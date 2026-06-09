@@ -374,6 +374,12 @@ export type StreamStatus =
   | "INVALID"
   | "ERROR";
 
+/**
+ * MistServer stream info JSON (e.g. `GET /json_<stream>.js`). Fields mirror the
+ * MistServer metadata serializer (`lib/dtsc.cpp` `Meta::toJSON`) so the player always
+ * knows what is available. Error fields (`error`/`on_error`/`perc`) are present only
+ * in error/initializing states.
+ */
 export interface MistStreamInfo {
   error?: string;
   on_error?: string;
@@ -381,15 +387,47 @@ export interface MistStreamInfo {
   type?: "live" | "live+vod" | "vod";
   hasVideo?: boolean;
   hasAudio?: boolean;
+  /** Wall-clock unix ms corresponding to stream time 0 (mirrored in `meta`). */
   unixoffset?: number;
   lastms?: number;
+  width?: number;
+  height?: number;
+  /** Source-selection algorithm version. */
+  selver?: number;
+  /** Server capabilities for this stream. */
+  capa?: MistStreamCapabilities;
   source?: MistStreamSource[];
   meta?: MistStreamMeta;
 }
 
+export interface MistStreamCapabilities {
+  datachannels?: boolean;
+  selver?: number;
+  ssl?: boolean;
+}
+
 export interface MistStreamMeta {
   tracks?: Record<string, MistTrackInfo>;
+  /** DVR window width in ms (stable; prefer over raw firstms for seekable start). */
   buffer_window?: number;
+  /**
+   * Stream-level keepaway (ms): max `minKeepAway` across tracks — how far behind the
+   * raw edge (`lastms`) you must stay for continuous data. The live-latency target is
+   * derived from this. NOTE: inflated by slow meta tracks; prefer max over A/V tracks.
+   */
+  jitter?: number;
+  /** Max allowed keepaway (ms) — upper bound on `jitter`/DVR holdback. */
+  maxkeepaway?: number;
+  /** 1 if any track carries B-frames. */
+  bframes?: number;
+  /** 1 for live streams. */
+  live?: number;
+  /** Stream type, as reported inside meta. */
+  type?: string;
+  /** Wall-clock unix ms corresponding to stream time 0. */
+  unixoffset?: number;
+  /** Metadata format version. */
+  version?: number;
   duration?: number;
   /** Optional MistServer base URL hint (present in some gateway-merged payloads) */
   mistUrl?: string;
@@ -400,26 +438,51 @@ export interface MistStreamSource {
   type: string;
   priority?: number;
   simul_tracks?: number;
+  total_matches?: number;
   relurl?: string;
+  /** Human-readable name (e.g. "HLS (CMAF)", "MP4 progressive"). */
+  hrn?: string;
+  /** Legacy player asset URL (e.g. Flash). */
+  player_url?: string;
   RTCIceServers?: RTCIceServer[];
+  dashMode?: "standard" | "low-latency";
+  lowLatency?: boolean;
+  capabilities?: Record<string, unknown>;
 }
 
 export interface MistTrackInfo {
   type: "video" | "audio" | "meta";
   codec: string;
-  width?: number;
-  height?: number;
-  bps?: number;
-  fpks?: number;
-  init?: string;
   codecstring?: string;
+  trackid?: number;
+  idx?: number;
+  init?: string;
   firstms?: number;
   lastms?: number;
+  /** Timestamp of the newest received packet for this track (ms). */
+  nowms?: number;
+  bps?: number;
+  maxbps?: number;
+  /** Per-track keepaway (ms) = `minKeepAway`; absent when zero. */
+  jitter?: number;
   lang?: string;
-  idx?: number;
+  /** Live-only: count of fragments missed (dropped) on this track. */
+  missed_frags?: number;
+  // Video-only
+  width?: number;
+  height?: number;
+  /** Frames per kilosecond (nominal) and its derived fps. */
+  fpks?: number;
+  fps?: number;
+  /** Effective (measured) frames per kilosecond and derived fps. */
+  efpks?: number;
+  efps?: number;
+  h264_level?: string;
+  h264_profile?: string;
+  // Audio-only
   channels?: number;
   rate?: number;
-  /** Track payload size in bytes (present on some MistServer builds) */
+  /** Audio sample size in bits. */
   size?: number;
 }
 
@@ -558,13 +621,15 @@ export interface TelemetryOptions {
 }
 
 /**
- * Playback mode affects protocol selection:
- * - 'low-latency': Prefer WebRTC/WHEP for minimal delay (sub-second)
- * - 'quality': Prefer MP4/WS for stable playback, HLS/DASH as fallback
- * - 'vod': VOD/clip content - prefer seekable protocols (HLS/MP4), exclude WHEP
- * - 'auto': Balanced selection (MP4/WS → WHEP → HLS)
+ * Playback mode weights the per-protocol selection axes (latency, boot, stability,
+ * VOD-suitability) differently — see MODE_WEIGHTS in core/scorer.ts:
+ * - 'low-latency': latency dominates → WHEP
+ * - 'balanced': low-ish latency + quick boot + stability → CMAF
+ * - 'quality': stability dominates → plain HLS-TS
+ * - 'vod': VOD-suitability dominates; duration flips MP4 (short clip) vs HLS-TS (long)
+ * - 'auto': fast boot + top stability → plain HLS-TS
  */
-export type PlaybackMode = "low-latency" | "quality" | "vod" | "auto";
+export type PlaybackMode = "low-latency" | "balanced" | "quality" | "vod" | "auto";
 
 /** ABR mode configuration */
 export type ABRMode = "auto" | "resize" | "bitrate" | "manual";

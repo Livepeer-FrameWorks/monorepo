@@ -23,6 +23,8 @@ export interface MetaTrackManagerConfig {
   maxMessageAge?: number;
   /** Fast-forward interval in seconds for catching up (default: 5) */
   fastForwardInterval?: number;
+  /** Wait for a non-zero playback time before sending the socket's first seek. */
+  deferInitialSeekUntilPlaybackTime?: boolean;
 }
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "reconnecting";
@@ -153,6 +155,8 @@ export class MetaTrackManager {
   private bufferAhead: number;
   private maxMessageAge: number;
   private fastForwardInterval: number;
+  private deferInitialSeekUntilPlaybackTime: boolean;
+  private initialSeekSent = false;
   private lastFastForwardTime = 0;
   private timedEventBuffer: Map<string, MetaTrackEvent[]> = new Map(); // trackId -> events sorted by time
   private readonly createSocket: (url: string) => MetaSocket;
@@ -172,6 +176,7 @@ export class MetaTrackManager {
     this.bufferAhead = config.bufferAhead ?? 5;
     this.maxMessageAge = config.maxMessageAge ?? 5;
     this.fastForwardInterval = config.fastForwardInterval ?? 5;
+    this.deferInitialSeekUntilPlaybackTime = config.deferInitialSeekUntilPlaybackTime ?? false;
     this.createSocket = (url: string) => new MetadataTransportSocket(url);
 
     // Add initial subscriptions
@@ -217,6 +222,7 @@ export class MetaTrackManager {
    */
   private createWebSocket(connectionId: number): void {
     this.latestServerRange = null;
+    this.initialSeekSent = false;
 
     try {
       const wsUrl = this.buildWsUrl();
@@ -338,6 +344,9 @@ export class MetaTrackManager {
    */
   setPlaybackTime(timeInSeconds: number): void {
     this.currentPlaybackTime = timeInSeconds;
+    if (this.deferInitialSeekUntilPlaybackTime) {
+      this.sendInitialSeekIfReady();
+    }
 
     // Process any buffered events that are now due
     this.processTimedEvents();
@@ -586,6 +595,18 @@ export class MetaTrackManager {
     }
   }
 
+  private sendInitialSeekIfReady(): void {
+    if (this.initialSeekSent || !this.isSocketOpen()) return;
+    if (
+      this.deferInitialSeekUntilPlaybackTime &&
+      (!Number.isFinite(this.currentPlaybackTime) || this.currentPlaybackTime <= 0)
+    ) {
+      return;
+    }
+    this.sendSeek(this.currentPlaybackTime);
+    this.initialSeekSent = true;
+  }
+
   /**
    * Send hold command (pause metadata delivery)
    */
@@ -665,8 +686,8 @@ export class MetaTrackManager {
     // Send all subscribed tracks at once (MistServer protocol)
     this.sendTracksUpdate();
 
-    // Send initial seek to current playback position
-    this.sendSeek(this.currentPlaybackTime);
+    // Send initial seek to current playback position once it is known.
+    this.sendInitialSeekIfReady();
 
     // Flush message buffer
     this.flushMessageBuffer();

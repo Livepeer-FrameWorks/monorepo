@@ -69,7 +69,7 @@ export interface FrameWorksPlayerOptions {
   /** Debug logging */
   debug?: boolean;
   /** Playback mode preference */
-  playbackMode?: "auto" | "low-latency" | "quality" | "vod";
+  playbackMode?: "auto" | "low-latency" | "balanced" | "quality" | "vod";
   /** Force a specific player implementation (for diagnostics or embed policy). */
   forcePlayer?: string;
   /** Force a specific source MIME/type (for diagnostics or embed policy). */
@@ -102,7 +102,7 @@ interface LegacyConfig {
     controls?: boolean;
     debug?: boolean;
     authToken?: string;
-    playbackMode?: "auto" | "low-latency" | "quality" | "vod";
+    playbackMode?: "auto" | "low-latency" | "balanced" | "quality" | "vod";
     forcePlayer?: string;
     forceType?: string;
     forceSource?: number;

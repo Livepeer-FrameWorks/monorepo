@@ -49,7 +49,6 @@ export { MistReporter } from "./core/MistReporter";
 export { MetaTrackManager } from "./core/MetaTrackManager";
 export type { MetaTrackSubscription } from "./core/MetaTrackManager";
 export { SubtitleManager } from "./core/SubtitleManager";
-export { LiveDurationProxy } from "./core/LiveDurationProxy";
 export { TimerManager } from "./core/TimerManager";
 export { TypedEventEmitter, TypedEventEmitter as EventEmitter } from "./core/EventEmitter";
 export { TelemetryReporter } from "./core/TelemetryReporter";

@@ -296,7 +296,62 @@ describe("BasePlayer", () => {
     expect(player.acceptsSeekableRangeHint()).toBe(true);
     player.setSeekableRangeHint({ start: 100_000, end: 160_000 });
 
-    expect(player.getSeekableRange()).toEqual({ start: 100_000, end: 160_000 });
+    // The live edge extrapolates by wall-clock between hints (the seekbar keeps
+    // growing), so assert the preserved DVR width rather than an exact edge value.
+    const range = player.getSeekableRange()!;
+    expect(range).not.toBeNull();
+    expect(range.end).toBeGreaterThanOrEqual(160_000);
+    expect(range.end - range.start).toBe(60_000);
+  });
+
+  it("anchors connection start from the requested startunix offset (DVR window present)", () => {
+    const player = new TestPlayer();
+    const video = createMockVideo();
+    video.currentTime = 0;
+    player.setVideoElement(video);
+    player.enableLiveSeek();
+    // Connection opened with startunix=-5 (5s behind live).
+    (player as any).liveSeekOffsetSec = -5;
+
+    // DVR window present → connStart = edge + offset = 160000 - 5000 = 155000.
+    player.setSeekableRangeHint({ start: 100_000, end: 160_000 });
+    expect(player.getCurrentTime()).toBe(155_000);
+
+    // Anchored once: a later hint at a grown edge does NOT re-derive the anchor; the
+    // playhead tracks the element via the fixed connection-start (currentTime still 0).
+    player.setSeekableRangeHint({ start: 101_000, end: 161_000 });
+    expect(player.getCurrentTime()).toBe(155_000);
+  });
+
+  it("subtracts already-elapsed currentTime when the first hint arrives late", () => {
+    const player = new TestPlayer();
+    const video = createMockVideo();
+    // First DVR-windowed hint lands after playback has advanced 4s.
+    video.currentTime = 4;
+    player.setVideoElement(video);
+    player.enableLiveSeek();
+    (player as any).liveSeekOffsetSec = -5;
+
+    // connStart = edge + offset - currentTime = 160000 - 5000 - 4000 = 151000.
+    // getCurrentTime = connStart + currentTime = 151000 + 4000 = 155000 = edge - 5s,
+    // i.e. the playhead reads 5s behind live (NOT clamped to the edge / latency 0).
+    player.setSeekableRangeHint({ start: 100_000, end: 160_000 });
+    expect(player.getCurrentTime()).toBe(155_000);
+    expect(player.getLiveLatencyMs()).toBeGreaterThanOrEqual(5_000);
+  });
+
+  it("stays unanchored (element-native) when the stream has no DVR window", () => {
+    const player = new TestPlayer();
+    const video = createMockVideo();
+    video.currentTime = 5;
+    player.setVideoElement(video);
+    player.enableLiveSeek();
+    (player as any).liveSeekOffsetSec = -2;
+
+    // No DVR window (end == start) → startunix unsupported → don't anchor.
+    player.setSeekableRangeHint({ start: 160_000, end: 160_000 });
+    expect(player.getSeekableRange()).toBeNull();
+    expect(player.getCurrentTime()).toBe(5_000); // raw element time fallback
   });
 
   it("handles Picture-in-Picture requests", async () => {

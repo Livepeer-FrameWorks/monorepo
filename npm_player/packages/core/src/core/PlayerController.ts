@@ -43,6 +43,7 @@ import type {
   EndpointInfo,
   LoadingPosterInfo,
   MistStreamInfo,
+  MistStreamSource,
   OutputEndpoint,
   OutputCapabilities,
   PlayerState,
@@ -51,6 +52,7 @@ import type {
   ThumbnailAssetUrls,
 } from "../types";
 import { ChandlerAssetSource } from "./ChandlerAssetSource";
+import { maxPlayableKeepAwayMs } from "./delivery/keep-away-rate-controller";
 import type {
   StreamInfo,
   StreamSource,
@@ -87,6 +89,17 @@ function sourceCanCarryPlaybackHeaders(source: StreamSource): boolean {
     source.type === "html5/application/vnd.apple.mpegurl" ||
     source.type === "html5/application/vnd.apple.mpegurl;version=7"
   );
+}
+
+function sourceUsesManifestTimeline(sourceType?: string): boolean {
+  if (!sourceType) return false;
+  const type = sourceType.toLowerCase();
+  return type.includes("dash") || type.includes("mpegurl") || type.includes("m3u8");
+}
+
+function playerOwnsAdaptiveBitrate(shortname?: string): boolean {
+  const id = shortname?.toLowerCase();
+  return id === "dashjs" || id === "hlsjs" || id === "videojs";
 }
 
 // ============================================================================
@@ -138,7 +151,7 @@ export interface PlayerControllerConfig {
   /** Force a specific source index */
   forceSource?: number;
   /** Playback mode preference */
-  playbackMode?: "auto" | "low-latency" | "quality" | "vod";
+  playbackMode?: "auto" | "low-latency" | "balanced" | "quality" | "vod";
   /** Built-in locale for wrapper UI strings. */
   locale?: FwLocale;
   /** Custom translation overrides applied on top of the locale pack. */
@@ -718,6 +731,14 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   // ============================================================================
   private _stallStartTime: number = 0;
   private static readonly HARD_FAILURE_STALL_THRESHOLD_MS = 30000; // 30 seconds sustained stall
+  // Last currentTime (ms) markPlaybackProgress treated as real progress. A starving
+  // element still creeps currentTime and fires timeupdate, so progress alone is not
+  // proof of playback — we also require readyState and a monotonic advance.
+  private _lastProgressMarkMs: number = 0;
+  // HTMLMediaElement.HAVE_FUTURE_DATA — enough decoded data to play forward.
+  private static readonly HAVE_FUTURE_DATA = 3;
+  // Minimum forward advance (ms) between marks to count as real progress.
+  private static readonly PROGRESS_ADVANCE_EPSILON_MS = 1;
 
   // ============================================================================
   // Seeking & Live Detection State (Centralized from wrappers)
@@ -940,6 +961,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     this._hasPlaybackStarted = false;
     this._isBuffering = false;
     this._stallStartTime = 0;
+    this._lastProgressMarkMs = 0;
     this._seekableStart = 0;
     this._liveEdge = 0;
     this._canSeek = false;
@@ -1474,6 +1496,32 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     if (!Number.isFinite(currentTime) || currentTime <= 0) return;
 
     this._hasPlaybackStarted = true;
+
+    // A timeupdate is not proof of playback: a starving element creeps currentTime
+    // one frame at a time during a stall, which would otherwise mask it as "playing".
+    // Require the media to actually be playable forward — readyState >= HAVE_FUTURE_DATA
+    // AND a monotonic advance since the last mark. Direct-render players (WebCodecs/WHEP)
+    // have no readyState, so for them the monotonic advance is the only available signal.
+    // Measure forward progress in the element's own clock (raw currentTime), not the
+    // reported value — callers pass reportedTimeMs in different coordinate spaces
+    // (raw vs anchor-mapped), which would corrupt a shared monotonic comparison.
+    const el = this.videoElement;
+    const isDirectRender = this.currentPlayer?.isDirectRendering === true;
+    const markMs = el && !isDirectRender ? el.currentTime * 1000 : currentTime;
+    const advanced =
+      markMs > this._lastProgressMarkMs + PlayerController.PROGRESS_ADVANCE_EPSILON_MS;
+    const playable = isDirectRender
+      ? advanced
+      : !!el && el.readyState >= PlayerController.HAVE_FUTURE_DATA && advanced;
+
+    this._lastProgressMarkMs = markMs;
+
+    if (!playable) {
+      // Creeping-but-not-playing: leave buffering/stall state to the media events
+      // (onWaiting/onPlaying) and don't reset the reload-escalation window.
+      return;
+    }
+
     this._isBuffering = false;
     this._reloadRequestCount = 0;
     this._reloadRequestWindowStartedAt = 0;
@@ -2287,6 +2335,10 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     // Calculate seekable range using centralized logic (allow player overrides)
     const playerRange = this.getPlayerSeekableRange();
+    const browserRange = this.getBrowserSeekableRange();
+    const manifestTimelinePending =
+      isLive && sourceUsesManifestTimeline(sourceType) && !playerRange && !browserRange;
+    const allowControllerLiveWindow = !manifestTimelinePending;
 
     // Log seeking inputs on first calculation and when values change
     if (isLive && !this._seekingLoggedOnce) {
@@ -2296,6 +2348,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
           `bufferWindowMs=${bufferWindowMs} ` +
           `playerRange=${JSON.stringify(playerRange)} ` +
           `video.seekable.length=${el.seekable?.length ?? 0} ` +
+          `manifestTimelinePending=${manifestTimelinePending} ` +
           `hasMistStreamInfo=${!!mistStreamInfo} ` +
           `trackCount=${mistStreamInfo?.meta?.tracks ? Object.keys(mistStreamInfo.meta.tracks).length : 0}`
       );
@@ -2310,21 +2363,24 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     const initialSeekRange = playerRange
       ? { seekableStart: playerRange.start, liveEdge: playerRange.end }
-      : calculateSeekableRange({
-          isLive,
-          video: el,
-          mistStreamInfo,
-          currentTime,
-          duration,
-          allowMediaStreamDvr,
-          bufferedStartMs,
-        });
+      : browserRange
+        ? { seekableStart: browserRange.start, liveEdge: browserRange.end }
+        : calculateSeekableRange({
+            isLive,
+            video: el,
+            mistStreamInfo: allowControllerLiveWindow ? mistStreamInfo : undefined,
+            currentTime,
+            duration,
+            allowMediaStreamDvr,
+            bufferedStartMs: allowControllerLiveWindow ? bufferedStartMs : undefined,
+          });
     let seekableStart = initialSeekRange.seekableStart;
     const liveEdge = initialSeekRange.liveEdge;
 
     // Mist buffer_window is authoritative for DVR size. If player APIs report an
     // ever-growing range (common with some live playlists), clamp to a sliding window.
     if (
+      allowControllerLiveWindow &&
       isLive &&
       bufferWindowMs !== undefined &&
       bufferWindowMs > 0 &&
@@ -2359,6 +2415,14 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       }
     }
 
+    // Push MistServer's reported keepaway so the player's live-latency target tracks the
+    // stream's actual jitter (per-track minKeepAway) rather than a fixed guess.
+    if (isLive && this.currentPlayer?.setLiveKeepAwayMs) {
+      this.currentPlayer.setLiveKeepAwayMs(
+        maxPlayableKeepAwayMs(mistStreamInfo?.meta?.tracks, mistStreamInfo?.meta?.jitter)
+      );
+    }
+
     // Update can seek - pass player's canSeek if available (e.g., WebCodecs uses server commands)
     const playerCanSeek =
       this.currentPlayer && typeof (this.currentPlayer as any).canSeek === "function"
@@ -2369,7 +2433,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       video: el,
       isLive,
       duration,
-      bufferWindowMs,
+      bufferWindowMs: allowControllerLiveWindow ? bufferWindowMs : undefined,
       playerCanSeek,
       playerSeekableRange: playerRange,
     });
@@ -2873,7 +2937,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
    * Set playback mode preference.
    * Unlike selectCombo, this is a persistent preference that affects scoring.
    */
-  setPlaybackMode(mode: "auto" | "low-latency" | "quality" | "vod"): void {
+  setPlaybackMode(mode: "auto" | "low-latency" | "balanced" | "quality" | "vod"): void {
     this.config.playbackMode = mode;
     this.log(`[setPlaybackMode] Mode set to: ${mode}`);
   }
@@ -2886,7 +2950,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     forcePlayer?: string;
     forceType?: string;
     forceSource?: number;
-    playbackMode?: "auto" | "low-latency" | "quality" | "vod";
+    playbackMode?: "auto" | "low-latency" | "balanced" | "quality" | "vod";
   }): Promise<void> {
     // Update playback mode if provided (this is a persistent preference)
     if (options.playbackMode) {
@@ -3069,7 +3133,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     );
     const sources: StreamSource[] = Array.isArray(data.source)
       ? (normalizeMistSourceUrls(
-          data.source.map((s: { url: string; type: string }) => ({
+          (data.source as MistStreamSource[]).map((s) => ({
             ...s,
             mistDatachannels,
           })),
@@ -4286,25 +4350,33 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       this.log(`[video:playing] ${this.describeAutoplayContext(el)}`);
       this.clearDeferredAutoplayRetry();
       this.clearAutoplayActivationRecovery();
-      this._isBuffering = false;
       this._hasPlaybackStarted = true;
-      // Clear stall timer on successful playback
-      if (this._stallStartTime > 0) {
-        this.log(`Stall cleared after ${Date.now() - this._stallStartTime}ms`);
-        this._stallStartTime = 0;
+      // Same playability gate as markPlaybackProgress: only clear buffering / assert
+      // playing when the element is actually playable forward. A starving element can
+      // fire `playing` between micro-stalls with readyState < HAVE_FUTURE_DATA.
+      if (el.readyState >= PlayerController.HAVE_FUTURE_DATA) {
+        this._isBuffering = false;
+        if (this._stallStartTime > 0) {
+          this.log(`Stall cleared after ${Date.now() - this._stallStartTime}ms`);
+          this._stallStartTime = 0;
+        }
+        this.setState("playing");
       }
-      this.setState("playing");
       // Attempt to clear error on playback resume
       this.attemptClearError();
     };
     const onCanPlay = () => {
       this.log(`[video:canplay] ${this.describeAutoplayContext(el)}`);
-      this._isBuffering = false;
-      // Clear stall timer on canplay
-      this._stallStartTime = 0;
+      // canplay nominally implies readyState >= HAVE_FUTURE_DATA, but guard in case it
+      // dropped before this handler ran — don't clear buffering when not playable.
+      const playable = el.readyState >= PlayerController.HAVE_FUTURE_DATA;
+      if (playable) {
+        this._isBuffering = false;
+        this._stallStartTime = 0;
+      }
       if (el.paused) {
         void this.attemptConfiguredAutoplay(el, "canplay");
-      } else {
+      } else if (playable) {
         this.setState("playing");
       }
       this.metaTrackManager?.setPaused(false);
@@ -4443,6 +4515,14 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private initializeABRController(): void {
     const player = this.currentPlayer;
     if (!player || !this.videoElement) return;
+
+    const shortname = player.capability?.shortname ?? this._currentPlayerInfo?.shortname;
+    if (playerOwnsAdaptiveBitrate(shortname)) {
+      this.log(
+        `[ABRController] Skipping outer ABR for ${shortname}; manifest player owns adaptive bitrate`
+      );
+      return;
+    }
 
     this.abrController = new ABRController({
       options: { mode: "auto" },
@@ -4732,6 +4812,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       mistBaseUrl: mistUrl,
       streamName: this.getMistStreamName(),
       debug: this.config.debug,
+      deferInitialSeekUntilPlaybackTime:
+        this.isEffectivelyLive() && sourceUsesManifestTimeline(this._currentSourceInfo?.type),
     });
 
     // Set initial playback time before connecting so the first seek goes to the

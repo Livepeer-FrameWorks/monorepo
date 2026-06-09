@@ -14,6 +14,10 @@ export interface StreamSource {
   streamName?: string;
   mistPlayerUrl?: string;
   headers?: Record<string, string>;
+  /** Explicit DASH mode hint from Mist source/info data. */
+  dashMode?: "standard" | "low-latency";
+  /** Protocol capability facts passed through from Mist source/info data. */
+  capabilities?: Record<string, unknown>;
   /** MistServer capability hint for WebRTC datachannel control support (WHEP seeking). */
   mistDatachannels?: boolean;
 }
@@ -317,6 +321,8 @@ export interface IPlayer {
   acceptsSeekableRangeHint?(): boolean;
   /** Optional: push authoritative seekable range hints from controller logic (milliseconds) */
   setSeekableRangeHint?(range: { start: number; end: number } | null): void;
+  /** Optional: push MistServer's reported keepaway (ms) so live-latency targets track jitter */
+  setLiveKeepAwayMs?(keepAwayMs: number): void;
   /** Optional: provide buffered ranges override */
   getBufferedRanges?(): TimeRanges | null;
 
@@ -390,12 +396,16 @@ export abstract class BasePlayer implements IPlayer {
   protected listeners: Map<string, Set<Function>> = new Map();
   protected videoElement: HTMLVideoElement | null = null;
 
-  // Anchor-based coordinate system: MistServer absolute ms via StreamStateClient.
-  // Browser video.currentTime is used only for smooth interpolation between updates.
-  protected _anchorStreamEndMs = 0;
-  protected _anchorRaw = 0;
+  // Single-timebase model for live progressive playback. MistServer's stream timeline
+  // is the authority; the element timeline maps through one connection-start anchor:
+  //   streamTimeMs = _connStartStreamMs + video.currentTime * 1000
+  // The live edge (duration) is tracked separately from the playhead, so latency =
+  // edge - playhead is representable rather than collapsing to zero.
+  protected _connStartStreamMs = 0; // stream ms at element currentTime=0 (from requested startunix offset)
+  protected _hasConnAnchor = false; // true once anchored (a DVR window + edge are known)
+  protected _liveEdgeStreamMs = 0; // latest authoritative live edge (stream ms)
+  protected _liveEdgeWallclockMs = 0; // Date.now() when _liveEdgeStreamMs was set
   protected _dvrWidthMs = 0;
-  protected _hasAnchor = false;
 
   // Live seeking via startunix URL rewriting (MistServer DVR)
   protected liveSeekEnabled = false;
@@ -513,20 +523,21 @@ export abstract class BasePlayer implements IPlayer {
     }
   }
 
-  // Coordinate getters — anchor-based when live seek is active, browser-local fallback
+  // Coordinate getters — single-timebase when live seek is active, browser-local fallback.
   getCurrentTime(): number {
-    if (this.liveSeekEnabled && this._hasAnchor && this.videoElement) {
-      const rawAdvance = this.videoElement.currentTime - this._anchorRaw;
-      const offset = this.pendingLiveSeekOffset ?? this.liveSeekOffsetSec;
-      return this._anchorStreamEndMs + offset * 1000 + rawAdvance * 1000;
+    if (this.liveSeekEnabled && this._hasConnAnchor && this.videoElement) {
+      return this._connStartStreamMs + this.videoElement.currentTime * 1000;
     }
     return (this.videoElement?.currentTime ?? 0) * 1000;
   }
 
   getDuration(): number {
-    if (this.liveSeekEnabled && this._hasAnchor && this.videoElement) {
-      const rawAdvance = this.videoElement.currentTime - this._anchorRaw;
-      return this._anchorStreamEndMs + rawAdvance * 1000;
+    if (this.liveSeekEnabled && this._hasConnAnchor) {
+      // The live edge advances at wall-clock rate; extrapolate from the last hint so
+      // the seekbar grows smoothly between (1-4Hz) updates. Never below the playhead.
+      const extrapolated =
+        this._liveEdgeStreamMs + Math.max(0, Date.now() - this._liveEdgeWallclockMs);
+      return Math.max(extrapolated, this.getCurrentTime());
     }
     const d = this.videoElement?.duration;
     if (d === undefined || d === null) return 0;
@@ -535,10 +546,16 @@ export abstract class BasePlayer implements IPlayer {
   }
 
   getSeekableRange(): { start: number; end: number } | null {
-    if (!this.liveSeekEnabled || !this._hasAnchor || this._dvrWidthMs <= 0) return null;
+    if (!this.liveSeekEnabled || !this._hasConnAnchor || this._dvrWidthMs <= 0) return null;
     const durationMs = this.getDuration();
     if (!Number.isFinite(durationMs) || durationMs <= 0) return null;
     return { start: Math.max(0, durationMs - this._dvrWidthMs), end: durationMs };
+  }
+
+  /** Latency behind the live edge (ms) in the single-timebase model. 0 when not anchored. */
+  getLiveLatencyMs(): number {
+    if (!this.liveSeekEnabled || !this._hasConnAnchor) return 0;
+    return Math.max(0, this.getDuration() - this.getCurrentTime());
   }
 
   acceptsSeekableRangeHint(): boolean {
@@ -562,21 +579,51 @@ export abstract class BasePlayer implements IPlayer {
   setSeekableRangeHint(range: { start: number; end: number } | null): void {
     if (!range || !Number.isFinite(range.end) || range.end <= 0) return;
     if (!this.liveSeekEnabled) return;
-    this._anchorStreamEndMs = range.end;
-    this._anchorRaw = this.videoElement?.currentTime ?? 0;
+
+    // Advance the authoritative live edge only when it actually moves forward, and stamp
+    // the wall-clock at that moment. The controller calls this at ~4Hz but MistServer
+    // pushes fresh lastms far less often, so range.end repeats. Re-stamping the wall-clock
+    // on every (stale) repeat would zero the extrapolation term in getDuration, freezing
+    // the edge at a stale value while the playhead advances → latency decays to 0. Gating
+    // on forward movement lets getDuration extrapolate at real-time between real updates.
+    if (range.end > this._liveEdgeStreamMs) {
+      this._liveEdgeStreamMs = range.end;
+      this._liveEdgeWallclockMs = Date.now();
+    }
     this._dvrWidthMs = Math.max(0, range.end - range.start);
-    this._hasAnchor = true;
+
+    // Anchor the connection start ONCE per connection from the requested startunix
+    // offset: the connection began streaming at (live edge when it opened) + offset, and
+    // the element has already played `currentTime` seconds of it. So the stream time at
+    // element currentTime=0 is:  range.end + offset - currentTime.
+    // The `- currentTime` term is essential: the first DVR-windowed hint usually arrives
+    // after playback has advanced, so without it connStart is overestimated and
+    // getCurrentTime runs past the live edge (latency clamps to 0). Only trust the offset
+    // when the stream has a DVR window; otherwise stay unanchored (element-native).
+    if (!this._hasConnAnchor && this._dvrWidthMs > 0) {
+      const curMs = (this.videoElement?.currentTime ?? 0) * 1000;
+      this._connStartStreamMs = range.end + this.liveSeekOffsetSec * 1000 - curMs;
+      this._hasConnAnchor = true;
+    }
+
+    this.onLiveEdgeUpdated();
   }
+
+  /**
+   * Called after each authoritative live-edge update while live seek is active.
+   * Default no-op; progressive players override to steer playbackRate (keep-away).
+   */
+  protected onLiveEdgeUpdated(): void {}
 
   getBufferedRanges(): TimeRanges | null {
     const video = this.videoElement;
     if (!video) return null;
     const buffered = video.buffered;
-    if (!this.liveSeekEnabled || !this._hasAnchor || !buffered || buffered.length === 0)
+    if (!this.liveSeekEnabled || !this._hasConnAnchor || !buffered || buffered.length === 0)
       return buffered;
 
-    const offset = this.pendingLiveSeekOffset ?? this.liveSeekOffsetSec;
-    const baseSec = this._anchorStreamEndMs / 1000 + offset - this._anchorRaw;
+    // Map element-time buffered ranges into stream-time via the single anchor.
+    const baseSec = this._connStartStreamMs / 1000;
     const shifted: [number, number][] = [];
     for (let i = 0; i < buffered.length; i++) {
       const s = buffered.start(i) + baseSec;
@@ -616,28 +663,30 @@ export abstract class BasePlayer implements IPlayer {
 
   seek(timeMs: number): void {
     if (this.liveSeekEnabled) {
-      if (this._hasAnchor) {
-        const durationMs = this.getDuration();
-        const offsetFromLiveSec = (timeMs - durationMs) / 1000;
-
-        // In-buffer seek: try browser seekable range first
-        const video = this.videoElement;
-        if (video?.seekable && video.seekable.length > 0) {
-          const rawEnd = video.seekable.end(video.seekable.length - 1);
-          const browserTarget = rawEnd + offsetFromLiveSec;
-          const rawStart = video.seekable.start(0);
-          if (browserTarget >= rawStart - 0.5) {
-            const clamped = Math.max(rawStart, Math.min(rawEnd, browserTarget));
-            this.seekInBuffer(clamped);
-            this.liveSeekOffsetSec = Math.min(0, offsetFromLiveSec);
-            this._anchorRaw = clamped;
-            return;
+      if (this._hasConnAnchor) {
+        // Map the stream-time target back to element time through the single anchor.
+        const targetElementSec = (timeMs - this._connStartStreamMs) / 1000;
+        // In-buffer check must use buffered (actually-downloaded ranges), NOT seekable:
+        // a byte-range-seekable progressive MP4 reports a large seekable extent, so a
+        // DVR seek to undownloaded data would be routed to seekInBuffer() and fail.
+        const buffered = this.videoElement?.buffered;
+        if (buffered && buffered.length > 0) {
+          for (let i = 0; i < buffered.length; i++) {
+            const s = buffered.start(i);
+            const e = buffered.end(i);
+            if (targetElementSec >= s - 0.5 && targetElementSec <= e + 0.5) {
+              // Already downloaded: instant element seek; the anchor is unchanged
+              // because the connection timeline is unchanged.
+              this.seekInBuffer(Math.max(s, Math.min(e, targetElementSec)));
+              return;
+            }
           }
         }
 
-        // Out-of-buffer: startunix URL rewrite
-        let offset = offsetFromLiveSec;
-        if (offset > 0) offset = 0;
+        // Out-of-buffer: reopen the connection behind live via startunix. The element
+        // timeline resets on reload, so drop the anchor — it re-captures on the next hint.
+        const offset = Math.min(0, (timeMs - this.getDuration()) / 1000);
+        this._hasConnAnchor = false;
         this.scheduleLiveSeekOffset(offset, false);
         return;
       }
@@ -712,19 +761,21 @@ export abstract class BasePlayer implements IPlayer {
     return v ? !isFinite(v.duration) : false;
   }
 
+  /**
+   * Target latency (ms) behind the live edge for live progressive playback.
+   * Default 0; progressive players override with a jitter-aware margin.
+   */
+  protected getTargetLatencyMs(): number {
+    return 0;
+  }
+
   jumpToLive(): void {
     if (this.liveSeekEnabled) {
-      const v = this.videoElement;
-      if (v?.seekable && v.seekable.length > 0) {
-        const rawEnd = v.seekable.end(v.seekable.length - 1);
-        this.seekInBuffer(rawEnd);
-        this.liveSeekOffsetSec = 0;
-        this._anchorRaw = rawEnd;
-        this.pendingLiveSeekOffset = null;
-        if (this.liveSeekTimer) {
-          clearTimeout(this.liveSeekTimer);
-          this.liveSeekTimer = null;
-        }
+      if (this._hasConnAnchor) {
+        // Seek to a safe margin behind the edge — NOT the raw edge, which pins the
+        // playhead at the download front and starves. The keep-away controller then
+        // holds it at the target.
+        this.seek(Math.max(0, this.getDuration() - this.getTargetLatencyMs()));
         return;
       }
       this.scheduleLiveSeekOffset(0, true);
@@ -784,7 +835,8 @@ export abstract class BasePlayer implements IPlayer {
     const wasPlaying = !this.videoElement.paused;
     this.videoElement.src = url;
     this.videoElement.load();
-    this._anchorRaw = 0;
+    // New connection → element timeline resets to 0; re-capture the anchor next hint.
+    this._hasConnAnchor = false;
     if (wasPlaying) this.videoElement.play().catch(() => {});
   }
 
@@ -800,9 +852,10 @@ export abstract class BasePlayer implements IPlayer {
       this.liveSeekTimer = null;
     }
     this.pendingLiveSeekOffset = null;
-    this._hasAnchor = false;
-    this._anchorStreamEndMs = 0;
-    this._anchorRaw = 0;
+    this._hasConnAnchor = false;
+    this._connStartStreamMs = 0;
+    this._liveEdgeStreamMs = 0;
+    this._liveEdgeWallclockMs = 0;
     this._dvrWidthMs = 0;
     this.liveSeekOffsetSec = 0;
     this.liveSeekBaseUrl = null;
@@ -816,7 +869,7 @@ export abstract class BasePlayer implements IPlayer {
     return appendUrlParams(stripUrlParams(url), params);
   }
 
-  private buildLiveSeekUrl(offsetSec: number): string {
+  protected buildLiveSeekUrl(offsetSec: number): string {
     const base = this.liveSeekBaseUrl || "";
     if (!base) return "";
     if (!offsetSec || offsetSec >= 0) return this.stripStartUnixParam(base);

@@ -69,6 +69,36 @@ describe("MetaTrackManager", () => {
     expect(seek).toEqual({ type: "seek", seek_time: 0, ff_to: 5000 });
   });
 
+  it("can defer the initial socket seek until playback time is known", () => {
+    const manager = new MetaTrackManager({
+      mistBaseUrl: "http://mist.test",
+      streamName: "abc",
+      deferInitialSeekUntilPlaybackTime: true,
+    });
+    manager.subscribe("1", vi.fn());
+
+    manager.connect();
+    vi.advanceTimersByTime(100);
+
+    const ws = MockWebSocket.instances[0];
+    ws.onopen?.();
+
+    expect(ws.send).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(ws.send.mock.calls[0][0])).toEqual({ type: "tracks", meta: "1" });
+
+    manager.setPlaybackTime(12);
+
+    expect(ws.send).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(ws.send.mock.calls[1][0])).toEqual({
+      type: "seek",
+      seek_time: 12000,
+      ff_to: 17000,
+    });
+
+    manager.setPlaybackTime(13);
+    expect(ws.send).toHaveBeenCalledTimes(2);
+  });
+
   it("uses socket factory seam during connect", () => {
     const manager = new MetaTrackManager({ mistBaseUrl: "http://mist.test", streamName: "abc" });
     const factorySpy = vi.fn((url: string) => new MockWebSocket(url) as unknown as WebSocket);

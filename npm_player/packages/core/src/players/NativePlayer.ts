@@ -1,6 +1,10 @@
 import { BasePlayer } from "../core/PlayerInterface";
 import { isLiveStreamType } from "../core/PlayerInterface";
-import { LiveDurationProxy } from "../core/LiveDurationProxy";
+import {
+  decideKeepAwayRate,
+  keepAwareTargetMs,
+  KEEP_AWAY_DEFAULTS,
+} from "../core/delivery/keep-away-rate-controller";
 import { MistControlChannel } from "../core/MistControlChannel";
 import { buildQualityLevelsFromStreamTracks } from "../core/QualityLevels";
 import { translateCodec } from "../core/CodecUtils";
@@ -26,7 +30,7 @@ import type {
  * - HTML5 video element for direct media
  * - WHEP (WebRTC HTTP Egress Protocol) for WebRTC streams
  *
- * - Live duration proxy for meaningful seek bar
+ * - Single-timebase live seek bar + keep-away playback-rate control (BasePlayer)
  * - Auto-recovery on long pause (reload after 5s)
  * - MP3 seeking restriction
  * - Dynamic source switching via setSource()
@@ -81,9 +85,18 @@ export class NativePlayerImpl extends BasePlayer {
   private streamInfoRef: StreamInfo | null = null;
   private selectedTrack = "auto";
 
+  // Read-ahead (ms) below which we must not speed up (protect the buffer), and below
+  // which we actively slow down to rebuild. Decouples the low-latency goal (latency
+  // control) from the don't-stall guarantee (real buffer floor).
+  private static readonly READ_AHEAD_SAFE_MS = 1500;
+  private static readonly READ_AHEAD_CRITICAL_MS = 750;
+
   // Reference html5.js features
-  private liveDurationProxy: LiveDurationProxy | null = null;
   private pausedAt: number | null = null;
+  // Target latency behind the live edge for progressive live (keep-away setpoint).
+  // Live target = how much read-ahead (≈ latency behind live) to hold. Derived from
+  // MistServer's reported keepaway; refreshed via setLiveKeepAwayMs as jitter changes.
+  private targetLatencyMs = KEEP_AWAY_DEFAULTS.targetLatencyMs;
   private currentSourceUrl: string | null = null;
   private currentMimeType: string | null = null;
   private sourceElement: HTMLSourceElement | null = null; // legacy, always null now
@@ -238,6 +251,8 @@ export class NativePlayerImpl extends BasePlayer {
     this.currentMimeType = source.type;
     this.currentOptions = options;
     this.streamInfoRef = streamInfo ?? null;
+    // The initial startunix offset below uses the default target; the controller refines
+    // targetLatencyMs to the jitter-aware keepaway via setLiveKeepAwayMs on the first hint.
     this.isMP3Source = source.type === "html5/audio/mp3";
     this.whepPlayRequested = false;
     this.whepHoldRequested = false;
@@ -259,20 +274,28 @@ export class NativePlayerImpl extends BasePlayer {
     this.videoElement = video;
     container.appendChild(video);
 
-    // LiveDurationProxy supplies seek and jump-to-live for non-WHEP live streams.
-    // WHEP handles live edge through Mist control signaling.
+    // Live edge is handled by the single-timebase model in BasePlayer (seek/duration
+    // anchored to MistServer stream time). WHEP uses Mist control signaling instead.
     const isLiveStream = isLiveStreamType(streamInfo?.type);
     if (source.type !== "whep" && isLiveStream) {
       // Upstream html5.js:158-160: force loop=false for live
       video.loop = false;
       this.setupAutoRecovery(video);
-      this.setupLiveDurationProxy(video);
       // startunix URL rewriting only works for progressive formats (MP4/MPEG-TS/WebM).
       // For HLS, the browser's native HLS stack handles DVR seeking via the playlist —
       // startunix rewrites cause 404s ("Fragment out of range").
       const isHLS = source.type?.includes("mpegurl");
       if (!isHLS) {
         this.initLiveSeek(source.url);
+        // Start a chosen margin behind the live edge (startunix) so Mist bursts a
+        // backlog and the browser builds read-ahead, instead of starving at the
+        // realtime-delivered edge. The keep-away controller holds it there.
+        const offsetSec = -this.targetLatencyMs / 1000;
+        const initialUrl = this.buildLiveSeekUrl(offsetSec);
+        if (initialUrl) {
+          this.currentSourceUrl = initialUrl;
+          this.liveSeekOffsetSec = offsetSec;
+        }
       }
     }
 
@@ -307,7 +330,8 @@ export class NativePlayerImpl extends BasePlayer {
         return video;
       } else {
         this.setupVideoEventListeners(video, options);
-        video.src = source.url;
+        // currentSourceUrl carries the initial startunix offset for progressive live.
+        video.src = this.currentSourceUrl ?? source.url;
         return video;
       }
     } catch (error: any) {
@@ -319,14 +343,55 @@ export class NativePlayerImpl extends BasePlayer {
     }
   }
 
+  /** Keep-away setpoint: how far behind the live edge we hold progressive live. */
+  protected getTargetLatencyMs(): number {
+    return this.targetLatencyMs;
+  }
+
   /**
-   * Setup live duration proxy for meaningful seek bar on live streams
+   * Refresh the live target from MistServer's reported keepaway as it changes
+   * (controller pushes per stream-state update). Keeps the target jitter-aware.
    */
-  private setupLiveDurationProxy(video: HTMLVideoElement): void {
-    this.liveDurationProxy = new LiveDurationProxy(video, {
-      constrainSeek: true,
-      // Duration changes are handled by UI polling getDuration()
-    });
+  setLiveKeepAwayMs(keepAwayMs: number): void {
+    this.targetLatencyMs = keepAwareTargetMs(keepAwayMs);
+  }
+
+  /**
+   * On each authoritative live-edge update, nudge playbackRate (±1%, imperceptible) to
+   * hold a target LATENCY behind the live edge — the catch-up MistServer's embed leaves
+   * as a TODO. WHEP never reaches here (it doesn't enable live seek).
+   *
+   * Two signals, two jobs:
+   *  - Latency (anchor-derived `getLiveLatencyMs`) is the control target — it's the thing
+   *    we want low and is independent of how much the browser happens to buffer ahead.
+   *  - Read-ahead (`buffered.end − currentTime`) is the MEASURED safety floor: never speed
+   *    up into a thin buffer, and slow down if it gets critically low. This is what keeps
+   *    the latency controller from ever catching up into a stall.
+   */
+  protected onLiveEdgeUpdated(): void {
+    const video = this.videoElement;
+    if (!video || video.paused || this.currentMimeType === "whep") return;
+    const buffered = video.buffered;
+    if (!buffered || buffered.length === 0) return;
+
+    const readAheadMs = Math.max(0, (buffered.end(buffered.length - 1) - video.currentTime) * 1000);
+    const latencyMs = this.getLiveLatencyMs();
+    const decision = decideKeepAwayRate(
+      { currentLatencyMs: latencyMs, currentRate: video.playbackRate },
+      { ...KEEP_AWAY_DEFAULTS, targetLatencyMs: this.targetLatencyMs }
+    );
+    let rate = decision.kind === "set_rate" ? decision.rate : video.playbackRate;
+
+    // Buffer safety overrides the latency target: protect against starvation.
+    if (readAheadMs < NativePlayerImpl.READ_AHEAD_CRITICAL_MS) {
+      rate = Math.min(rate, KEEP_AWAY_DEFAULTS.rebuildRate); // force slow-down to rebuild
+    } else if (rate > 1 && readAheadMs < NativePlayerImpl.READ_AHEAD_SAFE_MS) {
+      rate = 1.0; // don't catch up (speed up) into a thin buffer
+    }
+
+    if (Math.abs(rate - video.playbackRate) > 0.0001) {
+      video.playbackRate = rate;
+    }
   }
 
   private cleanupFailedWhepStartup(video: HTMLVideoElement): void {
@@ -510,7 +575,7 @@ export class NativePlayerImpl extends BasePlayer {
   }
 
   getLiveLatency(): number {
-    return this.liveDurationProxy?.getLatency() ?? 0;
+    return this.getLiveLatencyMs();
   }
 
   protected reloadSource(url: string): void {
@@ -520,19 +585,14 @@ export class NativePlayerImpl extends BasePlayer {
     this.currentSourceUrl = url;
     this.videoElement.src = url;
     this.videoElement.load();
-    this._anchorRaw = 0;
+    // New connection → element timeline resets; re-capture the anchor on the next hint.
+    this._hasConnAnchor = false;
     if (wasPlaying) this.videoElement.play().catch(() => {});
   }
 
   async destroy(): Promise<void> {
     // Set destroyed flag immediately to guard against async callbacks
     this.destroyed = true;
-
-    // Cleanup live duration proxy
-    if (this.liveDurationProxy) {
-      this.liveDurationProxy.destroy();
-      this.liveDurationProxy = null;
-    }
 
     if (this.reconnectTimer) {
       try {

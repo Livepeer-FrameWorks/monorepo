@@ -86,10 +86,6 @@ export type {
   MistSignalingState,
 } from "./MistSignaling";
 
-// Live duration handling for live streams
-export { LiveDurationProxy, createLiveVideoProxy } from "./LiveDurationProxy";
-export type { LiveDurationProxyOptions, LiveDurationState } from "./LiveDurationProxy";
-
 // Timer management for memory leak prevention
 export { TimerManager } from "./TimerManager";
 

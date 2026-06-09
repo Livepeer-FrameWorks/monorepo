@@ -29,7 +29,10 @@ export interface PlayerScore {
     priorityScore: number;
     sourceScore: number;
     reliabilityScore: number;
-    modeBonus: number;
+    latencyScore: number;
+    bootScore: number;
+    stabilityScore: number;
+    vodScore: number;
     routingBonus: number;
     protocolPenalty: number;
   };
@@ -156,15 +159,14 @@ export function isProtocolBlacklisted(mimeType: string): boolean {
 }
 
 /**
- * Protocol penalties for problematic protocols (not blacklisted, but deprioritized)
- * These get subtracted from the total score to deprioritize certain protocols.
- *
- * Heavy penalties (0.50+): Reference-supported but consistently unreliable
- * Medium penalties (0.20): Experimental or spotty support
+ * Readiness penalties: protocols that are reference-supported but not yet
+ * production-proven get subtracted from the total so they can be force-selected
+ * for dev but never win automatic selection. This is the "not ready" gate; it is
+ * distinct from stability, which is scored per-protocol in PROTOCOL_STABILITY_SCORE.
  */
 export const PROTOCOL_PENALTIES: Record<string, number> = {
-  // WebCodecs is useful as an explicit low-level option, but the raw-frame path
-  // owns more A/V timing than browser-native transports and should not win by default.
+  // WebCodecs raw-frame path owns its own decode/timing pipeline and is not yet
+  // production-ready; selectable explicitly but not as an automatic winner.
   "ws/video/raw": 0.65,
   "wss/video/raw": 0.65,
   "ws/video/h264": 0.65,
@@ -174,52 +176,40 @@ export const PROTOCOL_PENALTIES: Record<string, number> = {
   "html5/audio/webm": 0.6,
   "ws/video/webm": 0.8,
   "wss/video/webm": 0.8,
-  // MEWS - heavy penalty, prefer HLS/WebRTC (reference mews.js has issues)
+  // MEWS - not production-ready; prefer HLS/WebRTC for now
   "ws/video/mp4": 0.5,
   "wss/video/mp4": 0.5,
   // Native Mist WebRTC signaling - treat like MEWS (legacy/less stable than WHEP)
   webrtc: 0.5,
   "mist/webrtc": 0.5,
-  // DASH - heavy penalty, broken implementation
-  "dash/video/mp4": 0.9, // Below legacy
-  "dash/video/webm": 0.95,
-  // CMAF-style protocols (fMP4 over HLS/DASH) - fragmentation issues
-  "html5/application/vnd.apple.mpegurl;version=7": 0.2, // HLSv7 is CMAF-based
-  // LL-HLS specific - experimental, spotty support
-  "ll-hls": 0.2,
-  cmaf: 0.2,
 };
 
 /**
  * Calculate protocol penalty based on known problematic protocols
  */
 export function calculateProtocolPenalty(mimeType: string): number {
-  // Direct match
-  if (PROTOCOL_PENALTIES[mimeType]) {
+  // Direct match. Use `in` so configured penalties are authoritative even when
+  // a value is falsy.
+  if (mimeType in PROTOCOL_PENALTIES) {
     return PROTOCOL_PENALTIES[mimeType];
   }
   // Pattern-based penalties for protocols not explicitly listed
   const lowerMime = mimeType.toLowerCase();
   if (lowerMime.includes("webm")) {
-    return 0.5; // Heavy penalty for any WebM variant
-  }
-  if (lowerMime.startsWith("dash/")) {
-    return 0.4; // DASH penalty
-  }
-  if (lowerMime.includes("cmaf") || lowerMime.includes("ll-hls")) {
-    return 0.2;
+    return 0.5; // Heavy penalty for any WebM variant (also catches dash/video/webm)
   }
   return 0;
 }
 
 /**
- * Player reliability scores
- * Based on library maturity, error recovery, and overall stability
+ * Player reliability scores — a small per-player tiebreaker (weight ~0.05).
+ * Transport stability is scored per-protocol in PROTOCOL_STABILITY_SCORE; this
+ * map only separates players serving the same protocol (e.g. hls.js vs videojs).
  */
 export const PLAYER_RELIABILITY: Record<string, number> = {
   webcodecs: 0.75, // Low-level decoder path; keep selectable but behind browser transport stacks.
   videojs: 0.95, // Fast loading, built-in HLS via VHS
-  hlsjs: 0.9, // Battle-tested but slower to load
+  hlsjs: 0.96, // Battle-tested HLS/LL-HLS path; slower to load, but stable on CMAF.
   native: 0.85, // Native is lightweight but has edge cases
   "mist-webrtc": 0.85, // Full signaling features
   mews: 0.75, // Custom protocol, less tested
@@ -235,97 +225,203 @@ export function calculateReliabilityScore(playerShortname: string): number {
 }
 
 /**
- * Protocol bonuses for each playback mode
+ * Per-protocol score axes (0–1, higher = better).
  *
- * IMPORTANT: Track compatibility is enforced by trackScore (50% weight).
- * Mode bonuses (12% weight) only affect ordering among compatible options.
- * Partial track support (e.g. video-only) gets a normalized trackScore penalty
- * that naturally pushes it below full combos.
- *
- * Priority rationale:
- * - Low-latency: WHEP/WebRTC and MP4/WS first; WebCodecs remains a fallback/manual option
- * - Quality: ABR-capable HLS first; WebCodecs stays behind browser-native ABR
- * - VOD: MP4/HLS first (seekable), WHEP hard penalty (no seek support)
- * - Auto: browser-native HTTP/MSE paths first; WHEP is opt-in via low-latency
+ * Playback selection is driven by four independent per-protocol qualities —
+ * latency, transport stability, boot/time-to-first-frame, and VOD-suitability —
+ * combined per mode via MODE_WEIGHTS. ABR and seeking are NOT axes here: in this
+ * player they are provided for every protocol by the Mist control/metadata
+ * integration, so they do not differentiate protocols. Stability is per-protocol
+ * (not per-player) because hls.js serves both plain HLS-TS and CMAF/LL-HLS yet
+ * they differ sharply in robustness.
  */
-export const MODE_PROTOCOL_BONUSES: Record<PlaybackMode, Record<string, number>> = {
-  "low-latency": {
-    // WHEP/WebRTC: sub-second latency
-    whep: 0.5,
-    webrtc: 0.35,
-    "mist/webrtc": 0.35,
-    // MP4/WS (MEWS): 2-5s latency, good fallback
-    "ws/video/mp4": 0.35,
-    "wss/video/mp4": 0.35,
-    // WebCodecs raw/h264: low latency, but less stable than browser transport stacks
-    "ws/video/raw": 0.2,
-    "wss/video/raw": 0.2,
-    "ws/video/h264": 0.18,
-    "wss/video/h264": 0.18,
-    // Progressive MP4 is not an adaptive live transport; keep it below WHEP/MEWS here.
-    "html5/video/mp4": 0.12,
-    // HLS: high latency, minimal bonus
-    "html5/application/vnd.apple.mpegurl": 0.05,
-  },
-  quality: {
-    // HLS: ABR support, universal browser path
-    "html5/application/vnd.apple.mpegurl": 0.5,
-    "html5/application/vnd.apple.mpegurl;version=7": 0.42,
-    // MP4/WS is selectable, but quality mode should favor manifest ABR first.
-    "ws/video/mp4": 0.28,
-    "wss/video/mp4": 0.28,
-    "html5/video/mp4": 0.15,
-    // WebCodecs has no manifest-level ABR and should sit behind HLS in quality mode.
-    "ws/video/raw": 0.1,
-    "wss/video/raw": 0.1,
-    "ws/video/h264": 0.08,
-    "wss/video/h264": 0.08,
-    // WebRTC: minimal for quality mode
-    whep: 0.05,
-    webrtc: 0.05,
-    "mist/webrtc": 0.05,
-  },
-  vod: {
-    // VOD/Clip: Prefer seekable protocols, EXCLUDE WebRTC (no seek support)
-    "html5/video/mp4": 0.5, // Progressive MP4 - best for clips
-    "html5/application/vnd.apple.mpegurl": 0.45, // HLS - ABR support
-    "dash/video/mp4": 0.4, // DASH - ABR support
-    "ws/video/mp4": 0.35, // MEWS - seekable via MSE
-    "wss/video/mp4": 0.35,
-    // WHEP/WebRTC: low priority for VOD (seeking via MistControl data channel)
-    whep: 0.1,
-    webrtc: 0.1,
-    "mist/webrtc": 0.1,
-  },
-  auto: {
-    // Direct MP4 is the most predictable default in local/dev and clip-like playback.
-    "html5/video/mp4": 0.55,
-    // HLS: reliable ABR live path.
-    "html5/application/vnd.apple.mpegurl": 0.32,
-    "html5/application/vnd.apple.mpegurl;version=7": 0.26,
-    // MP4/WS (MEWS): lower latency than HLS
-    "ws/video/mp4": 0.24,
-    "wss/video/mp4": 0.24,
-    // WHEP/WebRTC are available, but local/dev environments commonly lack a
-    // complete ICE/datachannel setup. Keep them for explicit low-latency mode.
-    whep: 0.08,
-    webrtc: 0.06,
-    "mist/webrtc": 0.06,
-    // WebCodecs remains available, but should not be the default live choice.
-    "ws/video/raw": 0.15,
-    "wss/video/raw": 0.15,
-    "ws/video/h264": 0.13,
-    "wss/video/h264": 0.13,
-  },
+
+/** Live glass-to-glass latency (higher score = lower latency). */
+export const PROTOCOL_LATENCY_SCORE: Record<string, number> = {
+  whep: 1.0,
+  webrtc: 1.0,
+  "mist/webrtc": 1.0,
+  "ws/video/raw": 0.9,
+  "wss/video/raw": 0.9,
+  "ws/video/h264": 0.9,
+  "wss/video/h264": 0.9,
+  "ws/video/mp4": 0.8,
+  "wss/video/mp4": 0.8,
+  "html5/application/vnd.apple.mpegurl;version=7": 0.65,
+  "ll-hls": 0.65,
+  cmaf: 0.65,
+  // FrameWorks live MP4 is a read-ahead stream that tracks the edge, so it ranks
+  // above DASH — unlike generic progressive MP4, which has no live edge at all.
+  "html5/video/mp4": 0.5,
+  "dash/video/mp4": 0.35,
+  // Plain HLS-TS: highest latency (buffer depth × segment length).
+  "html5/application/vnd.apple.mpegurl": 0.2,
+};
+
+/** Transport stability / robustness (higher score = more stable). */
+export const PROTOCOL_STABILITY_SCORE: Record<string, number> = {
+  "html5/application/vnd.apple.mpegurl": 1.0, // hls.js: most battle-tested recovery path
+  "dash/video/mp4": 0.75,
+  "html5/video/mp4": 0.75,
+  // CMAF/LL-HLS rides hls.js but the low-latency code path is the fragile part.
+  "html5/application/vnd.apple.mpegurl;version=7": 0.55,
+  "ll-hls": 0.55,
+  cmaf: 0.55,
+  "ws/video/mp4": 0.4,
+  "wss/video/mp4": 0.4,
+  whep: 0.3,
+  webrtc: 0.3,
+  "mist/webrtc": 0.3,
+  "ws/video/raw": 0.2,
+  "wss/video/raw": 0.2,
+  "ws/video/h264": 0.2,
+  "wss/video/h264": 0.2,
 };
 
 /**
- * Calculate mode-specific bonus for a protocol
+ * Boot / time-to-first-frame for protocols whose value is fixed (higher = faster).
+ * html5/video/mp4 is context-dependent and resolved in calculateBootScore: a live
+ * read-ahead MP4 boots slowly, a faststart VOD file boots fast.
  */
-export function calculateModeBonus(mimeType: string, mode: PlaybackMode): number {
-  if (!mode) return 0;
-  return MODE_PROTOCOL_BONUSES[mode]?.[mimeType] ?? 0;
+export const PROTOCOL_BOOT_SCORE: Record<string, number> = {
+  "ws/video/raw": 1.0,
+  "wss/video/raw": 1.0,
+  "ws/video/h264": 1.0,
+  "wss/video/h264": 1.0,
+  "html5/application/vnd.apple.mpegurl": 0.95,
+  "ws/video/mp4": 0.9,
+  "wss/video/mp4": 0.9,
+  "dash/video/mp4": 0.85,
+  "html5/application/vnd.apple.mpegurl;version=7": 0.85,
+  "ll-hls": 0.85,
+  cmaf: 0.85,
+  // WHEP/WebRTC: cold-start pays ICE/DTLS/SDP before any media.
+  whep: 0.45,
+  webrtc: 0.45,
+  "mist/webrtc": 0.45,
+};
+
+/** MP4 boot is contextual: live read-ahead is slow, faststart VOD file is fast. */
+const MP4_BOOT_LIVE = 0.4;
+const MP4_BOOT_VOD = 0.85;
+
+/**
+ * VOD-suitability for long-form VOD (higher = better). Segmented adaptive
+ * protocols win on ABR + CDN cacheability + robust startup. Only consulted in
+ * `vod` mode. For short clips PROTOCOL_VOD_SCORE_SHORT applies instead.
+ */
+export const PROTOCOL_VOD_SCORE: Record<string, number> = {
+  "html5/application/vnd.apple.mpegurl": 1.0,
+  "dash/video/mp4": 0.95,
+  "html5/application/vnd.apple.mpegurl;version=7": 0.9,
+  "ll-hls": 0.9,
+  cmaf: 0.9,
+  "html5/video/mp4": 0.5, // no ABR; weak for long content
+  "ws/video/mp4": 0.3,
+  "wss/video/mp4": 0.3,
+  whep: 0.2,
+  webrtc: 0.2,
+  "mist/webrtc": 0.2,
+  "ws/video/raw": 0.2,
+  "wss/video/raw": 0.2,
+  "ws/video/h264": 0.2,
+  "wss/video/h264": 0.2,
+};
+
+/**
+ * VOD-suitability for short clips (≤ SHORT_CLIP_MS). Segmentation overhead is not
+ * worth it for a 2-minute clip, so progressive MP4's simplicity/snappy scrubbing wins.
+ */
+export const PROTOCOL_VOD_SCORE_SHORT: Record<string, number> = {
+  "html5/video/mp4": 0.95,
+  "html5/application/vnd.apple.mpegurl": 0.6,
+  "dash/video/mp4": 0.55,
+  "html5/application/vnd.apple.mpegurl;version=7": 0.55,
+  "ll-hls": 0.55,
+  cmaf: 0.55,
+  "ws/video/mp4": 0.3,
+  "wss/video/mp4": 0.3,
+  whep: 0.2,
+  webrtc: 0.2,
+  "mist/webrtc": 0.2,
+  "ws/video/raw": 0.2,
+  "wss/video/raw": 0.2,
+  "ws/video/h264": 0.2,
+  "wss/video/h264": 0.2,
+};
+
+/** Clips at or below this duration are scored as short content. */
+export const SHORT_CLIP_MS = 180_000;
+
+/** Stream context that makes some per-protocol scores content-dependent. */
+export interface ScoreContext {
+  isLive?: boolean;
+  durationMs?: number;
 }
+
+export function calculateLatencyScore(mimeType: string): number {
+  if (mimeType in PROTOCOL_LATENCY_SCORE) return PROTOCOL_LATENCY_SCORE[mimeType];
+  const m = mimeType.toLowerCase();
+  if (m.includes("cmaf") || m.includes("ll-hls")) return 0.65;
+  if (m.startsWith("dash/")) return 0.35;
+  return 0.5;
+}
+
+export function calculateStabilityScore(mimeType: string): number {
+  if (mimeType in PROTOCOL_STABILITY_SCORE) return PROTOCOL_STABILITY_SCORE[mimeType];
+  const m = mimeType.toLowerCase();
+  if (m.includes("cmaf") || m.includes("ll-hls")) return 0.55;
+  if (m.startsWith("dash/")) return 0.75;
+  return 0.5;
+}
+
+export function calculateBootScore(mimeType: string, ctx: ScoreContext = {}): number {
+  if (mimeType === "html5/video/mp4") {
+    return ctx.isLive ? MP4_BOOT_LIVE : MP4_BOOT_VOD;
+  }
+  if (mimeType in PROTOCOL_BOOT_SCORE) return PROTOCOL_BOOT_SCORE[mimeType];
+  const m = mimeType.toLowerCase();
+  if (m.includes("cmaf") || m.includes("ll-hls")) return 0.85;
+  if (m.startsWith("dash/")) return 0.85;
+  return 0.6;
+}
+
+export function calculateVodScore(mimeType: string, ctx: ScoreContext = {}): number {
+  const isShort =
+    ctx.durationMs !== undefined && ctx.durationMs > 0 && ctx.durationMs <= SHORT_CLIP_MS;
+  const table = isShort ? PROTOCOL_VOD_SCORE_SHORT : PROTOCOL_VOD_SCORE;
+  if (mimeType in table) return table[mimeType];
+  const m = mimeType.toLowerCase();
+  if (m.includes("cmaf") || m.includes("ll-hls")) return isShort ? 0.55 : 0.9;
+  if (m.startsWith("dash/")) return isShort ? 0.55 : 0.95;
+  return isShort ? 0.4 : 0.4;
+}
+
+/**
+ * Per-mode weighting of the four protocol axes. Each mode emphasises a different
+ * blend; the ordering tests in scorer.test.ts are the contract these numbers serve.
+ * Track compatibility (trackScore, 0.5 weight), readiness penalty (1.0 weight) and
+ * routing (0.08) are applied on top of these and are constant across modes.
+ */
+export interface ModeWeights {
+  latency: number;
+  boot: number;
+  stability: number;
+  vod: number;
+}
+
+export const MODE_WEIGHTS: Record<PlaybackMode, ModeWeights> = {
+  // Latency dominates; readiness penalty keeps not-ready MEWS/WebCodecs out → WHEP wins.
+  "low-latency": { latency: 0.3, boot: 0.1, stability: 0.08, vod: 0.0 },
+  // Low-ish latency + quick boot + decent stability → CMAF wins (HLS-TS close behind).
+  balanced: { latency: 0.2, boot: 0.1, stability: 0.14, vod: 0.04 },
+  // Stability dominates → plain HLS-TS (hls.js) wins.
+  quality: { latency: 0.05, boot: 0.08, stability: 0.25, vod: 0.1 },
+  // VOD-suitability dominates; duration flips MP4 vs segmented (long → HLS-TS, clip → MP4).
+  vod: { latency: 0.0, boot: 0.12, stability: 0.16, vod: 0.28 },
+  // Fast boot + top stability → plain HLS-TS wins (live MP4 boots slow).
+  auto: { latency: 0.1, boot: 0.18, stability: 0.16, vod: 0.06 },
+};
 
 /**
  * Protocol routing rules - certain players are preferred for certain protocols
@@ -354,9 +450,11 @@ export const PROTOCOL_ROUTING: Record<string, { prefer: string[]; avoid?: string
     prefer: ["videojs", "hlsjs"],
     avoid: ["native"],
   },
+  // HLSv7 is CMAF/LL-HLS. hls.js has mature LL-HLS (lowLatencyMode, PART-HOLD-BACK,
+  // liveSyncPosition) and holds the live edge; VHS's LL/CMAF path is broken today. hls.js only.
   "html5/application/vnd.apple.mpegurl;version=7": {
-    prefer: ["videojs", "hlsjs"],
-    avoid: ["native"],
+    prefer: ["hlsjs"],
+    avoid: ["videojs", "native"],
   },
 
   // DASH
@@ -412,13 +510,15 @@ export function scorePlayer(
     playerShortname?: string;
     mimeType?: string;
     playbackMode?: PlaybackMode;
+    /** Stream context (from Mist JSON) — flips MP4 boot/VOD scores. */
+    isLive?: boolean;
+    durationMs?: number;
     weights?: {
       tracks: number;
       priority: number;
       source: number;
       quality: number;
       reliability?: number;
-      mode?: number;
       routing?: number;
       protocolPenalty?: number;
     };
@@ -433,42 +533,51 @@ export function scorePlayer(
     playerShortname,
     mimeType,
     playbackMode = "auto",
+    isLive,
+    durationMs,
     weights = {
-      tracks: 0.5, // Reduced from 0.70 to make room for new factors
-      priority: 0.1, // Reduced from 0.15
-      source: 0.05, // Reduced from 0.10
-      quality: 0.05, // Unchanged
-      reliability: 0.1, // NEW: Player stability
-      mode: 0.1, // Playback mode bonus (reduced slightly)
-      routing: 0.08, // Protocol routing preference
-      protocolPenalty: 1.0, // Protocol penalty weight (applied as subtraction)
+      tracks: 0.5, // Track-type compatibility dominates; equal across full A/V combos.
+      priority: 0.1, // Player priority order
+      source: 0.05, // MistServer source order
+      quality: 0.05, // Bandwidth match
+      reliability: 0.05, // Per-player tiebreak only (stability is per-protocol below)
+      routing: 0.08, // Protocol→player routing preference
+      protocolPenalty: 1.0, // Readiness gate (subtracted)
     },
   } = options;
 
   const finalTrackScores = { ...DEFAULT_TRACK_SCORES, ...trackScores };
+  const ctx: ScoreContext = { isLive, durationMs };
 
-  // Individual component scores
+  // Component scores
   const trackScore = calculateTrackScore(supportedTracks, finalTrackScores);
   const priorityScore = calculatePriorityScore(priority, maxPriority);
   const sourceScore = calculateSourceScore(sourceIndex, totalSources);
   const qualityScore = calculateQualityScore(bandwidth, targetBandwidth);
-
-  // New enhanced scores
   const reliabilityScore = playerShortname ? calculateReliabilityScore(playerShortname) : 0.5;
-  const modeBonus = mimeType ? calculateModeBonus(mimeType, playbackMode) : 0;
   const routingBonus =
     mimeType && playerShortname ? calculateRoutingBonus(mimeType, playerShortname) : 0;
   const protocolPenalty = mimeType ? calculateProtocolPenalty(mimeType) : 0;
 
-  // Weighted total score (penalty is subtracted)
+  // Per-protocol axes, weighted by playback mode.
+  const latencyScore = mimeType ? calculateLatencyScore(mimeType) : 0;
+  const bootScore = mimeType ? calculateBootScore(mimeType, ctx) : 0;
+  const stabilityScore = mimeType ? calculateStabilityScore(mimeType) : 0;
+  const vodScore = mimeType ? calculateVodScore(mimeType, ctx) : 0;
+  const modeWeights = MODE_WEIGHTS[playbackMode] ?? MODE_WEIGHTS.auto;
+
+  // Weighted total score (readiness penalty is subtracted)
   const total =
     trackScore * weights.tracks +
     priorityScore * weights.priority +
     sourceScore * weights.source +
     qualityScore * weights.quality +
     reliabilityScore * (weights.reliability ?? 0) +
-    modeBonus * (weights.mode ?? 0) +
-    routingBonus * (weights.routing ?? 0) -
+    routingBonus * (weights.routing ?? 0) +
+    latencyScore * modeWeights.latency +
+    bootScore * modeWeights.boot +
+    stabilityScore * modeWeights.stability +
+    vodScore * modeWeights.vod -
     protocolPenalty * (weights.protocolPenalty ?? 1.0);
 
   return {
@@ -480,7 +589,10 @@ export function scorePlayer(
       priorityScore,
       sourceScore,
       reliabilityScore,
-      modeBonus,
+      latencyScore,
+      bootScore,
+      stabilityScore,
+      vodScore,
       routingBonus,
       protocolPenalty,
     },

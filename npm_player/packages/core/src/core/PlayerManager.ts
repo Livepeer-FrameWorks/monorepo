@@ -100,14 +100,16 @@ export interface PlayerCombination {
     priorityScore: number;
     sourceScore: number;
     reliabilityScore?: number;
-    modeBonus?: number;
+    latencyScore?: number;
+    bootScore?: number;
+    stabilityScore?: number;
+    vodScore?: number;
     routingBonus?: number;
     weights: {
       tracks: number;
       priority: number;
       source: number;
       reliability?: number;
-      mode?: number;
       routing?: number;
     };
   };
@@ -425,6 +427,14 @@ export class PlayerManager {
       requiredTracks.push("audio");
     }
 
+    // Stream context drives content-aware scoring (live read-ahead MP4 vs short clip vs long VOD).
+    const isLive = isLiveStreamType(streamInfo.type);
+    const trackEnds = streamInfo.meta.tracks
+      .filter((t) => t.type === "video" || t.type === "audio")
+      .map((t) => t.lastms)
+      .filter((n): n is number => typeof n === "number");
+    const durationMs = trackEnds.length > 0 ? Math.max(...trackEnds) : undefined;
+
     // Track seen player+sourceType pairs to avoid duplicates
     const seenPairs = new Set<string>();
 
@@ -472,6 +482,8 @@ export class PlayerManager {
               playerShortname: player.capability.shortname,
               mimeType: source.type,
               playbackMode: effectiveMode,
+              isLive,
+              durationMs,
             }
           );
 
@@ -514,6 +526,8 @@ export class PlayerManager {
           playerShortname: player.capability.shortname,
           mimeType: source.type,
           playbackMode: effectiveMode,
+          isLive,
+          durationMs,
         });
 
         // Partial combos (missing entire track types) get a hard penalty
@@ -535,14 +549,16 @@ export class PlayerManager {
             priorityScore,
             sourceScore,
             reliabilityScore: playerScore.breakdown?.reliabilityScore ?? 0,
-            modeBonus: playerScore.breakdown?.modeBonus ?? 0,
+            latencyScore: playerScore.breakdown?.latencyScore ?? 0,
+            bootScore: playerScore.breakdown?.bootScore ?? 0,
+            stabilityScore: playerScore.breakdown?.stabilityScore ?? 0,
+            vodScore: playerScore.breakdown?.vodScore ?? 0,
             routingBonus: playerScore.breakdown?.routingBonus ?? 0,
             weights: {
               tracks: 0.5,
               priority: 0.1,
               source: 0.05,
-              reliability: 0.1,
-              mode: 0.12,
+              reliability: 0.05,
               routing: 0.08,
             },
           },
@@ -1176,10 +1192,12 @@ export class PlayerManager {
     for (let i = 0; i < Math.min(compatible.length, 8); i++) {
       const c = compatible[i];
       const tracks = c.scoreBreakdown?.trackTypes?.join("+") || "?";
-      const mb = c.scoreBreakdown?.modeBonus?.toFixed(2) || "0";
+      const lat = c.scoreBreakdown?.latencyScore?.toFixed(2) || "0";
+      const stab = c.scoreBreakdown?.stabilityScore?.toFixed(2) || "0";
+      const boot = c.scoreBreakdown?.bootScore?.toFixed(2) || "0";
       const rb = c.scoreBreakdown?.routingBonus?.toFixed(2) || "0";
       lines.push(
-        `  #${i + 1} ${c.player} + ${c.sourceType}: ${c.score.toFixed(3)} [${tracks}] mode:${mb} route:${rb}`
+        `  #${i + 1} ${c.player} + ${c.sourceType}: ${c.score.toFixed(3)} [${tracks}] lat:${lat} stab:${stab} boot:${boot} route:${rb}`
       );
     }
     if (compatible.length > 8) {

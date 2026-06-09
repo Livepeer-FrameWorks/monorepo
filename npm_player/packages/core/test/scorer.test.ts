@@ -9,19 +9,51 @@ import {
   calculateQualityScore,
   calculateProtocolPenalty,
   calculateReliabilityScore,
-  calculateModeBonus,
+  calculateLatencyScore,
+  calculateStabilityScore,
+  calculateBootScore,
+  calculateVodScore,
   calculateRoutingBonus,
   isProtocolBlacklisted,
   scorePlayer,
   compareScores,
   scoreAndRankPlayers,
   meetsMinimumScore,
-  PROTOCOL_BLACKLIST,
-  PROTOCOL_PENALTIES,
-  PLAYER_RELIABILITY,
-  MODE_PROTOCOL_BONUSES,
-  PROTOCOL_ROUTING,
+  SHORT_CLIP_MS,
 } from "../src/core/scorer";
+
+const ALL_PROTOCOLS = {
+  whep: { mime: "whep", player: "native" },
+  cmaf: { mime: "html5/application/vnd.apple.mpegurl;version=7", player: "hlsjs" },
+  hlsTs: { mime: "html5/application/vnd.apple.mpegurl", player: "hlsjs" },
+  dash: { mime: "dash/video/mp4", player: "dashjs" },
+  mp4: { mime: "html5/video/mp4", player: "native" },
+  mews: { mime: "ws/video/mp4", player: "mews" },
+  webcodecs: { mime: "ws/video/raw", player: "webcodecs" },
+} as const;
+
+/** Score every protocol for a full A/V stream in a given mode + context, return a name→total map. */
+function scoreAllProtocols(
+  playbackMode: "low-latency" | "balanced" | "quality" | "vod" | "auto",
+  ctx: { isLive?: boolean; durationMs?: number } = {}
+): Record<keyof typeof ALL_PROTOCOLS, number> {
+  const out = {} as Record<keyof typeof ALL_PROTOCOLS, number>;
+  for (const [name, { mime, player }] of Object.entries(ALL_PROTOCOLS)) {
+    out[name as keyof typeof ALL_PROTOCOLS] = scorePlayer(["video", "audio"], 0, 0, {
+      maxPriority: 100,
+      totalSources: 1,
+      playerShortname: player,
+      mimeType: mime,
+      playbackMode,
+      ...ctx,
+    }).total;
+  }
+  return out;
+}
+
+function winner(scores: Record<string, number>): string {
+  return Object.entries(scores).sort((a, b) => b[1] - a[1])[0][0];
+}
 
 describe("scorer", () => {
   // =========================================================================
@@ -147,16 +179,16 @@ describe("scorer", () => {
       expect(calculateProtocolPenalty("some/video/webm-variant")).toBe(0.5);
     });
 
-    it("pattern-based: dash/ prefix gets 0.4", () => {
-      expect(calculateProtocolPenalty("dash/audio/mp4")).toBe(0.4);
+    it("DASH and CMAF/LL-HLS carry no readiness penalty (stability is scored separately)", () => {
+      expect(calculateProtocolPenalty("dash/video/mp4")).toBe(0);
+      expect(calculateProtocolPenalty("dash/audio/mp4")).toBe(0);
+      expect(calculateProtocolPenalty("html5/application/vnd.apple.mpegurl;version=7")).toBe(0);
+      expect(calculateProtocolPenalty("ll-hls")).toBe(0);
+      expect(calculateProtocolPenalty("cmaf")).toBe(0);
     });
 
-    it("pattern-based: cmaf gets 0.2", () => {
-      expect(calculateProtocolPenalty("cmaf-stuff")).toBe(0.2);
-    });
-
-    it("DASH video/mp4 is highest penalty (0.9)", () => {
-      expect(calculateProtocolPenalty("dash/video/mp4")).toBe(0.9);
+    it("WebM-in-DASH still penalized via the webm pattern", () => {
+      expect(calculateProtocolPenalty("dash/video/webm")).toBe(0.5);
     });
   });
 
@@ -192,7 +224,8 @@ describe("scorer", () => {
   // calculateReliabilityScore
   // =========================================================================
   describe("calculateReliabilityScore", () => {
-    it("videojs has top reliability and webcodecs is lower", () => {
+    it("hlsjs and videojs are the top HLS reliability options", () => {
+      expect(calculateReliabilityScore("hlsjs")).toBe(0.96);
       expect(calculateReliabilityScore("videojs")).toBe(0.95);
       expect(calculateReliabilityScore("webcodecs")).toBe(0.75);
     });
@@ -207,66 +240,85 @@ describe("scorer", () => {
   });
 
   // =========================================================================
-  // calculateModeBonus
+  // Per-protocol axes (latency / stability / boot / vod)
   // =========================================================================
-  describe("calculateModeBonus", () => {
-    it("low-latency keeps WebCodecs below WHEP and MEWS", () => {
-      expect(calculateModeBonus("ws/video/raw", "low-latency")).toBe(0.2);
-      expect(calculateModeBonus("ws/video/raw", "low-latency")).toBeLessThan(
-        calculateModeBonus("whep", "low-latency")
-      );
-      expect(calculateModeBonus("ws/video/raw", "low-latency")).toBeLessThan(
-        calculateModeBonus("ws/video/mp4", "low-latency")
+  describe("calculateLatencyScore", () => {
+    it("WHEP is lowest latency, plain HLS-TS highest", () => {
+      expect(calculateLatencyScore("whep")).toBe(1.0);
+      expect(calculateLatencyScore("html5/application/vnd.apple.mpegurl")).toBe(0.2);
+      expect(calculateLatencyScore("whep")).toBeGreaterThan(
+        calculateLatencyScore("html5/application/vnd.apple.mpegurl")
       );
     });
 
-    it("quality keeps WebCodecs below HLS", () => {
-      expect(calculateModeBonus("ws/video/raw", "quality")).toBeLessThan(
-        calculateModeBonus("html5/application/vnd.apple.mpegurl", "quality")
+    it("orders CMAF < MP4 < DASH on latency (MP4 lower latency than DASH)", () => {
+      const cmaf = calculateLatencyScore("html5/application/vnd.apple.mpegurl;version=7");
+      const mp4 = calculateLatencyScore("html5/video/mp4");
+      const dash = calculateLatencyScore("dash/video/mp4");
+      expect(cmaf).toBeGreaterThan(mp4);
+      expect(mp4).toBeGreaterThan(dash);
+    });
+  });
+
+  describe("calculateStabilityScore", () => {
+    it("HLS-TS most stable; DASH ≈ MP4 above CMAF; WebCodecs lowest", () => {
+      expect(calculateStabilityScore("html5/application/vnd.apple.mpegurl")).toBe(1.0);
+      expect(calculateStabilityScore("dash/video/mp4")).toBe(
+        calculateStabilityScore("html5/video/mp4")
+      );
+      expect(calculateStabilityScore("dash/video/mp4")).toBeGreaterThan(
+        calculateStabilityScore("html5/application/vnd.apple.mpegurl;version=7")
+      );
+      expect(calculateStabilityScore("ws/video/raw")).toBeLessThan(
+        calculateStabilityScore("ws/video/mp4")
       );
     });
 
-    it("quality favors HLS over progressive MP4 and MEWS", () => {
-      expect(calculateModeBonus("html5/application/vnd.apple.mpegurl", "quality")).toBeGreaterThan(
-        calculateModeBonus("html5/video/mp4", "quality")
-      );
-      expect(calculateModeBonus("html5/application/vnd.apple.mpegurl", "quality")).toBeGreaterThan(
-        calculateModeBonus("ws/video/mp4", "quality")
+    it("CMAF less stable than plain HLS-TS even though both are hls.js", () => {
+      expect(calculateStabilityScore("html5/application/vnd.apple.mpegurl;version=7")).toBeLessThan(
+        calculateStabilityScore("html5/application/vnd.apple.mpegurl")
       );
     });
+  });
 
-    it("auto keeps WHEP behind HTTP/MSE transports", () => {
-      expect(calculateModeBonus("html5/video/mp4", "auto")).toBeGreaterThan(
-        calculateModeBonus("whep", "auto")
-      );
-      expect(calculateModeBonus("html5/application/vnd.apple.mpegurl", "auto")).toBeGreaterThan(
-        calculateModeBonus("whep", "auto")
-      );
-      expect(calculateModeBonus("ws/video/mp4", "auto")).toBeGreaterThan(
-        calculateModeBonus("whep", "auto")
+  describe("calculateBootScore", () => {
+    it("WebCodecs and HLS-TS boot fastest; WHEP cold-start is slow", () => {
+      expect(calculateBootScore("ws/video/raw")).toBe(1.0);
+      expect(calculateBootScore("html5/application/vnd.apple.mpegurl")).toBeGreaterThan(
+        calculateBootScore("whep")
       );
     });
 
-    it("low-latency: WHEP > HLS", () => {
-      expect(calculateModeBonus("whep", "low-latency")).toBeGreaterThan(
-        calculateModeBonus("html5/application/vnd.apple.mpegurl", "low-latency")
+    it("MP4 boots slow live (read-ahead) but fast as a faststart VOD file", () => {
+      expect(calculateBootScore("html5/video/mp4", { isLive: true })).toBe(0.4);
+      expect(calculateBootScore("html5/video/mp4", { isLive: false })).toBe(0.85);
+      expect(calculateBootScore("html5/video/mp4", { isLive: true })).toBeLessThan(
+        calculateBootScore("html5/video/mp4", { isLive: false })
       );
     });
+  });
 
-    it("vod deprioritizes WHEP (low but not excluded)", () => {
-      expect(calculateModeBonus("whep", "vod")).toBe(0.1);
+  describe("calculateVodScore", () => {
+    it("long VOD favors segmented HLS-TS > DASH > CMAF over progressive MP4", () => {
+      const long = { durationMs: 3_600_000 };
+      expect(calculateVodScore("html5/application/vnd.apple.mpegurl", long)).toBeGreaterThan(
+        calculateVodScore("dash/video/mp4", long)
+      );
+      expect(calculateVodScore("dash/video/mp4", long)).toBeGreaterThan(
+        calculateVodScore("html5/application/vnd.apple.mpegurl;version=7", long)
+      );
+      expect(
+        calculateVodScore("html5/application/vnd.apple.mpegurl;version=7", long)
+      ).toBeGreaterThan(calculateVodScore("html5/video/mp4", long));
     });
 
-    it("vod favors MP4", () => {
-      expect(calculateModeBonus("html5/video/mp4", "vod")).toBe(0.5);
-    });
-
-    it("returns 0 for unknown protocol in any mode", () => {
-      expect(calculateModeBonus("unknown/format", "auto")).toBe(0);
-    });
-
-    it("returns 0 for falsy mode", () => {
-      expect(calculateModeBonus("whep", undefined as any)).toBe(0);
+    it("short clip flips: progressive MP4 beats segmented", () => {
+      const short = { durationMs: 120_000 };
+      expect(calculateVodScore("html5/video/mp4", short)).toBeGreaterThan(
+        calculateVodScore("html5/application/vnd.apple.mpegurl", short)
+      );
+      expect(calculateVodScore("html5/video/mp4", short)).toBe(0.95);
+      expect(SHORT_CLIP_MS).toBeGreaterThan(120_000);
     });
   });
 
@@ -287,6 +339,15 @@ describe("scorer", () => {
 
     it("avoided player gets -0.1", () => {
       expect(calculateRoutingBonus("html5/application/vnd.apple.mpegurl", "native")).toBe(-0.1);
+    });
+
+    it("routes CMAF/LL-HLS to hls.js and avoids Video.js (its CMAF path is broken)", () => {
+      expect(calculateRoutingBonus("html5/application/vnd.apple.mpegurl;version=7", "hlsjs")).toBe(
+        0.15
+      );
+      expect(
+        calculateRoutingBonus("html5/application/vnd.apple.mpegurl;version=7", "videojs")
+      ).toBe(-0.1);
     });
 
     it("no routing rule returns 0", () => {
@@ -333,6 +394,25 @@ describe("scorer", () => {
       const clean = scorePlayer(["video"], 0, 0, { mimeType: "html5/video/mp4" });
       const penalized = scorePlayer(["video"], 0, 0, { mimeType: "html5/video/webm" });
       expect(clean.total).toBeGreaterThan(penalized.total);
+    });
+
+    it("ranks hls.js above Video.js for CMAF/LL-HLS", () => {
+      const common = {
+        maxPriority: 100,
+        totalSources: 2,
+        mimeType: "html5/application/vnd.apple.mpegurl;version=7",
+        playbackMode: "auto" as const,
+      };
+      const hlsjs = scorePlayer(["video", "audio"], 3, 0, {
+        ...common,
+        playerShortname: "hlsjs",
+      });
+      const videojs = scorePlayer(["video", "audio"], 2, 0, {
+        ...common,
+        playerShortname: "videojs",
+      });
+
+      expect(hlsjs.total).toBeGreaterThan(videojs.total);
     });
 
     it("low-latency ranks WebCodecs below WHEP and MEWS for full A/V", () => {
@@ -430,6 +510,73 @@ describe("scorer", () => {
     it("uses default weights when not specified", () => {
       const s = scorePlayer(["video", "audio"], 5, 1, { maxPriority: 10, totalSources: 3 });
       expect(s.total).toBeGreaterThan(0);
+    });
+  });
+
+  // =========================================================================
+  // Per-mode winners + invariants (the tuning contract)
+  // =========================================================================
+  describe("per-mode winners", () => {
+    it("low-latency → WHEP", () => {
+      expect(winner(scoreAllProtocols("low-latency", { isLive: true }))).toBe("whep");
+    });
+
+    it("balanced → CMAF", () => {
+      expect(winner(scoreAllProtocols("balanced", { isLive: true }))).toBe("cmaf");
+    });
+
+    it("quality → plain HLS-TS", () => {
+      expect(winner(scoreAllProtocols("quality", { isLive: true }))).toBe("hlsTs");
+    });
+
+    it("auto → plain HLS-TS", () => {
+      expect(winner(scoreAllProtocols("auto", { isLive: true }))).toBe("hlsTs");
+    });
+
+    it("vod long content → plain HLS-TS", () => {
+      expect(winner(scoreAllProtocols("vod", { isLive: false, durationMs: 3_600_000 }))).toBe(
+        "hlsTs"
+      );
+    });
+
+    it("vod short clip → progressive MP4", () => {
+      expect(winner(scoreAllProtocols("vod", { isLive: false, durationMs: 120_000 }))).toBe("mp4");
+    });
+  });
+
+  describe("scoring invariants", () => {
+    it("not-ready protocols (MEWS, WebCodecs) never win a live mode", () => {
+      for (const mode of ["low-latency", "balanced", "quality", "auto"] as const) {
+        const scores = scoreAllProtocols(mode, { isLive: true });
+        const w = winner(scores);
+        expect(w).not.toBe("mews");
+        expect(w).not.toBe("webcodecs");
+      }
+    });
+
+    it("DASH never wins a live mode", () => {
+      // DASH's order vs CMAF/MP4 legitimately shifts by mode (CMAF wins latency-weighted
+      // modes; DASH's higher stability lifts it in stability-weighted quality), but with
+      // LL-DASH off it is never the selected winner.
+      for (const mode of ["low-latency", "balanced", "quality", "auto"] as const) {
+        expect(winner(scoreAllProtocols(mode, { isLive: true }))).not.toBe("dash");
+      }
+    });
+
+    it("CMAF via hls.js beats CMAF via videojs (routing avoid)", () => {
+      const common = {
+        maxPriority: 100,
+        totalSources: 1,
+        mimeType: "html5/application/vnd.apple.mpegurl;version=7",
+        playbackMode: "balanced" as const,
+        isLive: true,
+      };
+      const hlsjs = scorePlayer(["video", "audio"], 0, 0, { ...common, playerShortname: "hlsjs" });
+      const videojs = scorePlayer(["video", "audio"], 0, 0, {
+        ...common,
+        playerShortname: "videojs",
+      });
+      expect(hlsjs.total).toBeGreaterThan(videojs.total);
     });
   });
 

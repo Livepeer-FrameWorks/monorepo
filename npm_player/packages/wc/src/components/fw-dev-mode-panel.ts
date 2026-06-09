@@ -881,16 +881,22 @@ export class FwDevModePanel extends LitElement {
                                           </div>
                                         `
                                       : nothing}
-                                    ${typeof combo.scoreBreakdown.modeBonus === "number" &&
-                                    combo.scoreBreakdown.modeBonus !== 0
+                                    ${typeof combo.scoreBreakdown.latencyScore === "number"
                                       ? html`
                                           <div class="fw-dev-tooltip-row">
-                                            Mode (${this.playbackMode}):
-                                            <span class="fw-dev-tooltip-bonus"
-                                              >+${combo.scoreBreakdown.modeBonus.toFixed(2)}</span
-                                            >
-                                            <span class="fw-dev-tooltip-weight"
-                                              >x${combo.scoreBreakdown.weights.mode ?? 0}</span
+                                            Protocol axes (${this.playbackMode}):
+                                            <span class="fw-dev-tooltip-value"
+                                              >lat ${combo.scoreBreakdown.latencyScore.toFixed(2)} ·
+                                              stab
+                                              ${(combo.scoreBreakdown.stabilityScore ?? 0).toFixed(
+                                                2
+                                              )}
+                                              · boot
+                                              ${(combo.scoreBreakdown.bootScore ?? 0).toFixed(2)} ·
+                                              vod
+                                              ${(combo.scoreBreakdown.vodScore ?? 0).toFixed(
+                                                2
+                                              )}</span
                                             >
                                           </div>
                                         `

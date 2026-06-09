@@ -24,6 +24,11 @@ export class DashJsPlayerImpl extends BasePlayer {
   private destroyed = false;
   private debugging = false;
   private sawMediaStartup = false;
+  private dashStreamInitialized = false;
+  private lastManifestActivityAt = 0;
+  private manifestRefreshMinIntervalMs = 2000;
+  private lowBufferRefreshThresholdMs = 2000;
+  private activeFragmentLoads = 0;
   private startupAbandonCount = 0;
   private startupAbandonReported = false;
   private cleanupStartupWatchdog: (() => void) | null = null;
@@ -156,6 +161,9 @@ export class DashJsPlayerImpl extends BasePlayer {
       "LOG",
       "PLAYBACK_TIME_UPDATED",
       "PLAYBACK_PROGRESS",
+      // Fires per forming part on chunked LL-DASH; informational, not fatal - keep
+      // it out of the log so it doesn't drown the console.
+      "CONFORMANCE_VIOLATION",
     ];
 
     const events = dashjs.MediaPlayer?.events || {};
@@ -227,11 +235,15 @@ export class DashJsPlayerImpl extends BasePlayer {
     this.dashPlayer.on("streamInitialized", cleanup);
     this.dashPlayer.on("canPlay", cleanup);
     this.dashPlayer.on("error", cleanup);
+    // Backstop only - cleared as soon as streamInitialized/canPlay/error fires. 3s was
+    // too tight for chunked LL-DASH cold start (MOOF parsing + UTC sync + first parts),
+    // tripping a false fatal before the stream stabilized. 10s gives real startup room
+    // while still catching a genuinely dead manifest.
     timeoutId = setTimeout(() => {
       if (settled || this.destroyed) return;
       cleanup();
       this.reportDashFailure("DASH fatal startup timed out before stream initialization");
-    }, 3000);
+    }, 10000);
     this.cleanupStartupWatchdog = cleanup;
   }
 
@@ -239,6 +251,129 @@ export class DashJsPlayerImpl extends BasePlayer {
     if (this.debugging) {
       console.debug(...args);
     }
+  }
+
+  private parseDashDurationMs(value: unknown): number | null {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      return value <= 60 ? value * 1000 : value;
+    }
+
+    if (typeof value !== "string") return null;
+
+    const match = value.match(
+      /^PT(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?$/
+    );
+    if (!match) return null;
+
+    const hours = Number(match[1] ?? 0);
+    const minutes = Number(match[2] ?? 0);
+    const seconds = Number(match[3] ?? 0);
+    const ms = (hours * 3600 + minutes * 60 + seconds) * 1000;
+    return Number.isFinite(ms) && ms > 0 ? ms : null;
+  }
+
+  private updateManifestTimingHints(manifest: any): void {
+    const minimumUpdatePeriod =
+      manifest?.minimumUpdatePeriod ??
+      manifest?.MPD?.minimumUpdatePeriod ??
+      manifest?.mpd?.minimumUpdatePeriod;
+    const minBufferTime =
+      manifest?.minBufferTime ?? manifest?.MPD?.minBufferTime ?? manifest?.mpd?.minBufferTime;
+
+    const refreshMs = this.parseDashDurationMs(minimumUpdatePeriod);
+    if (refreshMs !== null) {
+      this.manifestRefreshMinIntervalMs = Math.max(250, refreshMs);
+    }
+
+    const bufferMs = this.parseDashDurationMs(minBufferTime);
+    if (bufferMs !== null) {
+      this.lowBufferRefreshThresholdMs = Math.max(1000, Math.min(6000, bufferMs * 1.5));
+    }
+  }
+
+  private refreshLiveManifest(reason: string): void {
+    if (!this.dashPlayer || !this.isLiveStream() || !this.dashStreamInitialized) return;
+    if (typeof this.dashPlayer.refreshManifest !== "function") return;
+
+    const now = Date.now();
+    if (now - this.lastManifestActivityAt < this.manifestRefreshMinIntervalMs) return;
+
+    this.lastManifestActivityAt = now;
+    this.debugLog(`[DashJS] Refreshing live manifest after ${reason}`);
+
+    try {
+      this.dashPlayer.refreshManifest((_manifest: unknown, error: unknown) => {
+        if (error) {
+          console.warn("[DashJS] Live manifest refresh failed:", error);
+        }
+      });
+    } catch (error) {
+      console.warn("[DashJS] Live manifest refresh threw:", error);
+    }
+  }
+
+  private getFiniteSeconds(value: unknown): number | null {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
+    return value;
+  }
+
+  private getDashBufferLevelSeconds(event?: any): number | null {
+    const levels: number[] = [];
+
+    try {
+      const videoLevel = this.getFiniteSeconds(this.dashPlayer?.getBufferLength?.("video"));
+      if (videoLevel !== null) levels.push(videoLevel);
+    } catch {}
+
+    try {
+      const audioLevel = this.getFiniteSeconds(this.dashPlayer?.getBufferLength?.("audio"));
+      if (audioLevel !== null) levels.push(audioLevel);
+    } catch {}
+
+    if (levels.length > 0) return Math.min(...levels);
+
+    const eventLevel = this.getFiniteSeconds(event?.bufferLevel);
+    return eventLevel;
+  }
+
+  private handleBufferLevelUpdated(event?: any): void {
+    const bufferLevelSec = this.getDashBufferLevelSeconds(event);
+
+    if (bufferLevelSec === null) return;
+    if (!this.isLiveStream() || !this.dashStreamInitialized || !this.sawMediaStartup) return;
+    if (this.activeFragmentLoads > 0) return;
+
+    const thresholdSec = this.lowBufferRefreshThresholdMs / 1000;
+    if (bufferLevelSec > thresholdSec) return;
+
+    this.emit("bufferlow", {
+      current: bufferLevelSec * 1000,
+      desired: this.lowBufferRefreshThresholdMs,
+    });
+    this.refreshLiveManifest(`lowBuffer:${bufferLevelSec.toFixed(3)}s`);
+  }
+
+  private markFragmentLoadStarted(): void {
+    this.activeFragmentLoads++;
+  }
+
+  private markFragmentLoadEnded(): void {
+    this.activeFragmentLoads = Math.max(0, this.activeFragmentLoads - 1);
+  }
+
+  private applyDashSettings(): void {
+    this.debugLog("[DashJS] Applying DASH integration settings");
+    // Keep latency policy in the MPD. The low-buffer watcher only refreshes a live
+    // manifest when dash.js is idle and near underflow; it does not override liveDelay
+    // or catch-up behavior.
+    this.dashPlayer.updateSettings({
+      streaming: {
+        text: { defaultEnabled: false },
+      },
+      debug: {
+        logLevel: 2,
+      },
+    });
   }
 
   private createInternalRejectionHandler(): (e: PromiseRejectionEvent) => void {
@@ -251,7 +386,7 @@ export class DashJsPlayerImpl extends BasePlayer {
       // Only claim rejections that are actually dash.js's. The generic null /
       // "range" symptoms below are the known DVR/SIDX crash signature, but on
       // their own they also match unrelated app rejections fired while this
-      // player is alive — so gate them on a dash.js stack frame. Specific
+      // player is alive - so gate them on a dash.js stack frame. Specific
       // dash.js API signatures are claimed regardless.
       const fromDashjs = stack.includes("dashjs") || stack.includes("dash.all");
       const knownDashSignature =
@@ -286,6 +421,11 @@ export class DashJsPlayerImpl extends BasePlayer {
     this.container = container;
     this.subsLoaded = false;
     this.pendingSubtitleId = null;
+    this.dashStreamInitialized = false;
+    this.lastManifestActivityAt = 0;
+    this.manifestRefreshMinIntervalMs = 2000;
+    this.lowBufferRefreshThresholdMs = 2000;
+    this.activeFragmentLoads = 0;
     container.classList.add("fw-player-container");
 
     // Detect stream type from gateway/Mist metadata. source.type is the MIME
@@ -358,7 +498,15 @@ export class DashJsPlayerImpl extends BasePlayer {
       window.addEventListener("unhandledrejection", this._rejectionHandler);
 
       // Log key dashjs events for debugging
+      this.dashPlayer.on("manifestLoadingStarted", () => {
+        this.lastManifestActivityAt = Date.now();
+      });
+      this.dashPlayer.on("manifestLoadingFinished", () => {
+        this.lastManifestActivityAt = Date.now();
+      });
       this.dashPlayer.on("manifestLoaded", (e: any) => {
+        this.lastManifestActivityAt = Date.now();
+        this.updateManifestTimingHints(e?.data);
         this.debugLog("[DashJS] manifestLoaded:", e);
       });
       this.dashPlayer.on("canPlay", () => {
@@ -368,21 +516,12 @@ export class DashJsPlayerImpl extends BasePlayer {
       // Log stream initialization for debugging
       this.dashPlayer.on("streamInitialized", () => {
         if (this.destroyed) return;
+        this.dashStreamInitialized = true;
         const isDynamic = this.dashPlayer.isDynamic?.() ?? false;
         this.debugLog("[DashJS v5] streamInitialized - isDynamic:", isDynamic);
       });
 
-      // Match MistMetaPlayer's dashjs wrapper: let dashjs follow the MPD for live edge,
-      // buffer, and catch-up behavior unless the caller explicitly overrides it.
-      this.dashPlayer.updateSettings({
-        streaming: {
-          text: { defaultEnabled: false },
-          delay: { useSuggestedPresentationDelay: true },
-        },
-        debug: {
-          logLevel: 2,
-        },
-      });
+      this.applyDashSettings();
 
       // Caller overrides on top of the defaults above. dash.js's updateSettings
       // deep-merges, so a second call lets options.dashConfig win on overlapping
@@ -393,13 +532,23 @@ export class DashJsPlayerImpl extends BasePlayer {
 
       if (this.debugging) {
         this.dashPlayer.on("fragmentLoadingStarted", (e: any) => {
+          this.markFragmentLoadStarted();
           this.debugLog("[DashJS] Fragment loading started:", e.request?.url?.split("/").pop());
         });
         this.dashPlayer.on("fragmentLoadingCompleted", (e: any) => {
+          this.markFragmentLoadEnded();
           this.debugLog("[DashJS] Fragment loading completed:", e.request?.url?.split("/").pop());
+        });
+      } else {
+        this.dashPlayer.on("fragmentLoadingStarted", () => {
+          this.markFragmentLoadStarted();
+        });
+        this.dashPlayer.on("fragmentLoadingCompleted", () => {
+          this.markFragmentLoadEnded();
         });
       }
       this.dashPlayer.on("fragmentLoadingAbandoned", (e: any) => {
+        this.markFragmentLoadEnded();
         console.warn("[DashJS] Fragment loading ABANDONED:", e.request?.url?.split("/").pop(), e);
         if (!this.sawMediaStartup) {
           this.startupAbandonCount++;
@@ -410,20 +559,31 @@ export class DashJsPlayerImpl extends BasePlayer {
         }
       });
       this.dashPlayer.on("fragmentLoadingFailed", (e: any) => {
+        this.markFragmentLoadEnded();
         console.error("[DashJS] Fragment loading FAILED:", e.request?.url?.split("/").pop(), e);
+        this.refreshLiveManifest("fragmentLoadingFailed");
+      });
+      this.dashPlayer.on("bufferStalled", () => {
+        this.refreshLiveManifest("bufferStalled");
+      });
+      this.dashPlayer.on("playbackWaiting", () => {
+        this.refreshLiveManifest("playbackWaiting");
+      });
+      this.dashPlayer.on("bufferLevelUpdated", (e: any) => {
+        this.handleBufferLevelUpdated(e);
       });
 
       // dashjs v5: Initialize with URL
       this.debugLog("[DashJS v5] Initializing with URL:", source.url);
       this.armStartupWatchdog();
-      this.dashPlayer.initialize(video, source.url, false);
+      this.dashPlayer.initialize(video, source.url, options.autoplay !== false);
       this.debugLog("[DashJS v5] Initialize called");
       if (this.destroyed) {
         throw new Error("DASH player destroyed during initialization");
       }
 
-      // The controller owns autoplay; dash.js autoplay races with MSE attachment
-      // and can leave the video element paused=false but still buffering.
+      // Match MistMetaPlayer: dash.js gets the autoplay intent while the controller
+      // still handles browser autoplay recovery around the media element.
       this.setupVideoEventListeners(video, options, { readyEvent: "immediate" });
       this.setupStalledHandling();
 
@@ -510,10 +670,6 @@ export class DashJsPlayerImpl extends BasePlayer {
   }
 
   getCurrentTime(): number {
-    if (this.isLiveStream() && this.dashPlayer && typeof this.dashPlayer.time === "function") {
-      const sec = this.dashPlayer.time();
-      if (Number.isFinite(sec)) return sec * 1000;
-    }
     return super.getCurrentTime();
   }
 
@@ -529,8 +685,8 @@ export class DashJsPlayerImpl extends BasePlayer {
 
   getDuration(): number {
     if (this.isLiveStream()) {
-      const dvrRange = this.getDashDvrWindow();
-      if (dvrRange) return dvrRange.end;
+      const nativeRange = this.getNativeSeekableRange();
+      if (nativeRange) return nativeRange.end;
     }
     const sec = this.videoElement?.duration ?? 0;
     if (!Number.isFinite(sec)) return sec;
@@ -539,10 +695,9 @@ export class DashJsPlayerImpl extends BasePlayer {
 
   getSeekableRange(): { start: number; end: number } | null {
     if (this.isLiveStream()) {
-      const dvrRange = this.getDashDvrWindow();
-      if (dvrRange) return dvrRange;
+      return this.getNativeSeekableRange();
     }
-    return this.getNativeSeekableRange();
+    return super.getSeekableRange();
   }
 
   setSeekableRangeHint(_range: { start: number; end: number } | null): void {
@@ -550,11 +705,13 @@ export class DashJsPlayerImpl extends BasePlayer {
   }
 
   seek(timeMs: number): void {
-    if (
-      this.isLiveStream() &&
-      this.dashPlayer &&
-      typeof this.dashPlayer.seekToPresentationTime === "function"
-    ) {
+    // Live DASH: hand the seek to dash.js so IT orchestrates the DVR fetch. Setting
+    // video.currentTime directly (native MSE) makes dash.js abandon in-flight segments,
+    // reset its SourceBuffers (audio buffer → NaN) and refetch FORWARD toward live —
+    // i.e. the seek snaps back. seekToPresentationTime takes presentation time, which is
+    // the same coordinate as getCurrentTime()/video.currentTime, so the seekbar target
+    // maps directly.
+    if (this.isLiveStream() && typeof this.dashPlayer?.seekToPresentationTime === "function") {
       this.dashPlayer.seekToPresentationTime(timeMs / 1000);
       return;
     }
@@ -562,44 +719,17 @@ export class DashJsPlayerImpl extends BasePlayer {
   }
 
   /**
-   * Jump to live edge for live streams.
-   * Uses DASH.js seekToLive API when available.
+   * Jump to live edge for live streams via dash.js's own API (sets up the live-edge
+   * fetch state cleanly, unlike poking currentTime).
    */
   jumpToLive(): void {
     const video = this.videoElement;
     if (!video || !this.isLiveStream()) return;
-
-    if (this.dashPlayer && typeof this.dashPlayer.seekToOriginalLive === "function") {
-      this.debugLog("[DashJS] jumpToLive using seekToOriginalLive()");
+    if (typeof this.dashPlayer?.seekToOriginalLive === "function") {
       this.dashPlayer.seekToOriginalLive();
       return;
     }
-
-    // Fallback: seek to end of seekable range
-    if (video.seekable && video.seekable.length > 0) {
-      const liveEdge = video.seekable.end(video.seekable.length - 1);
-      if (isFinite(liveEdge) && liveEdge > 0) {
-        this.debugLog("[DashJS] jumpToLive using seekable.end:", liveEdge);
-        video.currentTime = liveEdge;
-      }
-    }
-  }
-
-  private getDashDvrWindow(): { start: number; end: number } | null {
-    if (!this.dashPlayer || typeof this.dashPlayer.getDvrWindow !== "function") {
-      return null;
-    }
-    try {
-      const dvr = this.dashPlayer.getDvrWindow();
-      const start = dvr?.start;
-      const end = dvr?.end;
-      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
-        return null;
-      }
-      return { start: start * 1000, end: end * 1000 };
-    } catch {
-      return null;
-    }
+    super.jumpToLive();
   }
 
   /**

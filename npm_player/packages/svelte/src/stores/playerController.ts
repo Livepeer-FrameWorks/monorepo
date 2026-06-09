@@ -172,7 +172,7 @@ export interface PlayerControllerStore extends Readable<PlayerControllerState> {
     forcePlayer?: string;
     forceType?: string;
     forceSource?: number;
-    playbackMode?: "auto" | "low-latency" | "quality" | "vod";
+    playbackMode?: "auto" | "low-latency" | "balanced" | "quality" | "vod";
   }) => Promise<void>;
 }
 
@@ -737,7 +737,7 @@ export function createPlayerControllerStore(
     forcePlayer?: string;
     forceType?: string;
     forceSource?: number;
-    playbackMode?: "auto" | "low-latency" | "quality" | "vod";
+    playbackMode?: "auto" | "low-latency" | "balanced" | "quality" | "vod";
   }): Promise<void> {
     await controller?.setDevModeOptions(options);
   }
