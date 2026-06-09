@@ -44,6 +44,12 @@ func TestRealPathCannedMappingShallow(t *testing.T) {
 	}
 }
 
+// NOTE: the sweeps cover Query + Mutation only. Subscription fields are
+// deliberately excluded — they resolve through r.SubManager (a live
+// Signalman-backed gRPC fan-out built by NewResolver, which RequireEnv's
+// SIGNALMAN_GRPC_ADDR) and need a WS/SSE transport the POST test handler does not
+// provide. Covering them needs a dedicated SubManager fake + streaming transport
+// (future work), not a silent gap.
 func realPathSweep(t *testing.T, srv playgroundTestHarness, root *ast.Definition, opType string) []sweepResult {
 	t.Helper()
 	if root == nil {

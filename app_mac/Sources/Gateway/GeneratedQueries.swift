@@ -1762,6 +1762,8 @@ enum GQL {
       createdAt
       isDefaultCluster
       isSubscribed
+      isPlatformOfficial
+      regionId
     }
   }
   """

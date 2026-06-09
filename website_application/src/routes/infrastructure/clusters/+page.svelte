@@ -137,7 +137,7 @@
   let selectedControlClusterId = $state("");
   let createdBootstrapToken = $state<string | null>(null);
   let controlClusterOptions = $derived(
-    mySubscriptions.filter((cluster) => (cluster as any).isPlatformOfficial)
+    mySubscriptions.filter((cluster) => cluster.isPlatformOfficial)
   );
 
   let publicMapNodes = $derived($networkStore.data?.networkStatus?.nodes ?? []);
@@ -310,12 +310,11 @@
       return;
     }
     try {
-      const input: Record<string, string> = { clusterName: newClusterName.trim() };
-      if (selectedControlClusterId) {
-        input.controlClusterId = selectedControlClusterId;
-      }
       const result = await createClusterMutation.mutate({
-        input: input as any,
+        input: {
+          clusterName: newClusterName.trim(),
+          ...(selectedControlClusterId ? { controlClusterId: selectedControlClusterId } : {}),
+        },
       });
       const data = result.data?.createEdgeCluster;
       if (data?.__typename === "CreateEdgeClusterResponse") {
@@ -996,9 +995,7 @@
                   <SelectItem value="">Automatic nearest region</SelectItem>
                   {#each controlClusterOptions as cluster (cluster.clusterId)}
                     <SelectItem value={cluster.clusterId}>
-                      {cluster.clusterName}{(cluster as any).regionId
-                        ? ` (${(cluster as any).regionId})`
-                        : ""}
+                      {cluster.clusterName}{cluster.regionId ? ` (${cluster.regionId})` : ""}
                     </SelectItem>
                   {/each}
                 </SelectContent>
