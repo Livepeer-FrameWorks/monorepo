@@ -90,7 +90,10 @@ func TestEnsureProtocolsAddsRTMP(t *testing.T) {
 	if got := cmaf["mergesessions"]; got != true {
 		t.Fatalf("CMAF mergesessions = %v, want true", got)
 	}
-	for _, oldName := range []string{"nonchunked", "dashllchunked", "dashlowlatency", "chunkedsegments"} {
+	if got := cmaf["dashlowlatency"]; got != true {
+		t.Fatalf("CMAF dashlowlatency = %v, want true", got)
+	}
+	for _, oldName := range []string{"nonchunked", "dashllchunked", "chunkedsegments"} {
 		if got, ok := cmaf[oldName]; ok {
 			t.Fatalf("CMAF %s = %v, want unset", oldName, got)
 		}
@@ -132,7 +135,7 @@ func TestEnsureProtocolsUpdatesRenamedMistProtocolOptions(t *testing.T) {
 	current := map[string]any{
 		"config": map[string]any{
 			"protocols": []any{
-				map[string]any{"connector": "CMAF", "mergesessions": true, "dashllchunked": true, "dashlowlatency": true, "chunkedsegments": true},
+				map[string]any{"connector": "CMAF", "mergesessions": true, "dashllchunked": true, "dashlowlatency": false, "chunkedsegments": true},
 				map[string]any{"connector": "HLS", "nonchunked": false, "chunkedsegments": true},
 			},
 		},
@@ -143,7 +146,10 @@ func TestEnsureProtocolsUpdatesRenamedMistProtocolOptions(t *testing.T) {
 	}
 
 	cmaf := findProtocolUpdate(t, mist.protocolUpdates, "CMAF").new
-	for _, oldName := range []string{"dashllchunked", "dashlowlatency", "nonchunked", "chunkedsegments"} {
+	if got := cmaf["dashlowlatency"]; got != true {
+		t.Fatalf("CMAF dashlowlatency = %v, want true", got)
+	}
+	for _, oldName := range []string{"dashllchunked", "nonchunked", "chunkedsegments"} {
 		if got, ok := cmaf[oldName]; ok {
 			t.Fatalf("CMAF update kept stale %s = %v", oldName, got)
 		}

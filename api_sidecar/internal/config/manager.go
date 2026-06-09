@@ -1326,7 +1326,7 @@ func managedProtocolDefinitions(httpPubURL, webrtcPubHost string) []map[string]a
 
 	return []map[string]any{
 		{"connector": "AAC"},
-		{"connector": "CMAF", "mergesessions": true},
+		{"connector": "CMAF", "mergesessions": true, "dashlowlatency": true},
 		{"connector": "DTSC"},
 		{"connector": "EBML"},
 		{"connector": "FLAC"},
@@ -1370,7 +1370,7 @@ func protocolUpdateNeeded(existing, desired map[string]any, connector string) bo
 func obsoleteManagedProtocolOptions(connector string) []string {
 	switch connector {
 	case "CMAF":
-		return []string{"dashllchunked", "dashlowlatency", "nonchunked", "chunkedsegments"}
+		return []string{"dashllchunked", "nonchunked", "chunkedsegments"}
 	case "HLS":
 		return []string{"nonchunked", "chunkedsegments"}
 	default:

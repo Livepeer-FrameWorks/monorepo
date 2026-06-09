@@ -466,9 +466,9 @@ func TestInfrastructureMistServerConfProtocolOptions(t *testing.T) {
 	}
 
 	cmaf := findProtocol("CMAF")
+	requireBool(cmaf, "dashlowlatency")
 	requireBool(cmaf, "mergesessions")
 	requireAbsent(cmaf, "dashllchunked")
-	requireAbsent(cmaf, "dashlowlatency")
 	requireAbsent(cmaf, "nonchunked")
 	requireAbsent(cmaf, "chunkedsegments")
 
