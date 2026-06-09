@@ -250,10 +250,11 @@ export const PROTOCOL_LATENCY_SCORE: Record<string, number> = {
   "html5/application/vnd.apple.mpegurl;version=7": 0.65,
   "ll-hls": 0.65,
   cmaf: 0.65,
-  // FrameWorks live MP4 is a read-ahead stream that tracks the edge, so it ranks
-  // above DASH — unlike generic progressive MP4, which has no live edge at all.
+  // LL-DASH sits behind LL-HLS in practice, but still tracks the live edge closely.
+  "dash/video/mp4": 0.55,
+  // FrameWorks live MP4 is a read-ahead stream that tracks the edge, unlike
+  // generic progressive MP4, which has no live edge at all.
   "html5/video/mp4": 0.5,
-  "dash/video/mp4": 0.35,
   // Plain HLS-TS: highest latency (buffer depth × segment length).
   "html5/application/vnd.apple.mpegurl": 0.2,
 };
@@ -363,7 +364,7 @@ export function calculateLatencyScore(mimeType: string): number {
   if (mimeType in PROTOCOL_LATENCY_SCORE) return PROTOCOL_LATENCY_SCORE[mimeType];
   const m = mimeType.toLowerCase();
   if (m.includes("cmaf") || m.includes("ll-hls")) return 0.65;
-  if (m.startsWith("dash/")) return 0.35;
+  if (m.startsWith("dash/")) return 0.55;
   return 0.5;
 }
 

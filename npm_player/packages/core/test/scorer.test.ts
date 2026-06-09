@@ -251,12 +251,12 @@ describe("scorer", () => {
       );
     });
 
-    it("orders CMAF < MP4 < DASH on latency (MP4 lower latency than DASH)", () => {
+    it("orders CMAF > DASH > MP4 on live latency", () => {
       const cmaf = calculateLatencyScore("html5/application/vnd.apple.mpegurl;version=7");
       const mp4 = calculateLatencyScore("html5/video/mp4");
       const dash = calculateLatencyScore("dash/video/mp4");
-      expect(cmaf).toBeGreaterThan(mp4);
-      expect(mp4).toBeGreaterThan(dash);
+      expect(cmaf).toBeGreaterThan(dash);
+      expect(dash).toBeGreaterThan(mp4);
     });
   });
 
@@ -556,8 +556,8 @@ describe("scorer", () => {
 
     it("DASH never wins a live mode", () => {
       // DASH's order vs CMAF/MP4 legitimately shifts by mode (CMAF wins latency-weighted
-      // modes; DASH's higher stability lifts it in stability-weighted quality), but with
-      // LL-DASH off it is never the selected winner.
+      // modes; DASH's higher stability lifts it in stability-weighted quality), but it
+      // still should not be the default live winner.
       for (const mode of ["low-latency", "balanced", "quality", "auto"] as const) {
         expect(winner(scoreAllProtocols(mode, { isLive: true }))).not.toBe("dash");
       }

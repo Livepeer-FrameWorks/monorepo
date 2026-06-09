@@ -81,6 +81,9 @@ vi.mock("dashjs", () => ({
 const EXPECTED_STANDARD_DASH_SETTINGS = {
   streaming: {
     text: { defaultEnabled: false },
+    // Live: abort a fragment fetch that stops making progress (the LL chunked
+    // path has no other timeout in dash.js).
+    fragmentRequestProgressTimeout: 3000,
   },
   debug: { logLevel: 2 },
 };

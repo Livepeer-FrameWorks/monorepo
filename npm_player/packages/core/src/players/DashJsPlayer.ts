@@ -369,6 +369,11 @@ export class DashJsPlayerImpl extends BasePlayer {
     this.dashPlayer.updateSettings({
       streaming: {
         text: { defaultEnabled: false },
+        // Live only: abort a fragment request that stops making progress. dash.js's
+        // fetch path (used for low-latency chunked segments) has no other timeout, so
+        // a response the origin never finishes would otherwise wedge the scheduler for
+        // the full 20s fragmentRequestTimeout. 3s = several missed 500ms CMAF parts.
+        ...(this.isLiveStream() ? { fragmentRequestProgressTimeout: 3000 } : {}),
       },
       debug: {
         logLevel: 2,
