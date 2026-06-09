@@ -227,6 +227,48 @@ func (m *mockBillingClient) GetTenantLimits(ctx context.Context, tenantID string
 }
 ```
 
+## Testing Glue Over Concrete Clients
+
+Some services (notably `api_balancing`/foghorn) reach collaborators through
+**concrete** generated clients held in package globals — e.g. `control.CommodoreClient`
+is a `*commodore.GRPCClient`, not an interface, and has no dialer seam. The
+business logic that matters (content resolution, pull placement, cross-cluster
+reauthorization) lives in functions that read these globals, so we want to test
+_those_, not the wrapper.
+
+### Pattern: in-process localhost gRPC fake (no production change)
+
+When a concrete client can't be stubbed via an interface, stand up a real
+localhost gRPC server implementing the service it wraps, and point a genuine
+client at it with `AllowInsecure`:
+
+1. Fake the **one** service the wrappers delegate to (all foghorn control
+   resolvers go through Commodore's `InternalService`). Embed the generated
+   `Unimplemented<Service>Server`; expose a settable func per RPC under test.
+2. `(&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")` (not `net.Listen` —
+   `noctx` lint), serve the fake, construct the real client with
+   `GRPCConfig{GRPCAddr: lis.Addr().String(), AllowInsecure: true, ...}`, swap the
+   package global, and restore on `t.Cleanup`.
+
+This is a **one-time harness** (`control/commodore_fake_test.go:startFakeCommodoreServer`)
+that unlocks every resolver behind that client — compose it with `sqlmock` and the
+state-manager seeders to test full resolution paths (warm-node serving,
+cross-cluster reauth refusal, etc.). The same shape applies to the
+`foghorn.FoghornPool` (also `AllowInsecure`-capable) and any concrete client.
+
+### The accept tier (don't fake-test glue)
+
+Top-level routing **dispatchers** (e.g. `ResolveViewerEndpoint`, `handleStreamBalancing`,
+the `arrangeOriginPull`/`queryStreamFanOut` orchestrators) and **goroutine loops**
+(`Start`/`Stop`/`run`/`tick`, peer read/write loops, reconciler/staleness tickers)
+are thin shells over already-tested cores. A unit test for them is all mock-wiring
+with little signal — the "Mocking everything" anti-pattern. Accept low _unit_
+coverage there; their decision logic is covered as extracted functions, and the
+wired-together behavior belongs in an **integration tier** (real Postgres/Redis via
+testcontainers) — a deliberate future investment, not something to force with mocks.
+Thin RPC client wrappers (`GetOrCreate` + timeout + forward) are the same: glue, not
+logic.
+
 ## CI Integration
 
 ### Required Checks

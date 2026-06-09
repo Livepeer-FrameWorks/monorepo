@@ -171,8 +171,7 @@ func backupPostgres(ctx context.Context, cmd *cobra.Command, manifest *inventory
 	backupFile := filepath.Join(outputDir, fmt.Sprintf("postgres-%s.sql", timestamp))
 
 	// Create backup command (works for both Docker and native)
-	var backupCmd = fmt.Sprintf("mkdir -p %s && docker compose -f /opt/frameworks/postgres/docker-compose.yml exec -T postgres pg_dumpall -U postgres > %s",
-		ssh.ShellQuote(outputDir), ssh.ShellQuote(backupFile))
+	backupCmd := buildPostgresBackupCommand(outputDir, backupFile)
 
 	result, err := runner.Run(ctx, backupCmd)
 	if err != nil {
@@ -229,17 +228,7 @@ func backupClickHouse(ctx context.Context, cmd *cobra.Command, manifest *invento
 	backupDir := filepath.Join(outputDir, fmt.Sprintf("clickhouse-%s", timestamp))
 
 	// Create backup using TSV export (compatible with all versions)
-	backupCmd := fmt.Sprintf(`
-mkdir -p %s
-docker compose -f /opt/frameworks/clickhouse/docker-compose.yml exec -T clickhouse-server clickhouse-client --query="SHOW DATABASES" | while read db; do
-  if [ "$db" != "system" ] && [ "$db" != "information_schema" ] && [ "$db" != "INFORMATION_SCHEMA" ]; then
-    mkdir -p %s/$db
-    docker compose -f /opt/frameworks/clickhouse/docker-compose.yml exec -T clickhouse-server clickhouse-client --database=$db --query="SHOW TABLES" | while read table; do
-      docker compose -f /opt/frameworks/clickhouse/docker-compose.yml exec -T clickhouse-server clickhouse-client --database=$db --query="SELECT * FROM $table FORMAT TSV" > %s/$db/$table.tsv
-    done
-  fi
-done
-`, ssh.ShellQuote(backupDir), ssh.ShellQuote(backupDir), ssh.ShellQuote(backupDir))
+	backupCmd := buildClickHouseBackupScript(backupDir)
 
 	result, err := runner.Run(ctx, backupCmd)
 	if err != nil {
@@ -428,6 +417,30 @@ cd / && tar czf %s \
 
 	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Backed up config from %d/%d hosts", successCount, len(manifest.Hosts)))
 	return nil
+}
+
+// buildPostgresBackupCommand builds the shell command that dumps all Postgres
+// databases to backupFile. outputDir and backupFile are shell-quoted so paths
+// with spaces or metacharacters cannot break out of the command.
+func buildPostgresBackupCommand(outputDir, backupFile string) string {
+	return fmt.Sprintf("mkdir -p %s && docker compose -f /opt/frameworks/postgres/docker-compose.yml exec -T postgres pg_dumpall -U postgres > %s",
+		ssh.ShellQuote(outputDir), ssh.ShellQuote(backupFile))
+}
+
+// buildClickHouseBackupScript builds the TSV-export script that dumps every
+// non-system ClickHouse database/table under backupDir (shell-quoted).
+func buildClickHouseBackupScript(backupDir string) string {
+	return fmt.Sprintf(`
+mkdir -p %s
+docker compose -f /opt/frameworks/clickhouse/docker-compose.yml exec -T clickhouse-server clickhouse-client --query="SHOW DATABASES" | while read db; do
+  if [ "$db" != "system" ] && [ "$db" != "information_schema" ] && [ "$db" != "INFORMATION_SCHEMA" ]; then
+    mkdir -p %s/$db
+    docker compose -f /opt/frameworks/clickhouse/docker-compose.yml exec -T clickhouse-server clickhouse-client --database=$db --query="SHOW TABLES" | while read table; do
+      docker compose -f /opt/frameworks/clickhouse/docker-compose.yml exec -T clickhouse-server clickhouse-client --database=$db --query="SELECT * FROM $table FORMAT TSV" > %s/$db/$table.tsv
+    done
+  fi
+done
+`, ssh.ShellQuote(backupDir), ssh.ShellQuote(backupDir), ssh.ShellQuote(backupDir))
 }
 
 // getRunner returns an SSH runner for a host

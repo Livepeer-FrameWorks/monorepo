@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"regexp"
@@ -25,12 +26,14 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
+	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -204,6 +207,68 @@ func promptConfirm(prompt string, skipConfirm bool) bool {
 	return response == "y" || response == "yes"
 }
 
+// buildCreateBootstrapTokenRequest assembles the gRPC request from already-parsed
+// flag values. Optional fields are set as pointers only when non-empty/positive so
+// the server distinguishes "unset" from a zero value.
+func buildCreateBootstrapTokenRequest(name, kind, ttl string, metadata *structpb.Struct, tenantID, clusterID, expectedIP string, usageLimit int) *quartermasterpb.CreateBootstrapTokenRequest {
+	req := &quartermasterpb.CreateBootstrapTokenRequest{
+		Name:     name,
+		Kind:     kind,
+		Ttl:      ttl,
+		Metadata: metadata,
+	}
+	if tenantID != "" {
+		req.TenantId = &tenantID
+	}
+	if clusterID != "" {
+		req.ClusterId = &clusterID
+	}
+	if expectedIP != "" {
+		req.ExpectedIp = &expectedIP
+	}
+	if usageLimit > 0 {
+		ul := int32(usageLimit)
+		req.UsageLimit = &ul
+	}
+	return req
+}
+
+// buildCreateClusterRequest assembles the gRPC request from parsed flag values.
+// The bool fields are pointers set only when their flag was explicitly changed,
+// so an unspecified flag leaves the field nil (server keeps its default).
+func buildCreateClusterRequest(cmd *cobra.Command, clusterID, clusterName, clusterType, baseURL, kafkaBrokers, databaseURL, periscopeURL, ownerTenantID, deploymentModel string, maxStreams, maxViewers, maxBandwidth, foghornCount int, isPlatformOfficial, isDefaultCluster bool) *quartermasterpb.CreateClusterRequest {
+	req := &quartermasterpb.CreateClusterRequest{
+		ClusterId:            clusterID,
+		ClusterName:          clusterName,
+		ClusterType:          clusterType,
+		BaseUrl:              baseURL,
+		KafkaBrokers:         parseCommaList(kafkaBrokers),
+		MaxConcurrentStreams: int32(maxStreams),
+		MaxConcurrentViewers: int32(maxViewers),
+		MaxBandwidthMbps:     int32(maxBandwidth),
+		DeploymentModel:      deploymentModel,
+	}
+	if databaseURL != "" {
+		req.DatabaseUrl = &databaseURL
+	}
+	if periscopeURL != "" {
+		req.PeriscopeUrl = &periscopeURL
+	}
+	if ownerTenantID != "" {
+		req.OwnerTenantId = &ownerTenantID
+	}
+	if foghornCount > 0 {
+		req.FoghornCount = int32(foghornCount)
+	}
+	if cmd.Flags().Changed("is-platform-official") {
+		req.IsPlatformOfficial = &isPlatformOfficial
+	}
+	if cmd.Flags().Changed("is-default-cluster") {
+		req.IsDefaultCluster = &isDefaultCluster
+	}
+	return req
+}
+
 func newAdminCmd() *cobra.Command {
 	adm := &cobra.Command{Use: "admin", Short: "Provider/admin operations"}
 	adm.AddCommand(newAdminTokensCmd())
@@ -279,6 +344,118 @@ func commodoreGRPCClientFromContext(ctx context.Context) (*commodore.GRPCClient,
 	return cli, ctxCfg, ep.Cleanup, nil
 }
 
+// adminTokensClient is the narrow Commodore surface the developer-API-token
+// commands use. Keeping it cmd-local (rather than the broad client Interface)
+// makes the dependency explicit and the test fake small — mirrors
+// serviceClusterAssignmentClient in cluster_provision.go.
+type adminTokensClient interface {
+	CreateAPIToken(ctx context.Context, req *commodorepb.CreateAPITokenRequest) (*commodorepb.CreateAPITokenResponse, error)
+	ListAPITokens(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*commodorepb.ListAPITokensResponse, error)
+	RevokeAPIToken(ctx context.Context, tokenID string) (*commodorepb.RevokeAPITokenResponse, error)
+}
+
+// runTokensCreate builds the create request, calls Commodore, and renders the
+// result. Inputs are assumed already validated/normalized by the caller.
+func runTokensCreate(ctx context.Context, w io.Writer, cli adminTokensClient, name, normalizedExpires, perms string, outputJSON bool) error {
+	req := &commodorepb.CreateAPITokenRequest{TokenName: name}
+	if strings.TrimSpace(perms) != "" {
+		req.Permissions = strings.Split(perms, ",")
+	}
+	if strings.TrimSpace(normalizedExpires) != "" {
+		d, err := time.ParseDuration(normalizedExpires)
+		if err != nil {
+			return fmt.Errorf("--expires: %w", err)
+		}
+		req.ExpiresAt = timestamppb.New(time.Now().Add(d))
+	}
+
+	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	resp, err := cli.CreateAPIToken(cctx, req)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	ux.Success(w, fmt.Sprintf("Created token %q (id=%s)", resp.TokenName, resp.Id))
+	if resp.TokenValue != "" {
+		_, _ = fmt.Fprintf(w, "Token value: %s\n", resp.TokenValue)
+	}
+	return nil
+}
+
+func runTokensList(ctx context.Context, w io.Writer, cli adminTokensClient, outputJSON bool) error {
+	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	resp, err := cli.ListAPITokens(cctx, nil)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	ux.Heading(w, fmt.Sprintf("Tokens (%d)", len(resp.Tokens)))
+	for _, t := range resp.Tokens {
+		_, _ = fmt.Fprintf(w, " - %s (%s) status=%s\n", t.TokenName, t.Id, t.Status)
+	}
+	return nil
+}
+
+// runTokensRevoke resolves the token (by ID or by name lookup), asks the caller
+// to confirm, and revokes. confirm receives the display name and returns
+// whether to proceed — the interactive prompt lives in the thin RunE closure so
+// this logic stays testable.
+func runTokensRevoke(ctx context.Context, w io.Writer, cli adminTokensClient, idArg, name string, confirm func(displayName string) bool) error {
+	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	var tokenID string
+	var tokenName string
+	if idArg != "" {
+		tokenID = idArg
+		if errValidate := validateUUID(tokenID); errValidate != nil {
+			return fmt.Errorf("token ID: %w", errValidate)
+		}
+	} else if name != "" {
+		resp, errList := cli.ListAPITokens(cctx, nil)
+		if errList != nil {
+			return fmt.Errorf("failed to list tokens: %w", errList)
+		}
+		for _, t := range resp.Tokens {
+			if t.TokenName == name {
+				tokenID = t.Id
+				tokenName = t.TokenName
+				break
+			}
+		}
+		if tokenID == "" {
+			return fmt.Errorf("no token found with name %q", name)
+		}
+	} else {
+		return fmt.Errorf("either token ID or --name is required")
+	}
+
+	displayName := tokenID
+	if tokenName != "" {
+		displayName = fmt.Sprintf("%s (%s)", tokenName, tokenID)
+	}
+	if !confirm(displayName) {
+		_, _ = fmt.Fprintln(w, "Cancelled")
+		return nil
+	}
+
+	if _, err := cli.RevokeAPIToken(cctx, tokenID); err != nil {
+		return err
+	}
+	ux.Success(w, fmt.Sprintf("Revoked token %s", tokenID))
+	return nil
+}
+
 func newAdminTokensCreateCmd() *cobra.Command {
 	var name string
 	var expires string
@@ -300,32 +477,7 @@ func newAdminTokensCreateCmd() *cobra.Command {
 		defer cleanup()
 		defer func() { _ = cli.Close() }()
 
-		req := &commodorepb.CreateAPITokenRequest{TokenName: name}
-		if strings.TrimSpace(perms) != "" {
-			req.Permissions = strings.Split(perms, ",")
-		}
-		if strings.TrimSpace(normalizedExpires) != "" {
-			d, _ := time.ParseDuration(normalizedExpires) // already validated above
-			expiresAt := timestamppb.New(time.Now().Add(d))
-			req.ExpiresAt = expiresAt
-		}
-
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		resp, err := cli.CreateAPIToken(cctx, req)
-		if err != nil {
-			return err
-		}
-		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Created token %q (id=%s)", resp.TokenName, resp.Id))
-		if resp.TokenValue != "" {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Token value: %s\n", resp.TokenValue)
-		}
-		return nil
+		return runTokensCreate(cmd.Context(), cmd.OutOrStdout(), cli, name, normalizedExpires, perms, output == "json")
 	}}
 	cmd.Flags().StringVar(&name, "name", "", "token name (label)")
 	cmd.Flags().StringVar(&expires, "expires", "", "expiry duration (e.g., 24h, 7d, 720h)")
@@ -342,22 +494,7 @@ func newAdminTokensListCmd() *cobra.Command {
 		defer cleanup()
 		defer func() { _ = cli.Close() }()
 
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		resp, err := cli.ListAPITokens(cctx, nil)
-		if err != nil {
-			return err
-		}
-		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Tokens (%d)", len(resp.Tokens)))
-		for _, t := range resp.Tokens {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), " - %s (%s) status=%s\n", t.TokenName, t.Id, t.Status)
-		}
-		return nil
+		return runTokensList(cmd.Context(), cmd.OutOrStdout(), cli, output == "json")
 	}}
 }
 
@@ -372,53 +509,14 @@ func newAdminTokensRevokeCmd() *cobra.Command {
 		defer cleanup()
 		defer func() { _ = cli.Close() }()
 
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-
-		var tokenID string
-		var tokenName string
+		idArg := ""
 		if len(args) > 0 {
-			tokenID = args[0]
-			// Validate token ID format
-			if errValidate := validateUUID(tokenID); errValidate != nil {
-				return fmt.Errorf("token ID: %w", errValidate)
-			}
-		} else if name != "" {
-			// Look up token ID by name
-			resp, errList := cli.ListAPITokens(cctx, nil)
-			if errList != nil {
-				return fmt.Errorf("failed to list tokens: %w", errList)
-			}
-			for _, t := range resp.Tokens {
-				if t.TokenName == name {
-					tokenID = t.Id
-					tokenName = t.TokenName
-					break
-				}
-			}
-			if tokenID == "" {
-				return fmt.Errorf("no token found with name %q", name)
-			}
-		} else {
-			return fmt.Errorf("either token ID or --name is required")
+			idArg = args[0]
 		}
-
-		// Confirm revocation
-		displayName := tokenID
-		if tokenName != "" {
-			displayName = fmt.Sprintf("%s (%s)", tokenName, tokenID)
+		confirm := func(displayName string) bool {
+			return promptConfirm(fmt.Sprintf("Revoke API token %s? This cannot be undone", displayName), yes)
 		}
-		if !promptConfirm(fmt.Sprintf("Revoke API token %s? This cannot be undone", displayName), yes) {
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Cancelled")
-			return nil
-		}
-
-		_, err = cli.RevokeAPIToken(cctx, tokenID)
-		if err != nil {
-			return err
-		}
-		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Revoked token %s", tokenID))
-		return nil
+		return runTokensRevoke(cmd.Context(), cmd.OutOrStdout(), cli, idArg, name, confirm)
 	}}
 	cmd.Flags().StringVar(&name, "name", "", "revoke token by name instead of ID")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "skip confirmation prompt")
@@ -514,6 +612,135 @@ func purserGRPCClientFromContext(ctx context.Context) (*purserclient.GRPCClient,
 	return p, ctxCfg, ep.Cleanup, nil
 }
 
+// adminRPCContext applies the standard 15s admin RPC deadline and threads the
+// caller's JWT (when present) onto the context the way every Quartermaster
+// admin command does. Returned cancel must be deferred by the caller.
+func adminRPCContext(ctx context.Context, jwt string) (context.Context, context.CancelFunc) {
+	return adminRPCContextTimeout(ctx, jwt, 15*time.Second)
+}
+
+// adminRPCContextTimeout is adminRPCContext with an explicit deadline, for the
+// few commands (e.g. create-edge) that need a longer budget.
+func adminRPCContextTimeout(ctx context.Context, jwt string, d time.Duration) (context.Context, context.CancelFunc) {
+	cctx, cancel := context.WithTimeout(ctx, d)
+	if jwt != "" {
+		cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, jwt)
+	}
+	return cctx, cancel
+}
+
+// adminBootstrapTokensClient is the narrow Quartermaster surface the
+// bootstrap-token commands use (see adminTokensClient for the rationale).
+type adminBootstrapTokensClient interface {
+	CreateBootstrapToken(ctx context.Context, req *quartermasterpb.CreateBootstrapTokenRequest) (*quartermasterpb.CreateBootstrapTokenResponse, error)
+	ListBootstrapTokens(ctx context.Context, kind, tenantID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListBootstrapTokensResponse, error)
+	RevokeBootstrapToken(ctx context.Context, tokenID string) error
+}
+
+// runBootstrapTokenCreate sends the already-built request, renders the result,
+// and (for edge_node) prints the enrollment next-step.
+func runBootstrapTokenCreate(ctx context.Context, w io.Writer, qm adminBootstrapTokensClient, jwt string, req *quartermasterpb.CreateBootstrapTokenRequest, kind string, outputJSON bool) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	resp, err := qm.CreateBootstrapToken(cctx, req)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	ux.Result(w, []ux.ResultField{
+		{Key: "token", OK: true, Detail: resp.Token.Token},
+		{Key: "kind", OK: true, Detail: resp.Token.Kind},
+		{Key: "expires", OK: true, Detail: resp.Token.ExpiresAt.AsTime().Format(time.RFC3339)},
+	})
+	if kind == "edge_node" {
+		ux.PrintNextSteps(w, []ux.NextStep{
+			{Cmd: fmt.Sprintf("frameworks edge deploy --ssh <user>@<host> --enrollment-token %s", resp.Token.Token), Why: "Use this token to enroll the target host."},
+		})
+	}
+	return nil
+}
+
+func runBootstrapTokensList(ctx context.Context, w io.Writer, qm adminBootstrapTokensClient, jwt string, outputJSON bool) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	resp, err := qm.ListBootstrapTokens(cctx, "", "", nil)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	ux.Heading(w, fmt.Sprintf("Bootstrap tokens (%d)", len(resp.Tokens)))
+	for _, t := range resp.Tokens {
+		used := ""
+		if t.UsedAt != nil {
+			used = " used"
+		}
+		tenant := "<any>"
+		if t.TenantId != nil {
+			tenant = *t.TenantId
+		}
+		cluster := "<any>"
+		if t.ClusterId != nil {
+			cluster = *t.ClusterId
+		}
+		_, _ = fmt.Fprintf(w, " - %s (id=%s) kind=%s tenant=%s cluster=%s expires=%s%s\n", t.Name, t.Id, t.Kind, tenant, cluster, t.ExpiresAt.AsTime().Format(time.RFC3339), used)
+	}
+	return nil
+}
+
+func runBootstrapTokensRevoke(ctx context.Context, w io.Writer, qm adminBootstrapTokensClient, jwt, idArg, name string, confirm func(displayName string) bool) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+
+	var tokenID string
+	var tokenName string
+	if idArg != "" {
+		tokenID = idArg
+		if err := validateUUID(tokenID); err != nil {
+			return fmt.Errorf("token ID: %w", err)
+		}
+	} else if name != "" {
+		resp, err := qm.ListBootstrapTokens(cctx, "", "", nil)
+		if err != nil {
+			return fmt.Errorf("failed to list bootstrap tokens: %w", err)
+		}
+		for _, t := range resp.Tokens {
+			if t.Name == name {
+				tokenID = t.Id
+				tokenName = t.Name
+				break
+			}
+		}
+		if tokenID == "" {
+			return fmt.Errorf("no bootstrap token found with name %q", name)
+		}
+	} else {
+		return fmt.Errorf("either token ID or --name is required")
+	}
+
+	displayName := tokenID
+	if tokenName != "" {
+		displayName = fmt.Sprintf("%s (%s)", tokenName, tokenID)
+	}
+	if !confirm(displayName) {
+		_, _ = fmt.Fprintln(w, "Cancelled")
+		return nil
+	}
+
+	if err := qm.RevokeBootstrapToken(cctx, tokenID); err != nil {
+		return err
+	}
+	ux.Success(w, fmt.Sprintf("Revoked bootstrap token %s", tokenID))
+	return nil
+}
+
 func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 	var kind string
 	var tenantID string
@@ -597,50 +824,8 @@ func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		req := &quartermasterpb.CreateBootstrapTokenRequest{
-			Name:     name,
-			Kind:     kind,
-			Ttl:      normalizedTTL,
-			Metadata: metadataStruct,
-		}
-		if tenantID != "" {
-			req.TenantId = &tenantID
-		}
-		if clusterID != "" {
-			req.ClusterId = &clusterID
-		}
-		if expectedIP != "" {
-			req.ExpectedIp = &expectedIP
-		}
-		if usageLimit > 0 {
-			ul := int32(usageLimit)
-			req.UsageLimit = &ul
-		}
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
-		resp, err := qm.CreateBootstrapToken(cctx, req)
-		if err != nil {
-			return err
-		}
-		if output == "json" {
-			enc := json.NewEncoder(out)
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-		ux.Result(out, []ux.ResultField{
-			{Key: "token", OK: true, Detail: resp.Token.Token},
-			{Key: "kind", OK: true, Detail: resp.Token.Kind},
-			{Key: "expires", OK: true, Detail: resp.Token.ExpiresAt.AsTime().Format(time.RFC3339)},
-		})
-		if kind == "edge_node" {
-			ux.PrintNextSteps(out, []ux.NextStep{
-				{Cmd: fmt.Sprintf("frameworks edge deploy --ssh <user>@<host> --enrollment-token %s", resp.Token.Token), Why: "Use this token to enroll the target host."},
-			})
-		}
-		return nil
+		req := buildCreateBootstrapTokenRequest(name, kind, normalizedTTL, metadataStruct, tenantID, clusterID, expectedIP, usageLimit)
+		return runBootstrapTokenCreate(cmd.Context(), out, qm, ctxCfg.Auth.JWT, req, kind, output == "json")
 	}}
 	cmd.Flags().StringVar(&kind, "kind", "edge_node", "token kind: edge_node|service|infrastructure_node")
 	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (defaults to active context's SystemTenantID)")
@@ -663,37 +848,7 @@ func newAdminBootstrapTokensListCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
-		resp, err := qm.ListBootstrapTokens(cctx, "", "", nil)
-		if err != nil {
-			return err
-		}
-		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Bootstrap tokens (%d)", len(resp.Tokens)))
-		for _, t := range resp.Tokens {
-			used := ""
-			if t.UsedAt != nil {
-				used = " used"
-			}
-			tenant := "<any>"
-			if t.TenantId != nil {
-				tenant = *t.TenantId
-			}
-			cluster := "<any>"
-			if t.ClusterId != nil {
-				cluster = *t.ClusterId
-			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), " - %s (id=%s) kind=%s tenant=%s cluster=%s expires=%s%s\n", t.Name, t.Id, t.Kind, tenant, cluster, t.ExpiresAt.AsTime().Format(time.RFC3339), used)
-		}
-		return nil
+		return runBootstrapTokensList(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg.Auth.JWT, output == "json")
 	}}
 }
 
@@ -707,55 +862,15 @@ func newAdminBootstrapTokensRevokeCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
 
-		var tokenID string
-		var tokenName string
+		idArg := ""
 		if len(args) > 0 {
-			tokenID = args[0]
-			// Validate token ID format
-			if err := validateUUID(tokenID); err != nil {
-				return fmt.Errorf("token ID: %w", err)
-			}
-		} else if name != "" {
-			// Look up token ID by name
-			resp, err := qm.ListBootstrapTokens(cctx, "", "", nil)
-			if err != nil {
-				return fmt.Errorf("failed to list bootstrap tokens: %w", err)
-			}
-			for _, t := range resp.Tokens {
-				if t.Name == name {
-					tokenID = t.Id
-					tokenName = t.Name
-					break
-				}
-			}
-			if tokenID == "" {
-				return fmt.Errorf("no bootstrap token found with name %q", name)
-			}
-		} else {
-			return fmt.Errorf("either token ID or --name is required")
+			idArg = args[0]
 		}
-
-		// Confirm revocation
-		displayName := tokenID
-		if tokenName != "" {
-			displayName = fmt.Sprintf("%s (%s)", tokenName, tokenID)
+		confirm := func(displayName string) bool {
+			return promptConfirm(fmt.Sprintf("Revoke bootstrap token %s? This cannot be undone", displayName), yes)
 		}
-		if !promptConfirm(fmt.Sprintf("Revoke bootstrap token %s? This cannot be undone", displayName), yes) {
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Cancelled")
-			return nil
-		}
-
-		if err := qm.RevokeBootstrapToken(cctx, tokenID); err != nil {
-			return err
-		}
-		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Revoked bootstrap token %s", tokenID))
-		return nil
+		return runBootstrapTokensRevoke(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg.Auth.JWT, idArg, name, confirm)
 	}}
 	cmd.Flags().StringVar(&name, "name", "", "revoke token by name instead of ID")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "skip confirmation prompt")
@@ -770,6 +885,30 @@ func newAdminTenantsCmd() *cobra.Command {
 	return cmd
 }
 
+// adminTenantsClient is the narrow Quartermaster surface the tenants commands use.
+type adminTenantsClient interface {
+	ListTenants(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListTenantsResponse, error)
+}
+
+func runTenantsList(ctx context.Context, w io.Writer, qm adminTenantsClient, jwt string, outputJSON bool) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	resp, err := qm.ListTenants(cctx, nil)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	ux.Heading(w, fmt.Sprintf("Tenants (%d)", len(resp.Tenants)))
+	for _, t := range resp.Tenants {
+		_, _ = fmt.Fprintf(w, " - %s (id=%s) tier=%s\n", t.Name, t.Id, t.DeploymentTier)
+	}
+	return nil
+}
+
 func newAdminTenantsListCmd() *cobra.Command {
 	return &cobra.Command{Use: "list", Short: "List all tenants", RunE: func(cmd *cobra.Command, args []string) error {
 		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
@@ -778,25 +917,7 @@ func newAdminTenantsListCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
-		resp, err := qm.ListTenants(cctx, nil)
-		if err != nil {
-			return err
-		}
-		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Tenants (%d)", len(resp.Tenants)))
-		for _, t := range resp.Tenants {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), " - %s (id=%s) tier=%s\n", t.Name, t.Id, t.DeploymentTier)
-		}
-		return nil
+		return runTenantsList(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg.Auth.JWT, output == "json")
 	}}
 }
 
@@ -817,6 +938,66 @@ func newAdminClustersCmd() *cobra.Command {
 	return cmd
 }
 
+// adminClustersClient is the narrow Quartermaster surface the cluster
+// list/create/update commands use.
+type adminClustersClient interface {
+	ListClusters(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error)
+	CreateCluster(ctx context.Context, req *quartermasterpb.CreateClusterRequest) (*quartermasterpb.ClusterResponse, error)
+	UpdateCluster(ctx context.Context, req *quartermasterpb.UpdateClusterRequest) (*quartermasterpb.ClusterResponse, error)
+}
+
+func runClustersList(ctx context.Context, w io.Writer, qm adminClustersClient, jwt string, outputJSON bool) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	resp, err := qm.ListClusters(cctx, nil)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	ux.Heading(w, fmt.Sprintf("Clusters (%d)", len(resp.Clusters)))
+	for _, c := range resp.Clusters {
+		_, _ = fmt.Fprintf(w, " - %s (id=%s) type=%s url=%s\n", c.ClusterName, c.ClusterId, c.ClusterType, c.BaseUrl)
+	}
+	return nil
+}
+
+// runClusterCreate sends the already-built request and renders the result.
+func runClusterCreate(ctx context.Context, w io.Writer, qm adminClustersClient, jwt string, req *quartermasterpb.CreateClusterRequest, outputJSON bool) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	resp, err := qm.CreateCluster(cctx, req)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	ux.Success(w, fmt.Sprintf("Created cluster %s (%s)", resp.Cluster.ClusterName, resp.Cluster.ClusterId))
+	return nil
+}
+
+func runClusterUpdate(ctx context.Context, w io.Writer, qm adminClustersClient, jwt string, req *quartermasterpb.UpdateClusterRequest, outputJSON bool) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	resp, err := qm.UpdateCluster(cctx, req)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	ux.Success(w, fmt.Sprintf("Updated cluster %s (%s)", resp.Cluster.ClusterName, resp.Cluster.ClusterId))
+	return nil
+}
+
 func newAdminClustersListCmd() *cobra.Command {
 	return &cobra.Command{Use: "list", Short: "List all clusters", RunE: func(cmd *cobra.Command, args []string) error {
 		qm, ctxCfg, cleanup, err := qmGRPCClientFromContext(cmd.Context())
@@ -825,25 +1006,7 @@ func newAdminClustersListCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
-		resp, err := qm.ListClusters(cctx, nil)
-		if err != nil {
-			return err
-		}
-		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Clusters (%d)", len(resp.Clusters)))
-		for _, c := range resp.Clusters {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), " - %s (id=%s) type=%s url=%s\n", c.ClusterName, c.ClusterId, c.ClusterType, c.BaseUrl)
-		}
-		return nil
+		return runClustersList(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg.Auth.JWT, output == "json")
 	}}
 }
 
@@ -894,53 +1057,12 @@ func newAdminClustersCreateCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
 
-		req := &quartermasterpb.CreateClusterRequest{
-			ClusterId:            clusterID,
-			ClusterName:          clusterName,
-			ClusterType:          clusterType,
-			BaseUrl:              baseURL,
-			KafkaBrokers:         parseCommaList(kafkaBrokers),
-			MaxConcurrentStreams: int32(maxStreams),
-			MaxConcurrentViewers: int32(maxViewers),
-			MaxBandwidthMbps:     int32(maxBandwidth),
-			DeploymentModel:      deploymentModel,
-		}
-		if databaseURL != "" {
-			req.DatabaseUrl = &databaseURL
-		}
-		if periscopeURL != "" {
-			req.PeriscopeUrl = &periscopeURL
-		}
-		if ownerTenantID != "" {
-			req.OwnerTenantId = &ownerTenantID
-		}
-		if foghornCount > 0 {
-			req.FoghornCount = int32(foghornCount)
-		}
-		if cmd.Flags().Changed("is-platform-official") {
-			req.IsPlatformOfficial = &isPlatformOfficial
-		}
-		if cmd.Flags().Changed("is-default-cluster") {
-			req.IsDefaultCluster = &isDefaultCluster
-		}
+		req := buildCreateClusterRequest(cmd, clusterID, clusterName, clusterType, baseURL, kafkaBrokers,
+			databaseURL, periscopeURL, ownerTenantID, deploymentModel,
+			maxStreams, maxViewers, maxBandwidth, foghornCount, isPlatformOfficial, isDefaultCluster)
 
-		resp, err := qm.CreateCluster(cctx, req)
-		if err != nil {
-			return err
-		}
-		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Created cluster %s (%s)", resp.Cluster.ClusterName, resp.Cluster.ClusterId))
-		return nil
+		return runClusterCreate(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg.Auth.JWT, req, output == "json")
 	}}
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster id (required)")
 	cmd.Flags().StringVar(&clusterName, "cluster-name", "", "cluster name (required)")
@@ -995,11 +1117,6 @@ func newAdminClustersUpdateCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
 
 		req := &quartermasterpb.UpdateClusterRequest{
 			ClusterId: clusterID,
@@ -1047,17 +1164,7 @@ func newAdminClustersUpdateCmd() *cobra.Command {
 			req.IsDefaultCluster = v
 		}
 
-		resp, err := qm.UpdateCluster(cctx, req)
-		if err != nil {
-			return err
-		}
-		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Updated cluster %s (%s)", resp.Cluster.ClusterName, resp.Cluster.ClusterId))
-		return nil
+		return runClusterUpdate(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg.Auth.JWT, req, output == "json")
 	}}
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster id (required)")
 	cmd.Flags().StringVar(&clusterName, "cluster-name", "", "cluster name")
@@ -1084,6 +1191,147 @@ func newAdminClustersAccessCmd() *cobra.Command {
 	return cmd
 }
 
+// adminClusterOpsClient is the Quartermaster surface for the cluster-ops leaf
+// commands (access, subscriptions, cert-status, create-edge, enrollment-token).
+type adminClusterOpsClient interface {
+	ListClustersForTenant(ctx context.Context, tenantID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ClustersAccessResponse, error)
+	GrantClusterAccess(ctx context.Context, req *quartermasterpb.GrantClusterAccessRequest) error
+	ListMySubscriptions(ctx context.Context, req *quartermasterpb.ListMySubscriptionsRequest) (*quartermasterpb.ListClustersResponse, error)
+	GetCluster(ctx context.Context, clusterID string) (*quartermasterpb.ClusterResponse, error)
+	DiscoverServices(ctx context.Context, serviceType, clusterID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ServiceDiscoveryResponse, error)
+	EnableSelfHosting(ctx context.Context, req *quartermasterpb.EnableSelfHostingRequest) (*quartermasterpb.EnableSelfHostingResponse, error)
+	CreateEnrollmentToken(ctx context.Context, req *quartermasterpb.CreateEnrollmentTokenRequest) (*quartermasterpb.CreateBootstrapTokenResponse, error)
+}
+
+func runClusterAccessList(ctx context.Context, w io.Writer, qm adminClusterOpsClient, jwt, tenantID string, outputJSON bool) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	resp, err := qm.ListClustersForTenant(cctx, tenantID, nil)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	ux.Heading(w, fmt.Sprintf("Accessible clusters (%d)", len(resp.Clusters)))
+	for _, c := range resp.Clusters {
+		_, _ = fmt.Fprintf(w, " - %s (id=%s) access=%s\n", c.ClusterName, c.ClusterId, c.AccessLevel)
+	}
+	return nil
+}
+
+func runClusterAccessGrant(ctx context.Context, w io.Writer, qm adminClusterOpsClient, jwt string, req *quartermasterpb.GrantClusterAccessRequest) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	if err := qm.GrantClusterAccess(cctx, req); err != nil {
+		return err
+	}
+	ux.Success(w, fmt.Sprintf("Granted access to cluster %s for tenant %s", req.ClusterId, req.TenantId))
+	return nil
+}
+
+func runClusterSubscriptionsList(ctx context.Context, w io.Writer, qm adminClusterOpsClient, jwt, tenantID string, outputJSON bool) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	resp, err := qm.ListMySubscriptions(cctx, &quartermasterpb.ListMySubscriptionsRequest{TenantId: tenantID})
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	ux.Heading(w, fmt.Sprintf("Subscriptions (%d)", len(resp.Clusters)))
+	for _, c := range resp.Clusters {
+		_, _ = fmt.Fprintf(w, " - %s (id=%s) type=%s\n", c.ClusterName, c.ClusterId, c.ClusterType)
+	}
+	return nil
+}
+
+func runClusterCertStatus(ctx context.Context, w io.Writer, qm adminClusterOpsClient, jwt, clusterID string) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	cluster, err := qm.GetCluster(cctx, clusterID)
+	if err != nil {
+		return fmt.Errorf("get cluster: %w", err)
+	}
+	foghorns, err := qm.DiscoverServices(cctx, "foghorn", clusterID, nil)
+	if err != nil {
+		return fmt.Errorf("discover foghorns: %w", err)
+	}
+
+	c := cluster.Cluster
+	_, _ = fmt.Fprintf(w, "Cluster: %s (%s)\n", c.ClusterName, c.ClusterId)
+	_, _ = fmt.Fprintf(w, "  type:       %s\n", c.ClusterType)
+	_, _ = fmt.Fprintf(w, "  base_url:   %s\n", c.BaseUrl)
+	_, _ = fmt.Fprintf(w, "  health:     %s\n", c.HealthStatus)
+	_, _ = fmt.Fprintf(w, "  active:     %v\n", c.IsActive)
+	_, _ = fmt.Fprintf(w, "  foghorns:   %d registered\n", len(foghorns.Instances))
+	for _, inst := range foghorns.Instances {
+		_, _ = fmt.Fprintf(w, "    - %s:%d  status=%s\n", inst.GetHost(), inst.GetPort(), inst.GetStatus())
+	}
+	// Cert readiness correlates with cluster health_status = 'active'.
+	if c.HealthStatus == "active" {
+		_, _ = fmt.Fprintf(w, "  cert:       ready (cluster active)\n")
+	} else {
+		_, _ = fmt.Fprintf(w, "  cert:       pending (cluster %s)\n", c.HealthStatus)
+	}
+	return nil
+}
+
+func runClusterCreateEdge(ctx context.Context, w io.Writer, qm adminClusterOpsClient, jwt string, req *quartermasterpb.EnableSelfHostingRequest, outputJSON bool) error {
+	cctx, cancel := adminRPCContextTimeout(ctx, jwt, 30*time.Second)
+	defer cancel()
+	resp, err := qm.EnableSelfHosting(cctx, req)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	c := resp.Cluster
+	t := resp.BootstrapToken
+	ux.Result(w, []ux.ResultField{
+		{Key: "cluster", OK: true, Detail: fmt.Sprintf("%s (id=%s)", c.ClusterName, c.ClusterId)},
+		{Key: "base url", OK: true, Detail: c.BaseUrl},
+		{Key: "foghorn", OK: true, Detail: resp.FoghornAddr},
+		{Key: "token", OK: true, Detail: t.Token},
+		{Key: "expires", OK: true, Detail: t.ExpiresAt.AsTime().Format(time.RFC3339)},
+	})
+	ux.PrintNextSteps(w, []ux.NextStep{
+		{Cmd: fmt.Sprintf("frameworks edge deploy --ssh <user>@<host> --enrollment-token %s", t.Token), Why: "Enroll an edge node against this new cluster."},
+	})
+	return nil
+}
+
+func runClusterEnrollmentToken(ctx context.Context, w io.Writer, qm adminClusterOpsClient, jwt, clusterID string, req *quartermasterpb.CreateEnrollmentTokenRequest, outputJSON bool) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	resp, err := qm.CreateEnrollmentToken(cctx, req)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	ux.Result(w, []ux.ResultField{
+		{Key: "token", OK: true, Detail: resp.Token.Token},
+		{Key: "cluster", OK: true, Detail: clusterID},
+		{Key: "expires", OK: true, Detail: resp.Token.ExpiresAt.AsTime().Format(time.RFC3339)},
+	})
+	ux.PrintNextSteps(w, []ux.NextStep{
+		{Cmd: fmt.Sprintf("frameworks edge deploy --ssh <user>@<host> --enrollment-token %s", resp.Token.Token), Why: "Enroll an edge node with this token."},
+	})
+	return nil
+}
+
 func newAdminClustersAccessListCmd() *cobra.Command {
 	var tenantID string
 	cmd := &cobra.Command{Use: "list", Short: "List clusters accessible to a tenant", RunE: func(cmd *cobra.Command, args []string) error {
@@ -1099,25 +1347,7 @@ func newAdminClustersAccessListCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
-		resp, err := qm.ListClustersForTenant(cctx, tenantID, nil)
-		if err != nil {
-			return err
-		}
-		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Accessible clusters (%d)", len(resp.Clusters)))
-		for _, c := range resp.Clusters {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), " - %s (id=%s) access=%s\n", c.ClusterName, c.ClusterId, c.AccessLevel)
-		}
-		return nil
+		return runClusterAccessList(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg.Auth.JWT, tenantID, output == "json")
 	}}
 	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (required)")
 	return cmd
@@ -1158,11 +1388,6 @@ func newAdminClustersAccessGrantCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
 
 		req := &quartermasterpb.GrantClusterAccessRequest{
 			TenantId:       tenantID,
@@ -1173,11 +1398,7 @@ func newAdminClustersAccessGrantCmd() *cobra.Command {
 		if expires != nil {
 			req.ExpiresAt = expires
 		}
-		if err := qm.GrantClusterAccess(cctx, req); err != nil {
-			return err
-		}
-		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Granted access to cluster %s for tenant %s", clusterID, tenantID))
-		return nil
+		return runClusterAccessGrant(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg.Auth.JWT, req)
 	}}
 	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (required)")
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster id (required)")
@@ -1195,6 +1416,110 @@ func newAdminClustersInvitesCmd() *cobra.Command {
 	cmd.AddCommand(newAdminClustersInvitesListMineCmd())
 	cmd.AddCommand(newAdminClustersInvitesAcceptCmd())
 	return cmd
+}
+
+// adminClusterInvitesClient is the narrow Quartermaster surface the cluster
+// invite commands use.
+type adminClusterInvitesClient interface {
+	CreateClusterInvite(ctx context.Context, req *quartermasterpb.CreateClusterInviteRequest) (*quartermasterpb.ClusterInvite, error)
+	ListClusterInvites(ctx context.Context, req *quartermasterpb.ListClusterInvitesRequest) (*quartermasterpb.ListClusterInvitesResponse, error)
+	RevokeClusterInvite(ctx context.Context, req *quartermasterpb.RevokeClusterInviteRequest) error
+	ListMyClusterInvites(ctx context.Context, req *quartermasterpb.ListMyClusterInvitesRequest) (*quartermasterpb.ListClusterInvitesResponse, error)
+	AcceptClusterInvite(ctx context.Context, req *quartermasterpb.AcceptClusterInviteRequest) (*quartermasterpb.ClusterSubscription, error)
+}
+
+func inviteExpiry(inv *quartermasterpb.ClusterInvite) string {
+	if inv.ExpiresAt != nil {
+		return inv.ExpiresAt.AsTime().Format(time.RFC3339)
+	}
+	return "-"
+}
+
+func runInviteCreate(ctx context.Context, w io.Writer, qm adminClusterInvitesClient, jwt string, req *quartermasterpb.CreateClusterInviteRequest, outputJSON bool) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	resp, err := qm.CreateClusterInvite(cctx, req)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	ux.Success(w, fmt.Sprintf("Created invite %s for tenant %s (token=%s)", resp.Id, resp.InvitedTenantId, resp.InviteToken))
+	return nil
+}
+
+func runInvitesList(ctx context.Context, w io.Writer, qm adminClusterInvitesClient, jwt string, req *quartermasterpb.ListClusterInvitesRequest, outputJSON bool) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	resp, err := qm.ListClusterInvites(cctx, req)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	ux.Heading(w, fmt.Sprintf("Invites (%d)", len(resp.Invites)))
+	for _, inv := range resp.Invites {
+		_, _ = fmt.Fprintf(w, " - %s tenant=%s status=%s expires=%s\n", inv.Id, inv.InvitedTenantId, inv.Status, inviteExpiry(inv))
+	}
+	return nil
+}
+
+func runInviteRevoke(ctx context.Context, w io.Writer, qm adminClusterInvitesClient, jwt string, req *quartermasterpb.RevokeClusterInviteRequest) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	if err := qm.RevokeClusterInvite(cctx, req); err != nil {
+		return err
+	}
+	ux.Success(w, fmt.Sprintf("Revoked invite %s", req.InviteId))
+	return nil
+}
+
+func runInvitesListMine(ctx context.Context, w io.Writer, qm adminClusterInvitesClient, jwt string, req *quartermasterpb.ListMyClusterInvitesRequest, outputJSON bool) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	resp, err := qm.ListMyClusterInvites(cctx, req)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	ux.Heading(w, fmt.Sprintf("Invites (%d)", len(resp.Invites)))
+	for _, inv := range resp.Invites {
+		_, _ = fmt.Fprintf(w, " - %s cluster=%s status=%s expires=%s\n", inv.Id, inv.ClusterId, inv.Status, inviteExpiry(inv))
+	}
+	return nil
+}
+
+func runInviteAccept(ctx context.Context, w io.Writer, qm adminClusterInvitesClient, jwt string, req *quartermasterpb.AcceptClusterInviteRequest, outputJSON bool) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	resp, err := qm.AcceptClusterInvite(cctx, req)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	ux.Result(w, []ux.ResultField{
+		{Key: "cluster", OK: true, Detail: resp.ClusterId},
+		{Key: "tenant", OK: true, Detail: resp.TenantId},
+		{Key: "access", OK: true, Detail: resp.AccessLevel},
+	})
+	ux.PrintNextSteps(w, []ux.NextStep{
+		{Cmd: fmt.Sprintf("frameworks admin clusters subscriptions list --tenant-id %s", resp.TenantId), Why: "Verify your tenant's subscriptions on this cluster."},
+	})
+	return nil
 }
 
 func newAdminClustersInvitesCreateCmd() *cobra.Command {
@@ -1231,11 +1556,6 @@ func newAdminClustersInvitesCreateCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
 
 		req := &quartermasterpb.CreateClusterInviteRequest{
 			ClusterId:       clusterID,
@@ -1247,17 +1567,7 @@ func newAdminClustersInvitesCreateCmd() *cobra.Command {
 		if expiresInDays > 0 {
 			req.ExpiresInDays = int32(expiresInDays)
 		}
-		resp, err := qm.CreateClusterInvite(cctx, req)
-		if err != nil {
-			return err
-		}
-		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Created invite %s for tenant %s (token=%s)", resp.Id, resp.InvitedTenantId, resp.InviteToken))
-		return nil
+		return runInviteCreate(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg.Auth.JWT, req, output == "json")
 	}}
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster id (required)")
 	cmd.Flags().StringVar(&ownerTenantID, "owner-tenant-id", "", "owner tenant id (required)")
@@ -1287,34 +1597,12 @@ func newAdminClustersInvitesListCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
 
-		resp, err := qm.ListClusterInvites(cctx, &quartermasterpb.ListClusterInvitesRequest{
+		req := &quartermasterpb.ListClusterInvitesRequest{
 			ClusterId:     clusterID,
 			OwnerTenantId: ownerTenantID,
-		})
-		if err != nil {
-			return err
 		}
-		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Invites (%d)", len(resp.Invites)))
-		for _, inv := range resp.Invites {
-			expires := "-"
-			if inv.ExpiresAt != nil {
-				expires = inv.ExpiresAt.AsTime().Format(time.RFC3339)
-			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), " - %s tenant=%s status=%s expires=%s\n",
-				inv.Id, inv.InvitedTenantId, inv.Status, expires)
-		}
-		return nil
+		return runInvitesList(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg.Auth.JWT, req, output == "json")
 	}}
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster id (required)")
 	cmd.Flags().StringVar(&ownerTenantID, "owner-tenant-id", "", "owner tenant id (required)")
@@ -1340,20 +1628,12 @@ func newAdminClustersInvitesRevokeCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
 
-		if err := qm.RevokeClusterInvite(cctx, &quartermasterpb.RevokeClusterInviteRequest{
+		req := &quartermasterpb.RevokeClusterInviteRequest{
 			InviteId:      inviteID,
 			OwnerTenantId: ownerTenantID,
-		}); err != nil {
-			return err
 		}
-		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Revoked invite %s", inviteID))
-		return nil
+		return runInviteRevoke(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg.Auth.JWT, req)
 	}}
 	cmd.Flags().StringVar(&inviteID, "invite-id", "", "invite id (required)")
 	cmd.Flags().StringVar(&ownerTenantID, "owner-tenant-id", "", "owner tenant id (required)")
@@ -1374,33 +1654,9 @@ func newAdminClustersInvitesListMineCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
 
-		resp, err := qm.ListMyClusterInvites(cctx, &quartermasterpb.ListMyClusterInvitesRequest{
-			TenantId: tenantID,
-		})
-		if err != nil {
-			return err
-		}
-		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Invites (%d)", len(resp.Invites)))
-		for _, inv := range resp.Invites {
-			expires := "-"
-			if inv.ExpiresAt != nil {
-				expires = inv.ExpiresAt.AsTime().Format(time.RFC3339)
-			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), " - %s cluster=%s status=%s expires=%s\n",
-				inv.Id, inv.ClusterId, inv.Status, expires)
-		}
-		return nil
+		req := &quartermasterpb.ListMyClusterInvitesRequest{TenantId: tenantID}
+		return runInvitesListMine(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg.Auth.JWT, req, output == "json")
 	}}
 	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (optional; uses auth context if omitted)")
 	return cmd
@@ -1424,34 +1680,12 @@ func newAdminClustersInvitesAcceptCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
 
-		resp, err := qm.AcceptClusterInvite(cctx, &quartermasterpb.AcceptClusterInviteRequest{
+		req := &quartermasterpb.AcceptClusterInviteRequest{
 			TenantId:    tenantID,
 			InviteToken: inviteToken,
-		})
-		if err != nil {
-			return err
 		}
-		out := cmd.OutOrStdout()
-		if output == "json" {
-			enc := json.NewEncoder(out)
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-		ux.Result(out, []ux.ResultField{
-			{Key: "cluster", OK: true, Detail: resp.ClusterId},
-			{Key: "tenant", OK: true, Detail: resp.TenantId},
-			{Key: "access", OK: true, Detail: resp.AccessLevel},
-		})
-		ux.PrintNextSteps(out, []ux.NextStep{
-			{Cmd: fmt.Sprintf("frameworks admin clusters subscriptions list --tenant-id %s", resp.TenantId), Why: "Verify your tenant's subscriptions on this cluster."},
-		})
-		return nil
+		return runInviteAccept(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg.Auth.JWT, req, output == "json")
 	}}
 	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (optional; uses auth context if omitted)")
 	cmd.Flags().StringVar(&inviteToken, "invite-token", "", "invite token (required)")
@@ -1479,25 +1713,7 @@ func newAdminClustersSubscriptionsListCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
-		resp, err := qm.ListMySubscriptions(cctx, &quartermasterpb.ListMySubscriptionsRequest{TenantId: tenantID})
-		if err != nil {
-			return err
-		}
-		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Subscriptions (%d)", len(resp.Clusters)))
-		for _, c := range resp.Clusters {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), " - %s (id=%s) type=%s\n", c.ClusterName, c.ClusterId, c.ClusterType)
-		}
-		return nil
+		return runClusterSubscriptionsList(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg.Auth.JWT, tenantID, output == "json")
 	}}
 	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (required)")
 	return cmd
@@ -1524,43 +1740,7 @@ func newAdminClustersCertStatusCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
-
-		cluster, err := qm.GetCluster(cctx, clusterID)
-		if err != nil {
-			return fmt.Errorf("get cluster: %w", err)
-		}
-
-		foghorns, err := qm.DiscoverServices(cctx, "foghorn", clusterID, nil)
-		if err != nil {
-			return fmt.Errorf("discover foghorns: %w", err)
-		}
-
-		c := cluster.Cluster
-		w := cmd.OutOrStdout()
-		_, _ = fmt.Fprintf(w, "Cluster: %s (%s)\n", c.ClusterName, c.ClusterId)
-		_, _ = fmt.Fprintf(w, "  type:       %s\n", c.ClusterType)
-		_, _ = fmt.Fprintf(w, "  base_url:   %s\n", c.BaseUrl)
-		_, _ = fmt.Fprintf(w, "  health:     %s\n", c.HealthStatus)
-		_, _ = fmt.Fprintf(w, "  active:     %v\n", c.IsActive)
-
-		_, _ = fmt.Fprintf(w, "  foghorns:   %d registered\n", len(foghorns.Instances))
-		for _, inst := range foghorns.Instances {
-			_, _ = fmt.Fprintf(w, "    - %s:%d  status=%s\n", inst.GetHost(), inst.GetPort(), inst.GetStatus())
-		}
-
-		// Wildcard cert: *.{cluster_slug}.{base_url}
-		// Cert readiness correlates with cluster health_status = 'active'
-		if c.HealthStatus == "active" {
-			_, _ = fmt.Fprintf(w, "  cert:       ready (cluster active)\n")
-		} else {
-			_, _ = fmt.Fprintf(w, "  cert:       pending (cluster %s)\n", c.HealthStatus)
-		}
-		return nil
+		return runClusterCertStatus(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg.Auth.JWT, clusterID)
 	}}
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster ID (required)")
 	return cmd
@@ -1586,11 +1766,6 @@ func newAdminClustersCreateEdgeCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
 
 		req := &quartermasterpb.EnableSelfHostingRequest{
 			TenantId:         tenantID,
@@ -1600,29 +1775,7 @@ func newAdminClustersCreateEdgeCmd() *cobra.Command {
 		if shortDesc != "" {
 			req.ShortDescription = &shortDesc
 		}
-		resp, err := qm.EnableSelfHosting(cctx, req)
-		if err != nil {
-			return err
-		}
-		out := cmd.OutOrStdout()
-		if output == "json" {
-			enc := json.NewEncoder(out)
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-		c := resp.Cluster
-		t := resp.BootstrapToken
-		ux.Result(out, []ux.ResultField{
-			{Key: "cluster", OK: true, Detail: fmt.Sprintf("%s (id=%s)", c.ClusterName, c.ClusterId)},
-			{Key: "base url", OK: true, Detail: c.BaseUrl},
-			{Key: "foghorn", OK: true, Detail: resp.FoghornAddr},
-			{Key: "token", OK: true, Detail: t.Token},
-			{Key: "expires", OK: true, Detail: t.ExpiresAt.AsTime().Format(time.RFC3339)},
-		})
-		ux.PrintNextSteps(out, []ux.NextStep{
-			{Cmd: fmt.Sprintf("frameworks edge deploy --ssh <user>@<host> --enrollment-token %s", t.Token), Why: "Enroll an edge node against this new cluster."},
-		})
-		return nil
+		return runClusterCreateEdge(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg.Auth.JWT, req, output == "json")
 	}}
 	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (defaults to JWT tenant)")
 	cmd.Flags().StringVar(&clusterName, "cluster-name", "", "display name for the cluster (required)")
@@ -1670,11 +1823,6 @@ func newAdminClustersEnrollmentTokenCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
 
 		req := &quartermasterpb.CreateEnrollmentTokenRequest{
 			ClusterId: clusterID,
@@ -1689,24 +1837,7 @@ func newAdminClustersEnrollmentTokenCmd() *cobra.Command {
 			normalized, _ := normalizeDuration(ttl)
 			req.Ttl = &normalized
 		}
-		resp, err := qm.CreateEnrollmentToken(cctx, req)
-		if err != nil {
-			return err
-		}
-		if output == "json" {
-			enc := json.NewEncoder(out)
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-		ux.Result(out, []ux.ResultField{
-			{Key: "token", OK: true, Detail: resp.Token.Token},
-			{Key: "cluster", OK: true, Detail: clusterID},
-			{Key: "expires", OK: true, Detail: resp.Token.ExpiresAt.AsTime().Format(time.RFC3339)},
-		})
-		ux.PrintNextSteps(out, []ux.NextStep{
-			{Cmd: fmt.Sprintf("frameworks edge deploy --ssh <user>@<host> --enrollment-token %s", resp.Token.Token), Why: "Enroll an edge node with this token."},
-		})
-		return nil
+		return runClusterEnrollmentToken(cmd.Context(), out, qm, ctxCfg.Auth.JWT, clusterID, req, output == "json")
 	}}
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster id (defaults to active context's ClusterID)")
 	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (defaults to active context's SystemTenantID)")
@@ -1725,6 +1856,152 @@ func newAdminNodesCmd() *cobra.Command {
 	return cmd
 }
 
+// adminNodesClient is the Quartermaster surface for the node and service-pool
+// admin commands.
+type adminNodesClient interface {
+	ListNodes(ctx context.Context, clusterID, nodeType, region string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListNodesResponse, error)
+	CreateNode(ctx context.Context, req *quartermasterpb.CreateNodeRequest) (*quartermasterpb.NodeResponse, error)
+	UpdateNodeHardware(ctx context.Context, req *quartermasterpb.UpdateNodeHardwareRequest) error
+	GetServicePoolStatus(ctx context.Context, serviceType string) (*quartermasterpb.GetServicePoolStatusResponse, error)
+	AddToServicePool(ctx context.Context, req *quartermasterpb.AddToServicePoolRequest) (*quartermasterpb.AddToServicePoolResponse, error)
+	DrainServiceInstance(ctx context.Context, req *quartermasterpb.DrainServiceInstanceRequest) (*quartermasterpb.DrainServiceInstanceResponse, error)
+	AssignServiceToCluster(ctx context.Context, req *quartermasterpb.AssignServiceToClusterRequest) error
+	UnassignServiceFromCluster(ctx context.Context, req *quartermasterpb.UnassignServiceFromClusterRequest) error
+}
+
+func runNodesList(ctx context.Context, w io.Writer, qm adminNodesClient, jwt, clusterID, nodeType, region string, outputJSON bool) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	resp, err := qm.ListNodes(cctx, clusterID, nodeType, region, nil)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	ux.Heading(w, fmt.Sprintf("Nodes (%d)", len(resp.Nodes)))
+	for _, n := range resp.Nodes {
+		_, _ = fmt.Fprintf(w, " - %s (id=%s) type=%s cluster=%s\n", n.NodeName, n.NodeId, n.NodeType, n.ClusterId)
+	}
+	return nil
+}
+
+func runNodeCreate(ctx context.Context, w io.Writer, qm adminNodesClient, jwt string, req *quartermasterpb.CreateNodeRequest, outputJSON bool) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	resp, err := qm.CreateNode(cctx, req)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	ux.Success(w, fmt.Sprintf("Created node %s (id=%s)", resp.Node.NodeName, resp.Node.NodeId))
+	return nil
+}
+
+func runNodeHardware(ctx context.Context, w io.Writer, qm adminNodesClient, jwt string, req *quartermasterpb.UpdateNodeHardwareRequest) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	if err := qm.UpdateNodeHardware(cctx, req); err != nil {
+		return err
+	}
+	ux.Success(w, fmt.Sprintf("Updated node hardware for %s", req.NodeId))
+	return nil
+}
+
+func runServicePoolStatus(ctx context.Context, w io.Writer, qm adminNodesClient, jwt, serviceType string, outputJSON bool) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	resp, err := qm.GetServicePoolStatus(cctx, serviceType)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	ux.Heading(w, fmt.Sprintf("%s service pool: %d total, %d assigned, %d unassigned", serviceType, resp.Total, resp.Assigned, resp.Unassigned))
+	for _, c := range resp.Clusters {
+		cid := c.ClusterId
+		if cid == "" {
+			cid = "(pool)"
+		}
+		_, _ = fmt.Fprintf(w, "\n  %s (%d instances)\n", cid, c.InstanceCount)
+		for _, inst := range c.Instances {
+			_, _ = fmt.Fprintf(w, "    - %s:%d  status=%s  id=%s\n", inst.GetHost(), inst.GetPort(), inst.GetStatus(), inst.GetId())
+		}
+	}
+	if len(resp.Assignments) > 0 {
+		_, _ = fmt.Fprintf(w, "\n  Assignments (many-to-many):\n")
+		for _, a := range resp.Assignments {
+			active := "active"
+			if !a.IsActive {
+				active = "inactive"
+			}
+			_, _ = fmt.Fprintf(w, "    instance=%s → cluster=%s  %s\n", a.InstanceId, a.ClusterId, active)
+		}
+	}
+	return nil
+}
+
+func runServicePoolAdd(ctx context.Context, w io.Writer, qm adminNodesClient, jwt string, req *quartermasterpb.AddToServicePoolRequest) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	resp, err := qm.AddToServicePool(cctx, req)
+	if err != nil {
+		return err
+	}
+	ux.Success(w, fmt.Sprintf("Released %d %s instance(s) to pool", resp.Released, resolveServiceTypeLabel(req.ServiceType)))
+	return nil
+}
+
+func runServicePoolDrain(ctx context.Context, w io.Writer, qm adminNodesClient, jwt string, req *quartermasterpb.DrainServiceInstanceRequest) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	resp, err := qm.DrainServiceInstance(cctx, req)
+	if err != nil {
+		return err
+	}
+	prev := resp.PreviousClusterId
+	if prev == "" || prev == "pool" {
+		_, _ = fmt.Fprintf(w, "Instance %s was already in pool\n", req.InstanceId)
+	} else {
+		ux.Success(w, fmt.Sprintf("Drained instance %s from cluster %s → pool", req.InstanceId, prev))
+	}
+	return nil
+}
+
+func runServicePoolAssign(ctx context.Context, w io.Writer, qm adminNodesClient, jwt string, req *quartermasterpb.AssignServiceToClusterRequest) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	if err := qm.AssignServiceToCluster(cctx, req); err != nil {
+		return err
+	}
+	label := resolveServiceTypeLabel(req.ServiceType)
+	if len(req.InstanceIds) > 0 {
+		ux.Success(w, fmt.Sprintf("Assigned %d %s instance(s) to cluster %s", len(req.InstanceIds), label, req.ClusterId))
+	} else {
+		ux.Success(w, fmt.Sprintf("Assigned %d %s instance(s) to cluster %s (least-loaded)", req.Count, label, req.ClusterId))
+	}
+	return nil
+}
+
+func runServicePoolUnassign(ctx context.Context, w io.Writer, qm adminNodesClient, jwt string, req *quartermasterpb.UnassignServiceFromClusterRequest) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	if err := qm.UnassignServiceFromCluster(cctx, req); err != nil {
+		return err
+	}
+	ux.Success(w, fmt.Sprintf("Unassigned %d %s instance(s) from cluster %s", len(req.InstanceIds), req.ServiceType, req.ClusterId))
+	return nil
+}
+
 func newAdminNodesListCmd() *cobra.Command {
 	var clusterID string
 	var nodeType string
@@ -1736,25 +2013,7 @@ func newAdminNodesListCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
-		resp, err := qm.ListNodes(cctx, clusterID, nodeType, region, nil)
-		if err != nil {
-			return err
-		}
-		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Nodes (%d)", len(resp.Nodes)))
-		for _, n := range resp.Nodes {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), " - %s (id=%s) type=%s cluster=%s\n", n.NodeName, n.NodeId, n.NodeType, n.ClusterId)
-		}
-		return nil
+		return runNodesList(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg.Auth.JWT, clusterID, nodeType, region, output == "json")
 	}}
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "filter by cluster ID")
 	cmd.Flags().StringVar(&nodeType, "type", "", "filter by node type (edge, bridge, chartroom, foredeck, logbook, steward, etc.)")
@@ -1826,11 +2085,6 @@ func newAdminNodesCreateCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
 
 		req := &quartermasterpb.CreateNodeRequest{
 			NodeId:    nodeID,
@@ -1868,17 +2122,7 @@ func newAdminNodesCreateCmd() *cobra.Command {
 			req.DiskGb = v
 		}
 
-		resp, err := qm.CreateNode(cctx, req)
-		if err != nil {
-			return err
-		}
-		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Created node %s (id=%s)", resp.Node.NodeName, resp.Node.NodeId))
-		return nil
+		return runNodeCreate(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg.Auth.JWT, req, output == "json")
 	}}
 	cmd.Flags().StringVar(&nodeID, "node-id", "", "node id (defaults to node-name)")
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster id (required)")
@@ -1922,45 +2166,7 @@ func newAdminServicePoolStatusCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
-
-		resp, err := qm.GetServicePoolStatus(cctx, serviceType)
-		if err != nil {
-			return err
-		}
-		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-
-		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("%s service pool: %d total, %d assigned, %d unassigned", serviceType, resp.Total, resp.Assigned, resp.Unassigned))
-		for _, c := range resp.Clusters {
-			cid := c.ClusterId
-			if cid == "" {
-				cid = "(pool)"
-			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\n  %s (%d instances)\n", cid, c.InstanceCount)
-			for _, inst := range c.Instances {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "    - %s:%d  status=%s  id=%s\n", inst.GetHost(), inst.GetPort(), inst.GetStatus(), inst.GetId())
-			}
-		}
-
-		if len(resp.Assignments) > 0 {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\n  Assignments (many-to-many):\n")
-			for _, a := range resp.Assignments {
-				active := "active"
-				if !a.IsActive {
-					active = "inactive"
-				}
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "    instance=%s → cluster=%s  %s\n", a.InstanceId, a.ClusterId, active)
-			}
-		}
-		return nil
+		return runServicePoolStatus(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg.Auth.JWT, serviceType, output == "json")
 	}}
 	cmd.Flags().StringVar(&serviceType, "service-type", "", "Service type to inspect")
 	return cmd
@@ -1984,23 +2190,14 @@ func newAdminServicePoolAddCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
 
-		resp, err := qm.AddToServicePool(cctx, &quartermasterpb.AddToServicePoolRequest{
+		req := &quartermasterpb.AddToServicePoolRequest{
 			InstanceIds:   instanceIDs,
 			Count:         int32(count),
 			FromClusterId: fromCluster,
 			ServiceType:   serviceType,
-		})
-		if err != nil {
-			return err
 		}
-		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Released %d %s instance(s) to pool", resp.Released, resolveServiceTypeLabel(serviceType)))
-		return nil
+		return runServicePoolAdd(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg.Auth.JWT, req)
 	}}
 	cmd.Flags().StringSliceVar(&instanceIDs, "instance-id", nil, "instance UUID(s) to release")
 	cmd.Flags().IntVar(&count, "count", 0, "number of instances to release from cluster")
@@ -2025,26 +2222,12 @@ func newAdminServicePoolDrainCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
 
-		resp, err := qm.DrainServiceInstance(cctx, &quartermasterpb.DrainServiceInstanceRequest{
+		req := &quartermasterpb.DrainServiceInstanceRequest{
 			InstanceId:  instanceID,
 			ServiceType: serviceType,
-		})
-		if err != nil {
-			return err
 		}
-		prev := resp.PreviousClusterId
-		if prev == "" || prev == "pool" {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Instance %s was already in pool\n", instanceID)
-		} else {
-			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Drained instance %s from cluster %s → pool", instanceID, prev))
-		}
-		return nil
+		return runServicePoolDrain(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg.Auth.JWT, req)
 	}}
 	cmd.Flags().StringVar(&instanceID, "instance-id", "", "instance UUID to drain (required)")
 	cmd.Flags().StringVar(&serviceType, "service-type", "", "service type to operate on (foghorn, chandler, livepeer-gateway)")
@@ -2072,27 +2255,14 @@ func newAdminServicePoolAssignCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
 
-		if err := qm.AssignServiceToCluster(cctx, &quartermasterpb.AssignServiceToClusterRequest{
+		req := &quartermasterpb.AssignServiceToClusterRequest{
 			ClusterId:   clusterID,
 			InstanceIds: instanceIDs,
 			Count:       int32(count),
 			ServiceType: serviceType,
-		}); err != nil {
-			return err
 		}
-		label := resolveServiceTypeLabel(serviceType)
-		if len(instanceIDs) > 0 {
-			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Assigned %d %s instance(s) to cluster %s", len(instanceIDs), label, clusterID))
-		} else {
-			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Assigned %d %s instance(s) to cluster %s (least-loaded)", count, label, clusterID))
-		}
-		return nil
+		return runServicePoolAssign(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg.Auth.JWT, req)
 	}}
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster to assign instance(s) to (required)")
 	cmd.Flags().StringSliceVar(&instanceIDs, "instance-id", nil, "specific service instance UUID(s)")
@@ -2128,21 +2298,13 @@ func newAdminServicePoolUnassignCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
 
-		if err := qm.UnassignServiceFromCluster(cctx, &quartermasterpb.UnassignServiceFromClusterRequest{
+		req := &quartermasterpb.UnassignServiceFromClusterRequest{
 			ClusterId:   clusterID,
 			InstanceIds: instanceIDs,
 			ServiceType: serviceType,
-		}); err != nil {
-			return err
 		}
-		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Unassigned %d %s instance(s) from cluster %s", len(instanceIDs), serviceType, clusterID))
-		return nil
+		return runServicePoolUnassign(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg.Auth.JWT, req)
 	}}
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster to unassign from (required)")
 	cmd.Flags().StringSliceVar(&instanceIDs, "instance-id", nil, "service instance UUID(s) to remove (required)")
@@ -2165,11 +2327,6 @@ func newAdminNodesHardwareCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
 		req := &quartermasterpb.UpdateNodeHardwareRequest{
 			NodeId: nodeID,
 		}
@@ -2182,11 +2339,7 @@ func newAdminNodesHardwareCmd() *cobra.Command {
 		if v := optionalInt32Flag(cmd, "disk-gb", diskGB); v != nil {
 			req.DiskGb = v
 		}
-		if err := qm.UpdateNodeHardware(cctx, req); err != nil {
-			return err
-		}
-		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Updated node hardware for %s", nodeID))
-		return nil
+		return runNodeHardware(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg.Auth.JWT, req)
 	}}
 	cmd.Flags().StringVar(&nodeID, "node-id", "", "node id (required)")
 	cmd.Flags().IntVar(&cpuCores, "cpu-cores", 0, "CPU cores (optional)")
@@ -2206,6 +2359,103 @@ func newAdminBillingCmd() *cobra.Command {
 	return cmd
 }
 
+// adminBillingClient is the narrow Purser surface the billing admin commands use.
+type adminBillingClient interface {
+	GetBillingTiers(ctx context.Context, includeInactive bool, pagination *commonpb.CursorPaginationRequest) (*purserpb.GetBillingTiersResponse, error)
+	InitializePostpaidAccount(ctx context.Context, tenantID string) (*purserpb.InitializePostpaidAccountResponse, error)
+	PromoteToPaid(ctx context.Context, tenantID, tierID string) (*purserpb.PromoteToPaidResponse, error)
+	SetClusterPricing(ctx context.Context, req *purserpb.SetClusterPricingRequest) (*purserpb.ClusterPricing, error)
+}
+
+func runBillingTiers(ctx context.Context, w io.Writer, p adminBillingClient, jwt string, outputJSON bool) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	resp, err := p.GetBillingTiers(cctx, false, nil)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	ux.Heading(w, fmt.Sprintf("Billing tiers (%d)", len(resp.Tiers)))
+	for _, t := range resp.Tiers {
+		defaults := ""
+		if t.IsDefaultPrepaid {
+			defaults = " [default-prepaid]"
+		}
+		if t.IsDefaultPostpaid {
+			defaults = " [default-postpaid]"
+		}
+		_, _ = fmt.Fprintf(w, "  %s (level=%d) %s - %s%.2f/mo%s\n",
+			t.TierName, t.TierLevel, t.DisplayName, t.Currency, t.BasePrice, defaults)
+	}
+	return nil
+}
+
+func runBillingInitPostpaid(ctx context.Context, w io.Writer, p adminBillingClient, jwt, tenantID string, outputJSON bool) error {
+	cctx, cancel := adminRPCContextTimeout(ctx, jwt, 30*time.Second)
+	defer cancel()
+	resp, err := p.InitializePostpaidAccount(cctx, tenantID)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	ux.Success(w, "Initialized postpaid account")
+	_, _ = fmt.Fprintf(w, "  Subscription: %s\n", resp.SubscriptionId)
+	_, _ = fmt.Fprintf(w, "  Tier level:   %d\n", resp.TierLevel)
+	_, _ = fmt.Fprintf(w, "  Primary cluster: %s\n", resp.PrimaryClusterId)
+	if len(resp.EligibleClusterIds) > 0 {
+		_, _ = fmt.Fprintf(w, "  Eligible clusters: %s\n", strings.Join(resp.EligibleClusterIds, ", "))
+	}
+	return nil
+}
+
+func runBillingPromote(ctx context.Context, w io.Writer, p adminBillingClient, jwt, tenantID string, outputJSON bool) error {
+	cctx, cancel := adminRPCContextTimeout(ctx, jwt, 30*time.Second)
+	defer cancel()
+	resp, err := p.PromoteToPaid(cctx, tenantID, "")
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	ux.Success(w, "Promoted to postpaid billing")
+	_, _ = fmt.Fprintf(w, "  Subscription: %s\n", resp.SubscriptionId)
+	_, _ = fmt.Fprintf(w, "  Billing model: %s\n", resp.NewBillingModel)
+	_, _ = fmt.Fprintf(w, "  Credit balance: %d cents\n", resp.CreditBalanceCents)
+	_, _ = fmt.Fprintf(w, "  Tier level: %d\n", resp.TierLevel)
+	_, _ = fmt.Fprintf(w, "  Primary cluster: %s\n", resp.PrimaryClusterId)
+	if len(resp.EligibleClusterIds) > 0 {
+		_, _ = fmt.Fprintf(w, "  Eligible clusters: %s\n", strings.Join(resp.EligibleClusterIds, ", "))
+	}
+	return nil
+}
+
+func runBillingSetClusterPricing(ctx context.Context, w io.Writer, p adminBillingClient, jwt, clusterID string, req *purserpb.SetClusterPricingRequest, outputJSON bool) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	resp, err := p.SetClusterPricing(cctx, req)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	ux.Success(w, fmt.Sprintf("Set cluster pricing for %s (model=%s)", clusterID, resp.PricingModel))
+	return nil
+}
+
 func newAdminBillingTiersCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "tiers", Short: "List billing tiers", RunE: func(cmd *cobra.Command, args []string) error {
 		p, ctxCfg, cleanup, err := purserGRPCClientFromContext(cmd.Context())
@@ -2214,33 +2464,7 @@ func newAdminBillingTiersCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = p.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
-		resp, err := p.GetBillingTiers(cctx, false, nil)
-		if err != nil {
-			return err
-		}
-		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Billing tiers (%d)", len(resp.Tiers)))
-		for _, t := range resp.Tiers {
-			defaults := ""
-			if t.IsDefaultPrepaid {
-				defaults = " [default-prepaid]"
-			}
-			if t.IsDefaultPostpaid {
-				defaults = " [default-postpaid]"
-			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s (level=%d) %s - %s%.2f/mo%s\n",
-				t.TierName, t.TierLevel, t.DisplayName, t.Currency, t.BasePrice, defaults)
-		}
-		return nil
+		return runBillingTiers(cmd.Context(), cmd.OutOrStdout(), p, ctxCfg.Auth.JWT, output == "json")
 	}}
 	return cmd
 }
@@ -2260,28 +2484,7 @@ func newAdminBillingInitPostpaidCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = p.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
-		resp, err := p.InitializePostpaidAccount(cctx, tenantID)
-		if err != nil {
-			return err
-		}
-		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-		ux.Success(cmd.OutOrStdout(), "Initialized postpaid account")
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Subscription: %s\n", resp.SubscriptionId)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Tier level:   %d\n", resp.TierLevel)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Primary cluster: %s\n", resp.PrimaryClusterId)
-		if len(resp.EligibleClusterIds) > 0 {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Eligible clusters: %s\n", strings.Join(resp.EligibleClusterIds, ", "))
-		}
-		return nil
+		return runBillingInitPostpaid(cmd.Context(), cmd.OutOrStdout(), p, ctxCfg.Auth.JWT, tenantID, output == "json")
 	}}
 	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (required)")
 	return cmd
@@ -2302,30 +2505,7 @@ func newAdminBillingPromoteCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = p.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
-		resp, err := p.PromoteToPaid(cctx, tenantID, "")
-		if err != nil {
-			return err
-		}
-		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-		ux.Success(cmd.OutOrStdout(), "Promoted to postpaid billing")
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Subscription: %s\n", resp.SubscriptionId)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Billing model: %s\n", resp.NewBillingModel)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Credit balance: %d cents\n", resp.CreditBalanceCents)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Tier level: %d\n", resp.TierLevel)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Primary cluster: %s\n", resp.PrimaryClusterId)
-		if len(resp.EligibleClusterIds) > 0 {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Eligible clusters: %s\n", strings.Join(resp.EligibleClusterIds, ", "))
-		}
-		return nil
+		return runBillingPromote(cmd.Context(), cmd.OutOrStdout(), p, ctxCfg.Auth.JWT, tenantID, output == "json")
 	}}
 	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (required)")
 	return cmd
@@ -2355,11 +2535,6 @@ func newAdminBillingSetClusterPricingCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = p.Close() }()
-		cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
 
 		req := &purserpb.SetClusterPricingRequest{
 			ClusterId:    clusterID,
@@ -2380,17 +2555,7 @@ func newAdminBillingSetClusterPricingCmd() *cobra.Command {
 			req.DefaultQuotas = quotas
 		}
 
-		resp, err := p.SetClusterPricing(cctx, req)
-		if err != nil {
-			return err
-		}
-		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Set cluster pricing for %s (model=%s)", clusterID, resp.PricingModel))
-		return nil
+		return runBillingSetClusterPricing(cmd.Context(), cmd.OutOrStdout(), p, ctxCfg.Auth.JWT, clusterID, req, output == "json")
 	}}
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster id (required)")
 	cmd.Flags().StringVar(&pricingModel, "pricing-model", "", "pricing model: free_unmetered|metered|monthly|tier_inherit|custom (required)")
@@ -2406,6 +2571,35 @@ func newAdminUsersCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "users", Short: "Manage users"}
 	cmd.AddCommand(newAdminUsersCreateCmd())
 	return cmd
+}
+
+// adminUsersClient is the narrow Commodore surface the users commands use.
+type adminUsersClient interface {
+	CreateUserInTenant(ctx context.Context, req *commodorepb.CreateUserInTenantRequest) (*commodorepb.CreateUserInTenantResponse, error)
+}
+
+func runUserCreate(ctx context.Context, w io.Writer, cli adminUsersClient, jwt, tenantID string, req *commodorepb.CreateUserInTenantRequest, outputJSON bool) error {
+	cctx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	resp, err := cli.CreateUserInTenant(cctx, req)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	ux.Result(w, []ux.ResultField{
+		{Key: "email", OK: true, Detail: resp.User.GetEmail()},
+		{Key: "user id", OK: true, Detail: resp.User.GetId()},
+		{Key: "tenant", OK: true, Detail: tenantID},
+		{Key: "role", OK: true, Detail: resp.User.GetRole()},
+	})
+	ux.PrintNextSteps(w, []ux.NextStep{
+		{Cmd: fmt.Sprintf("frameworks login --email %s", resp.User.GetEmail()), Why: "Log in with the new account."},
+	})
+	return nil
 }
 
 func newAdminUsersCreateCmd() *cobra.Command {
@@ -2463,39 +2657,16 @@ Password input methods, in precedence order:
 			}
 			defer cleanup()
 			defer func() { _ = cli.Close() }()
-			cctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
-			defer cancel()
-			if ctxCfg.Auth.JWT != "" {
-				cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-			}
 
-			resp, err := cli.CreateUserInTenant(cctx, &commodorepb.CreateUserInTenantRequest{
+			req := &commodorepb.CreateUserInTenantRequest{
 				TenantId:  tenantID,
 				Email:     email,
 				Password:  resolvedPW,
 				FirstName: firstName,
 				LastName:  lastName,
 				Role:      role,
-			})
-			if err != nil {
-				return err
 			}
-			if output == "json" {
-				enc := json.NewEncoder(out)
-				enc.SetIndent("", "  ")
-				return enc.Encode(resp)
-			}
-
-			ux.Result(out, []ux.ResultField{
-				{Key: "email", OK: true, Detail: resp.User.GetEmail()},
-				{Key: "user id", OK: true, Detail: resp.User.GetId()},
-				{Key: "tenant", OK: true, Detail: tenantID},
-				{Key: "role", OK: true, Detail: resp.User.GetRole()},
-			})
-			ux.PrintNextSteps(out, []ux.NextStep{
-				{Cmd: fmt.Sprintf("frameworks login --email %s", resp.User.GetEmail()), Why: "Log in with the new account."},
-			})
-			return nil
+			return runUserCreate(cmd.Context(), out, cli, ctxCfg.Auth.JWT, tenantID, req, output == "json")
 		},
 	}
 	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "existing tenant UUID (defaults to active context's SystemTenantID)")
@@ -2576,6 +2747,36 @@ func readAllStdin() (string, error) {
 	return "", scanner.Err()
 }
 
+// adminArtifactMigrator is the narrow Foghorn-federation surface the
+// migrate-artifacts command uses. The generated FoghornFederationClient
+// (returned by foghornfed.For(fh).Federation()) satisfies it structurally.
+type adminArtifactMigrator interface {
+	MigrateArtifactMetadata(ctx context.Context, in *foghornfederationpb.MigrateArtifactMetadataRequest, opts ...grpc.CallOption) (*foghornfederationpb.MigrateArtifactMetadataResponse, error)
+}
+
+func runMigrateArtifacts(ctx context.Context, w io.Writer, fed adminArtifactMigrator, jwt string, req *foghornfederationpb.MigrateArtifactMetadataRequest, outputJSON bool) error {
+	cctx, cancel := adminRPCContextTimeout(ctx, jwt, 60*time.Second)
+	defer cancel()
+	resp, err := fed.MigrateArtifactMetadata(cctx, req)
+	if err != nil {
+		return fmt.Errorf("migrate artifacts: %w", err)
+	}
+	if resp.Error != "" {
+		return fmt.Errorf("migration error: %s", resp.Error)
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	ux.Success(w, "Artifact metadata migration complete")
+	ux.Result(w, []ux.ResultField{
+		{Key: "migrated", OK: true, Detail: fmt.Sprintf("%d", resp.MigratedCount)},
+		{Key: "already existed", OK: true, Detail: fmt.Sprintf("%d", resp.AlreadyExists)},
+	})
+	return nil
+}
+
 func newAdminClustersMigrateArtifactsCmd() *cobra.Command {
 	var tenantID string
 	var fromCluster string
@@ -2594,36 +2795,11 @@ func newAdminClustersMigrateArtifactsCmd() *cobra.Command {
 		defer cleanup()
 		defer func() { _ = fh.Close() }()
 
-		cctx, cancel := context.WithTimeout(cmd.Context(), 60*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
-
-		resp, err := foghornfed.For(fh).Federation().MigrateArtifactMetadata(cctx, &foghornfederationpb.MigrateArtifactMetadataRequest{
+		req := &foghornfederationpb.MigrateArtifactMetadataRequest{
 			TenantId:        tenantID,
 			SourceClusterId: fromCluster,
-		})
-		if err != nil {
-			return fmt.Errorf("migrate artifacts: %w", err)
 		}
-
-		if resp.Error != "" {
-			return fmt.Errorf("migration error: %s", resp.Error)
-		}
-
-		out := cmd.OutOrStdout()
-		if output == "json" {
-			enc := json.NewEncoder(out)
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-		ux.Success(out, "Artifact metadata migration complete")
-		ux.Result(out, []ux.ResultField{
-			{Key: "migrated", OK: true, Detail: fmt.Sprintf("%d", resp.MigratedCount)},
-			{Key: "already existed", OK: true, Detail: fmt.Sprintf("%d", resp.AlreadyExists)},
-		})
-		return nil
+		return runMigrateArtifacts(cmd.Context(), cmd.OutOrStdout(), foghornfed.For(fh).Federation(), ctxCfg.Auth.JWT, req, output == "json")
 	}}
 	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (required)")
 	cmd.Flags().StringVar(&fromCluster, "from-cluster", "", "source cluster id to migrate artifacts from (required)")

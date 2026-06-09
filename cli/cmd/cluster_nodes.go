@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strconv"
@@ -31,6 +32,7 @@ import (
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -208,6 +210,12 @@ it into the existing edge deploy pipeline, and never prints the token.`,
 	return cmd
 }
 
+// clusterReleaseTargetClient is the narrow Quartermaster surface
+// runResolveInstallVersion needs.
+type clusterReleaseTargetClient interface {
+	GetClusterReleaseTarget(ctx context.Context, req *quartermasterpb.GetClusterReleaseTargetRequest) (*quartermasterpb.ClusterReleaseTargetResponse, error)
+}
+
 func resolveClusterNodeInstallVersion(cmd *cobra.Command, clusterID, fallbackVersion string) (string, error) {
 	qm, ctxCfg, cleanup, err := clusterNodesQMClientFromContext(cmd.Context())
 	if err != nil {
@@ -215,8 +223,14 @@ func resolveClusterNodeInstallVersion(cmd *cobra.Command, clusterID, fallbackVer
 	}
 	defer cleanup()
 	defer func() { _ = qm.Close() }()
+	return runResolveInstallVersion(cmd.Context(), qm, ctxCfg, clusterID, fallbackVersion)
+}
 
-	cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, 10*time.Second)
+// runResolveInstallVersion picks the edge install version: the cluster's pinned
+// target_version, else its channel, else the caller's fallback. A missing
+// release target (NotFound or nil) is not an error — it falls back.
+func runResolveInstallVersion(ctx context.Context, qm clusterReleaseTargetClient, ctxCfg fwcfg.Context, clusterID, fallbackVersion string) (string, error) {
+	cctx, cancel := clusterNodesRPCContext(ctx, ctxCfg, 10*time.Second)
 	defer cancel()
 	resp, err := qm.GetClusterReleaseTarget(cctx, &quartermasterpb.GetClusterReleaseTargetRequest{ClusterId: clusterID})
 	if err != nil {
@@ -238,6 +252,12 @@ func resolveClusterNodeInstallVersion(cmd *cobra.Command, clusterID, fallbackVer
 	return fallbackVersion, nil
 }
 
+// clusterEnrollmentTokenClient is the narrow Quartermaster surface
+// runCreateClusterEnrollmentToken needs.
+type clusterEnrollmentTokenClient interface {
+	CreateEnrollmentToken(ctx context.Context, req *quartermasterpb.CreateEnrollmentTokenRequest) (*quartermasterpb.CreateBootstrapTokenResponse, error)
+}
+
 func createClusterNodeEnrollmentToken(cmd *cobra.Command, clusterID, nodeName, tokenTTL string) (string, error) {
 	qm, ctxCfg, cleanup, err := clusterNodesQMClientFromContext(cmd.Context())
 	if err != nil {
@@ -245,7 +265,10 @@ func createClusterNodeEnrollmentToken(cmd *cobra.Command, clusterID, nodeName, t
 	}
 	defer cleanup()
 	defer func() { _ = qm.Close() }()
+	return runCreateClusterEnrollmentToken(cmd.Context(), qm, ctxCfg, clusterID, nodeName, tokenTTL)
+}
 
+func runCreateClusterEnrollmentToken(ctx context.Context, qm clusterEnrollmentTokenClient, ctxCfg fwcfg.Context, clusterID, nodeName, tokenTTL string) (string, error) {
 	tokenName := "cluster nodes add"
 	if strings.TrimSpace(nodeName) != "" {
 		tokenName = "cluster nodes add: " + strings.TrimSpace(nodeName)
@@ -254,6 +277,8 @@ func createClusterNodeEnrollmentToken(cmd *cobra.Command, clusterID, nodeName, t
 		ClusterId: clusterID,
 		Name:      &tokenName,
 	}
+	// Platform contexts mint with service auth, so the token must be bound to
+	// the platform's system tenant explicitly.
 	if clusterNodesUseServiceAuth(ctxCfg) {
 		tenantID := ctxCfg.SystemTenantID
 		if tenantID == "" {
@@ -264,7 +289,7 @@ func createClusterNodeEnrollmentToken(cmd *cobra.Command, clusterID, nodeName, t
 	if strings.TrimSpace(tokenTTL) != "" {
 		req.Ttl = &tokenTTL
 	}
-	cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, 15*time.Second)
+	cctx, cancel := clusterNodesRPCContext(ctx, ctxCfg, 15*time.Second)
 	defer cancel()
 	resp, err := qm.CreateEnrollmentToken(cctx, req)
 	if err != nil {
@@ -542,8 +567,14 @@ if [ "$found" = 0 ]; then echo "__FRAMEWORKS_ENV_FILE="; fi`
 	if err != nil {
 		return remoteEdgeEnv{}, err
 	}
+	return parseRemoteEdgeEnvOutput(result.Stdout), nil
+}
+
+// parseRemoteEdgeEnvOutput folds the discovery script's key=value lines into a
+// remoteEdgeEnv. Pure; non-matching lines are ignored.
+func parseRemoteEdgeEnvOutput(stdout string) remoteEdgeEnv {
 	out := remoteEdgeEnv{}
-	for _, line := range strings.Split(result.Stdout, "\n") {
+	for _, line := range strings.Split(stdout, "\n") {
 		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
 		if !ok {
 			continue
@@ -563,7 +594,7 @@ if [ "$found" = 0 ]; then echo "__FRAMEWORKS_ENV_FILE="; fi`
 			out.Foghorn = strings.TrimSpace(value)
 		}
 	}
-	return out, nil
+	return out
 }
 
 func promptSelectCluster(cmd *cobra.Command) (*quartermasterpb.InfrastructureCluster, error) {
@@ -777,6 +808,18 @@ func resolveClusterNode(cmd *cobra.Command, clusterID, selector string) (*quarte
 		return selected, clusterID, nil
 	}
 
+	selected, matchErr := matchClusterNode(nodes, selector, clusterID)
+	if matchErr != nil {
+		return nil, "", matchErr
+	}
+	return selected, clusterID, nil
+}
+
+// matchClusterNode resolves a node selector against a node list. A selector
+// matches on node id, node name, or the registry row id; exactly one match is
+// required — zero or multiple are errors (the multi-match error lists the
+// candidates so the caller can disambiguate).
+func matchClusterNode(nodes []*quartermasterpb.InfrastructureNode, selector, clusterID string) (*quartermasterpb.InfrastructureNode, error) {
 	var matches []*quartermasterpb.InfrastructureNode
 	for _, node := range nodes {
 		if node == nil {
@@ -787,7 +830,7 @@ func resolveClusterNode(cmd *cobra.Command, clusterID, selector string) (*quarte
 		}
 	}
 	if len(matches) == 1 {
-		return matches[0], clusterID, nil
+		return matches[0], nil
 	}
 	if len(matches) > 1 {
 		names := make([]string, 0, len(matches))
@@ -795,9 +838,9 @@ func resolveClusterNode(cmd *cobra.Command, clusterID, selector string) (*quarte
 			names = append(names, nodeDisplayName(node))
 		}
 		sort.Strings(names)
-		return nil, "", fmt.Errorf("node selector %q matched multiple nodes: %s", selector, strings.Join(names, ", "))
+		return nil, fmt.Errorf("node selector %q matched multiple nodes: %s", selector, strings.Join(names, ", "))
 	}
-	return nil, "", fmt.Errorf("node %q not found in cluster %s", selector, clusterID)
+	return nil, fmt.Errorf("node %q not found in cluster %s", selector, clusterID)
 }
 
 func resolveClusterIDForLifecycle(cmd *cobra.Command, ctxCfg fwcfg.Context, explicit string) (string, error) {
@@ -966,6 +1009,11 @@ func newClusterNodesFenceCmd(name, short string) *cobra.Command {
 	return cmd
 }
 
+// nodeModeClient is the narrow Foghorn-control surface runSetNodeMode needs.
+type nodeModeClient interface {
+	SetNodeMode(ctx context.Context, req *foghorncontrolpb.SetNodeModeRequest) (*foghorncontrolpb.SetNodeModeResponse, metadata.MD, error)
+}
+
 func setClusterNodeMode(cmd *cobra.Command, nodeID, mode string) error {
 	fh, ctxCfg, cleanup, err := clusterNodesFoghornClientFromContext(cmd.Context())
 	if err != nil {
@@ -973,7 +1021,11 @@ func setClusterNodeMode(cmd *cobra.Command, nodeID, mode string) error {
 	}
 	defer cleanup()
 	defer func() { _ = fh.Close() }()
-	cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, 15*time.Second)
+	return runSetNodeMode(cmd.Context(), cmd.OutOrStdout(), fh, ctxCfg, nodeID, mode)
+}
+
+func runSetNodeMode(ctx context.Context, w io.Writer, fh nodeModeClient, ctxCfg fwcfg.Context, nodeID, mode string) error {
+	cctx, cancel := clusterNodesRPCContext(ctx, ctxCfg, 15*time.Second)
 	defer cancel()
 	resp, _, err := fh.SetNodeMode(cctx, &foghorncontrolpb.SetNodeModeRequest{
 		NodeId: nodeID,
@@ -983,7 +1035,8 @@ func setClusterNodeMode(cmd *cobra.Command, nodeID, mode string) error {
 	if err != nil {
 		return err
 	}
-	ux.Result(cmd.OutOrStdout(), []ux.ResultField{{
+	// "already in mode" is treated as success — the desired end-state holds.
+	ux.Result(w, []ux.ResultField{{
 		Key:    "mode",
 		OK:     resp.GetStatus() == foghorncontrolpb.SetNodeModeStatus_SET_NODE_MODE_STATUS_SUCCESS || resp.GetStatus() == foghorncontrolpb.SetNodeModeStatus_SET_NODE_MODE_STATUS_ALREADY_IN_MODE,
 		Detail: fmt.Sprintf("%s: %s", resp.GetMode(), resp.GetMessage()),
@@ -1017,6 +1070,11 @@ func waitForNodeStreams(cmd *cobra.Command, nodeID string, timeout time.Duration
 	}
 }
 
+// nodeStatusClient is the narrow Quartermaster surface runUpdateNodeStatus needs.
+type nodeStatusClient interface {
+	UpdateNodeStatus(ctx context.Context, req *quartermasterpb.UpdateNodeStatusRequest) (*quartermasterpb.NodeResponse, error)
+}
+
 func updateQuartermasterNodeStatus(cmd *cobra.Command, nodeID, clusterID, statusValue string) error {
 	qm, ctxCfg, cleanup, err := clusterNodesQMClientFromContext(cmd.Context())
 	if err != nil {
@@ -1024,7 +1082,11 @@ func updateQuartermasterNodeStatus(cmd *cobra.Command, nodeID, clusterID, status
 	}
 	defer cleanup()
 	defer func() { _ = qm.Close() }()
-	cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, 15*time.Second)
+	return runUpdateNodeStatus(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg, nodeID, clusterID, statusValue)
+}
+
+func runUpdateNodeStatus(ctx context.Context, w io.Writer, qm nodeStatusClient, ctxCfg fwcfg.Context, nodeID, clusterID, statusValue string) error {
+	cctx, cancel := clusterNodesRPCContext(ctx, ctxCfg, 15*time.Second)
 	defer cancel()
 	resp, err := qm.UpdateNodeStatus(cctx, &quartermasterpb.UpdateNodeStatusRequest{
 		NodeId:            nodeID,
@@ -1034,7 +1096,8 @@ func updateQuartermasterNodeStatus(cmd *cobra.Command, nodeID, clusterID, status
 	if err != nil {
 		return err
 	}
-	ux.Result(cmd.OutOrStdout(), []ux.ResultField{{
+	// OK iff the registry now reflects the requested status.
+	ux.Result(w, []ux.ResultField{{
 		Key:    "registry",
 		OK:     resp.GetNode().GetStatus() == statusValue,
 		Detail: fmt.Sprintf("%s status=%s", resp.GetNode().GetNodeId(), resp.GetNode().GetStatus()),

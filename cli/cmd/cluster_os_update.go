@@ -327,21 +327,28 @@ func osUpdateHostList(manifest *inventory.Manifest, hostsCSV string) ([]inventor
 		}
 	}
 	out := make([]inventory.Host, 0, len(manifest.Hosts))
+	matched := make(map[string]bool, len(want))
 	for _, h := range manifest.Hosts {
+		// Filter against the immutable want set; mutating it mid-loop would
+		// disable filtering for hosts visited after the last wanted match.
 		if len(want) > 0 && !want[h.Name] {
 			continue
 		}
 		out = append(out, h)
-		delete(want, h.Name)
+		matched[h.Name] = true
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	if len(want) > 0 {
 		missing := make([]string, 0, len(want))
 		for name := range want {
-			missing = append(missing, name)
+			if !matched[name] {
+				missing = append(missing, name)
+			}
 		}
-		sort.Strings(missing)
-		return nil, fmt.Errorf("unknown host(s): %s", strings.Join(missing, ", "))
+		if len(missing) > 0 {
+			sort.Strings(missing)
+			return nil, fmt.Errorf("unknown host(s): %s", strings.Join(missing, ", "))
+		}
 	}
 	return out, nil
 }
@@ -374,7 +381,16 @@ func runOSUpdateHostCheck(ctx context.Context, base *provisioner.BaseProvisioner
 	if err != nil {
 		return result, fmt.Errorf("%s: check failed: %w", host.Name, err)
 	}
-	for _, line := range strings.Split(cmdResult.Stdout, "\n") {
+	return parseOSUpdateCheckOutput(cmdResult.Stdout, result), nil
+}
+
+// parseOSUpdateCheckOutput folds the FW_* key/value lines emitted by
+// osUpdateCheckScript into the result and derives the Pending flag. It is pure:
+// base carries the caller-initialized defaults (Host, AptListAgeSeconds=-1,
+// the empty UpgradeSummary baseline).
+func parseOSUpdateCheckOutput(stdout string, base osUpdateCheckResult) osUpdateCheckResult {
+	result := base
+	for _, line := range strings.Split(stdout, "\n") {
 		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
 		if !ok {
 			continue
@@ -405,7 +421,7 @@ func runOSUpdateHostCheck(ctx context.Context, base *provisioner.BaseProvisioner
 	result.Pending = !strings.HasPrefix(result.UpgradeSummary, "0 upgraded") ||
 		len(result.NeedrestartUnits) > 0 ||
 		result.RebootRequired
-	return result, nil
+	return result
 }
 
 func osUpdateCheckScript(refresh bool) string {
