@@ -42,10 +42,13 @@ func Derive(m *inventory.Manifest, opts DeriveOptions) (*Derived, error) {
 	}
 	d := &Derived{}
 
+	// DeploymentTier is intentionally unset: the column is billing-derived
+	// (Purser stamps billing_tiers.tier_name) and bootstrap must not claim a
+	// tier for the system tenant — 'global' used to pass the alias-eligibility
+	// gates and provisioned a *.cdn alias for the platform account.
 	d.Quartermaster.SystemTenant = &Tenant{
 		Alias:          SystemTenantAlias,
 		Name:           "FrameWorks",
-		DeploymentTier: "global",
 		PrimaryColor:   "#6366f1",
 		SecondaryColor: "#f59e0b",
 	}

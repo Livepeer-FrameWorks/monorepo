@@ -165,10 +165,11 @@ type JobManager struct {
 }
 
 // TierReconciler is the subset of tieraccess.Reconciler used by the downgrade
-// applier. Defined as an interface so JobManager tests can stub it without
-// pulling in the Quartermaster client.
+// applier and the deployment-tier sweep. Defined as an interface so
+// JobManager tests can stub it without pulling in the Quartermaster client.
 type TierReconciler interface {
-	Reconcile(ctx context.Context, tenantID string, tierLevel int32) ([]string, string, error)
+	Reconcile(ctx context.Context, tenantID string, tierLevel int32, tierName string) ([]string, string, error)
+	SweepDeploymentTiers(ctx context.Context) (int, error)
 }
 
 // NewJobManager creates a new job manager
@@ -251,6 +252,57 @@ func (jm *JobManager) Start(ctx context.Context) {
 
 	// Start Mollie observation drain backstop.
 	go jm.runMollieObservationDrain(ctx)
+
+	// Start deployment-tier sweep (Purser is the authority for
+	// quartermaster.tenants.deployment_tier).
+	go jm.runDeploymentTierSweep(ctx)
+}
+
+// runDeploymentTierSweep converges quartermaster.tenants.deployment_tier with
+// each tenant's effective billing tier. One early run shortly after startup
+// (so a deploy converges stale stamps without waiting an hour), then hourly.
+// The in-band stamp in tieraccess.Reconciler is the primary path; this loop
+// absorbs crashes between a tier flip and its stamp, QM outages, and rows
+// that predate Purser owning the column.
+func (jm *JobManager) runDeploymentTierSweep(ctx context.Context) {
+	if jm.tierReconciler == nil {
+		jm.logger.Info("deployment-tier sweep disabled: no tier reconciler configured")
+		return
+	}
+	startupDelay := time.NewTimer(1 * time.Minute)
+	defer startupDelay.Stop()
+	select {
+	case <-ctx.Done():
+		return
+	case <-jm.stopCh:
+		return
+	case <-startupDelay.C:
+	}
+	jm.deploymentTierSweepTick(ctx)
+
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-jm.stopCh:
+			return
+		case <-ticker.C:
+			jm.deploymentTierSweepTick(ctx)
+		}
+	}
+}
+
+func (jm *JobManager) deploymentTierSweepTick(ctx context.Context) {
+	repaired, err := jm.tierReconciler.SweepDeploymentTiers(ctx)
+	if err != nil {
+		jm.logger.WithError(err).Warn("deployment-tier sweep failed")
+		return
+	}
+	if repaired > 0 {
+		jm.logger.WithField("repaired", repaired).Info("deployment-tier sweep stamped tenants")
+	}
 }
 
 // runStripeMeterFlusher periodically pushes outbox rows to Stripe.
@@ -2297,15 +2349,17 @@ func (jm *JobManager) applyPendingDowngrade(ctx context.Context, tenantID string
 		currentTierID    string
 		pendingTierLevel sql.NullInt32
 	)
+	var pendingTierName sql.NullString
 	err := jm.db.QueryRowContext(ctx, `
 		SELECT ts.tier_id,
 		       ts.pending_tier_id,
 		       ts.pending_effective_at,
-		       bt.tier_level
+		       bt.tier_level,
+		       bt.tier_name
 		FROM purser.tenant_subscriptions ts
 		LEFT JOIN purser.billing_tiers bt ON bt.id = ts.pending_tier_id
 		WHERE ts.tenant_id = $1
-	`, tenantID).Scan(&currentTierID, &pendingTierID, &pendingDue, &pendingTierLevel)
+	`, tenantID).Scan(&currentTierID, &pendingTierID, &pendingDue, &pendingTierLevel, &pendingTierName)
 	if errors.Is(err, sql.ErrNoRows) {
 		return
 	}
@@ -2333,6 +2387,7 @@ func (jm *JobManager) applyPendingDowngrade(ctx context.Context, tenantID string
 
 	stagedTarget := pendingTierID.String
 	targetLevel := pendingTierLevel.Int32
+	targetName := pendingTierName.String
 
 	// Step 1: flip tier_id in its own short transaction, but keep pending_*
 	// set as the "reconcile-not-yet-applied" marker. Conditional on the
@@ -2360,7 +2415,7 @@ func (jm *JobManager) applyPendingDowngrade(ctx context.Context, tenantID string
 	}
 
 	// Step 2: reconcile cluster access + invalidate Commodore cache. Idempotent.
-	if _, _, err := jm.tierReconciler.Reconcile(ctx, tenantID, targetLevel); err != nil {
+	if _, _, err := jm.tierReconciler.Reconcile(ctx, tenantID, targetLevel, targetName); err != nil {
 		jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("reconcile cluster access for pending downgrade; will retry next tick")
 		return
 	}

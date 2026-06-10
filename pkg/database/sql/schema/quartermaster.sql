@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS quartermaster.tenants (
     secondary_color VARCHAR(7) DEFAULT '#f59e0b',
 
     -- ===== DEPLOYMENT CONFIGURATION =====
-    deployment_tier VARCHAR(50) DEFAULT 'global',
+    deployment_tier VARCHAR(50) DEFAULT 'free',  -- billing-derived; Purser stamps billing_tiers.tier_name
     deployment_model VARCHAR(50) DEFAULT 'shared',
     primary_cluster_id VARCHAR(100),
     official_cluster_id VARCHAR(100),  -- billing-tier cluster providing geographic coverage

@@ -125,6 +125,14 @@ func ReconcileCustomerBilling(ctx context.Context, exec DBTX, entries []Customer
 			}
 		}
 
+		// Stamp the billing tier into QM's tenants.deployment_tier — Purser is
+		// that column's authority. Emitted regardless of cluster_access: tier
+		// stamping is not cluster entitlement, and `none` entries still carry a
+		// billing tier the alias/custom-domain gates must see.
+		post = append(post, PostCommitOp{
+			Kind: PostCommitSetDeploymentTier, TenantID: tenantID, Tier: e.Tier, Alias: alias,
+		})
+
 		switch e.ClusterAccess {
 		case "", "derived":
 			official, err := loadOfficial()
@@ -164,6 +172,7 @@ type PostCommitOp struct {
 	Kind      PostCommitKind
 	TenantID  string
 	ClusterID string
+	Tier      string // billing tier_name, for set_deployment_tier
 	Alias     string // for human-readable reporting
 }
 
@@ -176,6 +185,11 @@ const (
 	PostCommitGrantClusterAccess PostCommitKind = "grant_cluster_access"
 	// PostCommitSetPrimaryCluster invokes UpdateTenant with primary_cluster_id.
 	PostCommitSetPrimaryCluster PostCommitKind = "set_primary_cluster"
+	// PostCommitSetDeploymentTier invokes UpdateTenant with deployment_tier =
+	// the entry's billing tier_name. Purser owns that QM column; bootstrap
+	// stamps it so desired-state customers converge immediately instead of
+	// waiting for the hourly deployment-tier sweep.
+	PostCommitSetDeploymentTier PostCommitKind = "set_deployment_tier"
 )
 
 // QMBootstrapClient is the cross-service surface ReconcileCustomerBilling

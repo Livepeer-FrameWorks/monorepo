@@ -92,9 +92,11 @@ func TestReconcileCustomerBilling_PlatformOfficialIntersection(t *testing.T) {
 		t.Errorf("expected 1 created subscription, got %v", res)
 	}
 
-	// Post-commit: one grant per official cluster + one set-primary.
+	// Post-commit: one grant per official cluster + one set-primary + one
+	// deployment-tier stamp.
 	wantGrants := map[string]bool{"core-1": false, "core-2": false}
 	gotPrimary := ""
+	gotTier := ""
 	for _, op := range post {
 		switch op.Kind {
 		case PostCommitGrantClusterAccess:
@@ -106,12 +108,17 @@ func TestReconcileCustomerBilling_PlatformOfficialIntersection(t *testing.T) {
 			}
 		case PostCommitSetPrimaryCluster:
 			gotPrimary = op.ClusterID
+		case PostCommitSetDeploymentTier:
+			gotTier = op.Tier
 		}
 	}
 	for cluster, seen := range wantGrants {
 		if !seen {
 			t.Errorf("expected grant op for %q, did not find it", cluster)
 		}
+	}
+	if gotTier != "starter" {
+		t.Errorf("expected set-deployment-tier op with tier \"starter\", got %q", gotTier)
 	}
 	// The mock returned core-2 first (ORDER BY required_tier_level DESC), so
 	// pickPrimary should pick core-2.
@@ -160,8 +167,10 @@ func TestReconcileCustomerBilling_ClusterAccessNone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReconcileCustomerBilling: %v", err)
 	}
-	if len(post) != 0 {
-		t.Errorf("cluster_access=none should emit no post-commit ops, got %v", post)
+	// cluster_access=none suppresses access ops, but the deployment-tier stamp
+	// is billing state, not cluster entitlement — it is still emitted.
+	if len(post) != 1 || post[0].Kind != PostCommitSetDeploymentTier || post[0].Tier != "enterprise" {
+		t.Errorf("cluster_access=none should emit only the deployment-tier stamp, got %v", post)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)
@@ -214,8 +223,8 @@ func TestReconcileCustomerBilling_EntitlementOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReconcileCustomerBilling: %v", err)
 	}
-	if len(post) != 0 {
-		t.Fatalf("cluster_access=none should emit no post-commit ops, got %v", post)
+	if len(post) != 1 || post[0].Kind != PostCommitSetDeploymentTier || post[0].Tier != "free" {
+		t.Fatalf("cluster_access=none should emit only the deployment-tier stamp, got %v", post)
 	}
 	if len(res.Noop) != 1 || res.Noop[0] != "frameworks" {
 		t.Fatalf("expected noop system tenant subscription, got %+v", res)

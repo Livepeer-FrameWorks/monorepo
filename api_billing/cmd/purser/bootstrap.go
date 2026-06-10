@@ -177,6 +177,12 @@ func applyPostCommitOp(ctx context.Context, client *qmclient.GRPCClient, op boot
 			TenantId: op.TenantID, PrimaryClusterId: &clusterID,
 		})
 		return err
+	case bootstrap.PostCommitSetDeploymentTier:
+		tier := op.Tier
+		_, err := client.UpdateTenant(ctx, &quartermasterpb.UpdateTenantRequest{
+			TenantId: op.TenantID, DeploymentTier: &tier,
+		})
+		return err
 	default:
 		return fmt.Errorf("unknown post-commit op %q", op.Kind)
 	}

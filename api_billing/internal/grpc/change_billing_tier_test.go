@@ -31,9 +31,9 @@ func expectLoadSubscription(mock sqlmock.Sqlmock, tenantID, tierID string, tierL
 
 // expectLoadTargetTier stubs the SELECT against billing_tiers for the target.
 func expectLoadTargetTier(mock sqlmock.Sqlmock, tierID string, tierLevel int32, isDefaultPrepaid, isActive bool) {
-	cols := []string{"tier_level", "is_default_prepaid", "is_active"}
-	rows := sqlmock.NewRows(cols).AddRow(tierLevel, isDefaultPrepaid, isActive)
-	mock.ExpectQuery(`SELECT tier_level, is_default_prepaid, is_active\s+FROM purser\.billing_tiers`).
+	cols := []string{"tier_level", "tier_name", "is_default_prepaid", "is_active"}
+	rows := sqlmock.NewRows(cols).AddRow(tierLevel, "target-tier", isDefaultPrepaid, isActive)
+	mock.ExpectQuery(`SELECT tier_level, tier_name, is_default_prepaid, is_active\s+FROM purser\.billing_tiers`).
 		WithArgs(tierID).
 		WillReturnRows(rows)
 }

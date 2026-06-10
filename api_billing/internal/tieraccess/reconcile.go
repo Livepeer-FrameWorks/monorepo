@@ -18,6 +18,7 @@ import (
 
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	tenantlimitspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
 )
@@ -29,6 +30,7 @@ import (
 type quartermasterAPI interface {
 	ListOfficialClusters(ctx context.Context) (*quartermasterpb.ListClustersResponse, error)
 	ListTenantClusterAccess(ctx context.Context, tenantID string) (*quartermasterpb.ListTenantClusterAccessResponse, error)
+	ListTenants(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListTenantsResponse, error)
 	GetTenant(ctx context.Context, tenantID string) (*quartermasterpb.GetTenantResponse, error)
 	UpdateTenant(ctx context.Context, req *quartermasterpb.UpdateTenantRequest) (*quartermasterpb.Tenant, error)
 	BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string, resourceLimits *tenantlimitspb.TenantResourceLimits) error
@@ -89,10 +91,14 @@ func (r *Reconciler) OfficialClusterIDs(ctx context.Context) (map[string]bool, e
 }
 
 // Reconcile brings tenant_cluster_access in line with the platform-official
-// clusters the tenant is entitled to at tierLevel. Ordered grant → set
-// primary → suspend so primary_cluster_id is never left pointing at a
-// suspended access row.
-func (r *Reconciler) Reconcile(ctx context.Context, tenantID string, tierLevel int32) (eligibleClusterIDs []string, primaryClusterID string, err error) {
+// clusters the tenant is entitled to at tierLevel, then stamps tierName into
+// Quartermaster's tenants.deployment_tier — Purser is that column's
+// authority; Quartermaster's alias/custom-domain gates read it. Ordered
+// grant → set primary → suspend → stamp so primary_cluster_id is never left
+// pointing at a suspended access row, and the stamp's alias side-effects in
+// Quartermaster (UpdateTenant enqueues alias ensure/remove on tier change)
+// see the final cluster-access state.
+func (r *Reconciler) Reconcile(ctx context.Context, tenantID string, tierLevel int32, tierName string) (eligibleClusterIDs []string, primaryClusterID string, err error) {
 	officialIDs, err := r.OfficialClusterIDs(ctx)
 	if err != nil {
 		return nil, "", err
@@ -201,6 +207,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, tenantID string, tierLevel i
 		}
 		if subErr := r.qm.DeactivateClusterAccess(ctx, tenantID, clusterID, "tier_downgrade"); subErr != nil {
 			return eligibleClusterIDs, primaryClusterID, fmt.Errorf("deactivate cluster access %s: %w", clusterID, subErr)
+		}
+	}
+
+	// (d) Stamp deployment_tier. Mismatch-only: Quartermaster enqueues an
+	// alias action on every tier write, so unconditional writes would churn
+	// the alias outbox. Failures here leave the stamp stale until the
+	// deployment-tier sweep converges it.
+	if tierName != "" && tenantResp.GetTenant().GetDeploymentTier() != tierName {
+		if _, stampErr := r.qm.UpdateTenant(ctx, &quartermasterpb.UpdateTenantRequest{
+			TenantId:       tenantID,
+			DeploymentTier: &tierName,
+		}); stampErr != nil {
+			return eligibleClusterIDs, primaryClusterID, fmt.Errorf("stamp deployment tier %s: %w", tierName, stampErr)
 		}
 	}
 

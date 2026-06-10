@@ -10,19 +10,23 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	tenantlimitspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
 )
 
 // fakeQM records the order of mutating Quartermaster calls so tests can assert
-// the grant → set-primary → suspend sequence. Reads are programmed via the
-// official / accessRows / primary fields.
+// the grant → set-primary → suspend → stamp sequence. Reads are programmed via
+// the official / accessRows / primary / deploymentTier / tenantPages fields.
 type fakeQM struct {
-	official   []string
-	accessRows []*quartermasterpb.TenantClusterAccessRow
-	primary    string
+	official       []string
+	accessRows     []*quartermasterpb.TenantClusterAccessRow
+	primary        string
+	deploymentTier string
+	tenantPages    [][]*quartermasterpb.Tenant
 
 	calls         []string
+	listTenantsAt int
 	bootstrapErr  error
 	updateErr     error
 	deactivateErr error
@@ -41,7 +45,7 @@ func (f *fakeQM) ListTenantClusterAccess(ctx context.Context, tenantID string) (
 }
 
 func (f *fakeQM) GetTenant(ctx context.Context, tenantID string) (*quartermasterpb.GetTenantResponse, error) {
-	tenant := &quartermasterpb.Tenant{}
+	tenant := &quartermasterpb.Tenant{DeploymentTier: f.deploymentTier}
 	if f.primary != "" {
 		p := f.primary
 		tenant.PrimaryClusterId = &p
@@ -49,8 +53,31 @@ func (f *fakeQM) GetTenant(ctx context.Context, tenantID string) (*quartermaster
 	return &quartermasterpb.GetTenantResponse{Tenant: tenant}, nil
 }
 
+func (f *fakeQM) ListTenants(ctx context.Context, _ *commonpb.CursorPaginationRequest) (*quartermasterpb.ListTenantsResponse, error) {
+	if f.listTenantsAt >= len(f.tenantPages) {
+		return &quartermasterpb.ListTenantsResponse{}, nil
+	}
+	page := f.tenantPages[f.listTenantsAt]
+	f.listTenantsAt++
+	hasNext := f.listTenantsAt < len(f.tenantPages)
+	cursor := "cursor"
+	resp := &quartermasterpb.ListTenantsResponse{
+		Tenants:    page,
+		Pagination: &commonpb.CursorPaginationResponse{HasNextPage: hasNext},
+	}
+	if hasNext {
+		resp.Pagination.EndCursor = &cursor
+	}
+	return resp, nil
+}
+
 func (f *fakeQM) UpdateTenant(ctx context.Context, req *quartermasterpb.UpdateTenantRequest) (*quartermasterpb.Tenant, error) {
-	f.calls = append(f.calls, "primary:"+req.GetPrimaryClusterId())
+	switch {
+	case req.DeploymentTier != nil:
+		f.calls = append(f.calls, "tier:"+req.GetTenantId()+"="+req.GetDeploymentTier())
+	default:
+		f.calls = append(f.calls, "primary:"+req.GetPrimaryClusterId())
+	}
 	if f.updateErr != nil {
 		return nil, f.updateErr
 	}
@@ -102,7 +129,7 @@ func TestReconcile_NoOfficialClustersIsNoOp(t *testing.T) {
 	qm := &fakeQM{official: nil}
 	r, mock := newReconcilerWithMock(t, qm)
 
-	eligible, primary, err := r.Reconcile(context.Background(), "tenant-1", 2)
+	eligible, primary, err := r.Reconcile(context.Background(), "tenant-1", 2, "supporter")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -119,9 +146,11 @@ func TestReconcile_NoOfficialClustersIsNoOp(t *testing.T) {
 }
 
 // The core ordering guarantee: grants happen first, the primary is repointed
-// second, and suspensions happen last — so primary_cluster_id is never left
-// pointing at a row that has just been suspended.
-func TestReconcile_OrderingGrantThenPrimaryThenSuspend(t *testing.T) {
+// second, suspensions third, and the deployment-tier stamp last — so
+// primary_cluster_id is never left pointing at a row that has just been
+// suspended, and the stamp's alias side-effects in QM see the final
+// cluster-access state.
+func TestReconcile_OrderingGrantThenPrimaryThenSuspendThenStamp(t *testing.T) {
 	qm := &fakeQM{
 		official: []string{"c1", "c2", "c3"},
 		// c2 already active+official; c4 active+official but no longer eligible.
@@ -129,14 +158,15 @@ func TestReconcile_OrderingGrantThenPrimaryThenSuspend(t *testing.T) {
 			activeOfficialRow("c2"),
 			activeOfficialRow("c4"),
 		},
-		primary: "c4", // not in the top-level subset → must move
+		primary:        "c4",   // not in the top-level subset → must move
+		deploymentTier: "free", // stale stamp → must be rewritten
 	}
 	r, mock := newReconcilerWithMock(t, qm)
 	mock.ExpectQuery(`SELECT cluster_id, required_tier_level`).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(pricingRows([2]any{"c1", 2}, [2]any{"c2", 1}, [2]any{"c3", 0}))
 
-	eligible, primary, err := r.Reconcile(context.Background(), "tenant-1", 2)
+	eligible, primary, err := r.Reconcile(context.Background(), "tenant-1", 2, "supporter")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -147,12 +177,56 @@ func TestReconcile_OrderingGrantThenPrimaryThenSuspend(t *testing.T) {
 		t.Errorf("eligible = %q, want %q", got, want)
 	}
 
-	want := []string{"grant:c1", "grant:c3", "primary:c1", "suspend:c4(tier_downgrade)"}
+	want := []string{"grant:c1", "grant:c3", "primary:c1", "suspend:c4(tier_downgrade)", "tier:tenant-1=supporter"}
 	if strings.Join(qm.calls, "|") != strings.Join(want, "|") {
 		t.Errorf("call order = %v, want %v", qm.calls, want)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet DB expectations: %v", err)
+	}
+}
+
+// A stamp that already matches the tenant's deployment_tier is skipped — QM
+// enqueues an alias action on every tier write, so unconditional stamping
+// would churn the alias outbox on every reconcile.
+func TestReconcile_StampSkippedWhenTierMatches(t *testing.T) {
+	qm := &fakeQM{
+		official:       []string{"c1"},
+		accessRows:     []*quartermasterpb.TenantClusterAccessRow{activeOfficialRow("c1")},
+		primary:        "c1",
+		deploymentTier: "supporter",
+	}
+	r, mock := newReconcilerWithMock(t, qm)
+	mock.ExpectQuery(`SELECT cluster_id, required_tier_level`).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(pricingRows([2]any{"c1", 2}))
+
+	if _, _, err := r.Reconcile(context.Background(), "tenant-1", 2, "supporter"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(qm.calls) != 0 {
+		t.Errorf("expected zero mutations, got %v", qm.calls)
+	}
+}
+
+// A failing stamp is wrapped and surfaced like the other reconcile sub-steps;
+// the sweep is the retry mechanism.
+func TestReconcile_StampErrorIsWrapped(t *testing.T) {
+	qm := &fakeQM{
+		official:       []string{"c1"},
+		accessRows:     []*quartermasterpb.TenantClusterAccessRow{activeOfficialRow("c1")},
+		primary:        "c1",
+		deploymentTier: "free",
+		updateErr:      errors.New("qm down"),
+	}
+	r, mock := newReconcilerWithMock(t, qm)
+	mock.ExpectQuery(`SELECT cluster_id, required_tier_level`).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(pricingRows([2]any{"c1", 2}))
+
+	_, _, err := r.Reconcile(context.Background(), "tenant-1", 2, "supporter")
+	if err == nil || !strings.Contains(err.Error(), "stamp deployment tier") {
+		t.Fatalf("expected wrapped stamp error, got %v", err)
 	}
 }
 
@@ -173,7 +247,7 @@ func TestReconcile_PrimaryTieBreakKeepsExistingPrimary(t *testing.T) {
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(pricingRows([2]any{"c1", 2}, [2]any{"c2", 2}))
 
-	_, primary, err := r.Reconcile(context.Background(), "tenant-1", 2)
+	_, primary, err := r.Reconcile(context.Background(), "tenant-1", 2, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -205,7 +279,7 @@ func TestReconcile_TierLevelForwardedToQuery(t *testing.T) {
 		WithArgs(sqlmock.AnyArg(), tierArg).
 		WillReturnRows(pricingRows([2]any{"c1", 0}))
 
-	if _, _, err := r.Reconcile(context.Background(), "tenant-1", 0); err != nil {
+	if _, _, err := r.Reconcile(context.Background(), "tenant-1", 0, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -225,7 +299,7 @@ func TestReconcile_GrantErrorIsWrappedAndPartialReturned(t *testing.T) {
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(pricingRows([2]any{"c1", 1}, [2]any{"c2", 0}))
 
-	eligible, _, err := r.Reconcile(context.Background(), "tenant-1", 1)
+	eligible, _, err := r.Reconcile(context.Background(), "tenant-1", 1, "supporter")
 	if err == nil || !strings.Contains(err.Error(), "grant cluster access") {
 		t.Fatalf("expected wrapped grant error, got %v", err)
 	}

@@ -57,13 +57,13 @@ func (s *QuartermasterServer) reconcileTenantAliasesOnce(ctx context.Context) {
 }
 
 // listDesiredTenantAliases computes each tenant's intended alias state. A
-// tenant wants an alias iff it is active on a paid tier AND holds at least one
-// active cluster subscription — the same condition the primary ensure/remove
-// paths converge to, so the backstop never fights them.
+// tenant wants an alias iff it is active on an alias-eligible monthly tier
+// AND holds at least one active cluster subscription — the same condition the
+// primary ensure/remove paths converge to, so the backstop never fights them.
 func (s *QuartermasterServer) listDesiredTenantAliases(ctx context.Context) ([]tenantAliasDesired, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT t.id::text, COALESCE(t.subdomain, ''),
-		       (t.is_active AND t.deployment_tier <> 'free'
+		       (t.is_active AND `+sqlAliasTierEligible+`
 		        AND EXISTS (SELECT 1 FROM quartermaster.tenant_cluster_access tca
 		                    WHERE tca.tenant_id = t.id AND tca.is_active = TRUE)) AS want
 		FROM quartermaster.tenants t

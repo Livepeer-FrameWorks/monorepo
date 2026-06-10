@@ -9,7 +9,7 @@ import (
 )
 
 func sysTenant() *Tenant {
-	return &Tenant{Alias: SystemTenantAlias, Name: "FrameWorks", DeploymentTier: "global", PrimaryColor: "#000", SecondaryColor: "#fff"}
+	return &Tenant{Alias: SystemTenantAlias, Name: "FrameWorks", PrimaryColor: "#000", SecondaryColor: "#fff"}
 }
 
 func TestReconcileTenantsRejectsNilExecutor(t *testing.T) {
@@ -56,15 +56,17 @@ func TestReconcileTenantsCreatesSystemAndCustomer(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT alias, tenant_id::text FROM quartermaster.bootstrap_tenant_aliases")).
 		WillReturnRows(sqlmock.NewRows([]string{"alias", "tenant_id"}))
 
+	// Insert-time tier seed defaults to 'free' (Purser owns the column after
+	// insert and stamps the billing tier).
 	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO quartermaster.tenants")).
-		WithArgs("FrameWorks", "global", "#000", "#fff").
+		WithArgs("FrameWorks", "free", "#000", "#fff").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("uuid-system"))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO quartermaster.bootstrap_tenant_aliases")).
 		WithArgs(SystemTenantAlias, "uuid-system").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO quartermaster.tenants")).
-		WithArgs("Acme", "global", "#6366f1", "#f59e0b").
+		WithArgs("Acme", "free", "#6366f1", "#f59e0b").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("uuid-acme"))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO quartermaster.bootstrap_tenant_aliases")).
 		WithArgs("acme", "uuid-acme").
@@ -98,10 +100,12 @@ func TestReconcileTenantsNoopOnUnchanged(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT alias, tenant_id::text FROM quartermaster.bootstrap_tenant_aliases")).
 		WillReturnRows(sqlmock.NewRows([]string{"alias", "tenant_id"}).AddRow(SystemTenantAlias, "uuid-system"))
+	// The update probe no longer reads deployment_tier — bootstrap never
+	// rewrites it on existing tenants.
 	mock.ExpectQuery(regexp.QuoteMeta("FROM quartermaster.tenants WHERE id = $1::uuid")).
 		WithArgs("uuid-system").
-		WillReturnRows(sqlmock.NewRows([]string{"name", "deployment_tier", "primary_color", "secondary_color"}).
-			AddRow("FrameWorks", "global", "#000", "#fff"))
+		WillReturnRows(sqlmock.NewRows([]string{"name", "primary_color", "secondary_color"}).
+			AddRow("FrameWorks", "#000", "#fff"))
 
 	_, res, err := ReconcileTenants(context.Background(), db, sysTenant(), nil)
 	if err != nil {

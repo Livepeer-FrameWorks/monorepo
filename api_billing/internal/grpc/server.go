@@ -5115,13 +5115,14 @@ func (s *PurserServer) getOfficialClusterIDs(ctx context.Context) (map[string]bo
 }
 
 // reconcileTierClusterAccess delegates to the shared tieraccess.Reconciler.
-// See package tieraccess for the bidirectional grant/suspend logic. Returns
-// empty values when no reconciler is configured (test wiring).
-func (s *PurserServer) reconcileTierClusterAccess(ctx context.Context, tenantID string, tierLevel int32) ([]string, string, error) {
+// See package tieraccess for the bidirectional grant/suspend logic and the
+// deployment_tier stamp. Returns empty values when no reconciler is
+// configured (test wiring).
+func (s *PurserServer) reconcileTierClusterAccess(ctx context.Context, tenantID string, tierLevel int32, tierName string) ([]string, string, error) {
 	if s.tierReconciler == nil {
 		return nil, "", nil
 	}
-	return s.tierReconciler.Reconcile(ctx, tenantID, tierLevel)
+	return s.tierReconciler.Reconcile(ctx, tenantID, tierLevel, tierName)
 }
 
 func (s *PurserServer) invalidateTenantCache(ctx context.Context, tenantID, reason string) error {
@@ -5159,14 +5160,14 @@ func (s *PurserServer) InitializePrepaidAccount(ctx context.Context, req *purser
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
 	// 1. Resolve default prepaid tier
-	var tierID string
+	var tierID, tierName string
 	var tierLevel int32
 	err = tx.QueryRowContext(ctx, `
-		SELECT id, tier_level
+		SELECT id, tier_level, tier_name
 		FROM purser.billing_tiers
 		WHERE is_default_prepaid = true AND is_active = true
 		LIMIT 1
-	`).Scan(&tierID, &tierLevel)
+	`).Scan(&tierID, &tierLevel, &tierName)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.FailedPrecondition, "no default prepaid billing tier configured")
 	}
@@ -5206,7 +5207,7 @@ func (s *PurserServer) InitializePrepaidAccount(ctx context.Context, req *purser
 	_ = s.db.QueryRowContext(ctx, `SELECT id FROM purser.tenant_subscriptions WHERE tenant_id = $1`, tenantID).Scan(&actualSubID)
 	_ = s.db.QueryRowContext(ctx, `SELECT id FROM purser.prepaid_balances WHERE tenant_id = $1 AND currency = $2`, tenantID, currency).Scan(&actualBalID)
 
-	eligibleClusters, primaryCluster, clusterErr := s.reconcileTierClusterAccess(ctx, tenantID, tierLevel)
+	eligibleClusters, primaryCluster, clusterErr := s.reconcileTierClusterAccess(ctx, tenantID, tierLevel, tierName)
 	if clusterErr != nil {
 		s.logger.WithError(clusterErr).WithField("tenant_id", tenantID).Warn("Failed to provision cluster access for prepaid account")
 	}
@@ -5245,14 +5246,14 @@ func (s *PurserServer) InitializePostpaidAccount(ctx context.Context, req *purse
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
 	// Resolve default postpaid tier
-	var tierID string
+	var tierID, tierName string
 	var tierLevel int32
 	err = tx.QueryRowContext(ctx, `
-		SELECT id, tier_level
+		SELECT id, tier_level, tier_name
 		FROM purser.billing_tiers
 		WHERE is_default_postpaid = true AND is_active = true
 		LIMIT 1
-	`).Scan(&tierID, &tierLevel)
+	`).Scan(&tierID, &tierLevel, &tierName)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.FailedPrecondition, "no default postpaid billing tier configured")
 	}
@@ -5280,7 +5281,7 @@ func (s *PurserServer) InitializePostpaidAccount(ctx context.Context, req *purse
 	var actualSubID string
 	_ = s.db.QueryRowContext(ctx, `SELECT id FROM purser.tenant_subscriptions WHERE tenant_id = $1`, tenantID).Scan(&actualSubID)
 
-	eligibleClusters, primaryCluster, clusterErr := s.reconcileTierClusterAccess(ctx, tenantID, tierLevel)
+	eligibleClusters, primaryCluster, clusterErr := s.reconcileTierClusterAccess(ctx, tenantID, tierLevel, tierName)
 	if clusterErr != nil {
 		s.logger.WithError(clusterErr).WithField("tenant_id", tenantID).Warn("Failed to provision cluster access for postpaid account")
 	}
@@ -6246,15 +6247,15 @@ func (s *PurserServer) PromoteToPaid(ctx context.Context, req *purserpb.PromoteT
 
 	// Resolve the target tier. Honor req.tier_id when provided; otherwise fall
 	// back to is_default_postpaid.
-	var tierID string
+	var tierID, tierName string
 	var tierLevel int32
 	var isDefaultPrepaid, isActive bool
 	if reqTierID := req.GetTierId(); reqTierID != "" {
 		err = s.db.QueryRowContext(ctx, `
-			SELECT id, tier_level, is_default_prepaid, is_active
+			SELECT id, tier_level, tier_name, is_default_prepaid, is_active
 			FROM purser.billing_tiers
 			WHERE id = $1
-		`, reqTierID).Scan(&tierID, &tierLevel, &isDefaultPrepaid, &isActive)
+		`, reqTierID).Scan(&tierID, &tierLevel, &tierName, &isDefaultPrepaid, &isActive)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, status.Error(codes.NotFound, "tier not found")
 		}
@@ -6269,10 +6270,10 @@ func (s *PurserServer) PromoteToPaid(ctx context.Context, req *purserpb.PromoteT
 		}
 	} else {
 		err = s.db.QueryRowContext(ctx, `
-			SELECT id, tier_level FROM purser.billing_tiers
+			SELECT id, tier_level, tier_name FROM purser.billing_tiers
 			WHERE is_default_postpaid = true AND is_active = true
 			LIMIT 1
-		`).Scan(&tierID, &tierLevel)
+		`).Scan(&tierID, &tierLevel, &tierName)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, status.Error(codes.FailedPrecondition, "no default postpaid billing tier configured")
 		}
@@ -6316,7 +6317,7 @@ func (s *PurserServer) PromoteToPaid(ctx context.Context, req *purserpb.PromoteT
 	}
 
 	// Re-evaluate cluster access for the new tier
-	eligibleClusters, primaryCluster, clusterErr := s.reconcileTierClusterAccess(ctx, tenantID, tierLevel)
+	eligibleClusters, primaryCluster, clusterErr := s.reconcileTierClusterAccess(ctx, tenantID, tierLevel, tierName)
 	if clusterErr != nil {
 		s.logger.WithError(clusterErr).WithField("tenant_id", tenantID).Error("Failed to re-evaluate cluster access after promotion")
 		return nil, status.Errorf(codes.Internal, "promoted to postpaid but failed to reconcile cluster access: %v", clusterErr)
@@ -6390,12 +6391,13 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 	}
 
 	var targetTierLevel int32
+	var targetTierName string
 	var isDefaultPrepaid, isActive bool
 	err = s.db.QueryRowContext(ctx, `
-		SELECT tier_level, is_default_prepaid, is_active
+		SELECT tier_level, tier_name, is_default_prepaid, is_active
 		FROM purser.billing_tiers
 		WHERE id = $1
-	`, targetTierID).Scan(&targetTierLevel, &isDefaultPrepaid, &isActive)
+	`, targetTierID).Scan(&targetTierLevel, &targetTierName, &isDefaultPrepaid, &isActive)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "target tier not found")
 	}
@@ -6416,7 +6418,7 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 	}
 
 	if targetTierID == currentTierID {
-		eligibleClusters, primaryCluster, clusterErr := s.reconcileTierClusterAccess(ctx, tenantID, targetTierLevel)
+		eligibleClusters, primaryCluster, clusterErr := s.reconcileTierClusterAccess(ctx, tenantID, targetTierLevel, targetTierName)
 		if clusterErr != nil {
 			s.logger.WithError(clusterErr).WithField("tenant_id", tenantID).Error("reconcile cluster access for unchanged tier")
 			return nil, status.Errorf(codes.Internal, "failed to reconcile cluster access for current tier: %v", clusterErr)
@@ -6466,7 +6468,7 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 			return nil, status.Errorf(codes.Internal, "update subscription tier: %v", err)
 		}
 
-		eligibleClusters, primaryCluster, clusterErr := s.reconcileTierClusterAccess(ctx, tenantID, targetTierLevel)
+		eligibleClusters, primaryCluster, clusterErr := s.reconcileTierClusterAccess(ctx, tenantID, targetTierLevel, targetTierName)
 		if clusterErr != nil {
 			s.logger.WithError(clusterErr).WithField("tenant_id", tenantID).Error("reconcile cluster access after tier change")
 			return nil, status.Errorf(codes.Internal, "tier changed but failed to reconcile cluster access: %v", clusterErr)

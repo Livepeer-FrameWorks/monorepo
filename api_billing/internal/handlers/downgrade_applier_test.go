@@ -11,17 +11,25 @@ import (
 )
 
 type stubTierReconciler struct {
-	calls    int
-	tenantID string
-	level    int32
-	err      error
+	calls      int
+	tenantID   string
+	level      int32
+	tierName   string
+	sweepCalls int
+	err        error
 }
 
-func (s *stubTierReconciler) Reconcile(_ context.Context, tenantID string, level int32) ([]string, string, error) {
+func (s *stubTierReconciler) Reconcile(_ context.Context, tenantID string, level int32, tierName string) ([]string, string, error) {
 	s.calls++
 	s.tenantID = tenantID
 	s.level = level
+	s.tierName = tierName
 	return nil, "", s.err
+}
+
+func (s *stubTierReconciler) SweepDeploymentTiers(_ context.Context) (int, error) {
+	s.sweepCalls++
+	return 0, nil
 }
 
 func TestApplyPendingDowngrade_NotDue_NoOp(t *testing.T) {
@@ -38,8 +46,8 @@ func TestApplyPendingDowngrade_NotDue_NoOp(t *testing.T) {
 	currentTier := "tier-A"
 	pending := "tier-B"
 	future := time.Now().Add(48 * time.Hour)
-	rows := sqlmock.NewRows([]string{"tier_id", "pending_tier_id", "pending_effective_at", "tier_level"}).
-		AddRow(currentTier, pending, future, int32(1))
+	rows := sqlmock.NewRows([]string{"tier_id", "pending_tier_id", "pending_effective_at", "tier_level", "tier_name"}).
+		AddRow(currentTier, pending, future, int32(1), "supporter")
 	mock.ExpectQuery(`SELECT ts\.tier_id,\s+ts\.pending_tier_id`).
 		WithArgs(tenantID).
 		WillReturnRows(rows)
@@ -65,8 +73,8 @@ func TestApplyPendingDowngrade_NoPending_NoOp(t *testing.T) {
 	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), tierReconciler: reconciler, billing: &Service{}}
 
 	tenantID := "tenant-1"
-	rows := sqlmock.NewRows([]string{"tier_id", "pending_tier_id", "pending_effective_at", "tier_level"}).
-		AddRow("tier-A", nil, nil, nil)
+	rows := sqlmock.NewRows([]string{"tier_id", "pending_tier_id", "pending_effective_at", "tier_level", "tier_name"}).
+		AddRow("tier-A", nil, nil, nil, nil)
 	mock.ExpectQuery(`SELECT ts\.tier_id,\s+ts\.pending_tier_id`).
 		WithArgs(tenantID).
 		WillReturnRows(rows)
@@ -95,8 +103,8 @@ func TestApplyPendingDowngrade_Happy_FlipsThenReconcilesThenClears(t *testing.T)
 	pending := "tier-B"
 	past := time.Now().Add(-time.Hour)
 
-	rows := sqlmock.NewRows([]string{"tier_id", "pending_tier_id", "pending_effective_at", "tier_level"}).
-		AddRow("tier-A", pending, past, int32(1))
+	rows := sqlmock.NewRows([]string{"tier_id", "pending_tier_id", "pending_effective_at", "tier_level", "tier_name"}).
+		AddRow("tier-A", pending, past, int32(1), "free")
 	mock.ExpectQuery(`SELECT ts\.tier_id,\s+ts\.pending_tier_id`).
 		WithArgs(tenantID).
 		WillReturnRows(rows)
@@ -117,6 +125,9 @@ func TestApplyPendingDowngrade_Happy_FlipsThenReconcilesThenClears(t *testing.T)
 	if reconciler.tenantID != tenantID || reconciler.level != 1 {
 		t.Errorf("reconciler called with tenant=%q level=%d; want tenant=%q level=1", reconciler.tenantID, reconciler.level, tenantID)
 	}
+	if reconciler.tierName != "free" {
+		t.Errorf("reconciler called with tierName=%q; want \"free\" (staged tier's name)", reconciler.tierName)
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet sqlmock expectations: %v", err)
 	}
@@ -136,8 +147,8 @@ func TestApplyPendingDowngrade_ReconcileFailLeavesPending(t *testing.T) {
 	pending := "tier-B"
 	past := time.Now().Add(-time.Hour)
 
-	rows := sqlmock.NewRows([]string{"tier_id", "pending_tier_id", "pending_effective_at", "tier_level"}).
-		AddRow("tier-A", pending, past, int32(1))
+	rows := sqlmock.NewRows([]string{"tier_id", "pending_tier_id", "pending_effective_at", "tier_level", "tier_name"}).
+		AddRow("tier-A", pending, past, int32(1), "free")
 	mock.ExpectQuery(`SELECT ts\.tier_id,\s+ts\.pending_tier_id`).
 		WithArgs(tenantID).
 		WillReturnRows(rows)

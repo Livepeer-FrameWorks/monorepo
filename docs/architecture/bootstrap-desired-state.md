@@ -122,7 +122,6 @@ reconcile their owned sections; there is not currently a top-level
 system_tenant:
   alias: frameworks # stable key — the canonical alias; reserved
   name: FrameWorks
-  deployment_tier: global
   primary_color: "#6366f1"
   secondary_color: "#f59e0b"
 ```
@@ -131,10 +130,11 @@ The rendered file does **not** carry the Quartermaster tenant UUID. Service boot
 subcommands resolve aliases to UUIDs via QM's persisted alias mapping at apply time,
 so re-runs always find the same tenant by alias.
 
-| Field                             | Stable | Source                                                      |
-| --------------------------------- | ------ | ----------------------------------------------------------- |
-| `alias`                           | yes    | Hardcoded `frameworks` for the system tenant. Drift = fail. |
-| `name`, `deployment_tier`, colors | no     | Manifest defaults; overlay can override.                    |
+| Field             | Stable | Source                                                                                                                                                   |
+| ----------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `alias`           | yes    | Hardcoded `frameworks` for the system tenant. Drift = fail.                                                                                              |
+| `name`, colors    | no     | Manifest defaults; overlay can override.                                                                                                                 |
+| `deployment_tier` | —      | Insert-only seed (defaults `free`). Purser owns the column afterwards (stamps the billing `tier_name`); bootstrap never rewrites it on existing tenants. |
 
 ### `tenants` (customer/private cluster owners)
 
@@ -146,7 +146,8 @@ tenants:
 ```
 
 Stable key: `alias`. The `frameworks` alias is reserved for the system tenant and
-cannot be used here. Drift = fail. All other fields update-on-drift.
+cannot be used here. Drift = fail. Name and colors update-on-drift;
+`deployment_tier` is an insert-only seed (Purser owns it afterwards).
 
 **Consumer obligation**: `quartermaster bootstrap` must persist the alias → UUID
 mapping in QM-owned storage (e.g. a `quartermaster.bootstrap_tenant_aliases` table
@@ -502,7 +503,6 @@ quartermaster:
   system_tenant:
     alias: frameworks
     name: FrameWorks
-    deployment_tier: global
   clusters:
     - id: core-central-primary
       name: Core Central Primary

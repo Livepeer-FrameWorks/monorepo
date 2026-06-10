@@ -51,11 +51,13 @@ func TestTenantAliasEligibleForStreaming(t *testing.T) {
 		want   bool
 	}{
 		{name: "nil", tenant: nil, want: false},
-		{name: "inactive paid", tenant: &quartermasterpb.Tenant{IsActive: false, DeploymentTier: "pro"}, want: false},
+		{name: "inactive paid", tenant: &quartermasterpb.Tenant{IsActive: false, DeploymentTier: "supporter"}, want: false},
 		{name: "active free", tenant: &quartermasterpb.Tenant{IsActive: true, DeploymentTier: "free"}, want: false},
+		{name: "active payg", tenant: &quartermasterpb.Tenant{IsActive: true, DeploymentTier: "payg"}, want: false},
 		{name: "active missing tier", tenant: &quartermasterpb.Tenant{IsActive: true}, want: false},
-		{name: "active paid", tenant: &quartermasterpb.Tenant{IsActive: true, DeploymentTier: "creator"}, want: true},
-		{name: "active paid with spaces", tenant: &quartermasterpb.Tenant{IsActive: true, DeploymentTier: " Pro "}, want: true},
+		{name: "active unknown tier fails closed", tenant: &quartermasterpb.Tenant{IsActive: true, DeploymentTier: "creator"}, want: false},
+		{name: "active paid", tenant: &quartermasterpb.Tenant{IsActive: true, DeploymentTier: "supporter"}, want: true},
+		{name: "active paid with spaces", tenant: &quartermasterpb.Tenant{IsActive: true, DeploymentTier: " Production "}, want: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

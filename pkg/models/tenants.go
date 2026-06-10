@@ -1,8 +1,26 @@
 package models
 
 import (
+	"slices"
+	"strings"
 	"time"
 )
+
+// AliasEligibleDeploymentTiers is the explicit allowlist of deployment tiers
+// that unlock tenant aliases ({sub}.cdn.{base} vanity domains) and custom
+// domains. These are the monthly paid tiers from Purser's billing catalog
+// (billing_tiers.yaml, tier_level >= 2). 'free' and 'payg' are deliberately
+// excluded: PAYG is prepaid pay-as-you-go and does not unlock tenant
+// subdomains. Unknown or empty tier names are ineligible by construction —
+// a new monthly tier must be added here (and to the SQL predicate in
+// api_tenants/internal/grpc/alias_eligibility.go) to unlock aliases.
+var AliasEligibleDeploymentTiers = []string{"supporter", "developer", "production", "enterprise"}
+
+// DeploymentTierAliasEligible reports whether a tenant deployment tier
+// unlocks tenant aliases and custom domains.
+func DeploymentTierAliasEligible(tier string) bool {
+	return slices.Contains(AliasEligibleDeploymentTiers, strings.ToLower(strings.TrimSpace(tier)))
+}
 
 // Tenant represents the full tenant record
 type Tenant struct {

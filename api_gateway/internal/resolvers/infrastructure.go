@@ -19,6 +19,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
@@ -2823,8 +2824,7 @@ func tenantAliasEligibleForStreaming(tenant *quartermasterpb.Tenant) bool {
 	if tenant == nil || !tenant.GetIsActive() {
 		return false
 	}
-	tier := strings.ToLower(strings.TrimSpace(tenant.GetDeploymentTier()))
-	return tier != "" && tier != "free"
+	return models.DeploymentTierAliasEligible(tenant.GetDeploymentTier())
 }
 
 func streamingConfigDomain(prefix, slug, baseURL string) string {

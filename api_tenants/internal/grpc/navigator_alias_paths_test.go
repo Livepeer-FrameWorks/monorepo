@@ -33,7 +33,7 @@ func TestEnqueueTenantAliasForSubdomainChangeRetiresBeforeEnsure(t *testing.T) {
 	mock.ExpectQuery(`SELECT t\.name, t\.subdomain, t\.deployment_tier, t\.is_active.*FOR UPDATE`).
 		WithArgs("tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"name", "subdomain", "deployment_tier", "is_active", "has_cluster"}).
-			AddRow("Acme", "new", "pro", true, true))
+			AddRow("Acme", "new", "supporter", true, true))
 	mock.ExpectQuery(`INSERT INTO quartermaster\.navigator_tenant_alias_outbox`).
 		WithArgs("tenant-1", "new", "", "", "ensure").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("ensure-1"))
@@ -183,7 +183,7 @@ func TestSubscribeToClusterEnqueuesEnsure(t *testing.T) {
 	mock.ExpectQuery(`SELECT t\.name, t\.subdomain, t\.deployment_tier, t\.is_active.*FOR UPDATE`).
 		WithArgs("tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"name", "subdomain", "deployment_tier", "is_active", "has_cluster"}).
-			AddRow("Acme", "acme", "pro", true, true))
+			AddRow("Acme", "acme", "supporter", true, true))
 	mock.ExpectQuery(`INSERT INTO quartermaster\.navigator_tenant_alias_outbox`).
 		WithArgs("tenant-1", "acme", "", "", "ensure").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("ensure-1"))
@@ -245,7 +245,7 @@ func TestGrantClusterAccessEnqueuesEnsure(t *testing.T) {
 	mock.ExpectQuery(`SELECT t\.name, t\.subdomain, t\.deployment_tier, t\.is_active.*FOR UPDATE`).
 		WithArgs("tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"name", "subdomain", "deployment_tier", "is_active", "has_cluster"}).
-			AddRow("Acme", "acme", "pro", true, true))
+			AddRow("Acme", "acme", "supporter", true, true))
 	mock.ExpectQuery(`INSERT INTO quartermaster\.navigator_tenant_alias_outbox`).
 		WithArgs("tenant-1", "acme", "", "", "ensure").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("ensure-1"))

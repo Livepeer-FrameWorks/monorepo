@@ -120,31 +120,38 @@ func TestAliasOutboxStoreReturnsRecordFailureError(t *testing.T) {
 	}
 }
 
-func TestEnqueueTenantAliasEnsureTxSkipsFreeTenant(t *testing.T) {
-	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
-	if err != nil {
-		t.Fatalf("sqlmock: %v", err)
-	}
-	defer func() { _ = db.Close() }()
-	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
-	ctx := context.Background()
+// Alias eligibility is an explicit allowlist of monthly paid tiers. free,
+// payg (prepaid pay-as-you-go), the legacy ”/global values, and unknown tier
+// names are all ineligible — the gate fails closed.
+func TestEnqueueTenantAliasEnsureTxSkipsIneligibleTiers(t *testing.T) {
+	for _, tier := range []string{"free", "", "payg", "global", "pro"} {
+		t.Run("tier="+tier, func(t *testing.T) {
+			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+			if err != nil {
+				t.Fatalf("sqlmock: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+			server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+			ctx := context.Background()
 
-	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT t\.name, t\.subdomain, t\.deployment_tier, t\.is_active.*FOR UPDATE`).
-		WithArgs("tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"name", "subdomain", "deployment_tier", "is_active", "has_cluster"}).
-			AddRow("Acme", "acme", "free", true, true))
-	// No INSERT expected: free tenants get no alias.
+			mock.ExpectBegin()
+			mock.ExpectQuery(`SELECT t\.name, t\.subdomain, t\.deployment_tier, t\.is_active.*FOR UPDATE`).
+				WithArgs("tenant-1").
+				WillReturnRows(sqlmock.NewRows([]string{"name", "subdomain", "deployment_tier", "is_active", "has_cluster"}).
+					AddRow("Acme", "acme", tier, true, true))
+			// No INSERT expected: ineligible tiers get no alias.
 
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		t.Fatalf("begin: %v", err)
-	}
-	if enqErr := server.enqueueTenantAliasEnsureTx(ctx, tx, "tenant-1", false); enqErr != nil {
-		t.Fatalf("enqueueTenantAliasEnsureTx: %v", enqErr)
-	}
-	if mockErr := mock.ExpectationsWereMet(); mockErr != nil {
-		t.Fatalf("unexpected queries: %v", mockErr)
+			tx, err := db.BeginTx(ctx, nil)
+			if err != nil {
+				t.Fatalf("begin: %v", err)
+			}
+			if enqErr := server.enqueueTenantAliasEnsureTx(ctx, tx, "tenant-1", false); enqErr != nil {
+				t.Fatalf("enqueueTenantAliasEnsureTx: %v", enqErr)
+			}
+			if mockErr := mock.ExpectationsWereMet(); mockErr != nil {
+				t.Fatalf("unexpected queries: %v", mockErr)
+			}
+		})
 	}
 }
 
@@ -161,7 +168,7 @@ func TestEnqueueTenantAliasEnsureTxEnqueuesForPaidActive(t *testing.T) {
 	mock.ExpectQuery(`SELECT t\.name, t\.subdomain, t\.deployment_tier, t\.is_active.*FOR UPDATE`).
 		WithArgs("tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"name", "subdomain", "deployment_tier", "is_active", "has_cluster"}).
-			AddRow("Acme", "acme", "pro", true, true))
+			AddRow("Acme", "acme", "supporter", true, true))
 	mock.ExpectQuery(`INSERT INTO quartermaster\.navigator_tenant_alias_outbox`).
 		WithArgs("tenant-1", "acme", "", "", "ensure").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("outbox-1"))

@@ -83,9 +83,12 @@ func upsertTenant(ctx context.Context, exec DBTX, t Tenant, aliases *AliasMap) (
 		return updateTenantByID(ctx, exec, id, t)
 	}
 
+	// deployment_tier is an insert-only seed: 'free' unless the desired state
+	// names a tier. Purser owns the column afterwards (stamps the billing
+	// tier_name), so updates below never touch it.
 	tier := t.DeploymentTier
 	if tier == "" {
-		tier = "global"
+		tier = "free"
 	}
 	primary := t.PrimaryColor
 	if primary == "" {
@@ -111,19 +114,19 @@ func upsertTenant(ctx context.Context, exec DBTX, t Tenant, aliases *AliasMap) (
 	return "created", nil
 }
 
+// updateTenantByID reconciles name and branding only. deployment_tier is
+// deliberately excluded: Purser owns it after insert (stamps the billing
+// tier_name), and bootstrap rewriting it from desired state would fight that
+// authority on every run.
 func updateTenantByID(ctx context.Context, exec DBTX, id string, t Tenant) (string, error) {
 	const probeSQL = `
-		SELECT name, COALESCE(deployment_tier,''), COALESCE(primary_color,''), COALESCE(secondary_color,'')
+		SELECT name, COALESCE(primary_color,''), COALESCE(secondary_color,'')
 		FROM quartermaster.tenants WHERE id = $1::uuid`
-	var curName, curTier, curPrimary, curSecondary string
-	if err := exec.QueryRowContext(ctx, probeSQL, id).Scan(&curName, &curTier, &curPrimary, &curSecondary); err != nil {
+	var curName, curPrimary, curSecondary string
+	if err := exec.QueryRowContext(ctx, probeSQL, id).Scan(&curName, &curPrimary, &curSecondary); err != nil {
 		return "", fmt.Errorf("probe tenant %s: %w", id, err)
 	}
 
-	tier := t.DeploymentTier
-	if tier == "" {
-		tier = "global"
-	}
 	primary := t.PrimaryColor
 	if primary == "" {
 		primary = "#6366f1"
@@ -133,15 +136,15 @@ func updateTenantByID(ctx context.Context, exec DBTX, id string, t Tenant) (stri
 		secondary = "#f59e0b"
 	}
 
-	if curName == t.Name && curTier == tier && curPrimary == primary && curSecondary == secondary {
+	if curName == t.Name && curPrimary == primary && curSecondary == secondary {
 		return "noop", nil
 	}
 
 	const updateSQL = `
 		UPDATE quartermaster.tenants
-		SET name = $2, deployment_tier = $3, primary_color = $4, secondary_color = $5, updated_at = NOW()
+		SET name = $2, primary_color = $3, secondary_color = $4, updated_at = NOW()
 		WHERE id = $1::uuid`
-	if _, err := exec.ExecContext(ctx, updateSQL, id, t.Name, tier, primary, secondary); err != nil {
+	if _, err := exec.ExecContext(ctx, updateSQL, id, t.Name, primary, secondary); err != nil {
 		return "", fmt.Errorf("update tenant %s: %w", id, err)
 	}
 	return "updated", nil

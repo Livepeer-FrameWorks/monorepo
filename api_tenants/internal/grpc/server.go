@@ -2353,6 +2353,13 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *quartermast
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
+	// Self-signup paths omit the tier; default to 'free' so the column never
+	// holds '' (Purser stamps the billing-derived tier afterwards).
+	deploymentTier := strings.ToLower(strings.TrimSpace(req.GetDeploymentTier()))
+	if deploymentTier == "" {
+		deploymentTier = "free"
+	}
+
 	// 1. Insert into quartermaster.tenants
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO quartermaster.tenants (id, name, subdomain, custom_domain, logo_url, primary_color, secondary_color,
@@ -2361,7 +2368,7 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *quartermast
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $10)
 	`, tenantID, name, subdomain, req.CustomDomain, req.LogoUrl,
 		req.GetPrimaryColor(), req.GetSecondaryColor(),
-		req.GetDeploymentTier(), req.GetDeploymentModel(), now)
+		deploymentTier, req.GetDeploymentModel(), now)
 
 	if err != nil {
 		s.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create tenant")
@@ -2679,7 +2686,7 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *quartermast
 			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias subdomain change: %v", enqErr)
 		}
 	} else if req.DeploymentTier != nil || req.IsActive != nil {
-		downgrade := (req.DeploymentTier != nil && strings.TrimSpace(*req.DeploymentTier) == "free") ||
+		downgrade := (req.DeploymentTier != nil && !models.DeploymentTierAliasEligible(*req.DeploymentTier)) ||
 			(req.IsActive != nil && !*req.IsActive)
 		if enqErr := s.enqueueTenantAliasForTierChange(ctx, tx, tenantID, downgrade); enqErr != nil {
 			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias tier change: %v", enqErr)
@@ -2703,9 +2710,8 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *quartermast
 // transaction. Tear-down of the previous domain runs whenever the value
 // changes, independent of plan tier (so an expired-to-free tenant still
 // gets the old Navigator state unwound). Ensure runs only when the new
-// domain is non-empty AND the tenant is paid + active — the drain worker
-// double-checks plan/state at dispatch time so a plan change between
-// enqueue and dispatch can't escape.
+// domain is non-empty AND the tenant is active on an alias-eligible monthly
+// tier (models.DeploymentTierAliasEligible).
 func (s *QuartermasterServer) enqueueCustomDomainTransition(ctx context.Context, tx *sql.Tx, tenantID, previousDomain, newDomain string) error {
 	previousDomain = strings.TrimSpace(previousDomain)
 	newDomain = strings.TrimSpace(newDomain)
@@ -2726,7 +2732,7 @@ func (s *QuartermasterServer) enqueueCustomDomainTransition(ctx context.Context,
 	`, tenantID).Scan(&tier, &isActive); err != nil {
 		return fmt.Errorf("lookup tier: %w", err)
 	}
-	if !isActive || tier == "" || tier == "free" {
+	if !isActive || !models.DeploymentTierAliasEligible(tier) {
 		return nil
 	}
 	if _, err := s.EnqueueNavigatorCustomDomainTx(ctx, tx, tenantID, newDomain, "ensure"); err != nil {
@@ -2737,8 +2743,9 @@ func (s *QuartermasterServer) enqueueCustomDomainTransition(ctx context.Context,
 
 // enqueueTenantAliasEnsureTx enqueues a durable Navigator ensure for the
 // tenant's subdomain alias inside the caller's tx — but only when the tenant
-// warrants one: active, paid tier, and holding at least one active cluster
-// subscription. This is the same condition the backstop reconciler uses, so
+// warrants one: active, on an alias-eligible monthly tier, and holding at
+// least one active cluster subscription. This is the same condition the
+// backstop reconciler uses, so
 // ensure never creates an alias the backstop would then reap. The resolved
 // decision rides the row, so the drain worker never re-derives it. When
 // eligible but missing a subdomain and generateIfMissing is set, a DNS-safe
@@ -2759,7 +2766,7 @@ func (s *QuartermasterServer) enqueueTenantAliasEnsureTx(ctx context.Context, tx
 	`, tenantID).Scan(&name, &subdomain, &tier, &isActive, &hasCluster); err != nil {
 		return fmt.Errorf("lookup tenant for alias ensure: %w", err)
 	}
-	if !isActive || tier == "" || tier == "free" || !hasCluster {
+	if !isActive || !models.DeploymentTierAliasEligible(tier) || !hasCluster {
 		return nil // not eligible for an alias (matches the backstop's "want")
 	}
 	label := strings.TrimSpace(subdomain.String)
@@ -2811,11 +2818,12 @@ func (s *QuartermasterServer) enqueueTenantAliasRetireTx(ctx context.Context, tx
 }
 
 // tenantHasPaidClusterAccessTx reports whether the tenant still warrants an
-// alias: it is active, on a paid tier, and holds at least one active cluster
-// subscription. A downgrade/deactivation only tears the alias down when this
-// is false — a tenant can keep the alias via another paid cluster. The
-// tenant's own is_active is part of the gate so deactivating a tenant tears
-// the alias down even while paid cluster-access rows linger.
+// alias: it is active, on an alias-eligible monthly tier, and holds at least
+// one active cluster subscription. A downgrade/deactivation only tears the
+// alias down when this is false — a tenant can keep the alias via another
+// paid cluster. The tenant's own is_active is part of the gate so
+// deactivating a tenant tears the alias down even while paid cluster-access
+// rows linger.
 func (s *QuartermasterServer) tenantHasPaidClusterAccessTx(ctx context.Context, tx *sql.Tx, tenantID string) (bool, error) {
 	var has bool
 	err := tx.QueryRowContext(ctx, `
@@ -2825,7 +2833,7 @@ func (s *QuartermasterServer) tenantHasPaidClusterAccessTx(ctx context.Context, 
 			WHERE tca.tenant_id = $1::uuid
 			  AND tca.is_active = TRUE
 			  AND t.is_active = TRUE
-			  AND t.deployment_tier <> 'free'
+			  AND `+sqlAliasTierEligible+`
 		)
 	`, tenantID).Scan(&has)
 	return has, err
@@ -3340,12 +3348,12 @@ func (s *QuartermasterServer) tenantSubdomainAvailable(ctx context.Context, cand
 	return !exists, nil
 }
 
-// ListAliasedTenantsForCluster returns tenants on a paid tier with
-// active access to the cluster. Used by Foghorn cert refresh to know
-// which per-tenant TLS bundles to include in ConfigSeed for edges in
+// ListAliasedTenantsForCluster returns tenants on an alias-eligible monthly
+// tier with active access to the cluster. Used by Foghorn cert refresh to
+// know which per-tenant TLS bundles to include in ConfigSeed for edges in
 // this cluster. Filters:
 //   - tenant_cluster_access.is_active = TRUE
-//   - tenants.deployment_tier <> 'free' (paid tier)
+//   - tenants.deployment_tier alias-eligible (sqlAliasTierEligible)
 //   - tenants.is_active = TRUE
 //   - tenants.subdomain IS NOT NULL AND <> ”
 //
@@ -3364,7 +3372,7 @@ func (s *QuartermasterServer) ListAliasedTenantsForCluster(ctx context.Context, 
 		WHERE tca.cluster_id = $1
 		  AND tca.is_active = TRUE
 		  AND t.is_active = TRUE
-		  AND t.deployment_tier <> 'free'
+		  AND `+sqlAliasTierEligible+`
 		  AND t.subdomain IS NOT NULL
 		  AND t.subdomain <> ''
 		ORDER BY t.id
