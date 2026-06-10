@@ -1547,6 +1547,23 @@ message StreamTrackListTrigger {
 }
 
 // RecordingCompleteTrigger (formerly RECORDING_END) indicates recorder completion.
+// Per-job feeder speed aggregates from MistServer's processing rate
+// controller, attached to RECORDING_END for process-controlled recordings
+// and carried through clip/VOD lifecycle events for analytics. Tick = one
+// controller cycle (~1s), so tick counts double as approximate seconds.
+message ProcessingSpeedStats {
+  uint32 ticks = 1;              // controller ticks observed
+  double speed_min = 2;          // lowest effectiveSpeed multiplier
+  double speed_avg = 3;          // time-weighted average multiplier
+  double speed_max = 4;          // highest effectiveSpeed multiplier
+  uint32 hard_slow_ticks = 5;    // ticks slammed to 1x by a proc verdict
+  uint32 regular_slow_ticks = 6; // ticks ramped down 20%
+  uint32 ramp_ups = 7;           // ramp-up events
+  uint32 lockout_ticks = 8;      // ticks under ramp lockout
+  uint32 stale_hold_ticks = 9;   // ticks held because a required proc was unobservable
+  optional int64 drain_ms = 10;  // recording drain tail after the source ended
+}
+
 message RecordingCompleteTrigger {
   string stream_name = 1;
   string file_path = 2;
@@ -1556,7 +1573,7 @@ message RecordingCompleteTrigger {
   int64 time_started = 6;
   int64 time_ended = 7;
   int64 media_duration_ms = 8;
-  
+
   // Enrichment fields for analytics (populated by Foghorn)
   optional string node_id = 9;
   optional string stream_id = 10;       // Enriched by Foghorn (UUID)
@@ -1567,6 +1584,7 @@ message RecordingCompleteTrigger {
   optional string exit_reason = 11;
   optional string human_exit_reason = 12;
   repeated StreamTrack tracks = 13;
+  optional ProcessingSpeedStats processing_speed = 14; // present for process-controlled recordings
 }
 
 // RecordingSegmentTrigger (RECORDING_SEGMENT) indicates a new segment has been written.
@@ -2010,6 +2028,9 @@ message ClipLifecycleData {
   optional bool is_synced = 28;
   optional bool is_finalized = 29;
   optional bool is_frozen = 30;
+  // Processing telemetry (STAGE_DONE): how fast the clip job actually ran.
+  optional ProcessingSpeedStats processing_speed = 31;
+  optional int64 processing_wall_ms = 32; // push start -> RECORDING_END wall time
 }
 
 // DVR lifecycle specific data (separate from DVR control messages)
@@ -2102,6 +2123,9 @@ message VodLifecycleData {
   optional bool is_synced = 27;
   optional bool is_finalized = 28;
   optional bool is_frozen = 29;
+  // Processing telemetry (STATUS_COMPLETED): how fast the processing job ran.
+  optional ProcessingSpeedStats processing_speed = 30;
+  optional int64 processing_wall_ms = 31; // push start -> RECORDING_END wall time
 }
 
 // MessageLifecycleData tracks support messaging events for real-time UI updates

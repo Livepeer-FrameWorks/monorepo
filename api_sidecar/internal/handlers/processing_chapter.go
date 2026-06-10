@@ -199,12 +199,16 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *ipcpb.ProcessingJobReq
 		return
 	}
 
-	progressTicker := time.NewTicker(30 * time.Second)
+	// 5s cadence: feeds the throughput sampler for completion telemetry; the
+	// lastms read is controller-API-only (no stream wake, no viewer count).
+	progressTicker := time.NewTicker(5 * time.Second)
 	defer progressTicker.Stop()
 	var lastMs int64
 	lastAdvance := time.Now()
 	var recordingEnd *ProcessingRecordingEndEvent
 	const stallTimeout = 3 * time.Minute
+	pushStartWallMs := time.Now().UnixMilli()
+	speedSampler := &processingSpeedSampler{}
 
 	recordingEndIsStale := func(evt ProcessingRecordingEndEvent) bool {
 		return recordingEndPredatesPush(evt.TimeStarted, currentPushStartedAt)
@@ -280,6 +284,7 @@ loop:
 			}
 		case <-progressTicker.C:
 			currentMs := h.getStreamLastMs(mistClient, streamName)
+			speedSampler.observe(time.Now().UnixMilli(), currentMs)
 			if currentMs > lastMs {
 				lastMs = currentMs
 				lastAdvance = time.Now()
@@ -363,6 +368,8 @@ loop:
 		outputs["chapter_media_start_ms"] = strconv.FormatInt(mediaStartMs, 10)
 		outputs["chapter_media_end_ms"] = strconv.FormatInt(mediaEndMs, 10)
 	}
+	outputs, speedFields := processingSpeedTelemetry(outputs, recordingEnd, speedSampler, pushStartWallMs)
+	log.WithFields(speedFields).Info("Chapter finalize completed")
 	h.sendResult(send, req.GetJobId(), "completed", "", outputs, outputPath, outputSizeBytes)
 	log.Info("Chapter finalize result sent, artifact registered with Foghorn")
 

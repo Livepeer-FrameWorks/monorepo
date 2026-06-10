@@ -494,6 +494,7 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		if len(trigger.Tracks) == 0 {
 			return nil, fmt.Errorf("RECORDING_END track summary contains no tracks")
 		}
+		trigger.ProcessingSpeed = parseRecordingSpeedStats(summary)
 		humanParts = humanParts[:len(humanParts)-1]
 		humanExitReason := strings.TrimSpace(strings.Join(humanParts, "\n"))
 		trigger.HumanExitReason = &humanExitReason
@@ -751,6 +752,39 @@ func parseTracksFromJSON(tracksData map[string]any) []*ipcpb.StreamTrack {
 	}
 
 	return tracks
+}
+
+// parseRecordingSpeedStats extracts the feeder speed aggregates Mist attaches
+// to RECORDING_END for process-controlled recordings ("speed" object +
+// "drain_ms" in the track summary JSON). Returns nil when absent.
+func parseRecordingSpeedStats(summary map[string]any) *ipcpb.ProcessingSpeedStats {
+	rawSpeed, ok := summary["speed"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	num := func(key string) float64 {
+		v, ok := rawSpeed[key].(float64)
+		if !ok {
+			return 0
+		}
+		return v
+	}
+	stats := &ipcpb.ProcessingSpeedStats{
+		Ticks:            uint32(num("ticks")),
+		SpeedMin:         num("min"),
+		SpeedAvg:         num("avg"),
+		SpeedMax:         num("max"),
+		HardSlowTicks:    uint32(num("hard_slow_ticks")),
+		RegularSlowTicks: uint32(num("regular_slow_ticks")),
+		RampUps:          uint32(num("ramp_ups")),
+		LockoutTicks:     uint32(num("lockout_ticks")),
+		StaleHoldTicks:   uint32(num("stale_hold_ticks")),
+	}
+	if drain, ok := summary["drain_ms"].(float64); ok {
+		drainMs := int64(drain)
+		stats.DrainMs = &drainMs
+	}
+	return stats
 }
 
 func parseRecordingTrackSummary(summary map[string]any) []*ipcpb.StreamTrack {

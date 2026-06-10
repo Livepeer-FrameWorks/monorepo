@@ -226,6 +226,39 @@ func TestParseTriggerToProtobufRecordingEnd(t *testing.T) {
 	if _, err := ParseTriggerToProtobuf(TriggerRecordingEnd, oldPayload, "node-1", logger); err == nil {
 		t.Fatal("expected RECORDING_END without track summary to fail")
 	}
+
+	// No "speed" object in the summary → no ProcessingSpeed on the trigger.
+	if got.GetProcessingSpeed() != nil {
+		t.Fatal("ProcessingSpeed should be nil without a speed object")
+	}
+}
+
+func TestParseTriggerToProtobufRecordingEndSpeedStats(t *testing.T) {
+	logger := logging.NewLogger()
+	// Track summary enriched with the rate-controller speed object + drain_ms,
+	// as emitted for process-controlled recordings.
+	payload := []byte("processing+job1\n/tmp/out.mkv\nMistOutMKV\n4096\n12\n1700000000\n1700000012\n12000\n0\n12000\nCLEAN_EOF\nclean end-of-file\n" +
+		`{"tracks":[{"idx":0,"id":7,"selected":true,"type":"video","codec":"H264","width":1280,"height":720,"firstms":0,"lastms":12000,"bps":800000,"rate":30}],` +
+		`"speed":{"ticks":40,"min":1,"avg":6.5,"max":24,"hard_slow_ticks":3,"regular_slow_ticks":2,"ramp_ups":8,"lockout_ticks":10,"stale_hold_ticks":12},"drain_ms":30000}` + "\n")
+
+	trig, err := ParseTriggerToProtobuf(TriggerRecordingEnd, payload, "node-1", logger)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	sp := trig.GetRecordingComplete().GetProcessingSpeed()
+	if sp == nil {
+		t.Fatal("ProcessingSpeed missing")
+	}
+	if sp.GetTicks() != 40 || sp.GetSpeedMin() != 1 || sp.GetSpeedAvg() != 6.5 || sp.GetSpeedMax() != 24 {
+		t.Fatalf("speed stats mismatch: %+v", sp)
+	}
+	if sp.GetHardSlowTicks() != 3 || sp.GetRegularSlowTicks() != 2 || sp.GetRampUps() != 8 ||
+		sp.GetLockoutTicks() != 10 || sp.GetStaleHoldTicks() != 12 {
+		t.Fatalf("verdict counters mismatch: %+v", sp)
+	}
+	if sp.DrainMs == nil || sp.GetDrainMs() != 30000 {
+		t.Fatalf("drain_ms mismatch: %+v", sp)
+	}
 }
 
 // TestParseTriggerToProtobufParamMappings covers the positional-payload

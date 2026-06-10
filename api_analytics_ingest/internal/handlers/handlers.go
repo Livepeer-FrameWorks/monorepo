@@ -3056,6 +3056,28 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 		h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "attempt").Inc()
 	}
 
+	// Processing speed telemetry (STAGE_DONE enrichment from Foghorn)
+	var (
+		procWallMs                      interface{}
+		speedMinX, speedAvgX, speedMaxX interface{}
+		hardSlowTicks, staleHoldTicks   interface{}
+		lockoutTicks, drainMs           interface{}
+	)
+	if cl.ProcessingWallMs != nil {
+		procWallMs = uint64(cl.GetProcessingWallMs())
+	}
+	if sp := cl.GetProcessingSpeed(); sp != nil && sp.GetTicks() > 0 {
+		speedMinX = float32(sp.GetSpeedMin())
+		speedAvgX = float32(sp.GetSpeedAvg())
+		speedMaxX = float32(sp.GetSpeedMax())
+		hardSlowTicks = sp.GetHardSlowTicks()
+		staleHoldTicks = sp.GetStaleHoldTicks()
+		lockoutTicks = sp.GetLockoutTicks()
+		if sp.DrainMs != nil {
+			drainMs = uint64(sp.GetDrainMs())
+		}
+	}
+
 	// 2. Write to clip_events (historical log - MergeTree)
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 			INSERT INTO artifact_events (
@@ -3063,7 +3085,9 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 				filename, request_id, stage, content_type,
 				start_unix, stop_unix, ingest_node_id,
 				percent, message, file_path, s3_url, size_bytes, expires_at,
-				source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+				source_region, stream_origin_region, stream_origin_cluster_id, schema_version,
+				processing_wall_ms, speed_min_x, speed_avg_x, speed_max_x,
+				hard_slow_ticks, stale_hold_ticks, lockout_ticks, drain_ms
 			)`)
 	if err != nil {
 		if h.metrics != nil {
@@ -3097,6 +3121,14 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 		env.streamOriginRegion,
 		env.streamOriginClusterID,
 		env.schemaVersion,
+		procWallMs,
+		speedMinX,
+		speedAvgX,
+		speedMaxX,
+		hardSlowTicks,
+		staleHoldTicks,
+		lockoutTicks,
+		drainMs,
 	); err != nil {
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
@@ -3400,6 +3432,28 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 		h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "attempt").Inc()
 	}
 
+	// Processing speed telemetry (STATUS_COMPLETED enrichment from Foghorn)
+	var (
+		vodProcWallMs                            interface{}
+		vodSpeedMinX, vodSpeedAvgX, vodSpeedMaxX interface{}
+		vodHardSlowTicks, vodStaleHoldTicks      interface{}
+		vodLockoutTicks, vodDrainMs              interface{}
+	)
+	if vodData.ProcessingWallMs != nil {
+		vodProcWallMs = uint64(vodData.GetProcessingWallMs())
+	}
+	if sp := vodData.GetProcessingSpeed(); sp != nil && sp.GetTicks() > 0 {
+		vodSpeedMinX = float32(sp.GetSpeedMin())
+		vodSpeedAvgX = float32(sp.GetSpeedAvg())
+		vodSpeedMaxX = float32(sp.GetSpeedMax())
+		vodHardSlowTicks = sp.GetHardSlowTicks()
+		vodStaleHoldTicks = sp.GetStaleHoldTicks()
+		vodLockoutTicks = sp.GetLockoutTicks()
+		if sp.DrainMs != nil {
+			vodDrainMs = uint64(sp.GetDrainMs())
+		}
+	}
+
 	// 2. Write to clip_events (historical log - MergeTree)
 	// Reuse clip_events table for VOD lifecycle events (content_type differentiates)
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
@@ -3407,7 +3461,9 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 				timestamp, tenant_id, stream_id, internal_name, cluster_id, origin_cluster_id,
 				filename, request_id, stage, content_type,
 				ingest_node_id, file_path, s3_url, size_bytes, message, expires_at,
-				source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+				source_region, stream_origin_region, stream_origin_cluster_id, schema_version,
+				processing_wall_ms, speed_min_x, speed_avg_x, speed_max_x,
+				hard_slow_ticks, stale_hold_ticks, lockout_ticks, drain_ms
 			)`)
 	if err != nil {
 		if h.metrics != nil {
@@ -3443,6 +3499,14 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 		env.streamOriginRegion,
 		env.streamOriginClusterID,
 		env.schemaVersion,
+		vodProcWallMs,
+		vodSpeedMinX,
+		vodSpeedAvgX,
+		vodSpeedMaxX,
+		vodHardSlowTicks,
+		vodStaleHoldTicks,
+		vodLockoutTicks,
+		vodDrainMs,
 	); err != nil {
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()

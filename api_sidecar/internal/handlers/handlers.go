@@ -1784,6 +1784,7 @@ func processingRecordingEndEvent(rec *ipcpb.RecordingCompleteTrigger) Processing
 		ExitReason:      rec.GetExitReason(),
 		HumanExitReason: rec.GetHumanExitReason(),
 		Tracks:          processingTracksFromProto(rec.GetTracks()),
+		ProcessingSpeed: rec.GetProcessingSpeed(),
 	}
 }
 

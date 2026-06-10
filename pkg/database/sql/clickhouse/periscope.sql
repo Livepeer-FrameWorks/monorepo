@@ -1096,7 +1096,18 @@ CREATE TABLE IF NOT EXISTS artifact_events (
     source_region LowCardinality(String) DEFAULT '',
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
-    schema_version UInt8 DEFAULT 0
+    schema_version UInt8 DEFAULT 0,
+
+    -- Processing speed telemetry (clip/VOD done stages): MistServer
+    -- rate-controller aggregates for the job, relayed via Helmsman → Foghorn.
+    processing_wall_ms Nullable(UInt64),
+    speed_min_x Nullable(Float32),
+    speed_avg_x Nullable(Float32),
+    speed_max_x Nullable(Float32),
+    hard_slow_ticks Nullable(UInt32),
+    stale_hold_ticks Nullable(UInt32),
+    lockout_ticks Nullable(UInt32),
+    drain_ms Nullable(UInt64)
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp, request_id)

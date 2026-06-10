@@ -129,13 +129,18 @@ func (h *ProcessingJobHandler) handleClip(req *ipcpb.ProcessingJobRequest, send 
 		return
 	}
 
-	progressTicker := time.NewTicker(30 * time.Second)
+	// 5s cadence: fine-grained enough to derive throughput (Δlastms/Δwall)
+	// for the completion telemetry; the lastms read is controller-API-only,
+	// so it neither wakes the stream nor counts as a viewer.
+	progressTicker := time.NewTicker(5 * time.Second)
 	defer progressTicker.Stop()
 	absoluteTimeout := time.After(4 * time.Hour)
 	var lastMs int64
 	lastAdvance := time.Now()
 	var recordingEnd *ProcessingRecordingEndEvent
 	const stallTimeout = 3 * time.Minute
+	pushStartWallMs := time.Now().UnixMilli()
+	speedSampler := &processingSpeedSampler{}
 
 	recordingEndIsStale := func(evt ProcessingRecordingEndEvent) bool {
 		return recordingEndPredatesPush(evt.TimeStarted, currentPushStartedAt)
@@ -201,6 +206,7 @@ loop:
 			}
 		case <-progressTicker.C:
 			currentMs := h.getStreamLastMs(mistClient, streamName)
+			speedSampler.observe(time.Now().UnixMilli(), currentMs)
 			if currentMs > lastMs {
 				lastMs = currentMs
 				lastAdvance = time.Now()
@@ -297,6 +303,8 @@ loop:
 		return
 	}
 
+	streamOutputs, speedFields := processingSpeedTelemetry(streamOutputs, recordingEnd, speedSampler, pushStartWallMs)
+	log.WithFields(speedFields).Info("Clip processing completed")
 	h.sendResultWithMediaDuration(send, req.GetJobId(), "completed", "", streamOutputs, outputPath, outputSizeBytes, recordingEnd.MediaDurationMs)
 	log.Info("Clip processing result sent, artifact registered with Foghorn")
 

@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -4789,6 +4790,52 @@ func SetProcessConfigCacheUpdater(h ProcessConfigCacheUpdater) {
 // maxRenditionSpanShortfallMs so the two sides agree on "materially shorter".
 const clipPartialShortfallMs = 2000
 
+// processingSpeedFromOutputs reconstructs the speed telemetry Helmsman
+// attached to the job result outputs map (see processingSpeedTelemetry on the
+// Helmsman side) for lifecycle enrichment. Returns nil stats when absent.
+func processingSpeedFromOutputs(outputs map[string]string) (*ipcpb.ProcessingSpeedStats, *int64) {
+	var wallMs *int64
+	if raw := outputs["processing_wall_ms"]; raw != "" {
+		if v, err := strconv.ParseInt(raw, 10, 64); err == nil {
+			wallMs = &v
+		}
+	}
+	if outputs["speed_source"] == "" {
+		return nil, wallMs
+	}
+	pf := func(k string) float64 {
+		v, err := strconv.ParseFloat(outputs[k], 64)
+		if err != nil {
+			return 0
+		}
+		return v
+	}
+	pu := func(k string) uint32 {
+		v, err := strconv.ParseUint(outputs[k], 10, 32)
+		if err != nil {
+			return 0
+		}
+		return uint32(v)
+	}
+	stats := &ipcpb.ProcessingSpeedStats{
+		Ticks:            pu("speed_ticks"),
+		SpeedMin:         pf("speed_min_x"),
+		SpeedAvg:         pf("speed_avg_x"),
+		SpeedMax:         pf("speed_max_x"),
+		HardSlowTicks:    pu("hard_slow_ticks"),
+		RegularSlowTicks: pu("regular_slow_ticks"),
+		RampUps:          pu("ramp_ups"),
+		LockoutTicks:     pu("lockout_ticks"),
+		StaleHoldTicks:   pu("stale_hold_ticks"),
+	}
+	if raw := outputs["drain_ms"]; raw != "" {
+		if v, err := strconv.ParseInt(raw, 10, 64); err == nil {
+			stats.DrainMs = &v
+		}
+	}
+	return stats, wallMs
+}
+
 // processProcessingJobResult handles job completion/failure results from Helmsman.
 func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string, logger logging.Logger) {
 	fields := logging.Fields{
@@ -5004,6 +5051,10 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 						durationSec := actualDurationMs / 1000
 						clipData.DurationSec = &durationSec
 					}
+					if sp, wallMs := processingSpeedFromOutputs(result.GetOutputs()); sp != nil || wallMs != nil {
+						clipData.ProcessingSpeed = sp
+						clipData.ProcessingWallMs = wallMs
+					}
 					go artifactoutbox.EnqueueClipLifecycleLogged(clipData)
 				}
 				if artifactType == "vod" && decklogClient != nil {
@@ -5024,6 +5075,10 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 					}
 					if tenantID != "" {
 						vodData.TenantId = &tenantID
+					}
+					if sp, wallMs := processingSpeedFromOutputs(result.GetOutputs()); sp != nil || wallMs != nil {
+						vodData.ProcessingSpeed = sp
+						vodData.ProcessingWallMs = wallMs
 					}
 					go artifactoutbox.EnqueueVodLifecycleLogged(vodData)
 				}

@@ -73,6 +73,89 @@ type ProcessingRecordingEndEvent struct {
 	ExitReason      string
 	HumanExitReason string
 	Tracks          []processingMetaVideoTrack
+	ProcessingSpeed *ipcpb.ProcessingSpeedStats // Mist feeder speed stats, when reported
+}
+
+// processingSpeedSampler derives throughput multipliers from successive
+// lastms observations (Δmedia/Δwall) on the progress ticker. Mist's own
+// controller stats (RECORDING_END "speed" object) are authoritative when
+// present; this sampler is the fallback and cross-check.
+type processingSpeedSampler struct {
+	prevMediaMs int64
+	prevWallMs  int64
+	minX, maxX  float64
+	sumX        float64
+	samples     int
+}
+
+func (s *processingSpeedSampler) observe(wallMs, mediaMs int64) {
+	if s.prevWallMs > 0 && wallMs > s.prevWallMs && mediaMs > s.prevMediaMs {
+		x := float64(mediaMs-s.prevMediaMs) / float64(wallMs-s.prevWallMs)
+		if s.samples == 0 || x < s.minX {
+			s.minX = x
+		}
+		if x > s.maxX {
+			s.maxX = x
+		}
+		s.sumX += x
+		s.samples++
+	}
+	s.prevWallMs = wallMs
+	s.prevMediaMs = mediaMs
+}
+
+// processingSpeedTelemetry merges the job's speed observations into the
+// result outputs map (string-valued, rides ProcessingJobResult.outputs to
+// Foghorn for lifecycle enrichment) and returns the map plus matching log
+// fields. Always assign the returned map: the input may be nil.
+func processingSpeedTelemetry(outputs map[string]string, evt *ProcessingRecordingEndEvent, sampler *processingSpeedSampler, pushStartWallMs int64) (map[string]string, logging.Fields) {
+	if outputs == nil {
+		outputs = map[string]string{}
+	}
+	wallMs := time.Now().UnixMilli() - pushStartWallMs
+	fields := logging.Fields{
+		"processing_wall_ms": wallMs,
+	}
+	outputs["processing_wall_ms"] = strconv.FormatInt(wallMs, 10)
+	var speedStats *ipcpb.ProcessingSpeedStats
+	if evt != nil {
+		fields["media_duration_ms"] = evt.MediaDurationMs
+		speedStats = evt.ProcessingSpeed
+	}
+	f := func(v float64) string { return strconv.FormatFloat(v, 'f', 2, 64) }
+	if sp := speedStats; sp != nil && sp.GetTicks() > 0 {
+		outputs["speed_source"] = "mist"
+		outputs["speed_min_x"] = f(sp.GetSpeedMin())
+		outputs["speed_avg_x"] = f(sp.GetSpeedAvg())
+		outputs["speed_max_x"] = f(sp.GetSpeedMax())
+		outputs["speed_ticks"] = strconv.FormatUint(uint64(sp.GetTicks()), 10)
+		outputs["hard_slow_ticks"] = strconv.FormatUint(uint64(sp.GetHardSlowTicks()), 10)
+		outputs["regular_slow_ticks"] = strconv.FormatUint(uint64(sp.GetRegularSlowTicks()), 10)
+		outputs["ramp_ups"] = strconv.FormatUint(uint64(sp.GetRampUps()), 10)
+		outputs["lockout_ticks"] = strconv.FormatUint(uint64(sp.GetLockoutTicks()), 10)
+		outputs["stale_hold_ticks"] = strconv.FormatUint(uint64(sp.GetStaleHoldTicks()), 10)
+		fields["speed_source"] = "mist"
+		fields["speed_min_x"] = sp.GetSpeedMin()
+		fields["speed_avg_x"] = sp.GetSpeedAvg()
+		fields["speed_max_x"] = sp.GetSpeedMax()
+		fields["hard_slow_ticks"] = sp.GetHardSlowTicks()
+		fields["stale_hold_ticks"] = sp.GetStaleHoldTicks()
+		if sp.DrainMs != nil {
+			outputs["drain_ms"] = strconv.FormatInt(sp.GetDrainMs(), 10)
+			fields["drain_ms"] = sp.GetDrainMs()
+		}
+	} else if sampler != nil && sampler.samples > 0 {
+		avg := sampler.sumX / float64(sampler.samples)
+		outputs["speed_source"] = "sampled"
+		outputs["speed_min_x"] = f(sampler.minX)
+		outputs["speed_avg_x"] = f(avg)
+		outputs["speed_max_x"] = f(sampler.maxX)
+		fields["speed_source"] = "sampled"
+		fields["speed_min_x"] = sampler.minX
+		fields["speed_avg_x"] = avg
+		fields["speed_max_x"] = sampler.maxX
+	}
+	return outputs, fields
 }
 
 var (
@@ -552,7 +635,9 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	}
 
 	// Single select loop: terminal triggers, process state, progress, and timeouts.
-	progressTicker := time.NewTicker(30 * time.Second)
+	// 5s cadence feeds the throughput sampler; the lastms read is
+	// controller-API-only (no stream wake, no viewer count).
+	progressTicker := time.NewTicker(5 * time.Second)
 	defer progressTicker.Stop()
 	absoluteTimeout := time.After(4 * time.Hour)
 
@@ -560,6 +645,8 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	lastAdvance := time.Now()
 	var recordingEnd *ProcessingRecordingEndEvent
 	const stallTimeout = 3 * time.Minute
+	pushStartWallMs := time.Now().UnixMilli()
+	speedSampler := &processingSpeedSampler{}
 
 	// restartWithLocalFallback swaps Livepeer for local MistProcAV and restarts
 	// the push, returning false only after it has already reported a terminal
@@ -709,6 +796,7 @@ loop:
 
 		case <-progressTicker.C:
 			currentMs := h.getStreamLastMs(mistClient, streamName)
+			speedSampler.observe(time.Now().UnixMilli(), currentMs)
 			if currentMs > lastMs {
 				lastMs = currentMs
 				lastAdvance = time.Now()
@@ -836,6 +924,8 @@ loop:
 	// in the warm cache immediately. DTSH generation above uses a temporary
 	// local source override, so playback cannot win the publish-vs-sidecar
 	// race for freshly-created clips.
+	outputs, speedFields := processingSpeedTelemetry(outputs, recordingEnd, speedSampler, pushStartWallMs)
+	log.WithFields(speedFields).Info("Processing completed")
 	h.sendResult(send, req.GetJobId(), "completed", "", outputs, outputPath, outputSizeBytes)
 	log.Info("Processing job result sent, artifact registered with Foghorn")
 
@@ -934,6 +1024,11 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, m
 	var lastErr error
 	bootTicker := time.NewTicker(500 * time.Millisecond)
 	defer bootTicker.Stop()
+	// Tracks whether the last active_streams check saw the stream. The boot
+	// request (a /json_ fetch) counts as a Mist viewer and wakes idle
+	// streams, so it must only fire while the stream is actually down;
+	// readiness polling itself is controller-API-only.
+	streamActive := false
 
 	for {
 		if evt, ok := nextProcessExitEvent(processExitCh, ignoredProcessExitBootCounts); ok {
@@ -986,14 +1081,18 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, m
 			}
 		}
 
-		if err := h.bootMistStream(streamName); err != nil {
-			lastErr = err
+		if !streamActive {
+			if err := h.bootMistStream(streamName); err != nil {
+				lastErr = err
+			}
 		}
 
 		streamData, err := h.getActiveProcessingStreamData(mistClient, streamName)
 		if err != nil {
 			lastErr = err
+			streamActive = false
 		} else {
+			streamActive = true
 			lastPresence = inspectProcessingActiveStream(streamData)
 			if lastPresence.sourceMedia {
 				log.WithFields(logrus.Fields{

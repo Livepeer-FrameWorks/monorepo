@@ -371,6 +371,51 @@ func TestProcessProcessingJobResult_CallsHandler(t *testing.T) {
 	}
 }
 
+func TestProcessingSpeedFromOutputs(t *testing.T) {
+	// No telemetry keys at all.
+	sp, wallMs := processingSpeedFromOutputs(map[string]string{})
+	if sp != nil || wallMs != nil {
+		t.Fatalf("empty outputs should yield nil,nil; got %v,%v", sp, wallMs)
+	}
+
+	// Wall time without speed stats (no sampler data, no Mist stats).
+	sp, wallMs = processingSpeedFromOutputs(map[string]string{"processing_wall_ms": "63000"})
+	if sp != nil {
+		t.Fatalf("no speed_source should yield nil stats, got %+v", sp)
+	}
+	if wallMs == nil || *wallMs != 63000 {
+		t.Fatalf("wallMs = %v, want 63000", wallMs)
+	}
+
+	// Full telemetry round-trip.
+	sp, wallMs = processingSpeedFromOutputs(map[string]string{
+		"processing_wall_ms": "63000",
+		"speed_source":       "mist",
+		"speed_ticks":        "40",
+		"speed_min_x":        "1.00",
+		"speed_avg_x":        "6.50",
+		"speed_max_x":        "24.00",
+		"hard_slow_ticks":    "3",
+		"regular_slow_ticks": "2",
+		"ramp_ups":           "8",
+		"lockout_ticks":      "10",
+		"stale_hold_ticks":   "12",
+		"drain_ms":           "30000",
+	})
+	if wallMs == nil || *wallMs != 63000 {
+		t.Fatalf("wallMs = %v, want 63000", wallMs)
+	}
+	if sp == nil || sp.GetTicks() != 40 || sp.GetSpeedAvg() != 6.5 || sp.GetSpeedMax() != 24 {
+		t.Fatalf("speed stats mismatch: %+v", sp)
+	}
+	if sp.GetHardSlowTicks() != 3 || sp.GetStaleHoldTicks() != 12 || sp.GetLockoutTicks() != 10 {
+		t.Fatalf("verdict counters mismatch: %+v", sp)
+	}
+	if sp.DrainMs == nil || sp.GetDrainMs() != 30000 {
+		t.Fatalf("drain_ms mismatch: %+v", sp)
+	}
+}
+
 func TestProcessProcessingJobResult_UnknownStatus(t *testing.T) {
 	_, _, _ = setupArtifactTestDeps(t)
 	logger := logging.NewLogger()
