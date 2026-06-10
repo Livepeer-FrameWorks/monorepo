@@ -1229,6 +1229,56 @@ func EnsureTrailingSlash(s string) string {
 	return s
 }
 
+func canonicalMistOutputBaseURL(baseURL string, rawOutputs map[string]any, streamName string) string {
+	base := strings.TrimSpace(baseURL)
+	if isValidMistOutputBaseURL(base) {
+		return EnsureTrailingSlash(base)
+	}
+	if raw, ok := findOutputRaw(rawOutputs, "HTTP"); ok {
+		if derived := baseFromResolvedMistOutput(ResolveTemplateURL(raw, "", streamName)); derived != "" {
+			return derived
+		}
+	}
+	return EnsureTrailingSlash(base)
+}
+
+func isValidMistOutputBaseURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host != "" && host != "http" && host != "https"
+}
+
+func baseFromResolvedMistOutput(raw string) string {
+	resolved := strings.TrimSpace(strings.Trim(raw, "[]\""))
+	if resolved == "" {
+		return ""
+	}
+	if strings.HasPrefix(resolved, "//") {
+		resolved = "https:" + resolved
+	}
+	u, err := url.Parse(resolved)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "" || host == "http" || host == "https" {
+		return ""
+	}
+	u.RawQuery = ""
+	u.Fragment = ""
+	if !strings.HasSuffix(u.Path, "/") {
+		if idx := strings.LastIndex(u.Path, "/"); idx >= 0 {
+			u.Path = u.Path[:idx+1]
+		} else {
+			u.Path = "/"
+		}
+	}
+	return EnsureTrailingSlash(u.String())
+}
+
 // ExtractPublicHostFromOutputs extracts the public hostname:port from MistServer outputs.
 // MistServer outputs like HLS contain the actual public-facing host (e.g., "localhost:18090")
 // while WebRTC uses "HOST" placeholder. This function extracts the public host from outputs
@@ -1426,24 +1476,25 @@ func BuildViewerEndpointFromOutputs(nodeID string, nodeOutputs *NodeOutputs, str
 	if nodeOutputs == nil || nodeOutputs.Outputs == nil {
 		return nil
 	}
+	baseURL := canonicalMistOutputBaseURL(nodeOutputs.BaseURL, nodeOutputs.Outputs, streamName)
 	publicHost := ExtractPublicHostFromOutputs(nodeOutputs.Outputs)
 	var protocol, endpointURL string
 	if webrtcURL, ok := findOutputRaw(nodeOutputs.Outputs, "WebRTC", "WebRTC with WebSocket signalling"); ok {
 		protocol = "webrtc"
-		endpointURL = ResolveTemplateURLWithHost(webrtcURL, nodeOutputs.BaseURL, streamName, publicHost)
+		endpointURL = ResolveTemplateURLWithHost(webrtcURL, baseURL, streamName, publicHost)
 	} else if hlsURL, ok := findOutputRaw(nodeOutputs.Outputs, "HLS", "HLS (TS)"); ok {
 		protocol = "hls"
-		endpointURL = ResolveTemplateURL(hlsURL, nodeOutputs.BaseURL, streamName)
+		endpointURL = ResolveTemplateURL(hlsURL, baseURL, streamName)
 	}
 	if endpointURL == "" {
 		return nil
 	}
 	return &sharedpb.ViewerEndpoint{
 		NodeId:   nodeID,
-		BaseUrl:  nodeOutputs.BaseURL,
+		BaseUrl:  baseURL,
 		Protocol: protocol,
 		Url:      endpointURL,
-		Outputs:  BuildOutputsMap(nodeOutputs.BaseURL, nodeOutputs.Outputs, streamName, isLive),
+		Outputs:  BuildOutputsMap(baseURL, nodeOutputs.Outputs, streamName, isLive),
 	}
 }
 
@@ -1451,7 +1502,7 @@ func BuildViewerEndpointFromOutputs(nodeID string, nodeOutputs *NodeOutputs, str
 func BuildOutputsMap(baseURL string, rawOutputs map[string]any, streamName string, isLive bool) map[string]*sharedpb.OutputEndpoint {
 	outputs := make(map[string]*sharedpb.OutputEndpoint)
 
-	base := EnsureTrailingSlash(baseURL)
+	base := canonicalMistOutputBaseURL(baseURL, rawOutputs, streamName)
 	html := base + streamName + ".html"
 	outputs["MIST_HTML"] = &sharedpb.OutputEndpoint{Protocol: "MIST_HTML", Url: html, Capabilities: BuildOutputCapabilities("MIST_HTML", isLive)}
 	outputs["PLAYER_JS"] = &sharedpb.OutputEndpoint{Protocol: "PLAYER_JS", Url: base + "player.js", Capabilities: BuildOutputCapabilities("PLAYER_JS", isLive)}

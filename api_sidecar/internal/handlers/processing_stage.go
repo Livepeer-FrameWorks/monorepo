@@ -64,6 +64,10 @@ func (h *ProcessingJobHandler) buildLocalProcessingSourceURL(req *ipcpb.Processi
 	query.Set("video", "all,!JPEG")
 	query.Set("meta", "all,!thumbvtt")
 	query.Set("subtitle", "all")
+	// rate=0 disables Mist's realtime pacing (realTime=0): without it a cut
+	// from a live stream is delivered at 1x media speed, so staging takes
+	// about as long as the clip itself.
+	query.Set("rate", "0")
 	if params["source_kind"] == "live" {
 		query.Set("startunix", strconv.FormatInt(startUnix-time.Now().Unix(), 10))
 		query.Set("duration", strconv.FormatInt(stopUnix-startUnix, 10))

@@ -49,3 +49,20 @@ func projectArtifactSizeToCommodore(ctx context.Context, artifactHash string, si
 		}).Warn("Failed to notify Commodore of artifact size")
 	}
 }
+
+// projectClipDurationToCommodore pushes the measured output duration onto the
+// commodore clip registry row, so a partial clip lists with its real length
+// instead of the requested span.
+func projectClipDurationToCommodore(ctx context.Context, tenantID, artifactHash string, durationMs int64, logger logging.Logger) {
+	if CommodoreClient == nil || tenantID == "" || artifactHash == "" || durationMs <= 0 {
+		return
+	}
+	notifyCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if _, err := CommodoreClient.UpdateClipDuration(notifyCtx, tenantID, artifactHash, durationMs); err != nil {
+		logger.WithError(err).WithFields(logging.Fields{
+			"artifact_hash": artifactHash,
+			"duration_ms":   durationMs,
+		}).Warn("Failed to notify Commodore of clip duration")
+	}
+}

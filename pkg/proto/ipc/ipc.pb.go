@@ -16963,6 +16963,7 @@ type ProcessingJobResult struct {
 	Outputs         map[string]string      `protobuf:"bytes,4,rep,name=outputs,proto3" json:"outputs,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // Metadata (codec, resolution, etc.) or completion info
 	OutputPath      string                 `protobuf:"bytes,5,opt,name=output_path,json=outputPath,proto3" json:"output_path,omitempty"`                                                   // Local file path of processed output (for artifact registration)
 	OutputSizeBytes int64                  `protobuf:"varint,6,opt,name=output_size_bytes,json=outputSizeBytes,proto3" json:"output_size_bytes,omitempty"`                                 // Size of processed output file
+	MediaDurationMs *int64                 `protobuf:"varint,7,opt,name=media_duration_ms,json=mediaDurationMs,proto3,oneof" json:"media_duration_ms,omitempty"`                           // Actual output media duration (RECORDING_END); lets Foghorn mark clips partial when shorter than requested
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -17035,6 +17036,13 @@ func (x *ProcessingJobResult) GetOutputPath() string {
 func (x *ProcessingJobResult) GetOutputSizeBytes() int64 {
 	if x != nil {
 		return x.OutputSizeBytes
+	}
+	return 0
+}
+
+func (x *ProcessingJobResult) GetMediaDurationMs() int64 {
+	if x != nil && x.MediaDurationMs != nil {
+		return *x.MediaDurationMs
 	}
 	return 0
 }
@@ -20955,7 +20963,7 @@ const file_ipc_proto_rawDesc = "" +
 	"local_path\x18\x06 \x01(\tR\tlocalPath\x124\n" +
 	"\x16presigned_recovery_url\x18\a \x01(\tR\x14presignedRecoveryUrl\x12\x1d\n" +
 	"\n" +
-	"size_bytes\x18\b \x01(\x03R\tsizeBytes\"\xb0\x02\n" +
+	"size_bytes\x18\b \x01(\x03R\tsizeBytes\"\xf7\x02\n" +
 	"\x13ProcessingJobResult\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x14\n" +
@@ -20963,10 +20971,12 @@ const file_ipc_proto_rawDesc = "" +
 	"\aoutputs\x18\x04 \x03(\v21.helmsmancontrol.ProcessingJobResult.OutputsEntryR\aoutputs\x12\x1f\n" +
 	"\voutput_path\x18\x05 \x01(\tR\n" +
 	"outputPath\x12*\n" +
-	"\x11output_size_bytes\x18\x06 \x01(\x03R\x0foutputSizeBytes\x1a:\n" +
+	"\x11output_size_bytes\x18\x06 \x01(\x03R\x0foutputSizeBytes\x12/\n" +
+	"\x11media_duration_ms\x18\a \x01(\x03H\x00R\x0fmediaDurationMs\x88\x01\x01\x1a:\n" +
 	"\fOutputsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x98\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x14\n" +
+	"\x12_media_duration_ms\"\x98\x01\n" +
 	"\x15ProcessingJobProgress\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12!\n" +
 	"\fprogress_pct\x18\x02 \x01(\x05R\vprogressPct\x12\x17\n" +
@@ -21753,6 +21763,7 @@ func file_ipc_proto_init() {
 	file_ipc_proto_msgTypes[103].OneofWrappers = []any{}
 	file_ipc_proto_msgTypes[106].OneofWrappers = []any{}
 	file_ipc_proto_msgTypes[111].OneofWrappers = []any{}
+	file_ipc_proto_msgTypes[126].OneofWrappers = []any{}
 	file_ipc_proto_msgTypes[137].OneofWrappers = []any{
 		(*GatewayTelemetryEvent_Discovery)(nil),
 		(*GatewayTelemetryEvent_State)(nil),

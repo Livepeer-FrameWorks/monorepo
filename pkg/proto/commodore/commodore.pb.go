@@ -3384,6 +3384,7 @@ type UpdateArtifactSizeRequest struct {
 	AssetType     ArtifactAssetType      `protobuf:"varint,2,opt,name=asset_type,json=assetType,proto3,enum=commodore.ArtifactAssetType" json:"asset_type,omitempty"`
 	AssetKey      string                 `protobuf:"bytes,3,opt,name=asset_key,json=assetKey,proto3" json:"asset_key,omitempty"`
 	SizeBytes     int64                  `protobuf:"varint,4,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	DurationMs    *int64                 `protobuf:"varint,5,opt,name=duration_ms,json=durationMs,proto3,oneof" json:"duration_ms,omitempty"` // Measured output duration; projects the real length of a partial clip (clips only)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3442,6 +3443,13 @@ func (x *UpdateArtifactSizeRequest) GetAssetKey() string {
 func (x *UpdateArtifactSizeRequest) GetSizeBytes() int64 {
 	if x != nil {
 		return x.SizeBytes
+	}
+	return 0
+}
+
+func (x *UpdateArtifactSizeRequest) GetDurationMs() int64 {
+	if x != nil && x.DurationMs != nil {
+		return *x.DurationMs
 	}
 	return 0
 }
@@ -13428,14 +13436,17 @@ const file_commodore_proto_rawDesc = "" +
 	"\tasset_key\x18\x03 \x01(\tR\bassetKey\x12,\n" +
 	"\x12storage_cluster_id\x18\x04 \x01(\tR\x10storageClusterId\"@\n" +
 	"$UpdateArtifactStorageClusterResponse\x12\x18\n" +
-	"\aupdated\x18\x01 \x01(\bR\aupdated\"\xb1\x01\n" +
+	"\aupdated\x18\x01 \x01(\bR\aupdated\"\xe7\x01\n" +
 	"\x19UpdateArtifactSizeRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12;\n" +
 	"\n" +
 	"asset_type\x18\x02 \x01(\x0e2\x1c.commodore.ArtifactAssetTypeR\tassetType\x12\x1b\n" +
 	"\tasset_key\x18\x03 \x01(\tR\bassetKey\x12\x1d\n" +
 	"\n" +
-	"size_bytes\x18\x04 \x01(\x03R\tsizeBytes\"6\n" +
+	"size_bytes\x18\x04 \x01(\x03R\tsizeBytes\x12$\n" +
+	"\vduration_ms\x18\x05 \x01(\x03H\x00R\n" +
+	"durationMs\x88\x01\x01B\x0e\n" +
+	"\f_duration_ms\"6\n" +
 	"\x1aUpdateArtifactSizeResponse\x12\x18\n" +
 	"\aupdated\x18\x01 \x01(\bR\aupdated\"5\n" +
 	"\x16ResolveClipHashRequest\x12\x1b\n" +
@@ -15146,6 +15157,7 @@ func file_commodore_proto_init() {
 	file_commodore_proto_msgTypes[32].OneofWrappers = []any{}
 	file_commodore_proto_msgTypes[34].OneofWrappers = []any{}
 	file_commodore_proto_msgTypes[36].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[42].OneofWrappers = []any{}
 	file_commodore_proto_msgTypes[50].OneofWrappers = []any{}
 	file_commodore_proto_msgTypes[56].OneofWrappers = []any{}
 	file_commodore_proto_msgTypes[62].OneofWrappers = []any{}

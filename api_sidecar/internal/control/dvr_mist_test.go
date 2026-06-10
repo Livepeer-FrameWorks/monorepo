@@ -678,3 +678,37 @@ func TestMaintainPushStatus_CompletedNaturally(t *testing.T) {
 		t.Fatal("expected completion notification to be sent")
 	}
 }
+
+func TestMaintainPushStatus_MissingPushWithSegmentsDoesNotRecreate(t *testing.T) {
+	mc := &startAwareFakeMist{pushIDToReturn: 99}
+	dm := newDVRManagerWithMist(t, mc)
+
+	var completionSent bool
+	job := &DVRJob{
+		DVRHash:      "hash-natural-before-retry",
+		PushID:       42,
+		StreamName:   "live+test",
+		TargetURI:    "/data/dvr/hash",
+		Status:       "recording",
+		MaxRetries:   10,
+		RetryCount:   0,
+		SegmentCount: 5,
+		Logger:       logging.NewLogger(),
+		SendFunc: func(_ *ipcpb.ControlMessage) {
+			completionSent = true
+		},
+	}
+	dm.jobs["hash-natural-before-retry"] = job
+
+	dm.maintainPushStatus(job)
+
+	if mc.startCalls != 0 {
+		t.Fatalf("expected no PushStart calls for natural completion, got %d", mc.startCalls)
+	}
+	if _, exists := dm.jobs["hash-natural-before-retry"]; exists {
+		t.Fatal("expected job to be removed")
+	}
+	if !completionSent {
+		t.Fatal("expected completion notification to be sent")
+	}
+}

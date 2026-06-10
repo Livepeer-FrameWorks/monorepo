@@ -2783,15 +2783,32 @@ func handleThumbnailUploadResponse(logger logging.Logger, resp *ipcpb.ThumbnailU
 				failedUploads++
 				continue
 			}
-		} else if err := presignedClient.UploadFileToPresignedURL(ctx, upload.GetPresignedUrl(), localPath, nil); err != nil {
-			logger.WithFields(logging.Fields{
-				"file_name":  upload.GetFileName(),
-				"local_path": localPath,
-				"s3_key":     upload.GetS3Key(),
-				"error":      err,
-			}).Error("Failed to upload thumbnail to S3")
-			failedUploads++
-			continue
+		} else {
+			// Read the whole file first: Mist can still be rewriting a
+			// thumbnail when THUMBNAIL_UPDATED fires, and a stat-then-stream
+			// upload dies with a ContentLength/body-length mismatch when the
+			// file changes underneath it. A single in-memory snapshot keeps
+			// length and body consistent (thumbnails are small).
+			data, err := os.ReadFile(localPath)
+			if err != nil {
+				logger.WithFields(logging.Fields{
+					"file_name":  upload.GetFileName(),
+					"local_path": localPath,
+					"error":      err,
+				}).Error("Failed to read thumbnail file")
+				failedUploads++
+				continue
+			}
+			if err := presignedClient.UploadBytesToPresignedURL(ctx, upload.GetPresignedUrl(), data, nil); err != nil {
+				logger.WithFields(logging.Fields{
+					"file_name":  upload.GetFileName(),
+					"local_path": localPath,
+					"s3_key":     upload.GetS3Key(),
+					"error":      err,
+				}).Error("Failed to upload thumbnail to S3")
+				failedUploads++
+				continue
+			}
 		}
 
 		uploadedKeys = append(uploadedKeys, upload.GetS3Key())

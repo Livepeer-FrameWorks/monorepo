@@ -89,8 +89,17 @@ func (s *CommodoreServer) UpdateArtifactSize(ctx context.Context, req *commodore
 	tenantID := req.GetTenantId()
 	assetKey := req.GetAssetKey()
 	sizeBytes := req.GetSizeBytes()
+	durationMs := req.GetDurationMs()
 	if tenantID == "" || assetKey == "" || sizeBytes < 0 {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id, asset_key, and non-negative size_bytes are required")
+	}
+	// Only commodore.clips carries a duration column; the other registry
+	// tables must not receive a duration projection.
+	if durationMs > 0 && req.GetAssetType() != commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_CLIP {
+		return nil, status.Error(codes.InvalidArgument, "duration_ms projection is only supported for clips")
+	}
+	if sizeBytes == 0 && durationMs <= 0 {
+		return &commodorepb.UpdateArtifactSizeResponse{Updated: false}, nil
 	}
 
 	table, keyCol, err := artifactAssetTable(req.GetAssetType())
@@ -98,13 +107,26 @@ func (s *CommodoreServer) UpdateArtifactSize(ctx context.Context, req *commodore
 		return nil, err
 	}
 
+	// size_bytes <= 0 leaves the stored size untouched so a duration-only
+	// projection cannot zero a previously-projected size.
 	query := `UPDATE ` + table + `
-		SET size_bytes = $1,
+		SET size_bytes = CASE WHEN $1::bigint > 0 THEN $1::bigint ELSE size_bytes END,
 		    updated_at = NOW()
 		WHERE tenant_id = $2::uuid
 		  AND ` + keyCol + ` = $3
-		  AND size_bytes IS DISTINCT FROM $1`
-	res, execErr := s.db.ExecContext(ctx, query, sizeBytes, tenantID, assetKey)
+		  AND size_bytes IS DISTINCT FROM $1::bigint`
+	args := []any{sizeBytes, tenantID, assetKey}
+	if durationMs > 0 {
+		query = `UPDATE ` + table + `
+		SET size_bytes = CASE WHEN $1::bigint > 0 THEN $1::bigint ELSE size_bytes END,
+		    duration = $4::bigint,
+		    updated_at = NOW()
+		WHERE tenant_id = $2::uuid
+		  AND ` + keyCol + ` = $3
+		  AND (size_bytes IS DISTINCT FROM $1::bigint OR duration IS DISTINCT FROM $4::bigint)`
+		args = append(args, durationMs)
+	}
+	res, execErr := s.db.ExecContext(ctx, query, args...)
 	if execErr != nil {
 		s.logger.WithError(execErr).WithFields(logging.Fields{
 			"tenant_id":  tenantID,

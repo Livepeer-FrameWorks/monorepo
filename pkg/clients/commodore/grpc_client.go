@@ -464,6 +464,18 @@ func (c *GRPCClient) UpdateArtifactSize(ctx context.Context, tenantID string, as
 	})
 }
 
+// UpdateClipDuration projects the measured output duration onto the
+// commodore clip registry row, so a partial clip (live buffer shallower than
+// the requested range) lists with its real length.
+func (c *GRPCClient) UpdateClipDuration(ctx context.Context, tenantID, clipHash string, durationMs int64) (*commodorepb.UpdateArtifactSizeResponse, error) {
+	return c.internal.UpdateArtifactSize(ctx, &commodorepb.UpdateArtifactSizeRequest{
+		TenantId:   tenantID,
+		AssetType:  commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_CLIP,
+		AssetKey:   clipHash,
+		DurationMs: &durationMs,
+	})
+}
+
 // UpdateDVRRetention back-fills retention_until on a finalized DVR.
 // Foghorn computes retention_until = ended_at + dvr_retention_days*24h
 // from the persisted policy snapshot at FinalizeDVR time and pushes it

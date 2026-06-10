@@ -619,6 +619,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		}
 		srcInfo, srcSpan := sourceFromReadinessOutputs(outputs)
 		if hasLivepeer && !fallbackAttempted && !livepeerRenditionsCompleteFromTracks(log, req.GetProcessesJson(), recordingEnd.Tracks, srcInfo, srcSpan) {
+			h.logProcessingTrackDivergence(log, mistClient, streamName, recordingEnd.Tracks)
 			log.Warn("Livepeer produced an incomplete rendition set, falling back to local MistProcAV before publish")
 			if !restartWithLocalFallback("Livepeer", 0) {
 				return false, true
@@ -783,6 +784,7 @@ loop:
 		// validates it; fail closed if incomplete.
 		srcInfo, srcSpan := sourceFromReadinessOutputs(outputs)
 		if !livepeerRenditionsCompleteFromTracks(log, req.GetProcessesJson(), recordingEnd.Tracks, srcInfo, srcSpan) {
+			h.logProcessingTrackDivergence(log, mistClient, streamName, recordingEnd.Tracks)
 			log.Error("Post-fallback local output is missing or has truncated renditions; refusing to publish")
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 			h.sendResult(send, req.GetJobId(), "failed", "post-fallback output renditions incomplete", nil, "", 0)
@@ -1470,6 +1472,21 @@ func renditionsCompleteFromTracks(log *logrus.Entry, expectedHeights []int, vide
 		}
 	}
 	return true
+}
+
+// logProcessingTrackDivergence logs the recorded (RECORDING_END) video track
+// heights next to the live stream-metadata heights at the moment a
+// completeness check fails. Renditions present in the stream but absent from
+// the recording point at a recording-side loss (push raced the transcode);
+// renditions absent from both mean they were never produced.
+func (h *ProcessingJobHandler) logProcessingTrackDivergence(log *logrus.Entry, mistClient *mist.Client, streamName string, recorded []processingMetaVideoTrack) {
+	fields := logrus.Fields{"recorded_video_heights": videoTrackHeights(recorded)}
+	if streamData, err := h.getActiveProcessingStreamData(mistClient, streamName); err != nil {
+		fields["stream_meta_error"] = err.Error()
+	} else {
+		fields["stream_video_heights"] = videoTrackHeights(inspectProcessingActiveStream(streamData).videoTracks)
+	}
+	log.WithFields(fields).Warn("Rendition completeness failed: recorded vs live stream video tracks")
 }
 
 // sourceFromReadinessOutputs builds the pre-transcode source baseline (dims +
@@ -2558,6 +2575,27 @@ func (h *ProcessingJobHandler) sendResult(send func(*ipcpb.ControlMessage), jobI
 			Outputs:         outputs,
 			OutputPath:      outputPath,
 			OutputSizeBytes: outputSizeBytes,
+		}},
+		SentAt: timestamppb.Now(),
+	})
+}
+
+// sendResultWithMediaDuration is sendResult with the output's measured media
+// duration attached, so Foghorn can compare it against the requested span and
+// mark the artifact partial.
+func (h *ProcessingJobHandler) sendResultWithMediaDuration(send func(*ipcpb.ControlMessage), jobID, status, errMsg string, outputs map[string]string, outputPath string, outputSizeBytes, mediaDurationMs int64) {
+	if send == nil {
+		return
+	}
+	send(&ipcpb.ControlMessage{
+		Payload: &ipcpb.ControlMessage_ProcessingJobResult{ProcessingJobResult: &ipcpb.ProcessingJobResult{
+			JobId:           jobID,
+			Status:          status,
+			Error:           errMsg,
+			Outputs:         outputs,
+			OutputPath:      outputPath,
+			OutputSizeBytes: outputSizeBytes,
+			MediaDurationMs: &mediaDurationMs,
 		}},
 		SentAt: timestamppb.Now(),
 	})

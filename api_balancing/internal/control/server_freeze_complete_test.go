@@ -140,6 +140,30 @@ func TestProcessFreezeComplete_Failure_NoTenant_SkipsCleanup(t *testing.T) {
 	s3Mock.mu.Unlock()
 }
 
+// The revert UPDATE uses $3 in three contexts (SET, two CASE comparisons);
+// without an explicit ::text cast at every site YugabyteDB rejects the
+// statement with 42P08 ("inconsistent types deduced"), silently stranding the
+// artifact in a non-terminal state.
+func TestProcessFreezeComplete_Failure_RevertCastsSyncStatusParam(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	logger := logging.NewLogger()
+
+	mock.ExpectExec(`UPDATE foghorn.artifacts.*sync_status = \$3::text.*CASE WHEN \$3::text = 'lost_local'.*CASE WHEN \$3::text = 'failed'`).
+		WithArgs("local file gone", "hash-lost", "lost_local").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	processFreezeComplete(context.Background(), &ipcpb.FreezeComplete{
+		AssetHash:    "hash-lost",
+		Status:       "failed",
+		Error:        "local file gone",
+		LocalMissing: true,
+	}, "node-1", logger)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProcessFreezeComplete_Failure_NilS3Client_SkipsCleanup(t *testing.T) {
 	mock, _, _ := setupArtifactTestDeps(t)
 	s3Client = nil // override

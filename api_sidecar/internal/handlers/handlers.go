@@ -1870,6 +1870,18 @@ func triggerClipSync(filePath string, sizeBytes uint64) {
 		return
 	}
 
+	// While the processing job for this clip is still in flight it owns
+	// publication: it validates the output and may delete it on failure.
+	// Syncing here would race that cleanup and freeze a half-judged file;
+	// the job triggers a storage check itself after a successful result.
+	if HasPendingJob("processing+" + clipHash) {
+		logger.WithFields(logging.Fields{
+			"clip_hash": clipHash,
+			"file_path": filePath,
+		}).Debug("Clip sync deferred: processing job still owns this output")
+		return
+	}
+
 	logger.WithFields(logging.Fields{
 		"clip_hash": clipHash,
 		"file_path": filePath,

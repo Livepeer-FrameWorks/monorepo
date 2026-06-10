@@ -2,6 +2,7 @@ package federation
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"slices"
@@ -33,15 +34,16 @@ import (
 // In multi-replica deployments, only the leader instance runs the active
 // peering loop (Redis-based leader lease).
 type PeerManager struct {
-	clusterID     string
-	instanceID    string // unique per-process, for leader election
-	pool          federationPeerPool
-	peerDiscovery clusterPeerDiscovery
-	cache         *RemoteEdgeCache
-	logger        logging.Logger
-	decklogClient *decklog.BatchedClient
-	ownerTenantID string
-	selfGeoFunc   func() (float64, float64, string)
+	clusterID              string
+	instanceID             string // unique per-process, for leader election
+	pool                   federationPeerPool
+	peerDiscovery          clusterPeerDiscovery
+	cache                  *RemoteEdgeCache
+	logger                 logging.Logger
+	decklogClient          *decklog.BatchedClient
+	ownerTenantID          string
+	selfGeoFunc            func() (float64, float64, string)
+	artifactTenantResolver func(ctx context.Context, hashes []string) (map[string]string, error)
 
 	mu               sync.RWMutex
 	peers            map[string]*peerState      // cluster_id -> peer state
@@ -51,6 +53,9 @@ type PeerManager struct {
 	isLeader         bool
 	startTime        time.Time
 	reconnectBackoff time.Duration
+
+	unresolvedAdMu     sync.Mutex
+	unresolvedAdLogged map[string]time.Time // artifact_hash -> last skip log, throttles the 30s ad loop
 }
 
 // metricSample stores a single BW/CPU observation for moving-average computation.
@@ -140,6 +145,10 @@ type PeerManagerConfig struct {
 	DecklogClient *decklog.BatchedClient
 	OwnerTenantID string
 	SelfGeoFunc   func() (float64, float64, string) // lat, lon, location — avoids import cycle with handlers
+	// ArtifactTenantResolver batch-resolves artifact hashes to tenant ids from
+	// the artifact registry. Artifacts outlive their streams, so in-memory
+	// stream state alone cannot attribute warm files from ended streams.
+	ArtifactTenantResolver func(ctx context.Context, hashes []string) (map[string]string, error)
 }
 
 // NewPeerManager creates and starts a new peer manager.
@@ -150,21 +159,23 @@ func NewPeerManager(cfg PeerManagerConfig) *PeerManager {
 	}
 
 	pm := &PeerManager{
-		clusterID:        cfg.ClusterID,
-		instanceID:       cfg.InstanceID,
-		pool:             newFoghornPoolAdapter(cfg.Pool),
-		peerDiscovery:    peerDiscovery,
-		cache:            cfg.Cache,
-		logger:           cfg.Logger,
-		decklogClient:    cfg.DecklogClient,
-		ownerTenantID:    cfg.OwnerTenantID,
-		selfGeoFunc:      cfg.SelfGeoFunc,
-		peers:            make(map[string]*peerState),
-		streamPeers:      make(map[string]map[string]bool),
-		metricHistory:    make(map[string][]metricSample),
-		done:             make(chan struct{}),
-		startTime:        time.Now(),
-		reconnectBackoff: peerReconnectBackoff,
+		clusterID:              cfg.ClusterID,
+		instanceID:             cfg.InstanceID,
+		pool:                   newFoghornPoolAdapter(cfg.Pool),
+		peerDiscovery:          peerDiscovery,
+		cache:                  cfg.Cache,
+		logger:                 cfg.Logger,
+		decklogClient:          cfg.DecklogClient,
+		ownerTenantID:          cfg.OwnerTenantID,
+		selfGeoFunc:            cfg.SelfGeoFunc,
+		artifactTenantResolver: cfg.ArtifactTenantResolver,
+		peers:                  make(map[string]*peerState),
+		streamPeers:            make(map[string]map[string]bool),
+		metricHistory:          make(map[string][]metricSample),
+		done:                   make(chan struct{}),
+		startTime:              time.Now(),
+		reconnectBackoff:       peerReconnectBackoff,
+		unresolvedAdLogged:     make(map[string]time.Time),
 	}
 	go pm.run()
 	return pm
@@ -1340,6 +1351,72 @@ func artifactTypeToString(t ipcpb.ArtifactEvent_ArtifactType) string {
 	}
 }
 
+// NewDBArtifactTenantResolver returns an ArtifactTenantResolver backed by the
+// foghorn.artifacts registry — the authority for artifact→tenant attribution.
+func NewDBArtifactTenantResolver(db *sql.DB) func(ctx context.Context, hashes []string) (map[string]string, error) {
+	return func(ctx context.Context, hashes []string) (map[string]string, error) {
+		if db == nil || len(hashes) == 0 {
+			return nil, nil
+		}
+		rows, err := db.QueryContext(ctx, `
+			SELECT artifact_hash, tenant_id::text
+			  FROM foghorn.artifacts
+			 WHERE artifact_hash = ANY($1)
+			   AND tenant_id IS NOT NULL`, pq.Array(hashes))
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = rows.Close() }()
+		tenants := make(map[string]string, len(hashes))
+		for rows.Next() {
+			var hash, tenantID string
+			if scanErr := rows.Scan(&hash, &tenantID); scanErr != nil {
+				return nil, scanErr
+			}
+			tenants[hash] = tenantID
+		}
+		return tenants, rows.Err()
+	}
+}
+
+// resolveArtifactTenants batch-resolves artifact hashes to tenant ids via the
+// configured registry resolver. Returns an empty map when no resolver is set
+// or the lookup fails (callers then skip those ads).
+func (pm *PeerManager) resolveArtifactTenants(hashes []string) map[string]string {
+	if len(hashes) == 0 || pm.artifactTenantResolver == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tenants, err := pm.artifactTenantResolver(ctx, hashes)
+	if err != nil {
+		pm.logger.WithError(err).Warn("pushArtifacts: artifact tenant registry lookup failed")
+		return nil
+	}
+	return tenants
+}
+
+// shouldLogUnresolvedAd throttles the per-cycle skip warning: the ad loop runs
+// every 30s and an unattributable artifact stays unattributable, so log each
+// hash at most once an hour.
+func (pm *PeerManager) shouldLogUnresolvedAd(hash string) bool {
+	const logInterval = time.Hour
+	now := time.Now()
+	pm.unresolvedAdMu.Lock()
+	defer pm.unresolvedAdMu.Unlock()
+	if last, ok := pm.unresolvedAdLogged[hash]; ok && now.Sub(last) < logInterval {
+		return false
+	}
+	// Drop stale entries so the map doesn't grow with long-evicted artifacts.
+	for h, last := range pm.unresolvedAdLogged {
+		if now.Sub(last) >= logInterval {
+			delete(pm.unresolvedAdLogged, h)
+		}
+	}
+	pm.unresolvedAdLogged[hash] = now
+	return true
+}
+
 // pushArtifacts sends an ArtifactAdvertisement with all hot artifacts across all
 // local edge nodes to connected peers. Sent every 30s. Artifact hashes are opaque
 // identifiers — the receiving cluster only uses them when it has a matching
@@ -1355,7 +1432,14 @@ func (pm *PeerManager) pushArtifacts() {
 		return
 	}
 
-	var locs []*foghornfederationpb.ArtifactLocation
+	// Pass 1: collect candidate ads, attributing tenants from in-memory
+	// stream state where the source stream is still known.
+	type pendingAd struct {
+		loc        *foghornfederationpb.ArtifactLocation
+		streamName string
+	}
+	var pending []pendingAd
+	var unresolvedHashes []string
 	for _, snap := range snapshot.Nodes {
 		if !snap.IsActive {
 			continue
@@ -1372,29 +1456,49 @@ func (pm *PeerManager) pushArtifacts() {
 				}
 			}
 			if tenantID == "" {
-				// Refuse to advertise an artifact we can't attribute to a
-				// tenant — empty TenantId would otherwise broadcast hot
-				// location across peers regardless of tenant scope.
-				pm.logger.WithFields(logging.Fields{
-					"artifact_hash": a.ClipHash,
-					"node_id":       snap.NodeID,
-					"stream_name":   a.StreamName,
-				}).Warn("pushArtifacts: skipping ad with unresolved tenant; check stream state hydration")
-				continue
+				unresolvedHashes = append(unresolvedHashes, a.ClipHash)
 			}
-			locs = append(locs, &foghornfederationpb.ArtifactLocation{
-				ArtifactHash: a.ClipHash,
-				ArtifactType: artifactTypeToString(a.ArtifactType),
-				NodeId:       snap.NodeID,
-				BaseUrl:      ns.BaseURL,
-				SizeBytes:    a.SizeBytes,
-				AccessCount:  uint32(a.AccessCount),
-				LastAccessed: a.LastAccessed,
-				GeoLat:       snap.GeoLatitude,
-				GeoLon:       snap.GeoLongitude,
-				TenantId:     tenantID,
+			pending = append(pending, pendingAd{
+				streamName: a.StreamName,
+				loc: &foghornfederationpb.ArtifactLocation{
+					ArtifactHash: a.ClipHash,
+					ArtifactType: artifactTypeToString(a.ArtifactType),
+					NodeId:       snap.NodeID,
+					BaseUrl:      ns.BaseURL,
+					SizeBytes:    a.SizeBytes,
+					AccessCount:  uint32(a.AccessCount),
+					LastAccessed: a.LastAccessed,
+					GeoLat:       snap.GeoLatitude,
+					GeoLon:       snap.GeoLongitude,
+					TenantId:     tenantID,
+				},
 			})
 		}
+	}
+
+	// Pass 2: artifacts outlive their streams, so resolve the remainder from
+	// the artifact registry (the authority for artifact→tenant attribution).
+	registryTenants := pm.resolveArtifactTenants(unresolvedHashes)
+
+	var locs []*foghornfederationpb.ArtifactLocation
+	for _, ad := range pending {
+		if ad.loc.TenantId == "" {
+			ad.loc.TenantId = registryTenants[ad.loc.ArtifactHash]
+		}
+		if ad.loc.TenantId == "" {
+			// Refuse to advertise an artifact we can't attribute to a
+			// tenant — empty TenantId would otherwise broadcast hot
+			// location across peers regardless of tenant scope.
+			if pm.shouldLogUnresolvedAd(ad.loc.ArtifactHash) {
+				pm.logger.WithFields(logging.Fields{
+					"artifact_hash": ad.loc.ArtifactHash,
+					"node_id":       ad.loc.NodeId,
+					"stream_name":   ad.streamName,
+				}).Warn("pushArtifacts: skipping ad with unresolved tenant; artifact registry has no tenant for this hash")
+			}
+			continue
+		}
+		locs = append(locs, ad.loc)
 	}
 
 	if len(locs) == 0 {

@@ -179,4 +179,54 @@ func TestUpdateArtifactSize(t *testing.T) {
 			t.Errorf("unmet: %v", err)
 		}
 	})
+
+	t.Run("clip_duration_projection", func(t *testing.T) {
+		s, mock, done := newMockServer(t)
+		defer done()
+		durationMs := int64(40792)
+		mock.ExpectExec(`UPDATE commodore.clips.*duration = \$4::bigint`).
+			WithArgs(int64(0), "t1", "clip-1", durationMs).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		resp, err := s.UpdateArtifactSize(context.Background(), &commodorepb.UpdateArtifactSizeRequest{
+			TenantId: "t1", AssetKey: "clip-1", SizeBytes: 0,
+			AssetType:  commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_CLIP,
+			DurationMs: &durationMs,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !resp.GetUpdated() {
+			t.Errorf("Updated = false, want true")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet: %v", err)
+		}
+	})
+
+	t.Run("duration_rejected_for_non_clip", func(t *testing.T) {
+		s, _, done := newMockServer(t)
+		defer done()
+		durationMs := int64(1000)
+		_, err := s.UpdateArtifactSize(context.Background(), &commodorepb.UpdateArtifactSizeRequest{
+			TenantId: "t1", AssetKey: "h1", SizeBytes: 100,
+			AssetType:  commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_DVR,
+			DurationMs: &durationMs,
+		})
+		wantCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("zero_size_without_duration_is_noop", func(t *testing.T) {
+		s, _, done := newMockServer(t)
+		defer done()
+		resp, err := s.UpdateArtifactSize(context.Background(), &commodorepb.UpdateArtifactSizeRequest{
+			TenantId: "t1", AssetKey: "h1", SizeBytes: 0,
+			AssetType: commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_VOD,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.GetUpdated() {
+			t.Errorf("Updated = true, want false for no-op")
+		}
+	})
 }

@@ -989,7 +989,7 @@ func TestBuildLocalProcessingSourceURL_DefaultsToMKV(t *testing.T) {
 	if !strings.Contains(got, "duration=30") {
 		t.Fatalf("source URL = %q, want duration query", got)
 	}
-	for _, want := range []string{"audio=all", "video=all%2C%21JPEG", "meta=all%2C%21thumbvtt", "subtitle=all"} {
+	for _, want := range []string{"audio=all", "video=all%2C%21JPEG", "meta=all%2C%21thumbvtt", "subtitle=all", "rate=0"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("source URL = %q, want %s query", got, want)
 		}

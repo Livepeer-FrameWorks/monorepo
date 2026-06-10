@@ -2590,6 +2590,7 @@ message ProcessingJobResult {
   map<string, string> outputs = 4; // Metadata (codec, resolution, etc.) or completion info
   string output_path = 5;          // Local file path of processed output (for artifact registration)
   int64 output_size_bytes = 6;     // Size of processed output file
+  optional int64 media_duration_ms = 7; // Actual output media duration (RECORDING_END); lets Foghorn mark clips partial when shorter than requested
 }
 
 // ProcessingJobProgress is sent periodically by Helmsman while a processing

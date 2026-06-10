@@ -83,6 +83,45 @@ func TestBuildOutputsMap(t *testing.T) {
 	}
 }
 
+func TestBuildOutputsMapRepairsMalformedBaseURLFromHTTPOutput(t *testing.T) {
+	rawOutputs := map[string]any{
+		"HLS":  "[\"https://edge-eu-1.media-eu-1.frameworks.network/view/hls/$/index.m3u8",
+		"HTTP": "[\"https://edge-eu-1.media-eu-1.frameworks.network/view/$.html",
+	}
+
+	outputs := BuildOutputsMap("https://https", rawOutputs, "60546679b497415db2338cd5cae54992", true)
+
+	if outputs["PLAYER_JS"].Url != "https://edge-eu-1.media-eu-1.frameworks.network/view/player.js" {
+		t.Fatalf("unexpected PLAYER_JS url: %q", outputs["PLAYER_JS"].Url)
+	}
+	if outputs["MIST_HTML"].Url != "https://edge-eu-1.media-eu-1.frameworks.network/view/60546679b497415db2338cd5cae54992.html" {
+		t.Fatalf("unexpected MIST_HTML url: %q", outputs["MIST_HTML"].Url)
+	}
+	if outputs["HLS"].Url != "https://edge-eu-1.media-eu-1.frameworks.network/view/hls/60546679b497415db2338cd5cae54992/index.m3u8" {
+		t.Fatalf("unexpected HLS url: %q", outputs["HLS"].Url)
+	}
+}
+
+func TestBuildViewerEndpointFromOutputsRepairsMalformedBaseURL(t *testing.T) {
+	endpoint := BuildViewerEndpointFromOutputs("edge-eu-1", &NodeOutputs{
+		NodeID:  "edge-eu-1",
+		BaseURL: "https://https",
+		Outputs: map[string]any{
+			"HLS":  "[\"https://edge-eu-1.media-eu-1.frameworks.network/view/hls/$/index.m3u8",
+			"HTTP": "[\"https://edge-eu-1.media-eu-1.frameworks.network/view/$.html",
+		},
+	}, "60546679b497415db2338cd5cae54992", true)
+	if endpoint == nil {
+		t.Fatal("expected endpoint")
+	}
+	if endpoint.BaseUrl != "https://edge-eu-1.media-eu-1.frameworks.network/view/" {
+		t.Fatalf("unexpected base url: %q", endpoint.BaseUrl)
+	}
+	if endpoint.Outputs["PLAYER_JS"].Url != "https://edge-eu-1.media-eu-1.frameworks.network/view/player.js" {
+		t.Fatalf("unexpected PLAYER_JS url: %q", endpoint.Outputs["PLAYER_JS"].Url)
+	}
+}
+
 func TestBuildOutputsMapNormalizesMistMetricsOutputs(t *testing.T) {
 	rawOutputs := map[string]any{
 		"AAC":    "[\"https://mist-seattle.stronk.rocks/view/$.aac",

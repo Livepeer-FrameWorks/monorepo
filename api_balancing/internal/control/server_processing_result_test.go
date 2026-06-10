@@ -95,13 +95,13 @@ func TestProcessProcessingJobResult_Completed_RegistersProcessedOutput(t *testin
 	// Lookup artifact hash
 	mock.ExpectQuery("SELECT a\\.artifact_hash.*FROM foghorn.processing_jobs").
 		WithArgs("job-1").
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format"}).
-			AddRow("art-hash", "vod", "tenant-1", "", "", "s3://old/upload.avi", "avi"))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format", "req_start", "req_stop"}).
+			AddRow("art-hash", "vod", "tenant-1", "", "", "s3://old/upload.avi", "avi", int64(0), int64(0)))
 
 	// Update artifact format + size_bytes + reset sync while retaining the
 	// old source URL until the replacement upload is durably synced.
 	mock.ExpectExec("(?s)UPDATE foghorn.artifacts.*SET format.*size_bytes.*artifact_type IN \\('clip', 'vod'\\).*sync_status = 'pending'.*storage_location = 'local'").
-		WithArgs("mp4", "art-hash", int64(5000)).
+		WithArgs("mp4", "art-hash", int64(5000), int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	processProcessingJobResult(&ipcpb.ProcessingJobResult{
@@ -159,13 +159,13 @@ func TestProcessProcessingJobResult_Completed_SkipsRegistrationWhenArtifactTermi
 
 	mock.ExpectQuery("SELECT a\\.artifact_hash.*FROM foghorn.processing_jobs").
 		WithArgs("job-del").
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format"}).
-			AddRow("art-deleted", "clip", "tenant-1", "", "", "", "avi"))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format", "req_start", "req_stop"}).
+			AddRow("art-deleted", "clip", "tenant-1", "", "", "", "avi", int64(0), int64(0)))
 
 	// Guarded ready-claim matches no row (artifact deleted/failed/etc): 0 rows
 	// affected. The handler must return here without any side effects.
 	mock.ExpectExec("(?s)UPDATE foghorn.artifacts.*SET format.*size_bytes.*sync_status = 'pending'.*storage_location = 'local'").
-		WithArgs("mp4", "art-deleted", int64(5000)).
+		WithArgs("mp4", "art-deleted", int64(5000), int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 0)) // 0 rows affected
 
 	processProcessingJobResult(&ipcpb.ProcessingJobResult{
@@ -200,6 +200,42 @@ func TestProcessProcessingJobResult_Completed_SkipsRegistrationWhenArtifactTermi
 	}
 }
 
+// A clip whose measured output is shorter than the requested span (live
+// buffer didn't reach back far enough) still completes: the artifact goes
+// ready with the ACTUAL duration recorded, not failed and not the requested
+// length.
+func TestProcessProcessingJobResult_Completed_PartialClipRecordsActualDuration(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	logger := logging.NewLogger()
+
+	mock.ExpectExec("(?s)UPDATE foghorn.processing_jobs.*SET status = 'completed'.*progress = 100").
+		WithArgs("job-partial", nil).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Requested span: 60s (unix 100 → 160). Actual output: 40.792s.
+	mock.ExpectQuery("SELECT a\\.artifact_hash.*source_start_unix.*source_stop_unix.*FROM foghorn.processing_jobs").
+		WithArgs("job-partial").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format", "req_start", "req_stop"}).
+			AddRow("art-partial", "clip", "tenant-1", "", "", "", "mkv", int64(100), int64(160)))
+
+	mock.ExpectExec("(?s)UPDATE foghorn.artifacts.*duration_seconds = CASE WHEN \\$4::bigint > 0.*status = CASE WHEN artifact_type IN \\('clip', 'vod'\\) THEN 'ready'").
+		WithArgs("mkv", "art-partial", int64(23625909), int64(40792)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	mediaDurationMs := int64(40792)
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{
+		JobId:           "job-partial",
+		Status:          "completed",
+		OutputPath:      "/data/clips/stream/art-partial.mkv",
+		OutputSizeBytes: 23625909,
+		MediaDurationMs: &mediaDurationMs,
+	}, "node-1", logger)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProcessProcessingJobResult_Completed_DoesNotDeleteOldS3UploadBeforeReplacementSync(t *testing.T) {
 	mock, s3Mock, _ := setupArtifactTestDeps(t)
 	logger := logging.NewLogger()
@@ -210,11 +246,11 @@ func TestProcessProcessingJobResult_Completed_DoesNotDeleteOldS3UploadBeforeRepl
 
 	mock.ExpectQuery("SELECT a\\.artifact_hash").
 		WithArgs("job-1").
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format"}).
-			AddRow("art-hash", "vod", "tenant-1", "", "", "s3://bucket/old/upload.avi", "avi"))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format", "req_start", "req_stop"}).
+			AddRow("art-hash", "vod", "tenant-1", "", "", "s3://bucket/old/upload.avi", "avi", int64(0), int64(0)))
 
 	mock.ExpectExec("UPDATE foghorn.artifacts").
-		WithArgs("mp4", "art-hash", int64(0)).
+		WithArgs("mp4", "art-hash", int64(0), int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	processProcessingJobResult(&ipcpb.ProcessingJobResult{
@@ -241,11 +277,11 @@ func TestProcessProcessingJobResult_Completed_SetsS3URLToNull(t *testing.T) {
 
 	mock.ExpectQuery("SELECT a\\.artifact_hash").
 		WithArgs("job-1").
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format"}).
-			AddRow("art-hash", "vod", "tenant-1", "", "", "", "avi"))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format", "req_start", "req_stop"}).
+			AddRow("art-hash", "vod", "tenant-1", "", "", "", "avi", int64(0), int64(0)))
 
 	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'pending'.*storage_location = 'local'").
-		WithArgs("mp4", "art-hash", int64(0)).
+		WithArgs("mp4", "art-hash", int64(0), int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	processProcessingJobResult(&ipcpb.ProcessingJobResult{
@@ -274,6 +310,32 @@ func TestProcessProcessingJobResult_Failed(t *testing.T) {
 		JobId:  "job-fail",
 		Status: "failed",
 		Error:  "ffmpeg crashed",
+	}, "node-1", logger)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProcessProcessingJobResult_Failed_MarksClipArtifactFailed(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	logger := logging.NewLogger()
+
+	mock.ExpectQuery("SELECT a\\.artifact_hash.*stream_id.*stream_internal_name.*FROM foghorn.processing_jobs").
+		WithArgs("job-clip-fail").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name"}).
+			AddRow("art-clip", "clip", "tenant-1", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", "stream-int"))
+	mock.ExpectExec("UPDATE foghorn.processing_jobs.*SET status = 'failed'").
+		WithArgs("job-clip-fail", "output duration short").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE foghorn.artifacts.*SET status = 'failed'").
+		WithArgs("art-clip", "output duration short").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{
+		JobId:  "job-clip-fail",
+		Status: "failed",
+		Error:  "output duration short",
 	}, "node-1", logger)
 
 	if err := mock.ExpectationsWereMet(); err != nil {

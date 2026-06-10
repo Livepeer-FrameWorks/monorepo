@@ -1790,11 +1790,13 @@ func (s *FoghornGRPCServer) StopDVR(ctx context.Context, req *sharedpb.StopDVRRe
 		nodeID        string
 		nodeSizeBytes sql.NullInt64
 	)
-	_ = s.db.QueryRowContext(ctx, `
+	if nodeErr := s.db.QueryRowContext(ctx, `
 		SELECT node_id, size_bytes FROM foghorn.artifact_nodes
 		WHERE artifact_hash = $1 AND NOT is_orphaned
 		ORDER BY last_seen_at DESC LIMIT 1
-	`, req.DvrHash).Scan(&nodeID, &nodeSizeBytes)
+	`, req.DvrHash).Scan(&nodeID, &nodeSizeBytes); nodeErr != nil && !errors.Is(nodeErr, sql.ErrNoRows) {
+		s.logger.WithError(nodeErr).WithField("dvr_hash", req.DvrHash).Warn("Failed to look up storage node for DVR stop")
+	}
 
 	switch dvrStatus {
 	case "finalizing":

@@ -107,12 +107,13 @@ func (h *ProcessingJobHandler) handleClip(req *ipcpb.ProcessingJobRequest, send 
 	}
 	h.sendProgress(send, req.GetJobId(), 0, 0, sourceDurationMs)
 
-	// Clip span: the requested range when known, else the readiness duration.
-	// Used to pick complete (non-truncated) renditions and as the final
-	// whole-output coverage gate.
-	clipSpanMs := clipRequestedSpanMs(req)
+	// Clip span: the staged cut is the ground truth of available material —
+	// the requested range can exceed what the live buffer actually held (a
+	// best-effort partial clip), so rendition completeness and the final
+	// whole-output gate measure against the cut itself, not the request.
+	clipSpanMs := float64(sourceDurationMs)
 	if clipSpanMs <= 0 {
-		clipSpanMs = float64(sourceDurationMs)
+		clipSpanMs = clipRequestedSpanMs(req)
 	}
 	videoSelector := h.processingVideoSelector(log, mistClient, streamName, req.GetProcessesJson(), streamOutputs, clipSpanMs)
 
@@ -251,18 +252,27 @@ loop:
 
 	// Whole-output coverage gate. Track selection already chose complete
 	// renditions or the source passthrough before push_start; this verifies the
-	// selected output actually spans the clip. A source that is itself too short
-	// (neither complete renditions nor complete source) fails here.
+	// push consumed the whole staged cut. Partial *coverage* (cut shorter than
+	// the requested range because the live buffer didn't reach back that far)
+	// is legitimate and publishes as a partial clip; a push that truncated the
+	// cut material itself fails here.
 	if clipSpanMs > 0 &&
 		clipSpanMs-float64(recordingEnd.MediaDurationMs) > maxRenditionSpanShortfallMs {
 		log.WithFields(logging.Fields{
 			"media_duration_ms":  recordingEnd.MediaDurationMs,
 			"source_duration_ms": int64(clipSpanMs),
-		}).Error("Clip: output materially shorter than source; refusing to publish")
+		}).Error("Clip: output materially shorter than cut source; refusing to publish")
 		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 		h.sendResult(send, req.GetJobId(), "failed",
-			fmt.Sprintf("output duration %dms short of source %dms", recordingEnd.MediaDurationMs, int64(clipSpanMs)), nil, "", 0)
+			fmt.Sprintf("output duration %dms short of cut source %dms", recordingEnd.MediaDurationMs, int64(clipSpanMs)), nil, "", 0)
 		return
+	}
+	if requestedSpanMs := clipRequestedSpanMs(req); requestedSpanMs > 0 &&
+		requestedSpanMs-float64(recordingEnd.MediaDurationMs) > maxRenditionSpanShortfallMs {
+		log.WithFields(logging.Fields{
+			"media_duration_ms": recordingEnd.MediaDurationMs,
+			"requested_span_ms": int64(requestedSpanMs),
+		}).Warn("Clip: source covered less than the requested range; publishing partial clip")
 	}
 	h.sendProgress(send, req.GetJobId(), 100, sourceDurationMs, sourceDurationMs)
 
@@ -287,7 +297,7 @@ loop:
 		return
 	}
 
-	h.sendResult(send, req.GetJobId(), "completed", "", streamOutputs, outputPath, outputSizeBytes)
+	h.sendResultWithMediaDuration(send, req.GetJobId(), "completed", "", streamOutputs, outputPath, outputSizeBytes, recordingEnd.MediaDurationMs)
 	log.Info("Clip processing result sent, artifact registered with Foghorn")
 
 	// Trigger storage check so the .mkv + .dtsh freeze to S3 promptly.

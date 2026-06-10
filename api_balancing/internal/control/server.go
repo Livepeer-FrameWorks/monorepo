@@ -4505,14 +4505,17 @@ func processFreezeComplete(ctx context.Context, complete *ipcpb.FreezeComplete, 
 		// the tombstone marker: playback / billing / cleanup-pressure paths
 		// already exclude status='failed', so the row is discoverable in admin
 		// listings without being treated as a usable asset.
+		// $3 must be cast at every site: with bare placeholders YugabyteDB
+		// deduces inconsistent types across the SET/CASE usages and rejects
+		// the statement with 42P08, which silently strands the artifact.
 		if _, dbErr := db.ExecContext(ctx, `
 			UPDATE foghorn.artifacts
 			SET storage_location = 'local',
-			    sync_status = $3,
-			    status = CASE WHEN $3 = 'lost_local' THEN 'failed' ELSE status END,
+			    sync_status = $3::text,
+			    status = CASE WHEN $3::text = 'lost_local' THEN 'failed' ELSE status END,
 			    sync_error = NULLIF($1,''),
 			    last_sync_attempt = NOW(),
-			    failure_count = CASE WHEN $3 = 'failed' THEN failure_count + 1 ELSE failure_count END,
+			    failure_count = CASE WHEN $3::text = 'failed' THEN failure_count + 1 ELSE failure_count END,
 			    updated_at = NOW()
 			WHERE artifact_hash = $2
 		`, errorMsg, assetHash, newSyncStatus); dbErr != nil {
@@ -4781,6 +4784,11 @@ func SetProcessConfigCacheUpdater(h ProcessConfigCacheUpdater) {
 	onProcessConfigCacheUpdate = h
 }
 
+// clipPartialShortfallMs is the tolerance before a clip whose measured output
+// is shorter than its requested span counts as partial. Mirrors Helmsman's
+// maxRenditionSpanShortfallMs so the two sides agree on "materially shorter".
+const clipPartialShortfallMs = 2000
+
 // processProcessingJobResult handles job completion/failure results from Helmsman.
 func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string, logger logging.Logger) {
 	fields := logging.Fields{
@@ -4866,6 +4874,7 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 		// STREAM_SOURCE resolves immediately.
 		if outputPath := result.GetOutputPath(); outputPath != "" {
 			var artifactHash, artifactType, tenantID, streamID, streamInternalName, oldS3URL, oldFormat string
+			var requestedStartUnix, requestedStopUnix int64
 			_ = db.QueryRowContext(ctx, `
 				SELECT a.artifact_hash,
 				       COALESCE(a.artifact_type,''),
@@ -4873,13 +4882,23 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 				       COALESCE(a.stream_id::text,''),
 				       COALESCE(a.stream_internal_name,''),
 				       COALESCE(a.s3_url,''),
-				       COALESCE(a.format,'')
+				       COALESCE(a.format,''),
+				       COALESCE((pj.source_params->>'source_start_unix')::bigint, 0),
+				       COALESCE((pj.source_params->>'source_stop_unix')::bigint, 0)
 				FROM foghorn.processing_jobs pj
 				JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash
-				WHERE pj.job_id = $1`, result.GetJobId()).Scan(&artifactHash, &artifactType, &tenantID, &streamID, &streamInternalName, &oldS3URL, &oldFormat)
+				WHERE pj.job_id = $1`, result.GetJobId()).Scan(&artifactHash, &artifactType, &tenantID, &streamID, &streamInternalName, &oldS3URL, &oldFormat, &requestedStartUnix, &requestedStopUnix)
 			if artifactHash != "" {
 				sizeBytes := result.GetOutputSizeBytes()
 				newFormat := strings.TrimPrefix(filepath.Ext(outputPath), ".")
+				actualDurationMs := result.GetMediaDurationMs()
+				// A best-effort source (live buffer shallower than the
+				// requested range) legitimately yields a shorter clip: it
+				// publishes as partial rather than failing, with the actual
+				// duration recorded everywhere the requested span was assumed.
+				requestedSpanMs := (requestedStopUnix - requestedStartUnix) * 1000
+				partial := actualDurationMs > 0 && requestedSpanMs > 0 &&
+					requestedSpanMs-actualDurationMs > clipPartialShortfallMs
 
 				// Claim the artifact as ready BEFORE any side effect. If it was
 				// deleted/failed in the window after the job-completed update
@@ -4893,11 +4912,12 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 						UPDATE foghorn.artifacts
 						SET format = $1,
 						    size_bytes = $3,
+						    duration_seconds = CASE WHEN $4::bigint > 0 THEN ($4::bigint / 1000)::int ELSE duration_seconds END,
 						    status = CASE WHEN artifact_type IN ('clip', 'vod') THEN 'ready' ELSE status END,
 						    sync_status = 'pending',
 						    storage_location = 'local',
 						    updated_at = NOW()
-						WHERE artifact_hash = $2 AND status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')`, newFormat, artifactHash, sizeBytes)
+						WHERE artifact_hash = $2 AND status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')`, newFormat, artifactHash, sizeBytes, actualDurationMs)
 				if dbErr != nil {
 					logger.WithError(dbErr).WithField("artifact_hash", artifactHash).Error("failed to update artifact format/size after processing")
 					return
@@ -4932,6 +4952,16 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 					IsComplete: true,
 				})
 				projectArtifactSizeToCommodore(ctx, artifactHash, sizeBytes, logger)
+				if partial {
+					logger.WithFields(logging.Fields{
+						"artifact_hash":      artifactHash,
+						"requested_span_ms":  requestedSpanMs,
+						"actual_duration_ms": actualDurationMs,
+					}).Warn("Clip published partial: source covered less than the requested range")
+				}
+				if artifactType == "clip" && actualDurationMs > 0 {
+					projectClipDurationToCommodore(ctx, tenantID, artifactHash, actualDurationMs, logger)
+				}
 				// Kick the artifact reconciler so the freeze-to-S3 push starts in
 				// seconds instead of waiting for the next poll interval.
 				NotifyArtifactMapUpdated(nodeID)
@@ -4970,6 +5000,10 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 					if streamInternalName != "" {
 						clipData.StreamInternalName = &streamInternalName
 					}
+					if actualDurationMs > 0 {
+						durationSec := actualDurationMs / 1000
+						clipData.DurationSec = &durationSec
+					}
 					go artifactoutbox.EnqueueClipLifecycleLogged(clipData)
 				}
 				if artifactType == "vod" && decklogClient != nil {
@@ -5006,13 +5040,14 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 		}
 
 	case "failed":
-		var failedArtifactHash, failedArtifactType, failedTenantID string
+		var failedArtifactHash, failedArtifactType, failedTenantID, failedStreamID, failedStreamInternalName string
 		failedLookupErr := db.QueryRowContext(ctx, `
-			SELECT a.artifact_hash, COALESCE(a.artifact_type,''), COALESCE(a.tenant_id::text,'')
+			SELECT a.artifact_hash, COALESCE(a.artifact_type,''), COALESCE(a.tenant_id::text,''),
+			       COALESCE(a.stream_id::text,''), COALESCE(a.stream_internal_name,'')
 			  FROM foghorn.processing_jobs pj
 			  JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash
 			 WHERE pj.job_id = $1
-		`, result.GetJobId()).Scan(&failedArtifactHash, &failedArtifactType, &failedTenantID)
+		`, result.GetJobId()).Scan(&failedArtifactHash, &failedArtifactType, &failedTenantID, &failedStreamID, &failedStreamInternalName)
 		if failedLookupErr != nil && failedLookupErr != sql.ErrNoRows {
 			logger.WithError(failedLookupErr).WithField("job_id", result.GetJobId()).Warn("Failed to look up artifact for processing failure")
 		}
@@ -5039,6 +5074,17 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 				logger.WithError(updateErr).WithField("artifact_hash", failedArtifactHash).Warn("Failed to mark clip artifact failed")
 			}
 			if decklogClient != nil {
+				// Resolve the stream id when the artifact row lacks it:
+				// periscope-ingest drops lifecycle events without a valid
+				// stream UUID, which is exactly how a failed clip stays
+				// "processing" in the UI forever.
+				if failedStreamID == "" && failedStreamInternalName != "" && CommodoreClient != nil {
+					resolveCtx, resolveCancel := context.WithTimeout(ctx, time.Second)
+					if resp, resolveErr := CommodoreClient.ResolveInternalName(resolveCtx, failedStreamInternalName); resolveErr == nil && resp != nil {
+						failedStreamID = resp.GetStreamId()
+					}
+					resolveCancel()
+				}
 				errText := result.GetError()
 				clipData := &ipcpb.ClipLifecycleData{
 					Stage:    ipcpb.ClipLifecycleData_STAGE_FAILED,
@@ -5047,6 +5093,12 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 				}
 				if failedTenantID != "" {
 					clipData.TenantId = &failedTenantID
+				}
+				if failedStreamID != "" {
+					clipData.StreamId = &failedStreamID
+				}
+				if failedStreamInternalName != "" {
+					clipData.StreamInternalName = &failedStreamInternalName
 				}
 				go artifactoutbox.EnqueueClipLifecycleLogged(clipData)
 			}

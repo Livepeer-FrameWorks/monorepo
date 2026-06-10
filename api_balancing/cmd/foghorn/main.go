@@ -679,15 +679,16 @@ func main() {
 		defer fedPool.Close()
 
 		peerManager = federation.NewPeerManager(federation.PeerManagerConfig{
-			ClusterID:     foghornCfg.ClusterID,
-			InstanceID:    instanceID,
-			Pool:          fedPool,
-			QM:            qmClient,
-			Cache:         remoteEdgeCache,
-			Logger:        logger,
-			DecklogClient: decklogClient,
-			OwnerTenantID: bootstrapOwnerTenantID,
-			SelfGeoFunc:   handlers.GetSelfGeo,
+			ClusterID:              foghornCfg.ClusterID,
+			InstanceID:             instanceID,
+			Pool:                   fedPool,
+			QM:                     qmClient,
+			Cache:                  remoteEdgeCache,
+			Logger:                 logger,
+			DecklogClient:          decklogClient,
+			OwnerTenantID:          bootstrapOwnerTenantID,
+			SelfGeoFunc:            handlers.GetSelfGeo,
+			ArtifactTenantResolver: federation.NewDBArtifactTenantResolver(db),
 		})
 		defer peerManager.Close()
 
