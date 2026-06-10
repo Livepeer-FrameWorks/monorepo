@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import {
   appendUrlParams,
   parseUrlParams,
@@ -7,6 +7,7 @@ import {
   isSecureUrl,
   httpToWs,
   wsToHttp,
+  matchPageProtocol,
 } from "../src/core/UrlUtils";
 
 describe("appendUrlParams", () => {
@@ -170,5 +171,52 @@ describe("wsToHttp", () => {
     expect(wsToHttp("wss://example.com/path?query=value")).toBe(
       "https://example.com/path?query=value"
     );
+  });
+});
+
+describe("appendUrlParams — string that strips to empty", () => {
+  it("returns the original URL when the param string is only a separator", () => {
+    expect(appendUrlParams("https://x/v.m3u8", "?")).toBe("https://x/v.m3u8");
+    expect(appendUrlParams("https://x/v.m3u8", "&")).toBe("https://x/v.m3u8");
+  });
+});
+
+describe("parseUrlParams — manual fallback", () => {
+  it("returns {} for a relative URL with no query string", () => {
+    // new URL() throws on a relative path → manual branch, no '?' → {}.
+    expect(parseUrlParams("/relative/path")).toEqual({});
+  });
+});
+
+describe("matchPageProtocol", () => {
+  const originalWindow = (globalThis as any).window;
+  afterEach(() => {
+    (globalThis as any).window = originalWindow;
+  });
+
+  const setProtocol = (protocol: string) => {
+    (globalThis as any).window = { location: { protocol } };
+  };
+
+  it("returns the URL unchanged when window is undefined (SSR)", () => {
+    delete (globalThis as any).window;
+    expect(matchPageProtocol("http://x/v.m3u8")).toBe("http://x/v.m3u8");
+  });
+
+  it("upgrades insecure URLs to match a secure page", () => {
+    setProtocol("https:");
+    expect(matchPageProtocol("http://x/v.m3u8")).toBe("https://x/v.m3u8");
+    expect(matchPageProtocol("ws://x/sock")).toBe("wss://x/sock");
+  });
+
+  it("downgrades secure URLs to match an insecure page", () => {
+    setProtocol("http:");
+    expect(matchPageProtocol("https://x/v.m3u8")).toBe("http://x/v.m3u8");
+    expect(matchPageProtocol("wss://x/sock")).toBe("ws://x/sock");
+  });
+
+  it("leaves matching protocols untouched", () => {
+    setProtocol("https:");
+    expect(matchPageProtocol("https://x/v.m3u8")).toBe("https://x/v.m3u8");
   });
 });

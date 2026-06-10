@@ -4,8 +4,12 @@ import {
   calculateLiveThresholds,
   calculateIsNearLive,
   calculateSeekableRange,
+  canSeekStream,
   isLiveContent,
+  isMediaStreamSource,
+  supportsPlaybackRate,
   LATENCY_TIERS,
+  DEFAULT_BUFFER_WINDOW_MS,
   mapPlayerTimeToMistTimeline,
 } from "../src/core/SeekingUtils";
 
@@ -174,6 +178,29 @@ describe("calculateSeekableRange", () => {
   });
 });
 
+describe("canSeekStream", () => {
+  it("keeps seeking enabled for live playback before a DVR window is discovered", () => {
+    expect(
+      canSeekStream({
+        video: null,
+        isLive: true,
+        duration: Infinity,
+      })
+    ).toBe(true);
+  });
+
+  it("honors an explicit player-level no-seek capability", () => {
+    expect(
+      canSeekStream({
+        video: null,
+        isLive: true,
+        duration: Infinity,
+        playerCanSeek: () => false,
+      })
+    ).toBe(false);
+  });
+});
+
 describe("mapPlayerTimeToMistTimeline", () => {
   it("maps zero-based live player time by distance from live edge", () => {
     expect(
@@ -236,5 +263,198 @@ describe("isLiveContent", () => {
 
   it("returns true for NaN duration", () => {
     expect(isLiveContent(undefined, undefined, NaN)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MediaStream-source detection (used by the seekable-range + canSeek fallbacks)
+// ---------------------------------------------------------------------------
+describe("isMediaStreamSource / supportsPlaybackRate", () => {
+  const original = (globalThis as any).MediaStream;
+  class FakeMediaStream {}
+  beforeAll(() => {
+    (globalThis as any).MediaStream = FakeMediaStream;
+  });
+  afterAll(() => {
+    (globalThis as any).MediaStream = original;
+  });
+
+  it("detects a MediaStream srcObject", () => {
+    const ms = { srcObject: new FakeMediaStream() } as unknown as HTMLVideoElement;
+    const url = { srcObject: null } as unknown as HTMLVideoElement;
+    expect(isMediaStreamSource(ms)).toBe(true);
+    expect(isMediaStreamSource(url)).toBe(false);
+    expect(isMediaStreamSource(null)).toBe(false);
+  });
+
+  it("disables playback-rate control only for MediaStream sources", () => {
+    expect(supportsPlaybackRate(null)).toBe(true); // no element → assume controllable
+    expect(supportsPlaybackRate({ srcObject: null } as unknown as HTMLVideoElement)).toBe(true);
+    expect(
+      supportsPlaybackRate({ srcObject: new FakeMediaStream() } as unknown as HTMLVideoElement)
+    ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// calculateSeekableRange — the live buffer-window fallback (no video.seekable)
+// ---------------------------------------------------------------------------
+describe("calculateSeekableRange (buffer-window fallback)", () => {
+  it("returns [0, duration] for VOD without seekable ranges", () => {
+    expect(
+      calculateSeekableRange({ isLive: false, video: null, currentTime: 0, duration: 300_000 })
+    ).toEqual({ seekableStart: 0, liveEdge: 300_000 });
+  });
+
+  it("uses Mist buffer_window to size the live window behind the edge", () => {
+    // liveEdge = duration (finite) = 600_000; window 60s → start 540_000.
+    expect(
+      calculateSeekableRange({
+        isLive: true,
+        video: null,
+        mistStreamInfo: { meta: { buffer_window: 60_000 } } as any,
+        currentTime: 0,
+        duration: 600_000,
+      })
+    ).toEqual({ seekableStart: 540_000, liveEdge: 600_000 });
+  });
+
+  it("derives the window from bufferedStartMs when buffer_window is absent", () => {
+    // liveEdge 600s, bufferedStart 570s → 30s window.
+    expect(
+      calculateSeekableRange({
+        isLive: true,
+        video: null,
+        currentTime: 0,
+        duration: 600_000,
+        bufferedStartMs: 570_000,
+      })
+    ).toEqual({ seekableStart: 570_000, liveEdge: 600_000 });
+  });
+
+  it("derives the window from video.buffered.start(0) when no explicit hint", () => {
+    const video = {
+      seekable: { length: 0, start: () => 0, end: () => 0 },
+      buffered: { length: 1, start: () => 580, end: () => 600 },
+      srcObject: null,
+    } as unknown as HTMLVideoElement;
+    expect(
+      calculateSeekableRange({ isLive: true, video, currentTime: 0, duration: 600_000 })
+    ).toEqual({ seekableStart: 580_000, liveEdge: 600_000 });
+  });
+
+  it("falls back to the 60s default window when nothing else is known", () => {
+    const range = calculateSeekableRange({
+      isLive: true,
+      video: null,
+      currentTime: 0,
+      duration: 600_000,
+    });
+    expect(range.liveEdge).toBe(600_000);
+    expect(range.seekableStart).toBe(600_000 - DEFAULT_BUFFER_WINDOW_MS);
+  });
+
+  it("exposes buffer_window at startup (liveEdge 0) so DVR is visible pre-playback", () => {
+    // duration non-finite & currentTime 0 → liveEdge = currentTime = 0; with
+    // buffer_window present, range becomes [0, buffer_window].
+    expect(
+      calculateSeekableRange({
+        isLive: true,
+        video: null,
+        mistStreamInfo: { meta: { buffer_window: 45_000 } } as any,
+        currentTime: 0,
+        duration: Infinity,
+      })
+    ).toEqual({ seekableStart: 0, liveEdge: 45_000 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// canSeekStream — the full decision tree
+// ---------------------------------------------------------------------------
+describe("canSeekStream (decision tree)", () => {
+  const original = (globalThis as any).MediaStream;
+  class FakeMediaStream {}
+  beforeAll(() => {
+    (globalThis as any).MediaStream = FakeMediaStream;
+  });
+  afterAll(() => {
+    (globalThis as any).MediaStream = original;
+  });
+
+  it("trusts a valid player-reported seekable range above everything", () => {
+    expect(
+      canSeekStream({
+        video: null,
+        isLive: false,
+        duration: 0,
+        playerSeekableRange: { start: 0, end: 10_000 },
+      })
+    ).toBe(true);
+  });
+
+  it("trusts an affirmative playerCanSeek()", () => {
+    expect(
+      canSeekStream({ video: null, isLive: false, duration: 0, playerCanSeek: () => true })
+    ).toBe(true);
+  });
+
+  it("returns false for VOD with no video element and no player hints", () => {
+    expect(canSeekStream({ video: null, isLive: false, duration: 300_000 })).toBe(false);
+  });
+
+  it("gates MediaStream sources on an explicit buffer_window", () => {
+    const video = { srcObject: new FakeMediaStream() } as unknown as HTMLVideoElement;
+    expect(canSeekStream({ video, isLive: false, duration: 0 })).toBe(false);
+    expect(canSeekStream({ video, isLive: false, duration: 0, bufferWindowMs: 30_000 })).toBe(true);
+  });
+
+  it("allows seeking when the browser reports seekable ranges", () => {
+    const video = {
+      srcObject: null,
+      seekable: { length: 1, start: () => 0, end: () => 100 },
+    } as unknown as HTMLVideoElement;
+    expect(canSeekStream({ video, isLive: false, duration: Infinity })).toBe(true);
+  });
+
+  it("allows seeking for VOD with a finite duration and no seekable ranges", () => {
+    const video = {
+      srcObject: null,
+      seekable: { length: 0, start: () => 0, end: () => 0 },
+    } as unknown as HTMLVideoElement;
+    expect(canSeekStream({ video, isLive: false, duration: 300_000 })).toBe(true);
+  });
+
+  it("returns false for VOD with no duration, no ranges, no hints", () => {
+    const video = {
+      srcObject: null,
+      seekable: { length: 0, start: () => 0, end: () => 0 },
+    } as unknown as HTMLVideoElement;
+    expect(canSeekStream({ video, isLive: false, duration: NaN })).toBe(false);
+  });
+});
+
+describe("mapPlayerTimeToMistTimeline (guards)", () => {
+  it("returns the player time unchanged when the Mist range is invalid", () => {
+    expect(
+      mapPlayerTimeToMistTimeline({
+        isLive: true,
+        playerTimeMs: 2_000,
+        playerSeekableRange: { start: 0, end: 5_000 },
+        mistSeekableRange: { start: 5, end: 5 }, // end <= start → invalid
+      })
+    ).toBe(2_000);
+  });
+
+  it("clamps the mapped time into the Mist range", () => {
+    // playerTime beyond the player edge → behindLive 0 → maps to mist end, clamped.
+    expect(
+      mapPlayerTimeToMistTimeline({
+        isLive: true,
+        playerTimeMs: 9_999,
+        playerSeekableRange: { start: 0, end: 5_000 },
+        mistSeekableRange: { start: 1_000, end: 2_000 },
+      })
+    ).toBe(2_000);
   });
 });

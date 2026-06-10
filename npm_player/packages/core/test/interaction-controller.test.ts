@@ -327,17 +327,18 @@ describe("InteractionController", () => {
   });
 
   // ===========================================================================
-  // Live mode restrictions
+  // Live mode behavior
   // ===========================================================================
-  describe("live mode restrictions", () => {
-    it("arrow seek disabled in live mode", () => {
+  describe("live mode behavior", () => {
+    it("arrow seek remains enabled in live mode", () => {
       const { config, container } = makeConfig({ isLive: true });
       const ic = new InteractionController(config);
       ic.attach();
 
       container._fire("keydown", { key: "ArrowLeft" });
       container._fire("keydown", { key: "ArrowRight" });
-      expect(config.onSeek).not.toHaveBeenCalled();
+      expect(config.onSeek).toHaveBeenCalledWith(-10);
+      expect(config.onSeek).toHaveBeenCalledWith(10);
     });
 
     it("speed shortcuts disabled in live mode", () => {
@@ -350,13 +351,13 @@ describe("InteractionController", () => {
       expect(config.onSpeedChange).not.toHaveBeenCalled();
     });
 
-    it("number key seek disabled in live mode", () => {
+    it("number key seek remains enabled in live mode", () => {
       const { config, container } = makeConfig({ isLive: true });
       const ic = new InteractionController(config);
       ic.attach();
 
       container._fire("keydown", { key: "5" });
-      expect(config.onSeekPercent).not.toHaveBeenCalled();
+      expect(config.onSeekPercent).toHaveBeenCalledWith(0.5);
     });
   });
 

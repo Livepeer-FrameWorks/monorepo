@@ -417,4 +417,141 @@ describe("StreamStateClient", () => {
       expect(handler).not.toHaveBeenCalled();
     });
   });
+
+  // ===========================================================================
+  // WebSocket connection + HTTP fallback (StreamStateClient.ts:283-341)
+  // ===========================================================================
+  describe("WebSocket", () => {
+    class MockWebSocket {
+      static OPEN = 1;
+      static CLOSED = 3;
+      static instances: MockWebSocket[] = [];
+      static throwOnConstruct = false;
+
+      readyState = MockWebSocket.OPEN;
+      url: string;
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onerror: (() => void) | null = null;
+      onclose: (() => void) | null = null;
+      close = vi.fn(() => {
+        this.readyState = MockWebSocket.CLOSED;
+        this.onclose?.();
+      });
+
+      constructor(url: string) {
+        if (MockWebSocket.throwOnConstruct) throw new Error("ws construct boom");
+        this.url = url;
+        MockWebSocket.instances.push(this);
+      }
+    }
+
+    beforeEach(() => {
+      MockWebSocket.instances = [];
+      MockWebSocket.throwOnConstruct = false;
+      vi.stubGlobal("WebSocket", MockWebSocket);
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    // Drives start() → debounce → initial HTTP poll → connectWebSocket().
+    async function startWithWs(online = true) {
+      globalThis.fetch = online
+        ? mockFetch(makeMistResponse(true))
+        : mockFetch(makeMistResponse(false));
+      const client = new StreamStateClient(makeConfig({ useWebSocket: true, pollInterval: 500 }));
+      client.start();
+      await vi.advanceTimersByTimeAsync(150);
+      return client;
+    }
+
+    it("connects a ws(s) socket after the initial poll and exposes it", async () => {
+      const client = await startWithWs();
+      expect(MockWebSocket.instances).toHaveLength(1);
+      const sock = MockWebSocket.instances[0];
+      // http(s) base is rewritten to ws(s); stream name is in the path.
+      expect(sock.url).toMatch(/^wss:\/\//);
+      expect(sock.url).toContain("json_test-stream.js");
+      expect(client.getSocket()).toBe(sock as unknown as WebSocket);
+      expect(client.isSocketReady()).toBe(true);
+      client.destroy();
+    });
+
+    it("applies stream info pushed over the socket", async () => {
+      // Initial poll is offline so the ONLINE state can only come from the WS message.
+      const client = await startWithWs(false);
+      expect(client.isOnline()).toBe(false);
+
+      MockWebSocket.instances[0].onmessage!({ data: JSON.stringify(makeMistResponse(true)) });
+      expect(client.isOnline()).toBe(true);
+      expect(client.getState().status).toBe("ONLINE");
+      client.destroy();
+    });
+
+    it("swallows a malformed socket message without changing state", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const client = await startWithWs();
+      const before = client.getState();
+
+      MockWebSocket.instances[0].onmessage!({ data: "{ not json" });
+      expect(client.getState()).toEqual(before);
+      expect(warnSpy).toHaveBeenCalled();
+      warnSpy.mockRestore();
+      client.destroy();
+    });
+
+    it("closes the socket on error", async () => {
+      const client = await startWithWs();
+      const sock = MockWebSocket.instances[0];
+      sock.onerror!();
+      expect(sock.close).toHaveBeenCalled();
+      client.destroy();
+    });
+
+    it("falls back to HTTP polling when the socket closes", async () => {
+      const client = await startWithWs();
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1); // initial poll only
+
+      MockWebSocket.instances[0].onclose!();
+      await vi.advanceTimersByTimeAsync(0); // flush the fallback poll
+      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+      expect(client.getSocket()).toBeNull();
+
+      // With WebSocket now disabled, HTTP polling is scheduled on the interval.
+      await vi.advanceTimersByTimeAsync(500);
+      expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+      client.destroy();
+    });
+
+    it("falls back to HTTP when the socket constructor throws", async () => {
+      MockWebSocket.throwOnConstruct = true;
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const client = await startWithWs();
+
+      expect(client.getSocket()).toBeNull();
+      expect(client.isSocketReady()).toBe(false);
+      // Initial poll + the catch-path fallback poll.
+      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+      warnSpy.mockRestore();
+      client.destroy();
+    });
+
+    it("refresh() is a no-op while the socket is open, but polls otherwise", async () => {
+      const client = await startWithWs();
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockClear();
+
+      client.refresh(); // socket open → updates arrive passively
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+
+      // Drop the socket: refresh must now actively poll.
+      MockWebSocket.instances[0].onclose!();
+      await vi.advanceTimersByTimeAsync(0);
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockClear();
+      client.refresh();
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+      client.destroy();
+    });
+  });
 });

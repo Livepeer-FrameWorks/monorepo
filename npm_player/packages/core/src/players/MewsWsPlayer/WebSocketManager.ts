@@ -23,8 +23,11 @@ export class WebSocketManager {
   private connectionTimeout: ReturnType<typeof setTimeout> | null = null;
   private static readonly CONNECTION_TIMEOUT_MS = 5000;
 
-  // Track pending retry timers so they can be cancelled on destroy
-  private pendingRetryTimers: Set<ReturnType<typeof setTimeout>> = new Set();
+  // Commands sent while disconnected are buffered here and replayed (in order)
+  // when the transport next reaches "connected" — mirrors mews.js, which reopens
+  // the socket and resends the in-flight command rather than dropping it.
+  private pendingSends: object[] = [];
+  private static readonly MAX_PENDING_SENDS = 32;
 
   // Message listener registry
   // Allows multiple listeners per message type for proper seek/play sequencing
@@ -76,37 +79,16 @@ export class WebSocketManager {
   }
 
   /**
-   * Send a command with retry logic (3.3.6).
-   * If not connected, will retry up to 5 times with 500ms delay.
-   * If connection is closing/closed, will attempt reconnect then retry.
+   * Send a command. While disconnected the command is buffered and replayed
+   * (in order) when the transport next connects — the transport owns
+   * reconnection, and a connection that never opens is surfaced via the
+   * connection timeout (onError), so there is no separate retry-count path.
    */
-  send(cmd: object, retry = 0): boolean {
-    const MAX_RETRIES = 5;
-    const RETRY_DELAY = 500;
-
-    // Early exit if destroyed - don't schedule any retries
+  send(cmd: object): boolean {
     if (this.isDestroyed) return false;
 
-    if (retry > MAX_RETRIES) {
-      this.onError("Too many send retries");
-      return false;
-    }
-
-    const scheduleRetry = (delay: number) => {
-      const timer = setTimeout(() => {
-        this.pendingRetryTimers.delete(timer);
-        if (!this.isDestroyed) {
-          this.send(cmd, retry + 1);
-        }
-      }, delay);
-      this.pendingRetryTimers.add(timer);
-    };
-
     if (!this.connected) {
-      // No socket at all, try to connect and retry
-      if (!this.isDestroyed && retry < MAX_RETRIES) {
-        scheduleRetry(RETRY_DELAY);
-      }
+      this.bufferPendingSend(cmd);
       return false;
     }
 
@@ -114,6 +96,28 @@ export class WebSocketManager {
       return this.transport.send(cmd as any);
     } catch {
       return false;
+    }
+  }
+
+  private bufferPendingSend(cmd: object): void {
+    // Bound the buffer so a socket that never connects can't grow it unbounded;
+    // oldest commands are the least relevant to replay.
+    if (this.pendingSends.length >= WebSocketManager.MAX_PENDING_SENDS) {
+      this.pendingSends.shift();
+    }
+    this.pendingSends.push(cmd);
+  }
+
+  private flushPendingSends(): void {
+    if (!this.pendingSends.length) return;
+    const queued = this.pendingSends;
+    this.pendingSends = [];
+    for (const cmd of queued) {
+      try {
+        this.transport.send(cmd as any);
+      } catch {
+        // A failed replay just drops that command; the next connect retries the rest.
+      }
     }
   }
 
@@ -137,11 +141,8 @@ export class WebSocketManager {
     this.clearConnectionTimeout();
     this.clearReconnectTimer();
 
-    // Cancel ALL pending retry timers to prevent any scheduled sends
-    for (const timer of this.pendingRetryTimers) {
-      clearTimeout(timer);
-    }
-    this.pendingRetryTimers.clear();
+    // Drop any commands buffered for replay.
+    this.pendingSends = [];
 
     // Clear all listeners to prevent memory leaks
     this.listeners = {};
@@ -182,6 +183,9 @@ export class WebSocketManager {
         this.clearReconnectTimer();
         this.clearConnectionTimeout();
         this.onOpen();
+        // Replay anything queued while disconnected, after onOpen has re-run the
+        // codec_data handshake so it stays first on the wire.
+        this.flushPendingSends();
       } else if (state === "disconnected") {
         const shouldRetry =
           !this.isDestroyed &&

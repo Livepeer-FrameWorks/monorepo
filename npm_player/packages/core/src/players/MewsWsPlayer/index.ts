@@ -377,6 +377,12 @@ export class MewsWsPlayerImpl extends BasePlayer {
           if (this.autoplay) {
             this.play().catch(() => {});
           }
+        } else if (initialized && this.isReady) {
+          // Reconnect: the source buffer already exists, but a fresh WebSocket
+          // carries no playback state, so the server won't send media until we
+          // ask. Re-issue play to resume the data flow — mirrors mews.js, which
+          // calls api.play() on reopen (mews.js:417-428, 944).
+          this.resumePlaybackAfterReconnect();
         }
       }
       this.wsManager?.removeListener("codec_data", listener);
@@ -396,6 +402,25 @@ export class MewsWsPlayerImpl extends BasePlayer {
   private handleWsClose(): void {
     if (this.debugging) console.log("MEWS: WebSocket closed");
     // Reconnection is handled by WebSocketManager
+  }
+
+  /**
+   * Resume the server data flow after the socket has reconnected. The browser
+   * keeps a reconnected stream's video element "playing" off the residual
+   * buffer, so play() would early-return without re-asking the server; we send
+   * the play command directly. For live we re-pin to the edge only when the
+   * element is at 0 (matching play()'s skip-to-live), since a mid-stream gap
+   * cannot be resumed seamlessly anyway.
+   */
+  private resumePlaybackAfterReconnect(): void {
+    if (!this.sbManager || this.sbManager.paused) return;
+    this.sbManager.paused = false;
+    const skipToLive = this.streamType === "live" && this.videoElement?.currentTime === 0;
+    if (skipToLive) {
+      this.send({ type: "play", seek_time: "live" });
+    } else {
+      this.send({ type: "play" });
+    }
   }
 
   /**

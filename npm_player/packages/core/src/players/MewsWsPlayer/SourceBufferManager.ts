@@ -192,7 +192,14 @@ export class SourceBufferManager {
           break;
         }
         case "InvalidStateError": {
-          // Playback is borked (mews.js:326-334)
+          // Playback is borked — stop it before anything else (mews.js:331-334
+          // calls player.api.pause()). If the element already carries an error,
+          // that path handles the surfacing; just bail.
+          try {
+            this.videoElement.pause();
+          } catch {
+            // ignore — element may already be torn down
+          }
           if (this.videoElement.error) {
             // Video element error will handle this
             this._busy = false;
