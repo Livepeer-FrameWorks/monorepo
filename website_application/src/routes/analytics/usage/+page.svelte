@@ -955,7 +955,7 @@
             <div class="slab-body--padded">
               <div class="space-y-3">
                 {#if ratedCosts.lineItems.length > 0}
-                  {#each ratedCosts.lineItems as item (`${item.lineKey}-${item.meter}`)}
+                  {#each ratedCosts.lineItems as item, i (`${item.lineKey}-${item.meter}-${i}`)}
                     <div class="flex items-center justify-between text-sm">
                       <span class="text-muted-foreground">{item.description}</span>
                       <span class="text-foreground"
@@ -1359,7 +1359,7 @@
                           </tr>
                         </thead>
                         <tbody>
-                          {#each apiUsageRecords as record (record.id)}
+                          {#each apiUsageRecords as record, i (`${record.id}-${i}`)}
                             {@const avgDuration =
                               record.requestCount > 0
                                 ? record.totalDurationMs / record.requestCount
@@ -1456,7 +1456,7 @@
                           </tr>
                         </thead>
                         <tbody>
-                          {#each processingEvents as evt (evt.id)}
+                          {#each processingEvents as evt, i (`${evt.id}-${i}`)}
                             {@const displayStreamId = evt.stream?.streamId ?? evt.streamId}
                             <tr class="border-b border-border/30 hover:bg-muted/10">
                               <td class="py-2 px-4 text-xs text-muted-foreground">
@@ -1729,7 +1729,7 @@
                     </tr>
                   </thead>
                   <tbody>
-                    {#each usageRecordPreview as record (record.id)}
+                    {#each usageRecordPreview as record, i (`${record.id}-${i}`)}
                       <tr class="border-b border-border/30 hover:bg-muted/10">
                         <td class="py-3 px-4 font-mono text-muted-foreground">
                           {record.usageType}
