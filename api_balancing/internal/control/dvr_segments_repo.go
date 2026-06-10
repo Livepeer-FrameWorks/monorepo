@@ -18,8 +18,9 @@ import (
 //
 // Chapter finalization reads bounded ranges from this table to remux
 // the canonical .mkv. A 'lost_local' row inside a chapter range moves
-// that chapter to state='failed_source_missing' (all-or-nothing
-// chapter artifacts; partial MKVs are never produced).
+// that chapter to state='failed_source_missing'; trailing lost_local rows
+// at the terminal tail may be trimmed so the playable prefix still becomes
+// a chapter artifact.
 
 // DVRSegmentRow is a row from foghorn.dvr_segments.
 type DVRSegmentRow struct {
@@ -285,8 +286,8 @@ func DVRSegmentProgress(ctx context.Context, artifactHash string) (segmentCount 
 
 // MarkDVRSegmentDropped transitions a segment row to deleted_local (was
 // uploaded before eviction; chapter finalization can recover from S3)
-// or lost_local (lost before upload; any chapter overlapping the row
-// moves to state='failed_source_missing'). drop_reason is recorded
+// or lost_local (lost before upload; internal chapter loss moves the
+// chapter to state='failed_source_missing'). drop_reason is recorded
 // for ops triage. Idempotent: a second call with the same
 // (was_uploaded) classification is a no-op.
 //

@@ -1784,21 +1784,61 @@ func (s *FoghornGRPCServer) StopDVR(ctx context.Context, req *sharedpb.StopDVRRe
 		return nil, status.Error(codes.Internal, "failed to fetch DVR artifact")
 	}
 
+	// Get node_id from artifact_nodes. Finalization retry can still run without
+	// one, but an active stop needs a storage node to receive the Mist stop.
+	var (
+		nodeID        string
+		nodeSizeBytes sql.NullInt64
+	)
+	_ = s.db.QueryRowContext(ctx, `
+		SELECT node_id, size_bytes FROM foghorn.artifact_nodes
+		WHERE artifact_hash = $1 AND NOT is_orphaned
+		ORDER BY last_seen_at DESC LIMIT 1
+	`, req.DvrHash).Scan(&nodeID, &nodeSizeBytes)
+
 	switch dvrStatus {
-	case "completed", "completed_partial", "failed", "ready", "deleted", "finalizing":
+	case "finalizing":
+		retrySizeBytes := uint64(0)
+		if sizeBytes.Valid && sizeBytes.Int64 > 0 {
+			retrySizeBytes = uint64(sizeBytes.Int64)
+		} else if nodeSizeBytes.Valid && nodeSizeBytes.Int64 > 0 {
+			retrySizeBytes = uint64(nodeSizeBytes.Int64)
+		}
+		retryDurationSeconds := int64(0)
+		if startedAt.Valid && endedAt.Valid && endedAt.Time.After(startedAt.Time) {
+			retryDurationSeconds = int64(endedAt.Time.Sub(startedAt.Time).Seconds())
+		}
+		go func() {
+			retryCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			final, finalErr := control.FinalizeDVR(retryCtx, req.DvrHash, control.FinalizeOptions{
+				ReportedStatus:  dvrStatus,
+				DurationSeconds: retryDurationSeconds,
+				SizeBytes:       retrySizeBytes,
+				StorageNodeID:   nodeID,
+			})
+			if finalErr != nil {
+				s.logger.WithError(finalErr).WithFields(logging.Fields{
+					"dvr_hash":     req.DvrHash,
+					"final_status": final.ArtifactStatus,
+				}).Warn("Stale DVR finalization retry failed")
+			}
+			if final.ArtifactStatus != "" && !final.NoOp {
+				if applyErr := state.DefaultManager().ApplyDVRStopped(context.Background(), req.DvrHash, final.ArtifactStatus, retryDurationSeconds, retrySizeBytes, final.ManifestPath, "", nodeID); applyErr != nil {
+					s.logger.WithError(applyErr).WithField("dvr_hash", req.DvrHash).Warn("ApplyDVRStopped after stale finalization retry failed")
+				}
+			}
+		}()
+		return &sharedpb.StopDVRResponse{
+			Success: true,
+			Message: "DVR finalization retry scheduled",
+		}, nil
+	case "completed", "completed_partial", "failed", "ready", "deleted":
 		return &sharedpb.StopDVRResponse{
 			Success: false,
 			Message: fmt.Sprintf("DVR recording already finished with status: %s", dvrStatus),
 		}, nil
 	}
-
-	// Get node_id from artifact_nodes
-	var nodeID string
-	_ = s.db.QueryRowContext(ctx, `
-		SELECT node_id FROM foghorn.artifact_nodes
-		WHERE artifact_hash = $1 AND NOT is_orphaned
-		ORDER BY last_seen_at DESC LIMIT 1
-	`, req.DvrHash).Scan(&nodeID)
 
 	if nodeID == "" {
 		return nil, status.Error(codes.Unavailable, "no storage node available for this DVR")

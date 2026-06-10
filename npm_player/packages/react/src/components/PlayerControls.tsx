@@ -375,7 +375,7 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
       bufferWindowMs,
     });
   }, [video, isLive, duration, bufferWindowMs, player]);
-  const canSeek = baseCanSeek && (!isLive || hasDvrWindow);
+  const canSeek = baseCanSeek;
 
   // Hysteresis for live badge - using core calculation
   useEffect(() => {

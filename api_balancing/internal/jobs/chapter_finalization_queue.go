@@ -208,7 +208,7 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 			control.ChapterStateFailedSourceMissing,
 			"chapter range has no segments")
 	}
-	refs, missing, refErr := q.buildSegmentRefs(parent.tenantID, parent.streamInternalName, c.ArtifactHash, segments)
+	refs, missing, trimmedTail, refErr := q.buildSegmentRefs(parent.tenantID, parent.streamInternalName, c.ArtifactHash, segments)
 	if refErr != nil {
 		return fmt.Errorf("build segment refs: %w", refErr)
 	}
@@ -216,6 +216,18 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 		return control.MarkChapterFailed(ctx, c.ChapterID,
 			control.ChapterStateFailedSourceMissing,
 			fmt.Sprintf("%d source segments missing from both local and recovery freeze", missing))
+	}
+	if len(refs) == 0 {
+		return control.MarkChapterFailed(ctx, c.ChapterID,
+			control.ChapterStateFailedSourceMissing,
+			"chapter range has no usable source segments")
+	}
+	if trimmedTail > 0 {
+		q.logger.WithFields(logging.Fields{
+			"chapter_id":       c.ChapterID,
+			"dvr_hash":         c.ArtifactHash,
+			"trimmed_segments": trimmedTail,
+		}).Warn("Chapter finalize: trimming lost tail segments from terminal chapter")
 	}
 
 	// Pick the dispatch target. The recording origin is preferred —
@@ -438,7 +450,8 @@ func (q *ChapterFinalizationQueue) readParentDVR(ctx context.Context, dvrHash st
 	return p, nil
 }
 
-func (q *ChapterFinalizationQueue) buildSegmentRefs(_ /*tenantID*/, _ /*streamInternalName*/, _ /*dvrHash*/ string, rows []control.DVRSegmentRow) ([]*ipcpb.DVRChapterSegmentRef, int, error) {
+func (q *ChapterFinalizationQueue) buildSegmentRefs(_ /*tenantID*/, _ /*streamInternalName*/, _ /*dvrHash*/ string, rows []control.DVRSegmentRow) ([]*ipcpb.DVRChapterSegmentRef, int, int, error) {
+	rows, trimmedTail := trimLostLocalTailSegments(rows)
 	refs := make([]*ipcpb.DVRChapterSegmentRef, 0, len(rows))
 	missing := 0
 	for _, r := range rows {
@@ -470,7 +483,7 @@ func (q *ChapterFinalizationQueue) buildSegmentRefs(_ /*tenantID*/, _ /*streamIn
 			// to 'closed' for retry.
 			url, err := presignArtifactGET(context.Background(), r.S3Key)
 			if err != nil {
-				return nil, 0, fmt.Errorf("presign recovery URL for segment %s: %w", r.SegmentName, err)
+				return nil, 0, 0, fmt.Errorf("presign recovery URL for segment %s: %w", r.SegmentName, err)
 			}
 			ref.PresignedRecoveryUrl = url
 		case "pending":
@@ -486,7 +499,7 @@ func (q *ChapterFinalizationQueue) buildSegmentRefs(_ /*tenantID*/, _ /*streamIn
 			}
 			url, err := presignArtifactGET(context.Background(), r.S3Key)
 			if err != nil {
-				return nil, 0, fmt.Errorf("presign recovery URL for lost segment %s: %w", r.SegmentName, err)
+				return nil, 0, 0, fmt.Errorf("presign recovery URL for lost segment %s: %w", r.SegmentName, err)
 			}
 			ref.PresignedRecoveryUrl = url
 		case "reclaimed":
@@ -494,7 +507,15 @@ func (q *ChapterFinalizationQueue) buildSegmentRefs(_ /*tenantID*/, _ /*streamIn
 		}
 		refs = append(refs, ref)
 	}
-	return refs, missing, nil
+	return refs, missing, trimmedTail, nil
+}
+
+func trimLostLocalTailSegments(rows []control.DVRSegmentRow) ([]control.DVRSegmentRow, int) {
+	end := len(rows)
+	for end > 0 && rows[end-1].Status == "lost_local" {
+		end--
+	}
+	return rows[:end], len(rows) - end
 }
 
 // mintChapterPlaybackID asks Commodore for the chapter's public

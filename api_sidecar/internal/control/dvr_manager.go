@@ -332,8 +332,8 @@ func resolveDVRSegmentsDirByHash(dvrHash string) string {
 
 // DropUnsyncedSegment force-evicts a single segment that has NOT been
 // uploaded to S3. This is the data-loss path: the segment is reported as
-// lost_local; any chapter that overlaps the lost segment will be marked
-// failed_source_missing by the finalization queue. Use only when no other
+// lost_local; internal chapter loss is marked failed_source_missing by the
+// finalization queue. Use only when no other
 // option remains. Reason should be one of disk_pressure / retention_expired
 // / operator_cleanup.
 // ErrDropRefusedByLease is returned by DropUnsyncedSegment when the lease
@@ -1328,6 +1328,27 @@ func (dm *DVRManager) maintainPushStatus(job *DVRJob) {
 		}
 	}
 
+	// If the recorder push disappeared after producing segments, Mist has
+	// normally completed the recording and removed the push. Treat that as the
+	// terminal signal before trying to recreate anything; recreating here opens
+	// a fresh append/noendlist writer against a stopped source.
+	if !pushFound && segmentCount > 0 {
+		dm.mutex.Lock()
+		exists := dm.jobs[job.DVRHash] == job
+		if exists {
+			job.Status = "completed"
+			job.pushGeneration++
+			delete(dm.jobs, job.DVRHash)
+			ClearDVRSourceOverride(job.StreamName)
+		}
+		dm.mutex.Unlock()
+		if exists {
+			job.Logger.Info("DVR recording completed successfully")
+			dm.sendCompletion(job, "success", "")
+		}
+		return
+	}
+
 	// If push missing or has errors, attempt recreation (unless we've exceeded retries)
 	if (!pushFound || pushHasErrors) && retryCount < maxRetries {
 		// Calculate backoff delay
@@ -1400,23 +1421,6 @@ func (dm *DVRManager) maintainPushStatus(job *DVRJob) {
 			dm.sendCompletion(job, "failed", fmt.Sprintf("Push failed after %d retries", retryCount))
 		}
 		return
-	}
-
-	// If push disappeared but we have segments, recording might have completed naturally
-	if !pushFound && segmentCount > 0 {
-		dm.mutex.Lock()
-		exists := dm.jobs[job.DVRHash] == job
-		if exists {
-			job.Status = "completed"
-			job.pushGeneration++
-			delete(dm.jobs, job.DVRHash)
-			ClearDVRSourceOverride(job.StreamName)
-		}
-		dm.mutex.Unlock()
-		if exists {
-			job.Logger.Info("DVR recording completed successfully")
-			dm.sendCompletion(job, "success", "")
-		}
 	}
 }
 

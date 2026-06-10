@@ -362,7 +362,7 @@
       bufferWindowMs,
     });
   });
-  let canSeek = $derived(baseCanSeek && (!isLive || hasDvrWindow));
+  let canSeek = $derived(baseCanSeek);
 
   // Update state from video events
   $effect(() => {

@@ -258,10 +258,14 @@ export function canSeekStream(params: CanSeekParams): boolean {
     return false;
   }
 
-  // Player API says yes - trust it for VOD, but require buffer for live
+  // Player API says yes - trust it. Stream type affects protocol ordering and
+  // coordinate mapping, not whether seeking controls are allowed.
   if (playerCanSeek && playerCanSeek()) {
-    if (!isLive) return true;
-    return bufferWindowMs !== undefined && bufferWindowMs > 0;
+    return true;
+  }
+
+  if (isLive) {
+    return true;
   }
 
   // No video element
@@ -281,11 +285,6 @@ export function canSeekStream(params: CanSeekParams): boolean {
 
   // VOD with valid duration
   if (!isLive && Number.isFinite(duration) && duration > 0) {
-    return true;
-  }
-
-  // Live with buffer_window configured
-  if (isLive && bufferWindowMs !== undefined && bufferWindowMs > 0) {
     return true;
   }
 

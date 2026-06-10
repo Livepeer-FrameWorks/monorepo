@@ -1715,7 +1715,7 @@ func SendMarkDVRSegmentUploaded(dvrHash, segmentName string, sizeBytes uint64) e
 // SendDVRSegmentDropped reports a forced eviction. wasUploaded distinguishes
 // safe local cleanup (Foghorn marks deleted_local; chapter finalization
 // recovers from S3) from data loss before upload (Foghorn marks
-// lost_local; overlapping chapters move to failed_source_missing).
+// lost_local; internal chapter loss moves to failed_source_missing).
 func SendDVRSegmentDropped(
 	dvrHash, segmentName, reason, localPath string,
 	mediaStartMs, mediaEndMs, durationMs int64,

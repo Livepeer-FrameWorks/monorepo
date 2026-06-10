@@ -348,12 +348,12 @@ export class InteractionController {
 
       case "seekBack":
         e.preventDefault();
-        if (!isLive) this.config.onSeek(-SKIP_AMOUNT_SECONDS);
+        this.config.onSeek(-SKIP_AMOUNT_SECONDS);
         break;
 
       case "seekForward":
         e.preventDefault();
-        if (!isLive) this.config.onSeek(SKIP_AMOUNT_SECONDS);
+        this.config.onSeek(SKIP_AMOUNT_SECONDS);
         break;
 
       case "volumeUp":
@@ -407,7 +407,7 @@ export class InteractionController {
 
       case "seekPercent":
         e.preventDefault();
-        if (!isLive && this.config.onSeekPercent) {
+        if (this.config.onSeekPercent) {
           const percent = parseInt(e.key, 10) / 10;
           this.config.onSeekPercent(percent);
         }

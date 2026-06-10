@@ -21,9 +21,9 @@ import (
 // Inside finalizing:
 //   1. Bounded retry of pending/failed_upload segments via
 //      RetryDVRSegmentUpload (sidecar re-attempts + emits MarkDVRSegmentUploaded).
-//   2. Reclassify remaining non-uploaded rows as lost_local. Chapters
-//      overlapping a lost_local row move to failed_source_missing at
-//      finalization (all-or-nothing chapter artifacts).
+//   2. Reclassify remaining non-uploaded rows as lost_local. Chapter
+//      finalization may trim a lost terminal tail, but internal lost rows
+//      still move the chapter to failed_source_missing.
 //   3. Close the active current chapter row by flipping is_current=false
 //      and state=closed; the finalization queue then produces the chapter
 //      VOD artifact.
@@ -40,6 +40,8 @@ import (
 // upper bound for a finalize call is roughly this value plus chapter close
 // bookkeeping and DB writes.
 var FinalizeRetrySeconds = 60
+
+const staleDVRFinalizingAfter = 10 * time.Minute
 
 // FinalizeOptions carries the sidecar's local view of the recording. They
 // are advisory; Foghorn computes the canonical artifact status from the
@@ -74,8 +76,9 @@ func FinalizeDVR(ctx context.Context, dvrHash string, opts FinalizeOptions) (Fin
 
 	logger := logging.NewLogger()
 
-	// Atomic claim of the active/stopping->finalizing transition. If another
-	// caller already moved past that lifecycle point we short-circuit.
+	// Atomic claim of the active/stopping->finalizing transition. A stale
+	// finalizing row is also reclaimable: a previous finalizer may have crashed
+	// or failed after the claim but before writing the terminal status.
 	var prevStatus string
 	err := db.QueryRowContext(ctx, `
 		UPDATE foghorn.artifacts
@@ -84,9 +87,12 @@ func FinalizeDVR(ctx context.Context, dvrHash string, opts FinalizeOptions) (Fin
 		       ended_at = COALESCE(ended_at, NOW())
 		 WHERE artifact_hash = $1
 		   AND artifact_type = 'dvr'
-		   AND status IN ('requested', 'starting', 'recording', 'stopping')
+		   AND (
+		        status IN ('requested', 'starting', 'recording', 'stopping')
+		        OR (status = 'finalizing' AND updated_at < NOW() - ($2::double precision * INTERVAL '1 second'))
+		   )
 	 RETURNING status
-	`, dvrHash).Scan(&prevStatus)
+	`, dvrHash, staleDVRFinalizingAfter.Seconds()).Scan(&prevStatus)
 	if errors.Is(err, sql.ErrNoRows) {
 		// Already terminal or in flight. Read current status and return NoOp.
 		current, readErr := readArtifactStatus(ctx, dvrHash)
@@ -119,7 +125,7 @@ func FinalizeDVR(ctx context.Context, dvrHash string, opts FinalizeOptions) (Fin
 		logger.WithError(err).Warn("Failed to reclassify remaining segments as lost_local")
 	}
 	if lost > 0 {
-		logger.WithField("segments_lost", lost).Warn("DVR finalized with lost segments; chapters overlapping a lost segment will move to failed_source_missing")
+		logger.WithField("segments_lost", lost).Warn("DVR finalized with lost segments; terminal chapter tail may be trimmed, internal chapter loss will fail the chapter")
 	}
 
 	// Compute retention_until from the persisted dvr_retention_days column,
