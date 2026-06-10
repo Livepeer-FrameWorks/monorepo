@@ -55,6 +55,26 @@ const (
 
 var edgeNodeIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,99}$`)
 
+// edgePreRegisterClient is the narrow Foghorn surface used by the edge
+// pre-registration path. *foghorn.GRPCClient satisfies it structurally.
+type edgePreRegisterClient interface {
+	PreRegisterEdge(ctx context.Context, req *foghornpb.PreRegisterEdgeRequest) (*foghornpb.PreRegisterEdgeResponse, error)
+}
+
+// edgeRegisterQMClient is the narrow Quartermaster surface used by manual edge
+// node registration. *quartermaster.GRPCClient satisfies it structurally.
+type edgeRegisterQMClient interface {
+	CheckHealth(ctx context.Context) error
+	CreateNode(ctx context.Context, req *quartermasterpb.CreateNodeRequest) (*quartermasterpb.NodeResponse, error)
+	CreateEnrollmentToken(ctx context.Context, req *quartermasterpb.CreateEnrollmentTokenRequest) (*quartermasterpb.CreateBootstrapTokenResponse, error)
+}
+
+// edgeNavCertClient is the narrow Navigator surface used to fetch edge TLS
+// certificates. *navigator.Client satisfies it structurally.
+type edgeNavCertClient interface {
+	IssueCertificate(ctx context.Context, req *dnspb.IssueCertificateRequest) (*dnspb.IssueCertificateResponse, error)
+}
+
 func newEdgeCmd() *cobra.Command {
 	edge := &cobra.Command{
 		Use:   "edge",
@@ -1479,11 +1499,17 @@ func preRegisterEdge(ctx context.Context, foghornAddr, enrollmentToken, sshTarge
 	}
 	defer client.Close()
 
-	return client.PreRegisterEdge(ctx, &foghornpb.PreRegisterEdgeRequest{
+	return runEdgePreRegister(ctx, client, &foghornpb.PreRegisterEdgeRequest{
 		EnrollmentToken: enrollmentToken,
 		ExternalIp:      externalIP,
 		PreferredNodeId: preferredNodeID,
 	})
+}
+
+// runEdgePreRegister performs the Foghorn PreRegisterEdge call against an
+// already-dialed client. The thin caller owns dial, IP resolution and Close.
+func runEdgePreRegister(ctx context.Context, cli edgePreRegisterClient, req *foghornpb.PreRegisterEdgeRequest) (*foghornpb.PreRegisterEdgeResponse, error) {
+	return cli.PreRegisterEdge(ctx, req)
 }
 
 func resolveEdgeExternalIP(ctx context.Context, sshTarget, sshKey, knownExternalIP string) string {
@@ -1600,9 +1626,17 @@ func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshKey, nodeName
 	fmt.Fprintf(cmd.OutOrStdout(), "    Connecting to Quartermaster at %s\n", qmAddr)
 	defer func() { _ = qmClient.Close() }()
 
-	fmt.Fprintln(cmd.OutOrStdout(), "    Checking Quartermaster gRPC health")
+	return runEdgeRegisterNode(ctx, cmd.OutOrStdout(), qmClient, qmAddr, nodeName, clusterID, externalIP, region)
+}
+
+// runEdgeRegisterNode runs the Quartermaster registration RPC sequence against
+// an already-dialed client: health check, CreateNode, then mint an enrollment
+// token. The thin caller owns token resolution, dial, and Close. Returns the
+// minted enrollment token.
+func runEdgeRegisterNode(ctx context.Context, w io.Writer, cli edgeRegisterQMClient, qmAddr, nodeName, clusterID, externalIP, region string) (string, error) {
+	fmt.Fprintln(w, "    Checking Quartermaster gRPC health")
 	healthCtx, healthCancel := context.WithTimeout(ctx, 10*time.Second)
-	if healthErr := qmClient.CheckHealth(healthCtx); healthErr != nil {
+	if healthErr := cli.CheckHealth(healthCtx); healthErr != nil {
 		healthCancel()
 		return "", fmt.Errorf("quartermaster gRPC health check failed at %s: %w", qmAddr, healthErr)
 	}
@@ -1612,17 +1646,14 @@ func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshKey, nodeName
 	if nodeID == "" {
 		nodeID = uuid.New().String()
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "    Upserting node id=%s external_ip=%s region=%s\n", nodeID, firstNonEmpty(externalIP, "<unset>"), firstNonEmpty(region, "<unset>"))
+	fmt.Fprintf(w, "    Upserting node id=%s external_ip=%s region=%s\n", nodeID, firstNonEmpty(externalIP, "<unset>"), firstNonEmpty(region, "<unset>"))
 
-	// Create node request
 	req := &quartermasterpb.CreateNodeRequest{
 		NodeId:    nodeID,
 		ClusterId: clusterID,
 		NodeName:  nodeName,
 		NodeType:  infra.NodeTypeEdge, // This triggers DNS sync for "edge" service type
 	}
-
-	// Set optional fields
 	if externalIP != "" {
 		req.ExternalIp = &externalIP
 	}
@@ -1630,25 +1661,25 @@ func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshKey, nodeName
 		req.Region = &region
 	}
 
-	fmt.Fprintln(cmd.OutOrStdout(), "    Calling Quartermaster CreateNode (deadline 30s)")
+	fmt.Fprintln(w, "    Calling Quartermaster CreateNode (deadline 30s)")
 	createCtx, createCancel := context.WithTimeout(ctx, 30*time.Second)
-	resp, err := qmClient.CreateNode(createCtx, req)
+	resp, err := cli.CreateNode(createCtx, req)
 	createCancel()
 	if err != nil {
 		return "", fmt.Errorf("failed to create node via Quartermaster at %s: %w", qmAddr, err)
 	}
 
-	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Node registered: %s (ID: %s)", nodeName, resp.GetNode().GetNodeId()))
-	ux.Success(cmd.OutOrStdout(), "Node registered (DNS will be synced by Navigator reconciler)")
+	ux.Success(w, fmt.Sprintf("Node registered: %s (ID: %s)", nodeName, resp.GetNode().GetNodeId()))
+	ux.Success(w, "Node registered (DNS will be synced by Navigator reconciler)")
 
 	tokenTenantID := strings.TrimSpace(resp.GetNode().GetOwnerTenantId())
 	if tokenTenantID == "" {
 		return "", fmt.Errorf("node %s is in cluster %s, but Quartermaster returned no cluster owner_tenant_id for enrollment token binding", nodeID, clusterID)
 	}
 	enrollmentReq := edgeEnrollmentTokenRequest(clusterID, nodeName, tokenTenantID)
-	fmt.Fprintln(cmd.OutOrStdout(), "    Minting short-lived enrollment token")
+	fmt.Fprintln(w, "    Minting short-lived enrollment token")
 	tokenCtx, tokenCancel := context.WithTimeout(ctx, 15*time.Second)
-	tokenResp, err := qmClient.CreateEnrollmentToken(tokenCtx, enrollmentReq)
+	tokenResp, err := cli.CreateEnrollmentToken(tokenCtx, enrollmentReq)
 	tokenCancel()
 	if err != nil {
 		return "", fmt.Errorf("failed to create enrollment token via Quartermaster at %s: %w", qmAddr, err)
@@ -1829,12 +1860,18 @@ func fetchCertFromNavigator(cmd *cobra.Command, cliCtx fwcfg.Context, domain, em
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	// Request certificate issuance
-	fmt.Fprintf(cmd.OutOrStdout(), "  - Requesting certificate for %s (this may take a minute)...\n", domain)
-	resp, err := navClient.IssueCertificate(ctx, &dnspb.IssueCertificateRequest{
+	return runEdgeFetchCert(ctx, cmd.OutOrStdout(), navClient, &dnspb.IssueCertificateRequest{
 		Domain: domain,
 		Email:  email,
 	})
+}
+
+// runEdgeFetchCert performs the Navigator IssueCertificate call against an
+// already-dialed client and unpacks the success/error envelope. The thin
+// caller owns dial, token resolution, and Close.
+func runEdgeFetchCert(ctx context.Context, w io.Writer, cli edgeNavCertClient, req *dnspb.IssueCertificateRequest) (certPEM, keyPEM string, err error) {
+	fmt.Fprintf(w, "  - Requesting certificate for %s (this may take a minute)...\n", req.GetDomain())
+	resp, err := cli.IssueCertificate(ctx, req)
 	if err != nil {
 		return "", "", fmt.Errorf("certificate issuance failed: %w", err)
 	}
@@ -1847,7 +1884,7 @@ func fetchCertFromNavigator(cmd *cobra.Command, cliCtx fwcfg.Context, domain, em
 		return "", "", fmt.Errorf("certificate issuance failed: %s", errMsg)
 	}
 
-	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Certificate issued for %s", domain))
+	ux.Success(w, fmt.Sprintf("Certificate issued for %s", req.GetDomain()))
 	return resp.GetCertPem(), resp.GetKeyPem(), nil
 }
 

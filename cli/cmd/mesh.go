@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"text/tabwriter"
 	"time"
@@ -12,6 +13,8 @@ import (
 	"frameworks/cli/internal/ux"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/spf13/cobra"
 )
@@ -72,6 +75,125 @@ func getMeshQuartermasterGRPCClient(ctx context.Context) (*quartermaster.GRPCCli
 	return client, ep.Cleanup, nil
 }
 
+// meshStatusClient is the narrow Quartermaster surface that `mesh status`
+// renders from. *quartermaster.GRPCClient satisfies it structurally.
+type meshStatusClient interface {
+	ListNodes(ctx context.Context, clusterID, nodeType, region string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListNodesResponse, error)
+}
+
+// runMeshStatus fetches the node inventory and renders the mesh topology. The
+// optional auditByKey map (computed by the caller from a GitOps manifest) adds
+// ORIGIN / KEY-MATCH / REVISION columns when present; nil falls back to the
+// QM-only view.
+func runMeshStatus(ctx context.Context, w io.Writer, cli meshStatusClient, auditByKey map[statusKey]auditRow, outputJSON bool) error {
+	if !outputJSON {
+		ux.Heading(w, "Privateer Mesh Status")
+		fmt.Fprint(w, "Fetching topology from Quartermaster... ")
+	}
+
+	resp, err := cli.ListNodes(ctx, "", "", "", nil)
+	if err != nil {
+		if !outputJSON {
+			fmt.Fprintln(w, "❌")
+		}
+		return fmt.Errorf("failed to get nodes: %w", err)
+	}
+	if !outputJSON {
+		ux.Success(w, fmt.Sprintf("(%d nodes)", len(resp.Nodes)))
+		fmt.Fprintln(w)
+	}
+
+	nodes := resp.Nodes
+	sort.Slice(nodes, func(i, j int) bool {
+		return nodes[i].Id < nodes[j].Id
+	})
+
+	type meshNode struct {
+		ID          string `json:"id"`
+		NodeName    string `json:"node_name"`
+		ClusterID   string `json:"cluster_id"`
+		Role        string `json:"role"`
+		InternalIP  string `json:"internal_ip"`
+		WireguardIP string `json:"wireguard_ip"`
+		LastSeen    string `json:"last_seen"`
+		AgentStatus string `json:"agent_status"`
+		Origin      string `json:"origin,omitempty"`
+		KeyMatch    string `json:"key_match,omitempty"`
+		Revision    string `json:"applied_mesh_revision,omitempty"`
+	}
+
+	var meshNodes []meshNode
+	for _, node := range nodes {
+		wgIP := "-"
+		if node.WireguardIp != nil {
+			wgIP = *node.WireguardIp
+		}
+
+		internalIP := "-"
+		if node.InternalIp != nil {
+			internalIP = *node.InternalIp
+		}
+
+		lastSeen := "-"
+		agentStatus := "Offline"
+
+		if node.LastHeartbeat != nil {
+			duration := time.Since(node.LastHeartbeat.AsTime()).Round(time.Second)
+			lastSeen = fmt.Sprintf("%s ago", duration)
+			if duration < 90*time.Second {
+				agentStatus = "Healthy"
+			} else {
+				agentStatus = "Stale/Offline"
+			}
+		}
+
+		origin := ""
+		keyMatch := ""
+		revision := ""
+		if auditByKey != nil {
+			if r, ok := auditByKey[statusKey{nodeName: node.NodeName, clusterID: node.ClusterId}]; ok {
+				origin = r.origin
+				keyMatch = statusKeyMatch(r.severity)
+				revision = r.revision
+			} else {
+				keyMatch = "no-manifest-row"
+			}
+		}
+
+		meshNodes = append(meshNodes, meshNode{
+			ID: node.Id, NodeName: node.NodeName, ClusterID: node.ClusterId, Role: node.NodeType,
+			InternalIP: internalIP, WireguardIP: wgIP,
+			LastSeen: lastSeen, AgentStatus: agentStatus,
+			Origin: origin, KeyMatch: keyMatch, Revision: revision,
+		})
+	}
+
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(meshNodes)
+	}
+
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	if auditByKey != nil {
+		fmt.Fprintln(tw, "CLUSTER\tNODE ID\tROLE\tINTERNAL IP\tWG IP\tLAST SEEN\tAGENT STATUS\tORIGIN\tKEY-MATCH\tREVISION")
+		for _, n := range meshNodes {
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				dashIfEmpty(n.ClusterID), n.ID, n.Role, n.InternalIP, n.WireguardIP, n.LastSeen, n.AgentStatus, dashIfEmpty(n.Origin), dashIfEmpty(n.KeyMatch), revisionLabel(n.Revision))
+		}
+	} else {
+		fmt.Fprintln(tw, "NODE ID\tROLE\tINTERNAL IP\tWG IP\tLAST SEEN\tAGENT STATUS")
+		for _, n := range meshNodes {
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+				n.ID, n.Role, n.InternalIP, n.WireguardIP, n.LastSeen, n.AgentStatus)
+		}
+	}
+	tw.Flush()
+
+	fmt.Fprintln(w, "\nNote: To join a new node, add it to GitOps, run 'frameworks mesh wg generate', then provision.")
+	return nil
+}
+
 // newMeshStatusCmd shows the mesh status
 func newMeshStatusCmd() *cobra.Command {
 	return &cobra.Command{
@@ -92,31 +214,6 @@ exit-coded divergence checking, use 'frameworks mesh wg audit'.`,
 			defer cleanup()
 			defer client.Close()
 
-			isJSON := output == "json"
-			if !isJSON {
-				ux.Heading(cmd.OutOrStdout(), "Privateer Mesh Status")
-				fmt.Fprint(cmd.OutOrStdout(), "Fetching topology from Quartermaster... ")
-			}
-
-			// Fetch Nodes via gRPC
-			resp, err := client.ListNodes(cmd.Context(), "", "", "", nil)
-			if err != nil {
-				if !isJSON {
-					fmt.Fprintln(cmd.OutOrStdout(), "❌")
-				}
-				return fmt.Errorf("failed to get nodes: %w", err)
-			}
-			if !isJSON {
-				ux.Success(cmd.OutOrStdout(), fmt.Sprintf("(%d nodes)", len(resp.Nodes)))
-				fmt.Fprintln(cmd.OutOrStdout())
-			}
-
-			// Sort by NodeId for stable output
-			nodes := resp.Nodes
-			sort.Slice(nodes, func(i, j int) bool {
-				return nodes[i].Id < nodes[j].Id
-			})
-
 			// Cross-reference with the GitOps manifest if any manifest
 			// source is set. The lookup table is keyed by (node_name,
 			// cluster_id) — node names are not globally unique across
@@ -124,91 +221,7 @@ exit-coded divergence checking, use 'frameworks mesh wg audit'.`,
 			// clusters with different identities.
 			auditByKey := buildStatusAuditIndex(cmd)
 
-			type meshNode struct {
-				ID          string `json:"id"`
-				NodeName    string `json:"node_name"`
-				ClusterID   string `json:"cluster_id"`
-				Role        string `json:"role"`
-				InternalIP  string `json:"internal_ip"`
-				WireguardIP string `json:"wireguard_ip"`
-				LastSeen    string `json:"last_seen"`
-				AgentStatus string `json:"agent_status"`
-				Origin      string `json:"origin,omitempty"`
-				KeyMatch    string `json:"key_match,omitempty"`
-				Revision    string `json:"applied_mesh_revision,omitempty"`
-			}
-
-			var meshNodes []meshNode
-			for _, node := range nodes {
-				wgIP := "-"
-				if node.WireguardIp != nil {
-					wgIP = *node.WireguardIp
-				}
-
-				internalIP := "-"
-				if node.InternalIp != nil {
-					internalIP = *node.InternalIp
-				}
-
-				lastSeen := "-"
-				agentStatus := "Offline"
-
-				if node.LastHeartbeat != nil {
-					duration := time.Since(node.LastHeartbeat.AsTime()).Round(time.Second)
-					lastSeen = fmt.Sprintf("%s ago", duration)
-					if duration < 90*time.Second {
-						agentStatus = "Healthy"
-					} else {
-						agentStatus = "Stale/Offline"
-					}
-				}
-
-				origin := ""
-				keyMatch := ""
-				revision := ""
-				if auditByKey != nil {
-					if r, ok := auditByKey[statusKey{nodeName: node.NodeName, clusterID: node.ClusterId}]; ok {
-						origin = r.origin
-						keyMatch = statusKeyMatch(r.severity)
-						revision = r.revision
-					} else {
-						keyMatch = "no-manifest-row"
-					}
-				}
-
-				meshNodes = append(meshNodes, meshNode{
-					ID: node.Id, NodeName: node.NodeName, ClusterID: node.ClusterId, Role: node.NodeType,
-					InternalIP: internalIP, WireguardIP: wgIP,
-					LastSeen: lastSeen, AgentStatus: agentStatus,
-					Origin: origin, KeyMatch: keyMatch, Revision: revision,
-				})
-			}
-
-			if isJSON {
-				enc := json.NewEncoder(cmd.OutOrStdout())
-				enc.SetIndent("", "  ")
-				return enc.Encode(meshNodes)
-			}
-
-			// Display Table
-			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			if auditByKey != nil {
-				fmt.Fprintln(w, "CLUSTER\tNODE ID\tROLE\tINTERNAL IP\tWG IP\tLAST SEEN\tAGENT STATUS\tORIGIN\tKEY-MATCH\tREVISION")
-				for _, n := range meshNodes {
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-						dashIfEmpty(n.ClusterID), n.ID, n.Role, n.InternalIP, n.WireguardIP, n.LastSeen, n.AgentStatus, dashIfEmpty(n.Origin), dashIfEmpty(n.KeyMatch), revisionLabel(n.Revision))
-				}
-			} else {
-				fmt.Fprintln(w, "NODE ID\tROLE\tINTERNAL IP\tWG IP\tLAST SEEN\tAGENT STATUS")
-				for _, n := range meshNodes {
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-						n.ID, n.Role, n.InternalIP, n.WireguardIP, n.LastSeen, n.AgentStatus)
-				}
-			}
-			w.Flush()
-
-			fmt.Fprintln(cmd.OutOrStdout(), "\nNote: To join a new node, add it to GitOps, run 'frameworks mesh wg generate', then provision.")
-			return nil
+			return runMeshStatus(cmd.Context(), cmd.OutOrStdout(), client, auditByKey, output == "json")
 		},
 	}
 }

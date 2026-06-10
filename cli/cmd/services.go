@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -20,6 +21,8 @@ import (
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/configgen"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/spf13/cobra"
 )
@@ -65,6 +68,14 @@ func newQMGRPCClientFromContext(ctx context.Context) (*qmclient.GRPCClient, fwcf
 	return qc, ctxCfg, ep.Cleanup, nil
 }
 
+// servicesQMClient is the narrow Quartermaster surface the health/discover
+// handlers call. *qmclient.GRPCClient satisfies it; tests inject a fake.
+type servicesQMClient interface {
+	GetServiceHealth(ctx context.Context, serviceID string) (*quartermasterpb.ListServicesHealthResponse, error)
+	ListServicesHealth(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListServicesHealthResponse, error)
+	DiscoverServices(ctx context.Context, serviceType, clusterID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ServiceDiscoveryResponse, error)
+}
+
 func newServicesHealthCmd() *cobra.Command {
 	var serviceID string
 	var svcType string
@@ -77,158 +88,113 @@ func newServicesHealthCmd() *cobra.Command {
 		defer qc.Close()
 		ctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
-
-		// Use gRPC to get services health
-		var resp interface{}
-		var instances []struct {
-			ServiceID      string
-			InstanceID     string
-			Status         string
-			Host           string
-			Port           int32
-			HealthEndpoint string
-		}
-
-		if strings.TrimSpace(serviceID) != "" {
-			// Get health for specific service
-			healthResp, err := qc.GetServiceHealth(ctx, serviceID)
-			if err != nil {
-				return err
-			}
-			resp = healthResp
-			for _, h := range healthResp.Instances {
-				host := ""
-				if h.Host != nil {
-					host = *h.Host
-				}
-				ep := ""
-				if h.HealthEndpoint != nil {
-					ep = *h.HealthEndpoint
-				}
-				instances = append(instances, struct {
-					ServiceID      string
-					InstanceID     string
-					Status         string
-					Host           string
-					Port           int32
-					HealthEndpoint string
-				}{
-					ServiceID:      h.ServiceId,
-					InstanceID:     h.InstanceId,
-					Status:         h.Status,
-					Host:           host,
-					Port:           h.Port,
-					HealthEndpoint: ep,
-				})
-			}
-		} else if strings.TrimSpace(svcType) != "" {
-			// Discover services by type first, then get health for each service
-			discResp, err := qc.DiscoverServices(ctx, svcType, "", nil)
-			if err != nil {
-				return err
-			}
-			// Get unique service IDs
-			ids := map[string]struct{}{}
-			for _, inst := range discResp.Instances {
-				ids[inst.ServiceId] = struct{}{}
-			}
-			for id := range ids {
-				healthResp, err := qc.GetServiceHealth(ctx, id)
-				if err != nil {
-					return err
-				}
-				for _, h := range healthResp.Instances {
-					host := ""
-					if h.Host != nil {
-						host = *h.Host
-					}
-					ep := ""
-					if h.HealthEndpoint != nil {
-						ep = *h.HealthEndpoint
-					}
-					instances = append(instances, struct {
-						ServiceID      string
-						InstanceID     string
-						Status         string
-						Host           string
-						Port           int32
-						HealthEndpoint string
-					}{
-						ServiceID:      h.ServiceId,
-						InstanceID:     h.InstanceId,
-						Status:         h.Status,
-						Host:           host,
-						Port:           h.Port,
-						HealthEndpoint: ep,
-					})
-				}
-			}
-			resp = map[string]interface{}{"instances": instances, "total": len(instances)}
-		} else {
-			// Get all services health
-			healthResp, err := qc.ListServicesHealth(ctx, nil)
-			if err != nil {
-				return err
-			}
-			resp = healthResp
-			for _, h := range healthResp.Instances {
-				host := ""
-				if h.Host != nil {
-					host = *h.Host
-				}
-				ep := ""
-				if h.HealthEndpoint != nil {
-					ep = *h.HealthEndpoint
-				}
-				instances = append(instances, struct {
-					ServiceID      string
-					InstanceID     string
-					Status         string
-					Host           string
-					Port           int32
-					HealthEndpoint string
-				}{
-					ServiceID:      h.ServiceId,
-					InstanceID:     h.InstanceId,
-					Status:         h.Status,
-					Host:           host,
-					Port:           h.Port,
-					HealthEndpoint: ep,
-				})
-			}
-		}
-
-		// Output
-		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-
-		// Sort by service then instance
-		sort.SliceStable(instances, func(i, j int) bool {
-			if instances[i].ServiceID == instances[j].ServiceID {
-				return instances[i].InstanceID < instances[j].InstanceID
-			}
-			return instances[i].ServiceID < instances[j].ServiceID
-		})
-		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Service Health (%d instances)", len(instances)))
-		for _, h := range instances {
-			line := fmt.Sprintf("%-12s inst=%-10s %s:%d %s [%s]", h.ServiceID, h.InstanceID, h.Host, h.Port, h.HealthEndpoint, h.Status)
-			switch strings.ToLower(h.Status) {
-			case "ok", "healthy":
-				ux.Success(cmd.OutOrStdout(), line)
-			case "degraded", "warning":
-				ux.Warn(cmd.OutOrStdout(), line)
-			default:
-				ux.Fail(cmd.OutOrStdout(), line)
-			}
-		}
-		return nil
+		return runServicesHealth(ctx, cmd.OutOrStdout(), qc, serviceID, svcType, output == "json")
 	}}
 	cmd.Flags().StringVar(&serviceID, "service-id", "", "filter by service ID")
 	cmd.Flags().StringVar(&svcType, "type", "", "filter by service type (catalog name)")
 	return cmd
+}
+
+// serviceHealthRow is one flattened health instance for text rendering.
+type serviceHealthRow struct {
+	ServiceID      string
+	InstanceID     string
+	Status         string
+	Host           string
+	Port           int32
+	HealthEndpoint string
+}
+
+// runServicesHealth resolves health instances by the active filter
+// (service-id > type > all), then renders them as JSON or a sorted,
+// status-colored list. Seam-extracted so the filter/render contract is
+// unit-tested with a fake Quartermaster client.
+func runServicesHealth(ctx context.Context, w io.Writer, qc servicesQMClient, serviceID, svcType string, outputJSON bool) error {
+	var resp any
+	var instances []serviceHealthRow
+
+	collect := func(insts []*quartermasterpb.ServiceInstanceHealth) {
+		for _, h := range insts {
+			host := ""
+			if h.Host != nil {
+				host = *h.Host
+			}
+			ep := ""
+			if h.HealthEndpoint != nil {
+				ep = *h.HealthEndpoint
+			}
+			instances = append(instances, serviceHealthRow{
+				ServiceID:      h.ServiceId,
+				InstanceID:     h.InstanceId,
+				Status:         h.Status,
+				Host:           host,
+				Port:           h.Port,
+				HealthEndpoint: ep,
+			})
+		}
+	}
+
+	switch {
+	case strings.TrimSpace(serviceID) != "":
+		healthResp, err := qc.GetServiceHealth(ctx, serviceID)
+		if err != nil {
+			return err
+		}
+		resp = healthResp
+		collect(healthResp.Instances)
+	case strings.TrimSpace(svcType) != "":
+		// Discover services by type first, then get health for each service ID.
+		discResp, err := qc.DiscoverServices(ctx, svcType, "", nil)
+		if err != nil {
+			return err
+		}
+		ids := map[string]struct{}{}
+		for _, inst := range discResp.Instances {
+			ids[inst.ServiceId] = struct{}{}
+		}
+		for id := range ids {
+			healthResp, err := qc.GetServiceHealth(ctx, id)
+			if err != nil {
+				return err
+			}
+			collect(healthResp.Instances)
+		}
+		resp = map[string]any{"instances": instances, "total": len(instances)}
+	default:
+		healthResp, err := qc.ListServicesHealth(ctx, nil)
+		if err != nil {
+			return err
+		}
+		resp = healthResp
+		collect(healthResp.Instances)
+	}
+
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+
+	// Sort by service then instance.
+	sort.SliceStable(instances, func(i, j int) bool {
+		if instances[i].ServiceID == instances[j].ServiceID {
+			return instances[i].InstanceID < instances[j].InstanceID
+		}
+		return instances[i].ServiceID < instances[j].ServiceID
+	})
+	ux.Heading(w, fmt.Sprintf("Service Health (%d instances)", len(instances)))
+	for _, h := range instances {
+		line := fmt.Sprintf("%-12s inst=%-10s %s:%d %s [%s]", h.ServiceID, h.InstanceID, h.Host, h.Port, h.HealthEndpoint, h.Status)
+		switch strings.ToLower(h.Status) {
+		case "ok", "healthy":
+			ux.Success(w, line)
+		case "degraded", "warning":
+			ux.Warn(w, line)
+		default:
+			ux.Fail(w, line)
+		}
+	}
+	return nil
 }
 
 func newServicesDiscoverCmd() *cobra.Command {
@@ -246,36 +212,41 @@ func newServicesDiscoverCmd() *cobra.Command {
 		defer qc.Close()
 		ctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
-
-		// Use gRPC DiscoverServices
-		resp, err := qc.DiscoverServices(ctx, svcType, clusterID, nil)
-		if err != nil {
-			return err
-		}
-		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Discovered %d instance(s) of %s\n", len(resp.Instances), svcType)
-		sort.SliceStable(resp.Instances, func(i, j int) bool { return resp.Instances[i].InstanceId < resp.Instances[j].InstanceId })
-		for _, inst := range resp.Instances {
-			ver := ""
-			if inst.Version != nil {
-				ver = *inst.Version
-			}
-			port := int32(0)
-			if inst.Port != nil {
-				port = *inst.Port
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), " - inst=%-10s svc=%-12s cluster=%-8s version=%-8s port=%d status=%s\n",
-				inst.InstanceId, inst.ServiceId, inst.ClusterId, ver, port, inst.HealthStatus)
-		}
-		return nil
+		return runServicesDiscover(ctx, cmd.OutOrStdout(), qc, svcType, clusterID, output == "json")
 	}}
 	cmd.Flags().StringVar(&svcType, "type", "", "service type (catalog name)")
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "optional cluster filter")
 	return cmd
+}
+
+// runServicesDiscover queries Quartermaster for instances of svcType and renders
+// them (JSON or a sorted text list). Seam-extracted so the render contract is
+// unit-tested with a fake client.
+func runServicesDiscover(ctx context.Context, w io.Writer, qc servicesQMClient, svcType, clusterID string, outputJSON bool) error {
+	resp, err := qc.DiscoverServices(ctx, svcType, clusterID, nil)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+	fmt.Fprintf(w, "Discovered %d instance(s) of %s\n", len(resp.Instances), svcType)
+	sort.SliceStable(resp.Instances, func(i, j int) bool { return resp.Instances[i].InstanceId < resp.Instances[j].InstanceId })
+	for _, inst := range resp.Instances {
+		ver := ""
+		if inst.Version != nil {
+			ver = *inst.Version
+		}
+		port := int32(0)
+		if inst.Port != nil {
+			port = *inst.Port
+		}
+		fmt.Fprintf(w, " - inst=%-10s svc=%-12s cluster=%-8s version=%-8s port=%d status=%s\n",
+			inst.InstanceId, inst.ServiceId, inst.ClusterId, ver, port, inst.HealthStatus)
+	}
+	return nil
 }
 
 func newServicesPlanCmd() *cobra.Command {

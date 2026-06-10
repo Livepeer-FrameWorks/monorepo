@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 	"time"
@@ -31,6 +32,15 @@ const (
 	edgeReleaseSyncAttempts   = 6
 	edgeReleaseSyncBaseDelay  = 250 * time.Millisecond
 )
+
+// edgeReleaseQMClient is the narrow Quartermaster surface the release-target
+// handlers call. *qmclient.GRPCClient satisfies it; tests inject a fake so the
+// call+render logic is exercised without a live control plane.
+type edgeReleaseQMClient interface {
+	ListEdgeReleases(ctx context.Context, req *quartermasterpb.ListEdgeReleasesRequest) (*quartermasterpb.ListEdgeReleasesResponse, error)
+	GetClusterReleaseTarget(ctx context.Context, req *quartermasterpb.GetClusterReleaseTargetRequest) (*quartermasterpb.ClusterReleaseTargetResponse, error)
+	SetClusterReleaseTarget(ctx context.Context, req *quartermasterpb.SetClusterReleaseTargetRequest) (*quartermasterpb.ClusterReleaseTargetResponse, error)
+}
 
 func newClusterReleasesCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -95,33 +105,40 @@ func newClusterReleasesListCmd() *cobra.Command {
 			defer func() { _ = qm.Close() }()
 			cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, 15*time.Second)
 			defer cancel()
-			resp, err := qm.ListEdgeReleases(cctx, &quartermasterpb.ListEdgeReleasesRequest{
-				Channel: strings.TrimSpace(channel),
-				Version: strings.TrimSpace(version),
-			})
-			if err != nil {
-				return err
-			}
-			if len(resp.GetReleases()) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "No edge releases found.")
-				return nil
-			}
-			for _, release := range resp.GetReleases() {
-				if release == nil {
-					continue
-				}
-				when := "-"
-				if release.GetPublishedAt() != nil {
-					when = release.GetPublishedAt().AsTime().Format(time.RFC3339)
-				}
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), " - %s/%s published=%s components=%s\n", release.GetChannel(), release.GetVersion(), when, release.GetComponentsJson())
-			}
-			return nil
+			return runReleasesList(cctx, cmd.OutOrStdout(), qm, channel, version)
 		},
 	}
 	cmd.Flags().StringVar(&channel, "channel", "", "release channel filter")
 	cmd.Flags().StringVar(&version, "version", "", "release version filter")
 	return cmd
+}
+
+// runReleasesList queries the edge-release catalog and renders one line per
+// release (or a "none found" notice). Seam-extracted from the list handler so
+// the render contract is unit-tested with a fake Quartermaster client.
+func runReleasesList(ctx context.Context, w io.Writer, qm edgeReleaseQMClient, channel, version string) error {
+	resp, err := qm.ListEdgeReleases(ctx, &quartermasterpb.ListEdgeReleasesRequest{
+		Channel: strings.TrimSpace(channel),
+		Version: strings.TrimSpace(version),
+	})
+	if err != nil {
+		return err
+	}
+	if len(resp.GetReleases()) == 0 {
+		fmt.Fprintln(w, "No edge releases found.")
+		return nil
+	}
+	for _, release := range resp.GetReleases() {
+		if release == nil {
+			continue
+		}
+		when := "-"
+		if release.GetPublishedAt() != nil {
+			when = release.GetPublishedAt().AsTime().Format(time.RFC3339)
+		}
+		_, _ = fmt.Fprintf(w, " - %s/%s published=%s components=%s\n", release.GetChannel(), release.GetVersion(), when, release.GetComponentsJson())
+	}
+	return nil
 }
 
 func newClusterReleaseTargetCmd() *cobra.Command {
@@ -204,23 +221,13 @@ func newClusterReleaseTargetSetCmd() *cobra.Command {
 			}
 			cctx, cancel := clusterNodesRPCContext(cmd.Context(), rpcCtxCfg, edgeReleaseSyncRPCTimeout)
 			defer cancel()
-			resp, err := qm.SetClusterReleaseTarget(cctx, &quartermasterpb.SetClusterReleaseTargetRequest{Target: &quartermasterpb.ClusterReleaseTarget{
+			return runReleaseTargetSet(cctx, cmd.OutOrStdout(), qm, &quartermasterpb.ClusterReleaseTarget{
 				ClusterId:       clusterID,
 				Channel:         channel,
 				TargetVersion:   targetVersion,
 				RolloutPlanJson: firstNonEmpty(strings.TrimSpace(rolloutPlan), "{}"),
 				Paused:          paused,
-			}})
-			if err != nil {
-				return err
-			}
-			target := resp.GetTarget()
-			ux.Result(cmd.OutOrStdout(), []ux.ResultField{{
-				Key:    "release-target",
-				OK:     true,
-				Detail: fmt.Sprintf("cluster=%s track=%s version=%s paused=%t", target.GetClusterId(), target.GetChannel(), firstNonEmpty(target.GetTargetVersion(), "latest"), target.GetPaused()),
-			}})
-			return nil
+			})
 		},
 	}
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster ID or slug (defaults to active context)")
@@ -229,6 +236,23 @@ func newClusterReleaseTargetSetCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&paused, "paused", false, "save the target without automatic reconciliation")
 	cmd.Flags().StringVar(&rolloutPlan, "rollout-plan", "{}", "rollout plan JSON")
 	return cmd
+}
+
+// runReleaseTargetSet persists a fully-built release target and renders the
+// result. The caller owns all validation, persona-gated publishing, and target
+// construction; this seam covers only the SetClusterReleaseTarget call + render.
+func runReleaseTargetSet(ctx context.Context, w io.Writer, qm edgeReleaseQMClient, target *quartermasterpb.ClusterReleaseTarget) error {
+	resp, err := qm.SetClusterReleaseTarget(ctx, &quartermasterpb.SetClusterReleaseTargetRequest{Target: target})
+	if err != nil {
+		return err
+	}
+	t := resp.GetTarget()
+	ux.Result(w, []ux.ResultField{{
+		Key:    "release-target",
+		OK:     true,
+		Detail: fmt.Sprintf("cluster=%s track=%s version=%s paused=%t", t.GetClusterId(), t.GetChannel(), firstNonEmpty(t.GetTargetVersion(), "latest"), t.GetPaused()),
+	}})
+	return nil
 }
 
 func shouldPublishReleaseForTarget(ctxCfg fwcfg.Context) bool {
@@ -411,7 +435,7 @@ func existingReleaseTargetControlsWithRetry(cmd *cobra.Command, qm *qmclient.GRP
 	return rolloutPlan, paused, err
 }
 
-func existingReleaseTargetControls(ctx context.Context, qm *qmclient.GRPCClient, clusterID string) (string, bool, error) {
+func existingReleaseTargetControls(ctx context.Context, qm edgeReleaseQMClient, clusterID string) (string, bool, error) {
 	resp, err := qm.GetClusterReleaseTarget(ctx, &quartermasterpb.GetClusterReleaseTargetRequest{ClusterId: clusterID})
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
@@ -560,17 +584,22 @@ func newClusterReleaseTargetGetCmd() *cobra.Command {
 			defer func() { _ = qm.Close() }()
 			cctx, cancel := clusterNodesRPCContext(cmd.Context(), rpcCtxCfg, 15*time.Second)
 			defer cancel()
-			resp, err := qm.GetClusterReleaseTarget(cctx, &quartermasterpb.GetClusterReleaseTargetRequest{ClusterId: clusterID})
-			if err != nil {
-				return err
-			}
-			target := resp.GetTarget()
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "cluster=%s track=%s version=%s paused=%t rollout_plan=%s\n", target.GetClusterId(), target.GetChannel(), firstNonEmpty(target.GetTargetVersion(), "latest"), target.GetPaused(), target.GetRolloutPlanJson())
-			return nil
+			return runReleaseTargetGet(cctx, cmd.OutOrStdout(), qm, clusterID)
 		},
 	}
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster ID or slug (defaults to active context)")
 	return cmd
+}
+
+// runReleaseTargetGet fetches and renders a cluster's edge release target.
+func runReleaseTargetGet(ctx context.Context, w io.Writer, qm edgeReleaseQMClient, clusterID string) error {
+	resp, err := qm.GetClusterReleaseTarget(ctx, &quartermasterpb.GetClusterReleaseTargetRequest{ClusterId: clusterID})
+	if err != nil {
+		return err
+	}
+	target := resp.GetTarget()
+	_, _ = fmt.Fprintf(w, "cluster=%s track=%s version=%s paused=%t rollout_plan=%s\n", target.GetClusterId(), target.GetChannel(), firstNonEmpty(target.GetTargetVersion(), "latest"), target.GetPaused(), target.GetRolloutPlanJson())
+	return nil
 }
 
 type edgeReleaseArtifactSpec struct {

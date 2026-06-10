@@ -26,6 +26,7 @@ import (
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
@@ -690,43 +691,13 @@ func newClusterNodesListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, 15*time.Second)
-			defer cancel()
-			resp, err := qm.ListNodes(cctx, clusterID, nodeType, region, nil)
-			if err != nil {
-				return err
-			}
-			if output == "json" {
-				enc := json.NewEncoder(cmd.OutOrStdout())
-				enc.SetIndent("", "  ")
-				return enc.Encode(resp)
-			}
-
-			var health map[string]*foghorncontrolpb.GetNodeHealthResponse
+			var loadHealth clusterNodesHealthLoader
 			if withHealth {
-				health = loadNodeHealth(cmd, resp.GetNodes())
+				loadHealth = func(nodes []*quartermasterpb.InfrastructureNode) map[string]*foghorncontrolpb.GetNodeHealthResponse {
+					return loadNodeHealth(cmd, nodes)
+				}
 			}
-
-			ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Cluster nodes (%d)", len(resp.GetNodes())))
-			for _, n := range resp.GetNodes() {
-				mode := "-"
-				streams := "-"
-				if h := health[n.GetNodeId()]; h != nil {
-					mode = h.GetOperationalMode()
-					streams = fmt.Sprintf("%d", h.GetActiveStreams())
-				}
-				versions := "-"
-				if h := health[n.GetNodeId()]; h != nil {
-					versions = nodeComponentVersions(h.GetComponentVersions())
-				}
-				lastSeen := "-"
-				if n.GetLastHeartbeat() != nil {
-					lastSeen = n.GetLastHeartbeat().AsTime().Format(time.RFC3339)
-				}
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), " - %s node=%s type=%s cluster=%s mode=%s streams=%s versions=%s last_seen=%s\n",
-					n.GetNodeName(), n.GetNodeId(), n.GetNodeType(), n.GetClusterId(), mode, streams, versions, lastSeen)
-			}
-			return nil
+			return runClusterNodesList(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg, clusterID, nodeType, region, output == "json", loadHealth)
 		},
 	}
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "filter by cluster ID (defaults to active context cluster_id)")
@@ -734,6 +705,59 @@ func newClusterNodesListCmd() *cobra.Command {
 	cmd.Flags().StringVar(&region, "region", "", "filter by region")
 	cmd.Flags().BoolVar(&withHealth, "health", true, "include Foghorn health/mode data when foghorn_grpc_addr is configured")
 	return cmd
+}
+
+// clusterNodesListQM is the narrow Quartermaster surface runClusterNodesList needs.
+type clusterNodesListQM interface {
+	ListNodes(ctx context.Context, clusterID, nodeType, region string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListNodesResponse, error)
+}
+
+// clusterNodesHealthLoader resolves per-node Foghorn health for the nodes the
+// list RPC returned. It is nil when --health is off and is invoked only on the
+// text path, after the JSON short-circuit.
+type clusterNodesHealthLoader func(nodes []*quartermasterpb.InfrastructureNode) map[string]*foghorncontrolpb.GetNodeHealthResponse
+
+// runClusterNodesList lists cluster nodes and renders them. JSON output dumps
+// the raw response; text output joins each node with optional Foghorn health
+// (mode/streams/component versions) when loadHealth is non-nil.
+func runClusterNodesList(ctx context.Context, w io.Writer, qm clusterNodesListQM, ctxCfg fwcfg.Context, clusterID, nodeType, region string, outputJSON bool, loadHealth clusterNodesHealthLoader) error {
+	cctx, cancel := clusterNodesRPCContext(ctx, ctxCfg, 15*time.Second)
+	defer cancel()
+	resp, err := qm.ListNodes(cctx, clusterID, nodeType, region, nil)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+
+	var health map[string]*foghorncontrolpb.GetNodeHealthResponse
+	if loadHealth != nil {
+		health = loadHealth(resp.GetNodes())
+	}
+
+	ux.Heading(w, fmt.Sprintf("Cluster nodes (%d)", len(resp.GetNodes())))
+	for _, n := range resp.GetNodes() {
+		mode := "-"
+		streams := "-"
+		if h := health[n.GetNodeId()]; h != nil {
+			mode = h.GetOperationalMode()
+			streams = fmt.Sprintf("%d", h.GetActiveStreams())
+		}
+		versions := "-"
+		if h := health[n.GetNodeId()]; h != nil {
+			versions = nodeComponentVersions(h.GetComponentVersions())
+		}
+		lastSeen := "-"
+		if n.GetLastHeartbeat() != nil {
+			lastSeen = n.GetLastHeartbeat().AsTime().Format(time.RFC3339)
+		}
+		_, _ = fmt.Fprintf(w, " - %s node=%s type=%s cluster=%s mode=%s streams=%s versions=%s last_seen=%s\n",
+			n.GetNodeName(), n.GetNodeId(), n.GetNodeType(), n.GetClusterId(), mode, streams, versions, lastSeen)
+	}
+	return nil
 }
 
 func loadNodeHealth(cmd *cobra.Command, nodes []*quartermasterpb.InfrastructureNode) map[string]*foghorncontrolpb.GetNodeHealthResponse {
