@@ -1540,6 +1540,15 @@ func streamConfigsFromSeed(seed *ipcpb.ConfigSeed, base, nodeID string) map[stri
 		if def.GetName() == "processing" || def.GetName() == "dvr" {
 			entry["source"] = inertMistSource
 		}
+		// Pin processing streams to INFO logging. Release Mist builds compile
+		// at debug level 3 (WARN) and the boot-on-demand processing+ spawn
+		// chain bottoms out at the compiled default, silently hiding all proc
+		// activity (track creation, packet buffering, encoder fallbacks) for
+		// exactly the jobs that need debugging. The per-stream debug config
+		// propagates through input → buffer → process spawns.
+		if def.GetName() == "processing" {
+			entry["debug"] = 4
+		}
 		if def.GetName() == "live" {
 			entry["DVR"] = 120000
 			entry["resume"] = 1

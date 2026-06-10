@@ -792,6 +792,11 @@ loop:
 
 			case evt.Status == "clean":
 				log.WithField("process", evt.ProcessType).Info("Process exited cleanly")
+
+			default:
+				// Includes "stopped": the Mist supervisor deliberately retired the
+				// process and the event reason names the guard that did it.
+				log.WithFields(evtFields).Warn("Process exit event")
 			}
 
 		case <-progressTicker.C:
@@ -1046,6 +1051,10 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, m
 				log.WithFields(evtFields).Info("Process retrying while waiting for processing readiness")
 			case evt.Status == "clean":
 				log.WithFields(evtFields).Info("Process exited cleanly while waiting for processing readiness")
+			default:
+				// Includes "stopped": deliberate Mist supervisor stop; the reason
+				// names the guard that retired the process.
+				log.WithFields(evtFields).Warn("Process exit event while waiting for processing readiness")
 			}
 		}
 		for {

@@ -40,6 +40,11 @@ func TestStreamConfigsFromSeedSkipsWildcardInstances(t *testing.T) {
 	if got := streams["processing"]["process_controlled_realtime"]; got != true {
 		t.Fatalf("processing process_controlled_realtime = %v, want true from seed", got)
 	}
+	// Release Mist builds compile at debug level 3; the processing template
+	// pins level 4 so processing-job proc activity is observable in prod.
+	if got := streams["processing"]["debug"]; got != 4 {
+		t.Fatalf("processing debug = %v, want 4", got)
+	}
 	if got := streams["dvr"]["DVR"]; got != 120000 {
 		t.Fatalf("dvr DVR = %v, want 120000", got)
 	}

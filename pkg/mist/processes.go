@@ -132,11 +132,13 @@ func ReplaceLivepeerWithLocal(processesJSON string) string {
 			} else {
 				av["track_select"] = "video=maxbps&audio=none&subtitle=none"
 			}
-			if inhibit, ok := prof["track_inhibit"].(string); ok {
-				av["track_inhibit"] = inhibit
-			} else if inhibit, ok := p["track_inhibit"].(string); ok {
-				av["track_inhibit"] = inhibit
-			}
+			// track_inhibit is intentionally NOT carried over. Profile inhibits
+			// (e.g. "video=<1280x720") are authored for the single Livepeer
+			// process, where every rendition is that process's own track and so
+			// never inhibits it. Split into one AV process per profile, each
+			// rendition belongs to a different process: the 360p AV's output
+			// would match the 720p AV's inhibit and Mist's supervisor would
+			// stop the rest of the ladder.
 			copyProcessOption(av, prof, "inconsequential")
 			copyProcessOption(av, prof, "exit_unmask")
 			copyProcessOptionWithFallback(av, prof, p, "source_mask")

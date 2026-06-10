@@ -262,18 +262,22 @@ func TestReplaceLivepeerWithLocalInheritsProcessSourceMask(t *testing.T) {
 	}
 	proc := got[0]
 	checks := map[string]any{
-		"process":       "AV",
-		"codec":         "H264",
-		"resolution":    "x360",
-		"source_mask":   float64(4),
-		"target_mask":   float64(2),
-		"track_select":  "video=maxbps&audio=none&subtitle=none",
-		"track_inhibit": "video=<640x360",
+		"process":      "AV",
+		"codec":        "H264",
+		"resolution":   "x360",
+		"source_mask":  float64(4),
+		"target_mask":  float64(2),
+		"track_select": "video=maxbps&audio=none&subtitle=none",
 	}
 	for key, want := range checks {
 		if got := proc[key]; got != want {
 			t.Errorf("%s = %#v, want %#v", key, got, want)
 		}
+	}
+	// Profile/parent track_inhibit must not survive the split into per-profile
+	// AV processes: one rendition would inhibit the next rung's process.
+	if inhibit, ok := proc["track_inhibit"]; ok {
+		t.Errorf("track_inhibit = %#v, want absent", inhibit)
 	}
 }
 
