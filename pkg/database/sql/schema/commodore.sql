@@ -62,7 +62,8 @@ CREATE TABLE IF NOT EXISTS commodore.refresh_tokens (
     expires_at TIMESTAMP NOT NULL,
     created_at TIMESTAMP DEFAULT NOW(),
     rotated_at TIMESTAMP,
-    revoked BOOLEAN DEFAULT FALSE
+    revoked BOOLEAN DEFAULT FALSE,
+    replaced_by UUID -- successor issued by rotation; reuse with an unused successor = lost response, not theft
 );
 
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON commodore.refresh_tokens(user_id);

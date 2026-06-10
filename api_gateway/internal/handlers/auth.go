@@ -422,17 +422,21 @@ func (h *AuthHandlers) RefreshToken() gin.HandlerFunc {
 		resp, err := h.commodore.RefreshToken(c.Request.Context(), refreshToken)
 		if err != nil {
 			h.logger.WithError(err).Debug("Token refresh failed")
-			if isAuthServiceUnavailable(err) {
-				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "authentication service temporarily unavailable"})
+			// Only a definitive rejection may destroy the session. Clearing
+			// cookies on transient errors (or on the losing side of a
+			// concurrent refresh) would wipe the valid cookies a winning
+			// refresh just set.
+			if st, ok := status.FromError(err); ok && st.Code() == codes.Unauthenticated {
+				// Clear invalid cookies (must match Secure flag to actually clear).
+				isDev := config.IsDevelopment()
+				secure := !isDev
+				c.SetCookie(refreshTokenCookie, "", -1, "/", h.cookieDomain, secure, true)
+				c.SetCookie(accessTokenCookie, "", -1, "/", h.cookieDomain, secure, true)
+				c.SetCookie(tenantIDCookie, "", -1, "/", h.cookieDomain, secure, true)
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired refresh token"})
 				return
 			}
-			// Clear invalid cookies (must match Secure flag to actually clear).
-			isDev := config.IsDevelopment()
-			secure := !isDev
-			c.SetCookie(refreshTokenCookie, "", -1, "/", h.cookieDomain, secure, true)
-			c.SetCookie(accessTokenCookie, "", -1, "/", h.cookieDomain, secure, true)
-			c.SetCookie(tenantIDCookie, "", -1, "/", h.cookieDomain, secure, true)
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired refresh token"})
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "authentication service temporarily unavailable"})
 			return
 		}
 

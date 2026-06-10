@@ -148,6 +148,7 @@ type FakeCommodore struct {
 	ListStorageArtifactsFn        func(ctx context.Context, req *commodorepb.ListStorageArtifactsRequest) (*commodorepb.ListStorageArtifactsResponse, error)
 	ListVodAssetsFn               func(ctx context.Context, tenantID string, pagination *commonpb.CursorPaginationRequest, streamID *string, opts ...commodore.MediaListOptions) (*sharedpb.ListVodAssetsResponse, error)
 	LoginFn                       func(ctx context.Context, req *commodorepb.LoginRequest) (*commodorepb.AuthResponse, error)
+	RefreshTokenFn                func(ctx context.Context, refreshToken string) (*commodorepb.AuthResponse, error)
 	MintMistAdminSessionFn        func(ctx context.Context, req *commodorepb.MintMistAdminSessionRequest) (*commodorepb.MintMistAdminSessionResponse, error)
 	RegisterFn                    func(ctx context.Context, req *commodorepb.RegisterRequest) (*commodorepb.RegisterResponse, error)
 	ResolveIngestEndpointFn       func(ctx context.Context, streamKey, viewerIP string) (*sharedpb.IngestEndpointResponse, error)

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -8,7 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"frameworks/api_gateway/internal/clients/clientstest"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 
 	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc/codes"
@@ -196,6 +199,79 @@ func TestHandleEmailNotVerifiedLoginError(t *testing.T) {
 			}
 			if body["error"] != "email not verified" {
 				t.Fatalf("error: got %q, want %q", body["error"], "email not verified")
+			}
+		})
+	}
+}
+
+// TestRefreshToken_ErrorMapping locks the rule that only a definitive
+// Unauthenticated from Commodore may clear the auth cookies. Clearing on
+// transient errors (or on the losing side of a concurrent refresh) wipes the
+// valid cookies a winning refresh just set and logs the user out everywhere.
+func TestRefreshToken_ErrorMapping(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name           string
+		err            error
+		wantStatus     int
+		wantClearedJar bool
+	}{
+		{
+			name:           "unauthenticated clears cookies",
+			err:            status.Error(codes.Unauthenticated, "invalid or expired refresh token"),
+			wantStatus:     http.StatusUnauthorized,
+			wantClearedJar: true,
+		},
+		{
+			name:           "internal error keeps cookies",
+			err:            status.Error(codes.Internal, "database error"),
+			wantStatus:     http.StatusServiceUnavailable,
+			wantClearedJar: false,
+		},
+		{
+			name:           "unavailable keeps cookies",
+			err:            status.Error(codes.Unavailable, "circuit breaker open"),
+			wantStatus:     http.StatusServiceUnavailable,
+			wantClearedJar: false,
+		},
+		{
+			name:           "plain error keeps cookies",
+			err:            errors.New("network sad"),
+			wantStatus:     http.StatusServiceUnavailable,
+			wantClearedJar: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &AuthHandlers{
+				commodore: &clientstest.FakeCommodore{
+					RefreshTokenFn: func(_ context.Context, _ string) (*commodorepb.AuthResponse, error) {
+						return nil, tc.err
+					},
+				},
+				logger: logging.NewLogger(),
+			}
+
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/refresh", nil)
+			c.Request.AddCookie(&http.Cookie{Name: refreshTokenCookie, Value: "stale-token"})
+
+			h.RefreshToken()(c)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status: got %d, want %d", rec.Code, tc.wantStatus)
+			}
+			cleared := false
+			for _, cookie := range rec.Result().Cookies() {
+				if cookie.Name == refreshTokenCookie && cookie.MaxAge < 0 {
+					cleared = true
+				}
+			}
+			if cleared != tc.wantClearedJar {
+				t.Fatalf("refresh cookie cleared = %v, want %v", cleared, tc.wantClearedJar)
 			}
 		})
 	}

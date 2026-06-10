@@ -1,6 +1,7 @@
 import { writable } from "svelte/store";
 import { browser } from "$app/environment";
 import { authAPI } from "$lib/authAPI.js";
+import { refreshAuthSession } from "$lib/auth/refresh";
 import { initializeWebSocket, disconnectWebSocket } from "./realtime.js";
 
 interface User {
@@ -91,11 +92,35 @@ function createAuthStore() {
   });
   let checkAuthPromise: Promise<void> | null = null;
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
   function stopRefreshLoop() {
     if (refreshTimer) {
       clearInterval(refreshTimer);
       refreshTimer = null;
+    }
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+  }
+
+  // One-shot retry after a transient refresh failure (network blip, backend
+  // restart) so a healthy session recovers without waiting a full interval.
+  function scheduleRefreshRetry() {
+    if (!browser || retryTimer) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      void refreshSession({ restartSocket: false });
+    }, 30 * 1000);
+  }
+
+  function readStoredUser(): User | null {
+    try {
+      const stored = localStorage.getItem("user");
+      return stored ? (JSON.parse(stored) as User) : null;
+    } catch {
+      return null;
     }
   }
 
@@ -110,26 +135,28 @@ function createAuthStore() {
   }
 
   async function refreshSession({ restartSocket = true } = {}): Promise<boolean> {
-    try {
-      const refreshResponse = await authAPI.post<{ user: User }>("/refresh");
-      const { user } = refreshResponse.data;
+    const result = await refreshAuthSession();
 
-      localStorage.setItem("user", JSON.stringify(user));
-
-      set({
+    if (result === "ok") {
+      const user = readStoredUser();
+      update((state) => ({
         isAuthenticated: true,
-        user,
+        user: user ?? state.user,
         loading: false,
         error: null,
         initialized: true,
-      });
+      }));
 
       startRefreshLoop();
       if (restartSocket) {
         initializeWebSocket();
       }
       return true;
-    } catch {
+    }
+
+    if (result === "unauthorized") {
+      // The backend definitively rejected the refresh token: the session is
+      // dead and local state must reflect that.
       stopRefreshLoop();
       disconnectWebSocket();
       localStorage.removeItem("user");
@@ -143,6 +170,12 @@ function createAuthStore() {
       });
       return false;
     }
+
+    // Transient failure: the cookies may still be valid (e.g. the network
+    // isn't back yet after wake-from-sleep). Keep the session and retry.
+    update((state) => ({ ...state, loading: false, initialized: true }));
+    scheduleRefreshRetry();
+    return false;
   }
 
   return {

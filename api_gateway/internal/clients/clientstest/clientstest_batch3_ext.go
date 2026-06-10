@@ -71,6 +71,14 @@ func (f *FakeCommodore) Login(ctx context.Context, req *commodorepb.LoginRequest
 	return f.LoginFn(ctx, req)
 }
 
+func (f *FakeCommodore) RefreshToken(ctx context.Context, refreshToken string) (*commodorepb.AuthResponse, error) {
+	f.Calls++
+	if f.RefreshTokenFn == nil {
+		panic("FakeCommodore.RefreshToken not stubbed")
+	}
+	return f.RefreshTokenFn(ctx, refreshToken)
+}
+
 func (f *FakeCommodore) MintMistAdminSession(ctx context.Context, req *commodorepb.MintMistAdminSessionRequest) (*commodorepb.MintMistAdminSessionResponse, error) {
 	f.Calls++
 	if f.MintMistAdminSessionFn == nil {

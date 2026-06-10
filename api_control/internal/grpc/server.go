@@ -4151,23 +4151,37 @@ func (s *CommodoreServer) Logout(ctx context.Context, req *commodorepb.LogoutReq
 	}, nil
 }
 
-// RefreshToken exchanges a refresh token for a new access token
+// RefreshToken exchanges a refresh token for a new access token. Rotation is
+// transactional (lock -> issue -> rotate -> commit) so a request can never
+// leave a half-rotated session behind. Replay of a rotated token within the
+// grace period is a legitimate concurrent-tab race and issues a fresh pair;
+// replay after the grace period is theft UNLESS the recorded successor was
+// never used, which means our rotation response never reached the client
+// (e.g. laptop slept mid-refresh) and the session is recovered instead.
 func (s *CommodoreServer) RefreshToken(ctx context.Context, req *commodorepb.RefreshTokenRequest) (*commodorepb.AuthResponse, error) {
 	refreshToken := req.GetRefreshToken()
 	if refreshToken == "" {
 		return nil, status.Error(codes.InvalidArgument, "refresh token required")
 	}
 
-	// Hash the token and look it up in the database
 	tokenHash := hashToken(refreshToken)
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
+	}
+	defer s.rollbackTx(tx)
 
 	var tokenID, userID, tenantID string
 	var revoked bool
 	var rotatedAt sql.NullTime
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, user_id, tenant_id, revoked, rotated_at FROM commodore.refresh_tokens
+	var replacedBy sql.NullString
+	err = tx.QueryRowContext(ctx, `
+		SELECT id, user_id, tenant_id, revoked, rotated_at, replaced_by
+		FROM commodore.refresh_tokens
 		WHERE token_hash = $1 AND expires_at > NOW()
-	`, tokenHash).Scan(&tokenID, &userID, &tenantID, &revoked, &rotatedAt)
+		FOR UPDATE
+	`, tokenHash).Scan(&tokenID, &userID, &tenantID, &revoked, &rotatedAt, &replacedBy)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.Unauthenticated, "invalid or expired refresh token")
@@ -4177,53 +4191,68 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *commodorepb.Ref
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	// Near-simultaneous browser refreshes can reuse the just-rotated token.
-	// Treat older reuse as a stolen-token signal and revoke the session family.
+	rotateCurrent := !revoked
+	var staleSuccessorID string
+
 	if revoked {
 		if rotatedAt.Valid && time.Since(rotatedAt.Time) <= refreshTokenReuseGracePeriod {
+			// Concurrent refreshes (multiple tabs, timer + 401-retry) replay
+			// the just-rotated token; issue a fresh pair instead of failing.
 			s.logger.WithFields(logging.Fields{
 				"user_id":    userID,
 				"tenant_id":  tenantID,
 				"rotated_at": rotatedAt.Time,
-			}).Warn("Refresh token reuse detected during rotation grace period")
-			return nil, status.Error(codes.Unauthenticated, "invalid or expired refresh token")
-		}
-		s.logger.WithFields(logging.Fields{
-			"user_id":   userID,
-			"tenant_id": tenantID,
-		}).Warn("Refresh token reuse detected, revoking all user sessions")
-		if _, revokeErr := s.db.ExecContext(ctx, `
-			UPDATE commodore.refresh_tokens SET revoked = true
-			WHERE user_id = $1 AND tenant_id = $2
-		`, userID, tenantID); revokeErr != nil {
-			s.logger.WithError(revokeErr).WithFields(logging.Fields{
+			}).Info("Refresh token replayed within rotation grace period; issuing fresh session")
+		} else {
+			successorUsed := true
+			if replacedBy.Valid {
+				var successorRevoked bool
+				successorErr := tx.QueryRowContext(ctx, `
+					SELECT revoked FROM commodore.refresh_tokens WHERE id = $1
+				`, replacedBy.String).Scan(&successorRevoked)
+				switch {
+				case successorErr == nil:
+					successorUsed = successorRevoked
+				case errors.Is(successorErr, sql.ErrNoRows):
+					// Successor gone (e.g. explicit logout); treat as used.
+				default:
+					s.logger.WithError(successorErr).Error("Database error checking refresh token successor")
+					return nil, status.Errorf(codes.Internal, "database error: %v", successorErr)
+				}
+			}
+			if successorUsed {
+				// Old token and its replacement are both in play: two parties
+				// share this session line. Revoke everything.
+				s.logger.WithFields(logging.Fields{
+					"user_id":   userID,
+					"tenant_id": tenantID,
+				}).Warn("Refresh token reuse detected, revoking all user sessions")
+				if _, revokeErr := tx.ExecContext(ctx, `
+					UPDATE commodore.refresh_tokens SET revoked = true
+					WHERE user_id = $1 AND tenant_id = $2
+				`, userID, tenantID); revokeErr != nil {
+					s.logger.WithError(revokeErr).WithFields(logging.Fields{
+						"user_id":   userID,
+						"tenant_id": tenantID,
+					}).Error("Failed to revoke sessions after refresh token reuse detection")
+				} else if commitErr := tx.Commit(); commitErr != nil {
+					s.logger.WithError(commitErr).Error("Failed to commit session revocation")
+				}
+				return nil, status.Error(codes.Unauthenticated, "session invalidated")
+			}
+			// The replacement we issued was never used: the rotation response
+			// never reached the client. Recover the session instead of
+			// treating the client as an attacker.
+			staleSuccessorID = replacedBy.String
+			s.logger.WithFields(logging.Fields{
 				"user_id":   userID,
 				"tenant_id": tenantID,
-			}).Error("Failed to revoke sessions after refresh token reuse detection")
+			}).Warn("Refresh token rotation response was lost; recovering session with fresh tokens")
 		}
-		return nil, status.Error(codes.Unauthenticated, "session invalidated")
 	}
 
-	// Revoke the old refresh token (don't delete - keep for reuse detection)
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE commodore.refresh_tokens SET revoked = true, rotated_at = NOW()
-		WHERE id = $1 AND revoked = false
-	`, tokenID)
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to rotate refresh token")
-		return nil, status.Errorf(codes.Internal, "failed to rotate refresh token: %v", err)
-	}
-	if rows, rowsErr := result.RowsAffected(); rowsErr == nil && rows == 0 {
-		s.logger.WithFields(logging.Fields{
-			"user_id":   userID,
-			"tenant_id": tenantID,
-		}).Warn("Refresh token was already rotated")
-		return nil, status.Error(codes.Unauthenticated, "invalid or expired refresh token")
-	}
-
-	// Look up user details
 	var user commodoreUserRecord
-	err = scanCommodoreUserForRefresh(s.db.QueryRowContext(ctx, `
+	err = scanCommodoreUserForRefresh(tx.QueryRowContext(ctx, `
 		SELECT email, role, permissions, first_name, last_name, is_active, verified, created_at, updated_at
 		FROM commodore.users WHERE id = $1 AND tenant_id = $2
 	`, userID, tenantID), &user)
@@ -4251,13 +4280,46 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *commodorepb.Ref
 	newRefreshHash := hashToken(newRefreshToken)
 	refreshExpiry := time.Now().Add(30 * 24 * time.Hour)
 
-	_, err = s.db.ExecContext(ctx, `
+	var newTokenID string
+	if err := tx.QueryRowContext(ctx, `
 		INSERT INTO commodore.refresh_tokens (tenant_id, user_id, token_hash, expires_at)
 		VALUES ($1, $2, $3, $4)
-	`, tenantID, userID, newRefreshHash, refreshExpiry)
-	if err != nil {
+		RETURNING id
+	`, tenantID, userID, newRefreshHash, refreshExpiry).Scan(&newTokenID); err != nil {
 		s.logger.WithError(err).Error("Failed to store new refresh token")
-		// Don't fail - access token is still valid
+		return nil, status.Errorf(codes.Internal, "failed to store refresh token: %v", err)
+	}
+
+	if rotateCurrent {
+		// Revoke the old refresh token (don't delete - keep for reuse detection)
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE commodore.refresh_tokens
+			SET revoked = true, rotated_at = NOW(), replaced_by = $2
+			WHERE id = $1
+		`, tokenID, newTokenID); err != nil {
+			s.logger.WithError(err).Error("Failed to rotate refresh token")
+			return nil, status.Errorf(codes.Internal, "failed to rotate refresh token: %v", err)
+		}
+	} else if staleSuccessorID != "" {
+		// Retire the undelivered successor and re-point the presented token
+		// at its actual replacement so a repeated lost response still
+		// resolves as recovery, not theft.
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE commodore.refresh_tokens SET revoked = true WHERE id = $1
+		`, staleSuccessorID); err != nil {
+			s.logger.WithError(err).Error("Failed to retire undelivered refresh token successor")
+			return nil, status.Errorf(codes.Internal, "failed to rotate refresh token: %v", err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE commodore.refresh_tokens SET replaced_by = $2 WHERE id = $1
+		`, tokenID, newTokenID); err != nil {
+			s.logger.WithError(err).Error("Failed to re-link recovered refresh token")
+			return nil, status.Errorf(codes.Internal, "failed to rotate refresh token: %v", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to commit: %v", err)
 	}
 
 	expiresAt := time.Now().Add(15 * time.Minute)
@@ -7380,7 +7442,10 @@ func (s *CommodoreServer) RevokeAPIToken(ctx context.Context, req *commodorepb.R
 // ============================================================================
 
 const (
-	refreshTokenReuseGracePeriod = 2 * time.Minute
+	// Replays of a rotated refresh token within this window are treated as
+	// concurrent-tab races (fresh tokens issued), not theft. Access tokens
+	// are 15-minute bearer tokens, so this is not a weaker exposure.
+	refreshTokenReuseGracePeriod = 10 * time.Minute
 
 	eventAuthLoginSucceeded     = "auth_login_succeeded"
 	eventAuthLoginFailed        = "auth_login_failed"

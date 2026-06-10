@@ -100,6 +100,25 @@ func TestGetMe_MapsInlineUserAndWalletRows(t *testing.T) {
 	}
 }
 
+func refreshTokenUserRows() *sqlmock.Rows {
+	createdAt := time.Unix(1_700_100_000, 0).UTC()
+	updatedAt := createdAt.Add(15 * time.Minute)
+	return sqlmock.NewRows([]string{
+		"email", "role", "permissions", "first_name", "last_name",
+		"is_active", "verified", "created_at", "updated_at",
+	}).AddRow(
+		"refresh@example.com",
+		"member",
+		"{billing_read,billing_write}",
+		"Grace",
+		"Hopper",
+		true,
+		true,
+		createdAt,
+		updatedAt,
+	)
+}
+
 func TestRefreshToken_MapsInlineUserStructToAuthResponse(t *testing.T) {
 	t.Setenv("JWT_SECRET", "test-secret-for-refresh-token")
 
@@ -110,38 +129,26 @@ func TestRefreshToken_MapsInlineUserStructToAuthResponse(t *testing.T) {
 	defer db.Close()
 
 	refreshToken := "refresh-token-raw"
-	createdAt := time.Unix(1_700_100_000, 0).UTC()
-	updatedAt := createdAt.Add(15 * time.Minute)
 
+	mock.ExpectBegin()
 	mock.ExpectQuery("FROM commodore.refresh_tokens").
 		WithArgs(hashToken(refreshToken)).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "revoked", "rotated_at"}).
-			AddRow("rt-1", "user-2", "tenant-2", false, nil))
-
-	mock.ExpectExec("UPDATE commodore.refresh_tokens SET revoked = true, rotated_at = NOW\\(\\)").
-		WithArgs("rt-1").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "revoked", "rotated_at", "replaced_by"}).
+			AddRow("rt-1", "user-2", "tenant-2", false, nil, nil))
 
 	mock.ExpectQuery("FROM commodore.users WHERE id = \\$1 AND tenant_id = \\$2").
 		WithArgs("user-2", "tenant-2").
-		WillReturnRows(sqlmock.NewRows([]string{
-			"email", "role", "permissions", "first_name", "last_name",
-			"is_active", "verified", "created_at", "updated_at",
-		}).AddRow(
-			"refresh@example.com",
-			"member",
-			"{billing_read,billing_write}",
-			"Grace",
-			"Hopper",
-			true,
-			true,
-			createdAt,
-			updatedAt,
-		))
+		WillReturnRows(refreshTokenUserRows())
 
-	mock.ExpectExec("INSERT INTO commodore.refresh_tokens").
+	mock.ExpectQuery("INSERT INTO commodore.refresh_tokens").
 		WithArgs("tenant-2", "user-2", sqlmock.AnyArg(), sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("rt-2"))
+
+	mock.ExpectExec("UPDATE commodore.refresh_tokens").
+		WithArgs("rt-1", "rt-2").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	mock.ExpectCommit()
 
 	server := &CommodoreServer{db: db, logger: logrus.New()}
 	resp, err := server.RefreshToken(context.Background(), &commodorepb.RefreshTokenRequest{RefreshToken: refreshToken})
@@ -176,7 +183,9 @@ func TestRefreshToken_MapsInlineUserStructToAuthResponse(t *testing.T) {
 	}
 }
 
-func TestRefreshToken_RecentRevokedTokenDoesNotRevokeSessionFamily(t *testing.T) {
+func TestRefreshToken_ReplayWithinGraceIssuesFreshSession(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-secret-for-refresh-token")
+
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("failed to create sqlmock: %v", err)
@@ -184,15 +193,159 @@ func TestRefreshToken_RecentRevokedTokenDoesNotRevokeSessionFamily(t *testing.T)
 	defer db.Close()
 
 	refreshToken := "refresh-token-raw"
+
+	mock.ExpectBegin()
 	mock.ExpectQuery("FROM commodore.refresh_tokens").
 		WithArgs(hashToken(refreshToken)).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "revoked", "rotated_at"}).
-			AddRow("rt-1", "user-2", "tenant-2", true, time.Now().Add(-time.Minute)))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "revoked", "rotated_at", "replaced_by"}).
+			AddRow("rt-1", "user-2", "tenant-2", true, time.Now().Add(-time.Minute), "rt-2"))
+
+	mock.ExpectQuery("FROM commodore.users WHERE id = \\$1 AND tenant_id = \\$2").
+		WithArgs("user-2", "tenant-2").
+		WillReturnRows(refreshTokenUserRows())
+
+	mock.ExpectQuery("INSERT INTO commodore.refresh_tokens").
+		WithArgs("tenant-2", "user-2", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("rt-3"))
+
+	mock.ExpectCommit()
+
+	server := &CommodoreServer{db: db, logger: logrus.New()}
+	resp, err := server.RefreshToken(context.Background(), &commodorepb.RefreshTokenRequest{RefreshToken: refreshToken})
+	if err != nil {
+		t.Fatalf("expected within-grace replay to issue a fresh session, got: %v", err)
+	}
+	if resp.GetToken() == "" || resp.GetRefreshToken() == "" {
+		t.Fatal("expected access token and refresh token in response")
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestRefreshToken_LostRotationResponseRecoversSession(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-secret-for-refresh-token")
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	refreshToken := "refresh-token-raw"
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("FROM commodore.refresh_tokens\\s+WHERE token_hash").
+		WithArgs(hashToken(refreshToken)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "revoked", "rotated_at", "replaced_by"}).
+			AddRow("rt-1", "user-2", "tenant-2", true, time.Now().Add(-time.Hour), "rt-2"))
+
+	// Successor was never used: the rotation response never reached the client.
+	mock.ExpectQuery("SELECT revoked FROM commodore.refresh_tokens WHERE id").
+		WithArgs("rt-2").
+		WillReturnRows(sqlmock.NewRows([]string{"revoked"}).AddRow(false))
+
+	mock.ExpectQuery("FROM commodore.users WHERE id = \\$1 AND tenant_id = \\$2").
+		WithArgs("user-2", "tenant-2").
+		WillReturnRows(refreshTokenUserRows())
+
+	mock.ExpectQuery("INSERT INTO commodore.refresh_tokens").
+		WithArgs("tenant-2", "user-2", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("rt-3"))
+
+	mock.ExpectExec("UPDATE commodore.refresh_tokens SET revoked = true WHERE id").
+		WithArgs("rt-2").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	mock.ExpectExec("UPDATE commodore.refresh_tokens SET replaced_by").
+		WithArgs("rt-1", "rt-3").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	mock.ExpectCommit()
+
+	server := &CommodoreServer{db: db, logger: logrus.New()}
+	resp, err := server.RefreshToken(context.Background(), &commodorepb.RefreshTokenRequest{RefreshToken: refreshToken})
+	if err != nil {
+		t.Fatalf("expected lost-rotation replay to recover the session, got: %v", err)
+	}
+	if resp.GetToken() == "" || resp.GetRefreshToken() == "" {
+		t.Fatal("expected access token and refresh token in response")
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestRefreshToken_ReuseWithUsedSuccessorRevokesSessionFamily(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	refreshToken := "refresh-token-raw"
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("FROM commodore.refresh_tokens\\s+WHERE token_hash").
+		WithArgs(hashToken(refreshToken)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "revoked", "rotated_at", "replaced_by"}).
+			AddRow("rt-1", "user-2", "tenant-2", true, time.Now().Add(-time.Hour), "rt-2"))
+
+	// Successor is itself rotated: two parties share this session line.
+	mock.ExpectQuery("SELECT revoked FROM commodore.refresh_tokens WHERE id").
+		WithArgs("rt-2").
+		WillReturnRows(sqlmock.NewRows([]string{"revoked"}).AddRow(true))
+
+	mock.ExpectExec("UPDATE commodore.refresh_tokens SET revoked = true\\s+WHERE user_id").
+		WithArgs("user-2", "tenant-2").
+		WillReturnResult(sqlmock.NewResult(0, 3))
+
+	mock.ExpectCommit()
 
 	server := &CommodoreServer{db: db, logger: logrus.New()}
 	_, err = server.RefreshToken(context.Background(), &commodorepb.RefreshTokenRequest{RefreshToken: refreshToken})
 	if err == nil {
-		t.Fatal("expected refresh token reuse to be rejected")
+		t.Fatal("expected refresh token reuse with a used successor to be rejected")
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestRefreshToken_StoreFailureRollsBack(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-secret-for-refresh-token")
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	refreshToken := "refresh-token-raw"
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("FROM commodore.refresh_tokens").
+		WithArgs(hashToken(refreshToken)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "revoked", "rotated_at", "replaced_by"}).
+			AddRow("rt-1", "user-2", "tenant-2", false, nil, nil))
+
+	mock.ExpectQuery("FROM commodore.users WHERE id = \\$1 AND tenant_id = \\$2").
+		WithArgs("user-2", "tenant-2").
+		WillReturnRows(refreshTokenUserRows())
+
+	mock.ExpectQuery("INSERT INTO commodore.refresh_tokens").
+		WithArgs("tenant-2", "user-2", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnError(context.DeadlineExceeded)
+
+	mock.ExpectRollback()
+
+	server := &CommodoreServer{db: db, logger: logrus.New()}
+	_, err = server.RefreshToken(context.Background(), &commodorepb.RefreshTokenRequest{RefreshToken: refreshToken})
+	if err == nil {
+		t.Fatal("expected refresh to fail when the new token cannot be stored")
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {

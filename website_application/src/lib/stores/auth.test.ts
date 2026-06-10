@@ -27,18 +27,18 @@ describe("auth store", () => {
   it("shares concurrent auth checks so only one refresh request is sent", async () => {
     const authAPI = {
       get: vi.fn().mockRejectedValue(new Error("expired")),
-      post: vi.fn().mockResolvedValue({
-        data: {
-          user: {
-            id: "user-1",
-            email: "user@example.com",
-            tenant_id: "tenant-1",
-          },
-        },
-      }),
+      post: vi.fn(),
     };
+    const refreshAuthSession = vi.fn().mockImplementation(async () => {
+      localStorage.setItem(
+        "user",
+        JSON.stringify({ id: "user-1", email: "user@example.com", tenant_id: "tenant-1" })
+      );
+      return "ok";
+    });
 
     vi.doMock("$lib/authAPI.js", () => ({ authAPI }));
+    vi.doMock("$lib/auth/refresh", () => ({ refreshAuthSession }));
     vi.doMock("$app/environment", () => ({ browser: false }));
     vi.doMock("./realtime.js", () => ({
       initializeWebSocket: vi.fn(),
@@ -50,8 +50,70 @@ describe("auth store", () => {
     await Promise.all([auth.checkAuth(), auth.checkAuth()]);
 
     expect(authAPI.get).toHaveBeenCalledTimes(1);
-    expect(authAPI.post).toHaveBeenCalledTimes(1);
-    expect(authAPI.post).toHaveBeenCalledWith("/refresh");
+    expect(refreshAuthSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the session on a transient refresh failure", async () => {
+    const authAPI = {
+      get: vi.fn().mockRejectedValue(new Error("network down")),
+      post: vi.fn().mockResolvedValue({
+        data: { user: { id: "user-1", email: "user@example.com" } },
+      }),
+    };
+    const refreshAuthSession = vi.fn().mockResolvedValue("transient");
+    const disconnectWebSocket = vi.fn();
+
+    vi.doMock("$lib/authAPI.js", () => ({ authAPI }));
+    vi.doMock("$lib/auth/refresh", () => ({ refreshAuthSession }));
+    vi.doMock("$app/environment", () => ({ browser: false }));
+    vi.doMock("./realtime.js", () => ({
+      initializeWebSocket: vi.fn(),
+      disconnectWebSocket,
+    }));
+
+    const { auth } = await import("./auth");
+    const { get } = await import("svelte/store");
+
+    await auth.login("user@example.com", "password");
+    expect(get(auth).isAuthenticated).toBe(true);
+
+    await auth.checkAuth(true);
+
+    expect(get(auth).isAuthenticated).toBe(true);
+    expect(get(auth).loading).toBe(false);
+    expect(disconnectWebSocket).not.toHaveBeenCalled();
+    expect(localStorage.getItem("user")).not.toBeNull();
+  });
+
+  it("logs out only on a definitive unauthorized refresh", async () => {
+    const authAPI = {
+      get: vi.fn().mockRejectedValue(new Error("expired")),
+      post: vi.fn().mockResolvedValue({
+        data: { user: { id: "user-1", email: "user@example.com" } },
+      }),
+    };
+    const refreshAuthSession = vi.fn().mockResolvedValue("unauthorized");
+    const disconnectWebSocket = vi.fn();
+
+    vi.doMock("$lib/authAPI.js", () => ({ authAPI }));
+    vi.doMock("$lib/auth/refresh", () => ({ refreshAuthSession }));
+    vi.doMock("$app/environment", () => ({ browser: false }));
+    vi.doMock("./realtime.js", () => ({
+      initializeWebSocket: vi.fn(),
+      disconnectWebSocket,
+    }));
+
+    const { auth } = await import("./auth");
+    const { get } = await import("svelte/store");
+
+    await auth.login("user@example.com", "password");
+    expect(get(auth).isAuthenticated).toBe(true);
+
+    await auth.checkAuth(true);
+
+    expect(get(auth).isAuthenticated).toBe(false);
+    expect(disconnectWebSocket).toHaveBeenCalled();
+    expect(localStorage.getItem("user")).toBeNull();
   });
 
   it("preserves unverified-account login error codes for route handling", async () => {
