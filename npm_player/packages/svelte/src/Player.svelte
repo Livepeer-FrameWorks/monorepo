@@ -742,6 +742,7 @@
               onJumpToLive={() => playerStore?.getController()?.jumpToLive()}
               controllerSeekableStart={storeState?.controllerSeekableStart ?? 0}
               controllerLiveEdge={storeState?.controllerLiveEdge ?? 0}
+              controllerCanSeek={storeState?.controllerCanSeek}
               thumbnailCues={storeState?.thumbnailCues ?? []}
               {activeLocale}
               onLocaleChange={(l) => {

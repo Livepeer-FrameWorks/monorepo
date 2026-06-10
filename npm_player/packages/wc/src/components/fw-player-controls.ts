@@ -272,7 +272,7 @@ export class FwPlayerControls extends LitElement {
       seekableStart,
       liveEdge,
       hasDvrWindow,
-      canSeek: baseCanSeek && (!isLive || hasDvrWindow),
+      canSeek: baseCanSeek,
       commitOnRelease: isLive,
       liveThresholds,
     };

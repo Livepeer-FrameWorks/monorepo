@@ -71,6 +71,8 @@
     controllerSeekableStart?: number;
     /** Controller-derived live edge (ms) — preferred over player direct */
     controllerLiveEdge?: number;
+    /** Controller-derived canSeek — preferred over player direct */
+    controllerCanSeek?: boolean;
     /** Thumbnail sprite cues for seek bar preview */
     thumbnailCues?: ThumbnailCue[];
   }
@@ -94,6 +96,7 @@
     onLocaleChange = undefined,
     controllerSeekableStart = undefined,
     controllerLiveEdge = undefined,
+    controllerCanSeek = undefined,
     thumbnailCues = undefined,
   }: Props = $props();
 
@@ -347,7 +350,10 @@
   // Live thresholds with buffer window scaling
   let liveThresholds = $derived(calculateLiveThresholds(sourceType, isWebRTC, bufferWindowMs));
 
-  // Can seek - check player's canSeek method first (for WebCodecs, MEWS server-side seeking)
+  // Fallback when no controller-derived canSeek is provided (standalone/custom usage).
+  // The player.canSeek() branch reads no reactive state, so this derived freezes at
+  // its first player-present evaluation — fine as a static fallback, wrong as the
+  // primary gate (WHEP's canSeek flips true only once its data channel opens).
   let baseCanSeek = $derived.by(() => {
     // Check if current player has canSeek method
     const player = globalPlayerManager.getCurrentPlayer();
@@ -362,7 +368,9 @@
       bufferWindowMs,
     });
   });
-  let canSeek = $derived(baseCanSeek);
+  // Controller owns canSeek (recomputed on every seeking-state update, including
+  // player-specific signals like WHEP's MistControl channel opening).
+  let canSeek = $derived(controllerCanSeek ?? baseCanSeek);
 
   // Update state from video events
   $effect(() => {

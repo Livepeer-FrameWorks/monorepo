@@ -2496,7 +2496,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     // Emit event for wrappers to consume
     // Only emit if something meaningful changed to avoid spam
-    if (seekableChanged || wasWebRTC !== this._isWebRTC) {
+    if (seekableChanged || wasWebRTC !== this._isWebRTC || prevCanSeek !== this._canSeek) {
       this.emit("seekingStateChange", {
         seekableStart: this._seekableStart,
         liveEdge: this._liveEdge,
