@@ -195,7 +195,13 @@ apex) covers every service. The cert is distributed via ConfigSeed
 to every edge in clusters the tenant subscribes to — regardless of
 cluster kind (platform-official, tenant-private, third-party
 marketplace). Caddy SNI on each edge presents the right cert per
-Host header. Bunny smart records under `cdn.{base}` resolve to the
+Host header. On Foghorn hosts (which serve
+`foghorn.{tenant}.cdn.{base}` playback), Privateer materializes the
+same tenant bundles under
+`/etc/frameworks/ingress/tls/tenant-alias/{tenant}/` and nginx
+resolves the cert per handshake from `$ssl_server_name`, proxying to
+the local Foghorn — one static catch-all vhost serves every alias
+tenant. Bunny smart records under `cdn.{base}` resolve to the
 union of edges across the tenant's subscribed clusters.
 
 This is the marketplace-spanning feature: one URL that geo-balances

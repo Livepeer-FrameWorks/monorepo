@@ -10,6 +10,7 @@ import (
 	"frameworks/cli/pkg/ansiblerun"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ingress"
 )
 
 func NewReverseProxyProvisioner(serviceName string, defaultPort int, pool *ssh.Pool) (Provisioner, error) {
@@ -88,12 +89,23 @@ func reverseProxyComposeVars(serviceName string, defaultPort int, config Service
 	}
 
 	sites := normalizeProxySites(config.Metadata, "docker")
+	var tap *tenantAliasPlayback
+	if serviceName == "nginx" {
+		tap = tenantAliasPlaybackFromMetadata(config.Metadata)
+	}
 	containerPort := 80
 	httpsPort := metaInt(config.Metadata, "https_port")
-	if httpsPort == 0 && proxySitesNeedHTTPS(serviceName, sites) {
+	if httpsPort == 0 && (proxySitesNeedHTTPS(serviceName, sites) || tap != nil) {
 		httpsPort = 443
 	}
-	configMounts, configFiles := reverseProxyContainerConfigs(serviceName, containerPort, sites)
+	certMounts := proxySiteVolumeMounts(sites)
+	if tap != nil {
+		// Privateer materializes per-tenant alias certs under this host dir;
+		// bind-mounting the directory makes new tenant subdirs visible to the
+		// containerized nginx without compose changes.
+		certMounts = append(certMounts, ingress.TLSRoot+"/"+ingress.TenantAliasDirName)
+	}
+	configMounts, configFiles := reverseProxyContainerConfigs(serviceName, containerPort, sites, tap)
 	compose := reverseProxyComposeContent(
 		serviceName,
 		image,
@@ -101,7 +113,7 @@ func reverseProxyComposeVars(serviceName string, defaultPort int, config Service
 		containerPort,
 		httpsPort,
 		configMounts,
-		proxySiteVolumeMounts(sites),
+		certMounts,
 	)
 	return map[string]any{
 		"compose_stack_name":            serviceName,
@@ -111,7 +123,7 @@ func reverseProxyComposeVars(serviceName string, defaultPort int, config Service
 	}, nil
 }
 
-func reverseProxyContainerConfigs(serviceName string, port int, sites []proxySite) (map[string]string, map[string]any) {
+func reverseProxyContainerConfigs(serviceName string, port int, sites []proxySite, tap *tenantAliasPlayback) (map[string]string, map[string]any) {
 	switch serviceName {
 	case "caddy":
 		return map[string]string{"Caddyfile": "/etc/caddy/Caddyfile"}, map[string]any{"Caddyfile": renderCaddyfile(sites)}
@@ -122,7 +134,7 @@ func reverseProxyContainerConfigs(serviceName string, port int, sites []proxySit
 		}
 		files := map[string]any{
 			"nginx.conf":      renderNginxRootConfig("/etc/nginx/conf.d/frameworks.conf"),
-			"frameworks.conf": renderNginxConfig(port, sites),
+			"frameworks.conf": renderNginxConfig(port, sites, tap),
 		}
 		return mounts, files
 	}
@@ -238,11 +250,10 @@ func renderCaddyfile(sites []proxySite) string {
 	return b.String()
 }
 
-func renderNginxConfig(port int, sites []proxySite) string {
+func renderNginxConfig(port int, sites []proxySite, tap *tenantAliasPlayback) string {
 	var b strings.Builder
 	if len(sites) == 0 {
 		fmt.Fprintf(&b, "server {\n    listen %d default_server;\n    server_name _;\n    return 404;\n}\n", port)
-		return b.String()
 	}
 	for _, site := range sites {
 		if len(site.Domains) == 0 || site.Upstream == "" {
@@ -253,7 +264,70 @@ func renderNginxConfig(port int, sites []proxySite) string {
 			writeNginxServer(&b, 443, " ssl", site)
 		}
 	}
+	if tap != nil {
+		writeNginxTenantAliasPlayback(&b, tap)
+	}
 	return b.String()
+}
+
+// tenantAliasPlayback configures the SNI catch-all that serves
+// foghorn.<tenant>.<zone>.<root> playback hosts on Foghorn-fronting nginx.
+// Mirrors the Ansible role's nginx_tenant_alias_playback (native mode); this
+// Go renderer is the docker-mode parity path.
+type tenantAliasPlayback struct {
+	ServiceLabel string
+	ZoneLabel    string
+	RootDomain   string
+	UpstreamPort int
+}
+
+func tenantAliasPlaybackFromMetadata(metadata map[string]any) *tenantAliasPlayback {
+	raw, ok := metadata["tenant_alias_playback"].(map[string]any)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	tap := &tenantAliasPlayback{
+		ServiceLabel: stringValue(raw["service_label"]),
+		ZoneLabel:    stringValue(raw["zone_label"]),
+		RootDomain:   stringValue(raw["root_domain"]),
+		UpstreamPort: metaInt(raw, "upstream_port"),
+	}
+	if tap.RootDomain == "" {
+		return nil
+	}
+	if tap.ServiceLabel == "" {
+		tap.ServiceLabel = "foghorn"
+	}
+	if tap.ZoneLabel == "" {
+		tap.ZoneLabel = "cdn"
+	}
+	if tap.UpstreamPort == 0 {
+		tap.UpstreamPort = 18008
+	}
+	return tap
+}
+
+// writeNginxTenantAliasPlayback renders the tenant-alias catch-all: a map
+// deriving the alias subdomain from SNI, an :80 redirect server, and a :443
+// server whose cert paths are resolved per-handshake from Privateer's
+// tenant-alias directory. One static block serves every alias tenant; a
+// tenant whose cert is not yet on disk fails only its own TLS handshake
+// (variable cert paths are not validated by `nginx -t`).
+func writeNginxTenantAliasPlayback(b *strings.Builder, tap *tenantAliasPlayback) {
+	rootRe := strings.ReplaceAll(tap.RootDomain, ".", `\.`)
+	hostRe := fmt.Sprintf(`%s\.[a-z0-9][a-z0-9-]*\.%s\.%s`, tap.ServiceLabel, tap.ZoneLabel, rootRe)
+	aliasCertDir := ingress.TLSRoot + "/" + ingress.TenantAliasDirName
+	fmt.Fprintf(b, "map $ssl_server_name $fw_tenant_alias_sub {\n    ~^%s\\.(?<sub>[a-z0-9][a-z0-9-]*)\\.%s\\.%s$ $sub;\n    default \"\";\n}\n\n",
+		tap.ServiceLabel, tap.ZoneLabel, rootRe)
+	fmt.Fprintf(b, "server {\n    listen 80;\n    server_name ~^%s$;\n\n    location / {\n        return 308 https://$host$request_uri;\n    }\n}\n\n", hostRe)
+	fmt.Fprintf(b, "server {\n    listen 443 ssl;\n    server_name ~^%s$;\n    http2 on;\n    ssl_certificate %s/$fw_tenant_alias_sub/tls.crt;\n    ssl_certificate_key %s/$fw_tenant_alias_sub/tls.key;\n",
+		hostRe, aliasCertDir, aliasCertDir)
+	// Docker-mode nginx reaches the host-native foghorn via the compose
+	// extra_hosts gateway alias, matching normalizeProxyUpstream's rewrite.
+	upstream := fmt.Sprintf("host.docker.internal:%d", tap.UpstreamPort)
+	b.WriteString("\n    location / {\n")
+	writeNginxProxyBlock(b, proxySite{Upstream: upstream, Profile: "media_delivery"})
+	b.WriteString("    }\n}\n\n")
 }
 
 func writeCaddyProxyDirectives(b *strings.Builder, site proxySite) {

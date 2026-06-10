@@ -107,6 +107,22 @@ nginx_route_profiles:
     proxy_send_timeout: 300s
     websocket: false
 nginx_https_port: 443
+# Tenant-alias playback catch-all (Foghorn hosts). When enabled, a single
+# regex vhost serves https://<service_label>.<tenant>.<zone_label>.<root>/
+# (e.g. foghorn.acme.cdn.frameworks.network) for EVERY alias tenant, with
+# the per-tenant wildcard cert loaded per-handshake via $ssl_server_name
+# from {{ nginx_ingress_tls_root }}/tenant-alias/<subdomain>/ (Privateer
+# materializes + prunes those — tenant churn needs no nginx config change,
+# and a missing tenant file never breaks `nginx -t` because variable cert
+# paths are not validated at config load). Variable ssl_certificate paths
+# require nginx >= 1.15.9. Disabled by default; the CLI enables it on hosts
+# that run foghorn.
+nginx_tenant_alias_playback:
+  enabled: false
+  service_label: foghorn
+  zone_label: cdn
+  root_domain: ""
+  upstream_port: 18008
 nginx_http2_directive_mode: auto
 nginx_http2_standalone_min_version: "1.25.1"
 # Distros put the nginx binary in different places (/usr/sbin on Debian,

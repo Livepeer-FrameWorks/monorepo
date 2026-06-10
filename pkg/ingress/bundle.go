@@ -45,3 +45,24 @@ func TLSCertPath(bundleID string) string {
 func TLSKeyPath(bundleID string) string {
 	return TLSRoot + "/" + bundleID + "/tls.key"
 }
+
+// TenantAliasDirName is the directory beneath TLSRoot where Privateer
+// materializes per-tenant alias wildcard certs, keyed by the tenant's alias
+// SUBDOMAIN (not the Navigator bundle ID "tenant:<uuid>" — the colon fails
+// IsValidBundleID, and nginx can only derive the subdomain from
+// $ssl_server_name at handshake time). Reserved as a bundle ID so a manifest
+// bundle can never collide with this subtree.
+const TenantAliasDirName = "tenant-alias"
+
+// TenantAliasCertPath returns the canonical on-disk path for a tenant alias
+// certificate. The caller must validate subdomain with IsValidBundleID
+// (subdomains satisfy the same charset) before passing it here.
+func TenantAliasCertPath(subdomain string) string {
+	return TLSRoot + "/" + TenantAliasDirName + "/" + subdomain + "/tls.crt"
+}
+
+// TenantAliasKeyPath returns the canonical on-disk path for a tenant alias
+// private key. See TenantAliasCertPath for caller obligations.
+func TenantAliasKeyPath(subdomain string) string {
+	return TLSRoot + "/" + TenantAliasDirName + "/" + subdomain + "/tls.key"
+}

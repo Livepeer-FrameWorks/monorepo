@@ -126,6 +126,95 @@ func TestReverseProxyComposeVarsAppliesMediaIngestProfile(t *testing.T) {
 	}
 }
 
+// Tenant-alias playback (docker parity): the SNI map, the :80 redirect, the
+// variable-cert :443 catch-all, and the tenant-alias cert dir mount must all
+// render from the tenant_alias_playback metadata.
+func TestReverseProxyComposeVarsRendersTenantAliasPlayback(t *testing.T) {
+	vars, err := reverseProxyComposeVars("nginx", 18090, ServiceConfig{
+		Mode:  "docker",
+		Image: "nginx:alpine",
+		Port:  80,
+		Metadata: map[string]any{"tenant_alias_playback": map[string]any{
+			"service_label": "foghorn",
+			"zone_label":    "cdn",
+			"root_domain":   "frameworks.network",
+			"upstream_port": 18008,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("reverseProxyComposeVars: %v", err)
+	}
+	compose := vars["compose_stack_compose_content"].(string)
+	files := vars["compose_stack_files"].(map[string]any)
+	conf := files["frameworks.conf"].(string)
+	for _, want := range []string{
+		`map $ssl_server_name $fw_tenant_alias_sub {`,
+		`~^foghorn\.(?<sub>[a-z0-9][a-z0-9-]*)\.cdn\.frameworks\.network$ $sub;`,
+		`server_name ~^foghorn\.[a-z0-9][a-z0-9-]*\.cdn\.frameworks\.network$;`,
+		`return 308 https://$host$request_uri;`,
+		`ssl_certificate /etc/frameworks/ingress/tls/tenant-alias/$fw_tenant_alias_sub/tls.crt;`,
+		`ssl_certificate_key /etc/frameworks/ingress/tls/tenant-alias/$fw_tenant_alias_sub/tls.key;`,
+		`proxy_pass http://host.docker.internal:18008;`,
+	} {
+		if !strings.Contains(conf, want) {
+			t.Fatalf("tenant-alias docker config missing %q:\n%s", want, conf)
+		}
+	}
+	for _, want := range []string{
+		`"443:443"`,
+		`/etc/frameworks/ingress/tls/tenant-alias:/etc/frameworks/ingress/tls/tenant-alias:ro`,
+	} {
+		if !strings.Contains(compose, want) {
+			t.Fatalf("tenant-alias compose missing %q:\n%s", want, compose)
+		}
+	}
+}
+
+// Without the metadata key, nothing tenant-alias related renders.
+func TestReverseProxyComposeVarsTenantAliasDisabledByDefault(t *testing.T) {
+	vars, err := reverseProxyComposeVars("nginx", 18090, ServiceConfig{
+		Mode:  "docker",
+		Image: "nginx:alpine",
+		Port:  18090,
+		Metadata: map[string]any{"proxy_sites": []map[string]any{{
+			"domains":  []string{"bridge.example.com"},
+			"upstream": "127.0.0.1:18000",
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("reverseProxyComposeVars: %v", err)
+	}
+	files := vars["compose_stack_files"].(map[string]any)
+	conf := files["frameworks.conf"].(string)
+	if strings.Contains(conf, "fw_tenant_alias_sub") {
+		t.Fatalf("tenant-alias blocks rendered without metadata:\n%s", conf)
+	}
+}
+
+// Native mode: the metadata key becomes nginx_tenant_alias_playback with
+// enabled=true for the Ansible role.
+func TestNginxRoleVarsPassesTenantAliasPlayback(t *testing.T) {
+	vars, err := nginxRoleVars(context.TODO(), nilHost(), ServiceConfig{
+		Port: 18090,
+		Metadata: map[string]any{"tenant_alias_playback": map[string]any{
+			"service_label": "foghorn",
+			"zone_label":    "cdn",
+			"root_domain":   "frameworks.network",
+			"upstream_port": 18008,
+		}},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("nginxRoleVars: %v", err)
+	}
+	tap, ok := vars["nginx_tenant_alias_playback"].(map[string]any)
+	if !ok {
+		t.Fatalf("nginx_tenant_alias_playback missing: %v", vars)
+	}
+	if tap["enabled"] != true || tap["root_domain"] != "frameworks.network" || tap["upstream_port"] != 18008 {
+		t.Fatalf("nginx_tenant_alias_playback = %v", tap)
+	}
+}
+
 func TestNginxRoleVarsUsesProxySites(t *testing.T) {
 	vars, err := nginxRoleVars(context.TODO(), nilHost(), ServiceConfig{
 		Port: 18090,

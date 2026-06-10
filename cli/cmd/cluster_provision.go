@@ -341,6 +341,9 @@ func validateIngressBundleIDs(manifest *inventory.Manifest) error {
 		if !ingress.IsValidBundleID(bundleID) {
 			return fmt.Errorf("tls_bundles[%q]: bundle id must match lowercase alphanumeric+hyphen (max 128, no leading hyphen)", bundleID)
 		}
+		if bundleID == ingress.TenantAliasDirName {
+			return fmt.Errorf("tls_bundles[%q]: bundle id is reserved (Privateer materializes tenant-alias certs under that directory)", bundleID)
+		}
 	}
 	for siteID, cfg := range manifest.IngressSites {
 		if cfg.TLSBundleID == "" {
@@ -348,6 +351,9 @@ func validateIngressBundleIDs(manifest *inventory.Manifest) error {
 		}
 		if !ingress.IsValidBundleID(cfg.TLSBundleID) {
 			return fmt.Errorf("ingress_sites[%q].tls_bundle_id %q is not a valid bundle id", siteID, cfg.TLSBundleID)
+		}
+		if cfg.TLSBundleID == ingress.TenantAliasDirName {
+			return fmt.Errorf("ingress_sites[%q].tls_bundle_id %q is reserved (Privateer materializes tenant-alias certs under that directory)", siteID, cfg.TLSBundleID)
 		}
 	}
 	return nil
@@ -3089,6 +3095,23 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 		}
 		if sites := buildProxySitesForHost(manifest, task.Host, clusterID, localSvcs, config.Metadata["extra_proxy_routes"]); len(sites) > 0 {
 			config.Metadata["proxy_sites"] = sites
+		}
+		// Tenant-alias playback: when this nginx fronts a local Foghorn, it
+		// serves foghorn.<tenant>.cdn.<root> for every alias tenant via one
+		// SNI-variable catch-all; Privateer materializes the per-tenant
+		// wildcard certs on disk. Edge Caddy gets alias hosts via ConfigSeed
+		// instead, so this is nginx-only.
+		if task.Type == "nginx" && manifest.RootDomain != "" {
+			if foghornPort, ok := localSvcs["foghorn"].(int); ok && foghornPort != 0 {
+				if label, labelOK := pkgdns.PublicSubdomain("foghorn"); labelOK && label != "" {
+					config.Metadata["tenant_alias_playback"] = map[string]any{
+						"service_label": label,
+						"zone_label":    pkgdns.TenantAliasZoneLabel,
+						"root_domain":   manifest.RootDomain,
+						"upstream_port": foghornPort,
+					}
+				}
+			}
 		}
 		hasPKI := manifest.Services["navigator"].Enabled
 		if grpcAddr, ok := runtimeData["quartermaster_grpc_addr"].(string); ok && grpcAddr != "" {

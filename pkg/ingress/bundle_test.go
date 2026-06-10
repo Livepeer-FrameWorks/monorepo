@@ -41,3 +41,18 @@ func TestTLSPaths(t *testing.T) {
 		t.Errorf("TLSKeyPath = %q", got)
 	}
 }
+
+func TestTenantAliasPaths(t *testing.T) {
+	if got := TenantAliasCertPath("acme"); got != "/etc/frameworks/ingress/tls/tenant-alias/acme/tls.crt" {
+		t.Errorf("TenantAliasCertPath = %q", got)
+	}
+	if got := TenantAliasKeyPath("acme"); got != "/etc/frameworks/ingress/tls/tenant-alias/acme/tls.key" {
+		t.Errorf("TenantAliasKeyPath = %q", got)
+	}
+	// The directory name itself passes the charset validator — reserving it
+	// as a bundle ID is enforced at manifest validation (cluster_provision),
+	// not here. This pins that assumption so a validator change is noticed.
+	if !IsValidBundleID(TenantAliasDirName) {
+		t.Errorf("TenantAliasDirName %q no longer matches the bundle charset; revisit the reservation in cluster_provision", TenantAliasDirName)
+	}
+}

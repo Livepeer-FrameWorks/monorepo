@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"maps"
 
 	"frameworks/cli/pkg/inventory"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ingress"
@@ -16,7 +17,7 @@ func nginxRoleVars(_ context.Context, _ inventory.Host, config ServiceConfig, _ 
 	if httpsPort == 0 {
 		httpsPort = 443
 	}
-	return map[string]any{
+	vars := map[string]any{
 		"nginx_http_port":        port,
 		"nginx_public_http_port": metaIntOrDefault(config.Metadata, "public_http_port", 80),
 		"nginx_https_port":       httpsPort,
@@ -27,5 +28,11 @@ func nginxRoleVars(_ context.Context, _ inventory.Host, config ServiceConfig, _ 
 		// values from pkg/ingress always win.
 		"nginx_ingress_tls_root":       ingress.TLSRoot,
 		"nginx_ingress_reload_trigger": ingress.ReloadTrigger,
-	}, nil
+	}
+	if tap, ok := config.Metadata["tenant_alias_playback"].(map[string]any); ok && len(tap) > 0 {
+		enabled := map[string]any{"enabled": true}
+		maps.Copy(enabled, tap)
+		vars["nginx_tenant_alias_playback"] = enabled
+	}
+	return vars, nil
 }

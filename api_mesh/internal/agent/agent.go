@@ -88,6 +88,13 @@ type ingressClient interface {
 	ListIngressSites(ctx context.Context, clusterID, nodeID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListIngressSitesResponse, error)
 }
 
+// aliasedTenantsClient lists the cluster's alias-eligible tenants so the
+// agent can materialize their per-tenant wildcard certs on Foghorn hosts —
+// nginx's SNI-variable cert paths read them per handshake.
+type aliasedTenantsClient interface {
+	ListAliasedTenantsForCluster(ctx context.Context, clusterID string) (*quartermasterpb.ListAliasedTenantsForClusterResponse, error)
+}
+
 type dnsService interface {
 	Start()
 	Stop()
@@ -143,6 +150,12 @@ type Agent struct {
 	ingressMu        sync.Mutex
 	ingressVersions  map[string]string
 	cachedIngressIDs []string
+	// Tenant-alias cert materialization (Foghorn hosts only). aliasVersions
+	// is keyed by alias subdomain and shares ingressMu with the ingress state.
+	aliasClient     aliasedTenantsClient
+	lastAliasSync   atomic.Int64
+	aliasVersions   map[string]string
+	cachedAliasSubs []string
 	// Startup substrate inputs and persisted managed cache.
 	staticPeersFile string
 	privateKeyFile  string
@@ -188,6 +201,7 @@ type Config struct {
 	MeshClient              meshClient
 	ServiceRegistryClient   serviceRegistryClient
 	IngressClient           ingressClient
+	AliasedTenantsClient    aliasedTenantsClient
 	NavigatorClient         certificateClient
 	WireGuardManager        wireguard.Manager
 	DNSService              dnsService
@@ -247,6 +261,7 @@ func New(cfg Config) (*Agent, error) {
 	client := cfg.MeshClient
 	registry := cfg.ServiceRegistryClient
 	ingress := cfg.IngressClient
+	alias := cfg.AliasedTenantsClient
 	if client == nil && cfg.ServiceToken != "" && cfg.QuartermasterGRPCAddr != "" {
 		qmGRPCClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
 			GRPCAddr:      cfg.QuartermasterGRPCAddr,
@@ -267,6 +282,9 @@ func New(cfg Config) (*Agent, error) {
 		if ingress == nil {
 			ingress = qmGRPCClient
 		}
+		if alias == nil {
+			alias = qmGRPCClient
+		}
 	}
 	if registry == nil {
 		if qmRegistry, ok := client.(serviceRegistryClient); ok {
@@ -276,6 +294,11 @@ func New(cfg Config) (*Agent, error) {
 	if ingress == nil {
 		if qmIngress, ok := client.(ingressClient); ok {
 			ingress = qmIngress
+		}
+	}
+	if alias == nil {
+		if qmAlias, ok := client.(aliasedTenantsClient); ok {
+			alias = qmAlias
 		}
 	}
 
@@ -326,6 +349,7 @@ func New(cfg Config) (*Agent, error) {
 		metrics:           cfg.Metrics,
 		registryClient:    registry,
 		ingressClient:     ingress,
+		aliasClient:       alias,
 		navigatorClient:   navigatorClient,
 		certIssueToken:    cfg.CertIssueToken,
 		pkiBasePath:       cfg.PKIBasePath,
@@ -334,6 +358,7 @@ func New(cfg Config) (*Agent, error) {
 		expectedServices:  append([]string(nil), cfg.ExpectedServiceTypes...),
 		certSyncInterval:  cfg.CertSyncInterval,
 		ingressVersions:   make(map[string]string),
+		aliasVersions:     make(map[string]string),
 		staticPeersFile:   cfg.StaticPeersFile,
 		privateKeyFile:    cfg.PrivateKeyFile,
 		wireguardIP:       cfg.WireguardIP,
@@ -832,6 +857,9 @@ func (a *Agent) sync() {
 	}
 	if err := a.syncIngressCertificates(); err != nil {
 		a.logger.WithError(err).Warn("Failed to sync ingress TLS materials")
+	}
+	if err := a.syncTenantAliasCertificates(); err != nil {
+		a.logger.WithError(err).Warn("Failed to sync tenant-alias TLS materials")
 	}
 	a.logger.Info("Successfully applied wireguard config")
 }

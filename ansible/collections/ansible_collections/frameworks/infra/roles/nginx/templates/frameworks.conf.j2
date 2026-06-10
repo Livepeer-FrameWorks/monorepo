@@ -5,6 +5,62 @@ server {
     return 404;
 }
 {% endif %}
+{% set tap = nginx_tenant_alias_playback | default({}) %}
+{% if tap.enabled | default(false) and (tap.root_domain | default('')) | length > 0 %}
+{% set tap_label = tap.service_label | default('foghorn') %}
+{% set tap_zone = tap.zone_label | default('cdn') %}
+{% set tap_root_re = tap.root_domain | regex_escape %}
+{% set tap_profile = nginx_route_profiles.media_delivery %}
+# Tenant-alias playback: one catch-all for every alias tenant's
+# {{ tap_label }}.<sub>.{{ tap_zone }}.{{ tap.root_domain }} host. The cert is
+# resolved per-handshake from the SNI subdomain; Privateer materializes
+# tenant wildcard bundles under {{ nginx_ingress_tls_root }}/tenant-alias/.
+# A tenant whose cert is not (yet) on disk fails its TLS handshake only —
+# variable cert paths are not checked by `nginx -t`.
+map $ssl_server_name $fw_tenant_alias_sub {
+    ~^{{ tap_label }}\.(?<sub>[a-z0-9][a-z0-9-]*)\.{{ tap_zone }}\.{{ tap_root_re }}$ $sub;
+    default "";
+}
+
+server {
+    listen {{ nginx_public_http_port }};
+    server_name ~^{{ tap_label }}\.[a-z0-9][a-z0-9-]*\.{{ tap_zone }}\.{{ tap_root_re }}$;
+
+    location / {
+        return 308 https://$host$request_uri;
+    }
+}
+
+server {
+    listen {{ nginx_https_port }} ssl{% if nginx_effective_http2_directive_mode == 'listen_parameter' %} http2{% endif %};
+    server_name ~^{{ tap_label }}\.[a-z0-9][a-z0-9-]*\.{{ tap_zone }}\.{{ tap_root_re }}$;
+{% if nginx_effective_http2_directive_mode == 'standalone' %}
+    http2 on;
+{% endif %}
+    ssl_certificate {{ nginx_ingress_tls_root }}/tenant-alias/$fw_tenant_alias_sub/tls.crt;
+    ssl_certificate_key {{ nginx_ingress_tls_root }}/tenant-alias/$fw_tenant_alias_sub/tls.key;
+
+    location / {
+        proxy_pass http://127.0.0.1:{{ tap.upstream_port | default(18008) }};
+        proxy_http_version 1.1;
+        client_max_body_size {{ tap_profile.client_max_body_size }};
+        client_body_timeout {{ tap_profile.client_body_timeout }};
+        send_timeout {{ tap_profile.send_timeout }};
+        proxy_request_buffering {{ 'on' if tap_profile.proxy_request_buffering else 'off' }};
+        proxy_buffering {{ 'on' if tap_profile.proxy_buffering else 'off' }};
+        proxy_buffer_size {{ tap_profile.proxy_buffer_size }};
+        proxy_buffers {{ tap_profile.proxy_buffers }};
+        proxy_busy_buffers_size {{ tap_profile.proxy_busy_buffers_size }};
+        proxy_connect_timeout {{ tap_profile.proxy_connect_timeout }};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout {{ tap_profile.proxy_read_timeout }};
+        proxy_send_timeout {{ tap_profile.proxy_send_timeout }};
+    }
+}
+{% endif %}
 {% for site in nginx_sites %}
 {% set profile_name = site.profile | default('api') %}
 {% set profile = nginx_route_profiles[profile_name] | default(nginx_route_profiles.api) %}
