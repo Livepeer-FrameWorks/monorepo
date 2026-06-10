@@ -109,9 +109,12 @@ func TestBuildSegmentRefs_StatusRouting(t *testing.T) {
 		{SegmentName: "s5", Sequence: 5, Status: "reclaimed"},             // missing
 	}
 
-	refs, missing, err := q.buildSegmentRefs("t", "stream", "hash", rows)
+	refs, missing, trimmedTail, err := q.buildSegmentRefs("t", "stream", "hash", rows)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if trimmedTail != 0 {
+		t.Errorf("trimmedTail = %d, want 0", trimmedTail)
 	}
 	if len(refs) != len(rows) {
 		t.Fatalf("got %d refs, want %d", len(refs), len(rows))
@@ -146,7 +149,7 @@ func TestBuildSegmentRefs_SizeBytesGuard(t *testing.T) {
 		{SegmentName: "null", Status: "pending", SizeBytes: sql.NullInt64{Valid: false}},
 		{SegmentName: "zero", Status: "pending", SizeBytes: sql.NullInt64{Int64: 0, Valid: true}},
 	}
-	refs, _, err := q.buildSegmentRefs("t", "stream", "hash", rows)
+	refs, _, _, err := q.buildSegmentRefs("t", "stream", "hash", rows)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -173,12 +176,79 @@ func TestBuildSegmentRefs_PresignErrorIsRetryable(t *testing.T) {
 	rows := []control.DVRSegmentRow{
 		{SegmentName: "s1", Status: "uploaded", S3Key: "k1"},
 	}
-	refs, _, err := q.buildSegmentRefs("t", "stream", "hash", rows)
+	refs, _, _, err := q.buildSegmentRefs("t", "stream", "hash", rows)
 	if err == nil {
 		t.Fatal("a presign failure must surface as an error, not a silent local-miss")
 	}
 	if refs != nil {
 		t.Errorf("refs must be nil on presign failure, got %v", refs)
+	}
+}
+
+func TestBuildSegmentRefs_TrimsLostLocalTail(t *testing.T) {
+	prevPresign := presignArtifactGET
+	t.Cleanup(func() { presignArtifactGET = prevPresign })
+	presigned := 0
+	presignArtifactGET = func(_ context.Context, key string) (string, error) {
+		presigned++
+		return "https://s3.example/" + key, nil
+	}
+
+	q := &ChapterFinalizationQueue{}
+	rows := []control.DVRSegmentRow{
+		{SegmentName: "s0", Sequence: 0, Status: "uploaded", S3Key: "k0", DurationMs: 2000, MediaStartMs: 0, MediaEndMs: 2000},
+		{SegmentName: "s1", Sequence: 1, Status: "pending", DurationMs: 2000, MediaStartMs: 2000, MediaEndMs: 4000},
+		{SegmentName: "s2", Sequence: 2, Status: "lost_local", S3Key: "k2", DurationMs: 2000, MediaStartMs: 4000, MediaEndMs: 6000},
+		{SegmentName: "s3", Sequence: 3, Status: "lost_local", DurationMs: 2000, MediaStartMs: 6000, MediaEndMs: 8000},
+	}
+
+	refs, missing, trimmedTail, err := q.buildSegmentRefs("t", "stream", "hash", rows)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if missing != 0 {
+		t.Errorf("missing = %d, want 0", missing)
+	}
+	if trimmedTail != 2 {
+		t.Errorf("trimmedTail = %d, want 2", trimmedTail)
+	}
+	if len(refs) != 2 {
+		t.Fatalf("got %d refs, want 2", len(refs))
+	}
+	if refs[0].GetSegmentName() != "s0" || refs[1].GetSegmentName() != "s1" {
+		t.Fatalf("unexpected refs after trim: %+v", refs)
+	}
+	if presigned != 1 {
+		t.Errorf("presigned = %d, want 1; trimmed lost tail must not request recovery URLs", presigned)
+	}
+}
+
+func TestBuildSegmentRefs_InternalLostLocalStillFails(t *testing.T) {
+	prevPresign := presignArtifactGET
+	t.Cleanup(func() { presignArtifactGET = prevPresign })
+	presignArtifactGET = func(_ context.Context, key string) (string, error) {
+		return "https://s3.example/" + key, nil
+	}
+
+	q := &ChapterFinalizationQueue{}
+	rows := []control.DVRSegmentRow{
+		{SegmentName: "s0", Sequence: 0, Status: "pending", DurationMs: 2000, MediaStartMs: 0, MediaEndMs: 2000},
+		{SegmentName: "s1", Sequence: 1, Status: "lost_local", DurationMs: 2000, MediaStartMs: 2000, MediaEndMs: 4000},
+		{SegmentName: "s2", Sequence: 2, Status: "uploaded", S3Key: "k2", DurationMs: 2000, MediaStartMs: 4000, MediaEndMs: 6000},
+	}
+
+	refs, missing, trimmedTail, err := q.buildSegmentRefs("t", "stream", "hash", rows)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if trimmedTail != 0 {
+		t.Errorf("trimmedTail = %d, want 0", trimmedTail)
+	}
+	if missing != 1 {
+		t.Errorf("missing = %d, want 1", missing)
+	}
+	if len(refs) != len(rows) {
+		t.Fatalf("got %d refs, want %d", len(refs), len(rows))
 	}
 }
 

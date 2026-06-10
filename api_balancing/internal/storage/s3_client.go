@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -15,6 +16,32 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
+
+// s3API is the minimal surface of *s3.Client that S3Client depends on.
+// Extracting it lets tests inject a fake without an AWS account. The real
+// *s3.Client satisfies it; the ListObjectsV2/ListParts methods also satisfy
+// the SDK paginator client interfaces. Credentials stay server-side: edge
+// nodes only ever receive presigned URLs, never an s3API.
+type s3API interface {
+	PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
+	DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
+	DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error)
+	HeadObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
+	ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
+	CreateMultipartUpload(ctx context.Context, params *s3.CreateMultipartUploadInput, optFns ...func(*s3.Options)) (*s3.CreateMultipartUploadOutput, error)
+	CompleteMultipartUpload(ctx context.Context, params *s3.CompleteMultipartUploadInput, optFns ...func(*s3.Options)) (*s3.CompleteMultipartUploadOutput, error)
+	AbortMultipartUpload(ctx context.Context, params *s3.AbortMultipartUploadInput, optFns ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error)
+	ListParts(ctx context.Context, params *s3.ListPartsInput, optFns ...func(*s3.Options)) (*s3.ListPartsOutput, error)
+}
+
+// s3Presigner is the minimal presign surface S3Client depends on.
+// *s3.PresignClient satisfies it. Kept separate from s3API because the AWS
+// SDK presign client is a distinct concrete type with no shared interface.
+type s3Presigner interface {
+	PresignPutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.PresignOptions)) (*v4.PresignedHTTPRequest, error)
+	PresignGetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.PresignOptions)) (*v4.PresignedHTTPRequest, error)
+	PresignUploadPart(ctx context.Context, params *s3.UploadPartInput, optFns ...func(*s3.PresignOptions)) (*v4.PresignedHTTPRequest, error)
+}
 
 // S3Config holds configuration for the S3 client
 type S3Config struct {
@@ -30,8 +57,8 @@ type S3Config struct {
 // This client holds credentials and should NEVER be deployed to edge nodes.
 // Edge nodes receive presigned URLs instead.
 type S3Client struct {
-	client        *s3.Client
-	presignClient *s3.PresignClient
+	client        s3API
+	presignClient s3Presigner
 	config        S3Config
 	logger        logging.Logger
 }
@@ -88,6 +115,21 @@ func NewS3Client(cfg S3Config, logger logging.Logger) (*S3Client, error) {
 		config:        cfg,
 		logger:        logger,
 	}, nil
+}
+
+// newS3ClientWithAPI builds an S3Client around injected api/presigner seams.
+// Test-only constructor: NewS3Client wires the real *s3.Client; this lets unit
+// tests exercise request shapes and presigned-URL behavior without AWS.
+func newS3ClientWithAPI(cfg S3Config, api s3API, presigner s3Presigner, logger logging.Logger) *S3Client {
+	if cfg.Region == "" {
+		cfg.Region = "us-east-1"
+	}
+	return &S3Client{
+		client:        api,
+		presignClient: presigner,
+		config:        cfg,
+		logger:        logger,
+	}
 }
 
 // fullKey returns the full S3 key including prefix

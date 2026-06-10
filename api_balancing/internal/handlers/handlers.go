@@ -69,6 +69,12 @@ var (
 	selfLocation string
 )
 
+// routingEventsDisabled short-circuits the fire-and-forget postBalancingEvent
+// telemetry. It is only ever set true by the test binary (set once, never
+// restored, so the async readers never race a writer); production leaves it
+// false. The routing decision itself is unaffected — only the Decklog emit is.
+var routingEventsDisabled bool
+
 func SetSelfGeo(lat, lon float64, location string) {
 	selfLat = lat
 	selfLon = lon
@@ -1982,6 +1988,9 @@ func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score u
 // postBalancingEventEx is postBalancingEvent with an explicit remoteClusterID
 // for cross-cluster routing decisions.
 func postBalancingEventEx(c *gin.Context, streamName, selectedNode string, score uint64, lat, lon float64, status, details string, nodeLat, nodeLon float64, nodeName string, durationMs float32, remoteClusterID string) {
+	if routingEventsDisabled {
+		return
+	}
 	// Extract client IP: CF-Connecting-IP > X-Forwarded-For > X-Real-IP > direct
 	clientIP := c.GetHeader("CF-Connecting-IP")
 	if clientIP == "" {

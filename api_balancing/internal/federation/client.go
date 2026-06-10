@@ -17,18 +17,25 @@ func federationContext(ctx context.Context) context.Context {
 	return context.WithValue(ctx, ctxkeys.KeyJWTToken, "")
 }
 
+// foghornPool is the subset of *foghorn.FoghornPool the federation wrappers
+// depend on. Defined as an interface so tests can supply a fake pool; the real
+// *foghorn.FoghornPool satisfies it.
+type foghornPool interface {
+	GetOrCreate(clusterID, addr string) (*foghorn.GRPCClient, error)
+}
+
 // FederationClient wraps FoghornPool to provide federation-specific calls.
 // Each method fetches (or lazily creates) the GRPCClient for the target
 // cluster, then invokes the corresponding FoghornFederation RPC.
 type FederationClient struct {
-	pool    *foghorn.FoghornPool
+	pool    foghornPool
 	logger  logging.Logger
 	timeout time.Duration
 }
 
 // FederationClientConfig holds dependencies for the federation client.
 type FederationClientConfig struct {
-	Pool    *foghorn.FoghornPool
+	Pool    foghornPool
 	Logger  logging.Logger
 	Timeout time.Duration // per-call timeout (default 10s)
 }
