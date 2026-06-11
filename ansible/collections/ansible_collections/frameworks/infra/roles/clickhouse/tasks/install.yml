@@ -84,6 +84,52 @@
     state: absent
   notify: clickhouse restart
 
+# The operator-analytics ClickHouse user (Metabase datasource for the
+# tenant activity cards) is a DEDICATED user so the runtime `frameworks`
+# service user never gains the postgresql() reach-through privileges.
+# Named-collection usage requires explicit grants for XML-defined users, and
+# <grants> cannot coexist with <allow_databases>/<access_management> on the
+# same user — ClickHouse refuses to START with "Any other access control
+# settings can't be specified with `grants`" (BAD_ARGUMENTS) — so this user
+# is grants-only.
+- name: Write managed ClickHouse operator-analytics user
+  when: clickhouse_named_collections | length > 0 and clickhouse_analytics_password | length > 0
+  ansible.builtin.copy:
+    dest: /etc/clickhouse-server/users.d/frameworks-analytics.xml
+    owner: clickhouse
+    group: clickhouse
+    mode: "0600"
+    content: |
+      <clickhouse>
+        <users>
+          <frameworks_analytics>
+            <password_sha256_hex>{{ clickhouse_analytics_password | hash('sha256') }}</password_sha256_hex>
+            <profile>default</profile>
+            <quota>default</quota>
+            <networks>
+              <ip>::/0</ip>
+            </networks>
+            <grants>
+              <query>GRANT SELECT ON periscope.*</query>
+              <query>GRANT dictGet ON periscope.tenant_dim</query>
+              <query>GRANT CREATE TEMPORARY TABLE, POSTGRES ON *.*</query>
+      {% for collection in clickhouse_named_collections %}
+              <query>GRANT NAMED COLLECTION ON {{ collection.name }}</query>
+      {% endfor %}
+            </grants>
+          </frameworks_analytics>
+        </users>
+      </clickhouse>
+  no_log: true
+  notify: clickhouse restart
+
+- name: Remove managed ClickHouse operator-analytics user when unconfigured
+  when: clickhouse_named_collections | length == 0 or clickhouse_analytics_password | length == 0
+  ansible.builtin.file:
+    path: /etc/clickhouse-server/users.d/frameworks-analytics.xml
+    state: absent
+  notify: clickhouse restart
+
 - name: Remove broken upstream TLS block when ClickHouse TLS is disabled
   when: not (clickhouse_enable_ssl | default(false) | bool)
   block:

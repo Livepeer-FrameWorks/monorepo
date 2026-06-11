@@ -3321,6 +3321,8 @@ GROUP BY day, tenant_id, cluster_id, storage_scope,
 -- CREATE succeeds even when Postgres is unreachable.
 -- ============================================================================
 
+-- Attribute DEFAULTs must be plain parseable literals: expressions like
+-- toDateTime(0) are a syntax error, and a bare 0 fails DateTime parsing.
 CREATE DICTIONARY IF NOT EXISTS tenant_dim
 (
     id UUID,
@@ -3328,7 +3330,7 @@ CREATE DICTIONARY IF NOT EXISTS tenant_dim
     subdomain String DEFAULT '',
     deployment_tier String DEFAULT '',
     is_active UInt8 DEFAULT 0,
-    created_at DateTime DEFAULT toDateTime(0)
+    created_at DateTime DEFAULT '1970-01-01 00:00:00'
 )
 PRIMARY KEY id
 SOURCE(POSTGRESQL(NAME quartermaster_pg TABLE 'tenants'))

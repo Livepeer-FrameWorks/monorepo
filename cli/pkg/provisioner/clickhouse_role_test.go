@@ -51,7 +51,8 @@ func TestClickHouseRoleVarsPassesNamedCollections(t *testing.T) {
 	config := ServiceConfig{
 		Version: "26.3.10.62",
 		Metadata: map[string]any{
-			"named_collections": collections,
+			"named_collections":             collections,
+			"clickhouse_analytics_password": "metabase-secret",
 		},
 	}
 
@@ -62,6 +63,9 @@ func TestClickHouseRoleVarsPassesNamedCollections(t *testing.T) {
 	got, ok := vars["clickhouse_named_collections"].([]map[string]any)
 	if !ok || len(got) != 1 || got[0]["name"] != "quartermaster_pg" {
 		t.Fatalf("clickhouse_named_collections = %#v, want the quartermaster_pg collection", vars["clickhouse_named_collections"])
+	}
+	if vars["clickhouse_analytics_password"] != "metabase-secret" {
+		t.Fatalf("clickhouse_analytics_password not passed through: %#v", vars["clickhouse_analytics_password"])
 	}
 
 	// Absent metadata must leave the var unset so the ansible default ([])

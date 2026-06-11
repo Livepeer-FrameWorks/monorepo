@@ -2776,6 +2776,12 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 				}
 				if collections := buildAnalyticsNamedCollections(manifest, sharedEnv); len(collections) > 0 {
 					config.Metadata["named_collections"] = collections
+					// The dedicated frameworks_analytics ClickHouse user
+					// (Metabase datasource) only exists when the collections
+					// do; its password rides the same shared env.
+					if pw := sharedEnv["CLICKHOUSE_ANALYTICS_PASSWORD"]; pw != "" {
+						config.Metadata["clickhouse_analytics_password"] = pw
+					}
 				}
 			}
 		case "kafka":

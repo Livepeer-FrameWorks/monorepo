@@ -4,12 +4,15 @@
 #     --file infrastructure/metabase/activity_cards.yaml \
 #     --dashboard "FrameWorks Tenants"
 #
-# All cards run against the ClickHouse datasource. Tenant names come from the
+# All cards run against the ClickHouse datasource, which must authenticate
+# as the dedicated `frameworks_analytics` ClickHouse user (password:
+# CLICKHOUSE_ANALYTICS_PASSWORD) — the runtime `frameworks` service user is
+# deliberately denied the Postgres reach-through. Tenant names come from the
 # periscope.tenant_dim dictionary; Postgres-side signals (logins, signups,
 # billing) reach commodore/quartermaster/purser through the *_pg named
 # collections via the postgresql() table function, authenticating as the
-# frameworks_analytics_ro role. Long-window cards read the daily rollup views
-# (1825-day TTL), never the 5m ledgers (90-day TTL).
+# frameworks_analytics_ro Postgres role. Long-window cards read the daily
+# rollup views (1825-day TTL), never the 5m ledgers (90-day TTL).
 cards:
   - slug: tenants.activity-overview
     name: Tenant activity overview (30d)

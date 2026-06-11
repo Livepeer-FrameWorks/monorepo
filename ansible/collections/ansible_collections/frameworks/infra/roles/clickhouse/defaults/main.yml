@@ -30,6 +30,11 @@ clickhouse_enable_ssl: false
 # empty list removes the managed drop-in.
 clickhouse_named_collections: []
 
+# Password for the dedicated frameworks_analytics ClickHouse user (the
+# Metabase datasource holding the postgresql() reach-through grants). Empty
+# removes the managed users.d drop-in.
+clickhouse_analytics_password: ""
+
 # idealista.clickhouse currently ships a malformed default quota value
 # (`execution_time: 0gv`). Override it locally until the upstream role is fixed.
 frameworks_clickhouse_default_quotas:

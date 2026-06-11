@@ -1295,6 +1295,7 @@ services:
       # Environment variables for users.xml
       CLICKHOUSE_PASSWORD: frameworks_dev # For frameworks user
       CLICKHOUSE_READONLY_PASSWORD: readonly_dev
+      CLICKHOUSE_ANALYTICS_PASSWORD: analytics_dev # For frameworks_analytics (Metabase reach-through)
     ulimits:
       nofile:
         soft: 262144

@@ -42,6 +42,30 @@
                 <database>periscope</database>
             </allow_databases>
         </frameworks>
+
+        <!-- Operator-analytics user (Metabase datasource for the tenant
+             activity cards). Holds the postgresql() reach-through privileges
+             so the runtime service user above never gains Postgres access.
+             Named-collection usage needs explicit grants for XML-defined
+             users, and <grants> cannot coexist with allow_databases /
+             access_management — the server refuses to start — so this user
+             is grants-only. -->
+        <frameworks_analytics>
+            <password from_env="CLICKHOUSE_ANALYTICS_PASSWORD"></password>
+            <profile>default</profile>
+            <quota>frameworks_quota</quota>
+            <networks>
+                <ip>::/0</ip>
+            </networks>
+            <grants>
+                <query>GRANT SELECT ON periscope.*</query>
+                <query>GRANT dictGet ON periscope.tenant_dim</query>
+                <query>GRANT CREATE TEMPORARY TABLE, POSTGRES ON *.*</query>
+                <query>GRANT NAMED COLLECTION ON quartermaster_pg</query>
+                <query>GRANT NAMED COLLECTION ON commodore_pg</query>
+                <query>GRANT NAMED COLLECTION ON purser_pg</query>
+            </grants>
+        </frameworks_analytics>
         
         <!-- Read-only user for monitoring/analytics -->
         <readonly_user>
