@@ -2,10 +2,11 @@
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
-  import { navigationConfig, type NavigationItem } from "../navigation.js";
+  import { navigationConfig, isPlatformOperatorUser, type NavigationItem } from "../navigation.js";
   import { createEventDispatcher, untrack } from "svelte";
   import { getIconComponent } from "../iconUtils";
   import { sidebarStore } from "../stores/sidebar.svelte";
+  import { auth } from "$lib/stores/auth";
   import { getMarketingSiteUrl } from "$lib/config";
   import DiscordBadge from "./DiscordBadge.svelte";
 
@@ -26,6 +27,14 @@
   let sectionChildIndex: Record<string, number> = {};
 
   let currentPath = $derived($page.url.pathname);
+
+  // Platform-admin sections are hidden for non-operators. Cosmetic only:
+  // the GraphQL resolvers enforce the real gate.
+  let platformOperator = $derived(isPlatformOperatorUser($auth.user));
+
+  function sectionVisible(section: NavigationItem): boolean {
+    return !section.requiresPlatformOperator || platformOperator;
+  }
 
   // Helper to get active children info for dot indicators in collapsed mode
   function getActiveChildrenInfo(sectionKey: string): {
@@ -208,7 +217,7 @@
 
     <!-- Feature Sections -->
     {#each Object.entries(navigationConfig) as [sectionKey, section] (sectionKey)}
-      {#if sectionKey !== "dashboard" && sectionKey !== "globalNetwork" && section.children}
+      {#if sectionKey !== "dashboard" && sectionKey !== "globalNetwork" && section.children && sectionVisible(section)}
         {@const SvelteComponent_1 = getIconComponent(section.icon)}
         {@const hasActiveChildren = sectionHasActiveChildren(sectionKey)}
         {@const childInfo = getActiveChildrenInfo(sectionKey)}

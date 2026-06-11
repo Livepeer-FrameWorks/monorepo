@@ -8,6 +8,24 @@ export interface NavigationItem {
   badge?: string;
   external?: boolean;
   children?: Record<string, NavigationItem>;
+  /**
+   * Hide the item unless the signed-in user is a platform operator
+   * (owner/admin of the reserved system tenant). Cosmetic only — the
+   * GraphQL resolvers enforce the actual gate.
+   */
+  requiresPlatformOperator?: boolean;
+}
+
+/** The reserved system tenant (`frameworks`); membership = platform staff. */
+export const SYSTEM_TENANT_ID = "00000000-0000-0000-0000-000000000001";
+
+/** Client-side mirror of the backend IsPlatformOperator gate (cosmetic). */
+export function isPlatformOperatorUser(
+  user?: { tenant_id?: string; role?: string } | null
+): boolean {
+  if (!user) return false;
+  const role = (user.role ?? "").toLowerCase();
+  return user.tenant_id === SYSTEM_TENANT_ID && (role === "owner" || role === "admin");
 }
 
 export interface RouteInfo {
@@ -27,6 +45,16 @@ const dynamicRoutes: Array<{
   route: Omit<RouteInfo, "path">;
   breadcrumb: Breadcrumb[];
 }> = [
+  {
+    pattern: /^\/admin\/tenants\/[^/]+$/,
+    route: { name: "Tenant Detail", parent: "Platform Admin" },
+    breadcrumb: [
+      { name: "Dashboard", href: "/" },
+      { name: "Platform Admin" },
+      { name: "Tenants", href: "/admin" },
+      { name: "Tenant Detail" },
+    ],
+  },
   {
     pattern: /^\/streams\/[^/]+$/,
     route: { name: "Stream Details", parent: "Content" },
@@ -380,6 +408,31 @@ export const navigationConfig: Record<string, NavigationItem> = {
         icon: "MessageSquare",
         active: true,
         description: "Contact support and view conversation history",
+      },
+    },
+  },
+
+  // Platform administration (system-tenant operators only; resolver-gated)
+  admin: {
+    name: "Platform Admin",
+    icon: "ShieldCheck",
+    requiresPlatformOperator: true,
+    children: {
+      tenants: {
+        name: "Tenants",
+        href: "/admin",
+        icon: "Building2",
+        active: true,
+        requiresPlatformOperator: true,
+        description: "Cross-tenant activity, billing, and content",
+      },
+      clusters: {
+        name: "Clusters",
+        href: "/admin/clusters",
+        icon: "Server",
+        active: true,
+        requiresPlatformOperator: true,
+        description: "Cluster pivot: live stats and resident tenants",
       },
     },
   },

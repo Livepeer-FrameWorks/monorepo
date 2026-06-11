@@ -1,0 +1,38 @@
+# Platform-operator drill-down: identity + activity + the tenant's own
+# analytics overview. System-tenant owner/admin only.
+query GetPlatformTenantOverview($id: ID!, $timeRange: TimeRangeInput) {
+  platform {
+    tenant(id: $id) {
+      tenantId
+      tenant {
+        id
+        name
+        subdomain
+        createdAt
+        customDomain
+      }
+      activity(timeRange: $timeRange) {
+        liveStreams
+        currentViewers
+        ingestHours
+        viewerHours
+        egressGb
+        uniqueViewers
+        totalSessions
+        apiRequests
+        apiErrors
+        lastStreamAt
+      }
+      overview(timeRange: $timeRange) {
+        totalStreams
+        activeStreams
+        totalViewers
+        viewerHours
+        ingestHours
+        egressGb
+        uniqueViewers
+        peakConcurrentViewers
+      }
+    }
+  }
+}

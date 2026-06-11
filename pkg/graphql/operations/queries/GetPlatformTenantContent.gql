@@ -1,0 +1,15 @@
+# Platform-operator drill-down: one tenant's content/account footprint.
+# System-tenant owner/admin only.
+query GetPlatformTenantContent($id: ID!) {
+  platform {
+    tenant(id: $id) {
+      tenantId
+      content {
+        artifactCount
+        userCount
+        liveStreams
+        lastStreamAt
+      }
+    }
+  }
+}

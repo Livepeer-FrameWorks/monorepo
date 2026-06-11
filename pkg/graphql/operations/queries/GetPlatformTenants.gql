@@ -1,0 +1,40 @@
+# Platform-operator god view: ranked cross-tenant activity index with
+# identity and billing columns. System-tenant owner/admin only.
+query GetPlatformTenants($timeRange: TimeRangeInput, $limit: Int) {
+  platform {
+    tenants(timeRange: $timeRange, limit: $limit) {
+      generatedAt
+      rows {
+        tenantId
+        tenant {
+          id
+          name
+          subdomain
+          createdAt
+        }
+        activity {
+          liveStreams
+          currentViewers
+          ingestHours
+          viewerHours
+          egressGb
+          uniqueViewers
+          totalSessions
+          apiRequests
+          apiErrors
+          lastStreamAt
+        }
+        billing {
+          billingModel
+          status
+          tierName
+          trialEndsAt
+          outstandingAmount
+          overdueInvoices
+          prepaidBalanceCents
+          currency
+        }
+      }
+    }
+  }
+}

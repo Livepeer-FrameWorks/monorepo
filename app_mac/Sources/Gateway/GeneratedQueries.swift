@@ -2165,6 +2165,38 @@ enum GQL {
   }
   """
 
+  static let GetPlatformClusters = """
+  # Platform-operator cluster pivot: every cluster with live stats and
+  # resident tenants. System-tenant owner/admin only.
+  query GetPlatformClusters {
+    platform {
+      clusters {
+        cluster {
+          id
+          clusterId
+          clusterName
+          clusterType
+        }
+        liveStats {
+          clusterId
+          activeStreams
+          currentViewers
+          uploadBytesPerSec
+          downloadBytesPerSec
+          activeNodes
+          egressCapacityBps
+        }
+        tenants {
+          id
+          name
+          subdomain
+        }
+        tenantCount
+      }
+    }
+  }
+  """
+
   static let GetPlatformOverview = """
   # Fetch platform-wide aggregate metrics and daily statistics for dashboard overview
   # Returns total streams, viewers, bandwidth, and time-series data
@@ -2199,6 +2231,173 @@ enum GQL {
           uniqueViewers
           totalSessions
           totalViews
+        }
+      }
+    }
+  }
+  """
+
+  static let GetPlatformTenantBilling = """
+  # Platform-operator drill-down: one tenant's billing surface (snapshot,
+  # invoices, prepaid balance, transactions, usage). System-tenant owner/admin only.
+  query GetPlatformTenantBilling($id: ID!, $invoicesFirst: Int = 25, $timeRange: TimeRangeInput) {
+    platform {
+      tenant(id: $id) {
+        tenantId
+        billing {
+          snapshot {
+            billingModel
+            status
+            tierName
+            trialEndsAt
+            nextBillingDate
+            outstandingAmount
+            overdueInvoices
+            prepaidBalanceCents
+            currency
+            subscribedAt
+          }
+          invoices(page: { first: $invoicesFirst }) {
+            edges {
+              node {
+                id
+                amount
+                currency
+                status
+                dueDate
+                createdAt
+              }
+            }
+            totalCount
+          }
+          prepaidBalance {
+            balanceCents
+            currency
+          }
+          balanceTransactions(page: { first: 25 }, timeRange: $timeRange) {
+            nodes {
+              id
+              amountCents
+              balanceAfterCents
+              transactionType
+              description
+              createdAt
+            }
+            totalCount
+          }
+          usageRecords(page: { first: 50 }, timeRange: $timeRange) {
+            nodes {
+              id
+              usageType
+              usageValue
+              clusterId
+              periodStart
+              periodEnd
+            }
+            totalCount
+          }
+        }
+      }
+    }
+  }
+  """
+
+  static let GetPlatformTenantContent = """
+  # Platform-operator drill-down: one tenant's content/account footprint.
+  # System-tenant owner/admin only.
+  query GetPlatformTenantContent($id: ID!) {
+    platform {
+      tenant(id: $id) {
+        tenantId
+        content {
+          artifactCount
+          userCount
+          liveStreams
+          lastStreamAt
+        }
+      }
+    }
+  }
+  """
+
+  static let GetPlatformTenantOverview = """
+  # Platform-operator drill-down: identity + activity + the tenant's own
+  # analytics overview. System-tenant owner/admin only.
+  query GetPlatformTenantOverview($id: ID!, $timeRange: TimeRangeInput) {
+    platform {
+      tenant(id: $id) {
+        tenantId
+        tenant {
+          id
+          name
+          subdomain
+          createdAt
+          customDomain
+        }
+        activity(timeRange: $timeRange) {
+          liveStreams
+          currentViewers
+          ingestHours
+          viewerHours
+          egressGb
+          uniqueViewers
+          totalSessions
+          apiRequests
+          apiErrors
+          lastStreamAt
+        }
+        overview(timeRange: $timeRange) {
+          totalStreams
+          activeStreams
+          totalViewers
+          viewerHours
+          ingestHours
+          egressGb
+          uniqueViewers
+          peakConcurrentViewers
+        }
+      }
+    }
+  }
+  """
+
+  static let GetPlatformTenants = """
+  # Platform-operator god view: ranked cross-tenant activity index with
+  # identity and billing columns. System-tenant owner/admin only.
+  query GetPlatformTenants($timeRange: TimeRangeInput, $limit: Int) {
+    platform {
+      tenants(timeRange: $timeRange, limit: $limit) {
+        generatedAt
+        rows {
+          tenantId
+          tenant {
+            id
+            name
+            subdomain
+            createdAt
+          }
+          activity {
+            liveStreams
+            currentViewers
+            ingestHours
+            viewerHours
+            egressGb
+            uniqueViewers
+            totalSessions
+            apiRequests
+            apiErrors
+            lastStreamAt
+          }
+          billing {
+            billingModel
+            status
+            tierName
+            trialEndsAt
+            outstandingAmount
+            overdueInvoices
+            prepaidBalanceCents
+            currency
+          }
         }
       }
     }

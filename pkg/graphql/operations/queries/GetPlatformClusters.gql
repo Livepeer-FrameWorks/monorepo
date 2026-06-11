@@ -1,0 +1,29 @@
+# Platform-operator cluster pivot: every cluster with live stats and
+# resident tenants. System-tenant owner/admin only.
+query GetPlatformClusters {
+  platform {
+    clusters {
+      cluster {
+        id
+        clusterId
+        clusterName
+        clusterType
+      }
+      liveStats {
+        clusterId
+        activeStreams
+        currentViewers
+        uploadBytesPerSec
+        downloadBytesPerSec
+        activeNodes
+        egressCapacityBps
+      }
+      tenants {
+        id
+        name
+        subdomain
+      }
+      tenantCount
+    }
+  }
+}

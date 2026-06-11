@@ -1,0 +1,62 @@
+# Platform-operator drill-down: one tenant's billing surface (snapshot,
+# invoices, prepaid balance, transactions, usage). System-tenant owner/admin only.
+query GetPlatformTenantBilling($id: ID!, $invoicesFirst: Int = 25, $timeRange: TimeRangeInput) {
+  platform {
+    tenant(id: $id) {
+      tenantId
+      billing {
+        snapshot {
+          billingModel
+          status
+          tierName
+          trialEndsAt
+          nextBillingDate
+          outstandingAmount
+          overdueInvoices
+          prepaidBalanceCents
+          currency
+          subscribedAt
+        }
+        invoices(page: { first: $invoicesFirst }) {
+          edges {
+            node {
+              id
+              amount
+              currency
+              status
+              dueDate
+              createdAt
+            }
+          }
+          totalCount
+        }
+        prepaidBalance {
+          balanceCents
+          currency
+        }
+        balanceTransactions(page: { first: 25 }, timeRange: $timeRange) {
+          nodes {
+            id
+            amountCents
+            balanceAfterCents
+            transactionType
+            description
+            createdAt
+          }
+          totalCount
+        }
+        usageRecords(page: { first: 50 }, timeRange: $timeRange) {
+          nodes {
+            id
+            usageType
+            usageValue
+            clusterId
+            periodStart
+            periodEnd
+          }
+          totalCount
+        }
+      }
+    }
+  }
+}
