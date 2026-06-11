@@ -6,49 +6,69 @@ import (
 	"time"
 )
 
-// Specs for the state-sync ordering invariant: an incoming peer change applies
-// only when it is newer than local state.
-const haOrderingRFC = "requires the state-sync ordering mechanism (docs/rfcs/foghorn-ha-ordering.md)"
+// Acceptance specs for the state-sync ordering invariant (see
+// docs/architecture/foghorn-ha.md, "Ordering and replay semantics"): an
+// incoming peer change applies only when its changelog entry ID is above the
+// entity's watermark, so a change logged before the write local state
+// already reflects can never roll it back.
 
-// A stale peer snapshot must not roll back a fresher local node's IsHealthy.
+// A stale peer snapshot must not roll back a fresher local node's
+// IsHealthy.
 func TestApplyRedisChange_StaleSnapshot_DoesNotRollBackHealth(t *testing.T) {
-	t.Skip(haOrderingRFC)
-
 	sm := ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
-	// Fresh local truth: node is healthy, updated now.
+	// Fresh local truth: node is healthy, its write-through landed at
+	// changelog position 2-0.
 	sm.TouchNode("node-1", true)
+	sm.watermarks.Record(stateChangeKey(StateChange{Entity: StateEntityNode, NodeID: "node-1"}), "2-0")
 
-	// A peer publishes an OLDER snapshot that still claims the node unhealthy.
+	// A peer's OLDER snapshot (logged at 1-0) still claims the node
+	// unhealthy: the watermark must drop it.
 	stale := NodeState{NodeID: "node-1", IsHealthy: false, LastUpdate: time.Now().Add(-time.Minute)}
 	payload, _ := json.Marshal(stale)
-	sm.applyRedisChange(StateChange{
-		Entity:    StateEntityNode,
-		Operation: StateOpUpsert,
-		NodeID:    "node-1",
-		Payload:   payload,
+	sm.handleStateChangelogEntry("1-0", StateChange{
+		InstanceID: "peer",
+		Entity:     StateEntityNode,
+		Operation:  StateOpUpsert,
+		NodeID:     "node-1",
+		Payload:    payload,
 	})
 
 	if ns := sm.GetNodeState("node-1"); ns == nil || !ns.IsHealthy {
 		t.Fatal("stale peer snapshot rolled back fresher local IsHealthy=true")
 	}
+
+	// A genuinely newer snapshot (logged at 3-0) applies.
+	newer := NodeState{NodeID: "node-1", IsHealthy: false, LastUpdate: time.Now()}
+	payload, _ = json.Marshal(newer)
+	sm.handleStateChangelogEntry("3-0", StateChange{
+		InstanceID: "peer",
+		Entity:     StateEntityNode,
+		Operation:  StateOpUpsert,
+		NodeID:     "node-1",
+		Payload:    payload,
+	})
+	if ns := sm.GetNodeState("node-1"); ns == nil || ns.IsHealthy {
+		t.Fatal("newer peer snapshot was not applied")
+	}
 }
 
 // A stale peer delete must not evict a fresher local node.
 func TestApplyRedisChange_StaleDelete_DoesNotEvictFresherNode(t *testing.T) {
-	t.Skip(haOrderingRFC)
-
 	sm := ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
-	sm.TouchNode("node-1", true) // fresh local node
+	// Fresh local node, write-through logged at 2-0.
+	sm.TouchNode("node-1", true)
+	sm.watermarks.Record(stateChangeKey(StateChange{Entity: StateEntityNode, NodeID: "node-1"}), "2-0")
 
-	// A peer delete that logically predates the local node's last update.
-	sm.applyRedisChange(StateChange{
-		Entity:    StateEntityNode,
-		Operation: StateOpDelete,
-		NodeID:    "node-1",
+	// A peer delete that was logged BEFORE the local write (1-0).
+	sm.handleStateChangelogEntry("1-0", StateChange{
+		InstanceID: "peer",
+		Entity:     StateEntityNode,
+		Operation:  StateOpDelete,
+		NodeID:     "node-1",
 	})
 
 	if ns := sm.GetNodeState("node-1"); ns == nil {

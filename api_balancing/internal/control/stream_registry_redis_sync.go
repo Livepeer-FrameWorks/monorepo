@@ -3,15 +3,20 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pkgredis "github.com/Livepeer-FrameWorks/monorepo/pkg/redis"
 )
 
 // EnableRedisSync wires the registry to a Redis store: rehydrates from
-// Redis on startup, write-through on every mutation, and subscribes to
-// cross-instance changes published by peer Foghorn instances. Returns the
-// number of source + artifact entries rehydrated.
+// Redis on startup, write-through on every mutation, and follows the
+// ordered, replayable changelog of cross-instance changes. The startup
+// sequence is a consistent cut — capture the changelog tail FIRST, then
+// load the key snapshot, then replay from the captured tail — so no change
+// can fall between snapshot and live sync. Returns the number of source +
+// artifact entries rehydrated.
 //
 // Matches the pattern used by state.StreamStateManager.EnableRedisSync so
 // operators see one consistent persistence model across Foghorn caches.
@@ -25,23 +30,63 @@ func (r *StreamRegistry) EnableRedisSync(ctx context.Context, store *RedisRegist
 	r.redisLogger = logger
 	r.mu.Unlock()
 
+	tail, tailErr := store.ChangelogTail(subCtx)
+	if tailErr != nil {
+		if logger != nil {
+			logger.WithError(tailErr).Warn("Failed to read registry changelog tail; replaying from start of retained log")
+		}
+		tail = "0-0"
+	}
+
 	sources, artifacts = r.rehydrateFromRedis(store, logger)
 
 	r.redisWg.Add(1)
 	go func() {
 		defer r.redisWg.Done()
-		subErr := store.Subscribe(subCtx, func(change RegistryChange) {
-			if change.InstanceID == instanceID {
-				return
+		cursor := tail
+		for {
+			subErr := store.ReadChanges(subCtx, cursor, r.handleRegistryChangelogEntry)
+			if errors.Is(subErr, pkgredis.ErrChangelogGap) && subCtx.Err() == nil {
+				// The cursor fell behind the trimmed window (long
+				// partition): re-run the consistent cut instead of
+				// continuing blind. Re-applying keys is idempotent —
+				// entries merge per-Location and watermarks gate.
+				if logger != nil {
+					logger.Warn("Stream-registry changelog reader fell behind retention; re-running consistent cut")
+				}
+				newTail, tailErr2 := store.ChangelogTail(subCtx)
+				if tailErr2 != nil {
+					newTail = "0-0"
+				}
+				r.rehydrateFromRedis(store, logger)
+				cursor = newTail
+				continue
 			}
-			r.applyRedisChange(change)
-		})
-		if subErr != nil && logger != nil {
-			logger.WithError(subErr).Warn("Stream-registry Redis subscription stopped")
+			if subErr != nil && logger != nil {
+				logger.WithError(subErr).Warn("Stream-registry changelog reader stopped")
+			}
+			return
 		}
 	}()
 
 	return sources, artifacts, nil
+}
+
+// handleRegistryChangelogEntry applies one changelog entry: self-originated
+// entries only advance the watermark (publish already did, but replay after
+// a restart lands here), peer entries apply only when newer than the key's
+// watermark — so a stale or replayed entry can never roll back a later
+// local write, regardless of any instance's wall clock.
+func (r *StreamRegistry) handleRegistryChangelogEntry(id string, change RegistryChange) {
+	key := string(change.Entity) + "|" + change.Key
+	if change.InstanceID == r.instanceID {
+		r.watermarks.Record(key, id)
+		return
+	}
+	if !r.watermarks.ShouldApply(key, id) {
+		return
+	}
+	r.applyRedisChange(change)
 }
 
 // DisableRedisSync stops the subscription goroutine. Safe to call from
@@ -104,19 +149,6 @@ func (r *StreamRegistry) rehydrateFromRedis(store *RedisRegistryStore, logger lo
 	return len(sources), len(artifacts)
 }
 
-// maxLocationUpdatedAt returns the latest UpdatedAt across every Location on
-// the entry. Used as the tombstone-ordering stamp for applyRedisChange's
-// stale-delete guard.
-func maxLocationUpdatedAt(e StreamEntry) time.Time {
-	var t time.Time
-	for _, loc := range e.Locations {
-		if loc.UpdatedAt.After(t) {
-			t = loc.UpdatedAt
-		}
-	}
-	return t
-}
-
 // mergeStreamEntry merges an incoming peer snapshot into the local view of a
 // source. Locations is per-cluster state, so each Location is reconciled
 // independently (newest UpdatedAt wins) rather than the whole entry being
@@ -172,28 +204,17 @@ func mergeStreamEntry(existing, incoming StreamEntry) StreamEntry {
 	return merged
 }
 
+// applyRedisChange applies a peer's changelog entry to the local in-memory
+// view. Ordering is already settled by the caller (changelog entry IDs +
+// per-key watermarks), so there are no staleness guards here: a delete that
+// reaches this function is by definition newer than anything local, and a
+// stale one was already dropped. Sources still merge per-Location because
+// Locations is per-cluster state with its own owner semantics.
 func (r *StreamRegistry) applyRedisChange(change RegistryChange) {
 	switch change.Entity {
 	case RegistryEntitySource:
 		if change.Operation == RegistryOpDelete {
 			r.mu.Lock()
-			// Tombstone ordering: a StreamEntry is per-cluster state, and a
-			// stale peer delete must not wipe an entry that was re-admitted
-			// locally after the delete was published. Drop the delete when any
-			// local Location is fresher than the delete's publish stamp.
-			if existing, ok := r.byInt[change.Key]; ok && change.PublishedAtUnixNano > 0 {
-				if local := maxLocationUpdatedAt(existing.entry); !local.IsZero() && local.UnixNano() > change.PublishedAtUnixNano {
-					r.mu.Unlock()
-					if r.redisLogger != nil {
-						r.redisLogger.WithFields(map[string]any{
-							"internal_name": change.Key,
-							"delete_ts":     change.PublishedAtUnixNano,
-							"local_ts":      local.UnixNano(),
-						}).Debug("applyRedisChange: dropping stale source delete")
-					}
-					return
-				}
-			}
 			r.removeSourceByKeyLocked(change.Key)
 			r.mu.Unlock()
 			return
@@ -226,14 +247,6 @@ func (r *StreamRegistry) applyRedisChange(change RegistryChange) {
 	case RegistryEntityArtifact:
 		if change.Operation == RegistryOpDelete {
 			r.artifacts.mu.Lock()
-			// Stale-ordering guard, symmetric to the upsert below: drop a delete
-			// published before the entry we currently hold was last cached, so an
-			// out-of-order pubsub delete can't wipe a fresher local re-upsert.
-			if existing, ok := r.artifacts.byHash[change.Key]; ok &&
-				change.PublishedAtUnixNano > 0 && change.PublishedAtUnixNano < existing.cached.UnixNano() {
-				r.artifacts.mu.Unlock()
-				return
-			}
 			r.removeArtifactByKeyLocked(change.Key)
 			r.artifacts.mu.Unlock()
 			return
@@ -243,26 +256,6 @@ func (r *StreamRegistry) applyRedisChange(change RegistryChange) {
 			return
 		}
 		r.artifacts.mu.Lock()
-		// Stale-snapshot guard: when a local artifact mutation races a
-		// peer's older snapshot still draining the pubsub queue, refuse
-		// to overwrite a fresher local entry. Mirrors the source-side
-		// guard in this same function; uses PublishedAtUnixNano on the
-		// change (ArtifactEntry has no per-mutation field of its own,
-		// and HydratedAt is first-hydration, not last-update).
-		if existing, ok := r.artifacts.byHash[e.ArtifactHash]; ok && e.ArtifactHash != "" && change.PublishedAtUnixNano > 0 {
-			localTS := existing.cached.UnixNano()
-			if change.PublishedAtUnixNano < localTS {
-				r.artifacts.mu.Unlock()
-				if r.redisLogger != nil {
-					r.redisLogger.WithFields(map[string]any{
-						"artifact_hash": e.ArtifactHash,
-						"incoming_ts":   change.PublishedAtUnixNano,
-						"local_ts":      localTS,
-					}).Debug("applyRedisChange: dropping stale artifact pubsub snapshot")
-				}
-				return
-			}
-		}
 		ce := &cachedArtifact{entry: e, cached: time.Now()}
 		r.artifacts.byHash[e.ArtifactHash] = ce
 		if e.InternalName != "" {
@@ -276,7 +269,7 @@ func (r *StreamRegistry) applyRedisChange(change RegistryChange) {
 }
 
 // removeSourceByKeyLocked drops every map index for a source given the
-// pubsub change key (the internal_name). Caller holds r.mu.
+// changelog change key (the internal_name). Caller holds r.mu.
 func (r *StreamRegistry) removeSourceByKeyLocked(internalName string) {
 	if internalName == "" {
 		return
@@ -305,10 +298,11 @@ func (r *StreamRegistry) removeArtifactByKeyLocked(hash string) {
 	delete(r.artifacts.byProcessingKey, hash)
 }
 
-// publishUpsertSource fires-and-forgets a pubsub event to peers. Caller
-// must NOT hold r.mu. Logs failures via the logger registered on the
-// store; pubsub failures don't fail the write because the source-of-truth
-// (Commodore / SQL / federation ad) will re-populate on next refresh.
+// publishUpsertSource write-throughs the entry and appends the change to
+// the changelog. Caller must NOT hold r.mu. Logs failures via the logger
+// registered on the store; changelog failures don't fail the write because
+// the source-of-truth (Commodore / SQL / federation ad) will re-populate on
+// next refresh.
 func (r *StreamRegistry) publishUpsertSource(e StreamEntry) {
 	r.mu.RLock()
 	store, instance, log := r.redisStore, r.instanceID, r.redisLogger
@@ -326,15 +320,13 @@ func (r *StreamRegistry) publishUpsertSource(e StreamEntry) {
 	if err != nil {
 		return
 	}
-	if err := store.Publish(RegistryChange{
+	r.publishChange(store, log, RegistryChange{
 		InstanceID: instance,
 		Entity:     RegistryEntitySource,
 		Operation:  RegistryOpUpsert,
 		Key:        e.InternalName,
 		Payload:    payload,
-	}); err != nil && log != nil {
-		log.WithError(err).WithField("internal_name", e.InternalName).Debug("Stream-registry pubsub source upsert failed")
-	}
+	})
 }
 
 func (r *StreamRegistry) publishDeleteSource(internalName string) {
@@ -344,18 +336,18 @@ func (r *StreamRegistry) publishDeleteSource(internalName string) {
 	if store == nil || internalName == "" {
 		return
 	}
-	if err := store.DeleteSource(internalName); err != nil && log != nil {
-		log.WithError(err).WithField("internal_name", internalName).Warn("Stream-registry Redis DeleteSource failed")
+	if err := store.DeleteSource(internalName); err != nil {
+		if log != nil {
+			log.WithError(err).WithField("internal_name", internalName).Warn("Stream-registry Redis DeleteSource failed; retrying in background")
+		}
+		retryRegistryDeleteAsync(log, "source", internalName, func() error { return store.DeleteSource(internalName) })
 	}
-	if err := store.Publish(RegistryChange{
-		InstanceID:          instance,
-		Entity:              RegistryEntitySource,
-		Operation:           RegistryOpDelete,
-		Key:                 internalName,
-		PublishedAtUnixNano: time.Now().UnixNano(),
-	}); err != nil && log != nil {
-		log.WithError(err).WithField("internal_name", internalName).Debug("Stream-registry pubsub source delete failed")
-	}
+	r.publishChange(store, log, RegistryChange{
+		InstanceID: instance,
+		Entity:     RegistryEntitySource,
+		Operation:  RegistryOpDelete,
+		Key:        internalName,
+	})
 }
 
 func (r *StreamRegistry) publishUpsertArtifact(e ArtifactEntry) {
@@ -375,16 +367,13 @@ func (r *StreamRegistry) publishUpsertArtifact(e ArtifactEntry) {
 	if err != nil {
 		return
 	}
-	if err := store.Publish(RegistryChange{
-		InstanceID:          instance,
-		Entity:              RegistryEntityArtifact,
-		Operation:           RegistryOpUpsert,
-		Key:                 e.ArtifactHash,
-		Payload:             payload,
-		PublishedAtUnixNano: time.Now().UnixNano(),
-	}); err != nil && log != nil {
-		log.WithError(err).WithField("artifact_hash", e.ArtifactHash).Debug("Stream-registry pubsub artifact upsert failed")
-	}
+	r.publishChange(store, log, RegistryChange{
+		InstanceID: instance,
+		Entity:     RegistryEntityArtifact,
+		Operation:  RegistryOpUpsert,
+		Key:        e.ArtifactHash,
+		Payload:    payload,
+	})
 }
 
 func (r *StreamRegistry) publishDeleteArtifact(hash string) {
@@ -394,16 +383,53 @@ func (r *StreamRegistry) publishDeleteArtifact(hash string) {
 	if store == nil || hash == "" {
 		return
 	}
-	if err := store.DeleteArtifact(hash); err != nil && log != nil {
-		log.WithError(err).WithField("artifact_hash", hash).Warn("Stream-registry Redis DeleteArtifact failed")
+	if err := store.DeleteArtifact(hash); err != nil {
+		if log != nil {
+			log.WithError(err).WithField("artifact_hash", hash).Warn("Stream-registry Redis DeleteArtifact failed; retrying in background")
+		}
+		retryRegistryDeleteAsync(log, "artifact", hash, func() error { return store.DeleteArtifact(hash) })
 	}
-	if err := store.Publish(RegistryChange{
-		InstanceID:          instance,
-		Entity:              RegistryEntityArtifact,
-		Operation:           RegistryOpDelete,
-		Key:                 hash,
-		PublishedAtUnixNano: time.Now().UnixNano(),
-	}); err != nil && log != nil {
-		log.WithError(err).WithField("artifact_hash", hash).Debug("Stream-registry pubsub artifact delete failed")
+	r.publishChange(store, log, RegistryChange{
+		InstanceID: instance,
+		Entity:     RegistryEntityArtifact,
+		Operation:  RegistryOpDelete,
+		Key:        hash,
+	})
+}
+
+// registryDeleteRetryBackoff paces retryRegistryDeleteAsync. Package var so
+// tests can shrink it.
+var registryDeleteRetryBackoff = []time.Duration{time.Second, 5 * time.Second, 30 * time.Second}
+
+// retryRegistryDeleteAsync retries a failed write-through key delete off
+// the hot path. The changelog delete entry is still appended — live
+// replicas converge regardless — so the only exposure is a later restart's
+// rehydrate resurrecting the stale key (bounded further by the registry's
+// lookup TTL); these retries close that window.
+func retryRegistryDeleteAsync(log logging.Logger, kind, key string, del func() error) {
+	go func() {
+		for _, wait := range registryDeleteRetryBackoff {
+			time.Sleep(wait)
+			if del() == nil {
+				return
+			}
+		}
+		if log != nil {
+			log.WithFields(map[string]any{"kind": kind, "key": key}).Error("Stream-registry write-through delete kept failing; stale key may resurrect on a future restart's rehydrate")
+		}
+	}()
+}
+
+// publishChange appends a change to the changelog and records its entry ID
+// as the key's watermark, so a peer entry logged before this write can never
+// be applied over it afterwards.
+func (r *StreamRegistry) publishChange(store *RedisRegistryStore, log logging.Logger, change RegistryChange) {
+	id, err := store.Publish(change)
+	if err != nil {
+		if log != nil {
+			log.WithError(err).WithFields(map[string]any{"entity": change.Entity, "key": change.Key}).Debug("Stream-registry changelog append failed")
+		}
+		return
 	}
+	r.watermarks.Record(string(change.Entity)+"|"+change.Key, id)
 }

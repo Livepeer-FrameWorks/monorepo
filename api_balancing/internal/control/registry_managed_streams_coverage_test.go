@@ -136,70 +136,62 @@ func TestApplyRedisChange_SourceUpsertNewEntry(t *testing.T) {
 	}
 }
 
-// TestApplyRedisChange_StaleDeleteDroppedByTombstoneOrdering locks the tombstone
-// ordering invariant: a peer delete published BEFORE the local entry was last
-// updated must be dropped, because the stream was re-admitted locally after the
-// delete was published. Honoring the stale delete would wipe live local
-// SourceActive state. A delete with NO local Location fresher than its stamp
-// (or no stamp) proceeds and removes every index.
-func TestApplyRedisChange_StaleDeleteDroppedByTombstoneOrdering(t *testing.T) {
-	t.Run("stale delete dropped", func(t *testing.T) {
-		r := NewStreamRegistry(nil, "cluster-local", time.Minute)
-		r.redisLogger = logging.NewLogger() // exercise the drop-debug-log arm
-
-		localUpdate := time.Now()
-		r.byInt["streamz"] = &cachedEntry{
-			entry: StreamEntry{
-				StreamID:     "sid-z",
-				InternalName: "streamz",
-				PlaybackID:   "play-z",
-				Locations: map[string]Location{
-					"cluster-local": {ClusterID: "cluster-local", SourceActive: true, UpdatedAt: localUpdate},
-				},
-			},
-			cached: localUpdate,
-		}
-		r.byID["sid-z"] = r.byInt["streamz"]
-		r.byPlay["play-z"] = r.byInt["streamz"]
-
-		// Delete published a full minute BEFORE the local Location's UpdatedAt.
-		r.applyRedisChange(RegistryChange{
-			Entity:              RegistryEntitySource,
-			Operation:           RegistryOpDelete,
-			Key:                 "streamz",
-			PublishedAtUnixNano: localUpdate.Add(-time.Minute).UnixNano(),
-		})
-
-		if _, ok := r.byInt["streamz"]; !ok {
-			t.Fatal("stale delete wiped a fresher local entry; tombstone ordering broken")
-		}
-	})
-
-	t.Run("fresh delete removes all indexes", func(t *testing.T) {
-		r := NewStreamRegistry(nil, "cluster-local", time.Minute)
-
-		localUpdate := time.Now().Add(-time.Minute)
+// TestApplyRedisChange_StaleDeleteDroppedByChangelogOrdering locks the
+// ordering invariant: a peer delete whose changelog entry ID is at or below
+// the key's watermark (logged before the write local state already reflects)
+// is dropped by the changelog handler, because the stream was re-admitted
+// locally after the delete was logged. Honoring it would wipe live local
+// SourceActive state. A delete logged after the watermark proceeds and
+// removes every index.
+func TestApplyRedisChange_StaleDeleteDroppedByChangelogOrdering(t *testing.T) {
+	seed := func(r *StreamRegistry) {
 		ce := &cachedEntry{
 			entry: StreamEntry{
 				StreamID:     "sid-z",
 				InternalName: "streamz",
 				PlaybackID:   "play-z",
 				Locations: map[string]Location{
-					"cluster-local": {ClusterID: "cluster-local", UpdatedAt: localUpdate},
+					"cluster-local": {ClusterID: "cluster-local", SourceActive: true, UpdatedAt: time.Now()},
 				},
 			},
-			cached: localUpdate,
+			cached: time.Now(),
 		}
 		r.byInt["streamz"] = ce
 		r.byID["sid-z"] = ce
 		r.byPlay["play-z"] = ce
+	}
 
-		// Delete published AFTER the local Location's UpdatedAt -> proceed.
-		r.applyRedisChange(RegistryChange{
-			Entity:              RegistryEntitySource,
-			Operation:           RegistryOpDelete,
-			Key:                 "streamz",
-			PublishedAtUnixNano: time.Now().UnixNano(),
+	t.Run("stale delete dropped", func(t *testing.T) {
+		r := NewStreamRegistry(nil, "cluster-local", time.Minute)
+		seed(r)
+
+		// Local re-admission published at changelog position 2-0.
+		r.watermarks.Record("source|streamz", "2-0")
+
+		// Peer delete logged earlier (1-0): skipped by the watermark.
+		r.handleRegistryChangelogEntry("1-0", RegistryChange{
+			InstanceID: "peer",
+			Entity:     RegistryEntitySource,
+			Operation:  RegistryOpDelete,
+			Key:        "streamz",
+		})
+
+		if _, ok := r.byInt["streamz"]; !ok {
+			t.Fatal("stale delete wiped a fresher local entry; changelog ordering broken")
+		}
+	})
+
+	t.Run("fresh delete removes all indexes", func(t *testing.T) {
+		r := NewStreamRegistry(nil, "cluster-local", time.Minute)
+		seed(r)
+
+		// Local write at 1-0; peer delete logged after it (2-0) -> proceed.
+		r.watermarks.Record("source|streamz", "1-0")
+		r.handleRegistryChangelogEntry("2-0", RegistryChange{
+			InstanceID: "peer",
+			Entity:     RegistryEntitySource,
+			Operation:  RegistryOpDelete,
+			Key:        "streamz",
 		})
 
 		if _, ok := r.byInt["streamz"]; ok {

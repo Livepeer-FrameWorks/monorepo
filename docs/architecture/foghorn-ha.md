@@ -1,6 +1,8 @@
 # Foghorn HA - Redis State Externalization
 
-Foghorn can run as multiple instances per cluster with Redis as the shared state backend. Local stream/node/artifact state mutations write through to Redis, and each instance maintains an in-memory cache synced via pub/sub for sub-millisecond local routing reads. Federation, relay ownership, startup rehydration, and peer-address lookup also use Redis directly.
+Foghorn can run as multiple instances per cluster with Redis as the shared state backend. Local stream/node/artifact state mutations write through to Redis, and each instance maintains an in-memory cache synced via an ordered, replayable **changelog** (a Redis Stream per cache) for sub-millisecond local routing reads. Federation, relay ownership, startup rehydration, and peer-address lookup also use Redis directly.
+
+Single-Foghorn cells have no Redis at all: the in-memory layer is the only layer, and all sync machinery stays behind `if redisStore != nil`.
 
 ## Architecture
 
@@ -18,7 +20,9 @@ Foghorn can run as multiple instances per cluster with Redis as the shared state
                      │  {cluster_id}:active_replications:*  │
                      │  {cluster_id}:leader:peer_manager    │
                      │                                      │
-                     │  pub/sub: foghorn:{cluster_id}:*     │
+                     │  changelogs (Redis Streams):         │
+                     │  {cluster_id}:state_changelog        │
+                     │  {cluster_id}:registry_changelog     │
                      └────────┬─────────────┬───────────────┘
                               │             │
                     ┌─────────┴───┐   ┌─────┴───────────┐
@@ -27,8 +31,8 @@ Foghorn can run as multiple instances per cluster with Redis as the shared state
                     │             │   │                  │
                     │  In-memory  │   │  In-memory      │
                     │  cache ◄────│───│──► cache         │
-                    │  (pub/sub   │   │  (pub/sub       │
-                    │   sync)     │   │   sync)         │
+                    │  (changelog │   │  (changelog     │
+                    │   replay)   │   │   replay)       │
                     └──────┬──────┘   └──────┬──────────┘
                            │                  │
                     ┌──────┴──────┐    ┌──────┴──────┐
@@ -42,10 +46,11 @@ Foghorn can run as multiple instances per cluster with Redis as the shared state
 | Component                   | Role                                                                                                                              | Data                                                                                                                                                                                                              |
 | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | StreamStateManager          | In-memory state + Redis write-through. Singleton accessed via `state.DefaultManager()`                                            | Stream states, node states, artifacts, viewer sessions                                                                                                                                                            |
-| RedisStateStore             | Redis CRUD operations, pub/sub publisher                                                                                          | All `{cluster_id}:*` keys                                                                                                                                                                                         |
+| RedisStateStore             | Redis CRUD operations, changelog appender/reader (`pkg/redis.Changelog`)                                                          | All `{cluster_id}:*` keys + `{cluster_id}:state_changelog`                                                                                                                                                        |
 | PeerManager leader election | Redis SET NX for `{cluster_id}:leader:peer_manager`                                                                               | Only leader runs PeerChannel connections                                                                                                                                                                          |
 | RemoteEdgeCache             | Federation telemetry cache (Redis). Scope narrowed: stream identity / playback index / active-replication moved to StreamRegistry | `remote_edges`, `remote_replications`, `edge_summary`, `remote_live_streams`, `remote_artifacts`, `stream_peers`, `peer_heartbeat`                                                                                |
-| StreamRegistry              | Unified per-stream identity + per-peer Locations + admission state. Redis-backed with cross-instance pubsub fanout                | `registry:source:{internal_name}`, `registry:artifact:{hash}` — federation-fed via UpsertFederatedSource; admission state via MarkSourceActive/Inactive; replication state via MarkReplicating/RecordOutboundPull |
+| StreamRegistry              | Unified per-stream identity + per-peer Locations + admission state. Redis-backed with cross-instance changelog replay             | `registry:source:{internal_name}`, `registry:artifact:{hash}` — federation-fed via UpsertFederatedSource; admission state via MarkSourceActive/Inactive; replication state via MarkReplicating/RecordOutboundPull |
+| identity.Resolver           | Single front door for stream/artifact → tenant/cluster attribution; layered state → registry → Commodore (see below)              | Instance-local negative cache only; positive caching lives in the layers it consults                                                                                                                              |
 
 ## Data Flows
 
@@ -56,11 +61,14 @@ Helmsman heartbeat → Foghorn instance
   → StreamStateManager.UpdateNodeState(nodeID, state)
   → Write to in-memory map (immediate, sub-ms)
   → Write to Redis: SET {cluster_id}:nodes:{nodeID} → JSON
-  → Publish to Redis: foghorn:{cluster_id}:state_updates → {type: "node", id: nodeID}
-  → All other instances receive pub/sub → update their in-memory cache
+  → XADD {cluster_id}:state_changelog → StateChange entry (server-assigned ID)
+  → Writer records the entry ID as the entity's watermark
+  → All other instances XREAD the changelog in order → apply to their in-memory cache
 ```
 
-State mutation helpers follow this pattern: update in-memory, write-through to Redis, publish notification.
+State mutation helpers follow this pattern: update in-memory, write-through to Redis (the rehydration source), append to the changelog (the live sync transport).
+
+Identity fields (`NodeID`, `TenantID`, `StreamID`, `PlaybackID`, node `ClusterID`) merge **monotonically** on every path — local writers, replicated changelog entries, and rehydration alike fill blanks but never replace a non-empty value with an empty one. A cold-enrichment write that produced an identity-less entry heals on the next identified event instead of being replicated cluster-wide.
 
 ### Read Path
 
@@ -178,19 +186,53 @@ These are control commands where the current "fire once, return buffer-accept" s
 
 Send-buffer race (`c.stream.Send` returns nil, TCP dies before flush) is only fully solved by an end-to-end ack — pattern 1 for commands that need it. For pattern-2 and pattern-3 commands the race is benign: the observer event or the next reconcile tick re-converges. gRPC keepalive eventually marks the dead stream so future sends to that node go through the relay path with a fresh `conn_owner`.
 
-### Rehydration on Startup
+### Rehydration on Startup (consistent cut)
 
 ```
 Foghorn instance starts
   → Connects to Redis
+  → Capture changelog tail ID (XREVRANGE ... COUNT 1)     ← FIRST
   → SCAN {cluster_id}:streams:* → bulk load into in-memory map
   → SCAN {cluster_id}:nodes:* → bulk load into in-memory map
   → SCAN {cluster_id}:artifacts:* → bulk load into in-memory map
-  → Subscribe to foghorn:{cluster_id}:state_updates
+  → XREAD {cluster_id}:state_changelog from the captured tail  ← replay
   → Ready to serve (in-memory cache fully populated)
 ```
 
-Merge-not-replace: rehydration merges Redis data with any state already received from Helmsman heartbeats during startup. Score recomputation runs after deserialization.
+Capture-then-load makes snapshot + replay a **consistent cut**: a change appended before the capture is fully reflected in the write-through keys the SCAN loads; a change appended after it is replayed from the log. Nothing can fall between the snapshot and the live sync (the startup lost-update window the old pub/sub transport had).
+
+Merge-not-replace: rehydration merges Redis data with any state already received from Helmsman heartbeats during startup, with identity fields merged ignore-empty. Score recomputation runs after deserialization.
+
+### Ordering and replay semantics
+
+The changelog (one Redis Stream per cache, `pkg/redis.Changelog`) replaces the earlier fire-and-forget pub/sub fanout, which delivered at-most-once with no ordering — a restarting instance silently missed changes forever, and two instances writing the same entity raced on arrival order. The previous mitigation compared cross-machine wall clocks, which broke under clock skew and after restarts.
+
+With the log, ordering and replay come from the data structure itself:
+
+- **Entry IDs are the versions.** Redis assigns each appended entry a monotonically increasing ID (`<ms>-<seq>`). Comparing two IDs orders the writes they carry with no reference to any wall clock, regardless of which instance produced them.
+- **Per-entity watermarks.** Each instance tracks, per entity (`pkg/redis.Watermarks`), the highest entry ID it has published (its own writes) or applied (peer writes). The apply path skips any entry at or below the watermark — so a peer change that was logged before a later local write can never roll it back, and replayed entries apply idempotently.
+- **Deletes are ordered like everything else.** A delete that reaches the apply path is by construction newer than anything local; a stale delete is dropped by the watermark. No wall-clock tombstone guards remain.
+- **Self-originated entries** are skipped by `InstanceID` and only advance the watermark.
+- **Bounded retention, gap-checked.** Streams are trimmed (`XADD MAXLEN ~ 100000`). A _restarting_ instance is always correct regardless of downtime: the write-through keys are the rehydration source and the consistent cut re-anchors replay at the current tail. A _live_ reader can fall behind retention (partitioned from Redis while peers keep appending); after any read failure the reader compares its cursor against the oldest retained entry and, on a gap, re-runs the consistent cut (capture tail → reload keys → resume) instead of silently skipping the trimmed range.
+
+The registry's per-Location CRDT merge is unchanged: `Locations` is per-cluster state with one authoritative writer per cluster, so incoming snapshots still merge Location-by-Location (newest `UpdatedAt` wins, locally-known Locations preserved) — that is about merge meaning, not transport ordering.
+
+Acceptance specs live in `api_balancing/internal/state/ha_ordering_spec_test.go` (stale snapshot / stale delete) and `api_balancing/internal/control/ha_ordering_spec_test.go` (clock-skewed delete / post-restart delete), plus the two-instance replay tests in `api_balancing/internal/state/changelog_sync_test.go`.
+
+### Identity resolution facade
+
+`api_balancing/internal/identity` is the single front door for "who does this stream/artifact belong to, and where does it live". Every trigger handler, gRPC surface, and federation path resolves through it instead of hand-rolling a lookup chain, so a consumer reading only a cold layer (the bug class behind empty-tenant/cluster attribution on HA replicas) can only be fixed once, centrally.
+
+Resolution layers, in order, each filling blanks monotonically (never erasing earlier layers):
+
+| Kind     | Chain                                                                                                          |
+| -------- | -------------------------------------------------------------------------------------------------------------- |
+| stream   | in-memory state union (serving NodeID + its cluster) → stream registry (which hydrates from Commodore on miss) |
+| artifact | stream registry (cache → `foghorn.artifacts` / processing jobs SQL) → Commodore `Resolve*Hash`                 |
+
+Only an authoritative not-found (the system of record answered "does not exist", `identity.ErrNotFound` from the adapters) is negative-cached, briefly (30s), so an unknown name arriving with every Mist trigger can't become a Commodore RPC firehose. Transient failures — RPC errors, DB outages, context expiry — are never cached: a dependency flap must retry on the next trigger, not harden into a 30s hard unknown for freeze/mint/thumbnails. Per-layer consults are counted in `foghorn_identity_resolutions_total{kind,layer,outcome}` so the next siloing bug shows up on a dashboard.
+
+Wiring lives in `cmd/foghorn/main.go` (`identity.SetDefault`); the facade itself imports no other internal package, with layers injected as narrow adapters — it works in every deployment shape, including registry-less tests and single-instance cells.
 
 ## Key Schema
 
@@ -232,10 +274,12 @@ Location fields (per cluster, per stream):
 - **Federated (peer cluster)**: `IsOrigin`, `IsLiveNow`, `EdgeCandidates`, `AdTimestamp`
 - **Local (this cluster)**: `IsOrigin`, `IsLiveNow`, `SourceNodes`, `SourceActive`, `SourceInactiveAt`, `OwnerNodeID` (admission), `ReplicatingFrom` + `PullDTSCURL` + `DestNodeID` + `DestNodeBaseURL` + `PullSourceNodeID` (dest-side pull), `OutboundPullers[]` (source-side pulls)
 
-### Pub/Sub Channels
+### Changelog Streams
 
-- `foghorn:{cluster_id}:state_updates` — StreamStateManager notifications (`{type, id}`); receivers re-read from Redis.
-- `foghorn:{cluster_id}:registry_updates` — StreamRegistry RegistryChange messages (entity, operation, key, full payload); receivers apply in-place without re-reading Redis. Self-published messages are filtered by `instance_id` so only peers apply.
+- `{cluster_id}:state_changelog` — StreamStateManager `StateChange` entries (entity, operation, key, full payload). Receivers apply in log order, gated by per-entity watermarks; self-published entries are skipped by `instance_id`.
+- `{cluster_id}:registry_changelog` — StreamRegistry `RegistryChange` entries, same semantics. Sources still merge per-Location on apply.
+
+Both are normal persistent keys (trimmed with `MAXLEN ~ 100000`), so they survive Sentinel failover like the state keys do.
 
 ## docker-compose Topology
 
@@ -314,7 +358,9 @@ Manual smoke check with compose topology:
 - `api_balancing/internal/control` - CommandRelay, Send*/SendLocal* wrappers, connection lifecycle hooks
 - `api_balancing/internal/grpc` - FoghornRelay gRPC handler (dispatches to SendLocal\*)
 - `api_balancing/internal/federation` - RemoteEdgeCache: federation telemetry cache + leader lease
-- `api_balancing/internal/control` - StreamRegistry: per-stream identity + per-peer Locations + admission/replication state, with Redis backing (RedisRegistryStore) and cross-instance pubsub fanout
+- `api_balancing/internal/control` - StreamRegistry: per-stream identity + per-peer Locations + admission/replication state, with Redis backing (RedisRegistryStore) and cross-instance changelog replay
+- `api_balancing/internal/identity` - identity resolver facade (state → registry → Commodore), wired in `cmd/foghorn/main.go`
+- `pkg/redis/changelog.go` - Changelog (Redis Stream append/tail/read) + Watermarks (per-key ordering)
 - `pkg/proto` - FoghornRelay service definition
 - dev compose configuration - foghorn + foghorn-2 + foghorn-redis topology
 

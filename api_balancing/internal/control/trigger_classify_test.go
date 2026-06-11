@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"testing"
-	"time"
 
 	"frameworks/api_balancing/internal/ingesterrors"
 
@@ -101,39 +100,4 @@ func TestClassifyTriggerError(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestMaxLocationUpdatedAt pins the CRDT tombstone-ordering helper feeding
-// mergeStreamEntry: it must return the newest Location timestamp regardless of
-// map iteration order, and a zero time for an entry with no Locations.
-func TestMaxLocationUpdatedAt(t *testing.T) {
-	tEarly := time.Unix(100, 0)
-	tMid := time.Unix(200, 0)
-	tLate := time.Unix(300, 0)
-
-	t.Run("empty_locations_zero_time", func(t *testing.T) {
-		if got := maxLocationUpdatedAt(StreamEntry{}); !got.IsZero() {
-			t.Fatalf("empty entry = %v, want zero time", got)
-		}
-	})
-
-	t.Run("returns_newest", func(t *testing.T) {
-		e := StreamEntry{Locations: map[string]Location{
-			"A": {ClusterID: "A", UpdatedAt: tEarly},
-			"B": {ClusterID: "B", UpdatedAt: tLate},
-			"C": {ClusterID: "C", UpdatedAt: tMid},
-		}}
-		if got := maxLocationUpdatedAt(e); !got.Equal(tLate) {
-			t.Fatalf("max = %v, want %v", got, tLate)
-		}
-	})
-
-	t.Run("single_location", func(t *testing.T) {
-		e := StreamEntry{Locations: map[string]Location{
-			"A": {ClusterID: "A", UpdatedAt: tMid},
-		}}
-		if got := maxLocationUpdatedAt(e); !got.Equal(tMid) {
-			t.Fatalf("max = %v, want %v", got, tMid)
-		}
-	})
 }

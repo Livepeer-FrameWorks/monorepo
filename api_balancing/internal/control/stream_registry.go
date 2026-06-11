@@ -10,6 +10,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	pkgredis "github.com/Livepeer-FrameWorks/monorepo/pkg/redis"
 )
 
 // IngestMode is a typed source stream ingest mode. The zero value is
@@ -317,6 +318,11 @@ type StreamRegistry struct {
 	redisCancel context.CancelFunc
 	redisWg     sync.WaitGroup
 	redisLogger logging.Logger
+
+	// watermarks tracks per-key changelog positions so stale or replayed
+	// peer entries never roll back a later local write. See
+	// pkgredis.Watermarks.
+	watermarks *pkgredis.Watermarks
 }
 
 type cachedEntry struct {
@@ -333,14 +339,15 @@ func NewStreamRegistry(client streamRegistryCommodore, clusterID string, ttl tim
 		ttl = 30 * time.Second
 	}
 	return &StreamRegistry{
-		client:    client,
-		clusterID: clusterID,
-		ttl:       ttl,
-		byID:      make(map[string]*cachedEntry),
-		byInt:     make(map[string]*cachedEntry),
-		byPlay:    make(map[string]*cachedEntry),
-		artifacts: newArtifactStore(),
-		managed:   newManagedState(),
+		client:     client,
+		clusterID:  clusterID,
+		ttl:        ttl,
+		byID:       make(map[string]*cachedEntry),
+		byInt:      make(map[string]*cachedEntry),
+		byPlay:     make(map[string]*cachedEntry),
+		artifacts:  newArtifactStore(),
+		managed:    newManagedState(),
+		watermarks: pkgredis.NewWatermarks(),
 	}
 }
 

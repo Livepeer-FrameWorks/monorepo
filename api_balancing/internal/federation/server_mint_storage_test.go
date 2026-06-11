@@ -2,6 +2,8 @@ package federation
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -9,6 +11,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/identity"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
@@ -127,6 +131,7 @@ func TestMintStorageURLs_LiveThumbnail_HappyPath(t *testing.T) {
 		t.Fatalf("seed stream: %v", err)
 	}
 	sm.SetStreamStreamID("stream-a", "stream-uuid")
+	installMintIdentityResolver(t, nil, nil)
 
 	fake := &fakeMintS3Client{}
 	srv := mintTestServer(t, fake, nil)
@@ -153,6 +158,114 @@ func TestMintStorageURLs_LiveThumbnail_HappyPath(t *testing.T) {
 	if len(fake.putCalls) != 1 || fake.putCalls[0].key != wantKey {
 		t.Fatalf("expected single PUT against %q, got %+v", wantKey, fake.putCalls)
 	}
+}
+
+// installMintIdentityResolver wires an identity facade over the test's
+// fakes, mirroring the production wiring in cmd/foghorn/main.go: the state
+// manager for the fast path, a registry leg backed by the fake's
+// ResolveInternalName (sources) and the sqlmock DB (artifacts), and the
+// fake's Resolve*Hash tables as the Commodore leg.
+func installMintIdentityResolver(t *testing.T, db *sql.DB, resolver *fakeMintResolver) {
+	t.Helper()
+	registry := control.NewStreamRegistry(nil, "platform-eu", time.Minute)
+	cfg := identity.Config{
+		StreamState: func(internalName string) (identity.StreamStateView, bool) {
+			ss := state.DefaultManager().GetStreamState(internalName)
+			if ss == nil {
+				return identity.StreamStateView{}, false
+			}
+			return identity.StreamStateView{
+				StreamID:   ss.StreamID,
+				PlaybackID: ss.PlaybackID,
+				TenantID:   ss.TenantID,
+				NodeID:     ss.NodeID,
+			}, true
+		},
+	}
+	if db != nil {
+		cfg.RegistryArtifact = func(ctx context.Context, hash string) (identity.ArtifactIdentity, error) {
+			entry, err := registry.ResolveArtifactByHash(ctx, db, hash)
+			if err != nil {
+				if errors.Is(err, control.ErrUnknownArtifact) {
+					return identity.ArtifactIdentity{}, identity.ErrNotFound
+				}
+				return identity.ArtifactIdentity{}, err
+			}
+			return identity.ArtifactIdentity{
+				ArtifactHash:       entry.ArtifactHash,
+				Kind:               entry.Kind.String(),
+				InternalName:       entry.InternalName,
+				StreamInternalName: entry.StreamInternal,
+				StreamID:           entry.StreamID,
+				TenantID:           entry.TenantID,
+				OriginClusterID:    entry.OriginClusterID,
+				StorageClusterID:   entry.StorageCluster,
+			}, nil
+		}
+	}
+	if resolver != nil {
+		cfg.RegistrySource = func(ctx context.Context, internalName string) (identity.StreamIdentity, error) {
+			resp, err := resolver.ResolveInternalName(ctx, internalName)
+			if err != nil || resp == nil || resp.GetStreamId() == "" {
+				return identity.StreamIdentity{}, identity.ErrNotFound
+			}
+			return identity.StreamIdentity{
+				InternalName:    internalName,
+				StreamID:        resp.GetStreamId(),
+				TenantID:        resp.GetTenantId(),
+				OriginClusterID: resp.GetOriginClusterId(),
+			}, nil
+		}
+		cfg.CommodoreArtifact = func(ctx context.Context, kind, hash string) (identity.ArtifactIdentity, error) {
+			switch kind {
+			case "clip":
+				resp, err := resolver.ResolveClipHash(ctx, hash)
+				if err != nil || resp == nil || !resp.GetFound() {
+					return identity.ArtifactIdentity{}, err
+				}
+				return identity.ArtifactIdentity{
+					ArtifactHash:       hash,
+					Kind:               kind,
+					InternalName:       resp.GetInternalName(),
+					StreamInternalName: resp.GetStreamInternalName(),
+					StreamID:           resp.GetStreamId(),
+					TenantID:           resp.GetTenantId(),
+					OriginClusterID:    resp.GetOriginClusterId(),
+				}, nil
+			case "vod":
+				resp, err := resolver.ResolveVodHash(ctx, hash)
+				if err != nil || resp == nil || !resp.GetFound() {
+					return identity.ArtifactIdentity{}, err
+				}
+				return identity.ArtifactIdentity{
+					ArtifactHash:       hash,
+					Kind:               kind,
+					InternalName:       resp.GetInternalName(),
+					StreamInternalName: resp.GetInternalName(),
+					TenantID:           resp.GetTenantId(),
+					OriginClusterID:    resp.GetOriginClusterId(),
+				}, nil
+			case "dvr":
+				resp, err := resolver.ResolveDVRHash(ctx, hash)
+				if err != nil || resp == nil || !resp.GetFound() {
+					return identity.ArtifactIdentity{}, err
+				}
+				return identity.ArtifactIdentity{
+					ArtifactHash:       hash,
+					Kind:               kind,
+					InternalName:       resp.GetInternalName(),
+					StreamInternalName: resp.GetStreamInternalName(),
+					StreamID:           resp.GetStreamId(),
+					TenantID:           resp.GetTenantId(),
+					OriginClusterID:    resp.GetOriginClusterId(),
+				}, nil
+			default:
+				return identity.ArtifactIdentity{}, nil
+			}
+		}
+	}
+	identity.SetDefault(identity.NewResolver(cfg))
+	t.Cleanup(func() { identity.SetDefault(nil) })
 }
 
 // fakeMintResolver answers the four Commodore Resolve* calls deterministically
@@ -208,9 +321,10 @@ func TestMintStorageURLs_LiveThumbnail_CommodoreFallback(t *testing.T) {
 		},
 	}
 
+	installMintIdentityResolver(t, nil, resolver)
+
 	fake := &fakeMintS3Client{}
 	srv := mintTestServer(t, fake, nil)
-	srv.SetMintArtifactResolver(resolver)
 
 	resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
 		TenantId:           "tenant-a",
@@ -242,8 +356,9 @@ func TestMintStorageURLs_LiveThumbnail_RejectsWithoutCommodore(t *testing.T) {
 	state.ResetDefaultManagerForTests()
 	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
 
+	installMintIdentityResolver(t, nil, nil)
 	srv := mintTestServer(t, &fakeMintS3Client{}, nil)
-	// No resolver wired — fallback path returns false.
+	// No registry/Commodore legs wired — resolution fails closed.
 
 	resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
 		TenantId:           "tenant-a",
@@ -279,8 +394,8 @@ func TestMintStorageURLs_LiveThumbnail_RejectsArtifactKeyStreamIDMismatch(t *tes
 		},
 	}
 
+	installMintIdentityResolver(t, nil, resolver)
 	srv := mintTestServer(t, &fakeMintS3Client{}, nil)
-	srv.SetMintArtifactResolver(resolver)
 
 	resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
 		TenantId:           "tenant-a",
@@ -309,6 +424,7 @@ func TestMintStorageURLs_LiveThumbnail_TenantMismatch(t *testing.T) {
 	if err := sm.UpdateStreamFromBuffer("stream-a", "stream-a", "node-a", "tenant-other", "FULL", ""); err != nil {
 		t.Fatalf("seed stream: %v", err)
 	}
+	installMintIdentityResolver(t, nil, nil)
 
 	srv := mintTestServer(t, &fakeMintS3Client{}, nil)
 	resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
@@ -366,9 +482,10 @@ func TestMintStorageURLs_DvrSet_KeyShape(t *testing.T) {
 		},
 	}
 
+	installMintIdentityResolver(t, nil, resolver)
+
 	fake := &fakeMintS3Client{}
 	srv := mintTestServer(t, fake, nil)
-	srv.SetMintArtifactResolver(resolver)
 
 	resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
 		TenantId:         "tenant-a",
@@ -417,9 +534,10 @@ func TestMintStorageURLs_DvrSegment_KeyShape(t *testing.T) {
 		},
 	}
 
+	installMintIdentityResolver(t, nil, resolver)
+
 	fake := &fakeMintS3Client{}
 	srv := mintTestServer(t, fake, nil)
-	srv.SetMintArtifactResolver(resolver)
 
 	resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
 		TenantId:        "tenant-a",
@@ -443,12 +561,11 @@ func TestMintStorageURLs_DvrSegment_KeyShape(t *testing.T) {
 	}
 }
 
-// TestMintStorageURLs_FastPath_RejectsCrossTypeHash asserts the DB fast path
-// validates artifact_type compatibility. A same-tenant DVR hash requested as
-// a clip mint must be rejected; otherwise the handler would build a clip-shape
-// S3 key against an asset that downstream consumers expect at the dvr-shape
-// path. The Commodore fallback is implicitly type-safe (each ResolveXHash
-// queries a single table), but the local fast path was not before this guard.
+// TestMintStorageURLs_FastPath_RejectsCrossTypeHash asserts the resolved
+// artifact kind is validated against the requested mint type. A same-tenant
+// DVR hash requested as a clip mint must be rejected; otherwise the handler
+// would build a clip-shape S3 key against an asset that downstream consumers
+// expect at the dvr-shape path.
 func TestMintStorageURLs_FastPath_RejectsCrossTypeHash(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -456,10 +573,13 @@ func TestMintStorageURLs_FastPath_RejectsCrossTypeHash(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"artifact_type", "stream_internal_name", "internal_name", "origin_cluster_id"}).
-		AddRow("dvr", "stream-a", "dvr-abcd", "platform-eu")
+	rows := sqlmock.NewRows([]string{
+		"artifact_hash", "artifact_type", "internal_name", "stream_internal_name",
+		"stream_id", "tenant_id", "status", "format",
+		"origin_cluster_id", "storage_cluster_id", "has_thumbnails",
+	}).AddRow("dvr-abcd", "dvr", "dvr-abcd", "stream-a", "", "tenant-a", "ready", "", "platform-eu", "", false)
 	mock.ExpectQuery("FROM foghorn.artifacts").
-		WithArgs("dvr-abcd", "tenant-a").
+		WithArgs("dvr-abcd").
 		WillReturnRows(rows)
 
 	cfg := FederationServerConfig{
@@ -479,6 +599,7 @@ func TestMintStorageURLs_FastPath_RejectsCrossTypeHash(t *testing.T) {
 		},
 	}
 	srv := NewFederationServer(cfg)
+	installMintIdentityResolver(t, db, nil)
 
 	resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
 		TenantId:        "tenant-a",
@@ -504,10 +625,11 @@ func TestMintStorageURLs_FastPath_RejectsCrossTypeHash(t *testing.T) {
 // TestMintStorageURLs_FastPath_FallsThroughOnEmptyStreamName covers the case
 // where the local artifact row matches by tenant and type but has no
 // stream_internal_name (incomplete cache from a prior delegation that
-// couldn't fill it in). The fast path must NOT accept that row for clip/dvr
-// — BuildClipS3Key / BuildDVRS3Key would emit "clips/<tenant>//<hash>.<fmt>".
-// Commodore is the authoritative source for stream_internal_name and is
-// always wired in production, so falling through is the correct behaviour.
+// couldn't fill it in). The local row must NOT satisfy a clip/dvr mint on
+// its own — BuildClipS3Key / BuildDVRS3Key would emit
+// "clips/<tenant>//<hash>.<fmt>". Commodore is the authoritative source for
+// stream_internal_name and is always wired in production, so the resolver
+// fills the gap from it.
 func TestMintStorageURLs_FastPath_FallsThroughOnEmptyStreamName(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -515,10 +637,13 @@ func TestMintStorageURLs_FastPath_FallsThroughOnEmptyStreamName(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"artifact_type", "stream_internal_name", "internal_name", "origin_cluster_id"}).
-		AddRow("clip", "", "clip-abcd", "platform-eu") // empty stream_internal_name
+	rows := sqlmock.NewRows([]string{
+		"artifact_hash", "artifact_type", "internal_name", "stream_internal_name",
+		"stream_id", "tenant_id", "status", "format",
+		"origin_cluster_id", "storage_cluster_id", "has_thumbnails",
+	}).AddRow("clip-abcd", "clip", "clip-abcd", "", "", "tenant-a", "ready", "mp4", "platform-eu", "", false) // empty stream_internal_name
 	mock.ExpectQuery("FROM foghorn.artifacts").
-		WithArgs("clip-abcd", "tenant-a").
+		WithArgs("clip-abcd").
 		WillReturnRows(rows)
 
 	resolver := &fakeMintResolver{
@@ -550,7 +675,7 @@ func TestMintStorageURLs_FastPath_FallsThroughOnEmptyStreamName(t *testing.T) {
 		},
 	}
 	srv := NewFederationServer(cfg)
-	srv.SetMintArtifactResolver(resolver)
+	installMintIdentityResolver(t, db, resolver)
 
 	resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
 		TenantId:        "tenant-a",

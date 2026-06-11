@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/artifacts"
@@ -11,6 +12,7 @@ import (
 	"frameworks/api_balancing/internal/federation"
 	foghorngrpc "frameworks/api_balancing/internal/grpc"
 	"frameworks/api_balancing/internal/handlers"
+	"frameworks/api_balancing/internal/identity"
 	"frameworks/api_balancing/internal/jobs"
 	"frameworks/api_balancing/internal/orchestrator"
 	"frameworks/api_balancing/internal/policybundle"
@@ -679,16 +681,24 @@ func main() {
 		defer fedPool.Close()
 
 		peerManager = federation.NewPeerManager(federation.PeerManagerConfig{
-			ClusterID:              foghornCfg.ClusterID,
-			InstanceID:             instanceID,
-			Pool:                   fedPool,
-			QM:                     qmClient,
-			Cache:                  remoteEdgeCache,
-			Logger:                 logger,
-			DecklogClient:          decklogClient,
-			OwnerTenantID:          bootstrapOwnerTenantID,
-			SelfGeoFunc:            handlers.GetSelfGeo,
-			ArtifactTenantResolver: federation.NewDBArtifactTenantResolver(db),
+			ClusterID:     foghornCfg.ClusterID,
+			InstanceID:    instanceID,
+			Pool:          fedPool,
+			QM:            qmClient,
+			Cache:         remoteEdgeCache,
+			Logger:        logger,
+			DecklogClient: decklogClient,
+			OwnerTenantID: bootstrapOwnerTenantID,
+			SelfGeoFunc:   handlers.GetSelfGeo,
+			// Late-bound through the identity facade (wired further down,
+			// after the stream registry exists) so ad attribution shares
+			// the same front door and metrics as every other consumer.
+			ArtifactTenantResolver: func(ctx context.Context, hashes []string) (map[string]string, error) {
+				if r := identity.Default(); r != nil {
+					return r.ResolveArtifactTenants(ctx, hashes)
+				}
+				return nil, nil
+			},
 		})
 		defer peerManager.Close()
 
@@ -795,6 +805,131 @@ func main() {
 	}
 	control.SetStreamRegistry(streamRegistry)
 	streamRegistry.StartSweeper(context.Background(), 30*time.Second, 5*time.Minute)
+
+	// Identity resolver facade: the single front door for stream/artifact
+	// → tenant/cluster attribution, layered state → registry → Commodore.
+	// All trigger handlers, gRPC surfaces, and federation paths resolve
+	// through this instead of hand-rolling lookup chains.
+	identityResolutions := metricsCollector.NewCounter(
+		"identity_resolutions_total",
+		"Identity resolver layer consults by kind, layer and outcome",
+		[]string{"kind", "layer", "outcome"},
+	)
+	identityCfg := identity.Config{
+		StreamState: func(internalName string) (identity.StreamStateView, bool) {
+			ss := state.DefaultManager().GetStreamState(internalName)
+			if ss == nil {
+				return identity.StreamStateView{}, false
+			}
+			return identity.StreamStateView{
+				StreamID:   ss.StreamID,
+				PlaybackID: ss.PlaybackID,
+				TenantID:   ss.TenantID,
+				NodeID:     ss.NodeID,
+			}, true
+		},
+		NodeCluster: func(nodeID string) string {
+			if ns := state.DefaultManager().GetNodeState(nodeID); ns != nil {
+				return ns.ClusterID
+			}
+			return ""
+		},
+		RegistrySource: func(ctx context.Context, internalName string) (identity.StreamIdentity, error) {
+			entry, resolveErr := streamRegistry.ResolveSourceByInternalName(ctx, internalName)
+			if resolveErr != nil {
+				// The registry's sentinel is the authoritative "does not
+				// exist" answer; everything else (Commodore RPC failure,
+				// SQL outage) is transient and must not be negative-cached.
+				if errors.Is(resolveErr, control.ErrUnknownStream) {
+					return identity.StreamIdentity{}, identity.ErrNotFound
+				}
+				return identity.StreamIdentity{}, resolveErr
+			}
+			return identity.StreamIdentity{
+				InternalName:    entry.InternalName,
+				StreamID:        entry.StreamID,
+				PlaybackID:      entry.PlaybackID,
+				TenantID:        entry.TenantID,
+				OriginClusterID: entry.OriginClusterID,
+			}, nil
+		},
+		RegistryArtifact: func(ctx context.Context, artifactHash string) (identity.ArtifactIdentity, error) {
+			entry, resolveErr := streamRegistry.ResolveArtifactByHash(ctx, db, artifactHash)
+			if resolveErr != nil {
+				if errors.Is(resolveErr, control.ErrUnknownArtifact) {
+					return identity.ArtifactIdentity{}, identity.ErrNotFound
+				}
+				return identity.ArtifactIdentity{}, resolveErr
+			}
+			return identity.ArtifactIdentity{
+				ArtifactHash:       entry.ArtifactHash,
+				Kind:               entry.Kind.String(),
+				InternalName:       entry.InternalName,
+				StreamInternalName: entry.StreamInternal,
+				StreamID:           entry.StreamID,
+				TenantID:           entry.TenantID,
+				OriginClusterID:    entry.OriginClusterID,
+				StorageClusterID:   entry.StorageCluster,
+			}, nil
+		},
+		ArtifactTenants: federation.NewDBArtifactTenantResolver(db),
+		Observe: func(kind, layer, outcome string) {
+			identityResolutions.WithLabelValues(kind, layer, outcome).Inc()
+		},
+	}
+	if commodoreClient != nil {
+		identityCfg.CommodoreArtifact = func(ctx context.Context, kind, artifactHash string) (identity.ArtifactIdentity, error) {
+			switch kind {
+			case "clip":
+				resp, resolveErr := commodoreClient.ResolveClipHash(ctx, artifactHash)
+				if resolveErr != nil || resp == nil || !resp.GetFound() {
+					return identity.ArtifactIdentity{}, resolveErr
+				}
+				return identity.ArtifactIdentity{
+					ArtifactHash:       artifactHash,
+					Kind:               kind,
+					InternalName:       resp.GetInternalName(),
+					StreamInternalName: resp.GetStreamInternalName(),
+					StreamID:           resp.GetStreamId(),
+					TenantID:           resp.GetTenantId(),
+					OriginClusterID:    resp.GetOriginClusterId(),
+				}, nil
+			case "vod":
+				resp, resolveErr := commodoreClient.ResolveVodHash(ctx, artifactHash)
+				if resolveErr != nil || resp == nil || !resp.GetFound() {
+					return identity.ArtifactIdentity{}, resolveErr
+				}
+				// VOD uploads have no parent stream; existing consumers
+				// (freeze, mint) use the asset's own internal_name where a
+				// stream name is required, so both fields carry it.
+				return identity.ArtifactIdentity{
+					ArtifactHash:       artifactHash,
+					Kind:               kind,
+					InternalName:       resp.GetInternalName(),
+					StreamInternalName: resp.GetInternalName(),
+					TenantID:           resp.GetTenantId(),
+					OriginClusterID:    resp.GetOriginClusterId(),
+				}, nil
+			case "dvr":
+				resp, resolveErr := commodoreClient.ResolveDVRHash(ctx, artifactHash)
+				if resolveErr != nil || resp == nil || !resp.GetFound() {
+					return identity.ArtifactIdentity{}, resolveErr
+				}
+				return identity.ArtifactIdentity{
+					ArtifactHash:       artifactHash,
+					Kind:               kind,
+					InternalName:       resp.GetInternalName(),
+					StreamInternalName: resp.GetStreamInternalName(),
+					StreamID:           resp.GetStreamId(),
+					TenantID:           resp.GetTenantId(),
+					OriginClusterID:    resp.GetOriginClusterId(),
+				}, nil
+			default:
+				return identity.ArtifactIdentity{}, nil
+			}
+		}
+	}
+	identity.SetDefault(identity.NewResolver(identityCfg))
 
 	// Peer-relay capability grants: Redis-backed when available (any HA
 	// instance can authorize a grant another minted), in-memory otherwise.
@@ -1011,9 +1146,6 @@ func main() {
 		federationServer.SetClipCreator(foghornServer)
 		federationServer.SetDVRCreator(foghornServer)
 		federationServer.SetArtifactCommandHandler(foghornServer)
-		if commodoreClient != nil {
-			federationServer.SetMintArtifactResolver(commodoreClient)
-		}
 	}
 
 	relayAdvertiseAddr := foghornRelayAdvertiseAddr(internalGRPCBindAddr, advertiseAddr)

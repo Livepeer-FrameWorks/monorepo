@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/artifactoutbox"
+	"frameworks/api_balancing/internal/identity"
 	"frameworks/api_balancing/internal/ingesterrors"
 	"frameworks/api_balancing/internal/state"
 	"frameworks/api_balancing/internal/storage"
@@ -4140,32 +4141,22 @@ func processFreezePermissionRequest(req *ipcpb.FreezePermissionRequest, nodeID s
 		WHERE artifact_hash = $1 AND artifact_type = $2`,
 		lookupHash, lookupType).Scan(&streamName, &originCluster, &syncStatus)
 
-	// Resolve tenant (and stream/origin if DB row was missing) via Commodore.
+	// Resolve tenant (and stream/origin if DB row was missing) via the
+	// identity facade: registry cache → foghorn SQL → Commodore.
 	// origin_cluster_id is required by the storage resolver's origin-first
 	// rule: a self-hosted origin with its own S3 should be preferred over
 	// the official cluster, but only if we know which cluster that is.
 	var tenantID string
 	var commodoreOrigin string
-	if CommodoreClient != nil {
+	if resolver := identity.Default(); resolver != nil {
 		resolveCtx, resolveCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer resolveCancel()
-		switch assetType {
-		case "clip":
-			if resp, resolveErr := CommodoreClient.ResolveClipHash(resolveCtx, assetHash); resolveErr == nil && resp.Found {
-				tenantID = resp.TenantId
-				if streamName == "" {
-					streamName = resp.StreamInternalName
-				}
-				commodoreOrigin = resp.OriginClusterId
+		if id, resolveErr := resolver.ResolveArtifact(resolveCtx, assetHash, assetType); resolveErr == nil {
+			tenantID = id.TenantID
+			if streamName == "" {
+				streamName = id.StreamInternalName
 			}
-		case "vod":
-			if resp, resolveErr := CommodoreClient.ResolveVodHash(resolveCtx, assetHash); resolveErr == nil && resp.Found {
-				tenantID = resp.TenantId
-				if streamName == "" {
-					streamName = resp.InternalName
-				}
-				commodoreOrigin = resp.OriginClusterId
-			}
+			commodoreOrigin = id.OriginClusterID
 		}
 	}
 	if commodoreOrigin != "" && !originCluster.Valid {
@@ -5013,12 +5004,8 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 				// seconds instead of waiting for the next poll interval.
 				NotifyArtifactMapUpdated(nodeID)
 				if artifactType == "clip" && decklogClient != nil {
-					if streamID == "" && streamInternalName != "" && CommodoreClient != nil {
-						resolveCtx, cancel := context.WithTimeout(ctx, time.Second)
-						if resp, resolveErr := CommodoreClient.ResolveInternalName(resolveCtx, streamInternalName); resolveErr == nil && resp != nil {
-							streamID = resp.GetStreamId()
-						}
-						cancel()
+					if streamID == "" {
+						streamID = resolveLifecycleStreamID(ctx, streamInternalName)
 					}
 					clipData := &ipcpb.ClipLifecycleData{
 						Stage:    ipcpb.ClipLifecycleData_STAGE_DONE,
@@ -5133,12 +5120,8 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 				// periscope-ingest drops lifecycle events without a valid
 				// stream UUID, which is exactly how a failed clip stays
 				// "processing" in the UI forever.
-				if failedStreamID == "" && failedStreamInternalName != "" && CommodoreClient != nil {
-					resolveCtx, resolveCancel := context.WithTimeout(ctx, time.Second)
-					if resp, resolveErr := CommodoreClient.ResolveInternalName(resolveCtx, failedStreamInternalName); resolveErr == nil && resp != nil {
-						failedStreamID = resp.GetStreamId()
-					}
-					resolveCancel()
+				if failedStreamID == "" {
+					failedStreamID = resolveLifecycleStreamID(ctx, failedStreamInternalName)
 				}
 				errText := result.GetError()
 				clipData := &ipcpb.ClipLifecycleData{
@@ -6028,17 +6011,32 @@ func emitArtifactStorageStateLifecycle(ctx context.Context, logger logging.Logge
 }
 
 func artifactLifecycleIdentity(ctx context.Context, artifactHash string) (artifactType, tenantID, streamInternal, streamID string) {
-	if db == nil || artifactHash == "" {
+	resolver := identity.Default()
+	if resolver == nil || artifactHash == "" {
 		return "", "", "", ""
 	}
-	if err := db.QueryRowContext(ctx, `
-		SELECT COALESCE(artifact_type,''), COALESCE(tenant_id::text,''), COALESCE(stream_internal_name,''), COALESCE(stream_id::text,'')
-		FROM foghorn.artifacts
-		WHERE artifact_hash = $1
-	`, artifactHash).Scan(&artifactType, &tenantID, &streamInternal, &streamID); err != nil {
+	id, err := resolver.ResolveArtifact(ctx, artifactHash, "")
+	if err != nil {
 		return "", "", "", ""
 	}
-	return artifactType, tenantID, streamInternal, streamID
+	return id.Kind, id.TenantID, id.StreamInternalName, id.StreamID
+}
+
+// resolveLifecycleStreamID maps a source internal name to its stream UUID
+// via the identity facade. Lifecycle events without a valid stream UUID are
+// dropped by periscope-ingest, so emitters backfill it here.
+func resolveLifecycleStreamID(ctx context.Context, streamInternalName string) string {
+	resolver := identity.Default()
+	if resolver == nil || streamInternalName == "" {
+		return ""
+	}
+	rctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	id, err := resolver.ResolveStream(rctx, streamInternalName)
+	if err != nil {
+		return ""
+	}
+	return id.StreamID
 }
 
 func dtshSyncedForArtifact(ctx context.Context, artifactHash string) bool {
@@ -6780,51 +6778,41 @@ func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadR
 	case parsed.Kind == streamident.KindSourceLive || bareMistNative:
 		isLive = true
 		streamInternalName = bareName
-		// In-memory StreamState carries StreamID + TenantID populated by
-		// PUSH_REWRITE on ingest. It does NOT carry cluster context, so
-		// origin cluster must come from Commodore even when state is hot.
-		if ss := state.DefaultManager().GetStreamState(bareName); ss != nil && ss.StreamID != "" {
-			thumbnailKey = ss.StreamID
-			thumbTenantID = ss.TenantID
+		// Identity facade layers in-memory state (StreamID + TenantID from
+		// PUSH_REWRITE) over the registry/Commodore (origin cluster, which
+		// state never carries). The bare-native pre-resolution above
+		// already warmed the registry for mist-native names.
+		if resolver := identity.Default(); resolver != nil {
+			rctx, rcancel := context.WithTimeout(context.Background(), 3*time.Second)
+			id, resolveErr := resolver.ResolveStream(rctx, bareName)
+			rcancel()
+			if resolveErr == nil {
+				thumbnailKey = id.StreamID
+				thumbTenantID = id.TenantID
+				thumbOriginCluster = id.OriginClusterID
+			}
 		}
-		if thumbnailKey == "" && resolvedStreamID != "" {
+		// Merge in the bare-native pre-resolution for any field the facade
+		// could not attribute.
+		if thumbnailKey == "" {
 			thumbnailKey = resolvedStreamID
-			state.DefaultManager().SetStreamStreamID(bareName, resolvedStreamID)
 		}
 		if thumbTenantID == "" {
 			thumbTenantID = resolvedTenantID
 		}
-		thumbOriginCluster = resolvedOriginCluster
-		if (thumbnailKey == "" || thumbOriginCluster == "") && CommodoreClient != nil {
-			resp, err := CommodoreClient.ResolveInternalName(context.Background(), bareName)
-			if err != nil || resp == nil {
-				logger.WithFields(logging.Fields{
-					"stream_name":   internalName,
-					"internal_name": bareName,
-					"error":         err,
-				}).Warn("Could not resolve internal_name to stream_id for thumbnail upload")
-				return
-			}
-			if thumbnailKey == "" {
-				if resp.StreamId == "" {
-					logger.WithFields(logging.Fields{
-						"stream_name":   internalName,
-						"internal_name": bareName,
-					}).Warn("Commodore returned no stream_id for thumbnail upload")
-					return
-				}
-				thumbnailKey = resp.StreamId
-				state.DefaultManager().SetStreamStreamID(bareName, resp.StreamId)
-			}
-			if thumbTenantID == "" {
-				thumbTenantID = resp.GetTenantId()
-			}
-			thumbOriginCluster = resp.GetOriginClusterId()
+		if thumbOriginCluster == "" {
+			thumbOriginCluster = resolvedOriginCluster
 		}
 		if thumbnailKey == "" {
-			logger.WithField("internal_name", bareName).Warn("Commodore client unavailable for stream_id resolution")
+			logger.WithFields(logging.Fields{
+				"stream_name":   internalName,
+				"internal_name": bareName,
+			}).Warn("Could not resolve internal_name to stream_id for thumbnail upload")
 			return
 		}
+		// Heal the in-memory union so the next consumer's state fast path
+		// hits without a registry/Commodore round-trip.
+		state.DefaultManager().SetStreamStreamID(bareName, thumbnailKey)
 		logger.WithFields(logging.Fields{
 			"stream_name":   internalName,
 			"internal_name": bareName,
@@ -7067,7 +7055,7 @@ func processThumbnailUploaded(req *ipcpb.ThumbnailUploaded, nodeID string, logge
 		"node_id":       nodeID,
 	}).Debug("Thumbnail upload confirmed")
 
-	markArtifactHasThumbnails(thumbnailKey, logger)
+	markArtifactHasThumbnails(thumbnailKey, nodeID, logger)
 	invalidateChandlerThumbnailCache(thumbnailKey, s3Keys, logger)
 }
 
@@ -7180,7 +7168,10 @@ func splitChandlerBaseURLs(raw string) []string {
 
 // markArtifactHasThumbnails flips has_thumbnails on the first confirmed
 // artifact thumbnail upload and projects that state to Commodore once.
-func markArtifactHasThumbnails(artifactHash string, logger logging.Logger) {
+// nodeID is the uploading node; it backstops cluster attribution when the
+// artifact row carries no cluster (e.g. clips of bare mist_native sources
+// created before cluster stamping was made robust).
+func markArtifactHasThumbnails(artifactHash, nodeID string, logger logging.Logger) {
 	conn := GetDB()
 	if conn == nil {
 		logger.Warn("DB not available, cannot mark artifact thumbnails")
@@ -7225,12 +7216,38 @@ func markArtifactHasThumbnails(artifactHash string, logger logging.Logger) {
 		logger.WithField("artifact_hash", artifactHash).Info("Artifact thumbnails marked as uploaded")
 	}
 
-	if CommodoreClient == nil || !tenantID.Valid || tenantID.String == "" {
-		return
-	}
 	cluster := storageClusterID.String
 	if cluster == "" {
 		cluster = originClusterID.String
+	}
+	if cluster == "" {
+		// The artifact row never got a cluster stamped (stream-state
+		// enrichment misses for bare mist_native sources). The uploading
+		// node's cluster is ground truth here; backfill the row so freeze
+		// resolution and playback URL construction heal too.
+		if ns := state.DefaultManager().GetNodeState(nodeID); ns != nil && ns.ClusterID != "" {
+			cluster = ns.ClusterID
+		}
+		if cluster == "" {
+			cluster = localClusterID
+		}
+		if cluster != "" {
+			if _, dbErr := conn.ExecContext(ctx, `
+				UPDATE foghorn.artifacts
+				   SET origin_cluster_id = $2, updated_at = NOW()
+				 WHERE artifact_hash = $1 AND origin_cluster_id IS NULL
+			`, artifactHash, cluster); dbErr != nil {
+				logger.WithError(dbErr).WithField("artifact_hash", artifactHash).Warn("Failed to backfill artifact origin cluster")
+			} else {
+				logger.WithFields(logging.Fields{
+					"artifact_hash": artifactHash,
+					"cluster_id":    cluster,
+				}).Info("Backfilled artifact origin cluster from uploading node")
+			}
+		}
+	}
+	if CommodoreClient == nil || !tenantID.Valid || tenantID.String == "" {
+		return
 	}
 	if cluster == "" {
 		logger.WithField("artifact_hash", artifactHash).Warn("Artifact thumbnail readiness has no cluster projection")

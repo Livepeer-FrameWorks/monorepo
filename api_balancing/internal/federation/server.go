@@ -12,10 +12,10 @@ import (
 
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/identity"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
@@ -79,22 +79,13 @@ type FederationServer struct {
 	// these. Wired from cmd/foghorn/main.go; unset in tests by default
 	// (canLocallyMintFor returns false for any non-empty target, which is
 	// the conservative answer when we don't know).
-	localS3Backing       S3Backing
-	advertisedBacking    AdvertisedBackingFunc
-	isServedCluster      func(clusterID string) bool
-	mintArtifactResolver MintArtifactResolver
+	localS3Backing    S3Backing
+	advertisedBacking AdvertisedBackingFunc
+	isServedCluster   func(clusterID string) bool
 
 	// storageMintCounter records MintStorageURLs outcomes. Optional;
 	// nil-safe (the handler only increments when the counter is set).
 	storageMintCounter *prometheus.CounterVec
-}
-
-// SetMintArtifactResolver wires the Commodore-backed authoritative
-// tenant + asset-context resolver used by MintStorageURLs as the
-// fallback when the local foghorn.artifacts row isn't on this pool.
-// Optional; absent ⇒ callee accepts only locally-cached rows.
-func (s *FederationServer) SetMintArtifactResolver(r MintArtifactResolver) {
-	s.mintArtifactResolver = r
 }
 
 // SetStorageMintMetric wires the MintStorageURLs outcome counter (label:
@@ -116,21 +107,6 @@ func (s *FederationServer) recordStorageMint(result string) {
 // cluster_peers metadata. ok=false when the tenant doesn't have access to
 // the cluster or the cluster doesn't advertise S3 backing.
 type AdvertisedBackingFunc func(ctx context.Context, tenantID, clusterID string) (S3Backing, bool)
-
-// MintArtifactResolver is the Commodore surface MintStorageURLs uses as
-// the authoritative tenant-binding source when the local foghorn.artifacts
-// row hasn't been seen on this Foghorn pool yet (delegated mints from a
-// peer pool that wrote the row, or live thumbnails which never have a
-// row). Mirrors the Resolve*Hash chain processFreezePermissionRequest
-// uses on the producer side. Production wires this to *commodore.GRPCClient;
-// tests can pass a stub or leave it nil to skip the Commodore fallback
-// (callee then accepts only locally-cached rows).
-type MintArtifactResolver interface {
-	ResolveInternalName(ctx context.Context, internalName string) (*commodorepb.ResolveInternalNameResponse, error)
-	ResolveClipHash(ctx context.Context, clipHash string) (*commodorepb.ResolveClipHashResponse, error)
-	ResolveDVRHash(ctx context.Context, dvrHash string) (*commodorepb.ResolveDVRHashResponse, error)
-	ResolveVodHash(ctx context.Context, vodHash string) (*commodorepb.ResolveVodHashResponse, error)
-}
 
 // S3Backing is the federation server's view of an S3 backing tuple.
 // Equality on the full tuple is required for "this Foghorn pool can mint
@@ -1285,154 +1261,59 @@ func (s *FederationServer) resolveMintArtifactContext(ctx context.Context, req *
 		return mintArtifactContext{}, false
 	}
 
-	// Fast path: local foghorn.artifacts filtered by tenant. Filtering by
-	// tenant in the WHERE prevents leaking cross-tenant existence through
-	// row-found vs row-missing branches. The row's artifact_type must also
-	// be compatible with the requested mint type — otherwise a same-tenant
-	// DVR/VOD hash could be requested as clip and pass through to a
-	// wrong-shape S3 key build.
-	if s.db != nil {
-		var rowArtifactType string
-		var streamName sql.NullString
-		var internalName sql.NullString
-		var originCluster sql.NullString
-		err := s.db.QueryRowContext(ctx, `
-			SELECT artifact_type,
-			       COALESCE(stream_internal_name, ''),
-			       COALESCE(internal_name, ''),
-			       COALESCE(origin_cluster_id, '')
-			FROM foghorn.artifacts
-			WHERE artifact_hash = $1 AND tenant_id = $2
-			LIMIT 1
-		`, lookupHash, req.GetTenantId()).Scan(&rowArtifactType, &streamName, &internalName, &originCluster)
-		if err == nil {
-			if !mintArtifactTypeCompatible(rowArtifactType, artType) {
-				return mintArtifactContext{}, false
-			}
-			// Clip / DVR S3 keys embed stream_internal_name as a path
-			// segment (BuildClipS3Key, BuildDVRS3Key). An empty value would
-			// produce malformed keys like "clips/<tenant>//.../...". When
-			// the row exists but lacks stream_internal_name, fall through
-			// to Commodore — its Resolve*Hash always carries
-			// stream_internal_name from the JOIN against streams.
-			needsStreamName := artType == "clip" || artType == "dvr" || artType == "dvr_segment" || artType == "dvr_manifest"
-			rowUsable := !needsStreamName || (streamName.Valid && streamName.String != "")
-			if rowUsable {
-				ctx := mintArtifactContext{tenantID: req.GetTenantId()}
-				if streamName.Valid {
-					ctx.streamName = streamName.String
-				}
-				if internalName.Valid {
-					ctx.internalName = internalName.String
-				}
-				if originCluster.Valid {
-					ctx.originClusterID = originCluster.String
-				}
-				return ctx, true
-			}
-		}
-		// Any DB error other than no-rows → keep going to Commodore. The
-		// fallback either confirms or rejects authoritatively.
-	}
-
-	// Commodore fallback: same Resolve*Hash chain processFreezePermissionRequest
-	// uses. Returns tenant + stream + internal-name + origin-cluster from
-	// the system of record.
-	if s.mintArtifactResolver == nil {
+	resolver := identity.Default()
+	if resolver == nil {
 		return mintArtifactContext{}, false
 	}
+
+	// Pin the lookup kind when the mint type implies it; "thumbnail" rides
+	// on any parent asset kind, so it probes (rare: cache miss for an
+	// existing artifact's thumbnail).
+	kindHint := ""
+	switch artType {
+	case "clip", "vod":
+		kindHint = artType
+	case "dvr", "dvr_segment", "dvr_manifest":
+		kindHint = "dvr"
+	}
+
 	rctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	switch artType {
-	case "clip":
-		resp, err := s.mintArtifactResolver.ResolveClipHash(rctx, lookupHash)
-		if err != nil || resp == nil || !resp.GetFound() {
-			return mintArtifactContext{}, false
-		}
-		if resp.GetTenantId() != req.GetTenantId() {
-			return mintArtifactContext{}, false
-		}
-		ctxOut := mintArtifactContext{
-			tenantID:        resp.GetTenantId(),
-			streamName:      resp.GetStreamInternalName(),
-			internalName:    resp.GetInternalName(),
-			originClusterID: resp.GetOriginClusterId(),
-		}
-		s.healMintArtifactRow(ctx, lookupHash, "clip", ctxOut)
-		return ctxOut, true
-
-	case "dvr", "dvr_segment", "dvr_manifest":
-		resp, err := s.mintArtifactResolver.ResolveDVRHash(rctx, lookupHash)
-		if err != nil || resp == nil || !resp.GetFound() {
-			return mintArtifactContext{}, false
-		}
-		if resp.GetTenantId() != req.GetTenantId() {
-			return mintArtifactContext{}, false
-		}
-		ctxOut := mintArtifactContext{
-			tenantID:        resp.GetTenantId(),
-			streamName:      resp.GetStreamInternalName(),
-			internalName:    resp.GetInternalName(),
-			originClusterID: resp.GetOriginClusterId(),
-		}
-		s.healMintArtifactRow(ctx, lookupHash, "dvr", ctxOut)
-		return ctxOut, true
-
-	case "vod":
-		resp, err := s.mintArtifactResolver.ResolveVodHash(rctx, lookupHash)
-		if err != nil || resp == nil || !resp.GetFound() {
-			return mintArtifactContext{}, false
-		}
-		if resp.GetTenantId() != req.GetTenantId() {
-			return mintArtifactContext{}, false
-		}
-		ctxOut := mintArtifactContext{
-			tenantID:        resp.GetTenantId(),
-			internalName:    resp.GetInternalName(),
-			originClusterID: resp.GetOriginClusterId(),
-		}
-		s.healMintArtifactRow(ctx, lookupHash, "vod", ctxOut)
-		return ctxOut, true
-
-	case "thumbnail":
-		// Vod-thumbnail path: artifact_key is "<artifact_hash>/<file>".
-		// The local DB miss above means we don't know the asset type
-		// from the row — try clip then dvr then vod, accept the first
-		// hit. This is rare (cache miss for an existing artifact's
-		// thumbnail) so the extra RPCs are acceptable.
-		if resp, err := s.mintArtifactResolver.ResolveClipHash(rctx, lookupHash); err == nil && resp != nil && resp.GetFound() && resp.GetTenantId() == req.GetTenantId() {
-			ctxOut := mintArtifactContext{
-				tenantID:        resp.GetTenantId(),
-				streamName:      resp.GetStreamInternalName(),
-				internalName:    resp.GetInternalName(),
-				originClusterID: resp.GetOriginClusterId(),
-			}
-			s.healMintArtifactRow(ctx, lookupHash, "clip", ctxOut)
-			return ctxOut, true
-		}
-		if resp, err := s.mintArtifactResolver.ResolveDVRHash(rctx, lookupHash); err == nil && resp != nil && resp.GetFound() && resp.GetTenantId() == req.GetTenantId() {
-			ctxOut := mintArtifactContext{
-				tenantID:        resp.GetTenantId(),
-				streamName:      resp.GetStreamInternalName(),
-				internalName:    resp.GetInternalName(),
-				originClusterID: resp.GetOriginClusterId(),
-			}
-			s.healMintArtifactRow(ctx, lookupHash, "dvr", ctxOut)
-			return ctxOut, true
-		}
-		if resp, err := s.mintArtifactResolver.ResolveVodHash(rctx, lookupHash); err == nil && resp != nil && resp.GetFound() && resp.GetTenantId() == req.GetTenantId() {
-			ctxOut := mintArtifactContext{
-				tenantID:        resp.GetTenantId(),
-				internalName:    resp.GetInternalName(),
-				originClusterID: resp.GetOriginClusterId(),
-			}
-			s.healMintArtifactRow(ctx, lookupHash, "vod", ctxOut)
-			return ctxOut, true
-		}
+	id, err := resolver.ResolveArtifact(rctx, lookupHash, kindHint)
+	if err != nil {
 		return mintArtifactContext{}, false
 	}
-
-	return mintArtifactContext{}, false
+	// Tenant guard: an unknown hash and another tenant's hash must be
+	// indistinguishable to the caller, so cross-tenant existence can't
+	// leak through found-vs-missing branches.
+	if id.TenantID != req.GetTenantId() {
+		return mintArtifactContext{}, false
+	}
+	// The resolved kind must be compatible with the requested mint type —
+	// otherwise a same-tenant DVR/VOD hash could be requested as clip and
+	// pass through to a wrong-shape S3 key build.
+	if !mintArtifactTypeCompatible(id.Kind, artType) {
+		return mintArtifactContext{}, false
+	}
+	// Clip / DVR S3 keys embed stream_internal_name as a path segment
+	// (BuildClipS3Key, BuildDVRS3Key); an empty value would produce
+	// malformed keys like "clips/<tenant>//.../...".
+	needsStreamName := artType == "clip" || artType == "dvr" || artType == "dvr_segment" || artType == "dvr_manifest"
+	if needsStreamName && id.StreamInternalName == "" {
+		return mintArtifactContext{}, false
+	}
+	ctxOut := mintArtifactContext{
+		tenantID:        id.TenantID,
+		streamName:      id.StreamInternalName,
+		internalName:    id.InternalName,
+		originClusterID: id.OriginClusterID,
+	}
+	// When the system of record (not a local row) attributed the artifact,
+	// heal a lifecycle row so subsequent delegated mints fast-path locally.
+	if id.Source == "commodore" {
+		s.healMintArtifactRow(ctx, lookupHash, id.Kind, ctxOut)
+	}
+	return ctxOut, true
 }
 
 // resolveLiveThumbnailContext handles the live-thumbnail branch: stream
@@ -1449,50 +1330,31 @@ func (s *FederationServer) resolveLiveThumbnailContext(ctx context.Context, req 
 		return mintArtifactContext{}, false
 	}
 
-	// Fast path: local stream state.
-	if sm := state.DefaultManager(); sm != nil {
-		if ss := sm.GetStreamState(req.GetStreamInternalName()); ss != nil {
-			if ss.TenantID != req.GetTenantId() {
-				return mintArtifactContext{}, false
-			}
-			if ss.StreamID != "" && ss.StreamID != wantStreamID {
-				s.logger.WithFields(logging.Fields{
-					"want_stream_id":   wantStreamID,
-					"actual_stream_id": ss.StreamID,
-				}).Warn("live thumbnail artifact_key streamID does not match stream state")
-				return mintArtifactContext{}, false
-			}
-			if ss.StreamID != "" {
-				return mintArtifactContext{tenantID: ss.TenantID, streamID: ss.StreamID}, true
-			}
-			// Stream state has tenant but no stream_id yet — fall through
-			// to Commodore for the authoritative stream_id.
-		}
-	}
-
-	// Commodore fallback: the storage Foghorn pool usually does NOT have
-	// the live ingest stream in its in-memory state. Commodore is the
-	// authoritative tenant + stream_id source.
-	if s.mintArtifactResolver == nil {
+	// The identity facade layers local stream state (fast path) over the
+	// registry/Commodore — the storage Foghorn pool usually does NOT have
+	// the live ingest stream in its in-memory state, so the deeper layers
+	// are the common case here.
+	resolver := identity.Default()
+	if resolver == nil {
 		return mintArtifactContext{}, false
 	}
 	rctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	resp, err := s.mintArtifactResolver.ResolveInternalName(rctx, req.GetStreamInternalName())
-	if err != nil || resp == nil {
+	id, err := resolver.ResolveStream(rctx, req.GetStreamInternalName())
+	if err != nil {
 		return mintArtifactContext{}, false
 	}
-	if resp.GetTenantId() != req.GetTenantId() || resp.GetStreamId() == "" {
+	if id.TenantID != req.GetTenantId() || id.StreamID == "" {
 		return mintArtifactContext{}, false
 	}
-	if resp.GetStreamId() != wantStreamID {
+	if id.StreamID != wantStreamID {
 		s.logger.WithFields(logging.Fields{
 			"want_stream_id":   wantStreamID,
-			"actual_stream_id": resp.GetStreamId(),
-		}).Warn("live thumbnail artifact_key streamID does not match Commodore stream record")
+			"actual_stream_id": id.StreamID,
+		}).Warn("live thumbnail artifact_key streamID does not match resolved stream record")
 		return mintArtifactContext{}, false
 	}
-	return mintArtifactContext{tenantID: resp.GetTenantId(), streamID: resp.GetStreamId()}, true
+	return mintArtifactContext{tenantID: id.TenantID, streamID: id.StreamID}, true
 }
 
 // healMintArtifactRow inserts a minimal lifecycle row for an artifact the

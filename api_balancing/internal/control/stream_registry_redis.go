@@ -18,7 +18,7 @@ const (
 	RegistryEntityArtifact RegistryEntity = "artifact"
 )
 
-// RegistryOperation distinguishes upsert/delete on pubsub.
+// RegistryOperation distinguishes upsert/delete on the changelog.
 type RegistryOperation string
 
 const (
@@ -26,24 +26,23 @@ const (
 	RegistryOpDelete RegistryOperation = "delete"
 )
 
-// RegistryChange is the pubsub payload published whenever a registry entry
-// is written or invalidated. Subscribers apply the change to their local
-// in-memory copy without re-querying Commodore/SQL.
-//
-// PublishedAtUnixNano is a monotonic stamp used by subscribers to drop
-// stale-snapshot races where a slower publisher's older entry could
-// otherwise clobber a newer local mutation (sub-second pubsub queue lag
-// + concurrent local writes). Sources have their own per-Location stamp
-// (Location.UpdatedAt) and rely on that; artifacts have no per-Location
-// timestamp and rely on PublishedAtUnixNano instead.
+// RegistryChange is the changelog entry appended whenever a registry entry
+// is written or invalidated. Peers apply the change to their local
+// in-memory copy without re-querying Commodore/SQL. Ordering and staleness
+// come from the changelog's server-assigned entry IDs (see
+// pkgredis.Changelog), not from any field in the payload.
 type RegistryChange struct {
-	InstanceID          string            `json:"instance_id"`
-	Entity              RegistryEntity    `json:"entity"`
-	Operation           RegistryOperation `json:"operation"`
-	Key                 string            `json:"key"` // internal_name for sources, artifact_hash for artifacts
-	Payload             json.RawMessage   `json:"payload,omitempty"`
-	PublishedAtUnixNano int64             `json:"published_at_unix_nano,omitempty"`
+	InstanceID string            `json:"instance_id"`
+	Entity     RegistryEntity    `json:"entity"`
+	Operation  RegistryOperation `json:"operation"`
+	Key        string            `json:"key"` // internal_name for sources, artifact_hash for artifacts
+	Payload    json.RawMessage   `json:"payload,omitempty"`
 }
+
+// registryChangelogMaxLen bounds the registry changelog. Sized like the
+// state changelog: the retained window must comfortably cover an instance's
+// worst-case downtime, after which key rehydration covers the rest.
+const registryChangelogMaxLen = 100000
 
 // RedisRegistryStore persists StreamRegistry state to Redis with write-
 // through semantics matching the state-package store. Keys are hash-tag-
@@ -51,9 +50,8 @@ type RegistryChange struct {
 // correctly.
 type RedisRegistryStore struct {
 	client    goredis.UniversalClient
-	pubsub    *pkgredis.TypedPubSub[RegistryChange]
+	changelog *pkgredis.Changelog[RegistryChange]
 	clusterID string
-	channel   string
 }
 
 // NewRedisRegistryStore constructs a Redis-backed store for the given
@@ -61,9 +59,8 @@ type RedisRegistryStore struct {
 func NewRedisRegistryStore(client goredis.UniversalClient, clusterID string) *RedisRegistryStore {
 	return &RedisRegistryStore{
 		client:    client,
-		pubsub:    pkgredis.NewTypedPubSub[RegistryChange](client),
+		changelog: pkgredis.NewChangelog[RegistryChange](client, fmt.Sprintf("{%s}:registry_changelog", clusterID), registryChangelogMaxLen),
 		clusterID: clusterID,
-		channel:   fmt.Sprintf("foghorn:%s:registry_updates", clusterID),
 	}
 }
 
@@ -139,15 +136,23 @@ func (r *RedisRegistryStore) GetAllArtifacts() (map[string]ArtifactEntry, error)
 	})
 }
 
-// Publish broadcasts a registry change to peer Foghorn instances.
-func (r *RedisRegistryStore) Publish(change RegistryChange) error {
-	return r.pubsub.Publish(context.Background(), r.channel, change)
+// Publish appends a registry change to the changelog and returns its
+// server-assigned entry ID — the change's logical version.
+func (r *RedisRegistryStore) Publish(change RegistryChange) (string, error) {
+	return r.changelog.Append(context.Background(), change)
 }
 
-// Subscribe streams registry changes from peer Foghorn instances. The
-// caller filters self-originating messages by InstanceID.
-func (r *RedisRegistryStore) Subscribe(ctx context.Context, handler func(RegistryChange)) error {
-	return r.pubsub.Subscribe(ctx, r.channel, handler)
+// ChangelogTail returns the newest changelog entry ID ("0-0" when empty).
+// Capture it before rehydrating keys; reading from it afterwards yields
+// exactly the changes not yet reflected in the key snapshot.
+func (r *RedisRegistryStore) ChangelogTail(ctx context.Context) (string, error) {
+	return r.changelog.Tail(ctx)
+}
+
+// ReadChanges consumes registry changes after fromID in log order until ctx
+// is done. The caller filters self-originating entries by InstanceID.
+func (r *RedisRegistryStore) ReadChanges(ctx context.Context, fromID string, handler func(id string, change RegistryChange)) error {
+	return r.changelog.Read(ctx, fromID, handler)
 }
 
 type registryScanner[T any] func(data string) (T, string, error)

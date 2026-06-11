@@ -18,6 +18,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	pkgredis "github.com/Livepeer-FrameWorks/monorepo/pkg/redis"
 )
 
 // Metrics hooks (optional)
@@ -371,6 +372,11 @@ type StreamStateManager struct {
 	redisCancel context.CancelFunc
 	redisWg     sync.WaitGroup
 
+	// Per-entity changelog watermarks: a peer change appended to the log
+	// before our own later write can never roll it back, and replayed
+	// entries apply idempotently. See pkgredis.Watermarks.
+	watermarks *pkgredis.Watermarks
+
 	// DNS-relevant delta tracker: records last-published per-node snapshot
 	// and a dirty set drained by the coalescer that pushes ReportAliveNodes.
 	dnsDelta dnsDeltaTracker
@@ -382,6 +388,7 @@ func NewStreamStateManager() *StreamStateManager {
 		streams:          make(map[string]*StreamState),
 		streamInstances:  make(map[string]map[string]*StreamInstanceState),
 		nodes:            make(map[string]*NodeState),
+		watermarks:       pkgredis.NewWatermarks(),
 		stalenessChecker: make(chan bool),
 		staleThreshold:   90 * time.Second,
 
@@ -437,6 +444,18 @@ func normalizeNodeOperationalMode(mode NodeOperationalMode) (NodeOperationalMode
 }
 
 // UpdateStreamFromBuffer updates stream state from STREAM_BUFFER event
+// applyIdentity merges an identity-bearing field with ignore-empty semantics:
+// a non-empty incoming value updates the field (streams legitimately move
+// nodes, so this is not set-once), an empty incoming value never erases a
+// known one. One write whose enrichment came back cold must not strip
+// identity that every other write carried — nor replicate that stripping
+// cluster-wide.
+func applyIdentity(dst *string, incoming string) {
+	if incoming != "" {
+		*dst = incoming
+	}
+}
+
 func (sm *StreamStateManager) UpdateStreamFromBuffer(streamName, internalName, nodeID, tenantID, bufferState string, streamDetailsJSON string) error {
 	sm.mu.Lock()
 
@@ -447,11 +466,15 @@ func (sm *StreamStateManager) UpdateStreamFromBuffer(streamName, internalName, n
 		state = &StreamState{
 			StreamName:   streamName,
 			InternalName: internalName,
-			NodeID:       nodeID,
-			TenantID:     tenantID,
 		}
 		sm.streams[internalName] = state
 	}
+	// Identity backfills on every buffer event, not only at creation: an
+	// entry born during a cold-enrichment window would otherwise stay
+	// identity-less forever (first-write-wins) and break attribution on
+	// every consumer.
+	applyIdentity(&state.NodeID, nodeID)
+	applyIdentity(&state.TenantID, tenantID)
 	if state.StartedAt == nil || state.Status != "live" {
 		state.StartedAt = &now
 	}
@@ -462,9 +485,10 @@ func (sm *StreamStateManager) UpdateStreamFromBuffer(streamName, internalName, n
 	}
 	inst := sm.streamInstances[internalName][nodeID]
 	if inst == nil {
-		inst = &StreamInstanceState{NodeID: nodeID, TenantID: tenantID}
+		inst = &StreamInstanceState{NodeID: nodeID}
 		sm.streamInstances[internalName][nodeID] = inst
 	}
+	applyIdentity(&inst.TenantID, tenantID)
 
 	// Update basic fields
 	state.BufferState = bufferState
@@ -738,6 +762,48 @@ func ResetDefaultManagerForTests() *StreamStateManager {
 	return defaultManager
 }
 
+// stateChangeKey identifies the entity a StateChange addresses, for changelog
+// watermark tracking.
+func stateChangeKey(change StateChange) string {
+	return string(change.Entity) + "|" + change.StreamName + "|" + change.NodeID + "|" + change.ArtifactID
+}
+
+// redisDeleteRetryBackoff paces retryRedisDeleteAsync. Package var so tests
+// can shrink it.
+var redisDeleteRetryBackoff = []time.Duration{time.Second, 5 * time.Second, 30 * time.Second}
+
+// retryRedisDeleteAsync retries a failed write-through key delete off the
+// hot path. The changelog delete entry is still appended — live replicas
+// converge regardless — so the only exposure is a later restart's rehydrate
+// resurrecting the stale key; these retries close that window.
+func retryRedisDeleteAsync(entity, key string, del func() error) {
+	go func() {
+		for _, wait := range redisDeleteRetryBackoff {
+			time.Sleep(wait)
+			if del() == nil {
+				return
+			}
+		}
+		if stateLogger != nil {
+			stateLogger.WithFields(map[string]any{"entity": entity, "key": key}).Error("Write-through delete kept failing; stale key may resurrect on a future restart's rehydrate")
+		}
+	}()
+}
+
+// publishStateChange appends the change to the changelog and records its
+// entry ID as the entity's watermark. Callers hold no expectation of
+// delivery; the write-through key remains the rehydration source of truth.
+func (sm *StreamStateManager) publishStateChange(change StateChange) {
+	id, err := sm.redisStore.PublishStateChange(change)
+	if err != nil {
+		if stateLogger != nil {
+			stateLogger.WithError(err).WithFields(map[string]any{"entity": change.Entity, "stream": change.StreamName, "node_id": change.NodeID}).Warn("Failed to append state change to changelog")
+		}
+		return
+	}
+	sm.watermarks.Record(stateChangeKey(change), id)
+}
+
 func (sm *StreamStateManager) persistNodeWriteThrough(nodeID string, payload json.RawMessage) {
 	if sm.redisStore == nil {
 		return
@@ -748,7 +814,7 @@ func (sm *StreamStateManager) persistNodeWriteThrough(nodeID string, payload jso
 		}
 		return
 	}
-	_ = sm.redisStore.PublishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityNode, Operation: StateOpUpsert, NodeID: nodeID, Payload: payload})
+	sm.publishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityNode, Operation: StateOpUpsert, NodeID: nodeID, Payload: payload})
 }
 
 func (sm *StreamStateManager) nodePayloadLocked(nodeID string) json.RawMessage {
@@ -773,27 +839,35 @@ func (sm *StreamStateManager) persistStreamWriteThrough(internalName string, pay
 		}
 		return
 	}
-	_ = sm.redisStore.PublishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityStream, Operation: StateOpUpsert, StreamName: internalName, Payload: payload})
+	sm.publishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityStream, Operation: StateOpUpsert, StreamName: internalName, Payload: payload})
 }
 
 func (sm *StreamStateManager) persistStreamDeleteWriteThrough(internalName string) {
 	if sm.redisStore == nil {
 		return
 	}
-	if err := sm.redisStore.DeleteStream(internalName); err != nil && stateLogger != nil {
-		stateLogger.WithError(err).WithField("stream", internalName).Warn("Failed to delete stream state from redis")
+	if err := sm.redisStore.DeleteStream(internalName); err != nil {
+		if stateLogger != nil {
+			stateLogger.WithError(err).WithField("stream", internalName).Warn("Failed to delete stream state from redis; retrying in background")
+		}
+		store := sm.redisStore
+		retryRedisDeleteAsync("stream", internalName, func() error { return store.DeleteStream(internalName) })
 	}
-	_ = sm.redisStore.PublishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityStream, Operation: StateOpDelete, StreamName: internalName})
+	sm.publishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityStream, Operation: StateOpDelete, StreamName: internalName})
 }
 
 func (sm *StreamStateManager) persistStreamInstanceDeleteWriteThrough(internalName, nodeID string) {
 	if sm.redisStore == nil {
 		return
 	}
-	if err := sm.redisStore.DeleteStreamInstance(internalName, nodeID); err != nil && stateLogger != nil {
-		stateLogger.WithError(err).WithField("stream", internalName).WithField("node_id", nodeID).Warn("Failed to delete stream instance from redis")
+	if err := sm.redisStore.DeleteStreamInstance(internalName, nodeID); err != nil {
+		if stateLogger != nil {
+			stateLogger.WithError(err).WithField("stream", internalName).WithField("node_id", nodeID).Warn("Failed to delete stream instance from redis; retrying in background")
+		}
+		store := sm.redisStore
+		retryRedisDeleteAsync("stream_instance", internalName+"/"+nodeID, func() error { return store.DeleteStreamInstance(internalName, nodeID) })
 	}
-	_ = sm.redisStore.PublishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityStreamInstance, Operation: StateOpDelete, StreamName: internalName, NodeID: nodeID})
+	sm.publishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityStreamInstance, Operation: StateOpDelete, StreamName: internalName, NodeID: nodeID})
 }
 
 func (sm *StreamStateManager) persistStreamInstanceWriteThrough(internalName, nodeID string, payload json.RawMessage) {
@@ -806,7 +880,7 @@ func (sm *StreamStateManager) persistStreamInstanceWriteThrough(internalName, no
 		}
 		return
 	}
-	_ = sm.redisStore.PublishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityStreamInstance, Operation: StateOpUpsert, StreamName: internalName, NodeID: nodeID, Payload: payload})
+	sm.publishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityStreamInstance, Operation: StateOpUpsert, StreamName: internalName, NodeID: nodeID, Payload: payload})
 }
 
 func (sm *StreamStateManager) UpdateUserConnection(internalName, nodeID, tenantID string, delta int) {
@@ -820,16 +894,17 @@ func (sm *StreamStateManager) UpdateUserConnection(internalName, nodeID, tenantI
 	if union.Viewers < 0 {
 		union.Viewers = 0
 	}
-	union.TenantID = tenantID
+	applyIdentity(&union.TenantID, tenantID)
 	union.LastUpdate = time.Now()
 	if sm.streamInstances[internalName] == nil {
 		sm.streamInstances[internalName] = make(map[string]*StreamInstanceState)
 	}
 	inst := sm.streamInstances[internalName][nodeID]
 	if inst == nil {
-		inst = &StreamInstanceState{NodeID: nodeID, TenantID: tenantID}
+		inst = &StreamInstanceState{NodeID: nodeID}
 		sm.streamInstances[internalName][nodeID] = inst
 	}
+	applyIdentity(&inst.TenantID, tenantID)
 	inst.Viewers += delta
 	if inst.Viewers < 0 {
 		inst.Viewers = 0
@@ -922,7 +997,7 @@ func (sm *StreamStateManager) UpdateTrackList(internalName, nodeID, tenantID, tr
 		union = &StreamState{InternalName: internalName, StreamName: internalName}
 		sm.streams[internalName] = union
 	}
-	union.TenantID = tenantID
+	applyIdentity(&union.TenantID, tenantID)
 	union.LastTrackList = trackListJSON
 	union.LastUpdate = time.Now()
 	if sm.streamInstances[internalName] == nil {
@@ -930,9 +1005,10 @@ func (sm *StreamStateManager) UpdateTrackList(internalName, nodeID, tenantID, tr
 	}
 	inst := sm.streamInstances[internalName][nodeID]
 	if inst == nil {
-		inst = &StreamInstanceState{NodeID: nodeID, TenantID: tenantID}
+		inst = &StreamInstanceState{NodeID: nodeID}
 		sm.streamInstances[internalName][nodeID] = inst
 	}
+	applyIdentity(&inst.TenantID, tenantID)
 	inst.LastTrackList = trackListJSON
 	inst.LastUpdate = time.Now()
 
@@ -1989,7 +2065,7 @@ func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*ipcpb
 				stateLogger.WithError(err).WithField("node_id", nodeID).Warn("Failed to write node artifacts to redis")
 			}
 		} else if payload, err := json.Marshal(artifactStates); err == nil {
-			_ = redisStore.PublishStateChange(StateChange{InstanceID: instanceID, Entity: StateEntityArtifact, Operation: StateOpUpsert, NodeID: nodeID, Payload: payload})
+			sm.publishStateChange(StateChange{InstanceID: instanceID, Entity: StateEntityArtifact, Operation: StateOpUpsert, NodeID: nodeID, Payload: payload})
 		}
 	}
 
@@ -2678,10 +2754,15 @@ func (sm *StreamStateManager) checkStaleNodes() {
 	artifactRepo := sm.repos.Artifacts
 	for _, nodeID := range toRemove {
 		if sm.redisStore != nil {
-			if err := sm.redisStore.DeleteNode(nodeID); err != nil && stateLogger != nil {
-				stateLogger.WithError(err).WithField("node_id", nodeID).Warn("Failed to delete stale node from Redis")
+			if err := sm.redisStore.DeleteNode(nodeID); err != nil {
+				if stateLogger != nil {
+					stateLogger.WithError(err).WithField("node_id", nodeID).Warn("Failed to delete stale node from Redis; retrying in background")
+				}
+				store := sm.redisStore
+				nid := nodeID
+				retryRedisDeleteAsync("node", nid, func() error { return store.DeleteNode(nid) })
 			}
-			_ = sm.redisStore.PublishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityNode, Operation: StateOpDelete, NodeID: nodeID})
+			sm.publishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityNode, Operation: StateOpDelete, NodeID: nodeID})
 		}
 		if artifactRepo != nil {
 			go func(nid string) {

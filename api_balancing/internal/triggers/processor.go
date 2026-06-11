@@ -16,6 +16,7 @@ import (
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/federation"
 	"frameworks/api_balancing/internal/geo"
+	"frameworks/api_balancing/internal/identity"
 	"frameworks/api_balancing/internal/ingesterrors"
 	"frameworks/api_balancing/internal/state"
 
@@ -4316,12 +4317,12 @@ func (p *Processor) applyStreamContext(trigger *ipcpb.MistTrigger, streamName st
 	var info streamContext
 	parsed := streamident.Parse(streamName)
 	if parsed.IsSource() || parsed.Kind == streamident.KindBare {
-		if control.StreamRegistryInstance != nil && parsed.Concrete != "" {
-			if entry, err := control.StreamRegistryInstance.ResolveSourceByInternalName(context.Background(), parsed.Concrete); err == nil && entry.TenantID != "" {
-				info.TenantID = entry.TenantID
-				info.StreamID = entry.StreamID
-				info.OriginClusterID = entry.OriginClusterID
-				info.Source = "stream_registry"
+		if resolver := identity.Default(); resolver != nil && parsed.Concrete != "" {
+			if id, err := resolver.ResolveStream(context.Background(), parsed.Concrete); err == nil {
+				info.TenantID = id.TenantID
+				info.StreamID = id.StreamID
+				info.OriginClusterID = id.OriginClusterID
+				info.Source = "identity_" + id.Source
 			}
 		}
 	}

@@ -385,7 +385,7 @@ func (r *StreamRegistry) withdrawFederatedSource(peerClusterID, internalName str
 	}
 	if len(ce.entry.Locations) == 0 {
 		// Drop the entry. Capture identity fields before deletion so the
-		// pubsub delete carries the keys peer instances need to evict.
+		// changelog delete carries the keys peer instances need to evict.
 		evicted := ce.entry
 		delete(r.byInt, internalName)
 		if evicted.StreamID != "" {

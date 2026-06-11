@@ -4,12 +4,14 @@ import (
 	"context"
 	"testing"
 
+	"frameworks/api_balancing/internal/identity/identitytest"
 	"frameworks/api_balancing/internal/state"
 )
 
 func TestEnrichClusterID_RespectsTenantOnFallback(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
+	identitytest.InstallStateBacked(t)
 
 	nodeID := "node-a"
 	streamName := "shared-stream"

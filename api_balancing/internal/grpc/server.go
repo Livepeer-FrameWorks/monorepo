@@ -21,6 +21,7 @@ import (
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/federation"
 	"frameworks/api_balancing/internal/handlers"
+	"frameworks/api_balancing/internal/identity"
 	"frameworks/api_balancing/internal/jobs"
 	"frameworks/api_balancing/internal/policybundle"
 	"frameworks/api_balancing/internal/state"
@@ -190,26 +191,34 @@ func (s *FoghornGRPCServer) RegisterServices(grpcServer *grpc.Server) {
 }
 
 // enrichClusterID returns the cluster for an operation. Prefers explicit
-// cluster_id from the caller. Falls back to stream's node state for
-// media-plane-initiated flows (e.g. DVR triggered by MistServer).
+// cluster_id from the caller; otherwise resolves through the identity
+// facade, which layers in-memory state (serving node's cluster) over the
+// shared registry (origin cluster) — so an instance that never saw the
+// ingest trigger flow still attributes correctly instead of returning "".
 //
-// Tenant-aware fallback prevents cross-tenant stream name collisions from
+// Tenant-aware guard prevents cross-tenant stream name collisions from
 // enriching artifacts with another tenant's cluster context.
 func (s *FoghornGRPCServer) enrichClusterID(explicit, streamName, tenantID string) string {
 	if explicit != "" {
 		return explicit
 	}
-	if streamName != "" {
-		if ss := state.DefaultManager().GetStreamState(streamName); ss != nil && ss.NodeID != "" {
-			if tenantID != "" && ss.TenantID != "" && ss.TenantID != tenantID {
-				return ""
-			}
-			if ns := state.DefaultManager().GetNodeState(ss.NodeID); ns != nil && ns.ClusterID != "" {
-				return ns.ClusterID
-			}
-		}
+	resolver := identity.Default()
+	if streamName == "" || resolver == nil {
+		return ""
 	}
-	return ""
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	id, err := resolver.ResolveStream(ctx, streamName)
+	if err != nil {
+		return ""
+	}
+	if tenantID != "" && id.TenantID != "" && id.TenantID != tenantID {
+		return ""
+	}
+	if id.ServingCluster != "" {
+		return id.ServingCluster
+	}
+	return id.OriginClusterID
 }
 
 // SetCacheInvalidator sets the cache invalidator for tenant cache management
@@ -821,7 +830,19 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *sharedpb.Create
 	}
 
 	// Emit STAGE_REQUESTED event to Decklog (with enriched timing fields)
+	// Cluster attribution must never end up NULL: thumbnail readiness,
+	// freeze storage resolution, and Chandler URL construction all key off
+	// it. Stream-state enrichment misses for bare mist_native sources, so
+	// fall back to the dispatch target's cluster, then this Foghorn's own.
 	clipCluster := s.enrichClusterID(req.GetClusterId(), req.StreamInternalName, req.GetTenantId())
+	if clipCluster == "" {
+		if ns := state.DefaultManager().GetNodeState(storageNodeID); ns != nil && ns.ClusterID != "" {
+			clipCluster = ns.ClusterID
+		}
+	}
+	if clipCluster == "" {
+		clipCluster = s.clusterID
+	}
 	if s.decklogClient != nil {
 		clipData := buildClipLifecycleData(ipcpb.ClipLifecycleData_STAGE_REQUESTED, req, reqID, clipHash)
 		if clipCluster != "" {

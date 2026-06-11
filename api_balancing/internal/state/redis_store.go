@@ -93,19 +93,22 @@ type NodeArtifactState struct {
 	Format       string `json:"format,omitempty"`
 }
 
+// stateChangelogMaxLen bounds the state changelog stream. At prod write
+// rates (a few entries/second/cluster) this retains hours of history —
+// far beyond any realistic consumer downtime.
+const stateChangelogMaxLen = 100000
+
 type RedisStateStore struct {
 	client    goredis.UniversalClient
-	pubsub    *pkgredis.TypedPubSub[StateChange]
+	changelog *pkgredis.Changelog[StateChange]
 	clusterID string
-	channel   string
 }
 
 func NewRedisStateStore(client goredis.UniversalClient, clusterID string) *RedisStateStore {
 	return &RedisStateStore{
 		client:    client,
-		pubsub:    pkgredis.NewTypedPubSub[StateChange](client),
+		changelog: pkgredis.NewChangelog[StateChange](client, fmt.Sprintf("{%s}:state_changelog", clusterID), stateChangelogMaxLen),
 		clusterID: clusterID,
-		channel:   fmt.Sprintf("foghorn:%s:state_updates", clusterID),
 	}
 }
 
@@ -360,12 +363,21 @@ func (r *RedisStateStore) ConsumePendingDVRStop(ctx context.Context, internalNam
 	return true, nil
 }
 
-func (r *RedisStateStore) PublishStateChange(change StateChange) error {
-	return r.pubsub.Publish(context.Background(), r.channel, change)
+// PublishStateChange appends the change to the cluster's ordered changelog
+// and returns the server-assigned entry ID — the change's logical version.
+func (r *RedisStateStore) PublishStateChange(change StateChange) (string, error) {
+	return r.changelog.Append(context.Background(), change)
 }
 
-func (r *RedisStateStore) SubscribeStateChanges(ctx context.Context, handler func(StateChange)) error {
-	return r.pubsub.Subscribe(ctx, r.channel, handler)
+// ChangelogTail returns the current end of the changelog; reading from it
+// yields only changes appended afterwards.
+func (r *RedisStateStore) ChangelogTail(ctx context.Context) (string, error) {
+	return r.changelog.Tail(ctx)
+}
+
+// ReadStateChanges consumes changes after fromID in order until ctx is done.
+func (r *RedisStateStore) ReadStateChanges(ctx context.Context, fromID string, handler func(id string, change StateChange)) error {
+	return r.changelog.Read(ctx, fromID, handler)
 }
 
 type redisScanner[T any] func(data string) (T, string, error)
