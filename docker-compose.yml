@@ -103,6 +103,11 @@ services:
       - ./pkg/database/sql/schema/navigator.sql:/docker-entrypoint-initdb.d/70_init_navigator.sql:ro
       - ./pkg/database/sql/schema/chatwoot.sql:/docker-entrypoint-initdb.d/75_init_chatwoot.sql:ro
       - ./pkg/database/sql/schema/skipper.sql:/docker-entrypoint-initdb.d/78_init_skipper.sql:ro
+      # Operator-analytics read-only role (consumed by ClickHouse named collections)
+      - ./pkg/database/sql/seeds/static/analytics_ro_quartermaster.sql:/docker-entrypoint-initdb.d/90_analytics_ro_quartermaster.sql:ro
+      - ./pkg/database/sql/seeds/static/analytics_ro_commodore.sql:/docker-entrypoint-initdb.d/91_analytics_ro_commodore.sql:ro
+      - ./pkg/database/sql/seeds/static/analytics_ro_purser.sql:/docker-entrypoint-initdb.d/92_analytics_ro_purser.sql:ro
+      - ./infrastructure/postgres/analytics_ro_dev_password.sql:/docker-entrypoint-initdb.d/93_analytics_ro_password.sql:ro
       # Demo Seeds (Dev/Demo only - loaded by default for local development)
       - ./pkg/database/sql/seeds/demo/demo_data.sql:/docker-entrypoint-initdb.d/99_init_demo.sql:ro
     ports:

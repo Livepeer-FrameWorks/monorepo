@@ -35,6 +35,46 @@ func TestClickHouseRoleVarsUsesSharedCredentials(t *testing.T) {
 	}
 }
 
+func TestClickHouseRoleVarsPassesNamedCollections(t *testing.T) {
+	collections := []map[string]any{
+		{
+			"name": "quartermaster_pg",
+			"settings": map[string]any{
+				"host":     "10.66.0.10",
+				"port":     5432,
+				"database": "quartermaster",
+				"user":     "frameworks_analytics_ro",
+				"password": "secret",
+			},
+		},
+	}
+	config := ServiceConfig{
+		Version: "26.3.10.62",
+		Metadata: map[string]any{
+			"named_collections": collections,
+		},
+	}
+
+	vars, err := clickhouseRoleVars(context.Background(), inventory.Host{}, config, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("clickhouseRoleVars: %v", err)
+	}
+	got, ok := vars["clickhouse_named_collections"].([]map[string]any)
+	if !ok || len(got) != 1 || got[0]["name"] != "quartermaster_pg" {
+		t.Fatalf("clickhouse_named_collections = %#v, want the quartermaster_pg collection", vars["clickhouse_named_collections"])
+	}
+
+	// Absent metadata must leave the var unset so the ansible default ([])
+	// removes a previously managed drop-in.
+	vars, err = clickhouseRoleVars(context.Background(), inventory.Host{}, ServiceConfig{Version: "26.3.10.62", Metadata: map[string]any{}}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("clickhouseRoleVars: %v", err)
+	}
+	if _, ok := vars["clickhouse_named_collections"]; ok {
+		t.Fatalf("clickhouse_named_collections should be unset without metadata")
+	}
+}
+
 func TestClickHouseRoleVarsResolvesVersionFromReleaseManifest(t *testing.T) {
 	repo := writeTestGitopsRelease(t, `
 platform_version: vtest

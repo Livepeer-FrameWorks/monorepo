@@ -1,0 +1,240 @@
+# Operator tenant activity: which tenants are active, and to what extent.
+# Synced into the "FrameWorks Tenants" dashboard (create it once in Metabase):
+#   frameworks cluster metabase sync \
+#     --file infrastructure/metabase/activity_cards.yaml \
+#     --dashboard "FrameWorks Tenants"
+#
+# All cards run against the ClickHouse datasource. Tenant names come from the
+# periscope.tenant_dim dictionary; Postgres-side signals (logins, signups,
+# billing) reach commodore/quartermaster/purser through the *_pg named
+# collections via the postgresql() table function, authenticating as the
+# frameworks_analytics_ro role. Long-window cards read the daily rollup views
+# (1825-day TTL), never the 5m ledgers (90-day TTL).
+cards:
+  - slug: tenants.activity-overview
+    name: Tenant activity overview (30d)
+    display: table
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT t.name AS tenant,
+             t.subdomain AS subdomain,
+             t.deployment_tier AS tier,
+             t.is_active AS is_active,
+             toDate(t.created_at) AS signed_up,
+             round(ifNull(r.ingest_hours, 0), 2) AS ingest_hours_30d,
+             round(ifNull(v.viewer_hours, 0), 2) AS viewer_hours_30d,
+             round(ifNull(v.egress_gb, 0), 3) AS egress_gb_30d,
+             ifNull(v.sessions, 0) AS sessions_30d,
+             ifNull(a.api_requests, 0) AS api_requests_30d,
+             r.last_stream_day AS last_stream_day
+      FROM periscope.tenant_dim AS t
+      LEFT JOIN (
+          SELECT tenant_id,
+                 sum(runtime_seconds) / 3600.0 AS ingest_hours,
+                 max(day) AS last_stream_day
+          FROM periscope.stream_runtime_daily
+          WHERE day >= today() - 30
+          GROUP BY tenant_id
+      ) AS r ON r.tenant_id = t.id
+      LEFT JOIN (
+          SELECT tenant_id,
+                 sum(viewer_hours) AS viewer_hours,
+                 sum(egress_gb) AS egress_gb,
+                 sum(total_sessions) AS sessions
+          FROM periscope.tenant_viewer_daily
+          WHERE day >= today() - 30
+          GROUP BY tenant_id
+      ) AS v ON v.tenant_id = t.id
+      LEFT JOIN (
+          SELECT tenant_id,
+                 sum(requests) AS api_requests
+          FROM periscope.api_usage_daily
+          WHERE day >= today() - 30
+          GROUP BY tenant_id
+      ) AS a ON a.tenant_id = t.id
+      ORDER BY viewer_hours_30d DESC, ingest_hours_30d DESC, api_requests_30d DESC
+      LIMIT 200
+
+  - slug: tenants.live-now
+    name: Tenants live right now
+    display: table
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT dictGetOrDefault('periscope.tenant_dim', 'name', tuple(tenant_id), toString(tenant_id)) AS tenant,
+             countIf(status = 'live') AS live_streams,
+             sum(current_viewers) AS current_viewers,
+             max(updated_at) AS last_update
+      FROM periscope.stream_state_current FINAL
+      GROUP BY tenant
+      HAVING live_streams > 0
+      ORDER BY current_viewers DESC
+      LIMIT 100
+
+  - slug: tenants.ingest-hours-by-day
+    name: Ingest hours by tenant per day
+    display: line
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT day,
+             dictGetOrDefault('periscope.tenant_dim', 'name', tuple(tenant_id), toString(tenant_id)) AS tenant,
+             round(sum(runtime_seconds) / 3600.0, 2) AS ingest_hours
+      FROM periscope.stream_runtime_daily
+      WHERE day >= today() - 30
+      GROUP BY day, tenant
+      ORDER BY day, tenant
+      LIMIT 5000
+
+  - slug: tenants.ingest-summary-30d
+    name: Ingest summary by tenant (30d)
+    display: table
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT dictGetOrDefault('periscope.tenant_dim', 'name', tuple(tenant_id), toString(tenant_id)) AS tenant,
+             round(sum(runtime_seconds) / 3600.0, 2) AS ingest_hours,
+             uniqExact(stream_id) AS streams_seen,
+             max(peak_viewers) AS peak_viewers,
+             max(day) AS last_active_day
+      FROM periscope.stream_runtime_daily
+      WHERE day >= today() - 30
+      GROUP BY tenant
+      ORDER BY ingest_hours DESC
+      LIMIT 100
+
+  - slug: tenants.viewer-hours-by-day
+    name: Viewer hours by tenant per day
+    display: line
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT day,
+             dictGetOrDefault('periscope.tenant_dim', 'name', tuple(tenant_id), toString(tenant_id)) AS tenant,
+             round(sum(viewer_hours), 2) AS viewer_hours
+      FROM periscope.tenant_viewer_daily
+      WHERE day >= today() - 30
+      GROUP BY day, tenant
+      ORDER BY day, tenant
+      LIMIT 5000
+
+  - slug: tenants.viewer-summary-30d
+    name: Viewer summary by tenant (30d)
+    display: table
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT dictGetOrDefault('periscope.tenant_dim', 'name', tuple(tenant_id), toString(tenant_id)) AS tenant,
+             round(sum(viewer_hours), 2) AS viewer_hours,
+             round(sum(egress_gb), 3) AS egress_gb,
+             toUInt64(uniqCombinedMerge(unique_viewers_state)) AS unique_viewers,
+             sum(total_sessions) AS sessions
+      FROM periscope.tenant_viewer_daily
+      WHERE day >= today() - 30
+      GROUP BY tenant
+      ORDER BY viewer_hours DESC
+      LIMIT 100
+
+  - slug: tenants.api-requests-30d
+    name: API activity by tenant (30d)
+    display: table
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT dictGetOrDefault('periscope.tenant_dim', 'name', tuple(tenant_id), toString(tenant_id)) AS tenant,
+             sum(requests) AS requests,
+             sum(errors) AS errors,
+             toUInt64(uniqCombinedMerge(unique_users_state)) AS active_users,
+             toUInt64(uniqCombinedMerge(unique_tokens_state)) AS active_tokens,
+             max(day) AS last_active_day
+      FROM periscope.api_usage_daily
+      WHERE day >= today() - 30
+      GROUP BY tenant
+      ORDER BY requests DESC
+      LIMIT 100
+
+  - slug: tenants.user-logins
+    name: User logins by tenant
+    display: table
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT dictGetOrDefault('periscope.tenant_dim', 'name', tuple(tenant_id), toString(tenant_id)) AS tenant,
+             count() AS users,
+             countIf(last_login_at >= now() - INTERVAL 7 DAY) AS active_7d,
+             countIf(last_login_at >= now() - INTERVAL 30 DAY) AS active_30d,
+             max(last_login_at) AS last_login
+      FROM postgresql(commodore_pg, table='users')
+      GROUP BY tenant
+      ORDER BY active_30d DESC, users DESC
+      LIMIT 200
+
+  - slug: tenants.api-token-activity
+    name: API token activity by tenant
+    display: table
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT dictGetOrDefault('periscope.tenant_dim', 'name', tuple(tenant_id), toString(tenant_id)) AS tenant,
+             count() AS tokens,
+             countIf(is_active) AS active_tokens,
+             countIf(last_used_at >= now() - INTERVAL 7 DAY) AS used_7d,
+             max(last_used_at) AS last_used
+      FROM postgresql(commodore_pg, table='api_tokens')
+      GROUP BY tenant
+      ORDER BY used_7d DESC, tokens DESC
+      LIMIT 200
+
+  - slug: tenants.streams-created-30d
+    name: Streams created by tenant (30d)
+    display: table
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT dictGetOrDefault('periscope.tenant_dim', 'name', tuple(tenant_id), toString(tenant_id)) AS tenant,
+             count() AS streams_created,
+             max(created_at) AS last_created
+      FROM postgresql(commodore_pg, table='streams')
+      WHERE created_at >= now() - INTERVAL 30 DAY
+      GROUP BY tenant
+      ORDER BY streams_created DESC
+      LIMIT 100
+
+  - slug: tenants.signups-by-week
+    name: Tenant signups by week and channel
+    display: bar
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT toStartOfWeek(t.created_at) AS week,
+             if(empty(a.signup_channel), 'unknown', a.signup_channel) AS channel,
+             count() AS signups
+      FROM postgresql(quartermaster_pg, table='tenants') AS t
+      LEFT JOIN postgresql(quartermaster_pg, table='tenant_attribution') AS a ON a.tenant_id = t.id
+      WHERE t.created_at >= now() - INTERVAL 90 DAY
+      GROUP BY week, channel
+      ORDER BY week, channel
+      LIMIT 500
+
+  - slug: tenants.billed-usage-30d
+    name: Billed usage by tenant and meter (30d)
+    display: table
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT dictGetOrDefault('periscope.tenant_dim', 'name', tuple(tenant_id), toString(tenant_id)) AS tenant,
+             usage_type,
+             round(sum(usage_value), 3) AS usage_total
+      FROM postgresql(purser_pg, table='usage_records')
+      WHERE value_kind = 'delta'
+        AND period_start >= now() - INTERVAL 30 DAY
+      GROUP BY tenant, usage_type
+      ORDER BY tenant, usage_total DESC
+      LIMIT 500
+
+  - slug: tenants.subscriptions
+    name: Tenant subscriptions and trials
+    display: table
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT dictGetOrDefault('periscope.tenant_dim', 'name', tuple(s.tenant_id), toString(s.tenant_id)) AS tenant,
+             bt.tier_name AS tier,
+             s.status AS status,
+             s.billing_model AS billing_model,
+             s.started_at AS started_at,
+             s.trial_ends_at AS trial_ends_at,
+             s.next_billing_date AS next_billing_date,
+             s.cancelled_at AS cancelled_at
+      FROM postgresql(purser_pg, table='tenant_subscriptions') AS s
+      LEFT JOIN postgresql(purser_pg, table='billing_tiers') AS bt ON bt.id = s.tier_id
+      ORDER BY started_at DESC
+      LIMIT 200

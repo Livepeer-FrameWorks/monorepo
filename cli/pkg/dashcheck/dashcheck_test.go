@@ -52,6 +52,32 @@ func TestMetabaseCardQueriesMatchPeriscopeSchema(t *testing.T) {
 	}
 }
 
+// The activity cards reach Postgres through ClickHouse's postgresql() table
+// function (named collections quartermaster_pg / commodore_pg / purser_pg),
+// so their identifiers are validated against the Postgres schema files in
+// addition to the Periscope ClickHouse schema.
+func TestMetabaseActivityCardQueriesMatchSchema(t *testing.T) {
+	repoRoot := findRepoRoot(t)
+	schema := loadClickHouseSchema(t, repoRoot)
+	loadPostgresSchema(t, repoRoot, schema)
+	specPath := filepath.Join(repoRoot, "infrastructure/metabase/activity_cards.yaml")
+
+	spec := loadMetabaseSpec(t, specPath)
+	var failures []string
+	for _, card := range spec.Cards {
+		if strings.TrimSpace(card.Query) == "" {
+			failures = append(failures, fmt.Sprintf("%s has an empty query", card.Slug))
+			continue
+		}
+		for _, err := range validateClickHouseQuery(card.Query, schema) {
+			failures = append(failures, fmt.Sprintf("%s: %s", card.Slug, err))
+		}
+	}
+	if len(failures) > 0 {
+		t.Fatalf("Metabase activity card SQL diverges from the ClickHouse/Postgres schemas:\n%s", strings.Join(failures, "\n"))
+	}
+}
+
 type tableSchema map[string]map[string]bool
 
 func findRepoRoot(t *testing.T) string {
@@ -346,6 +372,22 @@ func loadMetabaseSpec(t *testing.T, path string) metabase.Spec {
 	return spec
 }
 
+// loadPostgresSchema merges the analytics-reachable Postgres service schemas
+// into the table map. The DDL parser is loose (constraint lines may add bogus
+// "columns"), which only widens the allowlist — fine for drift detection.
+func loadPostgresSchema(t *testing.T, repoRoot string, schema tableSchema) {
+	t.Helper()
+
+	for _, name := range []string{"quartermaster", "commodore", "purser"} {
+		path := filepath.Join(repoRoot, "pkg/database/sql/schema", name+".sql")
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parseClickHouseDDL(string(content), schema)
+	}
+}
+
 func loadClickHouseSchema(t *testing.T, repoRoot string) tableSchema {
 	t.Helper()
 
@@ -414,7 +456,7 @@ func parseClickHouseDDL(content string, schema tableSchema) {
 	}
 }
 
-var createTableRe = regexp.MustCompile(`(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][A-Za-z0-9_.]*)\s*\(`)
+var createTableRe = regexp.MustCompile(`(?i)CREATE\s+(?:TABLE|DICTIONARY)\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][A-Za-z0-9_.]*)\s*\(`)
 var createViewRe = regexp.MustCompile(`(?i)\bCREATE\s+(?:MATERIALIZED\s+)?VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][A-Za-z0-9_.]*)\s+`)
 var alterTableRe = regexp.MustCompile(`(?i)ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?([A-Za-z_][A-Za-z0-9_.]*)\b`)
 var addColumnRe = regexp.MustCompile(`(?i)ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][A-Za-z0-9_]*)\b`)
@@ -556,6 +598,15 @@ func validateClickHouseQuery(query string, schema tableSchema) []string {
 func queryTables(query string) []string {
 	var tables []string
 	for _, match := range sqlTableRefRe.FindAllStringSubmatch(query, -1) {
+		name := normalizeTableName(match[1])
+		// postgresql(...) is a table function, not a table; the referenced
+		// Postgres table is extracted below.
+		if strings.EqualFold(name, "postgresql") {
+			continue
+		}
+		tables = append(tables, name)
+	}
+	for _, match := range pgTableFnRe.FindAllStringSubmatch(query, -1) {
 		tables = append(tables, normalizeTableName(match[1]))
 	}
 	return dedupe(tables)
@@ -570,6 +621,7 @@ func sqlAliases(query string) []string {
 }
 
 var sqlTableRefRe = regexp.MustCompile(`(?i)\b(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_.]*)`)
+var pgTableFnRe = regexp.MustCompile(`(?i)\bpostgresql\(\s*[A-Za-z_][A-Za-z0-9_]*\s*,\s*table\s*=\s*'([^']+)'\s*\)`)
 var sqlAliasRe = regexp.MustCompile(`(?i)\bAS\s+([A-Za-z_][A-Za-z0-9_]*)\b`)
 var sqlTokenRe = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
 
@@ -592,6 +644,11 @@ var sqlIgnoredTokens = lowerSet(
 	"count", "countif", "round", "avgif", "quantileif", "nullif", "coalesce",
 	"max", "min", "sum", "ifnull", "pow", "argmax", "tostartofhour", "now",
 	"today", "todate", "todatetime", "uniqexact", "quantile",
+	"left", "join", "on", "having", "if", "empty", "tuple", "tostring",
+	"touint64", "dictgetordefault", "uniqcombinedmerge", "tostartofweek",
+	// postgresql(<collection>, table='...') table-function plumbing; the
+	// collection names are defined in config.d/named-collections.xml.
+	"postgresql", "table", "quartermaster_pg", "commodore_pg", "purser_pg",
 )
 
 func stripSQLComments(content string) string {

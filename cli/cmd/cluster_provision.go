@@ -2774,6 +2774,9 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 				if manifest.Infrastructure.ClickHouse.Port != 0 {
 					config.Port = manifest.Infrastructure.ClickHouse.Port
 				}
+				if collections := buildAnalyticsNamedCollections(manifest, sharedEnv); len(collections) > 0 {
+					config.Metadata["named_collections"] = collections
+				}
 			}
 		case "kafka":
 			if manifest.Infrastructure.Kafka != nil {
@@ -5404,6 +5407,55 @@ func kafkaTopicsToMetadata(topics []inventory.KafkaTopic) []map[string]any {
 		})
 	}
 	return metadata
+}
+
+// buildAnalyticsNamedCollections renders the ClickHouse-to-Postgres named
+// collections for operator tenant-activity analytics. Each collection maps one
+// service schema to the corresponding manifest database and authenticates as
+// frameworks_analytics_ro.
+// Returns nil when the manifest has no Postgres or the password is absent so
+// the role var removes any previously managed drop-in.
+func buildAnalyticsNamedCollections(manifest *inventory.Manifest, sharedEnv map[string]string) []map[string]any {
+	pg := manifest.Infrastructure.Postgres
+	password := sharedEnv["ANALYTICS_RO_PASSWORD"]
+	if pg == nil || !pg.Enabled || password == "" {
+		return nil
+	}
+	pgHostName := pg.Host
+	if pg.IsYugabyte() && len(pg.Nodes) > 0 {
+		pgHostName = pg.Nodes[0].Host
+	}
+	// Colocated ClickHouse+Postgres connects over loopback, which the default
+	// pg_hba already allows. Split hosts fall back to the mesh address; that
+	// requires a pg_hba entry for the mesh CIDR.
+	pgAddr := "127.0.0.1"
+	if ch := manifest.Infrastructure.ClickHouse; ch == nil || ch.Host != pgHostName {
+		pgAddr = manifest.MeshAddress(pgHostName)
+	}
+	if pgAddr == "" {
+		return nil
+	}
+	var collections []map[string]any
+	for _, schema := range []string{"quartermaster", "commodore", "purser"} {
+		for _, db := range pg.Databases {
+			if db.Name != schema {
+				continue
+			}
+			collections = append(collections, map[string]any{
+				"name": schema + "_pg",
+				"settings": map[string]any{
+					"host":     pgAddr,
+					"port":     pg.EffectivePort(),
+					"database": schema,
+					"schema":   schema,
+					"user":     "frameworks_analytics_ro",
+					"password": password,
+				},
+			})
+			break
+		}
+	}
+	return collections
 }
 
 // extractInfraCredentials picks database credentials out of the preloaded

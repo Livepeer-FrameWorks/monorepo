@@ -58,6 +58,9 @@ func clickhouseRoleVars(ctx context.Context, host inventory.Host, config Service
 	if items, ok := config.Metadata["clickhouse_seed_items"].([]map[string]any); ok && len(items) > 0 {
 		vars["clickhouse_seed_items"] = items
 	}
+	if items, ok := config.Metadata["named_collections"].([]map[string]any); ok && len(items) > 0 {
+		vars["clickhouse_named_collections"] = items
+	}
 	if items, ok := config.Metadata["clickhouse_schema_items"].([]map[string]any); ok && len(items) > 0 {
 		vars["clickhouse_schema_items"] = items
 	}

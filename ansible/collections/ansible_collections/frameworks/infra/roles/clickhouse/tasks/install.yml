@@ -55,6 +55,35 @@
     mode: "0644"
   notify: clickhouse restart
 
+- name: Write managed ClickHouse named collections
+  when: clickhouse_named_collections | length > 0
+  ansible.builtin.copy:
+    dest: /etc/clickhouse-server/config.d/named-collections.xml
+    owner: clickhouse
+    group: clickhouse
+    mode: "0600"
+    content: |
+      <clickhouse>
+        <named_collections>
+      {% for collection in clickhouse_named_collections %}
+          <{{ collection.name }}>
+      {% for key, value in (collection.settings | default({})).items() %}
+            <{{ key }}>{{ value }}</{{ key }}>
+      {% endfor %}
+          </{{ collection.name }}>
+      {% endfor %}
+        </named_collections>
+      </clickhouse>
+  no_log: true
+  notify: clickhouse restart
+
+- name: Remove managed ClickHouse named collections when none are configured
+  when: clickhouse_named_collections | length == 0
+  ansible.builtin.file:
+    path: /etc/clickhouse-server/config.d/named-collections.xml
+    state: absent
+  notify: clickhouse restart
+
 - name: Remove broken upstream TLS block when ClickHouse TLS is disabled
   when: not (clickhouse_enable_ssl | default(false) | bool)
   block:

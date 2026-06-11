@@ -32,6 +32,36 @@
     
     <!-- Timezone -->
     <timezone>UTC</timezone>
+
+    <!-- Postgres reach-through for operator tenant-activity analytics. Dev uses
+         one shared `frameworks` database; provisioned clusters render these
+         collections from the manifest. Credentials are dev-only. -->
+    <named_collections>
+        <quartermaster_pg>
+            <host>postgres</host>
+            <port>5432</port>
+            <database>frameworks</database>
+            <schema>quartermaster</schema>
+            <user>frameworks_analytics_ro</user>
+            <password>frameworks_analytics_dev</password>
+        </quartermaster_pg>
+        <commodore_pg>
+            <host>postgres</host>
+            <port>5432</port>
+            <database>frameworks</database>
+            <schema>commodore</schema>
+            <user>frameworks_analytics_ro</user>
+            <password>frameworks_analytics_dev</password>
+        </commodore_pg>
+        <purser_pg>
+            <host>postgres</host>
+            <port>5432</port>
+            <database>frameworks</database>
+            <schema>purser</schema>
+            <user>frameworks_analytics_ro</user>
+            <password>frameworks_analytics_dev</password>
+        </purser_pg>
+    </named_collections>
     
     <!-- Background pool sizes -->
     <background_pool_size>16</background_pool_size>

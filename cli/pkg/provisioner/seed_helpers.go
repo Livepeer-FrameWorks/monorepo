@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"fmt"
+	"strings"
 
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 )
@@ -37,6 +38,30 @@ func BuildPostgresSeedItems(kind string, dbNames []string) ([]map[string]any, er
 		})
 	}
 	return items, nil
+}
+
+// AnalyticsRODatabase returns the first manifest database that carries an
+// analytics_ro static seed, or "" when the manifest defines none of them.
+// Used to decide where (and whether) to apply the role's password.
+func AnalyticsRODatabase(dbNames []string) string {
+	for _, db := range dbNames {
+		if path, ok := staticSeeds[db]; ok && strings.Contains(path, "analytics_ro") {
+			return db
+		}
+	}
+	return ""
+}
+
+// BuildAnalyticsROPasswordItem returns the seed item that sets the
+// frameworks_analytics_ro password. The role itself is created (idempotently,
+// without a password) by the analytics_ro_*.sql static seeds; the password
+// comes from manifest env so it never lands in an embedded SQL file.
+func BuildAnalyticsROPasswordItem(db, password string) map[string]any {
+	quoted := strings.ReplaceAll(password, "'", "''")
+	return map[string]any{
+		"db":  db,
+		"sql": fmt.Sprintf("ALTER ROLE frameworks_analytics_ro WITH LOGIN PASSWORD '%s'", quoted),
+	}
 }
 
 func pickPostgresSeedMap(kind string) (map[string]string, error) {

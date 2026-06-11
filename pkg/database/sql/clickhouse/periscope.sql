@@ -3306,3 +3306,31 @@ SELECT
 FROM storage_usage_daily_store
 GROUP BY day, tenant_id, cluster_id, storage_scope,
          storage_provider_tenant_id, storage_provider_cluster_id, storage_backend;
+
+-- ============================================================================
+-- TENANT DIMENSION (operator tenant activity)
+-- ----------------------------------------------------------------------------
+-- Labels tenant_id columns with the tenant's name/tier in analytics queries
+-- (Metabase activity cards, ad-hoc operator SQL). Source is
+-- quartermaster.tenants through the quartermaster_pg named collection
+-- (config.d/named-collections.xml), authenticating as the
+-- frameworks_analytics_ro role; this is the sanctioned operator-analytics
+-- exception to the no-cross-service-DB-reads rule. Attribute names match the
+-- Postgres columns; the key column is `id`, so lookups are
+-- dictGet('periscope.tenant_dim', 'name', tuple(tenant_id)). Lazy load means
+-- CREATE succeeds even when Postgres is unreachable.
+-- ============================================================================
+
+CREATE DICTIONARY IF NOT EXISTS tenant_dim
+(
+    id UUID,
+    name String DEFAULT '',
+    subdomain String DEFAULT '',
+    deployment_tier String DEFAULT '',
+    is_active UInt8 DEFAULT 0,
+    created_at DateTime DEFAULT toDateTime(0)
+)
+PRIMARY KEY id
+SOURCE(POSTGRESQL(NAME quartermaster_pg TABLE 'tenants'))
+LAYOUT(COMPLEX_KEY_HASHED())
+LIFETIME(MIN 300 MAX 600);

@@ -121,15 +121,7 @@ func runSeed(cmd *cobra.Command, rc *resolvedCluster, demo, force bool) error {
 			itemsKey = "yugabyte_seed_items"
 		}
 
-		runSeed := func(kind, label string) error {
-			items, err := provisioner.BuildPostgresSeedItems(kind, dbNames)
-			if err != nil {
-				return fmt.Errorf("%s %s seeds: %w", serviceName, kind, err)
-			}
-			if len(items) == 0 {
-				fmt.Fprintf(cmd.OutOrStdout(), "  No %s seeds apply for this manifest's databases\n", kind)
-				return nil
-			}
+		applyItems := func(items []map[string]any, kind, label string) error {
 			fmt.Fprintf(cmd.OutOrStdout(), "Applying %s %s seeds...\n", serviceName, kind)
 			cfg := provisioner.ServiceConfig{
 				Port: pg.EffectivePort(),
@@ -153,8 +145,37 @@ func runSeed(cmd *cobra.Command, rc *resolvedCluster, demo, force bool) error {
 			return nil
 		}
 
+		runSeed := func(kind, label string) error {
+			items, err := provisioner.BuildPostgresSeedItems(kind, dbNames)
+			if err != nil {
+				return fmt.Errorf("%s %s seeds: %w", serviceName, kind, err)
+			}
+			if len(items) == 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "  No %s seeds apply for this manifest's databases\n", kind)
+				return nil
+			}
+			return applyItems(items, kind, label)
+		}
+
 		if err := runSeed("static", "Static seeds"); err != nil {
 			return err
+		}
+		// The analytics_ro static seeds create the operator-analytics role
+		// without a password; set it from manifest env so ClickHouse named
+		// collections can authenticate.
+		if roDB := provisioner.AnalyticsRODatabase(dbNames); roDB != "" {
+			env, envErr := rc.SharedEnv()
+			if envErr != nil {
+				return fmt.Errorf("load manifest env_files: %w", envErr)
+			}
+			if roPassword := env["ANALYTICS_RO_PASSWORD"]; roPassword == "" {
+				fmt.Fprintln(cmd.OutOrStdout(), "  ANALYTICS_RO_PASSWORD not in manifest env_files; frameworks_analytics_ro has no password and cannot log in until one is set")
+			} else {
+				item := provisioner.BuildAnalyticsROPasswordItem(roDB, roPassword)
+				if err := applyItems([]map[string]any{item}, "analytics-ro password", "Analytics read-only role password"); err != nil {
+					return err
+				}
+			}
 		}
 		if demo {
 			if err := runSeed("demo", "Demo seeds"); err != nil {
