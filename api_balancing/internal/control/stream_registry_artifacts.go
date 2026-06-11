@@ -118,21 +118,39 @@ func (r *StreamRegistry) ResolveArtifactByHash(ctx context.Context, db artifactD
 	if artifactHash == "" {
 		return ArtifactEntry{}, ErrUnknownArtifact
 	}
-	if e, ok := r.lookupArtifact(r.artifacts.byHash, artifactHash); ok {
-		return e, nil
+	entry, fresh, stale := r.lookupArtifactEntry(r.artifacts.byHash, artifactHash)
+	if fresh {
+		r.observeResolve("artifact", "cache_hit", artifactHash)
+		return entry, nil
 	}
 	if db == nil {
+		// No SQL wired (registry-only cell): an expired entry is still the
+		// best available answer; with nothing cached this stays a miss.
+		if stale {
+			r.observeResolve("artifact", "stale_served", artifactHash)
+			return entry, nil
+		}
 		r.recordMiss(ctx, "artifact_hash", artifactHash)
+		r.observeResolve("artifact", "unavailable", artifactHash)
 		return ArtifactEntry{}, ErrUnknownArtifact
 	}
-	entry, err := r.hydrateArtifactFromSQL(ctx, db, "hash", artifactHash)
-	if err != nil {
-		if errors.Is(err, ErrUnknownArtifact) {
-			r.recordMiss(ctx, "artifact_hash", artifactHash)
-		}
+	hydrated, err := r.hydrateArtifactFromSQL(ctx, db, "hash", artifactHash)
+	if err == nil {
+		r.observeResolve("artifact", "hydrated", artifactHash)
+		return hydrated, nil
+	}
+	if errors.Is(err, ErrUnknownArtifact) {
+		// Authoritative no-row: never serve stale over it.
+		r.recordMiss(ctx, "artifact_hash", artifactHash)
+		r.observeResolve("artifact", "miss", artifactHash)
 		return ArtifactEntry{}, err
 	}
-	return entry, nil
+	if stale {
+		r.observeResolve("artifact", "stale_served", artifactHash)
+		return entry, nil
+	}
+	r.observeResolve("artifact", "error", artifactHash)
+	return ArtifactEntry{}, err
 }
 
 // ResolveArtifactByInternalName resolves vod+/dvr+/clip artifacts by their
@@ -142,21 +160,36 @@ func (r *StreamRegistry) ResolveArtifactByInternalName(ctx context.Context, db a
 	if internalName == "" {
 		return ArtifactEntry{}, ErrUnknownArtifact
 	}
-	if e, ok := r.lookupArtifact(r.artifacts.byInternal, internalName); ok {
-		return e, nil
+	entry, fresh, stale := r.lookupArtifactEntry(r.artifacts.byInternal, internalName)
+	if fresh {
+		r.observeResolve("artifact", "cache_hit", internalName)
+		return entry, nil
 	}
 	if db == nil {
+		if stale {
+			r.observeResolve("artifact", "stale_served", internalName)
+			return entry, nil
+		}
 		r.recordMiss(ctx, "artifact_internal_name", internalName)
+		r.observeResolve("artifact", "unavailable", internalName)
 		return ArtifactEntry{}, ErrUnknownArtifact
 	}
-	entry, err := r.hydrateArtifactFromSQL(ctx, db, "internal", internalName)
-	if err != nil {
-		if errors.Is(err, ErrUnknownArtifact) {
-			r.recordMiss(ctx, "artifact_internal_name", internalName)
-		}
+	hydrated, err := r.hydrateArtifactFromSQL(ctx, db, "internal", internalName)
+	if err == nil {
+		r.observeResolve("artifact", "hydrated", internalName)
+		return hydrated, nil
+	}
+	if errors.Is(err, ErrUnknownArtifact) {
+		r.recordMiss(ctx, "artifact_internal_name", internalName)
+		r.observeResolve("artifact", "miss", internalName)
 		return ArtifactEntry{}, err
 	}
-	return entry, nil
+	if stale {
+		r.observeResolve("artifact", "stale_served", internalName)
+		return entry, nil
+	}
+	r.observeResolve("artifact", "error", internalName)
+	return ArtifactEntry{}, err
 }
 
 // ResolveByProcessingHash bridges the processing→artifact identity
@@ -172,30 +205,61 @@ func (r *StreamRegistry) ResolveByProcessingHash(ctx context.Context, db artifac
 	// Finalized artifact wins over in-flight processing job — once the
 	// VOD/DVR row exists, that's the authoritative entry. ResolveByHash
 	// already prefers artifacts.
-	if e, ok := r.lookupArtifact(r.artifacts.byHash, artifactHash); ok && e.Kind != ArtifactKindProcessing {
-		return e, nil
+	hashEntry, hashFresh, hashStale := r.lookupArtifactEntry(r.artifacts.byHash, artifactHash)
+	if hashFresh && hashEntry.Kind != ArtifactKindProcessing {
+		r.observeResolve("artifact", "cache_hit", artifactHash)
+		return hashEntry, nil
 	}
-	if e, ok := r.lookupArtifact(r.artifacts.byProcessingKey, artifactHash); ok {
-		return e, nil
+	procEntry, procFresh, procStale := r.lookupArtifactEntry(r.artifacts.byProcessingKey, artifactHash)
+	if procFresh {
+		r.observeResolve("artifact", "cache_hit", artifactHash)
+		return procEntry, nil
+	}
+	// Stale fallback mirrors the fresh priority: finalized hash entry first,
+	// then in-flight processing entry.
+	staleEntry, haveStale := ArtifactEntry{}, false
+	if hashStale && hashEntry.Kind != ArtifactKindProcessing {
+		staleEntry, haveStale = hashEntry, true
+	} else if procStale {
+		staleEntry, haveStale = procEntry, true
 	}
 	if db == nil {
+		if haveStale {
+			r.observeResolve("artifact", "stale_served", artifactHash)
+			return staleEntry, nil
+		}
 		r.recordMiss(ctx, "processing_hash", artifactHash)
+		r.observeResolve("artifact", "unavailable", artifactHash)
 		return ArtifactEntry{}, ErrUnknownArtifact
 	}
 	// Prefer artifacts row (finalized). If absent, fall back to job row.
 	if entry, err := r.hydrateArtifactFromSQL(ctx, db, "hash", artifactHash); err == nil {
+		r.observeResolve("artifact", "hydrated", artifactHash)
 		return entry, nil
 	} else if !errors.Is(err, ErrUnknownArtifact) {
+		if haveStale {
+			r.observeResolve("artifact", "stale_served", artifactHash)
+			return staleEntry, nil
+		}
+		r.observeResolve("artifact", "error", artifactHash)
 		return ArtifactEntry{}, err
 	}
 	entry, err := r.hydrateProcessingFromSQL(ctx, db, artifactHash)
-	if err != nil {
-		if errors.Is(err, ErrUnknownArtifact) {
-			r.recordMiss(ctx, "processing_hash", artifactHash)
-		}
+	if err == nil {
+		r.observeResolve("artifact", "hydrated", artifactHash)
+		return entry, nil
+	}
+	if errors.Is(err, ErrUnknownArtifact) {
+		r.recordMiss(ctx, "processing_hash", artifactHash)
+		r.observeResolve("artifact", "miss", artifactHash)
 		return ArtifactEntry{}, err
 	}
-	return entry, nil
+	if haveStale {
+		r.observeResolve("artifact", "stale_served", artifactHash)
+		return staleEntry, nil
+	}
+	r.observeResolve("artifact", "error", artifactHash)
+	return ArtifactEntry{}, err
 }
 
 // OnProcessingFinalize is invoked from the existing finalize-hook code path
@@ -440,16 +504,30 @@ func (r *StreamRegistry) SnapshotArtifacts() []ArtifactEntry {
 }
 
 func (r *StreamRegistry) lookupArtifact(m map[string]*cachedArtifact, key string) (ArtifactEntry, bool) {
+	e, fresh, _ := r.lookupArtifactEntry(m, key)
+	return e, fresh
+}
+
+// lookupArtifactEntry mirrors lookupEntry's fresh/stale classification for
+// the artifact maps (stale entries are servable only when SQL re-hydration
+// fails transiently).
+func (r *StreamRegistry) lookupArtifactEntry(m map[string]*cachedArtifact, key string) (ArtifactEntry, bool, bool) {
+	r.mu.RLock()
+	ttl, staleMax := r.ttl, r.staleMax
+	r.mu.RUnlock()
 	r.artifacts.mu.RLock()
 	defer r.artifacts.mu.RUnlock()
 	ce, ok := m[key]
 	if !ok {
-		return ArtifactEntry{}, false
+		return ArtifactEntry{}, false, false
 	}
-	if time.Since(ce.cached) > r.ttl {
-		return ArtifactEntry{}, false
+	age := time.Since(ce.cached)
+	fresh := age <= ttl
+	stale := !fresh && age <= ttl+staleMax
+	if !fresh && !stale {
+		return ArtifactEntry{}, false, false
 	}
-	return ce.entry, true
+	return ce.entry, fresh, stale
 }
 
 func (r *StreamRegistry) storeArtifact(e ArtifactEntry) {

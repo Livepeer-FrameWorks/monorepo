@@ -806,6 +806,49 @@ func main() {
 	control.SetStreamRegistry(streamRegistry)
 	streamRegistry.StartSweeper(context.Background(), 30*time.Second, 5*time.Minute)
 
+	// Stale-on-transient-error window: expired registry entries may serve as
+	// fallback while Commodore/SQL re-hydration fails transiently (never on
+	// authoritative not-found). 0 disables stale serving.
+	if staleMaxRaw := config.GetEnv("FOGHORN_REGISTRY_STALE_MAX", ""); staleMaxRaw != "" {
+		if staleMax, parseErr := time.ParseDuration(staleMaxRaw); parseErr == nil && staleMax >= 0 {
+			streamRegistry.SetStaleMax(staleMax)
+		} else {
+			logger.WithField("value", staleMaxRaw).Warn("Invalid FOGHORN_REGISTRY_STALE_MAX; keeping 5m default")
+		}
+	}
+	registryResolutions := metricsCollector.NewCounter(
+		"stream_registry_resolutions_total",
+		"Stream registry resolve outcomes by entity and outcome",
+		[]string{"entity", "outcome"},
+	)
+	for _, entity := range []string{"source", "artifact"} {
+		for _, outcome := range []string{"cache_hit", "hydrated", "stale_served", "miss", "unavailable", "error"} {
+			registryResolutions.WithLabelValues(entity, outcome).Add(0)
+		}
+	}
+	var staleServeLogMu sync.Mutex
+	var staleServeLogLast time.Time
+	streamRegistry.SetResolveObserver(func(entity, outcome, key string) {
+		registryResolutions.WithLabelValues(entity, outcome).Inc()
+		if outcome != "stale_served" {
+			return
+		}
+		// Rate-limited: during an outage every expired-entry lookup serves
+		// stale; one warning per interval is signal, per lookup is noise.
+		staleServeLogMu.Lock()
+		shouldLog := time.Since(staleServeLogLast) > 30*time.Second
+		if shouldLog {
+			staleServeLogLast = time.Now()
+		}
+		staleServeLogMu.Unlock()
+		if shouldLog {
+			logger.WithFields(logging.Fields{
+				"entity": entity,
+				"key":    key,
+			}).Warn("stream_registry serving stale entry; upstream resolver failing transiently")
+		}
+	})
+
 	// Identity resolver facade: the single front door for stream/artifact
 	// → tenant/cluster attribution, layered state → registry → Commodore.
 	// All trigger handlers, gRPC surfaces, and federation paths resolve

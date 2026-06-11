@@ -1658,6 +1658,8 @@ func (pm *PeerManager) pushStreamAds() {
 				GeoLat:      snap.GeoLatitude,
 				GeoLon:      snap.GeoLongitude,
 				BufferState: si.ss.BufferState,
+				RamUsed:     uint64(ns.RAMCurrent),
+				RamMax:      uint64(ns.RAMMax),
 			})
 		}
 	}

@@ -197,11 +197,17 @@ func TestResolveSourceTTL_Expires(t *testing.T) {
 	}
 }
 
-func TestResolveSource_NilClient_FailClosed(t *testing.T) {
+func TestResolveSource_NilClient_TransientUnavailable(t *testing.T) {
+	// A nil client (Commodore not connected yet) is a transient condition,
+	// not "stream doesn't exist" — returning ErrUnknownStream here would let
+	// the identity layer negative-cache real streams during the boot window.
 	r := NewStreamRegistry(nil, "cluster-A", time.Minute)
 	_, err := r.ResolveSourceByInternalName(context.Background(), "x")
-	if !errors.Is(err, ErrUnknownStream) {
-		t.Errorf("err = %v, want ErrUnknownStream", err)
+	if !errors.Is(err, ErrRegistryUnavailable) {
+		t.Errorf("err = %v, want ErrRegistryUnavailable", err)
+	}
+	if errors.Is(err, ErrUnknownStream) {
+		t.Error("nil client must not look like authoritative not-found")
 	}
 }
 

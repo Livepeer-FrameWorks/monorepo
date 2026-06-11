@@ -2300,9 +2300,17 @@ func resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpoint
 			}
 		}
 	}
-	// Cold start: EdgeSummary cache empty but peers exist — fan out QueryStream
+	// Pre-warmed path: the federation mesh re-advertises live streams every
+	// 5s with per-edge scoring data; consume that before paying a fan-out.
+	// Only replaces the COLD path; the EdgeSummary cache above stays the
+	// primary source when warm.
+	if !skipRemote && len(deps.RemoteEdges) == 0 {
+		deps.RemoteEdges = control.FederatedRemoteEdges(internalName)
+	}
+	// Cold start: EdgeSummary cache empty, no usable ads, but peers exist:
+	// fan out QueryStream (single-flighted + memoized across requests).
 	if !skipRemote && len(deps.RemoteEdges) == 0 && len(allPeers) > 0 {
-		deps.RemoteEdges = queryStreamFanOut(ctx, internalName, streamTenantID, lat, lon, allPeers)
+		deps.RemoteEdges = queryStreamFanOutShared(ctx, internalName, streamTenantID, lat, lon, allPeers)
 	}
 
 	response, err := control.ResolveLivePlayback(ctx, deps, req.ContentId, internalName, streamID, streamTenantID)

@@ -120,11 +120,14 @@ type FoghornGRPCServer struct {
 	clusterID           string
 	instanceID          string
 	redisStore          *state.RedisStateStore
-	pendingDVRStops     map[string]time.Time
-	pendingDVRMu        sync.Mutex
-	originPullMu        sync.Mutex
-	originPulling       map[string]struct{}
-	artifactCleaner     *artifacts.Cleaner
+	// fanOutShared dedups + memoizes cold QueryStream fan-outs per
+	// (tenant, stream), same machinery as the HTTP /play path.
+	fanOutShared    *balancer.SharedFanOut
+	pendingDVRStops map[string]time.Time
+	pendingDVRMu    sync.Mutex
+	originPullMu    sync.Mutex
+	originPulling   map[string]struct{}
+	artifactCleaner *artifacts.Cleaner
 	// Signed-policy-bundle cache wired in cmd/foghorn/main.go. nil
 	// disables the bundle pathway; admission falls back to per-request
 	// Commodore ResolvePlaybackPolicy calls.
@@ -175,6 +178,7 @@ func NewFoghornGRPCServer(
 		decklogClient:   decklogClient,
 		s3Client:        s3Client,
 		purserClient:    purserClient,
+		fanOutShared:    balancer.NewSharedFanOut(5 * time.Second),
 		pendingDVRStops: make(map[string]time.Time),
 		originPulling:   make(map[string]struct{}),
 	}
@@ -2232,9 +2236,21 @@ func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *
 			}
 		}
 	}
-	// Cold start: EdgeSummary cache empty but peers exist — fan out QueryStream
-	if !skipRemote && len(deps.RemoteEdges) == 0 && len(allPeers) > 0 {
-		deps.RemoteEdges = s.queryStreamFanOut(ctx, internalName, tenantID, lat, lon, allPeers)
+	// Pre-warmed path: StreamAdvertisement-fed registry edges (5s cadence)
+	// before paying a fan-out; same ordering as the HTTP /play handler.
+	if !skipRemote && len(deps.RemoteEdges) == 0 {
+		deps.RemoteEdges = control.FederatedRemoteEdges(internalName)
+	}
+	// Cold start: EdgeSummary cache empty, no usable ads, but peers exist:
+	// fan out QueryStream (single-flighted + memoized; detached from this
+	// caller's cancellation so an abandoned request can't poison the shared
+	// memo window with an empty candidate set).
+	if !skipRemote && len(deps.RemoteEdges) == 0 && len(allPeers) > 0 && s.fanOutShared != nil {
+		deps.RemoteEdges = s.fanOutShared.Do(tenantID+"/"+internalName, func() []balancer.RemoteEdgeCandidate {
+			fanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			return s.queryStreamFanOut(fanCtx, internalName, tenantID, lat, lon, allPeers)
+		})
 	}
 
 	response, err := control.ResolveLivePlayback(ctx, deps, req.ContentId, internalName, streamID, tenantID)

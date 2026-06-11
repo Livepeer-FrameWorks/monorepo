@@ -1743,6 +1743,8 @@ func (s *FederationServer) handleStreamAdvertisement(_ context.Context, peerClus
 				GeoLat:      e.GeoLat,
 				GeoLon:      e.GeoLon,
 				BufferState: e.BufferState,
+				RAMUsed:     e.RamUsed,
+				RAMMax:      e.RamMax,
 			})
 		}
 		originCluster := ad.OriginClusterId

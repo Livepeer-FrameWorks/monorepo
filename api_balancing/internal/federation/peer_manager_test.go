@@ -1332,10 +1332,14 @@ func TestRecvLoop_CachesPeerPayloads(t *testing.T) {
 		t.Fatalf("expected play-2 -> live+ad2, got %q err=%v", byPlay.InternalName, lookupErr)
 	}
 
-	if _, lookupErr := registry.ResolveSourceByInternalName(ctx, "live+ad"); !errors.Is(lookupErr, control.ErrUnknownStream) {
+	// Withdrawn entries no longer answer from cache; with no Commodore
+	// client wired the fall-through hydrate reports transient
+	// ErrRegistryUnavailable (not ErrUnknownStream — nil client must never
+	// look like authoritative not-found).
+	if _, lookupErr := registry.ResolveSourceByInternalName(ctx, "live+ad"); !errors.Is(lookupErr, control.ErrRegistryUnavailable) {
 		t.Fatalf("expected live+ad withdrawn, got err=%v", lookupErr)
 	}
-	if _, lookupErr := registry.ResolveSourceByPlaybackID(ctx, "play-del"); !errors.Is(lookupErr, control.ErrUnknownStream) {
+	if _, lookupErr := registry.ResolveSourceByPlaybackID(ctx, "play-del"); !errors.Is(lookupErr, control.ErrRegistryUnavailable) {
 		t.Fatalf("expected play-del cleared, got err=%v", lookupErr)
 	}
 

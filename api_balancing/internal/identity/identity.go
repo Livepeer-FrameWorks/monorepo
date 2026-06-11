@@ -344,10 +344,26 @@ func (r *Resolver) ResolveArtifact(ctx context.Context, artifactHash, kindHint s
 		}
 		hit := false
 		for _, kind := range kinds {
+			// Per-kind probe outcomes are negative-cached in their own
+			// keyspace ("ak:"), shared by hinted and hintless calls, so
+			// partial knowledge survives: a hash known to not be a clip
+			// skips that RPC while the vod/dvr probes are still retried.
+			// Deliberately NOT the whole-call "a:" key — that one gates the
+			// entire resolution (registry layer included) and may only be
+			// written by the authoritative-and-not-transient verdict below.
+			kindKey := "ak:" + kind + ":" + artifactHash
+			if r.negativeHit(kindKey) {
+				authoritative = true
+				r.observe("artifact", "negative_cache", "kind_skip")
+				continue
+			}
 			com, err := r.cfg.CommodoreArtifact(ctx, kind, artifactHash)
 			switch {
 			case errors.Is(err, ErrNotFound):
 				authoritative = true
+				if ctx.Err() == nil {
+					r.negativeStore(kindKey)
+				}
 				continue
 			case err != nil:
 				transient = true
@@ -356,6 +372,9 @@ func (r *Resolver) ResolveArtifact(ctx context.Context, artifactHash, kindHint s
 				// nil error + zero identity is the adapters' "found
 				// nothing" answer — authoritative, same as ErrNotFound.
 				authoritative = true
+				if ctx.Err() == nil {
+					r.negativeStore(kindKey)
+				}
 				continue
 			}
 			// A kind probe that resolves to a DIFFERENT tenant is a hash

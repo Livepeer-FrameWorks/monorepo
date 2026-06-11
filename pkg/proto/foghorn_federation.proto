@@ -356,6 +356,11 @@ message PeerStreamEdge {
   double geo_lat = 8;
   double geo_lon = 9;
   string buffer_state = 10;  // FULL, DRY, RECOVER, etc.
+  // RAM utilization, same units as the node snapshot. Remote-edge scoring
+  // rejects candidates with ram_max == 0, so ads from peers that predate
+  // these fields gracefully fall through to the QueryStream fan-out.
+  uint64 ram_used = 11;
+  uint64 ram_max = 12;
 }
 
 // PeerHeartbeat provides session liveness and capability exchange.

@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	pkgredis "github.com/Livepeer-FrameWorks/monorepo/pkg/redis"
@@ -94,6 +96,11 @@ type EdgeCandidate struct {
 	GeoLat      float64
 	GeoLon      float64
 	BufferState string
+	// RAMUsed/RAMMax mirror the ad's ram fields. Zero RAMMax means the peer
+	// predates the fields; remote-edge scoring rejects such candidates, and
+	// the play path falls back to the QueryStream fan-out.
+	RAMUsed uint64
+	RAMMax  uint64
 }
 
 // Location is a per-cluster view of a stream — local or federated. Each
@@ -252,6 +259,13 @@ func (e StreamEntry) IsLiveAnywhere() bool {
 // a stream_registry.miss log so the missing site is visible.
 var ErrUnknownStream = errors.New("stream_registry: unknown stream")
 
+// ErrRegistryUnavailable is returned when no resolver can currently answer
+// (e.g. Commodore client not yet connected). It is a TRANSIENT condition and
+// deliberately distinct from ErrUnknownStream: the identity facade
+// negative-caches authoritative not-found, and an unavailable resolver must
+// never harden into a cached "doesn't exist".
+var ErrRegistryUnavailable = errors.New("stream_registry: resolver unavailable")
+
 // StreamRegistryInstance is the Foghorn-wide registry, wired at startup
 // alongside CommodoreClient. Nil-checks at every call site so unit tests
 // that don't install the registry still compile.
@@ -286,12 +300,28 @@ type StreamRegistry struct {
 	client    streamRegistryCommodore
 	clusterID string
 	ttl       time.Duration
+	// staleMax bounds stale-on-transient-error serving: an expired entry may
+	// still be served while age <= ttl+staleMax, but only when re-hydration
+	// failed transiently (never on authoritative not-found). Matches the
+	// Location sweeper's 5m maxAge by default — peer-fed Locations older than
+	// that are evicted anyway.
+	staleMax time.Duration
 
 	mu      sync.RWMutex
 	byID    map[string]*cachedEntry // keyed by StreamID
 	byInt   map[string]*cachedEntry // keyed by InternalName
 	byPlay  map[string]*cachedEntry // keyed by PlaybackID
 	missLog func(ctx context.Context, refKind, key string)
+	// resolveObserver reports resolve outcomes (metrics + stale-serve
+	// logging). entity is {source, artifact}; outcome is {cache_hit, hydrated,
+	// stale_served, miss, unavailable, error}; key is the lookup reference
+	// (log context only, not a metric label).
+	resolveObserver func(entity, outcome, key string)
+
+	// hydrateGroup deduplicates concurrent Commodore hydrations for the same
+	// reference. During an outage, expired-entry lookups would otherwise
+	// each pay the full RPC timeout before stale-serving.
+	hydrateGroup singleflight.Group
 
 	// live is consulted on every Resolve to populate IsLiveNow +
 	// SourceNodes from the existing StreamStateManager. Nil-safe: when
@@ -342,12 +372,40 @@ func NewStreamRegistry(client streamRegistryCommodore, clusterID string, ttl tim
 		client:     client,
 		clusterID:  clusterID,
 		ttl:        ttl,
+		staleMax:   5 * time.Minute,
 		byID:       make(map[string]*cachedEntry),
 		byInt:      make(map[string]*cachedEntry),
 		byPlay:     make(map[string]*cachedEntry),
 		artifacts:  newArtifactStore(),
 		managed:    newManagedState(),
 		watermarks: pkgredis.NewWatermarks(),
+	}
+}
+
+// SetStaleMax overrides the stale-serving window (0 disables stale serving).
+func (r *StreamRegistry) SetStaleMax(d time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if d >= 0 {
+		r.staleMax = d
+	}
+}
+
+// SetResolveObserver registers a callback invoked with the outcome of every
+// source/artifact resolve. Wired in main.go to a counter plus rate-limited
+// stale-serve logging.
+func (r *StreamRegistry) SetResolveObserver(fn func(entity, outcome, key string)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.resolveObserver = fn
+}
+
+func (r *StreamRegistry) observeResolve(entity, outcome, key string) {
+	r.mu.RLock()
+	fn := r.resolveObserver
+	r.mu.RUnlock()
+	if fn != nil {
+		fn(entity, outcome, key)
 	}
 }
 
@@ -571,6 +629,43 @@ func (r *StreamRegistry) clearReplicating(internalName, nodeID string) bool {
 // ce.entry.Locations after RUnlock would race with writers
 // (MarkReplicating, ClearReplicating, sweeper) mutating the map in
 // place.
+// FederatedEdgeCandidates returns the per-peer-cluster edge candidates the
+// federation mesh has advertised for a stream, keyed by cluster ID. Only
+// Locations that are live, non-local, and refreshed within maxAge are
+// included. maxAge doubles as the liveness gate (a healthy peer re-ads
+// every 5s, so a handful of missed pushes means the data is dead). Read-only
+// and memory-only: this is the play path's pre-warmed alternative to the
+// cold QueryStream fan-out. Returned slices are copies.
+func (r *StreamRegistry) FederatedEdgeCandidates(internalName string, maxAge time.Duration) map[string][]EdgeCandidate {
+	internalName = sourceInternalKey(internalName)
+	if internalName == "" || maxAge <= 0 {
+		return nil
+	}
+	cutoff := time.Now().Add(-maxAge)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	ce, ok := r.byInt[internalName]
+	if !ok {
+		return nil
+	}
+	var out map[string][]EdgeCandidate
+	for clusterID, loc := range ce.entry.Locations {
+		if clusterID == r.clusterID || !loc.IsLiveNow || len(loc.EdgeCandidates) == 0 {
+			continue
+		}
+		if loc.UpdatedAt.Before(cutoff) {
+			continue
+		}
+		if out == nil {
+			out = make(map[string][]EdgeCandidate)
+		}
+		copied := make([]EdgeCandidate, len(loc.EdgeCandidates))
+		copy(copied, loc.EdgeCandidates)
+		out[clusterID] = copied
+	}
+	return out
+}
+
 func (r *StreamRegistry) LocalReplication(_ context.Context, internalName string) (Location, bool) {
 	internalName = sourceInternalKey(internalName)
 	if internalName == "" {
@@ -749,10 +844,7 @@ func (r *StreamRegistry) ResolveSourceByInternalName(ctx context.Context, intern
 	if internalName == "" {
 		return StreamEntry{}, ErrUnknownStream
 	}
-	if e, ok := r.lookup(r.byInt, internalName); ok {
-		return e, nil
-	}
-	return r.hydrate(ctx, "internal_name", "", "", internalName)
+	return r.resolveSource(ctx, r.byInt, internalName, "internal_name", "", "", internalName)
 }
 
 // ResolveSourceByPlaybackID resolves a public playback ID to the canonical
@@ -763,10 +855,7 @@ func (r *StreamRegistry) ResolveSourceByPlaybackID(ctx context.Context, playback
 	if playbackID == "" {
 		return StreamEntry{}, ErrUnknownStream
 	}
-	if e, ok := r.lookup(r.byPlay, playbackID); ok {
-		return e, nil
-	}
-	return r.hydrate(ctx, "playback_id", "", playbackID, "")
+	return r.resolveSource(ctx, r.byPlay, playbackID, "playback_id", "", playbackID, "")
 }
 
 // ResolveSourceByStreamID resolves a Commodore stream_id UUID. Used by API
@@ -776,14 +865,55 @@ func (r *StreamRegistry) ResolveSourceByStreamID(ctx context.Context, streamID s
 	if streamID == "" {
 		return StreamEntry{}, ErrUnknownStream
 	}
-	if e, ok := r.lookup(r.byID, streamID); ok {
-		return e, nil
-	}
-	return r.hydrate(ctx, "stream_id", streamID, "", "")
+	return r.resolveSource(ctx, r.byID, streamID, "stream_id", streamID, "", "")
 }
 
-func (r *StreamRegistry) lookup(m map[string]*cachedEntry, key string) (StreamEntry, bool) {
-	// All reads of *cachedEntry must happen under the lock — writers
+// resolveSource is the shared lookup -> hydrate -> stale-fallback chain behind the
+// three ResolveSourceBy* entry points:
+//
+//	fresh cache hit          -> serve
+//	hydrate succeeds         -> serve (the 30s TTL is the revalidation cadence)
+//	authoritative not-found  -> fail (flows to identity's negative cache)
+//	transient hydrate error  -> serve the expired entry while within staleMax
+//	otherwise                -> return the transient error
+//
+// Stale entries are good enough for routing because runtime Locations are
+// maintained by live paths (admission, federation ads, redis sync) that touch
+// ce.cached independently of Commodore; only identity refresh stalls during
+// an outage.
+func (r *StreamRegistry) resolveSource(ctx context.Context, m map[string]*cachedEntry, key, refKind, streamID, playbackID, internalName string) (StreamEntry, error) {
+	entry, fresh, stale := r.lookupEntry(m, key)
+	if fresh {
+		r.observeResolve("source", "cache_hit", key)
+		return entry, nil
+	}
+	hydrated, err := r.hydrate(ctx, refKind, streamID, playbackID, internalName)
+	if err == nil {
+		r.observeResolve("source", "hydrated", key)
+		return hydrated, nil
+	}
+	if errors.Is(err, ErrUnknownStream) {
+		// Authoritative "doesn't exist": never serve stale over it.
+		r.observeResolve("source", "miss", key)
+		return StreamEntry{}, err
+	}
+	if stale {
+		r.observeResolve("source", "stale_served", key)
+		return entry, nil
+	}
+	if errors.Is(err, ErrRegistryUnavailable) {
+		r.observeResolve("source", "unavailable", key)
+	} else {
+		r.observeResolve("source", "error", key)
+	}
+	return StreamEntry{}, err
+}
+
+// lookupEntry reads a cached entry and classifies its age: fresh (within
+// ttl), stale (expired but within ttl+staleMax; servable only as a fallback
+// when re-hydration fails transiently), or neither (zero entry returned).
+func (r *StreamRegistry) lookupEntry(m map[string]*cachedEntry, key string) (StreamEntry, bool, bool) {
+	// All reads of *cachedEntry must happen under the lock; writers
 	// (AdmitAndReserve, UpsertLocalSource, UpsertFederatedSource, sweeper)
 	// mutate ce.entry struct fields and ce.cached in place. Deep-copy
 	// the Locations map here too so the live-presence enrichment below
@@ -792,11 +922,14 @@ func (r *StreamRegistry) lookup(m map[string]*cachedEntry, key string) (StreamEn
 	ce, ok := m[key]
 	if !ok {
 		r.mu.RUnlock()
-		return StreamEntry{}, false
+		return StreamEntry{}, false, false
 	}
-	if time.Since(ce.cached) > r.ttl {
+	age := time.Since(ce.cached)
+	fresh := age <= r.ttl
+	stale := !fresh && age <= r.ttl+r.staleMax
+	if !fresh && !stale {
 		r.mu.RUnlock()
-		return StreamEntry{}, false
+		return StreamEntry{}, false, false
 	}
 	entry := ce.entry
 	if entry.Locations != nil {
@@ -826,18 +959,54 @@ func (r *StreamRegistry) lookup(m map[string]*cachedEntry, key string) (StreamEn
 		}
 		entry.Locations[r.clusterID] = local
 	}
-	return entry, true
+	return entry, fresh, stale
 }
 
+// lookup is the fresh-only view of lookupEntry, for callers (and tests) that
+// must never see a stale entry.
+func (r *StreamRegistry) lookup(m map[string]*cachedEntry, key string) (StreamEntry, bool) {
+	e, fresh, _ := r.lookupEntry(m, key)
+	return e, fresh
+}
+
+// hydrateTimeout caps a detached hydrate round; comfortably above a healthy
+// Commodore RPC, well below request-queue pain.
+const hydrateTimeout = 5 * time.Second
+
+// hydrate resolves identity from Commodore, deduplicating concurrent calls
+// for the same reference through a singleflight group. The RPC runs on a
+// context detached from the first caller's cancellation (values preserved,
+// own timeout): waiters share the result, so an abandoned caller must not
+// fail the whole round into a transient error for everyone.
 func (r *StreamRegistry) hydrate(ctx context.Context, refKind, streamID, playbackID, internalName string) (StreamEntry, error) {
-	// Read client under the lock — SetCommodoreClient can swap it from
+	key := refKind + "|" + firstNonEmpty(streamID, playbackID, internalName)
+	v, err, _ := r.hydrateGroup.Do(key, func() (any, error) {
+		hCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), hydrateTimeout)
+		defer cancel()
+		return r.hydrateOnce(hCtx, refKind, streamID, playbackID, internalName)
+	})
+	if err != nil {
+		return StreamEntry{}, err
+	}
+	entry, ok := v.(StreamEntry)
+	if !ok {
+		return StreamEntry{}, ErrRegistryUnavailable
+	}
+	return entry, nil
+}
+
+func (r *StreamRegistry) hydrateOnce(ctx context.Context, refKind, streamID, playbackID, internalName string) (StreamEntry, error) {
+	// Read client under the lock; SetCommodoreClient can swap it from
 	// the reconnect goroutine.
 	r.mu.RLock()
 	client := r.client
 	r.mu.RUnlock()
 	if client == nil {
+		// Transient: Commodore not connected (boot window / reconnect) is
+		// not "stream doesn't exist"; misclassifying it would negative-cache
+		// real streams for 30s at the identity layer.
 		r.recordMiss(ctx, refKind, firstNonEmpty(streamID, playbackID, internalName))
-		return StreamEntry{}, ErrUnknownStream
+		return StreamEntry{}, ErrRegistryUnavailable
 	}
 	resp, err := client.ResolveStreamContext(ctx, streamID, playbackID, internalName, r.clusterID)
 	if err != nil {

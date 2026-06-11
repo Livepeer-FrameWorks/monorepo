@@ -2020,17 +2020,22 @@ func (x *StreamAdvertisement) GetDvrRecordingNodeId() string {
 
 // PeerStreamEdge describes a single edge node serving a specific stream.
 type PeerStreamEdge struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	BaseUrl       string                 `protobuf:"bytes,2,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`              // Public HTTPS URL
-	DtscUrl       string                 `protobuf:"bytes,3,opt,name=dtsc_url,json=dtscUrl,proto3" json:"dtsc_url,omitempty"`              // DTSC pull URL for origin-pull cascading
-	IsOrigin      bool                   `protobuf:"varint,4,opt,name=is_origin,json=isOrigin,proto3" json:"is_origin,omitempty"`          // True if node has original ingest input
-	BwAvailable   uint64                 `protobuf:"varint,5,opt,name=bw_available,json=bwAvailable,proto3" json:"bw_available,omitempty"` // Available bandwidth (bytes/sec)
-	CpuPercent    float64                `protobuf:"fixed64,6,opt,name=cpu_percent,json=cpuPercent,proto3" json:"cpu_percent,omitempty"`   // 0-100
-	ViewerCount   uint32                 `protobuf:"varint,7,opt,name=viewer_count,json=viewerCount,proto3" json:"viewer_count,omitempty"`
-	GeoLat        float64                `protobuf:"fixed64,8,opt,name=geo_lat,json=geoLat,proto3" json:"geo_lat,omitempty"`
-	GeoLon        float64                `protobuf:"fixed64,9,opt,name=geo_lon,json=geoLon,proto3" json:"geo_lon,omitempty"`
-	BufferState   string                 `protobuf:"bytes,10,opt,name=buffer_state,json=bufferState,proto3" json:"buffer_state,omitempty"` // FULL, DRY, RECOVER, etc.
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	NodeId      string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	BaseUrl     string                 `protobuf:"bytes,2,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`              // Public HTTPS URL
+	DtscUrl     string                 `protobuf:"bytes,3,opt,name=dtsc_url,json=dtscUrl,proto3" json:"dtsc_url,omitempty"`              // DTSC pull URL for origin-pull cascading
+	IsOrigin    bool                   `protobuf:"varint,4,opt,name=is_origin,json=isOrigin,proto3" json:"is_origin,omitempty"`          // True if node has original ingest input
+	BwAvailable uint64                 `protobuf:"varint,5,opt,name=bw_available,json=bwAvailable,proto3" json:"bw_available,omitempty"` // Available bandwidth (bytes/sec)
+	CpuPercent  float64                `protobuf:"fixed64,6,opt,name=cpu_percent,json=cpuPercent,proto3" json:"cpu_percent,omitempty"`   // 0-100
+	ViewerCount uint32                 `protobuf:"varint,7,opt,name=viewer_count,json=viewerCount,proto3" json:"viewer_count,omitempty"`
+	GeoLat      float64                `protobuf:"fixed64,8,opt,name=geo_lat,json=geoLat,proto3" json:"geo_lat,omitempty"`
+	GeoLon      float64                `protobuf:"fixed64,9,opt,name=geo_lon,json=geoLon,proto3" json:"geo_lon,omitempty"`
+	BufferState string                 `protobuf:"bytes,10,opt,name=buffer_state,json=bufferState,proto3" json:"buffer_state,omitempty"` // FULL, DRY, RECOVER, etc.
+	// RAM utilization, same units as the node snapshot. Remote-edge scoring
+	// rejects candidates with ram_max == 0, so ads from peers that predate
+	// these fields gracefully fall through to the QueryStream fan-out.
+	RamUsed       uint64 `protobuf:"varint,11,opt,name=ram_used,json=ramUsed,proto3" json:"ram_used,omitempty"`
+	RamMax        uint64 `protobuf:"varint,12,opt,name=ram_max,json=ramMax,proto3" json:"ram_max,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2133,6 +2138,20 @@ func (x *PeerStreamEdge) GetBufferState() string {
 		return x.BufferState
 	}
 	return ""
+}
+
+func (x *PeerStreamEdge) GetRamUsed() uint64 {
+	if x != nil {
+		return x.RamUsed
+	}
+	return 0
+}
+
+func (x *PeerStreamEdge) GetRamMax() uint64 {
+	if x != nil {
+		return x.RamMax
+	}
+	return 0
 }
 
 // PeerHeartbeat provides session liveness and capability exchange.
@@ -3465,7 +3484,7 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\ais_live\x18\x05 \x01(\bR\x06isLive\x128\n" +
 	"\x05edges\x18\x06 \x03(\v2\".foghorn_federation.PeerStreamEdgeR\x05edges\x12\x1c\n" +
 	"\ttimestamp\x18\a \x01(\x03R\ttimestamp\x121\n" +
-	"\x15dvr_recording_node_id\x18\b \x01(\tR\x12dvrRecordingNodeId\"\xb8\x02\n" +
+	"\x15dvr_recording_node_id\x18\b \x01(\tR\x12dvrRecordingNodeId\"\xec\x02\n" +
 	"\x0ePeerStreamEdge\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x19\n" +
 	"\bbase_url\x18\x02 \x01(\tR\abaseUrl\x12\x19\n" +
@@ -3478,7 +3497,9 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\ageo_lat\x18\b \x01(\x01R\x06geoLat\x12\x17\n" +
 	"\ageo_lon\x18\t \x01(\x01R\x06geoLon\x12!\n" +
 	"\fbuffer_state\x18\n" +
-	" \x01(\tR\vbufferState\"\x89\x03\n" +
+	" \x01(\tR\vbufferState\x12\x19\n" +
+	"\bram_used\x18\v \x01(\x04R\aramUsed\x12\x17\n" +
+	"\aram_max\x18\f \x01(\x04R\x06ramMax\"\x89\x03\n" +
 	"\rPeerHeartbeat\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12!\n" +
 	"\fstream_count\x18\x02 \x01(\rR\vstreamCount\x12,\n" +

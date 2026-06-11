@@ -90,6 +90,10 @@ type AdmissionResult struct {
 // ownerHealthy is an optional callback the caller can supply to short-
 // circuit "source_active=true but the owner node is stale/down" into
 // the source_active=false branch. Nil means "trust the recorded flag".
+// It runs UNDER r.mu, establishing the lock order registry.mu → state.mu
+// (the production callback reads StreamStateManager under its RLock).
+// Safe because state never calls into control; keep the callback free of
+// registry methods and other I/O.
 //
 // On any Accept variant, atomically sets SourceActive=true +
 // OwnerNodeID=candidateNodeID + clears SourceInactiveAt. On Reject,
