@@ -340,6 +340,9 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 	if job.ProcessesJSON.Valid {
 		resolved := job.ProcessesJSON.String
 		resolved = mist.MaskLivepeerSourceForVOD(resolved)
+		// One-shot job: finished processes must not be supervisor-restarted
+		// (restart churn blocks the buffer's output-drain signal).
+		resolved = mist.DisableProcessRestarts(resolved)
 		if d.gatewayResolver != nil {
 			// Queue jobs do not carry origin/official cluster IDs; nil candidates
 			// resolves against the resolver's local cluster.

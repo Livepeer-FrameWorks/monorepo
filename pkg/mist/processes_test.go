@@ -7,6 +7,36 @@ import (
 	"testing"
 )
 
+func TestDisableProcessRestartsMarksEveryEntry(t *testing.T) {
+	input := `[{"process":"Livepeer","target_profiles":[{"name":"360p","height":360}]},{"process":"AV","codec":"opus"},{"process":"Thumbs","restart_type":"backoff"}]`
+	var got []map[string]any
+	if err := json.Unmarshal([]byte(DisableProcessRestarts(input)), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("expected 3 processes, got %d", len(got))
+	}
+	for i, proc := range got {
+		if proc["restart_type"] != "disabled" {
+			t.Errorf("process %d restart_type = %#v, want \"disabled\"", i, proc["restart_type"])
+		}
+	}
+}
+
+func TestReplaceLivepeerWithLocalCarriesRestartType(t *testing.T) {
+	input := `[{"process":"Livepeer","restart_type":"disabled","target_profiles":[{"name":"360p","profile":"H264Main","height":360,"bitrate":900000}]}]`
+	var got []map[string]any
+	if err := json.Unmarshal([]byte(ReplaceLivepeerWithLocal(input)), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 process, got %d", len(got))
+	}
+	if got[0]["restart_type"] != "disabled" {
+		t.Errorf("restart_type = %#v, want \"disabled\"", got[0]["restart_type"])
+	}
+}
+
 func TestSetLivepeerBroadcastersFillsEveryLivepeerEntry(t *testing.T) {
 	input := `[
 		{"process":"AV","codec":"AAC","track_select":"audio=all&video=none&subtitle=none"},

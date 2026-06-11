@@ -143,6 +143,7 @@ func ReplaceLivepeerWithLocal(processesJSON string) string {
 			copyProcessOption(av, prof, "exit_unmask")
 			copyProcessOptionWithFallback(av, prof, p, "source_mask")
 			copyProcessOptionWithFallback(av, prof, p, "target_mask")
+			copyProcessOptionWithFallback(av, prof, p, "restart_type")
 			copyProcessOption(av, prof, "source_track")
 			copyProcessOption(av, prof, "gopsize")
 			if name, ok := prof["name"].(string); ok {
@@ -172,6 +173,34 @@ func MaskLivepeerSourceForVOD(processesJSON string) string {
 	for _, proc := range processes {
 		if procType, ok := proc["process"].(string); ok && procType == "Livepeer" {
 			proc["source_mask"] = 4
+			changed = true
+		}
+	}
+	if !changed {
+		return processesJSON
+	}
+	out, err := json.Marshal(processes)
+	if err != nil {
+		return processesJSON
+	}
+	return string(out)
+}
+
+// DisableProcessRestarts marks every process entry restart_type "disabled".
+// Processing jobs are one-shot: a process that finished its pass must not be
+// restarted by Mist's supervisor: the restart immediately trips its own
+// track_inhibit dedupe ("matches tracks from another producer") and, worse,
+// keeps hasProcessDrainConsumers() true so the buffer waits out its 30s idle
+// timer instead of signalling output drain when the job completes.
+func DisableProcessRestarts(processesJSON string) string {
+	var processes []map[string]interface{}
+	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
+		return processesJSON
+	}
+	changed := false
+	for _, proc := range processes {
+		if _, ok := proc["process"].(string); ok {
+			proc["restart_type"] = "disabled"
 			changed = true
 		}
 	}
