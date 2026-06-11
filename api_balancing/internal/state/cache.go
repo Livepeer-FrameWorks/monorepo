@@ -84,6 +84,43 @@ func (sm *StreamStateManager) handleStateChangelogEntry(id string, change StateC
 	sm.applyRedisChange(change)
 }
 
+// mergeIncomingNode reconciles a peer-published (or rehydrated) node snapshot
+// with local knowledge before it replaces the local entry. Snapshots replace
+// wholesale, with three exceptions:
+//   - identity (ClusterID/TenantID) merges ignore-empty; a peer that never
+//     resolved identity must not erase ours;
+//   - OperationalMode is multi-writer with its own changelog entity
+//     (StateEntityNodeMode): a snapshot may only fill an empty local mode
+//     (mixed-version bootstrap), never overwrite a known one;
+//   - AddBandwidth/PendingRedirects are local-only soft state derived from
+//     this instance's virtual viewers (its own pending redirects); a peer's
+//     penalties are meaningless here and a restart's are dead, so local
+//     values are kept and unknown nodes start at zero. The json:"-" scoring
+//     inputs (BinHost, EstBandwidthPerUser, LastPollTime) ride along for the
+//     same reason; unmarshaling zeroes them, and NodeIDByClientIP depends
+//     on BinHost surviving peer snapshot applies.
+func mergeIncomingNode(incoming, local *NodeState) {
+	if local == nil {
+		incoming.AddBandwidth = 0
+		incoming.PendingRedirects = 0
+		return
+	}
+	if incoming.ClusterID == "" {
+		incoming.ClusterID = local.ClusterID
+	}
+	if incoming.TenantID == "" {
+		incoming.TenantID = local.TenantID
+	}
+	if local.OperationalMode != "" {
+		incoming.OperationalMode = local.OperationalMode
+	}
+	incoming.AddBandwidth = local.AddBandwidth
+	incoming.PendingRedirects = local.PendingRedirects
+	incoming.BinHost = local.BinHost
+	incoming.EstBandwidthPerUser = local.EstBandwidthPerUser
+	incoming.LastPollTime = local.LastPollTime
+}
+
 func (sm *StreamStateManager) rehydrateFromRedis(store *RedisStateStore) error {
 	nodes, err := store.GetAllNodes()
 	if err != nil {
@@ -101,6 +138,10 @@ func (sm *StreamStateManager) rehydrateFromRedis(store *RedisStateStore) error {
 	if err != nil {
 		return err
 	}
+	modes, err := store.GetAllNodeModes()
+	if err != nil {
+		return err
+	}
 
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -109,16 +150,24 @@ func (sm *StreamStateManager) rehydrateFromRedis(store *RedisStateStore) error {
 	// local-only keys are preserved; identity fields merge ignore-empty so a
 	// snapshot that never resolved identity can't erase locally-known one).
 	for k, v := range nodes {
-		if local := sm.nodes[k]; local != nil {
-			if v.ClusterID == "" {
-				v.ClusterID = local.ClusterID
-			}
-			if v.TenantID == "" {
-				v.TenantID = local.TenantID
-			}
-		}
+		mergeIncomingNode(v, sm.nodes[k])
 		sm.nodes[k] = v
 		sm.recomputeNodeScoresLocked(v)
+	}
+	// Dedicated mode keys win over whatever (possibly stale) mode the node
+	// JSON carried; they are the multi-writer-safe representation. Applied
+	// to known nodes only; a mode key without a node key is eviction debris.
+	for nodeID, rec := range modes {
+		if rec == nil {
+			continue
+		}
+		mode, normErr := normalizeNodeOperationalMode(rec.Mode)
+		if normErr != nil {
+			continue
+		}
+		if n := sm.nodes[nodeID]; n != nil {
+			n.OperationalMode = mode
+		}
 	}
 	for k, v := range streams {
 		if local := sm.streams[k]; local != nil {
@@ -176,19 +225,35 @@ func (sm *StreamStateManager) applyRedisChange(change StateChange) {
 		}
 		var node NodeState
 		if err := json.Unmarshal(change.Payload, &node); err == nil {
-			// Snapshots replace wholesale, but identity merges ignore-empty:
-			// a peer that never resolved identity must not erase ours.
-			if local := sm.nodes[node.NodeID]; local != nil {
-				if node.ClusterID == "" {
-					node.ClusterID = local.ClusterID
-				}
-				if node.TenantID == "" {
-					node.TenantID = local.TenantID
-				}
-			}
+			mergeIncomingNode(&node, sm.nodes[node.NodeID])
 			sm.nodes[node.NodeID] = &node
 			sm.recomputeNodeScoresLocked(&node)
 		}
+	case StateEntityNodeMode:
+		if change.Operation == StateOpDelete {
+			return
+		}
+		var rec nodeModeRecord
+		if err := json.Unmarshal(change.Payload, &rec); err != nil {
+			return
+		}
+		nodeID := rec.NodeID
+		if nodeID == "" {
+			nodeID = change.NodeID
+		}
+		mode, err := normalizeNodeOperationalMode(rec.Mode)
+		if err != nil || nodeID == "" {
+			return
+		}
+		n := sm.nodes[nodeID]
+		if n == nil {
+			// Mode entry can arrive before the node's first snapshot; the
+			// shell fills in on that snapshot and is invisible to the
+			// balancer until then (no BaseURL, not healthy).
+			n = newNodeState(nodeID)
+			sm.nodes[nodeID] = n
+		}
+		n.OperationalMode = mode
 	case StateEntityStream:
 		if change.Operation == StateOpDelete {
 			delete(sm.streams, change.StreamName)

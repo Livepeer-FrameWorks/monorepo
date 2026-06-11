@@ -64,26 +64,32 @@ type StreamTrack struct {
 
 // StreamState represents the current state of a stream
 type StreamState struct {
-	StreamName       string         `json:"stream_name"`
-	InternalName     string         `json:"internal_name"`
-	PlaybackID       string         `json:"playback_id,omitempty"`
-	StreamID         string         `json:"stream_id,omitempty"`
-	NodeID           string         `json:"node_id"`
-	TenantID         string         `json:"tenant_id"`
-	Status           string         `json:"status"`       // "live", "offline", etc.
-	BufferState      string         `json:"buffer_state"` // "FULL", "EMPTY", "DRY", "RECOVER"
-	Tracks           []StreamTrack  `json:"tracks"`
-	Issues           string         `json:"issues,omitempty"`
-	HasIssues        bool           `json:"has_issues"`
-	StartedAt        *time.Time     `json:"started_at,omitempty"` // Current live interval start
-	LastUpdate       time.Time      `json:"last_update"`
-	RawDetails       map[string]any `json:"raw_details,omitempty"` // Raw MistServer data
-	Viewers          int            `json:"viewers"`
-	LastTrackList    string         `json:"last_track_list,omitempty"`
-	TotalConnections int            `json:"total_connections,omitempty"`
-	Inputs           int            `json:"inputs,omitempty"`
-	BytesUp          int64          `json:"bytes_up,omitempty"`
-	BytesDown        int64          `json:"bytes_down,omitempty"`
+	StreamName   string         `json:"stream_name"`
+	InternalName string         `json:"internal_name"`
+	PlaybackID   string         `json:"playback_id,omitempty"`
+	StreamID     string         `json:"stream_id,omitempty"`
+	NodeID       string         `json:"node_id"`
+	TenantID     string         `json:"tenant_id"`
+	Status       string         `json:"status"`       // "live", "offline", etc.
+	BufferState  string         `json:"buffer_state"` // "FULL", "EMPTY", "DRY", "RECOVER"
+	Tracks       []StreamTrack  `json:"tracks"`
+	Issues       string         `json:"issues,omitempty"`
+	HasIssues    bool           `json:"has_issues"`
+	StartedAt    *time.Time     `json:"started_at,omitempty"` // Current live interval start
+	LastUpdate   time.Time      `json:"last_update"`
+	RawDetails   map[string]any `json:"raw_details,omitempty"` // Raw MistServer data
+	// Viewers/TotalConnections/Inputs/BytesUp/BytesDown are cross-instance
+	// aggregates derived at read time by summing per-node instances (the
+	// single-writer state). The stored values are whatever the last
+	// publishing instance computed; kept for old-peer wire compat, never
+	// served directly: trusting them would let two conn-owner instances
+	// overwrite each other's contributions (last snapshot wins).
+	Viewers          int    `json:"viewers"`
+	LastTrackList    string `json:"last_track_list,omitempty"`
+	TotalConnections int    `json:"total_connections,omitempty"`
+	Inputs           int    `json:"inputs,omitempty"`
+	BytesUp          int64  `json:"bytes_up,omitempty"`
+	BytesDown        int64  `json:"bytes_down,omitempty"`
 }
 
 // StreamInstanceState represents per-node state for a specific stream
@@ -288,7 +294,12 @@ type NodeState struct {
 	DTSCPort      int      `json:"dtsc_port,omitempty"`      // DTSC protocol port
 	Tags          []string `json:"tags,omitempty"`           // Tags for scoring adjustments
 	ConfigStreams []string `json:"config_streams,omitempty"` // Streams this node can serve
-	AddBandwidth  uint64   `json:"add_bandwidth,omitempty"`  // Bandwidth penalty tracking
+	// AddBandwidth is local-only soft state: the bandwidth penalty for THIS
+	// instance's pending redirects (virtual viewers), debiting only its own
+	// routing decisions. Still serialized for old-peer wire compat, but
+	// receivers keep their local value (mergeIncomingNode); peers' penalties
+	// derive from virtual-viewer sets that are never replicated.
+	AddBandwidth uint64 `json:"add_bandwidth,omitempty"`
 
 	// Artifacts stored on this node
 	Artifacts []*ipcpb.StoredArtifact `json:"artifacts,omitempty"`
@@ -299,10 +310,11 @@ type NodeState struct {
 	BWAvailable   uint64    `json:"-"` // Available bandwidth (BWLimit - UpSpeed - AddBandwidth)
 	LastScoreTime time.Time `json:"-"` // When scores were last computed
 
-	// Virtual Viewer Tracking
-	PendingRedirects    int       `json:"pending_redirects"` // Count of redirects awaiting USER_NEW
-	EstBandwidthPerUser uint64    `json:"-"`                 // Cached per-viewer bandwidth estimate (bytes/sec)
-	LastPollTime        time.Time `json:"-"`                 // When real metrics arrived from Helmsman
+	// Virtual Viewer Tracking (local-only like AddBandwidth: this instance's
+	// redirects awaiting USER_NEW; never adopted from peer snapshots)
+	PendingRedirects    int       `json:"pending_redirects"`
+	EstBandwidthPerUser uint64    `json:"-"` // Cached per-viewer bandwidth estimate (bytes/sec)
+	LastPollTime        time.Time `json:"-"` // When real metrics arrived from Helmsman
 
 	// Activation probe: Foghorn verified this node's HTTPS endpoint is serving with valid TLS.
 	ProbeVerified bool `json:"probe_verified"`
@@ -530,6 +542,31 @@ func (sm *StreamStateManager) UpdateStreamFromBuffer(streamName, internalName, n
 	return nil
 }
 
+// deriveUnionStatsLocked recomputes the cross-instance aggregate fields on a
+// stream (copy) by summing its per-node instances. Instances are single-writer
+// (each node's conn-owner Foghorn) and replicate correctly; the stored union
+// fields are multi-writer last-snapshot-wins and must never be served
+// directly. (must hold lock)
+func (sm *StreamStateManager) deriveUnionStatsLocked(internalName string, s *StreamState) {
+	var viewers, totalConnections, inputs int
+	var bytesUp, bytesDown int64
+	for _, inst := range sm.streamInstances[internalName] {
+		if inst == nil {
+			continue
+		}
+		viewers += inst.Viewers
+		totalConnections += inst.TotalConnections
+		inputs += inst.Inputs
+		bytesUp += inst.BytesUp
+		bytesDown += inst.BytesDown
+	}
+	s.Viewers = viewers
+	s.TotalConnections = totalConnections
+	s.Inputs = inputs
+	s.BytesUp = bytesUp
+	s.BytesDown = bytesDown
+}
+
 // GetStreamState returns the current state for a stream
 func (sm *StreamStateManager) GetStreamState(internalName string) *StreamState {
 	sm.mu.RLock()
@@ -540,6 +577,7 @@ func (sm *StreamStateManager) GetStreamState(internalName string) *StreamState {
 		stateCopy := *state
 		stateCopy.Tracks = make([]StreamTrack, len(state.Tracks))
 		copy(stateCopy.Tracks, state.Tracks)
+		sm.deriveUnionStatsLocked(internalName, &stateCopy)
 		return &stateCopy
 	}
 	return nil
@@ -551,11 +589,12 @@ func (sm *StreamStateManager) GetAllStreamStates() []*StreamState {
 	defer sm.mu.RUnlock()
 
 	states := make([]*StreamState, 0, len(sm.streams))
-	for _, state := range sm.streams {
+	for internalName, state := range sm.streams {
 		// Return copies
 		stateCopy := *state
 		stateCopy.Tracks = make([]StreamTrack, len(state.Tracks))
 		copy(stateCopy.Tracks, state.Tracks)
+		sm.deriveUnionStatsLocked(internalName, &stateCopy)
 		states = append(states, &stateCopy)
 	}
 	return states
@@ -568,13 +607,18 @@ func (sm *StreamStateManager) GetStreamsByTenant(tenantID string) []*StreamState
 
 	cutoff := time.Now().Add(-sm.getStaleThreshold())
 	var states []*StreamState
-	for _, state := range sm.streams {
-		if state.TenantID == tenantID && state.Status == "live" && state.Inputs > 0 && state.LastUpdate.After(cutoff) {
-			stateCopy := *state
-			stateCopy.Tracks = make([]StreamTrack, len(state.Tracks))
-			copy(stateCopy.Tracks, state.Tracks)
-			states = append(states, &stateCopy)
+	for internalName, state := range sm.streams {
+		if state.TenantID != tenantID || state.Status != "live" || !state.LastUpdate.After(cutoff) {
+			continue
 		}
+		stateCopy := *state
+		stateCopy.Tracks = make([]StreamTrack, len(state.Tracks))
+		copy(stateCopy.Tracks, state.Tracks)
+		sm.deriveUnionStatsLocked(internalName, &stateCopy)
+		if stateCopy.Inputs == 0 {
+			continue
+		}
+		states = append(states, &stateCopy)
 	}
 	return states
 }
@@ -817,6 +861,22 @@ func (sm *StreamStateManager) persistNodeWriteThrough(nodeID string, payload jso
 	sm.publishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityNode, Operation: StateOpUpsert, NodeID: nodeID, Payload: payload})
 }
 
+// persistNodeModeWriteThrough publishes a node's operational mode as its own
+// keyed entity so the mode's changelog ordering is independent of node
+// heartbeat snapshots (see StateEntityNodeMode).
+func (sm *StreamStateManager) persistNodeModeWriteThrough(nodeID string, payload json.RawMessage) {
+	if sm.redisStore == nil {
+		return
+	}
+	if err := sm.redisStore.setJSONRaw(context.Background(), sm.redisStore.keyNodeMode(nodeID), payload); err != nil {
+		if stateLogger != nil {
+			stateLogger.WithError(err).WithField("node_id", nodeID).Warn("Failed to write node mode to redis")
+		}
+		return
+	}
+	sm.publishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityNodeMode, Operation: StateOpUpsert, NodeID: nodeID, Payload: payload})
+}
+
 func (sm *StreamStateManager) nodePayloadLocked(nodeID string) json.RawMessage {
 	n := sm.nodes[nodeID]
 	if n == nil {
@@ -885,17 +945,6 @@ func (sm *StreamStateManager) persistStreamInstanceWriteThrough(internalName, no
 
 func (sm *StreamStateManager) UpdateUserConnection(internalName, nodeID, tenantID string, delta int) {
 	sm.mu.Lock()
-	union := sm.streams[internalName]
-	if union == nil {
-		union = &StreamState{InternalName: internalName, StreamName: internalName}
-		sm.streams[internalName] = union
-	}
-	union.Viewers += delta
-	if union.Viewers < 0 {
-		union.Viewers = 0
-	}
-	applyIdentity(&union.TenantID, tenantID)
-	union.LastUpdate = time.Now()
 	if sm.streamInstances[internalName] == nil {
 		sm.streamInstances[internalName] = make(map[string]*StreamInstanceState)
 	}
@@ -910,6 +959,17 @@ func (sm *StreamStateManager) UpdateUserConnection(internalName, nodeID, tenantI
 		inst.Viewers = 0
 	}
 	inst.LastUpdate = time.Now()
+
+	union := sm.streams[internalName]
+	if union == nil {
+		union = &StreamState{InternalName: internalName, StreamName: internalName}
+		sm.streams[internalName] = union
+	}
+	applyIdentity(&union.TenantID, tenantID)
+	union.LastUpdate = time.Now()
+	// The published union snapshot carries this instance's derived view of
+	// the aggregates; receivers re-derive from instances and never adopt it.
+	sm.deriveUnionStatsLocked(internalName, union)
 
 	// Apply bandwidth penalty when a viewer connects (delta > 0)
 	if delta > 0 {
@@ -1112,25 +1172,14 @@ func (sm *StreamStateManager) SetStreamInstanceInputs(internalName, nodeID strin
 	sm.persistStreamInstanceWriteThrough(internalName, nodeID, instPayload)
 }
 
+// UpdateNodeStats records one node's Mist-reported stats for a stream. The
+// total/inputs/up/down values are per-node observations and are written to the
+// per-node instance only; the union aggregates are re-derived by summing
+// instances (writing them here directly was last-write-wins across conn-owner
+// instances).
 func (sm *StreamStateManager) UpdateNodeStats(internalName, nodeID string, total, inputs int, up, down int64, replicated bool) {
 	sm.mu.Lock()
 	now := time.Now()
-	union := sm.streams[internalName]
-	if union == nil {
-		union = &StreamState{InternalName: internalName, StreamName: internalName}
-		sm.streams[internalName] = union
-	}
-	if inputs > 0 {
-		if union.StartedAt == nil || union.Status != "live" {
-			union.StartedAt = &now
-		}
-		union.Status = "live"
-	}
-	union.TotalConnections = total
-	union.Inputs = inputs
-	union.BytesUp = up
-	union.BytesDown = down
-	union.LastUpdate = now
 	if sm.streamInstances[internalName] == nil {
 		sm.streamInstances[internalName] = make(map[string]*StreamInstanceState)
 	}
@@ -1148,6 +1197,20 @@ func (sm *StreamStateManager) UpdateNodeStats(internalName, nodeID string, total
 	inst.BytesDown = down
 	inst.Replicated = replicated
 	inst.LastUpdate = now
+
+	union := sm.streams[internalName]
+	if union == nil {
+		union = &StreamState{InternalName: internalName, StreamName: internalName}
+		sm.streams[internalName] = union
+	}
+	if inputs > 0 {
+		if union.StartedAt == nil || union.Status != "live" {
+			union.StartedAt = &now
+		}
+		union.Status = "live"
+	}
+	union.LastUpdate = now
+	sm.deriveUnionStatsLocked(internalName, union)
 	streamPayload, _ := json.Marshal(union)
 	instPayload, _ := json.Marshal(inst)
 	sm.mu.Unlock()
@@ -1203,18 +1266,8 @@ func (sm *StreamStateManager) ReconcileNodeStreamPresence(nodeID string, observe
 
 		union := sm.streams[internalName]
 		if union != nil {
-			totalInputs := 0
-			totalConnections := 0
-			for _, peer := range instances {
-				if peer == nil {
-					continue
-				}
-				totalInputs += peer.Inputs
-				totalConnections += peer.TotalConnections
-			}
-			union.Inputs = totalInputs
-			union.TotalConnections = totalConnections
-			if totalInputs == 0 {
+			sm.deriveUnionStatsLocked(internalName, union)
+			if union.Inputs == 0 {
 				union.Status = "offline"
 				union.BufferState = "EMPTY"
 			}
@@ -1536,6 +1589,7 @@ func (sm *StreamStateManager) SetNodeOperationalMode(ctx context.Context, nodeID
 		}
 	}
 
+	now := time.Now()
 	sm.mu.Lock()
 	n := sm.nodes[nodeID]
 	if n == nil {
@@ -1543,10 +1597,17 @@ func (sm *StreamStateManager) SetNodeOperationalMode(ctx context.Context, nodeID
 		sm.nodes[nodeID] = n
 	}
 	n.OperationalMode = normalized
-	n.LastUpdate = time.Now()
+	n.LastUpdate = now
 	nodePayload, _ := json.Marshal(n)
+	modePayload, modeMarshalErr := json.Marshal(nodeModeRecord{NodeID: nodeID, Mode: normalized, SetBy: setBy, SetAt: now})
 	sm.mu.Unlock()
 
+	// Dedicated entity is authoritative for replicas; the node snapshot still
+	// carries the mode so not-yet-upgraded peers converge during a rolling
+	// deploy (they ignore the unknown node_mode entity).
+	if modeMarshalErr == nil {
+		sm.persistNodeModeWriteThrough(nodeID, modePayload)
+	}
 	sm.persistNodeWriteThrough(nodeID, nodePayload)
 	return nil
 }
@@ -1846,10 +1907,11 @@ func (sm *StreamStateManager) GetNodeState(nodeID string) *NodeState {
 func (sm *StreamStateManager) GetClusterSnapshot() (streams []*StreamState, nodes []*NodeState) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	for _, s := range sm.streams {
+	for internalName, s := range sm.streams {
 		c := *s
 		c.Tracks = make([]StreamTrack, len(s.Tracks))
 		copy(c.Tracks, s.Tracks)
+		sm.deriveUnionStatsLocked(internalName, &c)
 		streams = append(streams, &c)
 	}
 	for _, n := range sm.nodes {
@@ -1998,28 +2060,6 @@ func (sm *StreamStateManager) FindNodeByArtifactInternalName(internalName string
 	}
 
 	return bestHost, bestArtifact
-}
-
-// UpdateAddBandwidth updates the bandwidth penalty for a node
-func (sm *StreamStateManager) UpdateAddBandwidth(nodeID string, addBandwidth uint64) {
-	sm.mu.Lock()
-
-	n := sm.nodes[nodeID]
-	if n == nil {
-		sm.mu.Unlock()
-		return
-	}
-
-	n.AddBandwidth = addBandwidth
-	n.LastUpdate = time.Now()
-
-	// Recompute cached scores since bandwidth affects them
-	sm.recomputeNodeScoresLocked(n)
-
-	nodePayload, _ := json.Marshal(n)
-	sm.mu.Unlock()
-
-	sm.persistNodeWriteThrough(nodeID, nodePayload)
 }
 
 // SetNodeArtifacts updates the artifacts stored on a node (in-memory and persistent)
@@ -2292,29 +2332,6 @@ func (sm *StreamStateManager) ApplyArtifactDeleted(ctx context.Context, clipHash
 	}
 
 	return nil
-}
-
-// DecayAddBandwidth applies bandwidth penalty decay to a node (like C++ LoadBalancer)
-func (sm *StreamStateManager) DecayAddBandwidth(nodeID string) {
-	sm.mu.Lock()
-
-	n := sm.nodes[nodeID]
-	if n == nil {
-		sm.mu.Unlock()
-		return
-	}
-
-	// Apply 0.75 decay factor (25% reduction each update)
-	n.AddBandwidth = uint64(float64(n.AddBandwidth) * 0.75)
-	n.LastUpdate = time.Now()
-
-	// Recompute cached scores since bandwidth affects them
-	sm.recomputeNodeScoresLocked(n)
-
-	nodePayload, _ := json.Marshal(n)
-	sm.mu.Unlock()
-
-	sm.persistNodeWriteThrough(nodeID, nodePayload)
 }
 
 // recomputeNodeScoresLocked recalculates cached score components for a node (must hold write lock)
@@ -2761,6 +2778,11 @@ func (sm *StreamStateManager) checkStaleNodes() {
 				store := sm.redisStore
 				nid := nodeID
 				retryRedisDeleteAsync("node", nid, func() error { return store.DeleteNode(nid) })
+			}
+			if err := sm.redisStore.DeleteNodeMode(nodeID); err != nil {
+				store := sm.redisStore
+				nid := nodeID
+				retryRedisDeleteAsync("node_mode", nid, func() error { return store.DeleteNodeMode(nid) })
 			}
 			sm.publishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityNode, Operation: StateOpDelete, NodeID: nodeID})
 		}

@@ -62,6 +62,13 @@ const (
 	StateEntityStream         StateEntity = "stream"
 	StateEntityStreamInstance StateEntity = "stream_instance"
 	StateEntityArtifact       StateEntity = "artifact"
+	// StateEntityNodeMode carries a node's operational mode as its own keyed
+	// record. The mode is multi-writer (operator API / orchestrator on any
+	// instance) and must not ride the whole-node snapshot: an in-flight
+	// heartbeat snapshot marshaled before a mode change would republish the
+	// old mode at a newer changelog ID, and the node watermark would then
+	// block the (older-ID) mode change.
+	StateEntityNodeMode StateEntity = "node_mode"
 
 	StateOpUpsert StateOperation = "upsert"
 	StateOpDelete StateOperation = "delete"
@@ -81,6 +88,14 @@ type streamInstanceRecord struct {
 	InternalName string               `json:"internal_name"`
 	NodeID       string               `json:"node_id"`
 	State        *StreamInstanceState `json:"state"`
+}
+
+// nodeModeRecord is the write-through payload for StateEntityNodeMode.
+type nodeModeRecord struct {
+	NodeID string              `json:"node_id"`
+	Mode   NodeOperationalMode `json:"mode"`
+	SetBy  string              `json:"set_by,omitempty"`
+	SetAt  time.Time           `json:"set_at"`
 }
 
 type NodeArtifactState struct {
@@ -123,6 +138,9 @@ func (r *RedisStateStore) keyStreamInstance(streamName, nodeID string) string {
 }
 func (r *RedisStateStore) keyArtifact(nodeID string) string {
 	return fmt.Sprintf("{%s}:artifacts:%s", r.clusterID, nodeID)
+}
+func (r *RedisStateStore) keyNodeMode(nodeID string) string {
+	return fmt.Sprintf("{%s}:node_mode:%s", r.clusterID, nodeID)
 }
 func (r *RedisStateStore) keyLease(role string) string {
 	return fmt.Sprintf("{%s}:lease:%s", r.clusterID, role)
@@ -196,6 +214,20 @@ func (r *RedisStateStore) GetAllNodes() (map[string]*NodeState, error) {
 
 func (r *RedisStateStore) DeleteNode(nodeID string) error {
 	return r.client.Del(context.Background(), r.keyNode(nodeID)).Err()
+}
+
+func (r *RedisStateStore) GetAllNodeModes() (map[string]*nodeModeRecord, error) {
+	return scanRedisMap(r, "{"+r.clusterID+"}:node_mode:*", func(data string) (*nodeModeRecord, string, error) {
+		var rec nodeModeRecord
+		if err := json.Unmarshal([]byte(data), &rec); err != nil {
+			return nil, "", err
+		}
+		return &rec, rec.NodeID, nil
+	})
+}
+
+func (r *RedisStateStore) DeleteNodeMode(nodeID string) error {
+	return r.client.Del(context.Background(), r.keyNodeMode(nodeID)).Err()
 }
 
 func (r *RedisStateStore) SetStream(name string, state *StreamState) error {

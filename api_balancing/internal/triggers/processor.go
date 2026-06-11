@@ -3363,6 +3363,11 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 		return "", false, nil
 	}
 
+	// Mist reports this NODE's viewer count; capture it before the Decklog
+	// enrichment below swaps in the cross-node union; the per-node value is
+	// what feeds the per-instance state write further down.
+	nodeViewers := int(slu.GetTotalViewers())
+
 	// Enrich with StartedAt from state manager (for duration calculation)
 	// State manager tracks when stream first went live
 	if streamState := state.DefaultManager().GetStreamState(internal); streamState != nil {
@@ -3388,7 +3393,7 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 	} else {
 		// Update stream stats in state manager for load balancing
 		// This is critical: the balancer requires inputs > 0 to consider a node for playback
-		total := int(slu.GetTotalViewers())
+		total := nodeViewers
 		inputs := int(slu.GetTotalInputs())
 		up := int64(slu.GetUploadedBytes())
 		down := int64(slu.GetDownloadedBytes())
@@ -3558,8 +3563,8 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *ipcpb.MistTrigger) (strin
 		totalConnections += int(s.GetTotal())
 	}
 
-	// Reconcile virtual viewers with real metrics from Helmsman
-	// This replaces DecayAddBandwidth() - times out stale PENDING viewers and updates bandwidth estimates
+	// Reconcile virtual viewers with real metrics from Helmsman: times out
+	// stale PENDING viewers and updates bandwidth estimates
 	state.DefaultManager().ReconcileVirtualViewers(nu.GetNodeId(), totalConnections, nu.GetUpSpeed())
 
 	// Update stream stats for each stream

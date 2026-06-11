@@ -219,6 +219,16 @@ The registry's per-Location CRDT merge is unchanged: `Locations` is per-cluster 
 
 Acceptance specs live in `api_balancing/internal/state/ha_ordering_spec_test.go` (stale snapshot / stale delete) and `api_balancing/internal/control/ha_ordering_spec_test.go` (clock-skewed delete / post-restart delete), plus the two-instance replay tests in `api_balancing/internal/state/changelog_sync_test.go`.
 
+### Single-writer vs multi-writer state
+
+Whole-struct snapshots over the changelog are only safe for **single-writer** state: each node's metrics, health, and stream instances funnel through that node's conn-owner instance, so the log totally orders one writer's snapshots. State writable from multiple instances must not ride them — last-snapshot-wins drops the other writer's contribution even with perfect ordering. Each multi-writer field gets one of three shapes:
+
+- **Derived at read time** — the stream-union aggregates (`Viewers`, `TotalConnections`, `Inputs`, `BytesUp`, `BytesDown`). Per-(stream,node) instances are single-writer and replicate; the union is their sum, computed in the state getters (`deriveUnionStatsLocked`). The stored union fields still serialize (old-peer wire compat, each writer stores its own derived view) but are never served from an incoming snapshot.
+- **Own keyed changelog entity** — `NodeState.OperationalMode` travels as `node_mode` entries with an independent watermark (`{cluster_id}:node_mode:{node_id}` write-through key). Incoming **node snapshots never overwrite a locally-known mode** (an in-flight heartbeat marshaled before a mode change would otherwise republish the old mode at a newer entry ID); first sight of an unknown node still adopts the snapshot's mode. `SetNodeOperationalMode` stays Postgres-first (`foghorn.node_maintenance`) and publishes both the dedicated entity and the node snapshot, so mixed-version peers converge during a rolling deploy; a mode set through an old-version instance reaches new instances via the 180s Postgres reconcile.
+- **Local-only soft state** — `AddBandwidth`/`PendingRedirects` (the bandwidth penalty for this instance's pending redirects). They derive from the virtual-viewer set, which is never replicated, so a peer's values are meaningless here: the node-snapshot merge keeps local values and zeroes them for unknown nodes (a fresh replica has no pending redirects; a restarted instance's penalties died with its process). Peer redirects surface in `UpSpeed` within one heartbeat. The non-serialized scoring inputs (`BinHost`, `EstBandwidthPerUser`, `LastPollTime`) are carried over in the same merge for the same reason.
+
+The merge exceptions live in one place: `mergeIncomingNode` (`internal/state/cache.go`), used by both the changelog apply path and rehydration. Specs: `internal/state/union_viewers_test.go`, `internal/state/node_mode_sync_test.go`.
+
 ### Identity resolution facade
 
 `api_balancing/internal/identity` is the single front door for "who does this stream/artifact belong to, and where does it live". Every trigger handler, gRPC surface, and federation path resolves through it instead of hand-rolling a lookup chain, so a consumer reading only a cold layer (the bug class behind empty-tenant/cluster attribution on HA replicas) can only be fixed once, centrally.
@@ -230,7 +240,11 @@ Resolution layers, in order, each filling blanks monotonically (never erasing ea
 | stream   | in-memory state union (serving NodeID + its cluster) → stream registry (which hydrates from Commodore on miss) |
 | artifact | stream registry (cache → `foghorn.artifacts` / processing jobs SQL) → Commodore `Resolve*Hash`                 |
 
-Only an authoritative not-found (the system of record answered "does not exist", `identity.ErrNotFound` from the adapters) is negative-cached, briefly (30s), so an unknown name arriving with every Mist trigger can't become a Commodore RPC firehose. Transient failures — RPC errors, DB outages, context expiry — are never cached: a dependency flap must retry on the next trigger, not harden into a 30s hard unknown for freeze/mint/thumbnails. Per-layer consults are counted in `foghorn_identity_resolutions_total{kind,layer,outcome}` so the next siloing bug shows up on a dashboard.
+Only an authoritative not-found (the system of record answered "does not exist", `identity.ErrNotFound` from the adapters) is negative-cached, briefly (30s), so an unknown name arriving with every Mist trigger can't become a Commodore RPC firehose. Transient failures — RPC errors, DB outages, context expiry — are never cached: a dependency flap must retry on the next trigger, not harden into a 30s hard unknown for freeze/mint/thumbnails. A registry with no Commodore client yet (boot window, reconnect) returns `control.ErrRegistryUnavailable`, which is transient by this rule. Per-layer consults are counted in `foghorn_identity_resolutions_total{kind,layer,outcome}` so the next siloing bug shows up on a dashboard.
+
+For artifacts with no kind hint, the Commodore fallback probes clip→vod→dvr; per-kind authoritative misses are negative-cached in their own keyspace (shared by hinted and hintless calls), so partial knowledge survives a mixed round — a hash known to not be a clip skips that RPC while a transiently-failing vod probe is retried.
+
+**Stale-on-transient-error (registry).** The registry's 30s TTL is a revalidation cadence, not an availability cliff: when re-hydration fails _transiently_ (Commodore RPC error, SQL outage, nil client), an expired entry is served as fallback while its age is within `ttl + staleMax` (default 5m, env `FOGHORN_REGISTRY_STALE_MAX`, 0 disables). Authoritative not-found always wins over a stale entry — a retracted stream must not be resurrected from cache. Runtime Locations stay fresh independently of Commodore (admission, federation ads, redis sync touch them), so stale-serving only defers identity refresh. Concurrent hydrations for the same reference share one RPC via singleflight, run on a context detached from the first caller's cancellation (`context.WithoutCancel` + 5s timeout) so an abandoned caller can't fail the round for every waiter. Outcomes are counted in `foghorn_stream_registry_resolutions_total{entity,outcome}` (`cache_hit`, `hydrated`, `stale_served`, `miss`, `unavailable`, `error`) with rate-limited warnings on stale serves.
 
 Wiring lives in `cmd/foghorn/main.go` (`identity.SetDefault`); the facade itself imports no other internal package, with layers injected as narrow adapters — it works in every deployment shape, including registry-less tests and single-instance cells.
 
@@ -244,6 +258,7 @@ Wiring lives in `cmd/foghorn/main.go` (`identity.SetDefault`); the facade itself
 | `{cluster_id}:stream_instances:{stream_name}:{node_id}` | JSON: StreamInstanceState (per-node stream data)                              | None                 |
 | `{cluster_id}:nodes:{node_id}`                          | JSON: NodeState (base_url, geo, cpu, ram, bw, artifacts)                      | None                 |
 | `{cluster_id}:artifacts:{node_id}`                      | JSON: list of artifacts stored on that node                                   | None                 |
+| `{cluster_id}:node_mode:{node_id}`                      | JSON: nodeModeRecord (mode, set_by, set_at) — multi-writer-safe mode record   | None                 |
 | `{cluster_id}:conn_owner:{node_id}`                     | String: `instanceID\|grpcAddr`                                                | 60s                  |
 
 ### Federation Telemetry (RemoteEdgeCache)
@@ -276,7 +291,7 @@ Location fields (per cluster, per stream):
 
 ### Changelog Streams
 
-- `{cluster_id}:state_changelog` — StreamStateManager `StateChange` entries (entity, operation, key, full payload). Receivers apply in log order, gated by per-entity watermarks; self-published entries are skipped by `instance_id`.
+- `{cluster_id}:state_changelog` — StreamStateManager `StateChange` entries (entity, operation, key, full payload). Entities: `node`, `stream`, `stream_instance`, `artifact`, `node_mode` (dedicated multi-writer-safe mode entity — see "Single-writer vs multi-writer state"). Receivers apply in log order, gated by per-entity watermarks; self-published entries are skipped by `instance_id`. Unknown entities are silent no-ops, which is what makes adding entities rolling-deploy-safe.
 - `{cluster_id}:registry_changelog` — StreamRegistry `RegistryChange` entries, same semantics. Sources still merge per-Location on apply.
 
 Both are normal persistent keys (trimmed with `MAXLEN ~ 100000`), so they survive Sentinel failover like the state keys do.
