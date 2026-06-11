@@ -1243,6 +1243,13 @@ List and manage tenants.
 ```bash
 # List all tenants (shows name and ID)
 frameworks admin tenants list
+
+# Cross-tenant activity rollup (god view): live streams, ingest/viewer
+# hours, egress, unique viewers, and API usage per tenant
+frameworks admin tenants activity
+
+# Wider window, top 10 only, machine-readable
+frameworks admin tenants activity --since 30d --limit 10 -o json
 ```
 
 **Sample output:**
@@ -1252,6 +1259,18 @@ Tenants (2)
  - FrameWorks (id=abc123-...) tier=global
  - Acme Corp (id=def456-...) tier=standard
 ```
+
+```
+Tenant activity — last 168h0m0s (2 tenants with activity)
+TENANT      TIER      LIVE  VIEWERS NOW  INGEST H  VIEWER H  EGRESS GB  UNIQUES  API REQS  LAST STREAM
+Acme Corp   standard  2     14           40.5      120.2     33.50      77       900       2026-06-10
+FrameWorks  global    0     0            1.5       0.0       0.00       0        321       2026-06-09
+```
+
+`activity` joins tenant names and tiers from Quartermaster with the
+Periscope cross-tenant rollup. The Periscope RPC only answers service
+credentials, so the command needs an active context with a resolvable
+service token.
 
 ---
 

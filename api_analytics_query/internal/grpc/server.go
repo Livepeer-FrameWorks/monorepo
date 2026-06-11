@@ -2887,6 +2887,182 @@ func sanitizePlatformOverviewResponse(resp *periscopepb.GetPlatformOverviewRespo
 	resp.IngestHours = sanitizeFloat64(resp.IngestHours)
 }
 
+// ListTenantActivity returns a cross-tenant activity rollup for the platform
+// operator god view (`frameworks admin tenants activity`). There is
+// deliberately no tenant scope: only service credentials (which carry no
+// user/tenant identity) may call it — the auth interceptor has already
+// rejected unauthenticated callers, so IsServiceCall is a positive gate here.
+func (s *PeriscopeServer) ListTenantActivity(ctx context.Context, req *periscopepb.ListTenantActivityRequest) (*periscopepb.ListTenantActivityResponse, error) {
+	if !middleware.IsServiceCall(ctx) {
+		return nil, status.Error(codes.PermissionDenied, "service credentials required")
+	}
+
+	startTime := time.Now().Add(-7 * 24 * time.Hour)
+	endTime := time.Now()
+	if req.GetTimeRange() != nil {
+		var err error
+		startTime, endTime, err = validateTimeRangeProto(req.GetTimeRange())
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
+		}
+	}
+	limit := int(req.GetLimit())
+	if limit <= 0 {
+		limit = 100
+	}
+
+	activity := map[string]*periscopepb.TenantActivity{}
+	get := func(tenantID string) *periscopepb.TenantActivity {
+		if a, ok := activity[tenantID]; ok {
+			return a
+		}
+		a := &periscopepb.TenantActivity{TenantId: tenantID}
+		activity[tenantID] = a
+		return a
+	}
+	scanRows := func(query string, scan func(rows *sql.Rows) error, args ...any) error {
+		rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+		if err != nil {
+			return wrapClickhouseError(err, "database error")
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			if err := scan(rows); err != nil {
+				s.logger.WithError(err).Warn("Failed to scan tenant activity row")
+			}
+		}
+		return rows.Err()
+	}
+
+	// Daily rollups are Date-grain; the end day is inclusive so a range
+	// ending "now" still counts today's partial day.
+	runtimeQuery := `
+		SELECT toString(tenant_id) AS tenant_id,
+		       sum(runtime_seconds) / 3600.0 AS ingest_hours,
+		       max(day) AS last_stream_day
+		FROM stream_runtime_daily
+		WHERE day >= toDate(?) AND day <= toDate(?)
+		GROUP BY tenant_id
+	`
+	if err := scanRows(runtimeQuery, func(rows *sql.Rows) error {
+		var tenantID string
+		var ingestHours float64
+		var lastDay time.Time
+		if err := rows.Scan(&tenantID, &ingestHours, &lastDay); err != nil {
+			return err
+		}
+		a := get(tenantID)
+		a.IngestHours = ingestHours
+		a.LastStreamAt = timestamppb.New(lastDay)
+		return nil
+	}, startTime, endTime); err != nil {
+		return nil, err
+	}
+
+	viewerQuery := `
+		SELECT toString(tenant_id) AS tenant_id,
+		       sum(viewer_hours) AS viewer_hours,
+		       sum(egress_gb) AS egress_gb,
+		       toInt64(uniqCombinedMerge(unique_viewers_state)) AS unique_viewers,
+		       toInt64(sum(total_sessions)) AS total_sessions
+		FROM tenant_viewer_daily
+		WHERE day >= toDate(?) AND day <= toDate(?)
+		GROUP BY tenant_id
+	`
+	if err := scanRows(viewerQuery, func(rows *sql.Rows) error {
+		var tenantID string
+		var viewerHours, egressGb float64
+		var uniqueViewers, totalSessions int64
+		if err := rows.Scan(&tenantID, &viewerHours, &egressGb, &uniqueViewers, &totalSessions); err != nil {
+			return err
+		}
+		a := get(tenantID)
+		a.ViewerHours = viewerHours
+		a.EgressGb = egressGb
+		a.UniqueViewers = uniqueViewers
+		a.TotalSessions = totalSessions
+		return nil
+	}, startTime, endTime); err != nil {
+		return nil, err
+	}
+
+	apiQuery := `
+		SELECT toString(tenant_id) AS tenant_id,
+		       toInt64(sum(requests)) AS requests,
+		       toInt64(sum(errors)) AS errors
+		FROM api_usage_daily
+		WHERE day >= toDate(?) AND day <= toDate(?)
+		GROUP BY tenant_id
+	`
+	if err := scanRows(apiQuery, func(rows *sql.Rows) error {
+		var tenantID string
+		var requests, errCount int64
+		if err := rows.Scan(&tenantID, &requests, &errCount); err != nil {
+			return err
+		}
+		a := get(tenantID)
+		a.ApiRequests = requests
+		a.ApiErrors = errCount
+		return nil
+	}, startTime, endTime); err != nil {
+		return nil, err
+	}
+
+	liveQuery := `
+		SELECT toString(tenant_id) AS tenant_id,
+		       toInt32(countIf(status = 'live')) AS live_streams,
+		       toInt32(sumIf(current_viewers, status = 'live')) AS current_viewers
+		FROM stream_state_current FINAL
+		GROUP BY tenant_id
+		HAVING live_streams > 0
+	`
+	if err := scanRows(liveQuery, func(rows *sql.Rows) error {
+		var tenantID string
+		var liveStreams, currentViewers int32
+		if err := rows.Scan(&tenantID, &liveStreams, &currentViewers); err != nil {
+			return err
+		}
+		a := get(tenantID)
+		a.LiveStreams = liveStreams
+		a.CurrentViewers = currentViewers
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	tenants := make([]*periscopepb.TenantActivity, 0, len(activity))
+	for _, a := range activity {
+		a.IngestHours = sanitizeFloat64(a.IngestHours)
+		a.ViewerHours = sanitizeFloat64(a.ViewerHours)
+		a.EgressGb = sanitizeFloat64(a.EgressGb)
+		tenants = append(tenants, a)
+	}
+	slices.SortFunc(tenants, func(x, y *periscopepb.TenantActivity) int {
+		if x.ViewerHours != y.ViewerHours {
+			if x.ViewerHours > y.ViewerHours {
+				return -1
+			}
+			return 1
+		}
+		if x.IngestHours != y.IngestHours {
+			if x.IngestHours > y.IngestHours {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(x.TenantId, y.TenantId)
+	})
+	if len(tenants) > limit {
+		tenants = tenants[:limit]
+	}
+
+	return &periscopepb.ListTenantActivityResponse{
+		Tenants:     tenants,
+		GeneratedAt: timestamppb.Now(),
+		TimeRange:   &commonpb.TimeRange{Start: timestamppb.New(startTime), End: timestamppb.New(endTime)},
+	}, nil
+}
+
 // GetNetworkLiveStats returns platform-wide live stats per cluster (no tenant filter).
 func (s *PeriscopeServer) GetNetworkLiveStats(ctx context.Context, _ *periscopepb.GetNetworkLiveStatsRequest) (*periscopepb.GetNetworkLiveStatsResponse, error) {
 	type clusterStats struct {

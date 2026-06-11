@@ -882,6 +882,7 @@ func newAdminBootstrapTokensRevokeCmd() *cobra.Command {
 func newAdminTenantsCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "tenants", Short: "Manage tenants"}
 	cmd.AddCommand(newAdminTenantsListCmd())
+	cmd.AddCommand(newAdminTenantsActivityCmd())
 	return cmd
 }
 

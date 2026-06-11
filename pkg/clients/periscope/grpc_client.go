@@ -495,6 +495,16 @@ func (c *GRPCClient) GetPlatformOverview(ctx context.Context, tenantID string, t
 	})
 }
 
+// ListTenantActivity returns the cross-tenant activity rollup for the
+// platform-operator god view. No tenant scope; the server only answers
+// service-credential calls.
+func (c *GRPCClient) ListTenantActivity(ctx context.Context, timeRange *TimeRangeOpts, limit int32) (*periscopepb.ListTenantActivityResponse, error) {
+	return c.platform.ListTenantActivity(ctx, &periscopepb.ListTenantActivityRequest{
+		TimeRange: buildTimeRange(timeRange),
+		Limit:     limit,
+	})
+}
+
 // GetNetworkLiveStats returns platform-wide per-cluster live stats (no tenant filter).
 func (c *GRPCClient) GetNetworkLiveStats(ctx context.Context) (*periscopepb.GetNetworkLiveStatsResponse, error) {
 	return c.platform.GetNetworkLiveStats(ctx, &periscopepb.GetNetworkLiveStatsRequest{})

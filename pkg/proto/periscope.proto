@@ -655,6 +655,34 @@ message GetPlatformOverviewResponse {
   common.TimeRange time_range = 21;
 }
 
+// Cross-tenant activity rollup for the platform-operator god view
+// (`frameworks admin tenants activity`). Deliberately has no tenant scope;
+// the server only answers service-credential calls.
+message ListTenantActivityRequest {
+  common.TimeRange time_range = 1;  // defaults to the trailing 7 days
+  int32 limit = 2;                  // max tenants returned; 0 = server default (100)
+}
+
+message TenantActivity {
+  string tenant_id = 1;
+  int32 live_streams = 2;           // stream_state_current snapshot, status = 'live'
+  int32 current_viewers = 3;        // current viewers on live streams
+  double ingest_hours = 4;          // stream_runtime_daily over the range
+  double viewer_hours = 5;          // tenant_viewer_daily over the range
+  double egress_gb = 6;             // tenant_viewer_daily over the range
+  int64 unique_viewers = 7;         // merged uniq state over the range
+  int64 total_sessions = 8;         // tenant_viewer_daily over the range
+  int64 api_requests = 9;           // api_usage_daily over the range
+  int64 api_errors = 10;            // api_usage_daily over the range
+  google.protobuf.Timestamp last_stream_at = 11;  // latest day with stream runtime in range
+}
+
+message ListTenantActivityResponse {
+  repeated TenantActivity tenants = 1;
+  google.protobuf.Timestamp generated_at = 2;
+  common.TimeRange time_range = 3;  // echoed range used for aggregation
+}
+
 // ============================================================================
 // Clip Analytics
 // ============================================================================
@@ -866,6 +894,7 @@ service FederationAnalyticsService {
 
 service PlatformAnalyticsService {
   rpc GetPlatformOverview(GetPlatformOverviewRequest) returns (GetPlatformOverviewResponse);
+  rpc ListTenantActivity(ListTenantActivityRequest) returns (ListTenantActivityResponse);
   rpc GetNetworkLiveStats(GetNetworkLiveStatsRequest) returns (GetNetworkLiveStatsResponse);
 }
 

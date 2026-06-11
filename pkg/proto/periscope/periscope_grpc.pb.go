@@ -1199,6 +1199,7 @@ var FederationAnalyticsService_ServiceDesc = grpc.ServiceDesc{
 
 const (
 	PlatformAnalyticsService_GetPlatformOverview_FullMethodName = "/periscope.PlatformAnalyticsService/GetPlatformOverview"
+	PlatformAnalyticsService_ListTenantActivity_FullMethodName  = "/periscope.PlatformAnalyticsService/ListTenantActivity"
 	PlatformAnalyticsService_GetNetworkLiveStats_FullMethodName = "/periscope.PlatformAnalyticsService/GetNetworkLiveStats"
 )
 
@@ -1207,6 +1208,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type PlatformAnalyticsServiceClient interface {
 	GetPlatformOverview(ctx context.Context, in *GetPlatformOverviewRequest, opts ...grpc.CallOption) (*GetPlatformOverviewResponse, error)
+	ListTenantActivity(ctx context.Context, in *ListTenantActivityRequest, opts ...grpc.CallOption) (*ListTenantActivityResponse, error)
 	GetNetworkLiveStats(ctx context.Context, in *GetNetworkLiveStatsRequest, opts ...grpc.CallOption) (*GetNetworkLiveStatsResponse, error)
 }
 
@@ -1228,6 +1230,16 @@ func (c *platformAnalyticsServiceClient) GetPlatformOverview(ctx context.Context
 	return out, nil
 }
 
+func (c *platformAnalyticsServiceClient) ListTenantActivity(ctx context.Context, in *ListTenantActivityRequest, opts ...grpc.CallOption) (*ListTenantActivityResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTenantActivityResponse)
+	err := c.cc.Invoke(ctx, PlatformAnalyticsService_ListTenantActivity_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *platformAnalyticsServiceClient) GetNetworkLiveStats(ctx context.Context, in *GetNetworkLiveStatsRequest, opts ...grpc.CallOption) (*GetNetworkLiveStatsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetNetworkLiveStatsResponse)
@@ -1243,6 +1255,7 @@ func (c *platformAnalyticsServiceClient) GetNetworkLiveStats(ctx context.Context
 // for forward compatibility.
 type PlatformAnalyticsServiceServer interface {
 	GetPlatformOverview(context.Context, *GetPlatformOverviewRequest) (*GetPlatformOverviewResponse, error)
+	ListTenantActivity(context.Context, *ListTenantActivityRequest) (*ListTenantActivityResponse, error)
 	GetNetworkLiveStats(context.Context, *GetNetworkLiveStatsRequest) (*GetNetworkLiveStatsResponse, error)
 	mustEmbedUnimplementedPlatformAnalyticsServiceServer()
 }
@@ -1256,6 +1269,9 @@ type UnimplementedPlatformAnalyticsServiceServer struct{}
 
 func (UnimplementedPlatformAnalyticsServiceServer) GetPlatformOverview(context.Context, *GetPlatformOverviewRequest) (*GetPlatformOverviewResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetPlatformOverview not implemented")
+}
+func (UnimplementedPlatformAnalyticsServiceServer) ListTenantActivity(context.Context, *ListTenantActivityRequest) (*ListTenantActivityResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListTenantActivity not implemented")
 }
 func (UnimplementedPlatformAnalyticsServiceServer) GetNetworkLiveStats(context.Context, *GetNetworkLiveStatsRequest) (*GetNetworkLiveStatsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetNetworkLiveStats not implemented")
@@ -1300,6 +1316,24 @@ func _PlatformAnalyticsService_GetPlatformOverview_Handler(srv interface{}, ctx 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PlatformAnalyticsService_ListTenantActivity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTenantActivityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PlatformAnalyticsServiceServer).ListTenantActivity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PlatformAnalyticsService_ListTenantActivity_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PlatformAnalyticsServiceServer).ListTenantActivity(ctx, req.(*ListTenantActivityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PlatformAnalyticsService_GetNetworkLiveStats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetNetworkLiveStatsRequest)
 	if err := dec(in); err != nil {
@@ -1328,6 +1362,10 @@ var PlatformAnalyticsService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetPlatformOverview",
 			Handler:    _PlatformAnalyticsService_GetPlatformOverview_Handler,
+		},
+		{
+			MethodName: "ListTenantActivity",
+			Handler:    _PlatformAnalyticsService_ListTenantActivity_Handler,
 		},
 		{
 			MethodName: "GetNetworkLiveStats",
