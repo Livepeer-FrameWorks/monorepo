@@ -84,6 +84,13 @@ type Query {
   analytics: Analytics!
 
   """
+  Platform-operator god view (cross-tenant). Every field requires an
+  owner/admin of the reserved system tenant and is audit-logged; all other
+  callers receive an authorization error.
+  """
+  platform: Platform!
+
+  """
   List all streams for the current tenant with pagination.
   """
   streamsConnection(
@@ -7627,4 +7634,146 @@ type PlaybackAccessDecision {
   webhookLatencyMs: Int
   "Internal MistServer name the evaluator resolved against. Always populated when a target was found."
   resolvedInternalName: String
+}
+
+# ============================================================================
+# PLATFORM-OPERATOR GOD VIEW (cross-tenant; system-tenant owner/admin only)
+# ============================================================================
+
+"""
+Platform-operator god view namespace. Every field is gated to owners/admins
+of the reserved system tenant and audit-logged at the gateway.
+"""
+type Platform {
+  """
+  Ranked cross-tenant activity index: Periscope activity joined with tenant
+  identity (Quartermaster) and billing snapshots (Purser).
+  """
+  tenants(
+    """
+    Time range for the activity rollup (defaults to the trailing 7 days).
+    """
+    timeRange: TimeRangeInput
+    """
+    Maximum number of rows (defaults to 100).
+    """
+    limit: Int
+  ): PlatformTenantIndex!
+
+  """
+  Admin drill-down for a single tenant.
+  """
+  tenant(
+    """
+    The tenant ID.
+    """
+    id: ID!
+  ): TenantAdminDetail
+
+  """
+  Cluster pivot: each cluster with live stats and resident tenants.
+  """
+  clusters: [ClusterPivotRow!]!
+}
+
+type PlatformTenantIndex {
+  rows: [PlatformTenantRow!]!
+  generatedAt: Time!
+}
+
+type PlatformTenantRow {
+  tenantId: ID!
+  "Identity from Quartermaster; null when the lookup failed (partial data tolerated)."
+  tenant: Tenant
+  "Activity rollup from Periscope; zeros when the tenant had no activity in range."
+  activity: TenantActivitySummary!
+  "Billing snapshot from Purser; null when the tenant has no subscription."
+  billing: TenantBillingSnapshot
+}
+
+"Cross-tenant activity rollup row (from Periscope daily ledgers + live snapshot)."
+type TenantActivitySummary {
+  liveStreams: Int!
+  currentViewers: Int!
+  ingestHours: Float!
+  viewerHours: Float!
+  egressGb: Float!
+  uniqueViewers: Int!
+  totalSessions: Int!
+  apiRequests: Int!
+  apiErrors: Int!
+  lastStreamAt: Time
+}
+
+"Billing snapshot row (from Purser subscriptions, invoices, prepaid balances)."
+type TenantBillingSnapshot {
+  tenantId: ID!
+  billingModel: String!
+  status: String!
+  tierId: String!
+  tierName: String!
+  trialEndsAt: Time
+  nextBillingDate: Time
+  "Total of pending + overdue invoices."
+  outstandingAmount: Float!
+  overdueInvoices: Int!
+  prepaidBalanceCents: Int!
+  currency: String!
+  subscribedAt: Time
+}
+
+type TenantAdminDetail {
+  tenantId: ID!
+  "Identity from Quartermaster; null when the lookup failed."
+  tenant: Tenant
+  "Activity rollup for this tenant (defaults to the trailing 7 days)."
+  activity(timeRange: TimeRangeInput): TenantActivitySummary!
+  "Tenant-scoped analytics overview, as the tenant would see it."
+  overview(timeRange: TimeRangeInput): PlatformOverview
+  billing: TenantAdminBilling!
+  content: TenantAdminContent!
+}
+
+"Admin view of one tenant's billing surface (reuses the tenant-facing types)."
+type TenantAdminBilling {
+  tenantId: ID!
+  snapshot: TenantBillingSnapshot
+  invoices(page: ConnectionInput): InvoicesConnection!
+  prepaidBalance(currency: String = "EUR"): PrepaidBalance
+  balanceTransactions(
+    page: ConnectionInput
+    transactionType: String
+    timeRange: TimeRangeInput
+  ): BalanceTransactionsConnection!
+  usageRecords(page: ConnectionInput, timeRange: TimeRangeInput): UsageRecordsConnection!
+}
+
+"Content/account footprint of one tenant."
+type TenantAdminContent {
+  "Durable artifacts (VOD + DVR + clips)."
+  artifactCount: Int!
+  "Active user accounts."
+  userCount: Int!
+  liveStreams: Int!
+  lastStreamAt: Time
+}
+
+type ClusterPivotRow {
+  cluster: Cluster!
+  "Live stats from Periscope; null when the cluster reported none."
+  liveStats: ClusterLiveStats
+  "First page of tenants assigned to this cluster."
+  tenants: [Tenant!]!
+  tenantCount: Int!
+}
+
+"Per-cluster live snapshot from Periscope GetNetworkLiveStats."
+type ClusterLiveStats {
+  clusterId: String!
+  activeStreams: Int!
+  currentViewers: Int!
+  uploadBytesPerSec: Float!
+  downloadBytesPerSec: Float!
+  activeNodes: Int!
+  egressCapacityBps: Float!
 }

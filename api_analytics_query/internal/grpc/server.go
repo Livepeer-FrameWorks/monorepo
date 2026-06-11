@@ -2910,6 +2910,21 @@ func (s *PeriscopeServer) ListTenantActivity(ctx context.Context, req *periscope
 	if limit <= 0 {
 		limit = 100
 	}
+	// An explicit tenant filter overrides the ranked-truncation contract:
+	// callers asking for specific tenants get all of them, not "the requested
+	// tenants that also rank in the top `limit`".
+	tenantIDs := req.GetTenantIds()
+	if len(tenantIDs) > limit {
+		limit = len(tenantIDs)
+	}
+	tenantFilter := ""
+	tenantArgs := make([]any, 0, len(tenantIDs))
+	if len(tenantIDs) > 0 {
+		tenantFilter = " AND tenant_id IN (?" + strings.Repeat(", ?", len(tenantIDs)-1) + ")"
+		for _, id := range tenantIDs {
+			tenantArgs = append(tenantArgs, id)
+		}
+	}
 
 	activity := map[string]*periscopepb.TenantActivity{}
 	get := func(tenantID string) *periscopepb.TenantActivity {
@@ -2933,6 +2948,9 @@ func (s *PeriscopeServer) ListTenantActivity(ctx context.Context, req *periscope
 		}
 		return rows.Err()
 	}
+	rangeArgs := func() []any {
+		return append([]any{startTime, endTime}, tenantArgs...)
+	}
 
 	// Daily rollups are Date-grain; the end day is inclusive so a range
 	// ending "now" still counts today's partial day.
@@ -2941,7 +2959,7 @@ func (s *PeriscopeServer) ListTenantActivity(ctx context.Context, req *periscope
 		       sum(runtime_seconds) / 3600.0 AS ingest_hours,
 		       max(day) AS last_stream_day
 		FROM stream_runtime_daily
-		WHERE day >= toDate(?) AND day <= toDate(?)
+		WHERE day >= toDate(?) AND day <= toDate(?)` + tenantFilter + `
 		GROUP BY tenant_id
 	`
 	if err := scanRows(runtimeQuery, func(rows *sql.Rows) error {
@@ -2955,7 +2973,7 @@ func (s *PeriscopeServer) ListTenantActivity(ctx context.Context, req *periscope
 		a.IngestHours = ingestHours
 		a.LastStreamAt = timestamppb.New(lastDay)
 		return nil
-	}, startTime, endTime); err != nil {
+	}, rangeArgs()...); err != nil {
 		return nil, err
 	}
 
@@ -2966,7 +2984,7 @@ func (s *PeriscopeServer) ListTenantActivity(ctx context.Context, req *periscope
 		       toInt64(uniqCombinedMerge(unique_viewers_state)) AS unique_viewers,
 		       toInt64(sum(total_sessions)) AS total_sessions
 		FROM tenant_viewer_daily
-		WHERE day >= toDate(?) AND day <= toDate(?)
+		WHERE day >= toDate(?) AND day <= toDate(?)` + tenantFilter + `
 		GROUP BY tenant_id
 	`
 	if err := scanRows(viewerQuery, func(rows *sql.Rows) error {
@@ -2982,7 +3000,7 @@ func (s *PeriscopeServer) ListTenantActivity(ctx context.Context, req *periscope
 		a.UniqueViewers = uniqueViewers
 		a.TotalSessions = totalSessions
 		return nil
-	}, startTime, endTime); err != nil {
+	}, rangeArgs()...); err != nil {
 		return nil, err
 	}
 
@@ -2991,7 +3009,7 @@ func (s *PeriscopeServer) ListTenantActivity(ctx context.Context, req *periscope
 		       toInt64(sum(requests)) AS requests,
 		       toInt64(sum(errors)) AS errors
 		FROM api_usage_daily
-		WHERE day >= toDate(?) AND day <= toDate(?)
+		WHERE day >= toDate(?) AND day <= toDate(?)` + tenantFilter + `
 		GROUP BY tenant_id
 	`
 	if err := scanRows(apiQuery, func(rows *sql.Rows) error {
@@ -3004,7 +3022,7 @@ func (s *PeriscopeServer) ListTenantActivity(ctx context.Context, req *periscope
 		a.ApiRequests = requests
 		a.ApiErrors = errCount
 		return nil
-	}, startTime, endTime); err != nil {
+	}, rangeArgs()...); err != nil {
 		return nil, err
 	}
 
@@ -3013,6 +3031,7 @@ func (s *PeriscopeServer) ListTenantActivity(ctx context.Context, req *periscope
 		       toInt32(countIf(status = 'live')) AS live_streams,
 		       toInt32(sumIf(current_viewers, status = 'live')) AS current_viewers
 		FROM stream_state_current FINAL
+		WHERE 1 = 1` + tenantFilter + `
 		GROUP BY tenant_id
 		HAVING live_streams > 0
 	`
@@ -3026,7 +3045,7 @@ func (s *PeriscopeServer) ListTenantActivity(ctx context.Context, req *periscope
 		a.LiveStreams = liveStreams
 		a.CurrentViewers = currentViewers
 		return nil
-	}); err != nil {
+	}, tenantArgs...); err != nil {
 		return nil, err
 	}
 

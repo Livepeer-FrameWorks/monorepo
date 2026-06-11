@@ -48,7 +48,8 @@ func (f *FakeCommodore) ListPullSourceEvents(ctx context.Context, req *commodore
 }
 
 func (f *FakeCommodore) ListStorageArtifacts(ctx context.Context, req *commodorepb.ListStorageArtifactsRequest) (*commodorepb.ListStorageArtifactsResponse, error) {
-	f.Calls++
+	// Called concurrently by DoPlatformTenantContent's fan-out.
+	f.incCalls()
 	if f.ListStorageArtifactsFn == nil {
 		panic("FakeCommodore.ListStorageArtifacts not stubbed")
 	}

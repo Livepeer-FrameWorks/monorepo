@@ -14,6 +14,7 @@ import (
 type Interface interface {
 	Close() error
 	GetTenantBillingStatus(ctx context.Context, tenantID string) (*purserpb.GetTenantBillingStatusResponse, error)
+	ListTenantBillingSnapshots(ctx context.Context, tenantIDs []string, limit int32) (*purserpb.ListTenantBillingSnapshotsResponse, error)
 	GetBillingTiers(ctx context.Context, includeInactive bool, pagination *commonpb.CursorPaginationRequest) (*purserpb.GetBillingTiersResponse, error)
 	GetBillingTier(ctx context.Context, tierID string) (*purserpb.BillingTier, error)
 	CreateBillingTier(ctx context.Context, req *purserpb.CreateBillingTierRequest) (*purserpb.BillingTier, error)

@@ -3208,36 +3208,62 @@ func (s *QuartermasterServer) GetTenantsByCluster(ctx context.Context, req *quar
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
 	}
 
+	// Limit-only pagination: cursor params are rejected loudly rather than
+	// silently returning the first page forever, and the limit clamps to the
+	// same ceiling the keyset-paginated list endpoints use.
+	limit := int32(100)
+	if p := req.GetPagination(); p != nil {
+		if p.GetAfter() != "" || p.GetBefore() != "" || p.GetLast() > 0 {
+			return nil, status.Error(codes.InvalidArgument, "GetTenantsByCluster supports first-page limits only (after/before/last are not implemented)")
+		}
+		if p.GetFirst() > 0 {
+			limit = min(p.GetFirst(), int32(pagination.MaxLimit))
+		}
+	}
+	// DISTINCT runs in the inner query so a tenant with multiple assignment
+	// rows neither duplicates nor inflates the windowed total_count.
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT t.id, t.name, t.subdomain, t.custom_domain, t.logo_url, t.primary_color, t.secondary_color,
-		       t.deployment_tier, t.deployment_model,
-		       t.primary_cluster_id, t.official_cluster_id, t.kafka_topic_prefix, t.kafka_brokers, t.database_url,
-		       t.is_active, t.created_at, t.updated_at
-		FROM quartermaster.tenants t
-		LEFT JOIN quartermaster.tenant_cluster_assignments tca ON t.id = tca.tenant_id
-		WHERE (t.primary_cluster_id = $1 OR tca.cluster_id = $1) AND t.is_active = TRUE
-	`, clusterID)
+		SELECT sub.*, count(*) OVER() AS total_count
+		FROM (
+			SELECT DISTINCT t.id, t.name, t.subdomain, t.custom_domain, t.logo_url, t.primary_color, t.secondary_color,
+			       t.deployment_tier, t.deployment_model,
+			       t.primary_cluster_id, t.official_cluster_id, t.kafka_topic_prefix, t.kafka_brokers, t.database_url,
+			       t.is_active, t.created_at, t.updated_at
+			FROM quartermaster.tenants t
+			LEFT JOIN quartermaster.tenant_cluster_assignments tca ON t.id = tca.tenant_id
+			WHERE (t.primary_cluster_id = $1 OR tca.cluster_id = $1) AND t.is_active = TRUE
+		) sub
+		ORDER BY sub.created_at
+		LIMIT $2
+	`, clusterID, limit)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 	defer func() { _ = rows.Close() }()
 
 	var tenants []*quartermasterpb.Tenant
+	var totalCount int32
 	for rows.Next() {
 		var tenant quartermasterpb.Tenant
 		var createdAt, updatedAt time.Time
-		var subdomain, customDomain, logoURL, primaryClusterID, kafkaTopicPrefix, databaseURL sql.NullString
+		var subdomain, customDomain, logoURL, primaryClusterID, officialClusterID, kafkaTopicPrefix, databaseURL sql.NullString
 		var kafkaBrokers []string
 
+		// Scan failures are hard errors: skipping rows silently turns a
+		// column/scan mismatch into "cluster has no tenants".
 		if err := rows.Scan(
 			&tenant.Id, &tenant.Name, &subdomain, &customDomain, &logoURL,
 			&tenant.PrimaryColor, &tenant.SecondaryColor,
 			&tenant.DeploymentTier, &tenant.DeploymentModel,
-			&primaryClusterID, &kafkaTopicPrefix,
+			&primaryClusterID, &officialClusterID, &kafkaTopicPrefix,
 			pq.Array(&kafkaBrokers), &databaseURL, &tenant.IsActive, &createdAt, &updatedAt,
+			&totalCount,
 		); err != nil {
-			s.logger.WithError(err).Warn("Failed to scan tenant by cluster")
-			continue
+			s.logger.WithError(err).Error("Failed to scan tenant by cluster")
+			return nil, status.Errorf(codes.Internal, "scan error: %v", err)
+		}
+		if officialClusterID.Valid {
+			tenant.OfficialClusterId = &officialClusterID.String
 		}
 
 		if subdomain.Valid {
@@ -3267,6 +3293,10 @@ func (s *QuartermasterServer) GetTenantsByCluster(ctx context.Context, req *quar
 	return &quartermasterpb.GetTenantsByClusterResponse{
 		ClusterId: clusterID,
 		Tenants:   tenants,
+		Pagination: &commonpb.CursorPaginationResponse{
+			TotalCount:  totalCount,
+			HasNextPage: totalCount > int32(len(tenants)),
+		},
 	}, nil
 }
 

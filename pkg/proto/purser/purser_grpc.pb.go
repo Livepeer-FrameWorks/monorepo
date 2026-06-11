@@ -21,11 +21,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	BillingService_GetBillingTiers_FullMethodName        = "/purser.BillingService/GetBillingTiers"
-	BillingService_GetBillingTier_FullMethodName         = "/purser.BillingService/GetBillingTier"
-	BillingService_CreateBillingTier_FullMethodName      = "/purser.BillingService/CreateBillingTier"
-	BillingService_UpdateBillingTier_FullMethodName      = "/purser.BillingService/UpdateBillingTier"
-	BillingService_GetTenantBillingStatus_FullMethodName = "/purser.BillingService/GetTenantBillingStatus"
+	BillingService_GetBillingTiers_FullMethodName            = "/purser.BillingService/GetBillingTiers"
+	BillingService_GetBillingTier_FullMethodName             = "/purser.BillingService/GetBillingTier"
+	BillingService_CreateBillingTier_FullMethodName          = "/purser.BillingService/CreateBillingTier"
+	BillingService_UpdateBillingTier_FullMethodName          = "/purser.BillingService/UpdateBillingTier"
+	BillingService_GetTenantBillingStatus_FullMethodName     = "/purser.BillingService/GetTenantBillingStatus"
+	BillingService_ListTenantBillingSnapshots_FullMethodName = "/purser.BillingService/ListTenantBillingSnapshots"
 )
 
 // BillingServiceClient is the client API for BillingService service.
@@ -44,6 +45,10 @@ type BillingServiceClient interface {
 	// Called by Commodore/Quartermaster to check suspension/balance status.
 	// Returns minimal info needed for gating decisions.
 	GetTenantBillingStatus(ctx context.Context, in *GetTenantBillingStatusRequest, opts ...grpc.CallOption) (*GetTenantBillingStatusResponse, error)
+	// Cross-tenant billing snapshot for the platform-operator god view.
+	// Deliberately has no tenant scope; the server only answers
+	// service-credential calls (the gateway gates the operator first).
+	ListTenantBillingSnapshots(ctx context.Context, in *ListTenantBillingSnapshotsRequest, opts ...grpc.CallOption) (*ListTenantBillingSnapshotsResponse, error)
 }
 
 type billingServiceClient struct {
@@ -104,6 +109,16 @@ func (c *billingServiceClient) GetTenantBillingStatus(ctx context.Context, in *G
 	return out, nil
 }
 
+func (c *billingServiceClient) ListTenantBillingSnapshots(ctx context.Context, in *ListTenantBillingSnapshotsRequest, opts ...grpc.CallOption) (*ListTenantBillingSnapshotsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTenantBillingSnapshotsResponse)
+	err := c.cc.Invoke(ctx, BillingService_ListTenantBillingSnapshots_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BillingServiceServer is the server API for BillingService service.
 // All implementations must embed UnimplementedBillingServiceServer
 // for forward compatibility.
@@ -120,6 +135,10 @@ type BillingServiceServer interface {
 	// Called by Commodore/Quartermaster to check suspension/balance status.
 	// Returns minimal info needed for gating decisions.
 	GetTenantBillingStatus(context.Context, *GetTenantBillingStatusRequest) (*GetTenantBillingStatusResponse, error)
+	// Cross-tenant billing snapshot for the platform-operator god view.
+	// Deliberately has no tenant scope; the server only answers
+	// service-credential calls (the gateway gates the operator first).
+	ListTenantBillingSnapshots(context.Context, *ListTenantBillingSnapshotsRequest) (*ListTenantBillingSnapshotsResponse, error)
 	mustEmbedUnimplementedBillingServiceServer()
 }
 
@@ -144,6 +163,9 @@ func (UnimplementedBillingServiceServer) UpdateBillingTier(context.Context, *Upd
 }
 func (UnimplementedBillingServiceServer) GetTenantBillingStatus(context.Context, *GetTenantBillingStatusRequest) (*GetTenantBillingStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetTenantBillingStatus not implemented")
+}
+func (UnimplementedBillingServiceServer) ListTenantBillingSnapshots(context.Context, *ListTenantBillingSnapshotsRequest) (*ListTenantBillingSnapshotsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListTenantBillingSnapshots not implemented")
 }
 func (UnimplementedBillingServiceServer) mustEmbedUnimplementedBillingServiceServer() {}
 func (UnimplementedBillingServiceServer) testEmbeddedByValue()                        {}
@@ -256,6 +278,24 @@ func _BillingService_GetTenantBillingStatus_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BillingService_ListTenantBillingSnapshots_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTenantBillingSnapshotsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BillingServiceServer).ListTenantBillingSnapshots(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BillingService_ListTenantBillingSnapshots_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BillingServiceServer).ListTenantBillingSnapshots(ctx, req.(*ListTenantBillingSnapshotsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BillingService_ServiceDesc is the grpc.ServiceDesc for BillingService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -282,6 +322,10 @@ var BillingService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetTenantBillingStatus",
 			Handler:    _BillingService_GetTenantBillingStatus_Handler,
+		},
+		{
+			MethodName: "ListTenantBillingSnapshots",
+			Handler:    _BillingService_ListTenantBillingSnapshots_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -576,6 +576,26 @@ type ClusterInviteEdge struct {
 	Node   *quartermasterpb.ClusterInvite `json:"node"`
 }
 
+// Per-cluster live snapshot from Periscope GetNetworkLiveStats.
+type ClusterLiveStats struct {
+	ClusterID           string  `json:"clusterId"`
+	ActiveStreams       int     `json:"activeStreams"`
+	CurrentViewers      int     `json:"currentViewers"`
+	UploadBytesPerSec   float64 `json:"uploadBytesPerSec"`
+	DownloadBytesPerSec float64 `json:"downloadBytesPerSec"`
+	ActiveNodes         int     `json:"activeNodes"`
+	EgressCapacityBps   float64 `json:"egressCapacityBps"`
+}
+
+type ClusterPivotRow struct {
+	Cluster *quartermasterpb.InfrastructureCluster `json:"cluster"`
+	// Live stats from Periscope; null when the cluster reported none.
+	LiveStats *ClusterLiveStats `json:"liveStats,omitempty"`
+	// First page of tenants assigned to this cluster.
+	Tenants     []*quartermasterpb.Tenant `json:"tenants"`
+	TenantCount int                       `json:"tenantCount"`
+}
+
 type ClusterSubscriptionConnection struct {
 	Edges      []*ClusterSubscriptionEdge             `json:"edges"`
 	Nodes      []*quartermasterpb.ClusterSubscription `json:"nodes"`
@@ -1512,6 +1532,21 @@ type PageInfo struct {
 	HasPreviousPage bool    `json:"hasPreviousPage"`
 }
 
+type PlatformTenantIndex struct {
+	Rows        []*PlatformTenantRow `json:"rows"`
+	GeneratedAt time.Time            `json:"generatedAt"`
+}
+
+type PlatformTenantRow struct {
+	TenantID string `json:"tenantId"`
+	// Identity from Quartermaster; null when the lookup failed (partial data tolerated).
+	Tenant *quartermasterpb.Tenant `json:"tenant,omitempty"`
+	// Activity rollup from Periscope; zeros when the tenant had no activity in range.
+	Activity *TenantActivitySummary `json:"activity"`
+	// Billing snapshot from Purser; null when the tenant has no subscription.
+	Billing *purserpb.TenantBillingSnapshot `json:"billing,omitempty"`
+}
+
 // Structured result of a dry-run policy evaluation. Mirrors Foghorn's
 // PlaybackDecision struct.
 type PlaybackAccessDecision struct {
@@ -2021,6 +2056,30 @@ func (StripeCheckoutSession) IsStripeCheckoutResult() {}
 // All subscriptions are tenant-scoped and require authentication.
 // Events are delivered as they occur with minimal latency.
 type Subscription struct {
+}
+
+// Cross-tenant activity rollup row (from Periscope daily ledgers + live snapshot).
+type TenantActivitySummary struct {
+	LiveStreams    int        `json:"liveStreams"`
+	CurrentViewers int        `json:"currentViewers"`
+	IngestHours    float64    `json:"ingestHours"`
+	ViewerHours    float64    `json:"viewerHours"`
+	EgressGb       float64    `json:"egressGb"`
+	UniqueViewers  int        `json:"uniqueViewers"`
+	TotalSessions  int        `json:"totalSessions"`
+	APIRequests    int        `json:"apiRequests"`
+	APIErrors      int        `json:"apiErrors"`
+	LastStreamAt   *time.Time `json:"lastStreamAt,omitempty"`
+}
+
+// Content/account footprint of one tenant.
+type TenantAdminContent struct {
+	// Durable artifacts (VOD + DVR + clips).
+	ArtifactCount int `json:"artifactCount"`
+	// Active user accounts.
+	UserCount    int        `json:"userCount"`
+	LiveStreams  int        `json:"liveStreams"`
+	LastStreamAt *time.Time `json:"lastStreamAt,omitempty"`
 }
 
 type TenantAnalyticsDailyConnection struct {

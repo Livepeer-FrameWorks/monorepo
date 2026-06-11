@@ -2943,6 +2943,21 @@ func (r *paymentResolver) CreatedAt(ctx context.Context, obj *purserpb.PaymentRe
 	return &t, nil
 }
 
+// Tenants is the resolver for the tenants field.
+func (r *platformResolver) Tenants(ctx context.Context, obj *markers.Platform, timeRange *model.TimeRangeInput, limit *int) (*model.PlatformTenantIndex, error) {
+	return r.DoPlatformTenants(ctx, timeRange, limit)
+}
+
+// Tenant is the resolver for the tenant field.
+func (r *platformResolver) Tenant(ctx context.Context, obj *markers.Platform, id string) (*markers.TenantAdminDetail, error) {
+	return r.DoPlatformTenant(ctx, id)
+}
+
+// Clusters is the resolver for the clusters field.
+func (r *platformResolver) Clusters(ctx context.Context, obj *markers.Platform) ([]*model.ClusterPivotRow, error) {
+	return r.DoPlatformClusters(ctx)
+}
+
 // TotalBandwidth is the resolver for the totalBandwidth field.
 func (r *platformOverviewResolver) TotalBandwidth(ctx context.Context, obj *periscopepb.GetPlatformOverviewResponse) (float64, error) {
 	return obj.PeakBandwidth, nil
@@ -3301,6 +3316,12 @@ func (r *qualityTierSummaryResolver) CodecAv1Minutes(ctx context.Context, obj *p
 // Analytics is the resolver for the analytics field.
 func (r *queryResolver) Analytics(ctx context.Context) (*markers.Analytics, error) {
 	return &markers.Analytics{}, nil
+}
+
+// Platform is the resolver for the platform field. The namespace itself is
+// just a marker; every child field gates on RequirePlatformOperator.
+func (r *queryResolver) Platform(ctx context.Context) (*markers.Platform, error) {
+	return &markers.Platform{}, nil
 }
 
 // StreamsConnection is the resolver for the streamsConnection field.
@@ -5785,6 +5806,58 @@ func (r *tenantResolver) CustomDomainStatus(ctx context.Context, obj *quartermas
 	return out, nil
 }
 
+// Snapshot is the resolver for the snapshot field.
+func (r *tenantAdminBillingResolver) Snapshot(ctx context.Context, obj *markers.TenantAdminBilling) (*purserpb.TenantBillingSnapshot, error) {
+	return r.DoPlatformTenantBillingSnapshot(ctx, obj.TenantID)
+}
+
+// Invoices is the resolver for the invoices field.
+func (r *tenantAdminBillingResolver) Invoices(ctx context.Context, obj *markers.TenantAdminBilling, page *model.ConnectionInput) (*model.InvoicesConnection, error) {
+	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
+	return r.DoPlatformTenantInvoices(ctx, obj.TenantID, first, after, last, before)
+}
+
+// PrepaidBalance is the resolver for the prepaidBalance field.
+func (r *tenantAdminBillingResolver) PrepaidBalance(ctx context.Context, obj *markers.TenantAdminBilling, currency *string) (*model.PrepaidBalance, error) {
+	return r.DoPlatformTenantPrepaidBalance(ctx, obj.TenantID, currency)
+}
+
+// BalanceTransactions is the resolver for the balanceTransactions field.
+func (r *tenantAdminBillingResolver) BalanceTransactions(ctx context.Context, obj *markers.TenantAdminBilling, page *model.ConnectionInput, transactionType *string, timeRange *model.TimeRangeInput) (*model.BalanceTransactionsConnection, error) {
+	return r.DoPlatformTenantBalanceTransactions(ctx, obj.TenantID, page, transactionType, timeRange)
+}
+
+// UsageRecords is the resolver for the usageRecords field.
+func (r *tenantAdminBillingResolver) UsageRecords(ctx context.Context, obj *markers.TenantAdminBilling, page *model.ConnectionInput, timeRange *model.TimeRangeInput) (*model.UsageRecordsConnection, error) {
+	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
+	return r.DoPlatformTenantUsageRecords(ctx, obj.TenantID, timeRange, first, after, last, before)
+}
+
+// Tenant is the resolver for the tenant field.
+func (r *tenantAdminDetailResolver) Tenant(ctx context.Context, obj *markers.TenantAdminDetail) (*quartermasterpb.Tenant, error) {
+	return r.DoPlatformTenantIdentity(ctx, obj.TenantID)
+}
+
+// Activity is the resolver for the activity field.
+func (r *tenantAdminDetailResolver) Activity(ctx context.Context, obj *markers.TenantAdminDetail, timeRange *model.TimeRangeInput) (*model.TenantActivitySummary, error) {
+	return r.DoPlatformTenantActivity(ctx, obj.TenantID, timeRange)
+}
+
+// Overview is the resolver for the overview field.
+func (r *tenantAdminDetailResolver) Overview(ctx context.Context, obj *markers.TenantAdminDetail, timeRange *model.TimeRangeInput) (*periscopepb.GetPlatformOverviewResponse, error) {
+	return r.DoPlatformTenantOverview(ctx, obj.TenantID, timeRange)
+}
+
+// Billing is the resolver for the billing field.
+func (r *tenantAdminDetailResolver) Billing(ctx context.Context, obj *markers.TenantAdminDetail) (*markers.TenantAdminBilling, error) {
+	return &markers.TenantAdminBilling{TenantID: obj.TenantID}, nil
+}
+
+// Content is the resolver for the content field.
+func (r *tenantAdminDetailResolver) Content(ctx context.Context, obj *markers.TenantAdminDetail) (*model.TenantAdminContent, error) {
+	return r.DoPlatformTenantContent(ctx, obj.TenantID)
+}
+
 // Day is the resolver for the day field.
 func (r *tenantAnalyticsDailyResolver) Day(ctx context.Context, obj *periscopepb.TenantAnalyticsDaily) (*time.Time, error) {
 	if obj.Day == nil {
@@ -5797,6 +5870,33 @@ func (r *tenantAnalyticsDailyResolver) Day(ctx context.Context, obj *periscopepb
 // EgressBytes is the resolver for the egressBytes field.
 func (r *tenantAnalyticsDailyResolver) EgressBytes(ctx context.Context, obj *periscopepb.TenantAnalyticsDaily) (float64, error) {
 	return float64(obj.EgressBytes), nil
+}
+
+// TrialEndsAt is the resolver for the trialEndsAt field.
+func (r *tenantBillingSnapshotResolver) TrialEndsAt(ctx context.Context, obj *purserpb.TenantBillingSnapshot) (*time.Time, error) {
+	if obj.TrialEndsAt == nil {
+		return nil, nil
+	}
+	t := obj.TrialEndsAt.AsTime()
+	return &t, nil
+}
+
+// NextBillingDate is the resolver for the nextBillingDate field.
+func (r *tenantBillingSnapshotResolver) NextBillingDate(ctx context.Context, obj *purserpb.TenantBillingSnapshot) (*time.Time, error) {
+	if obj.NextBillingDate == nil {
+		return nil, nil
+	}
+	t := obj.NextBillingDate.AsTime()
+	return &t, nil
+}
+
+// SubscribedAt is the resolver for the subscribedAt field.
+func (r *tenantBillingSnapshotResolver) SubscribedAt(ctx context.Context, obj *purserpb.TenantBillingSnapshot) (*time.Time, error) {
+	if obj.SubscribedAt == nil {
+		return nil, nil
+	}
+	t := obj.SubscribedAt.AsTime()
+	return &t, nil
 }
 
 // ID is the resolver for the id field.
@@ -6677,6 +6777,9 @@ func (r *Resolver) OrchestratorVantage() generated.OrchestratorVantageResolver {
 // Payment returns generated.PaymentResolver implementation.
 func (r *Resolver) Payment() generated.PaymentResolver { return &paymentResolver{r} }
 
+// Platform returns generated.PlatformResolver implementation.
+func (r *Resolver) Platform() generated.PlatformResolver { return &platformResolver{r} }
+
 // PlatformOverview returns generated.PlatformOverviewResolver implementation.
 func (r *Resolver) PlatformOverview() generated.PlatformOverviewResolver {
 	return &platformOverviewResolver{r}
@@ -6854,9 +6957,24 @@ func (r *Resolver) SystemHealthEvent() generated.SystemHealthEventResolver {
 // Tenant returns generated.TenantResolver implementation.
 func (r *Resolver) Tenant() generated.TenantResolver { return &tenantResolver{r} }
 
+// TenantAdminBilling returns generated.TenantAdminBillingResolver implementation.
+func (r *Resolver) TenantAdminBilling() generated.TenantAdminBillingResolver {
+	return &tenantAdminBillingResolver{r}
+}
+
+// TenantAdminDetail returns generated.TenantAdminDetailResolver implementation.
+func (r *Resolver) TenantAdminDetail() generated.TenantAdminDetailResolver {
+	return &tenantAdminDetailResolver{r}
+}
+
 // TenantAnalyticsDaily returns generated.TenantAnalyticsDailyResolver implementation.
 func (r *Resolver) TenantAnalyticsDaily() generated.TenantAnalyticsDailyResolver {
 	return &tenantAnalyticsDailyResolver{r}
+}
+
+// TenantBillingSnapshot returns generated.TenantBillingSnapshotResolver implementation.
+func (r *Resolver) TenantBillingSnapshot() generated.TenantBillingSnapshotResolver {
+	return &tenantBillingSnapshotResolver{r}
 }
 
 // TenantDailyStat returns generated.TenantDailyStatResolver implementation.
@@ -6991,6 +7109,7 @@ type orchestratorInstanceResolver struct{ *Resolver }
 type orchestratorPerformancePointResolver struct{ *Resolver }
 type orchestratorVantageResolver struct{ *Resolver }
 type paymentResolver struct{ *Resolver }
+type platformResolver struct{ *Resolver }
 type platformOverviewResolver struct{ *Resolver }
 type playbackInstanceResolver struct{ *Resolver }
 type playbackJwtPolicyResolver struct{ *Resolver }
@@ -7032,7 +7151,10 @@ type streamingUsageResolver struct{ *Resolver }
 type subscriptionResolver struct{ *Resolver }
 type systemHealthEventResolver struct{ *Resolver }
 type tenantResolver struct{ *Resolver }
+type tenantAdminBillingResolver struct{ *Resolver }
+type tenantAdminDetailResolver struct{ *Resolver }
 type tenantAnalyticsDailyResolver struct{ *Resolver }
+type tenantBillingSnapshotResolver struct{ *Resolver }
 type tenantDailyStatResolver struct{ *Resolver }
 type tenantStorageUsageResolver struct{ *Resolver }
 type tenantSubscriptionResolver struct{ *Resolver }

@@ -67,6 +67,18 @@ models:
   AnalyticsInfra:
     model:
       - frameworks/api_gateway/graph/markers.AnalyticsInfra
+  # Platform-operator god view namespace - marker structs (force resolvers).
+  # TenantAdminDetail/TenantAdminBilling carry the target tenant id; their
+  # remaining fields resolve lazily per tab.
+  Platform:
+    model:
+      - frameworks/api_gateway/graph/markers.Platform
+  TenantAdminDetail:
+    model:
+      - frameworks/api_gateway/graph/markers.TenantAdminDetail
+  TenantAdminBilling:
+    model:
+      - frameworks/api_gateway/graph/markers.TenantAdminBilling
   TenantEvent:
     model:
       - frameworks/api_gateway/graph/model.TenantEvent

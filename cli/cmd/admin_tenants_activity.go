@@ -23,7 +23,7 @@ import (
 // tenantActivityClient is the narrow Periscope surface the activity command
 // uses (see adminTokensClient for the rationale behind cmd-local interfaces).
 type tenantActivityClient interface {
-	ListTenantActivity(ctx context.Context, timeRange *periscope.TimeRangeOpts, limit int32) (*periscopepb.ListTenantActivityResponse, error)
+	ListTenantActivity(ctx context.Context, timeRange *periscope.TimeRangeOpts, tenantIDs []string, limit int32) (*periscopepb.ListTenantActivityResponse, error)
 }
 
 func periscopeGRPCClientFromContext(ctx context.Context) (*periscope.GRPCClient, fwcfg.Context, func(), error) {
@@ -75,7 +75,7 @@ func runTenantsActivity(ctx context.Context, w io.Writer, qm adminTenantsClient,
 	activityResp, err := ps.ListTenantActivity(actx, &periscope.TimeRangeOpts{
 		StartTime: time.Now().Add(-since),
 		EndTime:   time.Now(),
-	}, limit)
+	}, nil, limit)
 	if err != nil {
 		return fmt.Errorf("list tenant activity: %w", err)
 	}

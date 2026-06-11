@@ -29,7 +29,7 @@ type fakeActivityClient struct {
 	gotWindow time.Duration
 }
 
-func (f *fakeActivityClient) ListTenantActivity(ctx context.Context, timeRange *periscope.TimeRangeOpts, limit int32) (*periscopepb.ListTenantActivityResponse, error) {
+func (f *fakeActivityClient) ListTenantActivity(ctx context.Context, timeRange *periscope.TimeRangeOpts, tenantIDs []string, limit int32) (*periscopepb.ListTenantActivityResponse, error) {
 	f.gotLimit = limit
 	if timeRange != nil {
 		f.gotWindow = timeRange.EndTime.Sub(timeRange.StartTime)

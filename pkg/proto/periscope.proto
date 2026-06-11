@@ -661,6 +661,11 @@ message GetPlatformOverviewResponse {
 message ListTenantActivityRequest {
   common.TimeRange time_range = 1;  // defaults to the trailing 7 days
   int32 limit = 2;                  // max tenants returned; 0 = server default (100)
+  // Restrict the rollup to these tenants. Empty = all tenants, ranked by
+  // viewer hours and truncated by limit; callers reading a SPECIFIC tenant
+  // must filter here — client-side filtering of the ranked list misses any
+  // tenant outside the top `limit`.
+  repeated string tenant_ids = 3;
 }
 
 message TenantActivity {

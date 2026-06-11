@@ -28,7 +28,7 @@ type Interface interface {
 	GetLiveNodes(ctx context.Context, tenantID string, nodeID *string, relatedTenantIDs []string) (*periscopepb.GetLiveNodesResponse, error)
 	GetRoutingEvents(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts, relatedTenantIDs []string, subjectTenantID, clusterID *string) (*periscopepb.GetRoutingEventsResponse, error)
 	GetPlatformOverview(ctx context.Context, tenantID string, timeRange *TimeRangeOpts) (*periscopepb.GetPlatformOverviewResponse, error)
-	ListTenantActivity(ctx context.Context, timeRange *TimeRangeOpts, limit int32) (*periscopepb.ListTenantActivityResponse, error)
+	ListTenantActivity(ctx context.Context, timeRange *TimeRangeOpts, tenantIDs []string, limit int32) (*periscopepb.ListTenantActivityResponse, error)
 	GetNetworkLiveStats(ctx context.Context) (*periscopepb.GetNetworkLiveStatsResponse, error)
 	GetClipEvents(ctx context.Context, tenantID string, streamID *string, stage *string, contentType *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetClipEventsResponse, error)
 	GetArtifactState(ctx context.Context, tenantID string, requestID string) (*periscopepb.GetArtifactStateResponse, error)

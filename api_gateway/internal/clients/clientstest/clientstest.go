@@ -14,6 +14,7 @@ package clientstest
 import (
 	"context"
 	"io"
+	"sync"
 
 	"frameworks/api_gateway/internal/clients"
 
@@ -101,6 +102,7 @@ func SolventPurser() *FakePurser {
 // the backend" assertions).
 type FakeCommodore struct {
 	commodore.Interface
+	mu    sync.Mutex
 	Calls int
 
 	GetStreamFn       func(ctx context.Context, streamID string) (*commodorepb.Stream, error)
@@ -146,6 +148,7 @@ type FakeCommodore struct {
 	LinkWalletFn                  func(ctx context.Context, address, message, signature string) (*commodorepb.WalletIdentity, error)
 	ListPullSourceEventsFn        func(ctx context.Context, req *commodorepb.ListPullSourceEventsRequest) (*commodorepb.ListPullSourceEventsResponse, error)
 	ListStorageArtifactsFn        func(ctx context.Context, req *commodorepb.ListStorageArtifactsRequest) (*commodorepb.ListStorageArtifactsResponse, error)
+	GetTenantUserCountFn          func(ctx context.Context, tenantID string) (*commodorepb.GetTenantUserCountResponse, error)
 	ListVodAssetsFn               func(ctx context.Context, tenantID string, pagination *commonpb.CursorPaginationRequest, streamID *string, opts ...commodore.MediaListOptions) (*sharedpb.ListVodAssetsResponse, error)
 	LoginFn                       func(ctx context.Context, req *commodorepb.LoginRequest) (*commodorepb.AuthResponse, error)
 	RefreshTokenFn                func(ctx context.Context, refreshToken string) (*commodorepb.AuthResponse, error)
@@ -435,6 +438,7 @@ func (f *FakeCommodore) GetSigningKey(ctx context.Context, id string) (*commodor
 // func fields. Calls counts every backed method invocation.
 type FakePeriscope struct {
 	periscope.Interface
+	mu    sync.Mutex
 	Calls int
 
 	GetArtifactStatesByIDsFn func(ctx context.Context, tenantID string, requestIDs []string, contentType *string) (*periscopepb.GetArtifactStatesResponse, error)
@@ -456,6 +460,7 @@ type FakePeriscope struct {
 	GetNodeMetricsFn            func(ctx context.Context, tenantID string, nodeID *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*periscopepb.GetNodeMetricsResponse, error)
 	GetPlatformOverviewFn       func(ctx context.Context, tenantID string, timeRange *periscope.TimeRangeOpts) (*periscopepb.GetPlatformOverviewResponse, error)
 	GetNetworkLiveStatsFn       func(ctx context.Context) (*periscopepb.GetNetworkLiveStatsResponse, error)
+	ListTenantActivityFn        func(ctx context.Context, timeRange *periscope.TimeRangeOpts, tenantIDs []string, limit int32) (*periscopepb.ListTenantActivityResponse, error)
 	GetStreamHealthSummaryFn    func(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts) (*periscopepb.GetStreamHealthSummaryResponse, error)
 	GetNodePerformance5mFn      func(ctx context.Context, tenantID string, nodeID *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*periscopepb.GetNodePerformance5MResponse, error)
 
@@ -648,6 +653,7 @@ func (f *FakePeriscope) GetStreamHealthSummary(ctx context.Context, tenantID str
 // backed by func fields. Calls counts every backed method invocation.
 type FakeQuartermaster struct {
 	quartermaster.Interface
+	mu    sync.Mutex
 	Calls int
 
 	GetNodeFn               func(ctx context.Context, nodeID string) (*quartermasterpb.NodeResponse, error)
@@ -656,6 +662,9 @@ type FakeQuartermaster struct {
 	ListServiceInstancesFn  func(ctx context.Context, clusterID, serviceID, nodeID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListServiceInstancesResponse, error)
 	ListMySubscriptionsFn   func(ctx context.Context, req *quartermasterpb.ListMySubscriptionsRequest) (*quartermasterpb.ListClustersResponse, error)
 	ListClustersByOwnerFn   func(ctx context.Context, ownerTenantID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error)
+	ListClustersFn          func(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error)
+	ListTenantsFn           func(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListTenantsResponse, error)
+	GetTenantsByClusterFn   func(ctx context.Context, clusterID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.GetTenantsByClusterResponse, error)
 	CreateEnrollmentTokenFn func(ctx context.Context, req *quartermasterpb.CreateEnrollmentTokenRequest) (*quartermasterpb.CreateBootstrapTokenResponse, error)
 
 	GetTenantFn                  func(ctx context.Context, tenantID string) (*quartermasterpb.GetTenantResponse, error)
@@ -838,12 +847,14 @@ func (f *FakeQuartermaster) CreateEnrollmentToken(ctx context.Context, req *quar
 // fields. Calls counts every backed method invocation.
 type FakePurser struct {
 	purser.Interface
+	mu    sync.Mutex
 	Calls int
 
-	GetBillingDetailsFn      func(ctx context.Context, tenantID string) (*purserpb.BillingDetails, error)
-	GetPrepaidBalanceFn      func(ctx context.Context, tenantID, currency string) (*purserpb.PrepaidBalance, error)
-	GetTenantBillingStatusFn func(ctx context.Context, tenantID string) (*purserpb.GetTenantBillingStatusResponse, error)
-	GetPaymentRequirementsFn func(ctx context.Context, tenantID, resource string) (*purserpb.PaymentRequirements, error)
+	GetBillingDetailsFn          func(ctx context.Context, tenantID string) (*purserpb.BillingDetails, error)
+	GetPrepaidBalanceFn          func(ctx context.Context, tenantID, currency string) (*purserpb.PrepaidBalance, error)
+	GetTenantBillingStatusFn     func(ctx context.Context, tenantID string) (*purserpb.GetTenantBillingStatusResponse, error)
+	ListTenantBillingSnapshotsFn func(ctx context.Context, tenantIDs []string, limit int32) (*purserpb.ListTenantBillingSnapshotsResponse, error)
+	GetPaymentRequirementsFn     func(ctx context.Context, tenantID, resource string) (*purserpb.PaymentRequirements, error)
 
 	GetBillingTiersFn             func(ctx context.Context, includeInactive bool, pagination *commonpb.CursorPaginationRequest) (*purserpb.GetBillingTiersResponse, error)
 	GetInvoiceFn                  func(ctx context.Context, invoiceID string) (*purserpb.GetInvoiceResponse, error)

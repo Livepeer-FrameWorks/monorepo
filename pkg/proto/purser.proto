@@ -37,6 +37,11 @@ service BillingService {
   // Called by Commodore/Quartermaster to check suspension/balance status.
   // Returns minimal info needed for gating decisions.
   rpc GetTenantBillingStatus(GetTenantBillingStatusRequest) returns (GetTenantBillingStatusResponse);
+
+  // Cross-tenant billing snapshot for the platform-operator god view.
+  // Deliberately has no tenant scope; the server only answers
+  // service-credential calls (the gateway gates the operator first).
+  rpc ListTenantBillingSnapshots(ListTenantBillingSnapshotsRequest) returns (ListTenantBillingSnapshotsResponse);
 }
 
 // SubscriptionService handles tenant subscriptions
@@ -136,6 +141,32 @@ service ClusterPricingService {
 // Used by Commodore (ValidateStreamKey, isTenantSuspended) and Quartermaster (ValidateTenant).
 message GetTenantBillingStatusRequest {
   string tenant_id = 1;
+}
+
+// Cross-tenant billing snapshot for the platform-operator god view
+// (gateway /admin pages).
+message ListTenantBillingSnapshotsRequest {
+  repeated string tenant_ids = 1;  // empty = all subscriptions (capped by limit)
+  int32 limit = 2;                 // max rows returned; 0 = server default (500)
+}
+
+message TenantBillingSnapshot {
+  string tenant_id = 1;
+  string billing_model = 2;                          // 'postpaid' or 'prepaid'
+  string status = 3;                                 // subscription status
+  string tier_id = 4;
+  string tier_name = 5;
+  google.protobuf.Timestamp trial_ends_at = 6;
+  google.protobuf.Timestamp next_billing_date = 7;
+  double outstanding_amount = 8;                     // pending+overdue invoice total
+  int32 overdue_invoices = 9;
+  int64 prepaid_balance_cents = 10;
+  string currency = 11;
+  google.protobuf.Timestamp subscribed_at = 12;      // subscription created_at
+}
+
+message ListTenantBillingSnapshotsResponse {
+  repeated TenantBillingSnapshot snapshots = 1;
 }
 
 // Minimal billing status for gating decisions.

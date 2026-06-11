@@ -248,6 +248,14 @@ func (c *GRPCClient) ListTenants(ctx context.Context, pagination *commonpb.Curso
 	})
 }
 
+// GetTenantsByCluster lists the tenants assigned to a cluster.
+func (c *GRPCClient) GetTenantsByCluster(ctx context.Context, clusterID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.GetTenantsByClusterResponse, error) {
+	return c.tenant.GetTenantsByCluster(ctx, &quartermasterpb.GetTenantsByClusterRequest{
+		ClusterId:  clusterID,
+		Pagination: pagination,
+	})
+}
+
 // CreateTenant creates a new tenant
 func (c *GRPCClient) CreateTenant(ctx context.Context, req *quartermasterpb.CreateTenantRequest) (*quartermasterpb.CreateTenantResponse, error) {
 	return c.tenant.CreateTenant(ctx, req)

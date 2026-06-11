@@ -159,6 +159,16 @@ func (c *GRPCClient) GetTenantBillingStatus(ctx context.Context, tenantID string
 	})
 }
 
+// ListTenantBillingSnapshots returns the cross-tenant billing snapshot for
+// the platform-operator god view. The server only answers service-credential
+// calls; callers must not carry user/tenant identity in ctx.
+func (c *GRPCClient) ListTenantBillingSnapshots(ctx context.Context, tenantIDs []string, limit int32) (*purserpb.ListTenantBillingSnapshotsResponse, error) {
+	return c.billing.ListTenantBillingSnapshots(ctx, &purserpb.ListTenantBillingSnapshotsRequest{
+		TenantIds: tenantIDs,
+		Limit:     limit,
+	})
+}
+
 // ============================================================================
 // BILLING TIER OPERATIONS
 // ============================================================================

@@ -51,6 +51,7 @@ var mustSucceedQueries = []string{
 	"networkStatus",
 	"mollieMandates",
 	"serviceInstancesHealth",
+	"platform",
 }
 
 // mustSucceedMutations are mutation fields whose demo path returns synthesized

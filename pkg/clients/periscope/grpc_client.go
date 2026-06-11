@@ -497,10 +497,13 @@ func (c *GRPCClient) GetPlatformOverview(ctx context.Context, tenantID string, t
 
 // ListTenantActivity returns the cross-tenant activity rollup for the
 // platform-operator god view. No tenant scope; the server only answers
-// service-credential calls.
-func (c *GRPCClient) ListTenantActivity(ctx context.Context, timeRange *TimeRangeOpts, limit int32) (*periscopepb.ListTenantActivityResponse, error) {
+// service-credential calls. tenantIDs restricts the rollup to specific
+// tenants — required when reading one tenant, because the unfiltered list
+// is ranked and truncated by limit.
+func (c *GRPCClient) ListTenantActivity(ctx context.Context, timeRange *TimeRangeOpts, tenantIDs []string, limit int32) (*periscopepb.ListTenantActivityResponse, error) {
 	return c.platform.ListTenantActivity(ctx, &periscopepb.ListTenantActivityRequest{
 		TimeRange: buildTimeRange(timeRange),
+		TenantIds: tenantIDs,
 		Limit:     limit,
 	})
 }

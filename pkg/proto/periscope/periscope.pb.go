@@ -5403,9 +5403,14 @@ func (x *GetPlatformOverviewResponse) GetTimeRange() *common.TimeRange {
 // (`frameworks admin tenants activity`). Deliberately has no tenant scope;
 // the server only answers service-credential calls.
 type ListTenantActivityRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TimeRange     *common.TimeRange      `protobuf:"bytes,1,opt,name=time_range,json=timeRange,proto3" json:"time_range,omitempty"` // defaults to the trailing 7 days
-	Limit         int32                  `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`                         // max tenants returned; 0 = server default (100)
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	TimeRange *common.TimeRange      `protobuf:"bytes,1,opt,name=time_range,json=timeRange,proto3" json:"time_range,omitempty"` // defaults to the trailing 7 days
+	Limit     int32                  `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`                         // max tenants returned; 0 = server default (100)
+	// Restrict the rollup to these tenants. Empty = all tenants, ranked by
+	// viewer hours and truncated by limit; callers reading a SPECIFIC tenant
+	// must filter here — client-side filtering of the ranked list misses any
+	// tenant outside the top `limit`.
+	TenantIds     []string `protobuf:"bytes,3,rep,name=tenant_ids,json=tenantIds,proto3" json:"tenant_ids,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5452,6 +5457,13 @@ func (x *ListTenantActivityRequest) GetLimit() int32 {
 		return x.Limit
 	}
 	return 0
+}
+
+func (x *ListTenantActivityRequest) GetTenantIds() []string {
+	if x != nil {
+		return x.TenantIds
+	}
+	return nil
 }
 
 type TenantActivity struct {
@@ -18082,11 +18094,13 @@ const file_periscope_proto_rawDesc = "" +
 	"\vtotal_views\x18\x14 \x01(\x03R\n" +
 	"totalViews\x120\n" +
 	"\n" +
-	"time_range\x18\x15 \x01(\v2\x11.common.TimeRangeR\ttimeRangeJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04\"c\n" +
+	"time_range\x18\x15 \x01(\v2\x11.common.TimeRangeR\ttimeRangeJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04\"\x82\x01\n" +
 	"\x19ListTenantActivityRequest\x120\n" +
 	"\n" +
 	"time_range\x18\x01 \x01(\v2\x11.common.TimeRangeR\ttimeRange\x12\x14\n" +
-	"\x05limit\x18\x02 \x01(\x05R\x05limit\"\xae\x03\n" +
+	"\x05limit\x18\x02 \x01(\x05R\x05limit\x12\x1d\n" +
+	"\n" +
+	"tenant_ids\x18\x03 \x03(\tR\ttenantIds\"\xae\x03\n" +
 	"\x0eTenantActivity\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12!\n" +
 	"\flive_streams\x18\x02 \x01(\x05R\vliveStreams\x12'\n" +

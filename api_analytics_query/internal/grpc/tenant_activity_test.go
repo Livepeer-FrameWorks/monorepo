@@ -108,6 +108,38 @@ func TestListTenantActivity_MergesRollupsAndSortsByViewerHours(t *testing.T) {
 	}
 }
 
+// A tenant filter must reach the SQL: reading a specific tenant through the
+// unfiltered ranked list silently zeroes out tenants outside the top-limit.
+func TestListTenantActivity_FiltersToRequestedTenants(t *testing.T) {
+	server, mock := newTenantActivityServer(t)
+
+	day := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
+	filtered := `(?s)tenant_id IN \(\?\)`
+	mock.ExpectQuery(`(?s)FROM stream_runtime_daily.*` + filtered).
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "ingest_hours", "last_stream_day"}).
+			AddRow("tenant-small", 0.5, day))
+	mock.ExpectQuery(`(?s)FROM tenant_viewer_daily.*` + filtered).
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "viewer_hours", "egress_gb", "unique_viewers", "total_sessions"}))
+	mock.ExpectQuery(`(?s)FROM api_usage_daily.*` + filtered).
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "requests", "errors"}))
+	mock.ExpectQuery(`(?s)FROM stream_state_current FINAL.*` + filtered).
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "live_streams", "current_viewers"}))
+
+	resp, err := server.ListTenantActivity(context.Background(), &periscopepb.ListTenantActivityRequest{
+		TenantIds: []string{"tenant-small"},
+		Limit:     1,
+	})
+	if err != nil {
+		t.Fatalf("ListTenantActivity: %v", err)
+	}
+	if len(resp.Tenants) != 1 || resp.Tenants[0].TenantId != "tenant-small" {
+		t.Fatalf("expected the filtered tenant, got %+v", resp.Tenants)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestListTenantActivity_AppliesLimit(t *testing.T) {
 	server, mock := newTenantActivityServer(t)
 
