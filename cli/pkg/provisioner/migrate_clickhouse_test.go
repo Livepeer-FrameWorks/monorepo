@@ -120,6 +120,78 @@ func TestValidateClickHouseMigrationSetRejectsMutationInExpand(t *testing.T) {
 	}
 }
 
+func TestValidateClickHouseMigrationSetRejectsDictionaryExpressionDefault(t *testing.T) {
+	migrations := []Migration{
+		{
+			Database: "periscope",
+			Version:  "v0.3.1",
+			Phase:    "expand",
+			Sequence: 1,
+			Path:     "clickhouse/migrations/periscope/v0.3.1/expand/001_bad.sql",
+			content: `CREATE DICTIONARY IF NOT EXISTS tenant_dim
+(
+    id UUID,
+    created_at DateTime DEFAULT toDateTime(0)
+)
+PRIMARY KEY id
+SOURCE(POSTGRESQL(NAME quartermaster_pg TABLE 'tenants'))
+LAYOUT(COMPLEX_KEY_HASHED())
+LIFETIME(MIN 300 MAX 600);`,
+		},
+	}
+	err := validateClickHouseMigrationSet(migrations)
+	if err == nil {
+		t.Fatal("expected validation error for dictionary DEFAULT toDateTime(0)")
+	}
+	if !IsMigrationValidationError(err) {
+		t.Fatalf("got %T, want MigrationValidationError", err)
+	}
+	if !strings.Contains(err.Error(), "plain literals") {
+		t.Fatalf("error message missing literal-DEFAULT hint: %v", err)
+	}
+}
+
+func TestValidateClickHouseMigrationSetAcceptsDictionaryLiteralDefault(t *testing.T) {
+	migrations := []Migration{
+		{
+			Database: "periscope",
+			Version:  "v0.3.1",
+			Phase:    "expand",
+			Sequence: 1,
+			Path:     "clickhouse/migrations/periscope/v0.3.1/expand/001_ok.sql",
+			content: `CREATE DICTIONARY IF NOT EXISTS tenant_dim
+(
+    id UUID,
+    name String DEFAULT '',
+    created_at DateTime DEFAULT '1970-01-01 00:00:00'
+)
+PRIMARY KEY id
+SOURCE(POSTGRESQL(NAME quartermaster_pg TABLE 'tenants'))
+LAYOUT(COMPLEX_KEY_HASHED())
+LIFETIME(MIN 300 MAX 600);`,
+		},
+	}
+	if err := validateClickHouseMigrationSet(migrations); err != nil {
+		t.Fatalf("validateClickHouseMigrationSet rejected literal dictionary DEFAULTs: %v", err)
+	}
+}
+
+func TestValidateClickHouseMigrationSetAcceptsTableExpressionDefault(t *testing.T) {
+	migrations := []Migration{
+		{
+			Database: "periscope",
+			Version:  "v0.3.1",
+			Phase:    "expand",
+			Sequence: 1,
+			Path:     "clickhouse/migrations/periscope/v0.3.1/expand/001_ok.sql",
+			content:  "CREATE TABLE IF NOT EXISTS periscope.foo (id UUID, ts DateTime DEFAULT now()) ENGINE = MergeTree ORDER BY id;",
+		},
+	}
+	if err := validateClickHouseMigrationSet(migrations); err != nil {
+		t.Fatalf("validateClickHouseMigrationSet rejected table expression DEFAULT (only dictionaries forbid them): %v", err)
+	}
+}
+
 func TestValidateClickHouseMigrationSetAcceptsSafeExpand(t *testing.T) {
 	migrations := []Migration{
 		{

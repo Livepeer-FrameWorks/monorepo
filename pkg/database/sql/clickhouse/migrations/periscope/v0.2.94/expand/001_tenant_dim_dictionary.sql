@@ -13,6 +13,8 @@
 -- The same DDL is appended to the baseline periscope.sql so a fresh init
 -- and an upgrade converge on the same schema.
 
+-- Attribute DEFAULTs must be plain parseable literals: expressions like
+-- toDateTime(0) are a hard SYNTAX_ERROR in dictionary DDL.
 CREATE DICTIONARY IF NOT EXISTS tenant_dim
 (
     id UUID,
@@ -20,7 +22,7 @@ CREATE DICTIONARY IF NOT EXISTS tenant_dim
     subdomain String DEFAULT '',
     deployment_tier String DEFAULT '',
     is_active UInt8 DEFAULT 0,
-    created_at DateTime DEFAULT toDateTime(0)
+    created_at DateTime DEFAULT '1970-01-01 00:00:00'
 )
 PRIMARY KEY id
 SOURCE(POSTGRESQL(NAME quartermaster_pg TABLE 'tenants'))

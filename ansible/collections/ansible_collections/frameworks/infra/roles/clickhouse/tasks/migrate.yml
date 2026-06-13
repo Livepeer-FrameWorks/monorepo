@@ -210,7 +210,12 @@
   loop: "{{ clickhouse_migrate_items | default([]) }}"
   loop_control:
     label: "{{ item.db }}/{{ item.version }}/{{ item.phase }}/{{ item.filename }}"
+  # no_log because the command argv carries --password. failed_when: false so
+  # a failure does not abort while still redacted; the follow-up task below
+  # re-raises only per-item stderr, which does not include the argv password.
   no_log: "{{ clickhouse_default_password | length > 0 }}"
+  register: clickhouse_migrate_apply
+  failed_when: false
   changed_when: true
   vars:
     migration_key: "{{ item.version ~ ':' ~ item.phase ~ ':' ~ (item.sequence | string) }}"
@@ -232,3 +237,20 @@
     - clickhouse_migrate_items | default([]) | length > 0
     - migration_key not in ((clickhouse_ledger_by_db | default({}))[item.db] | default({}))
     - not ansible_check_mode
+
+# Surfaces the clickhouse-client error that the redacted apply task above
+# swallowed. stderr does not include the argv password.
+- name: Fail on ClickHouse migration errors
+  ansible.builtin.fail:
+    msg: |-
+      ClickHouse migration(s) failed:
+      {% for result in clickhouse_migrate_apply.results | default([]) %}
+      {% if (result.rc | default(0)) != 0 %}
+      - {{ result.item.db }}/{{ result.item.version }}/{{ result.item.phase }}/{{ result.item.filename }} (rc={{ result.rc }}):
+        {{ result.stderr | default('') | indent(2) }}
+      {% endif %}
+      {% endfor %}
+  when: >-
+    clickhouse_migrate_apply.results | default([])
+    | selectattr('rc', 'defined') | selectattr('rc', 'ne', 0)
+    | list | length > 0

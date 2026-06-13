@@ -293,6 +293,11 @@ var (
 	chMutationPattern     = regexp.MustCompile(`(?is)\bALTER\s+TABLE\b[^;]*\b(UPDATE|DELETE)\b`)
 	chCreateObjectPattern = regexp.MustCompile(`(?is)\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:MATERIALIZED\s+)?(?:TABLE|VIEW|DICTIONARY)\b`)
 	chIfNotExistsPattern  = regexp.MustCompile(`(?is)\bIF\s+NOT\s+EXISTS\b`)
+	// Dictionary attribute DEFAULTs must be plain literals; ClickHouse
+	// rejects expressions like `DEFAULT toDateTime(0)` with a SYNTAX_ERROR
+	// at apply time (table-column DEFAULT expressions are fine).
+	chCreateDictionaryPattern = regexp.MustCompile(`(?is)\bCREATE\s+DICTIONARY\b`)
+	chDictExprDefaultPattern  = regexp.MustCompile(`(?i)\bDEFAULT\s+[A-Za-z_][A-Za-z0-9_]*\s*\(`)
 )
 
 func validateClickHouseMigrationSet(migrations []Migration) error {
@@ -351,6 +356,12 @@ func validateClickHouseMigrationSet(migrations []Migration) error {
 					issues = append(issues, MigrationValidationIssue{
 						Path:    migration.Path,
 						Message: "CREATE TABLE/VIEW/DICTIONARY must use IF NOT EXISTS for idempotent re-apply against an existing baseline",
+					})
+				}
+				if chCreateDictionaryPattern.MatchString(stmt) && chDictExprDefaultPattern.MatchString(stmt) {
+					issues = append(issues, MigrationValidationIssue{
+						Path:    migration.Path,
+						Message: "CREATE DICTIONARY attribute DEFAULTs must be plain literals (e.g. '1970-01-01 00:00:00', not toDateTime(0)); ClickHouse rejects expression defaults at apply time",
 					})
 				}
 			}
