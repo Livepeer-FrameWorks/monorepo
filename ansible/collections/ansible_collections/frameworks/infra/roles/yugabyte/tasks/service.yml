@@ -67,6 +67,9 @@
       check_mode: false
       changed_when: false
 
+    # Skipped under --check: the start above never ran there, and a
+    # live-health assert in the no-op precheck would block the very
+    # provision run that repairs a down master.
     - name: Assert yb-master is running before starting tserver
       ansible.builtin.assert:
         that:
@@ -74,6 +77,7 @@
         fail_msg: >-
           yb-master not running
           (state={{ ansible_facts.services.get(yugabyte_master_service ~ '.service', {}).get('state', 'missing') }})
+      when: not ansible_check_mode
   rescue:
     - name: Capture yb-master systemctl status
       ansible.builtin.command:

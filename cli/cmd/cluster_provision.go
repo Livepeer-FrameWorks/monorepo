@@ -1393,6 +1393,19 @@ func serviceExists(state *detect.ServiceState) bool {
 	return state != nil && state.Exists
 }
 
+// provisionNeededWithoutPrecheck reports whether a service must be
+// provisioned regardless of config drift, making the no-op precheck moot:
+// an installed-but-not-running service is always provisioned to restore
+// service state (the same outcome the precheck's no-change arm reaches),
+// and role prechecks may probe live endpoints even under --check, so
+// asking first can only fail or be ignored. Relies on the detector
+// contract that Exists means "managed artifact installed", never
+// "currently active" — a genuinely absent install reports Exists:false
+// and takes the first-install path instead.
+func provisionNeededWithoutPrecheck(state *detect.ServiceState, deferStart bool) bool {
+	return serviceExists(state) && !deferStart && !serviceRunning(state)
+}
+
 type serviceClusterAssignmentClient interface {
 	AssignServiceToCluster(ctx context.Context, req *quartermasterpb.AssignServiceToClusterRequest) error
 	DrainServiceInstance(ctx context.Context, req *quartermasterpb.DrainServiceInstanceRequest) (*quartermasterpb.DrainServiceInstanceResponse, error)
@@ -3596,28 +3609,6 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 	return result
 }
 
-func defaultVictoriaMetricsHost(manifest *inventory.Manifest) (string, int) {
-	if manifest == nil {
-		return "", 0
-	}
-	obs, ok := manifest.Observability["victoriametrics"]
-	if !ok || !obs.Enabled {
-		return "", 0
-	}
-	hostName := obs.Host
-	if hostName == "" && len(obs.Hosts) > 0 {
-		hostName = obs.Hosts[0]
-	}
-	if hostName == "" {
-		return "", 0
-	}
-	port, err := resolvePort("victoriametrics", obs)
-	if err != nil || port == 0 {
-		port = provisioner.ServicePorts["victoriametrics"]
-	}
-	return manifestMeshHostname(manifest, hostName), port
-}
-
 func defaultVictoriaMetricsWriteURL(manifest *inventory.Manifest) string {
 	if manifest == nil {
 		return ""
@@ -3652,14 +3643,6 @@ func defaultVMAUTHWriteURL(manifest *inventory.Manifest) string {
 		return ""
 	}
 	return fmt.Sprintf("http://vmauth.internal:%d/api/v1/write", port)
-}
-
-func defaultVictoriaMetricsDatasourceURL(manifest *inventory.Manifest) string {
-	host, port := defaultVictoriaMetricsHost(manifest)
-	if host == "" || port == 0 {
-		return ""
-	}
-	return fmt.Sprintf("http://%s:%d/prometheus", host, port)
 }
 
 // buildPrivateerStaticPeers emits the static-peers.json payload for the
@@ -5774,14 +5757,14 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 
 	provisionSkipped := false
 	if !force && serviceExists(beforeState) {
-		wouldChange, checkErr := provisionWouldChange(ctx, prov, host, config, nil)
-		if checkErr != nil {
-			return nil, fmt.Errorf("%s precheck failed: %w (use --force to bypass the no-op precheck)", task.Name, checkErr)
-		}
-		if !wouldChange {
-			if !config.DeferStart && !serviceRunning(beforeState) {
-				fmt.Printf("  %s on %s has unchanged managed files but is not running; running provision to restore service state\n", task.Name, task.Host)
-			} else {
+		if provisionNeededWithoutPrecheck(beforeState, config.DeferStart) {
+			fmt.Printf("  %s on %s is not running; skipping no-op precheck and provisioning to restore service state\n", task.Name, task.Host)
+		} else {
+			wouldChange, checkErr := provisionWouldChange(ctx, prov, host, config, nil)
+			if checkErr != nil {
+				return nil, fmt.Errorf("%s precheck failed: %w (use --force to bypass the no-op precheck)", task.Name, checkErr)
+			}
+			if !wouldChange {
 				provisionSkipped = true
 				fmt.Printf("  %s on %s already matches desired install/config/service state; skipping provision\n", task.Name, task.Host)
 			}
@@ -6544,10 +6527,11 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		}
 	}
 
-	if baseName == "grafana" && env["VICTORIAMETRICS_URL"] == "" {
-		if url := defaultVictoriaMetricsDatasourceURL(manifest); url != "" {
-			env["VICTORIAMETRICS_URL"] = url
-		}
+	// Stock Grafana installs plugins listed in GF_INSTALL_PLUGINS at
+	// container start; both datasource plugins must be present before
+	// `cluster grafana sync` can create the managed datasources.
+	if baseName == "grafana" && env["GF_INSTALL_PLUGINS"] == "" {
+		env["GF_INSTALL_PLUGINS"] = "grafana-clickhouse-datasource,victoriametrics-metrics-datasource"
 	}
 	if baseName != "navigator" {
 		removeNavigatorInternalCAEnv(env)

@@ -13,9 +13,36 @@ import (
 	"time"
 
 	"frameworks/cli/internal/readiness"
+	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
 )
+
+// Three-state contract: not installed → first-install path (helper false,
+// precheck already bypassed by the serviceExists guard); installed but not
+// running → provision without asking the precheck (helper true); installed
+// and running → precheck decides (helper false). DeferStart suppresses the
+// bypass: a deliberately-not-started service may still be a clean skip.
+func TestProvisionNeededWithoutPrecheck(t *testing.T) {
+	cases := []struct {
+		name       string
+		state      *detect.ServiceState
+		deferStart bool
+		want       bool
+	}{
+		{"nil state", nil, false, false},
+		{"not installed", &detect.ServiceState{Exists: false, Running: false}, false, false},
+		{"installed and running", &detect.ServiceState{Exists: true, Running: true}, false, false},
+		{"installed but down", &detect.ServiceState{Exists: true, Running: false}, false, true},
+		{"installed but down, deferred start", &detect.ServiceState{Exists: true, Running: false}, true, false},
+		{"running flag without exists", &detect.ServiceState{Exists: false, Running: true}, false, false},
+	}
+	for _, tc := range cases {
+		if got := provisionNeededWithoutPrecheck(tc.state, tc.deferStart); got != tc.want {
+			t.Errorf("%s: provisionNeededWithoutPrecheck = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
 
 func TestPhaseRunsPostProvisionInit(t *testing.T) {
 	cases := map[orchestrator.Phase]bool{

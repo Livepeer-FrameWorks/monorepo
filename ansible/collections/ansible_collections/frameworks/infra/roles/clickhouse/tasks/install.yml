@@ -160,8 +160,12 @@
         enabled: true
         daemon_reload: false
 
+    # Skipped under --check: the service was never actually (re)started
+    # there, and a live-health assert in the no-op precheck would block the
+    # very provision run that repairs a down server.
     - name: Probe ClickHouse locally after start
       ansible.builtin.include_tasks: _probe_client.yml
+      when: not ansible_check_mode
 
   rescue:
     - name: Capture clickhouse-server systemctl status after failed start
