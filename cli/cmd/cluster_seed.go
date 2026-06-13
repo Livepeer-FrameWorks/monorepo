@@ -123,13 +123,17 @@ func runSeed(cmd *cobra.Command, rc *resolvedCluster, demo, force bool) error {
 
 		applyItems := func(items []map[string]any, kind, label string) error {
 			fmt.Fprintf(cmd.OutOrStdout(), "Applying %s %s seeds...\n", serviceName, kind)
+			// The role vars builders resolve pinned install metadata from the
+			// release manifest even for seed-only runs.
 			cfg := provisioner.ServiceConfig{
 				Port: pg.EffectivePort(),
 				Metadata: map[string]any{
+					"platform_channel":  manifest.ResolvedChannel(),
 					"postgres_password": password,
 					itemsKey:            items,
 				},
 			}
+			rc.applyReleaseMetadata(cfg.Metadata)
 			prov, provErr := provisioner.GetProvisioner(serviceName, sshPool)
 			if provErr != nil {
 				return provErr
@@ -230,10 +234,12 @@ func runSeed(cmd *cobra.Command, rc *resolvedCluster, demo, force bool) error {
 				chCfg := provisioner.ServiceConfig{
 					Port: chPort,
 					Metadata: map[string]any{
+						"platform_channel":      manifest.ResolvedChannel(),
 						"clickhouse_password":   chPassword,
 						"clickhouse_seed_items": items,
 					},
 				}
+				rc.applyReleaseMetadata(chCfg.Metadata)
 				chProv, chErr := provisioner.GetProvisioner("clickhouse", sshPool)
 				if chErr != nil {
 					return chErr
