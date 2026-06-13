@@ -20,7 +20,6 @@
         'EDGE_PUBLIC_URL': 'https://' ~ helmsman_edge_domain ~ '/view',
         'EDGE_DOMAIN': helmsman_edge_domain,
         'FOGHORN_CONTROL_ADDR': helmsman_foghorn_grpc_addr,
-        'EDGE_ENROLLMENT_TOKEN': helmsman_enrollment_token,
         'ACME_EMAIL': helmsman_acme_email | default('', true),
         'DEPLOY_MODE': helmsman_deploy_mode,
         'MISTSERVER_URL': 'http://' ~ helmsman_mist_api_upstream,

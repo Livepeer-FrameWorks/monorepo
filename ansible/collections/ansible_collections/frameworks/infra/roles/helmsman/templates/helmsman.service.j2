@@ -11,6 +11,7 @@ SupplementaryGroups={{ helmsman_extra_groups }}
 {% endif %}
 WorkingDirectory={{ helmsman_install_dir }}
 EnvironmentFile={{ helmsman_env_file }}
+EnvironmentFile=-{{ helmsman_enroll_env_file }}
 ExecStart={{ helmsman_install_dir }}/helmsman
 Restart=always
 RestartSec=5

@@ -70,6 +70,14 @@ type EdgeProvisionConfig struct {
 	FetchCert     bool
 	DryRun        bool
 
+	// AlreadyEnrolled marks a node whose prior provision completed: identity
+	// comes from the remote install and no enrollment token is needed —
+	// Foghorn resolves reconnecting nodes by fingerprint and ignores tokens.
+	// ForceReenroll overrides that (wiped control-plane state) and also
+	// re-renders the write-once bootstrap files on the host.
+	AlreadyEnrolled bool
+	ForceReenroll   bool
+
 	Timeout       time.Duration
 	Force         bool
 	Version       string
@@ -111,6 +119,9 @@ func (c *EdgeProvisionConfig) resolvedMode() string {
 }
 
 func (c *EdgeProvisionConfig) requireEnrollmentToken() error {
+	if c.AlreadyEnrolled && !c.ForceReenroll {
+		return nil
+	}
 	if strings.TrimSpace(c.EnrollmentToken) != "" {
 		return nil
 	}
@@ -563,6 +574,171 @@ func (e *EdgeProvisioner) Detect(ctx context.Context, host inventory.Host) (*det
 	}
 
 	return &detect.ServiceState{Exists: false, Running: false}, nil
+}
+
+// EdgeEnrollment is the identity a completed edge install left on the host.
+type EdgeEnrollment struct {
+	NodeID      string
+	EdgeDomain  string
+	FoghornAddr string
+	ClusterID   string
+	Mode        string // "docker" | "native" (best-effort, from Detect)
+	Running     bool
+}
+
+// Enrolled reports whether the host carries a completed enrollment.
+func (e *EdgeEnrollment) Enrolled() bool {
+	return e != nil && e.NodeID != ""
+}
+
+// edgeEnrollmentEnvCandidates are the env files a completed provision renders,
+// in probe order: linux native, darwin system, darwin user, docker compose.
+// The env file is the enrollment marker — it is written only by a completed
+// install, survives helmsman downtime, and carries the identity to reuse.
+var edgeEnrollmentEnvCandidates = []string{
+	"/etc/frameworks/helmsman.env",
+	"/usr/local/etc/frameworks/helmsman.env",
+	"$HOME/.config/frameworks/helmsman.env",
+	"/opt/frameworks/edge/.edge.env",
+}
+
+// DetectEnrollment reports whether the host already carries an enrolled edge
+// install and, if so, the node identity to reuse. Provision uses this to skip
+// PreRegisterEdge and the enrollment-token requirement on re-runs — Foghorn
+// resolves reconnecting nodes by fingerprint, so re-presenting a token only
+// churns config files.
+//
+// The marker files are secret-bearing (0600, owned by frameworks/root), so a
+// plain SSH user cannot read them directly; the probe falls back to
+// passwordless sudo — the same privilege Ansible's become path requires. A
+// marker that exists but is unreadable is an error, never "fresh": treating
+// an enrolled node as fresh causes exactly the identity churn this detection
+// prevents.
+func (e *EdgeProvisioner) DetectEnrollment(ctx context.Context, host inventory.Host) (*EdgeEnrollment, error) {
+	// Two readability paths, both fail closed (exit 4) when the marker
+	// exists but its contents can't be trusted — never silently "fresh",
+	// which would re-pre-register and churn the node identity.
+	//
+	// Direct read ([ -r ]): plain grep. rc 0 (keys found) and 1 (no keys in
+	// a readable file) are both genuine — print and exit 0; rc >=2 is a read
+	// failure (I/O error, file vanished) — exit 4.
+	//
+	// Privileged read: sudoers is per-command, so probing `sudo -n true`
+	// proves nothing about `sudo -n grep` (policy may allow one and deny the
+	// other — and a denied sudo also exits 1, indistinguishable from grep's
+	// no-match). Instead the read runs under one `sudo -n sh -c` that emits a
+	// sentinel only after the grep actually executes; if sudo refuses
+	// (policy or auth), the sentinel is absent and we exit 4. With the
+	// sentinel present, grep's own rc (0 or 1) is trustworthy.
+	result, err := e.RunCommand(ctx, host, edgeEnrollmentProbeScript(edgeEnrollmentEnvCandidates))
+	enrollment, err := classifyEnrollmentProbe(result, err, host.User)
+	if err != nil {
+		return nil, err
+	}
+	if !enrollment.Enrolled() {
+		return enrollment, nil
+	}
+	if state, detectErr := e.Detect(ctx, host); detectErr == nil && state != nil {
+		enrollment.Running = state.Running
+		enrollment.Mode = state.Metadata["mode"]
+	}
+	return enrollment, nil
+}
+
+// edgeEnrollmentProbeScript builds the POSIX-sh probe that reads the
+// enrollment identity from the first marker file that exists, over the given
+// candidate paths.
+//
+// Two readability paths, both fail closed (exit 4) when the marker exists but
+// its contents can't be trusted — never silently "fresh", which would
+// re-pre-register and churn the node identity.
+//
+// Direct read ([ -r ]): plain grep. rc 0 (keys found) and 1 (no keys in a
+// readable file) are both genuine — print and exit 0; rc >=2 is a read
+// failure (I/O error, file vanished) — exit 4.
+//
+// Privileged read: sudoers is per-command, so probing `sudo -n true` proves
+// nothing about `sudo -n grep` (policy may allow one and deny the other — and
+// a denied sudo also exits 1, indistinguishable from grep's no-match).
+// Instead the read runs under one `sudo -n sh -c` that emits a sentinel only
+// when grep actually ran AND returned a trustworthy rc (0 or 1). Sentinel
+// absent ⇒ exit 4, covering both sudo refusal (policy or auth) and a
+// post-sudo read failure (grep rc >=2: file vanished, I/O error) — the same
+// fail-closed rule as the direct branch.
+//
+// Exit codes consumed by classifyEnrollmentProbe: 0 = identity printed (may
+// be empty → fresh), 3 = no marker file exists (fresh), 4 = marker exists but
+// unreadable (error, never fresh).
+func edgeEnrollmentProbeScript(candidates []string) string {
+	return `for f in ` + strings.Join(candidates, " ") + `; do
+  [ -f "$f" ] || continue
+  if [ -r "$f" ]; then
+    out=$(grep -E '^(NODE_ID|EDGE_DOMAIN|FOGHORN_CONTROL_ADDR|CLUSTER_ID)=' "$f" 2>/dev/null)
+    [ $? -le 1 ] || exit 4
+    printf '%s\n' "$out"
+    exit 0
+  fi
+  out=$(sudo -n sh -c 'grep -E "^(NODE_ID|EDGE_DOMAIN|FOGHORN_CONTROL_ADDR|CLUSTER_ID)=" "$1" 2>/dev/null; [ $? -le 1 ] && printf __PROBE_OK__' _ "$f" 2>/dev/null)
+  case "$out" in
+    *__PROBE_OK__) printf '%s' "${out%__PROBE_OK__}"; exit 0 ;;
+    *) exit 4 ;;
+  esac
+done
+exit 3`
+}
+
+// classifyEnrollmentProbe maps the probe script's outcome to an enrollment
+// state. The runners return a non-nil error for ANY non-zero exit (see
+// ssh.Client.Run), so the script's deliberate exit codes (3 = fresh host,
+// 4 = marker unreadable) arrive alongside an error and must be classified
+// from result.ExitCode, never from err.
+func classifyEnrollmentProbe(result *ssh.CommandResult, runErr error, sshUser string) (*EdgeEnrollment, error) {
+	if result == nil {
+		if runErr == nil {
+			runErr = fmt.Errorf("no command result")
+		}
+		return nil, fmt.Errorf("edge: detect enrollment: %w", runErr)
+	}
+	switch result.ExitCode {
+	case 0:
+		return parseEdgeEnrollmentEnv(result.Stdout), nil
+	case 3:
+		return &EdgeEnrollment{}, nil
+	case 4:
+		return nil, fmt.Errorf("edge: existing edge install detected but its identity file could not be read (passwordless sudo missing for %s, or the privileged read failed); fix sudo or pass --force-reenroll", sshUser)
+	default:
+		// -1 = runner/process failure, 255 = ssh transport failure; anything
+		// else is an unexpected probe outcome. All are errors, never "fresh".
+		detail := strings.TrimSpace(result.Stderr)
+		if detail == "" && runErr != nil {
+			detail = runErr.Error()
+		}
+		return nil, fmt.Errorf("edge: detect enrollment probe failed (exit %d): %s", result.ExitCode, detail)
+	}
+}
+
+// parseEdgeEnrollmentEnv extracts the enrollment identity from KEY=VALUE
+// lines of a rendered helmsman/edge env file.
+func parseEdgeEnrollmentEnv(content string) *EdgeEnrollment {
+	enrollment := &EdgeEnrollment{}
+	for line := range strings.SplitSeq(content, "\n") {
+		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		switch key {
+		case "NODE_ID":
+			enrollment.NodeID = value
+		case "EDGE_DOMAIN":
+			enrollment.EdgeDomain = value
+		case "FOGHORN_CONTROL_ADDR":
+			enrollment.FoghornAddr = value
+		case "CLUSTER_ID":
+			enrollment.ClusterID = value
+		}
+	}
+	return enrollment
 }
 
 // Validate is a TCP probe of the edge's HTTPS listener. The full role-side

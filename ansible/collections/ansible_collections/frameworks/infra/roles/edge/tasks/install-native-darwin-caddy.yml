@@ -33,6 +33,7 @@
     dest: "{{ edge_darwin_base_dir }}/caddy"
     remote_src: true
     creates: "{{ edge_caddy_install_sentinel }}"
+  register: edge_caddy_extract_result
   when: not ansible_check_mode
 
 - name: Mark caddy install sentinel and ensure binary is executable (darwin)
@@ -44,11 +45,41 @@
     creates: "{{ edge_caddy_install_sentinel }}"
   when: not ansible_check_mode
 
+# The component updater (helmsman) owns this file at runtime. Stamp only
+# when this run actually installed the pinned artifact, or the key was never
+# seeded — never regress a version the updater recorded.
+- name: Check recorded Caddy component version (darwin)
+  ansible.builtin.command:
+    argv:
+      - grep
+      - -q
+      - "^CADDY_VERSION="
+      - "{{ edge_darwin_conf_dir }}/component-versions.env"
+  register: edge_caddy_version_recorded
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Record Caddy version for the component updater (darwin)
+  ansible.builtin.lineinfile:
+    path: "{{ edge_darwin_conf_dir }}/component-versions.env"
+    regexp: "^CADDY_VERSION="
+    line: "CADDY_VERSION={{ edge_caddy_version }}"
+    create: true
+    mode: "0644"
+  when:
+    - not ansible_check_mode
+    - edge_caddy_version | length > 0
+    - (edge_caddy_extract_result is changed) or (edge_caddy_version_recorded.rc | default(1)) != 0
+
+# Helmsman persists its production Caddyfile to this same path after
+# ConfigSeed activation; force:false keeps this a first-boot-only render.
 - name: Render Caddyfile (darwin)
   ansible.builtin.template:
     src: Caddyfile.native.j2
     dest: "{{ edge_darwin_conf_dir }}/Caddyfile"
     mode: "0644"
+    force: "{{ edge_force_bootstrap_caddyfile | bool }}"
 
 - name: Render caddy env file (darwin)
   ansible.builtin.copy:

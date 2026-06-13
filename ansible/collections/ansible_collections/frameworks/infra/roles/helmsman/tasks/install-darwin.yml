@@ -44,6 +44,7 @@
     dest: "{{ helmsman_darwin_base_dir }}/helmsman"
     remote_src: true
     creates: "{{ helmsman_install_sentinel }}"
+  register: helmsman_extract_result
   notify: helmsman restart
   when: not ansible_check_mode
 
@@ -61,3 +62,33 @@
   args:
     creates: "{{ helmsman_install_sentinel }}"
   when: not ansible_check_mode
+
+# The component updater (helmsman itself) owns this file at runtime. Stamp
+# only when this run actually installed the pinned artifact, or the key was
+# never seeded — never regress a version the updater recorded.
+- name: Check recorded Helmsman component version
+  ansible.builtin.command:
+    argv:
+      - grep
+      - -q
+      - "^HELMSMAN_VERSION="
+      - "{{ helmsman_component_versions_file }}"
+  register: helmsman_version_recorded
+  changed_when: false
+  failed_when: false
+  when:
+    - not ansible_check_mode
+    - helmsman_component_versions_file | length > 0
+
+- name: Record Helmsman version for the component updater
+  ansible.builtin.lineinfile:
+    path: "{{ helmsman_component_versions_file }}"
+    regexp: "^HELMSMAN_VERSION="
+    line: "HELMSMAN_VERSION={{ helmsman_version }}"
+    create: true
+    mode: "0644"
+  when:
+    - not ansible_check_mode
+    - helmsman_component_versions_file | length > 0
+    - helmsman_version | length > 0
+    - (helmsman_extract_result is changed) or (helmsman_version_recorded.rc | default(1)) != 0

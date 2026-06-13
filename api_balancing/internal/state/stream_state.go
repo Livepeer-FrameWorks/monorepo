@@ -318,6 +318,12 @@ type NodeState struct {
 
 	// Activation probe: Foghorn verified this node's HTTPS endpoint is serving with valid TLS.
 	ProbeVerified bool `json:"probe_verified"`
+
+	// Announced-restart reconnect window. In-memory only, never serialized:
+	// only the conn-owner instance that received the announce may act on it,
+	// so it must not ride write-through snapshots to HA peers.
+	PendingReconnectUntil time.Time `json:"-"`
+	PendingReconnectSetAt time.Time `json:"-"`
 }
 
 type NodeOperationalMode string
@@ -1418,13 +1424,20 @@ func (sm *StreamStateManager) TouchNode(nodeID string, isHealthy bool) {
 	}
 	n.IsHealthy = isHealthy
 	n.IsStale = false
+	// Deliberately does NOT disarm the announced-restart window: the dying
+	// helmsman's heartbeat ticker and lifecycle poller keep sending during
+	// its post-announce drain, so a healthy touch can arrive between the
+	// announce and the disconnect. Only a re-register (control Register
+	// path) or finalization disarms the window.
 	now := time.Now()
 	n.LastUpdate = now
 	n.LastHeartbeat = now
-	nodePayload, _ := json.Marshal(n)
+	nodePayload, err := json.Marshal(n)
 	sm.mu.Unlock()
 
-	sm.persistNodeWriteThrough(nodeID, nodePayload)
+	if err == nil {
+		sm.persistNodeWriteThrough(nodeID, nodePayload)
+	}
 	sm.MarkNodeDNSChanged(nodeID)
 }
 

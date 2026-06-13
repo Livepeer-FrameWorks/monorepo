@@ -479,6 +479,12 @@ func sendDesiredStateResult(msg *ipcpb.ControlMessage, restartSelf bool, logger 
 
 func scheduleSelfRestart(logger logging.Logger) {
 	go func() {
+		// Exiting here bypasses the signal handler, so announce the
+		// planned restart explicitly — otherwise Foghorn sees a bare
+		// disconnect and publishes the node unhealthy to DNS.
+		if err := AnnounceRestart(logger); err != nil && logger != nil {
+			logger.WithError(err).Warn("Failed to announce self-update restart to Foghorn")
+		}
 		time.Sleep(500 * time.Millisecond)
 		if logger != nil {
 			logger.Info("Restarting Helmsman after self-update")

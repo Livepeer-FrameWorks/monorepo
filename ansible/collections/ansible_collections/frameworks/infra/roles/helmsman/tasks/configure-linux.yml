@@ -21,6 +21,23 @@
   no_log: true
   notify: helmsman restart
 
+# Write-once: a fresh token on re-provision must not restart an enrolled
+# node (Foghorn ignores the token once the node fingerprint resolves). The
+# notify only fires when the file is actually (re)written — first boot or
+# an explicit force-reenroll.
+- name: Render enrollment env file
+  ansible.builtin.copy:
+    dest: "{{ helmsman_enroll_env_file }}"
+    content: |
+      EDGE_ENROLLMENT_TOKEN={{ helmsman_enrollment_token }}
+    owner: "{{ helmsman_user }}"
+    group: "{{ helmsman_group }}"
+    mode: "0600"
+    force: "{{ helmsman_force_reenroll | bool }}"
+  no_log: true
+  when: helmsman_enrollment_token | length > 0
+  notify: helmsman restart
+
 - name: Render systemd unit
   ansible.builtin.template:
     src: helmsman.service.j2

@@ -246,10 +246,76 @@ func releaseConnOwnerForDisconnect(nodeID string, log logging.Logger) bool {
 func cleanupControlDisconnect(nodeID, canonicalID string, stream ipcpb.HelmsmanControl_ConnectServer, log logging.Logger) {
 	for _, id := range removeCurrentControlConn(nodeID, canonicalID, stream) {
 		if releaseConnOwnerForDisconnect(id, log) {
-			state.DefaultManager().MarkNodeDisconnected(id)
+			// An announced restart (helmsman's "node_restarting" lifecycle
+			// event) holds node health until the reconnect deadline: the
+			// data plane keeps serving while the sidecar restarts. The conn
+			// owner is still released above so the node can reconnect to any
+			// HA instance. Unannounced disconnects (crash, SIGKILL) have no
+			// armed window and go unhealthy immediately.
+			if deadline, ok := state.DefaultManager().NodePendingReconnect(id); ok && time.Now().Before(deadline) {
+				log.WithFields(logging.Fields{
+					"node_id":  id,
+					"deadline": deadline.Format(time.RFC3339),
+				}).Info("Deferring disconnect for announced restart")
+				deferPendingDisconnect(id, deadline, log)
+			} else {
+				state.DefaultManager().MarkNodeDisconnected(id)
+			}
 		}
 		ForgetManagedStreamLastSent(id)
 	}
+}
+
+// armRestartWindow arms the announced-restart reconnect window for the
+// node's registered and canonical identifiers — disconnect cleanup checks
+// the window per identifier, and fingerprint resolution can rewrite the id.
+// Must run synchronously in the control receive loop: helmsman exits
+// ~500ms after announcing, and the async trigger path both races the
+// disconnect cleanup and drops triggers from no-longer-current streams.
+func armRestartWindow(nodeID string, stream ipcpb.HelmsmanControl_ConnectServer, log logging.Logger) {
+	canonicalNodeID := nodeID
+	if registry != nil {
+		registry.mu.RLock()
+		if c, ok := registry.conns[nodeID]; ok && c.stream == stream && c.canonicalID != "" {
+			canonicalNodeID = c.canonicalID
+		}
+		registry.mu.RUnlock()
+	}
+	deadline := time.Now().Add(state.RestartReconnectWindow())
+	state.DefaultManager().SetNodePendingReconnect(nodeID, deadline)
+	if canonicalNodeID != nodeID {
+		state.DefaultManager().SetNodePendingReconnect(canonicalNodeID, deadline)
+	}
+	log.WithFields(logging.Fields{
+		"node_id":  canonicalNodeID,
+		"deadline": deadline.Format(time.RFC3339),
+	}).Info("Helmsman announced restart; holding node health for reconnect window")
+}
+
+func deferPendingDisconnect(nodeID string, deadline time.Time, log logging.Logger) {
+	time.AfterFunc(time.Until(deadline), func() {
+		finalizePendingDisconnect(nodeID, log)
+	})
+}
+
+// finalizePendingDisconnect runs when an announced-restart window expires.
+// No-ops when the node already reconnected: the Register path (this
+// instance) disarms the window, and a Redis conn owner means the node
+// reconnected to another HA instance — a stale unhealthy publish from the
+// old owner would fight that instance's healthy state.
+func finalizePendingDisconnect(nodeID string, log logging.Logger) {
+	if _, ok := state.DefaultManager().NodePendingReconnect(nodeID); !ok {
+		return
+	}
+	if rs := GetRedisStore(); rs != nil {
+		if owner, err := rs.GetConnOwner(context.Background(), nodeID); err == nil && owner.InstanceID != "" {
+			state.DefaultManager().ClearNodePendingReconnect(nodeID)
+			return
+		}
+	}
+	state.DefaultManager().ClearNodePendingReconnect(nodeID)
+	state.DefaultManager().MarkNodeDisconnected(nodeID)
+	log.WithField("node_id", nodeID).Warn("Announced restart did not reconnect in time; marking node disconnected")
 }
 
 // lockedStream serializes Send on a single Helmsman control stream. gRPC's
@@ -1209,6 +1275,15 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 				}
 			}
 
+			// A successful re-register is the ONLY disarm for an
+			// announced-restart window (besides finalization): heartbeats
+			// can't disarm it because the pre-restart process keeps
+			// heartbeating through its post-announce drain.
+			state.DefaultManager().ClearNodePendingReconnect(canonicalNodeID)
+			if canonicalNodeID != nodeID {
+				state.DefaultManager().ClearNodePendingReconnect(nodeID)
+			}
+
 			// Store canonical node ID back into conn for cert refresh and other lookups
 			if canonicalNodeID != nodeID {
 				registry.mu.Lock()
@@ -1416,6 +1491,14 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 		case *ipcpb.ControlMessage_MistTrigger:
 			// Handle MistServer trigger forwarding from Helmsman
 			incMistTrigger(x.MistTrigger.GetTriggerType(), x.MistTrigger.GetBlocking(), "received")
+			// Arm the announced-restart window synchronously, before the
+			// goroutine dispatch: helmsman exits ~500ms after announcing,
+			// and once disconnect cleanup runs, processMistTrigger drops
+			// the trigger as coming from a stale stream — the announce
+			// would be lost exactly when it matters.
+			if nu := x.MistTrigger.GetNodeLifecycleUpdate(); nu != nil && nu.GetEventType() == state.EventNodeRestarting {
+				armRestartWindow(nodeID, stream, registry.log)
+			}
 			go processMistTrigger(x.MistTrigger, nodeID, stream, registry.log)
 		case *ipcpb.ControlMessage_FreezePermissionRequest:
 			// Handle freeze permission request from Helmsman (cold storage)

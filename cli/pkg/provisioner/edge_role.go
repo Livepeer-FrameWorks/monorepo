@@ -155,16 +155,20 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 		"edge_acme_email":        config.Email,
 		"edge_foghorn_grpc_addr": config.FoghornGRPCAddr,
 		"edge_enrollment_token":  config.EnrollmentToken,
-		"edge_telemetry_url":     config.TelemetryURL,
-		"edge_telemetry_token":   config.TelemetryToken,
-		"edge_cert_pem":          config.CertPEM,
-		"edge_key_pem":           config.KeyPEM,
-		"edge_ca_bundle_pem":     config.CABundlePEM,
-		"edge_mist_api_password": mistPass,
-		"edge_mistserver_image":  "mistserver:latest",
-		"edge_caddy_image":       "caddy:2.8.4",
-		"edge_helmsman_image":    "frameworks/helmsman:latest",
-		"edge_darwin_domain":     darwinDomain,
+		// Write-once bootstrap files (enrollment token env, bootstrap
+		// Caddyfile) are only re-rendered on an explicit re-enroll.
+		"edge_force_reenroll":            config.ForceReenroll,
+		"edge_force_bootstrap_caddyfile": config.ForceReenroll,
+		"edge_telemetry_url":             config.TelemetryURL,
+		"edge_telemetry_token":           config.TelemetryToken,
+		"edge_cert_pem":                  config.CertPEM,
+		"edge_key_pem":                   config.KeyPEM,
+		"edge_ca_bundle_pem":             config.CABundlePEM,
+		"edge_mist_api_password":         mistPass,
+		"edge_mistserver_image":          "mistserver:latest",
+		"edge_caddy_image":               "caddy:2.8.4",
+		"edge_helmsman_image":            "frameworks/helmsman:latest",
+		"edge_darwin_domain":             darwinDomain,
 	}
 	if config.BandwidthMbps < 0 {
 		return nil, fmt.Errorf("edge: bandwidth_mbps must be non-negative")

@@ -16,6 +16,14 @@ edge_acme_email: ""
 edge_foghorn_grpc_addr: ""
 edge_enrollment_token: ""
 
+# Re-enrollment knobs. The bootstrap Caddyfile and the enrollment-token env
+# file are write-once: helmsman owns the Caddyfile after ConfigSeed
+# activation, and Foghorn ignores tokens for already-registered nodes. Set
+# true (CLI --force-reenroll) to overwrite both when re-enrolling a node
+# that was wiped from the control plane.
+edge_force_bootstrap_caddyfile: false
+edge_force_reenroll: false
+
 # Optional: pre-staged wildcard cert (otherwise ConfigSeed writes it post-
 # enrollment). Both halves are required together.
 edge_cert_pem: ""
@@ -69,6 +77,12 @@ edge_config_schema_version: ""
 # Remote filesystem layout. Shared by docker + native modes.
 edge_base_dir: /opt/frameworks/edge
 edge_conf_dir: /etc/frameworks
+
+# Helmsman component-updater version file. Sub-roles stamp installed
+# versions here (instead of helmsman.env) so version bumps never restart
+# helmsman; the updater owns this file at runtime. Path must match
+# componentVersionPath() in api_sidecar/internal/updater.
+edge_component_versions_file: /etc/frameworks/component-versions.env
 edge_ca_path: /etc/frameworks/pki/ca.crt
 edge_cert_dir: /etc/frameworks/certs
 edge_storage_local_path: /var/lib/frameworks/edge-storage

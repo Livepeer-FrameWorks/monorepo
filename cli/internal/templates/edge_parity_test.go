@@ -68,13 +68,35 @@ func TestEdgeTemplateParity(t *testing.T) {
 		t.Error("jinja Caddyfile.docker should bind bootstrap HTTPS to edge_domain for SNI")
 	}
 
-	wantEnvKeys := []string{"NODE_ID", "EDGE_DOMAIN", "FOGHORN_CONTROL_ADDR", "EDGE_ENROLLMENT_TOKEN", "DEPLOY_MODE"}
+	wantEnvKeys := []string{"NODE_ID", "EDGE_DOMAIN", "FOGHORN_CONTROL_ADDR", "DEPLOY_MODE"}
 	for _, key := range wantEnvKeys {
 		if !strings.Contains(goEnv, key+"=") {
 			t.Errorf("go .edge.env missing key %q", key)
 		}
 		if !strings.Contains(jinjaEdgeEnv, key+"=") {
 			t.Errorf("jinja edge.env missing key %q", key)
+		}
+	}
+
+	// The enrollment token is split into a write-once env file on both
+	// surfaces so a fresh token on re-provision never changes .edge.env
+	// (compose recreates the helmsman container on env changes).
+	if strings.Contains(goEnv, "EDGE_ENROLLMENT_TOKEN") {
+		t.Error("go .edge.env must not carry the enrollment token")
+	}
+	if strings.Contains(jinjaEdgeEnv, "EDGE_ENROLLMENT_TOKEN") {
+		t.Error("jinja edge.env must not carry the enrollment token")
+	}
+	goEnroll := readFile(t, filepath.Join(tmpDir, ".edge-enroll.env"))
+	if !strings.Contains(goEnroll, "EDGE_ENROLLMENT_TOKEN=parity-token") {
+		t.Error("go .edge-enroll.env missing the enrollment token")
+	}
+	for _, surface := range []struct{ name, content string }{
+		{"go compose", goCompose},
+		{"jinja compose", jinjaCompose},
+	} {
+		if !strings.Contains(surface.content, ".edge-enroll.env") {
+			t.Errorf("%s must load the write-once enrollment env file", surface.name)
 		}
 	}
 

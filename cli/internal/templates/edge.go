@@ -202,6 +202,16 @@ scrape_configs:
 `
 	}
 
+	// The enrollment token lives in its own write-once file so a fresh token
+	// on re-render never changes .edge.env (compose recreates the helmsman
+	// container on env changes; Foghorn ignores tokens for enrolled nodes).
+	out = append(out, EdgeRenderedFile{
+		Path:      ".edge-enroll.env",
+		Content:   []byte("# Fill the enrollment token issued by FrameWorks\nEDGE_ENROLLMENT_TOKEN=" + vars.EnrollmentToken + "\n"),
+		Mode:      0o600,
+		WriteMode: EdgeWriteIfMissingOrOverwrite,
+	})
+
 	tplFiles := []struct{ in, out string }{
 		{"edge/Caddyfile.tmpl", "Caddyfile"},
 		{"edge/.edge.env.tmpl", ".edge.env"},

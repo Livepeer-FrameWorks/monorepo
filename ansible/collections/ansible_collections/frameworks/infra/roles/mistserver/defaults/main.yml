@@ -13,6 +13,11 @@ mistserver_install_debug_symbols: false
 mistserver_debug_symbols_dir: "{{ mistserver_install_dir }}/debug"
 mistserver_manifest_file: "{{ mistserver_install_dir }}/manifest.json"
 
+# Optional: helmsman component-updater version file (component-versions.env).
+# When set, the install tasks record MIST_VERSION there so helmsman reports
+# the installed version. Empty means no stamp (non-edge deployments).
+mistserver_component_versions_file: ""
+
 mistserver_api_user: frameworks
 # Required. Go-side callers generate a random hex string per host. Stored in
 # the env file with mode 0600 so only the mistserver user can read it.

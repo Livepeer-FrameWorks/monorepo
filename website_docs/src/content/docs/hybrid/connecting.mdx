@@ -82,10 +82,10 @@ By default, bootstrap tokens are single-use. Set `--usage-limit` if you need a r
 
 ### Enroll the Node
 
-First, add the enrollment token to your `.edge.env`:
+First, add the enrollment token to your `.edge-enroll.env` (kept separate from `.edge.env` so token changes never restart an enrolled node):
 
 ```bash
-# In .edge.env
+# In .edge-enroll.env
 EDGE_ENROLLMENT_TOKEN=your-enrollment-token
 ```
 

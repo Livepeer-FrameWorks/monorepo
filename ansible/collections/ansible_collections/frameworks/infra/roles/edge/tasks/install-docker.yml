@@ -61,17 +61,35 @@
     dest: "{{ edge_base_dir }}/maintenance.html"
     mode: "0644"
 
+# Helmsman (in the compose stack) persists its production Caddyfile to this
+# mounted path after ConfigSeed activation; force:false keeps this a
+# first-boot-only render.
 - name: Render bootstrap Caddyfile
   ansible.builtin.template:
     src: Caddyfile.docker.j2
     dest: "{{ edge_base_dir }}/Caddyfile"
     mode: "0644"
+    force: "{{ edge_force_bootstrap_caddyfile | bool }}"
 
 - name: Render edge env file
   ansible.builtin.template:
     src: edge.env.j2
     dest: "{{ edge_base_dir }}/.edge.env"
     mode: "0600"
+  no_log: true
+
+# Write-once: a fresh token on re-provision must not change the compose env
+# (which would recreate the helmsman container); Foghorn ignores tokens for
+# already-registered nodes. Token-less re-runs leave the existing file in
+# place; a fresh tokenless run writes an empty value (enrollment then fails
+# upstream at the CLI's token requirement, not here).
+- name: Render edge enrollment env file
+  ansible.builtin.copy:
+    dest: "{{ edge_base_dir }}/.edge-enroll.env"
+    content: |
+      EDGE_ENROLLMENT_TOKEN={{ edge_enrollment_token }}
+    mode: "0600"
+    force: "{{ (edge_force_reenroll | bool) and (edge_enrollment_token | length > 0) }}"
   no_log: true
 
 - name: Delegate to compose_stack for edge

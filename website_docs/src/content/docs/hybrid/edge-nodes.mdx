@@ -110,10 +110,16 @@ NODE_ID=edge-us-sea-1
 EDGE_PUBLIC_URL=https://stream.yourdomain.com/view
 FOGHORN_CONTROL_ADDR=foghorn.<media-cluster>.example.com:18029
 GRPC_TLS_CA_PATH=
-EDGE_ENROLLMENT_TOKEN=your-enrollment-token
 EDGE_DOMAIN=stream.yourdomain.com
 ACME_EMAIL=ops@yourdomain.com
 DEPLOY_MODE=docker
+```
+
+The enrollment token lives in its own file, `.edge-enroll.env`, so rotating or re-issuing a token never changes `.edge.env` (which would restart an enrolled node):
+
+```bash
+# In .edge-enroll.env
+EDGE_ENROLLMENT_TOKEN=your-enrollment-token
 ```
 
 `NODE_ID` must be stable and unique per node. `EDGE_PUBLIC_URL` should include the `/view` path. `FOGHORN_CONTROL_ADDR` is the Foghorn gRPC endpoint Helmsman needs at boot — the HTTP balancer base, TLS bundle, telemetry, and SiteConfig arrive over the live gRPC `ConfigSeed` stream once Helmsman connects.
@@ -137,7 +143,7 @@ HELMSMAN_STORAGE_LOCAL_PATH=/var/lib/mistserver/recordings
 frameworks edge enroll --dir /opt/frameworks-edge
 ```
 
-In Docker mode, this starts the containers and enrolls the node if `EDGE_ENROLLMENT_TOKEN` is set.
+In Docker mode, this starts the containers and enrolls the node if `EDGE_ENROLLMENT_TOKEN` is set in `.edge-enroll.env`.
 
 Check status:
 

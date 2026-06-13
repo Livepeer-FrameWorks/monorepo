@@ -543,6 +543,7 @@ func newEdgeProvisionCmd() *cobra.Command {
 	var skipPreflight bool
 	var applyTuning bool
 	var registerNode bool
+	var forceReenroll bool
 	var fetchCert bool
 	var manifestPath string
 	var clusterManifestPath string
@@ -597,7 +598,7 @@ Multi-node manifest example:
 
 			// Check if using manifest mode
 			if manifestPath != "" {
-				return runEdgeProvisionFromManifest(cmd, cliCtx, manifestPath, clusterManifestPath, sshKey, enrollmentToken, parallel, timeout, mode, version, ageKeyFile, dryRun, skipPreflight)
+				return runEdgeProvisionFromManifest(cmd, cliCtx, manifestPath, clusterManifestPath, sshKey, enrollmentToken, parallel, timeout, mode, version, ageKeyFile, dryRun, skipPreflight, forceReenroll)
 			}
 
 			// Default --cluster-id from context. --foghorn-addr is intentionally
@@ -609,6 +610,42 @@ Multi-node manifest example:
 			}
 			foghornAddrExplicit := cmd.Flags().Changed("foghorn-addr")
 
+			// Single node mode - require ssh target or --local
+			isLocal := local || sshTarget == "localhost" || sshTarget == "127.0.0.1"
+			if sshTarget == "" && !isLocal {
+				return fmt.Errorf("--ssh is required (user@host), --local for this machine, or --manifest for multi-node")
+			}
+
+			// Already-enrolled detection: a completed install leaves the
+			// rendered env file with the node identity. Reuse it instead of
+			// re-running PreRegisterEdge — Foghorn resolves enrolled nodes by
+			// fingerprint, so re-presenting a token only churns config files
+			// and risks a new node identity. Runs before the flag guards
+			// below: an enrolled node neutralizes --register and the token,
+			// so contradictory-but-ignorable flag combos must not error.
+			var enrollment *provisioner.EdgeEnrollment
+			if !forceReenroll {
+				var detectErr error
+				enrollment, detectErr = detectExistingEdgeEnrollment(cmd.Context(), sshTarget, sshKey, isLocal)
+				if detectErr != nil {
+					return detectErr
+				}
+			}
+			if enrollment != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "Node already enrolled as %s; reusing identity (use --force-reenroll to re-enroll)\n", enrollment.NodeID)
+				if enrollmentToken != "" {
+					fmt.Fprintln(cmd.OutOrStdout(), "  enrollment token ignored for already-enrolled node")
+					enrollmentToken = ""
+				}
+				if registerNode {
+					fmt.Fprintln(cmd.OutOrStdout(), "  --register skipped: node is already registered")
+					registerNode = false
+				}
+				if enrollment.Mode != "" && !cmd.Flags().Changed("mode") {
+					mode = enrollment.Mode
+				}
+			}
+
 			// --register belongs to the manual/admin path. The token path
 			// already registers the node via Foghorn's PreRegisterEdge.
 			if registerNode && enrollmentToken != "" {
@@ -617,11 +654,8 @@ Multi-node manifest example:
 			if registerNode && cliCtx.Persona != fwcfg.PersonaPlatform {
 				return fmt.Errorf("--register requires Quartermaster access; use a platform context for manual node registration")
 			}
-
-			// Single node mode - require ssh target or --local
-			isLocal := local || sshTarget == "localhost" || sshTarget == "127.0.0.1"
-			if sshTarget == "" && !isLocal {
-				return fmt.Errorf("--ssh is required (user@host), --local for this machine, or --manifest for multi-node")
+			if forceReenroll && enrollmentToken == "" && !registerNode {
+				return fmt.Errorf("--force-reenroll requires --enrollment-token (or --register to mint one)")
 			}
 
 			// PreRegisterEdge: if enrollment token is provided but domain is not,
@@ -629,6 +663,16 @@ Multi-node manifest example:
 			var preRegNodeID string
 			var preRegFoghornAddr string
 			var preRegCABundle string
+			if enrollment != nil {
+				preRegNodeID = enrollment.NodeID
+				preRegFoghornAddr = enrollment.FoghornAddr
+				if nodeDomain == "" {
+					nodeDomain = enrollment.EdgeDomain
+				}
+				if clusterID == "" {
+					clusterID = enrollment.ClusterID
+				}
+			}
 			if enrollmentToken != "" {
 				fmt.Fprintln(cmd.OutOrStdout(), "Pre-registering edge via enrollment token...")
 				preRegTarget := sshTarget
@@ -761,6 +805,8 @@ Multi-node manifest example:
 				Timeout:         timeout,
 				Version:         version,
 				DarwinDomain:    darwinDomain,
+				AlreadyEnrolled: enrollment != nil,
+				ForceReenroll:   forceReenroll,
 			}
 			if registerNode || fetchCert {
 				epConfig.BeforeInstall = func(ctx context.Context, cfg *provisioner.EdgeProvisionConfig) error {
@@ -824,6 +870,7 @@ Multi-node manifest example:
 	cmd.Flags().BoolVar(&skipPreflight, "skip-preflight", false, "Skip preflight checks")
 	cmd.Flags().BoolVar(&applyTuning, "tune", false, "Apply sysctl/limits tuning")
 	cmd.Flags().BoolVar(&registerNode, "register", false, "Register node in Quartermaster (DNS synced by Navigator reconciler)")
+	cmd.Flags().BoolVar(&forceReenroll, "force-reenroll", false, "Re-enroll an already-provisioned node (requires --enrollment-token; re-renders write-once bootstrap files)")
 	cmd.Flags().BoolVar(&fetchCert, "fetch-cert", false, "Fetch TLS certificate from Navigator (DNS-01 challenge)")
 	cmd.Flags().StringVar(&manifestPath, "manifest", "", "Path to edge manifest file (edges.yaml) for multi-node provisioning")
 	cmd.Flags().StringVar(&clusterManifestPath, "cluster-manifest", "", "Path to cluster manifest used for platform SERVICE_TOKEN in edge manifest mode")
@@ -850,7 +897,7 @@ type EdgeProvisionResult struct {
 }
 
 // runEdgeProvisionFromManifest provisions multiple edge nodes from a manifest file
-func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, manifestPath, clusterManifestOverride, defaultSSHKey, enrollmentToken string, parallel int, timeout time.Duration, cliMode, cliVersion, ageKeyFile string, dryRun, skipPreflight bool) error {
+func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, manifestPath, clusterManifestOverride, defaultSSHKey, enrollmentToken string, parallel int, timeout time.Duration, cliMode, cliVersion, ageKeyFile string, dryRun, skipPreflight, forceReenroll bool) error {
 	// Load manifest (with host inventory merge if hosts_file is set)
 	manifest, err := inventory.LoadEdgeWithHosts(manifestPath, ageKeyFile)
 	if err != nil {
@@ -984,7 +1031,7 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 				nodeVersion = cliVersion
 			}
 			nodeTelemetryURL := edgeManifestTelemetryWriteURL(manifest, clusterManifest, clusterID)
-			err := provisionSingleEdgeNode(cmd, controlCtx, n.SSH, sshKey, n.Name, nodeDomain, poolDomain, clusterID, n.Region, manifest.Email, token, n.ExternalIP, false, n.ApplyTune, n.RegisterQM, skipPreflight, timeout, nodeMode, nodeVersion, edgeManifestFoghornGRPCAddr(manifest.RootDomain, clusterID), controlCABundlePEM, nodeTelemetryURL, "", n.ResolvedCapabilities(manifest.Capabilities), n.ResolvedBandwidthMbps(manifest.BandwidthMbps), n.ResolvedMaxTranscodes(manifest.MaxTranscodes), n.ResolvedStorageBytes(manifest.StorageBytes), dryRun)
+			err := provisionSingleEdgeNode(cmd, controlCtx, n.SSH, sshKey, n.Name, nodeDomain, poolDomain, clusterID, n.Region, manifest.Email, token, n.ExternalIP, false, n.ApplyTune, n.RegisterQM, skipPreflight, timeout, nodeMode, nodeVersion, edgeManifestFoghornGRPCAddr(manifest.RootDomain, clusterID), controlCABundlePEM, nodeTelemetryURL, "", n.ResolvedCapabilities(manifest.Capabilities), n.ResolvedBandwidthMbps(manifest.BandwidthMbps), n.ResolvedMaxTranscodes(manifest.MaxTranscodes), n.ResolvedStorageBytes(manifest.StorageBytes), dryRun, forceReenroll)
 			if err != nil {
 				result.Error = err
 				result.Success = false
@@ -1329,7 +1376,41 @@ func populateEdgePreRegistration(ctx context.Context, cmd *cobra.Command, cliCtx
 // knownExternalIP, when non-empty, is the canonical IP from the manifest's
 // hosts inventory; it bypasses the remote ifconfig.me probe in both the
 // preregistration and Quartermaster registration paths.
-func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget, sshKey, nodeName, nodeDomain, poolDomain, clusterID, region, email, enrollmentToken, knownExternalIP string, fetchCert, applyTuning, registerNode, skipPreflight bool, timeout time.Duration, mode, version, foghornGRPCAddr, caBundlePEM, telemetryURL, telemetryToken string, capabilities []string, bandwidthMbps, maxTranscodes int, storageCapacityBytes uint64, dryRun bool) error {
+func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget, sshKey, nodeName, nodeDomain, poolDomain, clusterID, region, email, enrollmentToken, knownExternalIP string, fetchCert, applyTuning, registerNode, skipPreflight bool, timeout time.Duration, mode, version, foghornGRPCAddr, caBundlePEM, telemetryURL, telemetryToken string, capabilities []string, bandwidthMbps, maxTranscodes int, storageCapacityBytes uint64, dryRun, forceReenroll bool) error {
+	// Already-enrolled detection: reuse the identity a completed install
+	// left on the host instead of re-running PreRegisterEdge (Foghorn
+	// resolves enrolled nodes by fingerprint; a re-presented token only
+	// churns config files and risks a new node identity). Runs before the
+	// register_qm guards below: an enrolled node neutralizes register_qm and
+	// the token, so contradictory-but-ignorable combos must not error.
+	var enrollment *provisioner.EdgeEnrollment
+	if !forceReenroll && !dryRun {
+		var detectErr error
+		enrollment, detectErr = detectExistingEdgeEnrollment(cmd.Context(), sshTarget, sshKey, false)
+		if detectErr != nil {
+			return detectErr
+		}
+	}
+	var enrolledNodeID string
+	if enrollment != nil {
+		fmt.Fprintf(cmd.OutOrStdout(), "  - Node already enrolled as %s; reusing identity (use --force-reenroll to re-enroll)\n", enrollment.NodeID)
+		enrolledNodeID = enrollment.NodeID
+		enrollmentToken = ""
+		if registerNode {
+			fmt.Fprintln(cmd.OutOrStdout(), "  - register_qm skipped: node is already registered")
+			registerNode = false
+		}
+		if nodeDomain == "" {
+			nodeDomain = enrollment.EdgeDomain
+		}
+		if clusterID == "" {
+			clusterID = enrollment.ClusterID
+		}
+		if foghornGRPCAddr == "" {
+			foghornGRPCAddr = enrollment.FoghornAddr
+		}
+	}
+
 	// Same --register guards the single-node provision RunE applies. Manifest
 	// mode reaches this helper without going through that RunE, so duplicate
 	// the contract here to keep the rule single-source.
@@ -1399,7 +1480,7 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 		Email:           email,
 		EnrollmentToken: enrollmentToken,
 		FoghornGRPCAddr: foghornAddr,
-		NodeID:          firstNonEmpty(canonicalEdgeNodeID(nodeName), nodeName),
+		NodeID:          firstNonEmpty(enrolledNodeID, canonicalEdgeNodeID(nodeName), nodeName),
 		CABundlePEM:     edgeCABundlePEM,
 		TelemetryURL:    telemetryURL,
 		TelemetryToken:  telemetryToken,
@@ -1412,6 +1493,8 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 		Timeout:         timeout,
 		Version:         version,
 		DryRun:          dryRun,
+		AlreadyEnrolled: enrollment != nil,
+		ForceReenroll:   forceReenroll,
 	}
 	if registerNode || fetchCert {
 		config.BeforeInstall = func(ctx context.Context, cfg *provisioner.EdgeProvisionConfig) error {
@@ -1461,6 +1544,30 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// detectExistingEdgeEnrollment probes the target for a completed edge
+// install and returns its identity, or nil when the host is fresh. Probe
+// failures (unreachable host, identity file present but unreadable) abort
+// provisioning: proceeding as fresh on an enrolled node causes the identity
+// churn this detection exists to prevent.
+func detectExistingEdgeEnrollment(ctx context.Context, sshTarget, sshKey string, isLocal bool) (*provisioner.EdgeEnrollment, error) {
+	var host inventory.Host
+	if isLocal {
+		host = inventory.Host{ExternalIP: "localhost", User: os.Getenv("USER")}
+	} else {
+		host = sshTargetToHost(sshTarget)
+	}
+	pool := fwssh.NewPool(30*time.Second, sshKey)
+	ep := provisioner.NewEdgeProvisioner(pool)
+	enrollment, err := ep.DetectEnrollment(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	if !enrollment.Enrolled() {
+		return nil, nil
+	}
+	return enrollment, nil
 }
 
 // sshTargetToHost converts a "user@host" string into an inventory.Host.

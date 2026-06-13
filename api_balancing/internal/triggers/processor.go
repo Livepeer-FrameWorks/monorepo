@@ -3466,6 +3466,18 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *ipcpb.MistTrigger) (strin
 		"location":   nu.GetLocation(),
 	}).Info("Received NodeLifecycleUpdate from Helmsman")
 
+	// Announced restart: return before the snapshot writes below — the
+	// announce carries an empty payload that would wipe BaseURL/metrics via
+	// SetNodeInfo. The reconnect window itself is armed synchronously in the
+	// control receive loop (control.armRestartWindow): this handler runs in
+	// a goroutine that loses the race against disconnect cleanup when
+	// helmsman exits right after announcing, and the generic trigger path
+	// drops triggers from streams that are no longer current.
+	if nu.GetEventType() == state.EventNodeRestarting {
+		p.logger.WithField("node_id", nu.GetNodeId()).Info("Helmsman announced restart")
+		return "", false, nil
+	}
+
 	// Parse latitude/longitude for state manager
 	var latitude, longitude *float64
 	if geo.IsValidLatLon(nu.GetLatitude(), nu.GetLongitude()) {

@@ -16,41 +16,10 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
-	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"github.com/gin-gonic/gin"
 )
-
-// notifyFoghornShutdown sends a final health update to Foghorn before shutdown using shared client
-func notifyFoghornShutdown() error {
-	nodeID := control.GetCurrentNodeID()
-	if nodeID == "" {
-		nodeID = os.Getenv("NODE_ID")
-		if nodeID == "" {
-			nodeID = "unknown-node"
-		}
-	}
-
-	trigger := &ipcpb.MistTrigger{
-		TriggerType: "NODE_LIFECYCLE_UPDATE",
-		NodeId:      nodeID,
-		Timestamp:   time.Now().Unix(),
-		Blocking:    false,
-		RequestId:   "",
-		TriggerPayload: &ipcpb.MistTrigger_NodeLifecycleUpdate{
-			NodeLifecycleUpdate: &ipcpb.NodeLifecycleUpdate{
-				NodeId:    nodeID,
-				IsHealthy: false,
-				EventType: "node_shutdown",
-				Timestamp: time.Now().Unix(),
-			},
-		},
-	}
-
-	_, err := control.SendMistTrigger(trigger, logging.NewLoggerWithService("helmsman-shutdown"))
-	return err
-}
 
 func main() {
 	if version.HandleCLI() {
@@ -261,11 +230,14 @@ func main() {
 		// Stop cleanup monitor
 		handlers.StopCleanupMonitor()
 
-		// Try to notify Foghorn
-		if err := notifyFoghornShutdown(); err != nil {
-			logger.WithError(err).Error("Failed to notify Foghorn of shutdown")
+		// Announce the planned exit so Foghorn holds DNS health for a
+		// bounded reconnect window (systemd restarts us in seconds; the
+		// data plane keeps serving meanwhile). A crash skips this, so
+		// unannounced disconnects still go unhealthy immediately.
+		if err := control.AnnounceRestart(logging.NewLoggerWithService("helmsman-shutdown")); err != nil {
+			logger.WithError(err).Error("Failed to announce restart to Foghorn")
 		} else {
-			logger.Info("Successfully notified Foghorn of shutdown")
+			logger.Info("Announced restart to Foghorn")
 		}
 
 		// Brief pause to allow final messages to be sent

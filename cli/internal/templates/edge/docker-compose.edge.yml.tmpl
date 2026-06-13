@@ -44,6 +44,7 @@ services:
         hard: 1048576
     env_file:
       - .edge.env
+      - .edge-enroll.env
     environment:
       - HELMSMAN_WEBHOOK_URL=http://helmsman:18007
       - MISTSERVER_URL=http://mistserver:4242

@@ -34,6 +34,15 @@ helmsman_user: frameworks
 helmsman_group: frameworks
 helmsman_install_dir: /opt/frameworks/helmsman
 helmsman_env_file: /etc/frameworks/helmsman.env
+# Enrollment token lives in its own write-once env file so a fresh token on
+# re-provision doesn't diff helmsman.env and restart the service (Foghorn
+# ignores tokens for already-registered nodes; fingerprint resolution wins).
+helmsman_enroll_env_file: /etc/frameworks/helmsman-enroll.env
+helmsman_force_reenroll: false
+# Optional: helmsman component-updater version file (component-versions.env).
+# When set, the install tasks record HELMSMAN_VERSION there. Empty means no
+# stamp.
+helmsman_component_versions_file: ""
 helmsman_systemd_name: frameworks-helmsman
 helmsman_unit_path: "/etc/systemd/system/{{ helmsman_systemd_name }}.service"
 helmsman_port: 18007

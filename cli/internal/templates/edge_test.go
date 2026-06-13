@@ -49,6 +49,7 @@ func TestRenderEdgeTemplates_dockerModeFullSet(t *testing.T) {
 	}
 	slices.Sort(paths)
 	want := []string{
+		".edge-enroll.env",
 		".edge.env",
 		"Caddyfile",
 		"docker-compose.edge.yml",
@@ -131,10 +132,25 @@ func TestRenderEdgeTemplates_envFileHasExpectedKeys(t *testing.T) {
 		t.Fatalf(".edge.env missing")
 	}
 	content := string(env.Content)
-	for _, key := range []string{"NODE_ID=edge-test", "EDGE_DOMAIN=edge.example.com", "ENROLLMENT_TOKEN=TOKEN_ABC", "DEPLOY_MODE=docker"} {
+	for _, key := range []string{"NODE_ID=edge-test", "EDGE_DOMAIN=edge.example.com", "DEPLOY_MODE=docker"} {
 		if !strings.Contains(content, key) {
 			t.Errorf(".edge.env missing %q; got:\n%s", key, content)
 		}
+	}
+	// The token lives in its own write-once file so a fresh token never
+	// changes .edge.env (compose recreates helmsman on env changes).
+	if strings.Contains(content, "EDGE_ENROLLMENT_TOKEN") {
+		t.Errorf(".edge.env must not carry the enrollment token; got:\n%s", content)
+	}
+	enroll, ok := fileByPath(files, ".edge-enroll.env")
+	if !ok {
+		t.Fatalf(".edge-enroll.env missing")
+	}
+	if !strings.Contains(string(enroll.Content), "EDGE_ENROLLMENT_TOKEN=TOKEN_ABC") {
+		t.Errorf(".edge-enroll.env missing token; got:\n%s", enroll.Content)
+	}
+	if enroll.WriteMode != EdgeWriteIfMissingOrOverwrite {
+		t.Errorf(".edge-enroll.env must be write-once (EdgeWriteIfMissingOrOverwrite), got %v", enroll.WriteMode)
 	}
 }
 

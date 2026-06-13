@@ -581,11 +581,19 @@ Manage repo-owned Metabase content for a cluster.
 
 ### frameworks cluster metabase sync
 
-Sync the managed Periscope cards from `infrastructure/metabase/periscope_cards.yaml`
-to Metabase. The command creates missing cards and updates cards that still
-carry the Frameworks managed hash. Existing cards without that marker are left
-alone unless `--adopt` confirms the SQL already matches, or `--force` is used
-to replace them.
+Sync the FrameWorks-managed Metabase card specs. Without `--file`, every spec
+embedded in the CLI (`pkg/metabase/specs/`) is synced to the dashboard it
+declares; missing collections and dashboards are created automatically. The
+Metabase URL is derived from the cluster manifest's `root_domain`
+(`https://metabase.<root_domain>`) and the API key is read from the manifest
+env_files (`METABASE_API_KEY`); flags and environment variables override both.
+The only manual prerequisite is the Metabase database connection itself (it
+carries the ClickHouse credentials).
+
+The command creates missing cards and updates cards that still carry the
+Frameworks managed hash. Existing cards without that marker are left alone
+unless `--adopt` confirms the SQL already matches, or `--force` is used to
+replace them.
 
 **Usage:**
 
@@ -595,13 +603,13 @@ frameworks cluster metabase sync [flags]
 
 **Flags:**
 
-- `--url string` - Metabase base URL (defaults to `METABASE_URL`)
+- `--url string` - Metabase base URL (defaults to `METABASE_URL`, else derived from the manifest)
 - `--session-id string` - Metabase session ID (defaults to `METABASE_SESSION_ID`)
-- `--api-key string` - Metabase API key (defaults to `METABASE_API_KEY`)
-- `--file string` - Managed card spec file
+- `--api-key string` - Metabase API key (defaults to `METABASE_API_KEY`, else the manifest env_files)
+- `--file string` - Sync a single card spec file instead of the embedded specs
 - `--database string` / `--database-id int` - Target Metabase database
 - `--collection string` / `--collection-id int` - Target collection
-- `--dashboard string` / `--dashboard-id int` - Dashboard to attach cards to
+- `--dashboard string` / `--dashboard-id int` - Dashboard override (requires `--file`)
 - `--dry-run` - Print intended changes without writing
 - `--adopt` - Mark matching unmanaged cards as Frameworks-managed
 - `--force` - Replace existing unmanaged cards
@@ -611,6 +619,48 @@ frameworks cluster metabase sync [flags]
 ```bash
 frameworks cluster metabase sync --url http://localhost:3001 --session-id "$METABASE_SESSION_ID" --dry-run
 frameworks cluster metabase sync --url https://metabase.example.com --api-key "$METABASE_API_KEY" --adopt
+```
+
+### frameworks cluster grafana
+
+Manage repo-owned Grafana content for a cluster.
+
+### frameworks cluster grafana sync
+
+Sync the repo-owned Grafana dashboard (the consolidated FrameWorks Ops,
+embedded in the CLI from `pkg/grafana/dashboards/`) into the `FrameWorks`
+folder, creating the folder and the pinned datasources it references when
+missing: uid `victoriametrics` (the VictoriaMetrics datasource plugin,
+addressed by mesh IP from the manifest) and uid `clickhouse` (the dedicated
+`frameworks_analytics` ClickHouse user, password from
+`CLICKHOUSE_ANALYTICS_PASSWORD` in the manifest env_files — the same identity
+the Metabase datasource uses). The Grafana URL is derived from the manifest's `root_domain` and
+credentials come from `GF_SECURITY_ADMIN_USER` / `GF_SECURITY_ADMIN_PASSWORD`;
+flags and environment variables override both.
+
+Dashboards are pushed with `overwrite` keyed on their stable uid, so the sync
+is idempotent and UI edits to the managed dashboard are overwritten on the
+next sync — the repo is the source of truth. Hand-created datasources keep
+their own uids and are never touched.
+
+**Usage:**
+
+```bash
+frameworks cluster grafana sync [flags]
+```
+
+**Flags:**
+
+- `--url string` - Grafana base URL (defaults to `GRAFANA_URL`, else derived from the manifest)
+- `--api-key string` - Grafana service-account token (defaults to `GRAFANA_API_KEY`, else admin basic auth from the manifest env_files)
+- `--file string` - Sync a single dashboard JSON file instead of the embedded dashboards
+- `--dry-run` - Print intended changes without writing
+
+**Examples:**
+
+```bash
+frameworks cluster grafana sync --dry-run
+frameworks cluster grafana sync
 ```
 
 ### frameworks cluster logs
@@ -1804,10 +1854,10 @@ When `--enrollment-token` is provided without `--domain`, the CLI calls `PreRegi
 
 ### frameworks edge enroll
 
-Start the edge stack and verify HTTPS readiness. The bootstrap token must be set in the edge environment file as `EDGE_ENROLLMENT_TOKEN`.
+Start the edge stack and verify HTTPS readiness. The bootstrap token must be set as `EDGE_ENROLLMENT_TOKEN` in the enrollment environment file (`.edge-enroll.env`).
 
 ```bash
-# Enroll edge node (token read from edge environment file)
+# Enroll edge node (token read from the enrollment environment file)
 frameworks edge enroll
 
 # From a specific directory
