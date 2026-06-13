@@ -12,31 +12,116 @@ import (
 	"testing"
 
 	"frameworks/cli/pkg/metabase"
+
+	gfdash "github.com/Livepeer-FrameWorks/monorepo/pkg/grafana"
+	mbspecs "github.com/Livepeer-FrameWorks/monorepo/pkg/metabase"
 )
 
 func TestGrafanaDashboardQueriesReferenceKnownMetrics(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	knownMetrics := loadDeclaredMetrics(t, repoRoot)
-	dashboardPath := filepath.Join(repoRoot, "infrastructure/grafana/dashboards/frameworks-ops.json")
 
-	expressions := loadGrafanaExpressions(t, dashboardPath)
+	// Every CLI-embedded dashboard: all PromQL must reference metrics that
+	// the Go code actually declares.
+	dashboards := embeddedGrafanaDashboards(t)
+
 	var failures []string
-	for _, expr := range expressions {
-		for _, unknown := range unknownPromMetrics(expr, knownMetrics) {
-			failures = append(failures, fmt.Sprintf("%s\n  %s", unknown, expr))
+	for name, content := range dashboards {
+		for _, expr := range grafanaExpressions(t, name, content) {
+			for _, unknown := range unknownPromMetrics(expr, knownMetrics) {
+				failures = append(failures, fmt.Sprintf("%s: %s\n  %s", name, unknown, expr))
+			}
 		}
 	}
 	if len(failures) > 0 {
-		t.Fatalf("Grafana dashboard references metrics that are not declared or allowlisted:\n%s", strings.Join(failures, "\n\n"))
+		t.Fatalf("Grafana dashboards reference metrics that are not declared or allowlisted:\n%s", strings.Join(failures, "\n\n"))
 	}
+}
+
+// Embedded dashboards must be classic-schema (the sync pushes via
+// /api/dashboards/db, which V2 exports cannot use) with stable uids (the
+// sync's idempotence keys on them).
+func TestEmbeddedGrafanaDashboardsAreClassicWithUIDs(t *testing.T) {
+	for name, content := range embeddedGrafanaDashboards(t) {
+		var dash map[string]any
+		if err := json.Unmarshal(content, &dash); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if _, ok := dash["panels"]; !ok {
+			t.Errorf("%s is not a classic-schema dashboard (no panels)", name)
+		}
+		if uid, _ := dash["uid"].(string); uid == "" {
+			t.Errorf("%s has no uid", name)
+		}
+	}
+}
+
+// ClickHouse-backed Grafana panels (rawSql) are validated against the
+// Periscope schema the same way the Metabase cards are.
+func TestGrafanaClickHouseQueriesMatchPeriscopeSchema(t *testing.T) {
+	repoRoot := findRepoRoot(t)
+	schema := loadClickHouseSchema(t, repoRoot)
+
+	var failures []string
+	for name, content := range embeddedGrafanaDashboards(t) {
+		var doc any
+		if err := json.Unmarshal(content, &doc); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var queries []string
+		walkJSON(doc, func(obj map[string]any) {
+			if raw, ok := obj["rawSql"].(string); ok && strings.TrimSpace(raw) != "" {
+				queries = append(queries, raw)
+			}
+		})
+		for _, query := range queries {
+			for _, err := range validateClickHouseQuery(stripGrafanaMacros(query), schema) {
+				failures = append(failures, fmt.Sprintf("%s: %s\n  %s", name, err, query))
+			}
+		}
+	}
+	if len(failures) > 0 {
+		t.Fatalf("Grafana ClickHouse panels diverge from the Periscope schema:\n%s", strings.Join(failures, "\n"))
+	}
+}
+
+// stripGrafanaMacros removes $__timeFilter(col) / $__timeInterval(col) style
+// macros, keeping the column argument so it still gets validated.
+func stripGrafanaMacros(query string) string {
+	return grafanaMacroRe.ReplaceAllString(query, "$1")
+}
+
+var grafanaMacroRe = regexp.MustCompile(`\$__[A-Za-z]+\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)`)
+
+func embeddedGrafanaDashboards(t *testing.T) map[string][]byte {
+	t.Helper()
+
+	entries, err := gfdash.Content.ReadDir("dashboards")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dashboards := map[string][]byte{}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		content, err := gfdash.Content.ReadFile("dashboards/" + entry.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		dashboards[entry.Name()] = content
+	}
+	if len(dashboards) == 0 {
+		t.Fatal("no embedded grafana dashboards")
+	}
+	return dashboards
 }
 
 func TestMetabaseCardQueriesMatchPeriscopeSchema(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	schema := loadClickHouseSchema(t, repoRoot)
-	specPath := filepath.Join(repoRoot, "infrastructure/metabase/periscope_cards.yaml")
 
-	spec := loadMetabaseSpec(t, specPath)
+	spec := loadEmbeddedMetabaseSpec(t, "periscope_cards.yaml")
 	var failures []string
 	for _, card := range spec.Cards {
 		if strings.TrimSpace(card.Query) == "" {
@@ -60,9 +145,8 @@ func TestMetabaseActivityCardQueriesMatchSchema(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	schema := loadClickHouseSchema(t, repoRoot)
 	loadPostgresSchema(t, repoRoot, schema)
-	specPath := filepath.Join(repoRoot, "infrastructure/metabase/activity_cards.yaml")
 
-	spec := loadMetabaseSpec(t, specPath)
+	spec := loadEmbeddedMetabaseSpec(t, "activity_cards.yaml")
 	var failures []string
 	for _, card := range spec.Cards {
 		if strings.TrimSpace(card.Query) == "" {
@@ -88,7 +172,7 @@ func findRepoRoot(t *testing.T) string {
 		t.Fatal(err)
 	}
 	for dir := wd; ; dir = filepath.Dir(dir) {
-		if fileExists(filepath.Join(dir, "infrastructure/grafana/dashboards/frameworks-ops.json")) &&
+		if fileExists(filepath.Join(dir, "pkg/grafana/dashboards/frameworks-ops.json")) &&
 			fileExists(filepath.Join(dir, "pkg/database/sql/clickhouse/periscope.sql")) {
 			return dir
 		}
@@ -103,16 +187,12 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-func loadGrafanaExpressions(t *testing.T, path string) []string {
+func grafanaExpressions(t *testing.T, name string, content []byte) []string {
 	t.Helper()
 
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
 	var doc any
 	if err := json.Unmarshal(content, &doc); err != nil {
-		t.Fatalf("parse %s: %v", path, err)
+		t.Fatalf("parse %s: %v", name, err)
 	}
 
 	var expressions []string
@@ -359,15 +439,25 @@ func knownMetric(metric string, known map[string]bool) bool {
 	return false
 }
 
-func loadMetabaseSpec(t *testing.T, path string) metabase.Spec {
+// loadEmbeddedMetabaseSpec reads a spec from the CLI-embedded set, so this
+// test also guards the embed: a spec on disk but missing from (or broken in)
+// the binary fails here instead of at `cluster metabase sync` time.
+func loadEmbeddedMetabaseSpec(t *testing.T, name string) metabase.Spec {
 	t.Helper()
 
-	spec, err := metabase.LoadSpec(path)
+	content, err := mbspecs.Content.ReadFile("specs/" + name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := metabase.ParseSpec(content)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(spec.Cards) == 0 {
-		t.Fatalf("%s has no cards", path)
+		t.Fatalf("%s has no cards", name)
+	}
+	if spec.Dashboard == "" {
+		t.Fatalf("%s does not declare a dashboard", name)
 	}
 	return spec
 }
@@ -646,6 +736,7 @@ var sqlIgnoredTokens = lowerSet(
 	"today", "todate", "todatetime", "uniqexact", "quantile",
 	"left", "join", "on", "having", "if", "empty", "tuple", "tostring",
 	"touint64", "dictgetordefault", "uniqcombinedmerge", "tostartofweek",
+	"positioncaseinsensitive",
 	// postgresql(<collection>, table='...') table-function plumbing; the
 	// collection names are defined in config.d/named-collections.xml.
 	"postgresql", "table", "quartermaster_pg", "commodore_pg", "purser_pg",

@@ -23,7 +23,10 @@ import (
 const managedMarkerPrefix = "frameworks:metabase-card"
 
 type Spec struct {
-	Cards []Card `yaml:"cards"`
+	// Dashboard is the target dashboard for every card in this spec. The
+	// --dashboard flag / DashboardID option override it.
+	Dashboard string `yaml:"dashboard"`
+	Cards     []Card `yaml:"cards"`
 }
 
 type Card struct {
@@ -35,21 +38,25 @@ type Card struct {
 }
 
 type SyncOptions struct {
-	BaseURL      string
-	SessionID    string
-	APIKey       string
+	BaseURL   string
+	SessionID string
+	APIKey    string
+	// SpecPath reads the card spec from a file. SpecContent (e.g. a
+	// CLI-embedded spec) takes precedence when both are set.
 	SpecPath     string
+	SpecContent  []byte
 	Database     string
 	DatabaseID   int
 	Collection   string
 	CollectionID int
-	Dashboard    string
-	DashboardID  int
-	DryRun       bool
-	Adopt        bool
-	Force        bool
-	HTTPClient   *http.Client
-	Out          io.Writer
+	// Dashboard/DashboardID override the spec's own `dashboard:` field.
+	Dashboard   string
+	DashboardID int
+	DryRun      bool
+	Adopt       bool
+	Force       bool
+	HTTPClient  *http.Client
+	Out         io.Writer
 }
 
 type SyncSummary struct {
@@ -111,6 +118,10 @@ func LoadSpec(path string) (Spec, error) {
 	if err != nil {
 		return Spec{}, err
 	}
+	return ParseSpec(content)
+}
+
+func ParseSpec(content []byte) (Spec, error) {
 	var spec Spec
 	if err := yaml.Unmarshal(content, &spec); err != nil {
 		return Spec{}, err
@@ -136,9 +147,18 @@ func Sync(ctx context.Context, opts SyncOptions) (SyncSummary, error) {
 	if opts.Out == nil {
 		opts.Out = io.Discard
 	}
-	spec, err := LoadSpec(opts.SpecPath)
+	var spec Spec
+	var err error
+	if len(opts.SpecContent) > 0 {
+		spec, err = ParseSpec(opts.SpecContent)
+	} else {
+		spec, err = LoadSpec(opts.SpecPath)
+	}
 	if err != nil {
 		return SyncSummary{}, err
+	}
+	if opts.Dashboard == "" && opts.DashboardID == 0 {
+		opts.Dashboard = spec.Dashboard
 	}
 
 	c := client{
@@ -147,15 +167,37 @@ func Sync(ctx context.Context, opts SyncOptions) (SyncSummary, error) {
 		apiKey:    opts.APIKey,
 		http:      opts.HTTPClient,
 	}
+	// The database connection is the only container that cannot be created
+	// here: it carries engine credentials. Collections and dashboards are
+	// plain named containers, so a missing one is created instead of failing.
 	databaseID, err := c.resolveEntityID(ctx, "/api/database", opts.DatabaseID, opts.Database)
 	if err != nil {
+		if errors.Is(err, errNotFound) {
+			return SyncSummary{}, fmt.Errorf("resolve Metabase database: %w — create the connection in Metabase admin (Databases → Add database) or pass --database/--database-id", err)
+		}
 		return SyncSummary{}, fmt.Errorf("resolve Metabase database: %w", err)
 	}
 	collectionID, err := c.resolveEntityID(ctx, "/api/collection", opts.CollectionID, opts.Collection)
+	if errors.Is(err, errNotFound) {
+		if opts.DryRun {
+			fmt.Fprintf(opts.Out, "create collection %q\n", opts.Collection)
+			collectionID, err = 0, nil
+		} else if collectionID, err = c.createCollection(ctx, opts.Collection); err == nil {
+			fmt.Fprintf(opts.Out, "created collection %q\n", opts.Collection)
+		}
+	}
 	if err != nil {
 		return SyncSummary{}, fmt.Errorf("resolve Metabase collection: %w", err)
 	}
 	dashboardID, err := c.resolveEntityID(ctx, "/api/dashboard", opts.DashboardID, opts.Dashboard)
+	if errors.Is(err, errNotFound) {
+		if opts.DryRun {
+			fmt.Fprintf(opts.Out, "create dashboard %q\n", opts.Dashboard)
+			dashboardID, err = 0, nil
+		} else if dashboardID, err = c.createDashboard(ctx, opts.Dashboard, collectionID); err == nil {
+			fmt.Fprintf(opts.Out, "created dashboard %q\n", opts.Dashboard)
+		}
+	}
 	if err != nil {
 		return SyncSummary{}, fmt.Errorf("resolve Metabase dashboard: %w", err)
 	}
@@ -244,6 +286,8 @@ func Sync(ctx context.Context, opts SyncOptions) (SyncSummary, error) {
 	return summary, nil
 }
 
+var errNotFound = errors.New("not found")
+
 func (c client) resolveEntityID(ctx context.Context, endpoint string, explicitID int, name string) (int, error) {
 	if explicitID > 0 {
 		return explicitID, nil
@@ -260,7 +304,31 @@ func (c client) resolveEntityID(ctx context.Context, endpoint string, explicitID
 			return item.ID, nil
 		}
 	}
-	return 0, fmt.Errorf("%q not found", name)
+	return 0, fmt.Errorf("%q %w", name, errNotFound)
+}
+
+func (c client) createCollection(ctx context.Context, name string) (int, error) {
+	var created struct {
+		ID int `json:"id"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/api/collection", map[string]any{"name": name}, &created); err != nil {
+		return 0, fmt.Errorf("create collection %q: %w", name, err)
+	}
+	return created.ID, nil
+}
+
+func (c client) createDashboard(ctx context.Context, name string, collectionID int) (int, error) {
+	body := map[string]any{"name": name}
+	if collectionID > 0 {
+		body["collection_id"] = collectionID
+	}
+	var created struct {
+		ID int `json:"id"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/api/dashboard", body, &created); err != nil {
+		return 0, fmt.Errorf("create dashboard %q: %w", name, err)
+	}
+	return created.ID, nil
 }
 
 func (c client) findCardByName(ctx context.Context, name string) (metabaseCard, bool, error) {
@@ -307,20 +375,52 @@ func (c client) updateCardDescription(ctx context.Context, remote metabaseCard, 
 }
 
 func (c client) ensureDashboardCard(ctx context.Context, dashboardID, cardID int, dryRun bool) (bool, error) {
-	var dash dashboard
+	// Dashcards are read and written as raw maps: PUT /api/dashboard/:id
+	// replaces the whole dashcards array (POST /api/dashboard/:id/cards was
+	// removed in Metabase 49), so existing entries are sent back exactly as
+	// fetched to preserve their layout.
+	var dash map[string]any
 	if err := c.do(ctx, http.MethodGet, fmt.Sprintf("/api/dashboard/%d", dashboardID), nil, &dash); err != nil {
 		return false, err
 	}
-	for _, dashcard := range dash.Dashcards {
-		if dashcard.CardID == cardID || dashcard.Card.ID == cardID {
+	var dashcards []any
+	if list, ok := dash["dashcards"].([]any); ok {
+		dashcards = list
+	}
+	nextRow := 0.0
+	for _, raw := range dashcards {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if existing, ok := entry["card_id"].(float64); ok && int(existing) == cardID {
 			return false, nil
+		}
+		var row, sizeY float64
+		if v, ok := entry["row"].(float64); ok {
+			row = v
+		}
+		if v, ok := entry["size_y"].(float64); ok {
+			sizeY = v
+		}
+		if row+sizeY > nextRow {
+			nextRow = row + sizeY
 		}
 	}
 	if dryRun {
 		return true, nil
 	}
-	body := map[string]any{"cardId": cardID}
-	if err := c.do(ctx, http.MethodPost, fmt.Sprintf("/api/dashboard/%d/cards", dashboardID), body, nil); err != nil {
+	// Negative id = "create this dashcard"; appended below the existing grid
+	// at half width (24-column grid).
+	body := map[string]any{"dashcards": append(dashcards, map[string]any{
+		"id":      -1,
+		"card_id": cardID,
+		"row":     int(nextRow),
+		"col":     0,
+		"size_x":  12,
+		"size_y":  6,
+	})}
+	if err := c.do(ctx, http.MethodPut, fmt.Sprintf("/api/dashboard/%d", dashboardID), body, nil); err != nil {
 		return false, err
 	}
 	return true, nil

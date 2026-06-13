@@ -1,3 +1,4 @@
+dashboard: FrameWorks Periscope
 cards:
   - slug: periscope.routing-decisions-by-selected-node
     name: Routing decisions by selected node

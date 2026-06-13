@@ -1,8 +1,6 @@
 # Operator tenant activity: which tenants are active, and to what extent.
-# Synced into the "FrameWorks Tenants" dashboard (create it once in Metabase):
-#   frameworks cluster metabase sync \
-#     --file infrastructure/metabase/activity_cards.yaml \
-#     --dashboard "FrameWorks Tenants"
+# Embedded into the CLI and synced into the "FrameWorks Tenants" dashboard
+# (auto-created) by `frameworks cluster metabase sync`.
 #
 # All cards run against the ClickHouse datasource, which must authenticate
 # as the dedicated `frameworks_analytics` ClickHouse user (password:
@@ -13,6 +11,7 @@
 # collections via the postgresql() table function, authenticating as the
 # frameworks_analytics_ro Postgres role. Long-window cards read the daily
 # rollup views (1825-day TTL), never the 5m ledgers (90-day TTL).
+dashboard: FrameWorks Tenants
 cards:
   - slug: tenants.activity-overview
     name: Tenant activity overview (30d)

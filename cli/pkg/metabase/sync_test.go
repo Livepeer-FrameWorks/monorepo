@@ -65,14 +65,30 @@ func TestSyncUpdatesManagedCardAndAddsItToDashboard(t *testing.T) {
 				t.Fatal("updated card missing managed marker")
 			}
 			return jsonResponse(http.StatusOK, map[string]any{"id": 67})
-		case req.Method == http.MethodPost && req.URL.Path == "/api/dashboard/9/cards":
+		case req.Method == http.MethodGet && req.URL.Path == "/api/dashboard/9":
+			return jsonResponse(http.StatusOK, map[string]any{
+				"id": 9, "name": "FrameWorks Periscope",
+				"dashcards": []map[string]any{{"id": 31, "card_id": 50, "row": 0, "col": 0, "size_x": 24, "size_y": 4}},
+			})
+		case req.Method == http.MethodPut && req.URL.Path == "/api/dashboard/9":
 			dashboardUpdated = true
 			var body map[string]any
 			decodeBody(t, req.Body, &body)
-			if body["cardId"].(float64) != 67 {
-				t.Fatalf("dashboard added wrong card id: %#v", body["cardId"])
+			dashcards := body["dashcards"].([]any)
+			if len(dashcards) != 2 {
+				t.Fatalf("PUT must keep existing dashcards and append, got %d entries", len(dashcards))
 			}
-			return jsonResponse(http.StatusOK, map[string]any{"id": 101})
+			if existing := dashcards[0].(map[string]any); existing["card_id"].(float64) != 50 {
+				t.Fatalf("existing dashcard not preserved: %#v", existing)
+			}
+			added := dashcards[1].(map[string]any)
+			if added["card_id"].(float64) != 67 {
+				t.Fatalf("dashboard added wrong card id: %#v", added["card_id"])
+			}
+			if added["row"].(float64) != 4 {
+				t.Fatalf("new dashcard must land below the existing grid, row=%#v", added["row"])
+			}
+			return jsonResponse(http.StatusOK, map[string]any{"id": 9})
 		default:
 			return metabaseFixtureResponse(t, req, metabaseCard{
 				ID:           67,
@@ -102,6 +118,132 @@ func TestSyncUpdatesManagedCardAndAddsItToDashboard(t *testing.T) {
 	}
 	if summary.Updated != 1 || summary.AddedToDashboard != 1 {
 		t.Fatalf("unexpected summary: %+v", summary)
+	}
+}
+
+func TestSyncCreatesMissingCollectionAndDashboard(t *testing.T) {
+	card := testCard()
+	specPath := writeSpec(t, []Card{card})
+	var createdCollection, createdDashboard, createdCard bool
+
+	client := fakeHTTPClient(func(req *http.Request) (*http.Response, error) {
+		switch {
+		case req.Method == http.MethodGet && req.URL.Path == "/api/collection":
+			return jsonResponse(http.StatusOK, []map[string]any{{"id": 4, "name": "Something Else"}})
+		case req.Method == http.MethodGet && req.URL.Path == "/api/dashboard":
+			return jsonResponse(http.StatusOK, []map[string]any{})
+		case req.Method == http.MethodPost && req.URL.Path == "/api/collection":
+			createdCollection = true
+			var body map[string]any
+			decodeBody(t, req.Body, &body)
+			if body["name"] != "FrameWorks" {
+				t.Fatalf("created collection with wrong name: %#v", body["name"])
+			}
+			return jsonResponse(http.StatusOK, map[string]any{"id": 11})
+		case req.Method == http.MethodPost && req.URL.Path == "/api/dashboard":
+			createdDashboard = true
+			var body map[string]any
+			decodeBody(t, req.Body, &body)
+			if body["name"] != "FrameWorks Tenants" {
+				t.Fatalf("created dashboard with wrong name: %#v", body["name"])
+			}
+			if body["collection_id"].(float64) != 11 {
+				t.Fatalf("dashboard not placed in created collection: %#v", body["collection_id"])
+			}
+			return jsonResponse(http.StatusOK, map[string]any{"id": 21})
+		case req.Method == http.MethodGet && req.URL.Path == "/api/search":
+			return jsonResponse(http.StatusOK, map[string]any{"data": []map[string]any{}})
+		case req.Method == http.MethodPost && req.URL.Path == "/api/card":
+			createdCard = true
+			var body map[string]any
+			decodeBody(t, req.Body, &body)
+			if body["collection_id"].(float64) != 11 {
+				t.Fatalf("card not placed in created collection: %#v", body["collection_id"])
+			}
+			return jsonResponse(http.StatusOK, map[string]any{"id": 67})
+		case req.Method == http.MethodGet && req.URL.Path == "/api/dashboard/21":
+			return jsonResponse(http.StatusOK, dashboard{ID: 21, Name: "FrameWorks Tenants"})
+		case req.Method == http.MethodPut && req.URL.Path == "/api/dashboard/21":
+			var body map[string]any
+			decodeBody(t, req.Body, &body)
+			added := body["dashcards"].([]any)[0].(map[string]any)
+			if added["card_id"].(float64) != 67 {
+				t.Fatalf("dashboard added wrong card id: %#v", added["card_id"])
+			}
+			return jsonResponse(http.StatusOK, map[string]any{"id": 21})
+		default:
+			return metabaseFixtureResponse(t, req, metabaseCard{})
+		}
+	})
+
+	summary, err := Sync(context.Background(), SyncOptions{
+		BaseURL:    "http://metabase.local",
+		SessionID:  "session",
+		SpecPath:   specPath,
+		Database:   "FrameWorks ClickHouse",
+		Collection: "FrameWorks",
+		Dashboard:  "FrameWorks Tenants",
+		HTTPClient: client,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !createdCollection || !createdDashboard || !createdCard {
+		t.Fatalf("expected collection/dashboard/card creation, got collection=%v dashboard=%v card=%v",
+			createdCollection, createdDashboard, createdCard)
+	}
+	if summary.Created != 1 || summary.AddedToDashboard != 1 {
+		t.Fatalf("unexpected summary: %+v", summary)
+	}
+}
+
+func TestSyncDryRunCreatesNothing(t *testing.T) {
+	card := testCard()
+	specPath := writeSpec(t, []Card{card})
+	var writes []string
+
+	client := fakeHTTPClient(func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodGet {
+			writes = append(writes, req.Method+" "+req.URL.Path)
+			return jsonResponse(http.StatusOK, map[string]any{"id": 99})
+		}
+		switch req.URL.Path {
+		case "/api/collection":
+			return jsonResponse(http.StatusOK, []map[string]any{})
+		case "/api/dashboard":
+			return jsonResponse(http.StatusOK, []map[string]any{})
+		case "/api/search":
+			return jsonResponse(http.StatusOK, map[string]any{"data": []map[string]any{}})
+		default:
+			return metabaseFixtureResponse(t, req, metabaseCard{})
+		}
+	})
+
+	var out bytes.Buffer
+	summary, err := Sync(context.Background(), SyncOptions{
+		BaseURL:    "http://metabase.local",
+		SessionID:  "session",
+		SpecPath:   specPath,
+		Database:   "FrameWorks ClickHouse",
+		Collection: "FrameWorks",
+		Dashboard:  "FrameWorks Tenants",
+		DryRun:     true,
+		HTTPClient: client,
+		Out:        &out,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("dry run must not write, got %v", writes)
+	}
+	if summary.Created != 1 {
+		t.Fatalf("unexpected summary: %+v", summary)
+	}
+	for _, want := range []string{`create collection "FrameWorks"`, `create dashboard "FrameWorks Tenants"`, `create card`} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("dry-run output missing %q:\n%s", want, out.String())
+		}
 	}
 }
 

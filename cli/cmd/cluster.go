@@ -77,6 +77,7 @@ invocation. Explicit flags always win over saved context defaults.`,
 	cluster.AddCommand(newClusterSkipperCmd())
 	cluster.AddCommand(newClusterOSCmd())
 	cluster.AddCommand(newClusterMetabaseCmd())
+	cluster.AddCommand(newClusterGrafanaCmd())
 
 	return cluster
 }
