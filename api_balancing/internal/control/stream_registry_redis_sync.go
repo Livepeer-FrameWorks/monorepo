@@ -184,6 +184,15 @@ func mergeStreamEntry(existing, incoming StreamEntry) StreamEntry {
 	if merged.HydratedAt.IsZero() {
 		merged.HydratedAt = incoming.HydratedAt
 	}
+	// Auth identity is filled from a peer only when the local side hasn't
+	// hydrated it (same "stable identity from local, fill from incoming when
+	// empty" rule). A peer that has resolved the auth bit warms ours so the
+	// live resolve carries it without each instance re-hydrating.
+	if !merged.RequiresAuthKnown && incoming.RequiresAuthKnown {
+		merged.RequiresAuth = incoming.RequiresAuth
+		merged.RequiresAuthKnown = true
+		merged.ClusterPeers = incoming.ClusterPeers
+	}
 	if len(incoming.Locations) == 0 {
 		return merged
 	}

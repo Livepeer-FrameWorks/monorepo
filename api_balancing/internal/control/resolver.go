@@ -2,15 +2,23 @@ package control
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"frameworks/api_balancing/internal/state"
+
+	"golang.org/x/sync/singleflight"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 )
+
+// liveResolveGroup collapses concurrent direct ResolvePlaybackID fallbacks for
+// the same playback_id into a single Commodore RPC.
+var liveResolveGroup singleflight.Group
 
 // CommodoreClient holds the reference to the commodore gRPC client for resolution.
 // This should be set during application initialization (e.g. in handlers.Init).
@@ -173,8 +181,56 @@ func ResolveStream(ctx context.Context, input string) (*StreamTarget, error) {
 	// mist_native       → <internal> (bare)    (concrete Mist config; literal source set by sidecar Apply)
 	// Bare names are reserved for concrete configs; new ingest modes must
 	// not introduce a fourth `<word>+` prefix without explicit design review.
+	//
+	// The registry is the primary resolver: it singleflights concurrent
+	// lookups for one playback_id into a single Commodore RPC and serves a
+	// stale-but-known entry when Commodore/DB is transiently unreachable, so a
+	// viewer burst doesn't stampede the control plane and a known-live stream
+	// keeps resolving through a blip. RuntimeName encodes the live+/pull+/bare
+	// shape; the entry carries the auth + cluster-peer fields hydrated from
+	// ResolveStreamContext.
+	if StreamRegistryInstance != nil {
+		entry, err := StreamRegistryInstance.ResolveSourceByPlaybackID(ctx, input)
+		switch {
+		case err == nil && entry.RuntimeName != "":
+			return &StreamTarget{
+				InternalName:      entry.RuntimeName,
+				IsVod:             false,
+				TenantID:          entry.TenantID,
+				StreamID:          entry.StreamID,
+				ContentType:       "live",
+				ClusterPeers:      entry.ClusterPeers,
+				RequiresAuth:      entry.RequiresAuth,
+				RequiresAuthKnown: entry.RequiresAuthKnown,
+			}, nil
+		case errors.Is(err, ErrUnknownStream):
+			// Authoritative not-found (incl. admission-rejected): never serve
+			// stale over it and never resurrect via the direct path.
+			return &StreamTarget{}, nil
+		}
+		// Transient registry error with no usable cached entry falls through to
+		// the direct path. The registry hydrates via ResolveStreamContext,
+		// which also depends on Quartermaster + Purser; ResolvePlaybackID needs
+		// only Commodore, so a QM/Purser blip must not block a cold resolve the
+		// direct path can still answer.
+	}
+
+	// Registry not wired (unit tests / early boot) or transient fallthrough.
+	// Singleflight here too so concurrent cold callers collapse to one
+	// Commodore RPC. ResolveStream has no per-caller state, so the shared
+	// *StreamTarget is safe to return to every waiter (callers read, never
+	// mutate it).
 	if CommodoreClient != nil {
-		if resp, err := CommodoreClient.ResolvePlaybackID(ctx, input); err == nil {
+		v, err, _ := liveResolveGroup.Do(input, func() (any, error) {
+			// Detach the shared RPC from the winning caller's cancellation (and
+			// bound it) so an abandoned caller can't fail the round for every
+			// waiter — same isolation the registry hydrate uses.
+			rpcCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			resp, err := CommodoreClient.ResolvePlaybackID(rpcCtx, input)
+			if err != nil {
+				return nil, err
+			}
 			var internalName string
 			switch resp.GetIngestMode() {
 			case "pull":
@@ -194,6 +250,11 @@ func ResolveStream(ctx context.Context, input string) (*StreamTarget, error) {
 				RequiresAuth:      resp.GetRequiresAuth(),
 				RequiresAuthKnown: true,
 			}, nil
+		})
+		if err == nil {
+			if target, ok := v.(*StreamTarget); ok {
+				return target, nil
+			}
 		}
 	}
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 )
 
@@ -60,6 +61,91 @@ func TestResolveSource_StaleServedOnTransientHydrateError(t *testing.T) {
 	}
 	if !outcomes.has("source:stale_served") {
 		t.Fatalf("observer outcomes %v missing source:stale_served", outcomes.list)
+	}
+}
+
+// The live PLAY_REWRITE resolve path reads requires_auth + cluster_peers off
+// the registry entry, so hydrate must carry them and stale-serve must preserve
+// them through a transient Commodore outage.
+func TestResolveSource_CarriesAndStaleServesAuthIdentity(t *testing.T) {
+	resp := nativeResp()
+	resp.RequiresAuth = true
+	resp.ClusterPeers = []*clusterpeerpb.TenantClusterPeer{{ClusterId: "cluster-B"}}
+	fake := &fakeCommodore{resp: resp}
+	r := NewStreamRegistry(fake, "cluster-A", 10*time.Millisecond)
+
+	e, err := r.ResolveSourceByPlaybackID(context.Background(), "frameworks-demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !e.RequiresAuth || !e.RequiresAuthKnown {
+		t.Fatalf("hydrate dropped auth bit: %+v", e)
+	}
+	if len(e.ClusterPeers) != 1 || e.ClusterPeers[0].GetClusterId() != "cluster-B" {
+		t.Fatalf("hydrate dropped cluster peers: %+v", e.ClusterPeers)
+	}
+
+	time.Sleep(20 * time.Millisecond)
+	fake.resp, fake.err = nil, errors.New("commodore rpc down")
+	stale, err := r.ResolveSourceByPlaybackID(context.Background(), "frameworks-demo")
+	if err != nil {
+		t.Fatalf("expected stale entry, got err = %v", err)
+	}
+	if !stale.RequiresAuth || !stale.RequiresAuthKnown || len(stale.ClusterPeers) != 1 {
+		t.Fatalf("stale serve lost auth identity: %+v", stale)
+	}
+}
+
+// A routing-only warm entry (as PUSH_REWRITE admission / managed-stream upsert
+// creates it — fresh, but no RequiresAuthKnown) must be hydrated on the live
+// playback-resolve path so the auth identity is filled, then served fresh
+// without re-hydrating once complete. STREAM_SOURCE (requireAuth=false) keeps
+// short-circuiting on the same warm entry.
+func TestResolveSource_HydratesWarmEntryMissingAuth(t *testing.T) {
+	resp := nativeResp()
+	resp.RequiresAuth = true
+	fake := &fakeCommodore{resp: resp}
+	r := NewStreamRegistry(fake, "cluster-A", time.Minute)
+
+	ce := &cachedEntry{entry: StreamEntry{
+		PlaybackID:   "frameworks-demo",
+		InternalName: "60546679b497415db2338cd5cae54992",
+		RuntimeName:  "60546679b497415db2338cd5cae54992",
+		IngestMode:   IngestMistNative,
+		TenantID:     "tenant-1",
+		// no RequiresAuthKnown / ClusterPeers — routing only
+	}, cached: time.Now()}
+	r.mu.Lock()
+	r.byPlay["frameworks-demo"] = ce
+	r.byInt["60546679b497415db2338cd5cae54992"] = ce
+	r.mu.Unlock()
+
+	// requireAuth=false (internal-name path) short-circuits the warm entry.
+	if _, err := r.ResolveSourceByInternalName(context.Background(), "60546679b497415db2338cd5cae54992"); err != nil {
+		t.Fatal(err)
+	}
+	if fake.hits != 0 {
+		t.Fatalf("STREAM_SOURCE path must not hydrate a fresh entry, hits=%d", fake.hits)
+	}
+
+	// requireAuth=true (playback path) hydrates to fill the auth identity.
+	e, err := r.ResolveSourceByPlaybackID(context.Background(), "frameworks-demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fake.hits != 1 {
+		t.Fatalf("warm authless entry must hydrate on the playback path, hits=%d", fake.hits)
+	}
+	if !e.RequiresAuthKnown || !e.RequiresAuth {
+		t.Fatalf("hydrate did not fill auth identity: %+v", e)
+	}
+
+	// Now fresh WITH auth → no second hydrate.
+	if _, err := r.ResolveSourceByPlaybackID(context.Background(), "frameworks-demo"); err != nil {
+		t.Fatal(err)
+	}
+	if fake.hits != 1 {
+		t.Fatalf("auth-complete fresh entry must not re-hydrate, hits=%d", fake.hits)
 	}
 }
 

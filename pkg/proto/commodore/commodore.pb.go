@@ -673,6 +673,11 @@ type ResolveStreamContextResponse struct {
 	TenantId           string `protobuf:"bytes,8,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	UserId             string `protobuf:"bytes,9,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	IsRecordingEnabled bool   `protobuf:"varint,10,opt,name=is_recording_enabled,json=isRecordingEnabled,proto3" json:"is_recording_enabled,omitempty"`
+	// requires_auth lets Foghorn's stream registry cache the playback-auth bit
+	// alongside the rest of the stream identity, so the live PLAY_REWRITE resolve
+	// path can serve a stale-but-known entry (and its auth decision) while
+	// Commodore is transiently unreachable. Same column ResolvePlaybackID reads.
+	RequiresAuth bool `protobuf:"varint,22,opt,name=requires_auth,json=requiresAuth,proto3" json:"requires_auth,omitempty"`
 	// ===== BILLING MODEL & SUSPENSION =====
 	// Same semantics as ValidateStreamKeyResponse: billing_model selects cache
 	// TTL (1m prepaid / 10m postpaid); is_suspended / is_balance_negative
@@ -796,6 +801,13 @@ func (x *ResolveStreamContextResponse) GetUserId() string {
 func (x *ResolveStreamContextResponse) GetIsRecordingEnabled() bool {
 	if x != nil {
 		return x.IsRecordingEnabled
+	}
+	return false
+}
+
+func (x *ResolveStreamContextResponse) GetRequiresAuth() bool {
+	if x != nil {
+		return x.RequiresAuth
 	}
 	return false
 }
@@ -13428,7 +13440,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\n" +
 	"cluster_id\x18\x04 \x01(\tR\tclusterIdB\f\n" +
 	"\n" +
-	"identifier\"\xaf\b\n" +
+	"identifier\"\xd4\b\n" +
 	"\x1cResolveStreamContextResponse\x12\x1a\n" +
 	"\badmitted\x18\x01 \x01(\bR\badmitted\x12)\n" +
 	"\x10admission_reason\x18\x02 \x01(\tR\x0fadmissionReason\x12N\n" +
@@ -13443,6 +13455,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\auser_id\x18\t \x01(\tR\x06userId\x120\n" +
 	"\x14is_recording_enabled\x18\n" +
 	" \x01(\bR\x12isRecordingEnabled\x12#\n" +
+	"\rrequires_auth\x18\x16 \x01(\bR\frequiresAuth\x12#\n" +
 	"\rbilling_model\x18\v \x01(\tR\fbillingModel\x12!\n" +
 	"\fis_suspended\x18\f \x01(\bR\visSuspended\x12.\n" +
 	"\x13is_balance_negative\x18\r \x01(\bR\x11isBalanceNegative\x12/\n" +

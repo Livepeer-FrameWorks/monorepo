@@ -1441,27 +1441,31 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 
 // ResolveStreamContext returns the materialization fact set as ValidateStreamKey
 // but is keyed by stream identifier (stream_id / playback_id / internal_name)
-// rather than stream key. Used by Foghorn's managed-stream reconciler for
-// ingest modes that bypass PUSH_REWRITE — notably mist_native — so the same
-// cache writes happen without a stream key.
+// rather than stream key. Two callers: Foghorn's managed-stream reconciler for
+// ingest modes that bypass PUSH_REWRITE (notably mist_native), and Foghorn's
+// stream-registry hydrate on the live PLAY_REWRITE playback-resolve path, for
+// all streams (incl. customer streams), where it also supplies requires_auth +
+// cluster_peers.
 //
 // Admission semantics: `admitted` rolls user-active, cluster entitlement,
 // suspension, and negative-balance into a single boolean. Free-tier-load and
 // per-tenant-cap are NOT enforced here (they live in Foghorn's PUSH_REWRITE
 // path); the facts needed to layer those checks caller-side are returned in
-// the response. Today this RPC is only invoked for operator/system-tenant
-// managed streams (see cli/pkg/bootstrap/render.go: mistNativeStreamToRendered
-// rejects non-system tenants), so the missing caller-side gates do not
-// affect customer billing. Widening managed-stream ownership to tenants
-// requires implementing those gates before relaxing the render-layer
-// constraint.
+// the response. Those two missing gates are INGEST-time admission concerns and
+// do not apply to playback resolution, so the playback caller is unaffected;
+// the playback-relevant gates (suspension, negative-balance) are already inside
+// `admitted`. Widening *managed-stream* ownership to tenants still requires
+// implementing those ingest gates (see cli/pkg/bootstrap/render.go:
+// mistNativeStreamToRendered, which rejects non-system tenants) before relaxing
+// the render-layer constraint.
 func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodorepb.ResolveStreamContextRequest) (*commodorepb.ResolveStreamContextResponse, error) {
 	var streamID, userID, tenantID, internalName, playbackID, ingestMode string
-	var isActive, isRecordingEnabled bool
+	var isActive, isRecordingEnabled, requiresAuth bool
 
 	const baseSelect = `
 		SELECT s.id, s.user_id, s.tenant_id, s.internal_name,
-		       u.is_active, s.is_recording_enabled, s.playback_id, s.ingest_mode
+		       u.is_active, s.is_recording_enabled, s.playback_id, s.ingest_mode,
+		       s.requires_auth
 		FROM commodore.streams s
 		JOIN commodore.users u ON s.user_id = u.id
 		WHERE `
@@ -1491,6 +1495,7 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodo
 	err := s.db.QueryRowContext(ctx, query, arg).Scan(
 		&streamID, &userID, &tenantID, &internalName,
 		&isActive, &isRecordingEnabled, &playbackID, &ingestMode,
+		&requiresAuth,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return &commodorepb.ResolveStreamContextResponse{
@@ -1516,6 +1521,7 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodo
 		TenantId:           tenantID,
 		UserId:             userID,
 		IsRecordingEnabled: isRecordingEnabled,
+		RequiresAuth:       requiresAuth,
 	}
 
 	if !isActive {

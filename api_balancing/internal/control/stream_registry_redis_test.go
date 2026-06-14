@@ -6,9 +6,34 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	"github.com/alicebob/miniredis/v2"
 	goredis "github.com/redis/go-redis/v9"
 )
+
+// Auth identity (requires_auth + cluster_peers) is filled from a peer only when
+// the local side hasn't hydrated it; a locally-known bit is not overwritten.
+func TestMergeStreamEntry_FillsAuthIdentityFromPeer(t *testing.T) {
+	incoming := StreamEntry{
+		InternalName:      "s1",
+		RequiresAuth:      true,
+		RequiresAuthKnown: true,
+		ClusterPeers:      []*clusterpeerpb.TenantClusterPeer{{ClusterId: "cluster-B"}},
+	}
+
+	filled := mergeStreamEntry(StreamEntry{InternalName: "s1"}, incoming)
+	if !filled.RequiresAuthKnown || !filled.RequiresAuth {
+		t.Fatalf("peer auth not filled into authless local entry: %+v", filled)
+	}
+	if len(filled.ClusterPeers) != 1 || filled.ClusterPeers[0].GetClusterId() != "cluster-B" {
+		t.Fatalf("peer cluster_peers not filled: %+v", filled.ClusterPeers)
+	}
+
+	localKnown := StreamEntry{InternalName: "s1", RequiresAuth: false, RequiresAuthKnown: true}
+	if keep := mergeStreamEntry(localKnown, incoming); keep.RequiresAuth {
+		t.Fatalf("a locally-known auth bit must not be overwritten by a peer: %+v", keep)
+	}
+}
 
 func newTestRedis(t *testing.T) (*RedisRegistryStore, goredis.UniversalClient, *miniredis.Miniredis) {
 	t.Helper()
@@ -70,13 +95,16 @@ func TestRedisRegistryStore_RoundTripsSource(t *testing.T) {
 	store, _, _ := newTestRedis(t)
 
 	entry := StreamEntry{
-		StreamID:        "stream-1",
-		TenantID:        "tenant-1",
-		PlaybackID:      "frameworks-demo",
-		InternalName:    "60546679b497415db2338cd5cae54992",
-		IngestMode:      IngestMistNative,
-		RuntimeName:     "60546679b497415db2338cd5cae54992",
-		OriginClusterID: "cluster-test",
+		StreamID:          "stream-1",
+		TenantID:          "tenant-1",
+		PlaybackID:        "frameworks-demo",
+		InternalName:      "60546679b497415db2338cd5cae54992",
+		IngestMode:        IngestMistNative,
+		RuntimeName:       "60546679b497415db2338cd5cae54992",
+		OriginClusterID:   "cluster-test",
+		RequiresAuth:      true,
+		RequiresAuthKnown: true,
+		ClusterPeers:      []*clusterpeerpb.TenantClusterPeer{{ClusterId: "peer-X"}},
 		Locations: map[string]Location{
 			"cluster-test": {
 				ClusterID: "cluster-test",
@@ -102,6 +130,12 @@ func TestRedisRegistryStore_RoundTripsSource(t *testing.T) {
 	}
 	if got.Locations["cluster-test"].IsOrigin != true {
 		t.Errorf("Location IsOrigin not round-tripped")
+	}
+	if !got.RequiresAuth || !got.RequiresAuthKnown {
+		t.Errorf("auth identity not round-tripped: %+v", got)
+	}
+	if len(got.ClusterPeers) != 1 || got.ClusterPeers[0].GetClusterId() != "peer-X" {
+		t.Errorf("cluster_peers not round-tripped: %+v", got.ClusterPeers)
 	}
 }
 

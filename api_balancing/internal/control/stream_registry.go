@@ -11,6 +11,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	pkgredis "github.com/Livepeer-FrameWorks/monorepo/pkg/redis"
 )
@@ -206,6 +207,15 @@ type StreamEntry struct {
 	// Locations carries per-cluster details for this stream. Keyed by
 	// cluster_id. Always has at least one entry once hydrated.
 	Locations map[string]Location
+
+	// Playback-auth identity, cached alongside routing so the live
+	// PLAY_REWRITE resolve path can serve a stale-but-known entry (and its
+	// auth decision) while Commodore is transiently unreachable.
+	// RequiresAuthKnown distinguishes "public" (known false) from "never
+	// hydrated the auth bit" so a consumer can fail closed on the latter.
+	RequiresAuth      bool
+	RequiresAuthKnown bool
+	ClusterPeers      []*clusterpeerpb.TenantClusterPeer
 
 	// HydratedAt is the time this entry was first filled from Commodore /
 	// federation / sidecar snapshot.
@@ -844,18 +854,21 @@ func (r *StreamRegistry) ResolveSourceByInternalName(ctx context.Context, intern
 	if internalName == "" {
 		return StreamEntry{}, ErrUnknownStream
 	}
-	return r.resolveSource(ctx, r.byInt, internalName, "internal_name", "", "", internalName)
+	// STREAM_SOURCE / thumbnail callers need routing only, not the auth bit.
+	return r.resolveSource(ctx, r.byInt, internalName, "internal_name", "", "", internalName, false)
 }
 
 // ResolveSourceByPlaybackID resolves a public playback ID to the canonical
 // StreamEntry. Used by playback/PLAY_REWRITE paths that already have the
-// public ID and need to discover the routing target.
+// public ID and need to discover the routing target. requireAuth=true so a
+// routing-only warm entry (from PUSH_REWRITE admission) is hydrated to fill the
+// RequiresAuth/ClusterPeers identity the live resolve depends on.
 func (r *StreamRegistry) ResolveSourceByPlaybackID(ctx context.Context, playbackID string) (StreamEntry, error) {
 	playbackID = strings.TrimSpace(playbackID)
 	if playbackID == "" {
 		return StreamEntry{}, ErrUnknownStream
 	}
-	return r.resolveSource(ctx, r.byPlay, playbackID, "playback_id", "", playbackID, "")
+	return r.resolveSource(ctx, r.byPlay, playbackID, "playback_id", "", playbackID, "", true)
 }
 
 // ResolveSourceByStreamID resolves a Commodore stream_id UUID. Used by API
@@ -865,7 +878,8 @@ func (r *StreamRegistry) ResolveSourceByStreamID(ctx context.Context, streamID s
 	if streamID == "" {
 		return StreamEntry{}, ErrUnknownStream
 	}
-	return r.resolveSource(ctx, r.byID, streamID, "stream_id", streamID, "", "")
+	// Clip/DVR dispatch needs routing only, not the auth bit.
+	return r.resolveSource(ctx, r.byID, streamID, "stream_id", streamID, "", "", false)
 }
 
 // resolveSource is the shared lookup -> hydrate -> stale-fallback chain behind the
@@ -881,9 +895,16 @@ func (r *StreamRegistry) ResolveSourceByStreamID(ctx context.Context, streamID s
 // maintained by live paths (admission, federation ads, redis sync) that touch
 // ce.cached independently of Commodore; only identity refresh stalls during
 // an outage.
-func (r *StreamRegistry) resolveSource(ctx context.Context, m map[string]*cachedEntry, key, refKind, streamID, playbackID, internalName string) (StreamEntry, error) {
+func (r *StreamRegistry) resolveSource(ctx context.Context, m map[string]*cachedEntry, key, refKind, streamID, playbackID, internalName string, requireAuth bool) (StreamEntry, error) {
 	entry, fresh, stale := r.lookupEntry(m, key)
-	if fresh {
+	// A fresh entry short-circuits hydrate — UNLESS the caller needs the auth
+	// identity (live PLAY_REWRITE resolve) and this entry was populated by a
+	// routing-only path (PUSH_REWRITE admission / managed-stream upsert) that
+	// never set RequiresAuthKnown. Then fall through to hydrate to fill it.
+	// Once hydrated, store() merges RequiresAuthKnown onto the same entry so
+	// subsequent resolves are fast again — this self-heals regardless of which
+	// upsert path created the entry.
+	if fresh && (!requireAuth || entry.RequiresAuthKnown) {
 		r.observeResolve("source", "cache_hit", key)
 		return entry, nil
 	}
@@ -897,7 +918,11 @@ func (r *StreamRegistry) resolveSource(ctx context.Context, m map[string]*cached
 		r.observeResolve("source", "miss", key)
 		return StreamEntry{}, err
 	}
-	if stale {
+	// Transient hydrate failure: serve the best cached entry we have — a stale
+	// entry, or the fresh routing-only entry we declined above. The latter
+	// keeps RequiresAuthKnown=false, so an auth consumer fails closed on it
+	// rather than treating "unknown" as "public".
+	if stale || fresh {
 		r.observeResolve("source", "stale_served", key)
 		return entry, nil
 	}
@@ -1028,14 +1053,17 @@ func (r *StreamRegistry) hydrateOnce(ctx context.Context, refKind, streamID, pla
 	}
 
 	entry := StreamEntry{
-		StreamID:        resp.GetStreamId(),
-		TenantID:        resp.GetTenantId(),
-		PlaybackID:      resp.GetPlaybackId(),
-		InternalName:    resp.GetInternalName(),
-		IngestMode:      mode,
-		RuntimeName:     RuntimeNameFor(mode, resp.GetInternalName()),
-		OriginClusterID: resp.GetOriginClusterId(),
-		HydratedAt:      time.Now(),
+		StreamID:          resp.GetStreamId(),
+		TenantID:          resp.GetTenantId(),
+		PlaybackID:        resp.GetPlaybackId(),
+		InternalName:      resp.GetInternalName(),
+		IngestMode:        mode,
+		RuntimeName:       RuntimeNameFor(mode, resp.GetInternalName()),
+		OriginClusterID:   resp.GetOriginClusterId(),
+		RequiresAuth:      resp.GetRequiresAuth(),
+		RequiresAuthKnown: true,
+		ClusterPeers:      resp.GetClusterPeers(),
+		HydratedAt:        time.Now(),
 	}
 	r.store(entry)
 	return entry, nil
@@ -1087,6 +1115,15 @@ func (r *StreamRegistry) store(e StreamEntry) {
 		}
 		if e.OriginClusterID != "" {
 			ce.entry.OriginClusterID = e.OriginClusterID
+		}
+		// Auth/peers are only meaningful from an authoritative hydrate
+		// (RequiresAuthKnown). Guarding on it means a non-authoritative
+		// store (should one ever reach here) can't blank a known auth bit,
+		// while a real refresh still updates peers — including to empty.
+		if e.RequiresAuthKnown {
+			ce.entry.RequiresAuth = e.RequiresAuth
+			ce.entry.RequiresAuthKnown = true
+			ce.entry.ClusterPeers = e.ClusterPeers
 		}
 		ce.cached = time.Now()
 	}

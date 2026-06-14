@@ -433,6 +433,11 @@ message ResolveStreamContextResponse {
   string tenant_id = 8;
   string user_id = 9;
   bool is_recording_enabled = 10;
+  // requires_auth lets Foghorn's stream registry cache the playback-auth bit
+  // alongside the rest of the stream identity, so the live PLAY_REWRITE resolve
+  // path can serve a stale-but-known entry (and its auth decision) while
+  // Commodore is transiently unreachable. Same column ResolvePlaybackID reads.
+  bool requires_auth = 22;
 
   // ===== BILLING MODEL & SUSPENSION =====
   // Same semantics as ValidateStreamKeyResponse: billing_model selects cache

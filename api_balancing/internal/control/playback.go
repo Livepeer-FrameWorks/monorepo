@@ -241,7 +241,12 @@ func ResolveContent(ctx context.Context, input string) (*ContentResolution, erro
 		}
 	}
 
-	// 2. Live playback_id resolution
+	// 2. Live playback_id resolution.
+	// This /play + gRPC ResolveViewerEndpoint path resolves live content
+	// directly via Commodore and does not use the stream registry's stale-serve
+	// — unlike the Mist PLAY_REWRITE path (control.ResolveStream). A Commodore/DB
+	// outage therefore fails live resolution here. See docs/architecture/
+	// foghorn-ha.md (media-plane resolve resilience) for the scope boundary.
 	if CommodoreClient != nil {
 		if resp, err := CommodoreClient.ResolvePlaybackID(ctx, input); err == nil && resp.InternalName != "" {
 			return &ContentResolution{

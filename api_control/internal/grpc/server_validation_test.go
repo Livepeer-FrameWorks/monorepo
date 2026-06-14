@@ -168,7 +168,7 @@ func TestValidateStreamKey(t *testing.T) {
 
 func TestResolveStreamContext(t *testing.T) {
 	ctx := context.Background()
-	cols := []string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}
+	cols := []string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode", "requires_auth"}
 	tests := []struct {
 		name      string
 		req       *commodorepb.ResolveStreamContextRequest
@@ -206,7 +206,7 @@ func TestResolveStreamContext(t *testing.T) {
 			req:  &commodorepb.ResolveStreamContextRequest{Identifier: &commodorepb.ResolveStreamContextRequest_PlaybackId{PlaybackId: "pk_inactive"}},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				rows := sqlmock.NewRows(cols).
-					AddRow("stream-id", "user-id", "tenant-id", "internal", false, true, "pk_inactive", "mist_native")
+					AddRow("stream-id", "user-id", "tenant-id", "internal", false, true, "pk_inactive", "mist_native", false)
 				mock.ExpectQuery(`WHERE s\.playback_id = \$1`).WithArgs("pk_inactive").WillReturnRows(rows)
 			},
 			assert: func(t *testing.T, resp *commodorepb.ResolveStreamContextResponse) {
@@ -232,7 +232,7 @@ func TestResolveStreamContext(t *testing.T) {
 			wantErr: true,
 			setupMock: func(mock sqlmock.Sqlmock) {
 				rows := sqlmock.NewRows(cols).
-					AddRow("stream-id", "user-id", "tenant-id", "internal-name-1", true, false, "pk_demo", "mist_native")
+					AddRow("stream-id", "user-id", "tenant-id", "internal-name-1", true, false, "pk_demo", "mist_native", false)
 				mock.ExpectQuery(`WHERE s\.internal_name = \$1`).WithArgs("internal-name-1").WillReturnRows(rows)
 			},
 		},
@@ -249,7 +249,7 @@ func TestResolveStreamContext(t *testing.T) {
 			wantErr: true,
 			setupMock: func(mock sqlmock.Sqlmock) {
 				rows := sqlmock.NewRows(cols).
-					AddRow("stream-id", "user-id", "tenant-id", "internal-name-2", true, false, "pk_demo", "mist_native")
+					AddRow("stream-id", "user-id", "tenant-id", "internal-name-2", true, false, "pk_demo", "mist_native", true)
 				mock.ExpectQuery(`WHERE s\.internal_name = \$1`).WithArgs("internal-name-2").WillReturnRows(rows)
 			},
 		},

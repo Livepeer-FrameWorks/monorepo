@@ -194,6 +194,35 @@ func TestResolveStream(t *testing.T) {
 	})
 }
 
+// The direct ResolvePlaybackID fallback is singleflighted and runs on a context
+// detached from the winning caller's cancellation, so an abandoned caller can't
+// fail the shared resolve for every waiter (mirrors the registry hydrate).
+func TestResolveStream_LiveFallbackDetachedFromCallerCancellation(t *testing.T) {
+	prevReg := StreamRegistryInstance
+	StreamRegistryInstance = nil // force the direct fallback path
+	t.Cleanup(func() { StreamRegistryInstance = prevReg })
+
+	startFakeCommodoreServer(t, &fakeCommodoreInternal{
+		playbackID: func(rpcCtx context.Context, _ *commodorepb.ResolvePlaybackIDRequest) (*commodorepb.ResolvePlaybackIDResponse, error) {
+			if err := rpcCtx.Err(); err != nil {
+				return nil, err
+			}
+			return &commodorepb.ResolvePlaybackIDResponse{InternalName: "rec", TenantId: "t1"}, nil
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // caller abandoned before resolve
+
+	got, err := ResolveStream(ctx, "pbid-detach")
+	if err != nil {
+		t.Fatalf("fallback must resolve on a canceled caller ctx (detached RPC): %v", err)
+	}
+	if got.InternalName != "live+rec" {
+		t.Fatalf("unexpected target: %+v", got)
+	}
+}
+
 // TestResolveArtifactHashStreamTarget pins the DVR→clip→VOD first-hit ordering
 // of hash resolution and the all-miss nil contract.
 func TestResolveArtifactHashStreamTarget(t *testing.T) {
