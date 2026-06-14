@@ -104,6 +104,9 @@ type AccountUser struct {
 	LastName         string `yaml:"last_name,omitempty"`
 	Password         string `yaml:"password,omitempty"`
 	ResetCredentials bool   `yaml:"reset_credentials,omitempty"`
+	// PlatformOperator grants platform staff access (the RFC 9068
+	// platform_operator role). Reconciled idempotently like the profile fields.
+	PlatformOperator bool `yaml:"platform_operator,omitempty"`
 }
 
 // AccountBilling carries the customer-billing declaration. For system_operator

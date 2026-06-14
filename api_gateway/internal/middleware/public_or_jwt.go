@@ -177,6 +177,7 @@ func PublicOrJWTAuth(secret []byte, serviceClients *clients.ServiceClients) gin.
 		c.Set(string(ctxkeys.KeyEmail), authResult.Email)
 		c.Set(string(ctxkeys.KeyRole), authResult.Role)
 		c.Set(string(ctxkeys.KeyAuthType), authResult.AuthType)
+		c.Set(string(ctxkeys.KeyPlatformOperator), authResult.PlatformOperator)
 		if authResult.AuthType == "x402" {
 			c.Set(string(ctxkeys.KeyX402Processed), authResult.X402Processed)
 			c.Set(string(ctxkeys.KeyX402AuthOnly), authResult.X402AuthOnly)

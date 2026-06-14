@@ -1,5 +1,5 @@
 # Platform-operator god view: ranked cross-tenant activity index with
-# identity and billing columns. System-tenant owner/admin only.
+# identity and billing columns. Requires the platform_operator grant.
 query GetPlatformTenants($timeRange: TimeRangeInput, $limit: Int) {
   platform {
     tenants(timeRange: $timeRange, limit: $limit) {

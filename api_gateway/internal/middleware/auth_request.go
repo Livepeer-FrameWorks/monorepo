@@ -28,6 +28,9 @@ type AuthResult struct {
 	X402Processed bool
 	X402AuthOnly  bool
 	Permissions   []string
+	// PlatformOperator is the platform staff grant, carried from the verified
+	// token (roles claim) or the validated credential response.
+	PlatformOperator bool
 }
 
 type AuthOptions struct {
@@ -82,16 +85,17 @@ func AuthenticateRequest(ctx context.Context, r *http.Request, clients *clients.
 			}
 
 			return &AuthResult{
-				UserID:        walletResp.Auth.User.Id,
-				TenantID:      walletResp.Auth.User.TenantId,
-				Email:         email,
-				Role:          walletResp.Auth.User.Role,
-				AuthType:      "x402",
-				JWTToken:      walletResp.Auth.Token,
-				WalletAddress: walletAddress,
-				ExpiresAt:     expiresAt,
-				X402Processed: true,
-				X402AuthOnly:  walletResp.IsAuthOnly,
+				UserID:           walletResp.Auth.User.Id,
+				TenantID:         walletResp.Auth.User.TenantId,
+				Email:            email,
+				Role:             walletResp.Auth.User.Role,
+				AuthType:         "x402",
+				JWTToken:         walletResp.Auth.Token,
+				WalletAddress:    walletAddress,
+				ExpiresAt:        expiresAt,
+				X402Processed:    true,
+				X402AuthOnly:     walletResp.IsAuthOnly,
+				PlatformOperator: walletResp.Auth.User.PlatformOperator,
 			}, nil
 		}
 	}
@@ -122,13 +126,14 @@ func AuthenticateRequest(ctx context.Context, r *http.Request, clients *clients.
 				email = *resp.User.Email
 			}
 			return &AuthResult{
-				UserID:        resp.User.Id,
-				TenantID:      resp.User.TenantId,
-				Email:         email,
-				Role:          resp.User.Role,
-				AuthType:      "wallet",
-				JWTToken:      resp.Token,
-				WalletAddress: walletAddr,
+				UserID:           resp.User.Id,
+				TenantID:         resp.User.TenantId,
+				Email:            email,
+				Role:             resp.User.Role,
+				AuthType:         "wallet",
+				JWTToken:         resp.Token,
+				WalletAddress:    walletAddr,
+				PlatformOperator: resp.User.PlatformOperator,
 			}, nil
 		}
 	}
@@ -155,17 +160,25 @@ func AuthenticateRequest(ctx context.Context, r *http.Request, clients *clients.
 	claims, err := auth.ValidateJWT(token, jwtSecret)
 	if err == nil {
 		return &AuthResult{
-			UserID:   claims.UserID,
-			TenantID: claims.TenantID,
-			Email:    claims.Email,
-			Role:     claims.Role,
-			AuthType: "jwt",
-			JWTToken: token,
+			UserID:           claims.UserID,
+			TenantID:         claims.TenantID,
+			Email:            claims.Email,
+			Role:             claims.Role,
+			AuthType:         "jwt",
+			JWTToken:         token,
+			PlatformOperator: claims.HasRole(auth.RolePlatformOperator),
 		}, nil
 	}
 
 	resp, err := clients.Commodore.ValidateAPIToken(ctx, token)
 	if err == nil && resp != nil && resp.Valid {
+		// Platform-operator authority is deliberately NOT inherited by API
+		// tokens: a long-lived, scope-limited token must not become
+		// cross-tenant platform-admin just because its owner is staff. The
+		// /admin surface is interactive (JWT); operator power requires an
+		// interactive session, not a programmatic credential. (resp carries
+		// the owner's platform_operator for information, but the gate ignores
+		// it on this path.)
 		return &AuthResult{
 			UserID:      resp.UserId,
 			TenantID:    resp.TenantId,
@@ -191,6 +204,9 @@ func ApplyAuthToContext(ctx context.Context, auth *AuthResult) context.Context {
 	ctx = context.WithValue(ctx, ctxkeys.KeyEmail, auth.Email)
 	ctx = context.WithValue(ctx, ctxkeys.KeyRole, auth.Role)
 	ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, auth.AuthType)
+	if auth.PlatformOperator {
+		ctx = context.WithValue(ctx, ctxkeys.KeyPlatformOperator, true)
+	}
 	if auth.JWTToken != "" {
 		ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, auth.JWTToken)
 	}
@@ -222,12 +238,13 @@ func ApplyAuthToContext(ctx context.Context, auth *AuthResult) context.Context {
 	}
 	if auth.UserID != "" && auth.TenantID != "" {
 		ctx = context.WithValue(ctx, ctxkeys.KeyUser, &UserContext{
-			UserID:      auth.UserID,
-			TenantID:    auth.TenantID,
-			Email:       auth.Email,
-			Role:        auth.Role,
-			TokenID:     auth.TokenID,
-			Permissions: auth.Permissions,
+			UserID:           auth.UserID,
+			TenantID:         auth.TenantID,
+			Email:            auth.Email,
+			Role:             auth.Role,
+			TokenID:          auth.TokenID,
+			Permissions:      auth.Permissions,
+			PlatformOperator: auth.PlatformOperator,
 		})
 	}
 	return ctx

@@ -84,9 +84,9 @@ type Query {
   analytics: Analytics!
 
   """
-  Platform-operator god view (cross-tenant). Every field requires an
-  owner/admin of the reserved system tenant and is audit-logged; all other
-  callers receive an authorization error.
+  Platform-operator god view (cross-tenant). Every field requires the
+  platform_operator grant (RFC 9068 roles claim) and is audit-logged; all
+  other callers receive an authorization error.
   """
   platform: Platform!
 
@@ -1909,9 +1909,9 @@ type Mutation {
 
   Authority is infrastructure ownership, not subscriber access: Mist admin
   access is effectively shell on the edge box, so only owner/admin users
-  in the cluster owner tenant can open it. FrameWorks system-tenant
-  owner/admin users are allowed as platform break-glass. Anything else
-  returns AuthError without exposing whether the node exists.
+  in the cluster owner tenant can open it. Holders of the platform_operator
+  grant are allowed as break-glass. Anything else returns AuthError without
+  exposing whether the node exists.
   """
   openMistAdminSession(input: OpenMistAdminSessionInput!): OpenMistAdminSessionResult!
 
@@ -7637,12 +7637,12 @@ type PlaybackAccessDecision {
 }
 
 # ============================================================================
-# PLATFORM-OPERATOR GOD VIEW (cross-tenant; system-tenant owner/admin only)
+# PLATFORM-OPERATOR GOD VIEW (cross-tenant; requires the platform_operator grant)
 # ============================================================================
 
 """
-Platform-operator god view namespace. Every field is gated to owners/admins
-of the reserved system tenant and audit-logged at the gateway.
+Platform-operator god view namespace. Every field requires the
+platform_operator grant (RFC 9068 roles claim) and is audit-logged at the gateway.
 """
 type Platform {
   """

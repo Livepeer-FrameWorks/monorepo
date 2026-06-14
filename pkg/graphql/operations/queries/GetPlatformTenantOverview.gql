@@ -1,5 +1,5 @@
 # Platform-operator drill-down: identity + activity + the tenant's own
-# analytics overview. System-tenant owner/admin only.
+# analytics overview. Requires the platform_operator grant.
 query GetPlatformTenantOverview($id: ID!, $timeRange: TimeRangeInput) {
   platform {
     tenant(id: $id) {

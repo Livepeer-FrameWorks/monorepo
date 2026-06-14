@@ -2,7 +2,7 @@
 # submits `sessionToken` as a hidden POST form field to `postUrl` in a
 # new tab — keeping the token out of URLs/referrers/access logs. Auth
 # is ownership-bound: only owner/admin users in the infrastructure owner
-# tenant can open it; system-tenant owner/admin users are platform break-glass.
+# tenant can open it; platform_operator-grant holders are break-glass.
 mutation OpenMistAdminSession($input: OpenMistAdminSessionInput!) {
   openMistAdminSession(input: $input) {
     ... on MistAdminSession {

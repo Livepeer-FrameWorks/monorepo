@@ -121,14 +121,16 @@ func reconcileUser(ctx context.Context, exec DBTX, tenantID string, u AccountUse
 		       COALESCE(first_name, ''),
 		       COALESCE(last_name, ''),
 		       role,
-		       COALESCE(permissions, '{}')
+		       COALESCE(permissions, '{}'),
+		       platform_operator
 		FROM commodore.users
 		WHERE tenant_id = $1::uuid AND email = $2`
 	var (
 		id, curFirst, curLast, curRole string
 		curPerms                       pq.StringArray
+		curPlatformOp                  bool
 	)
-	err := exec.QueryRowContext(ctx, probeSQL, tenantID, u.Email).Scan(&id, &curFirst, &curLast, &curRole, &curPerms)
+	err := exec.QueryRowContext(ctx, probeSQL, tenantID, u.Email).Scan(&id, &curFirst, &curLast, &curRole, &curPerms, &curPlatformOp)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		hash, hashErr := auth.HashPassword(u.Password)
@@ -139,12 +141,12 @@ func reconcileUser(ctx context.Context, exec DBTX, tenantID string, u AccountUse
 		const insertSQL = `
 			INSERT INTO commodore.users
 				(id, tenant_id, email, password_hash, first_name, last_name, role, permissions,
-				 is_active, verified, created_at, updated_at)
+				 platform_operator, is_active, verified, created_at, updated_at)
 			VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8,
-			        true, true, NOW(), NOW())`
+			        $9, true, true, NOW(), NOW())`
 		if _, insertErr := exec.ExecContext(ctx, insertSQL,
 			userID, tenantID, u.Email, hash, u.FirstName, u.LastName, u.Role,
-			pq.Array(defaultPermissions(u.Role)),
+			pq.Array(defaultPermissions(u.Role)), u.PlatformOperator,
 		); insertErr != nil {
 			return "", "", fmt.Errorf("insert user: %w", insertErr)
 		}
@@ -155,7 +157,7 @@ func reconcileUser(ctx context.Context, exec DBTX, tenantID string, u AccountUse
 
 	desiredPerms := defaultPermissions(u.Role)
 	profileEq := curFirst == u.FirstName && curLast == u.LastName && curRole == u.Role &&
-		stringSliceEq([]string(curPerms), desiredPerms)
+		stringSliceEq([]string(curPerms), desiredPerms) && curPlatformOp == u.PlatformOperator
 
 	if u.ResetCredentials {
 		if !allowReset {
@@ -167,7 +169,7 @@ func reconcileUser(ctx context.Context, exec DBTX, tenantID string, u AccountUse
 			if profileEq {
 				return "noop", warn, nil
 			}
-			if err := updateUserProfile(ctx, exec, id, u, desiredPerms); err != nil {
+			if err := updateUserProfile(ctx, exec, id, tenantID, u, desiredPerms); err != nil {
 				return "", warn, err
 			}
 			return "updated", warn, nil
@@ -179,10 +181,10 @@ func reconcileUser(ctx context.Context, exec DBTX, tenantID string, u AccountUse
 		const updateSQL = `
 			UPDATE commodore.users
 			SET first_name = $2, last_name = $3, role = $4, permissions = $5,
-			    password_hash = $6, updated_at = NOW()
-			WHERE id = $1::uuid`
+			    password_hash = $6, platform_operator = $7, updated_at = NOW()
+			WHERE id = $1::uuid AND tenant_id = $8::uuid`
 		if _, updateErr := exec.ExecContext(ctx, updateSQL, id, u.FirstName, u.LastName, u.Role,
-			pq.Array(desiredPerms), hash); updateErr != nil {
+			pq.Array(desiredPerms), hash, u.PlatformOperator, tenantID); updateErr != nil {
 			return "", "", fmt.Errorf("update user (with credentials): %w", updateErr)
 		}
 		return "updated", "", nil
@@ -191,18 +193,18 @@ func reconcileUser(ctx context.Context, exec DBTX, tenantID string, u AccountUse
 	if profileEq {
 		return "noop", "", nil
 	}
-	if err := updateUserProfile(ctx, exec, id, u, desiredPerms); err != nil {
+	if err := updateUserProfile(ctx, exec, id, tenantID, u, desiredPerms); err != nil {
 		return "", "", err
 	}
 	return "updated", "", nil
 }
 
-func updateUserProfile(ctx context.Context, exec DBTX, id string, u AccountUser, perms []string) error {
+func updateUserProfile(ctx context.Context, exec DBTX, id, tenantID string, u AccountUser, perms []string) error {
 	const updateSQL = `
 		UPDATE commodore.users
-		SET first_name = $2, last_name = $3, role = $4, permissions = $5, updated_at = NOW()
-		WHERE id = $1::uuid`
-	if _, err := exec.ExecContext(ctx, updateSQL, id, u.FirstName, u.LastName, u.Role, pq.Array(perms)); err != nil {
+		SET first_name = $2, last_name = $3, role = $4, permissions = $5, platform_operator = $6, updated_at = NOW()
+		WHERE id = $1::uuid AND tenant_id = $7::uuid`
+	if _, err := exec.ExecContext(ctx, updateSQL, id, u.FirstName, u.LastName, u.Role, pq.Array(perms), u.PlatformOperator, tenantID); err != nil {
 		return fmt.Errorf("update user profile: %w", err)
 	}
 	return nil

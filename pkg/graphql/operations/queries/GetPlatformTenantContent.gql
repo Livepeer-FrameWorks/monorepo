@@ -1,5 +1,5 @@
 # Platform-operator drill-down: one tenant's content/account footprint.
-# System-tenant owner/admin only.
+# Requires the platform_operator grant.
 query GetPlatformTenantContent($id: ID!) {
   platform {
     tenant(id: $id) {

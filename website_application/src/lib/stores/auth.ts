@@ -12,6 +12,7 @@ interface User {
   first_name?: string;
   last_name?: string;
   role?: string;
+  platform_operator?: boolean;
   created_at?: string;
   is_active?: boolean;
   is_verified?: boolean;

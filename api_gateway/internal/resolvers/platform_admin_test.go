@@ -22,11 +22,12 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// operatorCtx is a system-tenant owner: passes RequirePlatformOperator.
+// operatorCtx carries the platform_operator grant: passes RequirePlatformOperator.
 func operatorCtx() context.Context {
 	ctx := clientstest.AuthedCtx(tenants.SystemTenantID.String())
 	ctx = context.WithValue(ctx, ctxkeys.KeyRole, "owner")
 	ctx = context.WithValue(ctx, ctxkeys.KeyUserID, "operator-1")
+	ctx = context.WithValue(ctx, ctxkeys.KeyPlatformOperator, true)
 	return ctx
 }
 

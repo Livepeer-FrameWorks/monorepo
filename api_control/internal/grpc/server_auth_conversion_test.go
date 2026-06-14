@@ -31,7 +31,7 @@ func TestGetMe_MapsInlineUserAndWalletRows(t *testing.T) {
 		WithArgs("user-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "tenant_id", "email", "first_name", "last_name", "role", "permissions",
-			"is_active", "verified", "last_login_at", "created_at", "updated_at",
+			"is_active", "verified", "last_login_at", "created_at", "updated_at", "platform_operator",
 		}).AddRow(
 			"user-1",
 			"tenant-1",
@@ -45,6 +45,7 @@ func TestGetMe_MapsInlineUserAndWalletRows(t *testing.T) {
 			lastLoginAt,
 			createdAt,
 			updatedAt,
+			false,
 		))
 
 	mock.ExpectQuery("FROM commodore.wallet_identities").
@@ -105,7 +106,7 @@ func refreshTokenUserRows() *sqlmock.Rows {
 	updatedAt := createdAt.Add(15 * time.Minute)
 	return sqlmock.NewRows([]string{
 		"email", "role", "permissions", "first_name", "last_name",
-		"is_active", "verified", "created_at", "updated_at",
+		"is_active", "verified", "created_at", "updated_at", "platform_operator",
 	}).AddRow(
 		"refresh@example.com",
 		"member",
@@ -116,6 +117,7 @@ func refreshTokenUserRows() *sqlmock.Rows {
 		true,
 		createdAt,
 		updatedAt,
+		false,
 	)
 }
 

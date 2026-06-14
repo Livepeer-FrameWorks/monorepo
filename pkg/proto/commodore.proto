@@ -685,6 +685,7 @@ message ValidateAPITokenResponse {
   string role = 5;                      // json:"role,omitempty"
   repeated string permissions = 6;      // json:"permissions,omitempty"
   string token_id = 7;                  // json:"token_id,omitempty"
+  bool platform_operator = 8;           // json:"platform_operator,omitempty" - computed from the token's user row
 }
 
 // ============================================================================
@@ -1440,6 +1441,7 @@ message User {
   google.protobuf.Timestamp created_at = 11; // json:"created_at"
   google.protobuf.Timestamp updated_at = 12; // json:"updated_at"
   repeated WalletIdentity wallets = 13; // Linked wallets (populated on GetMe)
+  bool platform_operator = 14;          // json:"platform_operator" - platform staff grant (commodore.users.platform_operator)
 }
 
 // ============================================================================

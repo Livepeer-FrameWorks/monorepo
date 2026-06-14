@@ -1,11 +1,15 @@
 package middleware
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"frameworks/api_gateway/internal/clients"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 
 	"github.com/gin-gonic/gin"
@@ -93,6 +97,106 @@ func TestGraphQLContextMiddleware_GinToGoContextBridge(t *testing.T) {
 			}
 			if capturedRole != tt.wantRole {
 				t.Errorf("Role: got %q, want %q", capturedRole, tt.wantRole)
+			}
+		})
+	}
+}
+
+// TestGraphQLContextMiddleware_CarriesPlatformOperator guards grant erasure:
+// the middleware rebuilds KeyUser, so it must carry the platform_operator grant
+// into both the UserContext (which RequirePlatformOperator reads preferentially)
+// and the raw KeyPlatformOperator key — otherwise an operator's grant is erased
+// on every HTTP GraphQL request and /admin denies them.
+func TestGraphQLContextMiddleware_CarriesPlatformOperator(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	for _, op := range []bool{true, false} {
+		name := "operator"
+		if !op {
+			name = "non-operator"
+		}
+		t.Run(name, func(t *testing.T) {
+			var fromUserContext, fromRawKey bool
+
+			r := gin.New()
+			r.Use(func(c *gin.Context) {
+				c.Set(string(ctxkeys.KeyUserID), "user-1")
+				c.Set(string(ctxkeys.KeyTenantID), "tenant-1")
+				c.Set(string(ctxkeys.KeyPlatformOperator), op)
+				c.Next()
+			})
+			r.Use(GraphQLContextMiddleware("test-service-token"))
+			r.GET("/test", func(c *gin.Context) {
+				ctx := c.Request.Context()
+				if u := GetUserFromContext(ctx); u != nil {
+					fromUserContext = u.PlatformOperator
+				}
+				fromRawKey = ctxkeys.IsPlatformOperator(ctx)
+				c.String(200, "ok")
+			})
+
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequestWithContext(context.Background(), "GET", "/test", nil)
+			r.ServeHTTP(w, req)
+
+			if fromUserContext != op {
+				t.Errorf("UserContext.PlatformOperator: got %v, want %v", fromUserContext, op)
+			}
+			if fromRawKey != op {
+				t.Errorf("ctxkeys.IsPlatformOperator: got %v, want %v", fromRawKey, op)
+			}
+		})
+	}
+}
+
+// TestPlatformOperatorSurvivesFullAuthChain drives a real roles-bearing JWT
+// through the actual HTTP middleware chain — PublicOrJWTAuth →
+// GraphQLContextMiddleware — and asserts the platform_operator grant reaches
+// the resolver-visible UserContext. This is the end-to-end coverage the
+// isolated GraphQLContextMiddleware test cannot give: it would catch a
+// regression anywhere from claim decoding to the gin→context handoff.
+func TestPlatformOperatorSurvivesFullAuthChain(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	secret := []byte("test-secret-please-do-not-use-in-prod")
+
+	for _, op := range []bool{true, false} {
+		name := "operator-jwt"
+		var roles []string
+		if op {
+			roles = []string{auth.RolePlatformOperator}
+		} else {
+			name = "plain-jwt"
+		}
+		t.Run(name, func(t *testing.T) {
+			token, err := auth.GenerateSessionJWT("u1", "t1", "u@example.com", "owner", roles, time.Time{}, secret)
+			if err != nil {
+				t.Fatalf("mint: %v", err)
+			}
+
+			var seen bool
+			r := gin.New()
+			r.Use(PublicOrJWTAuth(secret, &clients.ServiceClients{}))
+			r.Use(GraphQLContextMiddleware("svc-token"))
+			r.POST("/graphql", func(c *gin.Context) {
+				u := GetUserFromContext(c.Request.Context())
+				if u == nil {
+					t.Fatal("no user context after auth chain")
+				}
+				seen = u.PlatformOperator
+				c.String(http.StatusOK, "ok")
+			})
+
+			body := []byte(`{"query":"query { platform { tenants { generatedAt } } }"}`)
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", bytes.NewReader(body))
+			req.Header.Set("Authorization", "Bearer "+token)
+			r.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d", w.Code)
+			}
+			if seen != op {
+				t.Fatalf("resolver-visible PlatformOperator = %v, want %v", seen, op)
 			}
 		})
 	}

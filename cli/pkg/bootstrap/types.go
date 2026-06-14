@@ -466,6 +466,9 @@ type AccountUserCommon struct {
 	FirstName        string `yaml:"first_name,omitempty"`
 	LastName         string `yaml:"last_name,omitempty"`
 	ResetCredentials bool   `yaml:"reset_credentials,omitempty"`
+	// PlatformOperator grants platform staff access (RFC 9068 platform_operator
+	// role). Secret-free, so it lives in the common (committed) layer.
+	PlatformOperator bool `yaml:"platform_operator,omitempty"`
 }
 
 // AccountUserDerived is a user entry as it appears in Derived/Overlay layers, with the

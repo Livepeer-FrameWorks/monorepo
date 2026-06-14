@@ -1,9 +1,8 @@
 package resolvers
 
 import (
+	"context"
 	"testing"
-
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
 )
 
 // TestMistAdminCanAdminNode covers the ownership predicate that both
@@ -15,27 +14,26 @@ func TestMistAdminCanAdminNode(t *testing.T) {
 		ownerTenantID string
 		callerTenant  string
 		callerRole    string
+		platformOp    bool
 		want          bool
 	}
-	systemTenant := tenants.SystemTenantID.String()
 	cases := []c{
-		{"owner-tenant-owner", "tenant-acme", "tenant-acme", "owner", true},
-		{"owner-tenant-admin", "tenant-acme", "tenant-acme", "admin", true},
-		{"owner-tenant-member-denied", "tenant-acme", "tenant-acme", "member", false},
-		{"subscribed-customer-denied", systemTenant, "tenant-customer", "owner", false},
-		{"system-owner-break-glass", "", systemTenant, "owner", true},
-		{"system-admin-break-glass", "tenant-acme", systemTenant, "admin", true},
-		{"system-member-denied", "tenant-acme", systemTenant, "member", false},
-		{"different-tenant-denied", "tenant-acme", "tenant-evil", "owner", false},
-		{"missing-owner-non-system-denied", "", "tenant-acme", "owner", false},
-		{"missing-caller-tenant-denied", "tenant-acme", "", "owner", false},
+		{"owner-tenant-owner", "tenant-acme", "tenant-acme", "owner", false, true},
+		{"owner-tenant-admin", "tenant-acme", "tenant-acme", "admin", false, true},
+		{"owner-tenant-member-denied", "tenant-acme", "tenant-acme", "member", false, false},
+		{"subscribed-customer-denied", "tenant-acme", "tenant-customer", "owner", false, false},
+		{"platform-operator-break-glass", "", "tenant-x", "member", true, true},
+		{"platform-operator-other-tenant", "tenant-acme", "tenant-x", "member", true, true},
+		{"different-tenant-denied", "tenant-acme", "tenant-evil", "owner", false, false},
+		{"missing-owner-non-operator-denied", "", "tenant-acme", "owner", false, false},
+		{"missing-caller-tenant-denied", "tenant-acme", "", "owner", false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := mistAdminCanAdminNode(tc.ownerTenantID, tc.callerTenant, tc.callerRole)
+			got := mistAdminCanAdminNode(context.Background(), tc.ownerTenantID, tc.callerTenant, tc.callerRole, tc.platformOp)
 			if got != tc.want {
-				t.Errorf("mistAdminCanAdminNode(owner=%q, caller=%q, role=%q) = %v; want %v",
-					tc.ownerTenantID, tc.callerTenant, tc.callerRole, got, tc.want)
+				t.Errorf("mistAdminCanAdminNode(owner=%q, caller=%q, role=%q, op=%v) = %v; want %v",
+					tc.ownerTenantID, tc.callerTenant, tc.callerRole, tc.platformOp, got, tc.want)
 			}
 		})
 	}

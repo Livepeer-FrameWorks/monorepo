@@ -61,7 +61,7 @@
   <EmptyState
     icon="ShieldCheck"
     title="Platform operator access required"
-    description="This admin view is restricted to owners/admins of the system tenant."
+    description="This admin view is restricted to users with the platform operator grant."
     size="md"
     showAction={false}
   />

@@ -1018,17 +1018,18 @@ func userToJSON(u *commodorepb.User) map[string]any {
 		return nil
 	}
 	result := map[string]any{
-		"id":          u.Id,
-		"tenant_id":   u.TenantId,
-		"email":       u.Email,
-		"first_name":  u.FirstName,
-		"last_name":   u.LastName,
-		"role":        u.Role,
-		"permissions": u.Permissions,
-		"is_active":   u.IsActive,
-		"is_verified": u.IsVerified,
-		"created_at":  u.CreatedAt.AsTime(),
-		"updated_at":  u.UpdatedAt.AsTime(),
+		"id":                u.Id,
+		"tenant_id":         u.TenantId,
+		"email":             u.Email,
+		"first_name":        u.FirstName,
+		"last_name":         u.LastName,
+		"role":              u.Role,
+		"permissions":       u.Permissions,
+		"is_active":         u.IsActive,
+		"is_verified":       u.IsVerified,
+		"platform_operator": u.PlatformOperator,
+		"created_at":        u.CreatedAt.AsTime(),
+		"updated_at":        u.UpdatedAt.AsTime(),
 	}
 	if u.LastLoginAt != nil {
 		result["last_login_at"] = u.LastLoginAt.AsTime()

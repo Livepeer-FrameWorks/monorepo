@@ -1,11 +1,10 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
-
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
 )
 
 var testSecret = []byte("test-secret-please-do-not-use-in-prod")
@@ -102,31 +101,30 @@ func TestMistAdminSessionUniqueJTI(t *testing.T) {
 }
 
 func TestCanAdminMistNode(t *testing.T) {
-	systemTenant := tenants.SystemTenantID.String()
 	cases := []struct {
 		name          string
 		ownerTenantID string
 		callerTenant  string
 		callerRole    string
+		platformOp    bool
 		want          bool
 	}{
-		{"owner-tenant-owner", "tenant-acme", "tenant-acme", "owner", true},
-		{"owner-tenant-admin", "tenant-acme", "tenant-acme", "admin", true},
-		{"owner-tenant-member-denied", "tenant-acme", "tenant-acme", "member", false},
-		{"customer-owner-denied-on-system-owned-node", systemTenant, "tenant-customer", "owner", false},
-		{"system-owner-break-glass", "", systemTenant, "owner", true},
-		{"system-admin-break-glass", "tenant-acme", systemTenant, "admin", true},
-		{"system-member-denied", "tenant-acme", systemTenant, "member", false},
-		{"different-tenant-denied", "tenant-acme", "tenant-evil", "owner", false},
-		{"missing-owner-non-system-denied", "", "tenant-acme", "owner", false},
-		{"missing-caller-tenant-denied", "tenant-acme", "", "owner", false},
+		{"owner-tenant-owner", "tenant-acme", "tenant-acme", "owner", false, true},
+		{"owner-tenant-admin", "tenant-acme", "tenant-acme", "admin", false, true},
+		{"owner-tenant-member-denied", "tenant-acme", "tenant-acme", "member", false, false},
+		{"customer-owner-denied-on-other-node", "tenant-acme", "tenant-customer", "owner", false, false},
+		{"platform-operator-break-glass-no-owner", "", "tenant-x", "member", true, true},
+		{"platform-operator-break-glass-other-tenant", "tenant-acme", "tenant-x", "member", true, true},
+		{"non-operator-different-tenant-denied", "tenant-acme", "tenant-evil", "owner", false, false},
+		{"missing-owner-non-operator-denied", "", "tenant-acme", "owner", false, false},
+		{"missing-caller-tenant-denied", "tenant-acme", "", "owner", false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := CanAdminMistNode(tc.ownerTenantID, tc.callerTenant, tc.callerRole)
+			got := CanAdminMistNode(context.Background(), tc.ownerTenantID, tc.callerTenant, tc.callerRole, tc.platformOp)
 			if got != tc.want {
-				t.Errorf("CanAdminMistNode(owner=%q, caller=%q, role=%q) = %v; want %v",
-					tc.ownerTenantID, tc.callerTenant, tc.callerRole, got, tc.want)
+				t.Errorf("CanAdminMistNode(owner=%q, caller=%q, role=%q, op=%v) = %v; want %v",
+					tc.ownerTenantID, tc.callerTenant, tc.callerRole, tc.platformOp, got, tc.want)
 			}
 		})
 	}

@@ -328,11 +328,15 @@ func main() {
 									ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, resp.Token)
 								}
 
+								if resp.User.PlatformOperator {
+									ctx = context.WithValue(ctx, ctxkeys.KeyPlatformOperator, true)
+								}
 								user := &middleware.UserContext{
-									UserID:   resp.User.Id,
-									TenantID: resp.User.TenantId,
-									Email:    email,
-									Role:     resp.User.Role,
+									UserID:           resp.User.Id,
+									TenantID:         resp.User.TenantId,
+									Email:            email,
+									Role:             resp.User.Role,
+									PlatformOperator: resp.User.PlatformOperator,
 								}
 								ctx = context.WithValue(ctx, ctxkeys.KeyUser, user)
 								return ctx, &initPayload, nil
@@ -353,11 +357,16 @@ func main() {
 					ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, token)
 					ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, "jwt")
 
+					platformOperator := claims.HasRole(pkgauth.RolePlatformOperator)
+					if platformOperator {
+						ctx = context.WithValue(ctx, ctxkeys.KeyPlatformOperator, true)
+					}
 					user := &middleware.UserContext{
-						UserID:   claims.UserID,
-						TenantID: claims.TenantID,
-						Email:    claims.Email,
-						Role:     claims.Role,
+						UserID:           claims.UserID,
+						TenantID:         claims.TenantID,
+						Email:            claims.Email,
+						Role:             claims.Role,
+						PlatformOperator: platformOperator,
 					}
 					ctx = context.WithValue(ctx, ctxkeys.KeyUser, user)
 				} else {
@@ -378,7 +387,9 @@ func main() {
 						if len(resp.Permissions) > 0 {
 							ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, resp.Permissions)
 						}
-
+						// API tokens do not inherit platform-operator authority
+						// (see auth_request.go); operator power requires an
+						// interactive JWT session, not a programmatic credential.
 						user := &middleware.UserContext{
 							UserID:      resp.UserId,
 							TenantID:    resp.TenantId,

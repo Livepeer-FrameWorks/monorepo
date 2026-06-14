@@ -51,11 +51,11 @@ func TestLoginChecksPasswordBeforeUnverifiedState(t *testing.T) {
 			now := time.Now()
 			rows := sqlmock.NewRows([]string{
 				"id", "tenant_id", "email", "password_hash", "first_name", "last_name",
-				"role", "permissions", "is_active", "verified", "created_at", "updated_at",
+				"role", "permissions", "is_active", "verified", "created_at", "updated_at", "platform_operator",
 			}).AddRow(
 				"user-1", "tenant-1", "user@example.com", hashedPassword,
 				sql.NullString{}, sql.NullString{}, "owner", pq.StringArray{"streams:read"},
-				true, false, now, now,
+				true, false, now, now, false,
 			)
 			mock.ExpectQuery("FROM commodore.users WHERE email = \\$1").
 				WithArgs("user@example.com").

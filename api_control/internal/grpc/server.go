@@ -412,19 +412,29 @@ func selectActiveIngestCluster(clusterID sql.NullString, updatedAt sql.NullTime,
 }
 
 type commodoreUserRecord struct {
-	ID           string
-	TenantID     string
-	Email        string
-	PasswordHash string
-	FirstName    sql.NullString
-	LastName     sql.NullString
-	Role         string
-	Permissions  []string
-	IsActive     bool
-	IsVerified   bool
-	LastLoginAt  sql.NullTime
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID               string
+	TenantID         string
+	Email            string
+	PasswordHash     string
+	FirstName        sql.NullString
+	LastName         sql.NullString
+	Role             string
+	Permissions      []string
+	IsActive         bool
+	IsVerified       bool
+	PlatformOperator bool
+	LastLoginAt      sql.NullTime
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+// platformRoles maps a user's grants to the RFC 9068 roles slice carried in
+// the session token; the platform_operator grant is the only role today.
+func platformRoles(platformOperator bool) []string {
+	if platformOperator {
+		return []string{auth.RolePlatformOperator}
+	}
+	return nil
 }
 
 func scanCommodoreUserForLogin(row *sql.Row, user *commodoreUserRecord) error {
@@ -441,6 +451,7 @@ func scanCommodoreUserForLogin(row *sql.Row, user *commodoreUserRecord) error {
 		&user.IsVerified,
 		&user.CreatedAt,
 		&user.UpdatedAt,
+		&user.PlatformOperator,
 	)
 }
 
@@ -458,6 +469,7 @@ func scanCommodoreUserForGetMe(row *sql.Row, user *commodoreUserRecord) error {
 		&user.LastLoginAt,
 		&user.CreatedAt,
 		&user.UpdatedAt,
+		&user.PlatformOperator,
 	)
 }
 
@@ -472,6 +484,7 @@ func scanCommodoreUserForRefresh(row *sql.Row, user *commodoreUserRecord) error 
 		&user.IsVerified,
 		&user.CreatedAt,
 		&user.UpdatedAt,
+		&user.PlatformOperator,
 	)
 }
 
@@ -487,17 +500,18 @@ func (u commodoreUserRecord) toProtoUser(userID, tenantID string) *commodorepb.U
 	email := u.Email
 
 	result := &commodorepb.User{
-		Id:          id,
-		TenantId:    tenant,
-		Email:       &email,
-		FirstName:   u.FirstName.String,
-		LastName:    u.LastName.String,
-		Role:        u.Role,
-		Permissions: u.Permissions,
-		IsActive:    u.IsActive,
-		IsVerified:  u.IsVerified,
-		CreatedAt:   timestamppb.New(u.CreatedAt),
-		UpdatedAt:   timestamppb.New(u.UpdatedAt),
+		Id:               id,
+		TenantId:         tenant,
+		Email:            &email,
+		FirstName:        u.FirstName.String,
+		LastName:         u.LastName.String,
+		Role:             u.Role,
+		Permissions:      u.Permissions,
+		IsActive:         u.IsActive,
+		IsVerified:       u.IsVerified,
+		PlatformOperator: u.PlatformOperator,
+		CreatedAt:        timestamppb.New(u.CreatedAt),
+		UpdatedAt:        timestamppb.New(u.UpdatedAt),
 	}
 	if u.LastLoginAt.Valid {
 		result.LastLoginAt = timestamppb.New(u.LastLoginAt.Time)
@@ -2117,9 +2131,12 @@ func (s *CommodoreServer) ValidateAPIToken(ctx context.Context, req *commodorepb
 		s.logger.WithError(updateErr).Debug("Failed to update API token last_used_at")
 	}
 
-	// Look up user email and role for context
+	// Look up user email, role, and platform-operator grant for context.
+	// Filter by the token's tenant too (defense in depth: the user must belong
+	// to the tenant the token is scoped to).
 	var email, role string
-	err = s.db.QueryRowContext(ctx, `SELECT email, role FROM commodore.users WHERE id = $1`, userID).Scan(&email, &role)
+	var platformOperator bool
+	err = s.db.QueryRowContext(ctx, `SELECT email, role, platform_operator FROM commodore.users WHERE id = $1 AND tenant_id = $2`, userID, tenantID).Scan(&email, &role, &platformOperator)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithFields(logging.Fields{
 			"user_id": userID,
@@ -2128,13 +2145,14 @@ func (s *CommodoreServer) ValidateAPIToken(ctx context.Context, req *commodorepb
 	}
 
 	return &commodorepb.ValidateAPITokenResponse{
-		Valid:       true,
-		UserId:      userID,
-		TenantId:    tenantID,
-		Email:       email,
-		Role:        role,
-		Permissions: permissions,
-		TokenId:     tokenID,
+		Valid:            true,
+		UserId:           userID,
+		TenantId:         tenantID,
+		Email:            email,
+		Role:             role,
+		Permissions:      permissions,
+		TokenId:          tokenID,
+		PlatformOperator: platformOperator,
 	}, nil
 }
 
@@ -2170,8 +2188,8 @@ var (
 //     tenant in the request.
 //
 //  2. Ownership is verified against Quartermaster. The caller must be an
-//     owner/admin in the cluster's owner tenant; the reserved system
-//     tenant is allowed as platform break-glass.
+//     owner/admin in the cluster's owner tenant; holders of the
+//     platform_operator grant are allowed as break-glass.
 func (s *CommodoreServer) MintMistAdminSession(ctx context.Context, req *commodorepb.MintMistAdminSessionRequest) (*commodorepb.MintMistAdminSessionResponse, error) {
 	nodeID := strings.TrimSpace(req.GetNodeId())
 	if nodeID == "" {
@@ -2183,6 +2201,10 @@ func (s *CommodoreServer) MintMistAdminSession(ctx context.Context, req *commodo
 		return nil, err
 	}
 	trustedRole := strings.TrimSpace(ctxkeys.GetRole(ctx))
+	// The platform-operator grant rides the JWT that this service's gRPC
+	// interceptor validated itself (same trust basis as role/tenant), so the
+	// break-glass arm reads it from the verified claims, not a forwarded bool.
+	trustedPlatformOperator := ctxkeys.IsPlatformOperator(ctx)
 
 	ownerResp, err := mistAdminGetNodeOwner(s, ctx, nodeID)
 	if err != nil {
@@ -2201,7 +2223,7 @@ func (s *CommodoreServer) MintMistAdminSession(ctx context.Context, req *commodo
 	isPlatformOfficial := clusterResp.GetCluster().GetIsPlatformOfficial()
 	ownerTenantID := strings.TrimSpace(ownerResp.GetOwnerTenantId())
 
-	if !auth.CanAdminMistNode(ownerTenantID, trustedTenantID, trustedRole) {
+	if !auth.CanAdminMistNode(ctx, ownerTenantID, trustedTenantID, trustedRole, trustedPlatformOperator) {
 		s.logger.WithFields(logging.Fields{
 			"node_id":              nodeID,
 			"cluster_id":           clusterID,
@@ -3833,7 +3855,7 @@ func (s *CommodoreServer) Login(ctx context.Context, req *commodorepb.LoginReque
 	// Find user by email
 	var user commodoreUserRecord
 	err := scanCommodoreUserForLogin(s.db.QueryRowContext(ctx, `
-		SELECT id, tenant_id, email, password_hash, first_name, last_name, role, permissions, is_active, verified, created_at, updated_at
+		SELECT id, tenant_id, email, password_hash, first_name, last_name, role, permissions, is_active, verified, created_at, updated_at, platform_operator
 		FROM commodore.users WHERE email = $1
 	`, email), &user)
 
@@ -3862,12 +3884,14 @@ func (s *CommodoreServer) Login(ctx context.Context, req *commodorepb.LoginReque
 		return nil, status.Error(codes.Unauthenticated, "email not verified")
 	}
 
-	// Update last login
-	_, _ = s.db.ExecContext(ctx, `UPDATE commodore.users SET last_login_at = NOW() WHERE id = $1`, user.ID)
+	// Update last login (best effort)
+	if _, updateErr := s.db.ExecContext(ctx, `UPDATE commodore.users SET last_login_at = NOW() WHERE id = $1 AND tenant_id = $2`, user.ID, user.TenantID); updateErr != nil {
+		s.logger.WithError(updateErr).Debug("Failed to update last_login_at")
+	}
 
 	// Generate JWT access token
 	jwtSecret := []byte(config.RequireEnv("JWT_SECRET"))
-	token, err := auth.GenerateJWT(user.ID, user.TenantID, user.Email, user.Role, jwtSecret)
+	token, err := auth.GenerateSessionJWT(user.ID, user.TenantID, user.Email, user.Role, platformRoles(user.PlatformOperator), time.Now(), jwtSecret)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to generate JWT")
 		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
@@ -4077,7 +4101,7 @@ func (s *CommodoreServer) GetMe(ctx context.Context, req *commodorepb.GetMeReque
 	var user commodoreUserRecord
 
 	err = scanCommodoreUserForGetMe(s.db.QueryRowContext(ctx, `
-		SELECT id, tenant_id, email, first_name, last_name, role, permissions, is_active, verified, last_login_at, created_at, updated_at
+		SELECT id, tenant_id, email, first_name, last_name, role, permissions, is_active, verified, last_login_at, created_at, updated_at, platform_operator
 		FROM commodore.users WHERE id = $1 AND tenant_id = $2
 	`, userID, tenantID), &user)
 
@@ -4253,7 +4277,7 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *commodorepb.Ref
 
 	var user commodoreUserRecord
 	err = scanCommodoreUserForRefresh(tx.QueryRowContext(ctx, `
-		SELECT email, role, permissions, first_name, last_name, is_active, verified, created_at, updated_at
+		SELECT email, role, permissions, first_name, last_name, is_active, verified, created_at, updated_at, platform_operator
 		FROM commodore.users WHERE id = $1 AND tenant_id = $2
 	`, userID, tenantID), &user)
 
@@ -4267,7 +4291,7 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *commodorepb.Ref
 
 	// Generate new access token
 	jwtSecret := []byte(config.RequireEnv("JWT_SECRET"))
-	token, err := auth.GenerateJWT(userID, tenantID, user.Email, user.Role, jwtSecret)
+	token, err := auth.GenerateSessionJWT(userID, tenantID, user.Email, user.Role, platformRoles(user.PlatformOperator), time.Now(), jwtSecret)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
 	}
@@ -4511,7 +4535,7 @@ func (s *CommodoreServer) rollbackTx(tx *sql.Tx) {
 func (s *CommodoreServer) issueUserSessionTx(ctx context.Context, tx *sql.Tx, userID, tenantID, authType string) (*commodorepb.AuthResponse, error) {
 	var user commodoreUserRecord
 	err := scanCommodoreUserForRefresh(tx.QueryRowContext(ctx, `
-		SELECT email, role, permissions, first_name, last_name, is_active, verified, created_at, updated_at
+		SELECT email, role, permissions, first_name, last_name, is_active, verified, created_at, updated_at, platform_operator
 		FROM commodore.users WHERE id = $1 AND tenant_id = $2
 	`, userID, tenantID), &user)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -4525,7 +4549,7 @@ func (s *CommodoreServer) issueUserSessionTx(ctx context.Context, tx *sql.Tx, us
 	}
 
 	jwtSecret := []byte(config.RequireEnv("JWT_SECRET"))
-	token, err := auth.GenerateJWT(userID, tenantID, user.Email, user.Role, jwtSecret)
+	token, err := auth.GenerateSessionJWT(userID, tenantID, user.Email, user.Role, platformRoles(user.PlatformOperator), time.Now(), jwtSecret)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
 	}
@@ -5358,16 +5382,16 @@ func (s *CommodoreServer) WalletLogin(ctx context.Context, req *commodorepb.Wall
 
 	var email sql.NullString
 	var firstName, lastName, role string
-	var isActive, isVerified bool
+	var isActive, isVerified, platformOperator bool
 	var lastLoginAt sql.NullTime
 	var createdAt, updatedAt time.Time
 
 	err = s.db.QueryRowContext(ctx, `
 		SELECT email, first_name, last_name, role, is_active, verified,
-		       last_login_at, created_at, updated_at
-		FROM commodore.users WHERE id = $1
-	`, userID).Scan(&email, &firstName, &lastName, &role,
-		&isActive, &isVerified, &lastLoginAt, &createdAt, &updatedAt)
+		       last_login_at, created_at, updated_at, platform_operator
+		FROM commodore.users WHERE id = $1 AND tenant_id = $2
+	`, userID, tenantID).Scan(&email, &firstName, &lastName, &role,
+		&isActive, &isVerified, &lastLoginAt, &createdAt, &updatedAt, &platformOperator)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to fetch user: %v", err)
 	}
@@ -5381,8 +5405,8 @@ func (s *CommodoreServer) WalletLogin(ctx context.Context, req *commodorepb.Wall
 
 	// Update last_login_at on user
 	_, _ = s.db.ExecContext(ctx, `
-		UPDATE commodore.users SET last_login_at = NOW() WHERE id = $1
-	`, userID)
+		UPDATE commodore.users SET last_login_at = NOW() WHERE id = $1 AND tenant_id = $2
+	`, userID, tenantID)
 
 	// Generate JWT
 	jwtSecret := []byte(config.RequireEnv("JWT_SECRET"))
@@ -5390,7 +5414,7 @@ func (s *CommodoreServer) WalletLogin(ctx context.Context, req *commodorepb.Wall
 	if email.Valid {
 		emailStr = email.String
 	}
-	token, err := auth.GenerateJWT(userID, tenantID, emailStr, role, jwtSecret)
+	token, err := auth.GenerateSessionJWT(userID, tenantID, emailStr, role, platformRoles(platformOperator), time.Now(), jwtSecret)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
 	}
@@ -5398,15 +5422,16 @@ func (s *CommodoreServer) WalletLogin(ctx context.Context, req *commodorepb.Wall
 
 	// Build user response
 	user := &commodorepb.User{
-		Id:         userID,
-		TenantId:   tenantID,
-		FirstName:  firstName,
-		LastName:   lastName,
-		Role:       role,
-		IsActive:   isActive,
-		IsVerified: isVerified,
-		CreatedAt:  timestamppb.New(createdAt),
-		UpdatedAt:  timestamppb.New(updatedAt),
+		Id:               userID,
+		TenantId:         tenantID,
+		FirstName:        firstName,
+		LastName:         lastName,
+		Role:             role,
+		IsActive:         isActive,
+		IsVerified:       isVerified,
+		PlatformOperator: platformOperator,
+		CreatedAt:        timestamppb.New(createdAt),
+		UpdatedAt:        timestamppb.New(updatedAt),
 	}
 	if email.Valid {
 		user.Email = &email.String
@@ -5477,16 +5502,16 @@ func (s *CommodoreServer) WalletLoginWithX402(ctx context.Context, req *commodor
 
 	var email sql.NullString
 	var firstName, lastName, role string
-	var isActive, isVerified bool
+	var isActive, isVerified, platformOperator bool
 	var lastLoginAt sql.NullTime
 	var createdAt, updatedAt time.Time
 
 	err = s.db.QueryRowContext(ctx, `
 		SELECT email, first_name, last_name, role, is_active, verified,
-		       last_login_at, created_at, updated_at
-		FROM commodore.users WHERE id = $1
-	`, userID).Scan(&email, &firstName, &lastName, &role,
-		&isActive, &isVerified, &lastLoginAt, &createdAt, &updatedAt)
+		       last_login_at, created_at, updated_at, platform_operator
+		FROM commodore.users WHERE id = $1 AND tenant_id = $2
+	`, userID, tenantID).Scan(&email, &firstName, &lastName, &role,
+		&isActive, &isVerified, &lastLoginAt, &createdAt, &updatedAt, &platformOperator)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to fetch user: %v", err)
 	}
@@ -5500,8 +5525,8 @@ func (s *CommodoreServer) WalletLoginWithX402(ctx context.Context, req *commodor
 
 	// Update last_login_at on user
 	_, _ = s.db.ExecContext(ctx, `
-		UPDATE commodore.users SET last_login_at = NOW() WHERE id = $1
-	`, userID)
+		UPDATE commodore.users SET last_login_at = NOW() WHERE id = $1 AND tenant_id = $2
+	`, userID, tenantID)
 
 	// Generate JWT
 	jwtSecret := []byte(config.RequireEnv("JWT_SECRET"))
@@ -5509,22 +5534,23 @@ func (s *CommodoreServer) WalletLoginWithX402(ctx context.Context, req *commodor
 	if email.Valid {
 		emailStr = email.String
 	}
-	token, err := auth.GenerateJWT(userID, tenantID, emailStr, role, jwtSecret)
+	token, err := auth.GenerateSessionJWT(userID, tenantID, emailStr, role, platformRoles(platformOperator), time.Now(), jwtSecret)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
 	}
 	expiresAt := time.Now().Add(15 * time.Minute)
 
 	user := &commodorepb.User{
-		Id:         userID,
-		TenantId:   tenantID,
-		FirstName:  firstName,
-		LastName:   lastName,
-		Role:       role,
-		IsActive:   isActive,
-		IsVerified: isVerified,
-		CreatedAt:  timestamppb.New(createdAt),
-		UpdatedAt:  timestamppb.New(updatedAt),
+		Id:               userID,
+		TenantId:         tenantID,
+		FirstName:        firstName,
+		LastName:         lastName,
+		Role:             role,
+		IsActive:         isActive,
+		IsVerified:       isVerified,
+		PlatformOperator: platformOperator,
+		CreatedAt:        timestamppb.New(createdAt),
+		UpdatedAt:        timestamppb.New(updatedAt),
 	}
 	if email.Valid {
 		user.Email = &email.String

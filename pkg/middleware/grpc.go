@@ -109,6 +109,9 @@ func GRPCAuthInterceptor(cfg GRPCAuthConfig) grpc.UnaryServerInterceptor {
 				ctx = context.WithValue(ctx, ctxkeys.KeyUserID, claims.UserID)
 				ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, claims.TenantID)
 				ctx = context.WithValue(ctx, ctxkeys.KeyRole, claims.Role)
+				if claims.HasRole(auth.RolePlatformOperator) {
+					ctx = context.WithValue(ctx, ctxkeys.KeyPlatformOperator, true)
+				}
 				ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, token)
 				ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, "jwt")
 
@@ -199,6 +202,9 @@ func GRPCStreamAuthInterceptor(cfg GRPCAuthConfig) grpc.StreamServerInterceptor 
 				ctx = context.WithValue(ctx, ctxkeys.KeyUserID, claims.UserID)
 				ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, claims.TenantID)
 				ctx = context.WithValue(ctx, ctxkeys.KeyRole, claims.Role)
+				if claims.HasRole(auth.RolePlatformOperator) {
+					ctx = context.WithValue(ctx, ctxkeys.KeyPlatformOperator, true)
+				}
 				ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, token)
 				ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, "jwt")
 

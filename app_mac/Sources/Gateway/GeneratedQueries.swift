@@ -2167,7 +2167,7 @@ enum GQL {
 
   static let GetPlatformClusters = """
   # Platform-operator cluster pivot: every cluster with live stats and
-  # resident tenants. System-tenant owner/admin only.
+  # resident tenants. Requires the platform_operator grant.
   query GetPlatformClusters {
     platform {
       clusters {
@@ -2239,7 +2239,7 @@ enum GQL {
 
   static let GetPlatformTenantBilling = """
   # Platform-operator drill-down: one tenant's billing surface (snapshot,
-  # invoices, prepaid balance, transactions, usage). System-tenant owner/admin only.
+  # invoices, prepaid balance, transactions, usage). Requires the platform_operator grant.
   query GetPlatformTenantBilling($id: ID!, $invoicesFirst: Int = 25, $timeRange: TimeRangeInput) {
     platform {
       tenant(id: $id) {
@@ -2304,7 +2304,7 @@ enum GQL {
 
   static let GetPlatformTenantContent = """
   # Platform-operator drill-down: one tenant's content/account footprint.
-  # System-tenant owner/admin only.
+  # Requires the platform_operator grant.
   query GetPlatformTenantContent($id: ID!) {
     platform {
       tenant(id: $id) {
@@ -2322,7 +2322,7 @@ enum GQL {
 
   static let GetPlatformTenantOverview = """
   # Platform-operator drill-down: identity + activity + the tenant's own
-  # analytics overview. System-tenant owner/admin only.
+  # analytics overview. Requires the platform_operator grant.
   query GetPlatformTenantOverview($id: ID!, $timeRange: TimeRangeInput) {
     platform {
       tenant(id: $id) {
@@ -2363,7 +2363,7 @@ enum GQL {
 
   static let GetPlatformTenants = """
   # Platform-operator god view: ranked cross-tenant activity index with
-  # identity and billing columns. System-tenant owner/admin only.
+  # identity and billing columns. Requires the platform_operator grant.
   query GetPlatformTenants($timeRange: TimeRangeInput, $limit: Int) {
     platform {
       tenants(timeRange: $timeRange, limit: $limit) {
@@ -4855,7 +4855,7 @@ enum GQL {
   # submits `sessionToken` as a hidden POST form field to `postUrl` in a
   # new tab — keeping the token out of URLs/referrers/access logs. Auth
   # is ownership-bound: only owner/admin users in the infrastructure owner
-  # tenant can open it; system-tenant owner/admin users are platform break-glass.
+  # tenant can open it; platform_operator-grant holders are break-glass.
   mutation OpenMistAdminSession($input: OpenMistAdminSessionInput!) {
     openMistAdminSession(input: $input) {
       ... on MistAdminSession {

@@ -90,8 +90,8 @@ func TestReconcileAccountsResetCredentialsRequiresFlag(t *testing.T) {
 	// existing user matches the desired profile exactly
 	mock.ExpectQuery(regexp.QuoteMeta("FROM commodore.users")).
 		WithArgs("uuid-system", "ops@example.com").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "first_name", "last_name", "role", "permissions"}).
-			AddRow("uuid-user", "Ops", "Person", "owner", `{read,write,admin}`))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "first_name", "last_name", "role", "permissions", "platform_operator"}).
+			AddRow("uuid-user", "Ops", "Person", "owner", `{read,write,admin}`, false))
 
 	acc := sysAccount()
 	acc.Users[0].ResetCredentials = true

@@ -421,8 +421,8 @@ func TestValidateAPIToken(t *testing.T) {
 					AddRow("token-id", "user-id", "tenant-id", "{read,write}")
 				mock.ExpectQuery("FROM commodore.api_tokens").WithArgs(hashToken("good-token")).WillReturnRows(rows)
 				mock.ExpectExec("UPDATE commodore.api_tokens SET last_used_at").WithArgs("token-id").WillReturnResult(sqlmock.NewResult(1, 1))
-				userRows := sqlmock.NewRows([]string{"email", "role"}).AddRow("user@example.com", "admin")
-				mock.ExpectQuery("SELECT email, role FROM commodore.users").WithArgs("user-id").WillReturnRows(userRows)
+				userRows := sqlmock.NewRows([]string{"email", "role", "platform_operator"}).AddRow("user@example.com", "admin", false)
+				mock.ExpectQuery("SELECT email, role, platform_operator FROM commodore.users").WithArgs("user-id", "tenant-id").WillReturnRows(userRows)
 			},
 			assert: func(t *testing.T, resp *commodorepb.ValidateAPITokenResponse, err error) {
 				if err != nil {

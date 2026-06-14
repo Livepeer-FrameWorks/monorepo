@@ -1,14 +1,14 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/authz"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -44,24 +44,15 @@ var (
 	ErrWrongMistAdminSessionPurpose = errors.New("token has wrong purpose for mist admin session")
 )
 
-// CanAdminMistNode is the owner check for Mist LSP access. The caller must
-// be an owner/admin in the tenant that owns the infrastructure cluster; the
-// reserved system tenant is allowed as platform break-glass.
-func CanAdminMistNode(ownerTenantID, callerTenantID, callerRole string) bool {
-	ownerTenantID = strings.TrimSpace(ownerTenantID)
-	callerTenantID = strings.TrimSpace(callerTenantID)
-	callerRole = strings.ToLower(strings.TrimSpace(callerRole))
-	if callerTenantID == "" || !mistAdminPrivilegedRole(callerRole) {
-		return false
-	}
-	if ownerTenantID != "" && callerTenantID == ownerTenantID {
-		return true
-	}
-	return callerTenantID == tenants.SystemTenantID.String()
-}
-
-func mistAdminPrivilegedRole(role string) bool {
-	return role == "owner" || role == "admin"
+// CanAdminMistNode is the owner check for Mist LSP access, delegated to the
+// authz PDP: the caller must be an owner/admin of the tenant that owns the
+// infrastructure cluster, or carry the platform operator grant (break-glass).
+func CanAdminMistNode(ctx context.Context, ownerTenantID, callerTenantID, callerRole string, callerIsPlatformOperator bool) bool {
+	return authz.Default.Can(ctx, authz.Identity{
+		TenantID:         callerTenantID,
+		Role:             callerRole,
+		PlatformOperator: callerIsPlatformOperator,
+	}, authz.ActionAdminMistNode, authz.Resource{OwnerTenantID: ownerTenantID}).Allow
 }
 
 // GenerateMistAdminSessionJWT mints a session token bound to one edge

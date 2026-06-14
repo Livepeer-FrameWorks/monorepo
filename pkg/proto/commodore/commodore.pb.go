@@ -2314,16 +2314,17 @@ func (x *ValidateAPITokenRequest) GetToken() string {
 
 // Matches pkg/api/commodore/types.go:ValidateAPITokenResponse exactly
 type ValidateAPITokenResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Valid         bool                   `protobuf:"varint,1,opt,name=valid,proto3" json:"valid,omitempty"`                      // json:"valid"
-	UserId        string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`       // json:"user_id,omitempty"
-	TenantId      string                 `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"` // json:"tenant_id,omitempty"
-	Email         string                 `protobuf:"bytes,4,opt,name=email,proto3" json:"email,omitempty"`                       // json:"email,omitempty"
-	Role          string                 `protobuf:"bytes,5,opt,name=role,proto3" json:"role,omitempty"`                         // json:"role,omitempty"
-	Permissions   []string               `protobuf:"bytes,6,rep,name=permissions,proto3" json:"permissions,omitempty"`           // json:"permissions,omitempty"
-	TokenId       string                 `protobuf:"bytes,7,opt,name=token_id,json=tokenId,proto3" json:"token_id,omitempty"`    // json:"token_id,omitempty"
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Valid            bool                   `protobuf:"varint,1,opt,name=valid,proto3" json:"valid,omitempty"`                                               // json:"valid"
+	UserId           string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                                // json:"user_id,omitempty"
+	TenantId         string                 `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                          // json:"tenant_id,omitempty"
+	Email            string                 `protobuf:"bytes,4,opt,name=email,proto3" json:"email,omitempty"`                                                // json:"email,omitempty"
+	Role             string                 `protobuf:"bytes,5,opt,name=role,proto3" json:"role,omitempty"`                                                  // json:"role,omitempty"
+	Permissions      []string               `protobuf:"bytes,6,rep,name=permissions,proto3" json:"permissions,omitempty"`                                    // json:"permissions,omitempty"
+	TokenId          string                 `protobuf:"bytes,7,opt,name=token_id,json=tokenId,proto3" json:"token_id,omitempty"`                             // json:"token_id,omitempty"
+	PlatformOperator bool                   `protobuf:"varint,8,opt,name=platform_operator,json=platformOperator,proto3" json:"platform_operator,omitempty"` // json:"platform_operator,omitempty" - computed from the token's user row
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *ValidateAPITokenResponse) Reset() {
@@ -2403,6 +2404,13 @@ func (x *ValidateAPITokenResponse) GetTokenId() string {
 		return x.TokenId
 	}
 	return ""
+}
+
+func (x *ValidateAPITokenResponse) GetPlatformOperator() bool {
+	if x != nil {
+		return x.PlatformOperator
+	}
+	return false
 }
 
 // Mint request carries only the target node. Identity (user_id / tenant_id
@@ -7944,18 +7952,19 @@ type User struct {
 	TenantId string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"` // json:"tenant_id"
 	Email    *string                `protobuf:"bytes,3,opt,name=email,proto3,oneof" json:"email,omitempty"`                 // json:"email,omitempty" - NULL for wallet-only accounts
 	// password and password_hash never serialized
-	FirstName     string                 `protobuf:"bytes,4,opt,name=first_name,json=firstName,proto3" json:"first_name,omitempty"`                // json:"first_name"
-	LastName      string                 `protobuf:"bytes,5,opt,name=last_name,json=lastName,proto3" json:"last_name,omitempty"`                   // json:"last_name"
-	Role          string                 `protobuf:"bytes,6,opt,name=role,proto3" json:"role,omitempty"`                                           // json:"role"
-	Permissions   []string               `protobuf:"bytes,7,rep,name=permissions,proto3" json:"permissions,omitempty"`                             // json:"permissions"
-	IsActive      bool                   `protobuf:"varint,8,opt,name=is_active,json=isActive,proto3" json:"is_active,omitempty"`                  // json:"is_active"
-	IsVerified    bool                   `protobuf:"varint,9,opt,name=is_verified,json=isVerified,proto3" json:"is_verified,omitempty"`            // json:"is_verified"
-	LastLoginAt   *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=last_login_at,json=lastLoginAt,proto3,oneof" json:"last_login_at,omitempty"` // json:"last_login_at,omitempty"
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`               // json:"created_at"
-	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`               // json:"updated_at"
-	Wallets       []*WalletIdentity      `protobuf:"bytes,13,rep,name=wallets,proto3" json:"wallets,omitempty"`                                    // Linked wallets (populated on GetMe)
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	FirstName        string                 `protobuf:"bytes,4,opt,name=first_name,json=firstName,proto3" json:"first_name,omitempty"`                        // json:"first_name"
+	LastName         string                 `protobuf:"bytes,5,opt,name=last_name,json=lastName,proto3" json:"last_name,omitempty"`                           // json:"last_name"
+	Role             string                 `protobuf:"bytes,6,opt,name=role,proto3" json:"role,omitempty"`                                                   // json:"role"
+	Permissions      []string               `protobuf:"bytes,7,rep,name=permissions,proto3" json:"permissions,omitempty"`                                     // json:"permissions"
+	IsActive         bool                   `protobuf:"varint,8,opt,name=is_active,json=isActive,proto3" json:"is_active,omitempty"`                          // json:"is_active"
+	IsVerified       bool                   `protobuf:"varint,9,opt,name=is_verified,json=isVerified,proto3" json:"is_verified,omitempty"`                    // json:"is_verified"
+	LastLoginAt      *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=last_login_at,json=lastLoginAt,proto3,oneof" json:"last_login_at,omitempty"`         // json:"last_login_at,omitempty"
+	CreatedAt        *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`                       // json:"created_at"
+	UpdatedAt        *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`                       // json:"updated_at"
+	Wallets          []*WalletIdentity      `protobuf:"bytes,13,rep,name=wallets,proto3" json:"wallets,omitempty"`                                            // Linked wallets (populated on GetMe)
+	PlatformOperator bool                   `protobuf:"varint,14,opt,name=platform_operator,json=platformOperator,proto3" json:"platform_operator,omitempty"` // json:"platform_operator" - platform staff grant (commodore.users.platform_operator)
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *User) Reset() {
@@ -8077,6 +8086,13 @@ func (x *User) GetWallets() []*WalletIdentity {
 		return x.Wallets
 	}
 	return nil
+}
+
+func (x *User) GetPlatformOperator() bool {
+	if x != nil {
+		return x.PlatformOperator
+	}
+	return false
 }
 
 // Matches pkg/api/commodore/types.go:CreateStreamRequest (lines 114-119)
@@ -13346,7 +13362,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\x11origin_cluster_id\x18\a \x01(\tR\x0foriginClusterId\x12#\n" +
 	"\rrequires_auth\x18\b \x01(\bR\frequiresAuth\"/\n" +
 	"\x17ValidateAPITokenRequest\x12\x14\n" +
-	"\x05token\x18\x01 \x01(\tR\x05token\"\xcd\x01\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\"\xfa\x01\n" +
 	"\x18ValidateAPITokenResponse\x12\x14\n" +
 	"\x05valid\x18\x01 \x01(\bR\x05valid\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x1b\n" +
@@ -13354,7 +13370,8 @@ const file_commodore_proto_rawDesc = "" +
 	"\x05email\x18\x04 \x01(\tR\x05email\x12\x12\n" +
 	"\x04role\x18\x05 \x01(\tR\x04role\x12 \n" +
 	"\vpermissions\x18\x06 \x03(\tR\vpermissions\x12\x19\n" +
-	"\btoken_id\x18\a \x01(\tR\atokenId\"6\n" +
+	"\btoken_id\x18\a \x01(\tR\atokenId\x12+\n" +
+	"\x11platform_operator\x18\b \x01(\bR\x10platformOperator\"6\n" +
 	"\x1bMintMistAdminSessionRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"t\n" +
 	"\x1cMintMistAdminSessionResponse\x12\x14\n" +
@@ -13845,7 +13862,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\x11LinkEmailResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12+\n" +
-	"\x11verification_sent\x18\x03 \x01(\bR\x10verificationSent\"\x8a\x04\n" +
+	"\x11verification_sent\x18\x03 \x01(\bR\x10verificationSent\"\xb7\x04\n" +
 	"\x04User\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x19\n" +
@@ -13864,7 +13881,8 @@ const file_commodore_proto_rawDesc = "" +
 	"created_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
 	"updated_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x123\n" +
-	"\awallets\x18\r \x03(\v2\x19.commodore.WalletIdentityR\awalletsB\b\n" +
+	"\awallets\x18\r \x03(\v2\x19.commodore.WalletIdentityR\awallets\x12+\n" +
+	"\x11platform_operator\x18\x0e \x01(\bR\x10platformOperatorB\b\n" +
 	"\x06_emailB\x10\n" +
 	"\x0e_last_login_at\"\xeb\x01\n" +
 	"\x13CreateStreamRequest\x12\x14\n" +

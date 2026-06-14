@@ -100,7 +100,7 @@ func (r *Resolver) DoOpenMistAdminSession(ctx context.Context, input model.OpenM
 		}
 		return nil, errors.New("resolve cluster: empty cluster response")
 	}
-	if !auth.CanAdminMistNode(strings.TrimSpace(ownerResp.GetOwnerTenantId()), tenantID, role) {
+	if !auth.CanAdminMistNode(ctx, strings.TrimSpace(ownerResp.GetOwnerTenantId()), tenantID, role, ctxkeys.IsPlatformOperator(ctx)) {
 		r.Logger.WithFields(logging.Fields{
 			"node_id":              nodeID,
 			"cluster_id":           clusterID,
@@ -149,6 +149,6 @@ func (r *Resolver) DoOpenMistAdminSession(ctx context.Context, input model.OpenM
 	}, nil
 }
 
-func mistAdminCanAdminNode(ownerTenantID, callerTenantID, callerRole string) bool {
-	return auth.CanAdminMistNode(ownerTenantID, callerTenantID, callerRole)
+func mistAdminCanAdminNode(ctx context.Context, ownerTenantID, callerTenantID, callerRole string, callerIsPlatformOperator bool) bool {
+	return auth.CanAdminMistNode(ctx, ownerTenantID, callerTenantID, callerRole, callerIsPlatformOperator)
 }

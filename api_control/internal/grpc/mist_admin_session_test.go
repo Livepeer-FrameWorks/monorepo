@@ -84,16 +84,22 @@ func clusterResp(id string, isPlatformOfficial bool) *quartermasterpb.ClusterRes
 
 // --- happy paths ---
 
-func TestMintMistAdminSession_SystemTenantBreakGlassAllowsOwnerAndAdmin(t *testing.T) {
+// ctxAsOperator builds a trusted context carrying the platform_operator grant
+// (as the gRPC interceptor sets it from the validated JWT's roles claim).
+func ctxAsOperator(userID, tenantID, role string) context.Context {
+	return context.WithValue(ctxAs(userID, tenantID, role), ctxkeys.KeyPlatformOperator, true)
+}
+
+func TestMintMistAdminSession_PlatformOperatorBreakGlassAllowed(t *testing.T) {
 	srv := newMistAdminTestServer(t)
-	systemTenant := tenants.SystemTenantID.String()
-	for _, role := range []string{"owner", "admin"} {
+	for _, role := range []string{"owner", "admin", "member"} {
 		t.Run(role, func(t *testing.T) {
 			stubOwnership(t,
 				platformOfficialOwner("edge-us-1", "media-us-1"), nil,
 				clusterResp("media-us-1", true), nil,
 			)
-			ctx := ctxAs("platform-user", systemTenant, role)
+			// Break-glass is the platform_operator grant, not the tenant.
+			ctx := ctxAsOperator("platform-user", "tenant-ops", role)
 			resp, err := srv.MintMistAdminSession(ctx, &commodorepb.MintMistAdminSessionRequest{NodeId: "edge-us-1"})
 			if err != nil {
 				t.Fatalf("mint: %v", err)
@@ -111,13 +117,27 @@ func TestMintMistAdminSession_SystemTenantBreakGlassAllowsOwnerAndAdmin(t *testi
 			if err != nil || !vresp.GetValid() {
 				t.Fatalf("validate: valid=%v err=%v", vresp.GetValid(), err)
 			}
-			if vresp.GetUserId() != "platform-user" || vresp.GetTenantId() != systemTenant || vresp.GetRole() != role {
+			if vresp.GetUserId() != "platform-user" || vresp.GetTenantId() != "tenant-ops" || vresp.GetRole() != role {
 				t.Errorf("token claims from request body, not trusted ctx: %+v", vresp)
 			}
 			if vresp.GetClusterId() != "media-us-1" {
 				t.Errorf("cluster_id should be server-resolved; got %q", vresp.GetClusterId())
 			}
 		})
+	}
+}
+
+func TestMintMistAdminSession_NonOperatorTenantDeniedOnPlatformOfficial(t *testing.T) {
+	srv := newMistAdminTestServer(t)
+	stubOwnership(t,
+		platformOfficialOwner("edge-us-1", "media-us-1"), nil,
+		clusterResp("media-us-1", true), nil,
+	)
+	// Owner of some tenant, but no platform_operator grant: denied.
+	ctx := ctxAs("u", tenants.SystemTenantID.String(), "owner")
+	_, err := srv.MintMistAdminSession(ctx, &commodorepb.MintMistAdminSessionRequest{NodeId: "edge-us-1"})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Errorf("non-operator on platform-official must be denied; got %v", err)
 	}
 }
 
@@ -194,13 +214,13 @@ func TestMintMistAdminSession_DeniesOwnerTenantMemberOnPrivateCluster(t *testing
 	}
 }
 
-func TestMintMistAdminSession_SystemTenantCanAdminPrivateCluster(t *testing.T) {
+func TestMintMistAdminSession_PlatformOperatorCanAdminPrivateCluster(t *testing.T) {
 	srv := newMistAdminTestServer(t)
 	stubOwnership(t,
 		tenantOwnedOwner("edge-acme-1", "acme-private", "tenant-acme"), nil,
 		clusterResp("acme-private", false), nil,
 	)
-	ctx := ctxAs("platform-admin", tenants.SystemTenantID.String(), "admin")
+	ctx := ctxAsOperator("platform-admin", "tenant-ops", "admin")
 	resp, err := srv.MintMistAdminSession(ctx, &commodorepb.MintMistAdminSessionRequest{NodeId: "edge-acme-1"})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
@@ -276,7 +296,7 @@ func TestValidateMistAdminSession_RejectsWrongNode(t *testing.T) {
 		platformOfficialOwner("edge-us-1", "media-us-1"), nil,
 		clusterResp("media-us-1", true), nil,
 	)
-	ctx := ctxAs("u", tenants.SystemTenantID.String(), "owner")
+	ctx := ctxAsOperator("u", "tenant-ops", "owner")
 	mint, err := srv.MintMistAdminSession(ctx, &commodorepb.MintMistAdminSessionRequest{NodeId: "edge-us-1"})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
@@ -296,7 +316,7 @@ func TestValidateMistAdminSession_RejectsMissingExpectedNode(t *testing.T) {
 		platformOfficialOwner("edge-us-1", "media-us-1"), nil,
 		clusterResp("media-us-1", true), nil,
 	)
-	ctx := ctxAs("u", tenants.SystemTenantID.String(), "owner")
+	ctx := ctxAsOperator("u", "tenant-ops", "owner")
 	mint, err := srv.MintMistAdminSession(ctx, &commodorepb.MintMistAdminSessionRequest{NodeId: "edge-us-1"})
 	if err != nil {
 		t.Fatalf("mint: %v", err)

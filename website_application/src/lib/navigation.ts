@@ -10,22 +10,16 @@ export interface NavigationItem {
   children?: Record<string, NavigationItem>;
   /**
    * Hide the item unless the signed-in user is a platform operator
-   * (owner/admin of the reserved system tenant). Cosmetic only — the
+   * (the platform_operator grant). Cosmetic only — the
    * GraphQL resolvers enforce the actual gate.
    */
   requiresPlatformOperator?: boolean;
 }
 
-/** The reserved system tenant (`frameworks`); membership = platform staff. */
-export const SYSTEM_TENANT_ID = "00000000-0000-0000-0000-000000000001";
-
-/** Client-side mirror of the backend IsPlatformOperator gate (cosmetic). */
-export function isPlatformOperatorUser(
-  user?: { tenant_id?: string; role?: string } | null
-): boolean {
-  if (!user) return false;
-  const role = (user.role ?? "").toLowerCase();
-  return user.tenant_id === SYSTEM_TENANT_ID && (role === "owner" || role === "admin");
+/** Client-side mirror of the backend platform-operator gate (cosmetic only;
+ * the gateway enforces the real grant from the signed token). */
+export function isPlatformOperatorUser(user?: { platform_operator?: boolean } | null): boolean {
+  return user?.platform_operator === true;
 }
 
 export interface RouteInfo {
@@ -412,7 +406,7 @@ export const navigationConfig: Record<string, NavigationItem> = {
     },
   },
 
-  // Platform administration (system-tenant operators only; resolver-gated)
+  // Platform administration (platform_operator grant only; resolver-gated)
   admin: {
     name: "Platform Admin",
     icon: "ShieldCheck",

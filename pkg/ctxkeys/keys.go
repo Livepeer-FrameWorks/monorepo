@@ -24,6 +24,10 @@ const (
 	KeySessionToken Key = "session_token"
 	KeyWalletAddr   Key = "wallet_address"
 	KeyPermissions  Key = "permissions"
+	// KeyPlatformOperator marks the authenticated principal as platform staff
+	// (the RFC 9068 platform_operator role). Set only from a verified token /
+	// validated credential, never trusted across the service boundary.
+	KeyPlatformOperator Key = "platform_operator"
 )
 
 // X402 context keys
@@ -229,4 +233,13 @@ func GetPermissions(ctx context.Context) []string {
 		return v
 	}
 	return nil
+}
+
+// IsPlatformOperator reports whether the context carries the platform operator
+// grant. Fail-closed: absent/non-bool → false.
+func IsPlatformOperator(ctx context.Context) bool {
+	if v, ok := ctx.Value(KeyPlatformOperator).(bool); ok {
+		return v
+	}
+	return false
 }

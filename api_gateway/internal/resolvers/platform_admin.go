@@ -11,7 +11,7 @@ import (
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/authz"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
@@ -34,17 +34,23 @@ import (
 const platformDefaultTenantLimit = 100
 const platformMaxTenantLimit = 500
 
-// RequirePlatformOperator gates platform admin: owner/admin of the system
-// tenant only. Pure check; auditing happens in platformGate so every surface
-// records both outcomes.
+// RequirePlatformOperator gates platform admin on the platform_operator
+// grant via the authz PDP. Pure check; auditing happens in platformGate so
+// every surface records both outcomes.
 func (r *Resolver) RequirePlatformOperator(ctx context.Context) error {
-	tenantID := ctxkeys.GetTenantID(ctx)
-	role := ctxkeys.GetRole(ctx)
-	if user := middleware.GetUserFromContext(ctx); user != nil {
-		tenantID = user.TenantID
-		role = user.Role
+	id := authz.Identity{
+		UserID:           ctxkeys.GetUserID(ctx),
+		TenantID:         ctxkeys.GetTenantID(ctx),
+		Role:             ctxkeys.GetRole(ctx),
+		PlatformOperator: ctxkeys.IsPlatformOperator(ctx),
 	}
-	if !auth.IsPlatformOperator(tenantID, role) {
+	if user := middleware.GetUserFromContext(ctx); user != nil {
+		id.UserID = user.UserID
+		id.TenantID = user.TenantID
+		id.Role = user.Role
+		id.PlatformOperator = user.PlatformOperator
+	}
+	if !authz.Default.Can(ctx, id, authz.ActionAccessPlatformAdmin, authz.Resource{}).Allow {
 		return fmt.Errorf("platform operator access required")
 	}
 	return nil
@@ -117,7 +123,7 @@ func (c strippedIdentityCtx) Value(key any) any {
 	// "unauthenticated" at the gateway layer.
 	case ctxkeys.KeyUserID, ctxkeys.KeyEmail, ctxkeys.KeyRole, ctxkeys.KeyJWTToken,
 		ctxkeys.KeyAPIToken, ctxkeys.KeyAPITokenHash, ctxkeys.KeyUser,
-		ctxkeys.KeySessionToken, ctxkeys.KeyWalletAddr:
+		ctxkeys.KeySessionToken, ctxkeys.KeyWalletAddr, ctxkeys.KeyPlatformOperator:
 		return nil
 	}
 	return c.Context.Value(key)

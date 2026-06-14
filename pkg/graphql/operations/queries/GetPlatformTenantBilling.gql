@@ -1,5 +1,5 @@
 # Platform-operator drill-down: one tenant's billing surface (snapshot,
-# invoices, prepaid balance, transactions, usage). System-tenant owner/admin only.
+# invoices, prepaid balance, transactions, usage). Requires the platform_operator grant.
 query GetPlatformTenantBilling($id: ID!, $invoicesFirst: Int = 25, $timeRange: TimeRangeInput) {
   platform {
     tenant(id: $id) {

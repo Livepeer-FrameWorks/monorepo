@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS commodore.users (
     -- ===== AUTHORIZATION =====
     role VARCHAR(50) DEFAULT 'member',
     permissions TEXT[] DEFAULT ARRAY['streams:read'],
+    platform_operator BOOLEAN NOT NULL DEFAULT FALSE, -- platform staff grant (RFC 9068 platform_operator role)
 
     -- ===== STATUS & ACTIVITY =====
     is_active BOOLEAN DEFAULT TRUE,

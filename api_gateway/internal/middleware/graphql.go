@@ -16,12 +16,13 @@ import (
 
 // UserContext represents authenticated user information for GraphQL resolvers
 type UserContext struct {
-	UserID      string
-	TenantID    string
-	Email       string
-	Role        string
-	TokenID     string
-	Permissions []string
+	UserID           string
+	TenantID         string
+	Email            string
+	Role             string
+	TokenID          string
+	Permissions      []string
+	PlatformOperator bool
 }
 
 // GraphQLContextMiddleware transfers user info from Gin context to request context
@@ -50,6 +51,7 @@ func GraphQLContextMiddleware(expectedServiceToken string) gin.HandlerFunc {
 		// or from request context (for WebSocket connections)
 		var userIDStr, tenantIDStr, emailStr, roleStr string
 		var permissions []string
+		var platformOperator bool
 		var authenticated bool
 
 		// Try Gin context first (HTTP requests)
@@ -67,6 +69,11 @@ func GraphQLContextMiddleware(expectedServiceToken string) gin.HandlerFunc {
 				if v, ok := c.Get(string(ctxkeys.KeyPermissions)); ok {
 					permissions, _ = v.([]string)
 				}
+				if v, ok := c.Get(string(ctxkeys.KeyPlatformOperator)); ok {
+					if b, isBool := v.(bool); isBool {
+						platformOperator = b
+					}
+				}
 			}
 		}
 
@@ -78,6 +85,7 @@ func GraphQLContextMiddleware(expectedServiceToken string) gin.HandlerFunc {
 					emailStr = ctxkeys.GetEmail(ctx)
 					roleStr = ctxkeys.GetRole(ctx)
 					permissions = ctxkeys.GetPermissions(ctx)
+					platformOperator = ctxkeys.IsPlatformOperator(ctx)
 				}
 			}
 		}
@@ -85,17 +93,19 @@ func GraphQLContextMiddleware(expectedServiceToken string) gin.HandlerFunc {
 		// Build user context for GraphQL resolvers
 		if authenticated && userIDStr != "" && tenantIDStr != "" {
 			user := &UserContext{
-				UserID:      userIDStr,
-				TenantID:    tenantIDStr,
-				Email:       emailStr,
-				Role:        roleStr,
-				Permissions: permissions,
+				UserID:           userIDStr,
+				TenantID:         tenantIDStr,
+				Email:            emailStr,
+				Role:             roleStr,
+				Permissions:      permissions,
+				PlatformOperator: platformOperator,
 			}
 			ctx = context.WithValue(ctx, ctxkeys.KeyUser, user)
 			ctx = context.WithValue(ctx, ctxkeys.KeyUserID, userIDStr)
 			ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, tenantIDStr)
 			ctx = context.WithValue(ctx, ctxkeys.KeyEmail, emailStr)
 			ctx = context.WithValue(ctx, ctxkeys.KeyRole, roleStr)
+			ctx = context.WithValue(ctx, ctxkeys.KeyPlatformOperator, platformOperator)
 		}
 
 		c.Request = c.Request.WithContext(ctx)
