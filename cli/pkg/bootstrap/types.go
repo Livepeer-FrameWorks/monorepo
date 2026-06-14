@@ -363,6 +363,11 @@ type MistNativeStream struct {
 	// edge when the stream is admitted.
 	IsRecordingEnabled bool `yaml:"is_recording_enabled,omitempty"`
 
+	// Monitoring is the per-stream Skipper monitoring toggle: "" / "inherit"
+	// (follow tier, default), "on" (monitor regardless of tier), or "off"
+	// (never monitor).
+	Monitoring string `yaml:"monitoring,omitempty"`
+
 	// ProcessPolicy is the per-stream MistServer process config (transcodes,
 	// thumbnails, sprite, etc.). When set, the reconciler writes it to
 	// commodore.stream_processing_config; when empty the stream inherits the
@@ -411,6 +416,7 @@ type MistNativeStreamRendered struct {
 	SourceKind         string                  `yaml:"source_kind"`
 	AlwaysOn           bool                    `yaml:"always_on"`
 	IsRecordingEnabled bool                    `yaml:"is_recording_enabled,omitempty"`
+	Monitoring         string                  `yaml:"monitoring,omitempty"`
 	ProcessPolicy      any                     `yaml:"process_policy,omitempty"`
 	PlacementCount     int                     `yaml:"placement_count,omitempty"`
 	AllowedClusterIDs  []string                `yaml:"allowed_cluster_ids,omitempty"`

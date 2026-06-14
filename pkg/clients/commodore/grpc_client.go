@@ -223,6 +223,14 @@ func (c *GRPCClient) ListManagedStreams(ctx context.Context, clusterID string) (
 	return c.internal.ListManagedStreams(ctx, &commodorepb.ListManagedStreamsRequest{ClusterId: clusterID})
 }
 
+// ListStreamMonitoring returns a tenant's streams with their per-stream Skipper
+// monitoring toggle. Called by Skipper each heartbeat cycle. Skipper keys its
+// monitored set and scoped Periscope reads on the public stream_id UUID;
+// internal_name is for logging only.
+func (c *GRPCClient) ListStreamMonitoring(ctx context.Context, tenantID string) (*commodorepb.ListStreamMonitoringResponse, error) {
+	return c.internal.ListStreamMonitoring(ctx, &commodorepb.ListStreamMonitoringRequest{TenantId: tenantID})
+}
+
 // RecordStreamActiveCluster pins the cluster currently serving a managed
 // stream so commodore.streams.active_ingest_cluster_id reflects the
 // elected placement. Called by Foghorn's reconciler after a successful

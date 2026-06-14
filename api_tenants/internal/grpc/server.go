@@ -379,7 +379,7 @@ func (s *QuartermasterServer) GetTenant(ctx context.Context, req *quartermasterp
 		SELECT id, name, subdomain, custom_domain, logo_url, primary_color, secondary_color,
 		       deployment_tier, deployment_model,
 		       primary_cluster_id, official_cluster_id, kafka_topic_prefix, kafka_brokers, database_url,
-		       is_active, created_at, updated_at,
+		       is_active, monitoring_enabled, created_at, updated_at,
 		       rate_limit_per_minute, rate_limit_burst
 		FROM quartermaster.tenants
 		WHERE id = $1
@@ -388,7 +388,7 @@ func (s *QuartermasterServer) GetTenant(ctx context.Context, req *quartermasterp
 		&tenant.PrimaryColor, &tenant.SecondaryColor, &tenant.DeploymentTier,
 		&tenant.DeploymentModel,
 		&primaryClusterID, &officialClusterID, &kafkaTopicPrefix, pq.Array(&kafkaBrokers), &databaseURL,
-		&tenant.IsActive, &createdAt, &updatedAt,
+		&tenant.IsActive, &tenant.MonitoringEnabled, &createdAt, &updatedAt,
 		&tenant.RateLimitPerMinute, &tenant.RateLimitBurst,
 	)
 
@@ -2239,7 +2239,7 @@ func (s *QuartermasterServer) ListTenants(ctx context.Context, req *quartermaste
 		SELECT id, name, subdomain, custom_domain, logo_url, primary_color, secondary_color,
 		       deployment_tier, deployment_model,
 		       primary_cluster_id, official_cluster_id, kafka_topic_prefix, kafka_brokers, database_url,
-		       is_active, created_at, updated_at
+		       is_active, monitoring_enabled, created_at, updated_at
 		FROM quartermaster.tenants
 		%s
 		ORDER BY created_at %s, id %s
@@ -2257,10 +2257,13 @@ func (s *QuartermasterServer) ListTenants(ctx context.Context, req *quartermaste
 	for rows.Next() {
 		tenant, err := scanTenant(rows)
 		if err != nil {
-			s.logger.WithError(err).Warn("Failed to scan tenant")
-			continue
+			s.logger.WithError(err).Error("Failed to scan tenant")
+			return nil, status.Errorf(codes.Internal, "scan tenant: %v", err)
 		}
 		tenants = append(tenants, tenant)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "iterate tenants: %v", err)
 	}
 
 	// Determine pagination info
@@ -2295,11 +2298,11 @@ func (s *QuartermasterServer) ListTenants(ctx context.Context, req *quartermaste
 // CROSS-SERVICE: BILLING BATCH PROCESSING
 // ============================================================================
 
-// ListActiveTenants returns all active tenant IDs for billing batch processing.
-// Called by Purser billing job to avoid cross-service DB access.
+// ListActiveTenants returns active tenants for cross-service batch processing.
+// Purser consumes tenant_ids; Skipper consumes tenants for monitoring policy.
 func (s *QuartermasterServer) ListActiveTenants(ctx context.Context, req *quartermasterpb.ListActiveTenantsRequest) (*quartermasterpb.ListActiveTenantsResponse, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id FROM quartermaster.tenants WHERE is_active = true
+		SELECT id, monitoring_enabled FROM quartermaster.tenants WHERE is_active = true ORDER BY id
 	`)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
@@ -2307,17 +2310,27 @@ func (s *QuartermasterServer) ListActiveTenants(ctx context.Context, req *quarte
 	defer func() { _ = rows.Close() }()
 
 	var tenantIDs []string
+	var tenants []*quartermasterpb.ActiveTenant
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
-			s.logger.WithError(err).Warn("Failed to scan tenant ID")
-			continue
+		var monitoringEnabled bool
+		if err := rows.Scan(&id, &monitoringEnabled); err != nil {
+			s.logger.WithError(err).Error("Failed to scan active tenant")
+			return nil, status.Errorf(codes.Internal, "scan active tenant: %v", err)
 		}
 		tenantIDs = append(tenantIDs, id)
+		tenants = append(tenants, &quartermasterpb.ActiveTenant{
+			TenantId:          id,
+			MonitoringEnabled: monitoringEnabled,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "iterate active tenants: %v", err)
 	}
 
 	return &quartermasterpb.ListActiveTenantsResponse{
 		TenantIds: tenantIDs,
+		Tenants:   tenants,
 	}, nil
 }
 
@@ -2599,6 +2612,12 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *quartermast
 		args = append(args, *req.IsActive)
 		argIdx++
 		changedFields = append(changedFields, "is_active")
+	}
+	if req.MonitoringEnabled != nil {
+		updates = append(updates, fmt.Sprintf("monitoring_enabled = $%d", argIdx))
+		args = append(args, *req.MonitoringEnabled)
+		argIdx++
+		changedFields = append(changedFields, "monitoring_enabled")
 	}
 
 	if len(updates) == 0 {
@@ -2977,7 +2996,7 @@ func (s *QuartermasterServer) GetTenantCluster(ctx context.Context, req *quarter
 		SELECT id, name, subdomain, custom_domain, logo_url, primary_color, secondary_color,
 		       deployment_tier, deployment_model,
 		       primary_cluster_id, official_cluster_id, kafka_topic_prefix, kafka_brokers, database_url,
-		       is_active, created_at, updated_at
+		       is_active, monitoring_enabled, created_at, updated_at
 		FROM quartermaster.tenants
 		WHERE id = $1 AND is_active = TRUE
 	`, tenantID).Scan(
@@ -2985,7 +3004,7 @@ func (s *QuartermasterServer) GetTenantCluster(ctx context.Context, req *quarter
 		&tenant.PrimaryColor, &tenant.SecondaryColor,
 		&tenant.DeploymentTier, &tenant.DeploymentModel,
 		&primaryClusterID, &officialClusterID, &kafkaTopicPrefix,
-		pq.Array(&kafkaBrokers), &databaseURL, &tenant.IsActive, &createdAt, &updatedAt,
+		pq.Array(&kafkaBrokers), &databaseURL, &tenant.IsActive, &tenant.MonitoringEnabled, &createdAt, &updatedAt,
 	)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -3147,7 +3166,7 @@ func (s *QuartermasterServer) GetTenantsBatch(ctx context.Context, req *quarterm
 		SELECT id, name, subdomain, custom_domain, logo_url, primary_color, secondary_color,
 		       deployment_tier, deployment_model,
 		       primary_cluster_id, official_cluster_id, kafka_topic_prefix, kafka_brokers, database_url,
-		       is_active, created_at, updated_at
+		       is_active, monitoring_enabled, created_at, updated_at
 		FROM quartermaster.tenants
 		WHERE id = ANY($1) AND is_active = TRUE
 	`, pq.Array(tenantIDs))
@@ -3160,18 +3179,18 @@ func (s *QuartermasterServer) GetTenantsBatch(ctx context.Context, req *quarterm
 	for rows.Next() {
 		var tenant quartermasterpb.Tenant
 		var createdAt, updatedAt time.Time
-		var subdomain, customDomain, logoURL, primaryClusterID, kafkaTopicPrefix, databaseURL sql.NullString
+		var subdomain, customDomain, logoURL, primaryClusterID, officialClusterID, kafkaTopicPrefix, databaseURL sql.NullString
 		var kafkaBrokers []string
 
 		if err := rows.Scan(
 			&tenant.Id, &tenant.Name, &subdomain, &customDomain, &logoURL,
 			&tenant.PrimaryColor, &tenant.SecondaryColor,
 			&tenant.DeploymentTier, &tenant.DeploymentModel,
-			&primaryClusterID, &kafkaTopicPrefix,
-			pq.Array(&kafkaBrokers), &databaseURL, &tenant.IsActive, &createdAt, &updatedAt,
+			&primaryClusterID, &officialClusterID, &kafkaTopicPrefix,
+			pq.Array(&kafkaBrokers), &databaseURL, &tenant.IsActive, &tenant.MonitoringEnabled, &createdAt, &updatedAt,
 		); err != nil {
-			s.logger.WithError(err).Warn("Failed to scan tenant in batch")
-			continue
+			s.logger.WithError(err).Error("Failed to scan tenant in batch")
+			return nil, status.Errorf(codes.Internal, "scan error: %v", err)
 		}
 
 		if subdomain.Valid {
@@ -3186,6 +3205,9 @@ func (s *QuartermasterServer) GetTenantsBatch(ctx context.Context, req *quarterm
 		if primaryClusterID.Valid {
 			tenant.PrimaryClusterId = &primaryClusterID.String
 		}
+		if officialClusterID.Valid {
+			tenant.OfficialClusterId = &officialClusterID.String
+		}
 		if kafkaTopicPrefix.Valid {
 			tenant.KafkaTopicPrefix = &kafkaTopicPrefix.String
 		}
@@ -3196,6 +3218,9 @@ func (s *QuartermasterServer) GetTenantsBatch(ctx context.Context, req *quarterm
 		tenant.CreatedAt = timestamppb.New(createdAt)
 		tenant.UpdatedAt = timestamppb.New(updatedAt)
 		tenants = append(tenants, &tenant)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "iterate tenant batch: %v", err)
 	}
 
 	return &quartermasterpb.ListTenantsResponse{Tenants: tenants}, nil
@@ -3228,7 +3253,7 @@ func (s *QuartermasterServer) GetTenantsByCluster(ctx context.Context, req *quar
 			SELECT DISTINCT t.id, t.name, t.subdomain, t.custom_domain, t.logo_url, t.primary_color, t.secondary_color,
 			       t.deployment_tier, t.deployment_model,
 			       t.primary_cluster_id, t.official_cluster_id, t.kafka_topic_prefix, t.kafka_brokers, t.database_url,
-			       t.is_active, t.created_at, t.updated_at
+			       t.is_active, t.monitoring_enabled, t.created_at, t.updated_at
 			FROM quartermaster.tenants t
 			LEFT JOIN quartermaster.tenant_cluster_assignments tca ON t.id = tca.tenant_id
 			WHERE (t.primary_cluster_id = $1 OR tca.cluster_id = $1) AND t.is_active = TRUE
@@ -3256,7 +3281,7 @@ func (s *QuartermasterServer) GetTenantsByCluster(ctx context.Context, req *quar
 			&tenant.PrimaryColor, &tenant.SecondaryColor,
 			&tenant.DeploymentTier, &tenant.DeploymentModel,
 			&primaryClusterID, &officialClusterID, &kafkaTopicPrefix,
-			pq.Array(&kafkaBrokers), &databaseURL, &tenant.IsActive, &createdAt, &updatedAt,
+			pq.Array(&kafkaBrokers), &databaseURL, &tenant.IsActive, &tenant.MonitoringEnabled, &createdAt, &updatedAt,
 			&totalCount,
 		); err != nil {
 			s.logger.WithError(err).Error("Failed to scan tenant by cluster")
@@ -3288,6 +3313,9 @@ func (s *QuartermasterServer) GetTenantsByCluster(ctx context.Context, req *quar
 		tenant.CreatedAt = timestamppb.New(createdAt)
 		tenant.UpdatedAt = timestamppb.New(updatedAt)
 		tenants = append(tenants, &tenant)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "iterate tenants by cluster: %v", err)
 	}
 
 	return &quartermasterpb.GetTenantsByClusterResponse{
@@ -10324,7 +10352,7 @@ func scanTenant(rows *sql.Rows) (*quartermasterpb.Tenant, error) {
 		&tenant.PrimaryColor, &tenant.SecondaryColor, &tenant.DeploymentTier,
 		&tenant.DeploymentModel,
 		&primaryClusterID, &officialClusterID, &kafkaTopicPrefix, pq.Array(&kafkaBrokers), &databaseURL,
-		&tenant.IsActive, &createdAt, &updatedAt,
+		&tenant.IsActive, &tenant.MonitoringEnabled, &createdAt, &updatedAt,
 	)
 	if err != nil {
 		return nil, err

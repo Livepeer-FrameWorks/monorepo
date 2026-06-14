@@ -21,6 +21,7 @@ fragment StreamCoreFields on Stream {
   }
   dvrChapterMode
   dvrChapterIntervalSeconds
+  monitoring
   retentionOverrides {
     streamId
     dvrRetentionDaysOverride

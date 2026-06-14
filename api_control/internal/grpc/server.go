@@ -1701,6 +1701,59 @@ func (s *CommodoreServer) ListManagedStreams(ctx context.Context, req *commodore
 	return resp, nil
 }
 
+// ListStreamMonitoring returns a tenant's streams with their per-stream
+// Skipper monitoring toggle. Service-to-service (Skipper). Skipper keys its
+// monitored set and scoped Periscope reads on stream_id (the public UUID =
+// commodore.streams.id); internal_name is returned only for logging. The
+// nullable column maps: NULL maps to INHERIT, TRUE maps to ON, FALSE to OFF.
+func (s *CommodoreServer) ListStreamMonitoring(ctx context.Context, req *commodorepb.ListStreamMonitoringRequest) (*commodorepb.ListStreamMonitoringResponse, error) {
+	tenantID := strings.TrimSpace(req.GetTenantId())
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+
+	const querySQL = `
+		SELECT id::text, internal_name, monitoring_enabled
+		FROM commodore.streams
+		WHERE tenant_id = $1::uuid
+		ORDER BY id::text`
+
+	rows, err := s.db.QueryContext(ctx, querySQL, tenantID)
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id": tenantID,
+			"error":     err,
+		}).Error("Database error listing stream monitoring")
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer rows.Close()
+
+	resp := &commodorepb.ListStreamMonitoringResponse{}
+	for rows.Next() {
+		var (
+			row     commodorepb.StreamMonitoringRow
+			enabled sql.NullBool
+		)
+		if scanErr := rows.Scan(&row.StreamId, &row.InternalName, &enabled); scanErr != nil {
+			s.logger.WithError(scanErr).Error("Failed to scan stream monitoring row")
+			return nil, status.Errorf(codes.Internal, "scan stream monitoring: %v", scanErr)
+		}
+		switch {
+		case !enabled.Valid:
+			row.MonitoringToggle = commodorepb.MonitoringToggle_MONITORING_TOGGLE_INHERIT
+		case enabled.Bool:
+			row.MonitoringToggle = commodorepb.MonitoringToggle_MONITORING_TOGGLE_ON
+		default:
+			row.MonitoringToggle = commodorepb.MonitoringToggle_MONITORING_TOGGLE_OFF
+		}
+		resp.Streams = append(resp.Streams, &row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "iterate stream monitoring: %v", err)
+	}
+	return resp, nil
+}
+
 // RecordStreamActiveCluster updates commodore.streams.active_ingest_cluster_id
 // for a managed stream. Mirrors the contended-update guard from
 // ValidateStreamKey's push-ingest path so a stale claim cannot overwrite a
@@ -6108,7 +6161,8 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *commodorepb.List
 		       s.is_recording_enabled, s.created_at, s.updated_at, s.ingest_mode,
 		       p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}'),
 		       s.active_ingest_cluster_id,
-		       s.dvr_retention_days_override, s.clip_retention_days_override
+		       s.dvr_retention_days_override, s.clip_retention_days_override,
+		       s.monitoring_enabled
 		FROM commodore.streams s
 		LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 		WHERE s.user_id = $1 AND s.tenant_id = $2`
@@ -6137,8 +6191,8 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *commodorepb.List
 	for rows.Next() {
 		stream, err := s.scanStream(rows)
 		if err != nil {
-			s.logger.WithError(err).Warn("Error scanning stream")
-			continue
+			s.logger.WithError(err).Error("Error scanning stream")
+			return nil, status.Errorf(codes.Internal, "scan stream: %v", err)
 		}
 		if !routeAttempted {
 			routeAttempted = true
@@ -6150,6 +6204,9 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *commodorepb.List
 			s.populateStreamOriginRegion(ctx, tenantID, stream, route)
 		}
 		streams = append(streams, stream)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "iterate streams: %v", err)
 	}
 
 	// Detect hasMore and trim results
@@ -6382,6 +6439,22 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *commodorepb.Upd
 		args = append(args, ivArg)
 		argIdx++
 		changedFields = append(changedFields, "dvr_chapter_interval_seconds")
+	}
+	if req.Monitoring != nil {
+		// Tri-state nullable column: INHERIT -> NULL, ON -> true, OFF -> false.
+		var monArg any
+		switch req.GetMonitoring() {
+		case commodorepb.MonitoringToggle_MONITORING_TOGGLE_ON:
+			monArg = true
+		case commodorepb.MonitoringToggle_MONITORING_TOGGLE_OFF:
+			monArg = false
+		default:
+			monArg = nil // INHERIT
+		}
+		updates = append(updates, fmt.Sprintf("monitoring_enabled = $%d", argIdx))
+		args = append(args, monArg)
+		argIdx++
+		changedFields = append(changedFields, "monitoring_enabled")
 	}
 
 	if len(updates) == 0 && pullSource == nil {
@@ -7632,7 +7705,8 @@ func (s *CommodoreServer) GetStreamsBatch(ctx context.Context, req *commodorepb.
 		       s.is_recording_enabled, s.created_at, s.updated_at, s.ingest_mode,
 		       p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}'),
 		       s.active_ingest_cluster_id,
-		       s.dvr_retention_days_override, s.clip_retention_days_override
+		       s.dvr_retention_days_override, s.clip_retention_days_override,
+		       s.monitoring_enabled
 		FROM commodore.streams s
 		LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 		WHERE s.id = ANY($1) AND s.user_id = $2 AND s.tenant_id = $3
@@ -7648,8 +7722,8 @@ func (s *CommodoreServer) GetStreamsBatch(ctx context.Context, req *commodorepb.
 	for rows.Next() {
 		stream, err := s.scanStream(rows)
 		if err != nil {
-			s.logger.WithError(err).Warn("Error scanning stream in batch")
-			continue
+			s.logger.WithError(err).Error("Error scanning stream in batch")
+			return nil, status.Errorf(codes.Internal, "scan stream batch: %v", err)
 		}
 		if !routeAttempted {
 			routeAttempted = true
@@ -7662,6 +7736,9 @@ func (s *CommodoreServer) GetStreamsBatch(ctx context.Context, req *commodorepb.
 		}
 		streams = append(streams, stream)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "iterate stream batch: %v", err)
+	}
 
 	return &commodorepb.GetStreamsBatchResponse{Streams: streams}, nil
 }
@@ -7673,6 +7750,7 @@ func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, ten
 	var pullAllowedClusters pq.StringArray
 	var createdAt, updatedAt time.Time
 	var chapterInterval, dvrRetOverride, clipRetOverride sql.NullInt32
+	var monEnabled sql.NullBool
 
 	// Query config only - operational state (status, started_at, ended_at) comes from Periscope Data Plane.
 	err := s.db.QueryRowContext(ctx, `
@@ -7681,7 +7759,8 @@ func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, ten
 		       p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}'),
 		       s.active_ingest_cluster_id,
 		       s.dvr_chapter_mode, s.dvr_chapter_interval_seconds,
-		       s.dvr_retention_days_override, s.clip_retention_days_override
+		       s.dvr_retention_days_override, s.clip_retention_days_override,
+		       s.monitoring_enabled
 		FROM commodore.streams s
 		LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 		WHERE s.id = $1 AND s.user_id = $2 AND s.tenant_id = $3
@@ -7689,7 +7768,7 @@ func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, ten
 		&stream.Title, &description, &stream.IsRecordingEnabled, &createdAt, &updatedAt,
 		&stream.IngestMode, &sourceURIEnc, &pullEnabled, &pullAllowedClusters,
 		&activeIngest, &chapterMode, &chapterInterval,
-		&dvrRetOverride, &clipRetOverride)
+		&dvrRetOverride, &clipRetOverride, &monEnabled)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "stream not found")
@@ -7704,6 +7783,7 @@ func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, ten
 	if activeIngest.Valid {
 		stream.ActiveIngestClusterId = activeIngest.String
 	}
+	stream.Monitoring = monitoringToggleFromNullBool(monEnabled)
 	stream.IsRecording = stream.IsRecordingEnabled
 	stream.CreatedAt = timestamppb.New(createdAt)
 	stream.UpdatedAt = timestamppb.New(updatedAt)
@@ -7789,6 +7869,19 @@ func posterOnlyThumbnailAssets(assets *sharedpb.ThumbnailAssets) *sharedpb.Thumb
 	}
 }
 
+// monitoringToggleFromNullBool maps the nullable commodore.streams.monitoring_
+// enabled column to the wire enum: NULL -> INHERIT, true -> ON, false -> OFF.
+func monitoringToggleFromNullBool(b sql.NullBool) commodorepb.MonitoringToggle {
+	switch {
+	case !b.Valid:
+		return commodorepb.MonitoringToggle_MONITORING_TOGGLE_INHERIT
+	case b.Bool:
+		return commodorepb.MonitoringToggle_MONITORING_TOGGLE_ON
+	default:
+		return commodorepb.MonitoringToggle_MONITORING_TOGGLE_OFF
+	}
+}
+
 // scanStream scans config-only stream data; operational state comes from Periscope Data Plane
 func (s *CommodoreServer) scanStream(rows *sql.Rows) (*commodorepb.Stream, error) {
 	var stream commodorepb.Stream
@@ -7797,14 +7890,16 @@ func (s *CommodoreServer) scanStream(rows *sql.Rows) (*commodorepb.Stream, error
 	var pullAllowedClusters pq.StringArray
 	var createdAt, updatedAt time.Time
 	var dvrRetOverride, clipRetOverride sql.NullInt32
+	var monEnabled sql.NullBool
 
 	err := rows.Scan(&stream.StreamId, &stream.InternalName, &stream.StreamKey, &stream.PlaybackId,
 		&stream.Title, &description, &stream.IsRecordingEnabled, &createdAt, &updatedAt,
 		&stream.IngestMode, &sourceURIEnc, &pullEnabled, &pullAllowedClusters, &activeIngest,
-		&dvrRetOverride, &clipRetOverride)
+		&dvrRetOverride, &clipRetOverride, &monEnabled)
 	if err != nil {
 		return nil, err
 	}
+	stream.Monitoring = monitoringToggleFromNullBool(monEnabled)
 
 	if description.Valid {
 		stream.Description = description.String

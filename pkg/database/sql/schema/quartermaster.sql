@@ -53,6 +53,10 @@ CREATE TABLE IF NOT EXISTS quartermaster.tenants (
     -- ===== STATUS & LIFECYCLE =====
     is_provider BOOLEAN DEFAULT FALSE,
     is_active BOOLEAN DEFAULT TRUE,
+    -- Tenant-wide master switch for Skipper AI monitoring/notifications. When
+    -- false, Skipper skips the tenant entirely regardless of tier entitlement
+    -- or per-stream overrides. Default TRUE preserves existing behavior.
+    monitoring_enabled BOOLEAN NOT NULL DEFAULT TRUE,
     trial_ends_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()

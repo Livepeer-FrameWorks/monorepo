@@ -800,6 +800,7 @@ func GenerateTenant() *quartermasterpb.Tenant {
 		PrimaryDeploymentTier: "edge",
 		PrimaryClusterId:      stringPtr("cluster_demo_us_west"),
 		IsActive:              true,
+		MonitoringEnabled:     true,
 		CreatedAt:             timestamppb.New(now.Add(-180 * 24 * time.Hour)),
 		UpdatedAt:             timestamppb.New(now.Add(-1 * 24 * time.Hour)),
 	}

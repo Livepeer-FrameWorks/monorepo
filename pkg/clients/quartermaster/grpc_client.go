@@ -278,7 +278,21 @@ func (c *GRPCClient) ListActiveTenants(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return resp.TenantIds, nil
+	return resp.GetTenantIds(), nil
+}
+
+// ListActiveTenantsWithMonitoring returns active tenants paired with their
+// tenant-wide Skipper monitoring switch. Called by Skipper's heartbeat so the
+// master switch rides the same per-cycle call that yields the tenant set.
+func (c *GRPCClient) ListActiveTenantsWithMonitoring(ctx context.Context) ([]*quartermasterpb.ActiveTenant, error) {
+	resp, err := c.tenant.ListActiveTenants(ctx, &quartermasterpb.ListActiveTenantsRequest{})
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.GetTenantIds()) != len(resp.GetTenants()) {
+		return nil, fmt.Errorf("quartermaster ListActiveTenants response mismatch: tenant_ids=%d tenants=%d", len(resp.GetTenantIds()), len(resp.GetTenants()))
+	}
+	return resp.GetTenants(), nil
 }
 
 // ============================================================================

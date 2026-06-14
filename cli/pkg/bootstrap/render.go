@@ -1269,6 +1269,13 @@ func mistNativeStreamToRendered(m MistNativeStream, clusters []Cluster) (MistNat
 		return MistNativeStreamRendered{}, fmt.Errorf("allowed_cluster_ids currently supports exactly one source cluster for mist_native streams (got %d); cross-cluster source election is not implemented", len(allowedIDs))
 	}
 
+	monitoring := strings.ToLower(strings.TrimSpace(m.Monitoring))
+	switch monitoring {
+	case "", "inherit", "on", "off":
+	default:
+		return MistNativeStreamRendered{}, fmt.Errorf("monitoring must be one of inherit/on/off (got %q)", m.Monitoring)
+	}
+
 	return MistNativeStreamRendered{
 		PlaybackID:         m.PlaybackID,
 		OwnerTenant:        m.OwnerTenant,
@@ -1278,6 +1285,7 @@ func mistNativeStreamToRendered(m MistNativeStream, clusters []Cluster) (MistNat
 		SourceKind:         m.SourceKind,
 		AlwaysOn:           m.AlwaysOn,
 		IsRecordingEnabled: m.IsRecordingEnabled,
+		Monitoring:         monitoring,
 		ProcessPolicy:      m.ProcessPolicy,
 		PlacementCount:     count,
 		AllowedClusterIDs:  allowedIDs,

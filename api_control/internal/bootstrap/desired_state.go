@@ -55,6 +55,7 @@ type MistNativeStream struct {
 	SourceKind         string                  `yaml:"source_kind"`
 	AlwaysOn           bool                    `yaml:"always_on"`
 	IsRecordingEnabled bool                    `yaml:"is_recording_enabled,omitempty"`
+	Monitoring         string                  `yaml:"monitoring,omitempty"`
 	ProcessPolicy      any                     `yaml:"process_policy,omitempty"`
 	PlacementCount     int                     `yaml:"placement_count,omitempty"`
 	AllowedClusterIDs  []string                `yaml:"allowed_cluster_ids,omitempty"`

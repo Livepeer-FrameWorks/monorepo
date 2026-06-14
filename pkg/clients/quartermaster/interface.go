@@ -29,6 +29,7 @@ type Interface interface {
 	UpdateTenant(ctx context.Context, req *quartermasterpb.UpdateTenantRequest) (*quartermasterpb.Tenant, error)
 	ResolveTenant(ctx context.Context, req *quartermasterpb.ResolveTenantRequest) (*quartermasterpb.ResolveTenantResponse, error)
 	ListActiveTenants(ctx context.Context) ([]string, error)
+	ListActiveTenantsWithMonitoring(ctx context.Context) ([]*quartermasterpb.ActiveTenant, error)
 	GetCluster(ctx context.Context, clusterID string) (*quartermasterpb.ClusterResponse, error)
 	ListAliasedTenantsForCluster(ctx context.Context, clusterID string) (*quartermasterpb.ListAliasedTenantsForClusterResponse, error)
 	ListClusters(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error)

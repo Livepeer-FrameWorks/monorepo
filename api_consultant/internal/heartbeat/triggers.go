@@ -140,10 +140,11 @@ func (t *LookoutTrigger) handleIncident(ctx context.Context, msg kafka.Message) 
 	if incident.TenantID == "" {
 		return nil
 	}
-	if !t.Agent.isSkipperEnabled(ctx, incident.TenantID) {
+	tm := t.Agent.resolveTenant(ctx, incident.TenantID)
+	if !tm.eligible() {
 		return nil
 	}
-	snapshot, err := t.Agent.loadSnapshot(ctx, incident.TenantID)
+	snapshot, err := t.Agent.loadSnapshot(ctx, tm)
 	if err != nil {
 		if t.Logger != nil {
 			t.Logger.WithError(err).WithField("tenant_id", incident.TenantID).Warn("Lookout snapshot load failed")

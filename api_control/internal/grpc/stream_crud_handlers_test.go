@@ -14,18 +14,18 @@ import (
 
 var fixedTS = time.Unix(1700000000, 0).UTC()
 
-// streamListCols mirrors the 16-column projection scanStream reads in
+// streamListCols mirrors the 17-column projection scanStream reads in
 // ListStreams (push stream → pull-source columns NULL).
 func pushListRow() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
 		"id", "internal_name", "stream_key", "playback_id", "title", "description",
 		"is_recording_enabled", "created_at", "updated_at", "ingest_mode",
 		"source_uri_enc", "enabled", "allowed_cluster_ids", "active_ingest_cluster_id",
-		"dvr_retention_days_override", "clip_retention_days_override",
+		"dvr_retention_days_override", "clip_retention_days_override", "monitoring_enabled",
 	})
 }
 
-// pushFullRow mirrors the 18-column projection queryStream reads after an
+// pushFullRow mirrors the 19-column projection queryStream reads after an
 // UpdateStream commit.
 func pushFullRow() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
@@ -33,7 +33,7 @@ func pushFullRow() *sqlmock.Rows {
 		"is_recording_enabled", "created_at", "updated_at", "ingest_mode",
 		"source_uri_enc", "enabled", "allowed_cluster_ids", "active_ingest_cluster_id",
 		"dvr_chapter_mode", "dvr_chapter_interval_seconds",
-		"dvr_retention_days_override", "clip_retention_days_override",
+		"dvr_retention_days_override", "clip_retention_days_override", "monitoring_enabled",
 	})
 }
 
@@ -175,7 +175,7 @@ func TestUpdateStream(t *testing.T) {
 				"s1", "live+abc", "key-1", "pb-1", "New Title", nil,
 				false, fixedTS, fixedTS, "push",
 				nil, nil, "{}", nil,
-				nil, nil, nil, nil))
+				nil, nil, nil, nil, nil))
 
 		stream, err := s.UpdateStream(ctxAs("u1", "t1", "owner"), &commodorepb.UpdateStreamRequest{
 			StreamId: "s1", Name: proto.String("New Title"),
@@ -206,10 +206,47 @@ func TestUpdateStream(t *testing.T) {
 				"s1", "live+abc", "key-1", "pb-1", "Title", nil,
 				false, fixedTS, fixedTS, "push",
 				nil, nil, "{}", nil,
-				nil, nil, nil, nil))
+				nil, nil, nil, nil, nil))
 
 		if _, err := s.UpdateStream(ctxAs("u1", "t1", "owner"), &commodorepb.UpdateStreamRequest{StreamId: "s1"}); err != nil {
 			t.Fatalf("unexpected error: %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet: %v", err)
+		}
+	})
+
+	t.Run("monitoring_update_writes_nullable_toggle", func(t *testing.T) {
+		s, mock, done := newMockServer(t)
+		defer done()
+		mock.ExpectQuery("ingest_mode, is_recording_enabled").
+			WithArgs("s1", "u1", "t1").
+			WillReturnRows(sqlmock.NewRows([]string{"internal_name", "ingest_mode", "is_recording_enabled"}).
+				AddRow("live+abc", "push", false))
+		mock.ExpectBegin()
+		mock.ExpectExec("UPDATE commodore.streams SET").
+			WithArgs(false, "s1", "u1", "t1").
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit()
+		expectOutboxInsert(mock)
+		mock.ExpectQuery("LEFT JOIN commodore.stream_pull_sources").
+			WithArgs("s1", "u1", "t1").
+			WillReturnRows(pushFullRow().AddRow(
+				"s1", "live+abc", "key-1", "pb-1", "Title", nil,
+				false, fixedTS, fixedTS, "push",
+				nil, nil, "{}", nil,
+				nil, nil, nil, nil, false))
+
+		monitoring := commodorepb.MonitoringToggle_MONITORING_TOGGLE_OFF
+		stream, err := s.UpdateStream(ctxAs("u1", "t1", "owner"), &commodorepb.UpdateStreamRequest{
+			StreamId:   "s1",
+			Monitoring: &monitoring,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if stream.GetMonitoring() != commodorepb.MonitoringToggle_MONITORING_TOGGLE_OFF {
+			t.Fatalf("Monitoring=%v want OFF", stream.GetMonitoring())
 		}
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Errorf("unmet: %v", err)
@@ -283,8 +320,8 @@ func TestListStreams(t *testing.T) {
 		mock.ExpectQuery("LEFT JOIN commodore.stream_pull_sources").
 			WithArgs("u1", "t1").
 			WillReturnRows(pushListRow().
-				AddRow("s1", "live+a", "k1", "pb1", "First", nil, false, fixedTS, fixedTS, "push", nil, nil, "{}", nil, nil, nil).
-				AddRow("s2", "live+b", "k2", "pb2", "Second", "desc", true, fixedTS, fixedTS, "push", nil, nil, "{}", nil, nil, nil))
+				AddRow("s1", "live+a", "k1", "pb1", "First", nil, false, fixedTS, fixedTS, "push", nil, nil, "{}", nil, nil, nil, nil).
+				AddRow("s2", "live+b", "k2", "pb2", "Second", "desc", true, fixedTS, fixedTS, "push", nil, nil, "{}", nil, nil, nil, nil))
 
 		resp, err := s.ListStreams(ctxAs("u1", "t1", "owner"), &commodorepb.ListStreamsRequest{})
 		if err != nil {
@@ -322,4 +359,40 @@ func TestListStreams(t *testing.T) {
 			t.Errorf("got %d streams, want 0", len(resp.GetStreams()))
 		}
 	})
+}
+
+func TestListStreamMonitoringMapsNullableToggle(t *testing.T) {
+	s, mock, done := newMockServer(t)
+	defer done()
+	mock.ExpectQuery("SELECT id::text, internal_name, monitoring_enabled").
+		WithArgs("t1").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "internal_name", "monitoring_enabled"}).
+			AddRow("s1", "live+a", nil).
+			AddRow("s2", "live+b", true).
+			AddRow("s3", "live+c", false))
+
+	resp, err := s.ListStreamMonitoring(context.Background(), &commodorepb.ListStreamMonitoringRequest{TenantId: "t1"})
+	if err != nil {
+		t.Fatalf("ListStreamMonitoring: %v", err)
+	}
+	got := resp.GetStreams()
+	if len(got) != 3 {
+		t.Fatalf("got %d rows, want 3", len(got))
+	}
+	want := []commodorepb.MonitoringToggle{
+		commodorepb.MonitoringToggle_MONITORING_TOGGLE_INHERIT,
+		commodorepb.MonitoringToggle_MONITORING_TOGGLE_ON,
+		commodorepb.MonitoringToggle_MONITORING_TOGGLE_OFF,
+	}
+	for i := range want {
+		if got[i].GetMonitoringToggle() != want[i] {
+			t.Fatalf("row %d toggle=%v want %v", i, got[i].GetMonitoringToggle(), want[i])
+		}
+	}
+	if got[0].GetInternalName() != "live+a" {
+		t.Fatalf("InternalName=%q want live+a", got[0].GetInternalName())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet: %v", err)
+	}
 }

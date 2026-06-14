@@ -59,6 +59,14 @@ service InternalService {
   // Stable ordering by stream_id keeps reconciler diffs deterministic.
   rpc ListManagedStreams(ListManagedStreamsRequest) returns (ListManagedStreamsResponse);
 
+  // Lists a tenant's streams with their per-stream Skipper monitoring toggle.
+  // Called by Skipper (api_consultant) each heartbeat cycle to resolve which
+  // streams to monitor. Service-to-service; filters by tenant_id. Skipper keys
+  // its monitored set and scoped Periscope reads on stream_id (the public UUID
+  // = commodore.streams.id, which Periscope stores as stream_health.stream_id);
+  // internal_name is returned only for logging/diagnostics.
+  rpc ListStreamMonitoring(ListStreamMonitoringRequest) returns (ListStreamMonitoringResponse);
+
   // Records the cluster currently serving a managed stream. Foghorn calls
   // this after a successful ApplyManagedStream so commodore.streams.active_
   // ingest_cluster_id reflects the elected placement: without it, public
@@ -484,6 +492,30 @@ message ManagedStreamRow {
 
 message ListManagedStreamsResponse {
   repeated ManagedStreamRow streams = 1;
+}
+
+// Per-stream Skipper monitoring toggle. Self-describing on the wire (vs the
+// optional bool used on Stream/UpdateStreamRequest) so Skipper's 3-way
+// decision reads cleanly. Server maps the nullable column: NULL -> INHERIT,
+// true -> ON, false -> OFF.
+enum MonitoringToggle {
+  MONITORING_TOGGLE_INHERIT = 0;  // follow the tenant's tier entitlement
+  MONITORING_TOGGLE_ON = 1;       // monitor regardless of tier
+  MONITORING_TOGGLE_OFF = 2;      // never monitor
+}
+
+message ListStreamMonitoringRequest {
+  string tenant_id = 1;   // required; all queries filter tenant_id
+}
+
+message StreamMonitoringRow {
+  string stream_id = 1;             // public UUID
+  string internal_name = 2;         // Mist identifier (logging only; Periscope keys on stream_id UUID)
+  MonitoringToggle monitoring_toggle = 3;
+}
+
+message ListStreamMonitoringResponse {
+  repeated StreamMonitoringRow streams = 1;
 }
 
 message RecordStreamActiveClusterRequest {
@@ -1575,6 +1607,9 @@ message Stream {
   // stream-bound so no override is exposed here for VOD.
   optional int32 dvr_retention_days_override  = 27;
   optional int32 clip_retention_days_override = 28;
+  // Per-stream Skipper monitoring override. Always set on reads; INHERIT when
+  // the column is NULL. See MonitoringToggle.
+  MonitoringToggle monitoring = 29;
 }
 
 // PullSourceAllowedClustersInput wraps the placement-pin list so callers can
@@ -1626,6 +1661,9 @@ message UpdateStreamRequest {
   // NEXT recording, not in-flight.
   optional string dvr_chapter_mode             = 7;
   optional int32  dvr_chapter_interval_seconds = 8;
+  // Per-stream Skipper monitoring override. Unset = leave unchanged; set to
+  // INHERIT/ON/OFF to write NULL/true/false on the column.
+  optional MonitoringToggle monitoring = 9;
 }
 
 message DeleteStreamRequest {

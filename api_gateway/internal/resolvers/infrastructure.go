@@ -616,6 +616,9 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 		if input.Name != nil {
 			tenant.Name = *input.Name
 		}
+		if input.MonitoringEnabled != nil {
+			tenant.MonitoringEnabled = *input.MonitoringEnabled
+		}
 		return tenant, nil
 	}
 
@@ -689,6 +692,12 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 		}
 	}
 
+	if input.MonitoringEnabled != nil {
+		updateReq.MonitoringEnabled = input.MonitoringEnabled
+		updates++
+		changedFields = append(changedFields, "monitoring_enabled")
+	}
+
 	if updates == 0 {
 		r.Logger.WithField("tenant_id", tenantID).Debug("No tenant updates requested")
 		return r.DoGetTenant(ctx)
@@ -715,6 +724,30 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 	return r.DoGetTenant(ctx)
 }
 
+func monitoringToggleToProto(toggle model.MonitoringToggle) commodorepb.MonitoringToggle {
+	switch toggle {
+	case model.MonitoringToggleOn:
+		return commodorepb.MonitoringToggle_MONITORING_TOGGLE_ON
+	case model.MonitoringToggleOff:
+		return commodorepb.MonitoringToggle_MONITORING_TOGGLE_OFF
+	default:
+		return commodorepb.MonitoringToggle_MONITORING_TOGGLE_INHERIT
+	}
+}
+
+// MonitoringToggleFromProto maps the Commodore wire enum to the GraphQL enum.
+// Exported for the generated Stream.monitoring field resolver.
+func MonitoringToggleFromProto(toggle commodorepb.MonitoringToggle) model.MonitoringToggle {
+	switch toggle {
+	case commodorepb.MonitoringToggle_MONITORING_TOGGLE_ON:
+		return model.MonitoringToggleOn
+	case commodorepb.MonitoringToggle_MONITORING_TOGGLE_OFF:
+		return model.MonitoringToggleOff
+	default:
+		return model.MonitoringToggleInherit
+	}
+}
+
 // DoUpdateStream updates stream settings
 func (r *Resolver) DoUpdateStream(ctx context.Context, id string, input model.UpdateStreamInput) (*commodorepb.Stream, error) {
 	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
@@ -734,6 +767,9 @@ func (r *Resolver) DoUpdateStream(ctx context.Context, id string, input model.Up
 				}
 				if input.Record != nil {
 					stream.IsRecording = *input.Record
+				}
+				if input.Monitoring != nil {
+					stream.Monitoring = monitoringToggleToProto(*input.Monitoring)
 				}
 				return stream, nil
 			}
@@ -776,6 +812,10 @@ func (r *Resolver) DoUpdateStream(ctx context.Context, id string, input model.Up
 		v := int32(*input.DvrChapterIntervalSeconds)
 		req.DvrChapterIntervalSeconds = &v
 	}
+	if input.Monitoring != nil {
+		monitoring := monitoringToggleToProto(*input.Monitoring)
+		req.Monitoring = &monitoring
+	}
 
 	// Call Commodore gRPC (context metadata carries auth)
 	stream, err := r.Clients.Commodore.UpdateStream(ctx, req)
@@ -799,6 +839,9 @@ func (r *Resolver) DoUpdateStream(ctx context.Context, id string, input model.Up
 	}
 	if input.PullSource != nil {
 		changedFields = append(changedFields, "pull_source")
+	}
+	if input.Monitoring != nil {
+		changedFields = append(changedFields, "monitoring_enabled")
 	}
 	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventStreamUpdated,

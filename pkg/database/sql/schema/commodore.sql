@@ -220,6 +220,13 @@ CREATE TABLE IF NOT EXISTS commodore.streams (
     -- ===== DVR RECORDING =====
     is_recording_enabled BOOLEAN DEFAULT FALSE,
 
+    -- ===== SKIPPER MONITORING =====
+    -- Per-stream override for Skipper AI health monitoring. Tri-state:
+    --   NULL  = INHERIT (follow the tenant's tier entitlement) -- default
+    --   TRUE  = ON  (monitor regardless of billing tier)
+    --   FALSE = OFF (never monitor, even if the tenant is entitled)
+    monitoring_enabled BOOLEAN,
+
     -- ===== DVR CHAPTER POLICY =====
     -- Snapshotted onto foghorn.artifacts at StartDVR. NULL = chapters
     -- disabled. Changes take effect on the next recording, not in-flight.

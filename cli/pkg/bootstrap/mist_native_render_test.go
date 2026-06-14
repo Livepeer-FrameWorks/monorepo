@@ -131,6 +131,38 @@ func TestMistNativeStreamToRendered_PlacementCountDefaultsToOne(t *testing.T) {
 	}
 }
 
+func TestMistNativeStreamToRendered_ValidatesMonitoring(t *testing.T) {
+	clusters := []Cluster{{ID: "edge-eu-1", Type: "edge"}}
+	rendered, err := mistNativeStreamToRendered(MistNativeStream{
+		PlaybackID:        "demo",
+		OwnerTenant:       TenantRef{Ref: "quartermaster.system_tenant"},
+		Title:             "Demo",
+		Source:            "ts-exec:cat /dev/null",
+		SourceKind:        "exec",
+		Monitoring:        " ON ",
+		AllowedClusterIDs: []string{"edge-eu-1"},
+	}, clusters)
+	if err != nil {
+		t.Fatalf("monitoring=ON should render: %v", err)
+	}
+	if rendered.Monitoring != "on" {
+		t.Fatalf("Monitoring=%q want on", rendered.Monitoring)
+	}
+
+	_, err = mistNativeStreamToRendered(MistNativeStream{
+		PlaybackID:        "demo",
+		OwnerTenant:       TenantRef{Ref: "quartermaster.system_tenant"},
+		Title:             "Demo",
+		Source:            "ts-exec:cat /dev/null",
+		SourceKind:        "exec",
+		Monitoring:        "enabled",
+		AllowedClusterIDs: []string{"edge-eu-1"},
+	}, clusters)
+	if err == nil || !strings.Contains(err.Error(), "inherit/on/off") {
+		t.Fatalf("expected invalid monitoring rejection, got %v", err)
+	}
+}
+
 // TestMistNativeStreamToRendered_PlacementCountIsNodeCountNotClusterCount
 // locks the contract that placement_count counts elected edge NODES, not
 // clusters: a single allowed cluster legitimately supports placement_count

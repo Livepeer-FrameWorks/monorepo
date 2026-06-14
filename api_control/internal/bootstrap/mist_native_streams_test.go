@@ -73,6 +73,31 @@ func TestEncodeProcessPolicy_AcceptsCanonicalMistArray(t *testing.T) {
 	}
 }
 
+func TestMonitoringNullBoolValidatesToggle(t *testing.T) {
+	cases := []struct {
+		in    string
+		valid bool
+		value bool
+	}{
+		{"", false, false},
+		{"inherit", false, false},
+		{" ON ", true, true},
+		{"off", true, false},
+	}
+	for _, tc := range cases {
+		got, err := monitoringNullBool(tc.in)
+		if err != nil {
+			t.Fatalf("monitoringNullBool(%q): %v", tc.in, err)
+		}
+		if got.Valid != tc.valid || got.Bool != tc.value {
+			t.Fatalf("monitoringNullBool(%q)=%+v want valid=%v bool=%v", tc.in, got, tc.valid, tc.value)
+		}
+	}
+	if _, err := monitoringNullBool("enabled"); err == nil || !strings.Contains(err.Error(), "inherit/on/off") {
+		t.Fatalf("invalid monitoring value should be rejected, got %v", err)
+	}
+}
+
 func TestValidateMistNativeShape(t *testing.T) {
 	good := MistNativeStream{
 		PlaybackID:        "frameworks-demo",
@@ -135,13 +160,14 @@ func TestReconcileMistNativeStreams_NoopOnIdempotentRerun(t *testing.T) {
 
 	probeCols := []string{
 		"id", "title", "description", "ingest_mode", "always_on", "is_recording_enabled",
+		"monitoring_enabled",
 		"source_spec", "source_kind", "placement_count",
 		"allowed_cluster_ids", "local_asset_paths", "processes_live",
 	}
 	mock.ExpectQuery(`FROM commodore\.streams s`).
 		WithArgs("tenant-uuid", "frameworks-demo").
 		WillReturnRows(sqlmock.NewRows(probeCols).AddRow(
-			"stream-uuid", "Demo", "Loop", "mist_native", true, false,
+			"stream-uuid", "Demo", "Loop", "mist_native", true, false, nil,
 			source, "exec", int32(1),
 			"{cluster-edge}", "[]", processPolicyJSON,
 		))
@@ -191,6 +217,7 @@ func TestReconcileMistNativeStreams_PrunesAbsentFromDesired(t *testing.T) {
 	source := "ts-exec:cat /dev/null"
 	probeCols := []string{
 		"id", "title", "description", "ingest_mode", "always_on", "is_recording_enabled",
+		"monitoring_enabled",
 		"source_spec", "source_kind", "placement_count",
 		"allowed_cluster_ids", "local_asset_paths", "processes_live",
 	}
@@ -198,7 +225,7 @@ func TestReconcileMistNativeStreams_PrunesAbsentFromDesired(t *testing.T) {
 	mock.ExpectQuery(`FROM commodore\.streams s`).
 		WithArgs("tenant-uuid", "frameworks-demo").
 		WillReturnRows(sqlmock.NewRows(probeCols).AddRow(
-			"stream-keep", "Demo", "", "mist_native", true, false,
+			"stream-keep", "Demo", "", "mist_native", true, false, nil,
 			source, "exec", int32(1), "{cluster-edge}", "[]", "",
 		))
 	// Prune list returns the kept row + an absent row that should be deleted.
@@ -278,13 +305,14 @@ func TestReconcileMistNativeStreams_RejectsModeMismatch(t *testing.T) {
 
 	probeCols := []string{
 		"id", "title", "description", "ingest_mode", "always_on", "is_recording_enabled",
+		"monitoring_enabled",
 		"source_spec", "source_kind", "placement_count",
 		"allowed_cluster_ids", "local_asset_paths", "processes_live",
 	}
 	mock.ExpectQuery(`FROM commodore\.streams s`).
 		WithArgs("tenant-uuid", "frameworks-demo").
 		WillReturnRows(sqlmock.NewRows(probeCols).AddRow(
-			"stream-uuid", "Demo", "", "pull", false, false,
+			"stream-uuid", "Demo", "", "pull", false, false, nil,
 			nil, nil, nil, "{}", "[]", "",
 		))
 

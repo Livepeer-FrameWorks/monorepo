@@ -249,6 +249,21 @@ func isSystemTenantRef(ref string) bool {
 		r == "quartermaster.tenants."+SystemTenantAlias
 }
 
+// monitoringNullBool maps the rendered per-stream Monitoring value to the
+// nullable commodore.streams.monitoring_enabled column.
+func monitoringNullBool(monitoring string) (sql.NullBool, error) {
+	switch strings.ToLower(strings.TrimSpace(monitoring)) {
+	case "on":
+		return sql.NullBool{Bool: true, Valid: true}, nil
+	case "off":
+		return sql.NullBool{Bool: false, Valid: true}, nil
+	case "", "inherit":
+		return sql.NullBool{}, nil
+	default:
+		return sql.NullBool{}, fmt.Errorf("monitoring must be one of inherit/on/off (got %q)", monitoring)
+	}
+}
+
 func reconcileMistNativeStream(ctx context.Context, exec DBTX, tenantID, alias string, m MistNativeStream) (string, error) {
 	const probeSQL = `
 		SELECT s.id::text,
@@ -257,6 +272,7 @@ func reconcileMistNativeStream(ctx context.Context, exec DBTX, tenantID, alias s
 		       s.ingest_mode,
 		       s.always_on,
 		       s.is_recording_enabled,
+		       s.monitoring_enabled,
 		       mn.source_spec,
 		       mn.source_kind,
 		       mn.placement_count,
@@ -272,13 +288,14 @@ func reconcileMistNativeStream(ctx context.Context, exec DBTX, tenantID, alias s
 		streamID                                 string
 		curTitle, curDesc, curMode               string
 		curAlwaysOn, curRecording                bool
+		curMonitoring                            sql.NullBool
 		curSourceSpec, curSourceKind             sql.NullString
 		curPlacementCount                        sql.NullInt32
 		curAllowedClusters                       pq.StringArray
 		curLocalAssetsJSON, curProcessesLiveJSON string
 	)
 	err := exec.QueryRowContext(ctx, probeSQL, tenantID, m.PlaybackID).Scan(
-		&streamID, &curTitle, &curDesc, &curMode, &curAlwaysOn, &curRecording,
+		&streamID, &curTitle, &curDesc, &curMode, &curAlwaysOn, &curRecording, &curMonitoring,
 		&curSourceSpec, &curSourceKind, &curPlacementCount,
 		&curAllowedClusters, &curLocalAssetsJSON, &curProcessesLiveJSON,
 	)
@@ -307,10 +324,15 @@ func reconcileMistNativeStream(ctx context.Context, exec DBTX, tenantID, alias s
 		return "", fmt.Errorf("encode process_policy: %w", err)
 	}
 
+	wantMonitoring, err := monitoringNullBool(m.Monitoring)
+	if err != nil {
+		return "", err
+	}
 	streamFieldsEq := curTitle == m.Title &&
 		curDesc == m.Description &&
 		curAlwaysOn == m.AlwaysOn &&
-		curRecording == m.IsRecordingEnabled
+		curRecording == m.IsRecordingEnabled &&
+		curMonitoring == wantMonitoring
 	curAllowed := []string(curAllowedClusters)
 	mistFieldsEq := curSourceSpec.Valid && curSourceSpec.String == m.Source &&
 		curSourceKind.Valid && curSourceKind.String == m.SourceKind &&
@@ -330,10 +352,11 @@ func reconcileMistNativeStream(ctx context.Context, exec DBTX, tenantID, alias s
 			    description = $3,
 			    always_on = $4,
 			    is_recording_enabled = $5,
+			    monitoring_enabled = $6,
 			    updated_at = NOW()
 			WHERE id = $1::uuid`
 		if _, err := exec.ExecContext(ctx, updateStreamSQL,
-			streamID, m.Title, m.Description, m.AlwaysOn, m.IsRecordingEnabled,
+			streamID, m.Title, m.Description, m.AlwaysOn, m.IsRecordingEnabled, wantMonitoring,
 		); err != nil {
 			return "", fmt.Errorf("update stream: %w", err)
 		}
@@ -367,6 +390,11 @@ func reconcileMistNativeStream(ctx context.Context, exec DBTX, tenantID, alias s
 }
 
 func createMistNativeStream(ctx context.Context, exec DBTX, tenantID, alias string, m MistNativeStream) (string, error) {
+	monitoringEnabled, monErr := monitoringNullBool(m.Monitoring)
+	if monErr != nil {
+		return "", monErr
+	}
+
 	const ownerSQL = `
 		SELECT id::text FROM commodore.users
 		WHERE tenant_id = $1::uuid AND role = 'owner'
@@ -386,15 +414,16 @@ func createMistNativeStream(ctx context.Context, exec DBTX, tenantID, alias stri
 		INSERT INTO commodore.streams
 			(id, tenant_id, user_id, stream_key, playback_id, internal_name,
 			 title, description, ingest_mode, always_on, is_recording_enabled,
-			 created_at, updated_at)
+			 monitoring_enabled, created_at, updated_at)
 		VALUES (gen_random_uuid(), $1::uuid, $5::uuid,
 		        'mistnative-' || $2, $2,
 		        replace(gen_random_uuid()::text, '-', ''),
-		        $3, $4, 'mist_native', $6, $7, NOW(), NOW())
+		        $3, $4, 'mist_native', $6, $7, $8, NOW(), NOW())
 		RETURNING id::text`
 	var streamID string
 	if err := exec.QueryRowContext(ctx, insertStreamSQL,
 		tenantID, m.PlaybackID, m.Title, m.Description, ownerID, m.AlwaysOn, m.IsRecordingEnabled,
+		monitoringEnabled,
 	).Scan(&streamID); err != nil {
 		return "", fmt.Errorf("insert stream: %w", err)
 	}

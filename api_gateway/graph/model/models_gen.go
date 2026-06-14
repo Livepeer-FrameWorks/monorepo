@@ -2219,6 +2219,8 @@ type UpdateStreamInput struct {
 	// Chapter interval in seconds. Required when dvrChapterMode =
 	// FIXED_INTERVAL. Minimum 3600 (1 hour).
 	DvrChapterIntervalSeconds *int `json:"dvrChapterIntervalSeconds,omitempty"`
+	// Per-stream Skipper monitoring override. INHERIT follows the tenant tier.
+	Monitoring *MonitoringToggle `json:"monitoring,omitempty"`
 }
 
 // Input for updating enterprise subscription custom terms.
@@ -2241,6 +2243,8 @@ type UpdateTenantInput struct {
 	// picks up the change on the next reconciler tick and starts/teardowns the
 	// verification + cert lifecycle accordingly.
 	CustomDomain *string `json:"customDomain,omitempty"`
+	// Tenant-wide Skipper AI monitoring master switch. null leaves it unchanged.
+	MonitoringEnabled *bool `json:"monitoringEnabled,omitempty"`
 }
 
 type UsageEntry struct {

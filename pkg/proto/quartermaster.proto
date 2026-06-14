@@ -368,6 +368,10 @@ message Tenant {
   // when tenant's preferred primary_cluster_id is a self-hosted or marketplace cluster
   // with limited geographic reach. When official == primary, this field is empty.
   optional string official_cluster_id = 27; // json:"official_cluster_id,omitempty"
+
+  // Tenant-wide master switch for Skipper AI monitoring/notifications.
+  // Default true; when false Skipper skips the tenant entirely.
+  bool monitoring_enabled = 28;         // json:"monitoring_enabled"
 }
 
 message ListTenantsRequest {
@@ -413,6 +417,7 @@ message UpdateTenantRequest {
   optional string primary_deployment_tier = 10; // json:"primary_deployment_tier,omitempty"
   optional string primary_cluster_id = 12; // json:"primary_cluster_id,omitempty"
   optional bool is_active = 13;         // json:"is_active,omitempty"
+  optional bool monitoring_enabled = 14; // json:"monitoring_enabled,omitempty"
 }
 
 message DeleteTenantRequest {
@@ -473,7 +478,17 @@ message ListActiveTenantsRequest {
 
 // Response with tenant IDs for batch processing
 message ListActiveTenantsResponse {
-  repeated string tenant_ids = 1;       // List of active tenant UUIDs
+  repeated string tenant_ids = 1;       // List of active tenant UUIDs for billing batch callers
+  // Richer rows carrying the tenant-wide Skipper monitoring switch. Parallel
+  // to tenant_ids (same set) so existing callers keep using tenant_ids while
+  // Skipper consumes the toggle. Added so the master switch piggybacks on the
+  // existing per-cycle call with zero extra round-trips.
+  repeated ActiveTenant tenants = 2;
+}
+
+message ActiveTenant {
+  string tenant_id = 1;
+  bool monitoring_enabled = 2;
 }
 
 // ============================================================================

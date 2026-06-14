@@ -13,7 +13,6 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/llm"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
 )
 
 type fakeOrchestrator struct {
@@ -167,7 +166,8 @@ func TestProcessTenantHealthySkipsLLM(t *testing.T) {
 		Logger:       testLogger(),
 	})
 
-	if err := agent.processTenant(context.Background(), "tenant-healthy"); err != nil {
+	tm := tenantMonitoring{TenantID: "tenant-healthy", TenantWideEnabled: true, TierEntitled: true, Monitored: []string{"stream"}, AllStreamCount: 1}
+	if err := agent.processTenant(context.Background(), tm); err != nil {
 		t.Fatalf("processTenant: %v", err)
 	}
 	if orchestrator.calls != 0 {
@@ -203,7 +203,8 @@ func TestProcessTenantDegradedInvestigates(t *testing.T) {
 		Logger:       testLogger(),
 	})
 
-	if err := agent.processTenant(context.Background(), "tenant-degraded"); err != nil {
+	tm := tenantMonitoring{TenantID: "tenant-degraded", TenantWideEnabled: true, TierEntitled: true, Monitored: []string{"stream"}, AllStreamCount: 1}
+	if err := agent.processTenant(context.Background(), tm); err != nil {
 		t.Fatalf("processTenant: %v", err)
 	}
 	if orchestrator.calls != 1 {
@@ -214,39 +215,27 @@ func TestProcessTenantDegradedInvestigates(t *testing.T) {
 	}
 }
 
-func TestIsSkipperEnabledAllowsHeartbeatOnBillingError(t *testing.T) {
+func TestTierEntitledFailsOpenOnBillingError(t *testing.T) {
 	agent := NewAgent(AgentConfig{
 		Purser:            &fakeBillingClient{err: errors.New("billing unavailable")},
 		Logger:            testLogger(),
 		RequiredTierLevel: 3,
 	})
 
-	if !agent.isSkipperEnabled(context.Background(), "tenant-billing-error") {
-		t.Fatal("expected billing lookup errors to fail open for heartbeat")
+	if !agent.tierEntitled(context.Background(), "tenant-billing-error") {
+		t.Fatal("expected billing lookup errors to keep tenant entitled")
 	}
 }
 
-func TestIsSkipperEnabledStillHonorsKnownLowTier(t *testing.T) {
+func TestTierEntitledHonorsKnownLowTier(t *testing.T) {
 	agent := NewAgent(AgentConfig{
 		Purser:            &fakeBillingClient{tierLevel: 1},
 		Logger:            testLogger(),
 		RequiredTierLevel: 3,
 	})
 
-	if agent.isSkipperEnabled(context.Background(), "tenant-low-tier") {
-		t.Fatal("expected known low tier to remain ineligible")
-	}
-}
-
-func TestIsSkipperEnabledAllowsSystemTenant(t *testing.T) {
-	agent := NewAgent(AgentConfig{
-		Purser:            &fakeBillingClient{tierLevel: 1},
-		Logger:            testLogger(),
-		RequiredTierLevel: 3,
-	})
-
-	if !agent.isSkipperEnabled(context.Background(), tenants.SystemTenantID.String()) {
-		t.Fatal("expected system tenant to bypass commercial tier gate")
+	if agent.tierEntitled(context.Background(), "tenant-low-tier") {
+		t.Fatal("expected known low tier to be unentitled")
 	}
 }
 
@@ -287,13 +276,31 @@ type fakePeriscopeClient struct {
 	qoeResp       *periscopepb.GetClientQoeSummaryResponse
 	overviewResp  *periscopepb.GetPlatformOverviewResponse
 	streamMetrics *periscopepb.GetStreamHealthMetricsResponse
+	// Per-stream summaries keyed by stream_id (public UUID), for scoped-path tests.
+	healthByStream map[string]*periscopepb.StreamHealthSummary
+	qoeByStream    map[string]*periscopepb.ClientQoeSummary
+	// summaryStreamIDArgs records the streamID arg of each
+	// GetStreamHealthSummary call ("" for nil) so tests can assert the
+	// fast-path (one nil call) vs scoped-path (one call per stream).
+	summaryStreamIDArgs []string
 }
 
-func (f *fakePeriscopeClient) GetStreamHealthSummary(_ context.Context, _ string, _ *string, _ *periscope.TimeRangeOpts) (*periscopepb.GetStreamHealthSummaryResponse, error) {
+func (f *fakePeriscopeClient) GetStreamHealthSummary(_ context.Context, _ string, streamID *string, _ *periscope.TimeRangeOpts) (*periscopepb.GetStreamHealthSummaryResponse, error) {
+	arg := ""
+	if streamID != nil {
+		arg = *streamID
+	}
+	f.summaryStreamIDArgs = append(f.summaryStreamIDArgs, arg)
+	if streamID != nil && f.healthByStream != nil {
+		return &periscopepb.GetStreamHealthSummaryResponse{Summary: f.healthByStream[*streamID]}, nil
+	}
 	return f.healthResp, nil
 }
 
-func (f *fakePeriscopeClient) GetClientQoeSummary(_ context.Context, _ string, _ *string, _ *periscope.TimeRangeOpts) (*periscopepb.GetClientQoeSummaryResponse, error) {
+func (f *fakePeriscopeClient) GetClientQoeSummary(_ context.Context, _ string, streamID *string, _ *periscope.TimeRangeOpts) (*periscopepb.GetClientQoeSummaryResponse, error) {
+	if streamID != nil && f.qoeByStream != nil {
+		return &periscopepb.GetClientQoeSummaryResponse{Summary: f.qoeByStream[*streamID]}, nil
+	}
 	return f.qoeResp, nil
 }
 

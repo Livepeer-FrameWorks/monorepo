@@ -2408,6 +2408,8 @@ input UpdateStreamInput {
   FIXED_INTERVAL. Minimum 3600 (1 hour).
   """
   dvrChapterIntervalSeconds: Int
+  "Per-stream Skipper monitoring override. INHERIT follows the tenant tier."
+  monitoring: MonitoringToggle
 }
 
 """
@@ -2556,6 +2558,18 @@ enum DVRChapterMode {
   FIXED_INTERVAL
   "Rolling DVR only: recording still runs, but no historical chapter artifacts are produced."
   NONE
+}
+
+"""
+Per-stream Skipper AI monitoring override.
+"""
+enum MonitoringToggle {
+  "Follow the tenant's billing-tier entitlement (default)."
+  INHERIT
+  "Monitor this stream regardless of billing tier."
+  ON
+  "Never monitor this stream, even if the tenant is tier-entitled."
+  OFF
 }
 
 """
@@ -2998,6 +3012,8 @@ input UpdateTenantInput {
   verification + cert lifecycle accordingly.
   """
   customDomain: String
+  "Tenant-wide Skipper AI monitoring master switch. null leaves it unchanged."
+  monitoringEnabled: Boolean
 }
 
 """
@@ -3686,6 +3702,8 @@ type Tenant {
   Null when no customDomain is configured.
   """
   customDomainStatus: CustomDomainStatus
+  "Tenant-wide Skipper AI monitoring master switch. Default true."
+  monitoringEnabled: Boolean!
 }
 
 """
@@ -3770,6 +3788,8 @@ type Stream implements Node {
   ignored otherwise. Minimum 3600 (1 hour).
   """
   dvrChapterIntervalSeconds: Int
+  "Per-stream Skipper monitoring override (INHERIT follows tier)."
+  monitoring: MonitoringToggle!
   """
   Recent pull-source resolution events for pull streams. Captures the
   customer-facing resolution outcome (resolved, not_found, disabled,

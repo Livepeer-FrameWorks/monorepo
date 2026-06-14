@@ -15,11 +15,11 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/llm"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -61,6 +61,7 @@ type AgentConfig struct {
 	Periscope         PeriscopeClient
 	Purser            BillingClient
 	Quartermaster     QuartermasterClient
+	Commodore         CommodoreClient
 	Decklog           DecklogClient
 	Reporter          *Reporter
 	Diagnostics       *diagnostics.BaselineEvaluator
@@ -75,6 +76,7 @@ type Agent struct {
 	periscope         PeriscopeClient
 	purser            BillingClient
 	quartermaster     QuartermasterClient
+	commodore         CommodoreClient
 	decklog           DecklogClient
 	reporter          *Reporter
 	diagnostics       *diagnostics.BaselineEvaluator
@@ -110,8 +112,15 @@ type BillingClient interface {
 }
 
 type QuartermasterClient interface {
-	ListActiveTenants(ctx context.Context) ([]string, error)
+	ListActiveTenantsWithMonitoring(ctx context.Context) ([]*quartermasterpb.ActiveTenant, error)
 	BootstrapService(ctx context.Context, req *quartermasterpb.BootstrapServiceRequest) (*quartermasterpb.BootstrapServiceResponse, error)
+}
+
+// CommodoreClient is the narrow read Skipper needs: per-tenant stream
+// monitoring toggles, each carrying the public stream UUID (the key Skipper
+// uses for Periscope reads) plus internal_name for logging.
+type CommodoreClient interface {
+	ListStreamMonitoring(ctx context.Context, tenantID string) (*commodorepb.ListStreamMonitoringResponse, error)
 }
 
 type DecklogClient interface {
@@ -134,6 +143,7 @@ func NewAgent(cfg AgentConfig) *Agent {
 		periscope:         cfg.Periscope,
 		purser:            cfg.Purser,
 		quartermaster:     cfg.Quartermaster,
+		commodore:         cfg.Commodore,
 		decklog:           cfg.Decklog,
 		reporter:          cfg.Reporter,
 		diagnostics:       cfg.Diagnostics,
@@ -175,17 +185,17 @@ func (a *Agent) runCycle(ctx context.Context) {
 	if a.logger == nil {
 		return
 	}
-	tenantIDs, err := a.fetchEligibleTenants(ctx)
+	eligible, err := a.fetchEligibleTenants(ctx)
 	if err != nil {
 		a.logger.WithError(err).Warn("Heartbeat tenant discovery failed")
 		return
 	}
-	for _, tenantID := range tenantIDs {
-		if tenantID == "" {
+	for _, tm := range eligible {
+		if tm.TenantID == "" {
 			continue
 		}
-		if err := a.processTenant(ctx, tenantID); err != nil {
-			a.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Heartbeat processing failed")
+		if err := a.processTenant(ctx, tm); err != nil {
+			a.logger.WithError(err).WithField("tenant_id", tm.TenantID).Warn("Heartbeat processing failed")
 		}
 	}
 
@@ -195,19 +205,30 @@ func (a *Agent) runCycle(ctx context.Context) {
 	a.infraMonitor.Run(ctx)
 }
 
-func (a *Agent) fetchEligibleTenants(ctx context.Context) ([]string, error) {
+// fetchEligibleTenants lists active tenants with their tenant-wide monitoring
+// switch, then resolves each to a monitoring decision. A tenant is eligible
+// when its master switch is on, it has at least one candidate monitored stream
+// and it currently has live streams.
+func (a *Agent) fetchEligibleTenants(ctx context.Context) ([]tenantMonitoring, error) {
 	if a.quartermaster == nil {
 		return nil, errors.New("quartermaster client unavailable")
 	}
-	tenantIDs, err := a.quartermaster.ListActiveTenants(ctx)
+	tenants, err := a.activeTenantsWithMonitoring(ctx)
 	if err != nil {
 		return nil, err
 	}
-	eligible := make([]string, 0, len(tenantIDs))
-	for _, tenantID := range tenantIDs {
+	eligible := make([]tenantMonitoring, 0, len(tenants))
+	for _, row := range tenants {
+		tenantID := row.GetTenantId()
 		if tenantID == "" {
 			continue
 		}
+		tenantWide := row.GetMonitoringEnabled()
+		// Master switch off: skip without touching Periscope/Commodore.
+		if !tenantWide {
+			continue
+		}
+		// Cheap pre-filter: idle tenants never reach the Commodore read.
 		activeStreams, err := a.countActiveStreams(ctx, tenantID)
 		if err != nil {
 			a.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Heartbeat stream scan failed")
@@ -216,37 +237,23 @@ func (a *Agent) fetchEligibleTenants(ctx context.Context) ([]string, error) {
 		if activeStreams == 0 {
 			continue
 		}
-		if !a.isSkipperEnabled(ctx, tenantID) {
+		tm := a.resolveTenantMonitoring(ctx, tenantID, tenantWide)
+		if !tm.eligible() {
 			continue
 		}
-		eligible = append(eligible, tenantID)
+		eligible = append(eligible, tm)
 	}
 	return eligible, nil
 }
 
-func (a *Agent) isSkipperEnabled(ctx context.Context, tenantID string) bool {
-	if a.requiredTierLevel <= 0 {
-		return true
-	}
-	if tenantID == tenants.SystemTenantID.String() {
-		return true
-	}
-	if a.purser == nil {
-		a.logger.WithField("tenant_id", tenantID).Warn("Purser unavailable; allowing Skipper heartbeat")
-		return true
-	}
-	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, tenantID)
-	status, err := a.purser.GetBillingStatus(ctx, tenantID)
+// activeTenantsWithMonitoring returns active tenants with their tenant-wide
+// monitoring switches, preserving Quartermaster's response order.
+func (a *Agent) activeTenantsWithMonitoring(ctx context.Context) ([]*quartermasterpb.ActiveTenant, error) {
+	rows, err := a.quartermaster.ListActiveTenantsWithMonitoring(ctx)
 	if err != nil {
-		a.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to fetch billing status; allowing Skipper heartbeat")
-		return true
+		return nil, err
 	}
-	tier := status.GetTier()
-	if tier == nil {
-		a.logger.WithField("tenant_id", tenantID).Warn("Billing status missing tier; allowing Skipper heartbeat")
-		return true
-	}
-	return int(tier.TierLevel) >= a.requiredTierLevel
+	return rows, nil
 }
 
 func (a *Agent) countActiveStreams(ctx context.Context, tenantID string) (int, error) {
@@ -261,18 +268,22 @@ func (a *Agent) countActiveStreams(ctx context.Context, tenantID string) (int, e
 	return int(resp.GetActiveStreams()), nil
 }
 
-func (a *Agent) processTenant(ctx context.Context, tenantID string) error {
+func (a *Agent) processTenant(ctx context.Context, tm tenantMonitoring) error {
 	if a.orchestrator == nil || a.periscope == nil {
 		return errors.New("heartbeat dependencies unavailable")
 	}
+	tenantID := tm.TenantID
 	ctx = skipper.WithTenantID(ctx, tenantID)
 	ctx = skipper.WithMode(ctx, "heartbeat")
-	snapshot, err := a.loadSnapshot(ctx, tenantID)
+	snapshot, err := a.loadSnapshot(ctx, tm)
 	if err != nil {
 		return err
 	}
+	// No live monitored streams this cycle (e.g. scoped tenant whose monitored
+	// streams aren't currently live): nothing to evaluate.
 	if snapshot == nil || snapshot.Health == nil {
-		return errors.New("missing health snapshot")
+		a.logger.WithField("tenant_id", tenantID).Info("HEARTBEAT_OK")
+		return nil
 	}
 
 	metrics := snapshotToMetricMap(snapshot)
@@ -302,7 +313,7 @@ func (a *Agent) processTenant(ctx context.Context, tenantID string) error {
 	// Per-stream analysis when triage signals trouble.
 	var streamAnomalies []diagnostics.StreamAnomaly
 	if result.Action != diagnostics.TriageOK && a.perStreamAnalyzer != nil && a.periscope != nil {
-		streamAnomalies = a.collectPerStreamAnomalies(ctx, tenantID, snapshot)
+		streamAnomalies = a.collectPerStreamAnomalies(ctx, tm)
 	}
 
 	switch result.Action {
@@ -366,7 +377,8 @@ func metricsFromDeviations(devs []diagnostics.Deviation) []string {
 	return names
 }
 
-func (a *Agent) collectPerStreamAnomalies(ctx context.Context, tenantID string, snapshot *healthSnapshot) []diagnostics.StreamAnomaly {
+func (a *Agent) collectPerStreamAnomalies(ctx context.Context, tm tenantMonitoring) []diagnostics.StreamAnomaly {
+	tenantID := tm.TenantID
 	now := time.Now()
 	timeRange := &periscope.TimeRangeOpts{
 		StartTime: now.Add(-defaultSummaryWindow),
@@ -393,6 +405,24 @@ func (a *Agent) collectPerStreamAnomalies(ctx context.Context, tenantID string, 
 		}
 		pagination = &periscope.CursorPaginationOpts{First: 100, After: &cursor}
 	}
+	// Constrain anomalies to the monitored streams so muted/OFF streams never
+	// surface. Skipped when the monitored set covers everything, where
+	// filtering is a no-op. Both sides key on the public stream UUID
+	// (tm.Monitored holds commodore.streams.id; StreamHealthMetric.stream_id
+	// is the same UUID column).
+	if !tm.coversAll() {
+		monitoredSet := make(map[string]struct{}, len(tm.Monitored))
+		for _, n := range tm.Monitored {
+			monitoredSet[n] = struct{}{}
+		}
+		filtered := make([]*periscopepb.StreamHealthMetric, 0, len(allMetrics))
+		for _, m := range allMetrics {
+			if _, ok := monitoredSet[m.GetStreamId()]; ok {
+				filtered = append(filtered, m)
+			}
+		}
+		allMetrics = filtered
+	}
 	if len(allMetrics) == 0 {
 		return nil
 	}
@@ -406,7 +436,8 @@ func (a *Agent) collectPerStreamAnomalies(ctx context.Context, tenantID string, 
 	return anomalies
 }
 
-func (a *Agent) loadSnapshot(ctx context.Context, tenantID string) (*healthSnapshot, error) {
+func (a *Agent) loadSnapshot(ctx context.Context, tm tenantMonitoring) (*healthSnapshot, error) {
+	tenantID := tm.TenantID
 	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, tenantID)
 	now := time.Now()
 	window := defaultSummaryWindow
@@ -414,30 +445,85 @@ func (a *Agent) loadSnapshot(ctx context.Context, tenantID string) (*healthSnaps
 		StartTime: now.Add(-window),
 		EndTime:   now,
 	}
-	healthResp, err := a.periscope.GetStreamHealthSummary(ctx, tenantID, nil, timeRange)
-	if err != nil {
-		return nil, err
-	}
-	qoeResp, err := a.periscope.GetClientQoeSummary(ctx, tenantID, nil, timeRange)
-	if err != nil {
-		if a.logger != nil {
+
+	// Fast path: the monitored set covers every stream (for example, an
+	// entitled tenant with no per-stream overrides), so the cheap tenant-wide
+	// aggregate is exactly the monitored aggregate.
+	if tm.coversAll() {
+		healthResp, err := a.periscope.GetStreamHealthSummary(ctx, tenantID, nil, timeRange)
+		if err != nil {
+			return nil, err
+		}
+		qoeResp, err := a.periscope.GetClientQoeSummary(ctx, tenantID, nil, timeRange)
+		if err != nil && a.logger != nil {
 			a.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Heartbeat client QoE lookup failed")
 		}
+		var qoeSummary *periscopepb.ClientQoeSummary
+		if qoeResp != nil {
+			qoeSummary = qoeResp.GetSummary()
+		}
+		activeStreams, err := a.countActiveStreams(ctx, tenantID)
+		if err != nil {
+			return nil, err
+		}
+		return &healthSnapshot{
+			TenantID:      tenantID,
+			ActiveStreams: activeStreams,
+			Window:        window,
+			Health:        healthResp.GetSummary(),
+			ClientQoE:     qoeSummary,
+		}, nil
 	}
-	var qoeSummary *periscopepb.ClientQoeSummary
-	if qoeResp != nil {
-		qoeSummary = qoeResp.GetSummary()
+
+	// Scoped path: aggregate over only the monitored streams. tm.Monitored
+	// holds public stream UUIDs (commodore.streams.id) — the same identifier
+	// Periscope stores as stream_health_5m.stream_id and filters on. A
+	// monitored stream with no samples in the window is simply not live right
+	// now and is skipped; liveness comes from SampleCount.
+	healthParts := make([]*periscopepb.StreamHealthSummary, 0, len(tm.Monitored))
+	qoeParts := make([]*periscopepb.ClientQoeSummary, 0, len(tm.Monitored))
+	liveCount := 0
+	lookupErrs := 0
+	for _, streamID := range tm.Monitored {
+		healthResp, err := a.periscope.GetStreamHealthSummary(ctx, tenantID, &streamID, timeRange)
+		if err != nil {
+			lookupErrs++
+			if a.logger != nil {
+				a.logger.WithError(err).WithField("tenant_id", tenantID).WithField("stream_id", streamID).Warn("Scoped stream health lookup failed")
+			}
+			continue
+		}
+		summary := healthResp.GetSummary()
+		if summary == nil || summary.GetSampleCount() <= 0 {
+			continue
+		}
+		liveCount++
+		healthParts = append(healthParts, summary)
+
+		qoeResp, err := a.periscope.GetClientQoeSummary(ctx, tenantID, &streamID, timeRange)
+		if err != nil {
+			if a.logger != nil {
+				a.logger.WithError(err).WithField("tenant_id", tenantID).WithField("stream_id", streamID).Warn("Scoped client QoE lookup failed")
+			}
+		} else if qoeResp != nil && qoeResp.GetSummary() != nil {
+			qoeParts = append(qoeParts, qoeResp.GetSummary())
+		}
 	}
-	activeStreams, err := a.countActiveStreams(ctx, tenantID)
-	if err != nil {
-		return nil, err
+	if liveCount == 0 {
+		// Distinguish "no monitored stream is live" (clean no-op) from "every
+		// lookup failed" (telemetry outage) — the latter must not be reported
+		// as healthy.
+		if lookupErrs > 0 {
+			return nil, fmt.Errorf("scoped stream health lookups failed for all %d monitored streams", lookupErrs)
+		}
+		return nil, nil
 	}
 	return &healthSnapshot{
 		TenantID:      tenantID,
-		ActiveStreams: activeStreams,
+		ActiveStreams: liveCount,
 		Window:        window,
-		Health:        healthResp.GetSummary(),
-		ClientQoE:     qoeSummary,
+		Health:        aggregateHealthSummaries(healthParts),
+		ClientQoE:     aggregateQoeSummaries(qoeParts),
 	}, nil
 }
 

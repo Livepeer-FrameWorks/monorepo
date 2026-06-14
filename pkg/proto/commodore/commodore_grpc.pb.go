@@ -25,6 +25,7 @@ const (
 	InternalService_ValidateStreamKey_FullMethodName               = "/commodore.InternalService/ValidateStreamKey"
 	InternalService_ResolveStreamContext_FullMethodName            = "/commodore.InternalService/ResolveStreamContext"
 	InternalService_ListManagedStreams_FullMethodName              = "/commodore.InternalService/ListManagedStreams"
+	InternalService_ListStreamMonitoring_FullMethodName            = "/commodore.InternalService/ListStreamMonitoring"
 	InternalService_RecordStreamActiveCluster_FullMethodName       = "/commodore.InternalService/RecordStreamActiveCluster"
 	InternalService_ClearStreamActiveCluster_FullMethodName        = "/commodore.InternalService/ClearStreamActiveCluster"
 	InternalService_ResolvePlaybackID_FullMethodName               = "/commodore.InternalService/ResolvePlaybackID"
@@ -108,6 +109,13 @@ type InternalServiceClient interface {
 	// ResolveStreamContext above.
 	// Stable ordering by stream_id keeps reconciler diffs deterministic.
 	ListManagedStreams(ctx context.Context, in *ListManagedStreamsRequest, opts ...grpc.CallOption) (*ListManagedStreamsResponse, error)
+	// Lists a tenant's streams with their per-stream Skipper monitoring toggle.
+	// Called by Skipper (api_consultant) each heartbeat cycle to resolve which
+	// streams to monitor. Service-to-service; filters by tenant_id. Skipper keys
+	// its monitored set and scoped Periscope reads on stream_id (the public UUID
+	// = commodore.streams.id, which Periscope stores as stream_health.stream_id);
+	// internal_name is returned only for logging/diagnostics.
+	ListStreamMonitoring(ctx context.Context, in *ListStreamMonitoringRequest, opts ...grpc.CallOption) (*ListStreamMonitoringResponse, error)
 	// Records the cluster currently serving a managed stream. Foghorn calls
 	// this after a successful ApplyManagedStream so commodore.streams.active_
 	// ingest_cluster_id reflects the elected placement: without it, public
@@ -307,6 +315,16 @@ func (c *internalServiceClient) ListManagedStreams(ctx context.Context, in *List
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListManagedStreamsResponse)
 	err := c.cc.Invoke(ctx, InternalService_ListManagedStreams_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) ListStreamMonitoring(ctx context.Context, in *ListStreamMonitoringRequest, opts ...grpc.CallOption) (*ListStreamMonitoringResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListStreamMonitoringResponse)
+	err := c.cc.Invoke(ctx, InternalService_ListStreamMonitoring_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -808,6 +826,13 @@ type InternalServiceServer interface {
 	// ResolveStreamContext above.
 	// Stable ordering by stream_id keeps reconciler diffs deterministic.
 	ListManagedStreams(context.Context, *ListManagedStreamsRequest) (*ListManagedStreamsResponse, error)
+	// Lists a tenant's streams with their per-stream Skipper monitoring toggle.
+	// Called by Skipper (api_consultant) each heartbeat cycle to resolve which
+	// streams to monitor. Service-to-service; filters by tenant_id. Skipper keys
+	// its monitored set and scoped Periscope reads on stream_id (the public UUID
+	// = commodore.streams.id, which Periscope stores as stream_health.stream_id);
+	// internal_name is returned only for logging/diagnostics.
+	ListStreamMonitoring(context.Context, *ListStreamMonitoringRequest) (*ListStreamMonitoringResponse, error)
 	// Records the cluster currently serving a managed stream. Foghorn calls
 	// this after a successful ApplyManagedStream so commodore.streams.active_
 	// ingest_cluster_id reflects the elected placement: without it, public
@@ -991,6 +1016,9 @@ func (UnimplementedInternalServiceServer) ResolveStreamContext(context.Context, 
 }
 func (UnimplementedInternalServiceServer) ListManagedStreams(context.Context, *ListManagedStreamsRequest) (*ListManagedStreamsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListManagedStreams not implemented")
+}
+func (UnimplementedInternalServiceServer) ListStreamMonitoring(context.Context, *ListStreamMonitoringRequest) (*ListStreamMonitoringResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListStreamMonitoring not implemented")
 }
 func (UnimplementedInternalServiceServer) RecordStreamActiveCluster(context.Context, *RecordStreamActiveClusterRequest) (*RecordStreamActiveClusterResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RecordStreamActiveCluster not implemented")
@@ -1201,6 +1229,24 @@ func _InternalService_ListManagedStreams_Handler(srv interface{}, ctx context.Co
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(InternalServiceServer).ListManagedStreams(ctx, req.(*ListManagedStreamsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_ListStreamMonitoring_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListStreamMonitoringRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).ListStreamMonitoring(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_ListStreamMonitoring_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).ListStreamMonitoring(ctx, req.(*ListStreamMonitoringRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2051,6 +2097,10 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListManagedStreams",
 			Handler:    _InternalService_ListManagedStreams_Handler,
+		},
+		{
+			MethodName: "ListStreamMonitoring",
+			Handler:    _InternalService_ListStreamMonitoring_Handler,
 		},
 		{
 			MethodName: "RecordStreamActiveCluster",

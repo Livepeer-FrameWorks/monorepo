@@ -187,8 +187,10 @@ func main() {
 		billingClient = purserClient
 	}
 	var tenantContacts heartbeat.TenantContactClient
+	var streamMonitoring heartbeat.CommodoreClient
 	if commodoreClient != nil {
 		tenantContacts = commodoreClient
+		streamMonitoring = commodoreClient
 	}
 
 	// Create Decklog gRPC client for usage metering
@@ -447,6 +449,7 @@ func main() {
 		Periscope:         periscopeClient,
 		Purser:            billingClient,
 		Quartermaster:     qmClient,
+		Commodore:         streamMonitoring,
 		Decklog:           decklogClient,
 		Reporter:          heartbeatReporter,
 		Diagnostics:       baselineEvaluator,

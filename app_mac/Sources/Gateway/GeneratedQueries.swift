@@ -514,6 +514,7 @@ enum GQL {
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
+    monitoring
     retentionOverrides {
       streamId
       dvrRetentionDaysOverride

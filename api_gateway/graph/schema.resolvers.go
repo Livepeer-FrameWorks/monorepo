@@ -4926,6 +4926,14 @@ func (r *streamResolver) DvrChapterMode(ctx context.Context, obj *commodorepb.St
 	return &m, nil
 }
 
+// Monitoring is the resolver for the monitoring field.
+func (r *streamResolver) Monitoring(ctx context.Context, obj *commodorepb.Stream) (model.MonitoringToggle, error) {
+	if obj == nil {
+		return model.MonitoringToggleInherit, nil
+	}
+	return resolvers.MonitoringToggleFromProto(obj.GetMonitoring()), nil
+}
+
 // RecentPullSourceEvents is the resolver for the recentPullSourceEvents field.
 func (r *streamResolver) RecentPullSourceEvents(ctx context.Context, obj *commodorepb.Stream, limit *int) ([]*commodorepb.PullSourceEvent, error) {
 	return r.DoStreamRecentPullSourceEvents(ctx, obj, limit)
