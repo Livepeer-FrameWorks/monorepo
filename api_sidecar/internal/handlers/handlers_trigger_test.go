@@ -22,6 +22,7 @@ func setupTriggerTest(t *testing.T, tenantID string) {
 	gin.SetMode(gin.TestMode)
 	logger = logging.NewLoggerWithService("handlers-test")
 	metrics = nil
+	clearPlayRewriteCache()
 	config.InitManager(logger)
 	config.ApplySeed(&ipcpb.ConfigSeed{TenantId: tenantID}, nil)
 }

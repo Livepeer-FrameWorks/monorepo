@@ -213,7 +213,7 @@ func (m *Manager) reconcile() {
 	triggers := map[string]any{
 		"PUSH_REWRITE": []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/push_rewrite"), "sync": true}},
 		// "PLAY_REWRITE":      []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/play_rewrite"), "sync": true, "streams": []string{"vod+", "live+"}}},
-		"PLAY_REWRITE":      []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/play_rewrite"), "sync": true}},
+		"PLAY_REWRITE":      []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/play_rewrite"), "sync": true, "default": "__fw_play_rewrite_unresolved"}},
 		"STREAM_SOURCE":     []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/stream_source"), "sync": true}},
 		"PUSH_OUT_START":    []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/push_out_start"), "sync": true}},
 		"PUSH_END":          []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/push_end"), "sync": false}},

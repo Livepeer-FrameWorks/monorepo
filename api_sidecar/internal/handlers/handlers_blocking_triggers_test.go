@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"frameworks/api_sidecar/internal/control"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -156,6 +157,57 @@ func TestHandlePlayRewriteBranches(t *testing.T) {
 		HandlePlayRewrite(ctx)
 		assertOK(t, rec, "processing+localjob")
 	})
+}
+
+func TestHandlePlayRewriteUsesCachedFoghornSuccess(t *testing.T) {
+	setupTriggerTest(t, "tenant-blk")
+	const body = "frameworks-demo\n192.0.2.10\nHLS\nhttp://example.com/view"
+
+	calls := 0
+	stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
+		calls++
+		if calls == 1 {
+			return &control.MistTriggerResult{Response: "60546679b497415db2338cd5cae54992"}, nil
+		}
+		t.Fatal("fresh cached PLAY_REWRITE must not reach Foghorn")
+		return nil, nil
+	})
+
+	ctx, rec := newWebhookContext(body)
+	HandlePlayRewrite(ctx)
+	assertOK(t, rec, "60546679b497415db2338cd5cae54992")
+
+	ctx, rec = newWebhookContext(body)
+	HandlePlayRewrite(ctx)
+	assertOK(t, rec, "60546679b497415db2338cd5cae54992")
+	if calls != 1 {
+		t.Fatalf("Foghorn calls = %d, want 1", calls)
+	}
+}
+
+func TestHandlePlayRewriteRecoversFromForwardErrorWithCache(t *testing.T) {
+	setupTriggerTest(t, "tenant-blk")
+	const body = "frameworks-demo\n192.0.2.10\nHLS\nhttp://example.com/view"
+	rememberPlayRewrite("frameworks-demo", "60546679b497415db2338cd5cae54992")
+
+	playRewriteCache.Lock()
+	entry := playRewriteCache.entries["frameworks-demo"]
+	entry.storedAt = entry.storedAt.Add(-playRewriteBurstTTL - time.Millisecond)
+	playRewriteCache.entries["frameworks-demo"] = entry
+	playRewriteCache.Unlock()
+
+	calls := 0
+	stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
+		calls++
+		return &control.MistTriggerResult{ErrorCode: ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT}, errors.New("foghorn down")
+	})
+
+	ctx, rec := newWebhookContext(body)
+	HandlePlayRewrite(ctx)
+	assertOK(t, rec, "60546679b497415db2338cd5cae54992")
+	if calls != 1 {
+		t.Fatalf("Foghorn calls = %d, want 1", calls)
+	}
 }
 
 // StreamProcess returns a JSON process-override array. Cover the local override,

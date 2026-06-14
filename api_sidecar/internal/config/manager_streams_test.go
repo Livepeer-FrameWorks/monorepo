@@ -156,6 +156,41 @@ func TestReconcileConfiguresPushInputCloseTrigger(t *testing.T) {
 	}
 }
 
+func TestReconcileConfiguresPlayRewriteDefault(t *testing.T) {
+	mist := &recordingMistAPI{}
+	manager := &Manager{
+		mistClient: mist,
+		logger:     logging.NewLogger(),
+		lastSeed: &ipcpb.ConfigSeed{
+			FoghornBalancerBase: "http://foghorn:18008",
+			Templates: []*ipcpb.StreamTemplate{
+				{Def: &ipcpb.StreamDef{Name: "live"}},
+			},
+		},
+	}
+
+	manager.reconcile()
+
+	if len(mist.updatedConfigs) == 0 {
+		t.Fatal("expected UpdateConfig call")
+	}
+	triggers, ok := mist.updatedConfigs[0]["triggers"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing triggers in UpdateConfig: %#v", mist.updatedConfigs[0])
+	}
+	rawHandlers, ok := triggers["PLAY_REWRITE"].([]any)
+	if !ok || len(rawHandlers) != 1 {
+		t.Fatalf("PLAY_REWRITE trigger = %#v", triggers["PLAY_REWRITE"])
+	}
+	handler, ok := rawHandlers[0].(map[string]any)
+	if !ok {
+		t.Fatalf("PLAY_REWRITE handler = %#v", rawHandlers[0])
+	}
+	if got := handler["default"]; got != "__fw_play_rewrite_unresolved" {
+		t.Fatalf("PLAY_REWRITE default = %v", got)
+	}
+}
+
 func TestStaleManagedWildcardStreams(t *testing.T) {
 	current := map[string]any{
 		"streams": map[string]any{

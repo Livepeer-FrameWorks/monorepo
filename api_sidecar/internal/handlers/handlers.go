@@ -767,6 +767,15 @@ func HandlePlayRewrite(c *gin.Context) {
 			c.String(http.StatusOK, requested)
 			return
 		}
+		if cached, ok := cachedPlayRewrite(requested, false); ok {
+			logger.WithFields(logging.Fields{
+				"requested_stream": requested,
+				"response":         cached,
+			}).Debug("PLAY_REWRITE resolved from local cache")
+			incMistWebhook("PLAY_REWRITE", "cache_hit")
+			c.String(http.StatusOK, cached)
+			return
+		}
 	}
 
 	// Forward trigger to Foghorn via gRPC and get response
@@ -781,6 +790,19 @@ func HandlePlayRewrite(c *gin.Context) {
 
 		if metrics != nil {
 			metrics.NodeOperations.WithLabelValues("play_rewrite", "forwarding_error").Inc()
+		}
+
+		if play := mistTrigger.GetPlayRewrite(); play != nil {
+			requested := play.GetRequestedStream()
+			if cached, ok := cachedPlayRewrite(requested, true); ok {
+				logger.WithFields(logging.Fields{
+					"requested_stream": requested,
+					"response":         cached,
+				}).Warn("PLAY_REWRITE using cached response after Foghorn forward error")
+				incMistWebhook("PLAY_REWRITE", "cache_recovery")
+				c.String(http.StatusOK, cached)
+				return
+			}
 		}
 
 		c.String(http.StatusOK, "") // Empty response uses default behavior
@@ -806,6 +828,9 @@ func HandlePlayRewrite(c *gin.Context) {
 		"response": result.Response,
 	}).Info("PLAY_REWRITE resolved by Foghorn")
 	incMistWebhook("PLAY_REWRITE", "success")
+	if play := mistTrigger.GetPlayRewrite(); play != nil {
+		rememberPlayRewrite(play.GetRequestedStream(), result.Response)
+	}
 
 	// Track successful operation
 	if metrics != nil {
