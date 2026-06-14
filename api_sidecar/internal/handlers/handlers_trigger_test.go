@@ -272,7 +272,7 @@ func TestTriggerHandlersRejectMalformedPayloads(t *testing.T) {
 			name:     "play_rewrite",
 			body:     "stream-name\n192.0.2.10\nHLS",
 			handler:  HandlePlayRewrite,
-			response: "",
+			response: config.PlayRewriteUnresolvedSentinel,
 		},
 		{
 			name:     "user_new",

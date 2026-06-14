@@ -726,7 +726,7 @@ func HandlePlayRewrite(c *gin.Context) {
 			metrics.NodeOperations.WithLabelValues("play_rewrite", "error").Inc()
 		}
 
-		c.String(http.StatusOK, "") // Empty response uses default behavior
+		c.String(http.StatusOK, config.PlayRewriteUnresolvedSentinel)
 		return
 	}
 
@@ -749,7 +749,7 @@ func HandlePlayRewrite(c *gin.Context) {
 			metrics.NodeOperations.WithLabelValues("play_rewrite", "parse_error").Inc()
 		}
 
-		c.String(http.StatusOK, "") // Empty response uses default behavior
+		c.String(http.StatusOK, config.PlayRewriteUnresolvedSentinel)
 		return
 	}
 
@@ -767,15 +767,11 @@ func HandlePlayRewrite(c *gin.Context) {
 			c.String(http.StatusOK, requested)
 			return
 		}
-		if cached, ok := cachedPlayRewrite(requested, false); ok {
-			logger.WithFields(logging.Fields{
-				"requested_stream": requested,
-				"response":         cached,
-			}).Debug("PLAY_REWRITE resolved from local cache")
-			incMistWebhook("PLAY_REWRITE", "cache_hit")
-			c.String(http.StatusOK, cached)
-			return
-		}
+		// No local-cache short-circuit here: PLAY_REWRITE on Foghorn runs
+		// per-viewer billing enforcement, viewer accounting, and Decklog
+		// analytics, so every reachable request must reach Foghorn. The local
+		// cache is consulted only as a last-resort recovery when Foghorn is
+		// unreachable (see the forward-error branch below).
 	}
 
 	// Forward trigger to Foghorn via gRPC and get response
@@ -794,7 +790,7 @@ func HandlePlayRewrite(c *gin.Context) {
 
 		if play := mistTrigger.GetPlayRewrite(); play != nil {
 			requested := play.GetRequestedStream()
-			if cached, ok := cachedPlayRewrite(requested, true); ok {
+			if cached, ok := cachedPlayRewrite(requested); ok {
 				logger.WithFields(logging.Fields{
 					"requested_stream": requested,
 					"response":         cached,
@@ -805,7 +801,11 @@ func HandlePlayRewrite(c *gin.Context) {
 			}
 		}
 
-		c.String(http.StatusOK, "") // Empty response uses default behavior
+		// Return the unresolved sentinel ourselves rather than "" so safety
+		// does not depend on the Mist `default` being deployed correctly: an
+		// empty body lets Mist substitute its implicit "true" if the config
+		// drifted, which misroutes playback.
+		c.String(http.StatusOK, config.PlayRewriteUnresolvedSentinel)
 		return
 	}
 
@@ -820,7 +820,21 @@ func HandlePlayRewrite(c *gin.Context) {
 			metrics.NodeOperations.WithLabelValues("play_rewrite", "aborted").Inc()
 		}
 
-		c.String(http.StatusOK, "") // Empty response uses default behavior
+		// Foghorn deliberately rejected this playback (e.g. owner suspended /
+		// balance exhausted). Return the unresolved sentinel so Mist fails
+		// cleanly instead of falling back to its "true" default.
+		c.String(http.StatusOK, config.PlayRewriteUnresolvedSentinel)
+		return
+	}
+
+	// Foghorn can resolve with a non-abort but empty response — its
+	// "not found / unresolved / admission-rejected" shape (handlePlayRewrite
+	// returns ("", false, nil), incl. the authoritative-not-found path of the
+	// registry-routed resolve). Treat that exactly like a failure: return the
+	// sentinel ourselves so Mist never falls back to its implicit "true".
+	if strings.TrimSpace(result.Response) == "" {
+		incMistWebhook("PLAY_REWRITE", "unresolved")
+		c.String(http.StatusOK, config.PlayRewriteUnresolvedSentinel)
 		return
 	}
 
@@ -917,7 +931,7 @@ func HandleStreamSource(c *gin.Context) {
 			metrics.NodeOperations.WithLabelValues("stream_source", "error").Inc()
 		}
 
-		c.String(http.StatusOK, "") // Empty response will cause MistServer to use default source
+		c.String(http.StatusOK, config.StreamSourceUnavailable)
 		return
 	}
 
@@ -938,7 +952,7 @@ func HandleStreamSource(c *gin.Context) {
 			metrics.NodeOperations.WithLabelValues("stream_source", "parse_error").Inc()
 		}
 
-		c.String(http.StatusOK, "") // Empty response will cause MistServer to use default source
+		c.String(http.StatusOK, config.StreamSourceUnavailable)
 		return
 	}
 
@@ -1005,7 +1019,11 @@ func HandleStreamSource(c *gin.Context) {
 			metrics.NodeOperations.WithLabelValues("stream_source", "forwarding_error").Inc()
 		}
 
-		c.String(http.StatusOK, "") // Empty response will cause MistServer to use default source
+		// Return the offline sentinel ourselves rather than "" so Mist does not
+		// fall back to the configured `balance:<foghorn>` default source, which
+		// routes through the very Foghorn we just failed to reach. The
+		// `offline:` prefix makes Mist's input_balancer disconnect cleanly.
+		c.String(http.StatusOK, config.StreamSourceUnavailable)
 		return
 	}
 
@@ -1020,7 +1038,7 @@ func HandleStreamSource(c *gin.Context) {
 			metrics.NodeOperations.WithLabelValues("stream_source", "aborted").Inc()
 		}
 
-		c.String(http.StatusOK, "") // Empty response will cause MistServer to use default source
+		c.String(http.StatusOK, config.StreamSourceUnavailable)
 		return
 	}
 

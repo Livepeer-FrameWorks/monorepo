@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
+	"frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
@@ -23,10 +23,13 @@ func assertOK(t *testing.T, rec *httptest.ResponseRecorder, wantBody string) {
 
 // Blocking triggers hold the Mist request open until Foghorn answers, and the
 // handler's *text response* is the decision Mist enforces. The shared safety
-// rule is fail-closed: any error (parse, forward, timeout) must resolve to the
-// safe default — deny the push / let Mist fall back — never an accidental allow.
-// These tests drive the stub's MistTriggerResult to reach the deny/abort/error
-// branches the existing happy-path tests don't cover.
+// rule is fail-closed: any error (parse, forward, timeout) must resolve to a
+// safe value Helmsman returns ITSELF — deny the push, the PLAY_REWRITE
+// unresolved sentinel, or the STREAM_SOURCE offline marker — never "" (which
+// lets Mist substitute its own default, including the implicit "true" it
+// applies for a missing default) and never an accidental allow. These tests
+// drive the stub's MistTriggerResult to reach the deny/abort/error branches the
+// existing happy-path tests don't cover.
 //
 // Note on the forward-error stub: these handlers dereference result.ErrorCode
 // when logging a forward failure, so the stub must return a non-nil result
@@ -122,29 +125,43 @@ func TestHandlePushRewriteDenialBranches(t *testing.T) {
 	})
 }
 
-// PlayRewrite: empty string = Mist default behavior. Cover abort, forward error,
-// and the local processing+ shortcut (an in-flight job is served locally without
-// consulting Foghorn).
+// PlayRewrite: on any failure the handler returns the unresolved sentinel
+// itself (never "") so Mist can't substitute "true". Cover abort, forward error
+// (no cache entry), and the local processing+ shortcut (an in-flight job is
+// served locally without consulting Foghorn).
 func TestHandlePlayRewriteBranches(t *testing.T) {
 	setupTriggerTest(t, "tenant-blk")
+	clearPlayRewriteCache()
 	const body = "stream-name\n192.0.2.10\nHLS\nhttp://example.com/view"
 
-	t.Run("abort uses default", func(t *testing.T) {
+	t.Run("abort returns unresolved sentinel", func(t *testing.T) {
 		stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
 			return &control.MistTriggerResult{Abort: true}, nil
 		})
 		ctx, rec := newWebhookContext(body)
 		HandlePlayRewrite(ctx)
-		assertOK(t, rec, "")
+		assertOK(t, rec, config.PlayRewriteUnresolvedSentinel)
 	})
 
-	t.Run("forward error uses default", func(t *testing.T) {
+	t.Run("forward error without cache returns unresolved sentinel", func(t *testing.T) {
 		stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
 			return &control.MistTriggerResult{}, errors.New("foghorn down")
 		})
 		ctx, rec := newWebhookContext(body)
 		HandlePlayRewrite(ctx)
-		assertOK(t, rec, "")
+		assertOK(t, rec, config.PlayRewriteUnresolvedSentinel)
+	})
+
+	// Foghorn's "not found / unresolved" shape is a NON-abort empty response.
+	// Helmsman must still return the sentinel, not "" (which Mist turns into
+	// "true").
+	t.Run("empty non-abort success returns unresolved sentinel", func(t *testing.T) {
+		stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
+			return &control.MistTriggerResult{Response: ""}, nil
+		})
+		ctx, rec := newWebhookContext(body)
+		HandlePlayRewrite(ctx)
+		assertOK(t, rec, config.PlayRewriteUnresolvedSentinel)
 	})
 
 	t.Run("in-flight processing job resolves locally", func(t *testing.T) {
@@ -159,18 +176,18 @@ func TestHandlePlayRewriteBranches(t *testing.T) {
 	})
 }
 
-func TestHandlePlayRewriteUsesCachedFoghornSuccess(t *testing.T) {
+// A reachable Foghorn is consulted on EVERY request: PLAY_REWRITE carries
+// per-viewer billing/accounting/analytics on the Foghorn side, so the handler
+// must not short-circuit a repeat from local cache while Foghorn is up.
+func TestHandlePlayRewriteAlwaysConsultsReachableFoghorn(t *testing.T) {
 	setupTriggerTest(t, "tenant-blk")
+	clearPlayRewriteCache()
 	const body = "frameworks-demo\n192.0.2.10\nHLS\nhttp://example.com/view"
 
 	calls := 0
 	stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
 		calls++
-		if calls == 1 {
-			return &control.MistTriggerResult{Response: "60546679b497415db2338cd5cae54992"}, nil
-		}
-		t.Fatal("fresh cached PLAY_REWRITE must not reach Foghorn")
-		return nil, nil
+		return &control.MistTriggerResult{Response: "60546679b497415db2338cd5cae54992"}, nil
 	})
 
 	ctx, rec := newWebhookContext(body)
@@ -180,21 +197,19 @@ func TestHandlePlayRewriteUsesCachedFoghornSuccess(t *testing.T) {
 	ctx, rec = newWebhookContext(body)
 	HandlePlayRewrite(ctx)
 	assertOK(t, rec, "60546679b497415db2338cd5cae54992")
-	if calls != 1 {
-		t.Fatalf("Foghorn calls = %d, want 1", calls)
+	if calls != 2 {
+		t.Fatalf("Foghorn calls = %d, want 2 (reachable Foghorn must be consulted every time)", calls)
 	}
 }
 
+// When Foghorn is UNREACHABLE, the handler replays the last Foghorn-approved
+// resolution from the recovery cache rather than returning the sentinel — the
+// only case where the local cache answers.
 func TestHandlePlayRewriteRecoversFromForwardErrorWithCache(t *testing.T) {
 	setupTriggerTest(t, "tenant-blk")
+	clearPlayRewriteCache()
 	const body = "frameworks-demo\n192.0.2.10\nHLS\nhttp://example.com/view"
 	rememberPlayRewrite("frameworks-demo", "60546679b497415db2338cd5cae54992")
-
-	playRewriteCache.Lock()
-	entry := playRewriteCache.entries["frameworks-demo"]
-	entry.storedAt = entry.storedAt.Add(-playRewriteBurstTTL - time.Millisecond)
-	playRewriteCache.entries["frameworks-demo"] = entry
-	playRewriteCache.Unlock()
 
 	calls := 0
 	stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
@@ -277,22 +292,22 @@ func TestHandleStreamSourceForwardBranches(t *testing.T) {
 		}
 	})
 
-	t.Run("abort uses default source", func(t *testing.T) {
+	t.Run("abort returns offline marker", func(t *testing.T) {
 		stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
 			return &control.MistTriggerResult{Abort: true}, nil
 		})
 		ctx, rec := newWebhookContext("live+stream-1")
 		HandleStreamSource(ctx)
-		assertOK(t, rec, "")
+		assertOK(t, rec, config.StreamSourceUnavailable)
 	})
 
-	t.Run("forward error uses default source", func(t *testing.T) {
+	t.Run("forward error returns offline marker", func(t *testing.T) {
 		stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
 			return &control.MistTriggerResult{}, errors.New("foghorn down")
 		})
 		ctx, rec := newWebhookContext("live+stream-1")
 		HandleStreamSource(ctx)
-		assertOK(t, rec, "")
+		assertOK(t, rec, config.StreamSourceUnavailable)
 	})
 
 	t.Run("pending processing job without staged file falls through to foghorn", func(t *testing.T) {

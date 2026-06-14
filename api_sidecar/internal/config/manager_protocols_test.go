@@ -10,10 +10,11 @@ type recordingMistAPI struct {
 	addedProtocols  []map[string]interface{}
 	protocolUpdates []protocolUpdate
 	updatedConfigs  []map[string]interface{}
+	backupResult    map[string]interface{} // returned by ConfigBackup (nil ⇒ nil)
 }
 
 func (m *recordingMistAPI) ConfigBackup() (map[string]interface{}, error) {
-	return nil, nil
+	return m.backupResult, nil
 }
 
 func (m *recordingMistAPI) UpdateConfig(partial map[string]interface{}) (map[string]interface{}, error) {
