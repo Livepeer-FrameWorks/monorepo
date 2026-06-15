@@ -177,8 +177,8 @@ func enforceMinCLIVersion(required string) error {
 	return nil
 }
 
-// resolvePGHost returns the host running the postgres / yugabyte primary,
-// matching the resolution used by `cluster migrate`.
+// resolvePGHost returns the host used by upgrade-gate SQL checks. Runtime
+// services and `cluster migrate` have separate HA-aware Yugabyte selection.
 func resolvePGHost(manifest *inventory.Manifest, pg *inventory.PostgresConfig) (inventory.Host, bool) {
 	if pg.IsYugabyte() && len(pg.Nodes) > 0 {
 		return manifest.GetHost(pg.Nodes[0].Host)

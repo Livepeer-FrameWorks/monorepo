@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/lib/pq"
 )
@@ -291,13 +292,13 @@ func reconcileMistNativeStream(ctx context.Context, exec DBTX, tenantID, alias s
 		curMonitoring                            sql.NullBool
 		curSourceSpec, curSourceKind             sql.NullString
 		curPlacementCount                        sql.NullInt32
-		curAllowedClusters                       pq.StringArray
+		curAllowedClusters                       []string
 		curLocalAssetsJSON, curProcessesLiveJSON string
 	)
 	err := exec.QueryRowContext(ctx, probeSQL, tenantID, m.PlaybackID).Scan(
 		&streamID, &curTitle, &curDesc, &curMode, &curAlwaysOn, &curRecording, &curMonitoring,
 		&curSourceSpec, &curSourceKind, &curPlacementCount,
-		&curAllowedClusters, &curLocalAssetsJSON, &curProcessesLiveJSON,
+		database.ArrayScan(&curAllowedClusters), &curLocalAssetsJSON, &curProcessesLiveJSON,
 	)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -333,7 +334,7 @@ func reconcileMistNativeStream(ctx context.Context, exec DBTX, tenantID, alias s
 		curAlwaysOn == m.AlwaysOn &&
 		curRecording == m.IsRecordingEnabled &&
 		curMonitoring == wantMonitoring
-	curAllowed := []string(curAllowedClusters)
+	curAllowed := curAllowedClusters
 	mistFieldsEq := curSourceSpec.Valid && curSourceSpec.String == m.Source &&
 		curSourceKind.Valid && curSourceKind.String == m.SourceKind &&
 		curPlacementCount.Valid && int(curPlacementCount.Int32) == placement &&

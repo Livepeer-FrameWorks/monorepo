@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"frameworks/cli/internal/ux"
-	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
 
@@ -178,18 +177,24 @@ func runMigratePostgresBranch(ctx context.Context, cmd *cobra.Command, rc *resol
 	}
 	*branchesRun = append(*branchesRun, "postgres")
 
-	var pgHost inventory.Host
-	var ok bool
-	if pg.IsYugabyte() && len(pg.Nodes) > 0 {
-		pgHost, ok = manifest.GetHost(pg.Nodes[0].Host)
+	// Target a live node rather than pinning Nodes[0]: migrations (DDL) are
+	// cluster-replicated, so any healthy tserver applies them. For Yugabyte we
+	// select by local YSQL health (below); this keeps `cluster migrate` working
+	// when the first node is the dead one.
+	hosts := postgresCandidateHosts(manifest, pg)
+	if len(hosts) == 0 {
+		return fmt.Errorf("no postgres/yugabyte hosts resolvable in manifest")
+	}
+	pgHost := hosts[0]
+	if pg.IsYugabyte() {
+		// Migrations run via ysqlsh -h localhost on the chosen node, so pick a
+		// tserver whose local YSQL actually answers, not merely one reachable
+		// over SSH, and fail over to the next node otherwise.
+		h, ok := firstHealthyYugabyteHost(ctx, sshPool, hosts, pg)
 		if !ok {
-			return fmt.Errorf("yugabyte node host %s not found", pg.Nodes[0].Host)
+			return fmt.Errorf("no yugabyte tserver with healthy local YSQL among %d candidate(s)", len(hosts))
 		}
-	} else {
-		pgHost, ok = manifest.GetHost(pg.Host)
-		if !ok {
-			return fmt.Errorf("postgres host %s not found", pg.Host)
-		}
+		pgHost = h
 	}
 
 	databases := schemaDatabasesFromConfigs(pg.Databases)

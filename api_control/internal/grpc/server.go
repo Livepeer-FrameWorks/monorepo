@@ -446,7 +446,7 @@ func scanCommodoreUserForLogin(row *sql.Row, user *commodoreUserRecord) error {
 		&user.FirstName,
 		&user.LastName,
 		&user.Role,
-		pq.Array(&user.Permissions),
+		fwdb.ArrayScan(&user.Permissions),
 		&user.IsActive,
 		&user.IsVerified,
 		&user.CreatedAt,
@@ -463,7 +463,7 @@ func scanCommodoreUserForGetMe(row *sql.Row, user *commodoreUserRecord) error {
 		&user.FirstName,
 		&user.LastName,
 		&user.Role,
-		pq.Array(&user.Permissions),
+		fwdb.ArrayScan(&user.Permissions),
 		&user.IsActive,
 		&user.IsVerified,
 		&user.LastLoginAt,
@@ -477,7 +477,7 @@ func scanCommodoreUserForRefresh(row *sql.Row, user *commodoreUserRecord) error 
 	return row.Scan(
 		&user.Email,
 		&user.Role,
-		pq.Array(&user.Permissions),
+		fwdb.ArrayScan(&user.Permissions),
 		&user.FirstName,
 		&user.LastName,
 		&user.IsActive,
@@ -1684,12 +1684,12 @@ func (s *CommodoreServer) ListManagedStreams(ctx context.Context, req *commodore
 		var (
 			row        commodorepb.ManagedStreamRow
 			placement  sql.NullInt32
-			allowedArr pq.StringArray
+			allowedArr []string
 		)
 		if scanErr := rows.Scan(
 			&row.StreamId, &row.PlaybackId, &row.InternalName, &row.TenantId,
 			&row.IngestMode, &row.SourceSpec, &row.SourceKind, &row.AlwaysOn,
-			&placement, &allowedArr,
+			&placement, fwdb.ArrayScan(&allowedArr),
 		); scanErr != nil {
 			s.logger.WithError(scanErr).Warn("Failed to scan managed stream row")
 			continue
@@ -1698,7 +1698,7 @@ func (s *CommodoreServer) ListManagedStreams(ctx context.Context, req *commodore
 		if placement.Valid && placement.Int32 > 0 {
 			row.PlacementCount = placement.Int32
 		}
-		row.AllowedClusterIds = []string(allowedArr)
+		row.AllowedClusterIds = allowedArr
 		resp.Streams = append(resp.Streams, &row)
 	}
 	if err := rows.Err(); err != nil {
@@ -1957,7 +1957,7 @@ func (s *CommodoreServer) ResolvePullSourceByInternalName(ctx context.Context, r
 		ingestMode        string
 		sourceURIEnc      string
 		enabled           bool
-		allowedClusterIDs pq.StringArray
+		allowedClusterIDs []string
 	)
 	err := s.retryPostgres(ctx, func() error {
 		return s.db.QueryRowContext(ctx, `
@@ -1966,7 +1966,7 @@ func (s *CommodoreServer) ResolvePullSourceByInternalName(ctx context.Context, r
 				FROM commodore.streams s
 				JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 				WHERE s.internal_name = $1
-			`, internalName).Scan(&streamID, &tenantID, &ingestMode, &sourceURIEnc, &enabled, &allowedClusterIDs)
+			`, internalName).Scan(&streamID, &tenantID, &ingestMode, &sourceURIEnc, &enabled, fwdb.ArrayScan(&allowedClusterIDs))
 	})
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1997,7 +1997,7 @@ func (s *CommodoreServer) ResolvePullSourceByInternalName(ctx context.Context, r
 		Enabled:           enabled,
 		TenantId:          tenantID,
 		StreamId:          streamID,
-		AllowedClusterIds: []string(allowedClusterIDs),
+		AllowedClusterIds: allowedClusterIDs,
 	}, nil
 }
 
@@ -2097,13 +2097,13 @@ func (s *CommodoreServer) listPullSourceClusterCapabilities(ctx context.Context)
 func (s *CommodoreServer) loadPullSourceState(ctx context.Context, streamID, userID, tenantID string) (string, bool, []string, error) {
 	var enc string
 	var enabled bool
-	var allowed pq.StringArray
+	var allowed []string
 	err := s.db.QueryRowContext(ctx, `
 		SELECT p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}')
 		FROM commodore.streams s
 		JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 		WHERE s.id = $1 AND s.user_id = $2 AND s.tenant_id = $3
-	`, streamID, userID, tenantID).Scan(&enc, &enabled, &allowed)
+	`, streamID, userID, tenantID).Scan(&enc, &enabled, fwdb.ArrayScan(&allowed))
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil, status.Error(codes.NotFound, "pull source not found")
 	}
@@ -2114,7 +2114,7 @@ func (s *CommodoreServer) loadPullSourceState(ctx context.Context, streamID, use
 	if err != nil {
 		return "", false, nil, status.Errorf(codes.Internal, "failed to decrypt pull source: %v", err)
 	}
-	return plain, enabled, []string(allowed), nil
+	return plain, enabled, allowed, nil
 }
 
 // formatRuntimePlacementRejects renders FilterPlacementClusters rejects as a
@@ -2172,7 +2172,7 @@ func (s *CommodoreServer) ValidateAPIToken(ctx context.Context, req *commodorepb
 		WHERE token_value = $1
 		  AND is_active = true
 		  AND (expires_at IS NULL OR expires_at > NOW())
-	`, hashToken(token)).Scan(&tokenID, &userID, &tenantID, pq.Array(&permissions))
+	`, hashToken(token)).Scan(&tokenID, &userID, &tenantID, fwdb.ArrayScan(&permissions))
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return &commodorepb.ValidateAPITokenResponse{Valid: false}, nil
@@ -4717,8 +4717,7 @@ func (s *CommodoreServer) StartDeviceAuthorization(ctx context.Context, req *com
 		if err == nil {
 			break
 		}
-		var pqErr *pq.Error
-		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+		if fwdb.SQLState(err) == "23505" {
 			continue
 		}
 		return nil, status.Errorf(codes.Internal, "failed to persist device_code: %v", err)
@@ -7442,7 +7441,7 @@ func (s *CommodoreServer) ListAPITokens(ctx context.Context, req *commodorepb.Li
 		var lastUsedAt, expiresAt sql.NullTime
 		var createdAt time.Time
 
-		err := rows.Scan(&token.Id, &token.TokenName, pq.Array(&permissions), &token.Status,
+		err := rows.Scan(&token.Id, &token.TokenName, fwdb.ArrayScan(&permissions), &token.Status,
 			&lastUsedAt, &expiresAt, &createdAt)
 		if err != nil {
 			continue
@@ -7753,7 +7752,7 @@ func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, ten
 	var stream commodorepb.Stream
 	var description, sourceURIEnc, activeIngest, chapterMode sql.NullString
 	var pullEnabled sql.NullBool
-	var pullAllowedClusters pq.StringArray
+	var pullAllowedClusters []string
 	var createdAt, updatedAt time.Time
 	var chapterInterval, dvrRetOverride, clipRetOverride sql.NullInt32
 	var monEnabled sql.NullBool
@@ -7772,7 +7771,7 @@ func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, ten
 		WHERE s.id = $1 AND s.user_id = $2 AND s.tenant_id = $3
 	`, streamID, userID, tenantID).Scan(&stream.StreamId, &stream.InternalName, &stream.StreamKey, &stream.PlaybackId,
 		&stream.Title, &description, &stream.IsRecordingEnabled, &createdAt, &updatedAt,
-		&stream.IngestMode, &sourceURIEnc, &pullEnabled, &pullAllowedClusters,
+		&stream.IngestMode, &sourceURIEnc, &pullEnabled, fwdb.ArrayScan(&pullAllowedClusters),
 		&activeIngest, &chapterMode, &chapterInterval,
 		&dvrRetOverride, &clipRetOverride, &monEnabled)
 
@@ -7805,7 +7804,7 @@ func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, ten
 		if classErr != nil {
 			s.logger.WithError(classErr).WithField("stream_id", stream.StreamId).Debug("pull source classification failed")
 		}
-		stream.PullSource = buildPullSourceView(sourceURI, pullEnabled.Bool, class, []string(pullAllowedClusters))
+		stream.PullSource = buildPullSourceView(sourceURI, pullEnabled.Bool, class, pullAllowedClusters)
 	}
 
 	stream.ThumbnailAssets = s.buildStreamThumbnailAssets(activeIngest, stream.StreamId)
@@ -7893,14 +7892,14 @@ func (s *CommodoreServer) scanStream(rows *sql.Rows) (*commodorepb.Stream, error
 	var stream commodorepb.Stream
 	var description, sourceURIEnc, activeIngest sql.NullString
 	var pullEnabled sql.NullBool
-	var pullAllowedClusters pq.StringArray
+	var pullAllowedClusters []string
 	var createdAt, updatedAt time.Time
 	var dvrRetOverride, clipRetOverride sql.NullInt32
 	var monEnabled sql.NullBool
 
 	err := rows.Scan(&stream.StreamId, &stream.InternalName, &stream.StreamKey, &stream.PlaybackId,
 		&stream.Title, &description, &stream.IsRecordingEnabled, &createdAt, &updatedAt,
-		&stream.IngestMode, &sourceURIEnc, &pullEnabled, &pullAllowedClusters, &activeIngest,
+		&stream.IngestMode, &sourceURIEnc, &pullEnabled, fwdb.ArrayScan(&pullAllowedClusters), &activeIngest,
 		&dvrRetOverride, &clipRetOverride, &monEnabled)
 	if err != nil {
 		return nil, err
@@ -7928,7 +7927,7 @@ func (s *CommodoreServer) scanStream(rows *sql.Rows) (*commodorepb.Stream, error
 		if classErr != nil {
 			s.logger.WithError(classErr).WithField("stream_id", stream.StreamId).Debug("pull source classification failed")
 		}
-		stream.PullSource = buildPullSourceView(sourceURI, pullEnabled.Bool, class, []string(pullAllowedClusters))
+		stream.PullSource = buildPullSourceView(sourceURI, pullEnabled.Bool, class, pullAllowedClusters)
 	}
 
 	stream.ThumbnailAssets = s.buildStreamThumbnailAssets(activeIngest, stream.StreamId)

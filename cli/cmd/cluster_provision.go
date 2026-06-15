@@ -6569,25 +6569,63 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	if env["DATABASE_HOST"] != "" && env["DATABASE_URL"] == "" {
 		dbUser := env["DATABASE_USER"]
 		dbPass := env["DATABASE_PASSWORD"]
-		dbHost := env["DATABASE_HOST"]
 		dbPort := env["DATABASE_PORT"]
 		if dbPort == "" {
 			dbPort = "5432"
-		}
-		var userInfo string
-		if dbPass != "" {
-			userInfo = url.UserPassword(dbUser, dbPass).String()
-		} else {
-			userInfo = url.User(dbUser).String()
 		}
 		dbName := strings.ReplaceAll(task.ServiceID, "-", "_")
 		if env["DATABASE_NAME"] != "" {
 			dbName = env["DATABASE_NAME"]
 		}
-		env["DATABASE_URL"] = fmt.Sprintf("postgres://%s@%s/%s?sslmode=disable", userInfo, net.JoinHostPort(dbHost, dbPort), dbName)
+		env["DATABASE_URL"] = buildDatabaseURL(manifest, env["DATABASE_HOST"], dbPort, dbUser, dbPass, dbName)
 	}
 
 	return env, nil
+}
+
+// buildDatabaseURL assembles the DATABASE_URL consumed by the YugabyteDB smart
+// driver. For a multi-node Yugabyte cluster it lists every tserver as a contact
+// point and enables connection load balancing plus a bounded dial timeout, so a
+// single dead node cannot take SQL ingress down (failover is connection-level).
+// Single-host Postgres/Yugabyte keeps the original single-host form. The
+// multi-node URL carries the pgx-only `load_balance` param, which is NOT
+// libpq-safe; strip it before handing the URL to psql/ysqlsh (the cluster
+// diagnose script does this). Multi-host URIs and connect_timeout are libpq-safe.
+func buildDatabaseURL(manifest *inventory.Manifest, primaryHost, port, user, pass, dbName string) string {
+	var userinfo *url.Userinfo
+	if pass != "" {
+		userinfo = url.UserPassword(user, pass)
+	} else {
+		userinfo = url.User(user)
+	}
+	q := url.Values{}
+	q.Set("sslmode", "disable")
+	host := net.JoinHostPort(primaryHost, port)
+
+	if pg := manifest.Infrastructure.Postgres; pg != nil && pg.IsYugabyte() && len(pg.Nodes) > 1 {
+		hosts := make([]string, 0, len(pg.Nodes))
+		for _, n := range pg.Nodes {
+			h := manifestMeshHostname(manifest, n.Host)
+			if h == "" {
+				continue
+			}
+			hosts = append(hosts, net.JoinHostPort(h, port))
+		}
+		if len(hosts) > 1 {
+			host = strings.Join(hosts, ",")
+			q.Set("load_balance", "true")
+			q.Set("connect_timeout", "5")
+		}
+	}
+
+	u := url.URL{
+		Scheme:   "postgres",
+		User:     userinfo,
+		Host:     host,
+		Path:     "/" + dbName,
+		RawQuery: q.Encode(),
+	}
+	return u.String()
 }
 
 func applySharedPostgresDatabaseDefaults(serviceID string, env map[string]string) {

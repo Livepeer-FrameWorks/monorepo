@@ -10,6 +10,7 @@ import (
 
 	"github.com/lib/pq"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 )
 
@@ -212,10 +213,10 @@ func reconcilePullStream(ctx context.Context, exec DBTX, tenantID, alias string,
 		curTitle, curDesc, curMode string
 		curURIEnc                  sql.NullString
 		curEnabled                 sql.NullBool
-		curAllowedClusters         pq.StringArray
+		curAllowedClusters         []string
 	)
 	err := exec.QueryRowContext(ctx, probeSQL, tenantID, p.PlaybackID).Scan(
-		&streamID, &curTitle, &curDesc, &curMode, &curURIEnc, &curEnabled, &curAllowedClusters,
+		&streamID, &curTitle, &curDesc, &curMode, &curURIEnc, &curEnabled, database.ArrayScan(&curAllowedClusters),
 	)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -238,7 +239,7 @@ func reconcilePullStream(ctx context.Context, exec DBTX, tenantID, alias string,
 	}
 
 	streamFieldsEq := curTitle == p.Title && curDesc == p.Description
-	curAllowed := []string(curAllowedClusters)
+	curAllowed := curAllowedClusters
 	pullFieldsEq := curURIEnc.Valid && curURI == p.SourceURI &&
 		curEnabled.Valid && curEnabled.Bool == p.Enabled &&
 		slices.Equal(curAllowed, p.AllowedClusterIDs)

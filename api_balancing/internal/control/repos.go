@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/state"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
-	"github.com/lib/pq"
 )
 
 // ============================================================================
@@ -528,12 +528,9 @@ func (r *artifactRepositoryDB) upsertArtifactsOnce(ctx context.Context, nodeID s
 }
 
 func isRetryableArtifactUpsertError(err error) bool {
-	var pqErr *pq.Error
-	if errors.As(err, &pqErr) {
-		switch string(pqErr.Code) {
-		case "40P01", "40001":
-			return true
-		}
+	switch database.SQLState(err) {
+	case "40P01", "40001":
+		return true
 	}
 	return false
 }

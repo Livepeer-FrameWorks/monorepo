@@ -454,6 +454,12 @@ STREAM_ID=%s
 TENANT_ID=%s
 STREAM_SQL=%s
 QMASTER_SQL=%s
+fw_libpq_url() {
+  # psql/libpq rejects pgx-only connection params (load_balance,
+  # default_query_exec_mode); strip them, then normalize separators (handles
+  # adjacent params). Multi-host URIs and connect_timeout ARE libpq-safe, kept.
+  printf '%%s' "$1" | sed -E 's/(load_balance|default_query_exec_mode)=[^&]*//g; s/&+/\&/g; s/\?&/?/g; s/[?&]+$//'
+}
 echo "== host =="
 hostname -f 2>/dev/null || hostname
 echo "== resource snapshot =="
@@ -494,7 +500,7 @@ if printf '%%s\n' %s | grep -qx quartermaster && [ -n "${QMASTER_SQL}" ]; then
     . /etc/frameworks/quartermaster.env
     set +a
     if [ -n "${DATABASE_URL}" ] && command -v psql >/dev/null 2>&1; then
-      psql "${DATABASE_URL}" -X -P pager=off -A -F ' | ' -c "${QMASTER_SQL}" 2>&1 || true
+      psql "$(fw_libpq_url "${DATABASE_URL}")" -X -P pager=off -A -F ' | ' -c "${QMASTER_SQL}" 2>&1 || true
     else
       echo "psql or DATABASE_URL unavailable"
     fi
@@ -509,7 +515,7 @@ if printf '%%s\n' %s | grep -qx commodore && [ -n "${STREAM_SQL}" ]; then
     . /etc/frameworks/commodore.env
     set +a
     if [ -n "${DATABASE_URL}" ] && command -v psql >/dev/null 2>&1; then
-      psql "${DATABASE_URL}" -X -P pager=off -A -F ' | ' -c "${STREAM_SQL}" 2>&1 || true
+      psql "$(fw_libpq_url "${DATABASE_URL}")" -X -P pager=off -A -F ' | ' -c "${STREAM_SQL}" 2>&1 || true
     else
       echo "psql or DATABASE_URL unavailable"
     fi

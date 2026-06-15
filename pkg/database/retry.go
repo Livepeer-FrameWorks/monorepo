@@ -6,8 +6,6 @@ import (
 	"errors"
 	"strings"
 	"time"
-
-	"github.com/lib/pq"
 )
 
 const DefaultRetryAttempts = 6
@@ -15,21 +13,25 @@ const DefaultRetryAttempts = 6
 // IsRetryablePostgresError classifies database errors that are expected to
 // succeed when the whole statement or transaction is replayed. Yugabyte can
 // surface schema-cache races as SQLSTATE 40001 during rolling deploys.
+//
+// "cached plan must not change result type" is included as defense-in-depth.
+// We default pgx to exec mode (no statement cache; see Connect), so this should
+// not occur. If a caller overrides to a cached exec mode, pgx returns this
+// error to the application after online DDL (it invalidates the cache for next
+// time but does NOT transparently retry), so replaying the statement succeeds.
 func IsRetryablePostgresError(err error) bool {
 	if err == nil {
 		return false
 	}
-	var pqErr *pq.Error
-	if errors.As(err, &pqErr) {
-		switch string(pqErr.Code) {
-		case "40P01", "40001":
-			return true
-		}
+	switch SQLState(err) {
+	case "40P01", "40001":
+		return true
 	}
 	msg := strings.ToLower(err.Error())
 	if strings.Contains(msg, "schema version mismatch") ||
 		strings.Contains(msg, "catalog version mismatch") ||
 		strings.Contains(msg, "mismatched_schema") ||
+		strings.Contains(msg, "cached plan must not change result type") ||
 		strings.Contains(msg, "catalog snapshot") && strings.Contains(msg, "invalidated") {
 		return true
 	}

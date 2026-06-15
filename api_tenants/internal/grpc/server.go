@@ -387,7 +387,7 @@ func (s *QuartermasterServer) GetTenant(ctx context.Context, req *quartermasterp
 		&tenant.Id, &tenant.Name, &subdomain, &customDomain, &logoURL,
 		&tenant.PrimaryColor, &tenant.SecondaryColor, &tenant.DeploymentTier,
 		&tenant.DeploymentModel,
-		&primaryClusterID, &officialClusterID, &kafkaTopicPrefix, pq.Array(&kafkaBrokers), &databaseURL,
+		&primaryClusterID, &officialClusterID, &kafkaTopicPrefix, database.ArrayScan(&kafkaBrokers), &databaseURL,
 		&tenant.IsActive, &tenant.MonitoringEnabled, &createdAt, &updatedAt,
 		&tenant.RateLimitPerMinute, &tenant.RateLimitBurst,
 	)
@@ -485,7 +485,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *quarte
 			  AND c.is_active = true
 		`, primaryClusterID, tenantID).Scan(
 			&resp.ClusterId, &resp.ClusterName, &resp.ClusterType, &resp.BaseUrl,
-			pq.Array(&kafkaBrokers), &databaseURL, &periscopeURL,
+			database.ArrayScan(&kafkaBrokers), &databaseURL, &periscopeURL,
 			&topicPrefix,
 			&resp.MaxStreams, &resp.HealthStatus,
 		)
@@ -3004,7 +3004,7 @@ func (s *QuartermasterServer) GetTenantCluster(ctx context.Context, req *quarter
 		&tenant.PrimaryColor, &tenant.SecondaryColor,
 		&tenant.DeploymentTier, &tenant.DeploymentModel,
 		&primaryClusterID, &officialClusterID, &kafkaTopicPrefix,
-		pq.Array(&kafkaBrokers), &databaseURL, &tenant.IsActive, &tenant.MonitoringEnabled, &createdAt, &updatedAt,
+		database.ArrayScan(&kafkaBrokers), &databaseURL, &tenant.IsActive, &tenant.MonitoringEnabled, &createdAt, &updatedAt,
 	)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -3187,7 +3187,7 @@ func (s *QuartermasterServer) GetTenantsBatch(ctx context.Context, req *quarterm
 			&tenant.PrimaryColor, &tenant.SecondaryColor,
 			&tenant.DeploymentTier, &tenant.DeploymentModel,
 			&primaryClusterID, &officialClusterID, &kafkaTopicPrefix,
-			pq.Array(&kafkaBrokers), &databaseURL, &tenant.IsActive, &tenant.MonitoringEnabled, &createdAt, &updatedAt,
+			database.ArrayScan(&kafkaBrokers), &databaseURL, &tenant.IsActive, &tenant.MonitoringEnabled, &createdAt, &updatedAt,
 		); err != nil {
 			s.logger.WithError(err).Error("Failed to scan tenant in batch")
 			return nil, status.Errorf(codes.Internal, "scan error: %v", err)
@@ -3281,7 +3281,7 @@ func (s *QuartermasterServer) GetTenantsByCluster(ctx context.Context, req *quar
 			&tenant.PrimaryColor, &tenant.SecondaryColor,
 			&tenant.DeploymentTier, &tenant.DeploymentModel,
 			&primaryClusterID, &officialClusterID, &kafkaTopicPrefix,
-			pq.Array(&kafkaBrokers), &databaseURL, &tenant.IsActive, &tenant.MonitoringEnabled, &createdAt, &updatedAt,
+			database.ArrayScan(&kafkaBrokers), &databaseURL, &tenant.IsActive, &tenant.MonitoringEnabled, &createdAt, &updatedAt,
 			&totalCount,
 		); err != nil {
 			s.logger.WithError(err).Error("Failed to scan tenant by cluster")
@@ -9393,7 +9393,7 @@ func (s *QuartermasterServer) ListServices(ctx context.Context, req *quartermast
 
 		if err := rows.Scan(
 			&svc.Id, &serviceID, &svc.Name, &plane, &description, &defaultPort,
-			&healthCheckPath, &dockerImage, &version, pq.Array(&dependencies),
+			&healthCheckPath, &dockerImage, &version, database.ArrayScan(&dependencies),
 			&tagsJSON, &svc.IsActive, &serviceType, &serviceProtocol, &createdAt, &updatedAt,
 		); err != nil {
 			s.logger.WithError(err).Warn("Failed to scan service row")
@@ -10351,7 +10351,7 @@ func scanTenant(rows *sql.Rows) (*quartermasterpb.Tenant, error) {
 		&tenant.Id, &tenant.Name, &subdomain, &customDomain, &logoURL,
 		&tenant.PrimaryColor, &tenant.SecondaryColor, &tenant.DeploymentTier,
 		&tenant.DeploymentModel,
-		&primaryClusterID, &officialClusterID, &kafkaTopicPrefix, pq.Array(&kafkaBrokers), &databaseURL,
+		&primaryClusterID, &officialClusterID, &kafkaTopicPrefix, database.ArrayScan(&kafkaBrokers), &databaseURL,
 		&tenant.IsActive, &tenant.MonitoringEnabled, &createdAt, &updatedAt,
 	)
 	if err != nil {
@@ -10395,7 +10395,7 @@ func scanCluster(rows *sql.Rows) (*quartermasterpb.InfrastructureCluster, error)
 	err := rows.Scan(
 		&cluster.Id, &cluster.ClusterId, &cluster.ClusterName, &cluster.ClusterType,
 		&ownerTenantID, &cluster.DeploymentModel, &cluster.BaseUrl, &databaseURL, &periscopeURL,
-		pq.Array(&kafkaBrokers), &cluster.MaxConcurrentStreams, &cluster.MaxConcurrentViewers,
+		database.ArrayScan(&kafkaBrokers), &cluster.MaxConcurrentStreams, &cluster.MaxConcurrentViewers,
 		&cluster.MaxBandwidthMbps, &cluster.HealthStatus, &cluster.IsActive, &cluster.IsDefaultCluster,
 		&cluster.IsPlatformOfficial, &cluster.PublicTopology, &cluster.AllowPrivatePullSources, &createdAt, &updatedAt,
 	)
@@ -10568,13 +10568,13 @@ func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string
 	err := row.Scan(
 		&cluster.Id, &cluster.ClusterId, &cluster.ClusterName, &cluster.ClusterType,
 		&ownerTenantID, &cluster.DeploymentModel, &cluster.BaseUrl, &databaseURL, &periscopeURL,
-		pq.Array(&kafkaBrokers), &cluster.MaxConcurrentStreams, &cluster.MaxConcurrentViewers,
+		database.ArrayScan(&kafkaBrokers), &cluster.MaxConcurrentStreams, &cluster.MaxConcurrentViewers,
 		&cluster.MaxBandwidthMbps, &cluster.HealthStatus, &cluster.IsActive, &cluster.IsDefaultCluster,
 		&cluster.IsPlatformOfficial, &cluster.PublicTopology, &createdAt, &updatedAt,
 		&visibility, &requiresApproval, &shortDescription,
 		&cluster.S3Bucket, &cluster.S3Endpoint, &cluster.S3Region,
 		&cluster.RegionId, &cluster.CellId, &cluster.ClusterClass,
-		&cluster.ControlCellId, pq.Array(&eligibleCells),
+		&cluster.ControlCellId, database.ArrayScan(&eligibleCells),
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "cluster not found")
@@ -12388,7 +12388,7 @@ func (s *QuartermasterServer) ListPeers(ctx context.Context, req *quartermasterp
 	for rows.Next() {
 		var peer quartermasterpb.PeerCluster
 		var sharedTenantIDs []string
-		if err := rows.Scan(&peer.ClusterId, pq.Array(&sharedTenantIDs), &peer.ClusterName, &peer.ClusterType, &peer.FoghornAddr); err != nil {
+		if err := rows.Scan(&peer.ClusterId, database.ArrayScan(&sharedTenantIDs), &peer.ClusterName, &peer.ClusterType, &peer.FoghornAddr); err != nil {
 			return nil, status.Errorf(codes.Internal, "scan peer: %v", err)
 		}
 		peer.SharedTenantIds = sharedTenantIDs

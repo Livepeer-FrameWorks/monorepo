@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/lib/pq"
 )
 
@@ -123,13 +124,13 @@ func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (s
 		curListenPort                                                       int
 		curIsDefault, curIsPlatform, curPublicTopology, curAllowPrivatePull bool
 		curRegion, curCell, curClass, curControlCell                        string
-		curEligibleCells                                                    pq.StringArray
+		curEligibleCells                                                    []string
 		curS3Bucket, curS3Endpoint, curS3Region                             string
 	)
 	probeErr := exec.QueryRowContext(ctx, probeSQL, c.ID).Scan(
 		&curName, &curType, &curOwner, &curBaseURL, &curCIDR, &curListenPort,
 		&curIsDefault, &curIsPlatform, &curPublicTopology, &curAllowPrivatePull,
-		&curRegion, &curCell, &curClass, &curControlCell, &curEligibleCells,
+		&curRegion, &curCell, &curClass, &curControlCell, database.ArrayScan(&curEligibleCells),
 		&curS3Bucket, &curS3Endpoint, &curS3Region,
 	)
 	switch {
@@ -190,7 +191,7 @@ func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (s
 		return "", fmt.Errorf("cell drift: db=%q desired=%q (cell_id is stable once set; refusing rewrite)", curCell, c.Cell)
 	}
 
-	eligibleNoop := stringSlicesEqual([]string(curEligibleCells), c.EligibleServingCells)
+	eligibleNoop := stringSlicesEqual(curEligibleCells, c.EligibleServingCells)
 
 	if curName == c.Name &&
 		curBaseURL == c.BaseURL &&

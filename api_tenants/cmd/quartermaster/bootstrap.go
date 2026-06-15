@@ -16,7 +16,6 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	"github.com/lib/pq"
 
 	"gopkg.in/yaml.v3"
 )
@@ -144,11 +143,7 @@ func runBootstrapTransactionOnce(ctx context.Context, db *sql.DB, qm bootstrap.Q
 }
 
 func isRetryableBootstrapTransactionError(err error) bool {
-	var pqErr *pq.Error
-	if !errors.As(err, &pqErr) {
-		return false
-	}
-	switch string(pqErr.Code) {
+	switch database.SQLState(err) {
 	case "40001", "40P01":
 		return true
 	default:

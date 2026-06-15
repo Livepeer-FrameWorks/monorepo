@@ -694,16 +694,15 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 	}
 
 	if manifest.Infrastructure.Postgres != nil && manifest.Infrastructure.Postgres.Enabled {
-		pgHostName := manifest.Infrastructure.Postgres.Host
-		if manifest.Infrastructure.Postgres.IsYugabyte() && len(manifest.Infrastructure.Postgres.Nodes) > 0 {
-			pgHostName = manifest.Infrastructure.Postgres.Nodes[0].Host
-		}
-		host, ok := manifest.GetHost(pgHostName)
-		if !ok {
-			recordMiss("Postgres/Yugabyte", fmt.Sprintf("host %q not found in manifest", pgHostName))
+		if manifest.Infrastructure.Postgres.IsYugabyte() {
+			// Any tserver serves YSQL; probe every node and report the first
+			// healthy one rather than pinning the (possibly dead) first node.
+			runInfraCheck("Postgres/Yugabyte", checkYugabyteCluster(cmd.Context(), doctorSSHPool, manifest, manifest.Infrastructure.Postgres))
 		} else {
-			if manifest.Infrastructure.Postgres.IsYugabyte() {
-				runInfraCheck("Postgres/Yugabyte", checkYugabyteLocalYSQL(cmd.Context(), doctorSSHPool, host, manifest.Infrastructure.Postgres))
+			pgHostName := manifest.Infrastructure.Postgres.Host
+			host, ok := manifest.GetHost(pgHostName)
+			if !ok {
+				recordMiss("Postgres/Yugabyte", fmt.Sprintf("host %q not found in manifest", pgHostName))
 			} else {
 				password, pwErr := resolveYugabytePassword(manifest.Infrastructure.Postgres, sharedEnv)
 				if pwErr != nil {
@@ -829,20 +828,24 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 	if manifest.Infrastructure.Postgres != nil && manifest.Infrastructure.Postgres.Enabled {
 		fmt.Fprintln(cmd.OutOrStdout(), "Database Migrations:")
 		fmt.Fprintln(cmd.OutOrStdout(), "")
-		pgHostName := manifest.Infrastructure.Postgres.Host
-		if manifest.Infrastructure.Postgres.IsYugabyte() && len(manifest.Infrastructure.Postgres.Nodes) > 0 {
-			pgHostName = manifest.Infrastructure.Postgres.Nodes[0].Host
-		}
-		host, ok := manifest.GetHost(pgHostName)
-		if !ok {
-			recordMiss("Postgres migrations", fmt.Sprintf("host %q not found in manifest", pgHostName))
+		hosts := postgresCandidateHosts(manifest, manifest.Infrastructure.Postgres)
+		if len(hosts) == 0 {
+			recordMiss("Postgres migrations", "no postgres/yugabyte hosts resolvable in manifest")
 		} else {
 			doctorTarget, targetErr := resolveMigrationTarget(rc, "")
 			if targetErr != nil {
 				doctorTarget = ""
 			}
 			totalChecks++
-			result := doctorPostgresMigrations(cmd.Context(), doctorSSHPool, manifest, host, "", doctorTarget)
+			// Any tserver carries the (cluster-replicated) _migrations table; probe
+			// each node and use the first that responds rather than pinning Nodes[0].
+			var result *health.CheckResult
+			for _, h := range hosts {
+				result = doctorPostgresMigrations(cmd.Context(), doctorSSHPool, manifest, h, "", doctorTarget)
+				if result.OK {
+					break
+				}
+			}
 			printHealthResult(cmd, "Postgres migrations", result)
 			if result.OK {
 				passedChecks++
@@ -969,6 +972,65 @@ func checkYugabyteLocalYSQL(ctx context.Context, sshPool *fwssh.Pool, host inven
 	result.Status = "healthy"
 	result.Message = fmt.Sprintf("Local YSQL query OK (latency: %v)", result.Latency)
 	return result
+}
+
+// postgresCandidateHosts returns the manifest hosts to probe for a
+// Postgres/Yugabyte deployment, in order: every Yugabyte node, or the single
+// configured host for vanilla Postgres. Doctor and migration checks use this
+// list so they iterate the cluster instead of pinning the first node.
+func postgresCandidateHosts(manifest *inventory.Manifest, pg *inventory.PostgresConfig) []inventory.Host {
+	names := make([]string, 0, len(pg.Nodes)+1)
+	for _, n := range pg.Nodes {
+		names = append(names, n.Host)
+	}
+	if len(names) == 0 {
+		names = append(names, pg.Host)
+	}
+	hosts := make([]inventory.Host, 0, len(names))
+	for _, hn := range names {
+		if h, ok := manifest.GetHost(hn); ok {
+			hosts = append(hosts, h)
+		}
+	}
+	return hosts
+}
+
+// checkYugabyteCluster probes each tserver in order and returns the first
+// healthy result (annotated with the node name). Any tserver serves YSQL, so
+// doctor reflects cluster health rather than the status of one pinned node. If
+// every node fails it returns the last failure.
+func checkYugabyteCluster(ctx context.Context, sshPool *fwssh.Pool, manifest *inventory.Manifest, pg *inventory.PostgresConfig) *health.CheckResult {
+	hosts := postgresCandidateHosts(manifest, pg)
+	if len(hosts) == 0 {
+		return &health.CheckResult{Name: "yugabyte", CheckedAt: time.Now(), OK: false, Status: "unhealthy", Error: "no yugabyte nodes resolvable in manifest"}
+	}
+	var last *health.CheckResult
+	for _, host := range hosts {
+		res := checkYugabyteLocalYSQL(ctx, sshPool, host, pg)
+		if res.OK {
+			if res.Metadata == nil {
+				res.Metadata = map[string]string{}
+			}
+			res.Metadata["node"] = host.Name
+			return res
+		}
+		last = res
+	}
+	return last
+}
+
+// firstHealthyYugabyteHost returns the first candidate tserver that answers a
+// local YSQL probe (SELECT 1 via ysqlsh), so admin DB operations (e.g. migrations
+// applied through ysqlsh -h localhost on the node) target a node whose database
+// is actually up, not merely one reachable over SSH. Selection only; it does not
+// retry a mutation across nodes.
+func firstHealthyYugabyteHost(ctx context.Context, sshPool *fwssh.Pool, hosts []inventory.Host, pg *inventory.PostgresConfig) (inventory.Host, bool) {
+	for _, h := range hosts {
+		if checkYugabyteLocalYSQL(ctx, sshPool, h, pg).OK {
+			return h, true
+		}
+	}
+	return inventory.Host{}, false
 }
 
 func checkServiceEndpoint(name string, svc inventory.ServiceConfig, address string, port int) *health.CheckResult {

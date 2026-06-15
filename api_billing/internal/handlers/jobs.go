@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/lib/pq"
 	"github.com/shopspring/decimal"
 	"github.com/sirupsen/logrus"
 
@@ -24,6 +23,7 @@ import (
 	decklog "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	periscope "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
@@ -760,8 +760,7 @@ func (jm *JobManager) deductPrepaidBalanceForCreditTx(ctx context.Context, tx *s
 			transaction_type, description, reference_id, reference_type, created_at
 		) VALUES ($1, $2, $3, 'credit', $4, $5, $6, NOW())
 	`, tenantID, -applied, currentBalance-applied, description, referenceID, referenceType); txErr != nil {
-		var pqErr *pq.Error
-		if errors.As(txErr, &pqErr) && pqErr.Code == "23505" {
+		if database.SQLState(txErr) == "23505" {
 			// Duplicate ledger row exists. Read its amount so the caller can
 			// preserve prepaid_credit_applied. Balance is untouched.
 			var historicAmount int64
@@ -908,8 +907,7 @@ func (jm *JobManager) deductPrepaidBalanceForCredit(ctx context.Context, tenantI
 	`, tenantID, -amountCents, newBalance, description, referenceID, referenceType)
 	if err != nil {
 		if referenceID != nil {
-			var pqErr *pq.Error
-			if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+			if database.SQLState(err) == "23505" {
 				if rollbackErr := tx.Rollback(); rollbackErr != nil {
 					jm.logger.WithError(rollbackErr).Warn("Failed to rollback duplicate credit deduction")
 				}

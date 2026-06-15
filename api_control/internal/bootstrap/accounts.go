@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -127,10 +128,10 @@ func reconcileUser(ctx context.Context, exec DBTX, tenantID string, u AccountUse
 		WHERE tenant_id = $1::uuid AND email = $2`
 	var (
 		id, curFirst, curLast, curRole string
-		curPerms                       pq.StringArray
+		curPerms                       []string
 		curPlatformOp                  bool
 	)
-	err := exec.QueryRowContext(ctx, probeSQL, tenantID, u.Email).Scan(&id, &curFirst, &curLast, &curRole, &curPerms, &curPlatformOp)
+	err := exec.QueryRowContext(ctx, probeSQL, tenantID, u.Email).Scan(&id, &curFirst, &curLast, &curRole, database.ArrayScan(&curPerms), &curPlatformOp)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		hash, hashErr := auth.HashPassword(u.Password)
@@ -157,7 +158,7 @@ func reconcileUser(ctx context.Context, exec DBTX, tenantID string, u AccountUse
 
 	desiredPerms := defaultPermissions(u.Role)
 	profileEq := curFirst == u.FirstName && curLast == u.LastName && curRole == u.Role &&
-		stringSliceEq([]string(curPerms), desiredPerms) && curPlatformOp == u.PlatformOperator
+		stringSliceEq(curPerms, desiredPerms) && curPlatformOp == u.PlatformOperator
 
 	if u.ResetCredentials {
 		if !allowReset {

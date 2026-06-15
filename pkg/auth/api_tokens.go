@@ -8,7 +8,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/lib/pq"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
 var (
@@ -32,7 +32,7 @@ type APIToken struct {
 // ValidateAPIToken validates a developer API token
 func ValidateAPIToken(db *sql.DB, tokenValue string) (*APIToken, error) {
 	var token APIToken
-	var permissions pq.StringArray
+	var permissions []string
 	// Get token from database
 	err := db.QueryRowContext(context.Background(), `
 		SELECT id, tenant_id, user_id, token_name,
@@ -41,7 +41,7 @@ func ValidateAPIToken(db *sql.DB, tokenValue string) (*APIToken, error) {
 		WHERE token_value = $1 AND is_active = true
 	`, hashToken(tokenValue)).Scan(
 		&token.ID, &token.TenantID, &token.UserID,
-		&token.TokenName, &permissions, &token.IsActive,
+		&token.TokenName, database.ArrayScan(&permissions), &token.IsActive,
 		&token.ExpiresAt, &token.CreatedAt,
 	)
 
@@ -53,7 +53,7 @@ func ValidateAPIToken(db *sql.DB, tokenValue string) (*APIToken, error) {
 		return nil, err
 	}
 
-	token.Permissions = []string(permissions)
+	token.Permissions = permissions
 	if !token.IsActive {
 		return nil, ErrInvalidAPIToken
 	}
