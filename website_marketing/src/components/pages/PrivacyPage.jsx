@@ -8,30 +8,57 @@ const privacySections = [
     items: [
       "Account details you provide such as name, email address, company, and authentication metadata.",
       "Operational telemetry—usage logs, health metrics, and error diagnostics—to keep the platform reliable.",
+      "Streaming metadata such as stream configuration, routing decisions, and aggregate viewer and quality-of-experience analytics generated as your streams are delivered.",
+      "Billing information needed to manage subscriptions and usage; payment card details are handled by our payment processor and are not stored on FrameWorks servers.",
       "Support communications and feedback you submit through tickets, email, or chat.",
+    ],
+  },
+  {
+    title: "What we do not collect",
+    items: [
+      "We do not inspect or mine the contents of your live or recorded media for advertising or profiling.",
+      "We do not sell, rent, or trade your personal data or your viewers' data to anyone.",
+      "Self-hosted and hybrid deployments keep your media and much of your operational data on infrastructure you control—by design, we never need a copy to deliver the service.",
     ],
   },
   {
     title: "How we use it",
     items: [
       "To operate and secure FrameWorks, troubleshoot issues, and improve performance.",
+      "To produce the analytics and routing visibility you see in your own dashboards.",
       "To send product or policy updates you opt into during beta.",
-      "To enforce our terms and acceptable use policy.",
+      "To enforce our terms and acceptable use policy, and to detect and prevent abuse.",
     ],
   },
   {
     title: "How we share it",
     items: [
       "We do not sell personal data.",
-      "We may share it with trusted vendors who help us run FrameWorks (for example hosting, analytics, email) under confidentiality agreements.",
+      "We may share it with trusted vendors who help us run FrameWorks (for example hosting, analytics, email) under confidentiality agreements, limited to what they need to provide their service.",
       "We may disclose it if required by law or to protect the safety and rights of our users.",
     ],
   },
   {
-    title: "Retention & control",
+    title: "Cookies & analytics",
     items: [
-      "We keep data only as long as necessary for the purposes above or to comply with legal requirements.",
-      `You can request access or deletion by emailing ${config.contactEmail ?? "privacy@frameworks.network"}. Deleting certain data may disable your account.`,
+      "We use a small number of strictly necessary cookies to keep you signed in and to remember your preferences.",
+      "Any product analytics we collect are aggregated and used to understand how features are used, not to build advertising profiles.",
+      "You can block non-essential cookies in your browser; the core application will continue to work.",
+    ],
+  },
+  {
+    title: "Your rights & control",
+    items: [
+      "Depending on your location, you may have rights to access, correct, export, or delete your personal data, and to object to or restrict certain processing.",
+      `You can exercise these rights, or request access or deletion, by emailing ${config.contactEmail ?? "privacy@frameworks.network"}. Deleting certain data may disable your account.`,
+      "We keep data only as long as necessary for the purposes above or to comply with legal requirements, after which it is deleted or anonymised.",
+    ],
+  },
+  {
+    title: "Security & data sovereignty",
+    items: [
+      "We protect data in transit and at rest, scope internal access to what each role needs, and follow the principle of least privilege across our services.",
+      "FrameWorks is built around sovereignty: you can run hosted, hybrid, or fully self-hosted, choosing where your media and control plane live so your data stays under your jurisdiction and ownership.",
       "We will update this policy as the product evolves; continuing to use FrameWorks means you accept the latest version.",
     ],
   },

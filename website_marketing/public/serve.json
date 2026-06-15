@@ -1,0 +1,14 @@
+{
+  "trailingSlash": false,
+  "directoryListing": false,
+  "headers": [
+    {
+      "source": "@(__spa-fallback.html|health|SKILL.md|heartbeat.md|skill.json|llms.txt)",
+      "headers": [{ "key": "X-Robots-Tag", "value": "noindex, nofollow" }]
+    },
+    {
+      "source": ".well-known/**",
+      "headers": [{ "key": "X-Robots-Tag", "value": "noindex, nofollow" }]
+    }
+  ]
+}

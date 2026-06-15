@@ -207,6 +207,26 @@ export default defineConfig({
     svelte(),
     starlight({
       title: "FrameWorks Docs",
+      favicon: "/favicon.svg",
+      head: [
+        {
+          tag: "link",
+          attrs: { rel: "icon", type: "image/png", sizes: "48x48", href: "/favicon-48.png" },
+        },
+        {
+          tag: "link",
+          attrs: { rel: "icon", type: "image/png", sizes: "96x96", href: "/favicon-96.png" },
+        },
+        {
+          tag: "link",
+          attrs: { rel: "icon", type: "image/png", sizes: "192x192", href: "/favicon-192.png" },
+        },
+        {
+          tag: "link",
+          attrs: { rel: "apple-touch-icon", sizes: "180x180", href: "/apple-touch-icon.png" },
+        },
+        { tag: "link", attrs: { rel: "manifest", href: "/site.webmanifest" } },
+      ],
       plugins: [
         starlightBlog({
           authors: {

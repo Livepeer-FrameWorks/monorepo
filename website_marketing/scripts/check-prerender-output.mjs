@@ -14,7 +14,16 @@ const routes = [
   ["aup/index.html", "FrameWorks Acceptable Use Policy"],
 ];
 
-const staticFiles = ["health", "robots.txt", "llms.txt", "sitemap.xml"];
+const staticFiles = [
+  "health",
+  "robots.txt",
+  "llms.txt",
+  "sitemap.xml",
+  "favicon.ico",
+  "favicon-192.png",
+  "apple-touch-icon.png",
+  "site.webmanifest",
+];
 const failures = [];
 
 for (const [relativePath, ...snippets] of routes) {
@@ -30,12 +39,38 @@ for (const [relativePath, ...snippets] of routes) {
       failures.push(`build/client/${relativePath} missing ${JSON.stringify(snippet)}`);
     }
   }
+
+  // Search and assistive clients need one document title and one primary
+  // heading per prerendered content route.
+  const titleMatch = html.match(/<title>([^<]*)<\/title>/);
+  if (!titleMatch || titleMatch[1].trim().length === 0) {
+    failures.push(`build/client/${relativePath} has no non-empty <title>`);
+  }
+  const h1Count = (html.match(/<h1[\s>]/g) || []).length;
+  if (h1Count !== 1) {
+    failures.push(`build/client/${relativePath} has ${h1Count} <h1> tags (expected exactly 1)`);
+  }
 }
 
 for (const relativePath of staticFiles) {
   const absolutePath = join(clientDir, relativePath);
   if (!existsSync(absolutePath)) {
     failures.push(`missing static output: build/client/${relativePath}`);
+  }
+}
+
+// Non-content artifacts need explicit noindex headers because they are copied
+// into the served build output beside the real routes.
+const serveConfigPath = join(clientDir, "serve.json");
+if (!existsSync(serveConfigPath)) {
+  failures.push("missing build/client/serve.json (de-index rules for non-content files)");
+} else {
+  const serveConfig = readFileSync(serveConfigPath, "utf8");
+  if (!serveConfig.includes("__spa-fallback.html")) {
+    failures.push("build/client/serve.json missing the __spa-fallback.html noindex rule");
+  }
+  if (!serveConfig.includes("X-Robots-Tag")) {
+    failures.push("build/client/serve.json missing X-Robots-Tag noindex headers");
   }
 }
 

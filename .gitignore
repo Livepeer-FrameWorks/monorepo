@@ -36,6 +36,7 @@ build/
 .nuxt/
 .output/
 .vite/
+website_marketing/.react-router/
 coverage/
 test-results/
 *.log

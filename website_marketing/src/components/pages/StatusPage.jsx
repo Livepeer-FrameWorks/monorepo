@@ -230,13 +230,49 @@ const StatusPage = () => {
 
       <SectionDivider />
 
+      <Section className="bg-brand-surface">
+        <SectionContainer className="max-w-3xl space-y-6">
+          <HeadlineStack
+            eyebrow="Methodology"
+            title="How we measure health"
+            subtitle="Every status above is derived from live signals, not a hand-edited dashboard."
+            align="left"
+            underlineAlign="start"
+          />
+          <div className="space-y-4 text-sm leading-relaxed text-muted-foreground">
+            <p>
+              The rollup on this page is generated in real time from FrameWorks' own control plane.
+              Each edge cluster continuously reports node health, active streams, concurrent
+              viewers, and ingress and egress throughput. We aggregate those signals per cluster and
+              roll them into a single platform-wide state that refreshes every thirty seconds.
+            </p>
+            <p>
+              A cluster is marked <strong>operational</strong> when its nodes are healthy and
+              accepting traffic, <strong>degraded</strong> when some capacity is impaired but
+              delivery continues, and <strong>down</strong> when it can no longer serve viewers.
+              Because the platform routes around unhealthy nodes, a degraded cluster does not
+              necessarily mean your streams are affected—routing steers viewers to the nearest
+              healthy edge.
+            </p>
+            <p>
+              This is a public beta, so the demo environment may be intermittently offline for
+              maintenance or upgrades. The numbers here reflect the live network as the control
+              plane sees it; if you operate a hybrid or self-hosted deployment, your own clusters
+              report into the same health model.
+            </p>
+          </div>
+        </SectionContainer>
+      </Section>
+
+      <SectionDivider />
+
       <Section className="bg-brand-surface-muted">
         <SectionContainer>
           <MarketingBand surface="midnight" tone="neutral" texture="none" density="compact" flush>
             <HeadlineStack
               eyebrow="Incidents"
               title="Recent incidents"
-              subtitle="No incidents reported."
+              subtitle="No incidents reported. Subscribe to updates by contacting our team if you operate production workloads."
               align="left"
               underlineAlign="start"
             />

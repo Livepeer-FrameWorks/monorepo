@@ -1,0 +1,13 @@
+{
+  "name": "FrameWorks",
+  "short_name": "FrameWorks",
+  "description": "Sovereign video infrastructure for live streaming.",
+  "icons": [
+    { "src": "/favicon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/favicon-512.png", "sizes": "512x512", "type": "image/png" }
+  ],
+  "theme_color": "#000000",
+  "background_color": "#000000",
+  "display": "browser",
+  "start_url": "/"
+}
