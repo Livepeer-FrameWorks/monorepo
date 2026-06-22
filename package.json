@@ -26,18 +26,18 @@
   "devDependencies": {
     "@codecov/sveltekit-plugin": "^2.0.1",
     "@codecov/vite-plugin": "^2.0.1",
-    "@typescript-eslint/eslint-plugin": "^8.58.2",
-    "@typescript-eslint/parser": "^8.58.2",
-    "@typescript-eslint/type-utils": "^8.58.2",
-    "@typescript-eslint/utils": "^8.58.2",
+    "@typescript-eslint/eslint-plugin": "^8.61.1",
+    "@typescript-eslint/parser": "^8.61.1",
+    "@typescript-eslint/type-utils": "^8.61.1",
+    "@typescript-eslint/utils": "^8.61.1",
     "eslint-config-prettier": "^10.1.8",
-    "globals": "^17.5.0",
-    "knip": "^6.4.1",
-    "lefthook": "^2.1.5",
-    "prettier": "^3.8.3",
+    "globals": "^17.6.0",
+    "knip": "^6.17.1",
+    "lefthook": "^2.1.9",
+    "prettier": "^3.8.4",
     "prettier-plugin-astro": "^0.14.1",
-    "prettier-plugin-svelte": "^3.5.1",
-    "typescript-eslint": "^8.58.2"
+    "prettier-plugin-svelte": "^4.1.1",
+    "typescript-eslint": "^8.61.1"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
