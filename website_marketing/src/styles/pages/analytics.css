@@ -1,0 +1,18 @@
+/* Page-specific styles for /analytics (the analytics showcase). */
+@layer components {
+  .analytics-intro {
+    margin-top: 0.4rem;
+    font-size: 1.02rem;
+    line-height: 1.68;
+    color: hsl(var(--muted-foreground));
+  }
+
+  /* Spacing only. The dotted list itself reuses .marketing-icon-list (IconList). */
+  .analytics-list {
+    margin-top: clamp(1.1rem, 2vw, 1.5rem);
+  }
+
+  .analytics-cta {
+    margin-top: 1.6rem;
+  }
+}

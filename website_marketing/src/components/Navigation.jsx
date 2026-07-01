@@ -56,6 +56,9 @@ const Navigation = () => {
             <Link to="/about" className={linkClasses("/about")}>
               About
             </Link>
+            <Link to="/analytics" className={linkClasses("/analytics")}>
+              Analytics
+            </Link>
             <Link to="/pricing" className={linkClasses("/pricing")}>
               Pricing
             </Link>
@@ -130,6 +133,11 @@ const Navigation = () => {
                 <SheetClose asChild>
                   <Link to="/about" className={linkClasses("/about", "mobile")}>
                     About
+                  </Link>
+                </SheetClose>
+                <SheetClose asChild>
+                  <Link to="/analytics" className={linkClasses("/analytics", "mobile")}>
+                    Analytics
                   </Link>
                 </SheetClose>
                 <SheetClose asChild>

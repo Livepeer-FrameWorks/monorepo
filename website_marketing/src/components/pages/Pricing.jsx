@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import config from "../../config";
 import InfoTooltip from "../shared/InfoTooltip";
 import StatusTag from "../shared/StatusTag";
+import SovereigntyNote from "../shared/SovereigntyNote";
 import SavingsCalculator from "../shared/SavingsCalculator";
 import { Section, SectionContainer } from "@/components/ui/section";
 import {
@@ -760,8 +761,13 @@ const Pricing = () => {
             >
               <HeadlineStack
                 eyebrow="Operating models"
-                title="SaaS → Hybrid → Fully self-hosted"
-                subtitle="Choose the level of control you want: fully hosted, self-hosted edge, or the video and control-plane stack."
+                title="SaaS to Hybrid to Fully self-hosted"
+                subtitle={
+                  <>
+                    Choose the level of control you want: fully hosted, self-hosted edge, or the
+                    video and control-plane stack. <SovereigntyNote />
+                  </>
+                }
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"

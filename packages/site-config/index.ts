@@ -38,6 +38,15 @@ export const MARKETING_ROUTES: MarketingRouteSeo[] = [
     priority: "1.0",
   },
   {
+    id: "analytics",
+    path: "/analytics",
+    title: "FrameWorks Analytics - Real-Time Streaming Telemetry, QoE & Geo Insights",
+    description:
+      "See why viewer X connected to edge Y. FrameWorks gives every plan real-time viewer geo, routing decisions, player QoE, VOD retention, and transparent usage analytics - your data, on your infrastructure.",
+    changefreq: "weekly",
+    priority: "0.9",
+  },
+  {
     id: "pricing",
     path: "/pricing",
     title: "FrameWorks Pricing - Hosted, Hybrid, and Self-Hosted Streaming",

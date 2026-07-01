@@ -24,6 +24,7 @@ import {
   NetworkMap,
 } from "@/components/marketing";
 import { Section, SectionContainer } from "@/components/ui/section";
+import SovereigntyNote from "../shared/SovereigntyNote";
 import {
   Accordion,
   AccordionContent,
@@ -187,6 +188,7 @@ const LandingPage = () => {
     badge: pillar.badge,
     title: pillar.title,
     description: pillar.description,
+    meta: pillar.title === "Sovereignty Without Pain" ? <SovereigntyNote /> : undefined,
     hover: "subtle",
     stripe: true,
     flush: true,
@@ -539,7 +541,12 @@ const LandingPage = () => {
                 underlineAlign="start"
                 actionsPlacement="inline"
                 actions={
-                  <CTACluster align="end">
+                  <CTACluster align="end" wrap>
+                    <MarketingCTAButton
+                      intent="secondary"
+                      to="/analytics"
+                      label="Explore analytics"
+                    />
                     <MarketingCTAButton intent="secondary" to="/about" label="Read our mission" />
                   </CTACluster>
                 }

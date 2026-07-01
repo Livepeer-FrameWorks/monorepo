@@ -11,6 +11,7 @@ import {
 } from "@heroicons/react/24/outline";
 import { Section, SectionContainer } from "@/components/ui/section";
 import StatusTag from "../shared/StatusTag";
+import SovereigntyNote from "../shared/SovereigntyNote";
 import {
   MarketingHero,
   MarketingBand,
@@ -381,7 +382,12 @@ const About = () => {
                       >
                         <span className="mission-pillars__dot" aria-hidden="true" />
                         <div className="mission-pillars__body">
-                          <h4>{highlight.title}</h4>
+                          <h4>
+                            {highlight.title}{" "}
+                            {highlight.title === "Sovereignty Without Pain" ? (
+                              <SovereigntyNote />
+                            ) : null}
+                          </h4>
                           <p>{highlight.description}</p>
                           {highlight.betaNote ? (
                             <span className="mission-pillars__note">{highlight.betaNote}</span>

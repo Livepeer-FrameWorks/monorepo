@@ -1,5 +1,6 @@
 const marketingRoutes = [
   "/",
+  "/analytics",
   "/pricing",
   "/about",
   "/contact",

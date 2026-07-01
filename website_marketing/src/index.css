@@ -19,6 +19,7 @@
 @import "./styles/marketing/timeline.css";
 @import "./styles/marketing/skipper.css";
 @import "./styles/marketing/network.css";
+@import "./styles/marketing/dashboards.css";
 
 /* Page-specific styles */
 @import "./styles/pages/about.css";
@@ -26,6 +27,7 @@
 @import "./styles/pages/documentation.css";
 @import "./styles/pages/landing.css";
 @import "./styles/pages/pricing.css";
+@import "./styles/pages/analytics.css";
 
 @layer base {
   :root {
