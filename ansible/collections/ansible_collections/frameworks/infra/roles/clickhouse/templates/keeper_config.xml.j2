@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<!-- Managed by frameworks.infra.clickhouse — standalone ClickHouse Keeper.
+     Do not edit by hand; regenerated on every provision. -->
+<clickhouse>
+  <logger>
+    <level>information</level>
+    <log>/var/log/clickhouse-keeper/clickhouse-keeper.log</log>
+    <errorlog>/var/log/clickhouse-keeper/clickhouse-keeper.err.log</errorlog>
+    <size>100M</size>
+    <count>5</count>
+  </logger>
+
+{% for listen_host in (clickhouse_listen_hosts if (clickhouse_listen_hosts | length > 0) else [clickhouse_listen_host]) %}
+  <listen_host>{{ listen_host }}</listen_host>
+{% endfor %}
+
+  <keeper_server>
+    <tcp_port>{{ clickhouse_keeper_client_port | default(9181) }}</tcp_port>
+    <server_id>{{ clickhouse_keeper_id }}</server_id>
+    <log_storage_path>/var/lib/clickhouse-keeper/coordination/log</log_storage_path>
+    <snapshot_storage_path>/var/lib/clickhouse-keeper/coordination/snapshots</snapshot_storage_path>
+    <!-- Keep online 1->3 quorum growth available without recreating the ensemble. -->
+    <enable_reconfiguration>true</enable_reconfiguration>
+    <coordination_settings>
+      <operation_timeout_ms>10000</operation_timeout_ms>
+      <session_timeout_ms>30000</session_timeout_ms>
+      <raft_logs_level>information</raft_logs_level>
+    </coordination_settings>
+    <raft_configuration>
+{% for node in clickhouse_keeper_nodes %}
+      <server>
+        <id>{{ node.id }}</id>
+        <hostname>{{ node.host }}</hostname>
+        <port>{{ clickhouse_keeper_raft_port | default(9234) }}</port>
+      </server>
+{% endfor %}
+    </raft_configuration>
+  </keeper_server>
+</clickhouse>

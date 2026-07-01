@@ -75,8 +75,8 @@ func newClusterPreflightCmd() *cobra.Command {
 					results = append(results, preflight.PostgresConnectivity(ctx, pgHost, pg.EffectivePort()))
 				}
 				if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled {
-					chHost := ch.Host
-					if host, ok := manifest.GetHost(ch.Host); ok {
+					chHost := ch.CoordinatorHost()
+					if host, ok := manifest.GetHost(ch.CoordinatorHost()); ok {
 						chHost = host.ExternalIP
 					}
 					port := ch.Port

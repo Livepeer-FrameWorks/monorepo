@@ -218,11 +218,11 @@ func collectClickHouseSnapshot(ctx context.Context, rc *resolvedCluster, pool *s
 	if ch == nil || !ch.Enabled {
 		return nil
 	}
-	host, ok := manifest.GetHost(ch.Host)
+	host, ok := manifest.GetHost(ch.CoordinatorHost())
 	if !ok {
-		return fmt.Errorf("clickhouse: host %s not found", ch.Host)
+		return fmt.Errorf("clickhouse: host %s not found", ch.CoordinatorHost())
 	}
-	host.Name = firstNonEmpty(host.Name, ch.Host)
+	host.Name = firstNonEmpty(host.Name, ch.CoordinatorHost())
 
 	sharedEnv, err := rc.SharedEnv()
 	if err != nil {

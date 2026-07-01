@@ -51,7 +51,7 @@ func main() {
 
 	// Connect to ClickHouse
 	chConfig := database.DefaultClickHouseConfig()
-	chConfig.Addr = []string{clickhouseAddr}
+	chConfig.Addr = strings.Split(clickhouseAddr, ",")
 	chConfig.Database = clickhouseDB
 	chConfig.Username = clickhouseUser
 	chConfig.Password = clickhousePassword

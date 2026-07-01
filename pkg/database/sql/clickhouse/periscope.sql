@@ -3,7 +3,12 @@
 -- Clean, normalized analytics schema designed to align with public GraphQL API.
 -- ============================================================================
 
-CREATE DATABASE IF NOT EXISTS periscope;
+-- Replicated database engine: auto-propagates DDL across replicas via Keeper,
+-- guarantees a shared {uuid} for every table's replica path, and is required for
+-- refreshable-MV refresh coordination (one replica refreshes). The same DDL runs
+-- in dev (single node + embedded Keeper) and prod (multi-node + standalone Keeper);
+-- {shard}/{replica} come from the server <macros> config.
+CREATE DATABASE IF NOT EXISTS periscope ENGINE = Replicated('/clickhouse/databases/periscope/{shard}', '{shard}', '{replica}');
 USE periscope;
 
 -- ============================================================================
@@ -35,7 +40,7 @@ CREATE TABLE IF NOT EXISTS raw_mist_triggers (
     forwarded_at_ms Int64,           -- Helmsman-side wall clock at first successful send
     ingested_at_ms Int64,            -- Periscope-side wall clock at INSERT (version)
     schema_version Int32 DEFAULT 0
-) ENGINE = ReplacingMergeTree(ingested_at_ms)
+) ENGINE = ReplicatedReplacingMergeTree(ingested_at_ms)
 PARTITION BY toYYYYMM(toDateTime(received_at_ms / 1000))
 ORDER BY (node_id, trigger_type, source_request_id)
 TTL toDateTime(received_at_ms / 1000) + INTERVAL 30 DAY;
@@ -94,7 +99,7 @@ CREATE TABLE IF NOT EXISTS stream_event_log (
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
     schema_version UInt8 DEFAULT 0
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp, event_id)
 TTL timestamp + INTERVAL 90 DAY;
@@ -109,7 +114,7 @@ CREATE TABLE IF NOT EXISTS stream_viewer_5m (
     stream_id UUID,
     max_viewers UInt32,
     avg_viewers Float32
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(timestamp_5m)
 ORDER BY (timestamp_5m, tenant_id, stream_id)
 TTL timestamp_5m + INTERVAL 180 DAY;
@@ -161,7 +166,7 @@ CREATE TABLE IF NOT EXISTS stream_state_current (
 
     started_at Nullable(DateTime),
     updated_at DateTime
-) ENGINE = ReplacingMergeTree(updated_at)
+) ENGINE = ReplicatedReplacingMergeTree(updated_at)
 ORDER BY (tenant_id, stream_id);
 
 -- ============================================================================
@@ -209,7 +214,7 @@ CREATE TABLE IF NOT EXISTS stream_health_samples (
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
     schema_version UInt8 DEFAULT 0
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp)
 TTL timestamp + INTERVAL 30 DAY;
@@ -231,7 +236,7 @@ CREATE TABLE IF NOT EXISTS stream_health_5m (
     max_frame_jitter_ms Nullable(Float32),
     buffer_dry_count UInt32,
     quality_tier LowCardinality(String)
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(timestamp_5m)
 ORDER BY (timestamp_5m, tenant_id, stream_id, node_id)
 TTL timestamp_5m + INTERVAL 180 DAY;
@@ -277,7 +282,7 @@ CREATE TABLE IF NOT EXISTS rebuffering_events (
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
     schema_version UInt8 DEFAULT 0
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp)
 TTL timestamp + INTERVAL 90 DAY;
@@ -328,7 +333,7 @@ CREATE TABLE IF NOT EXISTS track_list_events (
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
     schema_version UInt8 DEFAULT 0
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp, event_id)
 TTL timestamp + INTERVAL 90 DAY;
@@ -351,7 +356,7 @@ CREATE TABLE IF NOT EXISTS quality_tier_daily (
     codec_av1_minutes UInt32,
     avg_bitrate UInt32,
     avg_fps Float32
-) ENGINE = SummingMergeTree()
+) ENGINE = ReplicatedSummingMergeTree()
 PARTITION BY toYYYYMM(day)
 ORDER BY (day, tenant_id, stream_id)
 TTL day + INTERVAL 730 DAY;
@@ -413,7 +418,7 @@ CREATE TABLE IF NOT EXISTS viewer_connection_events (
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
     schema_version UInt8 DEFAULT 0
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp, event_id)
 TTL timestamp + INTERVAL 90 DAY;
@@ -439,7 +444,7 @@ CREATE TABLE IF NOT EXISTS viewer_sessions_current (
     session_duration SimpleAggregateFunction(max, UInt32),
 
     last_updated SimpleAggregateFunction(max, DateTime)
-) ENGINE = AggregatingMergeTree()
+) ENGINE = ReplicatedAggregatingMergeTree()
 ORDER BY (tenant_id, stream_id, node_id, session_id);
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS viewer_sessions_connect_mv TO viewer_sessions_current AS
@@ -514,7 +519,7 @@ CREATE TABLE IF NOT EXISTS client_qoe_samples (
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
     schema_version UInt8 DEFAULT 0
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp)
 TTL timestamp + INTERVAL 90 DAY;
@@ -530,7 +535,7 @@ CREATE TABLE IF NOT EXISTS client_qoe_5m (
     avg_bw_out Float64,
     avg_connection_time Float32,
     pkt_loss_rate Nullable(Float32)
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(timestamp_5m)
 ORDER BY (timestamp_5m, tenant_id, stream_id, node_id)
 TTL timestamp_5m + INTERVAL 180 DAY;
@@ -607,7 +612,7 @@ CREATE TABLE IF NOT EXISTS player_boot_samples (
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
     schema_version UInt8 DEFAULT 0
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 -- stream_id is Nullable (null for VOD), so it cannot appear raw in the sorting
 -- key without allow_nullable_key; ifNull() makes the key non-nullable while
@@ -706,7 +711,7 @@ CREATE TABLE IF NOT EXISTS client_qoe_session_deltas (
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
     schema_version UInt8 DEFAULT 0
-) ENGINE = ReplacingMergeTree(timestamp)
+) ENGINE = ReplicatedReplacingMergeTree(timestamp)
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 -- ORDER BY tuple IS the ReplacingMergeTree dedupe key: the client-stable identity
 -- of a beacon, which collapses double-fires regardless of the per-request event_id.
@@ -748,7 +753,7 @@ CREATE TABLE IF NOT EXISTS vod_retention_buckets (
 
     source_region LowCardinality(String) DEFAULT '',
     schema_version UInt8 DEFAULT 0
-) ENGINE = ReplacingMergeTree(timestamp)
+) ENGINE = ReplicatedReplacingMergeTree(timestamp)
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, artifact_hash, session_id, bucket_index, beacon_seq)
 TTL timestamp + INTERVAL 90 DAY;
@@ -796,7 +801,7 @@ CREATE TABLE IF NOT EXISTS routing_decisions (
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
     schema_version UInt8 DEFAULT 0
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp)
 TTL timestamp + INTERVAL 90 DAY;
@@ -814,7 +819,7 @@ CREATE TABLE IF NOT EXISTS routing_cluster_hourly (
     sum_distance_km Float64,
     max_latency_ms Float32,
     avg_score Float64
-) ENGINE = SummingMergeTree((event_count, success_count, sum_latency_ms, sum_distance_km))
+) ENGINE = ReplicatedSummingMergeTree((event_count, success_count, sum_latency_ms, sum_distance_km))
 PARTITION BY toYYYYMM(hour)
 ORDER BY (hour, tenant_id, cluster_id, remote_cluster_id, status)
 TTL hour + INTERVAL 365 DAY;
@@ -870,7 +875,7 @@ CREATE TABLE IF NOT EXISTS federation_events (
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
     schema_version UInt8 DEFAULT 0
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, local_cluster, event_type, timestamp)
 TTL timestamp + INTERVAL 90 DAY;
@@ -886,7 +891,7 @@ CREATE TABLE IF NOT EXISTS federation_hourly (
     sum_latency_ms Float32,
     sum_time_to_live_ms Float32,
     failure_count UInt32
-) ENGINE = SummingMergeTree((event_count, sum_latency_ms, sum_time_to_live_ms, failure_count))
+) ENGINE = ReplicatedSummingMergeTree((event_count, sum_latency_ms, sum_time_to_live_ms, failure_count))
 PARTITION BY toYYYYMM(hour)
 ORDER BY (hour, tenant_id, local_cluster, remote_cluster, event_type)
 TTL hour + INTERVAL 365 DAY;
@@ -934,7 +939,7 @@ CREATE TABLE IF NOT EXISTS node_state_current (
 
     metadata JSON,
     updated_at DateTime
-) ENGINE = ReplacingMergeTree(updated_at)
+) ENGINE = ReplicatedReplacingMergeTree(updated_at)
 ORDER BY (tenant_id, cluster_id, node_id);
 
 CREATE TABLE IF NOT EXISTS node_metrics_samples (
@@ -968,7 +973,7 @@ CREATE TABLE IF NOT EXISTS node_metrics_samples (
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
     schema_version UInt8 DEFAULT 0
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, cluster_id, node_id, timestamp)
 TTL timestamp + INTERVAL 30 DAY;
@@ -991,7 +996,7 @@ CREATE TABLE IF NOT EXISTS node_performance_5m (
     streams_sum SimpleAggregateFunction(sum, Float64),
     streams_count SimpleAggregateFunction(sum, UInt64),
     max_streams SimpleAggregateFunction(max, UInt32)
-) ENGINE = AggregatingMergeTree()
+) ENGINE = ReplicatedAggregatingMergeTree()
 PARTITION BY (toYYYYMM(timestamp_5m), tenant_id)
 ORDER BY (tenant_id, cluster_id, node_id, timestamp_5m)
 TTL timestamp_5m + INTERVAL 180 DAY;
@@ -1039,7 +1044,7 @@ CREATE TABLE IF NOT EXISTS node_metrics_1h (
     bw_out_min SimpleAggregateFunction(min, UInt64),
     healthy_sum SimpleAggregateFunction(sum, UInt64),
     healthy_count SimpleAggregateFunction(sum, UInt64)
-) ENGINE = AggregatingMergeTree()
+) ENGINE = ReplicatedAggregatingMergeTree()
 PARTITION BY (toYYYYMM(timestamp_1h), tenant_id)
 ORDER BY (tenant_id, cluster_id, node_id, timestamp_1h)
 TTL timestamp_1h + INTERVAL 365 DAY;
@@ -1108,7 +1113,7 @@ CREATE TABLE IF NOT EXISTS artifact_events (
     stale_hold_ticks Nullable(UInt32),
     lockout_ticks Nullable(UInt32),
     drain_ms Nullable(UInt64)
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp, request_id)
 TTL timestamp + INTERVAL 90 DAY;
@@ -1151,7 +1156,7 @@ CREATE TABLE IF NOT EXISTS artifact_state_current (
     is_synced Nullable(Bool),
     is_finalized Nullable(Bool),
     is_frozen Nullable(Bool)
-) ENGINE = ReplacingMergeTree(updated_at)
+) ENGINE = ReplicatedReplacingMergeTree(updated_at)
 ORDER BY (tenant_id, request_id);
 
 -- ============================================================================
@@ -1192,7 +1197,7 @@ CREATE TABLE IF NOT EXISTS storage_snapshots (
     -- after its recorded `timestamp` is still picked up by the next
     -- rebuilder pass instead of being permanently skipped.
     ingested_at_ms Int64 DEFAULT toUnixTimestamp64Milli(now64(3))
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (timestamp, tenant_id, node_id)
 TTL timestamp + INTERVAL 90 DAY;
@@ -1221,7 +1226,7 @@ CREATE TABLE IF NOT EXISTS storage_events (
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
     schema_version UInt8 DEFAULT 0
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp, asset_hash)
 TTL timestamp + INTERVAL 90 DAY;
@@ -1292,7 +1297,7 @@ CREATE TABLE IF NOT EXISTS processing_events (
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
     schema_version UInt8 DEFAULT 0
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp)
 TTL timestamp + INTERVAL 90 DAY;
@@ -1315,7 +1320,7 @@ CREATE TABLE IF NOT EXISTS ingest_errors (
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
     schema_version UInt8 DEFAULT 0
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(received_at)
 ORDER BY (received_at, event_type, event_id)
 TTL received_at + INTERVAL 30 DAY;
@@ -1353,7 +1358,7 @@ CREATE TABLE IF NOT EXISTS api_requests (
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
     schema_version UInt8 DEFAULT 0
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, timestamp)
 TTL timestamp + INTERVAL 90 DAY;
@@ -1383,7 +1388,7 @@ CREATE TABLE IF NOT EXISTS tenant_acquisition_events (
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
     schema_version UInt8 DEFAULT 0
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(timestamp)
 ORDER BY (signup_channel, timestamp, tenant_id)
 TTL timestamp + INTERVAL 730 DAY;
@@ -1410,7 +1415,7 @@ CREATE TABLE IF NOT EXISTS api_events (
 
     INDEX idx_event_type event_type TYPE bloom_filter GRANULARITY 4,
     INDEX idx_resource_type resource_type TYPE bloom_filter GRANULARITY 4
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(timestamp)
 ORDER BY (tenant_id, event_type, timestamp)
 TTL timestamp + INTERVAL 1 YEAR;
@@ -1436,7 +1441,7 @@ CREATE TABLE IF NOT EXISTS orchestrator_state_current (
     last_seen DateTime,
     metadata JSON,
     updated_at DateTime
-) ENGINE = ReplacingMergeTree(updated_at)
+) ENGINE = ReplicatedReplacingMergeTree(updated_at)
 ORDER BY (tenant_id, orch_addr);
 
 -- Per-instance state. One row per (cluster owner, orch_addr, resolved_ip).
@@ -1465,7 +1470,7 @@ CREATE TABLE IF NOT EXISTS orchestrator_instance_state_current (
     last_seen DateTime,
     metadata JSON,
     updated_at DateTime
-) ENGINE = ReplacingMergeTree(updated_at)
+) ENGINE = ReplicatedReplacingMergeTree(updated_at)
 ORDER BY (tenant_id, orch_addr, resolved_ip);
 
 -- Per-vantage observation: one row per (cluster owner, gateway, orch_addr,
@@ -1492,7 +1497,7 @@ CREATE TABLE IF NOT EXISTS orchestrator_vantage_current (
     dialed_recently UInt8,
     last_seen DateTime,
     updated_at DateTime
-) ENGINE = ReplacingMergeTree(updated_at)
+) ENGINE = ReplicatedReplacingMergeTree(updated_at)
 ORDER BY (tenant_id, gateway_id, orch_addr, resolved_ip);
 
 -- Raw discovery observations. One row per (gateway attempt, resolved IP).
@@ -1525,7 +1530,7 @@ CREATE TABLE IF NOT EXISTS orchestrator_discovery_samples (
     schema_version UInt8 DEFAULT 0,
 
     INDEX idx_orch_addr orch_addr TYPE bloom_filter GRANULARITY 4
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, gateway_id, orch_addr, resolved_ip, timestamp)
 TTL timestamp + INTERVAL 30 DAY;
@@ -1543,7 +1548,7 @@ CREATE TABLE IF NOT EXISTS orchestrator_discovery_5m (
     latency_sum SimpleAggregateFunction(sum, UInt64),
     latency_count SimpleAggregateFunction(sum, UInt64),
     max_latency SimpleAggregateFunction(max, UInt32)
-) ENGINE = AggregatingMergeTree()
+) ENGINE = ReplicatedAggregatingMergeTree()
 PARTITION BY (toYYYYMM(timestamp_5m), tenant_id)
 ORDER BY (tenant_id, gateway_id, orch_addr, resolved_ip, timestamp_5m)
 TTL timestamp_5m + INTERVAL 180 DAY;
@@ -1579,7 +1584,7 @@ CREATE TABLE IF NOT EXISTS orchestrator_discovery_1h (
     latency_sum SimpleAggregateFunction(sum, UInt64),
     latency_count SimpleAggregateFunction(sum, UInt64),
     max_latency SimpleAggregateFunction(max, UInt32)
-) ENGINE = AggregatingMergeTree()
+) ENGINE = ReplicatedAggregatingMergeTree()
 PARTITION BY (toYYYYMM(timestamp_1h), tenant_id)
 ORDER BY (tenant_id, gateway_id, orch_addr, resolved_ip, timestamp_1h)
 TTL timestamp_1h + INTERVAL 1 YEAR;
@@ -1630,7 +1635,7 @@ CREATE TABLE IF NOT EXISTS orchestrator_transcode_outcomes (
 
     INDEX idx_orch_addr orch_addr TYPE bloom_filter GRANULARITY 4,
     INDEX idx_session_id session_id TYPE bloom_filter GRANULARITY 4
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, orch_addr, resolved_ip, timestamp)
 TTL timestamp + INTERVAL 30 DAY;
@@ -1650,7 +1655,7 @@ CREATE TABLE IF NOT EXISTS orchestrator_transcode_hourly (
     overall_ms_count SimpleAggregateFunction(sum, UInt64),
     max_overall_ms SimpleAggregateFunction(max, UInt32),
     pixels_sum SimpleAggregateFunction(sum, UInt64)
-) ENGINE = AggregatingMergeTree()
+) ENGINE = ReplicatedAggregatingMergeTree()
 PARTITION BY (toYYYYMM(timestamp_1h), tenant_id)
 ORDER BY (tenant_id, orch_addr, resolved_ip, gateway_id, timestamp_1h)
 TTL timestamp_1h + INTERVAL 2 YEAR;
@@ -1694,7 +1699,7 @@ CREATE TABLE IF NOT EXISTS orchestrator_ai_outcomes (
 
     INDEX idx_orch_addr orch_addr TYPE bloom_filter GRANULARITY 4,
     INDEX idx_pipeline pipeline TYPE bloom_filter GRANULARITY 4
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, orch_addr, resolved_ip, timestamp)
 TTL timestamp + INTERVAL 30 DAY;
@@ -1713,7 +1718,7 @@ CREATE TABLE IF NOT EXISTS orchestrator_ai_hourly (
     latency_ms_sum SimpleAggregateFunction(sum, UInt64),
     latency_ms_count SimpleAggregateFunction(sum, UInt64),
     max_latency_ms SimpleAggregateFunction(max, UInt32)
-) ENGINE = AggregatingMergeTree()
+) ENGINE = ReplicatedAggregatingMergeTree()
 PARTITION BY (toYYYYMM(timestamp_1h), tenant_id)
 ORDER BY (tenant_id, orch_addr, resolved_ip, gateway_id, timestamp_1h)
 TTL timestamp_1h + INTERVAL 2 YEAR;
@@ -1811,7 +1816,7 @@ CREATE TABLE IF NOT EXISTS viewer_sessions_final (
     host_times Array(Tuple(name LowCardinality(String), seconds UInt32)) DEFAULT [],
 
     payload_raw String CODEC(ZSTD(3))
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
 ORDER BY (tenant_id, projection_version_ms, node_id, session_id)
 TTL toDateTime(projection_version_ms / 1000) + INTERVAL 730 DAY;
@@ -1876,7 +1881,7 @@ CREATE TABLE IF NOT EXISTS stream_sessions_final (
 
     closed_reason LowCardinality(String) DEFAULT 'final',
     payload_raw String CODEC(ZSTD(3))
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
 ORDER BY (tenant_id, projection_version_ms, node_id, stream_id, source_event_id)
 TTL toDateTime(projection_version_ms / 1000) + INTERVAL 730 DAY;
@@ -1957,7 +1962,7 @@ CREATE TABLE IF NOT EXISTS processing_segments_final (
     projection_version_ms Int64,
 
     payload_raw String CODEC(ZSTD(3))
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
 ORDER BY (tenant_id, projection_version_ms, node_id, stream_id, source_event_id, process_type, output_codec, track_type)
 TTL toDateTime(projection_version_ms / 1000) + INTERVAL 730 DAY;
@@ -2026,7 +2031,7 @@ CREATE TABLE IF NOT EXISTS viewer_sessions_anomalous (
     projection_version_ms Int64,
 
     notes String DEFAULT ''
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(toDateTime(closed_at_ms / 1000))
 ORDER BY (tenant_id, closed_at_ms, node_id, session_id)
 TTL toDateTime(closed_at_ms / 1000) + INTERVAL 365 DAY;
@@ -2047,7 +2052,7 @@ CREATE TABLE IF NOT EXISTS stream_sessions_anomalous (
     projection_version_ms Int64,
 
     notes String DEFAULT ''
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(toDateTime(closed_at_ms / 1000))
 ORDER BY (tenant_id, closed_at_ms, node_id, stream_id)
 TTL toDateTime(closed_at_ms / 1000) + INTERVAL 365 DAY;
@@ -2068,7 +2073,7 @@ CREATE TABLE IF NOT EXISTS ledger_rebuild_cursors (
     ledger_name LowCardinality(String),
     last_processed_projection_ms Int64,
     updated_at_ms Int64
-) ENGINE = ReplacingMergeTree(updated_at_ms)
+) ENGINE = ReplicatedReplacingMergeTree(updated_at_ms)
 ORDER BY ledger_name
 TTL toDateTime(updated_at_ms / 1000) + INTERVAL 365 DAY;
 
@@ -2091,7 +2096,7 @@ CREATE TABLE IF NOT EXISTS viewer_usage_5m (
     source_event_id String,             -- USER_END source_event_id that produced this row
 
     projection_version_ms Int64
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
 ORDER BY (tenant_id, projection_version_ms, cluster_id, stream_id, node_id, session_id, window_start)
 TTL toDateTime(projection_version_ms / 1000) + INTERVAL 90 DAY;
@@ -2126,7 +2131,7 @@ CREATE TABLE IF NOT EXISTS stream_runtime_5m (
     peak_viewers UInt32 DEFAULT 0,
 
     projection_version_ms Int64
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
 ORDER BY (tenant_id, projection_version_ms, cluster_id, stream_id, source_event_id, window_start)
 TTL toDateTime(projection_version_ms / 1000) + INTERVAL 90 DAY;
@@ -2160,7 +2165,7 @@ CREATE TABLE IF NOT EXISTS storage_gb_seconds_5m (
     file_count UInt64 DEFAULT 0,        -- argMax of snapshots within the window
 
     projection_version_ms Int64
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
 ORDER BY (tenant_id, projection_version_ms, cluster_id, storage_provider_tenant_id, storage_provider_cluster_id, storage_scope, storage_backend, window_start)
 TTL toDateTime(projection_version_ms / 1000) + INTERVAL 90 DAY;
@@ -2193,7 +2198,7 @@ CREATE TABLE IF NOT EXISTS processing_5m (
     media_seconds Float64 DEFAULT 0,
 
     projection_version_ms Int64
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
 ORDER BY (tenant_id, projection_version_ms, cluster_id, stream_id, process_type, output_codec, track_type, source_event_id, window_start)
 TTL toDateTime(projection_version_ms / 1000) + INTERVAL 90 DAY;
@@ -2232,7 +2237,7 @@ CREATE TABLE IF NOT EXISTS api_usage_5m (
     unique_users_state AggregateFunction(uniqCombined, UInt64),
     unique_tokens_state AggregateFunction(uniqCombined, UInt64),
     projection_version_ms Int64
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
 ORDER BY (tenant_id, projection_version_ms, auth_type, operation_type, operation_name, window_start)
 TTL toDateTime(projection_version_ms / 1000) + INTERVAL 365 DAY;
@@ -2277,7 +2282,7 @@ CREATE TABLE IF NOT EXISTS projection_divergences (
     prior_value_json String CODEC(ZSTD(3)),
     new_value_json String CODEC(ZSTD(3)),
     source_event_id String
-) ENGINE = MergeTree()
+) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(toDateTime(observed_at_ms / 1000))
 ORDER BY (table_name, observed_at_ms, source_event_id)
 TTL toDateTime(observed_at_ms / 1000) + INTERVAL 90 DAY;
@@ -2302,7 +2307,7 @@ CREATE TABLE IF NOT EXISTS tenant_usage_5m_store (
     unique_sessions_state AggregateFunction(uniqCombined, String),
     unique_streams_state AggregateFunction(uniqCombined, UUID),
     refresh_version_ms DateTime64(3)
-) ENGINE = ReplacingMergeTree(refresh_version_ms)
+) ENGINE = ReplicatedReplacingMergeTree(refresh_version_ms)
 PARTITION BY toYYYYMM(window_start)
 ORDER BY (tenant_id, window_start, cluster_id)
 TTL window_start + INTERVAL 30 DAY;
@@ -2353,7 +2358,7 @@ CREATE TABLE IF NOT EXISTS tenant_usage_hourly_store (
     unique_sessions_state AggregateFunction(uniqCombined, String),
     unique_streams_state AggregateFunction(uniqCombined, UUID),
     refresh_version_ms DateTime64(3)
-) ENGINE = ReplacingMergeTree(refresh_version_ms)
+) ENGINE = ReplicatedReplacingMergeTree(refresh_version_ms)
 PARTITION BY toYYYYMM(hour)
 ORDER BY (tenant_id, hour, cluster_id)
 TTL hour + INTERVAL 730 DAY;
@@ -2401,7 +2406,7 @@ CREATE TABLE IF NOT EXISTS viewer_hours_hourly_store (
     egress_bytes UInt64 DEFAULT 0,
     unique_viewers_state AggregateFunction(uniqCombined, String),
     refresh_version_ms DateTime64(3)
-) ENGINE = ReplacingMergeTree(refresh_version_ms)
+) ENGINE = ReplicatedReplacingMergeTree(refresh_version_ms)
 PARTITION BY toYYYYMM(hour)
 ORDER BY (tenant_id, hour, cluster_id, stream_id, country_code)
 TTL hour + INTERVAL 365 DAY;
@@ -2449,7 +2454,7 @@ CREATE TABLE IF NOT EXISTS viewer_geo_hourly_store (
     egress_gb Float64 DEFAULT 0,
     unique_viewers_state AggregateFunction(uniqCombined, String),
     refresh_version_ms DateTime64(3)
-) ENGINE = ReplacingMergeTree(refresh_version_ms)
+) ENGINE = ReplicatedReplacingMergeTree(refresh_version_ms)
 PARTITION BY toYYYYMM(hour)
 ORDER BY (tenant_id, hour, country_code)
 TTL hour + INTERVAL 365 DAY;
@@ -2499,7 +2504,7 @@ CREATE TABLE IF NOT EXISTS viewer_city_hourly_store (
     egress_gb Float64 DEFAULT 0,
     unique_viewers_state AggregateFunction(uniqCombined, String),
     refresh_version_ms DateTime64(3)
-) ENGINE = ReplacingMergeTree(refresh_version_ms)
+) ENGINE = ReplicatedReplacingMergeTree(refresh_version_ms)
 PARTITION BY toYYYYMM(hour)
 ORDER BY (tenant_id, hour, stream_id, country_code, city)
 TTL hour + INTERVAL 365 DAY;
@@ -2552,7 +2557,7 @@ CREATE TABLE IF NOT EXISTS stream_connection_hourly_store (
     total_sessions UInt64 DEFAULT 0,
     unique_viewers_state AggregateFunction(uniqCombined, String),
     refresh_version_ms DateTime64(3)
-) ENGINE = ReplacingMergeTree(refresh_version_ms)
+) ENGINE = ReplicatedReplacingMergeTree(refresh_version_ms)
 PARTITION BY toYYYYMM(hour)
 ORDER BY (tenant_id, hour, stream_id)
 TTL hour + INTERVAL 365 DAY;
@@ -2597,7 +2602,7 @@ CREATE TABLE IF NOT EXISTS stream_runtime_hourly_store (
     runtime_seconds UInt64 DEFAULT 0,
     peak_viewers UInt32 DEFAULT 0,
     refresh_version_ms DateTime64(3)
-) ENGINE = ReplacingMergeTree(refresh_version_ms)
+) ENGINE = ReplicatedReplacingMergeTree(refresh_version_ms)
 PARTITION BY toYYYYMM(hour)
 ORDER BY (tenant_id, hour, cluster_id, stream_id)
 TTL hour + INTERVAL 365 DAY;
@@ -2644,7 +2649,7 @@ CREATE TABLE IF NOT EXISTS processing_hourly_store (
     media_seconds Float64 DEFAULT 0,
     segment_count UInt64 DEFAULT 0,
     refresh_version_ms DateTime64(3)
-) ENGINE = ReplacingMergeTree(refresh_version_ms)
+) ENGINE = ReplicatedReplacingMergeTree(refresh_version_ms)
 PARTITION BY toYYYYMM(hour)
 ORDER BY (tenant_id, hour, cluster_id, process_type, output_codec, track_type)
 TTL hour + INTERVAL 730 DAY;
@@ -2688,7 +2693,7 @@ CREATE TABLE IF NOT EXISTS processing_daily_store (
     media_seconds Float64 DEFAULT 0,
     segment_count UInt64 DEFAULT 0,
     refresh_version_ms DateTime64(3)
-) ENGINE = ReplacingMergeTree(refresh_version_ms)
+) ENGINE = ReplicatedReplacingMergeTree(refresh_version_ms)
 PARTITION BY toYYYYMM(day)
 ORDER BY (tenant_id, day, cluster_id, process_type, output_codec, track_type)
 TTL day + INTERVAL 1825 DAY;
@@ -2735,7 +2740,7 @@ CREATE TABLE IF NOT EXISTS api_usage_hourly_store (
     unique_users_state AggregateFunction(uniqCombined, UInt64),
     unique_tokens_state AggregateFunction(uniqCombined, UInt64),
     refresh_version_ms DateTime64(3)
-) ENGINE = ReplacingMergeTree(refresh_version_ms)
+) ENGINE = ReplicatedReplacingMergeTree(refresh_version_ms)
 PARTITION BY toYYYYMM(hour)
 ORDER BY (tenant_id, hour, auth_type, operation_type, operation_name)
 TTL hour + INTERVAL 365 DAY;
@@ -2796,7 +2801,7 @@ CREATE TABLE IF NOT EXISTS tenant_usage_daily_store (
     unique_sessions_state AggregateFunction(uniqCombined, String),
     unique_streams_state AggregateFunction(uniqCombined, UUID),
     refresh_version_ms DateTime64(3)
-) ENGINE = ReplacingMergeTree(refresh_version_ms)
+) ENGINE = ReplicatedReplacingMergeTree(refresh_version_ms)
 PARTITION BY toYYYYMM(day)
 ORDER BY (tenant_id, day, cluster_id)
 TTL day + INTERVAL 1825 DAY;
@@ -2842,7 +2847,7 @@ CREATE TABLE IF NOT EXISTS tenant_viewer_daily_store (
     unique_viewers_state AggregateFunction(uniqCombined, String),
     total_sessions UInt64 DEFAULT 0,
     refresh_version_ms DateTime64(3)
-) ENGINE = ReplacingMergeTree(refresh_version_ms)
+) ENGINE = ReplicatedReplacingMergeTree(refresh_version_ms)
 PARTITION BY toYYYYMM(day)
 ORDER BY (tenant_id, day, cluster_id)
 TTL day + INTERVAL 1825 DAY;
@@ -2896,7 +2901,7 @@ CREATE TABLE IF NOT EXISTS tenant_analytics_daily_store (
     unique_viewers_state AggregateFunction(uniqCombined, String),
     egress_bytes UInt64 DEFAULT 0,
     refresh_version_ms DateTime64(3)
-) ENGINE = ReplacingMergeTree(refresh_version_ms)
+) ENGINE = ReplicatedReplacingMergeTree(refresh_version_ms)
 PARTITION BY toYYYYMM(day)
 ORDER BY (tenant_id, day)
 TTL day + INTERVAL 1825 DAY;
@@ -2952,7 +2957,7 @@ CREATE TABLE IF NOT EXISTS stream_analytics_daily_store (
     unique_cities UInt32 DEFAULT 0,
     egress_bytes UInt64 DEFAULT 0,
     refresh_version_ms DateTime64(3)
-) ENGINE = ReplacingMergeTree(refresh_version_ms)
+) ENGINE = ReplicatedReplacingMergeTree(refresh_version_ms)
 PARTITION BY toYYYYMM(day)
 ORDER BY (tenant_id, day, stream_id)
 TTL day + INTERVAL 1825 DAY;
@@ -3014,7 +3019,7 @@ CREATE TABLE IF NOT EXISTS viewer_geo_daily_store (
     egress_gb Float64 DEFAULT 0,
     unique_viewers_state AggregateFunction(uniqCombined, String),
     refresh_version_ms DateTime64(3)
-) ENGINE = ReplacingMergeTree(refresh_version_ms)
+) ENGINE = ReplicatedReplacingMergeTree(refresh_version_ms)
 PARTITION BY toYYYYMM(day)
 ORDER BY (tenant_id, day, country_code)
 TTL day + INTERVAL 1825 DAY;
@@ -3060,7 +3065,7 @@ CREATE TABLE IF NOT EXISTS viewer_city_daily_store (
     egress_gb Float64 DEFAULT 0,
     unique_viewers_state AggregateFunction(uniqCombined, String),
     refresh_version_ms DateTime64(3)
-) ENGINE = ReplacingMergeTree(refresh_version_ms)
+) ENGINE = ReplicatedReplacingMergeTree(refresh_version_ms)
 PARTITION BY toYYYYMM(day)
 ORDER BY (tenant_id, day, stream_id, country_code, city)
 TTL day + INTERVAL 1825 DAY;
@@ -3105,7 +3110,7 @@ CREATE TABLE IF NOT EXISTS stream_runtime_daily_store (
     runtime_seconds UInt64 DEFAULT 0,
     peak_viewers UInt32 DEFAULT 0,
     refresh_version_ms DateTime64(3)
-) ENGINE = ReplacingMergeTree(refresh_version_ms)
+) ENGINE = ReplicatedReplacingMergeTree(refresh_version_ms)
 PARTITION BY toYYYYMM(day)
 ORDER BY (tenant_id, day, cluster_id, stream_id)
 TTL day + INTERVAL 1825 DAY;
@@ -3155,7 +3160,7 @@ CREATE TABLE IF NOT EXISTS api_usage_daily_store (
     unique_users_state AggregateFunction(uniqCombined, UInt64),
     unique_tokens_state AggregateFunction(uniqCombined, UInt64),
     refresh_version_ms DateTime64(3)
-) ENGINE = ReplacingMergeTree(refresh_version_ms)
+) ENGINE = ReplicatedReplacingMergeTree(refresh_version_ms)
 PARTITION BY toYYYYMM(day)
 ORDER BY (tenant_id, day, auth_type, operation_type, operation_name)
 TTL day + INTERVAL 1825 DAY;
@@ -3220,7 +3225,7 @@ CREATE TABLE IF NOT EXISTS storage_usage_hourly_store (
     gb_hours Float64 DEFAULT 0,
     avg_gb Float64 DEFAULT 0,
     refresh_version_ms DateTime64(3)
-) ENGINE = ReplacingMergeTree(refresh_version_ms)
+) ENGINE = ReplicatedReplacingMergeTree(refresh_version_ms)
 PARTITION BY toYYYYMM(hour)
 ORDER BY (tenant_id, hour, cluster_id, storage_provider_tenant_id, storage_provider_cluster_id, storage_scope, storage_backend)
 TTL hour + INTERVAL 365 DAY;
@@ -3270,7 +3275,7 @@ CREATE TABLE IF NOT EXISTS storage_usage_daily_store (
     gb_seconds Float64 DEFAULT 0,
     gb_hours Float64 DEFAULT 0,
     refresh_version_ms DateTime64(3)
-) ENGINE = ReplacingMergeTree(refresh_version_ms)
+) ENGINE = ReplicatedReplacingMergeTree(refresh_version_ms)
 PARTITION BY toYYYYMM(day)
 ORDER BY (tenant_id, day, cluster_id, storage_provider_tenant_id, storage_provider_cluster_id, storage_scope, storage_backend)
 TTL day + INTERVAL 1825 DAY;
@@ -3336,3 +3341,13 @@ PRIMARY KEY id
 SOURCE(POSTGRESQL(NAME quartermaster_pg TABLE 'tenants'))
 LAYOUT(COMPLEX_KEY_HASHED())
 LIFETIME(MIN 300 MAX 600);
+
+-- Schema baseline identity marker. Records the consolidated-baseline floor so the
+-- migration min-version guard treats below-floor migrations as folded into the
+-- baseline (not missing). Kept in sync with provisioner.schemaMigrationBaselineFloor
+-- by TestBaselineMarkerFloorMatchesConst. See docs/standards/schema-migrations.md.
+CREATE TABLE IF NOT EXISTS _schema_baseline (
+    floor String,
+    applied_at DateTime64(3) DEFAULT now64()
+) ENGINE = ReplicatedReplacingMergeTree(applied_at) ORDER BY tuple();
+INSERT INTO _schema_baseline (floor) VALUES ('v0.2.96');

@@ -28,9 +28,9 @@
           '--port=' ~ (clickhouse_port_tcp | string),
           '--database=' ~ item.database,
           '-q',
-          "SELECT count() FROM system.tables WHERE database = '" ~ item.database ~ "' AND name != '_migrations' AND engine NOT LIKE '%View'"]
-         + (['--password', clickhouse_default_password]
-            if clickhouse_default_password | length > 0 else []) }}
+          "SELECT count() FROM system.tables WHERE database = '" ~ item.database ~ "' AND name != '_migrations' AND engine NOT LIKE '%View'"] }}
+  environment:
+    CLICKHOUSE_PASSWORD: "{{ clickhouse_default_password }}"
   register: clickhouse_schema_state_queries
   changed_when: false
   check_mode: false
@@ -74,9 +74,9 @@
           '--port=' ~ (clickhouse_port_tcp | string),
           '--database=' ~ item.database,
           '--multiquery',
-          '--queries-file=/tmp/frameworks-clickhouse-schema-' ~ item.name ~ '.sql']
-         + (['--password', clickhouse_default_password]
-            if clickhouse_default_password | length > 0 else []) }}
+          '--queries-file=/tmp/frameworks-clickhouse-schema-' ~ item.name ~ '.sql'] }}
+  environment:
+    CLICKHOUSE_PASSWORD: "{{ clickhouse_default_password }}"
   loop: "{{ clickhouse_schema_items | default([]) }}"
   loop_control:
     label: "{{ item.name }}"

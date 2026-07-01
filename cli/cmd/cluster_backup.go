@@ -211,9 +211,9 @@ func backupClickHouse(ctx context.Context, cmd *cobra.Command, manifest *invento
 		return fmt.Errorf("clickhouse not enabled in manifest")
 	}
 
-	host, found := manifest.GetHost(manifest.Infrastructure.ClickHouse.Host)
+	host, found := manifest.GetHost(manifest.Infrastructure.ClickHouse.CoordinatorHost())
 	if !found {
-		return fmt.Errorf("clickhouse host not found: %s", manifest.Infrastructure.ClickHouse.Host)
+		return fmt.Errorf("clickhouse host not found: %s", manifest.Infrastructure.ClickHouse.CoordinatorHost())
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "  Backing up ClickHouse on %s...\n", host.ExternalIP)

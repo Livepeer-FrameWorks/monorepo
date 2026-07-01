@@ -101,6 +101,45 @@ func DefaultPort(id string) (int, bool) {
 	return s.DefaultPort, true
 }
 
+// ClickHouse port catalog — the single source for port-collision accounting
+// (cli/pkg/inventory/ports.go), the Keeper role-var builder, and the Jinja
+// templates (fed via clickhouse_keeper_*_port vars). Keeps accounting in sync
+// with what clickhouse-server and the colocated standalone Keeper actually bind.
+const (
+	ClickHouseNativePort       = 9000 // matches Services["clickhouse"].DefaultPort
+	ClickHouseHTTPPort         = 8123
+	ClickHouseInterserverPort  = 9009
+	ClickHouseKeeperClientPort = 9181 // Keeper client (ZooKeeper-compatible)
+	ClickHouseKeeperRaftPort   = 9234 // Keeper inter-server raft
+)
+
+// PortSpec names one port a service binds, for collision accounting.
+type PortSpec struct {
+	Name string
+	Port int
+}
+
+// ClickHousePorts returns every port a ClickHouse node binds. nativePort overrides
+// the default when non-zero. clustered adds the colocated standalone Keeper's
+// client + raft ports (a Replicated cluster always runs Keeper).
+func ClickHousePorts(nativePort int, clustered bool) []PortSpec {
+	if nativePort == 0 {
+		nativePort = ClickHouseNativePort
+	}
+	ports := []PortSpec{
+		{"clickhouse-native", nativePort},
+		{"clickhouse-http", ClickHouseHTTPPort},
+		{"clickhouse-interserver", ClickHouseInterserverPort},
+	}
+	if clustered {
+		ports = append(ports,
+			PortSpec{"clickhouse-keeper", ClickHouseKeeperClientPort},
+			PortSpec{"clickhouse-keeper-raft", ClickHouseKeeperRaftPort},
+		)
+	}
+	return ports
+}
+
 // SupportsSIGHUPReload reports whether the service's main package has wired
 // a SIGHUP reload callback. Used by the go_service Ansible role's vars
 // builder to decide whether to render `ExecReload=` in the systemd unit.

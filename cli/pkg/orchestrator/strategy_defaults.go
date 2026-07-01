@@ -61,7 +61,7 @@ var serviceStrategyDefaults = map[string]UpdateStrategy{
 	// Redis: replicas roll first, then primary.
 	"redis": {MaxUnavailable: 1, PrimaryLast: true},
 
-	// ClickHouse — single-host today; treat as singleton.
+	// ClickHouse — singleton today; Replicated cluster nodes roll one at a time.
 	"clickhouse": {MaxUnavailable: 1},
 
 	// Stateless multi-host paired regional. region_stagger keeps EU and

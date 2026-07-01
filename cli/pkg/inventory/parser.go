@@ -112,14 +112,18 @@ func loadWithHosts(path, explicitHostsPath, ageKeyFile string, validate bool) (*
 		return nil, err
 	}
 
+	// An explicitly-provided hostsPath is used verbatim — it is already
+	// CWD-relative or absolute (callers like `mesh wg` pre-resolve it). Only the
+	// manifest's own hosts_file field is relative to the manifest's directory;
+	// re-joining an explicit path double-resolves it (clusters/x/clusters/x/...).
 	hostsPath := explicitHostsPath
-	if hostsPath == "" {
+	if hostsPath == "" && manifest.HostsFile != "" {
 		hostsPath = manifest.HostsFile
-	}
-	if hostsPath != "" {
 		if !filepath.IsAbs(hostsPath) {
 			hostsPath = filepath.Join(filepath.Dir(path), hostsPath)
 		}
+	}
+	if hostsPath != "" {
 		inv, err := LoadHostInventory(hostsPath, ageKeyFile)
 		if err != nil {
 			return nil, fmt.Errorf("load host inventory: %w", err)
@@ -247,6 +251,39 @@ func LoadEdgeWithHosts(path, ageKeyFile string) (*EdgeManifest, error) {
 }
 
 // Validate checks the manifest for errors
+// validateClusterNodeIDs enforces the shared identity invariant for hand-authored
+// cluster node IDs (Kafka brokers/controllers, Postgres nodes, ClickHouse nodes):
+// every ID is a positive integer and unique within its group. These IDs drive task
+// names, Keeper/raft server_ids, and replica macros, so collisions silently corrupt
+// provisioning. kind is used only for the error message.
+func validateClusterNodeIDs(kind string, ids []int) error {
+	seen := make(map[int]struct{}, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			return fmt.Errorf("%s node id must be a positive integer, got %d", kind, id)
+		}
+		if _, dup := seen[id]; dup {
+			return fmt.Errorf("duplicate %s node id: %d", kind, id)
+		}
+		seen[id] = struct{}{}
+	}
+	return nil
+}
+
+// validateUniqueNodeHosts rejects two nodes sharing a host. Applies only to
+// topologies that run one process per host (ClickHouse, YugabyteDB) — NOT Kafka,
+// which may legitimately co-locate a broker and a controller on one host.
+func validateUniqueNodeHosts(kind string, hosts []string) error {
+	seen := make(map[string]struct{}, len(hosts))
+	for _, h := range hosts {
+		if _, dup := seen[h]; dup {
+			return fmt.Errorf("duplicate %s node host: %s", kind, h)
+		}
+		seen[h] = struct{}{}
+	}
+	return nil
+}
+
 func (m *Manifest) Validate() error {
 	if m.Version == "" {
 		return fmt.Errorf("version is required")
@@ -281,6 +318,20 @@ func (m *Manifest) Validate() error {
 				return fmt.Errorf("postgres host '%s' not found in hosts", pgHost)
 			}
 		}
+		if len(m.Infrastructure.Postgres.Nodes) > 0 {
+			pgIDs := make([]int, 0, len(m.Infrastructure.Postgres.Nodes))
+			pgNodeHosts := make([]string, 0, len(m.Infrastructure.Postgres.Nodes))
+			for _, n := range m.Infrastructure.Postgres.Nodes {
+				pgIDs = append(pgIDs, n.ID)
+				pgNodeHosts = append(pgNodeHosts, n.Host)
+			}
+			if err := validateClusterNodeIDs("postgres", pgIDs); err != nil {
+				return err
+			}
+			if err := validateUniqueNodeHosts("postgres", pgNodeHosts); err != nil {
+				return err
+			}
+		}
 		seenPostgresInstances := map[string]struct{}{}
 		for _, inst := range m.Infrastructure.Postgres.Instances {
 			if strings.TrimSpace(inst.Name) == "" {
@@ -299,9 +350,47 @@ func (m *Manifest) Validate() error {
 		}
 	}
 
-	if m.Infrastructure.ClickHouse != nil && m.Infrastructure.ClickHouse.Enabled {
-		if _, ok := m.Hosts[m.Infrastructure.ClickHouse.Host]; !ok {
-			return fmt.Errorf("clickhouse.host '%s' not found in hosts", m.Infrastructure.ClickHouse.Host)
+	if ch := m.Infrastructure.ClickHouse; ch != nil && ch.Enabled {
+		// `host:` was removed — ClickHouse is always a Replicated cluster (N>=1).
+		// Tombstone the old field with a clear migration error.
+		if ch.Host != "" {
+			return fmt.Errorf("clickhouse.host was removed; use clickhouse.nodes: [{host: %q, id: 1}]", ch.Host)
+		}
+		if len(ch.Nodes) == 0 {
+			return fmt.Errorf("clickhouse: at least one entry in 'nodes' is required when enabled")
+		}
+		chIDs := make([]int, 0, len(ch.Nodes))
+		chHosts := make([]string, 0, len(ch.Nodes))
+		for _, node := range ch.Nodes {
+			if _, ok := m.Hosts[node.Host]; !ok {
+				return fmt.Errorf("clickhouse.node host '%s' not found in hosts", node.Host)
+			}
+			chIDs = append(chIDs, node.ID)
+			chHosts = append(chHosts, node.Host)
+		}
+		if err := validateClusterNodeIDs("clickhouse", chIDs); err != nil {
+			return err
+		}
+		if err := validateUniqueNodeHosts("clickhouse", chHosts); err != nil {
+			return err
+		}
+		// N>1 is refused after id/host validation. The operational model permits only a
+		// single ClickHouse node because bootstrap and direct ops target one coordinator;
+		// rejecting larger manifests prevents silent partial apply.
+		if len(ch.Nodes) > 1 {
+			return fmt.Errorf("clickhouse: multi-node (%d nodes) is unsupported by this release; declare exactly one node", len(ch.Nodes))
+		}
+		// read_endpoint/write_endpoint are host-key overrides for the service
+		// CLICKHOUSE_ADDR (migration cutover); when set they must resolve to a host.
+		for _, ep := range []struct{ field, host string }{
+			{"read_endpoint", ch.ReadEndpoint},
+			{"write_endpoint", ch.WriteEndpoint},
+		} {
+			if ep.host != "" {
+				if _, ok := m.Hosts[ep.host]; !ok {
+					return fmt.Errorf("clickhouse.%s host '%s' not found in hosts", ep.field, ep.host)
+				}
+			}
 		}
 	}
 
@@ -317,33 +406,38 @@ func (m *Manifest) Validate() error {
 		if m.Infrastructure.Kafka.ClusterID == "" {
 			return fmt.Errorf("kafka.cluster_id is required (generate with: kafka-storage.sh random-uuid)")
 		}
+		// Shared id>0 + uniqueness invariant; Kafka may co-locate hosts so no
+		// unique-host check here.
+		brokerIDs := make([]int, 0, len(m.Infrastructure.Kafka.Brokers))
 		seenBrokerIDs := make(map[int]bool)
 		for _, broker := range m.Infrastructure.Kafka.Brokers {
-			if seenBrokerIDs[broker.ID] {
-				return fmt.Errorf("duplicate kafka broker id: %d", broker.ID)
-			}
+			brokerIDs = append(brokerIDs, broker.ID)
 			seenBrokerIDs[broker.ID] = true
+		}
+		if err := validateClusterNodeIDs("kafka broker", brokerIDs); err != nil {
+			return err
 		}
 
 		if len(m.Infrastructure.Kafka.Controllers) > 0 {
 			if len(m.Infrastructure.Kafka.Controllers) < 3 {
 				return fmt.Errorf("kafka dedicated controllers require at least 3 for quorum fault tolerance")
 			}
-			seenControllerIDs := make(map[int]bool)
+			ctrlIDs := make([]int, 0, len(m.Infrastructure.Kafka.Controllers))
 			for _, ctrl := range m.Infrastructure.Kafka.Controllers {
 				if _, ok := m.Hosts[ctrl.Host]; !ok {
 					return fmt.Errorf("kafka.controller host '%s' not found in hosts", ctrl.Host)
 				}
-				if seenControllerIDs[ctrl.ID] {
-					return fmt.Errorf("duplicate kafka controller id: %d", ctrl.ID)
-				}
+				// Kafka-specific: broker and controller IDs share one space.
 				if seenBrokerIDs[ctrl.ID] {
 					return fmt.Errorf("kafka controller id %d conflicts with broker id", ctrl.ID)
 				}
-				seenControllerIDs[ctrl.ID] = true
 				if ctrl.DirID == "" {
 					return fmt.Errorf("kafka.controllers[%d].dir_id is required (generate with: kafka-storage.sh random-uuid)", ctrl.ID)
 				}
+				ctrlIDs = append(ctrlIDs, ctrl.ID)
+			}
+			if err := validateClusterNodeIDs("kafka controller", ctrlIDs); err != nil {
+				return err
 			}
 		}
 

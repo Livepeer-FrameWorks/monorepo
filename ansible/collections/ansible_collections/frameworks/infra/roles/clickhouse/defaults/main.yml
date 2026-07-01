@@ -24,6 +24,17 @@ clickhouse_databases: []
 clickhouse_users: []
 clickhouse_enable_ssl: false
 
+# Replicated-cluster topology, populated by the CLI from clickhouse.nodes. Empty
+# lists mean "singleton" — the role skips Keeper + cluster.xml entirely.
+# clickhouse_cluster_nodes: [{host, port}] (remote_servers replicas)
+# clickhouse_keeper_nodes:  [{id, host, port}] (Keeper ensemble; port is 9181 client)
+clickhouse_cluster_name: periscope
+clickhouse_cluster_nodes: []
+clickhouse_keeper_nodes: []
+clickhouse_shard: "1"
+clickhouse_replica: "{{ inventory_hostname }}"
+clickhouse_keeper_id: 1
+
 # Named collections rendered into config.d/named-collections.xml. Each item is
 # {name, settings: {host, port, database, user, password, ...}}. The CLI
 # populates this from the manifest for operator tenant-activity analytics;

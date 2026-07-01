@@ -222,11 +222,13 @@ func buildClusterDriftTargets(manifest *inventory.Manifest) []clusterDriftTarget
 			})
 		}
 	}
-	if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled && ch.Host != "" {
-		targets = append(targets, clusterDriftTarget{
-			Host: ch.Host, Display: "clickhouse", Deploy: "clickhouse",
-			DesiredMode: ch.Mode, PinnedVersion: ch.Version,
-		})
+	if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled {
+		for _, chHost := range ch.AllHosts() {
+			targets = append(targets, clusterDriftTarget{
+				Host: chHost, Display: "clickhouse", Deploy: "clickhouse",
+				DesiredMode: ch.Mode, PinnedVersion: ch.Version,
+			})
+		}
 	}
 	if kf := manifest.Infrastructure.Kafka; kf != nil && kf.Enabled {
 		for _, br := range kf.Brokers {

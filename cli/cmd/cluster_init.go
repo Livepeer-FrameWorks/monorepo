@@ -345,12 +345,13 @@ func initClickHouse(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster
 
 	fmt.Fprintln(out, "Initializing ClickHouse databases and tables...")
 
-	host, ok := manifest.GetHost(manifest.Infrastructure.ClickHouse.Host)
-	if !ok {
-		return fmt.Errorf("clickhouse host %s not found", manifest.Infrastructure.ClickHouse.Host)
-	}
-
 	ch := manifest.Infrastructure.ClickHouse
+	// Bootstrap currently targets a single ClickHouse node. A larger manifest would
+	// require ordered Keeper quorum formation before Replicated DB creation, so refuse
+	// it before any partial initialization.
+	if ch.IsMultiNode() {
+		return fmt.Errorf("multi-node ClickHouse bootstrap (%d nodes) is unsupported; declare exactly one node", len(ch.Nodes))
+	}
 	prov, err := provisioner.GetProvisioner("clickhouse", pool)
 	if err != nil {
 		return err
@@ -364,19 +365,46 @@ func initClickHouse(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster
 	}
 	chPassword := chEnv["CLICKHOUSE_PASSWORD"]
 
-	config := provisioner.ServiceConfig{
-		Port: ch.Port,
-		Metadata: map[string]any{
+	// Shared Replicated-cluster metadata. keeper_nodes being non-empty is what
+	// makes init.yml create `periscope` with the Replicated database engine
+	// (so its tables replicate and refreshable MVs coordinate); the {shard}/
+	// {replica} macros themselves come from each node's cluster.xml.
+	clusterMeta := func(replica string, nodeID int) map[string]any {
+		md := map[string]any{
 			"platform_channel":    manifest.ResolvedChannel(),
 			"databases":           ch.Databases,
 			"clickhouse_password": chPassword,
-		},
+		}
+		maps.Copy(md, clickhouseClusterMetadata(manifest, ch, replica, nodeID))
+		rc.applyReleaseMetadata(md)
+		return md
 	}
-	rc.applyReleaseMetadata(config.Metadata)
 
-	if initErr := prov.Initialize(ctx, host, config); initErr != nil {
-		return initErr
+	// Database creation runs on EVERY node so each joins the Replicated database's
+	// replica group (the DDL log lives per-replica in Keeper; a node that hasn't
+	// created the DB isn't a member). Table DDL + migrations then run once on the
+	// coordinator below and propagate to joined replicas via the Keeper DDL log.
+	for _, node := range ch.Nodes {
+		nodeHost, hostOK := manifest.GetHost(node.Host)
+		if !hostOK {
+			return fmt.Errorf("clickhouse node host %s not found", node.Host)
+		}
+		nodeCfg := provisioner.ServiceConfig{Port: ch.Port, Metadata: clusterMeta(node.Host, node.ID)}
+		if initErr := prov.Initialize(ctx, nodeHost, nodeCfg); initErr != nil {
+			return initErr
+		}
 	}
+
+	if len(ch.Databases) == 0 {
+		return nil
+	}
+
+	// Coordinator (lowest node ID) owns table DDL + migrations.
+	host, ok := manifest.GetHost(ch.CoordinatorHost())
+	if !ok {
+		return fmt.Errorf("clickhouse coordinator host %s not found", ch.CoordinatorHost())
+	}
+	config := provisioner.ServiceConfig{Port: ch.Port, Metadata: clusterMeta(ch.CoordinatorHost(), 0)}
 
 	if len(ch.Databases) == 0 {
 		return nil

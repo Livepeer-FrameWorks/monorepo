@@ -168,7 +168,7 @@ func resolveServiceHost(manifest *inventory.Manifest, serviceName string) (inven
 		}
 	case "clickhouse":
 		if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled {
-			return manifest.GetHost(ch.Host)
+			return manifest.GetHost(ch.CoordinatorHost())
 		}
 	case "redis":
 		if r := manifest.Infrastructure.Redis; r != nil && r.Enabled && len(r.Instances) > 0 {

@@ -2796,6 +2796,18 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 						config.Metadata["clickhouse_analytics_password"] = pw
 					}
 				}
+				// Replicated-cluster topology: feed the role enough to render the
+				// remote_servers / macros / Keeper config.d drop-ins (clickhouse_role.go
+				// cannot infer cluster membership on its own).
+				if ch := manifest.Infrastructure.ClickHouse; len(ch.Nodes) > 0 {
+					nodeID := 0
+					if task.InstanceID != "" {
+						if id, err := strconv.Atoi(task.InstanceID); err == nil {
+							nodeID = id
+						}
+					}
+					maps.Copy(config.Metadata, clickhouseClusterMetadata(manifest, ch, task.Host, nodeID))
+				}
 			}
 		case "kafka":
 			if manifest.Infrastructure.Kafka != nil {
@@ -3573,7 +3585,7 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 			addTarget("yugabyte-master", address, 7000, "/prometheus-metrics", masterLabels)
 		}
 	}
-	if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled && ch.Host == hostName {
+	if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled && ch.HasHost(hostName) {
 		addTarget("clickhouse", "127.0.0.1", 9363, "/metrics", map[string]string{
 			"frameworks_service": "clickhouse",
 			"frameworks_source":  "infrastructure",
@@ -3903,7 +3915,9 @@ func privateerInfraPeerHostsForHost(manifest *inventory.Manifest, selfHostName s
 				}
 			case topology.InfraClickHouse:
 				if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled {
-					addHost(ch.Host)
+					for _, host := range ch.AllHosts() {
+						addHost(host)
+					}
 				}
 			case topology.InfraKafka:
 				if manifest.Infrastructure.Kafka == nil || !manifest.Infrastructure.Kafka.Enabled {
@@ -5418,7 +5432,7 @@ func buildAnalyticsNamedCollections(manifest *inventory.Manifest, sharedEnv map[
 	// pg_hba already allows. Split hosts fall back to the mesh address; that
 	// requires a pg_hba entry for the mesh CIDR.
 	pgAddr := "127.0.0.1"
-	if ch := manifest.Infrastructure.ClickHouse; ch == nil || ch.Host != pgHostName {
+	if ch := manifest.Infrastructure.ClickHouse; ch == nil || !ch.HasHost(pgHostName) {
 		pgAddr = manifest.MeshAddress(pgHostName)
 	}
 	if pgAddr == "" {
@@ -5978,13 +5992,9 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	}
 
 	if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled {
-		if chHost := manifestMeshHostname(manifest, ch.Host); chHost != "" {
-			port := ch.Port
-			if port == 0 {
-				port = 9000
-			}
-			env["CLICKHOUSE_ADDR"] = fmt.Sprintf("%s:%d", chHost, port)
-			env["CLICKHOUSE_PORT"] = strconv.Itoa(port)
+		if addr := buildClickHouseAddr(manifest, ch, task.ServiceID); addr != "" {
+			env["CLICKHOUSE_ADDR"] = addr
+			env["CLICKHOUSE_PORT"] = strconv.Itoa(ch.EffectivePort())
 			env["CLICKHOUSE_DB"] = "periscope"
 			env["CLICKHOUSE_USER"] = "frameworks"
 			if len(ch.Databases) > 0 {
@@ -6581,6 +6591,82 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	}
 
 	return env, nil
+}
+
+// buildClickHouseAddr returns the comma-separated mesh host:port list consumed by
+// serviceID as CLICKHOUSE_ADDR. clickhouse-go accepts a native address list directly,
+// so — unlike the YugabyteDB DSN — no query params are needed. A read/write endpoint
+// override (used during migration to keep a service on the old node) wins over Nodes
+// and resolves to a single host; otherwise it's one entry per Replicated cluster node.
+func buildClickHouseAddr(manifest *inventory.Manifest, ch *inventory.ClickHouseConfig, serviceID string) string {
+	if ep := ch.EndpointFor(serviceID); ep != "" {
+		host := manifestMeshHostname(manifest, ep)
+		if host == "" {
+			return ""
+		}
+		return fmt.Sprintf("%s:%d", host, ch.EffectivePort())
+	}
+	addrs := ch.AllAddrs(func(hostName string) string {
+		return manifestMeshHostname(manifest, hostName)
+	})
+	return strings.Join(addrs, ",")
+}
+
+// clickhouseClusterNodes returns the remote_servers replica list (mesh host:port)
+// for a Replicated cluster, or nil for a singleton (no Nodes).
+func clickhouseClusterNodes(manifest *inventory.Manifest, ch *inventory.ClickHouseConfig) []map[string]any {
+	if len(ch.Nodes) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(ch.Nodes))
+	for _, n := range ch.Nodes {
+		host := manifestMeshHostname(manifest, n.Host)
+		if host == "" {
+			continue
+		}
+		out = append(out, map[string]any{"host": host, "port": ch.EffectivePort()})
+	}
+	return out
+}
+
+// clickhouseKeeperNodes returns the Keeper ensemble (id, mesh host, client port).
+// The port is the Keeper client port (ZooKeeper-compatible) used by the server's
+// <zookeeper> config; the raft inter-server port is passed separately.
+func clickhouseKeeperNodes(manifest *inventory.Manifest, ch *inventory.ClickHouseConfig) []map[string]any {
+	if len(ch.Nodes) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(ch.Nodes))
+	for _, n := range ch.Nodes {
+		host := manifestMeshHostname(manifest, n.Host)
+		if host == "" {
+			continue
+		}
+		out = append(out, map[string]any{"id": n.ID, "host": host, "port": servicedefs.ClickHouseKeeperClientPort})
+	}
+	return out
+}
+
+// clickhouseClusterMetadata builds the ServiceConfig.Metadata that tells the
+// clickhouse role this is a Replicated cluster. keeper_nodes being present is the
+// trigger that makes init.yml create the Replicated database and migrate.yml use a
+// ReplicatedReplacingMergeTree _migrations ledger. Shared by provision, init, and
+// migrate so those paths cannot drift. replica/nodeID identify this node; pass
+// nodeID 0 for coordinator-only ops (no server_id needed).
+func clickhouseClusterMetadata(manifest *inventory.Manifest, ch *inventory.ClickHouseConfig, replica string, nodeID int) map[string]any {
+	md := map[string]any{
+		"cluster_name":  "periscope",
+		"cluster_nodes": clickhouseClusterNodes(manifest, ch),
+		"keeper_nodes":  clickhouseKeeperNodes(manifest, ch),
+		"shard":         "1",
+	}
+	if replica != "" {
+		md["replica"] = replica
+	}
+	if nodeID > 0 {
+		md["node_id"] = nodeID
+	}
+	return md
 }
 
 // buildDatabaseURL assembles the DATABASE_URL consumed by the YugabyteDB smart

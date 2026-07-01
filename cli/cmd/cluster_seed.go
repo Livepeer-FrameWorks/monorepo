@@ -192,7 +192,7 @@ func runSeed(cmd *cobra.Command, rc *resolvedCluster, demo, force bool) error {
 	if demo {
 		ch := manifest.Infrastructure.ClickHouse
 		if ch != nil && ch.Enabled {
-			chHost, ok := manifest.GetHost(ch.Host)
+			chHost, ok := manifest.GetHost(ch.CoordinatorHost())
 			if !ok {
 				return fmt.Errorf("clickhouse host not found in manifest")
 			}

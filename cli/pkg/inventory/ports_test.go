@@ -150,7 +150,7 @@ func TestManifestValidateDetectsClickHouseAuxiliaryPortCollisions(t *testing.T) 
 				Enabled: true,
 				Mode:    "native",
 				Version: "25.9.2.1",
-				Host:    "host-a",
+				Nodes:   []ClickHouseNode{{Host: "host-a", ID: 1}},
 			},
 		},
 		Services: map[string]ServiceConfig{

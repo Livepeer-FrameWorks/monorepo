@@ -88,4 +88,41 @@
     <merge_tree>
         <ttl_only_drop_parts>1</ttl_only_drop_parts>
     </merge_tree>
-</clickhouse> 
+
+    <!-- Replication for dev: single-node embedded ClickHouse Keeper so the SAME
+         Replicated* schema (periscope.sql) that runs in production also runs here.
+         Embedded (in-process) Keeper is fine for a single small dev instance;
+         production uses a standalone clickhouse-keeper service. -->
+    <keeper_server>
+        <tcp_port>9181</tcp_port>
+        <server_id>1</server_id>
+        <log_storage_path>/var/lib/clickhouse/coordination/log</log_storage_path>
+        <snapshot_storage_path>/var/lib/clickhouse/coordination/snapshots</snapshot_storage_path>
+        <coordination_settings>
+            <operation_timeout_ms>10000</operation_timeout_ms>
+            <session_timeout_ms>30000</session_timeout_ms>
+        </coordination_settings>
+        <raft_configuration>
+            <server>
+                <id>1</id>
+                <hostname>localhost</hostname>
+                <port>9234</port>
+            </server>
+        </raft_configuration>
+    </keeper_server>
+
+    <!-- Client config tag is <zookeeper> even though it points at Keeper. -->
+    <zookeeper>
+        <node>
+            <host>localhost</host>
+            <port>9181</port>
+        </node>
+    </zookeeper>
+
+    <macros>
+        <shard>01</shard>
+        <replica>dev-1</replica>
+    </macros>
+    <default_replica_path>/clickhouse/tables/{uuid}/{shard}</default_replica_path>
+    <default_replica_name>{replica}</default_replica_name>
+</clickhouse>

@@ -7,6 +7,51 @@ import (
 	"testing"
 )
 
+func TestManifestValidateClickHouseTopology(t *testing.T) {
+	base := func(ch *ClickHouseConfig) *Manifest {
+		return &Manifest{
+			Version: "1",
+			Type:    "cluster",
+			Hosts: map[string]Host{
+				"ch-1": {ExternalIP: "10.0.0.10", User: "root", WireguardIP: "10.88.0.10"},
+				"ch-2": {ExternalIP: "10.0.0.11", User: "root", WireguardIP: "10.88.0.11"},
+			},
+			Infrastructure: InfrastructureConfig{ClickHouse: ch},
+		}
+	}
+	cases := []struct {
+		name    string
+		ch      *ClickHouseConfig
+		wantErr string // substring; "" = must pass
+	}{
+		{"host_tombstone_rejected", &ClickHouseConfig{Enabled: true, Host: "ch-1"}, "clickhouse.host was removed"},
+		{"nodes_required", &ClickHouseConfig{Enabled: true}, "at least one entry in 'nodes'"},
+		{"duplicate_id", &ClickHouseConfig{Enabled: true, Nodes: []ClickHouseNode{{Host: "ch-1", ID: 1}, {Host: "ch-2", ID: 1}}}, "duplicate clickhouse node id"},
+		{"zero_id", &ClickHouseConfig{Enabled: true, Nodes: []ClickHouseNode{{Host: "ch-1", ID: 0}}}, "must be a positive integer"},
+		{"duplicate_host", &ClickHouseConfig{Enabled: true, Nodes: []ClickHouseNode{{Host: "ch-1", ID: 1}, {Host: "ch-1", ID: 2}}}, "duplicate clickhouse node host"},
+		{"unknown_host", &ClickHouseConfig{Enabled: true, Nodes: []ClickHouseNode{{Host: "nope", ID: 1}}}, "not found in hosts"},
+		{"valid_single_node", &ClickHouseConfig{Enabled: true, Nodes: []ClickHouseNode{{Host: "ch-1", ID: 1}}}, ""},
+		{"multi_node_refused", &ClickHouseConfig{Enabled: true, Nodes: []ClickHouseNode{{Host: "ch-1", ID: 1}, {Host: "ch-2", ID: 2}}}, "multi-node (2 nodes) is unsupported by this release"},
+		{"read_endpoint_unknown_host", &ClickHouseConfig{Enabled: true, Nodes: []ClickHouseNode{{Host: "ch-1", ID: 1}}, ReadEndpoint: "nope"}, "read_endpoint host 'nope' not found"},
+		{"write_endpoint_unknown_host", &ClickHouseConfig{Enabled: true, Nodes: []ClickHouseNode{{Host: "ch-1", ID: 1}}, WriteEndpoint: "nope"}, "write_endpoint host 'nope' not found"},
+		{"valid_endpoints_pinned_to_other_host", &ClickHouseConfig{Enabled: true, Nodes: []ClickHouseNode{{Host: "ch-1", ID: 1}}, ReadEndpoint: "ch-2", WriteEndpoint: "ch-2"}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := base(tc.ch).Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected valid, got %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error = %v, want substring %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestManifestValidateKafkaRequiresClusterID(t *testing.T) {
 	manifest := &Manifest{
 		Version: "1",
@@ -348,6 +393,60 @@ nodes:
 	}
 	if manifest.Nodes[0].ExternalIP != "edge-eu-1.example.com" {
 		t.Fatalf("ExternalIP = %q, want host inventory value", manifest.Nodes[0].ExternalIP)
+	}
+}
+
+// Regression: an explicitly-provided hostsPath must be used verbatim, not
+// re-joined to the manifest's directory. Callers like `mesh wg generate` resolve
+// the manifest's hosts_file relative to the manifest dir and pass that resolved
+// path in; re-joining it produced clusters/production/clusters/production/hosts.yaml
+// and broke `frameworks mesh wg generate --manifest clusters/production/cluster.yaml`.
+func TestLoadWithHostsFileDoesNotDoubleJoinExplicitPath(t *testing.T) {
+	root := t.TempDir()
+	sub := filepath.Join(root, "clusters", "production")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifestYAML := `version: v1
+type: cluster
+hosts_file: hosts.yaml
+hosts:
+  ch-1:
+    cluster: c
+    roles: [infrastructure]
+`
+	hostsYAML := `hosts:
+  ch-1:
+    external_ip: 203.0.113.5
+    user: root
+`
+	if err := os.WriteFile(filepath.Join(sub, "cluster.yaml"), []byte(manifestYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "hosts.yaml"), []byte(hostsYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Run from the repo root so the relative manifest path carries a directory
+	// component — the exact shape that triggered the double-join.
+	t.Chdir(root)
+
+	// The explicit hostsPath is already resolved relative to the manifest dir,
+	// mirroring resolveMeshHostsFile's output.
+	m, err := LoadWithHostsFileNoValidate(
+		"clusters/production/cluster.yaml",
+		"clusters/production/hosts.yaml",
+		"",
+	)
+	if err != nil {
+		t.Fatalf("LoadWithHostsFileNoValidate: %v", err)
+	}
+	h, ok := m.Hosts["ch-1"]
+	if !ok {
+		t.Fatalf("host ch-1 not merged from inventory: %+v", m.Hosts)
+	}
+	if h.ExternalIP != "203.0.113.5" || h.User != "root" {
+		t.Fatalf("host inventory not merged verbatim: %+v", h)
 	}
 }
 

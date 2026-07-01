@@ -292,7 +292,18 @@ func computeDerived(env map[string]string) error {
 	if err != nil {
 		return err
 	}
-	env["CLICKHOUSE_ADDR"] = fmt.Sprintf("%s:%s", chHost, chNativePort)
+	// CLICKHOUSE_HOST may be a comma-separated list for a Replicated cluster; apply
+	// the native port to each host so CLICKHOUSE_ADDR is a valid address list.
+	chHosts := strings.Split(chHost, ",")
+	chAddrs := make([]string, 0, len(chHosts))
+	for _, h := range chHosts {
+		h = strings.TrimSpace(h)
+		if h == "" {
+			continue
+		}
+		chAddrs = append(chAddrs, fmt.Sprintf("%s:%s", h, chNativePort))
+	}
+	env["CLICKHOUSE_ADDR"] = strings.Join(chAddrs, ",")
 	env["CLICKHOUSE_PORT"] = chHTTPPort
 
 	if errSet := setHTTPURL(env, "COMMODORE_URL", "COMMODORE_HOST", "COMMODORE_PORT"); errSet != nil {

@@ -251,7 +251,7 @@ func resolveLogTargets(manifest *inventory.Manifest, serviceName string) ([]logT
 		return infrastructureLogTargets(manifest, serviceName, "kafka", kafkaLogHosts(manifest.Infrastructure.Kafka))
 	}
 	if serviceName == "clickhouse" && manifest.Infrastructure.ClickHouse != nil && manifest.Infrastructure.ClickHouse.Enabled {
-		return infrastructureLogTargets(manifest, serviceName, "clickhouse", []string{manifest.Infrastructure.ClickHouse.Host})
+		return infrastructureLogTargets(manifest, serviceName, "clickhouse", manifest.Infrastructure.ClickHouse.AllHosts())
 	}
 
 	if targets, ok, err := serviceLogTargets(manifest, serviceName, manifest.Services); ok || err != nil {

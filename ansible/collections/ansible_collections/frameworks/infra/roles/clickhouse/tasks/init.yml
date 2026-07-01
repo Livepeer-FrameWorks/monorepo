@@ -9,22 +9,30 @@
       {{ ['clickhouse-client',
           '--host=' ~ frameworks_clickhouse_client_host,
           '--port=' ~ (clickhouse_port_tcp | string),
-          '-q', 'SHOW DATABASES']
-         + (['--password', clickhouse_default_password] if clickhouse_default_password | length > 0 else []) }}
+          '-q', 'SHOW DATABASES'] }}
+  environment:
+    CLICKHOUSE_PASSWORD: "{{ clickhouse_default_password }}"
   no_log: "{{ clickhouse_default_password | length > 0 }}"
   register: ch_db_list
   changed_when: false
   check_mode: false
   when: clickhouse_databases | length > 0
 
+# When clustered (clickhouse_keeper_nodes set), create the database with the
+# Replicated engine so its tables replicate and refreshable MVs coordinate. Must
+# match the engine periscope.sql uses, so the schema's CREATE DATABASE IF NOT
+# EXISTS is a no-op rather than leaving a plain Atomic database behind.
 - name: Create missing databases
   ansible.builtin.command:
     argv: >-
       {{ ['clickhouse-client',
           '--host=' ~ frameworks_clickhouse_client_host,
           '--port=' ~ (clickhouse_port_tcp | string),
-          '-q', 'CREATE DATABASE ' ~ item]
-         + (['--password', clickhouse_default_password] if clickhouse_default_password | length > 0 else []) }}
+          '-q', 'CREATE DATABASE ' ~ item ~ (
+              " ENGINE = Replicated('/clickhouse/databases/" ~ item ~ "/{shard}', '{shard}', '{replica}')"
+              if (clickhouse_keeper_nodes | default([]) | length > 0) else "")] }}
+  environment:
+    CLICKHOUSE_PASSWORD: "{{ clickhouse_default_password }}"
   loop: "{{ clickhouse_databases }}"
   loop_control:
     label: "{{ item }}"

@@ -25,7 +25,7 @@ func logTargetsTestManifest() *inventory.Manifest {
 		Infrastructure: inventory.InfrastructureConfig{
 			Postgres:   &inventory.PostgresConfig{Enabled: true, Host: "pg1"},
 			Kafka:      &inventory.KafkaConfig{Enabled: true, Brokers: []inventory.KafkaBroker{{Host: "k1", ID: 1}}},
-			ClickHouse: &inventory.ClickHouseConfig{Enabled: true, Host: "ch1"},
+			ClickHouse: &inventory.ClickHouseConfig{Enabled: true, Nodes: []inventory.ClickHouseNode{{Host: "ch1", ID: 1}}},
 		},
 		Services: map[string]inventory.ServiceConfig{
 			"foghorn": {Enabled: true, Hosts: []string{"f1", "f2"}},

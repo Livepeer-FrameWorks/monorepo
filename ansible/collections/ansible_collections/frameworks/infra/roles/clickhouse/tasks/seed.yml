@@ -28,8 +28,10 @@
           '--database=' ~ item.database,
           '--multiquery',
           '--queries-file=/tmp/frameworks-clickhouse-seed-' ~ item.name ~ '.sql']
-         + (['--user=frameworks', '--password', clickhouse_default_password]
+         + (['--user=frameworks']
             if clickhouse_default_password | length > 0 else []) }}
+  environment:
+    CLICKHOUSE_PASSWORD: "{{ clickhouse_default_password }}"
   loop: "{{ clickhouse_seed_items | default([]) }}"
   loop_control:
     label: "{{ item.name }}"

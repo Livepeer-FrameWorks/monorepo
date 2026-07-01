@@ -2,6 +2,7 @@ package inventory
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -403,15 +404,112 @@ type KafkaTopic struct {
 	Config            map[string]string `yaml:"config,omitempty"`
 }
 
-// ClickHouseConfig represents ClickHouse configuration
+// ClickHouseConfig represents ClickHouse configuration. ClickHouse is always a
+// Replicated cluster (N>=1): a single node is a one-element Nodes list that still
+// gets Keeper + the Replicated schema. There is no non-replicated singleton mode.
 type ClickHouseConfig struct {
-	Enabled   bool     `yaml:"enabled"`
-	Mode      string   `yaml:"mode"` // native
-	Version   string   `yaml:"version"`
-	Host      string   `yaml:"host"` // Host name from Hosts map
+	Enabled bool             `yaml:"enabled"`
+	Mode    string           `yaml:"mode"` // native
+	Version string           `yaml:"version"`
+	Nodes   []ClickHouseNode `yaml:"nodes,omitempty"` // Replicated cluster nodes (>=1); sole PROVISIONING target
+	// ReadEndpoint / WriteEndpoint decouple the SERVICE endpoint from the
+	// provisioning target (Nodes). They are host keys: ReadEndpoint overrides
+	// periscope-query's CLICKHOUSE_ADDR, WriteEndpoint overrides periscope-ingest's.
+	// Empty → use Nodes. Used during migration to keep services on the live old node
+	// while the new node is provisioned, then flip write-then-read at cutover (write
+	// first so ingest drains into the new node, read after so dashboards never read
+	// a node mid-drain).
+	ReadEndpoint  string `yaml:"read_endpoint,omitempty"`
+	WriteEndpoint string `yaml:"write_endpoint,omitempty"`
+	// Host is a removed field, retained only as a tombstone so an old `host:`
+	// manifest fails validation with a clear migration message instead of a
+	// strict-unmarshal "unknown field" error. Never read outside parser validation.
+	Host      string   `yaml:"host,omitempty"`
 	Port      int      `yaml:"port"`
 	Databases []string `yaml:"databases,omitempty"`
 	SQLAccess string   `yaml:"sql_access,omitempty"` // "direct" (default) or "ssh"
+}
+
+// EndpointFor returns the host-key override a given periscope service should use
+// for CLICKHOUSE_ADDR, or "" to fall back to Nodes. periscope-query follows
+// ReadEndpoint; periscope-ingest follows WriteEndpoint.
+func (ch *ClickHouseConfig) EndpointFor(serviceID string) string {
+	switch serviceID {
+	case "periscope-query":
+		return ch.ReadEndpoint
+	case "periscope-ingest":
+		return ch.WriteEndpoint
+	}
+	return ""
+}
+
+// ClickHouseNode represents a node in a Replicated ClickHouse cluster.
+// No per-node port: every node uses the cluster-level ClickHouseConfig.Port.
+type ClickHouseNode struct {
+	Host string `yaml:"host"` // Host name from Hosts map
+	ID   int    `yaml:"id"`   // Node ID (>=1); drives task names, Keeper server_id, {replica}
+}
+
+// EffectivePort returns the configured native port or the default 9000.
+func (ch *ClickHouseConfig) EffectivePort() int {
+	if ch.Port != 0 {
+		return ch.Port
+	}
+	return 9000
+}
+
+// CoordinatorHost returns the host of the node with the lowest positive ID — the
+// deterministic, reorder-proof coordinator for single-writer operations (table
+// DDL, migrations, seed, backup/snapshot/restore). NOT the YAML-order first node.
+func (ch *ClickHouseConfig) CoordinatorHost() string {
+	bestID, bestHost := 0, ""
+	for _, n := range ch.Nodes {
+		if n.ID <= 0 {
+			continue
+		}
+		if bestID == 0 || n.ID < bestID {
+			bestID, bestHost = n.ID, n.Host
+		}
+	}
+	return bestHost
+}
+
+// HasHost reports whether name is one of this config's hosts.
+func (ch *ClickHouseConfig) HasHost(name string) bool {
+	return slices.Contains(ch.AllHosts(), name)
+}
+
+// IsMultiNode reports whether the manifest exceeds the supported single-node
+// ClickHouse bootstrap shape.
+func (ch *ClickHouseConfig) IsMultiNode() bool {
+	return len(ch.Nodes) > 1
+}
+
+// AllHosts returns every node host name for this Replicated cluster.
+func (ch *ClickHouseConfig) AllHosts() []string {
+	hosts := make([]string, 0, len(ch.Nodes))
+	for _, n := range ch.Nodes {
+		hosts = append(hosts, n.Host)
+	}
+	return hosts
+}
+
+// AllAddrs returns host:port for every node, applying the cluster-level port.
+// resolve maps a host name to its reachable address (typically manifest.MeshAddress
+// or a mesh hostname); pass nil to use raw host names.
+func (ch *ClickHouseConfig) AllAddrs(resolve func(hostName string) string) []string {
+	hosts := ch.AllHosts()
+	addrs := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		if resolve != nil {
+			h = resolve(h)
+		}
+		if h == "" {
+			continue
+		}
+		addrs = append(addrs, fmt.Sprintf("%s:%d", h, ch.EffectivePort()))
+	}
+	return addrs
 }
 
 // RedisConfig represents Redis instance configuration

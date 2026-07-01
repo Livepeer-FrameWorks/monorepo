@@ -55,6 +55,107 @@
     mode: "0644"
   notify: clickhouse restart
 
+# Replicated cluster + coordination. Only when the manifest declares a clustered
+# ClickHouse (clickhouse_keeper_nodes non-empty). A bare singleton skips all of
+# this and the drop-ins are removed, so non-clustered deployments are unaffected.
+# Keeper is a STANDALONE clickhouse-keeper process (docs treat embedded in-process
+# Keeper as test/small-instance only) and must be up before clickhouse-server
+# starts so the Replicated database engine and Replicated* tables can attach.
+- name: Configure standalone ClickHouse Keeper + cluster
+  when: clickhouse_keeper_nodes | default([]) | length > 0
+  block:
+    - name: Install clickhouse-keeper package (Altinity/ClickHouse repo added by idealista)
+      ansible.builtin.apt:
+        name: clickhouse-keeper
+        state: present
+        update_cache: true
+
+    - name: Ensure ClickHouse Keeper directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: clickhouse
+        group: clickhouse
+        mode: "0750"
+      loop:
+        - /var/log/clickhouse-keeper
+        - /var/lib/clickhouse-keeper
+        - /var/lib/clickhouse-keeper/coordination
+        - /var/lib/clickhouse-keeper/coordination/log
+        - /var/lib/clickhouse-keeper/coordination/snapshots
+
+    - name: Render managed ClickHouse Keeper config
+      ansible.builtin.template:
+        src: keeper_config.xml.j2
+        dest: /etc/clickhouse-keeper/keeper_config.xml
+        owner: clickhouse
+        group: clickhouse
+        mode: "0644"
+      notify: keeper restart
+
+    - name: Ensure clickhouse-keeper is enabled and started
+      ansible.builtin.systemd:
+        name: clickhouse-keeper
+        state: started
+        enabled: true
+        daemon_reload: true
+
+    # remote_servers + macros + zookeeper(keeper) client + default_replica_path.
+    # The Replicated database engine (not remote_servers) does the actual DDL/data
+    # replication; remote_servers is kept for tooling and system.clusters visibility.
+    - name: Write managed ClickHouse cluster config
+      ansible.builtin.template:
+        src: cluster.xml.j2
+        dest: /etc/clickhouse-server/config.d/cluster.xml
+        owner: clickhouse
+        group: clickhouse
+        mode: "0644"
+      notify: clickhouse restart
+
+    # Encode the Keeper->server dependency in systemd so ordering holds on reboot
+    # and manual `systemctl restart`, not only during an Ansible run (where it
+    # would depend on handler definition order).
+    - name: Ensure clickhouse-server systemd drop-in dir exists
+      ansible.builtin.file:
+        path: /etc/systemd/system/clickhouse-server.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Order clickhouse-server after clickhouse-keeper (systemd drop-in)
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/clickhouse-server.service.d/10-keeper.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          After=clickhouse-keeper.service
+          Wants=clickhouse-keeper.service
+      register: clickhouse_keeper_dropin
+
+    - name: Reload systemd after writing the Keeper ordering drop-in
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: clickhouse_keeper_dropin is changed
+
+- name: Remove managed ClickHouse cluster + Keeper-ordering config when unclustered
+  when: clickhouse_keeper_nodes | default([]) | length == 0
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/clickhouse-server.service.d/10-keeper.conf
+  notify: clickhouse restart
+
+- name: Remove managed ClickHouse cluster config when unclustered
+  when: clickhouse_keeper_nodes | default([]) | length == 0
+  ansible.builtin.file:
+    path: /etc/clickhouse-server/config.d/cluster.xml
+    state: absent
+  notify: clickhouse restart
+
 - name: Write managed ClickHouse named collections
   when: clickhouse_named_collections | length > 0
   ansible.builtin.copy:

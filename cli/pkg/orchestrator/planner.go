@@ -197,7 +197,7 @@ func (p *Planner) topologyInfraTaskDeps(serviceID string, svc inventory.ServiceC
 		case topology.InfraDatabase:
 			deps = appendIfInGraph(deps, p.databaseTaskNames(dep)...)
 		case topology.InfraClickHouse:
-			deps = appendIfInGraph(deps, "clickhouse")
+			deps = appendIfInGraph(deps, p.clickhouseTaskNames()...)
 		case topology.InfraKafka:
 			deps = appendIfInGraph(deps, p.kafkaTaskNames(dep, clusterID)...)
 		case topology.InfraRedis:
@@ -229,6 +229,25 @@ func (p *Planner) databaseTaskNames(dep topology.InfraDependency) []string {
 		return out
 	}
 	return []string{"postgres"}
+}
+
+// clickhouseNodeTaskName is the task name for a Replicated ClickHouse node.
+func clickhouseNodeTaskName(id int) string {
+	return "clickhouse-node-" + strconv.Itoa(id)
+}
+
+// clickhouseTaskNames returns the per-node provisioning task names ClickHouse
+// consumers depend on. ClickHouse is always a Replicated cluster (N>=1 nodes).
+func (p *Planner) clickhouseTaskNames() []string {
+	ch := p.manifest.Infrastructure.ClickHouse
+	if ch == nil || !ch.Enabled {
+		return nil
+	}
+	out := make([]string, 0, len(ch.Nodes))
+	for _, node := range ch.Nodes {
+		out = append(out, clickhouseNodeTaskName(node.ID))
+	}
+	return out
 }
 
 func (p *Planner) kafkaTaskNames(dep topology.InfraDependency, clusterID string) []string {
@@ -551,12 +570,22 @@ func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
 		}
 	}
 
-	// Add ClickHouse
-	if p.manifest.Infrastructure.ClickHouse != nil && p.manifest.Infrastructure.ClickHouse.Enabled {
-		task := NewTask("clickhouse", "clickhouse", "", p.manifest.Infrastructure.ClickHouse.Host, PhaseInfrastructure)
-		task.DependsOn = append(task.DependsOn, hostDatabaseDeps[task.Host]...)
-		task.DependsOn = withMesh(task.DependsOn)
-		graph.AddTask(task)
+	// Add ClickHouse. Always a Replicated cluster (N>=1): one task per node,
+	// mirroring the YugabyteDB pattern.
+	if ch := p.manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled {
+		// Centralized ClickHouse size guard. Planner-backed flows share this path, so
+		// manifests larger than the supported single-node bootstrap cannot partially
+		// apply.
+		if ch.IsMultiNode() {
+			return fmt.Errorf("multi-node ClickHouse (%d nodes) bootstrap is unsupported; declare exactly one node", len(ch.Nodes))
+		}
+		for _, node := range ch.Nodes {
+			task := NewTask("clickhouse", "clickhouse", strconv.Itoa(node.ID), node.Host, PhaseInfrastructure)
+			task.Name = clickhouseNodeTaskName(node.ID)
+			task.DependsOn = append(task.DependsOn, hostDatabaseDeps[node.Host]...)
+			task.DependsOn = withMesh(task.DependsOn)
+			graph.AddTask(task)
+		}
 	}
 
 	return nil
@@ -736,8 +765,10 @@ func EffectiveVMAgentHosts(svc inventory.ServiceConfig, manifest *inventory.Mani
 			}
 		}
 	}
-	if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled && ch.Host != "" {
-		seen[ch.Host] = struct{}{}
+	if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled {
+		for _, host := range ch.AllHosts() {
+			seen[host] = struct{}{}
+		}
 	}
 	result := make([]string, 0, len(seen))
 	for name := range seen {

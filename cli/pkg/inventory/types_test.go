@@ -98,6 +98,81 @@ func TestPostgresConfigEffectiveReplicationFactor(t *testing.T) {
 	}
 }
 
+func TestClickHouseConfigHelpers(t *testing.T) {
+	// Nodes intentionally out of ID order to prove CoordinatorHost picks the
+	// lowest positive ID, not the first list entry.
+	cluster := &ClickHouseConfig{
+		Port:  9000,
+		Nodes: []ClickHouseNode{{Host: "ch2", ID: 2}, {Host: "ch1", ID: 1}},
+	}
+
+	t.Run("EffectivePort_default", func(t *testing.T) {
+		if got := (&ClickHouseConfig{}).EffectivePort(); got != 9000 {
+			t.Fatalf("EffectivePort() = %d, want 9000", got)
+		}
+		if got := (&ClickHouseConfig{Port: 9100}).EffectivePort(); got != 9100 {
+			t.Fatalf("EffectivePort() = %d, want 9100", got)
+		}
+	})
+
+	t.Run("AllHosts_nodes_only", func(t *testing.T) {
+		got := cluster.AllHosts()
+		if len(got) != 2 || got[0] != "ch2" || got[1] != "ch1" {
+			t.Fatalf("AllHosts() = %v, want [ch2 ch1]", got)
+		}
+		if got := (&ClickHouseConfig{}).AllHosts(); len(got) != 0 {
+			t.Fatalf("AllHosts() = %v, want []", got)
+		}
+	})
+
+	t.Run("AllAddrs_applies_cluster_port_and_resolve", func(t *testing.T) {
+		got := cluster.AllAddrs(func(h string) string { return h + ".internal" })
+		want := []string{"ch2.internal:9000", "ch1.internal:9000"}
+		if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+			t.Fatalf("AllAddrs() = %v, want %v", got, want)
+		}
+		// nil resolve passes host through untouched.
+		if got := (&ClickHouseConfig{Port: 9000, Nodes: []ClickHouseNode{{Host: "solo", ID: 1}}}).AllAddrs(nil); len(got) != 1 || got[0] != "solo:9000" {
+			t.Fatalf("AllAddrs(nil) = %v, want [solo:9000]", got)
+		}
+	})
+
+	t.Run("CoordinatorHost_lowest_positive_id", func(t *testing.T) {
+		if got := cluster.CoordinatorHost(); got != "ch1" {
+			t.Fatalf("CoordinatorHost() = %q, want ch1 (lowest id, not first entry)", got)
+		}
+		if got := (&ClickHouseConfig{}).CoordinatorHost(); got != "" {
+			t.Fatalf("CoordinatorHost() = %q, want empty", got)
+		}
+	})
+
+	t.Run("HasHost", func(t *testing.T) {
+		if !cluster.HasHost("ch2") {
+			t.Error("HasHost(ch2) = false, want true")
+		}
+		if cluster.HasHost("nope") {
+			t.Error("HasHost(nope) = true, want false")
+		}
+	})
+
+	t.Run("EndpointFor_read_write_overrides", func(t *testing.T) {
+		ch := &ClickHouseConfig{ReadEndpoint: "old-ro", WriteEndpoint: "old-rw"}
+		if got := ch.EndpointFor("periscope-query"); got != "old-ro" {
+			t.Fatalf("EndpointFor(query) = %q, want old-ro", got)
+		}
+		if got := ch.EndpointFor("periscope-ingest"); got != "old-rw" {
+			t.Fatalf("EndpointFor(ingest) = %q, want old-rw", got)
+		}
+		// Unset endpoints and unrelated services fall back to "" (→ Nodes).
+		if got := ch.EndpointFor("some-other-service"); got != "" {
+			t.Fatalf("EndpointFor(other) = %q, want empty", got)
+		}
+		if got := (&ClickHouseConfig{}).EndpointFor("periscope-query"); got != "" {
+			t.Fatalf("EndpointFor(query) with no override = %q, want empty", got)
+		}
+	})
+}
+
 func TestManifestSharedEnvFiles(t *testing.T) {
 	t.Run("nil_manifest", func(t *testing.T) {
 		var m *Manifest

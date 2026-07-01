@@ -147,9 +147,9 @@ func fillGrafanaAccessFromManifest(cmd *cobra.Command, opts *grafana.SyncOptions
 	if ch == nil || !ch.Enabled {
 		return errors.New("manifest defines no ClickHouse; the clickhouse datasource cannot be derived")
 	}
-	chHost := manifestMeshHostname(manifest, ch.Host)
+	chHost := manifestMeshHostname(manifest, ch.CoordinatorHost())
 	if chHost == "" {
-		return fmt.Errorf("ClickHouse host %q not found in manifest hosts", ch.Host)
+		return fmt.Errorf("ClickHouse host %q not found in manifest hosts", ch.CoordinatorHost())
 	}
 	// The dedicated frameworks_analytics user is the one analytics read
 	// identity (provisioned via users.d, reachable cross-host). The role's

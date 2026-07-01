@@ -181,7 +181,7 @@ func TestBuildClusterDriftTargets_coversInfrastructure(t *testing.T) {
 				Enabled: true, Engine: "yugabyte", Mode: "native", Version: "2.20.0",
 				Nodes: []inventory.PostgresNode{{Host: "pg-1"}, {Host: "pg-2"}},
 			},
-			ClickHouse: &inventory.ClickHouseConfig{Enabled: true, Mode: "native", Version: "24.3", Host: "ch-1"},
+			ClickHouse: &inventory.ClickHouseConfig{Enabled: true, Mode: "native", Version: "24.3", Nodes: []inventory.ClickHouseNode{{Host: "ch-1", ID: 1}}},
 			Kafka: &inventory.KafkaConfig{
 				Enabled: true, Mode: "native", Version: "3.7.0",
 				Brokers:     []inventory.KafkaBroker{{Host: "kf-1"}},
@@ -279,7 +279,7 @@ func TestCollectClusterDriftEntries_respectsManifestVersionPin(t *testing.T) {
 		Hosts: map[string]inventory.Host{"h1": {Name: "h1"}},
 		Infrastructure: inventory.InfrastructureConfig{
 			ClickHouse: &inventory.ClickHouseConfig{
-				Enabled: true, Mode: "native", Version: "24.3", Host: "h1",
+				Enabled: true, Mode: "native", Version: "24.3", Nodes: []inventory.ClickHouseNode{{Host: "h1", ID: 1}},
 			},
 		},
 	}

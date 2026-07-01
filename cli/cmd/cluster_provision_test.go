@@ -213,7 +213,7 @@ func TestBuildTaskConfigDoesNotUsePlatformReleaseAsInfrastructureVersion(t *test
 			ClickHouse: &inventory.ClickHouseConfig{
 				Enabled: true,
 				Mode:    "native",
-				Host:    "node-a",
+				Nodes:   []inventory.ClickHouseNode{{Host: "node-a", ID: 1}},
 			},
 		},
 	}
@@ -1719,7 +1719,7 @@ func TestBuildServiceEnvVarsUsesMeshHostsForBackendDependencies(t *testing.T) {
 			},
 			ClickHouse: &inventory.ClickHouseConfig{
 				Enabled: true,
-				Host:    "yuga-eu-1",
+				Nodes:   []inventory.ClickHouseNode{{Host: "yuga-eu-1", ID: 1}},
 				Port:    9000,
 			},
 			Kafka: &inventory.KafkaConfig{
@@ -2352,7 +2352,7 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 			},
 			ClickHouse: &inventory.ClickHouseConfig{
 				Enabled: true,
-				Host:    "ch-eu-1",
+				Nodes:   []inventory.ClickHouseNode{{Host: "ch-eu-1", ID: 1}},
 				Port:    9000,
 			},
 			Kafka: &inventory.KafkaConfig{
@@ -3077,7 +3077,7 @@ func TestBuildVMAgentScrapeTargetsIncludesClickHouse(t *testing.T) {
 		Infrastructure: inventory.InfrastructureConfig{
 			ClickHouse: &inventory.ClickHouseConfig{
 				Enabled: true,
-				Host:    "clickhouse-1",
+				Nodes:   []inventory.ClickHouseNode{{Host: "clickhouse-1", ID: 1}},
 			},
 		},
 	}

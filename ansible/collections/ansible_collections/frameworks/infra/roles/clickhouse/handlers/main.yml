@@ -1,4 +1,15 @@
 ---
+# Keeper is defined FIRST so that on a run where both Keeper and server configs
+# change (both handlers notified), Ansible — which fires handlers in definition
+# order, not notification order — restarts Keeper before clickhouse-server, so the
+# server attaches to the already-restarted Keeper. systemd After=/Wants= only
+# orders boot/manual starts, not handler runs.
+- name: Restart clickhouse-keeper
+  listen: keeper restart
+  ansible.builtin.systemd:
+    name: clickhouse-keeper
+    state: restarted
+
 - name: Restart clickhouse
   listen: clickhouse restart
   ansible.builtin.systemd:

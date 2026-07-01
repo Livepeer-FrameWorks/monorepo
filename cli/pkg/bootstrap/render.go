@@ -272,7 +272,9 @@ func deriveInfrastructureRegistry(d *Derived, m *inventory.Manifest) {
 		if port == 0 {
 			port = 9000
 		}
-		addEntry("clickhouse", "clickhouse", ch.Host, port, infraMetadata("clickhouse", "primary", ""))
+		for _, chHost := range ch.AllHosts() {
+			addEntry("clickhouse", "clickhouse", chHost, port, infraMetadata("clickhouse", "primary", ""))
+		}
 	}
 
 	if redis := m.Infrastructure.Redis; redis != nil && redis.Enabled {

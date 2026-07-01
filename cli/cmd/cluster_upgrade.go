@@ -395,7 +395,7 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 		}
 	case "clickhouse":
 		if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled {
-			host, found = manifest.GetHost(ch.Host)
+			host, found = manifest.GetHost(ch.CoordinatorHost())
 		}
 	case "redis":
 		if r := manifest.Infrastructure.Redis; r != nil && r.Enabled && len(r.Instances) > 0 {

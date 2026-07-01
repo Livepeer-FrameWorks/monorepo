@@ -80,26 +80,17 @@ func (m *Manifest) validatePortCollisions() error {
 		}
 	}
 
-	if m.Infrastructure.ClickHouse != nil && m.Infrastructure.ClickHouse.Enabled {
-		const (
-			clickhouseHTTPPort        = 8123
-			clickhouseInterserverPort = 9009
-		)
-
-		port := m.Infrastructure.ClickHouse.Port
-		if port == 0 {
-			if defaultPort, ok := servicedefs.DefaultPort("clickhouse"); ok {
-				port = defaultPort
+	if ch := m.Infrastructure.ClickHouse; ch != nil && ch.Enabled {
+		// A Replicated cluster always runs a colocated standalone Keeper, so its
+		// client/raft ports are accounted for too — otherwise a manifest could
+		// pass validation while another service collides with Keeper.
+		clustered := len(ch.Nodes) > 0
+		for _, chHost := range ch.AllHosts() {
+			for _, ps := range servicedefs.ClickHousePorts(ch.Port, clustered) {
+				if err := addPort(chHost, ps.Port, ps.Name); err != nil {
+					return err
+				}
 			}
-		}
-		if err := addPort(m.Infrastructure.ClickHouse.Host, port, "clickhouse-native"); err != nil {
-			return err
-		}
-		if err := addPort(m.Infrastructure.ClickHouse.Host, clickhouseHTTPPort, "clickhouse-http"); err != nil {
-			return err
-		}
-		if err := addPort(m.Infrastructure.ClickHouse.Host, clickhouseInterserverPort, "clickhouse-interserver"); err != nil {
-			return err
 		}
 	}
 

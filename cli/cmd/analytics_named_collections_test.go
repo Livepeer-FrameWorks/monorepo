@@ -24,7 +24,7 @@ func analyticsTestManifest() *inventory.Manifest {
 			},
 			ClickHouse: &inventory.ClickHouseConfig{
 				Enabled: true,
-				Host:    "analytics-1", // split from postgres, uses mesh address
+				Nodes:   []inventory.ClickHouseNode{{Host: "analytics-1", ID: 1}}, // split from postgres, uses mesh address
 			},
 		},
 	}
@@ -62,7 +62,7 @@ func TestBuildAnalyticsNamedCollectionsPerServiceDatabase(t *testing.T) {
 // pg_hba allows loopback and docker-bridge only, never the mesh CIDR.
 func TestBuildAnalyticsNamedCollectionsUsesLoopbackWhenColocated(t *testing.T) {
 	manifest := analyticsTestManifest()
-	manifest.Infrastructure.ClickHouse.Host = "control-1"
+	manifest.Infrastructure.ClickHouse.Nodes = []inventory.ClickHouseNode{{Host: "control-1", ID: 1}}
 
 	collections := buildAnalyticsNamedCollections(manifest, map[string]string{
 		"ANALYTICS_RO_PASSWORD": "secret",

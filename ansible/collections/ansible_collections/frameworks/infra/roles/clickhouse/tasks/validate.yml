@@ -20,8 +20,9 @@
     - name: Confirm SELECT version() via clickhouse-client
       ansible.builtin.command:
         argv: >-
-          {{ ['clickhouse-client', '--host=' ~ frameworks_clickhouse_client_host, '--port=' ~ (clickhouse_port_tcp | string), '-q', 'SELECT version()']
-             + (['--password', clickhouse_default_password] if clickhouse_default_password | length > 0 else []) }}
+          {{ ['clickhouse-client', '--host=' ~ frameworks_clickhouse_client_host, '--port=' ~ (clickhouse_port_tcp | string), '-q', 'SELECT version()'] }}
+      environment:
+        CLICKHOUSE_PASSWORD: "{{ clickhouse_default_password }}"
       register: ch_version
       changed_when: false
       check_mode: false

@@ -1,0 +1,44 @@
+<?xml version="1.0"?>
+<!-- Managed by frameworks.infra.clickhouse — Replicated cluster + Keeper client.
+     Do not edit by hand; regenerated on every provision. -->
+<clickhouse>
+  <remote_servers>
+    <{{ clickhouse_cluster_name }}>
+      <shard>
+        <internal_replication>true</internal_replication>
+{% for node in clickhouse_cluster_nodes %}
+        <replica>
+          <host>{{ node.host }}</host>
+          <port>{{ node.port }}</port>
+        </replica>
+{% endfor %}
+      </shard>
+    </{{ clickhouse_cluster_name }}>
+  </remote_servers>
+
+  <macros>
+    <shard>{{ clickhouse_shard }}</shard>
+    <replica>{{ clickhouse_replica }}</replica>
+  </macros>
+
+  <!-- Bare Replicated*MergeTree tables resolve their ZK path from these. The
+       {uuid} is consistent across replicas because every table is created inside
+       a Replicated database (or via ON CLUSTER), which propagates one UUID. -->
+  <default_replica_path>/clickhouse/tables/{uuid}/{shard}</default_replica_path>
+  <default_replica_name>{replica}</default_replica_name>
+
+  <!-- Client config tag is <zookeeper> even though the ensemble is ClickHouse
+       Keeper (wire-compatible). -->
+  <zookeeper>
+{% for node in clickhouse_keeper_nodes %}
+    <node>
+      <host>{{ node.host }}</host>
+      <port>{{ node.port }}</port>
+    </node>
+{% endfor %}
+  </zookeeper>
+
+  <distributed_ddl>
+    <path>/clickhouse/task_queue/ddl</path>
+  </distributed_ddl>
+</clickhouse>

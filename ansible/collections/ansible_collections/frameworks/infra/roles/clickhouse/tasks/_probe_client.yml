@@ -2,8 +2,9 @@
 - name: Probe ClickHouse locally via clickhouse-client
   ansible.builtin.command:
     argv: >-
-      {{ ['clickhouse-client', '--host=' ~ item, '--port=' ~ (clickhouse_port_tcp | string), '-q', 'SELECT 1']
-         + (['--password', clickhouse_default_password] if clickhouse_default_password | length > 0 else []) }}
+      {{ ['clickhouse-client', '--host=' ~ item, '--port=' ~ (clickhouse_port_tcp | string), '-q', 'SELECT 1'] }}
+  environment:
+    CLICKHOUSE_PASSWORD: "{{ clickhouse_default_password }}"
   loop: "{{ frameworks_clickhouse_probe_hosts }}"
   register: clickhouse_probe_results
   changed_when: false

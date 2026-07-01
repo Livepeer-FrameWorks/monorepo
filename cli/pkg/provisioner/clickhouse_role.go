@@ -10,6 +10,8 @@ import (
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
 // clickhouseRoleVars translates the manifest's clickhouse.* config into the
@@ -69,6 +71,30 @@ func clickhouseRoleVars(ctx context.Context, host inventory.Host, config Service
 	}
 	if items, ok := config.Metadata["clickhouse_migrate_items"].([]map[string]any); ok && len(items) > 0 {
 		vars["clickhouse_migrate_items"] = items
+	}
+	// Replicated-cluster topology. The CLI supplies these for every enabled
+	// ClickHouse node; direct role use can omit them to run without Keeper.
+	if clusterName := metaString(config.Metadata, "cluster_name"); clusterName != "" {
+		vars["clickhouse_cluster_name"] = clusterName
+	}
+	if shard := metaString(config.Metadata, "shard"); shard != "" {
+		vars["clickhouse_shard"] = shard
+	}
+	if replica := metaString(config.Metadata, "replica"); replica != "" {
+		vars["clickhouse_replica"] = replica
+	}
+	if nodes, ok := config.Metadata["cluster_nodes"].([]map[string]any); ok && len(nodes) > 0 {
+		vars["clickhouse_cluster_nodes"] = nodes
+	}
+	if keeper, ok := config.Metadata["keeper_nodes"].([]map[string]any); ok && len(keeper) > 0 {
+		vars["clickhouse_keeper_nodes"] = keeper
+		// Keeper ports sourced from the single servicedefs catalog so the
+		// templates never hardcode them and accounting (ports.go) stays in sync.
+		vars["clickhouse_keeper_client_port"] = servicedefs.ClickHouseKeeperClientPort
+		vars["clickhouse_keeper_raft_port"] = servicedefs.ClickHouseKeeperRaftPort
+	}
+	if id, ok := config.Metadata["node_id"].(int); ok && id > 0 {
+		vars["clickhouse_keeper_id"] = id
 	}
 	return vars, nil
 }

@@ -104,7 +104,7 @@ func TestEffectivePrivateerHostsForManifestAddsMetricsHosts(t *testing.T) {
 			},
 			ClickHouse: &inventory.ClickHouseConfig{
 				Enabled: true,
-				Host:    "ch-1",
+				Nodes:   []inventory.ClickHouseNode{{Host: "ch-1", ID: 1}},
 			},
 		},
 	}
@@ -135,7 +135,7 @@ func TestEffectiveVMAgentHostsAddsMetricsInfrastructureToExplicitHosts(t *testin
 			},
 			ClickHouse: &inventory.ClickHouseConfig{
 				Enabled: true,
-				Host:    "ch-1",
+				Nodes:   []inventory.ClickHouseNode{{Host: "ch-1", ID: 1}},
 			},
 		},
 	}
@@ -306,7 +306,7 @@ func TestPlan_ClickHouseDependsOnSameHostYugabyte(t *testing.T) {
 				Enabled: true,
 				Mode:    "native",
 				Version: "25.9.2.1",
-				Host:    "yuga-eu-1",
+				Nodes:   []inventory.ClickHouseNode{{Host: "yuga-eu-1", ID: 1}},
 			},
 		},
 	}
@@ -322,7 +322,7 @@ func TestPlan_ClickHouseDependsOnSameHostYugabyte(t *testing.T) {
 
 	for batchIdx, batch := range plan.Batches {
 		for _, task := range batch {
-			if task.Name == "clickhouse" {
+			if task.Name == "clickhouse-node-1" {
 				clickhouseTask = task
 				clickhouseBatch = batchIdx
 			}

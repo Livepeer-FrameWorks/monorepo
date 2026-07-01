@@ -1,4 +1,4 @@
-# Database HA — client ingress to YugabyteDB
+# Database HA — YugabyteDB ingress + ClickHouse replication
 
 FrameWorks runs YugabyteDB as a replication-factor-3 cluster (e.g. `yuga-eu-1/2/3`).
 The database was always HA; the **way services connected to it** was not — every
@@ -85,3 +85,60 @@ time by `database.Connect`, not stored in the env.)
 one (`checkYugabyteCluster` in `cli/cmd/cluster.go`), and the migration check does
 the same — so doctor reflects cluster health instead of the status of one pinned
 node. The CLI itself still uses `lib/pq` (its own module).
+
+# ClickHouse HA — Replicated cluster + ClickHouse Keeper
+
+ClickHouse is modeled as a **Replicated cluster of N≥1 nodes** — there is no
+non-replicated singleton mode. `inventory.ClickHouseConfig` carries only `Nodes`
+(`{host, id}`); the old scalar `host:` is a tombstone that fails validation with a
+migration hint. A single node is just a one-element cluster that still runs Keeper
+and the Replicated schema, so growing to 3 needs no second data backfill.
+
+## Always-replicated schema
+
+`pkg/database/sql/clickhouse/periscope.sql` creates the `periscope` database with
+`ENGINE = Replicated('/clickhouse/databases/periscope/{shard}','{shard}','{replica}')`
+and every table as a `Replicated*MergeTree` (bare engine; the replica path comes
+from `default_replica_path = /clickhouse/tables/{uuid}/{shard}` + `{replica}`). The
+`{shard}`/`{replica}` macros are rendered into each node's `config.d/cluster.xml`.
+The same DDL runs in dev (single node + embedded Keeper in `infrastructure/clickhouse/config.xml`)
+and prod (standalone Keeper). ClickHouse must be **≥24.10** (refreshable MVs only
+coordinate across replicas inside a Replicated database from 24.10) — the version
+is release-managed (currently `26.3.10.62`), never pinned per-manifest.
+
+## ClickHouse Keeper (not ZooKeeper)
+
+A **standalone `clickhouse-keeper`** process runs colocated on each node (the role
+installs it; embedded in-process Keeper is test-only per upstream). The server's
+`<zookeeper>` client config points at it (Keeper is wire-compatible). Ports:
+**9181** client, **9234** raft — defined once in `pkg/servicedefs` (`ClickHousePorts`),
+fed to both port-collision accounting (`cli/pkg/inventory/ports.go`) and the Jinja
+templates via `clickhouse_keeper_{client,raft}_port` vars. The server↔Keeper start
+order is enforced by a systemd drop-in (`After=/Wants=clickhouse-keeper.service`)
+**and** Ansible handler ordering (Keeper handler defined first).
+
+## Bootstrap order: per-node DB join, coordinator-only DDL
+
+The Replicated database engine replicates DDL only among nodes that have already
+**joined** the database (its DDL log is per-replica in Keeper). So `cluster init`:
+
+1. runs `CREATE DATABASE … ENGINE = Replicated` on **every** node (each joins the
+   replica group), then
+2. applies table DDL + migrations **once on the coordinator** — the node with the
+   **lowest positive ID** (`ClickHouseConfig.CoordinatorHost()`, deterministic and
+   reorder-proof) — which propagates to joined replicas via the Keeper DDL log.
+
+Coordinator-targeted ops: init/schema/migrate/seed/backup/snapshot/restore/grafana.
+The `_migrations` ledger is `ReplicatedReplacingMergeTree` (the shared metadata
+builder `clickhouseClusterMetadata` feeds keeper topology to provision, init, **and**
+migrate so they cannot drift).
+
+## Current state: single node; multi-node bootstrap gated
+
+Production runs **one** ClickHouse node today (`clickhouse-eu-1`). The schema,
+Keeper, and config are N>1-ready, but the multi-node _bootstrap_ (Keeper-quorum
+formation ordering, and per-node fan-out for upgrade/restart/preflight) is not yet
+built — `cluster init` **refuses** N>1 with a clear message. Growth to a 3-replica
+cluster is the documented expansion runbook, not an automatic flip. Node identity
+(`id`) is validated unique and positive, shared with the Postgres/Kafka invariant
+(`validateClusterNodeIDs`); ClickHouse and Yugabyte additionally require unique hosts.
