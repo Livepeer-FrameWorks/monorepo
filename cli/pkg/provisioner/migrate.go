@@ -63,6 +63,30 @@ func enforcesMigrationPhaseSafety(migration Migration) bool {
 	return compareSemver(migration.Version, migrationPhaseSafetyFloor) >= 0
 }
 
+// schemaMigrationBaselineFloor is the schema-consolidation floor: migrations with
+// a version strictly below it are folded into the baseline schema files
+// (pkg/database/sql/schema/*.sql, clickhouse/periscope.sql) and are never offered.
+//
+// SAFETY INVARIANT: set the floor at or below the first version not fully
+// applied by every live cluster. Existing clusters never re-apply the baseline,
+// so raising it too far would silently skip migrations between the cluster's
+// applied version and the floor. The floor is v0.2.96 so v0.2.96/v0.2.97 still
+// ship as normal migrations while older folded migrations are excluded.
+//
+// The minimum-upgrade-version guard ({Postgres,ClickHouse}BelowFloorGap in
+// migration_floor_guard.go) enforces this: a cluster missing any < floor migration
+// is refused with a stepping-stone message rather than silently stranded. DISTINCT
+// from migrationPhaseSafetyFloor (which gates validation rules, not selection).
+const schemaMigrationBaselineFloor = "v0.2.96"
+
+// belowBaselineFloor reports whether a migration predates the current schema
+// consolidation and is therefore folded into the baseline. Such migrations are
+// filtered from generated migration items; fresh installs get their effect via
+// the baseline schema, while existing clusters must satisfy the below-floor guard.
+func belowBaselineFloor(migration Migration) bool {
+	return compareSemver(migration.Version, schemaMigrationBaselineFloor) < 0
+}
+
 var expandUnsafeSQLPatterns = []struct {
 	re      *regexp.Regexp
 	message string

@@ -197,3 +197,16 @@ CREATE TABLE IF NOT EXISTS navigator.tenant_custom_domains (
 
 CREATE INDEX IF NOT EXISTS idx_tenant_custom_domains_status
     ON navigator.tenant_custom_domains(status);
+
+-- Schema baseline identity marker. Records that this database was created from the
+-- consolidated baseline at this floor, so the migration min-version guard treats
+-- below-floor migrations as folded into the baseline (not missing). An existing
+-- cluster upgraded in place has no marker and is checked for ledger completeness
+-- instead. The floor value is kept in sync with provisioner.schemaMigrationBaselineFloor
+-- by TestBaselineMarkerFloorMatchesConst. See docs/standards/schema-migrations.md.
+CREATE TABLE IF NOT EXISTS public._schema_baseline (
+    floor TEXT NOT NULL,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO public._schema_baseline (floor)
+    SELECT 'v0.2.96' WHERE NOT EXISTS (SELECT 1 FROM public._schema_baseline);

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -127,6 +128,13 @@ func runMigrate(cmd *cobra.Command, rc *resolvedCluster, dryRun bool, phase stri
 		}
 	}
 
+	// Minimum-upgrade-version guard: refuse if the cluster is missing any migration
+	// folded below the baseline floor (it would be silently skipped). Runs before
+	// any migration is applied. See docs/standards/schema-migrations.md.
+	if err := runBelowFloorGuard(ctx, rc, sshPool); err != nil {
+		return err
+	}
+
 	branchesRun := []string{}
 	branchesWithItems := []string{}
 	branchErrors := map[string]error{}
@@ -165,6 +173,69 @@ func runMigrate(cmd *cobra.Command, rc *resolvedCluster, dryRun bool, phase stri
 		{Cmd: "frameworks cluster upgrade --all --dry-run", Why: "Preview service rollout after expand-compatible migrations."},
 		{Why: "Review release notes for required data migrations or verification before flipping reads or applying contract migrations."},
 	})
+	return nil
+}
+
+// runBelowFloorGuard refuses the migration if any cluster is missing a migration
+// that was folded below the baseline floor — those are no longer offered, so an
+// existing cluster lacking them would be silently stranded. Read-only; fail-closed
+// (a ledger-read failure blocks rather than risk an unsafe upgrade).
+func runBelowFloorGuard(ctx context.Context, rc *resolvedCluster, sshPool *ssh.Pool) error {
+	manifest := rc.Manifest
+
+	if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
+		hosts := postgresCandidateHosts(manifest, pg)
+		if len(hosts) > 0 {
+			pgHost := hosts[0]
+			if pg.IsYugabyte() {
+				if h, ok := firstHealthyYugabyteHost(ctx, sshPool, hosts, pg); ok {
+					pgHost = h
+				}
+			}
+			databases := schemaDatabasesFromConfigs(pg.Databases)
+			if pg.IsYugabyte() {
+				databases = yugabyteSchemaDatabases(pg.Databases, manifest)
+			}
+			if len(databases) > 0 {
+				var sharedEnv map[string]string
+				if pg.IsYugabyte() && pg.Password == "" {
+					env, sErr := rc.SharedEnv()
+					if sErr != nil {
+						return fmt.Errorf("load manifest env_files: %w", sErr)
+					}
+					sharedEnv = env
+				}
+				password, pErr := resolveYugabytePassword(pg, sharedEnv)
+				if pErr != nil {
+					return pErr
+				}
+				gap, gErr := provisioner.PostgresBelowFloorGap(ctx, sshPool, pgHost, pg, password, databases)
+				if gErr != nil {
+					return fmt.Errorf("baseline-floor check (postgres): %w", gErr)
+				}
+				if len(gap) > 0 {
+					return fmt.Errorf("%s", provisioner.FormatBelowFloorRefusal("postgres", gap))
+				}
+			}
+		}
+	}
+
+	if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled && len(ch.Databases) > 0 {
+		if host, ok := manifest.GetHost(ch.CoordinatorHost()); ok {
+			host.Name = firstNonEmpty(host.Name, ch.CoordinatorHost())
+			env, sErr := rc.SharedEnv()
+			if sErr != nil {
+				return fmt.Errorf("load manifest env_files: %w", sErr)
+			}
+			gap, gErr := provisioner.ClickHouseBelowFloorGap(ctx, sshPool, host, ch.EffectivePort(), env["CLICKHOUSE_PASSWORD"], ch.Databases)
+			if gErr != nil {
+				return fmt.Errorf("baseline-floor check (clickhouse): %w", gErr)
+			}
+			if len(gap) > 0 {
+				return fmt.Errorf("%s", provisioner.FormatBelowFloorRefusal("clickhouse", gap))
+			}
+		}
+	}
 	return nil
 }
 
@@ -284,9 +355,9 @@ func runMigrateClickHouseBranch(ctx context.Context, cmd *cobra.Command, rc *res
 		return nil
 	}
 
-	host, ok := manifest.GetHost(ch.Host)
+	host, ok := manifest.GetHost(ch.CoordinatorHost())
 	if !ok {
-		return fmt.Errorf("clickhouse host %s not found", ch.Host)
+		return fmt.Errorf("clickhouse host %s not found", ch.CoordinatorHost())
 	}
 
 	items, err := provisioner.BuildClickHouseMigrationItems(ch.Databases, phase, target)
@@ -327,6 +398,10 @@ func runMigrateClickHouseBranch(ctx context.Context, cmd *cobra.Command, rc *res
 			"clickhouse_migrate_items": items,
 		},
 	}
+	// Same Replicated-cluster metadata as provision/init so migrate.yml's
+	// _migrations ledger uses ReplicatedReplacingMergeTree (keeper_nodes present),
+	// not a plain per-node ledger. Migrations run on the coordinator.
+	maps.Copy(cfg.Metadata, clickhouseClusterMetadata(manifest, ch, ch.CoordinatorHost(), 0))
 
 	if dryRun {
 		fmt.Fprintf(out, "ClickHouse: running %s migrations in --check --diff mode (no writes)\n", phase)

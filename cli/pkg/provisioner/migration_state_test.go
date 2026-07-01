@@ -120,14 +120,22 @@ func TestBuildMigrationItemsRejectsBadPhase(t *testing.T) {
 }
 
 func TestBuildMigrationItemsCanUseLogicalSourceForPhysicalDatabase(t *testing.T) {
-	items, err := BuildMigrationItemsForDatabases([]SchemaDatabase{
+	// Drive the pure selection helper with a synthetic POST-floor migration so the
+	// logical-source→physical-target remap is verified independently of which
+	// versions are in the embedded tree (pre-floor ones are folded/deleted).
+	all := []Migration{{
+		Database: "foghorn",
+		Version:  "v0.3.5",
+		Phase:    "expand",
+		Sequence: 1,
+		Filename: "001_add_column.sql",
+		content:  "ALTER TABLE foghorn.streams ADD COLUMN IF NOT EXISTS x INT;",
+	}}
+	items := buildMigrationItemsFromList(all, []SchemaDatabase{
 		{Name: "foghorn_eu", SourceName: "foghorn", Schema: "foghorn"},
-	}, "expand", "v0.2.33")
-	if err != nil {
-		t.Fatalf("BuildMigrationItemsForDatabases returned error: %v", err)
-	}
+	}, "expand", "v99.0.0")
 	if len(items) == 0 {
-		t.Fatal("expected foghorn migrations for physical foghorn_eu database")
+		t.Fatal("expected foghorn migrations remapped onto physical foghorn_eu database")
 	}
 	for _, item := range items {
 		if got := item["db"]; got != "foghorn_eu" {

@@ -26,6 +26,7 @@
 | UI design system                | `docs/standards/design-system.md`          |
 | Metrics naming/units            | `docs/standards/metrics.md`                |
 | Code comments policy            | `docs/standards/code-comments.md`          |
+| Schema migrations & baseline    | `docs/standards/schema-migrations.md`      |
 | Deployment & ops                | `website_docs/src/content/docs/operators/` |
 | Dev runtime                     | `docker-compose.yml`                       |
 | Release pipeline                | `.github/workflows/release.yml`            |
