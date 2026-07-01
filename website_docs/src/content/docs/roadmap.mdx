@@ -19,9 +19,9 @@ The [Platform capabilities](/platform/feature-matrix) page is the source of trut
 
 ## Expanding Now
 
-### Self-host, Hybrid, and Federated Delivery
+### Bring Your Own Cloud: Edge, Hybrid, and Federation
 
-We are continuing to harden the self-host path: bring your own MistServer nodes and let FrameWorks handle DNS, TLS, geo-balanced routing, cluster federation, tenant subdomains, analytics, playback access control, and the rest of the operations layer around them. The same plane supports teams running fully self-hosted clusters, teams that mix their own infrastructure with managed FrameWorks regions, and teams that want to list spare capacity to others.
+FrameWorks runs across a spectrum of ownership, from fully hosted to fully sovereign. The first BYOC level ships today: bring your own MistServer edge nodes and let FrameWorks handle DNS, TLS, geo-balanced routing, cluster federation, tenant subdomains, analytics, playback access control, and the rest of the operations layer around them. The same plane supports teams running self-hosted clusters, teams that mix their own infrastructure with managed FrameWorks regions, and teams that want to list spare capacity to others. We are hardening this path and the diagnostics around self-hosted deployments. Deeper BYOC levels (private media clusters, hosted private clusters, and fully sovereign self-hosting) are tracked under **Next** and **Later** below.
 
 **Outcome:** stand up a production-grade MistServer cluster without gluing together ten separate services for DNS, certificates, routing, observability, billing, and access control.
 
@@ -38,6 +38,12 @@ Livepeer Gateway integration is active. We are expanding native controls, plan-a
 **Outcome:** enable ABR when source bitrate or viewer networks make a single rendition impractical.
 
 ## Next
+
+### Dedicated and Private Clusters (BYOC)
+
+Two deeper BYOC levels are in design. A private media cluster lets you run the media and data plane on your own cloud while leaning on the FrameWorks control plane for tenancy, routing, billing, and access control; the remaining work is federation-trust hardening (scoped per-cluster credentials or mutual TLS) for clusters on customer-controlled infrastructure. Hosted private clusters let FrameWorks provision dedicated, isolated capacity for a single tenant with reserved-capacity and fixed-rate pricing; the remaining work is cloud-provider provisioning automation, a reserved-capacity billing model, and an operator console.
+
+**Outcome:** keep more of the stack on infrastructure you choose, or reserve dedicated FrameWorks-operated capacity, without dropping to a fully hand-built deployment.
 
 ### DRM
 
@@ -110,6 +116,12 @@ Server-side processing remains a longer-term platform theme. The intent is to ke
 Managed DNS, generic CDN/proxying, and standalone object/block storage are backlog items adjacent to video delivery. FrameWorks already runs DNS automation, service proxying, and media storage internally for operated deployments; the roadmap work is turning the right parts into customer-facing products with domains, origins, Ceph-backed storage resources, self-hosted/Anycast DNS paths, policies, billing, and support boundaries.
 
 **Outcome:** cover more of the infrastructure teams already wire around their video workloads without pretending internal operator plumbing is a self-serve product.
+
+### Fully Sovereign Self-Hosting (BYOC)
+
+The deepest BYOC level: run the entire stack with no runtime dependency on FrameWorks, including your own object storage and analytics store, your own DNS, and an isolated control plane and identity root. Self-hosting the stack is possible today, but the control and data plane still assume a shared FrameWorks root. Making them fully portable needs dedicated-database and identity decoupling, self-hosted DNS (PowerDNS is planned, not built), and a bring-your-own storage and analytics path. Today FrameWorks runs ClickHouse and S3-compatible storage for hosted tenants; this is the work that turns "self-host the stack" into "host nothing on us at all," and it shares groundwork with the Managed DNS, Proxying, and Storage Services item above.
+
+**Outcome:** operate FrameWorks entirely within your own jurisdiction and ownership boundary, with no control-plane dependency on us.
 
 ### Mobile Apps and Help Center
 

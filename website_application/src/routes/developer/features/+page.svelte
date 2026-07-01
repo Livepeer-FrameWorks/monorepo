@@ -84,7 +84,8 @@
         </div>
         <p class="text-sm text-muted-foreground max-w-3xl">
           Browse FrameWorks capabilities across the GraphQL API, agent tools, dashboard workflows,
-          and docs. Each row links to example queries you can run in the playground.
+          and docs. Open any feature for details — some include GraphQL examples you can run in the
+          playground.
         </p>
       </div>
       <div class="flex flex-wrap gap-3 text-xs text-muted-foreground shrink-0 pt-1">

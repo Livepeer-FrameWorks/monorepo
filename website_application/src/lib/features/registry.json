@@ -2147,6 +2147,108 @@
       }
     },
     {
+      "slug": "byo-media-cluster",
+      "name": "Private media cluster (BYOC)",
+      "area": "infrastructure",
+      "description": "Run the media and data plane on your own cloud while using the FrameWorks control plane for tenancy, routing, billing, and access control.",
+      "status": "roadmap",
+      "gap_reason": "Not shipped as a public workflow. Edge enrollment and cross-cluster federation exist, but running a full media and data cluster on customer-controlled infrastructure needs federation-trust hardening (scoped per-cluster credentials or mutual TLS) and a media-cluster provisioning preset.",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {},
+        "mcp": {},
+        "webapp": {},
+        "docs": {}
+      },
+      "actual_surfaces": {
+        "docs": false,
+        "graphql": false,
+        "mcp": false,
+        "webapp": false
+      }
+    },
+    {
+      "slug": "hosted-private-clusters",
+      "name": "Hosted private clusters (BYOC)",
+      "area": "infrastructure",
+      "description": "FrameWorks-provisioned dedicated, isolated clusters for a single tenant, with reserved capacity and fixed-rate pricing.",
+      "status": "roadmap",
+      "gap_reason": "Not shipped. Private-cluster records and tenant-cluster access exist, but self-serve provisioning of dedicated capacity needs cloud-provider automation (infrastructure-as-code or provider SDKs) that does not exist today, plus a reserved-capacity billing SKU and an operator console.",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {},
+        "mcp": {},
+        "webapp": {},
+        "docs": {}
+      },
+      "actual_surfaces": {
+        "docs": false,
+        "graphql": false,
+        "mcp": false,
+        "webapp": false
+      }
+    },
+    {
+      "slug": "sovereign-self-host",
+      "name": "Fully sovereign self-hosting (BYOC)",
+      "area": "infrastructure",
+      "description": "Run the entire FrameWorks stack with no runtime dependency on FrameWorks, including your own object storage, analytics store, DNS, and an isolated control plane and identity root.",
+      "status": "roadmap",
+      "gap_reason": "Not shipped as turnkey. Self-hosting the stack is possible today, but full sovereignty needs dedicated-database and identity decoupling from the shared control plane, self-hosted DNS (PowerDNS is planned, not built), and a bring-your-own object-storage and analytics-store path. Today FrameWorks runs ClickHouse and S3-compatible storage for hosted tenants.",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {},
+        "mcp": {},
+        "webapp": {},
+        "docs": {}
+      },
+      "actual_surfaces": {
+        "docs": false,
+        "graphql": false,
+        "mcp": false,
+        "webapp": false
+      }
+    },
+    {
       "slug": "drm",
       "name": "DRM",
       "area": "playback",
