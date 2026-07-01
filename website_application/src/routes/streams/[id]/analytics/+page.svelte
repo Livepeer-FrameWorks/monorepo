@@ -19,9 +19,9 @@
   import { Badge } from "$lib/components/ui/badge";
   import { GridSeam } from "$lib/components/layout";
   import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
-  import ViewerTrendChart from "$lib/components/charts/ViewerTrendChart.svelte";
-  import QualityTierChart from "$lib/components/charts/QualityTierChart.svelte";
-  import CodecDistributionChart from "$lib/components/charts/CodecDistributionChart.svelte";
+  import TrendChart from "$lib/components/charts/TrendChart.svelte";
+  import { palette } from "$lib/components/charts/theme";
+  import BreakdownChart from "$lib/components/charts/BreakdownChart.svelte";
   import { EventLog } from "$lib/components/stream-details";
   import type { StreamEvent } from "$lib/components/stream-details/EventLog.svelte";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
@@ -440,10 +440,18 @@
                 <h3>Viewer Trend</h3>
               </div>
               <div class="slab-body--padded">
-                <ViewerTrendChart
+                <TrendChart
                   data={viewerTrendData}
                   height={250}
-                  seriesLabel="Unique Viewers"
+                  series={[
+                    {
+                      key: "viewers",
+                      label: "Unique Viewers",
+                      color: palette.blue,
+                      filled: true,
+                      format: (v) => `${v} viewers`,
+                    },
+                  ]}
                 />
               </div>
             </div>
@@ -456,7 +464,41 @@
                 <h3>Quality Distribution</h3>
               </div>
               <div class="slab-body--padded">
-                <QualityTierChart data={qualityData} />
+                <BreakdownChart
+                  mode="doughnut"
+                  format="minutes"
+                  emptyText="No quality tier data available"
+                  items={qualityData
+                    ? [
+                        {
+                          label: "2160p",
+                          value: qualityData.tier2160pMinutes,
+                          color: palette.cyan,
+                        },
+                        {
+                          label: "1440p",
+                          value: qualityData.tier1440pMinutes,
+                          color: palette.green,
+                        },
+                        {
+                          label: "1080p",
+                          value: qualityData.tier1080pMinutes,
+                          color: palette.blue,
+                        },
+                        {
+                          label: "720p",
+                          value: qualityData.tier720pMinutes,
+                          color: palette.yellow,
+                        },
+                        {
+                          label: "480p",
+                          value: qualityData.tier480pMinutes,
+                          color: palette.orange,
+                        },
+                        { label: "SD", value: qualityData.tierSdMinutes, color: palette.fgDark },
+                      ]
+                    : []}
+                />
               </div>
             </div>
           {/if}
@@ -467,7 +509,12 @@
                 <h3>Codec Usage</h3>
               </div>
               <div class="slab-body--padded">
-                <CodecDistributionChart data={codecDistribution} />
+                <BreakdownChart
+                  mode="doughnut"
+                  format="minutes"
+                  emptyText="No codec data available"
+                  items={codecDistribution.map((c) => ({ label: c.codec, value: c.minutes }))}
+                />
               </div>
             </div>
           {/if}

@@ -150,9 +150,9 @@
 
   // Network status for header
   const STATUS_COLORS: Record<string, string> = {
-    healthy: "rgb(34, 197, 94)",
-    degraded: "rgb(234, 179, 8)",
-    down: "rgb(239, 68, 68)",
+    healthy: "rgb(158, 206, 106)",
+    degraded: "rgb(224, 175, 104)",
+    down: "rgb(247, 118, 142)",
   };
   let networkStatus = $derived(
     clusters.every((c) => c.status === "healthy")
@@ -161,7 +161,7 @@
         ? "down"
         : "degraded"
   );
-  let networkStatusColor = $derived(STATUS_COLORS[networkStatus] ?? "rgb(148, 163, 184)");
+  let networkStatusColor = $derived(STATUS_COLORS[networkStatus] ?? "rgb(169, 177, 214)");
   let networkStatusLabel = $derived(
     networkStatus === "healthy" ? "OPERATIONAL" : networkStatus === "degraded" ? "DEGRADED" : "DOWN"
   );

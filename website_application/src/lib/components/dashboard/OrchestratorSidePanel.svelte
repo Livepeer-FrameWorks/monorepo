@@ -336,10 +336,10 @@
     flex-direction: column;
     gap: 1rem;
     padding: 1rem;
-    background: var(--card, #0f172a);
-    border: 1px solid var(--border, rgba(148, 163, 184, 0.2));
+    background: var(--card, #24283b);
+    border: 1px solid var(--border, rgba(169, 177, 214, 0.2));
     border-radius: 0.5rem;
-    color: var(--foreground, #e2e8f0);
+    color: var(--foreground, #c0caf5);
   }
 
   .orch-panel__header {
@@ -354,7 +354,7 @@
     font-size: 0.875rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: var(--muted-foreground, #94a3b8);
+    color: var(--muted-foreground, #a9b1d6);
   }
 
   .orch-panel__addr {
@@ -384,7 +384,7 @@
     font-size: 0.75rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: var(--muted-foreground, #94a3b8);
+    color: var(--muted-foreground, #a9b1d6);
   }
 
   .orch-panel__dl {
@@ -396,7 +396,7 @@
   }
 
   .orch-panel__dl dt {
-    color: var(--muted-foreground, #94a3b8);
+    color: var(--muted-foreground, #a9b1d6);
   }
 
   .orch-panel__dl dd {
@@ -413,21 +413,21 @@
   .orch-panel__table td {
     padding: 0.375rem 0.5rem;
     text-align: left;
-    border-bottom: 1px solid var(--border, rgba(148, 163, 184, 0.15));
+    border-bottom: 1px solid var(--border, rgba(169, 177, 214, 0.15));
   }
 
   .orch-panel__table th {
-    color: var(--muted-foreground, #94a3b8);
+    color: var(--muted-foreground, #a9b1d6);
     font-weight: 500;
   }
 
   .orch-panel__row--stale td {
-    color: var(--muted-foreground, #94a3b8);
+    color: var(--muted-foreground, #a9b1d6);
   }
 
   .orch-panel__detail-row td {
     padding-top: 0;
-    background: color-mix(in srgb, var(--card, #0f172a) 92%, white);
+    background: color-mix(in srgb, var(--card, #24283b) 92%, white);
   }
 
   .orch-panel__detail-block {
@@ -439,7 +439,7 @@
   }
 
   .orch-panel__detail-label {
-    color: var(--muted-foreground, #94a3b8);
+    color: var(--muted-foreground, #a9b1d6);
     font-size: 0.75rem;
   }
 
@@ -454,9 +454,9 @@
     align-items: center;
     max-width: 100%;
     padding: 0.0625rem 0.375rem;
-    border: 1px solid var(--border, rgba(148, 163, 184, 0.2));
+    border: 1px solid var(--border, rgba(169, 177, 214, 0.2));
     border-radius: 0.25rem;
-    color: var(--foreground, #e2e8f0);
+    color: var(--foreground, #c0caf5);
     word-break: break-word;
   }
 
@@ -479,16 +479,16 @@
     line-height: 1.4;
     border: 1px solid currentColor;
     border-radius: 999px;
-    color: var(--muted-foreground, #94a3b8);
+    color: var(--muted-foreground, #a9b1d6);
   }
 
   .orch-panel__muted {
-    color: var(--muted-foreground, #94a3b8);
+    color: var(--muted-foreground, #a9b1d6);
   }
 
   .orch-panel__empty {
     margin: 0;
     font-size: 0.875rem;
-    color: var(--muted-foreground, #94a3b8);
+    color: var(--muted-foreground, #a9b1d6);
   }
 </style>

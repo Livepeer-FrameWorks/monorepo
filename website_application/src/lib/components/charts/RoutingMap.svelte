@@ -199,14 +199,14 @@
   const ROLE_COLORS: Record<string, string> = {
     core: "rgb(249, 115, 22)",
     central: "rgb(249, 115, 22)",
-    media: "rgb(59, 130, 246)",
-    edge: "rgb(59, 130, 246)",
-    compute: "rgb(34, 197, 94)",
-    worker: "rgb(34, 197, 94)",
-    livepeer: "rgb(34, 197, 94)",
-    "livepeer-gateway": "rgb(34, 197, 94)",
-    orchestrator: "rgb(34, 197, 94)",
-    default: "rgb(148, 163, 184)",
+    media: "rgb(122, 162, 247)",
+    edge: "rgb(122, 162, 247)",
+    compute: "rgb(158, 206, 106)",
+    worker: "rgb(158, 206, 106)",
+    livepeer: "rgb(158, 206, 106)",
+    "livepeer-gateway": "rgb(158, 206, 106)",
+    orchestrator: "rgb(158, 206, 106)",
+    default: "rgb(169, 177, 214)",
   };
 
   // UX state
@@ -522,9 +522,9 @@
   }
 
   function relationshipColor(type: RelationshipLine["type"]): string {
-    if (type === "traffic") return "rgba(34, 197, 94, 0.6)";
-    if (type === "assignment") return "rgba(168, 85, 247, 0.72)";
-    if (type === "replication") return "rgba(168, 85, 247, 0.7)";
+    if (type === "traffic") return "rgba(158, 206, 106, 0.6)";
+    if (type === "assignment") return "rgba(187, 154, 247, 0.72)";
+    if (type === "replication") return "rgba(187, 154, 247, 0.7)";
     return "rgba(125, 207, 255, 0.72)";
   }
 
@@ -660,7 +660,7 @@
 
     // 1b. Draw flows (client bucket -> node bucket centroids)
     currentFlows.forEach((f) => {
-      const color = f.color || "rgba(168, 85, 247, 0.5)"; // purple
+      const color = f.color || "rgba(187, 154, 247, 0.5)"; // purple
       const weight = f.weight || 1.2;
       leaflet
         .polyline([f.from, f.to], {
@@ -737,7 +737,7 @@
         );
         const icon = leaflet.divIcon({
           className: "node-dot-marker",
-          html: `<div style="background-color: color-mix(in srgb, ${color} 20%, rgb(15, 23, 42)); width: ${size}px; height: ${size}px; border-radius: 8px; border: 2px solid ${color}; display: flex; align-items: center; justify-content: center; color: ${color}; font-size: 11px; font-weight: 700; box-shadow: 0 0 10px color-mix(in srgb, ${color} 35%, transparent);">${nodesInGroup.length}</div>`,
+          html: `<div style="background-color: color-mix(in srgb, ${color} 20%, rgb(22, 22, 30)); width: ${size}px; height: ${size}px; border-radius: 8px; border: 2px solid ${color}; display: flex; align-items: center; justify-content: center; color: ${color}; font-size: 11px; font-weight: 700; box-shadow: 0 0 10px color-mix(in srgb, ${color} 35%, transparent);">${nodesInGroup.length}</div>`,
           iconSize: [size, size],
           iconAnchor: [size / 2, size / 2],
         });
@@ -803,7 +803,7 @@
     // 2. Draw Routes (Bezier curves or straight lines)
     currentRoutes.forEach((route) => {
       const isSuccess = route.status === "success" || route.status === "SUCCESS";
-      const color = isSuccess ? "rgba(34, 197, 94, 0.4)" : "rgba(239, 68, 68, 0.4)";
+      const color = isSuccess ? "rgba(158, 206, 106, 0.4)" : "rgba(247, 118, 142, 0.4)";
       const weight = 1;
 
       // Draw line
@@ -823,7 +823,7 @@
       // Draw Client (Origin) dot
       const clientIcon = leaflet.divIcon({
         className: "custom-client-icon",
-        html: `<div style="background-color: ${isSuccess ? "rgb(34, 197, 94)" : "rgb(239, 68, 68)"}; width: 6px; height: 6px; border-radius: 50%;"></div>`,
+        html: `<div style="background-color: ${isSuccess ? "rgb(158, 206, 106)" : "rgb(247, 118, 142)"}; width: 6px; height: 6px; border-radius: 50%;"></div>`,
         iconSize: [6, 6],
         iconAnchor: [3, 3],
       });
@@ -985,7 +985,7 @@
       const repNode = currentNodes.find((n) => n.clusterId === clusterId);
       const baseColor = repNode
         ? roleColor(nodeRole(repNode, renderedServicesByNode[repNode.id]), repNode.status)
-        : "rgb(148, 163, 184)";
+        : "rgb(169, 177, 214)";
       leaflet
         .polyline([from, to], {
           color: withAlpha(baseColor, 0.42),
@@ -1003,7 +1003,7 @@
       const cluster = currentClusters.find((c) => c.id === clusterId);
       const clusterColor = cluster
         ? roleColor(cluster.clusterType, cluster.status)
-        : "rgb(148, 163, 184)";
+        : "rgb(169, 177, 214)";
 
       const drawMemberLine = (node: NodeLocation) => {
         const from = markerLatLng(nodeMarkersByID[node.id], [node.lat, node.lng]);
@@ -1185,7 +1185,7 @@
   function orchestratorPinColor(vantage: OrchestratorVantagePin): string {
     if (vantage.latestLatencyMs >= 750) return "rgb(74, 111, 91)";
     if (vantage.latestLatencyMs >= 250) return "rgb(45, 150, 96)";
-    return "rgb(34, 197, 94)";
+    return "rgb(158, 206, 106)";
   }
 
   function dedupeOrchestratorVantages(
@@ -1381,7 +1381,7 @@
     position: relative;
     width: 100%;
     border-radius: 0.5rem;
-    background-color: rgb(15, 23, 42);
+    background-color: rgb(22, 22, 30);
     transition: all 0.3s ease;
   }
 
@@ -1407,9 +1407,9 @@
     z-index: 25;
     width: min(360px, calc(100% - 4.75rem));
     overflow: hidden;
-    border: 1px solid rgba(51, 65, 85, 0.78);
+    border: 1px solid rgba(59, 66, 97, 0.78);
     border-radius: 8px;
-    background: rgba(15, 23, 42, 0.94);
+    background: rgba(22, 22, 30, 0.94);
     box-shadow: 0 20px 50px rgba(0, 0, 0, 0.36);
     backdrop-filter: blur(10px);
   }
@@ -1423,16 +1423,16 @@
     height: 1.5rem;
     border: 1px solid rgba(71, 85, 105, 0.72);
     border-radius: 6px;
-    background: rgba(30, 41, 59, 0.92);
-    color: rgb(148, 163, 184);
+    background: rgba(36, 40, 59, 0.92);
+    color: rgb(169, 177, 214);
     font-size: 1rem;
     line-height: 1;
     cursor: pointer;
   }
 
   .map-detail-panel__close:hover {
-    color: rgb(226, 232, 240);
-    border-color: rgba(148, 163, 184, 0.72);
+    color: rgb(192, 202, 245);
+    border-color: rgba(169, 177, 214, 0.72);
   }
 
   .map-detail-panel__body {
@@ -1457,23 +1457,23 @@
     justify-content: center;
     width: 2rem;
     height: 2rem;
-    background-color: rgba(30, 41, 59, 0.9);
-    border: 1px solid rgba(51, 65, 85, 0.6);
+    background-color: rgba(36, 40, 59, 0.9);
+    border: 1px solid rgba(59, 66, 97, 0.6);
     border-radius: 0.375rem;
-    color: rgb(148, 163, 184);
+    color: rgb(169, 177, 214);
     cursor: pointer;
     transition: all 0.15s ease;
   }
 
   .map-control-btn:hover {
-    background-color: rgba(51, 65, 85, 0.9);
-    color: rgb(226, 232, 240);
+    background-color: rgba(59, 66, 97, 0.9);
+    color: rgb(192, 202, 245);
   }
 
   .map-control-btn--active {
-    border-color: rgba(34, 197, 94, 0.65);
+    border-color: rgba(158, 206, 106, 0.65);
     color: rgb(134, 239, 172);
-    box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.18);
+    box-shadow: 0 0 0 1px rgba(158, 206, 106, 0.18);
   }
 
   .scroll-hint {
@@ -1482,12 +1482,12 @@
     left: 50%;
     transform: translateX(-50%);
     z-index: 15;
-    background-color: rgba(30, 41, 59, 0.95);
-    border: 1px solid rgba(51, 65, 85, 0.6);
+    background-color: rgba(36, 40, 59, 0.95);
+    border: 1px solid rgba(59, 66, 97, 0.6);
     border-radius: 0.375rem;
     padding: 0.375rem 0.75rem;
     font-size: 0.75rem;
-    color: rgb(148, 163, 184);
+    color: rgb(169, 177, 214);
     cursor: pointer;
     transition: opacity 0.2s ease;
   }
@@ -1499,7 +1499,7 @@
   .scroll-hint kbd {
     display: inline-block;
     padding: 0.125rem 0.375rem;
-    background-color: rgba(51, 65, 85, 0.8);
+    background-color: rgba(59, 66, 97, 0.8);
     border-radius: 0.25rem;
     font-family: inherit;
     font-size: 0.7rem;
@@ -1516,11 +1516,11 @@
     justify-content: center;
     z-index: 10;
     pointer-events: none;
-    background-color: rgba(15, 23, 42, 0.5);
+    background-color: rgba(22, 22, 30, 0.5);
   }
 
   :global(.leaflet-container) {
-    background-color: rgb(15, 23, 42) !important;
+    background-color: rgb(22, 22, 30) !important;
   }
 
   /* Undo Tailwind Preflight resets that break Leaflet rendering */
@@ -1549,7 +1549,7 @@
     font-size: 0.85rem;
     margin-bottom: 0.5rem;
     padding-bottom: 0.4rem;
-    border-bottom: 1px solid rgba(51, 65, 85, 0.6);
+    border-bottom: 1px solid rgba(59, 66, 97, 0.6);
     color: rgb(241, 245, 249);
   }
 
@@ -1560,18 +1560,18 @@
   }
 
   :global(.map-popup__table tr + tr) {
-    border-top: 1px solid rgba(51, 65, 85, 0.3);
+    border-top: 1px solid rgba(59, 66, 97, 0.3);
   }
 
   :global(.map-popup__label) {
-    color: rgb(148, 163, 184);
+    color: rgb(169, 177, 214);
     padding: 0.2rem 0.75rem 0.2rem 0;
     white-space: nowrap;
     vertical-align: top;
   }
 
   :global(.map-popup__value) {
-    color: rgb(226, 232, 240);
+    color: rgb(192, 202, 245);
     padding: 0.2rem 0;
     text-align: right;
     white-space: normal;
@@ -1611,8 +1611,8 @@
     display: inline-block;
     padding: 0.1rem 0.4rem;
     font-size: 0.65rem;
-    background: rgba(59, 130, 246, 0.15);
-    border: 1px solid rgba(59, 130, 246, 0.3);
+    background: rgba(122, 162, 247, 0.15);
+    border: 1px solid rgba(122, 162, 247, 0.3);
     border-radius: 3px;
     color: rgb(147, 197, 253);
   }
@@ -1621,7 +1621,7 @@
     margin-top: 0.5rem;
     font-size: 0.75rem;
     font-style: italic;
-    color: rgb(148, 163, 184);
+    color: rgb(169, 177, 214);
   }
 
   :global(.cluster-marker--glow) {
@@ -1660,7 +1660,7 @@
     border-radius: 50%;
   }
   :global(.node-shape--ring) {
-    background-color: rgba(15, 23, 42, 0.85);
+    background-color: rgba(22, 22, 30, 0.85);
     border: 2px solid var(--node-color);
     border-radius: 50%;
   }
@@ -1682,7 +1682,7 @@
   }
   :global(.cluster-shape--core) {
     border-radius: 10px;
-    background: color-mix(in srgb, var(--node-color) 22%, rgba(15, 23, 42, 0.85));
+    background: color-mix(in srgb, var(--node-color) 22%, rgba(22, 22, 30, 0.85));
     border: 2px solid var(--node-color);
     box-shadow: 0 0 12px color-mix(in srgb, var(--node-color) 40%, transparent);
   }

@@ -14,6 +14,9 @@
     label: string;
     subtitle?: string | null;
     statusIndicator?: StatusIndicator | null;
+    delta?: string | null;
+    deltaTrend?: "up" | "down" | null;
+    sparkline?: number[] | null;
   }
 
   let {
@@ -24,7 +27,26 @@
     label,
     subtitle = null,
     statusIndicator = null,
+    delta = null,
+    deltaTrend = null,
+    sparkline = null,
   }: Props = $props();
+
+  // Inline sparkline path (decorative trend); maps the series into a 100x26 box.
+  const sparkPoints = $derived.by(() => {
+    if (!sparkline || sparkline.length < 2) return "";
+    const W = 100;
+    const H = 26;
+    const min = Math.min(...sparkline);
+    const max = Math.max(...sparkline);
+    const span = max - min || 1;
+    const step = W / (sparkline.length - 1);
+    return sparkline
+      .map(
+        (v, i) => `${(i * step).toFixed(1)},${(H - ((v - min) / span) * (H - 4) - 2).toFixed(1)}`
+      )
+      .join(" ");
+  });
 </script>
 
 <div class="h-full p-4 relative flex items-center gap-4">
@@ -46,12 +68,41 @@
   </div>
 
   <div class="flex flex-col min-w-0">
-    <div class="text-lg font-bold {valueColor} leading-none">
-      {value}
+    <div class="flex items-baseline gap-2">
+      <div class="text-lg font-bold {valueColor} leading-none">
+        {value}
+      </div>
+      {#if delta}
+        <span
+          class="text-[11px] font-semibold {deltaTrend === 'down'
+            ? 'text-destructive'
+            : 'text-success'}"
+        >
+          {delta}
+        </span>
+      {/if}
     </div>
     <div class="text-xs text-muted-foreground font-medium mt-1 truncate" title={label}>{label}</div>
     {#if subtitle}
       <div class="text-[10px] text-muted-foreground/70 truncate">{subtitle}</div>
     {/if}
   </div>
+
+  {#if sparkPoints}
+    <svg
+      class="ml-auto h-7 w-20 shrink-0 opacity-80 {valueColor}"
+      viewBox="0 0 100 26"
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
+      <polyline
+        points={sparkPoints}
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.5"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
+    </svg>
+  {/if}
 </div>

@@ -30,8 +30,9 @@
   import { Badge } from "$lib/components/ui/badge";
   import { GridSeam } from "$lib/components/layout";
   import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
-  import BootTtfTrendChart from "$lib/components/charts/BootTtfTrendChart.svelte";
-  import SessionQoeTrendChart from "$lib/components/charts/SessionQoeTrendChart.svelte";
+  import TrendChart from "$lib/components/charts/TrendChart.svelte";
+  import BootWaterfall from "$lib/components/charts/BootWaterfall.svelte";
+  import { palette, type TrendSeries } from "$lib/components/charts/theme";
   import VodRetentionChart from "$lib/components/charts/VodRetentionChart.svelte";
   import VodRetentionAssetPicker from "$lib/components/charts/VodRetentionAssetPicker.svelte";
   import {
@@ -93,6 +94,43 @@
   let bootClusterRows = $state<BootClusterRows>([]);
   let qoeSummary = $state<QoeSummary | null>(null);
   let qoeSeries = $state<QoeSeries>([]);
+
+  const qoeTrendSeries: TrendSeries[] = [
+    {
+      key: "rebufferingRatio",
+      label: "Rebuffering ratio",
+      color: palette.blue,
+      axis: "y",
+      filled: true,
+      scale: 100,
+      unit: "%",
+      digits: 3,
+    },
+    {
+      key: "frameDropRatio",
+      label: "Frame drop ratio",
+      color: palette.red,
+      axis: "y",
+      scale: 100,
+      unit: "%",
+      digits: 3,
+    },
+    {
+      key: "avgBitrateBps",
+      label: "Avg bitrate",
+      color: palette.cyan,
+      axis: "y1",
+      scale: 1 / 1_000_000,
+      unit: " Mbps",
+      digits: 2,
+    },
+  ];
+
+  const bootTtfSeries: TrendSeries[] = [
+    { key: "p50TtfMs", label: "TTF p50", color: palette.green, filled: true, format: (v) => ms(v) },
+    { key: "p95TtfMs", label: "TTF p95", color: palette.yellow, format: (v) => ms(v) },
+    { key: "p99TtfMs", label: "TTF p99", color: palette.purple, format: (v) => ms(v) },
+  ];
   let qoeClusterRows = $state<QoeClusterRows>([]);
   let assetsConn = $state<AssetsConnection | null>(null);
   let assets = $derived(assetsConn?.nodes ?? []);
@@ -302,15 +340,40 @@
     ensureTabLoaded(activeTab);
   }
 
-  // Average span breakdown for the boot waterfall table.
-  let spanRows = $derived(
+  // Average span breakdown for the boot waterfall.
+  let bootStages = $derived(
     bootSummary
       ? [
-          { label: "Gateway resolve (GraphQL)", value: bootSummary.avgGatewayResolveMs },
-          { label: "Mist hydrate (json_*.js)", value: bootSummary.avgMistHydrateMs },
-          { label: "Player select", value: bootSummary.avgPlayerSelectMs },
-          { label: "Connect", value: bootSummary.avgConnectMs },
-          { label: "Prebuffer", value: bootSummary.avgPrebufferMs },
+          {
+            label: "Gateway resolve",
+            ms: bootSummary.avgGatewayResolveMs ?? 0,
+            color: palette.blue,
+            hint: "GraphQL",
+          },
+          {
+            label: "Mist hydrate",
+            ms: bootSummary.avgMistHydrateMs ?? 0,
+            color: palette.cyan,
+            hint: "json_*.js",
+          },
+          {
+            label: "Player select",
+            ms: bootSummary.avgPlayerSelectMs ?? 0,
+            color: palette.green,
+            hint: "protocol scoring",
+          },
+          {
+            label: "Connect",
+            ms: bootSummary.avgConnectMs ?? 0,
+            color: palette.yellow,
+            hint: "transport + first byte",
+          },
+          {
+            label: "Prebuffer",
+            ms: bootSummary.avgPrebufferMs ?? 0,
+            color: palette.orange,
+            hint: "fill to first frame",
+          },
         ]
       : []
   );
@@ -421,7 +484,14 @@
                   Time-to-first-frame over time
                 </h2>
                 {#if bootSeries.length > 0}
-                  <BootTtfTrendChart data={[...bootSeries]} />
+                  <TrendChart
+                    data={[...bootSeries]}
+                    series={bootTtfSeries}
+                    axes={{ y: { title: "Time to first frame", tickFormat: ms } }}
+                    sampleKey="bootCount"
+                    sampleNoun="boot"
+                    maxTicks={8}
+                  />
                 {:else}
                   <p class="text-xs text-muted-foreground">No boot samples in this time range.</p>
                 {/if}
@@ -431,25 +501,7 @@
                 <h2 class="text-sm font-semibold text-foreground mb-3">
                   Boot waterfall — average span breakdown
                 </h2>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Span</TableHead>
-                      <TableHead class="text-right">Avg</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {#each spanRows as row (row.label)}
-                      <TableRow>
-                        <TableCell>{row.label}</TableCell>
-                        <TableCell class="text-right">{ms(row.value)}</TableCell>
-                      </TableRow>
-                    {/each}
-                  </TableBody>
-                </Table>
-                <p class="text-xs text-muted-foreground mt-2">
-                  Cache hit ratio on player-owned fetches: {pct(bootSummary?.cacheHitRatio, 0)}
-                </p>
+                <BootWaterfall stages={bootStages} cacheHitRatio={bootSummary?.cacheHitRatio} />
               </section>
 
               {#if bootClusterRows.length > 0}
@@ -548,7 +600,14 @@
                   Quality of experience over time
                 </h2>
                 {#if qoeSeries.length > 0}
-                  <SessionQoeTrendChart data={[...qoeSeries]} />
+                  <TrendChart
+                    data={[...qoeSeries]}
+                    series={qoeTrendSeries}
+                    leftTitle="Rebuffer / frame-drop %"
+                    rightTitle="Bitrate (Mbps)"
+                    sampleKey="sessionCount"
+                    sampleNoun="session"
+                  />
                 {:else}
                   <p class="text-xs text-muted-foreground">
                     No playback sessions in this time range.

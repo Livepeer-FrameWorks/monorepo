@@ -16,7 +16,7 @@
   import { Select, SelectContent, SelectItem, SelectTrigger } from "$lib/components/ui/select";
   import { GridSeam } from "$lib/components/layout";
   import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
-  import StorageBreakdownChart from "$lib/components/charts/StorageBreakdownChart.svelte";
+  import BreakdownChart from "$lib/components/charts/BreakdownChart.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
   import MediaRetentionPanel from "$lib/components/account/MediaRetentionPanel.svelte";
   import AssetRetentionDialog from "$lib/components/library/AssetRetentionDialog.svelte";
@@ -718,7 +718,20 @@
               <h3>Aggregate usage</h3>
             </div>
             <div class="slab-body--padded">
-              <StorageBreakdownChart data={storageBreakdown} />
+              <BreakdownChart
+                mode="bar"
+                horizontal
+                format="bytes"
+                height={180}
+                emptyText="No storage data available"
+                items={storageBreakdown
+                  ? [
+                      { label: "DVR", value: storageBreakdown.dvrBytes },
+                      { label: "Clips", value: storageBreakdown.clipBytes },
+                      { label: "VOD", value: storageBreakdown.vodBytes },
+                    ]
+                  : []}
+              />
             </div>
           </div>
         </div>

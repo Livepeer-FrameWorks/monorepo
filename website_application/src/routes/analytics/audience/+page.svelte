@@ -13,11 +13,9 @@
   import { Button } from "$lib/components/ui/button";
   import { GridSeam } from "$lib/components/layout";
   import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
-  import CountryDistributionChart from "$lib/components/charts/CountryDistributionChart.svelte";
-  import CountryTrendChart from "$lib/components/charts/CountryTrendChart.svelte";
-  import GeoHeatmap from "$lib/components/charts/GeoHeatmap.svelte";
-  import RoutingMap from "$lib/components/charts/RoutingMap.svelte";
-  import CountryChoropleth from "$lib/components/charts/CountryChoropleth.svelte";
+  import BreakdownChart from "$lib/components/charts/BreakdownChart.svelte";
+  import TrendChart from "$lib/components/charts/TrendChart.svelte";
+  import GeoView from "$lib/components/charts/GeoView.svelte";
   import { getCountryName } from "$lib/utils/country-names";
   import EmptyState from "$lib/components/EmptyState.svelte";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
@@ -57,7 +55,7 @@
     $geoDistStore.data?.analytics?.usage?.streaming?.geographicDistribution ?? null
   );
 
-  // Transform hourly geo data for CountryTrendChart (from dedicated MV)
+  // Transform hourly geo data for the country TrendChart (from dedicated MV)
   // Falls back to viewersByCountry from geographicDistribution if hourly data not available
   let countryTrendData = $derived.by(() => {
     const hourlyEdges =
@@ -117,9 +115,7 @@
 
   // Viewer events from connection events store (with pagination support)
   let viewerEvents = $derived(connectionEvents);
-  // Visualization mode: 'routes' shows direct client->node lines, 'buckets' shows H3 hexagons + flows
-  let vizMode = $state<"routes" | "buckets">("routes");
-  let selectedBucket: string | null = null;
+  let selectedBucket = $state<string | null>(null);
 
   // Prepare data for Heatmap from Top Cities
   let heatmapData = $derived.by(() => {
@@ -384,33 +380,6 @@
     return buildBucketFlows(edges.map((edge) => edge.node));
   });
 
-  let flowSegments = $derived.by(() => {
-    return bucketFlows
-      .map((flow) => {
-        const from = bucketToCentroid({ h3Index: flow.from });
-        const to = bucketToCentroid({ h3Index: flow.to });
-        if (!from || !to) return null;
-        // Amber for cross-cluster, orange for long-haul (>1500km), purple for normal
-        const color = flow.crossCluster
-          ? "rgba(245,158,11,0.75)"
-          : flow.avgDistance > 1500
-            ? "rgba(249,115,22,0.65)"
-            : "rgba(168,85,247,0.6)";
-        return {
-          from,
-          to,
-          weight: Math.min(4, 1 + Math.log1p(flow.count)),
-          color,
-        };
-      })
-      .filter(Boolean) as {
-      from: [number, number];
-      to: [number, number];
-      weight: number;
-      color: string;
-    }[];
-  });
-
   let recentRoutingEvents = $derived.by(() => {
     const edges = $routingEventsStore.data?.analytics?.infra?.routingEventsConnection?.edges ?? [];
     const nodes = edges.map((e) => e.node);
@@ -634,7 +603,6 @@
   });
 
   // Icons
-  const GlobeIcon = getIconComponent("Globe");
   const Globe2Icon = getIconComponent("Globe2");
   const UsersIcon = getIconComponent("Users");
   const MapPinIcon = getIconComponent("Target");
@@ -739,35 +707,31 @@
 
         <!-- Main Content Grid -->
         <div class="dashboard-grid">
-          <!-- Global Viewer Heatmap Slab -->
-          {#if geographicDistribution?.topCities?.length}
+          <!-- Viewer geography & routing (single layered map: heat / countries / routes / buckets) -->
+          {#if geographicDistribution?.topCities?.length || geographicDistribution?.topCountries?.length || routingMapData.routes.length > 0}
             <div class="slab col-span-full">
               <div class="slab-header">
                 <div class="flex items-center gap-2">
                   <Globe2Icon class="w-4 h-4 text-primary" />
-                  <h3>Global Viewer Heatmap</h3>
+                  <h3>Viewer geography & routing</h3>
                 </div>
               </div>
-              <div class="slab-body--flush h-[400px]">
+              <div class="slab-body--flush h-[500px]">
                 {#if typeof window !== "undefined"}
-                  <GeoHeatmap data={heatmapData} height={400} />
-                {/if}
-              </div>
-            </div>
-          {/if}
-
-          <!-- Country Choropleth Slab -->
-          {#if geographicDistribution?.topCountries?.length}
-            <div class="slab col-span-full">
-              <div class="slab-header">
-                <div class="flex items-center gap-2">
-                  <GlobeIcon class="w-4 h-4 text-primary" />
-                  <h3>Country Choropleth</h3>
-                </div>
-              </div>
-              <div class="slab-body--flush h-[320px]">
-                {#if typeof window !== "undefined"}
-                  <CountryChoropleth data={geographicDistribution.topCountries} height={320} />
+                  <GeoView
+                    heat={heatmapData}
+                    countries={geographicDistribution?.topCountries ?? []}
+                    routes={routingMapData.routes}
+                    nodes={routingMapData.nodes}
+                    buckets={routingMapData.buckets}
+                    {selectedBucket}
+                    onBucketClick={(id) => {
+                      const clean = id.slice(2);
+                      selectedBucket = selectedBucket === clean ? null : clean;
+                    }}
+                    height={500}
+                    initialView="heat"
+                  />
                 {/if}
               </div>
             </div>
@@ -784,10 +748,13 @@
               </div>
               <div class="slab-body--padded">
                 <div class="p-4 border border-border/30 bg-muted/20">
-                  <CountryDistributionChart
-                    data={geographicDistribution.topCountries}
+                  <BreakdownChart
+                    mode="doughnut"
                     height={280}
-                    maxItems={8}
+                    emptyText="No country data available"
+                    items={(geographicDistribution.topCountries ?? [])
+                      .slice(0, 8)
+                      .map((c) => ({ label: getCountryName(c.countryCode), value: c.viewerCount }))}
                   />
                 </div>
               </div>
@@ -860,7 +827,18 @@
               </div>
               <div class="slab-body--padded">
                 <div class="p-4 border border-border/30 bg-muted/20">
-                  <CountryTrendChart data={countryTrendData} height={300} maxCountries={6} />
+                  <TrendChart
+                    data={countryTrendData}
+                    height={300}
+                    pivot={{
+                      key: "countryCode",
+                      valueKey: "viewerCount",
+                      max: 6,
+                      unit: " viewers",
+                      nameFn: getCountryName,
+                    }}
+                    axes={{ y: { title: "Viewers", tickFormat: (v) => v.toLocaleString() } }}
+                  />
                 </div>
               </div>
             </div>
@@ -1125,156 +1103,6 @@
                         </div>
                       </div>
                     </div>
-                  </div>
-                {/if}
-              </div>
-            </div>
-          {/if}
-
-          <!-- Routing Map Slab -->
-          {#if routingMapData.routes.length > 0}
-            <div class="slab col-span-full">
-              <div class="slab-header">
-                <div class="flex items-center justify-between w-full">
-                  <div class="flex items-center gap-3">
-                    <ActivityIcon class="w-4 h-4 text-primary" />
-                    <h3>Routing Spider Map</h3>
-                  </div>
-                  <!-- Visualization Mode Toggle -->
-                  <div class="flex items-center gap-1 p-0.5 bg-muted/50 rounded">
-                    <button
-                      class="px-3 py-1 text-xs font-medium rounded transition-colors {vizMode ===
-                      'routes'
-                        ? 'bg-background text-foreground shadow-sm'
-                        : 'text-muted-foreground hover:text-foreground'}"
-                      onclick={() => (vizMode = "routes")}
-                    >
-                      Routes
-                    </button>
-                    <button
-                      class="px-3 py-1 text-xs font-medium rounded transition-colors {vizMode ===
-                      'buckets'
-                        ? 'bg-background text-foreground shadow-sm'
-                        : 'text-muted-foreground hover:text-foreground'}"
-                      onclick={() => (vizMode = "buckets")}
-                    >
-                      Buckets
-                    </button>
-                  </div>
-                </div>
-              </div>
-              <div class="slab-body--flush h-[500px]">
-                {#if typeof window !== "undefined"}
-                  <RoutingMap
-                    routes={vizMode === "routes" ? routingMapData.routes : []}
-                    nodes={routingMapData.nodes}
-                    buckets={vizMode === "buckets" ? routingMapData.buckets : []}
-                    flows={vizMode === "buckets" ? flowSegments : []}
-                    onBucketClick={(id) => {
-                      const clean = id.slice(2); // drop prefix c-/n-
-                      selectedBucket = selectedBucket === clean ? null : clean;
-                    }}
-                    height={500}
-                  />
-                {/if}
-              </div>
-            </div>
-          {/if}
-
-          <!-- Map Legend (mode-dependent) -->
-          {#if routingMapData.routes.length > 0}
-            <div class="slab col-span-full">
-              <div class="slab-header">
-                <div class="flex items-center gap-2">
-                  <Globe2Icon class="w-4 h-4 text-muted-foreground" />
-                  <h3>Map Legend</h3>
-                </div>
-              </div>
-              <div class="slab-body--padded text-xs text-muted-foreground space-y-3">
-                {#if vizMode === "routes"}
-                  <!-- Routes Mode Legend -->
-                  <div class="space-y-2">
-                    <p
-                      class="text-[11px] uppercase tracking-wide text-muted-foreground/70 font-medium"
-                    >
-                      Direct Routing View
-                    </p>
-                    <div class="flex items-center gap-3">
-                      <span
-                        class="inline-block w-3 h-3 rounded-full bg-primary shadow-[0_0_6px_theme(colors.primary)]"
-                      ></span>
-                      <span>Edge Node (infrastructure server)</span>
-                    </div>
-                    <div class="flex items-center gap-3">
-                      <span class="inline-block w-2 h-2 rounded-full bg-success"></span>
-                      <span>Client origin (viewer location)</span>
-                    </div>
-                    <div class="flex items-center gap-3">
-                      <span class="inline-block w-6 h-0.5 bg-success/60"></span>
-                      <span>Successful route (client → node)</span>
-                    </div>
-                    <div class="flex items-center gap-3">
-                      <span class="inline-block w-6 h-0.5 bg-destructive/60"></span>
-                      <span>Failed route</span>
-                    </div>
-                  </div>
-                {:else}
-                  <!-- Buckets Mode Legend -->
-                  <div class="space-y-2">
-                    <p
-                      class="text-[11px] uppercase tracking-wide text-muted-foreground/70 font-medium"
-                    >
-                      Aggregated Bucket View (H3 Resolution 5, ~25km hexagons)
-                    </p>
-                    <div class="flex items-center gap-3">
-                      <span
-                        class="inline-block w-4 h-4 rounded-sm bg-primary/30 border border-primary/50"
-                      ></span>
-                      <span>Client bucket (viewer region)</span>
-                    </div>
-                    <div class="flex items-center gap-3">
-                      <span
-                        class="inline-block w-4 h-4 rounded-sm bg-success/30 border border-success/50"
-                      ></span>
-                      <span>Node bucket (edge server region)</span>
-                    </div>
-                    <div class="flex items-center gap-3">
-                      <span class="inline-block w-6 h-0.5 bg-purple-500/60"></span>
-                      <span>Bucket flow (&lt;1500km average distance)</span>
-                    </div>
-                    <div class="flex items-center gap-3">
-                      <span class="inline-block w-6 h-0.5 bg-orange-500/60"></span>
-                      <span>Long-haul flow (&gt;1500km) - consider adding closer edge</span>
-                    </div>
-                    <div class="flex items-center gap-3">
-                      <span class="inline-block w-6 h-0.5 bg-amber-500/70"></span>
-                      <span>Cross-cluster flow (routed via remote cluster)</span>
-                    </div>
-                    {#if bucketHotspots.length > 0}
-                      {@const counts = bucketHotspots.map((b) => b.count)}
-                      {@const minCount = Math.min(...counts)}
-                      {@const maxCount = Math.max(...counts)}
-                      {@const midCount = counts[Math.floor(counts.length / 2)]}
-                      <div class="pt-2 border-t border-border/30">
-                        <p class="text-[11px] text-muted-foreground/70 mb-2">
-                          Bucket fill intensity (by event count):
-                        </p>
-                        <div class="flex items-center gap-2 text-[11px] text-muted-foreground">
-                          <span>{minCount}</span>
-                          <div
-                            class="flex-1 h-2 rounded bg-gradient-to-r from-primary/20 via-primary/50 to-primary/80"
-                          ></div>
-                          <span>{midCount}</span>
-                          <div
-                            class="flex-1 h-2 rounded bg-gradient-to-r from-primary/80 via-success/60 to-success/90"
-                          ></div>
-                          <span>{maxCount} events</span>
-                        </div>
-                      </div>
-                    {/if}
-                    <p class="text-[11px] text-muted-foreground/80 pt-1">
-                      Click a bucket to filter tables below; click again to clear.
-                    </p>
                   </div>
                 {/if}
               </div>

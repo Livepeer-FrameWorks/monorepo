@@ -24,7 +24,8 @@
   import DynamicHints from "$lib/components/dashboard/DynamicHints.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
   import { EventLog, type StreamEvent } from "$lib/components/stream-details";
-  import ViewerTrendChart from "$lib/components/charts/ViewerTrendChart.svelte";
+  import TrendChart from "$lib/components/charts/TrendChart.svelte";
+  import { palette } from "$lib/components/charts/theme";
   import {
     realtimeStreams,
     streamMetrics,
@@ -414,12 +415,19 @@
                     {formatNumber(dailyStats.reduce((sum, d) => sum + (d.viewerHours || 0), 0))}h
                   </span>
                 </div>
-                <ViewerTrendChart
+                <TrendChart
                   data={dailyStats.map((d) => ({ timestamp: d.date, viewers: d.viewerHours || 0 }))}
                   mini={true}
                   height={40}
-                  seriesLabel="Viewer Hours"
-                  valueFormatter={(v) => `${formatNumber(v)}h`}
+                  series={[
+                    {
+                      key: "viewers",
+                      label: "Viewer Hours",
+                      color: palette.cyan,
+                      filled: true,
+                      format: (v) => `${formatNumber(v)}h`,
+                    },
+                  ]}
                 />
               </div>
               <!-- Egress Trend -->
@@ -430,12 +438,19 @@
                     {formatNumber(dailyStats.reduce((sum, d) => sum + (d.egressGb || 0), 0))} GB
                   </span>
                 </div>
-                <ViewerTrendChart
+                <TrendChart
                   data={dailyStats.map((d) => ({ timestamp: d.date, viewers: d.egressGb || 0 }))}
                   mini={true}
                   height={40}
-                  seriesLabel="Egress"
-                  valueFormatter={(v) => `${formatNumber(v)} GB`}
+                  series={[
+                    {
+                      key: "viewers",
+                      label: "Egress",
+                      color: palette.blue,
+                      filled: true,
+                      format: (v) => `${formatNumber(v)} GB`,
+                    },
+                  ]}
                 />
               </div>
               <!-- Sessions Trend -->
@@ -446,15 +461,22 @@
                     {formatNumber(dailyStats.reduce((sum, d) => sum + (d.totalSessions || 0), 0))}
                   </span>
                 </div>
-                <ViewerTrendChart
+                <TrendChart
                   data={dailyStats.map((d) => ({
                     timestamp: d.date,
                     viewers: d.totalSessions || 0,
                   }))}
                   mini={true}
                   height={40}
-                  seriesLabel="Sessions"
-                  valueFormatter={(v) => formatNumber(v)}
+                  series={[
+                    {
+                      key: "viewers",
+                      label: "Sessions",
+                      color: palette.purple,
+                      filled: true,
+                      format: (v) => formatNumber(v),
+                    },
+                  ]}
                 />
               </div>
             </div>

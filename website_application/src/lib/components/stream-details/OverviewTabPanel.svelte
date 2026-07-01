@@ -3,9 +3,9 @@
   import { formatDate, formatDuration } from "$lib/utils/stream-helpers";
   import { formatNumber } from "$lib/utils/formatters";
   import { getIconComponent } from "$lib/iconUtils";
-  import ViewerTrendChart from "$lib/components/charts/ViewerTrendChart.svelte";
-  import QualityTierChart from "$lib/components/charts/QualityTierChart.svelte";
-  import CodecDistributionChart from "$lib/components/charts/CodecDistributionChart.svelte";
+  import TrendChart from "$lib/components/charts/TrendChart.svelte";
+  import { palette } from "$lib/components/charts/theme";
+  import BreakdownChart from "$lib/components/charts/BreakdownChart.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
   import {
     classifyTrack,
@@ -358,10 +358,51 @@
       <div class="slab-body--padded">
         <div class="grid grid-cols-1 md:grid-cols-2 border border-border/30">
           <div class="p-4 border-b border-border/30 md:border-b-0 md:border-r border-border/30">
-            <QualityTierChart data={qualityTierSummary} height={200} />
+            <BreakdownChart
+              mode="doughnut"
+              height={200}
+              format="minutes"
+              emptyText="No quality tier data available"
+              items={qualityTierSummary
+                ? [
+                    {
+                      label: "2160p",
+                      value: qualityTierSummary.tier2160pMinutes,
+                      color: palette.cyan,
+                    },
+                    {
+                      label: "1440p",
+                      value: qualityTierSummary.tier1440pMinutes,
+                      color: palette.green,
+                    },
+                    {
+                      label: "1080p",
+                      value: qualityTierSummary.tier1080pMinutes,
+                      color: palette.blue,
+                    },
+                    {
+                      label: "720p",
+                      value: qualityTierSummary.tier720pMinutes,
+                      color: palette.yellow,
+                    },
+                    {
+                      label: "480p",
+                      value: qualityTierSummary.tier480pMinutes,
+                      color: palette.orange,
+                    },
+                    { label: "SD", value: qualityTierSummary.tierSdMinutes, color: palette.fgDark },
+                  ]
+                : []}
+            />
           </div>
           <div class="p-4">
-            <CodecDistributionChart data={codecDistribution} height={200} title="" />
+            <BreakdownChart
+              mode="doughnut"
+              height={200}
+              format="minutes"
+              emptyText="No codec data available"
+              items={codecDistribution.map((c) => ({ label: c.codec, value: c.minutes }))}
+            />
           </div>
         </div>
 
@@ -407,7 +448,19 @@
     </div>
     <div class="slab-body--padded">
       {#if chartData.length > 0}
-        <ViewerTrendChart data={chartData} height={200} title="" />
+        <TrendChart
+          data={chartData}
+          height={200}
+          series={[
+            {
+              key: "viewers",
+              label: "Viewers",
+              color: palette.blue,
+              filled: true,
+              format: (v) => `${v} viewers`,
+            },
+          ]}
+        />
       {:else}
         <div class="h-[200px] flex items-center justify-center">
           <EmptyState

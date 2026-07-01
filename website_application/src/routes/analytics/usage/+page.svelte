@@ -22,8 +22,9 @@
   import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
   import { Alert, AlertTitle, AlertDescription } from "$lib/components/ui/alert";
   import { Select, SelectTrigger, SelectContent, SelectItem } from "$lib/components/ui/select";
-  import StorageBreakdownChart from "$lib/components/charts/StorageBreakdownChart.svelte";
-  import ViewerTrendChart from "$lib/components/charts/ViewerTrendChart.svelte";
+  import BreakdownChart from "$lib/components/charts/BreakdownChart.svelte";
+  import TrendChart from "$lib/components/charts/TrendChart.svelte";
+  import { palette } from "$lib/components/charts/theme";
   import EmptyState from "$lib/components/EmptyState.svelte";
   import { getCountryName } from "$lib/utils/country-names";
   import { goto } from "$app/navigation";
@@ -767,44 +768,72 @@
                 {#if usageAggregateSeries.streamHours.length > 0}
                   <div class="border border-border/30 bg-muted/10 p-3">
                     <div class="text-xs text-muted-foreground mb-2">Stream Hours</div>
-                    <ViewerTrendChart
+                    <TrendChart
                       data={usageAggregateSeries.streamHours}
                       height={180}
-                      seriesLabel="Stream Hours"
-                      valueFormatter={(value) => `${value.toFixed(1)} h`}
+                      series={[
+                        {
+                          key: "viewers",
+                          label: "Stream Hours",
+                          color: palette.blue,
+                          filled: true,
+                          format: (v) => `${v.toFixed(1)} h`,
+                        },
+                      ]}
                     />
                   </div>
                 {/if}
                 {#if usageAggregateSeries.ingressGb.length > 0}
                   <div class="border border-border/30 bg-muted/10 p-3">
                     <div class="text-xs text-muted-foreground mb-2">Ingress (GB)</div>
-                    <ViewerTrendChart
+                    <TrendChart
                       data={usageAggregateSeries.ingressGb}
                       height={180}
-                      seriesLabel="Ingress (GB)"
-                      valueFormatter={(value) => `${value.toFixed(1)} GB`}
+                      series={[
+                        {
+                          key: "viewers",
+                          label: "Ingress (GB)",
+                          color: palette.cyan,
+                          filled: true,
+                          format: (v) => `${v.toFixed(1)} GB`,
+                        },
+                      ]}
                     />
                   </div>
                 {/if}
                 {#if usageAggregateSeries.egressGb.length > 0}
                   <div class="border border-border/30 bg-muted/10 p-3">
                     <div class="text-xs text-muted-foreground mb-2">Egress (GB)</div>
-                    <ViewerTrendChart
+                    <TrendChart
                       data={usageAggregateSeries.egressGb}
                       height={180}
-                      seriesLabel="Egress (GB)"
-                      valueFormatter={(value) => `${value.toFixed(1)} GB`}
+                      series={[
+                        {
+                          key: "viewers",
+                          label: "Egress (GB)",
+                          color: palette.green,
+                          filled: true,
+                          format: (v) => `${v.toFixed(1)} GB`,
+                        },
+                      ]}
                     />
                   </div>
                 {/if}
                 {#if usageAggregateSeries.recordingGb.length > 0}
                   <div class="border border-border/30 bg-muted/10 p-3">
                     <div class="text-xs text-muted-foreground mb-2">Recording Storage (GiB)</div>
-                    <ViewerTrendChart
+                    <TrendChart
                       data={usageAggregateSeries.recordingGb}
                       height={180}
-                      seriesLabel="Recording (GiB)"
-                      valueFormatter={(value) => `${value.toFixed(1)} GiB`}
+                      series={[
+                        {
+                          key: "viewers",
+                          label: "Recording (GiB)",
+                          color: palette.yellow,
+                          filled: true,
+                          format: (v) => `${v.toFixed(1)} GiB`,
+                        },
+                      ]}
                     />
                   </div>
                 {/if}
@@ -824,7 +853,19 @@
               <span class="text-xs text-muted-foreground">{currentRange.label}</span>
             </div>
             <div class="slab-body--padded">
-              <ViewerTrendChart data={viewerTrendData} height={200} />
+              <TrendChart
+                data={viewerTrendData}
+                height={200}
+                series={[
+                  {
+                    key: "viewers",
+                    label: "Viewers",
+                    color: palette.blue,
+                    filled: true,
+                    format: (v) => `${v} viewers`,
+                  },
+                ]}
+              />
             </div>
           </div>
         {/if}
@@ -1565,7 +1606,20 @@
             </div>
             <div class="slab-body--padded">
               {#if storageData}
-                <StorageBreakdownChart data={storageData} height={160} />
+                <BreakdownChart
+                  mode="bar"
+                  horizontal
+                  format="bytes"
+                  height={160}
+                  emptyText="No storage data available"
+                  items={storageData
+                    ? [
+                        { label: "DVR", value: storageData.dvrBytes },
+                        { label: "Clips", value: storageData.clipBytes },
+                        { label: "VOD", value: storageData.vodBytes },
+                      ]
+                    : []}
+                />
                 <div class="mt-4 pt-4 border-t border-border/30">
                   <div class="flex items-center justify-between text-sm">
                     <span class="text-muted-foreground">Total Storage</span>

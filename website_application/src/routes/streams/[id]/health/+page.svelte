@@ -21,8 +21,9 @@
   import { toast } from "$lib/stores/toast.js";
   import { streamMetrics as realtimeStreamMetrics } from "$lib/stores/realtime";
   import BufferStateIndicator from "$lib/components/health/BufferStateIndicator.svelte";
-  import HealthTrendChart from "$lib/components/charts/HealthTrendChart.svelte";
-  import BufferHealthHistogram from "$lib/components/charts/BufferHealthHistogram.svelte";
+  import TrendChart from "$lib/components/charts/TrendChart.svelte";
+  import { palette } from "$lib/components/charts/theme";
+  import BreakdownChart from "$lib/components/charts/BreakdownChart.svelte";
   import LoadingCard from "$lib/components/LoadingCard.svelte";
   import { getIconComponent } from "$lib/iconUtils";
   import { GridSeam } from "$lib/components/layout";
@@ -1114,15 +1115,23 @@
           {#if clientMetrics.length > 1}
             <div class="slab-body--padded border-t border-border/30">
               <h4 class="text-sm font-medium text-muted-foreground mb-3">Packet Loss Trend</h4>
-              <HealthTrendChart
+              <TrendChart
                 data={clientMetrics.map((m) => ({
                   timestamp: m.timestamp,
                   packetLoss: m.packetLossRate,
                 }))}
                 height={200}
-                showBufferHealth={false}
-                showBitrate={false}
-                showPacketLoss={true}
+                series={[
+                  {
+                    key: "packetLoss",
+                    label: "Packet loss",
+                    color: palette.red,
+                    scale: 100,
+                    unit: "%",
+                    digits: 2,
+                  },
+                ]}
+                axes={{ y: { title: "Packet loss %", max: 5, tickFormat: (v) => `${v}%` } }}
               />
               <p class="text-xs text-muted-foreground mt-2">Packet Loss (red, lower=better)</p>
             </div>
@@ -1700,7 +1709,15 @@
             <h3>Buffer Health Distribution</h3>
           </div>
           <div class="slab-body--padded">
-            <BufferHealthHistogram data={bufferHealthValues} height={250} />
+            <BreakdownChart
+              mode="histogram"
+              values={bufferHealthValues}
+              height={250}
+              unit="sessions"
+              range={[0, 100]}
+              binCount={10}
+              emptyText="No buffer data available"
+            />
           </div>
         </div>
       {/if}
@@ -1717,15 +1734,37 @@
         </div>
         {#if healthMetrics.length > 0}
           <div class="slab-body--padded">
-            <HealthTrendChart
+            <TrendChart
               data={healthMetrics.map((m) => ({
                 timestamp: m.timestamp,
                 bufferHealth: m.bufferHealth,
                 bitrate: m.bitrate,
               }))}
               height={350}
-              showBufferHealth={true}
-              showBitrate={true}
+              series={[
+                {
+                  key: "bufferHealth",
+                  label: "Buffer health",
+                  color: palette.green,
+                  filled: true,
+                  scale: 100,
+                  unit: "%",
+                  digits: 0,
+                },
+                {
+                  key: "bitrate",
+                  label: "Bitrate",
+                  color: palette.blue,
+                  axis: "y1",
+                  scale: 1 / 1000,
+                  unit: " Mbps",
+                  digits: 2,
+                },
+              ]}
+              axes={{
+                y: { title: "Buffer health %", max: 100, tickFormat: (v) => `${v}%` },
+                y1: { title: "Bitrate (Mbps)", color: palette.blue },
+              }}
             />
           </div>
         {:else}
