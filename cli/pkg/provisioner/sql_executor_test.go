@@ -115,6 +115,13 @@ func TestShellQuote(t *testing.T) {
 		{"hello", "'hello'"},
 		{"it's", "'it'\\''s'"},
 		{"", "''"},
+		// The bug that motivated ShellQuote: Go %q (double-quote) would let these
+		// expand in the remote shell. Single-quote quoting keeps them literal.
+		{"a$b", "'a$b'"},
+		{"$(rm -rf /)", "'$(rm -rf /)'"},
+		{"back`tick`", "'back`tick`'"},
+		{`back\slash`, `'back\slash'`},
+		{"p@ss'w$rd`x\\y", "'p@ss'\\''w$rd`x\\y'"},
 	}
 	for _, tt := range tests {
 		got := shellQuote(tt.input)

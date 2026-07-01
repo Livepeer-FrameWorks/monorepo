@@ -492,3 +492,8 @@ func scanPsqlValue(raw string, dest any) error {
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
+
+// ShellQuote is the exported form for callers outside this package (e.g. the
+// cluster CLI building remote clickhouse-client invocations). Single-quote shell
+// quoting: safe for $, backticks, backslashes, and quotes — unlike Go's %q.
+func ShellQuote(s string) string { return shellQuote(s) }

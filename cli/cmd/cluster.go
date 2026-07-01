@@ -59,6 +59,7 @@ invocation. Explicit flags always win over saved context defaults.`,
 	cluster.AddCommand(newClusterProvisionCmd())
 	cluster.AddCommand(newClusterFinalizeCmd())
 	cluster.AddCommand(newClusterInitCmd())
+	cluster.AddCommand(newClusterClickHouseCmd())
 	cluster.AddCommand(newClusterLogsCmd())
 	cluster.AddCommand(newClusterSnapshotCmd())
 	cluster.AddCommand(newClusterRestartCmd())
@@ -508,7 +509,7 @@ func runDetect(cmd *cobra.Command, manifest *inventory.Manifest, manifestPath st
 	}
 
 	if manifest.Infrastructure.ClickHouse != nil && manifest.Infrastructure.ClickHouse.Enabled {
-		detectServiceWithTimeout(cmd, sshPool, manifest, "clickhouse", "clickhouse", manifest.Infrastructure.ClickHouse.Host)
+		detectServiceWithTimeout(cmd, sshPool, manifest, "clickhouse", "clickhouse", manifest.Infrastructure.ClickHouse.CoordinatorHost())
 	}
 
 	if manifest.Infrastructure.Kafka != nil && manifest.Infrastructure.Kafka.Enabled {
@@ -724,9 +725,9 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 	}
 
 	if manifest.Infrastructure.ClickHouse != nil && manifest.Infrastructure.ClickHouse.Enabled {
-		host, ok := manifest.GetHost(manifest.Infrastructure.ClickHouse.Host)
+		host, ok := manifest.GetHost(manifest.Infrastructure.ClickHouse.CoordinatorHost())
 		if !ok {
-			recordMiss("ClickHouse", fmt.Sprintf("host %q not found in manifest", manifest.Infrastructure.ClickHouse.Host))
+			recordMiss("ClickHouse", fmt.Sprintf("host %q not found in manifest", manifest.Infrastructure.ClickHouse.CoordinatorHost()))
 		} else {
 			checker := clickHouseDoctorChecker(manifest.Infrastructure.ClickHouse, sharedEnv)
 			runInfraCheck("ClickHouse", checker.Check(host.ExternalIP, manifest.Infrastructure.ClickHouse.Port))
