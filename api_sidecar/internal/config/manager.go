@@ -321,6 +321,10 @@ func desiredTriggers() map[string]any {
 func applyBaselineMistConfig(desiredConfig map[string]any) {
 	desiredConfig["accesslog"] = "LOG"
 	desiredConfig["debug"] = 4
+	// FrameWorks does not use Mist's NDI/ONVIF/VISCA camera auto-discovery; keep its
+	// probe loop (UDP broadcasts, multicast) off. Enabling cameras later flips this
+	// same managed-config key, not an app-level toggle.
+	desiredConfig["device_discovery"] = false
 	desiredConfig["prometheus"] = mist.MetricsConfigValue
 	desiredConfig["sessionInputMode"] = 15
 	desiredConfig["sessionOutputMode"] = 15
