@@ -6,7 +6,7 @@ interface User {
 }
 
 // API configuration for authentication endpoints
-const AUTH_URL = import.meta.env.VITE_AUTH_URL ?? "";
+const AUTH_URL = import.meta.env.VITE_AUTH_URL || "/auth";
 export { AUTH_URL };
 
 export const authAPI = axios.create({

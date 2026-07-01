@@ -49,7 +49,7 @@ func TestAuthHandlers_InvalidJSONBindingsReturnBadRequest(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(rec)
-			c.Request = httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(`{"broken_json":`))
+			c.Request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/test", strings.NewReader(`{"broken_json":`))
 			c.Request.Header.Set("Content-Type", "application/json")
 
 			tc.handler(c)
@@ -161,8 +161,23 @@ func TestHandleEmailNotVerifiedLoginError(t *testing.T) {
 			wantHandled: true,
 		},
 		{
+			name:        "not activated wording gets stable code",
+			message:     "account not activated",
+			wantHandled: true,
+		},
+		{
+			name:        "activate account wording gets stable code",
+			message:     "please activate your account before signing in",
+			wantHandled: true,
+		},
+		{
 			name:        "invalid credentials remains generic",
 			message:     "invalid credentials",
+			wantHandled: false,
+		},
+		{
+			name:        "deactivated account remains separate",
+			message:     "account deactivated",
 			wantHandled: false,
 		},
 		{
@@ -199,6 +214,87 @@ func TestHandleEmailNotVerifiedLoginError(t *testing.T) {
 			}
 			if body["error"] != "email not verified" {
 				t.Fatalf("error: got %q, want %q", body["error"], "email not verified")
+			}
+		})
+	}
+}
+
+func TestLoginMapsActivationErrorsToVerificationResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantError  string
+		wantCode   string
+	}{
+		{
+			name:       "email not verified",
+			err:        status.Error(codes.Unauthenticated, "email not verified"),
+			wantStatus: http.StatusForbidden,
+			wantError:  "email not verified",
+			wantCode:   emailNotVerifiedErrorCode,
+		},
+		{
+			name:       "not activated",
+			err:        status.Error(codes.Unauthenticated, "account not activated"),
+			wantStatus: http.StatusForbidden,
+			wantError:  "email not verified",
+			wantCode:   emailNotVerifiedErrorCode,
+		},
+		{
+			name:       "invalid credentials",
+			err:        status.Error(codes.Unauthenticated, "invalid credentials"),
+			wantStatus: http.StatusUnauthorized,
+			wantError:  "invalid credentials",
+		},
+		{
+			name:       "deactivated account is not verification",
+			err:        status.Error(codes.Unauthenticated, "account deactivated"),
+			wantStatus: http.StatusUnauthorized,
+			wantError:  "account deactivated",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &AuthHandlers{
+				commodore: &clientstest.FakeCommodore{
+					LoginFn: func(_ context.Context, req *commodorepb.LoginRequest) (*commodorepb.AuthResponse, error) {
+						if req.Email != "user@example.com" || req.Password != "correct-password" {
+							t.Fatalf("login request = %+v", req)
+						}
+						return nil, tc.err
+					},
+				},
+				logger: logging.NewLogger(),
+			}
+
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequestWithContext(
+				context.Background(),
+				http.MethodPost,
+				"/auth/login",
+				strings.NewReader(`{"email":"user@example.com","password":"correct-password"}`),
+			)
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			h.Login()(c)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status: got %d, want %d (body=%q)", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			var body map[string]string
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("unmarshal body: %v (raw=%q)", err, rec.Body.String())
+			}
+			if body["error"] != tc.wantError {
+				t.Fatalf("error: got %q, want %q", body["error"], tc.wantError)
+			}
+			if body["error_code"] != tc.wantCode {
+				t.Fatalf("error_code: got %q, want %q", body["error_code"], tc.wantCode)
 			}
 		})
 	}

@@ -1,6 +1,6 @@
 import { browser } from "$app/environment";
 
-const AUTH_URL = import.meta.env.VITE_AUTH_URL ?? "";
+const AUTH_URL = import.meta.env.VITE_AUTH_URL || "/auth";
 
 /**
  * Outcome of a refresh attempt. Only "unauthorized" means the session is
@@ -53,7 +53,7 @@ async function postRefresh(fetchFn: typeof globalThis.fetch): Promise<RefreshRes
 export async function refreshAuthSession(
   fetchFn: typeof globalThis.fetch = globalThis.fetch
 ): Promise<RefreshResult> {
-  if (!browser || !AUTH_URL) {
+  if (!browser) {
     return "transient";
   }
 

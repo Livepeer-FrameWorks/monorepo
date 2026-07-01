@@ -3,6 +3,7 @@
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
+  import { isEmailVerificationRequired } from "$lib/auth/errors";
   import { auth } from "$lib/stores/auth";
   import { getMarketingSiteUrl } from "$lib/config";
   import { getIconComponent } from "$lib/iconUtils";
@@ -33,14 +34,6 @@
   };
   let turnstileToken = $state("");
   let turnstileWidgetId = $state("");
-
-  const isEmailVerificationRequired = (result: { error?: string; errorCode?: string }) => {
-    if (result.errorCode?.trim().toUpperCase() === "EMAIL_NOT_VERIFIED") {
-      return true;
-    }
-    const message = result.error?.toLowerCase() ?? "";
-    return message.includes("not verified") || message.includes("verify your email");
-  };
 
   const resetTurnstileWidget = () => {
     if (typeof window !== "undefined" && turnstileWidgetId) {

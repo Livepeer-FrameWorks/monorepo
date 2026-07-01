@@ -45,6 +45,19 @@ describe("refreshAuthSession", () => {
     expect(localStorage.setItem).toHaveBeenCalledWith("user", JSON.stringify({ id: "user-1" }));
   });
 
+  it("defaults to the same-origin gateway auth prefix", async () => {
+    vi.unstubAllEnvs();
+    const fetchFn = vi.fn().mockResolvedValue(new Response(JSON.stringify({}), { status: 200 }));
+
+    const { refreshAuthSession } = await loadModule();
+
+    await expect(refreshAuthSession(fetchFn)).resolves.toBe("ok");
+    expect(fetchFn).toHaveBeenCalledWith(
+      "/auth/refresh",
+      expect.objectContaining({ method: "POST", credentials: "include" })
+    );
+  });
+
   it("classifies a 401 as unauthorized", async () => {
     const fetchFn = vi.fn().mockResolvedValue(new Response("", { status: 401 }));
 

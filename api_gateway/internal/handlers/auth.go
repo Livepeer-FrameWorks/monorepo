@@ -28,7 +28,7 @@ const (
 )
 
 var (
-	loginAllowedErrors         = []string{"not verified", "verify your email", "deactivated"}
+	loginAllowedErrors         = []string{"not verified", "verify your email", "not activated", "activate your account", "deactivated"}
 	walletLoginAllowedErrors   = []string{"signature", "expired"}
 	registerAllowedErrors      = []string{"already exists", "user limit", "bot verification"}
 	verifyEmailAllowedErrors   = []string{"invalid or expired", "already verified"}
@@ -72,9 +72,21 @@ func handleEmailNotVerifiedLoginError(c *gin.Context, message string) bool {
 	return true
 }
 
+func handleEmailNotVerifiedLoginStatusError(c *gin.Context, err error) bool {
+	st, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+	return handleEmailNotVerifiedLoginError(c, st.Message())
+}
+
 func isEmailNotVerifiedLoginMessage(message string) bool {
 	lowered := strings.ToLower(strings.TrimSpace(message))
-	return strings.Contains(lowered, "not verified") || strings.Contains(lowered, "verify your email")
+	return strings.Contains(lowered, "not verified") ||
+		strings.Contains(lowered, "verify your email") ||
+		strings.Contains(lowered, "not activated") ||
+		strings.Contains(lowered, "activate your account") ||
+		strings.Contains(lowered, "activate your email")
 }
 
 // parseBehavior converts JSON behavior string to proto BehaviorData
@@ -144,6 +156,9 @@ func (h *AuthHandlers) Login() gin.HandlerFunc {
 				return
 			}
 			if handleBotCheckError(c, err) {
+				return
+			}
+			if handleEmailNotVerifiedLoginStatusError(c, err) {
 				return
 			}
 			errMsg := gatewayerrors.SanitizeGRPCError(err, "invalid credentials", loginAllowedErrors)
