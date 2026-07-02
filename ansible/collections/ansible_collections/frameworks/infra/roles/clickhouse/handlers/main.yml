@@ -1,9 +1,16 @@
 ---
-# Keeper is defined FIRST so that on a run where both Keeper and server configs
-# change (both handlers notified), Ansible — which fires handlers in definition
-# order, not notification order — restarts Keeper before clickhouse-server, so the
-# server attaches to the already-restarted Keeper. systemd After=/Wants= only
-# orders boot/manual starts, not handler runs.
+# Defined before the restart handlers so a unit-file change (e.g. the Keeper
+# ordering drop-in) is reloaded into systemd before any restart in the same flush.
+- name: Reload systemd units
+  listen: systemd daemon-reload
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+# Keeper is defined FIRST of the restart handlers so that on a run where both
+# Keeper and server configs change (both handlers notified), Ansible — which
+# fires handlers in definition order, not notification order — restarts Keeper
+# before clickhouse-server, so the server attaches to the already-restarted
+# Keeper. systemd After=/Wants= only orders boot/manual starts, not handler runs.
 - name: Restart clickhouse-keeper
   listen: keeper restart
   ansible.builtin.systemd:

@@ -133,12 +133,7 @@
           [Unit]
           After=clickhouse-keeper.service
           Wants=clickhouse-keeper.service
-      register: clickhouse_keeper_dropin
-
-    - name: Reload systemd after writing the Keeper ordering drop-in
-      ansible.builtin.systemd:
-        daemon_reload: true
-      when: clickhouse_keeper_dropin is changed
+      notify: systemd daemon-reload
 
 - name: Remove managed ClickHouse cluster + Keeper-ordering config when unclustered
   when: clickhouse_keeper_nodes | default([]) | length == 0
@@ -147,7 +142,9 @@
     state: absent
   loop:
     - /etc/systemd/system/clickhouse-server.service.d/10-keeper.conf
-  notify: clickhouse restart
+  notify:
+    - systemd daemon-reload
+    - clickhouse restart
 
 - name: Remove managed ClickHouse cluster config when unclustered
   when: clickhouse_keeper_nodes | default([]) | length == 0
