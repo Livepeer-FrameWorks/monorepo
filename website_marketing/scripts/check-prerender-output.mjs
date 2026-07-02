@@ -4,9 +4,15 @@ import { join } from "node:path";
 const clientDir = join(process.cwd(), "build", "client");
 
 const routes = [
-  ["index.html", "FrameWorks - Sovereign Video Infrastructure", "Sovereign Video Infrastructure"],
+  [
+    "index.html",
+    "FrameWorks - Sovereign Live Streaming Platform, Hosted or Self-Hosted",
+    "Sovereign Video Infrastructure",
+  ],
+  // Snippet stops before "QoE & Geo" because the built title HTML-encodes the ampersand.
+  ["analytics/index.html", "FrameWorks Analytics - Real-Time Streaming Telemetry"],
   ["pricing/index.html", "FrameWorks Pricing - Hosted, Hybrid, and Self-Hosted Streaming"],
-  ["about/index.html", "About FrameWorks - Sovereign Streaming Infrastructure Team"],
+  ["about/index.html", "About FrameWorks - The Team Behind Sovereign Live Streaming"],
   ["contact/index.html", "Contact FrameWorks - Streaming Infrastructure Support"],
   ["status/index.html", "FrameWorks Status - Live Streaming Network Health"],
   ["privacy/index.html", "FrameWorks Privacy Policy"],
@@ -49,6 +55,10 @@ for (const [relativePath, ...snippets] of routes) {
   const h1Count = (html.match(/<h1[\s>]/g) || []).length;
   if (h1Count !== 1) {
     failures.push(`build/client/${relativePath} has ${h1Count} <h1> tags (expected exactly 1)`);
+  }
+  const emptyHeadings = html.match(/<h[1-6][^>]*>\s*<\/h[1-6]>/g) || [];
+  if (emptyHeadings.length > 0) {
+    failures.push(`build/client/${relativePath} has ${emptyHeadings.length} empty heading tag(s)`);
   }
 }
 

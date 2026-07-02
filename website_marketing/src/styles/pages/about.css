@@ -96,7 +96,7 @@
     gap: clamp(0.3rem, 0.6vw, 0.5rem);
   }
 
-  .mission-pillars__body h4 {
+  .mission-pillars__body h3 {
     margin: 0;
     font-size: 0.88rem;
     letter-spacing: 0.18em;

@@ -45,6 +45,36 @@ case "$TARGET" in
     ;;
   */website_docs/*)
     printf '\nSitemap: https://logbook.frameworks.network/sitemap-index.xml\n' >> "$TARGET/robots.txt"
+
+    # Full-content companion to llms.txt (docs site only): the whole docs corpus
+    # in one fetch for AI agents, frontmatter stripped, one URL header per page.
+    DOCS_CONTENT="$REPO_ROOT/website_docs/src/content/docs"
+    if [ -d "$DOCS_CONTENT" ]; then
+      printf '# FrameWorks full documentation\n\n> Every page from https://logbook.frameworks.network/ concatenated. See llms.txt for the curated index.\n' > "$TARGET/llms-full.txt"
+      find "$DOCS_CONTENT" -type f \( -name '*.md' -o -name '*.mdx' \) | LC_ALL=C sort | while read -r doc; do
+        if grep -q '^draft: true' "$doc"; then continue; fi
+        rel="${doc#"$DOCS_CONTENT"/}"
+        rel="${rel%.mdx}"
+        rel="${rel%.md}"
+        rel="${rel%index}"
+        # Emit "# <title>" + canonical URL per page, drop frontmatter, and drop
+        # leading MDX component imports (imports inside code fences come after
+        # real content, so they are preserved).
+        awk -v url="https://logbook.frameworks.network/$rel" '
+          NR==1 && /^---[[:space:]]*$/ { fm=1; next }
+          fm && /^title:/ { t=$0; sub(/^title:[[:space:]]*/, "", t); gsub(/^"|"$/, "", t); title=t; next }
+          fm && /^---[[:space:]]*$/ {
+            fm=0
+            if (title != "") printf("\n\n---\n# %s\n%s\n\n", title, url)
+            else printf("\n\n---\n# %s\n\n", url)
+            next
+          }
+          fm { next }
+          !body && (/^[[:space:]]*$/ || /^import /) { next }
+          { body=1; print }
+        ' "$doc" >> "$TARGET/llms-full.txt"
+      done
+    fi
     ;;
   */website_application/*)
     printf '\nSitemap: https://app.frameworks.network/sitemap.xml\n' >> "$TARGET/robots.txt"

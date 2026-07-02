@@ -376,7 +376,7 @@ const Contact = () => {
               >
                 <div className="contact-form-panel">
                   <div className="contact-form-panel__header">
-                    <h3 className="contact-form-panel__title">Send us a note</h3>
+                    <h2 className="contact-form-panel__title">Send us a note</h2>
                     <p className="contact-form-panel__subtitle">
                       We usually reply within one business day.
                     </p>
@@ -565,6 +565,7 @@ const Contact = () => {
           >
             <MarketingSlab variant="feature-panel">
               <MarketingSlabHeader
+                as="h2"
                 eyebrow="FAQ"
                 title="Common questions"
                 subtitle="Quick answers to the questions we hear most often."

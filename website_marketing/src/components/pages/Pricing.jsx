@@ -516,6 +516,7 @@ const Pricing = () => {
             })}
             columns={3}
             stackAt="md"
+            headingLevel="h2"
           />
         }
       />
@@ -805,6 +806,7 @@ const Pricing = () => {
                           subtitle={option.tagline}
                           hover="none"
                           flush
+                          headingLevel="h3"
                           meta={
                             <span className="deployment-option__indicator" aria-hidden="true">
                               +
@@ -840,6 +842,7 @@ const Pricing = () => {
           >
             <MarketingSlab variant="feature-panel">
               <MarketingSlabHeader
+                as="h2"
                 eyebrow="FAQ"
                 title="Frequently asked questions"
                 subtitle="Everything you need to know about FrameWorks pricing before you launch."

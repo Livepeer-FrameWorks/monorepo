@@ -226,6 +226,22 @@ export default defineConfig({
           attrs: { rel: "apple-touch-icon", sizes: "180x180", href: "/apple-touch-icon.png" },
         },
         { tag: "link", attrs: { rel: "manifest", href: "/site.webmanifest" } },
+        // og:image must be an absolute URL, so it can only be emitted when the
+        // site origin is known (production builds always set VITE_DOCS_SITE_URL).
+        ...(siteOrigin
+          ? [
+              {
+                tag: "meta",
+                attrs: {
+                  property: "og:image",
+                  content: new URL(`${basePath}/og-card.png`.replace("//", "/"), siteOrigin).href,
+                },
+              },
+              { tag: "meta", attrs: { property: "og:image:width", content: "1200" } },
+              { tag: "meta", attrs: { property: "og:image:height", content: "630" } },
+              { tag: "meta", attrs: { name: "twitter:card", content: "summary_large_image" } },
+            ]
+          : []),
       ],
       plugins: [
         starlightBlog({

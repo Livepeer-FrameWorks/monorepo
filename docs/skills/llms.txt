@@ -17,6 +17,17 @@
 - [Agent Overview](https://logbook.frameworks.network/agents/overview): Discovery, auth, and capabilities
 - [Skipper Video Consultant](https://logbook.frameworks.network/agents/skipper): RAG-grounded streaming expertise
 
+## Migrating
+
+FrameWorks is an alternative to managed video APIs like Mux, Bunny Stream, and Livepeer Studio — the same stack runs hosted, hybrid, or fully self-hosted.
+
+- [Migration overview](https://logbook.frameworks.network/migrate): Pick your starting point
+- [Migrate from Mux](https://logbook.frameworks.network/migrate/mux): REST → GraphQL, signed playback, simulcast, recordings
+- [Migrate from Livepeer Studio](https://logbook.frameworks.network/migrate/livepeer-studio): API shape and access-control differences
+- [Migrate from Bunny Stream](https://logbook.frameworks.network/migrate/bunny-stream): VOD carries over, live capabilities open up
+- [Migrate from MistServer](https://logbook.frameworks.network/migrate/mistserver): Add a control plane, or federate edge capacity
+- [Migrate from any video API](https://logbook.frameworks.network/migrate/generic): The universal checklist
+
 ## API
 
 - MCP Discovery: https://bridge.frameworks.network/.well-known/mcp.json
@@ -44,3 +55,4 @@
 
 - [Full skill.json](https://frameworks.network/skill.json): Machine-readable metadata
 - [Agent Access Architecture](https://github.com/livepeer-frameworks/monorepo/blob/development/docs/architecture/agent-access.md)
+- [llms-full.txt](https://logbook.frameworks.network/llms-full.txt): The complete documentation corpus in one file

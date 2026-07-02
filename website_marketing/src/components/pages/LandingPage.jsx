@@ -563,8 +563,9 @@ const LandingPage = () => {
           <SectionContainer>
             <MarketingSlab variant="feature-panel">
               <MarketingSlabHeader
+                as="h2"
                 eyebrow="FAQ"
-                title="Sovereign streaming, plainly answered"
+                title="Sovereign live streaming, plainly answered"
                 subtitle="Short answers for operators, builders, and AI search engines trying to understand what FrameWorks does."
               />
               <Accordion type="single" collapsible>
@@ -628,6 +629,7 @@ const LandingPage = () => {
                       variant="list"
                       indicator="check"
                       gap="md"
+                      headingLevel="h3"
                     />
                   </div>
 
@@ -640,7 +642,7 @@ const LandingPage = () => {
                     />
                     <MarketingCTAButton
                       intent="secondary"
-                      href="https://github.com/livepeer/frameworks"
+                      href={config.githubUrl}
                       label="Self-host on GitHub"
                       icon="github"
                       external
@@ -711,6 +713,7 @@ const LandingPage = () => {
                       variant="list"
                       indicator="check"
                       gap="md"
+                      headingLevel="h3"
                     />
                   </div>
 
@@ -751,7 +754,7 @@ const LandingPage = () => {
                     , authenticate, pay, and operate.
                   </span>
                 </div>
-                <AgentPipelineStrip />
+                <AgentPipelineStrip headingLevel="h3" />
               </div>
             </MarketingBand>
           </SectionContainer>

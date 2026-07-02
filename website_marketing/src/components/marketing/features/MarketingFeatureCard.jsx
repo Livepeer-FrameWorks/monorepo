@@ -20,6 +20,7 @@ const MarketingFeatureCard = forwardRef(
       flush = false,
       stripe = false,
       metaAlign = "start",
+      headingLevel: Heading = "h4",
       className,
       ...props
     },
@@ -50,7 +51,7 @@ const MarketingFeatureCard = forwardRef(
         ) : null}
         <div className="marketing-feature-card__heading">
           {badge ? <span className="marketing-feature-card__badge">{badge}</span> : null}
-          {title ? <h4 className="marketing-feature-card__title">{title}</h4> : null}
+          {title ? <Heading className="marketing-feature-card__title">{title}</Heading> : null}
           {subtitle ? <span className="marketing-feature-card__subtitle">{subtitle}</span> : null}
         </div>
         {meta ? <div className="marketing-feature-card__meta">{renderSlot(meta)}</div> : null}

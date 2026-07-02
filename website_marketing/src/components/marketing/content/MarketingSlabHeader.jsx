@@ -1,11 +1,11 @@
 import { cn } from "@/lib/utils";
 
-const MarketingSlabHeader = ({ title, eyebrow, actions, subtitle, className }) => (
+const MarketingSlabHeader = ({ title, eyebrow, actions, subtitle, className, as: Tag = "h3" }) => (
   <div className={cn("marketing-slab__header marketing-slab__header--stack", className)}>
     <div className="marketing-slab__row">
       <div className="flex flex-col gap-2">
         {eyebrow ? <span className="marketing-pill">{eyebrow}</span> : null}
-        {title ? <h3 className="marketing-slab__title">{title}</h3> : null}
+        {title ? <Tag className="marketing-slab__title">{title}</Tag> : null}
       </div>
       {actions}
     </div>

@@ -11,6 +11,7 @@ const IconList = forwardRef(
       stackAt = "md",
       variant = "card",
       indicator = "icon",
+      headingLevel: Heading = "h4",
       className,
       ...props
     },
@@ -42,7 +43,9 @@ const IconList = forwardRef(
               ) : indicator === "icon" && item.icon ? (
                 <span className="marketing-icon-list__icon">{renderSlot(item.icon)}</span>
               ) : null}
-              {item.title ? <h4 className="marketing-icon-list__title">{item.title}</h4> : null}
+              {item.title ? (
+                <Heading className="marketing-icon-list__title">{item.title}</Heading>
+              ) : null}
             </div>
           ) : null}
           {item.description ? (

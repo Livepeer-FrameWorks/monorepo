@@ -31,9 +31,9 @@ export const MARKETING_ROUTES: MarketingRouteSeo[] = [
   {
     id: "home",
     path: "/",
-    title: "FrameWorks - Sovereign Video Infrastructure",
+    title: "FrameWorks - Sovereign Live Streaming Platform, Hosted or Self-Hosted",
     description:
-      "FrameWorks is a live streaming platform for sovereign video operations, combining MistServer delivery, Livepeer-backed processing, analytics, and self-hostable control-plane workflows.",
+      "FrameWorks is a live streaming platform and API for sovereign video operations: MistServer delivery, Livepeer-backed transcoding, and real-time analytics. Start hosted, go hybrid, or run the whole stack self-hosted on your own infrastructure.",
     changefreq: "weekly",
     priority: "1.0",
   },
@@ -58,7 +58,7 @@ export const MARKETING_ROUTES: MarketingRouteSeo[] = [
   {
     id: "about",
     path: "/about",
-    title: "About FrameWorks - Sovereign Streaming Infrastructure Team",
+    title: "About FrameWorks - The Team Behind Sovereign Live Streaming",
     description:
       "Learn how FrameWorks builds sovereign live video infrastructure around MistServer, Livepeer, open operations, and self-hosted edge clusters.",
     changefreq: "monthly",

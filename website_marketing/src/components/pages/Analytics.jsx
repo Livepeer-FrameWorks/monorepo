@@ -137,6 +137,7 @@ const Analytics = () => {
                   indicator="dot"
                   tone="accent"
                   className="analytics-list"
+                  headingLevel="h3"
                   items={bullets([
                     "Real-time concurrent and peak viewers, with quality-tier breakdowns per stream.",
                     "VOD audience retention with a most-replayed density strip that surfaces the moments that matter.",
@@ -214,6 +215,7 @@ const Analytics = () => {
                   indicator="dot"
                   tone="accent"
                   className="analytics-list"
+                  headingLevel="h3"
                   items={bullets([
                     "Viewer-measured rebuffering ratio, frame drops and bitrate trends.",
                     "Boot waterfall pinpoints startup latency from resolve to first frame.",
@@ -293,6 +295,7 @@ const Analytics = () => {
                   indicator="dot"
                   tone="green"
                   className="analytics-list"
+                  headingLevel="h3"
                   items={bullets([
                     "Bandwidth, storage and codec breakdowns with ~5-minute settlement.",
                     "Per-stream and per-tenant cost visibility.",

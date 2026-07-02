@@ -382,12 +382,12 @@ const About = () => {
                       >
                         <span className="mission-pillars__dot" aria-hidden="true" />
                         <div className="mission-pillars__body">
-                          <h4>
+                          <h3>
                             {highlight.title}{" "}
                             {highlight.title === "Sovereignty Without Pain" ? (
                               <SovereigntyNote />
                             ) : null}
-                          </h4>
+                          </h3>
                           <p>{highlight.description}</p>
                           {highlight.betaNote ? (
                             <span className="mission-pillars__note">{highlight.betaNote}</span>
