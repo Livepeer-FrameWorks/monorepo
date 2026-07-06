@@ -42,7 +42,7 @@ jobs:
       packages: ${{ steps.changes.outputs.packages }}
       has_changes: ${{ steps.changes.outputs.has_changes }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -92,7 +92,7 @@ jobs:
       needs.detect-changes.outputs.has_changes == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v6
         with:
@@ -219,7 +219,7 @@ jobs:
             filter: "@livepeer-frameworks/streamcrafter-core"
             slug: streamcrafter-core
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-node-pnpm
       - name: Run Stryker mutation tests
         working-directory: ${{ matrix.package }}

@@ -25,7 +25,7 @@ jobs:
       image_matrix: ${{ steps.components.outputs.image_matrix }}
       webapp_matrix: ${{ steps.components.outputs.webapp_matrix }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Download release-plan decision
         uses: actions/download-artifact@v8
         with:
@@ -64,7 +64,7 @@ jobs:
       carry_forward_count: ${{ steps.plan.outputs.carry_forward_count }}
     steps:
       - name: Checkout monorepo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Generate GitOps token
         id: gitops_app_token
         uses: actions/create-github-app-token@v3
@@ -73,7 +73,7 @@ jobs:
           private-key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
           repositories: gitops
       - name: Checkout GitOps repo (read-only, for baseline lookup)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: Livepeer-FrameWorks/gitops
           token: ${{ steps.gitops_app_token.outputs.token }}
@@ -134,7 +134,7 @@ jobs:
       matrix: ${{ fromJson(needs.define-release-components.outputs.image_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download release-plan decision
         uses: actions/download-artifact@v8
@@ -240,7 +240,7 @@ jobs:
       matrix: ${{ fromJson(needs.define-release-components.outputs.image_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download release-plan decision
         uses: actions/download-artifact@v8
@@ -344,7 +344,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download release-plan decision
         uses: actions/download-artifact@v8
@@ -464,7 +464,7 @@ jobs:
       matrix: ${{ fromJson(needs.define-release-components.outputs.webapp_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download release-plan decision
         uses: actions/download-artifact@v8
@@ -490,7 +490,7 @@ jobs:
 
       - name: Checkout GitOps config
         if: ${{ steps.plan.outputs.action == 'build' }}
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: Livepeer-FrameWorks/gitops
           token: ${{ steps.gitops_app_token.outputs.token }}
@@ -648,7 +648,7 @@ jobs:
       matrix: ${{ fromJson(needs.define-release-components.outputs.webapp_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download release-plan decision
         uses: actions/download-artifact@v8
@@ -674,7 +674,7 @@ jobs:
 
       - name: Checkout GitOps config
         if: ${{ steps.plan.outputs.action == 'build' }}
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: Livepeer-FrameWorks/gitops
           token: ${{ steps.gitops_app_token.outputs.token }}
@@ -792,7 +792,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download release-plan decision
         uses: actions/download-artifact@v8
@@ -900,7 +900,7 @@ jobs:
     name: Build CLI (linux/amd64)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Read CLI component version
         id: compver
         run: |
@@ -935,7 +935,7 @@ jobs:
     name: Build CLI (darwin)
     runs-on: macos-arm64-self-hosted
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Add Homebrew to PATH
         run: echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
       - name: Read CLI component version
@@ -1004,7 +1004,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download release-plan decision
         uses: actions/download-artifact@v8
@@ -1101,7 +1101,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download release-plan decision
         uses: actions/download-artifact@v8
@@ -1196,7 +1196,7 @@ jobs:
     runs-on: macos-arm64-self-hosted
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download release-plan decision
         uses: actions/download-artifact@v8
@@ -1309,7 +1309,7 @@ jobs:
     runs-on: macos-arm64-self-hosted
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Add Homebrew to PATH
         run: echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
@@ -1437,7 +1437,7 @@ jobs:
     runs-on: macos-arm64-self-hosted
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Add Homebrew to PATH
         run: echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
@@ -1525,7 +1525,7 @@ jobs:
       contents: write # softprops/action-gh-release uploads release assets
       packages: read # docker login to pull image digests for manifest generation
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Generate release metadata GitHub App token
         id: release-metadata-token
         uses: actions/create-github-app-token@v3
@@ -2214,7 +2214,7 @@ jobs:
           private-key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
           repositories: gitops
       - name: Checkout env repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: ${{ env.ENV_REPO }}
           token: ${{ steps.app-token.outputs.token }}
