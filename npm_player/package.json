@@ -23,15 +23,15 @@
     "clean": "rm -rf packages/*/dist packages/*/.svelte-kit"
   },
   "devDependencies": {
-    "concurrently": "^9.0.1",
-    "eslint": "^10.2.0",
-    "eslint-plugin-svelte": "^3.17.0",
-    "globals": "^17.3.0",
+    "concurrently": "^10.0.3",
+    "eslint": "^10.6.0",
+    "eslint-plugin-svelte": "^3.20.0",
+    "globals": "^17.7.0",
     "postcss-import": "^16.1.1",
     "postcss-prefix-selector": "^2.1.1",
-    "svelte-eslint-parser": "^1.5.1",
-    "typescript": "^5.9.3",
-    "typescript-eslint": "^8.58.1"
+    "svelte-eslint-parser": "^1.8.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.62.1"
   },
   "author": "Livepeer FrameWorks",
   "license": "Unlicense"
