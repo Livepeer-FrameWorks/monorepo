@@ -3,29 +3,29 @@ module frameworks/api_consultant
 go 1.26.2
 
 require (
-	codeberg.org/readeck/go-readability/v2 v2.1.1
+	codeberg.org/readeck/go-readability/v2 v2.1.2
 	github.com/DATA-DOG/go-sqlmock v1.5.2
-	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.0
+	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
 	github.com/Livepeer-FrameWorks/monorepo/pkg v0.0.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-rod/rod v0.116.2
 	github.com/go-rod/stealth v0.4.9
 	github.com/google/uuid v1.6.0
-	github.com/pgvector/pgvector-go v0.3.0
-	golang.org/x/net v0.53.0
+	github.com/pgvector/pgvector-go v0.4.0
+	golang.org/x/net v0.56.0
 	google.golang.org/protobuf v1.36.11
 )
 
 require (
-	github.com/JohannesKaufmann/dom v0.2.0 // indirect
-	github.com/andybalholm/cascadia v1.3.3 // indirect
-	github.com/araddon/dateparse v0.0.0-20210429162001-6b43995a97de // indirect
+	github.com/JohannesKaufmann/dom v0.3.1 // indirect
+	github.com/andybalholm/cascadia v1.3.4 // indirect
 	github.com/bits-and-blooms/bitset v1.24.4 // indirect
 	github.com/bytedance/gopkg v0.1.4 // indirect
 	github.com/failsafe-go/failsafe-go v0.9.6 // indirect
 	github.com/go-shiori/dom v0.0.0-20230515143342-73569d674e1c // indirect
 	github.com/gogs/chardet v0.0.0-20211120154057-b7413eaefb8f // indirect
-	github.com/google/jsonschema-go v0.4.2 // indirect
+	github.com/google/jsonschema-go v0.4.3 // indirect
+	github.com/itlightning/dateparse v0.2.1 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
@@ -39,16 +39,16 @@ require (
 	github.com/ysmood/leakless v0.9.0 // indirect
 	github.com/yugabyte/pgx/v5 v5.7.6-yb-1 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.5.1 // indirect
-	go.opentelemetry.io/otel/sdk v1.43.0 // indirect
+	go.opentelemetry.io/otel/sdk/metric v1.44.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 )
 
 require (
-	github.com/ClickHouse/ch-go v0.71.0 // indirect
-	github.com/ClickHouse/clickhouse-go/v2 v2.45.0 // indirect
+	github.com/ClickHouse/ch-go v0.73.0 // indirect
+	github.com/ClickHouse/clickhouse-go/v2 v2.47.0 // indirect
 	github.com/andybalholm/brotli v1.2.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
-	github.com/btcsuite/btcd/btcec/v2 v2.3.6 // indirect
+	github.com/btcsuite/btcd/btcec/v2 v2.5.0 // indirect
 	github.com/bytedance/sonic v1.15.0 // indirect
 	github.com/bytedance/sonic/loader v0.5.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -66,12 +66,12 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/joho/godotenv v1.5.1 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/compress v1.18.5 // indirect
+	github.com/klauspost/compress v1.18.6 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/lib/pq v1.12.3 // indirect
-	github.com/mattn/go-isatty v0.0.21 // indirect
-	github.com/modelcontextprotocol/go-sdk v1.5.0
+	github.com/mattn/go-isatty v0.0.22 // indirect
+	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
@@ -79,7 +79,7 @@ require (
 	github.com/oschwald/maxminddb-golang v1.13.1 // indirect
 	github.com/paulmach/orb v0.13.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.3.0 // indirect
-	github.com/pierrec/lz4/v4 v4.1.26 // indirect
+	github.com/pierrec/lz4/v4 v4.1.27 // indirect
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.67.5 // indirect
@@ -90,20 +90,20 @@ require (
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/sirupsen/logrus v1.9.4
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
-	github.com/twmb/franz-go v1.21.0 // indirect
+	github.com/twmb/franz-go v1.21.5 // indirect
 	github.com/twmb/franz-go/pkg/kmsg v1.13.1 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
-	go.opentelemetry.io/otel v1.43.0 // indirect
-	go.opentelemetry.io/otel/trace v1.43.0 // indirect
+	go.opentelemetry.io/otel v1.44.0 // indirect
+	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/arch v0.26.0 // indirect
-	golang.org/x/crypto v0.50.0 // indirect
-	golang.org/x/sync v0.20.0
-	golang.org/x/sys v0.43.0 // indirect
-	golang.org/x/text v0.36.0
+	golang.org/x/crypto v0.53.0 // indirect
+	golang.org/x/sync v0.21.0
+	golang.org/x/sys v0.46.0 // indirect
+	golang.org/x/text v0.38.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
-	google.golang.org/grpc v1.80.0
+	google.golang.org/grpc v1.82.0
 )
 
 replace (
