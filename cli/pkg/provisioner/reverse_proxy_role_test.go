@@ -298,6 +298,81 @@ func TestRenderCaddyfileRewritesHostForHTTPSUpstreams(t *testing.T) {
 	}
 }
 
+func TestRenderCaddyfileSplitsWWWRedirectAndAddsHSTS(t *testing.T) {
+	content := renderCaddyfile([]proxySite{{
+		Domains:     []string{"example.com", "www.example.com"},
+		Upstream:    "127.0.0.1:18000",
+		TLSMode:     "files",
+		TLSCertPath: "/tls/cert.pem",
+		TLSKeyPath:  "/tls/key.pem",
+	}})
+	for _, want := range []string{
+		"www.example.com {\n    tls /tls/cert.pem /tls/key.pem\n    redir https://example.com{uri} permanent\n}",
+		"example.com {\n    tls /tls/cert.pem /tls/key.pem\n    header Strict-Transport-Security \"max-age=31536000\"",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("Caddyfile missing %q:\n%s", want, content)
+		}
+	}
+	if strings.Contains(content, "example.com, www.example.com {") {
+		t.Fatalf("www host should be split out of the main site block:\n%s", content)
+	}
+}
+
+func TestRenderCaddyfileKeepsWWWForTLSOffSites(t *testing.T) {
+	content := renderCaddyfile([]proxySite{{
+		Domains:  []string{"example.com", "www.example.com"},
+		Upstream: "127.0.0.1:18000",
+		TLSMode:  "off",
+	}})
+	if !strings.Contains(content, "example.com, www.example.com {") {
+		t.Fatalf("tls-off site should keep serving www directly:\n%s", content)
+	}
+	if strings.Contains(content, "redir https://") || strings.Contains(content, "Strict-Transport-Security") {
+		t.Fatalf("tls-off site must not gain https redirects or HSTS:\n%s", content)
+	}
+}
+
+func TestRenderNginxConfigRedirectsHTTPForTLSSites(t *testing.T) {
+	content := renderNginxConfig(80, []proxySite{{
+		Domains:     []string{"example.com", "www.example.com"},
+		Upstream:    "127.0.0.1:18000",
+		TLSMode:     "files",
+		TLSCertPath: "/tls/cert.pem",
+		TLSKeyPath:  "/tls/key.pem",
+	}}, nil)
+	for _, want := range []string{
+		"location = /health {\n        return 204;\n    }",
+		"return 308 https://$host$request_uri;",
+		"add_header Strict-Transport-Security \"max-age=31536000\" always;",
+		"server_name www.example.com;",
+		"return 301 https://example.com$request_uri;",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("nginx config missing %q:\n%s", want, content)
+		}
+	}
+	if strings.Contains(content, "server_name example.com www.example.com;") {
+		t.Fatalf("www host should be split out of the main server blocks:\n%s", content)
+	}
+	if strings.Contains(content, "location = / {") {
+		t.Fatalf("root path must redirect, not answer health probes:\n%s", content)
+	}
+}
+
+func TestRenderNginxConfigKeepsHTTPOnlySitesProxying(t *testing.T) {
+	content := renderNginxConfig(80, []proxySite{{
+		Domains:  []string{"plain.example.com"},
+		Upstream: "127.0.0.1:18000",
+	}}, nil)
+	if !strings.Contains(content, "proxy_pass http://127.0.0.1:18000;") {
+		t.Fatalf("http-only site should keep proxying on :80:\n%s", content)
+	}
+	if strings.Contains(content, "return 308") || strings.Contains(content, "Strict-Transport-Security") {
+		t.Fatalf("http-only site must not gain TLS redirect behavior:\n%s", content)
+	}
+}
+
 func TestNativeNginxTemplatesOwnRootConfigAndRouteProfiles(t *testing.T) {
 	content := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/nginx/templates/frameworks.conf.j2")
 	for _, want := range []string{

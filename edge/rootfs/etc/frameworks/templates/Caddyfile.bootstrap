@@ -1,11 +1,11 @@
 {
-    admin unix//run/caddy/admin.sock
+    admin unix//run/caddy/admin.sock|0660
     servers {
         protocols h1 h2 h3
     }
 }
 
-{{ edge_domain }}:443 {
+{$EDGE_DOMAIN}:443 {
     tls internal
 
     handle /health {
@@ -13,19 +13,19 @@
     }
 
     handle_path /webhooks/* {
-        reverse_proxy helmsman:18007
+        reverse_proxy localhost:18007
     }
 
     @mist_admin {
         path /_mist-session /_mist /_mist/*
     }
     handle @mist_admin {
-        reverse_proxy helmsman:18007
+        reverse_proxy localhost:18007
     }
 
     respond "Node bootstrapping - awaiting activation" 503
 }
 
-{{ edge_domain }}:80 {
+{$EDGE_DOMAIN}:80 {
     respond "Node bootstrapping" 503
 }

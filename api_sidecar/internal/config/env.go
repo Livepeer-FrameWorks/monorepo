@@ -74,10 +74,12 @@ type HelmsmanConfig struct {
 
 	// RelayTrustedCIDR is a comma-separated CIDR list whose RemoteAddr
 	// bypasses the relay authorize gate like loopback (still requiring no
-	// proxy-forward markers). For the local Mist→Helmsman hop when Mist
-	// dials a non-loopback service address (docker: helmsman:18007). Empty
-	// in production/native (Mist reaches Helmsman on 127.0.0.1). NEVER set
-	// to a range that covers peer nodes — peer reads authorize via Foghorn.
+	// proxy-forward markers). Only needed when Mist dials Helmsman over a
+	// non-loopback service address (the dev compose bridge, where Mist and
+	// Helmsman are separate containers). Empty in production — native hosts
+	// and the single edge container both reach Helmsman on 127.0.0.1.
+	// NEVER set to a range that covers peer nodes — peer reads authorize
+	// via Foghorn.
 	RelayTrustedCIDR string
 }
 
@@ -120,8 +122,8 @@ func LoadHelmsmanConfig() *HelmsmanConfig {
 		// Webhook URL (defaults handled at usage site if empty)
 		WebhookURL: config.GetEnv("HELMSMAN_WEBHOOK_URL", ""),
 
-		// Trusted CIDR for the local Mist→Helmsman hop (docker). Empty in
-		// production/native — loopback only.
+		// Trusted CIDR for the local Mist→Helmsman hop (dev compose bridge
+		// only). Empty in production — loopback only.
 		RelayTrustedCIDR: config.GetEnv("HELMSMAN_RELAY_TRUSTED_CIDR", ""),
 
 		// gRPC TLS / trust

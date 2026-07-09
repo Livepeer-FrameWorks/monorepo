@@ -6,13 +6,41 @@
 }
 
 {% for site in caddy_sites %}
-{{ site.domains | join(', ') }} {
+{# www.X hosts whose apex X is also served get canonicalizing 301s instead of
+   duplicate content; the site cert's SANs cover both names. Explicitly
+   tls-off sites are http-only, so there is no https target to redirect to. #}
+{% set ns = namespace(www_hosts=[]) %}
+{% if site.tls_mode | default('') != 'off' %}
+{% for domain in site.domains %}
+{% if domain.startswith('www.') and domain[4:] in site.domains %}
+{% set ns.www_hosts = ns.www_hosts + [domain] %}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% set main_domains = site.domains | reject('in', ns.www_hosts) | list %}
+{% for www_host in ns.www_hosts %}
+{{ www_host }} {
 {% if site.tls_mode | default('') == 'off' %}
     tls off
 {% elif site.tls_mode | default('') == 'internal' %}
     tls internal
 {% elif site.tls_mode | default('') == 'files' and site.tls_cert_path | default('') | length > 0 and site.tls_key_path | default('') | length > 0 %}
     tls {{ site.tls_cert_path }} {{ site.tls_key_path }}
+{% endif %}
+    redir https://{{ www_host[4:] }}{uri} permanent
+}
+
+{% endfor %}
+{{ main_domains | join(', ') }} {
+{% if site.tls_mode | default('') == 'off' %}
+    tls off
+{% elif site.tls_mode | default('') == 'internal' %}
+    tls internal
+{% elif site.tls_mode | default('') == 'files' and site.tls_cert_path | default('') | length > 0 and site.tls_key_path | default('') | length > 0 %}
+    tls {{ site.tls_cert_path }} {{ site.tls_key_path }}
+{% endif %}
+{% if site.tls_mode | default('') != 'off' %}
+    header Strict-Transport-Security "max-age=31536000"
 {% endif %}
 {% if site.upstream is defined and site.upstream | length > 0 %}
 {% if site.path_prefixes | default([]) | length > 0 %}

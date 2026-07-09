@@ -102,6 +102,7 @@ Mode B — Pre-existing token (no login needed):
 				sshTarget:          sshTarget,
 				sshKey:             sshKey,
 				mode:               mode,
+				modeExplicit:       cmd.Flags().Changed("mode"),
 				email:              email,
 				applyTuning:        applyTuning,
 				skipPreflight:      skipPreflight,
@@ -135,8 +136,12 @@ Mode B — Pre-existing token (no login needed):
 			if err != nil {
 				return err
 			}
+			sshSuffix := ""
+			if strings.TrimSpace(sshTarget) != "" {
+				sshSuffix = " --ssh " + sshTarget
+			}
 			ux.PrintNextSteps(out, []ux.NextStep{
-				{Cmd: "frameworks edge status", Why: "Verify services are up and HTTPS is healthy."},
+				{Cmd: "frameworks edge status" + sshSuffix, Why: "Verify services are up and HTTPS is healthy."},
 				{Cmd: "frameworks edge doctor", Why: "Run diagnostics and get adaptive remediation hints."},
 			})
 			return nil
@@ -151,7 +156,7 @@ Mode B — Pre-existing token (no login needed):
 	cmd.Flags().StringVar(&foghornAddr, "foghorn-addr", "", "explicit Foghorn gRPC override (debug only; normally Bridge resolves it)")
 	cmd.Flags().StringVar(&sshTarget, "ssh", "", "SSH target (user@host) for remote deployment")
 	cmd.Flags().StringVar(&sshKey, "ssh-key", "", "SSH private key path")
-	cmd.Flags().StringVar(&mode, "mode", "docker", "deployment mode: docker or native")
+	cmd.Flags().StringVar(&mode, "mode", "container", "deployment mode: container (single edge image) or native; 'docker' is a deprecated alias for container. Local (no --ssh) deploys default to native unless --mode is passed explicitly")
 	cmd.Flags().StringVar(&email, "email", "", "ACME email for TLS certificates")
 	cmd.Flags().BoolVar(&applyTuning, "tune", true, "apply sysctl/limits tuning")
 	cmd.Flags().BoolVar(&skipPreflight, "skip-preflight", false, "skip preflight checks")
@@ -175,6 +180,7 @@ type deployConfig struct {
 	sshTarget          string
 	sshKey             string
 	mode               string
+	modeExplicit       bool // --mode was passed; local deploys otherwise default to native
 	email              string
 	applyTuning        bool
 	skipPreflight      bool
@@ -344,7 +350,7 @@ func renderEdgeDeployResult(cmd *cobra.Command, f edgeDeployResultFields) {
 	}
 
 	stackOK := f.provisioned
-	stackDetail := "docker compose up"
+	stackDetail := "edge stack up"
 	if !stackOK {
 		stackDetail = "provisioning did not complete"
 	}
@@ -431,8 +437,19 @@ func deployLocal(ctx context.Context, cmd *cobra.Command, cfg deployConfig, resp
 		caBundlePEM = ""
 	}
 
+	// Local deploys default to native launchd/systemd (no Docker
+	// dependency), matching `edge provision --local`; an explicit --mode
+	// container is honored. Say so — a default that differs from the flag's
+	// advertised one must never be silent.
+	localMode := "native"
+	if cfg.modeExplicit {
+		localMode = cfg.mode
+	} else {
+		fmt.Fprintln(cmd.OutOrStdout(), "Local deploy defaults to native mode (no Docker dependency); pass --mode container for the single edge image")
+	}
+
 	epConfig := provisioner.EdgeProvisionConfig{
-		Mode:            "native",
+		Mode:            localMode,
 		NodeName:        resp.GetNodeId(),
 		NodeDomain:      resp.GetEdgeDomain(),
 		PoolDomain:      resp.GetPoolDomain(),

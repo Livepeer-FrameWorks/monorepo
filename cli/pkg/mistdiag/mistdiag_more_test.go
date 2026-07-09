@@ -80,9 +80,16 @@ func TestBuildCommand_TargetGate(t *testing.T) {
 
 func TestNewAnalyzerRunner_ModeNormalization(t *testing.T) {
 	t.Parallel()
-	// Only "docker" stays docker; everything else normalizes to native.
-	if ar := NewAnalyzerRunner(&mockRunner{}, "docker"); ar.mode != "docker" {
-		t.Errorf("docker must stay docker; got %q", ar.mode)
+	// "container" and its deprecated "docker" alias exec into the edge
+	// container; everything else normalizes to native.
+	for _, m := range []string{"container", "docker"} {
+		ar := NewAnalyzerRunner(&mockRunner{}, m)
+		if ar.mode != "container" {
+			t.Errorf("mode %q must normalize to container; got %q", m, ar.mode)
+		}
+		if ar.container != "frameworks-edge" {
+			t.Errorf("mode %q must target frameworks-edge; got %q", m, ar.container)
+		}
 	}
 	for _, m := range []string{"native", "", "DOCKER", "podman", "k8s"} {
 		if ar := NewAnalyzerRunner(&mockRunner{}, m); ar.mode != "native" {

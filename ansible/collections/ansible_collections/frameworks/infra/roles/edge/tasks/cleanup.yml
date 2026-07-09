@@ -1,12 +1,12 @@
 ---
-- name: Delegate cleanup to compose_stack (docker mode)
+- name: Delegate cleanup to compose_stack (container mode)
   ansible.builtin.include_role:
     name: frameworks.infra.compose_stack
     tasks_from: cleanup.yml
   vars:
     compose_stack_name: edge
     compose_stack_project_dir: "{{ edge_base_dir }}"
-  when: edge_mode == 'docker'
+  when: edge_mode != 'native'
 
 - name: Stop edge-native systemd services
   ansible.builtin.systemd:

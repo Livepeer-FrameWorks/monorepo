@@ -199,7 +199,7 @@ it into the existing edge deploy pipeline, and never prints the token.`,
 	cmd.Flags().StringVar(&nodeName, "node-name", "", "preferred node name/id")
 	cmd.Flags().StringVar(&sshTarget, "ssh", "", "SSH target (user@host)")
 	cmd.Flags().StringVar(&sshKey, "ssh-key", "", "SSH private key path")
-	cmd.Flags().StringVar(&mode, "mode", "native", "deployment mode: native or docker")
+	cmd.Flags().StringVar(&mode, "mode", "native", "deployment mode: native or container ('docker' is a deprecated alias for container)")
 	cmd.Flags().StringVar(&email, "email", "", "ACME email for TLS certificates")
 	cmd.Flags().StringVar(&version, "version", "stable", "platform version for binary resolution")
 	cmd.Flags().StringVar(&tokenTTL, "token-ttl", "5m", "short-lived enrollment token TTL")
@@ -1137,21 +1137,34 @@ func terminalNodeStatus(action string) string {
 }
 
 func stopEdgeStack(cmd *cobra.Command, sshTarget, sshKey string) error {
+	ctx := cmd.Context()
+	var failures []error
+	succeeded := 0
+
+	// Container mode: resolve the actual compose project (the CLI renders
+	// docker-compose.edge.yml, Ansible renders docker-compose.yml under
+	// /opt/frameworks/edge) and go through the sudo-aware docker runner —
+	// a hardcoded file list would miss the Ansible layout entirely.
+	if dir, compose := resolveEdgeComposeContext(ctx, "", sshTarget, sshKey); compose != "" {
+		if _, errOut, runErr := runEdgeDocker(ctx, sshTarget, sshKey, []string{"compose", "-f", compose, "down"}, dir); runErr != nil {
+			failures = append(failures, fmt.Errorf("docker compose -f %s down (in %s): %w: %s", compose, dir, runErr, strings.TrimSpace(errOut)))
+		} else {
+			succeeded++
+		}
+	}
+
 	host := sshTargetToHost(sshTarget)
 	pool := fwssh.NewPool(30*time.Second, sshKey)
 	defer func() { _ = pool.Close() }()
 	ep := provisioner.NewEdgeProvisioner(pool)
-	commands := []string{
-		"cd /opt/frameworks/edge && docker compose -f docker-compose.yml -f docker-compose.edge.yml down",
+	nativeCommands := []string{
 		"systemctl stop frameworks-caddy frameworks-helmsman frameworks-mistserver",
 		"launchctl kill SIGTERM system/com.livepeer.frameworks.caddy",
 		"launchctl kill SIGTERM system/com.livepeer.frameworks.helmsman",
 		"launchctl kill SIGTERM system/com.livepeer.frameworks.mistserver",
 	}
-	var failures []error
-	succeeded := 0
-	for _, command := range commands {
-		if _, runErr := ep.RunCommand(cmd.Context(), host, command); runErr != nil {
+	for _, command := range nativeCommands {
+		if _, runErr := ep.RunCommand(ctx, host, command); runErr != nil {
 			failures = append(failures, fmt.Errorf("%s: %w", command, runErr))
 			continue
 		}

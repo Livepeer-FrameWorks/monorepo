@@ -1,0 +1,10 @@
+#!/command/with-contenv sh
+# Root run-script grants ambient CAP_NET_BIND_SERVICE (80/443 as non-root)
+# on every launch, so the capability survives in-place caddy binary swaps
+# (file setcap xattrs on the volume would not).
+export HOME=/var/lib/caddy
+export XDG_DATA_HOME=/var/lib/caddy/data
+export XDG_CONFIG_HOME=/var/lib/caddy/config
+exec setpriv --reuid caddy --regid caddy --init-groups \
+  --inh-caps +net_bind_service --ambient-caps +net_bind_service \
+  /opt/frameworks/caddy/caddy run --config /etc/caddy/Caddyfile

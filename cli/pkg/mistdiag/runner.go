@@ -18,16 +18,22 @@ var KnownAnalyzers = []string{
 
 const (
 	analyzerPrefix = "MistAnalyser"
-	binDir         = "/usr/local/bin"
-	maxDetail      = 10
-	maxTimeout     = 300
+	// Native installs put analyzers on PATH under /usr/local/bin; the edge
+	// image seeds the Mist tree under /opt/frameworks/mistserver (bin/ with
+	// bundled lib/, so container invocations need LD_LIBRARY_PATH).
+	nativeBinDir    = "/usr/local/bin"
+	containerBinDir = "/opt/frameworks/mistserver/bin"
+	containerLibDir = "/opt/frameworks/mistserver/lib"
+	maxDetail       = 10
+	maxTimeout      = 300
 )
 
 // AnalyzerRunner executes MistServer analyzer binaries on an edge node.
 type AnalyzerRunner struct {
 	runner    fwssh.Runner
-	mode      string // "docker" or "native"
+	mode      string // "container" or "native"
 	container string
+	binDir    string
 }
 
 // AnalyzerOptions configures an analyzer invocation.
@@ -49,23 +55,19 @@ type AnalyzerResult struct {
 	Duration time.Duration
 }
 
-// NewAnalyzerRunner creates a runner for the given deploy mode.
-// mode must be "docker" or "native".
+// NewAnalyzerRunner creates a runner for the given deploy mode: "container"
+// (single edge image; "docker" is a deprecated alias) execs into the
+// frameworks-edge container, anything else runs natively on the host.
 func NewAnalyzerRunner(runner fwssh.Runner, mode string) *AnalyzerRunner {
-	container := "mistserver"
-	if mode != "docker" {
-		mode = "native"
+	if mode == "container" || mode == "docker" {
+		return &AnalyzerRunner{runner: runner, mode: "container", container: "frameworks-edge", binDir: containerBinDir}
 	}
-	return &AnalyzerRunner{
-		runner:    runner,
-		mode:      mode,
-		container: container,
-	}
+	return &AnalyzerRunner{runner: runner, mode: "native", binDir: nativeBinDir}
 }
 
 // Available returns the analyzer names present on the node.
 func (ar *AnalyzerRunner) Available(ctx context.Context) ([]string, error) {
-	cmd := fmt.Sprintf("ls %s/%s* 2>/dev/null", binDir, analyzerPrefix)
+	cmd := fmt.Sprintf("ls %s/%s* 2>/dev/null", ar.binDir, analyzerPrefix)
 	cmd = ar.wrapCommand(cmd)
 
 	result, err := ar.runner.Run(ctx, cmd)
@@ -135,7 +137,7 @@ func (ar *AnalyzerRunner) Validate(ctx context.Context, analyzer, target string,
 }
 
 func (ar *AnalyzerRunner) buildCommand(opts AnalyzerOptions) string {
-	binary := fmt.Sprintf("%s/%s%s", binDir, analyzerPrefix, opts.Analyzer)
+	binary := fmt.Sprintf("%s/%s%s", ar.binDir, analyzerPrefix, opts.Analyzer)
 
 	var args []string
 
@@ -171,9 +173,12 @@ func (ar *AnalyzerRunner) buildCommand(opts AnalyzerOptions) string {
 	return ar.wrapCommand(cmd)
 }
 
-// wrapCommand prefixes a command with docker exec when in docker mode.
+// wrapCommand prefixes a command with docker exec when in container mode.
+// The bundled Mist lib dir rides along because the seeded analyzers link
+// against it (same contract as the mistserver run script).
 func (ar *AnalyzerRunner) wrapCommand(cmd string) string {
-	if ar.mode == "docker" {
+	if ar.mode == "container" {
+		cmd = fmt.Sprintf("LD_LIBRARY_PATH=%s %s", containerLibDir, cmd)
 		return fmt.Sprintf("docker exec %s sh -c %s", fwssh.ShellQuote(ar.container), fwssh.ShellQuote(cmd))
 	}
 	return cmd

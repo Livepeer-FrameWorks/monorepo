@@ -130,12 +130,16 @@ func runEdgeRole(ctx context.Context, pool *ssh.Pool, host inventory.Host, confi
 
 // edgeRoleVars builds the extra-vars map the frameworks.infra.edge role
 // expects. Pinned artifacts are resolved from the release manifest named by
-// config.Version. Native mode without Version errors out because native
-// installs require pinned tarballs. Docker mode can run without a release
-// selector for local workflows, but uses the pinned MistServer image when one
-// is available.
+// config.Version. Both modes require a release selector: native installs
+// need pinned tarballs, container installs need the pinned edge image
+// digest.
 func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map[string]any, error) {
 	mode := config.resolvedMode()
+	// Provision defaults an empty Version to the stable channel; this guard
+	// only trips for direct callers that bypass that.
+	if strings.TrimSpace(config.Version) == "" {
+		return nil, fmt.Errorf("edge: --version (release channel or tag) is required; %s mode installs pinned release artifacts", mode)
+	}
 
 	darwinDomain := string(config.DarwinDomain)
 	if darwinDomain == "" {
@@ -165,9 +169,7 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 		"edge_key_pem":                   config.KeyPEM,
 		"edge_ca_bundle_pem":             config.CABundlePEM,
 		"edge_mist_api_password":         mistPass,
-		"edge_mistserver_image":          "mistserver:latest",
-		"edge_caddy_image":               "caddy:2.8.4",
-		"edge_helmsman_image":            "frameworks/helmsman:latest",
+		"edge_image":                     "livepeerframeworks/frameworks-edge:latest",
 		"edge_darwin_domain":             darwinDomain,
 	}
 	if config.BandwidthMbps < 0 {
@@ -191,41 +193,36 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 	}
 	maps.Copy(vars, capEnv)
 
-	// Trusted CIDR for the local Mist→Helmsman relay hop. Docker: Mist dials
-	// helmsman:18007 over the compose bridge, so the relay's loopback
-	// exemption doesn't apply — trust the private bridge range for that hop
-	// only (peer reads go Caddy + Bearer). Native: empty, Mist reaches
-	// Helmsman on loopback. Broad RFC1918 fallback; narrow on shared hosts.
-	if mode == "native" {
-		vars["edge_relay_trusted_cidr"] = ""
+	// The local Mist→Helmsman relay hop is loopback in both modes (native
+	// host, or inside the single edge container), so no trusted CIDR.
+	vars["edge_relay_trusted_cidr"] = ""
+
+	// Container compose flavor: Linux uses host networking; macOS (Docker
+	// Desktop) publishes the bounded media port set because its host
+	// networking has broken UDP semantics.
+	if remoteOS == "darwin" {
+		vars["edge_container_flavor"] = "darwin"
 	} else {
-		vars["edge_relay_trusted_cidr"] = "172.16.0.0/12"
+		vars["edge_container_flavor"] = "linux"
 	}
 
 	var manifest *gitops.Manifest
 	if strings.TrimSpace(config.Version) != "" {
 		var manifestErr error
-		manifest, manifestErr = fetchEdgeManifest(config.Version)
+		manifest, manifestErr = fetchEdgeManifestFn(config.Version)
 		if manifestErr != nil {
 			return nil, manifestErr
 		}
-		image, imageErr := edgeExternalImage(manifest, "mistserver")
-		if imageErr != nil {
-			return nil, imageErr
+		// The edge image entry only exists in releases that ship the
+		// single-image container mode; native installs must keep working
+		// against older manifests without it.
+		if mode != "native" {
+			edgeImage, edgeImageErr := edgeServiceImage(manifest, "edge")
+			if edgeImageErr != nil {
+				return nil, edgeImageErr
+			}
+			vars["edge_image"] = edgeImage
 		}
-		if image != "" {
-			vars["edge_mistserver_image"] = image
-		}
-		caddyImage, caddyImageErr := edgeInfraImage(manifest, "caddy")
-		if caddyImageErr != nil {
-			return nil, caddyImageErr
-		}
-		vars["edge_caddy_image"] = caddyImage
-		helmsmanImage, helmsmanImageErr := edgeServiceImage(manifest, "helmsman")
-		if helmsmanImageErr != nil {
-			return nil, helmsmanImageErr
-		}
-		vars["edge_helmsman_image"] = helmsmanImage
 		for key, value := range map[string]string{
 			"edge_config_schema_version": strings.TrimSpace(manifest.PlatformVersion),
 			"edge_mistserver_version":    edgeExternalVersion(manifest, "mistserver"),
@@ -244,7 +241,7 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 
 	if manifest == nil {
 		var manifestErr error
-		manifest, manifestErr = fetchEdgeManifest(config.Version)
+		manifest, manifestErr = fetchEdgeManifestFn(config.Version)
 		if manifestErr != nil {
 			return nil, manifestErr
 		}
@@ -279,7 +276,10 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 	vars["edge_caddy_artifact_url"] = caddyURL
 	vars["edge_caddy_artifact_checksum"] = caddySum
 
-	if strings.TrimSpace(config.TelemetryURL) != "" {
+	// vmagent is both-or-nothing on URL + token (same contract as the role
+	// and the compose renderers); URL alone must not pull in a vmagent
+	// release artifact the role will never install.
+	if strings.TrimSpace(config.TelemetryURL) != "" && strings.TrimSpace(config.TelemetryToken) != "" {
 		artifact, err := resolveInfraArtifactFromChannel("vmagent", arch, config.Version, nil)
 		if err != nil {
 			return nil, fmt.Errorf("edge: resolve vmagent artifact: %w", err)
@@ -316,6 +316,10 @@ func edgeCapabilityEnv(caps []string) (map[string]any, error) {
 	}, nil
 }
 
+// fetchEdgeManifestFn is a seam so tests can supply a fake manifest without
+// network access.
+var fetchEdgeManifestFn = fetchEdgeManifest
+
 func fetchEdgeManifest(version string) (*gitops.Manifest, error) {
 	if strings.TrimSpace(version) == "" {
 		return nil, fmt.Errorf("edge native provisioning requires --version to resolve binary pins")
@@ -344,19 +348,6 @@ func edgeExternalImage(manifest *gitops.Manifest, name string) (string, error) {
 		return dep.Image, nil
 	}
 	return dep.Image + "@" + dep.Digest, nil
-}
-
-// edgeInfraImage returns image@digest for an infrastructure entry used by
-// compose-mode edge deployment.
-func edgeInfraImage(manifest *gitops.Manifest, name string) (string, error) {
-	infra := manifest.GetInfrastructure(name)
-	if infra == nil || infra.Image == "" {
-		return "", fmt.Errorf("release manifest has no infrastructure image for %s", name)
-	}
-	if infra.Digest == "" {
-		return "", fmt.Errorf("release manifest infrastructure %s has image %q but no digest", name, infra.Image)
-	}
-	return infra.Image + "@" + infra.Digest, nil
 }
 
 // edgeServiceImage returns image@digest for a first-party service entry.
@@ -419,11 +410,13 @@ func edgeExternalBinary(manifest *gitops.Manifest, name, arch string) (string, s
 	if dep == nil {
 		return "", "", fmt.Errorf("edge: release manifest has no external_dependency entry for %q", name)
 	}
-	for i := range dep.Binaries {
-		bin := &dep.Binaries[i]
-		if strings.Contains(bin.Name, arch) && !isDebugArtifactName(bin.Name) && bin.URL != "" {
-			return bin.URL, bin.Checksum, nil
+	if bin := dep.RuntimeBinaryForPlatform(arch); bin != nil {
+		// Pinned artifacts are the contract: the Mist role's get_url would
+		// silently skip verification on an empty checksum, so refuse here.
+		if strings.TrimSpace(bin.Checksum) == "" {
+			return "", "", fmt.Errorf("edge: release manifest %s artifact for %q carries no checksum; refusing unverified native install", name, arch)
 		}
+		return bin.URL, bin.Checksum, nil
 	}
 	return "", "", fmt.Errorf("edge: release manifest %s entry has no binary URL for arch %q", name, arch)
 }
@@ -443,11 +436,7 @@ func edgeExternalDebugBinary(manifest *gitops.Manifest, name, arch string) (stri
 }
 
 func isDebugArtifactName(name string) bool {
-	lower := strings.ToLower(strings.TrimSpace(name))
-	return strings.Contains(lower, "-debug-") ||
-		strings.HasSuffix(lower, "-debug.tar.gz") ||
-		strings.HasSuffix(lower, ".debug") ||
-		strings.Contains(lower, "/debug/")
+	return gitops.IsDebugAssetName(name)
 }
 
 func edgeServiceBinary(manifest *gitops.Manifest, name, remoteOS, remoteArch string) (string, string, error) {

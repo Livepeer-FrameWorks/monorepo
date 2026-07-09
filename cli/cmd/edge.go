@@ -162,10 +162,13 @@ func newEdgeTuneCmd() *cobra.Command {
 		out := cmd.OutOrStdout()
 		if runtime.GOOS == "darwin" {
 			ux.Heading(out, "Network tuning on macOS")
+			fmt.Fprintln(out, "  Container mode: the compose stack's edge-tuning oneshot applies the")
+			fmt.Fprintln(out, "  Linux VM sysctls (rmem_max/wmem_max/somaxconn/...) on every 'compose up' —")
+			fmt.Fprintln(out, "  nothing to do here. Native (launchd) mode tuning is manual:")
 			fmt.Fprintln(out, "  - File descriptors: launchctl limit maxfiles 1048576 1048576")
 			fmt.Fprintln(out, "  - Socket buffers: sysctl -w kern.ipc.maxsockbuf=16777216")
 			fmt.Fprintln(out, "  - Listen backlog: sysctl -w kern.ipc.somaxconn=8192")
-			ux.Warn(out, "These require sudo and reset on reboot unless added to /etc/sysctl.conf.")
+			ux.Warn(out, "The native-mode commands require sudo and reset on reboot unless added to /etc/sysctl.conf.")
 			return nil
 		}
 		ux.Heading(out, "Applying edge tuning (sysctl + limits)")
@@ -218,6 +221,7 @@ func newEdgeInitCmd() *cobra.Command {
 	var foghornAddr string
 	var overwrite bool
 	var initMode string
+	var initTargetOS string
 	var telemetryURL string
 	var telemetryToken string
 	cmd := &cobra.Command{Use: "init", Short: ".edge.env + templates (compose, Caddyfile)", RunE: func(cmd *cobra.Command, args []string) error {
@@ -290,6 +294,10 @@ func newEdgeInitCmd() *cobra.Command {
 			preRegCABundle = ""
 		}
 
+		mistPassword, err := generateEdgeMistPassword()
+		if err != nil {
+			return err
+		}
 		vars := templates.EdgeVars{
 			NodeID:          preRegNodeID,
 			EdgeDomain:      domain,
@@ -299,6 +307,8 @@ func newEdgeInitCmd() *cobra.Command {
 			GRPCTLSCAPath:   grpcTLSCAPath,
 			CABundlePEM:     preRegCABundle,
 			Mode:            initMode,
+			EdgeOS:          normalizeEdgeTargetOS(initTargetOS),
+			MistAPIPassword: mistPassword,
 			TelemetryURL:    telemetryURL,
 			TelemetryToken:  telemetryToken,
 		}
@@ -307,6 +317,12 @@ func newEdgeInitCmd() *cobra.Command {
 			return err
 		}
 		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Wrote edge templates to %s", target))
+		if vars.Mode != "native" {
+			// The flavor decides networking and the helmsman bind address —
+			// a cross-OS render must be a visible choice, never a silent
+			// default.
+			fmt.Fprintf(cmd.OutOrStdout(), "  compose flavor: %s (override with --target-os when rendering for a different host)\n", vars.EdgeOS)
+		}
 		ux.PrintNextSteps(cmd.OutOrStdout(), []ux.NextStep{
 			{Cmd: fmt.Sprintf("frameworks edge enroll --dir %s", target), Why: "Start the edge stack and verify HTTPS."},
 		})
@@ -318,7 +334,8 @@ func newEdgeInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&enrollmentToken, "enrollment-token", "", "enrollment token issued by FrameWorks for node bootstrap")
 	cmd.Flags().StringVar(&foghornAddr, "foghorn-addr", "", "Foghorn gRPC address for PreRegisterEdge (host:port)")
 	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "overwrite existing files")
-	cmd.Flags().StringVar(&initMode, "mode", "docker", "Deployment mode: docker (compose) or native (systemd)")
+	cmd.Flags().StringVar(&initMode, "mode", "container", "Deployment mode: container (single edge image) or native (systemd/launchd); 'docker' is a deprecated alias for container")
+	cmd.Flags().StringVar(&initTargetOS, "target-os", runtime.GOOS, "Target OS for the compose flavor: linux (host networking) or darwin (published ports + VM tuning). Defaults to THIS machine's OS — set explicitly when rendering for a different host")
 	return cmd
 }
 
@@ -338,20 +355,15 @@ func newEdgeEnrollCmd() *cobra.Command {
 		}
 		ux.Heading(out, fmt.Sprintf("Enrolling edge node on %s", target))
 
-		compose := "docker-compose.edge.yml"
+		var compose string
+		dir, compose = resolveEdgeComposeContext(cmd.Context(), dir, sshTarget, sshKey)
 		envFile := ".edge.env"
-		var outStr, errOut string
-		var err error
-		if strings.TrimSpace(sshTarget) != "" {
-			_, outStr, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "up", "-d"}, dir)
-		} else {
-			_, outStr, errOut, err = xexec.Run(cmd.Context(), "docker", []string{"compose", "-f", compose, "--env-file", envFile, "up", "-d"}, dir)
-		}
+		outStr, errOut, err := runEdgeDocker(cmd.Context(), sshTarget, sshKey, []string{"compose", "-f", compose, "--env-file", envFile, "up", "-d", "--remove-orphans"}, dir)
 		if err != nil {
 			ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("docker compose up: %w", err), "docker daemon rejected the stack — inspect the output for the specific service error", outStr, errOut)
 			return err
 		}
-		ux.Success(out, "Edge stack started (caddy, mistserver, helmsman)")
+		ux.Success(out, "Edge stack started (single edge container: caddy + mistserver + helmsman under s6)")
 		domain := readRemoteEnvFileKey(cmd.Context(), sshTarget, sshKey, dir, envFile, "EDGE_DOMAIN")
 		if strings.TrimSpace(domain) == "" {
 			ux.Warn(out, "EDGE_DOMAIN not set in .edge.env; skipping HTTPS check")
@@ -374,8 +386,12 @@ func newEdgeEnrollCmd() *cobra.Command {
 // parseEdgeServiceStatus extracts per-service up/down state from docker
 // compose ps or systemctl status output. Service names returned match
 // `frameworks edge logs <name>` handles. On parse uncertainty the service
-// is omitted rather than reported as down.
+// is omitted rather than reported as down. Container mode runs the whole
+// stack in one "edge" container, so it yields a single check.
 func parseEdgeServiceStatus(raw, mode string) []readiness.EdgeCheck {
+	if mode == "container" {
+		return parseEdgeContainerStatus(raw)
+	}
 	services := []string{"caddy", "mistserver", "helmsman"}
 	out := make([]readiness.EdgeCheck, 0, len(services))
 	lowered := strings.ToLower(raw)
@@ -393,30 +409,18 @@ func parseEdgeServiceStatus(raw, mode string) []readiness.EdgeCheck {
 
 		// Docker ps is one line per service; systemctl status spans multiple
 		// lines per block — native mode expands scope to the next block boundary.
-		scope := nameLine
-		if mode == "native" {
-			blockEnd := len(lowered)
-			if dot := strings.Index(lowered[idx+len(svc):], "●"); dot >= 0 {
-				blockEnd = idx + len(svc) + dot
-			}
-			if lineBreak := strings.Index(lowered[idx+len(svc):], "\n\n"); lineBreak >= 0 && idx+len(svc)+lineBreak < blockEnd {
-				blockEnd = idx + len(svc) + lineBreak
-			}
-			scope = lowered[lineStart:blockEnd]
+		blockEnd := len(lowered)
+		if dot := strings.Index(lowered[idx+len(svc):], "●"); dot >= 0 {
+			blockEnd = idx + len(svc) + dot
 		}
+		if lineBreak := strings.Index(lowered[idx+len(svc):], "\n\n"); lineBreak >= 0 && idx+len(svc)+lineBreak < blockEnd {
+			blockEnd = idx + len(svc) + lineBreak
+		}
+		scope := lowered[lineStart:blockEnd]
 
-		healthy := false
-		switch mode {
-		case "native":
-			healthy = strings.Contains(scope, "active (running)") || strings.Contains(scope, "com.livepeer.frameworks")
-			if strings.Contains(scope, "failed") || strings.Contains(scope, "inactive") {
-				healthy = false
-			}
-		case "docker":
-			healthy = strings.Contains(scope, "up ") || strings.Contains(scope, "running")
-			if strings.Contains(scope, "unhealthy") || strings.Contains(scope, "exited") || strings.Contains(scope, "restarting") {
-				healthy = false
-			}
+		healthy := strings.Contains(scope, "active (running)") || strings.Contains(scope, "com.livepeer.frameworks")
+		if strings.Contains(scope, "failed") || strings.Contains(scope, "inactive") {
+			healthy = false
 		}
 		out = append(out, readiness.EdgeCheck{
 			Name:   svc,
@@ -427,14 +431,228 @@ func parseEdgeServiceStatus(raw, mode string) []readiness.EdgeCheck {
 	return out
 }
 
-// detectEdgeMode reads DEPLOY_MODE from <dir>/.edge.env to determine if the
-// edge stack is running in docker or native mode. Honors --dir both locally
-// and over SSH. Falls back to "docker" if unset.
-func detectEdgeMode(ctx context.Context, dir, envFile, sshTarget, sshKey string) string {
-	if readRemoteEnvFileKey(ctx, sshTarget, sshKey, dir, envFile, "DEPLOY_MODE") == "native" {
-		return "native"
+// parseEdgeContainerStatus finds the single edge compose service by exact
+// column match, so sibling containers of the same project
+// (frameworks-edge-vmagent, frameworks-edge-tuning) can never stand in for
+// a dead edge container: an exited frameworks-edge is simply absent from
+// default compose ps output and must be reported as missing, not healthy.
+func parseEdgeContainerStatus(raw string) []readiness.EdgeCheck {
+	for line := range strings.SplitSeq(raw, "\n") {
+		lowered := strings.ToLower(line)
+		matched := false
+		for _, field := range strings.Fields(lowered) {
+			if field == "edge" || field == "frameworks-edge" {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		healthy := strings.Contains(lowered, "up ") || strings.Contains(lowered, "running")
+		// "(health: starting)" is warm-up, not health: the s6 stack may
+		// still be seeding. Green means the healthcheck actually passed.
+		if strings.Contains(lowered, "unhealthy") || strings.Contains(lowered, "exited") || strings.Contains(lowered, "restarting") || strings.Contains(lowered, "health: starting") {
+			healthy = false
+		}
+		return []readiness.EdgeCheck{{Name: "edge", OK: healthy, Detail: strings.TrimSpace(line)}}
 	}
-	return "docker"
+	return nil
+}
+
+// detectEdgeMode determines whether the edge stack on the target runs in
+// container or native mode. DEPLOY_MODE from <dir>/.edge.env wins (rendered
+// by `edge init` and the container install; legacy "docker" normalizes to
+// container). Without it, native deployed-state markers decide:
+// Ansible-native installs configure helmsman via helmsman.env and never
+// render .edge.env, so "no .edge.env" must not collapse to container.
+func detectEdgeMode(ctx context.Context, dir, envFile, sshTarget, sshKey string) string {
+	if raw := strings.TrimSpace(readRemoteEnvFileKey(ctx, sshTarget, sshKey, dir, envFile, "DEPLOY_MODE")); raw != "" {
+		return templates.NormalizeEdgeMode(raw)
+	}
+	nativeMarkers := []struct{ dir, file string }{
+		{"/etc/frameworks", "helmsman.env"},
+		{"/usr/local/etc/frameworks", "helmsman.env"},
+	}
+	if strings.TrimSpace(sshTarget) == "" {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			nativeMarkers = append(nativeMarkers, struct{ dir, file string }{filepath.Join(home, ".config/frameworks"), "helmsman.env"})
+		}
+	}
+	for _, m := range nativeMarkers {
+		if probeEdgeComposeFile(ctx, sshTarget, sshKey, m.dir, m.file) == nil {
+			return "native"
+		}
+	}
+	return "container"
+}
+
+// edgeAnsibleBaseDir is the compose project directory the Ansible edge role
+// deploys into (edge_base_dir); compose_stack names the file
+// docker-compose.yml there, while `edge init` renders
+// docker-compose.edge.yml into the operator's directory.
+const edgeAnsibleBaseDir = "/opt/frameworks/edge"
+
+// edgeNativeEnvPaths lists where Ansible-native installs keep helmsman's env
+// file (0600, frameworks-owned — it carries the Mist password).
+func edgeNativeEnvPaths(local bool) []string {
+	paths := []string{"/etc/frameworks/helmsman.env", "/usr/local/etc/frameworks/helmsman.env"}
+	if local {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			paths = append(paths, filepath.Join(home, ".config/frameworks/helmsman.env"))
+		}
+	}
+	return paths
+}
+
+// readEdgeMetadataKey reads node metadata (EDGE_DOMAIN, NODE_ID, ...) for
+// the given deploy mode. Container nodes trust only <dir>/.edge.env (a
+// migrated host may still carry stale native env files). Native nodes read
+// the helmsman env files FIRST — they are the deployed truth, and a node
+// migrated container→native may still carry a stale container-era
+// .edge.env — falling back to .edge.env only for CLI-rendered native
+// installs that never wrote helmsman.env. The native files are 0600, so
+// remote reads retry with passwordless sudo.
+func readEdgeMetadataKey(ctx context.Context, sshTarget, sshKey, dir, deployMode, key string) string {
+	if deployMode == "native" {
+		if v := readEdgeNativeEnvKey(ctx, sshTarget, sshKey, key); v != "" {
+			return v
+		}
+	}
+	if v := strings.TrimSpace(readRemoteEnvFileKey(ctx, sshTarget, sshKey, dir, ".edge.env", key)); v != "" {
+		return v
+	}
+	return ""
+}
+
+func readEdgeNativeEnvKey(ctx context.Context, sshTarget, sshKey, key string) string {
+	local := strings.TrimSpace(sshTarget) == ""
+	for _, path := range edgeNativeEnvPaths(local) {
+		if local {
+			if v := strings.TrimSpace(readEnvFileKey(path, key)); v != "" {
+				return v
+			}
+			continue
+		}
+		script := fmt.Sprintf("grep ^%s= %s 2>/dev/null || sudo -n grep ^%s= %s 2>/dev/null",
+			fwssh.ShellQuote(key), fwssh.ShellQuote(path), fwssh.ShellQuote(key), fwssh.ShellQuote(path))
+		_, out, _, err := xexec.RunSSHWithKey(ctx, sshTarget, sshKey, "sh", []string{"-c", script}, "")
+		if err != nil {
+			continue
+		}
+		prefix := key + "="
+		for ln := range strings.SplitSeq(out, "\n") {
+			if v, ok := strings.CutPrefix(strings.TrimSpace(ln), prefix); ok {
+				if v = strings.TrimSpace(v); v != "" {
+					return v
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// resolveEdgeComposeContext returns the (dir, composeFile) container-mode
+// management commands should operate on, so `edge status/update/logs/...`
+// work against both an operator-local `edge init` render and an
+// Ansible-provisioned node without the operator guessing --dir. A bare
+// docker-compose.yml only counts when .edge.env sits next to it (it is the
+// compose_stack layout marker), so unrelated compose projects are ignored.
+func resolveEdgeComposeContext(ctx context.Context, dir, sshTarget, sshKey string) (string, string) {
+	if strings.TrimSpace(dir) == "" {
+		dir = "."
+	}
+	type candidate struct {
+		dir, compose string
+		needsEnv     bool
+	}
+	candidates := []candidate{
+		{dir, "docker-compose.edge.yml", false},
+		// A bare docker-compose.yml in the operator's cwd only counts when
+		// .edge.env sits next to it, so unrelated compose projects are
+		// ignored. Under the ansible base dir the path itself is the marker
+		// (and .edge.env there may be root-owned).
+		{dir, "docker-compose.yml", true},
+	}
+	if dir == "." {
+		candidates = append(candidates,
+			candidate{edgeAnsibleBaseDir, "docker-compose.edge.yml", false},
+			candidate{edgeAnsibleBaseDir, "docker-compose.yml", false},
+		)
+	}
+	for _, c := range candidates {
+		if probeEdgeComposeFile(ctx, sshTarget, sshKey, c.dir, c.compose) != nil {
+			continue
+		}
+		if c.needsEnv && probeEdgeEnvFile(ctx, sshTarget, sshKey, c.dir, ".edge.env") != nil {
+			continue
+		}
+		return c.dir, c.compose
+	}
+	return dir, "docker-compose.edge.yml"
+}
+
+// probeEdgeComposeFile checks existence (not readability) so root-owned
+// deployments are still discoverable by an unprivileged SSH user; the
+// docker commands themselves fall back to sudo via runEdgeDocker.
+func probeEdgeComposeFile(ctx context.Context, sshTarget, sshKey, dir, file string) error {
+	if strings.TrimSpace(sshTarget) == "" {
+		return probeEdgeEnvFile(ctx, sshTarget, sshKey, dir, file)
+	}
+	path := strings.TrimRight(dir, "/") + "/" + file
+	if strings.TrimSpace(dir) == "" {
+		path = file
+	}
+	script := fmt.Sprintf("test -e %s", fwssh.ShellQuote(path))
+	code, _, _, err := xexec.RunSSHWithKey(ctx, sshTarget, sshKey, "sh", []string{"-c", script}, "")
+	if err != nil {
+		return fmt.Errorf("probe %s: %w", path, err)
+	}
+	if code != 0 {
+		return fmt.Errorf("probe %s: missing", path)
+	}
+	return nil
+}
+
+// runEdgeDocker runs a docker command for container-mode management.
+// Remotely it retries once with passwordless sudo when the plain invocation
+// fails: Ansible-provisioned stacks are root-owned (env files, docker
+// socket), while `edge init` renders belong to the operator.
+func runEdgeDocker(ctx context.Context, sshTarget, sshKey string, args []string, dir string) (string, string, error) {
+	if strings.TrimSpace(sshTarget) == "" {
+		_, out, errOut, err := xexec.Run(ctx, "docker", args, dir)
+		return out, errOut, err
+	}
+	_, out, errOut, err := xexec.RunSSHWithKey(ctx, sshTarget, sshKey, "docker", args, dir)
+	if err == nil {
+		return out, errOut, nil
+	}
+	_, sudoOut, sudoErrOut, sudoErr := xexec.RunSSHWithKey(ctx, sshTarget, sshKey, "sudo", append([]string{"-n", "docker"}, args...), dir)
+	if sudoErr == nil {
+		return sudoOut, sudoErrOut, nil
+	}
+	return out, errOut, err
+}
+
+// generateEdgeMistPassword mints the shared MistServer API password for
+// operator-local renders (the provisioner path generates its own); Mist
+// only enables controller auth when the value is non-empty.
+func generateEdgeMistPassword() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate MistServer API password: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// normalizeEdgeTargetOS folds arbitrary GOOS values onto the two compose
+// flavors: darwin keeps its published-ports flavor, everything else gets
+// host networking.
+func normalizeEdgeTargetOS(goos string) string {
+	if strings.EqualFold(strings.TrimSpace(goos), "darwin") {
+		return "darwin"
+	}
+	return "linux"
 }
 
 // detectEdgeOS returns "darwin" or "linux" for the target host.
@@ -773,8 +991,12 @@ Multi-node manifest example:
 					User:       os.Getenv("USER"),
 				}
 				darwinDomain = provisioner.DomainUser
-				if mode == "docker" {
-					mode = "native" // local install always uses native launchd
+				if !cmd.Flags().Changed("mode") {
+					// Local installs default to native launchd (no Docker
+					// Desktop dependency); an explicit --mode container is
+					// honored.
+					mode = "native"
+					fmt.Fprintln(cmd.OutOrStdout(), "  local install defaults to native mode; pass --mode container for the single edge image")
 				}
 				fmt.Fprintln(cmd.OutOrStdout(), "  launchd domain: user (no admin required)")
 			} else {
@@ -848,9 +1070,13 @@ Multi-node manifest example:
 			}
 
 			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Edge node provisioned at https://%s", primaryDomain))
+			sshSuffix := ""
+			if strings.TrimSpace(sshTarget) != "" {
+				sshSuffix = " --ssh " + sshTarget
+			}
 			ux.PrintNextSteps(cmd.OutOrStdout(), []ux.NextStep{
-				{Cmd: "frameworks edge status", Why: "Confirm services are running and HTTPS is healthy."},
-				{Cmd: "frameworks edge doctor", Why: "Run diagnostics if anything looks off."},
+				{Cmd: "frameworks edge status" + sshSuffix, Why: "Confirm services are running and HTTPS is healthy."},
+				{Cmd: "frameworks edge doctor", Why: "Run diagnostics on the node if anything looks off."},
 			})
 			return nil
 		},
@@ -875,7 +1101,7 @@ Multi-node manifest example:
 	cmd.Flags().StringVar(&manifestPath, "manifest", "", "Path to edge manifest file (edges.yaml) for multi-node provisioning")
 	cmd.Flags().StringVar(&clusterManifestPath, "cluster-manifest", "", "Path to cluster manifest used for platform SERVICE_TOKEN in edge manifest mode")
 	cmd.Flags().IntVar(&parallel, "parallel", 1, "Number of nodes to provision in parallel (for manifest mode)")
-	cmd.Flags().StringVar(&mode, "mode", "docker", "Deployment mode: docker (compose) or native (systemd)")
+	cmd.Flags().StringVar(&mode, "mode", "container", "Deployment mode: container (single edge image) or native (systemd/launchd); 'docker' is a deprecated alias for container")
 	cmd.Flags().StringVar(&version, "version", "", "Platform version for binary resolution (e.g., stable, v1.2.3)")
 	cmd.Flags().BoolVar(&local, "local", false, "Provision this machine as a user LaunchAgent (no admin required, macOS only)")
 	cmd.Flags().StringVar(&ageKeyFile, "age-key", "", "Path to age private key for SOPS-encrypted host files (default: $SOPS_AGE_KEY_FILE)")
@@ -2005,14 +2231,18 @@ func newEdgeStatusCmd() *cobra.Command {
 			dir = "."
 		}
 		envFile := ".edge.env"
+		// Ansible-provisioned nodes keep .edge.env + compose under
+		// /opt/frameworks/edge; resolve before env reads.
+		dir, _ = resolveEdgeComposeContext(cmd.Context(), dir, sshTarget, sshKey)
 		deployMode := detectEdgeMode(cmd.Context(), dir, envFile, sshTarget, sshKey)
 
-		// Multi-line state summary sourced from .edge.env + runtime probes.
-		if envDomain := readRemoteEnvFileKey(cmd.Context(), sshTarget, sshKey, dir, envFile, "EDGE_DOMAIN"); envDomain != "" && domain == "" {
+		// Multi-line state summary sourced from .edge.env (container) or
+		// the native helmsman env + runtime probes.
+		if envDomain := readEdgeMetadataKey(cmd.Context(), sshTarget, sshKey, dir, deployMode, "EDGE_DOMAIN"); envDomain != "" && domain == "" {
 			domain = envDomain
 		}
-		nodeID := readRemoteEnvFileKey(cmd.Context(), sshTarget, sshKey, dir, envFile, "NODE_ID")
-		telemetryURL := readRemoteEnvFileKey(cmd.Context(), sshTarget, sshKey, dir, envFile, "TELEMETRY_URL")
+		nodeID := readEdgeMetadataKey(cmd.Context(), sshTarget, sshKey, dir, deployMode, "NODE_ID")
+		telemetryURL := readEdgeMetadataKey(cmd.Context(), sshTarget, sshKey, dir, deployMode, "TELEMETRY_URL")
 		ux.Subheading(cmd.OutOrStdout(), "Edge node state:")
 		fmt.Fprintf(cmd.OutOrStdout(), "  mode:      %s\n", deployMode)
 		if nodeID != "" {
@@ -2051,13 +2281,9 @@ func newEdgeStatusCmd() *cobra.Command {
 				fmt.Fprint(cmd.OutOrStdout(), out)
 			}
 		} else {
-			// Docker: compose ps
-			compose := "docker-compose.edge.yml"
-			if strings.TrimSpace(sshTarget) != "" {
-				_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "ps"}, dir)
-			} else {
-				_, out, errOut, err = xexec.Run(cmd.Context(), "docker", []string{"compose", "-f", compose, "--env-file", envFile, "ps"}, dir)
-			}
+			// Container: compose ps against the resolved project dir
+			composeDir, compose := resolveEdgeComposeContext(cmd.Context(), dir, sshTarget, sshKey)
+			out, errOut, err = runEdgeDocker(cmd.Context(), sshTarget, sshKey, []string{"compose", "-f", compose, "--env-file", envFile, "ps"}, composeDir)
 			if err != nil {
 				ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("docker compose ps: %w", err), "run 'docker info' to confirm the daemon is reachable, or re-run with --dir pointing at the deployment directory", out, errOut)
 			} else {
@@ -2096,6 +2322,9 @@ func newEdgeUpdateCmd() *cobra.Command {
 		}
 		ux.Heading(out, fmt.Sprintf("Updating edge services on %s", target))
 		envFile := ".edge.env"
+		// Resolve the deployed project dir before reading DEPLOY_MODE so
+		// Ansible-provisioned nodes (/opt/frameworks/edge) classify right.
+		dir, _ = resolveEdgeComposeContext(cmd.Context(), dir, sshTarget, sshKey)
 		deployMode := detectEdgeMode(cmd.Context(), dir, envFile, sshTarget, sshKey)
 
 		if deployMode == "native" {
@@ -2112,25 +2341,13 @@ func newEdgeUpdateCmd() *cobra.Command {
 			}
 			ux.Success(out, "Edge services refreshed (native)")
 		} else {
-			compose := "docker-compose.edge.yml"
+			composeDir, compose := resolveEdgeComposeContext(cmd.Context(), dir, sshTarget, sshKey)
 			steps := dockerEdgeUpdateSteps(compose, envFile)
-			// pull
-			if strings.TrimSpace(sshTarget) != "" {
-				if _, out, errOut, err := xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", steps[0], dir); err != nil {
-					ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("compose pull: %w", err), "confirm the registry is reachable from this host and the image tags in docker-compose.edge.yml are valid", out, errOut)
-					return err
-				}
-			} else if _, out, errOut, err := xexec.Run(cmd.Context(), "docker", steps[0], dir); err != nil {
-				ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("compose pull: %w", err), "confirm the registry is reachable from this host and the image tags in docker-compose.edge.yml are valid", out, errOut)
+			if out, errOut, err := runEdgeDocker(cmd.Context(), sshTarget, sshKey, steps[0], composeDir); err != nil {
+				ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("compose pull: %w", err), "confirm the registry is reachable from this host and the image tags in "+compose+" are valid", out, errOut)
 				return err
 			}
-			// up -d
-			if strings.TrimSpace(sshTarget) != "" {
-				if _, out, errOut, err := xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", steps[1], dir); err != nil {
-					ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("compose up: %w", err), "docker daemon rejected the stack — inspect the output for a specific service error", out, errOut)
-					return err
-				}
-			} else if _, out, errOut, err := xexec.Run(cmd.Context(), "docker", steps[1], dir); err != nil {
+			if out, errOut, err := runEdgeDocker(cmd.Context(), sshTarget, sshKey, steps[1], composeDir); err != nil {
 				ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("compose up: %w", err), "docker daemon rejected the stack — inspect the output for a specific service error", out, errOut)
 				return err
 			}
@@ -2154,7 +2371,10 @@ func nativeEdgeRefreshCommand(edgeOS string) string {
 func dockerEdgeUpdateSteps(compose, envFile string) [][]string {
 	return [][]string{
 		{"compose", "-f", compose, "--env-file", envFile, "pull"},
-		{"compose", "-f", compose, "--env-file", envFile, "up", "-d"},
+		// --remove-orphans retires leftover services from the old
+		// 3-container layout in the same project dir (edge-proxy etc.),
+		// which would otherwise keep squatting 80/443.
+		{"compose", "-f", compose, "--env-file", envFile, "up", "-d", "--remove-orphans"},
 	}
 }
 
@@ -2166,11 +2386,13 @@ func newEdgeCertCmd() *cobra.Command {
 	var reload bool
 	cmd := &cobra.Command{Use: "cert", Short: "Show TLS expiry and optionally reload Caddy", RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
+		if dir == "" {
+			dir = "."
+		}
+		dir, _ = resolveEdgeComposeContext(cmd.Context(), dir, sshTarget, sshKey)
+		certDeployMode := detectEdgeMode(cmd.Context(), dir, ".edge.env", sshTarget, sshKey)
 		if strings.TrimSpace(domain) == "" {
-			if dir == "" {
-				dir = "."
-			}
-			domain = readRemoteEnvFileKey(cmd.Context(), sshTarget, sshKey, dir, ".edge.env", "EDGE_DOMAIN")
+			domain = readEdgeMetadataKey(cmd.Context(), sshTarget, sshKey, dir, certDeployMode, "EDGE_DOMAIN")
 		}
 		if strings.TrimSpace(domain) == "" {
 			ux.Warn(out, "No domain provided and EDGE_DOMAIN not set in .edge.env")
@@ -2190,7 +2412,7 @@ func newEdgeCertCmd() *cobra.Command {
 			}
 		}
 		if reload {
-			deployMode := detectEdgeMode(cmd.Context(), dir, ".edge.env", sshTarget, sshKey)
+			deployMode := certDeployMode
 			var outStr, errOut string
 			var err error
 			if deployMode == "native" {
@@ -2208,14 +2430,11 @@ func newEdgeCertCmd() *cobra.Command {
 					_, outStr, errOut, err = xexec.Run(cmd.Context(), "systemctl", []string{"reload", "frameworks-caddy"}, "")
 				}
 			} else {
-				if strings.TrimSpace(sshTarget) != "" {
-					_, outStr, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", []string{"exec", "edge-proxy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"}, dir)
-				} else {
-					_, outStr, errOut, err = xexec.Run(cmd.Context(), "docker", []string{"exec", "edge-proxy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"}, dir)
-				}
+				reloadArgs := []string{"exec", "frameworks-edge", "/opt/frameworks/caddy/caddy", "reload", "--config", "/etc/caddy/Caddyfile"}
+				outStr, errOut, err = runEdgeDocker(cmd.Context(), sshTarget, sshKey, reloadArgs, dir)
 			}
 			if err != nil {
-				ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("caddy reload: %w", err), "confirm the edge-proxy container is running and /etc/caddy/Caddyfile is valid", outStr, errOut)
+				ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("caddy reload: %w", err), "confirm the frameworks-edge container is running and /etc/caddy/Caddyfile is valid", outStr, errOut)
 				return err
 			}
 			ux.Success(out, "Caddy reloaded")
@@ -2226,7 +2445,7 @@ func newEdgeCertCmd() *cobra.Command {
 	cmd.Flags().StringVar(&domain, "domain", "", "edge domain to check")
 	cmd.Flags().StringVar(&sshTarget, "ssh", "", "run remotely on user@host via SSH for reload")
 	cmd.Flags().StringVar(&sshKey, "ssh-key", "", "SSH private key path")
-	cmd.Flags().BoolVar(&reload, "reload", false, "reload Caddy inside edge-proxy container")
+	cmd.Flags().BoolVar(&reload, "reload", false, "reload Caddy inside the frameworks-edge container")
 	return cmd
 }
 
@@ -2241,6 +2460,7 @@ func newEdgeLogsCmd() *cobra.Command {
 			dir = "."
 		}
 		envFile := ".edge.env"
+		dir, _ = resolveEdgeComposeContext(cmd.Context(), dir, sshTarget, sshKey)
 		deployMode := detectEdgeMode(cmd.Context(), dir, envFile, sshTarget, sshKey)
 		svc := ""
 		if len(args) == 1 {
@@ -2293,7 +2513,7 @@ func newEdgeLogsCmd() *cobra.Command {
 				_, out, errOut, err = xexec.Run(cmd.Context(), "sh", logArgs, "")
 			}
 		} else {
-			compose := "docker-compose.edge.yml"
+			composeDir, compose := resolveEdgeComposeContext(cmd.Context(), dir, sshTarget, sshKey)
 			arg := []string{"compose", "-f", compose, "--env-file", envFile, "logs"}
 			if follow {
 				arg = append(arg, "-f")
@@ -2302,13 +2522,15 @@ func newEdgeLogsCmd() *cobra.Command {
 				arg = append(arg, "--tail", fmt.Sprintf("%d", tail))
 			}
 			if svc != "" {
+				// caddy/mistserver/helmsman all live in the single edge
+				// container; their lines are interleaved on its stdout.
+				switch svc {
+				case "caddy", "mistserver", "helmsman":
+					svc = "edge"
+				}
 				arg = append(arg, svc)
 			}
-			if strings.TrimSpace(sshTarget) != "" {
-				_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", arg, dir)
-			} else {
-				_, out, errOut, err = xexec.Run(cmd.Context(), "docker", arg, dir)
-			}
+			out, errOut, err = runEdgeDocker(cmd.Context(), sshTarget, sshKey, arg, composeDir)
 		}
 
 		if err != nil {
@@ -2396,6 +2618,7 @@ func newEdgeDoctorCmd() *cobra.Command {
 			dir = "."
 		}
 		envFile := ".edge.env"
+		dir, _ = resolveEdgeComposeContext(ctx, dir, "", "")
 		deployMode := detectEdgeMode(ctx, dir, envFile, "", "")
 		var (
 			serviceChecks []readiness.EdgeCheck
@@ -2418,21 +2641,21 @@ func newEdgeDoctorCmd() *cobra.Command {
 				serviceChecks = parseEdgeServiceStatus(out, "native")
 			}
 		} else {
-			compose := "docker-compose.edge.yml"
-			_, out, errOut, err := xexec.Run(ctx, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "ps"}, dir)
+			composeDir, compose := resolveEdgeComposeContext(ctx, dir, "", "")
+			_, out, errOut, err := xexec.Run(ctx, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "ps"}, composeDir)
 			fmt.Fprintln(textOut, "Compose Services:")
 			if err != nil {
 				fmt.Fprintf(textOut, " compose ps error: %v\n%s\n", err, errOut)
 				probeErr = err.Error()
 			} else {
 				fmt.Fprint(textOut, out)
-				serviceChecks = parseEdgeServiceStatus(out, "docker")
+				serviceChecks = parseEdgeServiceStatus(out, "container")
 			}
 		}
 
 		// HTTPS TLS
 		if domain == "" {
-			domain = readRemoteEnvFileKey(ctx, "", "", dir, envFile, "EDGE_DOMAIN")
+			domain = readEdgeMetadataKey(ctx, "", "", dir, deployMode, "EDGE_DOMAIN")
 		}
 		httpsStatus := 0
 		httpsError := ""
@@ -2569,15 +2792,25 @@ The mode change is sent upstream to Foghorn for validation. Foghorn applies
 the change and pushes an updated ConfigSeed back to the node.`, Args: cobra.RangeArgs(0, 1), RunE: func(cmd *cobra.Command, args []string) error {
 		helmsmanBase := "http://localhost:18007"
 
-		if len(args) == 0 {
-			curlArgs := []string{"-s", "-f", helmsmanBase + "/node/mode"}
-			var outStr, errOut string
-			var err error
-			if strings.TrimSpace(sshTarget) != "" {
-				_, outStr, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "curl", curlArgs, "")
-			} else {
-				_, outStr, errOut, err = xexec.Run(cmd.Context(), "curl", curlArgs, "")
+		// Container mode reaches the loopback-bound /node/mode endpoint by
+		// exec'ing curl inside the edge container (works on the darwin
+		// bridge flavor too, where 18007 is never published).
+		envDir, _ := resolveEdgeComposeContext(cmd.Context(), ".", sshTarget, sshKey)
+		deployMode := detectEdgeMode(cmd.Context(), envDir, ".edge.env", sshTarget, sshKey)
+		runModeCurl := func(curlArgs []string) (string, string, error) {
+			if deployMode == "container" {
+				return runEdgeDocker(cmd.Context(), sshTarget, sshKey, append([]string{"exec", "frameworks-edge", "curl"}, curlArgs...), "")
 			}
+			if strings.TrimSpace(sshTarget) != "" {
+				_, outStr, errOut, err := xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "curl", curlArgs, "")
+				return outStr, errOut, err
+			}
+			_, outStr, errOut, err := xexec.Run(cmd.Context(), "curl", curlArgs, "")
+			return outStr, errOut, err
+		}
+
+		if len(args) == 0 {
+			outStr, errOut, err := runModeCurl([]string{"-s", "-f", helmsmanBase + "/node/mode"})
 			if err != nil {
 				ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("get node mode: %w", err), "helmsman at "+helmsmanBase+" unreachable — run 'frameworks edge status' to confirm the node is up", "", errOut)
 				return err
@@ -2595,14 +2828,7 @@ the change and pushes an updated ConfigSeed back to the node.`, Args: cobra.Rang
 
 		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Setting node mode to %s", mode))
 		body := fmt.Sprintf(`{"mode":%q,"reason":%q}`, mode, reason)
-		curlArgs := []string{"-s", "-f", "-X", "POST", "-H", "Content-Type: application/json", "-d", body, helmsmanBase + "/node/mode"}
-		var outStr, errOut string
-		var err error
-		if strings.TrimSpace(sshTarget) != "" {
-			_, outStr, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "curl", curlArgs, "")
-		} else {
-			_, outStr, errOut, err = xexec.Run(cmd.Context(), "curl", curlArgs, "")
-		}
+		outStr, errOut, err := runModeCurl([]string{"-s", "-f", "-X", "POST", "-H", "Content-Type: application/json", "-d", body, helmsmanBase + "/node/mode"})
 		if err != nil {
 			ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("set node mode: %w", err), "helmsman at "+helmsmanBase+" refused the mode change — check 'frameworks edge logs helmsman'", "", errOut)
 			return err

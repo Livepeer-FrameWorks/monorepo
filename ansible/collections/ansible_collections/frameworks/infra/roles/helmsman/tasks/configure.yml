@@ -28,6 +28,7 @@
         'FRAMEWORKS_TRIGGER_WAL_DIR': helmsman_effective_trigger_wal_dir,
         'CADDY_ADMIN_URL': helmsman_caddy_admin_url,
         'CADDY_CONFIG_PATH': helmsman_caddy_config_path,
+        'HELMSMAN_BIND_ADDR': helmsman_bind_addr,
         'MIST_API_USERNAME': helmsman_mist_api_user,
         'MIST_API_PASSWORD': helmsman_mist_api_password,
         }

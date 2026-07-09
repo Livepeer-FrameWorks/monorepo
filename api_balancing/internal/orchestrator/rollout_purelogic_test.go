@@ -63,10 +63,12 @@ func TestNodePlatformKey(t *testing.T) {
 	}
 }
 
-// The DeployMode gate accepts "native" case-insensitively and tolerates
-// surrounding whitespace; everything else (docker, empty, fenced operational
-// modes, underivable platform) must be rejected so automatic release updates
-// only ever touch healthy, normal-mode, native nodes.
+// The DeployMode gate accepts "native" and "container" (the single edge
+// image applies in-place component updates exactly like native)
+// case-insensitively, tolerating surrounding whitespace; everything else
+// (the retired multi-container docker mode, empty, fenced operational
+// modes, underivable platform) must be rejected so automatic release
+// updates only ever touch healthy, normal-mode, convergeable nodes.
 func TestNodeAllowsAutomaticReleaseUpdate_DeployModeNormalization(t *testing.T) {
 	t.Parallel()
 
@@ -77,10 +79,14 @@ func TestNodeAllowsAutomaticReleaseUpdate_DeployModeNormalization(t *testing.T) 
 	}{
 		{"uppercase native", &state.NodeState{DeployMode: "NATIVE", OS: "linux", Arch: "amd64"}, true},
 		{"padded native", &state.NodeState{DeployMode: "  native  ", OS: "linux", Arch: "amd64"}, true},
+		{"container", &state.NodeState{DeployMode: "container", OS: "linux", Arch: "amd64"}, true},
+		{"uppercase container", &state.NodeState{DeployMode: "CONTAINER", OS: "linux", Arch: "arm64"}, true},
 		{"empty deploy mode", &state.NodeState{DeployMode: "", OS: "linux", Arch: "amd64"}, false},
-		{"docker", &state.NodeState{DeployMode: "docker", OS: "linux", Arch: "amd64"}, false},
+		{"legacy docker", &state.NodeState{DeployMode: "docker", OS: "linux", Arch: "amd64"}, false},
 		{"native but no platform", &state.NodeState{DeployMode: "native"}, false},
+		{"container but no platform", &state.NodeState{DeployMode: "container"}, false},
 		{"native but draining", &state.NodeState{DeployMode: "native", OS: "linux", Arch: "amd64", OperationalMode: state.NodeModeDraining}, false},
+		{"container but draining", &state.NodeState{DeployMode: "container", OS: "linux", Arch: "amd64", OperationalMode: state.NodeModeDraining}, false},
 		{"nil node", nil, false},
 	}
 	for _, tc := range tests {

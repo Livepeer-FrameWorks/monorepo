@@ -35,44 +35,61 @@ type EdgeVars struct {
 	// Optional: file-based TLS certificate paths (if using Navigator-issued certs)
 	CertPath string // e.g., /etc/frameworks/certs/cert.pem
 	KeyPath  string // e.g., /etc/frameworks/certs/key.pem
-	// Deployment mode: "docker" (default) or "native" (bare metal with systemd)
-	Mode             string
-	HelmsmanUpstream string // Docker: "helmsman:18007", Native: "localhost:18007"
-	MistUpstream     string // Docker: "mistserver:8080", Native: "localhost:8080"
-	CaddyAdminAddr   string // Docker: "unix//run/caddy/admin.sock", Native: "localhost:2019"
+	// Deployment mode: "container" (default; single edge image under
+	// s6-overlay) or "native" (bare metal with systemd/launchd). "docker" is
+	// accepted as a deprecated alias for container.
+	Mode string
+	// EdgeOS selects the container compose flavor: "linux" (host networking;
+	// host node_tuning sysctls apply directly) or "darwin" (bridge with the
+	// bounded published port set + privileged VM-tuning oneshot, because
+	// Docker Desktop host networking has broken UDP semantics on macOS).
+	EdgeOS           string
+	HelmsmanUpstream string // localhost:18007 in both modes (loopback inside the container)
+	MistUpstream     string // localhost:8080 in both modes
+	CaddyAdminAddr   string // Container: "unix//run/caddy/admin.sock", Native: "localhost:2019"
 	SiteAddress      string // Caddy site address: "*.cluster.root" (wildcard) or "edge.cluster.root" (single)
 	MistAPIPassword  string // MistServer API auth password (used for -a flag and helmsman config sync)
-	MistServerImage  string // Docker image for local edge init; remote apply pins this from GitOps.
-	CaddyImage       string // Docker image for caddy in compose mode; manifest-pinned (image@digest) when a release is selected.
-	HelmsmanImage    string // Docker image for helmsman in compose mode; manifest-pinned (image@digest) when a release is selected.
-	ChandlerUpstream string // Docker: "chandler:18020", Native: "localhost:18020"
+	EdgeImage        string // Single edge image (helmsman+Mist+Caddy); manifest-pinned (image@digest) when a release is selected.
+	ChandlerUpstream string // localhost:18020 in both modes
 	TelemetryURL     string
 	TelemetryToken   string
 	// RelayTrustedCIDR is the CIDR whose RemoteAddr bypasses the relay
-	// authorize gate for the local Mist→Helmsman hop. Docker: the compose bridge
-	// range (Mist dials helmsman:18007, non-loopback). Native: empty (Mist
-	// reaches Helmsman on loopback). Never covers peer nodes.
+	// authorize gate for the local Mist→Helmsman hop. Empty in both modes
+	// (Mist reaches Helmsman on loopback — native host or inside the edge
+	// container). Never covers peer nodes.
 	RelayTrustedCIDR string
+	// StorageCapacityBytes optionally caps the hot-storage logical size
+	// (HELMSMAN_STORAGE_CAPACITY_BYTES). Recommended on macOS where the
+	// named volume reports the whole Docker VM disk.
+	StorageCapacityBytes string
+}
+
+// NormalizeEdgeMode maps user-facing mode names onto the canonical set,
+// folding the deprecated "docker" alias into "container".
+func NormalizeEdgeMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", "docker", "container":
+		return "container"
+	case "native":
+		return "native"
+	default:
+		return strings.ToLower(strings.TrimSpace(mode))
+	}
 }
 
 // SetModeDefaults fills Mode-dependent fields if not explicitly set.
 func (v *EdgeVars) SetModeDefaults() {
-	if v.Mode == "" {
-		v.Mode = "docker"
+	v.Mode = NormalizeEdgeMode(v.Mode)
+	if v.EdgeOS == "" {
+		v.EdgeOS = "linux"
 	}
+	// Both modes are loopback now: native processes share the host, the
+	// container mode shares one network namespace.
 	if v.HelmsmanUpstream == "" {
-		if v.Mode == "native" {
-			v.HelmsmanUpstream = "localhost:18007"
-		} else {
-			v.HelmsmanUpstream = "helmsman:18007"
-		}
+		v.HelmsmanUpstream = "localhost:18007"
 	}
 	if v.MistUpstream == "" {
-		if v.Mode == "native" {
-			v.MistUpstream = "localhost:8080"
-		} else {
-			v.MistUpstream = "mistserver:8080"
-		}
+		v.MistUpstream = "localhost:8080"
 	}
 	if v.CaddyAdminAddr == "" {
 		if v.Mode == "native" {
@@ -82,28 +99,90 @@ func (v *EdgeVars) SetModeDefaults() {
 		}
 	}
 	if v.ChandlerUpstream == "" {
-		if v.Mode == "native" {
-			v.ChandlerUpstream = "localhost:18020"
-		} else {
-			v.ChandlerUpstream = "chandler:18020"
-		}
+		v.ChandlerUpstream = "localhost:18020"
 	}
-	if v.RelayTrustedCIDR == "" && v.Mode != "native" {
-		// Docker: Mist dials helmsman:18007 over the compose bridge, so the
-		// relay's loopback exemption doesn't apply. Trust the private bridge
-		// range for the local hop only (peer reads go Caddy + Bearer).
-		// Broad RFC1918 fallback — operators on shared hosts should narrow it.
-		v.RelayTrustedCIDR = "172.16.0.0/12"
+	if v.EdgeImage == "" {
+		v.EdgeImage = "livepeerframeworks/frameworks-edge:latest"
 	}
-	if v.MistServerImage == "" {
-		v.MistServerImage = "mistserver:latest"
+}
+
+// edgeNetworkBlock renders the compose network settings for the edge
+// service: host networking on Linux; on macOS a bridge with the bounded
+// published port set (Mist pins WebRTC to UDP 18203 and SRT to UDP 8889 —
+// single ports, not ranges) plus namespaced sysctls.
+func edgeNetworkBlock(edgeOS string) string {
+	if edgeOS != "darwin" {
+		return "    network_mode: host"
 	}
-	if v.CaddyImage == "" {
-		v.CaddyImage = "caddy:2.8.4"
+	return `    ports:
+      - "80:80"
+      - "443:443"
+      - "1935:1935"
+      - "4200:4200"
+      - "5554:5554"
+      - "8080:8080"
+      - "8889:8889/udp"
+      - "18203:18203/udp"
+    sysctls:
+      net.core.somaxconn: 16384
+      net.ipv4.ip_local_port_range: "10000 65535"
+    depends_on:
+      edge-tuning:
+        condition: service_completed_successfully`
+}
+
+// edgeTuningService renders the privileged oneshot that applies the
+// non-namespaced media sysctls inside the Docker Desktop Linux VM on macOS
+// (values mirror ansible roles/node_tuning defaults). On Linux the host
+// node_tuning role owns these, so the block is empty.
+func edgeTuningService(edgeOS string) string {
+	if edgeOS != "darwin" {
+		return ""
 	}
-	if v.HelmsmanImage == "" {
-		v.HelmsmanImage = "frameworks/helmsman:latest"
+	return `  edge-tuning:
+    image: busybox:1.37
+    container_name: frameworks-edge-tuning
+    privileged: true
+    network_mode: host
+    command:
+      - sh
+      - -c
+      - |
+        set -x
+        sysctl -w net.core.rmem_max=67108864
+        sysctl -w net.core.wmem_max=67108864
+        sysctl -w net.core.somaxconn=16384
+        sysctl -w net.ipv4.ip_local_port_range="10000 65535"
+        sysctl -w net.ipv4.tcp_notsent_lowat=16384
+        sysctl -w net.core.default_qdisc=fq || true
+        sysctl -w net.ipv4.tcp_congestion_control=bbr || true
+    restart: "no"
+
+`
+}
+
+// storageCapacityBlock renders the optional hot-storage logical cap. On
+// macOS container deployments the named volume's Statfs reports the whole
+// Docker VM disk, so an explicit cap keeps the eviction thresholds honest.
+func storageCapacityBlock(vars EdgeVars) string {
+	if v := strings.TrimSpace(vars.StorageCapacityBytes); v != "" {
+		return "\n# Logical cap for hot storage eviction thresholds (bytes)\nHELMSMAN_STORAGE_CAPACITY_BYTES=" + v + "\n"
 	}
+	if vars.Mode == "container" && vars.EdgeOS == "darwin" {
+		return "\n# Recommended on macOS: cap hot storage so eviction thresholds track a\n# real budget instead of the whole Docker VM disk (bytes).\n#HELMSMAN_STORAGE_CAPACITY_BYTES=107374182400\n"
+	}
+	return ""
+}
+
+// helmsmanBindAddr keeps helmsman's :18007 (which carries the
+// unauthenticated local /node/mode endpoint) on loopback everywhere except
+// the darwin bridge flavor, where vmagent scrapes it by service DNS and the
+// port is never host-published.
+func helmsmanBindAddr(vars EdgeVars) string {
+	if vars.Mode != "native" && vars.EdgeOS == "darwin" {
+		return ""
+	}
+	return "127.0.0.1"
 }
 
 // EdgeWriteMode selects WriteEdgeTemplates' per-file write semantic.
@@ -116,6 +195,9 @@ const (
 	EdgeWriteAlways
 	// EdgeWriteIfMissingOrOverwrite skips silently if the file exists and overwrite=false.
 	EdgeWriteIfMissingOrOverwrite
+	// EdgeWriteIfMissing never overwrites an existing file, even with
+	// overwrite=true — for secrets that must not rotate on re-render.
+	EdgeWriteIfMissing
 )
 
 // EdgeRenderedFile is one file produced by RenderEdgeTemplates. Path is
@@ -132,15 +214,24 @@ type EdgeRenderedFile struct {
 // effects.
 func RenderEdgeTemplates(vars EdgeVars) ([]EdgeRenderedFile, error) {
 	vars.SetModeDefaults()
+	// A typo'd mode must fail here, not silently render a container stack
+	// (everything non-native falls through to the container templates).
+	if vars.Mode != "native" && vars.Mode != "container" {
+		return nil, fmt.Errorf("invalid edge mode %q (valid: container, native; 'docker' is a deprecated alias for container)", vars.Mode)
+	}
 
 	var out []EdgeRenderedFile
 
-	out = append(out, EdgeRenderedFile{
-		Path:      "maintenance.html",
-		Content:   append([]byte(nil), maintenance.HTML...),
-		Mode:      0o644,
-		WriteMode: EdgeWriteIfMissingOrOverwrite,
-	})
+	// Container mode seeds the maintenance page inside the image
+	// (edgeseed); only native serves it from the host filesystem.
+	if vars.Mode == "native" {
+		out = append(out, EdgeRenderedFile{
+			Path:      "maintenance.html",
+			Content:   append([]byte(nil), maintenance.HTML...),
+			Mode:      0o644,
+			WriteMode: EdgeWriteIfMissingOrOverwrite,
+		})
+	}
 
 	if strings.TrimSpace(vars.CABundlePEM) != "" {
 		out = append(out, EdgeRenderedFile{
@@ -159,6 +250,15 @@ func RenderEdgeTemplates(vars EdgeVars) ([]EdgeRenderedFile, error) {
 			Mode:      0o600,
 			WriteMode: EdgeWriteAlways,
 		})
+		// Scrape targets: with host networking (linux) vmagent shares the
+		// host namespace, so localhost reaches the edge container's ports;
+		// on the darwin bridge it dials the edge service by name.
+		scrapeHost := "localhost"
+		vmagentNetworkBlock := "    network_mode: host\n"
+		if vars.EdgeOS == "darwin" {
+			scrapeHost = "edge"
+			vmagentNetworkBlock = ""
+		}
 		vmagentConfig := fmt.Sprintf(`global:
   scrape_interval: 30s
 scrape_configs:
@@ -166,7 +266,7 @@ scrape_configs:
     metrics_path: %s
     static_configs:
       - targets:
-          - "mistserver:8080"
+          - "%s:8080"
         labels:
           frameworks_mode: "edge"
           frameworks_node: %q
@@ -175,23 +275,27 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets:
-          - "helmsman:18007"
+          - "%s:18007"
         labels:
           frameworks_mode: "edge"
           frameworks_node: %q
           frameworks_service: "helmsman"
-`, mist.MetricsPath, vars.NodeID, vars.NodeID)
+`, mist.MetricsPath, scrapeHost, vars.NodeID, scrapeHost, vars.NodeID)
 		out = append(out, EdgeRenderedFile{
 			Path:      "vmagent-edge.yml",
 			Content:   []byte(vmagentConfig),
 			Mode:      0o644,
 			WriteMode: EdgeWriteAlways,
 		})
+		// Loopback listener: with host networking anything else would
+		// expose vmagent's control/metrics endpoint on the public edge
+		// host. Nothing dials vmagent — it scrapes and remote-writes
+		// outbound.
 		vmagentServiceBlock = `  vmagent:
     image: victoriametrics/vmagent:v1.143.0
     container_name: frameworks-edge-vmagent
-    command:
-      - -httpListenAddr=:8429
+` + vmagentNetworkBlock + `    command:
+      - -httpListenAddr=127.0.0.1:8429
       - -promscrape.config=/etc/frameworks/vmagent-edge.yml
       - -remoteWrite.url={{TELEMETRY_URL}}
       - -remoteWrite.bearerTokenFile=/etc/frameworks/telemetry/token
@@ -199,6 +303,7 @@ scrape_configs:
       - ./vmagent-edge.yml:/etc/frameworks/vmagent-edge.yml:ro
       - ./telemetry:/etc/frameworks/telemetry:ro
     restart: unless-stopped
+
 `
 	}
 
@@ -212,11 +317,29 @@ scrape_configs:
 		WriteMode: EdgeWriteIfMissingOrOverwrite,
 	})
 
+	// Secrets stay out of the world-readable compose file: the container
+	// loads them via this 0600 env file. Strictly write-once (even with
+	// --overwrite) so re-renders never rotate a live MistServer password;
+	// delete the file to rotate.
+	if vars.Mode != "native" {
+		out = append(out, EdgeRenderedFile{
+			Path:      ".edge-secrets.env",
+			Content:   []byte("# Shared MistServer controller password (mist -a / helmsman API client).\n# Write-once: delete this file and re-run edge init to rotate.\nMIST_API_PASSWORD=" + vars.MistAPIPassword + "\n"),
+			Mode:      0o600,
+			WriteMode: EdgeWriteIfMissing,
+		})
+	}
+
+	// Native mode renders the bootstrap Caddyfile on the host; the container
+	// image bakes its own bootstrap (edge/rootfs) and helmsman owns the
+	// activated config on the caddy_etc volume, so container mode renders
+	// only compose + env.
 	tplFiles := []struct{ in, out string }{
-		{"edge/Caddyfile.tmpl", "Caddyfile"},
 		{"edge/.edge.env.tmpl", ".edge.env"},
 	}
-	if vars.Mode != "native" {
+	if vars.Mode == "native" {
+		tplFiles = append(tplFiles, struct{ in, out string }{"edge/Caddyfile.tmpl", "Caddyfile"})
+	} else {
 		tplFiles = append([]struct{ in, out string }{
 			{"edge/docker-compose.edge.yml.tmpl", "docker-compose.edge.yml"},
 		}, tplFiles...)
@@ -242,13 +365,15 @@ scrape_configs:
 		content = strings.ReplaceAll(content, "{{DEPLOY_MODE}}", vars.Mode)
 		content = strings.ReplaceAll(content, "{{RELAY_TRUSTED_CIDR}}", vars.RelayTrustedCIDR)
 		content = strings.ReplaceAll(content, "{{MIST_API_PASSWORD}}", vars.MistAPIPassword)
-		content = strings.ReplaceAll(content, "{{MISTSERVER_IMAGE}}", vars.MistServerImage)
-		content = strings.ReplaceAll(content, "{{CADDY_IMAGE}}", vars.CaddyImage)
-		content = strings.ReplaceAll(content, "{{HELMSMAN_IMAGE}}", vars.HelmsmanImage)
+		content = strings.ReplaceAll(content, "{{EDGE_IMAGE}}", vars.EdgeImage)
+		content = strings.ReplaceAll(content, "{{EDGE_NETWORK_BLOCK}}", edgeNetworkBlock(vars.EdgeOS))
+		content = strings.ReplaceAll(content, "{{EDGE_TUNING_SERVICE}}", edgeTuningService(vars.EdgeOS))
 		content = strings.ReplaceAll(content, "{{CHANDLER_UPSTREAM}}", vars.ChandlerUpstream)
 		content = strings.ReplaceAll(content, "{{TELEMETRY_URL}}", vars.TelemetryURL)
 		content = strings.ReplaceAll(content, "{{VMAGENT_EDGE_SERVICE}}", vmagentServiceBlock)
 		content = strings.ReplaceAll(content, "{{TELEMETRY_TOKEN}}", vars.TelemetryToken)
+		content = strings.ReplaceAll(content, "{{STORAGE_CAPACITY_BLOCK}}", storageCapacityBlock(vars))
+		content = strings.ReplaceAll(content, "{{HELMSMAN_BIND_ADDR}}", helmsmanBindAddr(vars))
 		if vars.CertPath != "" && vars.KeyPath != "" {
 			content = strings.ReplaceAll(content, "{{TLS_DIRECTIVE}}", fmt.Sprintf("tls %s %s", vars.CertPath, vars.KeyPath))
 		} else {
@@ -287,6 +412,12 @@ func WriteEdgeTemplates(targetDir string, vars EdgeVars, overwrite bool) error {
 			}
 		case EdgeWriteIfMissingOrOverwrite:
 			if _, statErr := os.Stat(outPath); statErr != nil || overwrite {
+				if err := os.WriteFile(outPath, f.Content, f.Mode); err != nil {
+					return err
+				}
+			}
+		case EdgeWriteIfMissing:
+			if _, statErr := os.Stat(outPath); statErr != nil {
 				if err := os.WriteFile(outPath, f.Content, f.Mode); err != nil {
 					return err
 				}

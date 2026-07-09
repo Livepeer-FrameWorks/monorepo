@@ -4,44 +4,31 @@ import (
 	"testing"
 )
 
-func TestParseEdgeServiceStatus_dockerAllHealthy(t *testing.T) {
+func TestParseEdgeServiceStatus_containerHealthy(t *testing.T) {
 	t.Parallel()
-	raw := `NAME           SERVICE      STATUS
-edge-caddy     caddy        Up 2 hours
-edge-mist      mistserver   Up 2 hours
-edge-helm      helmsman     Up 2 hours (healthy)
+	raw := `NAME              SERVICE   STATUS
+frameworks-edge   edge      Up 2 hours (healthy)
 `
-	checks := parseEdgeServiceStatus(raw, "docker")
-	if len(checks) != 3 {
-		t.Fatalf("expected 3 services detected, got %d: %+v", len(checks), checks)
+	checks := parseEdgeServiceStatus(raw, "container")
+	if len(checks) != 1 {
+		t.Fatalf("expected 1 service detected, got %d: %+v", len(checks), checks)
 	}
-	for _, c := range checks {
-		if !c.OK {
-			t.Errorf("expected %s OK, got %+v", c.Name, c)
-		}
+	if checks[0].Name != "edge" || !checks[0].OK {
+		t.Errorf("expected edge OK, got %+v", checks[0])
 	}
 }
 
-func TestParseEdgeServiceStatus_dockerUnhealthyFails(t *testing.T) {
+func TestParseEdgeServiceStatus_containerUnhealthyFails(t *testing.T) {
 	t.Parallel()
-	raw := `NAME           SERVICE      STATUS
-edge-caddy     caddy        Up 2 hours
-edge-mist      mistserver   Up 2 hours (unhealthy)
-edge-helm      helmsman     Exited (1) 5 minutes ago
+	raw := `NAME              SERVICE   STATUS
+frameworks-edge   edge      Up 2 hours (unhealthy)
 `
-	checks := parseEdgeServiceStatus(raw, "docker")
-	state := map[string]bool{}
-	for _, c := range checks {
-		state[c.Name] = c.OK
+	checks := parseEdgeServiceStatus(raw, "container")
+	if len(checks) != 1 {
+		t.Fatalf("expected 1 service detected, got %d: %+v", len(checks), checks)
 	}
-	if !state["caddy"] {
-		t.Errorf("caddy should be OK")
-	}
-	if state["mistserver"] {
-		t.Errorf("mistserver should be flagged (unhealthy)")
-	}
-	if state["helmsman"] {
-		t.Errorf("helmsman should be flagged (exited)")
+	if checks[0].OK {
+		t.Errorf("edge should be flagged (unhealthy), got %+v", checks[0])
 	}
 }
 
@@ -72,15 +59,44 @@ func TestParseEdgeServiceStatus_nativeSystemctl(t *testing.T) {
 
 func TestParseEdgeServiceStatus_missingServiceOmittedNotFabricated(t *testing.T) {
 	t.Parallel()
-	raw := `NAME        SERVICE   STATUS
-edge-caddy  caddy     Up 2 hours
+	raw := `NAME              SERVICE   STATUS
+something-else    other     Up 2 hours
 `
-	checks := parseEdgeServiceStatus(raw, "docker")
-	if len(checks) != 1 {
-		t.Fatalf("expected only 1 service detected, got %d: %+v", len(checks), checks)
+	checks := parseEdgeServiceStatus(raw, "container")
+	if len(checks) != 0 {
+		t.Fatalf("expected no services detected, got %d: %+v", len(checks), checks)
 	}
-	if checks[0].Name != "caddy" {
-		t.Errorf("expected caddy, got %s", checks[0].Name)
+}
+
+// "(health: starting)" is warm-up, not health — the s6 stack may still be
+// seeding. Reporting green before the healthcheck passes would let a drift
+// CI gate pass on a node that never reaches (healthy).
+func TestParseEdgeServiceStatus_healthStartingIsNotHealthy(t *testing.T) {
+	t.Parallel()
+	raw := `NAME              SERVICE   STATUS
+frameworks-edge   edge      Up 5 seconds (health: starting)
+`
+	checks := parseEdgeServiceStatus(raw, "container")
+	if len(checks) != 1 {
+		t.Fatalf("expected 1 check, got %d: %+v", len(checks), checks)
+	}
+	if checks[0].OK {
+		t.Fatalf("health: starting must not report OK: %+v", checks[0])
+	}
+}
+
+// A dead frameworks-edge container is absent from default compose ps
+// output; its sibling containers (vmagent, tuning) must never satisfy the
+// "edge" match — that would report a healthy stack during a full outage.
+func TestParseEdgeServiceStatus_siblingContainersDoNotMaskDeadEdge(t *testing.T) {
+	t.Parallel()
+	raw := `NAME                      SERVICE       STATUS
+frameworks-edge-vmagent   vmagent       Up 2 hours
+frameworks-edge-tuning    edge-tuning   Exited (0) 2 hours ago
+`
+	checks := parseEdgeServiceStatus(raw, "container")
+	if len(checks) != 0 {
+		t.Fatalf("sibling containers must not stand in for the edge service; got %+v", checks)
 	}
 }
 

@@ -36,9 +36,11 @@ var (
 // credentials and no forwarded-IP headers, so Mist's loopback auto-auth
 // fires and Mist never sees the operator's session.
 //
-// Only loopback upstreams are supported. Docker edges, where Helmsman
-// dials the mistserver container by service name, return 501 because that
-// hop requires Mist's JSON challenge/response controller auth.
+// Only loopback upstreams are supported — which covers production: native
+// hosts and the single edge container both reach Mist on 127.0.0.1.
+// Non-loopback upstreams (the dev compose bridge / retired multi-container
+// layout, where Helmsman dials the mistserver container by service name)
+// return 501 because that hop cannot rely on Mist's loopback auto-auth.
 func MistAdminProxy(mistURL string, logger logging.Logger) gin.HandlerFunc {
 	target, err := url.Parse(mistURL)
 	if err != nil || target.Host == "" || target.Scheme == "" {
@@ -51,7 +53,7 @@ func MistAdminProxy(mistURL string, logger logging.Logger) gin.HandlerFunc {
 
 	if !isLoopbackHost(target.Hostname()) {
 		logger.WithField("mist_host", target.Hostname()).
-			Info("mist admin proxy disabled: upstream is non-loopback (docker edge); JSON auth flow required")
+			Info("mist admin proxy disabled: upstream is non-loopback (dev bridge / retired multi-container layout); JSON auth flow required")
 		return func(c *gin.Context) {
 			c.String(http.StatusNotImplemented,
 				"mist admin proxy is unsupported on this edge: upstream is non-loopback and requires Mist JSON challenge/response auth")

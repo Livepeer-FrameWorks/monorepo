@@ -1,11 +1,20 @@
 ---
+# Everything non-native falls through to the container install path, so an
+# unknown mode string must be a hard stop, not a surprise container deploy.
+- name: Edge | validate mode
+  ansible.builtin.assert:
+    that:
+      - edge_mode in ['native', 'container', 'docker']
+    fail_msg: "edge_mode must be 'native' or 'container' ('docker' is a deprecated alias for container); got '{{ edge_mode }}'"
+  tags: [install, configure, service, validate]
+
 - name: Edge | prepare shared state
   ansible.builtin.import_tasks: prepare.yml
   tags: [install, configure]
 
-- name: Edge | install (docker)
-  ansible.builtin.import_tasks: install-docker.yml
-  when: edge_mode == 'docker'
+- name: Edge | install (container)
+  ansible.builtin.import_tasks: install-container.yml
+  when: edge_mode != 'native'
   tags: [install, configure, service, validate]
 
 - name: Edge | install (native-linux)

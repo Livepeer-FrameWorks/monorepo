@@ -1,0 +1,149 @@
+---
+# Single-image edge container (helmsman + MistServer + Caddy under
+# s6-overlay, host networking). Binaries and mutable state live on named
+# volumes so Foghorn-driven in-place component updates survive container
+# recreation; the image's init-seed oneshot installs/upgrades baked
+# binaries. The bootstrap Caddyfile is baked into the image and helmsman
+# persists the activated config on the caddy_etc volume — nothing
+# Caddy-related is rendered on the host.
+
+- name: Ensure edge project directory
+  ansible.builtin.file:
+    path: "{{ edge_base_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Ensure edge container-mode support directories
+  ansible.builtin.file:
+    path: "{{ edge_base_dir }}/{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - pki
+    - telemetry
+    # Hot-storage host bind — same path the retired 3-container stack used,
+    # so migrated nodes keep their DVR/clip artifacts.
+    - storage
+
+- name: Mirror CA bundle into compose project (when provided)
+  ansible.builtin.copy:
+    dest: "{{ edge_base_dir }}/pki/ca.crt"
+    content: "{{ edge_ca_bundle_pem }}"
+    mode: "0644"
+  when: edge_ca_bundle_pem | length > 0
+  no_log: true
+
+- name: Mirror telemetry token (when provided)
+  ansible.builtin.copy:
+    dest: "{{ edge_base_dir }}/telemetry/token"
+    content: "{{ edge_telemetry_token }}\n"
+    mode: "0600"
+  when: edge_telemetry_url | length > 0 and edge_telemetry_token | length > 0
+  no_log: true
+
+# Telemetry requires BOTH url and token (single contract with the compose
+# template and the Go renderer).
+- name: Render vmagent scrape config (when telemetry enabled)
+  ansible.builtin.template:
+    src: vmagent-edge.yml.j2
+    dest: "{{ edge_base_dir }}/vmagent-edge.yml"
+    mode: "0644"
+  when: edge_telemetry_url | length > 0 and edge_telemetry_token | length > 0
+
+# 0644: .edge.env carries no secrets (the enrollment token lives in the
+# write-once .edge-enroll.env, the Mist password in .edge-secrets.env), and
+# CLI management commands read it over SSH as the unprivileged operator user.
+- name: Render edge env file
+  ansible.builtin.template:
+    src: edge.env.j2
+    dest: "{{ edge_base_dir }}/.edge.env"
+    mode: "0644"
+  no_log: true
+
+# Secrets stay out of the world-readable compose file; prepare.yml reuses
+# the password from this file on re-runs, so the rendered content is stable.
+- name: Render edge secrets env file
+  ansible.builtin.copy:
+    dest: "{{ edge_base_dir }}/.edge-secrets.env"
+    content: |
+      MIST_API_PASSWORD={{ edge_effective_mist_api_password }}
+    mode: "0600"
+  no_log: true
+
+# Write-once: a fresh token on re-provision must not change the compose env
+# (which would recreate the edge container); Foghorn ignores tokens for
+# already-registered nodes. Token-less re-runs leave the existing file in
+# place; a fresh tokenless run writes an empty value (enrollment then fails
+# upstream at the CLI's token requirement, not here).
+- name: Render edge enrollment env file
+  ansible.builtin.copy:
+    dest: "{{ edge_base_dir }}/.edge-enroll.env"
+    content: |
+      EDGE_ENROLLMENT_TOKEN={{ edge_enrollment_token }}
+    mode: "0600"
+    force: "{{ (edge_force_reenroll | bool) and (edge_enrollment_token | length > 0) }}"
+  no_log: true
+
+# macOS runs Docker Desktop/OrbStack (preflight verified the CLI); Linux
+# package management would fail and the daemon belongs to the desktop app.
+# The play escalates for filesystem writes, so probe that the root context
+# can actually reach the daemon (Docker Desktop's "Allow the default Docker
+# socket" setting / OrbStack default) before compose runs.
+- name: Probe Docker daemon reachability (darwin)
+  ansible.builtin.command:
+    argv: [docker, info, --format, "{{ '{{.ServerVersion}}' }}"]
+  register: edge_darwin_docker_info
+  changed_when: false
+  failed_when: false
+  when:
+    - ansible_facts.os_family == 'Darwin'
+    - not ansible_check_mode
+
+- name: Fail with guidance when the Docker daemon is unreachable (darwin)
+  ansible.builtin.fail:
+    msg: >-
+      Docker daemon is not reachable in the escalated session. Enable
+      "Allow the default Docker socket to be used" in Docker Desktop
+      (Settings → Advanced) or install OrbStack, then re-run.
+  when:
+    - ansible_facts.os_family == 'Darwin'
+    - not ansible_check_mode
+    - edge_darwin_docker_info.rc != 0
+
+# Migration from the retired 3-container stack (edge-proxy + mistserver +
+# helmsman). Node identity survives in .edge.env/.edge-enroll.env; certs and
+# streams re-arrive via ConfigSeed after enrollment; hot storage keeps its
+# host bind (./storage). Scoped by the compose project label so unrelated
+# containers that merely share these generic names are never touched.
+- name: Identify legacy 3-container edge stack containers
+  ansible.builtin.command:
+    argv:
+      - docker
+      - ps
+      - -aq
+      - --filter
+      - label=com.docker.compose.project={{ edge_base_dir | basename }}
+      - --filter
+      - name=^{{ item }}$
+  loop: [edge-proxy, mistserver, helmsman]
+  register: edge_legacy_containers
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Remove legacy 3-container edge stack (if present)
+  ansible.builtin.command:
+    argv: [docker, rm, -f, "{{ item }}"]
+  loop: "{{ edge_legacy_containers.results | default([]) | map(attribute='stdout_lines') | map('default', []) | flatten }}"
+  changed_when: true
+  when: not ansible_check_mode
+
+- name: Delegate to compose_stack for edge
+  ansible.builtin.include_role:
+    name: frameworks.infra.compose_stack
+  vars:
+    compose_stack_name: edge
+    compose_stack_project_dir: "{{ edge_base_dir }}"
+    compose_stack_compose_content: "{{ lookup('template', 'compose.yml.j2') }}"
+    # Docker Desktop/OrbStack own the engine on macOS — no Linux packages.
+    compose_stack_manage_docker: "{{ ansible_facts.os_family != 'Darwin' }}"

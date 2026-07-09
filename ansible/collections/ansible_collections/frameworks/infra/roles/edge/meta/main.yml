@@ -4,8 +4,8 @@ galaxy_info:
   author: FrameWorks Infra
   description: >-
     Meta-role for edge-node provisioning. Orchestrates mistserver +
-    helmsman + caddy (+ optional vmagent) in docker-compose mode,
-    Linux systemd, or macOS launchd.
+    helmsman + caddy (+ optional vmagent) as the single-image edge
+    container, Linux systemd, or macOS launchd.
   license: AGPL-3.0-or-later
   min_ansible_version: "2.15"
 
@@ -18,8 +18,9 @@ argument_specs:
       edge_mode:
         type: str
         required: false
-        default: docker
-        choices: [docker, native]
+        default: container
+        # "docker" is accepted as a deprecated alias for container.
+        choices: [container, docker, native]
       edge_node_id:
         type: str
         required: true
@@ -35,10 +36,10 @@ argument_specs:
       edge_mist_api_password:
         type: str
         required: true
-      edge_mistserver_image:
+      edge_image:
         type: str
         required: false
-        default: mistserver:latest
+        default: livepeerframeworks/frameworks-edge:latest
       edge_acme_email:
         type: str
         required: false

@@ -732,15 +732,29 @@ func edgeServiceArtifacts(info *gitops.ServiceInfo, remoteOS, remoteArch string)
 	return artifacts, nil
 }
 
+// edgeReleasePlatforms are the platforms edge nodes can report; artifact
+// maps are keyed by these so the Foghorn reconciler's node platform lookup
+// matches.
+var edgeReleasePlatforms = [][2]string{
+	{"linux", "amd64"},
+	{"linux", "arm64"},
+	{"darwin", "amd64"},
+	{"darwin", "arm64"},
+}
+
 func edgeExternalArtifacts(dep *gitops.ExternalDependency, remoteOS, remoteArch string) (map[string]edgeReleaseArtifactSpec, error) {
 	if dep == nil {
 		return nil, fmt.Errorf("external dependency missing")
 	}
+	// External dependency binaries keep their full release asset filenames
+	// (mistserver-linux-amd64-<tag>.tar.gz, docker-tag.txt, debug bundles),
+	// so artifacts are resolved per platform token — never by treating the
+	// filename itself as a platform key.
 	if platformFilterSet(remoteOS, remoteArch) {
 		name := platformArtifactName(remoteOS, remoteArch)
-		artifact := dep.GetBinary(name)
+		artifact := dep.RuntimeBinaryForPlatform(name)
 		if artifact == nil {
-			return nil, fmt.Errorf("%s has no binary for %s", dep.Name, name)
+			return nil, fmt.Errorf("%s has no runtime binary for %s", dep.Name, name)
 		}
 		return map[string]edgeReleaseArtifactSpec{
 			platformKey(remoteOS, remoteArch): {
@@ -749,16 +763,16 @@ func edgeExternalArtifacts(dep *gitops.ExternalDependency, remoteOS, remoteArch 
 			},
 		}, nil
 	}
-	artifacts := make(map[string]edgeReleaseArtifactSpec, len(dep.Binaries))
-	for _, artifact := range dep.Binaries {
-		key, ok := platformKeyFromArtifactName(artifact.Name)
-		if !ok {
-			return nil, fmt.Errorf("%s binary has invalid platform key %q", dep.Name, artifact.Name)
+	artifacts := make(map[string]edgeReleaseArtifactSpec, len(edgeReleasePlatforms))
+	for _, p := range edgeReleasePlatforms {
+		artifact := dep.RuntimeBinaryForPlatform(platformArtifactName(p[0], p[1]))
+		if artifact == nil {
+			continue
 		}
-		artifacts[key] = edgeReleaseArtifactSpec{ArtifactURL: artifact.URL, Checksum: artifact.Checksum}
+		artifacts[platformKey(p[0], p[1])] = edgeReleaseArtifactSpec{ArtifactURL: artifact.URL, Checksum: artifact.Checksum}
 	}
 	if len(artifacts) == 0 {
-		return nil, fmt.Errorf("%s has no binary artifacts", dep.Name)
+		return nil, fmt.Errorf("%s has no runtime binary artifacts", dep.Name)
 	}
 	return artifacts, nil
 }

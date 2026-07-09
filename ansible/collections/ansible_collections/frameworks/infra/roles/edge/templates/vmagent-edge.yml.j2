@@ -1,3 +1,16 @@
+{#
+  Scrape targets per stack shape (must mirror the Go renderer in
+  cli/internal/templates/edge.go):
+  - native: services on host loopback; caddy exposes admin metrics on 2019.
+  - container linux: vmagent shares the host netns (network_mode: host), so
+    loopback reaches the edge container's host-networked ports.
+  - container darwin: vmagent sits on the compose bridge and dials the edge
+    service by name. Caddy's admin endpoint is a unix socket inside the
+    container, so there is no caddy scrape in container mode.
+  MistServer metrics are served by its HTTP output on 8080 (pkg/mist
+  MetricsPath), not the 4242 controller API.
+#}
+{% set edge_scrape_host = 'edge' if (edge_mode != 'native' and edge_container_flavor | default('linux') == 'darwin') else '127.0.0.1' %}
 global:
   scrape_interval: 30s
 scrape_configs:
@@ -5,11 +18,7 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets:
-{% if edge_mode == 'docker' %}
-          - "mistserver:4242"
-{% else %}
-          - "127.0.0.1:4242"
-{% endif %}
+          - "{{ edge_scrape_host }}:8080"
         labels:
           frameworks_mode: "edge"
           frameworks_node: "{{ edge_node_id }}"
@@ -18,16 +27,12 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets:
-{% if edge_mode == 'docker' %}
-          - "helmsman:18007"
-{% else %}
-          - "127.0.0.1:18007"
-{% endif %}
+          - "{{ edge_scrape_host }}:18007"
         labels:
           frameworks_mode: "edge"
           frameworks_node: "{{ edge_node_id }}"
           frameworks_service: "helmsman"
-{% if edge_mode != 'docker' %}
+{% if edge_mode == 'native' %}
   - job_name: edge-caddy
     metrics_path: /metrics
     static_configs:

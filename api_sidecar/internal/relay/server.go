@@ -72,9 +72,10 @@ type Server struct {
 	nodeID     string
 	authorizer RelayPullAuthorizer
 	// trustedCIDRs are RemoteAddr ranges that bypass the authorize gate like
-	// loopback does (still AND-gated by no proxy-forward markers). For the
-	// local Mist→Helmsman hop where Mist dials a non-loopback service address
-	// (docker: helmsman:18007). Empty in production/native — loopback only.
+	// loopback does (still AND-gated by no proxy-forward markers). Only for
+	// the local Mist→Helmsman hop when Mist dials a non-loopback service
+	// address (the dev compose bridge). Empty in production — native hosts
+	// and the single edge container are loopback-only.
 	trustedCIDRs []*net.IPNet
 	// authzCache memoizes recent ALLOW decisions per (grant_id, path) so a
 	// multi-block pull session makes one authorize round-trip, not one per
@@ -112,11 +113,13 @@ type Options struct {
 	Authorizer RelayPullAuthorizer
 	// RelayTrustedCIDR is a comma-separated list of CIDRs whose RemoteAddr
 	// bypasses the authorize gate (like loopback), for the local
-	// Mist→Helmsman hop when Mist dials a non-loopback service address
-	// (docker: helmsman:18007). The bypass is still AND-gated by absence of
-	// proxy-forward markers, so Caddy-forwarded peer traffic on the same
-	// subnet still gets authorized. Empty = loopback-only (the
-	// production/native default). NOT for peer-node traffic.
+	// Mist→Helmsman hop when Mist dials a non-loopback service address (the
+	// dev compose bridge, where Mist and Helmsman are separate containers).
+	// The bypass is still AND-gated by absence of proxy-forward markers, so
+	// Caddy-forwarded peer traffic on the same subnet still gets
+	// authorized. Empty = loopback-only (the production default — native
+	// hosts and the single edge container alike). NOT for peer-node
+	// traffic.
 	RelayTrustedCIDR string
 }
 
@@ -244,9 +247,10 @@ func (s *Server) MountRoutes(r *gin.Engine) {
 // peerAuthMiddleware gates /internal/artifact/*.
 //
 // Loopback callers (RemoteAddr 127.0.0.1 / ::1) and configured trusted-CIDR
-// callers pass through ONLY when they carry no proxy-forwarding markers — Mist
-// on the same box / the local docker hop never carries those; Caddy
-// reverse-proxying remote (peer) traffic always does. The proxy-marker check is
+// callers pass through ONLY when they carry no proxy-forwarding markers —
+// Mist's local hop (loopback in production, the dev compose bridge under a
+// trusted CIDR) never carries those; Caddy reverse-proxying remote (peer)
+// traffic always does. The proxy-marker check is
 // the critical second leg: Caddy's hop arrives over loopback/bridge, so a pure
 // RemoteAddr check would let any external request through the edge FQDN bypass
 // the gate.

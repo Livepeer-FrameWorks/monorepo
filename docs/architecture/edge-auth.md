@@ -161,7 +161,8 @@ resolver returns MistAdminSession { postUrl, sessionToken, expiresAt }
   ▼
 edge Caddy → handle @mist_admin (host-matched to edge FQDN,
   │         /_mist-session /_mist /_mist/*)
-  │ 5. reverse_proxy → helmsman:18007 (preserves path)
+  │ 5. reverse_proxy → localhost:18007 (preserves path; Caddy and Helmsman
+  │    share loopback on native hosts and inside the edge container)
   ▼
 api_sidecar (Helmsman)
   │ /_mist-session POST handler:
@@ -182,7 +183,7 @@ MistServer controller LSP UI
 
 ### Critical invariants
 
-1. **`MIST_API_PASSWORD` never leaves the box.** Native edges rely on Mist's loopback auto-auth — the reverse-proxy director scrubs `Forwarded` / `X-Forwarded-For` / `X-Forwarded-Host` / `X-Forwarded-Proto` / `X-Real-IP` so Mist sees a pure loopback caller and skips Basic Auth. Docker edges (`mistserver:4242` not loopback) are unsupported and respond `501` because they cannot rely on loopback auto-auth.
+1. **`MIST_API_PASSWORD` never leaves the box.** Production edges rely on Mist's loopback auto-auth — native hosts and the single edge container both reach Mist on 127.0.0.1 — and the reverse-proxy director scrubs `Forwarded` / `X-Forwarded-For` / `X-Forwarded-Host` / `X-Forwarded-Proto` / `X-Real-IP` so Mist sees a pure loopback caller and skips Basic Auth. Non-loopback upstreams (the dev compose bridge / retired multi-container layout, `mistserver:4242`) are unsupported and respond `501` because they cannot rely on loopback auto-auth.
 2. **Cookie is path-scoped to `/_mist`** so it can't be sent on `/view/*` or any other origin path; never `Path=/`.
 3. **Authorization / Cookie scrubbed on the upstream** request so the operator's platform JWT and session never reach Mist.
 4. **Set-Cookie scrubbed on the downstream** response so Mist's controller session doesn't collide with platform cookies on the same eTLD+1.

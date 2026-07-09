@@ -1,14 +1,14 @@
 ---
 # Edge meta-role. Composes the edge stack (mistserver + helmsman + caddy +
-# optional vmagent) either as a docker-compose deployment or as a set of
-# native services — Linux systemd or macOS launchd, the latter in system
-# or user domain.
+# optional vmagent) either as the single-image edge container (s6-overlay,
+# host networking) or as a set of native services — Linux systemd or macOS
+# launchd, the latter in system or user domain.
 #
 # Orchestration data (node identity, domain, enrollment token, Foghorn addr)
 # flows in from the CLI. Pinned artifacts for each sub-service flow in from
 # the release manifest via the Go-side vars builder.
 
-edge_mode: docker # docker | native
+edge_mode: container # container | native ("docker" is a deprecated alias for container)
 edge_node_id: ""
 edge_cluster_id: ""
 edge_domain: ""
@@ -52,9 +52,9 @@ edge_cap_processing: ""
 # mistserver (-a frameworks:<pw>) and helmsman (MIST_API_PASSWORD env).
 edge_mist_api_password: ""
 
-# Docker-mode MistServer image. Remote cluster applies pass the GitOps-pinned
-# image@digest; local/bootstrap workflows can still use the historical tag.
-edge_mistserver_image: mistserver:latest
+# Container-mode edge image (helmsman + MistServer + Caddy under s6-overlay).
+# Remote cluster applies pass the GitOps-pinned image@digest.
+edge_image: livepeerframeworks/frameworks-edge:latest
 
 # Pinned artifacts. Each sub-role receives its own vars; these top-level
 # keys let the Go caller hand the full set in one map.
@@ -74,7 +74,7 @@ edge_vmagent_artifact_url: ""
 edge_vmagent_artifact_checksum: ""
 edge_config_schema_version: ""
 
-# Remote filesystem layout. Shared by docker + native modes.
+# Remote filesystem layout. Shared by container + native modes.
 edge_base_dir: /opt/frameworks/edge
 edge_conf_dir: /etc/frameworks
 

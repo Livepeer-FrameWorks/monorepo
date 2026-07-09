@@ -29,12 +29,28 @@
   failed_when: false
   no_log: true
 
+- name: Read existing edge secrets env
+  ansible.builtin.slurp:
+    src: "{{ edge_base_dir }}/.edge-secrets.env"
+  register: edge_existing_secrets_env
+  changed_when: false
+  failed_when: false
+  no_log: true
+
 - name: Extract existing MistServer API password
   ansible.builtin.set_fact:
     edge_existing_native_mist_api_password: >-
       {{
         (
           edge_existing_mistserver_env.content | default('') | b64decode
+          | regex_search('(?m)^MIST_API_PASSWORD=[^\r\n]*')
+          | default('', true)
+        ) | regex_replace('^MIST_API_PASSWORD=', '')
+      }}
+    edge_existing_secrets_mist_api_password: >-
+      {{
+        (
+          edge_existing_secrets_env.content | default('') | b64decode
           | regex_search('(?m)^MIST_API_PASSWORD=[^\r\n]*')
           | default('', true)
         ) | regex_replace('^MIST_API_PASSWORD=', '')
@@ -49,24 +65,44 @@
       }}
   no_log: true
 
+# Priority: the secrets env file (current layout), then the legacy compose
+# inline value (pre-secrets stacks being migrated), then native env, then a
+# freshly provided password.
 - name: Select effective MistServer API password
   ansible.builtin.set_fact:
     edge_effective_mist_api_password: >-
       {{
         [
-          edge_existing_native_mist_api_password | default('', true),
+          edge_existing_secrets_mist_api_password | default('', true),
           edge_existing_compose_mist_api_password | default('', true),
+          edge_existing_native_mist_api_password | default('', true),
           edge_mist_api_password | default('', true)
         ] | map('trim') | reject('equalto', '') | list | first | default('', true)
       }}
   no_log: true
 
+# An empty password silently disables MistServer controller auth (the
+# container run script drops -a, native passes an empty credential). The Go
+# provisioner always generates one; direct role users must supply
+# edge_mist_api_password.
+- name: Assert MistServer API password resolved
+  ansible.builtin.assert:
+    that:
+      - edge_effective_mist_api_password | length > 0
+    fail_msg: >-
+      No MistServer API password: no existing install to reuse one from and
+      edge_mist_api_password was not provided.
+    quiet: true
+
+# Ownership only applies in native mode: container-only hosts have no
+# frameworks user (the accounts live inside the edge image, and the CA is
+# staged into the compose project dir by install-container.yml).
 - name: Stage internal CA bundle (when provided)
   ansible.builtin.copy:
     dest: "{{ edge_ca_path }}"
     content: "{{ edge_ca_bundle_pem }}"
-    owner: frameworks
-    group: frameworks
+    owner: "{{ 'frameworks' if edge_mode == 'native' else omit }}"
+    group: "{{ 'frameworks' if edge_mode == 'native' else omit }}"
     mode: "0644"
   when: edge_ca_bundle_pem | length > 0
   no_log: true

@@ -500,11 +500,12 @@ message Register {
   // Foghorn may honor or override based on DB-persisted state.
   NodeOperationalMode requested_mode = 15;
   // Base URL Mist on this node uses to reach the /internal/artifact/* relay
-  // on this Helmsman. In production where Mist and Helmsman are colocated
-  // this is http://127.0.0.1:18007; in container deployments where Mist and
-  // Helmsman are separate services this is the inter-container address
-  // (e.g. http://helmsman:18007). Foghorn stamps STREAM_SOURCE responses
-  // with this prefix so Mist always resolves to the right Helmsman.
+  // on this Helmsman. In production this is http://127.0.0.1:18007 — Mist
+  // and Helmsman share loopback on native hosts and inside the single edge
+  // container alike. Only the dev compose bridge (separate containers) uses
+  // an inter-container address like http://helmsman:18007. Foghorn stamps
+  // STREAM_SOURCE responses with this prefix so Mist always resolves to the
+  // right Helmsman.
   string relay_base_url = 16;
   // Owner-tagged Mist streams currently configured on this node, as known
   // to Helmsman after sidecar hydration. Foghorn uses this to seed its
@@ -1941,7 +1942,7 @@ message NodeLifecycleUpdate {
   uint32 connections_cached = 44;    // curr[4] - cached connections
 
   // Runtime placement metadata for edge release selection.
-  string deploy_mode = 45;           // native | docker
+  string deploy_mode = 45;           // native | container (legacy "docker" = retired multi-container mode, ineligible for auto-updates)
   string os = 46;                    // runtime.GOOS
   string arch = 47;                  // runtime.GOARCH
 }

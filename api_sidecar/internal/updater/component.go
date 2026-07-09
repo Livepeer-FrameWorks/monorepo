@@ -17,7 +17,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -52,8 +51,13 @@ func Apply(ctx context.Context, component *ipcpb.DesiredComponent) Result {
 		}
 		return Result{Success: true, Detail: "version recorded"}
 	}
-	if strings.TrimSpace(os.Getenv("DEPLOY_MODE")) == "docker" {
-		return Result{Detail: "docker-mode component updates require a container image rollout"}
+	// A containerized helmsman WITHOUT s6 supervision is the retired
+	// multi-container layout: Mist and Caddy run in other containers, so an
+	// in-place swap here would target processes that don't exist. Refuse
+	// with an actionable message; those nodes migrate by re-provisioning
+	// onto the single edge image.
+	if deployMode := strings.TrimSpace(os.Getenv("DEPLOY_MODE")); deployMode != "" && deployMode != "native" && !s6SupervisionPresent() {
+		return Result{Detail: "containerized helmsman without s6 supervision (retired multi-container layout); re-provision with the single edge image to enable in-place updates"}
 	}
 	if strings.TrimSpace(component.GetArtifactUrl()) == "" {
 		return Result{Detail: "artifact_url required"}
@@ -135,6 +139,20 @@ func WriteComponentVersion(component, version string) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// ComponentVersionKey exposes the component-versions.env key for a component
+// so the edge-container seed can compare image-baked versions against
+// installed ones.
+func ComponentVersionKey(component string) (string, error) {
+	return componentVersionKey(component)
+}
+
+// ExchangeDirsForProbe exposes the atomic directory exchange used by
+// component swaps so the edge-container seed can verify the backing
+// filesystem supports it.
+func ExchangeDirsForProbe(a, b string) error {
+	return exchangeDirs(a, b)
 }
 
 func componentVersionKey(component string) (string, error) {
@@ -313,7 +331,7 @@ func applyMistServer(ctx context.Context, artifact string, component *ipcpb.Desi
 		return err
 	}
 	return replaceDirsAtomically([]dirReplacement{replacement}, func() error {
-		return signalMistController(ctx)
+		return currentServiceController().SignalMistUSR1(ctx)
 	})
 }
 
@@ -508,7 +526,7 @@ func applyCaddy(ctx context.Context, artifact string) error {
 	if err := installFile(binary, filepath.Join(root, "caddy"), 0o755); err != nil {
 		return err
 	}
-	return restartCaddy(ctx)
+	return currentServiceController().RestartCaddy(ctx)
 }
 
 func componentInstallDir(component string) string {
@@ -788,73 +806,6 @@ func rollbackDirReplacements(replacements []dirReplacement) error {
 		}
 	}
 	return errors.Join(errs...)
-}
-
-func signalMistController(ctx context.Context) error {
-	if runtime.GOOS == "darwin" {
-		errSystem := runCommand(ctx, "launchctl", "kill", "USR1", "system/com.livepeer.frameworks.mistserver")
-		if errSystem == nil {
-			return nil
-		}
-		errUser := runCommand(ctx, "launchctl", "kill", "USR1", fmt.Sprintf("gui/%d/com.livepeer.frameworks.mistserver", os.Getuid()))
-		if errUser == nil {
-			return nil
-		}
-		errProc := runCommand(ctx, "pkill", "-USR1", "-f", "MistController")
-		if errProc == nil {
-			return nil
-		}
-		return errors.Join(errSystem, errUser, errProc)
-	}
-	command, args := linuxMistControllerSignalCommand()
-	errService := runCommand(ctx, command, args...)
-	if errService == nil {
-		return nil
-	}
-	errProc := runCommand(ctx, "pkill", "-USR1", "-f", "MistController")
-	if errProc == nil {
-		return nil
-	}
-	return errors.Join(errService, errProc)
-}
-
-func linuxMistControllerSignalCommand() (string, []string) {
-	return "systemctl", []string{"kill", "--kill-whom=main", "-s", "USR1", "frameworks-mistserver"}
-}
-
-func restartCaddy(ctx context.Context) error {
-	if runtime.GOOS == "darwin" {
-		return firstCommand(ctx,
-			"launchctl", "kickstart", "-k", "system/com.livepeer.frameworks.caddy",
-			"launchctl", "kickstart", "-k", fmt.Sprintf("gui/%d/com.livepeer.frameworks.caddy", os.Getuid()),
-		)
-	}
-	return runCommand(ctx, "systemctl", "restart", "frameworks-caddy")
-}
-
-func firstCommand(ctx context.Context, first ...string) error {
-	if len(first)%4 != 0 {
-		return fmt.Errorf("invalid command list")
-	}
-	var errs []error
-	for i := 0; i < len(first); i += 4 {
-		if err := runCommand(ctx, first[i], first[i+1:i+4]...); err == nil {
-			return nil
-		} else {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
-}
-
-func runCommand(ctx context.Context, name string, args ...string) error {
-	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(cctx, name, args...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
-	}
-	return nil
 }
 
 func sortedKeys(values map[string]string) []string {

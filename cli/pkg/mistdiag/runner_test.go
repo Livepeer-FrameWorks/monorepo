@@ -53,8 +53,8 @@ func TestNormalizeAnalyzerName(t *testing.T) {
 	}
 }
 
-func TestBuildCommand_Docker(t *testing.T) {
-	ar := &AnalyzerRunner{mode: "docker", container: "mistserver"}
+func TestBuildCommand_Container(t *testing.T) {
+	ar := NewAnalyzerRunner(&mockRunner{}, "container")
 	cmd := ar.buildCommand(AnalyzerOptions{
 		Analyzer: "HLS",
 		Target:   "http://localhost:8080/hls/live/index.m3u8",
@@ -63,9 +63,9 @@ func TestBuildCommand_Docker(t *testing.T) {
 		Timeout:  10,
 	})
 
-	// Should wrap in docker exec
-	if !contains(cmd, "docker exec") {
-		t.Errorf("docker mode should wrap command with docker exec, got: %s", cmd)
+	// Should wrap in docker exec into the single edge container
+	if !contains(cmd, "docker exec") || !contains(cmd, "frameworks-edge") {
+		t.Errorf("container mode should wrap command with docker exec into frameworks-edge, got: %s", cmd)
 	}
 	if !contains(cmd, "MistAnalyserHLS") {
 		t.Errorf("command should contain MistAnalyserHLS, got: %s", cmd)
@@ -79,7 +79,7 @@ func TestBuildCommand_Docker(t *testing.T) {
 }
 
 func TestBuildCommand_Native(t *testing.T) {
-	ar := &AnalyzerRunner{mode: "native", container: "mistserver"}
+	ar := NewAnalyzerRunner(&mockRunner{}, "native")
 	cmd := ar.buildCommand(AnalyzerOptions{
 		Analyzer: "TS",
 		Target:   "/tmp/recording.ts",

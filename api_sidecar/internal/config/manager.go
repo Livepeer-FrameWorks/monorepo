@@ -1197,7 +1197,13 @@ func caddyAdminAddr() string {
 func caddyfileAdminAddr() string {
 	raw := caddyAdminAddr()
 	if strings.HasPrefix(raw, "unix/") {
-		return raw
+		if strings.Contains(raw, "|") {
+			return raw
+		}
+		// Group-accessible mode: helmsman (frameworks, in the caddy group)
+		// must still reach the admin socket caddy re-creates on every
+		// config load.
+		return raw + "|0660"
 	}
 	u, err := url.Parse(raw)
 	if err == nil && u.Host != "" {
@@ -1220,8 +1226,8 @@ func caddyConfigPath() string {
 // reloadCaddy triggers a Caddy config reload via the admin API.
 // If content is provided, it is POSTed directly. Otherwise reads from CADDY_CONFIG_PATH.
 //
-// Docker: CADDY_ADMIN_SOCKET=/run/caddy/admin.sock (Unix socket, no network exposure)
-// Bare metal: CADDY_ADMIN_URL=http://localhost:2019 (loopback only)
+// Container (single edge image): CADDY_ADMIN_SOCKET=/run/caddy/admin.sock (Unix socket, no network exposure)
+// Native: CADDY_ADMIN_URL=http://localhost:2019 (loopback only)
 // reloadCaddy returns true on success.
 func (m *Manager) reloadCaddy(content []byte) bool {
 	socketPath := os.Getenv("CADDY_ADMIN_SOCKET")
@@ -1430,6 +1436,11 @@ func managedProtocolDefinitions(httpPubURL, webrtcPubHost string) []map[string]a
 		"nolocal":               false,
 		"noresolve":             false,
 		"packetlog":             false,
+		// Pinned to the Mist compiled-in default: container deployments
+		// publish this exact UDP port, so the value is a contract, not a
+		// preference. float64 because Mist's JSON round-trips numbers that
+		// way and protocolUpdateNeeded compares with DeepEqual.
+		"port": float64(18203),
 	}
 	if webrtcPubHost != "" {
 		webrtc["pubhost"] = webrtcPubHost
@@ -1455,7 +1466,9 @@ func managedProtocolDefinitions(httpPubURL, webrtcPubHost string) []map[string]a
 		{"connector": "RTSP"},
 		{"connector": "SDP"},
 		{"connector": "SubRip"},
-		{"connector": "TSSRT"},
+		// Port pinned to the Mist default; published 1:1 by container
+		// deployments (same contract as the WebRTC port below).
+		{"connector": "TSSRT", "port": float64(8889)},
 		{"connector": "WAV"},
 		webrtc,
 		{"connector": "JPG"},

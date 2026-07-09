@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"sync"
@@ -10,6 +11,7 @@ import (
 
 	sidecarconfig "frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
+	"frameworks/api_sidecar/internal/edgeseed"
 	"frameworks/api_sidecar/internal/handlers"
 	"frameworks/api_sidecar/internal/leases"
 	"frameworks/api_sidecar/internal/relay"
@@ -22,6 +24,13 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "seed-edge" {
+		if err := edgeseed.Run(); err != nil {
+			fmt.Fprintln(os.Stderr, "seed-edge:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if version.HandleCLI() {
 		return
 	}
@@ -254,6 +263,12 @@ func main() {
 
 	// Start server with graceful shutdown
 	serverConfig := server.DefaultConfig("helmsman", "18007")
+	// :18007 serves webhooks, the relay, and the UNAUTHENTICATED local
+	// /node/mode endpoint. Native and Linux host-network container deploys
+	// set 127.0.0.1 (everything that needs it — Caddy, Mist triggers,
+	// vmagent — is loopback there); the darwin bridge flavor leaves it
+	// empty so vmagent can scrape by service DNS (18007 is not published).
+	serverConfig.BindAddr = os.Getenv("HELMSMAN_BIND_ADDR")
 	server.RegisterEnvFileReload("helmsman", logger)
 	if err := server.Start(serverConfig, r, logger); err != nil {
 		logger.WithError(err).Fatal("Server startup failed")

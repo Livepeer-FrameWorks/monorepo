@@ -44,7 +44,7 @@ func NewEdgeProvisioner(pool *ssh.Pool) *EdgeProvisioner {
 // EdgeProvisionConfig carries everything the edge role needs plus the Go-side
 // pipeline controls (preflight skip, HTTPS verify timeout, darwin domain).
 type EdgeProvisionConfig struct {
-	Mode string // "docker" | "native"
+	Mode string // "container" | "native" ("docker" is a deprecated alias for container)
 
 	NodeName        string
 	NodeDomain      string
@@ -112,10 +112,15 @@ func (c *EdgeProvisionConfig) verificationDomain() string {
 }
 
 func (c *EdgeProvisionConfig) resolvedMode() string {
-	if c.Mode == "" {
-		return "docker"
+	switch strings.ToLower(strings.TrimSpace(c.Mode)) {
+	case "", "docker", "container":
+		// "docker" is the deprecated name for the single-image container mode.
+		return "container"
+	case "native":
+		return "native"
+	default:
+		return strings.ToLower(strings.TrimSpace(c.Mode))
 	}
-	return c.Mode
 }
 
 func (c *EdgeProvisionConfig) requireEnrollmentToken() error {
@@ -138,8 +143,18 @@ func (c *EdgeProvisionConfig) requireEnrollmentToken() error {
 //	[7] public HTTPS verify after ConfigSeed activation
 func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, config EdgeProvisionConfig) error {
 	mode := config.resolvedMode()
+	if mode != "native" && mode != "container" {
+		return fmt.Errorf("invalid edge mode %q (valid: container, native; 'docker' is a deprecated alias for container)", config.Mode)
+	}
 	if strings.TrimSpace(config.FoghornGRPCAddr) == "" {
 		return fmt.Errorf("edge Foghorn gRPC address is required; use Bridge enrollment or a cluster manifest that can derive the target Foghorn endpoint")
+	}
+	// Both modes install pinned release artifacts (native tarballs or the
+	// edge image digest), so an unpinned run gets the stable channel rather
+	// than failing the happy path.
+	if strings.TrimSpace(config.Version) == "" {
+		config.Version = "stable"
+		fmt.Println("No --version specified; installing from the stable release channel")
 	}
 	if config.DryRun {
 		fmt.Println("Dry-run mode: remote preflight plus Ansible --check --diff; registration, ConfigSeed delivery, service start, and HTTPS verification are skipped")
@@ -197,9 +212,6 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 		}
 	}
 
-	if remoteOS == "darwin" && mode != "native" {
-		return fmt.Errorf("unsupported mode for darwin: %s (only native)", mode)
-	}
 	if config.DryRun {
 		fmt.Printf("[5-6/7] Checking edge stack (%s, %s)...\n", mode, remoteOS)
 	} else {
@@ -241,9 +253,12 @@ func (e *EdgeProvisioner) runPreflight(ctx context.Context, host inventory.Host,
 		return fmt.Errorf("failed to detect remote OS: %w", err)
 	}
 
-	if mode == "docker" {
+	if mode != "native" {
 		result, dockerErr := e.RunCommand(ctx, host, "docker --version")
 		if dockerErr != nil || result.ExitCode != 0 {
+			if remoteOS == "darwin" {
+				return fmt.Errorf("docker not installed (container mode on macOS requires Docker Desktop or OrbStack)")
+			}
 			return fmt.Errorf("docker not installed")
 		}
 		fmt.Printf("  docker: %s\n", strings.TrimSpace(result.Stdout))
@@ -316,29 +331,58 @@ func (e *EdgeProvisioner) checkEdgePortOwnership(ctx context.Context, host inven
 		return nil
 	}
 	if remoteOS == "darwin" {
+		// Docker Desktop's/OrbStack's port proxy holds published ports —
+		// acceptable only when EVERY listener is docker-managed (mixed
+		// ownership means some other process squats one of the ports) AND
+		// the managed edge container is what published them. An unrelated
+		// compose project on 80/443 must fail here, not later at compose up.
+		if darwinListenersAllDockerManaged(listenerOutput) && e.edgeContainerStackRunning(ctx, host) {
+			if mode == "native" {
+				// The native install path migrates the managed container
+				// stack (compose down + DEPLOY_MODE flip) — not a conflict.
+				fmt.Println("  ports 80/443: held by the managed edge container stack; native install will migrate it")
+			} else {
+				fmt.Println("  ports 80/443: already held by the managed edge container via Docker Desktop/OrbStack; continuing")
+			}
+			return nil
+		}
+		if mode != "native" && darwinListenersAllDockerManaged(listenerOutput) {
+			return fmt.Errorf("ports 80/443 are docker-published by a container that is not the managed edge stack:\n%s", listenerOutput)
+		}
 		return fmt.Errorf("ports 80/443 already in use:\n%s", listenerOutput)
 	}
 
 	nativePIDs := e.frameworksCaddyPIDs(ctx, host)
 	nativeOwnsPorts := len(nativePIDs) > 0 && listenerPIDsSubset(listenerOutput, nativePIDs)
-	dockerRunning := e.edgeDockerStackRunning(ctx, host)
+	containerRunning := e.edgeContainerStackRunning(ctx, host)
 
-	switch mode {
-	case "native":
+	if mode == "native" {
 		if nativeOwnsPorts {
 			fmt.Println("  ports 80/443: already held by managed frameworks-caddy; continuing")
 			return nil
 		}
-		if dockerRunning {
-			return fmt.Errorf("ports 80/443 are held while an existing docker edge stack is running; requested native mode. Stop the docker edge stack or provision with --mode docker")
+		if containerRunning {
+			// Not a conflict: the native install path migrates the managed
+			// container stack (compose down + DEPLOY_MODE flip) before the
+			// native services start. Failing here would make that
+			// migration unreachable through normal provisioning.
+			fmt.Println("  ports 80/443: held by the managed edge container stack; native install will migrate it")
+			return nil
 		}
-	case "docker":
-		if dockerRunning && listenerLooksDockerManaged(listenerOutput) {
-			fmt.Println("  ports 80/443: already held by managed docker edge stack; continuing")
+	} else {
+		// The single edge container uses host networking on Linux, so the
+		// listener is caddy inside the container (no docker-proxy). Any
+		// running managed edge container claims the ports legitimately;
+		// legacy 3-container stacks show docker-proxy listeners.
+		if containerRunning {
+			fmt.Println("  ports 80/443: already held by managed edge container stack; continuing")
 			return nil
 		}
 		if len(nativePIDs) > 0 {
-			return fmt.Errorf("ports 80/443 are held while frameworks-caddy is running; requested docker mode. Stop frameworks-caddy or provision with --mode native")
+			return fmt.Errorf("ports 80/443 are held while frameworks-caddy is running; requested container mode. Stop frameworks-caddy or provision with --mode native")
+		}
+		if listenerLooksDockerManaged(listenerOutput) {
+			return fmt.Errorf("ports 80/443 are held by a docker-published container that is not the managed edge stack:\n%s", listenerOutput)
 		}
 	}
 
@@ -357,9 +401,46 @@ func (e *EdgeProvisioner) frameworksCaddyPIDs(ctx context.Context, host inventor
 	return map[string]struct{}{pid: {}}
 }
 
-func (e *EdgeProvisioner) edgeDockerStackRunning(ctx context.Context, host inventory.Host) bool {
-	result, err := e.RunCommand(ctx, host, "docker ps --filter name=edge-proxy --format '{{.Names}}' 2>/dev/null")
-	return err == nil && result.ExitCode == 0 && strings.Contains(result.Stdout, "edge-proxy")
+// darwinListenersAllDockerManaged reports whether every listening entry in
+// lsof output belongs to a docker-desktop-class port proxy. lsof truncates
+// COMMAND to 9 characters, so Docker Desktop's com.docker.backend shows as
+// "com.docke".
+func darwinListenersAllDockerManaged(listenerOutput string) bool {
+	sawListener := false
+	for line := range strings.SplitSeq(strings.TrimSpace(listenerOutput), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "COMMAND") {
+			continue
+		}
+		sawListener = true
+		lower := strings.ToLower(line)
+		if !strings.HasPrefix(lower, "com.dock") && !strings.HasPrefix(lower, "docker") && !strings.HasPrefix(lower, "orbstack") && !strings.HasPrefix(lower, "vpnkit") {
+			return false
+		}
+	}
+	return sawListener
+}
+
+// edgeContainerStackRunning detects a managed edge container: the current
+// single-image stack (frameworks-edge) or the retired 3-container proxy
+// (edge-proxy), which the container install path migrates away. Names are
+// matched exactly — sibling containers (frameworks-edge-vmagent) or
+// similarly-named strangers must never stand in for the edge container.
+// The sudo retry mirrors runEdgeDocker: on Ansible-provisioned hosts the
+// SSH user often has passwordless sudo but no docker group, and a false
+// negative here blocks the container→native migration in preflight.
+func (e *EdgeProvisioner) edgeContainerStackRunning(ctx context.Context, host inventory.Host) bool {
+	result, err := e.RunCommand(ctx, host, "docker ps --format '{{.Names}}' 2>/dev/null || sudo -n docker ps --format '{{.Names}}' 2>/dev/null")
+	if err != nil || result.ExitCode != 0 {
+		return false
+	}
+	for line := range strings.SplitSeq(result.Stdout, "\n") {
+		switch strings.TrimSpace(line) {
+		case "frameworks-edge", "edge-proxy":
+			return true
+		}
+	}
+	return false
 }
 
 var listenerPIDPattern = regexp.MustCompile(`pid=([0-9]+)`)
@@ -539,10 +620,12 @@ func tlsVersionName(version uint16) string {
 func (e *EdgeProvisioner) Detect(ctx context.Context, host inventory.Host) (*detect.ServiceState, error) {
 	result, err := e.RunCommand(ctx, host, "docker compose -f /opt/frameworks/edge/docker-compose.yml ps --format json 2>/dev/null")
 	if err == nil && result.ExitCode == 0 && strings.TrimSpace(result.Stdout) != "" {
+		// Detected state uses the canonical mode name; "docker" survives
+		// only as an input alias, never as persisted/reported truth.
 		return &detect.ServiceState{
 			Exists:   true,
 			Running:  true,
-			Metadata: map[string]string{"mode": "docker"},
+			Metadata: map[string]string{"mode": "container"},
 		}, nil
 	}
 
@@ -582,7 +665,7 @@ type EdgeEnrollment struct {
 	EdgeDomain  string
 	FoghornAddr string
 	ClusterID   string
-	Mode        string // "docker" | "native" (best-effort, from Detect)
+	Mode        string // "container" | "native" (best-effort, from Detect)
 	Running     bool
 }
 

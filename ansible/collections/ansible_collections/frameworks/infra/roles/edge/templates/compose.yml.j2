@@ -1,93 +1,106 @@
 {#
-  Remote-apply edge compose file. Paired with the operator-local Go
-  renderer at cli/internal/templates/edge/docker-compose.edge.yml.tmpl —
-  both must agree on service names (caddy/mistserver/helmsman [+vmagent]),
-  published ports, volume layout, and env-file semantics. The Go-side
-  TestEdgeTemplateParity test in cli/internal/templates asserts shape.
-#}
-version: "3.9"
+  Remote-apply edge compose file (container mode). Paired with the
+  operator-local Go renderer at
+  cli/internal/templates/edge/docker-compose.edge.yml.tmpl — both must agree
+  on the service name (edge [+vmagent]), networking per flavor, volume
+  layout, and env-file semantics. The Go-side TestEdgeTemplateParity test in
+  cli/internal/templates asserts shape.
 
+  Flavors: linux = host networking (host node_tuning sysctls apply);
+  darwin = bridge + bounded published port set (Mist pins WebRTC/SRT to
+  single UDP ports) + privileged edge-tuning oneshot for the Docker VM's
+  non-namespaced media sysctls.
+#}
 services:
-  caddy:
-    image: "{{ edge_caddy_image }}"
-    container_name: edge-proxy
+  edge:
+    image: "{{ edge_image }}"
+    container_name: frameworks-edge
+{% if edge_container_flavor | default('linux') == 'darwin' %}
     ports:
       - "80:80"
       - "443:443"
-    environment:
-      - ACME_AGREE=true
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./maintenance.html:/etc/caddy/maintenance.html:ro
-      - caddy_data:/data
-      - caddy_config:/config
-      - ./certs:/etc/frameworks/certs
-      - caddy_admin:/run/caddy
-    restart: unless-stopped
-
-  mistserver:
-    image: "{{ edge_mistserver_image }}"
-    container_name: mistserver
-    command:
-      - MistController
-      - -c
-      - /etc/mistserver.conf
-      - -a
-      - "frameworks:{{ edge_effective_mist_api_password }}"
+      - "1935:1935"
+      - "4200:4200"
+      - "5554:5554"
+      - "8080:8080"
+      - "8889:8889/udp"
+      - "18203:18203/udp"
+    sysctls:
+      net.core.somaxconn: 16384
+      net.ipv4.ip_local_port_range: "10000 65535"
+    depends_on:
+      edge-tuning:
+        condition: service_completed_successfully
+{% else %}
+    network_mode: host
+{% endif %}
     shm_size: "1g"
     ulimits:
       nofile:
         soft: 1048576
         hard: 1048576
-    environment:
-      - MIST_DEBUG=3
-    expose:
-      - "8080"
-    volumes:
-      - mist_thumbs:/tmp/mist_thumbs
-    restart: unless-stopped
-
-  helmsman:
-    image: "{{ edge_helmsman_image }}"
-    container_name: helmsman
-    ulimits:
-      nofile:
-        soft: 1048576
-        hard: 1048576
+    stop_grace_period: 1m
     env_file:
       - .edge.env
       - .edge-enroll.env
+      - .edge-secrets.env
     environment:
-      - HELMSMAN_WEBHOOK_URL=http://helmsman:18007
-      - MISTSERVER_URL=http://mistserver:4242
-      - MISTSERVER_HTTP_URL=http://mistserver:8080
-      - CADDY_ADMIN_SOCKET=/run/caddy/admin.sock
-      - CADDY_CONFIG_PATH=/etc/caddy/Caddyfile
       - MIST_API_USERNAME=frameworks
-      - MIST_API_PASSWORD={{ edge_effective_mist_api_password }}
     volumes:
-      - ./certs:/etc/frameworks/certs
+      - frameworks_opt:/opt/frameworks
+      - frameworks_etc:/etc/frameworks
       - ./pki:/etc/frameworks/pki
+{# rw: seed-edge sets ownership and helmsman rotates the token from
+   ConfigSeed; vmagent below mounts this same dir read-only. #}
       - ./telemetry:/etc/frameworks/telemetry
-      - ./Caddyfile:/etc/caddy/Caddyfile
-      - caddy_admin:/run/caddy
-      - mist_thumbs:/tmp/mist_thumbs
-      - ./storage:{{ edge_docker_storage_local_path }}
-    expose:
-      - "18007"
+      - caddy_etc:/etc/caddy
+      - caddy_data:/var/lib/caddy
+{# Host bind, NOT a named volume: the retired 3-container stack used the
+   same ./storage bind, so migrated nodes keep serving their existing
+   DVR/clip artifacts with zero copying. The operator-local Go renderer
+   uses a named volume instead (no legacy data, better macOS IO). #}
+      - ./storage:/data/storage
     restart: unless-stopped
-{% if edge_telemetry_url | length > 0 %}
+{% if edge_container_flavor | default('linux') == 'darwin' %}
+
+  edge-tuning:
+    image: busybox:1.37
+    container_name: frameworks-edge-tuning
+    privileged: true
+    network_mode: host
+    command:
+      - sh
+      - -c
+      - |
+        set -x
+        sysctl -w net.core.rmem_max=67108864
+        sysctl -w net.core.wmem_max=67108864
+        sysctl -w net.core.somaxconn=16384
+        sysctl -w net.ipv4.ip_local_port_range="10000 65535"
+        sysctl -w net.ipv4.tcp_notsent_lowat=16384
+        sysctl -w net.core.default_qdisc=fq || true
+        sysctl -w net.ipv4.tcp_congestion_control=bbr || true
+    restart: "no"
+{% endif %}
+{# vmagent requires BOTH url and token (matching the Go renderer and the
+   role defaults contract) — tokenless remote-write is not a supported
+   shape. #}
+{% if edge_telemetry_url | length > 0 and edge_telemetry_token | length > 0 %}
 
   vmagent:
     image: victoriametrics/vmagent:v1.143.0
     container_name: frameworks-edge-vmagent
+{% if edge_container_flavor | default('linux') != 'darwin' %}
+    network_mode: host
+{% endif %}
     command:
-      - -httpListenAddr=:8429
+{# Loopback: with host networking this would otherwise expose vmagent's
+   control/metrics HTTP endpoint on the public edge host. Nothing dials
+   vmagent — it scrapes and remote-writes outbound. #}
+      - -httpListenAddr=127.0.0.1:8429
       - -promscrape.config=/etc/frameworks/vmagent-edge.yml
       - -remoteWrite.url={{ edge_telemetry_url }}
-{% if edge_telemetry_token | length > 0 %}
       - -remoteWrite.bearerTokenFile=/etc/frameworks/telemetry/token
-{% endif %}
     volumes:
       - ./vmagent-edge.yml:/etc/frameworks/vmagent-edge.yml:ro
       - ./telemetry:/etc/frameworks/telemetry:ro
@@ -95,7 +108,7 @@ services:
 {% endif %}
 
 volumes:
+  frameworks_opt: {}
+  frameworks_etc: {}
+  caddy_etc: {}
   caddy_data: {}
-  caddy_config: {}
-  caddy_admin: {}
-  mist_thumbs: {}

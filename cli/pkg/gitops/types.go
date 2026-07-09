@@ -222,6 +222,45 @@ func (d *ExternalDependency) GetBinary(arch string) *ExternalBinary {
 	return nil
 }
 
+// RuntimeBinaryForPlatform returns the runtime (non-debug) binary tarball
+// whose asset name carries the given "<os>-<arch>" token. External
+// dependency binaries keep their full release asset filenames (e.g.
+// mistserver-linux-amd64-<tag>.tar.gz), so exact-name lookups like
+// GetBinary("linux-amd64") do not match them; this is the canonical way to
+// resolve a platform's runtime artifact. Only ".tar.gz" assets qualify
+// (mirroring the CI selector), so checksum/SBOM/signature sidecar assets
+// that embed the platform token are never mistaken for the binary.
+func (d *ExternalDependency) RuntimeBinaryForPlatform(platform string) *ExternalBinary {
+	platform = strings.ToLower(strings.TrimSpace(platform))
+	if platform == "" {
+		return nil
+	}
+	for i := range d.Binaries {
+		bin := &d.Binaries[i]
+		name := strings.ToLower(strings.TrimSpace(bin.Name))
+		if bin.URL == "" || IsDebugAssetName(name) {
+			continue
+		}
+		if name == platform {
+			return bin
+		}
+		if strings.HasSuffix(name, ".tar.gz") && strings.Contains(name, "-"+platform+"-") {
+			return bin
+		}
+	}
+	return nil
+}
+
+// IsDebugAssetName reports whether a release asset name is a debug-symbol
+// artifact rather than a runtime binary.
+func IsDebugAssetName(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	return strings.Contains(lower, "-debug-") ||
+		strings.HasSuffix(lower, "-debug.tar.gz") ||
+		strings.HasSuffix(lower, ".debug") ||
+		strings.Contains(lower, "/debug/")
+}
+
 // FetchOptions configures manifest fetching
 type FetchOptions struct {
 	Channel        string        // stable | rc

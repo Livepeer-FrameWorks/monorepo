@@ -259,7 +259,8 @@ func TestReconcileTarget_NoEligibleNodesIsNoopOrch(t *testing.T) {
 		control.SetDB(prevDB)
 		state.ResetDefaultManagerForTests()
 	})
-	// A docker node in the target cluster is present but NOT eligible.
+	// A legacy multi-container docker node in the target cluster is present
+	// but NOT eligible (native and single-image container nodes are).
 	sm.TouchNode("docker-node", true)
 	sm.SetNodeRuntimeInfo("docker-node", "docker", "linux", "amd64")
 	sm.SetNodeConnectionInfo(context.Background(), "docker-node", "", "", "cluster-a", nil)

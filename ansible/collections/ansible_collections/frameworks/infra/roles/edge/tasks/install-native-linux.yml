@@ -1,4 +1,73 @@
 ---
+# Migration from container mode: stop the compose stack (else it keeps
+# 80/443/1935) and flip the leftover .edge.env DEPLOY_MODE so CLI management
+# commands classify the node as native instead of resurrecting the retired
+# container via `edge update`. Volumes are kept.
+- name: Check for leftover container-mode compose project (migration)
+  ansible.builtin.stat:
+    path: "{{ edge_base_dir }}/docker-compose.yml"
+  register: edge_leftover_compose
+
+- name: Stop retired edge container stack (migration)
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ edge_base_dir }}/docker-compose.yml", down]
+  when:
+    - not ansible_check_mode
+    - edge_leftover_compose.stat.exists | default(false)
+  changed_when: true
+  failed_when: false
+
+# The env flip must reflect reality and fail CLOSED: it requires a
+# successful docker ps proving neither managed container (single-image or
+# legacy proxy) is running. A daemon we cannot reach might still be running
+# the stack — proceeding would stamp a lying DEPLOY_MODE=native over live
+# containers holding 80/443/1935.
+- name: Check retired edge container is stopped (migration)
+  ansible.builtin.command:
+    argv: [docker, ps, -q, --filter, "name=^frameworks-edge$", --filter, "name=^edge-proxy$"]
+  register: edge_container_check
+  changed_when: false
+  failed_when: false
+  when:
+    - not ansible_check_mode
+    - edge_leftover_compose.stat.exists | default(false)
+
+- name: Fail when the retired edge container stack cannot be proven stopped (migration)
+  ansible.builtin.fail:
+    msg: >-
+      Cannot prove the retired edge container stack is stopped:
+      {{ 'docker ps failed (daemon unreachable in this context?)'
+         if (edge_container_check.rc | default(1)) != 0
+         else 'a managed edge container is still running and holds the media ports' }}.
+      Stop the stack (docker compose -f {{ edge_base_dir }}/docker-compose.yml down),
+      verify docker is reachable, and re-run.
+  when:
+    - not ansible_check_mode
+    - edge_leftover_compose.stat.exists | default(false)
+    - >-
+      (edge_container_check.rc | default(1)) != 0
+      or (edge_container_check.stdout | default('') | trim | length) > 0
+
+# Missing .edge.env is fine (nothing to mislead the CLI); a FAILED rewrite
+# of an existing one is not — the stale DEPLOY_MODE=container would let
+# `edge update` resurrect the retired stack, so let lineinfile errors fail
+# the play.
+- name: Check for leftover container-mode env file (migration)
+  ansible.builtin.stat:
+    path: "{{ edge_base_dir }}/.edge.env"
+  register: edge_leftover_env
+  when: edge_leftover_compose.stat.exists | default(false)
+
+- name: Mark leftover edge env as native (migration)
+  ansible.builtin.lineinfile:
+    path: "{{ edge_base_dir }}/.edge.env"
+    regexp: "^DEPLOY_MODE="
+    line: "DEPLOY_MODE=native"
+  when:
+    - edge_leftover_compose.stat.exists | default(false)
+    - edge_leftover_env.stat.exists | default(false)
+    - ansible_check_mode or ((edge_container_check.rc | default(1)) == 0 and (edge_container_check.stdout | default('') | trim | length) == 0)
+
 - name: Apply mistserver install sub-role
   ansible.builtin.include_role:
     name: frameworks.infra.mistserver
@@ -235,6 +304,8 @@
     - edge_config_schema_version | length > 0
     - (edge_schema_version_recorded.rc | default(1)) != 0
 
+# Telemetry requires BOTH url and token (single contract with the compose
+# template and the Go renderer).
 - name: Apply vmagent edge telemetry (when enabled)
   ansible.builtin.import_tasks: install-native-linux-vmagent.yml
-  when: edge_telemetry_url | length > 0
+  when: edge_telemetry_url | length > 0 and edge_telemetry_token | length > 0

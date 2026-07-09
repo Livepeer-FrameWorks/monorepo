@@ -232,12 +232,32 @@ func renderCaddyfile(sites []proxySite) string {
 		if len(site.Domains) == 0 || site.Upstream == "" {
 			continue
 		}
-		b.WriteString(strings.Join(site.Domains, ", "))
+		mainDomains, wwwHosts := splitWWWRedirectDomains(site.Domains)
+		if site.TLSMode == "off" {
+			// http-only site: no https target to canonicalize www onto.
+			mainDomains, wwwHosts = site.Domains, nil
+		}
+		tlsDirective := caddyTLSDirective(site)
+		for _, wwwHost := range wwwHosts {
+			b.WriteString(wwwHost)
+			b.WriteString(" {\n")
+			if tlsDirective != "" {
+				b.WriteString("    ")
+				b.WriteString(tlsDirective)
+				b.WriteString("\n")
+			}
+			fmt.Fprintf(&b, "    redir https://%s{uri} permanent\n", strings.TrimPrefix(wwwHost, "www."))
+			b.WriteString("}\n\n")
+		}
+		b.WriteString(strings.Join(mainDomains, ", "))
 		b.WriteString(" {\n")
-		if directive := caddyTLSDirective(site); directive != "" {
+		if tlsDirective != "" {
 			b.WriteString("    ")
-			b.WriteString(directive)
+			b.WriteString(tlsDirective)
 			b.WriteString("\n")
+		}
+		if site.TLSMode != "off" {
+			b.WriteString("    header Strict-Transport-Security \"max-age=31536000\"\n")
 		}
 		writeCaddyProxyDirectives(&b, site)
 		for _, directive := range site.ExtraDirectives {
@@ -250,6 +270,26 @@ func renderCaddyfile(sites []proxySite) string {
 	return b.String()
 }
 
+// splitWWWRedirectDomains partitions a site's domain list into served domains
+// and www.X aliases whose apex X is also in the list; the aliases get
+// canonicalizing 301s instead of duplicate content.
+func splitWWWRedirectDomains(domains []string) (main []string, wwwHosts []string) {
+	set := make(map[string]struct{}, len(domains))
+	for _, domain := range domains {
+		set[domain] = struct{}{}
+	}
+	for _, domain := range domains {
+		if strings.HasPrefix(domain, "www.") {
+			if _, ok := set[strings.TrimPrefix(domain, "www.")]; ok {
+				wwwHosts = append(wwwHosts, domain)
+				continue
+			}
+		}
+		main = append(main, domain)
+	}
+	return main, wwwHosts
+}
+
 func renderNginxConfig(port int, sites []proxySite, tap *tenantAliasPlayback) string {
 	var b strings.Builder
 	if len(sites) == 0 {
@@ -259,10 +299,19 @@ func renderNginxConfig(port int, sites []proxySite, tap *tenantAliasPlayback) st
 		if len(site.Domains) == 0 || site.Upstream == "" {
 			continue
 		}
-		writeNginxServer(&b, port, "", site)
-		if site.TLSMode == "files" && site.TLSCertPath != "" && site.TLSKeyPath != "" {
-			writeNginxServer(&b, 443, " ssl", site)
+		if site.TLSMode != "files" || site.TLSCertPath == "" || site.TLSKeyPath == "" {
+			// HTTP-only site: nothing to redirect to.
+			writeNginxServer(&b, port, "", site)
+			continue
 		}
+		mainDomains, wwwHosts := splitWWWRedirectDomains(site.Domains)
+		writeNginxHTTPSRedirectServer(&b, port, mainDomains)
+		for _, wwwHost := range wwwHosts {
+			writeNginxWWWRedirectServers(&b, port, wwwHost, site)
+		}
+		mainSite := site
+		mainSite.Domains = mainDomains
+		writeNginxServer(&b, 443, " ssl", mainSite)
 	}
 	if tap != nil {
 		writeNginxTenantAliasPlayback(&b, tap)
@@ -361,10 +410,26 @@ func caddyHTTPSUpstreamNeedsHostRewrite(upstream string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(upstream)), "https://")
 }
 
+// writeNginxHTTPSRedirectServer renders the plain-HTTP side of a TLS site:
+// /health answers LB health probes on :80 (Navigator monitors expect 2xx),
+// every real path redirects to HTTPS.
+func writeNginxHTTPSRedirectServer(b *strings.Builder, port int, domains []string) {
+	fmt.Fprintf(b, "server {\n    listen %d;\n    server_name %s;\n\n    location = /health {\n        return 204;\n    }\n\n    location / {\n        return 308 https://$host$request_uri;\n    }\n}\n\n", port, strings.Join(domains, " "))
+}
+
+// writeNginxWWWRedirectServers renders the canonicalizing www.X -> X 301 on
+// both the plain and TLS listeners (the site cert's SANs cover both names).
+func writeNginxWWWRedirectServers(b *strings.Builder, port int, wwwHost string, site proxySite) {
+	apex := strings.TrimPrefix(wwwHost, "www.")
+	fmt.Fprintf(b, "server {\n    listen %d;\n    server_name %s;\n\n    location / {\n        return 301 https://%s$request_uri;\n    }\n}\n\n", port, wwwHost, apex)
+	fmt.Fprintf(b, "server {\n    listen 443 ssl;\n    server_name %s;\n    http2 on;\n    ssl_certificate %s;\n    ssl_certificate_key %s;\n    add_header Strict-Transport-Security \"max-age=31536000\" always;\n\n    location / {\n        return 301 https://%s$request_uri;\n    }\n}\n\n", wwwHost, site.TLSCertPath, site.TLSKeyPath, apex)
+}
+
 func writeNginxServer(b *strings.Builder, port int, listenSuffix string, site proxySite) {
 	fmt.Fprintf(b, "server {\n    listen %d%s;\n    server_name %s;\n", port, listenSuffix, strings.Join(site.Domains, " "))
 	if listenSuffix != "" {
 		fmt.Fprintf(b, "    http2 on;\n    ssl_certificate %s;\n    ssl_certificate_key %s;\n", site.TLSCertPath, site.TLSKeyPath)
+		b.WriteString("    add_header Strict-Transport-Security \"max-age=31536000\" always;\n")
 	}
 	paths := site.PathPrefixes
 	if len(paths) == 0 {

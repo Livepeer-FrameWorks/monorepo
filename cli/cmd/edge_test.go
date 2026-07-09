@@ -232,9 +232,11 @@ func TestNativeEdgeRefreshCommandDarwinSignalsMist(t *testing.T) {
 
 func TestDockerEdgeUpdateStepsUseComposePullThenUp(t *testing.T) {
 	got := dockerEdgeUpdateSteps("docker-compose.edge.yml", ".edge.env")
+	// --remove-orphans retires legacy 3-container services left in the
+	// same compose project, which would otherwise keep squatting 80/443.
 	want := [][]string{
 		{"compose", "-f", "docker-compose.edge.yml", "--env-file", ".edge.env", "pull"},
-		{"compose", "-f", "docker-compose.edge.yml", "--env-file", ".edge.env", "up", "-d"},
+		{"compose", "-f", "docker-compose.edge.yml", "--env-file", ".edge.env", "up", "-d", "--remove-orphans"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("steps len = %d, want %d", len(got), len(want))

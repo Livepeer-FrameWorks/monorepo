@@ -18,7 +18,13 @@ import (
 
 const edgeDriftEnvFile = ".edge.env"
 
-var edgeDriftServices = []string{"caddy", "mistserver", "helmsman"}
+// Expected service names per stack shape: the container stack runs one
+// "edge" compose service (caddy/mistserver/helmsman live inside it under
+// s6); the native stack runs three host services.
+var (
+	edgeDriftContainerServices = []string{"edge"}
+	edgeDriftNativeServices    = []string{"caddy", "mistserver", "helmsman"}
+)
 
 const (
 	driftStatusOK                 = "ok"
@@ -72,10 +78,11 @@ func newEdgeDriftCmd() *cobra.Command {
 		Short: "Observed-state survey: services, .edge.env keys, HTTPS health",
 		Long: `Survey the current edge node for divergence from its configured state.
 
-Reports whether each edge service (caddy, mistserver, helmsman) is running in
-the expected stack, whether required .edge.env keys are present, and whether
-the HTTPS health endpoint is reachable. Probes both docker and native stacks
-so a service running under the wrong manager surfaces as wrong_mode.
+Reports whether the expected edge services are running in the configured
+stack (container mode: the single frameworks-edge container; native mode:
+caddy, mistserver, helmsman), whether required .edge.env keys are present,
+and whether the HTTPS health endpoint is reachable. Probes both stacks so a
+service running under the wrong manager surfaces as wrong_mode.
 
 Role-level config+binary diff is owned by ` + "`edge provision --dry-run`" + `
 (ansible-playbook --check --diff). ` + "`edge drift`" + ` is observed-state only.
@@ -116,26 +123,36 @@ Exits non-zero on any divergence, so CI can gate on it.`,
 }
 
 func runEdgeDrift(ctx context.Context, dir, domainFlag, sshTarget, sshKey string) edgeDriftReport {
-	envProbeErr := probeEdgeEnvFile(ctx, sshTarget, sshKey, dir, edgeDriftEnvFile)
+	// Ansible-provisioned nodes keep the stack (and .edge.env) under
+	// /opt/frameworks/edge; resolve before probing so drift surveys the
+	// deployed state instead of the operator's cwd.
+	dir, composeFile := resolveEdgeComposeContext(ctx, dir, sshTarget, sshKey)
+	// detectEdgeMode recognizes native installs via their deployed-state
+	// markers; a bare NormalizeEdgeMode(.edge.env) would misreport native
+	// Ansible nodes (which never render .edge.env) as container.
+	deployMode := detectEdgeMode(ctx, dir, edgeDriftEnvFile, sshTarget, sshKey)
 
-	nodeID := readRemoteEnvFileKey(ctx, sshTarget, sshKey, dir, edgeDriftEnvFile, "NODE_ID")
-	envDomain := readRemoteEnvFileKey(ctx, sshTarget, sshKey, dir, edgeDriftEnvFile, "EDGE_DOMAIN")
-	foghornAddr := readRemoteEnvFileKey(ctx, sshTarget, sshKey, dir, edgeDriftEnvFile, "FOGHORN_CONTROL_ADDR")
-	telemetryURL := readRemoteEnvFileKey(ctx, sshTarget, sshKey, dir, edgeDriftEnvFile, "TELEMETRY_URL")
-	deployModeRaw := readRemoteEnvFileKey(ctx, sshTarget, sshKey, dir, edgeDriftEnvFile, "DEPLOY_MODE")
-	deployMode := "docker"
-	if deployModeRaw == "native" {
-		deployMode = "native"
+	// Container installs carry .edge.env next to the compose file; native
+	// installs keep metadata in helmsman.env, so a missing .edge.env is
+	// only a probe failure in container mode.
+	var envProbeErr error
+	if deployMode != "native" {
+		envProbeErr = probeEdgeEnvFile(ctx, sshTarget, sshKey, dir, edgeDriftEnvFile)
 	}
+
+	nodeID := readEdgeMetadataKey(ctx, sshTarget, sshKey, dir, deployMode, "NODE_ID")
+	envDomain := readEdgeMetadataKey(ctx, sshTarget, sshKey, dir, deployMode, "EDGE_DOMAIN")
+	foghornAddr := readEdgeMetadataKey(ctx, sshTarget, sshKey, dir, deployMode, "FOGHORN_CONTROL_ADDR")
+	telemetryURL := readEdgeMetadataKey(ctx, sshTarget, sshKey, dir, deployMode, "TELEMETRY_URL")
 
 	effectiveDomain := strings.TrimSpace(domainFlag)
 	if effectiveDomain == "" {
 		effectiveDomain = envDomain
 	}
 
-	dockerChecks := probeEdgeDockerServices(ctx, dir, sshTarget, sshKey)
+	containerChecks := probeEdgeContainerServices(ctx, dir, composeFile, sshTarget, sshKey)
 	nativeChecks := probeEdgeNativeServices(ctx, sshTarget, sshKey)
-	services := classifyEdgeServices(deployMode, dockerChecks, nativeChecks)
+	services := classifyEdgeServices(deployMode, containerChecks, nativeChecks)
 
 	var config []edgeDriftConfigStatus
 	if envProbeErr != nil {
@@ -172,21 +189,15 @@ func runEdgeDrift(ctx context.Context, dir, domainFlag, sshTarget, sshKey string
 	return rep
 }
 
-// probeEdgeDockerServices returns the docker-stack checks for edgeDriftServices.
-// Services absent from docker compose ps are omitted, matching parseEdgeServiceStatus.
-func probeEdgeDockerServices(ctx context.Context, dir, sshTarget, sshKey string) []readiness.EdgeCheck {
-	compose := "docker-compose.edge.yml"
-	var out string
-	var err error
-	if strings.TrimSpace(sshTarget) != "" {
-		_, out, _, err = xexec.RunSSHWithKey(ctx, sshTarget, sshKey, "docker", []string{"compose", "-f", compose, "--env-file", edgeDriftEnvFile, "ps"}, dir)
-	} else {
-		_, out, _, err = xexec.Run(ctx, "docker", []string{"compose", "-f", compose, "--env-file", edgeDriftEnvFile, "ps"}, dir)
-	}
+// probeEdgeContainerServices returns the container-stack checks (the single
+// edge compose service). Services absent from docker compose ps are omitted,
+// matching parseEdgeServiceStatus.
+func probeEdgeContainerServices(ctx context.Context, dir, compose, sshTarget, sshKey string) []readiness.EdgeCheck {
+	out, _, err := runEdgeDocker(ctx, sshTarget, sshKey, []string{"compose", "-f", compose, "--env-file", edgeDriftEnvFile, "ps"}, dir)
 	if err != nil {
 		return nil
 	}
-	return parseEdgeServiceStatus(out, "docker")
+	return parseEdgeServiceStatus(out, "container")
 }
 
 // probeEdgeNativeServices returns the native-stack checks for edgeDriftServices.
@@ -212,48 +223,57 @@ func probeEdgeNativeServices(ctx context.Context, sshTarget, sshKey string) []re
 	return parseEdgeServiceStatus(out, "native")
 }
 
-// classifyEdgeServices combines docker and native probe results per service.
-// Invariant: a service omitted from both parsed probe outputs is reported as
-// `missing` rather than inferred. Services found in the stack opposite the
-// configured DEPLOY_MODE are `wrong_mode`, regardless of their run state.
-func classifyEdgeServices(deployMode string, docker, native []readiness.EdgeCheck) []edgeDriftServiceStatus {
-	dockerByName := map[string]readiness.EdgeCheck{}
-	for _, c := range docker {
-		dockerByName[c.Name] = c
+// classifyEdgeServices combines container and native probe results.
+// Invariants: an expected service absent from its stack's probe output is
+// `missing` rather than inferred, and any service found in the stack
+// opposite the configured DEPLOY_MODE is `wrong_mode` regardless of run
+// state. Service names differ per stack (container: "edge"; native: the
+// three host services), so the expected and stray lists are mode-dependent.
+func classifyEdgeServices(deployMode string, container, native []readiness.EdgeCheck) []edgeDriftServiceStatus {
+	containerByName := map[string]readiness.EdgeCheck{}
+	for _, c := range container {
+		containerByName[c.Name] = c
 	}
 	nativeByName := map[string]readiness.EdgeCheck{}
 	for _, c := range native {
 		nativeByName[c.Name] = c
 	}
 
-	out := make([]edgeDriftServiceStatus, 0, len(edgeDriftServices))
-	for _, svc := range edgeDriftServices {
-		expected := dockerByName
-		other := nativeByName
-		if deployMode == "native" {
-			expected = nativeByName
-			other = dockerByName
-		}
-		inExpected, foundExpected := expected[svc]
-		inOther, foundOther := other[svc]
+	expectedServices := edgeDriftContainerServices
+	expected := containerByName
+	strayServices := edgeDriftNativeServices
+	stray := nativeByName
+	strayMode := "native"
+	if deployMode == "native" {
+		expectedServices = edgeDriftNativeServices
+		expected = nativeByName
+		strayServices = edgeDriftContainerServices
+		stray = containerByName
+		strayMode = "container"
+	}
+
+	out := make([]edgeDriftServiceStatus, 0, len(expectedServices)+len(strayServices))
+	for _, svc := range expectedServices {
+		check, found := expected[svc]
 		switch {
-		case foundExpected && inExpected.OK:
-			out = append(out, edgeDriftServiceStatus{Name: svc, Status: driftStatusOK, Detail: inExpected.Detail})
-		case foundExpected && !inExpected.OK:
-			out = append(out, edgeDriftServiceStatus{Name: svc, Status: driftStatusStopped, Detail: inExpected.Detail})
-		case foundOther:
-			otherMode := "docker"
-			if deployMode == "docker" {
-				otherMode = "native"
-			}
-			detail := inOther.Detail
-			if detail == "" {
-				detail = "found in " + otherMode + " stack"
-			}
-			out = append(out, edgeDriftServiceStatus{Name: svc, Status: driftStatusWrongMode, Detail: detail})
+		case found && check.OK:
+			out = append(out, edgeDriftServiceStatus{Name: svc, Status: driftStatusOK, Detail: check.Detail})
+		case found:
+			out = append(out, edgeDriftServiceStatus{Name: svc, Status: driftStatusStopped, Detail: check.Detail})
 		default:
 			out = append(out, edgeDriftServiceStatus{Name: svc, Status: driftStatusMissing})
 		}
+	}
+	for _, svc := range strayServices {
+		check, found := stray[svc]
+		if !found {
+			continue
+		}
+		detail := check.Detail
+		if detail == "" {
+			detail = "found in " + strayMode + " stack"
+		}
+		out = append(out, edgeDriftServiceStatus{Name: svc, Status: driftStatusWrongMode, Detail: detail})
 	}
 	return out
 }

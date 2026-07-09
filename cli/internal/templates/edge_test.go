@@ -33,10 +33,10 @@ func fileByPath(files []EdgeRenderedFile, path string) (EdgeRenderedFile, bool) 
 	return EdgeRenderedFile{}, false
 }
 
-func TestRenderEdgeTemplates_dockerModeFullSet(t *testing.T) {
+func TestRenderEdgeTemplates_containerModeFullSet(t *testing.T) {
 	t.Parallel()
 	vars := fixedEdgeVars()
-	vars.Mode = "docker"
+	vars.Mode = "container"
 
 	files, err := RenderEdgeTemplates(vars)
 	if err != nil {
@@ -48,12 +48,13 @@ func TestRenderEdgeTemplates_dockerModeFullSet(t *testing.T) {
 		paths = append(paths, f.Path)
 	}
 	slices.Sort(paths)
+	// No Caddyfile / maintenance.html: the edge image bakes the bootstrap
+	// config and seeds the maintenance page itself.
 	want := []string{
 		".edge-enroll.env",
+		".edge-secrets.env",
 		".edge.env",
-		"Caddyfile",
 		"docker-compose.edge.yml",
-		"maintenance.html",
 		filepath.Join("pki", "ca.crt"),
 		filepath.Join("telemetry", "token"),
 		"vmagent-edge.yml",
@@ -61,6 +62,24 @@ func TestRenderEdgeTemplates_dockerModeFullSet(t *testing.T) {
 	slices.Sort(want)
 	if !slices.Equal(paths, want) {
 		t.Errorf("paths:\n  got  %v\n  want %v", paths, want)
+	}
+}
+
+func TestRenderEdgeTemplates_dockerAliasMapsToContainer(t *testing.T) {
+	t.Parallel()
+	vars := fixedEdgeVars()
+	vars.Mode = "docker"
+
+	files, err := RenderEdgeTemplates(vars)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	env, ok := fileByPath(files, ".edge.env")
+	if !ok {
+		t.Fatalf(".edge.env missing")
+	}
+	if !strings.Contains(string(env.Content), "DEPLOY_MODE=container") {
+		t.Errorf("legacy docker mode must render DEPLOY_MODE=container; got:\n%s", env.Content)
 	}
 }
 
@@ -78,8 +97,13 @@ func TestRenderEdgeTemplates_dockerVMAgentUsesStandardPort(t *testing.T) {
 		t.Fatalf("docker-compose.edge.yml missing")
 	}
 	content := string(compose.Content)
-	if !strings.Contains(content, "- -httpListenAddr=:8429") {
-		t.Fatalf("edge vmagent should use standard listener :8429:\n%s", content)
+	// Loopback-pinned: with host networking, a wildcard listener would
+	// expose vmagent's control/metrics endpoint on the public edge host.
+	if !strings.Contains(content, "- -httpListenAddr=127.0.0.1:8429") {
+		t.Fatalf("edge vmagent should use loopback listener 127.0.0.1:8429:\n%s", content)
+	}
+	if strings.Contains(content, "-httpListenAddr=:8429") {
+		t.Fatalf("edge vmagent must not bind all interfaces:\n%s", content)
 	}
 	if strings.Contains(content, ":8430") {
 		t.Fatalf("edge vmagent should not use the retired :8430 listener:\n%s", content)
@@ -132,7 +156,7 @@ func TestRenderEdgeTemplates_envFileHasExpectedKeys(t *testing.T) {
 		t.Fatalf(".edge.env missing")
 	}
 	content := string(env.Content)
-	for _, key := range []string{"NODE_ID=edge-test", "EDGE_DOMAIN=edge.example.com", "DEPLOY_MODE=docker"} {
+	for _, key := range []string{"NODE_ID=edge-test", "EDGE_DOMAIN=edge.example.com", "DEPLOY_MODE=container"} {
 		if !strings.Contains(content, key) {
 			t.Errorf(".edge.env missing %q; got:\n%s", key, content)
 		}
@@ -216,6 +240,9 @@ func TestWriteEdgeTemplates_maintenanceSilentlySkippedWhenExists(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	vars := fixedEdgeVars()
+	// maintenance.html is only rendered in native mode (the edge image
+	// seeds its own copy in container mode).
+	vars.Mode = "native"
 	// Pre-create maintenance.html with sentinel content; second call
 	// without overwrite must leave it alone (EdgeWriteIfMissingOrOverwrite
 	// semantic).

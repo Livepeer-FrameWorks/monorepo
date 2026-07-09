@@ -374,7 +374,11 @@ func nodeAllowsAutomaticReleaseUpdate(node *state.NodeState) bool {
 	if node == nil {
 		return false
 	}
-	if !strings.EqualFold(strings.TrimSpace(node.DeployMode), "native") {
+	// Single-image container edges apply in-place component updates exactly
+	// like native nodes (s6-supervised swaps); only the legacy multi-container
+	// "docker" mode required image rollouts and stays excluded.
+	deployMode := strings.ToLower(strings.TrimSpace(node.DeployMode))
+	if deployMode != "native" && deployMode != "container" {
 		return false
 	}
 	if nodePlatformKey(node) == "" {

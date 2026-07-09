@@ -96,14 +96,21 @@ server {
 }
 
 {% if site.tls_mode | default('') == 'files' and site.tls_cert_path | default('') | length > 0 and site.tls_key_path | default('') | length > 0 %}
+{# www.X hosts whose apex X is also served here get canonicalizing 301s
+   instead of duplicate content; the site cert's SANs cover both names. #}
+{% set ns = namespace(www_hosts=[]) %}
+{% for domain in site.domains %}
+{% if domain.startswith('www.') and domain[4:] in site.domains %}
+{% set ns.www_hosts = ns.www_hosts + [domain] %}
+{% endif %}
+{% endfor %}
+{% set main_domains = site.domains | reject('in', ns.www_hosts) | list %}
 server {
     listen {{ nginx_public_http_port }};
-    server_name {{ site.domains | join(' ') }};
+    server_name {{ main_domains | join(' ') }};
 
-    location = / {
-        return 204;
-    }
-
+{# /health answers plain-HTTP LB health probes (Navigator monitors expect 2xx
+   on :80); every real path redirects to HTTPS. #}
     location = /health {
         return 204;
     }
@@ -112,15 +119,42 @@ server {
         return 308 https://$host$request_uri;
     }
 }
+{% for www_host in ns.www_hosts %}
+
+server {
+    listen {{ nginx_public_http_port }};
+    server_name {{ www_host }};
+
+    location / {
+        return 301 https://{{ www_host[4:] }}$request_uri;
+    }
+}
 
 server {
     listen {{ nginx_https_port }} ssl{% if nginx_effective_http2_directive_mode == 'listen_parameter' %} http2{% endif %};
-    server_name {{ site.domains | join(' ') }};
+    server_name {{ www_host }};
 {% if nginx_effective_http2_directive_mode == 'standalone' %}
     http2 on;
 {% endif %}
     ssl_certificate {{ site.tls_cert_path }};
     ssl_certificate_key {{ site.tls_key_path }};
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    location / {
+        return 301 https://{{ www_host[4:] }}$request_uri;
+    }
+}
+{% endfor %}
+
+server {
+    listen {{ nginx_https_port }} ssl{% if nginx_effective_http2_directive_mode == 'listen_parameter' %} http2{% endif %};
+    server_name {{ main_domains | join(' ') }};
+{% if nginx_effective_http2_directive_mode == 'standalone' %}
+    http2 on;
+{% endif %}
+    ssl_certificate {{ site.tls_cert_path }};
+    ssl_certificate_key {{ site.tls_key_path }};
+    add_header Strict-Transport-Security "max-age=31536000" always;
 
 {% for path_prefix in site.path_prefixes | default(['/']) %}
     location {{ path_prefix }} {

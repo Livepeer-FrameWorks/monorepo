@@ -120,7 +120,9 @@ func runDiagnoseMediaAuto(cmd *cobra.Command, sshTarget, sshKey, dir, stream str
 	}
 	defer cleanup()
 
+	dir, _ = resolveEdgeComposeContext(ctx, dir, sshTarget, sshKey)
 	mode := detectEdgeMode(ctx, dir, ".edge.env", sshTarget, sshKey)
+	runner = wrapEdgeDiagRunner(runner, mode, sshTarget)
 	ar := mistdiag.NewAnalyzerRunner(runner, mode)
 
 	out := cmd.OutOrStdout()
@@ -210,7 +212,9 @@ func runDiagnoseMediaManual(cmd *cobra.Command, sshTarget, sshKey, dir, analyzer
 	}
 	defer cleanup()
 
+	dir, _ = resolveEdgeComposeContext(ctx, dir, sshTarget, sshKey)
 	mode := detectEdgeMode(ctx, dir, ".edge.env", sshTarget, sshKey)
+	runner = wrapEdgeDiagRunner(runner, mode, sshTarget)
 	ar := mistdiag.NewAnalyzerRunner(runner, mode)
 
 	analyzer = mistdiag.NormalizeAnalyzerName(analyzer)
@@ -238,6 +242,47 @@ func runDiagnoseMediaManual(cmd *cobra.Command, sshTarget, sshKey, dir, analyzer
 		return fmt.Errorf("analyzer exited with code %d", result.ExitCode)
 	}
 	return nil
+}
+
+// wrapEdgeDiagRunner adds the same passwordless-sudo retry runEdgeDocker
+// gives the management commands: remote container-mode docker invocations
+// against Ansible-provisioned (root-owned) stacks fail for unprivileged SSH
+// users on the socket or env files.
+func wrapEdgeDiagRunner(runner fwssh.Runner, mode, sshTarget string) fwssh.Runner {
+	if mode == "container" && strings.TrimSpace(sshTarget) != "" {
+		return &sudoRetryRunner{inner: runner}
+	}
+	return runner
+}
+
+// sudoRetryRunner retries failed docker commands with `sudo -n`.
+type sudoRetryRunner struct {
+	inner fwssh.Runner
+}
+
+func (s *sudoRetryRunner) Run(ctx context.Context, command string) (*fwssh.CommandResult, error) {
+	res, err := s.inner.Run(ctx, command)
+	if err == nil && res != nil && res.ExitCode == 0 {
+		return res, nil
+	}
+	if strings.HasPrefix(command, "docker ") {
+		if sudoRes, sudoErr := s.inner.Run(ctx, "sudo -n "+command); sudoErr == nil && sudoRes != nil && sudoRes.ExitCode == 0 {
+			return sudoRes, sudoErr
+		}
+	}
+	return res, err
+}
+
+func (s *sudoRetryRunner) RunScript(ctx context.Context, script string) (*fwssh.CommandResult, error) {
+	return s.inner.RunScript(ctx, script)
+}
+
+func (s *sudoRetryRunner) Upload(ctx context.Context, opts fwssh.UploadOptions) error {
+	return s.inner.Upload(ctx, opts)
+}
+
+func (s *sudoRetryRunner) Close() error {
+	return s.inner.Close()
 }
 
 // makeEdgeRunner creates an ssh.Runner from command flags.

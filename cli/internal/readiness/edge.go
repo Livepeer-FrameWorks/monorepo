@@ -47,7 +47,7 @@ func EdgeReadiness(in EdgeInputs) Report {
 	}
 
 	if in.ServiceProbeErr != "" {
-		why := "confirm the docker daemon is running and docker-compose.edge.yml is present"
+		why := "confirm the docker daemon is running and the compose project exists (docker-compose.edge.yml, or docker-compose.yml on Ansible-provisioned nodes)"
 		if in.Mode == "native" {
 			why = "confirm frameworks-caddy/helmsman/mistserver units exist and the current user can query them"
 		}

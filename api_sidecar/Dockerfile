@@ -6,9 +6,6 @@ ENV GOFLAGS="-tags=nomsgpack"
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates tzdata build-base
 
-# Install grpcurl
-RUN go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
-
 # Set up workspace with correct relative paths
 WORKDIR /src/frameworks/api_sidecar
 
@@ -52,9 +49,6 @@ FROM alpine:3.19
 # Install runtime dependencies
 RUN apk add --no-cache ca-certificates tzdata
 
-# Copy grpcurl from builder
-COPY --from=builder /go/bin/grpcurl /usr/local/bin/
-
 # Create non-root user
 RUN addgroup -g 1001 -S frameworks && \
     adduser -u 1001 -S frameworks -G frameworks
@@ -69,9 +63,9 @@ RUN chown frameworks:frameworks /app/helmsman
 
 USER frameworks
 
-# Health check
+# Health check: helmsman serves HTTP (gin) on 18007, not gRPC.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD grpcurl -plaintext localhost:18007 grpc.health.v1.Health/Check || exit 1
+    CMD wget -q -O /dev/null http://127.0.0.1:18007/health || exit 1
 
 EXPOSE 18007
 

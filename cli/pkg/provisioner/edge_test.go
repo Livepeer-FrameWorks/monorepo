@@ -84,9 +84,10 @@ func TestEdgeProvisionConfig_ResolvedMode(t *testing.T) {
 		mode string
 		want string
 	}{
-		{"explicit docker", "docker", "docker"},
+		{"explicit container", "container", "container"},
+		{"legacy docker alias", "docker", "container"},
 		{"explicit native", "native", "native"},
-		{"empty defaults to docker", "", "docker"},
+		{"empty defaults to container", "", "container"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -109,6 +110,26 @@ LISTEN 0 16384 *:80 *:* users:(("caddy",pid=328964,fd=7))`
 	}
 	if listenerPIDsSubset("LISTEN *:443", map[string]struct{}{"328964": {}}) {
 		t.Fatal("unexpectedly accepted output without pid data")
+	}
+}
+
+func TestDarwinListenersAllDockerManaged(t *testing.T) {
+	t.Parallel()
+	// lsof truncates COMMAND to 9 chars: com.docker.backend → "com.docke".
+	allDocker := `COMMAND     PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME
+com.docke  1234 marco   88u  IPv6 0x1      0t0  TCP *:http (LISTEN)
+com.docke  1234 marco   89u  IPv6 0x2      0t0  TCP *:https (LISTEN)`
+	if !darwinListenersAllDockerManaged(allDocker) {
+		t.Fatal("expected all-docker listener set to be accepted")
+	}
+	mixed := `COMMAND     PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME
+com.docke  1234 marco   88u  IPv6 0x1      0t0  TCP *:http (LISTEN)
+nginx       555 root    12u  IPv4 0x3      0t0  TCP *:https (LISTEN)`
+	if darwinListenersAllDockerManaged(mixed) {
+		t.Fatal("mixed ownership must not be accepted")
+	}
+	if darwinListenersAllDockerManaged("") {
+		t.Fatal("empty output must not be accepted")
 	}
 }
 
@@ -148,9 +169,79 @@ func TestSetEdgeComponentVersionVarRejectsControlCharacters(t *testing.T) {
 	}
 }
 
-func TestEdgeRoleVarsCapacityControls(t *testing.T) {
+// stubEdgeManifest swaps fetchEdgeManifestFn for a canned manifest carrying
+// the pinned edge image, so edgeRoleVars tests run without network access.
+func stubEdgeManifest(t *testing.T) func() {
+	t.Helper()
+	prev := fetchEdgeManifestFn
+	fetchEdgeManifestFn = func(string) (*gitops.Manifest, error) {
+		return &gitops.Manifest{
+			PlatformVersion: "vtest",
+			Services: []gitops.ServiceEntry{
+				{
+					Name:           "edge",
+					ServiceVersion: "vtest",
+					Image:          "livepeerframeworks/frameworks-edge:vtest",
+					Digest:         "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+				},
+			},
+		}, nil
+	}
+	return func() { fetchEdgeManifestFn = prev }
+}
+
+// TestEdgeRoleVarsNativeToleratesManifestWithoutEdgeImage pins that native
+// provisioning keeps working against release manifests that predate the
+// single-image container mode (no services: edge entry) — the edge image is
+// container-only metadata.
+func TestEdgeRoleVarsNativeToleratesManifestWithoutEdgeImage(t *testing.T) {
+	prev := fetchEdgeManifestFn
+	fetchEdgeManifestFn = func(string) (*gitops.Manifest, error) {
+		return &gitops.Manifest{
+			PlatformVersion: "vtest",
+			Services: []gitops.ServiceEntry{
+				{
+					Name:           "helmsman",
+					ServiceVersion: "vtest",
+					Image:          "livepeerframeworks/frameworks-helmsman:vtest",
+					Digest:         "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+				},
+			},
+			NativeBinaries: []gitops.NativeBinary{
+				{Name: "helmsman", Artifacts: []gitops.Artifact{{Arch: "linux-amd64", File: "h.tar.gz", URL: "https://example.test/h.tar.gz", Checksum: "sha256:aa"}}},
+			},
+			ExternalDependencies: []gitops.ExternalDependency{
+				{Name: "mistserver", ReleaseTag: "m1", Binaries: []gitops.ExternalBinary{
+					{Name: "mistserver-linux-amd64-m1.tar.gz", URL: "https://example.test/m.tar.gz", Checksum: "sha256:bb"},
+					{Name: "mistserver-linux-amd64-debug-m1.tar.gz", URL: "https://example.test/md.tar.gz", Checksum: "sha256:bc"},
+				}},
+			},
+			Infrastructure: []gitops.InfrastructureEntry{
+				{Name: "caddy", Version: "2.11.3", Artifacts: []gitops.Artifact{{Arch: "linux-amd64", File: "c.tar.gz", URL: "https://example.test/c.tar.gz", Checksum: "sha512:cc"}}},
+			},
+		}, nil
+	}
+	defer func() { fetchEdgeManifestFn = prev }()
+
 	vars, err := edgeRoleVars(&EdgeProvisionConfig{
-		Mode:          "docker",
+		Mode:    "native",
+		Version: "vtest",
+		NodeID:  "edge-native-1",
+	}, "linux", "amd64")
+	if err != nil {
+		t.Fatalf("edgeRoleVars returned error: %v", err)
+	}
+	if img, ok := vars["edge_image"]; ok && img != "livepeerframeworks/frameworks-edge:latest" {
+		t.Fatalf("native mode must not resolve a manifest edge image; got %#v", img)
+	}
+}
+
+func TestEdgeRoleVarsCapacityControls(t *testing.T) {
+	restore := stubEdgeManifest(t)
+	defer restore()
+	vars, err := edgeRoleVars(&EdgeProvisionConfig{
+		Mode:          "container",
+		Version:       "vtest",
 		NodeID:        "edge-eu-1",
 		Capabilities:  []string{"edge", "storage"},
 		BandwidthMbps: 2000,
@@ -202,8 +293,14 @@ func TestEdgeVMAgentRoleFilesUseStandardListenerPort(t *testing.T) {
 	} {
 		t.Run(path, func(t *testing.T) {
 			content := readRepoFile(t, path)
-			if !strings.Contains(content, "-httpListenAddr=:8429") {
-				t.Fatalf("edge vmagent role file should use standard listener :8429:\n%s", content)
+			// Loopback-pinned: edge vmagent runs host-networked (or on a
+			// host unit), so a wildcard listener would expose its
+			// control/metrics endpoint on the public edge host.
+			if !strings.Contains(content, "-httpListenAddr=127.0.0.1:8429") {
+				t.Fatalf("edge vmagent role file should use loopback listener 127.0.0.1:8429:\n%s", content)
+			}
+			if strings.Contains(content, "-httpListenAddr=:8429") {
+				t.Fatalf("edge vmagent role file must not bind all interfaces:\n%s", content)
 			}
 			if strings.Contains(content, ":8430") {
 				t.Fatalf("edge vmagent role file should not use retired listener :8430:\n%s", content)
@@ -217,7 +314,7 @@ func TestEdgeVMAgentRoleFilesUseStandardListenerPort(t *testing.T) {
 // their own host. These tests pin the bootstrap shape so renames don't
 // silently drop fields from that local-render path.
 
-func TestWriteEdgeTemplates_DockerMode(t *testing.T) {
+func TestWriteEdgeTemplates_ContainerMode(t *testing.T) {
 	tmpDir := t.TempDir()
 	vars := templates.EdgeVars{
 		NodeID:          "test-node",
@@ -226,58 +323,46 @@ func TestWriteEdgeTemplates_DockerMode(t *testing.T) {
 		AcmeEmail:       "ops@example.com",
 		FoghornGRPCAddr: "foghorn.example.com:18008",
 		EnrollmentToken: "tok-abc",
-		Mode:            "docker",
+		Mode:            "container",
 	}
 
 	if err := templates.WriteEdgeTemplates(tmpDir, vars, true); err != nil {
 		t.Fatalf("WriteEdgeTemplates failed: %v", err)
 	}
 
-	for _, f := range []string{"docker-compose.edge.yml", "Caddyfile", ".edge.env"} {
+	for _, f := range []string{"docker-compose.edge.yml", ".edge.env"} {
 		path := filepath.Join(tmpDir, f)
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			t.Errorf("expected file %s to exist", f)
 		}
 	}
-
-	caddyfile, err := os.ReadFile(filepath.Join(tmpDir, "Caddyfile"))
-	if err != nil {
-		t.Fatalf("failed to read Caddyfile: %v", err)
-	}
-	content := string(caddyfile)
-	if !strings.Contains(content, "tls internal") {
-		t.Error("Bootstrap Caddyfile should contain 'tls internal'")
-	}
-	if !strings.Contains(content, "edge-1.example.com:443") {
-		t.Error("Bootstrap Caddyfile should bind HTTPS to EDGE_DOMAIN so Caddy can issue an SNI certificate")
-	}
-	if !strings.Contains(content, "helmsman:18007") {
-		t.Error("Bootstrap Caddyfile should contain Docker upstream helmsman:18007 for webhooks")
-	}
-	if !strings.Contains(content, "handle /health") || !strings.Contains(content, `respond "ok" 200`) {
-		t.Error("Bootstrap Caddyfile should expose a 200 /health endpoint")
-	}
-	if !strings.Contains(content, "503") {
-		t.Error("Bootstrap Caddyfile should serve 503 during bootstrap")
+	// The bootstrap Caddyfile is baked into the edge image; container mode
+	// renders none on the host.
+	if _, err := os.Stat(filepath.Join(tmpDir, "Caddyfile")); err == nil {
+		t.Error("container mode should not render a host-side Caddyfile")
 	}
 
 	envContent, _ := os.ReadFile(filepath.Join(tmpDir, ".edge.env"))
-	if !strings.Contains(string(envContent), "DEPLOY_MODE=docker") {
-		t.Error(".edge.env should contain DEPLOY_MODE=docker")
+	if !strings.Contains(string(envContent), "DEPLOY_MODE=container") {
+		t.Error(".edge.env should contain DEPLOY_MODE=container")
 	}
 
 	composeContent, err := os.ReadFile(filepath.Join(tmpDir, "docker-compose.edge.yml"))
 	if err != nil {
 		t.Fatalf("failed to read docker-compose.edge.yml: %v", err)
 	}
-	if strings.Contains(string(composeContent), "./pki:/etc/frameworks/pki:ro") {
-		t.Error("docker compose should not mount ./pki read-only; Helmsman updates the CA bundle via ConfigSeed")
+	compose := string(composeContent)
+	if !strings.Contains(compose, "container_name: frameworks-edge") {
+		t.Error("container compose should run the single frameworks-edge container")
+	}
+	if !strings.Contains(compose, "network_mode: host") {
+		t.Error("linux container compose should use host networking")
 	}
 }
 
-func TestWriteEdgeTemplates_DockerModeDefaultsMistServerImage(t *testing.T) {
+func TestWriteEdgeTemplates_ContainerModeDefaultsEdgeImage(t *testing.T) {
 	tmpDir := t.TempDir()
-	vars := templates.EdgeVars{Mode: "docker"}
+	vars := templates.EdgeVars{Mode: "container"}
 
 	if err := templates.WriteEdgeTemplates(tmpDir, vars, true); err != nil {
 		t.Fatalf("WriteEdgeTemplates failed: %v", err)
@@ -287,8 +372,8 @@ func TestWriteEdgeTemplates_DockerModeDefaultsMistServerImage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to read docker-compose.edge.yml: %v", err)
 	}
-	if !strings.Contains(string(composeContent), "image: mistserver:latest") {
-		t.Error("docker compose should default to mistserver:latest for local edge init")
+	if !strings.Contains(string(composeContent), "image: livepeerframeworks/frameworks-edge:latest") {
+		t.Error("container compose should default to the edge image for local edge init")
 	}
 }
 
@@ -349,11 +434,12 @@ func TestWriteEdgeTemplates_NativeMode(t *testing.T) {
 
 func TestWriteEdgeTemplates_BootstrapCaddyfile(t *testing.T) {
 	tmpDir := t.TempDir()
+	// Only native mode renders the bootstrap Caddyfile on the host.
 	vars := templates.EdgeVars{
 		EdgeDomain:  "edge-1.example.com",
 		SiteAddress: "edge-1.example.com",
 		AcmeEmail:   "ops@example.com",
-		Mode:        "docker",
+		Mode:        "native",
 	}
 
 	if err := templates.WriteEdgeTemplates(tmpDir, vars, true); err != nil {

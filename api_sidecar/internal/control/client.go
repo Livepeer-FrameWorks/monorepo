@@ -1964,10 +1964,11 @@ func IsConnected() bool {
 }
 
 // relayBaseURL returns the URL Mist on this node uses to reach Helmsman's
-// /internal/artifact/* read-through relay. Reads HELMSMAN_RELAY_BASE_URL when
-// set (container deployments where Mist resolves to a service name like
-// http://helmsman:18007); falls back to http://127.0.0.1:18007 for the
-// production colocated-with-Mist case.
+// /internal/artifact/* read-through relay. Reads HELMSMAN_RELAY_BASE_URL
+// when set (the dev compose bridge, where Mist resolves to a service name
+// like http://helmsman:18007); falls back to http://127.0.0.1:18007 for
+// production, where Mist and Helmsman share loopback on native hosts and
+// inside the single edge container alike.
 func relayBaseURL() string {
 	if v := strings.TrimSpace(os.Getenv("HELMSMAN_RELAY_BASE_URL")); v != "" {
 		return strings.TrimRight(v, "/")

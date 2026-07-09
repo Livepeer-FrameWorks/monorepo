@@ -585,7 +585,7 @@ type EdgeManifest struct {
 	EnrollmentToken string     `yaml:"enrollment_token,omitempty"` // Token for node bootstrap
 	HostsFile       string     `yaml:"hosts_file,omitempty"`       // SOPS-encrypted host inventory
 	FetchCert       bool       `yaml:"fetch_cert,omitempty"`       // Deprecated for manifest provisioning; edge TLS is delivered by ConfigSeed
-	Mode            string     `yaml:"mode,omitempty"`             // "docker" (default) or "native"
+	Mode            string     `yaml:"mode,omitempty"`             // "container" (default; single edge image) or "native" ("docker" = deprecated alias)
 	Capabilities    []string   `yaml:"capabilities,omitempty"`     // Default node capabilities: ingest, edge, storage, processing
 	BandwidthMbps   int        `yaml:"bandwidth_mbps,omitempty"`   // Default egress bandwidth limit advertised by Helmsman
 	MaxTranscodes   int        `yaml:"max_transcodes,omitempty"`   // Default local transcoding concurrency limit
@@ -604,7 +604,7 @@ type EdgeNode struct {
 	Labels        map[string]string `yaml:"labels,omitempty"`       // Additional labels
 	ApplyTune     bool              `yaml:"apply_tune,omitempty"`   // Apply sysctl tuning
 	RegisterQM    bool              `yaml:"register_qm,omitempty"`  // Register in Quartermaster
-	Mode          string            `yaml:"mode,omitempty"`         // Per-node mode override ("docker"|"native")
+	Mode          string            `yaml:"mode,omitempty"`         // Per-node mode override ("container"|"native"; "docker" = deprecated alias)
 	Capabilities  []string          `yaml:"capabilities,omitempty"` // Per-node capability override
 	BandwidthMbps int               `yaml:"bandwidth_mbps,omitempty"`
 	MaxTranscodes int               `yaml:"max_transcodes,omitempty"`
@@ -689,7 +689,7 @@ type EdgeConnection struct {
 }
 
 // ResolvedMode returns the effective mode for this node, falling back to the
-// manifest default, then to "docker".
+// manifest default, then to "container" (the single edge image).
 func (n EdgeNode) ResolvedMode(manifestDefault string) string {
 	if n.Mode != "" {
 		return n.Mode
@@ -697,5 +697,5 @@ func (n EdgeNode) ResolvedMode(manifestDefault string) string {
 	if manifestDefault != "" {
 		return manifestDefault
 	}
-	return "docker"
+	return "container"
 }

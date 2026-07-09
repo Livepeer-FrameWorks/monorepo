@@ -450,6 +450,300 @@ jobs:
           path: final/*
 
   # ---------------------------------------------------------------------------
+  # Single-image edge container (helmsman + MistServer + Caddy under s6).
+  # Consumes the SAME pinned native tarballs as bare-metal installs (staged by
+  # edge/stage-dist.sh) so in-place component updates inside the container are
+  # byte-identical to native updates. Built per-arch, merged, and emitted into
+  # the manifest services list as "edge".
+  # ---------------------------------------------------------------------------
+  # MistServer's latest release is resolved ONCE here and consumed by both
+  # edge-image arch builds and the manifest job, so the baked Mist version
+  # can never diverge from the manifest pin (or between architectures) if a
+  # Mist release lands mid-workflow.
+  resolve-mistserver:
+    name: Resolve MistServer Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate release metadata GitHub App token
+        id: mist-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.GITOPS_APP_ID }}
+          private-key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
+          repositories: mistserver
+
+      - name: Fetch latest MistServer release metadata
+        env:
+          GH_APP_TOKEN: ${{ steps.mist-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_APP_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/Livepeer-FrameWorks/mistserver/releases/latest \
+            > dist/mistserver-release.json
+          jq -re '.tag_name' dist/mistserver-release.json
+
+      # Publicly downloadable asset URLs are a platform contract, not a CI
+      # convenience: edge nodes fetch these SAME browser_download_urls
+      # without credentials (ansible get_url on native installs, helmsman's
+      # in-place updater inside containers). If this probe fails, fix the
+      # mistserver repo/release visibility — do NOT paper over it with a
+      # token here, or every edge self-update breaks instead.
+      - name: Assert release assets are publicly downloadable
+        run: |
+          set -euo pipefail
+          URL=$(jq -re '[.assets[] | select((.name | startswith("mistserver-linux-")) and (.name | endswith(".tar.gz")))][0].browser_download_url' dist/mistserver-release.json)
+          curl -fsSLI -o /dev/null "$URL"
+          echo "Asset publicly reachable: ${URL}"
+
+      # stage-dist hard-requires checksums (no --allow-unverified in CI) and
+      # native provisioning refuses checksum-less Mist artifacts on every
+      # platform (edgeExternalBinary), so ANY runtime tarball missing
+      # GitHub's computed digest — darwin included — must fail HERE at
+      # resolution, not late in image builds or at provision time.
+      - name: Assert runtime tarballs carry digests
+        run: |
+          set -euo pipefail
+          MISSING=$(jq -r '[.assets[] | select((.name | startswith("mistserver-")) and (.name | contains("-debug-") | not) and (.name | endswith(".tar.gz"))) | select((.digest // "") == "") | .name] | join(", ")' dist/mistserver-release.json)
+          if [[ -n "$MISSING" ]]; then
+            echo "MistServer runtime assets missing digests (re-upload so GitHub computes them): $MISSING" >&2
+            exit 1
+          fi
+          echo "All runtime tarballs carry digests"
+
+      - name: Upload MistServer release metadata
+        uses: actions/upload-artifact@v7
+        with:
+          name: mistserver-release
+          path: dist/mistserver-release.json
+
+  build-edge-image:
+    name: Build Edge Image (${{ matrix.arch }})
+    needs:
+      [release-plan, resolve-mistserver, build-service-binaries-amd64, build-service-binaries-arm64]
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download release-plan decision
+        uses: actions/download-artifact@v8
+        with:
+          name: release-plan
+          path: dist
+
+      - name: Download MistServer release metadata
+        uses: actions/download-artifact@v8
+        with:
+          name: mistserver-release
+          path: dist
+
+      - name: Download service binary artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: binary-all-linux-${{ matrix.arch }}
+          path: dist/binaries
+
+      # A carry-forward helmsman means the binaries job intentionally built
+      # no fresh tarball; the image then bakes the carried artifact (same
+      # bytes native nodes run) at its carried service_version so the
+      # release reconciler sees converged versions.
+      - name: Resolve helmsman artifact (build or carry-forward)
+        id: helmsman
+        run: |
+          set -euo pipefail
+          action=$(jq -r '.decisions.helmsman.action // "build"' dist/release-plan.json)
+          if [[ "$action" == "carry_forward" ]]; then
+            art=$(jq -ce --arg a "linux-${{ matrix.arch }}" \
+              '.decisions.helmsman.carried_native_binary.artifacts[] | select(.arch == $a)' dist/release-plan.json)
+            url=$(echo "$art" | jq -re .url)
+            sum=$(echo "$art" | jq -re .checksum)
+            file="dist/binaries/$(echo "$art" | jq -re .file)"
+            mkdir -p dist/binaries
+            curl -fsSL -o "$file" "$url"
+            case "$sum" in
+              sha256:*) echo "${sum#sha256:}  $file" | sha256sum -c - ;;
+              sha512:*) echo "${sum#sha512:}  $file" | sha512sum -c - ;;
+              *) echo "unsupported checksum format: $sum" >&2; exit 1 ;;
+            esac
+            version=$(jq -re '.decisions.helmsman.carried_service.service_version // .decisions.helmsman.baseline_tag' dist/release-plan.json)
+            echo "Using carried-forward helmsman ${version} from ${url}"
+          else
+            file=$(ls dist/binaries/frameworks-helmsman-*-linux-${{ matrix.arch }}.tar.gz)
+            version="${{ github.ref_name }}"
+          fi
+          echo "tar=${file}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve MistServer native tarball
+        id: mist
+        run: |
+          set -euo pipefail
+          TAG=$(jq -re '.tag_name' dist/mistserver-release.json)
+          ASSET=$(jq -ce --arg arch "linux-${{ matrix.arch }}" \
+            '[.assets[] | select((.name | startswith("mistserver-" + $arch + "-")) and (.name | contains("-debug-") | not) and (.name | endswith(".tar.gz")))][0]' \
+            dist/mistserver-release.json)
+          echo "url=$(echo "$ASSET" | jq -re .browser_download_url)" >> "$GITHUB_OUTPUT"
+          echo "checksum=$(echo "$ASSET" | jq -r '.digest // ""')" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Resolved MistServer ${TAG}: $(echo "$ASSET" | jq -r .name)"
+
+      - name: Resolve pinned Caddy tarball
+        id: caddy
+        run: |
+          set -euo pipefail
+          python3 - "linux-${{ matrix.arch }}" <<'PY' >> "$GITHUB_OUTPUT"
+          import sys, yaml
+          arch = sys.argv[1]
+          with open("config/infrastructure.yaml") as fh:
+              data = yaml.safe_load(fh)
+          caddy = next(e for e in data["infrastructure"] if e["name"] == "caddy")
+          artifact = next(a for a in caddy["artifacts"] if a["arch"] == arch)
+          print(f"url={artifact['url']}")
+          print(f"checksum={artifact.get('checksum', '')}")
+          print(f"version={caddy['version']}")
+          PY
+
+      - name: Stage edge dist
+        run: |
+          set -euo pipefail
+          ./edge/stage-dist.sh \
+            --arch ${{ matrix.arch }} \
+            --helmsman-tar "${{ steps.helmsman.outputs.tar }}" \
+            --helmsman-version "${{ steps.helmsman.outputs.version }}" \
+            --mist-url "${{ steps.mist.outputs.url }}" \
+            --mist-sha256 "${{ steps.mist.outputs.checksum }}" \
+            --mist-version "${{ steps.mist.outputs.version }}" \
+            --caddy-url "${{ steps.caddy.outputs.url }}" \
+            --caddy-sha256 "${{ steps.caddy.outputs.checksum }}" \
+            --caddy-version "${{ steps.caddy.outputs.version }}" \
+            --config-schema-version "${{ github.ref_name }}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to DockerHub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build & push edge image (${{ matrix.arch }})
+        uses: docker/build-push-action@v7
+        with:
+          context: edge
+          file: edge/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          push: true
+          provenance: true
+          sbom: true
+          tags: |
+            ${{ env.REGISTRY }}/frameworks-edge:${{ github.ref_name }}-${{ matrix.arch }}
+            livepeerframeworks/frameworks-edge:${{ github.ref_name }}-${{ matrix.arch }}
+          cache-from: type=gha,scope=edge-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,ignore-error=true,scope=edge-${{ matrix.arch }}
+
+  merge-edge-image:
+    name: Merge Edge Image Manifest
+    needs: [build-edge-image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to DockerHub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Create multi-arch edge manifest
+        run: |
+          set -euo pipefail
+          TAG="${{ github.ref_name }}"
+          GHCR="${{ env.REGISTRY }}/frameworks-edge"
+          DH="livepeerframeworks/frameworks-edge"
+
+          TRACK=""
+          case "${TAG}" in
+            *-beta*) TRACK="beta" ;;
+            *-rc*)   TRACK="rc" ;;
+            v[0-9]*) TRACK="latest" ;;
+          esac
+
+          GHCR_TAGS=("-t" "${GHCR}:${TAG}")
+          DH_TAGS=("-t" "${DH}:${TAG}")
+          if [[ -n "${TRACK}" ]]; then
+            GHCR_TAGS+=("-t" "${GHCR}:${TRACK}")
+            DH_TAGS+=("-t" "${DH}:${TRACK}")
+          fi
+
+          docker buildx imagetools create \
+            "${GHCR_TAGS[@]}" \
+            "${GHCR}:${TAG}-amd64" \
+            "${GHCR}:${TAG}-arm64"
+
+          docker buildx imagetools create \
+            "${DH_TAGS[@]}" \
+            "${DH}:${TAG}-amd64" \
+            "${DH}:${TAG}-arm64"
+
+          GHCR_DIGEST="sha256:$(docker buildx imagetools inspect "${GHCR}:${TAG}" --raw | sha256sum | cut -d' ' -f1)"
+          DH_DIGEST="sha256:$(docker buildx imagetools inspect "${DH}:${TAG}" --raw | sha256sum | cut -d' ' -f1)"
+
+          mkdir -p final
+          cat > "final/image-edge.json" <<JSON
+          {
+            "name": "edge",
+            "image": "${DH}:${TAG}",
+            "digest": "${DH_DIGEST}",
+            "dockerhub_image": "${DH}:${TAG}",
+            "dockerhub_digest": "${DH_DIGEST}",
+            "ghcr_image": "${GHCR}:${TAG}",
+            "ghcr_digest": "${GHCR_DIGEST}",
+            "service_version": "${TAG}",
+            "git_commit": "${{ github.sha }}"
+          }
+          JSON
+
+      - name: Upload edge digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: image-digest-edge
+          path: final/*
+
+  # ---------------------------------------------------------------------------
   # Webapp Docker images — split amd64 (ubuntu) + arm64 (native self-hosted)
   # ---------------------------------------------------------------------------
   build-webapps-amd64:
@@ -1511,7 +1805,9 @@ jobs:
     name: Generate & Publish Manifest
     needs:
       - release-plan
+      - resolve-mistserver
       - merge-image-manifests
+      - merge-edge-image
       - merge-webapp-manifests
       - build-cli
       - build-cli-darwin
@@ -1526,13 +1822,15 @@ jobs:
       packages: read # docker login to pull image digests for manifest generation
     steps:
       - uses: actions/checkout@v6
+      # MistServer metadata comes from the resolve-mistserver job's artifact;
+      # this token only covers the go-livepeer release lookup.
       - name: Generate release metadata GitHub App token
         id: release-metadata-token
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ vars.GITOPS_APP_ID }}
           private-key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
-          repositories: go-livepeer,mistserver
+          repositories: go-livepeer
       - name: Log in to GHCR
         uses: docker/login-action@v4
         with:
@@ -1622,38 +1920,21 @@ jobs:
           echo "Fetched go-livepeer latest release: ${TAG}"
           echo "Docker tag: ${TAG}, Digest: ${DIGEST}"
 
-      - name: Fetch MistServer metadata from latest release
+      - name: Download MistServer release metadata
+        uses: actions/download-artifact@v8
+        with:
+          name: mistserver-release
+          path: dist
+
+      # Consumes the release JSON pinned by the resolve-mistserver job so
+      # the manifest advertises exactly the Mist version the edge image
+      # baked, even if MistServer publishes mid-workflow.
+      - name: Read MistServer metadata
         id: mistserver
-        env:
-          GH_APP_TOKEN: ${{ steps.release-metadata-token.outputs.token }}
         run: |
           set -euo pipefail
 
-          BODY_FILE="$(mktemp)"
-          HEADER_FILE="$(mktemp)"
-          trap 'rm -f "$BODY_FILE" "$HEADER_FILE"' EXIT
-
-          STATUS="$(
-            curl -sSL \
-              -D "$HEADER_FILE" \
-              -o "$BODY_FILE" \
-              -w '%{http_code}' \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer ${GH_APP_TOKEN}" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              https://api.github.com/repos/Livepeer-FrameWorks/mistserver/releases/latest
-          )"
-
-          if [ "$STATUS" != "200" ]; then
-            echo "GitHub API request failed for MistServer latest release: HTTP ${STATUS}"
-            echo "Response headers:"
-            cat "$HEADER_FILE"
-            echo "Response body:"
-            cat "$BODY_FILE"
-            exit 1
-          fi
-
-          RELEASE="$(cat "$BODY_FILE")"
+          RELEASE="$(cat dist/mistserver-release.json)"
 
           TAG=$(echo "$RELEASE" | jq -re '.tag_name')
           TAG_URL=$(echo "$RELEASE" | jq -re '.assets[] | select(.name=="docker-tag.txt") | .browser_download_url')
@@ -1829,6 +2110,11 @@ jobs:
           for f in dist/digests/*.json; do
             name=$(jq -r .name "$f")
             if echo "$WEBAPP_NAMES" | grep -qx "$name"; then
+              continue
+            fi
+            # The edge image is container-only: its contents ARE the other
+            # components' native tarballs, so it has no tarball of its own.
+            if [[ "$name" == "edge" ]]; then
               continue
             fi
             source_hash=""

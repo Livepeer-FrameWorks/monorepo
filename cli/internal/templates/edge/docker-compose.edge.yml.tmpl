@@ -1,73 +1,36 @@
-version: "3.9"
-
 services:
-  caddy:
-    image: {{CADDY_IMAGE}}
-    container_name: edge-proxy
-    ports:
-      - "80:80"
-      - "443:443"
-    environment:
-      - ACME_AGREE=true
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./maintenance.html:/etc/caddy/maintenance.html:ro
-      - caddy_data:/data
-      - caddy_config:/config
-      - ./certs:/etc/frameworks/certs
-      - caddy_admin:/run/caddy
-    restart: unless-stopped
-
-  mistserver:
-    image: {{MISTSERVER_IMAGE}}
-    container_name: mistserver
-    command: ["MistController", "-c", "/etc/mistserver.conf", "-a", "frameworks:{{MIST_API_PASSWORD}}"]
+  edge:
+    image: {{EDGE_IMAGE}}
+    container_name: frameworks-edge
+{{EDGE_NETWORK_BLOCK}}
     shm_size: "1g"
     ulimits:
       nofile:
         soft: 1048576
         hard: 1048576
-    environment:
-      - MIST_DEBUG=3
-    expose:
-      - "8080"
-    volumes:
-      - mist_thumbs:/tmp/mist_thumbs
-    restart: unless-stopped
-
-  helmsman:
-    image: {{HELMSMAN_IMAGE}}
-    container_name: helmsman
-    ulimits:
-      nofile:
-        soft: 1048576
-        hard: 1048576
+    stop_grace_period: 1m
     env_file:
       - .edge.env
       - .edge-enroll.env
+      - .edge-secrets.env
     environment:
-      - HELMSMAN_WEBHOOK_URL=http://helmsman:18007
-      - MISTSERVER_URL=http://mistserver:4242
-      - MISTSERVER_HTTP_URL=http://mistserver:8080
-      - CADDY_ADMIN_SOCKET=/run/caddy/admin.sock
-      - CADDY_CONFIG_PATH=/etc/caddy/Caddyfile
       - MIST_API_USERNAME=frameworks
-      - MIST_API_PASSWORD={{MIST_API_PASSWORD}}
     volumes:
-      - ./certs:/etc/frameworks/certs
+      - frameworks_opt:/opt/frameworks
+      - frameworks_etc:/etc/frameworks
       - ./pki:/etc/frameworks/pki
+      # rw: seed-edge sets ownership and helmsman rotates the token from
+      # ConfigSeed; vmagent mounts this same dir read-only.
       - ./telemetry:/etc/frameworks/telemetry
-      - ./Caddyfile:/etc/caddy/Caddyfile
-      - caddy_admin:/run/caddy
-      - mist_thumbs:/tmp/mist_thumbs
-    expose:
-      - "18007"
+      - caddy_etc:/etc/caddy
+      - caddy_data:/var/lib/caddy
+      - edge_storage:/data/storage
     restart: unless-stopped
 
-{{VMAGENT_EDGE_SERVICE}}
-
+{{EDGE_TUNING_SERVICE}}{{VMAGENT_EDGE_SERVICE}}
 volumes:
+  frameworks_opt: {}
+  frameworks_etc: {}
+  caddy_etc: {}
   caddy_data: {}
-  caddy_config: {}
-  caddy_admin: {}
-  mist_thumbs: {}
+  edge_storage: {}

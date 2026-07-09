@@ -9,40 +9,35 @@ import (
 	"frameworks/cli/internal/readiness"
 )
 
-func TestClassifyEdgeServices_dockerModeOKStoppedMissing(t *testing.T) {
+func TestClassifyEdgeServices_containerModeOKAndStopped(t *testing.T) {
 	t.Parallel()
-	docker := []readiness.EdgeCheck{
-		{Name: "caddy", OK: true, Detail: "Up 2 hours"},
-		{Name: "mistserver", OK: false, Detail: "Exited"},
+	container := []readiness.EdgeCheck{
+		{Name: "edge", OK: true, Detail: "Up 2 hours (healthy)"},
 	}
-	native := []readiness.EdgeCheck{}
-	got := classifyEdgeServices("docker", docker, native)
+	got := classifyEdgeServices("container", container, nil)
+	if len(got) != 1 || got[0].Name != "edge" || got[0].Status != driftStatusOK {
+		t.Errorf("want single edge ok, got %+v", got)
+	}
 
-	statuses := map[string]string{}
-	for _, s := range got {
-		statuses[s.Name] = s.Status
-	}
-	if statuses["caddy"] != driftStatusOK {
-		t.Errorf("caddy: want ok, got %s", statuses["caddy"])
-	}
-	if statuses["mistserver"] != driftStatusStopped {
-		t.Errorf("mistserver: want stopped, got %s", statuses["mistserver"])
-	}
-	if statuses["helmsman"] != driftStatusMissing {
-		t.Errorf("helmsman: want missing, got %s", statuses["helmsman"])
+	container[0].OK = false
+	got = classifyEdgeServices("container", container, nil)
+	if len(got) != 1 || got[0].Status != driftStatusStopped {
+		t.Errorf("want single edge stopped, got %+v", got)
 	}
 }
 
 func TestClassifyEdgeServices_wrongModeFoundInOtherStack(t *testing.T) {
 	t.Parallel()
-	docker := []readiness.EdgeCheck{}
 	native := []readiness.EdgeCheck{
 		{Name: "mistserver", OK: true, Detail: "active (running)"},
 	}
-	got := classifyEdgeServices("docker", docker, native)
+	got := classifyEdgeServices("container", nil, native)
 	statuses := map[string]string{}
 	for _, s := range got {
 		statuses[s.Name] = s.Status
+	}
+	if statuses["edge"] != driftStatusMissing {
+		t.Errorf("edge: want missing, got %s", statuses["edge"])
 	}
 	if statuses["mistserver"] != driftStatusWrongMode {
 		t.Errorf("mistserver: want wrong_mode, got %s", statuses["mistserver"])
@@ -51,20 +46,23 @@ func TestClassifyEdgeServices_wrongModeFoundInOtherStack(t *testing.T) {
 
 func TestClassifyEdgeServices_nativeModeSymmetric(t *testing.T) {
 	t.Parallel()
-	docker := []readiness.EdgeCheck{
-		{Name: "caddy", OK: true, Detail: "Up"},
+	container := []readiness.EdgeCheck{
+		{Name: "edge", OK: true, Detail: "Up"},
 	}
 	native := []readiness.EdgeCheck{
 		{Name: "mistserver", OK: true, Detail: "active (running)"},
 		{Name: "helmsman", OK: false, Detail: "failed"},
 	}
-	got := classifyEdgeServices("native", docker, native)
+	got := classifyEdgeServices("native", container, native)
 	statuses := map[string]string{}
 	for _, s := range got {
 		statuses[s.Name] = s.Status
 	}
-	if statuses["caddy"] != driftStatusWrongMode {
-		t.Errorf("caddy: want wrong_mode in native mode (found only in docker), got %s", statuses["caddy"])
+	if statuses["edge"] != driftStatusWrongMode {
+		t.Errorf("edge: want wrong_mode in native mode (found in container stack), got %s", statuses["edge"])
+	}
+	if statuses["caddy"] != driftStatusMissing {
+		t.Errorf("caddy: want missing, got %s", statuses["caddy"])
 	}
 	if statuses["mistserver"] != driftStatusOK {
 		t.Errorf("mistserver: want ok, got %s", statuses["mistserver"])
@@ -76,9 +74,9 @@ func TestClassifyEdgeServices_nativeModeSymmetric(t *testing.T) {
 
 func TestClassifyEdgeServices_omittedFromBothStacksIsMissing(t *testing.T) {
 	t.Parallel()
-	got := classifyEdgeServices("docker", nil, nil)
-	if len(got) != len(edgeDriftServices) {
-		t.Fatalf("expected %d entries, got %d", len(edgeDriftServices), len(got))
+	got := classifyEdgeServices("container", nil, nil)
+	if len(got) != len(edgeDriftContainerServices) {
+		t.Fatalf("expected %d entries, got %d", len(edgeDriftContainerServices), len(got))
 	}
 	for _, s := range got {
 		if s.Status != driftStatusMissing {

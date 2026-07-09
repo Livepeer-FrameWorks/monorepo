@@ -25,8 +25,8 @@ func DiscoverStreams(ctx context.Context, runner fwssh.Runner, mode string) ([]A
 		mistAPIBase,
 	)
 
-	if mode == "docker" {
-		apiCmd = fmt.Sprintf("docker exec mistserver sh -c %s", fwssh.ShellQuote(apiCmd))
+	if mode == "container" || mode == "docker" {
+		apiCmd = fmt.Sprintf("docker exec frameworks-edge sh -c %s", fwssh.ShellQuote(apiCmd))
 	}
 
 	result, err := runner.Run(ctx, apiCmd)

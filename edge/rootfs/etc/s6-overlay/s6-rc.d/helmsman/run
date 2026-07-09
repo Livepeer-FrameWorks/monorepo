@@ -1,0 +1,5 @@
+#!/command/with-contenv sh
+# Exiting with status 0 is helmsman's self-update mechanism: s6-supervise
+# relaunches it, picking up a freshly swapped binary.
+cd /opt/frameworks/helmsman
+exec s6-setuidgid frameworks /opt/frameworks/helmsman/helmsman

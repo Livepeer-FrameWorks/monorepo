@@ -286,10 +286,12 @@ func TestCaddyfileAdminAddrUsesAddressNotURL(t *testing.T) {
 	}
 }
 
-func TestCaddyfileAdminAddrKeepsUnixSocket(t *testing.T) {
+func TestCaddyfileAdminAddrKeepsUnixSocketGroupAccessible(t *testing.T) {
+	// The 0660 mode keeps the re-created socket reachable by helmsman
+	// (frameworks user, caddy group) after every Caddy config load.
 	t.Setenv("CADDY_ADMIN_SOCKET", "/run/caddy/admin.sock")
-	if got := caddyfileAdminAddr(); got != "unix//run/caddy/admin.sock" {
-		t.Fatalf("caddyfileAdminAddr() = %q, want unix//run/caddy/admin.sock", got)
+	if got := caddyfileAdminAddr(); got != "unix//run/caddy/admin.sock|0660" {
+		t.Fatalf("caddyfileAdminAddr() = %q, want unix//run/caddy/admin.sock|0660", got)
 	}
 }
 
