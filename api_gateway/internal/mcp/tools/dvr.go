@@ -59,8 +59,11 @@ type StartDVRInput struct {
 // StartDVRResult represents the result of starting DVR.
 type StartDVRResult struct {
 	DVRHash string `json:"dvr_hash"`
-	Status  string `json:"status"`
-	Message string `json:"message"`
+	// PlaybackID is the public playback_id — the canonical identifier to pass to
+	// resolve_playback_endpoint for viewing (prefer this over the dvr_hash).
+	PlaybackID string `json:"playback_id,omitempty"`
+	Status     string `json:"status"`
+	Message    string `json:"message"`
 }
 
 func handleStartDVR(ctx context.Context, args StartDVRInput, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -104,9 +107,10 @@ func handleStartDVR(ctx context.Context, args StartDVRInput, clients *clients.Se
 	}
 
 	result := StartDVRResult{
-		DVRHash: resp.DvrHash,
-		Status:  resp.Status,
-		Message: fmt.Sprintf("DVR recording started. Hash: %s", resp.DvrHash),
+		DVRHash:    resp.DvrHash,
+		PlaybackID: resp.PlaybackId,
+		Status:     resp.Status,
+		Message:    fmt.Sprintf("DVR recording started. Hash: %s", resp.DvrHash),
 	}
 
 	return toolSuccess(result)

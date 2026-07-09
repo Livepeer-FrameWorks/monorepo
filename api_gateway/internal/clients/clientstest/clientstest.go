@@ -156,6 +156,13 @@ type FakeCommodore struct {
 	RegisterFn                    func(ctx context.Context, req *commodorepb.RegisterRequest) (*commodorepb.RegisterResponse, error)
 	ResolveIngestEndpointFn       func(ctx context.Context, streamKey, viewerIP string) (*sharedpb.IngestEndpointResponse, error)
 	ResolveViewerEndpointFn       func(ctx context.Context, contentID, viewerIP, viewerToken string) (*sharedpb.ViewerEndpointResponse, error)
+	ResolveVodIDFn                func(ctx context.Context, vodID string) (*commodorepb.ResolveVodIDResponse, error)
+	ResolveClipHashFn             func(ctx context.Context, clipHash string) (*commodorepb.ResolveClipHashResponse, error)
+	ResolveDVRHashFn              func(ctx context.Context, dvrHash string) (*commodorepb.ResolveDVRHashResponse, error)
+	ResolveVodHashFn              func(ctx context.Context, vodHash string) (*commodorepb.ResolveVodHashResponse, error)
+	ResolveArtifactPlaybackIDFn   func(ctx context.Context, playbackID string) (*commodorepb.ResolveArtifactPlaybackIDResponse, error)
+	ResolvePlaybackIDFn           func(ctx context.Context, playbackID string) (*commodorepb.ResolvePlaybackIDResponse, error)
+	ResolveChapterPlaybackIDFn    func(ctx context.Context, playbackID string) (*commodorepb.ResolveChapterPlaybackIDResponse, error)
 	UnlinkWalletFn                func(ctx context.Context, walletID string) (*commodorepb.UnlinkWalletResponse, error)
 	WalletLoginFn                 func(ctx context.Context, address, message, signature string, attribution *commonpb.SignupAttribution) (*commodorepb.AuthResponse, error)
 	GetMediaRetentionPolicyFn     func(ctx context.Context, req *commodorepb.GetMediaRetentionPolicyRequest) (*commodorepb.GetMediaRetentionPolicyResponse, error)
@@ -190,6 +197,62 @@ func (f *FakeCommodore) GetStreamsBatch(ctx context.Context, streamIDs []string)
 		panic("FakeCommodore.GetStreamsBatch not stubbed")
 	}
 	return f.GetStreamsBatchFn(ctx, streamIDs)
+}
+
+func (f *FakeCommodore) ResolveVodID(ctx context.Context, vodID string) (*commodorepb.ResolveVodIDResponse, error) {
+	f.Calls++
+	if f.ResolveVodIDFn == nil {
+		panic("FakeCommodore.ResolveVodID not stubbed")
+	}
+	return f.ResolveVodIDFn(ctx, vodID)
+}
+
+func (f *FakeCommodore) ResolveClipHash(ctx context.Context, clipHash string) (*commodorepb.ResolveClipHashResponse, error) {
+	f.Calls++
+	if f.ResolveClipHashFn == nil {
+		panic("FakeCommodore.ResolveClipHash not stubbed")
+	}
+	return f.ResolveClipHashFn(ctx, clipHash)
+}
+
+func (f *FakeCommodore) ResolveDVRHash(ctx context.Context, dvrHash string) (*commodorepb.ResolveDVRHashResponse, error) {
+	f.Calls++
+	if f.ResolveDVRHashFn == nil {
+		panic("FakeCommodore.ResolveDVRHash not stubbed")
+	}
+	return f.ResolveDVRHashFn(ctx, dvrHash)
+}
+
+func (f *FakeCommodore) ResolveVodHash(ctx context.Context, vodHash string) (*commodorepb.ResolveVodHashResponse, error) {
+	f.Calls++
+	if f.ResolveVodHashFn == nil {
+		panic("FakeCommodore.ResolveVodHash not stubbed")
+	}
+	return f.ResolveVodHashFn(ctx, vodHash)
+}
+
+func (f *FakeCommodore) ResolveArtifactPlaybackID(ctx context.Context, playbackID string) (*commodorepb.ResolveArtifactPlaybackIDResponse, error) {
+	f.Calls++
+	if f.ResolveArtifactPlaybackIDFn == nil {
+		panic("FakeCommodore.ResolveArtifactPlaybackID not stubbed")
+	}
+	return f.ResolveArtifactPlaybackIDFn(ctx, playbackID)
+}
+
+func (f *FakeCommodore) ResolvePlaybackID(ctx context.Context, playbackID string) (*commodorepb.ResolvePlaybackIDResponse, error) {
+	f.Calls++
+	if f.ResolvePlaybackIDFn == nil {
+		panic("FakeCommodore.ResolvePlaybackID not stubbed")
+	}
+	return f.ResolvePlaybackIDFn(ctx, playbackID)
+}
+
+func (f *FakeCommodore) ResolveChapterPlaybackID(ctx context.Context, playbackID string) (*commodorepb.ResolveChapterPlaybackIDResponse, error) {
+	f.Calls++
+	if f.ResolveChapterPlaybackIDFn == nil {
+		panic("FakeCommodore.ResolveChapterPlaybackID not stubbed")
+	}
+	return f.ResolveChapterPlaybackIDFn(ctx, playbackID)
 }
 
 func (f *FakeCommodore) ListStreams(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*commodorepb.ListStreamsResponse, error) {

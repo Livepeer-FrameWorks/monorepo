@@ -176,3 +176,31 @@ func TestExtractPlaybackContentID(t *testing.T) {
 		})
 	}
 }
+
+// mcpAccessIdentity is the invariant that prevents an anonymous playback resolve
+// from being throttled on (and exhausting) the stream owner's rate-limit bucket:
+// billing follows the owner while the rate-limit identity stays the caller.
+func TestMCPAccessIdentity(t *testing.T) {
+	// Anonymous viewer resolving an owned stream: bill the owner, rate-limit the
+	// caller — the empty caller identity means per-IP public bucket downstream.
+	if billing, rl := mcpAccessIdentity("", "owner-tenant"); billing != "owner-tenant" || rl == nil || *rl != "" {
+		t.Errorf("anon caller: got billing=%q rl=%v, want billing=owner-tenant rl=&\"\"", billing, ptrStr(rl))
+	}
+
+	// Authenticated non-owner viewer: bill the owner, rate-limit the caller's tenant.
+	if billing, rl := mcpAccessIdentity("tenant-b", "tenant-a"); billing != "tenant-a" || rl == nil || *rl != "tenant-b" {
+		t.Errorf("authed non-owner: got billing=%q rl=%v, want billing=tenant-a rl=&\"tenant-b\"", billing, ptrStr(rl))
+	}
+
+	// No owner resolved: caller stays the billing tenant, no decoupling.
+	if billing, rl := mcpAccessIdentity("tenant-c", ""); billing != "tenant-c" || rl != nil {
+		t.Errorf("no owner: got billing=%q rl=%v, want billing=tenant-c rl=nil", billing, ptrStr(rl))
+	}
+}
+
+func ptrStr(p *string) string {
+	if p == nil {
+		return "<nil>"
+	}
+	return "&" + *p
+}

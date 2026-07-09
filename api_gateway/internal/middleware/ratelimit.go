@@ -200,6 +200,14 @@ type AccessRequest struct {
 	PublicAllowlisted bool
 	X402Processed     bool
 	X402AuthOnly      bool
+
+	// RateLimitTenantID, when non-nil, is the CALLER's own identity used solely for
+	// the rate-limit bucket, decoupled from TenantID (which drives billing/owner
+	// attribution). An empty string means an anonymous caller → per-IP public
+	// bucket. Nil (the default) means "share TenantID for both". This exists so a
+	// public caller resolving an owned resource (e.g. anonymous viewer playback)
+	// is throttled on its own IP bucket and cannot exhaust the owner's tenant bucket.
+	RateLimitTenantID *string
 }
 
 type AccessDecision struct {
@@ -260,8 +268,8 @@ var prepaidAllowlist = map[string]bool{
 // RateLimitMiddlewareWithX402 creates a Gin middleware with full x402 support
 // Includes both billing checks, x402 payment requirements in 402 responses,
 // AND X-PAYMENT header handling for settling x402 payments
-func RateLimitMiddlewareWithX402(rl *RateLimiter, getLimits func(tenantID string) (limit, burst int), billingChecker BillingChecker, x402Provider X402Provider, x402Settler X402Settler, x402Resolver x402.CommodoreClient) gin.HandlerFunc {
-	return rateLimitMiddlewareInternal(rl, getLimits, billingChecker, x402Provider, x402Settler, x402Resolver)
+func RateLimitMiddlewareWithX402(rl *RateLimiter, getLimits func(tenantID string) (limit, burst int), billingChecker BillingChecker, x402Provider X402Provider, x402Settler X402Settler, x402Resolver x402.CommodoreClient, tp *TrustedProxies) gin.HandlerFunc {
+	return rateLimitMiddlewareInternal(rl, getLimits, billingChecker, x402Provider, x402Settler, x402Resolver, tp)
 }
 
 // graphqlRequest represents a minimal GraphQL request for operation extraction
@@ -271,7 +279,7 @@ type graphqlRequest struct {
 }
 
 // rateLimitMiddlewareInternal is the internal implementation with optional x402 support
-func rateLimitMiddlewareInternal(rl *RateLimiter, getLimits func(tenantID string) (limit, burst int), billingChecker BillingChecker, x402Provider X402Provider, x402Settler X402Settler, x402Resolver x402.CommodoreClient) gin.HandlerFunc {
+func rateLimitMiddlewareInternal(rl *RateLimiter, getLimits func(tenantID string) (limit, burst int), billingChecker BillingChecker, x402Provider X402Provider, x402Settler X402Settler, x402Resolver x402.CommodoreClient, tp *TrustedProxies) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID, _ := c.Get(string(ctxkeys.KeyTenantID))
 		tenantIDStr, _ := tenantID.(string)
@@ -305,7 +313,7 @@ func rateLimitMiddlewareInternal(rl *RateLimiter, getLimits func(tenantID string
 
 		decision := EvaluateAccess(c.Request.Context(), AccessRequest{
 			TenantID:          tenantIDStr,
-			ClientIP:          c.ClientIP(),
+			ClientIP:          ClientIPFromRequestWithTrust(c.Request, tp),
 			Path:              resourcePath,
 			OperationName:     opName,
 			XPayment:          GetX402PaymentHeader(c.Request),
@@ -328,18 +336,35 @@ func rateLimitMiddlewareInternal(rl *RateLimiter, getLimits func(tenantID string
 }
 
 func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, getLimits func(tenantID string) (limit, burst int), billingChecker BillingChecker, x402Provider X402Provider, x402Settler X402Settler, x402Resolver x402.CommodoreClient, logger logging.Logger) AccessDecision {
+	// Normalize the client IP BEFORE building any "public:<ip>" bucket key, so an
+	// empty IP yields "public:unknown" (still classified public) rather than a bare
+	// "public:" that isPublicTenant would reject — which would drop the caller out
+	// of the public throttle.
+	if req.ClientIP == "" {
+		req.ClientIP = "unknown"
+	}
 	tenantID := req.TenantID
 	if tenantID == "" {
 		tenantID = "public:" + req.ClientIP
-	}
-	if req.ClientIP == "" {
-		req.ClientIP = "unknown"
 	}
 
 	headers := map[string]string{}
 	tenantIDStr := tenantID
 	isPublic := isPublicTenant(tenantIDStr)
 	x402Paid := req.X402Processed && !req.X402AuthOnly
+
+	// Rate-limit identity is separate from the billing/owner identity (tenantIDStr):
+	// a caller can supply its own tenant (empty → per-IP public bucket) so an
+	// anonymous request resolving an OWNED resource is bucketed on its own IP, not
+	// the resource owner's tenant. Defaults to the billing identity when unset.
+	rlTenant := tenantIDStr
+	if req.RateLimitTenantID != nil {
+		rlTenant = *req.RateLimitTenantID
+		if rlTenant == "" {
+			rlTenant = "public:" + req.ClientIP
+		}
+	}
+	rlIsPublic := isPublicTenant(rlTenant)
 
 	if req.XPayment != "" && x402Settler != nil && !req.X402Processed {
 		settleResult, settleErr := x402.SettleX402Payment(ctx, x402.SettlementOptions{
@@ -422,16 +447,42 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 		}
 	}
 
-	limit, burst := 0, 0
-	if getLimits != nil && !isPublic {
-		limit, burst = getLimits(tenantIDStr)
-	}
-
-	if isPublic {
+	// Public (unauthenticated) callers are still rate-limited, keyed per client IP
+	// via the "public:<ip>" bucket. This bounds abuse of the anonymous allowlisted
+	// endpoints (resolveIngestEndpoint, resolveViewerEndpoint, networkStatus, the
+	// public orchestrator topology fields, and the walletLogin/bootstrapEdge
+	// mutations) that would otherwise be unmetered. Limits are fixed, not
+	// tenant-derived. x402-paid callers are metered by payment, so they skip the
+	// per-IP throttle.
+	if rlIsPublic {
+		if rl == nil || x402Paid {
+			return AccessDecision{Allowed: true, Headers: headers}
+		}
+		limit, burst := publicRateLimits()
+		allowed, remaining, resetSeconds := rl.Allow(rlTenant, limit, burst)
+		headers["X-RateLimit-Limit"] = strconv.Itoa(limit)
+		headers["X-RateLimit-Remaining"] = strconv.Itoa(remaining)
+		headers["X-RateLimit-Reset"] = strconv.Itoa(resetSeconds)
+		if !allowed {
+			if logger != nil {
+				logger.WithFields(logging.Fields{
+					"client_ip":     req.ClientIP,
+					"limit":         limit,
+					"reset_seconds": resetSeconds,
+					"path":          req.Path,
+				}).Warn("Public rate limit exceeded")
+			}
+			return rateLimitExceededDecision(limit, resetSeconds, headers)
+		}
 		return AccessDecision{Allowed: true, Headers: headers}
 	}
 
-	allowed, remaining, resetSeconds := rl.Allow(tenantIDStr, limit, burst)
+	limit, burst := 0, 0
+	if getLimits != nil {
+		limit, burst = getLimits(rlTenant)
+	}
+
+	allowed, remaining, resetSeconds := rl.Allow(rlTenant, limit, burst)
 	headers["X-RateLimit-Limit"] = strconv.Itoa(limit)
 	headers["X-RateLimit-Remaining"] = strconv.Itoa(remaining)
 	headers["X-RateLimit-Reset"] = strconv.Itoa(resetSeconds)
@@ -439,35 +490,67 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 	if !allowed {
 		if logger != nil {
 			logger.WithFields(logging.Fields{
-				"tenant_id":     tenantIDStr,
-				"limit":         limit,
+				"tenant_id":     rlTenant,
 				"reset_seconds": resetSeconds,
+				"limit":         limit,
 				"path":          req.Path,
 			}).Warn("Rate limit exceeded")
 		}
-		headers["Retry-After"] = strconv.Itoa(resetSeconds)
-		docsURL := strings.TrimSpace(os.Getenv("DOCS_PUBLIC_URL"))
-		response := map[string]any{
-			"error":       "rate_limit_exceeded",
-			"message":     "Too many requests. Please retry after the specified time.",
-			"limit":       limit,
-			"retry_after": resetSeconds,
-		}
-		if docsURL != "" {
-			response["documentation"] = docsURL + "/api/rate-limits"
-		}
-		return AccessDecision{
-			Allowed: false,
-			Status:  http.StatusTooManyRequests,
-			Body:    response,
-			Headers: headers,
-		}
+		return rateLimitExceededDecision(limit, resetSeconds, headers)
 	}
 
 	return AccessDecision{
 		Allowed: true,
 		Headers: headers,
 	}
+}
+
+// rateLimitExceededDecision builds the shared 429 Too Many Requests response for
+// both authenticated (per-tenant) and public (per-IP) rate-limit rejections.
+func rateLimitExceededDecision(limit, resetSeconds int, headers map[string]string) AccessDecision {
+	headers["Retry-After"] = strconv.Itoa(resetSeconds)
+	docsURL := strings.TrimSpace(os.Getenv("DOCS_PUBLIC_URL"))
+	response := map[string]any{
+		"error":       "rate_limit_exceeded",
+		"message":     "Too many requests. Please retry after the specified time.",
+		"limit":       limit,
+		"retry_after": resetSeconds,
+	}
+	if docsURL != "" {
+		response["documentation"] = docsURL + "/api/rate-limits"
+	}
+	return AccessDecision{
+		Allowed: false,
+		Status:  http.StatusTooManyRequests,
+		Body:    response,
+		Headers: headers,
+	}
+}
+
+// Public (unauthenticated) request rate limits, applied per client IP. Kept low
+// since legitimate public callers hit these endpoints once per ingest/playback
+// start, not per frame. Overridable via env for operators behind shared NAT.
+const (
+	defaultPublicRateLimitPerMinute = 60
+	defaultPublicRateLimitBurst     = 30
+)
+
+// publicRateLimits returns the per-IP limit/burst for unauthenticated callers,
+// honoring PUBLIC_RATE_LIMIT_PER_MINUTE / PUBLIC_RATE_LIMIT_BURST when set to a
+// positive integer, otherwise the defaults.
+func publicRateLimits() (limit, burst int) {
+	limit, burst = defaultPublicRateLimitPerMinute, defaultPublicRateLimitBurst
+	if v := strings.TrimSpace(os.Getenv("PUBLIC_RATE_LIMIT_PER_MINUTE")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("PUBLIC_RATE_LIMIT_BURST")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			burst = n
+		}
+	}
+	return limit, burst
 }
 
 // build402Response builds the 402 Payment Required response

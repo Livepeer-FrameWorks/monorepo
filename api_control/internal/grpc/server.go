@@ -9028,31 +9028,21 @@ func (s *CommodoreServer) ResolveViewerEndpoint(ctx context.Context, req *shared
 			return resp, nil
 		}
 		streamID := resp.Metadata.GetStreamId()
-		if streamID != "" {
+		tenantID := resp.Metadata.GetTenantId()
+		// Enrichment is tenant-scoped only. If Foghorn didn't resolve a tenant we
+		// skip rather than run an unscoped stream lookup — no cross-tenant read path
+		// (mirrors finalizeIngestResponse).
+		if streamID != "" && tenantID != "" {
 			var title, description sql.NullString
-			if tenantID := resp.Metadata.GetTenantId(); tenantID != "" {
-				err := s.db.QueryRowContext(ctx, `
-					SELECT title, description FROM commodore.streams WHERE id = $1 AND tenant_id = $2
-				`, streamID, tenantID).Scan(&title, &description)
-				if err == nil {
-					if title.Valid && title.String != "" {
-						resp.Metadata.Title = &title.String
-					}
-					if description.Valid && description.String != "" {
-						resp.Metadata.Description = &description.String
-					}
+			err := s.db.QueryRowContext(ctx, `
+				SELECT title, description FROM commodore.streams WHERE id = $1 AND tenant_id = $2
+			`, streamID, tenantID).Scan(&title, &description)
+			if err == nil {
+				if title.Valid && title.String != "" {
+					resp.Metadata.Title = &title.String
 				}
-			} else {
-				err := s.db.QueryRowContext(ctx, `
-					SELECT title, description FROM commodore.streams WHERE id = $1
-				`, streamID).Scan(&title, &description)
-				if err == nil {
-					if title.Valid && title.String != "" {
-						resp.Metadata.Title = &title.String
-					}
-					if description.Valid && description.String != "" {
-						resp.Metadata.Description = &description.String
-					}
+				if description.Valid && description.String != "" {
+					resp.Metadata.Description = &description.String
 				}
 			}
 			// Silently ignore errors - enrichment is best-effort, don't fail the request
@@ -9117,38 +9107,79 @@ func (s *CommodoreServer) ResolveIngestEndpoint(ctx context.Context, req *shared
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
-	// Enrich metadata with stream info from Commodore's database (best-effort)
-	if resp.Metadata != nil && resp.Metadata.StreamId != "" {
-		var title, description sql.NullString
-		if resp.Metadata.TenantId != "" {
-			err := s.db.QueryRowContext(ctx, `
-				SELECT title, description FROM commodore.streams WHERE id = $1 AND tenant_id = $2
-			`, resp.Metadata.StreamId, resp.Metadata.TenantId).Scan(&title, &description)
-			if err == nil {
-				if title.Valid && title.String != "" {
-					resp.Metadata.Title = &title.String
-				}
-				if description.Valid && description.String != "" {
-					resp.Metadata.Description = &description.String
-				}
-			}
-		} else {
-			err := s.db.QueryRowContext(ctx, `
-				SELECT title, description FROM commodore.streams WHERE id = $1
-			`, resp.Metadata.StreamId).Scan(&title, &description)
-			if err == nil {
-				if title.Valid && title.String != "" {
-					resp.Metadata.Title = &title.String
-				}
-				if description.Valid && description.String != "" {
-					resp.Metadata.Description = &description.String
-				}
-			}
-		}
-		// Silently ignore errors - enrichment is best-effort
-	}
+	s.finalizeIngestResponse(ctx, tenantID, resp)
 
 	return resp, nil
+}
+
+// finalizeIngestResponse enriches ingest metadata with tenant-scoped stream info
+// and, for any non-owner resolve (anonymous, or an authenticated caller whose
+// tenant does not match the stream's), strips fields a bare key-holder must not
+// receive. Extracted from ResolveIngestEndpoint so the trust boundary is
+// unit-testable without a live Foghorn.
+func (s *CommodoreServer) finalizeIngestResponse(ctx context.Context, callerTenantID string, resp *sharedpb.IngestEndpointResponse) {
+	if resp == nil || resp.Metadata == nil {
+		return
+	}
+	md := resp.Metadata
+
+	// Ownership is tenant match, not merely "is authenticated": resolveIngestEndpoint
+	// is an allowlisted query that accepts an optional JWT, so an authenticated caller
+	// from another tenant must NOT be treated as the owner.
+	isOwner := callerTenantID != "" && callerTenantID == md.TenantId
+
+	// Title/description are authoritative from Commodore's own tenant-scoped lookup
+	// below — never trusted from the upstream (Foghorn) response. Clear any echoed
+	// values first so a non-owner cannot retain metadata we did not derive under
+	// their own tenant scope.
+	md.Title = nil
+	md.Description = nil
+
+	// Enrich metadata with stream info from Commodore's database (best-effort).
+	// Scope to the CALLER's tenant when authenticated, so a signed-in non-owner
+	// cannot read another tenant's stream row; anonymous callers scope to the
+	// tenant Foghorn resolved from the key. If neither is known, skip — never an
+	// unscoped query.
+	if md.StreamId != "" {
+		scopeTenant := callerTenantID
+		if scopeTenant == "" {
+			scopeTenant = md.TenantId
+		}
+		if scopeTenant != "" {
+			var title, description sql.NullString
+			err := s.db.QueryRowContext(ctx, `
+				SELECT title, description FROM commodore.streams WHERE id = $1 AND tenant_id = $2
+			`, md.StreamId, scopeTenant).Scan(&title, &description)
+			if err == nil {
+				if title.Valid && title.String != "" {
+					md.Title = &title.String
+				}
+				if description.Valid && description.String != "" {
+					md.Description = &description.String
+				}
+			}
+			// Silently ignore errors - enrichment is best-effort
+		}
+	}
+
+	// The echoed stream key and owning tenant are returned ONLY to the owning
+	// tenant. An anonymous caller or an authenticated caller whose tenant does not
+	// match the resolved stream's tenant is not the owner and receives neither — a
+	// bare key-holder already has the key and must not learn tenancy.
+	if !isOwner {
+		stripSensitiveIngestMetadata(md)
+	}
+}
+
+// stripSensitiveIngestMetadata clears fields a non-owner ingest resolve must not
+// return: the echoed stream key and the owning tenant ID. Callers decide who is a
+// non-owner (anonymous, or an authenticated caller whose tenant does not match).
+func stripSensitiveIngestMetadata(md *sharedpb.IngestMetadata) {
+	if md == nil {
+		return
+	}
+	md.StreamKey = ""
+	md.TenantId = ""
 }
 
 // ============================================================================

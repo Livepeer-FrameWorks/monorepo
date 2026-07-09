@@ -39,6 +39,7 @@ func (m *mockPurser) SettleX402Payment(ctx context.Context, tenantID string, pay
 type mockCommodore struct {
 	resolvePlaybackIDFn         func(ctx context.Context, playbackID string) (*commodorepb.ResolvePlaybackIDResponse, error)
 	resolveArtifactPlaybackIDFn func(ctx context.Context, playbackID string) (*commodorepb.ResolveArtifactPlaybackIDResponse, error)
+	resolveChapterPlaybackIDFn  func(ctx context.Context, playbackID string) (*commodorepb.ResolveChapterPlaybackIDResponse, error)
 	resolveClipHashFn           func(ctx context.Context, clipHash string) (*commodorepb.ResolveClipHashResponse, error)
 	resolveDVRHashFn            func(ctx context.Context, dvrHash string) (*commodorepb.ResolveDVRHashResponse, error)
 	resolveIdentifierFn         func(ctx context.Context, identifier string) (*commodorepb.ResolveIdentifierResponse, error)
@@ -58,6 +59,13 @@ func (m *mockCommodore) ResolveArtifactPlaybackID(ctx context.Context, playbackI
 		return nil, nil
 	}
 	return m.resolveArtifactPlaybackIDFn(ctx, playbackID)
+}
+
+func (m *mockCommodore) ResolveChapterPlaybackID(ctx context.Context, playbackID string) (*commodorepb.ResolveChapterPlaybackIDResponse, error) {
+	if m.resolveChapterPlaybackIDFn == nil {
+		return nil, nil
+	}
+	return m.resolveChapterPlaybackIDFn(ctx, playbackID)
 }
 
 func (m *mockCommodore) ResolveClipHash(ctx context.Context, clipHash string) (*commodorepb.ResolveClipHashResponse, error) {
@@ -250,6 +258,21 @@ func TestResolveResource(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if resolution.Kind != ResourceKindViewer || !resolution.Resolved {
+			t.Fatalf("unexpected resolution: %+v", resolution)
+		}
+	})
+
+	t.Run("viewer resolves DVR chapter playback (distinct resolver)", func(t *testing.T) {
+		commodore := &mockCommodore{
+			resolveChapterPlaybackIDFn: func(_ context.Context, playbackID string) (*commodorepb.ResolveChapterPlaybackIDResponse, error) {
+				return &commodorepb.ResolveChapterPlaybackIDResponse{Found: true, TenantId: "tenant-ch"}, nil
+			},
+		}
+		resolution, err := ResolveResource(ctx, "viewer://chapter-pid", commodore)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resolution.Kind != ResourceKindViewer || !resolution.Resolved || resolution.TenantID != "tenant-ch" {
 			t.Fatalf("unexpected resolution: %+v", resolution)
 		}
 	})

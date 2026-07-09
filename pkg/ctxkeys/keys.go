@@ -73,11 +73,23 @@ const (
 	KeyGraphQLOperationName Key = "graphql_operation_name"
 	KeyGraphQLComplexity    Key = "graphql_complexity"
 	KeyGraphQLErrorCount    Key = "graphql_error_count"
+	// KeyPlaybackContentID carries the canonical viewer playback_id resolved from a
+	// (possibly Relay/global) content_id, so the MCP access middleware and the tool
+	// handler share one normalization instead of resolving twice.
+	KeyPlaybackContentID Key = "playback_content_id"
 )
 
 // GetTenantID extracts tenant_id from context.
 func GetTenantID(ctx context.Context) string {
 	if v, ok := ctx.Value(KeyTenantID).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// GetPlaybackContentID extracts the pre-resolved canonical playback_id from context.
+func GetPlaybackContentID(ctx context.Context) string {
+	if v, ok := ctx.Value(KeyPlaybackContentID).(string); ok {
 		return v
 	}
 	return ""

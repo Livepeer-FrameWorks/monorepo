@@ -52,8 +52,11 @@ type CreateClipInput struct {
 // CreateClipResult represents the result of creating a clip.
 type CreateClipResult struct {
 	ClipHash string `json:"clip_hash"`
-	Status   string `json:"status"`
-	Message  string `json:"message"`
+	// PlaybackID is the public playback_id — the canonical identifier to pass to
+	// resolve_playback_endpoint for viewing (prefer this over the clip_hash).
+	PlaybackID string `json:"playback_id,omitempty"`
+	Status     string `json:"status"`
+	Message    string `json:"message"`
 }
 
 func handleCreateClip(ctx context.Context, args CreateClipInput, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -99,9 +102,10 @@ func handleCreateClip(ctx context.Context, args CreateClipInput, clients *client
 	}
 
 	result := CreateClipResult{
-		ClipHash: resp.ClipHash,
-		Status:   resp.Status,
-		Message:  fmt.Sprintf("Clip creation started. Hash: %s. Status: %s", resp.ClipHash, resp.Status),
+		ClipHash:   resp.ClipHash,
+		PlaybackID: resp.PlaybackId,
+		Status:     resp.Status,
+		Message:    fmt.Sprintf("Clip creation started. Hash: %s. Status: %s", resp.ClipHash, resp.Status),
 	}
 
 	return toolSuccess(result)

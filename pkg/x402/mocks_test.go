@@ -42,6 +42,8 @@ type MockCommodoreClient struct {
 	PlaybackError            error
 	ArtifactPlaybackResponse *commodorepb.ResolveArtifactPlaybackIDResponse
 	ArtifactPlaybackError    error
+	ChapterPlaybackResponse  *commodorepb.ResolveChapterPlaybackIDResponse
+	ChapterPlaybackError     error
 	ClipResponse             *commodorepb.ResolveClipHashResponse
 	ClipError                error
 	DVRResponse              *commodorepb.ResolveDVRHashResponse
@@ -60,6 +62,10 @@ func (m *MockCommodoreClient) ResolvePlaybackID(ctx context.Context, playbackID 
 
 func (m *MockCommodoreClient) ResolveArtifactPlaybackID(ctx context.Context, playbackID string) (*commodorepb.ResolveArtifactPlaybackIDResponse, error) {
 	return m.ArtifactPlaybackResponse, m.ArtifactPlaybackError
+}
+
+func (m *MockCommodoreClient) ResolveChapterPlaybackID(ctx context.Context, playbackID string) (*commodorepb.ResolveChapterPlaybackIDResponse, error) {
+	return m.ChapterPlaybackResponse, m.ChapterPlaybackError
 }
 
 func (m *MockCommodoreClient) ResolveClipHash(ctx context.Context, clipHash string) (*commodorepb.ResolveClipHashResponse, error) {

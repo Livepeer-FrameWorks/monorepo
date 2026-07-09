@@ -9,6 +9,7 @@ import (
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 	"google.golang.org/protobuf/proto"
 )
@@ -305,4 +306,41 @@ func TestFormatRuntimePlacementRejects(t *testing.T) {
 	if strings.Count(got, "; ") != 2 {
 		t.Errorf("expected 2 separators in %q", got)
 	}
+}
+
+// stripSensitiveIngestMetadata protects non-owner ingest resolves: a bare
+// stream-key holder must not get the key echoed back or learn the owning tenant.
+// Only the owning tenant keeps these fields (see finalizeIngestResponse).
+func TestStripSensitiveIngestMetadata(t *testing.T) {
+	md := &sharedpb.IngestMetadata{
+		StreamId:         "stream-123",
+		StreamKey:        "sk_secret",
+		TenantId:         "tenant-abc",
+		RecordingEnabled: true,
+		Title:            proto.String("My Stream"),
+	}
+
+	stripSensitiveIngestMetadata(md)
+
+	if md.StreamKey != "" {
+		t.Errorf("stream key not cleared: %q", md.StreamKey)
+	}
+	if md.TenantId != "" {
+		t.Errorf("tenant id not cleared: %q", md.TenantId)
+	}
+	// Non-sensitive fields must survive so the caller can still publish/record.
+	if md.StreamId != "stream-123" {
+		t.Errorf("stream id was altered: %q", md.StreamId)
+	}
+	if !md.RecordingEnabled {
+		t.Error("recording flag was altered")
+	}
+	if md.GetTitle() != "My Stream" {
+		t.Errorf("title was altered: %q", md.GetTitle())
+	}
+}
+
+// A nil metadata (Foghorn returned none) must be a no-op, not a panic.
+func TestStripSensitiveIngestMetadataNil(t *testing.T) {
+	stripSensitiveIngestMetadata(nil)
 }

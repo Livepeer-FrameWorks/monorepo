@@ -77,7 +77,10 @@ func RequireJWTAuth(secret []byte) gin.HandlerFunc {
 // Flow:
 // 1. WebSocket upgrades → pass through (auth in InitFunc)
 // 2. POST requests → check allowlist FIRST
-//   - If allowlisted → proceed anonymously (ignore any tokens)
+//   - If allowlisted → do NOT require auth, but apply an OPTIONAL JWT when one is
+//     present so the caller's tenant/identity is available downstream (e.g. to
+//     preserve owner-only fields on resolveIngestEndpoint). A missing or invalid
+//     token is ignored, not rejected — the request still proceeds.
 //   - If not allowlisted and no auth is provided → return a 402 x402 challenge
 //   - If not allowlisted and auth is provided → require valid auth
 //
@@ -102,7 +105,9 @@ func PublicOrJWTAuth(secret []byte, serviceClients *clients.ServiceClients) gin.
 			// Restore body for downstream handler
 			c.Request.Body = io.NopCloser(bytes.NewReader(body))
 
-			// If allowlisted, proceed anonymously (ignore any tokens sent)
+			// If allowlisted, don't require auth — but apply an optional JWT when
+			// present so downstream can attribute the caller (invalid/stale tokens
+			// are ignored, not rejected).
 			if isAllowlistedQuery(body) {
 				if authResult := optionalJWTAuthResult(c.Request, secret); authResult != nil {
 					c.Set(string(ctxkeys.KeyUserID), authResult.UserID)

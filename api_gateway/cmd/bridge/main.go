@@ -591,7 +591,7 @@ func main() {
 	// IMPORTANT: WebSocket upgrades may authenticate in the GraphQL WS InitFunc (connectionParams),
 	// so rate limiting must not run before that auth has a chance to set tenant context.
 	graphqlHTTPMiddleware := []gin.HandlerFunc{
-		middleware.RateLimitMiddlewareWithX402(rateLimiter, tenantCache.GetLimitsFunc(), tenantCache, serviceClients.Purser, serviceClients.Purser, serviceClients.Commodore),
+		middleware.RateLimitMiddlewareWithX402(rateLimiter, tenantCache.GetLimitsFunc(), tenantCache, serviceClients.Purser, serviceClients.Purser, serviceClients.Commodore, trustedProxies),
 		middleware.GraphQLContextMiddleware(serviceToken),
 		middleware.GraphQLAttachLoaders(serviceClients),
 		middleware.UsageTrackerMiddleware(usageTracker),

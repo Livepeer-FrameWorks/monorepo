@@ -7,7 +7,7 @@ import (
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/mcp/preflight"
 	"frameworks/api_gateway/internal/resolvers"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -19,7 +19,7 @@ func RegisterPlaybackTools(server *mcp.Server, clients *clients.ServiceClients, 
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "resolve_playback_endpoint",
-			Description: "Resolve playback URLs for a stream or VOD content. Returns primary and fallback endpoints, plus thumbnail and sprite preview URLs when available.",
+			Description: "Resolve playback URLs for a live stream, VOD, clip, or DVR recording. Returns primary and fallback endpoints, plus thumbnail and sprite preview URLs when available.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args ResolvePlaybackInput) (*mcp.CallToolResult, any, error) {
 			return handleResolvePlayback(ctx, args, clients, logger)
@@ -29,7 +29,7 @@ func RegisterPlaybackTools(server *mcp.Server, clients *clients.ServiceClients, 
 
 // ResolvePlaybackInput represents input for resolve_playback_endpoint tool.
 type ResolvePlaybackInput struct {
-	ContentID string `json:"content_id" jsonschema:"required" jsonschema_description:"Content ID (playback_id, stream_id, or Relay ID)"`
+	ContentID string `json:"content_id" jsonschema:"required" jsonschema_description:"Public playback_id (live, VOD, clip, or DVR), or a FrameWorks global ID (Stream/Clip/VodAsset). A raw internal stream UUID / stream_id / internal_name is not accepted — use the playback_id."`
 	ViewerIP  string `json:"viewer_ip,omitempty" jsonschema_description:"Viewer IP for geo-routing (optional)"`
 }
 
@@ -61,20 +61,16 @@ func handleResolvePlayback(ctx context.Context, args ResolvePlaybackInput, clien
 		return toolError("content_id is required")
 	}
 
-	contentID := args.ContentID
-	if typ, id, ok := globalid.Decode(args.ContentID); ok {
-		switch typ {
-		case globalid.TypeStream:
-			contentID = id
-		case globalid.TypeVodAsset:
-			artifactHash, err := resolveVodIdentifier(ctx, args.ContentID, clients)
-			if err != nil {
-				return toolError(err.Error())
-			}
-			contentID = artifactHash
-		default:
-			return toolError(fmt.Sprintf("unsupported relay ID type: %s", typ))
+	// The MCP access middleware normalizes content_id once and stashes the canonical
+	// playback_id; reuse it to avoid re-resolving. Fall back to normalizing here if
+	// it's absent (e.g. middleware normalization failed or was skipped).
+	contentID := ctxkeys.GetPlaybackContentID(ctx)
+	if contentID == "" {
+		normalized, _, nErr := NormalizePlaybackContent(ctx, args.ContentID, clients)
+		if nErr != nil {
+			return toolError(nErr.Error())
 		}
+		contentID = normalized
 	}
 
 	// Call Commodore to resolve viewer endpoint

@@ -57,6 +57,7 @@ type PurserClient interface {
 type CommodoreClient interface {
 	ResolvePlaybackID(ctx context.Context, playbackID string) (*commodorepb.ResolvePlaybackIDResponse, error)
 	ResolveArtifactPlaybackID(ctx context.Context, playbackID string) (*commodorepb.ResolveArtifactPlaybackIDResponse, error)
+	ResolveChapterPlaybackID(ctx context.Context, playbackID string) (*commodorepb.ResolveChapterPlaybackIDResponse, error)
 	ResolveClipHash(ctx context.Context, clipHash string) (*commodorepb.ResolveClipHashResponse, error)
 	ResolveDVRHash(ctx context.Context, dvrHash string) (*commodorepb.ResolveDVRHashResponse, error)
 	ResolveIdentifier(ctx context.Context, identifier string) (*commodorepb.ResolveIdentifierResponse, error)
@@ -332,6 +333,16 @@ func ResolveResource(ctx context.Context, resource string, commodore CommodoreCl
 			}, nil
 		}
 		if resp, err := commodore.ResolvePlaybackID(ctxTimeout, raw); err == nil && resp != nil && resp.TenantId != "" {
+			return &ResourceResolution{
+				Resource: "viewer://" + raw,
+				Kind:     ResourceKindViewer,
+				TenantID: resp.TenantId,
+				Resolved: true,
+			}, nil
+		}
+		// DVR chapter playback IDs are a distinct public playback_id class with
+		// their own resolver (not covered by ResolveArtifactPlaybackID).
+		if resp, err := commodore.ResolveChapterPlaybackID(ctxTimeout, raw); err == nil && resp != nil && resp.Found && resp.TenantId != "" {
 			return &ResourceResolution{
 				Resource: "viewer://" + raw,
 				Kind:     ResourceKindViewer,

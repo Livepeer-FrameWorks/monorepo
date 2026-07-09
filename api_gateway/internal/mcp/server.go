@@ -317,14 +317,26 @@ func (s *Server) registerAccessMiddleware() {
 
 			resourcePath := mcpOperationResourcePath(opName, req.GetParams())
 			tenantID := ctxkeys.GetTenantID(ctx)
-			contentID := ""
+			// rateLimitTenantID decouples the rate-limit bucket from the billing
+			// tenant when they differ (playback resolves to the stream OWNER for
+			// billing, but must be throttled on the CALLER's identity).
+			var rateLimitTenantID *string
 			if opName == "mcp:tools/call:resolve_playback_endpoint" {
-				contentID = extractPlaybackContentID(req.GetParams())
-				if contentID != "" {
-					if ownerTenantID := s.resolvePlaybackOwnerTenant(ctx, contentID); ownerTenantID != "" {
-						tenantID = ownerTenantID
-						ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, ownerTenantID)
-						resourcePath = "viewer://" + contentID
+				if raw := extractPlaybackContentID(req.GetParams()); raw != "" {
+					// Normalize once (Relay/global IDs → canonical playback_id) and share
+					// it with the handler via ctx. Owner attribution and viewer:// x402
+					// key off the canonical playback_id, not the raw (possibly Relay) input.
+					playbackID, ownerTenantID, nErr := tools.NormalizePlaybackContent(ctx, raw, s.serviceClients)
+					if nErr == nil && playbackID != "" {
+						ctx = context.WithValue(ctx, ctxkeys.KeyPlaybackContentID, playbackID)
+						resourcePath = "viewer://" + playbackID
+						if ownerTenantID != "" {
+							// Billing switches to the content owner; the rate-limit bucket
+							// stays the caller's so an anonymous viewer can't exhaust the
+							// owner's tenant bucket (see mcpAccessIdentity).
+							tenantID, rateLimitTenantID = mcpAccessIdentity(tenantID, ownerTenantID)
+							ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, tenantID)
+						}
 					}
 				}
 			} else if tenantID == "" && xPayment != "" {
@@ -334,14 +346,18 @@ func (s *Server) registerAccessMiddleware() {
 
 			publicAllowlisted := isPublicMCPOperation(opName)
 
-			// Unauthenticated metadata operations (initialize, list tools/resources/prompts)
-			// bypass access control — they don't need rate limiting or billing checks.
-			if tenantID == "" && publicAllowlisted {
+			// Only true protocol-metadata operations (initialize, list/get) bypass
+			// access control entirely — they carry no billable work and predate auth.
+			// Public *tool/resource* calls (payment, playback, marketplace) still flow
+			// through EvaluateAccess so the per-IP public rate limit applies to them,
+			// same as the public GraphQL surface.
+			if tenantID == "" && isPublicMCPMetadataOperation(opName) {
 				return next(ctx, method, req)
 			}
 
 			decision := middleware.EvaluateAccess(ctx, middleware.AccessRequest{
 				TenantID:          tenantID,
+				RateLimitTenantID: rateLimitTenantID,
 				ClientIP:          clientIP,
 				Path:              resourcePath,
 				OperationName:     opName,
@@ -608,20 +624,34 @@ func getMcpArgString(params mcp.Params, keys ...string) string {
 }
 
 func isPublicMCPOperation(opName string) bool {
+	if isPublicMCPMetadataOperation(opName) {
+		return true
+	}
 	switch opName {
-	case "mcp:tools/list",
-		"mcp:resources/list",
-		"mcp:resources/templates/list",
-		"mcp:prompts/list",
-		"mcp:prompts/get",
-		"mcp:initialize",
-		"mcp:tools/call:get_payment_options",
+	case "mcp:tools/call:get_payment_options",
 		"mcp:tools/call:submit_payment",
 		"mcp:tools/call:resolve_playback_endpoint",
 		"mcp:tools/call:browse_marketplace",
 		"mcp:resources/read:account://status",
 		"mcp:resources/read:billing://pricing",
 		"mcp:resources/read:clusters://marketplace":
+		return true
+	default:
+		return false
+	}
+}
+
+// isPublicMCPMetadataOperation is the subset of public operations that carry no
+// billable work and may skip access control entirely (protocol discovery). Public
+// tool/resource *calls* are deliberately excluded so they are rate-limited.
+func isPublicMCPMetadataOperation(opName string) bool {
+	switch opName {
+	case "mcp:tools/list",
+		"mcp:resources/list",
+		"mcp:resources/templates/list",
+		"mcp:prompts/list",
+		"mcp:prompts/get",
+		"mcp:initialize":
 		return true
 	default:
 		return false
@@ -690,17 +720,18 @@ func extractPlaybackContentID(params mcp.Params) string {
 	return ""
 }
 
-func (s *Server) resolvePlaybackOwnerTenant(ctx context.Context, contentID string) string {
-	if contentID == "" || s.serviceClients == nil || s.serviceClients.Commodore == nil {
-		return ""
+// mcpAccessIdentity decides the billing tenant and the caller's rate-limit identity
+// for a playback resolve that maps to a stream owner. Billing switches to the owner
+// (so a delinquent owner's streams don't play), while the rate-limit bucket stays
+// the caller's — an empty caller means anonymous → per-IP bucket — so an anonymous
+// viewer cannot exhaust the owner's tenant bucket. When no owner is resolved the
+// caller remains the billing tenant with no decoupling (nil).
+func mcpAccessIdentity(callerTenantID, ownerTenantID string) (billingTenantID string, rateLimitTenantID *string) {
+	if ownerTenantID == "" {
+		return callerTenantID, nil
 	}
-	if resp, err := s.serviceClients.Commodore.ResolveArtifactPlaybackID(ctx, contentID); err == nil && resp.Found && resp.TenantId != "" {
-		return resp.TenantId
-	}
-	if resp, err := s.serviceClients.Commodore.ResolvePlaybackID(ctx, contentID); err == nil && resp.TenantId != "" {
-		return resp.TenantId
-	}
-	return ""
+	caller := callerTenantID
+	return ownerTenantID, &caller
 }
 
 func (s *Server) applyX402Auth(ctx context.Context, xPayment, clientIP string) context.Context {
