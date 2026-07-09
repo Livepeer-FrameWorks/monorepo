@@ -205,9 +205,9 @@ const Analytics = () => {
                   underlineAlign="start"
                 >
                   <p className="analytics-intro">
-                    QoE comes from the viewer's browser, not just the origin buffer: rebuffering,
-                    frame drops and bitrate over time, plus a time-to-first-frame waterfall that
-                    splits gateway resolve, Mist hydrate and prebuffer.
+                    QoE is measured in the viewer's browser: rebuffering, frame drops, bitrate over
+                    time, and a time-to-first-frame waterfall that splits gateway resolve, Mist
+                    hydrate and prebuffer.
                   </p>
                 </HeadlineStack>
                 <IconList

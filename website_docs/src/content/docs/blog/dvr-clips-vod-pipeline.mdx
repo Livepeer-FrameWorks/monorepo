@@ -1,0 +1,57 @@
+---
+title: "DVR, Clips, and VOD: What Happens After the Live Edge"
+date: 2026-06-08
+authors:
+  - frameworks
+excerpt: "A live stream is a ring buffer on an edge node. Everything that outlives it — DVR archives, chapters, clips, VOD — has to be copied out before the buffer moves on. How that pipeline works, including across clusters."
+tags:
+  - engineering
+  - architecture
+  - dvr
+---
+
+A live stream, at the edge, is a ring buffer. MistServer keeps a bounded window of segments on disk, old ones fall off the back, and when the stream ends the buffer eventually stops mattering. Everything that outlives the broadcast — the seekable archive, the highlight clip, the uploaded VOD — has to be copied out of that buffer before it disappears. This post walks through that pipeline.
+
+## Three clocks
+
+The design that made DVR tractable for us was separating three timescales that look related but aren't.
+
+The **live DVR window** is what a viewer can scrub back through while the stream is up. It's sized per billing tier and lives on the edge node.
+
+The **stream session** is the recording itself. One session produces one DVR artifact, with no per-artifact length cap — a channel that streams for 90 days straight is one artifact. A stream that ends and comes back an hour later starts a new one.
+
+**Retention** is how long the archive survives after the stream ends: the tier's retention period, counted from the moment the session finalized. The retention policy is snapshotted when the recording starts, so a mid-stream plan change never silently shortens an archive that's already recording. An active recording is invisible to retention entirely; the clock starts at the end.
+
+Underneath all three sits the source of truth: a per-segment ledger in Foghorn's database. Every recorded segment gets a row with a monotonically assigned sequence number, its start and end timestamps in stream media time, its storage key, and its status. There are no manifest files in object storage to keep consistent — playlists are generated from the ledger when something needs one.
+
+## Chapters, and why the archive is never one file
+
+A 90-day artifact is unmanageable as a unit, so replay works through **chapters**: bounded slices of the archive, each finalized into its own VOD artifact. Chapters are cut either at a fixed size matching the tier's window, or on fixed UTC intervals (hourly at minimum, anchored to the epoch, so chapter boundaries are predictable without knowing when the stream started).
+
+Finalizing a chapter is a processing job. The sidecar builds a temporary HLS playlist over the chapter's segments — with program-date-time tags derived from the ledger, so wall-clock timing survives the conversion — and Mist remuxes it into a canonical MKV. A thumbnailer pass generates the poster and sprite track, and a follow-up step produces the seek-index sidecar. From that point the chapter is playable; a later "freeze" step uploads the MKV to object storage, after which the chapter is fully cold and the temporary per-segment copies can be reclaimed.
+
+The chapter lifecycle is a straight line: open → closed → finalizing → finalized → frozen → reclaimed. Playback is legal from `finalized` onward. If a chapter can't finalize because its source segments are gone, it fails explicitly rather than producing a shorter file that pretends to be complete.
+
+## Clips are processing jobs too
+
+Clipping used to be its own bespoke path; it's now the same processing-job machinery with a different source. A clip request records an artifact in `requested` state, resolves what it's cutting from — the live buffer, the rolling DVR window, or an already-finalized chapter — and queues a job that produces a canonical MKV. The job carries the source kind, the time range, and the output name; a failed job marks the artifact failed and emits a lifecycle event, so the dashboard shows "clip failed" instead of a spinner that never resolves.
+
+Lifecycle events for all of this flow through the same analytics backbone as everything else: sidecar to Foghorn to Kafka, landing in ClickHouse for state queries and in the WebSocket layer for live UI updates. The clips panel in the dashboard is a materialized view of those events, joined with the business metadata (titles, ownership, retention) that lives in Commodore.
+
+## Across clusters
+
+Federation made streams portable between clusters; artifacts needed the same treatment, with one extra wrinkle — the bytes are big and mostly cold.
+
+Reads go through a single RPC to the cluster that owns the artifact. If the artifact has been frozen to object storage, the owner answers with a presigned download URL and the requesting cluster never touches the media path. If freezing hasn't finished but an origin node still holds the complete file, the owner can answer with a relay URL that serves the bytes from that node directly — no waiting for the S3 sync, and no storage credentials shared between clusters. If neither is true yet, the answer is a plain 503: the freeze pipeline is already moving the bytes, and a later attempt will succeed without anyone running a polling loop.
+
+Whole DVR artifacts are excluded from that surface. A remote cluster can't ask for "the 90-day archive" — replay is always through chapters, which are just VOD artifacts and follow the same rules as any other.
+
+Writes federate too. When a cluster needs to store artifact bytes it doesn't have local storage for, it delegates to the cluster that owns the storage, which verifies it actually _is_ the owner — right cluster, and its configured storage backend matches what the topology service advertises — before minting upload URLs. A cluster can't be tricked into signing uploads into someone else's bucket.
+
+## Cleanup and thumbnails
+
+Cleanup is layered. Edges evict local DVR segments under disk pressure, oldest first, because object storage holds the durable copy. Expired artifacts are soft-deleted first and hard-deleted (database and storage) only after a 30-day grace window. Orphaned local files get a periodic sweep. Reclaiming a chapter's temporary segments is two-phase — local deletion confirmed before the cold copies go — so a crash between the phases leaves extra data, never missing data.
+
+Thumbnails ride the same rails: the poster and a 10×10 sprite grid of 160×90 frames per chapter or clip, addressed by stable artifact identifiers, served through a small caching asset service, with a WebVTT index so players can show scrub previews without downloading video.
+
+The failure this whole design guards against is the segment ledger and object storage disagreeing about what exists — which is why the ledger is the single source of truth and every cleanup phase deletes only after the durable copy is confirmed. Docs: [DVR chapters](/builders/dvr-chapters), [clips](/builders/clips), [recordings](/builders/recordings), [storage and retention](/builders/storage-and-retention), and the operator's view in [DVR operations](/operators/dvr).

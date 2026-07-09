@@ -562,7 +562,7 @@ cluster_id: regional-production
 cluster_manifest: cluster.yaml
 enrollment_token: fw_edge_...
 hosts_file: clusters/edge/hosts.enc.yaml
-mode: docker
+mode: container
 capabilities: [ingest, edge, storage, processing]
 bandwidth_mbps: 2000
 max_transcodes: 4
@@ -589,7 +589,7 @@ on the `frameworks edge provision` command when an explicit key is needed.
 - `enrollment_token` (optional) - Token used for edge bootstrap
 - `hosts_file` (optional) - SOPS-encrypted edge host inventory
 - `fetch_cert` (deprecated) - Ignored for edge manifests; enrolled edge TLS is delivered by Foghorn `ConfigSeed`
-- `mode` (optional) - Default node mode, `docker` by default or `native`
+- `mode` (optional) - Default node mode: `container` (default; single edge image) or `native`. `docker` is a deprecated alias for `container`.
 - `capabilities` (optional) - Default enabled Helmsman capabilities: `ingest`, `edge`, `storage`, `processing`. Empty means all capabilities enabled.
 - `bandwidth_mbps` (optional) - Default node bandwidth limit advertised by Helmsman and reconciled into MistServer `bwlimit`.
 - `max_transcodes` (optional) - Default local transcoding concurrency limit reported by Helmsman.
@@ -606,7 +606,7 @@ Edge telemetry ingress is control-plane managed. Enrolled edge nodes receive rem
 - `region` (optional)
 - `apply_tune` (optional)
 - `register_qm` (optional)
-- `mode` (optional) - Per-node override, `docker` or `native`
+- `mode` (optional) - Per-node override, `container` or `native` (`docker` is a deprecated alias for `container`)
 - `capabilities` (optional) - Per-node override for enabled capabilities
 - `bandwidth_mbps` (optional) - Per-node bandwidth override
 - `max_transcodes` (optional) - Per-node transcode limit override

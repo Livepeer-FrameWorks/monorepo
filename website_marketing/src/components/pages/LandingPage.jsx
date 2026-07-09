@@ -158,7 +158,7 @@ const LandingPage = () => {
     {
       title: "Developer-First",
       description:
-        "Typed SDKs over a GraphQL API. Agents discover via skill.json, authenticate with a wallet, and pay through MCP — no human handoff.",
+        "Typed SDKs over a GraphQL API. Agents discover via skill.json, authenticate with a wallet, and pay through MCP.",
       icon: CodeBracketIcon,
       tone: "accent",
       badge: "Core",
@@ -166,7 +166,7 @@ const LandingPage = () => {
     {
       title: "End-to-End Analytics",
       description:
-        "Routing decisions, QoE metrics, and player telemetry — so you can see why viewer X connected to edge Y.",
+        "Routing decisions, QoE metrics, and player telemetry show why viewer X connected to edge Y.",
       icon: ChartBarIcon,
       tone: "green",
       badge: "Core",
@@ -233,10 +233,11 @@ const LandingPage = () => {
       name: "Pay As You Go",
       price: "€0.00055",
       period: "/delivered min",
-      description: "Pay only when you use it. Built for agents — works for humans too.",
+      description:
+        "Pay only when you use it. Wallet-friendly, with account controls for operators.",
       features: [
         "No subscription, no commitment",
-        "Wallet auth — no email, no signup form",
+        "Wallet auth with no email or signup form",
         "Top up via card, crypto, or gasless USDC",
         "Same rates as subscription tiers",
       ],
@@ -347,7 +348,7 @@ const LandingPage = () => {
                     </span>
                   </div>
                   <p className="hero-player-card__subhead">
-                    Adaptive playback — WASM, WebCodecs, every protocol
+                    Adaptive playback across WASM, WebCodecs, and every protocol
                   </p>
                   <p className="hero-player-card__caption">
                     Auto-negotiates transport and codec per device. Fully embeddable.
@@ -659,7 +660,7 @@ const LandingPage = () => {
 
         <SectionDivider />
 
-        {/* Agent-Native Section — Part 1: Skipper + Part 2: Open Agent Infra */}
+        {/* Agent-Native Section: Part 1, Skipper; Part 2, Open Agent Infra */}
         <Section className="bg-brand-surface-muted landing-section--agents">
           <SectionContainer>
             <MarketingBand
@@ -680,7 +681,7 @@ const LandingPage = () => {
                     <HeadlineStack
                       eyebrow="Video Consultant"
                       title="Documentation That Talks Back"
-                      subtitle="Like having a video engineer on your team — one that's read every doc and can check your streams in real time."
+                      subtitle="Like having a video engineer on your team, with access to the docs and live stream checks."
                       align="left"
                       underlineAlign="start"
                     />
@@ -692,7 +693,7 @@ const LandingPage = () => {
                         {
                           title: "Grounded in real docs",
                           description:
-                            "FrameWorks, MistServer, FFmpeg, OBS, SRT, HLS, nginx-rtmp, and more — searched semantically, not keyword-matched.",
+                            "FrameWorks, MistServer, FFmpeg, OBS, SRT, HLS, nginx-rtmp, and more, searched semantically rather than keyword-matched.",
                         },
                         {
                           title: "Live stream diagnostics",
@@ -702,7 +703,7 @@ const LandingPage = () => {
                         {
                           title: "Confidence tagging",
                           description:
-                            "Every answer tagged verified, sourced, best guess, or unknown — so you know when to act and when to verify.",
+                            "Every answer is tagged verified, sourced, best guess, or unknown. You can tell when to act and when to verify.",
                         },
                         {
                           title: "Available everywhere",
@@ -737,12 +738,12 @@ const LandingPage = () => {
                 <SkipperConversationPreview />
               </MarketingGridSplit>
 
-              {/* Part 2: Open Agent Infrastructure — compact footer strip */}
+              {/* Part 2: Open Agent Infrastructure, compact footer strip */}
               <div className="skipper-agent-strip">
                 <div className="skipper-agent-strip__header">
                   <span className="skipper-agent-strip__eyebrow">Agent-Native</span>
                   <span className="skipper-agent-strip__title">
-                    Your agents work here too — discover via{" "}
+                    Your agents work here too. Discover via{" "}
                     <a
                       href={`https://${config.domain}/SKILL.md`}
                       className="skipper-agent-strip__link"
@@ -751,7 +752,7 @@ const LandingPage = () => {
                     >
                       SKILL.md
                     </a>
-                    , authenticate, pay, and operate.
+                    , then authenticate, pay, and operate.
                   </span>
                 </div>
                 <AgentPipelineStrip headingLevel="h3" />
@@ -803,7 +804,7 @@ const LandingPage = () => {
                     tone: "green",
                     title: "Platform Presets",
                     description:
-                      "Built-in presets for Twitch, YouTube, Facebook, Kick, and X. Paste your stream key and go — or use a custom RTMP/RTMPS/SRT endpoint.",
+                      "Built-in presets for Twitch, YouTube, Facebook, Kick, and X. Paste your stream key and go, or use a custom RTMP/RTMPS/SRT endpoint.",
                     hover: "subtle",
                     stripe: true,
                     flush: true,

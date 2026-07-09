@@ -15,7 +15,7 @@ frameworks edge status --dir /opt/frameworks-edge
 
 Shows:
 
-- Container status in Docker mode, or systemd/launchd status in native mode
+- Health of the single `frameworks-edge` container in container mode, or systemd/launchd status in native mode
 - HTTPS health check against your configured domain
 
 ## Logs
@@ -53,13 +53,13 @@ Update/restart the deployed edge services:
 frameworks edge update --dir /opt/frameworks-edge
 ```
 
-In Docker mode this:
+In container mode this:
 
-1. Pulls new images from the registry
-2. Recreates containers with new images
-3. Preserves configuration and data
+1. Pulls a new edge image from the registry
+2. Recreates the `frameworks-edge` container
+3. Preserves configuration, binaries, and data (named volumes; on Ansible-provisioned nodes hot storage is the `storage/` directory next to the compose file)
 
-In native mode, `edge update` restarts the native services. Release-target convergence for native components is driven by the control plane, not by pulling Docker images.
+In native mode, `edge update` restarts the native services. In both modes, day-to-day component convergence (Helmsman/MistServer/Caddy versions) is driven by the control plane's release reconciler — `edge update` is the coarse image/service refresh, not the update mechanism.
 
 Check current version:
 
@@ -84,7 +84,7 @@ frameworks edge cert --reload --dir /opt/frameworks-edge
 
 ## Operational Mode
 
-Use node mode when you want Foghorn to stop sending new traffic without fully stopping the services. This command talks to Helmsman's local HTTP API, so it works for native deployments and Docker deployments where you have made that API reachable from the host.
+Use node mode when you want Foghorn to stop sending new traffic without fully stopping the services. This command talks to Helmsman's local HTTP API: directly on native nodes, and by exec'ing into the `frameworks-edge` container on container nodes — no ports need to be exposed for it.
 
 ```bash
 # Show current mode
@@ -101,21 +101,18 @@ Mode changes are requested through Helmsman and validated by Foghorn, which push
 
 ## Restarting Services
 
-For Docker deployments:
+For container deployments:
 
 ```bash
 cd /opt/frameworks-edge
 
-# Restart everything
-docker compose -f docker-compose.edge.yml restart
-
-# Restart specific container
-docker compose -f docker-compose.edge.yml restart helmsman
+# Restart the edge container (caddy/mistserver/helmsman run inside it)
+docker compose -f docker-compose.edge.yml restart edge
 ```
 
 ## Stopping the Node
 
-For Docker deployments, stop the containers:
+For container deployments, stop the stack:
 
 ```bash
 docker compose -f docker-compose.edge.yml stop
@@ -160,16 +157,19 @@ frameworks edge logs helmsman --tail 100
 
 ## Resource Usage
 
-For Docker deployments, check what your node is using:
+For container deployments (the single edge image), check what your node is using:
 
 ```bash
-docker stats mistserver helmsman edge-proxy
+docker stats frameworks-edge
 ```
 
-MistServer metrics are available on the MistServer control interface. In the default Docker template that port is not published on the host; expose it intentionally or query it from a shell that has access to the container network:
+MistServer's control interface binds loopback inside the container. On Linux (host networking) it is reachable from the host's loopback; on macOS exec into the container:
 
 ```bash
+# Linux
 curl http://localhost:4242/api/stats
+# macOS
+docker exec frameworks-edge curl -s http://localhost:4242/api/stats
 ```
 
 Helmsman exposes Prometheus metrics when its local HTTP API is reachable:
@@ -180,7 +180,7 @@ curl http://localhost:18007/metrics
 
 ## Configuration Changes
 
-Most config lives in `.edge.env`. After editing a Docker deployment:
+Most config lives in `.edge.env`. After editing a container deployment:
 
 ```bash
 cd /opt/frameworks-edge
@@ -201,19 +201,40 @@ Changes that take effect immediately:
 
 ## Backup and Recovery
 
-**What to backup:**
+**What to backup (container mode):** the whole project directory — it carries
+the node's identity and secrets:
 
-- `.edge.env` - Your configuration
-- MistServer recordings (if enabled)
-- Any custom Caddyfile modifications
+- `.edge.env` - Configuration (node identity, domain, control-plane address)
+- `.edge-enroll.env` - Write-once enrollment token file
+- `.edge-secrets.env` - MistServer API password (0600)
+- `pki/` - Internal CA bundle for the Foghorn gRPC connection
+- `telemetry/` - Telemetry token (when telemetry is enabled)
+- `docker-compose.edge.yml` (or `docker-compose.yml` on Ansible-provisioned
+  nodes)
+
+The named volumes (`frameworks_opt`, `frameworks_etc`, `caddy_etc`,
+`caddy_data`) hold binaries, certs, and the activated Caddyfile. You do not
+need to back them up for identity: binaries reseed from the image and
+converge via the release reconciler, and certs and stream config re-arrive
+over ConfigSeed after the node reconnects.
+
+Hot storage (DVR/clip artifacts) differs by setup: local `edge init`
+renders use the `edge_storage` named volume, while Ansible-provisioned
+nodes bind the `storage/` directory next to the compose file (kept from the
+earlier layout so migrated nodes retain their artifacts). Back it up — the
+volume or the directory respectively — only if you must preserve local
+DVR/clip artifacts across the move.
 
 **Recovery:**
 
-1. Install Docker on the new host when recovering a Docker deployment
+1. Install Docker on the new host (container mode)
 2. Run `frameworks edge preflight`
-3. Run `frameworks edge init --dir .` to generate compose/Caddyfile
-4. Copy your saved `.edge.env` into the directory
-5. Start with `frameworks edge enroll --dir .`
+3. Restore the saved project directory (env files, `pki/`, `telemetry/`,
+   compose file) — do **not** re-run `edge init`, which would mint a new
+   node identity and secrets
+4. Start with `frameworks edge enroll --dir .`
+5. Certificates, stream config, and component versions converge from the
+   control plane after enrollment
 
 ## Common Tasks
 
@@ -225,10 +246,10 @@ Edit `.edge.env`:
 HELMSMAN_MAX_TRANSCODES=10
 ```
 
-Then restart Helmsman:
+Then restart the edge container:
 
 ```bash
-docker compose -f docker-compose.edge.yml restart helmsman
+docker compose -f docker-compose.edge.yml restart edge
 ```
 
 ### Disable ingest temporarily
@@ -238,7 +259,7 @@ docker compose -f docker-compose.edge.yml restart helmsman
 HELMSMAN_CAP_INGEST=false
 
 # Restart
-docker compose -f docker-compose.edge.yml restart helmsman
+docker compose -f docker-compose.edge.yml restart edge
 ```
 
 Foghorn will stop routing new ingest to this node.
@@ -251,15 +272,24 @@ curl http://localhost:4242/api/streams
 
 Or via the dashboard under **Nodes → [your node]**.
 
-### Clear recordings storage
+### Clear hot storage
+
+Helmsman's cleanup monitor and the control plane's DVR reclaim already evict
+by watermark; manual clearing is for emergencies. In container mode, hot
+storage is mounted at `/data/storage` (the `edge_storage` named volume on
+local `edge init` renders, the `storage/` host directory on
+Ansible-provisioned nodes):
 
 ```bash
 # Check usage
-du -sh /var/lib/mistserver/recordings
+docker exec frameworks-edge du -sh /data/storage
 
-# Remove old recordings (careful!)
-find /var/lib/mistserver/recordings -mtime +30 -delete
+# Remove old artifacts (careful — bypasses Foghorn's segment accounting!)
+docker exec frameworks-edge find /data/storage -mtime +30 -delete
 ```
+
+Native mode keeps hot storage at `/var/lib/frameworks/edge-storage` on the
+host.
 
 ## Automation
 

@@ -92,7 +92,7 @@ export function spreadOverlappingMarkers(map, items, opts = {}) {
  */
 function groupOffsets(n, step, maxExpandedGroupSize = Number.POSITIVE_INFINITY) {
   const slots = Math.max(1, Math.min(n, maxExpandedGroupSize));
-  // Item 0 always sits at (0,0) — the caller anchors that slot at the largest
+  // Item 0 always sits at (0,0). The caller anchors that slot at the largest
   // item's real pixel position, so it doesn't move.
   if (slots === 2) {
     const base = [

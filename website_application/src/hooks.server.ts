@@ -17,5 +17,9 @@ export const handle: Handle = async ({ event, resolve }) => {
     tenantId: tenantId || null,
   });
 
-  return resolve(event);
+  const response = await resolve(event);
+  // The app domain owns no search surface (marketing/docs do); keep every page
+  // crawlable-but-noindexed so already-indexed URLs get dropped by Google.
+  response.headers.set("X-Robots-Tag", "noindex, nofollow");
+  return response;
 };

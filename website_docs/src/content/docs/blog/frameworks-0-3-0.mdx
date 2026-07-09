@@ -1,0 +1,31 @@
+---
+title: "FrameWorks 0.3.0"
+date: 2026-07-05
+authors:
+  - frameworks
+excerpt: "The next FrameWorks tag focuses on the operating layer: platform admin, analytics, resilient edge playback, safer agent workflows, and the real-time foundation for chat and conferencing."
+tags:
+  - announcements
+  - releases
+  - roadmap
+---
+
+0.3.0 is the next FrameWorks tag.
+
+The theme is the operating layer: the pieces that make FrameWorks easier to run as a live-video platform. Platform admin, analytics, edge resilience, agent workflows, and the real-time foundation for chat and conferencing.
+
+Platform admin is the most direct change. The cross-tenant admin API, admin console, and explicit operator grant model give operators a supported place to inspect tenants, clusters, billing, and content. That matters for hosted operations and for anyone running more than one cluster. Admin access should be a permission with a paper trail, not an accident of which account was created first.
+
+Analytics is also moving out of the "internal-only" bucket. Playback QoE, tenant activity, operator activity, stream monitoring controls, and the consolidated dashboard charts make the platform state more visible to the people who can act on it. The goal is answering normal operational questions without opening three private dashboards and a SQL console.
+
+Edge playback is getting stricter about partial failure. Foghorn and Helmsman now have better behavior when the stream is healthy but the control plane is having a short bad moment: registry stale-serving for transient resolve failures, bounded Helmsman recovery for previously approved play rewrites, HA state sync through Redis changelogs, federation advertisements for resilient playback, and native edge install improvements across Linux and macOS.
+
+Skipper and MCP are part of 0.3.0 because agents are becoming an operations surface. The useful work is diagnostics from real stream state, schema-aware API help, billing preflight before expensive actions, confirmation gates around mutations, and source labels that say whether an answer came from docs, schema, metrics, or model inference.
+
+Chat and conferencing are next because FrameWorks already has pieces of the real-time stack: support conversations, message lifecycle events, Signalman subscriptions, and Skipper conversations. Conferencing needs room state, participant identity, moderation, recording rules, pricing, and media routing built around active participants. 0.3.0 sets up that direction by tightening the real-time and operator foundations first.
+
+Composer stays on the roadmap. It is still one of the more interesting media features: overlays, lower thirds, SSAI, transcription, object detection, picture-in-picture, automated clipping. It also has a lot of product contract behind it: API shape, placement model, lifecycle, billing meters, permissions, dashboard controls, and MCP access. We would rather land it with those boundaries right than ship a demo-shaped control surface.
+
+BYOC also gets clearer in this line. Bring-your-own MistServer edge nodes are the first practical level. Private media clusters, hosted private clusters, and fully sovereign self-hosting sit deeper because they move the trust boundary itself. The admin, analytics, and edge work in 0.3.0 is what those models need underneath.
+
+So 0.3.0 is about making the platform less mysterious to operate. Better admin tools, better observability, safer agents, more resilient playback, and a clearer path toward chat, conferencing, and composer.

@@ -97,7 +97,7 @@ frameworks edge enroll --dir /opt/frameworks-edge
 
 This:
 
-1. Starts the MistServer, Helmsman, and Caddy containers
+1. Starts the single `frameworks-edge` container (MistServer, Helmsman, and Caddy under one supervisor)
 2. Waits for `https://<EDGE_DOMAIN>/health` to become available
 3. Helmsman connects to Foghorn (gRPC) and sends the enrollment token
 4. Foghorn asks Quartermaster to register the node and starts including healthy heartbeats in routing decisions
@@ -152,7 +152,7 @@ Your node will receive traffic when:
 
 ## Ingesting to Your Node
 
-Streamers can push directly to your node instead of the default ingest. Direct ingest requires MistServer ports to be exposed on the host. The default Docker edge template publishes only 80/443, so expose the non-HTTP ports in your deployment before using direct RTMP/E-RTMP/SRT/RTSP ingest.
+Streamers can push directly to your node instead of the default ingest. Direct ingest requires MistServer ports to be reachable on the host. On Linux, container mode uses host networking, so all media ports are already bound on the host; on macOS the compose template publishes the media port set (RTMP, SRT, RTSP, WebRTC, HTTP) explicitly. In both cases you only need to open/forward them at your firewall or router.
 
 Open/forward as needed:
 

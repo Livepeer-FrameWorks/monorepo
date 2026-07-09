@@ -163,12 +163,12 @@ const Contact = () => {
     {
       question: "What is pay-as-you-go billing?",
       answer:
-        "Add funds to your account via card or crypto. Usage (storage, transcoding, delivered minutes) is deducted automatically — no invoices, no monthly commitment. Top up again when your balance runs low.",
+        "Add funds to your account via card or crypto. Usage for storage, transcoding, and delivered minutes is deducted automatically. No invoices or monthly commitment. Top up again when your balance runs low.",
     },
     {
       question: "Can I use FrameWorks without an email account?",
       answer:
-        "Yes. Connect an Ethereum wallet to authenticate — your wallet address is your identity. You can optionally add an email later for notifications.",
+        "Yes. Connect an Ethereum wallet to authenticate. Your wallet address is your identity. You can optionally add an email later for notifications.",
     },
   ];
 
@@ -284,7 +284,7 @@ const Contact = () => {
       <MarketingHero
         seed="/contact"
         title="Contact us"
-        description="Sales, support, partnerships, and bug reports — pick a channel below or send a note."
+        description="Sales, support, partnerships, and bug reports. Choose a channel below or send a note."
         align="left"
         surface="gradient"
         support="Email • Discord • Forum • Enterprise requests"

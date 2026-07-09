@@ -1,6 +1,19 @@
 {
   "trailingSlash": false,
   "directoryListing": false,
+  "redirects": [
+    { "source": "/docs", "destination": "https://logbook.frameworks.network/", "type": 301 },
+    {
+      "source": "/docs/:path*",
+      "destination": "https://logbook.frameworks.network/:path*",
+      "type": 301
+    },
+    {
+      "source": "/roadmap",
+      "destination": "https://logbook.frameworks.network/roadmap",
+      "type": 301
+    }
+  ],
   "headers": [
     {
       "source": "@(__spa-fallback.html|health|SKILL.md|heartbeat.md|skill.json|llms.txt)",

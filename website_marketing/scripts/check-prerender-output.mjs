@@ -18,6 +18,8 @@ const routes = [
   ["privacy/index.html", "FrameWorks Privacy Policy"],
   ["terms/index.html", "FrameWorks Terms of Service"],
   ["aup/index.html", "FrameWorks Acceptable Use Policy"],
+  // Snippet stops before "& Responsible" because the built title HTML-encodes the ampersand.
+  ["security/index.html", "FrameWorks Security"],
 ];
 
 const staticFiles = [

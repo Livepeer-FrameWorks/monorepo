@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 
-// Designed layout — fixed per frame
+// Designed layout, fixed per frame
 const FRAMES = [
   {
     color: "122, 162, 247",
@@ -74,7 +74,7 @@ const FRAMES = [
   },
 ];
 
-// Seeded PRNG — deterministic per page load, varies between loads
+// Seeded PRNG, deterministic per page load and varied between loads.
 const createRng = (seed) => {
   let s = seed | 0;
   return () => {
@@ -89,7 +89,7 @@ const buildFrameStyles = (seed) => {
   const rng = createRng(seed);
 
   return FRAMES.map((f) => {
-    // Randomized entrance vector — shoot in from a random direction
+    // Randomized entrance vector from a random direction.
     const enterAngle = range(rng, 0, Math.PI * 2);
     const enterDist = range(rng, 250, 450);
     const enterX = Math.cos(enterAngle) * enterDist;
@@ -98,7 +98,7 @@ const buildFrameStyles = (seed) => {
     // Staggered entrance timing
     const enterDelay = range(rng, 0.1, 0.7);
 
-    // Random orbit phase — each frame starts at a different point in its loop
+    // Random orbit phase so each frame starts at a different point in its loop.
     const orbitPhase = range(rng, 0, f.orbitDur);
     const swayPhase = range(rng, 0, f.swayDur);
 

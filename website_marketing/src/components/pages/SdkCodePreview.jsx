@@ -38,7 +38,7 @@ const snippetPlayerSvelte = `<script lang="ts">
   muted={true}
 />`;
 
-const snippetPlayerWc = `<!-- IIFE via npm CDN — no bundler needed -->
+const snippetPlayerWc = `<!-- IIFE via npm CDN, no bundler needed -->
 <!-- unpkg -->
 <script src="https://unpkg.com/@livepeer-frameworks/player-wc/dist/fw-player.iife.js"></script>
 <!-- or jsdelivr -->
@@ -108,7 +108,7 @@ studio.on('stateChange', ({ state }) => {
 await studio.startCamera()
 await studio.goLive()`;
 
-const snippetIngestWc = `<!-- IIFE via npm CDN — no bundler needed -->
+const snippetIngestWc = `<!-- IIFE via npm CDN, no bundler needed -->
 <!-- unpkg -->
 <script src="https://unpkg.com/@livepeer-frameworks/streamcrafter-wc/dist/fw-streamcrafter.iife.js"></script>
 <!-- or jsdelivr -->

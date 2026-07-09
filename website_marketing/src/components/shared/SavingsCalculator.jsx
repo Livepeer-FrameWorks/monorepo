@@ -156,9 +156,18 @@ const Calculator = ({ className, variant = "default" }) => {
           <div className="pricing-calculator__row">
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <Label htmlFor={ids.edgeOffloadPercent} className="pricing-calculator__label">
-                  Edge offload (%)
-                </Label>
+                <span className="flex items-center gap-1.5">
+                  <Label htmlFor={ids.edgeOffloadPercent} className="pricing-calculator__label">
+                    Edge offload (%)
+                  </Label>
+                  <InfoTooltip label="What is edge offload?">
+                    Plug your own compute into the platform: run FrameWorks Edge on your own servers
+                    or cloud, and we keep handling geo-routing, TLS, analytics, and access control
+                    around it. Viewers served from your edges aren&apos;t billed as delivered
+                    minutes. It&apos;s the first level of bring-your-own-cloud — plug-in storage is
+                    next on the roadmap.
+                  </InfoTooltip>
+                </span>
                 <Input
                   id={ids.edgeOffloadPercent}
                   type="number"
@@ -178,7 +187,7 @@ const Calculator = ({ className, variant = "default" }) => {
                 className="w-full"
               />
               <div className="pricing-calculator__hint">
-                Offloaded minutes are not billed by FrameWorks.
+                Minutes served from your own edge nodes are not billed by FrameWorks.
               </div>
             </div>
           </div>
@@ -200,15 +209,15 @@ const Calculator = ({ className, variant = "default" }) => {
           <div className="pricing-calculator__panel">
             {isEnterpriseVolume && (
               <div className="pricing-calculator__enterprise-hint">
-                Large volume — custom discounts available. Contact us for tailored pricing.
+                Large volume. Contact us for custom rates.
               </div>
             )}
             <div className="pricing-calculator__panel-heading">
               <span>FrameWorks estimate (cheapest option)</span>
               <InfoTooltip>
                 Delivery is priced per minute. Offload to your own edges to shrink billable minutes.
-                Advanced processing (AI, V2V, compositing) is in pilot — contact sales. Enterprise:
-                custom quote.
+                Advanced processing (AI, V2V, compositing) is in pilot. Contact sales for enterprise
+                quotes.
               </InfoTooltip>
             </div>
             <div className="pricing-calculator__metric">

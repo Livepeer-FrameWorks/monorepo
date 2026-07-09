@@ -4,7 +4,7 @@
 export const BRAND_NAME = "FrameWorks";
 
 export const MARKETING_SITE_URL = "https://frameworks.network";
-export const APP_SITE_URL = "https://app.frameworks.network";
+export const APP_SITE_URL = "https://chartroom.frameworks.network";
 export const DOCS_SITE_URL = "https://logbook.frameworks.network";
 export const API_SITE_URL = "https://bridge.frameworks.network";
 export const FORMS_SITE_URL = "https://steward.frameworks.network";
@@ -106,6 +106,15 @@ export const MARKETING_ROUTES: MarketingRouteSeo[] = [
     title: "FrameWorks Acceptable Use Policy",
     description:
       "Read the FrameWorks acceptable use policy for live streaming, hosted infrastructure, self-hosted clusters, and platform accounts.",
+    changefreq: "yearly",
+    priority: "0.3",
+  },
+  {
+    id: "security",
+    path: "/security",
+    title: "FrameWorks Security & Responsible Disclosure",
+    description:
+      "Report a vulnerability to FrameWorks. Our disclosure policy covers reporting channels, scope, rules of engagement, and safe harbor for good-faith security research.",
     changefreq: "yearly",
     priority: "0.3",
   },

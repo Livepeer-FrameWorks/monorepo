@@ -16,7 +16,7 @@ const steps = [
   {
     icon: FingerPrintIcon,
     title: "Authenticate",
-    description: "Wallet signature or x402 — account created instantly.",
+    description: "Wallet signature or x402 creates the account instantly.",
   },
   {
     icon: BanknotesIcon,
@@ -26,7 +26,7 @@ const steps = [
   {
     icon: WrenchScrewdriverIcon,
     title: "Operate",
-    description: "Streams, diagnostics, billing — all via MCP.",
+    description: "Streams, diagnostics, and billing all run through MCP.",
   },
 ];
 

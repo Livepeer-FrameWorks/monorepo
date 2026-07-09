@@ -121,7 +121,7 @@ const About = () => {
     {
       title: "End-to-End Analytics",
       description:
-        "Routing decisions, QoE metrics, and player telemetry — so you can see why viewer X connected to edge Y.",
+        "Routing decisions, QoE metrics, and player telemetry show why viewer X connected to edge Y.",
       icon: null,
       tone: "green",
     },
@@ -156,7 +156,7 @@ const About = () => {
       description:
         "A drop-in app that auto-discovers IP cameras, VISCA PTZ controls, NDI sources, USB webcams, and HDMI inputs.",
       status: "pipeline",
-      statusNote: "Internal and pilot workloads only — request access via Contact.",
+      statusNote: "Internal and pilot workloads only. Request access via Contact.",
     },
     {
       title: "Multi-stream Compositing",
@@ -166,7 +166,7 @@ const About = () => {
       description:
         "Combine multiple input streams into one composite output with picture-in-picture, overlays, and mixing.",
       status: "pipeline",
-      statusNote: "Internal and pilot workloads only — request access via Contact.",
+      statusNote: "Internal and pilot workloads only. Request access via Contact.",
     },
     {
       title: "Live AI Processing",
@@ -176,7 +176,7 @@ const About = () => {
       description:
         "AI-native live video: transcribe, analyze, automate, and transform streams in real time.",
       status: "pipeline",
-      statusNote: "Internal and pilot workloads only — request access via Contact.",
+      statusNote: "Internal and pilot workloads only. Request access via Contact.",
     },
     {
       title: "DRM Content Protection",
@@ -462,7 +462,7 @@ const About = () => {
                 actionsPlacement="inline"
               >
                 <p className="marketing-tech__intro">
-                  Components from ingest through analytics — used in production by MistServer
+                  Components from ingest through analytics, used in production by MistServer
                   operators and on the Livepeer network.
                 </p>
               </HeadlineStack>

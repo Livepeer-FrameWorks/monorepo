@@ -49,8 +49,8 @@ graph LR
 
 Before you start:
 
-- A Linux server for the default Docker deployment, or a Linux/macOS host for native edge deployment
-- Docker and Docker Compose when using the Docker mode
+- A Linux or macOS host (container mode runs the single edge image; native mode uses systemd/launchd)
+- Docker with the Compose plugin when using container mode (Docker Desktop or OrbStack on macOS)
 - Public IP or reachable public DNS name for viewer traffic
 - A DNS record for the assigned edge domain, unless the Bridge bootstrap flow assigns and syncs it for you
 - Ports available as needed (expose only what you use):

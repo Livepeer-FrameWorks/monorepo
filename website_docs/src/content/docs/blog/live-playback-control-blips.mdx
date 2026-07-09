@@ -1,0 +1,33 @@
+---
+title: Keeping Live Playback Up During Control-Plane Blips
+date: 2026-07-03
+authors:
+  - frameworks
+excerpt: "How Foghorn and Helmsman handle live playback when the media path is healthy but fresh control-plane resolution is briefly unavailable."
+tags:
+  - architecture
+  - playback
+  - edge
+---
+
+Live playback has an awkward dependency: the media path can be perfectly healthy while the control plane is briefly unavailable.
+
+A viewer asks MistServer for `playback_id`. Mist fires a blocking `PLAY_REWRITE` trigger to Helmsman. Helmsman asks Foghorn what that token should resolve to. Foghorn may need stream identity, tenant billing state, cluster policy, auth requirements, and federation data before it can answer.
+
+That is the right place to enforce policy. It is also the wrong place to fail open.
+
+Mist's default here is permissive. If a blocking `PLAY_REWRITE` handler is missing, times out, or returns the wrong default, Mist can treat the request as allowed or route it in a way FrameWorks did not approve. Helmsman now renders a safe unresolved sentinel for `PLAY_REWRITE` instead of relying on Mist's permissive default. No answer is better than a mis-serve.
+
+But "no answer" is still a bad viewer experience when the edge already had a valid answer a few seconds ago.
+
+FrameWorks handles that in two places.
+
+First, Foghorn's live stream registry can serve a stale-but-known entry when the hydrate path fails transiently. The registry is not using stale data as authority forever. It has a TTL and a bounded stale window. It also treats authoritative not-found differently from an outage. If Commodore says the stream does not exist, or admission rejected it, stale data does not resurrect it. If Commodore, SQL, Quartermaster, or Purser has a short blip, a known-live stream can keep resolving while the registry retries.
+
+Second, Helmsman keeps a tiny recovery cache for successful play rewrites. It records the last Foghorn-approved response for a requested stream and will replay it only when forwarding the trigger to Foghorn fails. The cache is small in both time and size: 30 seconds, capped at 4096 entries. Reachable Foghorn requests always go back to Foghorn. The cache is not an edge authority and it is not a billing bypass strategy. It is a bridge for restarts, dropped control streams, and short network stalls.
+
+The two mechanisms cover different failures. Foghorn stale-serving protects the control-plane resolve path while preserving policy semantics; Helmsman recovery protects the media edge from a short Foghorn reachability failure. In both cases authoritative rejection still wins, and Mist never gets a permissive fallback just because FrameWorks failed to answer in time.
+
+The trade-off is explicit. During a Helmsman recovery hit, the viewer path reuses a response that was approved moments earlier, so it can briefly miss fresh billing/account changes. That is why the recovery window is 30 seconds, not minutes. The goal is to survive a blip, not move policy enforcement to the edge.
+
+This is the kind of behavior we want more of in the stack: fail closed by default, recover only from states we previously approved, and keep the recovery window narrow enough that it cannot become the new source of truth.

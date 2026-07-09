@@ -1,5 +1,6 @@
 Contact: mailto:security@frameworks.network
 Contact: https://github.com/livepeer-frameworks/monorepo/security/advisories
+Policy: https://github.com/livepeer-frameworks/monorepo/blob/master/SECURITY.md
 Expires: 2027-02-01T00:00:00.000Z
 Preferred-Languages: en
 Canonical: https://frameworks.network/.well-known/security.txt

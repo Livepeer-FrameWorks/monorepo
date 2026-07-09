@@ -246,12 +246,12 @@ Practical consequences:
 - A "carried" service is not a downgrade. It is the same artefact that
   shipped earlier, content-pinned forward into the new release.
 
-<Aside type="note" title="Native edge nodes auto-update">
-  Use native mode for production edge nodes when you want release-target reconciliation. Foghorn
-  currently auto-updates native Helmsman, MistServer, and Caddy components over the Helmsman control
-  stream; MistServer binary updates use an in-place controller reload. Docker edge nodes do not
-  auto-update yet, even though they still report component versions. Update Docker edge nodes
-  manually with `frameworks edge update` or your compose rollout process.
+<Aside type="note" title="Edge nodes auto-update in both modes">
+  Foghorn auto-updates Helmsman, MistServer, and Caddy components over the Helmsman control stream
+  for native nodes and single-image container nodes alike; MistServer binary updates use an in-place
+  controller reload in both. Container nodes keep binaries on persistent volumes, so in-place
+  updates survive container restarts. Only the retired multi-container docker mode was excluded from
+  reconciliation.
 </Aside>
 
 Release notes call out carried components when relevant.

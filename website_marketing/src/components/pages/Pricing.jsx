@@ -140,7 +140,7 @@ const enterpriseTier = {
     "Private deployments or co-managed operations with our engineers",
     "Committed bandwidth and processing capacity with reserved capacity",
     "Custom SLAs with training, consulting, and on-call support",
-    "Flexible billing arrangements tailored to your organization",
+    "Invoice, procurement, or prepaid billing terms",
   ],
 };
 
@@ -149,10 +149,10 @@ const payAsYouGo = {
   price: "€0.00055",
   period: "/delivered min",
   badge: "Agent-Ready",
-  description: "Pay only when you use it. Built for agents — works for humans too.",
+  description: "Pay only when you use it. Wallet-friendly, with account controls for operators.",
   features: [
     "No subscription, no commitment",
-    "Wallet auth — no email, no signup form",
+    "Wallet auth with no email or signup form",
     "Top up via card, crypto, or gasless USDC",
     "Same rates as subscription tiers, full API access",
   ],
@@ -172,9 +172,9 @@ const processingFeatureMatrix = [
   {
     feature: "Live AI Processing",
     description:
-      "AI transcription, video analysis, automated highlights, and real-time V2V transformations. Pilot access — pricing finalized once the processing meter contract lands.",
+      "AI transcription, video analysis, automated highlights, and real-time V2V transformations.",
     status: "pipeline",
-    statusNote: "Internal and pilot workloads only — request access via Contact.",
+    statusNote: "Internal and pilot workloads only. Request access via Contact.",
     tiers: {
       free: "Only self-hosting",
       supporter: "Only self-hosting",
@@ -187,7 +187,7 @@ const processingFeatureMatrix = [
     description:
       "Combine multiple streams with studio-style mixing and effects. Bundled in delivered minutes.",
     status: "pipeline",
-    statusNote: "Internal and pilot workloads only — request access via Contact.",
+    statusNote: "Internal and pilot workloads only. Request access via Contact.",
     tiers: {
       free: "Only self-hosting",
       supporter: "Only self-hosting",
@@ -211,14 +211,14 @@ const deploymentOptions = [
     tagline: "We run everything",
     tone: "accent",
     icon: CloudIcon,
-    summary: "Ingest, delivery, processing, and ops — fully managed.",
+    summary: "Ingest, delivery, processing, and ops, fully managed.",
     modal: {
       description:
-        "Let FrameWorks run ingest, delivery, observability, and advanced-processing orchestration while your team focuses on product. You keep full visibility.",
+        "FrameWorks runs ingest, delivery, observability, and processing orchestration. Your team keeps the dashboards, logs, and runbooks.",
       bullets: [
         "SLO-backed operations with shared runbooks and direct-to-engineer escalation.",
         "Managed load balancers, CDN federation, and advanced-processing scheduling with per-tier usage breakdowns.",
-        "Service credits to expand into new regions, workloads, or codecs without retooling pipelines.",
+        "Managed rollouts for additional regions, codecs, or processing pools, with usage shown per line item.",
       ],
     },
   },
@@ -246,7 +246,7 @@ const deploymentOptions = [
     tone: "accent",
     icon: HomeIcon,
     summary:
-      "Run control plane, databases, and edge on your infrastructure — with or without our support.",
+      "Run control plane, databases, and edge on your infrastructure, with or without our support.",
     modal: {
       description:
         "Keep the video workload and control plane under your control by running Mist ingest, delivery, and FrameWorks services inside your footprint. S3-compatible storage and DNS remain external integrations today.",
@@ -270,7 +270,7 @@ const deploymentOptions = [
       bullets: [
         "Security and compliance reviews aligned to your policies with artifact-ready evidence packs.",
         "Custom SLAs, reserved processing and edge pools, and direct engineer-to-engineer escalation.",
-        "Automation, training, billing, and reporting tailored to your internal tooling and finance flows.",
+        "Integrations for billing exports, finance reports, training, and automation workflows.",
       ],
     },
   },
@@ -305,17 +305,17 @@ export const PRICING_FAQS = [
   {
     question: "What is pay-as-you-go billing?",
     answer:
-      "Add funds to your account via card or crypto. Usage (storage, transcoding, delivered minutes) is deducted automatically — no invoices, no monthly commitment. Top up again when your balance runs low.",
+      "Add funds to your account via card or crypto. Usage for storage, transcoding, and delivered minutes is deducted automatically. No invoices or monthly commitment. Top up again when your balance runs low.",
   },
   {
     question: "Can I use FrameWorks without an email account?",
     answer:
-      "Yes. Connect an Ethereum wallet to authenticate — your wallet address is your identity. You can optionally add an email later for notifications.",
+      "Yes. Connect an Ethereum wallet to authenticate. Your wallet address is your identity. You can optionally add an email later for notifications.",
   },
   {
     question: "How do AI agents access FrameWorks?",
     answer:
-      "Agents discover the platform via skill.json (compatible with OpenClaw, Claude Code, Cursor, Gemini CLI), llms.txt, or .well-known/mcp.json. They authenticate with an EVM wallet signature which auto-provisions a prepaid tenant — no email or registration. They fund their balance via x402 gasless USDC on Base or Arbitrum, then use MCP tools or GraphQL to manage streams, recordings, analytics, and QoE diagnostics. Three operations work without any auth: payment options, payment submission, and playback resolution.",
+      "Agents discover the platform via skill.json (compatible with OpenClaw, Claude Code, Cursor, Gemini CLI), llms.txt, or .well-known/mcp.json. They authenticate with an EVM wallet signature that auto-provisions a prepaid tenant without email or registration. They fund their balance via x402 gasless USDC on Base or Arbitrum, then use MCP tools or GraphQL to manage streams, recordings, analytics, and QoE diagnostics. Three operations work without any auth: payment options, payment submission, and playback resolution.",
   },
   {
     question: "What is x402 and how does it work?",
@@ -325,7 +325,7 @@ export const PRICING_FAQS = [
   {
     question: "Which agent frameworks are compatible?",
     answer:
-      "Any framework that reads skill.json or llms.txt can discover FrameWorks — including OpenClaw, Claude Code, Claude Desktop, Cursor, Gemini CLI, and others. For full operational access, connect via the MCP endpoint or use the GraphQL API directly. The platform also publishes a W3C DID document and OAuth protected resource metadata for standards-based integration.",
+      "Any framework that reads skill.json or llms.txt can discover FrameWorks, including OpenClaw, Claude Code, Claude Desktop, Cursor, Gemini CLI, and others. For full operational access, connect via the MCP endpoint or use the GraphQL API directly. The platform also publishes a W3C DID document and OAuth protected resource metadata for standards-based integration.",
   },
 ];
 
@@ -393,7 +393,7 @@ const pricingHeroHighlights = [
   {
     title: "Deep analytics included",
     description:
-      "See why viewer X connected to edge Y — QoE metrics and routing decisions in every plan.",
+      "See why viewer X connected to edge Y with QoE metrics and routing decisions in every plan.",
     tone: "green",
     icon: BanknotesIcon,
   },
@@ -596,7 +596,11 @@ const Pricing = () => {
                 actionsPlacement="inline"
                 actions={
                   <CTACluster align="end" wrap>
-                    <MarketingCTAButton intent="secondary" to="/docs" label="Read the docs" />
+                    <MarketingCTAButton
+                      intent="secondary"
+                      href={config.docsUrl}
+                      label="Read the docs"
+                    />
                     <MarketingCTAButton intent="secondary" to="/contact" label="Talk to sales" />
                   </CTACluster>
                 }
@@ -633,7 +637,7 @@ const Pricing = () => {
               <HeadlineStack
                 eyebrow="No subscription required"
                 title="Pay As You Go"
-                subtitle="Top up your balance and pay for what you use. AI agents can discover, authenticate, fund, and operate the platform end-to-end — no human interaction required."
+                subtitle="Top up your balance and pay for what you use. AI agents can discover, authenticate, fund, and operate the platform through MCP and GraphQL, using the same account balance as operators."
                 align="left"
                 underlineAlign="start"
               />
@@ -732,7 +736,7 @@ const Pricing = () => {
               <HeadlineStack
                 eyebrow="Advanced processing"
                 title="Advanced processing capabilities"
-                subtitle="AI workloads (transcription, V2V, highlights) and multi-stream compositing are in pilot — request access via Contact. Standard transcoding is bundled in delivered minutes. Pricing finalized once the processing meter contract lands."
+                subtitle="AI workloads (transcription, V2V, highlights) and multi-stream compositing are in pilot. Request access via Contact. Standard transcoding is bundled in delivered minutes."
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"

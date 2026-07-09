@@ -8,7 +8,7 @@ const gqlEndpoint = config.gatewayUrl;
 const badgeTooltips = {
   verified: "Confirmed from official FrameWorks documentation",
   sourced: "Cited from external documentation",
-  best_guess: "Inferred from context — verify before acting",
+  best_guess: "Inferred from context. Verify before acting.",
 };
 
 const conversations = [
@@ -26,7 +26,7 @@ const conversations = [
       {
         role: "assistant",
         badge: "verified",
-        text: 'Done — "Product Demo" is live-ready. You can go live right now using StreamCrafter in the dashboard, or connect an external encoder like OBS.',
+        text: '"Product Demo" is live-ready. You can go live right now using StreamCrafter in the dashboard, or connect an external encoder like OBS.',
       },
       {
         role: "user",
@@ -49,7 +49,7 @@ const conversations = [
       {
         role: "assistant",
         badge: "verified",
-        text: 'Clipped! "Product Demo — Clip 1" is saved to your recordings. Share it directly or download from the stream page.',
+        text: 'Clipped. "Product Demo Clip 1" is saved to your recordings. Share it directly or download from the stream page.',
       },
     ],
     source: "FrameWorks API, Stream Management",
@@ -59,7 +59,7 @@ const conversations = [
     messages: [
       {
         role: "user",
-        text: "My stream health page is showing a high rebuffer ratio — what's going on?",
+        text: "My stream health page is showing a high rebuffer ratio. What's going on?",
       },
       {
         role: "tool",
@@ -81,7 +81,7 @@ const conversations = [
       {
         role: "assistant",
         badge: "sourced",
-        text: "Your keyframe interval is set to 4 seconds — drop it to 2s in OBS under Settings → Output → Keyframe Interval. HLS and DASH split segments on keyframes, so 4s intervals mean 4s minimum latency and slower recovery after a stall. At 2s you halve both.",
+        text: "Your keyframe interval is set to 4 seconds. Drop it to 2s in OBS under Settings → Output → Keyframe Interval. HLS and DASH split segments on keyframes, so 4s intervals mean 4s minimum latency and slower recovery after a stall. At 2s you halve both.",
       },
     ],
     source: "FrameWorks Docs, OBS Knowledge Base",

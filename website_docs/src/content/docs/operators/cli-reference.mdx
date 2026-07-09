@@ -1636,9 +1636,9 @@ pipeline, and does not print the token. Quartermaster requires provider
 authority for this path; ordinary tenant subscriptions cannot mint node
 enrollment tokens. Lifecycle-managed adds default to native mode and, unless
 `--version` is supplied, install from the cluster's release
-target. Clusters without a release target use the stable manifest. Pass
-`--mode docker` only for nodes managed outside the agent-pull release
-reconciler.
+target. Clusters without a release target use the stable manifest.
+`--mode container` installs the single edge image; container nodes converge
+through the same agent-pull release reconciler as native ones.
 Before provisioning, it probes the target for an existing FrameWorks edge stack
 and classifies clean, complete same-cluster, foreign, partial, and unmarked
 installs. Foreign clusters are refused. Same-cluster targets are treated as
@@ -1716,7 +1716,8 @@ plan JSON. Pass `--cluster-id` when scripting. This is an override/repair path;
 provider `cluster provision` follows the manifest channel, and `cluster upgrade
 --all` syncs the target after the platform upgrade succeeds. Foghorn reconciles
 targets against reported node component versions and runtime platform metadata.
-Docker-mode edge nodes are not selected for native artifact convergence.
+Native and container (single edge image) nodes both converge; only the retired
+multi-container docker mode was excluded.
 Helmsman and Caddy changes apply over the existing Helmsman control stream,
 while Mist normally replaces the complete binary set atomically and sends `USR1`
 to MistController so new child processes use the new binaries without draining
@@ -1775,7 +1776,7 @@ pre-registration. No Foghorn address required.
 - `--foghorn-addr` - Explicit Foghorn gRPC override; debug only. Bridge resolves the addr by default; use this when you need to talk to a specific Foghorn directly.
 - `--ssh` - SSH target (user@host) for remote deployment
 - `--ssh-key` - SSH private key path
-- `--mode` - Deployment mode: `docker` (default) or `native`
+- `--mode` - Deployment mode: `container` (default; single edge image) or `native`. `docker` is a deprecated alias for `container`. Local deploys without `--ssh` default to `native` (no Docker dependency) unless `--mode` is passed explicitly.
 - `--email` - ACME email for TLS certificates
 - `--tune` - Apply sysctl/limits tuning (default: true)
 - `--skip-preflight` - Skip preflight checks

@@ -8,6 +8,7 @@ const marketingRoutes = [
   "/privacy",
   "/terms",
   "/aup",
+  "/security",
   "/sitemap.xml",
 ];
 

@@ -10,5 +10,6 @@ export default [
   route("privacy", "./routes/privacy.jsx"),
   route("terms", "./routes/terms.jsx"),
   route("aup", "./routes/aup.jsx"),
+  route("security", "./routes/security.jsx"),
   route("sitemap.xml", "./routes/sitemap.xml.js"),
 ];

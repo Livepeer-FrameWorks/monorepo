@@ -1,0 +1,53 @@
+---
+title: "Two CAs, One Mesh: How FrameWorks Services Get Their Identity"
+date: 2026-04-02
+authors:
+  - frameworks
+excerpt: "Navigator runs an internal CA for service-to-service traffic and drives ACME for public endpoints; Privateer distributes keys and WireGuard config to every node. Why a sovereign platform has to own its own trust root."
+tags:
+  - engineering
+  - architecture
+  - security
+---
+
+A platform that can be self-hosted, including air-gapped, has a constraint most SaaS never faces: nothing in the trust chain is allowed to depend on someone else's control plane. Certificates, mesh coordination, service identity — if any of it phones home to a vendor, the "sovereign" deployment model is fiction. That constraint shaped how FrameWorks does transport security, and this post walks through the result.
+
+## Two certificate systems
+
+Everything TLS in FrameWorks traces back to one of two issuers, and both live in Navigator, our DNS and certificate service.
+
+The **internal CA** covers service-to-service gRPC on the private network. Navigator issues the leaves; Privateer (more on it below) delivers the CA certificate and each service's cert and key onto the node. Services talk to each other over TLS with the internal root pinned.
+
+**Public ACME** covers everything a browser or a viewer touches. Navigator drives DNS-01 challenges, stores the resulting bundles, and publishes them to the reverse proxies and to Foghorn's external listener. Per-tenant custom domains get the same lifecycle: DNS record, ACME issuance, tenant-scoped storage, automatic renewal.
+
+There is no third tier — no separate "mesh TLS" system. Mesh traffic is internal-CA; public traffic is web PKI; every listener belongs to exactly one of the two.
+
+Authentication rides _on top of_ the transport rather than inside it: service tokens, JWTs, and enrollment tokens over server-authenticated TLS. We haven't done transport mTLS or SPIFFE-style workload identity; per-edge client certificates are an open design item. What we have today is encrypted transport with a pinned root, plus a credential on every call that can be checked and logged.
+
+## The one service with two front doors
+
+Foghorn is both an internal control-plane service and the public-facing edge authority, so it runs two gRPC listeners in one process. The internal listener (port 18019) serves control RPCs, health polling, and federation, with an internal-CA certificate. The external listener (port 18029) serves edge nodes out on the public internet — managed or bring-your-own — with an ACME cluster-wildcard certificate that their standard system trust stores already accept.
+
+The invariant that matters: the external listener must never serve the internal certificate. In production, if Navigator can't supply the cluster wildcard bundle, Foghorn refuses to start rather than degrade into serving the wrong identity on a public port. Clients hold the same line — every gRPC client dials with an explicit tuple of address, expected TLS name, and CA material, because "where the connection goes" and "who it must prove to be" are different questions, and conflating them is how you end up trusting the wrong thing after a DNS change.
+
+## Privateer: the part that touches every node
+
+Privateer is the mesh agent that runs on every backend node. It assembles the WireGuard mesh from three layers of configuration: static identity from the gitops manifest (each host's mesh address and public key), seed peers for bootstrap, and the managed layer — peers, mesh DNS, and PKI material — synced continuously from Quartermaster and cached locally so a node that reboots during a control-plane outage comes back with its last known mesh. Privateer composes the WireGuard config itself; hand-written tunnel configs aren't a supported input. It also serves local DNS for mesh hostnames, so services find each other by name inside the overlay.
+
+We looked at the obvious alternative. Tailscale is excellent, and its coordination plane is a SaaS — topology visible to a third party, per-device pricing, and nothing works air-gapped. Headscale trades that for a dependency on an external project at the center of our trust model. For a platform whose deepest deployment model is "customer premises, no outbound dependencies," mesh coordination had to be a first-party service. That's Privateer and Quartermaster.
+
+## How an edge node joins
+
+Edge nodes are the untrusted boundary — they run on hardware we may not own, in a [bring-your-own-compute](/hybrid/edge-nodes) world. Enrollment is two-phase:
+
+**Returning nodes** are recognized by fingerprint. The edge presents its network identity and hashed hardware identifiers; Quartermaster resolves them to a known node and tenant, and the node is registered immediately.
+
+**New nodes** present an enrollment token minted for a tenant (and optionally a specific cluster, with an optional usage limit for bulk provisioning). A pre-registration step validates the token, assigns the node identity and its DNS names, and hands back the internal CA bundle so the node can verify what it talks to from the first real RPC onward. Tokens are consumed atomically; a leaked single-use token that has been spent is worthless.
+
+Everything after enrollment goes through the authenticated listeners with per-request credentials. The only unauthenticated surface is health checking and the enrollment entry point itself, which validates its token in-method.
+
+## Why bother
+
+Because the deployment models demand it. Shared SaaS, dedicated clusters, and full self-hosting all run the same stack, and the self-hosted case only works if the trust root travels with the deployment. "Sovereign" here means control of the video path, routing, analytics, mesh, and platform services — we still use S3-compatible object storage and public DNS providers today, and native alternatives are roadmap, so we won't claim every primitive is first-party. But a customer who runs FrameWorks on their own metal holds their own CA, their own mesh coordination, and their own certificate lifecycle, and no part of stream delivery asks our infrastructure for permission.
+
+The operator-facing details live in [mesh networking](/operators/mesh-bootstrap), [DNS and cluster routing](/operators/dns), and the [architecture overview](/operators/architecture).

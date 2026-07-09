@@ -3,62 +3,28 @@ title: "What Seven AI Agents Found in Our Streaming Platform"
 date: 2026-01-31
 authors:
   - frameworks
-excerpt: "We used a multi-agent review process to audit FrameWorks across routing, ingest, billing, analytics, auth, and more. It found real edge cases, but the useful part was not automation for its own sake: it was forcing every claim to come with evidence."
+excerpt: "We used a multi-agent review process to audit FrameWorks across routing, ingest, billing, analytics, auth, and more. The useful part was forcing every claim to come with evidence."
 tags:
   - engineering
   - ai
   - architecture
 ---
 
-import { Aside } from "@astrojs/starlight/components";
-
 Live video systems collect awkward edge cases.
 
 A viewer connects from a location that sits on the wrong side of a geofence boundary. A DVR recording starts at the same moment a stream is shutting down. Two usage events for the same tenant arrive close enough together that billing code has to prove it is actually idempotent. None of those cases are hard to understand on their own. The hard part is that they do not stay on their own.
 
-FrameWorks is split across routing, ingest, VOD, edge orchestration, analytics, billing, auth, MCP agent access, DNS, Skipper, WebSocket routing, and tenant management. Each subsystem has tests and reviews, but the interesting failures tend to sit between them. They show up when a stream lifecycle event crosses into billing, or when a viewer-routing decision depends on data that is still warming in a cache.
+FrameWorks is split across routing, ingest, VOD, edge orchestration, analytics, billing, auth, MCP agent access, DNS, Skipper, WebSocket routing, and tenant management. Each subsystem has tests and reviews, but the interesting failures tend to sit between them.
 
-We wanted a way to keep looking for those failures after the initial implementation work was done. Not a one-off security audit, and not a big rewrite disguised as process. Just a repeatable way to ask: which parts of the platform have not been reviewed recently, what can go wrong there, and can we prove it from the code?
+We ran the first audit pass by hand: seven roles, 26 batches, 90 tasks, 12 subsystems. One agent traced a domain, another checked the report, another wrote a fix if the finding held up, another reviewed the patch. CI and a human reviewer still owned the merge.
 
-So we ran a manually orchestrated audit using seven agent roles.
+The rule that made the output usable was simple: no finding without evidence.
 
-## How the audit worked
+A report had to name the files and functions, describe the failing input or interleaving, explain the tenant or operator impact, and say what test would prove the fix. "This might race" went nowhere. "Two prepaid usage reports can reserve against the same tenant balance before the ledger state is visible" was at least reviewable.
 
-The process was intentionally simple. One agent picked a domain to inspect. Another traced the relevant code paths and wrote findings. A separate reviewer checked those findings against the repository. If a fix made sense, another agent implemented it, a reviewer looked at the pull request, and a final pass addressed review feedback before CI and human merge.
+That rule cut out a surprising amount of noise. It made the agents more useful because their job stopped being "sound smart about the codebase" and became "keep reading until you can point at the code."
 
-The roles were less important than the separation between them. The agent that found a bug did not get to declare the fix correct. The agent that wrote the patch did not review its own work. The human still had the last merge decision.
-
-We also made one rule non-negotiable: every finding had to cite evidence. A vague claim like "there may be a race condition here" was not enough. The report had to point to the files involved, describe the interleaving or input that triggered the issue, explain the impact, and propose a concrete fix.
-
-That made the process much more useful. It also filtered out a lot of confident nonsense.
-
-<Aside type="note" title="Evidence beats confidence">
-  The best audit findings were not the most dramatic ones. They were the ones that made a small,
-  specific claim and backed it with enough context that another reviewer could reproduce the
-  reasoning.
-</Aside>
-
-## Why agents helped
-
-The strongest use case was not "AI replaces engineers." It was much narrower: agents are good at patiently tracing boring paths through a large codebase.
-
-For example, a human reviewer might look at the billing handler, confirm the obvious transaction boundary, and move on. An audit agent can keep following the event backward into Kafka consumers, forward into ClickHouse writes, sideways into tenant scoping, and then ask what happens if two messages arrive for the same tenant in the same small window.
-
-That kind of review is tedious. It is also where a lot of production bugs live.
-
-The agents were useful in three places:
-
-- **Breadth.** They could cover many subsystems without requiring one person to keep the entire platform in their head all week.
-- **Patience.** They did not mind following a stream from API request to database write to service event to async consumer.
-- **Second opinions.** A separate review pass caught findings that sounded plausible but did not match the actual code or design intent.
-
-The last point mattered most. LLMs can misunderstand why a system is built a certain way. Sometimes code that looks suspicious is an intentional trade-off. Sometimes an apparent race is already prevented by a lock one layer down. The review pass forced us to separate "this looks scary" from "this is actually broken."
-
-## What we found
-
-We ran the first version across 12 subsystems in 26 batches. Each task was scoped to a few hours of agent work, and the batches were small enough that a human could still review the output without drowning in it.
-
-The audit completed 90 tasks across the platform. The most common findings were exactly the kinds of things we expected in a multi-tenant streaming system:
+The findings were mostly the kind you expect after a platform gets broad enough:
 
 | Category             | Count | Example                                                                 |
 | -------------------- | ----- | ----------------------------------------------------------------------- |
@@ -71,41 +37,16 @@ The audit completed 90 tasks across the platform. The most common findings were 
 | Auth bypass vectors  | 4     | GraphQL complexity bypass through deep nesting with small page sizes    |
 | DNS propagation      | 3     | Stale DNS pointing at decommissioned nodes                              |
 
-The most valuable findings were not always the highest severity. A few were boring but important tenant-isolation checks. A few were "this is safe, and here is why" confirmations that turned implicit assumptions into documented invariants. Those are useful too, because future changes have something concrete to preserve.
+Some of the best results were not bug fixes. A reviewer would chase a claim and find the lower layer already enforced the invariant. That still helped. It turned a hidden assumption into something we could preserve during the next change.
 
-## What changed in the code review culture
+The agents were good at long, boring traces. GraphQL to gRPC to a service event. Kafka to ClickHouse to Purser. Foghorn state to Helmsman rewrites to the player fallback path. A person can do that too, but it is easy to stop when the first function looks fine. The agent did not get tired of following one more edge.
 
-The audit changed the questions we ask during review.
+The weak point was severity. LLMs like to make findings sound bigger than they are. The review pass had to push hard on impact: can a tenant hit this, does it cross a trust boundary, is there data loss, is it only a noisy log, is the bad state already repaired one layer later?
 
-"Does this query filter by tenant?" became a first-class check, not an afterthought. "Is this operation idempotent if Kafka retries it?" started showing up in reviews outside the audit. "What happens if this cache key collides across tenants?" became easier to ask because we had examples from real findings.
+The first run also taught us what a finding report should look like. Early reports came padded with process notes and architecture recaps — fine while designing the workflow, useless when the question is "is this bug real?" The format we settled on: one paragraph for the claim, the exact files and functions, the failing interleaving or input, the tenant impact, the smallest reasonable fix, and the test that proves it. Batch size mattered too. Three tasks per batch kept the human reviewer ahead of the queue; bigger batches just moved the bottleneck to whoever had to merge.
 
-That is the part of the experiment we would keep even without the agents. A good audit leaves behind sharper engineering habits.
+The lasting change was in review questions. We now ask more often whether a cache key includes `tenant_id`, whether a handler survives Kafka retry, whether stream lifecycle events can arrive out of order, and whether an edge can keep serving a previously approved playback path when the control plane is temporarily out.
 
-It also made us more careful about severity. Agents are tempted to overstate risk because "critical issue found" sounds more useful than "possible edge case worth testing." The review stage pushed severity back down when the evidence did not support it. That made the high-severity findings easier to take seriously.
+Next up is lightweight automation: track when each subsystem was last audited, weight the riskier areas like billing and auth, and open work only when there is a useful review to run. Most audit cycles should behave like Skipper's runtime monitoring — wake up, look at the current state, and go back to sleep.
 
-## What we would do differently
-
-The first run was too verbose. Some reports included too much process, too many proposed formats, and too much architecture explanation. That is useful while designing an internal workflow, but it is not useful when the goal is to decide whether a bug is real.
-
-Next time, we would make the reports shorter:
-
-- one paragraph for the claim
-- exact files and functions involved
-- the failing interleaving or input
-- the user or tenant impact
-- the smallest reasonable fix
-- the test that proves the fix
-
-We would also keep batch sizes small. Three tasks per batch was about right. Larger batches create a review queue, and the human reviewer becomes the bottleneck. Smaller batches make the pipeline feel busy without producing enough useful coverage.
-
-## Where this goes next
-
-The manual version proved that the process is worth keeping, but we do not want a pile of bespoke prompts and hand-run tasks to become part of how FrameWorks operates.
-
-The next step is lightweight automation: track when each subsystem was last audited, prioritize higher-risk areas like billing and auth, and only open work when there is a useful review to run. The goal is not to have agents constantly changing code. The goal is to keep stale, risky parts of the platform from going unexamined for too long.
-
-We already use a similar idea in Skipper's runtime monitoring. Most checks should be quiet. They wake up, inspect the current state, and do nothing unless something actually needs attention. The audit process should behave the same way.
-
-AI agents were helpful here because they gave us more review coverage, not because they removed judgment from the system. The useful pattern was evidence first, independent review second, automation third, and human merge last.
-
-That is less flashy than "seven agents fixed our platform." It is also much closer to how we want to build software.
+The agents gave us more coverage. The process worked because evidence, independent review, tests, and human merge stayed in the loop.

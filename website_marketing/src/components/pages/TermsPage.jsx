@@ -30,7 +30,7 @@ const termsSections = [
   {
     title: "4. Fees & Beta Billing",
     paragraphs: [
-      "During the public beta, metered streaming usage—bandwidth, processing, and storage—is provided at no charge while we tune pricing for general availability. Any subscription or add-on fees are billed as described at checkout before you incur them.",
+      "During the public beta, metered streaming usage for bandwidth, processing, and storage is provided at no charge while we tune pricing for general availability. Any subscription or add-on fees are billed as described at checkout before you incur them.",
       "Account balances and top-ups are real and remain yours; they are applied against future usage and are not forfeited when the beta ends. We will give reasonable notice before metered usage becomes billable.",
     ],
   },

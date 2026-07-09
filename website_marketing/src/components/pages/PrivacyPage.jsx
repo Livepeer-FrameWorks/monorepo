@@ -7,7 +7,7 @@ const privacySections = [
     title: "Information we collect",
     items: [
       "Account details you provide such as name, email address, company, and authentication metadata.",
-      "Operational telemetry—usage logs, health metrics, and error diagnostics—to keep the platform reliable.",
+      "Operational telemetry, including usage logs, health metrics, and error diagnostics, to keep the platform reliable.",
       "Streaming metadata such as stream configuration, routing decisions, and aggregate viewer and quality-of-experience analytics generated as your streams are delivered.",
       "Billing information needed to manage subscriptions and usage; payment card details are handled by our payment processor and are not stored on FrameWorks servers.",
       "Support communications and feedback you submit through tickets, email, or chat.",
@@ -18,7 +18,7 @@ const privacySections = [
     items: [
       "We do not inspect or mine the contents of your live or recorded media for advertising or profiling.",
       "We do not sell, rent, or trade your personal data or your viewers' data to anyone.",
-      "Self-hosted and hybrid deployments keep your media and much of your operational data on infrastructure you control—by design, we never need a copy to deliver the service.",
+      "Self-hosted and hybrid deployments keep your media and much of your operational data on infrastructure you control. We do not need a copy to deliver the service.",
     ],
   },
   {

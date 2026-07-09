@@ -1,0 +1,41 @@
+---
+title: "Our Production Topology Is Public on Purpose"
+date: 2026-03-16
+authors:
+  - frameworks
+excerpt: "The FrameWorks gitops repo is public: every service, database, and broker placement in plaintext, with only host addresses and credentials encrypted. What we encrypt, what we don't, and the pre-commit hooks that enforce the boundary."
+tags:
+  - engineering
+  - operations
+  - sovereignty
+---
+
+Last week we merged our private gitops repo into the public one. The commit message is one line: "merge gitops-private for deployment transparency." Since then, the [FrameWorks gitops repo](https://github.com/Livepeer-FrameWorks/gitops) has contained our actual production deployment — every service, database, message broker, cache, and host-to-role mapping, in plaintext, for anyone to read.
+
+The position follows from the product. FrameWorks sells sovereignty: run the platform on our infrastructure, on a dedicated cluster, or entirely on your own hardware. A platform that pitches "you can see and control the whole stack" while hiding how its own production stack is wired would be making an argument against itself. So the cluster manifest that drives our deployment is the same kind of artifact we document for operators, published as-is. Each cluster in it carries an explicit `public_topology: true` flag.
+
+## The boundary
+
+The repo splits into two kinds of files.
+
+**Plaintext:** the cluster manifest (topology, service placement, database and broker wiring, per-service configuration), the edge-node topology, the non-secret operator environment, and the release manifests with their channel pointers. SOPS-encrypted files also keep their YAML keys and structure visible — you can see _that_ there's a WireGuard private key per host and what the file layout is, just not the value.
+
+**Encrypted:** the hosts file (server addresses, SSH targets, WireGuard private keys) and the secrets env files (API keys, passwords, tokens). Everything encrypted uses [SOPS](https://github.com/getsops/sops) with [age](https://github.com/FiloSottile/age) keys.
+
+The interesting property is what the plaintext half enables. Anyone evaluating FrameWorks can answer "how is this actually deployed" from the source instead of from a marketing diagram. An operator setting up their own cluster has our production manifest as a working reference for the [manifest format](/operators/cluster-manifest). And our own deployment discussions happen against a file everyone can see.
+
+## The guards
+
+A public repo with an encryption boundary is one careless commit away from being a public repo without one. Three pre-commit hooks enforce it:
+
+- **No plaintext secrets** — staged secrets files must actually be SOPS-encrypted: env files need the SOPS version marker, encrypted YAML needs its `sops:` metadata block. A decrypted file that someone forgot to re-encrypt fails the commit.
+- **No leaked addresses** — staged plaintext manifests are grepped for IP addresses that belong in the encrypted hosts file, with only documentation ranges and loopback allowed through.
+- **No age keys** — any staged file containing an age secret-key prefix fails the commit, so a private key can't ride along in a config or a note.
+
+Secret edits go through a small wrapper script that decrypts to a temp file, applies the change, and re-encrypts — nobody hand-edits encrypted files. Key management is documented in the repo itself: adding a teammate is a keypair plus `sops updatekeys`; a compromised key means removing it _and_ rotating every value it could decrypt, on the theory that once the ciphertext is public, revoking the key alone protects nothing.
+
+## What it costs
+
+The downside: our infrastructure is easier to case. An attacker can read which services exist, where the trust boundaries are, and what a valuable target would be. We accepted that because most of it is discoverable anyway — port scans, DNS, TLS certificates, and job postings reconstruct a topology diagram slowly but reliably — while the part that gives an attacker traction (addresses, credentials, keys) stays encrypted. What we got in return is a deployment reference that can't go stale, since the deploy tooling reads the same file you do.
+
+If you're deploying FrameWorks yourself, start from the [deployment guide](/operators/deployment) — the public manifest is the worked example.

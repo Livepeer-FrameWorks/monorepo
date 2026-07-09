@@ -251,7 +251,7 @@ const StatusPage = () => {
               accepting traffic, <strong>degraded</strong> when some capacity is impaired but
               delivery continues, and <strong>down</strong> when it can no longer serve viewers.
               Because the platform routes around unhealthy nodes, a degraded cluster does not
-              necessarily mean your streams are affected—routing steers viewers to the nearest
+              necessarily mean your streams are affected. Routing steers viewers to the nearest
               healthy edge.
             </p>
             <p>

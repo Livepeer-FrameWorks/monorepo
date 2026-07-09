@@ -97,9 +97,10 @@ frameworks edge init --dir /opt/frameworks-edge \
 
 This creates:
 
-- Edge environment file - Environment configuration
-- Edge compose file - MistServer, Helmsman, and Caddy
-- Caddy config file - Bootstrap reverse proxy; production TLS and viewer routing are activated from ConfigSeed after enrollment
+- Edge environment files - Configuration, write-once enrollment token, and the MistServer API secret
+- Edge compose file - The single `frameworks-edge` container (MistServer, Helmsman, and Caddy run inside it under s6)
+
+The bootstrap Caddy config is baked into the edge image; production TLS and viewer routing are activated from ConfigSeed after enrollment. (Native mode renders the bootstrap Caddyfile on the host instead.)
 
 ## Review the Config
 
@@ -112,7 +113,7 @@ FOGHORN_CONTROL_ADDR=foghorn.<media-cluster>.example.com:18029
 GRPC_TLS_CA_PATH=
 EDGE_DOMAIN=stream.yourdomain.com
 ACME_EMAIL=ops@yourdomain.com
-DEPLOY_MODE=docker
+DEPLOY_MODE=container
 ```
 
 The enrollment token lives in its own file, `.edge-enroll.env`, so rotating or re-issuing a token never changes `.edge.env` (which would restart an enrolled node):
@@ -134,7 +135,11 @@ HELMSMAN_CAP_EDGE=true
 HELMSMAN_CAP_STORAGE=true
 HELMSMAN_CAP_PROCESSING=true
 HELMSMAN_MAX_TRANSCODES=0
-HELMSMAN_STORAGE_LOCAL_PATH=/var/lib/mistserver/recordings
+# Hot-storage location. Container mode already persists /data/storage on the
+# edge_storage named volume — do NOT override it there, or DVR/clip data
+# lands outside the volume. Native mode defaults to
+# /var/lib/frameworks/edge-storage.
+#HELMSMAN_STORAGE_LOCAL_PATH=/var/lib/frameworks/edge-storage
 ```
 
 ## Start the Stack
@@ -143,7 +148,7 @@ HELMSMAN_STORAGE_LOCAL_PATH=/var/lib/mistserver/recordings
 frameworks edge enroll --dir /opt/frameworks-edge
 ```
 
-In Docker mode, this starts the containers and enrolls the node if `EDGE_ENROLLMENT_TOKEN` is set in `.edge-enroll.env`.
+In container mode, this starts the single `frameworks-edge` container and enrolls the node if `EDGE_ENROLLMENT_TOKEN` is set in `.edge-enroll.env`.
 
 Check status:
 
@@ -153,9 +158,8 @@ frameworks edge status --dir /opt/frameworks-edge
 
 You should see:
 
-- `mistserver` - Running
-- `helmsman` - Running
-- `caddy` - Running
+- `edge` - Up (healthy) — the single container running MistServer, Helmsman,
+  and Caddy under s6 (native mode lists the three services individually)
 - HTTPS - `/health` responds on the configured edge domain
 
 ## What’s Running
@@ -178,7 +182,7 @@ The sidecar. Does:
 - Collects client and node metrics for Foghorn
 - Reports node capacity and storage details
 
-Health check: `curl http://localhost:18007/health` when Helmsman's local HTTP API is reachable. In the default Docker template, the port is exposed only inside the compose network.
+Health check: Helmsman's HTTP API binds loopback (it carries local-only management endpoints). On Linux — native or container mode with host networking — `curl http://localhost:18007/health` works from the host; on macOS container mode use `docker exec frameworks-edge curl -s http://localhost:18007/health` (the port is not published).
 
 ### Caddy
 
@@ -193,14 +197,15 @@ The generated Caddyfile starts in bootstrap mode with internal TLS and a 503 res
 ## Logs
 
 ```bash
-# All services
+# All services (caddy/mistserver/helmsman run inside the single edge
+# container; their lines are interleaved on its stdout)
 frameworks edge logs --dir /opt/frameworks-edge
 
-# Specific container
+# Service-name arguments map to the same edge container
 frameworks edge logs helmsman --dir /opt/frameworks-edge --follow
 
 # Or use docker directly
-docker compose -f docker-compose.edge.yml logs -f helmsman
+docker compose -f docker-compose.edge.yml logs -f edge
 ```
 
 ## Common Issues

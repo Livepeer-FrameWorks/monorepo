@@ -212,3 +212,10 @@ Single service: `make build-bin-<name>` (e.g. `make build-bin-purser`). See `Mak
 | `docs/rfcs/`         | Proposals under discussion                      |
 | `docs/skills/`       | Agent integration & discovery files             |
 | `CONTRIBUTING.md`    | Dev setup, code style, workflows, PR process    |
+
+## Security
+
+Found a vulnerability? See [`SECURITY.md`](SECURITY.md) for our disclosure policy,
+scope, and safe harbor. Report privately via [GitHub Private Vulnerability Reporting](https://github.com/livepeer-frameworks/monorepo/security/advisories/new)
+or **security@frameworks.network** — please don't open a public issue. The machine-readable
+policy is served at `/.well-known/security.txt` on each site.
