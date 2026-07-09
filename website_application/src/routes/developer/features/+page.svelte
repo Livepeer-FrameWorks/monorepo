@@ -2,9 +2,10 @@
   import { resolve } from "$app/paths";
   import { LayoutGrid, ShieldAlert } from "lucide-svelte";
   import {
-    features,
     featuresByArea,
-    statusRank,
+    flattenFeatures,
+    PILLAR_ORDER,
+    pillarLabel,
     SURFACE_KEYS,
     surfaceCell,
     type Feature,
@@ -12,25 +13,21 @@
     type SurfaceKey,
   } from "$lib/features";
 
+  // Families and subitems render in curated registry order, grouped by pillar.
   const grouped = featuresByArea();
-  const areas = Object.keys(grouped).sort();
-  for (const area of areas) {
-    grouped[area].sort((a, b) => {
-      const r = statusRank(a.status) - statusRank(b.status);
-      if (r !== 0) return r;
-      return a.name.localeCompare(b.name);
-    });
-  }
+  const areas = PILLAR_ORDER.filter((p) => grouped[p]?.length);
 
-  const totalFeatures = features.length;
-  const shippedCount = features.filter((f) => f.status === "shipped").length;
-  const partialCount = features.filter((f) => f.status === "partial").length;
-  const gapCount = features.filter((f) => f.status === "gap").length;
-  const roadmapCount = features.filter((f) => f.status === "roadmap").length;
+  const allFeatures = flattenFeatures();
+  const totalFeatures = allFeatures.length;
+  const shippedCount = allFeatures.filter((f) => f.status === "shipped").length;
+  const partialCount = allFeatures.filter((f) => f.status === "partial").length;
+  const gapCount = allFeatures.filter((f) => f.status === "gap").length;
+  const roadmapCount = allFeatures.filter((f) => f.status === "roadmap").length;
 
   const SURFACE_LABEL: Record<SurfaceKey, string> = {
     graphql: "API",
     mcp: "MCP",
+    cli: "CLI",
     webapp: "App",
     docs: "Docs",
   };
@@ -49,23 +46,33 @@
     roadmap: "bg-muted text-muted-foreground",
   };
 
+  // A family row with no surfaces of its own still counts as covered when its
+  // subitems fill the surface (family_surfaces is the generator-computed union).
+  function viaSubitems(f: Feature, surface: SurfaceKey): boolean {
+    return !(f.actual_surfaces[surface] ?? false) && (f.family_surfaces?.[surface] ?? false);
+  }
+
   function cellClass(f: Feature, surface: SurfaceKey): string {
     const c = surfaceCell(f, surface);
-    if (!c.required) return "bg-muted/40 text-muted-foreground";
+    if (f.status === "roadmap" || !c.required) return "bg-muted/40 text-muted-foreground";
     if (c.filled) return "bg-success/15 text-success";
+    if (viaSubitems(f, surface)) return "bg-success/10 text-success/70";
     return "bg-destructive/15 text-destructive";
   }
 
   function cellGlyph(f: Feature, surface: SurfaceKey): string {
     const c = surfaceCell(f, surface);
-    if (!c.required) return "—";
-    return c.filled ? "✓" : "✗";
+    if (f.status === "roadmap" || !c.required) return "—";
+    if (c.filled || viaSubitems(f, surface)) return "✓";
+    return "✗";
   }
 
   function cellTitle(f: Feature, surface: SurfaceKey): string {
     const c = surfaceCell(f, surface);
+    if (f.status === "roadmap") return "planned";
     if (!c.required) return c.reason ? `not required — ${c.reason}` : "not required";
     if (c.filled) return c.sensitive ? "available; sensitive operation" : "available";
+    if (viaSubitems(f, surface)) return "available via subitems";
     return "not available";
   }
 </script>
@@ -103,7 +110,9 @@
     <div class="px-4 sm:px-6 lg:px-8 py-6 max-w-screen-xl mx-auto">
       {#each areas as area (area)}
         <section class="mb-8">
-          <h2 class="text-xs uppercase tracking-wider text-muted-foreground mb-2">{area}</h2>
+          <h2 class="text-xs uppercase tracking-wider text-muted-foreground mb-2">
+            {pillarLabel(area)}
+          </h2>
           <div class="border border-border rounded-md overflow-hidden">
             <table class="w-full text-sm">
               <thead class="bg-muted/50 text-xs text-muted-foreground">
@@ -117,17 +126,22 @@
                 </tr>
               </thead>
               <tbody>
-                {#each grouped[area] as f (f.slug)}
+                {#each grouped[area].flatMap( (fam) => [{ f: fam, child: false }, ...(fam.subitems ?? []).map( (s) => ({ f: s, child: true }) )] ) as { f, child } (f.slug)}
                   <tr class="border-t border-border hover:bg-accent/30">
-                    <td class="px-3 py-2">
+                    <td class="px-3 py-2" class:pl-8={child}>
                       <a
                         href={resolve(`/developer/features/${f.slug}`)}
-                        class="text-primary hover:underline font-medium"
+                        class="text-primary hover:underline {child ? '' : 'font-medium'}"
                       >
-                        {f.name}
+                        {#if child}<span class="text-muted-foreground mr-1" aria-hidden="true"
+                            >↳</span
+                          >{/if}{f.name}
                       </a>
-                      {#if f.description}
-                        <div class="text-xs text-muted-foreground mt-0.5">{f.description}</div>
+                      {#if f.kind === "foundation"}
+                        <span
+                          class="text-[10px] uppercase tracking-wide px-1 py-0.5 rounded bg-muted text-muted-foreground ml-1"
+                          >Foundation</span
+                        >
                       {/if}
                     </td>
                     <td class="px-3 py-2">

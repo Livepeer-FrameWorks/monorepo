@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -44,6 +45,13 @@ type MCPSurface struct {
 	Tools []string `yaml:"tools,omitempty" json:"tools,omitempty"`
 }
 
+// CLISurface lists `frameworks` command paths (e.g. "edge update"); every
+// space-separated segment is validated against cobra Use: declarations in
+// cli/cmd/*.go.
+type CLISurface struct {
+	Commands []string `yaml:"commands,omitempty" json:"commands,omitempty"`
+}
+
 type WebappSurface struct {
 	Routes []string `yaml:"routes,omitempty" json:"routes,omitempty"`
 }
@@ -55,6 +63,7 @@ type DocsSurface struct {
 type Surfaces struct {
 	GraphQL GraphQLSurface `yaml:"graphql,omitempty" json:"graphql"`
 	MCP     MCPSurface     `yaml:"mcp,omitempty" json:"mcp"`
+	CLI     CLISurface     `yaml:"cli,omitempty" json:"cli"`
 	Webapp  WebappSurface  `yaml:"webapp,omitempty" json:"webapp"`
 	Docs    DocsSurface    `yaml:"docs,omitempty" json:"docs"`
 }
@@ -80,6 +89,7 @@ type Feature struct {
 	Slug             string                `yaml:"slug" json:"slug"`
 	Name             string                `yaml:"name" json:"name"`
 	Area             string                `yaml:"area" json:"area"`
+	Kind             string                `yaml:"kind,omitempty" json:"kind"`
 	Description      string                `yaml:"description,omitempty" json:"description,omitempty"`
 	Status           string                `yaml:"status" json:"status"`
 	GapReason        string                `yaml:"gap_reason,omitempty" json:"gap_reason,omitempty"`
@@ -87,9 +97,46 @@ type Feature struct {
 	Configurability  *Configurability      `yaml:"configurability,omitempty" json:"configurability,omitempty"`
 	Surfaces         Surfaces              `yaml:"surfaces,omitempty" json:"surfaces"`
 	Examples         []Example             `yaml:"examples,omitempty" json:"examples,omitempty"`
+	DependsOn        []string              `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
+	Related          []string              `yaml:"related,omitempty" json:"related,omitempty"`
+	Aliases          []string              `yaml:"aliases,omitempty" json:"aliases,omitempty"`
+	Subitems         []Feature             `yaml:"subitems,omitempty" json:"subitems,omitempty"`
 
 	// Computed (not in YAML)
 	ActualSurfaces map[string]bool `yaml:"-" json:"actual_surfaces"`
+	// Enables is the derived reverse of DependsOn across the whole registry.
+	Enables []string `yaml:"-" json:"enables,omitempty"`
+	// FamilySurfaces is own ∪ subitem ActualSurfaces; set on parents only.
+	FamilySurfaces map[string]bool `yaml:"-" json:"family_surfaces,omitempty"`
+}
+
+// pillarOrder is the canonical product ordering for top-level `area` values;
+// it drives section order in the generated MDX matrix and is the allowed set
+// for validation. Subitems inherit their parent's pillar and must not set area.
+var pillarOrder = []string{
+	"streaming",
+	"playback",
+	"media-library",
+	"processing",
+	"analytics",
+	"infrastructure",
+	"commerce",
+	"developer",
+	"engagement",
+	"account",
+}
+
+var pillarLabels = map[string]string{
+	"streaming":      "Streaming",
+	"playback":       "Playback",
+	"media-library":  "Media Library",
+	"processing":     "Processing & AI",
+	"analytics":      "Analytics & Observability",
+	"infrastructure": "Infrastructure & BYOC",
+	"commerce":       "Commerce & Billing",
+	"developer":      "Developer Platform & Agents",
+	"engagement":     "Engagement & Interactivity",
+	"account":        "Account & Apps",
 }
 
 type Registry struct {
@@ -103,6 +150,7 @@ type validator struct {
 	schemaSubscriptions map[string]bool
 	schemaFields        map[string]bool
 	mcpTools            map[string]string // tool name → file path
+	cliCommands         map[string]bool   // cobra Use: tokens from cli/cmd
 	errors              []string
 }
 
@@ -134,11 +182,22 @@ func main() {
 	if err := v.loadMCPTools(); err != nil {
 		die("load MCP tools: %v", err)
 	}
-
-	for i := range reg.Features {
-		v.validateFeature(&reg.Features[i])
-		reg.Features[i].computeActualSurfaces()
+	if err := v.loadCLICommands(); err != nil {
+		die("load CLI commands: %v", err)
 	}
+
+	v.validateHierarchy(&reg)
+	for i := range reg.Features {
+		f := &reg.Features[i]
+		v.validateFeature(f)
+		f.computeActualSurfaces()
+		for j := range f.Subitems {
+			v.validateFeature(&f.Subitems[j])
+			f.Subitems[j].computeActualSurfaces()
+		}
+		f.computeFamilySurfaces()
+	}
+	v.validateRelations(&reg)
 
 	// Cross-cutting check: any reachable GraphQL field must be wired to a
 	// real resolver. gqlgen can regenerate panic stubs when resolver method
@@ -152,7 +211,11 @@ func main() {
 		}
 		os.Exit(1)
 	}
-	fmt.Printf("✓ Feature registry validated (%d features)\n", len(reg.Features))
+	total := 0
+	for _, f := range reg.Features {
+		total += 1 + len(f.Subitems)
+	}
+	fmt.Printf("✓ Feature registry validated (%d families, %d features)\n", len(reg.Features), total)
 
 	if emitJSON {
 		outPath := filepath.Join(repoRoot, "website_application", "src", "lib", "features", "registry.json")
@@ -188,30 +251,20 @@ func relativeOrAbs(base, target string) string {
 	return target
 }
 
-// renderMatrixMDX emits a Starlight-compatible MDX feature matrix grouped by area.
+// renderMatrixMDX emits a Starlight-compatible MDX feature matrix grouped by
+// pillar, in curated pillarOrder / YAML order. Roadmap rows are included as
+// "Planned" (surfaces shown as "—" since their references are unvalidated);
+// ActualSurfaces/FamilySurfaces are expected to be computed already.
 func renderMatrixMDX(reg Registry) string {
 	areas := map[string][]Feature{}
 	for _, f := range reg.Features {
-		if f.Status == "roadmap" {
-			continue
-		}
-		f.computeActualSurfaces()
 		areas[f.Area] = append(areas[f.Area], f)
 	}
-	keys := make([]string, 0, len(areas))
-	for k := range areas {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	statusOrder := map[string]int{"shipped": 0, "partial": 1, "gap": 2}
-	for _, k := range keys {
-		fs := areas[k]
-		sort.SliceStable(fs, func(i, j int) bool {
-			if statusOrder[fs[i].Status] != statusOrder[fs[j].Status] {
-				return statusOrder[fs[i].Status] < statusOrder[fs[j].Status]
-			}
-			return fs[i].Name < fs[j].Name
-		})
+	keys := make([]string, 0, len(pillarOrder))
+	for _, p := range pillarOrder {
+		if len(areas[p]) > 0 {
+			keys = append(keys, p)
+		}
 	}
 
 	var b strings.Builder
@@ -228,38 +281,92 @@ func renderMatrixMDX(reg Registry) string {
 	b.WriteString("## Availability key\n\n")
 	b.WriteString("- **Available** — ready to use today; availability can still depend on account tier, deployment, and configuration.\n")
 	b.WriteString("- **Expanding** — the core capability is live; a specific surface or workflow is actively shipping.\n")
-	b.WriteString("- **Planned** — tracked on the [Roadmap](/roadmap), not represented as a shipped capability in this matrix.\n\n")
+	b.WriteString("- **Planned** — not yet usable; included so the matrix shows the full capability scope. Sequencing and detail live on the [Roadmap](/roadmap).\n\n")
+	b.WriteString("Rows marked *(foundation)* are platform building blocks whose value shows up through the product capabilities built on them.\n\n")
 	b.WriteString("## Capability matrix\n\n")
 
-	surfaceLabel := map[string]string{"graphql": "API", "mcp": "Agents (MCP)", "webapp": "Dashboard", "docs": "Docs"}
-	surfaceKeys := []string{"graphql", "mcp", "webapp", "docs"}
+	surfaceLabel := map[string]string{"graphql": "API", "mcp": "Agents (MCP)", "cli": "CLI", "webapp": "Dashboard", "docs": "Docs"}
+	surfaceKeys := []string{"graphql", "mcp", "cli", "webapp", "docs"}
 	surfaceSummary := func(f Feature) string {
+		if f.Status == "roadmap" {
+			return "—"
+		}
+		actual := f.ActualSurfaces
+		if f.FamilySurfaces != nil {
+			actual = f.FamilySurfaces
+		}
 		available := []string{}
 		for _, s := range surfaceKeys {
-			if f.ActualSurfaces[s] {
+			if actual[s] {
 				available = append(available, surfaceLabel[s])
 			}
 		}
 		if len(available) == 0 {
-			return "Contact us"
+			return "—"
 		}
 		return strings.Join(available, ", ")
 	}
 
 	for _, area := range keys {
 		fmt.Fprintf(&b, "### %s\n\n", publicAreaLabel(area))
+		if pillarHasRoadmapRows(areas[area]) {
+			fmt.Fprintf(&b, "Planned items in this area are detailed on the [Roadmap](/roadmap#%s).\n\n", anchorSlug(publicAreaLabel(area)))
+		}
 		b.WriteString("| Capability | Availability | Surfaces | What it unlocks |\n")
 		b.WriteString("| --- | --- | --- | --- |\n")
-		for _, f := range areas[area] {
+		row := func(f Feature, child bool) {
 			description := strings.TrimSpace(f.Description)
 			if description == "" {
 				description = f.Name
 			}
-			fmt.Fprintf(&b, "| **%s** | %s | %s | %s |\n", f.Name, publicStatusLabel(f.Status), escapeMDXCell(surfaceSummary(f)), escapeMDXCell(compactWhitespace(description)))
+			name := fmt.Sprintf("**%s**", f.Name)
+			if child {
+				name = "↳ " + f.Name
+			}
+			if f.Kind == "foundation" {
+				name += " *(foundation)*"
+			}
+			fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", name, publicStatusLabel(f.Status), escapeMDXCell(surfaceSummary(f)), escapeMDXCell(compactWhitespace(description)))
+		}
+		for _, f := range areas[area] {
+			row(f, false)
+			for _, s := range f.Subitems {
+				row(s, true)
+			}
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("Planned product work lives on the [Roadmap](/roadmap). This page stays focused on capabilities that are already usable or actively expanding across shipped surfaces.\n")
+	b.WriteString("The [Roadmap](/roadmap) carries sequencing and detail for planned work; this matrix shows the full capability scope, shipped and planned alike.\n")
+	return b.String()
+}
+
+func pillarHasRoadmapRows(fs []Feature) bool {
+	for _, f := range fs {
+		if f.Status == "roadmap" {
+			return true
+		}
+		for _, s := range f.Subitems {
+			if s.Status == "roadmap" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// anchorSlug mirrors github-slugger (used by Starlight for heading ids):
+// lowercase, drop everything but [a-z0-9 -], then each space becomes a
+// hyphen — "Processing & AI" → "processing--ai".
+func anchorSlug(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
+			b.WriteRune(r)
+		case r == ' ':
+			b.WriteRune('-')
+		}
+	}
 	return b.String()
 }
 
@@ -277,18 +384,7 @@ func publicStatusLabel(status string) string {
 }
 
 func publicAreaLabel(area string) string {
-	labels := map[string]string{
-		"account":        "Account",
-		"agents":         "Agents",
-		"analytics":      "Analytics",
-		"billing":        "Billing",
-		"developer":      "Developer",
-		"infrastructure": "Infrastructure",
-		"playback":       "Playback",
-		"storage":        "Storage",
-		"streaming":      "Streaming",
-	}
-	if label, ok := labels[area]; ok {
+	if label, ok := pillarLabels[area]; ok {
 		return label
 	}
 	if area == "" {
@@ -302,11 +398,14 @@ func compactWhitespace(s string) string {
 }
 
 // escapeMDXCell escapes characters that would break a Markdown table cell
-// rendered through MDX: pipes terminate cells; `<` opens a JSX tag.
+// rendered through MDX: pipes terminate cells; `<` opens a JSX tag; `{` opens
+// a JSX expression (e.g. npm package shorthand "player-{core,react}").
 func escapeMDXCell(s string) string {
 	s = strings.ReplaceAll(s, "|", "\\|")
 	s = strings.ReplaceAll(s, "<", "&lt;")
 	s = strings.ReplaceAll(s, ">", "&gt;")
+	s = strings.ReplaceAll(s, "{", "&#123;")
+	s = strings.ReplaceAll(s, "}", "&#125;")
 	return s
 }
 
@@ -314,9 +413,153 @@ func (f *Feature) computeActualSurfaces() {
 	f.ActualSurfaces = map[string]bool{
 		"graphql": len(f.Surfaces.GraphQL.Mutations) > 0 || len(f.Surfaces.GraphQL.Queries) > 0 || len(f.Surfaces.GraphQL.Subscriptions) > 0 || len(f.Surfaces.GraphQL.Fields) > 0,
 		"mcp":     len(f.Surfaces.MCP.Tools) > 0,
+		"cli":     len(f.Surfaces.CLI.Commands) > 0,
 		"webapp":  len(f.Surfaces.Webapp.Routes) > 0,
 		"docs":    len(f.Surfaces.Docs.Pages) > 0,
 	}
+}
+
+// computeFamilySurfaces sets FamilySurfaces (own ∪ subitem surfaces) on
+// parents so renderers can show what a family covers without treating a
+// grouping row's empty surface list as "nothing shipped". Requires
+// computeActualSurfaces to have run on the row and all subitems.
+func (f *Feature) computeFamilySurfaces() {
+	if len(f.Subitems) == 0 {
+		return
+	}
+	union := map[string]bool{}
+	maps.Copy(union, f.ActualSurfaces)
+	for i := range f.Subitems {
+		for k, ok := range f.Subitems[i].ActualSurfaces {
+			if ok {
+				union[k] = true
+			}
+		}
+	}
+	f.FamilySurfaces = union
+}
+
+// validateHierarchy enforces the two-level shape of the registry: top-level
+// rows carry a pillar `area` from pillarOrder, subitems inherit it (and must
+// not set their own), nesting is one level deep, and slugs are globally
+// unique so /developer/features/[slug] URLs stay unambiguous.
+func (v *validator) validateHierarchy(reg *Registry) {
+	pillars := map[string]bool{}
+	for _, p := range pillarOrder {
+		pillars[p] = true
+	}
+	seen := map[string]bool{}
+	claim := func(slug string) {
+		if slug == "" {
+			v.errf("feature with empty slug")
+			return
+		}
+		if seen[slug] {
+			v.errf("%s: duplicate slug", slug)
+		}
+		seen[slug] = true
+	}
+	for i := range reg.Features {
+		f := &reg.Features[i]
+		claim(f.Slug)
+		if !pillars[f.Area] {
+			v.errf("%s: area %q is not a known pillar (%s)", f.Slug, f.Area, strings.Join(pillarOrder, ", "))
+		}
+		for j := range f.Subitems {
+			s := &f.Subitems[j]
+			claim(s.Slug)
+			if s.Area != "" {
+				v.errf("%s: subitems inherit the parent pillar; remove area %q", s.Slug, s.Area)
+			}
+			if len(s.Subitems) > 0 {
+				v.errf("%s: subitems cannot have their own subitems (one level of nesting only)", s.Slug)
+			}
+		}
+	}
+}
+
+// validateRelations checks kind, depends_on, related, and aliases across the
+// whole registry, then derives the reverse dependency edges (Enables).
+// Runs after validateHierarchy (slug uniqueness) and computeActualSurfaces.
+func (v *validator) validateRelations(reg *Registry) {
+	bySlug := map[string]*Feature{}
+	walk := func(fn func(f *Feature)) {
+		for i := range reg.Features {
+			fn(&reg.Features[i])
+			for j := range reg.Features[i].Subitems {
+				fn(&reg.Features[i].Subitems[j])
+			}
+		}
+	}
+	walk(func(f *Feature) { bySlug[f.Slug] = f })
+
+	names := map[string]bool{}
+	for slug := range bySlug {
+		names[slug] = true
+	}
+	walk(func(f *Feature) {
+		switch f.Kind {
+		case "":
+			f.Kind = "product"
+		case "product", "foundation":
+		default:
+			v.errf("%s: invalid kind %q (must be product|foundation)", f.Slug, f.Kind)
+		}
+		for _, dep := range f.DependsOn {
+			if dep == f.Slug {
+				v.errf("%s: depends_on references itself", f.Slug)
+			} else if bySlug[dep] == nil {
+				v.errf("%s: depends_on target %q is not a known slug", f.Slug, dep)
+			}
+		}
+		for _, rel := range f.Related {
+			if bySlug[rel] == nil {
+				v.errf("%s: related target %q is not a known slug", f.Slug, rel)
+			}
+		}
+		for _, alias := range f.Aliases {
+			if names[alias] {
+				v.errf("%s: alias %q collides with an existing slug or alias", f.Slug, alias)
+			}
+			names[alias] = true
+		}
+	})
+
+	// Cycle check over depends_on: 0 = unvisited, 1 = in stack, 2 = done.
+	state := map[string]int{}
+	var visit func(slug string) bool
+	visit = func(slug string) bool {
+		switch state[slug] {
+		case 1:
+			return false
+		case 2:
+			return true
+		}
+		state[slug] = 1
+		if f := bySlug[slug]; f != nil {
+			for _, dep := range f.DependsOn {
+				if bySlug[dep] != nil && !visit(dep) {
+					v.errf("%s: depends_on cycle via %q", slug, dep)
+					state[slug] = 2
+					return true // report once per entry point
+				}
+			}
+		}
+		state[slug] = 2
+		return true
+	}
+	for slug := range bySlug {
+		visit(slug)
+	}
+
+	walk(func(f *Feature) {
+		for _, dep := range f.DependsOn {
+			if target := bySlug[dep]; target != nil {
+				target.Enables = append(target.Enables, f.Slug)
+			}
+		}
+	})
+	walk(func(f *Feature) { sort.Strings(f.Enables) })
 }
 
 func (v *validator) validateFeature(f *Feature) {
@@ -353,6 +596,13 @@ func (v *validator) validateFeature(f *Feature) {
 	for _, t := range f.Surfaces.MCP.Tools {
 		if _, ok := v.mcpTools[t]; !ok {
 			v.errf("%s: MCP tool %q not registered under api_gateway/internal/mcp/tools/", f.Slug, t)
+		}
+	}
+	for _, c := range f.Surfaces.CLI.Commands {
+		for seg := range strings.FieldsSeq(c) {
+			if !v.cliCommands[seg] {
+				v.errf("%s: CLI command %q — segment %q has no cobra Use: declaration under cli/cmd/", f.Slug, c, seg)
+			}
 		}
 	}
 	for _, r := range f.Surfaces.Webapp.Routes {
@@ -544,6 +794,34 @@ func (v *validator) checkResolverStubs(_ *Registry) {
 	for _, name := range names {
 		v.errf("GraphQL resolver %q is still wired to a not-implemented panic stub in schema.resolvers.go", name)
 	}
+}
+
+// loadCLICommands collects cobra command tokens from cli/cmd/*.go. Both
+// declaration styles are matched: multi-line `Use:   "edge",` and inline
+// `&cobra.Command{Use: "update", ...}`. Only the first word of Use matters
+// (cobra allows `Use: "update [flags]"`).
+var cliUseRe = regexp.MustCompile(`Use:\s*"([a-z][a-z0-9-]*)`)
+
+func (v *validator) loadCLICommands() error {
+	dir := filepath.Join(v.repoRoot, "cli", "cmd")
+	v.cliCommands = map[string]bool{}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			return err
+		}
+		for _, m := range cliUseRe.FindAllStringSubmatch(string(data), -1) {
+			v.cliCommands[m[1]] = true
+		}
+	}
+	return nil
 }
 
 func (v *validator) loadMCPTools() error {

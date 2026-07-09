@@ -16,85 +16,139 @@ FrameWorks is built as a platform, not only a dashboard. The matrix shows which 
 
 - **Available** — ready to use today; availability can still depend on account tier, deployment, and configuration.
 - **Expanding** — the core capability is live; a specific surface or workflow is actively shipping.
-- **Planned** — tracked on the [Roadmap](/roadmap), not represented as a shipped capability in this matrix.
+- **Planned** — not yet usable; included so the matrix shows the full capability scope. Sequencing and detail live on the [Roadmap](/roadmap).
+
+Rows marked *(foundation)* are platform building blocks whose value shows up through the product capabilities built on them.
 
 ## Capability matrix
 
-### Account
+### Streaming
+
+Planned items in this area are detailed on the [Roadmap](/roadmap#streaming).
 
 | Capability | Availability | Surfaces | What it unlocks |
 | --- | --- | --- | --- |
-| **Tenant settings** | Expanding | API, Agents (MCP), Dashboard, Docs | Tenant identity, billing setup, retention defaults, routing preferences, and wallet-provisioned account lifecycle. |
+| **Live streams** | Available | API, Agents (MCP), Dashboard, Docs | Push and pull live streams with stream keys and ingest configuration. Push ingest over RTMP/E-RTMP, SRT, and WHIP (WebRTC); pull from RTSP, SRT, RIST, HLS, MPEG-TS, and Mist/DTSC sources. |
+| ↳ Stream keys *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Per-stream ingest credentials with rotation. |
+| ↳ Pull streams | Expanding | API, Agents (MCP), Dashboard, Docs | Stream inputs pulled from upstream sources (RTSP, SRT, RIST, HLS, etc.) instead of pushed, with resolution-stage lifecycle audit. |
+| ↳ Multistream push targets | Available | API, Agents (MCP), Dashboard, Docs | Forward live streams to additional RTMP/SRT destinations. |
+| **StreamCrafter (browser studio)** | Available | API, Dashboard, Docs | Browser-based broadcasting studio — WHIP/WebRTC ingest, compositing, and multi-source mixing. Ships as npm packages @livepeer-frameworks/streamcrafter-&#123;core,react,svelte,wc&#125; and powers the dashboard's Go Live page. |
+| **Device discovery and contribution inputs** | Planned | — | Edge-local discovery for cameras, PTZ devices, NDI sources, USB capture, HDMI inputs, and local contribution paths. |
 
-### Agents
+### Playback
+
+Planned items in this area are detailed on the [Roadmap](/roadmap#playback).
 
 | Capability | Availability | Surfaces | What it unlocks |
 | --- | --- | --- | --- |
-| **Skipper (in-app consultant agent)** | Expanding | API, Agents (MCP), Dashboard, Docs | Conversational platform agent for support and investigations. |
+| **Playback** | Available | API, Agents (MCP), Dashboard, Docs | Resolve a viewer or ingest endpoint for a stream / VOD / clip. Delivery over HLS, LL-HLS (CMAF), DASH, WebRTC (WHEP), and progressive MP4. |
+| ↳ Player SDKs | Available | API, Dashboard, Docs | Embeddable player packages — @livepeer-frameworks/player-&#123;core,react,svelte,wc&#125; — with theming, adaptive playback, and built-in boot/QoE telemetry. |
+| ↳ Playback access control | Available | API, Agents (MCP), Dashboard, Docs | Public / JWT / webhook playback authorization policy on streams, clips, and VOD assets, with a dry-run tester and full agent management surface. |
+| ↳ Signing keys *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | ES256 keypairs for signing playback JWTs. Private material returned once on creation. |
+| ↳ DRM | Planned | — | FairPlay, Widevine, and PlayReady protection for premium playback workflows. |
 
-### Analytics
+### Media Library
+
+Planned items in this area are detailed on the [Roadmap](/roadmap#media-library).
+
+| Capability | Availability | Surfaces | What it unlocks |
+| --- | --- | --- | --- |
+| **DVR recordings** | Available | API, Agents (MCP), Dashboard, Docs | 24/7-capable DVR recording with bounded live seekback, continuous archive storage, chapter replay, and VOD-style playback. |
+| ↳ DVR chapters | Expanding | API, Agents (MCP), Dashboard, Docs | Chapter artifacts that segment a long-running DVR session into replayable windows, so a 24/7 recording can be replayed by window, civil-time range, or explicit range without restarting the live stream. |
+| ↳ Scheduled recordings | Planned | — | Calendar-driven DVR captures that start and stop on schedule, so streams record themselves on a fixed cadence. |
+| **VOD assets** | Available | API, Agents (MCP), Dashboard, Docs | Multipart VOD upload and lifecycle. |
+| ↳ Scheduled VOD streams | Planned | — | Linear live channels assembled from existing VOD assets, with schedules that make archived media play as a rolling live stream. |
+| **Clips** | Available | API, Agents (MCP), Dashboard, Docs | Time-range clips extracted from streams or recordings. |
+| **Media retention** | Available | API, Agents (MCP), Dashboard, Docs | Tenant-controlled storage policy for 24/7 DVR archives, clips, and VOD assets, with per-asset overrides and entitlement bounds. |
+| **Thumbnails and sprite previews** | Expanding | API, Agents (MCP), Dashboard, Docs | Auto-generated poster frames and sprite-tile preview strips for live streams, clips, VOD, and DVR playback. |
+
+### Processing & AI
+
+Planned items in this area are detailed on the [Roadmap](/roadmap#processing--ai).
+
+| Capability | Availability | Surfaces | What it unlocks |
+| --- | --- | --- | --- |
+| **Processing** *(foundation)* | Expanding | API, Dashboard, Docs | Server-side media processing — live ABR transcoding, on-edge AI, and composition — placed on the right nodes across a cluster. |
+| ↳ Gateway-backed transcoding | Expanding | API, Dashboard, Docs | Live ABR renditions through Livepeer Gateway or local processing, with processing usage telemetry. |
+| ↳ Live AI processing | Planned | — | ONNX models running directly on the in-memory stream buffer of media edge nodes — detection, transcription, moderation, audio tagging, and embeddings for semantic search. |
+| ↳ Composition and SSAI | Planned | — | MistServer-native blitter for logos, watermarks, and lower-third overlays; Composer for server-side ad insertion (SSAI), raw-pixel composition, picture-in-picture, and automated clipping. |
+
+### Analytics & Observability
+
+Planned items in this area are detailed on the [Roadmap](/roadmap#analytics--observability).
 
 | Capability | Availability | Surfaces | What it unlocks |
 | --- | --- | --- | --- |
 | **Analytics** | Expanding | API, Agents (MCP), Dashboard, Docs | Stream health, viewers, geographic, routing, quality tiers, federation, node metrics, and view-level player QoE (rebuffering, frame drops, startup, VOD retention) — with cross-player coverage still expanding. |
+| **Incidents and alerts** | Planned | — | Tenant-scoped incident feed aggregating node-health, certificate, DNS, capacity, and cluster alerts with acknowledge/resolve and realtime delivery. |
 
-### Billing
+### Infrastructure & BYOC
+
+Planned items in this area are detailed on the [Roadmap](/roadmap#infrastructure--byoc).
+
+| Capability | Availability | Surfaces | What it unlocks |
+| --- | --- | --- | --- |
+| **Geo-balanced viewer routing** *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Foghorn resolves each viewer to the optimal edge by geography, load, and node health across federated clusters. |
+| **Edge clusters** *(foundation)* | Available | API, Agents (MCP), CLI, Dashboard, Docs | Tenant-owned edge clusters with bootstrap and node enrollment. |
+| ↳ Enrollment / bootstrap tokens *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | One-shot tokens used to enroll new edge nodes into a cluster. |
+| ↳ Nodes (edge / ingest / playback) *(foundation)* | Available | API, Agents (MCP), CLI, Dashboard, Docs | Per-node health, info, and discovery. |
+| ↳ Node mode (drain / maintenance) *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Operator controls to drain a node, put it in maintenance, or restore it to active service. |
+| ↳ Federated network status *(foundation)* | Available | API, Dashboard, Docs | Cross-cluster routing visibility and orchestrator vantage points. |
+| ↳ Edge auto-update *(foundation)* | Available | CLI, Docs | Foghorn's release reconciler auto-updates Helmsman, MistServer, and Caddy on edge nodes over the Helmsman control stream — native and single-image container nodes alike. |
+| ↳ Edge ISO and cloud images *(foundation)* | Planned | — | Bootable FrameWorks Edge ISO and prebuilt cloud/marketplace images for on-demand media-cluster scaling. |
+| **Cluster marketplace** | Expanding | API, Agents (MCP), Dashboard, Docs | Browse listed clusters and manage subscriptions. A vetted public marketplace program for third-party capacity is on the roadmap. |
+| ↳ Cluster invites *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Direct invites granting another tenant access to a cluster. |
+| ↳ Cluster subscription requests *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Tenant-requested subscription to a cluster, requiring operator approval. |
+| **BYOC ownership levels** | Expanding | Docs | The deployment ownership spectrum — from bring-your-own edge nodes to fully sovereign self-hosting. |
+| ↳ Private media cluster (BYOC) | Planned | — | Run the media and data plane on your own cloud while using the FrameWorks control plane for tenancy, routing, billing, and access control. |
+| ↳ Hosted private clusters (BYOC) | Planned | — | FrameWorks-provisioned dedicated, isolated clusters for a single tenant, with reserved capacity and fixed-rate pricing. |
+| ↳ Fully sovereign self-hosting (BYOC) | Planned | — | Run the entire FrameWorks stack with no runtime dependency on FrameWorks, including your own object storage, analytics store, DNS, and an isolated control plane and identity root. |
+| **Adjacent infrastructure services** | Expanding | API, Docs | Infrastructure products adjacent to video delivery — managed DNS, generic proxying/CDN, and standalone storage. |
+| ↳ Managed DNS and cluster domains | Expanding | API, Docs | Platform-managed DNS, TLS certificates, media-cluster domains, and tenant streaming domain discovery. |
+| ↳ Generic proxying and CDN services | Planned | — | Customer-configured proxy/CDN front doors for non-video services and adjacent workloads. |
+| ↳ Standalone object and block storage | Planned | — | Customer-facing storage buckets, volumes, policies, and lifecycle controls outside the video-asset workflow. |
+
+### Commerce & Billing
 
 | Capability | Availability | Surfaces | What it unlocks |
 | --- | --- | --- | --- |
 | **Billing & prepaid balance** | Available | API, Agents (MCP), Dashboard, Docs | Card / Mollie / crypto top-ups, billing details, invoices, prepaid balance. |
-| **Usage caps, alerts, retention cost preview** | Expanding | Contact us | Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes. |
-
-### Developer
-
-| Capability | Availability | Surfaces | What it unlocks |
-| --- | --- | --- | --- |
-| **Agents (MCP server)** | Available | Agents (MCP), Dashboard, Docs | Model Context Protocol server exposing FrameWorks operations to agents. |
-| **Developer API tokens** | Available | API, Dashboard, Docs | Long-lived API tokens for SDK / CI use. |
-| **GraphQL playground** | Available | Dashboard, Docs | Interactive GraphQL explorer wired to the live schema. |
-| **Signing keys** | Available | API, Agents (MCP), Dashboard, Docs | ES256 keypairs for signing playback JWTs. Private material returned once on creation. |
+| ↳ Usage caps, alerts, retention cost preview | Expanding | — | Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes. |
 | **Wallet & on-chain identity** | Expanding | API, Agents (MCP), Dashboard, Docs | Wallet sign-in, linked-wallet account identity, and x402 micropayments. |
 
-### Infrastructure
+### Developer Platform & Agents
+
+Planned items in this area are detailed on the [Roadmap](/roadmap#developer-platform--agents).
 
 | Capability | Availability | Surfaces | What it unlocks |
 | --- | --- | --- | --- |
-| **Cluster invites** | Available | API, Agents (MCP), Dashboard, Docs | Direct invites granting another tenant access to a cluster. |
-| **Cluster subscription requests** | Available | API, Agents (MCP), Dashboard, Docs | Tenant-requested subscription to a cluster, requiring operator approval. |
-| **Edge clusters** | Available | API, Agents (MCP), Dashboard, Docs | Tenant-owned edge clusters with bootstrap and node enrollment. |
-| **Enrollment / bootstrap tokens** | Available | API, Agents (MCP), Dashboard, Docs | One-shot tokens used to enroll new edge nodes into a cluster. |
-| **Federated network status** | Available | API, Dashboard, Docs | Cross-cluster routing visibility and orchestrator vantage points. |
-| **Node mode (drain / maintenance)** | Available | API, Agents (MCP), Dashboard, Docs | Operator controls to drain a node, put it in maintenance, or restore it to active service. |
-| **Nodes (edge / ingest / playback)** | Available | API, Agents (MCP), Dashboard, Docs | Per-node health, info, and discovery. |
-| **Cluster marketplace** | Expanding | API, Agents (MCP), Dashboard, Docs | Browse listed clusters and manage subscriptions. A vetted public marketplace program for third-party capacity is on the roadmap. |
-| **Managed DNS and cluster domains** | Expanding | API, Docs | Platform-managed DNS, TLS certificates, media-cluster domains, and tenant streaming domain discovery. |
+| **Developer API** | Expanding | API, Dashboard, Docs | The GraphQL API and the tooling around it — playground, API tokens, webhooks, and server-side SDKs. |
+| ↳ Developer API tokens *(foundation)* | Available | API, Dashboard, Docs | Long-lived API tokens for SDK / CI use. |
+| ↳ GraphQL playground | Available | Dashboard, Docs | Interactive GraphQL explorer wired to the live schema. |
+| ↳ Outbound event webhooks | Planned | — | Tenant-configured outbound webhooks for stream / clip / VOD lifecycle events. |
+| ↳ Backend SDKs | Planned | — | Server-side SDKs (Node, Python, PHP, Ruby, Elixir, Java, C#) wrapping the GraphQL API, webhooks, uploads, and access-token/JWT workflows. |
+| **Agents (MCP server)** | Available | API, Agents (MCP), Dashboard, Docs | Model Context Protocol server exposing FrameWorks operations to agents. |
+| ↳ Skipper (in-app consultant agent) | Expanding | API, Agents (MCP), Dashboard, Docs | Conversational platform agent for support and investigations. |
 
-### Playback
+### Engagement & Interactivity
 
-| Capability | Availability | Surfaces | What it unlocks |
-| --- | --- | --- | --- |
-| **Playback** | Available | API, Agents (MCP), Dashboard, Docs | Resolve a viewer or ingest endpoint for a stream / VOD / clip. |
-| **Playback access control** | Available | API, Agents (MCP), Dashboard, Docs | Public / JWT / webhook playback authorization policy on streams, clips, and VOD assets, with a dry-run tester and full agent management surface. |
-
-### Storage
+Planned items in this area are detailed on the [Roadmap](/roadmap#engagement--interactivity).
 
 | Capability | Availability | Surfaces | What it unlocks |
 | --- | --- | --- | --- |
-| **Clips** | Available | API, Agents (MCP), Dashboard, Docs | Time-range clips extracted from streams or recordings. |
-| **DVR recordings** | Available | API, Agents (MCP), Dashboard, Docs | 24/7-capable DVR recording with bounded live seekback, continuous archive storage, chapter replay, and VOD-style playback. |
-| **Media retention** | Available | API, Agents (MCP), Dashboard, Docs | Tenant-controlled storage policy for 24/7 DVR archives, clips, and VOD assets, with per-asset overrides and entitlement bounds. |
-| **VOD assets** | Available | API, Agents (MCP), Dashboard, Docs | Multipart VOD upload and lifecycle. |
-| **DVR chapters** | Expanding | API, Agents (MCP), Dashboard, Docs | Chapter artifacts that segment a long-running DVR session into replayable windows, so a 24/7 recording can be replayed by window, civil-time range, or explicit range without restarting the live stream. |
+| **Conferencing and remote contribution** | Planned | — | Multi-party WebRTC rooms and remote-guest contribution — commentators and callers mixed into a managed stream. |
+| **Rooms, chat, and interactivity (Parlor)** | Planned | — | Viewer chat and engagement primitives — channel points, hype trains, leaderboards, flair, and moderation views — synced to the stream. |
 
-### Streaming
+### Account & Apps
+
+Planned items in this area are detailed on the [Roadmap](/roadmap#account--apps).
 
 | Capability | Availability | Surfaces | What it unlocks |
 | --- | --- | --- | --- |
-| **Live streams** | Available | API, Agents (MCP), Dashboard, Docs | Push and pull live streams with stream keys and ingest configuration. |
-| **Multistream push targets** | Available | API, Agents (MCP), Dashboard, Docs | Forward live streams to additional RTMP/SRT destinations. |
-| **Stream keys** | Available | API, Agents (MCP), Dashboard, Docs | Per-stream ingest credentials with rotation. |
-| **Gateway-backed transcoding** | Expanding | API, Dashboard, Docs | Live ABR renditions through Livepeer Gateway or local processing, with processing usage telemetry. |
-| **Pull streams** | Expanding | API, Agents (MCP), Dashboard, Docs | Stream inputs pulled from upstream sources (RTSP, SRT, RIST, HLS, etc.) instead of pushed, with resolution-stage lifecycle audit. |
-| **Thumbnails and sprite previews** | Expanding | API, Agents (MCP), Dashboard, Docs | Auto-generated poster frames and sprite-tile preview strips for live streams, clips, VOD, and DVR playback. |
+| **Tenant settings** | Expanding | API, Agents (MCP), Dashboard, Docs | Tenant identity, billing setup, retention defaults, routing preferences, and wallet-provisioned account lifecycle. |
+| ↳ Teams & RBAC | Planned | — | Multi-user tenants with role-based access control. |
+| **Companion apps** | Expanding | — | Desktop and mobile companions to the dashboard and CLI. |
+| ↳ Desktop companion (macOS tray) | Expanding | — | Menu-bar app bundled with the CLI in the macOS installer for local edge and stream control. |
+| ↳ Mobile apps and integrated help center | Planned | — | Native mobile operations and an in-product help center for support, incidents, and account workflows. |
 
-Planned product work lives on the [Roadmap](/roadmap). This page stays focused on capabilities that are already usable or actively expanding across shipped surfaces.
+The [Roadmap](/roadmap) carries sequencing and detail for planned work; this matrix shows the full capability scope, shipped and planned alike.

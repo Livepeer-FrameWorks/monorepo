@@ -6,7 +6,10 @@
   import { Button } from "$lib/components/ui/button";
   import { getDocsSiteUrl } from "$lib/config";
   import {
+    familyOf,
     findFeature,
+    pillarLabel,
+    resolveSlugs,
     SURFACE_KEYS,
     surfaceCell,
     type FeatureStatus,
@@ -15,6 +18,17 @@
 
   const slug = $derived($page.params.slug ?? "");
   const feature = $derived(findFeature(slug));
+  const family = $derived(feature ? familyOf(feature.slug) : undefined);
+  const builtOn = $derived(resolveSlugs(feature?.depends_on));
+  const enables = $derived(resolveSlugs(feature?.enables));
+  const related = $derived(resolveSlugs(feature?.related));
+  const relationGroups = $derived(
+    [
+      { title: "Built on", items: builtOn },
+      { title: "Enables", items: enables },
+      { title: "Related", items: related },
+    ].filter((g) => g.items.length > 0)
+  );
 
   const STATUS_CLASS: Record<FeatureStatus, string> = {
     shipped: "bg-success/15 text-success",
@@ -33,6 +47,7 @@
   const SURFACE_LABEL: Record<SurfaceKey, string> = {
     graphql: "GraphQL API",
     mcp: "Agent tools",
+    cli: "CLI",
     webapp: "Dashboard",
     docs: "Docs",
   };
@@ -95,12 +110,79 @@
         <span class="text-xs px-1.5 py-0.5 rounded {STATUS_CLASS[feature.status]}">
           {STATUS_LABEL[feature.status]}
         </span>
-        <span class="text-xs text-muted-foreground">— {feature.area}</span>
+        {#if feature.kind === "foundation"}
+          <span
+            class="text-[10px] uppercase tracking-wide px-1 py-0.5 rounded bg-muted text-muted-foreground"
+            >Foundation</span
+          >
+        {/if}
+        <span class="text-xs text-muted-foreground"
+          >— {pillarLabel(family?.area ?? feature.area)}</span
+        >
       </div>
+      {#if family}
+        <p class="text-xs text-muted-foreground mb-2">
+          Part of
+          <a
+            href={resolve(`/developer/features/${family.slug}`)}
+            class="text-primary hover:underline">{family.name}</a
+          >
+        </p>
+      {/if}
       {#if feature.description}
         <p class="text-sm text-muted-foreground max-w-3xl">{feature.description}</p>
       {/if}
     </header>
+
+    <!-- Subitems -->
+    {#if feature.subitems?.length}
+      <section class="mb-8">
+        <h3 class="text-xs uppercase tracking-wider text-muted-foreground mb-2">Includes</h3>
+        <div class="border border-border rounded-md divide-y divide-border">
+          {#each feature.subitems as sub (sub.slug)}
+            <div class="flex items-center justify-between gap-3 px-4 py-2.5">
+              <div>
+                <a
+                  href={resolve(`/developer/features/${sub.slug}`)}
+                  class="text-sm text-primary hover:underline font-medium"
+                >
+                  {sub.name}
+                </a>
+                {#if sub.description}
+                  <div class="text-xs text-muted-foreground mt-0.5">{sub.description}</div>
+                {/if}
+              </div>
+              <span class="text-xs px-1.5 py-0.5 rounded shrink-0 {STATUS_CLASS[sub.status]}">
+                {STATUS_LABEL[sub.status]}
+              </span>
+            </div>
+          {/each}
+        </div>
+      </section>
+    {/if}
+
+    <!-- Relations -->
+    {#if relationGroups.length}
+      <section class="mb-8 flex flex-wrap gap-x-8 gap-y-3">
+        {#each relationGroups as group (group.title)}
+          <div>
+            <h3 class="text-xs uppercase tracking-wider text-muted-foreground mb-1.5">
+              {group.title}
+            </h3>
+            <div class="flex flex-wrap gap-1.5">
+              {#each group.items as rel (rel.slug)}
+                <a
+                  href={resolve(`/developer/features/${rel.slug}`)}
+                  class="text-xs px-2 py-1 rounded border border-border text-primary hover:bg-accent/30"
+                >
+                  {rel.name}
+                </a>
+              {/each}
+            </div>
+          </div>
+        {/each}
+      </section>
+    {/if}
 
     <!-- Surfaces -->
     <section class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
@@ -113,10 +195,18 @@
               class="text-xs px-1.5 py-0.5 rounded {cell.required
                 ? cell.filled
                   ? 'bg-success/15 text-success'
-                  : 'bg-destructive/15 text-destructive'
+                  : feature.status === 'roadmap'
+                    ? 'bg-muted text-muted-foreground'
+                    : 'bg-destructive/15 text-destructive'
                 : 'bg-muted/40 text-muted-foreground'}"
             >
-              {cell.required ? (cell.filled ? "Available" : "Not available") : "Not required"}
+              {cell.required
+                ? cell.filled
+                  ? "Available"
+                  : feature.status === "roadmap"
+                    ? "Planned"
+                    : "Not available"
+                : "Not required"}
             </span>
           </div>
           {#if !cell.required && cell.reason}
@@ -166,6 +256,12 @@
             {#if feature.surfaces.mcp.tools?.length}
               <div class="text-xs font-mono space-y-0.5">
                 {#each feature.surfaces.mcp.tools as t (t)}<div>{t}</div>{/each}
+              </div>
+            {/if}
+          {:else if s === "cli"}
+            {#if feature.surfaces.cli.commands?.length}
+              <div class="text-xs font-mono space-y-0.5">
+                {#each feature.surfaces.cli.commands as c (c)}<div>frameworks {c}</div>{/each}
               </div>
             {/if}
           {:else if s === "webapp"}

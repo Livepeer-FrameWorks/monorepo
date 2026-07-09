@@ -4,11 +4,30 @@
 # MCP, webapp, docs) and what configurability they expose. Validated by
 # `make verify-feature-registry` (scripts/registry/main.go).
 #
+# Structure:
+#   - Top-level rows are product families grouped into pillars via `area`
+#     (streaming | playback | media-library | processing | analytics |
+#     infrastructure | commerce | developer | engagement | account).
+#   - A family may carry a `subitems:` list (one level deep). Subitems are
+#     full feature rows — own slug, status, surfaces — but inherit the
+#     parent's pillar and must not set `area`. Slugs are globally unique
+#     across both levels (they are /developer/features/[slug] URLs).
+#
 # Conventions:
 #   - status:     shipped | partial | gap | roadmap
 #                 partial = some required surfaces filled but not all
 #                 gap     = no required surfaces filled (or none for this feature)
 #                 roadmap = future intent (skips reference validation)
+#   - kind:       product (default) | foundation. Foundations are building
+#                 blocks whose value shows up through the products built on
+#                 them; renderers mark them and derive what they enable.
+#   - depends_on: directional edges to other slugs (cycle-checked); the
+#                 generator derives the reverse `enables` list. related: is
+#                 for non-directional peers only.
+#   - aliases:    retired slugs that should keep resolving in the webapp.
+#   - surfaces.cli.commands: `frameworks` command paths ("edge update");
+#                 every segment is validated against cobra Use: declarations
+#                 in cli/cmd/.
 #   - Each feature's required_surfaces.* is explicit. Default for shipped
 #     configurable features is graphql+mcp+webapp+docs all required (agents
 #     are first-class personas). Opt-out per surface uses required: false +
@@ -19,16 +38,17 @@
 #     the validator converts to `[name]` on disk.
 #   - Docs pages are repo-relative paths from website_docs/src/content/docs/.
 #
-# Adding a feature: add a row, run `make verify-feature-registry`, fix any
-# missing-reference errors, commit YAML + generated registry.json together.
+# Adding a feature: add a row (or a subitem under its family), run
+# `make verify-feature-registry`, fix any missing-reference errors, commit
+# YAML + generated registry.json together.
 
 features:
-  # ───────────────── Streaming core ─────────────────
+  # ───────────────── Streaming ─────────────────
 
   - slug: streams
     name: Live streams
     area: streaming
-    description: Push and pull live streams with stream keys and ingest configuration.
+    description: Push and pull live streams with stream keys and ingest configuration. Push ingest over RTMP/E-RTMP, SRT, and WHIP (WebRTC); pull from RTSP, SRT, RIST, HLS, MPEG-TS, and Mist/DTSC sources.
     status: shipped
     required_surfaces:
       graphql: { required: true }
@@ -49,69 +69,140 @@ features:
           - builders/streams.mdx
           - builders/quick-start.mdx
           - builders/ingest.mdx
+    subitems:
+      - slug: stream-keys
+        name: Stream keys
+        kind: foundation
+        description: Per-stream ingest credentials with rotation.
+        status: shipped
+        required_surfaces:
+          graphql: { required: true }
+          mcp:
+            required: true
+            sensitive: true
+            returns_secret_material: true
+            requires_confirmation: true
+            audit_events: true
+          webapp: { required: true }
+          docs: { required: true }
+        surfaces:
+          graphql:
+            mutations: [createStreamKey, deleteStreamKey, refreshStreamKey]
+            queries: [streamKeysConnection, validateStreamKey]
+          mcp:
+            tools:
+              [
+                list_stream_keys,
+                create_stream_key,
+                delete_stream_key,
+                refresh_stream_key,
+                validate_stream_key,
+              ]
+          webapp:
+            routes: ["/streams/:id"]
+          docs:
+            pages: [builders/ingest.mdx]
 
-  - slug: pull-streams
-    name: Pull streams
+      - slug: pull-streams
+        name: Pull streams
+        description: Stream inputs pulled from upstream sources (RTSP, SRT, RIST, HLS, etc.) instead of pushed, with resolution-stage lifecycle audit.
+        status: partial
+        gap_reason: |
+          Resolution-stage lifecycle events ship: Foghorn writes pull_source_events rows for STREAM_SOURCE evaluations (resolved / not_found / disabled / blocked_uri / private_not_allowed / commodore_error / foghorn_base_unresolved), exposed via Stream.recentPullSourceEvents and shown on the stream setup panel. Downstream MistServer dial telemetry needs new upstream connect/disconnect/retry trigger types before FrameWorks can show dial-stage health.
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+        surfaces:
+          graphql:
+            mutations: [createStream, updateStream]
+          mcp:
+            tools: [create_stream, update_stream]
+          webapp:
+            routes: ["/streams/:id"]
+          docs:
+            pages: [builders/pull-streams.mdx]
+
+      - slug: multistream-targets
+        name: Multistream push targets
+        description: Forward live streams to additional RTMP/SRT destinations.
+        status: shipped
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+        configurability:
+          cost_affecting: true
+          per_resource_override: present
+          effective_value_visible: present
+          audit_events: present
+          undo: present
+        surfaces:
+          graphql:
+            mutations: [createPushTarget, updatePushTarget, deletePushTarget]
+          mcp:
+            tools: [list_push_targets, create_push_target, update_push_target, delete_push_target]
+          webapp:
+            routes: ["/streams/:id"]
+          docs:
+            pages: [builders/multistreaming.mdx]
+
+  - slug: streamcrafter
+    name: StreamCrafter (browser studio)
     area: streaming
-    description: Stream inputs pulled from upstream sources (RTSP, SRT, RIST, HLS, etc.) instead of pushed, with resolution-stage lifecycle audit.
-    status: partial
+    description: Browser-based broadcasting studio — WHIP/WebRTC ingest, compositing, and multi-source mixing. Ships as npm packages @livepeer-frameworks/streamcrafter-{core,react,svelte,wc} and powers the dashboard's Go Live page.
+    status: shipped
+    depends_on: [streams]
+    related: [conferencing, device-discovery-contribution-inputs]
+    required_surfaces:
+      graphql: { required: true }
+      mcp:
+        { required: false, reason: "Client-side SDK; agents drive streams via the stream tools." }
+      webapp: { required: true }
+      docs: { required: true }
+    surfaces:
+      graphql:
+        queries: [resolveIngestEndpoint]
+      webapp:
+        routes: ["/go-live", "/developer/sdks"]
+      docs:
+        pages:
+          - builders/ingest.mdx
+          - builders/ingest-advanced.mdx
+          - builders/ingest-compositor.mdx
+          - builders/ingest-react.mdx
+          - builders/ingest-svelte.mdx
+          - builders/ingest-vanilla.mdx
+          - builders/ingest-wc.mdx
+          - builders/integration-guide.mdx
+
+  - slug: device-discovery-contribution-inputs
+    name: Device discovery and contribution inputs
+    area: streaming
+    description: Edge-local discovery for cameras, PTZ devices, NDI sources, USB capture, HDMI inputs, and local contribution paths.
+    status: roadmap
     gap_reason: |
-      Resolution-stage lifecycle events ship: Foghorn writes pull_source_events rows for STREAM_SOURCE evaluations (resolved / not_found / disabled / blocked_uri / private_not_allowed / commodore_error / foghorn_base_unresolved), exposed via Stream.recentPullSourceEvents and shown on the stream setup panel. Downstream MistServer dial telemetry needs new upstream connect/disconnect/retry trigger types before FrameWorks can show dial-stage health.
+      Experimental media-engine discovery and local-source creation exist below the FrameWorks product layer. The missing work is
+      packaging that capability into FrameWorks Edge, then exposing it through API, dashboard, Tray, CLI, and MCP workflows for managed
+      streams and self-hosted clusters.
+    depends_on: [edge-clusters, companion-apps]
+    related: [live-ai, conferencing]
     required_surfaces:
       graphql: { required: true }
       mcp: { required: true }
       webapp: { required: true }
       docs: { required: true }
-    surfaces:
-      graphql:
-        mutations: [createStream, updateStream]
-      mcp:
-        tools: [create_stream, update_stream]
-      webapp:
-        routes: ["/streams/:id"]
-      docs:
-        pages: [builders/pull-streams.mdx]
-
-  - slug: stream-keys
-    name: Stream keys
-    area: streaming
-    description: Per-stream ingest credentials with rotation.
-    status: shipped
-    required_surfaces:
-      graphql: { required: true }
-      mcp:
-        required: true
-        sensitive: true
-        returns_secret_material: true
-        requires_confirmation: true
-        audit_events: true
-      webapp: { required: true }
-      docs: { required: true }
-    surfaces:
-      graphql:
-        mutations: [createStreamKey, deleteStreamKey, refreshStreamKey]
-        queries: [streamKeysConnection, validateStreamKey]
-      mcp:
-        tools:
-          [
-            list_stream_keys,
-            create_stream_key,
-            delete_stream_key,
-            refresh_stream_key,
-            validate_stream_key,
-          ]
-      webapp:
-        routes: ["/streams/:id"]
-      docs:
-        pages: [builders/ingest.mdx]
 
   # ───────────────── Playback ─────────────────
 
   - slug: playback
     name: Playback
     area: playback
-    description: Resolve a viewer or ingest endpoint for a stream / VOD / clip.
+    description: Resolve a viewer or ingest endpoint for a stream / VOD / clip. Delivery over HLS, LL-HLS (CMAF), DASH, WebRTC (WHEP), and progressive MP4.
     status: shipped
+    depends_on: [viewer-routing]
     required_surfaces:
       graphql: { required: true }
       mcp: { required: true }
@@ -133,137 +224,151 @@ features:
           - builders/playback-svelte.mdx
           - builders/playback-vanilla.mdx
           - builders/playback-wc.mdx
+    subitems:
+      - slug: player-sdks
+        name: Player SDKs
+        description: Embeddable player packages — @livepeer-frameworks/player-{core,react,svelte,wc} — with theming, adaptive playback, and built-in boot/QoE telemetry.
+        status: shipped
+        depends_on: [playback]
+        related: [analytics]
+        required_surfaces:
+          graphql: { required: true }
+          mcp:
+            {
+              required: false,
+              reason: "Client-side SDK; agents resolve endpoints via resolve_playback_endpoint.",
+            }
+          webapp: { required: true }
+          docs: { required: true }
+        surfaces:
+          graphql:
+            queries: [resolveViewerEndpoint]
+          webapp:
+            routes: ["/developer/sdks", "/view"]
+          docs:
+            pages:
+              - builders/playback-react.mdx
+              - builders/playback-svelte.mdx
+              - builders/playback-vanilla.mdx
+              - builders/playback-wc.mdx
+              - builders/playback-theming.mdx
+              - builders/playback-advanced.mdx
 
-  - slug: playback-access-control
-    name: Playback access control
-    area: playback
-    description: Public / JWT / webhook playback authorization policy on streams, clips, and VOD assets, with a dry-run tester and full agent management surface.
-    status: shipped
-    required_surfaces:
-      graphql: { required: true }
-      mcp: { required: true }
-      webapp: { required: true }
-      docs: { required: true }
-    configurability:
-      security_affecting: true
-      tenant_default: false
-      per_resource_override: present
-      effective_value_visible: present
-      audit_events: present
-      undo: present
-    surfaces:
-      graphql:
-        mutations: [setPlaybackPolicy, testPlaybackAccess]
-      mcp:
-        tools: [test_playback_access, set_playback_policy, clear_playback_policy]
-      webapp:
-        routes: ["/streams/:id"]
-      docs:
-        pages: [builders/playback-access-control.mdx]
-    examples:
-      - title: "Test a JWT against the live policy"
-        query: |
-          mutation TestJWT {
-            testPlaybackAccess(input: {
-              playbackId: "<playback-id>"
-              viewerToken: "eyJhbGciOiJFUzI1NiIs..."
-              connector: "hls"
-            }) {
-              ... on PlaybackAccessDecision {
-                allowed
-                reason
-                kid
-                claimsJson
+      - slug: playback-access-control
+        name: Playback access control
+        description: Public / JWT / webhook playback authorization policy on streams, clips, and VOD assets, with a dry-run tester and full agent management surface.
+        status: shipped
+        depends_on: [signing-keys]
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+        configurability:
+          security_affecting: true
+          tenant_default: false
+          per_resource_override: present
+          effective_value_visible: present
+          audit_events: present
+          undo: present
+        surfaces:
+          graphql:
+            mutations: [setPlaybackPolicy, testPlaybackAccess]
+          mcp:
+            tools: [test_playback_access, set_playback_policy, clear_playback_policy]
+          webapp:
+            routes: ["/streams/:id"]
+          docs:
+            pages: [builders/playback-access-control.mdx]
+        examples:
+          - title: "Test a JWT against the live policy"
+            query: |
+              mutation TestJWT {
+                testPlaybackAccess(input: {
+                  playbackId: "<playback-id>"
+                  viewerToken: "eyJhbGciOiJFUzI1NiIs..."
+                  connector: "hls"
+                }) {
+                  ... on PlaybackAccessDecision {
+                    allowed
+                    reason
+                    kid
+                    claimsJson
+                  }
+                  ... on ValidationError { message field }
+                }
               }
-              ... on ValidationError { message field }
-            }
-          }
-      - title: "Inspect webhook policy without firing"
-        query: |
-          mutation Inspect {
-            testPlaybackAccess(input: {
-              playbackId: "<playback-id>"
-              fireWebhook: false
-            }) {
-              ... on PlaybackAccessDecision { policyType reason detail }
-            }
-          }
-      - title: "Fire a real webhook test"
-        query: |
-          mutation Fire {
-            testPlaybackAccess(input: {
-              playbackId: "<playback-id>"
-              viewerIp: "203.0.113.42"
-              connector: "hls"
-              fireWebhook: true
-            }) {
-              ... on PlaybackAccessDecision {
-                allowed reason webhookStatus webhookLatencyMs
+          - title: "Inspect webhook policy without firing"
+            query: |
+              mutation Inspect {
+                testPlaybackAccess(input: {
+                  playbackId: "<playback-id>"
+                  fireWebhook: false
+                }) {
+                  ... on PlaybackAccessDecision { policyType reason detail }
+                }
               }
-            }
-          }
+          - title: "Fire a real webhook test"
+            query: |
+              mutation Fire {
+                testPlaybackAccess(input: {
+                  playbackId: "<playback-id>"
+                  viewerIp: "203.0.113.42"
+                  connector: "hls"
+                  fireWebhook: true
+                }) {
+                  ... on PlaybackAccessDecision {
+                    allowed reason webhookStatus webhookLatencyMs
+                  }
+                }
+              }
 
-  - slug: signing-keys
-    name: Signing keys
-    area: developer
-    description: ES256 keypairs for signing playback JWTs. Private material returned once on creation.
-    status: shipped
-    required_surfaces:
-      graphql: { required: true }
-      webapp: { required: true }
-      docs: { required: true }
-      mcp:
-        required: true
-        sensitive: true
-        returns_secret_material: true
-        requires_confirmation: true
-        audit_events: true
-    surfaces:
-      graphql:
-        mutations: [createSigningKey, revokeSigningKey]
-        queries: [signingKey, signingKeysConnection]
-      mcp:
-        tools: [list_signing_keys, create_signing_key, revoke_signing_key]
-      webapp:
-        routes: ["/developer/signing-keys"]
-      docs:
-        pages: [builders/playback-access-control.mdx]
+      - slug: signing-keys
+        name: Signing keys
+        kind: foundation
+        description: ES256 keypairs for signing playback JWTs. Private material returned once on creation.
+        status: shipped
+        required_surfaces:
+          graphql: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+          mcp:
+            required: true
+            sensitive: true
+            returns_secret_material: true
+            requires_confirmation: true
+            audit_events: true
+        surfaces:
+          graphql:
+            mutations: [createSigningKey, revokeSigningKey]
+            queries: [signingKey, signingKeysConnection]
+          mcp:
+            tools: [list_signing_keys, create_signing_key, revoke_signing_key]
+          webapp:
+            routes: ["/developer/signing-keys"]
+          docs:
+            pages: [builders/playback-access-control.mdx]
 
-  # ───────────────── Multistreaming ─────────────────
+      - slug: drm
+        name: DRM
+        description: FairPlay, Widevine, and PlayReady protection for premium playback workflows.
+        status: roadmap
+        gap_reason: Not shipped. Playback signing keys and webhook/JWT access control are available today, but multi-DRM license packaging and player enforcement are separate work.
+        depends_on: [playback-access-control, player-sdks]
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
 
-  - slug: multistream-targets
-    name: Multistream push targets
-    area: streaming
-    description: Forward live streams to additional RTMP/SRT destinations.
-    status: shipped
-    required_surfaces:
-      graphql: { required: true }
-      mcp: { required: true }
-      webapp: { required: true }
-      docs: { required: true }
-    configurability:
-      cost_affecting: true
-      per_resource_override: present
-      effective_value_visible: present
-      audit_events: present
-      undo: present
-    surfaces:
-      graphql:
-        mutations: [createPushTarget, updatePushTarget, deletePushTarget]
-      mcp:
-        tools: [list_push_targets, create_push_target, update_push_target, delete_push_target]
-      webapp:
-        routes: ["/streams/:id"]
-      docs:
-        pages: [builders/multistreaming.mdx]
-
-  # ───────────────── DVR / recordings / clips / VOD ─────────────────
+  # ───────────────── Media Library ─────────────────
 
   - slug: dvr-recordings
     name: DVR recordings
-    area: storage
+    area: media-library
     description: 24/7-capable DVR recording with bounded live seekback, continuous archive storage, chapter replay, and VOD-style playback.
     status: shipped
+    related: [media-retention]
     required_surfaces:
       graphql: { required: true }
       mcp: { required: true }
@@ -282,59 +387,48 @@ features:
         pages:
           - builders/recordings.mdx
           - operators/dvr.mdx
+    subitems:
+      - slug: dvr-chapters
+        name: DVR chapters
+        description: Chapter artifacts that segment a long-running DVR session into replayable windows, so a 24/7 recording can be replayed by window, civil-time range, or explicit range without restarting the live stream.
+        status: partial
+        gap_reason: Chapter playback and policy controls are present in the dashboard; audit-event coverage for chapter-policy changes still needs verification.
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+        configurability:
+          per_resource_override: present
+          effective_value_visible: partial
+          audit_events: unverified
+          undo: present
+        surfaces:
+          graphql:
+            mutations: [updateStream]
+            queries: [dvrChapter, dvrChapters]
+          mcp:
+            tools: [update_stream]
+          webapp:
+            routes: ["/streams/:id", "/view"]
+          docs:
+            pages: [builders/dvr-chapters.mdx]
 
-  - slug: dvr-chapters
-    name: DVR chapters
-    area: storage
-    description: Chapter artifacts that segment a long-running DVR session into replayable windows, so a 24/7 recording can be replayed by window, civil-time range, or explicit range without restarting the live stream.
-    status: partial
-    gap_reason: Chapter playback and policy controls are present in the dashboard; audit-event coverage for chapter-policy changes still needs verification.
-    required_surfaces:
-      graphql: { required: true }
-      mcp: { required: true }
-      webapp: { required: true }
-      docs: { required: true }
-    configurability:
-      per_resource_override: present
-      effective_value_visible: partial
-      audit_events: unverified
-      undo: present
-    surfaces:
-      graphql:
-        mutations: [updateStream]
-        queries: [dvrChapter, dvrChapters]
-      mcp:
-        tools: [update_stream]
-      webapp:
-        routes: ["/streams/:id", "/view"]
-      docs:
-        pages: [builders/dvr-chapters.mdx]
-
-  - slug: clips
-    name: Clips
-    area: storage
-    description: Time-range clips extracted from streams or recordings.
-    status: shipped
-    required_surfaces:
-      graphql: { required: true }
-      mcp: { required: true }
-      webapp: { required: true }
-      docs: { required: true }
-    surfaces:
-      graphql:
-        mutations: [createClip, deleteClip]
-        queries: [clip, clipsConnection]
-        subscriptions: [liveClipLifecycle]
-      mcp:
-        tools: [create_clip, delete_clip]
-      webapp:
-        routes: ["/library"]
-      docs:
-        pages: [builders/clips.mdx]
+      - slug: scheduled-recordings
+        name: Scheduled recordings
+        description: Calendar-driven DVR captures that start and stop on schedule, so streams record themselves on a fixed cadence.
+        status: roadmap
+        gap_reason: DVR recording is shipped (start_dvr / stop_dvr exist); scheduling is the gap. Requires a schedule store, a sweeper that triggers DVR start/stop at window boundaries, GraphQL mutation + query surface, MCP tools, and a calendar UI. Primary use cases include places of worship, lectures, periodic events, and any scheduled programming.
+        depends_on: [dvr-recordings]
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
 
   - slug: vod
     name: VOD assets
-    area: storage
+    area: media-library
     description: Multipart VOD upload and lifecycle.
     status: shipped
     required_surfaces:
@@ -360,10 +454,48 @@ features:
         routes: ["/library"]
       docs:
         pages: [builders/recordings.mdx]
+    subitems:
+      - slug: scheduled-vod-streams
+        name: Scheduled VOD streams
+        description: Linear live channels assembled from existing VOD assets, with schedules that make archived media play as a rolling live stream.
+        status: roadmap
+        gap_reason: |
+          Not shipped. Managed Mist-native streams provide the lower-level primitive for platform-owned concrete stream configs, but scheduled VOD streams need a separate product layer:
+          a schedule/timeline store, VOD artifact selection, asset availability checks, pre-hydration/pinning for frozen assets, failover-aware edge placement, GraphQL/MCP controls,
+          and dashboard scheduling workflows. The source material should remain normal finalized VOD artifacts with their existing storage lifecycle; the scheduler turns them into a
+          live channel without bypassing artifact ownership, retention, or billing semantics.
+        depends_on: [vod]
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+
+  - slug: clips
+    name: Clips
+    area: media-library
+    description: Time-range clips extracted from streams or recordings.
+    status: shipped
+    required_surfaces:
+      graphql: { required: true }
+      mcp: { required: true }
+      webapp: { required: true }
+      docs: { required: true }
+    surfaces:
+      graphql:
+        mutations: [createClip, deleteClip]
+        queries: [clip, clipsConnection]
+        subscriptions: [liveClipLifecycle]
+      mcp:
+        tools: [create_clip, delete_clip]
+      webapp:
+        routes: ["/library"]
+      docs:
+        pages: [builders/clips.mdx]
 
   - slug: media-retention
     name: Media retention
-    area: storage
+    area: media-library
     description: Tenant-controlled storage policy for 24/7 DVR archives, clips, and VOD assets, with per-asset overrides and entitlement bounds.
     status: shipped
     required_surfaces:
@@ -444,7 +576,7 @@ features:
 
   - slug: thumbnails-and-previews
     name: Thumbnails and sprite previews
-    area: streaming
+    area: media-library
     description: Auto-generated poster frames and sprite-tile preview strips for live streams, clips, VOD, and DVR playback.
     status: partial
     gap_reason: >
@@ -501,39 +633,89 @@ features:
             }
           }
 
-  - slug: gateway-backed-transcoding
-    name: Gateway-backed transcoding
-    area: streaming
-    description: Live ABR renditions through Livepeer Gateway or local processing, with processing usage telemetry.
+  # ───────────────── Processing & AI ─────────────────
+
+  - slug: processing
+    name: Processing
+    area: processing
+    kind: foundation
+    description: Server-side media processing — live ABR transcoding, on-edge AI, and composition — placed on the right nodes across a cluster.
     status: partial
     gap_reason: |
-      The media plane can use Livepeer Gateway-backed processing and the analytics API exposes processing/orchestrator telemetry.
-      What is still missing is a tenant-facing control surface for rendition ladders, plan-aware defaults, per-stream overrides,
-      and agent/dashboard workflows for choosing when Gateway-backed ABR is enabled.
+      Livepeer Gateway-backed transcoding is live with processing telemetry (see the transcoding subitem). The orchestration
+      remainder is cluster-wide: client-side processing stats in MistServer and processing-aware scheduling in Foghorn, so heavy
+      jobs (full transcodes, large AI models) land on dedicated compute nodes — leveraging the Livepeer network — while
+      ultralight work stays on the edge.
     required_surfaces:
       graphql: { required: true }
       mcp: { required: true }
       webapp: { required: true }
       docs: { required: true }
-    surfaces:
-      graphql:
-        queries: [analytics]
-        fields:
-          [
-            ProcessingUsage.processingUsageConnection,
-            ProcessingUsageRecord.renditionCount,
-            ProcessingUsageRecord.renditionsJson,
-            ProcessingUsageSummary.livepeerSeconds,
-            OrchestratorPerformancePoint.transcodeAttempts,
-            OrchestratorPerformancePoint.transcodeSuccesses,
-            OrchestratorPerformancePoint.transcodeFailures,
-          ]
-      webapp:
-        routes: ["/analytics/usage"]
-      docs:
-        pages: [builders/encoder-setup.mdx, operators/architecture.mdx]
+    subitems:
+      - slug: gateway-backed-transcoding
+        name: Gateway-backed transcoding
+        description: Live ABR renditions through Livepeer Gateway or local processing, with processing usage telemetry.
+        status: partial
+        gap_reason: |
+          The media plane can use Livepeer Gateway-backed processing and the analytics API exposes processing/orchestrator telemetry.
+          What is still missing is a tenant-facing control surface for rendition ladders, plan-aware defaults, per-stream overrides,
+          and agent/dashboard workflows for choosing when Gateway-backed ABR is enabled.
+        depends_on: [processing]
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+        surfaces:
+          graphql:
+            queries: [analytics]
+            fields:
+              [
+                ProcessingUsage.processingUsageConnection,
+                ProcessingUsageRecord.renditionCount,
+                ProcessingUsageRecord.renditionsJson,
+                ProcessingUsageSummary.livepeerSeconds,
+                OrchestratorPerformancePoint.transcodeAttempts,
+                OrchestratorPerformancePoint.transcodeSuccesses,
+                OrchestratorPerformancePoint.transcodeFailures,
+              ]
+          webapp:
+            routes: ["/analytics/usage"]
+          docs:
+            pages: [builders/encoder-setup.mdx, operators/architecture.mdx]
 
-  # ───────────────── Analytics ─────────────────
+      - slug: live-ai
+        name: Live AI processing
+        description: ONNX models running directly on the in-memory stream buffer of media edge nodes — detection, transcription, moderation, audio tagging, and embeddings for semantic search.
+        status: roadmap
+        gap_reason: |
+          The media-engine ONNX runtime is in active development: ultralight CPU models run directly on the in-memory stream
+          buffer on edge nodes. Tested so far: object detection and segmentation (YOLO) and audio transcription (Parakeet,
+          heavily quantized for CPU). Candidate workloads: content moderation (NSFW / violence), audio event tagging and
+          speaker identification, and frame/text embeddings for semantic search. Heavy models defer to dedicated compute via
+          the Livepeer network. The FrameWorks product layer — model selection, per-stream enablement, output routing to
+          analytics and webhooks, and billing meters — is not designed yet. Pilot access exists via contact-sales.
+        depends_on: [processing, edge-clusters]
+        aliases: [composer-ai]
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+
+      - slug: composition
+        name: Composition and SSAI
+        description: MistServer-native blitter for logos, watermarks, and lower-third overlays; Composer for server-side ad insertion (SSAI), raw-pixel composition, picture-in-picture, and automated clipping.
+        status: roadmap
+        gap_reason: Not shipped. Requires product/API design for overlay placement and lifecycle, SSAI ad-decision integration, billing meters, agent permissions, and dashboard/MCP surfaces for configuring composition.
+        depends_on: [processing]
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+
+  # ───────────────── Analytics & Observability ─────────────────
 
   - slug: analytics
     name: Analytics
@@ -542,7 +724,7 @@ features:
     status: partial
     gap_reason: |
       Stream, routing, server-side QoS, and client QoE are live, plus view-level player QoE from the FrameWorks player: boot telemetry (TTFF waterfall + Resource Timing), viewer-experienced rebuffering, frame drops, bitrate/quality switches, exit-before-start, and per-asset VOD retention/watch-density — across API, dashboard, MCP, and docs.
-      Still maturing: QoE from non-FrameWorks / third-party players, and broader sampling/rollups.
+      Still maturing: QoE from non-FrameWorks / third-party players, broader sampling/rollups, and the next telemetry pass — reducing time-to-first-frame and measuring/reducing cross-region stream-replication time.
     required_surfaces:
       graphql: { required: true }
       mcp: { required: true }
@@ -578,7 +760,224 @@ features:
       docs:
         pages: [builders/analytics-api.mdx]
 
-  # ───────────────── Infrastructure ─────────────────
+  - slug: incidents-and-alerts
+    name: Incidents and alerts
+    area: analytics
+    description: Tenant-scoped incident feed aggregating node-health, certificate, DNS, capacity, and cluster alerts with acknowledge/resolve and realtime delivery.
+    status: roadmap
+    gap_reason: |
+      Not shipped. Prometheus and Grafana cover internal monitoring. The customer-facing gap is a tenant incident feed — Alertmanager webhook ingestion, dedup/fingerprinting, an incident store, GraphQL queries + acknowledge/resolve mutations, realtime delivery via Signalman, and MCP tools so agents can triage. Self-hosted operators get visibility into their own clusters (cert expiry, port reachability, DNS resolution, CPU/memory thresholds) without standing up a separate monitoring stack.
+    related: [analytics]
+    required_surfaces:
+      graphql: { required: true }
+      mcp: { required: true }
+      webapp: { required: true }
+      docs: { required: true }
+
+  # ───────────────── Infrastructure & BYOC ─────────────────
+
+  - slug: viewer-routing
+    name: Geo-balanced viewer routing
+    area: infrastructure
+    kind: foundation
+    description: Foghorn resolves each viewer to the optimal edge by geography, load, and node health across federated clusters.
+    status: shipped
+    related: [federation-network, analytics]
+    required_surfaces:
+      graphql: { required: true }
+      mcp: { required: true }
+      webapp: { required: true }
+      docs: { required: true }
+    surfaces:
+      graphql:
+        queries: [resolveViewerEndpoint, networkStatus]
+      mcp:
+        tools: [diagnose_routing]
+      webapp:
+        routes: ["/network"]
+      docs:
+        pages: [builders/playback.mdx, operators/multi-cluster.mdx]
+
+  - slug: edge-clusters
+    name: Edge clusters
+    area: infrastructure
+    kind: foundation
+    description: Tenant-owned edge clusters with bootstrap and node enrollment.
+    status: shipped
+    required_surfaces:
+      graphql: { required: true }
+      mcp: { required: true }
+      webapp: { required: true }
+      docs: { required: true }
+    surfaces:
+      graphql:
+        mutations: [createEdgeCluster, bootstrapEdge]
+        queries: [cluster, clustersConnection]
+      mcp:
+        tools: [create_edge_cluster]
+      cli:
+        commands: ["edge deploy", "edge diagnose", "edge drift"]
+      webapp:
+        routes: ["/infrastructure/clusters", "/infrastructure/:clusterId"]
+      docs:
+        pages: [hybrid/edge-nodes.mdx, hybrid/connecting.mdx]
+    subitems:
+      - slug: enrollment-tokens
+        name: Enrollment / bootstrap tokens
+        kind: foundation
+        description: One-shot tokens used to enroll new edge nodes into a cluster.
+        status: shipped
+        required_surfaces:
+          graphql: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+          mcp:
+            required: true
+            sensitive: true
+            returns_secret_material: true
+            audit_events: true
+        surfaces:
+          graphql:
+            mutations: [createBootstrapToken, revokeBootstrapToken, createEnrollmentToken]
+            queries: [bootstrapTokensConnection]
+          mcp:
+            tools: [create_enrollment_token]
+          webapp:
+            routes: ["/infrastructure/:clusterId"]
+          docs:
+            pages: [hybrid/connecting.mdx, hybrid/node-cli.mdx]
+
+      - slug: nodes
+        name: Nodes (edge / ingest / playback)
+        kind: foundation
+        description: Per-node health, info, and discovery.
+        status: shipped
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+        surfaces:
+          graphql:
+            queries: [node, nodesConnection, serviceInstancesHealth, discoverServicesConnection]
+          mcp:
+            tools: [get_node_health, get_node_info]
+          cli:
+            commands: ["cluster nodes"]
+          webapp:
+            routes: ["/nodes", "/nodes/:id"]
+          docs:
+            pages: [hybrid/edge-nodes.mdx, hybrid/node-cli.mdx]
+
+      - slug: node-mode
+        name: Node mode (drain / maintenance)
+        kind: foundation
+        description: Operator controls to drain a node, put it in maintenance, or restore it to active service.
+        status: shipped
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+        configurability:
+          tenant_default: not_applicable
+          per_resource_override: present
+          effective_value_visible: present
+          entitlement_bounds: not_applicable
+          audit_events: present
+          undo: present
+        surfaces:
+          graphql:
+            mutations: [setNodeMode]
+          mcp:
+            tools: [manage_node, set_node_mode]
+          webapp:
+            routes: ["/nodes/:id"]
+          docs:
+            pages: [hybrid/node-mode.mdx, hybrid/node-cli.mdx, hybrid/edge-nodes.mdx]
+        examples:
+          - title: "Drain a node"
+            query: |
+              mutation Drain { setNodeMode(input: { nodeId: "<node-id>", mode: DRAINING, reason: "monthly maintenance" }) {
+                ... on InfrastructureNode {
+                  nodeId
+                  effectiveMode
+                  routingImpactPreview { activeStreams activeViewers }
+                }
+                ... on ValidationError { message field }
+                ... on NotFoundError { message }
+              } }
+          - title: "Restore a node"
+            query: |
+              mutation Restore { setNodeMode(input: { nodeId: "<node-id>", mode: NORMAL }) {
+                ... on InfrastructureNode { effectiveMode }
+                ... on ValidationError { message field }
+              } }
+
+      - slug: federation-network
+        name: Federated network status
+        kind: foundation
+        description: Cross-cluster routing visibility and orchestrator vantage points.
+        status: shipped
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: false, reason: "Diagnostic surface; covered by analytics MCP tools." }
+          webapp: { required: true }
+          docs: { required: true }
+        surfaces:
+          graphql:
+            queries:
+              - networkStatus
+              - orchestrator
+              - orchestratorInstances
+              - orchestratorPerformanceSeries
+              - orchestratorVantages
+              - orchestratorsConnection
+          webapp:
+            routes: ["/network", "/infrastructure/federation", "/infrastructure/network"]
+          docs:
+            pages: [operators/multi-cluster.mdx]
+
+      - slug: edge-auto-update
+        name: Edge auto-update
+        kind: foundation
+        description: Foghorn's release reconciler auto-updates Helmsman, MistServer, and Caddy on edge nodes over the Helmsman control stream — native and single-image container nodes alike.
+        status: shipped
+        related: [nodes, edge-iso-cloud-images]
+        required_surfaces:
+          graphql:
+            {
+              required: false,
+              reason: "Driven by Foghorn's release reconciler over the Helmsman control stream; no API surface.",
+            }
+          mcp: { required: false, reason: "No agent surface; updates are automatic." }
+          webapp:
+            {
+              required: false,
+              reason: "No dashboard workflow; component versions surface via node views.",
+            }
+          docs: { required: true }
+        surfaces:
+          cli:
+            commands: ["edge update", "update"]
+          docs:
+            pages: [operators/running-upgrades.mdx, hybrid/node-cli.mdx]
+
+      - slug: edge-iso-cloud-images
+        name: Edge ISO and cloud images
+        kind: foundation
+        description: Bootable FrameWorks Edge ISO and prebuilt cloud/marketplace images for on-demand media-cluster scaling.
+        status: roadmap
+        gap_reason: |
+          Edge enrollment and bootstrap exist; the missing work is packaging: a bootable ISO for bare metal and prebuilt
+          images with marketplace listings (AWS, GCP, DigitalOcean, Hetzner, Linode, Vultr) so a media cluster can scale on
+          demand — for FrameWorks' own capacity and for BYOC deployments alike. Groundwork for hosted-private-cluster
+          provisioning automation.
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
 
   - slug: cluster-marketplace
     name: Cluster marketplace
@@ -624,226 +1023,192 @@ features:
         routes: ["/infrastructure/marketplace", "/infrastructure/clusters"]
       docs:
         pages: [hybrid/overview.mdx, operators/multi-cluster.mdx]
+    subitems:
+      - slug: cluster-invites
+        name: Cluster invites
+        kind: foundation
+        description: Direct invites granting another tenant access to a cluster.
+        status: shipped
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+        surfaces:
+          graphql:
+            mutations: [createClusterInvite, revokeClusterInvite, acceptClusterInvite]
+            queries:
+              - clusterInvites
+              - clusterInvitesConnection
+              - myClusterInvites
+              - myClusterInvitesConnection
+          mcp:
+            tools: [create_cluster_invite, revoke_cluster_invite, accept_cluster_invite]
+          webapp:
+            routes: ["/infrastructure/:clusterId"]
+          docs:
+            pages: [hybrid/overview.mdx]
 
-  - slug: edge-clusters
-    name: Edge clusters
-    area: infrastructure
-    description: Tenant-owned edge clusters with bootstrap and node enrollment.
-    status: shipped
-    required_surfaces:
-      graphql: { required: true }
-      mcp: { required: true }
-      webapp: { required: true }
-      docs: { required: true }
-    surfaces:
-      graphql:
-        mutations: [createEdgeCluster, bootstrapEdge]
-        queries: [cluster, clustersConnection]
-      mcp:
-        tools: [create_edge_cluster]
-      webapp:
-        routes: ["/infrastructure/clusters", "/infrastructure/:clusterId"]
-      docs:
-        pages: [hybrid/edge-nodes.mdx, hybrid/connecting.mdx]
+      - slug: cluster-subscription-requests
+        name: Cluster subscription requests
+        kind: foundation
+        description: Tenant-requested subscription to a cluster, requiring operator approval.
+        status: shipped
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+        surfaces:
+          graphql:
+            mutations:
+              [requestClusterSubscription, approveClusterSubscription, rejectClusterSubscription]
+            queries: [pendingSubscriptions, pendingSubscriptionsConnection]
+          mcp:
+            tools:
+              [
+                request_cluster_subscription,
+                approve_subscription_request,
+                reject_subscription_request,
+              ]
+          webapp:
+            routes: ["/infrastructure/:clusterId"]
+          docs:
+            pages: [hybrid/overview.mdx]
 
-  - slug: enrollment-tokens
-    name: Enrollment / bootstrap tokens
+  - slug: byoc-ownership
+    name: BYOC ownership levels
     area: infrastructure
-    description: One-shot tokens used to enroll new edge nodes into a cluster.
-    status: shipped
-    required_surfaces:
-      graphql: { required: true }
-      webapp: { required: true }
-      docs: { required: true }
-      mcp:
-        required: true
-        sensitive: true
-        returns_secret_material: true
-        audit_events: true
-    surfaces:
-      graphql:
-        mutations: [createBootstrapToken, revokeBootstrapToken, createEnrollmentToken]
-        queries: [bootstrapTokensConnection]
-      mcp:
-        tools: [create_enrollment_token]
-      webapp:
-        routes: ["/infrastructure/:clusterId"]
-      docs:
-        pages: [hybrid/connecting.mdx, hybrid/node-cli.mdx]
-
-  - slug: cluster-invites
-    name: Cluster invites
-    area: infrastructure
-    description: Direct invites granting another tenant access to a cluster.
-    status: shipped
-    required_surfaces:
-      graphql: { required: true }
-      mcp: { required: true }
-      webapp: { required: true }
-      docs: { required: true }
-    surfaces:
-      graphql:
-        mutations: [createClusterInvite, revokeClusterInvite, acceptClusterInvite]
-        queries:
-          - clusterInvites
-          - clusterInvitesConnection
-          - myClusterInvites
-          - myClusterInvitesConnection
-      mcp:
-        tools: [create_cluster_invite, revoke_cluster_invite, accept_cluster_invite]
-      webapp:
-        routes: ["/infrastructure/:clusterId"]
-      docs:
-        pages: [hybrid/overview.mdx]
-
-  - slug: cluster-subscription-requests
-    name: Cluster subscription requests
-    area: infrastructure
-    description: Tenant-requested subscription to a cluster, requiring operator approval.
-    status: shipped
-    required_surfaces:
-      graphql: { required: true }
-      mcp: { required: true }
-      webapp: { required: true }
-      docs: { required: true }
-    surfaces:
-      graphql:
-        mutations:
-          [requestClusterSubscription, approveClusterSubscription, rejectClusterSubscription]
-        queries: [pendingSubscriptions, pendingSubscriptionsConnection]
-      mcp:
-        tools:
-          [request_cluster_subscription, approve_subscription_request, reject_subscription_request]
-      webapp:
-        routes: ["/infrastructure/:clusterId"]
-      docs:
-        pages: [hybrid/overview.mdx]
-
-  - slug: nodes
-    name: Nodes (edge / ingest / playback)
-    area: infrastructure
-    description: Per-node health, info, and discovery.
-    status: shipped
-    required_surfaces:
-      graphql: { required: true }
-      mcp: { required: true }
-      webapp: { required: true }
-      docs: { required: true }
-    surfaces:
-      graphql:
-        queries: [node, nodesConnection, serviceInstancesHealth, discoverServicesConnection]
-      mcp:
-        tools: [get_node_health, get_node_info]
-      webapp:
-        routes: ["/nodes", "/nodes/:id"]
-      docs:
-        pages: [hybrid/edge-nodes.mdx, hybrid/node-cli.mdx]
-
-  - slug: node-mode
-    name: Node mode (drain / maintenance)
-    area: infrastructure
-    description: Operator controls to drain a node, put it in maintenance, or restore it to active service.
-    status: shipped
-    required_surfaces:
-      graphql: { required: true }
-      mcp: { required: true }
-      webapp: { required: true }
-      docs: { required: true }
-    configurability:
-      tenant_default: not_applicable
-      per_resource_override: present
-      effective_value_visible: present
-      entitlement_bounds: not_applicable
-      audit_events: present
-      undo: present
-    surfaces:
-      graphql:
-        mutations: [setNodeMode]
-      mcp:
-        tools: [manage_node, set_node_mode]
-      webapp:
-        routes: ["/nodes/:id"]
-      docs:
-        pages: [hybrid/node-mode.mdx, hybrid/node-cli.mdx, hybrid/edge-nodes.mdx]
-    examples:
-      - title: "Drain a node"
-        query: |
-          mutation Drain { setNodeMode(input: { nodeId: "<node-id>", mode: DRAINING, reason: "monthly maintenance" }) {
-            ... on InfrastructureNode {
-              nodeId
-              effectiveMode
-              routingImpactPreview { activeStreams activeViewers }
-            }
-            ... on ValidationError { message field }
-            ... on NotFoundError { message }
-          } }
-      - title: "Restore a node"
-        query: |
-          mutation Restore { setNodeMode(input: { nodeId: "<node-id>", mode: NORMAL }) {
-            ... on InfrastructureNode { effectiveMode }
-            ... on ValidationError { message field }
-          } }
-
-  - slug: federation-network
-    name: Federated network status
-    area: infrastructure
-    description: Cross-cluster routing visibility and orchestrator vantage points.
-    status: shipped
-    required_surfaces:
-      graphql: { required: true }
-      mcp: { required: false, reason: "Diagnostic surface; covered by analytics MCP tools." }
-      webapp: { required: true }
-      docs: { required: true }
-    surfaces:
-      graphql:
-        queries:
-          - networkStatus
-          - orchestrator
-          - orchestratorInstances
-          - orchestratorPerformanceSeries
-          - orchestratorVantages
-          - orchestratorsConnection
-      webapp:
-        routes: ["/network", "/infrastructure/federation", "/infrastructure/network"]
-      docs:
-        pages: [operators/multi-cluster.mdx]
-
-  - slug: managed-dns-routing
-    name: Managed DNS and cluster domains
-    area: infrastructure
-    description: Platform-managed DNS, TLS certificates, media-cluster domains, and tenant streaming domain discovery.
+    description: The deployment ownership spectrum — from bring-your-own edge nodes to fully sovereign self-hosting.
     status: partial
     gap_reason: |
-      Navigator reconciles platform and media-cluster DNS for operated deployments, and the API exposes tenant streaming domains
-      through streamingConfig. The missing product surface is customer-controlled DNS: custom domain onboarding, verification,
-      certificate status, proxy policy, and self-serve dashboard/MCP workflows.
+      The first level ships today as edge clusters: bring your own MistServer edge nodes and FrameWorks runs DNS, TLS,
+      geo-balanced routing, federation, tenant subdomains, analytics, playback access control, and billing around them.
+      The deeper levels — private media clusters, hosted private clusters, and fully sovereign self-hosting — are roadmap
+      subitems.
     required_surfaces:
       graphql: { required: true }
       mcp: { required: true }
       webapp: { required: true }
       docs: { required: true }
     surfaces:
-      graphql:
-        queries: [streamingConfig]
-        fields:
-          [
-            StreamingConfig.ingestDomain,
-            StreamingConfig.edgeDomain,
-            StreamingConfig.playDomain,
-            StreamingConfig.chandlerDomain,
-            StreamingConfig.officialIngestDomain,
-            StreamingConfig.officialEdgeDomain,
-            StreamingConfig.officialPlayDomain,
-            StreamingConfig.officialChandlerDomain,
-          ]
       docs:
-        pages: [operators/dns.mdx, operators/deployment.mdx]
+        pages: [hybrid/overview.mdx]
+    subitems:
+      - slug: byo-media-cluster
+        name: Private media cluster (BYOC)
+        description: Run the media and data plane on your own cloud while using the FrameWorks control plane for tenancy, routing, billing, and access control.
+        status: roadmap
+        gap_reason: Not shipped as a public workflow. Edge enrollment and cross-cluster federation exist, but running a full media and data cluster on customer-controlled infrastructure needs federation-trust hardening (scoped per-cluster credentials or mutual TLS) and a media-cluster provisioning preset.
+        depends_on: [edge-clusters, federation-network]
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
 
-  # ───────────────── Billing & wallet ─────────────────
+      - slug: hosted-private-clusters
+        name: Hosted private clusters (BYOC)
+        description: FrameWorks-provisioned dedicated, isolated clusters for a single tenant, with reserved capacity and fixed-rate pricing.
+        status: roadmap
+        gap_reason: Not shipped. Private-cluster records and tenant-cluster access exist, but self-serve provisioning of dedicated capacity needs cloud-provider automation (infrastructure-as-code or provider SDKs) that does not exist today, plus a reserved-capacity billing SKU and an operator console.
+        depends_on: [edge-iso-cloud-images]
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+
+      - slug: sovereign-self-host
+        name: Fully sovereign self-hosting (BYOC)
+        description: Run the entire FrameWorks stack with no runtime dependency on FrameWorks, including your own object storage, analytics store, DNS, and an isolated control plane and identity root.
+        status: roadmap
+        gap_reason: Not shipped as turnkey. Self-hosting the stack is possible today, but full sovereignty needs dedicated-database and identity decoupling from the shared control plane, self-hosted DNS (PowerDNS is planned, not built), and a bring-your-own object-storage and analytics-store path. Today FrameWorks runs ClickHouse and S3-compatible storage for hosted tenants.
+        depends_on: [standalone-storage-services, managed-dns-routing]
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+
+  - slug: adjacent-infra-services
+    name: Adjacent infrastructure services
+    area: infrastructure
+    description: Infrastructure products adjacent to video delivery — managed DNS, generic proxying/CDN, and standalone storage.
+    status: partial
+    gap_reason: |
+      FrameWorks already operates DNS automation, service proxying, and media storage internally for operated deployments,
+      and managed media-cluster DNS is partially customer-facing. Turning these into standalone customer products — custom
+      domains, origins, buckets/volumes, policies, billing, and support boundaries — is tracked by the subitems.
+    required_surfaces:
+      graphql: { required: true }
+      mcp: { required: true }
+      webapp: { required: true }
+      docs: { required: true }
+    subitems:
+      - slug: managed-dns-routing
+        name: Managed DNS and cluster domains
+        description: Platform-managed DNS, TLS certificates, media-cluster domains, and tenant streaming domain discovery.
+        status: partial
+        gap_reason: |
+          Navigator reconciles platform and media-cluster DNS for operated deployments, and the API exposes tenant streaming domains
+          through streamingConfig. The missing product surface is customer-controlled DNS: custom domain onboarding, verification,
+          certificate status, proxy policy, and self-serve dashboard/MCP workflows.
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+        surfaces:
+          graphql:
+            queries: [streamingConfig]
+            fields:
+              [
+                StreamingConfig.ingestDomain,
+                StreamingConfig.edgeDomain,
+                StreamingConfig.playDomain,
+                StreamingConfig.chandlerDomain,
+                StreamingConfig.officialIngestDomain,
+                StreamingConfig.officialEdgeDomain,
+                StreamingConfig.officialPlayDomain,
+                StreamingConfig.officialChandlerDomain,
+              ]
+          docs:
+            pages: [operators/dns.mdx, operators/deployment.mdx]
+
+      - slug: generic-proxying-cdn
+        name: Generic proxying and CDN services
+        description: Customer-configured proxy/CDN front doors for non-video services and adjacent workloads.
+        status: roadmap
+        gap_reason: |
+          Navigator can proxy selected platform services for operated deployments. A customer-facing generic proxy/CDN product is not shipped:
+          it needs origin onboarding, routing policy, TLS/domain validation, caching controls, abuse controls, billing, and dashboard/API/MCP
+          workflows.
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+
+      - slug: standalone-storage-services
+        name: Standalone object and block storage
+        description: Customer-facing storage buckets, volumes, policies, and lifecycle controls outside the video-asset workflow.
+        status: roadmap
+        gap_reason: |
+          FrameWorks already has media storage, cold-storage lifecycle, and cross-cluster S3 delegation for DVR, clips, VOD, thumbnails,
+          and preview assets. A standalone object/block storage product is not shipped: it needs resource provisioning, quota/billing,
+          access credentials, policy management, dashboard/API/MCP controls, and operator support boundaries.
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+
+  # ───────────────── Commerce & Billing ─────────────────
 
   - slug: billing
     name: Billing & prepaid balance
-    area: billing
+    area: commerce
     description: Card / Mollie / crypto top-ups, billing details, invoices, prepaid balance.
     status: shipped
     required_surfaces:
@@ -886,15 +1251,29 @@ features:
         routes: ["/account/balance", "/account/billing"]
       docs:
         pages: [builders/billing.mdx]
+    subitems:
+      - slug: usage-caps
+        name: Usage caps, alerts, retention cost preview
+        description: Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes.
+        status: partial
+        gap_reason: |
+          Cost preview shipped (2026-05-16): Purser surfaces per-tenant marginal storage pricing via GetTenantBillingStatus.StoragePricing, and pkg/billing/storagecost projects a per-asset $/day + $/month figure used on Clip / DVRRequest / VodAsset.storageCost. The storage browser route lists assets with their cost projection and resolved retention. Remaining gap: customer-set caps (configurable thresholds per meter) and alert delivery infrastructure (dedupe, notification channels, threshold-crossed semantics) — still real engineering projects, tracked as the rest of this row.
+        depends_on: [billing]
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
 
   - slug: wallet
     name: Wallet & on-chain identity
-    area: developer
+    area: commerce
     description: Wallet sign-in, linked-wallet account identity, and x402 micropayments.
     status: partial
     gap_reason: |
       Agent wallet auth and x402 settlement are exposed through get_payment_options and submit_payment.
       First-class MCP wallet-management tools for listing, linking, and unlinking additional wallets are still missing.
+    related: [billing]
     required_surfaces:
       graphql: { required: true }
       webapp: { required: true }
@@ -915,48 +1294,98 @@ features:
       docs:
         pages: [builders/wallet-and-crypto.mdx, agents/wallet-auth.mdx, agents/payments.mdx]
 
-  # ───────────────── Developer surfaces ─────────────────
+  # ───────────────── Developer Platform & Agents ─────────────────
 
-  - slug: developer-tokens
-    name: Developer API tokens
+  - slug: developer-api
+    name: Developer API
     area: developer
-    description: Long-lived API tokens for SDK / CI use.
-    status: shipped
+    description: The GraphQL API and the tooling around it — playground, API tokens, webhooks, and server-side SDKs.
+    status: partial
+    gap_reason: The GraphQL API, playground, and developer tokens ship; outbound webhooks and server-side SDKs are roadmap subitems.
     required_surfaces:
-      graphql: { required: true }
-      webapp: { required: true }
-      docs: { required: true }
-      mcp:
-        required: false
-        reason: API tokens authorize MCP itself; tools managing them would be circular.
-    surfaces:
       graphql:
-        mutations: [createDeveloperToken, revokeDeveloperToken]
-        queries: [developerTokensConnection]
-      webapp:
-        routes: ["/developer/api-keys"]
-      docs:
-        pages: [builders/api-reference.mdx]
-
-  - slug: graphql-playground
-    name: GraphQL playground
-    area: developer
-    description: Interactive GraphQL explorer wired to the live schema.
-    status: shipped
-    required_surfaces:
-      webapp: { required: true }
-      docs: { required: true }
-      graphql: { required: false, reason: "The playground IS a graphql client; nothing to expose." }
-      mcp:
         {
           required: false,
-          reason: "Agents use introspect_schema / generate_query / execute_query directly.",
+          reason: "The subitems carry the concrete operations; the API itself is the surface.",
         }
+      mcp: { required: false, reason: "Agents access the API through the MCP server (agents-mcp)." }
+      webapp: { required: true }
+      docs: { required: true }
     surfaces:
       webapp:
         routes: ["/developer/playground"]
       docs:
         pages: [builders/api-reference.mdx]
+    subitems:
+      - slug: developer-tokens
+        name: Developer API tokens
+        kind: foundation
+        description: Long-lived API tokens for SDK / CI use.
+        status: shipped
+        required_surfaces:
+          graphql: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+          mcp:
+            required: false
+            reason: API tokens authorize MCP itself; tools managing them would be circular.
+        surfaces:
+          graphql:
+            mutations: [createDeveloperToken, revokeDeveloperToken]
+            queries: [developerTokensConnection]
+          webapp:
+            routes: ["/developer/api-keys"]
+          docs:
+            pages: [builders/api-reference.mdx]
+
+      - slug: graphql-playground
+        name: GraphQL playground
+        description: Interactive GraphQL explorer wired to the live schema.
+        status: shipped
+        required_surfaces:
+          webapp: { required: true }
+          docs: { required: true }
+          graphql:
+            { required: false, reason: "The playground IS a graphql client; nothing to expose." }
+          mcp:
+            {
+              required: false,
+              reason: "Agents use introspect_schema / generate_query / execute_query directly.",
+            }
+        surfaces:
+          webapp:
+            routes: ["/developer/playground"]
+          docs:
+            pages: [builders/api-reference.mdx]
+
+      - slug: outbound-webhooks
+        name: Outbound event webhooks
+        description: Tenant-configured outbound webhooks for stream / clip / VOD lifecycle events.
+        status: roadmap
+        gap_reason: Not shipped. Inbound playback-auth webhook exists (covered by playback-access-control); outbound delivery is future work.
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+
+      - slug: backend-sdks
+        name: Backend SDKs
+        description: Server-side SDKs (Node, Python, PHP, Ruby, Elixir, Java, C#) wrapping the GraphQL API, webhooks, uploads, and access-token/JWT workflows.
+        status: roadmap
+        gap_reason: |
+          Not shipped. Only frontend JS packages (player, StreamCrafter) exist today, and the migration guides disclose the
+          missing server-side SDKs as a parity gap. Phased delivery, starting with Node and Python; each SDK covers API access,
+          webhook verification, uploads, access tokens, and JWT signing.
+        required_surfaces:
+          graphql:
+            {
+              required: false,
+              reason: "SDKs wrap the existing GraphQL API; no new schema surface.",
+            }
+          mcp: { required: false, reason: "Agents use the MCP server directly." }
+          webapp: { required: true }
+          docs: { required: true }
 
   - slug: agents-mcp
     name: Agents (MCP server)
@@ -984,46 +1413,78 @@ features:
             agents/skipper.mdx,
             agents/wallet-auth.mdx,
           ]
+    subitems:
+      - slug: skipper
+        name: Skipper (in-app consultant agent)
+        description: Conversational platform agent for support and investigations.
+        status: partial
+        gap_reason: MCP exposes ask_consultant only; conversation management (list/get/send/archive) is not exposed.
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+        surfaces:
+          graphql:
+            mutations:
+              - createConversation
+              - sendMessage
+              - updateSkipperConversation
+              - deleteSkipperConversation
+              - markSkipperReportsRead
+            queries:
+              - conversation
+              - conversationsConnection
+              - messagesConnection
+              - skipperConversation
+              - skipperConversations
+              - skipperReport
+              - skipperReports
+              - skipperUnreadReportCount
+            subscriptions: [liveConversationUpdates, liveMessageReceived, skipperChat]
+          mcp:
+            tools: [ask_consultant, search_support_history]
+          webapp:
+            routes: ["/skipper", "/skipper/investigations", "/messages", "/messages/:id"]
+          docs:
+            pages: [agents/skipper.mdx, operators/skipper.mdx]
 
-  # ───────────────── Skipper ─────────────────
+  # ───────────────── Engagement & Interactivity ─────────────────
 
-  - slug: skipper
-    name: Skipper (in-app consultant agent)
-    area: agents
-    description: Conversational platform agent for support and investigations.
-    status: partial
-    gap_reason: MCP exposes ask_consultant only; conversation management (list/get/send/archive) is not exposed.
+  - slug: conferencing
+    name: Conferencing and remote contribution
+    area: engagement
+    description: Multi-party WebRTC rooms and remote-guest contribution — commentators and callers mixed into a managed stream.
+    status: roadmap
+    gap_reason: |
+      WHIP ingest and WHEP playback ship as single-source paths. Rooms need a session/room model, participant auth,
+      server-side audio (then video) mixing into a managed stream for live-commentator and remote-guest workflows, plus
+      API, dashboard, and MCP surfaces.
+    depends_on: [streams]
+    related: [rooms-interactivity]
     required_surfaces:
       graphql: { required: true }
       mcp: { required: true }
       webapp: { required: true }
       docs: { required: true }
-    surfaces:
-      graphql:
-        mutations:
-          - createConversation
-          - sendMessage
-          - updateSkipperConversation
-          - deleteSkipperConversation
-          - markSkipperReportsRead
-        queries:
-          - conversation
-          - conversationsConnection
-          - messagesConnection
-          - skipperConversation
-          - skipperConversations
-          - skipperReport
-          - skipperReports
-          - skipperUnreadReportCount
-        subscriptions: [liveConversationUpdates, liveMessageReceived, skipperChat]
-      mcp:
-        tools: [ask_consultant, search_support_history]
-      webapp:
-        routes: ["/skipper", "/skipper/investigations", "/messages", "/messages/:id"]
-      docs:
-        pages: [agents/skipper.mdx, operators/skipper.mdx]
 
-  # ───────────────── Tenant ─────────────────
+  - slug: rooms-interactivity
+    name: Rooms, chat, and interactivity (Parlor)
+    area: engagement
+    description: Viewer chat and engagement primitives — channel points, hype trains, leaderboards, flair, and moderation views — synced to the stream.
+    status: roadmap
+    gap_reason: |
+      The planned rooms service (api_rooms, codename Parlor) is a stub; the product design (chat, channel points, hype
+      trains, leaderboards, flair, stream-synced events, moderator views) is captured in docs/rfcs/parlor.md. Viewer chat
+      is the first surface; real-time A/V rooms live under conferencing.
+    related: [conferencing]
+    required_surfaces:
+      graphql: { required: true }
+      mcp: { required: true }
+      webapp: { required: true }
+      docs: { required: true }
+
+  # ───────────────── Account & Apps ─────────────────
 
   - slug: tenant
     name: Tenant settings
@@ -1049,200 +1510,60 @@ features:
         routes: ["/settings", "/account/billing"]
       docs:
         pages: [agents/wallet-auth.mdx, agents/mcp.mdx]
+    subitems:
+      - slug: team-rbac
+        name: Teams & RBAC
+        description: Multi-user tenants with role-based access control.
+        status: roadmap
+        gap_reason: Not shipped. Requires tenant membership model, role grants, invitation flow, GraphQL policy checks, MCP permission scoping, and webapp team administration.
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
 
-  # ───────────────── Roadmap ─────────────────
-
-  - slug: outbound-webhooks
-    name: Outbound event webhooks
-    area: developer
-    description: Tenant-configured outbound webhooks for stream / clip / VOD lifecycle events.
-    status: roadmap
-    gap_reason: Not shipped. Inbound playback-auth webhook exists (covered by playback-access-control); outbound delivery is future work.
-    required_surfaces:
-      graphql: { required: true }
-      mcp: { required: true }
-      webapp: { required: true }
-      docs: { required: true }
-
-  - slug: team-rbac
-    name: Teams & RBAC
+  - slug: companion-apps
+    name: Companion apps
     area: account
-    description: Multi-user tenants with role-based access control.
-    status: roadmap
-    gap_reason: Not shipped. Requires tenant membership model, role grants, invitation flow, GraphQL policy checks, MCP permission scoping, and webapp team administration.
-    required_surfaces:
-      graphql: { required: true }
-      mcp: { required: true }
-      webapp: { required: true }
-      docs: { required: true }
-
-  - slug: composer-ai
-    name: Processing and composition
-    area: streaming
-    description: Server-side processing in the media engine — MistServer-native blitter for overlays, logos, and lower-thirds; Composer for server-side ad insertion (SSAI) and raw-pixel composition; transcription, object detection, picture-in-picture, and automated clipping on top.
-    status: roadmap
-    gap_reason: Not shipped. Requires product/API design for overlay placement and lifecycle, SSAI ad-decision integration, model execution boundaries for AI detection and transcription, billing meters, agent permissions, and dashboard/MCP surfaces for configuring composition.
-    required_surfaces:
-      graphql: { required: true }
-      mcp: { required: true }
-      webapp: { required: true }
-      docs: { required: true }
-
-  - slug: usage-caps
-    name: Usage caps, alerts, retention cost preview
-    area: billing
-    description: Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes.
+    description: Desktop and mobile companions to the dashboard and CLI.
     status: partial
     gap_reason: |
-      Cost preview shipped (2026-05-16): Purser surfaces per-tenant marginal storage pricing via GetTenantBillingStatus.StoragePricing, and pkg/billing/storagecost projects a per-asset $/day + $/month figure used on Clip / DVRRequest / VodAsset.storageCost. The storage browser route lists assets with their cost projection and resolved retention. Remaining gap: customer-set caps (configurable thresholds per meter) and alert delivery infrastructure (dedupe, notification channels, threshold-crossed semantics) — still real engineering projects, tracked as the rest of this row.
+      The macOS tray app ships in the .pkg installer alongside the CLI but is undertested and undocumented; mobile apps
+      and the integrated help center are roadmap subitems.
     required_surfaces:
-      graphql: { required: true }
-      mcp: { required: true }
-      webapp: { required: true }
+      graphql:
+        {
+          required: false,
+          reason: "Native apps consume the existing API; no dedicated schema surface.",
+        }
+      mcp: { required: false, reason: "Not an agent surface." }
+      webapp: { required: false, reason: "Native apps, not dashboard routes." }
       docs: { required: true }
+    subitems:
+      - slug: mac-tray
+        name: Desktop companion (macOS tray)
+        description: Menu-bar app bundled with the CLI in the macOS installer for local edge and stream control.
+        status: partial
+        gap_reason: |
+          Ships in the macOS .pkg installer, but the app is undertested and underdeveloped — no docs page (deliberately,
+          until it hardens), no marketing presence, and no Windows/Linux equivalent.
+        required_surfaces:
+          graphql:
+            {
+              required: false,
+              reason: "Desktop app consumes the existing API; no dedicated schema surface.",
+            }
+          mcp: { required: false, reason: "Not an agent surface." }
+          webapp: { required: false, reason: "Native app, not a dashboard route." }
+          docs: { required: true }
 
-  - slug: scheduled-recordings
-    name: Scheduled recordings
-    area: storage
-    description: Calendar-driven DVR captures that start and stop on schedule, so streams record themselves on a fixed cadence.
-    status: roadmap
-    gap_reason: DVR recording is shipped (start_dvr / stop_dvr exist); scheduling is the gap. Requires a schedule store, a sweeper that triggers DVR start/stop at window boundaries, GraphQL mutation + query surface, MCP tools, and a calendar UI. Primary use cases include places of worship, lectures, periodic events, and any scheduled programming.
-    required_surfaces:
-      graphql: { required: true }
-      mcp: { required: true }
-      webapp: { required: true }
-      docs: { required: true }
-
-  - slug: scheduled-vod-streams
-    name: Scheduled VOD streams
-    area: streaming
-    description: Linear live channels assembled from existing VOD assets, with schedules that make archived media play as a rolling live stream.
-    status: roadmap
-    gap_reason: |
-      Not shipped. Managed Mist-native streams provide the lower-level primitive for platform-owned concrete stream configs, but scheduled VOD streams need a separate product layer:
-      a schedule/timeline store, VOD artifact selection, asset availability checks, pre-hydration/pinning for frozen assets, failover-aware edge placement, GraphQL/MCP controls,
-      and dashboard scheduling workflows. The source material should remain normal finalized VOD artifacts with their existing storage lifecycle; the scheduler turns them into a
-      live channel without bypassing artifact ownership, retention, or billing semantics.
-    required_surfaces:
-      graphql: { required: true }
-      mcp: { required: true }
-      webapp: { required: true }
-      docs: { required: true }
-
-  - slug: incidents-and-alerts
-    name: Incidents and alerts
-    area: infrastructure
-    description: Tenant-scoped incident feed aggregating node-health, certificate, DNS, capacity, and cluster alerts with acknowledge/resolve and realtime delivery.
-    status: roadmap
-    gap_reason: |
-      Not shipped. Prometheus and Grafana cover internal monitoring. The customer-facing gap is a tenant incident feed — Alertmanager webhook ingestion, dedup/fingerprinting, an incident store, GraphQL queries + acknowledge/resolve mutations, realtime delivery via Signalman, and MCP tools so agents can triage. Self-hosted operators get visibility into their own clusters (cert expiry, port reachability, DNS resolution, CPU/memory thresholds) without standing up a separate monitoring stack.
-    required_surfaces:
-      graphql: { required: true }
-      mcp: { required: true }
-      webapp: { required: true }
-      docs: { required: true }
-
-  - slug: byo-media-cluster
-    name: Private media cluster (BYOC)
-    area: infrastructure
-    description: Run the media and data plane on your own cloud while using the FrameWorks control plane for tenancy, routing, billing, and access control.
-    status: roadmap
-    gap_reason: Not shipped as a public workflow. Edge enrollment and cross-cluster federation exist, but running a full media and data cluster on customer-controlled infrastructure needs federation-trust hardening (scoped per-cluster credentials or mutual TLS) and a media-cluster provisioning preset.
-    required_surfaces:
-      graphql: { required: true }
-      mcp: { required: true }
-      webapp: { required: true }
-      docs: { required: true }
-
-  - slug: hosted-private-clusters
-    name: Hosted private clusters (BYOC)
-    area: infrastructure
-    description: FrameWorks-provisioned dedicated, isolated clusters for a single tenant, with reserved capacity and fixed-rate pricing.
-    status: roadmap
-    gap_reason: Not shipped. Private-cluster records and tenant-cluster access exist, but self-serve provisioning of dedicated capacity needs cloud-provider automation (infrastructure-as-code or provider SDKs) that does not exist today, plus a reserved-capacity billing SKU and an operator console.
-    required_surfaces:
-      graphql: { required: true }
-      mcp: { required: true }
-      webapp: { required: true }
-      docs: { required: true }
-
-  - slug: sovereign-self-host
-    name: Fully sovereign self-hosting (BYOC)
-    area: infrastructure
-    description: Run the entire FrameWorks stack with no runtime dependency on FrameWorks, including your own object storage, analytics store, DNS, and an isolated control plane and identity root.
-    status: roadmap
-    gap_reason: Not shipped as turnkey. Self-hosting the stack is possible today, but full sovereignty needs dedicated-database and identity decoupling from the shared control plane, self-hosted DNS (PowerDNS is planned, not built), and a bring-your-own object-storage and analytics-store path. Today FrameWorks runs ClickHouse and S3-compatible storage for hosted tenants.
-    required_surfaces:
-      graphql: { required: true }
-      mcp: { required: true }
-      webapp: { required: true }
-      docs: { required: true }
-
-  - slug: drm
-    name: DRM
-    area: playback
-    description: FairPlay, Widevine, and PlayReady protection for premium playback workflows.
-    status: roadmap
-    gap_reason: Not shipped. Playback signing keys and webhook/JWT access control are available today, but multi-DRM license packaging and player enforcement are separate work.
-    required_surfaces:
-      graphql: { required: true }
-      mcp: { required: true }
-      webapp: { required: true }
-      docs: { required: true }
-
-  - slug: device-discovery-contribution-inputs
-    name: Device discovery and contribution inputs
-    area: streaming
-    description: Edge-local discovery for cameras, PTZ devices, NDI sources, USB capture, HDMI inputs, and local contribution paths.
-    status: roadmap
-    gap_reason: |
-      Experimental media-engine discovery and local-source creation exist below the FrameWorks product layer. The missing work is
-      packaging that capability into FrameWorks Edge, then exposing it through API, dashboard, Tray, CLI, and MCP workflows for managed
-      streams and self-hosted clusters.
-    required_surfaces:
-      graphql: { required: true }
-      mcp: { required: true }
-      webapp: { required: true }
-      docs: { required: true }
-
-  - slug: standalone-storage-services
-    name: Standalone object and block storage
-    area: storage
-    description: Customer-facing storage buckets, volumes, policies, and lifecycle controls outside the video-asset workflow.
-    status: roadmap
-    gap_reason: |
-      FrameWorks already has media storage, cold-storage lifecycle, and cross-cluster S3 delegation for DVR, clips, VOD, thumbnails,
-      and preview assets. A standalone object/block storage product is not shipped: it needs resource provisioning, quota/billing,
-      access credentials, policy management, dashboard/API/MCP controls, and operator support boundaries.
-    required_surfaces:
-      graphql: { required: true }
-      mcp: { required: true }
-      webapp: { required: true }
-      docs: { required: true }
-
-  - slug: generic-proxying-cdn
-    name: Generic proxying and CDN services
-    area: infrastructure
-    description: Customer-configured proxy/CDN front doors for non-video services and adjacent workloads.
-    status: roadmap
-    gap_reason: |
-      Navigator can proxy selected platform services for operated deployments. A customer-facing generic proxy/CDN product is not shipped:
-      it needs origin onboarding, routing policy, TLS/domain validation, caching controls, abuse controls, billing, and dashboard/API/MCP
-      workflows.
-    required_surfaces:
-      graphql: { required: true }
-      mcp: { required: true }
-      webapp: { required: true }
-      docs: { required: true }
-
-  - slug: mobile-apps-help-center
-    name: Mobile apps and integrated help center
-    area: account
-    description: Native mobile operations and an in-product help center for support, incidents, and account workflows.
-    status: roadmap
-    gap_reason: Not shipped as a product surface. Support and messaging infrastructure exists, but native mobile workflows and integrated help-center UX are planned after core platform surfaces.
-    required_surfaces:
-      graphql: { required: true }
-      mcp: { required: true }
-      webapp: { required: true }
-      docs: { required: true }
+      - slug: mobile-apps-help-center
+        name: Mobile apps and integrated help center
+        description: Native mobile operations and an in-product help center for support, incidents, and account workflows.
+        status: roadmap
+        gap_reason: Not shipped as a product surface. Support and messaging infrastructure exists, but native mobile workflows and integrated help-center UX are planned after core platform surfaces.
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
