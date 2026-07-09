@@ -60,11 +60,17 @@ type BillingAddress struct {
 // JSONB is a generic typed JSONB map.
 type JSONB map[string]any
 
+// Value returns JSON as a string, not []byte: the pgx stdlib driver
+// wire-encodes []byte as bytea, which jsonb parameters reject.
 func (j JSONB) Value() (driver.Value, error) {
 	if j == nil {
 		return nil, nil
 	}
-	return json.Marshal(j)
+	encoded, err := json.Marshal(j)
+	if err != nil {
+		return nil, err
+	}
+	return string(encoded), nil
 }
 
 func (j *JSONB) Scan(value any) error {
@@ -84,11 +90,17 @@ func (j *JSONB) Scan(value any) error {
 	return json.Unmarshal(bytes, j)
 }
 
+// valueFromJSON returns JSON as a string for the same jsonb-vs-bytea reason
+// as JSONB.Value.
 func valueFromJSON(v any) (driver.Value, error) {
 	if v == nil {
 		return nil, nil
 	}
-	return json.Marshal(v)
+	encoded, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	return string(encoded), nil
 }
 
 func scanToJSON(dest any, value any) error {

@@ -1605,7 +1605,7 @@ func (s *PurserServer) CreateSubscription(ctx context.Context, req *purserpb.Cre
 			payment_method, custom_features, created_at, updated_at
 		)
 		VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8, $9, $10, $11, $12, $6, $6)
-	`, subID, tenantID, tierID, billingEmail, billingModel, now, trialEndsAt, periodEnd, periodStart, periodEnd, req.GetPaymentMethod(), featuresJSON); err != nil {
+	`, subID, tenantID, tierID, billingEmail, billingModel, now, trialEndsAt, periodEnd, periodStart, periodEnd, req.GetPaymentMethod(), fwdb.JSONText(featuresJSON)); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create subscription: %v", err)
 	}
 
@@ -1723,7 +1723,7 @@ func (s *PurserServer) UpdateSubscription(ctx context.Context, req *purserpb.Upd
 			return nil, status.Errorf(codes.InvalidArgument, "invalid custom_features: %v", err)
 		}
 		updates = append(updates, fmt.Sprintf("custom_features = $%d", argIdx))
-		args = append(args, featuresJSON)
+		args = append(args, fwdb.JSONText(featuresJSON))
 		argIdx++
 	}
 
@@ -4188,7 +4188,7 @@ func (s *PurserServer) SetClusterPricing(ctx context.Context, req *purserpb.SetC
 			updated_at = NOW()
 		RETURNING id
 	`, clusterID, pricingModel, basePrice, currency,
-		requiredTierLevel, allowFreeTier, meteredRatesBytes, defaultQuotasBytes,
+		requiredTierLevel, allowFreeTier, fwdb.JSONText(meteredRatesBytes), fwdb.JSONText(defaultQuotasBytes),
 		req.StripeProductId, req.StripePriceIdMonthly, req.StripeMeterEventName,
 	).Scan(&pricingID)
 	if err != nil {
@@ -7571,7 +7571,7 @@ func (s *PurserServer) UpdateBillingDetails(ctx context.Context, req *purserpb.U
 			return nil, status.Errorf(codes.Internal, "failed to serialize address: %v", err)
 		}
 		updates = append(updates, fmt.Sprintf("billing_address = $%d", argIdx))
-		args = append(args, addressJSON)
+		args = append(args, fwdb.JSONText(addressJSON))
 		argIdx++
 	}
 

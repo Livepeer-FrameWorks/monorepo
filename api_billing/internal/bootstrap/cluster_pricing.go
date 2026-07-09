@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"frameworks/api_billing/internal/pricing"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
 // ReconcileClusterPricing upserts every ClusterPricing row in desired into
@@ -118,7 +119,7 @@ func upsertClusterPricing(ctx context.Context, exec DBTX, cp ClusterPricing) (st
 			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`
 		if _, err := exec.ExecContext(ctx, insertSQL,
 			cp.ClusterID, cp.PricingModel, basePrice, currency,
-			requiredTier, allowFree, metered, quotas,
+			requiredTier, allowFree, database.JSONText(metered), database.JSONText(quotas),
 		); err != nil {
 			return "", err
 		}
@@ -148,7 +149,7 @@ func upsertClusterPricing(ctx context.Context, exec DBTX, cp ClusterPricing) (st
 		WHERE cluster_id = $1`
 	if _, err := exec.ExecContext(ctx, updateSQL,
 		cp.ClusterID, cp.PricingModel, basePrice, currency,
-		requiredTier, allowFree, metered, quotas,
+		requiredTier, allowFree, database.JSONText(metered), database.JSONText(quotas),
 	); err != nil {
 		return "", err
 	}

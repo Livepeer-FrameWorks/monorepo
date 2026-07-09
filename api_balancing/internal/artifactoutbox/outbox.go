@@ -203,7 +203,7 @@ func enqueue(ctx context.Context, tx execContext, kind, tenantID, streamID, arti
 		INSERT INTO foghorn.artifact_event_outbox
 			(event_kind, tenant_id, stream_id, artifact_id, payload)
 		VALUES ($1, NULLIF($2, '')::uuid, $3, $4, $5::jsonb)
-	`, kind, tid, streamID, artifactID, body)
+	`, kind, tid, streamID, artifactID, database.JSONText(body))
 	if err != nil {
 		return fmt.Errorf("insert artifact event outbox row: %w", err)
 	}

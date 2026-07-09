@@ -3,12 +3,14 @@ package database_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"os"
 	"reflect"
 	"testing"
 
 	fwdb "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 	"github.com/lib/pq"
 )
 
@@ -115,6 +117,92 @@ func TestPgxRetainedPqArrayBind(t *testing.T) {
 	}
 	if !reflect.DeepEqual(gotTags, wantTags) || !reflect.DeepEqual(gotCounts, wantCounts) {
 		t.Fatalf("roundtrip mismatch: tags=%v counts=%v", gotTags, gotCounts)
+	}
+}
+
+// TestPgxJSONBBind is the contract gate for JSONB parameter binding under the
+// pgx stdlib driver: []byte wire-encodes as bytea and jsonb rejects it, so all
+// jsonb binds must go through fwdb.JSONText (or bind a string). BYTEA columns
+// must keep receiving []byte.
+func TestPgxJSONBBind(t *testing.T) {
+	db := openIT(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	if _, err := db.ExecContext(ctx,
+		`CREATE TEMP TABLE pgx_jsonb_it (id bigint PRIMARY KEY, doc jsonb, blob bytea)`); err != nil {
+		t.Fatalf("create temp table: %v", err)
+	}
+
+	payload := []byte(`{"a":1,"b":["x","y"]}`)
+
+	// The regression this test guards against: raw []byte -> jsonb fails.
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO pgx_jsonb_it (id, doc) VALUES (1, $1)`, payload); err == nil {
+		t.Fatal("raw []byte bind to jsonb unexpectedly succeeded; revisit the JSONText contract")
+	}
+
+	// The contract: JSONText for jsonb, raw []byte for bytea, in one statement.
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO pgx_jsonb_it (id, doc, blob) VALUES (1, $1::jsonb, $2)`,
+		fwdb.JSONText(payload), payload); err != nil {
+		t.Fatalf("JSONText bind: %v", err)
+	}
+
+	// nil marshal output must bind NULL (COALESCE($n::jsonb, ...) sites depend on it).
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO pgx_jsonb_it (id, doc) VALUES (2, $1)`, fwdb.JSONText(nil)); err != nil {
+		t.Fatalf("JSONText(nil) bind: %v", err)
+	}
+
+	var docIsNull bool
+	var gotDoc, gotBlob []byte
+	if err := db.QueryRowContext(ctx,
+		`SELECT doc, blob, (SELECT doc IS NULL FROM pgx_jsonb_it WHERE id = 2)
+		 FROM pgx_jsonb_it WHERE id = 1`).Scan(&gotDoc, &gotBlob, &docIsNull); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if !docIsNull {
+		t.Error("JSONText(nil) did not bind NULL")
+	}
+	if !reflect.DeepEqual(gotBlob, payload) {
+		t.Errorf("bytea round-trip: got %q want %q", gotBlob, payload)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(gotDoc, &got); err != nil || got["a"] != float64(1) {
+		t.Errorf("jsonb round-trip: got %s (err=%v)", gotDoc, err)
+	}
+}
+
+// TestPgxJSONBValuerRoundTrip locks the models JSON Valuers to the string
+// contract: Value() returning []byte would bind as bytea and break jsonb.
+func TestPgxJSONBValuerRoundTrip(t *testing.T) {
+	db := openIT(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	if _, err := db.ExecContext(ctx,
+		`CREATE TEMP TABLE pgx_jsonb_valuer_it (id bigint PRIMARY KEY, doc jsonb)`); err != nil {
+		t.Fatalf("create temp table: %v", err)
+	}
+	in := models.JSONB{"limit": float64(5), "tags": []any{"a"}}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO pgx_jsonb_valuer_it (id, doc) VALUES (1, $1), (2, $2)`,
+		in, models.JSONB(nil)); err != nil {
+		t.Fatalf("models.JSONB bind: %v", err)
+	}
+	var out models.JSONB
+	var nilIsNull bool
+	if err := db.QueryRowContext(ctx,
+		`SELECT doc, (SELECT doc IS NULL FROM pgx_jsonb_valuer_it WHERE id = 2)
+		 FROM pgx_jsonb_valuer_it WHERE id = 1`).Scan(&out, &nilIsNull); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if !reflect.DeepEqual(out, in) {
+		t.Errorf("round-trip: got %v want %v", out, in)
+	}
+	if !nilIsNull {
+		t.Error("nil models.JSONB did not bind NULL")
 	}
 }
 

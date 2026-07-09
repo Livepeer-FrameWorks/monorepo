@@ -79,7 +79,7 @@ func (s *CommodoreServer) enqueueInvalidationOutbox(
 			(tenant_id, reason, internal_names)
 		VALUES ($1::uuid, $2, $3::jsonb)
 		RETURNING id
-	`, tenantID, reason, namesJSON)
+	`, tenantID, reason, database.JSONText(namesJSON))
 	if scanErr := row.Scan(&id); scanErr != nil {
 		return "", fmt.Errorf("insert outbox row: %w", scanErr)
 	}

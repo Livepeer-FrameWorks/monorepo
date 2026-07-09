@@ -58,7 +58,7 @@ as defense-in-depth in case a caller overrides to a cached mode.)
 
 ## Driver portability helpers (lib/pq → pgx)
 
-The swap is not a pure drop-in. Two `lib/pq`-isms had to become driver-agnostic,
+The swap is not a pure drop-in. Three `lib/pq`-isms had to become driver-agnostic,
 centralized in `pkg/database`:
 
 - **SQLSTATE classification**: `database.SQLState(err)` reads the code from a
@@ -68,6 +68,13 @@ centralized in `pkg/database`:
   types or a bare slice pointer (jackc/pgx#1556). Scan with
   `database.ArrayScan(&slice)`. **Binding** is unchanged — `pq.Array(value)` (a
   `driver.Valuer`) still works under both pgx and go-sqlmock, so it is kept.
+- **JSONB binding**: pgx stdlib wire-encodes `[]byte` as `bytea`, which json/jsonb
+  parameters reject (`invalid input syntax for type json`). Bind marshaled JSON
+  through `database.JSONText(b)` (string for non-empty, SQL NULL for nil/empty) or
+  as a `string`. JSON `driver.Valuer` types (`models.JSONB` etc.) return `string`
+  from `Value()`. True BYTEA columns keep binding `[]byte`. **Scanning** is
+  unchanged — the JSON `Scan()` implementations accept both `[]byte` and `string`.
+  Guarded by `TestPgxJSONBBind`.
 
 ## Diagnostics and `psql`
 

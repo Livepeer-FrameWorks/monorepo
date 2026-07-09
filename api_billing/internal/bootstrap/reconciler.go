@@ -12,6 +12,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"frameworks/api_billing/internal/rating"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
 // Result describes what a reconciler did per row. Returned aggregated so callers
@@ -127,7 +128,7 @@ func upsertBillingTier(ctx context.Context, exec DBTX, t CatalogTier) (string, e
 		if insertErr := exec.QueryRowContext(ctx, insertSQL,
 			t.TierName, t.DisplayName, t.Description,
 			t.BasePrice, t.Currency, defaultPeriod(t.BillingPeriod),
-			features, t.SupportLevel, t.SLALevel,
+			database.JSONText(features), t.SupportLevel, t.SLALevel,
 			t.MeteringEnabled,
 			t.TierLevel, t.IsEnterprise,
 			t.IsDefaultPrepaid, t.IsDefaultPostpaid,
@@ -208,7 +209,7 @@ func upsertBillingTier(ctx context.Context, exec DBTX, t CatalogTier) (string, e
 			if _, updateErr := exec.ExecContext(ctx, updateSQL,
 				t.TierName, t.DisplayName, t.Description,
 				t.BasePrice, t.Currency, defaultPeriod(t.BillingPeriod),
-				features, t.SupportLevel, t.SLALevel,
+				database.JSONText(features), t.SupportLevel, t.SLALevel,
 				t.MeteringEnabled,
 				t.TierLevel, t.IsEnterprise,
 				t.IsDefaultPrepaid, t.IsDefaultPostpaid,

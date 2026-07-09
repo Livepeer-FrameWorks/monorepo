@@ -4315,7 +4315,7 @@ func (s *QuartermasterServer) BootstrapClusterAccess(ctx context.Context, req *q
 			is_active = true,
 			resource_limits = COALESCE(NULLIF(quartermaster.tenant_cluster_access.resource_limits, '{}'::jsonb), EXCLUDED.resource_limits),
 			updated_at = NOW()
-	`, tenantID, clusterID, resourceLimitsJSON); err != nil {
+	`, tenantID, clusterID, database.JSONText(resourceLimitsJSON)); err != nil {
 		return nil, status.Errorf(codes.Internal, "upsert tenant_cluster_access: %v", err)
 	}
 
@@ -11484,7 +11484,7 @@ func (s *QuartermasterServer) CreateClusterInvite(ctx context.Context, req *quar
 			resource_limits, status, created_by, created_at, expires_at
 		) VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9)
 	`, id, clusterID, invitedTenantID, token, accessLevel,
-		resourceLimitsJSON, ownerTenantID, now, expiresAt)
+		database.JSONText(resourceLimitsJSON), ownerTenantID, now, expiresAt)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create invite: %v", err)
 	}

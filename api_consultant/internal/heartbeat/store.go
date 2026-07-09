@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/google/uuid"
 )
 
@@ -79,9 +80,9 @@ func (s *SQLReportStore) Save(ctx context.Context, record ReportRecord) (ReportR
 		record.TenantID,
 		record.Trigger,
 		record.Summary,
-		metricsJSON,
+		database.JSONText(metricsJSON),
 		record.RootCause,
-		recommendationsJSON,
+		database.JSONText(recommendationsJSON),
 	).Scan(&createdAt)
 	if err != nil {
 		return ReportRecord{}, fmt.Errorf("insert report: %w", err)

@@ -18,6 +18,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/countries"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -659,7 +660,7 @@ func (h *X402Handler) recordSettlementIntent(ctx context.Context, network, payer
 		ON CONFLICT (network, payer_address, nonce) DO UPDATE
 		SET tenant_id = purser.x402_nonces.tenant_id
 		RETURNING id, tx_hash, tenant_id, amount_cents, status, auth_payload::text, (xmax = 0) AS inserted
-	`, network, strings.ToLower(payerAddress), nonce, tenantID, amountCents, payloadJSON).
+	`, network, strings.ToLower(payerAddress), nonce, tenantID, amountCents, database.JSONText(payloadJSON)).
 		Scan(&nonceID, &storedTxHash, &storedTenant, &storedAmount, &storedStatus, &storedPay, &inserted)
 	if err != nil {
 		return "", false, nil, err

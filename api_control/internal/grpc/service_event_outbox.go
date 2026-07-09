@@ -65,7 +65,7 @@ func (s *CommodoreServer) EnqueueServiceEventTx(
 		VALUES ($1, $2::uuid, $3, $4, $5, $6::jsonb)
 		RETURNING id
 	`, event.GetEventType(), event.GetTenantId(), event.GetUserId(),
-		event.GetResourceType(), event.GetResourceId(), payload)
+		event.GetResourceType(), event.GetResourceId(), database.JSONText(payload))
 	if scanErr := row.Scan(&id); scanErr != nil {
 		return "", fmt.Errorf("insert service event outbox row: %w", scanErr)
 	}

@@ -20,6 +20,7 @@ import (
 
 	billingmollie "frameworks/api_billing/internal/mollie"
 	"frameworks/api_billing/internal/operator"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -2685,7 +2686,7 @@ func (s *Service) upsertMollieMandate(tenantID string, info billingmollie.Mandat
 			method = EXCLUDED.method,
 			details = EXCLUDED.details,
 			updated_at = NOW()
-	`, tenantID, info.MollieCustomerID, info.MollieMandateID, info.Status, info.Method, details, info.CreatedAt)
+	`, tenantID, info.MollieCustomerID, info.MollieMandateID, info.Status, info.Method, database.JSONText(details), info.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to store Mollie mandate: %w", err)
 	}

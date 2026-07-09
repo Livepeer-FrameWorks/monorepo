@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/pgvector/pgvector-go"
 )
 
@@ -236,7 +237,7 @@ func (s *Store) Upsert(ctx context.Context, chunks []Chunk) error {
 			chunk.Text,
 			chunk.Index,
 			pgvector.NewVector(chunk.Embedding),
-			metadataBytes,
+			database.JSONText(metadataBytes),
 		); err != nil {
 			return fmt.Errorf("insert chunk: %w", err)
 		}

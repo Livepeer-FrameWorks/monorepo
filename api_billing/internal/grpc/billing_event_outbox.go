@@ -79,7 +79,7 @@ func (s *PurserServer) EnqueueBillingEventTx(
 			(event_type, tenant_id, user_id, resource_type, resource_id, billing_event)
 		VALUES ($1, $2::uuid, $3, $4, $5, $6::jsonb)
 		RETURNING id
-	`, eventType, tenantID, userID, resourceType, resourceID, billingJSON)
+	`, eventType, tenantID, userID, resourceType, resourceID, database.JSONText(billingJSON))
 	if scanErr := row.Scan(&id); scanErr != nil {
 		return "", fmt.Errorf("insert billing event outbox row: %w", scanErr)
 	}

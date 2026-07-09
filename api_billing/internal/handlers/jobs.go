@@ -1476,7 +1476,7 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 						    updated_at = NOW()
 						WHERE id = $11 AND tenant_id = $12 AND status IN ('draft', 'manual_review')
 						RETURNING id
-					`, totalAmt, baseAmt, meteredAmt, creditAmt, currency, status, dueDate, usageJSON, periodStart, periodEnd, draftInvoiceID, tenantID, grossMeteredAmt).Scan(&invoiceID)
+					`, totalAmt, baseAmt, meteredAmt, creditAmt, currency, status, dueDate, database.JSONText(usageJSON), periodStart, periodEnd, draftInvoiceID, tenantID, grossMeteredAmt).Scan(&invoiceID)
 				if txErr != nil {
 					return fmt.Errorf("update invoice: %w", txErr)
 				}
@@ -1507,7 +1507,7 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 						updated_at = NOW()
 					WHERE purser.billing_invoices.status IN ('draft', 'manual_review')
 					RETURNING id
-					`, invoiceID, tenantID, totalAmt, currency, status, dueDate, baseAmt, meteredAmt, creditAmt, usageJSON, periodStart, periodEnd, grossMeteredAmt).Scan(&invoiceID)
+					`, invoiceID, tenantID, totalAmt, currency, status, dueDate, baseAmt, meteredAmt, creditAmt, database.JSONText(usageJSON), periodStart, periodEnd, grossMeteredAmt).Scan(&invoiceID)
 				if txErr != nil {
 					return fmt.Errorf("upsert invoice: %w", txErr)
 				}
@@ -3180,7 +3180,7 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 					updated_at = NOW()
 				WHERE purser.billing_invoices.status IN ('draft', 'manual_review')
 				RETURNING id
-			`, tenantID, totalAmt, currency, dueDate, baseAmt, meteredAmt, creditAmt, usageJSON, periodStart, periodEnd, grossMeteredAmt).Scan(&invoiceID)
+			`, tenantID, totalAmt, currency, dueDate, baseAmt, meteredAmt, creditAmt, database.JSONText(usageJSON), periodStart, periodEnd, grossMeteredAmt).Scan(&invoiceID)
 		if txErr != nil {
 			return fmt.Errorf("upsert invoice draft: %w", txErr)
 		}

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
 type PostStore interface {
@@ -59,7 +61,7 @@ func (s *SQLPostStore) Save(ctx context.Context, record PostRecord) (PostRecord,
 		string(record.ContentType),
 		record.TweetText,
 		record.ContextSummary,
-		triggerJSON,
+		database.JSONText(triggerJSON),
 		status,
 	).Scan(&id, &createdAt)
 	if err != nil {

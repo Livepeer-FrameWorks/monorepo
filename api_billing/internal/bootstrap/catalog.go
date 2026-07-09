@@ -80,8 +80,10 @@ func EmbeddedTiers() ([]CatalogTier, error) {
 	return c.Tiers, nil
 }
 
-// jsonBytes marshals an any-typed JSONB value into a `[]byte` ready for the SQL
-// driver. nil maps become a literal `{}` to match the column DEFAULT.
+// jsonBytes marshals an any-typed JSONB value into `[]byte` for jsonEq
+// comparisons. nil maps become a literal `{}` to match the column DEFAULT.
+// Bind sites must wrap the result in database.JSONText — the pgx driver
+// encodes raw []byte as bytea, which jsonb parameters reject.
 func jsonBytes(v map[string]any) ([]byte, error) {
 	if v == nil {
 		return []byte("{}"), nil

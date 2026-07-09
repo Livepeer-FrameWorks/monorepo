@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -357,7 +358,7 @@ func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *commodorep
 			WHERE %s AND tenant_id = $5
 		`, tableCol, whereCol)
 
-	res, err := tx.ExecContext(ctx, q, requiresAuth, policyJSON, webhookSecretEnc, target.id, tenantID)
+	res, err := tx.ExecContext(ctx, q, requiresAuth, database.JSONText(policyJSON), webhookSecretEnc, target.id, tenantID)
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
 			"target": target.kind,
