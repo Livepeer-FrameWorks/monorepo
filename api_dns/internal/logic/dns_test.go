@@ -37,6 +37,7 @@ type fakeCloudflareClient struct {
 	updateLoadBalancer   func(lbID string, lb cloudflare.LoadBalancer) (*cloudflare.LoadBalancer, error)
 	listMonitors         func() ([]cloudflare.Monitor, error)
 	createMonitor        func(monitor cloudflare.Monitor) (*cloudflare.Monitor, error)
+	updateMonitor        func(monitorID string, monitor cloudflare.Monitor) (*cloudflare.Monitor, error)
 	listPools            func() ([]cloudflare.Pool, error)
 	updatePool           func(poolID string, pool cloudflare.Pool) (*cloudflare.Pool, error)
 	createPool           func(pool cloudflare.Pool) (*cloudflare.Pool, error)
@@ -152,6 +153,14 @@ func (f *fakeCloudflareClient) CreateMonitor(monitor cloudflare.Monitor) (*cloud
 		return f.createMonitor(monitor)
 	}
 	monitor.ID = "monitor"
+	return &monitor, nil
+}
+
+func (f *fakeCloudflareClient) UpdateMonitor(monitorID string, monitor cloudflare.Monitor) (*cloudflare.Monitor, error) {
+	if f.updateMonitor != nil {
+		return f.updateMonitor(monitorID, monitor)
+	}
+	monitor.ID = monitorID
 	return &monitor, nil
 }
 
@@ -2110,8 +2119,8 @@ func TestEnsureMonitor_RootIngressUsesCloudflareCompatibleExpectedCodes(t *testi
 	if !created.FollowRedirects {
 		t.Fatal("expected root ingress monitor to follow redirects")
 	}
-	if created.Path != "/" {
-		t.Fatalf("expected root ingress path /, got %q", created.Path)
+	if created.Path != "/health" {
+		t.Fatalf("expected root ingress path /health, got %q", created.Path)
 	}
 }
 
@@ -3030,5 +3039,231 @@ func TestEnsureMonitor_FallsBackToHealth(t *testing.T) {
 	}
 	if createdMonitor.Path != "/health" {
 		t.Fatalf("expected fallback path '/health', got %q", createdMonitor.Path)
+	}
+}
+
+func TestEnsureMonitor_RootIngressProbesHealthPath(t *testing.T) {
+	var createdMonitor cloudflare.Monitor
+	cf := &fakeCloudflareClient{
+		listMonitors: func() ([]cloudflare.Monitor, error) {
+			return nil, nil
+		},
+		createMonitor: func(monitor cloudflare.Monitor) (*cloudflare.Monitor, error) {
+			createdMonitor = monitor
+			monitor.ID = "mon-ingress"
+			return &monitor, nil
+		},
+	}
+	manager := newTestManager(cf)
+
+	_, err := manager.ensureMonitor(rootIngressPoolServiceType)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if createdMonitor.Path != "/health" {
+		t.Fatalf("expected ingress monitor path '/health', got %q", createdMonitor.Path)
+	}
+	if createdMonitor.Port != 80 {
+		t.Fatalf("expected ingress monitor port 80, got %d", createdMonitor.Port)
+	}
+	if createdMonitor.ExpectedCodes != "2xx" {
+		t.Fatalf("expected ingress monitor codes '2xx', got %q", createdMonitor.ExpectedCodes)
+	}
+	if !createdMonitor.FollowRedirects {
+		t.Fatal("expected ingress monitor to follow redirects")
+	}
+}
+
+func TestEnsureMonitor_UpdatesDriftedMonitor(t *testing.T) {
+	var updatedID string
+	var updatedMonitor cloudflare.Monitor
+	cf := &fakeCloudflareClient{
+		listMonitors: func() ([]cloudflare.Monitor, error) {
+			return []cloudflare.Monitor{{
+				ID:              "mon-ingress",
+				Type:            "http",
+				Description:     "nav-public-ingress-health",
+				Method:          "GET",
+				Path:            "/",
+				Port:            80,
+				ExpectedCodes:   "2xx",
+				FollowRedirects: true,
+			}}, nil
+		},
+		createMonitor: func(monitor cloudflare.Monitor) (*cloudflare.Monitor, error) {
+			t.Fatal("createMonitor should not be called for an existing monitor")
+			return nil, nil
+		},
+		updateMonitor: func(monitorID string, monitor cloudflare.Monitor) (*cloudflare.Monitor, error) {
+			updatedID = monitorID
+			updatedMonitor = monitor
+			monitor.ID = monitorID
+			return &monitor, nil
+		},
+	}
+	manager := newTestManager(cf)
+
+	monitorID, err := manager.ensureMonitor(rootIngressPoolServiceType)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if monitorID != "mon-ingress" {
+		t.Fatalf("expected existing monitor ID, got %q", monitorID)
+	}
+	if updatedID != "mon-ingress" {
+		t.Fatalf("expected drifted monitor to be updated, got update for %q", updatedID)
+	}
+	if updatedMonitor.Path != "/health" {
+		t.Fatalf("expected drift update to set path '/health', got %q", updatedMonitor.Path)
+	}
+}
+
+func TestEnsureMonitor_NoUpdateWhenMonitorMatches(t *testing.T) {
+	manager := newTestManager(nil)
+	cf := &fakeCloudflareClient{
+		listMonitors: func() ([]cloudflare.Monitor, error) {
+			return []cloudflare.Monitor{{
+				ID:              "mon-ingress",
+				Type:            "http",
+				Description:     "nav-public-ingress-health",
+				Method:          "GET",
+				Path:            "/health",
+				Port:            80,
+				ExpectedCodes:   "2xx",
+				FollowRedirects: true,
+				Timeout:         manager.monitorConfig.Timeout,
+				Interval:        manager.monitorConfig.Interval,
+				Retries:         manager.monitorConfig.Retries,
+			}}, nil
+		},
+		createMonitor: func(monitor cloudflare.Monitor) (*cloudflare.Monitor, error) {
+			t.Fatal("createMonitor should not be called for a matching monitor")
+			return nil, nil
+		},
+		updateMonitor: func(monitorID string, monitor cloudflare.Monitor) (*cloudflare.Monitor, error) {
+			t.Fatal("updateMonitor should not be called when config matches")
+			return nil, nil
+		},
+	}
+	manager.cfClient = cf
+
+	monitorID, err := manager.ensureMonitor(rootIngressPoolServiceType)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if monitorID != "mon-ingress" {
+		t.Fatalf("expected existing monitor ID, got %q", monitorID)
+	}
+}
+
+func TestSyncService_ApexServiceReconcilesWWWAlias(t *testing.T) {
+	ip := "10.0.0.1"
+	qm := &fakeQuartermasterClient{
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{
+			Nodes: []*quartermasterpb.InfrastructureNode{
+				{NodeId: "web-1", ClusterId: "core", ExternalIp: strPtr(ip)},
+			},
+		},
+	}
+	var createdRecords []cloudflare.DNSRecord
+	cf := &fakeCloudflareClient{
+		createDNSRecord: func(record cloudflare.DNSRecord) (*cloudflare.DNSRecord, error) {
+			createdRecords = append(createdRecords, record)
+			record.ID = "rec-" + record.Name
+			return &record, nil
+		},
+	}
+	m := newTestManager(cf)
+	m.qmClient = qm
+
+	_, err := m.SyncService(context.Background(), "foredeck", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var wwwRecord *cloudflare.DNSRecord
+	for i := range createdRecords {
+		if createdRecords[i].Name == "www.example.com" {
+			wwwRecord = &createdRecords[i]
+		}
+	}
+	if wwwRecord == nil {
+		t.Fatalf("expected www alias CNAME to be created, got records %v", createdRecords)
+	}
+	if wwwRecord.Type != "CNAME" || wwwRecord.Content != "example.com" {
+		t.Fatalf("expected CNAME to apex, got type=%q content=%q", wwwRecord.Type, wwwRecord.Content)
+	}
+	if !wwwRecord.Proxied {
+		t.Fatal("expected www alias CNAME to be proxied")
+	}
+}
+
+func TestSyncService_NonApexServiceSkipsWWWAlias(t *testing.T) {
+	ip := "10.0.0.1"
+	qm := &fakeQuartermasterClient{
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{
+			Nodes: []*quartermasterpb.InfrastructureNode{
+				{NodeId: "web-1", ClusterId: "core", ExternalIp: strPtr(ip)},
+			},
+		},
+	}
+	cf := &fakeCloudflareClient{
+		createDNSRecord: func(record cloudflare.DNSRecord) (*cloudflare.DNSRecord, error) {
+			t.Fatalf("unexpected DNS record creation for %s", record.Name)
+			return nil, nil
+		},
+	}
+	m := newTestManager(cf)
+	m.qmClient = qm
+
+	if _, err := m.SyncService(context.Background(), "bridge", ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSyncService_WWWAliasReplacesLegacyARecord(t *testing.T) {
+	ip := "10.0.0.1"
+	qm := &fakeQuartermasterClient{
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{
+			Nodes: []*quartermasterpb.InfrastructureNode{
+				{NodeId: "web-1", ClusterId: "core", ExternalIp: strPtr(ip)},
+			},
+		},
+	}
+	var deletedIDs []string
+	var createdRecords []cloudflare.DNSRecord
+	cf := &fakeCloudflareClient{
+		listDNSRecords: func(recordType, name string) ([]cloudflare.DNSRecord, error) {
+			if recordType == "A" && name == "www.example.com" {
+				return []cloudflare.DNSRecord{{ID: "legacy-www-a", Type: "A", Name: name, Content: "192.0.2.1"}}, nil
+			}
+			return nil, nil
+		},
+		deleteDNSRecord: func(recordID string) error {
+			deletedIDs = append(deletedIDs, recordID)
+			return nil
+		},
+		createDNSRecord: func(record cloudflare.DNSRecord) (*cloudflare.DNSRecord, error) {
+			createdRecords = append(createdRecords, record)
+			record.ID = "rec-" + record.Name
+			return &record, nil
+		},
+	}
+	m := newTestManager(cf)
+	m.qmClient = qm
+
+	if _, err := m.SyncService(context.Background(), "foredeck", ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(deletedIDs) != 1 || deletedIDs[0] != "legacy-www-a" {
+		t.Fatalf("expected legacy www A record to be deleted, got %v", deletedIDs)
+	}
+	var sawCNAME bool
+	for _, record := range createdRecords {
+		if record.Name == "www.example.com" && record.Type == "CNAME" {
+			sawCNAME = true
+		}
+	}
+	if !sawCNAME {
+		t.Fatalf("expected replacement www CNAME, got %v", createdRecords)
 	}
 }

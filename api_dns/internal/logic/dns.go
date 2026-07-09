@@ -72,6 +72,7 @@ type cloudflareClient interface {
 	UpdateLoadBalancer(lbID string, lb cloudflare.LoadBalancer) (*cloudflare.LoadBalancer, error)
 	ListMonitors() ([]cloudflare.Monitor, error)
 	CreateMonitor(monitor cloudflare.Monitor) (*cloudflare.Monitor, error)
+	UpdateMonitor(monitorID string, monitor cloudflare.Monitor) (*cloudflare.Monitor, error)
 	ListPools() ([]cloudflare.Pool, error)
 	UpdatePool(poolID string, pool cloudflare.Pool) (*cloudflare.Pool, error)
 	CreatePool(pool cloudflare.Pool) (*cloudflare.Pool, error)
@@ -1169,12 +1170,85 @@ func (m *DNSManager) SyncService(ctx context.Context, serviceType, rootDomain st
 		if err := m.applySingleNodeConfig(ctx, fqdn, activeNodes[0].ExternalIP, m.shouldProxy(serviceType)); err != nil {
 			return nil, err
 		}
+		if aliasErr := m.ensureApexWWWAlias(serviceType, fqdn); aliasErr != nil {
+			return nil, aliasErr
+		}
 		return m.cleanupManagedPools(fqdn, serviceType, nil), nil
 	}
 
 	// === Multi Node: Load Balancer Pool ===
 	log.Info("Multiple nodes detected, using Load Balancer")
-	return m.applyRootLoadBalancerConfig(ctx, fqdn, serviceType, domain, activeNodes, m.shouldProxy(serviceType))
+	partialErrors, lbErr := m.applyRootLoadBalancerConfig(ctx, fqdn, serviceType, domain, activeNodes, m.shouldProxy(serviceType))
+	if lbErr != nil {
+		return partialErrors, lbErr
+	}
+	if aliasErr := m.ensureApexWWWAlias(serviceType, fqdn); aliasErr != nil {
+		return partialErrors, aliasErr
+	}
+	return partialErrors, nil
+}
+
+// ensureApexWWWAlias keeps a proxied "www" CNAME pointed at the apex for
+// services whose public label is the root domain itself. www is an alias of
+// the apex — it follows whichever service owns the apex record, not a
+// specific service type.
+func (m *DNSManager) ensureApexWWWAlias(serviceType, fqdn string) error {
+	label, ok := pkgdns.PublicSubdomain(serviceType)
+	if !ok || label != "" {
+		return nil
+	}
+	wwwFQDN := "www." + fqdn
+
+	// A CNAME cannot coexist with A/AAAA records on the same name; drop
+	// conflicting legacy records first. The proxy flattens the CNAME, so the
+	// swap does not change what resolvers see.
+	for _, recordType := range []string{"A", "AAAA"} {
+		records, err := m.cfClient.ListDNSRecords(recordType, wwwFQDN)
+		if err != nil {
+			return fmt.Errorf("failed to list %s records for %s: %w", recordType, wwwFQDN, err)
+		}
+		for _, record := range records {
+			m.logger.WithFields(logging.Fields{"fqdn": wwwFQDN, "type": recordType}).Info("Deleting conflicting www record")
+			if err := m.cfClient.DeleteDNSRecord(record.ID); err != nil {
+				return fmt.Errorf("failed to delete conflicting %s record for %s: %w", recordType, wwwFQDN, err)
+			}
+		}
+	}
+
+	records, err := m.cfClient.ListDNSRecords("CNAME", wwwFQDN)
+	if err != nil {
+		return fmt.Errorf("failed to list CNAME records for %s: %w", wwwFQDN, err)
+	}
+	if len(records) == 0 {
+		m.logger.WithFields(logging.Fields{"fqdn": wwwFQDN, "target": fqdn}).Info("Creating www alias CNAME")
+		if _, err := m.cfClient.CreateDNSRecord(cloudflare.DNSRecord{
+			Type:    "CNAME",
+			Name:    wwwFQDN,
+			Content: fqdn,
+			TTL:     m.recordTTL,
+			Proxied: true,
+		}); err != nil {
+			return fmt.Errorf("failed to create www alias CNAME for %s: %w", fqdn, err)
+		}
+		return nil
+	}
+
+	record := records[0]
+	if record.Content != fqdn || !record.Proxied || record.TTL != m.recordTTL {
+		m.logger.WithFields(logging.Fields{"fqdn": wwwFQDN, "target": fqdn}).Info("Updating www alias CNAME")
+		record.Content = fqdn
+		record.Proxied = true
+		record.TTL = m.recordTTL
+		if _, err := m.cfClient.UpdateDNSRecord(record.ID, record); err != nil {
+			return fmt.Errorf("failed to update www alias CNAME for %s: %w", fqdn, err)
+		}
+	}
+	for _, extra := range records[1:] {
+		if err := m.cfClient.DeleteDNSRecord(extra.ID); err != nil {
+			m.logger.WithError(err).WithField("fqdn", wwwFQDN).Warn("Failed to delete duplicate www CNAME record")
+		}
+	}
+	return nil
 }
 
 // applySingleNodeConfig ensures an A record exists and cleans up any LB config
@@ -1626,11 +1700,6 @@ func (m *DNSManager) ensureMonitor(serviceType string) (string, error) {
 	}
 
 	monitorName := fmt.Sprintf("nav-%s-health", serviceType)
-	for _, mon := range monitors {
-		if mon.Description == monitorName {
-			return mon.ID, nil
-		}
-	}
 
 	// Determine port for this service type
 	port := m.servicePorts[serviceType]
@@ -1638,7 +1707,6 @@ func (m *DNSManager) ensureMonitor(serviceType string) (string, error) {
 		port = 80 // Default fallback
 	}
 
-	// Create new monitor
 	path := m.healthPaths[serviceType]
 	if path == "" {
 		path = "/health"
@@ -1647,13 +1715,15 @@ func (m *DNSManager) ensureMonitor(serviceType string) (string, error) {
 	expectedCodes := "200"
 	followRedirects := false
 	if serviceType == rootIngressPoolServiceType {
-		path = "/"
+		// Probe the ingress /health endpoint, not "/": the root path is real
+		// traffic (redirected to HTTPS by the ingress), while /health answers
+		// 2xx directly on :80.
+		path = "/health"
 		port = 80
 		expectedCodes = "2xx"
 		followRedirects = true
 	}
-	m.logger.WithFields(logging.Fields{"name": monitorName, "port": port}).Info("Creating health check monitor")
-	monitor := cloudflare.Monitor{
+	desired := cloudflare.Monitor{
 		Type:            monitorType,
 		Description:     monitorName,
 		Method:          "GET",
@@ -1665,11 +1735,38 @@ func (m *DNSManager) ensureMonitor(serviceType string) (string, error) {
 		ExpectedCodes:   expectedCodes,
 		FollowRedirects: followRedirects,
 	}
-	created, err := m.cfClient.CreateMonitor(monitor)
+
+	for _, mon := range monitors {
+		if mon.Description != monitorName {
+			continue
+		}
+		if monitorConfigDrifted(mon, desired) {
+			m.logger.WithFields(logging.Fields{"name": monitorName, "path": desired.Path, "port": desired.Port}).Info("Updating drifted health check monitor")
+			if _, updateErr := m.cfClient.UpdateMonitor(mon.ID, desired); updateErr != nil {
+				return "", fmt.Errorf("failed to update monitor: %w", updateErr)
+			}
+		}
+		return mon.ID, nil
+	}
+
+	m.logger.WithFields(logging.Fields{"name": monitorName, "port": port}).Info("Creating health check monitor")
+	created, err := m.cfClient.CreateMonitor(desired)
 	if err != nil {
 		return "", fmt.Errorf("failed to create monitor: %w", err)
 	}
 	return created.ID, nil
+}
+
+// monitorConfigDrifted reports whether a live monitor no longer matches the
+// probe config Navigator derives. Timing knobs (timeout/interval/retries) are
+// deliberately not compared so operator tuning survives reconciles.
+func monitorConfigDrifted(current, desired cloudflare.Monitor) bool {
+	return current.Type != desired.Type ||
+		current.Method != desired.Method ||
+		current.Path != desired.Path ||
+		current.Port != desired.Port ||
+		current.ExpectedCodes != desired.ExpectedCodes ||
+		current.FollowRedirects != desired.FollowRedirects
 }
 
 func steeringPolicyForPools(pools []desiredPool) string {

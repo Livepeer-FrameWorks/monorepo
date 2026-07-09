@@ -142,6 +142,27 @@ func (c *Client) CreateMonitor(monitor Monitor) (*Monitor, error) {
 	return &created, nil
 }
 
+// UpdateMonitor updates an existing health check monitor
+func (c *Client) UpdateMonitor(monitorID string, monitor Monitor) (*Monitor, error) {
+	path := fmt.Sprintf("/accounts/%s/load_balancers/monitors/%s", c.accountID, monitorID)
+	resp, err := c.doRequest("PUT", path, monitor)
+	if err != nil {
+		return nil, err
+	}
+
+	resultJSON, err := json.Marshal(resp.Result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal result: %w", err)
+	}
+
+	var updated Monitor
+	if err := json.Unmarshal(resultJSON, &updated); err != nil {
+		return nil, fmt.Errorf("failed to parse monitor: %w", err)
+	}
+
+	return &updated, nil
+}
+
 // ListMonitors lists all health check monitors
 func (c *Client) ListMonitors() ([]Monitor, error) {
 	path := fmt.Sprintf("/accounts/%s/load_balancers/monitors", c.accountID)
