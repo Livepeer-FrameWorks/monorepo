@@ -1288,9 +1288,10 @@ services:
       - ./pkg/database/sql/clickhouse/periscope.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
       - ./pkg/database/sql/seeds/demo/clickhouse_demo_data.sql:/docker-entrypoint-initdb.d/02_seed_demo.sql:ro
     environment:
-      # Start with default user for initialization
+      # Start with default user for initialization. Do not set CLICKHOUSE_DB here:
+      # the schema creates periscope with ENGINE = Replicated, while the Docker
+      # entrypoint would pre-create CLICKHOUSE_DB as a plain Atomic database.
       CLICKHOUSE_USER: default
-      CLICKHOUSE_DB: periscope
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
       # Environment variables for users.xml
       CLICKHOUSE_PASSWORD: frameworks_dev # For frameworks user
