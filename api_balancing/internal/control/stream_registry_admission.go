@@ -99,8 +99,9 @@ type AdmissionResult struct {
 // OwnerNodeID=candidateNodeID + clears SourceInactiveAt. On Reject,
 // no mutation. Creates a minimal StreamEntry if none exists for the
 // AcceptNew case; the caller's UpsertLocalSource later refines
-// identity fields. Callers must NOT also call MarkSourceActive — the
-// flip is part of the same critical section as the decision.
+// identity fields. Callers must NOT also stamp ownership separately
+// (MarkSourceOwnerIfUnset is for pull sources) — the flip is part of
+// the same critical section as the decision.
 func (r *StreamRegistry) AdmitAndReserve(internalName, candidateNodeID string, ownerHealthy func(nodeID string) bool) AdmissionResult {
 	internalName = strings.TrimSpace(internalName)
 	candidateNodeID = strings.TrimSpace(candidateNodeID)
@@ -165,31 +166,50 @@ func (r *StreamRegistry) AdmitAndReserve(internalName, candidateNodeID string, o
 	return result
 }
 
-// MarkSourceActive flips the local cluster's Location to
-// SourceActive=true and stamps OwnerNodeID. Called from the PUSH_REWRITE
-// path immediately after admission accepts the new publisher. Idempotent —
-// re-marking the same owner just refreshes UpdatedAt; marking a different
-// owner overwrites OwnerNodeID (takeover already drained the previous
-// owner before this call lands).
+// MarkSourceOwnerIfUnset atomically stamps nodeID as the stream's source
+// owner iff no owner is currently recorded on the local cluster's
+// Location. First dialer wins: an existing owner (same or different node)
+// is returned untouched, so a later /source call — a relay, a probe, a
+// double-dial — can never flip ownership. This is the ownership stamp for
+// pull sources, the counterpart of AdmitAndReserve's inline stamp for
+// push ingest; offlineIsStreamWide consumes it to type offline edges.
 //
-// Hydration: callers must ensure the StreamEntry exists in the registry
-// before calling. The PUSH_REWRITE admission path does so via the existing
-// hydration in ResolveSourceByInternalName, so this method only mutates
-// already-known entries.
-func (r *StreamRegistry) MarkSourceActive(internalName, nodeID string) {
-	internalName = strings.TrimSpace(internalName)
+// A missing entry is created minimally (same pattern as AdmitAndReserve's
+// AcceptNew and MarkReplicating; no network under the lock, resolvers
+// refine identity later). Callers only invoke this after positively
+// resolving the stream (the /source pull path has just confirmed an
+// enabled pull source with Commodore), so the stamp must not silently
+// degrade to backstop-only offline just because the local cache lacked
+// the entry.
+func (r *StreamRegistry) MarkSourceOwnerIfUnset(internalName, nodeID string) (string, bool) {
+	internalName = sourceInternalKey(internalName)
 	nodeID = strings.TrimSpace(nodeID)
 	if internalName == "" || nodeID == "" {
-		return
+		return "", false
 	}
 	var snapshot StreamEntry
-	var changed bool
+	var stamped bool
+	var owner string
 	r.mu.Lock()
-	if ce, ok := r.byInt[internalName]; ok {
-		if ce.entry.Locations == nil {
-			ce.entry.Locations = make(map[string]Location)
+	ce, ok := r.byInt[internalName]
+	if !ok {
+		ce = &cachedEntry{
+			entry: StreamEntry{
+				InternalName: internalName,
+				Locations:    make(map[string]Location),
+				HydratedAt:   time.Now(),
+			},
+			cached: time.Now(),
 		}
-		loc := ce.entry.Locations[r.clusterID]
+		r.byInt[internalName] = ce
+	}
+	if ce.entry.Locations == nil {
+		ce.entry.Locations = make(map[string]Location)
+	}
+	loc := ce.entry.Locations[r.clusterID]
+	if loc.OwnerNodeID != "" {
+		owner = loc.OwnerNodeID
+	} else {
 		loc.ClusterID = r.clusterID
 		loc.SourceActive = true
 		loc.SourceInactiveAt = time.Time{}
@@ -198,12 +218,60 @@ func (r *StreamRegistry) MarkSourceActive(internalName, nodeID string) {
 		ce.entry.Locations[r.clusterID] = loc
 		ce.cached = time.Now()
 		snapshot = ce.entry
-		changed = true
+		owner = nodeID
+		stamped = true
 	}
 	r.mu.Unlock()
-	if changed {
+	if stamped {
 		r.publishUpsertSource(snapshot)
 	}
+	return owner, stamped
+}
+
+// SourceOwner returns the local cluster's recorded source-owner node for a
+// stream. Ownership types offline edges: only the owner's STREAM_END or
+// vanish is a stream-wide fact — a replica/relay node ending the stream is
+// a node-local fact that must not flip the stream's user-visible status.
+// OwnerNodeID survives MarkSourceInactive (retained for the reconnect
+// resume path), so the owner is still known when the delayed STREAM_END
+// arrives after PUSH_INPUT_CLOSE.
+func (r *StreamRegistry) SourceOwner(internalName string) (string, bool) {
+	internalName = sourceInternalKey(internalName)
+	if internalName == "" {
+		return "", false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	ce, ok := r.byInt[internalName]
+	if !ok {
+		return "", false
+	}
+	loc, ok := ce.entry.Locations[r.clusterID]
+	if !ok || strings.TrimSpace(loc.OwnerNodeID) == "" {
+		return "", false
+	}
+	return loc.OwnerNodeID, true
+}
+
+// OriginCluster returns the stream's origin cluster ID when known.
+// Log-only context for offline suppression — the authority decision never
+// depends on it (no recorded local owner already means node-local).
+func (r *StreamRegistry) OriginCluster(internalName string) (string, bool) {
+	internalName = sourceInternalKey(internalName)
+	if internalName == "" {
+		return "", false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	ce, ok := r.byInt[internalName]
+	if !ok {
+		return "", false
+	}
+	origin := strings.TrimSpace(ce.entry.OriginClusterID)
+	if origin == "" {
+		return "", false
+	}
+	return origin, true
 }
 
 // MarkSourceInactive flips SourceActive to false on the local cluster's

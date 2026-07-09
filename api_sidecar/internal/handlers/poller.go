@@ -8,9 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -88,6 +90,24 @@ type PrometheusMonitor struct {
 	lastBwUp     uint64
 	lastBwDown   uint64
 	lastPollTime time.Time
+
+	// Vanish-diff state: internal names seen on the previous successful
+	// active_streams poll. A stream present last poll but absent now has
+	// lost its Mist session; Mist emits no per-stream trigger for that
+	// edge, so the poller reports it as an explicit offline lifecycle
+	// update. seeded distinguishes "first successful poll after start"
+	// (only record, never emit) from "everything genuinely vanished".
+	// pendingOfflineNames holds vanished names whose offline send has not
+	// succeeded yet; they retry each poll until delivered or the stream
+	// reappears.
+	streamDiffMu            sync.Mutex
+	lastActiveInternalNames map[string]struct{}
+	pendingOfflineNames     map[string]struct{}
+	activeStreamsSeeded     bool
+	// emitStreamLifecycle is spawned with `go` every tick; a slow Mist
+	// API response could overlap runs and a late finisher would swap in
+	// a stale set. Ticks that find a run in flight are dropped.
+	streamLifecycleInFlight atomic.Bool
 }
 
 var prometheusMonitor *PrometheusMonitor
@@ -418,6 +438,12 @@ func (pm *PrometheusMonitor) emitNodeLifecycle(nodeID, baseURL string) {
 
 // emitStreamLifecycle fetches data from MistServer's TCP API directly
 func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
+	if !pm.streamLifecycleInFlight.CompareAndSwap(false, true) {
+		monitorLogger.WithField("node_id", nodeID).Debug("Stream lifecycle poll still in flight, dropping tick")
+		return
+	}
+	defer pm.streamLifecycleInFlight.Store(false)
+
 	monitorLogger.WithFields(logging.Fields{
 		"api_url": baseURL + "/api2",
 		"node_id": nodeID,
@@ -436,8 +462,9 @@ func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
 	}
 
 	// Extract active streams data
-	present := make(map[string]struct{})
-	if activeStreams, ok := apiResponse["active_streams"].(map[string]any); ok {
+	activeStreams, activeStreamsAuthoritative := activeStreamsFromResponse(apiResponse)
+	present := make(map[string]struct{}, len(activeStreams))
+	if activeStreamsAuthoritative {
 		monitorLogger.WithFields(logging.Fields{
 			"api_url": baseURL + "/api2",
 			"node_id": nodeID,
@@ -453,11 +480,16 @@ func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
 		monitorLogger.WithFields(logging.Fields{
 			"api_url": baseURL + "/api2",
 			"node_id": nodeID,
-		}).Warn("No active_streams found")
+		}).Warn("active_streams missing or malformed in Mist response; skipping stream-presence reconciliation this poll")
+		return
 	}
 	// Reconcile source leases against Mist's authoritative view. Only fires
-	// after a successful GetActiveStreams response — poll errors above already
-	// returned without reaching here, so no-poll-on-error is honored.
+	// after a successful GetActiveStreams response with a well-formed
+	// active_streams member — poll errors and malformed payloads returned
+	// above. Without the shape gate, a malformed response would count as an
+	// absent-stream observation, and two of those in a row release source
+	// leases (ReconcileSources' missing-poll threshold) for streams Mist is
+	// still serving.
 	if tracker := leases.GlobalTracker(); tracker != nil {
 		// Boot-recovery: streams open in Mist before Helmsman restarted have
 		// no source lease yet because STREAM_SOURCE only fires once per
@@ -477,7 +509,152 @@ func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
 			monitorLogger.WithField("released", released).Info("Source leases released by Mist reconciliation")
 		}
 	}
+
+	// Vanish diff: report streams that disappeared since the previous
+	// successful poll as explicit offline lifecycle updates. Without this,
+	// nothing corrects stream_state_current when STREAM_END is delayed by
+	// buffer drain or dropped on an expired stream-context cache — the
+	// user-visible status stays "live". Only authoritative payloads reach
+	// this point: synthesizing mass offlines from a malformed payload is
+	// worse than leaving the residue to the ingest backstop.
+	presentInternal := make(map[string]struct{}, len(present))
+	for streamName := range present {
+		if internalName, ok := offlineReportableInternalName(streamName); ok {
+			presentInternal[internalName] = struct{}{}
+		}
+	}
+	pm.streamDiffMu.Lock()
+	if pm.pendingOfflineNames == nil {
+		pm.pendingOfflineNames = make(map[string]struct{})
+	}
+	toReport := updatePendingOffline(pm.pendingOfflineNames, pm.lastActiveInternalNames, presentInternal, pm.activeStreamsSeeded)
+	pm.lastActiveInternalNames = presentInternal
+	pm.activeStreamsSeeded = true
+	pm.streamDiffMu.Unlock()
+
+	// Names stay pending until a send succeeds, so a transient Foghorn
+	// failure retries on the next poll instead of silently dropping the
+	// offline edge until the ingest backstop catches it minutes later.
+	for _, internalName := range toReport {
+		if _, err := control.SendMistTrigger(buildOfflineLifecycleTrigger(nodeID, internalName), monitorLogger); err != nil {
+			monitorLogger.WithFields(logging.Fields{
+				"error":         err,
+				"internal_name": internalName,
+			}).Error("Failed to send offline stream lifecycle update to Foghorn")
+			continue
+		}
+		pm.streamDiffMu.Lock()
+		delete(pm.pendingOfflineNames, internalName)
+		pm.streamDiffMu.Unlock()
+	}
+
 	markMistActiveStreamsPolled()
+}
+
+// activeStreamsFromResponse extracts the active_streams member of a Mist
+// API response and reports whether it is authoritative. Mist's fillActive
+// leaves the member JSON null when zero streams are active, so null is an
+// authoritative empty set — while a missing key or a non-map value means
+// the payload cannot be trusted as a stream-presence observation (treating
+// it as empty would synthesize offline events and, via ReconcileSources'
+// missing-poll counting, release source leases for live streams).
+func activeStreamsFromResponse(apiResponse map[string]any) (map[string]any, bool) {
+	raw, hasKey := apiResponse["active_streams"]
+	if !hasKey {
+		return nil, false
+	}
+	if raw == nil {
+		return nil, true
+	}
+	activeStreams, ok := raw.(map[string]any)
+	return activeStreams, ok
+}
+
+// offlineReportableInternalName maps a Mist runtime stream name to the
+// internal name eligible for vanish-offline reporting. Only source streams
+// (live+/pull+) participate — the population whose ending means "the
+// stream went offline". Everything else is excluded as not
+// self-describing: artifact surfaces (vod+/dvr+/processing+) vanish
+// whenever their viewers leave, and bare names may be a mist-native
+// stream but equally an unprefixed artifact key or a leaked playback_id.
+// Foghorn's authority gate is positive-ownership-only, so a colliding
+// bare token could never flip a stream owned elsewhere — but it could
+// still spam the identity resolver with junk lookups, and bare streams
+// have no ownership stamp to consume anyway. Bare streams keep their
+// live-path lifecycle reporting; a stale live row for one is corrected by
+// the ingest backstop instead of this fast path.
+func offlineReportableInternalName(streamName string) (string, bool) {
+	parsed := streamident.Parse(streamName)
+	if parsed.IsSource() {
+		return parsed.Concrete, true
+	}
+	return "", false
+}
+
+// updatePendingOffline merges newly vanished names into pending, drops
+// pending names that reappeared (they are live again; reporting the stale
+// vanish would fight their own refreshes), and returns the sorted names to
+// report this poll. seeded=false (first successful poll) only records —
+// nothing new is merged, but leftover pending names still report.
+func updatePendingOffline(pending, prev, current map[string]struct{}, seeded bool) []string {
+	if seeded {
+		for _, name := range diffVanishedStreams(prev, current) {
+			pending[name] = struct{}{}
+		}
+	}
+	for name := range pending {
+		if _, back := current[name]; back {
+			delete(pending, name)
+		}
+	}
+	toReport := make([]string, 0, len(pending))
+	for name := range pending {
+		toReport = append(toReport, name)
+	}
+	sort.Strings(toReport)
+	return toReport
+}
+
+// diffVanishedStreams returns the names present in prev but absent from
+// current, sorted for deterministic emission order.
+func diffVanishedStreams(prev, current map[string]struct{}) []string {
+	var vanished []string
+	for name := range prev {
+		if _, ok := current[name]; !ok {
+			vanished = append(vanished, name)
+		}
+	}
+	sort.Strings(vanished)
+	return vanished
+}
+
+// buildOfflineLifecycleTrigger reports a vanished stream to Foghorn. Only
+// internal_name, node_id and the explicit offline status matter; stream_id
+// and tenant_id are deliberately left unset — Foghorn's applyStreamContext
+// enriches them (identity registry → stream cache → Commodore fallback),
+// and the stream was live one poll interval ago so its context is warm.
+// BufferState EMPTY and the zero counters describe the vanished session
+// for the analytics row; Foghorn's offline branch does not read them.
+func buildOfflineLifecycleTrigger(nodeID, internalName string) *ipcpb.MistTrigger {
+	bufferState := "EMPTY"
+	zeroInputs := uint32(0)
+	zeroViewers := uint32(0)
+	return &ipcpb.MistTrigger{
+		TriggerType: "STREAM_LIFECYCLE_UPDATE",
+		NodeId:      nodeID,
+		Timestamp:   time.Now().Unix(),
+		Blocking:    false,
+		TriggerPayload: &ipcpb.MistTrigger_StreamLifecycleUpdate{
+			StreamLifecycleUpdate: &ipcpb.StreamLifecycleUpdate{
+				NodeId:       nodeID,
+				InternalName: internalName,
+				Status:       "offline",
+				BufferState:  &bufferState,
+				TotalInputs:  &zeroInputs,
+				TotalViewers: &zeroViewers,
+			},
+		},
+	}
 }
 
 // rebuildSourceLeasesFromMist installs SourceLeases for active Mist streams

@@ -195,6 +195,42 @@ func TestResolveLivePlayback_RemoteEdgeRedirect(t *testing.T) {
 	}
 }
 
+// Federated peers advertise their full playback base URL — scheme and /view
+// path included (EDGE_PUBLIC_URL, e.g. "https://edge.example/view") — not a
+// bare host. The redirect builder must normalize that shape to
+// https://<host>/play/<id> rather than prepending a second scheme.
+func TestResolveLivePlayback_RemoteEdgeRedirectNormalizesFullBaseURL(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	seedLiveEdgeNode(t, sm, "edge-faraway-2", "https://far.example.com", 10.0, 10.0, liveHLSOutputs())
+
+	deps := newLiveDeps(sm, 52.0, 5.0)
+	deps.RemoteEdges = []balancer.RemoteEdgeCandidate{{
+		ClusterID:   "peer-cluster-eu",
+		NodeID:      "peer-edge-2",
+		BaseURL:     "https://peer-edge.eu.example.com/view",
+		GeoLat:      52.1,
+		GeoLon:      5.1,
+		BWAvailable: 1_000_000_000,
+		RAMMax:      16_000_000_000,
+		RAMUsed:     1_000_000_000,
+		CPUPercent:  5,
+	}}
+
+	resp, err := ResolveLivePlayback(context.Background(), deps, "view-key-9", "live+s", "stream-9", "tenant-A")
+	if err != nil {
+		t.Fatalf("remote-edge live resolution failed: %v", err)
+	}
+
+	redirect := findEndpoint(collectEndpoints(resp), "peer-edge-2")
+	if redirect == nil {
+		t.Fatalf("expected a redirect endpoint for the peer edge, got %+v", collectEndpoints(resp))
+	}
+	if got, want := redirect.GetUrl(), "https://peer-edge.eu.example.com/play/view-key-9"; got != want {
+		t.Fatalf("redirect URL normalization = %q, want %q", got, want)
+	}
+}
+
 // Score-merge ordering: with both a local edge and a geo-near remote edge, the
 // merged candidate set is re-sorted by score (highest first). The geo-near
 // remote outscores the geo-far local even after the cross-cluster penalty, so

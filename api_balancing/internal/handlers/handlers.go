@@ -1365,6 +1365,40 @@ func handleGetPullSource(c *gin.Context, streamName string, lat, lon float64, ta
 		return
 	}
 
+	// Handing this node the raw upstream URI makes it the stream's source
+	// owner — the OG pull, the exact counterpart of AdmitAndReserve's
+	// stamp for push ingest. First dialer wins; a relay or double-dial
+	// asking later cannot flip ownership. The federated branch above never
+	// stamps: returning a peer's DTSC means this cluster is a carrier.
+	// callerNodeID == "" (IP-mapping miss) stays unstamped by design —
+	// unknown provenance rides the ingest backstop, not the fast path.
+	if callerNodeID != "" && control.StreamRegistryInstance != nil {
+		// Seed full identity before stamping: on a cold cache the stamp
+		// would otherwise create an identity-empty entry, and fresh cache
+		// hits short-circuit hydration — identity lookups would see a
+		// "known" stream with no tenant/stream IDs and negative-cache it.
+		// The Commodore resolve above carries everything needed.
+		internalName := strings.TrimPrefix(streamName, "pull+")
+		control.StreamRegistryInstance.UpsertLocalSource(control.StreamEntry{
+			InternalName: internalName,
+			TenantID:     src.GetTenantId(),
+			StreamID:     src.GetStreamId(),
+			IngestMode:   control.IngestPull,
+		})
+		if owner, stamped := control.StreamRegistryInstance.MarkSourceOwnerIfUnset(internalName, callerNodeID); stamped {
+			logger.WithFields(logging.Fields{
+				"stream":  streamName,
+				"node_id": callerNodeID,
+			}).Info("Source lookup: stamped pull-source owner")
+		} else if owner != "" && owner != callerNodeID {
+			logger.WithFields(logging.Fields{
+				"stream":   streamName,
+				"node_id":  callerNodeID,
+				"owner_id": owner,
+			}).Info("Source lookup: upstream handed to non-owner; ownership retained")
+		}
+	}
+
 	durationMs := float32(time.Since(start).Milliseconds())
 	if metrics != nil {
 		metrics.RoutingDecisions.WithLabelValues("source", "pull_upstream").Inc()

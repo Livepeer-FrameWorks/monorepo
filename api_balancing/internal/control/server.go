@@ -5534,8 +5534,11 @@ func TriggerDtshSync(nodeID, assetHash, assetType, filePath string) {
 }
 
 // Default storage base path when node has no StorageLocal configured.
-// Matches HELMSMAN_STORAGE_LOCAL_PATH default for consistent path reconstruction.
-var defaultStorageBase = "/var/lib/mistserver/recordings"
+// Matches HELMSMAN_STORAGE_LOCAL_PATH's native default for consistent path
+// reconstruction (containers use /data/storage but always report
+// StorageLocal). Override with FOGHORN_DEFAULT_STORAGE_BASE for fleets on a
+// legacy layout.
+var defaultStorageBase = "/var/lib/frameworks/edge-storage"
 
 // SetDefaultStorageBase overrides the default storage base path (FOGHORN_DEFAULT_STORAGE_BASE).
 func SetDefaultStorageBase(path string) {
@@ -5566,8 +5569,8 @@ func SetArtifactRepository(repo state.ArtifactRepository) {
 // node's HELMSMAN_RELAY_BASE_URL env var. Returns "" when the node has not
 // connected or did not advertise a relay URL — callers must treat this as
 // "cannot route through relay, abort STREAM_SOURCE" rather than fabricating
-// 127.0.0.1, which is wrong for container deployments where Mist and
-// Helmsman are separate services.
+// 127.0.0.1, which is wrong wherever Mist and Helmsman do not share loopback
+// (the dev compose bridge runs them as separate containers).
 func GetRelayBaseURL(nodeID string) string {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()

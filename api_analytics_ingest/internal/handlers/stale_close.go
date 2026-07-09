@@ -35,6 +35,15 @@ const (
 	// from an outage doesn't produce one giant INSERT. Excess rows
 	// roll over to the next tick.
 	StaleCloseScanLimit = 1000
+
+	// StreamStateOfflineTimeout is how long a stream_state_current row may
+	// go without a refresh before the backstop flips it to offline. Live
+	// rows are refreshed every ~10s by Helmsman's STREAM_LIFECYCLE_UPDATE
+	// poll, so 2 minutes means ~12 consecutive missed refreshes — enough
+	// slack for producer-clock vs ClickHouse-clock skew. Much shorter than
+	// StaleCloseTimeout: this guards the user-visible status, not billing
+	// anomaly accounting.
+	StreamStateOfflineTimeout = 2 * time.Minute
 )
 
 // startStaleCloseLoops launches the viewer and stream stale-close workers.
@@ -42,6 +51,7 @@ const (
 func (s *LedgerScheduler) startStaleCloseLoops(ctx context.Context) {
 	go s.runStaleCloseLoop(ctx, "viewer_sessions_anomalous", s.h.staleCloseViewerSessions)
 	go s.runStaleCloseLoop(ctx, "stream_sessions_anomalous", s.h.staleCloseStreamSessions)
+	go s.runStaleCloseLoop(ctx, "stream_state_offline", s.h.staleMarkStreamStateOffline)
 }
 
 func (s *LedgerScheduler) runStaleCloseLoop(ctx context.Context, name string, run func(context.Context) error) {
@@ -234,5 +244,53 @@ func (h *AnalyticsHandler) staleCloseStreamSessions(ctx context.Context) error {
 		h.metrics.ClickHouseInserts.WithLabelValues("stream_sessions_anomalous", "inserted").Add(float64(rowsEmitted))
 	}
 	h.logger.WithField("count", rowsEmitted).Info("Stale-closed stream sessions")
+	return nil
+}
+
+// staleMarkStreamStateOffline is the status backstop: it flips
+// stream_state_current rows to offline when their event-driven refresh
+// stopped. The primary offline edges (STREAM_END, the poller's vanish
+// diff) can be delayed or dropped — Mist buffer drain, an expired
+// Foghorn stream-context cache, a dead node — and without this loop a
+// stuck "live" row stays live forever.
+//
+// One atomic server-side INSERT ... SELECT: the FINAL row supplies every
+// non-nullable column, the new row gets updated_at = now() so it wins
+// the ReplacingMergeTree merge and drops out of the next scan's WHERE.
+// Known trade-off: an ingest/Kafka backlog longer than the timeout
+// briefly flips genuinely-live streams offline; once the backlog drains,
+// fresh lifecycle refreshes win again and status self-heals.
+func (h *AnalyticsHandler) staleMarkStreamStateOffline(ctx context.Context) error {
+	err := h.clickhouse.Exec(ctx, fmt.Sprintf(`
+		INSERT INTO periscope.stream_state_current (
+			tenant_id, stream_id, internal_name, node_id,
+			status, buffer_state,
+			current_viewers, total_inputs,
+			uploaded_bytes, downloaded_bytes, viewer_seconds,
+			has_issues, issues_description,
+			track_count, quality_tier, primary_width, primary_height,
+			primary_fps, primary_codec, primary_bitrate,
+			packets_sent, packets_lost, packets_retransmitted,
+			started_at, updated_at
+		)
+		SELECT
+			tenant_id, stream_id, internal_name, node_id,
+			'offline', 'EMPTY',
+			0, 0,
+			uploaded_bytes, downloaded_bytes, viewer_seconds,
+			has_issues, issues_description,
+			track_count, quality_tier, primary_width, primary_height,
+			primary_fps, primary_codec, primary_bitrate,
+			packets_sent, packets_lost, packets_retransmitted,
+			started_at, now()
+		FROM periscope.stream_state_current FINAL
+		WHERE status NOT IN ('offline', 'stopped', 'gone')
+		  AND stream_id != toUUIDOrZero('')
+		  AND updated_at < now() - INTERVAL %d SECOND
+		LIMIT %d`,
+		int(StreamStateOfflineTimeout.Seconds()), StaleCloseScanLimit))
+	if err != nil {
+		return fmt.Errorf("stream_state_current offline backstop: %w", err)
+	}
 	return nil
 }

@@ -24,6 +24,170 @@ func TestInternalMistRuntimeStreamDetection(t *testing.T) {
 	}
 }
 
+// --- vanish diff / offline lifecycle ---
+
+func TestDiffVanishedStreams(t *testing.T) {
+	set := func(names ...string) map[string]struct{} {
+		m := make(map[string]struct{}, len(names))
+		for _, n := range names {
+			m[n] = struct{}{}
+		}
+		return m
+	}
+
+	vanished := diffVanishedStreams(set("a", "b", "c"), set("b"))
+	if len(vanished) != 2 || vanished[0] != "a" || vanished[1] != "c" {
+		t.Fatalf("expected sorted [a c], got %v", vanished)
+	}
+	if got := diffVanishedStreams(set("a"), set("a")); len(got) != 0 {
+		t.Fatalf("expected no vanish for unchanged set, got %v", got)
+	}
+	if got := diffVanishedStreams(set(), set("a")); len(got) != 0 {
+		t.Fatalf("expected no vanish for new streams, got %v", got)
+	}
+	if got := diffVanishedStreams(set("a", "b"), set()); len(got) != 2 {
+		t.Fatalf("expected full vanish for emptied set, got %v", got)
+	}
+}
+
+// TestOfflineReportableInternalName locks the vanish-diff population to
+// source streams (live+/pull+) only. Artifact surfaces vanish whenever
+// their viewers leave, and bare names are not self-describing (mist-native
+// stream vs unprefixed artifact key vs leaked playback_id) — a colliding
+// bare token could flip a real stream offline, so neither may produce
+// offline stream-state writes from this path.
+func TestOfflineReportableInternalName(t *testing.T) {
+	cases := []struct {
+		streamName string
+		want       string
+		ok         bool
+	}{
+		{"live+demo", "demo", true},
+		{"pull+relayed", "relayed", true},
+		{"bare-stream", "", false},
+		{"vod+aabbccddeeff0011", "", false},
+		{"dvr+recording-hash", "", false},
+		{"processing+artifact", "", false},
+	}
+	for _, tc := range cases {
+		got, ok := offlineReportableInternalName(tc.streamName)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("offlineReportableInternalName(%q) = (%q, %v), want (%q, %v)", tc.streamName, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+// TestActiveStreamsFromResponse locks the authority classification of the
+// active_streams member. Mist's fillActive leaves it JSON null when zero
+// streams are active — that is an authoritative empty set (the last
+// stream's vanish must still be reported) — while a missing key or a
+// wrong-typed value must not be trusted: treating it as empty would
+// synthesize offline events and feed lease reconciliation false absences.
+func TestActiveStreamsFromResponse(t *testing.T) {
+	streams, ok := activeStreamsFromResponse(map[string]any{
+		"active_streams": map[string]any{"live+demo": map[string]any{}},
+	})
+	if !ok || len(streams) != 1 {
+		t.Fatalf("map payload = (%v, %v), want authoritative with one stream", streams, ok)
+	}
+
+	streams, ok = activeStreamsFromResponse(map[string]any{"active_streams": nil})
+	if !ok || len(streams) != 0 {
+		t.Fatalf("null payload = (%v, %v), want authoritative empty", streams, ok)
+	}
+
+	if _, ok := activeStreamsFromResponse(map[string]any{}); ok {
+		t.Fatal("missing key must not be authoritative")
+	}
+	if _, ok := activeStreamsFromResponse(map[string]any{"active_streams": "garbage"}); ok {
+		t.Fatal("wrong-typed payload must not be authoritative")
+	}
+}
+
+// TestUpdatePendingOffline pins the retry contract of the vanish diff:
+// unseeded polls only record, vanished names persist across polls until a
+// send succeeds (the caller deletes on success), and a stream that comes
+// back is dropped from pending instead of being reported stale-offline.
+func TestUpdatePendingOffline(t *testing.T) {
+	set := func(names ...string) map[string]struct{} {
+		m := make(map[string]struct{}, len(names))
+		for _, n := range names {
+			m[n] = struct{}{}
+		}
+		return m
+	}
+
+	// First successful poll: seeded=false must not merge anything.
+	pending := set()
+	if got := updatePendingOffline(pending, nil, set("a", "b"), false); len(got) != 0 {
+		t.Fatalf("unseeded poll must not report, got %v", got)
+	}
+
+	// "a" vanishes → reported.
+	if got := updatePendingOffline(pending, set("a", "b"), set("b"), true); len(got) != 1 || got[0] != "a" {
+		t.Fatalf("expected [a] reported, got %v", got)
+	}
+
+	// Send failed (caller did not delete): next poll retries "a" and picks
+	// up the newly vanished "b".
+	if got := updatePendingOffline(pending, set("b"), set(), true); len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Fatalf("expected retry [a b], got %v", got)
+	}
+
+	// "a" reappears before delivery: it drops out; "b" stays pending.
+	if got := updatePendingOffline(pending, set(), set("a"), true); len(got) != 1 || got[0] != "b" {
+		t.Fatalf("expected reappeared a dropped, [b] kept, got %v", got)
+	}
+
+	// Successful send deletes (caller behavior), leaving pending empty.
+	delete(pending, "b")
+	if got := updatePendingOffline(pending, set("a"), set("a"), true); len(got) != 0 {
+		t.Fatalf("expected nothing pending, got %v", got)
+	}
+}
+
+func TestBuildOfflineLifecycleTrigger(t *testing.T) {
+	trigger := buildOfflineLifecycleTrigger("node-1", "demo")
+
+	if trigger.TriggerType != "STREAM_LIFECYCLE_UPDATE" {
+		t.Fatalf("expected STREAM_LIFECYCLE_UPDATE, got %s", trigger.TriggerType)
+	}
+	if trigger.NodeId != "node-1" {
+		t.Fatalf("expected node-1, got %s", trigger.NodeId)
+	}
+	if trigger.Blocking {
+		t.Fatal("offline lifecycle update must be non-blocking")
+	}
+
+	slu := trigger.GetStreamLifecycleUpdate()
+	if slu == nil {
+		t.Fatal("expected StreamLifecycleUpdate payload")
+	}
+	if slu.NodeId != "node-1" {
+		t.Fatalf("expected payload node-1, got %s", slu.NodeId)
+	}
+	if slu.InternalName != "demo" {
+		t.Fatalf("expected internal name demo, got %q", slu.InternalName)
+	}
+	if slu.Status != "offline" {
+		t.Fatalf("expected status offline, got %q", slu.Status)
+	}
+	if slu.GetBufferState() != "EMPTY" {
+		t.Fatalf("expected EMPTY buffer state, got %q", slu.GetBufferState())
+	}
+	if slu.TotalInputs == nil || *slu.TotalInputs != 0 {
+		t.Fatalf("expected explicit zero inputs, got %v", slu.TotalInputs)
+	}
+	if slu.TotalViewers == nil || *slu.TotalViewers != 0 {
+		t.Fatalf("expected explicit zero viewers, got %v", slu.TotalViewers)
+	}
+	// stream_id / tenant_id stay unset: Foghorn's applyStreamContext owns
+	// that enrichment, and a poller-supplied guess could mis-attribute.
+	if slu.StreamId != nil || slu.TenantId != nil {
+		t.Fatalf("expected stream_id/tenant_id unset, got %v/%v", slu.StreamId, slu.TenantId)
+	}
+}
+
 func TestConvertStreamAPI_FullPayload(t *testing.T) {
 	streamData := map[string]interface{}{
 		"viewers":     float64(42),

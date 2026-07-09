@@ -146,9 +146,9 @@ To use a local database, set `GEOIP_MMDB_PATH` to the path of your MMDB file. If
 
 Foghorn reconstructs local file paths for DVR dispatch. It uses the node's registered `StorageLocal` path when available; if not, it falls back to `FOGHORN_DEFAULT_STORAGE_BASE`:
 
-| Variable                       | Default                          | Description                                                                                                                  |
-| ------------------------------ | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `FOGHORN_DEFAULT_STORAGE_BASE` | `/var/lib/mistserver/recordings` | Fallback storage path when node's StorageLocal is unavailable. Must be absolute. Should match `HELMSMAN_STORAGE_LOCAL_PATH`. |
+| Variable                       | Default                            | Description                                                                                                                                                                           |
+| ------------------------------ | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FOGHORN_DEFAULT_STORAGE_BASE` | `/var/lib/frameworks/edge-storage` | Fallback storage path when node's StorageLocal is unavailable. Must be absolute. Should match `HELMSMAN_STORAGE_LOCAL_PATH` (native default; container nodes report `/data/storage`). |
 
 ## Related
 

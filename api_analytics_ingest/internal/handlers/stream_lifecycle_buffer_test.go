@@ -133,3 +133,54 @@ func TestStreamLifecycleSkipsInvalidStreamID(t *testing.T) {
 		t.Fatalf("expected no batches for invalid stream_id, got %#v", conn.batches)
 	}
 }
+
+// TestStreamLifecycleHonorsExplicitOfflineStatus pins the offline fast path:
+// the poller's vanish diff reports a disappeared stream as an explicit
+// status="offline" lifecycle update, and processStreamLifecycle must write
+// that through to stream_state_current instead of applying its "live"
+// default.
+func TestStreamLifecycleHonorsExplicitOfflineStatus(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	streamID := uuid.NewString()
+	inputs := uint32(0)
+	viewers := uint32(0)
+	bufferState := "EMPTY"
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
+		StreamId: &streamID,
+		NodeId:   "edge-eu-1",
+		TriggerPayload: &ipcpb.MistTrigger_StreamLifecycleUpdate{
+			StreamLifecycleUpdate: &ipcpb.StreamLifecycleUpdate{
+				InternalName: "live+demo",
+				Status:       "offline",
+				BufferState:  &bufferState,
+				TotalInputs:  &inputs,
+				TotalViewers: &viewers,
+			},
+		},
+	})
+	event := kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "stream_lifecycle_update",
+		Timestamp: time.Unix(1710000000, 0),
+		Source:    "decklog",
+		TenantID:  uuid.NewString(),
+		Data:      data,
+	}
+
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	state := conn.batches["stream_state_current"]
+	if state == nil || len(state.rows) != 1 {
+		t.Fatalf("expected one stream_state_current row, got %#v", state)
+	}
+	row := state.rows[0]
+	if row[4] != "offline" {
+		t.Fatalf("status = %#v, want explicit offline honored over the live default", row[4])
+	}
+	if row[5] != "EMPTY" {
+		t.Fatalf("buffer_state = %#v, want EMPTY", row[5])
+	}
+}

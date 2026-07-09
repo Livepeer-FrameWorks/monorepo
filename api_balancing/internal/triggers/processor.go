@@ -1608,7 +1608,7 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 	}
 
 	// Source-active flip happened atomically inside AdmitAndReserve at
-	// the admission decision above — no separate MarkSourceActive call
+	// the admission decision above — no separate ownership stamp is
 	// needed here. The matching MarkSourceInactive fires from
 	// handlePushInputClose when the publisher disconnects, or from
 	// handleStreamEnd as a belt-and-suspenders if PUSH_INPUT_CLOSE was lost.
@@ -3039,17 +3039,29 @@ func (p *Processor) handleStreamEnd(trigger *ipcpb.MistTrigger) (string, bool, e
 
 	var decklogErr error
 
-	// Send enriched trigger to Decklog
-	if err := p.sendTriggerToDecklog(trigger); err != nil {
-		p.logger.WithFields(logging.Fields{
-			"internal_name": internalName,
-			"trigger_type":  trigger.GetTriggerType(),
-			"error":         err,
-		}).Error("Failed to send stream end trigger to Decklog")
-		decklogErr = err
+	// STREAM_END is only globally authoritative when the ending node is
+	// the source owner (Periscope writes stream_state_current offline
+	// unconditionally on receipt). A replica/relay node draining its
+	// buffer fires the same trigger and means nothing stream-wide — for
+	// it, only the node-local effects below may run.
+	streamWide := p.offlineIsStreamWide(internalName, nodeID)
+	if streamWide {
+		if err := p.sendTriggerToDecklog(trigger); err != nil {
+			p.logger.WithFields(logging.Fields{
+				"internal_name": internalName,
+				"trigger_type":  trigger.GetTriggerType(),
+				"error":         err,
+			}).Error("Failed to send stream end trigger to Decklog")
+			decklogErr = err
+		}
+	} else {
+		p.logger.WithFields(offlineSuppressionLogFields(internalName, nodeID)).Info("Node-local STREAM_END; suppressing stream-wide effects")
 	}
 
-	// Update state offline
+	// Node-local effects — this node lost its copy of the stream.
+
+	// Update state offline (per-node: zeroes this instance's presence; the
+	// union only flips when no other node still actively carries it)
 	state.DefaultManager().SetOffline(internalName, nodeID)
 
 	// Belt-and-suspenders source-presence flip: if PUSH_INPUT_CLOSE was
@@ -3063,29 +3075,47 @@ func (p *Processor) handleStreamEnd(trigger *ipcpb.MistTrigger) (string, bool, e
 		registry.MarkSourceInactive(internalName, nodeID)
 	}
 
-	// Decrement the broadcaster's concurrent-stream count. Idempotent: a
-	// stream not in the set is a no-op, so duplicate STREAM_END fires are
-	// safe. TenantID may be empty when streamContext is missing (e.g. cache
-	// expired before STREAM_END arrived); the helper short-circuits in that
-	// case.
-	state.DefaultTenantCapacity().UnregisterStream(trigger.GetTenantId(), internalName)
-
-	// Broadcast stream-offline to federated peers + clean up stream-scoped peers
-	if p.peerNotifier != nil {
-		p.peerNotifier.BroadcastStreamLifecycle(internalName, trigger.GetTenantId(), false)
-		p.peerNotifier.UntrackStream(internalName)
+	if streamWide {
+		p.finalizeStreamWideOffline(internalName, nodeID, trigger.GetTenantId())
 	}
-
-	// Stop DVR on its storage node if active
-	control.StopDVRByInternalName(internalName, p.logger)
-
-	// Deactivate multistream push targets on the origin node
-	go p.deactivatePushTargets(nodeID, streamEnd.GetStreamName())
 
 	if decklogErr != nil && shouldSurfaceDecklogError(trigger) {
 		return "", false, decklogErr
 	}
 	return "", false, nil
+}
+
+// finalizeStreamWideOffline runs the stream-wide effects of the stream
+// itself ending. Shared by the owner's STREAM_END and the owner's vanish
+// (a lifecycle offline standing in for a missed/delayed STREAM_END) —
+// without it on the vanish path, exactly the case the vanish diff exists
+// for would leave push targets, tenant capacity, federation and DVR state
+// stale. Every effect is idempotent, so a late real STREAM_END re-running
+// them is a no-op.
+func (p *Processor) finalizeStreamWideOffline(internalName, nodeID, tenantID string) {
+	// Deactivate multistream push targets. Stream-wide despite the
+	// node-scoped RPC: the tracking map is process-global keyed by
+	// activatePushTargets' own "live+<internal>" construction, and pushes
+	// run on the owner. Untrack synchronously; only the Helmsman RPC is
+	// async.
+	pushStreamName := "live+" + internalName
+	untrackPushTargets(pushStreamName)
+	go p.deactivatePushTargets(nodeID, pushStreamName)
+
+	// Decrement the broadcaster's concurrent-stream count. Idempotent: a
+	// stream not in the set is a no-op. TenantID may be empty when
+	// streamContext is missing (e.g. cache expired before the trigger
+	// arrived); the helper short-circuits in that case.
+	state.DefaultTenantCapacity().UnregisterStream(tenantID, internalName)
+
+	// Broadcast stream-offline to federated peers + clean up stream-scoped peers
+	if p.peerNotifier != nil {
+		p.peerNotifier.BroadcastStreamLifecycle(internalName, tenantID, false)
+		p.peerNotifier.UntrackStream(internalName)
+	}
+
+	// Stop DVR on its storage node if active
+	control.StopDVRByInternalName(internalName, p.logger)
 }
 
 // handleUserEnd processes USER_END trigger (non-blocking)
@@ -3375,8 +3405,41 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 			startedAtUnix := streamState.StartedAt.Unix()
 			slu.StartedAt = &startedAtUnix
 		}
-		viewers := uint32(streamState.Viewers)
-		slu.TotalViewers = &viewers
+		if slu.GetStatus() != "offline" {
+			viewers := uint32(streamState.Viewers)
+			slu.TotalViewers = &viewers
+		}
+	}
+
+	if slu.GetStatus() == "offline" {
+		// This node lost the stream either way; per-node state must record it.
+		state.DefaultManager().SetOffline(internal, nodeID)
+		// stream_state_current is keyed per stream, not per node. Only the
+		// recorded source owner's vanish may reach Periscope; a replica,
+		// relay, or ownerless carrier losing the stream is a node-local
+		// fact and forwarding it would flap the user-visible status.
+		if !p.offlineIsStreamWide(internal, nodeID) {
+			p.logger.WithFields(offlineSuppressionLogFields(internal, nodeID)).Info("Suppressing offline lifecycle forward; not a stream-wide ending")
+			return "", false, nil
+		}
+		if err := p.sendTriggerToDecklog(trigger); err != nil {
+			p.logger.WithFields(logging.Fields{
+				"internal_name": internal,
+				"trigger_type":  trigger.GetTriggerType(),
+				"error":         err,
+			}).Error("Failed to send stream lifecycle update to Decklog")
+		}
+		// The owner's vanish stands in for a missed/delayed STREAM_END, so
+		// it must run the same source-inactive flip and stream-wide
+		// finalization — otherwise admission stays blocked on
+		// SourceActive=true and push/capacity/federation/DVR state stays
+		// stale until (or unless) the real STREAM_END arrives. All
+		// idempotent; a late STREAM_END re-runs them as no-ops.
+		if registry := control.StreamRegistryInstance; registry != nil {
+			registry.MarkSourceInactive(internal, nodeID)
+		}
+		p.finalizeStreamWideOffline(internal, nodeID, slu.GetTenantId())
+		return "", false, nil
 	}
 
 	// Forward the enriched StreamLifecycleUpdate to Decklog
@@ -3388,19 +3451,59 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 		}).Error("Failed to send stream lifecycle update to Decklog")
 	}
 
-	if slu.GetStatus() == "offline" {
-		state.DefaultManager().SetOffline(internal, nodeID)
-	} else {
-		// Update stream stats in state manager for load balancing
-		// This is critical: the balancer requires inputs > 0 to consider a node for playback
-		total := nodeViewers
-		inputs := int(slu.GetTotalInputs())
-		up := int64(slu.GetUploadedBytes())
-		down := int64(slu.GetDownloadedBytes())
-		replicated := slu.GetReplicated()
-		state.DefaultManager().UpdateNodeStats(internal, nodeID, total, inputs, up, down, replicated)
-	}
+	// Update stream stats in state manager for load balancing
+	// This is critical: the balancer requires inputs > 0 to consider a node for playback
+	total := nodeViewers
+	inputs := int(slu.GetTotalInputs())
+	up := int64(slu.GetUploadedBytes())
+	down := int64(slu.GetDownloadedBytes())
+	replicated := slu.GetReplicated()
+	state.DefaultManager().UpdateNodeStats(internal, nodeID, total, inputs, up, down, replicated)
 	return "", false, nil
+}
+
+// offlineIsStreamWide types an offline edge (STREAM_END or a vanish-diff
+// lifecycle offline) by recorded source authority. Authority is stamped
+// when the source STARTS — AdmitAndReserve for push ingest, the /source
+// pull stamp for upstream pulls — and only the recorded owner ending its
+// stream is a stream-wide fact; replicas still draining inputs cannot
+// veto it. No recorded owner means node-local, always: replicas never
+// have one, in-cluster carriers aren't it, and unknown provenance
+// (mist-native bare streams, registry loss) falls to the 2-minute ingest
+// backstop. Absence of other carriers is deliberately NOT authority —
+// every liveness signal that could stand in for ownership at end time
+// (ReplicatingFrom, the Replicated flag, local presence) is cleared or
+// decays mid-stream.
+//
+// This gates the STATUS plane (Decklog → Periscope, peer broadcast, DVR)
+// only. Foghorn's in-memory union deliberately follows the ROUTING plane
+// instead: after an owner ends, replicas still holding buffered media keep
+// the union live so current viewers can drain, and it converges to offline
+// when their instances end seconds later. Periscope saying "offline" while
+// the union still routes is that intended split, not a missed write.
+func (p *Processor) offlineIsStreamWide(internalName, nodeID string) bool {
+	registry := control.StreamRegistryInstance
+	if registry == nil {
+		return false
+	}
+	owner, known := registry.SourceOwner(internalName)
+	return known && owner == nodeID
+}
+
+// offlineSuppressionLogFields annotates a suppressed offline forward with
+// the provenance that explains it — most usefully the origin cluster when
+// this cluster is a carrier for a stream owned elsewhere.
+func offlineSuppressionLogFields(internalName, nodeID string) logging.Fields {
+	fields := logging.Fields{
+		"internal_name": internalName,
+		"node_id":       nodeID,
+	}
+	if registry := control.StreamRegistryInstance; registry != nil {
+		if origin, known := registry.OriginCluster(internalName); known && origin != control.GetLocalClusterID() {
+			fields["origin_cluster"] = origin
+		}
+	}
+	return fields
 }
 
 // handleClientLifecycleUpdate enriches ClientLifecycleUpdate and queues it for
@@ -4506,9 +4609,9 @@ func (p *Processor) activatePushTargets(nodeID, internalName, tenantID string, t
 }
 
 // deactivatePushTargets tells Helmsman to stop all pushes for a stream.
+// Untracking is the caller's job (handleStreamEnd does it synchronously in
+// its stream-wide branch) — this function only performs the node RPC.
 func (p *Processor) deactivatePushTargets(nodeID, streamName string) {
-	untrackPushTargets(streamName)
-
 	if err := control.SendDeactivatePushTargets(nodeID, &ipcpb.DeactivatePushTargets{
 		StreamName: streamName,
 	}); err != nil {

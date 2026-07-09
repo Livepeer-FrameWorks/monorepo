@@ -153,9 +153,48 @@ func TestAdmitAndReserve_OwnerUnhealthyShortCircuitsActive(t *testing.T) {
 	}
 }
 
+// TestMarkSourceOwnerIfUnset locks the pull-ownership stamp contract:
+// a missing entry is created minimally (callers stamp only after a
+// positive resolve, so a cold local cache must not degrade the stream to
+// backstop-only offline), the first dialer wins atomically, a later
+// caller never flips ownership, and the stamp survives MarkSourceInactive
+// just like admission-stamped ownership does.
+func TestMarkSourceOwnerIfUnset(t *testing.T) {
+	const internal = "60546679b497415db2338cd5cae54992"
+
+	empty := NewStreamRegistry(&fakeCommodore{resp: nativeResp()}, "cluster-A", time.Minute)
+	if owner, stamped := empty.MarkSourceOwnerIfUnset("never-seen", "node-1"); !stamped || owner != "node-1" {
+		t.Fatalf("cold-cache stamp = (%q, %v), want minimal entry created and (node-1, true)", owner, stamped)
+	}
+	if got, known := empty.SourceOwner("never-seen"); !known || got != "node-1" {
+		t.Fatalf("SourceOwner after cold-cache stamp = (%q, %v), want (node-1, true)", got, known)
+	}
+
+	r := newPopulatedRegistry(t)
+	owner, stamped := r.MarkSourceOwnerIfUnset(internal, "node-1")
+	if !stamped || owner != "node-1" {
+		t.Fatalf("first stamp = (%q, %v), want (node-1, true)", owner, stamped)
+	}
+	if got, known := r.SourceOwner(internal); !known || got != "node-1" {
+		t.Fatalf("SourceOwner after stamp = (%q, %v), want (node-1, true)", got, known)
+	}
+
+	// Second caller must not clobber.
+	owner, stamped = r.MarkSourceOwnerIfUnset(internal, "node-2")
+	if stamped || owner != "node-1" {
+		t.Fatalf("second stamp = (%q, %v), want retained (node-1, false)", owner, stamped)
+	}
+
+	// Ownership survives the source-inactive flip (reconnect/resume path).
+	r.MarkSourceInactive(internal, "node-1")
+	if got, known := r.SourceOwner(internal); !known || got != "node-1" {
+		t.Fatalf("SourceOwner after inactive = (%q, %v), want retained (node-1, true)", got, known)
+	}
+}
+
 func TestMarkSourceInactiveIgnoresWrongOwner(t *testing.T) {
 	r := newPopulatedRegistry(t)
-	r.MarkSourceActive("60546679b497415db2338cd5cae54992", "node-1")
+	r.MarkSourceOwnerIfUnset("60546679b497415db2338cd5cae54992", "node-1")
 	// Stale PUSH_INPUT_CLOSE from node-2 (e.g. replay or wrong-node leak)
 	// must not clear node-1's live ownership.
 	r.MarkSourceInactive("60546679b497415db2338cd5cae54992", "node-2")

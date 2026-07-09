@@ -1111,15 +1111,13 @@ func (sm *StreamStateManager) SetStreamStreamID(internalName, streamID string) {
 }
 
 func (sm *StreamStateManager) SetOffline(internalName, nodeID string) {
+	staleCutoff := time.Now().Add(-sm.getStaleThreshold())
 	sm.mu.Lock()
 	union := sm.streams[internalName]
 	if union == nil {
 		union = &StreamState{InternalName: internalName, StreamName: internalName}
 		sm.streams[internalName] = union
 	}
-	union.Status = "offline"
-	union.BufferState = "EMPTY"
-	union.LastUpdate = time.Now()
 	if sm.streamInstances[internalName] == nil {
 		sm.streamInstances[internalName] = make(map[string]*StreamInstanceState)
 	}
@@ -1128,9 +1126,37 @@ func (sm *StreamStateManager) SetOffline(internalName, nodeID string) {
 		inst = &StreamInstanceState{NodeID: nodeID}
 		sm.streamInstances[internalName][nodeID] = inst
 	}
+	now := time.Now()
 	inst.Status = "offline"
 	inst.BufferState = "EMPTY"
-	inst.LastUpdate = time.Now()
+	// Zero presence counters: the balancer and union derivation read
+	// Inputs/connections straight off instances without checking Status,
+	// so a dead node with stale Inputs>0 would stay source-eligible.
+	// Bytes counters are cumulative session totals and stay.
+	inst.Inputs = 0
+	inst.TotalConnections = 0
+	inst.Viewers = 0
+	inst.LastUpdate = now
+
+	// The union goes offline only when no other node still actively
+	// carries the stream — one edge dropping a replicated/migrating
+	// stream must not flap the stream-wide status.
+	otherActive := false
+	for otherNodeID, other := range sm.streamInstances[internalName] {
+		if otherNodeID == nodeID || other == nil {
+			continue
+		}
+		if other.Status != "offline" && other.Inputs > 0 && other.LastUpdate.After(staleCutoff) {
+			otherActive = true
+			break
+		}
+	}
+	if !otherActive {
+		union.Status = "offline"
+		union.BufferState = "EMPTY"
+	}
+	union.LastUpdate = now
+	sm.deriveUnionStatsLocked(internalName, union)
 	streamPayload, _ := json.Marshal(union)
 	instPayload, _ := json.Marshal(inst)
 	sm.mu.Unlock()

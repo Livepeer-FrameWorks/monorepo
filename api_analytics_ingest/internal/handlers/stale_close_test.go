@@ -100,3 +100,37 @@ func TestStaleCloseStreamSessionsClampsViewerSeconds(t *testing.T) {
 		t.Errorf("notes = %q, want STREAM_END timeout annotation", notes)
 	}
 }
+
+// TestStaleMarkStreamStateOffline locks the status backstop's contract: one
+// atomic INSERT ... SELECT against stream_state_current that only targets
+// rows still claiming a non-terminal status, skips rows without a real
+// stream UUID, and uses the 2-minute staleness window (12 missed 10s
+// lifecycle refreshes) — not the 4h anomaly-accounting timeout.
+func TestStaleMarkStreamStateOffline(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	h := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+
+	if err := h.staleMarkStreamStateOffline(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(conn.execs) != 1 {
+		t.Fatalf("expected exactly one exec, got %d: %#v", len(conn.execs), conn.execs)
+	}
+	q := conn.execs[0].query
+	if !strings.Contains(q, "INSERT INTO periscope.stream_state_current") {
+		t.Errorf("backstop must insert into stream_state_current, got %q", q)
+	}
+	if !strings.Contains(q, "'offline'") {
+		t.Errorf("backstop must write status 'offline', got %q", q)
+	}
+	if !strings.Contains(q, "NOT IN ('offline', 'stopped', 'gone')") {
+		t.Errorf("backstop must exclude terminal statuses, got %q", q)
+	}
+	if !strings.Contains(q, "stream_id != toUUIDOrZero('')") {
+		t.Errorf("backstop must skip rows without a stream UUID, got %q", q)
+	}
+	if !strings.Contains(q, "INTERVAL 120 SECOND") {
+		t.Errorf("backstop must use the 120s status window, got %q", q)
+	}
+}

@@ -135,6 +135,70 @@ func TestHandleGetPullSourceUpstreamReturnedWhenPlaceable(t *testing.T) {
 	}
 }
 
+// Invariant: handing a node the raw upstream URI stamps it as the stream's
+// source owner — the OG-pull counterpart of push admission's ownership stamp
+// — WITHOUT any precondition on registry state: from a completely cold cache
+// the handout must seed the full identity (tenant/stream IDs from the
+// Commodore resolve, pull ingest mode) AND the ownership, because an
+// identity-empty entry would be served as a fresh cache hit and poison
+// identity lookups. First dialer wins; a second caller getting the same
+// answer must not flip ownership.
+func TestHandleGetPullSourceStampsFirstDialerAsOwner(t *testing.T) {
+	withSeededBalancer(t)
+	withLoggerSourceRes(t)
+	t.Cleanup(control.SetupTestRegistry("", nil))
+	t.Setenv("CLUSTER_ID", "cluster-local")
+
+	prevStreamRegistry := control.StreamRegistryInstance
+	streamRegistry := control.NewStreamRegistry(nil, "cluster-local", time.Minute)
+	control.StreamRegistryInstance = streamRegistry
+	t.Cleanup(func() { control.StreamRegistryInstance = prevStreamRegistry })
+
+	startPullCommodoreSourceRes(t, &pullSourceFakeSourceRes{
+		resolvePull: func(_ context.Context, _ *commodorepb.ResolvePullSourceByInternalNameRequest) (*commodorepb.ResolvePullSourceByInternalNameResponse, error) {
+			return &commodorepb.ResolvePullSourceByInternalNameResponse{
+				Found:     true,
+				Enabled:   true,
+				SourceUri: "https://origin.example.com/live/master.m3u8",
+				TenantId:  "tenant-pull",
+				StreamId:  "6cb1c1de-0000-4000-8000-000000000009",
+			}, nil
+		},
+	})
+
+	// Deliberately NO registry pre-seed: this is the cold-cache path.
+	c, w := newSourceCtxSourceRes("source=pull%2Bcam-own")
+	handleGetPullSource(c, "pull+cam-own", 0, 0, nil, "edgeA", "203.0.113.5", c.Request.Context(), time.Now())
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	owner, known := streamRegistry.SourceOwner("cam-own")
+	if !known || owner != "edgeA" {
+		t.Fatalf("SourceOwner after cold-cache handout = (%q, %v), want (edgeA, true)", owner, known)
+	}
+	entry, err := streamRegistry.ResolveSourceByInternalName(c.Request.Context(), "cam-own")
+	if err != nil {
+		t.Fatalf("registry identity after handout: %v", err)
+	}
+	if entry.TenantID != "tenant-pull" || entry.StreamID != "6cb1c1de-0000-4000-8000-000000000009" {
+		t.Fatalf("registry identity = tenant %q / stream %q, want the Commodore-resolved identity", entry.TenantID, entry.StreamID)
+	}
+	if entry.IngestMode != control.IngestPull {
+		t.Fatalf("registry ingest mode = %v, want IngestPull", entry.IngestMode)
+	}
+
+	// Second dialer gets the upstream too but must not steal ownership.
+	c2, w2 := newSourceCtxSourceRes("source=pull%2Bcam-own")
+	handleGetPullSource(c2, "pull+cam-own", 0, 0, nil, "edgeB", "203.0.113.6", c2.Request.Context(), time.Now())
+	if w2.Code != http.StatusOK {
+		t.Fatalf("second status = %d, want 200", w2.Code)
+	}
+	owner, known = streamRegistry.SourceOwner("cam-own")
+	if !known || owner != "edgeA" {
+		t.Fatalf("SourceOwner after second handout = (%q, %v), want retained (edgeA, true)", owner, known)
+	}
+}
+
 // Invariant: handleGetSource dispatches a pull+ stream to the pull resolver and,
 // on the upstream-origin leg, returns the full upstream URI inline (the /source
 // answer Mist dials). Locks that the pull-kind branch of handleGetSource reaches

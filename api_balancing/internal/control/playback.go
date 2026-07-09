@@ -1024,7 +1024,7 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 				NodeId:      node.NodeID,
 				BaseUrl:     node.Host,
 				Protocol:    "redirect",
-				Url:         "https://" + node.Host + "/play/" + viewKey,
+				Url:         PlaybackEdgeRedirectURL(node.Host, viewKey),
 				GeoDistance: geoDistance,
 				LoadScore:   float64(node.Score),
 				ClusterId:   node.ClusterID,

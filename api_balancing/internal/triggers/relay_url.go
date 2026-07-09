@@ -13,16 +13,19 @@ import (
 // buildVODRelayURL constructs the Mist source URL for a VOD/clip artifact
 // served via Helmsman's read-through relay on the given node. The base URL
 // is per-node (captured at Register from HELMSMAN_RELAY_BASE_URL on the
-// sidecar) so production-colocated Mist sees 127.0.0.1 while container
-// deployments see the inter-container address (e.g. helmsman:18007).
+// sidecar): 127.0.0.1 in production, where Mist and Helmsman share loopback
+// on native hosts and inside the single edge container alike; only the dev
+// compose bridge (separate containers) advertises a service address like
+// helmsman:18007.
 //
 // The URL carries NO auth token: Mist derives the sidecar request as
 // input + ".dtsh" (mistserver/src/input/input.cpp), and a query token would
 // mutate to ?artifact_relay_token=TOK.dtsh — leaving the path at <hash>.<ext>,
 // so the request routes to the media handler and never reaches the .dtsh
 // dispatch. The Mist→Helmsman hop is a same-node sidecar trust boundary
-// instead: Helmsman's relay accepts it via loopback (production colocation) or
-// HELMSMAN_RELAY_TRUSTED_CIDR (docker, where Mist dials helmsman:18007).
+// instead: Helmsman's relay accepts it via loopback (production — native and
+// the single edge container alike) or HELMSMAN_RELAY_TRUSTED_CIDR (the dev
+// compose bridge, where Mist dials helmsman:18007).
 //
 // For clips, streamInternal carries the owning stream's internal_name and is
 // encoded as a path segment (clips/<stream>/<hash>.<ext>), NOT a query

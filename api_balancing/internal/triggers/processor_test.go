@@ -396,6 +396,52 @@ func TestHandleStreamLifecycleDropsMissingStreamID(t *testing.T) {
 	}
 }
 
+// TestHandleStreamLifecycleOfflineMarksNodeOffline covers the offline branch
+// end-to-end at the state layer: the reporting node's instance is marked
+// offline whether or not the forward is suppressed, and another node's live
+// instance survives untouched.
+func TestHandleStreamLifecycleOfflineMarksNodeOffline(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+
+	// node-B still carries the stream; node-A reports it vanished.
+	sm.UpdateNodeStats("demo", "node-B", 3, 1, 100, 200, false)
+
+	tenantID := "tenant-1"
+	streamID := "b3b1c1de-0000-4000-8000-000000000001"
+	p := &Processor{logger: logging.NewLogger()}
+
+	_, _, err := p.handleStreamLifecycleUpdate(&ipcpb.MistTrigger{
+		TriggerType: "STREAM_LIFECYCLE_UPDATE",
+		StreamId:    &streamID,
+		NodeId:      "node-A",
+		TriggerPayload: &ipcpb.MistTrigger_StreamLifecycleUpdate{
+			StreamLifecycleUpdate: &ipcpb.StreamLifecycleUpdate{
+				TenantId:     &tenantID,
+				NodeId:       "node-A",
+				InternalName: "demo",
+				Status:       "offline",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	instances := state.DefaultManager().GetStreamInstances("demo")
+	instA, ok := instances["node-A"]
+	if !ok || instA.Status != "offline" {
+		t.Fatalf("expected node-A instance marked offline, got %#v", instances["node-A"])
+	}
+	instB := instances["node-B"]
+	if instB.Inputs != 1 || instB.Status == "offline" {
+		t.Fatalf("expected node-B instance untouched by node-A offline, got %#v", instB)
+	}
+	if union := state.DefaultManager().GetStreamState("demo"); union == nil || union.Status == "offline" {
+		t.Fatalf("union must stay non-offline while node-B carries the stream, got %#v", union)
+	}
+}
+
 func TestHandleNodeLifecycleUpdate_TriggersImmediateReconcileOnlyOnArtifactMapChange(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)

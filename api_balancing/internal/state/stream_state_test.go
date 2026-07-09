@@ -973,6 +973,47 @@ func TestUpdateNodeStatsStartsNewIntervalAfterOffline(t *testing.T) {
 	}
 }
 
+// TestSetOfflinePerNodeSemantics locks the per-node contract: SetOffline
+// zeroes the reporting node's presence counters (the balancer and union
+// derivation read Inputs without checking Status, so stale Inputs>0 would
+// keep a dead node source-eligible), and the union only goes offline when
+// no other node still actively carries the stream.
+func TestSetOfflinePerNodeSemantics(t *testing.T) {
+	sm := NewStreamStateManager()
+	defer sm.Shutdown()
+
+	internalName := "multi-node"
+	sm.UpdateNodeStats(internalName, "node-A", 5, 1, 100, 200, false)
+	sm.UpdateNodeStats(internalName, "node-B", 3, 1, 100, 200, true)
+
+	sm.SetOffline(internalName, "node-A")
+
+	instA := sm.GetStreamInstances(internalName)["node-A"]
+	if instA.Status != "offline" || instA.Inputs != 0 || instA.TotalConnections != 0 {
+		t.Fatalf("expected node-A instance offline with zeroed presence, got %#v", instA)
+	}
+	union := sm.GetStreamState(internalName)
+	if union == nil || union.Status == "offline" {
+		t.Fatalf("union must stay non-offline while node-B carries the stream, got %#v", union)
+	}
+	if union.Inputs != 1 {
+		t.Fatalf("union inputs must exclude the offline node, got %d", union.Inputs)
+	}
+
+	// Last carrier gone → union goes offline.
+	sm.SetOffline(internalName, "node-B")
+	union = sm.GetStreamState(internalName)
+	if union == nil || union.Status != "offline" {
+		t.Fatalf("expected union offline after last carrier left, got %#v", union)
+	}
+	if union.BufferState != "EMPTY" {
+		t.Fatalf("expected EMPTY union buffer state, got %q", union.BufferState)
+	}
+	if union.Inputs != 0 {
+		t.Fatalf("expected zero union inputs, got %d", union.Inputs)
+	}
+}
+
 func TestUpdateStreamFromBuffer_IgnoresNonStringIssues(t *testing.T) {
 	sm := NewStreamStateManager()
 
