@@ -31,9 +31,9 @@ jobs:
     name: ansible-lint + yamllint
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: "pip"
@@ -83,9 +83,9 @@ jobs:
         image:
           - geerlingguy/docker-ubuntu2404-ansible:latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: "pip"
@@ -127,9 +127,9 @@ jobs:
           - geerlingguy/docker-ubuntu2404-ansible:latest
           - geerlingguy/docker-ubuntu2604-ansible:latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: "pip"
