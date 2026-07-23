@@ -75,7 +75,7 @@
     "autoprefixer": "^10.5.0",
     "dashjs": "5.2.0",
     "hls.js": "1.6.16",
-    "postcss": "^8.5.10",
+    "postcss": "^8.5.12",
     "postcss-cli": "^11.0.1",
     "postcss-prefix-selector": "^2.1.1",
     "rollup": "^4.60.1",
