@@ -5,10 +5,10 @@
 -- authoritative thumbnail cluster at SELECT time is
 -- COALESCE(storage_cluster_id, origin_cluster_id).
 --
--- has_thumbnails flips false→true via Commodore.MarkArtifactThumbnailsReady,
--- called from Foghorn's processThumbnailUploaded confirmation site (NOT the
--- mint-URL request site). storage_cluster_id updates via the separate
--- UpdateArtifactStorageCluster RPC, which never touches has_thumbnails.
+-- Both has_thumbnails and storage_cluster_id are projected by the single
+-- authoritative Commodore.UpdateArtifactCatalogSnapshot RPC, written by the
+-- Foghorn artifact reconciler (has_thumbnails preserves-on-absent via COALESCE;
+-- storage_cluster_id is whole-state). The earlier per-field RPCs no longer exist.
 --
 -- Schema source of truth: pkg/database/sql/schema/commodore.sql
 
