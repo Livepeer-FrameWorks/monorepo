@@ -43,6 +43,13 @@ func NewChangelog[T any](client goredis.UniversalClient, key string, maxLen int6
 	return &Changelog[T]{client: client, key: key, maxLen: maxLen}
 }
 
+// Key returns the underlying Redis Stream key, so a caller that needs to XADD to this changelog
+// atomically WITH other keys (a multi-key Lua script) can target the same stream.
+func (c *Changelog[T]) Key() string { return c.key }
+
+// MaxLen returns the approximate trim length used on XADD (MAXLEN ~), for a Lua XADD to match.
+func (c *Changelog[T]) MaxLen() int64 { return c.maxLen }
+
 // Append adds an entry and returns its server-assigned ID.
 func (c *Changelog[T]) Append(ctx context.Context, msg T) (string, error) {
 	payload, err := json.Marshal(msg)

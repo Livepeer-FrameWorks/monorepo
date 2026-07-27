@@ -13,8 +13,6 @@ import (
 	"google.golang.org/grpc"
 	grpc_health_v1 "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/metadata"
-
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const DefaultServerName = "decklog.internal"
@@ -357,12 +355,24 @@ func (c *BatchedClient) SendLoadBalancing(data *ipcpb.LoadBalancingData) error {
 
 // SendClipLifecycle sends clip lifecycle data to Decklog
 func (c *BatchedClient) SendClipLifecycle(data *ipcpb.ClipLifecycleData) error {
+	return c.SendClipLifecycleWithID("", data)
+}
+
+// SendClipLifecycleWithID sends clip lifecycle data stamping the given stable event_id (the outbox row
+// id), so a redelivered event carries the SAME id as the first attempt for event-id-keyed projections.
+// The event's source_updated_at_ms (also from the outbox row) is ingest's best-effort collapse key for
+// artifact_state_current — see periscope.sql; it is not a rigorous total order. Empty eventID falls
+// back to a freshly-minted UUIDv7.
+func (c *BatchedClient) SendClipLifecycleWithID(eventID string, data *ipcpb.ClipLifecycleData) error {
 	ctx := c.authContext()
 	trigger := &ipcpb.MistTrigger{
 		TriggerType: "CLIP_LIFECYCLE",
 		TriggerPayload: &ipcpb.MistTrigger_ClipLifecycleData{
 			ClipLifecycleData: data,
 		},
+	}
+	if eventID != "" {
+		trigger.EventId = eventID
 	}
 	if data.GetStreamId() != "" {
 		streamID := data.GetStreamId()
@@ -391,29 +401,26 @@ func (c *BatchedClient) SendClipLifecycle(data *ipcpb.ClipLifecycleData) error {
 		"stage":     data.GetStage().String(),
 	}).Debug("Clip lifecycle data sent to Decklog")
 
-	c.emitArtifactLifecycleEvent(buildArtifactLifecycleEvent(
-		ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
-		data.GetClipHash(),
-		data.GetStreamId(),
-		clipStageToStatus(data.GetStage()),
-		int64Ptr(data.GetStartedAt()),
-		int64Ptr(data.GetCompletedAt()),
-		int64Ptr(data.GetExpiresAt()),
-		data.GetTenantId(),
-		data.GetUserId(),
-	))
-
 	return nil
 }
 
 // SendDVRLifecycle sends DVR lifecycle data to Decklog
 func (c *BatchedClient) SendDVRLifecycle(data *ipcpb.DVRLifecycleData) error {
+	return c.SendDVRLifecycleWithID("", data)
+}
+
+// SendDVRLifecycleWithID sends DVR lifecycle data stamping the given stable event_id (see
+// SendClipLifecycleWithID for why redeliveries must reuse the outbox row id).
+func (c *BatchedClient) SendDVRLifecycleWithID(eventID string, data *ipcpb.DVRLifecycleData) error {
 	ctx := c.authContext()
 	trigger := &ipcpb.MistTrigger{
 		TriggerType: "DVR_LIFECYCLE",
 		TriggerPayload: &ipcpb.MistTrigger_DvrLifecycleData{
 			DvrLifecycleData: data,
 		},
+	}
+	if eventID != "" {
+		trigger.EventId = eventID
 	}
 	if data.GetStreamId() != "" {
 		streamID := data.GetStreamId()
@@ -442,29 +449,26 @@ func (c *BatchedClient) SendDVRLifecycle(data *ipcpb.DVRLifecycleData) error {
 		"status":   data.GetStatus().String(),
 	}).Debug("DVR lifecycle data sent to Decklog")
 
-	c.emitArtifactLifecycleEvent(buildArtifactLifecycleEvent(
-		ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR,
-		data.GetDvrHash(),
-		data.GetStreamId(),
-		dvrStatusToStatus(data.GetStatus()),
-		int64Ptr(data.GetStartedAt()),
-		int64Ptr(data.GetEndedAt()),
-		int64Ptr(data.GetExpiresAt()),
-		data.GetTenantId(),
-		data.GetUserId(),
-	))
-
 	return nil
 }
 
 // SendVodLifecycle sends VOD lifecycle data to Decklog
 func (c *BatchedClient) SendVodLifecycle(data *ipcpb.VodLifecycleData) error {
+	return c.SendVodLifecycleWithID("", data)
+}
+
+// SendVodLifecycleWithID sends VOD lifecycle data stamping the given stable event_id (see
+// SendClipLifecycleWithID for why redeliveries must reuse the outbox row id).
+func (c *BatchedClient) SendVodLifecycleWithID(eventID string, data *ipcpb.VodLifecycleData) error {
 	ctx := c.authContext()
 	trigger := &ipcpb.MistTrigger{
 		TriggerType: "VOD_LIFECYCLE",
 		TriggerPayload: &ipcpb.MistTrigger_VodLifecycleData{
 			VodLifecycleData: data,
 		},
+	}
+	if eventID != "" {
+		trigger.EventId = eventID
 	}
 	if data.GetTenantId() != "" {
 		tenantID := data.GetTenantId()
@@ -489,129 +493,7 @@ func (c *BatchedClient) SendVodLifecycle(data *ipcpb.VodLifecycleData) error {
 		"status":   data.GetStatus().String(),
 	}).Debug("VOD lifecycle data sent to Decklog")
 
-	c.emitArtifactLifecycleEvent(buildArtifactLifecycleEvent(
-		ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD,
-		data.GetVodHash(),
-		"",
-		vodStatusToStatus(data.GetStatus()),
-		int64Ptr(data.GetStartedAt()),
-		int64Ptr(data.GetCompletedAt()),
-		int64Ptr(data.GetExpiresAt()),
-		data.GetTenantId(),
-		data.GetUserId(),
-	))
-
 	return nil
-}
-
-func (c *BatchedClient) emitArtifactLifecycleEvent(event *ipcpb.ServiceEvent) {
-	if c == nil || event == nil || c.client == nil {
-		return
-	}
-	if event.Source == "" {
-		event.Source = c.source
-	}
-	if event.Timestamp == nil {
-		event.Timestamp = timestamppb.Now()
-	}
-	c.stampServiceEnvelope(event)
-	go func(ev *ipcpb.ServiceEvent) {
-		if _, err := c.client.SendServiceEvent(c.authContext(), ev); err != nil {
-			c.logger.WithError(err).WithField("event_type", ev.EventType).Warn("Failed to emit artifact lifecycle service event")
-		}
-	}(event)
-}
-
-func buildArtifactLifecycleEvent(
-	artifactType ipcpb.ArtifactEvent_ArtifactType,
-	artifactID, streamID, status string,
-	startedAt, completedAt, expiresAt *int64,
-	tenantID, userID string,
-) *ipcpb.ServiceEvent {
-	if artifactID == "" || tenantID == "" {
-		return nil
-	}
-
-	payload := &ipcpb.ArtifactEvent{
-		ArtifactType: artifactType,
-		ArtifactId:   artifactID,
-		StreamId:     streamID,
-		Status:       status,
-	}
-	if startedAt != nil {
-		payload.StartedAt = startedAt
-	}
-	if completedAt != nil {
-		payload.CompletedAt = completedAt
-	}
-	if expiresAt != nil {
-		payload.ExpiresAt = expiresAt
-	}
-
-	return &ipcpb.ServiceEvent{
-		EventType:    "artifact_lifecycle",
-		Source:       "foghorn",
-		TenantId:     tenantID,
-		UserId:       userID,
-		ResourceType: "artifact",
-		ResourceId:   artifactID,
-		Payload:      &ipcpb.ServiceEvent_ArtifactEvent{ArtifactEvent: payload},
-	}
-}
-
-func clipStageToStatus(stage ipcpb.ClipLifecycleData_Stage) string {
-	switch stage {
-	case ipcpb.ClipLifecycleData_STAGE_REQUESTED:
-		return "requested"
-	case ipcpb.ClipLifecycleData_STAGE_QUEUED:
-		return "queued"
-	case ipcpb.ClipLifecycleData_STAGE_PROGRESS:
-		return "processing"
-	case ipcpb.ClipLifecycleData_STAGE_DONE:
-		return "completed"
-	case ipcpb.ClipLifecycleData_STAGE_FAILED:
-		return "failed"
-	case ipcpb.ClipLifecycleData_STAGE_DELETED:
-		return "deleted"
-	default:
-		return "unknown"
-	}
-}
-
-func dvrStatusToStatus(status ipcpb.DVRLifecycleData_Status) string {
-	switch status {
-	case ipcpb.DVRLifecycleData_STATUS_STARTED:
-		return "started"
-	case ipcpb.DVRLifecycleData_STATUS_RECORDING:
-		return "recording"
-	case ipcpb.DVRLifecycleData_STATUS_STOPPED:
-		return "stopped"
-	case ipcpb.DVRLifecycleData_STATUS_FAILED:
-		return "failed"
-	case ipcpb.DVRLifecycleData_STATUS_DELETED:
-		return "deleted"
-	default:
-		return "unknown"
-	}
-}
-
-func vodStatusToStatus(status ipcpb.VodLifecycleData_Status) string {
-	switch status {
-	case ipcpb.VodLifecycleData_STATUS_REQUESTED:
-		return "requested"
-	case ipcpb.VodLifecycleData_STATUS_UPLOADING:
-		return "uploading"
-	case ipcpb.VodLifecycleData_STATUS_PROCESSING:
-		return "processing"
-	case ipcpb.VodLifecycleData_STATUS_COMPLETED:
-		return "completed"
-	case ipcpb.VodLifecycleData_STATUS_FAILED:
-		return "failed"
-	case ipcpb.VodLifecycleData_STATUS_DELETED:
-		return "deleted"
-	default:
-		return "unknown"
-	}
 }
 
 func int64Ptr(value int64) *int64 {
