@@ -170,7 +170,7 @@ Single service: `make build-bin-<name>` (e.g. `make build-bin-purser`). See `Mak
 | Media                         | MistServer (HTTP)        | 8080     | HLS/WebRTC delivery                                                                                            |
 | Media                         | MistServer (SRT)         | 8889/udp | SRT ingest                                                                                                     |
 | Media                         | Livepeer Gateway         | 8935     | Livepeer compute gateway (transcoding orchestration; not in dev compose)                                       |
-| Media                         | Chandler                 | 18020    | Cluster-scoped asset serving (thumbnails, sprites, VOD metadata)                                               |
+| Media                         | Chandler                 | 18020    | Cluster-scoped asset serving (poster frames and sprite previews)                                               |
 | Network & Trust               | Navigator                | 18010    | Public DNS management & ACME (production deployments; intentionally excluded from single-node dev compose)     |
 | Network & Trust               | Navigator (gRPC)         | 18011    | gRPC API (production deployments; intentionally excluded from single-node dev compose)                         |
 | Network & Trust               | Privateer                | 18012    | WireGuard mesh agent & Local DNS (production deployments; intentionally excluded from single-node dev compose) |

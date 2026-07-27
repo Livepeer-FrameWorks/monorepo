@@ -26,7 +26,7 @@ Cluster A (tenant's preferred)              Cluster B (origin)
 
 | Component        | Role                                                                                                                                                                                                                                                                                                           | Data                                                                                                                                                                                                                                                                       |
 | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| FederationServer | Handles inbound gRPC RPCs (QueryStream, NotifyOriginPull, PrepareArtifact, PeerChannel, CreateRemoteClip, CreateRemoteDVR, ListTenantArtifacts, MigrateArtifactMetadata, ForwardArtifactCommand)                                                                                                               | Reads local LoadBalancer scores; records outbound pulls on StreamRegistry's Location[local].OutboundPullers (NotifyOriginPull); writes federation telemetry to RemoteEdgeCache                                                                                             |
+| FederationServer | Handles inbound gRPC RPCs (QueryStream, NotifyOriginPull, PrepareArtifact, PeerChannel, CreateRemoteClip, CreateRemoteDVR, ListTenantArtifacts, MigrateArtifactMetadata, ForwardArtifactCommand, MintStorageURLs, DeleteStorageObjects)                                                                        | Reads local LoadBalancer scores; records outbound pulls on StreamRegistry's Location[local].OutboundPullers (NotifyOriginPull); writes federation telemetry to RemoteEdgeCache                                                                                             |
 | FederationClient | Pool wrapper for outbound unary RPCs to peer Foghorns                                                                                                                                                                                                                                                          | Uses FoghornPool lazy connections                                                                                                                                                                                                                                          |
 | PeerManager      | Manages PeerChannel lifecycles, peer discovery, telemetry push/recv, leader election                                                                                                                                                                                                                           | Redis leader lease, peer address map                                                                                                                                                                                                                                       |
 | StreamRegistry   | Unified per-stream identity + replication + admission state (control package). Federated peer ads upsert here as `Locations[peer_cluster]`; local in-flight pulls land as `Locations[local].ReplicatingFrom + PullDTSCURL + DestNodeID`; source-side outbound pulls land as `Locations[local].OutboundPullers` | Redis backing (`{cluster_id}:registry:source:*`, `{cluster_id}:registry:artifact:*`) with cross-instance changelog replay (ordered Redis Stream; see foghorn-ha.md); SweepStaleLocations (30s tick / 5-min maxAge) ages stale federated entries + per-OutboundPull entries |
@@ -82,26 +82,65 @@ PeerChannel is a bidirectional gRPC stream carrying 8 payload types via `oneof`:
 
 ### Cross-Cluster Artifact Access
 
+Cross-cluster artifact access is a read-through model: no bulk replication, no
+copy jobs. The requesting cluster resolves a durable or hot source at the
+origin, records a local pointer row, and its Helmsman relay/block cache reads
+bytes on demand. Four pieces cooperate:
+
+| Piece                                                        | Where                                                                                              | Role                                                                                                                                                                               |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PrepareArtifact` (federation RPC)                           | `api_balancing/internal/federation/server.go`                                                      | Origin-side decision: presigned S3 GET, peer-relay grant, storage redirect, or not-ready                                                                                           |
+| resolve→authorize→adopt front doors                          | `api_balancing/internal/control/cross_cluster_artifact.go`, `playback.go`, `triggers/processor.go` | Requesting-side allowlist enforcement + local pointer-row adoption (`/play` and direct-edge STREAM_SOURCE)                                                                         |
+| `RelayResolve` (Helmsman ⇄ Foghorn)                          | `api_balancing/internal/control/relay_resolve.go`                                                  | Byte-serve-time resolution for Helmsman's `/internal/artifact/*` relay: presigned URLs + sidecars + size from the adopted row                                                      |
+| `MintStorageURLs` / `DeleteStorageObjects` (federation RPCs) | `federation/server.go`                                                                             | Delegated **write** against a storage cluster the caller cannot mint for locally. `DeleteStorageObjects` (and the rest of the mutation surface) is disabled by default — see below |
+
+#### Storage ownership gate: canLocallyMintFor
+
+One rule decides "can this Foghorn pool sign S3 URLs for that cluster":
+the target cluster must be **served locally** (`isServedCluster`) AND the
+local S3 client's backing tuple (bucket + endpoint + region, full-tuple
+equality — bucket name alone collides across MinIO/R2/Bunny) must match the
+cluster's **advertised backing** from Quartermaster's `cluster_peers`
+metadata for that tenant. The same rule is used symmetrically:
+
+- `PrepareArtifact` emits `RedirectClusterId` when the artifact's
+  authoritative cluster (`COALESCE(storage_cluster_id, origin_cluster_id)`)
+  fails the gate — read redirect.
+- `MintStorageURLs` rejects with `storage_not_owned_here` when the caller
+  claims a target this pool doesn't own — write validation.
+
+Sharing the rule prevents the asymmetry where a pool would redirect a read
+but accept a write to the same cluster.
+
+#### PrepareArtifact decision tree (origin side)
+
 ```
 Viewer requests clip/VOD on Cluster A, artifact lives on Cluster B:
 
 1. Foghorn A: PrepareArtifact(artifact_hash, tenant_id) → Foghorn B
-2. Foghorn B: queries foghorn.artifacts
-3. If sync_status='synced': mints presigned S3 GET URL → returns to A
-4. Else if a local origin node has the canonical full file on disk
-   (foghorn.artifact_nodes row with role='origin', is_complete=true,
-   recently-seen): Foghorn B mints a short-lived opaque capability grant
-   (5min TTL, stored in B's Redis, bound to {origin node id, artifact_hash,
-   allowed media + .dtsh paths}) and returns peer_relay_url +
-   peer_relay_grant_id → A. Cluster A's Helmsman block cache fetches blocks
-   directly from origin node's Helmsman with the grant id as
-   Authorization: Bearer. No S3 sync wait.
-5. Else: returns Ready=false; Foghorn A surfaces 503 to the viewer.
+2. Foghorn B: queries foghorn.artifacts (tenant-scoped, status != 'deleted')
+3. If the row's authoritative cluster is one B can't mint for
+   (canLocallyMintFor fails): returns RedirectClusterId → A re-issues
+   PrepareArtifact to that storage cluster (single hop; chained redirects
+   are rejected, and the redirect target is allowlist-authorized BEFORE
+   the dial).
+4. If sync_status='synced': mints presigned S3 GET URL (15min) → returns to A
+5. Else if storage_location is local/freezing and a local origin node has
+   the canonical full file on disk (foghorn.artifact_nodes row with
+   role='origin', is_complete=true, not orphaned, last_seen < 90s;
+   base_url via node_outputs): Foghorn B mints a short-lived opaque
+   capability grant (5min TTL, stored in B's Redis, bound to {origin node
+   id, artifact_hash, allowed media + .dtsh paths}) and returns
+   peer_relay_url + peer_relay_grant_id → A. Cluster A's Helmsman block
+   cache fetches blocks directly from origin node's Helmsman with the
+   grant id as Authorization: Bearer. No S3 sync wait.
+6. Else: returns Ready=false; Foghorn A surfaces 503 to the viewer.
    The freeze pipeline lands the bytes asynchronously; the next viewer
    attempt picks up where the failed one left off.
-6. Foghorn A: redirects viewer (or hands relay URL to its Helmsman).
 
-For clip/VOD: returns a single URL — either S3-presigned or peer-relay.
+For clip/VOD: returns a single URL — either S3-presigned or peer-relay —
+plus format, stream_internal_name, and size (the block cache needs size
+up-front to plan range splits).
 ```
 
 The peer-relay grant is an opaque random id, not a self-validating token:
@@ -113,6 +152,129 @@ the id as opaque and forwards it through to its local block cache. This
 keeps trust boundaries intact (no key on edges, no cross-cluster key
 distribution; a grant's access ends when its short TTL expires, with no explicit revoke) while letting
 hot-but-unsynced artifacts serve viewers immediately across the federation.
+
+**Recursion invariant**: the peer-relay fallback only ever points at a
+_local_ origin node. A cluster never returns another peer's relay URL, so
+resolution cannot chain through clusters that point back at each other.
+
+#### Resolve → authorize → adopt (requesting side)
+
+Both viewer front doors share one path for vod/clip artifacts — including
+processed-VOD outputs and finalized DVR-chapter artifacts, which are
+`vod`-shaped rows:
+
+- **`/play`** (`playback.go` `resolveRemoteArtifact`): playback_id resolved
+  via Commodore names a remote `origin_cluster_id`.
+- **Direct-edge STREAM_SOURCE** (`triggers/processor.go`): a viewer landed
+  on an edge without going through `/play` (`vod+`/`processing+` stream
+  names), so there is no local artifact row and no warm state; STREAM_SOURCE
+  is the front door and runs the same chain via
+  `control.ResolveAndAdoptRemoteArtifact`.
+
+The chain: enforce the tenant peer allowlist on the origin cluster **and**
+on any storage-redirect cluster (before dialing it — a compromised origin
+must not point the tenant at a cluster outside its allowlist), federate via
+`PrepareArtifact`, then **adopt** a local `foghorn.artifacts` pointer row
+via the single shared upsert `adoptRemoteArtifactRow`:
+`storage_location='s3'` always (the artifact's home is the authoritative
+cluster's S3, which also keeps the row out of the freeze reconciler);
+`sync_status='synced'` only when origin returned a durable S3 URL, else
+`'pending'`; re-adoption ratchets sync_status up to synced, never back down;
+identity fields fill blanks only.
+
+Adoption is **load-bearing, not best-effort**: `RelayResolve` deliberately
+never federates by hash on a missing row (it has no requesting-tenant
+context to enforce the allowlist), so a failed upsert fails the whole
+resolution closed — better a retryable error than a relay URL whose byte
+GET will 404 for the resolve-cache TTL with no self-heal.
+
+Front-door **re**authorization: an adopted pointer row persists, but every
+new STREAM*SOURCE/`/play` re-checks the row's authoritative cluster against
+the tenant's \_fresh* `cluster_peers` envelope, so a revoked peer stops
+serving on the next open.
+
+#### RelayResolve (byte-serve time)
+
+Helmsman's `/internal/artifact/*` relay encodes only (kind, hash, ext); on
+a cold serve it sends `RelayResolveRequest` up the control stream and gets
+back state (`PLAYABLE` / `SOURCE_MISSING` / freezing), a presigned media
+GET (1h TTL, above the relay's refresh window), a `.dtsh` sidecar GET URL
+(read-only; the durable index is published only via the staged
+`TriggerDtshSync` path, never a direct relay PUT), expected size, and the
+stream_internal_name for nested clip paths.
+Resolution reads the **adopted local row only**. Two fallbacks apply before
+404, in order: (1) a local origin node holds the canonical file
+(hot-but-unsynced) → peer-relay grant; (2) the row points at a peer
+cluster → federate via the adopted-row path (nil redirect authorizer: the
+row's clusters were allowlist-checked at adopt time). S3 authority is gated
+on `sync_status='synced'` to close the post-processing race where `s3_url`
+still points at the original upload while a rewritten container syncs.
+
+#### MintStorageURLs (delegated writes)
+
+The write-side mirror: a Foghorn that cannot mint locally for the tenant's
+storage cluster asks the owning pool for a presigned PUT URL. The callee
+validates, in order: federation service auth → `canLocallyMintFor`
+(ownership claim) → artifact-type guard → tenant ownership + asset context
+(local `foghorn.artifacts` first, Commodore
+`Resolve*Hash`/`ResolveInternalName` fallback).
+
+**Only `thumbnail` single-PUT (15min expiry) is supported.** Federated
+ARTIFACT freeze — `clip`, `vod`, `dvr`, `dvr_segment`, `dvr_manifest` — is
+rejected at this boundary with `federated_artifact_freeze_unsupported`:
+there is no cross-cluster completion propagation, so the storage-owning
+Foghorn's cache-healed row would never observe the upload and would strand
+at `pending`. A thumbnail upload has no such round trip — the caller
+consumes the returned `S3Key` immediately — so it is the one valid
+delegated write. Full artifact federation returns only with the
+descriptor/completion protocol. Outcomes are counted per reason
+(`accepted`, `storage_not_owned_here`, `tenant_mismatch`,
+`federated_artifact_freeze_unsupported`, …).
+
+`DeleteStorageObjects` is the delete counterpart. **The ENTIRE inbound
+cross-cluster RPC surface is DISABLED by default in this release**
+(`AllowFederationMutations=false`), gated as ONE policy — there is intentionally
+NO read-only allowlist. `QueryStream`, `PrepareArtifact`, `NotifyOriginPull`,
+`PeerChannel`, `MintStorageURLs`, `CreateRemoteClip`, `CreateRemoteDVR`,
+`DeleteStorageObjects`, `ForwardArtifactCommand`, `MigrateArtifactMetadata`, and
+`ListTenantArtifacts` all fail closed. Even the reads are gated: `QueryStream`
+leaks routing data and `PrepareArtifact` can hand back a presigned object URL or a
+relay grant, and the shared federation service token proves only
+`auth_type==service` with no trustworthy caller cluster (`requesting_cluster` is
+self-declared). So no caller can be authorized for another cluster's tenant data
+until cluster-bound identity + tenant entitlement exist (the workload-identity
+RFC). Delete returns `accepted=false, reason=federation_mutations_disabled`; the
+others return a `FailedPrecondition`/disabled response. In the single-provider
+release `FEDERATION_ENABLED` is false so the server is not even registered, making
+this default doubly inert.
+
+When enabled, the delete flow is: the caller resolves the target key/prefix
+from its **own** authoritative row and sends it; the callee validates
+ownership/tenant/path-shape and deletes exactly that target (never
+reconstructing from local rows, which may be cache-healed stubs). Not-found
+targets return accepted=true for idempotent retries; auth/ownership/shape
+failures never collapse into not-found success.
+
+While the mutation surface is disabled, the artifact purge (`purge_deleted.go`)
+also **excludes remote-owned rows** from its bytes+rows sweep: their bytes can't
+be freed, so reaping them would fail forever and a page of them would starve
+reapable local rows. They are retained (never lost) until cross-cluster deletion
+is enabled.
+
+#### Rolling DVR (dvr+) cross-cluster arrange
+
+The rolling-DVR surface is not an artifact fetch — it is a live DTSC pull.
+When STREAM_SOURCE fires for `dvr+<token>` on a cluster that is not
+recording the source stream, `tryArrangeDVRCrossCluster`
+(`triggers/processor.go`) consults the StreamRegistry's per-peer
+`Locations` for a peer advertising a `RecordingNodeID`, gates that peer
+against the tenant's fresh cluster-peer envelope (registry state can
+outlive a revocation), and arranges an origin-pull from the recording node
+via `federation.ArrangeOriginPull` — the viewer's edge then pulls the
+rolling recording over DTSC. No advertised recording or a failed
+arrangement → `offline:not_recorded`.
+
+#### DVR chapter replay
 
 DVR archive playback does not use whole-artifact `PrepareArtifact`. A DVR can
 run for months; replay is sliced into finalized chapter VOD artifacts:
@@ -227,8 +389,10 @@ Federation events carry `local_lat`, `local_lon`, `remote_lat`, `remote_lon` (al
 
 ## Key Files
 
-- `pkg/proto` - Service definition (9 RPCs, 8 PeerMessage payload types)
-- `api_balancing/internal/federation` - FederationServer: all RPC handlers
+- `pkg/proto` - Service definition (11 RPCs, 8 PeerMessage payload types)
+- `api_balancing/internal/federation` - FederationServer: all RPC handlers (incl. PrepareArtifact/MintStorageURLs/DeleteStorageObjects + canLocallyMintFor ownership gate)
+- `api_balancing/internal/control/cross_cluster_artifact.go` - shared resolve→authorize→adopt path (`ResolveAndAdoptRemoteArtifact`, `adoptRemoteArtifactRow`)
+- `api_balancing/internal/control/relay_resolve.go` - RelayResolve: byte-serve-time resolution for Helmsman's artifact relay
 - `api_balancing/internal/federation` - FederationClient: pool wrapper for outbound RPCs
 - `api_balancing/internal/federation` - PeerManager: lifecycle, discovery, telemetry, leader election
 - `api_balancing/internal/federation` - RemoteEdgeCache: Redis CRUD with TTLs and Lua-scripted lease ops (federation telemetry only — stream identity / playback index / active replication moved to control.StreamRegistry)

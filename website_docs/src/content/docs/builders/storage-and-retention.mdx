@@ -12,9 +12,11 @@ Storage is one of the larger billing line items for live-streaming workloads, es
 This page explains the underlying model so you can make informed retention decisions.
 
 <Aside type="caution">
-  Retention reduces cost but it also deletes data. Shortening a tenant default or per-asset override
-  schedules data for deletion at the new horizon — there is no "soft-delete" intermediate state
-  today.
+  Retention reduces cost but it also deletes data. When an asset reaches its retention horizon it
+  **disappears from your library** — the sweep runs hourly, so removal happens within about an hour
+  of the deadline. Shortening a tenant default or per-asset override moves that horizon in, so
+  affected assets can leave the library on the next sweep. There is no user-visible recovery window:
+  once an asset is gone from the library you cannot restore it.
 </Aside>
 
 ## What gets stored, when
@@ -191,21 +193,19 @@ mutation ResetRetention($input: ResetMediaRetentionOverrideInput!) {
 
 ```graphql
 query DVRRetention($id: ID!) {
-  dvrRecordingsConnection(streamId: $id) {
-    edges {
-      node {
-        dvrHash
-        expiresAt
-        effectiveRetention {
-          retentionDays
-          retentionUntil
-          source
-        }
-        storageCost {
-          perDay
-          perMonth
-          currency
-        }
+  storageArtifactsConnection(input: { kinds: [DVR], streamId: $id }) {
+    nodes {
+      hash
+      expiresAt
+      effectiveRetention {
+        retentionDays
+        retentionUntil
+        source
+      }
+      storageCost {
+        perDay
+        perMonth
+        currency
       }
     }
   }

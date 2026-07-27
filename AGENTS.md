@@ -17,6 +17,7 @@
 | ------------------------------- | ------------------------------------------ |
 | Architecture, services, ports   | `README.md`                                |
 | Analytics pipeline, event types | `docs/architecture/analytics-pipeline.md`  |
+| Artifact processing pipeline    | `docs/architecture/processing-pipeline.md` |
 | Service events backbone         | `docs/architecture/service-events.md`      |
 | Viewer routing algorithm        | `docs/architecture/viewer-routing.md`      |
 | TLS and service identity        | `docs/architecture/tls.md`                 |

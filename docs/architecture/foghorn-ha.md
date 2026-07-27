@@ -114,11 +114,11 @@ All 11 push commands that depend on the specific Helmsman stream:
 
 #### Connection Ownership Keys
 
-| Key                                | Value                                                      | TTL |
-| ---------------------------------- | ---------------------------------------------------------- | --- |
-| `{cluster_id}:conn_owner:{nodeID}` | `instanceID\|grpcAddr` (e.g., `foghorn-1\|10.0.0.5:18019`) | 60s |
+| Key                                | Value                                                                 | TTL |
+| ---------------------------------- | --------------------------------------------------------------------- | --- |
+| `{cluster_id}:conn_owner:{nodeID}` | `instanceID\|grpcAddr\|fence` (e.g., `foghorn-1\|10.0.0.5:18019\|42`) | 60s |
 
-Lifecycle: set on Helmsman connect, refreshed on every heartbeat, deleted on disconnect. If Foghorn crashes, keys expire within 60s.
+Lifecycle: **fenced-CAS acquired** on Helmsman connect (`AcquireConnOwnerFenced` — takes the key only when the connection's fence is strictly higher than any current owner), refreshed on every heartbeat (`RefreshConnOwnerFenced` — renews only while still owner; returns `ErrConnOwnerLost` to close a superseded stream), deleted on disconnect (matched by instance + fence so an old connection's teardown cannot delete a newer owner). If Foghorn crashes, keys expire within 60s.
 
 #### Address Discovery
 
@@ -136,9 +136,9 @@ Federation commands (e.g., PrepareArtifact from Cluster A) land on a random Fogh
 
 ### Delivery Semantics
 
-A successful `Send*` return does not mean the Helmsman or the underlying MistServer received the command. `SendLocal*` (e.g., `SendLocalDVRStop` at `api_balancing/internal/control/server.go:1642`) returns whatever `c.stream.Send(msg)` returns — gRPC accepted the message into its send buffer. The bytes may still be lost if the underlying connection dies before flush.
+A successful `Send*` return does not mean the Helmsman or the underlying MistServer received the command. `SendLocal*` (e.g., `SendLocalDVRStop` at `api_balancing/internal/control/server.go:1878`) returns whatever `c.stream.Send(msg)` returns — gRPC accepted the message into its send buffer. The bytes may still be lost if the underlying connection dies before flush.
 
-The HA forward layer (`commandRelay.forward` at `server.go:539`) adds one more layer of confirmation: peer A returns `ForwardCommandResponse{Delivered: true}` (`api_balancing/internal/grpc/relay_server.go:108`) only if its `SendLocal*` dispatch succeeded. This still represents buffer-accept on the peer, not Mist confirmation.
+The HA forward layer (`CommandRelay.forward` at `server.go:728`) adds one more layer of confirmation: peer A returns `ForwardCommandResponse{Delivered: true}` (`api_balancing/internal/grpc/relay_server.go:106`) only if its `SendLocal*` dispatch succeeded. This still represents buffer-accept on the peer, not Mist confirmation.
 
 Three patterns exist in the codebase for getting stronger guarantees. Each command-type should be classified into one of them.
 
@@ -148,11 +148,11 @@ The bidirectional control stream is already used for request/response on command
 
 Current users:
 
-- `ValidateEdgeToken` — response at `server.go:2679`
-- `EdgeMistAdminSession` — response at `server.go:2810`
-- `ThumbnailUpload` — response at `server.go:5493`
+- `ValidateEdgeToken` — response sent by `sendEdgeTokenResponse` (`server.go:7477`)
+- `EdgeMistAdminSession` — response sent by `sendEdgeMistAdminSessionResponse` (`server.go:7523`)
+- `ThumbnailUpload` — response sent in `processThumbnailUploadRequest` (`server.go:7846`)
 
-Most other commands carry a `RequestId` field (see `RelayRequestID` at `server.go:665`) but no response handler exists for them; the field is used only for logs.
+Most other commands carry a `RequestId` field (see `RelayRequestID` at `server.go:854`) but no response handler exists for them; the field is used only for logs.
 
 #### Pattern 2 — Intent in Redis with atomic consume
 
@@ -160,8 +160,8 @@ Desired action is written to a Redis key with TTL. The instance that observes th
 
 Current users:
 
-- Pending DVR stop: `{cluster_id}:pending_dvr_stop:{internal_name}` with TTL `pendingDVRStopTTL = 30 * time.Minute` (`api_balancing/internal/state/redis_store.go:17`); consumed via the `getAndDelete` Lua script (`redis_store.go:32-38`) when `StartDVR` arrives.
-- Origin-pull arbitration: `{cluster_id}:origin_pull_lock:{stream_name}` via `SET NX EX` with the holder's `instanceID`; released via owner-checked Lua (`releaseLeaseScript`, `redis_store.go:48-54`).
+- Pending DVR stop: `{cluster_id}:pending_dvr_stop:{internal_name}` with TTL `pendingDVRStopTTL = 30 * time.Minute` (`api_balancing/internal/state/redis_store.go:18`); consumed via the `getAndDelete` Lua script (`redis_store.go:33-39`) when `StartDVR` arrives.
+- Origin-pull arbitration: `{cluster_id}:origin_pull_lock:{stream_name}` via `SET NX EX` with the holder's `instanceID`; released via owner-checked Lua (`releaseLeaseScript`, `redis_store.go:49-55`).
 
 #### Pattern 3 — Periodic reconcile loop
 
@@ -169,20 +169,20 @@ A loop on each instance re-derives desired state from authoritative storage and 
 
 Current users:
 
-- TLS certificate distribution: `StartCertRefreshLoop` (`server.go:5915`) re-issues `ConfigSeed` to every node every interval; a single drop is healed on the next tick.
+- TLS certificate distribution: `StartCertRefreshLoop` (`server.go:6898`) re-issues `ConfigSeed` to every node every interval; a single drop is healed on the next tick.
 
 #### Known Delivery Gaps
 
 These are control commands where the current "fire once, return buffer-accept" semantic is the only convergence mechanism. They are tracked here as backlog; they are not addressed in code yet.
 
-| Command                                         | Current semantic                                         | Why a single drop matters                                                                                              | Proposed pattern                                                                                                                                                           |
-| ----------------------------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `commandRelay.forward` stale-owner path         | Evict and return error (`server.go:580-583, 595-598`)    | During connection failover the new owner has already written its key; the caller never sees it                         | One re-`GetConnOwner` and retry after `evictStale()`                                                                                                                       |
-| `SendStopSessions` (tenant kill)                | Per-node loop, log on error, continue                    | No observer event corresponds to "sessions stopped"; tenant keeps streaming through delinquency                        | Pattern 1: Helmsman acks with terminated count                                                                                                                             |
-| `SendDVRStop` on a running stream               | One-shot send via relay (`server.go:1656-1674`)          | Disk continues filling until the publisher disconnects                                                                 | Pattern 2: write `{cluster_id}:dvr_stop_intent:{internal_name}:{dvr_hash}` with TTL; `RECORDING_END` handler does GETDEL; sweep retries unmatched intents older than grace |
-| `ActivatePushTargets` / `DeactivatePushTargets` | One-shot send via relay                                  | Desired-state by nature; a drop leaves the node in the opposite state until the next user action triggers a fresh send | Pattern 3: per-node reconcile against the desired push-target set                                                                                                          |
-| `ApplyManagedStream` / `RetractManagedStream`   | One-shot send via relay                                  | Same as above; desired-state managed-stream configs                                                                    | Pattern 3: per-node reconcile against the desired managed-stream set                                                                                                       |
-| `ClipDelete` / `DvrDelete` / `VodDelete`        | One-shot send; populates `RequestId` that is never acked | Orphan cleanup is the failure mode; eventually retried by cleanup loops                                                | Drop the unused `RequestId` for explicitness, or wire pattern 1 if cleanup confirmation becomes load-bearing                                                               |
+| Command                                         | Current semantic                                                                                | Why a single drop matters                                                                                              | Proposed pattern                                                                                                                                                           |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CommandRelay.forward` stale-owner path         | Evict and return error (`evictStale` call sites in `CommandRelay.forward`, `server.go:760-797`) | During connection failover the new owner has already written its key; the caller never sees it                         | One re-`GetConnOwner` and retry after `evictStale()`                                                                                                                       |
+| `SendStopSessions` (tenant kill)                | Per-node loop, log on error, continue                                                           | No observer event corresponds to "sessions stopped"; tenant keeps streaming through delinquency                        | Pattern 1: Helmsman acks with terminated count                                                                                                                             |
+| `SendDVRStop` on a running stream               | One-shot send via relay (`SendDVRStop`, `server.go:1893-1910`)                                  | Disk continues filling until the publisher disconnects                                                                 | Pattern 2: write `{cluster_id}:dvr_stop_intent:{internal_name}:{dvr_hash}` with TTL; `RECORDING_END` handler does GETDEL; sweep retries unmatched intents older than grace |
+| `ActivatePushTargets` / `DeactivatePushTargets` | One-shot send via relay                                                                         | Desired-state by nature; a drop leaves the node in the opposite state until the next user action triggers a fresh send | Pattern 3: per-node reconcile against the desired push-target set                                                                                                          |
+| `ApplyManagedStream` / `RetractManagedStream`   | One-shot send via relay                                                                         | Same as above; desired-state managed-stream configs                                                                    | Pattern 3: per-node reconcile against the desired managed-stream set                                                                                                       |
+| `ClipDelete` / `DvrDelete` / `VodDelete`        | One-shot send; populates `RequestId` that is never acked                                        | Orphan cleanup is the failure mode; eventually retried by cleanup loops                                                | Drop the unused `RequestId` for explicitness, or wire pattern 1 if cleanup confirmation becomes load-bearing                                                               |
 
 Send-buffer race (`c.stream.Send` returns nil, TCP dies before flush) is only fully solved by an end-to-end ack — pattern 1 for commands that need it. For pattern-2 and pattern-3 commands the race is benign: the observer event or the next reconcile tick re-converges. gRPC keepalive eventually marks the dead stream so future sends to that node go through the relay path with a fresh `conn_owner`.
 
@@ -223,6 +223,8 @@ Acceptance specs live in `api_balancing/internal/state/ha_ordering_spec_test.go`
 
 Whole-struct snapshots over the changelog are only safe for **single-writer** state: each node's metrics, health, and stream instances funnel through that node's conn-owner instance, so the log totally orders one writer's snapshots. State writable from multiple instances must not ride them — last-snapshot-wins drops the other writer's contribution even with perfect ordering. Each multi-writer field gets one of three shapes:
 
+> **Caveat — changelog IDs do NOT order across a conn-ownership handoff.** "Single-writer" holds only while one connection owns a node. During a reconnect/failover the owner changes, and a stale old-owner's snapshot can still be appended _after_ the new owner's — earning a higher entry ID and winning the watermark. Redis Stream IDs order by _append_ order, not report/ownership order. The **whole-node artifact inventory** therefore does not rely on the changelog watermark alone: it carries the connection **ownership fence** (issued monotonically at Register from a Postgres sequence) plus a per-connection sequence, and orders by `(fence, seq)` at **every** sink — in-memory acceptance gate, Postgres `node_artifact_report_watermark` CAS, the Redis key (a fenced `SetNodeArtifactsFenced` Lua CAS on a companion `artifacts_wm` watermark), and the changelog apply (gated by the `(fence, seq)` carried on every `NodeArtifactState` row, not the entry ID). Connection ownership itself is a **fenced `conn_owner` CAS**: `AcquireConnOwnerFenced` only takes the key when the caller's fence is strictly higher, a superseded registration is rejected (fail closed), and the losing connection is torn down when its `RefreshConnOwnerFenced` returns `ErrConnOwnerLost`. Redis being unreachable at acquire time also fails closed (the registration is rejected) so an unfenced owner never serves. A genuinely single-Foghorn cell runs without Redis (the fence is still enforced in memory + Postgres); multi-Foghorn without Redis remains unsupported (there is no shared ownership to fence).
+
 - **Derived at read time** — the stream-union aggregates (`Viewers`, `TotalConnections`, `Inputs`, `BytesUp`, `BytesDown`). Per-(stream,node) instances are single-writer and replicate; the union is their sum, computed in the state getters (`deriveUnionStatsLocked`). The stored union fields still serialize (old-peer wire compat, each writer stores its own derived view) but are never served from an incoming snapshot.
 - **Own keyed changelog entity** — `NodeState.OperationalMode` travels as `node_mode` entries with an independent watermark (`{cluster_id}:node_mode:{node_id}` write-through key). Incoming **node snapshots never overwrite a locally-known mode** (an in-flight heartbeat marshaled before a mode change would otherwise republish the old mode at a newer entry ID); first sight of an unknown node still adopts the snapshot's mode. `SetNodeOperationalMode` stays Postgres-first (`foghorn.node_maintenance`) and publishes both the dedicated entity and the node snapshot, so mixed-version peers converge during a rolling deploy; a mode set through an old-version instance reaches new instances via the 180s Postgres reconcile.
 - **Local-only soft state** — `AddBandwidth`/`PendingRedirects` (the bandwidth penalty for this instance's pending redirects). They derive from the virtual-viewer set, which is never replicated, so a peer's values are meaningless here: the node-snapshot merge keeps local values and zeroes them for unknown nodes (a fresh replica has no pending redirects; a restarted instance's penalties died with its process). Peer redirects surface in `UpSpeed` within one heartbeat. The non-serialized scoring inputs (`BinHost`, `EstBandwidthPerUser`, `LastPollTime`) are carried over in the same merge for the same reason.
@@ -250,6 +252,36 @@ For artifacts with no kind hint, the Commodore fallback probes clip→vod→dvr;
 
 Wiring lives in `cmd/foghorn/main.go` (`identity.SetDefault`); the facade itself imports no other internal package, with layers injected as narrow adapters — it works in every deployment shape, including registry-less tests and single-instance cells.
 
+## Control Cells (VirtualFoghorn)
+
+A **cell** is one Foghorn pool (the instances sharing a Redis, as described above). The control-cell model decouples "which clusters a cell serves" from "which cluster the cell physically runs in": every tenant-private / marketplace / self-hosted cluster is assigned a regional Foghorn control cell that owns Helmsman ConfigSeed distribution, tenant-alias TLS bundle delivery, and edge apply-state for it. Platform-official clusters control themselves (`control_cell_id = cell_id`). This is what lets a customer's self-hosted edge cluster run without its own Foghorn — a platform cell "virtually" controls it.
+
+### Schema (quartermaster.infrastructure_clusters)
+
+| Column                      | Meaning                                                                                                                                                     |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `control_cell_id`           | The Foghorn cell that controls this cluster. NULL until assignment runs; empty/self means the cluster controls itself (platform_official).                  |
+| `eligible_serving_cell_ids` | Foghorn cells authorized to serve content from this cluster. Defaults to `[control_cell_id]`; intended to be populated when multi-cell serving is opted in. |
+| `reassignment_state`        | NULL in steady state; CHECK-constrained to `'draining'` for an operator-initiated control-cell reassignment.                                                |
+
+### How assignments are populated (enforced today)
+
+- **GitOps bootstrap**: the cluster manifest carries `cell` / `class` / `control_cell` / `eligible_serving_cells`, with render-time defaults in `cli/pkg/bootstrap/render.go` (Cell ← cluster ID, ControlCell ← Cell, EligibleServingCells ← [ControlCell]); Quartermaster's desired-state reconciler upserts them (`api_tenants/internal/bootstrap/clusters.go`).
+- **Runtime creation**: `CreatePrivateCluster` / `EnableSelfHosting` (`api_tenants/internal/grpc/server.go`) pick a control cell by scoring healthy `platform_official` Foghorn instances (internal-control listener, running + healthy) on load and geo, then write `control_cell_id` = chosen cell and `eligible_serving_cell_ids` = `[control cell]` in the same transaction that creates the cluster row, owner access grant, and Foghorn `service_cluster_assignments` row.
+
+### What consumes the assignment (enforced today)
+
+- **Navigator tenant-alias DNS membership**: the alias apply-state worker (`api_dns/internal/worker/tenant_alias_worker.go`) only publishes a cluster's edges into a tenant's DNS set when `ClusterControlCellHealthy` passes — resolved via Quartermaster `GetCluster` → `control_cell_id` → the _control cell's_ `health_status`. A degraded or offline controlling cell drops its controlled clusters out of the membership set until it recovers. Empty/self control cell falls back to the cluster's own health.
+- **Public Foghorn addressing**: `lookupClusterPublicFoghornGRPC` falls back to the control cell's `base_url` when the controlled cluster has none, and a background repair batch copies the control cell's `base_url` onto `tenant_private` clusters missing one (`tenant_private_repair.go`).
+- The columns are exposed on the `InfrastructureCluster` proto (`ControlCellId`, `EligibleServingCellIds`) for any reader of `GetCluster`.
+
+### Schema-only today (not enforced)
+
+Be precise about what does **not** exist yet — until v0.2.33 this model lived only in SQL comments, and parts of those comments are still aspirational:
+
+- **`reassignment_state` has no writer or reader.** The `ReassignClusterControlCell` RPC named in the migration comment does not exist anywhere in the codebase; nothing ever sets `'draining'`, and Navigator does not filter on it. The drain-then-ACK reassignment flow (including the `GetEdgeApplyState` ACK the comment references) is design intent only.
+- **`eligible_serving_cell_ids` has no serving-path consumer.** It is written at creation and carried on the proto, but neither Foghorn routing nor Navigator reads it — multi-cell serving authorization is not enforced anywhere. Today the effective serving set is whatever `service_cluster_assignments` says.
+
 ## Key Schema
 
 ### Local State (StreamStateManager)
@@ -259,9 +291,10 @@ Wiring lives in `cmd/foghorn/main.go` (`identity.SetDefault`); the facade itself
 | `{cluster_id}:streams:{stream_name}`                    | JSON: StreamState (node_id, tenant_id, status, tracks, viewers, buffer_state) | None (authoritative) |
 | `{cluster_id}:stream_instances:{stream_name}:{node_id}` | JSON: StreamInstanceState (per-node stream data)                              | None                 |
 | `{cluster_id}:nodes:{node_id}`                          | JSON: NodeState (base_url, geo, cpu, ram, bw, artifacts)                      | None                 |
-| `{cluster_id}:artifacts:{node_id}`                      | JSON: list of artifacts stored on that node                                   | None                 |
+| `{cluster_id}:artifacts:{node_id}`                      | JSON: list of artifacts stored on that node (written under the fenced CAS)    | None                 |
+| `{cluster_id}:artifacts_wm:{node_id}`                   | String: `fence-seq` watermark gating the artifacts key write                  | None                 |
 | `{cluster_id}:node_mode:{node_id}`                      | JSON: nodeModeRecord (mode, set_by, set_at) — multi-writer-safe mode record   | None                 |
-| `{cluster_id}:conn_owner:{node_id}`                     | String: `instanceID\|grpcAddr`                                                | 60s                  |
+| `{cluster_id}:conn_owner:{node_id}`                     | String: `instanceID\|grpcAddr\|fence` (fenced CAS ownership)                  | 60s                  |
 
 ### Federation Telemetry (RemoteEdgeCache)
 

@@ -211,23 +211,24 @@ query {
 }
 ```
 
-For stream-scoped media views, chapter artifacts also surface through `vodAssetsConnection(streamId: ...)` with `originType: "dvr_chapter"`. Omit `streamId` to get the normal tenant VOD library, which only returns library-visible user uploads.
+For stream-scoped media views, chapter artifacts also surface through `storageArtifactsConnection` when you request `kinds: [VOD, CHAPTER]` and pass a `streamId`. Omit `streamId` to get the normal tenant VOD library, which only returns library-visible user uploads.
 
 ```graphql
 query StreamVodArtifacts {
-  vodAssetsConnection(streamId: "stream-global-id", page: { first: 20 }) {
-    edges {
-      node {
-        id
-        playbackId
-        streamId
-        originType
-        originId
-        title
-        status
-        createdAt
-      }
+  storageArtifactsConnection(
+    input: { kinds: [VOD, CHAPTER], streamId: "stream-global-id", first: 20, offset: 0 }
+  ) {
+    nodes {
+      id
+      kind
+      playbackId
+      streamId
+      title
+      status
+      createdAt
     }
+    totalCount
+    hasNextPage
   }
 }
 ```
@@ -259,20 +260,21 @@ The DVR system default is 30 days. A tenant can lift or shorten it per-class via
 
 ```graphql
 query {
-  dvrRecordingsConnection(streamId: "stream-global-id", page: { first: 10 }) {
-    edges {
-      node {
-        dvrHash
-        playbackId
-        title
-        createdAt
-        expiresAt
-        durationSeconds
-        sizeBytes
-        status
-        isExpired
-      }
+  storageArtifactsConnection(
+    input: { kinds: [DVR], streamId: "stream-global-id", first: 10, offset: 0 }
+  ) {
+    nodes {
+      hash
+      playbackId
+      title
+      createdAt
+      expiresAt
+      durationSeconds
+      sizeBytes
+      status
     }
+    totalCount
+    hasNextPage
   }
 }
 ```
@@ -403,18 +405,20 @@ Once ready, clips are playable at the same URLs as any other content:
 ```graphql
 # List clips for a stream
 query {
-  clipsConnection(streamId: "stream-global-id", page: { first: 20 }) {
-    edges {
-      node {
-        id
-        title
-        playbackId
-        duration
-        status
-        createdAt
-        sizeBytes
-      }
+  storageArtifactsConnection(
+    input: { kinds: [CLIP], streamId: "stream-global-id", first: 20, offset: 0 }
+  ) {
+    nodes {
+      id
+      title
+      playbackId
+      durationSeconds
+      status
+      createdAt
+      sizeBytes
     }
+    totalCount
+    hasNextPage
   }
 }
 
@@ -525,36 +529,37 @@ Same URL pattern as all other content:
 ```graphql
 # List all library VOD uploads
 query {
-  vodAssetsConnection(page: { first: 20 }) {
-    edges {
-      node {
-        id
-        playbackId
-        title
-        status
-        sizeBytes
-        durationSeconds
-        createdAt
-      }
+  storageArtifactsConnection(input: { kinds: [VOD, CHAPTER], first: 20, offset: 0 }) {
+    nodes {
+      id
+      playbackId
+      title
+      status
+      sizeBytes
+      durationSeconds
+      createdAt
     }
+    totalCount
+    hasNextPage
   }
 }
 
 # List VOD-shaped artifacts derived from a stream, including DVR chapters
 query {
-  vodAssetsConnection(streamId: "stream-global-id", page: { first: 20 }) {
-    edges {
-      node {
-        id
-        playbackId
-        streamId
-        originType
-        originId
-        title
-        status
-        createdAt
-      }
+  storageArtifactsConnection(
+    input: { kinds: [VOD, CHAPTER], streamId: "stream-global-id", first: 20, offset: 0 }
+  ) {
+    nodes {
+      id
+      kind
+      playbackId
+      streamId
+      title
+      status
+      createdAt
     }
+    totalCount
+    hasNextPage
   }
 }
 

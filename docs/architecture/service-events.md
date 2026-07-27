@@ -29,7 +29,7 @@ Service Producer → Decklog (gRPC) → Kafka [service_events] → Periscope Ing
 Deckhand → Decklog → Kafka [service_events] → Signalman → GraphQL Subscriptions → UI
 ```
 
-**Note**: Signalman only forwards messaging‑related service events (e.g., message/conversation updates). `api_request_batch` is ignored.
+**Note**: Signalman only forwards messaging‑related service events (e.g., message/conversation updates). `api_request_batch` is ignored. A latent `skipper_investigation` → `CHANNEL_AI` routing branch exists in Signalman (`api_realtime/cmd/signalman/main.go`), but nothing currently produces that event type, so it is functionally unused today.
 
 ---
 
@@ -100,7 +100,10 @@ Event types are string constants emitted by services. The list below reflects cu
 **Artifacts (Commodore + Foghorn)**
 
 - `artifact_registered` (Commodore)
-- `artifact_lifecycle` (Foghorn, emitted alongside clip/DVR/VOD lifecycle analytics)
+
+Foghorn does **not** emit a derived `artifact_lifecycle` ServiceEvent. It emits the typed
+clip/DVR/VOD lifecycle event (MistTrigger analytics); the analytics ingest service fans that out into
+the `artifact_state_current` overlay and the `artifact_events` history.
 
 **Billing (Purser)**
 
@@ -128,10 +131,11 @@ Event types are string constants emitted by services. The list below reflects cu
 
 **Notes**
 
+- Quartermaster does not call Decklog inline: it enqueues its service events into its own transactional outbox (`quartermaster.service_event_outbox`, written inside the state-changing transaction) and a drain worker delivers them to Decklog with retry/backoff (`api_tenants/internal/grpc/service_event_outbox.go`). Quartermaster also keeps separate Navigator intent outboxes (`navigator_custom_domain_outbox`, `navigator_tenant_alias_outbox`) for custom-domain/tenant-alias intents — those carry DNS/ingress intents to Navigator, not service events, and the full pipeline is documented on the Quartermaster/Navigator side.
+- Foghorn's artifact events use the same transactional-outbox shape (`foghorn.artifact_event_outbox`); see the node-copy telemetry section of [analytics-pipeline.md](analytics-pipeline.md).
 - Demo mode skips ServiceEvent emission in the Gateway.
 - Only **metadata** is stored and broadcast for support events; message content is excluded.
 - API usage aggregates include **HMAC-hashed** user/token identifiers for unique counts (no raw IDs stored).
-- Foghorn emits `artifact_lifecycle` service events via the Decklog client when sending clip/DVR/VOD lifecycle analytics.
 - Commodore emits `media.retention_policy.changed`, `media.retention.override_applied`, and `media.retention.override_reset` for customer-tunable storage retention changes.
 - Commodore emits `stream_updated` with `push_targets` or `playback_policy` in `changed_fields` when those stream-level controls change, and `playback_policy_changed` ArtifactEvents for clip/VOD playback policy changes.
 - Usage tracking reserves system tenant UUIDs (including an anonymous usage bucket) to avoid dropping unauthenticated traffic from rollups.
@@ -186,6 +190,7 @@ default unless a manifest topic config overrides it.
 - Periscope Ingest and Signalman wrap Kafka handlers and publish failures to `decklog_events_dlq`.
 - DLQ payloads are JSON with base64-encoded keys/values and the original headers for replay.
 - Include `tenant_id` and `event_type` headers on DLQ messages to keep tenant-aware replay filters and routing intact.
+- Wrapper semantics (retryable-vs-permanent classification, `wrapWithDLQ` vs `wrapRetryOnly`, payload encoding) are documented in [decklog.md](decklog.md).
 
 **Replay**
 

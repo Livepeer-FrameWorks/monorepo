@@ -152,7 +152,7 @@ Foghorn processor.handleStreamSource(trigger):
   If dvr+:
     → Recording-node DTSC (intra-cluster) or local manifest if this node
       is the recording origin
-    → If neither resolves locally AND federation cache has a peer
+    → If neither resolves locally AND the StreamRegistry has a peer
       cluster's `Location[peer].RecordingNodeID` for this stream's source,
       `tryArrangeDVRCrossCluster` calls `federation.DefaultArrange` to
       set up `dvr+<hash>` origin-pull from the peer's recording node
@@ -216,7 +216,7 @@ Three layers prevent circular replication between clusters:
 
 ### Layer 1: Pre-Arrangement Check
 
-Before calling `NotifyOriginPull`, check `RemoteReplicationEntry` records in Redis. If the target cluster is already replicating this stream from us, skip.
+Before calling `NotifyOriginPull`, check `RemoteReplicationEntry` records in the `RemoteEdgeCache` (Redis; peer-availability entries fed by `ReplicationEvent` broadcasts — these remain in the federation cache, unlike per-stream replication state, which lives on the StreamRegistry). If the target cluster is already replicating this stream from us, skip.
 
 ```
 arrangeOriginPull():
@@ -258,10 +258,13 @@ The topology is **implicit and dynamic** — there is no fixed origin/hub/edge h
 - Scaling: more viewers → Foghorn selects edges with capacity → MistServer pulls from origin → star widens.
 - No proactive replication. All pulls are demand-driven (viewer or source request triggers them).
 
-### Not yet implemented (from RFC)
+### Not yet implemented (proposed in the orchestration RFC)
 
-- Hub-based inter-region replication (multi-hop cascade)
-- `max_replicas_total`, `max_replicas_per_region` policy fields
+Everything above is the demand-driven half. The proactive half — orchestrated replication — is proposed, not built; see `docs/rfcs/stream-replication.md` (Stream Replication Orchestration):
+
+- Pre-emptive spread: replicating a stream to a cell/region ahead of expected demand (operator action, per-stream policy, or predicted audience)
+- Hub-based inter-region replication (explicit origin/hub/edge roles, multi-hop cascade)
+- Per-stream replication policy: `max_replicas_total`, `max_replicas_per_region`, `allowed_regions` — intent homed in Commodore, entitlement in Quartermaster, enactment in Foghorn; a `replicate`-verb consumer of `docs/rfcs/placement-policy-engine.md`
 - Explicit topology graph with observability
 - Region metadata sourcing and validation
 

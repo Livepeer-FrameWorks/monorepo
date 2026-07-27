@@ -57,23 +57,23 @@ query LibraryPreviewInputs {
       name
     }
   }
-  clipsConnection(page: { first: 50 }) {
+  clips: storageArtifactsConnection(input: { kinds: [CLIP], first: 50, offset: 0 }) {
     nodes {
-      clipHash
+      hash
       playbackId
       title
     }
   }
-  dvrRecordingsConnection(page: { first: 50 }) {
+  recordings: storageArtifactsConnection(input: { kinds: [DVR], first: 50, offset: 0 }) {
     nodes {
-      dvrHash
+      hash
       playbackId
       title
     }
   }
-  vodAssetsConnection(page: { first: 50 }) {
+  vod: storageArtifactsConnection(input: { kinds: [VOD, CHAPTER], first: 50, offset: 0 }) {
     nodes {
-      artifactHash
+      hash
       playbackId
       title
     }
@@ -81,7 +81,7 @@ query LibraryPreviewInputs {
 }
 ```
 
-Use `https://{chandlerDomain}/assets/{assetId}/poster.jpg`, `sprite.jpg`, and `sprite.vtt`. `assetId` is `streamId` for live streams, `clipHash` for clips, `dvrHash` for DVR recordings, and `artifactHash` for VOD.
+Use `https://{chandlerDomain}/assets/{assetId}/poster.jpg`, `sprite.jpg`, and `sprite.vtt`. `assetId` is `streamId` for live streams and the artifact `hash` for clips, DVR recordings, and VOD.
 
 ## In the FrameWorks Player
 

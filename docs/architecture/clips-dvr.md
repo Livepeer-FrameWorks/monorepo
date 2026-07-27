@@ -7,13 +7,13 @@
 │  Commodore  │     │  Periscope  │     │  Signalman  │     │   Foghorn   │
 │  (Control)  │     │ (Analytics) │     │ (Real-time) │     │   (Media)   │
 ├─────────────┤     ├─────────────┤     ├─────────────┤     ├─────────────┤
-│ Business    │     │ Lifecycle   │     │ Live Kafka  │     │ Artifact    │
-│ Registry    │     │ State       │     │ Events      │     │ Operations  │
-│ - ownership │     │ - status    │     │ - progress  │     │ - storage   │
-│ - titles    │     │ - size      │     │ - stage     │     │ - S3 sync   │
-│ - stream    │     │ - file path │     │ - errors    │     │ - routing   │
-│ - retention │     │ - s3_url    │     │             │     │             │
-│             │     │            │     │             │     │             │
+│ Business +  │     │ Transient   │     │ Live Kafka  │     │ Artifact    │
+│ Catalog     │     │ Overlay     │     │ Events      │     │ Operations  │
+│ - ownership │     │ - hasLocal  │     │ - progress  │     │ - storage   │
+│ - titles    │     │   Copy      │     │ - stage     │     │ - S3 sync   │
+│ - stream    │     │ - live      │     │ - errors    │     │ - routing   │
+│ - retention │     │   progress  │     │             │     │             │
+│ - sync/s3   │     │             │     │             │     │             │
 └─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
        │                   │                   │                   │
        └───────────┬───────┴───────────────────┴───────────────────┘
@@ -33,12 +33,12 @@
 
 ## Service Responsibilities
 
-| Service       | Role          | Data                                                     | Query Pattern                                                           |
-| ------------- | ------------- | -------------------------------------------------------- | ----------------------------------------------------------------------- |
-| **Commodore** | Control Plane | Business registry (ownership, titles, stream, retention) | GraphQL queries for clip/DVR listings                                   |
-| **Periscope** | Analytics     | Lifecycle state (stage, size, file path, s3_url)         | GraphQL lifecycle field resolvers (ArtifactLifecycleLoader) batch-fetch |
-| **Signalman** | Real-time     | Live Kafka events                                        | GraphQL subscriptions                                                   |
-| **Foghorn**   | Media Plane   | Artifact operations (storage, S3 sync, routing)          | Internal gRPC for mutations                                             |
+| Service       | Role          | Data                                                                                                                                | Query Pattern                                                     |
+| ------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| **Commodore** | Control Plane | Business registry (ownership, titles, stream, retention) + durable lifecycle catalog (sync/finalize/freeze, size, duration, tracks) | `ListStorageArtifacts` — one unified catalog query for every kind |
+| **Periscope** | Analytics     | Transient overlay only (`hasLocalCopy` — present full local node copy, live progress)                                               | Gap-fill on top of the durable catalog                            |
+| **Signalman** | Real-time     | Live Kafka events                                                                                                                   | GraphQL subscriptions                                             |
+| **Foghorn**   | Media Plane   | Artifact operations (storage, S3 sync, routing)                                                                                     | Internal gRPC for mutations                                       |
 
 ## GraphQL Data Flow
 
@@ -47,26 +47,28 @@
 Frontend executes a single GraphQL query:
 
 ```graphql
-query GetClips($streamId: ID, $first: Int, $after: String) {
-  clipsConnection(streamId: $streamId, page: { first: $first, after: $after }) {
-    edges {
-      node {
-        # Business metadata → Commodore
-        id
-        clipHash
-        playbackId
-        streamId
-        title
-        createdAt
-        expiresAt
+query GetClips($streamId: ID, $first: Int, $offset: Int) {
+  storageArtifactsConnection(
+    input: { kinds: [CLIP], streamId: $streamId, first: $first, offset: $offset }
+  ) {
+    nodes {
+      # Business metadata → Commodore
+      id
+      hash
+      playbackId
+      streamId
+      title
+      createdAt
+      expiresAt
 
-        # Lifecycle state → Periscope (field resolvers via ArtifactLifecycleLoader)
-        status
-        sizeBytes
-        storageLocation
-        isFrozen # Boolean (nullable — null when lifecycle state unavailable)
-        isExpired # Boolean! (derived from retention_until)
-      }
+      # Durable lifecycle state → Commodore catalog (projected from Foghorn)
+      status
+      sizeBytes
+      storageLocation
+      isSynced # Boolean (nullable — null when lifecycle state unavailable)
+      isFinalized # Boolean (nullable — null when lifecycle state unavailable)
+      # Observed placement overlay → Periscope (present full local node copy: origin or cache)
+      hasLocalCopy # Boolean (nullable — null when placement overlay unavailable)
     }
   }
 }
@@ -74,10 +76,22 @@ query GetClips($streamId: ID, $first: Int, $after: String) {
 
 Gateway handles this as:
 
-1. **Parent resolver** calls Commodore `GetClips` → returns business metadata
-2. **Parent resolver** prefetches lifecycle data via `ArtifactLifecycleLoader.LoadMany`, which batch-calls Periscope `GetArtifactStates(request_ids: [clip_hash/dvr_hash])`
-3. **Lifecycle field resolvers** read from the request-scoped loader cache (`Load`) to avoid duplicate lookups
-4. Gateway merges results and returns unified response
+1. **Single resolver** calls Commodore `ListStorageArtifacts` → returns the unified catalog row
+   for every kind (clip/DVR/chapter/VOD), carrying both the business metadata AND the durable
+   lifecycle facts (`syncStatus`/`isSynced`/`isFinalized`/`storageLocation`/duration/tracks). These
+   lifecycle facts are the durable catalog projection written by the Foghorn artifact reconciler
+   (`UpdateArtifactCatalogSnapshot`), so they survive a Periscope rebuild.
+2. **Transient overlay** — the observed placement signal (`hasLocalCopy` = a full local node copy
+   exists on at least one node, origin or cache, plus live progress) is gap-filled from Periscope's
+   node-copy placement on top of the durable catalog; it is never sourced from the catalog's
+   `frozen_at`, and is **nullable** — null means the placement overlay is unavailable (unknown), NOT
+   `false`. The durable fields (`isSynced`/`isFinalized`) are never overwritten by the overlay. The
+   former overloaded `isFrozen` field is removed, and so is the duplicate `isHot` field (`hasLocalCopy`
+   is now the single canonical placement field): the durable "in S3" fact is `isSynced`, and the
+   S3-only / read-through-relay state is **derived** by consumers as `isSynced && hasLocalCopy === false`
+   (only claimed when sync is confirmed AND the overlay reports no local node copy; never claimed while
+   `hasLocalCopy` is null/unknown).
+3. Gateway returns the unified response.
 
 ### Subscriptions (Live Updates)
 
@@ -105,14 +119,15 @@ Frontend → Gateway → Commodore.CreateClip → Foghorn.CreateClip
 
 ## State Classification
 
-| State Type              | Description                                                        | Owner     | Storage                             | Query Source            |
-| ----------------------- | ------------------------------------------------------------------ | --------- | ----------------------------------- | ----------------------- |
-| **Business Registry**   | tenant_id, user_id, stream_id, title, description, retention       | Commodore | PostgreSQL                          | GraphQL parent resolver |
-| **Lifecycle State**     | stage, size_bytes, file_path, s3_url, manifest_path, error_message | Periscope | ClickHouse `artifact_state_current` | GraphQL field resolvers |
-| **Artifact Operations** | storage_location, node assignments, sync status                    | Foghorn   | PostgreSQL                          | Internal gRPC only      |
-| **Real-time Events**    | Live progress updates, stage changes                               | Signalman | Kafka passthrough                   | GraphQL subscriptions   |
+| State Type                  | Description                                                                    | Owner                                                        | Storage                             | Query Source                           |
+| --------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------ | ----------------------------------- | -------------------------------------- |
+| **Business Registry**       | tenant_id, user_id, stream_id, title, description, retention                   | Commodore                                                    | PostgreSQL                          | `ListStorageArtifacts` (unified)       |
+| **Durable Lifecycle State** | sync_status, is_synced, is_finalized, storage_location, size, duration, tracks | Commodore catalog (projected from Foghorn by the reconciler) | PostgreSQL                          | `ListStorageArtifacts` (same row)      |
+| **Artifact Operations**     | node assignments, S3 sync orchestration                                        | Foghorn                                                      | PostgreSQL (`foghorn.artifacts`)    | Internal gRPC only (never read live)   |
+| **Transient Overlay**       | `hasLocalCopy` (present full local node copy: origin or cache), live progress  | Periscope                                                    | ClickHouse `artifact_state_current` | Gap-fill on top of the durable catalog |
+| **Real-time Events**        | Live progress updates, stage changes                                           | Signalman                                                    | Kafka passthrough                   | GraphQL subscriptions                  |
 
-Note: `storageLocation`/`isFrozen` are derived in GraphQL from Periscope `s3_url` (not stored directly in ClickHouse). `isFrozen` is nullable (returns null when lifecycle state is unavailable). `isExpired` is derived from `retention_until`.
+Note: the durable lifecycle fields (`syncStatus`/`isSynced`/`isFinalized`/`storageLocation`) come from the Commodore catalog row, written by the single-writer reconciler projection from `foghorn.artifacts` — so they survive a Periscope rebuild. `isExpired` is derived from `retention_until`. Only the ephemeral placement overlay — `hasLocalCopy` (present full local node copy on at least one node, origin or cache; nullable = unknown), plus live progress — is sourced from Periscope. There is no `isFrozen` field and no duplicate `isHot` field; `hasLocalCopy` is the single canonical placement field. S3-only / read-through-relay is derived as `isSynced && hasLocalCopy === false`.
 
 ### Data Flow During Processing
 
@@ -158,10 +173,10 @@ Schemas: `pkg/database/sql/schema` (clips, dvr_recordings), `pkg/database/sql/sc
 ### Commodore InternalService
 
 ```protobuf
-// Register a new clip in the business registry
-rpc RegisterClip(RegisterClipRequest) returns (RegisterClipResponse);
-
-// Register a new DVR recording in the business registry
+// Register a new DVR recording in the business registry (Foghorn → Commodore
+// during StartDVR; mints the DVR hash, business row, and creation intent).
+// Clips and VOD register their business rows directly in Commodore's CreateClip /
+// CreateVodUpload; there is no RegisterClip/RegisterVod RPC.
 rpc RegisterDVR(RegisterDVRRequest) returns (RegisterDVRResponse);
 
 // Resolve clip hash to tenant context (for analytics enrichment and playback)
@@ -225,9 +240,18 @@ Helmsman -> Foghorn (ClipLifecycle event with request_id + clip_hash)
 
 ```
 FREEZE (warm -> cold, S3 upload):
-  1. Foghorn sends FreezeRequest(artifact_hash) to Helmsman
-  2. Helmsman uploads to S3, returns s3_url
-  3. Foghorn updates: artifacts.sync_status='synced', artifacts.s3_url=url
+  1. Foghorn claims the freeze attempt, binding the exact canonical object key into
+     artifacts.sync_object_key, SERVER-MINTS the attempt id, and mints a presigned PUT for an ATTEMPT-SCOPED
+     STAGING key (sync_object_key + ".staging." + attempt_id) — NOT the canonical key; then sends
+     FreezeRequest(artifact_hash, attempt_id) to Helmsman. Only a lifecycle-ready (status='ready') artifact is claimable.
+  2. Helmsman uploads to that presigned STAGING URL (it never holds a PUT to the canonical object) and echoes
+     the attempt id at completion
+  3. On completion Foghorn HEAD-verifies the staged object, PUBLISHES it (server-side conditional copy) to a
+     FRESH immutable version key (sync_object_key + ".att-" + attempt_id) OUTSIDE the transaction, then the
+     guarded transaction atomically FLIPS the authoritative pointer artifacts.active_object_key (and s3_url /
+     vod_metadata.s3_key) to it and sets sync_status='synced'. Publishing to a fresh key means the copy never
+     overwrites a served object, so a rollback can never expose uncommitted bytes; a superseded previous
+     version and the staging object are durably enqueued for cleanup. The node's reported URL is not trusted.
   4. While the reporting node still has a warm copy, artifacts.storage_location remains 'local'
   5. If a remote-origin warm copy is evicted later, Foghorn removes that node cache and may mark the artifact S3-resident
 
@@ -243,7 +267,7 @@ COLD PLAYBACK (no local copy, read-through from S3):
 
 - **Commodore** emits `artifact_registered` ServiceEvents when clip/DVR/VOD registry records are created.
 - **Commodore** emits `media.retention_policy.changed`, `media.retention.override_applied`, and `media.retention.override_reset` ServiceEvents for retention policy changes and per-asset override changes.
-- **Foghorn** emits clip/DVR/VOD lifecycle analytics events (MistTrigger) **and** an `artifact_lifecycle` ServiceEvent (via Decklog client) for audit visibility.
+- **Foghorn** emits the typed clip/DVR/VOD lifecycle event (MistTrigger analytics); it does not emit a derived `artifact_lifecycle` ServiceEvent. The analytics ingest service fans that event out into the `artifact_state_current` overlay and the `artifact_events` history.
 - ServiceEvents are metadata-only; lifecycle analytics flow through Periscope.
 
 ## Cross-Cluster Artifact Access
@@ -375,6 +399,18 @@ Three background jobs manage artifact lifecycle:
 | `OrphanCleanupJob` | 5 min    | Send delete requests to Helmsman for deleted artifacts |
 | `PurgeDeletedJob`  | 24 hours | Hard-delete from DB + S3 (when no active node copies)  |
 
+**Library visibility vs. byte recovery.** An asset disappears from `/library` at
+**soft-delete**, not at hard-delete: when `RetentionJob` sets `status='deleted'`,
+the catalog reconciler projects a _deletion_ to Commodore (`UpdateArtifactCatalogSnapshot`
+with `deleted=true`) that removes the durable catalog row, so the asset stops
+showing as Ready on the very next reconcile pass (≤1h retention sweep + projection
+latency). The subsequent windows — `OrphanCleanupJob` evicting node copies and the
+`PurgeDeletedJob` **30-day** row/S3 purge below — are a media-plane **byte-recovery
+window**, not a library-visibility grace period; the asset is already gone from the
+user's library before any bytes are reclaimed. `'expired'` is only the brief
+transient state between the retention deadline passing and the sweep that soft-deletes
+the row.
+
 ### RetentionJob
 
 Uses `retention_until` to decide when terminal artifacts are soft-deleted.
@@ -410,28 +446,33 @@ WHERE a.status = 'deleted' AND NOT n.is_orphaned
 
 ### PurgeDeletedJob
 
-Final cleanup after local files are confirmed deleted. Runs every 24 hours.
+Final cleanup of `status IN ('deleted','failed')` artifacts past the retention age,
+once no non-orphaned node copy remains. Runs every 24 hours.
 
-**Database cleanup** (always performed):
+**Fail-closed — bytes first, then the row.** The sweep is gated on the artifact
+cleaner being wired: if it is absent, the job does **nothing** this cycle (it does
+NOT delete rows), because an origin Foghorn that delegates storage to peer clusters
+has no local S3 and still needs the federation delegate to free remote bytes.
+Deleting the row while bytes remain elsewhere would strand them. S3 (or the
+cross-cluster delegate) is deleted first; the DB row is hard-deleted only after that
+cleanup **definitively succeeds**, so a failure leaves the row for the next cycle to
+retry. Tenant identity comes from Foghorn's denormalized `artifacts.tenant_id` (no
+Commodore round-trip on the purge path).
 
 ```sql
-DELETE FROM foghorn.artifacts
-WHERE status = 'deleted'
+SELECT a.artifact_hash, a.artifact_type, a.tenant_id, ...
+FROM foghorn.artifacts a
+LEFT JOIN foghorn.vod_metadata v ON v.artifact_hash = a.artifact_hash
+WHERE a.artifact_type IN ('clip', 'dvr', 'vod')
+  AND a.status IN ('deleted', 'failed')
+  AND a.updated_at < NOW() - INTERVAL '30 days'
   AND NOT EXISTS (
-    SELECT 1 FROM foghorn.artifact_nodes
-    WHERE artifact_hash = foghorn.artifacts.artifact_hash
-    AND NOT is_orphaned
+    SELECT 1 FROM foghorn.artifact_nodes an
+    WHERE an.artifact_hash = a.artifact_hash AND an.is_orphaned = false
   )
-  AND updated_at < NOW() - INTERVAL '30 days'
+-- per row: delete S3/remote bytes via the cleaner, then DELETE the artifacts row
+-- only on confirmed cleanup success.
 ```
-
-**S3 cleanup** (conditional):
-
-- Requires S3 client configured in Foghorn
-- Requires tenant context resolvable via Commodore
-
-If either condition is not met, S3 cleanup is skipped and only the database
-records are deleted.
 
 ## VOD Uploads
 
@@ -461,18 +502,21 @@ artifact_type = 'vod'
 
 ### Gateway (api_gateway) - GraphQL Orchestration
 
-- `api_gateway` - Field resolver configuration for lifecycle fields
-- `api_gateway/graph` - Parent resolvers (Commodore) + field resolvers (Periscope)
-- `api_gateway/internal/loaders` - Batch loader for Periscope lifecycle data
-- `api_gateway/internal/resolvers` - GetClipsConnection, GetDVRRecordingsConnection
+- `api_gateway/internal/resolvers/storage_artifacts.go` - `storageArtifactsConnection` resolver:
+  one `ListStorageArtifacts` call returns the unified catalog (business + durable lifecycle) for
+  every kind; a transient overlay gap-fills only `hasLocalCopy`/live progress
+- `api_gateway/graph` - the unified `StorageArtifact` type (durable fields off the catalog)
 
-### Commodore (api_control) - Business Registry
+### Commodore (api_control) - Business Registry + Durable Catalog
 
-- `api_control/internal/grpc` - GetClips, ListDVRRequests (query own tables, NOT Foghorn)
+- `api_control/internal/grpc` - `ListStorageArtifacts` (unified query over own clips/
+  dvr_recordings/vod_assets tables, NOT Foghorn) and `UpdateArtifactCatalogSnapshot` (the sole
+  revision-guarded projection writer, called by the Foghorn reconciler)
 
-### Periscope (api_analytics_query) - Lifecycle State
+### Periscope (api_analytics_query) - Transient Overlay Only
 
-- `api_analytics_query/internal/grpc` - GetArtifactStates with request_ids filter
+- `api_analytics_query/internal/grpc` - GetArtifactStates with request_ids filter (present
+  full-local-node-copy `hasLocalCopy`/live progress overlay; NOT the durable lifecycle source)
 
 ### Foghorn (api_balancing) - Artifact Operations
 
@@ -491,7 +535,7 @@ artifact_type = 'vod'
 
 ### Frontend (website_application)
 
-- `pkg/graphql/operations/queries/GetClipsConnection.gql` - Clip queries with lifecycle fields
-- `pkg/graphql/operations/queries/GetDVRRequests.gql` - DVR queries with lifecycle fields
+- `pkg/graphql/operations/queries/GetStorageArtifactsConnection.gql` - unified catalog query
+  (all kinds) with durable lifecycle + duration + tracks
 - `pkg/graphql/operations/subscriptions/ClipLifecycle.gql` - Real-time updates
 - `pkg/graphql/operations/subscriptions/DvrLifecycle.gql` - Real-time updates

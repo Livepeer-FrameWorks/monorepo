@@ -1,6 +1,6 @@
 # Trigger durability
 
-Final/accounting Mist triggers (USER_END, STREAM_END, PUSH_END, RECORDING_END, RECORDING_SEGMENT, LIVEPEER_SEGMENT_COMPLETE, PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE) carry the ground-truth facts billing reads from. The pipeline must not drop them on the way from Mist to Kafka. This page describes the contract that guarantees that.
+Final/accounting Mist triggers (USER_END, STREAM_END, PUSH_END, PUSH_INPUT_CLOSE, RECORDING_END, RECORDING_SEGMENT, LIVEPEER_SEGMENT_COMPLETE, PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE) carry the ground-truth facts billing reads from. The pipeline must not drop them on the way from Mist to Kafka. This page describes the contract that guarantees that.
 
 ## Why it exists
 
@@ -12,7 +12,7 @@ The durability layer closes the gap with three changes:
 2. Foghorn emits a `MistTriggerAck` only after Decklog's `SendEvent` returns success (Decklog returns success only after its Kafka publish commits — so a positive ack means the trigger is durably ingested).
 3. Helmsman waits for the positive ack before truncating the WAL row. On disconnect, restart, or negative-but-retryable ack, the entry stays on disk and replays.
 
-The scope is intentionally narrow: only the seven final/accounting triggers above are wrapped. Best-effort triggers (heartbeats, `USER_NEW` admission, `STREAM_BUFFER` health, etc.) stay on the fire-and-forget path; their loss is recoverable from polling.
+The scope is intentionally narrow: only the eight final/accounting triggers above are wrapped. Best-effort triggers (heartbeats, `USER_NEW` admission, `STREAM_BUFFER` health, etc.) stay on the fire-and-forget path; their loss is recoverable from polling.
 
 ## Source of truth
 
@@ -40,13 +40,13 @@ Identical re-deliveries from Mist hash to the same id and collapse on the WAL fi
 
 `api_sidecar/internal/storage/trigger_wal.go`.
 
-- Directory: `FRAMEWORKS_TRIGGER_WAL_DIR`; native edge provisioning sets it to `/var/lib/frameworks/helmsman/trigger-wal`. If unset, Helmsman falls back to `$XDG_CACHE_HOME/frameworks/trigger-wal` or `/tmp/frameworks-trigger-wal`.
+- Directory: `FRAMEWORKS_TRIGGER_WAL_DIR`; native edge provisioning sets it to `/var/lib/frameworks/helmsman/trigger-wal`. If unset, Helmsman falls back to `$HELMSMAN_STORAGE_LOCAL_PATH/trigger-wal`, then the OS user cache dir (`os.UserCacheDir()`) under `frameworks/trigger-wal`, and finally `/tmp/frameworks-trigger-wal`.
 - One file per durable trigger: `<received_at_ms>-<source_event_id>.pb` containing the marshaled `pb.MistTrigger`.
 - Writes are atomic: write to `.tmp`, `fsync`, `rename` into place, then fsync the WAL directory. Append returns only after the file and directory entry are durable.
 - `Ack(source_event_id)` deletes the file (glob-on-id so any `received_at_ms` prefix works).
 - `DeadLetter(source_event_id)` renames non-retryable rows to `.dead`; they are no longer retried but remain inspectable on disk.
 - `Pending()` returns the protobuf-unmarshaled list in oldest-first order (sorted by filename, which has the millisecond prefix).
-- 30-day TTL is implicit — the file stays until it is acked or manually purged. Operators should monitor pending depth.
+- No TTL — the file stays until it is acked or manually purged. Operators should monitor pending depth.
 
 The package is a Go-only library; tests in `trigger_wal_test.go` cover idempotent append, idempotent ack, crash-restart recovery (open a fresh handle on the same dir), and ordered drain.
 
@@ -105,7 +105,7 @@ Foghorn maps processor errors via `classifyTriggerError` (`api_balancing/interna
 - **api_sidecar crashes between Mist's 200 OK and the next forwarder tick.** WAL is fsynced before the response, so the trigger survives. On restart, the forwarder calls `Pending()` and replays. Same `source_event_id` → idempotent across crashes.
 - **api_balancing crashes during processing.** Helmsman's `awaitAck` times out after 30s, the next forwarder tick re-sends. Foghorn re-enriches and re-publishes; downstream dedup on `EventId`.
 - **Decklog returns Kafka publish error.** Processor returns the error, Foghorn sends a negative retryable ack. WAL entry stays; next tick retries. This includes the raw trigger journal publish. If the underlying Kafka cluster is unavailable for hours, the WAL accumulates — operators see the pending-depth metric and can intervene.
-- **WAL append fails.** Helmsman returns `503` for the trigger handler and emits `webhook_request_total{status="wal_error"}`. Final/accounting handlers must not acknowledge Mist as successfully accepted if the local durable write failed.
+- **WAL append fails.** Helmsman returns `503` for the trigger handler and emits `mist_webhook_requests_total{status="wal_error"}`. Final/accounting handlers must not acknowledge Mist as successfully accepted if the local durable write failed.
 - **Helmsman parse/schema error after reading the body.** The raw body is wrapped in `RawMistWebhookTrigger` and durably journaled before `200 OK`, so MistServer parser drift cannot silently drop an accounting trigger. The raw envelope is operator-visible in `raw_mist_triggers`; typed final-fact projection simply skips it until the parser is fixed and the raw record is replayed.
 - **Downstream non-retryable error (schema/tenant).** The WAL entry is moved to a `.dead` file for inspection and is not retried. Re-sending the same payload would fail the same way. Operator inspects by reading the WAL directory.
 - **Trigger hash collision.** Mist would have to deliver two distinct triggers with identical `(node_id, trigger_type, payload_raw)`. SHA-256 collision in practice means this is impossible.
@@ -113,8 +113,8 @@ Foghorn maps processor errors via `classifyTriggerError` (`api_balancing/interna
 ## Operational handles
 
 - WAL directory pending file count is the canonical "is anything stuck?" signal.
-- `webhook_request_total{trigger_type, status}` carries `durably_enqueued`, `durably_enqueued_parse_error`, and `wal_error` statuses for each final/accounting handler.
-- `/internal/triggers/wal` lists pending rows and can kick an immediate drain. Replay is safe because retries use the same `source_event_id` and deterministic typed `event_id`; the WAL itself is idempotent by source id.
+- `mist_webhook_requests_total{trigger_type, status}` carries `durably_enqueued`, `durably_enqueued_parse_error`, and `wal_error` statuses for each final/accounting handler.
+- `GET /triggers/wal` lists pending rows; `POST /triggers/wal/replay` kicks an immediate drain. Replay is safe because retries use the same `source_event_id` and deterministic typed `event_id`; the WAL itself is idempotent by source id.
 
 ## Why not …
 
@@ -128,7 +128,7 @@ Foghorn maps processor errors via `classifyTriggerError` (`api_balancing/interna
 - `api_sidecar/internal/storage/trigger_wal.go` — WAL
 - `api_sidecar/internal/control/trigger_forwarder.go` — forwarder
 - `api_sidecar/internal/handlers/handlers.go` — Helmsman handlers (`forwardDurable`)
-- `api_balancing/internal/control/server.go` — Foghorn ack emission (`sendMistTriggerAck`, `triggerTypesNeedingDurableAck`)
+- `api_balancing/internal/control/server.go` — Foghorn ack emission (`sendMistTriggerAck`; the durable-set gate is `mist.IsDurableTriggerType` in `pkg/mist/triggers.go`)
 - `pkg/clients/decklog/client.go` — Decklog client; respects pre-set `EventId`
 - `api_firehose/internal/grpc/server.go` — Decklog server; ack-after-Kafka
 - `pkg/database/sql/clickhouse/periscope.sql` — `raw_mist_triggers` projection

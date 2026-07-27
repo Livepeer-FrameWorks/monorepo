@@ -73,28 +73,26 @@ subscription {
 
 ## Listing clips
 
-Clips paginate via the standard Relay-style `clipsConnection`. Filter by `streamId` to scope to a single source stream, or omit it to list all clips for the tenant.
+Clips are listed through the unified `storageArtifactsConnection` with `kinds: [CLIP]`. Pass `streamId` to scope to a single source stream, or omit it to list all clips for the tenant. Pagination is offset-based (`first`/`offset`).
 
 ```graphql
 query MyClips {
-  clipsConnection(page: { first: 20 }) {
-    edges {
-      node {
-        id
-        clipId
-        name
-        playbackId
-        startMs
-        endMs
-        createdAt
-        expiresAt
-      }
-    }
-    pageInfo {
-      hasNextPage
-      endCursor
+  storageArtifactsConnection(input: { kinds: [CLIP], first: 20, offset: 0 }) {
+    nodes {
+      id
+      key
+      hash
+      title
+      playbackId
+      streamId
+      createdAt
+      expiresAt
+      durationSeconds
     }
     totalCount
+    hasNextPage
+    limit
+    offset
   }
 }
 ```

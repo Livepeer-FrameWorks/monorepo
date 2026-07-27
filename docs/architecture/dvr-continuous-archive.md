@@ -192,7 +192,7 @@ Mist's `append=1 + noendlist=1` keeps the local rolling playlist appendable acro
 ## Pointers
 
 - Chapter standards (ID stability, mode validation, lost-segment semantics, public addressing): `docs/standards/dvr-chapters.md`
-- Operator runbook (`DVR_CLUSTER_MAX_*` envs, sweeper tuning, `completed_partial` triage): `website_docs/src/content/docs/operators/dvr.md`
+- Operator runbook (`DVR_CLUSTER_MAX_*` envs, sweeper tuning, `completed_partial` triage): `website_docs/src/content/docs/operators/dvr.mdx`
 - Public chapter API: `website_docs/src/content/docs/builders/dvr-chapters.mdx`
 - Tier policy resolver: `pkg/dvrpolicy/resolve.go`
 - Segment ledger repo: `api_balancing/internal/control/dvr_segments_repo.go`
