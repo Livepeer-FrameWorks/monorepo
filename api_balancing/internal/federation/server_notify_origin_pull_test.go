@@ -22,9 +22,10 @@ func testFederationServerWithCache(t *testing.T) (*FederationServer, *RemoteEdge
 	client := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
 	cache := NewRemoteEdgeCache(client, "cluster-a", logging.NewLogger())
 	server := NewFederationServer(FederationServerConfig{
-		Logger:    logging.NewLogger(),
-		ClusterID: "cluster-a",
-		Cache:     cache,
+		Logger:                   logging.NewLogger(),
+		ClusterID:                "cluster-a",
+		Cache:                    cache,
+		AllowFederationMutations: true,
 	})
 	// Install a per-test stream registry so NotifyOriginPull can record
 	// outbound pulls. Tests that want to exercise the registry-unavailable

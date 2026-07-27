@@ -187,6 +187,54 @@ func TestOfflineIsStreamWide_ReplicaNeverStreamWide(t *testing.T) {
 // concurrent-stream count drops, push-target tracking clears, and
 // SourceActive flips so the publisher's reconnect takes the resume path
 // instead of being rejected as a duplicate.
+// F6: when the stream owner is UNRESOLVABLE and the node merely ASSERTS a tenant, the owner-vanish path must
+// still run the NODE-authoritative effects (source-inactive, push untrack) but must NOT drive the TENANT-scoped
+// effects (concurrent-stream decrement, federation lifecycle broadcast) under the unverified asserted tenant —
+// otherwise a node could decrement/relabel a tenant that may not own the stream.
+func TestOwnerVanishUnresolvedTenantSkipsTenantScopedFinalization(t *testing.T) {
+	reg := installRegistryForTest(t)
+	state.ResetDefaultManagerForTests()
+	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	capacity := state.ResetDefaultTenantCapacityForTests()
+	t.Cleanup(func() { state.ResetDefaultTenantCapacityForTests() })
+
+	const internal = "vanish-unresolved-1"
+	const assertedTenant = "tenant-forged"
+	streamName := "live+" + internal
+	if r := reg.AdmitAndReserve(internal, "node-ingest", nil); r.Decision != control.AdmissionAcceptNew {
+		t.Fatalf("seed admit: %v", r.Decision)
+	}
+	// The stream's capacity is held under the forged tenant to prove it is NOT decremented by an unverified path.
+	capacity.RegisterStream(assertedTenant, internal)
+	trackPushTargets(streamName, assertedTenant, []*commodorepb.PushTargetInternal{{Id: "t1", TargetUri: "rtmp://example/push"}})
+	t.Cleanup(func() { untrackPushTargets(streamName) })
+
+	tenant := assertedTenant
+	streamID := "b3b1c1de-0000-4000-8000-000000000003"
+	p := minimalProcessorForStreamEnd(t) // NO resolver seed → owner is unresolvable
+	if _, _, err := p.handleStreamLifecycleUpdate(&ipcpb.MistTrigger{
+		TriggerType: "STREAM_LIFECYCLE_UPDATE",
+		StreamId:    &streamID,
+		NodeId:      "node-ingest",
+		TriggerPayload: &ipcpb.MistTrigger_StreamLifecycleUpdate{
+			StreamLifecycleUpdate: &ipcpb.StreamLifecycleUpdate{
+				TenantId: &tenant, NodeId: "node-ingest", InternalName: internal, Status: "offline",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("owner vanish: %v", err)
+	}
+
+	// Node-authoritative effect DID run (push tracking dropped).
+	if _, found := lookupPushTarget(streamName, "rtmp://example/push"); found {
+		t.Fatal("owner vanish must still drop push-target tracking (node-authoritative)")
+	}
+	// Tenant-scoped effect must NOT run under the unverified asserted tenant: the forged tenant's count stands.
+	if !capacity.HasStream(assertedTenant, internal) {
+		t.Fatal("an unresolved node-asserted tenant must NOT drive the concurrent-stream decrement")
+	}
+}
+
 func TestOwnerVanishRunsStreamEndFinalization(t *testing.T) {
 	reg := installRegistryForTest(t)
 	state.ResetDefaultManagerForTests()
@@ -209,6 +257,10 @@ func TestOwnerVanishRunsStreamEndFinalization(t *testing.T) {
 	tenant := tenantID
 	streamID := "b3b1c1de-0000-4000-8000-000000000002"
 	p := minimalProcessorForStreamEnd(t)
+	// The stream was admitted under a resolvable owner; seed the resolver so owner-vanish finalization runs with
+	// the AUTHORITATIVE tenant. (An UNRESOLVED node-asserted tenant is deliberately NOT trusted for the
+	// tenant-scoped effects — see TestOwnerVanishUnresolvedTenantSkipsTenantScopedFinalization.)
+	p.streamCache.Set(tenantID+":"+internal, streamContext{TenantID: tenantID, StreamID: streamID}, time.Minute)
 	_, _, err := p.handleStreamLifecycleUpdate(&ipcpb.MistTrigger{
 		TriggerType: "STREAM_LIFECYCLE_UPDATE",
 		StreamId:    &streamID,

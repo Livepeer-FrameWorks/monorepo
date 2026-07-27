@@ -13,7 +13,6 @@ import (
 
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
-	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 )
@@ -924,45 +923,6 @@ func TestBuildPosterThumbnailAssets(t *testing.T) {
 	}
 	if got.SpriteVttUrl != "" || got.SpriteJpgUrl != "" {
 		t.Fatalf("expected poster-only assets, got spriteVtt=%q spriteJpg=%q", got.SpriteVttUrl, got.SpriteJpgUrl)
-	}
-}
-
-func TestArtifactNodesFromDBBuildsWarmNodeFallback(t *testing.T) {
-	mockDB, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer mockDB.Close()
-
-	mock.ExpectQuery("SELECT an.node_id").
-		WithArgs("hash-1", "vod").
-		WillReturnRows(sqlmock.NewRows([]string{
-			"node_id", "file_path", "size_bytes", "format", "stream_internal_name",
-		}).AddRow("edge-node-1", "/recordings/vod/hash-1.mp4", int64(2048), "mp4", "source-stream"))
-
-	nodes, err := artifactNodesFromDB(context.Background(), mockDB, "hash-1", "vod")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(nodes) != 1 {
-		t.Fatalf("expected one node, got %d", len(nodes))
-	}
-	got := nodes[0]
-	if got.NodeID != "edge-node-1" {
-		t.Fatalf("node id = %q", got.NodeID)
-	}
-	if got.Artifact.GetClipHash() != "hash-1" {
-		t.Fatalf("artifact hash = %q", got.Artifact.GetClipHash())
-	}
-	if got.Artifact.GetFormat() != "mp4" {
-		t.Fatalf("format = %q", got.Artifact.GetFormat())
-	}
-	if got.Artifact.GetArtifactType() != ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD {
-		t.Fatalf("artifact type = %v", got.Artifact.GetArtifactType())
-	}
-
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
 	}
 }
 

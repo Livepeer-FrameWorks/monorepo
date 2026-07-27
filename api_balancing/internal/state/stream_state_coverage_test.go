@@ -180,20 +180,20 @@ func TestFindNodesByArtifactHash_ScoresAndActiveFiltering(t *testing.T) {
 	hash := "clip-hash-xyz"
 
 	// node-idle and node-busy both have the artifact and are healthy/active.
-	sm.SetNodeArtifacts("node-idle", []*ipcpb.StoredArtifact{{ClipHash: hash, FilePath: "/d/x.mp4"}})
-	sm.SetNodeArtifacts("node-busy", []*ipcpb.StoredArtifact{{ClipHash: hash, FilePath: "/d/x.mp4"}})
+	sm.SetNodeArtifacts("node-idle", []*ipcpb.StoredArtifact{{ClipHash: hash, FilePath: "/d/x.mp4"}}, ArtifactReportOrder{Fence: 1, Seq: 1})
+	sm.SetNodeArtifacts("node-busy", []*ipcpb.StoredArtifact{{ClipHash: hash, FilePath: "/d/x.mp4"}}, ArtifactReportOrder{Fence: 1, Seq: 1})
 	sm.SetNodeInfo("node-idle", "http://host-idle:8080", true, nil, nil, "", "", nil)
 	sm.SetNodeInfo("node-busy", "http://host-busy:8080", true, nil, nil, "", "", nil)
 	metricsForCPU(sm, "node-idle", 10) // higher idleness score
 	metricsForCPU(sm, "node-busy", 90) // lower idleness score
 
 	// node-other is active but does NOT host the hash.
-	sm.SetNodeArtifacts("node-other", []*ipcpb.StoredArtifact{{ClipHash: "different", FilePath: "/d/o.mp4"}})
+	sm.SetNodeArtifacts("node-other", []*ipcpb.StoredArtifact{{ClipHash: "different", FilePath: "/d/o.mp4"}}, ArtifactReportOrder{Fence: 1, Seq: 1})
 	sm.SetNodeInfo("node-other", "http://host-other:8080", true, nil, nil, "", "", nil)
 	metricsForCPU(sm, "node-other", 10)
 
 	// node-inactive hosts the hash but is unhealthy (IsActive=false), must be skipped.
-	sm.SetNodeArtifacts("node-inactive", []*ipcpb.StoredArtifact{{ClipHash: hash, FilePath: "/d/x.mp4"}})
+	sm.SetNodeArtifacts("node-inactive", []*ipcpb.StoredArtifact{{ClipHash: hash, FilePath: "/d/x.mp4"}}, ArtifactReportOrder{Fence: 1, Seq: 1})
 	// SetNodeInfo with isHealthy=false would still leave it stale; just don't make it healthy.
 	sm.SetNodeInfo("node-inactive", "http://host-inactive:8080", false, nil, nil, "", "", nil)
 
@@ -267,8 +267,8 @@ func (f *fakeDVRRepo) ListAllDVR(_ context.Context) ([]DVRRecord, error) { retur
 func (f *fakeDVRRepo) ResolveInternalNameByHash(_ context.Context, _ string) (string, error) {
 	return f.internalName, f.resolveErr
 }
-func (f *fakeDVRRepo) UpdateDVRProgressByHash(_ context.Context, _, _ string, _ int64) error {
-	return nil
+func (f *fakeDVRRepo) UpdateDVRProgressByHash(_ context.Context, _, _ string, _ int64, _ uint32, _ string) (bool, string, error) {
+	return true, "recording", nil
 }
 func (f *fakeDVRRepo) UpdateDVRCompletionByHash(_ context.Context, _, _ string, _, _ int64, _, _ string) error {
 	return nil
@@ -285,7 +285,7 @@ func TestApplyDVRProgress_PersistsInstanceFields(t *testing.T) {
 	nodeID := "node-dvr"
 	sm.ConfigurePolicies(PoliciesConfig{DVRRepo: &fakeDVRRepo{internalName: internalName}})
 
-	if err := sm.ApplyDVRProgress(context.Background(), "dvr-hash-1", "recording", 4096, 7, nodeID); err != nil {
+	if _, err := sm.ApplyDVRProgress(context.Background(), "dvr-hash-1", "recording", 4096, 7, nodeID); err != nil {
 		t.Fatalf("ApplyDVRProgress: %v", err)
 	}
 
@@ -312,7 +312,7 @@ func TestApplyDVRProgress_UnresolvedHashIsNoop(t *testing.T) {
 
 	sm.ConfigurePolicies(PoliciesConfig{DVRRepo: &fakeDVRRepo{resolveErr: errors.New("not found")}})
 
-	if err := sm.ApplyDVRProgress(context.Background(), "dvr-hash-missing", "recording", 1, 1, "node-x"); err != nil {
+	if _, err := sm.ApplyDVRProgress(context.Background(), "dvr-hash-missing", "recording", 1, 1, "node-x"); err != nil {
 		t.Fatalf("ApplyDVRProgress: %v", err)
 	}
 	// No internal name resolved => no instance created anywhere.
@@ -321,6 +321,122 @@ func TestApplyDVRProgress_UnresolvedHashIsNoop(t *testing.T) {
 	sm.mu.RUnlock()
 	if count != 0 {
 		t.Fatalf("expected no stream instances for unresolved hash, got %d", count)
+	}
+}
+
+// rejectingDVRRepo answers the resolver but rejects every progress write (as the durable
+// dispatch-owner guard does for a non-owner). Used to prove a rejected report mutates no in-memory sink.
+type rejectingDVRRepo struct {
+	internalName string
+	rejectErr    error
+}
+
+func (f *rejectingDVRRepo) ListAllDVR(_ context.Context) ([]DVRRecord, error) { return nil, nil }
+func (f *rejectingDVRRepo) ResolveInternalNameByHash(_ context.Context, _ string) (string, error) {
+	return f.internalName, nil
+}
+func (f *rejectingDVRRepo) UpdateDVRProgressByHash(_ context.Context, _, _ string, _ int64, _ uint32, _ string) (bool, string, error) {
+	return false, "", f.rejectErr
+}
+func (f *rejectingDVRRepo) UpdateDVRCompletionByHash(_ context.Context, _, _ string, _, _ int64, _, _ string) error {
+	return nil
+}
+func (f *rejectingDVRRepo) NeedsDtshSync(_ context.Context, _ string) bool { return false }
+
+// A progress report the durable write rejects (non-owner) must return the error and mutate NO
+// stream-instance sink — the rejection short-circuits before mirroring.
+func TestApplyDVRProgress_NonOwnerRejectionMirrorsNothing(t *testing.T) {
+	sm := NewStreamStateManager()
+	t.Cleanup(sm.Shutdown)
+
+	repo := &rejectingDVRRepo{internalName: "internal-dvr-reject", rejectErr: errors.New("reporting node is not the dispatched recording node")}
+	sm.ConfigurePolicies(PoliciesConfig{
+		DVRRepo: repo,
+		WritePolicies: map[EntityType]WritePolicy{
+			EntityDVR: {Enabled: true, Mode: WriteThrough},
+		},
+	})
+
+	if _, err := sm.ApplyDVRProgress(context.Background(), "dvr-reject", "recording", 4096, 7, "rogue-node"); err == nil {
+		t.Fatal("expected the repository rejection to propagate")
+	}
+	sm.mu.RLock()
+	count := len(sm.streamInstances)
+	sm.mu.RUnlock()
+	if count != 0 {
+		t.Fatalf("expected no stream instance mutated on rejection, got %d", count)
+	}
+}
+
+// terminalNoopDVRRepo answers the resolver but reports the durable write as a NO-OP against a terminal
+// row (applied=false, current terminal status), as UpdateDVRProgressByHash does for a late progress tick.
+type terminalNoopDVRRepo struct {
+	internalName string
+	current      string
+}
+
+func (f *terminalNoopDVRRepo) ListAllDVR(_ context.Context) ([]DVRRecord, error) { return nil, nil }
+func (f *terminalNoopDVRRepo) ResolveInternalNameByHash(_ context.Context, _ string) (string, error) {
+	return f.internalName, nil
+}
+func (f *terminalNoopDVRRepo) UpdateDVRProgressByHash(_ context.Context, _, _ string, _ int64, _ uint32, _ string) (bool, string, error) {
+	return false, f.current, nil
+}
+func (f *terminalNoopDVRRepo) UpdateDVRCompletionByHash(_ context.Context, _, _ string, _, _ int64, _, _ string) error {
+	return nil
+}
+func (f *terminalNoopDVRRepo) NeedsDtshSync(_ context.Context, _ string) bool { return false }
+
+// A late progress report against a terminal/finalizing row is a durable no-op (applied=false): it must
+// return applied=false and mutate NO stream-instance sink, so the memory mirror can never resurrect a
+// terminal recording back to 'recording'.
+func TestApplyDVRProgress_TerminalNoopMirrorsNothing(t *testing.T) {
+	sm := NewStreamStateManager()
+	t.Cleanup(sm.Shutdown)
+
+	repo := &terminalNoopDVRRepo{internalName: "internal-dvr-terminal", current: "finalizing"}
+	sm.ConfigurePolicies(PoliciesConfig{
+		DVRRepo: repo,
+		WritePolicies: map[EntityType]WritePolicy{
+			EntityDVR: {Enabled: true, Mode: WriteThrough},
+		},
+	})
+
+	applied, err := sm.ApplyDVRProgress(context.Background(), "dvr-terminal", "recording", 4096, 7, "node-1")
+	if err != nil {
+		t.Fatalf("ApplyDVRProgress: %v", err)
+	}
+	if applied {
+		t.Fatal("expected applied=false for a terminal no-op")
+	}
+	sm.mu.RLock()
+	count := len(sm.streamInstances)
+	sm.mu.RUnlock()
+	if count != 0 {
+		t.Fatalf("expected no stream instance mutated on a terminal no-op, got %d", count)
+	}
+}
+
+// On a successful progress report only Foghorn's canonical 'recording' status is mirrored, never the
+// advisory node-supplied status field.
+func TestApplyDVRProgress_MirrorsCanonicalStatusOnly(t *testing.T) {
+	sm := NewStreamStateManager()
+	t.Cleanup(sm.Shutdown)
+
+	internalName := "internal-dvr-canonical"
+	nodeID := "node-dvr"
+	sm.ConfigurePolicies(PoliciesConfig{DVRRepo: &fakeDVRRepo{internalName: internalName}})
+
+	// The node reports a non-canonical status; the mirror must ignore it and stamp 'recording'.
+	if _, err := sm.ApplyDVRProgress(context.Background(), "dvr-hash-1", "node-says-uploading", 4096, 7, nodeID); err != nil {
+		t.Fatalf("ApplyDVRProgress: %v", err)
+	}
+	inst, ok := sm.GetStreamInstances(internalName)[nodeID]
+	if !ok {
+		t.Fatal("expected stream instance after ApplyDVRProgress")
+	}
+	if inst.RawDetails["dvr_status"] != "recording" {
+		t.Fatalf("dvr_status = %#v, want canonical recording", inst.RawDetails["dvr_status"])
 	}
 }
 

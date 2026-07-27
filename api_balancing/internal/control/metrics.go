@@ -11,9 +11,10 @@ type ControlMetrics struct {
 	// Labels: command_type, status
 	RelayForwards *prometheus.CounterVec
 	// ArtifactSyncOutcomes counts SyncComplete outcomes reported by Helmsman.
-	// Labels: outcome ("success"|"evicted_remote"|"failed"|"lost_local").
+	// Labels: outcome ("success"|"failed"|"lost_local"|"dtsh_failed").
 	// outcome="lost_local" is terminal data loss (the local source was gone
 	// before the S3 sync succeeded and is never retried) — alert on its rate.
+	// outcome="dtsh_failed" is a retryable incremental .dtsh index sync failure.
 	ArtifactSyncOutcomes *prometheus.CounterVec
 }
 

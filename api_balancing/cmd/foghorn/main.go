@@ -19,6 +19,7 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"frameworks/api_balancing/internal/storage"
 	"frameworks/api_balancing/internal/triggers"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
@@ -100,6 +101,16 @@ func main() {
 	config.LoadEnv(logger)
 	foghornCfg := foghornconfig.Load()
 	control.SetLocalClusterID(foghornCfg.ClusterID)
+
+	// Explicit platform-shared edge clusters: only on these may a tenantless node serve arbitrary tenants'
+	// durable bytes (control.nodeMayServeTenant). Comma-separated cluster IDs. This is the operator-declared
+	// source; the canonical Quartermaster is_platform_official set is loaded separately below. Unset here ⇒
+	// only Quartermaster-official clusters qualify; if both are empty, tenantless nodes serve nothing.
+	for _, c := range strings.Split(config.GetEnv("FOGHORN_PLATFORM_SHARED_CLUSTERS", ""), ",") {
+		if c = strings.TrimSpace(c); c != "" {
+			control.AddPlatformSharedCluster(c)
+		}
+	}
 
 	// Storage base path for local-path reconstruction (DVR dispatch) when node
 	// has no StorageLocal. Must match Helmsman's HELMSMAN_STORAGE_LOCAL_PATH.
@@ -277,7 +288,7 @@ func main() {
 		),
 		ArtifactSyncOutcomes: metricsCollector.NewCounter(
 			"artifact_sync_outcomes_total",
-			"Artifact SyncComplete outcomes from Helmsman (success/evicted_remote/failed/lost_local)",
+			"Artifact SyncComplete outcomes from Helmsman (success/failed/lost_local/dtsh_failed)",
 			[]string{"outcome"},
 		),
 	})
@@ -1145,13 +1156,6 @@ func main() {
 		}
 	})
 	if fedClient != nil && peerManager != nil {
-		control.SetStorageMintDelegate(func(ctx context.Context, targetClusterID string, req *foghornfederationpb.MintStorageURLsRequest) (*foghornfederationpb.MintStorageURLsResponse, error) {
-			addr := peerManager.GetPeerAddr(targetClusterID)
-			if addr == "" {
-				return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "peer_unreachable"}, nil
-			}
-			return fedClient.MintStorageURLs(ctx, targetClusterID, addr, req)
-		})
 		control.SetStorageDeleteDelegate(func(ctx context.Context, targetClusterID string, req *foghornfederationpb.DeleteStorageObjectsRequest) (*foghornfederationpb.DeleteStorageObjectsResponse, error) {
 			addr := peerManager.GetPeerAddr(targetClusterID)
 			if addr == "" {
@@ -1223,6 +1227,9 @@ func main() {
 	// Foghorn can present cluster wildcard certificates for every assigned
 	// control-plane name.
 	control.LoadServedClusters()
+	// Seed the platform-shared edge allowlist from Quartermaster's canonical is_platform_official fact (the
+	// only clusters where a tenantless node may serve arbitrary tenants). Additive to the explicit config above.
+	control.LoadPlatformSharedClusters()
 
 	internalRegistrars := []control.ServiceRegistrar{foghornServer.RegisterServices}
 	if federationServer != nil {
@@ -1328,7 +1335,9 @@ func main() {
 		defer chapterReclaimer.Stop()
 	}
 
-	// Start stale freeze cleanup job (resets stuck freezing artifacts)
+	// Start stale freeze cleanup job (resets stuck freezing artifacts). It durably ENQUEUES each abandoned
+	// attempt's staging object into foghorn.staging_cleanup_queue (transactionally with the reset); the
+	// StagingCleanupJob below is what deletes them from S3 with retries.
 	staleFreezeJob := jobs.NewStaleFreezeCleanupJob(jobs.StaleFreezeCleanupConfig{
 		DB:         db,
 		Logger:     logger,
@@ -1337,6 +1346,93 @@ func main() {
 	})
 	staleFreezeJob.Start()
 	defer staleFreezeJob.Stop()
+
+	// Crash-recovery reconciler for the thumbnail publication state machine: re-drives attempts stuck in
+	// 'publishing' (idempotent pointer CAS) and fails + sweeps attempts abandoned past their lease (their
+	// staging/version objects go to the staging-cleanup queue below). DB-only.
+	thumbnailRecoveryJob := jobs.NewThumbnailRecoveryJob(jobs.ThumbnailRecoveryConfig{
+		DB:       db,
+		Logger:   logger,
+		Interval: 1 * time.Minute,
+		// Re-drive completions whose ThumbnailUploaded confirmation was lost (verify -> promote -> publish
+		// against the staged objects), so a one-shot VOD thumbnail isn't orphaned when a send/crash loses it.
+		Complete: func(ctx context.Context, attemptID string) (bool, error) {
+			return control.CompleteThumbnailAttemptForRecovery(ctx, attemptID, logger)
+		},
+	})
+	thumbnailRecoveryJob.Start()
+	defer thumbnailRecoveryJob.Stop()
+
+	// Start the staging cleanup worker: drains foghorn.staging_cleanup_queue (superseded/abandoned freeze
+	// staging objects, enqueued transactionally at completion/recovery), deleting each from S3 with a capped
+	// backoff and removing the row on success. This is the ONLY collector for freeze staging objects; nil S3
+	// makes it a no-op drain.
+	if s3ForReconciler != nil {
+		stagingCleanupJob := jobs.NewStagingCleanupJob(jobs.StagingCleanupConfig{
+			DB:     db,
+			S3:     s3ForReconciler,
+			Logger: logger,
+		})
+		stagingCleanupJob.Start()
+		defer stagingCleanupJob.Stop()
+	}
+
+	// Start creation-command expiry job (terminalizes artifact-creation ledger rows
+	// stranded 'accepted' after a handler crashed between the accept and its terminal
+	// write — see GetArtifactCreationStatus). CAS-rejects only rows past the hard
+	// deadline with no artifact, so a still-running or committed create is never
+	// touched. This is the sole writer that terminalizes strands; the status read path
+	// only reads.
+	creationCommandExpiryJob := jobs.NewCreationCommandExpiryJob(jobs.CreationCommandExpiryConfig{
+		DB:       db,
+		Logger:   logger,
+		Interval: 1 * time.Minute,
+		Deadline: 15 * time.Minute,
+	})
+	creationCommandExpiryJob.Start()
+	defer creationCommandExpiryJob.Stop()
+
+	// Start completing-VOD recovery job (converges uploads stranded in 'completing' after an ambiguous
+	// S3 completion error — see CompleteVodUpload). Needs S3 to probe object existence; skipped when
+	// no S3 is configured. Uses s3ForFederation (a *storage.S3Client with Exists + BuildS3URL).
+	if s3ForFederation != nil {
+		completingVodRecoveryJob := jobs.NewCompletingVodRecoveryJob(jobs.CompletingVodRecoveryConfig{
+			DB:         db,
+			S3:         s3ForFederation,
+			Logger:     logger,
+			Interval:   2 * time.Minute,
+			StaleAfter: 5 * time.Minute,
+			FailAfter:  1 * time.Hour,
+		})
+		completingVodRecoveryJob.Start()
+		defer completingVodRecoveryJob.Stop()
+
+		// Start aborting-VOD recovery job (converges aborts stranded in 'aborting' after an interrupted
+		// AbortVodUpload — see AbortVodUpload). Needs S3 to re-run the multipart abort idempotently;
+		// skipped when no S3 is configured. Uses the same s3ForFederation *storage.S3Client.
+		abortingVodRecoveryJob := jobs.NewAbortingVodRecoveryJob(jobs.AbortingVodRecoveryConfig{
+			DB:         db,
+			S3:         s3ForFederation,
+			Logger:     logger,
+			Interval:   2 * time.Minute,
+			StaleAfter: 5 * time.Minute,
+		})
+		abortingVodRecoveryJob.Start()
+		defer abortingVodRecoveryJob.Stop()
+	}
+
+	// Start DVR starting-recovery job (converges recordings stranded in 'starting' after a lost node
+	// ack — see StartDVR). Reads the persisted dvr_start_dispatch descriptor to idempotently re-dispatch
+	// the start (or drain a compensating stop / finalize failed) with no external routing dependency.
+	dvrStartingRecoveryJob := jobs.NewDVRStartingRecoveryJob(jobs.DVRStartingRecoveryConfig{
+		DB:         db,
+		Logger:     logger,
+		Interval:   1 * time.Minute,
+		StaleAfter: 2 * time.Minute,
+		FailAfter:  15 * time.Minute,
+	})
+	dvrStartingRecoveryJob.Start()
+	defer dvrStartingRecoveryJob.Stop()
 
 	// Start orphan reconciliation job (retries failed deletions)
 	orphanCleanupJob := jobs.NewOrphanCleanupJob(jobs.OrphanCleanupConfig{
@@ -1382,6 +1478,12 @@ func main() {
 		SendFreeze:      control.SendFreezeRequest,
 		Logger:          logger,
 		Interval:        5 * time.Minute,
+		ClusterID:       foghornCfg.ClusterID,
+		OnNodeIndexed: func(ctx context.Context, artifactHash, nodeID string) {
+			if err := control.RefreshNodeCopy(ctx, artifactHash, nodeID); err != nil {
+				logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("Failed to emit node-copy GAINED after reconciler index")
+			}
+		},
 	})
 	artifactReconciler.Start()
 	defer artifactReconciler.Stop()
@@ -1389,6 +1491,31 @@ func main() {
 		logger.WithField("node_id", nodeID).Debug("Triggering immediate artifact reconciliation after artifact map update")
 		artifactReconciler.Trigger()
 	})
+	control.SetOnCatalogDirty(func() {
+		logger.Debug("Triggering immediate catalog projection after committed lifecycle mutation")
+		artifactReconciler.Trigger()
+	})
+
+	// Node-copy telemetry reconciliation: emit GAINED for present copies that have never been
+	// emitted (last_emitted_version=0). This is emission CORRECTNESS — rows on a fresh projection and
+	// rows created by non-emitting writers (DVR-start / reconciler / segment inserts) — NOT loss
+	// recovery: the durable, authoritative record of node copies is foghorn.artifact_nodes
+	// itself (self-healing from ~10s node reports), and the ClickHouse projection is analytics-
+	// only. Each row is emitted once (its last_emitted_version then becomes >0) under FOR UPDATE,
+	// so this is idempotent, mints no fake history for stable rows, can't resurrect an evicted
+	// copy, and is safe on every replica. Runs immediately on boot, then on a slow timer.
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			if n, err := control.ReconcileNodeCopies(context.Background()); err != nil {
+				logger.WithError(err).Warn("Node-copy reconciliation pass failed")
+			} else if n > 0 {
+				logger.WithField("emitted", n).Debug("Node-copy reconciliation seeded copies")
+			}
+			<-ticker.C
+		}
+	}()
 
 	// Start processing job dispatcher (routes VOD processing jobs to edge nodes)
 	processingDispatcher := jobs.NewProcessingDispatcher(jobs.ProcessingDispatcherConfig{
@@ -1398,18 +1525,13 @@ func main() {
 	processingDispatcher.SetProcessConfigCacher(triggerProcessor)
 	processingDispatcher.SetGatewayResolver(triggerProcessor)
 
-	// Initialize VOD processing pipeline and wire result handler
+	// Initialize VOD processing pipeline. Completed/failed results are handled atomically in
+	// control.processProcessingJobResult — there is no duplicate result callback.
 	foghorngrpc.InitVodPipeline(db, logger, decklogClient)
-	control.SetProcessingJobResultHandler(func(ctx context.Context, jobID, status string, outputs map[string]string, errorMsg string) {
-		foghorngrpc.GetVodPipeline().HandleJobResult(ctx, jobID, status, outputs, errorMsg)
-	})
 	control.SetProcessConfigCacheUpdater(triggerProcessor.CacheProcessConfig)
-
-	// When stale recovery exhausts a job's retries, reconcile the artifact
-	// so it doesn't stay stuck in 'processing' forever.
-	processingDispatcher.SetJobExhaustedHandler(func(ctx context.Context, jobID, artifactHash string) {
-		foghorngrpc.GetVodPipeline().HandleJobResult(ctx, jobID, "failed", nil, "max retries exceeded")
-	})
+	// Exhaustion (max retries) marks the artifact failed + emits lifecycle directly in the
+	// dispatcher's recoverStale (failVODArtifact / failClipArtifact) — no separate callback that
+	// would double-write.
 	processingDispatcher.Start()
 	defer processingDispatcher.Stop()
 
@@ -1433,6 +1555,13 @@ func main() {
 
 	// Livepeer gateway auth webhook — validates incoming segments against active streams
 	router.POST("/webhooks/livepeer/auth", handlers.HandleLivepeerAuth)
+
+	// In-cell thumbnail resolver: a co-located Chandler (reached via mesh DNS foghorn.internal) resolves
+	// asset_key -> active version on a cold cache miss. Service-token guarded (same trust as the Foghorn ->
+	// Chandler invalidation channel). Any HA instance answers from shared Postgres.
+	if thumbToken := strings.TrimSpace(os.Getenv("SERVICE_TOKEN")); thumbToken != "" {
+		router.GET("/internal/thumbnails/active-version", auth.ServiceAuthMiddleware(thumbToken), handlers.HandleResolveActiveThumbnailVersion)
+	}
 
 	// MistServer Compatibility - stream key routing for Helmsman/MistServer
 	router.NoRoute(handlers.MistServerCompatibilityHandler)

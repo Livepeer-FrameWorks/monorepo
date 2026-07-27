@@ -33,7 +33,7 @@ func TestResolveContent_ArtifactPlacementRouting(t *testing.T) {
 		sm.SetNodeInfo("warm1", "https://warm1.example.com", true, &lat, &lon, "ams", "", map[string]any{"HLS": "x"})
 		sm.TouchNode("warm1", true)
 		// StoredArtifact.ClipHash carries the hash for any artifact type.
-		sm.SetNodeArtifacts("warm1", []*ipcpb.StoredArtifact{{ClipHash: "warmhash"}})
+		sm.SetNodeArtifacts("warm1", []*ipcpb.StoredArtifact{{ClipHash: "warmhash"}}, state.ArtifactReportOrder{Fence: 1, Seq: 1})
 
 		prevLB := loadBalancerInstance
 		loadBalancerInstance = &fakeLoadBalancer{nodes: map[string]state.NodeState{

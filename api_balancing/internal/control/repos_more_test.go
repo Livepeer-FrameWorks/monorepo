@@ -102,16 +102,140 @@ func TestResolveInternalNameByHash(t *testing.T) {
 	}
 }
 
-// UpdateDVRProgressByHash promotes a pre-terminal DVR and grows its size
-// monotonically (GREATEST), gated on non-terminal statuses.
-func TestUpdateDVRProgressByHash(t *testing.T) {
+// progressSelectRe matches the locked pre-read that reads prior status, identity, and the durable
+// dispatch owner node. The reporting node is verified against dvr_start_dispatch.node_id before any
+// mutation; the node-supplied status is never written.
+const progressSelectRe = `SELECT status,\s+tenant_id::text,.*dvr_start_dispatch->>'node_id'.*FROM foghorn.artifacts\s+WHERE artifact_hash = \$1 AND artifact_type = 'dvr'\s+FOR UPDATE`
+
+// progressUpdateRe matches the metrics + first-edge promotion write. status only ever moves
+// requested/starting -> recording (CASE), never to a node-supplied value.
+const progressUpdateRe = `UPDATE foghorn.artifacts\s+SET status = CASE WHEN status IN \('requested', 'starting'\) THEN 'recording' ELSE status END,\s+size_bytes = GREATEST`
+
+func progressRows(status, dispatchNode string) *sqlmock.Rows {
+	return sqlmock.NewRows([]string{"status", "tenant_id", "stream_id", "internal_name", "dispatch_node"}).
+		AddRow(status, "tenant-1", "stream-1", "live+x", dispatchNode)
+}
+
+// UpdateDVRProgressByHash promotes a pre-terminal DVR and grows its size monotonically (GREATEST). The
+// FIRST transition into 'recording' (prior status 'starting') enqueues the STATUS_RECORDING lifecycle
+// event on the SAME transaction as the flip; the node-supplied status is never persisted.
+func TestUpdateDVRProgressByHash_FirstRecordingEnqueuesLifecycle(t *testing.T) {
 	_, mock := setupRepoTest(t)
 	repo := &dvrRepositoryDB{}
-	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET status = \$2,\s+size_bytes = GREATEST.*WHERE artifact_hash = \$1\s+AND artifact_type = 'dvr'\s+AND status IN \('requested', 'starting', 'recording'\)`).
-		WithArgs("dvr-1", "recording", int64(4096)).
+	mock.ExpectBegin()
+	mock.ExpectQuery(progressSelectRe).
+		WithArgs("dvr-1").
+		WillReturnRows(progressRows("starting", "node-1"))
+	mock.ExpectExec(progressUpdateRe).
+		WithArgs("dvr-1", int64(4096)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	if err := repo.UpdateDVRProgressByHash(context.Background(), "dvr-1", "recording", 4096); err != nil {
+	// STATUS_RECORDING lifecycle enqueued on the same tx (dvr_lifecycle kind, tenant/stream/hash).
+	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).
+		WithArgs("dvr_lifecycle", "tenant-1", "stream-1", "dvr-1", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	// The node-supplied status is 'finalizing' — it must be ignored; only the canonical recording flip
+	// is written.
+	applied, current, err := repo.UpdateDVRProgressByHash(context.Background(), "dvr-1", "finalizing", 4096, 7, "node-1")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !applied || current != "recording" {
+		t.Fatalf("first-edge promotion: got (applied=%v, current=%q), want (true, recording)", applied, current)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A repeated progress report on an already-'recording' DVR must NOT re-emit STATUS_RECORDING; the
+// UPDATE still grows size but the enqueue is gated on the starting->recording edge.
+func TestUpdateDVRProgressByHash_AlreadyRecordingNoDuplicate(t *testing.T) {
+	_, mock := setupRepoTest(t)
+	repo := &dvrRepositoryDB{}
+	mock.ExpectBegin()
+	mock.ExpectQuery(progressSelectRe).
+		WithArgs("dvr-1").
+		WillReturnRows(progressRows("recording", "node-1"))
+	mock.ExpectExec(progressUpdateRe).
+		WithArgs("dvr-1", int64(8192)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	applied, current, err := repo.UpdateDVRProgressByHash(context.Background(), "dvr-1", "recording", 8192, 9, "node-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !applied || current != "recording" {
+		t.Fatalf("continued-recording metrics: got (applied=%v, current=%q), want (true, recording)", applied, current)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A report for a terminal/finalizing row is a no-op: progress must never overwrite a terminal status.
+// No UPDATE, no enqueue — just a committing transaction. It reports applied=false with the row's
+// unchanged terminal status so callers leave every downstream sink untouched.
+func TestUpdateDVRProgressByHash_TerminalIsNoop(t *testing.T) {
+	_, mock := setupRepoTest(t)
+	repo := &dvrRepositoryDB{}
+	mock.ExpectBegin()
+	mock.ExpectQuery(progressSelectRe).
+		WithArgs("dvr-1").
+		WillReturnRows(progressRows("finalizing", "node-1"))
+	mock.ExpectCommit()
+	applied, current, err := repo.UpdateDVRProgressByHash(context.Background(), "dvr-1", "recording", 1, 1, "node-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied {
+		t.Fatalf("terminal/finalizing no-op must report applied=false, got true")
+	}
+	if current != "finalizing" {
+		t.Fatalf("terminal no-op current status: got %q, want finalizing", current)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A missing row commits as a no-op with no mutation: applied=false, empty current status.
+func TestUpdateDVRProgressByHash_MissingRowIsNoop(t *testing.T) {
+	_, mock := setupRepoTest(t)
+	repo := &dvrRepositoryDB{}
+	mock.ExpectBegin()
+	mock.ExpectQuery(progressSelectRe).
+		WithArgs("dvr-1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectCommit()
+	applied, current, err := repo.UpdateDVRProgressByHash(context.Background(), "dvr-1", "recording", 1, 1, "node-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied || current != "" {
+		t.Fatalf("missing-row no-op: got (applied=%v, current=%q), want (false, \"\")", applied, current)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A progress report from a node OTHER than the dispatched recording node is rejected — no UPDATE, no
+// enqueue, the transaction rolls back and an error is returned (applied=false).
+func TestUpdateDVRProgressByHash_NonOwningNodeRejected(t *testing.T) {
+	_, mock := setupRepoTest(t)
+	repo := &dvrRepositoryDB{}
+	mock.ExpectBegin()
+	mock.ExpectQuery(progressSelectRe).
+		WithArgs("dvr-1").
+		WillReturnRows(progressRows("recording", "owner-node"))
+	mock.ExpectRollback()
+	applied, _, err := repo.UpdateDVRProgressByHash(context.Background(), "dvr-1", "recording", 4096, 7, "rogue-node")
+	if err == nil {
+		t.Fatal("expected rejection error from a non-owning node, got nil")
+	}
+	if applied {
+		t.Fatal("a rejected report must report applied=false")
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -179,13 +303,19 @@ func TestGetArtifactSyncInfo(t *testing.T) {
 	})
 }
 
-// RegisterOriginArtifact upserts an origin (canonical full-file) node row.
+// RegisterOriginArtifact upserts an origin (canonical full-file) node row and emits a
+// durable GAINED in the same transaction when the copy first becomes present.
 func TestRegisterOriginArtifact(t *testing.T) {
-	_, mock := setupRepoTest(t)
-	repo := &artifactRepositoryDB{}
-	mock.ExpectExec(`INSERT INTO foghorn.artifact_nodes.*'origin'.*ON CONFLICT \(artifact_hash, node_id\) DO UPDATE`).
+	repo, mock := setupRepoTest(t)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT role, is_complete, is_orphaned FROM foghorn.artifact_nodes.*FOR UPDATE`).
+		WithArgs("art-1", "node-1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`INSERT INTO foghorn.artifact_nodes.*'origin'.*ON CONFLICT \(artifact_hash, node_id\) DO UPDATE.*RETURNING`).
 		WithArgs("art-1", "node-1", "/d/art-1.mp4", int64(4096), true).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WillReturnRows(sqlmock.NewRows([]string{"inserted", "is_complete"}).AddRow(true, true))
+	expectNodeCopyOutbox(mock, "art-1")
+	mock.ExpectCommit()
 	if err := repo.RegisterOriginArtifact(context.Background(), "art-1", "node-1", "/d/art-1.mp4", 4096, true); err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +395,7 @@ func TestReposMore_NilDBGuards(t *testing.T) {
 	if _, err := (&dvrRepositoryDB{}).ListAllDVR(ctx); !errors.Is(err, sql.ErrConnDone) {
 		t.Errorf("ListAllDVR nil db = %v", err)
 	}
-	if err := (&dvrRepositoryDB{}).UpdateDVRProgressByHash(ctx, "h", "recording", 1); !errors.Is(err, sql.ErrConnDone) {
+	if _, _, err := (&dvrRepositoryDB{}).UpdateDVRProgressByHash(ctx, "h", "recording", 1, 0, ""); !errors.Is(err, sql.ErrConnDone) {
 		t.Errorf("UpdateDVRProgressByHash nil db = %v", err)
 	}
 	if _, err := (&nodeRepositoryDB{}).ListAllNodes(ctx); !errors.Is(err, sql.ErrConnDone) {

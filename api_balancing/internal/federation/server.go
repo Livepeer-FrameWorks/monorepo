@@ -73,6 +73,21 @@ type FederationServer struct {
 	artifactHandler ArtifactCommandHandler
 	peerManager     PeerAddrResolver
 	fedClient       *FederationClient
+	// allowFederationMutations is the central gate for the ENTIRE inbound cross-cluster RPC surface. It is OFF
+	// by default: the shared federation service token proves only auth_type==service and carries no trustworthy
+	// caller cluster (requesting_cluster is self-declared), so no caller can be authorized for another cluster's
+	// tenant data — not even for reads, since QueryStream leaks routing data and PrepareArtifact can hand back a
+	// presigned URL / relay grant. Every inbound RPC calls federationMutationsDisabled() after service auth and
+	// fails closed when this is false, so the surface is disabled as ONE policy. There is intentionally NO
+	// read-only allowlist until cluster-bound identity + tenant entitlement exist.
+	//
+	//   GATED (all inbound RPCs): QueryStream, PrepareArtifact, NotifyOriginPull, PeerChannel, MintStorageURLs,
+	//   CreateRemoteClip, CreateRemoteDVR, DeleteStorageObjects, ForwardArtifactCommand, MigrateArtifactMetadata,
+	//   ListTenantArtifacts.
+	//
+	// In the single-provider release FEDERATION_ENABLED is false so the server is not even registered; this
+	// default only matters for a federation-enabled deployment that has not opted into the surface.
+	allowFederationMutations bool
 
 	// Storage-cluster ownership inputs. Both PrepareArtifact (read-side
 	// redirect) and MintStorageURLs (write-side ownership check) consult
@@ -152,6 +167,10 @@ type FederationServerConfig struct {
 	LocalS3Backing    S3Backing
 	AdvertisedBacking AdvertisedBackingFunc
 	IsServedCluster   func(clusterID string) bool
+	// AllowFederationMutations enables the ENTIRE inbound federation RPC surface (see the full list on
+	// FederationServer.allowFederationMutations). Leave false (the default) until cluster-bound federation
+	// identity + tenant entitlement exist; every inbound RPC fails closed while it is false.
+	AllowFederationMutations bool
 }
 
 // NewFederationServer creates a new federation gRPC server.
@@ -171,7 +190,16 @@ func NewFederationServer(cfg FederationServerConfig) *FederationServer {
 		localS3Backing:    cfg.LocalS3Backing,
 		advertisedBacking: cfg.AdvertisedBacking,
 		isServedCluster:   cfg.IsServedCluster,
+
+		allowFederationMutations: cfg.AllowFederationMutations,
 	}
+}
+
+// federationMutationsDisabled reports whether the cross-cluster mutation surface is fail-closed. Every mutation
+// / enumeration RPC calls this right after service auth and returns a benign not-handled response when true, so
+// the whole surface is disabled as a unit rather than one RPC at a time. See allowFederationMutations.
+func (s *FederationServer) federationMutationsDisabled() bool {
+	return !s.allowFederationMutations
 }
 
 // canLocallyMintFor reports whether this Foghorn pool can mint presigned
@@ -226,6 +254,12 @@ func (s *FederationServer) RegisterServices(srv *grpc.Server) {
 func (s *FederationServer) QueryStream(ctx context.Context, req *foghornfederationpb.QueryStreamRequest) (*foghornfederationpb.QueryStreamResponse, error) {
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
+	}
+	// FAIL CLOSED with the rest of the surface: this exposes routing/edge data to a self-declared caller
+	// cluster the shared service token cannot authenticate. No RPC is a safe read-only allowlist until
+	// cluster-bound identity exists.
+	if s.federationMutationsDisabled() {
+		return nil, status.Error(codes.FailedPrecondition, "federation_mutations_disabled")
 	}
 	if req.StreamName == "" {
 		return nil, status.Error(codes.InvalidArgument, "stream_name required")
@@ -335,6 +369,11 @@ func (s *FederationServer) QueryStream(ctx context.Context, req *foghornfederati
 func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *foghornfederationpb.OriginPullNotification) (*foghornfederationpb.OriginPullAck, error) {
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
+	}
+	// FAIL CLOSED with the mutation surface: this drives cross-cluster origin-pull replication (a control
+	// mutation of routing state) and the shared service token cannot bind the caller cluster.
+	if s.federationMutationsDisabled() {
+		return &foghornfederationpb.OriginPullAck{Accepted: false, Reason: "federation_mutations_disabled"}, nil
 	}
 	if req.StreamName == "" {
 		return nil, status.Error(codes.InvalidArgument, "stream_name required")
@@ -503,6 +542,12 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *foghornfede
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
 	}
+	// FAIL CLOSED with the rest of the surface: this trusts a caller-supplied tenant/hash and can hand back a
+	// presigned object URL or a relay capability, so it is NOT a safe read-only RPC under the shared service
+	// token. Gated until cluster-bound caller identity + tenant entitlement exist.
+	if s.federationMutationsDisabled() {
+		return nil, status.Error(codes.FailedPrecondition, "federation_mutations_disabled")
+	}
 	hash := req.GetArtifactId()
 	if hash == "" {
 		hash = req.GetClipHash()
@@ -528,20 +573,27 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *foghornfede
 	})
 
 	var internalName, streamInternalName, artifactType, format, storageLocation, syncStatus string
+	var recordedObjectKey string
 	var sizeBytes sql.NullInt64
 	var authoritativeCluster sql.NullString
 	err := s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(internal_name, ''),
-		       COALESCE(stream_internal_name, ''),
-		       artifact_type,
-		       COALESCE(format, ''),
-		       COALESCE(storage_location, ''),
-		       COALESCE(sync_status, ''),
-		       size_bytes,
-		       COALESCE(storage_cluster_id, origin_cluster_id)
-		FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND tenant_id = $2 AND status != 'deleted'
-	`, hash, tenantID).Scan(&internalName, &streamInternalName, &artifactType, &format, &storageLocation, &syncStatus, &sizeBytes, &authoritativeCluster)
+		SELECT COALESCE(a.internal_name, ''),
+		       COALESCE(a.stream_internal_name, ''),
+		       a.artifact_type,
+		       COALESCE(a.format, ''),
+		       COALESCE(a.storage_location, ''),
+		       COALESCE(a.sync_status, ''),
+		       a.size_bytes,
+		       COALESCE(a.storage_cluster_id, a.origin_cluster_id),
+		       -- The authoritative PUBLISHED object key: active_object_key (the version-addressed pointer
+		       -- completion flips) first, then vod_metadata.s3_key (kept in sync for VOD), then the legacy
+		       -- sync_object_key descriptor for pre-version rows. The read path consumes it rather than
+		       -- reconstructing a possibly-divergent key.
+		       COALESCE(NULLIF(a.active_object_key, ''), NULLIF(v.s3_key, ''), NULLIF(a.sync_object_key, ''), '')
+		FROM foghorn.artifacts a
+		LEFT JOIN foghorn.vod_metadata v ON v.artifact_hash = a.artifact_hash
+		WHERE a.artifact_hash = $1 AND a.tenant_id = $2 AND a.status != 'deleted'
+	`, hash, tenantID).Scan(&internalName, &streamInternalName, &artifactType, &format, &storageLocation, &syncStatus, &sizeBytes, &authoritativeCluster, &recordedObjectKey)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return &foghornfederationpb.PrepareArtifactResponse{Error: "artifact not found"}, nil
@@ -621,7 +673,14 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *foghornfede
 		if s.s3Client == nil {
 			return &foghornfederationpb.PrepareArtifactResponse{Error: "origin storage not configured"}, nil
 		}
-		s3Key := s.buildArtifactS3Key(artType, tenantID, streamInternalName, hash, format)
+		// Consume the RECORDED canonical key (vod_metadata.s3_key / sync_object_key) — the exact object
+		// the writer PUT to — never a reconstructed key that could diverge. A synced clip/VOD without a
+		// recorded key is an inconsistent row: fail closed rather than presign a guessed object.
+		if recordedObjectKey == "" {
+			log.WithField("artifact_type", artType).Warn("PrepareArtifact: synced artifact has no recorded object key; refusing")
+			return &foghornfederationpb.PrepareArtifactResponse{Error: "artifact has no recorded storage object key"}, nil
+		}
+		s3Key := recordedObjectKey
 		presignedURL, err := s.s3Client.GeneratePresignedGET(s3Key, 15*time.Minute)
 		if err != nil {
 			log.WithError(err).Error("Failed to generate presigned GET for artifact")
@@ -770,19 +829,6 @@ func peerRelayArtifactPath(artifactType, artifactHash, format, streamInternalNam
 	}
 }
 
-func (s *FederationServer) buildArtifactS3Key(artType, tenantID, internalName, hash, format string) string {
-	switch artType {
-	case "clip":
-		return s.s3Client.BuildClipS3Key(tenantID, internalName, hash, format)
-	case "dvr":
-		return s.s3Client.BuildDVRS3Key(tenantID, internalName, hash)
-	case "vod":
-		return s.s3Client.BuildVodS3Key(tenantID, hash, hash+"."+format)
-	default:
-		return "artifacts/" + tenantID + "/" + hash
-	}
-}
-
 // MintStorageURLs issues presigned PUT URLs for an upload that the
 // requesting Foghorn cannot mint locally. The callee MUST own the named
 // target storage cluster (served + S3 backing tuple match) and the artifact
@@ -791,6 +837,12 @@ func (s *FederationServer) buildArtifactS3Key(artType, tenantID, internalName, h
 func (s *FederationServer) MintStorageURLs(ctx context.Context, req *foghornfederationpb.MintStorageURLsRequest) (*foghornfederationpb.MintStorageURLsResponse, error) {
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
+	}
+	// FAIL CLOSED with the mutation surface: this mints WRITE (PUT) URLs against a storage cluster, and the
+	// shared service token cannot bind the caller cluster. Disabled by default.
+	if s.federationMutationsDisabled() {
+		s.recordStorageMint("federation_mutations_disabled")
+		return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "federation_mutations_disabled"}, nil
 	}
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
@@ -828,176 +880,49 @@ func (s *FederationServer) MintStorageURLs(ctx context.Context, req *foghornfede
 		return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
 	}
 
-	// Operation / artifact-type compatibility.
+	// Thumbnail minting is the only supported federated write: its upload is consumed immediately by the
+	// caller from the returned S3Key, with no completion round trip. Any other artifact type is rejected
+	// at the protocol boundary (a delegated freeze has no cross-cluster completion path, so the
+	// storage-owning Foghorn's row would strand at `pending`).
 	artType := strings.ToLower(strings.TrimSpace(req.GetArtifactType()))
 	op := req.GetOp()
-	switch artType {
-	case "thumbnail", "clip", "dvr_segment", "dvr_manifest", "vod":
-		// vod here is the single-PUT freeze of an existing VOD asset.
-		// Federated VOD multipart create flows through CreateVodUpload,
-		// which rejects with storage_delegation_unsupported_for_vod.
-		if op != foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_SINGLE {
-			s.recordStorageMint("unsupported_operation")
-			return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_operation"}, nil
-		}
-	case "dvr":
-		if op != foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_DVR_SET {
-			s.recordStorageMint("unsupported_operation")
-			return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_operation"}, nil
-		}
-		if len(req.GetSegmentFilenames()) == 0 {
-			s.recordStorageMint("unsupported_operation")
-			return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_operation"}, nil
-		}
-	default:
-		s.recordStorageMint("unsupported_artifact_type")
-		return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_artifact_type"}, nil
+	if artType != "thumbnail" {
+		s.recordStorageMint("federated_artifact_freeze_unsupported")
+		return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "federated_artifact_freeze_unsupported"}, nil
+	}
+	if op != foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_SINGLE {
+		s.recordStorageMint("unsupported_operation")
+		return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_operation"}, nil
 	}
 
 	// Tenant ownership + asset context: try local foghorn.artifacts first,
-	// fall back to Commodore (Resolve*Hash for artifacts, ResolveInternalName
-	// for live thumbs). Mirrors the resolution chain
-	// processFreezePermissionRequest already uses on the producer side.
-	mctx, ok := s.resolveMintArtifactContext(ctx, req, artType)
-	if !ok {
+	// fall back to Commodore (ResolveInternalName for live thumbs, Resolve*Hash
+	// for vod/clip thumbs). This is the tenant boundary — a caller may only mint
+	// against a stream/artifact its tenant owns.
+	if _, ok := s.resolveMintArtifactContext(ctx, req); !ok {
 		s.recordStorageMint("tenant_mismatch")
 		return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "tenant_mismatch"}, nil
 	}
 
-	// Build the S3 key per artifact type, mirroring the local-mint code
-	// paths so a delegated upload lands at the same key as a local one
-	// would for the same input.
-	expiry := 30 * time.Minute
-	if artType == "thumbnail" {
-		expiry = 15 * time.Minute
+	// Only thumbnail minting reaches here (the artifact-type guard above fails all others closed).
+	// artifact_key is "<streamID-or-artifactHash>/<filename>". Use the caller-provided key directly —
+	// both live (streamID) and vod/clip (artifact_hash) shapes match the existing S3 layout
+	// `thumbnails/<key>/<file>` produced by processThumbnailUploadRequest.
+	expiry := 15 * time.Minute
+	s3Key := "thumbnails/" + req.GetArtifactKey()
+	url, err := s.s3Client.GeneratePresignedPUT(s3Key, expiry)
+	if err != nil {
+		log.WithError(err).Error("GeneratePresignedPUT failed")
+		s.recordStorageMint("s3_error")
+		return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
 	}
-	switch artType {
-	case "thumbnail":
-		// artifact_key is "<streamID-or-artifactHash>/<filename>". Use the
-		// caller-provided key directly — both live (streamID) and vod/clip
-		// (artifact_hash) shapes match the existing S3 layout
-		// `thumbnails/<key>/<file>` produced by processThumbnailUploadRequest.
-		s3Key := "thumbnails/" + req.GetArtifactKey()
-		url, err := s.s3Client.GeneratePresignedPUT(s3Key, expiry)
-		if err != nil {
-			log.WithError(err).Error("GeneratePresignedPUT failed")
-			s.recordStorageMint("s3_error")
-			return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
-		}
-		s.recordStorageMint("accepted")
-		return &foghornfederationpb.MintStorageURLsResponse{
-			Accepted:         true,
-			S3Key:            s3Key,
-			PresignedPutUrl:  url,
-			UrlExpirySeconds: uint32(expiry.Seconds()),
-		}, nil
-
-	case "clip":
-		// Mirror processFreezePermissionRequest's clip-key construction.
-		// The caller passes the artifact_key as the clip hash; format is
-		// derived from content_type (default mp4 when empty).
-		format := "mp4"
-		if ct := strings.TrimSpace(req.GetContentType()); ct != "" {
-			if before, after, ok := strings.Cut(ct, "/"); ok && before == "video" && after != "" {
-				format = after
-			}
-		}
-		s3Key := s.s3Client.BuildClipS3Key(req.GetTenantId(), mctx.streamName, req.GetArtifactKey(), format)
-		url, err := s.s3Client.GeneratePresignedPUT(s3Key, expiry)
-		if err != nil {
-			log.WithError(err).Error("clip GeneratePresignedPUT failed")
-			s.recordStorageMint("s3_error")
-			return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
-		}
-		s.recordStorageMint("accepted")
-		return &foghornfederationpb.MintStorageURLsResponse{
-			Accepted:         true,
-			S3Key:            s3Key,
-			PresignedPutUrl:  url,
-			UrlExpirySeconds: uint32(expiry.Seconds()),
-		}, nil
-
-	case "dvr":
-		dvrPrefix := s.s3Client.BuildDVRS3Key(req.GetTenantId(), mctx.streamName, req.GetArtifactKey())
-		segmentURLs := map[string]string{}
-		for _, fn := range req.GetSegmentFilenames() {
-			fn = strings.TrimSpace(fn)
-			if fn == "" {
-				continue
-			}
-			s3Key := dvrPrefix + "/" + fn
-			url, err := s.s3Client.GeneratePresignedPUT(s3Key, expiry)
-			if err != nil {
-				log.WithError(err).WithField("segment", fn).Error("dvr segment GeneratePresignedPUT failed")
-				s.recordStorageMint("s3_error")
-				return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
-			}
-			segmentURLs[fn] = url
-		}
-		s.recordStorageMint("accepted")
-		return &foghornfederationpb.MintStorageURLsResponse{
-			Accepted:         true,
-			S3Key:            dvrPrefix,
-			SegmentUrls:      segmentURLs,
-			UrlExpirySeconds: uint32(expiry.Seconds()),
-		}, nil
-
-	case "vod":
-		// Single-PUT freeze of an already-existing VOD asset (NOT
-		// multipart create — that flow lives in CreateVodUpload and is
-		// intentionally rejected via storage_delegation_unsupported_for_vod).
-		// Mirror the local-mint path's key shape exactly so a delegated
-		// freeze lands at the same key as a local one would: filename is
-		// `<hash>.<format>`, format derived from content_type.
-		format := "mp4"
-		if ct := strings.TrimSpace(req.GetContentType()); ct != "" {
-			if before, after, ok := strings.Cut(ct, "/"); ok && before == "video" && after != "" {
-				format = after
-			}
-		}
-		s3Key := s.s3Client.BuildVodS3Key(req.GetTenantId(), req.GetArtifactKey(), req.GetArtifactKey()+"."+format)
-		url, err := s.s3Client.GeneratePresignedPUT(s3Key, expiry)
-		if err != nil {
-			log.WithError(err).Error("vod GeneratePresignedPUT failed")
-			s.recordStorageMint("s3_error")
-			return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
-		}
-		s.recordStorageMint("accepted")
-		return &foghornfederationpb.MintStorageURLsResponse{
-			Accepted:         true,
-			S3Key:            s3Key,
-			PresignedPutUrl:  url,
-			UrlExpirySeconds: uint32(expiry.Seconds()),
-		}, nil
-
-	case "dvr_segment", "dvr_manifest":
-		// artifact_key is "<parent_dvr_hash>/<filename>". Build the same key
-		// shape the local-mint path would have used: BuildDVRS3Key(tenant,
-		// streamName, parentHash) + filename.
-		parentHash, fileName, ok := strings.Cut(req.GetArtifactKey(), "/")
-		if !ok || parentHash == "" || fileName == "" {
-			s.recordStorageMint("unsupported_operation")
-			return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_operation"}, nil
-		}
-		dvrPrefix := s.s3Client.BuildDVRS3Key(req.GetTenantId(), mctx.streamName, parentHash)
-		s3Key := dvrPrefix + "/" + fileName
-		url, err := s.s3Client.GeneratePresignedPUT(s3Key, expiry)
-		if err != nil {
-			log.WithError(err).Error("dvr incremental GeneratePresignedPUT failed")
-			s.recordStorageMint("s3_error")
-			return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
-		}
-		s.recordStorageMint("accepted")
-		return &foghornfederationpb.MintStorageURLsResponse{
-			Accepted:         true,
-			S3Key:            s3Key,
-			PresignedPutUrl:  url,
-			UrlExpirySeconds: uint32(expiry.Seconds()),
-		}, nil
-	}
-
-	// Unreachable — switch above is exhaustive given the artifact-type guard.
-	return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_artifact_type"}, nil
+	s.recordStorageMint("accepted")
+	return &foghornfederationpb.MintStorageURLsResponse{
+		Accepted:         true,
+		S3Key:            s3Key,
+		PresignedPutUrl:  url,
+		UrlExpirySeconds: uint32(expiry.Seconds()),
+	}, nil
 }
 
 // DeleteStorageObjects handles a peer Foghorn pool asking us to delete an
@@ -1017,6 +942,14 @@ func (s *FederationServer) MintStorageURLs(ctx context.Context, req *foghornfede
 func (s *FederationServer) DeleteStorageObjects(ctx context.Context, req *foghornfederationpb.DeleteStorageObjectsRequest) (*foghornfederationpb.DeleteStorageObjectsResponse, error) {
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
+	}
+	// FAIL CLOSED at the boundary: this RPC destructively deletes provider bytes, but the shared service token
+	// does not bind the caller to requesting_cluster, so it cannot authorize cross-cluster deletion. Disabled by
+	// default with the rest of the mutation surface until cluster-bound identity lands (workload-identity RFC).
+	if s.federationMutationsDisabled() {
+		s.logger.WithField("requesting_cluster", req.GetRequestingCluster()).
+			Warn("DeleteStorageObjects: federation mutations are disabled (no cluster-bound caller identity)")
+		return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: false, Reason: "federation_mutations_disabled"}, nil
 	}
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
@@ -1079,6 +1012,12 @@ func (s *FederationServer) DeleteStorageObjects(ctx context.Context, req *foghor
 		return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: true}, nil
 
 	case "vod":
+		// Deletion operates on the EXACT caller-supplied key (validated below to bind to the caller's tenant
+		// namespace + artifact hash). The cleaner sends the main, .dtsh, and pending keys as SEPARATE requests,
+		// so each must delete its own supplied object — the owner MUST NOT collapse them onto one resolved key.
+		// NOTE: a cross-provider caller whose backend PREFIX differs from this provider's cannot form a correct
+		// key here; that (and provider-relative active_object_key/active_dtsh_key transfer) is the cross-cluster
+		// durable-replication RFC, out of scope for this single-provider release.
 		key := strings.TrimSpace(req.GetS3Key())
 		if key == "" {
 			return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: false, Reason: "missing_target"}, nil
@@ -1177,27 +1116,28 @@ func dvrPrefixMatchesHash(prefix, hash string) bool {
 	return trimmed[slash+1:] == hash
 }
 
-// tenantMatchesLocalRow returns false only if a local foghorn.artifacts
-// row for the given hash exists with a different tenant_id. Missing row
-// (NoRows) returns true: we may simply not have a local copy of the
-// metadata (the authoritative caller does), which is expected for
-// cross-cluster cleanup.
+// tenantMatchesLocalRow FAILS CLOSED: it returns true only when a local foghorn.artifacts row for the hash
+// exists AND its tenant_id matches the claimed tenant. A missing row, a NULL tenant, or a nil DB all return
+// false — a destructive delete under the shared federation service token must bind to a positive local tenant
+// match, not proceed on absence.
 func (s *FederationServer) tenantMatchesLocalRow(ctx context.Context, artifactHash, claimedTenant string) bool {
+	// FAIL CLOSED. A destructive delete under the shared federation service token (requesting_cluster is
+	// self-declared, not yet cluster-bound — that is the workload-identity RFC) must be able to POSITIVELY bind
+	// the target to the claimed tenant against THIS provider's own row. No DB, no local row, or a NULL tenant
+	// means we cannot prove ownership → reject, rather than trusting a caller-supplied shape.
 	if s.db == nil {
-		return true
+		return false
 	}
 	var rowTenant sql.NullString
 	err := s.db.QueryRowContext(ctx, `SELECT tenant_id FROM foghorn.artifacts WHERE artifact_hash = $1`, artifactHash).Scan(&rowTenant)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return true
+		if !errors.Is(err, sql.ErrNoRows) {
+			s.logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("DeleteStorageObjects: failed to read local tenant for cross-check")
 		}
-		// On unexpected errors, fail closed.
-		s.logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("DeleteStorageObjects: failed to read local tenant for cross-check")
 		return false
 	}
 	if !rowTenant.Valid {
-		return true
+		return false
 	}
 	return rowTenant.String == claimedTenant
 }
@@ -1215,44 +1155,17 @@ type mintArtifactContext struct {
 	streamID        string // public stream ID; populated for live thumbnails (used to validate artifact_key prefix)
 }
 
-// mintArtifactTypeCompatible answers whether a stored row's artifact_type can
-// satisfy a requested mint artType. Each mint type builds a different S3 key
-// shape, so a same-tenant DVR hash must NOT be acceptable as a clip mint —
-// the resulting key would land somewhere the downstream consumers won't find
-// it. Thumbnail (artifact-backed branch — live thumbnails are handled
-// upstream) accepts any of clip/dvr/vod since it just consults the parent
-// asset for routing context.
-func mintArtifactTypeCompatible(rowType, requestedType string) bool {
-	switch requestedType {
-	case "clip":
-		return rowType == "clip"
-	case "vod":
-		return rowType == "vod"
-	case "dvr", "dvr_segment", "dvr_manifest":
-		return rowType == "dvr"
-	case "thumbnail":
-		return rowType == "clip" || rowType == "dvr" || rowType == "vod"
-	}
-	return false
-}
-
-// resolveMintArtifactContext is the unified resolver for MintStorageURLs.
-// It mirrors the resolution chain processFreezePermissionRequest already
-// uses on the producer side: fast-path the local foghorn.artifacts row
-// when present, fall back to Commodore.Resolve*Hash (or
-// ResolveInternalName for live thumbs) when missing. When Commodore fills
-// a gap on a non-thumbnail asset, an opportunistic cache-heal row is
-// inserted so subsequent delegated mints fast-path locally; healing
-// failures are logged but never block the response. Live thumbnails do
-// NOT heal (no DB row exists by design).
-func (s *FederationServer) resolveMintArtifactContext(ctx context.Context, req *foghornfederationpb.MintStorageURLsRequest, artType string) (mintArtifactContext, bool) {
-	if artType == "thumbnail" && req.GetStreamInternalName() != "" {
+// resolveMintArtifactContext resolves the tenant/asset context for a thumbnail mint (the only supported
+// MintStorageURLs write). Live thumbnails resolve via stream state / ResolveInternalName; vod/clip
+// thumbnails resolve their parent artifact by hash. It fast-paths the local foghorn.artifacts row when
+// present and falls back to Commodore when missing, healing a lifecycle row (vod/clip only; live
+// thumbnails have no DB row by design) so subsequent delegated mints fast-path locally.
+func (s *FederationServer) resolveMintArtifactContext(ctx context.Context, req *foghornfederationpb.MintStorageURLsRequest) (mintArtifactContext, bool) {
+	if req.GetStreamInternalName() != "" {
 		return s.resolveLiveThumbnailContext(ctx, req)
 	}
 
-	// Artifact-backed path. artifact_key may be "<hash>" or
-	// "<hash>/<filename>" for dvr_segment/dvr_manifest/thumbnail-vod;
-	// strip any /file suffix to get the lookup hash.
+	// VOD/clip thumbnail: artifact_key is "<parent_hash>/<filename>"; strip the file suffix.
 	lookupHash := req.GetArtifactKey()
 	if before, _, ok := strings.Cut(lookupHash, "/"); ok && before != "" {
 		lookupHash = before
@@ -1266,40 +1179,18 @@ func (s *FederationServer) resolveMintArtifactContext(ctx context.Context, req *
 		return mintArtifactContext{}, false
 	}
 
-	// Pin the lookup kind when the mint type implies it; "thumbnail" rides
-	// on any parent asset kind, so it probes (rare: cache miss for an
-	// existing artifact's thumbnail).
-	kindHint := ""
-	switch artType {
-	case "clip", "vod":
-		kindHint = artType
-	case "dvr", "dvr_segment", "dvr_manifest":
-		kindHint = "dvr"
-	}
-
 	rctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	id, err := resolver.ResolveArtifact(rctx, lookupHash, kindHint)
+	id, err := resolver.ResolveArtifact(rctx, lookupHash, "") // any parent kind
 	if err != nil {
 		return mintArtifactContext{}, false
 	}
-	// Tenant guard: an unknown hash and another tenant's hash must be
-	// indistinguishable to the caller, so cross-tenant existence can't
-	// leak through found-vs-missing branches.
+	// Tenant guard: an unknown hash and another tenant's hash must be indistinguishable to the caller.
 	if id.TenantID != req.GetTenantId() {
 		return mintArtifactContext{}, false
 	}
-	// The resolved kind must be compatible with the requested mint type —
-	// otherwise a same-tenant DVR/VOD hash could be requested as clip and
-	// pass through to a wrong-shape S3 key build.
-	if !mintArtifactTypeCompatible(id.Kind, artType) {
-		return mintArtifactContext{}, false
-	}
-	// Clip / DVR S3 keys embed stream_internal_name as a path segment
-	// (BuildClipS3Key, BuildDVRS3Key); an empty value would produce
-	// malformed keys like "clips/<tenant>//.../...".
-	needsStreamName := artType == "clip" || artType == "dvr" || artType == "dvr_segment" || artType == "dvr_manifest"
-	if needsStreamName && id.StreamInternalName == "" {
+	// A thumbnail must hang off a real clip/dvr/vod parent.
+	if id.Kind != "clip" && id.Kind != "dvr" && id.Kind != "vod" {
 		return mintArtifactContext{}, false
 	}
 	ctxOut := mintArtifactContext{
@@ -1308,8 +1199,8 @@ func (s *FederationServer) resolveMintArtifactContext(ctx context.Context, req *
 		internalName:    id.InternalName,
 		originClusterID: id.OriginClusterID,
 	}
-	// When the system of record (not a local row) attributed the artifact,
-	// heal a lifecycle row so subsequent delegated mints fast-path locally.
+	// When the system of record (not a local row) attributed the artifact, heal a lifecycle row so
+	// subsequent delegated mints fast-path locally.
 	if id.Source == "commodore" {
 		s.healMintArtifactRow(ctx, lookupHash, id.Kind, ctxOut)
 	}
@@ -1390,6 +1281,10 @@ func (s *FederationServer) CreateRemoteClip(ctx context.Context, req *foghornfed
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
 	}
+	// FAIL CLOSED with the mutation surface: this CREATES a clip artifact on behalf of a peer.
+	if s.federationMutationsDisabled() {
+		return nil, status.Error(codes.FailedPrecondition, "federation_mutations_disabled")
+	}
 	if req.GetStreamInternalName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "stream_internal_name required")
 	}
@@ -1463,6 +1358,10 @@ func (s *FederationServer) CreateRemoteDVR(ctx context.Context, req *foghornfede
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
 	}
+	// FAIL CLOSED with the mutation surface: this STARTS a DVR recording on behalf of a peer.
+	if s.federationMutationsDisabled() {
+		return nil, status.Error(codes.FailedPrecondition, "federation_mutations_disabled")
+	}
 	if req.GetStreamInternalName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "stream_internal_name required")
 	}
@@ -1517,6 +1416,12 @@ func (s *FederationServer) PeerChannel(stream foghornfederationpb.FoghornFederat
 	ctx := stream.Context()
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return err
+	}
+	// FAIL CLOSED with the mutation surface: PeerChannel accepts inbound telemetry/replication events that
+	// mutate routing state (EdgeTelemetry, ReplicationEvent, StreamLifecycle, artifact/stream advertisements),
+	// and the shared service token cannot authenticate the peer cluster. Disabled by default.
+	if s.federationMutationsDisabled() {
+		return status.Error(codes.FailedPrecondition, "federation_mutations_disabled")
 	}
 
 	var peerClusterID string
@@ -1793,6 +1698,16 @@ func (s *FederationServer) ListTenantArtifacts(ctx context.Context, req *foghorn
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
 	}
+	// FAIL CLOSED with the mutation surface: this enumerates a tenant's artifact hashes, the exact inventory the
+	// forwarded-delete and metadata-migration paths target. Without cluster-bound caller identity an unbound
+	// service-token holder must not enumerate another cluster's tenant data. Disabled by default.
+	if s.federationMutationsDisabled() {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id":          req.GetTenantId(),
+			"requesting_cluster": req.GetRequestingCluster(),
+		}).Warn("ListTenantArtifacts: federation mutations are disabled (no cluster-bound caller identity)")
+		return nil, status.Error(codes.FailedPrecondition, "federation_mutations_disabled")
+	}
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
@@ -1845,6 +1760,15 @@ func (s *FederationServer) ListTenantArtifacts(ctx context.Context, req *foghorn
 func (s *FederationServer) MigrateArtifactMetadata(ctx context.Context, req *foghornfederationpb.MigrateArtifactMetadataRequest) (*foghornfederationpb.MigrateArtifactMetadataResponse, error) {
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
+	}
+	// FAIL CLOSED with the mutation surface: this writes local artifact rows sourced from a peer, and the shared
+	// service token cannot bind the caller to source_cluster_id. Disabled by default (workload-identity RFC).
+	if s.federationMutationsDisabled() {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id":      req.GetTenantId(),
+			"source_cluster": req.GetSourceClusterId(),
+		}).Warn("MigrateArtifactMetadata: federation mutations are disabled (no cluster-bound caller identity)")
+		return &foghornfederationpb.MigrateArtifactMetadataResponse{Error: "federation_mutations_disabled"}, nil
 	}
 	tenantID := req.GetTenantId()
 	sourceClusterID := req.GetSourceClusterId()
@@ -1966,6 +1890,16 @@ func upsertMigratedArtifactMetadata(ctx context.Context, db *sql.DB, tenantID, s
 func (s *FederationServer) ForwardArtifactCommand(ctx context.Context, req *foghornfederationpb.ForwardArtifactCommandRequest) (*foghornfederationpb.ForwardArtifactCommandResponse, error) {
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
+	}
+	// FAIL CLOSED with the rest of the mutation surface: a peer-forwarded delete_clip/stop_dvr/delete_dvr/
+	// delete_vod destroys local artifacts, and the shared service token cannot authorize the calling cluster.
+	// Revalidating that the row exists is not authorization. Disabled by default (workload-identity RFC).
+	if s.federationMutationsDisabled() {
+		s.logger.WithFields(logging.Fields{
+			"command":       req.GetCommand(),
+			"artifact_hash": req.GetArtifactHash(),
+		}).Warn("ForwardArtifactCommand: federation mutations are disabled (no cluster-bound caller identity)")
+		return &foghornfederationpb.ForwardArtifactCommandResponse{Handled: false, Error: "federation_mutations_disabled"}, nil
 	}
 	if req.GetArtifactHash() == "" {
 		return nil, status.Error(codes.InvalidArgument, "artifact_hash required")

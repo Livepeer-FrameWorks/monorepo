@@ -106,7 +106,7 @@ func TestResolveArtifactPlayback_WarmNodeHappyPath(t *testing.T) {
 	lat, lon := 52.0, 5.0
 	sm.SetNodeInfo("n1", "https://n1.example.com", true, &lat, &lon, "ams", "", map[string]any{"HLS": "x"})
 	sm.TouchNode("n1", true)
-	sm.SetNodeArtifacts("n1", []*ipcpb.StoredArtifact{{ClipHash: "h1"}})
+	sm.SetNodeArtifacts("n1", []*ipcpb.StoredArtifact{{ClipHash: "h1"}}, state.ArtifactReportOrder{Fence: 1, Seq: 1})
 
 	startFakeCommodoreServer(t, &fakeCommodoreInternal{
 		artifactPlaybackID: foundArtifact("h1", "vod", "t1", ""),
@@ -130,6 +130,52 @@ func TestResolveArtifactPlayback_WarmNodeHappyPath(t *testing.T) {
 	}
 	if resp.GetPrimary().GetUrl() == "" {
 		t.Fatal("primary endpoint url must be populated")
+	}
+}
+
+// TestResolveArtifactPlayback_CordonBlocksDBFallback is the cordon regression: a node holds the artifact
+// but its ArtifactInventoryReady cordon is DOWN (incomplete scan), so the in-memory FindNodesByArtifactHash
+// excludes it. There is deliberately NO fallback to foghorn.artifact_nodes — the durable projection has no
+// readiness gate — so a NON-cold artifact (not synced, not S3, origin==local => no federation) must resolve
+// to a "storage node unknown" error, NOT route through a retained DB row. The test mocks ONLY the metadata
+// query; if the removed artifact_nodes fallback ran, sqlmock would flag its unexpected query.
+func TestResolveArtifactPlayback_CordonBlocksDBFallback(t *testing.T) {
+	ctx := context.Background()
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	lat, lon := 52.0, 5.0
+	sm.SetNodeInfo("n1", "https://n1.example.com", true, &lat, &lon, "ams", "", map[string]any{"HLS": "x"})
+	sm.TouchNode("n1", true)
+	// Node reported the artifact (ready), then a later incomplete scan cordons it — inventory retained,
+	// ArtifactInventoryReady=false. FindNodesByArtifactHash must now exclude it.
+	sm.SetNodeArtifacts("n1", []*ipcpb.StoredArtifact{{ClipHash: "h1"}}, state.ArtifactReportOrder{Fence: 1, Seq: 1})
+	if err := sm.CordonNodeArtifactsIncomplete("n1", state.ArtifactReportOrder{Fence: 1, Seq: 2}); err != nil {
+		t.Fatalf("cordon failed: %v", err)
+	}
+	if nodes := sm.FindNodesByArtifactHash("h1"); len(nodes) != 0 {
+		t.Fatalf("cordoned node must be excluded from in-memory routing, got %d", len(nodes))
+	}
+
+	startFakeCommodoreServer(t, &fakeCommodoreInternal{
+		artifactPlaybackID: foundArtifact("h1", "vod", "t1", ""), // origin empty => local, no federation
+	})
+	mockDB, mock, _ := sqlmock.New()
+	t.Cleanup(func() { _ = mockDB.Close() })
+	// Artifact is NOT synced and NOT on S3 (cold path cannot serve), authoritative cluster empty
+	// (serveable). Only this metadata query is expected — no artifact_nodes fallback.
+	mock.ExpectQuery(`FROM foghorn.artifacts\s+WHERE artifact_hash = \$1`).
+		WithArgs("h1", "vod", "t1").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"internal_name", "status", "duration_seconds", "size_bytes", "created_at",
+			"format", "storage_location", "sync_status", "has_thumbnails", "authoritative_cluster",
+		}).AddRow("s1", "ready", int64(60), int64(9000), nil, "mp4", "local", "pending", false, ""))
+
+	_, err := ResolveArtifactPlayback(ctx, &PlaybackDependencies{DB: mockDB, LocalClusterID: "c1", GeoLat: 52, GeoLon: 5}, "pb")
+	if err == nil {
+		t.Fatal("cordoned inventory + non-cold artifact must NOT route through the DB projection; expected an error")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("only the metadata query may run (no artifact_nodes fallback): %v", err)
 	}
 }
 

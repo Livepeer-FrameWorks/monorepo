@@ -32,9 +32,10 @@ func TestPeerChannel_StoresIncomingPayloadsInCache(t *testing.T) {
 	control.SetStreamRegistry(registry)
 	t.Cleanup(func() { control.SetStreamRegistry(prior) })
 	srv := NewFederationServer(FederationServerConfig{
-		Logger:    testLogger(),
-		ClusterID: "cluster-a",
-		Cache:     cache,
+		Logger:                   testLogger(),
+		ClusterID:                "cluster-a",
+		Cache:                    cache,
+		AllowFederationMutations: true,
 	})
 
 	peerCluster := "cluster-b"
@@ -235,9 +236,10 @@ func TestPeerChannel_StoresIncomingPayloadsInCache(t *testing.T) {
 func TestPeerChannel_HandlerNilPayloadsNoop(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	srv := NewFederationServer(FederationServerConfig{
-		Logger:    testLogger(),
-		ClusterID: "cluster-a",
-		Cache:     cache,
+		Logger:                   testLogger(),
+		ClusterID:                "cluster-a",
+		Cache:                    cache,
+		AllowFederationMutations: true,
 	})
 
 	ctx := context.Background()

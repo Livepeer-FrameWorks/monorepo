@@ -8,21 +8,6 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 )
 
-// nullIfEmpty maps "" to a nil *string so empty optional columns persist as SQL
-// NULL rather than an empty-string literal. The distinction is load-bearing for
-// COALESCE/IS NULL filters downstream, so a non-empty value must round-trip by
-// pointer identity.
-func TestNullIfEmpty(t *testing.T) {
-	if got := nullIfEmpty(""); got != nil {
-		t.Errorf("nullIfEmpty(\"\") = %v, want nil", got)
-	}
-	s := "value"
-	got := nullIfEmpty(s)
-	if got == nil || *got != "value" {
-		t.Fatalf("nullIfEmpty(%q) = %v, want pointer to %q", s, got, s)
-	}
-}
-
 // resolvePlaybackAuthInvalidationNames has two regimes. When the caller supplies
 // an explicit name list it is taken verbatim — trimmed, de-duplicated, and
 // order-preserved — without consulting the load balancer or DB. We exercise that

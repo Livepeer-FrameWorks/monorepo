@@ -37,6 +37,8 @@ func (f *fakeHLSPresigner) ParseS3URL(s3URL string) (string, error) {
 	return s3URL, nil
 }
 
+func (f *fakeHLSPresigner) ParseLocalS3URL(s3URL string) (string, error) { return f.ParseS3URL(s3URL) }
+
 // Unused-by-this-test interface methods.
 func (f *fakeHLSPresigner) GeneratePresignedPUT(string, time.Duration) (string, error) {
 	return "", nil
@@ -50,6 +52,12 @@ func (f *fakeHLSPresigner) BuildClipS3Key(string, string, string, string) string
 func (f *fakeHLSPresigner) BuildDVRS3Key(string, string, string) string             { return "" }
 func (f *fakeHLSPresigner) BuildVodS3Key(string, string, string) string             { return "" }
 func (f *fakeHLSPresigner) BuildS3URL(key string) string                            { return "s3://bucket/" + key }
+func (f *fakeHLSPresigner) Exists(context.Context, string) (bool, error)            { return true, nil }
+func (f *fakeHLSPresigner) GetObjectSize(context.Context, string) (int64, error)    { return 0, nil }
+func (f *fakeHLSPresigner) HeadObjectInfo(context.Context, string) (bool, int64, string, error) {
+	return true, 0, "", nil
+}
+func (f *fakeHLSPresigner) PromoteObject(context.Context, string, string, string) error { return nil }
 
 func newHLSDispatcher() *ProcessingDispatcher {
 	return NewProcessingDispatcher(ProcessingDispatcherConfig{Logger: logging.NewLogger()})

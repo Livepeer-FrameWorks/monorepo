@@ -344,7 +344,7 @@ func TestApplyArtifactPlacement(t *testing.T) {
 			}{CPU: n.cpu})
 			sm.TouchNode(n.id, true)
 			sm.SetProbeVerified(n.id, true)
-			sm.SetNodeArtifacts(n.id, []*ipcpb.StoredArtifact{{ClipHash: h}})
+			sm.SetNodeArtifacts(n.id, []*ipcpb.StoredArtifact{{ClipHash: h}}, state.ArtifactReportOrder{Fence: 1, Seq: 1})
 		}
 
 		tgt := &StreamTarget{}

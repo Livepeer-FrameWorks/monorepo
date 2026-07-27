@@ -3,13 +3,17 @@ package jobs
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/lib/pq"
 
+	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
+	commodoreclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
@@ -22,24 +26,32 @@ type ReconcilerS3Client interface {
 	BuildClipS3Key(tenantID, streamName, clipHash, format string) string
 	BuildDVRS3Key(tenantID, internalName, dvrHash string) string
 	BuildVodS3Key(tenantID, artifactHash, filename string) string
+	Delete(ctx context.Context, key string) error
+	// ParseLocalS3URL extracts the RAW object key from an s3://bucket/prefix/key URL ONLY when the bucket is
+	// THIS cell's local bucket (else it errors). Used by the active_object_key backfill so a remote-provider
+	// pointer can never be rewritten as a local key.
+	ParseLocalS3URL(s3URL string) (string, error)
 }
 
 // FreezeRequestSender sends a FreezeRequest to a specific node.
 type FreezeRequestSender func(nodeID string, req *ipcpb.FreezeRequest) error
 
-// maxArtifactRetries caps the number of generic-freeze retries for a single
-// artifact before it is left in sync_status='failed' as a terminal-by-budget
-// tombstone. Operators can manually re-enqueue by resetting failure_count.
-const maxArtifactRetries = 8
+// catalogBackfillBatch bounds the catalog-revision backfill per pass (rows at catalog_revision=0).
+// A full batch self-triggers another pass so the backfill converges without waiting a full interval.
+const catalogBackfillBatch = 500
+
+// dvrChildRepairBatch bounds the per-pass repair that cascades still-live children of soft-deleted
+// DVR parents. Converges once every such parent's children are cascaded.
+const dvrChildRepairBatch = 200
 
 // ReconcilerCommodoreClient defines Commodore operations needed by the reconciler.
+// Catalog projection goes exclusively through UpdateArtifactCatalogSnapshot (the sole
+// revision-guarded writer); the per-field update RPCs were removed.
 type ReconcilerCommodoreClient interface {
 	ResolveClipHash(ctx context.Context, hash string) (*commodorepb.ResolveClipHashResponse, error)
 	ResolveDVRHash(ctx context.Context, hash string) (*commodorepb.ResolveDVRHashResponse, error)
 	ResolveVodHash(ctx context.Context, hash string) (*commodorepb.ResolveVodHashResponse, error)
-	MarkArtifactThumbnailsReady(ctx context.Context, tenantID string, assetType commodorepb.ArtifactAssetType, assetKey, storageClusterID string) (*commodorepb.MarkArtifactThumbnailsReadyResponse, error)
-	UpdateArtifactStorageCluster(ctx context.Context, tenantID string, assetType commodorepb.ArtifactAssetType, assetKey, storageClusterID string) (*commodorepb.UpdateArtifactStorageClusterResponse, error)
-	UpdateArtifactSize(ctx context.Context, tenantID string, assetType commodorepb.ArtifactAssetType, assetKey string, sizeBytes int64) (*commodorepb.UpdateArtifactSizeResponse, error)
+	UpdateArtifactCatalogSnapshot(ctx context.Context, req *commodorepb.UpdateArtifactCatalogSnapshotRequest) (*commodorepb.UpdateArtifactCatalogSnapshotResponse, error)
 }
 
 // ArtifactReconcilerConfig holds configuration for the reconciler job.
@@ -51,6 +63,10 @@ type ArtifactReconcilerConfig struct {
 	Logger          logging.Logger
 	Interval        time.Duration // How often to run (default: 5 minutes)
 	BatchSize       int           // Max artifacts per pass (default: 50)
+	ClusterID       string        // This cluster's ID; only locally-authoritative (origin) rows are projected
+	// OnNodeIndexed emits a node-copy GAINED for a row this reconciler onboarded (which
+	// may restore an artifact_nodes row that was previously LOST). Nil = no emit.
+	OnNodeIndexed func(ctx context.Context, artifactHash, nodeID string)
 }
 
 // ArtifactReconciler periodically scans for artifacts that need sync and
@@ -60,12 +76,21 @@ type ArtifactReconciler struct {
 	s3Client   ReconcilerS3Client
 	commodore  ReconcilerCommodoreClient
 	sendFreeze FreezeRequestSender
-	logger     logging.Logger
-	interval   time.Duration
-	batchSize  int
-	stopCh     chan struct{}
-	triggerCh  chan struct{}
-	wg         sync.WaitGroup
+	// prepareFreeze is the ONE shared freeze-assignment contract (control.PrepareLocalFreezeAssignment);
+	// a seam so the reconciler's freeze dispatch is unit-testable without control's routing/backing globals.
+	prepareFreeze func(ctx context.Context, assetType, assetHash, tenantID, streamName, serverFormat, originClusterID, nodeID string, expiry time.Duration) (control.FreezeAssignment, string, bool)
+	// nodeFreezeProtocolOK reports whether a locally-connected node supports staged freeze (control.NodeFreezeProtocolOK);
+	// a seam so the reconciler can pre-skip a known-old local sidecar without a live registry in tests.
+	nodeFreezeProtocolOK func(nodeID string) (ok bool, known bool)
+	logger               logging.Logger
+	interval             time.Duration
+	batchSize            int
+	clusterID            string
+	onNodeIndexed        func(ctx context.Context, artifactHash, nodeID string)
+	stopCh               chan struct{}
+	triggerCh            chan struct{}
+	ledgerTriggerCh      chan struct{}
+	wg                   sync.WaitGroup
 }
 
 func NewArtifactReconciler(cfg ArtifactReconcilerConfig) *ArtifactReconciler {
@@ -78,22 +103,62 @@ func NewArtifactReconciler(cfg ArtifactReconcilerConfig) *ArtifactReconciler {
 		batchSize = 50
 	}
 	return &ArtifactReconciler{
-		db:         cfg.DB,
-		s3Client:   cfg.S3Client,
-		commodore:  cfg.CommodoreClient,
-		sendFreeze: cfg.SendFreeze,
-		logger:     cfg.Logger,
-		interval:   interval,
-		batchSize:  batchSize,
-		stopCh:     make(chan struct{}),
-		triggerCh:  make(chan struct{}, 1),
+		db:                   cfg.DB,
+		s3Client:             cfg.S3Client,
+		commodore:            cfg.CommodoreClient,
+		sendFreeze:           cfg.SendFreeze,
+		prepareFreeze:        control.PrepareLocalFreezeAssignment,
+		nodeFreezeProtocolOK: control.NodeFreezeProtocolOK,
+		logger:               cfg.Logger,
+		interval:             interval,
+		batchSize:            batchSize,
+		clusterID:            cfg.ClusterID,
+		onNodeIndexed:        cfg.OnNodeIndexed,
+		stopCh:               make(chan struct{}),
+		triggerCh:            make(chan struct{}, 1),
+		ledgerTriggerCh:      make(chan struct{}, 1),
 	}
 }
 
 func (r *ArtifactReconciler) Start() {
-	r.wg.Add(1)
+	r.wg.Add(2)
 	go r.run()
+	go r.runLedgerSweep()
 	r.logger.Info("Artifact reconciler started")
+}
+
+// runLedgerSweep drains the freeze-publication ledger on its OWN schedule + goroutine, fully decoupled from the
+// catalog-projection reconcile loop, so a cleanup backlog can never delay projection. It self-triggers via
+// ledgerTriggerCh when a pass drains a full batch, so a backlog drains promptly instead of one page per tick.
+func (r *ArtifactReconciler) runLedgerSweep() {
+	defer r.wg.Done()
+	if r.db == nil {
+		return
+	}
+	ticker := time.NewTicker(r.interval)
+	defer ticker.Stop()
+	r.reconcileFreezePublicationLedgerPass()
+	for {
+		select {
+		case <-r.ledgerTriggerCh:
+			r.reconcileFreezePublicationLedgerPass()
+		case <-ticker.C:
+			r.reconcileFreezePublicationLedgerPass()
+		case <-r.stopCh:
+			return
+		}
+	}
+}
+
+// triggerLedgerSweep requests an immediate ledger pass (coalesced).
+func (r *ArtifactReconciler) triggerLedgerSweep() {
+	if r == nil || r.ledgerTriggerCh == nil {
+		return
+	}
+	select {
+	case r.ledgerTriggerCh <- struct{}{}:
+	default:
+	}
 }
 
 func (r *ArtifactReconciler) Stop() {
@@ -119,6 +184,10 @@ func (r *ArtifactReconciler) run() {
 	ticker := time.NewTicker(r.interval)
 	defer ticker.Stop()
 
+	// Run an initial pass at startup so the first reconcile begins immediately rather than waiting
+	// a full interval on a quiet process.
+	r.reconcile()
+
 	for {
 		select {
 		case <-r.triggerCh:
@@ -135,6 +204,17 @@ func (r *ArtifactReconciler) reconcile() {
 	if r.db == nil {
 		return
 	}
+
+	// Billing attribution runs FIRST and on its OWN advisory lock + timeout, decoupled from the projection
+	// critical section below. It makes external per-tenant resolver calls (canMintOfficialLocally), so holding
+	// the projection lock across it would let one slow resolver stall catalog projection / orphan reconciliation
+	// for every replica's catch-up. It is idempotent (only flips false→true) and per-(tenant,cluster)-scoped, so
+	// a distinct single-flight lock (not the projection lock) is all it needs to keep replicas from double-scanning.
+	r.reconcileBillingAttribution()
+
+	// NOTE: publication-ledger reconciliation is NOT run here — it runs on its OWN independently-scheduled loop
+	// (runLedgerSweep) with its own advisory lock, so a cleanup backlog never occupies this reconcile pass's
+	// context and delays catalog projection.
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -153,7 +233,35 @@ func (r *ArtifactReconciler) reconcile() {
 	}
 	defer conn.ExecContext(ctx, "SELECT pg_advisory_unlock(hashtext('artifact_reconciler'))") //nolint:errcheck
 
-	projected := r.projectCommodoreArtifactState(ctx)
+	// Attribution must precede projection: a row with no origin_cluster_id is claimed by the cluster
+	// that physically owns it (holds an origin node copy in this cluster-local foghorn DB). The
+	// projection matches on exact origin, so an unattributed row is never claimed by a non-owning
+	// cluster's snapshot.
+	r.backfillOriginCluster(ctx)
+
+	// Make active_object_key the SINGLE authoritative pointer: populate it prefix-aware from s3_url for legacy
+	// synced clip/vod rows that predate version-addressing (the vod_metadata postdeploy backfill can't reach
+	// clips, and pure SQL can't strip the client prefix). Bounded + idempotent; converges as rows leave the set.
+	r.backfillActiveObjectKey(ctx)
+
+	// Rows at catalog_revision = 0 are assigned a fresh revision in bounded batches so they project
+	// once; converges to a no-op (new rows get their revision from the INSERT trigger).
+	seeded := r.backfillCatalogRevisions(ctx)
+
+	// Cascade the still-live children of soft-deleted DVR parents so their deletions project.
+	// Bounded and idempotent; runs under the same advisory lock so replicas don't double-cascade.
+	repaired := r.repairDeletedDVRChildren(ctx)
+
+	projected, scanned := r.projectCommodoreArtifactState(ctx)
+	// Either bounded step filling its batch means more catalog work is pending. Rather than wait a
+	// full interval (leaving the catalog diverged), self-trigger another pass — but only AFTER
+	// this function returns and releases the advisory lock, so each catch-up pass re-acquires the
+	// lock fresh and a peer can interleave. Converges: backfill drains revision-0 rows; projection
+	// advances/backs-off rows out of the eligible set.
+	if seeded >= catalogBackfillBatch || scanned >= r.batchSize || repaired >= dvrChildRepairBatch {
+		r.Trigger()
+	}
+
 	if r.s3Client == nil || r.sendFreeze == nil {
 		if projected > 0 {
 			r.logger.WithField("projected", projected).Info("Artifact projection repair pass complete")
@@ -174,9 +282,387 @@ func (r *ArtifactReconciler) reconcile() {
 	}
 }
 
-func (r *ArtifactReconciler) projectCommodoreArtifactState(ctx context.Context) int {
-	if r.commodore == nil {
+// reconcileBillingAttribution runs the identity-aware durable_backend_local reconciliation under its OWN
+// single-flight advisory lock ('artifact_billing_attribution') and its own timeout — deliberately NOT the
+// 'artifact_reconciler' projection lock. It claims legitimate historical local rows (authoritative cluster is
+// this cell's, or resolves LOCAL per-tenant) that predate durable_backend_local / the conservative both-null
+// backfill. Because it issues external per-tenant resolver calls, decoupling it keeps a slow resolver from
+// blocking catalog projection / orphan reconciliation. Idempotent (only flips false→true); a lost lock (a peer
+// holds it) or a busy pass simply retries next tick.
+func (r *ArtifactReconciler) reconcileBillingAttribution() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	conn, err := r.db.Conn(ctx)
+	if err != nil {
+		r.logger.WithError(err).Warn("Failed to acquire DB connection for billing attribution lock")
+		return
+	}
+	defer conn.Close()
+
+	var acquired bool
+	if lErr := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock(hashtext('artifact_billing_attribution'))").Scan(&acquired); lErr != nil || !acquired {
+		return
+	}
+	defer conn.ExecContext(ctx, "SELECT pg_advisory_unlock(hashtext('artifact_billing_attribution'))") //nolint:errcheck
+
+	if marked, bErr := control.ReconcileBillingAttribution(ctx); bErr != nil {
+		r.logger.WithError(bErr).Warn("Billing attribution reconciliation failed")
+	} else if marked > 0 {
+		r.logger.WithField("marked", marked).Info("Reconciled durable_backend_local billing attribution for historical local rows")
+	}
+}
+
+// reconcileFreezePublicationLedgerPass runs the publication-ledger sweep under its OWN single-flight advisory
+// lock ('freeze_publication_ledger') + timeout, so a cleanup backlog can never hold the 'artifact_reconciler'
+// projection lock and delay catalog convergence. It self-triggers another pass when it drained a FULL batch so
+// a backlog drains promptly instead of waiting a full interval.
+func (r *ArtifactReconciler) reconcileFreezePublicationLedgerPass() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	conn, err := r.db.Conn(ctx)
+	if err != nil {
+		r.logger.WithError(err).Warn("Failed to acquire DB connection for publication ledger lock")
+		return
+	}
+	defer conn.Close()
+
+	var acquired bool
+	if lErr := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock(hashtext('freeze_publication_ledger'))").Scan(&acquired); lErr != nil || !acquired {
+		return
+	}
+	defer conn.ExecContext(ctx, "SELECT pg_advisory_unlock(hashtext('freeze_publication_ledger'))") //nolint:errcheck
+
+	if r.reconcileFreezePublicationLedger(ctx) {
+		r.triggerLedgerSweep() // a full batch means more remains — drain promptly rather than waiting a full interval
+	}
+}
+
+// backfillActiveObjectKey populates foghorn.artifacts.active_object_key (the authoritative published object
+// pointer) for LEGACY synced clip/vod rows that predate version-addressing, so the pointer converges to the
+// single source of truth instead of leaving permanent NULLs behind a runtime read/delete fallback. The exact
+// raw key is only recoverable prefix-aware via the S3 client (pure SQL cannot strip the configured prefix, and
+// the vod_metadata postdeploy backfill cannot reach clips), so this parses s3_url per row.
+//
+// STORAGE-OWNERSHIP SAFE: it touches ONLY rows whose bytes are on THIS cell's local backend
+// (durable_backend_local = true) AND whose s3_url resolves under the LOCAL bucket (ParseLocalS3URL errors on a
+// foreign bucket) — a federation-adopted remote pointer is never rewritten as a local key. Updates are
+// tenant-scoped. Progress is a DURABLE KEYSET over foghorn.active_object_key_backfill_cursor so an anomalous
+// unparseable row can never starve later rows. DB-only + pure string parse (no external call), safe under the
+// projection lock.
+func (r *ArtifactReconciler) backfillActiveObjectKey(ctx context.Context) {
+	if r.s3Client == nil {
+		return
+	}
+	const backfillBatch = 500
+
+	var lastHash string
+	if cErr := r.db.QueryRowContext(ctx,
+		`SELECT last_hash FROM foghorn.active_object_key_backfill_cursor WHERE id = true`).Scan(&lastHash); cErr != nil {
+		r.logger.WithError(cErr).Warn("active_object_key backfill cursor read failed")
+		return
+	}
+
+	// STORAGE-OWNERSHIP SAFE: only LOCALLY-BACKED rows (durable_backend_local=true) — a federation-adopted
+	// remote pointer is never touched. Keyset PAST the durable cursor so an anomalous skipped row can't starve
+	// later rows.
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT artifact_hash, tenant_id::text, s3_url
+		FROM foghorn.artifacts
+		WHERE sync_status = 'synced'
+		  AND artifact_type IN ('clip', 'vod')
+		  AND COALESCE(active_object_key, '') = ''
+		  AND COALESCE(s3_url, '') <> ''
+		  AND durable_backend_local = true
+		  AND tenant_id IS NOT NULL
+		  AND artifact_hash > $1
+		ORDER BY artifact_hash
+		LIMIT $2`, lastHash, backfillBatch)
+	if err != nil {
+		r.logger.WithError(err).Warn("active_object_key backfill scan failed")
+		return
+	}
+	type row struct{ hash, tenant, s3URL string }
+	var pending []row
+	for rows.Next() {
+		var rr row
+		if scanErr := rows.Scan(&rr.hash, &rr.tenant, &rr.s3URL); scanErr != nil {
+			rows.Close() //nolint:errcheck,sqlclosecheck
+			r.logger.WithError(scanErr).Warn("active_object_key backfill scan row failed")
+			return
+		}
+		pending = append(pending, rr)
+	}
+	if rowErr := rows.Err(); rowErr != nil {
+		rows.Close() //nolint:errcheck,sqlclosecheck
+		r.logger.WithError(rowErr).Warn("active_object_key backfill row iteration failed")
+		return
+	}
+	rows.Close() //nolint:errcheck,sqlclosecheck
+
+	backfilled := 0
+	for _, rr := range pending {
+		// ParseLocalS3URL errors on a foreign bucket, so a locally-backed row whose s3_url is somehow NOT under
+		// the local bucket is a data anomaly — skip it (the cursor still advances past it) rather than persist a
+		// bad local pointer that would misroute playback/deletion.
+		key, perr := r.s3Client.ParseLocalS3URL(rr.s3URL)
+		if perr != nil || strings.TrimSpace(key) == "" {
+			r.logger.WithError(perr).WithField("artifact_hash", rr.hash).Debug("active_object_key backfill: skipping row with non-local s3_url")
+			continue
+		}
+		res, uErr := r.db.ExecContext(ctx, `
+			UPDATE foghorn.artifacts SET active_object_key = $3
+			WHERE artifact_hash = $1 AND tenant_id::text = $2 AND COALESCE(active_object_key, '') = ''`, rr.hash, rr.tenant, key)
+		if uErr != nil {
+			r.logger.WithError(uErr).WithField("artifact_hash", rr.hash).Debug("active_object_key backfill update failed")
+			continue
+		}
+		if n, _ := res.RowsAffected(); n > 0 { //nolint:errcheck
+			backfilled++
+		}
+	}
+
+	// Advance the durable cursor: a FULL page means more rows remain → continue past the last hash; a short page
+	// means the end → wrap to the start so the next cycle re-scans (picking up newly-eligible legacy rows).
+	nextHash := ""
+	if len(pending) == backfillBatch {
+		nextHash = pending[len(pending)-1].hash
+	}
+	if _, uErr := r.db.ExecContext(ctx,
+		`UPDATE foghorn.active_object_key_backfill_cursor SET last_hash = $1 WHERE id = true`, nextHash); uErr != nil {
+		r.logger.WithError(uErr).Warn("active_object_key backfill cursor advance failed")
+	}
+	if backfilled > 0 {
+		r.logger.WithField("backfilled", backfilled).Info("Backfilled active_object_key for legacy synced rows")
+	}
+}
+
+// reconcileFreezePublicationLedger is the durable backstop for freeze publication: it collects any object a
+// completion recorded (BEFORE promoting) but whose guarded transaction never committed — a completion-path DB
+// failure or a lost CAS whose winner already cleared the attempt identity. Rows are only considered after a
+// grace period, and the sweep is REQ-AWARE: if the attempt that produced the object is STILL on the artifact
+// (sync_request_id / dtsh_sync_request_id), it is retrying and the object is left alone, so the sweep can never
+// race a retry into deleting an object it is about to make live. A guarded (candidate) object that equals the
+// live active_object_key/active_dtsh_key is kept (its ledger row is just dropped); everything else — staging,
+// or an orphaned candidate — is enqueued to the staging cleanup queue and its ledger row removed, atomically.
+// reconcileFreezePublicationLedger drains one bounded, keyset-cursored page of the ledger. Returns true when it
+// processed a FULL batch (more likely remains) so the caller can self-trigger another pass.
+func (r *ArtifactReconciler) reconcileFreezePublicationLedger(ctx context.Context) bool {
+	const batch = 500
+
+	var lastKey string
+	if cErr := r.db.QueryRowContext(ctx,
+		`SELECT last_key FROM foghorn.freeze_publication_ledger_cursor WHERE id = true`).Scan(&lastKey); cErr != nil {
+		r.logger.WithError(cErr).Warn("freeze publication ledger cursor read failed")
+		return false
+	}
+	// Keyset PAST the cursor by object_key (the PK), so rows skipped-because-retrying advance the cursor and
+	// cannot starve later rows; the grace period keeps an in-flight completion from being raced.
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT object_key, artifact_hash, tenant_id, request_id, guarded
+		FROM foghorn.freeze_publication_ledger
+		WHERE created_at < NOW() - INTERVAL '15 minutes'
+		  AND object_key > $1
+		ORDER BY object_key
+		LIMIT $2`, lastKey, batch)
+	if err != nil {
+		r.logger.WithError(err).Warn("freeze publication ledger scan failed")
+		return false
+	}
+	type ledgerRow struct {
+		objectKey, hash, tenant, req string
+		guarded                      bool
+	}
+	var pending []ledgerRow
+	for rows.Next() {
+		var lr ledgerRow
+		if scanErr := rows.Scan(&lr.objectKey, &lr.hash, &lr.tenant, &lr.req, &lr.guarded); scanErr != nil {
+			rows.Close() //nolint:errcheck,sqlclosecheck
+			r.logger.WithError(scanErr).Warn("freeze publication ledger scan row failed")
+			return false
+		}
+		pending = append(pending, lr)
+	}
+	if rowErr := rows.Err(); rowErr != nil {
+		rows.Close() //nolint:errcheck,sqlclosecheck
+		r.logger.WithError(rowErr).Warn("freeze publication ledger row iteration failed")
+		return false
+	}
+	rows.Close() //nolint:errcheck,sqlclosecheck
+
+	collected := 0
+	for _, lr := range pending {
+		var syncReq, dtshReq, activeKey, activeDtsh string
+		aErr := r.db.QueryRowContext(ctx, `
+			SELECT COALESCE(sync_request_id,''), COALESCE(dtsh_sync_request_id,''),
+			       COALESCE(active_object_key,''), COALESCE(active_dtsh_key,'')
+			FROM foghorn.artifacts WHERE artifact_hash = $1 AND tenant_id::text = $2`, lr.hash, lr.tenant).
+			Scan(&syncReq, &dtshReq, &activeKey, &activeDtsh)
+		artifactGone := errors.Is(aErr, sql.ErrNoRows)
+		if aErr != nil && !artifactGone {
+			r.logger.WithError(aErr).WithField("object_key", lr.objectKey).Debug("freeze publication ledger: artifact re-read failed; retrying next pass")
+			continue
+		}
+		// The attempt that produced this object is STILL outstanding → it is retrying; never touch its objects.
+		if !artifactGone && (lr.req == syncReq || lr.req == dtshReq) {
+			continue
+		}
+		// A guarded candidate that is the LIVE pointer must be KEPT — only drop its ledger row.
+		if lr.guarded && !artifactGone && (lr.objectKey == activeKey || lr.objectKey == activeDtsh) {
+			if _, dErr := r.db.ExecContext(ctx, `DELETE FROM foghorn.freeze_publication_ledger WHERE object_key = $1`, lr.objectKey); dErr != nil {
+				r.logger.WithError(dErr).WithField("object_key", lr.objectKey).Debug("freeze publication ledger: failed to drop live-candidate row")
+			}
+			continue
+		}
+		// Staging, an orphaned candidate, or an object whose artifact is gone → enqueue for cleanup and drop the
+		// ledger row atomically, so the object is durably collected exactly once.
+		tx, txErr := r.db.BeginTx(ctx, nil)
+		if txErr != nil {
+			r.logger.WithError(txErr).Debug("freeze publication ledger: begin tx failed")
+			continue
+		}
+		if _, eErr := tx.ExecContext(ctx, `INSERT INTO foghorn.staging_cleanup_queue (object_key) VALUES ($1) ON CONFLICT (object_key) DO NOTHING`, lr.objectKey); eErr != nil {
+			tx.Rollback() //nolint:errcheck
+			r.logger.WithError(eErr).WithField("object_key", lr.objectKey).Debug("freeze publication ledger: enqueue failed")
+			continue
+		}
+		if _, dErr := tx.ExecContext(ctx, `DELETE FROM foghorn.freeze_publication_ledger WHERE object_key = $1`, lr.objectKey); dErr != nil {
+			tx.Rollback() //nolint:errcheck
+			r.logger.WithError(dErr).WithField("object_key", lr.objectKey).Debug("freeze publication ledger: ledger delete failed")
+			continue
+		}
+		if cErr := tx.Commit(); cErr != nil {
+			r.logger.WithError(cErr).WithField("object_key", lr.objectKey).Debug("freeze publication ledger: commit failed")
+			continue
+		}
+		collected++
+	}
+
+	// Advance the durable cursor past every reviewed row: a FULL page means more remain → continue past the last
+	// object_key; a short page means the end → wrap to the start so the next cycle re-checks from the top
+	// (including rows skipped this cycle because their attempt was still retrying).
+	nextKey := ""
+	if len(pending) == batch {
+		nextKey = pending[len(pending)-1].objectKey
+	}
+	if _, uErr := r.db.ExecContext(ctx,
+		`UPDATE foghorn.freeze_publication_ledger_cursor SET last_key = $1 WHERE id = true`, nextKey); uErr != nil {
+		r.logger.WithError(uErr).Warn("freeze publication ledger cursor advance failed")
+	}
+	if collected > 0 {
+		r.logger.WithField("collected", collected).Info("Reconciled orphaned freeze publication objects")
+	}
+	return len(pending) == batch
+}
+
+// backfillOriginCluster deterministically claims origin ownership for rows that have no
+// origin_cluster_id but belong to THIS cluster. Because each cluster runs its own Foghorn DB,
+// two signals prove local ownership: a live row that physically holds an origin node copy in the
+// cluster-local foghorn.artifact_nodes, OR a deleted row (whose copies were already cleaned) that
+// still carries the empty-origin "locally-created" marker — claimed so its Commodore catalog row
+// can be projected away. Adopted cross-cluster pointers carry the remote origin, so they are never
+// mis-claimed. Bounded per pass; converges once every owned unattributed row is attributed (new
+// rows get origin_cluster_id at creation). Assigning origin does NOT bump catalog_revision (it
+// isn't a projected field), so this doesn't re-dirty the queue.
+func (r *ArtifactReconciler) backfillOriginCluster(ctx context.Context) {
+	if r.clusterID == "" {
+		return
+	}
+	const backfillBatch = 500
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE foghorn.artifacts
+		   SET origin_cluster_id = $2
+		 WHERE ctid IN (
+		     SELECT a.ctid FROM foghorn.artifacts a
+		      WHERE COALESCE(a.origin_cluster_id, '') = ''
+		        -- Empty origin_cluster_id means locally-created (adopted cross-cluster pointers carry
+		        -- the remote origin), so this cluster owns it. A live row must still physically hold
+		        -- an origin copy; a DELETED row (whose copies were cleaned) is claimed on the empty-
+		        -- origin signal alone so its stale Commodore catalog row can be projected away.
+		        AND (a.status = 'deleted'
+		             OR EXISTS (
+		                 SELECT 1 FROM foghorn.artifact_nodes n
+		                  WHERE n.artifact_hash = a.artifact_hash
+		                    AND n.role = 'origin'))
+		      LIMIT $1
+		 )`, backfillBatch, r.clusterID)
+	if err != nil {
+		r.logger.WithError(err).Warn("Origin-cluster attribution backfill failed")
+		return
+	}
+	if n, _ := res.RowsAffected(); n > 0 { //nolint:errcheck // pq populates RowsAffected on UPDATE
+		r.logger.WithField("attributed", n).Info("Attributed origin cluster for legacy artifacts")
+	}
+}
+
+// repairDeletedDVRChildren enforces the invariant that a deleted DVR parent has no residual chapter
+// state: it cascades the children of soft-deleted DVR parents whose chapter rows still exist.
+// Delegates to the tenant-scoped batch repair; each cascaded child then projects its own deletion
+// to Commodore.
+func (r *ArtifactReconciler) repairDeletedDVRChildren(ctx context.Context) int {
+	n, err := control.RepairDeletedDVRChildrenBatch(ctx, dvrChildRepairBatch)
+	if err != nil {
+		r.logger.WithError(err).Warn("Deleted-DVR child repair failed")
+		return n
+	}
+	if n > 0 {
+		r.logger.WithField("repaired", n).Info("Repaired orphaned children of deleted DVR parents")
+	}
+	return n
+}
+
+// backfillCatalogRevisions assigns a fresh catalog_revision (from nextval, so each is distinct) to
+// up to catalogBackfillBatch of this cluster's authoritative rows still at catalog_revision = 0,
+// entering them into the projection queue (catalog_revision > catalog_synced_rev). Runs under the
+// reconciler advisory lock so replicas don't double-assign; converges to a no-op.
+func (r *ArtifactReconciler) backfillCatalogRevisions(ctx context.Context) int64 {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE foghorn.artifacts
+		   SET catalog_revision = nextval('foghorn.artifact_catalog_revision_seq')
+		 WHERE ctid IN (
+		     SELECT ctid FROM foghorn.artifacts
+		      WHERE catalog_revision = 0
+		        -- Deleted rows ARE seeded too, so a revision-0 deletion gets a revision and projects
+		        -- as a catalog deletion (removing its stale Commodore row). Only rows this cluster
+		        -- owns; unattributed rows wait for backfillOriginCluster (no cross-cluster race).
+		        AND origin_cluster_id = $2
+		      LIMIT $1
+		 )`, catalogBackfillBatch, r.clusterID)
+	if err != nil {
+		r.logger.WithError(err).Warn("Catalog-revision rollout backfill failed")
 		return 0
+	}
+	n, _ := res.RowsAffected() //nolint:errcheck // pq populates RowsAffected on UPDATE
+	if n > 0 {
+		r.logger.WithField("seeded", n).Info("Seeded catalog revisions for revision-0 artifacts")
+	}
+	return n
+}
+
+// projectCommodoreArtifactState is the sole durable Commodore catalog projector. Each pass
+// projects a whole authoritative snapshot for every locally-authoritative row whose
+// catalog_revision (a source-owned monotonic sequence, bumped by trigger on any catalog
+// change) exceeds its catalog_synced_rev watermark. Rows are served LEAST-RECENTLY-PROJECTED
+// first (ORDER BY catalog_synced_rev) so a continuously-mutating cohort — active DVRs minting
+// a fresh revision on every segment — cannot stay at the head of the queue and starve rows
+// behind it. Non-origin (adopted pointer) rows are excluded so a remote cluster can't clobber
+// origin state. The watermark advances ONLY when Commodore confirms the row is covered at the
+// projected revision; a not-found row is retried, and a poison row (bad type / malformed
+// tracks) is quarantined so it can't head-of-line block the queue.
+// projectCommodoreArtifactState returns (advanced, scanned): advanced is the count of rows whose
+// watermark moved this pass; scanned is the number of eligible rows the batch pulled. scanned ==
+// batchSize signals the batch was full (more work pending) so reconcile() can self-trigger.
+func (r *ArtifactReconciler) projectCommodoreArtifactState(ctx context.Context) (int, int) {
+	if r.commodore == nil {
+		return 0, 0
+	}
+	// Commodore now requires the projecting cluster's identity to assign/enforce catalog origin
+	// authority. Without a cluster id this reconciler cannot project — fail the pass loudly rather
+	// than emit a per-row rejection storm.
+	if r.clusterID == "" {
+		r.logger.Warn("Artifact reconciler has no cluster id; skipping catalog projection (source authority required)")
+		return 0, 0
 	}
 	var rows *sql.Rows
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
@@ -184,74 +670,247 @@ func (r *ArtifactReconciler) projectCommodoreArtifactState(ctx context.Context) 
 		//nolint:sqlclosecheck // rows is closed by caller after retry succeeds.
 		rows, err = r.db.QueryContext(ctx, `
 			SELECT artifact_hash, artifact_type, tenant_id::text,
-			       COALESCE(storage_cluster_id, ''), COALESCE(origin_cluster_id, ''),
-			       COALESCE(has_thumbnails, false), COALESCE(size_bytes, 0)
+			       storage_cluster_id, has_thumbnails, size_bytes,
+			       COALESCE(duration_ms, duration_seconds * 1000), tracks::text,
+			       sync_status, dtsh_synced, storage_location,
+			       catalog_revision, status,
+			       EXTRACT(EPOCH FROM retention_until)::bigint,
+			       error_message
 			FROM foghorn.artifacts
-			WHERE status != 'deleted'
-			  AND tenant_id IS NOT NULL
-			  AND (COALESCE(storage_cluster_id, '') <> ''
-			       OR COALESCE(has_thumbnails, false) = TRUE
-			       OR COALESCE(size_bytes, 0) > 0)
-			ORDER BY updated_at DESC
+			WHERE tenant_id IS NOT NULL
+			  -- Deleted rows are INCLUDED so the reconciler can project the DELETION onto the catalog
+			  -- (foghorn-side retention expiry / delete otherwise never reaches /library, leaving it
+			  -- showing Ready forever). The projection loop branches on status='deleted'.
+			  -- Project ONLY rows this cluster deterministically owns. An unattributed row is NOT
+			  -- projected until backfillOriginCluster claims it locally, so it can never be raced
+			  -- and claimed by a non-owning cluster.
+			  AND origin_cluster_id = $2
+			  AND catalog_revision > catalog_synced_rev
+			  AND catalog_revision > catalog_quarantined_rev
+			  AND (catalog_next_attempt_at IS NULL OR catalog_next_attempt_at <= NOW())
+			ORDER BY catalog_synced_rev ASC, catalog_revision ASC
 			LIMIT $1
-		`, r.batchSize)
+		`, r.batchSize, r.clusterID)
 		return err
 	})
 	if err != nil {
-		r.logger.WithError(err).Warn("Failed to query artifacts for Commodore projection repair")
-		return 0
+		r.logger.WithError(err).Warn("Failed to query artifacts for Commodore projection")
+		return 0, 0
 	}
 	defer rows.Close()
 
 	count := 0
+	scanned := 0
 	for rows.Next() {
-		var hash, artifactType, tenantID, storageCluster, originCluster string
-		var hasThumbnails bool
-		var sizeBytes int64
-		if err := rows.Scan(&hash, &artifactType, &tenantID, &storageCluster, &originCluster, &hasThumbnails, &sizeBytes); err != nil {
+		scanned++
+		var hash, artifactType, tenantID string
+		var storageCluster, syncStatus, storageLocation, tracksJSON sql.NullString
+		var hasThumbnails, dtshSynced sql.NullBool
+		var lifecycleStatus, errorMessage sql.NullString
+		var sizeBytes, durationMs, retentionUnix sql.NullInt64
+		var revision int64
+		if err := rows.Scan(&hash, &artifactType, &tenantID, &storageCluster, &hasThumbnails, &sizeBytes,
+			&durationMs, &tracksJSON, &syncStatus, &dtshSynced, &storageLocation, &revision, &lifecycleStatus, &retentionUnix, &errorMessage); err != nil {
 			r.logger.WithError(err).Warn("Failed to scan artifact projection row")
 			continue
 		}
 		assetType, ok := artifactAssetTypeFromString(artifactType)
 		if !ok {
+			// Poison row: record a quarantine watermark (NOT catalog_synced_rev) so it can't
+			// head-of-line block, while keeping the row visibly uncovered. A later re-mutation
+			// bumps catalog_revision past catalog_quarantined_rev and re-enqueues it.
+			r.quarantineCatalogRow(ctx, hash, revision, "unsupported artifact type: "+artifactType)
 			continue
 		}
-		if storageCluster != "" {
-			if _, err := r.commodore.UpdateArtifactStorageCluster(ctx, tenantID, assetType, hash, storageCluster); err != nil {
-				r.logger.WithError(err).WithField("artifact_hash", hash).Warn("Failed to repair Commodore artifact storage projection")
+
+		// Deletion projection: a soft-deleted foghorn row removes the catalog business row and writes a
+		// durable tombstone marker so /library stops showing the (retention-expired / deleted) asset.
+		// Coverage is the marker, not the business row's absence: the deletion is covered only when
+		// Commodore reports the tombstone marker present at >= this revision (Found=true). A response
+		// without that marker (Found=false) is NOT covered — advancing on it would let purge reap the
+		// foghorn row while no surviving marker blocks a lagging writer from resurrecting the asset.
+		if lifecycleStatus.Valid && lifecycleStatus.String == "deleted" {
+			delReq := &commodorepb.UpdateArtifactCatalogSnapshotRequest{
+				TenantId:        tenantID,
+				AssetType:       assetType,
+				AssetKey:        hash,
+				SourceRevision:  revision,
+				Deleted:         true,
+				SourceClusterId: strPtrOrNil(r.clusterID),
+			}
+			resp, delErr := r.commodore.UpdateArtifactCatalogSnapshot(ctx, delReq)
+			if delErr != nil {
+				r.logger.WithError(delErr).WithField("artifact_hash", hash).Warn("Failed to project catalog deletion")
+				r.backoffCatalogRow(ctx, hash)
 				continue
 			}
-			count++
+			if resp.GetFound() && resp.GetCurrentRevision() >= revision {
+				r.advanceCatalogWatermark(ctx, hash, revision)
+				count++
+			} else {
+				r.backoffCatalogRow(ctx, hash)
+			}
+			continue
 		}
-		thumbnailCluster := storageCluster
-		if thumbnailCluster == "" {
-			thumbnailCluster = originCluster
-		}
-		if hasThumbnails && thumbnailCluster != "" {
-			if _, err := r.commodore.MarkArtifactThumbnailsReady(ctx, tenantID, assetType, hash, thumbnailCluster); err != nil {
-				r.logger.WithError(err).WithField("artifact_hash", hash).Warn("Failed to repair Commodore artifact thumbnail projection")
+
+		tracksPresent := tracksJSON.Valid
+		var tracks []*commodorepb.MediaTrack
+		if tracksPresent {
+			parsed, terr := commodoreclient.UnmarshalMediaTracks([]byte(tracksJSON.String))
+			if terr != nil {
+				r.quarantineCatalogRow(ctx, hash, revision, "malformed tracks JSON: "+terr.Error())
 				continue
 			}
-			count++
+			tracks = parsed
 		}
-		if sizeBytes > 0 {
-			if _, err := r.commodore.UpdateArtifactSize(ctx, tenantID, assetType, hash, sizeBytes); err != nil {
-				r.logger.WithError(err).WithField("artifact_hash", hash).Warn("Failed to repair Commodore artifact size projection")
-				continue
-			}
-			count++
+		snapshot := &commodorepb.UpdateArtifactCatalogSnapshotRequest{
+			TenantId:         tenantID,
+			AssetType:        assetType,
+			AssetKey:         hash,
+			SourceRevision:   revision,
+			SizeBytes:        nullInt64Ptr(sizeBytes),
+			DurationMs:       nullInt64Ptr(durationMs),
+			TracksPresent:    tracksPresent,
+			Tracks:           tracks,
+			SyncStatus:       nullStringPtr(syncStatus),
+			IsSynced:         boolPtr(syncStatus.Valid && syncStatus.String == "synced"),
+			IsFinalized:      boolPtr(dtshSynced.Valid && dtshSynced.Bool),
+			StorageLocation:  nullStringPtr(storageLocation),
+			StorageClusterId: nullStringPtr(storageCluster),
+			HasThumbnails:    boolPtr(hasThumbnails.Valid && hasThumbnails.Bool),
+			LifecycleStatus:  nullStringPtr(lifecycleStatus),
+			ErrorMessage:     nullStringPtr(errorMessage),
+			// Assert this cluster as the projection source so Commodore enforces origin authority:
+			// only the origin cluster may mutate the artifact's catalog state.
+			SourceClusterId: strPtrOrNil(r.clusterID),
+			// Retention horizon → catalog, so /library shows accurate expiry for every kind
+			// (chapters included). Absent = keep-forever (NULL).
+			RetentionUntilUnix: nullInt64Ptr(retentionUnix),
 		}
+		resp, err := r.commodore.UpdateArtifactCatalogSnapshot(ctx, snapshot)
+		if err != nil {
+			r.logger.WithError(err).WithField("artifact_hash", hash).Warn("Failed to project Commodore catalog snapshot")
+			// Back this row off so a repeatedly-failing projection can't head-of-line block newer
+			// rows every pass; retried once the backoff elapses.
+			r.backoffCatalogRow(ctx, hash)
+			continue
+		}
+		if !resp.GetFound() {
+			// The catalog row isn't there yet (created out of band / registration lag). Do NOT
+			// advance the watermark — back off so it can't monopolize the batch, and retry later.
+			r.backoffCatalogRow(ctx, hash)
+			continue
+		}
+		if resp.GetCurrentRevision() < revision {
+			// Found, but Commodore's stored revision is behind what we asked for: a concurrent
+			// insert landed between the guarded UPDATE and the readback, or the guard rejected a
+			// stale attempt. Coverage is NOT proven for this revision — back off and retry.
+			r.backoffCatalogRow(ctx, hash)
+			continue
+		}
+		// Confirmed covered: Commodore's stored revision is at least this source revision.
+		r.advanceCatalogWatermark(ctx, hash, revision)
+		count++
 	}
-	return count
+	if rowsErr := rows.Err(); rowsErr != nil {
+		r.logger.WithError(rowsErr).Warn("Error iterating artifacts for Commodore projection")
+	}
+	return count, scanned
+}
+
+// advanceCatalogWatermark sets catalog_synced_rev = revision when it hasn't already moved
+// past it, and clears any stale quarantine error now that the row is covered. The WHERE guard
+// keeps the watermark monotonic and the trigger's watermark-only exemption means this write
+// does not re-dirty the row (catalog_quarantine_error is not a snapshot-projected field).
+func (r *ArtifactReconciler) advanceCatalogWatermark(ctx context.Context, hash string, revision int64) {
+	if _, err := r.db.ExecContext(ctx,
+		`UPDATE foghorn.artifacts
+		    SET catalog_synced_rev = $1, catalog_quarantine_error = NULL,
+		        catalog_next_attempt_at = NULL, catalog_projection_attempts = 0
+		  WHERE artifact_hash = $2 AND catalog_synced_rev < $1`,
+		revision, hash); err != nil {
+		r.logger.WithError(err).WithField("artifact_hash", hash).Warn("Failed to advance catalog projection watermark")
+	}
+}
+
+// backoffCatalogRow stamps catalog_next_attempt_at with an EXPONENTIAL backoff so the scan skips
+// this row until it elapses. The base is the reconcile interval and it doubles per consecutive
+// failure (capped at 1h): a fixed backoff shorter than the interval would leave a permanently-
+// failing row eligible again before every pass (re-filling the oldest-first batch and starving
+// newer rows), so the delay must exceed the cadence and grow. It does NOT advance
+// catalog_synced_rev (coverage is unproven). catalog_next_attempt_at / attempts are not
+// snapshot-projected fields, so this write does not bump catalog_revision.
+func (r *ArtifactReconciler) backoffCatalogRow(ctx context.Context, hash string) {
+	baseSecs := int(r.interval.Seconds())
+	if baseSecs < 1 {
+		baseSecs = 1
+	}
+	if _, err := r.db.ExecContext(ctx,
+		`UPDATE foghorn.artifacts
+		    SET catalog_projection_attempts = catalog_projection_attempts + 1,
+		        catalog_next_attempt_at = NOW() + make_interval(secs =>
+		            LEAST($2::float8 * power(2, LEAST(catalog_projection_attempts + 1, 6)), 3600))
+		  WHERE artifact_hash = $1`,
+		hash, baseSecs); err != nil {
+		r.logger.WithError(err).WithField("artifact_hash", hash).Warn("Failed to set catalog projection backoff")
+	}
+}
+
+// quarantineCatalogRow records that a row could not be projected because its authoritative
+// state is unrepresentable (unknown asset type, malformed tracks). It advances
+// catalog_quarantined_rev (NOT catalog_synced_rev) and stores the reason on the Foghorn row,
+// so the projection scan skips it — it can't head-of-line block the queue — without falsely
+// marking it covered. The quarantine state lives on foghorn.artifacts (operator-visible there,
+// not in the Commodore catalog that ListStorageArtifacts reads). A later authoritative
+// mutation — including a correction to the very field that caused the quarantine, since
+// artifact_type is now in the revision-bump trigger — pushes catalog_revision past the
+// quarantine mark and re-enqueues the row.
+func (r *ArtifactReconciler) quarantineCatalogRow(ctx context.Context, hash string, revision int64, reason string) {
+	r.logger.WithFields(logging.Fields{"artifact_hash": hash, "reason": reason}).
+		Warn("Quarantining catalog snapshot projection")
+	if _, err := r.db.ExecContext(ctx,
+		`UPDATE foghorn.artifacts
+		    SET catalog_quarantined_rev = $1, catalog_quarantine_error = $3
+		  WHERE artifact_hash = $2 AND catalog_quarantined_rev < $1`,
+		revision, hash, reason); err != nil {
+		r.logger.WithError(err).WithField("artifact_hash", hash).Warn("Failed to record catalog quarantine")
+	}
+}
+
+func nullInt64Ptr(v sql.NullInt64) *int64 {
+	if !v.Valid {
+		return nil
+	}
+	return &v.Int64
+}
+
+func nullStringPtr(v sql.NullString) *string {
+	if !v.Valid {
+		return nil
+	}
+	return &v.String
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+// strPtrOrNil maps an empty string to a nil optional. A projecting cluster always has a cluster
+// id set; a nil/absent source_cluster_id is rejected by Commodore (it is required), so this only
+// avoids sending a spurious empty string on the wire.
+func strPtrOrNil(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 // retryFailed re-sends FreezeRequests for artifacts with sync_status='failed'.
 func (r *ArtifactReconciler) retryFailed(ctx context.Context) int {
-	// sync_status='failed' is retryable with an exponential backoff schedule
-	// keyed off failure_count. After maxRetries the row stays 'failed' but is
-	// excluded from future retry scans — operator-visible terminal-by-budget.
-	// lost_local is already terminal (separate filter via sync_status='failed').
-	// DVR rows use the segment ledger and are excluded from generic freeze.
+	// sync_status='failed' is a TRANSIENT failure and is retried INDEFINITELY with a capped,
+	// jittered exponential backoff keyed off failure_count — never abandoned by a retry budget
+	// (stranding an artifact would force an operator SQL edit to recover). Only a classified
+	// PERMANENT failure is terminal: lost_local (source gone before any sync) is a separate
+	// sync_status excluded here. The ±20% jitter (0.8 + 0.4*random() per row) spreads a burst of
+	// same-age failures so retries don't thunder. DVR rows use the segment ledger and are excluded.
 	var rows *sql.Rows
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		var err error
@@ -260,19 +919,27 @@ func (r *ArtifactReconciler) retryFailed(ctx context.Context) int {
 			SELECT a.artifact_hash, a.artifact_type, COALESCE(a.stream_internal_name,''), a.tenant_id, a.format,
 			       an.node_id, an.file_path
 			FROM foghorn.artifacts a
-			JOIN foghorn.artifact_nodes an ON a.artifact_hash = an.artifact_hash
+			JOIN LATERAL (
+			    -- Exactly ONE deterministic, COMPLETE source per artifact: never dispatch an upload from
+			    -- an incomplete (partial) copy, and pick the same node each pass (lowest node_id) so two
+			    -- ticks can't race two uploaders for the same artifact.
+			    SELECT node_id, file_path FROM foghorn.artifact_nodes
+			    WHERE artifact_hash = a.artifact_hash AND is_orphaned = false AND is_complete = true
+			    ORDER BY node_id
+			    LIMIT 1
+			) an ON true
 			WHERE a.sync_status = 'failed'
 			  AND a.artifact_type != 'dvr'
-			  AND a.failure_count < $2
 			  AND a.updated_at < NOW() - LEAST(
 			      INTERVAL '5 minutes' * (1 << LEAST(a.failure_count, 4)),
 			      INTERVAL '1 hour'
-			    )
-			  AND a.status != 'deleted'
-			  AND an.is_orphaned = false
+			    ) * (0.8 + 0.4 * random())
+			  -- Lifecycle-ready only: never dispatch a freeze for an artifact still uploading/processing
+			  -- (the processing completion would reset the claim and strand the object).
+			  AND a.status = 'ready'
 			ORDER BY a.updated_at ASC
 			LIMIT $1
-		`, r.batchSize, maxArtifactRetries)
+		`, r.batchSize)
 		return err
 	})
 	if err != nil {
@@ -290,11 +957,14 @@ func (r *ArtifactReconciler) retryFailed(ctx context.Context) int {
 			continue
 		}
 
-		if err := r.sendFreezeForArtifact(ctx, hash, assetType, streamName, tenantID, format.String, nodeID, filePath); err != nil {
+		dispatched, err := r.sendFreezeForArtifact(ctx, hash, assetType, streamName, tenantID, format.String, nodeID, filePath)
+		if err != nil {
 			r.logger.WithError(err).WithField("artifact_hash", hash).Warn("Failed to send freeze retry")
 			continue
 		}
-		count++
+		if dispatched {
+			count++
+		}
 	}
 	return count
 }
@@ -305,12 +975,19 @@ func (r *ArtifactReconciler) advancePending(ctx context.Context) int {
 		SELECT a.artifact_hash, a.artifact_type, COALESCE(a.stream_internal_name,''), a.tenant_id, a.format,
 		       an.node_id, an.file_path
 		FROM foghorn.artifacts a
-		JOIN foghorn.artifact_nodes an ON a.artifact_hash = an.artifact_hash
+		JOIN LATERAL (
+		    -- One deterministic COMPLETE source per artifact (see retryFailed): never dispatch from a
+		    -- partial copy, and pick the same node each pass so ticks don't race two uploaders.
+		    SELECT node_id, file_path FROM foghorn.artifact_nodes
+		    WHERE artifact_hash = a.artifact_hash AND is_orphaned = false AND is_complete = true
+		    ORDER BY node_id
+		    LIMIT 1
+		) an ON true
 		WHERE a.sync_status = 'pending'
 		  AND a.artifact_type != 'dvr'
 		  AND a.storage_location = 'local'
-		  AND a.status != 'deleted'
-		  AND an.is_orphaned = false
+		  -- Lifecycle-ready only (see retryFailed): an uploading/processing artifact is not freezable.
+		  AND a.status = 'ready'
 		ORDER BY a.created_at ASC
 		LIMIT $1
 	`, r.batchSize)
@@ -329,11 +1006,14 @@ func (r *ArtifactReconciler) advancePending(ctx context.Context) int {
 			continue
 		}
 
-		if err := r.sendFreezeForArtifact(ctx, hash, assetType, streamName, tenantID, format.String, nodeID, filePath); err != nil {
+		dispatched, err := r.sendFreezeForArtifact(ctx, hash, assetType, streamName, tenantID, format.String, nodeID, filePath)
+		if err != nil {
 			r.logger.WithError(err).WithField("artifact_hash", hash).Warn("Failed to send freeze for pending artifact")
 			continue
 		}
-		count++
+		if dispatched {
+			count++
+		}
 	}
 	return count
 }
@@ -460,6 +1140,11 @@ func (r *ArtifactReconciler) reconcileOrphaned(ctx context.Context) int {
 		if err != nil {
 			continue
 		}
+		if r.onNodeIndexed != nil {
+			// This upsert can restore an artifact_nodes row that was previously LOST;
+			// emit a node-copy GAINED so the analytics projection isn't left absent.
+			r.onNodeIndexed(ctx, c.hash, c.nodeID)
+		}
 
 		r.logger.WithFields(logging.Fields{
 			"artifact_hash": c.hash,
@@ -488,59 +1173,83 @@ func artifactTypeFromProto(t ipcpb.ArtifactEvent_ArtifactType) string {
 	}
 }
 
-// sendFreezeForArtifact generates presigned URLs and sends a FreezeRequest to the node.
-func (r *ArtifactReconciler) sendFreezeForArtifact(ctx context.Context, hash, assetType, streamName, tenantID, format, nodeID, filePath string) error {
+// sendFreezeForArtifact assigns and sends a proactive FreezeRequest to the node through the ONE shared
+// freeze contract the interactive permission path uses — so a background dispatch applies the SAME tenant
+// routing, source+destination authorization, local-backing ownership check, server-minted attempt, staging
+// key, and claim. It can no longer store to the wrong backend, skip authorization, or attribute bytes to the
+// origin cluster.
+func (r *ArtifactReconciler) sendFreezeForArtifact(ctx context.Context, hash, assetType, streamName, tenantID, format, nodeID, filePath string) (dispatched bool, err error) {
+	if format == "" {
+		format = "mp4"
+	}
+	if assetType == "clip" && streamName == "" {
+		return false, fmt.Errorf("clip %s missing stream_internal_name", hash)
+	}
+	// Proactive-dispatch protocol pre-check: if the target node is LOCALLY connected and declares a
+	// pre-staged-freeze protocol version, do not claim+dispatch (it would neither upload to staging nor echo
+	// the attempt id, so the attempt could only ever fail closed and churn). Leave it for a later pass, after
+	// the sidecar is upgraded. `known=false` (peer-owned / not connected) does NOT skip — the owning instance's
+	// session-bound admission is the authority there.
+	if r.nodeFreezeProtocolOK != nil {
+		if ok, known := r.nodeFreezeProtocolOK(nodeID); known && !ok {
+			r.logger.WithFields(map[string]interface{}{"artifact_hash": hash, "node_id": nodeID}).
+				Debug("Proactive freeze skipped: sidecar control-protocol predates staged freeze")
+			return false, nil
+		}
+	}
 	expiry := 30 * time.Minute
-	requestID := fmt.Sprintf("reconcile-%s-%d", hash, time.Now().UnixMilli())
+
+	assignment, reason, ok := r.prepareFreeze(ctx, assetType, hash, tenantID, streamName, format, "", nodeID, expiry)
+	if !ok {
+		// Not assigned (unauthorized / official storage remote / not eligible / etc.): NOTHING was dispatched,
+		// so the caller must not count this as retried/advanced. Left for a later pass; not a loop error.
+		r.logger.WithFields(map[string]interface{}{"artifact_hash": hash, "reason": reason}).Debug("Proactive freeze not assigned")
+		return false, nil
+	}
 
 	req := &ipcpb.FreezeRequest{
-		RequestId:        requestID,
+		RequestId:        assignment.AttemptID, // server-minted; the node echoes it at completion
 		AssetType:        assetType,
 		AssetHash:        hash,
 		InternalName:     streamName,
 		LocalPath:        filePath,
+		PresignedPutUrl:  assignment.StagingURL,
 		UrlExpirySeconds: int64(expiry.Seconds()),
 	}
 
-	switch assetType {
-	case "clip":
-		if streamName == "" {
-			return fmt.Errorf("clip %s missing stream_internal_name", hash)
+	if err := r.sendFreeze(nodeID, req); err != nil {
+		// The wire send failed. It is AMBIGUOUS whether the node received the command and uploaded to the
+		// attempt-scoped staging key, so revert the row to retryable AND durably enqueue that staging object
+		// for deletion — both in ONE transaction so a crash can't revert without scheduling cleanup. The
+		// revert is guarded by THIS attempt's (attempt id, node, tenant) so a concurrent completion or newer
+		// attempt is never clobbered. When the revert affects 0 rows (already completed/superseded), the
+		// staging object is the winner's canonical source and must NOT be enqueued.
+		if txErr := database.WithRetryablePostgresTx(ctx, r.db, nil, func(tx *sql.Tx) error {
+			res, uErr := tx.ExecContext(ctx, `
+				UPDATE foghorn.artifacts
+				SET sync_status = 'failed', storage_location = 'local',
+				    sync_request_id = NULL, sync_node_id = NULL, updated_at = NOW()
+				WHERE artifact_hash = $1 AND sync_status = 'in_progress'
+				  AND status = 'ready'
+				  AND sync_request_id = $2 AND sync_node_id = $3
+				  AND tenant_id::text = $4`, hash, assignment.AttemptID, nodeID, tenantID)
+			if uErr != nil {
+				return uErr
+			}
+			n, raErr := res.RowsAffected()
+			if raErr != nil {
+				return raErr
+			}
+			if n == 0 {
+				return nil // did not revert THIS attempt → do not touch staging
+			}
+			return control.EnqueueStagingCleanupTx(ctx, tx, control.FreezeStagingKey(assignment.CanonicalKey, assignment.AttemptID))
+		}); txErr != nil {
+			r.logger.WithError(txErr).WithField("artifact_hash", hash).Warn("Failed to revert artifact after freeze send failure")
 		}
-		if format == "" {
-			format = "mp4"
-		}
-		s3Key := r.s3Client.BuildClipS3Key(tenantID, streamName, hash, format)
-		url, err := r.s3Client.GeneratePresignedPUT(s3Key, expiry)
-		if err != nil {
-			return fmt.Errorf("presign clip: %w", err)
-		}
-		req.PresignedPutUrl = url
-
-	case "vod":
-		if format == "" {
-			format = "mp4"
-		}
-		s3Key := r.s3Client.BuildVodS3Key(tenantID, hash, fmt.Sprintf("%s.%s", hash, format))
-		url, err := r.s3Client.GeneratePresignedPUT(s3Key, expiry)
-		if err != nil {
-			return fmt.Errorf("presign vod: %w", err)
-		}
-		req.PresignedPutUrl = url
-
-	default:
-		return fmt.Errorf("unsupported asset type: %s", assetType)
+		return false, err
 	}
-
-	// Mark as in_progress before sending
-	if _, dbErr := r.db.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		SET storage_location = 'freezing', sync_status = 'in_progress', updated_at = NOW()
-		WHERE artifact_hash = $1`, hash); dbErr != nil {
-		r.logger.WithError(dbErr).WithField("artifact_hash", hash).Warn("Failed to mark artifact as freezing")
-	}
-
-	return r.sendFreeze(nodeID, req)
+	return true, nil
 }
 
 // resolveArtifactContext uses Commodore to find the tenant and stream for an artifact.

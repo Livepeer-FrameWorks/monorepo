@@ -5,17 +5,19 @@ import (
 	"database/sql"
 	"testing"
 
+	"frameworks/api_balancing/internal/state"
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
-// fileArtifactRows builds the 10-column row fillFileArtifactResolve scans.
+// fileArtifactRows builds the 12-column row fillFileArtifactResolve scans.
 func fileArtifactRows() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
 		"s3_url", "size_bytes", "format", "dtsh_synced", "stream_internal_name",
 		"sync_status", "origin_cluster_id", "storage_cluster_id", "tenant_id", "artifact_type",
+		"active_dtsh_key", "durable_backend_local",
 	})
 }
 
@@ -32,7 +34,7 @@ func TestFillFileArtifactResolve(t *testing.T) {
 		db = nil
 		t.Cleanup(func() { db = prev })
 		resp := &ipcpb.RelayResolveResponse{}
-		fillFileArtifactResolve(ctx, &ipcpb.RelayResolveRequest{AssetHash: "h"}, resp, log)
+		fillFileArtifactResolve(ctx, &ipcpb.RelayResolveRequest{AssetHash: "h"}, resp, "node-1", log)
 		if resp.GetError() == "" {
 			t.Fatal("nil DB must set an error")
 		}
@@ -42,7 +44,7 @@ func TestFillFileArtifactResolve(t *testing.T) {
 		mock, _, _ := setupArtifactTestDeps(t)
 		mock.ExpectQuery(`FROM foghorn.artifacts`).WithArgs("h").WillReturnError(sql.ErrNoRows)
 		resp := &ipcpb.RelayResolveResponse{State: ipcpb.AssetState_ASSET_STATE_SOURCE_MISSING}
-		fillFileArtifactResolve(ctx, &ipcpb.RelayResolveRequest{AssetHash: "h", AssetKind: "vod"}, resp, log)
+		fillFileArtifactResolve(ctx, &ipcpb.RelayResolveRequest{AssetHash: "h", AssetKind: "vod"}, resp, "node-1", log)
 		if resp.GetError() != "" {
 			t.Fatalf("missing row must not error, got %q", resp.GetError())
 		}
@@ -55,7 +57,7 @@ func TestFillFileArtifactResolve(t *testing.T) {
 		mock, _, _ := setupArtifactTestDeps(t)
 		mock.ExpectQuery(`FROM foghorn.artifacts`).WithArgs("h").WillReturnError(sql.ErrConnDone)
 		resp := &ipcpb.RelayResolveResponse{}
-		fillFileArtifactResolve(ctx, &ipcpb.RelayResolveRequest{AssetHash: "h", AssetKind: "vod"}, resp, log)
+		fillFileArtifactResolve(ctx, &ipcpb.RelayResolveRequest{AssetHash: "h", AssetKind: "vod"}, resp, "node-1", log)
 		if resp.GetError() == "" {
 			t.Fatal("db error must set an error")
 		}
@@ -63,12 +65,18 @@ func TestFillFileArtifactResolve(t *testing.T) {
 
 	t.Run("synced row serves presigned media", func(t *testing.T) {
 		mock, _, _ := setupArtifactTestDeps(t)
+		// The requesting node is a platform/shared edge: no tenant, on a cluster THIS Foghorn operates → entitled.
+		sm := state.ResetDefaultManagerForTests()
+		t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+		sm.SetNodeInfo("node-1", "n", true, nil, nil, "", "", nil)
+		sm.SetNodeConnectionInfo(context.Background(), "node-1", "n", "", "platform-eu", nil)
+		AddPlatformSharedCluster("platform-eu")
 		mock.ExpectQuery(`FROM foghorn.artifacts`).WithArgs("h").
 			WillReturnRows(fileArtifactRows().AddRow(
 				"s3://bucket/key.mp4", int64(1234), "mp4", false, "stream1",
-				"synced", "", "", "t1", "vod"))
+				"synced", "", "", "t1", "vod", "", true))
 		resp := &ipcpb.RelayResolveResponse{State: ipcpb.AssetState_ASSET_STATE_SOURCE_MISSING}
-		fillFileArtifactResolve(ctx, &ipcpb.RelayResolveRequest{AssetHash: "h", AssetKind: "vod"}, resp, log)
+		fillFileArtifactResolve(ctx, &ipcpb.RelayResolveRequest{AssetHash: "h", AssetKind: "vod"}, resp, "node-1", log)
 		if resp.GetState() != ipcpb.AssetState_ASSET_STATE_PLAYABLE {
 			t.Fatalf("synced row must be playable, got %s err=%q", resp.GetState(), resp.GetError())
 		}
@@ -80,17 +88,38 @@ func TestFillFileArtifactResolve(t *testing.T) {
 		}
 	})
 
+	t.Run("dedicated node is denied another tenant's artifact (no presigned URL leak)", func(t *testing.T) {
+		mock, _, _ := setupArtifactTestDeps(t)
+		// The requesting node is DEDICATED to tenant-a; the artifact belongs to tenant-b.
+		sm := state.ResetDefaultManagerForTests()
+		t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+		sm.SetNodeInfo("byoc-a-node", "n", true, nil, nil, "", "", nil)
+		sm.SetNodeConnectionInfo(context.Background(), "byoc-a-node", "n", "tenant-a", "", nil)
+		mock.ExpectQuery(`FROM foghorn.artifacts`).WithArgs("h").
+			WillReturnRows(fileArtifactRows().AddRow(
+				"s3://bucket/key.mp4", int64(1234), "mp4", false, "stream1",
+				"synced", "", "", "tenant-b", "vod", "", true))
+		resp := &ipcpb.RelayResolveResponse{State: ipcpb.AssetState_ASSET_STATE_SOURCE_MISSING}
+		fillFileArtifactResolve(ctx, &ipcpb.RelayResolveRequest{AssetHash: "h", AssetKind: "vod"}, resp, "byoc-a-node", log)
+		if resp.GetMediaPresignedUrl() != "" {
+			t.Fatal("a tenant-a node must NOT receive a presigned URL for a tenant-b artifact")
+		}
+		if resp.GetState() != ipcpb.AssetState_ASSET_STATE_SOURCE_MISSING {
+			t.Fatalf("cross-tenant request must stay source-missing, got %s", resp.GetState())
+		}
+	})
+
 	t.Run("unsynced row falls through to peer relay (and 404s without a local origin)", func(t *testing.T) {
 		mock, _, _ := setupArtifactTestDeps(t)
 		// Artifact row present but sync_status is pending: must NOT serve the s3_url.
 		mock.ExpectQuery(`FROM foghorn.artifacts`).WithArgs("h").
 			WillReturnRows(fileArtifactRows().AddRow(
 				"s3://bucket/key.mp4", int64(1234), "mp4", false, "stream1",
-				"pending", "", "", "t1", "vod"))
+				"pending", "", "", "t1", "vod", "", false))
 		// Peer-relay fallback queries artifact_nodes for a local origin; none here.
 		mock.ExpectQuery(`FROM foghorn.artifact_nodes`).WithArgs("h").WillReturnError(sql.ErrNoRows)
 		resp := &ipcpb.RelayResolveResponse{State: ipcpb.AssetState_ASSET_STATE_SOURCE_MISSING}
-		fillFileArtifactResolve(ctx, &ipcpb.RelayResolveRequest{AssetHash: "h", AssetKind: "vod"}, resp, log)
+		fillFileArtifactResolve(ctx, &ipcpb.RelayResolveRequest{AssetHash: "h", AssetKind: "vod"}, resp, "node-1", log)
 		if resp.GetMediaPresignedUrl() != "" {
 			t.Fatal("pending sync must not serve a presigned media URL")
 		}
@@ -180,7 +209,7 @@ func TestFillCrossClusterArtifactFromCommodore(t *testing.T) {
 		CommodoreClient = nil
 		t.Cleanup(func() { CommodoreClient = prev })
 		resp := &ipcpb.RelayResolveResponse{State: ipcpb.AssetState_ASSET_STATE_SOURCE_MISSING}
-		fillCrossClusterArtifactFromCommodore(ctx, &ipcpb.RelayResolveRequest{AssetHash: "h"}, resp, log)
+		fillCrossClusterArtifactFromCommodore(ctx, &ipcpb.RelayResolveRequest{AssetHash: "h"}, resp, "node-1", log)
 		if resp.GetState() != ipcpb.AssetState_ASSET_STATE_SOURCE_MISSING {
 			t.Fatalf("nil client must not change state, got %s", resp.GetState())
 		}
@@ -193,13 +222,19 @@ func TestFillCrossClusterArtifactFromCommodore(t *testing.T) {
 			},
 		})
 		resp := &ipcpb.RelayResolveResponse{State: ipcpb.AssetState_ASSET_STATE_SOURCE_MISSING}
-		fillCrossClusterArtifactFromCommodore(ctx, &ipcpb.RelayResolveRequest{AssetHash: "h"}, resp, log)
+		fillCrossClusterArtifactFromCommodore(ctx, &ipcpb.RelayResolveRequest{AssetHash: "h"}, resp, "node-1", log)
 		if resp.GetState() != ipcpb.AssetState_ASSET_STATE_SOURCE_MISSING {
 			t.Fatalf("hash miss must not change state, got %s", resp.GetState())
 		}
 	})
 
 	t.Run("unauthorized origin cluster is refused", func(t *testing.T) {
+		sm := state.ResetDefaultManagerForTests()
+		t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+		// Platform/shared edge on a served cluster: passes tenant binding so the ORIGIN-cluster gate is exercised.
+		sm.SetNodeInfo("node-1", "n", true, nil, nil, "", "", nil)
+		sm.SetNodeConnectionInfo(context.Background(), "node-1", "n", "", "platform-eu", nil)
+		AddPlatformSharedCluster("platform-eu")
 		startFakeCommodoreServer(t, &fakeCommodoreInternal{
 			vodHash: func(_ context.Context, _ *commodorepb.ResolveVodHashRequest) (*commodorepb.ResolveVodHashResponse, error) {
 				// Found, with an origin cluster but NO cluster peers -> not authorized.
@@ -207,9 +242,27 @@ func TestFillCrossClusterArtifactFromCommodore(t *testing.T) {
 			},
 		})
 		resp := &ipcpb.RelayResolveResponse{State: ipcpb.AssetState_ASSET_STATE_SOURCE_MISSING}
-		fillCrossClusterArtifactFromCommodore(ctx, &ipcpb.RelayResolveRequest{AssetHash: "h"}, resp, log)
+		fillCrossClusterArtifactFromCommodore(ctx, &ipcpb.RelayResolveRequest{AssetHash: "h"}, resp, "node-1", log)
 		if resp.GetState() == ipcpb.AssetState_ASSET_STATE_PLAYABLE {
 			t.Fatal("unauthorized origin cluster must not be served")
+		}
+	})
+
+	t.Run("node dedicated to another tenant is denied before federation", func(t *testing.T) {
+		sm := state.ResetDefaultManagerForTests()
+		t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+		sm.SetNodeInfo("byoc-a-node", "n", true, nil, nil, "", "", nil)
+		sm.SetNodeConnectionInfo(context.Background(), "byoc-a-node", "n", "tenant-a", "", nil)
+		startFakeCommodoreServer(t, &fakeCommodoreInternal{
+			vodHash: func(_ context.Context, _ *commodorepb.ResolveVodHashRequest) (*commodorepb.ResolveVodHashResponse, error) {
+				// The node-tenant binding is checked BEFORE the origin/peer gate, so this is denied regardless.
+				return &commodorepb.ResolveVodHashResponse{Found: true, OriginClusterId: "c1", TenantId: "tenant-b"}, nil
+			},
+		})
+		resp := &ipcpb.RelayResolveResponse{State: ipcpb.AssetState_ASSET_STATE_SOURCE_MISSING}
+		fillCrossClusterArtifactFromCommodore(ctx, &ipcpb.RelayResolveRequest{AssetHash: "h"}, resp, "byoc-a-node", log)
+		if resp.GetState() == ipcpb.AssetState_ASSET_STATE_PLAYABLE {
+			t.Fatal("a tenant-a node must NOT reach a tenant-b federated URL")
 		}
 	})
 }

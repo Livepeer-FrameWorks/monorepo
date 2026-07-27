@@ -32,13 +32,13 @@ func BuildDVRS3Key(tenantID, internalName, dvrHash string) string {
 	return fmt.Sprintf("dvr/%s/%s/%s", tenantID, internalName, dvrHash)
 }
 
-// BuildVodS3Key formats a VOD's deterministic S3 key. Mirrors
-// storage.S3Client.BuildVodS3Key. Used as a fallback when
-// vod_metadata.s3_key is absent for VODs whose freeze produced a
-// deterministic key (e.g. federated freezes use hash+"."+format as the
-// filename).
-func BuildVodS3Key(tenantID, artifactHash, filename string) string {
-	return fmt.Sprintf("vod/%s/%s/%s", tenantID, artifactHash, filename)
+// BuildThumbnailPrefix is the S3 prefix under which ALL of an asset's thumbnail objects live — every
+// versioned object (thumbnails/{asset}/v/{version}/...), every per-attempt staging object
+// (thumbnails/{asset}/.staging/...), and any legacy fixed-key object (thumbnails/{asset}/...). Deleting the
+// prefix frees them together. For a purged artifact the asset_key IS the artifact_hash. Mirrors
+// control.ThumbnailStagingKey/ThumbnailVersionKey; kept here to avoid an import cycle onto internal/control.
+func BuildThumbnailPrefix(assetKey string) string {
+	return fmt.Sprintf("thumbnails/%s/", assetKey)
 }
 
 // ArtifactRef carries the authoritative metadata Cleaner needs to compute
@@ -53,8 +53,25 @@ type ArtifactRef struct {
 	Format           string
 	StorageClusterID string
 	OriginClusterID  string
-	VODS3Key         string // VOD only; from foghorn.vod_metadata.s3_key
-	S3URL            string // VOD fallback when vod_metadata.s3_key is absent; foghorn.artifacts.s3_url
+	// DurableBackendLocal is foghorn.artifacts.durable_backend_local: the STABLE write-time fact that these
+	// bytes live on THIS cell's local S3 backend (e.g. an official-alias cluster whose advertised backing is
+	// local). It OVERRIDES cluster-id comparison for delete routing — cluster id is attribution, not backend
+	// ownership, so a locally-backed alias must be deleted locally, never delegated to a peer.
+	DurableBackendLocal bool
+	VODS3Key            string // VOD only; from foghorn.vod_metadata.s3_key
+	S3URL               string // fallback when active_object_key/vod_metadata.s3_key absent; foghorn.artifacts.s3_url
+	// ActiveObjectKey is foghorn.artifacts.active_object_key: the AUTHORITATIVE published object key (the
+	// attempt-versioned key completion flipped the pointer to). It is the exact stored object, so deletion
+	// prefers it over any reconstructed/canonical key. Empty for legacy rows (fall back to VODS3Key/S3URL/
+	// reconstruction). The co-located index at ActiveObjectKey+".dtsh" is deleted alongside it.
+	ActiveObjectKey string
+	// ActiveDtshKey is foghorn.artifacts.active_dtsh_key: the authoritative version-addressed .dtsh index
+	// object. Deleted alongside the media object. Empty for legacy rows (fall back to <ActiveObjectKey>.dtsh).
+	ActiveDtshKey string
+	// PendingObjectKey is foghorn.artifacts.sync_object_key: the exact object an in-flight freeze
+	// authorized a PUT for. Retained on the deleted row so a PUT that lands AFTER the terminal transition
+	// is still freed even if it differs from (or the row can no longer derive) the main deletion target.
+	PendingObjectKey string
 }
 
 // S3Client is the local-bucket subset Cleaner needs to actually free
@@ -113,15 +130,70 @@ var (
 // (idempotent retries). Auth/ownership/shape failures from the remote
 // path return ErrRemoteRejected with the reason in the wrapped error.
 func (c *Cleaner) Delete(ctx context.Context, ref ArtifactRef) error {
+	pending := strings.TrimSpace(ref.PendingObjectKey)
 	target, err := c.resolveTarget(ref)
 	if err != nil {
-		return err
+		// No derivable main target. If a freeze bound a pending object, free THAT (an authorized-but-late
+		// PUT can otherwise leak); only when there is nothing to clean do we surface the missing-target error.
+		if pending == "" {
+			return err
+		}
+		return c.deleteKey(ctx, ref, pending)
 	}
 
 	if c.isRemote(ref) {
-		return c.deleteRemote(ctx, ref, target)
+		if delErr := c.deleteRemote(ctx, ref, target); delErr != nil {
+			return delErr
+		}
+	} else if delErr := c.deleteLocal(ctx, target); delErr != nil {
+		return delErr
 	}
-	return c.deleteLocal(ctx, target)
+	// Free the .dtsh index for a single-object clip/vod (never for a DVR prefix). Prefer the authoritative
+	// version-addressed active_dtsh_key; legacy rows fall back to the co-located <media>.dtsh. NotFound is
+	// idempotent-success, so deleting is safe even when no index was written.
+	if target.S3Key != "" {
+		dtshKey := strings.TrimSpace(ref.ActiveDtshKey)
+		if dtshKey == "" {
+			dtshKey = target.S3Key + ".dtsh"
+		}
+		if delErr := c.deleteKey(ctx, ref, dtshKey); delErr != nil {
+			return delErr
+		}
+	}
+	// Also free the pending freeze descriptor object when it differs from the main target.
+	if pending != "" && pending != target.S3Key {
+		return c.deleteKey(ctx, ref, pending)
+	}
+	return nil
+}
+
+// DeleteThumbnailsOnCluster frees an asset's thumbnail objects (all versions, staging, and legacy) by removing
+// the thumbnails/{hash}/ prefix from the cluster that actually STORES them — the thumbnail publication's
+// official-durable destination cluster, which is INDEPENDENT of where the parent artifact's own bytes live.
+// Routing by the parent artifact would delegate to the wrong cluster for a BYOC-origin artifact whose thumbnails
+// were stored on platform-official storage, leaking the locally-billed objects. An empty destination (unknown /
+// legacy) or one equal to this cluster deletes locally; otherwise it delegates to the owning cluster. DeletePrefix
+// on an empty prefix is idempotent success, so an asset that never had thumbnails is a clean no-op.
+func (c *Cleaner) DeleteThumbnailsOnCluster(ctx context.Context, tenantID, artifactHash, destinationCluster string) error {
+	hash := strings.TrimSpace(artifactHash)
+	if hash == "" {
+		return nil
+	}
+	target := deletionTarget{S3Prefix: BuildThumbnailPrefix(hash)}
+	owner := strings.TrimSpace(destinationCluster)
+	if owner == "" || owner == c.LocalCluster {
+		return c.deleteLocal(ctx, target)
+	}
+	return c.deleteRemote(ctx, ArtifactRef{Hash: hash, Type: "thumbnail", TenantID: tenantID, StorageClusterID: owner}, target)
+}
+
+// deleteKey frees a single explicit S3 key (local pool or, for a peer-owned artifact, via the delegate).
+func (c *Cleaner) deleteKey(ctx context.Context, ref ArtifactRef, key string) error {
+	t := deletionTarget{S3Key: key}
+	if c.isRemote(ref) {
+		return c.deleteRemote(ctx, ref, t)
+	}
+	return c.deleteLocal(ctx, t)
 }
 
 // deletionTarget is what we send on the wire (and use locally). Exactly
@@ -134,8 +206,14 @@ type deletionTarget struct {
 func (c *Cleaner) resolveTarget(ref ArtifactRef) (deletionTarget, error) {
 	switch strings.ToLower(strings.TrimSpace(ref.Type)) {
 	case "clip":
+		// Prefer the AUTHORITATIVE published key; a frozen clip lives at the attempt-versioned
+		// active_object_key, NOT the reconstructed canonical key. Reconstruction is only the legacy fallback
+		// for rows synced before active_object_key existed.
+		if k := strings.TrimSpace(ref.ActiveObjectKey); k != "" {
+			return deletionTarget{S3Key: k}, nil
+		}
 		if ref.TenantID == "" || ref.StreamInternal == "" || ref.Hash == "" || ref.Format == "" {
-			return deletionTarget{}, fmt.Errorf("%w: clip needs tenant_id, stream_internal_name, artifact_hash, format", ErrMissingTarget)
+			return deletionTarget{}, fmt.Errorf("%w: clip needs active_object_key or tenant_id, stream_internal_name, artifact_hash, format", ErrMissingTarget)
 		}
 		return deletionTarget{S3Key: BuildClipS3Key(ref.TenantID, ref.StreamInternal, ref.Hash, ref.Format)}, nil
 	case "dvr":
@@ -154,19 +232,19 @@ func (c *Cleaner) resolveTarget(ref ArtifactRef) (deletionTarget, error) {
 	}
 }
 
-// resolveVODKey picks the best deletion target for a VOD row, in
-// preference order:
-//  1. vod_metadata.s3_key — authoritative when present (user uploads).
-//  2. Parsed from foghorn.artifacts.s3_url — present after a freeze even
-//     when vod_metadata.s3_key was never written (legacy / non-upload
-//     paths).
-//  3. Derived BuildVodS3Key(tenant, hash, hash+"."+format) — the
-//     deterministic shape used by federated freezes; safe fallback when
-//     format is known.
+// resolveVODKey picks the deletion target for a VOD row from a RECORDED object key only, in preference
+// order:
+//  1. vod_metadata.s3_key — the authoritative recorded key (uploads and freezes both write it).
+//  2. Parsed from foghorn.artifacts.s3_url — the recorded canonical URL after a completed freeze.
 //
-// Returns ErrMissingTarget only when none of these are derivable, so a
-// VOD row with bytes on S3 is never silently dropped by the purge job.
+// It does NOT reconstruct a key from tenant/hash/format: deletion consumes the exact recorded object, the
+// same source of truth the write path persists. When no recorded key exists here, Delete falls back to
+// the freeze descriptor (ref.PendingObjectKey) and otherwise fails closed — a VOD is never deleted at a
+// guessed key.
 func (c *Cleaner) resolveVODKey(ref ArtifactRef) (string, error) {
+	if k := strings.TrimSpace(ref.ActiveObjectKey); k != "" {
+		return k, nil
+	}
 	if k := strings.TrimSpace(ref.VODS3Key); k != "" {
 		return k, nil
 	}
@@ -175,10 +253,7 @@ func (c *Cleaner) resolveVODKey(ref ArtifactRef) (string, error) {
 			return k, nil
 		}
 	}
-	if ref.TenantID != "" && ref.Hash != "" && strings.TrimSpace(ref.Format) != "" {
-		return BuildVodS3Key(ref.TenantID, ref.Hash, ref.Hash+"."+ref.Format), nil
-	}
-	return "", fmt.Errorf("%w: vod needs vod_metadata.s3_key, s3_url, or format", ErrMissingTarget)
+	return "", fmt.Errorf("%w: vod needs a recorded vod_metadata.s3_key or s3_url", ErrMissingTarget)
 }
 
 // isRemote returns true when the artifact's bytes live on a cluster
@@ -187,6 +262,12 @@ func (c *Cleaner) resolveVODKey(ref ArtifactRef) (string, error) {
 // authoritative-cluster lookup at api_balancing/internal/control/playback.go:177).
 // Empty / unset / matches local → false (local).
 func (c *Cleaner) isRemote(ref ArtifactRef) bool {
+	// Persisted backend ownership WINS over cluster-id comparison: a locally-backed official alias has a
+	// storage_cluster_id that differs from LocalCluster but its bytes are on THIS cell's S3, so it must be
+	// deleted locally, not delegated.
+	if ref.DurableBackendLocal {
+		return false
+	}
 	owner := strings.TrimSpace(ref.StorageClusterID)
 	if owner == "" {
 		owner = strings.TrimSpace(ref.OriginClusterID)

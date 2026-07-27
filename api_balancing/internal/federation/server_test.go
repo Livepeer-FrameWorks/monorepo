@@ -50,9 +50,10 @@ func (s *testPeerChannelServerStream) RecvMsg(any) error { return nil }
 func TestPeerChannel_RejectsEmptyClusterID(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	srv := NewFederationServer(FederationServerConfig{
-		Logger:    testLogger(),
-		ClusterID: "cluster-a",
-		Cache:     cache,
+		Logger:                   testLogger(),
+		ClusterID:                "cluster-a",
+		Cache:                    cache,
+		AllowFederationMutations: true,
 	})
 
 	svcCtx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "service")
@@ -75,9 +76,10 @@ func TestPeerChannel_RejectsEmptyClusterID(t *testing.T) {
 func TestPeerChannel_RejectsClusterIDChangeWithinStream(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	srv := NewFederationServer(FederationServerConfig{
-		Logger:    testLogger(),
-		ClusterID: "cluster-a",
-		Cache:     cache,
+		Logger:                   testLogger(),
+		ClusterID:                "cluster-a",
+		Cache:                    cache,
+		AllowFederationMutations: true,
 	})
 
 	svcCtx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "service")

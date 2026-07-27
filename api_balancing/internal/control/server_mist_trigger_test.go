@@ -1,11 +1,9 @@
 package control
 
 import (
-	"context"
 	"errors"
 	"testing"
 
-	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -27,7 +25,10 @@ func (c *captureMistTriggerProcessor) ProcessTypedTrigger(trigger *ipcpb.MistTri
 	return "", false, c.err
 }
 
-func TestProcessMistTrigger_PopulatesLocalClusterIDWhenMissing(t *testing.T) {
+// There is NO local-cluster fallback: the cluster is whatever the authenticated session carries. A session
+// with an empty cluster yields an empty cluster_id — the server never substitutes its own local cluster,
+// which would misattribute a remote node's work to this Foghorn.
+func TestProcessMistTrigger_NoLocalClusterFallback(t *testing.T) {
 	prevProcessor := mistTriggerProcessor
 	prevLocalClusterID := localClusterID
 	t.Cleanup(func() {
@@ -35,30 +36,18 @@ func TestProcessMistTrigger_PopulatesLocalClusterIDWhenMissing(t *testing.T) {
 		localClusterID = prevLocalClusterID
 	})
 
-	// No node state registered → falls back to localClusterID
-	sm := state.ResetDefaultManagerForTests()
-	_ = sm
-
 	capture := &captureMistTriggerProcessor{}
 	mistTriggerProcessor = capture
 	localClusterID = "cluster-local"
 
-	trigger := &ipcpb.MistTrigger{
-		TriggerType: "PUSH_END",
-		Blocking:    false,
-		RequestId:   "req-1",
-		TriggerPayload: &ipcpb.MistTrigger_PushEnd{
-			PushEnd: &ipcpb.PushEndTrigger{StreamName: "live+abc"},
-		},
-	}
-
-	processMistTrigger(trigger, "node-1", nil, logging.Logger(logrus.New()))
+	trigger := pushEndTrigger("req-1", "")
+	processMistTrigger(trigger, NodeSession{CanonicalNodeID: "node-1"}, nil, logging.Logger(logrus.New()))
 
 	if capture.last == nil {
 		t.Fatal("processor did not receive trigger")
 	}
-	if capture.last.GetClusterId() != "cluster-local" {
-		t.Fatalf("expected cluster_id to default to local cluster, got %q", capture.last.GetClusterId())
+	if capture.last.GetClusterId() != "" {
+		t.Fatalf("empty session cluster must not fall back to local cluster, got %q", capture.last.GetClusterId())
 	}
 }
 
@@ -83,7 +72,7 @@ func TestProcessMistTrigger_DurableAckReportsProcessorError(t *testing.T) {
 		},
 	}
 
-	processMistTrigger(trigger, "node-1", stream, logging.Logger(logrus.New()))
+	processMistTrigger(trigger, NodeSession{CanonicalNodeID: "node-1"}, stream, logging.Logger(logrus.New()))
 
 	msg := stream.lastSent()
 	if msg == nil {
@@ -125,7 +114,7 @@ func TestProcessMistTrigger_PushInputCloseGetsDurableAck(t *testing.T) {
 		},
 	}
 
-	processMistTrigger(trigger, "node-1", stream, logging.Logger(logrus.New()))
+	processMistTrigger(trigger, NodeSession{CanonicalNodeID: "node-1"}, stream, logging.Logger(logrus.New()))
 
 	msg := stream.lastSent()
 	if msg == nil {
@@ -176,7 +165,7 @@ func TestProcessMistTrigger_AllDurableTypesGetAck(t *testing.T) {
 				TriggerPayload: &ipcpb.MistTrigger_RawMistWebhook{
 					RawMistWebhook: &ipcpb.RawMistWebhookTrigger{PayloadRaw: []byte("raw")},
 				},
-			}, "node-1", stream, logging.Logger(logrus.New()))
+			}, NodeSession{CanonicalNodeID: "node-1"}, stream, logging.Logger(logrus.New()))
 
 			msg := stream.lastSent()
 			if msg == nil {
@@ -215,7 +204,7 @@ func TestProcessMistTrigger_NonDurableAsyncGetsNoAck(t *testing.T) {
 		TriggerPayload: &ipcpb.MistTrigger_RawMistWebhook{
 			RawMistWebhook: &ipcpb.RawMistWebhookTrigger{PayloadRaw: []byte("raw")},
 		},
-	}, "node-1", stream, logging.Logger(logrus.New()))
+	}, NodeSession{CanonicalNodeID: "node-1"}, stream, logging.Logger(logrus.New()))
 
 	if msg := stream.lastSent(); msg != nil {
 		t.Fatalf("non-durable async trigger should not receive a control-stream ack, got %T", msg.GetPayload())
@@ -248,7 +237,7 @@ func TestProcessMistTrigger_DropsStaleControlStream(t *testing.T) {
 		},
 	}
 
-	processMistTrigger(trigger, "node-1", staleStream, logging.Logger(logrus.New()))
+	processMistTrigger(trigger, NodeSession{CanonicalNodeID: "node-1"}, staleStream, logging.Logger(logrus.New()))
 
 	if capture.last != nil {
 		t.Fatal("processor received stale trigger")
@@ -269,105 +258,120 @@ func TestProcessMistTrigger_DropsStaleControlStream(t *testing.T) {
 	}
 }
 
-func TestProcessMistTrigger_PrefersNodeRegistryCluster(t *testing.T) {
-	prevProcessor := mistTriggerProcessor
-	prevLocalClusterID := localClusterID
-	t.Cleanup(func() {
-		mistTriggerProcessor = prevProcessor
-		localClusterID = prevLocalClusterID
-	})
+// registerTestConn installs an authenticated control connection (the source processMistTrigger now derives
+// The server-owned NodeSession reflects the authenticated connection's resolved identity, prefers the canonical
+// node id, and is absent for an unregistered node.
+func TestNodeSession_FromRegisteredConn(t *testing.T) {
+	prev := registry
+	t.Cleanup(func() { registry = prev })
+	registry = &Registry{conns: map[string]*conn{}, log: logging.Logger(logrus.New())}
+	registry.conns["raw-1"] = &conn{rawNodeID: "raw-1", canonicalID: "canon-1", clusterID: "cluster-x", fence: 7, protocolVersion: 3}
 
-	sm := state.ResetDefaultManagerForTests()
-	sm.SetNodeConnectionInfo(context.Background(), "node-remote", "10.0.0.5", "", "cluster-remote", nil)
-
-	capture := &captureMistTriggerProcessor{}
-	mistTriggerProcessor = capture
-	localClusterID = "cluster-local"
-
-	trigger := &ipcpb.MistTrigger{
-		TriggerType: "PUSH_END",
-		Blocking:    false,
-		RequestId:   "req-3",
-		TriggerPayload: &ipcpb.MistTrigger_PushEnd{
-			PushEnd: &ipcpb.PushEndTrigger{StreamName: "live+abc"},
-		},
+	sess, ok := currentNodeSession("raw-1")
+	if !ok {
+		t.Fatal("expected a session for a registered node")
+	}
+	if sess.RawNodeID != "raw-1" || sess.CanonicalNodeID != "canon-1" || sess.ClusterID != "cluster-x" || sess.Fence != 7 || sess.ProtocolVersion != 3 {
+		t.Fatalf("session mismatch: %+v", sess)
+	}
+	if sess.NodeID() != "canon-1" {
+		t.Fatalf("NodeID() must prefer the canonical id, got %q", sess.NodeID())
 	}
 
-	processMistTrigger(trigger, "node-remote", nil, logging.Logger(logrus.New()))
-
-	if capture.last == nil {
-		t.Fatal("processor did not receive trigger")
-	}
-	if capture.last.GetClusterId() != "cluster-remote" {
-		t.Fatalf("expected cluster_id from node registry %q, got %q", "cluster-remote", capture.last.GetClusterId())
-	}
-}
-
-func TestProcessMistTrigger_DoesNotOverwriteProvidedClusterID(t *testing.T) {
-	prevProcessor := mistTriggerProcessor
-	prevLocalClusterID := localClusterID
-	t.Cleanup(func() {
-		mistTriggerProcessor = prevProcessor
-		localClusterID = prevLocalClusterID
-	})
-
-	capture := &captureMistTriggerProcessor{}
-	mistTriggerProcessor = capture
-	localClusterID = "cluster-local"
-
-	providedCluster := "cluster-from-helmsman"
-	trigger := &ipcpb.MistTrigger{
-		TriggerType: "PUSH_END",
-		Blocking:    false,
-		RequestId:   "req-2",
-		ClusterId:   &providedCluster,
-		TriggerPayload: &ipcpb.MistTrigger_PushEnd{
-			PushEnd: &ipcpb.PushEndTrigger{StreamName: "live+abc"},
-		},
+	// No canonical id → NodeID falls back to the raw registry key.
+	registry.conns["raw-2"] = &conn{rawNodeID: "raw-2", clusterID: "c"}
+	if s2, _ := currentNodeSession("raw-2"); s2.NodeID() != "raw-2" {
+		t.Fatalf("NodeID() must fall back to the raw id, got %q", s2.NodeID())
 	}
 
-	processMistTrigger(trigger, "node-1", nil, logging.Logger(logrus.New()))
-
-	if capture.last == nil {
-		t.Fatal("processor did not receive trigger")
+	// Unregistered node → no session.
+	if _, ok := currentNodeSession("ghost"); ok {
+		t.Fatal("an unregistered node must have no session")
 	}
-	if capture.last.GetClusterId() != providedCluster {
-		t.Fatalf("expected cluster_id to remain %q, got %q", providedCluster, capture.last.GetClusterId())
+
+	// Pre-resolution non-dispatchability: the zero session has an empty NodeID(). The Connect receive loop
+	// drops any trigger whose captured session reports an empty NodeID() (see the guard before dispatch), so
+	// a connection that has not resolved+published its identity can never attribute work to any node.
+	if (NodeSession{}).NodeID() != "" {
+		t.Fatal("an unresolved (zero) session must report an empty NodeID() so the dispatch guard drops it")
 	}
 }
 
-func TestProcessMistTrigger_NodeRegistryClusterOverridesProvidedClusterID(t *testing.T) {
-	prevProcessor := mistTriggerProcessor
-	prevLocalClusterID := localClusterID
-	t.Cleanup(func() {
-		mistTriggerProcessor = prevProcessor
-		localClusterID = prevLocalClusterID
-	})
+// pushEndTrigger builds a PUSH_END trigger optionally carrying a self-asserted payload cluster_id.
+func pushEndTrigger(reqID, payloadCluster string) *ipcpb.MistTrigger {
+	tr := &ipcpb.MistTrigger{
+		TriggerType:    "PUSH_END",
+		RequestId:      reqID,
+		TriggerPayload: &ipcpb.MistTrigger_PushEnd{PushEnd: &ipcpb.PushEndTrigger{StreamName: "live+abc"}},
+	}
+	if payloadCluster != "" {
+		tr.ClusterId = &payloadCluster
+	}
+	return tr
+}
 
-	sm := state.ResetDefaultManagerForTests()
-	sm.SetNodeConnectionInfo(context.Background(), "node-remote", "10.0.0.5", "", "cluster-registered", nil)
-
+// The cluster stamped on a trigger comes from the AUTHENTICATED session passed by value, overriding any
+// self-asserted payload cluster_id. There is no local-cluster fallback.
+func TestProcessMistTrigger_UsesSessionClusterAuthoritatively(t *testing.T) {
+	prev := mistTriggerProcessor
+	prevLocal := localClusterID
+	t.Cleanup(func() { mistTriggerProcessor = prev; localClusterID = prevLocal })
 	capture := &captureMistTriggerProcessor{}
 	mistTriggerProcessor = capture
 	localClusterID = "cluster-local"
 
-	providedCluster := "cluster-from-trigger"
-	trigger := &ipcpb.MistTrigger{
-		TriggerType: "PUSH_END",
-		Blocking:    false,
-		RequestId:   "req-4",
-		ClusterId:   &providedCluster,
-		TriggerPayload: &ipcpb.MistTrigger_PushEnd{
-			PushEnd: &ipcpb.PushEndTrigger{StreamName: "live+abc"},
-		},
-	}
-
-	processMistTrigger(trigger, "node-remote", nil, logging.Logger(logrus.New()))
+	trigger := pushEndTrigger("req-1", "cluster-from-helmsman")
+	processMistTrigger(trigger, NodeSession{CanonicalNodeID: "node-remote", ClusterID: "cluster-authenticated"}, nil, logging.Logger(logrus.New()))
 
 	if capture.last == nil {
 		t.Fatal("processor did not receive trigger")
 	}
-	if capture.last.GetClusterId() != "cluster-registered" {
-		t.Fatalf("expected registered node cluster to override provided cluster, got %q", capture.last.GetClusterId())
+	if capture.last.GetClusterId() != "cluster-authenticated" {
+		t.Fatalf("cluster must come from the session, not the payload or local cluster; got %q", capture.last.GetClusterId())
+	}
+}
+
+// The trigger is attributed to the session's CANONICAL node id, not the raw registry key and not a payload id.
+func TestProcessMistTrigger_AttributesToCanonicalNodeID(t *testing.T) {
+	prev := mistTriggerProcessor
+	t.Cleanup(func() { mistTriggerProcessor = prev })
+	capture := &captureMistTriggerProcessor{}
+	mistTriggerProcessor = capture
+
+	trigger := pushEndTrigger("req-2", "")
+	trigger.NodeId = "some-other-node"
+	processMistTrigger(trigger, NodeSession{RawNodeID: "raw-x", CanonicalNodeID: "canon-x", ClusterID: "c"}, nil, logging.Logger(logrus.New()))
+
+	if capture.last == nil {
+		t.Fatal("processor did not receive trigger")
+	}
+	if capture.last.GetNodeId() != "canon-x" {
+		t.Fatalf("node_id must be the session canonical id, got %q", capture.last.GetNodeId())
+	}
+}
+
+// Reconnect safety: the handler uses the session PASSED BY VALUE and never re-reads the registry, so a
+// reconnect that has already replaced the registry entry (with a different cluster) cannot substitute the
+// newer session for work received on the older connection.
+func TestProcessMistTrigger_UsesPassedSessionNotRegistry(t *testing.T) {
+	prev := mistTriggerProcessor
+	prevReg := registry
+	t.Cleanup(func() { mistTriggerProcessor = prev; registry = prevReg })
+	capture := &captureMistTriggerProcessor{}
+	mistTriggerProcessor = capture
+
+	// A reconnect has already published a NEWER connection for node-x with a different cluster.
+	registry = &Registry{conns: map[string]*conn{}, log: logging.Logger(logrus.New())}
+	registry.conns["node-x"] = &conn{rawNodeID: "node-x", canonicalID: "node-x", clusterID: "cluster-NEW"}
+
+	// Work received on the OLDER connection carries the older session by value.
+	oldSession := NodeSession{CanonicalNodeID: "node-x", ClusterID: "cluster-OLD"}
+	processMistTrigger(pushEndTrigger("req-3", ""), oldSession, nil, logging.Logger(logrus.New()))
+
+	if capture.last == nil {
+		t.Fatal("processor did not receive trigger")
+	}
+	if capture.last.GetClusterId() != "cluster-OLD" {
+		t.Fatalf("handler must use the passed session (cluster-OLD), not the reconnected registry entry; got %q", capture.last.GetClusterId())
 	}
 }

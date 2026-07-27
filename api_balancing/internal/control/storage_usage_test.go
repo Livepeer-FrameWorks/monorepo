@@ -1,0 +1,97 @@
+package control
+
+import (
+	"context"
+	"testing"
+
+	"github.com/DATA-DOG/go-sqlmock"
+)
+
+// ReconcileBillingAttribution reviews a BOUNDED page of (tenant, cluster) pairs PAST a durable cursor, marks
+// the owned ones, and advances the cursor — so a slow/large remote prefix can never restart at the same
+// position and starve later locally-owned pairs. This pins the read-cursor → bounded-scan → mark →
+// advance-cursor shape, ownership classification, and the wrap-on-short-page behaviour.
+func TestReconcileBillingAttribution_BoundedKeysetCursor(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	prevLocal := localClusterID
+	SetLocalClusterID("official-a")
+	prevMint := canMintOfficialLocallyFn
+	canMintOfficialLocallyFn = func(context.Context, string, string) bool { return false } // remote pairs are NOT owned
+	t.Cleanup(func() {
+		SetLocalClusterID(prevLocal)
+		canMintOfficialLocallyFn = prevMint
+	})
+
+	// 1) Durable cursor read (start).
+	mock.ExpectQuery(`SELECT last_tenant, last_cluster FROM foghorn.billing_attribution_cursor WHERE id = true`).
+		WillReturnRows(sqlmock.NewRows([]string{"last_tenant", "last_cluster"}).AddRow("", ""))
+	// 2) Bounded keyset page of unmarked pairs past the cursor: one pure-local (owned) + one remote (not owned).
+	mock.ExpectQuery(`SELECT p.tenant, p.cluster FROM`).
+		WithArgs("", "", billingAttributionBatch).
+		WillReturnRows(sqlmock.NewRows([]string{"tenant", "cluster"}).
+			AddRow("t1", "").
+			AddRow("t2", "remote-x"))
+	// 3) Only the owned pair (empty cluster ⇒ pure-local) is marked.
+	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET durable_backend_local = true`).
+		WithArgs("t1", "").
+		WillReturnResult(sqlmock.NewResult(0, 3))
+	// 4) Short page (< batch) ⇒ cursor WRAPS to the start so the next cycle re-reviews from the top.
+	mock.ExpectExec(`UPDATE foghorn.billing_attribution_cursor SET last_tenant = \$1, last_cluster = \$2 WHERE id = true`).
+		WithArgs("", "").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	marked, err := ReconcileBillingAttribution(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if marked != 3 {
+		t.Fatalf("expected 3 rows marked (the owned pair), got %d", marked)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A FULL page means more pairs remain, so the cursor advances to the last reviewed pair (not a wrap) — the
+// next pass continues strictly after it instead of restarting at the same prefix.
+func TestReconcileBillingAttribution_FullPageAdvancesCursor(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	prevLocal := localClusterID
+	SetLocalClusterID("official-a")
+	prevMint := canMintOfficialLocallyFn
+	canMintOfficialLocallyFn = func(context.Context, string, string) bool { return false }
+	t.Cleanup(func() {
+		SetLocalClusterID(prevLocal)
+		canMintOfficialLocallyFn = prevMint
+	})
+
+	mock.ExpectQuery(`SELECT last_tenant, last_cluster FROM foghorn.billing_attribution_cursor WHERE id = true`).
+		WillReturnRows(sqlmock.NewRows([]string{"last_tenant", "last_cluster"}).AddRow("t0", "c0"))
+	// A full page of `billingAttributionBatch` remote (unowned) pairs.
+	pageRows := sqlmock.NewRows([]string{"tenant", "cluster"})
+	lastTenant, lastCluster := "", ""
+	for i := 0; i < billingAttributionBatch; i++ {
+		tn := "t-" + string(rune('a'+i%26))
+		cl := "remote"
+		pageRows.AddRow(tn, cl)
+		lastTenant, lastCluster = tn, cl
+	}
+	mock.ExpectQuery(`SELECT p.tenant, p.cluster FROM`).
+		WithArgs("t0", "c0", billingAttributionBatch).
+		WillReturnRows(pageRows)
+	// No UPDATE foghorn.artifacts (all pairs remote/unowned). Cursor advances to the LAST reviewed pair.
+	mock.ExpectExec(`UPDATE foghorn.billing_attribution_cursor SET last_tenant = \$1, last_cluster = \$2 WHERE id = true`).
+		WithArgs(lastTenant, lastCluster).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	marked, err := ReconcileBillingAttribution(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if marked != 0 {
+		t.Fatalf("expected 0 rows marked (all remote), got %d", marked)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -1,5 +1,5 @@
-// Package artifactoutbox delivers Foghorn artifact-lifecycle (DVR / VOD
-// / Clip) and federation peer-registry events to Decklog through a
+// Package artifactoutbox delivers Foghorn artifact-lifecycle (DVR / VOD / Clip),
+// federation peer-registry, and artifact node-copy events to Decklog through a
 // durable outbox. Producers call the Enqueue helpers; a drain worker
 // dispatches with exponential backoff.
 package artifactoutbox
@@ -27,10 +27,11 @@ const (
 	lease              = 60 * time.Second
 	alertAfterAttempts = 12
 
-	kindClipLifecycle   = "clip_lifecycle"
-	kindDVRLifecycle    = "dvr_lifecycle"
-	kindVodLifecycle    = "vod_lifecycle"
-	kindFederationEvent = "federation_event"
+	kindClipLifecycle    = "clip_lifecycle"
+	kindDVRLifecycle     = "dvr_lifecycle"
+	kindVodLifecycle     = "vod_lifecycle"
+	kindFederationEvent  = "federation_event"
+	kindArtifactNodeCopy = "artifact_node_copy"
 )
 
 func config() outbox.Config {
@@ -54,8 +55,10 @@ var (
 )
 
 // Init wires the package-level dependencies. Call once at process start.
-// Safe to call with a nil decklogClient — the worker will log "disabled"
-// and Enqueue calls still write outbox rows for retention.
+// Safe to call with a nil decklogClient — the worker logs "disabled" and Enqueue
+// calls still write outbox rows, so capture continues and delivery waits for a
+// client. The package-level db is only used by non-transactional enqueue helpers
+// and the drain worker; the state-coupled node-copy path always supplies its own tx.
 func Init(database *sql.DB, log logging.Logger, dc *decklogclient.BatchedClient) {
 	db = database
 	logger = log
@@ -91,9 +94,24 @@ func RunWorker(ctx context.Context) {
 // drain worker dispatches to Decklog with exponential backoff. Use
 // EnqueueClipLifecycleTx when the caller already holds a transaction —
 // the INSERT then rolls back with the caller's tx on failure.
+// ErrLifecycleMissingTenant is returned when an artifact-lifecycle event is enqueued without a tenant.
+// A lifecycle event MUST be attributable — accepting an empty tenant (coerced to NULL in the outbox
+// row) is fail-open, so the enqueue is rejected. On a Tx variant this rolls back the caller's state
+// transition, keeping state and its analytics event consistent.
+var ErrLifecycleMissingTenant = errors.New("artifactoutbox: lifecycle event requires a tenant")
+
+// ErrNilLifecyclePayload is returned when a lifecycle enqueue is called with a nil payload. A nil
+// payload is a programmer error (e.g. an event builder that returned nil for unresolved identity):
+// silently returning success would let the caller's state transaction commit WITHOUT its required
+// analytics event, so it is rejected — on a Tx variant this rolls the state transition back.
+var ErrNilLifecyclePayload = errors.New("artifactoutbox: nil lifecycle payload")
+
 func EnqueueClipLifecycle(data *ipcpb.ClipLifecycleData) error {
 	if data == nil {
-		return nil
+		return ErrNilLifecyclePayload
+	}
+	if data.GetTenantId() == "" {
+		return fmt.Errorf("clip %s: %w", data.GetClipHash(), ErrLifecycleMissingTenant)
 	}
 	return enqueue(context.Background(), nil, kindClipLifecycle, data.GetTenantId(),
 		data.GetStreamId(), data.GetClipHash(), data)
@@ -101,7 +119,10 @@ func EnqueueClipLifecycle(data *ipcpb.ClipLifecycleData) error {
 
 func EnqueueClipLifecycleTx(ctx context.Context, tx execContext, data *ipcpb.ClipLifecycleData) error {
 	if data == nil {
-		return nil
+		return ErrNilLifecyclePayload
+	}
+	if data.GetTenantId() == "" {
+		return fmt.Errorf("clip %s: %w", data.GetClipHash(), ErrLifecycleMissingTenant)
 	}
 	return enqueue(ctx, tx, kindClipLifecycle, data.GetTenantId(),
 		data.GetStreamId(), data.GetClipHash(), data)
@@ -109,7 +130,10 @@ func EnqueueClipLifecycleTx(ctx context.Context, tx execContext, data *ipcpb.Cli
 
 func EnqueueDVRLifecycle(data *ipcpb.DVRLifecycleData) error {
 	if data == nil {
-		return nil
+		return ErrNilLifecyclePayload
+	}
+	if data.GetTenantId() == "" {
+		return fmt.Errorf("dvr %s: %w", data.GetDvrHash(), ErrLifecycleMissingTenant)
 	}
 	return enqueue(context.Background(), nil, kindDVRLifecycle, data.GetTenantId(),
 		data.GetStreamId(), data.GetDvrHash(), data)
@@ -117,7 +141,10 @@ func EnqueueDVRLifecycle(data *ipcpb.DVRLifecycleData) error {
 
 func EnqueueDVRLifecycleTx(ctx context.Context, tx execContext, data *ipcpb.DVRLifecycleData) error {
 	if data == nil {
-		return nil
+		return ErrNilLifecyclePayload
+	}
+	if data.GetTenantId() == "" {
+		return fmt.Errorf("dvr %s: %w", data.GetDvrHash(), ErrLifecycleMissingTenant)
 	}
 	return enqueue(ctx, tx, kindDVRLifecycle, data.GetTenantId(),
 		data.GetStreamId(), data.GetDvrHash(), data)
@@ -127,7 +154,10 @@ func EnqueueDVRLifecycleTx(ctx context.Context, tx execContext, data *ipcpb.DVRL
 // associated with a live stream.
 func EnqueueVodLifecycle(data *ipcpb.VodLifecycleData) error {
 	if data == nil {
-		return nil
+		return ErrNilLifecyclePayload
+	}
+	if data.GetTenantId() == "" {
+		return fmt.Errorf("vod %s: %w", data.GetVodHash(), ErrLifecycleMissingTenant)
 	}
 	return enqueue(context.Background(), nil, kindVodLifecycle, data.GetTenantId(),
 		"", data.GetVodHash(), data)
@@ -135,7 +165,10 @@ func EnqueueVodLifecycle(data *ipcpb.VodLifecycleData) error {
 
 func EnqueueVodLifecycleTx(ctx context.Context, tx execContext, data *ipcpb.VodLifecycleData) error {
 	if data == nil {
-		return nil
+		return ErrNilLifecyclePayload
+	}
+	if data.GetTenantId() == "" {
+		return fmt.Errorf("vod %s: %w", data.GetVodHash(), ErrLifecycleMissingTenant)
 	}
 	return enqueue(ctx, tx, kindVodLifecycle, data.GetTenantId(),
 		"", data.GetVodHash(), data)
@@ -157,9 +190,21 @@ func EnqueueFederationEventTx(ctx context.Context, tx execContext, data *ipcpb.F
 		data.GetStreamId(), "", data)
 }
 
-// EnqueueClipLifecycleLogged is the fire-and-forget variant used from
-// background goroutines. Enqueue failures land on the package logger so
-// the outbox-bypass case (Init never wired, DB outage) is observable.
+// EnqueueArtifactNodeCopyTx writes a per-(artifact, node) local-copy transition to
+// the outbox within the caller's transaction, so the durable state change and its
+// telemetry commit atomically. tenantID rides the ServiceEvent envelope; the outbox
+// row id becomes the event_id (stable dedupe key) at dispatch.
+func EnqueueArtifactNodeCopyTx(ctx context.Context, tx execContext, tenantID string, data *ipcpb.ArtifactNodeCopyEvent) error {
+	if data == nil {
+		return nil
+	}
+	return enqueue(ctx, tx, kindArtifactNodeCopy, tenantID, "", data.GetArtifactHash(), data)
+}
+
+// EnqueueClipLifecycleLogged enqueues to the durable outbox but LOGS an enqueue failure instead of
+// returning it — for callers that cannot propagate the error (no enclosing transaction to fail).
+// Delivery is still durable once the row is written; only the enqueue-write failure (Init never wired,
+// DB outage) is degraded to a log line so the outbox-bypass case stays observable.
 func EnqueueClipLifecycleLogged(data *ipcpb.ClipLifecycleData) {
 	if err := EnqueueClipLifecycle(data); err != nil && logger != nil {
 		logger.WithError(err).Warn("artifactoutbox: enqueue clip lifecycle")
@@ -185,16 +230,21 @@ type execContext interface {
 }
 
 func enqueue(ctx context.Context, tx execContext, kind, tenantID, streamID, artifactID string, payload any) error {
-	if db == nil {
-		return nil
+	// A supplied tx writes the outbox row in the caller's transaction, independent of
+	// the package-global db — so state-coupled callers work regardless of Init order.
+	// Only a non-transactional call before Init has no target, and that is a wiring
+	// error the caller must see, not a silent no-op that drops the event. Check the
+	// concrete db (not the interface) so a nil *sql.DB isn't boxed into a non-nil target.
+	target := tx
+	if target == nil {
+		if db == nil {
+			return errors.New("artifactoutbox: enqueue requires a transaction or an initialized DB")
+		}
+		target = db
 	}
 	body, err := marshalPayload(payload)
 	if err != nil {
 		return err
-	}
-	target := tx
-	if target == nil {
-		target = db
 	}
 	// outbox has a nullable tenant_id; empty-string callers (federation events
 	// from the system tenant) coerce to NULL via the NULLIF below.
@@ -211,7 +261,7 @@ func enqueue(ctx context.Context, tx execContext, kind, tenantID, streamID, arti
 }
 
 // marshalPayload accepts the typed proto payload and serializes via protojson.
-// Type switch enumerates the four state-coupled Foghorn message kinds; any
+// Type switch enumerates the five state-coupled Foghorn message kinds; any
 // other type is a programmer error and surfaces explicitly.
 func marshalPayload(payload any) ([]byte, error) {
 	switch m := payload.(type) {
@@ -222,6 +272,8 @@ func marshalPayload(payload any) ([]byte, error) {
 	case *ipcpb.VodLifecycleData:
 		return protojson.Marshal(m)
 	case *ipcpb.FederationEventData:
+		return protojson.Marshal(m)
+	case *ipcpb.ArtifactNodeCopyEvent:
 		return protojson.Marshal(m)
 	default:
 		return nil, fmt.Errorf("unsupported artifact event payload type %T", payload)
@@ -258,13 +310,11 @@ func (store) ClaimBatch(ctx context.Context, _ int, _ time.Duration) ([]outbox.C
 }
 
 func (store) MarkCompleted(ctx context.Context, id string) error {
-	markCompleted(ctx, id)
-	return nil
+	return markCompleted(ctx, id)
 }
 
-func (store) RecordFailure(ctx context.Context, id string, attempts int, _ []string, cause error, _ time.Duration) error {
-	recordFailure(ctx, id, attempts, cause)
-	return nil
+func (store) RecordFailure(ctx context.Context, id string, attempts int, _ []string, cause error, backoff time.Duration) error {
+	return recordFailure(ctx, id, attempts, cause, backoff)
 }
 
 type dispatcher struct{}
@@ -300,6 +350,7 @@ func claimBatchOnce(ctx context.Context) ([]outboxRow, error) {
 			FROM foghorn.artifact_event_outbox
 			WHERE completed_at IS NULL
 			  AND (claimed_at IS NULL OR claimed_at < NOW() - $1::interval)
+			  AND (next_retry_at IS NULL OR next_retry_at <= NOW())
 			ORDER BY created_at
 			FOR UPDATE SKIP LOCKED
 			LIMIT $2
@@ -349,50 +400,76 @@ func claimBatchOnce(ctx context.Context) ([]outboxRow, error) {
 	return out, nil
 }
 
-func markCompleted(ctx context.Context, id string) {
+func markCompleted(ctx context.Context, id string) error {
 	if _, err := db.ExecContext(ctx, `
 		UPDATE foghorn.artifact_event_outbox
 		SET completed_at = NOW(), last_error = NULL
 		WHERE id = $1::uuid
-	`, id); err != nil && logger != nil {
-		logger.WithError(err).WithField("outbox_id", id).
-			Warn("Failed to mark foghorn artifact event outbox row completed")
+	`, id); err != nil {
+		if logger != nil {
+			logger.WithError(err).WithField("outbox_id", id).
+				Warn("Failed to mark foghorn artifact event outbox row completed")
+		}
+		return err
 	}
+	return nil
 }
 
-func recordFailure(ctx context.Context, id string, attempts int, cause error) {
+// recordFailure persists the INCREMENTED attempt count, the cause, releases the claim, and —
+// critically — stamps next_retry_at = NOW() + backoff so the row drops out of the eligible set
+// until its backoff elapses. The generic worker passes the pre-increment attempt count and the
+// backoff it computed from it (ComputeBackoff); we persist attempts+1 so the counter actually
+// grows (driving both the backoff schedule and the repeated-failure alert) instead of freezing
+// at its inserted default.
+func recordFailure(ctx context.Context, id string, attempts int, cause error, backoff time.Duration) error {
 	msg := ""
 	if cause != nil {
 		msg = cause.Error()
 	}
+	newAttempts := attempts + 1
 	if _, err := db.ExecContext(ctx, `
 		UPDATE foghorn.artifact_event_outbox
-		SET attempts = $2, last_error = $3, claimed_at = NULL
+		SET attempts = $2, last_error = $3, claimed_at = NULL, next_retry_at = NOW() + $4::interval
 		WHERE id = $1::uuid
-	`, id, attempts, msg); err != nil && logger != nil {
-		logger.WithError(err).WithField("outbox_id", id).
-			Warn("Failed to record foghorn artifact event outbox failure")
+	`, id, newAttempts, msg, fmt.Sprintf("%d milliseconds", backoff.Milliseconds())); err != nil {
+		if logger != nil {
+			logger.WithError(err).WithField("outbox_id", id).
+				Warn("Failed to record foghorn artifact event outbox failure")
+		}
+		// Return the persistence error so the generic worker can retry: a lost failure-record write
+		// would otherwise leave attempts/backoff frozen and re-deliver on the next claim.
+		return err
 	}
-	if attempts >= alertAfterAttempts && logger != nil {
+	if newAttempts >= alertAfterAttempts && logger != nil {
 		logger.WithFields(logging.Fields{
 			"outbox_id": id,
-			"attempts":  attempts,
+			"attempts":  newAttempts,
 			"cause":     msg,
 		}).Error("Foghorn artifact event outbox row failing repeatedly — Decklog reachability degraded")
 	}
+	return nil
 }
 
 func dispatchRow(_ context.Context, row outboxRow) ([]string, error) {
 	if decklogClient == nil {
 		return nil, errors.New("decklog client not configured")
 	}
+	// sourceMs is the row's immutable created_at (the source transition time), stamped onto the event so
+	// ingest can collapse artifact_state_current on a STABLE value instead of Decklog receipt time.
+	// Because it lives on the outbox row it is identical across every at-least-once redelivery, so a
+	// replayed older transition keeps its original time (best-effort: created_at is wall-clock, not a
+	// source-owned monotonic revision, so concurrent same-artifact transitions can still tie/invert).
+	sourceMs := row.createdAt.UnixMilli()
 	switch row.eventKind {
 	case kindClipLifecycle:
 		data := &ipcpb.ClipLifecycleData{}
 		if err := protojson.Unmarshal(row.payload, data); err != nil {
 			return nil, fmt.Errorf("unmarshal ClipLifecycleData: %w", err)
 		}
-		if err := decklogClient.SendClipLifecycle(data); err != nil {
+		// row.id is the stable event_id (event-id-keyed projections dedupe on it); source_updated_at_ms
+		// is the stable collapse key for artifact_state_current.
+		data.SourceUpdatedAtMs = &sourceMs
+		if err := decklogClient.SendClipLifecycleWithID(row.id, data); err != nil {
 			return []string{"decklog"}, err
 		}
 	case kindDVRLifecycle:
@@ -400,7 +477,8 @@ func dispatchRow(_ context.Context, row outboxRow) ([]string, error) {
 		if err := protojson.Unmarshal(row.payload, data); err != nil {
 			return nil, fmt.Errorf("unmarshal DVRLifecycleData: %w", err)
 		}
-		if err := decklogClient.SendDVRLifecycle(data); err != nil {
+		data.SourceUpdatedAtMs = &sourceMs
+		if err := decklogClient.SendDVRLifecycleWithID(row.id, data); err != nil {
 			return []string{"decklog"}, err
 		}
 	case kindVodLifecycle:
@@ -408,7 +486,8 @@ func dispatchRow(_ context.Context, row outboxRow) ([]string, error) {
 		if err := protojson.Unmarshal(row.payload, data); err != nil {
 			return nil, fmt.Errorf("unmarshal VodLifecycleData: %w", err)
 		}
-		if err := decklogClient.SendVodLifecycle(data); err != nil {
+		data.SourceUpdatedAtMs = &sourceMs
+		if err := decklogClient.SendVodLifecycleWithID(row.id, data); err != nil {
 			return []string{"decklog"}, err
 		}
 	case kindFederationEvent:
@@ -417,6 +496,23 @@ func dispatchRow(_ context.Context, row outboxRow) ([]string, error) {
 			return nil, fmt.Errorf("unmarshal FederationEventData: %w", err)
 		}
 		if err := decklogClient.SendFederationEvent(data); err != nil {
+			return []string{"decklog"}, err
+		}
+	case kindArtifactNodeCopy:
+		data := &ipcpb.ArtifactNodeCopyEvent{}
+		if err := protojson.Unmarshal(row.payload, data); err != nil {
+			return nil, fmt.Errorf("unmarshal ArtifactNodeCopyEvent: %w", err)
+		}
+		// The outbox row id is the stable event_id — replays carry the same id so
+		// the ClickHouse log dedupes.
+		ev := &ipcpb.ServiceEvent{
+			EventId:   row.id,
+			EventType: "artifact_node_copy",
+			Source:    "foghorn",
+			TenantId:  row.tenantID,
+			Payload:   &ipcpb.ServiceEvent_ArtifactNodeCopyEvent{ArtifactNodeCopyEvent: data},
+		}
+		if err := decklogClient.SendServiceEvent(ev); err != nil {
 			return []string{"decklog"}, err
 		}
 	default:

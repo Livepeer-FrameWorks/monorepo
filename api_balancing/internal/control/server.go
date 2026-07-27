@@ -168,12 +168,87 @@ type Registry struct {
 }
 
 type conn struct {
-	stream       ipcpb.HelmsmanControl_ConnectServer
-	last         time.Time
+	stream ipcpb.HelmsmanControl_ConnectServer
+	last   time.Time
+	// rawNodeID is the registry key the node heartbeats under (the id it self-asserted at Register). Kept so the
+	// server-owned NodeSession (see nodeSession) can carry BOTH the raw and canonical ids without a registry
+	// reverse-lookup.
+	rawNodeID    string
 	peerAddr     string
 	canonicalID  string // node ID after fingerprint/enrollment resolution (may differ from registry key)
 	clusterID    string
 	relayBaseURL string // base URL Mist on this node uses to reach Helmsman's /internal/artifact/* relay
+	// protocolVersion is the control-protocol version this sidecar declared at registration
+	// (Register.control_protocol_version). It gates protocol-dependent dispatch — notably staged freeze —
+	// on an OBSERVED capability rather than a per-request self-asserted flag. 0 = a pre-staged-freeze sidecar.
+	protocolVersion int32
+	// fence is the monotonic ownership fence issued to THIS control connection at registration. It
+	// orders whole-node artifact reports across reconnects (a later connection ranks strictly
+	// higher) and is used to write a terminal watermark tombstone when the connection is evicted.
+	fence int64
+	// superseded is set the moment this connection is removed or replaced in the registry, UNDER sendGate.
+	superseded atomic.Bool
+	// sendGate serializes a dispatch's (check-superseded → Send) against retirement's (set-superseded). Holding
+	// it makes the superseded check and the Send atomic w.r.t. a reconnect retiring the connection, so a
+	// command is never transmitted over a connection a reconnect has already retired. *conn is always
+	// heap-allocated and shared by pointer, so the mutex is never copied.
+	sendGate sync.Mutex
+}
+
+// NodeSession is the server-owned, authenticated identity of a control connection. It is built from the values
+// Quartermaster resolved at Register (fingerprint/enrollment + cluster reconcile) and is immutable for the
+// connection's lifetime — handlers use it INSTEAD of re-deriving identity from node-reported NodeState (which a
+// reconnect can race) or trusting payload identity fields.
+//
+// It carries NODE + CLUSTER identity only. The cluster may have a Quartermaster owner tenant, but that is a
+// cluster-ownership fact for node-level/provider attribution — it is NEVER media-tenant provenance. Media tenant
+// is always resolved per-resource (job/stream/artifact); see PLAN_MEDIA_AUTHORITY_FOUNDATION.md.
+type NodeSession struct {
+	RawNodeID       string // registry key the node heartbeats under
+	CanonicalNodeID string // node id after fingerprint/enrollment resolution
+	ClusterID       string // authoritative virtual cluster (server-resolved at enrollment, never payload)
+	Fence           int64  // monotonic ownership fence for this connection generation
+	ProtocolVersion int32
+}
+
+// NodeID returns the id handlers should attribute effects to: the canonical id when resolution produced one,
+// else the raw registry key.
+func (s NodeSession) NodeID() string {
+	if strings.TrimSpace(s.CanonicalNodeID) != "" {
+		return s.CanonicalNodeID
+	}
+	return s.RawNodeID
+}
+
+// session snapshots the connection's authenticated identity. Callers hold no lock; the fields are written once
+// during Register (before the conn is dispatch-visible) and only read thereafter.
+// session returns the connection's immutable authenticated identity. The identity fields are set ONCE during
+// Register — after fingerprint/enrollment resolves the canonical node + cluster and BEFORE the conn is published
+// into registry.conns — and never mutated after, so any dispatch-visible conn always carries a complete session.
+func (c *conn) session() NodeSession {
+	return NodeSession{
+		RawNodeID:       c.rawNodeID,
+		CanonicalNodeID: c.canonicalID,
+		ClusterID:       c.clusterID,
+		Fence:           c.fence,
+		ProtocolVersion: c.protocolVersion,
+	}
+}
+
+// currentNodeSession returns the authenticated session for the connection currently registered under nodeID.
+// ok=false when there is no current connection (the node isn't connected here). This is the authoritative
+// identity source for handlers, replacing race-prone GetNodeState-for-identity lookups.
+func currentNodeSession(nodeID string) (NodeSession, bool) {
+	if registry == nil {
+		return NodeSession{}, false
+	}
+	registry.mu.RLock()
+	c := registry.conns[nodeID]
+	registry.mu.RUnlock()
+	if c == nil {
+		return NodeSession{}, false
+	}
+	return c.session(), true
 }
 
 func currentControlConn(nodeID string, stream ipcpb.HelmsmanControl_ConnectServer) (*conn, bool) {
@@ -189,6 +264,22 @@ func currentControlConn(nodeID string, stream ipcpb.HelmsmanControl_ConnectServe
 	return c, true
 }
 
+// connIsCurrentlyRegistered reports whether c is STILL the connection the registry maps nodeID to. Send paths
+// call this WHILE holding c.sendGate: a replacement publishes the new conn into the registry map BEFORE
+// retiring the old one (retireConn runs after the swap, outside registry.mu), so a sender that already fetched
+// the old pointer could otherwise pass the superseded check (flag not yet set) and transmit over a stream a
+// reconnect has replaced. The registry-generation recheck closes that window without reintroducing the
+// registry.mu/sendGate coupling (retireConn never holds registry.mu, so sendGate→registry.mu can't invert).
+func connIsCurrentlyRegistered(nodeID string, c *conn) bool {
+	if registry == nil || c == nil {
+		return false
+	}
+	registry.mu.RLock()
+	cur := registry.conns[nodeID]
+	registry.mu.RUnlock()
+	return cur == c
+}
+
 func controlStreamIsCurrentOrUntracked(nodeID string, stream ipcpb.HelmsmanControl_ConnectServer) bool {
 	if registry == nil {
 		return true
@@ -202,32 +293,59 @@ func controlStreamIsCurrentOrUntracked(nodeID string, stream ipcpb.HelmsmanContr
 	return c.stream == stream
 }
 
-func removeCurrentControlConn(nodeID, canonicalID string, stream ipcpb.HelmsmanControl_ConnectServer) []string {
+// removedConn identifies a control connection dropped from the registry, carrying its ownership fence
+// so the conn_owner release matches the EXACT connection and cannot delete a newer owner's key.
+type removedConn struct {
+	id    string
+	fence int64
+}
+
+// retireConn marks a connection superseded UNDER its sendGate, so an in-flight SendLocalFreezeRequest (which
+// holds the same gate across its superseded check + Send) either finishes first on the still-current
+// connection or observes the flag and aborts. Serialized this way, no command is ever sent over a retired
+// connection. MUST be called WITHOUT holding registry.mu: it blocks on the conn's sendGate until any in-flight
+// send finishes, and holding registry.mu across that wait would stall every registration/lookup behind one
+// slow send. Callers unlink the conn from the registry under the lock, release it, then retire.
+func retireConn(c *conn) {
+	c.sendGate.Lock()
+	c.superseded.Store(true)
+	c.sendGate.Unlock()
+}
+
+func removeCurrentControlConn(nodeID, canonicalID string, stream ipcpb.HelmsmanControl_ConnectServer) []removedConn {
 	if registry == nil {
 		return nil
 	}
-	removed := make([]string, 0, 2)
+	removed := make([]removedConn, 0, 2)
+	toRetire := make([]*conn, 0, 2)
 	registry.mu.Lock()
 	if c, ok := registry.conns[nodeID]; ok && c.stream == stream {
 		delete(registry.conns, nodeID)
-		removed = append(removed, nodeID)
+		toRetire = append(toRetire, c)
+		removed = append(removed, removedConn{id: nodeID, fence: c.fence})
 	}
 	if canonicalID != "" && canonicalID != nodeID {
 		if c, ok := registry.conns[canonicalID]; ok && c.stream == stream {
 			delete(registry.conns, canonicalID)
-			removed = append(removed, canonicalID)
+			toRetire = append(toRetire, c)
+			removed = append(removed, removedConn{id: canonicalID, fence: c.fence})
 		}
 	}
 	registry.mu.Unlock()
+	// Retire OUTSIDE registry.mu (see retireConn): the conns are already unlinked, so no new sender can find
+	// them; the sendGate alone serializes the superseded-store against a concurrent sender's check+Send.
+	for _, c := range toRetire {
+		retireConn(c)
+	}
 	return removed
 }
 
-func releaseConnOwnerForDisconnect(nodeID string, log logging.Logger) bool {
+func releaseConnOwnerForDisconnect(nodeID string, fence int64, log logging.Logger) bool {
 	rs := GetRedisStore()
 	if rs == nil {
 		return true
 	}
-	deleted, err := rs.DeleteConnOwnerIfMatch(context.Background(), nodeID, GetInstanceID(), GetAdvertiseAddr())
+	deleted, err := rs.DeleteConnOwnerIfMatch(context.Background(), nodeID, GetInstanceID(), GetAdvertiseAddr(), fence)
 	if err != nil {
 		log.WithError(err).WithField("node_id", nodeID).Warn("Failed to clean conn owner in Redis")
 		return false
@@ -244,8 +362,9 @@ func releaseConnOwnerForDisconnect(nodeID string, log logging.Logger) bool {
 }
 
 func cleanupControlDisconnect(nodeID, canonicalID string, stream ipcpb.HelmsmanControl_ConnectServer, log logging.Logger) {
-	for _, id := range removeCurrentControlConn(nodeID, canonicalID, stream) {
-		if releaseConnOwnerForDisconnect(id, log) {
+	for _, rc := range removeCurrentControlConn(nodeID, canonicalID, stream) {
+		id := rc.id
+		if releaseConnOwnerForDisconnect(id, rc.fence, log) {
 			// An announced restart (helmsman's "node_restarting" lifecycle
 			// event) holds node health until the reconnect deadline: the
 			// data plane keeps serving while the sidecar restarts. The conn
@@ -343,11 +462,65 @@ var clipHashResolver func(string) (string, string, error)
 var db *sql.DB
 var localClusterID string
 var servedClusters atomic.Pointer[sync.Map]
+
+// The platform-shared allowlist names the only clusters on which a TENANTLESS node may serve arbitrary
+// tenants' durable bytes. It is NOT servedClusters (which only means "this Foghorn operates the cluster"; a
+// served cluster can be tenant-dedicated/BYOC). It has two independent sources kept in separate sets so
+// revocation works correctly:
+//   - platformSharedConfig: operator-declared via FOGHORN_PLATFORM_SHARED_CLUSTERS, set once at startup.
+//   - platformSharedDerived: Quartermaster's canonical is_platform_official fact, atomically REPLACED on every
+//     refresh (LoadPlatformSharedClusters) so a revoked cluster stops being authorized on the next successful
+//     refresh — a set that only accumulated would keep a revoked cluster authorized forever.
+//
+// Empty (both sets) ⇒ tenantless nodes serve nothing (fail closed). Per-tenant serve entitlement across
+// clusters remains the cross-cluster subscribed-storage RFC.
+var platformSharedConfig atomic.Pointer[sync.Map]
+var platformSharedDerived atomic.Pointer[sync.Map]
+
+// platformSharedDerivedAt is the time.Time of the last SUCCESSFUL derived refresh (nil = never). It stores a
+// full time.Time (with its MONOTONIC reading) rather than a wall-clock unix stamp so freshness is measured
+// monotonically — a backward wall-clock jump cannot extend authority past the TTL. The derived snapshot is
+// trusted only within platformSharedDerivedTTL; a stale snapshot HARD-EXPIRES to fail closed.
+var platformSharedDerivedAt atomic.Pointer[time.Time]
+
+const platformSharedDerivedTTL = 15 * time.Minute
+
 var chandlerBaseMu sync.RWMutex
 var resolvedChandlerBaseURL string
 
 func init() {
 	servedClusters.Store(&sync.Map{})
+	platformSharedConfig.Store(&sync.Map{})
+	platformSharedDerived.Store(&sync.Map{})
+}
+
+// AddPlatformSharedCluster designates a cluster as an EXPLICITLY-configured platform-shared edge. This set is
+// operator-declared and not revoked at runtime; canonical Quartermaster status flows through the separately-
+// refreshed derived set instead (see LoadPlatformSharedClusters).
+func AddPlatformSharedCluster(id string) {
+	if strings.TrimSpace(id) == "" {
+		return
+	}
+	platformSharedConfig.Load().Store(id, true)
+}
+
+// IsPlatformSharedCluster reports whether the cluster is a platform-shared edge per EITHER the explicit config
+// or the canonical Quartermaster-derived snapshot.
+func IsPlatformSharedCluster(id string) bool {
+	if strings.TrimSpace(id) == "" {
+		return false
+	}
+	if _, ok := platformSharedConfig.Load().Load(id); ok {
+		return true
+	}
+	// The Quartermaster-derived snapshot is trusted only while fresh: a hard expiry means a prolonged QM
+	// outage denies (fail closed) instead of authorizing on a stale set forever. Measured monotonically.
+	at := platformSharedDerivedAt.Load()
+	if at == nil || time.Since(*at) > platformSharedDerivedTTL {
+		return false
+	}
+	_, ok := platformSharedDerived.Load().Load(id)
+	return ok
 }
 
 var quartermasterClient *qmclient.GRPCClient
@@ -582,24 +755,13 @@ type NodeOutputs struct {
 
 // Optional analytics callbacks set by handlers package
 var artifactDeletedHandler func(context.Context, *ipcpb.ArtifactDeleted)
-var dvrDeletedHandler func(dvrHash string, sizeBytes uint64, nodeID string)
-var dvrStoppedHandler func(dvrHash string, finalStatus string, nodeID string, sizeBytes uint64, manifestPath string, errorMsg string)
 var artifactMapUpdatedHandler func(nodeID string)
+var catalogDirtyHandler func()
 
 // SetArtifactDeletedHandler registers the callback for node-local
 // artifact deletion/eviction reconciliation + DELETED lifecycle emission.
 func SetArtifactDeletedHandler(onDeleted func(context.Context, *ipcpb.ArtifactDeleted)) {
 	artifactDeletedHandler = onDeleted
-}
-
-// SetDVRDeletedHandler registers callback for DVR deletion analytics
-func SetDVRDeletedHandler(handler func(dvrHash string, sizeBytes uint64, nodeID string)) {
-	dvrDeletedHandler = handler
-}
-
-// SetDVRStoppedHandler registers callback for DVR stopped analytics
-func SetDVRStoppedHandler(handler func(dvrHash string, finalStatus string, nodeID string, sizeBytes uint64, manifestPath string, errorMsg string)) {
-	dvrStoppedHandler = handler
 }
 
 // SetOnArtifactMapUpdated registers a callback invoked when Helmsman reports a real artifact-map change.
@@ -613,6 +775,24 @@ func NotifyArtifactMapUpdated(nodeID string) {
 		return
 	}
 	artifactMapUpdatedHandler(nodeID)
+}
+
+// SetOnCatalogDirty registers a callback invoked when an authoritative artifact lifecycle
+// mutation commits and the durable Commodore catalog projection needs a refresh.
+func SetOnCatalogDirty(handler func()) {
+	catalogDirtyHandler = handler
+}
+
+// NotifyCatalogDirty kicks the artifact reconciler (the sole catalog writer) after a committed
+// lifecycle mutation, so the durable catalog reflects the new sync/finalize/freeze state
+// promptly instead of waiting for the slow fallback pass. This is a catalog-specific signal:
+// unlike NotifyArtifactMapUpdated (a node cache-map change), it fires on lifecycle transitions
+// even when no node-map delta occurred.
+func NotifyCatalogDirty() {
+	if catalogDirtyHandler == nil {
+		return
+	}
+	catalogDirtyHandler()
 }
 
 // Init initializes the global registry
@@ -739,7 +919,9 @@ func (r *CommandRelay) forward(ctx context.Context, req *foghornrelaypb.ForwardC
 		return fmt.Errorf("relay: no address for instance %s", owner.InstanceID)
 	}
 	evictStale := func() {
-		_, _ = r.store.DeleteConnOwnerIfMatch(ctx, req.TargetNodeId, owner.InstanceID, owner.GRPCAddr)
+		if _, derr := r.store.DeleteConnOwnerIfMatch(ctx, req.TargetNodeId, owner.InstanceID, owner.GRPCAddr, owner.Fence); derr != nil {
+			log.WithError(derr).WithField("node_id", req.TargetNodeId).Debug("Failed to evict stale conn owner during relay")
+		}
 	}
 	if r.pool == nil {
 		incRelayForward(commandType, "pool_unavailable")
@@ -872,11 +1054,51 @@ func controlLogger() logging.Logger {
 	return logging.NewLoggerWithService("foghorn")
 }
 
-// SetLocalClusterID sets the primary cluster ID and marks it as served.
+// SetLocalClusterID sets the primary cluster ID and marks it as served. It does NOT mark it platform-shared:
+// a local CLUSTER_ID can be a tenant-dedicated/BYOC cluster, and inferring platform-shared authority from it
+// would let a tenantless node there reach every tenant. Platform-shared status comes ONLY from the canonical
+// is_platform_official fact (LoadPlatformSharedClusters) or explicit validated config — see nodeMayServeTenant.
 func SetLocalClusterID(id string) {
 	localClusterID = id
 	servedClusters.Load().Store(id, true)
 	clearResolvedChandlerBaseURL()
+}
+
+// LoadPlatformSharedClusters refreshes the Quartermaster-DERIVED platform-shared snapshot from the canonical
+// is_platform_official fact, fetched through the Quartermaster client with a bounded context. On success it
+// ATOMICALLY REPLACES the derived set, so a cluster whose flag was revoked stops being authorized this cycle.
+// On any error (client unset, RPC failure) it leaves the previous snapshot in place — a transient QM outage
+// must not suddenly deny every platform edge. The explicit config set is untouched.
+func LoadPlatformSharedClusters() {
+	if quartermasterClient == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := quartermasterClient.ListOfficialClusters(ctx)
+	if err != nil || resp == nil {
+		return
+	}
+	applyPlatformSharedRefresh(resp.GetClusters())
+}
+
+// applyPlatformSharedRefresh filters to ACTIVE official clusters, atomically replaces the derived snapshot,
+// and stamps the refresh time (starting the freshness window). Split out so the filter/replace/expiry logic
+// is unit-testable without a live Quartermaster.
+func applyPlatformSharedRefresh(clusters []*quartermasterpb.InfrastructureCluster) {
+	fresh := &sync.Map{}
+	for _, c := range clusters {
+		// Defense in depth: only ACTIVE official clusters confer platform-shared authority.
+		if !c.GetIsPlatformOfficial() || !c.GetIsActive() {
+			continue
+		}
+		if id := strings.TrimSpace(c.GetClusterId()); id != "" {
+			fresh.Store(id, true)
+		}
+	}
+	platformSharedDerived.Store(fresh)
+	now := time.Now()
+	platformSharedDerivedAt.Store(&now)
 }
 
 // GetLocalClusterID returns the primary cluster ID for this Foghorn instance.
@@ -964,7 +1186,8 @@ func StartServedClustersRefresh(ctx context.Context, interval time.Duration, log
 			return
 		case <-ticker.C:
 			LoadServedClusters()
-			log.WithField("clusters", ServedClustersSnapshot()).Debug("Refreshed served clusters from DB")
+			LoadPlatformSharedClusters()
+			log.WithField("clusters", ServedClustersSnapshot()).Debug("Refreshed served + platform-shared clusters from DB")
 		}
 	}
 }
@@ -975,8 +1198,18 @@ func SetClipHashResolver(resolver func(string) (string, string, error)) {
 }
 
 // SetQuartermasterClient sets the Quartermaster client for edge enrollment and lookups
+// resolveNodeFingerprintFn is the seam the Connect handler uses to resolve a node's canonical identity + tenant
+// from its fingerprint. Wired to the real Quartermaster client; overridable in tests so registration can reach
+// the post-resolution ownership acquisition with an authenticated identity.
+var resolveNodeFingerprintFn func(ctx context.Context, req *quartermasterpb.ResolveNodeFingerprintRequest) (*quartermasterpb.ResolveNodeFingerprintResponse, error)
+
 func SetQuartermasterClient(c *qmclient.GRPCClient) {
 	quartermasterClient = c
+	if c != nil {
+		resolveNodeFingerprintFn = c.ResolveNodeFingerprint
+	} else {
+		resolveNodeFingerprintFn = nil
+	}
 	clearResolvedChandlerBaseURL()
 }
 
@@ -1093,6 +1326,23 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 	// dispatch) shares this one wrapper, so all sends funnel through its mutex.
 	stream = &lockedStream{HelmsmanControl_ConnectServer: stream}
 	var nodeID string
+	// connFence is the ownership fence issued to THIS control connection at Register. It is captured
+	// per-Connect-invocation, so a stale older connection's goroutine-dispatched handlers stamp the
+	// lower fence and a reconnect (new Connect, higher fence) supersedes — the ordering key for
+	// whole-node artifact reports across reconnects.
+	var connFence int64
+	// connProtocolVersion is the control-protocol version THIS connection declared at Register, captured
+	// per-Connect-invocation. Freeze admission is bound to this captured value (passed into the handler),
+	// NOT re-looked-up by node id later: a reconnect can replace the registry entry between a request's
+	// receipt and its goroutine execution, so a re-lookup would admit an old session's request under a new
+	// session's version. Binding to the capture keeps admission and the response stream on the same session.
+	var connProtocolVersion int32
+	// connSession is the IMMUTABLE authenticated identity of THIS connection, captured once at Register (after
+	// identity resolution, when the conn is published) and passed BY VALUE into handlers. Handlers attribute work
+	// to this captured session rather than re-reading the registry, so a reconnect that replaces the registry
+	// entry between a message's receipt and its goroutine execution can never substitute a newer session for work
+	// received on this connection.
+	var connSession NodeSession
 	// On initial message we expect a Register
 	for {
 		msg, err := stream.Recv()
@@ -1104,6 +1354,14 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 				registry.log.WithField("node_id", nodeID).Warn("Closing stale Helmsman control stream")
 				return nil
 			}
+		}
+		// Pre-resolution non-dispatchability: every message except Register requires this connection's fully
+		// resolved, published identity (connSession, captured once at Register after fingerprint/enrollment
+		// resolution). A control message arriving before Register completes has no authenticated node to
+		// attribute to or authorize against, so drop it rather than dispatch under an empty identity.
+		if _, isRegister := msg.GetPayload().(*ipcpb.ControlMessage_Register); !isRegister && connSession.NodeID() == "" {
+			registry.log.Warn("Dropping control message received before node identity resolution")
+			continue
 		}
 		switch x := msg.GetPayload().(type) {
 		case *ipcpb.ControlMessage_Register:
@@ -1123,35 +1381,47 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 			if p, _ := peer.FromContext(stream.Context()); p != nil {
 				peerAddr = p.Addr.String()
 			}
-			registry.mu.Lock()
-			registry.conns[nodeID] = &conn{
-				stream:       stream,
-				last:         time.Now(),
-				peerAddr:     peerAddr,
-				relayBaseURL: strings.TrimRight(x.Register.GetRelayBaseUrl(), "/"),
+			// Issue this connection its ownership fence BEFORE it becomes dispatch-visible. Fail CLOSED: a
+			// connection with no fence would emit unversioned reports that bypass ordering, so we
+			// reject registration and let Helmsman reconnect rather than accept an unfenced owner.
+			fence, ferr := AllocateNodeControlFence(context.Background())
+			if ferr != nil {
+				registry.log.WithError(ferr).WithField("node_id", nodeID).Error("Failed to allocate node control fence; rejecting registration")
+				return status.Error(codes.Unavailable, "control fence allocation failed")
 			}
-			registry.mu.Unlock()
-			registry.log.WithField("node_id", nodeID).Info("Helmsman registered")
-			// Mark node healthy in unified state (baseURL unknown at register)
-			state.DefaultManager().SetNodeInfo(nodeID, "", true, nil, nil, "", "", nil)
+			connFence = fence
+			connProtocolVersion = x.Register.GetControlProtocolVersion()
+
+			// Build the connection but keep it OUT of the dispatchable registry until every ownership claim
+			// below succeeds. Concurrent command dispatch resolves connections through registry.conns, so a
+			// connection published before it owns the node could be selected and then lose the fenced race.
+			newConn := &conn{
+				stream:          stream,
+				last:            time.Now(),
+				rawNodeID:       nodeID,
+				peerAddr:        peerAddr,
+				relayBaseURL:    strings.TrimRight(x.Register.GetRelayBaseUrl(), "/"),
+				protocolVersion: x.Register.GetControlProtocolVersion(),
+				fence:           fence,
+			}
 
 			cleanup := func() {
 				cleanupControlDisconnect(nodeID, canonicalNodeID, stream, registry.log)
 			}
 
-			// HA: register connection ownership in Redis so peer instances can relay commands
-			if rs := GetRedisStore(); rs != nil {
-				if err := rs.SetConnOwner(context.Background(), nodeID, GetInstanceID(), GetAdvertiseAddr()); err != nil {
-					registry.log.WithError(err).WithField("node_id", nodeID).Warn("Failed to set conn owner in Redis")
-				}
-			}
+			// SECURITY (identity-before-mutation): Redis conn ownership and the Ready=false artifact takeover
+			// marker are acquired ONLY on the server-resolved CANONICAL id, and ONLY AFTER fingerprint/enrollment
+			// resolution succeeds (below). Acquiring them here on the raw, self-asserted node_id would let a
+			// connection that asserts an existing node's id — then fails enrollment — cordon that node's
+			// artifacts and steal its ownership fence. Resolution mutates no ownership/readiness state; every
+			// such mutation happens post-resolution, keyed on the authenticated identity.
 
 			// Fingerprint-based tenant resolution (pre-provisioned mappings only; no creation here)
 			tenantID := ""
 			clusterID := ""
+			host := ""
 			{
 				// Build resolver request
-				host := ""
 				if md, ok := metadata.FromIncomingContext(stream.Context()); ok {
 					if fwd := md.Get("x-forwarded-for"); len(fwd) > 0 {
 						parts := strings.Split(fwd[0], ",")
@@ -1168,9 +1438,10 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 					host = h
 				}
 
-				// Register node IP with state manager for same-host avoidance logic.
-				// TenantID/ClusterID are resolved below via fingerprint or enrollment.
-				state.DefaultManager().SetNodeConnectionInfo(context.Background(), nodeID, host, tenantID, clusterID, nil)
+				// SECURITY: the node's IP is NOT written to state here — a registration that fails
+				// fingerprint/enrollment below never authenticated, and writing its connection info on the raw,
+				// self-asserted id would let it mutate a victim node's BinHost/liveness/routing/DNS. The write
+				// happens only AFTER resolution succeeds, on the canonical id (see SetNodeConnectionInfo below).
 
 				fpReq := &quartermasterpb.ResolveNodeFingerprintRequest{PeerIp: host}
 				if x.Register != nil && x.Register.Fingerprint != nil {
@@ -1186,9 +1457,9 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 						fpReq.MachineIdSha256 = &s
 					}
 				}
-				if quartermasterClient != nil {
+				if resolveNodeFingerprintFn != nil {
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-					resp, err := quartermasterClient.ResolveNodeFingerprint(ctx, fpReq)
+					resp, err := resolveNodeFingerprintFn(ctx, fpReq)
 					cancel()
 					if err == nil && resp != nil {
 						tenantID = resp.TenantId
@@ -1254,25 +1525,54 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 
 			clusterID = reconcileNodeCluster(stream.Context(), canonicalNodeID, clusterID, registry.log)
 
-			// Persist resolved tenant/cluster ownership on the node state
+			// Identity is now RESOLVED and authenticated. Acquire fenced Redis ownership of the CANONICAL id
+			// (fail CLOSED on err/superseded) — this is the FIRST ownership mutation, so a registration rejected
+			// during resolution above never touched any node's ownership. A strictly-higher fence already owning
+			// the canonical id means a concurrent reconnect landed first → reject.
+			if rs := GetRedisStore(); rs != nil {
+				acquired, err := rs.AcquireConnOwnerFenced(context.Background(), canonicalNodeID, GetInstanceID(), GetAdvertiseAddr(), connFence)
+				if err != nil {
+					registry.log.WithError(err).WithField("node_id", canonicalNodeID).Error("Failed to acquire canonical conn owner in Redis; rejecting registration (fail closed)")
+					cleanup()
+					return status.Error(codes.Unavailable, "canonical conn owner acquisition failed")
+				}
+				if !acquired {
+					registry.log.WithField("node_id", canonicalNodeID).Warn("A higher-fence connection already owns the canonical node; rejecting superseded registration")
+					cleanup()
+					return status.Error(codes.Aborted, "superseded by a newer control connection")
+				}
+			}
+
+			// Install the fence acceptance floor + publish the fenced Ready=false artifact takeover marker on the
+			// CANONICAL id so HA peers re-arm the artifact cordon for this connection. REQUIRED before dispatch
+			// visibility; fail CLOSED (release the ownership just acquired) so a marker that can't be durably
+			// published never leaves peers routing to a stale owner's Ready=true inventory.
+			if ferr := state.DefaultManager().RecordNodeArtifactFence(canonicalNodeID, connFence); ferr != nil {
+				releaseConnOwnerForDisconnect(canonicalNodeID, connFence, registry.log)
+				cleanup()
+				if errors.Is(ferr, state.ErrArtifactInventorySuperseded) {
+					registry.log.WithField("node_id", canonicalNodeID).Warn("A higher-fence connection superseded this node's artifact takeover marker; rejecting superseded registration")
+					return status.Error(codes.Aborted, "superseded by a newer control connection")
+				}
+				registry.log.WithError(ferr).WithField("node_id", canonicalNodeID).Error("Failed to publish artifact takeover marker; rejecting registration (fail closed)")
+				return status.Error(codes.Unavailable, "artifact takeover marker publish failed")
+			}
+
+			// Persist resolved tenant/cluster ownership + the peer IP on the CANONICAL (authenticated) node state.
+			// This is the FIRST node connection-info write of the registration — deferred to here
+			// (post-resolution) so only an authenticated node's canonical id ever mutates liveness/routing state
+			// (the same-host-avoidance BinHost included). The self-asserted raw id is UNVERIFIED and is never
+			// written to shared state; below, the loop's node id is rebound to the canonical id.
 			if clusterID != "" {
 				AddServedCluster(clusterID)
 			}
-			if tenantID != "" || clusterID != "" {
-				state.DefaultManager().SetNodeConnectionInfo(context.Background(), canonicalNodeID, "", tenantID, clusterID, nil)
-				// When canonical differs, also stamp the actively-heartbeated nodeID
-				// so the balancer's tenant filter sees the correct ownership.
-				if canonicalNodeID != nodeID {
-					state.DefaultManager().SetNodeConnectionInfo(context.Background(), nodeID, "", tenantID, clusterID, nil)
-				}
+			if tenantID != "" || clusterID != "" || host != "" {
+				state.DefaultManager().SetNodeConnectionInfo(context.Background(), canonicalNodeID, host, tenantID, clusterID, nil)
 			}
 			if fingerprintResolved {
 				// Fingerprint resolution means Quartermaster already knows this node;
 				// do not let a stale activation-probe flag from Redis keep it unroutable.
 				state.DefaultManager().SetProbeVerified(canonicalNodeID, true)
-				if canonicalNodeID != nodeID {
-					state.DefaultManager().SetProbeVerified(nodeID, true)
-				}
 			}
 
 			// A successful re-register is the ONLY disarm for an
@@ -1280,34 +1580,43 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 			// can't disarm it because the pre-restart process keeps
 			// heartbeating through its post-announce drain.
 			state.DefaultManager().ClearNodePendingReconnect(canonicalNodeID)
-			if canonicalNodeID != nodeID {
-				state.DefaultManager().ClearNodePendingReconnect(nodeID)
+
+			// Identity is fully resolved and the CANONICAL ownership fence is held (the raw asserted id is NOT
+			// fenced — a global-monotonic fence would always let a new connection win, so it cannot certify an
+			// alias). Stamp the resolved canonical id + cluster onto the (still-unpublished) conn so its
+			// NodeSession is COMPLETE and IMMUTABLE, then publish it into the dispatchable registry. Every
+			// command-dispatch path reads registry.conns, so nothing can route to this connection (or read an
+			// incomplete session from it) before this point.
+			newConn.canonicalID = canonicalNodeID
+			newConn.clusterID = clusterID
+			connSession = newConn.session()
+
+			// From here the node's IDENTITY is its authenticated CANONICAL id. The self-asserted raw id is
+			// UNVERIFIED and is NOT an authorization alias: a divergent raw id could belong to another node on a
+			// peer Foghorn, and local-registry absence is not HA-safe proof of ownership. Rebind the receive
+			// loop's node id to canonical so EVERY subsequent path (registry publish, config dispatch, heartbeat
+			// ownership refresh, relay authorization) uses only the proven identity — never the raw assertion.
+			rawAssertedID := nodeID
+			nodeID = canonicalNodeID
+			if rawAssertedID != canonicalNodeID {
+				registry.log.WithFields(logging.Fields{"canonical_node_id": canonicalNodeID, "asserted_node_id": rawAssertedID}).
+					Info("Node registered under its canonical id; the divergent asserted raw id is not aliased (unverified)")
 			}
 
-			// Store canonical node ID back into conn for cert refresh and other lookups
-			if canonicalNodeID != nodeID {
-				registry.mu.Lock()
-				if c, ok := registry.conns[nodeID]; ok {
-					c.canonicalID = canonicalNodeID
-					c.clusterID = clusterID
-					registry.conns[canonicalNodeID] = c
-				}
-				registry.mu.Unlock()
-
-				if rs := GetRedisStore(); rs != nil {
-					if err := rs.SetConnOwner(context.Background(), canonicalNodeID, GetInstanceID(), GetAdvertiseAddr()); err != nil {
-						registry.log.WithError(err).WithField("node_id", canonicalNodeID).Warn("Failed to set canonical conn owner in Redis")
-					}
-				}
-			}
 			registry.mu.Lock()
-			if c, ok := registry.conns[nodeID]; ok {
-				c.clusterID = clusterID
+			var retire *conn
+			if prevConn, ok := registry.conns[canonicalNodeID]; ok && prevConn != newConn {
+				retire = prevConn // a stale dispatcher must not send over the replaced connection
 			}
-			if c, ok := registry.conns[canonicalNodeID]; ok {
-				c.clusterID = clusterID
-			}
+			registry.conns[canonicalNodeID] = newConn
 			registry.mu.Unlock()
+			// Retire the replaced connection OUTSIDE registry.mu (see retireConn): it is no longer the
+			// registered conn, so retiring it can't block a new dispatch, only in-flight ones.
+			if retire != nil {
+				retireConn(retire)
+			}
+			registry.log.WithField("node_id", canonicalNodeID).Info("Helmsman registered")
+			state.DefaultManager().SetNodeInfo(canonicalNodeID, "", true, nil, nil, "", "", nil)
 
 			// Hydrate the managed-stream lastSent map from the sidecar's
 			// post-restart applied set so a Foghorn restart followed by a
@@ -1336,9 +1645,6 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 			// Fresh enrollments without a usable site are not routable.
 			if !fingerprintResolved && (seed.GetSite() == nil || seed.GetSite().GetEdgeDomain() == "") {
 				state.DefaultManager().SetProbeVerified(canonicalNodeID, false)
-				if canonicalNodeID != nodeID {
-					state.DefaultManager().SetProbeVerified(nodeID, false)
-				}
 				registry.log.WithField("node_id", canonicalNodeID).Warn("Fresh enrollment produced no site config; node marked unverified")
 			}
 
@@ -1347,10 +1653,7 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 			// probed — Foghorn verifies the HTTPS endpoint before routing traffic.
 			if !fingerprintResolved && seed.GetSite() != nil && seed.GetSite().GetEdgeDomain() != "" {
 				state.DefaultManager().SetProbeVerified(canonicalNodeID, false)
-				if canonicalNodeID != nodeID {
-					state.DefaultManager().SetProbeVerified(nodeID, false)
-				}
-				go probeEdgeActivation(canonicalNodeID, seed.GetSite().GetEdgeDomain(), nodeID)
+				go probeEdgeActivation(canonicalNodeID, seed.GetSite().GetEdgeDomain(), canonicalNodeID)
 			}
 
 			// Forward hardware specs to Quartermaster if present
@@ -1427,10 +1730,17 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 				}(x.Register, canonicalNodeID, clusterID, peerAddr)
 			}
 		case *ipcpb.ControlMessage_ArtifactDeleted:
+			// SECURITY: the payload node_id is node-asserted and could name ANOTHER node — the DB callback below
+			// uses it to remove an artifact_nodes placement + emit a LOST event, so a connection could evict a
+			// peer's placement by naming it. Overwrite it with the authenticated CANONICAL session id BEFORE any
+			// consumer reads it (both consumers are spawned after this synchronous write, so there is no race).
+			if x.ArtifactDeleted != nil {
+				x.ArtifactDeleted.NodeId = connSession.NodeID()
+			}
 			if artifactDeletedHandler != nil {
 				go artifactDeletedHandler(context.Background(), x.ArtifactDeleted)
 			}
-			go handleArtifactDeleted(x.ArtifactDeleted, nodeID, registry.log)
+			go handleArtifactDeleted(x.ArtifactDeleted, connSession, registry.log)
 		case *ipcpb.ControlMessage_Heartbeat:
 			if nodeID != "" {
 				canonicalNodeID := nodeID
@@ -1458,22 +1768,39 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 				if hb := x.Heartbeat; hb != nil {
 					UpdateVerifiedAppliedFromHeartbeat(canonicalNodeID, hb.GetAppliedManagedStreams())
 				}
-				// HA: refresh connection ownership TTL
+				// HA: refresh connection ownership TTL under the fence. If a higher-fence connection has
+				// taken over (a reconnect landed on another instance), this stream is superseded and MUST
+				// close — that is how the losing connection is torn down after ownership handoff.
 				if rs := GetRedisStore(); rs != nil {
-					refreshOrRestore := func(nid string) {
-						if err := rs.RefreshConnOwner(context.Background(), nid); err != nil {
-							if errors.Is(err, state.ErrConnOwnerMissing) {
-								if setErr := rs.SetConnOwner(context.Background(), nid, GetInstanceID(), GetAdvertiseAddr()); setErr != nil {
-									registry.log.WithError(setErr).WithField("node_id", nid).Warn("Failed to restore conn owner in Redis")
-								}
-							} else {
-								registry.log.WithError(err).WithField("node_id", nid).Warn("Failed to refresh conn owner TTL")
+					refreshOrRestore := func(nid string) (lost bool) {
+						err := rs.RefreshConnOwnerFenced(context.Background(), nid, GetInstanceID(), GetAdvertiseAddr(), connFence)
+						switch {
+						case err == nil:
+							return false
+						case errors.Is(err, state.ErrConnOwnerMissing):
+							// Key expired (Redis blip / TTL lapse): re-acquire with our fence. If a strictly
+							// higher fence beat us to it, we lost ownership and must close.
+							acquired, aerr := rs.AcquireConnOwnerFenced(context.Background(), nid, GetInstanceID(), GetAdvertiseAddr(), connFence)
+							if aerr != nil {
+								registry.log.WithError(aerr).WithField("node_id", nid).Warn("Failed to restore conn owner in Redis")
+								return false
 							}
+							return !acquired
+						case errors.Is(err, state.ErrConnOwnerLost):
+							return true
+						default:
+							registry.log.WithError(err).WithField("node_id", nid).Warn("Failed to refresh conn owner TTL")
+							return false
 						}
 					}
-					refreshOrRestore(nodeID)
+					lost := refreshOrRestore(nodeID)
 					if canonicalNodeID != nodeID {
-						refreshOrRestore(canonicalNodeID)
+						lost = refreshOrRestore(canonicalNodeID) || lost
+					}
+					if lost {
+						registry.log.WithField("node_id", nodeID).Warn("Lost conn ownership to a higher-fence connection; closing superseded stream")
+						cleanupControlDisconnect(nodeID, canonicalNodeID, stream, registry.log)
+						return status.Error(codes.Aborted, "superseded by a newer control connection")
 					}
 				}
 			}
@@ -1484,10 +1811,10 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 			}).Error("Rejected DVRStartRequest from edge control stream; DVR starts must use Foghorn StartDVR")
 		case *ipcpb.ControlMessage_DvrProgress:
 			// Handle DVR progress updates from storage Helmsman
-			go processDVRProgress(x.DvrProgress, nodeID, registry.log)
+			go processDVRProgress(x.DvrProgress, connSession, registry.log)
 		case *ipcpb.ControlMessage_DvrStopped:
 			// Handle DVR completion from storage Helmsman
-			go processDVRStopped(x.DvrStopped, nodeID, registry.log)
+			go processDVRStopped(x.DvrStopped, connSession, registry.log)
 		case *ipcpb.ControlMessage_MistTrigger:
 			// Handle MistServer trigger forwarding from Helmsman
 			incMistTrigger(x.MistTrigger.GetTriggerType(), x.MistTrigger.GetBlocking(), "received")
@@ -1496,73 +1823,84 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 			// and once disconnect cleanup runs, processMistTrigger drops
 			// the trigger as coming from a stale stream — the announce
 			// would be lost exactly when it matters.
-			if nu := x.MistTrigger.GetNodeLifecycleUpdate(); nu != nil && nu.GetEventType() == state.EventNodeRestarting {
-				armRestartWindow(nodeID, stream, registry.log)
+			if nu := x.MistTrigger.GetNodeLifecycleUpdate(); nu != nil {
+				// Bind the report to THIS connection's authenticated identity: the downstream
+				// processor keys memory/Redis/Postgres off nu.NodeId, so a stale/malformed sidecar
+				// must not be able to name another node in its payload. Overwrite it with the canonical
+				// session id (log a mismatch), never the raw registry key.
+				if pid := nu.GetNodeId(); pid != "" && pid != connSession.NodeID() && registry.log != nil {
+					registry.log.WithFields(logging.Fields{"conn_node_id": connSession.NodeID(), "payload_node_id": pid}).
+						Warn("Node lifecycle payload node_id != connection node_id; using connection identity")
+				}
+				nu.NodeId = connSession.NodeID()
+				// Stamp THIS connection's ownership fence onto the report (the sidecar leaves it 0);
+				// Foghorn owns cross-reconnect ordering, so the fence is attached here on receive.
+				nu.ArtifactsConnectionFence = connFence
+				if nu.GetEventType() == state.EventNodeRestarting {
+					armRestartWindow(nodeID, stream, registry.log)
+				}
 			}
-			go processMistTrigger(x.MistTrigger, nodeID, stream, registry.log)
+			go processMistTrigger(x.MistTrigger, connSession, stream, registry.log)
 		case *ipcpb.ControlMessage_FreezePermissionRequest:
-			// Handle freeze permission request from Helmsman (cold storage)
-			go processFreezePermissionRequest(x.FreezePermissionRequest, nodeID, stream, registry.log)
+			// Handle freeze permission request from Helmsman (cold storage). Admission is bound to THIS
+			// session — the protocol version AND the ownership fence captured at Register — so a goroutine
+			// dispatched from a since-superseded connection neither admits under a newer version nor claims
+			// an attempt for a connection that no longer owns the node.
+			go processFreezePermissionRequest(x.FreezePermissionRequest, connSession.NodeID(), connProtocolVersion, connFence, stream, registry.log)
 		case *ipcpb.ControlMessage_FreezeProgress:
 			// Handle freeze progress updates from Helmsman
-			go processFreezeProgress(x.FreezeProgress, nodeID, registry.log)
-		case *ipcpb.ControlMessage_FreezeComplete:
-			// Handle freeze completion from Helmsman
-			go processFreezeComplete(context.Background(), x.FreezeComplete, nodeID, registry.log)
+			go processFreezeProgress(x.FreezeProgress, connSession.NodeID(), registry.log)
 		case *ipcpb.ControlMessage_CanDeleteRequest:
 			// Handle can-delete check from Helmsman (dual-storage architecture)
-			go processCanDeleteRequest(x.CanDeleteRequest, nodeID, stream, registry.log)
+			go processCanDeleteRequest(x.CanDeleteRequest, connSession.NodeID(), stream, registry.log)
 		case *ipcpb.ControlMessage_RelayResolveRequest:
 			// Read-through relay resolution: sidecar wants presigned URLs +
 			// chapter refs for an asset it's about to serve over
 			// /internal/artifact/*. Same control-stream pattern as CanDelete.
-			go processRelayResolveRequest(x.RelayResolveRequest, nodeID, stream, registry.log)
+			// Bound to the authenticated CANONICAL identity (nodeID was rebound to canonical at Register); the
+			// grant is minted here and authorized in AuthorizeRelayPull below against the same canonical id —
+			// mint↔authorize bind to one PROVEN identity, and nodeMayServeTenant reads only canonical state.
+			go processRelayResolveRequest(x.RelayResolveRequest, connSession.NodeID(), stream, registry.log)
 		case *ipcpb.ControlMessage_AuthorizeRelayPullRequest:
-			// Serving edge asks Foghorn to authorize an inbound peer-relay
-			// pull against the grant Foghorn minted at resolve time. nodeID is
-			// the node_id this control connection registered with (the same
-			// value the grant was minted against), so the origin-node binding
-			// is consistent mint↔authorize. NOTE: it's the registered id, not
-			// reconciled to the fingerprint/enrollment-resolved canonical id —
-			// the node binding is defense-in-depth on top of the opaque grant
-			// (exact path + hash + 5-min TTL + origin-cluster-only validation),
-			// not a standalone trust boundary.
-			go processAuthorizeRelayPullRequest(x.AuthorizeRelayPullRequest, nodeID, stream, registry.log)
+			// Serving edge asks Foghorn to authorize an inbound peer-relay pull against the grant Foghorn minted
+			// at resolve time, bound to the same authenticated CANONICAL identity as the mint (consistent
+			// mint↔authorize), on top of the opaque grant (exact path + hash + 5-min TTL + origin-cluster-only).
+			go processAuthorizeRelayPullRequest(x.AuthorizeRelayPullRequest, connSession.NodeID(), stream, registry.log)
 		case *ipcpb.ControlMessage_SyncComplete:
 			// Handle sync completion from Helmsman (dual-storage architecture)
-			go processSyncComplete(x.SyncComplete, nodeID, registry.log)
+			go processSyncComplete(x.SyncComplete, connSession.NodeID(), registry.log)
 		case *ipcpb.ControlMessage_ModeChangeRequest:
-			go processModeChangeRequest(x.ModeChangeRequest, nodeID, stream, registry.log)
+			go processModeChangeRequest(x.ModeChangeRequest, connSession.NodeID(), stream, registry.log)
 		case *ipcpb.ControlMessage_UpdateApplyResult:
-			go processUpdateApplyResult(x.UpdateApplyResult, nodeID, registry.log)
+			go processUpdateApplyResult(x.UpdateApplyResult, connSession.NodeID(), registry.log)
 		case *ipcpb.ControlMessage_ValidateEdgeTokenRequest:
-			go processValidateEdgeToken(msg.GetRequestId(), x.ValidateEdgeTokenRequest, nodeID, stream, registry.log)
+			go processValidateEdgeToken(msg.GetRequestId(), x.ValidateEdgeTokenRequest, connSession.NodeID(), stream, registry.log)
 		case *ipcpb.ControlMessage_EdgeMistAdminSessionRequest:
-			go processEdgeMistAdminSession(msg.GetRequestId(), x.EdgeMistAdminSessionRequest, nodeID, stream, registry.log)
+			go processEdgeMistAdminSession(msg.GetRequestId(), x.EdgeMistAdminSessionRequest, connSession.NodeID(), stream, registry.log)
 		case *ipcpb.ControlMessage_ProcessingJobResult:
 			if x.ProcessingJobResult.GetStatus() == "cache_update" {
 				// Refresh cached overrides before returning so the restarted push
 				// reads the latest value from Helmsman.
-				processProcessingJobResult(x.ProcessingJobResult, nodeID, registry.log)
+				processProcessingJobResult(x.ProcessingJobResult, connSession.NodeID(), registry.log)
 			} else {
-				go processProcessingJobResult(x.ProcessingJobResult, nodeID, registry.log)
+				go processProcessingJobResult(x.ProcessingJobResult, connSession.NodeID(), registry.log)
 			}
 		case *ipcpb.ControlMessage_ProcessingJobProgress:
-			go processProcessingJobProgress(x.ProcessingJobProgress, registry.log)
+			go processProcessingJobProgress(x.ProcessingJobProgress, connSession.NodeID(), registry.log)
 		case *ipcpb.ControlMessage_ThumbnailUploadRequest:
-			go processThumbnailUploadRequest(msg.GetRequestId(), x.ThumbnailUploadRequest, nodeID, stream, registry.log)
+			go processThumbnailUploadRequest(msg.GetRequestId(), x.ThumbnailUploadRequest, connSession.NodeID(), connProtocolVersion, stream, registry.log)
 		case *ipcpb.ControlMessage_ThumbnailUploaded:
-			go processThumbnailUploaded(x.ThumbnailUploaded, nodeID, registry.log)
+			go processThumbnailUploaded(x.ThumbnailUploaded, connSession.NodeID(), registry.log)
 		case *ipcpb.ControlMessage_RecordDvrSegmentRequest:
-			go processRecordDVRSegment(x.RecordDvrSegmentRequest, nodeID, stream, registry.log)
+			go processRecordDVRSegment(x.RecordDvrSegmentRequest, connSession.NodeID(), stream, registry.log)
 		case *ipcpb.ControlMessage_MarkDvrSegmentUploaded:
-			go processMarkDVRSegmentUploaded(x.MarkDvrSegmentUploaded, nodeID, registry.log)
+			go processMarkDVRSegmentUploaded(x.MarkDvrSegmentUploaded, connSession.NodeID(), registry.log)
 		case *ipcpb.ControlMessage_DvrSegmentDropped:
-			go processDVRSegmentDropped(x.DvrSegmentDropped, nodeID, registry.log)
+			go processDVRSegmentDropped(x.DvrSegmentDropped, connSession.NodeID(), registry.log)
 		case *ipcpb.ControlMessage_EvictableSegmentsRequest:
-			go processEvictableSegmentsRequest(x.EvictableSegmentsRequest, nodeID, stream, registry.log)
+			go processEvictableSegmentsRequest(x.EvictableSegmentsRequest, connSession.NodeID(), stream, registry.log)
 		case *ipcpb.ControlMessage_RestoreLocalSegmentIndexRequest:
-			go processRestoreLocalSegmentIndexRequest(x.RestoreLocalSegmentIndexRequest, nodeID, stream, registry.log)
+			go processRestoreLocalSegmentIndexRequest(x.RestoreLocalSegmentIndexRequest, connSession.NodeID(), stream, registry.log)
 		case *ipcpb.ControlMessage_ConfigSeedApplyResult:
 			if x.ConfigSeedApplyResult != nil {
 				ack := x.ConfigSeedApplyResult
@@ -1615,21 +1953,21 @@ func CleanupLocalConnOwners(ctx context.Context) {
 		return
 	}
 
-	nodeIDs := make([]string, 0)
+	owned := make([]removedConn, 0)
 	registry.mu.RLock()
-	for nodeID := range registry.conns {
-		nodeIDs = append(nodeIDs, nodeID)
+	for nodeID, c := range registry.conns {
+		owned = append(owned, removedConn{id: nodeID, fence: c.fence})
 	}
 	registry.mu.RUnlock()
 
-	for _, nodeID := range nodeIDs {
-		deleted, err := rs.DeleteConnOwnerIfMatch(ctx, nodeID, instanceID, advertiseAddr)
+	for _, rc := range owned {
+		deleted, err := rs.DeleteConnOwnerIfMatch(ctx, rc.id, instanceID, advertiseAddr, rc.fence)
 		if err != nil {
-			registry.log.WithError(err).WithField("node_id", nodeID).Warn("Failed to clean conn owner during shutdown")
+			registry.log.WithError(err).WithField("node_id", rc.id).Warn("Failed to clean conn owner during shutdown")
 			continue
 		}
 		if deleted {
-			registry.log.WithField("node_id", nodeID).Info("Cleaned conn owner during shutdown")
+			registry.log.WithField("node_id", rc.id).Info("Cleaned conn owner during shutdown")
 		}
 	}
 }
@@ -2374,6 +2712,64 @@ func allowInsecureControlGRPC() bool {
 
 var ErrNotConnected = status.Error(codes.Unavailable, "node not connected")
 
+// ErrConnSuperseded is returned when a dispatch targets a control connection that a reconnect retired. It is
+// distinct from ErrNotConnected and explicitly NOT relayable (shouldRelay returns false for it): the node is
+// present via a NEWER session on this instance, so re-forwarding would deliver the command to the new owner
+// after the caller already treated the local attempt as failed. The caller reverts/retries instead.
+var ErrConnSuperseded = status.Error(codes.Unavailable, "control connection superseded by a reconnect")
+
+// ErrFreezeProtocolUnsupported is returned by the final owning send when the target sidecar's declared
+// control-protocol version is below FreezeStagedProtocolMin. It is distinct from ErrNotConnected so the HA
+// relay path does NOT re-forward it (the node IS connected here — it is simply too old): the freeze fails
+// closed and the artifact stays local/retryable until the sidecar is upgraded.
+var ErrFreezeProtocolUnsupported = status.Error(codes.FailedPrecondition, "sidecar control-protocol version does not support staged freeze")
+
+// FreezeStagedProtocolMin is the minimum control-protocol version a sidecar must declare (in Register) to be
+// handed a staged, server-minted freeze. A sidecar below it neither uploads to the attempt-scoped staging
+// key nor echoes the server-minted attempt id, so it can complete neither the staging HEAD verification nor
+// the attempt-scoped completion CAS. Freeze admission to such a node FAILS CLOSED. Version 0 is a
+// pre-staged-freeze sidecar (Register.control_protocol_version absent).
+const FreezeStagedProtocolMin int32 = 1
+
+// ThumbnailStagedProtocolMin is the minimum control-protocol version a sidecar must declare to be handed a
+// staged, server-minted thumbnail publication. Below it, the sidecar neither uploads to the per-attempt staging
+// keys nor echoes the attempt id, so it can neither be verified nor bound to the completion CAS — the mint
+// FAILS CLOSED (no legacy fixed-key overwrite path). Bumped above FreezeStagedProtocolMin because thumbnail
+// staging is a distinct, later capability; sidecar-first rollout declares this version before Foghorn enforces.
+const ThumbnailStagedProtocolMin int32 = 2
+
+// connIsCurrentOwner reports whether the node's currently-registered control connection is the SAME one that
+// carried a request (matched by ownership fence). A goroutine dispatched from a since-superseded connection
+// gets false, so it can decline to claim an attempt for a connection that no longer owns the node. A missing
+// registry entry (never registered / cleaned up) also returns false — fail closed.
+func connIsCurrentOwner(nodeID string, fence int64) bool {
+	if registry == nil {
+		return false
+	}
+	registry.mu.RLock()
+	c := registry.conns[nodeID]
+	registry.mu.RUnlock()
+	return c != nil && c.fence == fence
+}
+
+// NodeFreezeProtocolOK reports whether the node's LOCAL control connection declares a protocol version that
+// supports staged, server-minted freeze. known=false means this instance holds no local connection for the
+// node (owned by a peer, or not connected) — a caller must NOT treat that as "incapable"; the owning
+// instance's session-bound interactive admission is the authority. Used as a proactive-dispatch pre-check so
+// the reconciler does not repeatedly claim+revert against a known-old locally-connected sidecar.
+func NodeFreezeProtocolOK(nodeID string) (ok bool, known bool) {
+	if registry == nil {
+		return false, false
+	}
+	registry.mu.RLock()
+	c := registry.conns[nodeID]
+	registry.mu.RUnlock()
+	if c == nil {
+		return false, false
+	}
+	return c.protocolVersion >= FreezeStagedProtocolMin, true
+}
+
 // shouldRelay reports whether a local send error warrants a relay attempt.
 // Beyond ErrNotConnected (node absent from registry), it also triggers relay
 // when stream.Send failed and the node was concurrently removed — covering
@@ -2381,6 +2777,9 @@ var ErrNotConnected = status.Error(codes.Unavailable, "node not connected")
 func shouldRelay(nodeID string, err error) bool {
 	if err == nil {
 		return false
+	}
+	if errors.Is(err, ErrConnSuperseded) {
+		return false // a newer LOCAL session owns the node; never re-forward to the new owner
 	}
 	if errors.Is(err, ErrNotConnected) {
 		return true
@@ -2391,7 +2790,10 @@ func shouldRelay(nodeID string, err error) bool {
 	return c == nil
 }
 
-func handleArtifactDeleted(deleted *ipcpb.ArtifactDeleted, nodeID string, logger logging.Logger) {
+func handleArtifactDeleted(deleted *ipcpb.ArtifactDeleted, session NodeSession, logger logging.Logger) {
+	// Attribute the deletion to THIS connection's authenticated canonical id (passed by value), never the
+	// raw registry key or a payload field — the two diverge under fingerprint/enrollment resolution.
+	nodeID := session.NodeID()
 	artifactHash := deleted.GetArtifactHash()
 	reason := deleted.GetReason()
 
@@ -2407,7 +2809,10 @@ func handleArtifactDeleted(deleted *ipcpb.ArtifactDeleted, nodeID string, logger
 }
 
 // processDVRProgress handles DVR progress updates from storage Helmsman
-func processDVRProgress(progress *ipcpb.DVRProgress, storageNodeID string, logger logging.Logger) {
+func processDVRProgress(progress *ipcpb.DVRProgress, session NodeSession, logger logging.Logger) {
+	// The DVR-owner authorization below binds the report to the dispatched recording node; that owner is
+	// stored under the canonical id, so authorize/attribute against the authenticated session, never the raw key.
+	storageNodeID := session.NodeID()
 	dvrHash := progress.GetDvrHash()
 	status := progress.GetStatus()
 	segmentCount := progress.GetSegmentCount()
@@ -2422,7 +2827,37 @@ func processDVRProgress(progress *ipcpb.DVRProgress, storageNodeID string, logge
 		"message":       message,
 	}).Info("DVR progress update")
 
-	if db != nil && dvrHash != "" && storageNodeID != "" {
+	// Authorize the reporting node against the dispatched recording owner (strictly, and scoped to the
+	// owning tenant) BEFORE any sink. A mismatched node — even against a terminal row — is rejected with
+	// zero mutation. Fail closed when the tenant cannot be resolved or the lookup errors.
+	if dvrHash != "" && storageNodeID != "" {
+		tenantID, found, ownErr := dvrOwnerTenant(streamCtx(), dvrHash)
+		if ownErr != nil || !found {
+			logger.WithError(ownErr).WithFields(logging.Fields{
+				"dvr_hash":       dvrHash,
+				"reporting_node": storageNodeID,
+			}).Warn("Ignoring DVR progress: no tenant-owned DVR row for hash (or lookup failed)")
+			return
+		}
+		if authorized, chkErr := dvrReportNodeAuthorized(streamCtx(), dvrHash, tenantID, storageNodeID, dvrAuthStrict); chkErr != nil || !authorized {
+			logger.WithError(chkErr).WithFields(logging.Fields{
+				"dvr_hash":       dvrHash,
+				"reporting_node": storageNodeID,
+			}).Warn("Ignoring DVR progress: reporting node is not the dispatched recording owner (or lookup failed)")
+			return
+		}
+	}
+
+	// The durable progress write classifies the report: applied=true only for an accepted active
+	// transition. A terminal/finalizing no-op does not mirror into stream-instance state.
+	applied, perr := state.DefaultManager().ApplyDVRProgress(streamCtx(), dvrHash, status, uint64(sizeBytes), uint32(segmentCount), storageNodeID)
+	if perr != nil {
+		logger.WithError(perr).WithField("dvr_hash", dvrHash).Debug("ApplyDVRProgress failed")
+	}
+
+	// Refresh artifact_nodes / emit node-copy GAINED ONLY for an accepted active transition. A terminal
+	// no-op must not revive node presence or re-emit GAINED for a settled recording.
+	if applied && db != nil && dvrHash != "" && storageNodeID != "" {
 		if _, err := db.ExecContext(streamCtx(), `
 			UPDATE foghorn.artifact_nodes
 			   SET last_seen_at = NOW(),
@@ -2436,14 +2871,17 @@ func processDVRProgress(progress *ipcpb.DVRProgress, storageNodeID string, logge
 				"dvr_hash": dvrHash,
 				"node_id":  storageNodeID,
 			}).Warn("Failed to refresh active DVR artifact node from progress update")
+		} else if rerr := RefreshNodeCopy(streamCtx(), dvrHash, storageNodeID); rerr != nil {
+			logger.WithError(rerr).WithField("dvr_hash", dvrHash).Warn("Failed to emit node-copy GAINED after DVR progress refresh")
 		}
 	}
-
-	_ = state.DefaultManager().ApplyDVRProgress(streamCtx(), dvrHash, status, uint64(sizeBytes), uint32(segmentCount), storageNodeID)
 }
 
 // processDVRStopped handles DVR completion from storage Helmsman
-func processDVRStopped(stopped *ipcpb.DVRStopped, storageNodeID string, logger logging.Logger) {
+func processDVRStopped(stopped *ipcpb.DVRStopped, session NodeSession, logger logging.Logger) {
+	// FinalizeDVR binds the completion to the dispatched recording node (ReportingNodeID); that owner is the
+	// canonical id, so authorize/attribute against the authenticated session, never the raw registry key.
+	storageNodeID := session.NodeID()
 	dvrHash := stopped.GetDvrHash()
 	status := stopped.GetStatus()
 	errorMsg := stopped.GetError()
@@ -2465,12 +2903,29 @@ func processDVRStopped(stopped *ipcpb.DVRStopped, storageNodeID string, logger l
 	// for the new state machine; "deleted" passes through unchanged so the
 	// retention cleanup path still works.
 	if status == "deleted" {
+		// Bind the deleted report to the dispatched recording node (the finalize branch below is bound
+		// inside FinalizeDVR via ReportingNodeID). A report from any other node for an existing recording
+		// is rejected without mutating; a duplicate delete against a genuinely absent row is a safe no-op
+		// (idempotent-stop mode). The owner check is scoped to the tenant that owns the hash. Fail closed
+		// on a tenant-lookup query error: abort with no state mutation.
+		tenantID, found, ownErr := dvrOwnerTenant(streamCtx(), dvrHash)
+		if ownErr != nil {
+			logger.WithError(ownErr).WithFields(logging.Fields{"dvr_hash": dvrHash, "reporting_node": storageNodeID}).
+				Warn("Ignoring DVRStopped(deleted): owner-tenant lookup failed; failing closed")
+			return
+		}
+		if found {
+			if ok, chkErr := dvrReportNodeAuthorized(streamCtx(), dvrHash, tenantID, storageNodeID, dvrAuthIdempotentStop); chkErr != nil || !ok {
+				logger.WithError(chkErr).WithFields(logging.Fields{"dvr_hash": dvrHash, "reporting_node": storageNodeID}).
+					Warn("Ignoring DVRStopped(deleted): reporting node is not the dispatched recording owner (or lookup failed)")
+				return
+			}
+		}
 		if applyErr := state.DefaultManager().ApplyDVRStopped(streamCtx(), dvrHash, "deleted", int64(durationSeconds), uint64(sizeBytes), manifestPath, errorMsg, storageNodeID); applyErr != nil {
 			logger.WithError(applyErr).WithField("dvr_hash", dvrHash).Warn("ApplyDVRStopped(deleted) failed")
 		}
-		if dvrDeletedHandler != nil {
-			go dvrDeletedHandler(dvrHash, uint64(sizeBytes), storageNodeID)
-		}
+		// The authoritative DELETED lifecycle event is emitted in-transaction by SoftDeleteDVRAndChapters
+		// (the deletion path), so a sidecar 'deleted' report does NOT emit a second, duplicate event.
 		return
 	}
 
@@ -2488,6 +2943,7 @@ func processDVRStopped(stopped *ipcpb.DVRStopped, storageNodeID string, logger l
 			DurationSeconds: int64(durationSeconds),
 			SizeBytes:       uint64(sizeBytes),
 			StorageNodeID:   storageNodeID,
+			ReportingNodeID: storageNodeID,
 		})
 		if err != nil {
 			if final.ArtifactStatus == "" {
@@ -2502,10 +2958,8 @@ func processDVRStopped(stopped *ipcpb.DVRStopped, storageNodeID string, logger l
 		if applyErr := state.DefaultManager().ApplyDVRStopped(streamCtx(), dvrHash, final.ArtifactStatus, int64(durationSeconds), uint64(sizeBytes), final.ManifestPath, errorMsg, storageNodeID); applyErr != nil {
 			logger.WithError(applyErr).WithField("dvr_hash", dvrHash).Warn("ApplyDVRStopped after FinalizeDVR failed")
 		}
-		projectArtifactSizeToCommodore(streamCtx(), dvrHash, int64(sizeBytes), logger)
-		if dvrStoppedHandler != nil {
-			go dvrStoppedHandler(dvrHash, final.ArtifactStatus, storageNodeID, uint64(sizeBytes), final.ManifestPath, errorMsg)
-		}
+		// The terminal DVR STOPPED lifecycle event is enqueued INSIDE FinalizeDVR's transaction (durable,
+		// atomic with the terminal state) — no separate crash-lossy callback here.
 	}()
 }
 
@@ -2743,15 +3197,18 @@ func sendMistTriggerAck(stream ipcpb.HelmsmanControl_ConnectServer, requestID st
 }
 
 // processMistTrigger processes typed MistServer triggers forwarded from Helmsman
-func processMistTrigger(trigger *ipcpb.MistTrigger, nodeID string, stream ipcpb.HelmsmanControl_ConnectServer, logger logging.Logger) {
+func processMistTrigger(trigger *ipcpb.MistTrigger, session NodeSession, stream ipcpb.HelmsmanControl_ConnectServer, logger logging.Logger) {
+	nodeID := session.NodeID()
 	if trigger != nil {
-		if ns := state.DefaultManager().GetNodeState(nodeID); ns != nil && strings.TrimSpace(ns.ClusterID) != "" {
-			cid := strings.TrimSpace(ns.ClusterID)
-			trigger.ClusterId = &cid
-		} else if (trigger.ClusterId == nil || strings.TrimSpace(trigger.GetClusterId()) == "") && strings.TrimSpace(localClusterID) != "" {
-			cid := strings.TrimSpace(localClusterID)
-			trigger.ClusterId = &cid
-		}
+		// Bind the trigger to THIS connection's IMMUTABLE authenticated session (captured at Register and passed
+		// by value), never the payload and never a registry re-fetch: overwrite the self-asserted node_id with
+		// the canonical authenticated id, and the cluster_id with the session's server-resolved cluster. A node
+		// therefore cannot attribute routing/storage/lifecycle/accounting effects to another node/cluster by
+		// naming them in the payload, and a reconnect can't substitute a newer session for this connection's
+		// work. There is NO local-cluster fallback: an authenticated connection carries its resolved cluster.
+		trigger.NodeId = nodeID
+		cid := strings.TrimSpace(session.ClusterID)
+		trigger.ClusterId = &cid
 	}
 
 	triggerType := trigger.GetTriggerType()
@@ -3875,10 +4332,23 @@ type S3ClientInterface interface {
 	DeleteByURL(ctx context.Context, s3URL string) error
 	DeletePrefix(ctx context.Context, prefix string) (int, error)
 	ParseS3URL(s3URL string) (string, error)
+	// ParseLocalS3URL is ParseS3URL with a bucket guard: it errors unless the URL is under THIS cell's local
+	// bucket, so a foreign/remote-provider pointer is never presigned or routed as a local object.
+	ParseLocalS3URL(s3URL string) (string, error)
 	BuildClipS3Key(tenantID, streamName, clipHash, format string) string
 	BuildDVRS3Key(tenantID, internalName, dvrHash string) string
 	BuildVodS3Key(tenantID, artifactHash, filename string) string
 	BuildS3URL(key string) string
+	// Exists / GetObjectSize HEAD the object so completion can VERIFY a node's self-reported upload before
+	// promoting it to durable state (both satisfied by *storage.S3Client). Exists maps not-found to (false, nil);
+	// a transient error is returned so the caller can leave the attempt retryable rather than fail it.
+	Exists(ctx context.Context, key string) (bool, error)
+	GetObjectSize(ctx context.Context, key string) (int64, error)
+	// HeadObjectInfo returns existence + size + ETag in one HEAD; PromoteObject copies a staging object to
+	// the canonical key conditional on that ETag (then deletes staging). Together they let completion consume
+	// an attempt-scoped staging upload without ever exposing a canonical-key PUT to the node.
+	HeadObjectInfo(ctx context.Context, key string) (bool, int64, string, error)
+	PromoteObject(ctx context.Context, srcKey, dstKey, ifMatchETag string) error
 }
 
 var s3Client S3ClientInterface
@@ -3893,15 +4363,8 @@ func SetS3Client(client S3ClientInterface) {
 // deployments running without federation enabled.
 var (
 	storageResolverFactory func(ctx context.Context, tenantID string) *storage.ClusterResolver
-	storageMintDelegate    StorageMintDelegate
 	storageDeleteDelegate  StorageDeleteDelegate
 )
-
-// StorageMintDelegate sends a MintStorageURLs request to the Foghorn pool
-// that owns the named storage cluster's S3. Wired from main.go to the
-// federation client + peer manager pair; absent in tests or when
-// federation isn't enabled.
-type StorageMintDelegate func(ctx context.Context, targetClusterID string, req *foghornfederationpb.MintStorageURLsRequest) (*foghornfederationpb.MintStorageURLsResponse, error)
 
 // StorageDeleteDelegate sends a DeleteStorageObjects request to the
 // Foghorn pool that owns the named storage cluster's S3. Wired from
@@ -3915,14 +4378,6 @@ type StorageDeleteDelegate func(ctx context.Context, targetClusterID string, req
 // factory. Called once at startup.
 func SetStorageResolverFactory(f func(ctx context.Context, tenantID string) *storage.ClusterResolver) {
 	storageResolverFactory = f
-}
-
-// SetStorageMintDelegate wires the cross-cluster MintStorageURLs sender
-// used when the resolver picks StorageMintViaFederation. Called once at
-// startup; absent ⇒ federation mode falls back to a clear reject so we
-// don't accidentally local-mint against the wrong S3 backing.
-func SetStorageMintDelegate(d StorageMintDelegate) {
-	storageMintDelegate = d
 }
 
 // SetStorageDeleteDelegate wires the cross-cluster DeleteStorageObjects
@@ -3953,23 +4408,109 @@ var officialClusterCache = cache.New(cache.Options{
 	MaxEntries:           10000,
 }, cache.MetricsHooks{})
 
-// resolveFreezeStorageCluster runs the storage resolver for the freeze
-// flow. Origin candidate is the artifact row's origin_cluster_id.
-// Official candidate comes from Quartermaster.GetClusterRouting via the
-// cached helper. When no resolver factory is wired (tests / minimal dev
-// setups) falls back to (origin, StorageMintLocal).
-func resolveFreezeStorageCluster(ctx context.Context, tenantID, originClusterID string) (string, storage.StorageMintMode) {
-	if storageResolverFactory == nil {
-		return originClusterID, storage.StorageMintLocal
+// mintAttemptID mints a server-owned freeze attempt id (128 bits of entropy, hex). The node ECHOES it at
+// completion, so the DB claim binds a Foghorn-ASSIGNED operation rather than a node-chosen request id.
+// Returns "" on a crypto/rand failure so the caller FAILS CLOSED (never reusing a predictable id across
+// attempts, which would let a retry consume another attempt's staging capability).
+func mintAttemptID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return ""
 	}
-	resolver := storageResolverFactory(ctx, tenantID)
-	if resolver == nil {
-		return originClusterID, storage.StorageMintLocal
+	return hex.EncodeToString(b[:])
+}
+
+// FreezeStagingKey derives the attempt-scoped staging object key from the base descriptor key. The presigned
+// PUT (both the interactive permission path and the reconciler push path) targets this key; completion HEAD-
+// verifies it and promotes it to a FRESH attempt-versioned CANDIDATE key (FreezePublishKey) — never the bare
+// descriptor key. Scoping by the attempt id makes staging keys unguessable across attempts. It is the ONE
+// staging-key builder both freeze dispatch paths and completion share.
+func FreezeStagingKey(canonicalKey, attemptID string) string {
+	return canonicalKey + ".staging." + attemptID
+}
+
+// FreezePublishKey derives the IMMUTABLE, attempt-versioned CANDIDATE key that a completion PUBLISHES the media
+// object to — the durable address recorded in active_object_key once the guarded CAS flips the pointer to it.
+// It is distinct from both the staging key (which the node holds a PUT for) and the bare descriptor key:
+// publishing to a fresh per-attempt key means a promote never overwrites an already-served object, so a
+// rollback after the copy cannot expose uncommitted bytes. The .dtsh index is NOT co-located here — it is
+// version-addressed independently at FreezePublishDtshKey (<k>.dtsh.att-<attempt>).
+func FreezePublishKey(canonicalKey, attemptID string) string {
+	return canonicalKey + ".att-" + attemptID
+}
+
+// FreezePublishDtshKey derives the IMMUTABLE, attempt-versioned key the .dtsh index is PUBLISHED to (recorded
+// in active_dtsh_key). Flat and derivable from (canonical, attempt) exactly like the staging key, so recovery
+// and the terminal-clear trigger can reconstruct it. Version-addressing the .dtsh (not co-locating it at a
+// fixed <media>.dtsh) means a late/duplicate attempt writes a DIFFERENT key and can never overwrite the live
+// index before losing its CAS — the same guarantee the main object has.
+func FreezePublishDtshKey(canonicalKey, attemptID string) string {
+	return canonicalKey + ".dtsh.att-" + attemptID
+}
+
+// FreezeAssignment is the server-owned outcome of authorizing + claiming a LOCAL freeze.
+type FreezeAssignment struct {
+	AttemptID    string // server-minted; the node echoes it at completion
+	CanonicalKey string // base descriptor key (persisted as sync_object_key); completion derives the staging + versioned candidate keys from it, never handing it to the node
+	StagingURL   string // presigned PUT to the attempt-scoped staging key
+	DestCluster  string // the official durable cluster this cell mints into
+}
+
+// PrepareLocalFreezeAssignment is the SINGLE shared freeze contract used by BOTH the interactive permission
+// path and the proactive reconciler push path, so neither can store to the wrong backend or skip
+// authorization: it resolves the tenant's OFFICIAL durable destination, authorizes source+destination,
+// requires the official backing to be THIS cell's local backend, server-mints the attempt, presigns the
+// attempt-scoped STAGING PUT, and CLAIMS the attempt (persisting the destination storage cluster + canonical
+// key). Returns a structured denial reason when ok=false; the artifact is left untouched on any denial.
+func PrepareLocalFreezeAssignment(ctx context.Context, assetType, assetHash, tenantID, streamName, serverFormat, originClusterID, nodeID string, expiry time.Duration) (FreezeAssignment, string, bool) {
+	routing, ok := tenantStorageRoutingFn(ctx, tenantID)
+	if !ok {
+		return FreezeAssignment{}, "authorization_check_failed", false
 	}
-	return resolver.Resolve(storage.ResolverInput{
-		OriginClusterID:   originClusterID,
-		OfficialClusterID: resolveOfficialClusterID(ctx, tenantID),
-	})
+	destCluster := strings.TrimSpace(routing.officialCluster)
+
+	nodeTenant, nodeCluster := "", ""
+	if ns := state.DefaultManager().GetNodeState(nodeID); ns != nil {
+		nodeTenant, nodeCluster = ns.TenantID, ns.ClusterID
+	}
+	if !authorizeStorageReplication(nodeTenant, nodeCluster, tenantID, destCluster, routing) {
+		return FreezeAssignment{}, "cluster_not_authorized", false
+	}
+	if s3Client == nil {
+		return FreezeAssignment{}, "s3_not_configured", false
+	}
+	if !canMintOfficialLocallyFn(ctx, tenantID, destCluster) {
+		return FreezeAssignment{}, "official_storage_remote", false
+	}
+
+	attemptID := mintAttemptID()
+	if attemptID == "" {
+		return FreezeAssignment{}, "attempt_mint_failed", false
+	}
+
+	canonicalKey := ""
+	switch assetType {
+	case "clip":
+		canonicalKey = s3Client.BuildClipS3Key(tenantID, streamName, assetHash, serverFormat)
+	case "vod":
+		canonicalKey = s3Client.BuildVodS3Key(tenantID, assetHash, fmt.Sprintf("%s.%s", assetHash, serverFormat))
+	}
+	if canonicalKey == "" {
+		return FreezeAssignment{}, "unsupported_asset_type", false
+	}
+	stagingURL, err := s3Client.GeneratePresignedPUT(FreezeStagingKey(canonicalKey, attemptID), expiry)
+	if err != nil {
+		return FreezeAssignment{}, "presign_failed", false
+	}
+
+	scAttr := ""
+	if destCluster != "" && destCluster != originClusterID {
+		scAttr = destCluster
+	}
+	if claimed, cErr := claimFreezeAttempt(ctx, assetHash, attemptID, nodeID, tenantID, scAttr, canonicalKey); cErr != nil || !claimed {
+		return FreezeAssignment{}, "not_claimable", false
+	}
+	return FreezeAssignment{AttemptID: attemptID, CanonicalKey: canonicalKey, StagingURL: stagingURL, DestCluster: destCluster}, "", true
 }
 
 // resolveThumbnailStorageCluster runs the storage resolver for the
@@ -3978,176 +4519,22 @@ func resolveFreezeStorageCluster(ctx context.Context, tenantID, originClusterID 
 // Quartermaster lookup. Mirrors resolveFreezeStorageCluster's fallback
 // behaviour when no factory is wired (tests / minimal dev setups).
 func resolveThumbnailStorageCluster(ctx context.Context, tenantID, originClusterID string) (string, storage.StorageMintMode) {
+	// FAIL CLOSED when no storage resolver is wired: without it there is no proof of the tenant's official
+	// durable destination, and assuming the origin cluster is locally mintable would contradict official-durable
+	// selection (and could mint a tenant's thumbnails onto a BYOC origin). A missing resolver is unavailable.
 	if storageResolverFactory == nil {
-		return originClusterID, storage.StorageMintLocal
+		return "", storage.StorageUnavailable
 	}
 	resolver := storageResolverFactory(ctx, tenantID)
 	if resolver == nil {
-		return originClusterID, storage.StorageMintLocal
+		return "", storage.StorageUnavailable
 	}
+	// Durable destination is the tenant's OFFICIAL cluster only (mirrors the freeze contract). The origin
+	// cluster is source-authority attribution, NOT a durable-storage candidate — an advertised BYOC origin
+	// must never win the durable thumbnail write. A remote official → federation; unresolved → unavailable.
 	return resolver.Resolve(storage.ResolverInput{
-		OriginClusterID:   originClusterID,
 		OfficialClusterID: resolveOfficialClusterID(ctx, tenantID),
 	})
-}
-
-// thumbnailContentType maps an allowlisted thumbnail filename to the
-// MIME type the federated mint should record on the presigned PUT.
-func thumbnailContentType(fileName string) string {
-	switch fileName {
-	case "poster.jpg", "sprite.jpg":
-		return "image/jpeg"
-	case "sprite.vtt":
-		return "text/vtt"
-	}
-	return "application/octet-stream"
-}
-
-// buildFreezeMintRequest constructs the MintStorageURLs request that
-// matches the local-mint code paths' S3 key shapes for each freeze asset
-// type. Returns nil for unsupported asset types so the caller can reject
-// with a clear reason.
-func buildFreezeMintRequest(assetType, assetHash, tenantID, requestingCluster, targetCluster, localPath string) *foghornfederationpb.MintStorageURLsRequest {
-	base := &foghornfederationpb.MintStorageURLsRequest{
-		TenantId:          tenantID,
-		RequestingCluster: requestingCluster,
-		TargetClusterId:   targetCluster,
-	}
-	switch assetType {
-	case "clip":
-		format := "mp4"
-		if idx := strings.LastIndex(localPath, "."); idx != -1 {
-			format = localPath[idx+1:]
-		}
-		base.ArtifactType = "clip"
-		base.ArtifactKey = assetHash
-		base.Op = foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_SINGLE
-		base.ContentType = "video/" + format
-		return base
-	case "vod":
-		format := "mp4"
-		if idx := strings.LastIndex(localPath, "."); idx != -1 {
-			format = localPath[idx+1:]
-		}
-		base.ArtifactType = "vod"
-		base.ArtifactKey = assetHash
-		base.Op = foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_SINGLE
-		base.ContentType = "video/" + format
-		return base
-	}
-	return nil
-}
-
-// lookupAuthoritativeClusterUnambiguous reads COALESCE(storage_cluster_id,
-// origin_cluster_id) for an artifact hash. CanDeleteRequest does not carry
-// tenant_id, so to avoid letting a same-hash row from a different tenant
-// influence the can-delete shortcut we only return an answer when exactly
-// one row matches the hash. Returns (cluster, true) on the unambiguous
-// single-row case; (_, false) if zero rows, multiple rows, or DB error.
-func lookupAuthoritativeClusterUnambiguous(ctx context.Context, artifactHash string, logger logging.Logger) (string, bool) {
-	if db == nil {
-		return "", false
-	}
-	rows, err := db.QueryContext(ctx, `
-		SELECT COALESCE(storage_cluster_id, origin_cluster_id)
-		FROM foghorn.artifacts
-		WHERE artifact_hash = $1
-	`, artifactHash)
-	if err != nil {
-		logger.WithError(err).WithField("asset_hash", artifactHash).Warn("authoritative-cluster lookup failed")
-		return "", false
-	}
-	defer rows.Close()
-	var first sql.NullString
-	count := 0
-	for rows.Next() {
-		var cluster sql.NullString
-		if scanErr := rows.Scan(&cluster); scanErr != nil {
-			logger.WithError(scanErr).WithField("asset_hash", artifactHash).Warn("authoritative-cluster scan failed")
-			return "", false
-		}
-		if count == 0 {
-			first = cluster
-		}
-		count++
-		if count > 1 {
-			break
-		}
-	}
-	if err := rows.Err(); err != nil {
-		logger.WithError(err).WithField("asset_hash", artifactHash).Warn("authoritative-cluster row iteration failed")
-		return "", false
-	}
-	if count != 1 {
-		if count > 1 {
-			logger.WithField("asset_hash", artifactHash).Warn("authoritative-cluster lookup ambiguous (multiple tenant rows for hash); skipping remote-synced shortcut")
-		}
-		return "", false
-	}
-	if !first.Valid {
-		return "", true
-	}
-	return first.String, true
-}
-
-// persistFreezeStorageCluster updates the artifact row's storage_cluster_id
-// after a federated mint. The UPDATE is scoped by (artifact_hash, tenant_id)
-// — storage ownership is a tenant-scoped attribute and a missing tenant
-// filter would let a same-hash row in a different tenant get rewritten.
-// NULL is preserved when the chosen storage cluster matches origin so rows
-// without a storage redirect look unchanged.
-func persistFreezeStorageCluster(ctx context.Context, artifactHash, tenantID, storageCluster string) {
-	if db == nil || strings.TrimSpace(artifactHash) == "" || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(storageCluster) == "" {
-		return
-	}
-	var artifactType string
-	err := db.QueryRowContext(ctx, `
-		UPDATE foghorn.artifacts
-		SET storage_cluster_id = $3,
-		    updated_at = NOW()
-		WHERE artifact_hash = $1
-		  AND tenant_id = $2
-		  AND COALESCE(storage_cluster_id, '') <> $3
-		RETURNING artifact_type
-	`, artifactHash, tenantID, storageCluster).Scan(&artifactType)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			// Row already at this cluster — no work, no notify needed.
-			return
-		}
-		// Soft failure — the upload still works, the read side just
-		// can't reconstruct the storage cluster from the row.
-		controlLogger().WithError(err).WithFields(logging.Fields{
-			"artifact_hash":   artifactHash,
-			"tenant_id":       tenantID,
-			"storage_cluster": storageCluster,
-		}).Warn("persistFreezeStorageCluster: UPDATE failed; storage cluster may be stale on read side")
-		return
-	}
-	notifyCommodoreStorageCluster(ctx, artifactHash, tenantID, artifactType, storageCluster)
-}
-
-// notifyCommodoreStorageCluster pushes a storage cluster ownership change
-// to Commodore's registry projection. UpdateArtifactStorageCluster never
-// flips has_thumbnails — that's the readiness RPC.
-func notifyCommodoreStorageCluster(ctx context.Context, artifactHash, tenantID, artifactType, storageCluster string) {
-	if CommodoreClient == nil || tenantID == "" {
-		return
-	}
-	assetType, ok := artifactAssetTypeFromString(artifactType)
-	if !ok {
-		return
-	}
-	notifyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	if _, err := CommodoreClient.UpdateArtifactStorageCluster(notifyCtx, tenantID, assetType, artifactHash, storageCluster); err != nil {
-		controlLogger().WithError(err).WithFields(logging.Fields{
-			"artifact_hash":   artifactHash,
-			"tenant_id":       tenantID,
-			"storage_cluster": storageCluster,
-			"asset_type":      artifactType,
-		}).Warn("Failed to notify Commodore of artifact storage cluster change")
-	}
 }
 
 func resolveOfficialClusterID(ctx context.Context, tenantID string) string {
@@ -4162,10 +4549,16 @@ func resolveOfficialClusterID(ctx context.Context, tenantID string) string {
 		if qErr != nil {
 			return "", false, qErr
 		}
-		if routing == nil || routing.OfficialClusterId == nil {
+		if routing == nil {
 			return "", true, nil
 		}
-		return *routing.OfficialClusterId, true, nil
+		official := strings.TrimSpace(routing.GetOfficialClusterId())
+		if official == "" {
+			// Quartermaster omits official_cluster_id when it equals the tenant's primary cluster; normalize
+			// to the primary so single-cluster tenants still resolve a durable destination (mirrors freeze).
+			official = strings.TrimSpace(routing.GetClusterId())
+		}
+		return official, true, nil
 	})
 	if err != nil || !ok {
 		return ""
@@ -4179,11 +4572,10 @@ func resolveOfficialClusterID(ctx context.Context, tenantID string) string {
 
 // processFreezePermissionRequest handles freeze permission requests from Helmsman
 // Generates presigned URLs for secure S3 uploads without exposing credentials
-func processFreezePermissionRequest(req *ipcpb.FreezePermissionRequest, nodeID string, stream ipcpb.HelmsmanControl_ConnectServer, logger logging.Logger) {
+func processFreezePermissionRequest(req *ipcpb.FreezePermissionRequest, nodeID string, connProtocolVersion int32, connFence int64, stream ipcpb.HelmsmanControl_ConnectServer, logger logging.Logger) {
 	requestID := req.GetRequestId()
 	assetType := req.GetAssetType()
 	assetHash := req.GetAssetHash()
-	localPath := req.GetLocalPath()
 	sizeBytes := req.GetSizeBytes()
 
 	logger.WithFields(logging.Fields{
@@ -4194,10 +4586,9 @@ func processFreezePermissionRequest(req *ipcpb.FreezePermissionRequest, nodeID s
 		"node_id":    nodeID,
 	}).Info("Processing freeze permission request")
 
-	// Note: the s3Client nil-check is deferred until after the storage
-	// resolver runs. A self-host pool with no local S3 client must still
-	// be able to delegate to the platform pool's S3 via federation;
-	// rejecting up front would foreclose that path.
+	// Note: the s3Client nil-check is deferred until after the storage resolver runs, so the resolver
+	// verdict (unavailable / peer-cluster reject / local) is produced first with a structured reason
+	// rather than a blanket "s3_not_configured".
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -4212,98 +4603,134 @@ func processFreezePermissionRequest(req *ipcpb.FreezePermissionRequest, nodeID s
 		return
 	}
 
+	// Server-observed protocol gate: a sidecar that predates the staged, server-minted freeze protocol would
+	// upload to the canonical key and complete without the attempt id, so a granted freeze could never verify
+	// or match the completion CAS. Deny explicitly (fail closed) so an un-upgraded node is signalled rather
+	// than silently accumulating in_progress attempts that only stale recovery reaps. The version is the one
+	// CAPTURED for THIS session at Register (passed in), so the check and the response below are bound to the
+	// same connection that made the request — a concurrent reconnect cannot admit this request under a
+	// different session's version.
+	if connProtocolVersion < FreezeStagedProtocolMin {
+		logger.WithFields(logging.Fields{"node_id": nodeID, "protocol_version": connProtocolVersion, "required": FreezeStagedProtocolMin}).
+			Warn("Denying freeze: sidecar control-protocol version predates staged freeze; upgrade the sidecar")
+		sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
+			RequestId: requestID,
+			AssetHash: assetHash,
+			Approved:  false,
+			Reason:    "sidecar_protocol_unsupported",
+		}, logger)
+		return
+	}
+
 	lookupHash := assetHash
 	lookupType := assetType
 
-	var streamName string
-	var originCluster sql.NullString
-	var syncStatus sql.NullString
-	err := db.QueryRowContext(ctx, `
-		SELECT stream_internal_name, origin_cluster_id, sync_status
-		FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND artifact_type = $2`,
-		lookupHash, lookupType).Scan(&streamName, &originCluster, &syncStatus)
-
-	// Resolve tenant (and stream/origin if DB row was missing) via the
-	// identity facade: registry cache → foghorn SQL → Commodore.
-	// origin_cluster_id is required by the storage resolver's origin-first
-	// rule: a self-hosted origin with its own S3 should be preferred over
-	// the official cluster, but only if we know which cluster that is.
-	var tenantID string
-	var commodoreOrigin string
+	// Resolve tenant (and stream/origin) via the identity facade FIRST — the foghorn.artifacts lookup
+	// below MUST be tenant-scoped so a request can never read another tenant's row (partition scoping /
+	// authorization, not collision avoidance: artifact_hash is a randomly-minted, globally-unique id).
+	// origin_cluster_id is used only for storage-cluster attribution (scAttr), not destination selection.
+	var tenantID, commodoreOrigin, commodoreStream string
 	if resolver := identity.Default(); resolver != nil {
 		resolveCtx, resolveCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer resolveCancel()
 		if id, resolveErr := resolver.ResolveArtifact(resolveCtx, assetHash, assetType); resolveErr == nil {
 			tenantID = id.TenantID
-			if streamName == "" {
-				streamName = id.StreamInternalName
-			}
+			commodoreStream = id.StreamInternalName
 			commodoreOrigin = id.OriginClusterID
 		}
+	}
+
+	// TENANT-SCOPED metadata lookup (stream/origin/sync_status/format). The catalog format is the
+	// IMMUTABLE server-owned input to the canonical S3 key, so this read must FAIL CLOSED: a transient DB
+	// error would otherwise default the format to mp4 and mint an mp4 key, while completion (which
+	// re-reads the row) could later record a *.webm key synced. On a genuine query error we reject the
+	// freeze; only sql.ErrNoRows (row not yet registered) is tolerated — the authorization gate below
+	// then rejects it anyway.
+	var streamName string
+	var originCluster sql.NullString
+	var storageClusterCol sql.NullString
+	var syncStatus sql.NullString
+	var catalogFormat sql.NullString
+	if tenantID != "" {
+		if metaErr := db.QueryRowContext(ctx, `
+			SELECT stream_internal_name, origin_cluster_id, storage_cluster_id, sync_status, COALESCE(format, '')
+			FROM foghorn.artifacts
+			WHERE artifact_hash = $1 AND artifact_type = $2 AND tenant_id::text = $3`,
+			lookupHash, lookupType, tenantID).Scan(&streamName, &originCluster, &storageClusterCol, &syncStatus, &catalogFormat); metaErr != nil && !errors.Is(metaErr, sql.ErrNoRows) {
+			logger.WithError(metaErr).WithField("asset_hash", lookupHash).Warn("Freeze metadata lookup failed; rejecting (cannot derive canonical object key without the catalog format)")
+			sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
+				RequestId: requestID, AssetHash: assetHash, Approved: false, Reason: "metadata_unavailable",
+			}, logger)
+			return
+		}
+	}
+	// The canonical key's format is server-owned (catalog), defaulting to mp4 when the catalog has none
+	// yet — the SAME default completion applies, so the two stages always agree on the object.
+	serverFormat := "mp4"
+	if f := strings.TrimSpace(catalogFormat.String); f != "" {
+		serverFormat = f
+	}
+	if streamName == "" {
+		streamName = commodoreStream
 	}
 	if commodoreOrigin != "" && !originCluster.Valid {
 		originCluster = sql.NullString{String: commodoreOrigin, Valid: true}
 	}
 
-	// If DB row was missing but Commodore resolved the artifact, create the
-	// lifecycle row. Persist origin_cluster_id so the storage resolver can
-	// honor origin-first on subsequent freezes for this asset.
-	if err != nil && tenantID != "" && streamName != "" {
-		insertOrigin := sql.NullString{String: commodoreOrigin, Valid: commodoreOrigin != ""}
-		if _, dbErr := db.ExecContext(ctx, `
-			INSERT INTO foghorn.artifacts
-				(artifact_hash, artifact_type, stream_internal_name, tenant_id,
-				 origin_cluster_id, storage_location, sync_status, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, 'local', 'pending', NOW(), NOW())
-			ON CONFLICT (artifact_hash) DO NOTHING`,
-			lookupHash, lookupType, streamName, tenantID, insertOrigin); dbErr != nil {
-			logger.WithError(dbErr).WithField("asset_hash", lookupHash).Error("failed to create lifecycle row from Commodore")
-		}
-		logger.WithFields(logging.Fields{
-			"asset_hash":        lookupHash,
-			"asset_type":        lookupType,
-			"tenant_id":         tenantID,
-			"origin_cluster_id": commodoreOrigin,
-		}).Info("Created lifecycle row from Commodore during freeze permission")
-		err = nil
-	}
-
-	if err != nil {
-		entry := logger.WithFields(logging.Fields{
-			"asset_hash":  assetHash,
-			"asset_type":  assetType,
-			"lookup_hash": lookupHash,
-			"lookup_type": lookupType,
-			"error":       err,
-		})
-		if errors.Is(err, sql.ErrNoRows) {
-			entry.Debug("Rejecting freeze permission for uncataloged asset")
-		} else {
-			entry.Error("Failed to resolve asset for freeze permission")
-		}
-		sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
-			RequestId: requestID,
-			AssetHash: assetHash,
-			Approved:  false,
-			Reason:    "asset_not_found",
-		}, logger)
-		return
-	}
-
+	// AUTHORIZATION — enforced BEFORE any state creation (no lifecycle row is written for an
+	// unauthorized request), in TWO independent gates:
+	//
+	//   (1) POSSESSION (here): the requesting node must hold a COMPLETE, non-orphaned copy of a LIVE
+	//       (non-deleted) artifact (foghorn.artifact_nodes, tenant-scoped via the artifacts join). Same
+	//       canonical "servable complete copy" predicate the relay/reconciler use.
+	//
+	//   (2) TWO-SIDED STORAGE AUTHORITY (after the destination is resolved, below): possession is
+	//       SELF-ATTESTED, so it is necessary but not sufficient. The node's SERVER-OWNED tenant/cluster
+	//       (Quartermaster enrollment, held in NodeState) must be authorized to replicate for the artifact
+	//       tenant, AND the tenant must be entitled to the destination cluster Foghorn resolves — the same
+	//       tenant_cluster_access entitlement the cross-cluster serving path uses. See authorizeStorageReplication.
+	//
+	// Fail closed on a DB error, no qualifying copy, or an unauthorized cluster/tenant. (Completion later
+	// re-checks request/node/state and consumes the persisted server-derived descriptor.)
 	if tenantID == "" {
-		logger.WithFields(logging.Fields{
-			"asset_hash": assetHash,
-			"asset_type": assetType,
-		}).Error("Could not resolve tenant for asset")
+		logger.WithFields(logging.Fields{"asset_hash": assetHash, "asset_type": assetType}).
+			Error("Could not resolve tenant for asset")
 		sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
-			RequestId: requestID,
-			AssetHash: assetHash,
-			Approved:  false,
-			Reason:    "tenant_not_found",
+			RequestId: requestID, AssetHash: assetHash, Approved: false, Reason: "tenant_not_found",
 		}, logger)
 		return
 	}
+	var nodeHoldsCopy bool
+	if aErr := db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			  FROM foghorn.artifact_nodes an
+			  JOIN foghorn.artifacts a ON a.artifact_hash = an.artifact_hash
+			 WHERE an.artifact_hash = $1 AND an.node_id = $2 AND a.tenant_id::text = $3
+			   AND an.is_complete = true
+			   AND an.is_orphaned = false
+			   AND a.status <> 'deleted'
+		)`, lookupHash, nodeID, tenantID).Scan(&nodeHoldsCopy); aErr != nil {
+		logger.WithError(aErr).WithFields(logging.Fields{"asset_hash": lookupHash, "node_id": nodeID}).
+			Error("Failed to verify node artifact ownership for freeze permission")
+		sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
+			RequestId: requestID, AssetHash: assetHash, Approved: false, Reason: "authorization_check_failed",
+		}, logger)
+		return
+	}
+	if !nodeHoldsCopy {
+		logger.WithFields(logging.Fields{"asset_hash": lookupHash, "node_id": nodeID, "tenant_id": tenantID}).
+			Warn("Denying freeze permission: requesting node holds no complete, non-orphaned copy of the live artifact")
+		sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
+			RequestId: requestID, AssetHash: assetHash, Approved: false, Reason: "node_copy_absent",
+		}, logger)
+		return
+	}
+
+	// Possession (gate 1) above proved a live foghorn.artifacts row + a complete node copy exist for this
+	// (tenant, hash), so there is no missing-row recovery or uncataloged-reject path here: a truly absent
+	// artifact fails the ownership gate and returned above. streamName/origin come from the tenant-scoped
+	// lookup or the identity facade.
 
 	// Resolve the storage cluster for this asset using the same chain
 	// CreateVodUpload uses: origin artifact row, tenant routing, then this
@@ -4315,193 +4742,87 @@ func processFreezePermissionRequest(req *ipcpb.FreezePermissionRequest, nodeID s
 	if originCluster.Valid {
 		originClusterID = originCluster.String
 	}
-	storageCluster, mintMode := resolveFreezeStorageCluster(ctx, tenantID, originClusterID)
 
-	// Remote artifact: storage cluster is authoritative — skip upload,
-	// just evict. Replaces the prior origin_cluster_id-only check so a
-	// row with delegated storage routes to the storage cluster, not origin.
-	// NULL storage_cluster_id falls back to origin via the resolver's
-	// behaviour for rows created before storage_cluster_id was populated.
-	if storageCluster != "" && storageCluster != localClusterID && !isServedCluster(storageCluster) {
-		logger.WithFields(logging.Fields{
-			"asset_hash":      assetHash,
-			"storage_cluster": storageCluster,
-			"origin_cluster":  originClusterID,
-		}).Info("Remote artifact — skip_upload=true (storage cluster's S3 authoritative)")
+	// Already durably stored on a REMOTE cluster → skip upload, just evict the local warm copy. Checked
+	// BEFORE authorizing a new mint (possession authorizes eviction of an already-durable copy). Requires
+	// VERIFIED durability (sync_status='synced'); the DURABLE location is storage_cluster_id ONLY — a
+	// not-yet-synced artifact has a NULL storage_cluster_id and proceeds to a local mint into official storage.
+	artifactStorageCluster := strings.TrimSpace(storageClusterCol.String)
+	if artifactStorageCluster != "" && artifactStorageCluster != localClusterID && !isServedCluster(artifactStorageCluster) {
+		if !syncStatus.Valid || syncStatus.String != "synced" {
+			logger.WithFields(logging.Fields{
+				"asset_hash": assetHash, "storage_cluster": artifactStorageCluster, "sync_status": syncStatus.String,
+			}).Warn("Rejecting freeze: remote storage cluster but artifact is not yet durably synced (cannot verify remote durability from this cell)")
+			sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
+				RequestId: requestID, AssetHash: assetHash, Approved: false, Reason: "remote_not_durable",
+			}, logger)
+			return
+		}
+		logger.WithFields(logging.Fields{"asset_hash": assetHash, "storage_cluster": artifactStorageCluster}).
+			Info("Remote artifact already durably synced — skip_upload=true (evict local warm copy)")
 		sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
-			RequestId:  requestID,
-			AssetHash:  assetHash,
-			Approved:   true,
-			SkipUpload: true,
+			RequestId: requestID, AssetHash: assetHash, Approved: true, SkipUpload: true,
 		}, logger)
 		return
 	}
 
-	// Already synced means the asset is eligible for local eviction, not
-	// that this delete attempt should trust stale metadata blindly. Return
-	// fresh presigned URLs below so pressure cleanup refreshes the durable
-	// object immediately before deleting the local warm copy.
-	if syncStatus.Valid && syncStatus.String == "synced" {
-		logger.WithFields(logging.Fields{
-			"asset_hash": assetHash,
-			"asset_type": assetType,
-			"node_id":    nodeID,
-		}).Debug("Asset already synced to S3; issuing refresh freeze before eviction")
+	// Bind admission to the CURRENT session before claiming: if this connection was superseded by a reconnect
+	// between the request's arrival and this goroutine (a new fence now owns the node), do NOT claim an attempt
+	// or presign — the response would go to a dead stream and the claim would be orphaned. The newer connection
+	// re-drives its own freezes. (SendLocalFreezeRequest applies the same current-session discipline for the
+	// proactive path.)
+	if !connIsCurrentOwner(nodeID, connFence) {
+		logger.WithFields(logging.Fields{"asset_hash": assetHash, "node_id": nodeID, "conn_fence": connFence}).
+			Warn("Ignoring freeze permission request from a superseded connection")
+		return
 	}
 
-	// Generate presigned URLs
+	// STORAGE ASSIGNMENT (gate 2 + mint + claim), through the ONE shared contract the reconciler also uses:
+	// resolve the OFFICIAL destination, authorize source+destination against the tenant's server-owned
+	// entitlement, require the official backing to be THIS cell's local backend, server-mint the attempt,
+	// presign the attempt-scoped STAGING PUT, and claim. Any denial leaves the artifact untouched.
 	expiry := 30 * time.Minute
-	expirySeconds := int64(expiry.Seconds())
+	assignment, reason, ok := PrepareLocalFreezeAssignment(ctx, assetType, assetHash, tenantID, streamName, serverFormat, originClusterID, nodeID, expiry)
+	if !ok {
+		logger.WithFields(logging.Fields{"asset_hash": assetHash, "node_id": nodeID, "tenant_id": tenantID, "reason": reason}).
+			Warn("Freeze permission denied")
+		sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
+			RequestId: requestID, AssetHash: assetHash, Approved: false, Reason: reason,
+		}, logger)
+		return
+	}
 
-	response := &ipcpb.FreezePermissionResponse{
+	grant := &ipcpb.FreezePermissionResponse{
 		RequestId:        requestID,
 		AssetHash:        assetHash,
 		Approved:         true,
-		UrlExpirySeconds: expirySeconds,
+		PresignedPutUrl:  assignment.StagingURL,
+		UrlExpirySeconds: int64(expiry.Seconds()),
+		AttemptId:        assignment.AttemptID,
 	}
-
-	// Branch on the resolver verdict. Local mode keeps the existing
-	// per-type s3Client paths below. Federation mode delegates the mint
-	// to the Foghorn pool that owns storageCluster's S3. Unavailable
-	// rejects with a structured reason so the operator can act.
-	switch mintMode {
-	case storage.StorageUnavailable:
-		sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
-			RequestId: requestID,
-			AssetHash: assetHash,
-			Approved:  false,
-			Reason:    "service_unavailable",
-		}, logger)
-		return
-
-	case storage.StorageMintViaFederation:
-		if storageMintDelegate == nil {
-			logger.WithField("storage_cluster", storageCluster).Warn("Federated mint required but no delegate wired")
-			sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
-				RequestId: requestID,
-				AssetHash: assetHash,
-				Approved:  false,
-				Reason:    "peer_unreachable",
-			}, logger)
-			return
-		}
-		mintReq := buildFreezeMintRequest(assetType, assetHash, tenantID, localClusterID, storageCluster, localPath)
-		if mintReq == nil {
-			sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
-				RequestId: requestID,
-				AssetHash: assetHash,
-				Approved:  false,
-				Reason:    "unsupported_asset_type",
-			}, logger)
-			return
-		}
-		mintResp, mintErr := storageMintDelegate(ctx, storageCluster, mintReq)
-		if mintErr != nil || mintResp == nil || !mintResp.GetAccepted() {
-			reason := "peer_unreachable"
-			if mintResp != nil && mintResp.GetReason() != "" {
-				reason = mintResp.GetReason()
-			}
-			logger.WithError(mintErr).WithFields(logging.Fields{
-				"asset_hash":      assetHash,
-				"storage_cluster": storageCluster,
-				"reason":          reason,
-			}).Warn("Federated MintStorageURLs rejected freeze")
-			sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
-				RequestId: requestID,
-				AssetHash: assetHash,
-				Approved:  false,
-				Reason:    reason,
-			}, logger)
-			return
-		}
-		if mintResp.GetPresignedPutUrl() != "" {
-			response.PresignedPutUrl = mintResp.GetPresignedPutUrl()
-		}
-		if len(mintResp.GetSegmentUrls()) > 0 {
-			response.SegmentUrls = mintResp.GetSegmentUrls()
-		}
-		persistFreezeStorageCluster(ctx, lookupHash, tenantID, storageCluster)
-		sendFreezePermissionResponse(stream, response, logger)
+	// FENCE the GRANT to THIS connection generation: it carries a freshly CLAIMED, server-minted attempt, so if
+	// a reconnect superseded this connection in the window between the admission check above and here, the grant
+	// must NOT reach the retired stream — the newer connection re-drives its own freezes and stale recovery
+	// reclaims the orphaned claim. Route through the conn's sendGate (same discipline as SendLocalFreezeRequest)
+	// so the superseded check and Send cannot interleave with retirement; a non-current stream is skipped.
+	c, ok := currentControlConn(nodeID, stream)
+	if !ok {
+		logger.WithFields(logging.Fields{"asset_hash": assetHash, "node_id": nodeID, "attempt_id": assignment.AttemptID}).
+			Warn("Not sending freeze grant: connection is no longer the current session (superseded by a reconnect)")
 		return
 	}
-
-	// StorageMintLocal requires a configured local S3 client; federation
-	// minting above uses the origin cluster's storage surface instead.
-	if s3Client == nil {
-		logger.Warn("S3 client not configured, rejecting freeze request")
-		sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
-			RequestId: requestID,
-			AssetHash: assetHash,
-			Approved:  false,
-			Reason:    "s3_not_configured",
-		}, logger)
+	c.sendGate.Lock()
+	if c.superseded.Load() || !connIsCurrentlyRegistered(nodeID, c) {
+		c.sendGate.Unlock()
+		logger.WithFields(logging.Fields{"asset_hash": assetHash, "node_id": nodeID, "attempt_id": assignment.AttemptID}).
+			Warn("Not sending freeze grant: connection superseded after admission")
 		return
 	}
-
-	switch assetType {
-	case "clip":
-		// Single file - extract format from path
-		format := "mp4"
-		if idx := strings.LastIndex(localPath, "."); idx != -1 {
-			format = localPath[idx+1:]
-		}
-		s3Key := s3Client.BuildClipS3Key(tenantID, streamName, assetHash, format)
-		presignedURL, err := s3Client.GeneratePresignedPUT(s3Key, expiry)
-		if err != nil {
-			logger.WithError(err).Error("Failed to generate presigned PUT URL for clip")
-			sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
-				RequestId: requestID,
-				AssetHash: assetHash,
-				Approved:  false,
-				Reason:    "presign_failed",
-			}, logger)
-			return
-		}
-		response.PresignedPutUrl = presignedURL
-	case "vod":
-		// VOD single file - extract format from path
-		format := "mp4"
-		if idx := strings.LastIndex(localPath, "."); idx != -1 {
-			format = localPath[idx+1:]
-		}
-		// VOD uses artifact_hash as filename base, with tenant context
-		s3Key := s3Client.BuildVodS3Key(tenantID, assetHash, fmt.Sprintf("%s.%s", assetHash, format))
-		presignedURL, err := s3Client.GeneratePresignedPUT(s3Key, expiry)
-		if err != nil {
-			logger.WithError(err).Error("Failed to generate presigned PUT URL for VOD")
-			sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
-				RequestId: requestID,
-				AssetHash: assetHash,
-				Approved:  false,
-				Reason:    "presign_failed",
-			}, logger)
-			return
-		}
-		response.PresignedPutUrl = presignedURL
-
-		logger.WithFields(logging.Fields{
-			"asset_hash": assetHash,
-			"s3_key":     s3Key,
-		}).Info("Generated presigned URL for VOD freeze")
-	}
-
-	if _, dbErr := db.ExecContext(context.Background(), `UPDATE foghorn.artifacts SET storage_location = 'freezing', sync_status = 'in_progress', updated_at = NOW() WHERE artifact_hash = $1`, assetHash); dbErr != nil {
-		logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to mark artifact as freezing")
-	}
-
-	// Persist storage_cluster_id when the resolver picked a cluster other
-	// than origin so the read side can reconstruct the right Chandler /
-	// PrepareArtifact target.
-	if storageCluster != "" && storageCluster != originClusterID {
-		persistFreezeStorageCluster(context.Background(), lookupHash, tenantID, storageCluster)
-	}
-
-	sendFreezePermissionResponse(stream, response, logger)
+	sendFreezePermissionResponse(stream, grant, logger)
+	c.sendGate.Unlock()
 
 	logger.WithFields(logging.Fields{
-		"request_id": requestID,
-		"asset_hash": assetHash,
-		"asset_type": assetType,
+		"request_id": requestID, "attempt_id": assignment.AttemptID, "asset_hash": assetHash, "asset_type": assetType,
 	}).Info("Freeze permission granted with presigned URLs")
 }
 
@@ -4520,6 +4841,277 @@ func sendFreezePermissionResponse(stream ipcpb.HelmsmanControl_ConnectServer, re
 	}
 }
 
+// claimFreezeAttempt is the local-mint convenience wrapper over ClaimFreezeAttempt using the package db
+// handle; see ClaimFreezeAttempt for the guarded-claim contract.
+func claimFreezeAttempt(ctx context.Context, assetHash, requestID, nodeID, tenantID, storageCluster, objectKey string) (claimed bool, err error) {
+	return ClaimFreezeAttempt(ctx, db, assetHash, requestID, nodeID, tenantID, storageCluster, objectKey)
+}
+
+// ClaimFreezeAttempt is the one guarded freeze-claim, invoked by PrepareLocalFreezeAssignment for both the
+// interactive and reconciler paths. In a single tenant-scoped UPDATE it re-authorizes (status='ready', a
+// complete non-orphaned copy present on this node) and reserves the attempt, persisting the attempt
+// identity (the SERVER-MINTED attempt id + authenticated node id), the resolved storage cluster, and the
+// server-derived sync_object_key together. An idempotent same-attempt/node re-claim is accepted only with
+// the identical key+cluster, so the persisted descriptor is immutable and completion promotes exactly the
+// object the presigned PUT targeted. Returns claimed=false (deny) on a DB error or an unclaimable row.
+func ClaimFreezeAttempt(ctx context.Context, dbh *sql.DB, assetHash, requestID, nodeID, tenantID, storageCluster, objectKey string) (claimed bool, err error) {
+	if dbh == nil {
+		return false, nil // no DB → cannot record an attempt → deny (fail closed)
+	}
+	if tenantID == "" || requestID == "" || nodeID == "" {
+		return false, nil // identity incomplete → cannot scope the attempt → deny (fail closed)
+	}
+	if objectKey == "" {
+		return false, nil // no server-derived descriptor → cannot bind the object → deny (fail closed)
+	}
+	// status = 'ready' is the lifecycle-ready gate: a clip/vod is freezable ONLY after processing has
+	// published it. A complete copy reported while the artifact is still 'uploading'/'processing' must NOT
+	// be claimable, because the processing completion resets sync_status/storage_location (and may rewrite
+	// format) and would strand a freeze claimed too early. The INITIAL claim (pending/failed/synced) binds
+	// the descriptor + storage cluster. An idempotent same-request/node re-claim is accepted ONLY when it
+	// carries the IDENTICAL object key AND storage cluster: a retry that computed a different key/cluster
+	// matches zero rows (deny), so the presigned URL the caller returns can never target a different object
+	// than the persisted descriptor completion will consume.
+	// The claim and its publication-ledger rows commit in ONE transaction: the ledger records the attempt's
+	// deterministic staging + candidate objects BEFORE the node holds any PUT URL, so a later completion whose
+	// guarded transaction is lost (e.g. a concurrent duplicate that clears the attempt identity) can never leak
+	// an uploaded/promoted object — the sweep collects it from the durable, identity-independent ledger row.
+	tx, txErr := dbh.BeginTx(ctx, nil)
+	if txErr != nil {
+		return false, txErr
+	}
+	defer tx.Rollback() //nolint:errcheck // best-effort on the non-commit paths
+	res, execErr := tx.ExecContext(ctx, `
+		UPDATE foghorn.artifacts
+		SET storage_location = 'freezing', sync_status = 'in_progress',
+		    sync_request_id = $2, sync_node_id = $3,
+		    storage_cluster_id = NULLIF($5, ''),
+		    sync_object_key = $6,
+		    -- The assignment was verified locally-mintable for this tenant before the claim, so the promoted
+		    -- bytes will be durable on THIS cell's backend. Persist that billing attribution now (stable; the
+		    -- read side never recomputes it from mutable tenant routing).
+		    durable_backend_local = true,
+		    last_sync_attempt = NOW(), updated_at = NOW()
+		WHERE artifact_hash = $1
+		  AND tenant_id::text = $4
+		  AND status = 'ready'
+		  AND EXISTS (
+		        SELECT 1 FROM foghorn.artifact_nodes an
+		         WHERE an.artifact_hash = $1 AND an.node_id = $3
+		           AND an.is_complete = true AND an.is_orphaned = false
+		  )
+		  AND (
+		        sync_status IN ('pending', 'failed', 'synced')
+		     OR (sync_status = 'in_progress' AND sync_request_id = $2 AND sync_node_id = $3
+		         AND sync_object_key = $6
+		         AND storage_cluster_id IS NOT DISTINCT FROM NULLIF($5, ''))
+		  )`,
+		assetHash, requestID, nodeID, tenantID, storageCluster, objectKey)
+	if execErr != nil {
+		return false, execErr
+	}
+	n, raErr := res.RowsAffected()
+	if raErr != nil {
+		return false, raErr
+	}
+	if n == 0 {
+		return false, nil // nothing claimed → rollback, no ledger rows
+	}
+	if lErr := RecordFreezePublicationLedgerTx(ctx, tx, assetHash, tenantID, requestID, objectKey); lErr != nil {
+		return false, lErr // ledger record failed → rollback the claim too (fail closed; the caller retries)
+	}
+	if cErr := tx.Commit(); cErr != nil {
+		return false, cErr
+	}
+	return true, nil
+}
+
+// claimDtshAttempt records the outstanding incremental-.dtsh sync attempt (request + node) on an
+// ALREADY-SYNCED artifact BEFORE the DtshSyncRequest is dispatched, so the completion can be
+// authenticated the same way a freeze/sync completion is. It is TENANT-SCOPED (a claim can never touch
+// another tenant's artifact) and claimable only when the main upload is 'synced' and the index isn't
+// yet marked synced. It refuses to steal a live attempt owned by a DIFFERENT request/node, and — so a
+// node re-reporting the same missing .dtsh every ~10s can't hammer a failed attempt — a 'failed'
+// attempt is re-claimable ONLY after a backoff that GROWS with dtsh_failure_count (30s per prior
+// failure, capped at 10min). A truly stuck 'in_progress' attempt (node died mid-upload) self-heals
+// after 10min. Returns claimed=false (deny) on a DB error or an unclaimable row.
+func claimDtshAttempt(ctx context.Context, assetHash, requestID, nodeID, tenantID string) (claimed bool, err error) {
+	if db == nil {
+		return false, nil
+	}
+	if requestID == "" || nodeID == "" || tenantID == "" {
+		return false, nil // incomplete identity → fail closed
+	}
+	// Same live-copy contract as the main freeze claim, PLUS a kind-specific published-lifecycle gate that
+	// matches the durable chk_active_dtsh_state constraint: the artifact must be in its legitimate synced
+	// state (clip/vod='ready') — never a NULL/processing/failed/requested row — AND THIS node must still hold
+	// a complete, non-orphaned copy, so a late .dtsh dispatch can't target a terminal/in-flight artifact or a
+	// node that no longer owns the bytes.
+	//
+	// One transaction: the CTE snapshots (FOR UPDATE) the PREVIOUS attempt id + descriptor before the guarded
+	// UPDATE overwrites the identity, so that when this claim REPLACES a different, stale (>10min) in_progress
+	// attempt, that attempt's (possibly-uploaded) .dtsh staging object is durably enqueued for deletion rather
+	// than leaked. (The main freeze has no equivalent here because stale-freeze recovery resets + enqueues the
+	// prior attempt before it becomes re-claimable.)
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
+	var objectKey, prevReq string
+	qErr := tx.QueryRowContext(ctx, `
+		WITH prev AS (
+			SELECT COALESCE(sync_object_key, '') AS ok, COALESCE(dtsh_sync_request_id, '') AS old_req
+			FROM foghorn.artifacts WHERE artifact_hash = $1 AND tenant_id::text = $4
+			FOR UPDATE
+		)
+		UPDATE foghorn.artifacts a
+		SET dtsh_status = 'in_progress', dtsh_sync_request_id = $2, dtsh_sync_node_id = $3,
+		    dtsh_last_attempt = NOW(), updated_at = NOW()
+		FROM prev
+		WHERE a.artifact_hash = $1
+		  AND a.tenant_id::text = $4
+		  AND a.artifact_type IN ('clip', 'vod')
+		  AND a.status = 'ready'
+		  AND a.sync_status = 'synced'
+		  AND a.dtsh_synced = false
+		  AND EXISTS (
+		        SELECT 1 FROM foghorn.artifact_nodes an
+		         WHERE an.artifact_hash = $1 AND an.node_id = $3
+		           AND an.is_complete = true AND an.is_orphaned = false
+		  )
+		  AND (
+		        a.dtsh_status IS NULL
+		     OR (a.dtsh_sync_request_id = $2 AND a.dtsh_sync_node_id = $3)
+		     OR (a.dtsh_status = 'failed'
+		         AND a.dtsh_last_attempt < NOW() - (LEAST(a.dtsh_failure_count, 20) * INTERVAL '30 seconds'))
+		     OR (a.dtsh_status = 'in_progress' AND a.dtsh_last_attempt < NOW() - INTERVAL '10 minutes')
+		  )
+		RETURNING prev.ok, prev.old_req`,
+		assetHash, requestID, nodeID, tenantID).Scan(&objectKey, &prevReq)
+	if errors.Is(qErr, sql.ErrNoRows) {
+		return false, nil // not claimable
+	}
+	if qErr != nil {
+		return false, qErr
+	}
+	if prevReq != "" && prevReq != requestID && objectKey != "" {
+		// The superseded prior attempt may have uploaded its .dtsh staging AND had its versioned candidate
+		// promoted before it lost the race — enqueue both so neither leaks.
+		if eErr := EnqueueDtshAttemptGarbageTx(ctx, tx, objectKey, prevReq); eErr != nil {
+			return false, eErr
+		}
+	}
+	if cErr := tx.Commit(); cErr != nil {
+		return false, cErr
+	}
+	return true, nil
+}
+
+// clearDtshAttempt releases a claimed .dtsh attempt back to a retryable 'failed' state (identity
+// cleared, failure count bumped) — used when the request could not even be dispatched, so the next
+// node report re-triggers it instead of leaving a phantom in_progress attempt.
+func clearDtshAttempt(ctx context.Context, assetHash, requestID, nodeID, tenantID string) {
+	if db == nil || tenantID == "" {
+		return
+	}
+	// One transaction: release the claim AND durably enqueue the .dtsh staging object AND its versioned
+	// candidate for cleanup. The dispatch failure is AMBIGUOUS (the node may have received the request and
+	// uploaded the .dtsh to its staging key despite the send error, and a concurrent completion may even have
+	// promoted the candidate before losing the CAS), so clearing the only identity without scheduling those
+	// keys would leak them — stale recovery would never see them (this row is already synced, not freezing).
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		if registry != nil {
+			registry.log.WithError(err).WithField("asset_hash", assetHash).Debug("clearDtshAttempt: begin tx failed")
+		}
+		return
+	}
+	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
+	var objectKey string
+	qErr := tx.QueryRowContext(ctx, `
+		UPDATE foghorn.artifacts
+		SET dtsh_status = 'failed', dtsh_failure_count = dtsh_failure_count + 1,
+		    dtsh_sync_request_id = NULL, dtsh_sync_node_id = NULL, updated_at = NOW()
+		WHERE artifact_hash = $1 AND dtsh_sync_request_id = $2 AND dtsh_sync_node_id = $3
+		  AND tenant_id::text = $4
+		RETURNING COALESCE(sync_object_key, '')`,
+		assetHash, requestID, nodeID, tenantID).Scan(&objectKey)
+	if errors.Is(qErr, sql.ErrNoRows) {
+		return // nothing to release (already cleared / re-claimed); the >10min stale recovery still covers it
+	}
+	if qErr != nil {
+		if registry != nil {
+			registry.log.WithError(qErr).WithField("asset_hash", assetHash).Warn("clearDtshAttempt: best-effort release failed (row stays in_progress; >10min stale re-claim recovers)")
+		}
+		return
+	}
+	if objectKey != "" {
+		if eErr := EnqueueDtshAttemptGarbageTx(ctx, tx, objectKey, requestID); eErr != nil {
+			if registry != nil {
+				registry.log.WithError(eErr).WithField("asset_hash", assetHash).Warn("clearDtshAttempt: enqueue .dtsh cleanup failed (row stays in_progress; >10min stale re-claim recovers)")
+			}
+			return
+		}
+	}
+	if cErr := tx.Commit(); cErr != nil && registry != nil {
+		registry.log.WithError(cErr).WithField("asset_hash", assetHash).Warn("clearDtshAttempt: commit failed (row stays in_progress; >10min stale re-claim recovers)")
+	}
+}
+
+// applyDtshCompletionFailure attributes a FAILED completion to the persisted .dtsh attempt (request +
+// node). A .dtsh sync runs on an already-synced row, so its failure never matches the main-upload
+// guard and would otherwise be silently dropped; matching the dtsh attempt identity records the
+// failure (retryable 'failed' + backoff counter) and clears the attempt so the next node report can
+// re-trigger it. Returns handled=true when this completion was a known dtsh attempt (so the caller
+// does NOT also run the main-upload failure guard).
+func applyDtshCompletionFailure(ctx context.Context, assetHash, reportingNodeID, requestID, errorMsg, tenantID string, logger logging.Logger) (handled bool) {
+	if db == nil || requestID == "" || reportingNodeID == "" || tenantID == "" {
+		return false
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		logger.WithError(err).WithField("asset_hash", assetHash).Error("failed to begin dtsh sync failure tx")
+		return false
+	}
+	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
+	// Clear the attempt and RETURN the descriptor so the .dtsh staging object (which the node may have
+	// uploaded despite reporting failure) AND its versioned candidate (a completion may have promoted it before
+	// the row lost the CAS) are durably enqueued for deletion on the SAME transaction.
+	var objectKey string
+	qErr := tx.QueryRowContext(ctx, `
+		UPDATE foghorn.artifacts
+		SET dtsh_status = 'failed', dtsh_failure_count = dtsh_failure_count + 1,
+		    sync_error = NULLIF($4, ''), dtsh_sync_request_id = NULL, dtsh_sync_node_id = NULL,
+		    dtsh_last_attempt = NOW(), updated_at = NOW()
+		WHERE artifact_hash = $1 AND dtsh_sync_request_id = $2 AND dtsh_sync_node_id = $3
+		  AND status NOT IN ('deleted', 'expired', 'aborted')
+		  AND tenant_id::text = $5
+		RETURNING COALESCE(sync_object_key, '')`,
+		assetHash, requestID, reportingNodeID, errorMsg, tenantID).Scan(&objectKey)
+	if errors.Is(qErr, sql.ErrNoRows) {
+		return false // not a recognized dtsh attempt → let the main-upload failure guard handle it
+	}
+	if qErr != nil {
+		logger.WithError(qErr).WithField("asset_hash", assetHash).Error("failed to record dtsh sync failure")
+		return false
+	}
+	if objectKey != "" {
+		if eErr := EnqueueDtshAttemptGarbageTx(ctx, tx, objectKey, requestID); eErr != nil {
+			logger.WithError(eErr).WithField("asset_hash", assetHash).Error("failed to enqueue .dtsh cleanup on failure")
+			return false
+		}
+	}
+	if cErr := tx.Commit(); cErr != nil {
+		logger.WithError(cErr).WithField("asset_hash", assetHash).Error("failed to commit dtsh sync failure")
+		return false
+	}
+	incArtifactSyncOutcome("dtsh_failed")
+	logger.WithFields(logging.Fields{"asset_hash": assetHash, "request_id": requestID, "node_id": reportingNodeID, "error": errorMsg}).
+		Warn("Incremental .dtsh sync failed; attempt recorded as retryable")
+	return true
+}
+
 // processFreezeProgress handles freeze progress updates from Helmsman
 func processFreezeProgress(progress *ipcpb.FreezeProgress, nodeID string, logger logging.Logger) {
 	logger.WithFields(logging.Fields{
@@ -4529,124 +5121,6 @@ func processFreezeProgress(progress *ipcpb.FreezeProgress, nodeID string, logger
 		"bytes_uploaded": progress.GetBytesUploaded(),
 		"node_id":        nodeID,
 	}).Debug("Freeze progress update")
-}
-
-// processFreezeComplete handles freeze completion from Helmsman
-func processFreezeComplete(ctx context.Context, complete *ipcpb.FreezeComplete, nodeID string, logger logging.Logger) {
-	requestID := complete.GetRequestId()
-	assetHash := complete.GetAssetHash()
-	status := complete.GetStatus()
-	s3URL := complete.GetS3Url()
-	sizeBytes := complete.GetSizeBytes()
-	errorMsg := complete.GetError()
-
-	logger.WithFields(logging.Fields{
-		"request_id": requestID,
-		"asset_hash": assetHash,
-		"status":     status,
-		"s3_url":     s3URL,
-		"size_bytes": sizeBytes,
-		"error":      errorMsg,
-		"node_id":    nodeID,
-	}).Info("Freeze operation completed")
-
-	if status == "success" {
-		// Update artifact storage location in database. Reset failure_count
-		// so a later eviction + restore can use the full retry budget again.
-		if _, dbErr := db.ExecContext(ctx, `
-				UPDATE foghorn.artifacts
-				SET storage_location = 'local',
-				    sync_status = 'synced',
-				    s3_url = NULLIF($1, ''),
-			    last_sync_attempt = NOW(),
-			    sync_error = NULL,
-			    failure_count = 0,
-			    updated_at = NOW()
-			WHERE artifact_hash = $2`,
-			s3URL, assetHash); dbErr != nil {
-			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to update artifact after successful freeze")
-		}
-	} else {
-		// Distinguish "local file is gone" (terminal lost_local — no retry, no
-		// S3 cleanup needed) from a transient failure that should be retried.
-		newSyncStatus := "failed"
-		if complete.GetLocalMissing() {
-			newSyncStatus = "lost_local"
-		}
-		// failure_count drives the retry-budget + exponential-backoff in
-		// retryFailed. We only increment for transient failures — lost_local
-		// is terminal, so leaving the counter alone is fine.
-		// status='failed' on lost_local pairs with sync_status='lost_local' as
-		// the tombstone marker: playback / billing / cleanup-pressure paths
-		// already exclude status='failed', so the row is discoverable in admin
-		// listings without being treated as a usable asset.
-		// $3 must be cast at every site: with bare placeholders YugabyteDB
-		// deduces inconsistent types across the SET/CASE usages and rejects
-		// the statement with 42P08, which silently strands the artifact.
-		if _, dbErr := db.ExecContext(ctx, `
-			UPDATE foghorn.artifacts
-			SET storage_location = 'local',
-			    sync_status = $3::text,
-			    status = CASE WHEN $3::text = 'lost_local' THEN 'failed' ELSE status END,
-			    sync_error = NULLIF($1,''),
-			    last_sync_attempt = NOW(),
-			    failure_count = CASE WHEN $3::text = 'failed' THEN failure_count + 1 ELSE failure_count END,
-			    updated_at = NOW()
-			WHERE artifact_hash = $2
-		`, errorMsg, assetHash, newSyncStatus); dbErr != nil {
-			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to revert artifact after freeze failure")
-		}
-		// lost_local is terminal — skip the partial-S3-cleanup branch since
-		// nothing was uploaded.
-		if complete.GetLocalMissing() {
-			logger.WithFields(logging.Fields{
-				"asset_hash": assetHash,
-				"node_id":    nodeID,
-			}).Warn("Artifact marked lost_local: local source file is gone before sync; will not retry")
-			return
-		}
-
-		// Clean up partial S3 uploads to avoid storage garbage
-		if s3Client != nil {
-			var artifactType, streamName, tenantID string
-			_ = db.QueryRowContext(ctx, `
-				SELECT artifact_type, COALESCE(stream_internal_name,''), COALESCE(tenant_id::text,'')
-				FROM foghorn.artifacts WHERE artifact_hash = $1`, assetHash).Scan(&artifactType, &streamName, &tenantID)
-			if tenantID != "" {
-				go func() {
-					cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 30*time.Second)
-					defer cleanCancel()
-					var prefix string
-					switch artifactType {
-					case "dvr":
-						prefix = s3Client.BuildDVRS3Key(tenantID, streamName, assetHash)
-					case "clip":
-						prefix = s3Client.BuildClipS3Key(tenantID, streamName, assetHash, "")
-						// Clip key includes format extension — strip it to get the prefix
-						if idx := strings.LastIndex(prefix, "."); idx != -1 {
-							prefix = prefix[:idx]
-						}
-					case "vod":
-						prefix = s3Client.BuildVodS3Key(tenantID, assetHash, assetHash)
-						if idx := strings.LastIndex(prefix, "/"); idx != -1 {
-							prefix = prefix[:idx+1] + assetHash
-						}
-					}
-					if prefix != "" {
-						deleted, err := s3Client.DeletePrefix(cleanCtx, prefix)
-						if err != nil {
-							logger.WithError(err).WithField("prefix", prefix).Warn("Failed to clean up partial S3 uploads")
-						} else if deleted > 0 {
-							logger.WithFields(logging.Fields{
-								"prefix":  prefix,
-								"deleted": deleted,
-							}).Info("Cleaned up partial S3 uploads after freeze failure")
-						}
-					}
-				}()
-			}
-		}
-	}
 }
 
 // SendFreezeRequest sends a proactive FreezeRequest to the given node, relaying via HA if needed.
@@ -4671,6 +5145,25 @@ func SendLocalFreezeRequest(nodeID string, req *ipcpb.FreezeRequest) error {
 	if c == nil {
 		return ErrNotConnected
 	}
+	// AUTHORITATIVE admission gate. This is the FINAL owning send for a staged, server-minted freeze — both
+	// the local reconciler dispatch and an HA-relayed proactive freeze terminate here on the instance that
+	// owns the connection. The reconciler's pre-check is only advisory (it deliberately proceeds for
+	// peer-owned nodes, and a node can reconnect with an older protocol between the pre-check and this send),
+	// so the CURRENT session's declared protocol MUST be validated here, immediately before transmitting.
+	// Fail closed with a non-relayable error (shouldRelay leaves a present-but-old conn un-relayed) so an old
+	// sidecar can never receive a staged freeze it would mishandle.
+	if c.protocolVersion < FreezeStagedProtocolMin {
+		return ErrFreezeProtocolUnsupported
+	}
+	// FENCE dispatch to THIS connection generation: hold sendGate across the superseded check AND the Send, so
+	// retirement (which sets superseded under the same gate) cannot interleave. Either this send completes on a
+	// still-current connection, or it observes superseded and aborts with a non-relayable error — never a Send
+	// over a connection a reconnect already retired.
+	c.sendGate.Lock()
+	defer c.sendGate.Unlock()
+	if c.superseded.Load() || !connIsCurrentlyRegistered(nodeID, c) {
+		return ErrConnSuperseded
+	}
 	msg := &ipcpb.ControlMessage{
 		RequestId: req.RequestId,
 		Payload:   &ipcpb.ControlMessage_FreezeRequest{FreezeRequest: req},
@@ -4685,6 +5178,14 @@ func SendLocalDtshSyncRequest(nodeID string, req *ipcpb.DtshSyncRequest) error {
 	registry.mu.RUnlock()
 	if c == nil {
 		return ErrNotConnected
+	}
+	// FENCE dispatch to THIS connection generation (see SendLocalFreezeRequest): a .dtsh sync stages a versioned
+	// index the node PUTs, so a send over a reconnect-retired connection would dispatch work the old session
+	// can't complete. Hold sendGate across the superseded check + registry-generation recheck AND the Send.
+	c.sendGate.Lock()
+	defer c.sendGate.Unlock()
+	if c.superseded.Load() || !connIsCurrentlyRegistered(nodeID, c) {
+		return ErrConnSuperseded
 	}
 	msg := &ipcpb.ControlMessage{
 		Payload: &ipcpb.ControlMessage_DtshSyncRequest{DtshSyncRequest: req},
@@ -4837,22 +5338,12 @@ func SendDeactivatePushTargets(nodeID string, req *ipcpb.DeactivatePushTargets) 
 	}))
 }
 
-// ProcessingJobResultHandler is called after a processing job result is persisted.
-// Set by the grpc package to avoid circular imports (control → grpc).
-type ProcessingJobResultHandler func(ctx context.Context, jobID, status string, outputs map[string]string, errorMsg string)
-
 // ProcessConfigCacheUpdater updates the STREAM_PROCESS cache for an artifact.
 // Used for Livepeer → local fallback: Helmsman tells Foghorn to cache the
 // local-only config so the restarted push gets it via STREAM_PROCESS.
 type ProcessConfigCacheUpdater func(artifactHash, processesJSON string)
 
-var onProcessingJobResult ProcessingJobResultHandler
 var onProcessConfigCacheUpdate ProcessConfigCacheUpdater
-
-// SetProcessingJobResultHandler registers a callback for processing job results.
-func SetProcessingJobResultHandler(h ProcessingJobResultHandler) {
-	onProcessingJobResult = h
-}
 
 // SetProcessConfigCacheUpdater registers the cache updater for Livepeer fallback.
 func SetProcessConfigCacheUpdater(h ProcessConfigCacheUpdater) {
@@ -4942,14 +5433,26 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 		artifactHash := result.GetOutputs()["artifact_hash"]
 		processesJSON := result.GetOutputs()["processes_json"]
 		if artifactHash != "" && processesJSON != "" {
-			if _, err := db.ExecContext(ctx, `
+			// Bind to the EXACT reported job owned by the reporting node: full (job_id, artifact, node, active)
+			// identity. Keying on (artifact_hash, node) alone would rewrite every sibling active job for the
+			// same artifact on that node (active jobs are not unique by artifact); a foreign node, or a job not
+			// dispatched to the reporting node, matches nothing.
+			res, err := db.ExecContext(ctx, `
 				UPDATE foghorn.processing_jobs
-				   SET processes_json = $2,
+				   SET processes_json = $3,
 				       updated_at = NOW()
-				 WHERE artifact_hash = $1
-				   AND status IN ('queued', 'dispatched', 'processing')
-			`, artifactHash, processesJSON); err != nil {
+				 WHERE job_id = $1
+				   AND artifact_hash = $2
+				   AND processing_node_id = $4
+				   AND status IN ('dispatched', 'processing')
+			`, result.GetJobId(), artifactHash, processesJSON, nodeID)
+			if err != nil {
 				logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("Failed to persist processing process config update")
+				return
+			}
+			if n, _ := res.RowsAffected(); n == 0 { //nolint:errcheck // pq populates RowsAffected on UPDATE
+				logger.WithFields(fields).WithField("artifact_hash", artifactHash).Warn("Ignoring cache_update for a job not assigned to the reporting node")
+				return
 			}
 			if onProcessConfigCacheUpdate != nil {
 				onProcessConfigCacheUpdate(artifactHash, processesJSON)
@@ -4958,45 +5461,87 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 		}
 		return
 	case "completed":
+		// A completed result MUST carry a produced output path. An empty one is a malformed
+		// report (truncated IPC, producer bug): blessing it as completed would strand the
+		// artifact "processing" forever with no file. Fail the job terminally instead — the
+		// artifact flips to failed and the lifecycle/UI reflect reality.
+		if result.GetOutputPath() == "" {
+			failProcessingJobAtomic(ctx, result.GetJobId(), "completed processing result carried no output path", nodeID, logger, fields)
+			return
+		}
+
 		var outputMeta *string
 		if len(result.GetOutputs()) > 0 {
-			b, _ := json.Marshal(result.GetOutputs())
-			s := string(b)
-			outputMeta = &s
+			if b, mErr := json.Marshal(result.GetOutputs()); mErr == nil {
+				s := string(b)
+				outputMeta = &s
+			} else {
+				logger.WithError(mErr).WithFields(fields).Warn("Failed to marshal completion outputs; storing null output_metadata")
+			}
 		}
-		// Only an active job completes. If the job was already terminated
-		// (e.g. the clip was deleted while processing, which marks the job
-		// failed), a late result must not resurrect it or its artifact.
-		res, err := db.ExecContext(ctx, `
-			UPDATE foghorn.processing_jobs
-			SET status = 'completed',
-			    progress = 100,
-			    output_metadata = $2,
-			    completed_at = NOW(),
-			    updated_at = NOW()
-			WHERE job_id = $1 AND status IN ('dispatched', 'processing')
-		`, result.GetJobId(), outputMeta)
-		if err != nil {
-			logger.WithError(err).WithFields(fields).Error("Failed to update processing job to completed")
-			return
-		}
-		n, raErr := res.RowsAffected()
-		if raErr != nil {
-			logger.WithError(raErr).WithFields(fields).Error("Failed to read rows affected for processing job completion")
-			return
-		}
-		if n == 0 {
-			logger.WithFields(fields).Warn("Ignoring completion for a non-active processing job (cancelled or its clip was deleted)")
-			return
-		}
-		logger.WithFields(fields).Info("Processing job completed")
 
-		// Register processed output in warm cache + in-memory state so vod+
-		// STREAM_SOURCE resolves immediately.
-		if outputPath := result.GetOutputPath(); outputPath != "" {
-			var artifactHash, artifactType, tenantID, streamID, streamInternalName, oldS3URL, oldFormat string
+		// The terminal transition is ONE transaction: artifact readiness + duration + tracks +
+		// vod_metadata + origin placement (with its node-copy event) + lifecycle enqueue commit
+		// together, and the job is marked completed LAST. Any failure rolls back, leaving the job
+		// dispatched/processing so stale recovery retries — a completed job is never left with an
+		// unready/unregistered artifact. In-memory state + reconciler wake happen only post-commit.
+		completionTx, txErr := db.BeginTx(ctx, nil)
+		if txErr != nil {
+			logger.WithError(txErr).WithFields(fields).Error("Failed to begin completion transaction")
+			return
+		}
+		committed := false
+		defer func() {
+			if !committed {
+				completionTx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
+			}
+		}()
+
+		// Lock the job and confirm it is still active. A cancelled/deleted job or a duplicate
+		// (already-completed) result is a no-op — no resurrection.
+		var jobStatusNow, assignedNode string
+		if lockErr := completionTx.QueryRowContext(ctx,
+			`SELECT status, COALESCE(processing_node_id, '') FROM foghorn.processing_jobs WHERE job_id = $1 FOR UPDATE`,
+			result.GetJobId()).Scan(&jobStatusNow, &assignedNode); lockErr != nil {
+			if errors.Is(lockErr, sql.ErrNoRows) {
+				logger.WithFields(fields).Warn("Completion for unknown processing job; ignoring")
+				return
+			}
+			logger.WithError(lockErr).WithFields(fields).Error("Failed to lock processing job for completion")
+			return
+		}
+		if jobStatusNow != "dispatched" && jobStatusNow != "processing" {
+			logger.WithFields(fields).Warn("Ignoring completion for a non-active processing job (cancelled, deleted, or duplicate)")
+			return
+		}
+		// Bind the result to the node the job was dispatched to: the reporting node becomes the recorded
+		// origin, so a mismatched node completing another's job would forge origin placement. Dispatch persists
+		// processing_node_id (guarded, before the node can report) for EVERY node-dispatched job, so a
+		// node-reported completion must carry a non-empty assignment that equals the reporting node. An empty
+		// assignment is not a "nodeless" allowance — it is an unbound wildcard, so reject it (fail closed); a
+		// genuinely internal/gateway completion would need its own non-node ingress.
+		if assignedNode == "" || assignedNode != nodeID {
+			logger.WithFields(fields).WithField("assigned_node", assignedNode).
+				Warn("Ignoring completion whose reporting node does not match the assigned processing node")
+			return
+		}
+
+		// Artifact terminal state (only when there's a produced output); captured for the
+		// post-commit side effects.
+		outputPath := result.GetOutputPath()
+		var (
+			haveArtifact                                   bool
+			artifactHash, artifactType, tenantID, streamID string
+			streamInternalName, newFormat                  string
+			sizeBytes, actualDurationMs                    int64
+			partial                                        bool
+		)
+		if outputPath != "" {
+			var oldS3URL, oldFormat string
 			var requestedStartUnix, requestedStopUnix int64
-			_ = db.QueryRowContext(ctx, `
+			// Lock the artifact row too. A lookup failure must NOT acknowledge the job — return
+			// (rollback) so it retries.
+			lookupErr := completionTx.QueryRowContext(ctx, `
 				SELECT a.artifact_hash,
 				       COALESCE(a.artifact_type,''),
 				       COALESCE(a.tenant_id::text,''),
@@ -5008,237 +5553,343 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 				       COALESCE((pj.source_params->>'source_stop_unix')::bigint, 0)
 				FROM foghorn.processing_jobs pj
 				JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash
-				WHERE pj.job_id = $1`, result.GetJobId()).Scan(&artifactHash, &artifactType, &tenantID, &streamID, &streamInternalName, &oldS3URL, &oldFormat, &requestedStartUnix, &requestedStopUnix)
+				WHERE pj.job_id = $1
+				FOR UPDATE OF a`, result.GetJobId()).Scan(&artifactHash, &artifactType, &tenantID, &streamID, &streamInternalName, &oldS3URL, &oldFormat, &requestedStartUnix, &requestedStopUnix)
+			if lookupErr != nil {
+				// A GENUINELY missing artifact row (ErrNoRows: the row was hard-deleted, or the
+				// job points at a hash with no artifact) must NOT be acknowledged as completed —
+				// roll back so stale recovery retries, and a permanently-gone artifact bounds out
+				// via max-retries → failed instead of a false "completed". This is distinct from a
+				// row that EXISTS in a terminal/deleted state (soft-deleted mid-processing), which
+				// the readiness UPDATE's affected==0 guard below handles by completing without
+				// publication.
+				if errors.Is(lookupErr, sql.ErrNoRows) {
+					logger.WithFields(fields).Warn("Completion for a job whose artifact row is missing; rolling back to retry")
+					return
+				}
+				logger.WithError(lookupErr).WithFields(fields).Error("Failed to look up artifact for completion; will retry")
+				return
+			}
 			if artifactHash != "" {
-				sizeBytes := result.GetOutputSizeBytes()
-				newFormat := strings.TrimPrefix(filepath.Ext(outputPath), ".")
-				actualDurationMs := result.GetMediaDurationMs()
-				// A best-effort source (live buffer shallower than the
-				// requested range) legitimately yields a shorter clip: it
-				// publishes as partial rather than failing, with the actual
-				// duration recorded everywhere the requested span was assumed.
+				_ = oldS3URL
+				sizeBytes = result.GetOutputSizeBytes()
+				newFormat = strings.TrimPrefix(filepath.Ext(outputPath), ".")
+				actualDurationMs = result.GetMediaDurationMs()
+				// A best-effort source (live buffer shallower than the requested range) legitimately
+				// yields a shorter clip: it publishes as partial rather than failing.
 				requestedSpanMs := (requestedStopUnix - requestedStartUnix) * 1000
-				partial := actualDurationMs > 0 && requestedSpanMs > 0 &&
+				partial = actualDurationMs > 0 && requestedSpanMs > 0 &&
 					requestedSpanMs-actualDurationMs > clipPartialShortfallMs
 
-				// Claim the artifact as ready BEFORE any side effect. If it was
-				// deleted/failed in the window after the job-completed update
-				// (e.g. the clip was deleted mid-processing), this matches 0 rows
-				// and we skip all registration, projection, and the DONE event,
-				// so a late completion never resurrects or surfaces a deleted
-				// clip. Keep the original upload URL in s3_url until the
-				// replacement upload is durably synced (sync completion updates
-				// s3_url + vod_metadata.s3_key together).
-				artRes, dbErr := db.ExecContext(ctx, `
+				// Authoritative A/V track capture; tracks_present gates replace-vs-preserve.
+				tracksPresent := result.GetTracksPresent()
+				tracksJSON, tErr := marshalRecordingTracks(result.GetTracks())
+				if tErr != nil {
+					logger.WithError(tErr).WithField("artifact_hash", artifactHash).Warn("Failed to marshal processed artifact tracks; leaving existing summary")
+					tracksPresent = false
+					tracksJSON = "[]"
+				}
+
+				// Claim readiness on the transaction. A row deleted/failed mid-processing matches
+				// 0 (guard) — the job still completes, but nothing is published.
+				artRes, dbErr := completionTx.ExecContext(ctx, `
 						UPDATE foghorn.artifacts
 						SET format = $1,
 						    size_bytes = $3,
 						    duration_seconds = CASE WHEN $4::bigint > 0 THEN ($4::bigint / 1000)::int ELSE duration_seconds END,
+						    duration_ms = CASE WHEN $4::bigint > 0 THEN $4::bigint ELSE duration_ms END,
+						    tracks = CASE WHEN $6::boolean THEN $5::jsonb ELSE tracks END,
 						    status = CASE WHEN artifact_type IN ('clip', 'vod') THEN 'ready' ELSE status END,
 						    sync_status = 'pending',
 						    storage_location = 'local',
 						    updated_at = NOW()
-						WHERE artifact_hash = $2 AND status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')`, newFormat, artifactHash, sizeBytes, actualDurationMs)
+						WHERE artifact_hash = $2 AND status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')`, newFormat, artifactHash, sizeBytes, actualDurationMs, tracksJSON, tracksPresent)
 				if dbErr != nil {
-					logger.WithError(dbErr).WithField("artifact_hash", artifactHash).Error("failed to update artifact format/size after processing")
+					logger.WithError(dbErr).WithField("artifact_hash", artifactHash).Error("Failed to update artifact readiness; will retry")
 					return
 				}
-				affected, raErr := artRes.RowsAffected()
-				if raErr != nil {
-					logger.WithError(raErr).WithField("artifact_hash", artifactHash).Error("failed to read rows affected for processed artifact update")
-					return
-				}
+				affected, _ := artRes.RowsAffected() //nolint:errcheck // pq always populates RowsAffected on UPDATE
 				if affected == 0 {
-					logger.WithFields(fields).WithField("artifact_hash", artifactHash).Warn("Processed artifact no longer active (deleted/failed); skipping registration and DONE")
-					return
-				}
+					logger.WithFields(fields).WithField("artifact_hash", artifactHash).Warn("Processed artifact no longer active (deleted/failed); completing job without publication")
+				} else {
+					haveArtifact = true
 
-				// Register processed output in the warm cache + in-memory state so
-				// vod+ STREAM_SOURCE resolves immediately. This node wrote the
-				// canonical file; register as origin with is_complete=true so the
-				// row is immediately eligible to serve cross-cluster peer-relay
-				// reads while the file uploads to S3.
-				if artifactRepo != nil {
-					if err := artifactRepo.RegisterOriginArtifact(ctx, artifactHash, nodeID, outputPath, sizeBytes, true); err != nil {
-						logger.WithError(err).WithFields(fields).Warn("Failed to register processed artifact as origin")
+					// VOD metadata (codec/resolution/…) from Helmsman stream info — same tx.
+					if artifactType == "vod" {
+						o := result.GetOutputs()
+						if _, mErr := completionTx.ExecContext(ctx, `
+						UPDATE foghorn.vod_metadata
+						SET duration_ms = $2::integer, resolution = $3, video_codec = $4, audio_codec = $5,
+						    bitrate_kbps = $6::integer, width = $7::integer, height = $8::integer,
+						    fps = $9::real, audio_channels = $10::integer, audio_sample_rate = $11::integer,
+						    updated_at = NOW()
+						WHERE artifact_hash = $1`,
+							artifactHash, nullIfEmptyChapterMeta(o["duration_ms"]), nullIfEmptyChapterMeta(o["resolution"]),
+							nullIfEmptyChapterMeta(o["video_codec"]), nullIfEmptyChapterMeta(o["audio_codec"]), nullIfEmptyChapterMeta(o["bitrate_kbps"]),
+							nullIfEmptyChapterMeta(o["width"]), nullIfEmptyChapterMeta(o["height"]), nullIfEmptyChapterMeta(o["fps"]),
+							nullIfEmptyChapterMeta(o["audio_channels"]), nullIfEmptyChapterMeta(o["audio_sample_rate"])); mErr != nil {
+							logger.WithError(mErr).WithField("artifact_hash", artifactHash).Error("Failed to update vod_metadata; will retry")
+							return
+						}
 					}
-				}
-				state.DefaultManager().AddNodeArtifact(nodeID, &ipcpb.StoredArtifact{
-					ClipHash:   artifactHash,
-					FilePath:   outputPath,
-					SizeBytes:  uint64(sizeBytes),
-					CreatedAt:  time.Now().Unix(),
-					Format:     newFormat,
-					Role:       ipcpb.StoredArtifact_ROLE_ORIGIN,
-					IsComplete: true,
-				})
-				projectArtifactSizeToCommodore(ctx, artifactHash, sizeBytes, logger)
-				if partial {
-					logger.WithFields(logging.Fields{
-						"artifact_hash":      artifactHash,
-						"requested_span_ms":  requestedSpanMs,
-						"actual_duration_ms": actualDurationMs,
-					}).Warn("Clip published partial: source covered less than the requested range")
-				}
-				if artifactType == "clip" && actualDurationMs > 0 {
-					projectClipDurationToCommodore(ctx, tenantID, artifactHash, actualDurationMs, logger)
-				}
-				// Kick the artifact reconciler so the freeze-to-S3 push starts in
-				// seconds instead of waiting for the next poll interval.
-				NotifyArtifactMapUpdated(nodeID)
-				if artifactType == "clip" && decklogClient != nil {
-					if streamID == "" {
-						streamID = resolveLifecycleStreamID(ctx, streamInternalName)
+					// Origin placement + node-copy event — same tx. This node wrote the canonical file;
+					// register as origin (is_complete=true) so it can serve peer-relay while it uploads.
+					if err := RegisterOriginArtifactTx(ctx, completionTx, artifactHash, nodeID, outputPath, sizeBytes, true); err != nil {
+						logger.WithError(err).WithField("artifact_hash", artifactHash).Error("Failed to register origin artifact; will retry")
+						return
 					}
-					clipData := &ipcpb.ClipLifecycleData{
-						Stage:    ipcpb.ClipLifecycleData_STAGE_DONE,
-						ClipHash: artifactHash,
-						ProgressPercent: func() *uint32 {
-							p := uint32(100)
-							return &p
-						}(),
-						FilePath:        &outputPath,
-						SizeBytes:       func() *uint64 { s := uint64(sizeBytes); return &s }(),
-						CompletedAt:     func() *int64 { t := time.Now().Unix(); return &t }(),
-						NodeId:          &nodeID,
-						StorageLocation: func() *string { v := "local"; return &v }(),
-						SyncStatus:      func() *string { v := "pending"; return &v }(),
-						IsHot:           func() *bool { v := true; return &v }(),
-						IsSynced:        func() *bool { v := false; return &v }(),
-						IsFinalized:     func() *bool { v := false; return &v }(),
-						IsFrozen:        func() *bool { v := false; return &v }(),
+					// Lifecycle enqueue in the SAME tx (durable outbox), regardless of Decklog conn.
+					if artifactType == "clip" {
+						if streamID == "" {
+							streamID = resolveLifecycleStreamID(ctx, streamInternalName)
+						}
+						clipData := &ipcpb.ClipLifecycleData{
+							Stage:    ipcpb.ClipLifecycleData_STAGE_DONE,
+							ClipHash: artifactHash,
+							ProgressPercent: func() *uint32 {
+								p := uint32(100)
+								return &p
+							}(),
+							FilePath:        &outputPath,
+							SizeBytes:       func() *uint64 { s := uint64(sizeBytes); return &s }(),
+							CompletedAt:     func() *int64 { t := time.Now().Unix(); return &t }(),
+							NodeId:          &nodeID,
+							StorageLocation: func() *string { v := "local"; return &v }(),
+							SyncStatus:      func() *string { v := "pending"; return &v }(),
+							HasLocalCopy:    func() *bool { v := true; return &v }(),
+							IsSynced:        func() *bool { v := false; return &v }(),
+							IsFinalized:     func() *bool { v := false; return &v }(),
+						}
+						if tenantID != "" {
+							clipData.TenantId = &tenantID
+						}
+						if streamID != "" {
+							clipData.StreamId = &streamID
+						}
+						if streamInternalName != "" {
+							clipData.StreamInternalName = &streamInternalName
+						}
+						if actualDurationMs > 0 {
+							durationSec := actualDurationMs / 1000
+							clipData.DurationSec = &durationSec
+						}
+						if sp, wallMs := processingSpeedFromOutputs(result.GetOutputs()); sp != nil || wallMs != nil {
+							clipData.ProcessingSpeed = sp
+							clipData.ProcessingWallMs = wallMs
+						}
+						if err := artifactoutbox.EnqueueClipLifecycleTx(ctx, completionTx, clipData); err != nil {
+							logger.WithError(err).WithField("artifact_hash", artifactHash).Error("Failed to enqueue clip lifecycle; will retry")
+							return
+						}
 					}
-					if tenantID != "" {
-						clipData.TenantId = &tenantID
+					if artifactType == "vod" {
+						vodData := &ipcpb.VodLifecycleData{
+							Status:          ipcpb.VodLifecycleData_STATUS_COMPLETED,
+							VodHash:         artifactHash,
+							FilePath:        &outputPath,
+							SizeBytes:       func() *uint64 { s := uint64(sizeBytes); return &s }(),
+							CompletedAt:     func() *int64 { t := time.Now().Unix(); return &t }(),
+							NodeId:          &nodeID,
+							ProgressPct:     func() *int32 { p := int32(100); return &p }(),
+							StorageLocation: func() *string { v := "local"; return &v }(),
+							SyncStatus:      func() *string { v := "pending"; return &v }(),
+							HasLocalCopy:    func() *bool { v := true; return &v }(),
+							IsSynced:        func() *bool { v := false; return &v }(),
+							IsFinalized:     func() *bool { v := false; return &v }(),
+						}
+						if tenantID != "" {
+							vodData.TenantId = &tenantID
+						}
+						if sp, wallMs := processingSpeedFromOutputs(result.GetOutputs()); sp != nil || wallMs != nil {
+							vodData.ProcessingSpeed = sp
+							vodData.ProcessingWallMs = wallMs
+						}
+						if err := artifactoutbox.EnqueueVodLifecycleTx(ctx, completionTx, vodData); err != nil {
+							logger.WithError(err).WithField("artifact_hash", artifactHash).Error("Failed to enqueue vod lifecycle; will retry")
+							return
+						}
 					}
-					if streamID != "" {
-						clipData.StreamId = &streamID
-					}
-					if streamInternalName != "" {
-						clipData.StreamInternalName = &streamInternalName
-					}
-					if actualDurationMs > 0 {
-						durationSec := actualDurationMs / 1000
-						clipData.DurationSec = &durationSec
-					}
-					if sp, wallMs := processingSpeedFromOutputs(result.GetOutputs()); sp != nil || wallMs != nil {
-						clipData.ProcessingSpeed = sp
-						clipData.ProcessingWallMs = wallMs
-					}
-					go artifactoutbox.EnqueueClipLifecycleLogged(clipData)
-				}
-				if artifactType == "vod" && decklogClient != nil {
-					vodData := &ipcpb.VodLifecycleData{
-						Status:          ipcpb.VodLifecycleData_STATUS_COMPLETED,
-						VodHash:         artifactHash,
-						FilePath:        &outputPath,
-						SizeBytes:       func() *uint64 { s := uint64(sizeBytes); return &s }(),
-						CompletedAt:     func() *int64 { t := time.Now().Unix(); return &t }(),
-						NodeId:          &nodeID,
-						ProgressPct:     func() *int32 { p := int32(100); return &p }(),
-						StorageLocation: func() *string { v := "local"; return &v }(),
-						SyncStatus:      func() *string { v := "pending"; return &v }(),
-						IsHot:           func() *bool { v := true; return &v }(),
-						IsSynced:        func() *bool { v := false; return &v }(),
-						IsFinalized:     func() *bool { v := false; return &v }(),
-						IsFrozen:        func() *bool { v := false; return &v }(),
-					}
-					if tenantID != "" {
-						vodData.TenantId = &tenantID
-					}
-					if sp, wallMs := processingSpeedFromOutputs(result.GetOutputs()); sp != nil || wallMs != nil {
-						vodData.ProcessingSpeed = sp
-						vodData.ProcessingWallMs = wallMs
-					}
-					go artifactoutbox.EnqueueVodLifecycleLogged(vodData)
-				}
+					_ = oldFormat
+				} // end else (artifact published)
+			} // end if artifactHash != ""
+		} // end if outputPath != ""
 
-				logger.WithFields(logging.Fields{
-					"artifact_hash": artifactHash,
-					"artifact_type": artifactType,
-					"node_id":       nodeID,
-					"output_path":   outputPath,
-					"old_format":    oldFormat,
-					"new_format":    newFormat,
-				}).Info("Registered processed artifact for immediate playback")
+		// Mark the job completed LAST, then commit the whole terminal transition atomically.
+		if _, err := completionTx.ExecContext(ctx, `
+			UPDATE foghorn.processing_jobs
+			SET status = 'completed', progress = 100, output_metadata = $2, completed_at = NOW(), updated_at = NOW()
+			WHERE job_id = $1`, result.GetJobId(), outputMeta); err != nil {
+			logger.WithError(err).WithFields(fields).Error("Failed to mark job completed; will retry")
+			return
+		}
+		if err := completionTx.Commit(); err != nil {
+			logger.WithError(err).WithFields(fields).Error("Failed to commit completion; will retry")
+			return
+		}
+		committed = true
+		logger.WithFields(fields).Info("Processing job completed")
+
+		// After commit: in-memory state + reconciler wake (best-effort, not part of durability).
+		if haveArtifact {
+			state.DefaultManager().AddNodeArtifact(nodeID, &ipcpb.StoredArtifact{
+				ClipHash:   artifactHash,
+				FilePath:   outputPath,
+				SizeBytes:  uint64(sizeBytes),
+				CreatedAt:  time.Now().Unix(),
+				Format:     newFormat,
+				Role:       ipcpb.StoredArtifact_ROLE_ORIGIN,
+				IsComplete: true,
+			})
+			if partial {
+				logger.WithFields(logging.Fields{"artifact_hash": artifactHash, "actual_duration_ms": actualDurationMs}).Warn("Clip published partial: source covered less than the requested range")
 			}
+			NotifyArtifactMapUpdated(nodeID)
 		}
 
 	case "failed":
-		var failedArtifactHash, failedArtifactType, failedTenantID, failedStreamID, failedStreamInternalName string
-		failedLookupErr := db.QueryRowContext(ctx, `
-			SELECT a.artifact_hash, COALESCE(a.artifact_type,''), COALESCE(a.tenant_id::text,''),
-			       COALESCE(a.stream_id::text,''), COALESCE(a.stream_internal_name,'')
-			  FROM foghorn.processing_jobs pj
-			  JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash
-			 WHERE pj.job_id = $1
-		`, result.GetJobId()).Scan(&failedArtifactHash, &failedArtifactType, &failedTenantID, &failedStreamID, &failedStreamInternalName)
-		if failedLookupErr != nil && failedLookupErr != sql.ErrNoRows {
-			logger.WithError(failedLookupErr).WithField("job_id", result.GetJobId()).Warn("Failed to look up artifact for processing failure")
-		}
-		_, err := db.ExecContext(ctx, `
-			UPDATE foghorn.processing_jobs
-			SET status = 'failed',
-			    error_message = $2,
-			    updated_at = NOW()
-			WHERE job_id = $1
-		`, result.GetJobId(), result.GetError())
-		if err != nil {
-			logger.WithError(err).WithFields(fields).Error("Failed to update processing job to failed")
-			return
-		}
-		logger.WithFields(fields).WithField("error", result.GetError()).Warn("Processing job failed")
-		if failedArtifactHash != "" && failedArtifactType == "clip" {
-			if _, updateErr := db.ExecContext(ctx, `
-				UPDATE foghorn.artifacts
-				   SET status = 'failed',
-				       error_message = $2,
-				       updated_at = NOW()
-				 WHERE artifact_hash = $1
-			`, failedArtifactHash, result.GetError()); updateErr != nil {
-				logger.WithError(updateErr).WithField("artifact_hash", failedArtifactHash).Warn("Failed to mark clip artifact failed")
-			}
-			if decklogClient != nil {
-				// Resolve the stream id when the artifact row lacks it:
-				// periscope-ingest drops lifecycle events without a valid
-				// stream UUID, which is exactly how a failed clip stays
-				// "processing" in the UI forever.
-				if failedStreamID == "" {
-					failedStreamID = resolveLifecycleStreamID(ctx, failedStreamInternalName)
-				}
-				errText := result.GetError()
-				clipData := &ipcpb.ClipLifecycleData{
-					Stage:    ipcpb.ClipLifecycleData_STAGE_FAILED,
-					ClipHash: failedArtifactHash,
-					Error:    &errText,
-				}
-				if failedTenantID != "" {
-					clipData.TenantId = &failedTenantID
-				}
-				if failedStreamID != "" {
-					clipData.StreamId = &failedStreamID
-				}
-				if failedStreamInternalName != "" {
-					clipData.StreamInternalName = &failedStreamInternalName
-				}
-				go artifactoutbox.EnqueueClipLifecycleLogged(clipData)
-			}
-		}
+		failProcessingJobAtomic(ctx, result.GetJobId(), result.GetError(), nodeID, logger, fields)
 
 	default:
 		logger.WithFields(fields).Warn("Unknown processing job result status")
 		return
 	}
+}
 
-	// Notify pipeline handler
-	if onProcessingJobResult != nil {
-		onProcessingJobResult(ctx, result.GetJobId(), jobStatus, result.GetOutputs(), result.GetError())
+// failProcessingJobAtomic drives a processing job to its terminal failed state as ONE
+// transaction: the job is locked FOR UPDATE (so a cancelled/deleted/duplicate job is a
+// no-op — no resurrection), marked failed, and — for clip/vod artifacts — the artifact is
+// flipped to failed and the failure lifecycle is enqueued on the same tx. Either everything
+// commits or nothing does, so a failed job is never left with an artifact still "processing"
+// (the split-write hazard the pre-transaction path carried). A transient error rolls back and
+// leaves the job active for stale recovery to retry.
+func failProcessingJobAtomic(ctx context.Context, jobID, errMsg, reportingNode string, logger logging.Logger, fields logging.Fields) {
+	tx, txErr := db.BeginTx(ctx, nil)
+	if txErr != nil {
+		logger.WithError(txErr).WithFields(fields).Error("Failed to begin failure transaction")
+		return
 	}
+	committed := false
+	defer func() {
+		if !committed {
+			tx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
+		}
+	}()
+
+	// Lock the job and resolve its artifact in one shot. LEFT JOIN so a job with no artifact
+	// row still returns its status; FOR UPDATE OF pj serializes against the completion path.
+	var jobStatusNow, assignedNode, artHash, artType, tenantID, streamID, streamInternalName string
+	lookupErr := tx.QueryRowContext(ctx, `
+		SELECT pj.status, COALESCE(pj.processing_node_id,''),
+		       COALESCE(a.artifact_hash,''), COALESCE(a.artifact_type,''),
+		       COALESCE(a.tenant_id::text,''), COALESCE(a.stream_id::text,''),
+		       COALESCE(a.stream_internal_name,'')
+		  FROM foghorn.processing_jobs pj
+		  LEFT JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash
+		 WHERE pj.job_id = $1
+		 FOR UPDATE OF pj`, jobID).Scan(&jobStatusNow, &assignedNode, &artHash, &artType, &tenantID, &streamID, &streamInternalName)
+	if lookupErr != nil {
+		if errors.Is(lookupErr, sql.ErrNoRows) {
+			logger.WithFields(fields).Warn("Failure for unknown processing job; ignoring")
+			return
+		}
+		logger.WithError(lookupErr).WithFields(fields).Error("Failed to lock processing job for failure; will retry")
+		return
+	}
+	if jobStatusNow != "dispatched" && jobStatusNow != "processing" {
+		logger.WithFields(fields).Warn("Ignoring failure for a non-active processing job (cancelled, deleted, or duplicate)")
+		return
+	}
+	// Bind the failure to the assigned node so a foreign node cannot fail another node's job. Both callers
+	// (the "failed" report and the internal empty-output→fail) pass the reporting connection's node id, and
+	// dispatch persists processing_node_id for every node-dispatched job, so require a non-empty assignment
+	// that equals the reporting node. An empty assignment is an unbound wildcard — reject it (fail closed).
+	if reportingNode == "" || assignedNode == "" || assignedNode != reportingNode {
+		logger.WithFields(fields).WithField("assigned_node", assignedNode).
+			Warn("Ignoring failure whose reporting node does not match the assigned processing node")
+		return
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE foghorn.processing_jobs
+		SET status = 'failed', error_message = $2, updated_at = NOW()
+		WHERE job_id = $1`, jobID, errMsg); err != nil {
+		logger.WithError(err).WithFields(fields).Error("Failed to mark job failed; will retry")
+		return
+	}
+
+	// Mark the artifact failed (clip AND vod) on the same tx. Without this a failed VOD/clip
+	// stays "processing" in the UI forever. The guard only touches a PRE-TERMINAL artifact and is
+	// tenant-scoped: a concurrently deleted/expired/aborted/already-ready artifact (or a
+	// hash-collision across tenants) must never be resurrected to 'failed'.
+	if artHash != "" && (artType == "clip" || artType == "vod") {
+		artRes, err := tx.ExecContext(ctx, `
+			UPDATE foghorn.artifacts
+			   SET status = 'failed', error_message = $2, updated_at = NOW()
+			 WHERE artifact_hash = $1
+			   AND tenant_id::text = $3
+			   AND status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')`, artHash, errMsg, tenantID)
+		if err != nil {
+			logger.WithError(err).WithField("artifact_hash", artHash).Error("Failed to mark artifact failed; will retry")
+			return
+		}
+		// Only emit FAILED if THIS tx actually transitioned the artifact; a 0-row result means it
+		// was already terminal (concurrently ready/deleted/expired/aborted) and a false FAILED
+		// analytics event must not be emitted. The job-failed transition still commits.
+		artFailed, _ := artRes.RowsAffected() //nolint:errcheck // pq populates RowsAffected on UPDATE
+		if artFailed == 0 {
+			// nothing to publish
+		} else if artType == "clip" {
+			// Resolve the stream id when the artifact row lacks it: periscope-ingest drops
+			// lifecycle events without a valid stream UUID — how a failed clip stays
+			// "processing" in the UI forever.
+			if streamID == "" {
+				streamID = resolveLifecycleStreamID(ctx, streamInternalName)
+			}
+			clipData := &ipcpb.ClipLifecycleData{
+				Stage:    ipcpb.ClipLifecycleData_STAGE_FAILED,
+				ClipHash: artHash,
+				Error:    &errMsg,
+			}
+			if tenantID != "" {
+				clipData.TenantId = &tenantID
+			}
+			if streamID != "" {
+				clipData.StreamId = &streamID
+			}
+			if streamInternalName != "" {
+				clipData.StreamInternalName = &streamInternalName
+			}
+			if err := artifactoutbox.EnqueueClipLifecycleTx(ctx, tx, clipData); err != nil {
+				logger.WithError(err).WithField("artifact_hash", artHash).Error("Failed to enqueue clip failure lifecycle; will retry")
+				return
+			}
+		} else {
+			vodData := &ipcpb.VodLifecycleData{
+				Status:  ipcpb.VodLifecycleData_STATUS_FAILED,
+				VodHash: artHash,
+				Error:   &errMsg,
+			}
+			if tenantID != "" {
+				vodData.TenantId = &tenantID
+			}
+			if err := artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData); err != nil {
+				logger.WithError(err).WithField("artifact_hash", artHash).Error("Failed to enqueue vod failure lifecycle; will retry")
+				return
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		logger.WithError(err).WithFields(fields).Error("Failed to commit failure; will retry")
+		return
+	}
+	committed = true
+	logger.WithFields(fields).WithField("error", errMsg).Warn("Processing job failed")
 }
 
 // processProcessingJobProgress handles periodic progress updates from Helmsman.
 // Refreshes updated_at (preventing stale recovery) and emits lifecycle events.
-func processProcessingJobProgress(progress *ipcpb.ProcessingJobProgress, logger logging.Logger) {
+func processProcessingJobProgress(progress *ipcpb.ProcessingJobProgress, nodeID string, logger logging.Logger) {
 	if db == nil {
 		return
 	}
@@ -5248,7 +5899,10 @@ func processProcessingJobProgress(progress *ipcpb.ProcessingJobProgress, logger 
 
 	progressPct := progress.GetProgressPct()
 
-	// Update job progress and refresh updated_at so stale recovery doesn't requeue
+	// Update job progress and refresh updated_at so stale recovery doesn't requeue. Bind STRICTLY to the
+	// assigned node so a foreign node cannot refresh another node's job (which would defeat stale recovery on a
+	// genuinely stuck node). processing_node_id is persisted before the node can report, so an active
+	// node-dispatched job always carries it; require an exact match (a NULL assignment is an unbound wildcard).
 	var artifactHash sql.NullString
 	var artifactType, streamID, streamInternalName string
 	var tenantID string
@@ -5256,15 +5910,16 @@ func processProcessingJobProgress(progress *ipcpb.ProcessingJobProgress, logger 
 		UPDATE foghorn.processing_jobs
 		SET progress = $2, updated_at = NOW()
 		WHERE job_id = $1 AND status IN ('dispatched', 'processing')
+		  AND processing_node_id = $3
 		RETURNING artifact_hash, tenant_id::text
-	`, progress.GetJobId(), progressPct).Scan(&artifactHash, &tenantID)
+	`, progress.GetJobId(), progressPct, nodeID).Scan(&artifactHash, &tenantID)
 	if err != nil {
 		if err != sql.ErrNoRows {
 			logger.WithError(err).WithField("job_id", progress.GetJobId()).Warn("Failed to update processing job progress")
 			return
 		}
 		if chapterID := chapterIDFromJobID(progress.GetJobId()); chapterID != "" {
-			processChapterFinalizeProgress(ctx, chapterID, progressPct, logger)
+			processChapterFinalizeProgress(ctx, chapterID, nodeID, progressPct, logger)
 		}
 		return
 	}
@@ -5282,7 +5937,13 @@ func processProcessingJobProgress(progress *ipcpb.ProcessingJobProgress, logger 
 		}
 	}
 
-	if decklogClient != nil && artifactHash.Valid {
+	// This is a best-effort PROGRESS SAMPLE, not a state transition — the artifact's
+	// 'processing' transition already committed atomically at dispatch. A dropped sample
+	// only loses one progress tick, so it stays best-effort. Capture does not depend on a
+	// live decklog client: the Enqueue*Logged helpers write the outbox row unconditionally
+	// (a queued row is delivered once decklog reconnects) and log — rather than swallow — an
+	// enqueue failure.
+	if artifactHash.Valid {
 		if artifactType == "clip" {
 			clipData := &ipcpb.ClipLifecycleData{
 				Stage:           ipcpb.ClipLifecycleData_STAGE_PROGRESS,
@@ -5298,11 +5959,7 @@ func processProcessingJobProgress(progress *ipcpb.ProcessingJobProgress, logger 
 			if streamInternalName != "" {
 				clipData.StreamInternalName = &streamInternalName
 			}
-			go func() {
-				if err := artifactoutbox.EnqueueClipLifecycle(clipData); err != nil {
-					logger.WithError(err).Warn("Failed to send clip processing progress lifecycle event")
-				}
-			}()
+			artifactoutbox.EnqueueClipLifecycleLogged(clipData)
 			return
 		}
 
@@ -5317,16 +5974,14 @@ func processProcessingJobProgress(progress *ipcpb.ProcessingJobProgress, logger 
 		if tenantID != "" {
 			vodData.TenantId = &tenantID
 		}
-		go func() {
-			if err := artifactoutbox.EnqueueVodLifecycle(vodData); err != nil {
-				logger.WithError(err).Warn("Failed to send processing progress lifecycle event")
-			}
-		}()
+		artifactoutbox.EnqueueVodLifecycleLogged(vodData)
 	}
 }
 
-func processChapterFinalizeProgress(ctx context.Context, chapterID string, progressPct int32, logger logging.Logger) {
+func processChapterFinalizeProgress(ctx context.Context, chapterID, nodeID string, progressPct int32, logger logging.Logger) {
 	var artifactHash, tenantID string
+	// Bind to the assigned node: only the connection this finalize was dispatched to may refresh its progress
+	// (which resets the stale-finalize deadline). A foreign node matches 0 rows and is ignored.
 	err := db.QueryRowContext(ctx, `
 		UPDATE foghorn.dvr_chapters c
 		   SET finalize_started_at = NOW()
@@ -5334,8 +5989,9 @@ func processChapterFinalizeProgress(ctx context.Context, chapterID string, progr
 		 WHERE c.chapter_id = $1
 		   AND c.playback_artifact_hash = a.artifact_hash
 		   AND c.state = 'finalizing'
+		   AND c.finalize_node_id = $2
 		 RETURNING c.playback_artifact_hash, a.tenant_id::text
-	`, chapterID).Scan(&artifactHash, &tenantID)
+	`, chapterID, nodeID).Scan(&artifactHash, &tenantID)
 	if err != nil {
 		if err != sql.ErrNoRows {
 			logger.WithError(err).WithField("chapter_id", chapterID).Warn("Failed to update chapter finalize progress")
@@ -5348,7 +6004,10 @@ func processChapterFinalizeProgress(ctx context.Context, chapterID string, progr
 		TenantId:    &tenantID,
 		ProgressPct: &progressPct,
 	}
-	go artifactoutbox.EnqueueVodLifecycleLogged(vodData)
+	// Best-effort progress sample. EnqueueVodLifecycleLogged already writes the durable outbox row
+	// synchronously and logs (not swallows) failure, so no goroutine wrapper is needed — a bare `go`
+	// here only risks losing the write on shutdown.
+	artifactoutbox.EnqueueVodLifecycleLogged(vodData)
 }
 
 func SendLocalProcessingJob(nodeID string, req *ipcpb.ProcessingJobRequest) error {
@@ -5357,6 +6016,15 @@ func SendLocalProcessingJob(nodeID string, req *ipcpb.ProcessingJobRequest) erro
 	registry.mu.RUnlock()
 	if c == nil {
 		return ErrNotConnected
+	}
+	// FENCE dispatch to THIS connection generation (same discipline as SendLocalFreezeRequest): hold sendGate
+	// across the superseded check AND the Send so a reconnect that retired this connection can't interleave —
+	// otherwise a processing job could be delivered to a retired connection and run twice. Fail closed with a
+	// non-relayable error on supersede.
+	c.sendGate.Lock()
+	defer c.sendGate.Unlock()
+	if c.superseded.Load() || !connIsCurrentlyRegistered(nodeID, c) {
+		return ErrConnSuperseded
 	}
 	msg := &ipcpb.ControlMessage{
 		Payload: &ipcpb.ControlMessage_ProcessingJobRequest{ProcessingJobRequest: req},
@@ -5388,7 +6056,11 @@ func GeneratePresignedGETForArtifact(_ context.Context, s3URL string) (string, e
 	}
 	key := s3URL
 	if strings.HasPrefix(s3URL, "s3://") {
-		parsed, err := s3Client.ParseS3URL(s3URL)
+		// FAIL CLOSED for a FOREIGN bucket: this mints a LOCAL presigned URL, so signing a federation-adopted
+		// remote object's s3_url here would hand out a URL against the wrong backend. ParseLocalS3URL errors
+		// unless the URL is under this cell's bucket; callers (relay resolve, processing dispatch) then route to
+		// federation / revert, never presign a remote object locally. (Cross-provider input is the RFC.)
+		parsed, err := s3Client.ParseLocalS3URL(s3URL)
 		if err != nil {
 			return "", err
 		}
@@ -5413,48 +6085,27 @@ func TriggerDtshSync(nodeID, assetHash, assetType, filePath string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	var (
-		streamName     string
-		tenantFromArti sql.NullString
-	)
-	err := db.QueryRowContext(ctx, `
-		SELECT stream_internal_name, tenant_id::text
-		FROM foghorn.artifacts
-		WHERE artifact_hash = $1`,
-		assetHash).Scan(&streamName, &tenantFromArti)
-	if err != nil {
-		logger.WithError(err).Error("Failed to lookup asset for dtsh sync")
-		return
-	}
-
-	var tenantID string
-	switch assetType {
-	case "clip":
-		if CommodoreClient != nil {
-			rpcCtx, rpcCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer rpcCancel()
-			if resp, err := CommodoreClient.ResolveClipHash(rpcCtx, assetHash); err == nil && resp.Found {
-				tenantID = resp.TenantId
-			}
-		}
-	case "dvr":
-		if CommodoreClient != nil {
-			rpcCtx, rpcCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer rpcCancel()
-			if resp, err := CommodoreClient.ResolveDVRHash(rpcCtx, assetHash); err == nil && resp.Found {
-				tenantID = resp.TenantId
-			}
-		}
-	case "vod":
-		// VOD artifacts (including hidden chapter-origin artifacts) are registered
-		// directly in foghorn.artifacts with tenant_id stamped at creation, so
-		// foghorn is the single authority for this lookup.
-		if tenantFromArti.Valid {
-			tenantID = tenantFromArti.String
+	// Resolve the OWNER tenant through the identity facade (the sanctioned hash→tenant authority) so the
+	// artifact lookup below is tenant-scoped (repository invariant), rather than reading by hash alone.
+	tenantID := ""
+	if resolver := identity.Default(); resolver != nil {
+		if id, rErr := resolver.ResolveArtifact(ctx, assetHash, assetType); rErr == nil {
+			tenantID = strings.TrimSpace(id.TenantID)
 		}
 	}
 	if tenantID == "" {
 		logger.Error("Could not resolve tenant for dtsh sync")
+		return
+	}
+
+	var syncObjectKey sql.NullString
+	err := db.QueryRowContext(ctx, `
+		SELECT sync_object_key
+		FROM foghorn.artifacts
+		WHERE artifact_hash = $1 AND tenant_id::text = $2`,
+		assetHash, tenantID).Scan(&syncObjectKey)
+	if err != nil {
+		logger.WithError(err).Error("Failed to lookup asset for dtsh sync")
 		return
 	}
 
@@ -5470,63 +6121,67 @@ func TriggerDtshSync(nodeID, assetHash, assetType, filePath string) {
 		UrlExpirySeconds: expirySeconds,
 	}
 
-	if assetType == "clip" {
-		// For clips: single .dtsh file next to the main file
-		format := "mp4"
-		if idx := strings.LastIndex(filePath, "."); idx != -1 {
-			format = filePath[idx+1:]
+	switch assetType {
+	case "clip":
+		// The .dtsh sidecar's canonical key is derived from the persisted descriptor (sync_object_key +
+		// ".dtsh"), never the node path. Like the main object, the presigned PUT targets an attempt-scoped
+		// STAGING key — completion HEAD-verifies it and PROMOTES it to the canonical .dtsh key, so the node
+		// never holds a canonical .dtsh PUT and cannot overwrite/enlarge the index after verification.
+		if !syncObjectKey.Valid || syncObjectKey.String == "" {
+			logger.Error("Cannot dispatch clip .dtsh sync: no persisted sync_object_key descriptor")
+			return
 		}
-		s3Key := s3Client.BuildClipS3Key(tenantID, streamName, assetHash, format) + ".dtsh"
-		presignedURL, err := s3Client.GeneratePresignedPUT(s3Key, expiry)
+		presignedURL, err := s3Client.GeneratePresignedPUT(FreezeStagingKey(syncObjectKey.String+".dtsh", requestID), expiry)
 		if err != nil {
 			logger.WithError(err).Error("Failed to generate presigned URL for clip .dtsh")
 			return
 		}
 		req.PresignedPutUrl = presignedURL
-	} else if assetType == "dvr" {
-		// For DVR: may have multiple .dtsh files in the directory
-		// We'll provide a map of presigned URLs for common .dtsh file patterns
-		s3Prefix := s3Client.BuildDVRS3Key(tenantID, streamName, assetHash)
-		req.DtshUrls = make(map[string]string)
-
-		// Generate presigned URLs for common .dtsh file patterns
-		// The main one is assetHash.m3u8.dtsh
-		dtshNames := []string{
-			assetHash + ".m3u8.dtsh",
-			assetHash + ".dtsh",
-		}
-		for _, dtshName := range dtshNames {
-			s3Key := s3Prefix + "/" + dtshName
-			url, err := s3Client.GeneratePresignedPUT(s3Key, expiry)
-			if err != nil {
-				logger.WithError(err).WithField("dtsh_name", dtshName).Warn("Failed to generate presigned URL for DVR .dtsh")
-				continue
-			}
-			req.DtshUrls[dtshName] = url
-		}
-
-		if len(req.DtshUrls) == 0 {
-			logger.Error("Failed to generate any presigned URLs for DVR .dtsh files")
+	case "dvr":
+		// Whole-DVR .dtsh sync is NOT dispatched: DVR whole-freeze is unsupported, and a multi-object DVR
+		// index has no single descriptor to stage+verify — issuing canonical PUT URLs would hand the node an
+		// unverifiable overwrite window. DVR playback uses per-chapter VOD artifacts, whose .dtsh IS staged
+		// and verified via the VOD path. (Whole-DVR index staging is docs/rfcs/cross-cluster-durable-replication-v1.md scope.)
+		logger.Debug("Skipping whole-DVR .dtsh sync (unsupported; chapters sync via the staged VOD path)")
+		return
+	case "vod":
+		// VOD .dtsh, like clip: the presigned PUT targets an attempt-scoped STAGING key derived from the
+		// persisted descriptor (sync_object_key + ".dtsh"), never the canonical key or the node filePath —
+		// completion HEAD-verifies + promotes it, so the node cannot overwrite/enlarge the index afterward.
+		if !syncObjectKey.Valid || syncObjectKey.String == "" {
+			logger.Error("Cannot dispatch vod .dtsh sync: no persisted sync_object_key descriptor")
 			return
 		}
-	} else if assetType == "vod" {
-		// VOD layout: vod/<tenant>/<hash>/<hash>.<ext> with sidecar at
-		// vod/<tenant>/<hash>/<hash>.<ext>.dtsh next to the main file.
-		format := "mp4"
-		if idx := strings.LastIndex(filePath, "."); idx != -1 {
-			format = filePath[idx+1:]
-		}
-		s3Key := s3Client.BuildVodS3Key(tenantID, assetHash, assetHash+"."+format) + ".dtsh"
-		presignedURL, err := s3Client.GeneratePresignedPUT(s3Key, expiry)
+		presignedURL, err := s3Client.GeneratePresignedPUT(FreezeStagingKey(syncObjectKey.String+".dtsh", requestID), expiry)
 		if err != nil {
 			logger.WithError(err).Error("Failed to generate presigned URL for VOD .dtsh")
 			return
 		}
 		req.PresignedPutUrl = presignedURL
+	default:
+		// Only clip and vod have a single staged+verified .dtsh index. Any other type (DVR is handled above;
+		// anything else is unexpected) must NOT claim a dtsh attempt or dispatch a request with an empty URL.
+		logger.Warn("Skipping .dtsh sync: unsupported asset_type")
+		return
+	}
+
+	// Record the attempt BEFORE dispatch so the completion (success OR failure) is authenticated
+	// against this exact request/node. An unclaimable row (index already synced, a live attempt on
+	// another node that isn't yet stale, or a recent failure still within backoff) means we must NOT
+	// dispatch a competing upload.
+	if claimed, cErr := claimDtshAttempt(ctx, assetHash, requestID, nodeID, tenantID); cErr != nil || !claimed {
+		logger.WithError(cErr).WithField("request_id", requestID).
+			Debug("Skipping .dtsh sync: attempt not claimable (already synced or owned by a live attempt)")
+		return
 	}
 
 	if err := SendDtshSyncRequest(nodeID, req); err != nil {
 		logger.WithError(err).Error("Failed to send DtshSyncRequest")
+		// Undo the claim (bounded ctx) so the next node report re-triggers. On a settlement failure the row
+		// stays dtsh in_progress and the >10min stale re-claim in claimDtshAttempt enqueues its .dtsh staging.
+		clearCtx, clearCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		clearDtshAttempt(clearCtx, assetHash, requestID, nodeID, tenantID)
+		clearCancel()
 		return
 	}
 
@@ -5562,6 +6217,45 @@ var artifactRepo state.ArtifactRepository
 // SetArtifactRepository sets the artifact repository for sync tracking.
 func SetArtifactRepository(repo state.ArtifactRepository) {
 	artifactRepo = repo
+}
+
+// DeleteNodeArtifact removes a node's local-copy row and emits a LOST placement in
+// one transaction (via the repository), so explicit deletion/eviction updates the
+// analytics projection.
+func DeleteNodeArtifact(ctx context.Context, artifactHash, nodeID string, reportedAtMs int64) error {
+	if artifactRepo == nil {
+		return nil
+	}
+	return artifactRepo.DeleteNodeArtifact(ctx, artifactHash, nodeID, reportedAtMs)
+}
+
+// ReconcileNodeCopies seeds never-emitted present copies and sweeps stale-present rows
+// so the analytics projection is seeded on boot and heals non-emitting writes. No-op if
+// the repository is unset. Returns the number of copies emitted.
+func ReconcileNodeCopies(ctx context.Context) (int, error) {
+	if artifactRepo == nil {
+		return 0, nil
+	}
+	return artifactRepo.ReconcileNodeCopies(ctx)
+}
+
+// RefreshNodeCopy synchronously emits GAINED for a present copy whose analytics
+// projection is absent — called by writers that restore/create presence outside the
+// emitting paths so the transition lands immediately. No-op if the repository is unset.
+func RefreshNodeCopy(ctx context.Context, artifactHash, nodeID string) error {
+	if artifactRepo == nil {
+		return nil
+	}
+	return artifactRepo.RefreshNodeCopy(ctx, artifactHash, nodeID)
+}
+
+// RegisterDVRRecordingOrigin registers the DVR recording node as origin (with base_url)
+// through the atomic transition path. No-op if the repository is unset.
+func RegisterDVRRecordingOrigin(ctx context.Context, artifactHash, nodeID, baseURL string) error {
+	if artifactRepo == nil {
+		return nil
+	}
+	return artifactRepo.RegisterDVRRecordingOrigin(ctx, artifactHash, nodeID, baseURL)
 }
 
 // GetRelayBaseURL returns the URL Mist on the given node uses to reach
@@ -5634,27 +6328,10 @@ func processCanDeleteRequest(req *ipcpb.CanDeleteRequest, nodeID string, stream 
 			logger.WithField("asset_hash", assetHash).Info("Asset durable copy verified, safe to delete local copy (no cached_at)")
 		}
 	} else {
-		// Check if this is a remote artifact (storage cluster's S3 holds the
-		// authoritative copy). storage_cluster_id is the cluster whose S3
-		// minted the upload URLs; NULL falls back to origin_cluster_id.
-		// CanDeleteRequest carries no tenant_id, so we read every row for
-		// the hash and only honor the remote-synced shortcut when there is
-		// exactly one match — multiple rows mean we can't prove which
-		// tenant's record this delete belongs to and could bleed a remote
-		// disposition across tenants.
-		if db != nil {
-			authoritativeCluster, ok := lookupAuthoritativeClusterUnambiguous(ctx, assetHash, logger)
-			if ok && authoritativeCluster != "" && !isServedCluster(authoritativeCluster) {
-				response.SafeToDelete = true
-				response.Reason = "remote_synced"
-				logger.WithFields(logging.Fields{
-					"asset_hash":            assetHash,
-					"authoritative_cluster": authoritativeCluster,
-				}).Info("Remote artifact — safe to delete (storage cluster's S3 authoritative)")
-				sendCanDeleteResponse(stream, response, logger)
-				return
-			}
-		}
+		// No local durability proof. A remote storage/origin cluster attribution is NOT durability proof:
+		// storage_cluster_id/origin_cluster_id only record WHERE the bytes would live, not that a durable
+		// object exists — a pending/failed artifact carries a cluster id but no synced object. Fail CLOSED
+		// (SafeToDelete stays false) and report the real sync state.
 
 		// Check if sync is in progress
 		if info == nil {
@@ -5742,13 +6419,13 @@ func processSyncComplete(complete *ipcpb.SyncComplete, nodeID string, logger log
 	requestID := complete.GetRequestId()
 	assetHash := complete.GetAssetHash()
 	status := complete.GetStatus()
-	s3URL := complete.GetS3Url()
+	// s3_url is never trusted from the node — the canonical URL is derived server-side from the persisted
+	// descriptor below, so this starts empty. The reporting node is the authenticated connection (the
+	// payload no longer carries a node_id), so a node can never attribute this sync to a different node.
+	s3URL := ""
 	sizeBytes := complete.GetSizeBytes()
 	errorMsg := complete.GetError()
-	reportingNodeID := complete.GetNodeId()
-	if reportingNodeID == "" {
-		reportingNodeID = nodeID
-	}
+	reportingNodeID := nodeID
 
 	logger.WithFields(logging.Fields{
 		"request_id": requestID,
@@ -5765,127 +6442,235 @@ func processSyncComplete(complete *ipcpb.SyncComplete, nodeID string, logger log
 		return
 	}
 
-	ctx := context.Background()
+	// Bounded: the completion does S3 HEAD + a promote (server-side copy) and a short DB transaction. An
+	// unbounded context would let a stalled S3 call hold the transaction open indefinitely.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 
 	dtshIncluded := complete.GetDtshIncluded()
+
+	// Resolve the artifact OWNER tenant through the identity facade (the sanctioned hash→tenant authority)
+	// so EVERY completion query below is tenant-scoped, per the repository invariant. A completion that
+	// cannot be attributed to an owner tenant is refused (the tenant-scoped guards match zero rows).
+	ownerTenant := ""
+	if resolver := identity.Default(); resolver != nil {
+		if id, rErr := resolver.ResolveArtifact(ctx, assetHash, ""); rErr == nil {
+			ownerTenant = strings.TrimSpace(id.TenantID)
+		}
+	}
 
 	switch status {
 	case "success":
 		incArtifactSyncOutcome("success")
-		var artifactType, internalName, format, tenantID, streamID, previousS3URL string
-		// If Helmsman didn't provide s3_url (typical), compute it from stored artifact metadata.
+		var artifactType, internalName, format, tenantID, streamID, syncObjectKey, syncStatusRow, previousActiveKey, previousActiveDtshKey, previousS3URL, previousDtshReq string
+		// The identity read is TENANT-SCOPED (ownerTenant, resolved via the identity facade) AND scoped to the
+		// SERVER-ASSIGNED attempt for THIS node: the row matches only when the owner tenant ($2) matches AND
+		// the echoed request id ($3, = FreezePermissionResponse.attempt_id) + authenticated connection ($4)
+		// equal the persisted MAIN or DTSH attempt identity. This satisfies the tenant-scoping invariant and
+		// yields tenantID="" (→ downstream no-op) for a stale / duplicate / wrong-node / wrong-tenant
+		// completion. A genuine read error refuses (fail closed).
 		if db != nil {
-			_ = db.QueryRowContext(ctx, `
-				SELECT COALESCE(artifact_type,''), COALESCE(stream_internal_name,''), COALESCE(format,''), COALESCE(tenant_id::text,''), COALESCE(stream_id::text,''), COALESCE(s3_url,'')
+			if idErr := db.QueryRowContext(ctx, `
+				SELECT COALESCE(artifact_type,''), COALESCE(stream_internal_name,''), COALESCE(format,''), COALESCE(tenant_id::text,''), COALESCE(stream_id::text,''), COALESCE(sync_object_key,''), COALESCE(sync_status,''), COALESCE(active_object_key,''), COALESCE(active_dtsh_key,''), COALESCE(s3_url,''), COALESCE(dtsh_sync_request_id,'')
 				FROM foghorn.artifacts
 				WHERE artifact_hash = $1
-			`, assetHash).Scan(&artifactType, &internalName, &format, &tenantID, &streamID, &previousS3URL)
+				  AND tenant_id::text = $2
+				  AND ( (sync_request_id = $3 AND sync_node_id = $4)
+				     OR (dtsh_sync_request_id = $3 AND dtsh_sync_node_id = $4) )
+			`, assetHash, ownerTenant, requestID, reportingNodeID).Scan(&artifactType, &internalName, &format, &tenantID, &streamID, &syncObjectKey, &syncStatusRow, &previousActiveKey, &previousActiveDtshKey, &previousS3URL, &previousDtshReq); idErr != nil && !errors.Is(idErr, sql.ErrNoRows) {
+				logger.WithError(idErr).WithField("asset_hash", assetHash).Error("sync completion: attempt-scoped identity pre-read failed; refusing to apply")
+				return
+			}
 		}
-		if s3URL == "" && s3Client != nil {
-			if tenantID != "" {
-				switch artifactType {
-				case "clip":
-					if format == "" {
-						format = "mp4"
-					}
-					if internalName != "" {
-						s3Key := s3Client.BuildClipS3Key(tenantID, internalName, assetHash, format)
-						s3URL = s3Client.BuildS3URL(s3Key)
-					}
-				case "dvr":
-					if internalName != "" {
-						s3Prefix := s3Client.BuildDVRS3Key(tenantID, internalName, assetHash)
-						s3URL = s3Client.BuildS3URL(s3Prefix)
-					}
-				case "vod":
-					if format == "" {
-						format = "mp4"
-					}
-					s3Key := s3Client.BuildVodS3Key(tenantID, assetHash, assetHash+"."+format)
-					s3URL = s3Client.BuildS3URL(s3Key)
+		// LEGACY ROWS (synced before version-addressing) carry no active_object_key/active_dtsh_key: the durable
+		// object lives at the key encoded in s3_url and any .dtsh co-located at <media>.dtsh. A non-empty s3_url on
+		// a clip/vod means a prior durable object exists — recover its key (prefix-aware, via the live client) so a
+		// re-publish SUPERSEDES and enqueues it (rather than orphaning it) and an incremental .dtsh has a media key
+		// to gate/co-locate under. This is gated on s3_url, NOT sync_status: a re-upload resets the row to
+		// in_progress, so the exact leak (re-uploaded legacy VOD's old object) surfaces with sync_status
+		// 'in_progress'. A first freeze has an empty s3_url, so this never fabricates a bogus predecessor. The
+		// postdeploy backfill fills active_object_key from vod_metadata for the common case; this closes the rest.
+		if previousActiveKey == "" && previousS3URL != "" && (artifactType == "clip" || artifactType == "vod") && s3Client != nil {
+			if k, perr := s3Client.ParseS3URL(previousS3URL); perr == nil && k != "" {
+				previousActiveKey = k
+				if previousActiveDtshKey == "" {
+					previousActiveDtshKey = k + ".dtsh"
 				}
 			}
 		}
-
-		// Update artifact registry with sync status and S3 URL
-		if err := artifactRepo.SetSyncStatus(ctx, assetHash, "synced", s3URL); err != nil {
-			logger.WithError(err).Error("Failed to update sync status in artifact registry")
+		// A clip/vod in_progress attempt always carries the sync_object_key bound at claim time. Refuse a
+		// descriptor-less clip/vod completion rather than promote an unverified reconstructed key: the row
+		// stays in_progress for stale recovery to requeue with a bound descriptor.
+		if (artifactType == "clip" || artifactType == "vod") && syncObjectKey == "" {
+			logger.WithField("asset_hash", assetHash).Warn("Refusing descriptor-less clip/vod sync completion; row left for stale recovery to requeue with a bound descriptor")
+			return
 		}
-
-		// Add this node to cached_nodes (it has a local copy)
-		if err := artifactRepo.AddCachedNode(ctx, assetHash, reportingNodeID); err != nil {
-			logger.WithError(err).Error("Failed to add cached node")
-		}
-
-		// Update foghorn.artifacts with storage_location, dtsh_synced, and
-		// the post-sync size.
-		if _, dbErr := db.ExecContext(ctx, `
-			UPDATE foghorn.artifacts
-			SET storage_location = 'local',
-			    s3_url = COALESCE(NULLIF($1,''), s3_url),
-			    dtsh_synced = $2,
-			    size_bytes = COALESCE(NULLIF($4::BIGINT, 0), size_bytes),
-			    last_sync_attempt = NOW(),
-			    sync_error = NULL,
-			    updated_at = NOW()
-			WHERE artifact_hash = $3
-			  AND sync_status = 'synced'`,
-			s3URL, dtshIncluded, assetHash, int64(sizeBytes)); dbErr != nil {
-			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to mark artifact as synced")
-		}
-
-		// Chapter artifacts (origin_type='dvr_chapter') advance their
-		// chapter row from finalized → frozen once both sync_status
-		// AND dtsh_synced are true. This is the trigger the reclaim
-		// sweep waits on; without it source TS segments stay pinned.
-		if dtshIncluded {
-			if chapterID := chapterOriginIDForArtifact(ctx, assetHash); chapterID != "" {
-				if frzErr := MarkChapterFrozen(ctx, chapterID); frzErr != nil {
-					logger.WithError(frzErr).WithFields(logging.Fields{
-						"chapter_id":    chapterID,
-						"artifact_hash": assetHash,
-					}).Warn("Chapter freeze transition failed")
+		// SERVER-SIDE VERIFICATION + PUBLICATION, performed OUTSIDE the database transaction. A node's
+		// "success" and reported size_bytes are SELF-ATTESTED. The node wrote to an attempt-scoped STAGING key;
+		// Foghorn HEAD-verifies it and PROMOTES (conditional copy on the observed ETag) to a FRESH, IMMUTABLE
+		// candidate key FreezePublishKey(sync_object_key, attempt) — a per-attempt key the node never held a
+		// PUT for and that is NOT any currently-served object. Because publication targets a fresh key, this
+		// copy can never overwrite live bytes, so it is safe to run it BEFORE (not inside) the transaction: the
+		// transaction then only FLIPS the active_object_key pointer to the verified candidate. If the CAS is
+		// lost or the commit fails, the candidate is simply an unreferenced orphan (enqueued for durable
+		// cleanup) — a rollback can never expose it. A missing object / 0 bytes FAILS CLOSED; a transient error
+		// is RETRYABLE. The recorded size is the PROVIDER-OBSERVED size. Only clip/vod carry a single object.
+		stagingToCleanup := ""     // main staging; enqueued for durable cleanup at commit
+		dtshStagingToCleanup := "" // .dtsh staging; same
+		publishMainKey := ""       // the fresh candidate the main object was PUBLISHED to (empty ⇒ dtsh-only / DVR)
+		publishDtshKey := ""       // the fresh, attempt-versioned key the .dtsh index was PUBLISHED to
+		if s3Client != nil && syncObjectKey != "" && (artifactType == "clip" || artifactType == "vod") {
+			if syncStatusRow == "in_progress" {
+				stagingKey := FreezeStagingKey(syncObjectKey, requestID)
+				exists, size, etag, hErr := s3Client.HeadObjectInfo(ctx, stagingKey)
+				if hErr != nil {
+					logger.WithError(hErr).WithFields(logging.Fields{"asset_hash": assetHash, "staging_key": stagingKey}).
+						Warn("Sync completion staging HEAD failed (transient); leaving attempt in_progress for retry")
+					return
+				}
+				if !exists {
+					logger.WithFields(logging.Fields{"asset_hash": assetHash, "staging_key": stagingKey}).
+						Warn("Refusing sync completion: no staged object (node reported success without a verified upload); leaving attempt for stale recovery")
+					return
+				}
+				if size <= 0 {
+					logger.WithFields(logging.Fields{"asset_hash": assetHash, "staging_key": stagingKey}).
+						Warn("Refusing sync completion: staged object is empty (0 bytes); leaving attempt for stale recovery")
+					return
+				}
+				if strings.TrimSpace(etag) == "" {
+					logger.WithFields(logging.Fields{"asset_hash": assetHash, "staging_key": stagingKey}).
+						Warn("Sync completion: staged object HEAD returned no ETag; leaving attempt in_progress for retry")
+					return
+				}
+				candidate := FreezePublishKey(syncObjectKey, requestID)
+				// Re-assert the main staging + candidate ledger rows (idempotent). The AUTHORITATIVE record was
+				// written at claim time (RecordFreezePublicationLedgerTx), so a failure here is non-fatal — the
+				// sweep still collects these objects from the claim-time rows; log and proceed.
+				if lErr := RecordPublicationPairDB(ctx, db, assetHash, tenantID, requestID, stagingKey, candidate); lErr != nil {
+					logger.WithError(lErr).WithField("asset_hash", assetHash).Debug("Sync completion: main publication ledger re-assert failed (non-fatal; claim-time record is authoritative)")
+				}
+				if pErr := s3Client.PromoteObject(ctx, stagingKey, candidate, etag); pErr != nil {
+					// RETRYABLE (left in_progress). Do NOT enqueue the candidate: the attempt keeps the SAME
+					// server-minted id, so a retry re-publishes to the SAME candidate key (idempotent copy) and
+					// may make it ACTIVE — enqueuing it here would race the retry and could delete the live
+					// object. A truly-abandoned attempt is collected by stale-freeze recovery (which clears the
+					// identity first, then derives + enqueues this exact candidate) — no reuse hazard.
+					logger.WithError(pErr).WithFields(logging.Fields{"asset_hash": assetHash, "staging_key": stagingKey, "candidate_key": candidate}).
+						Warn("Sync completion publication failed (overwrite race or transient); leaving attempt in_progress for retry")
+					return
+				}
+				publishMainKey = candidate
+				stagingToCleanup = stagingKey
+				// The provider-observed size is authoritative for durable state AND billing.
+				sizeBytes = uint64(size)
+			}
+			// The .dtsh index CO-LOCATES with the current media object version (readers derive it as
+			// <active_object_key>.dtsh). Publish the verified staged .dtsh to <mediaKey>.dtsh, where mediaKey is
+			// the just-published main object (bundled) or the row's CURRENT active object (incremental .dtsh on
+			// an already-synced row). If nothing verifiable is staged, downgrade (the incremental .dtsh retries).
+			if dtshIncluded {
+				mediaKey := publishMainKey
+				if mediaKey == "" {
+					mediaKey = previousActiveKey
+				}
+				stagingKey := FreezeStagingKey(syncObjectKey+".dtsh", requestID)
+				dExists, dSize, dEtag, dErr := s3Client.HeadObjectInfo(ctx, stagingKey)
+				if dErr != nil {
+					logger.WithError(dErr).WithFields(logging.Fields{"asset_hash": assetHash, "staging_key": stagingKey}).
+						Warn("Sync completion .dtsh staging HEAD failed (transient); leaving attempt in_progress for retry")
+					return
+				}
+				if dExists {
+					// The node UPLOADED a .dtsh staging object. Schedule it for cleanup NOW — regardless of whether
+					// we finalize — so a downgrade (invalid/zero-byte size, a ledger-write failure, or a failed
+					// promote) on a committing MAIN completion cannot leak it: the success tx enqueues
+					// dtshStagingToCleanup. (On the incremental dtsh-only path a downgrade returns without a commit;
+					// there the >10min stale-.dtsh re-claim collects this staging object.)
+					dtshStagingToCleanup = stagingKey
+				}
+				if mediaKey == "" || !dExists || dSize <= 0 || strings.TrimSpace(dEtag) == "" {
+					logger.WithFields(logging.Fields{"asset_hash": assetHash, "staging_key": stagingKey}).
+						Warn("Not finalizing dtsh_synced: no verifiable staged .dtsh index (or no media object to co-locate under)")
+					dtshIncluded = false
 				} else {
-					logger.WithFields(logging.Fields{
-						"chapter_id":    chapterID,
-						"artifact_hash": assetHash,
-					}).Info("Chapter frozen — source segments eligible for reclaim")
+					// mediaKey still GATES finalization (there must be a media object), but the .dtsh KEY is now
+					// version-addressed by the attempt (not co-located at a fixed <media>.dtsh).
+					dcand := FreezePublishDtshKey(syncObjectKey, requestID)
+					// Record the .dtsh staging + candidate ledger rows (idempotent). For a BUNDLED attempt these
+					// re-assert rows already written at claim time (RecordFreezePublicationLedgerTx); for an
+					// INCREMENTAL .dtsh-only attempt (claimDtshAttempt, which does NOT write the ledger at claim
+					// time) this insertion IS the durability source for the .dtsh candidate. Either way, if it fails
+					// we must NOT finalize dtsh_synced: without a durable ledger row a completion lost to a
+					// concurrent duplicate could leak the promoted candidate — so downgrade and let the retry re-run.
+					if lErr := RecordPublicationPairDB(ctx, db, assetHash, tenantID, requestID, stagingKey, dcand); lErr != nil {
+						logger.WithError(lErr).WithField("asset_hash", assetHash).Warn("Sync completion: failed to record .dtsh publication ledger; not finalizing dtsh_synced")
+						dtshIncluded = false
+					} else if pErr := s3Client.PromoteObject(ctx, stagingKey, dcand, dEtag); pErr != nil {
+						// Downgrade (retryable). The ledger row (recorded above) lets the sweep collect the candidate;
+						// dtshStagingToCleanup (set above) enqueues the staging on a committing main completion.
+						logger.WithError(pErr).WithFields(logging.Fields{"asset_hash": assetHash, "staging_key": stagingKey}).
+							Warn("Not finalizing dtsh_synced: .dtsh publication failed (overwrite race or transient)")
+						dtshIncluded = false
+					} else {
+						publishDtshKey = dcand
+					}
 				}
 			}
 		}
 
-		// For VOD, the s3_key in vod_metadata is the canonical S3 key.
-		// On processed-VOD replacement uploads the key derived above (from
-		// tenant/hash/format) differs from the original upload key; persist
-		// the new value so relay reads the synced location, not the
-		// original-upload row.
-		if artifactType == "vod" && s3URL != "" && db != nil {
-			derivedKey := ""
-			if s3Client != nil && tenantID != "" {
-				f := format
-				if f == "" {
-					f = "mp4"
-				}
-				derivedKey = s3Client.BuildVodS3Key(tenantID, assetHash, assetHash+"."+f)
-			}
-			if derivedKey != "" {
-				if _, dbErr := db.ExecContext(ctx, `
-					INSERT INTO foghorn.vod_metadata (artifact_hash, s3_key, filename)
-					VALUES ($1, $2, $3)
-					ON CONFLICT (artifact_hash) DO UPDATE SET s3_key = EXCLUDED.s3_key`,
-					assetHash, derivedKey, assetHash+"."+format); dbErr != nil {
-					logger.WithError(dbErr).WithField("asset_hash", assetHash).Warn("failed to update vod_metadata.s3_key after sync")
-				}
+		// The canonical S3 URL is ALWAYS derived SERVER-SIDE (s3URL starts empty above), from the object we
+		// just PUBLISHED (the fresh candidate) for a main upload; for the dtsh-only path (media unchanged) the
+		// row keeps its current s3_url (the guarded UPDATE's COALESCE preserves it since applied==0). DVR is a
+		// prefix. A synced main upload MUST carry a usable URL — fail closed if S3 is unavailable.
+		if s3Client != nil {
+			switch {
+			case publishMainKey != "":
+				s3URL = s3Client.BuildS3URL(publishMainKey)
+			case syncStatusRow == "synced" && previousActiveKey != "":
+				s3URL = s3Client.BuildS3URL(previousActiveKey)
+			case artifactType == "dvr" && tenantID != "" && internalName != "":
+				s3Prefix := s3Client.BuildDVRS3Key(tenantID, internalName, assetHash)
+				s3URL = s3Client.BuildS3URL(s3Prefix)
+			case syncObjectKey != "":
+				s3URL = s3Client.BuildS3URL(syncObjectKey)
 			}
 		}
+		if s3URL == "" {
+			logger.WithField("asset_hash", assetHash).Warn("Refusing sync completion: could not derive a usable canonical S3 URL (S3 unavailable/misconfigured); leaving attempt for stale recovery")
+			return
+		}
 
-		logger.WithFields(logging.Fields{
-			"asset_hash":    assetHash,
-			"s3_url":        s3URL,
-			"node_id":       reportingNodeID,
-			"dtsh_included": dtshIncluded,
-		}).Info("Asset synced to S3, local copy retained")
-		emitArtifactStorageStateLifecycle(ctx, logger, artifactStorageStateLifecycle{
+		if db == nil {
+			return
+		}
+
+		// This completion is bound by the EXACT (attempt id + node) match on the outstanding attempt, enforced
+		// by the guarded UPDATE below. The attempt id is SERVER-MINTED (issued at permission time, echoed by
+		// the node), and the node is the authenticated connection — so a node can only complete an operation
+		// Foghorn assigned. The artifact-owner tenant scopes the mutation as PARTITION SCOPING (sourced from
+		// the attempt-scoped read above). When no main-upload attempt matches, the UPDATE affects zero rows
+		// and the code falls through to the incremental .dtsh path below.
+		guardTenant := tenantID
+
+		// Read-only work BEFORE the guarded transaction: the chapter this artifact finalized (if any)
+		// and the canonical VOD S3 key to persist. Doing the lookups here keeps the transaction short.
+		chapterID := ""
+		if dtshIncluded {
+			chapterID = chapterOriginIDForArtifact(ctx, assetHash)
+		}
+		// vod_metadata.s3_key must equal the PUBLISHED object key (active_object_key) — the exact object the
+		// bytes were promoted to — so relay/deletion address the served version, not the bare descriptor.
+		// publishMainKey is non-empty for a main vod upload (the descriptor-less refusal above guarantees it).
+		derivedVodKey := ""
+		if artifactType == "vod" && publishMainKey != "" {
+			derivedVodKey = publishMainKey
+		}
+
+		// Build the storage-state analytics event NOW (identity/dtsh enrichment does its reads here,
+		// before the transaction opens) so it can be enqueued through the SAME transaction as the S3
+		// state change — a committed sync can never be lost to a disconnected Decklog or a crash.
+		syncLifecycleEvent := buildArtifactStorageLifecycleEvent(ctx, artifactStorageStateLifecycle{
 			artifactHash:    assetHash,
 			artifactType:    artifactType,
 			tenantID:        tenantID,
@@ -5902,97 +6687,416 @@ func processSyncComplete(complete *ipcpb.SyncComplete, nodeID string, logger log
 			frozen:          false,
 		})
 
-		if artifactType == "vod" && previousS3URL != "" && s3URL != "" && previousS3URL != s3URL && s3Client != nil {
-			if err := s3Client.DeleteByURL(ctx, previousS3URL); err != nil {
-				logger.WithError(err).WithFields(logging.Fields{
-					"asset_hash":      assetHash,
-					"replaced_s3_url": previousS3URL,
-					"new_s3_url":      s3URL,
-				}).Warn("Failed to delete replaced VOD source from S3 after sync")
-			} else {
-				logger.WithFields(logging.Fields{
-					"asset_hash":      assetHash,
-					"replaced_s3_url": previousS3URL,
-					"new_s3_url":      s3URL,
-				}).Info("Deleted replaced VOD source from S3 after sync")
+		// ONE guarded, idempotent transaction. The terminal UPDATE only fires when the row is still
+		// in_progress AND the completion matches the EXACT outstanding attempt (attempt id = $5 AND node =
+		// $6, both required — a NULL/absent attempt id does NOT match). The attempt id is SERVER-MINTED and
+		// echoed by the authenticated node, so completion consumes a Foghorn-assigned operation. tenant_id =
+		// $7 (the artifact owner) is partition scoping. A duplicate, stale, or wrong-node completion matches
+		// zero rows and the whole transaction is a no-op — no double node-copy, no resurrected lifecycle, no
+		// wrong-node attribution. Node-copy, VOD metadata, and the chapter freeze all commit atomically with
+		// the artifact promotion. The attempt identity is cleared here.
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			logger.WithError(err).WithField("asset_hash", assetHash).Error("failed to begin sync completion tx")
+			return
+		}
+		defer tx.Rollback() //nolint:errcheck // rollback is best-effort on the non-commit paths
+		res, err := tx.ExecContext(ctx, `
+			UPDATE foghorn.artifacts
+			SET storage_location = 'local',
+			    sync_status = 'synced',
+			    s3_url = COALESCE(NULLIF($1,''), s3_url),
+			    -- Atomically FLIP the authoritative object pointer to the freshly-published candidate (kept in
+			    -- sync with s3_url). This is the publication: the object was copied to $9 outside this tx, and
+			    -- only committing here makes it the served address. Empty $9 (dtsh-only / DVR) preserves it.
+			    active_object_key = COALESCE(NULLIF($9,''), active_object_key),
+			    dtsh_synced = $2,
+			    -- Flip the .dtsh pointer to the freshly-published versioned index when this upload bundled it;
+			    -- otherwise CLEAR it. This UPDATE is a MAIN-object (re)publication to a fresh candidate, so any
+			    -- prior .dtsh no longer co-locates with the served media and is being enqueued for deletion below
+			    -- — leaving the pointer set would reference garbage. dtsh_synced=$2 already resets to false here.
+			    active_dtsh_key = CASE WHEN $2 THEN NULLIF($10,'') ELSE NULL END,
+			    -- When the main upload bundled the .dtsh, atomically clear any overlapping incremental
+			    -- dtsh attempt (identity + failed backoff state) so a stale dtsh completion can't later
+			    -- re-open it against a row that is already dtsh_synced.
+			    dtsh_status = CASE WHEN $2 THEN NULL ELSE dtsh_status END,
+			    dtsh_sync_request_id = CASE WHEN $2 THEN NULL ELSE dtsh_sync_request_id END,
+			    dtsh_sync_node_id = CASE WHEN $2 THEN NULL ELSE dtsh_sync_node_id END,
+			    dtsh_failure_count = CASE WHEN $2 THEN 0 ELSE dtsh_failure_count END,
+			    size_bytes = COALESCE(NULLIF($4::BIGINT, 0), size_bytes),
+			    last_sync_attempt = NOW(),
+			    sync_error = NULL,
+			    sync_request_id = NULL,
+			    sync_node_id = NULL,
+			    updated_at = NOW()
+			WHERE artifact_hash = $3
+			  AND tenant_id::text = $7
+			  AND status NOT IN ('deleted', 'expired', 'aborted')
+			  AND sync_status = 'in_progress'
+			  AND sync_request_id = $5
+			  AND sync_node_id = $6
+			  -- Consume the descriptor INSIDE the CAS: $1 (the published s3_url) was derived from the
+			  -- sync_object_key read before this tx, so the row's descriptor must still equal it. Empty $8
+			  -- (DVR, no single-object descriptor) skips the check.
+			  AND ($8 = '' OR sync_object_key = $8)`,
+			s3URL, dtshIncluded, assetHash, int64(sizeBytes), requestID, reportingNodeID, guardTenant, syncObjectKey, publishMainKey, publishDtshKey)
+		if err != nil {
+			logger.WithError(err).WithField("asset_hash", assetHash).Error("failed to mark artifact as synced")
+			return
+		}
+		applied, raErr := res.RowsAffected()
+		if raErr != nil {
+			logger.WithError(raErr).WithField("asset_hash", assetHash).Error("failed to read sync completion rows affected")
+			return
+		}
+		if applied == 0 {
+			// Not an in_progress→synced transition. An incremental .dtsh sync (TriggerDtshSync) runs on
+			// an ALREADY-SYNCED artifact and reports back through this same SyncComplete path, so it can
+			// never match the in_progress guard. Handle it as its own idempotent transition, authenticated
+			// against the persisted DTSH attempt (request + node): set dtsh_synced on the synced row and
+			// clear the attempt, then advance the chapter freeze that depends on it — without touching
+			// sync_status or node copies. A stale/duplicate/wrong-node dtsh completion matches zero rows
+			// (guarded on the attempt identity AND dtsh not-yet-set) and is a no-op.
+			if dtshIncluded {
+				// Tenant is MANDATORY here (no wildcard): the metadata pre-read resolved it, and a dtsh
+				// completion for an unresolvable tenant must not finalize the index or advance reclaim.
+				if tenantID == "" {
+					logger.WithField("asset_hash", assetHash).Warn("Ignoring dtsh completion: unresolved tenant")
+					return
+				}
+				dRes, dErr := tx.ExecContext(ctx, `
+					UPDATE foghorn.artifacts
+					SET dtsh_synced = true, dtsh_status = NULL, dtsh_failure_count = 0,
+					    -- Flip the .dtsh pointer to the freshly-published versioned index (the CAS here fences it,
+					    -- so a late/duplicate attempt that published a different key can never win this pointer).
+					    active_dtsh_key = COALESCE(NULLIF($5,''), active_dtsh_key),
+					    dtsh_sync_request_id = NULL, dtsh_sync_node_id = NULL, updated_at = NOW()
+					WHERE artifact_hash = $1 AND sync_status = 'synced' AND dtsh_synced = false
+					  AND status NOT IN ('deleted', 'expired', 'aborted')
+					  AND dtsh_sync_request_id = $2 AND dtsh_sync_node_id = $3
+					  AND tenant_id::text = $4`,
+					assetHash, requestID, reportingNodeID, tenantID, publishDtshKey)
+				if dErr != nil {
+					logger.WithError(dErr).WithField("asset_hash", assetHash).Error("failed to apply dtsh sync")
+					return
+				}
+				dApplied, dRaErr := dRes.RowsAffected()
+				if dRaErr != nil {
+					logger.WithError(dRaErr).WithField("asset_hash", assetHash).Error("failed to read dtsh sync rows affected")
+					return
+				}
+				if dApplied == 0 {
+					// This completion LOST its CAS (a duplicate won, or the row is no longer in the pending-dtsh
+					// state). Any object it published (recorded in the freeze_publication_ledger BEFORE the promote)
+					// is left for reconcileFreezePublicationLedger to collect durably — it is req-aware, so a live
+					// candidate or a still-retrying attempt is never deleted. Roll back and return.
+					logger.WithField("asset_hash", assetHash).Debug("Ignoring sync completion: no in_progress attempt and no pending dtsh transition")
+					return
+				}
+				// The .dtsh index was already PUBLISHED (out of tx) to the fresh publishDtshKey; this transition
+				// flipped active_dtsh_key to it. If it superseded a PREVIOUS .dtsh version, that old index is now
+				// unreferenced — durably enqueue it.
+				if previousActiveDtshKey != "" && previousActiveDtshKey != publishDtshKey {
+					if eErr := EnqueueStagingCleanupTx(ctx, tx, previousActiveDtshKey); eErr != nil {
+						logger.WithError(eErr).WithField("asset_hash", assetHash).Error("failed to enqueue superseded .dtsh cleanup in dtsh sync completion")
+						return
+					}
+				}
+				if chapterID != "" {
+					if frzErr := MarkChapterFrozenTx(ctx, tx, chapterID); frzErr != nil {
+						logger.WithError(frzErr).WithFields(logging.Fields{"chapter_id": chapterID, "artifact_hash": assetHash}).
+							Error("Chapter freeze transition failed in dtsh sync completion")
+						return
+					}
+				}
+				// Durable analytics for the finalization transition, on the same tx (syncLifecycleEvent
+				// was built with finalized=dtshIncluded=true for this path).
+				if lErr := enqueueArtifactStorageLifecycleTx(ctx, tx, syncLifecycleEvent); lErr != nil {
+					logger.WithError(lErr).WithField("asset_hash", assetHash).Error("failed to enqueue storage lifecycle in dtsh sync completion")
+					return
+				}
+				// Durably enqueue the superseded .dtsh staging object for deletion ON this transaction.
+				if eErr := EnqueueStagingCleanupTx(ctx, tx, dtshStagingToCleanup); eErr != nil {
+					logger.WithError(eErr).WithField("asset_hash", assetHash).Error("failed to enqueue .dtsh staging cleanup in dtsh sync completion")
+					return
+				}
+				// This completion's .dtsh candidate is now LIVE (active_dtsh_key) and its staging is enqueued —
+				// clear their publication-ledger rows so the sweep never reconsiders them.
+				if lErr := ClearPublicationLedgerTx(ctx, tx, dtshStagingToCleanup, publishDtshKey); lErr != nil {
+					logger.WithError(lErr).WithField("asset_hash", assetHash).Error("failed to clear publication ledger in dtsh sync completion")
+					return
+				}
+				if cErr := tx.Commit(); cErr != nil {
+					logger.WithError(cErr).WithField("asset_hash", assetHash).Error("failed to commit dtsh sync completion")
+					return
+				}
+				NotifyCatalogDirty()
+				if chapterID != "" {
+					logger.WithFields(logging.Fields{"chapter_id": chapterID, "artifact_hash": assetHash}).
+						Info("Chapter frozen — source segments eligible for reclaim")
+				}
+				logger.WithField("asset_hash", assetHash).Info("Incremental .dtsh sync applied")
+				return
+			}
+			// This attempt LOST the guarded CAS (duplicate/stale/wrong-node). Any main/.dtsh object it published
+			// was recorded in the freeze_publication_ledger BEFORE the promote, so reconcileFreezePublicationLedger
+			// durably collects whichever candidate is orphaned (and its staging) — req-aware, so a live candidate
+			// (a concurrent duplicate that won with the SAME key) or a still-retrying attempt is never deleted.
+			// Nothing to do inline; roll back and return.
+			logger.WithFields(logging.Fields{
+				"asset_hash": assetHash,
+				"request_id": requestID,
+				"node_id":    reportingNodeID,
+			}).Debug("Ignoring sync completion that does not match the outstanding attempt (duplicate/stale/wrong-node)")
+			return
+		}
+
+		// applied == 1: THIS attempt won the CAS and the pointer flip above published the new object. The main
+		// (and any bundled .dtsh) object was already promoted to its fresh candidate key OUTSIDE this
+		// transaction, so nothing overwrites a served object and there is no S3 mutation inside the tx. If this
+		// re-published over a PREVIOUS version (active_object_key changed), that superseded MEDIA object and the
+		// superseded .dtsh index (the OLD active_dtsh_key, when this attempt published a new one) are now
+		// unreferenced — durably enqueue them for cleanup on THIS transaction.
+		if previousActiveKey != "" && previousActiveKey != publishMainKey {
+			supersededKeys := []string{previousActiveKey}
+			if previousActiveDtshKey != "" && previousActiveDtshKey != publishDtshKey {
+				supersededKeys = append(supersededKeys, previousActiveDtshKey)
+			}
+			for _, sk := range supersededKeys {
+				if eErr := EnqueueStagingCleanupTx(ctx, tx, sk); eErr != nil {
+					logger.WithError(eErr).WithField("asset_hash", assetHash).Error("failed to enqueue superseded object cleanup in sync completion")
+					return
+				}
+			}
+		}
+		// When this main upload BUNDLED a .dtsh ($2/dtshIncluded=true), the guarded UPDATE also CLEARED any
+		// overlapping incremental .dtsh attempt's identity (a different request id that was in-flight). That
+		// attempt may have uploaded its .dtsh staging and even promoted its versioned candidate — neither is
+		// derivable once the identity is gone, so enqueue both here. The bundled attempt's own keys use
+		// `requestID` (staging is enqueued as dtshStagingToCleanup; candidate is the new active_dtsh_key we keep).
+		if dtshIncluded && previousDtshReq != "" && previousDtshReq != requestID && syncObjectKey != "" {
+			if eErr := EnqueueDtshAttemptGarbageTx(ctx, tx, syncObjectKey, previousDtshReq); eErr != nil {
+				logger.WithError(eErr).WithField("asset_hash", assetHash).Error("failed to enqueue superseded incremental .dtsh cleanup in sync completion")
+				return
 			}
 		}
 
-	case "evicted_remote":
-		incArtifactSyncOutcome("evicted_remote")
-		// Remote-origin artifact: local copy was deleted, original lives on origin S3.
-		// Mark as synced on S3 and remove this node from warm cache.
-		if err := artifactRepo.SetSyncStatus(ctx, assetHash, "synced", ""); err != nil {
-			logger.WithError(err).Error("Failed to update sync status for evicted remote")
+		// Add this node to cached_nodes (it has a local copy) IN THE SAME TRANSACTION. Pass the synced
+		// size so the row and the emitted node-copy transition carry a real size, not zero.
+		if err := AddCachedNodeCopyTx(ctx, tx, assetHash, reportingNodeID, "", int64(sizeBytes)); err != nil {
+			logger.WithError(err).WithField("asset_hash", assetHash).Error("failed to add cached node copy in sync completion")
+			return
 		}
 
-		if _, dbErr := db.ExecContext(ctx, `
-			UPDATE foghorn.artifacts
-			SET storage_location = 's3',
-			    sync_status = 'synced',
-			    frozen_at = COALESCE(frozen_at, NOW()),
-			    last_sync_attempt = NOW(),
-			    sync_error = NULL,
-			    updated_at = NOW()
-			WHERE artifact_hash = $1`, assetHash); dbErr != nil {
-			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to mark evicted artifact as s3-resident")
+		// For VOD, the s3_key in vod_metadata is the canonical S3 key. On processed-VOD replacement
+		// uploads the derived key differs from the original upload key; persist the new value so relay
+		// reads the synced location, not the original-upload row.
+		if derivedVodKey != "" {
+			if _, dbErr := tx.ExecContext(ctx, `
+				INSERT INTO foghorn.vod_metadata (artifact_hash, s3_key, filename)
+				VALUES ($1, $2, $3)
+				ON CONFLICT (artifact_hash) DO UPDATE SET s3_key = EXCLUDED.s3_key`,
+				assetHash, derivedVodKey, assetHash+"."+format); dbErr != nil {
+				logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to update vod_metadata.s3_key in sync completion")
+				return
+			}
 		}
 
-		if _, dbErr := db.ExecContext(ctx, `
-			DELETE FROM foghorn.artifact_nodes
-			WHERE artifact_hash = $1 AND node_id = $2`, assetHash, reportingNodeID); dbErr != nil {
-			logger.WithError(dbErr).WithFields(logging.Fields{"asset_hash": assetHash, "node_id": reportingNodeID}).Error("failed to remove cached node after eviction")
+		// Chapter artifacts (origin_type='dvr_chapter') advance finalized → frozen once both
+		// sync_status AND dtsh_synced are true, atomically with this completion. This is the trigger
+		// the reclaim sweep waits on; without it source TS segments stay pinned.
+		if chapterID != "" {
+			if frzErr := MarkChapterFrozenTx(ctx, tx, chapterID); frzErr != nil {
+				logger.WithError(frzErr).WithFields(logging.Fields{
+					"chapter_id":    chapterID,
+					"artifact_hash": assetHash,
+				}).Error("Chapter freeze transition failed in sync completion")
+				return
+			}
 		}
 
-		// Remove from in-memory + Redis so routing stops directing to this node
-		state.DefaultManager().RemoveNodeArtifact(reportingNodeID, assetHash)
+		// Durable storage-state analytics: enqueue the pre-built lifecycle event onto THIS transaction,
+		// so the S3 transition and its stats record commit together (no fire-and-forget loss).
+		if lErr := enqueueArtifactStorageLifecycleTx(ctx, tx, syncLifecycleEvent); lErr != nil {
+			logger.WithError(lErr).WithField("asset_hash", assetHash).Error("failed to enqueue storage lifecycle in sync completion")
+			return
+		}
+
+		// The staging objects are now superseded by the promoted canonical copies. Enqueue their deletion ON
+		// THIS transaction so cleanup is DURABLE: a crash between the promote and commit leaves the staging
+		// bytes for an idempotent retry, and once committed the StagingCleanupJob deletes them with retries
+		// from the durable queue (never a one-shot best-effort delete that leaks storage on failure).
+		for _, sk := range []string{stagingToCleanup, dtshStagingToCleanup} {
+			if eErr := EnqueueStagingCleanupTx(ctx, tx, sk); eErr != nil {
+				logger.WithError(eErr).WithField("asset_hash", assetHash).Error("failed to enqueue staging cleanup in sync completion")
+				return
+			}
+		}
+
+		// This completion's published candidates are now LIVE (active_object_key / active_dtsh_key) and its
+		// staging objects are enqueued above — clear their publication-ledger rows on THIS transaction so the
+		// sweep never reconsiders them. Deletes strictly by object_key, so an orphaned .dtsh candidate from a
+		// mixed-duplicate peer completion keeps its own ledger row for the sweep.
+		if lErr := ClearPublicationLedgerTx(ctx, tx, stagingToCleanup, dtshStagingToCleanup, publishMainKey, publishDtshKey); lErr != nil {
+			logger.WithError(lErr).WithField("asset_hash", assetHash).Error("failed to clear publication ledger in sync completion")
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			logger.WithError(err).WithField("asset_hash", assetHash).Error("failed to commit sync completion")
+			return
+		}
+
+		// The durable S3 lifecycle is now committed on the authoritative foghorn.artifacts row; the
+		// artifact reconciler is the single writer that projects it onto the Commodore catalog. Kick it
+		// explicitly on this committed change so the catalog reflects 'synced' promptly.
+		NotifyCatalogDirty()
+		if chapterID != "" {
+			logger.WithFields(logging.Fields{
+				"chapter_id":    chapterID,
+				"artifact_hash": assetHash,
+			}).Info("Chapter frozen — source segments eligible for reclaim")
+		}
 
 		logger.WithFields(logging.Fields{
-			"asset_hash": assetHash,
-			"node_id":    reportingNodeID,
-		}).Info("Remote artifact evicted locally, marked as S3-resident")
-		emitArtifactStorageStateLifecycle(ctx, logger, artifactStorageStateLifecycle{
-			artifactHash:    assetHash,
-			nodeID:          reportingNodeID,
-			storageLocation: "s3",
-			syncStatus:      "synced",
-			hot:             false,
-			synced:          true,
-			finalized:       false,
-			frozen:          true,
-		})
+			"asset_hash":    assetHash,
+			"s3_url":        s3URL,
+			"node_id":       reportingNodeID,
+			"dtsh_included": dtshIncluded,
+		}).Info("Asset synced to S3, local copy retained")
+		// (The storage-state analytics event was enqueued durably inside the committed transaction above.)
+
+		// (A re-published VOD's superseded object is enqueued durably via previousActiveKey in the transaction
+		// above — no best-effort post-commit delete.)
 
 	default:
-		// Sync failed. local_missing=true is terminal lost_local; transient
-		// failures stay 'failed' and are retried with backoff/cap.
-		newSyncStatus := "failed"
-		if complete.GetLocalMissing() {
-			newSyncStatus = "lost_local"
+		// A .dtsh sync failure reports through this same path (dtsh_included=false) and runs on an
+		// already-synced row, so it NEVER matches the main-upload attempt guard. Attribute it to the
+		// persisted DTSH attempt FIRST (tenant-scoped); only a completion that is NOT a known dtsh
+		// attempt falls through to the main-upload failure guard. The failure tenant is the identity-resolved
+		// owner (ownerTenant), NOT an ad-hoc unscoped hash lookup — both failure guards are tenant-scoped.
+		if applyDtshCompletionFailure(ctx, assetHash, reportingNodeID, requestID, errorMsg, ownerTenant, logger) {
+			break
 		}
-		incArtifactSyncOutcome(newSyncStatus)
-		if err := artifactRepo.SetSyncStatus(ctx, assetHash, newSyncStatus, ""); err != nil {
-			logger.WithError(err).Error("Failed to update sync status to " + newSyncStatus)
+		// Shared guarded failure path. Applied only on a real, attempt-matched transition.
+		if applySyncCompletionFailure(ctx, assetHash, reportingNodeID, requestID, errorMsg, ownerTenant, complete.GetLocalMissing(), logger) {
+			logger.WithFields(logging.Fields{"asset_hash": assetHash, "error": errorMsg}).Warn("Asset sync to S3 failed")
 		}
-
-		if _, dbErr := db.ExecContext(ctx, `
-			UPDATE foghorn.artifacts
-			SET storage_location = 'local',
-			    sync_status = $3,
-			    status = CASE WHEN $3 = 'lost_local' THEN 'failed' ELSE status END,
-			    sync_error = NULLIF($1,''),
-			    last_sync_attempt = NOW(),
-			    failure_count = CASE WHEN $3 = 'failed' THEN failure_count + 1 ELSE failure_count END,
-			    updated_at = NOW()
-			WHERE artifact_hash = $2`,
-			errorMsg, assetHash, newSyncStatus); dbErr != nil {
-			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to record sync failure")
-		}
-
-		logger.WithFields(logging.Fields{
-			"asset_hash": assetHash,
-			"error":      errorMsg,
-		}).Warn("Asset sync to S3 failed")
 	}
+}
+
+// applySyncCompletionFailure applies a failed / lost_local sync completion as ONE guarded transaction,
+// shared by the SyncComplete failure paths. It locks and verifies the EXACT outstanding
+// attempt (in_progress + request id + node — no null wildcard, so an unauthenticated/legacy-null row
+// cannot be completed; stale recovery returns such rows to retryable). local_missing is a per-NODE
+// fact: it orphans THIS node's copy and declares terminal lost_local ONLY when no other complete copy
+// survives, otherwise retryable 'failed'. Returns applied=true only on a real transition, so callers
+// run post-completion side effects (S3 cleanup) ONLY for a completion that actually matched — never
+// for a duplicate/stale/wrong-node one.
+func applySyncCompletionFailure(ctx context.Context, assetHash, reportingNodeID, requestID, errorMsg, ownerTenant string, localMissing bool, logger logging.Logger) (applied bool) {
+	if db == nil {
+		incArtifactSyncOutcome("failed")
+		return false
+	}
+	if strings.TrimSpace(ownerTenant) == "" {
+		// No identity-resolved owner tenant → cannot tenant-scope the guard; fail closed (a settlement is
+		// never applied unscoped).
+		return false
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		logger.WithError(err).WithField("asset_hash", assetHash).Error("failed to begin sync failure tx")
+		return false
+	}
+	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
+
+	// Guard FIRST: lock the row and verify it is the EXACT outstanding attempt (request id + node) while
+	// still in_progress, BEFORE any orphaning — that exact match is the authorization, so a
+	// stale/unauthenticated/wrong-node completion never drops a copy or mutates state. The lock reads the
+	// artifact owner (tenant_id), which scopes the terminal UPDATE below as partition scoping. A query
+	// error rejects the completion (fail closed).
+	var lockedTenant, lockedObjectKey string
+	guardErr := tx.QueryRowContext(ctx, `
+		SELECT COALESCE(tenant_id::text,''), COALESCE(sync_object_key,'') FROM foghorn.artifacts
+		WHERE artifact_hash = $1
+		  AND tenant_id::text = $4
+		  AND status NOT IN ('deleted', 'expired', 'aborted')
+		  AND sync_status = 'in_progress'
+		  AND sync_request_id = $2
+		  AND sync_node_id = $3
+		FOR UPDATE`, assetHash, requestID, reportingNodeID, ownerTenant).Scan(&lockedTenant, &lockedObjectKey)
+	if errors.Is(guardErr, sql.ErrNoRows) {
+		logger.WithFields(logging.Fields{"asset_hash": assetHash, "request_id": requestID, "node_id": reportingNodeID}).
+			Debug("Ignoring failure completion that does not match the outstanding attempt (duplicate/stale/wrong-node)")
+		return false
+	}
+	if guardErr != nil {
+		logger.WithError(guardErr).WithField("asset_hash", assetHash).Error("failed to lock artifact for sync failure")
+		return false
+	}
+
+	newSyncStatus := "failed"
+	if localMissing {
+		// Drop the failed node's copy (emit LOST) atomically, then check whether any OTHER node still
+		// holds a present, complete copy.
+		if delErr := DeleteNodeArtifactTx(ctx, tx, assetHash, reportingNodeID, time.Now().UnixMilli()); delErr != nil {
+			logger.WithError(delErr).WithField("asset_hash", assetHash).Error("failed to orphan local_missing node copy")
+			return false
+		}
+		var otherComplete int
+		if cErr := tx.QueryRowContext(ctx, `
+			SELECT count(*) FROM foghorn.artifact_nodes
+			WHERE artifact_hash = $1 AND node_id <> $2 AND is_orphaned = false AND is_complete = true`,
+			assetHash, reportingNodeID).Scan(&otherComplete); cErr != nil {
+			logger.WithError(cErr).WithField("asset_hash", assetHash).Error("failed to count surviving copies")
+			return false
+		}
+		if otherComplete == 0 {
+			newSyncStatus = "lost_local" // no viable source remains → terminal
+		}
+	}
+	incArtifactSyncOutcome(newSyncStatus)
+
+	// The row is already locked+guarded above; this UPDATE keys on the hash under the artifact-owner
+	// tenant (tenant_id = $4, partition scoping from the locked row). The attempt identity is cleared.
+	if _, uErr := tx.ExecContext(ctx, `
+		UPDATE foghorn.artifacts
+		SET storage_location = 'local',
+		    sync_status = $2::text,
+		    status = CASE WHEN $2::text = 'lost_local' THEN 'failed' ELSE status END,
+		    sync_error = NULLIF($3,''),
+		    last_sync_attempt = NOW(),
+		    failure_count = CASE WHEN $2::text = 'failed' THEN failure_count + 1 ELSE failure_count END,
+		    sync_request_id = NULL,
+		    sync_node_id = NULL,
+		    updated_at = NOW()
+		WHERE artifact_hash = $1 AND tenant_id::text = $4`, assetHash, newSyncStatus, errorMsg, lockedTenant); uErr != nil {
+		logger.WithError(uErr).WithField("asset_hash", assetHash).Error("failed to record sync failure")
+		return false
+	}
+	// This failure WON the row lock, so the concurrent SUCCESS (if any) for the SAME attempt lost its CAS. The
+	// success may have already PUBLISHED its candidate objects (main + .dtsh) outside its transaction — and its
+	// own lost-CAS cleanup is only best-effort. So durably enqueue, ON this transaction, BOTH the attempt's
+	// staging objects AND its published candidates (all deterministic from lockedObjectKey + requestID). The
+	// identity is cleared here, so no future attempt reuses these keys. Descriptor-less rows enqueue nothing.
+	if lockedObjectKey != "" {
+		for _, key := range []string{
+			FreezeStagingKey(lockedObjectKey, requestID),
+			FreezeStagingKey(lockedObjectKey+".dtsh", requestID),
+			FreezePublishKey(lockedObjectKey, requestID),
+			FreezePublishDtshKey(lockedObjectKey, requestID),
+		} {
+			if eErr := EnqueueStagingCleanupTx(ctx, tx, key); eErr != nil {
+				logger.WithError(eErr).WithField("asset_hash", assetHash).Error("failed to enqueue cleanup on sync failure")
+				return false
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		logger.WithError(err).WithField("asset_hash", assetHash).Error("failed to commit sync failure")
+		return false
+	}
+	// lost_local means nothing was uploaded from this node — the caller must not run S3 cleanup.
+	return newSyncStatus == "failed"
 }
 
 type artifactStorageStateLifecycle struct {
@@ -6012,9 +7116,15 @@ type artifactStorageStateLifecycle struct {
 	frozen          bool
 }
 
-func emitArtifactStorageStateLifecycle(ctx context.Context, logger logging.Logger, state artifactStorageStateLifecycle) {
-	if decklogClient == nil || state.artifactHash == "" {
-		return
+// buildArtifactStorageLifecycleEvent enriches + constructs the storage-state lifecycle proto for a
+// successful S3 state transition WITHOUT Decklog gating and WITHOUT emitting. The caller enqueues the
+// returned event through its OWN transaction (durable outbox via enqueueArtifactStorageLifecycleTx),
+// so a committed S3 transition can never be lost to a disconnected drain client or a process exit.
+// Enrichment (identity resolve, dtsh lookup) runs here, BEFORE the caller opens its transaction, so no
+// network/DB round-trip is held during the commit. Returns nil for an unknown/unresolved type.
+func buildArtifactStorageLifecycleEvent(ctx context.Context, state artifactStorageStateLifecycle) any {
+	if state.artifactHash == "" {
+		return nil
 	}
 	if state.frozen && state.synced && !state.finalized {
 		state.finalized = dtshSyncedForArtifact(ctx, state.artifactHash)
@@ -6034,10 +7144,9 @@ func emitArtifactStorageStateLifecycle(ctx context.Context, logger logging.Logge
 			state.streamID = streamID
 		}
 	}
-
 	switch state.artifactType {
 	case "clip":
-		data := &ipcpb.ClipLifecycleData{
+		return &ipcpb.ClipLifecycleData{
 			Stage:              ipcpb.ClipLifecycleData_STAGE_DONE,
 			ClipHash:           state.artifactHash,
 			S3Url:              stringPtrIfNotEmpty(state.s3URL),
@@ -6048,16 +7157,14 @@ func emitArtifactStorageStateLifecycle(ctx context.Context, logger logging.Logge
 			StreamInternalName: stringPtrIfNotEmpty(state.streamInternal),
 			StorageLocation:    stringPtrIfNotEmpty(state.storageLocation),
 			SyncStatus:         stringPtrIfNotEmpty(state.syncStatus),
-			IsHot:              boolPtr(state.hot),
+			HasLocalCopy:       boolPtr(state.hot),
 			IsSynced:           boolPtr(state.synced),
 			IsFinalized:        boolPtr(state.finalized),
-			IsFrozen:           boolPtr(state.frozen),
 			ProgressPercent:    uint32Ptr(100),
 			CompletedAt:        int64Ptr(time.Now().Unix()),
 		}
-		go artifactoutbox.EnqueueClipLifecycleLogged(data)
 	case "vod":
-		data := &ipcpb.VodLifecycleData{
+		return &ipcpb.VodLifecycleData{
 			Status:          ipcpb.VodLifecycleData_STATUS_COMPLETED,
 			VodHash:         state.artifactHash,
 			S3Url:           stringPtrIfNotEmpty(state.s3URL),
@@ -6066,16 +7173,14 @@ func emitArtifactStorageStateLifecycle(ctx context.Context, logger logging.Logge
 			TenantId:        stringPtrIfNotEmpty(state.tenantID),
 			StorageLocation: stringPtrIfNotEmpty(state.storageLocation),
 			SyncStatus:      stringPtrIfNotEmpty(state.syncStatus),
-			IsHot:           boolPtr(state.hot),
+			HasLocalCopy:    boolPtr(state.hot),
 			IsSynced:        boolPtr(state.synced),
 			IsFinalized:     boolPtr(state.finalized),
-			IsFrozen:        boolPtr(state.frozen),
 			ProgressPct:     int32Ptr(100),
 			CompletedAt:     int64Ptr(time.Now().Unix()),
 		}
-		go artifactoutbox.EnqueueVodLifecycleLogged(data)
 	case "dvr":
-		data := &ipcpb.DVRLifecycleData{
+		return &ipcpb.DVRLifecycleData{
 			Status:             ipcpb.DVRLifecycleData_STATUS_STOPPED,
 			DvrHash:            state.artifactHash,
 			SizeBytes:          uint64PtrIfNonZero(state.sizeBytes),
@@ -6085,14 +7190,40 @@ func emitArtifactStorageStateLifecycle(ctx context.Context, logger logging.Logge
 			StreamInternalName: stringPtrIfNotEmpty(state.streamInternal),
 			StorageLocation:    stringPtrIfNotEmpty(state.storageLocation),
 			SyncStatus:         stringPtrIfNotEmpty(state.syncStatus),
-			IsHot:              boolPtr(state.hot),
+			HasLocalCopy:       boolPtr(state.hot),
 			IsSynced:           boolPtr(state.synced),
 			IsFinalized:        boolPtr(state.finalized),
-			IsFrozen:           boolPtr(state.frozen),
 		}
-		go artifactoutbox.EnqueueDVRLifecycleLogged(data)
 	default:
-		logger.WithFields(logging.Fields{"artifact_hash": state.artifactHash, "artifact_type": state.artifactType}).Debug("Skipping storage state lifecycle for unknown artifact type")
+		return nil
+	}
+}
+
+// enqueueArtifactStorageLifecycleTx writes a pre-built storage-state lifecycle event onto the caller's
+// transaction, so it commits atomically with the S3 state change. Delivery is the drain worker's job;
+// Decklog connectivity affects DRAINING, not capture.
+func enqueueArtifactStorageLifecycleTx(ctx context.Context, tx *sql.Tx, event any) error {
+	switch e := event.(type) {
+	case *ipcpb.ClipLifecycleData:
+		if e.GetTenantId() == "" {
+			return fmt.Errorf("clip storage lifecycle event for %s missing tenant — refusing to commit state without an attributable analytics event", e.GetClipHash())
+		}
+		return artifactoutbox.EnqueueClipLifecycleTx(ctx, tx, e)
+	case *ipcpb.VodLifecycleData:
+		if e.GetTenantId() == "" {
+			return fmt.Errorf("vod storage lifecycle event for %s missing tenant — refusing to commit state without an attributable analytics event", e.GetVodHash())
+		}
+		return artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, e)
+	case *ipcpb.DVRLifecycleData:
+		if e.GetTenantId() == "" {
+			return fmt.Errorf("dvr storage lifecycle event for %s missing tenant — refusing to commit state without an attributable analytics event", e.GetDvrHash())
+		}
+		return artifactoutbox.EnqueueDVRLifecycleTx(ctx, tx, e)
+	default:
+		// A nil or unknown event means buildArtifactStorageLifecycleEvent couldn't resolve the
+		// artifact's type/identity. The promised analytics record can't be produced, so the state
+		// transaction must NOT commit silently without it — roll back and let the completion retry.
+		return fmt.Errorf("unresolved storage lifecycle event (%T) — refusing to commit S3 state change without its analytics record", event)
 	}
 }
 
@@ -6808,7 +7939,48 @@ func sendEdgeMistAdminSessionResponse(requestID string, stream ipcpb.HelmsmanCon
 // presigned PUT URLs for each thumbnail file, and sends them back to Helmsman.
 // S3 keys use stable identifiers: stream_id (UUID) for live streams,
 // artifact_hash (32-char hex) for artifacts. Never playback_id (rotatable).
-func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadRequest, nodeID string, stream ipcpb.HelmsmanControl_ConnectServer, logger logging.Logger) {
+// nodeProducesThumbnailResource reports whether nodeID is actually serving/producing the resource a thumbnail
+// PUT would overwrite — the per-resource task authorization that keeps a merely tenant-entitled node from
+// naming a resource it isn't running. FAIL CLOSED on every unproven case. Live: the node must be running the
+// stream (in-memory stream instances). Artifacts (vod/dvr/processing): it must hold a non-orphaned copy OR be
+// the artifact's assigned processing node (the copy may not be registered yet during processing).
+func nodeProducesThumbnailResource(ctx context.Context, nodeID string, kind streamident.Kind, isLive bool, streamInternalName, resourceKey, tenantID string) bool {
+	if strings.TrimSpace(nodeID) == "" || strings.TrimSpace(resourceKey) == "" || strings.TrimSpace(tenantID) == "" {
+		return false
+	}
+	if isLive {
+		_, ok := state.DefaultManager().GetStreamInstances(streamInternalName)[nodeID]
+		return ok
+	}
+	switch kind {
+	case streamident.KindArtifactVOD, streamident.KindArtifactDVR, streamident.KindArtifactProcessing:
+		conn := GetDB()
+		if conn == nil {
+			return false
+		}
+		// TENANT-SCOPED so a hash collision across tenants can't cross-authorize. A serving node must hold a
+		// COMPLETE, non-orphaned copy; a processing node must be the artifact's assigned processor. Both are
+		// scoped to the resolved tenant.
+		var ok bool
+		if err := conn.QueryRowContext(ctx, `
+			SELECT EXISTS (SELECT 1 FROM foghorn.artifact_nodes an
+			                JOIN foghorn.artifacts a ON a.artifact_hash = an.artifact_hash
+			                WHERE an.artifact_hash = $1 AND an.node_id = $2
+			                  AND an.is_complete = true AND an.is_orphaned = false
+			                  AND a.tenant_id::text = $3)
+			    OR EXISTS (SELECT 1 FROM foghorn.processing_jobs
+			                WHERE artifact_hash = $1 AND processing_node_id = $2
+			                  AND tenant_id::text = $3
+			                  AND status IN ('dispatched', 'processing'))`, resourceKey, nodeID, tenantID).Scan(&ok); err != nil {
+			return false
+		}
+		return ok
+	default:
+		return false
+	}
+}
+
+func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadRequest, nodeID string, connProtocolVersion int32, stream ipcpb.HelmsmanControl_ConnectServer, logger logging.Logger) {
 	internalName := req.GetInternalName()
 	filePaths := req.GetFilePaths()
 
@@ -6817,6 +7989,18 @@ func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadR
 		"file_count":    len(filePaths),
 		"node_id":       nodeID,
 	}).Info("Processing thumbnail upload request")
+
+	// Strict protocol gate (fail closed, no legacy path): only a sidecar that declares the staged-thumbnail
+	// protocol uploads to the per-attempt staging keys and echoes the attempt id at completion. A sidecar below
+	// it could neither be verified nor bound to the publication CAS, so it gets NO mint.
+	if connProtocolVersion < ThumbnailStagedProtocolMin {
+		logger.WithFields(logging.Fields{
+			"internal_name":    internalName,
+			"node_id":          nodeID,
+			"protocol_version": connProtocolVersion,
+		}).Warn("Thumbnail upload denied: sidecar control-protocol version below staged-thumbnail minimum")
+		return
+	}
 
 	// Note: s3Client nil-check moved to inside the StorageMintLocal branch
 	// so a self-host pool with no local S3 can still federate to platform
@@ -7010,15 +8194,57 @@ func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadR
 		return
 	}
 
-	// Run the same storage resolver used by freeze and CreateVodUpload.
-	// Without a tenant, thumbOriginCluster/localClusterID are the only
-	// available storage ownership signals.
-	storageCluster, mintMode := resolveThumbnailStorageCluster(context.Background(), thumbTenantID, thumbOriginCluster)
+	// Authorize the reporting node for the resolved tenant BEFORE minting any overwrite-capable PUT URL: a node
+	// not entitled to this tenant must not obtain write URLs for its fixed-key thumbnail objects merely by
+	// naming a stream/artifact it does not own (same authority model as relay resolve, nodeMayServeTenant).
+	// Fail closed: an unresolved (empty) tenant is denied.
+	if !nodeMayServeTenant(nodeID, thumbTenantID) {
+		logger.WithFields(logging.Fields{
+			"internal_name": internalName,
+			"tenant_id":     thumbTenantID,
+			"node_id":       nodeID,
+		}).Warn("Thumbnail upload denied: reporting node is not authorized for the resolved tenant")
+		return
+	}
 
-	expiry := 15 * time.Minute
-	resp := &ipcpb.ThumbnailUploadResponse{
-		ThumbnailKey: thumbnailKey,
-		Uploads:      make([]*ipcpb.ThumbnailUploadResponse_PresignedUpload, 0, len(filePaths)),
+	// Beyond tenant authority, require the reporting node to actually PRODUCE the named resource: a fixed-key,
+	// overwrite-capable PUT must not be mintable by a tenant-entitled node (e.g. a tenantless platform-shared
+	// edge) merely for NAMING a resource it is not serving/processing. Live: the node must be running the
+	// stream; artifacts: it must hold a complete copy (serving) or be its assigned processing node. Fail closed.
+	ownCtx, ownCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	produces := nodeProducesThumbnailResource(ownCtx, nodeID, parsed.Kind, isLive, streamInternalName, thumbnailKey, thumbTenantID)
+	ownCancel()
+	if !produces {
+		logger.WithFields(logging.Fields{
+			"internal_name": internalName,
+			"thumbnail_key": thumbnailKey,
+			"node_id":       nodeID,
+		}).Warn("Thumbnail upload denied: reporting node does not serve/produce the named resource")
+		return
+	}
+
+	// Run the same official-durable storage resolver used by freeze and CreateVodUpload: the destination is the
+	// tenant's official cluster; the origin cluster is attribution only, never a durable-write candidate.
+	storageCluster, mintMode := resolveThumbnailStorageCluster(context.Background(), thumbTenantID, thumbOriginCluster)
+	if mintMode == storage.StorageUnavailable {
+		logger.WithFields(logging.Fields{
+			"internal_name":  internalName,
+			"tenant_id":      thumbTenantID,
+			"origin_cluster": thumbOriginCluster,
+		}).Warn("Storage resolver returned unavailable for thumbnail upload — dropping")
+		return
+	}
+	// FAIL CLOSED on a remote (federated) destination: completion verifies + promotes only through the LOCAL S3
+	// client, so a federated attempt would upload to a remote staging key that this cell can never HEAD/promote —
+	// the attempt would strand and its remote objects leak. A destination-side attest/promote/settle path does
+	// not exist, so this cell never mints a federated thumbnail attempt. This is BEFORE the attempt is minted.
+	if mintMode == storage.StorageMintViaFederation {
+		logger.WithFields(logging.Fields{
+			"internal_name":   internalName,
+			"tenant_id":       thumbTenantID,
+			"storage_cluster": storageCluster,
+		}).Warn("Thumbnail durable destination is a remote cell; federated thumbnail publication is not yet supported — dropping (fail closed)")
+		return
 	}
 
 	allowedThumbnailFiles := map[string]bool{
@@ -7026,94 +8252,97 @@ func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadR
 		"sprite.jpg": true,
 		"sprite.vtt": true,
 	}
+	// Dedupe to the allowlisted files this batch will publish, keeping the first local path per file.
+	type thumbFileTarget struct{ fileName, localPath string }
+	var targets []thumbFileTarget
+	seenFile := map[string]bool{}
+	for _, fp := range filePaths {
+		fileName := filepath.Base(fp)
+		if !allowedThumbnailFiles[fileName] {
+			logger.WithField("file_name", fileName).Warn("Rejected thumbnail filename not in allowlist")
+			continue
+		}
+		if seenFile[fileName] {
+			continue
+		}
+		seenFile[fileName] = true
+		targets = append(targets, thumbFileTarget{fileName: fileName, localPath: fp})
+	}
+	if len(targets) == 0 {
+		logger.Warn("No allowlisted thumbnail files in upload request")
+		return
+	}
+
+	// Mint the server-owned attempt and persist the assignment + per-file STAGING object rows BEFORE handing
+	// any presigned URL. The node uploads to per-attempt staging keys and echoes attempt_id at completion, so
+	// the completion binds a Foghorn-ASSIGNED operation. Fail closed on a crypto/rand or claim failure.
+	attemptID := mintAttemptID()
+	if attemptID == "" {
+		logger.Error("Failed to mint thumbnail attempt id; dropping")
+		return
+	}
+	fileNames := make([]string, 0, len(targets))
+	for _, t := range targets {
+		fileNames = append(fileNames, t.fileName)
+	}
+	expiry := 15 * time.Minute
+	claimCtx, claimCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	claimed, claimErr := ClaimThumbnailAttempt(claimCtx, GetDB(), attemptID, thumbTenantID, thumbnailKey, nodeID, storageCluster, fileNames, time.Now().Add(expiry))
+	claimCancel()
+	if claimErr != nil || !claimed {
+		logger.WithError(claimErr).WithFields(logging.Fields{
+			"internal_name": internalName,
+			"thumbnail_key": thumbnailKey,
+			"attempt_id":    attemptID,
+		}).Warn("Failed to claim thumbnail attempt; dropping (a stuck assignment is swept by the reconciler)")
+		return
+	}
+
+	resp := &ipcpb.ThumbnailUploadResponse{
+		ThumbnailKey: thumbnailKey,
+		AttemptId:    attemptID,
+		Uploads:      make([]*ipcpb.ThumbnailUploadResponse_PresignedUpload, 0, len(targets)),
+	}
 
 	switch mintMode {
-	case storage.StorageUnavailable:
-		logger.WithFields(logging.Fields{
-			"internal_name":  internalName,
-			"tenant_id":      thumbTenantID,
-			"origin_cluster": thumbOriginCluster,
-		}).Warn("Storage resolver returned unavailable for thumbnail upload — dropping")
-		return
-
 	case storage.StorageMintViaFederation:
-		if storageMintDelegate == nil {
-			logger.WithField("storage_cluster", storageCluster).Warn("Federated thumbnail mint required but no delegate wired — dropping")
-			return
-		}
-		// streamInternalName goes on the request only for live thumbs so
-		// the callee can verify tenant via stream state. For vod+ the
-		// callee verifies via foghorn.artifacts WHERE artifact_hash =
-		// <key prefix>.
-		streamCtxName := ""
-		if isLive {
-			streamCtxName = streamInternalName
-		}
-		for _, fp := range filePaths {
-			fileName := filepath.Base(fp)
-			if !allowedThumbnailFiles[fileName] {
-				logger.WithField("file_name", fileName).Warn("Rejected thumbnail filename not in allowlist")
-				continue
-			}
-			mintReq := &foghornfederationpb.MintStorageURLsRequest{
-				TenantId:           thumbTenantID,
-				RequestingCluster:  localClusterID,
-				TargetClusterId:    storageCluster,
-				ArtifactType:       "thumbnail",
-				ArtifactKey:        thumbnailKey + "/" + fileName,
-				Op:                 foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
-				ContentType:        thumbnailContentType(fileName),
-				StreamInternalName: streamCtxName,
-			}
-			mintResp, mintErr := storageMintDelegate(context.Background(), storageCluster, mintReq)
-			if mintErr != nil || mintResp == nil || !mintResp.GetAccepted() {
-				logger.WithError(mintErr).WithFields(logging.Fields{
-					"file_name":       fileName,
-					"storage_cluster": storageCluster,
-				}).Warn("Federated MintStorageURLs failed for thumbnail")
-				continue
-			}
-			resp.Uploads = append(resp.Uploads, &ipcpb.ThumbnailUploadResponse_PresignedUpload{
-				FileName:     fileName,
-				PresignedUrl: mintResp.GetPresignedPutUrl(),
-				S3Key:        mintResp.GetS3Key(),
-				LocalPath:    fp,
-			})
-		}
+		// Unreachable: federated destinations are rejected above (fail closed) because completion can only
+		// verify/promote locally. Guard defensively so a future resolver change can never silently hand out
+		// remote staging URLs that strand.
+		logger.WithField("storage_cluster", storageCluster).Error("Federated thumbnail mint reached the mint switch; dropping (must be rejected before claim)")
+		return
 
 	default: // StorageMintLocal
 		if s3Client == nil {
 			logger.Warn("S3 client not configured, ignoring thumbnail upload request")
 			return
 		}
-		for _, fp := range filePaths {
-			fileName := filepath.Base(fp)
-			if !allowedThumbnailFiles[fileName] {
-				logger.WithField("file_name", fileName).Warn("Rejected thumbnail filename not in allowlist")
-				continue
-			}
-			s3Key := "thumbnails/" + thumbnailKey + "/" + fileName
-
-			presignedURL, err := s3Client.GeneratePresignedPUT(s3Key, expiry)
+		// ALL-OR-NOTHING: prepare a presigned URL for EVERY object; a single failure fails the whole attempt so
+		// the node never receives a partial assignment (which the completion could never fully verify).
+		for _, t := range targets {
+			stagingKey := ThumbnailStagingKey(thumbnailKey, attemptID, t.fileName)
+			presignedURL, err := s3Client.GeneratePresignedPUT(stagingKey, expiry)
 			if err != nil {
-				logger.WithFields(logging.Fields{
-					"file_name": fileName,
-					"s3_key":    s3Key,
-					"error":     err,
-				}).Error("Failed to generate presigned PUT URL for thumbnail")
-				continue
+				logger.WithFields(logging.Fields{"file_name": t.fileName, "s3_key": stagingKey, "error": err}).
+					Error("Failed to presign a thumbnail object; failing the whole attempt (no partial assignment)")
+				failCtx, failCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				if fErr := FailThumbnailAttempt(failCtx, GetDB(), attemptID); fErr != nil {
+					logger.WithError(fErr).WithField("attempt_id", attemptID).Warn("Failed to fail thumbnail attempt after presign error; recovery will sweep on lease expiry")
+				}
+				failCancel()
+				return
 			}
 			resp.Uploads = append(resp.Uploads, &ipcpb.ThumbnailUploadResponse_PresignedUpload{
-				FileName:     fileName,
+				FileName:     t.fileName,
 				PresignedUrl: presignedURL,
-				S3Key:        s3Key,
-				LocalPath:    fp,
+				S3Key:        stagingKey,
+				LocalPath:    t.localPath,
 			})
 		}
 	}
 
-	if len(resp.Uploads) == 0 {
-		logger.Warn("No presigned URLs generated for thumbnail upload")
+	if len(resp.Uploads) != len(targets) {
+		logger.Warn("Not every thumbnail object was presigned; not dispatching a partial assignment")
 		return
 	}
 
@@ -7127,30 +8356,221 @@ func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadR
 	}
 }
 
-// processThumbnailUploaded handles confirmation after Helmsman uploads thumbnail
-// files to S3. For artifact thumbnails (DVR/clip), marks has_thumbnails=true.
-// Stream thumbnails need no DB update — the frontend resolves them via
-// deterministic Chandler URL from assetsDomain + stream_id.
+// processThumbnailUploaded handles the confirmation after Helmsman uploads a thumbnail attempt's files to their
+// per-attempt STAGING keys. It binds the confirmation to the server-minted assignment (echoed attempt_id),
+// HEAD-verifies + promotes each staged object to its IMMUTABLE version key, then flips the tenant-scoped active
+// pointer via the guarded CAS. There is no legacy fixed-key completion: a confirm without an attempt id is
+// dropped.
 func processThumbnailUploaded(req *ipcpb.ThumbnailUploaded, nodeID string, logger logging.Logger) {
-	thumbnailKey := req.GetThumbnailKey()
-	s3Keys := req.GetS3Keys()
+	attemptID := req.GetAttemptId()
+	if strings.TrimSpace(attemptID) == "" {
+		logger.WithField("thumbnail_key", req.GetThumbnailKey()).
+			Warn("Thumbnail confirm without attempt_id; dropping (staged publication requires the server-minted attempt)")
+		return
+	}
+	completeThumbnailPublication(context.Background(), attemptID, req.GetThumbnailKey(), nodeID, logger)
+}
 
-	logger.WithFields(logging.Fields{
-		"thumbnail_key": thumbnailKey,
-		"s3_keys":       s3Keys,
-		"node_id":       nodeID,
-	}).Debug("Thumbnail upload confirmed")
+// completeThumbnailPublication drives one attempt from verified staging to a published active pointer. Every
+// non-terminal exit leaves the attempt for the recovery reconciler (a transient S3/DB error is retried; a
+// missing staged object is swept after expiry) — it never publishes a partial or unverified set.
+func completeThumbnailPublication(ctx context.Context, attemptID, echoedKey, nodeID string, logger logging.Logger) {
+	dbh := GetDB()
+	a, objs, found, err := LoadThumbnailAttempt(ctx, dbh, attemptID)
+	if err != nil {
+		logger.WithError(err).WithField("attempt_id", attemptID).Warn("Thumbnail completion: load attempt failed; leaving for recovery")
+		return
+	}
+	if !found {
+		logger.WithField("attempt_id", attemptID).Warn("Thumbnail completion: unknown or expired-swept attempt; dropping")
+		return
+	}
+	// Bind the confirmation to the ASSIGNED node + asset — a node must not complete another node's attempt, and
+	// the echoed key must match the assignment. Fail closed on mismatch.
+	if a.NodeID != nodeID {
+		logger.WithFields(logging.Fields{"attempt_id": attemptID, "assigned_node": a.NodeID, "reporting_node": nodeID}).
+			Warn("Thumbnail completion: reporting node is not the assigned node; dropping")
+		return
+	}
+	if strings.TrimSpace(echoedKey) != "" && echoedKey != a.AssetKey {
+		logger.WithFields(logging.Fields{"attempt_id": attemptID, "assignment_asset": a.AssetKey, "echoed_key": echoedKey}).
+			Warn("Thumbnail completion: echoed thumbnail_key does not match the assignment; dropping")
+		return
+	}
+	switch a.Status {
+	case "published":
+		return // idempotent: a duplicate confirm for an already-published attempt is a no-op
+	case "failed":
+		logger.WithField("attempt_id", attemptID).Warn("Thumbnail completion: attempt already failed; dropping")
+		return
+	}
+	finishThumbnailPublication(ctx, dbh, a, objs, nodeID, logger)
+}
 
-	markArtifactHasThumbnails(thumbnailKey, nodeID, logger)
-	invalidateChandlerThumbnailCache(thumbnailKey, s3Keys, logger)
+// finishThumbnailPublication runs the S3 verify -> promote -> publish core for an already-loaded, non-terminal
+// attempt: it fences on lease expiry and the parent tombstone, HEAD-verifies + promotes every staged object to
+// its immutable version key, then flips the active pointer and runs the best-effort side effects. Shared by the
+// node completion and the recovery reconciler (which re-drives a completion whose ThumbnailUploaded was lost, so
+// a one-shot VOD thumbnail is not permanently orphaned). nodeID is only best-effort has_thumbnails backfill
+// attribution; the publication itself is bound to the server-minted attempt id.
+func finishThumbnailPublication(ctx context.Context, dbh *sql.DB, a ThumbnailAssignment, objs []ThumbnailObject, nodeID string, logger logging.Logger) {
+	attemptID := a.AttemptID
+	// EXPIRY FENCE: refuse to complete an attempt past its lease. It stays in a recovery-eligible state, so the
+	// reconciler fails + sweeps it. Because recovery only fails EXPIRED attempts, a non-expired attempt promoted
+	// below can never be concurrently failed — closing the promote-vs-fail leak for the common path.
+	if !a.Expiry.After(time.Now()) {
+		logger.WithField("attempt_id", attemptID).Warn("Thumbnail completion: attempt lease expired; dropping (recovery will fail it)")
+		return
+	}
+	// PARENT-TOMBSTONE FENCE: never promote a thumbnail whose parent artifact is being purged. Purge marks the
+	// artifact 'deleted' well before it sweeps (retention age), so a completion arriving after that must NOT
+	// write new version objects into a prefix the purge will delete. Drop and enqueue the staged objects for
+	// cleanup. Live streams (asset_key = stream_id) have no artifact row and are never affected.
+	if deleted, tErr := parentArtifactTombstoned(ctx, GetDB(), a.AssetKey); tErr != nil {
+		logger.WithError(tErr).WithField("attempt_id", attemptID).Warn("Thumbnail completion: parent-tombstone check failed; leaving attempt for recovery")
+		return
+	} else if deleted {
+		logger.WithFields(logging.Fields{"attempt_id": attemptID, "asset_key": a.AssetKey}).
+			Info("Thumbnail completion: parent artifact is tombstoned; dropping and failing the attempt")
+		failCtx, failCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if fErr := FailThumbnailAttempt(failCtx, GetDB(), attemptID); fErr != nil {
+			logger.WithError(fErr).WithField("attempt_id", attemptID).Warn("Failed to fail tombstoned thumbnail attempt; recovery will sweep on lease expiry")
+		}
+		failCancel()
+		return
+	}
+	if s3Client == nil {
+		// Local verify/promote needs the S3 client. A federated destination (official cluster on another cell)
+		// is not completed here — its staged objects live on another cell's S3, which this cell cannot verify.
+		logger.WithField("attempt_id", attemptID).Warn("Thumbnail completion: no local S3 client; leaving attempt for recovery")
+		return
+	}
+
+	// Verify + promote EVERY object to its immutable version key. All must succeed to publish — a missing/empty
+	// staged object or a transient error returns and leaves the attempt for retry/sweep (no partial publish).
+	//
+	// A promoted version object is NEVER enqueued for deletion from here: the version key is deterministic per
+	// attempt (asset_key/attempt_id/file), so a concurrent completion OF THE SAME ATTEMPT can publish that exact
+	// key. Enqueuing it while the attempt is still retryable could delete a NEWLY-LIVE object. Instead, any exit
+	// below simply leaves the attempt for the recovery reconciler, whose fail-sweep is GUARDED (it enqueues the
+	// reconstructed keys ONLY if it wins the terminal transition, i.e. the attempt did NOT publish) — so a live
+	// version is never queued for deletion, and an abandoned attempt's promoted objects are still reclaimed.
+	for _, o := range objs {
+		exists, size, etag, hErr := s3Client.HeadObjectInfo(ctx, o.StagingKey)
+		if hErr != nil {
+			logger.WithError(hErr).WithFields(logging.Fields{"attempt_id": attemptID, "staging_key": o.StagingKey}).
+				Warn("Thumbnail completion: staging HEAD failed (transient); leaving for retry")
+			return
+		}
+		if !exists || size <= 0 || strings.TrimSpace(etag) == "" {
+			logger.WithFields(logging.Fields{"attempt_id": attemptID, "staging_key": o.StagingKey, "exists": exists, "size": size}).
+				Warn("Thumbnail completion: staged object missing/empty; leaving for recovery")
+			return
+		}
+		versionKey := ThumbnailVersionKey(a.AssetKey, a.Version, o.FileName)
+		if pErr := s3Client.PromoteObject(ctx, o.StagingKey, versionKey, etag); pErr != nil {
+			logger.WithError(pErr).WithFields(logging.Fields{"attempt_id": attemptID, "version_key": versionKey}).
+				Warn("Thumbnail completion: promote to version key failed (transient); leaving for retry")
+			return
+		}
+		moved, mErr := MarkThumbnailObjectVerified(ctx, dbh, attemptID, o.FileName, versionKey, etag, size)
+		if mErr != nil {
+			// Already promoted; record-failed. LEAVE it for recovery (guarded) — never enqueue the candidate here.
+			logger.WithError(mErr).WithField("attempt_id", attemptID).Warn("Thumbnail completion: recording verified object failed; leaving for recovery")
+			return
+		}
+		if !moved {
+			// The assignment is no longer in a fenced non-terminal state (a concurrent completion published it, or
+			// a lease-expiry sweep failed it). Either way this attempt must not act; leave it for recovery. If it
+			// published, the promoted key is the LIVE version and must NOT be deleted; if it failed, recovery
+			// reclaims the reconstructed keys under its guarded transition.
+			logger.WithField("attempt_id", attemptID).Warn("Thumbnail completion: assignment no longer fenced mid-promote; leaving for recovery")
+			return
+		}
+	}
+
+	// Enter the durable publishing state, then CAS the active pointer to this attempt's version. If it can't
+	// enter publishing (a concurrent completion already did, or it expired/failed), LEAVE it for recovery —
+	// never enqueue the promoted objects here, since a concurrent completion may publish the same version key.
+	entered, eErr := EnterThumbnailPublishing(ctx, dbh, attemptID)
+	if eErr != nil {
+		logger.WithError(eErr).WithField("attempt_id", attemptID).Warn("Thumbnail completion: enter-publishing failed; leaving for retry")
+		return
+	}
+	if !entered {
+		logger.WithField("attempt_id", attemptID).Warn("Thumbnail completion: could not enter publishing (concurrent completion/expiry); leaving for recovery")
+		return
+	}
+	activated, pErr := PublishThumbnailAttempt(ctx, dbh, attemptID)
+	if pErr != nil {
+		logger.WithError(pErr).WithField("attempt_id", attemptID).Warn("Thumbnail completion: publish CAS failed; leaving for retry")
+		return
+	}
+	logger.WithFields(logging.Fields{"attempt_id": attemptID, "asset_key": a.AssetKey, "version": a.Version, "activated": activated}).
+		Info("Thumbnail attempt published")
+
+	// has_thumbnails and the staging-cleanup enqueue are committed ATOMICALLY inside PublishThumbnailAttempt (so
+	// a crash after the CAS can never skip them). Here we only run the BEST-EFFORT, self-healing side effects on
+	// the activated winner: the origin-cluster backfill / Commodore projection (via markArtifactHasThumbnails,
+	// idempotent) and the Chandler cache invalidation (Chandler otherwise self-heals via its short TTL +
+	// cold-miss resolve). A loser that didn't activate leaves the live version's side effects untouched.
+	if activated {
+		markArtifactHasThumbnails(a.AssetKey, nodeID, logger)
+		fileNames := make([]string, 0, len(objs))
+		for _, o := range objs {
+			fileNames = append(fileNames, o.FileName)
+		}
+		invalidateChandlerThumbnailCache(a.AssetKey, a.Version, fileNames, logger)
+	}
+}
+
+// CompleteThumbnailAttemptForRecovery re-drives a completion whose ThumbnailUploaded confirmation was lost (a
+// dropped send, or a Foghorn crash after the node uploaded but before the attempt reached 'publishing'). The
+// recovery reconciler invokes it for non-expired attempts stuck in a pre-publishing state past a staleness
+// threshold: it re-runs the SAME idempotent verify -> promote -> publish core against the staged objects (HEAD
+// on a not-yet-uploaded staging object simply leaves the attempt for the next pass). Without it, a one-shot VOD
+// thumbnail whose completion was lost would be failed + swept at lease expiry and lost. Bound to the assigned
+// node for best-effort backfill attribution only.
+//
+// Returns progressed=true ONLY when this pass drove the attempt to a TERMINAL state (published or settled-failed)
+// — so the reconciler counts real completions, not attempts still stuck (a not-yet-uploaded / poison row leaves
+// the attempt unchanged and returns false, and must not be reported as completed).
+func CompleteThumbnailAttemptForRecovery(ctx context.Context, attemptID string, logger logging.Logger) (progressed bool, err error) {
+	dbh := GetDB()
+	a, objs, found, lErr := LoadThumbnailAttempt(ctx, dbh, attemptID)
+	if lErr != nil {
+		return false, lErr
+	}
+	if !found {
+		return false, nil
+	}
+	switch a.Status {
+	case "published", "failed":
+		return false, nil // already terminal before this pass; not progress WE made
+	}
+	finishThumbnailPublication(ctx, dbh, a, objs, a.NodeID, logger)
+	// finishThumbnailPublication reports failures only via logs; re-read to learn whether the attempt actually
+	// reached a terminal state this pass (published or settled-failed) vs was left stuck for retry.
+	after, _, ok, aErr := LoadThumbnailAttempt(ctx, dbh, attemptID)
+	if aErr != nil {
+		return false, aErr
+	}
+	if !ok {
+		return true, nil // row gone (e.g. GC'd after publish) → it progressed
+	}
+	return after.Status == "published" || after.Status == "failed", nil
 }
 
 type chandlerInvalidateRequest struct {
 	AssetKey string   `json:"assetKey"`
 	Files    []string `json:"files"`
+	// ActiveVersion is the newly-published version this asset now serves. Chandler updates its in-memory
+	// asset_key -> version map from it (the push fast path), so it serves the new backing object WITHOUT a
+	// cold-miss resolve. Empty => version-unaware invalidation (legacy cache bust only).
+	ActiveVersion string `json:"activeVersion,omitempty"`
 }
 
-func invalidateChandlerThumbnailCache(thumbnailKey string, s3Keys []string, logger logging.Logger) {
+func invalidateChandlerThumbnailCache(thumbnailKey, activeVersion string, s3Keys []string, logger logging.Logger) {
 	if thumbnailKey == "" || len(s3Keys) == 0 {
 		return
 	}
@@ -7184,8 +8604,9 @@ func invalidateChandlerThumbnailCache(thumbnailKey string, s3Keys []string, logg
 	}
 
 	body, err := json.Marshal(chandlerInvalidateRequest{
-		AssetKey: thumbnailKey,
-		Files:    files,
+		AssetKey:      thumbnailKey,
+		Files:         files,
+		ActiveVersion: activeVersion,
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to encode Chandler cache invalidation request")
@@ -7257,11 +8678,15 @@ func splitChandlerBaseURLs(raw string) []string {
 // nodeID is the uploading node; it backstops cluster attribution when the
 // artifact row carries no cluster (e.g. clips of bare mist_native sources
 // created before cluster stamping was made robust).
-func markArtifactHasThumbnails(artifactHash, nodeID string, logger logging.Logger) {
+// markArtifactHasThumbnails returns whether the confirmation was AUTHORIZED (and therefore whether the caller
+// may run the Chandler cache invalidation): true only for a tenant-entitled confirmation on an existing
+// artifact row; false when there is no artifact row to bind (an unverifiable key — fail closed), when the
+// reporting node is not entitled to the artifact's tenant, or on a DB error.
+func markArtifactHasThumbnails(artifactHash, nodeID string, logger logging.Logger) bool {
 	conn := GetDB()
 	if conn == nil {
 		logger.Warn("DB not available, cannot mark artifact thumbnails")
-		return
+		return false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -7271,34 +8696,56 @@ func markArtifactHasThumbnails(artifactHash, nodeID string, logger logging.Logge
 		artifactType     string
 		storageClusterID sql.NullString
 		originClusterID  sql.NullString
+		alreadyMarked    bool
 	)
-	err := conn.QueryRowContext(ctx, `
-		UPDATE foghorn.artifacts
-		   SET has_thumbnails = true, updated_at = NOW()
+	// Resolve the artifact's tenant + cluster context BEFORE any write so the reporting node can be
+	// authorized. A key with no artifact row (e.g. a live stream_id thumbnail) has nothing to mark and no
+	// tenant to bind — return quietly.
+	selErr := conn.QueryRowContext(ctx, `
+		SELECT tenant_id::text, artifact_type, storage_cluster_id, origin_cluster_id, COALESCE(has_thumbnails, false)
+		  FROM foghorn.artifacts
 		 WHERE artifact_hash = $1
-		   AND has_thumbnails IS DISTINCT FROM true
-		RETURNING tenant_id::text, artifact_type, storage_cluster_id, origin_cluster_id
-	`, artifactHash).Scan(&tenantID, &artifactType, &storageClusterID, &originClusterID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			err = conn.QueryRowContext(ctx, `
-				SELECT tenant_id::text, artifact_type, storage_cluster_id, origin_cluster_id
-				  FROM foghorn.artifacts
-				 WHERE artifact_hash = $1
-				   AND has_thumbnails IS TRUE
-			`, artifactHash).Scan(&tenantID, &artifactType, &storageClusterID, &originClusterID)
-			if errors.Is(err, sql.ErrNoRows) {
-				return
-			}
-		}
-		if err != nil {
+	`, artifactHash).Scan(&tenantID, &artifactType, &storageClusterID, &originClusterID, &alreadyMarked)
+	if errors.Is(selErr, sql.ErrNoRows) {
+		// No artifact row for this key: there is nothing to bind authorization against, so FAIL CLOSED —
+		// an unverifiable key must not flip state or trigger a cache side effect. (Live stream thumbnails
+		// carry no artifact row; their cache freshness relies on Chandler's TTL, and a per-stream serve
+		// capability is the workload-identity RFC.)
+		return false
+	}
+	if selErr != nil {
+		logger.WithFields(logging.Fields{
+			"artifact_hash": artifactHash,
+			"error":         selErr,
+		}).Error("Failed to resolve artifact for thumbnail marking")
+		return false
+	}
+	// Bind the confirmation to the reporting node's tenant entitlement (same single-provider model as the PUT
+	// minting path). A node not entitled to this tenant must not flip has_thumbnails or trigger the cache
+	// side effects. FAIL CLOSED: a missing/empty artifact tenant is denied (an unbound tenant is not a pass),
+	// as is any node the tenant check rejects.
+	if !tenantID.Valid || tenantID.String == "" || !nodeMayServeTenant(nodeID, tenantID.String) {
+		logger.WithFields(logging.Fields{
+			"artifact_hash": artifactHash,
+			"tenant_id":     tenantID.String,
+			"node_id":       nodeID,
+		}).Warn("Thumbnail confirmation denied: reporting node is not authorized for the artifact tenant")
+		return false
+	}
+
+	if !alreadyMarked {
+		if _, err := conn.ExecContext(ctx, `
+			UPDATE foghorn.artifacts
+			   SET has_thumbnails = true, updated_at = NOW()
+			 WHERE artifact_hash = $1
+			   AND has_thumbnails IS DISTINCT FROM true
+		`, artifactHash); err != nil {
 			logger.WithFields(logging.Fields{
 				"artifact_hash": artifactHash,
 				"error":         err,
 			}).Error("Failed to mark artifact has_thumbnails")
-			return
+			return false
 		}
-	} else {
 		logger.WithField("artifact_hash", artifactHash).Info("Artifact thumbnails marked as uploaded")
 	}
 
@@ -7332,45 +8779,10 @@ func markArtifactHasThumbnails(artifactHash, nodeID string, logger logging.Logge
 			}
 		}
 	}
-	if CommodoreClient == nil || !tenantID.Valid || tenantID.String == "" {
-		return
-	}
-	if cluster == "" {
-		logger.WithField("artifact_hash", artifactHash).Warn("Artifact thumbnail readiness has no cluster projection")
-		return
-	}
-	assetType, ok := artifactAssetTypeFromString(artifactType)
-	if !ok {
-		logger.WithFields(logging.Fields{
-			"artifact_hash": artifactHash,
-			"artifact_type": artifactType,
-		}).Warn("Unknown artifact_type; skipping Commodore thumbnail notify")
-		return
-	}
-	notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer notifyCancel()
-	if _, err := CommodoreClient.MarkArtifactThumbnailsReady(notifyCtx, tenantID.String, assetType, artifactHash, cluster); err != nil {
-		logger.WithError(err).WithFields(logging.Fields{
-			"artifact_hash": artifactHash,
-			"asset_type":    artifactType,
-		}).Warn("Failed to notify Commodore of artifact thumbnail readiness")
-	}
-}
-
-// artifactAssetTypeFromString maps foghorn.artifacts.artifact_type values to
-// the proto enum used by MarkArtifactThumbnailsReady /
-// UpdateArtifactStorageCluster.
-func artifactAssetTypeFromString(t string) (commodorepb.ArtifactAssetType, bool) {
-	switch t {
-	case "clip":
-		return commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_CLIP, true
-	case "dvr":
-		return commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_DVR, true
-	case "vod":
-		return commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_VOD, true
-	default:
-		return commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_UNSPECIFIED, false
-	}
+	// has_thumbnails and the origin/storage cluster are now on the authoritative
+	// foghorn.artifacts row (written above); the artifact reconciler projects them onto the
+	// Commodore catalog with its revision guard, so no unguarded direct projection is done here.
+	return true
 }
 
 // getChandlerBaseURL returns the Chandler base URL from environment.

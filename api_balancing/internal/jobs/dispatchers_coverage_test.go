@@ -155,8 +155,9 @@ func TestDispatchJobPresignFailureReverts(t *testing.T) {
 // TestRecoverStaleRequeueOnlyPath locks the non-terminal recovery decision: when
 // the requeue CTE returns rows (stale dispatched/processing jobs still within
 // the retry budget) and the fail CTE returns nothing, the pass requeues and
-// fires NO artifact-failure UPDATE and NO onJobExhausted callback. Recoverable
-// jobs must not be failed.
+// fires NO artifact-failure UPDATE. Recoverable jobs must not be failed — the
+// sqlmock has no UPDATE foghorn.artifacts expectation, so any failure write
+// would fail the test.
 func TestRecoverStaleRequeueOnlyPath(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -167,23 +168,16 @@ func TestRecoverStaleRequeueOnlyPath(t *testing.T) {
 	// Requeue CTE affects rows (jobs bumped back to queued).
 	mock.ExpectExec("WITH requeued AS").
 		WillReturnResult(sqlmock.NewResult(0, 3))
-	// Fail CTE returns no exhausted jobs.
-	mock.ExpectQuery("WITH failed AS").
-		WillReturnRows(sqlmock.NewRows([]string{
-			"job_id", "artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name",
-		}))
+	// Candidate enumeration returns no exhausted jobs → no per-job fail tx runs (a stray
+	// UPDATE foghorn.artifacts would have no expectation and fail the test).
+	mock.ExpectQuery(`SELECT job_id\s+FROM foghorn.processing_jobs`).
+		WillReturnRows(sqlmock.NewRows([]string{"job_id"}))
 
-	var exhaustedCalls int
 	d := NewProcessingDispatcher(ProcessingDispatcherConfig{DB: db, Logger: logging.NewLogger()})
-	d.SetJobExhaustedHandler(func(_ context.Context, _, _ string) { exhaustedCalls++ })
-
 	d.recoverStale()
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
-	}
-	if exhaustedCalls != 0 {
-		t.Fatalf("onJobExhausted fired %d times on requeue-only pass; want 0", exhaustedCalls)
 	}
 }
 

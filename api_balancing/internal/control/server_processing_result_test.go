@@ -1,12 +1,9 @@
 package control
 
 import (
-	"context"
 	"database/sql"
 	"testing"
-	"time"
 
-	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
@@ -30,30 +27,40 @@ func TestProcessProcessingJobProgress_ChapterFinalizeUsesChapterLedger(t *testin
 	logger := logging.NewLogger()
 
 	mock.ExpectQuery("UPDATE foghorn.processing_jobs").
-		WithArgs("chapter-finalize-chapter-1", int32(42)).
+		WithArgs("chapter-finalize-chapter-1", int32(42), "node-1").
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("UPDATE foghorn.dvr_chapters c").
-		WithArgs("chapter-1").
+		WithArgs("chapter-1", "node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"playback_artifact_hash", "tenant_id"}).
 			AddRow("chapter-artifact-hash", "5eed517e-ba5e-da7a-517e-ba5eda7a0001"))
 
 	processProcessingJobProgress(&ipcpb.ProcessingJobProgress{
 		JobId:       "chapter-finalize-chapter-1",
 		ProgressPct: 42,
-	}, logger)
+	}, "node-1", logger)
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestProcessProcessingJobResult_Completed_NoOutput(t *testing.T) {
+// A "completed" result with no output path is malformed: it must NOT bless the job as
+// completed (which would strand the artifact "processing" forever). It is failed atomically
+// instead — BEGIN → lock+resolve FOR UPDATE OF pj → mark job failed → COMMIT. Here the job
+// has no artifact row, so only the job flips.
+func TestProcessProcessingJobResult_Completed_NoOutputFailsJob(t *testing.T) {
 	mock, _, _ := setupArtifactTestDeps(t)
 	logger := logging.NewLogger()
 
-	mock.ExpectExec("UPDATE foghorn.processing_jobs.*SET status = 'completed'").
-		WithArgs("job-1", nil).
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT pj.status.*FROM foghorn.processing_jobs pj\s+LEFT JOIN foghorn.artifacts a`).
+		WithArgs("job-1").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name"}).
+			AddRow("processing", "node-1", "", "", "", "", ""))
+	mock.ExpectExec(`UPDATE foghorn.processing_jobs\s+SET status = 'failed'`).
+		WithArgs("job-1", "completed processing result carried no output path").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	processProcessingJobResult(&ipcpb.ProcessingJobResult{
 		JobId:  "job-1",
@@ -65,170 +72,142 @@ func TestProcessProcessingJobResult_Completed_NoOutput(t *testing.T) {
 	}
 }
 
-func TestProcessProcessingJobResult_Completed_WithOutputMeta(t *testing.T) {
+// A cache_update result only mutates config for a job assigned to the REPORTING node (processing_node_id =
+// reporting). A foreign node's cache_update matches 0 rows and is dropped — it cannot rewrite another node's
+// job config by naming the artifact hash.
+func TestProcessProcessingJobResult_CacheUpdate_BindsToAssignedNode(t *testing.T) {
 	mock, _, _ := setupArtifactTestDeps(t)
 	logger := logging.NewLogger()
 
-	mock.ExpectExec("UPDATE foghorn.processing_jobs.*SET status = 'completed'").
-		WithArgs("job-1", sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE foghorn.processing_jobs\s+SET processes_json`).
+		WithArgs("job-x", "art-1", "[]", "attacker-node").
+		WillReturnResult(sqlmock.NewResult(0, 0)) // 0 rows: not this node's job
 
 	processProcessingJobResult(&ipcpb.ProcessingJobResult{
-		JobId:   "job-1",
-		Status:  "completed",
-		Outputs: map[string]string{"resolution": "1080p"},
-	}, "node-1", logger)
+		JobId:   "job-x",
+		Status:  "cache_update",
+		Outputs: map[string]string{"artifact_hash": "art-1", "processes_json": "[]"},
+	}, "attacker-node", logger)
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestProcessProcessingJobResult_Completed_RegistersProcessedOutput(t *testing.T) {
-	mock, _, repo := setupArtifactTestDeps(t)
+// A completion reported by a node OTHER than the one the job was dispatched to is rejected: the reporting
+// node would otherwise be recorded as the artifact origin. Nothing past the lock read is written or committed.
+func TestProcessProcessingJobResult_Completed_RejectsForeignNode(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
 	logger := logging.NewLogger()
 
-	mock.ExpectExec("(?s)UPDATE foghorn.processing_jobs.*SET status = 'completed'.*progress = 100").
-		WithArgs("job-1", nil).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT status, COALESCE.*FROM foghorn.processing_jobs WHERE job_id = \$1 FOR UPDATE`).
+		WithArgs("job-1").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id"}).AddRow("processing", "assigned-node"))
+	mock.ExpectRollback()
 
-	// Lookup artifact hash
-	mock.ExpectQuery("SELECT a\\.artifact_hash.*FROM foghorn.processing_jobs").
+	// Reporting node "attacker-node" != assigned "assigned-node": no readiness/complete write, just rollback.
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{JobId: "job-1", Status: "completed", OutputPath: "/data/out.mp4"}, "attacker-node", logger)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A failure reported by a node other than the assigned one is rejected before any job/artifact write.
+func TestFailProcessingJob_RejectsForeignNode(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	logger := logging.NewLogger()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT pj.status.*FROM foghorn.processing_jobs pj\s+LEFT JOIN foghorn.artifacts a`).
+		WithArgs("job-1").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name"}).
+			AddRow("processing", "assigned-node", "art-clip", "clip", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", "", ""))
+	mock.ExpectRollback()
+
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{JobId: "job-1", Status: "failed", Error: "boom"}, "attacker-node", logger)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A non-active job (cancelled/deleted → status 'failed', or a duplicate already-'completed'
+// result) is a no-op: the lock read shows it inactive and NOTHING is written or committed.
+func TestProcessProcessingJobResult_Completed_NonActiveJobIsNoop(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	logger := logging.NewLogger()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT status, COALESCE.*FROM foghorn.processing_jobs WHERE job_id = \$1 FOR UPDATE`).
+		WithArgs("job-1").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id"}).AddRow("failed", ""))
+	mock.ExpectRollback()
+
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{JobId: "job-1", Status: "completed", OutputPath: "/data/out.mp4"}, "node-1", logger)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Boundary: a readiness-write failure ROLLS BACK — the job is NOT marked completed, so stale
+// recovery retries. No job-complete UPDATE, no COMMIT.
+func TestProcessProcessingJobResult_Completed_ReadinessFailureRollsBack(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	logger := logging.NewLogger()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT status, COALESCE.*FROM foghorn.processing_jobs WHERE job_id = \$1 FOR UPDATE`).
+		WithArgs("job-1").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id"}).AddRow("processing", "node-1"))
+	mock.ExpectQuery(`FROM foghorn.processing_jobs pj\s+JOIN foghorn.artifacts a`).
 		WithArgs("job-1").
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format", "req_start", "req_stop"}).
-			AddRow("art-hash", "vod", "tenant-1", "", "", "s3://old/upload.avi", "avi", int64(0), int64(0)))
-
-	// Update artifact format + size_bytes + reset sync while retaining the
-	// old source URL until the replacement upload is durably synced.
-	mock.ExpectExec("(?s)UPDATE foghorn.artifacts.*SET format.*size_bytes.*artifact_type IN \\('clip', 'vod'\\).*sync_status = 'pending'.*storage_location = 'local'").
-		WithArgs("mp4", "art-hash", int64(5000), int64(0)).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+			AddRow("art-1", "vod", "tenant-1", "", "", "", "mp4", int64(0), int64(0)))
+	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET format`).
+		WillReturnError(sql.ErrConnDone)
+	mock.ExpectRollback()
 
 	processProcessingJobResult(&ipcpb.ProcessingJobResult{
 		JobId:           "job-1",
 		Status:          "completed",
-		OutputPath:      "/data/processed/output.mp4",
-		OutputSizeBytes: 5000,
+		OutputPath:      "/data/out.mp4",
+		OutputSizeBytes: 10,
 	}, "node-1", logger)
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
-
-	repo.mu.Lock()
-	if len(repo.originArtifactCalls) != 1 {
-		t.Fatalf("expected 1 RegisterOriginArtifact, got %d", len(repo.originArtifactCalls))
-	}
-	call := repo.originArtifactCalls[0]
-	if call.Hash != "art-hash" || call.NodeID != "node-1" || call.Path != "/data/processed/output.mp4" || call.Size != 5000 || !call.Complete {
-		t.Fatalf("unexpected call: %+v", call)
-	}
-	repo.mu.Unlock()
-
-	// Check in-memory state
-	sm := state.DefaultManager()
-	snap := sm.GetAllNodesSnapshot()
-	found := false
-	for _, n := range snap.Nodes {
-		if n.NodeID == "node-1" {
-			for _, a := range n.Artifacts {
-				if a.ClipHash == "art-hash" {
-					found = true
-					if a.Format != "mp4" {
-						t.Fatalf("expected format=mp4, got %s", a.Format)
-					}
-				}
-			}
-		}
-	}
-	if !found {
-		t.Fatal("processed artifact not found in in-memory state")
-	}
 }
 
-// A result that arrives after the clip was deleted (the ready-claim matches 0
-// rows because the artifact is in a terminal state) must skip output
-// registration and in-memory state, so a deleted clip is never resurrected.
-func TestProcessProcessingJobResult_Completed_SkipsRegistrationWhenArtifactTerminal(t *testing.T) {
-	mock, _, repo := setupArtifactTestDeps(t)
-	logger := logging.NewLogger()
-
-	mock.ExpectExec("(?s)UPDATE foghorn.processing_jobs.*SET status = 'completed'.*progress = 100").
-		WithArgs("job-del", nil).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-
-	mock.ExpectQuery("SELECT a\\.artifact_hash.*FROM foghorn.processing_jobs").
-		WithArgs("job-del").
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format", "req_start", "req_stop"}).
-			AddRow("art-deleted", "clip", "tenant-1", "", "", "", "avi", int64(0), int64(0)))
-
-	// Guarded ready-claim matches no row (artifact deleted/failed/etc): 0 rows
-	// affected. The handler must return here without any side effects.
-	mock.ExpectExec("(?s)UPDATE foghorn.artifacts.*SET format.*size_bytes.*sync_status = 'pending'.*storage_location = 'local'").
-		WithArgs("mp4", "art-deleted", int64(5000), int64(0)).
-		WillReturnResult(sqlmock.NewResult(0, 0)) // 0 rows affected
-
-	processProcessingJobResult(&ipcpb.ProcessingJobResult{
-		JobId:           "job-del",
-		Status:          "completed",
-		OutputPath:      "/data/processed/output.mp4",
-		OutputSizeBytes: 5000,
-	}, "node-del", logger)
-
-	// No further DB calls (no projection/lifecycle); exactly the three above.
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-
-	// No origin registration for a terminal artifact.
-	repo.mu.Lock()
-	if len(repo.originArtifactCalls) != 0 {
-		t.Fatalf("expected no RegisterOriginArtifact for terminal artifact, got %d", len(repo.originArtifactCalls))
-	}
-	repo.mu.Unlock()
-
-	// Not added to in-memory node state either.
-	for _, n := range state.DefaultManager().GetAllNodesSnapshot().Nodes {
-		if n.NodeID != "node-del" {
-			continue
-		}
-		for _, a := range n.Artifacts {
-			if a.ClipHash == "art-deleted" {
-				t.Fatal("terminal artifact should not be added to in-memory state")
-			}
-		}
-	}
-}
-
-// A clip whose measured output is shorter than the requested span (live
-// buffer didn't reach back far enough) still completes: the artifact goes
-// ready with the ACTUAL duration recorded, not failed and not the requested
-// length.
-func TestProcessProcessingJobResult_Completed_PartialClipRecordsActualDuration(t *testing.T) {
+// Deleted mid-processing: the readiness UPDATE guard matches 0 rows. The job STILL commits as
+// completed (it did complete) but no publication side effects occur.
+func TestProcessProcessingJobResult_Completed_DeletedMidProcessingStillCompletes(t *testing.T) {
 	mock, _, _ := setupArtifactTestDeps(t)
 	logger := logging.NewLogger()
 
-	mock.ExpectExec("(?s)UPDATE foghorn.processing_jobs.*SET status = 'completed'.*progress = 100").
-		WithArgs("job-partial", nil).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-
-	// Requested span: 60s (unix 100 → 160). Actual output: 40.792s.
-	mock.ExpectQuery("SELECT a\\.artifact_hash.*source_start_unix.*source_stop_unix.*FROM foghorn.processing_jobs").
-		WithArgs("job-partial").
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT status, COALESCE.*FROM foghorn.processing_jobs WHERE job_id = \$1 FOR UPDATE`).
+		WithArgs("job-1").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id"}).AddRow("processing", "node-1"))
+	mock.ExpectQuery(`FROM foghorn.processing_jobs pj\s+JOIN foghorn.artifacts a`).
+		WithArgs("job-1").
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format", "req_start", "req_stop"}).
-			AddRow("art-partial", "clip", "tenant-1", "", "", "", "mkv", int64(100), int64(160)))
-
-	mock.ExpectExec("(?s)UPDATE foghorn.artifacts.*duration_seconds = CASE WHEN \\$4::bigint > 0.*status = CASE WHEN artifact_type IN \\('clip', 'vod'\\) THEN 'ready'").
-		WithArgs("mkv", "art-partial", int64(23625909), int64(40792)).
+			AddRow("art-1", "vod", "tenant-1", "", "", "", "mp4", int64(0), int64(0)))
+	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET format`).
+		WillReturnResult(sqlmock.NewResult(0, 0)) // 0 rows: deleted/failed mid-processing
+	mock.ExpectExec(`UPDATE foghorn.processing_jobs\s+SET status = 'completed'`).
+		WithArgs("job-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
-	mediaDurationMs := int64(40792)
 	processProcessingJobResult(&ipcpb.ProcessingJobResult{
-		JobId:           "job-partial",
+		JobId:           "job-1",
 		Status:          "completed",
-		OutputPath:      "/data/clips/stream/art-partial.mkv",
-		OutputSizeBytes: 23625909,
-		MediaDurationMs: &mediaDurationMs,
+		OutputPath:      "/data/out.mp4",
+		OutputSizeBytes: 10,
 	}, "node-1", logger)
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -236,58 +215,27 @@ func TestProcessProcessingJobResult_Completed_PartialClipRecordsActualDuration(t
 	}
 }
 
-func TestProcessProcessingJobResult_Completed_DoesNotDeleteOldS3UploadBeforeReplacementSync(t *testing.T) {
-	mock, s3Mock, _ := setupArtifactTestDeps(t)
-	logger := logging.NewLogger()
-
-	mock.ExpectExec("UPDATE foghorn.processing_jobs").
-		WithArgs("job-1", nil).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-
-	mock.ExpectQuery("SELECT a\\.artifact_hash").
-		WithArgs("job-1").
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format", "req_start", "req_stop"}).
-			AddRow("art-hash", "vod", "tenant-1", "", "", "s3://bucket/old/upload.avi", "avi", int64(0), int64(0)))
-
-	mock.ExpectExec("UPDATE foghorn.artifacts").
-		WithArgs("mp4", "art-hash", int64(0), int64(0)).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-
-	processProcessingJobResult(&ipcpb.ProcessingJobResult{
-		JobId:      "job-1",
-		Status:     "completed",
-		OutputPath: "/data/output.mp4",
-	}, "node-1", logger)
-
-	time.Sleep(20 * time.Millisecond)
-	s3Mock.mu.Lock()
-	if len(s3Mock.deleteByURLCalls) != 0 {
-		t.Fatalf("expected no DeleteByURL before replacement sync, got %d", len(s3Mock.deleteByURLCalls))
-	}
-	s3Mock.mu.Unlock()
-}
-
-func TestProcessProcessingJobResult_Completed_SetsS3URLToNull(t *testing.T) {
+// A GENUINELY missing artifact row (the JOIN lookup returns ErrNoRows — the row is gone, not
+// merely soft-deleted) must NOT be acknowledged as completed. The tx rolls back with no
+// job-complete UPDATE and no COMMIT, so stale recovery retries.
+func TestProcessProcessingJobResult_Completed_MissingArtifactRollsBack(t *testing.T) {
 	mock, _, _ := setupArtifactTestDeps(t)
 	logger := logging.NewLogger()
 
-	mock.ExpectExec("UPDATE foghorn.processing_jobs").
-		WithArgs("job-1", nil).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-
-	mock.ExpectQuery("SELECT a\\.artifact_hash").
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT status, COALESCE.*FROM foghorn.processing_jobs WHERE job_id = \$1 FOR UPDATE`).
 		WithArgs("job-1").
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format", "req_start", "req_stop"}).
-			AddRow("art-hash", "vod", "tenant-1", "", "", "", "avi", int64(0), int64(0)))
-
-	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'pending'.*storage_location = 'local'").
-		WithArgs("mp4", "art-hash", int64(0), int64(0)).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id"}).AddRow("processing", "node-1"))
+	mock.ExpectQuery(`FROM foghorn.processing_jobs pj\s+JOIN foghorn.artifacts a`).
+		WithArgs("job-1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectRollback()
 
 	processProcessingJobResult(&ipcpb.ProcessingJobResult{
-		JobId:      "job-1",
-		Status:     "completed",
-		OutputPath: "/data/output.mp4",
+		JobId:           "job-1",
+		Status:          "completed",
+		OutputPath:      "/data/out.mp4",
+		OutputSizeBytes: 10,
 	}, "node-1", logger)
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -295,16 +243,80 @@ func TestProcessProcessingJobResult_Completed_SetsS3URLToNull(t *testing.T) {
 	}
 }
 
+// Full happy path for a clip completion: the whole terminal transition — readiness UPDATE,
+// origin registration (+ its node-copy outbox event), clip lifecycle outbox enqueue, and the
+// job-completed UPDATE — commits as ONE transaction, with the job marked completed LAST.
+func TestProcessProcessingJobResult_Completed_ClipFullSuccess(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	logger := logging.NewLogger()
+
+	tenant := "5eed517e-ba5e-da7a-517e-ba5eda7a0001"
+	streamID := "5eed517e-ba5e-da7a-517e-ba5eda7a0002"
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT status, COALESCE.*FROM foghorn.processing_jobs WHERE job_id = \$1 FOR UPDATE`).
+		WithArgs("job-clip-ok").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id"}).AddRow("processing", "node-1"))
+	mock.ExpectQuery(`FROM foghorn.processing_jobs pj\s+JOIN foghorn.artifacts a`).
+		WithArgs("job-clip-ok").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format", "req_start", "req_stop"}).
+			AddRow("art-clip", "clip", tenant, streamID, "live+demo", "", "", int64(0), int64(0)))
+	// Readiness claim.
+	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET format`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	// RegisterOriginArtifactTx: prior-read (none) → origin upsert (freshly inserted, complete).
+	mock.ExpectQuery(`SELECT role, is_complete, is_orphaned FROM foghorn.artifact_nodes`).
+		WithArgs("art-clip", "node-1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`INSERT INTO foghorn.artifact_nodes`).
+		WillReturnRows(sqlmock.NewRows([]string{"inserted", "is_complete"}).AddRow(true, true))
+	// emitPresentTx → GAINED: resolve tenant → mint version → stamp last_emitted_version →
+	// enqueue the node-copy outbox event.
+	mock.ExpectQuery(`SELECT tenant_id::text FROM foghorn.artifacts WHERE artifact_hash`).
+		WithArgs("art-clip").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow(tenant))
+	mock.ExpectQuery(`SELECT nextval\('foghorn.artifact_node_copy_version_seq'\)`).
+		WillReturnRows(sqlmock.NewRows([]string{"nextval"}).AddRow(int64(1)))
+	mock.ExpectExec(`UPDATE foghorn.artifact_nodes SET last_emitted_version`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).
+		WillReturnResult(sqlmock.NewResult(0, 1)) // node-copy event
+	// Clip lifecycle enqueue (same tx).
+	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	// Job marked completed LAST, then commit.
+	mock.ExpectExec(`UPDATE foghorn.processing_jobs\s+SET status = 'completed'`).
+		WithArgs("job-clip-ok", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{
+		JobId:           "job-clip-ok",
+		Status:          "completed",
+		OutputPath:      "/data/clip.mp4",
+		OutputSizeBytes: 2048,
+	}, "node-1", logger)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A failed result with no artifact row still flips the job to failed atomically:
+// BEGIN → lock+resolve FOR UPDATE OF pj (no artifact) → job failed → COMMIT.
 func TestProcessProcessingJobResult_Failed(t *testing.T) {
 	mock, _, _ := setupArtifactTestDeps(t)
 	logger := logging.NewLogger()
 
-	mock.ExpectQuery("SELECT a.artifact_hash").
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT pj.status.*FROM foghorn.processing_jobs pj\s+LEFT JOIN foghorn.artifacts a`).
 		WithArgs("job-fail").
-		WillReturnError(sql.ErrNoRows)
+		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name"}).
+			AddRow("processing", "node-1", "", "", "", "", ""))
 	mock.ExpectExec("UPDATE foghorn.processing_jobs.*SET status = 'failed'.*error_message").
 		WithArgs("job-fail", "ffmpeg crashed").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	processProcessingJobResult(&ipcpb.ProcessingJobResult{
 		JobId:  "job-fail",
@@ -317,20 +329,27 @@ func TestProcessProcessingJobResult_Failed(t *testing.T) {
 	}
 }
 
+// A failed clip: the job-failed UPDATE, the artifact-failed UPDATE, and the failure lifecycle
+// outbox insert all commit as ONE transaction — a failed job is never left with an artifact
+// still "processing".
 func TestProcessProcessingJobResult_Failed_MarksClipArtifactFailed(t *testing.T) {
 	mock, _, _ := setupArtifactTestDeps(t)
 	logger := logging.NewLogger()
 
-	mock.ExpectQuery("SELECT a\\.artifact_hash.*stream_id.*stream_internal_name.*FROM foghorn.processing_jobs").
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT pj.status.*FROM foghorn.processing_jobs pj\s+LEFT JOIN foghorn.artifacts a`).
 		WithArgs("job-clip-fail").
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name"}).
-			AddRow("art-clip", "clip", "tenant-1", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", "stream-int"))
+		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name"}).
+			AddRow("processing", "node-1", "art-clip", "clip", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", "5eed517e-ba5e-da7a-517e-ba5eda7a0002", "stream-int"))
 	mock.ExpectExec("UPDATE foghorn.processing_jobs.*SET status = 'failed'").
 		WithArgs("job-clip-fail", "output duration short").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE foghorn.artifacts.*SET status = 'failed'").
-		WithArgs("art-clip", "output duration short").
+		WithArgs("art-clip", "output duration short", "5eed517e-ba5e-da7a-517e-ba5eda7a0001").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	processProcessingJobResult(&ipcpb.ProcessingJobResult{
 		JobId:  "job-clip-fail",
@@ -343,31 +362,120 @@ func TestProcessProcessingJobResult_Failed_MarksClipArtifactFailed(t *testing.T)
 	}
 }
 
-func TestProcessProcessingJobResult_CallsHandler(t *testing.T) {
+// If the artifact is already terminal (concurrently ready/deleted/expired), the guarded UPDATE
+// affects 0 rows — the job still fails, but NO false FAILED lifecycle event is emitted.
+func TestProcessProcessingJobResult_Failed_NoFalseLifecycleWhenArtifactTerminal(t *testing.T) {
 	mock, _, _ := setupArtifactTestDeps(t)
 	logger := logging.NewLogger()
 
-	var handlerCalled bool
-	prevHandler := onProcessingJobResult
-	onProcessingJobResult = func(_ context.Context, jobID, status string, _ map[string]string, _ string) {
-		handlerCalled = true
-		if jobID != "job-1" || status != "completed" {
-			t.Fatalf("unexpected handler args: jobID=%s status=%s", jobID, status)
-		}
-	}
-	t.Cleanup(func() { onProcessingJobResult = prevHandler })
-
-	mock.ExpectExec("UPDATE foghorn.processing_jobs").
-		WithArgs("job-1", nil).
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT pj.status.*FROM foghorn.processing_jobs pj\s+LEFT JOIN foghorn.artifacts a`).
+		WithArgs("job-clip-fail").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name"}).
+			AddRow("processing", "node-1", "art-clip", "clip", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", "", ""))
+	mock.ExpectExec("UPDATE foghorn.processing_jobs.*SET status = 'failed'").
+		WithArgs("job-clip-fail", "output duration short").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	// Artifact already terminal → 0 rows; NO outbox INSERT follows.
+	mock.ExpectExec("UPDATE foghorn.artifacts.*SET status = 'failed'").
+		WithArgs("art-clip", "output duration short", "5eed517e-ba5e-da7a-517e-ba5eda7a0001").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
 
 	processProcessingJobResult(&ipcpb.ProcessingJobResult{
-		JobId:  "job-1",
-		Status: "completed",
+		JobId:  "job-clip-fail",
+		Status: "failed",
+		Error:  "output duration short",
 	}, "node-1", logger)
 
-	if !handlerCalled {
-		t.Fatal("onProcessingJobResult handler was not called")
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A failed VOD job flips both the job and the vod artifact and enqueues the vod failure
+// lifecycle in one tx.
+func TestProcessProcessingJobResult_Failed_MarksVodArtifactFailed(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	logger := logging.NewLogger()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT pj.status.*FROM foghorn.processing_jobs pj\s+LEFT JOIN foghorn.artifacts a`).
+		WithArgs("job-vod-fail").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name"}).
+			AddRow("processing", "node-1", "art-vod", "vod", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", "", ""))
+	mock.ExpectExec("UPDATE foghorn.processing_jobs.*SET status = 'failed'").
+		WithArgs("job-vod-fail", "transcode exploded").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE foghorn.artifacts.*SET status = 'failed'").
+		WithArgs("art-vod", "transcode exploded", "5eed517e-ba5e-da7a-517e-ba5eda7a0001").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{
+		JobId:  "job-vod-fail",
+		Status: "failed",
+		Error:  "transcode exploded",
+	}, "node-1", logger)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A failure for a non-active job (already completed/cancelled/duplicate) is a no-op: the
+// FOR UPDATE lock shows it inactive and NOTHING is written or committed.
+func TestProcessProcessingJobResult_Failed_NonActiveJobIsNoop(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	logger := logging.NewLogger()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT pj.status.*FROM foghorn.processing_jobs pj\s+LEFT JOIN foghorn.artifacts a`).
+		WithArgs("job-done").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name"}).
+			AddRow("completed", "", "art-x", "vod", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", "", ""))
+	mock.ExpectRollback()
+
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{
+		JobId:  "job-done",
+		Status: "failed",
+		Error:  "late failure after completion",
+	}, "node-1", logger)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A transient error while marking the artifact failed ROLLS BACK the whole failure tx — the
+// job is NOT left failed with an unfailed artifact; stale recovery retries.
+func TestProcessProcessingJobResult_Failed_ArtifactWriteRollsBack(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	logger := logging.NewLogger()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT pj.status.*FROM foghorn.processing_jobs pj\s+LEFT JOIN foghorn.artifacts a`).
+		WithArgs("job-vod-fail").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name"}).
+			AddRow("processing", "node-1", "art-vod", "vod", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", "", ""))
+	mock.ExpectExec("UPDATE foghorn.processing_jobs.*SET status = 'failed'").
+		WithArgs("job-vod-fail", "boom").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE foghorn.artifacts.*SET status = 'failed'").
+		WithArgs("art-vod", "boom", "5eed517e-ba5e-da7a-517e-ba5eda7a0001").
+		WillReturnError(sql.ErrConnDone)
+	mock.ExpectRollback()
+
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{
+		JobId:  "job-vod-fail",
+		Status: "failed",
+		Error:  "boom",
+	}, "node-1", logger)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

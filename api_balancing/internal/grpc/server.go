@@ -5,15 +5,22 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
+	"net"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	smithy "github.com/aws/smithy-go"
 
 	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/artifacts"
@@ -34,15 +41,12 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clips"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/dvrpolicy"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
-	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
@@ -66,6 +70,9 @@ type S3ClientInterface interface {
 	GeneratePresignedUploadParts(key, uploadID string, partCount int, expiry time.Duration) ([]storage.UploadPart, error)
 	CompleteMultipartUpload(ctx context.Context, key, uploadID string, parts []storage.CompletedPart) error
 	AbortMultipartUpload(ctx context.Context, key, uploadID string) error
+	// Exists reports whether the final object is present. Used by CompleteVodUpload to reconcile a
+	// retry where the multipart already completed on a prior attempt (S3 returns NoSuchUpload).
+	Exists(ctx context.Context, key string) (bool, error)
 	ListUploadedParts(ctx context.Context, key, uploadID string) ([]storage.UploadedPart, error)
 	BuildVodS3Key(tenantID, artifactHash, filename string) string
 	BuildS3URL(key string) string
@@ -102,6 +109,7 @@ type FoghornGRPCServer struct {
 	foghornpb.UnimplementedVodControlServiceServer
 	foghornpb.UnimplementedTenantControlServiceServer
 	foghornpb.UnimplementedNodeControlServiceServer
+	sharedpb.UnimplementedArtifactCreationStatusServiceServer
 
 	db                  *sql.DB
 	logger              logging.Logger
@@ -192,6 +200,7 @@ func (s *FoghornGRPCServer) RegisterServices(grpcServer *grpc.Server) {
 	foghornpb.RegisterVodControlServiceServer(grpcServer, s)
 	foghornpb.RegisterTenantControlServiceServer(grpcServer, s)
 	foghornpb.RegisterNodeControlServiceServer(grpcServer, s)
+	sharedpb.RegisterArtifactCreationStatusServiceServer(grpcServer, s)
 }
 
 // enrichClusterID returns the cluster for an operation. Prefers explicit
@@ -223,6 +232,26 @@ func (s *FoghornGRPCServer) enrichClusterID(explicit, streamName, tenantID strin
 		return id.ServingCluster
 	}
 	return id.OriginClusterID
+}
+
+// resolveDVROriginCluster resolves the SINGLE origin cluster reused for both the
+// Commodore intent/business row (via RegisterDVR) and Foghorn's own artifact row,
+// so the two planes never record different origins. It must be non-empty: an
+// empty-origin intent can never converge (the ack drain's Foghorn resolver rejects
+// an empty cluster), so it falls back to the storage node's cluster, then this
+// Foghorn's own cell. ok is false only when all three are empty — the caller then
+// fails the create instead of persisting an unconvergeable intent.
+func (s *FoghornGRPCServer) resolveDVROriginCluster(req *sharedpb.StartDVRRequest, storageNodeID string) (cluster string, ok bool) {
+	cluster = s.enrichClusterID(req.GetClusterId(), req.InternalName, req.GetTenantId())
+	if cluster == "" {
+		if ns := state.DefaultManager().GetNodeState(storageNodeID); ns != nil && ns.ClusterID != "" {
+			cluster = ns.ClusterID
+		}
+	}
+	if cluster == "" {
+		cluster = s.clusterID
+	}
+	return cluster, cluster != ""
 }
 
 // SetCacheInvalidator sets the cache invalidator for tenant cache management
@@ -297,12 +326,19 @@ func (s *FoghornGRPCServer) resolveVodStorageCluster(ctx context.Context, tenant
 	if s.quartermasterClient != nil {
 		routingCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
 		defer cancel()
-		if routing, err := s.quartermasterClient.GetClusterRouting(routingCtx, &quartermasterpb.GetClusterRoutingRequest{TenantId: tenantID}); err == nil && routing != nil && routing.OfficialClusterId != nil {
-			officialCluster = *routing.OfficialClusterId
+		if routing, err := s.quartermasterClient.GetClusterRouting(routingCtx, &quartermasterpb.GetClusterRoutingRequest{TenantId: tenantID}); err == nil && routing != nil {
+			officialCluster = strings.TrimSpace(routing.GetOfficialClusterId())
+			if officialCluster == "" {
+				// Quartermaster omits official_cluster_id when it equals the tenant's primary cluster;
+				// normalize to the primary so single-cluster tenants still resolve a durable destination.
+				officialCluster = strings.TrimSpace(routing.GetClusterId())
+			}
 		}
 	}
+	// Durable destination is the tenant's OFFICIAL cluster only (mirrors the freeze contract). The ingest/origin
+	// cluster is source-authority attribution, NOT a durable-storage candidate — an advertised BYOC origin must
+	// never win the durable write. A remote official → federation; an unresolved official → unavailable.
 	return resolver.Resolve(storage.ResolverInput{
-		OriginClusterID:   ingestClusterID,
 		OfficialClusterID: officialCluster,
 	})
 }
@@ -444,9 +480,10 @@ func (s *FoghornGRPCServer) consumePendingDVRStop(internalName string) bool {
 }
 
 func (s *FoghornGRPCServer) emitDVRStartFailure(req *sharedpb.StartDVRRequest, reason string) {
-	if s.decklogClient == nil {
-		return
-	}
+	// No foghorn.artifacts row exists yet at the early-validation failures that call this
+	// (source/storage resolution rejects before the DVR INSERT), so there is no state row to
+	// couple the event to. Enqueue the FAILED event durably (own statement, not gated on
+	// decklogClient, error not swallowed); the outbox worker delivers it to Decklog.
 	dvrData := &ipcpb.DVRLifecycleData{
 		Status: ipcpb.DVRLifecycleData_STATUS_FAILED,
 		Error:  &reason,
@@ -475,7 +512,9 @@ func (s *FoghornGRPCServer) emitDVRStartFailure(req *sharedpb.StartDVRRequest, r
 			return nil
 		}(),
 	}
-	go artifactoutbox.EnqueueDVRLifecycleLogged(dvrData)
+	if err := artifactoutbox.EnqueueDVRLifecycle(dvrData); err != nil {
+		s.logger.WithError(err).WithField("internal_name", req.InternalName).Error("Failed to enqueue DVR start-failure lifecycle event")
+	}
 }
 
 // resolveEffectiveDVRConfig clamps the caller-requested DVR window through
@@ -767,8 +806,50 @@ func clipProcessingPreferredNode(nodeID string) string {
 	return nodeID
 }
 
-// CreateClip creates a new clip from a stream
-func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *sharedpb.CreateClipRequest) (*sharedpb.CreateClipResponse, error) {
+// CreateClip creates a new clip from a stream. It records the attempt in Foghorn's command
+// ledger — 'accepted' before any fallible precheck, then 'committed' atomically with the
+// artifact row, or a deferred 'rejected' on any pre-commit exit — which Commodore's
+// convergence sweep reads to terminalize the intent. See docs/architecture/creation-saga.md.
+func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *sharedpb.CreateClipRequest) (resp *sharedpb.CreateClipResponse, err error) {
+	var prog creationLedgerProgress
+	defer func() {
+		err = s.finalizeCreationCommand(req.GetRequestId(), req.GetTenantId(), "clip", req.GetClipHash(), &prog, err)
+	}()
+	resp, err = s.createClipImpl(ctx, req, &prog)
+	return resp, err
+}
+
+// existingClipResult returns the idempotent CreateClip response for a clip artifact
+// that already exists (a retry after a lost response). found is false when no such
+// artifact exists. The fulfilled range is recovered from the durable processing job so
+// the response matches the original create; a second pass must not create a second
+// artifact/job/outbox event.
+func (s *FoghornGRPCServer) existingClipResult(ctx context.Context, tenantID, clipHash, playbackID string) (resp *sharedpb.CreateClipResponse, found bool, err error) {
+	if tenantID == "" || clipHash == "" {
+		return nil, false, nil
+	}
+	var existingStatus string
+	idErr := s.db.QueryRowContext(ctx, `
+		SELECT status FROM foghorn.artifacts
+		 WHERE artifact_hash = $1 AND artifact_type = 'clip' AND tenant_id = $2
+	`, clipHash, tenantID).Scan(&existingStatus)
+	if errors.Is(idErr, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if idErr != nil {
+		return nil, false, status.Errorf(codes.Internal, "failed to check existing clip artifact: %v", idErr)
+	}
+	startMsEff, durationMsEff := s.clipFulfilledTimingMs(ctx, tenantID, clipHash)
+	return &sharedpb.CreateClipResponse{
+		Status:              existingStatus,
+		ClipHash:            clipHash,
+		PlaybackId:          playbackID,
+		EffectiveStartMs:    startMsEff,
+		EffectiveDurationMs: durationMsEff,
+	}, true, nil
+}
+
+func (s *FoghornGRPCServer) createClipImpl(ctx context.Context, req *sharedpb.CreateClipRequest, prog *creationLedgerProgress) (*sharedpb.CreateClipResponse, error) {
 	if req.StreamInternalName == "" {
 		return nil, status.Error(codes.InvalidArgument, "stream_internal_name is required")
 	}
@@ -781,6 +862,46 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *sharedpb.Create
 	if strings.TrimSpace(req.GetProcessesJson()) == "" {
 		return nil, status.Error(codes.FailedPrecondition, "clip processing profile unavailable")
 	}
+	// The durable creation ledger is keyed by (request_id, clip_hash). When request_id is set (an
+	// intent-driven Commodore create) the caller-minted clip_hash MUST accompany it: otherwise 'accepted'
+	// would be recorded under the empty hash while 'committed' keys on the hash Foghorn later generates, so
+	// the commit CAS could never match and the artifact transaction would always roll back. Commodore always
+	// sends both; enforce the contract so a caller that omits the hash fails fast rather than silently.
+	if req.GetRequestId() != "" && strings.TrimSpace(req.GetClipHash()) == "" {
+		return nil, status.Error(codes.InvalidArgument, "clip_hash is required when request_id is set")
+	}
+
+	// Record 'accepted' in the durable command ledger (keyed by request_id + clip_hash)
+	// BEFORE any fallible precheck: a failure past this point is a still-'accepted' row the
+	// deferred finalizer flips to 'rejected', never an absent row the sweep polls forever. A
+	// failed durable write fails the RPC so the client re-drives. See
+	// docs/architecture/creation-saga.md.
+	acceptState, acceptErr := s.recordCreationCommandAcceptedDurable(ctx, req.GetRequestId(), req.GetTenantId(), "clip", req.GetClipHash(), prog)
+	if acceptErr != nil {
+		s.logger.WithError(acceptErr).WithField("clip_hash", req.GetClipHash()).Error("Failed to record accepted clip creation command")
+		if errors.Is(acceptErr, errCreationCommandIdentityMismatch) {
+			return nil, status.Error(codes.FailedPrecondition, "request_id already used for a different artifact")
+		}
+		return nil, status.Errorf(codes.Unavailable, "failed to record clip creation attempt: %v", acceptErr)
+	}
+	// A terminal retry must not resume the create's external work. 'rejected' is
+	// definitive; 'committed' means the clip artifact is already durable, so short-circuit
+	// to the idempotent existing-artifact result (keyed by the request-carried clip_hash)
+	// without re-dispatching.
+	switch acceptState {
+	case creationCommandRejected:
+		return nil, status.Error(codes.FailedPrecondition, "clip creation was terminally rejected")
+	case creationCommandCommitted:
+		resp, found, existErr := s.existingClipResult(ctx, req.GetTenantId(), req.GetClipHash(), req.GetPlaybackId())
+		if existErr != nil {
+			return nil, existErr
+		}
+		if !found {
+			return nil, status.Error(codes.Internal, "committed clip command has no artifact row")
+		}
+		s.logger.WithField("clip_hash", req.GetClipHash()).Info("CreateClip retry of a committed create; returning existing result (idempotent)")
+		return resp, nil
+	}
 
 	// Clip size is not known until export completes; reject only when the
 	// tenant is already at cap. See checkStorageEntitlement docs.
@@ -792,8 +913,13 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *sharedpb.Create
 
 	// Select the storage-capable node that will write the clip artifact. The
 	// source node can differ; Helmsman then pulls from that source node's Mist
-	// /view endpoint and writes locally.
+	// /view endpoint and writes locally. TENANT ISOLATION: scope selection to this
+	// tenant so a tenant-operated storage node can never receive another tenant's
+	// durable work (the balancer only applies the isolation when the scope is set).
 	sctx := context.WithValue(ctx, ctxkeys.KeyCapability, "storage")
+	if req.TenantId != "" {
+		sctx = context.WithValue(sctx, ctxkeys.KeyClusterScope, req.TenantId)
+	}
 	storageHost, _, _, _, _, err := s.lb.GetBestNodeWithScore(sctx, "", 0, 0, map[string]int{}, "", false)
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "no storage node available: %v", err)
@@ -833,6 +959,31 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *sharedpb.Create
 		}
 	}
 
+	// Idempotency: a retry after a lost response (client retry, or Commodore
+	// re-driving the same intent) carries the SAME Commodore-minted clip_hash,
+	// which is the artifact PK. If a clip artifact already exists for this
+	// identity, return the SAME fulfilled range instead of re-dispatching — a
+	// second pass must not create a second artifact/job/outbox event. The
+	// fulfilled range is recovered from the durable processing job so the
+	// response matches the original.
+	if req.GetTenantId() != "" {
+		resp, found, existErr := s.existingClipResult(ctx, req.GetTenantId(), clipHash, req.GetPlaybackId())
+		if existErr != nil {
+			return nil, existErr
+		}
+		if found {
+			// The artifact already exists (a retry after a lost response). Ensure this
+			// attempt's command row is 'committed' before returning success, so a live
+			// artifact is never left behind a forever-'accepted' command the sweep would
+			// poll as in-flight.
+			if ensErr := s.ensureCreationCommandCommitted(ctx, req.GetRequestId(), req.GetTenantId(), "clip", clipHash, prog); ensErr != nil {
+				return nil, status.Errorf(codes.Unavailable, "failed to finalize clip creation command: %v", ensErr)
+			}
+			s.logger.WithField("clip_hash", clipHash).Info("CreateClip is a retry for an existing clip artifact; returning existing result (idempotent)")
+			return resp, nil
+		}
+	}
+
 	// Emit STAGE_REQUESTED event to Decklog (with enriched timing fields)
 	// Cluster attribution must never end up NULL: thumbnail readiness,
 	// freeze storage resolution, and Chandler URL construction all key off
@@ -847,13 +998,21 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *sharedpb.Create
 	if clipCluster == "" {
 		clipCluster = s.clusterID
 	}
-	if s.decklogClient != nil {
+	// STAGE_REQUESTED precedes the foghorn.artifacts INSERT (dispatch can still reject the request
+	// before any row is written), so there is no artifact/command-ledger row to couple it to. It is
+	// therefore explicitly BEST-EFFORT analytics: the enqueue failure is logged and does NOT fail
+	// the create — the durable record of this attempt is the command ledger ('accepted', written
+	// earlier) plus the artifact row written below, not this pre-INSERT event. The outbox worker
+	// delivers enqueued events to Decklog with retry.
+	{
 		clipData := buildClipLifecycleData(ipcpb.ClipLifecycleData_STAGE_REQUESTED, req, reqID, clipHash)
 		if clipCluster != "" {
 			clipData.OriginClusterId = &clipCluster
 			clipData.ServingClusterId = &clipCluster
 		}
-		go artifactoutbox.EnqueueClipLifecycleLogged(clipData)
+		if enqErr := artifactoutbox.EnqueueClipLifecycle(clipData); enqErr != nil {
+			s.logger.WithError(enqErr).WithField("clip_hash", clipHash).Error("Failed to enqueue clip requested lifecycle event (best-effort; create proceeds)")
+		}
 	}
 
 	// Source dispatch first — coverage-aware best-effort selection of
@@ -869,7 +1028,9 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *sharedpb.Create
 		dispatch, dispatchErr = chooseClipSource(startMs, clipEndMs, liveCov, dvrCov, chapCov)
 	}
 	if dispatchErr != nil {
-		if s.decklogClient != nil {
+		// Dispatch rejected before any foghorn.artifacts row was written (INSERT happens later),
+		// so there is no state row to couple this to. Enqueue durably, no decklogClient gate.
+		{
 			failedData := buildClipLifecycleData(ipcpb.ClipLifecycleData_STAGE_FAILED, req, reqID, clipHash)
 			errMsg := fmt.Sprintf("clip source dispatch: %v", dispatchErr)
 			failedData.Error = &errMsg
@@ -877,7 +1038,9 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *sharedpb.Create
 				failedData.OriginClusterId = &clipCluster
 				failedData.ServingClusterId = &clipCluster
 			}
-			go artifactoutbox.EnqueueClipLifecycleLogged(failedData)
+			if enqErr := artifactoutbox.EnqueueClipLifecycle(failedData); enqErr != nil {
+				s.logger.WithError(enqErr).WithField("clip_hash", clipHash).Error("Failed to enqueue clip dispatch-failed lifecycle event")
+			}
 		}
 		s.logger.WithFields(logging.Fields{
 			"tenant_id":     req.GetTenantId(),
@@ -901,7 +1064,10 @@ resolve:
 	for {
 		switch dispatch.kind {
 		case ipcpb.ClipPullRequest_SOURCE_KIND_LIVE:
-			ictx := context.WithValue(ctx, ctxkeys.KeyCapability, "ingest")
+			// Derive from sctx (NOT ctx) so KeyClusterScope=req.TenantId carries through: the live source
+			// selection must stay tenant-isolated, since a source that advertises storage can be adopted as the
+			// durable destination below and a cross-tenant node must never be reachable through that path.
+			ictx := context.WithValue(sctx, ctxkeys.KeyCapability, "ingest")
 			host, _, _, _, _, ingestErr := s.lb.GetBestNodeWithScore(ictx, req.StreamInternalName, 0, 0, map[string]int{}, "", true)
 			liveNodeID := ""
 			if ingestErr == nil {
@@ -969,8 +1135,23 @@ resolve:
 	}
 	if sourceNodeID != "" {
 		if sourceNode := state.DefaultManager().GetNodeState(sourceNodeID); sourceNode != nil && sourceNode.CapStorage {
-			storageNodeID = sourceNodeID
-			storageHost = sourceHost
+			// Co-locate the clip write on the source node (avoids a cross-node pull) ONLY when that node is a
+			// valid tenant-scoped storage destination — the same isolation the initial GetBestNodeWithScore(sctx)
+			// applied. A source node dedicated to another tenant advertising storage must NOT silently replace
+			// the authorized destination; fall back to the tenant-scoped storage node in that case.
+			tenantOK := req.TenantId == "" || sourceNode.TenantID == "" || sourceNode.TenantID == req.TenantId
+			if tenantOK {
+				storageNodeID = sourceNodeID
+				storageHost = sourceHost
+			} else {
+				s.logger.WithFields(logging.Fields{
+					"clip_hash":       clipHash,
+					"source_node_id":  sourceNodeID,
+					"source_tenant":   sourceNode.TenantID,
+					"req_tenant":      req.TenantId,
+					"storage_node_id": storageNodeID,
+				}).Warn("Source node advertises storage but is dedicated to another tenant; keeping tenant-scoped storage destination")
+			}
 		}
 	}
 
@@ -997,20 +1178,11 @@ resolve:
 
 	storagePath := clips.BuildClipStoragePath(req.StreamInternalName, clipHash, format)
 	clipRetentionUntil := resolveArtifactInitialRetention(ctx, s.purserClient, req.TenantId, req.RetentionDays, 30 /* clip system default */, s.logger)
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, stream_internal_name, internal_name, stream_id, tenant_id, user_id, status, request_id, manifest_path, format, origin_cluster_id, retention_until, created_at, updated_at)
-		VALUES ($1, 'clip', $2, $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, NULLIF($6, '')::uuid, 'requested', $7, $8, $9, $10, $11, NOW(), NOW())
-	`, clipHash, req.StreamInternalName, req.GetInternalName(), req.GetStreamId(), req.TenantId, req.GetUserId(), reqID, storagePath, format, clipCluster, clipRetentionUntil)
 
-	if err != nil {
-		s.logger.WithFields(logging.Fields{
-			"clip_hash":     clipHash,
-			"internal_name": req.StreamInternalName,
-			"error":         err,
-		}).Error("Failed to store clip artifact in database")
-		return nil, status.Error(codes.Internal, "failed to store artifact")
-	}
-
+	// Resolve the source stream name and base URL BEFORE creating any artifact row. The LIVE case
+	// can fail (unroutable source); resolving it here means a rejected request never leaves an
+	// orphan clip row behind. Range normalization, dispatch, and source-node selection above are
+	// already pre-insert, so all failure paths that reject the request precede the artifact insert.
 	sourceStreamName := dispatch.streamName
 	sourceBaseURL := ""
 	switch dispatch.kind {
@@ -1018,12 +1190,6 @@ resolve:
 		var sourceErr error
 		sourceStreamName, sourceErr = clipLiveSourceStreamName(ctx, req)
 		if sourceErr != nil {
-			if _, markErr := s.db.ExecContext(ctx, `
-				UPDATE foghorn.artifacts SET status = 'failed', error_message = $1, updated_at = NOW()
-				WHERE artifact_hash = $2 AND tenant_id = $3
-			`, fmt.Sprintf("clip source route unavailable: %v", sourceErr), clipHash, req.TenantId); markErr != nil {
-				s.logger.WithError(markErr).Warn("Failed to mark clip artifact failed")
-			}
 			return nil, status.Errorf(codes.FailedPrecondition, "clip source route unavailable: %v", sourceErr)
 		}
 		if sourceHost != "" && sourceNodeID != "" && sourceNodeID != storageNodeID {
@@ -1068,30 +1234,55 @@ resolve:
 		sourceParams["source_chapter_artifact_hash"] = dispatch.chapterArtifactHash
 	}
 
-	jobID, err := jobs.InsertProcessingJobWithSourceParams(ctx, s.db, req.TenantId, clipHash, "process", nil, req.GetProcessesJson(), "", sourceParams, preferredNodeID)
-	if err != nil {
-		_, _ = s.db.ExecContext(ctx, `
-			UPDATE foghorn.artifacts SET status = 'failed', error_message = $1, updated_at = NOW()
-			WHERE artifact_hash = $2 AND tenant_id = $3
-		`, fmt.Sprintf("processing queue unavailable: %v", err), clipHash, req.TenantId)
-
-		if s.decklogClient != nil {
-			failedData := buildClipLifecycleData(ipcpb.ClipLifecycleData_STAGE_FAILED, req, reqID, clipHash)
-			failedData.Error = func() *string { e := fmt.Sprintf("processing queue unavailable: %v", err); return &e }()
-			go func() {
-				if errSend := artifactoutbox.EnqueueClipLifecycle(failedData); errSend != nil {
-					s.logger.WithError(errSend).Error("Failed to emit clip failed event")
-				}
-			}()
-		}
-
-		s.logger.WithFields(logging.Fields{
-			"clip_hash": clipHash,
-			"node_id":   preferredNodeID,
-			"error":     err,
-		}).Error("Failed to enqueue clip processing job")
-		return nil, status.Errorf(codes.Unavailable, "clip processing unavailable: %v", err)
+	// Create the clip artifact (directly as 'queued'), insert its processing job, and emit the QUEUED
+	// lifecycle event in ONE transaction (durable outbox). Every resolution/validation that can reject
+	// the request ran above, before any row exists, so this commit is the artifact's first durable
+	// state. Committing the artifact row, the processing job, and the QUEUED event together is atomic: a
+	// clip is never durable without its processing job. InsertProcessingJobWithSourceParamsTx joins THIS
+	// tx via pg_advisory_xact_lock (a transaction-scoped advisory lock, released on our commit/rollback),
+	// so the per-artifact insert dedup holds while composing with the outer tx. The event carries the
+	// tenant id (buildClipLifecycleData sets it from req.TenantId); the outbox rejects an empty-tenant
+	// event, which would roll this tx back. If the job insert fails, the whole tx rolls back — no orphan
+	// clip, no orphan job.
+	queuedData := buildClipLifecycleData(ipcpb.ClipLifecycleData_STAGE_QUEUED, req, reqID, clipHash)
+	if clipCluster != "" {
+		queuedData.OriginClusterId = &clipCluster
+		queuedData.ServingClusterId = &clipCluster
 	}
+	var jobID string
+	if txErr := s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
+		if _, execErr := tx.ExecContext(ctx, `
+			INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, stream_internal_name, internal_name, stream_id, tenant_id, user_id, status, request_id, manifest_path, format, origin_cluster_id, retention_until, created_at, updated_at)
+			VALUES ($1, 'clip', $2, $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, NULLIF($6, '')::uuid, 'queued', $7, $8, $9, $10, $11, NOW(), NOW())
+		`, clipHash, req.StreamInternalName, req.GetInternalName(), req.GetStreamId(), req.TenantId, req.GetUserId(), reqID, storagePath, format, clipCluster, clipRetentionUntil); execErr != nil {
+			return execErr
+		}
+		insertedJobID, jobErr := jobs.InsertProcessingJobWithSourceParamsTx(ctx, tx, req.TenantId, clipHash, "process", nil, req.GetProcessesJson(), "", sourceParams, preferredNodeID)
+		if jobErr != nil {
+			return jobErr
+		}
+		jobID = insertedJobID
+		// Commit the command ledger in the SAME tx as the artifact row so the
+		// 'committed' outcome (with the artifact's catalog_revision) is durable
+		// together with the clip.
+		if cmdErr := recordCreationCommandCommitted(ctx, tx, req.GetRequestId(), req.GetTenantId(), "clip", clipHash); cmdErr != nil {
+			return cmdErr
+		}
+		return artifactoutbox.EnqueueClipLifecycleTx(ctx, tx, queuedData)
+	}); txErr != nil {
+		s.logger.WithFields(logging.Fields{
+			"clip_hash":     clipHash,
+			"internal_name": req.StreamInternalName,
+			"error":         txErr,
+		}).Error("Failed to store clip artifact, processing job, and queued lifecycle event")
+		return nil, status.Error(codes.Internal, "failed to store artifact")
+	}
+	// The artifact row and its 'committed' ledger row committed together; the deferred
+	// finalizer must not now record a contradictory 'rejected'.
+	prog.committed = true
+	// The durable queue write committed; wake local dispatchers. The tx variant intentionally does not
+	// notify (the row is not durable until commit), so this is the notify site.
+	jobs.NotifyProcessingJobQueued()
 	s.logger.WithFields(logging.Fields{
 		"clip_hash":       clipHash,
 		"job_id":          jobID,
@@ -1101,15 +1292,14 @@ resolve:
 		"source_base_url": sourceBaseURL,
 	}).Info("Queued clip processing job")
 
-	// Emit STAGE_QUEUED event to Decklog (with enriched timing fields)
-	if s.decklogClient != nil {
-		clipData := buildClipLifecycleData(ipcpb.ClipLifecycleData_STAGE_QUEUED, req, reqID, clipHash)
-		go artifactoutbox.EnqueueClipLifecycleLogged(clipData)
-	}
+	// The artifact was created as 'queued' and its STAGE_QUEUED lifecycle event was committed in the
+	// same transaction above, so there is no separate (swallow-prone) enqueue here.
 
-	// Update stream state
+	// Mirror the durable phase onto the in-memory stream state. The artifact row, the outbox event,
+	// and the RPC response all report 'queued'; publishing an older 'requested' here would let a
+	// consumer observe a regressed lifecycle phase relative to what durably committed.
 	state.DefaultManager().UpdateStreamInstanceInfo(req.StreamInternalName, sourceNodeID, map[string]any{
-		"clip_status":     "requested",
+		"clip_status":     "queued",
 		"clip_request_id": reqID,
 		"clip_format":     format,
 	})
@@ -1126,6 +1316,49 @@ resolve:
 		EffectiveDurationMs: dispatch.effectiveEndMs - dispatch.effectiveStartMs,
 		Partial:             dispatch.partial,
 	}, nil
+}
+
+// DeleteStreamThumbnails removes a live stream's thumbnail control rows + objects. Commodore calls this on stream
+// deletion: a live stream (asset_key = stream_id) has no artifact row, so the purge job never reaches it, and its
+// FINAL active version is never superseded, so version-supersession GC never reclaims it — without this the
+// pointer + objects would be stranded. S3 deletion is routed by the thumbnail's OWN destination cluster.
+func (s *FoghornGRPCServer) DeleteStreamThumbnails(ctx context.Context, req *sharedpb.DeleteStreamThumbnailsRequest) (*sharedpb.DeleteStreamThumbnailsResponse, error) {
+	streamID := strings.TrimSpace(req.GetStreamId())
+	tenantID := strings.TrimSpace(req.GetTenantId())
+	if streamID == "" || tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "stream_id and tenant_id are required")
+	}
+	dbh := control.GetDB()
+	// Order: read destinations → sweep S3 → ONLY THEN drop the control rows. Sweeping S3 BEFORE deleting the rows
+	// means a sweep failure RETAINS the rows (and their destination attribution) so a retry can complete, instead
+	// of losing where the objects live; and we NEVER report success when cleanup didn't happen (no false ack).
+	// A live stream is being deleted, so there is no concurrent publication to fence against (unlike the purge
+	// job, which drops rows first to fence artifact republication).
+	if s.artifactCleaner == nil {
+		s.logger.WithField("stream_id", streamID).Warn("Artifact cleaner not wired; stream thumbnails NOT cleaned")
+		return &sharedpb.DeleteStreamThumbnailsResponse{Success: false, Message: "cleaner not wired; thumbnails not cleaned"}, nil
+	}
+	clusters, cErr := control.ThumbnailDestinationClusters(ctx, dbh, tenantID, streamID)
+	if cErr != nil {
+		return nil, status.Errorf(codes.Internal, "read thumbnail destinations: %v", cErr)
+	}
+	if len(clusters) == 0 {
+		clusters = []string{""}
+	}
+	for _, c := range clusters {
+		if sErr := s.artifactCleaner.DeleteThumbnailsOnCluster(ctx, tenantID, streamID, c); sErr != nil {
+			// Retain the control rows (destination attribution) for a retry; report the honest failure.
+			s.logger.WithError(sErr).WithFields(logging.Fields{"stream_id": streamID, "destination_cluster": c}).
+				Warn("Stream thumbnail S3 sweep failed; control rows retained for retry")
+			return &sharedpb.DeleteStreamThumbnailsResponse{Success: false, Message: "s3 cleanup failed: " + sErr.Error()}, nil
+		}
+	}
+	// S3 objects confirmed gone → drop the control rows. A failure here leaves harmless orphan rows (the objects
+	// are already deleted); surface it as an internal error so the caller can log/retry.
+	if dErr := control.DeleteThumbnailControlRows(ctx, dbh, tenantID, streamID); dErr != nil {
+		return nil, status.Errorf(codes.Internal, "delete thumbnail control rows: %v", dErr)
+	}
+	return &sharedpb.DeleteStreamThumbnailsResponse{Success: true}, nil
 }
 
 // DeleteClip deletes a clip
@@ -1146,13 +1379,18 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 		format           sql.NullString
 		storageClusterID sql.NullString
 		originClusterID  sql.NullString
+		activeObjectKey  sql.NullString
+		activeDtshKey    sql.NullString
+		syncObjectKey    sql.NullString
+		durableLocal     sql.NullBool
 	)
 	err := s.db.QueryRowContext(ctx, `
 		SELECT status, size_bytes, retention_until, stream_internal_name, tenant_id, user_id,
-		       format, storage_cluster_id, origin_cluster_id
+		       format, storage_cluster_id, origin_cluster_id, active_object_key,
+		       active_dtsh_key, sync_object_key, durable_backend_local
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND artifact_type = 'clip' AND tenant_id = $2
-	`, req.ClipHash, req.GetTenantId()).Scan(&currentStatus, &sizeBytes, &retentionUntil, &internalName, &denormTenantID, &denormUserID, &format, &storageClusterID, &originClusterID)
+	`, req.ClipHash, req.GetTenantId()).Scan(&currentStatus, &sizeBytes, &retentionUntil, &internalName, &denormTenantID, &denormUserID, &format, &storageClusterID, &originClusterID, &activeObjectKey, &activeDtshKey, &syncObjectKey, &durableLocal)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		if handled, _ := s.forwardArtifactToFederation(ctx, "delete_clip", req.ClipHash, req.GetTenantId(), ""); handled {
@@ -1178,6 +1416,63 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 		ORDER BY last_seen_at DESC LIMIT 1
 	`, req.ClipHash).Scan(&nodeID)
 
+	// DURABLE STATE FIRST: soft-delete the clip and record the DELETED lifecycle event in ONE
+	// transaction (durable outbox, tenant-scoped) BEFORE removing any bytes. A byte-first delete
+	// could leave a playable catalog row pointing at bytes that are already gone if the DB/outbox
+	// tx then fails. Commodore enrichment is a network call, so build the event OUTSIDE the
+	// transaction; the cleanup error is unknown here (cleanup runs after commit) and is reported
+	// only in the RPC message. The outbox worker — not decklogClient — owns Decklog delivery.
+	clipData := s.buildClipDeletedLifecycleData(ctx, req.ClipHash, nodeID, sizeBytes, retentionUntil, internalName, denormTenantID, denormUserID, "")
+	transitioned := false
+	if err = s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
+		res, execErr := tx.ExecContext(ctx, `
+			UPDATE foghorn.artifacts SET status = 'deleted', updated_at = NOW()
+			WHERE artifact_hash = $1 AND artifact_type = 'clip' AND tenant_id = $2
+			  AND status != 'deleted'
+		`, req.ClipHash, req.GetTenantId())
+		if execErr != nil {
+			return execErr
+		}
+		affected, raErr := res.RowsAffected()
+		if raErr != nil {
+			return raErr
+		}
+		if affected == 0 {
+			// Already deleted (or gone) at UPDATE time — do not enqueue a second DELETED event.
+			return nil
+		}
+		transitioned = true
+		return artifactoutbox.EnqueueClipLifecycleTx(ctx, tx, clipData)
+	}); err != nil {
+		s.logger.WithError(err).Error("Failed to delete clip")
+		return nil, status.Error(codes.Internal, "failed to delete clip")
+	}
+
+	// Lost a concurrent delete race (row already 'deleted' when the guarded UPDATE ran): report
+	// already-deleted and do NO physical cleanup — the winning delete owns the bytes. Returning here
+	// prevents duplicate DELETED analytics and byte removal for a delete this call did not commit.
+	if !transitioned {
+		return &sharedpb.DeleteClipResponse{
+			Success: false,
+			Message: "clip is already deleted",
+		}, nil
+	}
+
+	// Terminate any not-yet-finished processing job so a deleted clip never processes (e.g. delete
+	// races a freshly-queued job, or registry-write compensation). Best-effort and OUTSIDE the
+	// delete transaction: the dispatcher also skips deleted artifacts, so a failure here only risks
+	// a queued row lingering, not the clip re-processing.
+	if _, jobErr := s.db.ExecContext(ctx, `
+		UPDATE foghorn.processing_jobs
+		SET status = 'failed', error_message = 'clip deleted', updated_at = NOW()
+		WHERE artifact_hash = $1 AND status IN ('queued', 'dispatched', 'processing')
+	`, req.ClipHash); jobErr != nil {
+		s.logger.WithError(jobErr).WithField("clip_hash", req.ClipHash).Warn("Failed to cancel processing jobs for deleted clip")
+	}
+
+	// Physical cleanup runs ONLY after the soft-delete committed. Failures are non-fatal and marked
+	// cleanup-pending: the catalog is already durably deleted, so any lingering bytes are storage
+	// garbage the orphan/purge job reclaims, not a correctness bug.
 	cleanupError := ""
 
 	// Send delete request to Helmsman if we know the storage node
@@ -1189,7 +1484,7 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 		}
 		if errSend := control.SendClipDelete(nodeID, deleteReq); errSend != nil {
 			cleanupError = fmt.Sprintf("node cleanup pending: %v", errSend)
-			// Log but don't fail - the soft delete still works, cleanup can happen later
+			// Log but don't fail - the soft delete already committed, cleanup can happen later
 			s.logger.WithFields(logging.Fields{
 				"clip_hash": req.ClipHash,
 				"node_id":   nodeID,
@@ -1204,9 +1499,8 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 		}
 	}
 
-	// Delete S3 bytes immediately (cross-cluster aware via the federation
-	// delete delegate). Failure marks cleanup-pending; soft-delete still
-	// proceeds so the row enters the purge cycle for retries.
+	// Delete S3 bytes (cross-cluster aware via the federation delete delegate). Failure marks
+	// cleanup-pending; the row is already in the purge cycle for retries.
 	if s.artifactCleaner == nil {
 		if cleanupError != "" {
 			cleanupError += "; "
@@ -1214,13 +1508,17 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 		cleanupError += "s3 cleanup pending: cleaner not wired"
 		s.logger.WithField("clip_hash", req.ClipHash).Warn("Artifact cleaner not wired; clip S3 cleanup deferred to purge job")
 	} else if errCleanup := s.artifactCleaner.Delete(ctx, artifacts.ArtifactRef{
-		Hash:             req.ClipHash,
-		Type:             "clip",
-		TenantID:         req.GetTenantId(),
-		StreamInternal:   internalName.String,
-		Format:           format.String,
-		StorageClusterID: storageClusterID.String,
-		OriginClusterID:  originClusterID.String,
+		Hash:                req.ClipHash,
+		Type:                "clip",
+		TenantID:            req.GetTenantId(),
+		StreamInternal:      internalName.String,
+		Format:              format.String,
+		StorageClusterID:    storageClusterID.String,
+		OriginClusterID:     originClusterID.String,
+		ActiveObjectKey:     activeObjectKey.String,
+		ActiveDtshKey:       activeDtshKey.String,
+		PendingObjectKey:    syncObjectKey.String,
+		DurableBackendLocal: durableLocal.Bool,
 	}); errCleanup != nil {
 		if cleanupError != "" {
 			cleanupError += "; "
@@ -1229,32 +1527,7 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 		s.logger.WithError(errCleanup).WithField("clip_hash", req.ClipHash).Warn("Failed to delete clip from S3, will be retried by purge job")
 	}
 
-	// Soft delete in foghorn.artifacts
-	_, err = s.db.ExecContext(ctx, `
-		UPDATE foghorn.artifacts SET status = 'deleted', updated_at = NOW()
-		WHERE artifact_hash = $1 AND artifact_type = 'clip' AND tenant_id = $2
-	`, req.ClipHash, req.GetTenantId())
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to delete clip")
-		return nil, status.Error(codes.Internal, "failed to delete clip")
-	}
-
-	// Terminate any not-yet-finished processing job so a deleted clip never
-	// processes (e.g. delete races a freshly-queued job, or registry-write
-	// compensation). The dispatcher also skips deleted artifacts, but failing
-	// the job here keeps queued rows from lingering.
-	if _, jobErr := s.db.ExecContext(ctx, `
-		UPDATE foghorn.processing_jobs
-		SET status = 'failed', error_message = 'clip deleted', updated_at = NOW()
-		WHERE artifact_hash = $1 AND status IN ('queued', 'dispatched', 'processing')
-	`, req.ClipHash); jobErr != nil {
-		s.logger.WithError(jobErr).WithField("clip_hash", req.ClipHash).Warn("Failed to cancel processing jobs for deleted clip")
-	}
-
 	s.logger.WithField("clip_hash", req.ClipHash).Info("Clip soft-deleted successfully")
-
-	// Emit deletion lifecycle immediately (do not wait for node cleanup)
-	s.emitClipDeletedLifecycle(ctx, req.ClipHash, nodeID, sizeBytes, retentionUntil, internalName, denormTenantID, denormUserID, cleanupError)
 
 	message := "clip deleted successfully"
 	if cleanupError != "" {
@@ -1267,6 +1540,81 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 }
 
 // DVR CONTROL SERVICE IMPLEMENTATION
+
+// errDVRStartRaced signals that the recording UPDATE matched zero rows: a concurrent terminal
+// transition (stop/fail/finalize) moved the artifact out of the startable set between the storage
+// node accepting the recording and this commit. The start did not durably apply.
+var errDVRStartRaced = errors.New("dvr start raced a concurrent terminal transition")
+
+// buildDVRStartedLifecycleData builds the STATUS_STARTED lifecycle event for a DVR. Shared by the
+// primary start path and the retry-reconciliation path so both carry identical identity fields. The
+// tenant id must be set — the outbox rejects an empty-tenant lifecycle event.
+func buildDVRStartedLifecycleData(req *sharedpb.StartDVRRequest, dvrHash, dvrCluster, streamID string) *ipcpb.DVRLifecycleData {
+	data := &ipcpb.DVRLifecycleData{
+		Status:           ipcpb.DVRLifecycleData_STATUS_STARTED,
+		DvrHash:          dvrHash,
+		OriginClusterId:  &dvrCluster,
+		ServingClusterId: &dvrCluster,
+		StartedAt:        func() *int64 { t := time.Now().Unix(); return &t }(),
+	}
+	if streamID != "" {
+		data.StreamId = &streamID
+	} else if req.StreamId != nil && *req.StreamId != "" {
+		data.StreamId = req.StreamId
+	}
+	if req.TenantId != "" {
+		data.TenantId = &req.TenantId
+	}
+	if req.InternalName != "" {
+		data.StreamInternalName = &req.InternalName
+	}
+	if req.UserId != nil && *req.UserId != "" {
+		data.UserId = req.UserId
+	}
+	return data
+}
+
+// reconcileStartingDVR handles a retry that finds an existing DVR row still in 'starting' (a prior
+// StartDVR persisted the command attempt and (attempted to) dispatch it, but never observed the
+// node's confirmation). It returns an HONEST status string, never an optimistic promotion:
+//
+//   - 'recording': the node's first DVRProgress already promoted the row (positive confirmation) —
+//     the recording is genuinely running, so the caller returns "already_started".
+//   - 'requested'/'starting': still in flight, the node has not yet confirmed — the caller returns
+//     "starting". We do NOT re-send the start command inline here; the authoritative recording
+//     transition is driven exclusively by the node's progress report. A crash between the
+//     'starting' persist and the node's first progress ack
+//     leaves the row 'starting' with no progress arriving; that honest, non-terminal state is
+//     reconciled by jobs.DVRStartingRecoveryJob, which reads the persisted dvr_start_dispatch
+//     descriptor and idempotently re-dispatches SendDVRStart (the sidecar treats a repeat start for
+//     the same hash+stream as an idempotent ack), or finalizes the row failed if it stays
+//     unrecoverable — strictly safer than a false 'recording'.
+//   - anything terminal ('completed'/'completed_partial'/'failed'/'deleted'): a concurrent
+//     stop/finalize won — surface FailedPrecondition rather than a false already_started/started.
+//
+// The returned string is the wire Status the caller reports; the bool is whether that maps to an
+// active recording (true) so the caller can choose already_started vs starting.
+func (s *FoghornGRPCServer) reconcileStartingDVR(ctx context.Context, req *sharedpb.StartDVRRequest, dvrHash string) (string, error) {
+	var current string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT status FROM foghorn.artifacts
+		 WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND tenant_id = $2
+	`, dvrHash, req.TenantId).Scan(&current)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", status.Error(codes.FailedPrecondition, "DVR start could not be reconciled; artifact no longer exists")
+	} else if err != nil {
+		s.logger.WithError(err).WithField("dvr_hash", dvrHash).Error("Failed to re-read DVR status during start reconciliation")
+		return "", status.Error(codes.Internal, "failed to reconcile DVR start")
+	}
+	switch current {
+	case "recording":
+		return "already_started", nil
+	case "requested", "starting":
+		return "starting", nil
+	default:
+		return "", status.Errorf(codes.FailedPrecondition, "DVR start could not be reconciled; recording state is terminal (%s)", current)
+	}
+}
 
 // StartDVR initiates DVR recording for a stream
 func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *sharedpb.StartDVRRequest) (*sharedpb.StartDVRResponse, error) {
@@ -1281,7 +1629,7 @@ func (s *FoghornGRPCServer) StartDVRWithSourceHint(ctx context.Context, req *sha
 	return s.startDVR(ctx, req, sourceNodeID)
 }
 
-func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVRRequest, sourceNodeHint string) (*sharedpb.StartDVRResponse, error) {
+func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVRRequest, sourceNodeHint string) (resp *sharedpb.StartDVRResponse, retErr error) {
 	if req.InternalName == "" {
 		return nil, status.Error(codes.InvalidArgument, "internal_name is required")
 	}
@@ -1296,8 +1644,6 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 		s.emitDVRStartFailure(req, err.Error())
 		return nil, err
 	}
-
-	dvrCluster := s.enrichClusterID(req.GetClusterId(), req.InternalName, req.GetTenantId())
 
 	// Resolve effective DVR live-window / segment / max-entries policy. The
 	// caller (Commodore manual path; Foghorn auto-record) supplies the tier
@@ -1323,8 +1669,12 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 		return nil, status.Error(codes.Unavailable, "no source node available")
 	}
 
-	// Select storage node
+	// Select storage node. TENANT ISOLATION: scope to this tenant so a tenant-operated storage node can never
+	// receive another tenant's durable recording (the balancer applies the isolation only when the scope is set).
 	sctx := context.WithValue(ctx, ctxkeys.KeyCapability, "storage")
+	if req.TenantId != "" {
+		sctx = context.WithValue(sctx, ctxkeys.KeyClusterScope, req.TenantId)
+	}
 	storageHost, _, _, _, _, err := s.lb.GetBestNodeWithScore(sctx, "", 0, 0, map[string]int{}, "", false)
 	if err != nil {
 		s.emitDVRStartFailure(req, fmt.Sprintf("no storage node available: %v", err))
@@ -1337,13 +1687,23 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 		return nil, status.Error(codes.Unavailable, "storage node not connected")
 	}
 
-	// Check for existing active DVR in foghorn.artifacts
-	var existingHash string
+	// Resolve the origin cluster ONCE; both the Commodore intent (RegisterDVR below)
+	// and Foghorn's artifact row use this exact value so the two planes never diverge.
+	dvrCluster, clusterOK := s.resolveDVROriginCluster(req, storageNodeID)
+	if !clusterOK {
+		s.emitDVRStartFailure(req, "unable to resolve DVR origin cluster")
+		return nil, status.Error(codes.FailedPrecondition, "unable to resolve DVR origin cluster")
+	}
+
+	// Check for existing active DVR in foghorn.artifacts. A retry can land here on a row a prior
+	// attempt left in 'starting' (the storage node was told to record but the durable transition was
+	// never confirmed). Do NOT blindly report already_started for that: reconcile it below.
+	var existingHash, existingStatus string
 	_ = s.db.QueryRowContext(ctx, `
-		SELECT artifact_hash FROM foghorn.artifacts
-		WHERE stream_internal_name=$1 AND artifact_type='dvr' AND status IN ('requested','starting','recording')
+		SELECT artifact_hash, status FROM foghorn.artifacts
+		WHERE stream_internal_name=$1 AND artifact_type='dvr' AND status IN ('requested','starting','recording') AND tenant_id = $2
 		ORDER BY created_at DESC LIMIT 1
-	`, req.InternalName).Scan(&existingHash)
+	`, req.InternalName, req.TenantId).Scan(&existingHash, &existingStatus)
 
 	if existingHash != "" {
 		playbackID := ""
@@ -1351,6 +1711,26 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 			if resp, errResolve := control.CommodoreClient.ResolveDVRHash(ctx, existingHash); errResolve == nil && resp.Found {
 				playbackID = resp.PlaybackId
 			}
+		}
+		if existingStatus == "starting" || existingStatus == "requested" {
+			// Reconcile the unconfirmed prior attempt instead of returning a false already_started. A
+			// 'requested' row now also carries the durable dvr_start_dispatch descriptor (written with the
+			// insert), so the recovery worker can resume it — a retry must return the HONEST in-flight state,
+			// never already_started-dead. reconcileStartingDVR reports "already_started" only if the node
+			// already confirmed (row is 'recording'), "starting" if still in flight ('requested'/'starting'),
+			// or an error if the row went terminal. It never optimistically promotes to 'recording'.
+			reconciledStatus, recErr := s.reconcileStartingDVR(ctx, req, existingHash)
+			if recErr != nil {
+				return nil, recErr
+			}
+			return &sharedpb.StartDVRResponse{
+				Status:        reconciledStatus,
+				DvrHash:       existingHash,
+				IngestHost:    baseURL,
+				StorageHost:   storageHost,
+				StorageNodeId: storageNodeID,
+				PlaybackId:    playbackID,
+			}, nil
 		}
 		return &sharedpb.StartDVRResponse{
 			Status:        "already_started",
@@ -1367,13 +1747,23 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 	var artifactInternalName string
 	var playbackID string
 	var streamID string
+	// intentRequestID keys Foghorn's command ledger for this DVR create attempt (distinct
+	// from the tracing requestID below). See docs/architecture/creation-saga.md.
+	var intentRequestID string
+	// Guarantee a terminal ledger outcome for every exit past the intent mint: the defer
+	// records 'rejected' only if 'accepted' ran but the artifact insert did not commit
+	// (finalizeCreationCommand's own guard). Closes over intentRequestID + dvrHash.
+	var ledgerProg creationLedgerProgress
+	defer func() {
+		retErr = s.finalizeCreationCommand(intentRequestID, req.TenantId, "dvr", dvrHash, &ledgerProg, retErr)
+	}()
 	if control.CommodoreClient != nil {
 		regReq := &commodorepb.RegisterDVRRequest{
 			TenantId:           req.TenantId,
 			UserId:             req.GetUserId(),
 			StreamId:           req.GetStreamId(),
 			StreamInternalName: req.InternalName,
-			OriginClusterId:    s.enrichClusterID(req.GetClusterId(), req.InternalName, req.GetTenantId()),
+			OriginClusterId:    dvrCluster,
 		}
 		var regResp *commodorepb.RegisterDVRResponse
 		regResp, err = control.CommodoreClient.RegisterDVR(ctx, regReq)
@@ -1385,8 +1775,39 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 		artifactInternalName = regResp.GetInternalName()
 		playbackID = regResp.GetPlaybackId()
 		streamID = regResp.GetStreamId()
+		intentRequestID = regResp.GetRequestId()
 	} else {
 		return nil, status.Error(codes.Unavailable, "Commodore not available")
+	}
+
+	// Record the DVR create attempt in-flight in the command ledger, keyed by the
+	// intent request_id. Any pre-commit failure below terminalizes 'rejected' via the
+	// deferred finalizer; the artifact insert records 'committed' in the same tx. If
+	// 'accepted' cannot be written durably, FAIL the RPC before persisting anything.
+	acceptState, acceptErr := s.recordCreationCommandAcceptedDurable(ctx, intentRequestID, req.TenantId, "dvr", dvrHash, &ledgerProg)
+	if acceptErr != nil {
+		s.logger.WithError(acceptErr).WithField("dvr_hash", dvrHash).Error("Failed to record accepted DVR creation command")
+		if errors.Is(acceptErr, errCreationCommandIdentityMismatch) {
+			return nil, status.Error(codes.FailedPrecondition, "request_id already used for a different artifact")
+		}
+		return nil, status.Errorf(codes.Unavailable, "failed to record DVR creation attempt: %v", acceptErr)
+	}
+	// A terminal retry of this DVR create attempt must not resume it. 'rejected' is
+	// definitive; 'committed' means the DVR artifact is already durable, so report it as
+	// already started rather than inserting a duplicate. (A fresh RegisterDVR normally
+	// mints a new hash, so these branches only fire on a re-driven intent.)
+	switch acceptState {
+	case creationCommandRejected:
+		return nil, status.Error(codes.FailedPrecondition, "DVR creation was terminally rejected")
+	case creationCommandCommitted:
+		return &sharedpb.StartDVRResponse{
+			Status:        "already_started",
+			DvrHash:       dvrHash,
+			IngestHost:    baseURL,
+			StorageHost:   storageHost,
+			StorageNodeId: storageNodeID,
+			PlaybackId:    playbackID,
+		}, nil
 	}
 
 	// Generate request_id for tracing (distinct from artifact hash)
@@ -1410,42 +1831,88 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 	// thumbnails/sprites across Foghorn restarts and process-cache TTL expiry.
 	// Same snapshot pattern as dvr_window_seconds / dvr_chapter_mode.
 	dvrProcessesJSON := req.GetProcessesJson()
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO foghorn.artifacts (
-			artifact_hash, artifact_type, stream_internal_name, internal_name,
-			stream_id, tenant_id, user_id,
-			status, request_id, format, origin_cluster_id,
-			dvr_window_seconds, dvr_chapter_mode, dvr_chapter_interval, dvr_retention_days, dvr_processes_json,
-			created_at, updated_at
-		)
-		VALUES ($1, 'dvr', $2, $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, NULLIF($6, '')::uuid,
-		        'requested', $7, 'm3u8', $8, $9, NULLIF($10, '')::text, NULLIF($11, 0)::int, NULLIF($12, 0)::int, NULLIF($13, '')::text,
-		        NOW(), NOW())
-	`,
-		dvrHash, req.InternalName, artifactInternalName, streamID, req.TenantId, req.GetUserId(), requestID, dvrCluster,
-		effective.DVRWindowSeconds, chapterMode, chapterInterval, retentionDays, dvrProcessesJSON,
-	)
 
-	if err != nil {
-		if control.CommodoreClient != nil {
-			if _, cleanupErr := control.CommodoreClient.UpdateDVRRetention(ctx, &commodorepb.UpdateDVRRetentionRequest{
-				DvrHash:        dvrHash,
-				TenantId:       req.TenantId,
-				RetentionUntil: timestamppb.New(time.Now().UTC()),
-			}); cleanupErr != nil {
-				s.logger.WithError(cleanupErr).WithFields(logging.Fields{
-					"dvr_hash":  dvrHash,
-					"tenant_id": req.TenantId,
-				}).Warn("Failed to expire DVR registry row after Foghorn insert failure")
-			}
+	// Resolve the source runtime name + DTSC input and build the durable dvr_start_dispatch descriptor
+	// (target node + every field to rebuild the DVRStartRequest, state='pending') BEFORE inserting the
+	// row, so the descriptor is written ATOMICALLY with the 'requested' insert (same statement). A crash
+	// after the row exists then ALWAYS leaves a descriptor the stale-'requested'/'starting' recovery
+	// worker can find and resume — there is no window where a 'requested' row exists without one. These
+	// resolutions can fail; because nothing is persisted yet, a failure just expires the Commodore
+	// registry row we minted and returns, with no artifact row to finalize.
+	sourceStreamName := dvrSourceStreamName(req.InternalName)
+	fullDTSC := control.BuildDTSCURI(sourceNodeID, sourceStreamName, s.logger)
+	if fullDTSC == "" {
+		// No artifact row was written; the deferred finalizer records 'rejected' and
+		// the Commodore sweep removes the catalog-only dvr_recordings row on abort.
+		s.emitDVRStartFailure(req, "DTSC output not available on source node")
+		return nil, status.Error(codes.Unavailable, "DTSC output not available on source node")
+	}
+	sourceBaseURL := fullDTSC
+	if storageNodeID == sourceNodeID {
+		sourceBaseURL = ""
+	}
+	dispatchJSON, dispatchErr := json.Marshal(jobs.DVRStartDispatch{
+		State:             jobs.DVRDispatchStatePending,
+		NodeID:            storageNodeID,
+		NodeBaseURL:       storageHost,
+		SourceRuntimeName: sourceStreamName,
+		SourceBaseURL:     sourceBaseURL,
+		SegmentSeconds:    int32(effective.SegmentDurationSeconds),
+		WindowSeconds:     int32(effective.DVRWindowSeconds),
+		MaxEntries:        int32(effective.MaxEntries),
+		StreamID:          streamID,
+		InternalName:      req.InternalName,
+		DispatchedAt:      time.Now().Unix(),
+	})
+	if dispatchErr != nil {
+		// Nothing persisted; the deferred finalizer records 'rejected' and the
+		// Commodore sweep removes the catalog-only dvr_recordings row on abort.
+		s.logger.WithError(dispatchErr).WithField("dvr_hash", dvrHash).Error("Failed to encode DVR start dispatch descriptor; not persisting DVR row")
+		return nil, status.Error(codes.Internal, "failed to encode DVR start command attempt")
+	}
+
+	// Insert the DVR artifact row AND record the 'committed' ledger outcome in ONE
+	// transaction (same shape as CreateClip/CreateVodUpload). A separate committed
+	// write could otherwise fail after a durable DVR insert and leave a live recording
+	// with a forever-'accepted' intent; committing them together removes that window.
+	// On failure the deferred finalizer records 'rejected' and the Commodore sweep
+	// removes the catalog-only dvr_recordings row on abort — no best-effort cleanup here.
+	if txErr := s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
+		if _, execErr := tx.ExecContext(ctx, `
+			INSERT INTO foghorn.artifacts (
+				artifact_hash, artifact_type, stream_internal_name, internal_name,
+				stream_id, tenant_id, user_id,
+				status, request_id, format, origin_cluster_id,
+				dvr_window_seconds, dvr_chapter_mode, dvr_chapter_interval, dvr_retention_days, dvr_processes_json,
+				dvr_start_dispatch,
+				created_at, updated_at
+			)
+			VALUES ($1, 'dvr', $2, $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, NULLIF($6, '')::uuid,
+			        'requested', $7, 'm3u8', $8, $9, NULLIF($10, '')::text, NULLIF($11, 0)::int, NULLIF($12, 0)::int, NULLIF($13, '')::text,
+			        $14::jsonb,
+			        NOW(), NOW())
+		`,
+			dvrHash, req.InternalName, artifactInternalName, streamID, req.TenantId, req.GetUserId(), requestID, dvrCluster,
+			effective.DVRWindowSeconds, chapterMode, chapterInterval, retentionDays, dvrProcessesJSON,
+			string(dispatchJSON),
+		); execErr != nil {
+			return execErr
 		}
+		// Composed into the SAME tx so the 'committed' ledger row (with the artifact's
+		// catalog_revision, read from the row just inserted above) is durable together
+		// with the DVR artifact.
+		return recordCreationCommandCommitted(ctx, tx, intentRequestID, req.TenantId, "dvr", dvrHash)
+	}); txErr != nil {
 		s.logger.WithFields(logging.Fields{
 			"dvr_hash":      dvrHash,
 			"internal_name": req.InternalName,
-			"error":         err,
+			"error":         txErr,
 		}).Error("Failed to store DVR artifact in database")
 		return nil, status.Error(codes.Internal, "failed to store DVR artifact")
 	}
+	// The DVR artifact row and its 'committed' ledger row committed together; the
+	// deferred finalizer must not now record a contradictory 'rejected'.
+	ledgerProg.committed = true
 
 	if s.consumePendingDVRStop(req.InternalName) {
 		final, finalErr := control.FinalizeDVR(ctx, dvrHash, control.FinalizeOptions{
@@ -1467,41 +1934,10 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 		if responseStatus == "" {
 			responseStatus = "failed"
 		}
-		if s.decklogClient != nil {
-			stoppedAt := time.Now().Unix()
-			errorMsg := "stream ended before DVR start"
-			dvrData := &ipcpb.DVRLifecycleData{
-				Status:  ipcpb.DVRLifecycleData_STATUS_STOPPED,
-				DvrHash: dvrHash,
-				EndedAt: &stoppedAt,
-				Error:   &errorMsg,
-				StreamId: func() *string {
-					if req.StreamId != nil && *req.StreamId != "" {
-						return req.StreamId
-					}
-					return nil
-				}(),
-				TenantId: func() *string {
-					if req.TenantId != "" {
-						return &req.TenantId
-					}
-					return nil
-				}(),
-				StreamInternalName: func() *string {
-					if req.InternalName != "" {
-						return &req.InternalName
-					}
-					return nil
-				}(),
-				UserId: func() *string {
-					if req.UserId != nil && *req.UserId != "" {
-						return req.UserId
-					}
-					return nil
-				}(),
-			}
-			go artifactoutbox.EnqueueDVRLifecycleLogged(dvrData)
-		}
+		// control.FinalizeDVR (called above) enqueues the terminal STOPPED lifecycle event INSIDE its
+		// own finalize transaction (see dvr_finalize.go), so the state transition and its event commit
+		// atomically. A second independent enqueue here would produce a DUPLICATE STOPPED event, so we
+		// deliberately do not emit one on this pending-stop path.
 		return &sharedpb.StartDVRResponse{
 			Status:        responseStatus,
 			DvrHash:       dvrHash,
@@ -1517,20 +1953,25 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 	// stays false on this parent DVR row — it's a multi-file recording,
 	// not a single relayable artifact. Completeness is registered per
 	// chapter by the DVR chapter finalize, each under its own VOD hash.
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO foghorn.artifact_nodes (artifact_hash, node_id, base_url, cached_at, role, is_complete)
-		VALUES ($1, $2, $3, NOW(), 'origin', false)
-		ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
-			base_url = EXCLUDED.base_url,
-			last_seen_at = NOW(),
-			is_orphaned = false,
-			cached_at = COALESCE(foghorn.artifact_nodes.cached_at, NOW()),
-			role = 'origin'
-	`, dvrHash, storageNodeID, storageHost)
-
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to store DVR artifact node assignment")
-		// Don't fail the request, the artifact was created
+	// Route through the transactional origin-registration path so a cache→origin
+	// promotion emits UPDATED atomically (a raw upsert + presence-only refresh would
+	// miss the role change).
+	if err = control.RegisterDVRRecordingOrigin(ctx, dvrHash, storageNodeID, storageHost); err != nil {
+		// The recording-origin row (foghorn.artifact_nodes) is what routes rolling-DVR playback and
+		// targets the stop command; a DVR with no origin can be neither served nor cleanly stopped.
+		// Fail the start HONESTLY rather than proceeding to command a recording with no durable origin.
+		// Nothing was dispatched to the node yet, so finalizing the just-created 'requested' row failed
+		// is a complete rollback. The stale-'starting' recovery worker re-runs this same registration on
+		// re-dispatch, so a crash AFTER a successful registration is still reconciled.
+		s.logger.WithError(err).WithField("dvr_hash", dvrHash).Error("Failed to store DVR recording-origin assignment; failing start")
+		if final, finalErr := control.FinalizeDVR(ctx, dvrHash, control.FinalizeOptions{
+			ReportedStatus: "failed",
+			ReportedError:  fmt.Sprintf("recording-origin registration failed: %v", err),
+			StorageNodeID:  storageNodeID,
+		}); finalErr != nil && final.ArtifactStatus == "" {
+			s.logger.WithError(finalErr).WithField("dvr_hash", dvrHash).Error("Failed to finalize DVR after recording-origin registration failure")
+		}
+		return nil, status.Error(codes.Internal, "failed to store DVR recording-origin assignment")
 	}
 
 	// DVR configuration. Effective live-window / segment / max_entries are
@@ -1547,22 +1988,37 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 		RetentionUntil: 0,
 	}
 
-	sourceStreamName := dvrSourceStreamName(req.InternalName)
-	fullDTSC := control.BuildDTSCURI(sourceNodeID, sourceStreamName, s.logger)
-	if fullDTSC == "" {
-		final, finalErr := control.FinalizeDVR(ctx, dvrHash, control.FinalizeOptions{
-			ReportedStatus: "failed",
-			ReportedError:  "DTSC output not available on source node",
-			StorageNodeID:  storageNodeID,
-		})
-		if finalErr != nil && final.ArtifactStatus == "" {
-			s.logger.WithError(finalErr).WithField("dvr_hash", dvrHash).Error("Failed to finalize DVR after DTSC lookup failure")
-		}
-		return nil, status.Error(codes.Unavailable, "DTSC output not available on source node")
+	// Transition 'requested'->'starting' (guarded, tenant-scoped) and CHECK it committed (RowsAffected)
+	// BEFORE telling the node to record. The dvr_start_dispatch descriptor is already durable from the
+	// insert above; this UPDATE only advances the state, re-asserting the same descriptor so the "row is
+	// 'starting' only with a descriptor present" invariant holds explicitly. If the update errors OR
+	// matches zero rows (a concurrent stop/finalize already moved the row terminal), we MUST NOT send the
+	// external start command: launching a recording with no durable backing is exactly the inconsistency
+	// this ordering prevents. Return an error; nothing was sent, so there is nothing to compensate.
+	startingRes, startingErr := s.db.ExecContext(ctx, `
+		UPDATE foghorn.artifacts
+		   SET status = 'starting', dvr_start_dispatch = $3::jsonb, updated_at = NOW()
+		 WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND tenant_id = $2 AND status = 'requested'
+	`, dvrHash, req.TenantId, string(dispatchJSON))
+	if startingErr != nil {
+		s.logger.WithError(startingErr).WithFields(logging.Fields{
+			"dvr_hash":  dvrHash,
+			"tenant_id": req.TenantId,
+		}).Error("Failed to persist DVR 'starting' command attempt; not sending start command")
+		return nil, status.Error(codes.Internal, "failed to persist DVR start command attempt")
 	}
-	sourceBaseURL := fullDTSC
-	if storageNodeID == sourceNodeID {
-		sourceBaseURL = ""
+	startingRows, startingRAErr := startingRes.RowsAffected()
+	if startingRAErr != nil {
+		s.logger.WithError(startingRAErr).WithField("dvr_hash", dvrHash).Error("Failed to read DVR 'starting' RowsAffected; not sending start command")
+		return nil, status.Error(codes.Internal, "failed to persist DVR start command attempt")
+	}
+	if startingRows == 0 {
+		// The row left 'requested' before we could claim it (concurrent stop/finalize). Do not send.
+		s.logger.WithFields(logging.Fields{
+			"dvr_hash":  dvrHash,
+			"tenant_id": req.TenantId,
+		}).Error("DVR row left 'requested' before start-command persist; not sending start command")
+		return nil, status.Error(codes.Aborted, "DVR start raced a concurrent stop before command dispatch")
 	}
 
 	// Send gRPC control message to storage Helmsman. source_runtime_name
@@ -1579,117 +2035,107 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 	}
 
 	if err := control.SendDVRStart(storageNodeID, dvrReq); err != nil {
+		if classifyDVRSendError(err) != dvrSendDefinitiveReject {
+			// AMBIGUOUS send (transport/timeout/Unavailable/not-connected): the node MAY have accepted the
+			// start before the error surfaced. Terminalizing here would mark a possibly-running recording
+			// 'failed' and drop it out of the recovery scan. Instead leave the row 'starting' with its
+			// durable dvr_start_dispatch descriptor (state 'pending') so DVRStartingRecoveryJob idempotently
+			// re-dispatches — and, past the hard grace with no node progress, stops+finalizes. Return an
+			// error so the caller may also retry (the sidecar treats a repeat start for the same hash+stream
+			// as an ack), but do NOT finalize.
+			s.logger.WithError(err).WithFields(logging.Fields{
+				"dvr_hash": dvrHash,
+				"node_id":  storageNodeID,
+			}).Error("Ambiguous DVR start dispatch; leaving 'starting' for recovery reconciliation (not finalizing)")
+			return nil, status.Error(codes.Unavailable, "DVR start dispatch ambiguous; left for recovery reconciliation")
+		}
+		// DEFINITIVE rejection: the node rejected the command outright and is NOT recording. Terminalize now.
 		final, finalErr := control.FinalizeDVR(ctx, dvrHash, control.FinalizeOptions{
 			ReportedStatus: "failed",
-			ReportedError:  fmt.Sprintf("storage node unavailable: %v", err),
+			ReportedError:  fmt.Sprintf("storage node rejected DVR start: %v", err),
 			StorageNodeID:  storageNodeID,
 		})
 		if finalErr != nil && final.ArtifactStatus == "" {
-			s.logger.WithError(finalErr).WithField("dvr_hash", dvrHash).Error("Failed to finalize DVR after storage start failure")
+			s.logger.WithError(finalErr).WithField("dvr_hash", dvrHash).Error("Failed to finalize DVR after storage start rejection")
 		}
-
-		// Emit FAILED event to Decklog
-		if s.decklogClient != nil {
-			failedData := &ipcpb.DVRLifecycleData{
-				Status:  ipcpb.DVRLifecycleData_STATUS_FAILED,
-				DvrHash: dvrHash,
-				Error:   func() *string { e := fmt.Sprintf("storage node unavailable: %v", err); return &e }(),
-				StreamId: func() *string {
-					if req.StreamId != nil && *req.StreamId != "" {
-						return req.StreamId
-					}
-					return nil
-				}(),
-				TenantId: func() *string {
-					if req.TenantId != "" {
-						return &req.TenantId
-					}
-					return nil
-				}(),
-				StreamInternalName: func() *string {
-					if req.InternalName != "" {
-						return &req.InternalName
-					}
-					return nil
-				}(),
-				UserId: func() *string {
-					if req.UserId != nil && *req.UserId != "" {
-						return req.UserId
-					}
-					return nil
-				}(),
-			}
-			go func() {
-				if errSend := artifactoutbox.EnqueueDVRLifecycle(failedData); errSend != nil {
-					s.logger.WithError(errSend).Error("Failed to emit DVR failed event")
-				}
-			}()
-		}
+		// control.FinalizeDVR above owns and commits the terminal FAILED state AND its FAILED lifecycle
+		// event atomically (setArtifactFailed enqueues it in-tx). We do NOT enqueue a second FAILED event
+		// here — that produced duplicate terminal history.
 
 		s.logger.WithFields(logging.Fields{
 			"dvr_hash": dvrHash,
 			"node_id":  storageNodeID,
 			"error":    err,
-		}).Error("Failed to send DVR start request to storage node")
+		}).Error("Storage node definitively rejected DVR start request")
 		return nil, status.Error(codes.Internal, "failed to start DVR on storage node")
 	}
-	if _, updateErr := s.db.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		   SET status = 'recording',
-		       started_at = COALESCE(started_at, NOW()),
-		       updated_at = NOW()
-		 WHERE artifact_hash = $1 AND artifact_type = 'dvr'
-	`, dvrHash); updateErr != nil {
-		s.logger.WithError(updateErr).WithField("dvr_hash", dvrHash).Warn("Failed to mark DVR artifact recording after storage start")
-	}
-
-	// Emit DVR STATUS_STARTED event to Decklog
-	if s.decklogClient != nil {
-		dvrData := &ipcpb.DVRLifecycleData{
-			Status:           ipcpb.DVRLifecycleData_STATUS_STARTED,
-			DvrHash:          dvrHash,
-			OriginClusterId:  &dvrCluster,
-			ServingClusterId: &dvrCluster,
-			StartedAt:        func() *int64 { t := time.Now().Unix(); return &t }(),
-			StreamId: func() *string {
-				if streamID != "" {
-					return &streamID
-				}
-				if req.StreamId != nil && *req.StreamId != "" {
-					return req.StreamId
-				}
-				return nil
-			}(),
-			TenantId: func() *string {
-				if req.TenantId != "" {
-					return &req.TenantId
-				}
-				return nil
-			}(),
-			StreamInternalName: func() *string {
-				if req.InternalName != "" {
-					return &req.InternalName
-				}
-				return nil
-			}(),
-			UserId: func() *string {
-				if req.UserId != nil && *req.UserId != "" {
-					return req.UserId
-				}
-				return nil
-			}(),
+	// The node's first progress report is the authoritative "recording" ack. The storage sidecar
+	// (api_sidecar DVRManager) sets its job Status to "recording" once Mist is actually writing
+	// segments and emits a DVRProgress control message; Foghorn's processDVRProgress -> ApplyDVRProgress
+	// -> UpdateDVRProgressByHash promotes the artifact 'starting'->'recording' (guarded on
+	// status IN ('requested','starting','recording')). That first progress event — NOT this RPC — is the
+	// authoritative "recording" signal. So StartDVR must NOT optimistically claim 'recording': after the
+	// node ACCEPTS the start command we leave the row 'starting' and let the node's confirmation drive
+	// the recording transition. We report Status "starting" (honest "start requested"), never a
+	// "started"/"recording"-as-confirmed with no evidence.
+	//
+	// We still commit the STARTED lifecycle event here (start command was durably persisted and
+	// dispatched) in ONE transaction so the event can't be lost. The tx does NOT change status; it only
+	// guards that the row is still in a startable/recording state (a concurrent stop/finalize may have
+	// moved it terminal after SendDVRStart) so no STARTED event is minted for a dead artifact. A tx
+	// failure is NOT fatal and drives NO compensating stop: the node accepted the recording and the row
+	// is already durably 'starting' with its dvr_start_dispatch descriptor, so a lost STARTED event
+	// leaves node progress and DVRStartingRecoveryJob to reconcile the row.
+	dvrData := buildDVRStartedLifecycleData(req, dvrHash, dvrCluster, streamID)
+	if txErr := s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
+		// Guard only — the row stays 'starting' (or 'recording' if the node already confirmed between
+		// our persist above and here). A terminal status means a concurrent stop/finalize won; abort so
+		// we emit no STARTED event for an artifact that is no longer starting.
+		res, execErr := tx.ExecContext(ctx, `
+			UPDATE foghorn.artifacts
+			   SET updated_at = NOW()
+			 WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND tenant_id = $2
+			   AND status IN ('starting', 'recording')
+		`, dvrHash, req.TenantId)
+		if execErr != nil {
+			return execErr
 		}
-		go artifactoutbox.EnqueueDVRLifecycleLogged(dvrData)
+		affected, raErr := res.RowsAffected()
+		if raErr != nil {
+			return raErr
+		}
+		if affected == 0 {
+			return errDVRStartRaced
+		}
+		return artifactoutbox.EnqueueDVRLifecycleTx(ctx, tx, dvrData)
+	}); txErr != nil {
+		// The node ACCEPTED the start and the row is durably 'starting' with its dvr_start_dispatch
+		// descriptor (persisted before send). The only work this tx does is emit the STARTED lifecycle
+		// event, so its failure does NOT mean the recording failed — we neither compensate-stop nor mark
+		// the row failed here. Two cases:
+		//   - errDVRStartRaced (guard matched 0 rows): a concurrent stop/finalize already moved the row
+		//     terminal and owns tearing the node down (every concurrent terminalizer issues its own stop).
+		//     Emit no STARTED event for a dead artifact; report the honest superseded result.
+		//   - any other error (outbox/DB): the row stays 'starting'/'pending'. The node's first progress
+		//     promotes it to 'recording', or the DVRStartingRecoveryJob deadline path stops+finalizes.
+		//     Warn and fall through to return the honest 'starting' status rather than a fatal error that
+		//     would imply the recording never started.
+		if errors.Is(txErr, errDVRStartRaced) {
+			s.logger.WithError(txErr).WithField("dvr_hash", dvrHash).Warn("DVR started on storage node but the row was concurrently moved terminal; STARTED event not emitted, concurrent stop/finalize owns teardown")
+			return nil, status.Error(codes.Aborted, "DVR start superseded by a concurrent stop")
+		}
+		s.logger.WithError(txErr).WithField("dvr_hash", dvrHash).Warn("DVR started on storage node but STARTED lifecycle event failed to commit; row left 'starting'/'pending' for progress + recovery reconciliation")
 	}
 
-	// Update stream state
+	// Reflect the honest in-flight status. The row is 'starting'; the node's first DVRProgress promotes
+	// it to 'recording' (which ApplyDVRProgress also mirrors onto this stream-instance dvr_status).
 	state.DefaultManager().UpdateStreamInstanceInfo(req.InternalName, storageNodeID, map[string]any{
-		"dvr_status": "requested",
+		"dvr_status": "starting",
 		"dvr_hash":   dvrHash,
 	})
 
 	return &sharedpb.StartDVRResponse{
-		Status:        "started",
+		Status:        "starting",
 		DvrHash:       dvrHash,
 		IngestHost:    baseURL,
 		StorageHost:   storageHost,
@@ -1896,6 +2342,21 @@ func (s *FoghornGRPCServer) StopDVR(ctx context.Context, req *sharedpb.StopDVRRe
 	}, nil
 }
 
+// withArtifactLifecycleTx runs fn inside a single transaction and commits it, so a durable state
+// transition and its lifecycle outbox row commit atomically (or not at all). The outbox drain
+// worker — not the producer — owns Decklog delivery, so this must never gate on decklogClient.
+func (s *FoghornGRPCServer) withArtifactLifecycleTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // DeleteDVR deletes a DVR recording and its files
 func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteDVRRequest) (*sharedpb.DeleteDVRResponse, error) {
 	if req.DvrHash == "" {
@@ -1915,14 +2376,18 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteD
 		denormUserID     sql.NullString
 		storageClusterID sql.NullString
 		originClusterID  sql.NullString
+		activeObjectKey  sql.NullString
+		activeDtshKey    sql.NullString
+		syncObjectKey    sql.NullString
+		durableLocal     sql.NullBool
 	)
 
 	err := s.db.QueryRowContext(ctx, `
 		SELECT status, COALESCE(stream_internal_name, ''), size_bytes, retention_until, started_at, ended_at, tenant_id, user_id,
-		       storage_cluster_id, origin_cluster_id
+		       storage_cluster_id, origin_cluster_id, active_object_key, active_dtsh_key, sync_object_key, durable_backend_local
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND tenant_id = $2
-	`, req.DvrHash, req.GetTenantId()).Scan(&dvrStatus, &internalName, &sizeBytes, &retentionUntil, &startedAt, &endedAt, &denormTenantID, &denormUserID, &storageClusterID, &originClusterID)
+	`, req.DvrHash, req.GetTenantId()).Scan(&dvrStatus, &internalName, &sizeBytes, &retentionUntil, &startedAt, &endedAt, &denormTenantID, &denormUserID, &storageClusterID, &originClusterID, &activeObjectKey, &activeDtshKey, &syncObjectKey, &durableLocal)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		if handled, _ := s.forwardArtifactToFederation(ctx, "delete_dvr", req.DvrHash, req.GetTenantId(), ""); handled {
@@ -1932,13 +2397,6 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteD
 	} else if err != nil {
 		s.logger.WithError(err).Error("Failed to fetch DVR artifact")
 		return nil, status.Error(codes.Internal, "failed to fetch DVR artifact")
-	}
-
-	if dvrStatus == "deleted" {
-		return &sharedpb.DeleteDVRResponse{
-			Success: false,
-			Message: "DVR recording is already deleted",
-		}, nil
 	}
 
 	// Get node_id from artifact_nodes
@@ -1966,9 +2424,35 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteD
 		}
 	}
 
+	// DURABLE STATE FIRST: soft-delete the parent DVR, cascade its child chapter artifacts, and
+	// remove the chapter rows — all in ONE transaction — BEFORE deleting any bytes. A byte-first
+	// delete could leave an active catalog row whose bytes are already gone (on a subsequent DB
+	// failure), or leave active children the purge job can never discover. Because parent+children
+	// are marked deleted here, the standard orphan/purge flow reclaims ALL their bytes.
+	childHashes, parentTransitioned, delErr := control.SoftDeleteDVRAndChapters(ctx, req.DvrHash, req.GetTenantId())
+	if delErr != nil {
+		s.logger.WithError(delErr).WithField("dvr_hash", req.DvrHash).Error("Failed to soft-delete DVR recording")
+		return nil, status.Error(codes.Internal, "failed to delete DVR recording")
+	}
+
+	// Already-deleted parent (idempotent re-delete, or the losing side of a concurrent delete): the
+	// cascade above still repaired any children that were never soft-deleted, so report
+	// their hashes for the caller's catalog cascade — but return Success=false so the Gateway does
+	// NOT emit a duplicate API deletion event. No physical cleanup: the parent's bytes were already
+	// reclaimed (or are pending) from the original delete.
+	if !parentTransitioned {
+		return &sharedpb.DeleteDVRResponse{
+			Success:              false,
+			Message:              "DVR recording is already deleted",
+			DeletedChapterHashes: childHashes,
+		}, nil
+	}
+	s.logger.WithFields(logging.Fields{"dvr_hash": req.DvrHash, "chapters": len(childHashes)}).Info("DVR recording + chapters soft-deleted (durable state committed)")
+
 	cleanupError := ""
 
-	// Send delete request to Helmsman if we know the storage node
+	// Now physical cleanup (retryable; failure only marks cleanup-pending — the durable delete
+	// already committed, and the orphan/purge job reclaims any bytes left behind).
 	if nodeID != "" {
 		requestID := uuid.NewString()
 		deleteReq := &ipcpb.DVRDeleteRequest{
@@ -1977,7 +2461,6 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteD
 		}
 		if errDelete := control.SendDVRDelete(nodeID, deleteReq); errDelete != nil {
 			cleanupError = fmt.Sprintf("node cleanup pending: %v", errDelete)
-			// Log but don't fail - the soft delete still works, cleanup can happen later
 			s.logger.WithFields(logging.Fields{
 				"dvr_hash": req.DvrHash,
 				"node_id":  nodeID,
@@ -1992,8 +2475,7 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteD
 		}
 	}
 
-	// Delete S3 bytes immediately (cross-cluster aware). Failure marks
-	// cleanup-pending; soft-delete still proceeds.
+	// Delete S3 bytes (cross-cluster aware). Failure marks cleanup-pending.
 	if s.artifactCleaner == nil {
 		if cleanupError != "" {
 			cleanupError += "; "
@@ -2001,12 +2483,16 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteD
 		cleanupError += "s3 cleanup pending: cleaner not wired"
 		s.logger.WithField("dvr_hash", req.DvrHash).Warn("Artifact cleaner not wired; DVR S3 cleanup deferred to purge job")
 	} else if errCleanup := s.artifactCleaner.Delete(ctx, artifacts.ArtifactRef{
-		Hash:             req.DvrHash,
-		Type:             "dvr",
-		TenantID:         req.GetTenantId(),
-		StreamInternal:   internalName,
-		StorageClusterID: storageClusterID.String,
-		OriginClusterID:  originClusterID.String,
+		Hash:                req.DvrHash,
+		Type:                "dvr",
+		TenantID:            req.GetTenantId(),
+		StreamInternal:      internalName,
+		StorageClusterID:    storageClusterID.String,
+		OriginClusterID:     originClusterID.String,
+		ActiveObjectKey:     activeObjectKey.String,
+		ActiveDtshKey:       activeDtshKey.String,
+		PendingObjectKey:    syncObjectKey.String,
+		DurableBackendLocal: durableLocal.Bool,
 	}); errCleanup != nil {
 		if cleanupError != "" {
 			cleanupError += "; "
@@ -2015,28 +2501,17 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteD
 		s.logger.WithError(errCleanup).WithField("dvr_hash", req.DvrHash).Warn("Failed to delete DVR from S3, will be retried by purge job")
 	}
 
-	// Soft delete in foghorn.artifacts
-	_, err = s.db.ExecContext(ctx, `
-		UPDATE foghorn.artifacts SET status = 'deleted', updated_at = NOW()
-		WHERE artifact_hash = $1 AND artifact_type = 'dvr'
-	`, req.DvrHash)
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to delete DVR recording")
-		return nil, status.Error(codes.Internal, "failed to delete DVR recording")
-	}
-
-	s.logger.WithField("dvr_hash", req.DvrHash).Info("DVR recording soft-deleted successfully")
-
-	// Emit deletion lifecycle immediately (do not wait for node cleanup)
-	s.emitDVRDeletedLifecycle(ctx, req.DvrHash, nodeID, sizeBytes, retentionUntil, startedAt, endedAt, internalName, denormTenantID, denormUserID, cleanupError)
+	// The DVR-deleted (and per-chapter VOD-deleted) lifecycle events were already enqueued
+	// DURABLY inside SoftDeleteDVRAndChapters' transaction — no separate loss-prone emit here.
 
 	message := "DVR recording deleted successfully"
 	if cleanupError != "" {
 		message = "DVR recording deleted (" + cleanupError + ")"
 	}
 	return &sharedpb.DeleteDVRResponse{
-		Success: true,
-		Message: message,
+		Success:              true,
+		Message:              message,
+		DeletedChapterHashes: childHashes,
 	}, nil
 }
 
@@ -2913,8 +3388,68 @@ func generateVodHash(tenantID, filename string, timestamp time.Time) string {
 	return hex.EncodeToString(hash[:])[:32] // 32 char hash like clips
 }
 
-// CreateVodUpload initiates a multipart upload and returns presigned URLs
-func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *sharedpb.CreateVodUploadRequest) (*sharedpb.CreateVodUploadResponse, error) {
+// CreateVodUpload initiates a multipart upload and returns presigned URLs. It records the
+// attempt in Foghorn's command ledger — 'accepted' before any fallible precheck and before
+// the external S3 multipart create, then 'committed' atomically with the artifact row, or a
+// deferred 'rejected' on any pre-commit exit. See docs/architecture/creation-saga.md.
+func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *sharedpb.CreateVodUploadRequest) (resp *sharedpb.CreateVodUploadResponse, err error) {
+	var prog creationLedgerProgress
+	defer func() {
+		err = s.finalizeCreationCommand(req.GetRequestId(), req.GetTenantId(), "vod", req.GetVodHash(), &prog, err)
+	}()
+	resp, err = s.createVodUploadImpl(ctx, req, &prog)
+	return resp, err
+}
+
+// existingVodUploadResult returns the idempotent CreateVodUpload response for a VOD
+// artifact whose multipart already exists (a retry after a lost response), re-signing
+// the EXISTING S3 multipart from its persisted s3_key + upload_id rather than creating a
+// second one. found is false when no such artifact exists.
+func (s *FoghornGRPCServer) existingVodUploadResult(ctx context.Context, tenantID, artifactHash, playbackID string, partSize int64) (resp *sharedpb.CreateVodUploadResponse, found bool, err error) {
+	if tenantID == "" || artifactHash == "" {
+		return nil, false, nil
+	}
+	var (
+		existingUploadID  string
+		existingS3Key     string
+		existingParts     int
+		existingExpiresAt time.Time
+	)
+	idErr := s.db.QueryRowContext(ctx, `
+		SELECT m.s3_upload_id, m.s3_key, m.total_parts, m.upload_expires_at
+		  FROM foghorn.artifacts a
+		  JOIN foghorn.vod_metadata m ON m.artifact_hash = a.artifact_hash
+		 WHERE a.artifact_hash = $1 AND a.artifact_type = 'vod' AND a.tenant_id = $2
+	`, artifactHash, tenantID).Scan(&existingUploadID, &existingS3Key, &existingParts, &existingExpiresAt)
+	if errors.Is(idErr, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if idErr != nil {
+		return nil, false, status.Errorf(codes.Internal, "failed to check existing VOD upload: %v", idErr)
+	}
+	if s.s3Client == nil {
+		return nil, false, status.Error(codes.FailedPrecondition, "S3 storage not configured")
+	}
+	reParts, reErr := s.s3Client.GeneratePresignedUploadParts(existingS3Key, existingUploadID, existingParts, 2*time.Hour)
+	if reErr != nil {
+		return nil, false, status.Errorf(codes.Internal, "failed to re-sign existing upload URLs: %v", reErr)
+	}
+	protoParts := make([]*sharedpb.VodUploadPart, len(reParts))
+	for i, p := range reParts {
+		protoParts[i] = &sharedpb.VodUploadPart{PartNumber: int32(p.PartNumber), PresignedUrl: p.PresignedURL}
+	}
+	return &sharedpb.CreateVodUploadResponse{
+		UploadId:     existingUploadID,
+		ArtifactId:   artifactHash,
+		ArtifactHash: artifactHash,
+		PartSize:     partSize,
+		Parts:        protoParts,
+		ExpiresAt:    timestamppb.New(existingExpiresAt),
+		PlaybackId:   playbackID,
+	}, true, nil
+}
+
+func (s *FoghornGRPCServer) createVodUploadImpl(ctx context.Context, req *sharedpb.CreateVodUploadRequest, prog *creationLedgerProgress) (*sharedpb.CreateVodUploadResponse, error) {
 	if req.TenantId == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
@@ -2926,6 +3461,46 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *sharedpb.C
 	}
 	if req.GetInternalName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "internal_name is required")
+	}
+	// The durable creation ledger is keyed by (request_id, vod_hash). When request_id is set the
+	// caller-minted vod_hash MUST accompany it: otherwise 'accepted' is recorded under the empty hash while
+	// 'committed' keys on the hash Foghorn generates, so the commit CAS could never match and the artifact
+	// transaction would always roll back. Commodore always sends both; enforce the contract.
+	if req.GetRequestId() != "" && strings.TrimSpace(req.GetVodHash()) == "" {
+		return nil, status.Error(codes.InvalidArgument, "vod_hash is required when request_id is set")
+	}
+
+	// Record 'accepted' in the durable command ledger (keyed by request_id + vod_hash)
+	// BEFORE any fallible precheck and before the external S3 multipart create: a failure
+	// past this point is a still-'accepted' row the deferred finalizer flips to 'rejected',
+	// never an absent row the sweep polls forever. A failed durable write fails the RPC so
+	// the client re-drives. See docs/architecture/creation-saga.md.
+	acceptState, acceptErr := s.recordCreationCommandAcceptedDurable(ctx, req.GetRequestId(), req.GetTenantId(), "vod", req.GetVodHash(), prog)
+	if acceptErr != nil {
+		s.logger.WithError(acceptErr).WithField("vod_hash", req.GetVodHash()).Error("Failed to record accepted VOD creation command")
+		if errors.Is(acceptErr, errCreationCommandIdentityMismatch) {
+			return nil, status.Error(codes.FailedPrecondition, "request_id already used for a different artifact")
+		}
+		return nil, status.Errorf(codes.Unavailable, "failed to record VOD creation attempt: %v", acceptErr)
+	}
+	// A terminal retry must not resume the create's external work. 'rejected' is
+	// definitive; 'committed' means the upload artifact + multipart already exist, so
+	// short-circuit to the idempotent existing-artifact result (re-signing the EXISTING
+	// multipart) without creating a second S3 upload.
+	switch acceptState {
+	case creationCommandRejected:
+		return nil, status.Error(codes.FailedPrecondition, "VOD creation was terminally rejected")
+	case creationCommandCommitted:
+		partSize, _ := storage.CalculatePartSize(req.SizeBytes)
+		resp, found, existErr := s.existingVodUploadResult(ctx, req.GetTenantId(), req.GetVodHash(), req.GetPlaybackId(), partSize)
+		if existErr != nil {
+			return nil, existErr
+		}
+		if !found {
+			return nil, status.Error(codes.Internal, "committed VOD command has no artifact row")
+		}
+		s.logger.WithField("vod_hash", req.GetVodHash()).Info("CreateVodUpload retry of a committed create; returning existing multipart (idempotent)")
+		return resp, nil
 	}
 
 	// Upload size is known up-front; reject when the upload would push the
@@ -2960,6 +3535,33 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *sharedpb.C
 	// Calculate part size and count
 	partSize, partCount := storage.CalculatePartSize(req.SizeBytes)
 
+	// Idempotency: a retry after a lost response carries the SAME Commodore-minted
+	// vod_hash (the artifact PK). If the artifact + its multipart metadata already
+	// exist, re-sign the EXISTING S3 multipart upload and return it rather than
+	// creating a second multipart/artifact/outbox event. Presigned URLs are
+	// re-derived from the persisted s3_key + upload_id, so the retry response is
+	// equivalent to the original.
+	if req.GetVodHash() != "" {
+		resp, found, existErr := s.existingVodUploadResult(ctx, req.TenantId, artifactHash, req.GetPlaybackId(), partSize)
+		if existErr != nil {
+			return nil, existErr
+		}
+		if found {
+			// The artifact + multipart already exist (a retry after a lost response).
+			// Ensure this attempt's command row is 'committed' before returning success, so
+			// a live artifact is never left behind a forever-'accepted' command the sweep
+			// would poll as in-flight.
+			if ensErr := s.ensureCreationCommandCommitted(ctx, req.GetRequestId(), req.GetTenantId(), "vod", artifactHash, prog); ensErr != nil {
+				return nil, status.Errorf(codes.Unavailable, "failed to finalize VOD creation command: %v", ensErr)
+			}
+			s.logger.WithFields(logging.Fields{
+				"artifact_hash": artifactHash,
+				"upload_id":     resp.GetUploadId(),
+			}).Info("CreateVodUpload is a retry for an existing upload; returning existing multipart (idempotent)")
+			return resp, nil
+		}
+	}
+
 	// Build S3 key
 	s3Key := s.s3Client.BuildVodS3Key(req.TenantId, artifactHash, req.Filename)
 
@@ -2993,10 +3595,13 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *sharedpb.C
 		return nil, status.Errorf(codes.InvalidArgument, "filename must have an extension to determine format")
 	}
 
-	// Store artifact in foghorn.artifacts with status='uploading'.
-	// storage_cluster_id is set to the resolver-chosen cluster when it
-	// differs from the request's cluster_id (origin); when they match the
-	// column stays NULL to preserve the prior origin-as-storage semantic.
+	// Store the artifact row, its VOD metadata, and the STATUS_REQUESTED lifecycle event in ONE
+	// transaction (durable outbox). The S3 multipart upload was created above as an external side
+	// effect; if this transaction fails we ABORT that upload so no orphaned multipart lingers, then
+	// return an error — we never return success with half-written rows or a missing lifecycle event.
+	// storage_cluster_id is set to the resolver-chosen cluster when it differs from the request's
+	// cluster_id (origin); when they match the column stays NULL to preserve the prior
+	// origin-as-storage semantic.
 	storageClusterArg := sql.NullString{}
 	if storageCluster != "" && storageCluster != req.GetClusterId() {
 		storageClusterArg = sql.NullString{String: storageCluster, Valid: true}
@@ -3005,58 +3610,65 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *sharedpb.C
 	// Commodore-supplied retention_days takes precedence; the tier cap
 	// (0=uncapped on paid, finite on Free) clamps the result.
 	vodRetentionUntil := resolveArtifactInitialRetention(ctx, s.purserClient, req.TenantId, req.RetentionDays, 0 /* infinite VOD default */, s.logger)
-	err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		_, execErr := s.db.ExecContext(ctx, `
-		INSERT INTO foghorn.artifacts (
-			artifact_hash, artifact_type, internal_name,
-			tenant_id, user_id, status,
-			sync_status, size_bytes, s3_url, format, origin_cluster_id, storage_cluster_id, retention_until, created_at, updated_at
-		)
-		VALUES ($1, 'vod', $2, NULLIF($3, '')::uuid, NULLIF($4, '')::uuid, 'uploading',
-		        'in_progress', $5, $6, $7, $8, $9, $10, NOW(), NOW())
-	`, artifactHash, req.GetInternalName(), req.TenantId, req.UserId, req.SizeBytes, s.s3Client.BuildS3URL(s3Key), vodFormat, req.GetClusterId(), storageClusterArg, vodRetentionUntil)
-		return execErr
-	})
-
-	if err != nil {
-		// Abort S3 upload since we can't track it
-		_ = s.s3Client.AbortMultipartUpload(ctx, s3Key, uploadID)
-		s.logger.WithError(err).Error("Failed to store VOD artifact")
-		return nil, status.Errorf(codes.Internal, "failed to store artifact: %v", err)
-	}
-
 	uploadExpiresAt := time.Now().Add(2 * time.Hour)
 
-	// Store VOD metadata
-	err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		_, execErr := s.db.ExecContext(ctx, `
-		INSERT INTO foghorn.vod_metadata (
-			artifact_hash, filename, title, description, content_type,
-			s3_upload_id, s3_key, upload_expires_at, total_parts, created_at, updated_at
-		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
-	`, artifactHash, req.Filename, req.GetTitle(), req.GetDescription(), contentType, uploadID, s3Key, uploadExpiresAt, partCount)
-		return execErr
-	})
-
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to store VOD metadata")
-		if abortErr := s.s3Client.AbortMultipartUpload(ctx, s3Key, uploadID); abortErr != nil {
-			s.logger.WithError(abortErr).WithField("upload_id", uploadID).Warn("Failed to abort multipart upload after metadata write failure")
-		}
-		if _, markErr := s.db.ExecContext(ctx, `
-			UPDATE foghorn.artifacts
-			SET status = 'failed',
-			    sync_status = 'failed',
-			    sync_error = $1,
-			    error_message = $1,
-			    updated_at = NOW()
-			WHERE artifact_hash = $2
-		`, fmt.Sprintf("failed to store upload metadata: %v", err), artifactHash); markErr != nil {
-			s.logger.WithError(markErr).WithField("artifact_hash", artifactHash).Error("Failed to mark VOD artifact failed after metadata write failure")
-		}
-		return nil, status.Error(codes.Internal, "failed to store upload metadata")
+	// The REQUESTED event MUST carry the tenant id: the outbox rejects an empty-tenant lifecycle
+	// event (ErrLifecycleMissingTenant), which would roll this transaction back.
+	vodData := &ipcpb.VodLifecycleData{
+		Status:      ipcpb.VodLifecycleData_STATUS_REQUESTED,
+		VodHash:     artifactHash,
+		UploadId:    &uploadID,
+		Filename:    &req.Filename,
+		ContentType: &contentType,
+		SizeBytes:   proto.Uint64(uint64(req.SizeBytes)),
+		TenantId:    &req.TenantId,
+		StartedAt:   proto.Int64(time.Now().Unix()),
 	}
+	if req.UserId != "" {
+		vodData.UserId = &req.UserId
+	}
+	if cid := req.GetClusterId(); cid != "" {
+		vodData.OriginClusterId = &cid
+		vodData.ServingClusterId = &cid
+	}
+
+	if txErr := s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
+		if _, execErr := tx.ExecContext(ctx, `
+			INSERT INTO foghorn.artifacts (
+				artifact_hash, artifact_type, internal_name,
+				tenant_id, user_id, status,
+				sync_status, size_bytes, s3_url, format, origin_cluster_id, storage_cluster_id, retention_until, created_at, updated_at
+			)
+			VALUES ($1, 'vod', $2, NULLIF($3, '')::uuid, NULLIF($4, '')::uuid, 'uploading',
+			        'in_progress', $5, $6, $7, $8, $9, $10, NOW(), NOW())
+		`, artifactHash, req.GetInternalName(), req.TenantId, req.UserId, req.SizeBytes, s.s3Client.BuildS3URL(s3Key), vodFormat, req.GetClusterId(), storageClusterArg, vodRetentionUntil); execErr != nil {
+			return execErr
+		}
+		if _, execErr := tx.ExecContext(ctx, `
+			INSERT INTO foghorn.vod_metadata (
+				artifact_hash, filename, title, description, content_type,
+				s3_upload_id, s3_key, upload_expires_at, total_parts, created_at, updated_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+		`, artifactHash, req.Filename, req.GetTitle(), req.GetDescription(), contentType, uploadID, s3Key, uploadExpiresAt, partCount); execErr != nil {
+			return execErr
+		}
+		// Commit the command ledger in the SAME tx as the artifact row so the
+		// 'committed' outcome is durable together with the VOD.
+		if cmdErr := recordCreationCommandCommitted(ctx, tx, req.GetRequestId(), req.GetTenantId(), "vod", artifactHash); cmdErr != nil {
+			return cmdErr
+		}
+		return artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData)
+	}); txErr != nil {
+		if abortErr := s.s3Client.AbortMultipartUpload(ctx, s3Key, uploadID); abortErr != nil {
+			s.logger.WithError(abortErr).WithField("upload_id", uploadID).Warn("Failed to abort multipart upload after create transaction failure")
+		}
+		s.logger.WithError(txErr).WithField("artifact_hash", artifactHash).Error("Failed to persist VOD upload create (artifact+metadata+requested event)")
+		return nil, status.Error(codes.Internal, "failed to record upload")
+	}
+	// The artifact row and its 'committed' ledger row committed together; the deferred
+	// finalizer must not now record a contradictory 'rejected'.
+	prog.committed = true
 
 	s.logger.WithFields(logging.Fields{
 		"artifact_hash": artifactHash,
@@ -3068,43 +3680,9 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *sharedpb.C
 		"part_size":     partSize,
 	}).Info("Created VOD multipart upload")
 
-	// Project the storage cluster onto Commodore's registry row when the
-	// resolver chose a non-origin cluster, so list/get APIs can derive
-	// thumbnail URLs from the authoritative cluster.
-	if storageClusterArg.Valid && storageClusterArg.String != "" && control.CommodoreClient != nil {
-		go func(artifactHash, tenantID, cluster string) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if _, err := control.CommodoreClient.UpdateArtifactStorageCluster(ctx, tenantID, commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_VOD, artifactHash, cluster); err != nil {
-				s.logger.WithError(err).WithFields(logging.Fields{
-					"artifact_hash":   artifactHash,
-					"storage_cluster": cluster,
-				}).Warn("Failed to notify Commodore of VOD storage cluster")
-			}
-		}(artifactHash, req.TenantId, storageClusterArg.String)
-	}
-
-	// Emit VOD lifecycle event to Decklog (STATUS_REQUESTED)
-	if s.decklogClient != nil {
-		vodData := &ipcpb.VodLifecycleData{
-			Status:      ipcpb.VodLifecycleData_STATUS_REQUESTED,
-			VodHash:     artifactHash,
-			UploadId:    &uploadID,
-			Filename:    &req.Filename,
-			ContentType: &contentType,
-			SizeBytes:   proto.Uint64(uint64(req.SizeBytes)),
-			TenantId:    &req.TenantId,
-			StartedAt:   proto.Int64(time.Now().Unix()),
-		}
-		if req.UserId != "" {
-			vodData.UserId = &req.UserId
-		}
-		if cid := req.GetClusterId(); cid != "" {
-			vodData.OriginClusterId = &cid
-			vodData.ServingClusterId = &cid
-		}
-		go artifactoutbox.EnqueueVodLifecycleLogged(vodData)
-	}
+	// The storage cluster is written to foghorn.artifacts (authoritative) at registration; the
+	// artifact reconciler projects storage_cluster_id onto the Commodore catalog with its
+	// revision guard, so no unguarded fire-and-forget projection is done here.
 
 	// Convert storage.UploadPart to proto
 	protoParts := make([]*sharedpb.VodUploadPart, len(parts))
@@ -3256,6 +3834,167 @@ func vodUploadLastErrorCode(state sharedpb.VodStatus, errorMessage string) strin
 	}
 }
 
+// isNoSuchUploadError reports whether an S3 error is a genuine, SDK-TYPED "the multipart upload id no
+// longer exists" signal — a prior attempt already completed (or aborted) it. Classification is by TYPE,
+// never by substring: the aws-sdk-go-v2 layer wraps the API error with %w, so a real NoSuchUpload is an
+// *types.NoSuchUpload (which also satisfies smithy.APIError with code "NoSuchUpload"). An unrelated
+// provider error (AccessDenied, NoSuchBucket, ...) whose message merely contains "does not exist" is NOT
+// a gone upload and must not be mistaken for one — treating it as gone would falsely reconcile/converge.
+func isNoSuchUploadError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var noSuch *types.NoSuchUpload
+	if errors.As(err, &noSuch) {
+		return true
+	}
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.ErrorCode() == "NoSuchUpload"
+	}
+	return false
+}
+
+// s3CompletionClass classifies a CompleteMultipartUpload error so CompleteVodUpload can distinguish a
+// definite failure from cases where the object may already be committed on S3.
+type s3CompletionClass int
+
+const (
+	// s3CompletionDefiniteFailure: a permanent, client-side failure (e.g. 4xx AccessDenied / malformed
+	// request). The object did not land, so marking the artifact 'failed' is safe.
+	s3CompletionDefiniteFailure s3CompletionClass = iota
+	// s3CompletionMaybeCompleted: NoSuchUpload — the multipart id is gone because a prior attempt
+	// already completed (object present) or aborted (object absent) it. Probe Exists to decide.
+	s3CompletionMaybeCompleted
+	// s3CompletionAmbiguous: a transport/5xx failure (timeout, deadline, connection reset, HTTP 5xx).
+	// S3 MAY have committed the object even though the client saw an error. Probe Exists; if that is
+	// inconclusive (object absent or the probe itself errored) leave the row 'completing' for later
+	// reconciliation rather than recording a false 'failed'.
+	s3CompletionAmbiguous
+)
+
+// classifyS3CompletionError classifies a CompleteMultipartUpload error by TYPE (AWS SDK typed errors /
+// transport error types), not by string matching, so an ambiguous transport or 5xx failure — which
+// may have committed the object server-side — is never treated as a definite failure that would
+// strand a completed object as a 'failed' artifact.
+func classifyS3CompletionError(err error) s3CompletionClass {
+	if err == nil {
+		return s3CompletionDefiniteFailure
+	}
+	// NoSuchUpload (typed): the multipart id is gone (prior attempt completed or aborted it).
+	if isNoSuchUploadError(err) {
+		return s3CompletionMaybeCompleted
+	}
+	// Ambiguous transport failures: the request may have reached S3 and been applied before the client
+	// saw the error.
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+		return s3CompletionAmbiguous
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return s3CompletionAmbiguous
+	}
+	// Smithy typed API error: a 5xx server fault is ambiguous (the write may have landed); a 4xx client
+	// fault is a definite, permanent failure.
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		if apiErr.ErrorFault() == smithy.FaultServer {
+			return s3CompletionAmbiguous
+		}
+		return s3CompletionDefiniteFailure
+	}
+	// Opaque transport error with no typed signal (bare "connection reset" / "broken pipe" / EOF
+	// strings some SDK/proxy layers surface): prefer leaving 'completing' over a false 'failed'.
+	if isAmbiguousTransportError(err) {
+		return s3CompletionAmbiguous
+	}
+	return s3CompletionDefiniteFailure
+}
+
+// isAmbiguousTransportError is the string-based fallback for transport failures that arrive without a
+// typed net.Error / smithy.APIError signal. Conservative on purpose: a false ambiguous only delays a
+// genuine failure until the recovery scan confirms the object absent, whereas a false definite-failure
+// permanently strands an already-committed object.
+func isAmbiguousTransportError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, frag := range []string{
+		"connection reset",
+		"connection refused",
+		"broken pipe",
+		"unexpected eof",
+		"i/o timeout",
+		"timeout",
+		"deadline exceeded",
+		"tls handshake",
+		"no such host",
+		"server closed",
+		"reset by peer",
+	} {
+		if strings.Contains(msg, frag) {
+			return true
+		}
+	}
+	return false
+}
+
+// vodPartsMatchContract reports whether the retry's part set is identical to the persisted completion
+// contract's (same count, same {part_number, etag} pairs), independent of request ordering. A mismatch
+// means the retry would complete a DIFFERENT multipart set than the first claim persisted.
+func vodPartsMatchContract(reqParts []*sharedpb.VodCompletedPart, contractParts []jobs.VodCompletionPart) bool {
+	if len(reqParts) != len(contractParts) {
+		return false
+	}
+	sorted := make([]jobs.VodCompletionPart, len(reqParts))
+	for i, p := range reqParts {
+		sorted[i] = jobs.VodCompletionPart{PartNumber: p.PartNumber, ETag: p.Etag}
+	}
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].PartNumber < sorted[j].PartNumber })
+	for i := range sorted {
+		if sorted[i].PartNumber != contractParts[i].PartNumber || sorted[i].ETag != contractParts[i].ETag {
+			return false
+		}
+	}
+	return true
+}
+
+// dvrSendClass classifies a SendDVRStart error by whether it PROVES the node did not (and will not)
+// record. The send is fire-and-forget over the control stream, so almost every error is ambiguous: the
+// command may have been delivered and accepted before the transport error surfaced.
+type dvrSendClass int
+
+const (
+	// dvrSendRecoverable: transport/timeout/unavailable/not-connected — the node MAY have accepted the
+	// start. Leave the row 'starting' with its durable dvr_start_dispatch descriptor for the recovery
+	// worker to reconcile (idempotent re-dispatch, or stop+finalize past the hard grace).
+	dvrSendRecoverable dvrSendClass = iota
+	// dvrSendDefinitiveReject: an explicit negative response (a client-error gRPC code) proving the node
+	// rejected the command outright and is NOT recording — safe to terminalize immediately.
+	dvrSendDefinitiveReject
+)
+
+// classifyDVRSendError maps a SendDVRStart error to its recovery class. Only an explicit client-error
+// rejection is definitive; every transport/availability failure is recoverable (ambiguous delivery).
+func classifyDVRSendError(err error) dvrSendClass {
+	if err == nil {
+		return dvrSendRecoverable
+	}
+	if st, ok := status.FromError(err); ok {
+		switch st.Code() {
+		case codes.InvalidArgument, codes.FailedPrecondition, codes.NotFound, codes.PermissionDenied, codes.Unauthenticated:
+			return dvrSendDefinitiveReject
+		default:
+			// Unavailable / DeadlineExceeded / Unknown / Canceled / Internal / etc.: ambiguous delivery.
+			return dvrSendRecoverable
+		}
+	}
+	// Untyped transport error: treat as ambiguous rather than strand a possibly-running recording.
+	return dvrSendRecoverable
+}
+
 // CompleteVodUpload finalizes a multipart upload after all parts are uploaded
 func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *sharedpb.CompleteVodUploadRequest) (*sharedpb.CompleteVodUploadResponse, error) {
 	// NOTE: tenant_id validation happens at Commodore level (matches clips pattern)
@@ -3269,17 +4008,19 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *sharedpb
 		return nil, status.Error(codes.FailedPrecondition, "S3 storage not configured")
 	}
 
-	// Get artifact info by upload_id
-	// NOTE: tenant_id validation happens at Commodore level (matches clips pattern)
-	var artifactHash, s3Key string
+	// Look up the upload, accepting the in-flight 'uploading' state, the transient 'completing' claim,
+	// and the already-advanced 'processing' state so a retry converges idempotently instead of
+	// 404-ing or re-running multipart completion. tenant_id validation happens at Commodore level.
+	var artifactHash, s3Key, artifactStatus string
 	var sizeBytes sql.NullInt64
 	var userID sql.NullString
 	err := s.db.QueryRowContext(ctx, `
-		SELECT v.artifact_hash, v.s3_key, a.size_bytes, a.user_id
+		SELECT v.artifact_hash, v.s3_key, a.size_bytes, a.user_id, a.status
 		FROM foghorn.vod_metadata v
 		JOIN foghorn.artifacts a ON v.artifact_hash = a.artifact_hash
-		WHERE v.s3_upload_id = $1 AND a.status = 'uploading' AND a.tenant_id = $2
-	`, req.UploadId, req.TenantId).Scan(&artifactHash, &s3Key, &sizeBytes, &userID)
+		WHERE v.s3_upload_id = $1 AND a.tenant_id = $2
+		  AND a.status IN ('uploading', 'completing', 'processing')
+	`, req.UploadId, req.TenantId).Scan(&artifactHash, &s3Key, &sizeBytes, &userID, &artifactStatus)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "upload not found or already completed")
@@ -3288,33 +4029,199 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *sharedpb
 		return nil, status.Error(codes.Internal, "failed to fetch upload info")
 	}
 
-	// Convert proto parts to storage parts
-	storageParts := make([]storage.CompletedPart, len(req.Parts))
+	// A retry that already advanced to 'processing' on a prior attempt converges here: the multipart
+	// completion AND the durable transition both already happened, so return the asset without
+	// re-running either. This is the idempotent no-op that prevents a NoSuchUpload-driven false
+	// failure on the second call.
+	if artifactStatus == "processing" {
+		asset, lookupErr := s.lookupCompletedUploadAsset(artifactHash, false)
+		if lookupErr != nil {
+			s.logger.WithError(lookupErr).WithField("artifact_hash", artifactHash).Error("Failed to fetch already-processing asset on CompleteVodUpload retry")
+			return &sharedpb.CompleteVodUploadResponse{Asset: &sharedpb.VodAssetInfo{
+				ArtifactHash: artifactHash,
+				Status:       sharedpb.VodStatus_VOD_STATUS_PROCESSING,
+			}}, nil
+		}
+		return &sharedpb.CompleteVodUploadResponse{Asset: asset}, nil
+	}
+
+	// Build the durable multipart completion descriptor (s3 key, upload id, ordered parts) so the
+	// completing-VOD recovery job can RETRY CompleteMultipartUpload after a crash that lands before the
+	// call below. Parts are ordered by part number — the order S3 requires at completion.
+	descriptorParts := make([]jobs.VodCompletionPart, len(req.Parts))
 	for i, p := range req.Parts {
-		storageParts[i] = storage.CompletedPart{
-			PartNumber: int(p.PartNumber),
-			ETag:       p.Etag,
+		descriptorParts[i] = jobs.VodCompletionPart{PartNumber: p.PartNumber, ETag: p.Etag}
+	}
+	sort.Slice(descriptorParts, func(i, j int) bool { return descriptorParts[i].PartNumber < descriptorParts[j].PartNumber })
+	descriptorJSON, descriptorErr := json.Marshal(jobs.VodCompletionDescriptor{
+		S3Key:    s3Key,
+		UploadID: req.UploadId,
+		Parts:    descriptorParts,
+	})
+	if descriptorErr != nil {
+		s.logger.WithError(descriptorErr).WithField("artifact_hash", artifactHash).Error("Failed to encode VOD completion descriptor")
+		return nil, status.Error(codes.Internal, "failed to encode upload completion descriptor")
+	}
+
+	// Claim the upload for completion AND persist the processing spec + full multipart completion
+	// descriptor ATOMICALLY, in ONE transaction, BEFORE the external CompleteMultipartUpload call. Fail
+	// closed: if the spec/descriptor write fails the whole tx rolls back and the claim does NOT happen, so
+	// a row is NEVER left 'completing' without the persisted spec+descriptor the recovery job needs to
+	// reproduce the requested outputs and retry completion. The claim is guarded on the still-'uploading'
+	// state AND the matching s3_upload_id (RowsAffected). A row already 'completing' (a prior attempt that
+	// crashed after this atomic claim) skips the claim and reconciles below.
+	if artifactStatus == "uploading" {
+		claimed := false
+		claimErr := s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
+			claimRes, execErr := tx.ExecContext(ctx, `
+				UPDATE foghorn.artifacts
+				SET status = 'completing',
+				    last_sync_attempt = NOW(),
+				    updated_at = NOW()
+				WHERE artifact_hash = $1 AND tenant_id = $2 AND status = 'uploading'
+				  AND artifact_hash IN (
+				      SELECT artifact_hash FROM foghorn.vod_metadata WHERE s3_upload_id = $3
+				  )
+			`, artifactHash, req.TenantId, req.UploadId)
+			if execErr != nil {
+				return execErr
+			}
+			affected, raErr := claimRes.RowsAffected()
+			if raErr != nil {
+				return raErr
+			}
+			if affected == 0 {
+				// A concurrent caller claimed/advanced/aborted this upload; commit an empty tx and skip persist.
+				claimed = false
+				return nil
+			}
+			// COALESCE preserves a spec captured by a prior attempt when a retry arrives without one.
+			if _, persistErr := tx.ExecContext(ctx, `
+				UPDATE foghorn.vod_metadata
+				   SET processes_json = COALESCE(NULLIF($2, ''), processes_json),
+				       vod_completion_descriptor = $4::jsonb,
+				       updated_at = NOW()
+				 WHERE artifact_hash = $1 AND s3_upload_id = $3
+			`, artifactHash, req.GetProcessesJson(), req.UploadId, string(descriptorJSON)); persistErr != nil {
+				return persistErr
+			}
+			claimed = true
+			return nil
+		})
+		if claimErr != nil {
+			s.logger.WithError(claimErr).WithField("artifact_hash", artifactHash).Error("Failed to atomically claim VOD upload and persist completion descriptor")
+			return nil, status.Error(codes.Internal, "failed to claim upload for completion")
+		}
+		if !claimed {
+			// The claim matched no row (concurrent claim/advance/abort). Since the claim failed closed, the
+			// descriptor was NOT persisted for us either — do not proceed to complete.
+			return nil, status.Error(codes.FailedPrecondition, "upload already being completed or no longer pending")
 		}
 	}
 
-	// Complete S3 multipart upload
-	err = s.s3Client.CompleteMultipartUpload(ctx, s3Key, req.UploadId, storageParts)
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to complete S3 multipart upload")
-		// Update status to 'failed'
-		_, _ = s.db.ExecContext(ctx, `
-			UPDATE foghorn.artifacts
-			SET status = 'failed',
-			    sync_status = 'failed',
-			    sync_error = $1,
-			    error_message = $1,
-			    last_sync_attempt = NOW(),
-			    updated_at = NOW()
-			WHERE artifact_hash = $2
-		`, fmt.Sprintf("S3 upload failed: %v", err), artifactHash)
-		// Emit VOD lifecycle event (STATUS_FAILED)
-		if s.decklogClient != nil {
-			errMsg := fmt.Sprintf("S3 upload failed: %v", err)
+	// The row is now claimed ('completing'), which means the durable completion contract — the multipart
+	// upload id, the ordered part set, and the requested processing spec — is persisted on vod_metadata.
+	// Load it and treat it as AUTHORITATIVE for the rest of this call. Only the first claim (from
+	// 'uploading') wrote the contract; a retry that arrives while the row is already 'completing' MUST
+	// converge the SAME multipart part set and dispatch the SAME requested outputs the first claim
+	// persisted — never the retry request's parts/spec, which a concurrent or stale caller could have
+	// diverged into a DIFFERENT object or output set.
+	var persistedDescriptorJSON, authoritativeProcessesJSON string
+	if scanErr := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(vod_completion_descriptor::text, ''), COALESCE(processes_json, '')
+		  FROM foghorn.vod_metadata WHERE artifact_hash = $1
+	`, artifactHash).Scan(&persistedDescriptorJSON, &authoritativeProcessesJSON); scanErr != nil {
+		s.logger.WithError(scanErr).WithField("artifact_hash", artifactHash).Error("Failed to load persisted VOD completion contract")
+		return nil, status.Error(codes.Internal, "failed to load upload completion contract")
+	}
+	var contract jobs.VodCompletionDescriptor
+	if persistedDescriptorJSON == "" || json.Unmarshal([]byte(persistedDescriptorJSON), &contract) != nil || contract.UploadID == "" || len(contract.Parts) == 0 {
+		// A claimed row must carry a decodable descriptor; without it we cannot safely complete a
+		// deterministic part set, so fail rather than fall back to the retry request's parts.
+		s.logger.WithField("artifact_hash", artifactHash).Error("Claimed VOD upload has no usable completion contract")
+		return nil, status.Error(codes.Internal, "upload completion contract missing or unusable")
+	}
+
+	// Reject a retry whose upload id / parts / processing spec DIVERGE from the persisted contract rather
+	// than completing a different multipart set or changing the requested outputs. An empty spec on the
+	// retry is an idempotent replay (no spec re-sent), not a divergence.
+	if req.UploadId != contract.UploadID || !vodPartsMatchContract(req.Parts, contract.Parts) {
+		s.logger.WithFields(logging.Fields{
+			"artifact_hash":      artifactHash,
+			"req_upload_id":      req.UploadId,
+			"contract_upload_id": contract.UploadID,
+		}).Warn("CompleteVodUpload retry diverges from persisted completion contract; rejecting")
+		return nil, status.Error(codes.FailedPrecondition, "upload completion request does not match the persisted completion contract")
+	}
+	if reqSpec := req.GetProcessesJson(); reqSpec != "" && authoritativeProcessesJSON != "" && reqSpec != authoritativeProcessesJSON {
+		s.logger.WithField("artifact_hash", artifactHash).Warn("CompleteVodUpload retry processing spec diverges from persisted contract; rejecting")
+		return nil, status.Error(codes.FailedPrecondition, "upload processing spec does not match the persisted completion contract")
+	}
+
+	// Convert the CONTRACT's parts (already ordered by part number at persist time) to storage parts, so
+	// completion always converges the persisted multipart set regardless of the retry request's ordering.
+	storageParts := make([]storage.CompletedPart, len(contract.Parts))
+	for i, p := range contract.Parts {
+		storageParts[i] = storage.CompletedPart{
+			PartNumber: int(p.PartNumber),
+			ETag:       p.ETag,
+		}
+	}
+
+	// Complete the S3 multipart upload. Classify any error by TYPE (classifyS3CompletionError):
+	//   - NoSuchUpload: a prior attempt completed (object present) or aborted (object absent) it.
+	//   - Ambiguous (timeout / connection reset / 5xx): S3 MAY have committed the object anyway.
+	// For BOTH we probe Exists before deciding, so we never record 'failed' for an object that landed:
+	//   * object present               -> converge to 'processing' (idempotent, no re-completion)
+	//   * object absent + definite fail -> mark 'failed'
+	//   * object absent + ambiguous, or the Exists probe itself errors -> leave the row 'completing'
+	//     for later reconciliation (client retry OR the CompletingVodRecoveryJob), never 'failed'.
+	completeErr := s.s3Client.CompleteMultipartUpload(ctx, s3Key, contract.UploadID, storageParts)
+	if completeErr != nil {
+		completionClass := classifyS3CompletionError(completeErr)
+		genuineFailure := completionClass == s3CompletionDefiniteFailure
+		if completionClass == s3CompletionMaybeCompleted || completionClass == s3CompletionAmbiguous {
+			exists, existsErr := s.s3Client.Exists(ctx, s3Key)
+			if existsErr != nil {
+				// Can't determine whether the object landed; leave the row 'completing' for a later
+				// retry rather than recording a false failure OR a false success.
+				s.logger.WithError(existsErr).WithFields(logging.Fields{
+					"artifact_hash":    artifactHash,
+					"upload_id":        req.UploadId,
+					"s3_key":           s3Key,
+					"completion_class": completionClass,
+				}).Error("VOD completion errored and object-existence check failed; leaving 'completing' for reconciliation")
+				return nil, status.Errorf(codes.Internal, "failed to reconcile upload completion: %v", existsErr)
+			}
+			if exists {
+				// The final object is present (a prior attempt completed it, or an ambiguous transport
+				// error masked a server-side success). Do NOT re-complete — converge idempotently.
+				genuineFailure = false
+				s.logger.WithFields(logging.Fields{
+					"artifact_hash":    artifactHash,
+					"upload_id":        req.UploadId,
+					"s3_key":           s3Key,
+					"completion_class": completionClass,
+				}).Info("VOD object present despite completion error; converging to processing")
+			} else if completionClass == s3CompletionAmbiguous {
+				// Object absent AND the error was ambiguous: S3 may still be finalizing, or the write
+				// never landed. Do NOT mark 'failed' — leave 'completing' for the recovery scan to
+				// converge (if the object appears) or fail after a grace period.
+				s.logger.WithError(completeErr).WithFields(logging.Fields{
+					"artifact_hash": artifactHash,
+					"upload_id":     req.UploadId,
+					"s3_key":        s3Key,
+				}).Error("Ambiguous VOD completion error and object absent; leaving 'completing' for reconciliation")
+				return nil, status.Errorf(codes.Internal, "ambiguous upload completion; left for reconciliation: %v", completeErr)
+			}
+			// Otherwise: NoSuchUpload + object absent -> the multipart was aborted and nothing landed;
+			// genuineFailure stays true and we mark 'failed' below.
+		}
+		if genuineFailure {
+			s.logger.WithError(completeErr).Error("Failed to complete S3 multipart upload")
+			// Commit the FAILED status and its lifecycle event in ONE transaction (durable outbox), so
+			// the failure history can't be lost by a nil client, a crash, or a fire-and-forget enqueue.
+			errMsg := fmt.Sprintf("S3 upload failed: %v", completeErr)
 			vodData := &ipcpb.VodLifecycleData{
 				Status:      ipcpb.VodLifecycleData_STATUS_FAILED,
 				VodHash:     artifactHash,
@@ -3329,28 +4236,156 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *sharedpb
 			if sizeBytes.Valid && sizeBytes.Int64 > 0 {
 				vodData.SizeBytes = proto.Uint64(uint64(sizeBytes.Int64))
 			}
-			go artifactoutbox.EnqueueVodLifecycleLogged(vodData)
+			if txErr := s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
+				// Tenant-scoped + guarded: only a still-in-flight upload (uploading/completing)
+				// transitions to failed. A concurrent abort/delete (status='deleted'), a completion
+				// that already won (ready), or an already-advanced 'processing' row must NOT be flipped
+				// back to failed, and no FAILED event is emitted if no row moved.
+				res, execErr := tx.ExecContext(ctx, `
+					UPDATE foghorn.artifacts
+					SET status = 'failed',
+					    sync_status = 'failed',
+					    sync_error = $1,
+					    error_message = $1,
+					    last_sync_attempt = NOW(),
+					    updated_at = NOW()
+					WHERE artifact_hash = $2 AND tenant_id = $3
+					  AND status NOT IN ('deleted', 'ready', 'failed', 'processing')
+				`, errMsg, artifactHash, req.TenantId)
+				if execErr != nil {
+					return execErr
+				}
+				affected, raErr := res.RowsAffected()
+				if raErr != nil {
+					return raErr
+				}
+				if affected == 0 {
+					return nil // no valid transition — don't emit a false FAILED
+				}
+				return artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData)
+			}); txErr != nil {
+				s.logger.WithError(txErr).WithField("artifact_hash", artifactHash).Error("Failed to commit VOD upload failure state+event")
+			}
+			return nil, status.Errorf(codes.Internal, "failed to complete upload: %v", completeErr)
 		}
-		return nil, status.Errorf(codes.Internal, "failed to complete upload: %v", err)
 	}
 
-	// Update artifact: S3 upload done, start processing pipeline
+	// Advance the upload to 'processing' and record the PROCESSING lifecycle event in ONE
+	// transaction (durable outbox, tenant-scoped), so the state change and its event commit
+	// atomically. The outbox worker — not decklogClient — owns Decklog delivery.
 	s3URL := s.s3Client.BuildS3URL(s3Key)
-	_, err = s.db.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		SET status = 'processing',
-		    storage_location = 's3',
-		    sync_status = 'synced',
-		    sync_error = NULL,
-		    last_sync_attempt = NOW(),
-		    frozen_at = COALESCE(frozen_at, NOW()),
-		    s3_url = COALESCE(s3_url, $2),
-		    updated_at = NOW()
-		WHERE artifact_hash = $1
-	`, artifactHash, s3URL)
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to update artifact status")
+	processingData := &ipcpb.VodLifecycleData{
+		Status:      ipcpb.VodLifecycleData_STATUS_PROCESSING,
+		VodHash:     artifactHash,
+		UploadId:    &req.UploadId,
+		S3Url:       &s3URL,
+		TenantId:    &req.TenantId,
+		CompletedAt: proto.Int64(time.Now().Unix()),
 	}
+	if userID.Valid && userID.String != "" {
+		processingData.UserId = &userID.String
+	}
+	if sizeBytes.Valid && sizeBytes.Int64 > 0 {
+		processingData.SizeBytes = proto.Uint64(uint64(sizeBytes.Int64))
+	}
+	// Guarded + tenant-scoped: only a row we successfully CLAIMED ('completing') under THIS multipart
+	// upload id may advance to 'processing'. A concurrent abort/delete (or a mismatched upload id)
+	// leaves 0 rows affected, so we must NOT dispatch processing or overwrite a terminal state.
+	noTransition := false
+	if txErr := s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
+		res, execErr := tx.ExecContext(ctx, `
+			UPDATE foghorn.artifacts
+			SET status = 'processing',
+			    storage_location = 's3',
+			    sync_status = 'synced',
+			    sync_error = NULL,
+			    last_sync_attempt = NOW(),
+			    frozen_at = COALESCE(frozen_at, NOW()),
+			    s3_url = COALESCE(s3_url, $2),
+			    -- The multipart upload landed on THIS cell's local S3 backend; persist stable billing attribution.
+			    durable_backend_local = true,
+			    -- Populate the authoritative object pointer from the recorded multipart key so reads/deletion
+			    -- resolve active_object_key uniformly (a direct upload has no freeze candidate; the key is the
+			    -- multipart object).
+			    active_object_key = COALESCE(active_object_key, (SELECT s3_key FROM foghorn.vod_metadata WHERE artifact_hash = foghorn.artifacts.artifact_hash)),
+			    updated_at = NOW()
+			WHERE artifact_hash = $1 AND tenant_id = $3
+			  AND status = 'completing'
+			  AND artifact_hash IN (
+			      SELECT artifact_hash FROM foghorn.vod_metadata WHERE s3_upload_id = $4
+			  )
+		`, artifactHash, s3URL, req.TenantId, contract.UploadID)
+		if execErr != nil {
+			return execErr
+		}
+		affected, raErr := res.RowsAffected()
+		if raErr != nil {
+			return raErr
+		}
+		if affected == 0 {
+			noTransition = true
+			return nil // nothing valid to transition — commit an empty tx, emit no event
+		}
+		// Insert the processing job on THIS transaction so the 'completing'->'processing' state, its
+		// PROCESSING lifecycle event, and the job that actually drives processing commit together or
+		// not at all. A job-insert failure rolls back the transition and the event, so the row can
+		// never end up 'processing' with no job (which the scanner — selecting only 'completing' —
+		// would never revisit). InsertProcessingJobWithSourceParamsTx composes with the outer tx via a
+		// transaction-scoped advisory lock and dedups to any existing active job for idempotent retries.
+		if _, jobErr := jobs.InsertProcessingJobWithSourceParamsTx(ctx, tx, req.TenantId, artifactHash, "process", nil, authoritativeProcessesJSON, "", nil, ""); jobErr != nil {
+			return jobErr
+		}
+		return artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, processingData)
+	}); txErr != nil {
+		// DIVERGENCE: the S3 multipart upload is complete (fresh completion or reconciled via Exists),
+		// but the durable 'processing' transition + event + job did NOT commit. The row stays
+		// 'completing', so a retry re-enters this RPC and converges. Surface the error at ERROR with
+		// enough identity to reconcile (S3 done, PG not) instead of silently dispatching processing.
+		s.logger.WithError(txErr).WithFields(logging.Fields{
+			"artifact_hash": artifactHash,
+			"upload_id":     req.UploadId,
+			"tenant_id":     req.TenantId,
+			"s3_key":        s3Key,
+		}).Error("VOD S3 upload completed but processing state+event failed to commit; reconcile needed")
+		return nil, status.Errorf(codes.Internal, "upload completed in storage but failed to record processing state: %v", txErr)
+	}
+	if noTransition {
+		// The claimed row left 'completing' under us. If a concurrent caller already advanced it to
+		// 'processing', converge idempotently and return the asset; otherwise a concurrent
+		// abort/delete moved it terminal — do not resurrect it back to 'processing'.
+		var curStatus string
+		if scanErr := s.db.QueryRowContext(ctx, `
+			SELECT status FROM foghorn.artifacts WHERE artifact_hash = $1 AND tenant_id = $2
+		`, artifactHash, req.TenantId).Scan(&curStatus); scanErr == nil && curStatus == "processing" {
+			s.logger.WithFields(logging.Fields{
+				"artifact_hash": artifactHash,
+				"upload_id":     req.UploadId,
+				"tenant_id":     req.TenantId,
+			}).Info("VOD upload already advanced to processing by a concurrent completion; converging")
+			asset, lookupErr := s.lookupCompletedUploadAsset(artifactHash, false)
+			if lookupErr != nil {
+				// State is known-good (row is 'processing'); a failed asset re-read still returns the
+				// durable PROCESSING status rather than a spurious error.
+				s.logger.WithError(lookupErr).WithField("artifact_hash", artifactHash).Warn("Converged VOD upload to processing but asset re-read failed; returning PROCESSING")
+				return &sharedpb.CompleteVodUploadResponse{Asset: &sharedpb.VodAssetInfo{
+					ArtifactHash: artifactHash,
+					Status:       sharedpb.VodStatus_VOD_STATUS_PROCESSING,
+				}}, nil
+			}
+			return &sharedpb.CompleteVodUploadResponse{Asset: asset}, nil
+		}
+		s.logger.WithFields(logging.Fields{
+			"artifact_hash": artifactHash,
+			"upload_id":     req.UploadId,
+			"tenant_id":     req.TenantId,
+		}).Warn("VOD upload no longer pending under this upload id; skipping processing dispatch")
+		return nil, status.Error(codes.FailedPrecondition, "upload already aborted, deleted, or completed")
+	}
+
+	// The durable transition, its PROCESSING event, AND the processing job all committed in the tx
+	// above. The ...Tx job insert intentionally does not notify (the row is not durable until commit),
+	// so this is the notify site that wakes local dispatchers.
+	jobs.NotifyProcessingJobQueued()
 
 	s.logger.WithFields(logging.Fields{
 		"artifact_hash": artifactHash,
@@ -3359,61 +4394,14 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *sharedpb
 		"parts":         len(req.Parts),
 	}).Info("Completed VOD multipart upload, starting processing")
 
-	// Queue processing job (metadata extraction + thumbnails + optional transcode).
-	// Retry once with a fresh context — the INSERT can fail transiently (connection
-	// loss, context timeout from the upload RPC). If both attempts fail, mark the
-	// artifact as failed and emit STATUS_FAILED. We don't serve unprocessed VODs.
-	pipelineFailed := false
-	if vodPipeline != nil {
-		startErr := vodPipeline.StartPipeline(ctx, req.TenantId, artifactHash, req.ProcessesJson)
-		if startErr != nil {
-			s.logger.WithError(startErr).Warn("Processing pipeline INSERT failed, retrying")
-			retryCtx, retryCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			startErr = vodPipeline.StartPipeline(retryCtx, req.TenantId, artifactHash, req.ProcessesJson)
-			retryCancel()
-		}
-		if startErr != nil {
-			s.logger.WithError(startErr).Error("Processing pipeline INSERT failed after retry")
-			pipelineFailed = true
-			if revertErr := s.markVodArtifactFailed(artifactHash); revertErr != nil {
-				s.logger.WithError(revertErr).Error("Failed to mark artifact as failed")
-			}
-		}
-	}
-
-	if s.decklogClient != nil {
-		lifecycleStatus := ipcpb.VodLifecycleData_STATUS_PROCESSING
-		if pipelineFailed {
-			lifecycleStatus = ipcpb.VodLifecycleData_STATUS_FAILED
-		}
-		vodData := &ipcpb.VodLifecycleData{
-			Status:      lifecycleStatus,
-			VodHash:     artifactHash,
-			UploadId:    &req.UploadId,
-			S3Url:       &s3URL,
-			TenantId:    &req.TenantId,
-			CompletedAt: proto.Int64(time.Now().Unix()),
-		}
-		if userID.Valid && userID.String != "" {
-			vodData.UserId = &userID.String
-		}
-		if sizeBytes.Valid && sizeBytes.Int64 > 0 {
-			vodData.SizeBytes = proto.Uint64(uint64(sizeBytes.Int64))
-		}
-		go artifactoutbox.EnqueueVodLifecycleLogged(vodData)
-	}
-
-	// Fetch and return the asset
-	asset, err := s.lookupCompletedUploadAsset(artifactHash, pipelineFailed)
+	// Fetch and return the asset. The processing job committed atomically with the 'processing'
+	// transition above, so there is no "processing without a job" failure mode to reflect here.
+	asset, err := s.lookupCompletedUploadAsset(artifactHash, false)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to fetch asset after upload completion")
-		status := sharedpb.VodStatus_VOD_STATUS_PROCESSING
-		if pipelineFailed {
-			status = sharedpb.VodStatus_VOD_STATUS_FAILED
-		}
 		return &sharedpb.CompleteVodUploadResponse{Asset: &sharedpb.VodAssetInfo{
 			ArtifactHash: artifactHash,
-			Status:       status,
+			Status:       sharedpb.VodStatus_VOD_STATUS_PROCESSING,
 		}}, nil
 	}
 
@@ -3448,22 +4436,85 @@ func (s *FoghornGRPCServer) AbortVodUpload(ctx context.Context, req *sharedpb.Ab
 		return nil, status.Error(codes.Internal, "failed to fetch upload info")
 	}
 
-	// Abort S3 multipart upload
-	err = s.s3Client.AbortMultipartUpload(ctx, s3Key, req.UploadId)
-	if err != nil {
-		s.logger.WithError(err).Warn("Failed to abort S3 multipart upload")
-		// Continue to delete the database record anyway
+	// Claim ownership of the abort with a GUARDED transition 'uploading'->'aborting' (tenant-scoped,
+	// RowsAffected checked) BEFORE any S3 call. If this matches 0 rows a concurrent completion (or another
+	// abort) already moved the row out of 'uploading'; we MUST NOT destroy the multipart upload — return
+	// honestly and leave S3 untouched. Only the winner of this claim may abort the S3 upload. vod_metadata
+	// (with s3_key + s3_upload_id) is left intact until the abort finishes so jobs.AbortingVodRecoveryJob
+	// can converge an interrupted abort from the durable 'aborting' row.
+	claimRes, claimErr := s.db.ExecContext(ctx, `
+		UPDATE foghorn.artifacts
+		SET status = 'aborting', updated_at = NOW()
+		WHERE artifact_hash = $1 AND tenant_id = $2 AND status = 'uploading'
+	`, artifactHash, req.TenantId)
+	if claimErr != nil {
+		s.logger.WithError(claimErr).WithField("artifact_hash", artifactHash).Error("Failed to claim VOD upload abort; not touching S3")
+		return nil, status.Error(codes.Internal, "failed to claim upload abort")
+	}
+	claimed, claimRAErr := claimRes.RowsAffected()
+	if claimRAErr != nil {
+		s.logger.WithError(claimRAErr).WithField("artifact_hash", artifactHash).Error("Failed to read abort-claim RowsAffected; not touching S3")
+		return nil, status.Error(codes.Internal, "failed to claim upload abort")
+	}
+	if claimed == 0 {
+		// A concurrent completion or abort already moved the row off 'uploading'; the winner owns the
+		// multipart upload. Do NOT call AbortMultipartUpload — leave S3 untouched.
+		s.logger.WithFields(logging.Fields{
+			"artifact_hash": artifactHash,
+			"upload_id":     req.UploadId,
+			"tenant_id":     req.TenantId,
+		}).Info("VOD upload abort raced a concurrent completion/abort; leaving S3 untouched")
+		return nil, status.Error(codes.FailedPrecondition, "upload is no longer in 'uploading' state; abort raced a concurrent completion")
 	}
 
-	// Delete artifact and metadata
-	_, _ = s.db.ExecContext(ctx, `DELETE FROM foghorn.vod_metadata WHERE artifact_hash = $1`, artifactHash)
-	_, err = s.db.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		SET status = 'deleted', updated_at = NOW()
-		WHERE artifact_hash = $1
-	`, artifactHash)
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to delete aborted artifact")
+	// We own the abort ('aborting' claimed). Destroy the S3 multipart upload idempotently: a NoSuchUpload
+	// / already-aborted result means a prior attempt already tore it down and is success. Any other error
+	// leaves the row 'aborting' for jobs.AbortingVodRecoveryJob to re-run — do not delete metadata or emit
+	// DELETED yet.
+	if abortErr := s.s3Client.AbortMultipartUpload(ctx, s3Key, req.UploadId); abortErr != nil && !isNoSuchUploadError(abortErr) {
+		s.logger.WithError(abortErr).WithFields(logging.Fields{
+			"artifact_hash": artifactHash,
+			"upload_id":     req.UploadId,
+			"s3_key":        s3Key,
+		}).Warn("Failed to abort S3 multipart upload; leaving 'aborting' for recovery")
+		return nil, status.Error(codes.Internal, "failed to abort S3 multipart upload; left for recovery")
+	}
+
+	// S3 upload destroyed (or already gone). Transition 'aborting'->'deleted', delete metadata, and record
+	// the DELETED lifecycle event in ONE transaction (durable outbox). The guard on status='aborting'
+	// makes this idempotent against jobs.AbortingVodRecoveryJob running the same convergence.
+	vodData := &ipcpb.VodLifecycleData{
+		Status:      ipcpb.VodLifecycleData_STATUS_DELETED,
+		VodHash:     artifactHash,
+		UploadId:    &req.UploadId,
+		TenantId:    &req.TenantId,
+		CompletedAt: proto.Int64(time.Now().Unix()),
+	}
+	if userID.Valid && userID.String != "" {
+		vodData.UserId = &userID.String
+	}
+	if err = s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
+		res, execErr := tx.ExecContext(ctx, `
+			UPDATE foghorn.artifacts
+			SET status = 'deleted', updated_at = NOW()
+			WHERE artifact_hash = $1 AND tenant_id = $2 AND status = 'aborting'
+		`, artifactHash, req.TenantId)
+		if execErr != nil {
+			return execErr
+		}
+		affected, raErr := res.RowsAffected()
+		if raErr != nil {
+			return raErr
+		}
+		if affected == 0 {
+			return nil // the recovery worker already converged this 'aborting' row
+		}
+		if _, execErr := tx.ExecContext(ctx, `DELETE FROM foghorn.vod_metadata WHERE artifact_hash = $1`, artifactHash); execErr != nil {
+			return execErr
+		}
+		return artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData)
+	}); err != nil {
+		s.logger.WithError(err).Error("Failed to finalize aborted artifact")
 		return nil, status.Error(codes.Internal, "failed to clean up aborted upload")
 	}
 
@@ -3473,162 +4524,10 @@ func (s *FoghornGRPCServer) AbortVodUpload(ctx context.Context, req *sharedpb.Ab
 		"tenant_id":     req.TenantId,
 	}).Info("Aborted VOD multipart upload")
 
-	// Emit VOD lifecycle event (STATUS_DELETED)
-	if s.decklogClient != nil {
-		vodData := &ipcpb.VodLifecycleData{
-			Status:      ipcpb.VodLifecycleData_STATUS_DELETED,
-			VodHash:     artifactHash,
-			UploadId:    &req.UploadId,
-			TenantId:    &req.TenantId,
-			CompletedAt: proto.Int64(time.Now().Unix()),
-		}
-		if userID.Valid && userID.String != "" {
-			vodData.UserId = &userID.String
-		}
-		go artifactoutbox.EnqueueVodLifecycleLogged(vodData)
-	}
-
 	return &sharedpb.AbortVodUploadResponse{
 		Success: true,
 		Message: "upload aborted successfully",
 	}, nil
-}
-
-// GetVodAsset returns a single VOD asset by hash
-func (s *FoghornGRPCServer) GetVodAsset(ctx context.Context, req *sharedpb.GetVodAssetRequest) (*sharedpb.VodAssetInfo, error) {
-	// NOTE: tenant_id validation happens at Commodore level (matches clips pattern)
-	if req.ArtifactHash == "" {
-		return nil, status.Error(codes.InvalidArgument, "artifact_hash is required")
-	}
-
-	asset, err := s.getVodAssetInfo(ctx, req.ArtifactHash)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, status.Error(codes.NotFound, "VOD asset not found")
-		}
-		s.logger.WithError(err).Error("Failed to fetch VOD asset")
-		return nil, status.Error(codes.Internal, "failed to fetch VOD asset")
-	}
-
-	return asset, nil
-}
-
-// ListVodAssets returns paginated list of VOD assets
-// NOTE: Tenant-wide queries should go through Commodore.ListVodAssets (business registry owner)
-// This Foghorn endpoint is for lifecycle data queries, matching clips pattern
-func (s *FoghornGRPCServer) ListVodAssets(ctx context.Context, req *sharedpb.ListVodAssetsRequest) (*sharedpb.ListVodAssetsResponse, error) {
-	// NOTE: tenant_id validation happens at Commodore level (matches clips pattern)
-	// Tenant-wide VOD listing should go through Commodore.ListVodAssets
-	// This endpoint returns lifecycle data for artifact-specific queries
-
-	// Parse bidirectional keyset pagination
-	params, err := pagination.Parse(req.GetPagination())
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
-	}
-
-	builder := &pagination.KeysetBuilder{
-		TimestampColumn: "a.created_at",
-		IDColumn:        "a.artifact_hash",
-	}
-
-	// Build base WHERE clause - no tenant_id filter (matches clips pattern)
-	baseWhere := "a.artifact_type = 'vod' AND a.status != 'deleted'"
-	args := []any{}
-	argIdx := 1
-
-	// Count total
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM foghorn.artifacts a WHERE %s", baseWhere)
-	var total int32
-	if errCount := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); errCount != nil {
-		s.logger.WithError(errCount).Error("Failed to count VOD assets")
-		return nil, status.Error(codes.Internal, "failed to count VOD assets")
-	}
-
-	// Build select query with keyset pagination
-	selectQuery := fmt.Sprintf(`
-		SELECT a.artifact_hash, a.artifact_hash, a.status, a.size_bytes,
-		       COALESCE(a.storage_location, 'pending'), COALESCE(a.s3_url, ''),
-		       a.error_message, a.created_at, a.updated_at, a.retention_until,
-		       COALESCE(v.filename, ''), COALESCE(v.title, ''), COALESCE(v.description, ''),
-		       v.duration_ms, v.resolution, v.video_codec, v.audio_codec, v.bitrate_kbps,
-		       COALESCE(v.s3_upload_id, ''), COALESCE(v.s3_key, '')
-		FROM foghorn.artifacts a
-		LEFT JOIN foghorn.vod_metadata v ON a.artifact_hash = v.artifact_hash
-		WHERE %s`, baseWhere)
-
-	// Add keyset condition if cursor provided
-	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
-		selectQuery += " AND " + condition
-		args = append(args, cursorArgs...)
-	}
-
-	// Add ORDER BY and LIMIT
-	selectQuery += " " + builder.OrderBy(params)
-	selectQuery += fmt.Sprintf(" LIMIT %d", params.Limit+1)
-
-	// Fetch assets
-	rows, err := s.db.QueryContext(ctx, selectQuery, args...)
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to fetch VOD assets")
-		return nil, status.Error(codes.Internal, "failed to fetch VOD assets")
-	}
-	defer rows.Close()
-
-	var assets []*sharedpb.VodAssetInfo
-	for rows.Next() {
-		asset, err := s.scanVodAsset(rows)
-		if err != nil {
-			s.logger.WithError(err).Error("Failed to scan VOD asset")
-			continue
-		}
-		assets = append(assets, asset)
-	}
-
-	// Detect hasMore and trim results
-	hasMore := len(assets) > params.Limit
-	if hasMore {
-		assets = assets[:params.Limit]
-	}
-
-	// Reverse results if backward pagination
-	if params.Direction == pagination.Backward && len(assets) > 0 {
-		for i, j := 0, len(assets)-1; i < j; i, j = i+1, j-1 {
-			assets[i], assets[j] = assets[j], assets[i]
-		}
-	}
-
-	// Build cursors from results
-	var startCursor, endCursor string
-	if len(assets) > 0 {
-		first := assets[0]
-		last := assets[len(assets)-1]
-		startCursor = pagination.EncodeCursor(first.CreatedAt.AsTime(), first.ArtifactHash)
-		endCursor = pagination.EncodeCursor(last.CreatedAt.AsTime(), last.ArtifactHash)
-	}
-
-	// Build response with proper hasNextPage/hasPreviousPage
-	resp := &sharedpb.ListVodAssetsResponse{
-		Assets: assets,
-		Pagination: &commonpb.CursorPaginationResponse{
-			TotalCount: total,
-		},
-	}
-	if startCursor != "" {
-		resp.Pagination.StartCursor = &startCursor
-	}
-	if endCursor != "" {
-		resp.Pagination.EndCursor = &endCursor
-	}
-	if params.Direction == pagination.Forward {
-		resp.Pagination.HasNextPage = hasMore
-		resp.Pagination.HasPreviousPage = params.Cursor != nil
-	} else {
-		resp.Pagination.HasPreviousPage = hasMore
-		resp.Pagination.HasNextPage = params.Cursor != nil
-	}
-
-	return resp, nil
 }
 
 // DeleteVodAsset deletes a VOD asset
@@ -3650,15 +4549,21 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 		userID           sql.NullString
 		storageClusterID sql.NullString
 		originClusterID  sql.NullString
+		originType       sql.NullString
+		activeObjectKey  sql.NullString
+		activeDtshKey    sql.NullString
+		syncObjectKey    sql.NullString
+		durableLocal     sql.NullBool
 	)
 	err := s.db.QueryRowContext(ctx, `
 		SELECT a.status, COALESCE(v.s3_key, ''), a.s3_url, a.format,
 		       a.size_bytes, a.retention_until, a.user_id,
-		       a.storage_cluster_id, a.origin_cluster_id
+		       a.storage_cluster_id, a.origin_cluster_id, COALESCE(a.origin_type, ''),
+		       a.active_object_key, a.active_dtsh_key, a.sync_object_key, a.durable_backend_local
 		FROM foghorn.artifacts a
 		LEFT JOIN foghorn.vod_metadata v ON a.artifact_hash = v.artifact_hash
 		WHERE a.artifact_hash = $1 AND a.artifact_type = 'vod' AND a.tenant_id = $2
-	`, req.ArtifactHash, req.GetTenantId()).Scan(&currentStatus, &s3Key, &s3URL, &formatStr, &sizeBytes, &retentionUntil, &userID, &storageClusterID, &originClusterID)
+	`, req.ArtifactHash, req.GetTenantId()).Scan(&currentStatus, &s3Key, &s3URL, &formatStr, &sizeBytes, &retentionUntil, &userID, &storageClusterID, &originClusterID, &originType, &activeObjectKey, &activeDtshKey, &syncObjectKey, &durableLocal)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		if handled, _ := s.forwardArtifactToFederation(ctx, "delete_vod", req.ArtifactHash, req.GetTenantId(), ""); handled {
@@ -3670,6 +4575,15 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 		return nil, status.Error(codes.Internal, "failed to check VOD asset")
 	}
 
+	// A finalized DVR chapter is stored as artifact_type='vod' with origin_type='dvr_chapter',
+	// but it is owned by the parent DVR's chapter ledger (foghorn.dvr_chapters). Deleting it
+	// through the generic VOD path would erase its bytes while leaving the chapter row pointing
+	// at a dead artifact — orphaning the ledger. Chapter deletion must go through the
+	// chapter/recording-aware path, so reject it here rather than corrupt the ledger.
+	if originType.String == "dvr_chapter" {
+		return nil, status.Error(codes.FailedPrecondition, "artifact is a DVR chapter; delete via the recording, not as a VOD asset")
+	}
+
 	if currentStatus == "deleted" {
 		return &sharedpb.DeleteVodAssetResponse{
 			Success: false,
@@ -3677,26 +4591,101 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 		}, nil
 	}
 
-	// If uploading, abort the multipart upload first
+	// DURABLE STATE FIRST: soft-delete the VOD and record the STATUS_DELETED lifecycle event in ONE
+	// transaction (durable outbox, tenant-scoped) BEFORE removing any bytes. A byte-first delete
+	// could leave a playable catalog row pointing at bytes that are already gone if the DB/outbox
+	// tx then fails. The cleanup error is unknown here (cleanup runs after commit). The outbox
+	// worker — not decklogClient — owns Decklog delivery.
+	vodData := &ipcpb.VodLifecycleData{
+		Status:      ipcpb.VodLifecycleData_STATUS_DELETED,
+		VodHash:     req.ArtifactHash,
+		TenantId:    &req.TenantId,
+		CompletedAt: proto.Int64(time.Now().Unix()),
+	}
+	if userID.Valid && userID.String != "" {
+		vodData.UserId = &userID.String
+	}
+	if sizeBytes.Valid && sizeBytes.Int64 > 0 {
+		sb := uint64(sizeBytes.Int64)
+		vodData.SizeBytes = &sb
+	}
+	if retentionUntil.Valid {
+		exp := retentionUntil.Time.Unix()
+		vodData.ExpiresAt = &exp
+	}
+	transitioned := false
+	if err = s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
+		// Retire any outstanding freeze attempt on the terminal transition: a late completion for the
+		// abandoned attempt then matches nothing (its request/node is gone). sync_object_key is
+		// DELIBERATELY retained so the purge sweep can free an object whose PUT lands after deletion —
+		// the delete has authorized-but-not-yet-landed bytes to clean up.
+		res, execErr := tx.ExecContext(ctx, `
+			UPDATE foghorn.artifacts
+			SET status = 'deleted',
+			    sync_request_id = NULL, sync_node_id = NULL,
+			    updated_at = NOW()
+			WHERE artifact_hash = $1 AND artifact_type = 'vod' AND tenant_id = $2
+			  AND status != 'deleted'
+		`, req.ArtifactHash, req.TenantId)
+		if execErr != nil {
+			return execErr
+		}
+		affected, raErr := res.RowsAffected()
+		if raErr != nil {
+			return raErr
+		}
+		if affected == 0 {
+			// Already deleted (or gone) at UPDATE time — do not enqueue a second DELETED event.
+			return nil
+		}
+		transitioned = true
+		return artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData)
+	}); err != nil {
+		s.logger.WithError(err).Error("Failed to delete VOD asset")
+		return nil, status.Error(codes.Internal, "failed to delete VOD asset")
+	}
+
+	// Lost a concurrent delete race (row already 'deleted' when the guarded UPDATE ran): report
+	// already-deleted and do NO physical cleanup — the winning delete owns the bytes. Returning
+	// here prevents duplicate DELETED analytics and byte removal for a delete this call did not
+	// commit.
+	if !transitioned {
+		return &sharedpb.DeleteVodAssetResponse{
+			Success: false,
+			Message: "VOD asset is already deleted",
+		}, nil
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"artifact_hash": req.ArtifactHash,
+		"tenant_id":     req.TenantId,
+	}).Info("VOD asset soft-deleted successfully")
+
+	// Physical cleanup runs ONLY after the soft-delete committed. Failures are non-fatal: the
+	// catalog is already durably deleted, so any lingering bytes are storage garbage the
+	// orphan/purge job reclaims, not a correctness bug.
+
+	// If it was still uploading, abort the multipart upload so no orphaned parts linger.
 	if currentStatus == "uploading" {
 		var uploadID string
-		_ = s.db.QueryRowContext(ctx, `
+		if scanErr := s.db.QueryRowContext(ctx, `
 			SELECT s3_upload_id FROM foghorn.vod_metadata WHERE artifact_hash = $1
-		`, req.ArtifactHash).Scan(&uploadID)
-
+		`, req.ArtifactHash).Scan(&uploadID); scanErr != nil {
+			s.logger.WithError(scanErr).WithField("artifact_hash", req.ArtifactHash).Warn("Failed to look up multipart upload id for abort, deferring to purge job")
+		}
 		if uploadID != "" && s3Key != "" && s.s3Client != nil {
-			_ = s.s3Client.AbortMultipartUpload(ctx, s3Key, uploadID)
+			if abortErr := s.s3Client.AbortMultipartUpload(ctx, s3Key, uploadID); abortErr != nil {
+				s.logger.WithError(abortErr).WithField("artifact_hash", req.ArtifactHash).Warn("Failed to abort multipart upload, will be retried by purge job")
+			}
 		}
 	}
 
-	cleanupErrors := make([]string, 0, 2)
-
 	// Send delete request to nodes that have this VOD cached
-	rows, err := s.db.QueryContext(ctx, `
+	rows, queryErr := s.db.QueryContext(ctx, `
 		SELECT node_id FROM foghorn.artifact_nodes
 		WHERE artifact_hash = $1 AND NOT is_orphaned
 	`, req.ArtifactHash)
-	if err == nil {
+	if queryErr == nil {
 		defer func() { _ = rows.Close() }()
 		requestID := uuid.NewString()
 		for rows.Next() {
@@ -3709,7 +4698,6 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 				RequestId: requestID,
 			}
 			if sendErr := control.SendVodDelete(nodeID, deleteReq); sendErr != nil {
-				cleanupErrors = append(cleanupErrors, fmt.Sprintf("node %s cleanup pending: %v", nodeID, sendErr))
 				s.logger.WithFields(logging.Fields{
 					"artifact_hash": req.ArtifactHash,
 					"node_id":       nodeID,
@@ -3725,78 +4713,34 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 		}
 	}
 
-	// Delete from S3 immediately (cross-cluster aware via the federation
-	// delete delegate). The cleaner derives the target from
-	// vod_metadata.s3_key, falling back to a.s3_url and finally to the
-	// deterministic BuildVodS3Key shape so VODs whose s3_key was never
-	// recorded still get cleaned. Failure marks cleanup-pending; soft-
-	// delete still proceeds so the row enters the purge cycle for
-	// retries.
+	// Delete from S3 (cross-cluster aware via the federation delete delegate). The cleaner derives
+	// the target from vod_metadata.s3_key, falling back to a.s3_url and finally to the deterministic
+	// BuildVodS3Key shape so VODs whose s3_key was never recorded still get cleaned. Skipped for an
+	// uploading row whose multipart was just aborted. Failure marks cleanup-pending; the row is
+	// already in the purge cycle for retries.
 	if currentStatus != "uploading" {
 		if s.artifactCleaner == nil {
-			cleanupErrors = append(cleanupErrors, "s3 cleanup pending: cleaner not wired")
 			s.logger.WithField("artifact_hash", req.ArtifactHash).Warn("Artifact cleaner not wired; VOD S3 cleanup deferred to purge job")
 		} else if errDelete := s.artifactCleaner.Delete(ctx, artifacts.ArtifactRef{
-			Hash:             req.ArtifactHash,
-			Type:             "vod",
-			TenantID:         req.GetTenantId(),
-			Format:           formatStr.String,
-			VODS3Key:         s3Key,
-			S3URL:            s3URL.String,
-			StorageClusterID: storageClusterID.String,
-			OriginClusterID:  originClusterID.String,
+			Hash:                req.ArtifactHash,
+			Type:                "vod",
+			TenantID:            req.GetTenantId(),
+			Format:              formatStr.String,
+			VODS3Key:            s3Key,
+			S3URL:               s3URL.String,
+			StorageClusterID:    storageClusterID.String,
+			OriginClusterID:     originClusterID.String,
+			ActiveObjectKey:     activeObjectKey.String,
+			ActiveDtshKey:       activeDtshKey.String,
+			PendingObjectKey:    syncObjectKey.String,
+			DurableBackendLocal: durableLocal.Bool,
 		}); errDelete != nil {
-			cleanupErrors = append(cleanupErrors, fmt.Sprintf("s3 cleanup pending: %v", errDelete))
 			s.logger.WithFields(logging.Fields{
 				"artifact_hash": req.ArtifactHash,
 				"s3_key":        s3Key,
 				"error":         errDelete,
 			}).Warn("Failed to delete from S3, will be retried by purge job")
 		}
-	}
-
-	// Soft delete in foghorn.artifacts
-	_, err = s.db.ExecContext(ctx, `
-		UPDATE foghorn.artifacts SET status = 'deleted', updated_at = NOW()
-		WHERE artifact_hash = $1 AND artifact_type = 'vod'
-	`, req.ArtifactHash)
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to delete VOD asset")
-		return nil, status.Error(codes.Internal, "failed to delete VOD asset")
-	}
-
-	s.logger.WithFields(logging.Fields{
-		"artifact_hash": req.ArtifactHash,
-		"tenant_id":     req.TenantId,
-	}).Info("VOD asset soft-deleted successfully")
-
-	// Emit VOD lifecycle event (STATUS_DELETED)
-	if s.decklogClient != nil {
-		var cleanupError string
-		if len(cleanupErrors) > 0 {
-			cleanupError = strings.Join(cleanupErrors, "; ")
-		}
-		vodData := &ipcpb.VodLifecycleData{
-			Status:      ipcpb.VodLifecycleData_STATUS_DELETED,
-			VodHash:     req.ArtifactHash,
-			TenantId:    &req.TenantId,
-			CompletedAt: proto.Int64(time.Now().Unix()),
-		}
-		if cleanupError != "" {
-			vodData.Error = &cleanupError
-		}
-		if userID.Valid && userID.String != "" {
-			vodData.UserId = &userID.String
-		}
-		if sizeBytes.Valid && sizeBytes.Int64 > 0 {
-			sb := uint64(sizeBytes.Int64)
-			vodData.SizeBytes = &sb
-		}
-		if retentionUntil.Valid {
-			exp := retentionUntil.Time.Unix()
-			vodData.ExpiresAt = &exp
-		}
-		go artifactoutbox.EnqueueVodLifecycleLogged(vodData)
 	}
 
 	return &sharedpb.DeleteVodAssetResponse{
@@ -3823,18 +4767,6 @@ func (s *FoghornGRPCServer) getVodAssetInfo(ctx context.Context, artifactHash st
 	return s.scanVodAssetRow(row)
 }
 
-func (s *FoghornGRPCServer) markVodArtifactFailed(artifactHash string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		SET status = 'failed', updated_at = NOW()
-		WHERE artifact_hash = $1
-	`, artifactHash)
-	return err
-}
-
 func (s *FoghornGRPCServer) lookupCompletedUploadAsset(artifactHash string, pipelineFailed bool) (*sharedpb.VodAssetInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -3850,34 +4782,6 @@ func (s *FoghornGRPCServer) lookupCompletedUploadAsset(artifactHash string, pipe
 		}, nil
 	}
 	return nil, err
-}
-
-func (s *FoghornGRPCServer) scanVodAsset(rows *sql.Rows) (*sharedpb.VodAssetInfo, error) {
-	var id, artifactHash, statusStr, storageLocation, s3URL, filename, title, description string
-	var videoCodec, audioCodec, resolution, s3UploadID, s3Key sql.NullString
-	var sizeBytes sql.NullInt64
-	var durationMs, bitrateKbps sql.NullInt32
-	var errorMessage sql.NullString
-	var createdAt, updatedAt time.Time
-	var expiresAt sql.NullTime
-
-	err := rows.Scan(
-		&id, &artifactHash, &statusStr, &sizeBytes,
-		&storageLocation, &s3URL, &errorMessage,
-		&createdAt, &updatedAt, &expiresAt,
-		&filename, &title, &description,
-		&durationMs, &resolution, &videoCodec, &audioCodec, &bitrateKbps,
-		&s3UploadID, &s3Key,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return buildVodAssetInfo(
-		id, artifactHash, statusStr, storageLocation, filename, title, description,
-		sizeBytes, durationMs, resolution, videoCodec, audioCodec, bitrateKbps,
-		s3UploadID, s3Key, errorMessage, createdAt, updatedAt, expiresAt,
-	), nil
 }
 
 func (s *FoghornGRPCServer) scanVodAssetRow(row *sql.Row) (*sharedpb.VodAssetInfo, error) {
@@ -3977,7 +4881,11 @@ func buildVodAssetInfo(
 	return asset
 }
 
-func (s *FoghornGRPCServer) emitClipDeletedLifecycle(
+// buildClipDeletedLifecycleData assembles the STAGE_DELETED clip event, enriching tenant/user/
+// stream/timing fields from Commodore (a best-effort network lookup) when available. It performs
+// no DB writes and is called BEFORE the delete transaction so the enrichment round-trip never
+// holds a DB transaction open; the caller enqueues the returned value on its tx.
+func (s *FoghornGRPCServer) buildClipDeletedLifecycleData(
 	ctx context.Context,
 	clipHash string,
 	nodeID string,
@@ -3987,11 +4895,7 @@ func (s *FoghornGRPCServer) emitClipDeletedLifecycle(
 	denormTenantID sql.NullString,
 	denormUserID sql.NullString,
 	cleanupError string,
-) {
-	if s.decklogClient == nil {
-		return
-	}
-
+) *ipcpb.ClipLifecycleData {
 	var (
 		tenantIDStr     string
 		userIDStr       string
@@ -4085,102 +4989,7 @@ func (s *FoghornGRPCServer) emitClipDeletedLifecycle(
 	clipData.StopMs = stopMs
 	clipData.DurationSec = durationSec
 
-	go artifactoutbox.EnqueueClipLifecycleLogged(clipData)
-}
-
-func (s *FoghornGRPCServer) emitDVRDeletedLifecycle(
-	ctx context.Context,
-	dvrHash string,
-	nodeID string,
-	sizeBytes sql.NullInt64,
-	retentionUntil sql.NullTime,
-	startedAt sql.NullTime,
-	endedAt sql.NullTime,
-	internalName string,
-	denormTenantID sql.NullString,
-	denormUserID sql.NullString,
-	cleanupError string,
-) {
-	if s.decklogClient == nil {
-		return
-	}
-
-	var (
-		tenantIDStr     string
-		userIDStr       string
-		internalNameStr string
-		streamID        string
-	)
-
-	if denormTenantID.Valid {
-		tenantIDStr = denormTenantID.String
-	}
-	if denormUserID.Valid {
-		userIDStr = denormUserID.String
-	}
-	if internalName != "" {
-		internalNameStr = internalName
-	}
-
-	if control.CommodoreClient != nil {
-		cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		defer cancel()
-		if resp, err := control.CommodoreClient.ResolveDVRHash(cctx, dvrHash); err == nil && resp.Found {
-			if resp.TenantId != "" {
-				tenantIDStr = resp.TenantId
-			}
-			if resp.UserId != "" {
-				userIDStr = resp.UserId
-			}
-			if resp.StreamInternalName != "" {
-				internalNameStr = resp.StreamInternalName
-			}
-			if resp.StreamId != "" {
-				streamID = resp.StreamId
-			}
-		}
-	}
-
-	dvrData := &ipcpb.DVRLifecycleData{
-		Status:  ipcpb.DVRLifecycleData_STATUS_DELETED,
-		DvrHash: dvrHash,
-	}
-	if cleanupError != "" {
-		dvrData.Error = &cleanupError
-	}
-	if nodeID != "" {
-		dvrData.NodeId = &nodeID
-	}
-	if tenantIDStr != "" {
-		dvrData.TenantId = &tenantIDStr
-	}
-	if internalNameStr != "" {
-		dvrData.StreamInternalName = &internalNameStr
-	}
-	if streamID != "" {
-		dvrData.StreamId = &streamID
-	}
-	if userIDStr != "" {
-		dvrData.UserId = &userIDStr
-	}
-	if sizeBytes.Valid && sizeBytes.Int64 > 0 {
-		sb := uint64(sizeBytes.Int64)
-		dvrData.SizeBytes = &sb
-	}
-	if retentionUntil.Valid {
-		exp := retentionUntil.Time.Unix()
-		dvrData.ExpiresAt = &exp
-	}
-	if startedAt.Valid {
-		st := startedAt.Time.Unix()
-		dvrData.StartedAt = &st
-	}
-	if endedAt.Valid {
-		et := endedAt.Time.Unix()
-		dvrData.EndedAt = &et
-	}
-
-	go artifactoutbox.EnqueueDVRLifecycleLogged(dvrData)
+	return clipData
 }
 
 // TerminateTenantStreams stops all active streams for a suspended tenant

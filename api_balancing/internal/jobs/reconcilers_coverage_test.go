@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
@@ -201,47 +202,80 @@ func TestRevertToQueuedToleratesDBErrorRecon(t *testing.T) {
 	}
 }
 
-// TestFailVODArtifactFiltersByTenantRecon locks tenant isolation on the
-// exhausted-VOD failure projection: the UPDATE that marks an artifact 'failed'
-// carries BOTH artifact_hash AND tenant_id, so a job exhaustion can never flip
-// another tenant's artifact that shares a hash collision to 'failed'. This is
-// the only test that drives failVODArtifact directly with an asserted tenant arg.
-func TestFailVODArtifactFiltersByTenantRecon(t *testing.T) {
+// TestFailExhaustedJobAtomic_CommitsAllOrNothing pins that a VOD exhaustion commits the
+// job-failed CTE, the artifact-failed UPDATE, and the failure lifecycle outbox insert in ONE
+// transaction (BEGIN…COMMIT).
+func TestFailExhaustedJobAtomic_CommitsAllOrNothing(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
 
+	mock.ExpectBegin()
+	mock.ExpectQuery(`WITH failed AS`).
+		WithArgs("job-vodfail", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "error_message"}).
+			AddRow("vod-fail-hash-recon", "vod", "tenant-vodfail", "", "", "max retries exceeded"))
 	mock.ExpectExec("UPDATE foghorn.artifacts").
-		WithArgs("vod-fail-hash-recon", "tenant-vodfail", "max retries exceeded").
+		WithArgs("vod-fail-hash-recon", "max retries exceeded", "tenant-vodfail").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	d := NewProcessingDispatcher(ProcessingDispatcherConfig{DB: db, Logger: logging.NewLogger()})
-	d.failVODArtifact(context.Background(), "vod-fail-hash-recon", "tenant-vodfail", "max retries exceeded")
+	d.failExhaustedJobAtomic(context.Background(), "job-vodfail", time.Now(), time.Now())
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// TestFailVODArtifactToleratesDBErrorRecon locks error-tolerance on the same
-// projection: a failing UPDATE is logged and swallowed so the recovery sweep
-// that drives failVODArtifact for a batch of exhausted jobs isn't aborted by
-// one bad row.
-func TestFailVODArtifactToleratesDBErrorRecon(t *testing.T) {
+// TestFailExhaustedJobAtomic_RollsBackOnArtifactError: if the artifact-failed UPDATE errors,
+// the whole tx rolls back — the job is NOT left failed with a live artifact.
+func TestFailExhaustedJobAtomic_RollsBackOnArtifactError(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
 
+	mock.ExpectBegin()
+	mock.ExpectQuery(`WITH failed AS`).
+		WithArgs("job-vodfail2", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "error_message"}).
+			AddRow("vod-fail-hash-recon2", "vod", "tenant-vodfail2", "", "", "max retries exceeded"))
 	mock.ExpectExec("UPDATE foghorn.artifacts").
-		WithArgs("vod-fail-hash-recon2", "tenant-vodfail2", "max retries exceeded").
+		WithArgs("vod-fail-hash-recon2", "max retries exceeded", "tenant-vodfail2").
 		WillReturnError(errors.New("fail-vod boom"))
+	mock.ExpectRollback()
 
 	d := NewProcessingDispatcher(ProcessingDispatcherConfig{DB: db, Logger: logging.NewLogger()})
-	d.failVODArtifact(context.Background(), "vod-fail-hash-recon2", "tenant-vodfail2", "max retries exceeded")
+	d.failExhaustedJobAtomic(context.Background(), "job-vodfail2", time.Now(), time.Now())
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestFailExhaustedJobAtomic_NoOpWhenRecovered: if the guarded CTE matches no row (the job
+// recovered/completed since enumeration), nothing is written and the tx rolls back.
+func TestFailExhaustedJobAtomic_NoOpWhenRecovered(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`WITH failed AS`).
+		WithArgs("job-recovered", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectRollback()
+
+	d := NewProcessingDispatcher(ProcessingDispatcherConfig{DB: db, Logger: logging.NewLogger()})
+	d.failExhaustedJobAtomic(context.Background(), "job-recovered", time.Now(), time.Now())
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

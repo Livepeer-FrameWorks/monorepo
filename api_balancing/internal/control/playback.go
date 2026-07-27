@@ -340,11 +340,11 @@ func filterPullCandidatesByEligibility(ctx context.Context, nodes []balancer.Nod
 	if class == pullsource.ClassPublic && len(allowed) == 0 {
 		return nodes, nil
 	}
-	localClusterID := ""
+	localCID := ""
 	if deps != nil {
-		localClusterID = deps.LocalClusterID
+		localCID = deps.LocalClusterID
 	}
-	return filterPullCandidatesByClass(ctx, nodes, internalName, localClusterID, class, allowed, ClusterAllowsPrivatePulls)
+	return filterPullCandidatesByClass(ctx, nodes, internalName, localCID, class, allowed, ClusterAllowsPrivatePulls)
 }
 
 func filterPullCandidatesByClass(
@@ -590,14 +590,15 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 		return nil, fmt.Errorf("%s authoritative cluster %q not authorized for tenant", contentType, strings.TrimSpace(authoritativeCluster.String))
 	}
 
+	// Warm-node routing authority is the in-memory inventory ONLY: FindNodesByArtifactHash excludes
+	// inactive nodes, nodes whose ArtifactInventoryReady cordon is down, and non-present copies. There is
+	// deliberately NO fallback to foghorn.artifact_nodes — that durable projection has no readiness or
+	// completeness gate, so routing through it would resurrect exactly the copies the cordon suppresses
+	// (incomplete scans, copies dropped by a healthy scan pending the stale sweep, incomplete DVR origins).
+	// When no ready warm copy exists, the cold path below (S3/synced) or federation serves it instead.
 	var artifactNodes []state.ArtifactNodeInfo
 	if manager := state.DefaultManager(); manager != nil {
 		artifactNodes = manager.FindNodesByArtifactHash(artifactResp.ArtifactHash)
-	}
-	if len(artifactNodes) == 0 {
-		if rows, rowErr := artifactNodesFromDB(ctx, deps.DB, artifactResp.ArtifactHash, artifactType); rowErr == nil {
-			artifactNodes = rows
-		}
 	}
 	if len(artifactNodes) == 0 {
 		// No client redirect to a peer's hot copy. Cross-cluster artifacts are
@@ -820,54 +821,6 @@ func rankNodeScoresForArtifact(nodes []balancer.NodeWithScore, viewerLat, viewer
 		})
 	}
 	return rankArtifactNodes(out, viewerLat, viewerLon, 5)
-}
-
-func artifactNodesFromDB(ctx context.Context, db *sql.DB, artifactHash, artifactType string) ([]state.ArtifactNodeInfo, error) {
-	if db == nil || strings.TrimSpace(artifactHash) == "" {
-		return nil, nil
-	}
-	rows, err := db.QueryContext(ctx, `
-		SELECT an.node_id,
-		       COALESCE(an.file_path, ''),
-		       COALESCE(an.size_bytes, a.size_bytes, 0),
-		       COALESCE(NULLIF(a.format, ''), ''),
-		       COALESCE(NULLIF(a.stream_internal_name, ''), '')
-		  FROM foghorn.artifact_nodes an
-		  JOIN foghorn.artifacts a ON a.artifact_hash = an.artifact_hash
-		 WHERE an.artifact_hash = $1
-		   AND a.artifact_type = $2
-		   AND an.is_orphaned = false
-		 ORDER BY an.last_seen_at DESC NULLS LAST
-	`, artifactHash, artifactType)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var nodes []state.ArtifactNodeInfo
-	for rows.Next() {
-		var nodeID, filePath, format, streamName string
-		var sizeBytes int64
-		if scanErr := rows.Scan(&nodeID, &filePath, &sizeBytes, &format, &streamName); scanErr != nil {
-			return nil, scanErr
-		}
-		if sizeBytes < 0 {
-			sizeBytes = 0
-		}
-		nodes = append(nodes, state.ArtifactNodeInfo{
-			NodeID: nodeID,
-			Score:  0,
-			Artifact: &ipcpb.StoredArtifact{
-				ClipHash:     artifactHash,
-				StreamName:   streamName,
-				FilePath:     filePath,
-				SizeBytes:    uint64(sizeBytes),
-				Format:       format,
-				ArtifactType: playbackArtifactTypeToProto(artifactType),
-			},
-		})
-	}
-	return nodes, rows.Err()
 }
 
 func playbackArtifactTypeToProto(artifactType string) ipcpb.ArtifactEvent_ArtifactType {

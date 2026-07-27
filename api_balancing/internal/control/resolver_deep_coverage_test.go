@@ -134,7 +134,7 @@ func TestResolveArtifactPlayback_ChapterPath(t *testing.T) {
 	lat, lon := 52.0, 5.0
 	sm.SetNodeInfo("cn1", "https://cn1.example.com", true, &lat, &lon, "ams", "", map[string]any{"HLS": "x"})
 	sm.TouchNode("cn1", true)
-	sm.SetNodeArtifacts("cn1", []*ipcpb.StoredArtifact{{ClipHash: chapterHash32}})
+	sm.SetNodeArtifacts("cn1", []*ipcpb.StoredArtifact{{ClipHash: chapterHash32}}, state.ArtifactReportOrder{Fence: 1, Seq: 1})
 
 	mockDB, mock, err := sqlmock.New()
 	if err != nil {
@@ -197,7 +197,7 @@ func TestResolveArtifactPlayback_ClipArm(t *testing.T) {
 	lat, lon := 52.0, 5.0
 	sm.SetNodeInfo("clipn", "https://clipn.example.com", true, &lat, &lon, "ams", "", map[string]any{"HLS": "x"})
 	sm.TouchNode("clipn", true)
-	sm.SetNodeArtifacts("clipn", []*ipcpb.StoredArtifact{{ClipHash: "cliphash1"}})
+	sm.SetNodeArtifacts("clipn", []*ipcpb.StoredArtifact{{ClipHash: "cliphash1"}}, state.ArtifactReportOrder{Fence: 1, Seq: 1})
 
 	mockDB, mock, err := sqlmock.New()
 	if err != nil {
@@ -253,7 +253,7 @@ func TestResolveArtifactPlayback_DvrArmIsLive(t *testing.T) {
 	lat, lon := 52.0, 5.0
 	sm.SetNodeInfo("dvrn", "https://dvrn.example.com", true, &lat, &lon, "ams", "", map[string]any{"HLS": "x"})
 	sm.TouchNode("dvrn", true)
-	sm.SetNodeArtifacts("dvrn", []*ipcpb.StoredArtifact{{ClipHash: "dvrhash1"}})
+	sm.SetNodeArtifacts("dvrn", []*ipcpb.StoredArtifact{{ClipHash: "dvrhash1"}}, state.ArtifactReportOrder{Fence: 1, Seq: 1})
 
 	mockDB, mock, err := sqlmock.New()
 	if err != nil {

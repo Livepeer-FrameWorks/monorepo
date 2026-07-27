@@ -69,25 +69,32 @@ func TestDeleteClip_MismatchedTenantNotFound(t *testing.T) {
 	}
 }
 
-// Invariant: the happy path issues exactly the tenant-scoped soft-delete UPDATE
-// (status->'deleted') and the processing-job cancellation UPDATE, both filtered
-// by artifact_hash + tenant_id. artifactCleaner is nil so S3 cleanup defers but
-// the soft-delete still succeeds.
+// Invariant: the happy path commits the tenant-scoped soft-delete UPDATE
+// (status->'deleted') together with the DELETED lifecycle outbox row in ONE
+// transaction, then cancels the processing job (best-effort, outside the tx).
+// artifactCleaner is nil so S3 cleanup defers but the soft-delete still succeeds.
 func TestDeleteClip_SoftDeleteIssuesTenantScopedUpdate(t *testing.T) {
 	srv, mock := newLifecycleServer(t)
 	mock.ExpectQuery(`SELECT status, size_bytes`).
 		WithArgs("clip-h", "tenant-a").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"status", "size_bytes", "retention_until", "stream_internal_name",
-			"tenant_id", "user_id", "format", "storage_cluster_id", "origin_cluster_id",
-		}).AddRow("ready", nil, nil, "live+stream-1", "tenant-a", "user-1", "mkv", nil, nil))
+			"tenant_id", "user_id", "format", "storage_cluster_id", "origin_cluster_id", "active_object_key",
+			"active_dtsh_key", "sync_object_key", "durable_backend_local",
+		}).AddRow("ready", nil, nil, "live+stream-1", "tenant-a", "user-1", "mkv", nil, nil, nil, nil, nil, false))
 	// node lookup: no live storage node -> skip Helmsman send
 	mock.ExpectQuery(`SELECT node_id FROM foghorn.artifact_nodes`).
 		WithArgs("clip-h").
 		WillReturnRows(sqlmock.NewRows([]string{"node_id"}))
+	// Soft-delete + DELETED lifecycle event commit atomically.
+	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE foghorn.artifacts SET status = 'deleted'`).
 		WithArgs("clip-h", "tenant-a").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	// Processing-job cancellation runs after the delete tx (best-effort).
 	mock.ExpectExec(`UPDATE foghorn.processing_jobs`).
 		WithArgs("clip-h").
 		WillReturnResult(sqlmock.NewResult(0, 0))

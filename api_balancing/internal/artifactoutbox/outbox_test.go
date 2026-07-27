@@ -2,6 +2,7 @@ package artifactoutbox
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -79,19 +80,22 @@ func TestIDArray(t *testing.T) {
 
 // Nil payloads are no-ops even before Init wires the DB — background producers
 // can call the Enqueue helpers unconditionally.
-func TestEnqueueNilIsNoOp(t *testing.T) {
+// A nil LIFECYCLE payload is a programmer error (an unresolved event builder) that must NOT silently
+// succeed — otherwise a caller's state transaction commits without its required event. Non-lifecycle
+// federation events keep the no-op nil behavior (system-level, not state-coupled).
+func TestEnqueueNilLifecycleIsError(t *testing.T) {
 	resetPackageState(t)
-	if err := EnqueueClipLifecycle(nil); err != nil {
-		t.Errorf("clip: %v", err)
+	if err := EnqueueClipLifecycle(nil); !errors.Is(err, ErrNilLifecyclePayload) {
+		t.Errorf("clip: want ErrNilLifecyclePayload, got %v", err)
 	}
-	if err := EnqueueDVRLifecycle(nil); err != nil {
-		t.Errorf("dvr: %v", err)
+	if err := EnqueueDVRLifecycle(nil); !errors.Is(err, ErrNilLifecyclePayload) {
+		t.Errorf("dvr: want ErrNilLifecyclePayload, got %v", err)
 	}
-	if err := EnqueueVodLifecycle(nil); err != nil {
-		t.Errorf("vod: %v", err)
+	if err := EnqueueVodLifecycle(nil); !errors.Is(err, ErrNilLifecyclePayload) {
+		t.Errorf("vod: want ErrNilLifecyclePayload, got %v", err)
 	}
 	if err := EnqueueFederationEvent(nil); err != nil {
-		t.Errorf("federation: %v", err)
+		t.Errorf("federation nil stays a no-op: %v", err)
 	}
 }
 
@@ -464,16 +468,39 @@ func TestMarkCompletedUpdatesById(t *testing.T) {
 		WithArgs("id-42").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	markCompleted(context.Background(), "id-42")
+	if err := markCompleted(context.Background(), "id-42"); err != nil {
+		t.Fatalf("markCompleted: %v", err)
+	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)
 	}
 }
 
-// recordFailure persists the incremented attempt count, the failure cause, and
-// releases the claim (claimed_at = NULL) so another replica can retry. This is
-// the retry-reliability invariant: a failed dispatch is re-eligible, not stuck.
+// A persistence failure on the completion marker must PROPAGATE so the generic worker can retry
+// rather than silently treating the row as done.
+func TestMarkCompletedPropagatesDBError(t *testing.T) {
+	resetPackageState(t)
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+	Init(mockDB, logging.NewLogger(), nil)
+
+	mock.ExpectExec(`SET completed_at = NOW\(\), last_error = NULL`).
+		WithArgs("id-99").
+		WillReturnError(sql.ErrConnDone)
+
+	if err := markCompleted(context.Background(), "id-99"); err == nil {
+		t.Fatal("expected markCompleted to return the DB error")
+	}
+}
+
+// recordFailure persists the INCREMENTED attempt count (attempts+1), the failure cause,
+// releases the claim (claimed_at = NULL), and stamps next_retry_at so the row backs off. The
+// increment + backoff gate is the anti-starvation invariant: a failed dispatch is re-eligible
+// only after its backoff, so poison rows can't head-of-line block newer events.
 func TestRecordFailurePersistsAttemptsAndReleasesClaim(t *testing.T) {
 	resetPackageState(t)
 	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
@@ -483,12 +510,15 @@ func TestRecordFailurePersistsAttemptsAndReleasesClaim(t *testing.T) {
 	defer mockDB.Close()
 	Init(mockDB, logging.NewLogger(), nil)
 
-	// id, attempts, cause string — claimed_at release is in the SQL text.
-	mock.ExpectExec(`SET attempts = \$2, last_error = \$3, claimed_at = NULL`).
-		WithArgs("id-7", 3, "decklog down").
+	// attempts passed in is 3 (pre-increment); the UPDATE must bind $2 = 4 and set
+	// next_retry_at from the backoff interval ($4).
+	mock.ExpectExec(`SET attempts = \$2, last_error = \$3, claimed_at = NULL, next_retry_at = NOW\(\) \+ \$4::interval`).
+		WithArgs("id-7", 4, "decklog down", "5000 milliseconds").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	recordFailure(context.Background(), "id-7", 3, errors.New("decklog down"))
+	if err := recordFailure(context.Background(), "id-7", 3, errors.New("decklog down"), 5*time.Second); err != nil {
+		t.Fatalf("recordFailure: %v", err)
+	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)
@@ -506,11 +536,13 @@ func TestRecordFailureNilCause(t *testing.T) {
 	defer mockDB.Close()
 	Init(mockDB, logging.NewLogger(), nil)
 
-	mock.ExpectExec(`SET attempts = \$2, last_error = \$3, claimed_at = NULL`).
-		WithArgs("id-8", 1, "").
+	mock.ExpectExec(`SET attempts = \$2, last_error = \$3, claimed_at = NULL, next_retry_at = NOW\(\) \+ \$4::interval`).
+		WithArgs("id-8", 2, "", "2000 milliseconds").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	recordFailure(context.Background(), "id-8", 1, nil)
+	if err := recordFailure(context.Background(), "id-8", 1, nil, 2*time.Second); err != nil {
+		t.Fatalf("recordFailure: %v", err)
+	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)
@@ -563,9 +595,9 @@ func TestStoreClaimBatchMapsRows(t *testing.T) {
 	}
 }
 
-// store.MarkCompleted / store.RecordFailure delegate to the SQL helpers and
-// always return nil (the worker treats bookkeeping as best-effort) while still
-// issuing the underlying UPDATE.
+// store.MarkCompleted / store.RecordFailure delegate to the SQL helpers and PROPAGATE any
+// persistence error so the generic worker can retry the bookkeeping (a lost completion/failure
+// write would otherwise re-deliver or freeze backoff state).
 func TestStoreMarkCompletedAndRecordFailureDelegate(t *testing.T) {
 	resetPackageState(t)
 	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
@@ -579,7 +611,7 @@ func TestStoreMarkCompletedAndRecordFailureDelegate(t *testing.T) {
 		WithArgs("done-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`SET attempts = \$2`).
-		WithArgs("fail-1", 4, "boom").
+		WithArgs("fail-1", 5, "boom", "0 milliseconds").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	if err := (store{}).MarkCompleted(context.Background(), "done-1"); err != nil {

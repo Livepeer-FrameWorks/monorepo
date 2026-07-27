@@ -103,6 +103,12 @@ func mergeIncomingNode(incoming, local *NodeState) {
 	if local == nil {
 		incoming.AddBandwidth = 0
 		incoming.PendingRedirects = 0
+		// Artifacts/readiness are owned SOLELY by the fenced artifact envelope (StateEntityArtifact),
+		// which orders by (fence, seq). A generic — unfenced — node snapshot must never seed them, or a
+		// delayed heartbeat could clobber a newer fenced inventory. A new node starts with no artifacts
+		// and cordoned until its fenced envelope arrives.
+		incoming.Artifacts = nil
+		incoming.ArtifactInventoryReady = false
 		return
 	}
 	if incoming.ClusterID == "" {
@@ -119,6 +125,10 @@ func mergeIncomingNode(incoming, local *NodeState) {
 	incoming.BinHost = local.BinHost
 	incoming.EstBandwidthPerUser = local.EstBandwidthPerUser
 	incoming.LastPollTime = local.LastPollTime
+	// PRESERVE the locally-held fenced inventory + readiness: they are owned by the (fence, seq)-ordered
+	// artifact envelope, so an unfenced node heartbeat snapshot must not overwrite them with stale data.
+	incoming.Artifacts = local.Artifacts
+	incoming.ArtifactInventoryReady = local.ArtifactInventoryReady
 }
 
 func (sm *StreamStateManager) rehydrateFromRedis(store *RedisStateStore) error {
@@ -194,10 +204,25 @@ func (sm *StreamStateManager) rehydrateFromRedis(store *RedisStateStore) error {
 			sm.streamInstances[streamName][nodeID] = inst
 		}
 	}
-	for nodeID, arts := range artifacts {
+	for nodeID, env := range artifacts {
+		if env == nil {
+			continue
+		}
+		// Restore the accepted ordering watermark from the envelope so a post-restart report is ordered
+		// against what Redis already holds — a delayed old-owner report can't win right after rehydration.
+		// seq==0 is the takeover marker; its fence is still the ordering floor, so restore it too.
+		if env.Fence > 0 && env.Seq >= 0 {
+			incoming := incOrder{fence: env.Fence, seq: env.Seq}
+			if prev, known := sm.lastAcceptedArtifactOrder[nodeID]; !known || incoming.newerThan(prev) {
+				sm.lastAcceptedArtifactOrder[nodeID] = incoming
+			}
+		}
 		if n := sm.nodes[nodeID]; n != nil {
-			n.Artifacts = make([]*ipcpb.StoredArtifact, 0, len(arts))
-			for _, a := range arts {
+			// Restore the replicated readiness cordon so a restarted instance doesn't permanently exclude
+			// an already-confirmed node from artifact routing.
+			n.ArtifactInventoryReady = env.Ready
+			n.Artifacts = make([]*ipcpb.StoredArtifact, 0, len(env.Artifacts))
+			for _, a := range env.Artifacts {
 				n.Artifacts = append(n.Artifacts, &ipcpb.StoredArtifact{
 					ClipHash:     a.ClipHash,
 					FilePath:     a.FilePath,
@@ -300,11 +325,32 @@ func (sm *StreamStateManager) applyRedisChange(change StateChange) {
 			}
 			return
 		}
-		var arts []*NodeArtifactState
-		if err := json.Unmarshal(change.Payload, &arts); err == nil {
+		var env NodeArtifactSnapshot
+		if err := json.Unmarshal(change.Payload, &env); err == nil {
+			// Gate by the report ENVELOPE's (fence, seq), NOT changelog append order: across a
+			// conn-ownership handoff a stale old-owner snapshot can be appended AFTER the new owner's and
+			// earn a higher entry ID. The envelope carries the ordering identity even for an EMPTY
+			// inventory, so an authoritative "node holds nothing" report is ordered too and a stalled old
+			// owner's stale empty can't clear a newer inventory. A zero FENCE carries no ordering identity
+			// we can trust: REJECT it. seq==0 with a positive fence is the fenced TAKEOVER MARKER (a new
+			// owner's Ready=false cordon before its first report) — ordered by fence, accepted below.
+			if env.Fence <= 0 || env.Seq < 0 {
+				return
+			}
+			incoming := incOrder{fence: env.Fence, seq: env.Seq}
+			if prev, known := sm.lastAcceptedArtifactOrder[change.NodeID]; known && !incoming.newerThan(prev) {
+				return
+			}
+			sm.lastAcceptedArtifactOrder[change.NodeID] = incoming
 			if n := sm.nodes[change.NodeID]; n != nil {
-				n.Artifacts = make([]*ipcpb.StoredArtifact, 0, len(arts))
-				for _, a := range arts {
+				// Replicate readiness + inventory from the envelope. A real report (seq>=1) sets Ready=true
+				// and the new inventory; a takeover marker (seq==0) carries Ready=false + empty artifacts, so
+				// it re-arms the cordon AND clears the prior owner's inventory — the node serves no stored
+				// artifacts on this peer until the new owner's first report. This keeps in-memory, the Redis
+				// value, and rehydration consistent (the marker IS the stored envelope until the next report).
+				n.ArtifactInventoryReady = env.Ready
+				n.Artifacts = make([]*ipcpb.StoredArtifact, 0, len(env.Artifacts))
+				for _, a := range env.Artifacts {
 					n.Artifacts = append(n.Artifacts, &ipcpb.StoredArtifact{
 						ClipHash:     a.ClipHash,
 						FilePath:     a.FilePath,

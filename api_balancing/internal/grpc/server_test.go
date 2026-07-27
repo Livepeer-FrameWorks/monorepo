@@ -56,6 +56,36 @@ func TestResolveVodStorageClusterUsesConfiguredLocalCluster(t *testing.T) {
 	}
 }
 
+// The durable destination is the tenant's official cluster only: an advertised BYOC INGEST/origin cluster must
+// NOT win the durable write, even when it advertises a locally-mintable backing (the pre-fix origin-first bug).
+func TestResolveVodStorageCluster_IgnoresOriginAdvertisedBacking(t *testing.T) {
+	server := NewFoghornGRPCServer(nil, logging.NewLogger(), nil, nil, nil, nil, nil, nil)
+	server.SetClusterID("central-primary")
+	server.SetStorageResolverFactory(func(ctx context.Context, tenantID string) *storage.ClusterResolver {
+		return &storage.ClusterResolver{
+			LocalClusterID:       "central-primary",
+			LocalClusterServed:   func(id string) bool { return id == "byoc-origin" },
+			LocalS3ClientPresent: true,
+			LocalS3Backing:       storage.S3Backing{Bucket: "b", Endpoint: "e", Region: "r"},
+			AdvertisedBacking: func(id string) (storage.S3Backing, bool) {
+				// The origin advertises a backing this cell could mint locally — under the old origin-first
+				// contract it would win. Official/local advertise nothing.
+				if id == "byoc-origin" {
+					return storage.S3Backing{Bucket: "b", Endpoint: "e", Region: "r"}, true
+				}
+				return storage.S3Backing{}, false
+			},
+		}
+	})
+
+	// The ingest/origin cluster is "byoc-origin"; with no Quartermaster the official resolves empty, so the
+	// only durable candidate is the local cluster. The origin must be ignored → local mint on central-primary.
+	cluster, mode := server.resolveVodStorageCluster(context.Background(), "tenant-1", "byoc-origin")
+	if cluster != "central-primary" || mode != storage.StorageMintLocal {
+		t.Fatalf("BYOC origin must not win durable destination; got (%q, %s), want (central-primary, local)", cluster, mode)
+	}
+}
+
 func TestInvalidateTenantCacheRequiresTenantID(t *testing.T) {
 	server := NewFoghornGRPCServer(nil, logging.NewLogger(), nil, nil, nil, nil, nil, nil)
 

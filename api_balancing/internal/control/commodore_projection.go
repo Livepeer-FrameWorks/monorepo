@@ -1,68 +1,60 @@
 package control
 
 import (
-	"context"
-	"database/sql"
-	"time"
+	"math"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	commodoreclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
-func projectArtifactSizeToCommodore(ctx context.Context, artifactHash string, sizeBytes int64, logger logging.Logger) {
-	if CommodoreClient == nil || db == nil || artifactHash == "" {
-		return
+// marshalRecordingTracks maps the accepted A/V track set (from a completion-validated
+// ProcessingJobResult) to the durable MediaTrack JSON stored on foghorn.artifacts.tracks. It
+// ALWAYS returns a valid JSON array ("[]" for an empty set), never nil: whether to replace the
+// stored summary is decided by the result's tracks_present bit at the call site, not by
+// emptiness here — so an authoritative empty set clears prior tracks while a track-less result
+// (present=false) leaves them untouched. The authoritative capture point is the processing-
+// result path (keyed by the already-resolved artifact_hash) — NOT the raw RECORDING_END
+// trigger, which fires before Helmsman accepts the job. The artifact reconciler is the sole
+// writer that then projects tracks onto the catalog.
+func marshalRecordingTracks(tracks []*ipcpb.StreamTrack) (string, error) {
+	body, err := commodoreclient.MarshalMediaTracks(mapStreamTracks(tracks))
+	if err != nil {
+		return "", err
 	}
-
-	var artifactType, tenantID string
-	var storedSize sql.NullInt64
-	if err := db.QueryRowContext(ctx, `
-		SELECT artifact_type, tenant_id::text, size_bytes
-		  FROM foghorn.artifacts
-		 WHERE artifact_hash = $1
-		   AND tenant_id IS NOT NULL
-	`, artifactHash).Scan(&artifactType, &tenantID, &storedSize); err != nil {
-		if err != sql.ErrNoRows {
-			logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("Failed to resolve artifact for size projection")
-		}
-		return
-	}
-
-	if storedSize.Valid && storedSize.Int64 > 0 {
-		sizeBytes = storedSize.Int64
-	}
-	if sizeBytes <= 0 {
-		return
-	}
-
-	assetType, ok := artifactAssetTypeFromString(artifactType)
-	if !ok {
-		return
-	}
-
-	notifyCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if _, err := CommodoreClient.UpdateArtifactSize(notifyCtx, tenantID, assetType, artifactHash, sizeBytes); err != nil {
-		logger.WithError(err).WithFields(logging.Fields{
-			"artifact_hash": artifactHash,
-			"asset_type":    artifactType,
-			"size_bytes":    sizeBytes,
-		}).Warn("Failed to notify Commodore of artifact size")
-	}
+	return string(body), nil
 }
 
-// projectClipDurationToCommodore pushes the measured output duration onto the
-// commodore clip registry row, so a partial clip lists with its real length
-// instead of the requested span.
-func projectClipDurationToCommodore(ctx context.Context, tenantID, artifactHash string, durationMs int64, logger logging.Logger) {
-	if CommodoreClient == nil || tenantID == "" || artifactHash == "" || durationMs <= 0 {
-		return
+// mapStreamTracks translates the wire StreamTrack summary into the commodore
+// MediaTrack projection, keeping only the durable A/V descriptors (codec/geometry/
+// rates) and dropping transient timing/jitter metrics. fps is the only float; a non-finite value
+// (NaN/±Inf) is dropped so JSON serialization can't fail and lose the authoritative track set.
+func mapStreamTracks(tracks []*ipcpb.StreamTrack) []*commodorepb.MediaTrack {
+	out := make([]*commodorepb.MediaTrack, 0, len(tracks))
+	for _, t := range tracks {
+		if t == nil {
+			continue
+		}
+		out = append(out, &commodorepb.MediaTrack{
+			Type:        t.GetTrackType(),
+			Codec:       t.GetCodec(),
+			Width:       t.Width,
+			Height:      t.Height,
+			Fps:         finiteFloatOrNil(t.Fps),
+			Resolution:  t.Resolution,
+			BitrateKbps: t.BitrateKbps,
+			Channels:    t.Channels,
+			SampleRate:  t.SampleRate,
+		})
 	}
-	notifyCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	if _, err := CommodoreClient.UpdateClipDuration(notifyCtx, tenantID, artifactHash, durationMs); err != nil {
-		logger.WithError(err).WithFields(logging.Fields{
-			"artifact_hash": artifactHash,
-			"duration_ms":   durationMs,
-		}).Warn("Failed to notify Commodore of clip duration")
+	return out
+}
+
+// finiteFloatOrNil drops a non-finite float (NaN/±Inf) — encoding/json rejects those, which would
+// otherwise fail track serialization and drop the whole authoritative set at completion time.
+func finiteFloatOrNil(f *float64) *float64 {
+	if f == nil || math.IsNaN(*f) || math.IsInf(*f, 0) {
+		return nil
 	}
+	return f
 }

@@ -3,16 +3,10 @@ package grpc
 import (
 	"context"
 	"database/sql"
-	"time"
 
-	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/jobs"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
-
-	"github.com/sirupsen/logrus"
-	"google.golang.org/protobuf/proto"
 )
 
 // vodPipeline manages the post-upload VOD processing lifecycle.
@@ -57,141 +51,4 @@ func (p *VodPipeline) StartPipeline(ctx context.Context, tenantID, artifactHash,
 		"tenant_id":     tenantID,
 	}).Info("VOD processing pipeline started")
 	return nil
-}
-
-// HandleJobResult processes a completed/failed processing job result.
-// Metadata (codec, resolution, etc.) is extracted from outputs and stored
-// in vod_metadata — MistServer provides this when the stream boots.
-func (p *VodPipeline) HandleJobResult(ctx context.Context, jobID, resultStatus string, outputs map[string]string, errorMsg string) {
-	var artifactHash, tenantID, artifactType string
-	err := p.db.QueryRowContext(ctx, `
-		SELECT pj.artifact_hash, pj.tenant_id, COALESCE(a.artifact_type, '')
-		FROM foghorn.processing_jobs pj
-		LEFT JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash
-		WHERE pj.job_id = $1
-	`, jobID).Scan(&artifactHash, &tenantID, &artifactType)
-	if err != nil {
-		p.logger.WithError(err).WithField("job_id", jobID).Error("Failed to look up processing job for pipeline")
-		return
-	}
-	if artifactType != "vod" {
-		return
-	}
-
-	log := p.logger.WithFields(logging.Fields{
-		"job_id":        jobID,
-		"artifact_hash": artifactHash,
-		"status":        resultStatus,
-	})
-
-	if resultStatus == "failed" {
-		log.WithField("error", errorMsg).Error("Processing failed")
-		p.markArtifactFailed(ctx, log, artifactHash, tenantID, errorMsg)
-		return
-	}
-
-	// Populate vod_metadata from stream info returned by Helmsman
-	if len(outputs) > 0 {
-		p.updateVodMetadata(ctx, log, artifactHash, outputs)
-	}
-
-	p.markArtifactReady(ctx, log, artifactHash, tenantID)
-	log.Info("VOD processing complete")
-}
-
-func (p *VodPipeline) updateVodMetadata(ctx context.Context, log *logrus.Entry, artifactHash string, outputs map[string]string) {
-	_, err := p.db.ExecContext(ctx, `
-		UPDATE foghorn.vod_metadata
-		SET duration_ms = $2::integer,
-		    resolution = $3,
-		    video_codec = $4,
-		    audio_codec = $5,
-		    bitrate_kbps = $6::integer,
-		    width = $7::integer,
-		    height = $8::integer,
-		    fps = $9::real,
-		    audio_channels = $10::integer,
-		    audio_sample_rate = $11::integer,
-		    updated_at = NOW()
-		WHERE artifact_hash = $1
-	`,
-		artifactHash,
-		nullIfEmpty(outputs["duration_ms"]),
-		nullIfEmpty(outputs["resolution"]),
-		nullIfEmpty(outputs["video_codec"]),
-		nullIfEmpty(outputs["audio_codec"]),
-		nullIfEmpty(outputs["bitrate_kbps"]),
-		nullIfEmpty(outputs["width"]),
-		nullIfEmpty(outputs["height"]),
-		nullIfEmpty(outputs["fps"]),
-		nullIfEmpty(outputs["audio_channels"]),
-		nullIfEmpty(outputs["audio_sample_rate"]),
-	)
-	if err != nil {
-		log.WithError(err).Error("Failed to update vod_metadata")
-	}
-}
-
-func (p *VodPipeline) markArtifactReady(ctx context.Context, log *logrus.Entry, artifactHash, tenantID string) {
-	_, err := p.db.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		SET status = 'ready',
-		    updated_at = NOW()
-		WHERE artifact_hash = $1
-	`, artifactHash)
-	if err != nil {
-		log.WithError(err).Error("Failed to mark artifact ready")
-		return
-	}
-
-	log.Info("Artifact marked ready")
-
-	if p.decklogClient != nil {
-		progress := int32(100)
-		vodData := &ipcpb.VodLifecycleData{
-			Status:      ipcpb.VodLifecycleData_STATUS_COMPLETED,
-			VodHash:     artifactHash,
-			TenantId:    &tenantID,
-			CompletedAt: proto.Int64(time.Now().Unix()),
-			ProgressPct: &progress,
-		}
-		go artifactoutbox.EnqueueVodLifecycleLogged(vodData)
-	}
-}
-
-func (p *VodPipeline) markArtifactFailed(ctx context.Context, log *logrus.Entry, artifactHash, tenantID, errorMsg string) {
-	_, err := p.db.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		SET status = 'failed',
-		    updated_at = NOW()
-		WHERE artifact_hash = $1
-	`, artifactHash)
-	if err != nil {
-		log.WithError(err).Error("Failed to mark artifact as failed")
-		return
-	}
-
-	log.Error("Artifact marked failed")
-
-	if p.decklogClient != nil {
-		errStr := errorMsg
-		vodData := &ipcpb.VodLifecycleData{
-			Status:   ipcpb.VodLifecycleData_STATUS_FAILED,
-			VodHash:  artifactHash,
-			TenantId: &tenantID,
-			Error:    &errStr,
-		}
-		go func() {
-			if err := artifactoutbox.EnqueueVodLifecycle(vodData); err != nil {
-				p.logger.WithError(err).Warn("Failed to send VOD failed lifecycle event")
-			}
-		}()
-	}
-}
-
-func nullIfEmpty(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
 }

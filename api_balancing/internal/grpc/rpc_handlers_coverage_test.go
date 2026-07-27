@@ -3,9 +3,8 @@ package grpc
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
+	"errors"
 	"testing"
-	"time"
 
 	"frameworks/api_balancing/internal/control"
 
@@ -33,31 +32,6 @@ func newVodRpcHandlers(t *testing.T, s3 *fakeVodS3Client) (*FoghornGRPCServer, s
 	t.Cleanup(control.SetupTestRegistry("", nil))
 	srv := NewFoghornGRPCServer(db, logging.NewLogger(), nil, nil, nil, nil, s3, nil)
 	return srv, mock
-}
-
-// vodAssetCols is the exact 20-column shape getVodAssetInfo / ListVodAssets
-// select. Keep aligned with buildVodAssetInfo's scan order.
-func vodAssetCols() []string {
-	return []string{
-		"id", "artifact_hash", "status", "size_bytes",
-		"storage_location", "s3_url", "error_message",
-		"created_at", "updated_at", "retention_until",
-		"filename", "title", "description",
-		"duration_ms", "resolution", "video_codec", "audio_codec", "bitrate_kbps",
-		"s3_upload_id", "s3_key",
-	}
-}
-
-func vodAssetRow(hash, statusStr string) []driver.Value {
-	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	return []driver.Value{
-		hash, hash, statusStr, int64(2048),
-		"central-primary", "s3://bucket/vod.mp4", "",
-		now, now, sql.NullTime{},
-		"video.mp4", "Title", "Desc",
-		sql.NullInt32{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullInt32{},
-		"", "vod/t1/hash/video.mp4",
-	}
 }
 
 // ---- AbortVodUpload: validation + S3 precondition + tenant-scoped lifecycle ----
@@ -115,9 +89,9 @@ func TestAbortVodUpload_NotFoundForWrongTenant_RpcHandlers(t *testing.T) {
 	}
 }
 
-// Invariant: a successful abort aborts the S3 multipart upload (with the
-// recorded s3_key + upload_id) and transitions the artifact to 'deleted'. The
-// vod_metadata row is removed first.
+// Aborting-claim-wins: the guarded 'uploading'->'aborting' claim commits BEFORE any S3 call, then the
+// S3 multipart upload is aborted (with the recorded s3_key + upload_id) and the row transitions
+// 'aborting'->'deleted', deleting vod_metadata and emitting the DELETED event in ONE transaction.
 func TestAbortVodUpload_AbortsS3AndSoftDeletes_RpcHandlers(t *testing.T) {
 	s3 := &fakeVodS3Client{}
 	srv, mock := newVodRpcHandlers(t, s3)
@@ -126,12 +100,22 @@ func TestAbortVodUpload_AbortsS3AndSoftDeletes_RpcHandlers(t *testing.T) {
 		WithArgs("u1", "t1").
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_key", "user_id"}).
 			AddRow("hash-1", "vod/t1/hash/video.mp4", sql.NullString{}))
+	// Durable claim FIRST (tenant-scoped, 'uploading'->'aborting'), BEFORE any S3 call.
+	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'aborting'.*WHERE artifact_hash = \$1 AND tenant_id = \$2 AND status = 'uploading'`).
+		WithArgs("hash-1", "t1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	// After winning the claim, the finalize tx transitions 'aborting'->'deleted', deletes metadata, and
+	// emits the DELETED lifecycle event.
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'deleted'.*WHERE artifact_hash = \$1 AND tenant_id = \$2 AND status = 'aborting'`).
+		WithArgs("hash-1", "t1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`DELETE FROM foghorn\.vod_metadata`).
 		WithArgs("hash-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`UPDATE foghorn\.artifacts`).
-		WithArgs("hash-1").
+	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	resp, err := srv.AbortVodUpload(context.Background(), &sharedpb.AbortVodUploadRequest{
 		TenantId: "t1",
@@ -143,107 +127,63 @@ func TestAbortVodUpload_AbortsS3AndSoftDeletes_RpcHandlers(t *testing.T) {
 	if !resp.Success {
 		t.Fatalf("expected Success=true, got %+v", resp)
 	}
-	if s3.abortKey != "vod/t1/hash/video.mp4" || s3.abortUpID != "u1" {
-		t.Fatalf("expected S3 abort(key=vod/t1/hash/video.mp4, upid=u1), got (%q,%q)", s3.abortKey, s3.abortUpID)
+	if s3.abortCalls != 1 || s3.abortKey != "vod/t1/hash/video.mp4" || s3.abortUpID != "u1" {
+		t.Fatalf("expected exactly one S3 abort(key=vod/t1/hash/video.mp4, upid=u1), got calls=%d (%q,%q)", s3.abortCalls, s3.abortKey, s3.abortUpID)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)
 	}
 }
 
-// ---- GetVodAsset: validation + NotFound + read fidelity ----
+// Lost race: a concurrent completion already moved the upload off 'uploading', so the guarded
+// 'uploading'->'aborting' claim affects 0 rows. Abort must NOT call AbortMultipartUpload at all
+// (S3 untouched — the winner owns the upload) and returns FailedPrecondition, not a destructive success.
+func TestAbortVodUpload_LostRaceLeavesS3Untouched_RpcHandlers(t *testing.T) {
+	s3 := &fakeVodS3Client{}
+	srv, mock := newVodRpcHandlers(t, s3)
 
-// Invariant: artifact_hash is required.
-func TestGetVodAsset_RequiresArtifactHash_RpcHandlers(t *testing.T) {
-	srv, _ := newVodRpcHandlers(t, &fakeVodS3Client{})
+	mock.ExpectQuery(`SELECT v.artifact_hash, v.s3_key, a.user_id`).
+		WithArgs("u1", "t1").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_key", "user_id"}).
+			AddRow("hash-1", "vod/t1/hash/video.mp4", sql.NullString{}))
+	// Guarded claim matches nothing (status is no longer 'uploading'); no S3 call, no tx.
+	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'aborting'.*status = 'uploading'`).
+		WithArgs("hash-1", "t1").
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	_, err := srv.GetVodAsset(context.Background(), &sharedpb.GetVodAssetRequest{})
-	if status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("expected InvalidArgument, got %v", err)
+	_, err := srv.AbortVodUpload(context.Background(), &sharedpb.AbortVodUploadRequest{TenantId: "t1", UploadId: "u1"})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition when the abort loses the claim race, got %v", err)
 	}
-}
-
-// Invariant: a missing (or non-vod / deleted) artifact maps sql.ErrNoRows to
-// gRPC NotFound, not Internal.
-func TestGetVodAsset_NotFound_RpcHandlers(t *testing.T) {
-	srv, mock := newVodRpcHandlers(t, &fakeVodS3Client{})
-
-	mock.ExpectQuery(`FROM foghorn\.artifacts a`).
-		WithArgs("missing").
-		WillReturnError(sql.ErrNoRows)
-
-	_, err := srv.GetVodAsset(context.Background(), &sharedpb.GetVodAssetRequest{ArtifactHash: "missing"})
-	if status.Code(err) != codes.NotFound {
-		t.Fatalf("expected NotFound, got %v", err)
+	if s3.abortCalls != 0 {
+		t.Fatalf("expected AbortMultipartUpload to NEVER be called when the claim loses the race, got %d calls", s3.abortCalls)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)
 	}
 }
 
-// Invariant: a ready artifact row is scanned into a VodAssetInfo with the hash
-// surfaced and 'synced' mapped to VOD_STATUS_READY (read-fidelity for the asset
-// view).
-func TestGetVodAsset_ReturnsReadyAsset_RpcHandlers(t *testing.T) {
-	srv, mock := newVodRpcHandlers(t, &fakeVodS3Client{})
+// S3 abort fails (non-NoSuchUpload) after the claim wins: the row is left 'aborting' for the recovery
+// worker — no metadata delete, no DELETED event, and the RPC surfaces the error.
+func TestAbortVodUpload_S3AbortFailureLeavesAborting_RpcHandlers(t *testing.T) {
+	s3 := &fakeVodS3Client{abortErr: errors.New("s3 unreachable")}
+	srv, mock := newVodRpcHandlers(t, s3)
 
-	mock.ExpectQuery(`FROM foghorn\.artifacts a`).
-		WithArgs("hash-1").
-		WillReturnRows(sqlmock.NewRows(vodAssetCols()).AddRow(vodAssetRow("hash-1", "synced")...))
+	mock.ExpectQuery(`SELECT v.artifact_hash, v.s3_key, a.user_id`).
+		WithArgs("u1", "t1").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_key", "user_id"}).
+			AddRow("hash-1", "vod/t1/hash/video.mp4", sql.NullString{}))
+	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'aborting'.*status = 'uploading'`).
+		WithArgs("hash-1", "t1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	// No finalize tx — the abort errored, so the row stays 'aborting'.
 
-	asset, err := srv.GetVodAsset(context.Background(), &sharedpb.GetVodAssetRequest{ArtifactHash: "hash-1"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if asset.GetArtifactHash() != "hash-1" {
-		t.Fatalf("expected hash-1, got %q", asset.GetArtifactHash())
-	}
-	if asset.GetStatus() != sharedpb.VodStatus_VOD_STATUS_READY {
-		t.Fatalf("expected READY status, got %v", asset.GetStatus())
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet SQL expectations: %v", err)
-	}
-}
-
-// ---- ListVodAssets: count + page, excludes deleted ----
-
-// Invariant: listing counts then pages vod artifacts (status != deleted) and
-// returns the scanned assets with the total reflected in the cursor response.
-func TestListVodAssets_CountsAndPages_RpcHandlers(t *testing.T) {
-	srv, mock := newVodRpcHandlers(t, &fakeVodS3Client{})
-
-	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM foghorn\.artifacts a WHERE`).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int32(1)))
-	mock.ExpectQuery(`FROM foghorn\.artifacts a`).
-		WillReturnRows(sqlmock.NewRows(vodAssetCols()).AddRow(vodAssetRow("hash-1", "synced")...))
-
-	resp, err := srv.ListVodAssets(context.Background(), &sharedpb.ListVodAssetsRequest{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(resp.GetAssets()) != 1 || resp.GetAssets()[0].GetArtifactHash() != "hash-1" {
-		t.Fatalf("expected one asset hash-1, got %+v", resp.GetAssets())
-	}
-	if resp.GetPagination().GetTotalCount() != 1 {
-		t.Fatalf("expected total=1, got %d", resp.GetPagination().GetTotalCount())
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet SQL expectations: %v", err)
-	}
-}
-
-// Invariant: a count-query failure is surfaced as Internal (the list never
-// returns a partial/empty success on infra error).
-func TestListVodAssets_CountErrorIsInternal_RpcHandlers(t *testing.T) {
-	srv, mock := newVodRpcHandlers(t, &fakeVodS3Client{})
-
-	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM foghorn\.artifacts a WHERE`).
-		WillReturnError(sql.ErrConnDone)
-
-	_, err := srv.ListVodAssets(context.Background(), &sharedpb.ListVodAssetsRequest{})
+	_, err := srv.AbortVodUpload(context.Background(), &sharedpb.AbortVodUploadRequest{TenantId: "t1", UploadId: "u1"})
 	if status.Code(err) != codes.Internal {
-		t.Fatalf("expected Internal, got %v", err)
+		t.Fatalf("expected Internal when the S3 abort fails, got %v", err)
+	}
+	if s3.abortCalls != 1 {
+		t.Fatalf("expected exactly one S3 abort attempt, got %d", s3.abortCalls)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)
@@ -267,7 +207,8 @@ func deleteLookupCols() []string {
 	return []string{
 		"status", "s3_key", "s3_url", "format",
 		"size_bytes", "retention_until", "user_id",
-		"storage_cluster_id", "origin_cluster_id",
+		"storage_cluster_id", "origin_cluster_id", "origin_type",
+		"active_object_key", "active_dtsh_key", "sync_object_key", "durable_backend_local",
 	}
 }
 
@@ -303,7 +244,8 @@ func TestDeleteVodAsset_AlreadyDeletedIsNoOp_RpcHandlers(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows(deleteLookupCols()).AddRow(
 			"deleted", "", sql.NullString{}, sql.NullString{},
 			sql.NullInt64{}, sql.NullTime{}, sql.NullString{},
-			sql.NullString{}, sql.NullString{},
+			sql.NullString{}, sql.NullString{}, "",
+			sql.NullString{}, sql.NullString{}, sql.NullString{}, false,
 		))
 
 	resp, err := srv.DeleteVodAsset(context.Background(), &sharedpb.DeleteVodAssetRequest{
@@ -332,14 +274,22 @@ func TestDeleteVodAsset_SoftDeletesReadyAsset_RpcHandlers(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows(deleteLookupCols()).AddRow(
 			"synced", "vod/t1/hash/video.mp4", sql.NullString{}, sql.NullString{},
 			sql.NullInt64{Int64: 2048, Valid: true}, sql.NullTime{}, sql.NullString{},
-			sql.NullString{}, sql.NullString{},
+			sql.NullString{}, sql.NullString{}, "",
+			sql.NullString{}, sql.NullString{}, sql.NullString{}, false,
 		))
+	// DURABLE STATE FIRST: soft-delete (guarded, tenant-scoped) + DELETED lifecycle event commit
+	// atomically BEFORE any physical cleanup.
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE foghorn\.artifacts SET status = 'deleted'`).
+		WithArgs("hash-1", "t1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	// Physical cleanup runs only after the commit: fan out node-cleanup (no cached nodes here).
 	mock.ExpectQuery(`SELECT node_id FROM foghorn\.artifact_nodes`).
 		WithArgs("hash-1").
 		WillReturnRows(sqlmock.NewRows([]string{"node_id"}))
-	mock.ExpectExec(`UPDATE foghorn\.artifacts SET status = 'deleted'`).
-		WithArgs("hash-1").
-		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	resp, err := srv.DeleteVodAsset(context.Background(), &sharedpb.DeleteVodAssetRequest{
 		ArtifactHash: "hash-1",

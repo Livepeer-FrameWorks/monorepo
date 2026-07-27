@@ -1,12 +1,52 @@
 package jobs
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 )
+
+// A processing job's source media must NOT be placed on a node whose virtual cluster is NOT entitled to the
+// job's tenant (Quartermaster cluster↔tenant entitlement); a platform-shared cluster serves any tenant.
+func TestRouteProcessingJob_ExcludesCrossTenantDedicatedNode(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	t.Cleanup(sm.Shutdown)
+	ctx := context.Background()
+
+	// Injected entitlement (no live Quartermaster): cluster-b serves only tenant-b; cluster-shared serves any.
+	origAccess := clusterAccessibleForTenant
+	clusterAccessibleForTenant = func(clusterID, tenantID string) bool {
+		switch clusterID {
+		case "cluster-shared":
+			return true
+		case "cluster-b":
+			return tenantID == "tenant-b"
+		default:
+			return false
+		}
+	}
+	t.Cleanup(func() { clusterAccessibleForTenant = origAccess })
+
+	// Node in tenant-b's dedicated cluster, with the most spare capacity (0 in-flight).
+	sm.SetNodeConnectionInfo(ctx, "byoc-b", "h", "tenant-b", "cluster-b", nil)
+	sm.TouchNode("byoc-b", true)
+	setNodeProcessing(sm, "byoc-b", true, 0, 0)
+	// Node in a platform-shared cluster, busier.
+	sm.SetNodeConnectionInfo(ctx, "shared", "h", "", "cluster-shared", nil)
+	sm.TouchNode("shared", true)
+	setNodeProcessing(sm, "shared", true, 0, 5)
+
+	if id, _ := routeProcessingJob(&processingJob{TenantID: "tenant-a"}); id != "shared" {
+		t.Fatalf("tenant-a job must skip tenant-b's non-entitled cluster (even at 0 load) and use the platform-shared node; got %q", id)
+	}
+	if id, _ := routeProcessingJob(&processingJob{TenantID: "tenant-b"}); id != "byoc-b" {
+		t.Fatalf("tenant-b job may use tenant-b's own entitled cluster; got %q", id)
+	}
+}
 
 func preferred(nodeID string) *processingJob {
 	return &processingJob{PreferredNode: sql.NullString{String: nodeID, Valid: nodeID != ""}}
@@ -23,6 +63,12 @@ func TestRouteProcessingJob(t *testing.T) {
 	// Leave a fresh manager behind so a leftover alive node can't leak into
 	// other tests in this package (the dispatcher routes to alive nodes).
 	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+
+	// These subtests exercise capacity/class routing, not the tenant boundary — make every cluster entitled
+	// so eligibility isolates to capacity. The cross-tenant boundary has its own test.
+	origAccess := clusterAccessibleForTenant
+	clusterAccessibleForTenant = func(string, string) bool { return true }
+	t.Cleanup(func() { clusterAccessibleForTenant = origAccess })
 
 	t.Run("no alive nodes", func(t *testing.T) {
 		sm := state.ResetDefaultManagerForTests()

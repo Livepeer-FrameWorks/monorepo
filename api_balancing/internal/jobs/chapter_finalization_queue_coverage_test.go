@@ -38,11 +38,13 @@ func withControlDB(t *testing.T) sqlmock.Sqlmock {
 func TestDispatchChapter_MaxAttemptsExceeded(t *testing.T) {
 	mock := withControlDB(t)
 
-	// MarkChapterFailed runs exactly one UPDATE constrained to closed/finalizing
-	// rows; the terminal state arg must be failed_permanent.
-	mock.ExpectExec(`UPDATE foghorn\.dvr_chapters`).
-		WithArgs("chap-maxed", control.ChapterStateFailedPermanent, sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	// MarkChapterFailed is now one tx: transition the chapter (RETURNING its playback hash, NULL
+	// here — no artifact allocated) then commit. Terminal state arg must be failed_permanent.
+	mock.ExpectBegin()
+	mock.ExpectQuery(`UPDATE foghorn\.dvr_chapters.*RETURNING playback_artifact_hash`).
+		WithArgs("chap-maxed", control.ChapterStateFailedPermanent, sqlmock.AnyArg(), "").
+		WillReturnRows(sqlmock.NewRows([]string{"playback_artifact_hash"}).AddRow(nil))
+	mock.ExpectCommit()
 
 	q := &ChapterFinalizationQueue{logger: logging.NewLogger()}
 	c := control.DVRChapterRow{
@@ -114,12 +116,12 @@ func TestDispatchChapter_NoSegmentsFailsSourceMissing(t *testing.T) {
 	// terminal-fail UPDATE. Point ListDVRSegmentsOwnedByChapter at controlMock.
 	parentCols := []string{
 		"tenant_id", "user_id", "stream_id", "stream_internal_name",
-		"origin_cluster_id", "storage_cluster_id", "recording_node",
+		"origin_cluster_id", "storage_cluster_id", "retention_until", "recording_node",
 	}
 	qmock.ExpectQuery(`FROM foghorn\.artifacts`).
 		WithArgs("dvrhash").
 		WillReturnRows(sqlmock.NewRows(parentCols).
-			AddRow("tenant-1", "user-1", "stream-1", "stream-int", "cluster-1", "cluster-1", ""))
+			AddRow("tenant-1", "user-1", "stream-1", "stream-int", "cluster-1", "cluster-1", nil, ""))
 
 	// Segment list returns zero rows for this chapter's media range.
 	segCols := []string{
@@ -132,10 +134,12 @@ func TestDispatchChapter_NoSegmentsFailsSourceMissing(t *testing.T) {
 		WithArgs("dvrhash", int64(0), int64(10000)).
 		WillReturnRows(sqlmock.NewRows(segCols))
 
-	// Terminal fail: failed_source_missing.
-	controlMock.ExpectExec(`UPDATE foghorn\.dvr_chapters`).
-		WithArgs("chap-empty", control.ChapterStateFailedSourceMissing, sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	// Terminal fail: failed_source_missing (tx: transition RETURNING NULL hash → commit).
+	controlMock.ExpectBegin()
+	controlMock.ExpectQuery(`UPDATE foghorn\.dvr_chapters.*RETURNING playback_artifact_hash`).
+		WithArgs("chap-empty", control.ChapterStateFailedSourceMissing, sqlmock.AnyArg(), "").
+		WillReturnRows(sqlmock.NewRows([]string{"playback_artifact_hash"}).AddRow(nil))
+	controlMock.ExpectCommit()
 
 	q := &ChapterFinalizationQueue{db: mockDB, logger: logging.NewLogger()}
 	c := control.DVRChapterRow{
@@ -173,12 +177,12 @@ func TestDispatchChapter_MissingSegmentsFailsSourceMissing(t *testing.T) {
 
 	parentCols := []string{
 		"tenant_id", "user_id", "stream_id", "stream_internal_name",
-		"origin_cluster_id", "storage_cluster_id", "recording_node",
+		"origin_cluster_id", "storage_cluster_id", "retention_until", "recording_node",
 	}
 	qmock.ExpectQuery(`FROM foghorn\.artifacts`).
 		WithArgs("dvrhash").
 		WillReturnRows(sqlmock.NewRows(parentCols).
-			AddRow("tenant-1", "user-1", "stream-1", "stream-int", "cluster-1", "cluster-1", ""))
+			AddRow("tenant-1", "user-1", "stream-1", "stream-int", "cluster-1", "cluster-1", nil, ""))
 
 	segCols := []string{
 		"artifact_hash", "segment_name", "sequence",
@@ -195,9 +199,11 @@ func TestDispatchChapter_MissingSegmentsFailsSourceMissing(t *testing.T) {
 			AddRow("dvrhash", "s0", int64(0), int64(0), int64(2000), int64(2000),
 				nil, "", "reclaimed", nil, now, nil, nil, nil))
 
-	controlMock.ExpectExec(`UPDATE foghorn\.dvr_chapters`).
-		WithArgs("chap-missing", control.ChapterStateFailedSourceMissing, sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	controlMock.ExpectBegin()
+	controlMock.ExpectQuery(`UPDATE foghorn\.dvr_chapters.*RETURNING playback_artifact_hash`).
+		WithArgs("chap-missing", control.ChapterStateFailedSourceMissing, sqlmock.AnyArg(), "").
+		WillReturnRows(sqlmock.NewRows([]string{"playback_artifact_hash"}).AddRow(nil))
+	controlMock.ExpectCommit()
 
 	q := &ChapterFinalizationQueue{db: mockDB, logger: logging.NewLogger()}
 	c := control.DVRChapterRow{

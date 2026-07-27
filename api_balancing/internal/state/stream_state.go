@@ -3,8 +3,10 @@ package state
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"net"
 	neturl "net/url"
 	"strings"
@@ -19,7 +21,111 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	pkgredis "github.com/Livepeer-FrameWorks/monorepo/pkg/redis"
+	"google.golang.org/protobuf/proto"
 )
+
+// cloneStoredArtifacts returns a fully independent deep copy of an artifact slice: a fresh backing array
+// AND cloned *StoredArtifact pointees, so a snapshot handed to a caller can never be mutated by a
+// concurrent AddNodeArtifact / RemoveNodeArtifact (which replace elements in the live node's backing
+// array) after the state lock is released.
+func cloneStoredArtifacts(in []*ipcpb.StoredArtifact) []*ipcpb.StoredArtifact {
+	if in == nil {
+		return nil
+	}
+	out := make([]*ipcpb.StoredArtifact, len(in))
+	for i, a := range in {
+		if a == nil {
+			continue
+		}
+		if cloned, ok := proto.Clone(a).(*ipcpb.StoredArtifact); ok {
+			out[i] = cloned
+		}
+	}
+	return out
+}
+
+// cloneNodeStateLocked returns an independent copy of a NodeState: the struct plus ALL its mutable
+// reference fields — geo pointers, the Outputs map (deep, incl. nested JSON containers), Roles/Tags/
+// ConfigStreams slices, the ProcessingClasses map (including each ClassCapacity.Ready slice), and Artifacts
+// (deep). Callers must hold sm.mu. The returned value shares no mutable STORAGE with the live node —
+// concurrent point deltas / re-registration can't race a caller reading the snapshot after the lock is
+// released.
+func cloneNodeStateLocked(n *NodeState) *NodeState {
+	if n == nil {
+		return nil
+	}
+	c := *n
+	c.Latitude = cloneFloatPtr(n.Latitude)
+	c.Longitude = cloneFloatPtr(n.Longitude)
+	c.Outputs = cloneJSONMap(n.Outputs)
+	if n.Roles != nil {
+		c.Roles = append([]string(nil), n.Roles...)
+	}
+	if n.Tags != nil {
+		c.Tags = append([]string(nil), n.Tags...)
+	}
+	if n.ConfigStreams != nil {
+		c.ConfigStreams = append([]string(nil), n.ConfigStreams...)
+	}
+	c.ProcessingClasses = cloneProcessingClasses(n.ProcessingClasses)
+	c.Artifacts = cloneStoredArtifacts(n.Artifacts)
+	return &c
+}
+
+// cloneProcessingClasses deep-copies the per-class capacity map, including each ClassCapacity.Ready slice,
+// so a snapshot never shares the map or its slices with live state.
+func cloneProcessingClasses(in map[string]ClassCapacity) map[string]ClassCapacity {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]ClassCapacity, len(in))
+	for k, v := range in {
+		if v.Ready != nil {
+			v.Ready = append([]string(nil), v.Ready...)
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// cloneJSONMap deep-copies a JSON-sourced map[string]any so a snapshot shares no nested container (map/
+// slice) with live state. Node Outputs are only ever replaced wholesale today, but the immutable-snapshot
+// contract must not depend on that.
+func cloneJSONMap(in map[string]any) map[string]any {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = cloneJSONValue(v)
+	}
+	return out
+}
+
+// cloneJSONValue recursively copies the JSON value kinds produced by encoding/json (objects, arrays, and
+// scalars); scalars and any non-JSON leaf are returned as-is (immutable or not meaningfully mutable).
+func cloneJSONValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		return cloneJSONMap(t)
+	case []any:
+		out := make([]any, len(t))
+		for i, e := range t {
+			out[i] = cloneJSONValue(e)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
+func cloneFloatPtr(p *float64) *float64 {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
 
 // Metrics hooks (optional)
 var (
@@ -303,6 +409,13 @@ type NodeState struct {
 
 	// Artifacts stored on this node
 	Artifacts []*ipcpb.StoredArtifact `json:"artifacts,omitempty"`
+	// ArtifactInventoryReady gates ARTIFACT routing (not live ingest/stream routing): it is FALSE
+	// until the node's ACTIVE control connection delivers its first complete VERSIONED inventory
+	// snapshot, and is reset to false on every (re)connect (RecordNodeArtifactFence installs a new
+	// fence floor). Startup rehydration seeds Artifacts from Postgres but leaves this false, so a
+	// mixed-version/legacy sidecar that never sends a versioned report is excluded from artifact
+	// serving until it upgrades — without affecting its live-stream routing.
+	ArtifactInventoryReady bool `json:"artifact_inventory_ready,omitempty"`
 
 	// Cached scoring helpers (computed on update)
 	CPUScore      uint64    `json:"-"` // Pre-computed CPU score component
@@ -340,6 +453,24 @@ type StreamStateManager struct {
 	streamInstances map[string]map[string]*StreamInstanceState // internal_name -> node_id -> instance
 	nodes           map[string]*NodeState                      // node_id -> node state
 	mu              sync.RWMutex
+
+	// Whole-node artifact report ordering (see SetNodeArtifacts). A report is ordered by (fence,
+	// seq): the connection fence is issued monotonically by Foghorn when the node's control
+	// connection registers, so it is an ownership rank (a reconnect ranks strictly higher), and seq
+	// orders within a connection. lastAcceptedArtifactOrder is the per-node high-water accepted,
+	// checked + advanced SYNCHRONOUSLY under mu BEFORE any state mutation so a stale report never
+	// touches in-memory artifacts, Redis, published changes, or the DB. It OUTLIVES the NodeState so
+	// an in-flight stale report can't resurrect evicted placement. Keyed by node_id; guarded by mu.
+	lastAcceptedArtifactOrder map[string]incOrder
+
+	// artifactPublishMu serializes the Redis write + changelog publish for accepted reports of THIS
+	// instance so they land on the Redis stream in report order. lastPublishedArtifactOrder is the
+	// per-node high-water of what has actually been published; a report overtaken before its publish
+	// runs is skipped. Cross-owner ordering (a different Foghorn replica) IS enforced: the report
+	// envelope carries (fence, seq) into the Redis value + changelog, the fenced-CAS writer
+	// (SetNodeArtifactsFenced) and envelope-gated peer apply (cache.go) reject a stale owner's write.
+	artifactPublishMu          sync.Mutex
+	lastPublishedArtifactOrder map[string]incOrder
 
 	// Virtual Viewer Tracking (Option B: per-session)
 	virtualViewers map[string]*VirtualViewer // viewerID -> viewer (for full session tracking)
@@ -403,12 +534,14 @@ type StreamStateManager struct {
 // NewStreamStateManager creates a new stream state manager
 func NewStreamStateManager() *StreamStateManager {
 	sm := &StreamStateManager{
-		streams:          make(map[string]*StreamState),
-		streamInstances:  make(map[string]map[string]*StreamInstanceState),
-		nodes:            make(map[string]*NodeState),
-		watermarks:       pkgredis.NewWatermarks(),
-		stalenessChecker: make(chan bool),
-		staleThreshold:   90 * time.Second,
+		streams:                    make(map[string]*StreamState),
+		streamInstances:            make(map[string]map[string]*StreamInstanceState),
+		nodes:                      make(map[string]*NodeState),
+		lastAcceptedArtifactOrder:  make(map[string]incOrder),
+		lastPublishedArtifactOrder: make(map[string]incOrder),
+		watermarks:                 pkgredis.NewWatermarks(),
+		stalenessChecker:           make(chan bool),
+		staleThreshold:             90 * time.Second,
 
 		// Virtual Viewer Tracking
 		virtualViewers: make(map[string]*VirtualViewer),
@@ -1925,21 +2058,11 @@ func (sm *StreamStateManager) GetAllStreamInstances() map[string]map[string]Stre
 	return out
 }
 
-// GetNodeState returns a copy of the node state
+// GetNodeState returns an independent copy of the node state (safe to read after the lock is released).
 func (sm *StreamStateManager) GetNodeState(nodeID string) *NodeState {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	n := sm.nodes[nodeID]
-	if n == nil {
-		return nil
-	}
-	c := *n
-	if n.Outputs != nil {
-		copied := make(map[string]any, len(n.Outputs))
-		maps.Copy(copied, n.Outputs)
-		c.Outputs = copied
-	}
-	return &c
+	return cloneNodeStateLocked(sm.nodes[nodeID])
 }
 
 // GetClusterSnapshot returns copies of streams and nodes
@@ -1954,13 +2077,7 @@ func (sm *StreamStateManager) GetClusterSnapshot() (streams []*StreamState, node
 		streams = append(streams, &c)
 	}
 	for _, n := range sm.nodes {
-		c := *n
-		if n.Outputs != nil {
-			copied := make(map[string]any, len(n.Outputs))
-			maps.Copy(copied, n.Outputs)
-			c.Outputs = copied
-		}
-		nodes = append(nodes, &c)
+		nodes = append(nodes, cloneNodeStateLocked(n))
 	}
 	return
 }
@@ -2028,6 +2145,14 @@ func (sm *StreamStateManager) FindNodesByArtifactHash(hash string) []ArtifactNod
 	for _, node := range snapshot.Nodes {
 		// Skip inactive nodes
 		if !node.IsActive {
+			continue
+		}
+		// Artifact-only readiness cordon: a node whose active connection hasn't delivered a versioned
+		// complete inventory (legacy/mixed-version sidecar, or freshly rehydrated-but-unconfirmed) is
+		// excluded from ARTIFACT routing even though it stays eligible for live-stream routing. Its
+		// in-memory Artifacts list can't be trusted as authoritative yet, so serving from it risks
+		// routing to a copy the node no longer holds.
+		if !node.ArtifactInventoryReady {
 			continue
 		}
 		for _, artifact := range node.Artifacts {
@@ -2101,9 +2226,255 @@ func (sm *StreamStateManager) FindNodeByArtifactInternalName(internalName string
 	return bestHost, bestArtifact
 }
 
-// SetNodeArtifacts updates the artifacts stored on a node (in-memory and persistent)
-func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*ipcpb.StoredArtifact) {
+// ArtifactReportOrder is the ordering identity of a whole-node artifact report: the ownership fence
+// Foghorn issued to the delivering control connection, plus the sidecar's per-connection sequence.
+type ArtifactReportOrder struct {
+	Fence int64
+	Seq   int64
+}
+
+func (o ArtifactReportOrder) versioned() bool { return o.Fence > 0 && o.Seq > 0 }
+
+// incOrder totally orders reports lexicographically by (fence, seq), so a higher-fence connection
+// (a reconnect) always wins and a delayed report from a superseded connection always loses.
+type incOrder struct {
+	fence int64
+	seq   int64
+}
+
+func (o incOrder) newerThan(prev incOrder) bool {
+	if o.fence != prev.fence {
+		return o.fence > prev.fence
+	}
+	return o.seq > prev.seq
+}
+
+// storedArtifactsToStates converts an in-memory whole-node artifact slice into the peer-envelope
+// representation (NodeArtifactState) so a cordon marker can carry the retained last-good inventory to
+// HA peers with Ready=false, rather than clobbering their copy with an empty list.
+func storedArtifactsToStates(nodeID string, artifacts []*ipcpb.StoredArtifact) []*NodeArtifactState {
+	states := make([]*NodeArtifactState, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		aType := artifactTypeToString(artifact.GetArtifactType())
+		if aType == "" {
+			aType = inferArtifactType(artifact.GetFilePath())
+		}
+		states = append(states, &NodeArtifactState{
+			NodeID:       nodeID,
+			ClipHash:     artifact.GetClipHash(),
+			FilePath:     artifact.GetFilePath(),
+			SizeBytes:    artifact.GetSizeBytes(),
+			StreamName:   artifact.GetStreamName(),
+			ArtifactType: aType,
+			Format:       artifact.GetFormat(),
+		})
+	}
+	return states
+}
+
+// RecordNodeArtifactFence installs a new connection's fence as the local acceptance floor AND, when the
+// fence is newer, publishes a FENCED Ready=false takeover marker (seq=0) so HA peers cordon the node
+// too, until this owner's first versioned report lifts it. The marker (fence, 0) wins over any lower
+// fence and loses to a real report (seq>=1). It returns an error if the marker could not be durably
+// published: the caller (Register) MUST fail closed on that — a connection that couldn't cordon peers
+// must not become active/healthy, or peers keep the previous owner's Ready=true inventory and route to
+// stale copies. If the marker CAS loses to a strictly-higher fence (a concurrent reconnect won
+// ownership in the window after AcquireConnOwnerFenced), it returns ErrArtifactInventorySuperseded so
+// the caller rejects the superseded connection rather than making it ready. A nil redis store
+// (single-Foghorn) has no peers, so publishing is a no-op success.
+func (sm *StreamStateManager) RecordNodeArtifactFence(nodeID string, fence int64) error {
+	if fence <= 0 {
+		return nil
+	}
 	sm.mu.Lock()
+	incoming := incOrder{fence: fence, seq: 0}
+	newFence := false
+	if prev, known := sm.lastAcceptedArtifactOrder[nodeID]; !known || incoming.newerThan(prev) {
+		sm.lastAcceptedArtifactOrder[nodeID] = incoming
+		newFence = true
+		// A strictly-newer fence means a NEW control connection: re-arm the artifact-readiness cordon so
+		// the node is excluded from artifact routing until this connection delivers its first versioned
+		// complete inventory (SetNodeArtifacts lifts it). Live-stream routing is unaffected.
+		if n := sm.nodes[nodeID]; n != nil {
+			n.ArtifactInventoryReady = false
+		}
+	}
+	redisStore := sm.redisStore
+	instanceID := sm.instanceID
+	sm.mu.Unlock()
+
+	if !newFence || redisStore == nil {
+		return nil
+	}
+	sm.artifactPublishMu.Lock()
+	defer sm.artifactPublishMu.Unlock()
+	marker := incOrder{fence: fence, seq: 0}
+	if prev, known := sm.lastPublishedArtifactOrder[nodeID]; known && !marker.newerThan(prev) {
+		return nil // a newer publish already covers this fence
+	}
+	env := &NodeArtifactSnapshot{NodeID: nodeID, Fence: fence, Seq: 0, Ready: false, Artifacts: nil}
+	envBytes, merr := json.Marshal(env)
+	if merr != nil {
+		return fmt.Errorf("marshal takeover marker: %w", merr)
+	}
+	change := StateChange{InstanceID: instanceID, Entity: StateEntityArtifact, Operation: StateOpUpsert, NodeID: nodeID, Payload: envBytes}
+	changeBytes, cerr := json.Marshal(change)
+	if cerr != nil {
+		return fmt.Errorf("marshal takeover changelog entry: %w", cerr)
+	}
+	applied, werr := redisStore.SetNodeArtifactsFenced(context.Background(), nodeID, envBytes, changeBytes, fence, 0)
+	if werr != nil {
+		return fmt.Errorf("publish fenced takeover marker: %w", werr)
+	}
+	if !applied {
+		// A strictly-higher fence won ownership in the window between AcquireConnOwnerFenced and this
+		// marker write: this connection LOST the takeover race. Do not record the publish; surface the
+		// loss so the caller (Register) releases the ownership it just acquired and rejects the
+		// superseded connection before it can become dispatch-visible.
+		return ErrArtifactInventorySuperseded
+	}
+	sm.lastPublishedArtifactOrder[nodeID] = marker
+	return nil
+}
+
+// CordonNodeArtifactsIncomplete re-arms the artifact-routing cordon (ArtifactInventoryReady=false) when
+// the sidecar reports a scan it could NOT complete (a lost mount / read error). The node's last-good
+// in-memory inventory is RETAINED for observability, but the node is excluded from artifact routing
+// until a fresh COMPLETE inventory lifts the cordon via SetNodeArtifacts. Merely SKIPPING an incomplete
+// report (not applying it) is insufficient: it leaves a stale ArtifactInventoryReady=true, so a vanished
+// disk's copies stay routable indefinitely. Ordered by the report's (fence, seq) exactly like a real
+// report — a stale/superseded incomplete report never cordons a node a newer report already made ready —
+// and the Ready=false marker is published to HA peers so they cordon too. Returns
+// ErrArtifactInventorySuperseded when the report is a drop rather than an apply: either a newer order
+// already owns the node locally (stale at entry) or a strictly-higher fence owns it on another replica.
+// A nil Redis store (single-Foghorn) cordons locally.
+func (sm *StreamStateManager) CordonNodeArtifactsIncomplete(nodeID string, order ArtifactReportOrder) error {
+	if !order.versioned() {
+		// An unversioned report has no ordering identity; the caller already skips it upstream. Nothing
+		// to cordon on without an order to fence against.
+		return nil
+	}
+	sm.mu.Lock()
+	incoming := incOrder{fence: order.Fence, seq: order.Seq}
+	if prev, known := sm.lastAcceptedArtifactOrder[nodeID]; known && !incoming.newerThan(prev) {
+		sm.mu.Unlock()
+		// Stale: a newer report already owns the node's inventory. We correctly do NOT cordon it, but this
+		// is a DROP, not an apply — surface it as superseded (like SetNodeArtifacts and the CAS path below)
+		// so the caller logs "not applied" instead of falsely reporting the node as freshly cordoned.
+		return ErrArtifactInventorySuperseded
+	}
+	sm.lastAcceptedArtifactOrder[nodeID] = incoming
+	var retained []*NodeArtifactState
+	if n := sm.nodes[nodeID]; n != nil {
+		// Retain n.Artifacts (last-good) for observability; readiness=false is what removes it from routing.
+		n.ArtifactInventoryReady = false
+		n.LastUpdate = time.Now()
+		// Carry the retained inventory in the marker (with Ready=false) so a peer apply / restart
+		// rehydration keeps the last-good list instead of replacing it with an empty one. This is what
+		// distinguishes an incomplete-scan cordon from a takeover-empty marker (which carries no artifacts).
+		retained = storedArtifactsToStates(nodeID, n.Artifacts)
+	}
+	redisStore := sm.redisStore
+	instanceID := sm.instanceID
+	sm.mu.Unlock()
+
+	if redisStore == nil {
+		return nil // single-Foghorn: the local cordon is authoritative
+	}
+	sm.artifactPublishMu.Lock()
+	defer sm.artifactPublishMu.Unlock()
+	if prev, known := sm.lastPublishedArtifactOrder[nodeID]; known && !incoming.newerThan(prev) {
+		// A newer publish already covers this order: this cordon was OVERTAKEN, so it is a drop, not an
+		// apply. Surface superseded (like the stale-at-entry and CAS-rejection paths) so the caller does
+		// not log a successful cordon it never performed.
+		return ErrArtifactInventorySuperseded
+	}
+	env := &NodeArtifactSnapshot{NodeID: nodeID, Fence: order.Fence, Seq: order.Seq, Ready: false, Artifacts: retained}
+	envBytes, merr := json.Marshal(env)
+	if merr != nil {
+		return fmt.Errorf("marshal incomplete-scan cordon marker: %w", merr)
+	}
+	change := StateChange{InstanceID: instanceID, Entity: StateEntityArtifact, Operation: StateOpUpsert, NodeID: nodeID, Payload: envBytes}
+	changeBytes, cerr := json.Marshal(change)
+	if cerr != nil {
+		return fmt.Errorf("marshal incomplete-scan cordon changelog entry: %w", cerr)
+	}
+	applied, werr := redisStore.SetNodeArtifactsFenced(context.Background(), nodeID, envBytes, changeBytes, order.Fence, order.Seq)
+	if werr != nil {
+		return fmt.Errorf("publish incomplete-scan cordon marker: %w", werr)
+	}
+	if !applied {
+		return ErrArtifactInventorySuperseded
+	}
+	sm.lastPublishedArtifactOrder[nodeID] = incoming
+	return nil
+}
+
+// ErrArtifactInventorySuperseded means the fenced cross-instance CAS rejected a write because a
+// strictly-higher fence already owns the node's inventory on another Foghorn replica. It is returned by
+// both SetNodeArtifacts (a losing versioned report) and RecordNodeArtifactFence (a losing registration
+// takeover marker). This replica LOST the race: it keeps the node cordoned locally
+// (ArtifactInventoryReady=false) so nothing routes to an inventory it does not authoritatively own, and
+// on the registration path the caller rejects the superseded connection outright.
+var ErrArtifactInventorySuperseded = errors.New("node artifact inventory superseded by a higher fenced report")
+
+// SetNodeArtifacts applies an AUTHORITATIVE whole-node inventory report (in-memory, Redis, and
+// persistent). order is the report's (connection fence, seq) — mandatory and versioned for a real
+// sidecar report. Acceptance happens FIRST, synchronously under mu: a report that does not beat the
+// last accepted (fence, seq) for the node is dropped before any state is mutated, and the durable
+// (fence, seq) CAS is the shared backstop for goroutine-reordered DB commits.
+//
+// The local readiness cordon lifts ONLY after the cross-instance fenced CAS confirms this replica won
+// ownership: the in-memory artifacts are copied first, but ArtifactInventoryReady is set to true only
+// when SetNodeArtifactsFenced returns applied=true (or when there is no Redis tier). If the CAS is lost
+// (applied=false — a higher fence owns the node elsewhere), the node stays cordoned and
+// ErrArtifactInventorySuperseded is returned, so a losing replica never serves from a stale local copy.
+//
+// A non-versioned order (fence==0 or seq==0) is NOT an authoritative report: it is a memory-only
+// seed (test setup, in-process rehydration refinement). It is applied to in-memory state ONLY —
+// never Redis, never the durable placement table, never a peer StateChange — so a caller without an
+// ordering identity can never emit unordered durable/peer state or clobber a versioned report. The
+// authoritative writers are the versioned sidecar report (here) and the point deltas
+// AddNodeArtifact/RemoveNodeArtifact, whose durable effect is committed at their call site.
+//
+// HA tier: the Redis value + StateChange carry the report envelope's (fence, seq), and the
+// fenced-CAS writer (SetNodeArtifactsFenced) + envelope-gated peer apply (applyRedisChange) reject a
+// stale write from a PREVIOUS owner on ANOTHER Foghorn replica. See redis_store.go / cache.go.
+func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*ipcpb.StoredArtifact, order ArtifactReportOrder) error {
+	reportOrder := order
+
+	// Non-authoritative memory-only seed: apply to in-memory state and return without touching any
+	// durable or peer-visible sink. Unlike rehydration, this is a live seed so it stamps LastUpdate.
+	if !reportOrder.versioned() {
+		sm.mu.Lock()
+		n := sm.nodes[nodeID]
+		if n == nil {
+			n = newNodeState(nodeID)
+			sm.nodes[nodeID] = n
+		}
+		n.Artifacts = make([]*ipcpb.StoredArtifact, len(artifacts))
+		copy(n.Artifacts, artifacts)
+		n.LastUpdate = time.Now()
+		sm.mu.Unlock()
+		return nil
+	}
+
+	sm.mu.Lock()
+
+	// Acceptance gate FIRST: drop a stale whole-node report before touching any state, ordered by
+	// the connection ownership fence then the per-connection sequence.
+	accepted := incOrder{fence: reportOrder.Fence, seq: reportOrder.Seq}
+	if prev, known := sm.lastAcceptedArtifactOrder[nodeID]; known && !accepted.newerThan(prev) {
+		sm.mu.Unlock()
+		if stateLogger != nil {
+			stateLogger.WithField("node_id", nodeID).Debug("Dropped stale out-of-order node artifact report")
+		}
+		// Superseded at entry (a newer report already advanced the accepted order): NOT applied. Return the
+		// superseded sentinel — like the publish-overtake and fenced-CAS-loss paths — so the caller does not
+		// treat this as an apply and emit NotifyArtifactMapUpdated on an inventory that never landed.
+		return ErrArtifactInventorySuperseded
+	}
+	sm.lastAcceptedArtifactOrder[nodeID] = accepted
 
 	n := sm.nodes[nodeID]
 	if n == nil {
@@ -2111,10 +2482,14 @@ func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*ipcpb
 		sm.nodes[nodeID] = n
 	}
 
-	// Deep copy artifacts to avoid shared slices
+	// Deep copy artifacts to avoid shared slices. Readiness is NOT lifted here: the local routing cordon
+	// stays as-is until the cross-instance fenced CAS below confirms this replica owns the inventory.
 	n.Artifacts = make([]*ipcpb.StoredArtifact, len(artifacts))
 	copy(n.Artifacts, artifacts)
 	n.LastUpdate = time.Now()
+	// Receipt time versions this report's placement EVENTS (event time only; see
+	// ArtifactRecord.ReportedAtMs).
+	reportedAtMs := n.LastUpdate.UnixMilli()
 
 	// Get artifact repo reference while holding lock
 	artifactRepo := sm.repos.Artifacts
@@ -2122,7 +2497,18 @@ func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*ipcpb
 	instanceID := sm.instanceID
 	sm.mu.Unlock()
 
+	// inventoryReady decides whether the local routing cordon lifts. Single-Foghorn (no Redis peers) is
+	// authoritative locally, so it lifts. With a Redis tier the fenced CAS is authoritative: readiness
+	// lifts ONLY if this report wins it, otherwise the node stays cordoned (fail closed).
+	inventoryReady := true
+	var supersededErr error
+	// writeErr is set when the authoritative Redis write genuinely fails (marshal or the fenced CAS
+	// call). It is distinct from supersededErr (a valid CAS loss): a write failure means the report
+	// never became durable, so the caller must not notify/side-effect on it.
+	var writeErr error
+
 	if redisStore != nil {
+		inventoryReady = false
 		artifactStates := make([]*NodeArtifactState, 0, len(artifacts))
 		for _, artifact := range artifacts {
 			aType := artifactTypeToString(artifact.GetArtifactType())
@@ -2139,13 +2525,93 @@ func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*ipcpb
 				Format:       artifact.GetFormat(),
 			})
 		}
-		if err := redisStore.SetNodeArtifacts(nodeID, artifactStates); err != nil {
+		// Serialize the whole-report write so envelopes land in report order. Two ordering gates apply:
+		//  1. lastPublishedArtifactOrder is the fast in-instance gate (skip a locally-overtaken write).
+		//  2. SetNodeArtifactsFenced is the CROSS-instance backstop — ONE Lua op that CAS-compares the
+		//     (fence, seq), then writes the envelope value + advances the watermark + appends the
+		//     changelog atomically. The envelope carries (fence, seq) even when EMPTY, and the write +
+		//     publish can't diverge, so a stalled old owner can't clear a newer inventory.
+		sm.artifactPublishMu.Lock()
+		skip := false
+		if prev, known := sm.lastPublishedArtifactOrder[nodeID]; known && !accepted.newerThan(prev) {
+			skip = true
+			// Locally overtaken: a newer report already published in this instance. This report was NOT
+			// published, so it is superseded exactly like a lost fenced CAS — surface that so the code
+			// returns BEFORE the durable upsert / DTSH dispatch / caller notification, never running side
+			// effects on an inventory that did not become the published one.
+			supersededErr = ErrArtifactInventorySuperseded
 			if stateLogger != nil {
-				stateLogger.WithError(err).WithField("node_id", nodeID).Warn("Failed to write node artifacts to redis")
+				stateLogger.WithField("node_id", nodeID).Debug("Node artifact report locally overtaken by a newer report; not published, treating as superseded")
 			}
-		} else if payload, err := json.Marshal(artifactStates); err == nil {
-			sm.publishStateChange(StateChange{InstanceID: instanceID, Entity: StateEntityArtifact, Operation: StateOpUpsert, NodeID: nodeID, Payload: payload})
+		} else {
+			sm.lastPublishedArtifactOrder[nodeID] = accepted
 		}
+		if !skip {
+			// Ready=true: this is an accepted versioned complete inventory, so peers/rehydration lift the cordon.
+			envelope := &NodeArtifactSnapshot{NodeID: nodeID, Fence: reportOrder.Fence, Seq: reportOrder.Seq, Ready: true, Artifacts: artifactStates}
+			envBytes, merr := json.Marshal(envelope)
+			if merr != nil {
+				writeErr = fmt.Errorf("marshal node artifact envelope: %w", merr)
+				if stateLogger != nil {
+					stateLogger.WithError(merr).WithField("node_id", nodeID).Warn("Failed to marshal node artifact envelope for redis")
+				}
+			} else {
+				// The changelog entry is the SAME envelope wrapped as a StateChange, so peers apply it
+				// with its ordering identity (fence, seq) — including an empty inventory.
+				change := StateChange{InstanceID: instanceID, Entity: StateEntityArtifact, Operation: StateOpUpsert, NodeID: nodeID, Payload: envBytes}
+				changeBytes, cerr := json.Marshal(change)
+				if cerr != nil {
+					writeErr = fmt.Errorf("marshal node artifact changelog entry: %w", cerr)
+					if stateLogger != nil {
+						stateLogger.WithError(cerr).WithField("node_id", nodeID).Warn("Failed to marshal artifact changelog entry")
+					}
+				} else if applied, werr := redisStore.SetNodeArtifactsFenced(context.Background(), nodeID, envBytes, changeBytes, reportOrder.Fence, reportOrder.Seq); werr != nil {
+					writeErr = fmt.Errorf("write node artifact envelope to redis: %w", werr)
+					if stateLogger != nil {
+						stateLogger.WithError(werr).WithField("node_id", nodeID).Warn("Failed to write node artifact envelope to redis")
+					}
+				} else if applied {
+					// This replica won cross-instance ownership of the inventory: it may serve from it.
+					inventoryReady = true
+				} else {
+					// A strictly-higher fence already owns this node's inventory on another replica. Keep the
+					// node cordoned locally and surface the loss so nothing routes to a stale local copy.
+					supersededErr = ErrArtifactInventorySuperseded
+					if stateLogger != nil {
+						stateLogger.WithField("node_id", nodeID).Warn("Node artifact report lost the fenced CAS to a higher owner; keeping node cordoned")
+					}
+				}
+			}
+		}
+		sm.artifactPublishMu.Unlock()
+	}
+
+	// Apply the cross-instance CAS outcome to the local readiness cordon. Guard against a newer report
+	// having advanced the accepted order in the meantime — only THIS report may set the readiness it
+	// computed, so a concurrent newer report's decision is never overwritten.
+	sm.mu.Lock()
+	if cur, ok := sm.lastAcceptedArtifactOrder[nodeID]; ok && cur == accepted {
+		if node := sm.nodes[nodeID]; node != nil {
+			node.ArtifactInventoryReady = inventoryReady
+		}
+	}
+	sm.mu.Unlock()
+
+	// A genuine failure of the authoritative Redis write (marshal or the fenced CAS call) leaves this
+	// report non-durable: inventoryReady stayed false (applied above, node fail-closed cordoned) and we
+	// must NOT run the downstream side effects — DB placement persist, DTSH sync — nor let the caller
+	// notify peers on state that never landed in Redis. Return the error before any side effect.
+	if writeErr != nil {
+		return writeErr
+	}
+
+	// This report LOST the fenced cross-instance CAS: a strictly-higher fence owns this node's inventory
+	// on another replica, so the node is already cordoned (inventoryReady=false, applied to local
+	// readiness above). Return the supersession NOW — BEFORE the durable placement upsert and BEFORE the
+	// .dtsh trigger — so a losing snapshot can never persist placement or schedule a downstream command
+	// from state it does not authoritatively own. (The single-Foghorn/no-Redis path never sets this.)
+	if supersededErr != nil {
+		return supersededErr
 	}
 
 	// Persist to database (outside lock to avoid blocking)
@@ -2158,42 +2624,57 @@ func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*ipcpb
 					artifactType = inferArtifactType(a.GetFilePath())
 				}
 				records = append(records, ArtifactRecord{
-					ArtifactHash: a.GetClipHash(),
-					ArtifactType: artifactType,
-					StreamName:   a.GetStreamName(),
-					FilePath:     a.GetFilePath(),
-					SizeBytes:    int64(a.GetSizeBytes()),
-					CreatedAt:    a.GetCreatedAt(),
-					HasDtsh:      a.GetHasDtsh(),
-					AccessCount:  int64(a.GetAccessCount()),
-					LastAccessed: a.GetLastAccessed(),
-					Role:         storedArtifactRoleToString(a.GetRole()),
-					IsComplete:   a.GetIsComplete(),
+					ArtifactHash:          a.GetClipHash(),
+					ArtifactType:          artifactType,
+					StreamName:            a.GetStreamName(),
+					FilePath:              a.GetFilePath(),
+					SizeBytes:             int64(a.GetSizeBytes()),
+					CreatedAt:             a.GetCreatedAt(),
+					HasDtsh:               a.GetHasDtsh(),
+					AccessCount:           int64(a.GetAccessCount()),
+					LastAccessed:          a.GetLastAccessed(),
+					Role:                  storedArtifactRoleToString(a.GetRole()),
+					IsComplete:            a.GetIsComplete(),
+					ReportedAtMs:          reportedAtMs,
+					ReportConnectionFence: reportOrder.Fence,
+					ReportSeq:             reportOrder.Seq,
 				})
 			}
 			go func() {
-				_ = artifactRepo.UpsertArtifacts(context.Background(), nodeID, records)
+				if err := artifactRepo.UpsertArtifacts(context.Background(), nodeID, records); err != nil && stateLogger != nil {
+					stateLogger.WithError(err).WithField("node_id", nodeID).Warn("Failed to upsert node artifacts (placement telemetry may be missing)")
+				}
 			}()
 		} else {
-			// Node reports zero artifacts — mark all its DB rows as orphaned
-			go func() {
-				_ = artifactRepo.MarkNodeArtifactsOrphaned(context.Background(), nodeID)
-			}()
+			// An empty report asserts no presence; it does NOT negatively diff. The node's rows converge
+			// through the stale sweep / cordon / fenced-takeover (explicit eviction/disconnect orphans via
+			// its own path).
+			_ = reportedAtMs
 		}
 	}
 
 	// Check for .dtsh files that appeared after initial sync
 	// If an artifact has HasDtsh=true but was synced without it, trigger incremental sync
 	go sm.checkAndTriggerDtshSync(nodeID, artifacts)
+
+	// A superseded report already returned above (before these side effects), so this report won the CAS
+	// (or there is no Redis tier): success.
+	return nil
 }
 
-// AddNodeArtifact adds or updates a single artifact in the in-memory node state.
+// AddNodeArtifact is a best-effort IN-MEMORY point delta: it upserts a single artifact into the
+// node's in-memory inventory for read-freshness between authoritative sidecar reports. It does NOT
+// write Redis, the durable placement table, or a peer StateChange — the durable GAINED for a
+// server-authored copy (finalize/processing completion) is committed in the same transaction at the
+// call site, and cross-instance convergence is the next versioned sidecar report. It is a single-row
+// upsert, never a whole-snapshot rewrite, so it cannot clobber a concurrent versioned report's set.
 func (sm *StreamStateManager) AddNodeArtifact(nodeID string, artifact *ipcpb.StoredArtifact) {
 	if artifact == nil {
 		return
 	}
 
 	sm.mu.Lock()
+	defer sm.mu.Unlock()
 
 	n := sm.nodes[nodeID]
 	if n == nil {
@@ -2205,18 +2686,12 @@ func (sm *StreamStateManager) AddNodeArtifact(nodeID string, artifact *ipcpb.Sto
 		if existing.GetClipHash() == artifact.GetClipHash() {
 			n.Artifacts[i] = artifact
 			n.LastUpdate = time.Now()
-			artifactsCopy := append([]*ipcpb.StoredArtifact(nil), n.Artifacts...)
-			sm.mu.Unlock()
-			sm.SetNodeArtifacts(nodeID, artifactsCopy)
 			return
 		}
 	}
 
 	n.Artifacts = append(n.Artifacts, artifact)
 	n.LastUpdate = time.Now()
-	artifactsCopy := append([]*ipcpb.StoredArtifact(nil), n.Artifacts...)
-	sm.mu.Unlock()
-	sm.SetNodeArtifacts(nodeID, artifactsCopy)
 }
 
 // setNodeArtifactsMemoryOnly updates artifacts in memory without persisting to DB.
@@ -2335,13 +2810,17 @@ func triggerIncrementalDtshSync(nodeID, artifactHash, artifactType, filePath str
 	}
 }
 
-// RemoveNodeArtifact removes a specific artifact from a node's list
+// RemoveNodeArtifact is a best-effort IN-MEMORY point delta: it drops a single artifact from the
+// node's in-memory inventory so routing stops selecting this copy between authoritative reports. Like
+// AddNodeArtifact it does NOT write Redis, the durable placement table, or a peer StateChange — the
+// durable LOST is committed by the caller (e.g. DeleteNodeArtifact) and the next versioned sidecar
+// report reconciles peers. Single-row removal, never a whole-snapshot rewrite.
 func (sm *StreamStateManager) RemoveNodeArtifact(nodeID string, clipHash string) {
 	sm.mu.Lock()
+	defer sm.mu.Unlock()
 
 	n := sm.nodes[nodeID]
 	if n == nil || len(n.Artifacts) == 0 {
-		sm.mu.Unlock()
 		return
 	}
 
@@ -2355,9 +2834,6 @@ func (sm *StreamStateManager) RemoveNodeArtifact(nodeID string, clipHash string)
 
 	n.Artifacts = newArtifacts
 	n.LastUpdate = time.Now()
-	artifactsCopy := append([]*ipcpb.StoredArtifact(nil), n.Artifacts...)
-	sm.mu.Unlock()
-	sm.SetNodeArtifacts(nodeID, artifactsCopy)
 }
 
 // ApplyArtifactDeleted updates state and persists artifact deletion
@@ -2519,6 +2995,8 @@ type EnhancedBalancerNodeSnapshot struct {
 
 	// Artifacts stored on this node
 	Artifacts []*ipcpb.StoredArtifact `json:"artifacts"`
+	// ArtifactInventoryReady gates artifact routing — see NodeState.ArtifactInventoryReady.
+	ArtifactInventoryReady bool `json:"artifact_inventory_ready"`
 
 	// Stream summaries for this node
 	Streams map[string]BalancerStreamSummary `json:"streams"`
@@ -2668,11 +3146,14 @@ func (sm *StreamStateManager) getBalancerSnapshotInternal(includeStale, includeU
 			DiskTotalBytes: n.DiskTotalBytes,
 			DiskUsedBytes:  n.DiskUsedBytes,
 
-			// Transcoding info
-			ProcessingClasses: n.ProcessingClasses,
+			// Transcoding info — deep-cloned: the snapshot is an immutable view and must not share the
+			// live map (or its Ready slices) with concurrent capacity updates.
+			ProcessingClasses: cloneProcessingClasses(n.ProcessingClasses),
 
-			// Artifacts stored on this node
-			Artifacts: append([]*ipcpb.StoredArtifact(nil), n.Artifacts...),
+			// Artifacts stored on this node — deep-cloned pointees (AddNodeArtifact rewrites n.Artifacts[i]
+			// in place under the lock, which would otherwise race a caller reading this snapshot).
+			Artifacts:              cloneStoredArtifacts(n.Artifacts),
+			ArtifactInventoryReady: n.ArtifactInventoryReady,
 
 			// Stream summaries
 			Streams: nodeStreams[nodeID],
@@ -2801,8 +3282,17 @@ func (sm *StreamStateManager) checkStaleNodes() {
 		}
 	}
 
+	evictTombstone := make(map[string]incOrder, len(toRemove))
 	for _, nodeID := range toRemove {
 		delete(sm.nodes, nodeID)
+		// Fence the current connection: raise the accepted seq to the max so no in-flight/duplicate
+		// report of this connection's fence can resurrect the placement we're about to orphan. A
+		// returning node registers a NEW (higher) fence, which supersedes. The tombstone outlives the
+		// deleted NodeState (in memory AND — via the terminal orphan below — durably in Postgres).
+		fenced := sm.lastAcceptedArtifactOrder[nodeID]
+		fenced.seq = math.MaxInt64
+		sm.lastAcceptedArtifactOrder[nodeID] = fenced
+		evictTombstone[nodeID] = fenced
 	}
 	sm.mu.Unlock()
 
@@ -2826,9 +3316,17 @@ func (sm *StreamStateManager) checkStaleNodes() {
 			sm.publishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityNode, Operation: StateOpDelete, NodeID: nodeID})
 		}
 		if artifactRepo != nil {
-			go func(nid string) {
-				_ = artifactRepo.MarkNodeArtifactsOrphaned(context.Background(), nid)
-			}(nodeID)
+			evictedAtMs := time.Now().UnixMilli()
+			// Orphan with a DURABLE tombstone: advance the watermark to (currentFence, MaxInt64) so a
+			// stale in-flight upsert from that fence can't commit afterward and resurrect the rows. A
+			// node that never carried a fence orphans unversioned (0,0). A returning node's higher
+			// fence still supersedes the tombstone.
+			tomb := evictTombstone[nodeID]
+			go func(nid string, t incOrder) {
+				if err := artifactRepo.MarkNodeArtifactsOrphaned(context.Background(), nid, evictedAtMs, t.fence, t.seq); err != nil && stateLogger != nil {
+					stateLogger.WithError(err).WithField("node_id", nid).Warn("Failed to orphan artifacts for evicted node (placement may stay present)")
+				}
+			}(nodeID, tomb)
 		}
 		if stateLogger != nil {
 			stateLogger.WithField("node_id", nodeID).Info("Evicted disconnected node from state")
@@ -3115,24 +3613,48 @@ func (sm *StreamStateManager) RehydrateStatus() (time.Time, string) {
 	return sm.lastRehydrateAt, sm.lastRehydrateErr
 }
 
-// ApplyDVRProgress updates state and persists DVR progress by hash
-func (sm *StreamStateManager) ApplyDVRProgress(ctx context.Context, dvrHash string, status string, sizeBytes uint64, segmentCount uint32, nodeID string) error {
+// ApplyDVRProgress updates state and persists DVR progress by hash. The DB write is the durable
+// promotion of a 'starting' recording into 'recording' and — on that FIRST transition — the atomic
+// enqueue of the STATUS_RECORDING lifecycle event; its error is propagated (never discarded) so a
+// lost recording event surfaces to the caller instead of leaving analytics stuck at STARTED.
+//
+// The durable write also authorizes and classifies the report. It rejects a node that is not this DVR's
+// dispatch owner (error) and reports whether the write was APPLIED: applied=true only for an accepted
+// active transition ('recording'); applied=false for a terminal/finalizing no-op. Stream-instance state
+// is mirrored ONLY when the write applied and the canonical status is 'recording' — a late report
+// against a terminal row is a no-op that leaves the instance mirror untouched — and only Foghorn's
+// canonical 'recording' status is mirrored, never the advisory node-supplied `status`. Returns the
+// applied result so callers (e.g. processDVRProgress) can gate their own sinks the same way.
+//
+// When write-through is disabled (memory-only rehydrate mode) there is no durable no-op to distinguish,
+// so the mirror runs and applied is reported true.
+func (sm *StreamStateManager) ApplyDVRProgress(ctx context.Context, dvrHash string, status string, sizeBytes uint64, segmentCount uint32, nodeID string) (bool, error) {
+	applied := true
+	canonicalStatus := "recording"
 	if sm.repos.DVR != nil && sm.writePolicies[EntityDVR].Enabled && sm.writePolicies[EntityDVR].Mode == WriteThrough {
-		_ = sm.repos.DVR.UpdateDVRProgressByHash(ctx, dvrHash, status, int64(sizeBytes))
+		a, current, progressErr := sm.repos.DVR.UpdateDVRProgressByHash(ctx, dvrHash, status, int64(sizeBytes), segmentCount, nodeID)
 		if writeCounter != nil {
 			writeCounter(map[string]string{"entity": "dvr", "op": "progress"})
 		}
+		if progressErr != nil {
+			// Dispatch-owner rejection or durable write failure: do not mirror to stream-instance state.
+			return false, progressErr
+		}
+		applied = a
+		canonicalStatus = current
 	}
-	if sm.repos.DVR != nil {
+	// Mirror ONLY an accepted active transition whose canonical status is 'recording'. A terminal no-op
+	// (applied=false) leaves stream-instance state untouched so a late report cannot resurrect it.
+	if applied && canonicalStatus == "recording" && sm.repos.DVR != nil {
 		if internal, err := sm.repos.DVR.ResolveInternalNameByHash(ctx, dvrHash); err == nil && internal != "" {
 			sm.UpdateStreamInstanceInfo(internal, nodeID, map[string]any{
-				"dvr_status":        status,
+				"dvr_status":        "recording",
 				"dvr_segment_count": segmentCount,
 				"dvr_size_bytes":    sizeBytes,
 			})
 		}
 	}
-	return nil
+	return applied, nil
 }
 
 // ApplyDVRStopped updates state and persists DVR completion by hash
@@ -3411,7 +3933,7 @@ type ClipRepository interface {
 type DVRRepository interface {
 	ListAllDVR(ctx context.Context) ([]DVRRecord, error)
 	ResolveInternalNameByHash(ctx context.Context, dvrHash string) (string, error)
-	UpdateDVRProgressByHash(ctx context.Context, dvrHash string, status string, sizeBytes int64) error
+	UpdateDVRProgressByHash(ctx context.Context, dvrHash string, status string, sizeBytes int64, segmentCount uint32, nodeID string) (applied bool, currentStatus string, err error)
 	UpdateDVRCompletionByHash(ctx context.Context, dvrHash string, finalStatus string, durationSeconds int64, sizeBytes int64, manifestPath string, errorMsg string) error
 	// NeedsDtshSync returns true if the DVR is synced to S3 but .dtsh files weren't included
 	NeedsDtshSync(ctx context.Context, dvrHash string) bool
@@ -3457,8 +3979,29 @@ type ArtifactRepository interface {
 	GetCachedAt(ctx context.Context, artifactHash string) (int64, error)
 	// ListAllNodeArtifacts returns all non-orphaned artifacts grouped by node ID (for rehydration)
 	ListAllNodeArtifacts(ctx context.Context) (map[string][]ArtifactRecord, error)
-	// MarkNodeArtifactsOrphaned sets is_orphaned=true for all artifacts on a node
-	MarkNodeArtifactsOrphaned(ctx context.Context, nodeID string) error
+	// MarkNodeArtifactsOrphaned sets is_orphaned=true for a node's copies on the explicit
+	// eviction/disconnect path (NOT report-driven negative diff). reportedAtMs (UnixMilli) is the emitted
+	// LOST events' timestamp; 0 falls back to emit-time. reportFence + reportSeq are the ordering
+	// identity: an orphan that loses the atomic CAS to the last applied (fence, seq) is dropped as stale
+	// (0 fence / 0 seq = unversioned, always applies).
+	MarkNodeArtifactsOrphaned(ctx context.Context, nodeID string, reportedAtMs int64, reportFence, reportSeq int64) error
+	// DeleteNodeArtifact removes one node's local-copy row on explicit deletion/eviction
+	// and emits a LOST placement in the same transaction. reportedAtMs is the event
+	// timestamp (ordering is the monotonic version); 0 falls back to emit-time.
+	DeleteNodeArtifact(ctx context.Context, artifactHash, nodeID string, reportedAtMs int64) error
+	// ReconcileNodeCopies emits GAINED for present copies that have never been emitted
+	// (last_emitted_version=0) — boot seed + non-emitting-writer healing. Idempotent and
+	// safe on every replica; returns the number of copies emitted.
+	ReconcileNodeCopies(ctx context.Context) (int, error)
+	// RefreshNodeCopy synchronously emits GAINED for one present copy whose analytics
+	// projection is absent (last_emitted_version=0) — called by writers that restore/create
+	// presence outside the transactional emit paths, so the transition lands immediately
+	// (reconciliation is only the backstop). Locked (FOR UPDATE) and idempotent.
+	RefreshNodeCopy(ctx context.Context, artifactHash, nodeID string) error
+	// RegisterDVRRecordingOrigin registers the DVR recording node as origin (with
+	// base_url) through the atomic transition path so a cache→origin promotion emits
+	// UPDATED. Keeps the parent DVR row incomplete.
+	RegisterDVRRecordingOrigin(ctx context.Context, artifactHash, nodeID, baseURL string) error
 	// NeedsDtshSync returns true if the VOD artifact is synced to S3 but .dtsh wasn't included.
 	// Chapter-VOD artifacts depend on this catch-up path to flip dtsh_synced=true so the chapter
 	// row can advance from finalized → frozen → reclaimed without waiting for a viewer.
@@ -3481,11 +4024,25 @@ type ArtifactRecord struct {
 	// Role identifies which presence model this report describes.
 	// "origin" rows are written by the sidecar that finalized the file
 	// and are eligible to serve cross-cluster peer-relay reads when
-	// IsComplete=true. "cache" rows (default for poller reports) hold
-	// sparse block-cache content and cannot serve peers. Empty string
-	// is treated as "cache" by the repo.
+	// IsComplete=true. "cache" rows (default for poller reports) are a
+	// synced pulled copy of the whole file; IsComplete marks it full.
+	// Read-through block caches (`<asset>.blocks/`) are NOT reported here
+	// at all — the poller skips directories — so no row represents partial
+	// cache content. Empty string is treated as "cache" by the repo.
 	Role       string
 	IsComplete bool
+	// ReportedAtMs is the wall-clock (UnixMilli) captured when Foghorn received this
+	// node report. It is the node-copy event's *timestamp* (event time), NOT its
+	// ordering key — the analytics current-state projection is versioned by the
+	// monotonic sequence (see enqueueNodeCopy), not this value. 0 falls back to emit-time.
+	ReportedAtMs int64
+	// ReportConnectionFence + ReportSeq are the report's ordering identity: the ownership fence
+	// Foghorn issued to the delivering control connection + the sidecar's per-connection sequence.
+	// The durable upsert's atomic CAS drops a report that loses to the last applied (fence, seq) for
+	// the node, so out-of-order goroutine commits can't let a stale report overwrite newer placement.
+	// 0 fence / 0 seq = unversioned (always applied; watermark untouched — internal/eviction path).
+	ReportConnectionFence int64
+	ReportSeq             int64
 }
 
 // ArtifactSyncInfo represents sync tracking state for an artifact

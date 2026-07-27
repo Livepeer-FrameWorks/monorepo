@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -47,18 +48,39 @@ func processRelayResolveRequest(req *ipcpb.RelayResolveRequest, nodeID string, s
 
 	switch req.GetAssetKind() {
 	case "vod", "clip":
-		fillFileArtifactResolve(ctx, req, resp, logger)
+		fillFileArtifactResolve(ctx, req, resp, nodeID, logger)
 	case "upload":
-		fillUploadResolve(ctx, req, resp, logger)
+		fillUploadResolve(ctx, req, resp, nodeID, logger)
 	default:
 		resp.Error = fmt.Sprintf("unknown asset_kind %q", req.GetAssetKind())
 	}
-	_ = nodeID
 
 	sendRelayResolveResponse(stream, resp, logger)
 }
 
-func fillFileArtifactResolve(ctx context.Context, req *ipcpb.RelayResolveRequest, resp *ipcpb.RelayResolveResponse, logger logging.Logger) {
+// nodeMayServeTenant binds an action on a tenant's durable object (a RelayResolve presigned URL, a thumbnail
+// PUT) to the AUTHENTICATED requesting node's identity: it must not be handed to a node that isn't entitled to
+// that tenant merely because it knows the artifact hash / stream id. FAIL CLOSED on every unproven case — an
+// empty artifact tenant, or an unknown/absent requesting node, is denied.
+//
+// Authority model: the boundary is the authenticated node → its (server-resolved) virtual cluster, plus the
+// Quartermaster cluster↔tenant entitlement — NOT the NodeState.TenantID string. A node may serve a tenant iff
+// its cluster is entitled to that tenant per ClusterAccessibleForTenant (a platform-shared edge serves any
+// tenant; a dedicated cluster serves its owner + granted peers). This makes serve/process/store share one
+// predicate. NOTE: this adds a (cached) Quartermaster dependency to the serve check where the old node.TenantID
+// compare was purely in-memory; a node connected during a QM outage before its cluster resolves fails closed.
+func nodeMayServeTenant(nodeID, artifactTenant string) bool {
+	if strings.TrimSpace(artifactTenant) == "" {
+		return false
+	}
+	ns := state.DefaultManager().GetNodeState(nodeID)
+	if ns == nil {
+		return false
+	}
+	return ClusterAccessibleForTenant(ns.ClusterID, artifactTenant)
+}
+
+func fillFileArtifactResolve(ctx context.Context, req *ipcpb.RelayResolveRequest, resp *ipcpb.RelayResolveResponse, nodeID string, logger logging.Logger) {
 	if db == nil {
 		resp.Error = "foghorn not configured for relay resolve"
 		return
@@ -78,15 +100,18 @@ func fillFileArtifactResolve(ctx context.Context, req *ipcpb.RelayResolveRequest
 		storageClusterID sql.NullString
 		tenantID         sql.NullString
 		artifactType     sql.NullString
+		activeDtshKey    sql.NullString
+		durableLocal     sql.NullBool
 	)
 	err := db.QueryRowContext(ctx, `
 		SELECT COALESCE(s3_url,''), size_bytes, format, dtsh_synced, stream_internal_name, sync_status,
-		       origin_cluster_id, storage_cluster_id, tenant_id, artifact_type
+		       origin_cluster_id, storage_cluster_id, tenant_id, artifact_type, COALESCE(active_dtsh_key,''),
+		       COALESCE(durable_backend_local, false)
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND status != 'deleted'
 		LIMIT 1
 	`, req.GetAssetHash()).Scan(&s3URL, &sizeBytes, &format, &dtshSynced, &streamName, &syncStatus,
-		&originClusterID, &storageClusterID, &tenantID, &artifactType)
+		&originClusterID, &storageClusterID, &tenantID, &artifactType, &activeDtshKey, &durableLocal)
 	if errors.Is(err, sql.ErrNoRows) {
 		// No local row. For vod/clip the front door (STREAM_SOURCE and /play
 		// both via the shared resolve→authorize→adopt path) writes the
@@ -101,6 +126,14 @@ func fillFileArtifactResolve(ctx context.Context, req *ipcpb.RelayResolveRequest
 	if err != nil {
 		resp.Error = "db lookup failed"
 		logger.WithError(err).WithField("asset_hash", req.GetAssetHash()).Warn("RelayResolve DB lookup failed")
+		return
+	}
+	// TENANT BINDING: a presigned durable-storage URL is bound to the AUTHENTICATED requesting node's identity.
+	// A node dedicated to another tenant must not obtain this tenant's URL merely by knowing the artifact hash.
+	// Fail as SOURCE_MISSING (not a distinct error) so the caller learns nothing about the artifact's existence.
+	if !nodeMayServeTenant(nodeID, tenantID.String) {
+		logger.WithFields(logging.Fields{"asset_hash": req.GetAssetHash(), "node_id": nodeID, "artifact_tenant": tenantID.String}).
+			Warn("RelayResolve denied: requesting node is not entitled to this artifact's tenant")
 		return
 	}
 	if s3URL == "" {
@@ -154,6 +187,34 @@ func fillFileArtifactResolve(ctx context.Context, req *ipcpb.RelayResolveRequest
 		resp.Error = "s3 client not configured"
 		return
 	}
+	// OWNERSHIP GUARD: presign s3_url LOCALLY only when the bytes are provably on THIS cell's backend. Bucket
+	// equality alone is NOT ownership (two providers can share a bucket name), so this consults the PERSISTED
+	// ownership fact durable_backend_local AND the artifact's ORIGIN: the bytes are local when the row is
+	// explicitly marked local, OR its s3_url is under the local bucket AND it is not a federation-adopted pointer
+	// (origin is empty/local). A federation-migrated row (remote origin, durable_backend_local=false) routes
+	// through the federation contract (fillCrossClusterArtifact / PrepareArtifact) instead of being signed
+	// against the wrong provider — even under a shared bucket name. Legacy locally-backed rows that predate
+	// durable_backend_local still serve (local bucket + local/empty origin).
+	localCluster := strings.TrimSpace(localClusterID)
+	origin := strings.TrimSpace(originClusterID.String)
+	originIsLocal := origin == "" || (localCluster != "" && origin == localCluster)
+	_, localParseErr := s3Client.ParseLocalS3URL(s3URL)
+	locallyBacked := durableLocal.Bool || (localParseErr == nil && originIsLocal)
+	if !locallyBacked {
+		if fillPeerRelayFromLocalOrigin(ctx, req, resp, sizeBytes, format, streamName, logger) {
+			return
+		}
+		peerCluster := strings.TrimSpace(storageClusterID.String)
+		if peerCluster == "" {
+			peerCluster = strings.TrimSpace(originClusterID.String)
+		}
+		if peerCluster != "" {
+			fillCrossClusterArtifact(ctx, req, resp, logger, peerCluster, tenantID.String, artifactType.String, nil)
+		} else {
+			logger.WithField("asset_hash", req.GetAssetHash()).Debug("RelayResolve: synced row has a non-local s3_url and no peer cluster; not presigning locally")
+		}
+		return
+	}
 	mediaURL, err := GeneratePresignedGETForArtifact(ctx, s3URL)
 	if err != nil {
 		resp.Error = "mint media presigned"
@@ -171,19 +232,18 @@ func fillFileArtifactResolve(ctx context.Context, req *ipcpb.RelayResolveRequest
 		resp.ContentType = contentTypeForFormat(format.String)
 	}
 
-	// Sidecar S3 key follows the <media_key>.dtsh convention written by
-	// freeze and by the relay's direct .dtsh PUT. When the artifacts row
-	// reports dtsh_synced=true, mint a GET for it; otherwise omit so the
-	// relay returns 404 and Mist generates+PUTs a new one. PUT URL is
-	// always minted so externalWriter can persist freshly-generated
-	// sidecars.
+	// The durable .dtsh index is produced ONLY by the server-assigned STAGED publication (a node that holds a
+	// freshly-generated .dtsh reports has_dtsh → checkAndTriggerDtshSync → TriggerDtshSync → HEAD-verify →
+	// conditional promotion → active_dtsh_key flip). The relay only ever mints a READ URL: when the index is
+	// synced, a GET for the version-addressed key (legacy rows fall back to the co-located <media>.dtsh).
 	if dtshSynced.Valid && dtshSynced.Bool {
-		if u, mintErr := generateDtshPresignedGET(s3URL, relayURLTTL); mintErr == nil {
+		if k := strings.TrimSpace(activeDtshKey.String); k != "" {
+			if u, mintErr := generateDtshPresignedGETForKey(k, relayURLTTL); mintErr == nil {
+				resp.DtshPresignedGet = u
+			}
+		} else if u, mintErr := generateDtshPresignedGET(s3URL, relayURLTTL); mintErr == nil {
 			resp.DtshPresignedGet = u
 		}
-	}
-	if putURL, err := generateDtshPresignedPUT(s3URL, relayURLTTL); err == nil {
-		resp.DtshPresignedPut = putURL
 	}
 	// Clips nest under storage/clips/<stream_internal_name>/<hash>.<ext>
 	// when the clip writer knows the source stream; passing the stream
@@ -195,7 +255,7 @@ func fillFileArtifactResolve(ctx context.Context, req *ipcpb.RelayResolveRequest
 	resp.PolicyHint = ipcpb.RelayResolveResponse_CACHE_HINT_PREFER_DISK
 }
 
-func fillUploadResolve(ctx context.Context, req *ipcpb.RelayResolveRequest, resp *ipcpb.RelayResolveResponse, logger logging.Logger) {
+func fillUploadResolve(ctx context.Context, req *ipcpb.RelayResolveRequest, resp *ipcpb.RelayResolveResponse, nodeID string, logger logging.Logger) {
 	if db == nil || s3Client == nil {
 		resp.Error = "foghorn not configured for relay resolve"
 		return
@@ -205,24 +265,33 @@ func fillUploadResolve(ctx context.Context, req *ipcpb.RelayResolveRequest, resp
 	var (
 		s3Key     sql.NullString
 		sizeBytes sql.NullInt64
+		tenantID  sql.NullString
 	)
 	err := db.QueryRowContext(ctx, `
-		SELECT vm.s3_key, a.size_bytes
+		SELECT vm.s3_key, a.size_bytes, a.tenant_id
 		FROM foghorn.vod_metadata vm
 		LEFT JOIN foghorn.artifacts a ON a.artifact_hash = vm.artifact_hash
 		WHERE vm.artifact_hash = $1
 		LIMIT 1
-	`, req.GetAssetHash()).Scan(&s3Key, &sizeBytes)
+	`, req.GetAssetHash()).Scan(&s3Key, &sizeBytes, &tenantID)
 	if errors.Is(err, sql.ErrNoRows) || !s3Key.Valid || s3Key.String == "" {
 		// Direct-dial: no local upload metadata. Source artifact for
 		// the processing input might be on a peer cluster — federate
-		// via Commodore lookup + PrepareArtifact.
-		fillCrossClusterArtifactFromCommodore(ctx, req, resp, logger)
+		// via Commodore lookup + PrepareArtifact. The fallback authorizes
+		// the requesting node against the resolved artifact tenant.
+		fillCrossClusterArtifactFromCommodore(ctx, req, resp, nodeID, logger)
 		return
 	}
 	if err != nil {
 		resp.Error = "db lookup failed"
 		logger.WithError(err).WithField("asset_hash", req.GetAssetHash()).Warn("RelayResolve upload lookup failed")
+		return
+	}
+	// TENANT BINDING (see nodeMayServeTenant): don't hand a tenant's uploaded-VOD URL to a node dedicated to a
+	// different tenant. Fail as SOURCE_MISSING (leave state unset) so nothing about the artifact is revealed.
+	if !nodeMayServeTenant(nodeID, tenantID.String) {
+		logger.WithFields(logging.Fields{"asset_hash": req.GetAssetHash(), "node_id": nodeID, "artifact_tenant": tenantID.String}).
+			Warn("RelayResolve upload denied: requesting node is not entitled to this artifact's tenant")
 		return
 	}
 	mediaURL, err := s3Client.GeneratePresignedGET(s3Key.String, relayURLTTL)
@@ -238,9 +307,8 @@ func fillUploadResolve(ctx context.Context, req *ipcpb.RelayResolveRequest, resp
 	if sizeBytes.Valid && sizeBytes.Int64 > 0 {
 		resp.ExpectedSizeBytes = uint64(sizeBytes.Int64)
 	}
-	if putURL, err := s3Client.GeneratePresignedPUT(s3Key.String+".dtsh", relayURLTTL); err == nil {
-		resp.DtshPresignedPut = putURL
-	}
+	// No .dtsh PUT is minted here — see fillFileArtifactResolve: the durable index is published only via the
+	// server-assigned staged TriggerDtshSync attempt, never a direct relay PUT.
 }
 
 // fillPeerRelayFromLocalOrigin attempts to construct a peer-relay URL
@@ -398,23 +466,17 @@ func sendRelayResolveResponse(stream ipcpb.HelmsmanControl_ConnectServer, resp *
 	}
 }
 
-// generateDtshPresignedPUT builds a sidecar PUT URL alongside the artifact's
-// media key. The sidecar is stored at <media_key>.dtsh; freeze and the
-// relay's direct .dtsh PUT both target this key.
-func generateDtshPresignedPUT(mediaS3URL string, expiry time.Duration) (string, error) {
+// generateDtshPresignedGETForKey mints a read URL for the EXACT recorded .dtsh object key (active_dtsh_key),
+// the version-addressed index a completion published. Preferred over deriving from the media URL.
+func generateDtshPresignedGETForKey(dtshKey string, expiry time.Duration) (string, error) {
 	if s3Client == nil {
 		return "", fmt.Errorf("s3 client not configured")
 	}
-	key, err := keyFromMediaS3URL(mediaS3URL)
-	if err != nil {
-		return "", err
-	}
-	return s3Client.GeneratePresignedPUT(key+".dtsh", expiry)
+	return s3Client.GeneratePresignedGET(dtshKey, expiry)
 }
 
-// generateDtshPresignedGET mirrors the PUT helper for sidecar reads.
-// Only called when foghorn.artifacts.dtsh_synced=true on the artifact row,
-// so the key is known to exist in S3.
+// generateDtshPresignedGET mirrors the PUT helper for sidecar reads (LEGACY: derives <media>.dtsh from the
+// media URL, for rows synced before active_dtsh_key). Only called when foghorn.artifacts.dtsh_synced=true.
 func generateDtshPresignedGET(mediaS3URL string, expiry time.Duration) (string, error) {
 	if s3Client == nil {
 		return "", fmt.Errorf("s3 client not configured")
@@ -442,12 +504,20 @@ func keyFromMediaS3URL(mediaS3URL string) (string, error) {
 // adopts at the front door) this path CAN enforce the federation allowlist
 // here, on both the origin and any storage redirect. Returns silently (→ 404)
 // when Commodore has no match or the origin is not an authorized peer.
-func fillCrossClusterArtifactFromCommodore(ctx context.Context, req *ipcpb.RelayResolveRequest, resp *ipcpb.RelayResolveResponse, logger logging.Logger) {
+func fillCrossClusterArtifactFromCommodore(ctx context.Context, req *ipcpb.RelayResolveRequest, resp *ipcpb.RelayResolveResponse, nodeID string, logger logging.Logger) {
 	if CommodoreClient == nil {
 		return
 	}
 	commodoreResp, err := CommodoreClient.ResolveVodHash(ctx, req.GetAssetHash())
 	if err != nil || commodoreResp == nil || !commodoreResp.GetFound() {
+		return
+	}
+	// TENANT BINDING: the local vod_metadata lookup missed, but this still resolves a URL for the artifact's
+	// tenant — authorize the AUTHENTICATED requesting node against that tenant BEFORE federating, so a node
+	// dedicated to another tenant cannot reach this tenant's federated processing input by knowing the hash.
+	if !nodeMayServeTenant(nodeID, commodoreResp.GetTenantId()) {
+		logger.WithFields(logging.Fields{"asset_hash": req.GetAssetHash(), "node_id": nodeID, "artifact_tenant": commodoreResp.GetTenantId()}).
+			Warn("RelayResolve cross-cluster upload denied: requesting node is not entitled to this artifact's tenant")
 		return
 	}
 	originCluster := commodoreResp.GetOriginClusterId()

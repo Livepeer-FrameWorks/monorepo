@@ -50,11 +50,15 @@ func TestCleaner_LocalClipUsesFormatColumn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Delete err = %v", err)
 	}
-	if len(s3.deleteCalls) != 1 {
-		t.Fatalf("Delete calls = %d, want 1", len(s3.deleteCalls))
+	// The main object AND its co-located .dtsh index are deleted.
+	if len(s3.deleteCalls) != 2 {
+		t.Fatalf("Delete calls = %d, want 2", len(s3.deleteCalls))
 	}
 	if got, want := s3.deleteCalls[0], "clips/tenant-a/stream-x/clip-1.webm"; got != want {
 		t.Errorf("key = %q, want %q", got, want)
+	}
+	if got, want := s3.deleteCalls[1], "clips/tenant-a/stream-x/clip-1.webm.dtsh"; got != want {
+		t.Errorf("dtsh key = %q, want %q", got, want)
 	}
 }
 
@@ -92,11 +96,63 @@ func TestCleaner_LocalVODUsesS3Key(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Delete err = %v", err)
 	}
-	if len(s3.deleteCalls) != 1 {
-		t.Fatalf("Delete calls = %d, want 1", len(s3.deleteCalls))
+	// Main object + co-located .dtsh.
+	if len(s3.deleteCalls) != 2 {
+		t.Fatalf("Delete calls = %d, want 2", len(s3.deleteCalls))
 	}
 	if got, want := s3.deleteCalls[0], "vod/tenant-a/vod-1/movie.mp4"; got != want {
 		t.Errorf("key = %q, want %q", got, want)
+	}
+	if got, want := s3.deleteCalls[1], "vod/tenant-a/vod-1/movie.mp4.dtsh"; got != want {
+		t.Errorf("dtsh key = %q, want %q", got, want)
+	}
+}
+
+// A freeze may authorize a PUT that lands AFTER the artifact is deleted. The deleted row retains the
+// bound sync_object_key (PendingObjectKey); Delete must free THAT object too, in addition to the main
+// deletion target, so an authorized-but-late upload can't leak.
+func TestCleaner_DeletesPendingObjectKey(t *testing.T) {
+	s3 := &fakeS3{}
+	c := &Cleaner{LocalCluster: "eu-west", S3: s3}
+
+	err := c.Delete(context.Background(), ArtifactRef{
+		Hash:             "vod-1",
+		Type:             "vod",
+		TenantID:         "tenant-a",
+		VODS3Key:         "vod/tenant-a/vod-1/movie.mp4",
+		PendingObjectKey: "vod/tenant-a/vod-1/vod-1.mkv", // a differently-formatted pending freeze target
+	})
+	if err != nil {
+		t.Fatalf("Delete err = %v", err)
+	}
+	// Main object, its co-located .dtsh, then the pending freeze target.
+	if len(s3.deleteCalls) != 3 {
+		t.Fatalf("expected main + .dtsh + pending delete, got %v", s3.deleteCalls)
+	}
+	if s3.deleteCalls[0] != "vod/tenant-a/vod-1/movie.mp4" || s3.deleteCalls[1] != "vod/tenant-a/vod-1/movie.mp4.dtsh" || s3.deleteCalls[2] != "vod/tenant-a/vod-1/vod-1.mkv" {
+		t.Fatalf("unexpected delete keys: %v", s3.deleteCalls)
+	}
+}
+
+// When the row can no longer derive a main deletion target (e.g. a clip missing stream_internal_name)
+// but a pending freeze object was bound, Delete must still free the pending object rather than surface
+// ErrMissingTarget and leak it.
+func TestCleaner_MissingTargetStillDeletesPendingObject(t *testing.T) {
+	s3 := &fakeS3{}
+	c := &Cleaner{LocalCluster: "eu-west", S3: s3}
+
+	err := c.Delete(context.Background(), ArtifactRef{
+		Hash:     "clip-1",
+		Type:     "clip",
+		TenantID: "tenant-a",
+		// StreamInternal + Format absent → resolveTarget returns ErrMissingTarget
+		PendingObjectKey: "clips/tenant-a/stream-x/clip-1.mp4",
+	})
+	if err != nil {
+		t.Fatalf("Delete err = %v (pending object must be freed despite missing main target)", err)
+	}
+	if len(s3.deleteCalls) != 1 || s3.deleteCalls[0] != "clips/tenant-a/stream-x/clip-1.mp4" {
+		t.Fatalf("expected the pending object to be deleted, got %v", s3.deleteCalls)
 	}
 }
 
@@ -116,15 +172,15 @@ func TestCleaner_VODFallsBackToS3URL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Delete err = %v", err)
 	}
-	if len(s3.deleteCalls) != 1 || s3.deleteCalls[0] != "vod/tenant-a/vod-1/movie.mp4" {
+	if len(s3.deleteCalls) != 2 || s3.deleteCalls[0] != "vod/tenant-a/vod-1/movie.mp4" || s3.deleteCalls[1] != "vod/tenant-a/vod-1/movie.mp4.dtsh" {
 		t.Errorf("deleteCalls = %v", s3.deleteCalls)
 	}
 }
 
-func TestCleaner_VODFallsBackToBuildKeyFromFormat(t *testing.T) {
-	// Federated VOD freezes write to the deterministic shape
-	// vod/<tenant>/<hash>/<hash>.<format>; honor it as a last resort
-	// when neither s3_key nor s3_url were recorded.
+func TestCleaner_VODWithoutRecordedKeyFailsClosed(t *testing.T) {
+	// Deletion consumes a RECORDED key only (vod_metadata.s3_key / s3_url / the freeze descriptor). A VOD
+	// with just tenant+hash+format and no recorded key is NOT deleted at a reconstructed key — it fails
+	// closed with ErrMissingTarget so the purge job never frees a guessed object.
 	s3 := &fakeS3{}
 	c := &Cleaner{LocalCluster: "eu-west", S3: s3}
 
@@ -134,11 +190,11 @@ func TestCleaner_VODFallsBackToBuildKeyFromFormat(t *testing.T) {
 		TenantID: "tenant-a",
 		Format:   "mp4",
 	})
-	if err != nil {
-		t.Fatalf("Delete err = %v", err)
+	if !errors.Is(err, ErrMissingTarget) {
+		t.Fatalf("expected ErrMissingTarget, got %v", err)
 	}
-	if len(s3.deleteCalls) != 1 || s3.deleteCalls[0] != "vod/tenant-a/vod-1/vod-1.mp4" {
-		t.Errorf("deleteCalls = %v", s3.deleteCalls)
+	if len(s3.deleteCalls) != 0 {
+		t.Fatalf("must not delete a reconstructed key, got %v", s3.deleteCalls)
 	}
 }
 
@@ -147,10 +203,10 @@ func TestCleaner_RemoteOnlyDeploymentNoLocalS3(t *testing.T) {
 	// delegate is wired. Remote rows must still get cleaned.
 	called := false
 	delegate := func(_ context.Context, _ string, req *foghornfederationpb.DeleteStorageObjectsRequest) (*foghornfederationpb.DeleteStorageObjectsResponse, error) {
-		called = true
-		if req.GetS3Key() != "vod/tenant-a/vod-1/movie.mp4" {
+		if !called && req.GetS3Key() != "vod/tenant-a/vod-1/movie.mp4" { // first call = main object (a second call cleans .dtsh)
 			t.Errorf("delegate received key = %q", req.GetS3Key())
 		}
+		called = true
 		return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: true}, nil
 	}
 	c := &Cleaner{LocalCluster: "eu-west", S3: nil, Delegate: delegate}
@@ -226,7 +282,9 @@ func TestCleaner_RemoteUsesDelegateNotLocalS3(t *testing.T) {
 	s3 := &fakeS3{}
 	var got *foghornfederationpb.DeleteStorageObjectsRequest
 	delegate := func(_ context.Context, target string, req *foghornfederationpb.DeleteStorageObjectsRequest) (*foghornfederationpb.DeleteStorageObjectsResponse, error) {
-		got = req
+		if got == nil { // capture the MAIN object delete (the co-located .dtsh is a second delegate call)
+			got = req
+		}
 		if target != "us-east" {
 			t.Errorf("delegate target = %q, want us-east", target)
 		}
@@ -366,7 +424,7 @@ func TestCleaner_LocalClusterMatchUsesLocalS3(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Delete err = %v", err)
 	}
-	if len(s3.deleteCalls) != 1 {
-		t.Errorf("local Delete calls = %d, want 1", len(s3.deleteCalls))
+	if len(s3.deleteCalls) != 2 { // main object + co-located .dtsh
+		t.Errorf("local Delete calls = %d, want 2", len(s3.deleteCalls))
 	}
 }

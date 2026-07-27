@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
@@ -163,7 +162,7 @@ func (q *ChapterFinalizationQueue) tick() {
 	var chapters []control.DVRChapterRow
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		var listErr error
-		chapters, listErr = control.ListChaptersNeedingFinalization(ctx, chapterFinalizationDispatchBatchMax, chapterFinalizationMaxTimeout)
+		chapters, listErr = control.ListChaptersNeedingFinalization(ctx, chapterFinalizationDispatchBatchMax, chapterFinalizationMinTimeout, chapterFinalizationMaxTimeout)
 		return listErr
 	})
 	if err != nil {
@@ -191,7 +190,7 @@ func (q *ChapterFinalizationQueue) tick() {
 func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c control.DVRChapterRow) error {
 	if c.FinalizeAttempts >= chapterFinalizationMaxAttempts {
 		return control.MarkChapterFailed(ctx, c.ChapterID, control.ChapterStateFailedPermanent,
-			fmt.Sprintf("max attempts (%d) exceeded", chapterFinalizationMaxAttempts))
+			fmt.Sprintf("max attempts (%d) exceeded", chapterFinalizationMaxAttempts), "")
 	}
 
 	parent, err := q.readParentDVR(ctx, c.ArtifactHash)
@@ -206,7 +205,7 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 	if len(segments) == 0 {
 		return control.MarkChapterFailed(ctx, c.ChapterID,
 			control.ChapterStateFailedSourceMissing,
-			"chapter range has no segments")
+			"chapter range has no segments", "")
 	}
 	refs, missing, trimmedTail, refErr := q.buildSegmentRefs(parent.tenantID, parent.streamInternalName, c.ArtifactHash, segments)
 	if refErr != nil {
@@ -215,12 +214,12 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 	if missing > 0 {
 		return control.MarkChapterFailed(ctx, c.ChapterID,
 			control.ChapterStateFailedSourceMissing,
-			fmt.Sprintf("%d source segments missing from both local and recovery freeze", missing))
+			fmt.Sprintf("%d source segments missing from both local and recovery freeze", missing), "")
 	}
 	if len(refs) == 0 {
 		return control.MarkChapterFailed(ctx, c.ChapterID,
 			control.ChapterStateFailedSourceMissing,
-			"chapter range has no usable source segments")
+			"chapter range has no usable source segments", "")
 	}
 	if trimmedTail > 0 {
 		q.logger.WithFields(logging.Fields{
@@ -270,7 +269,7 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 				}).Warn("Chapter finalize: origin gone past grace with pending-local segments; classifying chapter as failed_source_missing")
 				return control.MarkChapterFailed(ctx, c.ChapterID,
 					control.ChapterStateFailedSourceMissing,
-					"recording origin unavailable past grace with pending source segments")
+					"recording origin unavailable past grace with pending source segments", "")
 			}
 			q.logger.WithFields(logging.Fields{
 				"chapter_id": c.ChapterID,
@@ -278,7 +277,9 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 			}).Debug("Chapter finalize: recording origin gone and some segments are pending-local-only; awaiting next tick")
 			return nil
 		}
-		altNode, reason := routeProcessingJob(nil)
+		// Thread the DVR's tenant so the alternate node is entitled for it: chapter finalization for tenant
+		// A's recording must not land on a cluster not entitled to A (nil tenant would drop the gate).
+		altNode, reason := routeProcessingJob(&processingJob{TenantID: parent.tenantID})
 		if altNode == "" {
 			q.logger.WithFields(logging.Fields{
 				"chapter_id": c.ChapterID,
@@ -308,7 +309,7 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 	// NOT advance to 'finalizing' without a publicly addressable ID
 	// since there is no artifact-hash fallback anymore.
 	filename := fmt.Sprintf("dvr-chapter-%s-%d-%d.mkv", c.ArtifactHash, c.StartMs, c.EndMs)
-	playbackID, mintErr := q.mintChapterPlaybackID(ctx, c.ChapterID, parent, playbackHash, filename)
+	playbackID, mintErr := q.mintChapterPlaybackID(ctx, c.ChapterID, parent, playbackHash, filename, c.ArtifactHash)
 	if mintErr != nil {
 		q.logger.WithError(mintErr).WithFields(logging.Fields{
 			"chapter_id":    c.ChapterID,
@@ -359,7 +360,9 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 		q.configCacher.CacheProcessConfig(playbackHash, processesJSON)
 	}
 
-	ok, err := control.MarkChapterFinalizing(ctx, c.ChapterID, playbackHash, chapterFinalizationMaxTimeout)
+	// MarkChapterFinalizing transitions the chapter AND enqueues the PROCESSING lifecycle in one
+	// transaction (durable, atomic) — no separate fire-and-forget emit here.
+	ok, err := control.MarkChapterFinalizing(ctx, c.ChapterID, playbackHash, parent.tenantID, targetNode, chapterFinalizationDeadline(c))
 	if err != nil {
 		return err
 	}
@@ -368,13 +371,6 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 		// re-claimed this stale finalizing row within the same tick.
 		return nil
 	}
-	startedAt := time.Now().Unix()
-	artifactoutbox.EnqueueVodLifecycleLogged(&ipcpb.VodLifecycleData{
-		Status:    ipcpb.VodLifecycleData_STATUS_PROCESSING,
-		VodHash:   playbackHash,
-		TenantId:  &parent.tenantID,
-		StartedAt: &startedAt,
-	})
 
 	deadline := time.Now().Add(chapterFinalizationDeadline(c)).UnixMilli()
 	chapterInt := chapterInternalName(playbackHash)
@@ -395,7 +391,7 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 		SourceSegments:           refs,
 	}
 	if err := control.SendProcessingJob(targetNode, req); err != nil {
-		retryErr := control.RetryChapterFinalize(ctx, c.ChapterID, fmt.Sprintf("dispatch failed: %v", err))
+		retryErr := control.RetryChapterFinalize(ctx, c.ChapterID, fmt.Sprintf("dispatch failed: %v", err), "")
 		if retryErr != nil {
 			q.logger.WithError(retryErr).WithField("chapter_id", c.ChapterID).Warn("Chapter finalization queue: roll-back to closed failed")
 		}
@@ -420,6 +416,9 @@ type parentDVR struct {
 	originClusterID    string
 	storageClusterID   string
 	recordingNode      string
+	// retentionUntil is the parent DVR's retention horizon; a chapter inherits it at
+	// allocation so the chapter's lifetime always tracks the parent (keep-forever ⇒ NULL).
+	retentionUntil sql.NullTime
 }
 
 func (q *ChapterFinalizationQueue) readParentDVR(ctx context.Context, dvrHash string) (parentDVR, error) {
@@ -431,6 +430,7 @@ func (q *ChapterFinalizationQueue) readParentDVR(ctx context.Context, dvrHash st
 		       COALESCE(a.stream_internal_name, ''),
 		       COALESCE(a.origin_cluster_id, ''),
 		       COALESCE(a.storage_cluster_id, ''),
+		       a.retention_until,
 		       COALESCE(
 		           (SELECT node_id
 		              FROM foghorn.artifact_nodes
@@ -441,7 +441,7 @@ func (q *ChapterFinalizationQueue) readParentDVR(ctx context.Context, dvrHash st
 		  FROM foghorn.artifacts a
 		 WHERE a.artifact_hash = $1
 		   AND a.artifact_type = 'dvr'
-	`, dvrHash).Scan(&p.tenantID, &p.userID, &p.streamID, &p.streamInternalName, &p.originClusterID, &p.storageClusterID, &p.recordingNode); err != nil {
+	`, dvrHash).Scan(&p.tenantID, &p.userID, &p.streamID, &p.streamInternalName, &p.originClusterID, &p.storageClusterID, &p.retentionUntil, &p.recordingNode); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return p, fmt.Errorf("parent DVR row missing")
 		}
@@ -523,11 +523,11 @@ func trimLostLocalTailSegments(rows []control.DVRSegmentRow) ([]control.DVRSegme
 // so retries return the same playback_id. Returns "" + error when the
 // client is unavailable or the RPC fails; callers treat that as a soft
 // miss and retry on the next finalization tick.
-func (q *ChapterFinalizationQueue) mintChapterPlaybackID(ctx context.Context, chapterID string, parent parentDVR, artifactHash, filename string) (string, error) {
+func (q *ChapterFinalizationQueue) mintChapterPlaybackID(ctx context.Context, chapterID string, parent parentDVR, artifactHash, filename, dvrHash string) (string, error) {
 	if control.CommodoreClient == nil {
 		return "", fmt.Errorf("commodore client not configured")
 	}
-	resp, err := control.CommodoreClient.MintChapterPlaybackID(ctx, chapterID, parent.tenantID, artifactHash, parent.userID, filename, parent.originClusterID, parent.storageClusterID, parent.streamID)
+	resp, err := control.CommodoreClient.MintChapterPlaybackID(ctx, chapterID, parent.tenantID, artifactHash, parent.userID, filename, parent.originClusterID, parent.storageClusterID, parent.streamID, dvrHash)
 	if err != nil {
 		return "", err
 	}
@@ -539,22 +539,29 @@ func (q *ChapterFinalizationQueue) mintChapterPlaybackID(ctx context.Context, ch
 
 func (q *ChapterFinalizationQueue) ensurePlaybackArtifactRow(ctx context.Context, hash string, c control.DVRChapterRow, parent parentDVR) error {
 	internalName := chapterInternalName(hash)
+	// A chapter inherits the parent DVR's retention horizon at allocation (keep-forever ⇒ NULL),
+	// so its lifetime tracks the parent. Later parent-retention changes are propagated by
+	// control.PropagateChapterRetention.
+	var retentionUntil interface{}
+	if parent.retentionUntil.Valid {
+		retentionUntil = parent.retentionUntil.Time
+	}
 	_, err := q.db.ExecContext(ctx, `
 		INSERT INTO foghorn.artifacts (
 			artifact_hash, artifact_type, tenant_id, user_id,
 			internal_name, stream_internal_name,
 			origin_type, origin_id, library_visible,
 			status, storage_location, sync_status, format,
-			origin_cluster_id, created_at, updated_at
+			origin_cluster_id, retention_until, created_at, updated_at
 		) VALUES (
 			$1, 'vod', $2::uuid, NULLIF($3, '')::uuid,
 			$4, $5,
 			'dvr_chapter', $6, false,
 			'finalizing', 'pending', 'pending', 'mkv',
-			NULLIF($7, ''), NOW(), NOW()
+			NULLIF($7, ''), $8, NOW(), NOW()
 		)
 		ON CONFLICT (artifact_hash) DO NOTHING
-	`, hash, parent.tenantID, parent.userID, internalName, parent.streamInternalName, c.ChapterID, parent.originClusterID)
+	`, hash, parent.tenantID, parent.userID, internalName, parent.streamInternalName, c.ChapterID, parent.originClusterID, retentionUntil)
 	return err
 }
 

@@ -23,6 +23,8 @@ type fakeVodS3Client struct {
 	createID    string
 	abortKey    string
 	abortUpID   string
+	abortErr    error
+	abortCalls  int
 }
 
 func (f *fakeVodS3Client) ListUploadedParts(_ context.Context, _, uploadID string) ([]storage.UploadedPart, error) {
@@ -49,10 +51,12 @@ func (f *fakeVodS3Client) CompleteMultipartUpload(context.Context, string, strin
 	panic("not used")
 }
 func (f *fakeVodS3Client) AbortMultipartUpload(_ context.Context, key, uploadID string) error {
+	f.abortCalls++
 	f.abortKey = key
 	f.abortUpID = uploadID
-	return nil
+	return f.abortErr
 }
+func (f *fakeVodS3Client) Exists(context.Context, string) (bool, error) { return false, nil }
 func (f *fakeVodS3Client) BuildVodS3Key(string, string, string) string {
 	return "vod/t1/hash/video.mp4"
 }
@@ -106,12 +110,20 @@ func TestCreateVodUpload_MetadataFailureAbortsMultipartUpload(t *testing.T) {
 	srv, mock, cleanup := newStatusServer(t, s3)
 	defer cleanup()
 
+	// Idempotency pre-check: a Commodore-minted vod_hash is looked up first so a
+	// retry re-signs an existing multipart instead of creating a second. No prior
+	// upload here, so it returns no rows and the create proceeds.
+	mock.ExpectQuery(`FROM foghorn\.artifacts a`).
+		WillReturnError(sql.ErrNoRows)
+	// Artifact + metadata + REQUESTED event are one atomic transaction now. When the vod_metadata
+	// INSERT fails the whole tx rolls back and the S3 multipart upload is aborted — no half-written
+	// rows, no orphaned upload.
+	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO foghorn\.artifacts`).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(`INSERT INTO foghorn\.vod_metadata`).
 		WillReturnError(sql.ErrConnDone)
-	mock.ExpectExec(`UPDATE foghorn\.artifacts`).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectRollback()
 
 	internalName := "vod-test"
 	vodHash := "hash-1"
@@ -128,6 +140,51 @@ func TestCreateVodUpload_MetadataFailureAbortsMultipartUpload(t *testing.T) {
 	}
 	if s3.abortUpID != "up-1" {
 		t.Fatalf("expected multipart upload to be aborted, got upload_id %q", s3.abortUpID)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The command-ledger 'accepted' row is written FIRST — before any fallible precheck — so
+// a precheck failure records 'rejected' rather than leaving a missing command. Here
+// CreateVodUpload carries a Commodore request_id; the accept INSERT + identity/status read
+// run before the idempotency probe, and when that probe errors the deferred finalizer
+// CAS-flips the still-'accepted' row to 'rejected'. The strict expectation order proves
+// the accept precedes the precheck.
+func TestCreateVodUpload_AcceptedBeforePrecheckFailureRecordsRejected(t *testing.T) {
+	srv, mock, cleanup := newStatusServer(t, &fakeVodS3Client{})
+	defer cleanup()
+
+	// 1) Accept is recorded first (INSERT ... ON CONFLICT DO NOTHING + identity/status read).
+	mock.ExpectExec(`INSERT INTO foghorn\.artifact_creation_commands`).
+		WithArgs("req-vod", "t1", "vod", "vh1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT \(tenant_id`).
+		WithArgs("req-vod", "t1", "vod", "vh1").
+		WillReturnRows(sqlmock.NewRows([]string{"identity_ok", "status"}).AddRow(true, "accepted"))
+	// 2) A later precheck (the idempotency probe) fails.
+	mock.ExpectQuery(`FROM foghorn\.artifacts a`).
+		WithArgs("vh1", "t1").
+		WillReturnError(sql.ErrConnDone)
+	// 3) The deferred finalizer CAS-rejects the still-'accepted' row — no missing command.
+	mock.ExpectExec(`UPDATE foghorn\.artifact_creation_commands`).
+		WithArgs("req-vod", "t1", "vod", "vh1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	internalName := "vod-test"
+	vodHash := "vh1"
+	requestID := "req-vod"
+	_, err := srv.CreateVodUpload(context.Background(), &sharedpb.CreateVodUploadRequest{
+		TenantId:     "t1",
+		Filename:     "video.mp4",
+		SizeBytes:    1024,
+		VodHash:      &vodHash,
+		InternalName: &internalName,
+		RequestId:    &requestID,
+	})
+	if got := status.Code(err); got != codes.Internal {
+		t.Fatalf("expected Internal for the failed precheck, got %s", got)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

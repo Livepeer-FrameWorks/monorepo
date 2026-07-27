@@ -34,12 +34,19 @@ func (f *fakeDeleteS3Client) DeletePrefix(_ context.Context, prefix string) (int
 	return 0, f.deletePrefixErr
 }
 
-func newDeleteServer(t *testing.T, fake *fakeDeleteS3Client) *FederationServer {
+func newDeleteServer(t *testing.T, fake *fakeDeleteS3Client) (*FederationServer, sqlmock.Sqlmock) {
 	t.Helper()
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	t.Cleanup(func() { mockDB.Close() })
 	cfg := FederationServerConfig{
-		Logger:    logging.NewLogger(),
-		ClusterID: "platform-eu",
-		S3Client:  fake,
+		Logger:                   logging.NewLogger(),
+		ClusterID:                "platform-eu",
+		DB:                       mockDB,
+		S3Client:                 fake,
+		AllowFederationMutations: true, // exercise the delete logic; production defaults to disabled (see below)
 		LocalS3Backing: S3Backing{
 			Bucket:   "frameworks",
 			Endpoint: "https://s3.example.com",
@@ -53,11 +60,50 @@ func newDeleteServer(t *testing.T, fake *fakeDeleteS3Client) *FederationServer {
 			return S3Backing{}, false
 		},
 	}
-	return NewFederationServer(cfg)
+	return NewFederationServer(cfg), mock
+}
+
+// expectTenantMatch queues the fail-closed tenant cross-check DeleteStorageObjects runs before deleting.
+func expectTenantMatch(mock sqlmock.Sqlmock, hash, tenant string) {
+	mock.ExpectQuery(`SELECT tenant_id FROM foghorn.artifacts WHERE artifact_hash = \$1`).
+		WithArgs(hash).
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow(tenant))
+}
+
+// By DEFAULT (no cluster-bound caller identity) the destructive RPC fails closed at the boundary — before any
+// tenant/shape/S3 work — because the shared service token cannot authorize cross-cluster deletion.
+func TestDeleteStorageObjects_DisabledByDefault(t *testing.T) {
+	fake := &fakeDeleteS3Client{}
+	mockDB, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	t.Cleanup(func() { mockDB.Close() })
+	srv := NewFederationServer(FederationServerConfig{
+		Logger: logging.NewLogger(), ClusterID: "platform-eu", DB: mockDB, S3Client: fake,
+		IsServedCluster: func(id string) bool { return id == "platform-eu" },
+		// AllowFederationMutations omitted → false.
+	})
+	resp, err := srv.DeleteStorageObjects(serviceAuthContext(), &foghornfederationpb.DeleteStorageObjectsRequest{
+		TenantId: "tenant-a", TargetClusterId: "platform-eu", ArtifactType: "vod", ArtifactHash: "v1",
+		Target: &foghornfederationpb.DeleteStorageObjectsRequest_S3Key{S3Key: "vod/tenant-a/v1/m.mp4"},
+	})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if resp.GetAccepted() {
+		t.Fatal("cross-cluster delete must be rejected when disabled")
+	}
+	if resp.GetReason() != "federation_mutations_disabled" {
+		t.Errorf("reason = %q, want federation_mutations_disabled", resp.GetReason())
+	}
+	if len(fake.deleteCalls) != 0 {
+		t.Error("no S3 deletion may occur when disabled")
+	}
 }
 
 func TestDeleteStorageObjects_RequiresServiceAuth(t *testing.T) {
-	srv := newDeleteServer(t, &fakeDeleteS3Client{})
+	srv, _ := newDeleteServer(t, &fakeDeleteS3Client{})
 	_, err := srv.DeleteStorageObjects(context.Background(), &foghornfederationpb.DeleteStorageObjectsRequest{
 		TenantId:        "tenant-a",
 		TargetClusterId: "platform-eu",
@@ -71,7 +117,7 @@ func TestDeleteStorageObjects_RequiresServiceAuth(t *testing.T) {
 }
 
 func TestDeleteStorageObjects_RejectsTargetWeDoNotOwn(t *testing.T) {
-	srv := newDeleteServer(t, &fakeDeleteS3Client{})
+	srv, _ := newDeleteServer(t, &fakeDeleteS3Client{})
 	resp, err := srv.DeleteStorageObjects(serviceAuthContext(), &foghornfederationpb.DeleteStorageObjectsRequest{
 		TenantId:        "tenant-a",
 		TargetClusterId: "selfhost-x",
@@ -92,7 +138,8 @@ func TestDeleteStorageObjects_RejectsTargetWeDoNotOwn(t *testing.T) {
 
 func TestDeleteStorageObjects_VODSuccess(t *testing.T) {
 	fake := &fakeDeleteS3Client{}
-	srv := newDeleteServer(t, fake)
+	srv, mock := newDeleteServer(t, fake)
+	expectTenantMatch(mock, "v1", "tenant-a")
 	resp, err := srv.DeleteStorageObjects(serviceAuthContext(), &foghornfederationpb.DeleteStorageObjectsRequest{
 		TenantId:        "tenant-a",
 		TargetClusterId: "platform-eu",
@@ -113,7 +160,8 @@ func TestDeleteStorageObjects_VODSuccess(t *testing.T) {
 
 func TestDeleteStorageObjects_DVRSuccess(t *testing.T) {
 	fake := &fakeDeleteS3Client{}
-	srv := newDeleteServer(t, fake)
+	srv, mock := newDeleteServer(t, fake)
+	expectTenantMatch(mock, "d1", "tenant-a")
 	resp, err := srv.DeleteStorageObjects(serviceAuthContext(), &foghornfederationpb.DeleteStorageObjectsRequest{
 		TenantId:        "tenant-a",
 		TargetClusterId: "platform-eu",
@@ -221,7 +269,7 @@ func TestDeleteStorageObjects_InvalidTargetShape(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &fakeDeleteS3Client{}
-			srv := newDeleteServer(t, fake)
+			srv, _ := newDeleteServer(t, fake)
 			resp, err := srv.DeleteStorageObjects(serviceAuthContext(), tc.req)
 			if err != nil {
 				t.Fatalf("err = %v", err)
@@ -240,7 +288,7 @@ func TestDeleteStorageObjects_InvalidTargetShape(t *testing.T) {
 }
 
 func TestDeleteStorageObjects_MissingTarget(t *testing.T) {
-	srv := newDeleteServer(t, &fakeDeleteS3Client{})
+	srv, _ := newDeleteServer(t, &fakeDeleteS3Client{})
 	resp, err := srv.DeleteStorageObjects(serviceAuthContext(), &foghornfederationpb.DeleteStorageObjectsRequest{
 		TenantId:        "tenant-a",
 		TargetClusterId: "platform-eu",
@@ -282,6 +330,7 @@ func TestDeleteStorageObjects_TenantMismatchAgainstLocalRow(t *testing.T) {
 			}
 			return S3Backing{}, false
 		},
+		AllowFederationMutations: true, // exercise the tenant cross-check (production defaults to disabled)
 	}
 	srv := NewFederationServer(cfg)
 
@@ -311,7 +360,8 @@ func TestDeleteStorageObjects_TenantMismatchAgainstLocalRow(t *testing.T) {
 
 func TestDeleteStorageObjects_S3ErrorPropagates(t *testing.T) {
 	fake := &fakeDeleteS3Client{deleteErr: errors.New("503 throttled")}
-	srv := newDeleteServer(t, fake)
+	srv, mock := newDeleteServer(t, fake)
+	expectTenantMatch(mock, "v1", "tenant-a")
 	resp, err := srv.DeleteStorageObjects(serviceAuthContext(), &foghornfederationpb.DeleteStorageObjectsRequest{
 		TenantId:        "tenant-a",
 		TargetClusterId: "platform-eu",

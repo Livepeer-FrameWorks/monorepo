@@ -3,11 +3,13 @@ package control
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"frameworks/api_balancing/internal/identity"
 	"frameworks/api_balancing/internal/state"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -25,10 +27,16 @@ type mockS3Client struct {
 	deleteByURLFn          func(ctx context.Context, s3URL string) error
 	deletePrefixFn         func(ctx context.Context, prefix string) (int, error)
 	parseS3URLFn           func(s3URL string) (string, error)
+	parseLocalS3URLFn      func(s3URL string) (string, error)
 	buildClipS3KeyFn       func(tenantID, streamName, clipHash, format string) string
 	buildDVRS3KeyFn        func(tenantID, internalName, dvrHash string) string
 	buildVodS3KeyFn        func(tenantID, artifactHash, filename string) string
 	buildS3URLFn           func(key string) string
+	existsFn               func(ctx context.Context, key string) (bool, error)
+	getObjectSizeFn        func(ctx context.Context, key string) (int64, error)
+	headObjectInfoFn       func(ctx context.Context, key string) (bool, int64, string, error)
+	promoteObjectFn        func(ctx context.Context, srcKey, dstKey, ifMatchETag string) error
+	promoteCalls           []string
 
 	presignPUTCalls   []string
 	presignGETCalls   []string
@@ -110,6 +118,17 @@ func (m *mockS3Client) ParseS3URL(s3URL string) (string, error) {
 	return s3URL, nil
 }
 
+func (m *mockS3Client) ParseLocalS3URL(s3URL string) (string, error) {
+	if m.parseLocalS3URLFn != nil {
+		return m.parseLocalS3URLFn(s3URL)
+	}
+	// Default: the conventional test bucket "bucket" is local; any other bucket is foreign.
+	if strings.HasPrefix(s3URL, "s3://bucket/") {
+		return m.ParseS3URL(s3URL)
+	}
+	return "", errors.New("not a local s3 URL: " + s3URL)
+}
+
 func (m *mockS3Client) PutObject(ctx context.Context, key string, body []byte, contentType string) error {
 	return nil
 }
@@ -144,6 +163,45 @@ func (m *mockS3Client) BuildVodS3Key(tenantID, artifactHash, filename string) st
 	return tenantID + "/vods/" + artifactHash + "/" + filename
 }
 
+// Exists / GetObjectSize default to "object present, nonzero size" so completion tests that don't opt into
+// verification still promote. The default size is a fixed nonzero sentinel (verifiedMockObjectSize): a 0
+// would now FAIL the completion closed (a durable clip/vod is never empty), which would mask nothing —
+// tests that care about the exact billed size set getObjectSizeFn explicitly.
+const verifiedMockObjectSize int64 = 1024
+
+func (m *mockS3Client) Exists(ctx context.Context, key string) (bool, error) {
+	if m.existsFn != nil {
+		return m.existsFn(ctx, key)
+	}
+	return true, nil
+}
+
+func (m *mockS3Client) GetObjectSize(ctx context.Context, key string) (int64, error) {
+	if m.getObjectSizeFn != nil {
+		return m.getObjectSizeFn(ctx, key)
+	}
+	return verifiedMockObjectSize, nil
+}
+
+// HeadObjectInfo defaults to "present, nonzero size, stable etag" so completion promotes; tests override
+// headObjectInfoFn to exercise missing / zero-size / changed-etag behavior.
+func (m *mockS3Client) HeadObjectInfo(ctx context.Context, key string) (bool, int64, string, error) {
+	if m.headObjectInfoFn != nil {
+		return m.headObjectInfoFn(ctx, key)
+	}
+	return true, verifiedMockObjectSize, "etag-mock", nil
+}
+
+func (m *mockS3Client) PromoteObject(ctx context.Context, srcKey, dstKey, ifMatchETag string) error {
+	m.mu.Lock()
+	m.promoteCalls = append(m.promoteCalls, srcKey+"->"+dstKey)
+	m.mu.Unlock()
+	if m.promoteObjectFn != nil {
+		return m.promoteObjectFn(ctx, srcKey, dstKey, ifMatchETag)
+	}
+	return nil
+}
+
 func (m *mockS3Client) BuildS3URL(key string) string {
 	if m.buildS3URLFn != nil {
 		return m.buildS3URLFn(key)
@@ -167,6 +225,7 @@ type mockArtifactRepo struct {
 	addCachedNodePathCalls []cachedNodePathCall
 	originArtifactCalls    []originArtifactCall
 	markOrphanedCalls      []string
+	deleteNodeCalls        [][2]string
 }
 
 type syncStatusCall struct {
@@ -252,13 +311,32 @@ func (m *mockArtifactRepo) ListAllNodeArtifacts(_ context.Context) (map[string][
 	return nil, nil
 }
 
-func (m *mockArtifactRepo) MarkNodeArtifactsOrphaned(ctx context.Context, nodeID string) error {
+func (m *mockArtifactRepo) MarkNodeArtifactsOrphaned(ctx context.Context, nodeID string, _ int64, _ int64, _ int64) error {
 	m.mu.Lock()
 	m.markOrphanedCalls = append(m.markOrphanedCalls, nodeID)
 	m.mu.Unlock()
 	if m.markNodeOrphanedFn != nil {
 		return m.markNodeOrphanedFn(ctx, nodeID)
 	}
+	return nil
+}
+
+func (m *mockArtifactRepo) DeleteNodeArtifact(_ context.Context, artifactHash, nodeID string, _ int64) error {
+	m.mu.Lock()
+	m.deleteNodeCalls = append(m.deleteNodeCalls, [2]string{artifactHash, nodeID})
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *mockArtifactRepo) ReconcileNodeCopies(_ context.Context) (int, error) {
+	return 0, nil
+}
+
+func (m *mockArtifactRepo) RefreshNodeCopy(_ context.Context, _, _ string) error {
+	return nil
+}
+
+func (m *mockArtifactRepo) RegisterDVRRecordingOrigin(_ context.Context, _, _, _ string) error {
 	return nil
 }
 
@@ -270,8 +348,8 @@ func (m *mockArtifactRepo) NeedsVODDtshSync(_ context.Context, _ string) bool {
 	return false
 }
 
-func (m *mockArtifactRepo) UpdateDVRProgressByHash(_ context.Context, _ string, _ string, _ int64) error {
-	return nil
+func (m *mockArtifactRepo) UpdateDVRProgressByHash(_ context.Context, _ string, _ string, _ int64, _ uint32, _ string) (bool, string, error) {
+	return true, "recording", nil
 }
 
 func (m *mockArtifactRepo) UpdateDVRCompletionByHash(_ context.Context, _ string, _ string, _ int64, _ int64, _ string, _ string) error {
@@ -299,12 +377,21 @@ func setupArtifactTestDeps(t *testing.T) (sqlmock.Sqlmock, *mockS3Client, *mockA
 	s3Client = s3Mock
 	artifactRepo = repoMock
 
+	// The completion path resolves the owner tenant via the identity facade before its tenant-scoped reads;
+	// stub it to attribute every hash to tenant-1 (the tenant the completion tests use).
+	identity.SetDefault(identity.NewResolver(identity.Config{
+		RegistryArtifact: func(_ context.Context, hash string) (identity.ArtifactIdentity, error) {
+			return identity.ArtifactIdentity{ArtifactHash: hash, TenantID: "tenant-1"}, nil
+		},
+	}))
+
 	sm := state.ResetDefaultManagerForTests()
 
 	t.Cleanup(func() {
 		db = prevDB
 		s3Client = prevS3
 		artifactRepo = prevRepo
+		identity.SetDefault(nil)
 		sm.Shutdown()
 		mockDB.Close()
 	})

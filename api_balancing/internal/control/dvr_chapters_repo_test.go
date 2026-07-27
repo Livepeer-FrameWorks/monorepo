@@ -224,10 +224,10 @@ func TestLatestChapterBefore(t *testing.T) {
 // scanChapterRowFromRows; an empty result is not an error.
 func TestListChaptersNeedingFinalization(t *testing.T) {
 	mock := setupChapterTest(t)
-	mock.ExpectQuery(`FROM foghorn.dvr_chapters\s+WHERE state = 'closed'`).
-		WithArgs(float64((10 * time.Minute).Seconds()), 25).
+	mock.ExpectQuery(`FROM foghorn.dvr_chapters c\s+WHERE \(c.state = 'closed'`).
+		WithArgs(float64((10 * time.Minute).Seconds()), float64((24 * time.Hour).Seconds()), 25).
 		WillReturnRows(sampleChapterRow())
-	out, err := ListChaptersNeedingFinalization(context.Background(), 25, 10*time.Minute)
+	out, err := ListChaptersNeedingFinalization(context.Background(), 25, 10*time.Minute, 24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +339,7 @@ func TestChapterRepo_NilDBGuards(t *testing.T) {
 	if _, err := CurrentChapter(ctx, "a"); !errors.Is(err, sql.ErrConnDone) {
 		t.Errorf("CurrentChapter nil db = %v", err)
 	}
-	if _, err := ListChaptersNeedingFinalization(ctx, 10, time.Minute); !errors.Is(err, sql.ErrConnDone) {
+	if _, err := ListChaptersNeedingFinalization(ctx, 10, time.Minute, 24*time.Hour); !errors.Is(err, sql.ErrConnDone) {
 		t.Errorf("ListChaptersNeedingFinalization nil db = %v", err)
 	}
 	if DVRArtifactStillRecording(ctx, "a") {

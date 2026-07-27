@@ -1438,7 +1438,7 @@ func TestPushArtifacts_SendsArtifactAdvertisement(t *testing.T) {
 		AccessCount:  5,
 		LastAccessed: time.Now().Unix(),
 		ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
-	}})
+	}}, state.ArtifactReportOrder{Fence: 1, Seq: 1})
 
 	pm := newTestPeerManager(t, "cluster-a", nil, false)
 	pm.pool = newFoghornPoolAdapter(newNoopPool(t))

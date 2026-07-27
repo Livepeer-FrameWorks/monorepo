@@ -38,14 +38,15 @@ func TestPrepareArtifactRejectsInconsistentS3Metadata(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster"}).
-		AddRow("stream-a", "source-stream-a", "clip", "mp4", "s3", "failed", 1024, nil)
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key"}).
+		AddRow("stream-a", "source-stream-a", "clip", "mp4", "s3", "failed", 1024, nil, "")
 	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
 
 	srv := NewFederationServer(FederationServerConfig{
-		Logger:   logging.NewLogger(),
-		DB:       db,
-		S3Client: &storage.S3Client{},
+		Logger:                   logging.NewLogger(),
+		DB:                       db,
+		S3Client:                 &storage.S3Client{},
+		AllowFederationMutations: true,
 	})
 
 	resp, err := srv.PrepareArtifact(serviceAuthContext(), &foghornfederationpb.PrepareArtifactRequest{
@@ -70,14 +71,15 @@ func TestPrepareArtifactRejectsTypeMismatch(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster"}).
-		AddRow("stream-a", "source-stream-a", "clip", "mp4", "s3", "synced", 1024, nil)
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key"}).
+		AddRow("stream-a", "source-stream-a", "clip", "mp4", "s3", "synced", 1024, nil, "clips/tenant-a/source-stream-a/stream-a.mp4")
 	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
 
 	srv := NewFederationServer(FederationServerConfig{
-		Logger:   logging.NewLogger(),
-		DB:       db,
-		S3Client: &storage.S3Client{},
+		Logger:                   logging.NewLogger(),
+		DB:                       db,
+		S3Client:                 &storage.S3Client{},
+		AllowFederationMutations: true,
 	})
 
 	resp, err := srv.PrepareArtifact(serviceAuthContext(), &foghornfederationpb.PrepareArtifactRequest{
@@ -106,7 +108,7 @@ func TestCreateRemoteClipRejectsTenantMismatch(t *testing.T) {
 	}
 
 	cc := &clipCreatorSpy{}
-	srv := NewFederationServer(FederationServerConfig{Logger: logging.NewLogger(), ClipCreator: cc})
+	srv := NewFederationServer(FederationServerConfig{Logger: logging.NewLogger(), ClipCreator: cc, AllowFederationMutations: true})
 	resp, err := srv.CreateRemoteClip(serviceAuthContext(), &foghornfederationpb.RemoteClipRequest{
 		StreamInternalName: "stream-a",
 		TenantId:           "tenant-other",
@@ -132,7 +134,7 @@ func TestCreateRemoteDVRRejectsTenantMismatch(t *testing.T) {
 	}
 
 	dc := &dvrCreatorSpy{}
-	srv := NewFederationServer(FederationServerConfig{Logger: logging.NewLogger(), DVRCreator: dc})
+	srv := NewFederationServer(FederationServerConfig{Logger: logging.NewLogger(), DVRCreator: dc, AllowFederationMutations: true})
 	resp, err := srv.CreateRemoteDVR(serviceAuthContext(), &foghornfederationpb.RemoteDVRRequest{
 		StreamInternalName: "stream-a",
 		TenantId:           "tenant-other",

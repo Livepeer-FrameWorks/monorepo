@@ -878,6 +878,17 @@ func (p *Processor) ensureTriggerTenantID(trigger *ipcpb.MistTrigger) string {
 	return ""
 }
 
+// assertedTenantConflicts reports whether a node-asserted tenant (from the trigger payload) conflicts with the
+// server-resolved resource owner now stamped on the trigger by applyStreamContext. It is a fail-closed DROP
+// condition on the payload-trust families: a node must not attribute a resource's events to a tenant that does
+// not own it. An empty asserted tenant (nothing claimed) or an empty resolved tenant (resource not resolvable,
+// so nothing authoritative to contradict) cannot conflict.
+func assertedTenantConflicts(assertedTenant, resolvedTenant string) bool {
+	assertedTenant = strings.TrimSpace(assertedTenant)
+	resolvedTenant = strings.TrimSpace(resolvedTenant)
+	return assertedTenant != "" && resolvedTenant != "" && assertedTenant != resolvedTenant
+}
+
 func (p *Processor) sendTriggerToDecklog(trigger *ipcpb.MistTrigger) error {
 	return p.sendTriggerToDecklogContext(context.Background(), trigger)
 }
@@ -1022,15 +1033,39 @@ func (p *Processor) handleProcessBilling(trigger *ipcpb.MistTrigger) (string, bo
 	pbill := payload.ProcessBilling
 	internalName := mist.ExtractInternalName(pbill.GetStreamName())
 
-	// Enrich tenant context if not already present
-	if pbill.TenantId == nil {
-		info := p.applyStreamContext(trigger, internalName)
-		if info.TenantID != "" {
-			pbill.TenantId = &info.TenantID
-		}
-	} else if *pbill.TenantId != "" {
-		trigger.TenantId = pbill.TenantId
+	// The billing tenant is resource-bound: resolve it from the stream, ALWAYS (even when the sidecar asserted
+	// one in the payload), and verify the assertion against the resolved owner. Seed the asserted value so
+	// applyStreamContext can detect a conflict; a conflict is a fail-closed drop — mis-billing another tenant
+	// is worse than losing one suspect event.
+	assertedTenant := strings.TrimSpace(pbill.GetTenantId())
+	if assertedTenant != "" {
+		trigger.TenantId = &assertedTenant
 	}
+	info := p.applyStreamContext(trigger, internalName)
+	if assertedTenantConflicts(assertedTenant, trigger.GetTenantId()) {
+		p.logger.WithFields(logging.Fields{
+			"trigger_type":    trigger.GetTriggerType(),
+			"internal_name":   internalName,
+			"asserted_tenant": assertedTenant,
+			"resolved_tenant": trigger.GetTenantId(),
+			"node_id":         trigger.GetNodeId(),
+		}).Warn("Dropping process_billing trigger: asserted tenant conflicts with resolved stream owner")
+		return "", false, nil
+	}
+	// FAIL CLOSED when the stream owner cannot be resolved: billing is attribution-bearing (money), so a
+	// node-asserted tenant must NEVER be forwarded unverified. Dropping a suspect billing event is strictly
+	// safer than mis-billing another tenant during a resolver/cache outage.
+	if strings.TrimSpace(info.TenantID) == "" {
+		p.logger.WithFields(logging.Fields{
+			"trigger_type":    trigger.GetTriggerType(),
+			"internal_name":   internalName,
+			"asserted_tenant": assertedTenant,
+			"node_id":         trigger.GetNodeId(),
+		}).Warn("Dropping process_billing trigger: stream owner unresolved; refusing to bill against a node-asserted tenant")
+		return "", false, nil
+	}
+	resolved := info.TenantID
+	pbill.TenantId = &resolved
 	if pbill.StreamId == nil || *pbill.StreamId == "" {
 		if streamID := trigger.GetStreamId(); streamID != "" {
 			pbill.StreamId = &streamID
@@ -1084,17 +1119,43 @@ func (p *Processor) handleStorageLifecycleData(trigger *ipcpb.MistTrigger) (stri
 		return "", false, fmt.Errorf("unexpected payload type for StorageLifecycleData: %T", trigger.GetTriggerPayload())
 	}
 	sld := payload.StorageLifecycleData
-	if sld.TenantId != nil {
-		trigger.TenantId = sld.TenantId
+	// The tenant is resource-bound: seed the sidecar's asserted value for verification, then resolve the
+	// authoritative owner from the resource key. A mismatch is a fail-closed drop (below).
+	assertedTenant := strings.TrimSpace(sld.GetTenantId())
+	if assertedTenant != "" {
+		trigger.TenantId = &assertedTenant
 	}
+	var info streamContext
 	if sld.InternalName != nil && *sld.InternalName != "" {
-		p.applyStreamContext(trigger, *sld.InternalName)
+		info = p.applyStreamContext(trigger, *sld.InternalName)
 	} else if sld.StreamId != nil && *sld.StreamId != "" {
-		p.applyStreamContext(trigger, *sld.StreamId)
+		info = p.applyStreamContext(trigger, *sld.StreamId)
 	} else if sld.AssetHash != "" {
 		// Helmsman doesn't have platform context — resolve via Commodore's
 		// unified resolver which accepts clip_hash/dvr_hash/vod_hash.
-		p.applyStreamContext(trigger, sld.AssetHash)
+		info = p.applyStreamContext(trigger, sld.AssetHash)
+	}
+	if assertedTenantConflicts(assertedTenant, trigger.GetTenantId()) {
+		p.logger.WithFields(logging.Fields{
+			"trigger_type":    trigger.GetTriggerType(),
+			"asserted_tenant": assertedTenant,
+			"resolved_tenant": trigger.GetTenantId(),
+			"node_id":         trigger.GetNodeId(),
+		}).Warn("Dropping storage lifecycle trigger: asserted tenant conflicts with resolved resource owner")
+		return "", false, nil
+	}
+	// FAIL CLOSED on an unverifiable assertion: when the node asserted a tenant but the resource owner cannot be
+	// resolved, a conflict check has nothing authoritative to contradict, so the asserted value would ride
+	// through unverified and attribute this event to a tenant that may not own the resource. Dropping a suspect
+	// best-effort analytics sample is strictly safer than polluting another tenant's rollup (same stance as
+	// process_billing). A non-asserted unresolved event carries no tenant and is dropped at send anyway.
+	if assertedTenant != "" && strings.TrimSpace(info.TenantID) == "" {
+		p.logger.WithFields(logging.Fields{
+			"trigger_type":    trigger.GetTriggerType(),
+			"asserted_tenant": assertedTenant,
+			"node_id":         trigger.GetNodeId(),
+		}).Warn("Dropping storage lifecycle trigger: resource owner unresolved; refusing to forward a node-asserted tenant unverified")
+		return "", false, nil
 	}
 	if sld.StreamId == nil || *sld.StreamId == "" {
 		if streamID := trigger.GetStreamId(); streamID != "" {
@@ -1102,12 +1163,18 @@ func (p *Processor) handleStorageLifecycleData(trigger *ipcpb.MistTrigger) (stri
 		}
 	}
 
-	// Forward to Decklog
+	// Forward to Decklog. These node-originated transitions are edge-cache ANALYTICS
+	// (ACTION_CACHED / EVICTED / EVICT_FAILED / SYNC_STARTED) reported best-effort by the sidecar
+	// (SendStorageLifecycle, nolint:errcheck) and carry no durable trigger type, so they are not
+	// durably-acked and there is nothing to re-drive: a Decklog outage drops only best-effort
+	// analytics here. OPERATIONAL storage state (synced / frozen, which drives hasLocalCopy and
+	// catalog attribution) is NOT on this path — the freeze/sync completion handlers capture it
+	// DURABLY via enqueueArtifactStorageLifecycleTx. The failure is therefore logged, not surfaced.
 	if err := p.sendTriggerToDecklog(trigger); err != nil {
 		p.logger.WithFields(logging.Fields{
 			"trigger_type": trigger.GetTriggerType(),
 			"error":        err,
-		}).Error("Failed to send storage lifecycle trigger to Decklog")
+		}).Warn("Failed to send storage lifecycle analytics trigger to Decklog (best-effort; dropped)")
 	}
 	return "", false, nil
 }
@@ -1119,19 +1186,43 @@ func (p *Processor) handleDVRLifecycleData(trigger *ipcpb.MistTrigger) (string, 
 		return "", false, fmt.Errorf("unexpected payload type for DVRLifecycleData: %T", trigger.GetTriggerPayload())
 	}
 	dld := payload.DvrLifecycleData
-	// Enrich tenant context if available in the payload
-	if dld.TenantId != nil && *dld.TenantId != "" {
-		trigger.TenantId = dld.TenantId
+	// The tenant is resource-bound: seed the sidecar's asserted value for verification, then resolve the
+	// authoritative owner from the resource key (stream name → stream_id → DVR hash). A mismatch is a
+	// fail-closed drop (below).
+	assertedTenant := strings.TrimSpace(dld.GetTenantId())
+	if assertedTenant != "" {
+		trigger.TenantId = &assertedTenant
 	}
+	var info streamContext
 	if dld.StreamInternalName != nil && *dld.StreamInternalName != "" {
 		normalizedName := mist.ExtractInternalName(*dld.StreamInternalName)
-		p.applyStreamContext(trigger, normalizedName)
+		info = p.applyStreamContext(trigger, normalizedName)
 	} else if dld.StreamId != nil && *dld.StreamId != "" {
 		// Fallback: resolve tenant/user context from stream_id (UUID)
-		p.applyStreamContext(trigger, *dld.StreamId)
+		info = p.applyStreamContext(trigger, *dld.StreamId)
 	} else if dld.DvrHash != "" {
 		// Helmsman may only know the DVR artifact hash at this point.
-		p.applyStreamContext(trigger, dld.DvrHash)
+		info = p.applyStreamContext(trigger, dld.DvrHash)
+	}
+	if assertedTenantConflicts(assertedTenant, trigger.GetTenantId()) {
+		p.logger.WithFields(logging.Fields{
+			"trigger_type":    trigger.GetTriggerType(),
+			"asserted_tenant": assertedTenant,
+			"resolved_tenant": trigger.GetTenantId(),
+			"node_id":         trigger.GetNodeId(),
+		}).Warn("Dropping DVR lifecycle trigger: asserted tenant conflicts with resolved resource owner")
+		return "", false, nil
+	}
+	// FAIL CLOSED on an unverifiable assertion (see handleStorageLifecycleData): a node-asserted tenant with an
+	// unresolvable resource owner must not be forwarded, or it would attribute this event to a tenant that may
+	// not own the DVR.
+	if assertedTenant != "" && strings.TrimSpace(info.TenantID) == "" {
+		p.logger.WithFields(logging.Fields{
+			"trigger_type":    trigger.GetTriggerType(),
+			"asserted_tenant": assertedTenant,
+			"node_id":         trigger.GetNodeId(),
+		}).Warn("Dropping DVR lifecycle trigger: resource owner unresolved; refusing to forward a node-asserted tenant unverified")
+		return "", false, nil
 	}
 	if dld.StreamId == nil || *dld.StreamId == "" {
 		if streamID := trigger.GetStreamId(); streamID != "" {
@@ -3108,9 +3199,14 @@ func (p *Processor) finalizeStreamWideOffline(internalName, nodeID, tenantID str
 	// arrived); the helper short-circuits in that case.
 	state.DefaultTenantCapacity().UnregisterStream(tenantID, internalName)
 
-	// Broadcast stream-offline to federated peers + clean up stream-scoped peers
+	// Broadcast stream-offline to federated peers + clean up stream-scoped peers. Skip the tenant-attributed
+	// broadcast when ownership is unresolved (empty tenant): peers filter federated lifecycle by tenant, so an
+	// empty tenant would bypass those filters and leak the event cross-tenant — consistent with UnregisterStream
+	// above short-circuiting on an empty tenant. UntrackStream is stream-local (no tenant) and always runs.
 	if p.peerNotifier != nil {
-		p.peerNotifier.BroadcastStreamLifecycle(internalName, tenantID, false)
+		if strings.TrimSpace(tenantID) != "" {
+			p.peerNotifier.BroadcastStreamLifecycle(internalName, tenantID, false)
+		}
 		p.peerNotifier.UntrackStream(internalName)
 	}
 
@@ -3324,6 +3420,13 @@ func (p *Processor) handleRecordingEnd(trigger *ipcpb.MistTrigger) (string, bool
 		}
 	}
 
+	// NOTE: track capture does NOT happen here. A raw RECORDING_END can be stale, from a failed
+	// or retired-generation push, and precedes Helmsman's processing-loop validation — so
+	// persisting tracks from it could stamp the catalog with unvalidated or truncated data.
+	// The authoritative A/V track set rides on ProcessingJobResult (completed path only) and is
+	// persisted by the already-resolved artifact_hash in processProcessingJobResult /
+	// handleChapterFinalizeResult, alongside size/duration/readiness.
+
 	return "", false, nil
 }
 
@@ -3375,8 +3478,38 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 	internal := mist.ExtractInternalName(slu.GetInternalName())
 	nodeID := slu.GetNodeId()
 
-	// Enrich tenant context before forwarding (same pattern as handleStreamEnd)
+	// Enrich tenant context before forwarding (same pattern as handleStreamEnd). The tenant is resource-bound:
+	// seed the sidecar's asserted value for verification, resolve the authoritative owner, then drop
+	// fail-closed on a conflict — a node must not relabel another tenant's stream lifecycle.
+	assertedTenant := strings.TrimSpace(slu.GetTenantId())
+	if assertedTenant != "" {
+		trigger.TenantId = &assertedTenant
+	}
 	info := p.applyStreamContext(trigger, internal)
+	if assertedTenantConflicts(assertedTenant, trigger.GetTenantId()) {
+		p.logger.WithFields(logging.Fields{
+			"trigger_type":    trigger.GetTriggerType(),
+			"internal_name":   internal,
+			"asserted_tenant": assertedTenant,
+			"resolved_tenant": trigger.GetTenantId(),
+			"node_id":         nodeID,
+		}).Warn("Dropping stream lifecycle trigger: asserted tenant conflicts with resolved stream owner")
+		return "", false, nil
+	}
+	// A node-asserted tenant we can't verify (stream owner unresolvable) must not ride into Decklog as
+	// authoritative attribution — but unlike the pure-analytics families, this handler ALSO drives
+	// node-authoritative operational state (offline finalization, source-inactive flip, load-balancer stats)
+	// that must run regardless of tenant provenance and legitimately uses the tenant the stream was admitted
+	// under. So suppress ONLY the analytics forward here; the operational path below still runs.
+	suppressUnverifiedForward := assertedTenant != "" && strings.TrimSpace(info.TenantID) == ""
+	if suppressUnverifiedForward {
+		p.logger.WithFields(logging.Fields{
+			"trigger_type":    trigger.GetTriggerType(),
+			"internal_name":   internal,
+			"asserted_tenant": assertedTenant,
+			"node_id":         nodeID,
+		}).Warn("Suppressing stream lifecycle forward: stream owner unresolved; refusing to forward a node-asserted tenant unverified (operational state still applied)")
+	}
 	if info.TenantID != "" && slu.TenantId == nil {
 		slu.TenantId = &info.TenantID
 	}
@@ -3422,12 +3555,14 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 			p.logger.WithFields(offlineSuppressionLogFields(internal, nodeID)).Info("Suppressing offline lifecycle forward; not a stream-wide ending")
 			return "", false, nil
 		}
-		if err := p.sendTriggerToDecklog(trigger); err != nil {
-			p.logger.WithFields(logging.Fields{
-				"internal_name": internal,
-				"trigger_type":  trigger.GetTriggerType(),
-				"error":         err,
-			}).Error("Failed to send stream lifecycle update to Decklog")
+		if !suppressUnverifiedForward {
+			if err := p.sendTriggerToDecklog(trigger); err != nil {
+				p.logger.WithFields(logging.Fields{
+					"internal_name": internal,
+					"trigger_type":  trigger.GetTriggerType(),
+					"error":         err,
+				}).Error("Failed to send stream lifecycle update to Decklog")
+			}
 		}
 		// The owner's vanish stands in for a missed/delayed STREAM_END, so
 		// it must run the same source-inactive flip and stream-wide
@@ -3438,17 +3573,29 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 		if registry := control.StreamRegistryInstance; registry != nil {
 			registry.MarkSourceInactive(internal, nodeID)
 		}
-		p.finalizeStreamWideOffline(internal, nodeID, slu.GetTenantId())
+		// The node-scoped effects above are node-authoritative. The TENANT-scoped effects
+		// (capacity decrement, federation lifecycle broadcast) must NOT run under an unverified
+		// node-asserted tenant: when the owner is unresolvable we have no authoritative tenant, so pass empty
+		// (UnregisterStream/BroadcastStreamLifecycle short-circuit) rather than attribute them to a tenant that
+		// may not own the stream. When resolved, slu's tenant is the server-stamped owner.
+		finalizationTenant := slu.GetTenantId()
+		if suppressUnverifiedForward {
+			finalizationTenant = ""
+		}
+		p.finalizeStreamWideOffline(internal, nodeID, finalizationTenant)
 		return "", false, nil
 	}
 
-	// Forward the enriched StreamLifecycleUpdate to Decklog
-	if err := p.sendTriggerToDecklog(trigger); err != nil {
-		p.logger.WithFields(logging.Fields{
-			"internal_name": internal,
-			"trigger_type":  trigger.GetTriggerType(),
-			"error":         err,
-		}).Error("Failed to send stream lifecycle update to Decklog")
+	// Forward the enriched StreamLifecycleUpdate to Decklog (unless the tenant is a node assertion we couldn't
+	// verify — the load-balancer state update below still runs).
+	if !suppressUnverifiedForward {
+		if err := p.sendTriggerToDecklog(trigger); err != nil {
+			p.logger.WithFields(logging.Fields{
+				"internal_name": internal,
+				"trigger_type":  trigger.GetTriggerType(),
+				"error":         err,
+			}).Error("Failed to send stream lifecycle update to Decklog")
+		}
 	}
 
 	// Update stream stats in state manager for load balancing
@@ -3516,8 +3663,36 @@ func (p *Processor) handleClientLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 	clu := payload.ClientLifecycleUpdate
 	internal := clu.GetInternalName()
 
-	// Enrich tenant context before forwarding (same pattern as handleUserNew/handleUserEnd)
+	// Enrich tenant context before forwarding (same pattern as handleUserNew/handleUserEnd). The tenant is
+	// resource-bound: seed the sidecar's asserted value for verification, resolve the authoritative owner, then
+	// drop fail-closed on a conflict — a mislabeled sample would pollute another tenant's QoE rollup.
+	assertedTenant := strings.TrimSpace(clu.GetTenantId())
+	if assertedTenant != "" {
+		trigger.TenantId = &assertedTenant
+	}
 	info := p.applyStreamContext(trigger, internal)
+	if assertedTenantConflicts(assertedTenant, trigger.GetTenantId()) {
+		p.logger.WithFields(logging.Fields{
+			"trigger_type":    trigger.GetTriggerType(),
+			"internal_name":   internal,
+			"asserted_tenant": assertedTenant,
+			"resolved_tenant": trigger.GetTenantId(),
+			"node_id":         trigger.GetNodeId(),
+		}).Warn("Dropping client lifecycle update: asserted tenant conflicts with resolved stream owner")
+		return "", false, nil
+	}
+	// FAIL CLOSED on an unverifiable assertion (see handleStorageLifecycleData): a node-asserted tenant with an
+	// unresolvable stream owner must not be forwarded, or a mislabeled sample would pollute another tenant's QoE
+	// rollup.
+	if assertedTenant != "" && strings.TrimSpace(info.TenantID) == "" {
+		p.logger.WithFields(logging.Fields{
+			"trigger_type":    trigger.GetTriggerType(),
+			"internal_name":   internal,
+			"asserted_tenant": assertedTenant,
+			"node_id":         trigger.GetNodeId(),
+		}).Warn("Dropping client lifecycle update: stream owner unresolved; refusing to forward a node-asserted tenant unverified")
+		return "", false, nil
+	}
 	if info.TenantID != "" && clu.TenantId == nil {
 		clu.TenantId = &info.TenantID
 	}
@@ -3560,6 +3735,15 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *ipcpb.MistTrigger) (strin
 		return "", false, fmt.Errorf("unexpected payload type for NodeLifecycleUpdate: %T", trigger.GetTriggerPayload())
 	}
 	nu := payload.NodeLifecycleUpdate
+
+	// Bind to the AUTHENTICATED connection: processMistTrigger stamped the envelope node_id from the
+	// connection identity, so overwrite the nested self-asserted node_id with it. This update can then only
+	// mutate the reporting node's OWN heartbeat/inventory/metrics/roles state — never another node's by naming
+	// it in the payload. (Bounding self-advertised cap_storage/cap_processing against enrollment authority is
+	// the broader server-owned NodeSession work, still open — see PLAN P1-6.)
+	if authNode := strings.TrimSpace(trigger.GetNodeId()); authNode != "" {
+		nu.NodeId = authNode
+	}
 
 	p.logger.WithFields(logging.Fields{
 		"node_id":    nu.GetNodeId(),
@@ -3716,11 +3900,46 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *ipcpb.MistTrigger) (strin
 	}()
 
 	// Update artifacts directly from protobuf - this is critical for VOD playback.
-	// Called unconditionally: an empty slice clears stale artifacts from a node
-	// that has lost all local files (prevents ghost artifacts in routing).
-	state.DefaultManager().SetNodeArtifacts(nu.GetNodeId(), nu.GetArtifacts())
-	if !artifactMapsEqual(previousArtifacts, nu.GetArtifacts()) {
-		control.NotifyArtifactMapUpdated(nu.GetNodeId())
+	// Applied as an AUTHORITATIVE whole-node inventory: an empty slice clears stale artifacts from a
+	// node that has lost all local files (prevents ghost artifacts in routing). Two guards keep a
+	// non-authoritative report from orphaning live copies:
+	//   1. A snapshot the sidecar FLAGS as incomplete (no complete filesystem scan yet) is skipped.
+	//   2. A report lacking the versioned-complete contract (report_seq is a sidecar-set monotonic
+	//      counter; a report_seq of 0 means a legacy sidecar that predates both the incomplete flag AND
+	//      the sequence) is ALSO skipped. Its absent `artifacts_snapshot_incomplete` defaults to false,
+	//      so without this guard a legacy sidecar's partial/empty scan would pass as "complete" and
+	//      clear routing-visible copies during a mixed-version rollout. We fail closed: keep the last
+	//      trusted inventory until a versioned report arrives. (The fence is Foghorn-stamped, so it is
+	//      the sidecar-owned seq that proves the capability.)
+	switch {
+	case nu.GetArtifactsSnapshotIncomplete():
+		// The sidecar could not complete its scan (cold start OR a lost mount / read error): its last
+		// reported inventory may now be stale. Do NOT apply it (retain last-good), AND cordon the node
+		// from artifact routing — merely skipping would leave ArtifactInventoryReady=true, keeping a
+		// vanished disk's copies routable indefinitely. The cordon is ordered by (fence, seq) so a
+		// superseded report can't cordon a node a newer complete report already made ready.
+		if err := state.DefaultManager().CordonNodeArtifactsIncomplete(nu.GetNodeId(),
+			state.ArtifactReportOrder{Fence: nu.GetArtifactsConnectionFence(), Seq: nu.GetArtifactsReportSeq()}); err != nil {
+			p.logger.WithField("node_id", nu.GetNodeId()).WithError(err).
+				Debug("Incomplete-scan cordon not applied (superseded by a newer fenced report)")
+		} else {
+			p.logger.WithField("node_id", nu.GetNodeId()).
+				Warn("Cordoned node from artifact routing: sidecar reported an incomplete scan (last-good inventory retained, not orphaned)")
+		}
+	case nu.GetArtifactsReportSeq() <= 0:
+		p.logger.WithField("node_id", nu.GetNodeId()).
+			Warn("Skipping unversioned node artifact report (legacy sidecar without the versioned-complete contract); not orphaning inventory")
+	default:
+		// A superseded report (a newer connection fence already won the artifact inventory) leaves
+		// this node cordoned; there is no accepted inventory change to propagate downstream, so only
+		// notify on a successful apply.
+		if err := state.DefaultManager().SetNodeArtifacts(nu.GetNodeId(), nu.GetArtifacts(),
+			state.ArtifactReportOrder{Fence: nu.GetArtifactsConnectionFence(), Seq: nu.GetArtifactsReportSeq()}); err != nil {
+			p.logger.WithField("node_id", nu.GetNodeId()).WithError(err).
+				Debug("Node artifact report not applied (superseded by a newer fence)")
+		} else if !artifactMapsEqual(previousArtifacts, nu.GetArtifacts()) {
+			control.NotifyArtifactMapUpdated(nu.GetNodeId())
+		}
 	}
 
 	// Enrich with database UUID for subscription lookups (frontend uses UUID, not logical name)
@@ -4227,10 +4446,13 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 	}
 
 	coldTenantID := p.ownerTenantID
-	// Provider attribution: S3 freezer is operated by the cluster's owner
-	// tenant (FrameWorks for the platform clusters; the marketplace
-	// cluster operator for third-party clusters). Customer billing rates the
-	// usage tenant; settlement views can route by these provider fields.
+	// Provider attribution = this emitting Foghorn's owner tenant + cluster. This is CORRECT BY
+	// CONSTRUCTION this release: freeze authorization restricts durable writes to the tenant's platform-
+	// official backend that THIS cell mints+verifies locally, and federated freeze is rejected — so every
+	// synced row's bytes live in a cluster this Foghorn operates. Once cross-cluster durable replication
+	// (see docs/rfcs/cross-cluster-durable-replication-v1.md) lands, the destination/provider will be read
+	// from the persisted replication assignment instead of inferred from the emitter. Customer billing
+	// rates the usage tenant; settlement views route by these provider fields.
 	coldSnapshot := &ipcpb.StorageSnapshot{
 		NodeId:                   "s3",
 		Timestamp:                time.Now().Unix(),
@@ -4460,8 +4682,25 @@ func (p *Processor) applyStreamContext(trigger *ipcpb.MistTrigger, streamName st
 	if trigger == nil {
 		return info
 	}
-	if info.TenantID != "" && (trigger.TenantId == nil || *trigger.TenantId == "") {
-		trigger.TenantId = &info.TenantID
+	// Server-resolved resource ownership is authoritative. When the resource resolves to a tenant, that tenant
+	// is stamped onto the trigger: an empty envelope is filled, and a non-empty envelope/payload assertion that
+	// DISAGREES with the resolved owner is overwritten (server wins) and logged — a node must not be able to
+	// attribute a resource's events to a tenant that does not own it. Callers on the payload-trust families
+	// additionally treat such a conflict as a fail-closed drop (see assertedTenantConflicts).
+	if info.TenantID != "" {
+		if trigger.TenantId == nil || *trigger.TenantId == "" {
+			trigger.TenantId = &info.TenantID
+		} else if *trigger.TenantId != info.TenantID {
+			p.logger.WithFields(logging.Fields{
+				"trigger_type":    trigger.GetTriggerType(),
+				"asserted_tenant": *trigger.TenantId,
+				"resolved_tenant": info.TenantID,
+				"stream_name":     streamName,
+				"node_id":         trigger.GetNodeId(),
+			}).Warn("Trigger tenant assertion conflicts with server-resolved resource owner; using resolved owner")
+			resolved := info.TenantID
+			trigger.TenantId = &resolved
+		}
 	}
 	if info.UserID != "" && (trigger.UserId == nil || *trigger.UserId == "") {
 		trigger.UserId = &info.UserID

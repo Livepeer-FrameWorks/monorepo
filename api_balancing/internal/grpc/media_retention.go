@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"frameworks/api_balancing/internal/control"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -37,19 +38,44 @@ func (s *FoghornGRPCServer) OverrideArtifactRetention(ctx context.Context, req *
 	default:
 		return nil, status.Errorf(codes.InvalidArgument, "unsupported artifact_type %q", artifactType)
 	}
-	until, err := s.resolveRetentionUntil(ctx, tenantID, artifactHash, artifactType, req)
-	if err != nil {
-		return nil, err
+	// "Keep forever" is retention_until = NULL. Commodore signals it as anchored-to-ended-at with
+	// retention_days = 0; treat that (and an explicit request for it) as clearing the horizon
+	// rather than rejecting it in resolveRetentionUntil's "days >= 1" guard.
+	keepForever := req.GetRetentionUntil() == nil && req.GetAnchorToEndedAt() && req.GetRetentionDays() == 0
+	var untilArg interface{}
+	var untilTime time.Time
+	if !keepForever {
+		until, err := s.resolveRetentionUntil(ctx, tenantID, artifactHash, artifactType, req)
+		if err != nil {
+			return nil, err
+		}
+		untilArg = until
+		untilTime = until
 	}
 
-	res, err := s.db.ExecContext(ctx, `
+	// The parent-artifact horizon and the child-chapter propagation commit as ONE transaction:
+	// a DVR owns its chapters' retention, so they must move together (keep-forever ⇒ NULL for
+	// both). A propagation failure rolls the parent update back rather than returning success
+	// with diverged children.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "retention override begin: %v", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			tx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
+		}
+	}()
+
+	res, err := tx.ExecContext(ctx, `
 		UPDATE foghorn.artifacts
 		   SET retention_until = $1
 		 WHERE artifact_hash = $2
 		   AND tenant_id::text = $3
 		   AND artifact_type = $4
 		   AND status IN ('completed', 'completed_partial', 'ready', 'failed')
-	`, until, artifactHash, tenantID, artifactType)
+	`, untilArg, artifactHash, tenantID, artifactType)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "retention override failed: %v", err)
 	}
@@ -61,10 +87,23 @@ func (s *FoghornGRPCServer) OverrideArtifactRetention(ctx context.Context, req *
 		return nil, status.Errorf(codes.FailedPrecondition,
 			"%s artifact is active or not found; retention overrides apply only to finalized assets", artifactType)
 	}
-	return &foghornpb.OverrideArtifactRetentionResponse{
-		Applied:        true,
-		RetentionUntil: timestamppb.New(until),
-	}, nil
+
+	if artifactType == "dvr" {
+		if _, propErr := control.PropagateChapterRetentionTx(ctx, tx, artifactHash, untilArg); propErr != nil {
+			return nil, status.Errorf(codes.Internal, "retention override: propagate to child chapters failed: %v", propErr)
+		}
+	}
+
+	if commitErr := tx.Commit(); commitErr != nil {
+		return nil, status.Errorf(codes.Internal, "retention override commit: %v", commitErr)
+	}
+	committed = true
+
+	resp := &foghornpb.OverrideArtifactRetentionResponse{Applied: true}
+	if !keepForever {
+		resp.RetentionUntil = timestamppb.New(untilTime)
+	}
+	return resp, nil
 }
 
 func (s *FoghornGRPCServer) resolveRetentionUntil(ctx context.Context, tenantID, artifactHash, artifactType string, req *foghornpb.OverrideArtifactRetentionRequest) (time.Time, error) {

@@ -26,7 +26,7 @@ func serviceAuthContext() context.Context {
 }
 
 func TestQueryStream_RequiresServiceAuthAndTenant(t *testing.T) {
-	srv := NewFederationServer(FederationServerConfig{Logger: newFederationTestLogger(), ClusterID: "cluster-a"})
+	srv := NewFederationServer(FederationServerConfig{Logger: newFederationTestLogger(), ClusterID: "cluster-a", AllowFederationMutations: true})
 
 	_, err := srv.QueryStream(context.Background(), &foghornfederationpb.QueryStreamRequest{
 		StreamName:        "stream-1",
@@ -59,7 +59,7 @@ func TestNotifyOriginPull_RejectsTenantMismatch(t *testing.T) {
 		t.Fatalf("UpdateStreamFromBuffer: %v", err)
 	}
 
-	srv := NewFederationServer(FederationServerConfig{Logger: newFederationTestLogger(), ClusterID: "cluster-a"})
+	srv := NewFederationServer(FederationServerConfig{Logger: newFederationTestLogger(), ClusterID: "cluster-a", AllowFederationMutations: true})
 	resp, err := srv.NotifyOriginPull(serviceAuthContext(), &foghornfederationpb.OriginPullNotification{
 		StreamName:    streamName,
 		SourceNodeId:  nodeID,
@@ -100,7 +100,7 @@ func (m *mockPeerChannelStream) Recv() (*foghornfederationpb.PeerMessage, error)
 
 func TestPeerChannel_RejectsClusterIDMismatch(t *testing.T) {
 	cache, _ := setupTestCache(t)
-	srv := NewFederationServer(FederationServerConfig{Logger: newFederationTestLogger(), ClusterID: "cluster-a", Cache: cache})
+	srv := NewFederationServer(FederationServerConfig{Logger: newFederationTestLogger(), ClusterID: "cluster-a", Cache: cache, AllowFederationMutations: true})
 	stream := &mockPeerChannelStream{
 		ctx: serviceAuthContext(),
 		msgs: []*foghornfederationpb.PeerMessage{
@@ -116,7 +116,7 @@ func TestPeerChannel_RejectsClusterIDMismatch(t *testing.T) {
 }
 
 func TestPeerChannel_RequiresInitialClusterID(t *testing.T) {
-	srv := NewFederationServer(FederationServerConfig{Logger: newFederationTestLogger(), ClusterID: "cluster-a"})
+	srv := NewFederationServer(FederationServerConfig{Logger: newFederationTestLogger(), ClusterID: "cluster-a", AllowFederationMutations: true})
 	stream := &mockPeerChannelStream{
 		ctx: serviceAuthContext(),
 		msgs: []*foghornfederationpb.PeerMessage{
@@ -131,7 +131,7 @@ func TestPeerChannel_RequiresInitialClusterID(t *testing.T) {
 }
 
 func TestPeerChannel_RejectsNonServiceAuth(t *testing.T) {
-	srv := NewFederationServer(FederationServerConfig{Logger: newFederationTestLogger(), ClusterID: "cluster-a"})
+	srv := NewFederationServer(FederationServerConfig{Logger: newFederationTestLogger(), ClusterID: "cluster-a", AllowFederationMutations: true})
 	stream := &mockPeerChannelStream{ctx: context.Background()}
 	err := srv.PeerChannel(stream)
 	if status.Code(err) != codes.PermissionDenied {
@@ -140,7 +140,7 @@ func TestPeerChannel_RejectsNonServiceAuth(t *testing.T) {
 }
 
 func TestCreateRemoteClip_RequiresServiceAuth(t *testing.T) {
-	srv := NewFederationServer(FederationServerConfig{Logger: newFederationTestLogger(), ClusterID: "cluster-a"})
+	srv := NewFederationServer(FederationServerConfig{Logger: newFederationTestLogger(), ClusterID: "cluster-a", AllowFederationMutations: true})
 	_, err := srv.CreateRemoteClip(context.Background(), &foghornfederationpb.RemoteClipRequest{
 		InternalName: "stream-1",
 		TenantId:     "tenant-a",
@@ -151,7 +151,7 @@ func TestCreateRemoteClip_RequiresServiceAuth(t *testing.T) {
 }
 
 func TestCreateRemoteDVR_RequiresServiceAuth(t *testing.T) {
-	srv := NewFederationServer(FederationServerConfig{Logger: newFederationTestLogger(), ClusterID: "cluster-a"})
+	srv := NewFederationServer(FederationServerConfig{Logger: newFederationTestLogger(), ClusterID: "cluster-a", AllowFederationMutations: true})
 	_, err := srv.CreateRemoteDVR(context.Background(), &foghornfederationpb.RemoteDVRRequest{
 		InternalName: "stream-1",
 		TenantId:     "tenant-a",
@@ -162,7 +162,7 @@ func TestCreateRemoteDVR_RequiresServiceAuth(t *testing.T) {
 }
 
 func TestListTenantArtifacts_RequiresServiceAuth(t *testing.T) {
-	srv := NewFederationServer(FederationServerConfig{Logger: newFederationTestLogger(), ClusterID: "cluster-a"})
+	srv := NewFederationServer(FederationServerConfig{Logger: newFederationTestLogger(), ClusterID: "cluster-a", AllowFederationMutations: true})
 	_, err := srv.ListTenantArtifacts(context.Background(), &foghornfederationpb.ListTenantArtifactsRequest{
 		TenantId: "tenant-a",
 	})
@@ -172,7 +172,7 @@ func TestListTenantArtifacts_RequiresServiceAuth(t *testing.T) {
 }
 
 func TestMigrateArtifactMetadata_RequiresServiceAuth(t *testing.T) {
-	srv := NewFederationServer(FederationServerConfig{Logger: newFederationTestLogger(), ClusterID: "cluster-a"})
+	srv := NewFederationServer(FederationServerConfig{Logger: newFederationTestLogger(), ClusterID: "cluster-a", AllowFederationMutations: true})
 	_, err := srv.MigrateArtifactMetadata(context.Background(), &foghornfederationpb.MigrateArtifactMetadataRequest{
 		TenantId:        "tenant-a",
 		SourceClusterId: "cluster-b",

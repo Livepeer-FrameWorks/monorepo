@@ -208,7 +208,7 @@ func TestInvalidateChandlerThumbnailCache(t *testing.T) {
 	t.Setenv("SERVICE_TOKEN", "svc-token")
 	t.Setenv("CHANDLER_INTERNAL_URL", srvA.URL+","+srvB.URL)
 
-	invalidateChandlerThumbnailCache("stream-id", []string{
+	invalidateChandlerThumbnailCache("stream-id", "v-1", []string{
 		"thumbnails/stream-id/sprite.jpg",
 		"thumbnails/stream-id/sprite.vtt",
 		"thumbnails/stream-id/sprite.vtt",
@@ -425,7 +425,7 @@ func TestInvalidateChandlerThumbnailCacheDeduplicatesBaseURLs(t *testing.T) {
 	t.Setenv("SERVICE_TOKEN", "svc-token")
 	t.Setenv("CHANDLER_INTERNAL_URL", srv.URL+","+srv.URL+"/")
 
-	invalidateChandlerThumbnailCache("stream-id", []string{
+	invalidateChandlerThumbnailCache("stream-id", "v-1", []string{
 		"thumbnails/stream-id/sprite.jpg",
 	}, logging.NewLoggerWithService("test"))
 

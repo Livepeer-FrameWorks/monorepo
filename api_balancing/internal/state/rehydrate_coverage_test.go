@@ -55,8 +55,8 @@ func (r *rehydrateDVRRepo) ListAllDVR(_ context.Context) ([]DVRRecord, error) {
 func (r *rehydrateDVRRepo) ResolveInternalNameByHash(_ context.Context, _ string) (string, error) {
 	return "", nil
 }
-func (r *rehydrateDVRRepo) UpdateDVRProgressByHash(_ context.Context, _, _ string, _ int64) error {
-	return nil
+func (r *rehydrateDVRRepo) UpdateDVRProgressByHash(_ context.Context, _, _ string, _ int64, _ uint32, _ string) (bool, string, error) {
+	return true, "recording", nil
 }
 func (r *rehydrateDVRRepo) UpdateDVRCompletionByHash(_ context.Context, _, _ string, _, _ int64, _, _ string) error {
 	return nil
@@ -107,7 +107,23 @@ func (r *rehydrateArtifactRepo) GetCachedAt(_ context.Context, _ string) (int64,
 func (r *rehydrateArtifactRepo) ListAllNodeArtifacts(_ context.Context) (map[string][]ArtifactRecord, error) {
 	return r.byNode, r.listErr
 }
-func (r *rehydrateArtifactRepo) MarkNodeArtifactsOrphaned(_ context.Context, _ string) error {
+func (r *rehydrateArtifactRepo) MarkNodeArtifactsOrphaned(_ context.Context, _ string, _ int64, _ int64, _ int64) error {
+	return nil
+}
+
+func (r *rehydrateArtifactRepo) DeleteNodeArtifact(_ context.Context, _, _ string, _ int64) error {
+	return nil
+}
+
+func (r *rehydrateArtifactRepo) ReconcileNodeCopies(_ context.Context) (int, error) {
+	return 0, nil
+}
+
+func (r *rehydrateArtifactRepo) RefreshNodeCopy(_ context.Context, _, _ string) error {
+	return nil
+}
+
+func (r *rehydrateArtifactRepo) RegisterDVRRecordingOrigin(_ context.Context, _, _, _ string) error {
 	return nil
 }
 func (r *rehydrateArtifactRepo) NeedsVODDtshSync(_ context.Context, _ string) bool { return false }
@@ -387,7 +403,7 @@ func TestApplyDVRProgress_MemoryUpdateWithoutWriteThroughRehydrate(t *testing.T)
 	// No write policy enabled -> write-through branch skipped, resolve branch taken.
 	sm.ConfigurePolicies(PoliciesConfig{DVRRepo: repo})
 
-	if err := sm.ApplyDVRProgress(context.Background(), "dvr-hash", "recording", 2048, 7, "node-1"); err != nil {
+	if _, err := sm.ApplyDVRProgress(context.Background(), "dvr-hash", "recording", 2048, 7, "node-1"); err != nil {
 		t.Fatalf("ApplyDVRProgress: %v", err)
 	}
 	if repo.progressCalls != 0 {
@@ -444,9 +460,9 @@ func (r *resolvingDVRRepo) ListAllDVR(_ context.Context) ([]DVRRecord, error) { 
 func (r *resolvingDVRRepo) ResolveInternalNameByHash(_ context.Context, _ string) (string, error) {
 	return r.internal, nil
 }
-func (r *resolvingDVRRepo) UpdateDVRProgressByHash(_ context.Context, _, _ string, _ int64) error {
+func (r *resolvingDVRRepo) UpdateDVRProgressByHash(_ context.Context, _, _ string, _ int64, _ uint32, _ string) (bool, string, error) {
 	r.progressCalls++
-	return nil
+	return true, "recording", nil
 }
 func (r *resolvingDVRRepo) UpdateDVRCompletionByHash(_ context.Context, _, _ string, _, _ int64, _, _ string) error {
 	r.completionCalls++

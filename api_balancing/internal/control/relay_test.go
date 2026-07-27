@@ -119,8 +119,8 @@ func TestConnOwnerEncodeDecode(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("round trip", func(t *testing.T) {
-		if err := store.SetConnOwner(ctx, "node-1", "inst-abc", "10.0.0.1:9090"); err != nil {
-			t.Fatalf("SetConnOwner: %v", err)
+		if ok, err := store.AcquireConnOwnerFenced(ctx, "node-1", "inst-abc", "10.0.0.1:9090", 1); err != nil || !ok {
+			t.Fatalf("AcquireConnOwnerFenced: ok=%v err=%v", ok, err)
 		}
 		owner, err := store.GetConnOwner(ctx, "node-1")
 		if err != nil {
@@ -163,10 +163,12 @@ func TestConnOwnerEncodeDecode(t *testing.T) {
 
 func TestGeneratePresignedGETForArtifact_ParsesStoredS3URL(t *testing.T) {
 	prev := s3Client
+	// GeneratePresignedGETForArtifact now parses via ParseLocalS3URL (fails closed on a foreign bucket), so the
+	// local-parse seam is what it consults.
 	mock := &mockS3Client{
-		parseS3URLFn: func(s3URL string) (string, error) {
+		parseLocalS3URLFn: func(s3URL string) (string, error) {
 			if s3URL != "s3://frameworks/dev/vod/tenant/hash/hash.mkv" {
-				t.Fatalf("ParseS3URL got %q", s3URL)
+				t.Fatalf("ParseLocalS3URL got %q", s3URL)
 			}
 			return "vod/tenant/hash/hash.mkv", nil
 		},
@@ -282,8 +284,8 @@ func TestForward_NoOwner(t *testing.T) {
 func TestForward_OwnerIsSelf(t *testing.T) {
 	store, _ := newTestStore(t)
 	ctx := context.Background()
-	if err := store.SetConnOwner(ctx, "node-1", "self-instance", "10.0.0.1:9090"); err != nil {
-		t.Fatalf("SetConnOwner: %v", err)
+	if ok, err := store.AcquireConnOwnerFenced(ctx, "node-1", "self-instance", "10.0.0.1:9090", 1); err != nil || !ok {
+		t.Fatalf("AcquireConnOwnerFenced: ok=%v err=%v", ok, err)
 	}
 
 	r := buildRelay(t, store, "self-instance", "10.0.0.1:9090", nil)
@@ -315,8 +317,8 @@ func TestForward_OwnerNoAddr(t *testing.T) {
 func TestForward_Success(t *testing.T) {
 	store, _ := newTestStore(t)
 	ctx := context.Background()
-	if err := store.SetConnOwner(ctx, "node-1", "peer-instance", "10.0.0.2:9090"); err != nil {
-		t.Fatalf("SetConnOwner: %v", err)
+	if ok, err := store.AcquireConnOwnerFenced(ctx, "node-1", "peer-instance", "10.0.0.2:9090", 1); err != nil || !ok {
+		t.Fatalf("AcquireConnOwnerFenced: ok=%v err=%v", ok, err)
 	}
 
 	fakeRelay := &fakeFoghornRelayClient{
@@ -340,8 +342,8 @@ func TestForward_Success(t *testing.T) {
 func TestForward_PeerRejects(t *testing.T) {
 	store, _ := newTestStore(t)
 	ctx := context.Background()
-	if err := store.SetConnOwner(ctx, "node-1", "peer-instance", "10.0.0.2:9090"); err != nil {
-		t.Fatalf("SetConnOwner: %v", err)
+	if ok, err := store.AcquireConnOwnerFenced(ctx, "node-1", "peer-instance", "10.0.0.2:9090", 1); err != nil || !ok {
+		t.Fatalf("AcquireConnOwnerFenced: ok=%v err=%v", ok, err)
 	}
 
 	fakeRelay := &fakeFoghornRelayClient{
@@ -368,8 +370,8 @@ func TestForward_PeerRejects(t *testing.T) {
 func TestForward_DialError(t *testing.T) {
 	store, _ := newTestStore(t)
 	ctx := context.Background()
-	if err := store.SetConnOwner(ctx, "node-1", "peer-instance", "10.0.0.2:9090"); err != nil {
-		t.Fatalf("SetConnOwner: %v", err)
+	if ok, err := store.AcquireConnOwnerFenced(ctx, "node-1", "peer-instance", "10.0.0.2:9090", 1); err != nil || !ok {
+		t.Fatalf("AcquireConnOwnerFenced: ok=%v err=%v", ok, err)
 	}
 
 	pool := &mockRelayPool{err: fmt.Errorf("connection refused")}
@@ -398,8 +400,8 @@ func TestForward_DialError(t *testing.T) {
 func TestForward_DialError_PreservesFreshOwner(t *testing.T) {
 	store, _ := newTestStore(t)
 	ctx := context.Background()
-	if err := store.SetConnOwner(ctx, "node-1", "stale-instance", "10.0.0.2:9090"); err != nil {
-		t.Fatalf("SetConnOwner: %v", err)
+	if ok, err := store.AcquireConnOwnerFenced(ctx, "node-1", "stale-instance", "10.0.0.2:9090", 1); err != nil || !ok {
+		t.Fatalf("AcquireConnOwnerFenced: ok=%v err=%v", ok, err)
 	}
 
 	// Pool that simulates a race: when dial is attempted (after forward reads
@@ -430,8 +432,8 @@ func TestForward_DialError_PreservesFreshOwner(t *testing.T) {
 func TestForward_PeerUnimplemented_PreservesOwner(t *testing.T) {
 	store, _ := newTestStore(t)
 	ctx := context.Background()
-	if err := store.SetConnOwner(ctx, "node-1", "peer-instance", "10.0.0.2:9090"); err != nil {
-		t.Fatalf("SetConnOwner: %v", err)
+	if ok, err := store.AcquireConnOwnerFenced(ctx, "node-1", "peer-instance", "10.0.0.2:9090", 1); err != nil || !ok {
+		t.Fatalf("AcquireConnOwnerFenced: ok=%v err=%v", ok, err)
 	}
 
 	fakeRelay := &fakeFoghornRelayClient{
@@ -463,8 +465,8 @@ func TestForward_PeerUnimplemented_PreservesOwner(t *testing.T) {
 func TestForward_NilResponseClearsOwner(t *testing.T) {
 	store, _ := newTestStore(t)
 	ctx := context.Background()
-	if err := store.SetConnOwner(ctx, "node-1", "peer-instance", "10.0.0.2:9090"); err != nil {
-		t.Fatalf("SetConnOwner: %v", err)
+	if ok, err := store.AcquireConnOwnerFenced(ctx, "node-1", "peer-instance", "10.0.0.2:9090", 1); err != nil || !ok {
+		t.Fatalf("AcquireConnOwnerFenced: ok=%v err=%v", ok, err)
 	}
 
 	fakeRelay := &fakeFoghornRelayClient{}
@@ -496,7 +498,8 @@ type racingRelayPool struct {
 }
 
 func (p *racingRelayPool) GetOrCreate(_, _ string) (CommandRelayClient, error) {
-	_ = p.store.SetConnOwner(context.Background(), "node-1", "fresh-instance", "10.0.0.3:9090")
+	// The takeover uses a strictly higher fence than the stale owner so it supersedes it.
+	_, _ = p.store.AcquireConnOwnerFenced(context.Background(), "node-1", "fresh-instance", "10.0.0.3:9090", 2)
 	return nil, p.err
 }
 
@@ -514,8 +517,8 @@ func TestForward_NotConfigured(t *testing.T) {
 func TestForward_AttachesRelayMetadata(t *testing.T) {
 	store, _ := newTestStore(t)
 	ctx := context.Background()
-	if err := store.SetConnOwner(ctx, "node-1", "peer-instance", "10.0.0.2:9090"); err != nil {
-		t.Fatalf("SetConnOwner: %v", err)
+	if ok, err := store.AcquireConnOwnerFenced(ctx, "node-1", "peer-instance", "10.0.0.2:9090", 1); err != nil || !ok {
+		t.Fatalf("AcquireConnOwnerFenced: ok=%v err=%v", ok, err)
 	}
 
 	fakeRelay := &fakeFoghornRelayClient{resp: &foghornrelaypb.ForwardCommandResponse{Delivered: true}}
@@ -576,8 +579,8 @@ func TestSendWithRelay_LocalFailRelay(t *testing.T) {
 
 	store, _ := newTestStore(t)
 	ctx := context.Background()
-	if err := store.SetConnOwner(ctx, "node-1", "peer-instance", "10.0.0.2:9090"); err != nil {
-		t.Fatalf("SetConnOwner: %v", err)
+	if ok, err := store.AcquireConnOwnerFenced(ctx, "node-1", "peer-instance", "10.0.0.2:9090", 1); err != nil || !ok {
+		t.Fatalf("AcquireConnOwnerFenced: ok=%v err=%v", ok, err)
 	}
 
 	fakeRelay := &fakeFoghornRelayClient{
@@ -601,8 +604,8 @@ func TestSendWithRelay_PropagatesRelayFailure(t *testing.T) {
 
 	store, _ := newTestStore(t)
 	ctx := context.Background()
-	if err := store.SetConnOwner(ctx, "node-1", "peer-instance", "10.0.0.2:9090"); err != nil {
-		t.Fatalf("SetConnOwner: %v", err)
+	if ok, err := store.AcquireConnOwnerFenced(ctx, "node-1", "peer-instance", "10.0.0.2:9090", 1); err != nil || !ok {
+		t.Fatalf("AcquireConnOwnerFenced: ok=%v err=%v", ok, err)
 	}
 
 	fakeRelay := &fakeFoghornRelayClient{
@@ -635,8 +638,8 @@ func TestSendWithRelay_ReturnsLocalAndRelayFailure(t *testing.T) {
 
 	store, _ := newTestStore(t)
 	ctx := context.Background()
-	if err := store.SetConnOwner(ctx, "node-1", "peer-instance", "10.0.0.2:9090"); err != nil {
-		t.Fatalf("SetConnOwner: %v", err)
+	if ok, err := store.AcquireConnOwnerFenced(ctx, "node-1", "peer-instance", "10.0.0.2:9090", 1); err != nil || !ok {
+		t.Fatalf("AcquireConnOwnerFenced: ok=%v err=%v", ok, err)
 	}
 
 	pool := &mockRelayPool{err: fmt.Errorf("dial timeout")}
@@ -657,8 +660,8 @@ func TestSendWithRelay_MultipleSendTypes(t *testing.T) {
 
 	store, _ := newTestStore(t)
 	ctx := context.Background()
-	if err := store.SetConnOwner(ctx, "node-1", "peer-instance", "10.0.0.2:9090"); err != nil {
-		t.Fatalf("SetConnOwner: %v", err)
+	if ok, err := store.AcquireConnOwnerFenced(ctx, "node-1", "peer-instance", "10.0.0.2:9090", 1); err != nil || !ok {
+		t.Fatalf("AcquireConnOwnerFenced: ok=%v err=%v", ok, err)
 	}
 
 	fakeRelay := &fakeFoghornRelayClient{
@@ -702,8 +705,8 @@ func TestPushOperationalMode_MixedLocalAndRemoteOwnership(t *testing.T) {
 
 	store, _ := newTestStore(t)
 	ctx := context.Background()
-	if err := store.SetConnOwner(ctx, "canonical-remote", "peer-instance", "10.0.0.2:9090"); err != nil {
-		t.Fatalf("SetConnOwner: %v", err)
+	if ok, err := store.AcquireConnOwnerFenced(ctx, "canonical-remote", "peer-instance", "10.0.0.2:9090", 1); err != nil || !ok {
+		t.Fatalf("AcquireConnOwnerFenced: ok=%v err=%v", ok, err)
 	}
 
 	fakeRelay := &fakeFoghornRelayClient{resp: &foghornrelaypb.ForwardCommandResponse{Delivered: true}}
@@ -744,8 +747,8 @@ func TestSendRelayCoverageMatchesForwardCommandOneof(t *testing.T) {
 
 	store, _ := newTestStore(t)
 	ctx := context.Background()
-	if err := store.SetConnOwner(ctx, "node-1", "peer-instance", "10.0.0.2:9090"); err != nil {
-		t.Fatalf("SetConnOwner: %v", err)
+	if ok, err := store.AcquireConnOwnerFenced(ctx, "node-1", "peer-instance", "10.0.0.2:9090", 1); err != nil || !ok {
+		t.Fatalf("AcquireConnOwnerFenced: ok=%v err=%v", ok, err)
 	}
 
 	fakeRelay := &fakeFoghornRelayClient{resp: &foghornrelaypb.ForwardCommandResponse{Delivered: true}}
@@ -859,11 +862,11 @@ func TestDeleteConnOwnerIfMatch(t *testing.T) {
 	store, mr := newTestStore(t)
 	ctx := context.Background()
 
-	if err := store.SetConnOwner(ctx, "node-1", "inst-old", "10.0.0.1:9090"); err != nil {
-		t.Fatalf("SetConnOwner: %v", err)
+	if ok, err := store.AcquireConnOwnerFenced(ctx, "node-1", "inst-old", "10.0.0.1:9090", 1); err != nil || !ok {
+		t.Fatalf("AcquireConnOwnerFenced: ok=%v err=%v", ok, err)
 	}
 
-	deleted, err := store.DeleteConnOwnerIfMatch(ctx, "node-1", "inst-other", "10.0.0.9:9090")
+	deleted, err := store.DeleteConnOwnerIfMatch(ctx, "node-1", "inst-other", "10.0.0.9:9090", 0)
 	if err != nil {
 		t.Fatalf("DeleteConnOwnerIfMatch mismatch: %v", err)
 	}
@@ -874,7 +877,7 @@ func TestDeleteConnOwnerIfMatch(t *testing.T) {
 		t.Fatal("expected conn_owner key to remain after mismatch")
 	}
 
-	deleted, err = store.DeleteConnOwnerIfMatch(ctx, "node-1", "inst-old", "10.0.0.1:9090")
+	deleted, err = store.DeleteConnOwnerIfMatch(ctx, "node-1", "inst-old", "10.0.0.1:9090", 1)
 	if err != nil {
 		t.Fatalf("DeleteConnOwnerIfMatch match: %v", err)
 	}
@@ -890,14 +893,16 @@ func TestDeleteConnOwnerIfMatch_PreventsStaleCleanupRace(t *testing.T) {
 	store, mr := newTestStore(t)
 	ctx := context.Background()
 
-	if err := store.SetConnOwner(ctx, "node-race", "inst-old", "10.0.0.1:9090"); err != nil {
-		t.Fatalf("SetConnOwner old: %v", err)
+	if ok, err := store.AcquireConnOwnerFenced(ctx, "node-race", "inst-old", "10.0.0.1:9090", 1); err != nil || !ok {
+		t.Fatalf("AcquireConnOwnerFenced old: ok=%v err=%v", ok, err)
 	}
-	if err := store.SetConnOwner(ctx, "node-race", "inst-new", "10.0.0.2:9090"); err != nil {
-		t.Fatalf("SetConnOwner new: %v", err)
+	// The reconnect supersedes with a strictly higher fence.
+	if ok, err := store.AcquireConnOwnerFenced(ctx, "node-race", "inst-new", "10.0.0.2:9090", 2); err != nil || !ok {
+		t.Fatalf("AcquireConnOwnerFenced new: ok=%v err=%v", ok, err)
 	}
 
-	deleted, err := store.DeleteConnOwnerIfMatch(ctx, "node-race", "inst-old", "10.0.0.1:9090")
+	// The old connection's disconnect cleanup carries its own (lower) fence and must not match.
+	deleted, err := store.DeleteConnOwnerIfMatch(ctx, "node-race", "inst-old", "10.0.0.1:9090", 1)
 	if err != nil {
 		t.Fatalf("DeleteConnOwnerIfMatch stale: %v", err)
 	}

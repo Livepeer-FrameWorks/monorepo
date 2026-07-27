@@ -33,10 +33,10 @@ func sampleSegmentRow() *sqlmock.Rows {
 // size, gated on the source states so a duplicate ack can't regress a later state.
 func TestMarkDVRSegmentUploaded(t *testing.T) {
 	mock, _, _ := setupArtifactTestDeps(t)
-	mock.ExpectExec(`UPDATE foghorn.dvr_segments\s+SET status = 'uploaded',\s+size_bytes = \$3,\s+uploaded_at = NOW\(\).*WHERE artifact_hash = \$1\s+AND segment_name = \$2\s+AND status IN \('pending', 'failed_upload'\)`).
-		WithArgs("art-1", "seg-1", int64(2048)).
+	mock.ExpectExec(`UPDATE foghorn.dvr_segments\s+SET status = 'uploaded',\s+size_bytes = \$3,\s+uploaded_at = NOW\(\).*WHERE artifact_hash = \$1\s+AND segment_name = \$2\s+AND status IN \('pending', 'failed_upload'\)\s+AND EXISTS`).
+		WithArgs("art-1", "seg-1", int64(2048), "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	if err := MarkDVRSegmentUploaded(context.Background(), "art-1", "seg-1", 2048); err != nil {
+	if err := MarkDVRSegmentUploaded(context.Background(), "tenant-1", "art-1", "seg-1", 2048); err != nil {
 		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -48,10 +48,10 @@ func TestMarkDVRSegmentUploaded(t *testing.T) {
 // and total bytes for the finalization queue's progress view.
 func TestDVRSegmentProgress(t *testing.T) {
 	mock, _, _ := setupArtifactTestDeps(t)
-	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(SUM\(size_bytes\), 0\)\s+FROM foghorn.dvr_segments\s+WHERE artifact_hash = \$1\s+AND status NOT IN \('lost_local', 'reclaimed'\)`).
-		WithArgs("art-1").
+	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(SUM\(size_bytes\), 0\)\s+FROM foghorn.dvr_segments\s+WHERE artifact_hash = \$1\s+AND status NOT IN \('lost_local', 'reclaimed'\)\s+AND EXISTS`).
+		WithArgs("art-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"count", "sum"}).AddRow(int64(3), int64(9000)))
-	count, size, err := DVRSegmentProgress(context.Background(), "art-1")
+	count, size, err := DVRSegmentProgress(context.Background(), "tenant-1", "art-1")
 	if err != nil || count != 3 || size != 9000 {
 		t.Fatalf("got (%d,%d,%v), want (3,9000,nil)", count, size, err)
 	}
@@ -62,10 +62,10 @@ func TestDVRSegmentProgress(t *testing.T) {
 // UPDATE affects a row, without inserting a placeholder.
 func TestMarkDVRSegmentDropped_ExistingUploadedRow(t *testing.T) {
 	mock, _, _ := setupArtifactTestDeps(t)
-	mock.ExpectExec(`UPDATE foghorn.dvr_segments\s+SET status = \$3,\s+drop_reason = \$4.*WHERE artifact_hash = \$1\s+AND segment_name = \$2\s+AND status NOT IN \('deleted_local', 'lost_local', 'reclaimed'\)`).
-		WithArgs("art-1", "seg-1", "deleted_local", "evicted", true).
+	mock.ExpectExec(`UPDATE foghorn.dvr_segments\s+SET status = \$3,\s+drop_reason = \$4.*WHERE artifact_hash = \$1\s+AND segment_name = \$2\s+AND status NOT IN \('deleted_local', 'lost_local', 'reclaimed'\)\s+AND EXISTS`).
+		WithArgs("art-1", "seg-1", "deleted_local", "evicted", true, "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	if err := MarkDVRSegmentDropped(context.Background(), "art-1", "seg-1", "evicted", true, 0, 0, 0, 0); err != nil {
+	if err := MarkDVRSegmentDropped(context.Background(), "tenant-1", "art-1", "seg-1", "evicted", true, 0, 0, 0, 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -79,7 +79,7 @@ func TestMarkDVRSegmentDropped_ExistingUploadedRow(t *testing.T) {
 func TestListEvictableDVRSegments(t *testing.T) {
 	t.Run("window disabled returns nothing", func(t *testing.T) {
 		setupArtifactTestDeps(t)
-		out, err := ListEvictableDVRSegments(context.Background(), "art-1", 0, 10)
+		out, err := ListEvictableDVRSegments(context.Background(), "tenant-1", "art-1", 0, 10)
 		if err != nil || out != nil {
 			t.Fatalf("got (%v,%v), want (nil,nil)", out, err)
 		}
@@ -87,9 +87,9 @@ func TestListEvictableDVRSegments(t *testing.T) {
 	t.Run("returns evictable names", func(t *testing.T) {
 		mock, _, _ := setupArtifactTestDeps(t)
 		mock.ExpectQuery(`SELECT s.segment_name\s+FROM foghorn.dvr_segments s\s+WHERE s.artifact_hash = \$1\s+AND s.status = 'uploaded'`).
-			WithArgs("art-1", sqlmock.AnyArg(), 100).
+			WithArgs("art-1", sqlmock.AnyArg(), 100, "tenant-1").
 			WillReturnRows(sqlmock.NewRows([]string{"segment_name"}).AddRow("seg-1").AddRow("seg-2"))
-		out, err := ListEvictableDVRSegments(context.Background(), "art-1", 60, 100)
+		out, err := ListEvictableDVRSegments(context.Background(), "tenant-1", "art-1", 60, 100)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -158,17 +158,17 @@ func TestListDVRSegmentsForRange(t *testing.T) {
 func TestLookupDVRSegmentsByName(t *testing.T) {
 	t.Run("empty list short-circuits", func(t *testing.T) {
 		setupArtifactTestDeps(t)
-		out, err := LookupDVRSegmentsByName(context.Background(), "art-1", nil)
+		out, err := LookupDVRSegmentsByName(context.Background(), "tenant-1", "art-1", nil)
 		if err != nil || out != nil {
 			t.Fatalf("got (%v,%v), want (nil,nil)", out, err)
 		}
 	})
 	t.Run("returns matching rows", func(t *testing.T) {
 		mock, _, _ := setupArtifactTestDeps(t)
-		mock.ExpectQuery(`FROM foghorn.dvr_segments\s+WHERE artifact_hash = \$1\s+AND segment_name = ANY\(\$2::text\[\]\)`).
-			WithArgs("art-1", pq.StringArray([]string{"seg-1"})).
+		mock.ExpectQuery(`FROM foghorn.dvr_segments\s+WHERE artifact_hash = \$1\s+AND segment_name = ANY\(\$2::text\[\]\)\s+AND EXISTS`).
+			WithArgs("art-1", pq.StringArray([]string{"seg-1"}), "tenant-1").
 			WillReturnRows(sampleSegmentRow())
-		out, err := LookupDVRSegmentsByName(context.Background(), "art-1", []string{"seg-1"})
+		out, err := LookupDVRSegmentsByName(context.Background(), "tenant-1", "art-1", []string{"seg-1"})
 		if err != nil || len(out) != 1 {
 			t.Fatalf("got (%+v,%v)", out, err)
 		}
@@ -195,13 +195,13 @@ func TestSegmentRepo_NilDBGuards(t *testing.T) {
 	t.Cleanup(func() { db = prev })
 	ctx := context.Background()
 
-	if err := MarkDVRSegmentUploaded(ctx, "a", "s", 1); !errors.Is(err, sql.ErrConnDone) {
+	if err := MarkDVRSegmentUploaded(ctx, "t", "a", "s", 1); !errors.Is(err, sql.ErrConnDone) {
 		t.Errorf("MarkDVRSegmentUploaded nil db = %v", err)
 	}
-	if _, _, err := DVRSegmentProgress(ctx, "a"); !errors.Is(err, sql.ErrConnDone) {
+	if _, _, err := DVRSegmentProgress(ctx, "t", "a"); !errors.Is(err, sql.ErrConnDone) {
 		t.Errorf("DVRSegmentProgress nil db = %v", err)
 	}
-	if err := MarkDVRSegmentDropped(ctx, "a", "s", "r", false, 0, 0, 0, 0); !errors.Is(err, sql.ErrConnDone) {
+	if err := MarkDVRSegmentDropped(ctx, "t", "a", "s", "r", false, 0, 0, 0, 0); !errors.Is(err, sql.ErrConnDone) {
 		t.Errorf("MarkDVRSegmentDropped nil db = %v", err)
 	}
 	if _, err := ListPendingDVRSegments(ctx, "a", time.Hour, 10); !errors.Is(err, sql.ErrConnDone) {

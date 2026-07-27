@@ -314,7 +314,7 @@ func seedArtifactNode(t *testing.T, sm *state.StreamStateManager, nodeID, host, 
 	}, "", 0, 0, 0)
 	sm.SetNodeArtifacts(nodeID, []*ipcpb.StoredArtifact{
 		{ClipHash: clipHash, FilePath: "/data/" + clipHash + ".mp4", StreamName: "vod+art"},
-	})
+	}, state.ArtifactReportOrder{Fence: 1, Seq: 1})
 }
 
 // Invariant: a VOD whose artifact is resolved by Commodore to a hash present on

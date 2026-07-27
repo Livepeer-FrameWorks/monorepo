@@ -131,9 +131,9 @@ func TestBuildVodAssetInfoStatusMapping(t *testing.T) {
 	}
 }
 
-// vodAssetColumns mirrors the SELECT column order that scanVodAsset/scanVodAssetRow
-// expect. If the production query changes, the scan offset would silently shift —
-// this test pins the contract.
+// vodAssetColumns mirrors the SELECT column order that scanVodAssetRow expects (still used by
+// getVodAssetInfo on the upload-completion path). If the production query changes, the scan offset
+// would silently shift — this test pins the contract.
 var vodAssetColumns = []string{
 	"id", "artifact_hash", "status", "size_bytes",
 	"storage_location", "s3_url", "error_message",
@@ -161,19 +161,11 @@ func TestScanVodAssetWithNullOptionalColumns(t *testing.T) {
 	)
 	mock.ExpectQuery(`SELECT`).WillReturnRows(mockRows)
 
-	rows, err := db.QueryContext(context.Background(), "SELECT ...")
-	if err != nil {
-		t.Fatalf("db.Query: %v", err)
-	}
-	defer rows.Close()
-	if !rows.Next() {
-		t.Fatal("expected one row")
-	}
-
+	row := db.QueryRowContext(context.Background(), "SELECT ...")
 	s := &FoghornGRPCServer{}
-	asset, err := s.scanVodAsset(rows)
+	asset, err := s.scanVodAssetRow(row)
 	if err != nil {
-		t.Fatalf("scanVodAsset: %v", err)
+		t.Fatalf("scanVodAssetRow: %v", err)
 	}
 	if asset.Id != "vod-1" || asset.Status != sharedpb.VodStatus_VOD_STATUS_READY {
 		t.Fatalf("unexpected asset: %+v", asset)

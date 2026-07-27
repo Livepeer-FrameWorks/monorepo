@@ -48,21 +48,25 @@ func playableChapterRow(chapterID, parentDVRHash, chapterState string) *sqlmock.
 	)
 }
 
-// INVARIANT: a "completed" chapter-finalize result advances the chapter row to
-// 'finalized' (and only then), updates the artifact row to ready/mkv, registers
-// the origin artifact in state, and upserts vod_metadata — mirroring the VOD
-// processing branch but skipping the processing_jobs UPDATE (chapter job_ids
-// are non-UUID). This pins the success state-transition contract.
+// INVARIANT: a "completed" chapter-finalize result runs ONE atomic transaction — lock the
+// chapter + its playback artifact, update the artifact to ready/mkv, upsert vod_metadata,
+// register the origin artifact (+ node-copy event), transition the chapter finalizing →
+// finalized (exactly one row), and enqueue the completion lifecycle — all committed together.
+// The job is never left with a ready artifact but an un-transitioned chapter (or vice versa).
 func TestHandleChapterFinalizeResult_CompletedAdvancesToFinalized(t *testing.T) {
-	mock, _, repo := setupArtifactTestDeps(t)
+	mock, _, _ := setupArtifactTestDeps(t)
 	startFakeCommodoreServer(t, &fakeCommodoreInternal{})
 
-	// Make node-1 an active balancer node so the post-registration warm-cache
-	// assertion (FindNodesByArtifactHash) can observe the artifact.
+	// Make node-1 an active balancer node so the post-commit warm-cache assertion
+	// (FindNodesByArtifactHash) can observe the artifact. A live producing node has already sent its
+	// poller inventory, so simulate a versioned snapshot to lift the artifact-readiness cordon (without
+	// it, the node is excluded from artifact routing until its first versioned report).
 	state.DefaultManager().SetNodeInfo("node-1", "https://n1.example.com", true, nil, nil, "ams", "", nil)
 	state.DefaultManager().TouchNode("node-1", true)
+	state.DefaultManager().SetNodeArtifacts("node-1", nil, state.ArtifactReportOrder{Fence: 1, Seq: 1})
 
 	const chapterID = "chap-fin-1"
+	const tenant = "5eed517e-ba5e-da7a-517e-ba5eda7a0001"
 	outputs := map[string]string{
 		"artifact_hash":         chapterHash32,
 		"chapter_segment_count": "7",
@@ -77,46 +81,199 @@ func TestHandleChapterFinalizeResult_CompletedAdvancesToFinalized(t *testing.T) 
 		OutputSizeBytes: 4096,
 	}
 
-	// 1) artifacts row UPDATE → ready/mkv/pending/local.
+	mock.ExpectBegin()
+	// Lock the chapter + allocated artifact + parent; confirm chapter='finalizing',
+	// artifact='finalizing', parent not deleted.
+	mock.ExpectQuery(`SELECT c.state, COALESCE\(c.playback_artifact_hash`).
+		WithArgs(chapterID).
+		WillReturnRows(sqlmock.NewRows([]string{"state", "playback_artifact_hash", "tenant_id", "status", "parent_status", "finalize_node_id"}).
+			AddRow(ChapterStateFinalizing, chapterHash32, tenant, "finalizing", "ready", "node-1"))
+	// Artifacts row → ready/mkv/pending/local, guarded on status='finalizing' (exactly one row).
 	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET status = 'ready'`).
-		WithArgs(chapterHash32, int64(4096)).
+		WithArgs(chapterHash32, int64(4096), "[]", int64(0), false).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	// 2) projectArtifactSizeToCommodore lookup — return no row so it returns
-	//    early without an UpdateArtifactSize RPC (keeps the test focused on
-	//    the state transition, not the projection round-trip).
-	mock.ExpectQuery(`SELECT artifact_type, tenant_id::text, size_bytes\s+FROM foghorn.artifacts`).
-		WithArgs(chapterHash32).
+	// vod_metadata upsert (outputs non-empty).
+	mock.ExpectExec(`INSERT INTO foghorn.vod_metadata`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	// RegisterOriginArtifactTx: prior-read (none) → origin upsert (inserted, complete) → GAINED
+	// node-copy (tenant → version → stamp → outbox).
+	mock.ExpectQuery(`SELECT role, is_complete, is_orphaned FROM foghorn.artifact_nodes`).
+		WithArgs(chapterHash32, "node-1").
 		WillReturnError(sql.ErrNoRows)
-	// 3) MarkChapterFinalized: finalizing → finalized, guarded by WHERE state='finalizing'.
+	mock.ExpectQuery(`INSERT INTO foghorn.artifact_nodes`).
+		WillReturnRows(sqlmock.NewRows([]string{"inserted", "is_complete"}).AddRow(true, true))
+	mock.ExpectQuery(`SELECT tenant_id::text FROM foghorn.artifacts WHERE artifact_hash`).
+		WithArgs(chapterHash32).
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow(tenant))
+	mock.ExpectQuery(`SELECT nextval\('foghorn.artifact_node_copy_version_seq'\)`).
+		WillReturnRows(sqlmock.NewRows([]string{"nextval"}).AddRow(int64(1)))
+	mock.ExpectExec(`UPDATE foghorn.artifact_nodes SET last_emitted_version`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).
+		WillReturnResult(sqlmock.NewResult(0, 1)) // node-copy event
+	// MarkChapterFinalizedTx: finalizing → finalized, exactly one row.
 	mock.ExpectExec(`UPDATE foghorn.dvr_chapters\s+SET state\s+= 'finalized'`).
 		WithArgs(chapterID, int32(7), false, nil, nil).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	// 4) updateChapterVodMetadata upsert.
-	mock.ExpectExec(`INSERT INTO foghorn.vod_metadata`).
+	// Completion lifecycle enqueue (same tx).
+	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	// 5) emitChapterVodLifecycle identity lookup (join chapters→artifacts).
-	mock.ExpectQuery(`SELECT c.playback_artifact_hash, a.tenant_id::text\s+FROM foghorn.dvr_chapters c`).
-		WithArgs(chapterID).
-		WillReturnRows(sqlmock.NewRows([]string{"playback_artifact_hash", "tenant_id"}).
-			AddRow(chapterHash32, "t1"))
+	mock.ExpectCommit()
 
 	handleChapterFinalizeResult(context.Background(), chapterID, "completed", result, "node-1", logging.NewLogger())
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sqlmock expectations: %v", err)
 	}
-	// Origin artifact registered with role=origin, is_complete=true so the
-	// chapter VOD is immediately serveable on the producing node.
-	if len(repo.originArtifactCalls) != 1 {
-		t.Fatalf("expected 1 origin artifact registration, got %d", len(repo.originArtifactCalls))
-	}
-	got := repo.originArtifactCalls[0]
-	if got.Hash != chapterHash32 || got.NodeID != "node-1" || !got.Complete {
-		t.Fatalf("unexpected origin registration: %+v", got)
-	}
-	// And the in-memory state manager carries the warm copy on the producing node.
+	// Post-commit: the in-memory state manager carries the warm copy on the producing node.
 	if nodes := state.DefaultManager().FindNodesByArtifactHash(chapterHash32); len(nodes) != 1 || nodes[0].NodeID != "node-1" {
 		t.Fatalf("expected the chapter artifact registered on node-1 in state, got %+v", nodes)
+	}
+}
+
+// INVARIANT: a duplicate/late completion (the chapter is no longer 'finalizing') is an
+// ignored no-op — the tx rolls back with NO artifact/chapter writes and does NOT bounce the
+// chapter to closed.
+func TestHandleChapterFinalizeResult_DuplicateCompletionIsNoOp(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	startFakeCommodoreServer(t, &fakeCommodoreInternal{})
+
+	const chapterID = "chap-dup-1"
+	result := &ipcpb.ProcessingJobResult{
+		JobId:           chapterFinalizeJobIDPrefix + chapterID,
+		Outputs:         map[string]string{"artifact_hash": chapterHash32},
+		OutputPath:      "/data/vod/" + chapterHash32 + ".mkv",
+		OutputSizeBytes: 4096,
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT c.state, COALESCE\(c.playback_artifact_hash`).
+		WithArgs(chapterID).
+		WillReturnRows(sqlmock.NewRows([]string{"state", "playback_artifact_hash", "tenant_id", "status", "parent_status", "finalize_node_id"}).
+			AddRow(ChapterStateFinalized, chapterHash32, "t1", "ready", "ready", "node-1")) // already finalized
+	mock.ExpectRollback()
+
+	handleChapterFinalizeResult(context.Background(), chapterID, "completed", result, "node-1", logging.NewLogger())
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+// INVARIANT: a malformed completion — no playback hash OR no output path — must NOT silently
+// leave the chapter 'finalizing' (strand) nor finalize without an origin copy. It bounces the
+// chapter finalizing → closed so the queue re-dispatches (bounded by finalize_attempts).
+func TestHandleChapterFinalizeResult_MalformedCompletionBouncesToClosed(t *testing.T) {
+	t.Run("no playback hash", func(t *testing.T) {
+		mock, _, _ := setupArtifactTestDeps(t)
+		startFakeCommodoreServer(t, &fakeCommodoreInternal{})
+		mock.ExpectExec(`UPDATE foghorn.dvr_chapters\s+SET state\s+= 'closed'`).
+			WithArgs("chap-nohash", sqlmock.AnyArg(), "node-1").
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		handleChapterFinalizeResult(context.Background(), "chap-nohash", "completed",
+			&ipcpb.ProcessingJobResult{JobId: chapterFinalizeJobIDPrefix + "chap-nohash", Outputs: map[string]string{}}, "node-1", logging.NewLogger())
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unmet: %v", err)
+		}
+	})
+	t.Run("hash but no output path", func(t *testing.T) {
+		mock, _, _ := setupArtifactTestDeps(t)
+		startFakeCommodoreServer(t, &fakeCommodoreInternal{})
+		mock.ExpectExec(`UPDATE foghorn.dvr_chapters\s+SET state\s+= 'closed'`).
+			WithArgs("chap-noout", sqlmock.AnyArg(), "node-1").
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		handleChapterFinalizeResult(context.Background(), "chap-noout", "completed",
+			&ipcpb.ProcessingJobResult{JobId: chapterFinalizeJobIDPrefix + "chap-noout", Outputs: map[string]string{"artifact_hash": chapterHash32}}, "node-1", logging.NewLogger())
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unmet: %v", err)
+		}
+	})
+}
+
+// INVARIANT: a chapter-finalize result from a node OTHER than the one the finalize was dispatched to is
+// rejected at the authorization SELECT — no lock, no finalize, no origin registration. A node that merely
+// learned the chapter id cannot finalize the artifact and become its recorded origin.
+func TestHandleChapterFinalizeResult_RejectsForeignNode(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	startFakeCommodoreServer(t, &fakeCommodoreInternal{})
+	// The authorization is read UNDER the finalize tx's FOR UPDATE lock: the locked row shows the attempt is
+	// assigned to "assigned-node", so a completion from "attacker-node" rolls back with NO writes (no artifact
+	// readiness, no origin registration, no bounce).
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT c.state, COALESCE\(c.playback_artifact_hash`).
+		WithArgs("chap-foreign").
+		WillReturnRows(sqlmock.NewRows([]string{"state", "playback_artifact_hash", "tenant_id", "status", "parent_status", "finalize_node_id"}).
+			AddRow(ChapterStateFinalizing, chapterHash32, "t1", "finalizing", "ready", "assigned-node"))
+	mock.ExpectRollback()
+	handleChapterFinalizeResult(context.Background(), "chap-foreign", "completed",
+		&ipcpb.ProcessingJobResult{JobId: chapterFinalizeJobIDPrefix + "chap-foreign", Outputs: map[string]string{"artifact_hash": chapterHash32}, OutputPath: "/data/vod/" + chapterHash32 + ".mkv"},
+		"attacker-node", logging.NewLogger())
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+// INVARIANT: a late completion whose allocated artifact is no longer 'finalizing' (e.g. the
+// parent DVR delete cascade soft-deleted it) must NOT resurrect it to 'ready'. The lock read
+// sees the artifact status and treats it as an ignored no-op — no writes, no bounce.
+func TestHandleChapterFinalizeResult_DoesNotResurrectDeletedArtifact(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	startFakeCommodoreServer(t, &fakeCommodoreInternal{})
+
+	const chapterID = "chap-deleted-art"
+	result := &ipcpb.ProcessingJobResult{
+		JobId:           chapterFinalizeJobIDPrefix + chapterID,
+		Outputs:         map[string]string{"artifact_hash": chapterHash32},
+		OutputPath:      "/data/vod/" + chapterHash32 + ".mkv",
+		OutputSizeBytes: 4096,
+	}
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT c.state, COALESCE\(c.playback_artifact_hash`).
+		WithArgs(chapterID).
+		WillReturnRows(sqlmock.NewRows([]string{"state", "playback_artifact_hash", "tenant_id", "status", "parent_status", "finalize_node_id"}).
+			AddRow(ChapterStateFinalizing, chapterHash32, "t1", "deleted", "deleted", "node-1")) // artifact + parent gone
+	mock.ExpectRollback()
+
+	handleChapterFinalizeResult(context.Background(), chapterID, "completed", result, "node-1", logging.NewLogger())
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+// INVARIANT: a transient persist failure inside the finalize tx rolls the whole tx back AND
+// bounces the chapter finalizing → closed (RetryChapterFinalize) so the queue re-dispatches —
+// the chapter is never left half-finalized.
+func TestHandleChapterFinalizeResult_TransientPersistFailureBouncesToClosed(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	startFakeCommodoreServer(t, &fakeCommodoreInternal{})
+
+	const chapterID = "chap-persist-fail"
+	const tenant = "5eed517e-ba5e-da7a-517e-ba5eda7a0001"
+	result := &ipcpb.ProcessingJobResult{
+		JobId:           chapterFinalizeJobIDPrefix + chapterID,
+		Outputs:         map[string]string{"artifact_hash": chapterHash32},
+		OutputPath:      "/data/vod/" + chapterHash32 + ".mkv",
+		OutputSizeBytes: 4096,
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT c.state, COALESCE\(c.playback_artifact_hash`).
+		WithArgs(chapterID).
+		WillReturnRows(sqlmock.NewRows([]string{"state", "playback_artifact_hash", "tenant_id", "status", "parent_status", "finalize_node_id"}).
+			AddRow(ChapterStateFinalizing, chapterHash32, tenant, "finalizing", "ready", "node-1"))
+	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET status = 'ready'`).
+		WillReturnError(sql.ErrConnDone)
+	mock.ExpectRollback()
+	// Bounce finalizing → closed for retry.
+	mock.ExpectExec(`UPDATE foghorn.dvr_chapters\s+SET state\s+= 'closed'`).
+		WithArgs(chapterID, sqlmock.AnyArg(), "node-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	handleChapterFinalizeResult(context.Background(), chapterID, "completed", result, "node-1", logging.NewLogger())
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sqlmock expectations: %v", err)
 	}
 }
 
@@ -136,15 +293,19 @@ func TestHandleChapterFinalizeResult_TerminalFailureMarksFailed(t *testing.T) {
 		},
 	}
 
-	// MarkChapterFailed: → failed_source_missing, guarded by state IN ('closed','finalizing').
-	mock.ExpectExec(`UPDATE foghorn.dvr_chapters\s+SET state\s+= \$2`).
-		WithArgs(chapterID, ChapterStateFailedSourceMissing, "segments gone").
+	// MarkChapterFailed is now one tx: transition the chapter (RETURNING its playback hash), fail
+	// the allocated child artifact (RETURNING tenant), and enqueue the failed lifecycle to the
+	// outbox — all committed together (no separate loss-prone emit).
+	mock.ExpectBegin()
+	mock.ExpectQuery(`UPDATE foghorn.dvr_chapters\s+SET state\s+= \$2.*RETURNING playback_artifact_hash`).
+		WithArgs(chapterID, ChapterStateFailedSourceMissing, "segments gone", "node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"playback_artifact_hash"}).AddRow(chapterHash32))
+	mock.ExpectQuery(`UPDATE foghorn.artifacts\s+SET status = 'failed'.*RETURNING tenant_id`).
+		WithArgs(chapterHash32, "segments gone").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow("5eed517e-ba5e-da7a-517e-ba5eda7a0001"))
+	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	// emitChapterVodLifecycle identity lookup (STATUS_FAILED path).
-	mock.ExpectQuery(`SELECT c.playback_artifact_hash, a.tenant_id::text`).
-		WithArgs(chapterID).
-		WillReturnRows(sqlmock.NewRows([]string{"playback_artifact_hash", "tenant_id"}).
-			AddRow(chapterHash32, "t1"))
+	mock.ExpectCommit()
 
 	handleChapterFinalizeResult(context.Background(), chapterID, "failed", result, "node-1", logging.NewLogger())
 
@@ -166,9 +327,9 @@ func TestHandleChapterFinalizeResult_TransientFailureRetries(t *testing.T) {
 		Error: "network blip",
 	}
 
-	// RetryChapterFinalize rolls finalizing → closed (the only DB write).
+	// RetryChapterFinalize rolls finalizing → closed (the only DB write), bound to the reporting node.
 	mock.ExpectExec(`UPDATE foghorn.dvr_chapters`).
-		WithArgs(chapterID, "network blip").
+		WithArgs(chapterID, "network blip", "node-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	handleChapterFinalizeResult(context.Background(), chapterID, "failed", result, "node-1", logging.NewLogger())
@@ -178,26 +339,8 @@ func TestHandleChapterFinalizeResult_TransientFailureRetries(t *testing.T) {
 	}
 }
 
-// INVARIANT: a completed result with NO playback artifact hash (empty outputs +
-// empty output path) is a no-op — it must not advance the chapter or touch the
-// artifact row, because there's nothing to register.
-func TestHandleChapterFinalizeResult_NoPlaybackHashIsNoOp(t *testing.T) {
-	mock, _, repo := setupArtifactTestDeps(t)
-	startFakeCommodoreServer(t, &fakeCommodoreInternal{})
-
-	result := &ipcpb.ProcessingJobResult{
-		JobId:   chapterFinalizeJobIDPrefix + "chap-x",
-		Outputs: map[string]string{},
-	}
-	handleChapterFinalizeResult(context.Background(), "chap-x", "completed", result, "node-1", logging.NewLogger())
-
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("expected no DB calls: %v", err)
-	}
-	if len(repo.originArtifactCalls) != 0 {
-		t.Fatal("no-op result must not register any origin artifact")
-	}
-}
+// (A no-hash/no-output completion is NOT a silent no-op — it bounces the chapter to 'closed'
+// for retry; see TestHandleChapterFinalizeResult_MalformedCompletionBouncesToClosed.)
 
 // INVARIANT: chapterPlaybackArtifactHashFromOutputs prefers an explicit
 // outputs["artifact_hash"], else derives the hash from the .mkv filename
@@ -214,12 +357,23 @@ func TestChapterPlaybackArtifactHashFromOutputs(t *testing.T) {
 	}
 }
 
-// INVARIANT: updateChapterVodMetadata is a no-op when outputs is empty (no
-// stream-info to fill), and otherwise upserts the metadata row.
-func TestUpdateChapterVodMetadata(t *testing.T) {
+// INVARIANT: updateChapterVodMetadataTx is a no-op success when outputs is empty (no
+// stream-info to fill) — the finalize tx must still commit — and otherwise upserts the row.
+func TestUpdateChapterVodMetadataTx(t *testing.T) {
 	t.Run("empty outputs is a no-op", func(t *testing.T) {
 		mock := setupChapterTest(t)
-		updateChapterVodMetadata(context.Background(), logging.NewLogger(), logging.Fields{}, chapterHash32, nil)
+		mock.ExpectBegin()
+		mock.ExpectRollback()
+		tx, err := db.BeginTx(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		if err := updateChapterVodMetadataTx(context.Background(), tx, chapterHash32, nil); err != nil {
+			t.Fatalf("empty outputs must succeed: %v", err)
+		}
+		if err := tx.Rollback(); err != nil {
+			t.Fatalf("rollback: %v", err)
+		}
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatalf("empty outputs must not query: %v", err)
 		}
@@ -227,10 +381,21 @@ func TestUpdateChapterVodMetadata(t *testing.T) {
 
 	t.Run("non-empty outputs upserts", func(t *testing.T) {
 		mock := setupChapterTest(t)
+		mock.ExpectBegin()
 		mock.ExpectExec(`INSERT INTO foghorn.vod_metadata`).
 			WillReturnResult(sqlmock.NewResult(0, 1))
-		updateChapterVodMetadata(context.Background(), logging.NewLogger(), logging.Fields{},
-			chapterHash32, map[string]string{"duration_ms": "5000", "resolution": "1920x1080"})
+		mock.ExpectCommit()
+		tx, err := db.BeginTx(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		if err := updateChapterVodMetadataTx(context.Background(), tx,
+			chapterHash32, map[string]string{"duration_ms": "5000", "resolution": "1920x1080"}); err != nil {
+			t.Fatalf("upsert: %v", err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("commit: %v", err)
+		}
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatalf("unmet expectations: %v", err)
 		}

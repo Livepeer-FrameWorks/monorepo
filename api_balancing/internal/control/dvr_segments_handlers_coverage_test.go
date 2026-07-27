@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"frameworks/api_balancing/internal/state"
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -203,14 +204,18 @@ func TestProcessRecordDVRSegment_HappyPathInsertsAndReplies(t *testing.T) {
 		WithArgs("dvr-hot").
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "stream_internal_name"}).
 			AddRow("tenant-1", "live+demo"))
+	// dvrReportNodeAuthorized (tenant-scoped): the reporting node is the dispatched recording owner.
+	mock.ExpectQuery(dvrNodeAuthSelectRe).
+		WithArgs("dvr-hot", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "dispatch_node"}).AddRow("recording", "node-9"))
 	// artifact_nodes refresh (node_id non-empty)
 	mock.ExpectExec("INSERT INTO foghorn.artifact_nodes").
 		WithArgs("dvr-hot", "node-9").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	// InsertDVRSegment tx
+	// InsertDVRSegment tx (parent lock is tenant-scoped)
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT status FROM foghorn.artifacts").
-		WithArgs("dvr-hot").
+		WithArgs("dvr-hot", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("recording"))
 	mock.ExpectQuery("SELECT sequence, status, media_start_ms, media_end_ms, duration_ms").
 		WithArgs("dvr-hot", "seg-3.ts").
@@ -264,6 +269,10 @@ func TestProcessRecordDVRSegment_TerminalInsertRejected(t *testing.T) {
 		WithArgs("dvr-done").
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "stream_internal_name"}).
 			AddRow("tenant-1", "live+demo"))
+	// dvrReportNodeAuthorized (tenant-scoped): node-9 owns this (still-active) recording.
+	mock.ExpectQuery(dvrNodeAuthSelectRe).
+		WithArgs("dvr-done", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "dispatch_node"}).AddRow("recording", "node-9"))
 	mock.ExpectExec("INSERT INTO foghorn.artifact_nodes").
 		WithArgs("dvr-done", "node-9").
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -271,7 +280,7 @@ func TestProcessRecordDVRSegment_TerminalInsertRejected(t *testing.T) {
 	// recovery insert not allowed → ErrDVRSegmentTerminal.
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT status FROM foghorn.artifacts").
-		WithArgs("dvr-done").
+		WithArgs("dvr-done", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("completed"))
 	mock.ExpectQuery("SELECT sequence, status, media_start_ms, media_end_ms, duration_ms").
 		WithArgs("dvr-done", "seg-9.ts").
@@ -312,17 +321,62 @@ func TestProcessRecordDVRSegment_NoS3Client(t *testing.T) {
 		WithArgs("dvr-s3").
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "stream_internal_name"}).
 			AddRow("tenant-1", "live+demo"))
-	// node_id empty here so artifact_nodes refresh is skipped.
+	// dvrReportNodeAuthorized (tenant-scoped, strict): node-9 owns this active recording, so the record
+	// passes the owner gate and refreshes artifact_nodes before hitting the missing S3 client.
+	mock.ExpectQuery(dvrNodeAuthSelectRe).
+		WithArgs("dvr-s3", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "dispatch_node"}).AddRow("recording", "node-9"))
+	mock.ExpectExec("INSERT INTO foghorn.artifact_nodes").
+		WithArgs("dvr-s3", "node-9").
+		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	processRecordDVRSegment(&ipcpb.RecordDVRSegmentRequest{
 		RequestId:   "r5",
 		DvrHash:     "dvr-s3",
 		SegmentName: "seg-0.ts",
-	}, "", cs, logging.NewLogger())
+	}, "node-9", cs, logging.NewLogger())
 
 	resp := extractRecordResp(t, cs)
 	if resp.GetReason() != "s3_client_unavailable" {
 		t.Fatalf("expected reason s3_client_unavailable, got %q", resp.GetReason())
+	}
+}
+
+// Invariant: a record from a node that is NOT the dispatched recording owner is rejected with
+// not_recording_owner and causes no side effect — no artifact_nodes revive, no ledger insert, no
+// presigned URL.
+func TestProcessRecordDVRSegment_NonOwnerRejected(t *testing.T) {
+	mock, s3, _ := setupArtifactTestDeps(t)
+	cs := &captureStream{}
+
+	mock.ExpectQuery("SELECT tenant_id::text, stream_internal_name").
+		WithArgs("dvr-owned").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "stream_internal_name"}).
+			AddRow("tenant-1", "live+demo"))
+	// dvrReportNodeAuthorized (tenant-scoped): an active recording dispatched to a DIFFERENT node.
+	mock.ExpectQuery(dvrNodeAuthSelectRe).
+		WithArgs("dvr-owned", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "dispatch_node"}).AddRow("recording", "owner-node"))
+	// No artifact_nodes INSERT, no InsertDVRSegment tx: the guard rejects first.
+
+	processRecordDVRSegment(&ipcpb.RecordDVRSegmentRequest{
+		RequestId:   "r6",
+		DvrHash:     "dvr-owned",
+		SegmentName: "seg-0.ts",
+	}, "rogue-node", cs, logging.NewLogger())
+
+	resp := extractRecordResp(t, cs)
+	if resp.GetAccepted() {
+		t.Fatal("expected accepted=false for a non-owning node")
+	}
+	if resp.GetReason() != "not_recording_owner" {
+		t.Fatalf("expected reason not_recording_owner, got %q", resp.GetReason())
+	}
+	if len(s3.presignPUTCalls) != 0 {
+		t.Fatalf("expected no presign for a rejected non-owner, got %v", s3.presignPUTCalls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -333,11 +387,19 @@ func TestProcessRecordDVRSegment_NoS3Client(t *testing.T) {
 func TestProcessMarkDVRSegmentUploaded_MutatesRow(t *testing.T) {
 	mock, _, _ := setupArtifactTestDeps(t)
 
+	// dvrOwnerTenant resolves the owning tenant from the hash.
+	mock.ExpectQuery(dvrOwnerTenantRe).
+		WithArgs("dvr-u").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow("tenant-1"))
+	// dvrReportNodeAuthorized (tenant-scoped): node-1 owns this recording.
+	mock.ExpectQuery(dvrNodeAuthSelectRe).
+		WithArgs("dvr-u", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "dispatch_node"}).AddRow("recording", "node-1"))
 	mock.ExpectExec("UPDATE foghorn.dvr_segments").
-		WithArgs("dvr-u", "seg-1.ts", int64(4096)).
+		WithArgs("dvr-u", "seg-1.ts", int64(4096), "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("SELECT COUNT\\(\\*\\), COALESCE\\(SUM\\(size_bytes\\), 0\\)").
-		WithArgs("dvr-u").
+		WithArgs("dvr-u", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"count", "sum"}).AddRow(2, 8192))
 
 	processMarkDVRSegmentUploaded(&ipcpb.MarkDVRSegmentUploaded{
@@ -364,6 +426,30 @@ func TestProcessMarkDVRSegmentUploaded_EmptyNoop(t *testing.T) {
 	}
 }
 
+// Invariant: an uploaded mark from a non-owning node is a no-op — the owner guard rejects before the
+// ledger UPDATE, so the row is never touched.
+func TestProcessMarkDVRSegmentUploaded_NonOwnerNoop(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+
+	mock.ExpectQuery(dvrOwnerTenantRe).
+		WithArgs("dvr-u2").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow("tenant-1"))
+	mock.ExpectQuery(dvrNodeAuthSelectRe).
+		WithArgs("dvr-u2", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "dispatch_node"}).AddRow("recording", "owner-node"))
+	// No UPDATE expected.
+
+	processMarkDVRSegmentUploaded(&ipcpb.MarkDVRSegmentUploaded{
+		DvrHash:     "dvr-u2",
+		SegmentName: "seg-1.ts",
+		SizeBytes:   4096,
+	}, "rogue-node", logging.NewLogger())
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // --- processDVRSegmentDropped ---
 
 // Invariant: a was_uploaded=true drop transitions the row to deleted_local via
@@ -371,8 +457,15 @@ func TestProcessMarkDVRSegmentUploaded_EmptyNoop(t *testing.T) {
 func TestProcessDVRSegmentDropped_UploadedDeletesLocal(t *testing.T) {
 	mock, _, _ := setupArtifactTestDeps(t)
 
+	// dvrOwnerTenant resolves the owning tenant, then the tenant-scoped owner check.
+	mock.ExpectQuery(dvrOwnerTenantRe).
+		WithArgs("dvr-d").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow("tenant-1"))
+	mock.ExpectQuery(dvrNodeAuthSelectRe).
+		WithArgs("dvr-d", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "dispatch_node"}).AddRow("recording", "node-1"))
 	mock.ExpectExec("UPDATE foghorn.dvr_segments").
-		WithArgs("dvr-d", "seg-2.ts", "deleted_local", "storage_pressure", true).
+		WithArgs("dvr-d", "seg-2.ts", "deleted_local", "storage_pressure", true, "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	processDVRSegmentDropped(&ipcpb.DVRSegmentDropped{
@@ -392,8 +485,15 @@ func TestProcessDVRSegmentDropped_UploadedDeletesLocal(t *testing.T) {
 func TestProcessDVRSegmentDropped_LostLocalUpdatesExisting(t *testing.T) {
 	mock, _, _ := setupArtifactTestDeps(t)
 
+	// dvrOwnerTenant resolves the owning tenant, then the tenant-scoped owner check.
+	mock.ExpectQuery(dvrOwnerTenantRe).
+		WithArgs("dvr-d2").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow("tenant-1"))
+	mock.ExpectQuery(dvrNodeAuthSelectRe).
+		WithArgs("dvr-d2", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "dispatch_node"}).AddRow("recording", "node-1"))
 	mock.ExpectExec("UPDATE foghorn.dvr_segments").
-		WithArgs("dvr-d2", "seg-5.ts", "lost_local", "evicted_before_upload", false).
+		WithArgs("dvr-d2", "seg-5.ts", "lost_local", "evicted_before_upload", false, "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	processDVRSegmentDropped(&ipcpb.DVRSegmentDropped{
@@ -440,6 +540,13 @@ func TestProcessEvictableSegmentsRequest_UsesStampedWindowAndReplies(t *testing.
 	mock, _, _ := setupArtifactTestDeps(t)
 	cs := &captureStream{}
 
+	// dvrOwnerTenant resolves the owning tenant, then the tenant-scoped owner check.
+	mock.ExpectQuery(dvrOwnerTenantRe).
+		WithArgs("dvr-e").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow("tenant-1"))
+	mock.ExpectQuery(dvrNodeAuthSelectRe).
+		WithArgs("dvr-e", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "dispatch_node"}).AddRow("recording", "node-1"))
 	// dvrEffectiveWindowSeconds returns a stamped window.
 	mock.ExpectQuery("SELECT dvr_window_seconds").
 		WithArgs("dvr-e").
@@ -462,6 +569,38 @@ func TestProcessEvictableSegmentsRequest_UsesStampedWindowAndReplies(t *testing.
 	names := msg.GetEvictableSegmentsResponse().GetSegmentNames()
 	if len(names) != 2 || names[0] != "seg-0.ts" || names[1] != "seg-1.ts" {
 		t.Fatalf("unexpected evictable names %v", names)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Invariant: an evictable-segments request from a non-owning node gets an empty (evict-nothing) answer
+// and never runs the window/eviction queries.
+func TestProcessEvictableSegmentsRequest_NonOwnerEmpty(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	cs := &captureStream{}
+
+	mock.ExpectQuery(dvrOwnerTenantRe).
+		WithArgs("dvr-e2").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow("tenant-1"))
+	mock.ExpectQuery(dvrNodeAuthSelectRe).
+		WithArgs("dvr-e2", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "dispatch_node"}).AddRow("recording", "owner-node"))
+	// No window query, no eviction query.
+
+	processEvictableSegmentsRequest(&ipcpb.EvictableSegmentsRequest{
+		RequestId: "e2",
+		DvrHash:   "dvr-e2",
+		MaxCount:  10,
+	}, "rogue-node", cs, logging.NewLogger())
+
+	msg := cs.lastSent()
+	if msg == nil || msg.GetEvictableSegmentsResponse() == nil {
+		t.Fatal("expected EvictableSegmentsResponse")
+	}
+	if len(msg.GetEvictableSegmentsResponse().GetSegmentNames()) != 0 {
+		t.Fatal("expected empty segment names for a non-owner")
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -656,15 +795,21 @@ func TestProcessRelayResolveRequest_VODNoRowSourceMissing(t *testing.T) {
 func TestProcessRelayResolveRequest_VODSyncedPlayable(t *testing.T) {
 	mock, s3, _ := setupArtifactTestDeps(t)
 	cs := &captureStream{}
+	// Platform/shared edge: no tenant, on a cluster THIS Foghorn operates → entitled to serve tenant-1's artifact.
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	sm.SetNodeInfo("node-1", "n", true, nil, nil, "", "", nil)
+	sm.SetNodeConnectionInfo(context.Background(), "node-1", "n", "", "platform-eu", nil)
+	AddPlatformSharedCluster("platform-eu")
 
-	// fillFileArtifactResolve main lookup: s3_url set, sync_status='synced'.
+	// fillFileArtifactResolve main lookup: s3_url set, sync_status='synced', durable_backend_local=true.
 	cols := []string{"s3_url", "size_bytes", "format", "dtsh_synced", "stream_internal_name",
-		"sync_status", "origin_cluster_id", "storage_cluster_id", "tenant_id", "artifact_type"}
+		"sync_status", "origin_cluster_id", "storage_cluster_id", "tenant_id", "artifact_type", "active_dtsh_key", "durable_backend_local"}
 	mock.ExpectQuery("FROM foghorn.artifacts").
 		WithArgs("h-ok").
 		WillReturnRows(sqlmock.NewRows(cols).AddRow(
 			"s3://bucket/vods/h-ok/file.mp4", 1234, "mp4", false, sql.NullString{},
-			"synced", "", "", "tenant-1", "vod"))
+			"synced", "", "", "tenant-1", "vod", "", true))
 
 	processRelayResolveRequest(&ipcpb.RelayResolveRequest{
 		RequestId: "rr3",
@@ -711,5 +856,85 @@ func TestFillCrossClusterArtifact_DepsUnwiredSilent(t *testing.T) {
 	}
 	if resp.GetMediaPresignedUrl() != "" || resp.GetPeerRelayUrl() != "" {
 		t.Fatal("expected no URLs populated when cross-cluster resolve is unavailable")
+	}
+}
+
+// After FinalizeDVR retains the immutable recording owner (dvr_start_dispatch -> {node_id}) on the
+// terminal row, the post-stop reclaim's DVRSegmentDropped ack from the SAME owner is strictly authorized
+// and the ledger row is transitioned (deleted_local -> S3-delete -> reclaimed downstream). A drop from a
+// DIFFERENT node against the same terminal row is rejected with no ledger mutation. This is the wedge the
+// owner-retention split prevents: if finalize had NULL'd the whole descriptor, the real owner's ack would
+// be rejected and the segment would never reclaim.
+func TestProcessDVRSegmentDropped_TerminalRetainedOwner(t *testing.T) {
+	t.Run("same owner authorized, ledger mutated", func(t *testing.T) {
+		mock, _, _ := setupArtifactTestDeps(t)
+
+		// Terminal ('completed') row that retains its owner after finalize.
+		mock.ExpectQuery(dvrOwnerTenantRe).
+			WithArgs("dvr-reclaim").
+			WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow("tenant-1"))
+		mock.ExpectQuery(dvrNodeAuthSelectRe).
+			WithArgs("dvr-reclaim", "tenant-1").
+			WillReturnRows(sqlmock.NewRows([]string{"status", "dispatch_node"}).AddRow("completed", "owner-node"))
+		mock.ExpectExec("UPDATE foghorn.dvr_segments").
+			WithArgs("dvr-reclaim", "seg-9.ts", "deleted_local", "post_stop_reclaim", true, "tenant-1").
+			WillReturnResult(sqlmock.NewResult(0, 1))
+
+		processDVRSegmentDropped(&ipcpb.DVRSegmentDropped{
+			DvrHash:     "dvr-reclaim",
+			SegmentName: "seg-9.ts",
+			Reason:      "post_stop_reclaim",
+			WasUploaded: true,
+		}, "owner-node", logging.NewLogger())
+
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("different node rejected, no ledger mutation", func(t *testing.T) {
+		mock, _, _ := setupArtifactTestDeps(t)
+
+		mock.ExpectQuery(dvrOwnerTenantRe).
+			WithArgs("dvr-reclaim").
+			WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow("tenant-1"))
+		mock.ExpectQuery(dvrNodeAuthSelectRe).
+			WithArgs("dvr-reclaim", "tenant-1").
+			WillReturnRows(sqlmock.NewRows([]string{"status", "dispatch_node"}).AddRow("completed", "owner-node"))
+		// No UPDATE foghorn.dvr_segments expected — a non-owner drop is rejected before the mutation.
+
+		processDVRSegmentDropped(&ipcpb.DVRSegmentDropped{
+			DvrHash:     "dvr-reclaim",
+			SegmentName: "seg-9.ts",
+			Reason:      "post_stop_reclaim",
+			WasUploaded: true,
+		}, "rogue-node", logging.NewLogger())
+
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// A DB error resolving the owning tenant (the partition-scoping bootstrap) must ABORT the segment op with
+// no downstream call: no owner-auth read, no ledger mutation. Collapsing the error into "absent" would
+// let a transient first-query failure bypass the owner check entirely.
+func TestProcessDVRSegmentDropped_TenantLookupErrorFailsClosed(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+
+	mock.ExpectQuery(dvrOwnerTenantRe).
+		WithArgs("dvr-err").
+		WillReturnError(errors.New("db down"))
+	// No owner-auth read, no UPDATE foghorn.dvr_segments — the handler fails closed on the lookup error.
+
+	processDVRSegmentDropped(&ipcpb.DVRSegmentDropped{
+		DvrHash:     "dvr-err",
+		SegmentName: "seg-1.ts",
+		Reason:      "storage_pressure",
+		WasUploaded: true,
+	}, "node-1", logging.NewLogger())
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }

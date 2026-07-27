@@ -3,6 +3,8 @@ package control
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -53,15 +55,22 @@ func handleChapterFinalizeResult(
 		"chapter_id": chapterID,
 	}
 
+	// Reporting-node authorization is enforced INSIDE each guarded transition below (the finalize lock, and the
+	// MarkChapterFailed / RetryChapterFinalize guarded UPDATEs all predicate on finalize_node_id = nodeID under
+	// their row lock). Chapter-finalize jobs are routed around foghorn.processing_jobs, so finalize_node_id
+	// (persisted at MarkChapterFinalizing before the node could report) is the reporting-node anchor. Doing the
+	// check inside the consuming transaction — not as a separate read — closes the TOCTOU where a stale-finalize
+	// reclaim reassigns the attempt between an out-of-band check and the transition.
 	if jobStatus == "failed" {
 		if terminal, reason := chapterTerminalFailure(result.GetOutputs(), result.GetError()); terminal {
-			if err := MarkChapterFailed(ctx, chapterID, ChapterStateFailedSourceMissing, reason); err != nil {
+			// MarkChapterFailed transitions the chapter, fails the child artifact, AND enqueues the
+			// failed lifecycle in one transaction — no separate (loss-prone) emit needed.
+			if err := MarkChapterFailed(ctx, chapterID, ChapterStateFailedSourceMissing, reason, nodeID); err != nil {
 				logger.WithError(err).WithFields(fields).Warn("Chapter finalize: terminal-fail mark failed")
 			}
-			emitChapterVodLifecycle(ctx, logger, chapterID, ipcpb.VodLifecycleData_STATUS_FAILED, 0, "", reason)
 			return
 		}
-		if err := RetryChapterFinalize(ctx, chapterID, result.GetError()); err != nil {
+		if err := RetryChapterFinalize(ctx, chapterID, result.GetError(), nodeID); err != nil {
 			logger.WithError(err).WithFields(fields).Warn("Chapter finalize: retry rollback failed")
 		}
 		return
@@ -73,8 +82,18 @@ func handleChapterFinalizeResult(
 
 	outputPath := result.GetOutputPath()
 	playbackHash := chapterPlaybackArtifactHashFromOutputs(result.GetOutputs(), outputPath)
-	if playbackHash == "" {
-		logger.WithFields(fields).Warn("Chapter finalize: no playback artifact hash in result")
+	if playbackHash == "" || outputPath == "" {
+		// A completed chapter result MUST carry BOTH a produced output path and a resolvable
+		// playback hash. A malformed completion is neither silently swallowed (which would strand
+		// the chapter 'finalizing' forever) nor finalized without an origin copy — bounce it to
+		// 'closed' so the queue re-dispatches; finalize_attempts bounds the retries → terminal-fail.
+		logger.WithFields(fields).WithFields(logging.Fields{
+			"has_hash":   playbackHash != "",
+			"has_output": outputPath != "",
+		}).Warn("Chapter finalize: malformed completion (missing hash or output path); bouncing to closed for retry")
+		if err := RetryChapterFinalize(ctx, chapterID, "malformed completion: missing hash or output path", nodeID); err != nil {
+			logger.WithError(err).WithFields(fields).Warn("Chapter finalize: bounce finalizing→closed failed")
+		}
 		return
 	}
 	sizeBytes := result.GetOutputSizeBytes()
@@ -103,37 +122,64 @@ func handleChapterFinalizeResult(
 		}
 	}
 
-	// Update artifact row to reflect the produced MKV — size, format,
-	// move to local/pending so the freeze pipeline picks it up. Mirror
-	// the normal VOD processing update sans the processing_jobs JOIN.
-	if _, dbErr := db.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		   SET status = 'ready',
-		       format = 'mkv',
-		       size_bytes = NULLIF($2, 0)::bigint,
-		       sync_status = 'pending',
-		       storage_location = 'local',
-		       updated_at = NOW()
-		 WHERE artifact_hash = $1
-	`, playbackHash, sizeBytes); dbErr != nil {
-		logger.WithError(dbErr).WithFields(fields).Warn("Chapter finalize: artifact row update failed")
-	} else {
-		projectArtifactSizeToCommodore(ctx, playbackHash, sizeBytes, logger)
+	// The chapter's finalized MKV is an ordinary vod+ artifact; its accepted A/V track set
+	// rides on the completion-validated ProcessingJobResult. Persist it by the resolved playback
+	// artifact_hash alongside readiness, gated on tracks_present (present replaces, empty clears,
+	// absent leaves untouched); the reconciler projects it onto the catalog.
+	tracksPresent := result.GetTracksPresent()
+	tracksJSON, tErr := marshalRecordingTracks(result.GetTracks())
+	if tErr != nil {
+		logger.WithError(tErr).WithFields(fields).Warn("Chapter finalize: failed to marshal tracks; leaving existing summary")
+		tracksPresent = false
+		tracksJSON = "[]"
 	}
 
-	// Origin registration so the chapter VOD is immediately playable on
-	// the node that produced it, and so cross-cluster peer-relay can
-	// serve viewers on other edges before the chapter syncs to S3.
-	// Same hooks as the VOD processing branch — artifact_nodes row +
-	// in-memory state, both stamped role=origin, is_complete=true.
-	if outputPath != "" {
-		if artifactRepo != nil {
-			if err := artifactRepo.RegisterOriginArtifact(ctx, playbackHash, nodeID, outputPath, sizeBytes, true); err != nil {
-				logger.WithError(err).WithFields(fields).Warn("Chapter finalize: origin registration failed")
-			}
+	// Chapter media duration: prefer the measured muxed-output duration from the validated
+	// RecordingEnd (result.media_duration_ms) — it reflects actual playback length. Fall back to
+	// the MKV segment-timeline span (end - start) only when the measured value is absent, since
+	// the span can diverge from playback duration under gaps/discontinuities. 0 leaves the stored
+	// value untouched.
+	chapterDurationMs := result.GetMediaDurationMs()
+	if chapterDurationMs <= 0 && mediaEndMs > mediaStartMs {
+		chapterDurationMs = mediaEndMs - mediaStartMs
+	}
+
+	// The whole chapter finalization is ONE transaction: lock the chapter + its allocated
+	// playback artifact, persist readiness/duration/tracks + vod_metadata + origin (with its
+	// node-copy event) + the finalizing→finalized transition + the completion lifecycle, and
+	// commit together. A chapter is never left half-finalized (artifact ready but chapter row
+	// still 'finalizing', or vice versa). A duplicate/late completion (chapter no longer
+	// 'finalizing') is an ignored no-op; any transient failure rolls the whole tx back and
+	// bounces the chapter finalizing→closed so the queue re-dispatches promptly.
+	resolvedHash, txErr := finalizeChapterArtifactTx(ctx, chapterID, playbackHash, outputPath, nodeID,
+		sizeBytes, segCount, hasGaps, mediaStartMs, mediaEndMs, chapterDurationMs, tracksPresent, tracksJSON,
+		result.GetOutputs(), logger, fields)
+	if txErr != nil {
+		if errors.Is(txErr, errChapterNotInFinalizing) {
+			logger.WithFields(fields).Info("Chapter finalize: chapter not in finalizing; ignoring completion")
+			return
 		}
+		if errors.Is(txErr, errChapterFinalizeNodeMismatch) {
+			logger.WithFields(fields).Warn("Chapter finalize: reporting node is not the assigned finalize node; ignoring completion")
+			return
+		}
+		logger.WithError(txErr).WithFields(fields).Warn("Chapter finalize: atomic finalize failed; bouncing chapter to closed for retry")
+		if rbErr := RetryChapterFinalize(ctx, chapterID, "finalize persist failed: "+txErr.Error(), nodeID); rbErr != nil {
+			logger.WithError(rbErr).WithFields(fields).Warn("Chapter finalize: bounce finalizing→closed failed")
+		}
+		return
+	}
+	logger.WithFields(fields).WithFields(logging.Fields{
+		"artifact_hash": resolvedHash,
+		"segments":      segCount,
+		"has_gaps":      hasGaps,
+	}).Info("Chapter finalized (state=finalized)")
+
+	// After commit: in-memory placement so the chapter VOD is immediately servable on the node
+	// that produced it (origin, is_complete=true) — best-effort, not part of durability.
+	if outputPath != "" {
 		state.DefaultManager().AddNodeArtifact(nodeID, &ipcpb.StoredArtifact{
-			ClipHash:   playbackHash,
+			ClipHash:   resolvedHash,
 			FilePath:   outputPath,
 			SizeBytes:  uint64(sizeBytes),
 			CreatedAt:  time.Now().Unix(),
@@ -141,25 +187,8 @@ func handleChapterFinalizeResult(
 			Role:       ipcpb.StoredArtifact_ROLE_ORIGIN,
 			IsComplete: true,
 		})
+		NotifyArtifactMapUpdated(nodeID)
 	}
-
-	if err := MarkChapterFinalized(ctx, chapterID, segCount, hasGaps, mediaStartMs, mediaEndMs); err != nil {
-		logger.WithError(err).WithFields(fields).Warn("Chapter finalize: state update failed")
-		return
-	}
-	logger.WithFields(fields).WithFields(logging.Fields{
-		"artifact_hash": playbackHash,
-		"segments":      segCount,
-		"has_gaps":      hasGaps,
-	}).Info("Chapter finalized (state=finalized)")
-
-	// Populate vod_metadata from Helmsman's stream-info outputs so the
-	// chapter artifact behaves like any other VOD on the player side
-	// (duration, resolution, codecs, fps). Mirrors VodPipeline's
-	// updateVodMetadata without the processing_jobs lookup it does
-	// first (chapter jobs are not in that table).
-	updateChapterVodMetadata(ctx, logger, fields, playbackHash, result.GetOutputs())
-	emitChapterVodLifecycle(ctx, logger, chapterID, ipcpb.VodLifecycleData_STATUS_COMPLETED, sizeBytes, outputPath, "")
 
 	// DTSH generation runs on the Helmsman side immediately after
 	// PUSH_END (api_sidecar/internal/handlers/processing_chapter.go).
@@ -169,42 +198,163 @@ func handleChapterFinalizeResult(
 	// No further server-side fan-out is needed here.
 }
 
-func emitChapterVodLifecycle(
+// errChapterNotInFinalizing signals that the locked chapter was not in 'finalizing' (a
+// duplicate/late completion or a concurrent worker already advanced it). The caller treats
+// this as an ignored no-op — NOT a transient failure — so it does not bounce the chapter.
+var errChapterNotInFinalizing = errors.New("chapter not in finalizing state")
+
+// errChapterFinalizeNodeMismatch signals that the reporting node is not the one this chapter's finalize
+// attempt is currently dispatched to (read under the FOR UPDATE lock). Treated as an ignored no-op.
+var errChapterFinalizeNodeMismatch = errors.New("chapter finalize reporting node mismatch")
+
+// finalizeChapterArtifactTx performs the atomic chapter-finalization transaction and returns
+// the resolved playback artifact hash. It locks the chapter and its allocated artifact
+// FOR UPDATE, requires the chapter to be in 'finalizing' (else errChapterNotInFinalizing),
+// persists artifact readiness + vod_metadata + origin placement, transitions the chapter via
+// MarkChapterFinalizedTx (requiring exactly one row), enqueues the completion lifecycle, and
+// commits. Any error rolls the whole transaction back.
+func finalizeChapterArtifactTx(
 	ctx context.Context,
-	logger logging.Logger,
-	chapterID string,
-	status ipcpb.VodLifecycleData_Status,
+	chapterID, playbackHash, outputPath, nodeID string,
 	sizeBytes int64,
-	filePath string,
-	errMsg string,
-) {
-	artifactHash, tenantID, lookupErr := chapterArtifactLifecycleIdentity(ctx, chapterID)
-	if lookupErr != nil {
-		logger.WithError(lookupErr).WithField("chapter_id", chapterID).Warn("Chapter finalize: lifecycle identity lookup failed")
-		return
+	segCount int32,
+	hasGaps bool,
+	mediaStartMs, mediaEndMs, chapterDurationMs int64,
+	tracksPresent bool,
+	tracksJSON string,
+	outputs map[string]string,
+	logger logging.Logger,
+	fields logging.Fields,
+) (string, error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			tx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
+		}
+	}()
+
+	// Lock the chapter row and its allocated playback artifact together, and confirm BOTH the
+	// chapter is still 'finalizing' AND the artifact is still 'finalizing' (its allocated state)
+	// AND the parent DVR isn't deleted. A late completion arriving after a parent-DVR delete
+	// cascade (which soft-deletes the child artifact) must NOT resurrect it to 'ready' — those
+	// guards make it an ignored no-op instead. A missing row (chapter/artifact gone) is transient.
+	var chapterState, storedHash, tenantID, artifactStatus, parentStatus, assignedNode string
+	lockErr := tx.QueryRowContext(ctx, `
+		SELECT c.state, COALESCE(c.playback_artifact_hash, ''), a.tenant_id::text, a.status,
+		       COALESCE(p.status, ''), COALESCE(c.finalize_node_id, '')
+		  FROM foghorn.dvr_chapters c
+		  JOIN foghorn.artifacts a ON a.artifact_hash = c.playback_artifact_hash
+		  LEFT JOIN foghorn.artifacts p ON p.artifact_hash = c.artifact_hash AND p.artifact_type = 'dvr'
+		 WHERE c.chapter_id = $1
+		 FOR UPDATE OF c, a`, chapterID).Scan(&chapterState, &storedHash, &tenantID, &artifactStatus, &parentStatus, &assignedNode)
+	if lockErr != nil {
+		return "", lockErr
+	}
+	if chapterState != ChapterStateFinalizing {
+		return "", errChapterNotInFinalizing
+	}
+	// Reporting-node authorization, read UNDER the FOR UPDATE lock so a concurrent stale-finalize reclaim
+	// cannot reassign finalize_node_id between the check and the finalize. Only the node this attempt is
+	// currently dispatched to may finalize it (and become its recorded origin). A mismatch/unset assignment is
+	// an ignored no-op — not a retry — so it does not bounce a legitimately-reassigned attempt.
+	if assignedNode == "" || assignedNode != nodeID {
+		return "", errChapterFinalizeNodeMismatch
+	}
+	if artifactStatus != "finalizing" {
+		// The allocated artifact is no longer awaiting finalization (deleted by a parent cascade,
+		// or already finalized/failed). Do NOT resurrect it — ignored no-op.
+		return "", errChapterNotInFinalizing
+	}
+	if parentStatus == "deleted" {
+		// Parent DVR was deleted; the chapter must not finalize into a live artifact.
+		return "", errChapterNotInFinalizing
+	}
+	resolvedHash := storedHash
+	if resolvedHash == "" {
+		resolvedHash = playbackHash
+	}
+	if resolvedHash != playbackHash {
+		logger.WithFields(fields).WithFields(logging.Fields{
+			"allocated_hash": resolvedHash,
+			"result_hash":    playbackHash,
+		}).Warn("Chapter finalize: result artifact hash differs from allocated; using allocated")
+	}
+
+	// Artifact row → reflect the produced MKV (size, format, duration, tracks) and move to
+	// local/pending. Guard on status='finalizing' + require exactly one row so a concurrent
+	// delete that slipped between the lock read and this write cannot be clobbered.
+	artRes, dbErr := tx.ExecContext(ctx, `
+		UPDATE foghorn.artifacts
+		   SET status = 'ready',
+		       format = 'mkv',
+		       size_bytes = NULLIF($2, 0)::bigint,
+		       tracks = CASE WHEN $5::boolean THEN $3::jsonb ELSE tracks END,
+		       duration_ms = CASE WHEN $4::bigint > 0 THEN $4::bigint ELSE duration_ms END,
+		       duration_seconds = CASE WHEN $4::bigint > 0 THEN ($4::bigint / 1000)::int ELSE duration_seconds END,
+		       sync_status = 'pending',
+		       storage_location = 'local',
+		       updated_at = NOW()
+		 WHERE artifact_hash = $1 AND status = 'finalizing'
+	`, resolvedHash, sizeBytes, tracksJSON, chapterDurationMs, tracksPresent)
+	if dbErr != nil {
+		return "", dbErr
+	}
+	if affected, _ := artRes.RowsAffected(); affected != 1 { //nolint:errcheck // pq populates RowsAffected on UPDATE
+		return "", errChapterNotInFinalizing
+	}
+
+	// vod_metadata (codecs/resolution/fps) from Helmsman stream info — same tx.
+	if metaErr := updateChapterVodMetadataTx(ctx, tx, resolvedHash, outputs); metaErr != nil {
+		return "", metaErr
+	}
+
+	// Origin placement + node-copy event — same tx. This node wrote the canonical MKV.
+	if outputPath != "" {
+		if regErr := RegisterOriginArtifactTx(ctx, tx, resolvedHash, nodeID, outputPath, sizeBytes, true); regErr != nil {
+			return "", regErr
+		}
+	}
+
+	// Chapter transition. We hold the chapter lock and confirmed 'finalizing', so exactly one
+	// row must transition; anything else is an anomaly that must not commit.
+	rows, finErr := MarkChapterFinalizedTx(ctx, tx, chapterID, segCount, hasGaps, mediaStartMs, mediaEndMs)
+	if finErr != nil {
+		return "", finErr
+	}
+	if rows != 1 {
+		return "", fmt.Errorf("chapter finalize transitioned %d rows, want exactly 1", rows)
+	}
+
+	// Completion lifecycle in the same tx (durable outbox).
+	vodData := &ipcpb.VodLifecycleData{
+		Status:  ipcpb.VodLifecycleData_STATUS_COMPLETED,
+		VodHash: resolvedHash,
+	}
+	if tenantID != "" {
+		vodData.TenantId = &tenantID
 	}
 	now := time.Now().Unix()
-	data := &ipcpb.VodLifecycleData{
-		Status:      status,
-		VodHash:     artifactHash,
-		TenantId:    &tenantID,
-		CompletedAt: &now,
-	}
-	if status == ipcpb.VodLifecycleData_STATUS_PROCESSING {
-		data.StartedAt = &now
-		data.CompletedAt = nil
-	}
+	vodData.CompletedAt = &now
 	if sizeBytes > 0 {
 		u := uint64(sizeBytes)
-		data.SizeBytes = &u
+		vodData.SizeBytes = &u
 	}
-	if filePath != "" {
-		data.FilePath = &filePath
+	if outputPath != "" {
+		vodData.FilePath = &outputPath
 	}
-	if errMsg != "" {
-		data.Error = &errMsg
+	if enqErr := artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData); enqErr != nil {
+		return "", enqErr
 	}
-	artifactoutbox.EnqueueVodLifecycleLogged(data)
+
+	if commitErr := tx.Commit(); commitErr != nil {
+		return "", commitErr
+	}
+	committed = true
+	return resolvedHash, nil
 }
 
 func chapterArtifactLifecycleIdentity(ctx context.Context, chapterID string) (artifactHash, tenantID string, err error) {
@@ -221,20 +371,20 @@ func chapterArtifactLifecycleIdentity(ctx context.Context, chapterID string) (ar
 	return artifactHash, tenantID, err
 }
 
-// updateChapterVodMetadata mirrors VodPipeline.updateVodMetadata's
-// schema fill without taking a dependency on the pipeline (chapter
-// jobs live outside foghorn.processing_jobs).
-func updateChapterVodMetadata(
+// updateChapterVodMetadataTx mirrors VodPipeline.updateVodMetadata's schema fill on the
+// caller's transaction (chapter jobs live outside foghorn.processing_jobs). An empty outputs
+// map is a no-op success — the finalize tx must still commit for a chapter that reported no
+// stream-info metadata.
+func updateChapterVodMetadataTx(
 	ctx context.Context,
-	logger logging.Logger,
-	fields logging.Fields,
+	tx *sql.Tx,
 	artifactHash string,
 	outputs map[string]string,
-) {
+) error {
 	if len(outputs) == 0 {
-		return
+		return nil
 	}
-	_, err := db.ExecContext(ctx, `
+	_, err := tx.ExecContext(ctx, `
 		INSERT INTO foghorn.vod_metadata (
 			artifact_hash,
 			duration_ms, resolution, video_codec, audio_codec,
@@ -272,8 +422,9 @@ func updateChapterVodMetadata(
 		nullIfEmptyChapterMeta(outputs["audio_sample_rate"]),
 	)
 	if err != nil {
-		logger.WithError(err).WithFields(fields).Warn("Chapter finalize: vod_metadata upsert failed")
+		return fmt.Errorf("chapter vod_metadata upsert: %w", err)
 	}
+	return nil
 }
 
 func nullIfEmptyChapterMeta(s string) *string {

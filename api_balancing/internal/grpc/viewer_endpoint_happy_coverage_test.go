@@ -212,7 +212,7 @@ func seedStorageArtifactViewerHappy(t *testing.T, sm *state.StreamStateManager, 
 	sm.SetProbeVerified(nodeID, true)
 	sm.SetNodeArtifacts(nodeID, []*ipcpb.StoredArtifact{
 		{ClipHash: clipHash, FilePath: "/data/" + clipHash + ".mp4", StreamName: "vod+art"},
-	})
+	}, state.ArtifactReportOrder{Fence: 1, Seq: 1})
 }
 
 // Invariant: a content_id that Commodore resolves to a LIVE stream dispatches to

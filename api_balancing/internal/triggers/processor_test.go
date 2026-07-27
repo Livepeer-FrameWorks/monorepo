@@ -456,12 +456,19 @@ func TestHandleNodeLifecycleUpdate_TriggersImmediateReconcileOnlyOnArtifactMapCh
 
 	p := &Processor{logger: logging.NewLogger()}
 
+	// Each report carries the versioned-complete contract (fence + a strictly-increasing report_seq);
+	// an unversioned report is now rejected, and the seq must grow so the acceptance gate keeps each
+	// successive report.
+	var seq int64
 	newTrigger := func(artifacts ...*ipcpb.StoredArtifact) *ipcpb.MistTrigger {
+		seq++
 		return &ipcpb.MistTrigger{
 			TriggerPayload: &ipcpb.MistTrigger_NodeLifecycleUpdate{
 				NodeLifecycleUpdate: &ipcpb.NodeLifecycleUpdate{
-					NodeId:    "node-1",
-					Artifacts: artifacts,
+					NodeId:                   "node-1",
+					Artifacts:                artifacts,
+					ArtifactsConnectionFence: 1,
+					ArtifactsReportSeq:       seq,
 				},
 			},
 		}

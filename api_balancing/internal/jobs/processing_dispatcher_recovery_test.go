@@ -14,11 +14,10 @@ func newRecoveryDispatcher(t *testing.T, db *sql.DB) *ProcessingDispatcher {
 	return NewProcessingDispatcher(ProcessingDispatcherConfig{DB: db, Logger: logging.NewLogger()})
 }
 
-// TestRecoverStaleFailsExhaustedArtifacts pins the terminal half of stale
-// recovery: jobs returned by the fail-CTE are marked failed per artifact type
-// (clip and vod each get an artifacts UPDATE carrying the exhaustion reason),
-// and every exhausted job with an artifact fires the onJobExhausted reconciler
-// so the artifact can fall back to a raw/served state.
+// TestRecoverStaleFailsExhaustedArtifacts pins the terminal half of stale recovery: each
+// exhausted candidate is failed in its OWN transaction — the job-failed CTE, the artifact-failed
+// UPDATE, and the failure lifecycle outbox insert all commit together (BEGIN…COMMIT per job), so
+// a failed job is never left with a live artifact.
 func TestRecoverStaleFailsExhaustedArtifacts(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -30,43 +29,41 @@ func TestRecoverStaleFailsExhaustedArtifacts(t *testing.T) {
 	mock.ExpectExec("WITH requeued AS").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	// 2. fail CTE returns the exhausted jobs (clip then vod).
-	mock.ExpectQuery("WITH failed AS").
-		WillReturnRows(sqlmock.NewRows([]string{
-			"job_id", "artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name",
-		}).
-			AddRow("job-clip", "hash-clip", "clip", "tenant-1", "stream-1", "live+demo").
-			AddRow("job-vod", "hash-vod", "vod", "tenant-2", "", ""))
+	// 2. candidate enumeration (read-only) returns the exhausted job ids.
+	mock.ExpectQuery(`SELECT job_id\s+FROM foghorn.processing_jobs`).
+		WillReturnRows(sqlmock.NewRows([]string{"job_id"}).AddRow("job-clip").AddRow("job-vod"))
 
-	// 3. clip artifact marked failed with the exhaustion reason.
+	// 3. job-clip: atomic fail tx.
+	mock.ExpectBegin()
+	mock.ExpectQuery(`WITH failed AS`).
+		WithArgs("job-clip", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "error_message"}).
+			AddRow("hash-clip", "clip", "tenant-1", "stream-1", "live+demo", "max retries exceeded"))
 	mock.ExpectExec("UPDATE foghorn.artifacts").
-		WithArgs("hash-clip", "tenant-1", "max retries exceeded").
+		WithArgs("hash-clip", "max retries exceeded", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
-	// 4. vod artifact marked failed.
+	// 4. job-vod: atomic fail tx.
+	mock.ExpectBegin()
+	mock.ExpectQuery(`WITH failed AS`).
+		WithArgs("job-vod", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "error_message"}).
+			AddRow("hash-vod", "vod", "tenant-2", "", "", "max retries exceeded"))
 	mock.ExpectExec("UPDATE foghorn.artifacts").
-		WithArgs("hash-vod", "tenant-2", "max retries exceeded").
+		WithArgs("hash-vod", "max retries exceeded", "tenant-2").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
-	var exhausted [][2]string
 	d := newRecoveryDispatcher(t, db)
-	d.SetJobExhaustedHandler(func(_ context.Context, jobID, artifactHash string) {
-		exhausted = append(exhausted, [2]string{jobID, artifactHash})
-	})
-
 	d.recoverStale()
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
-	}
-	want := [][2]string{{"job-clip", "hash-clip"}, {"job-vod", "hash-vod"}}
-	if len(exhausted) != len(want) {
-		t.Fatalf("onJobExhausted calls = %v, want %v", exhausted, want)
-	}
-	for i, w := range want {
-		if exhausted[i] != w {
-			t.Fatalf("onJobExhausted[%d] = %v, want %v", i, exhausted[i], w)
-		}
 	}
 }
 

@@ -2,9 +2,10 @@ package jobs
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"strings"
 	"sync"
 	"time"
 )
@@ -17,6 +18,7 @@ type mockReconcilerS3Client struct {
 	buildClipS3KeyFn       func(tenantID, streamName, clipHash, format string) string
 	buildDVRS3KeyFn        func(tenantID, internalName, dvrHash string) string
 	buildVodS3KeyFn        func(tenantID, artifactHash, filename string) string
+	parseS3URLFn           func(s3URL string) (string, error)
 
 	presignedPUTCalls []presignedPUTCall
 	clipKeyCalls      []clipKeyCall
@@ -46,6 +48,20 @@ func (m *mockReconcilerS3Client) GeneratePresignedPUT(key string, expiry time.Du
 		return m.generatePresignedPUTFn(key, expiry)
 	}
 	return "https://s3.example.com/presigned/" + key, nil
+}
+
+func (m *mockReconcilerS3Client) Delete(_ context.Context, _ string) error { return nil }
+
+func (m *mockReconcilerS3Client) ParseLocalS3URL(s3URL string) (string, error) {
+	if m.parseS3URLFn != nil {
+		return m.parseS3URLFn(s3URL)
+	}
+	// Default: ONLY the conventional test bucket "bucket" is local; a foreign bucket errors (mirrors the real
+	// client's bucket guard, so tests can exercise the remote-row skip).
+	if strings.HasPrefix(s3URL, "s3://bucket/") {
+		return strings.TrimPrefix(s3URL, "s3://bucket/"), nil
+	}
+	return "", errors.New("not a local s3 URL: " + s3URL)
 }
 
 func (m *mockReconcilerS3Client) BuildClipS3Key(tenantID, streamName, clipHash, format string) string {
@@ -86,15 +102,12 @@ type mockCommodoreClient struct {
 	resolveDVRHashFn  func(ctx context.Context, hash string) (*commodorepb.ResolveDVRHashResponse, error)
 	resolveVodHashFn  func(ctx context.Context, hash string) (*commodorepb.ResolveVodHashResponse, error)
 
-	clipCalls           []string
-	dvrCalls            []string
-	vodCalls            []string
-	storageProjection   []string
-	sizeProjection      []string
-	thumbnailProjection []string
-	updateStorageErr    error
-	updateSizeErr       error
-	markThumbnailsErr   error
+	clipCalls      []string
+	dvrCalls       []string
+	vodCalls       []string
+	snapshotCalls  []*commodorepb.UpdateArtifactCatalogSnapshotRequest
+	snapshotErr    error
+	snapshotRespFn func(req *commodorepb.UpdateArtifactCatalogSnapshotRequest) (*commodorepb.UpdateArtifactCatalogSnapshotResponse, error)
 }
 
 func (m *mockCommodoreClient) ResolveClipHash(ctx context.Context, hash string) (*commodorepb.ResolveClipHashResponse, error) {
@@ -127,34 +140,19 @@ func (m *mockCommodoreClient) ResolveVodHash(ctx context.Context, hash string) (
 	return &commodorepb.ResolveVodHashResponse{Found: false}, nil
 }
 
-func (m *mockCommodoreClient) UpdateArtifactStorageCluster(_ context.Context, tenantID string, assetType commodorepb.ArtifactAssetType, assetKey, storageClusterID string) (*commodorepb.UpdateArtifactStorageClusterResponse, error) {
+// UpdateArtifactCatalogSnapshot records the snapshot and, by default, confirms coverage by
+// echoing the requested source revision back as current_revision (the found+covered case).
+func (m *mockCommodoreClient) UpdateArtifactCatalogSnapshot(_ context.Context, req *commodorepb.UpdateArtifactCatalogSnapshotRequest) (*commodorepb.UpdateArtifactCatalogSnapshotResponse, error) {
 	m.mu.Lock()
-	m.storageProjection = append(m.storageProjection, tenantID+"|"+assetType.String()+"|"+assetKey+"|"+storageClusterID)
+	m.snapshotCalls = append(m.snapshotCalls, req)
 	m.mu.Unlock()
-	if m.updateStorageErr != nil {
-		return nil, m.updateStorageErr
+	if m.snapshotErr != nil {
+		return nil, m.snapshotErr
 	}
-	return &commodorepb.UpdateArtifactStorageClusterResponse{Updated: true}, nil
-}
-
-func (m *mockCommodoreClient) UpdateArtifactSize(_ context.Context, tenantID string, assetType commodorepb.ArtifactAssetType, assetKey string, sizeBytes int64) (*commodorepb.UpdateArtifactSizeResponse, error) {
-	m.mu.Lock()
-	m.sizeProjection = append(m.sizeProjection, fmt.Sprintf("%s|%s|%s|%d", tenantID, assetType.String(), assetKey, sizeBytes))
-	m.mu.Unlock()
-	if m.updateSizeErr != nil {
-		return nil, m.updateSizeErr
+	if m.snapshotRespFn != nil {
+		return m.snapshotRespFn(req)
 	}
-	return &commodorepb.UpdateArtifactSizeResponse{Updated: true}, nil
-}
-
-func (m *mockCommodoreClient) MarkArtifactThumbnailsReady(_ context.Context, tenantID string, assetType commodorepb.ArtifactAssetType, assetKey, storageClusterID string) (*commodorepb.MarkArtifactThumbnailsReadyResponse, error) {
-	m.mu.Lock()
-	m.thumbnailProjection = append(m.thumbnailProjection, tenantID+"|"+assetType.String()+"|"+assetKey+"|"+storageClusterID)
-	m.mu.Unlock()
-	if m.markThumbnailsErr != nil {
-		return nil, m.markThumbnailsErr
-	}
-	return &commodorepb.MarkArtifactThumbnailsReadyResponse{Updated: true}, nil
+	return &commodorepb.UpdateArtifactCatalogSnapshotResponse{Found: true, CurrentRevision: req.GetSourceRevision()}, nil
 }
 
 // freezeCapture records calls to SendFreeze for assertion.

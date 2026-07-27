@@ -155,7 +155,7 @@ func seedArtifactEdgeArms(t *testing.T, sm *state.StreamStateManager, nodeID, ho
 	sm.SetNodeInfo(nodeID, baseURL, true, &lat, &lon, "loc", "", outputs)
 	sm.SetNodeArtifacts(nodeID, []*ipcpb.StoredArtifact{
 		{ClipHash: clipHash, FilePath: "/data/" + clipHash + ".mp4", StreamName: "vod+art"},
-	})
+	}, state.ArtifactReportOrder{Fence: 1, Seq: 1})
 }
 
 // playbackCtxArms builds a gin context for HandleGenericViewerPlayback by

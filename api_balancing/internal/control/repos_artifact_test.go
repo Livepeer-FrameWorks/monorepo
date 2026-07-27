@@ -56,14 +56,20 @@ func TestUpsertArtifacts_InsertsWithFKGuard(t *testing.T) {
 	mock.ExpectExec("UPDATE foghorn.artifacts SET").
 		WithArgs("hash-1", "", int64(0), int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	// INSERT with WHERE EXISTS FK guard
-	mock.ExpectExec("INSERT INTO foghorn.artifact_nodes.*WHERE EXISTS.*SELECT 1 FROM foghorn.artifacts").
+	// Prior read locks the row and drives transition detection (not present yet).
+	mock.ExpectQuery("SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes.*FOR UPDATE").
+		WithArgs("hash-1", "node-1").
+		WillReturnError(sql.ErrNoRows)
+	// INSERT with WHERE EXISTS FK guard, RETURNING the inserted flag + row role/completeness.
+	mock.ExpectQuery("INSERT INTO foghorn.artifact_nodes.*WHERE EXISTS.*SELECT 1 FROM foghorn.artifacts.*RETURNING").
 		WithArgs("hash-1", "node-1", "/data/clip.mp4", int64(1024), int64(0), int64(0), int64(0), int64(0), "cache", false).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	// Mark stale
-	mock.ExpectExec("UPDATE foghorn.artifact_nodes.*SET is_orphaned = true").
+		WillReturnRows(sqlmock.NewRows([]string{"inserted", "role", "is_complete"}).AddRow(true, "cache", false))
+	// Newly present → durable GAINED in the same transaction.
+	expectNodeCopyOutbox(mock, "hash-1")
+	// Mark stale (no rows orphaned → no LOST).
+	mock.ExpectQuery("UPDATE foghorn.artifact_nodes.*SET is_orphaned = true.*RETURNING artifact_hash, role").
 		WithArgs("node-1").
-		WillReturnResult(sqlmock.NewResult(0, 0))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "role"}))
 	mock.ExpectCommit()
 
 	err := repo.UpsertArtifacts(context.Background(), "node-1", []state.ArtifactRecord{
@@ -90,12 +96,16 @@ func TestUpsertArtifacts_RetriesDeadlock(t *testing.T) {
 	mock.ExpectExec("UPDATE foghorn.artifacts SET").
 		WithArgs("hash-1", "", int64(0), int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("INSERT INTO foghorn.artifact_nodes.*WHERE EXISTS.*SELECT 1 FROM foghorn.artifacts").
+	mock.ExpectQuery("SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes.*FOR UPDATE").
+		WithArgs("hash-1", "node-1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("INSERT INTO foghorn.artifact_nodes.*WHERE EXISTS.*SELECT 1 FROM foghorn.artifacts.*RETURNING").
 		WithArgs("hash-1", "node-1", "", int64(0), int64(0), int64(0), int64(0), int64(0), "cache", false).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("UPDATE foghorn.artifact_nodes.*SET is_orphaned = true").
+		WillReturnRows(sqlmock.NewRows([]string{"inserted", "role", "is_complete"}).AddRow(true, "cache", false))
+	expectNodeCopyOutbox(mock, "hash-1")
+	mock.ExpectQuery("UPDATE foghorn.artifact_nodes.*SET is_orphaned = true.*RETURNING artifact_hash, role").
 		WithArgs("node-1").
-		WillReturnResult(sqlmock.NewResult(0, 0))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "role"}))
 	mock.ExpectCommit()
 
 	err := repo.UpsertArtifacts(context.Background(), "node-1", []state.ArtifactRecord{
@@ -116,7 +126,10 @@ func TestUpsertArtifacts_RollbackOnError(t *testing.T) {
 	mock.ExpectExec("UPDATE foghorn.artifacts SET").
 		WithArgs("hash-1", "", int64(0), int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("INSERT INTO foghorn.artifact_nodes").
+	mock.ExpectQuery("SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes.*FOR UPDATE").
+		WithArgs("hash-1", "node-1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("INSERT INTO foghorn.artifact_nodes").
 		WithArgs("hash-1", "node-1", "", int64(0), int64(0), int64(0), int64(0), int64(0), "cache", false).
 		WillReturnError(fmt.Errorf("FK violation"))
 	mock.ExpectRollback()
@@ -145,6 +158,22 @@ func TestSetSyncStatus_Updates(t *testing.T) {
 	}
 }
 
+// An empty s3URL must PRESERVE the stored value (COALESCE), never clear durable attribution.
+func TestSetSyncStatus_EmptyURLPreservesExisting(t *testing.T) {
+	repo, mock := setupRepoTest(t)
+
+	mock.ExpectExec(`UPDATE foghorn.artifacts.*SET sync_status = 'synced',\s+s3_url = COALESCE\(NULLIF\(\$2, ''\), s3_url\)`).
+		WithArgs("hash-1", "").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if err := repo.SetSyncStatus(context.Background(), "hash-1", "synced", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSetSyncStatus_NilDB(t *testing.T) {
 	prevDB := db
 	db = nil
@@ -160,12 +189,21 @@ func TestSetSyncStatus_NilDB(t *testing.T) {
 func TestAddCachedNode(t *testing.T) {
 	repo, mock := setupRepoTest(t)
 
-	mock.ExpectExec("INSERT INTO foghorn.artifact_nodes.*ON CONFLICT.*DO UPDATE").
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes.*FOR UPDATE").
 		WithArgs("hash-1", "node-1").
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("INSERT INTO foghorn.artifact_nodes.*ON CONFLICT.*DO UPDATE.*RETURNING").
+		WithArgs("hash-1", "node-1", "", int64(0)).
+		WillReturnRows(sqlmock.NewRows([]string{"inserted", "size_bytes"}).AddRow(true, nil))
+	expectNodeCopyOutbox(mock, "hash-1")
+	mock.ExpectCommit()
 
 	err := repo.AddCachedNode(context.Background(), "hash-1", "node-1")
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -173,12 +211,66 @@ func TestAddCachedNode(t *testing.T) {
 func TestAddCachedNodeWithPath(t *testing.T) {
 	repo, mock := setupRepoTest(t)
 
-	mock.ExpectExec("INSERT INTO foghorn.artifact_nodes.*file_path.*size_bytes").
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes.*FOR UPDATE").
+		WithArgs("hash-1", "node-1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("INSERT INTO foghorn.artifact_nodes.*file_path.*size_bytes.*RETURNING").
 		WithArgs("hash-1", "node-1", "/data/clip.mp4", int64(2048)).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WillReturnRows(sqlmock.NewRows([]string{"inserted", "size_bytes"}).AddRow(true, int64(2048)))
+	expectNodeCopyOutbox(mock, "hash-1")
+	mock.ExpectCommit()
 
 	err := repo.AddCachedNodeWithPath(context.Background(), "hash-1", "node-1", "/data/clip.mp4", 2048)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A STALE whole-node orphan must be dropped: the atomic (connection_fence, seq) CAS finds a newer
+// pair already stored (RETURNING no row), so the delayed report from a superseded connection can't
+// orphan copies a newer report restored.
+func TestMarkNodeArtifactsOrphaned_StaleReportRejected(t *testing.T) {
+	repo, mock := setupRepoTest(t)
+
+	mock.ExpectBegin()
+	// CAS: (fence 5, seq 90) loses to the stored pair → no row.
+	mock.ExpectQuery(`INSERT INTO foghorn.node_artifact_report_watermark AS w .* ON CONFLICT .* WHERE \(w.connection_fence, w.seq\) < \(EXCLUDED.connection_fence, EXCLUDED.seq\)\s+RETURNING connection_fence`).
+		WithArgs("node-1", int64(5), int64(90)).
+		WillReturnError(sql.ErrNoRows)
+	// No orphan UPDATE — the stale report is dropped and the tx rolls back.
+	mock.ExpectRollback()
+
+	if err := repo.MarkNodeArtifactsOrphaned(context.Background(), "node-1", 0, 5, 90); err != nil {
+		t.Fatalf("stale report must be a no-op, got: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A FRESH orphan ((fence, seq) that beats the stored pair) applies via the CAS and proceeds.
+func TestMarkNodeArtifactsOrphaned_FreshReportAppliesAndAdvancesWatermark(t *testing.T) {
+	repo, mock := setupRepoTest(t)
+
+	mock.ExpectBegin()
+	// CAS applies (RETURNING the fence).
+	mock.ExpectQuery(`INSERT INTO foghorn.node_artifact_report_watermark AS w .* ON CONFLICT .* WHERE \(w.connection_fence, w.seq\) < \(EXCLUDED.connection_fence, EXCLUDED.seq\)\s+RETURNING connection_fence`).
+		WithArgs("node-1", int64(8), int64(90)).
+		WillReturnRows(sqlmock.NewRows([]string{"connection_fence"}).AddRow(int64(8)))
+	mock.ExpectQuery("UPDATE foghorn.artifact_nodes.*SET is_orphaned = true.*WHERE node_id.*AND is_orphaned = false.*RETURNING artifact_hash, role").
+		WithArgs("node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "role"}).AddRow("hash-1", "cache"))
+	expectNodeCopyLostOutbox(mock, "hash-1")
+	mock.ExpectCommit()
+
+	if err := repo.MarkNodeArtifactsOrphaned(context.Background(), "node-1", 0, 8, 90); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -186,11 +278,15 @@ func TestAddCachedNodeWithPath(t *testing.T) {
 func TestMarkNodeArtifactsOrphaned(t *testing.T) {
 	repo, mock := setupRepoTest(t)
 
-	mock.ExpectExec("UPDATE foghorn.artifact_nodes.*SET is_orphaned = true.*WHERE node_id.*AND is_orphaned = false").
+	mock.ExpectBegin()
+	mock.ExpectQuery("UPDATE foghorn.artifact_nodes.*SET is_orphaned = true.*WHERE node_id.*AND is_orphaned = false.*RETURNING artifact_hash, role").
 		WithArgs("node-1").
-		WillReturnResult(sqlmock.NewResult(0, 5))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "role"}).AddRow("hash-1", "cache"))
+	// Each orphaned copy emits a durable LOST (last_emitted_version reset to 0).
+	expectNodeCopyLostOutbox(mock, "hash-1")
+	mock.ExpectCommit()
 
-	err := repo.MarkNodeArtifactsOrphaned(context.Background(), "node-1")
+	err := repo.MarkNodeArtifactsOrphaned(context.Background(), "node-1", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +301,7 @@ func TestMarkNodeArtifactsOrphaned_NilDB(t *testing.T) {
 	defer func() { db = prevDB }()
 
 	repo := &artifactRepositoryDB{}
-	err := repo.MarkNodeArtifactsOrphaned(context.Background(), "node-1")
+	err := repo.MarkNodeArtifactsOrphaned(context.Background(), "node-1", 0, 0, 0)
 	if !errors.Is(err, sql.ErrConnDone) {
 		t.Fatalf("expected ErrConnDone, got %v", err)
 	}

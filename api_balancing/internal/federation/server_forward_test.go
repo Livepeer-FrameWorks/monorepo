@@ -75,7 +75,7 @@ func (s *artifactCommandSpy) DeleteVodAsset(_ context.Context, _ *sharedpb.Delet
 }
 
 func TestForwardArtifactCommand_RequiresAuth(t *testing.T) {
-	srv := NewFederationServer(FederationServerConfig{Logger: logging.NewLogger()})
+	srv := NewFederationServer(FederationServerConfig{Logger: logging.NewLogger(), AllowFederationMutations: true})
 	_, err := srv.ForwardArtifactCommand(context.Background(), &foghornfederationpb.ForwardArtifactCommandRequest{
 		Command:      "delete_clip",
 		ArtifactHash: "hash-1",
@@ -89,7 +89,7 @@ func TestForwardArtifactCommand_RequiresAuth(t *testing.T) {
 }
 
 func TestForwardArtifactCommand_RequiresArtifactHash(t *testing.T) {
-	srv := NewFederationServer(FederationServerConfig{Logger: logging.NewLogger()})
+	srv := NewFederationServer(FederationServerConfig{Logger: logging.NewLogger(), AllowFederationMutations: true})
 	_, err := srv.ForwardArtifactCommand(serviceAuthContext(), &foghornfederationpb.ForwardArtifactCommandRequest{
 		Command: "delete_clip",
 	})
@@ -102,7 +102,7 @@ func TestForwardArtifactCommand_RequiresArtifactHash(t *testing.T) {
 }
 
 func TestForwardArtifactCommand_RequiresCommand(t *testing.T) {
-	srv := NewFederationServer(FederationServerConfig{Logger: logging.NewLogger()})
+	srv := NewFederationServer(FederationServerConfig{Logger: logging.NewLogger(), AllowFederationMutations: true})
 	_, err := srv.ForwardArtifactCommand(serviceAuthContext(), &foghornfederationpb.ForwardArtifactCommandRequest{
 		ArtifactHash: "hash-1",
 	})
@@ -115,7 +115,7 @@ func TestForwardArtifactCommand_RequiresCommand(t *testing.T) {
 }
 
 func TestForwardArtifactCommand_RequiresTenant(t *testing.T) {
-	srv := NewFederationServer(FederationServerConfig{Logger: logging.NewLogger()})
+	srv := NewFederationServer(FederationServerConfig{Logger: logging.NewLogger(), AllowFederationMutations: true})
 	_, err := srv.ForwardArtifactCommand(serviceAuthContext(), &foghornfederationpb.ForwardArtifactCommandRequest{
 		Command:      "delete_clip",
 		ArtifactHash: "hash-1",
@@ -131,8 +131,9 @@ func TestForwardArtifactCommand_RequiresTenant(t *testing.T) {
 func TestForwardArtifactCommand_DeleteClip_Handled(t *testing.T) {
 	spy := &artifactCommandSpy{}
 	srv := NewFederationServer(FederationServerConfig{
-		Logger:          logging.NewLogger(),
-		ArtifactHandler: spy,
+		Logger:                   logging.NewLogger(),
+		ArtifactHandler:          spy,
+		AllowFederationMutations: true,
 	})
 	resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &foghornfederationpb.ForwardArtifactCommandRequest{
 		Command:      "delete_clip",
@@ -153,8 +154,9 @@ func TestForwardArtifactCommand_DeleteClip_Handled(t *testing.T) {
 func TestForwardArtifactCommand_StopDVR_Handled(t *testing.T) {
 	spy := &artifactCommandSpy{}
 	srv := NewFederationServer(FederationServerConfig{
-		Logger:          logging.NewLogger(),
-		ArtifactHandler: spy,
+		Logger:                   logging.NewLogger(),
+		ArtifactHandler:          spy,
+		AllowFederationMutations: true,
 	})
 	resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &foghornfederationpb.ForwardArtifactCommandRequest{
 		Command:      "stop_dvr",
@@ -176,8 +178,9 @@ func TestForwardArtifactCommand_StopDVR_Handled(t *testing.T) {
 func TestForwardArtifactCommand_DeleteDVR_Handled(t *testing.T) {
 	spy := &artifactCommandSpy{}
 	srv := NewFederationServer(FederationServerConfig{
-		Logger:          logging.NewLogger(),
-		ArtifactHandler: spy,
+		Logger:                   logging.NewLogger(),
+		ArtifactHandler:          spy,
+		AllowFederationMutations: true,
 	})
 	resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &foghornfederationpb.ForwardArtifactCommandRequest{
 		Command:      "delete_dvr",
@@ -198,8 +201,9 @@ func TestForwardArtifactCommand_DeleteDVR_Handled(t *testing.T) {
 func TestForwardArtifactCommand_DeleteVod_Handled(t *testing.T) {
 	spy := &artifactCommandSpy{}
 	srv := NewFederationServer(FederationServerConfig{
-		Logger:          logging.NewLogger(),
-		ArtifactHandler: spy,
+		Logger:                   logging.NewLogger(),
+		ArtifactHandler:          spy,
+		AllowFederationMutations: true,
 	})
 	resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &foghornfederationpb.ForwardArtifactCommandRequest{
 		Command:      "delete_vod",
@@ -220,8 +224,9 @@ func TestForwardArtifactCommand_DeleteVod_Handled(t *testing.T) {
 func TestForwardArtifactCommand_NotFound_ReturnsFalse(t *testing.T) {
 	spy := &artifactCommandSpy{returnNotFound: true}
 	srv := NewFederationServer(FederationServerConfig{
-		Logger:          logging.NewLogger(),
-		ArtifactHandler: spy,
+		Logger:                   logging.NewLogger(),
+		ArtifactHandler:          spy,
+		AllowFederationMutations: true,
 	})
 	resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &foghornfederationpb.ForwardArtifactCommandRequest{
 		Command:      "delete_clip",
@@ -239,8 +244,9 @@ func TestForwardArtifactCommand_NotFound_ReturnsFalse(t *testing.T) {
 func TestForwardArtifactCommand_UnknownCommand(t *testing.T) {
 	spy := &artifactCommandSpy{}
 	srv := NewFederationServer(FederationServerConfig{
-		Logger:          logging.NewLogger(),
-		ArtifactHandler: spy,
+		Logger:                   logging.NewLogger(),
+		ArtifactHandler:          spy,
+		AllowFederationMutations: true,
 	})
 	resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &foghornfederationpb.ForwardArtifactCommandRequest{
 		Command:      "nuke_everything",
@@ -282,8 +288,9 @@ func TestForwardArtifactCommand_NilHandler(t *testing.T) {
 func TestForwardArtifactCommand_StopDVR_StreamIDNotSetWhenEmpty(t *testing.T) {
 	spy := &artifactCommandSpy{}
 	srv := NewFederationServer(FederationServerConfig{
-		Logger:          logging.NewLogger(),
-		ArtifactHandler: spy,
+		Logger:                   logging.NewLogger(),
+		ArtifactHandler:          spy,
+		AllowFederationMutations: true,
 	})
 
 	resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &foghornfederationpb.ForwardArtifactCommandRequest{
@@ -322,9 +329,10 @@ func TestForwardArtifactCommand_StopDVR_StreamIDMismatchRejected(t *testing.T) {
 
 	spy := &artifactCommandSpy{}
 	srv := NewFederationServer(FederationServerConfig{
-		Logger:          logging.NewLogger(),
-		DB:              db,
-		ArtifactHandler: spy,
+		Logger:                   logging.NewLogger(),
+		DB:                       db,
+		ArtifactHandler:          spy,
+		AllowFederationMutations: true,
 	})
 
 	resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &foghornfederationpb.ForwardArtifactCommandRequest{

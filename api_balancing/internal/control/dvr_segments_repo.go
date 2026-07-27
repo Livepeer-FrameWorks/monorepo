@@ -93,6 +93,7 @@ var dvrSegmentRecoveryInsertStatuses = map[string]struct{}{
 // idx_foghorn_dvr_segments_sequence enforces the invariant.
 func InsertDVRSegment(
 	ctx context.Context,
+	tenantID string,
 	artifactHash, segmentName, s3Key string,
 	mediaStartMs, mediaEndMs, durationMs int64,
 	allowRecoveryInsert bool,
@@ -100,7 +101,7 @@ func InsertDVRSegment(
 	var seq int64
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		var err error
-		seq, err = insertDVRSegmentOnce(ctx, artifactHash, segmentName, s3Key, mediaStartMs, mediaEndMs, durationMs, allowRecoveryInsert)
+		seq, err = insertDVRSegmentOnce(ctx, tenantID, artifactHash, segmentName, s3Key, mediaStartMs, mediaEndMs, durationMs, allowRecoveryInsert)
 		return err
 	})
 	return seq, err
@@ -108,6 +109,7 @@ func InsertDVRSegment(
 
 func insertDVRSegmentOnce(
 	ctx context.Context,
+	tenantID string,
 	artifactHash, segmentName, s3Key string,
 	mediaStartMs, mediaEndMs, durationMs int64,
 	allowRecoveryInsert bool,
@@ -121,10 +123,13 @@ func insertDVRSegmentOnce(
 	}
 	defer rollbackQuiet(tx)
 
+	// Lock the tenant-owned parent under (hash, tenant_id): confirming and holding the tenant-owned
+	// artifact row scopes every segment read/write in this transaction to that tenant. A hash not owned
+	// by tenantID resolves to no row and is rejected as not-found.
 	var artifactStatus string
 	if scanErr := tx.QueryRowContext(ctx,
-		`SELECT status FROM foghorn.artifacts WHERE artifact_hash = $1 AND artifact_type = 'dvr' FOR UPDATE`,
-		artifactHash,
+		`SELECT status FROM foghorn.artifacts WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND tenant_id = $2 FOR UPDATE`,
+		artifactHash, tenantID,
 	).Scan(&artifactStatus); scanErr != nil {
 		if errors.Is(scanErr, sql.ErrNoRows) {
 			return 0, fmt.Errorf("dvr artifact %s not found", artifactHash)
@@ -252,7 +257,7 @@ func sameSegmentDifferentClockDomain(existingStartMs, existingEndMs, incomingSta
 // source state for this transition: a wrong file with the same name must not
 // heal a gap. Startup recovery uses RecordDVRSegment's strict timing match to
 // take the row back to 'pending' before this can succeed.
-func MarkDVRSegmentUploaded(ctx context.Context, artifactHash, segmentName string, sizeBytes int64) error {
+func MarkDVRSegmentUploaded(ctx context.Context, tenantID, artifactHash, segmentName string, sizeBytes int64) error {
 	if db == nil {
 		return sql.ErrConnDone
 	}
@@ -264,14 +269,20 @@ func MarkDVRSegmentUploaded(ctx context.Context, artifactHash, segmentName strin
 		 WHERE artifact_hash = $1
 		   AND segment_name = $2
 		   AND status IN ('pending', 'failed_upload')
-	`, artifactHash, segmentName, sizeBytes)
+		   AND EXISTS (
+		       SELECT 1 FROM foghorn.artifacts a
+		        WHERE a.artifact_hash = foghorn.dvr_segments.artifact_hash
+		          AND a.artifact_type = 'dvr'
+		          AND a.tenant_id = $4
+		   )
+	`, artifactHash, segmentName, sizeBytes, tenantID)
 	if err != nil {
 		return fmt.Errorf("mark uploaded: %w", err)
 	}
 	return nil
 }
 
-func DVRSegmentProgress(ctx context.Context, artifactHash string) (segmentCount int64, sizeBytes int64, err error) {
+func DVRSegmentProgress(ctx context.Context, tenantID, artifactHash string) (segmentCount int64, sizeBytes int64, err error) {
 	if db == nil {
 		return 0, 0, sql.ErrConnDone
 	}
@@ -280,7 +291,13 @@ func DVRSegmentProgress(ctx context.Context, artifactHash string) (segmentCount 
 		  FROM foghorn.dvr_segments
 		 WHERE artifact_hash = $1
 		   AND status NOT IN ('lost_local', 'reclaimed')
-	`, artifactHash).Scan(&segmentCount, &sizeBytes)
+		   AND EXISTS (
+		       SELECT 1 FROM foghorn.artifacts a
+		        WHERE a.artifact_hash = foghorn.dvr_segments.artifact_hash
+		          AND a.artifact_type = 'dvr'
+		          AND a.tenant_id = $2
+		   )
+	`, artifactHash, tenantID).Scan(&segmentCount, &sizeBytes)
 	return segmentCount, sizeBytes, err
 }
 
@@ -301,6 +318,7 @@ func DVRSegmentProgress(ctx context.Context, artifactHash string) (segmentCount 
 // timing (e.g. mid-stream eviction of a row that already exists).
 func MarkDVRSegmentDropped(
 	ctx context.Context,
+	tenantID string,
 	artifactHash, segmentName, reason string,
 	wasUploaded bool,
 	mediaStartMs, mediaEndMs, durationMs int64,
@@ -316,7 +334,8 @@ func MarkDVRSegmentDropped(
 	// Only transition from live source states. Excluding the terminal
 	// states (deleted_local, lost_local, reclaimed) keeps a delayed or
 	// duplicate Helmsman ack from regressing a fully reclaimed row back
-	// to deleted_local — reclaim is meant to be idempotent.
+	// to deleted_local — reclaim is meant to be idempotent. The EXISTS
+	// predicate scopes the mutation to the tenant-owned parent DVR.
 	res, err := db.ExecContext(ctx, `
 		UPDATE foghorn.dvr_segments
 		   SET status = $3,
@@ -326,7 +345,13 @@ func MarkDVRSegmentDropped(
 		 WHERE artifact_hash = $1
 		   AND segment_name = $2
 		   AND status NOT IN ('deleted_local', 'lost_local', 'reclaimed')
-	`, artifactHash, segmentName, target, reason, wasUploaded)
+		   AND EXISTS (
+		       SELECT 1 FROM foghorn.artifacts a
+		        WHERE a.artifact_hash = foghorn.dvr_segments.artifact_hash
+		          AND a.artifact_type = 'dvr'
+		          AND a.tenant_id = $6
+		   )
+	`, artifactHash, segmentName, target, reason, wasUploaded, tenantID)
 	if err != nil {
 		return fmt.Errorf("mark dropped: %w", err)
 	}
@@ -357,6 +382,18 @@ func MarkDVRSegmentDropped(
 	// terminal — Foghorn's terminal-state guard fires first, but in-flight
 	// writes may still arrive).
 	err = database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		// Confirm the tenant-owned parent under lock before writing a placeholder segment row, so a
+		// lost_local tombstone is only ever created under the tenant that owns the DVR.
+		var parentStatus string
+		if scanErr := tx.QueryRowContext(ctx,
+			`SELECT status FROM foghorn.artifacts WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND tenant_id = $2 FOR UPDATE`,
+			artifactHash, tenantID,
+		).Scan(&parentStatus); scanErr != nil {
+			if errors.Is(scanErr, sql.ErrNoRows) {
+				return fmt.Errorf("lost_local insert refused: dvr %s not owned by tenant", artifactHash)
+			}
+			return fmt.Errorf("lock parent for lost_local: %w", scanErr)
+		}
 		var nextSeq int64
 		if scanErr := tx.QueryRowContext(ctx,
 			`SELECT COALESCE(MAX(sequence), -1) + 1 FROM foghorn.dvr_segments WHERE artifact_hash = $1`,
@@ -410,6 +447,7 @@ func MarkDVRSegmentDropped(
 // chapter reclaim sweep, not the sidecar.
 func ListEvictableDVRSegments(
 	ctx context.Context,
+	tenantID string,
 	artifactHash string,
 	windowSeconds int,
 	maxCount int,
@@ -433,6 +471,13 @@ func ListEvictableDVRSegments(
 		 WHERE s.artifact_hash = $1
 		   AND s.status = 'uploaded'
 		   AND s.media_end_ms < $2
+		   AND EXISTS (
+		       SELECT 1
+		         FROM foghorn.artifacts a
+		        WHERE a.artifact_hash = s.artifact_hash
+		          AND a.artifact_type = 'dvr'
+		          AND a.tenant_id = $4
+		   )
 		   AND NOT EXISTS (
 		       SELECT 1
 		         FROM foghorn.dvr_chapters c
@@ -443,7 +488,7 @@ func ListEvictableDVRSegments(
 		   )
 		 ORDER BY s.sequence ASC
 		 LIMIT $3
-	`, artifactHash, cutoffMs, maxCount)
+	`, artifactHash, cutoffMs, maxCount, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("list evictable: %w", err)
 	}
@@ -577,7 +622,7 @@ func ListDVRSegmentsForRange(ctx context.Context, artifactHash string, startMs, 
 // what's actually on disk, without ever asking for "all segments for this
 // DVR" — preserves the bounded-operations invariant for unbounded artifact
 // lifetime.
-func LookupDVRSegmentsByName(ctx context.Context, artifactHash string, segmentNames []string) ([]DVRSegmentRow, error) {
+func LookupDVRSegmentsByName(ctx context.Context, tenantID, artifactHash string, segmentNames []string) ([]DVRSegmentRow, error) {
 	if db == nil {
 		return nil, sql.ErrConnDone
 	}
@@ -586,7 +631,7 @@ func LookupDVRSegmentsByName(ctx context.Context, artifactHash string, segmentNa
 	}
 	// Use unnest($2::text[]) for the IN clause so the query plan stays a
 	// single index scan over (artifact_hash, segment_name) regardless of
-	// list size.
+	// list size. The EXISTS predicate scopes the read to the tenant-owned parent DVR.
 	rows, err := db.QueryContext(ctx, `
 		SELECT artifact_hash, segment_name, sequence,
 		       media_start_ms, media_end_ms, duration_ms,
@@ -595,7 +640,13 @@ func LookupDVRSegmentsByName(ctx context.Context, artifactHash string, segmentNa
 		  FROM foghorn.dvr_segments
 		 WHERE artifact_hash = $1
 		   AND segment_name = ANY($2::text[])
-	`, artifactHash, pq.StringArray(segmentNames))
+		   AND EXISTS (
+		       SELECT 1 FROM foghorn.artifacts a
+		        WHERE a.artifact_hash = foghorn.dvr_segments.artifact_hash
+		          AND a.artifact_type = 'dvr'
+		          AND a.tenant_id = $3
+		   )
+	`, artifactHash, pq.StringArray(segmentNames), tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("lookup segments by name: %w", err)
 	}

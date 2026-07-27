@@ -69,9 +69,10 @@ func (f *fakeMintS3Client) DeletePrefix(_ context.Context, _ string) (int, error
 func mintTestServer(t *testing.T, fake *fakeMintS3Client, db *sqlmock.Sqlmock) *FederationServer {
 	t.Helper()
 	cfg := FederationServerConfig{
-		Logger:    logging.NewLogger(),
-		ClusterID: "platform-eu",
-		S3Client:  fake,
+		Logger:                   logging.NewLogger(),
+		ClusterID:                "platform-eu",
+		S3Client:                 fake,
+		AllowFederationMutations: true,
 		LocalS3Backing: S3Backing{
 			Bucket:   "frameworks",
 			Endpoint: "https://s3.example.com",
@@ -446,278 +447,36 @@ func TestMintStorageURLs_LiveThumbnail_TenantMismatch(t *testing.T) {
 	}
 }
 
-func TestMintStorageURLs_VodRejectsMultipart(t *testing.T) {
-	srv := mintTestServer(t, &fakeMintS3Client{}, nil)
-	resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
-		TenantId:        "tenant-a",
-		TargetClusterId: "platform-eu",
-		ArtifactType:    "vod",
-		ArtifactKey:     "abcd1234",
-		Op:              foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_DVR_SET, // wrong op for vod
-	})
-	if err != nil {
-		t.Fatalf("unexpected RPC error: %v", err)
-	}
-	if resp.GetAccepted() {
-		t.Fatal("must reject vod with non-single op")
-	}
-	if resp.GetReason() != "unsupported_operation" {
-		t.Fatalf("expected unsupported_operation, got %q", resp.GetReason())
-	}
-}
-
-// TestMintStorageURLs_DvrSet_KeyShape locks in the segment-key shape against
-// a fake S3 client whose BuildDVRS3Key mirrors the real one (no trailing
-// slash). Without an explicit "/" in the federation handler's concat, segment
-// keys end up as ".../{hash}{filename}" instead of ".../{hash}/{filename}".
-func TestMintStorageURLs_DvrSet_KeyShape(t *testing.T) {
-	resolver := &fakeMintResolver{
-		dvrHashes: map[string]*commodorepb.ResolveDVRHashResponse{
-			"dvr-abcd": {
-				Found:              true,
-				TenantId:           "tenant-a",
-				StreamInternalName: "stream-a",
-				InternalName:       "dvr-abcd",
-			},
-		},
-	}
-
-	installMintIdentityResolver(t, nil, resolver)
-
-	fake := &fakeMintS3Client{}
-	srv := mintTestServer(t, fake, nil)
-
-	resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
-		TenantId:         "tenant-a",
-		TargetClusterId:  "platform-eu",
-		ArtifactType:     "dvr",
-		ArtifactKey:      "dvr-abcd",
-		Op:               foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_DVR_SET,
-		SegmentFilenames: []string{"segments/0.ts", "playlist.m3u8"},
-	})
-	if err != nil {
-		t.Fatalf("unexpected RPC error: %v", err)
-	}
-	if !resp.GetAccepted() {
-		t.Fatalf("expected acceptance; reason=%q", resp.GetReason())
-	}
-	wantPrefix := "dvr/tenant-a/stream-a/dvr-abcd"
-	if resp.GetS3Key() != wantPrefix {
-		t.Fatalf("dvr prefix mismatch: got %q want %q", resp.GetS3Key(), wantPrefix)
-	}
-	for _, fn := range []string{"segments/0.ts", "playlist.m3u8"} {
-		wantKey := wantPrefix + "/" + fn
-		hit := false
-		for _, c := range fake.putCalls {
-			if c.key == wantKey {
-				hit = true
-				break
+// TestMintStorageURLs_ArtifactFreezeUnsupported asserts the release contract: federated ARTIFACT freeze
+// (clip / VOD / DVR / DVR-segment / DVR-manifest) is unavailable at the protocol boundary because there
+// is no cross-cluster completion propagation. Every non-thumbnail artifact type — regardless of operation
+// or segment filenames — is rejected with federated_artifact_freeze_unsupported BEFORE any tenant/context
+// resolution, so the half-protocol is genuinely uncallable by an authenticated internal client. Only
+// thumbnail minting (consumed immediately by the caller) remains supported; its happy path is covered by
+// TestMintStorageURLs_LiveThumbnail_HappyPath.
+func TestMintStorageURLs_ArtifactFreezeUnsupported(t *testing.T) {
+	// The DVR-set operation and segment filenames are retired from the protocol; every non-thumbnail
+	// artifact type is rejected at the type guard (before op inspection), so PUT_SINGLE is sufficient here.
+	for _, artType := range []string{"clip", "vod", "dvr", "dvr_segment", "dvr_manifest"} {
+		t.Run(artType, func(t *testing.T) {
+			srv := mintTestServer(t, &fakeMintS3Client{}, nil)
+			resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
+				TenantId:        "tenant-a",
+				TargetClusterId: "platform-eu",
+				ArtifactType:    artType,
+				ArtifactKey:     "abcd1234",
+				Op:              foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
+			})
+			if err != nil {
+				t.Fatalf("unexpected RPC error: %v", err)
 			}
-		}
-		if !hit {
-			t.Fatalf("expected presigned PUT against %q; got calls=%+v", wantKey, fake.putCalls)
-		}
-	}
-}
-
-// TestMintStorageURLs_DvrSegment_KeyShape covers the dvr_segment / dvr_manifest
-// branch (incremental segment uploads). Same slash-separator invariant.
-func TestMintStorageURLs_DvrSegment_KeyShape(t *testing.T) {
-	resolver := &fakeMintResolver{
-		dvrHashes: map[string]*commodorepb.ResolveDVRHashResponse{
-			"dvr-abcd": {
-				Found:              true,
-				TenantId:           "tenant-a",
-				StreamInternalName: "stream-a",
-				InternalName:       "dvr-abcd",
-			},
-		},
-	}
-
-	installMintIdentityResolver(t, nil, resolver)
-
-	fake := &fakeMintS3Client{}
-	srv := mintTestServer(t, fake, nil)
-
-	resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
-		TenantId:        "tenant-a",
-		TargetClusterId: "platform-eu",
-		ArtifactType:    "dvr_segment",
-		ArtifactKey:     "dvr-abcd/segments/42.ts",
-		Op:              foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
-	})
-	if err != nil {
-		t.Fatalf("unexpected RPC error: %v", err)
-	}
-	if !resp.GetAccepted() {
-		t.Fatalf("expected acceptance; reason=%q", resp.GetReason())
-	}
-	wantKey := "dvr/tenant-a/stream-a/dvr-abcd/segments/42.ts"
-	if resp.GetS3Key() != wantKey {
-		t.Fatalf("dvr_segment key mismatch: got %q want %q", resp.GetS3Key(), wantKey)
-	}
-	if len(fake.putCalls) != 1 || fake.putCalls[0].key != wantKey {
-		t.Fatalf("expected single PUT against %q, got %+v", wantKey, fake.putCalls)
-	}
-}
-
-// TestMintStorageURLs_FastPath_RejectsCrossTypeHash asserts the resolved
-// artifact kind is validated against the requested mint type. A same-tenant
-// DVR hash requested as a clip mint must be rejected; otherwise the handler
-// would build a clip-shape S3 key against an asset that downstream consumers
-// expect at the dvr-shape path.
-func TestMintStorageURLs_FastPath_RejectsCrossTypeHash(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("sqlmock.New: %v", err)
-	}
-	defer db.Close()
-
-	rows := sqlmock.NewRows([]string{
-		"artifact_hash", "artifact_type", "internal_name", "stream_internal_name",
-		"stream_id", "tenant_id", "status", "format",
-		"origin_cluster_id", "storage_cluster_id", "has_thumbnails",
-	}).AddRow("dvr-abcd", "dvr", "dvr-abcd", "stream-a", "", "tenant-a", "ready", "", "platform-eu", "", false)
-	mock.ExpectQuery("FROM foghorn.artifacts").
-		WithArgs("dvr-abcd").
-		WillReturnRows(rows)
-
-	cfg := FederationServerConfig{
-		Logger:    logging.NewLogger(),
-		ClusterID: "platform-eu",
-		DB:        db,
-		S3Client:  &fakeMintS3Client{},
-		LocalS3Backing: S3Backing{
-			Bucket: "frameworks", Endpoint: "https://s3.example.com", Region: "us-east-1",
-		},
-		IsServedCluster: func(id string) bool { return id == "platform-eu" },
-		AdvertisedBacking: func(_ context.Context, _, clusterID string) (S3Backing, bool) {
-			if clusterID == "platform-eu" {
-				return S3Backing{Bucket: "frameworks", Endpoint: "https://s3.example.com", Region: "us-east-1"}, true
+			if resp.GetAccepted() {
+				t.Fatalf("federated %s freeze must be rejected", artType)
 			}
-			return S3Backing{}, false
-		},
-	}
-	srv := NewFederationServer(cfg)
-	installMintIdentityResolver(t, db, nil)
-
-	resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
-		TenantId:        "tenant-a",
-		TargetClusterId: "platform-eu",
-		ArtifactType:    "clip", // wrong: row is dvr
-		ArtifactKey:     "dvr-abcd",
-		Op:              foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
-	})
-	if err != nil {
-		t.Fatalf("unexpected RPC error: %v", err)
-	}
-	if resp.GetAccepted() {
-		t.Fatal("must reject: row.artifact_type=dvr but request asked for clip mint")
-	}
-	if resp.GetReason() != "tenant_mismatch" {
-		t.Fatalf("expected tenant_mismatch, got %q", resp.GetReason())
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("sql expectations: %v", err)
-	}
-}
-
-// TestMintStorageURLs_FastPath_FallsThroughOnEmptyStreamName covers the case
-// where the local artifact row matches by tenant and type but has no
-// stream_internal_name (incomplete cache from a prior delegation that
-// couldn't fill it in). The local row must NOT satisfy a clip/dvr mint on
-// its own — BuildClipS3Key / BuildDVRS3Key would emit
-// "clips/<tenant>//<hash>.<fmt>". Commodore is the authoritative source for
-// stream_internal_name and is always wired in production, so the resolver
-// fills the gap from it.
-func TestMintStorageURLs_FastPath_FallsThroughOnEmptyStreamName(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("sqlmock.New: %v", err)
-	}
-	defer db.Close()
-
-	rows := sqlmock.NewRows([]string{
-		"artifact_hash", "artifact_type", "internal_name", "stream_internal_name",
-		"stream_id", "tenant_id", "status", "format",
-		"origin_cluster_id", "storage_cluster_id", "has_thumbnails",
-	}).AddRow("clip-abcd", "clip", "clip-abcd", "", "", "tenant-a", "ready", "mp4", "platform-eu", "", false) // empty stream_internal_name
-	mock.ExpectQuery("FROM foghorn.artifacts").
-		WithArgs("clip-abcd").
-		WillReturnRows(rows)
-
-	resolver := &fakeMintResolver{
-		clipHashes: map[string]*commodorepb.ResolveClipHashResponse{
-			"clip-abcd": {
-				Found:              true,
-				TenantId:           "tenant-a",
-				StreamInternalName: "stream-a", // Commodore fills the gap
-				InternalName:       "clip-abcd",
-				OriginClusterId:    "platform-eu",
-			},
-		},
-	}
-
-	cfg := FederationServerConfig{
-		Logger:    logging.NewLogger(),
-		ClusterID: "platform-eu",
-		DB:        db,
-		S3Client:  &fakeMintS3Client{},
-		LocalS3Backing: S3Backing{
-			Bucket: "frameworks", Endpoint: "https://s3.example.com", Region: "us-east-1",
-		},
-		IsServedCluster: func(id string) bool { return id == "platform-eu" },
-		AdvertisedBacking: func(_ context.Context, _, clusterID string) (S3Backing, bool) {
-			if clusterID == "platform-eu" {
-				return S3Backing{Bucket: "frameworks", Endpoint: "https://s3.example.com", Region: "us-east-1"}, true
+			if resp.GetReason() != "federated_artifact_freeze_unsupported" {
+				t.Fatalf("expected federated_artifact_freeze_unsupported, got %q", resp.GetReason())
 			}
-			return S3Backing{}, false
-		},
-	}
-	srv := NewFederationServer(cfg)
-	installMintIdentityResolver(t, db, resolver)
-
-	resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
-		TenantId:        "tenant-a",
-		TargetClusterId: "platform-eu",
-		ArtifactType:    "clip",
-		ArtifactKey:     "clip-abcd",
-		Op:              foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
-		ContentType:     "video/mp4",
-	})
-	if err != nil {
-		t.Fatalf("unexpected RPC error: %v", err)
-	}
-	if !resp.GetAccepted() {
-		t.Fatalf("expected acceptance via Commodore fallback; reason=%q", resp.GetReason())
-	}
-	wantKey := "clips/tenant-a/stream-a/clip-abcd.mp4"
-	if resp.GetS3Key() != wantKey {
-		t.Fatalf("S3 key mismatch: got %q want %q", resp.GetS3Key(), wantKey)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("sql expectations: %v", err)
-	}
-}
-
-func TestMintStorageURLs_DvrSet_RequiresFilenames(t *testing.T) {
-	srv := mintTestServer(t, &fakeMintS3Client{}, nil)
-	resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
-		TenantId:        "tenant-a",
-		TargetClusterId: "platform-eu",
-		ArtifactType:    "dvr",
-		ArtifactKey:     "abcd1234",
-		Op:              foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_DVR_SET,
-		// SegmentFilenames intentionally empty
-	})
-	if err != nil {
-		t.Fatalf("unexpected RPC error: %v", err)
-	}
-	if resp.GetAccepted() {
-		t.Fatal("must reject dvr set without filenames")
-	}
-	if resp.GetReason() != "unsupported_operation" {
-		t.Fatalf("expected unsupported_operation, got %q", resp.GetReason())
+		})
 	}
 }
 
@@ -728,17 +487,18 @@ func TestPrepareArtifact_RedirectsWhenStorageOwnedElsewhere(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster"}).
-		AddRow("clip-x", "stream-x", "clip", "mp4", "s3", "synced", 1024, "selfhost-foreign")
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key"}).
+		AddRow("clip-x", "stream-x", "clip", "mp4", "s3", "synced", 1024, "selfhost-foreign", "clips/tenant-a/stream-x/clip-x.mp4")
 	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
 
 	cfg := FederationServerConfig{
-		Logger:          logging.NewLogger(),
-		ClusterID:       "platform-eu",
-		DB:              db,
-		S3Client:        &fakeMintS3Client{},
-		LocalS3Backing:  S3Backing{Bucket: "frameworks", Region: "us-east-1"},
-		IsServedCluster: func(id string) bool { return id == "platform-eu" },
+		Logger:                   logging.NewLogger(),
+		ClusterID:                "platform-eu",
+		DB:                       db,
+		S3Client:                 &fakeMintS3Client{},
+		AllowFederationMutations: true,
+		LocalS3Backing:           S3Backing{Bucket: "frameworks", Region: "us-east-1"},
+		IsServedCluster:          func(id string) bool { return id == "platform-eu" },
 		AdvertisedBacking: func(_ context.Context, _, clusterID string) (S3Backing, bool) {
 			if clusterID == "platform-eu" {
 				return S3Backing{Bucket: "frameworks", Region: "us-east-1"}, true

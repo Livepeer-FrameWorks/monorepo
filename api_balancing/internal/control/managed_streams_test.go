@@ -254,8 +254,8 @@ func TestReconcileClusterManagedStreams_SkipsRetractWhenConnectionOwnedByPeer(t 
 	}); err != nil {
 		t.Fatalf("SetNode: %v", err)
 	}
-	if err := store.SetConnOwner(ctx, "edge-eu-1", "peer-foghorn", "10.0.0.2:9090"); err != nil {
-		t.Fatalf("SetConnOwner: %v", err)
+	if ok, err := store.AcquireConnOwnerFenced(ctx, "edge-eu-1", "peer-foghorn", "10.0.0.2:9090", 1); err != nil || !ok {
+		t.Fatalf("AcquireConnOwnerFenced: ok=%v err=%v", ok, err)
 	}
 
 	fakeRelay := &fakeFoghornRelayClient{resp: &foghornrelaypb.ForwardCommandResponse{Delivered: true}}

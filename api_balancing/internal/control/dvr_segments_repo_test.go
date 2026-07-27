@@ -24,7 +24,7 @@ func TestInsertDVRSegment_HealsLostLocalWithMatchingTiming(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT status FROM foghorn\.artifacts WHERE artifact_hash =`).
-		WithArgs(dvrHash).
+		WithArgs(dvrHash, "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("completed"))
 	mock.ExpectQuery(`SELECT sequence, status, media_start_ms, media_end_ms, duration_ms`).
 		WithArgs(dvrHash, segmentName).
@@ -35,7 +35,7 @@ func TestInsertDVRSegment_HealsLostLocalWithMatchingTiming(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	seq, err := InsertDVRSegment(context.Background(), dvrHash, segmentName, "s3/key", mediaStartMs, mediaEndMs, durationMs, false)
+	seq, err := InsertDVRSegment(context.Background(), "tenant-1", dvrHash, segmentName, "s3/key", mediaStartMs, mediaEndMs, durationMs, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestInsertDVRSegment_RejectsTimingMismatch(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT status FROM foghorn\.artifacts WHERE artifact_hash =`).
-		WithArgs(dvrHash).
+		WithArgs(dvrHash, "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("completed"))
 	// Existing row has different timing — a wrong file with the same name.
 	mock.ExpectQuery(`SELECT sequence, status, media_start_ms, media_end_ms, duration_ms`).
@@ -64,7 +64,7 @@ func TestInsertDVRSegment_RejectsTimingMismatch(t *testing.T) {
 			AddRow(int64(7), "lost_local", int64(100_000), int64(106_000), int64(6_000)))
 	mock.ExpectRollback()
 
-	_, err := InsertDVRSegment(context.Background(), dvrHash, segmentName, "s3/key", 200_000, 206_000, 6_000, false)
+	_, err := InsertDVRSegment(context.Background(), "tenant-1", dvrHash, segmentName, "s3/key", 200_000, 206_000, 6_000, false)
 	if !errors.Is(err, ErrDVRSegmentTimingMismatch) {
 		t.Fatalf("expected ErrDVRSegmentTimingMismatch, got %v", err)
 	}
@@ -87,7 +87,7 @@ func TestInsertDVRSegment_AcceptsExistingSegmentAcrossClockDomains(t *testing.T)
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT status FROM foghorn\.artifacts WHERE artifact_hash =`).
-		WithArgs(dvrHash).
+		WithArgs(dvrHash, "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("recording"))
 	mock.ExpectQuery(`SELECT sequence, status, media_start_ms, media_end_ms, duration_ms`).
 		WithArgs(dvrHash, segmentName).
@@ -95,7 +95,7 @@ func TestInsertDVRSegment_AcceptsExistingSegmentAcrossClockDomains(t *testing.T)
 			AddRow(existingSeq, "uploaded", relativeFrom, relativeFrom+durationMs, durationMs))
 	mock.ExpectCommit()
 
-	seq, err := InsertDVRSegment(context.Background(), dvrHash, segmentName, "s3/key", absoluteFrom, absoluteFrom+durationMs, durationMs, false)
+	seq, err := InsertDVRSegment(context.Background(), "tenant-1", dvrHash, segmentName, "s3/key", absoluteFrom, absoluteFrom+durationMs, durationMs, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestInsertDVRSegment_PendingRetryAllowedAfterParentCompleted(t *testing.T) 
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT status FROM foghorn\.artifacts WHERE artifact_hash =`).
-		WithArgs(dvrHash).
+		WithArgs(dvrHash, "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("completed"))
 	mock.ExpectQuery(`SELECT sequence, status, media_start_ms, media_end_ms, duration_ms`).
 		WithArgs(dvrHash, segmentName).
@@ -128,7 +128,7 @@ func TestInsertDVRSegment_PendingRetryAllowedAfterParentCompleted(t *testing.T) 
 			AddRow(existingSeq, "pending", int64(0), int64(10417), int64(10417)))
 	mock.ExpectCommit()
 
-	seq, err := InsertDVRSegment(context.Background(), dvrHash, segmentName, "s3/key", 0, 10417, 10417, false)
+	seq, err := InsertDVRSegment(context.Background(), "tenant-1", dvrHash, segmentName, "s3/key", 0, 10417, 10417, false)
 	if err != nil {
 		t.Fatalf("expected pending retry to succeed under completed parent; got %v", err)
 	}
@@ -150,7 +150,7 @@ func TestInsertDVRSegment_UploadedRetryRejectedAfterParentCompleted(t *testing.T
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT status FROM foghorn\.artifacts WHERE artifact_hash =`).
-		WithArgs(dvrHash).
+		WithArgs(dvrHash, "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("completed"))
 	mock.ExpectQuery(`SELECT sequence, status, media_start_ms, media_end_ms, duration_ms`).
 		WithArgs(dvrHash, segmentName).
@@ -158,7 +158,7 @@ func TestInsertDVRSegment_UploadedRetryRejectedAfterParentCompleted(t *testing.T
 			AddRow(int64(5), "uploaded", int64(0), int64(6000), int64(6000)))
 	mock.ExpectRollback()
 
-	_, err := InsertDVRSegment(context.Background(), dvrHash, segmentName, "s3/key", 0, 6000, 6000, false)
+	_, err := InsertDVRSegment(context.Background(), "tenant-1", dvrHash, segmentName, "s3/key", 0, 6000, 6000, false)
 	if !errors.Is(err, ErrDVRSegmentTerminal) {
 		t.Fatalf("expected ErrDVRSegmentTerminal for uploaded+terminal-parent retry, got %v", err)
 	}
@@ -176,7 +176,7 @@ func TestInsertDVRSegment_ExistingPendingRetryReusesSequence(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT status FROM foghorn\.artifacts WHERE artifact_hash =`).
-		WithArgs(dvrHash).
+		WithArgs(dvrHash, "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("recording"))
 	mock.ExpectQuery(`SELECT sequence, status, media_start_ms, media_end_ms, duration_ms`).
 		WithArgs(dvrHash, segmentName).
@@ -184,7 +184,7 @@ func TestInsertDVRSegment_ExistingPendingRetryReusesSequence(t *testing.T) {
 			AddRow(existingSeq, "pending", int64(0), int64(6_000), int64(6_000)))
 	mock.ExpectCommit()
 
-	seq, err := InsertDVRSegment(context.Background(), dvrHash, segmentName, "s3/key", 0, 6_000, 6_000, false)
+	seq, err := InsertDVRSegment(context.Background(), "tenant-1", dvrHash, segmentName, "s3/key", 0, 6_000, 6_000, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestInsertDVRSegment_RetriesWholeTransactionOnReadRestart(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT status FROM foghorn\.artifacts WHERE artifact_hash =`).
-		WithArgs(dvrHash).
+		WithArgs(dvrHash, "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("recording"))
 	mock.ExpectQuery(`SELECT sequence, status, media_start_ms, media_end_ms, duration_ms`).
 		WithArgs(dvrHash, segmentName).
@@ -214,7 +214,7 @@ func TestInsertDVRSegment_RetriesWholeTransactionOnReadRestart(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT status FROM foghorn\.artifacts WHERE artifact_hash =`).
-		WithArgs(dvrHash).
+		WithArgs(dvrHash, "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("recording"))
 	mock.ExpectQuery(`SELECT sequence, status, media_start_ms, media_end_ms, duration_ms`).
 		WithArgs(dvrHash, segmentName).
@@ -222,7 +222,7 @@ func TestInsertDVRSegment_RetriesWholeTransactionOnReadRestart(t *testing.T) {
 			AddRow(existingSeq, "pending", int64(0), int64(6_000), int64(6_000)))
 	mock.ExpectCommit()
 
-	seq, err := InsertDVRSegment(context.Background(), dvrHash, segmentName, "s3/key", 0, 6_000, 6_000, false)
+	seq, err := InsertDVRSegment(context.Background(), "tenant-1", dvrHash, segmentName, "s3/key", 0, 6_000, 6_000, false)
 	if err != nil {
 		t.Fatalf("unexpected error after retry: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestInsertDVRSegment_RecoveryInsertAllowedAfterParentCompleted(t *testing.T
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT status FROM foghorn\.artifacts WHERE artifact_hash =`).
-		WithArgs(dvrHash).
+		WithArgs(dvrHash, "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("completed"))
 	mock.ExpectQuery(`SELECT sequence, status, media_start_ms, media_end_ms, duration_ms`).
 		WithArgs(dvrHash, segmentName).
@@ -255,7 +255,7 @@ func TestInsertDVRSegment_RecoveryInsertAllowedAfterParentCompleted(t *testing.T
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	seq, err := InsertDVRSegment(context.Background(), dvrHash, segmentName, "s3/key", 0, 6_000, 6_000, true)
+	seq, err := InsertDVRSegment(context.Background(), "tenant-1", dvrHash, segmentName, "s3/key", 0, 6_000, 6_000, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
