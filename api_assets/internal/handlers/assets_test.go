@@ -21,13 +21,17 @@ import (
 )
 
 type fakeS3 struct {
-	data  []byte
-	err   error
-	calls int
+	data    []byte
+	err     error
+	calls   int
+	lastKey string
 }
 
-func (f *fakeS3) GetObject(_ context.Context, _ *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+func (f *fakeS3) GetObject(_ context.Context, params *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
 	f.calls++
+	if params != nil && params.Key != nil {
+		f.lastKey = *params.Key
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -49,15 +53,21 @@ func newTestHandler(s3client S3Getter, prefix string) (*AssetHandler, prometheus
 	misses := prometheus.NewCounter(prometheus.CounterOpts{Name: "test_misses"})
 	s3errs := prometheus.NewCounter(prometheus.CounterOpts{Name: "test_s3errs"})
 	h := &AssetHandler{
-		s3:           s3client,
-		bucket:       "test-bucket",
-		prefix:       prefix,
-		serviceToken: "test-token",
-		cache:        cache.NewLRU(1024*1024, 5*time.Minute),
-		logger:       logging.NewLoggerWithService("test"),
-		cacheHits:    hits,
-		cacheMisses:  misses,
-		s3Errors:     s3errs,
+		s3:             s3client,
+		bucket:         "test-bucket",
+		prefix:         prefix,
+		serviceToken:   "test-token",
+		cache:          cache.NewLRU(1024*1024, 5*time.Minute),
+		logger:         logging.NewLoggerWithService("test"),
+		cacheHits:      hits,
+		cacheMisses:    misses,
+		s3Errors:       s3errs,
+		activeVersions: map[string]versionEntry{},
+		httpClient:     &http.Client{Timeout: 2 * time.Second},
+		// Default seam: an AUTHORITATIVE "no active version" (resolver reachable, asset never versioned) so the
+		// cache/serving tests exercise the legacy-key path without a live resolver. Tests that need the real HTTP
+		// pull (cold-miss / unreachable / no-version-over-HTTP) clear this and set foghornResolveURL.
+		resolveVersionFn: func(_ context.Context, _ string) (string, bool, bool) { return "", true, false },
 	}
 	return h, hits, misses, s3errs
 }
@@ -355,5 +365,142 @@ func TestHandleInvalidateCache_RemovesSelectedFiles(t *testing.T) {
 	}
 	if counterValue(misses) != 3 {
 		t.Fatalf("expected 3 cache misses, got %v", counterValue(misses))
+	}
+}
+
+// After a push (invalidation carrying activeVersion), a GET serves the immutable versioned object — while the
+// public URL stays /assets/{assetKey}/{file}. The backing S3 key is thumbnails/{assetKey}/v/{version}/{file}.
+func TestHandleGetAsset_ServesVersionedObjectAfterPush(t *testing.T) {
+	fake := &fakeS3{data: []byte("poster")}
+	h, _, _, _ := newTestHandler(fake, "")
+
+	w := serveJSONRequest(h, http.MethodPost, "/internal/assets/cache/invalidate",
+		`{"assetKey":"stream-1","activeVersion":"v-abc","files":["poster.jpg"]}`, "test-token")
+	if w.Code != http.StatusOK {
+		t.Fatalf("push invalidate failed: %d %s", w.Code, w.Body.String())
+	}
+
+	if w := serveRequest(h, "/assets/stream-1/poster.jpg"); w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if fake.lastKey != "thumbnails/stream-1/v/v-abc/poster.jpg" {
+		t.Fatalf("expected versioned backing key, got %q", fake.lastKey)
+	}
+}
+
+// With no pushed version, a cold GET pulls the active version from the in-cell Foghorn resolve endpoint and then
+// serves the versioned object. A resolver that reports no version leaves the legacy un-versioned key.
+func TestHandleGetAsset_ColdMissPullsVersionFromFoghorn(t *testing.T) {
+	fake := &fakeS3{data: []byte("poster")}
+	h, _, _, _ := newTestHandler(fake, "")
+
+	var gotAssetKey string
+	foghorn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		gotAssetKey = r.URL.Query().Get("assetKey")
+		_, _ = w.Write([]byte(`{"activeVersion":"v-xyz"}`))
+	}))
+	defer foghorn.Close()
+	h.resolveVersionFn = nil // exercise the real HTTP pull
+	h.foghornResolveURL = foghorn.URL
+
+	if w := serveRequest(h, "/assets/stream-2/poster.jpg"); w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if gotAssetKey != "stream-2" {
+		t.Fatalf("Foghorn resolver was asked for %q", gotAssetKey)
+	}
+	if fake.lastKey != "thumbnails/stream-2/v/v-xyz/poster.jpg" {
+		t.Fatalf("expected pulled versioned key, got %q", fake.lastKey)
+	}
+}
+
+// A missing SERVICE_TOKEN (unusable resolver) must FAIL CLOSED, not be treated as positive proof that the asset
+// has no version — otherwise Chandler serves a stale legacy object while Foghorn publishes versioned ones.
+func TestHandleGetAsset_UnconfiguredResolverFailsClosed(t *testing.T) {
+	fake := &fakeS3{data: []byte("poster")}
+	h, _, _, _ := newTestHandler(fake, "")
+	h.resolveVersionFn = nil // no seam
+	h.serviceToken = ""      // missing SERVICE_TOKEN → resolver unusable
+	h.foghornResolveURL = ""
+
+	w := serveRequest(h, "/assets/stream-unconfigured/poster.jpg")
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("an unconfigured resolver (no SERVICE_TOKEN) must fail closed (503), got %d", w.Code)
+	}
+	if fake.lastKey != "" {
+		t.Fatalf("must not fetch any S3 object when the resolver is unusable, fetched %q", fake.lastKey)
+	}
+}
+
+// A GONE resolve (parent artifact terminal) must 404 and NOT serve a surviving legacy object, and must evict any
+// cached versioned mapping.
+func TestHandleGetAsset_GoneReturns404AndEvicts(t *testing.T) {
+	fake := &fakeS3{data: []byte("poster")}
+	h, _, _, _ := newTestHandler(fake, "")
+	// Seed a fresh cached versioned mapping, then have the resolver report GONE.
+	h.versionsMu.Lock()
+	h.activeVersions["stream-gone"] = versionEntry{version: "v1", resolvedAt: time.Now()}
+	h.versionsMu.Unlock()
+	h.resolveVersionFn = func(_ context.Context, _ string) (string, bool, bool) { return "", true, true }
+
+	// Cache hit would serve v1 — but the resolver is only consulted on cold miss. Force a cold miss by expiring.
+	h.versionsMu.Lock()
+	h.activeVersions["stream-gone"] = versionEntry{version: "v1", resolvedAt: time.Now().Add(-time.Hour)}
+	h.versionsMu.Unlock()
+
+	w := serveRequest(h, "/assets/stream-gone/poster.jpg")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("a GONE asset must 404, got %d", w.Code)
+	}
+	if fake.lastKey != "" {
+		t.Fatalf("a GONE asset must not fetch any S3 object (legacy or versioned), fetched %q", fake.lastKey)
+	}
+	// The cached mapping was evicted.
+	h.versionsMu.RLock()
+	_, still := h.activeVersions["stream-gone"]
+	h.versionsMu.RUnlock()
+	if still {
+		t.Fatal("a GONE resolve must evict the cached versioned mapping")
+	}
+}
+
+// P2: when the version resolver is CONFIGURED but unreachable and nothing is cached, Chandler fails closed (503)
+// rather than serving a possibly-stale legacy object for what might be a versioned asset.
+func TestHandleGetAsset_ResolverUnreachableFailsClosed(t *testing.T) {
+	fake := &fakeS3{data: []byte("poster")}
+	h, _, _, _ := newTestHandler(fake, "")
+	h.resolveVersionFn = nil                   // exercise the real HTTP pull
+	h.foghornResolveURL = "http://127.0.0.1:1" // configured but connection-refused
+
+	w := serveRequest(h, "/assets/stream-unreach/poster.jpg")
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 fail-closed on an unreachable resolver, got %d", w.Code)
+	}
+	if fake.lastKey != "" {
+		t.Fatalf("must not fetch any S3 object when the version is unresolvable, fetched %q", fake.lastKey)
+	}
+}
+
+// A resolver that reports no version (never-published / migration) leaves Chandler serving the legacy key.
+func TestHandleGetAsset_NoVersionServesLegacyKey(t *testing.T) {
+	fake := &fakeS3{data: []byte("poster")}
+	h, _, _, _ := newTestHandler(fake, "")
+
+	foghorn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"activeVersion":""}`))
+	}))
+	defer foghorn.Close()
+	h.resolveVersionFn = nil // exercise the real HTTP pull
+	h.foghornResolveURL = foghorn.URL
+
+	if w := serveRequest(h, "/assets/stream-3/poster.jpg"); w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if fake.lastKey != "thumbnails/stream-3/poster.jpg" {
+		t.Fatalf("expected legacy key fallback, got %q", fake.lastKey)
 	}
 }
