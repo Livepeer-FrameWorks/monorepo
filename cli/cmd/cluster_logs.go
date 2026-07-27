@@ -804,9 +804,17 @@ if [ -d /etc/frameworks/pki/services ]; then
     if [ -f "$cert" ] && [ -f "$key" ]; then
       cert_hash="$(openssl x509 -in "$cert" -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform der 2>/dev/null | sha256sum 2>/dev/null | awk '{print $1}')"
       key_hash="$(openssl pkey -in "$key" -pubout -outform der 2>/dev/null | sha256sum 2>/dev/null | awk '{print $1}')"
-      status="match"
-      [ -n "$cert_hash" ] && [ "$cert_hash" = "$key_hash" ] || status="mismatch"
-      echo "$svc $status cert=$cert_hash key=$key_hash"
+      pair_status="match"
+      [ -n "$cert_hash" ] && [ "$cert_hash" = "$key_hash" ] || pair_status="mismatch"
+      validity="valid"
+      if ! openssl x509 -in "$cert" -checkend 0 -noout >/dev/null 2>&1; then
+        validity="expired"
+      elif ! openssl x509 -in "$cert" -checkend 129600 -noout >/dev/null 2>&1; then
+        validity="expiring_within_36h"
+      fi
+      not_before="$(openssl x509 -in "$cert" -noout -startdate 2>/dev/null | sed 's/^notBefore=//')"
+      not_after="$(openssl x509 -in "$cert" -noout -enddate 2>/dev/null | sed 's/^notAfter=//')"
+      echo "$svc pair=$pair_status validity=$validity not_before=$not_before not_after=$not_after cert=$cert_hash key=$key_hash"
     fi
   done
 fi

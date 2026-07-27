@@ -540,10 +540,29 @@ func parseClickHouseDDL(content string, schema tableSchema) {
 		}
 		tableName := normalizeTableName(match[1])
 		ensureTable(schema, tableName)
+		// A `SELECT *` view exposes exactly its base table's columns, which the
+		// explicit column parse cannot see; inherit them so readers of the view
+		// validate against the real column set.
+		if selectIsStar(stmt) {
+			for _, base := range queryTables(stmt) {
+				for column := range schema[base] {
+					schema[tableName][column] = true
+				}
+			}
+		}
 		for _, column := range parseSelectColumns(stmt) {
 			schema[tableName][column] = true
 		}
 	}
+}
+
+func selectIsStar(stmt string) bool {
+	selectIdx := indexSQLKeyword(stmt, "select")
+	fromIdx := indexSQLKeyword(stmt, "from")
+	if selectIdx < 0 || fromIdx <= selectIdx {
+		return false
+	}
+	return strings.TrimSpace(stmt[selectIdx+len("select"):fromIdx]) == "*"
 }
 
 var createTableRe = regexp.MustCompile(`(?i)CREATE\s+(?:TABLE|DICTIONARY)\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][A-Za-z0-9_.]*)\s*\(`)
@@ -730,7 +749,7 @@ func sqlKeywordOrFunction(token string) bool {
 
 var sqlIgnoredTokens = lowerSet(
 	"select", "from", "where", "group", "by", "order", "limit", "as", "and", "or",
-	"is", "not", "null", "interval", "hour", "day", "final", "desc", "asc",
+	"is", "not", "null", "interval", "hour", "day", "final", "distinct", "desc", "asc",
 	"count", "countif", "round", "avgif", "quantileif", "nullif", "coalesce",
 	"max", "min", "sum", "ifnull", "pow", "argmax", "tostartofhour", "now",
 	"today", "todate", "todatetime", "uniqexact", "quantile",

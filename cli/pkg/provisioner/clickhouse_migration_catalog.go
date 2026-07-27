@@ -44,7 +44,8 @@ type ClickHouseMigrationCatalog struct {
 var PeriscopeMigrationCatalog = ClickHouseMigrationCatalog{
 	Tables: []string{
 		"api_events", "api_requests", "api_usage_5m", "api_usage_daily_store",
-		"api_usage_hourly_store", "artifact_events", "artifact_state_current",
+		"api_usage_hourly_store", "artifact_events", "artifact_node_copy_current",
+		"artifact_node_copy_events", "artifact_state_current",
 		"client_qoe_5m", "client_qoe_samples", "client_qoe_session_deltas",
 		"federation_events", "federation_hourly", "ingest_errors",
 		"ledger_rebuild_cursors", "node_metrics_1h", "node_metrics_samples",
@@ -89,7 +90,8 @@ var PeriscopeMigrationCatalog = ClickHouseMigrationCatalog{
 		"viewer_geo_daily_mv", "viewer_geo_hourly_mv", "viewer_hours_hourly_mv",
 	},
 	Views: []string{
-		"api_usage_5m_v", "api_usage_daily", "api_usage_hourly", "processing_5m_v",
+		"api_usage_5m_v", "api_usage_daily", "api_usage_hourly", "artifact_events_deduped",
+		"processing_5m_v",
 		"processing_daily", "processing_hourly", "processing_segments_final_v",
 		"storage_gb_seconds_5m_v", "storage_usage_daily", "storage_usage_hourly",
 		"stream_analytics_daily", "stream_connection_hourly", "stream_runtime_5m_v",

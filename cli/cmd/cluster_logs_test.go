@@ -25,6 +25,11 @@ func TestLogsSnapshotScriptIncludesPrivateerAndRedisDiagnostics(t *testing.T) {
 		"== redis sentinel diagnostics ==",
 		"frameworks-redis-*sentinel*.service",
 		"redis-cli -p \"$port\" SENTINEL masters",
+		"== pki service certificate pairs ==",
+		"validity=\"expired\"",
+		"validity=\"expiring_within_36h\"",
+		"-checkend 129600",
+		"not_after=",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("snapshot script missing %q", want)

@@ -17,8 +17,10 @@ import (
 const pgHarnessImage = "pgvector/pgvector:pg15"
 
 // pgIntrospectQuery dumps a database's logical schema as sorted text: columns
-// (schema/table/column/type/nullability/default), indexes, and constraints across
-// all user schemas. _migrations is excluded (it exists only in the replayed DB).
+// (schema/table/column/type/nullability/default), indexes, constraints WITH their full definition
+// (pg_get_constraintdef — so a changed CHECK expression is detected, not just a renamed constraint),
+// triggers (pg_get_triggerdef), and function bodies (md5 of pg_get_functiondef, one line so the
+// line-sorted comparison stays intact). _migrations is excluded (it exists only in the replayed DB).
 const pgIntrospectQuery = `
 SELECT 'col|' || table_schema || '|' || table_name || '|' || column_name || '|' ||
        data_type || '|' || is_nullable || '|' || coalesce(column_default, '')
@@ -31,14 +33,30 @@ SELECT 'idx|' || schemaname || '|' || indexname || '|' || indexdef
  WHERE schemaname NOT IN ('pg_catalog','information_schema')
    AND tablename <> '_migrations'
 UNION ALL
-SELECT 'con|' || tc.table_schema || '|' || tc.table_name || '|' || tc.constraint_type || '|' || tc.constraint_name
-  FROM information_schema.table_constraints tc
- WHERE tc.table_schema NOT IN ('pg_catalog','information_schema')
-   AND tc.table_name <> '_migrations'
+SELECT 'con|' || n.nspname || '|' || t.relname || '|' || c.contype::text || '|' || c.conname || '|' || pg_get_constraintdef(c.oid)
+  FROM pg_constraint c
+  JOIN pg_class t ON t.oid = c.conrelid
+  JOIN pg_namespace n ON n.oid = t.relnamespace
+ WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+   AND t.relname <> '_migrations'
    -- Exclude Postgres's synthesized NOT NULL check constraints: their names embed
    -- table OIDs (e.g. 21489_21843_3_not_null) so they differ between the two DBs
    -- as pure noise. NOT NULL is already compared via is_nullable in the column rows.
-   AND NOT (tc.constraint_type = 'CHECK' AND tc.constraint_name LIKE '%_not_null')
+   AND NOT (c.contype = 'c' AND c.conname LIKE '%_not_null')
+UNION ALL
+SELECT 'trg|' || n.nspname || '|' || t.relname || '|' || tg.tgname || '|' || pg_get_triggerdef(tg.oid)
+  FROM pg_trigger tg
+  JOIN pg_class t ON t.oid = tg.tgrelid
+  JOIN pg_namespace n ON n.oid = t.relnamespace
+ WHERE NOT tg.tgisinternal
+   AND n.nspname NOT IN ('pg_catalog','information_schema')
+   AND t.relname <> '_migrations'
+UNION ALL
+SELECT 'fn|' || n.nspname || '|' || p.proname || '|' || md5(pg_get_functiondef(p.oid))
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+ WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+   AND p.prokind = 'f'
  ORDER BY 1`
 
 func pgStart(t *testing.T, name string) {

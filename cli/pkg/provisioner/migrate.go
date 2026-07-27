@@ -95,7 +95,10 @@ var expandUnsafeSQLPatterns = []struct {
 	{regexp.MustCompile(`(?is)\bALTER\s+TABLE\b.*\bRENAME\b`), "renames are not expand-compatible with old binaries"},
 	{regexp.MustCompile(`(?is)\bALTER\s+TABLE\b.*\bALTER\s+COLUMN\b.*\bTYPE\b`), "column type rewrites are not expand-compatible"},
 	{regexp.MustCompile(`(?is)\bALTER\s+TABLE\b.*\bSET\s+NOT\s+NULL\b`), "SET NOT NULL requires a completed data migration and postdeploy/contract gating"},
-	{regexp.MustCompile(`(?is)\bUPDATE\s+[A-Za-z_][A-Za-z0-9_.]*\b`), "bulk data rewrites belong in service-owned background data migrations"},
+	// Match a real data-rewrite UPDATE (UPDATE <table> ... SET), bounded to a single statement
+	// so it does NOT false-positive on the trigger event clause "BEFORE/AFTER UPDATE ON" (valid
+	// DDL) or on the word "UPDATE" in a comment. Real rewrites always have SET.
+	{regexp.MustCompile(`(?is)\bUPDATE\s+[A-Za-z_][A-Za-z0-9_.]*[^;]*?\bSET\b`), "bulk data rewrites belong in service-owned background data migrations"},
 	{regexp.MustCompile(`(?is)\bDELETE\s+FROM\s+[A-Za-z_][A-Za-z0-9_.]*\b`), "bulk deletes belong in service-owned background data migrations or contract"},
 }
 

@@ -18,6 +18,7 @@ import (
 	fwgitops "frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/provisioner"
 	fwssh "frameworks/cli/pkg/ssh"
 
@@ -753,6 +754,28 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 
 	for name, svc := range manifest.Services {
 		if !svc.Enabled {
+			continue
+		}
+		if name == "privateer" {
+			port, err := resolvePort(name, svc)
+			if err != nil {
+				recordMiss(name, fmt.Sprintf("resolve port: %v", err))
+				continue
+			}
+			hostNames := orchestrator.EffectivePrivateerHostsForManifest(svc, manifest)
+			if len(hostNames) == 0 {
+				recordMiss(name, "no effective hosts found in manifest")
+				continue
+			}
+			for _, hostName := range hostNames {
+				host, ok := manifest.GetHost(hostName)
+				label := fmt.Sprintf("privateer@%s", hostName)
+				if !ok {
+					recordMiss(label, fmt.Sprintf("host %q not found in manifest", hostName))
+					continue
+				}
+				runInfraCheck(label, checkServiceEndpoint(name, svc, host.ExternalIP, port))
+			}
 			continue
 		}
 

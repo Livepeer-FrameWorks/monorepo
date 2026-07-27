@@ -2,10 +2,55 @@ package provisioner
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
 )
+
+func TestClickHouseRoleUsesScopedDeb822Repository(t *testing.T) {
+	install := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/clickhouse/tasks/install-debian.yml")
+	for _, want := range []string{
+		"ansible.builtin.deb822_repository",
+		"https://packages.clickhouse.com/deb",
+		"signed_by: \"{{ clickhouse_repository_key_url }}\"",
+		"python3-debian",
+		"allow_downgrades: true",
+	} {
+		if !strings.Contains(install, want) {
+			t.Fatalf("ClickHouse Debian installer missing %q:\n%s", want, install)
+		}
+	}
+	for _, forbidden := range []string{
+		"ansible.builtin.apt_key",
+		"ansible.builtin.apt_repository",
+	} {
+		if strings.Contains(install, forbidden) {
+			t.Fatalf("ClickHouse Debian installer still uses %q:\n%s", forbidden, install)
+		}
+	}
+
+	wrapper := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/clickhouse/tasks/install.yml")
+	if strings.Contains(wrapper, "tasks_from: install-Debian.yml") {
+		t.Fatalf("ClickHouse wrapper still imports the legacy upstream installer:\n%s", wrapper)
+	}
+	if strings.Contains(wrapper, "ansible.builtin.apt:\n        name: clickhouse-keeper") {
+		t.Fatalf("ClickHouse wrapper installs the Keeper package that conflicts with clickhouse-server:\n%s", wrapper)
+	}
+	if !strings.Contains(install, "/lib/systemd/system/clickhouse-server.service") {
+		t.Fatalf("ClickHouse Debian installer does not verify the server unit:\n%s", install)
+	}
+
+	molecule := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/clickhouse/molecule/default/molecule.yml")
+	for _, image := range []string{
+		"geerlingguy/docker-ubuntu2404-ansible:latest",
+		"geerlingguy/docker-ubuntu2604-ansible:latest",
+	} {
+		if !strings.Contains(molecule, image) {
+			t.Fatalf("ClickHouse Molecule scenario missing %q:\n%s", image, molecule)
+		}
+	}
+}
 
 func TestClickHouseRoleVarsUsesSharedCredentials(t *testing.T) {
 	config := ServiceConfig{
