@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -287,6 +288,8 @@ func (h *AnalyticsHandler) HandleServiceEvent(event kafka.ServiceEvent) error {
 	switch event.EventType {
 	case "api_request_batch":
 		err = h.processServiceAPIRequestBatch(ctx, event)
+	case "artifact_node_copy":
+		err = h.processArtifactNodeCopy(ctx, event)
 	case "tenant_created":
 		if err = h.processTenantCreated(ctx, event); err != nil {
 			break
@@ -1292,6 +1295,14 @@ func getInt64FromMap(data map[string]interface{}, key string) (int64, bool) {
 		return int64(v), true
 	case json.Number:
 		n, err := v.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	case string:
+		// protojson encodes int64/uint64 as decimal strings; Decklog serializes
+		// ServiceEvent payloads via protojson, so these arrive as strings.
+		n, err := strconv.ParseInt(v, 10, 64)
 		if err != nil {
 			return 0, false
 		}
@@ -2914,6 +2925,18 @@ func marshalTypedEventData(data interface{}) string {
 	return string(b)
 }
 
+// lifecycleUpdatedAt picks the ReplacingMergeTree collapse key for artifact_state_current: the SOURCE
+// transition time (Foghorn outbox created_at, ms) when the producer stamped it, else Decklog receipt
+// time. The source value is stable across at-least-once redeliveries, so a replayed older transition
+// keeps its original time. This is BEST-EFFORT (created_at is wall-clock, not a source-owned monotonic
+// revision), not a rigorous total order — see periscope.sql artifact_state_current.
+func lifecycleUpdatedAt(sourceMs int64, receipt time.Time) time.Time {
+	if sourceMs > 0 {
+		return time.UnixMilli(sourceMs)
+	}
+	return receipt
+}
+
 func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka.AnalyticsEvent) error {
 	h.logger.Infof("Processing clip lifecycle event: %s", event.EventID)
 
@@ -2994,7 +3017,7 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 			progress_percent, error_message, requested_at, started_at, completed_at,
 			clip_start_unix, clip_stop_unix, file_path, s3_url, size_bytes,
 			processing_node_id, updated_at, expires_at,
-			storage_location, sync_status, is_hot, is_synced, is_finalized, is_frozen
+			storage_location, sync_status, has_local_copy, is_synced, is_finalized
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare live_artifacts batch: %v", err)
@@ -3027,14 +3050,13 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 		nilIfEmptyString(cl.GetS3Url()),
 		nilIfZeroUint64(cl.GetSizeBytes()),
 		nilIfEmptyString(cl.GetNodeId()),
-		event.Timestamp,
+		lifecycleUpdatedAt(cl.GetSourceUpdatedAtMs(), event.Timestamp), // updated_at (source-ordered)
 		expiresAtTime,
 		nilIfEmptyString(cl.GetStorageLocation()),
 		nilIfEmptyString(cl.GetSyncStatus()),
-		cl.IsHot,
+		cl.HasLocalCopy, // has_local_copy: a node holds a present full local copy
 		cl.IsSynced,
 		cl.IsFinalized,
-		cl.IsFrozen,
 	); appendErr != nil {
 		h.logger.Errorf("Failed to append to live_artifacts batch: %v", appendErr)
 		if h.metrics != nil {
@@ -3087,7 +3109,7 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 				percent, message, file_path, s3_url, size_bytes, expires_at,
 				source_region, stream_origin_region, stream_origin_cluster_id, schema_version,
 				processing_wall_ms, speed_min_x, speed_avg_x, speed_max_x,
-				hard_slow_ticks, stale_hold_ticks, lockout_ticks, drain_ms
+				hard_slow_ticks, stale_hold_ticks, lockout_ticks, drain_ms, event_id
 			)`)
 	if err != nil {
 		if h.metrics != nil {
@@ -3098,7 +3120,10 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 	defer closeClickHouseBatch(batch)
 
 	if err := batch.Append(
-		event.Timestamp,
+		// timestamp = SOURCE transition time (stable across at-least-once outbox
+		// redeliveries) so the read-time identity dedup and toYYYYMM(timestamp) partition
+		// hold on replay; falls back to receipt time only when unstamped.
+		lifecycleUpdatedAt(cl.GetSourceUpdatedAtMs(), event.Timestamp),
 		tenantID,
 		parseUUID(mistTriggerStreamID(&mt)),
 		internalName,
@@ -3129,6 +3154,7 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 		staleHoldTicks,
 		lockoutTicks,
 		drainMs,
+		event.EventID, // stable outbox row id → part of the read-time dedup identity
 	); err != nil {
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
@@ -3204,7 +3230,7 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 			tenant_id, stream_id, request_id, internal_name, filename, content_type, stage,
 			progress_percent, error_message, requested_at, started_at, completed_at,
 			segment_count, manifest_path, file_path, size_bytes, processing_node_id, updated_at, expires_at,
-			storage_location, sync_status, is_hot, is_synced, is_finalized, is_frozen
+			storage_location, sync_status, has_local_copy, is_synced, is_finalized
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare live_artifacts batch: %v", err)
@@ -3233,14 +3259,13 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 		nilIfEmptyString(dvrData.GetManifestPath()), // file_path = manifest_path for DVR
 		nilIfZeroUint64(dvrData.GetSizeBytes()),
 		nilIfEmptyString(nodeID),
-		event.Timestamp,
+		lifecycleUpdatedAt(dvrData.GetSourceUpdatedAtMs(), event.Timestamp), // updated_at (source-ordered)
 		expiresAtTime,
 		nilIfEmptyString(dvrData.GetStorageLocation()),
 		nilIfEmptyString(dvrData.GetSyncStatus()),
-		dvrData.IsHot,
+		dvrData.HasLocalCopy, // has_local_copy
 		dvrData.IsSynced,
 		dvrData.IsFinalized,
-		dvrData.IsFrozen,
 	); appendErr != nil {
 		h.logger.Errorf("Failed to append to live_artifacts batch: %v", appendErr)
 		if h.metrics != nil {
@@ -3268,7 +3293,7 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 				timestamp, tenant_id, stream_id, internal_name, cluster_id, origin_cluster_id,
 				filename, request_id, stage, content_type,
 				start_unix, stop_unix, ingest_node_id, file_path, size_bytes, message, expires_at,
-				source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+				source_region, stream_origin_region, stream_origin_cluster_id, schema_version, event_id
 			)`)
 	if err != nil {
 		if h.metrics != nil {
@@ -3284,7 +3309,8 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 	}
 
 	if err := batch.Append(
-		event.Timestamp,
+		// timestamp = stable SOURCE transition time (survives outbox redelivery) — see clip handler.
+		lifecycleUpdatedAt(dvrData.GetSourceUpdatedAtMs(), event.Timestamp),
 		tenantID,
 		parseUUID(mistTriggerStreamID(&mt)),
 		internalName,
@@ -3305,6 +3331,7 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 		env.streamOriginRegion,
 		env.streamOriginClusterID,
 		env.schemaVersion,
+		event.EventID, // stable outbox row id → part of the read-time dedup identity
 	); err != nil {
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
@@ -3369,7 +3396,7 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 			tenant_id, stream_id, request_id, internal_name, filename, content_type, stage,
 			progress_percent, error_message, requested_at, started_at, completed_at,
 			file_path, s3_url, size_bytes, processing_node_id, updated_at, expires_at,
-			storage_location, sync_status, is_hot, is_synced, is_finalized, is_frozen
+			storage_location, sync_status, has_local_copy, is_synced, is_finalized
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare live_artifacts batch for VOD: %v", err)
@@ -3403,14 +3430,13 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 		nilIfEmptyStringPtr(vodData.S3Url),     // s3_url
 		nilIfZeroUint64Ptr(vodData.SizeBytes),  // size_bytes
 		nilIfEmptyStringPtr(vodData.NodeId),    // processing_node_id
-		event.Timestamp,                        // updated_at
-		expiresAtTime,                          // expires_at
+		lifecycleUpdatedAt(vodData.GetSourceUpdatedAtMs(), event.Timestamp), // updated_at (source-ordered)
+		expiresAtTime, // expires_at
 		nilIfEmptyString(vodData.GetStorageLocation()),
 		nilIfEmptyString(vodData.GetSyncStatus()),
-		vodData.IsHot,
+		vodData.HasLocalCopy, // has_local_copy
 		vodData.IsSynced,
 		vodData.IsFinalized,
-		vodData.IsFrozen,
 	); appendErr != nil {
 		h.logger.Errorf("Failed to append to live_artifacts batch for VOD: %v", appendErr)
 		if h.metrics != nil {
@@ -3463,7 +3489,7 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 				ingest_node_id, file_path, s3_url, size_bytes, message, expires_at,
 				source_region, stream_origin_region, stream_origin_cluster_id, schema_version,
 				processing_wall_ms, speed_min_x, speed_avg_x, speed_max_x,
-				hard_slow_ticks, stale_hold_ticks, lockout_ticks, drain_ms
+				hard_slow_ticks, stale_hold_ticks, lockout_ticks, drain_ms, event_id
 			)`)
 	if err != nil {
 		if h.metrics != nil {
@@ -3479,7 +3505,8 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 	}
 
 	if err := batch.Append(
-		event.Timestamp,
+		// timestamp = stable SOURCE transition time (survives outbox redelivery) — see clip handler.
+		lifecycleUpdatedAt(vodData.GetSourceUpdatedAtMs(), event.Timestamp),
 		tenantID,
 		parseUUID(mistTriggerStreamID(&mt)),
 		internalName, // internal_name = vod_hash
@@ -3507,6 +3534,7 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 		vodStaleHoldTicks,
 		vodLockoutTicks,
 		vodDrainMs,
+		event.EventID, // stable outbox row id → part of the read-time dedup identity
 	); err != nil {
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
@@ -3646,121 +3674,14 @@ func (h *AnalyticsHandler) processStorageLifecycle(ctx context.Context, event ka
 		return err
 	}
 
-	if err := h.upsertArtifactStorageState(ctx, event, &mt, sld, internalName, actionStr); err != nil {
-		return err
-	}
-
+	// storage_lifecycle is a DIAGNOSTIC stream: the sidecar (Helmsman) emits it
+	// before Foghorn validates the sync attempt, so it may reflect a stale,
+	// timed-out, or ultimately-rejected attempt. It writes ONLY to storage_events.
+	// The authoritative artifact_state_current storage fields (is_synced,
+	// sync_status, storage_location, has_local_copy, is_finalized) come SOLELY from
+	// Foghorn's guarded, transactionally-captured Clip/DVR/Vod lifecycle events,
+	// which are emitted AFTER processSyncComplete/freeze validation.
 	return nil
-}
-
-func (h *AnalyticsHandler) upsertArtifactStorageState(
-	ctx context.Context,
-	event kafka.AnalyticsEvent,
-	mt *ipcpb.MistTrigger,
-	sld *ipcpb.StorageLifecycleData,
-	internalName string,
-	actionStr string,
-) error {
-	if sld == nil || sld.GetAssetHash() == "" {
-		return nil
-	}
-	// Relay read-through events measure S3 egress by asset; without a durable
-	// local cache path they are not proof that the whole asset is hot.
-	if sld.GetAction() == ipcpb.StorageLifecycleData_ACTION_CACHED && strings.TrimSpace(sld.GetLocalPath()) == "" {
-		return nil
-	}
-	storageLocation, syncStatus, isHot, isSynced, isFrozen := storageStateFromAction(sld.GetAction())
-	if storageLocation == "" && syncStatus == "" {
-		return nil
-	}
-	stage := "completed"
-	switch sld.GetAction() {
-	case ipcpb.StorageLifecycleData_ACTION_DELETED:
-		stage = "deleted"
-	case ipcpb.StorageLifecycleData_ACTION_SYNC_FAILED,
-		ipcpb.StorageLifecycleData_ACTION_EVICT_FAILED,
-		ipcpb.StorageLifecycleData_ACTION_CACHE_FAILED,
-		ipcpb.StorageLifecycleData_ACTION_LOCAL_MISSING:
-		stage = "failed"
-	}
-
-	stateBatch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO artifact_state_current (
-			tenant_id, stream_id, request_id, internal_name, filename, content_type, stage,
-			progress_percent, error_message, requested_at, started_at, completed_at,
-			file_path, s3_url, size_bytes, processing_node_id, updated_at,
-			storage_location, sync_status, is_hot, is_synced, is_finalized, is_frozen
-		)`)
-	if err != nil {
-		h.logger.Errorf("Failed to prepare artifact storage state batch: %v", err)
-		return err
-	}
-	defer closeClickHouseBatch(stateBatch)
-
-	isFinalized := sld.DtshIncluded
-	if err := stateBatch.Append(
-		event.TenantID,
-		parseUUID(mistTriggerStreamID(mt)),
-		sld.GetAssetHash(),
-		internalName,
-		nil,
-		sld.GetAssetType(),
-		stage,
-		uint8(100),
-		nilIfEmptyString(sld.GetError()),
-		event.Timestamp,
-		nil,
-		event.Timestamp,
-		nilIfEmptyString(sld.GetLocalPath()),
-		nilIfEmptyString(sld.GetS3Url()),
-		nilIfZeroUint64(sld.GetSizeBytes()),
-		nilIfEmptyString(mt.GetNodeId()),
-		event.Timestamp,
-		nilIfEmptyString(storageLocation),
-		nilIfEmptyString(syncStatus),
-		&isHot,
-		&isSynced,
-		isFinalized,
-		&isFrozen,
-	); err != nil {
-		h.logger.Errorf("Failed to append artifact storage state for %s: %v", actionStr, err)
-		return err
-	}
-
-	if err := stateBatch.Send(); err != nil {
-		h.logger.Errorf("Failed to send artifact storage state batch: %v", err)
-		return err
-	}
-	return nil
-}
-
-func storageStateFromAction(action ipcpb.StorageLifecycleData_Action) (storageLocation, syncStatus string, isHot, isSynced, isFrozen bool) {
-	switch action {
-	case ipcpb.StorageLifecycleData_ACTION_SYNC_STARTED:
-		return "local", "in_progress", true, false, false
-	case ipcpb.StorageLifecycleData_ACTION_SYNCED:
-		return "local", "synced", true, true, false
-	case ipcpb.StorageLifecycleData_ACTION_EVICTED:
-		return "s3", "synced", false, true, true
-	case ipcpb.StorageLifecycleData_ACTION_CACHE_STARTED:
-		// Read-through relay started filling a local cache block. The
-		// authoritative bytes remain on S3; storage_location stays 's3'.
-		return "s3", "synced", false, true, true
-	case ipcpb.StorageLifecycleData_ACTION_CACHED:
-		return "local", "synced", true, true, false
-	case ipcpb.StorageLifecycleData_ACTION_DELETED:
-		return "deleted", "deleted", false, false, false
-	case ipcpb.StorageLifecycleData_ACTION_SYNC_FAILED:
-		return "local", "failed", true, false, false
-	case ipcpb.StorageLifecycleData_ACTION_EVICT_FAILED:
-		return "local", "synced", true, true, false
-	case ipcpb.StorageLifecycleData_ACTION_CACHE_FAILED:
-		return "s3", "synced", false, true, true
-	case ipcpb.StorageLifecycleData_ACTION_LOCAL_MISSING:
-		return "local", "lost_local", false, false, false
-	default:
-		return "", "", false, false, false
-	}
 }
 
 // processFederationEvent handles federation operation events (origin-pull, peer topology, query fan-out)
@@ -4182,6 +4103,126 @@ func (h *AnalyticsHandler) processAPIRequestBatch(ctx context.Context, event kaf
 		"aggregate_count": rowCount,
 	}).Debug("Successfully processed API request batch")
 
+	return nil
+}
+
+// validNodeCopyRole gates the role against what producers emit (ipc.ArtifactNodeCopyEvent,
+// protojson lower-cased): "origin" or "cache". Anything else is rejected so malformed
+// input can't corrupt current state.
+func validNodeCopyRole(role string) bool {
+	return role == "origin" || role == "cache"
+}
+
+// processArtifactNodeCopy records a per-(artifact, node) local-copy transition emitted
+// by Foghorn (docs/architecture/analytics-pipeline.md): it appends to the immutable
+// artifact_node_copy_events log and upserts the latest state into
+// artifact_node_copy_current (ReplacingMergeTree keyed on the Foghorn-assigned monotonic
+// version). tenant_id rides the ServiceEvent envelope; transition arrives as a proto
+// enum name.
+func (h *AnalyticsHandler) processArtifactNodeCopy(ctx context.Context, event kafka.ServiceEvent) error {
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("artifact_node_copy", "attempt").Inc()
+	}
+
+	tenantID := parseUUID(event.TenantID)
+	if tenantID == uuid.Nil {
+		return fmt.Errorf("missing tenant_id in artifact_node_copy service event")
+	}
+	artifactHash := getStringFromMap(event.Data, "artifact_hash")
+	nodeID := getStringFromMap(event.Data, "node_id")
+	if artifactHash == "" || nodeID == "" {
+		return fmt.Errorf("artifact_node_copy event missing artifact_hash or node_id")
+	}
+
+	timestamp := event.Timestamp
+	if ms, ok := getInt64FromMap(event.Data, "timestamp_ms"); ok && ms > 0 {
+		timestamp = time.UnixMilli(ms)
+	}
+	role := strings.ToLower(getStringFromMap(event.Data, "role"))
+	transition := strings.ToLower(getStringFromMap(event.Data, "transition"))
+
+	// Reject anything outside the supported contract rather than writing it. A
+	// misspelled/empty/unspecified transition must NOT default to a present copy —
+	// that would silently corrupt current state.
+	switch transition {
+	case "gained", "lost", "updated":
+	default:
+		return fmt.Errorf("artifact_node_copy event has unsupported transition %q", transition)
+	}
+	if !validNodeCopyRole(role) {
+		return fmt.Errorf("artifact_node_copy event has unsupported role %q", role)
+	}
+
+	// version is the Foghorn-assigned monotonic revision; it drives ReplacingMergeTree
+	// dedup so concurrent updates converge deterministically. Every emitted event carries
+	// a real (>0) version, so a missing/zero one means the payload was mis-serialized
+	// (e.g. protojson string not parsed) — reject rather than write version=0, which
+	// would defeat the ordering guarantee.
+	v, ok := getInt64FromMap(event.Data, "version")
+	if !ok || v <= 0 {
+		return fmt.Errorf("artifact_node_copy event missing/zero version")
+	}
+	version := uint64(v)
+
+	isComplete := false
+	if b, ok := event.Data["is_complete"].(bool); ok {
+		isComplete = b
+	}
+	var sizeBytes *uint64
+	if sb, ok := getInt64FromMap(event.Data, "size_bytes"); ok && sb > 0 {
+		v := uint64(sb)
+		sizeBytes = &v
+	}
+	// GAINED/UPDATED mean the node holds a local copy; only LOST clears it.
+	present := transition != "lost"
+	env := serviceEnvelopeColumns(event)
+
+	// event_id (stable, from the durable outbox row) makes the log ReplacingMergeTree
+	// idempotent under at-least-once Kafka delivery.
+	logBatch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO artifact_node_copy_events (
+			event_id, timestamp, tenant_id, artifact_hash, node_id, role,
+			transition, is_complete, size_bytes, version, source_region, schema_version
+		)`)
+	if err != nil {
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("artifact_node_copy", "error").Inc()
+		}
+		return err
+	}
+	defer closeClickHouseBatch(logBatch)
+	if appendErr := logBatch.Append(
+		event.EventID, timestamp, tenantID, artifactHash, nodeID, role,
+		transition, isComplete, sizeBytes, version, env.sourceRegion, env.schemaVersion,
+	); appendErr != nil {
+		return appendErr
+	}
+	if sendErr := logBatch.Send(); sendErr != nil {
+		return sendErr
+	}
+
+	curBatch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO artifact_node_copy_current (
+			tenant_id, artifact_hash, node_id, role,
+			present, is_complete, size_bytes, version, updated_at
+		)`)
+	if err != nil {
+		return err
+	}
+	defer closeClickHouseBatch(curBatch)
+	if appendErr := curBatch.Append(
+		tenantID, artifactHash, nodeID, role,
+		present, isComplete, sizeBytes, version, timestamp,
+	); appendErr != nil {
+		return appendErr
+	}
+	if sendErr := curBatch.Send(); sendErr != nil {
+		return sendErr
+	}
+
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("artifact_node_copy", "success").Inc()
+	}
 	return nil
 }
 

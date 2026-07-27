@@ -25,7 +25,8 @@ Consumes analytics and service-plane events from Kafka and writes time-series da
 - `node_lifecycle_update` → `node_state_current` + `node_metrics_samples`
 - `client_lifecycle_batch` → `client_qoe_samples`
 - `load_balancing` → `routing_decisions`
-- `clip_lifecycle`, `dvr_lifecycle`, `vod_lifecycle`, `storage_lifecycle` → `artifact_state_current` + `artifact_events`
+- `clip_lifecycle`, `dvr_lifecycle`, `vod_lifecycle` → `artifact_state_current` + `artifact_events`
+- `storage_lifecycle` → `storage_events` (diagnostic only; never writes `artifact_state_current`)
 - `storage_snapshot` → `storage_snapshots`
 - `process_billing` → `processing_events` diagnostic telemetry; durable segment-complete triggers project into `processing_segments_final`
 - `api_request_batch` → API usage rollups and audit events

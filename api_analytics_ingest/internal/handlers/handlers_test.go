@@ -629,44 +629,6 @@ func TestVodProgressPercent(t *testing.T) {
 	}
 }
 
-func TestStorageStateFromAction(t *testing.T) {
-	tests := []struct {
-		name       string
-		action     ipcpb.StorageLifecycleData_Action
-		location   string
-		syncStatus string
-		hot        bool
-		synced     bool
-		frozen     bool
-	}{
-		{name: "sync started is in-progress local", action: ipcpb.StorageLifecycleData_ACTION_SYNC_STARTED, location: "local", syncStatus: "in_progress", hot: true, synced: false, frozen: false},
-		{name: "synced keeps local hot", action: ipcpb.StorageLifecycleData_ACTION_SYNCED, location: "local", syncStatus: "synced", hot: true, synced: true, frozen: false},
-		{name: "evicted is frozen cold", action: ipcpb.StorageLifecycleData_ACTION_EVICTED, location: "s3", syncStatus: "synced", hot: false, synced: true, frozen: true},
-		// Read-through cache fill: S3 stays authoritative, so location is still s3.
-		{name: "cache started stays s3 authoritative", action: ipcpb.StorageLifecycleData_ACTION_CACHE_STARTED, location: "s3", syncStatus: "synced", hot: false, synced: true, frozen: true},
-		{name: "cached restores hot", action: ipcpb.StorageLifecycleData_ACTION_CACHED, location: "local", syncStatus: "synced", hot: true, synced: true, frozen: false},
-		{name: "deleted clears everything", action: ipcpb.StorageLifecycleData_ACTION_DELETED, location: "deleted", syncStatus: "deleted", hot: false, synced: false, frozen: false},
-		{name: "sync failure keeps hot local", action: ipcpb.StorageLifecycleData_ACTION_SYNC_FAILED, location: "local", syncStatus: "failed", hot: true, synced: false, frozen: false},
-		// Eviction failing loses nothing — the asset is still fully synced.
-		{name: "evict failure stays synced", action: ipcpb.StorageLifecycleData_ACTION_EVICT_FAILED, location: "local", syncStatus: "synced", hot: true, synced: true, frozen: false},
-		{name: "cache failure stays s3 synced", action: ipcpb.StorageLifecycleData_ACTION_CACHE_FAILED, location: "s3", syncStatus: "synced", hot: false, synced: true, frozen: true},
-		{name: "local missing is lost_local", action: ipcpb.StorageLifecycleData_ACTION_LOCAL_MISSING, location: "local", syncStatus: "lost_local", hot: false, synced: false, frozen: false},
-		// Unknown action yields empty state so the caller skips the write.
-		{name: "unspecified yields empty state", action: ipcpb.StorageLifecycleData_ACTION_UNSPECIFIED, location: "", syncStatus: "", hot: false, synced: false, frozen: false},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			location, syncStatus, hot, synced, frozen := storageStateFromAction(tc.action)
-			if location != tc.location || syncStatus != tc.syncStatus || hot != tc.hot || synced != tc.synced || frozen != tc.frozen {
-				t.Fatalf("storageStateFromAction(%s) = (%q,%q,%v,%v,%v), want (%q,%q,%v,%v,%v)",
-					tc.action, location, syncStatus, hot, synced, frozen,
-					tc.location, tc.syncStatus, tc.hot, tc.synced, tc.frozen)
-			}
-		})
-	}
-}
-
 func TestNormalizeDVRStage(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -2064,41 +2026,62 @@ func TestMistTriggerStreamIDFallsBackToLifecyclePayloads(t *testing.T) {
 	}
 }
 
-func TestStorageLifecycleCachedWithoutLocalPathDoesNotUpdateCurrentState(t *testing.T) {
-	conn := newFakeClickhouseConn()
-	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
-	tenantID := uuid.NewString()
-	streamID := uuid.NewString()
-	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
-		StreamId: &streamID,
-		TriggerPayload: &ipcpb.MistTrigger_StorageLifecycleData{
-			StorageLifecycleData: &ipcpb.StorageLifecycleData{
-				Action:    ipcpb.StorageLifecycleData_ACTION_CACHED,
-				AssetType: "vod",
-				AssetHash: "asset-hash",
-				StreamId:  &streamID,
-				SizeBytes: 512,
-			},
-		},
-	})
-	event := kafka.AnalyticsEvent{
-		EventID:   uuid.NewString(),
-		EventType: "storage_lifecycle",
-		Timestamp: time.Now(),
-		Source:    "decklog",
-		TenantID:  tenantID,
-		Data:      data,
+// TestStorageLifecycleIsDiagnosticOnly pins the invariant that the sidecar
+// storage_lifecycle stream is diagnostic: every action writes ONLY to
+// storage_events and never touches artifact_state_current. In particular
+// ACTION_SYNCED — emitted before Foghorn validates the sync attempt — must not
+// flip the authoritative sync state, which comes solely from Foghorn's validated
+// Clip/DVR/Vod lifecycle events.
+func TestStorageLifecycleIsDiagnosticOnly(t *testing.T) {
+	actions := []ipcpb.StorageLifecycleData_Action{
+		ipcpb.StorageLifecycleData_ACTION_SYNCED,
+		ipcpb.StorageLifecycleData_ACTION_SYNC_STARTED,
+		ipcpb.StorageLifecycleData_ACTION_EVICTED,
+		ipcpb.StorageLifecycleData_ACTION_CACHED,
+		ipcpb.StorageLifecycleData_ACTION_DELETED,
+		ipcpb.StorageLifecycleData_ACTION_SYNC_FAILED,
+		ipcpb.StorageLifecycleData_ACTION_LOCAL_MISSING,
 	}
+	for _, action := range actions {
+		t.Run(action.String(), func(t *testing.T) {
+			conn := newFakeClickhouseConn()
+			handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+			tenantID := uuid.NewString()
+			streamID := uuid.NewString()
+			localPath := "/srv/cache/asset-hash"
+			data := mustMistTriggerData(t, &ipcpb.MistTrigger{
+				StreamId: &streamID,
+				TriggerPayload: &ipcpb.MistTrigger_StorageLifecycleData{
+					StorageLifecycleData: &ipcpb.StorageLifecycleData{
+						Action:    action,
+						AssetType: "vod",
+						AssetHash: "asset-hash",
+						StreamId:  &streamID,
+						SizeBytes: 512,
+						LocalPath: &localPath,
+					},
+				},
+			})
+			event := kafka.AnalyticsEvent{
+				EventID:   uuid.NewString(),
+				EventType: "storage_lifecycle",
+				Timestamp: time.Now(),
+				Source:    "decklog",
+				TenantID:  tenantID,
+				Data:      data,
+			}
 
-	if err := handler.HandleAnalyticsEvent(event); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	eventBatch := conn.batches["storage_events"]
-	if eventBatch == nil || len(eventBatch.rows) != 1 {
-		t.Fatalf("expected storage_events row, got %#v", eventBatch)
-	}
-	if stateBatch := conn.batches["artifact_state_current"]; stateBatch != nil && len(stateBatch.rows) > 0 {
-		t.Fatalf("unexpected artifact_state_current rows for read-through cached event: %#v", stateBatch.rows)
+			if err := handler.HandleAnalyticsEvent(event); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			eventBatch := conn.batches["storage_events"]
+			if eventBatch == nil || len(eventBatch.rows) != 1 {
+				t.Fatalf("expected one storage_events row, got %#v", eventBatch)
+			}
+			if stateBatch := conn.batches["artifact_state_current"]; stateBatch != nil && len(stateBatch.rows) > 0 {
+				t.Fatalf("storage_lifecycle must not write artifact_state_current, got %#v", stateBatch.rows)
+			}
+		})
 	}
 }
 

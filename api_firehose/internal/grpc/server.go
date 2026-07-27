@@ -96,11 +96,12 @@ func NewDecklogServerWithConfig(producer kafka.ProducerInterface, logger logging
 	}
 }
 
-// triggerTypesForRawJournal mirrors the set Foghorn acks durably and
-// Helmsman WALs. Decklog republishes the raw MistTrigger envelope to
+// triggerTypesForRawJournal is a subset of the durable-ack set Foghorn
+// acks and Helmsman WALs (mist.IsDurableTriggerType in
+// pkg/mist/triggers.go — PUSH_INPUT_CLOSE is durable but not
+// journaled). Decklog republishes the raw MistTrigger envelope to
 // rawTriggersTopic only for these trigger types so the audit table
-// stays focused on final/accounting facts. Keep in sync with
-// api_balancing/internal/control/server.go::triggerTypesNeedingDurableAck.
+// stays focused on final/accounting facts.
 var triggerTypesForRawJournal = map[string]struct{}{
 	"USER_END":                            {},
 	"STREAM_END":                          {},
@@ -340,6 +341,8 @@ func serviceEventPayloadToMap(event *ipcpb.ServiceEvent) (map[string]any, error)
 		return protoMessageToMap(payload.SupportEvent)
 	case *ipcpb.ServiceEvent_ArtifactEvent:
 		return protoMessageToMap(payload.ArtifactEvent)
+	case *ipcpb.ServiceEvent_ArtifactNodeCopyEvent:
+		return protoMessageToMap(payload.ArtifactNodeCopyEvent)
 	default:
 		return map[string]any{}, nil
 	}

@@ -33,8 +33,9 @@ import (
 //     per-meter epsilon must be recorded in projection_divergences before
 //     the newer projection is accepted.
 
-// triggerTypesWithFinalProjection mirrors api_firehose triggerTypesForRawJournal
-// and api_balancing triggerTypesNeedingDurableAck. Keep in sync.
+// triggerTypesWithFinalProjection is a subset of api_firehose
+// triggerTypesForRawJournal (itself a subset of the durable-ack set
+// gated by mist.IsDurableTriggerType). Keep in sync.
 var triggerTypesWithFinalProjection = map[string]struct{}{
 	"USER_END":                            {},
 	"STREAM_END":                          {},
