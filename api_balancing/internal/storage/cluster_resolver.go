@@ -70,6 +70,11 @@ func (m StorageMintMode) String() string {
 // row. The resolver applies request-owned candidates first, then its configured
 // LocalClusterID. Empty fields are skipped, duplicates are deduped.
 type ResolverInput struct {
+	// OriginClusterID is the stream's/artifact's INGEST cluster. It is source-authority attribution only and
+	// MUST NOT be supplied when selecting a DURABLE-WRITE destination: an advertised BYOC origin would then win
+	// the durable write over the tenant's official cluster. Durable callers (freeze, VOD, thumbnail) pass
+	// OfficialClusterID only; leave this empty for them. It remains for read/generality paths that legitimately
+	// prefer the origin copy.
 	OriginClusterID   string
 	OfficialClusterID string
 }
