@@ -1,0 +1,15 @@
+-- artifact_state_current.updated_at is the ReplacingMergeTree version that orders a row's lifecycle
+-- transitions. As DateTime (1s) two transitions in the same second (a rapid sync→frozen sequence) tie,
+-- and the collapse can surface a stale "current" state. Widening to DateTime64(3) keeps millisecond
+-- precision so it REDUCES (does not eliminate) same-second ties. It does NOT make the collapse
+-- deterministic: updated_at is a wall-clock time (source transition time or receipt), not a
+-- source-owned monotonic revision, so concurrent same-artifact transitions can still tie/invert — this
+-- projection is best-effort (see periscope.sql). Modifying the engine's version column in place is safe
+-- — the new type is still a valid ReplacingMergeTree version.
+--
+-- postdeploy phase: a MODIFY COLUMN type rewrite is a heavy operation in ClickHouse (it rewrites the
+-- column across parts), so it must not run in the expand phase.
+--
+-- Schema source of truth: pkg/database/sql/clickhouse/periscope.sql — the same column type is in the
+-- baseline so a fresh init and an upgrade converge.
+ALTER TABLE artifact_state_current MODIFY COLUMN updated_at DateTime64(3);

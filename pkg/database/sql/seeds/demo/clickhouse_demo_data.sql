@@ -874,6 +874,174 @@ SELECT
 FROM numbers(0, 2016);
 
 -- =================================================================================================
+-- 9A.1 Player Boot Samples (player_boot_samples) - Player Experience startup metrics
+-- =================================================================================================
+-- Browser-originated startup telemetry. Mixed live/VOD rows exercise the tenant aggregate,
+-- stream-specific filtering, VOD artifact filtering, cache ratio, and cluster-ops views.
+INSERT INTO periscope.player_boot_samples (
+    timestamp, event_id, tenant_id, stream_id, artifact_hash, internal_name, session_id, trace_id,
+    node_id, serving_cluster_id, origin_cluster_id, cluster_attributed,
+    total_ttf_ms, gateway_resolve_ms, mist_hydrate_ms, player_select_ms, connect_ms, prebuffer_ms,
+    outcome, error_code, player_type, protocol, content_type, is_live, connection_type, player_version,
+    manifest_url, manifest_ms, manifest_transfer_size,
+    first_segment_url, first_segment_ms, first_segment_transfer_size,
+    cdn_cache_status, age_seconds, resources,
+    source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+)
+SELECT
+    toDateTime(now() - INTERVAL (number * 5) MINUTE) AS timestamp,
+    generateUUIDv4() AS event_id,
+    toUUID('5eed517e-ba5e-da7a-517e-ba5eda7a0001') AS tenant_id,
+    if(number % 3 = 0, CAST(NULL, 'Nullable(UUID)'), toUUID('5eedfeed-11fe-ca57-feed-11feca570001')) AS stream_id,
+    if(number % 3 = 0, 'c3d4e5f678901234567890123456abcd', '') AS artifact_hash,
+    if(number % 3 = 0, 'vod_int_001', 'demo_live_stream_001') AS internal_name,
+    concat('px-boot-', toString(number)) AS session_id,
+    concat('trace-demo-', toString(number)) AS trace_id,
+    arrayElement(['edge-node-1', 'edge-ashburn', 'edge-singapore'], 1 + number % 3) AS node_id,
+    'demo-media' AS serving_cluster_id,
+    'demo-media' AS origin_cluster_id,
+    toUInt8(1) AS cluster_attributed,
+    toUInt32(if(number % 97 = 0, 0, 650 + (number % 13) * 37 + 220 * abs(sin(number / 17.0)))) AS total_ttf_ms,
+    toUInt32(75 + number % 90) AS gateway_resolve_ms,
+    toUInt32(85 + number % 120) AS mist_hydrate_ms,
+    toUInt32(24 + number % 30) AS player_select_ms,
+    toUInt32(150 + number % 210) AS connect_ms,
+    toUInt32(if(number % 97 = 0, 0, 220 + number % 260)) AS prebuffer_ms,
+    if(number % 97 = 0, 'error', 'success') AS outcome,
+    if(number % 97 = 0, 'manifest_timeout', '') AS error_code,
+    arrayElement(['hls.js', 'native', 'frameworks-player'], 1 + number % 3) AS player_type,
+    arrayElement(['hls', 'hls', 'dash', 'webrtc'], 1 + number % 4) AS protocol,
+    if(number % 3 = 0, 'vod', 'live') AS content_type,
+    toUInt8(if(number % 3 = 0, 0, 1)) AS is_live,
+    arrayElement(['wifi', 'ethernet', '5g'], 1 + number % 3) AS connection_type,
+    'demo-player/1.0.0' AS player_version,
+    if(number % 3 = 0, '/play/vod1a2b3c4d5e6fg/index.m3u8', '/play/pb_demo_live_001/index.m3u8') AS manifest_url,
+    toUInt32(55 + number % 100) AS manifest_ms,
+    toUInt64(4200 + number % 3200) AS manifest_transfer_size,
+    if(number % 3 = 0, '/vod/c3d4e5f678901234567890123456abcd/segment-0.m4s', '/live/demo_live_stream_001/segment-0.ts') AS first_segment_url,
+    toUInt32(90 + number % 180) AS first_segment_ms,
+    toUInt64(180000 + (number % 40) * 12000) AS first_segment_transfer_size,
+    if(number % 5 = 0, 'MISS', 'HIT') AS cdn_cache_status,
+    CAST(NULL, 'Nullable(UInt32)') AS age_seconds,
+    '[]' AS resources,
+    'eu-west' AS source_region,
+    'eu-west' AS stream_origin_region,
+    'demo-media' AS stream_origin_cluster_id,
+    toUInt8(1) AS schema_version
+FROM numbers(0, 2016);
+
+-- =================================================================================================
+-- 9A.2 Session QoE Deltas (client_qoe_session_deltas) - Player Experience playback QoE
+-- =================================================================================================
+-- One final beacon per synthetic session. These rows feed playback QoE summaries,
+-- time-series charts, cluster-ops QoE, and the retention asset eligibility gate.
+INSERT INTO periscope.client_qoe_session_deltas (
+    timestamp, event_id, tenant_id, stream_id, artifact_hash, internal_name, content_id, session_id,
+    beacon_seq, is_final, flush_reason,
+    node_id, serving_cluster_id, origin_cluster_id, cluster_attributed,
+    player_type, protocol, content_type, is_live, connection_type, player_version,
+    played_ms, rebuffer_ms, rebuffer_count, seek_wait_ms,
+    frame_stats_supported, frames_decoded, frames_dropped, frames_corrupted,
+    first_frame, fatal_error, error_code,
+    bitrate_bps_seconds, abr_upswitch_count, abr_downswitch_count, play_intent, live_edge_latency_ms,
+    bucket_width_s, asset_duration_s, max_bucket_reached,
+    source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+)
+SELECT
+    toDateTime(now() - INTERVAL (number * 5) MINUTE) AS timestamp,
+    generateUUIDv4() AS event_id,
+    toUUID('5eed517e-ba5e-da7a-517e-ba5eda7a0001') AS tenant_id,
+    if(number % 3 = 0, CAST(NULL, 'Nullable(UUID)'), toUUID('5eedfeed-11fe-ca57-feed-11feca570001')) AS stream_id,
+    if(number % 3 = 0, 'c3d4e5f678901234567890123456abcd', '') AS artifact_hash,
+    if(number % 3 = 0, 'vod_int_001', 'demo_live_stream_001') AS internal_name,
+    if(number % 3 = 0, 'vod:c3d4e5f678901234567890123456abcd', 'live:demo_live_stream_001') AS content_id,
+    concat('px-session-', toString(number)) AS session_id,
+    toUInt32(1) AS beacon_seq,
+    toUInt8(1) AS is_final,
+    arrayElement(['ended', 'pagehide', 'heartbeat-final'], 1 + number % 3) AS flush_reason,
+    arrayElement(['edge-node-1', 'edge-ashburn', 'edge-singapore'], 1 + number % 3) AS node_id,
+    'demo-media' AS serving_cluster_id,
+    'demo-media' AS origin_cluster_id,
+    toUInt8(1) AS cluster_attributed,
+    arrayElement(['hls.js', 'native', 'frameworks-player'], 1 + number % 3) AS player_type,
+    arrayElement(['hls', 'hls', 'dash', 'webrtc'], 1 + number % 4) AS protocol,
+    if(number % 3 = 0, 'vod', 'live') AS content_type,
+    toUInt8(if(number % 3 = 0, 0, 1)) AS is_live,
+    arrayElement(['wifi', 'ethernet', '5g'], 1 + number % 3) AS connection_type,
+    'demo-player/1.0.0' AS player_version,
+    toUInt64(if(number % 149 = 0, 0, if(number % 3 = 0, (20 + number % 220) * 1000, (120 + number % 180) * 1000))) AS played_ms,
+    toUInt64(if(number % 149 = 0, 0, if(number % 19 = 0, 2500 + (number % 4) * 600, (number % 5) * 120))) AS rebuffer_ms,
+    toUInt32(if(number % 149 = 0, 0, if(number % 19 = 0, 1 + number % 3, 0))) AS rebuffer_count,
+    toUInt64(if(number % 37 = 0, 700 + (number % 6) * 200, 0)) AS seek_wait_ms,
+    toUInt8(1) AS frame_stats_supported,
+    toUInt64(if(number % 149 = 0, 0, if(number % 3 = 0, (20 + number % 220) * 30, (120 + number % 180) * 30))) AS frames_decoded,
+    toUInt64(if(number % 149 = 0, 0, number % 11)) AS frames_dropped,
+    toUInt64(0) AS frames_corrupted,
+    toUInt8(if(number % 149 = 0, 0, 1)) AS first_frame,
+    toUInt8(if(number % 211 = 0, 1, 0)) AS fatal_error,
+    if(number % 211 = 0, 'media_decode_error', '') AS error_code,
+    toUInt64(if(number % 149 = 0, 0, (3200000 + (number % 5) * 450000) * if(number % 3 = 0, 20 + number % 220, 120 + number % 180))) AS bitrate_bps_seconds,
+    toUInt32(number % 4) AS abr_upswitch_count,
+    toUInt32(number % 3) AS abr_downswitch_count,
+    toUInt8(1) AS play_intent,
+    toUInt32(if(number % 3 = 0, 0, 2500 + number % 1800)) AS live_edge_latency_ms,
+    toUInt32(if(number % 3 = 0 AND number % 149 != 0, 5, 0)) AS bucket_width_s,
+    toUInt32(if(number % 3 = 0 AND number % 149 != 0, 300, 0)) AS asset_duration_s,
+    toUInt32(if(number % 3 = 0 AND number % 149 != 0, least(59, 8 + number % 57), 0)) AS max_bucket_reached,
+    'eu-west' AS source_region,
+    'eu-west' AS stream_origin_region,
+    'demo-media' AS stream_origin_cluster_id,
+    toUInt8(1) AS schema_version
+FROM numbers(0, 2016);
+
+-- =================================================================================================
+-- 9A.3 VOD Retention Buckets (vod_retention_buckets) - per-asset audience retention
+-- =================================================================================================
+-- Watch-density histogram for the seeded ready VOD asset. Audience retention is
+-- derived from client_qoe_session_deltas.max_bucket_reached above.
+INSERT INTO periscope.vod_retention_buckets (
+    timestamp, event_id, tenant_id, artifact_hash, internal_name, content_id, session_id,
+    beacon_seq, bucket_width_s, asset_duration_s, bucket_index, seconds_watched,
+    source_region, schema_version
+)
+SELECT
+    toDateTime(now() - INTERVAL (s.session_number * 5) MINUTE) AS timestamp,
+    generateUUIDv4() AS event_id,
+    toUUID('5eed517e-ba5e-da7a-517e-ba5eda7a0001') AS tenant_id,
+    'c3d4e5f678901234567890123456abcd' AS artifact_hash,
+    'vod_int_001' AS internal_name,
+    'vod:c3d4e5f678901234567890123456abcd' AS content_id,
+    concat('px-session-', toString(s.session_number)) AS session_id,
+    toUInt32(1) AS beacon_seq,
+    toUInt32(5) AS bucket_width_s,
+    toUInt32(300) AS asset_duration_s,
+    toUInt32(b.bucket_index) AS bucket_index,
+    toFloat32(least(
+        5.0,
+        greatest(
+            0.05,
+            (1.0 - toFloat64(b.bucket_index) / 75.0)
+            * 5.0
+            * (0.65 + (s.session_number % 5) / 10.0)
+            * if(b.bucket_index >= 42 AND b.bucket_index <= 47, 1.25, 1.0)
+        )
+    )) AS seconds_watched,
+    'eu-west' AS source_region,
+    toUInt8(1) AS schema_version
+FROM (
+    SELECT
+        number AS session_number,
+        toUInt32(least(59, 8 + number % 57)) AS max_bucket_reached
+    FROM numbers(0, 2016)
+    WHERE number % 3 = 0 AND number % 149 != 0
+) AS s
+CROSS JOIN (
+    SELECT number AS bucket_index
+    FROM numbers(0, 60)
+) AS b
+WHERE b.bucket_index <= s.max_bucket_reached;
+
+-- =================================================================================================
 -- 9B. API Requests (api_requests) - 7 days of 5-minute aggregated batches
 -- =================================================================================================
 -- GraphQL API request tracking for usage analytics
@@ -1102,6 +1270,9 @@ OPTIMIZE TABLE periscope.stream_viewer_5m FINAL;
 OPTIMIZE TABLE periscope.stream_health_5m FINAL;
 OPTIMIZE TABLE periscope.quality_tier_daily FINAL;
 OPTIMIZE TABLE periscope.client_qoe_5m FINAL;
+OPTIMIZE TABLE periscope.player_boot_samples FINAL;
+OPTIMIZE TABLE periscope.client_qoe_session_deltas FINAL;
+OPTIMIZE TABLE periscope.vod_retention_buckets FINAL;
 OPTIMIZE TABLE periscope.node_performance_5m FINAL;
 OPTIMIZE TABLE periscope.node_metrics_1h FINAL;
 -- Rollup tables populated by refreshable MVs; OPTIMIZE happens internally

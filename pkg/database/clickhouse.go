@@ -3,11 +3,22 @@ package database
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+)
+
+// clickHouseConnectRetries bounds boot-time connection attempts. ClickHouse's
+// image starts a throwaway server to run init scripts before restarting as the
+// real server, so a healthcheck can briefly pass against a node that then
+// refuses connections. Retrying with backoff rides out that window instead of
+// exiting and relying on the container restart policy.
+const (
+	clickHouseConnectRetries = 12
+	clickHouseConnectBackoff = 3 * time.Second
 )
 
 // ClickHouseConn represents a ClickHouse database connection using database/sql interface
@@ -102,18 +113,40 @@ func ConnectClickHouseNative(cfg ClickHouseConfig, logger logging.Logger) (Click
 
 // MustConnectClickHouse connects to ClickHouse using database/sql interface or panics
 func MustConnectClickHouse(cfg ClickHouseConfig, logger logging.Logger) ClickHouseConn {
-	conn, err := ConnectClickHouse(cfg, logger)
-	if err != nil {
-		logger.WithError(err).Fatal("Failed to connect to ClickHouse")
+	var conn ClickHouseConn
+	var err error
+	for attempt := 1; attempt <= clickHouseConnectRetries; attempt++ {
+		if conn, err = ConnectClickHouse(cfg, logger); err == nil {
+			return conn
+		}
+		if attempt < clickHouseConnectRetries {
+			logger.WithError(err).WithFields(logging.Fields{
+				"attempt":  attempt,
+				"retry_in": clickHouseConnectBackoff.String(),
+			}).Warn("ClickHouse not ready; retrying connection")
+			time.Sleep(clickHouseConnectBackoff)
+		}
 	}
+	logger.WithError(err).Fatal("Failed to connect to ClickHouse")
 	return conn
 }
 
 // MustConnectClickHouseNative connects to ClickHouse using native interface or panics
 func MustConnectClickHouseNative(cfg ClickHouseConfig, logger logging.Logger) ClickHouseNativeConn {
-	conn, err := ConnectClickHouseNative(cfg, logger)
-	if err != nil {
-		logger.WithError(err).Fatal("Failed to connect to ClickHouse native")
+	var conn ClickHouseNativeConn
+	var err error
+	for attempt := 1; attempt <= clickHouseConnectRetries; attempt++ {
+		if conn, err = ConnectClickHouseNative(cfg, logger); err == nil {
+			return conn
+		}
+		if attempt < clickHouseConnectRetries {
+			logger.WithError(err).WithFields(logging.Fields{
+				"attempt":  attempt,
+				"retry_in": clickHouseConnectBackoff.String(),
+			}).Warn("ClickHouse not ready; retrying native connection")
+			time.Sleep(clickHouseConnectBackoff)
+		}
 	}
+	logger.WithError(err).Fatal("Failed to connect to ClickHouse native")
 	return conn
 }

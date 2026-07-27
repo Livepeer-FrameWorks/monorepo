@@ -1,0 +1,15 @@
+-- artifact_events carries the outbox row id so at-least-once redeliveries are dedupable at READ time.
+--
+-- artifact_events is the append-only lifecycle HISTORY counted RAW by analytics. Its rows arrive
+-- through the Foghorn durable outbox (at-least-once): an ack-lost redelivery re-sends the SAME event
+-- with the SAME stable event_id (the outbox row id) and the SAME source timestamp, so a redelivery is
+-- byte-identical. Adding event_id lets the read sites collapse a redelivery on the full row identity
+-- (see api_analytics_query artifact_events reads) without changing the engine.
+--
+-- Additive and rolling-safe: an old ingest binary ignores the new column, a new binary writes event_id
+-- before any cutover, and the engine stays ReplicatedMergeTree so legacy rows (event_id='') never
+-- collapse under a merge. IF NOT EXISTS keeps it idempotent against a freshly-baselined cluster.
+--
+-- Schema source of truth: pkg/database/sql/clickhouse/periscope.sql — the same column is in the
+-- baseline so a fresh init and an upgrade converge on the same schema.
+ALTER TABLE artifact_events ADD COLUMN IF NOT EXISTS event_id String DEFAULT '';
