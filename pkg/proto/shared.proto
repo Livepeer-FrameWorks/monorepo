@@ -5,7 +5,6 @@ package shared;
 option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared;sharedpb";
 
 import "google/protobuf/timestamp.proto";
-import "common.proto";
 
 // SHARED MESSAGES FOR CLIPS AND DVR
 // Used by both Foghorn and Commodore services
@@ -34,7 +33,7 @@ message CreateClipRequest {
   optional int64 duration_sec = 10; // Duration (seconds)
   ClipMode mode = 11;               // How to interpret the time fields
   optional int64 expires_at = 12;   // Unix timestamp (seconds) for auto-deletion
-  optional string clip_hash = 13;   // Pre-generated hash from Commodore (if provided, Foghorn uses it)
+  optional string clip_hash = 13;   // Pre-generated hash from Commodore. REQUIRED when request_id is set (the durable ledger keys on it); optional only for direct-Foghorn callers with no request_id, where Foghorn generates it.
   optional string user_id = 14;     // User who created the clip (for Decklog events)
   optional string stream_id = 15;  // Public stream ID (UUID)
   optional string playback_id = 16; // Pre-generated playback ID (Commodore)
@@ -46,6 +45,11 @@ message CreateClipRequest {
   // 30-day system default.
   optional int32 retention_days = 19;
   string processes_json = 20;     // Pre-computed MistServer process config for artifact processing
+  // Commodore creation-intent request_id. Foghorn keys its durable command ledger
+  // (foghorn.artifact_creation_commands) on this id so GetArtifactCreationStatus can
+  // report committed/rejected/in-flight for THIS create attempt without inferring
+  // from artifact-row presence. Empty for direct-Foghorn callers with no intent.
+  optional string request_id = 21;
 }
 
 // CreateClipResponse - response from clip creation
@@ -104,29 +108,12 @@ message ClipInfo {
   // Values: tenant_default | per_asset_override | tier_entitlement.
   optional string retention_source = 23;
   optional string sync_status = 24;
-  optional bool is_hot = 25;
+  // has_local_copy: a node holds a present full local copy (origin or cache); nullable = unknown.
+  optional bool has_local_copy = 25;
   optional bool is_synced = 26;
   optional bool is_finalized = 27;
-  optional bool is_frozen = 28;
-  reserved 12, 19;
+  reserved 12, 19, 28;                // 28 was is_frozen
   reserved "access_count", "last_accessed";
-}
-
-// GetClipsRequest - request to list clips
-message GetClipsRequest {
-  string tenant_id = 1;
-  optional string stream_id = 2;      // filter by stream (UUID)
-  common.CursorPaginationRequest pagination = 3;
-  string search = 4;
-  string sort_field = 5;              // created_at | title | size_bytes | expires_at
-  string sort_direction = 6;          // asc | desc
-  optional int32 offset = 7;
-}
-
-// GetClipsResponse - paginated list of clips
-message GetClipsResponse {
-  repeated ClipInfo clips = 1;
-  common.CursorPaginationResponse pagination = 2;
 }
 
 // GetClipRequest - request to get a single clip
@@ -143,6 +130,20 @@ message DeleteClipRequest {
 
 // DeleteClipResponse - response from clip deletion
 message DeleteClipResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// DeleteStreamThumbnailsRequest - remove a live stream's thumbnail control rows + objects. A live stream has no
+// artifact row, so purge never reaches it and version-supersession GC never reclaims its final active version;
+// Commodore calls this on stream deletion.
+message DeleteStreamThumbnailsRequest {
+  string stream_id = 1;
+  string tenant_id = 2;  // Required for tenant-ownership-proved deletion
+}
+
+// DeleteStreamThumbnailsResponse - response from stream-thumbnail deletion
+message DeleteStreamThumbnailsResponse {
   bool success = 1;
   string message = 2;
 }
@@ -240,6 +241,10 @@ message DeleteDVRRequest {
 message DeleteDVRResponse {
   bool success = 1;
   string message = 2;
+  // Child chapter artifact hashes the media plane cascade-deleted. Commodore uses these to
+  // delete the matching chapter catalog rows (vod_assets + dvr_chapter_playback), which have no
+  // parent-DVR relation of their own — without this the chapter library rows outlive the DVR.
+  repeated string deleted_chapter_hashes = 3;
 }
 
 // DVRInfo - full DVR recording details
@@ -275,27 +280,11 @@ message DVRInfo {
   // projection. Null until Foghorn confirms the thumbnail upload.
   optional ThumbnailAssets thumbnail_assets = 23;
   optional string sync_status = 24;
-  optional bool is_hot = 25;
+  // has_local_copy: a node holds a present full local copy (origin or cache); nullable = unknown.
+  optional bool has_local_copy = 25;
   optional bool is_synced = 26;
   optional bool is_finalized = 27;
-  optional bool is_frozen = 28;
-}
-
-// ListDVRRecordingsRequest - request to list DVR recordings
-message ListDVRRecordingsRequest {
-  string tenant_id = 1;
-  optional string stream_id = 2;  // filter by stream (UUID)
-  common.CursorPaginationRequest pagination = 3;
-  string search = 4;
-  string sort_field = 5;              // created_at | title | size_bytes | expires_at
-  string sort_direction = 6;          // asc | desc
-  optional int32 offset = 7;
-}
-
-// ListDVRRecordingsResponse - paginated list of DVR recordings
-message ListDVRRecordingsResponse {
-  repeated DVRInfo dvr_recordings = 1;
-  common.CursorPaginationResponse pagination = 2;
+  reserved 28;                       // was is_frozen
 }
 
 // VIEWER ENDPOINT MESSAGES
@@ -487,7 +476,7 @@ message CreateVodUploadRequest {
   optional string content_type = 5;  // MIME type (video/mp4, etc.)
   optional string title = 6;
   optional string description = 7;
-  optional string vod_hash = 8;  // Pre-generated by Commodore (if provided, Foghorn uses it)
+  optional string vod_hash = 8;  // Pre-generated by Commodore. REQUIRED when request_id is set (the durable ledger keys on it); optional only for direct-Foghorn callers with no request_id, where Foghorn generates it.
   optional string playback_id = 9;          // Pre-generated playback ID (Commodore)
   optional string internal_name = 10; // Pre-generated artifact routing name (Commodore)
   string cluster_id = 11;                      // Cluster for this tenant's context (set by caller)
@@ -496,6 +485,11 @@ message CreateVodUploadRequest {
   // 0 = no auto-expire (paid-tier infinite VOD default). Unset = Foghorn
   // falls back to its own resolver which only knows the tier cap.
   optional int32 retention_days = 12;
+  // Commodore creation-intent request_id. Foghorn keys its durable command ledger
+  // (foghorn.artifact_creation_commands) on this id so GetArtifactCreationStatus can
+  // report committed/rejected/in-flight for THIS create attempt. Empty for
+  // direct-Foghorn callers with no intent.
+  optional string request_id = 13;
 }
 
 // CreateVodUploadResponse - multipart upload instructions
@@ -586,30 +580,9 @@ message DeleteVodAssetResponse {
   string message = 2;
 }
 
-// GetVodAssetRequest - get a single VOD asset
-message GetVodAssetRequest {
-  string tenant_id = 1;
-  string artifact_hash = 2;
-}
-
-// ListVodAssetsRequest - list VOD assets
-message ListVodAssetsRequest {
-  string tenant_id = 1;
-  common.CursorPaginationRequest pagination = 2;
-  optional string stream_id = 3;  // filter stream-derived VOD artifacts by source stream UUID
-  string search = 4;
-  string sort_field = 5;              // created_at | title | size_bytes | expires_at
-  string sort_direction = 6;          // asc | desc
-  optional int32 offset = 7;
-}
-
-// ListVodAssetsResponse - paginated list of VOD assets
-message ListVodAssetsResponse {
-  repeated VodAssetInfo assets = 1;
-  common.CursorPaginationResponse pagination = 2;
-}
-
-// VodAssetInfo - full VOD asset details (named differently from GraphQL VodAsset to avoid autobind collision)
+// VodAssetInfo is the single-asset VOD detail returned by the upload-completion path
+// (CompleteVodUpload). Library/bulk VOD reads go through the unified ListStorageArtifacts catalog.
+// Named differently from GraphQL VodAsset to avoid autobind collision.
 message VodAssetInfo {
   string id = 1;                 // UUID from live_artifacts
   string artifact_hash = 2;      // Hash for playback URL resolution
@@ -655,10 +628,11 @@ message VodAssetInfo {
   optional string origin_type = 25; // upload | dvr_chapter | null
   optional string origin_id = 26;   // origin entity id (chapter_id for dvr_chapter)
   string sync_status = 27;
-  bool is_hot = 28;
+  // has_local_copy: a node holds a present full local copy (origin or cache).
+  bool has_local_copy = 28;
   bool is_synced = 29;
   bool is_finalized = 30;
-  bool is_frozen = 31;
+  reserved 31;                       // was is_frozen
 }
 
 // VodMetadata - metadata extracted from video file (returned by validation)
@@ -695,4 +669,84 @@ message WebhookResponse {
   bool success = 1;                 // Whether the webhook was processed successfully
   string error = 2;                 // Error message if processing failed
   int32 status_code = 3;            // HTTP status code to return to the provider (200, 400, 401, 500)
+}
+
+// ArtifactCreationStatusService lets Commodore learn Foghorn's creation outcome
+// for a single create attempt when the cross-service create response was lost or
+// ambiguous. Implemented by Foghorn (FoghornGRPCServer) reading its durable
+// command ledger (foghorn.artifact_creation_commands) keyed by the intent's
+// request_id; the Commodore creation-intent convergence sweep calls it to decide
+// its terminal action from the explicit outcome enum. AckArtifactCreationCommand
+// lets Commodore durably tell Foghorn it has consumed a terminal outcome, so the
+// Foghorn retention GC never deletes a terminal row Commodore has not yet read.
+service ArtifactCreationStatusService {
+  rpc GetArtifactCreationStatus(GetArtifactCreationStatusRequest) returns (GetArtifactCreationStatusResponse);
+  rpc AckArtifactCreationCommand(AckArtifactCreationCommandRequest) returns (AckArtifactCreationCommandResponse);
+}
+
+// ArtifactCreationOutcome is the explicit ledger outcome Foghorn reports for one
+// create attempt. MISSING (no command row — a create RPC lost in transit) and ACCEPTED
+// (an in-flight command) are DISTINCT, so the convergence sweep bounded-aborts only a
+// truly-MISSING intent and never a valid ACCEPTED one. IDENTITY_MISMATCH (a command row
+// exists for this request_id but under a DIFFERENT kind/hash) is an invariant violation,
+// never a missing command: the sweep must NEVER abort on it — it leaves the intent
+// pending and surfaces the error.
+enum ArtifactCreationOutcome {
+  ARTIFACT_CREATION_OUTCOME_UNSPECIFIED = 0; // outcome not populated (treat as inconclusive)
+  ARTIFACT_CREATION_OUTCOME_MISSING = 1;     // no command row for this request_id/tenant
+  ARTIFACT_CREATION_OUTCOME_ACCEPTED = 2;    // command is 'accepted' (in-flight)
+  ARTIFACT_CREATION_OUTCOME_COMMITTED = 3;   // command is 'committed' (durable artifact)
+  ARTIFACT_CREATION_OUTCOME_REJECTED = 4;    // command is 'rejected' (definitive rejection)
+  ARTIFACT_CREATION_OUTCOME_IDENTITY_MISMATCH = 5; // row exists but bound to a different kind/hash (invariant violation, never aborted)
+}
+
+// GetArtifactCreationStatusRequest identifies one create attempt by the intent's
+// request_id — the ledger key Foghorn wrote when the create began. tenant_id scopes
+// the lookup; kind/artifact_hash are IDENTITY GUARDS: Foghorn looks the row up by
+// (tenant_id, request_id) and compares the stored kind/artifact_hash to these, so a
+// request_id reused for a different artifact resolves to IDENTITY_MISMATCH rather than
+// being silently misread as another intent's outcome.
+message GetArtifactCreationStatusRequest {
+  string tenant_id = 1;
+  string kind = 2;                  // "clip" | "dvr" | "vod" (identity guard)
+  string artifact_hash = 3;         // identity guard
+  string request_id = 4;            // creation-intent request_id (ledger key)
+}
+
+// GetArtifactCreationStatusResponse reports the ledger outcome for the attempt.
+// outcome is the authoritative signal (MISSING/ACCEPTED/COMMITTED/REJECTED/
+// IDENTITY_MISMATCH) the convergence sweep branches on; it derives from the command
+// ledger, never from artifact-row presence. effective_* / catalog_revision are
+// populated only on a COMMITTED outcome.
+message GetArtifactCreationStatusResponse {
+  reserved 1, 2;                    // were 'committed'/'rejected' bools, superseded by outcome
+  reserved "committed", "rejected";
+  reserved 3;                       // was 'status' (unused)
+  reserved "status";
+  int64 effective_start_ms = 4;     // clip fulfilled range (whole-second aligned), 0 for dvr/vod
+  int64 effective_duration_ms = 5;  // clip fulfilled range (whole-second aligned), 0 for dvr/vod
+  int64 catalog_revision = 6;       // foghorn.artifacts.catalog_revision recorded at ledger commit
+  ArtifactCreationOutcome outcome = 7; // explicit ledger outcome
+}
+
+// AckArtifactCreationCommandRequest identifies the terminal command Commodore has
+// consumed, by the same full identity the status query uses.
+message AckArtifactCreationCommandRequest {
+  string tenant_id = 1;
+  string kind = 2;                  // "clip" | "dvr" | "vod"
+  string artifact_hash = 3;
+  string request_id = 4;            // creation-intent request_id (ledger key)
+}
+
+// AckArtifactCreationCommandResponse reports the ledger outcome Foghorn resolved for
+// the ack, so Commodore discharges the durable ack obligation ONLY on a genuine
+// terminal-consumed outcome. outcome is COMMITTED/REJECTED only when a terminal row of
+// this full identity was found AND stamped consumed_at (the obligation is discharged);
+// ACCEPTED (still in-flight — not stamped), MISSING (no row), and IDENTITY_MISMATCH (a
+// row under a different kind/hash) are NON-discharging — the command is not consumed and
+// the intent keeps the obligation with backoff.
+message AckArtifactCreationCommandResponse {
+  reserved 1;                       // was 'acked' bool, superseded by outcome
+  reserved "acked";
+  ArtifactCreationOutcome outcome = 2; // explicit ledger outcome; only COMMITTED/REJECTED discharge the ack
 }

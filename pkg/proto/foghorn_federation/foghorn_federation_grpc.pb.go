@@ -68,15 +68,15 @@ type FoghornFederationClient interface {
 	// Used as a safety net when a command arrives at the wrong cluster (stale cache, race).
 	// The receiving cluster tries to handle it locally and reports whether it succeeded.
 	ForwardArtifactCommand(ctx context.Context, in *ForwardArtifactCommandRequest, opts ...grpc.CallOption) (*ForwardArtifactCommandResponse, error)
-	// MintStorageURLs issues presigned PUT URLs against the storage cluster's
+	// MintStorageURLs issues a presigned PUT URL against the storage cluster's
 	// S3 backing for cross-cluster upload delegation. The caller is the Foghorn
 	// pool that received the upload request from Helmsman; the callee is the
-	// Foghorn pool that owns the named target_cluster_id's S3. Single-PUT
-	// covers thumbnails, clips, single-PUT VOD freezes, and DVR incremental
-	// segments/manifests; DVR-set covers the initial DVR freeze. VOD multipart
-	// create/complete/abort is not exposed by this RPC; CreateVodUpload returns
-	// storage_delegation_unsupported_for_vod when the resolver picks a remote
-	// storage cluster.
+	// Foghorn pool that owns the named target_cluster_id's S3. Only thumbnail
+	// single-PUT is supported: the caller consumes the returned S3Key
+	// immediately, so it needs no cross-cluster completion. Federated ARTIFACT
+	// freeze (clip/vod/dvr/dvr_segment/dvr_manifest) is rejected with
+	// federated_artifact_freeze_unsupported because there is no cross-cluster
+	// completion-propagation protocol yet.
 	MintStorageURLs(ctx context.Context, in *MintStorageURLsRequest, opts ...grpc.CallOption) (*MintStorageURLsResponse, error)
 	// DeleteStorageObjects asks the storage-cluster Foghorn to delete an
 	// artifact's S3 bytes from its local backing. The caller is the Foghorn
@@ -257,15 +257,15 @@ type FoghornFederationServer interface {
 	// Used as a safety net when a command arrives at the wrong cluster (stale cache, race).
 	// The receiving cluster tries to handle it locally and reports whether it succeeded.
 	ForwardArtifactCommand(context.Context, *ForwardArtifactCommandRequest) (*ForwardArtifactCommandResponse, error)
-	// MintStorageURLs issues presigned PUT URLs against the storage cluster's
+	// MintStorageURLs issues a presigned PUT URL against the storage cluster's
 	// S3 backing for cross-cluster upload delegation. The caller is the Foghorn
 	// pool that received the upload request from Helmsman; the callee is the
-	// Foghorn pool that owns the named target_cluster_id's S3. Single-PUT
-	// covers thumbnails, clips, single-PUT VOD freezes, and DVR incremental
-	// segments/manifests; DVR-set covers the initial DVR freeze. VOD multipart
-	// create/complete/abort is not exposed by this RPC; CreateVodUpload returns
-	// storage_delegation_unsupported_for_vod when the resolver picks a remote
-	// storage cluster.
+	// Foghorn pool that owns the named target_cluster_id's S3. Only thumbnail
+	// single-PUT is supported: the caller consumes the returned S3Key
+	// immediately, so it needs no cross-cluster completion. Federated ARTIFACT
+	// freeze (clip/vod/dvr/dvr_segment/dvr_manifest) is rejected with
+	// federated_artifact_freeze_unsupported because there is no cross-cluster
+	// completion-propagation protocol yet.
 	MintStorageURLs(context.Context, *MintStorageURLsRequest) (*MintStorageURLsResponse, error)
 	// DeleteStorageObjects asks the storage-cluster Foghorn to delete an
 	// artifact's S3 bytes from its local backing. The caller is the Foghorn

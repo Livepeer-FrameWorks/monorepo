@@ -45,15 +45,15 @@ service FoghornFederation {
   // The receiving cluster tries to handle it locally and reports whether it succeeded.
   rpc ForwardArtifactCommand(ForwardArtifactCommandRequest) returns (ForwardArtifactCommandResponse);
 
-  // MintStorageURLs issues presigned PUT URLs against the storage cluster's
+  // MintStorageURLs issues a presigned PUT URL against the storage cluster's
   // S3 backing for cross-cluster upload delegation. The caller is the Foghorn
   // pool that received the upload request from Helmsman; the callee is the
-  // Foghorn pool that owns the named target_cluster_id's S3. Single-PUT
-  // covers thumbnails, clips, single-PUT VOD freezes, and DVR incremental
-  // segments/manifests; DVR-set covers the initial DVR freeze. VOD multipart
-  // create/complete/abort is not exposed by this RPC; CreateVodUpload returns
-  // storage_delegation_unsupported_for_vod when the resolver picks a remote
-  // storage cluster.
+  // Foghorn pool that owns the named target_cluster_id's S3. Only thumbnail
+  // single-PUT is supported: the caller consumes the returned S3Key
+  // immediately, so it needs no cross-cluster completion. Federated ARTIFACT
+  // freeze (clip/vod/dvr/dvr_segment/dvr_manifest) is rejected with
+  // federated_artifact_freeze_unsupported because there is no cross-cluster
+  // completion-propagation protocol yet.
   rpc MintStorageURLs(MintStorageURLsRequest) returns (MintStorageURLsResponse);
 
   // DeleteStorageObjects asks the storage-cluster Foghorn to delete an
@@ -462,34 +462,26 @@ message MintStorageURLsRequest {
   // check against).
   string target_cluster_id = 3;
 
-  // artifact_type is one of "thumbnail", "clip", "dvr", "dvr_segment",
-  // "dvr_manifest", "vod". For "vod" only OPERATION_PUT_SINGLE is supported
-  // (single-PUT freeze of an existing VOD asset). Multipart create / complete
-  // / abort is not exposed by this RPC; CreateVodUpload returns
-  // storage_delegation_unsupported_for_vod when the resolver picks a remote
-  // storage cluster.
+  // artifact_type must be "thumbnail". It is the only federated write this
+  // service supports; any other value is rejected with
+  // federated_artifact_freeze_unsupported.
   string artifact_type = 4;
 
-  // artifact_key uniquely identifies the asset:
-  //   thumbnail (live):       "<streamID>/<filename>"
-  //   thumbnail (vod/clip):   "<artifact_hash>/<filename>"
-  //   clip:                   hash
-  //   dvr:                    hash (per-segment paths come from segment_filenames)
-  //   dvr_segment, dvr_manifest:
-  //                           "<parent_dvr_hash>/<filename>" (single PUT
-  //                           against the parent DVR's S3 prefix)
+  // artifact_key is the thumbnail path "<streamID-or-artifactHash>/<filename>"
+  // (streamID for live thumbnails, artifact_hash for vod/clip thumbnails).
   string artifact_key = 5;
 
   enum Operation {
     OPERATION_UNSPECIFIED = 0;
-    OPERATION_PUT_SINGLE  = 1; // thumbnail / clip / dvr_segment / dvr_manifest
-    OPERATION_PUT_DVR_SET = 2; // dvr (initial freeze): one presigned PUT per filename
+    OPERATION_PUT_SINGLE  = 1; // the only supported op (thumbnail single PUT)
+    // 2 was OPERATION_PUT_DVR_SET, for the retired federated DVR artifact freeze.
+    reserved 2;
+    reserved "OPERATION_PUT_DVR_SET";
   }
   Operation op = 6;
 
-  // Required for OPERATION_PUT_DVR_SET (relative segment filenames). Empty
-  // for OPERATION_PUT_SINGLE.
-  repeated string segment_filenames = 7;
+  // 7 was segment_filenames, for the retired federated DVR-set artifact freeze.
+  reserved 7;
 
   // Optional sanity cap; storage-cluster Foghorn may reject above tier
   // quotas. Zero means "no hint".
@@ -515,17 +507,16 @@ message MintStorageURLsRequest {
 message MintStorageURLsResponse {
   bool   accepted          = 1;
   // Populated when accepted = false. One of: tenant_mismatch,
-  // storage_not_owned_here, unsupported_artifact_type,
+  // storage_not_owned_here, federated_artifact_freeze_unsupported,
   // unsupported_operation, s3_error, quota_exceeded.
   string reason            = 2;
 
-  // OPERATION_PUT_SINGLE result. Empty for DVR set.
+  // The single-PUT thumbnail result.
   string s3_key            = 3;
   string presigned_put_url = 4;
 
-  // OPERATION_PUT_DVR_SET result: filename -> presigned PUT URL. Empty for
-  // single. Map key is the same string passed in segment_filenames.
-  map<string, string> segment_urls = 5;
+  // 5 was segment_urls, for the retired federated DVR-set artifact freeze.
+  reserved 5;
 
   uint32 url_expiry_seconds = 6;
 }

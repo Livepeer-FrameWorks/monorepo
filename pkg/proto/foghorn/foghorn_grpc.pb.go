@@ -21,8 +21,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ClipControlService_CreateClip_FullMethodName = "/foghorn.ClipControlService/CreateClip"
-	ClipControlService_DeleteClip_FullMethodName = "/foghorn.ClipControlService/DeleteClip"
+	ClipControlService_CreateClip_FullMethodName             = "/foghorn.ClipControlService/CreateClip"
+	ClipControlService_DeleteClip_FullMethodName             = "/foghorn.ClipControlService/DeleteClip"
+	ClipControlService_DeleteStreamThumbnails_FullMethodName = "/foghorn.ClipControlService/DeleteStreamThumbnails"
 )
 
 // ClipControlServiceClient is the client API for ClipControlService service.
@@ -35,6 +36,10 @@ type ClipControlServiceClient interface {
 	CreateClip(ctx context.Context, in *shared.CreateClipRequest, opts ...grpc.CallOption) (*shared.CreateClipResponse, error)
 	// DeleteClip deletes a clip
 	DeleteClip(ctx context.Context, in *shared.DeleteClipRequest, opts ...grpc.CallOption) (*shared.DeleteClipResponse, error)
+	// DeleteStreamThumbnails removes a live stream's thumbnail control rows + objects. Called on stream deletion:
+	// a live stream has no artifact row (so purge never reaches it) and its final active version is never
+	// superseded (so GC never reclaims it), leaving the pointer + object stranded without this.
+	DeleteStreamThumbnails(ctx context.Context, in *shared.DeleteStreamThumbnailsRequest, opts ...grpc.CallOption) (*shared.DeleteStreamThumbnailsResponse, error)
 }
 
 type clipControlServiceClient struct {
@@ -65,6 +70,16 @@ func (c *clipControlServiceClient) DeleteClip(ctx context.Context, in *shared.De
 	return out, nil
 }
 
+func (c *clipControlServiceClient) DeleteStreamThumbnails(ctx context.Context, in *shared.DeleteStreamThumbnailsRequest, opts ...grpc.CallOption) (*shared.DeleteStreamThumbnailsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(shared.DeleteStreamThumbnailsResponse)
+	err := c.cc.Invoke(ctx, ClipControlService_DeleteStreamThumbnails_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ClipControlServiceServer is the server API for ClipControlService service.
 // All implementations must embed UnimplementedClipControlServiceServer
 // for forward compatibility.
@@ -75,6 +90,10 @@ type ClipControlServiceServer interface {
 	CreateClip(context.Context, *shared.CreateClipRequest) (*shared.CreateClipResponse, error)
 	// DeleteClip deletes a clip
 	DeleteClip(context.Context, *shared.DeleteClipRequest) (*shared.DeleteClipResponse, error)
+	// DeleteStreamThumbnails removes a live stream's thumbnail control rows + objects. Called on stream deletion:
+	// a live stream has no artifact row (so purge never reaches it) and its final active version is never
+	// superseded (so GC never reclaims it), leaving the pointer + object stranded without this.
+	DeleteStreamThumbnails(context.Context, *shared.DeleteStreamThumbnailsRequest) (*shared.DeleteStreamThumbnailsResponse, error)
 	mustEmbedUnimplementedClipControlServiceServer()
 }
 
@@ -90,6 +109,9 @@ func (UnimplementedClipControlServiceServer) CreateClip(context.Context, *shared
 }
 func (UnimplementedClipControlServiceServer) DeleteClip(context.Context, *shared.DeleteClipRequest) (*shared.DeleteClipResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteClip not implemented")
+}
+func (UnimplementedClipControlServiceServer) DeleteStreamThumbnails(context.Context, *shared.DeleteStreamThumbnailsRequest) (*shared.DeleteStreamThumbnailsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteStreamThumbnails not implemented")
 }
 func (UnimplementedClipControlServiceServer) mustEmbedUnimplementedClipControlServiceServer() {}
 func (UnimplementedClipControlServiceServer) testEmbeddedByValue()                            {}
@@ -148,6 +170,24 @@ func _ClipControlService_DeleteClip_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ClipControlService_DeleteStreamThumbnails_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(shared.DeleteStreamThumbnailsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClipControlServiceServer).DeleteStreamThumbnails(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClipControlService_DeleteStreamThumbnails_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClipControlServiceServer).DeleteStreamThumbnails(ctx, req.(*shared.DeleteStreamThumbnailsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ClipControlService_ServiceDesc is the grpc.ServiceDesc for ClipControlService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -162,6 +202,10 @@ var ClipControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteClip",
 			Handler:    _ClipControlService_DeleteClip_Handler,
+		},
+		{
+			MethodName: "DeleteStreamThumbnails",
+			Handler:    _ClipControlService_DeleteStreamThumbnails_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
@@ -693,8 +737,6 @@ const (
 	VodControlService_CompleteVodUpload_FullMethodName  = "/foghorn.VodControlService/CompleteVodUpload"
 	VodControlService_AbortVodUpload_FullMethodName     = "/foghorn.VodControlService/AbortVodUpload"
 	VodControlService_GetVodUploadStatus_FullMethodName = "/foghorn.VodControlService/GetVodUploadStatus"
-	VodControlService_GetVodAsset_FullMethodName        = "/foghorn.VodControlService/GetVodAsset"
-	VodControlService_ListVodAssets_FullMethodName      = "/foghorn.VodControlService/ListVodAssets"
 	VodControlService_DeleteVodAsset_FullMethodName     = "/foghorn.VodControlService/DeleteVodAsset"
 )
 
@@ -713,10 +755,6 @@ type VodControlServiceClient interface {
 	// GetVodUploadStatus reports server-authoritative state of an in-flight multipart upload,
 	// including which parts S3 has already received (via ListParts).
 	GetVodUploadStatus(ctx context.Context, in *shared.GetVodUploadStatusRequest, opts ...grpc.CallOption) (*shared.GetVodUploadStatusResponse, error)
-	// GetVodAsset returns a single VOD asset by hash
-	GetVodAsset(ctx context.Context, in *shared.GetVodAssetRequest, opts ...grpc.CallOption) (*shared.VodAssetInfo, error)
-	// ListVodAssets returns paginated list of VOD assets for a tenant
-	ListVodAssets(ctx context.Context, in *shared.ListVodAssetsRequest, opts ...grpc.CallOption) (*shared.ListVodAssetsResponse, error)
 	// DeleteVodAsset deletes a VOD asset
 	DeleteVodAsset(ctx context.Context, in *shared.DeleteVodAssetRequest, opts ...grpc.CallOption) (*shared.DeleteVodAssetResponse, error)
 }
@@ -769,26 +807,6 @@ func (c *vodControlServiceClient) GetVodUploadStatus(ctx context.Context, in *sh
 	return out, nil
 }
 
-func (c *vodControlServiceClient) GetVodAsset(ctx context.Context, in *shared.GetVodAssetRequest, opts ...grpc.CallOption) (*shared.VodAssetInfo, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(shared.VodAssetInfo)
-	err := c.cc.Invoke(ctx, VodControlService_GetVodAsset_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vodControlServiceClient) ListVodAssets(ctx context.Context, in *shared.ListVodAssetsRequest, opts ...grpc.CallOption) (*shared.ListVodAssetsResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(shared.ListVodAssetsResponse)
-	err := c.cc.Invoke(ctx, VodControlService_ListVodAssets_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *vodControlServiceClient) DeleteVodAsset(ctx context.Context, in *shared.DeleteVodAssetRequest, opts ...grpc.CallOption) (*shared.DeleteVodAssetResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(shared.DeleteVodAssetResponse)
@@ -814,10 +832,6 @@ type VodControlServiceServer interface {
 	// GetVodUploadStatus reports server-authoritative state of an in-flight multipart upload,
 	// including which parts S3 has already received (via ListParts).
 	GetVodUploadStatus(context.Context, *shared.GetVodUploadStatusRequest) (*shared.GetVodUploadStatusResponse, error)
-	// GetVodAsset returns a single VOD asset by hash
-	GetVodAsset(context.Context, *shared.GetVodAssetRequest) (*shared.VodAssetInfo, error)
-	// ListVodAssets returns paginated list of VOD assets for a tenant
-	ListVodAssets(context.Context, *shared.ListVodAssetsRequest) (*shared.ListVodAssetsResponse, error)
 	// DeleteVodAsset deletes a VOD asset
 	DeleteVodAsset(context.Context, *shared.DeleteVodAssetRequest) (*shared.DeleteVodAssetResponse, error)
 	mustEmbedUnimplementedVodControlServiceServer()
@@ -841,12 +855,6 @@ func (UnimplementedVodControlServiceServer) AbortVodUpload(context.Context, *sha
 }
 func (UnimplementedVodControlServiceServer) GetVodUploadStatus(context.Context, *shared.GetVodUploadStatusRequest) (*shared.GetVodUploadStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetVodUploadStatus not implemented")
-}
-func (UnimplementedVodControlServiceServer) GetVodAsset(context.Context, *shared.GetVodAssetRequest) (*shared.VodAssetInfo, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetVodAsset not implemented")
-}
-func (UnimplementedVodControlServiceServer) ListVodAssets(context.Context, *shared.ListVodAssetsRequest) (*shared.ListVodAssetsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListVodAssets not implemented")
 }
 func (UnimplementedVodControlServiceServer) DeleteVodAsset(context.Context, *shared.DeleteVodAssetRequest) (*shared.DeleteVodAssetResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteVodAsset not implemented")
@@ -944,42 +952,6 @@ func _VodControlService_GetVodUploadStatus_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
-func _VodControlService_GetVodAsset_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(shared.GetVodAssetRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VodControlServiceServer).GetVodAsset(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: VodControlService_GetVodAsset_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VodControlServiceServer).GetVodAsset(ctx, req.(*shared.GetVodAssetRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _VodControlService_ListVodAssets_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(shared.ListVodAssetsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VodControlServiceServer).ListVodAssets(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: VodControlService_ListVodAssets_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VodControlServiceServer).ListVodAssets(ctx, req.(*shared.ListVodAssetsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _VodControlService_DeleteVodAsset_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(shared.DeleteVodAssetRequest)
 	if err := dec(in); err != nil {
@@ -1020,14 +992,6 @@ var VodControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetVodUploadStatus",
 			Handler:    _VodControlService_GetVodUploadStatus_Handler,
-		},
-		{
-			MethodName: "GetVodAsset",
-			Handler:    _VodControlService_GetVodAsset_Handler,
-		},
-		{
-			MethodName: "ListVodAssets",
-			Handler:    _VodControlService_ListVodAssets_Handler,
 		},
 		{
 			MethodName: "DeleteVodAsset",

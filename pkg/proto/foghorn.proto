@@ -19,6 +19,10 @@ service ClipControlService {
   rpc CreateClip(shared.CreateClipRequest) returns (shared.CreateClipResponse);
   // DeleteClip deletes a clip
   rpc DeleteClip(shared.DeleteClipRequest) returns (shared.DeleteClipResponse);
+  // DeleteStreamThumbnails removes a live stream's thumbnail control rows + objects. Called on stream deletion:
+  // a live stream has no artifact row (so purge never reaches it) and its final active version is never
+  // superseded (so GC never reclaims it), leaving the pointer + object stranded without this.
+  rpc DeleteStreamThumbnails(shared.DeleteStreamThumbnailsRequest) returns (shared.DeleteStreamThumbnailsResponse);
 }
 
 // DVRControlService handles DVR recording management
@@ -83,10 +87,6 @@ service VodControlService {
   // GetVodUploadStatus reports server-authoritative state of an in-flight multipart upload,
   // including which parts S3 has already received (via ListParts).
   rpc GetVodUploadStatus(shared.GetVodUploadStatusRequest) returns (shared.GetVodUploadStatusResponse);
-  // GetVodAsset returns a single VOD asset by hash
-  rpc GetVodAsset(shared.GetVodAssetRequest) returns (shared.VodAssetInfo);
-  // ListVodAssets returns paginated list of VOD assets for a tenant
-  rpc ListVodAssets(shared.ListVodAssetsRequest) returns (shared.ListVodAssetsResponse);
   // DeleteVodAsset deletes a VOD asset
   rpc DeleteVodAsset(shared.DeleteVodAssetRequest) returns (shared.DeleteVodAssetResponse);
 }

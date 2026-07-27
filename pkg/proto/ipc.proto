@@ -70,6 +70,7 @@ message ServiceEvent {
     BillingEvent billing_event = 26;
     MessageLifecycleData support_event = 27;
     ArtifactEvent artifact_event = 28;
+    ArtifactNodeCopyEvent artifact_node_copy_event = 29;
   }
 
   // ===== Envelope v2 =====
@@ -162,9 +163,40 @@ message ArtifactEvent {
   optional int64 expires_at = 7;   // Retention expiration (if available)
 }
 
+// ArtifactNodeCopyEvent reports a per-(artifact, node) transition for a transient
+// LOCAL NODE COPY of an artifact — not the durable copy, which lives in object
+// storage and is tracked separately. Emitted by Foghorn when its artifact_nodes
+// state changes (see docs/architecture/analytics-pipeline.md). GAINED = the node now
+// holds a copy; LOST = it no longer does; UPDATED = still present but its role or
+// completeness changed. role distinguishes the producer/relay source ("origin") from a
+// synced pull ("cache"); is_complete marks a full local copy. The gateway resolves the
+// node's cluster from the registry, so no cluster is carried here. version is a
+// Foghorn-assigned monotonic revision used to order concurrent updates deterministically.
+// tenant_id rides the ServiceEvent envelope.
+message ArtifactNodeCopyEvent {
+  enum Transition {
+    TRANSITION_UNSPECIFIED = 0;
+    GAINED = 1;    // node now holds a local copy (present)
+    LOST = 2;      // node no longer holds it (evicted / orphaned / purged)
+    UPDATED = 3;   // still present; role or completeness changed
+  }
+  string artifact_hash = 1;
+  string node_id = 2;
+  string role = 4;            // "origin" | "cache"
+  Transition transition = 6;
+  bool is_complete = 7;       // full local copy present
+  // Point-in-time size at this transition; not maintained between transitions (a
+  // pure size change does not emit an event).
+  int64 size_bytes = 8;
+  int64 timestamp_ms = 9;     // when the transition was observed
+  uint64 version = 10;        // Foghorn-assigned monotonic revision (ordering)
+}
+
 message ControlMessage {
   reserved 22, 23;
   reserved "dvr_ready_request", "dvr_ready_response";
+  reserved 43;                  // retired freeze_complete — cold-storage freeze completion now flows through the shared SyncComplete path
+  reserved "freeze_complete";
   reserved 44, 45, 46;
   reserved "defrost_request", "defrost_progress", "defrost_complete";
   reserved 12;                  // retired clip_pull_request — clip creation enqueues a processing job; ClipPullRequest message survives for clipSourceDecision
@@ -205,7 +237,6 @@ message ControlMessage {
     FreezePermissionRequest freeze_permission_request = 40;
     FreezePermissionResponse freeze_permission_response = 41;
     FreezeProgress freeze_progress = 42;
-    FreezeComplete freeze_complete = 43;
     // Dual-storage sync operations (sync to S3 while keeping local)
     CanDeleteRequest can_delete_request = 47;
     CanDeleteResponse can_delete_response = 48;
@@ -514,6 +545,16 @@ message Register {
   // restart + DB-row removal sequence would leave the Mist config in
   // place forever because no Retract would ever fire.
   repeated AppliedManagedStream applied_managed_streams = 17;
+  // Monotonic control-protocol version the sidecar speaks, declared at
+  // registration so Foghorn can gate protocol-dependent dispatch on an
+  // OBSERVED (not per-request self-asserted) capability. A version below the
+  // staged-freeze minimum means the sidecar does not upload to the
+  // attempt-scoped staging key nor echo the server-minted attempt id, so
+  // Foghorn FAILS CLOSED on freeze dispatch to it (the artifact stays local,
+  // retryable) rather than hand out a staged freeze it would mishandle.
+  // Absent/0 = a pre-staged-freeze sidecar. Bump only when the wire contract
+  // Foghorn must gate on changes.
+  int32 control_protocol_version = 18;
 }
 
 // AppliedManagedStream is a sidecar→Foghorn snapshot at (re)connect of one
@@ -1024,12 +1065,14 @@ message VodDeleteRequest {
 // Helmsman detects storage pressure but cannot access S3 directly.
 message FreezePermissionRequest {
   string request_id = 1;
-  string asset_type = 2;         // "clip" or "dvr"
-  string asset_hash = 3;         // clip_hash or dvr_hash
-  string local_path = 4;         // Local path to the asset
-  uint64 size_bytes = 5;         // Size of the asset to freeze
-  string node_id = 6;            // Node requesting the freeze
-  repeated string filenames = 7; // For DVR: list of relative filenames to upload (e.g., "segments/0_0.ts")
+  string asset_type = 2;         // "clip" or "vod" (DVR freeze is rejected — DVR reclaims segment-wise)
+  string asset_hash = 3;         // clip_hash or vod_hash
+  uint64 size_bytes = 5;         // Size of the asset to freeze (informational)
+  // The request carries only the asset identity + size: Foghorn derives the canonical object key from its
+  // own catalog, ALWAYS server-mints the attempt id (returned as attempt_id; a self-asserted capability
+  // flag would be a client-controlled security downgrade), and binds the node to the authenticated connection.
+  reserved 4, 6, 7, 8;
+  reserved "local_path", "node_id", "filenames", "supports_server_minted_attempt";
 }
 
 // FreezePermissionResponse is sent by Foghorn with presigned URLs for freezing.
@@ -1041,9 +1084,14 @@ message FreezePermissionResponse {
   string presigned_put_url = 4;  // Presigned PUT URL (only if approved)
   int64 url_expiry_seconds = 5;  // URL expiry time
   string reason = 6;             // Reason if not approved
-  // For DVR: map of relative path -> presigned PUT URL
-  map<string, string> segment_urls = 7;
   bool skip_upload = 10;         // True = evict without uploading (origin S3 has authoritative copy)
+  // Server-minted attempt id. The node echoes it as SyncComplete.request_id, so completion consumes a
+  // Foghorn-assigned operation rather than a node-chosen id. The presigned PUT targets an attempt-scoped
+  // staging object that Foghorn promotes to the canonical key after verifying it.
+  string attempt_id = 11;
+  // DVR set-freeze is rejected, so no per-segment URL map is ever returned.
+  reserved 7;
+  reserved "segment_urls";
 }
 
 // Storage location enum for cold storage tracking
@@ -1078,20 +1126,6 @@ message FreezeProgress {
   uint32 percent = 3;            // 0..100
   uint64 bytes_uploaded = 4;
   string message = 5;
-}
-
-// FreezeComplete indicates freeze operation has finished
-message FreezeComplete {
-  string request_id = 1;
-  string asset_hash = 2;
-  string status = 3;             // "success" or "failed"
-  string s3_url = 4;             // Full S3 URL (s3://bucket/key)
-  uint64 size_bytes = 5;
-  string error = 6;              // Error message if failed
-  // local_missing=true signals the local source file is gone (ENOENT) before
-  // any S3 sync. Foghorn transitions sync_status='lost_local' (terminal) and
-  // stops retries. status will be "failed" in this case.
-  bool local_missing = 7;
 }
 
 // DVRSegmentRef is one segment in the chapter-finalize segment list
@@ -1169,7 +1203,8 @@ message RelayResolveResponse {
   AssetState state = 3;
   string media_presigned_url = 4; // S3 GET, range-capable (HEAD + Range)
   string dtsh_presigned_get = 5;  // empty if no sidecar yet
-  string dtsh_presigned_put = 6;  // for Mist-generated .dtsh write-back
+  reserved 6;                        // was dtsh_presigned_put; the durable .dtsh is published only via the staged TriggerDtshSync path
+  reserved "dtsh_presigned_put";
   uint64 expected_size_bytes = 7;
   string content_type = 8;
   int64 url_ttl_seconds = 9;      // for refresh on long playbacks
@@ -1241,16 +1276,18 @@ enum AssetState {
 }
 
 // SyncComplete indicates a sync (upload to S3 while keeping local) has finished.
-// Semantically different from FreezeComplete: sync keeps local copy.
+// The sync keeps the local copy after uploading to S3.
 message SyncComplete {
   string request_id = 1;
   string asset_hash = 2;
   string status = 3;             // "success" or "failed"
-  string s3_url = 4;             // Full S3 URL (s3://bucket/key)
-  uint64 size_bytes = 5;
+  uint64 size_bytes = 5;         // Node-reported size; Foghorn HEAD-verifies and records the observed size
   string error = 6;              // Error message if failed
-  string node_id = 7;            // Node that initiated the sync
   bool dtsh_included = 8;        // True if .dtsh index file was included in sync
+  // The completion carries no object URL or node id: Foghorn derives the canonical URL server-side from
+  // the persisted descriptor and attributes the sync to the authenticated connection.
+  reserved 4, 7;
+  reserved "s3_url", "node_id";
   // local_missing=true signals the local source file is gone (ENOENT). Foghorn
   // transitions sync_status='lost_local' (terminal) and stops retries. status
   // will be "failed" in this case.
@@ -1261,13 +1298,15 @@ message SyncComplete {
 // This is used when .dtsh appeared after the main asset was already synced to S3.
 message DtshSyncRequest {
   string request_id = 1;         // Request ID for tracking
-  string asset_type = 2;         // "clip" or "dvr"
-  string asset_hash = 3;         // clip_hash or dvr_hash
-  string local_path = 4;         // Path to the main asset (append .dtsh for clip, or directory for DVR)
+  string asset_type = 2;         // "clip" or "vod" (DVR freeze is rejected — DVR reclaims segment-wise)
+  string asset_hash = 3;         // clip_hash or vod_hash
+  string local_path = 4;         // Path to the main clip/vod asset (the sidecar appends .dtsh)
   string presigned_put_url = 5;  // Presigned PUT URL for uploading the .dtsh file
   int64 url_expiry_seconds = 6;  // When the presigned URL expires
-  // For DVR: map of .dtsh filename -> presigned URL (since DVR can have multiple .dtsh files)
-  map<string, string> dtsh_urls = 7;
+  // Retired whole-DVR multi-.dtsh map. A DVR is reclaimed segment-wise and its chapters freeze as their own
+  // VOD artifacts, so there is no whole-DVR .dtsh to sync; TriggerDtshSync rejects asset_type="dvr".
+  reserved 7;
+  reserved "dtsh_urls";
 }
 
 // StorageLifecycleData is emitted for analytics/observability of storage sync operations
@@ -1288,8 +1327,8 @@ message StorageLifecycleData {
                                // Foghorn transitions sync_status='lost_local' and stops retries.
   }
   Action action = 1;
-  string asset_type = 2;         // "clip" or "dvr"
-  string asset_hash = 3;         // clip_hash or dvr_hash
+  string asset_type = 2;         // "clip" or "vod" (DVR freeze is rejected — DVR reclaims segment-wise)
+  string asset_hash = 3;         // clip_hash or vod_hash
   optional string tenant_id = 4;
   optional string internal_name = 5;
   optional string stream_id = 13;      // Enriched by Foghorn (UUID)
@@ -1945,6 +1984,32 @@ message NodeLifecycleUpdate {
   string deploy_mode = 45;           // native | container (legacy "docker" = retired multi-container mode, ineligible for auto-updates)
   string os = 46;                    // runtime.GOOS
   string arch = 47;                  // runtime.GOARCH
+
+  // artifacts_report_seq is a strictly-monotonic per-connection counter set by the sidecar,
+  // captured atomically WITH the `artifacts` snapshot (see captureArtifactSnapshot). It orders
+  // reports WITHIN one control connection.
+  int64 artifacts_report_seq = 48;
+  // artifacts_connection_fence is NOT sent by the sidecar (it stays 0 on the wire). Foghorn stamps
+  // it on receipt with the monotonic fence it issued to the delivering control connection at
+  // Register, so reports are ordered by (connection_fence, report_seq): a reconnect gets a strictly
+  // higher fence and supersedes, and a delayed report from a superseded connection loses. This is
+  // an ownership fence, not wall-clock or first-arrival ordering.
+  int64 artifacts_connection_fence = 49;
+  // artifacts_snapshot_incomplete is set by the sidecar when the `artifacts` snapshot cannot be
+  // trusted as the node's COMPLETE inventory — i.e. no complete filesystem scan has succeeded yet
+  // (cold start with a directory-read error). Foghorn must NOT apply an incomplete snapshot as an
+  // authoritative whole-node report, because a partial or empty list would orphan live copies.
+  // Default false. A transient scan failure AFTER the first good scan retains the last-good index but
+  // reports INCOMPLETE (artifactScanHealthy=false), so Foghorn re-arms the artifact-routing cordon for
+  // the node until a fresh healthy scan lands. NOTE: this flag alone is NOT the completeness contract — a report is
+  // authoritative only when it ALSO carries a non-zero artifacts_report_seq. A legacy sidecar that
+  // predates the sequence sends report_seq=0 and Foghorn REJECTS its inventory (fails closed, keeps
+  // the last trusted inventory) rather than trusting a proto3-default "complete".
+  bool artifacts_snapshot_incomplete = 50;
+  // 51 (artifacts_scan_started_at_ms) is retired: reports assert presence only and do not carry a
+  // scan-start token. Reserved so the number and name are not reused.
+  reserved 51;
+  reserved "artifacts_scan_started_at_ms";
 }
 
 // Load balancing specific data (no trigger equivalent - generated by Foghorn routing)
@@ -2025,13 +2090,20 @@ message ClipLifecycleData {
   optional string serving_cluster_id = 24; // Cluster serving the clip to the viewer
   optional string storage_location = 25;
   optional string sync_status = 26;
-  optional bool is_hot = 27;
+  // has_local_copy: a node holds a present full local copy (origin or cache); nullable = unknown.
+  optional bool has_local_copy = 27;
   optional bool is_synced = 28;
   optional bool is_finalized = 29;
-  optional bool is_frozen = 30;
+  reserved 30;                             // was is_frozen
   // Processing telemetry (STAGE_DONE): how fast the clip job actually ran.
   optional ProcessingSpeedStats processing_speed = 31;
   optional int64 processing_wall_ms = 32; // push start -> RECORDING_END wall time
+  // source_updated_at_ms is the source transition time (the outbox row's created_at, ms) stamped at
+  // dispatch. It is STABLE across at-least-once redeliveries, so ingest collapses artifact_state_current
+  // on it (not Decklog receipt time) and a replayed older transition keeps its original time. It is
+  // BEST-EFFORT, not a rigorous total order — created_at is wall-clock, so concurrent same-artifact
+  // transitions can tie/invert within a millisecond. 0 = not stamped (fall back to receipt time).
+  optional int64 source_updated_at_ms = 33;
 }
 
 // DVR lifecycle specific data (separate from DVR control messages)
@@ -2070,10 +2142,13 @@ message DVRLifecycleData {
   optional string serving_cluster_id = 16; // Cluster serving the DVR to the viewer
   optional string storage_location = 17;
   optional string sync_status = 18;
-  optional bool is_hot = 19;
+  // has_local_copy: a node holds a present full local copy (origin or cache); nullable = unknown.
+  optional bool has_local_copy = 19;
   optional bool is_synced = 20;
   optional bool is_finalized = 21;
-  optional bool is_frozen = 22;
+  reserved 22;                             // was is_frozen
+  // source_updated_at_ms: stable source transition time (outbox created_at, ms) — see ClipLifecycleData.
+  optional int64 source_updated_at_ms = 23;
 }
 
 // VOD lifecycle specific data (for user-uploaded video assets)
@@ -2120,13 +2195,16 @@ message VodLifecycleData {
   optional int32 progress_pct = 23;        // 0-100 processing progress (STATUS_PROCESSING only)
   optional string storage_location = 24;
   optional string sync_status = 25;
-  optional bool is_hot = 26;
+  // has_local_copy: a node holds a present full local copy (origin or cache); nullable = unknown.
+  optional bool has_local_copy = 26;
   optional bool is_synced = 27;
   optional bool is_finalized = 28;
-  optional bool is_frozen = 29;
+  reserved 29;                             // was is_frozen
   // Processing telemetry (STATUS_COMPLETED): how fast the processing job ran.
   optional ProcessingSpeedStats processing_speed = 30;
   optional int64 processing_wall_ms = 31; // push start -> RECORDING_END wall time
+  // source_updated_at_ms: stable source transition time (outbox created_at, ms) — see ClipLifecycleData.
+  optional int64 source_updated_at_ms = 32;
 }
 
 // MessageLifecycleData tracks support messaging events for real-time UI updates
@@ -2382,13 +2460,16 @@ message StoredArtifact {
   int64 last_accessed = 10;  // Last access timestamp (Unix seconds)
   ArtifactEvent.ArtifactType artifact_type = 11; // Explicit artifact type (clip/dvr/vod)
 
-  // Presence role on this node. ORIGIN = canonical full file written by
-  // the recording/processing sidecar; eligible to serve cross-cluster
-  // peer-relay reads when is_complete=true. CACHE = sparse blocks
-  // fetched from S3; never authoritative for peer-relay. The polling
-  // path reports CACHE; finalizer RPCs report ORIGIN. Origin-wins
-  // upsert in Foghorn ensures CACHE writes can't downgrade an ORIGIN
-  // row.
+  // Presence role for this node's local copy. ORIGIN = the full file written
+  // locally by the recording/processing sidecar that produced it; eligible to
+  // serve cross-cluster peer-relay reads when is_complete=true. This is a
+  // producer/serving role, not the durable copy (that lives in object storage).
+  // CACHE = a materialized full file synced from object storage to this node; never
+  // authoritative for peer-relay. (Read-through relay block caches — <asset>.blocks/ —
+  // are NOT reported here: the poller only sees materialized full files, so a partial
+  // block cache is invisible to node-copy telemetry.) The polling path reports CACHE;
+  // finalizer RPCs report ORIGIN. Origin-wins upsert in Foghorn ensures CACHE writes
+  // can't downgrade an ORIGIN row.
   enum Role {
     ROLE_UNSPECIFIED = 0;
     ROLE_CACHE       = 1;
@@ -2616,6 +2697,16 @@ message ProcessingJobResult {
   string output_path = 5;          // Local file path of processed output (for artifact registration)
   int64 output_size_bytes = 6;     // Size of processed output file
   optional int64 media_duration_ms = 7; // Actual output media duration (RECORDING_END); lets Foghorn mark clips partial when shorter than requested
+  // Accepted full A/V track set of the produced output, taken from the VALIDATED RECORDING_END
+  // only on the "completed" path (after Helmsman rejects stale/failed/retired-generation
+  // events). This — not the generic Foghorn RECORDING_END trigger — is the authoritative track
+  // capture: Foghorn persists it by the already-resolved artifact_hash. Empty on failure.
+  repeated StreamTrack tracks = 8;
+  // tracks_present distinguishes "this completed job captured the track set (replace, even if
+  // the set is empty)" from "no track info available (preserve any prior summary)". Set true
+  // whenever the completed result carries a validated RECORDING_END; false leaves stored tracks
+  // untouched. Without this bit an empty list is ambiguous and stale tracks can't be cleared.
+  bool tracks_present = 9;
 }
 
 // ProcessingJobProgress is sent periodically by Helmsman while a processing
@@ -2699,12 +2790,16 @@ message ThumbnailUploadResponse {
   }
   string thumbnail_key = 1; // stream_id (UUID) for live, artifact_hash for artifacts
   repeated PresignedUpload uploads = 2;
+  // Server-minted publication attempt id. The presigned s3_key values are per-attempt STAGING keys; Helmsman
+  // MUST echo this id in ThumbnailUploaded so Foghorn can bind the confirmation to the assignment it minted.
+  string attempt_id = 3;
 }
 
 // Helmsman -> Foghorn: confirm upload complete
 message ThumbnailUploaded {
   string thumbnail_key = 1; // echoed from ThumbnailUploadResponse
   repeated string s3_keys = 2;
+  string attempt_id = 3; // echoed from ThumbnailUploadResponse; binds the confirmation to the minted attempt
 }
 
 // Gateway telemetry: Livepeer gateway -> Decklog -> Periscope (orchestrator

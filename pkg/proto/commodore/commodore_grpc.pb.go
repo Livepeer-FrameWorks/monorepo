@@ -40,18 +40,14 @@ const (
 	InternalService_StartDVR_FullMethodName                        = "/commodore.InternalService/StartDVR"
 	InternalService_RetrieveDVRChapter_FullMethodName              = "/commodore.InternalService/RetrieveDVRChapter"
 	InternalService_ListDVRChapters_FullMethodName                 = "/commodore.InternalService/ListDVRChapters"
-	InternalService_RegisterClip_FullMethodName                    = "/commodore.InternalService/RegisterClip"
 	InternalService_RegisterDVR_FullMethodName                     = "/commodore.InternalService/RegisterDVR"
 	InternalService_UpdateDVRRetention_FullMethodName              = "/commodore.InternalService/UpdateDVRRetention"
-	InternalService_MarkArtifactThumbnailsReady_FullMethodName     = "/commodore.InternalService/MarkArtifactThumbnailsReady"
-	InternalService_UpdateArtifactStorageCluster_FullMethodName    = "/commodore.InternalService/UpdateArtifactStorageCluster"
-	InternalService_UpdateArtifactSize_FullMethodName              = "/commodore.InternalService/UpdateArtifactSize"
+	InternalService_UpdateArtifactCatalogSnapshot_FullMethodName   = "/commodore.InternalService/UpdateArtifactCatalogSnapshot"
 	InternalService_ResolveClipHash_FullMethodName                 = "/commodore.InternalService/ResolveClipHash"
 	InternalService_ResolveDVRHash_FullMethodName                  = "/commodore.InternalService/ResolveDVRHash"
 	InternalService_ResolveArtifactPlaybackID_FullMethodName       = "/commodore.InternalService/ResolveArtifactPlaybackID"
 	InternalService_ResolveArtifactInternalName_FullMethodName     = "/commodore.InternalService/ResolveArtifactInternalName"
 	InternalService_ResolveIdentifier_FullMethodName               = "/commodore.InternalService/ResolveIdentifier"
-	InternalService_RegisterVod_FullMethodName                     = "/commodore.InternalService/RegisterVod"
 	InternalService_ResolveVodHash_FullMethodName                  = "/commodore.InternalService/ResolveVodHash"
 	InternalService_ResolveVodID_FullMethodName                    = "/commodore.InternalService/ResolveVodID"
 	InternalService_MintChapterPlaybackID_FullMethodName           = "/commodore.InternalService/MintChapterPlaybackID"
@@ -181,8 +177,6 @@ type InternalServiceClient interface {
 	// snapshotted at StartDVR — there is no mid-recording policy RPC.
 	RetrieveDVRChapter(ctx context.Context, in *foghorn_control.RetrieveDVRChapterRequest, opts ...grpc.CallOption) (*foghorn_control.RetrieveDVRChapterResponse, error)
 	ListDVRChapters(ctx context.Context, in *foghorn_control.ListDVRChaptersRequest, opts ...grpc.CallOption) (*foghorn_control.ListDVRChaptersResponse, error)
-	// Register a new clip in the business registry (called by Foghorn during CreateClip)
-	RegisterClip(ctx context.Context, in *RegisterClipRequest, opts ...grpc.CallOption) (*RegisterClipResponse, error)
 	// Register a new DVR recording in the business registry (called by Foghorn during StartDVR)
 	RegisterDVR(ctx context.Context, in *RegisterDVRRequest, opts ...grpc.CallOption) (*RegisterDVRResponse, error)
 	// Back-fill retention_until on a DVR recording at finalize time.
@@ -191,19 +185,14 @@ type InternalServiceClient interface {
 	// business registry's expires_at reflects post-end retention. Active
 	// recordings carry NULL retention_until until they finalize.
 	UpdateDVRRetention(ctx context.Context, in *UpdateDVRRetentionRequest, opts ...grpc.CallOption) (*UpdateDVRRetentionResponse, error)
-	// MarkArtifactThumbnailsReady flips has_thumbnails to TRUE and stamps the
-	// authoritative storage_cluster_id after Foghorn confirms the thumbnail
-	// bytes landed. Live streams are excluded — they derive URLs from
-	// active_ingest_cluster_id.
-	MarkArtifactThumbnailsReady(ctx context.Context, in *MarkArtifactThumbnailsReadyRequest, opts ...grpc.CallOption) (*MarkArtifactThumbnailsReadyResponse, error)
-	// UpdateArtifactStorageCluster updates storage_cluster_id only. It never
-	// touches has_thumbnails — a storage move on a thumbnail-less artifact must
-	// not falsely flip readiness. Called whenever Foghorn mutates
-	// foghorn.artifacts.storage_cluster_id.
-	UpdateArtifactStorageCluster(ctx context.Context, in *UpdateArtifactStorageClusterRequest, opts ...grpc.CallOption) (*UpdateArtifactStorageClusterResponse, error)
-	// UpdateArtifactSize projects Foghorn's authoritative artifact byte count
-	// into Commodore's registry rows for catalog pagination and sorting.
-	UpdateArtifactSize(ctx context.Context, in *UpdateArtifactSizeRequest, opts ...grpc.CallOption) (*UpdateArtifactSizeResponse, error)
+	// UpdateArtifactCatalogSnapshot applies a whole authoritative catalog snapshot
+	// (size/duration/tracks/lifecycle/cluster/thumbnails) from foghorn.artifacts under TWO guards:
+	// (1) monotonicity — applied only if source_revision is newer than the row's stored
+	// catalog_revision, so a stale reconciler snapshot cannot regress newer state; and (2) source
+	// authority — when source_cluster_id is supplied it must match the row's origin_cluster_id, so
+	// a non-origin cluster cannot clobber origin-owned state regardless of its revision. This is the
+	// reconciler's single-writer projection path.
+	UpdateArtifactCatalogSnapshot(ctx context.Context, in *UpdateArtifactCatalogSnapshotRequest, opts ...grpc.CallOption) (*UpdateArtifactCatalogSnapshotResponse, error)
 	// Resolve clip hash to tenant context (for analytics enrichment and playback)
 	ResolveClipHash(ctx context.Context, in *ResolveClipHashRequest, opts ...grpc.CallOption) (*ResolveClipHashResponse, error)
 	// Resolve DVR hash to tenant context (for analytics enrichment and playback)
@@ -215,8 +204,6 @@ type InternalServiceClient interface {
 	// Unified identifier resolution - checks streams, clips, and DVR in one call
 	// Used by Foghorn for analytics enrichment when local state cache misses
 	ResolveIdentifier(ctx context.Context, in *ResolveIdentifierRequest, opts ...grpc.CallOption) (*ResolveIdentifierResponse, error)
-	// Register a new VOD asset in the business registry (called by Foghorn during CreateVodUpload)
-	RegisterVod(ctx context.Context, in *RegisterVodRequest, opts ...grpc.CallOption) (*RegisterVodResponse, error)
 	// Resolve VOD hash to tenant context (for analytics enrichment and playback)
 	ResolveVodHash(ctx context.Context, in *ResolveVodHashRequest, opts ...grpc.CallOption) (*ResolveVodHashResponse, error)
 	// Resolve VOD relay ID (vod_assets.id) to VOD hash + tenant context
@@ -471,16 +458,6 @@ func (c *internalServiceClient) ListDVRChapters(ctx context.Context, in *foghorn
 	return out, nil
 }
 
-func (c *internalServiceClient) RegisterClip(ctx context.Context, in *RegisterClipRequest, opts ...grpc.CallOption) (*RegisterClipResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(RegisterClipResponse)
-	err := c.cc.Invoke(ctx, InternalService_RegisterClip_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *internalServiceClient) RegisterDVR(ctx context.Context, in *RegisterDVRRequest, opts ...grpc.CallOption) (*RegisterDVRResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RegisterDVRResponse)
@@ -501,30 +478,10 @@ func (c *internalServiceClient) UpdateDVRRetention(ctx context.Context, in *Upda
 	return out, nil
 }
 
-func (c *internalServiceClient) MarkArtifactThumbnailsReady(ctx context.Context, in *MarkArtifactThumbnailsReadyRequest, opts ...grpc.CallOption) (*MarkArtifactThumbnailsReadyResponse, error) {
+func (c *internalServiceClient) UpdateArtifactCatalogSnapshot(ctx context.Context, in *UpdateArtifactCatalogSnapshotRequest, opts ...grpc.CallOption) (*UpdateArtifactCatalogSnapshotResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MarkArtifactThumbnailsReadyResponse)
-	err := c.cc.Invoke(ctx, InternalService_MarkArtifactThumbnailsReady_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *internalServiceClient) UpdateArtifactStorageCluster(ctx context.Context, in *UpdateArtifactStorageClusterRequest, opts ...grpc.CallOption) (*UpdateArtifactStorageClusterResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(UpdateArtifactStorageClusterResponse)
-	err := c.cc.Invoke(ctx, InternalService_UpdateArtifactStorageCluster_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *internalServiceClient) UpdateArtifactSize(ctx context.Context, in *UpdateArtifactSizeRequest, opts ...grpc.CallOption) (*UpdateArtifactSizeResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(UpdateArtifactSizeResponse)
-	err := c.cc.Invoke(ctx, InternalService_UpdateArtifactSize_FullMethodName, in, out, cOpts...)
+	out := new(UpdateArtifactCatalogSnapshotResponse)
+	err := c.cc.Invoke(ctx, InternalService_UpdateArtifactCatalogSnapshot_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -575,16 +532,6 @@ func (c *internalServiceClient) ResolveIdentifier(ctx context.Context, in *Resol
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ResolveIdentifierResponse)
 	err := c.cc.Invoke(ctx, InternalService_ResolveIdentifier_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *internalServiceClient) RegisterVod(ctx context.Context, in *RegisterVodRequest, opts ...grpc.CallOption) (*RegisterVodResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(RegisterVodResponse)
-	err := c.cc.Invoke(ctx, InternalService_RegisterVod_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -898,8 +845,6 @@ type InternalServiceServer interface {
 	// snapshotted at StartDVR — there is no mid-recording policy RPC.
 	RetrieveDVRChapter(context.Context, *foghorn_control.RetrieveDVRChapterRequest) (*foghorn_control.RetrieveDVRChapterResponse, error)
 	ListDVRChapters(context.Context, *foghorn_control.ListDVRChaptersRequest) (*foghorn_control.ListDVRChaptersResponse, error)
-	// Register a new clip in the business registry (called by Foghorn during CreateClip)
-	RegisterClip(context.Context, *RegisterClipRequest) (*RegisterClipResponse, error)
 	// Register a new DVR recording in the business registry (called by Foghorn during StartDVR)
 	RegisterDVR(context.Context, *RegisterDVRRequest) (*RegisterDVRResponse, error)
 	// Back-fill retention_until on a DVR recording at finalize time.
@@ -908,19 +853,14 @@ type InternalServiceServer interface {
 	// business registry's expires_at reflects post-end retention. Active
 	// recordings carry NULL retention_until until they finalize.
 	UpdateDVRRetention(context.Context, *UpdateDVRRetentionRequest) (*UpdateDVRRetentionResponse, error)
-	// MarkArtifactThumbnailsReady flips has_thumbnails to TRUE and stamps the
-	// authoritative storage_cluster_id after Foghorn confirms the thumbnail
-	// bytes landed. Live streams are excluded — they derive URLs from
-	// active_ingest_cluster_id.
-	MarkArtifactThumbnailsReady(context.Context, *MarkArtifactThumbnailsReadyRequest) (*MarkArtifactThumbnailsReadyResponse, error)
-	// UpdateArtifactStorageCluster updates storage_cluster_id only. It never
-	// touches has_thumbnails — a storage move on a thumbnail-less artifact must
-	// not falsely flip readiness. Called whenever Foghorn mutates
-	// foghorn.artifacts.storage_cluster_id.
-	UpdateArtifactStorageCluster(context.Context, *UpdateArtifactStorageClusterRequest) (*UpdateArtifactStorageClusterResponse, error)
-	// UpdateArtifactSize projects Foghorn's authoritative artifact byte count
-	// into Commodore's registry rows for catalog pagination and sorting.
-	UpdateArtifactSize(context.Context, *UpdateArtifactSizeRequest) (*UpdateArtifactSizeResponse, error)
+	// UpdateArtifactCatalogSnapshot applies a whole authoritative catalog snapshot
+	// (size/duration/tracks/lifecycle/cluster/thumbnails) from foghorn.artifacts under TWO guards:
+	// (1) monotonicity — applied only if source_revision is newer than the row's stored
+	// catalog_revision, so a stale reconciler snapshot cannot regress newer state; and (2) source
+	// authority — when source_cluster_id is supplied it must match the row's origin_cluster_id, so
+	// a non-origin cluster cannot clobber origin-owned state regardless of its revision. This is the
+	// reconciler's single-writer projection path.
+	UpdateArtifactCatalogSnapshot(context.Context, *UpdateArtifactCatalogSnapshotRequest) (*UpdateArtifactCatalogSnapshotResponse, error)
 	// Resolve clip hash to tenant context (for analytics enrichment and playback)
 	ResolveClipHash(context.Context, *ResolveClipHashRequest) (*ResolveClipHashResponse, error)
 	// Resolve DVR hash to tenant context (for analytics enrichment and playback)
@@ -932,8 +872,6 @@ type InternalServiceServer interface {
 	// Unified identifier resolution - checks streams, clips, and DVR in one call
 	// Used by Foghorn for analytics enrichment when local state cache misses
 	ResolveIdentifier(context.Context, *ResolveIdentifierRequest) (*ResolveIdentifierResponse, error)
-	// Register a new VOD asset in the business registry (called by Foghorn during CreateVodUpload)
-	RegisterVod(context.Context, *RegisterVodRequest) (*RegisterVodResponse, error)
 	// Resolve VOD hash to tenant context (for analytics enrichment and playback)
 	ResolveVodHash(context.Context, *ResolveVodHashRequest) (*ResolveVodHashResponse, error)
 	// Resolve VOD relay ID (vod_assets.id) to VOD hash + tenant context
@@ -1062,23 +1000,14 @@ func (UnimplementedInternalServiceServer) RetrieveDVRChapter(context.Context, *f
 func (UnimplementedInternalServiceServer) ListDVRChapters(context.Context, *foghorn_control.ListDVRChaptersRequest) (*foghorn_control.ListDVRChaptersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListDVRChapters not implemented")
 }
-func (UnimplementedInternalServiceServer) RegisterClip(context.Context, *RegisterClipRequest) (*RegisterClipResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method RegisterClip not implemented")
-}
 func (UnimplementedInternalServiceServer) RegisterDVR(context.Context, *RegisterDVRRequest) (*RegisterDVRResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegisterDVR not implemented")
 }
 func (UnimplementedInternalServiceServer) UpdateDVRRetention(context.Context, *UpdateDVRRetentionRequest) (*UpdateDVRRetentionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateDVRRetention not implemented")
 }
-func (UnimplementedInternalServiceServer) MarkArtifactThumbnailsReady(context.Context, *MarkArtifactThumbnailsReadyRequest) (*MarkArtifactThumbnailsReadyResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method MarkArtifactThumbnailsReady not implemented")
-}
-func (UnimplementedInternalServiceServer) UpdateArtifactStorageCluster(context.Context, *UpdateArtifactStorageClusterRequest) (*UpdateArtifactStorageClusterResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method UpdateArtifactStorageCluster not implemented")
-}
-func (UnimplementedInternalServiceServer) UpdateArtifactSize(context.Context, *UpdateArtifactSizeRequest) (*UpdateArtifactSizeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method UpdateArtifactSize not implemented")
+func (UnimplementedInternalServiceServer) UpdateArtifactCatalogSnapshot(context.Context, *UpdateArtifactCatalogSnapshotRequest) (*UpdateArtifactCatalogSnapshotResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateArtifactCatalogSnapshot not implemented")
 }
 func (UnimplementedInternalServiceServer) ResolveClipHash(context.Context, *ResolveClipHashRequest) (*ResolveClipHashResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolveClipHash not implemented")
@@ -1094,9 +1023,6 @@ func (UnimplementedInternalServiceServer) ResolveArtifactInternalName(context.Co
 }
 func (UnimplementedInternalServiceServer) ResolveIdentifier(context.Context, *ResolveIdentifierRequest) (*ResolveIdentifierResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolveIdentifier not implemented")
-}
-func (UnimplementedInternalServiceServer) RegisterVod(context.Context, *RegisterVodRequest) (*RegisterVodResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method RegisterVod not implemented")
 }
 func (UnimplementedInternalServiceServer) ResolveVodHash(context.Context, *ResolveVodHashRequest) (*ResolveVodHashResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolveVodHash not implemented")
@@ -1503,24 +1429,6 @@ func _InternalService_ListDVRChapters_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
-func _InternalService_RegisterClip_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RegisterClipRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(InternalServiceServer).RegisterClip(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: InternalService_RegisterClip_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(InternalServiceServer).RegisterClip(ctx, req.(*RegisterClipRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _InternalService_RegisterDVR_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RegisterDVRRequest)
 	if err := dec(in); err != nil {
@@ -1557,56 +1465,20 @@ func _InternalService_UpdateDVRRetention_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
-func _InternalService_MarkArtifactThumbnailsReady_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MarkArtifactThumbnailsReadyRequest)
+func _InternalService_UpdateArtifactCatalogSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateArtifactCatalogSnapshotRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(InternalServiceServer).MarkArtifactThumbnailsReady(ctx, in)
+		return srv.(InternalServiceServer).UpdateArtifactCatalogSnapshot(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: InternalService_MarkArtifactThumbnailsReady_FullMethodName,
+		FullMethod: InternalService_UpdateArtifactCatalogSnapshot_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(InternalServiceServer).MarkArtifactThumbnailsReady(ctx, req.(*MarkArtifactThumbnailsReadyRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _InternalService_UpdateArtifactStorageCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(UpdateArtifactStorageClusterRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(InternalServiceServer).UpdateArtifactStorageCluster(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: InternalService_UpdateArtifactStorageCluster_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(InternalServiceServer).UpdateArtifactStorageCluster(ctx, req.(*UpdateArtifactStorageClusterRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _InternalService_UpdateArtifactSize_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(UpdateArtifactSizeRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(InternalServiceServer).UpdateArtifactSize(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: InternalService_UpdateArtifactSize_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(InternalServiceServer).UpdateArtifactSize(ctx, req.(*UpdateArtifactSizeRequest))
+		return srv.(InternalServiceServer).UpdateArtifactCatalogSnapshot(ctx, req.(*UpdateArtifactCatalogSnapshotRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1697,24 +1569,6 @@ func _InternalService_ResolveIdentifier_Handler(srv interface{}, ctx context.Con
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(InternalServiceServer).ResolveIdentifier(ctx, req.(*ResolveIdentifierRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _InternalService_RegisterVod_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RegisterVodRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(InternalServiceServer).RegisterVod(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: InternalService_RegisterVod_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(InternalServiceServer).RegisterVod(ctx, req.(*RegisterVodRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2159,10 +2013,6 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _InternalService_ListDVRChapters_Handler,
 		},
 		{
-			MethodName: "RegisterClip",
-			Handler:    _InternalService_RegisterClip_Handler,
-		},
-		{
 			MethodName: "RegisterDVR",
 			Handler:    _InternalService_RegisterDVR_Handler,
 		},
@@ -2171,16 +2021,8 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _InternalService_UpdateDVRRetention_Handler,
 		},
 		{
-			MethodName: "MarkArtifactThumbnailsReady",
-			Handler:    _InternalService_MarkArtifactThumbnailsReady_Handler,
-		},
-		{
-			MethodName: "UpdateArtifactStorageCluster",
-			Handler:    _InternalService_UpdateArtifactStorageCluster_Handler,
-		},
-		{
-			MethodName: "UpdateArtifactSize",
-			Handler:    _InternalService_UpdateArtifactSize_Handler,
+			MethodName: "UpdateArtifactCatalogSnapshot",
+			Handler:    _InternalService_UpdateArtifactCatalogSnapshot_Handler,
 		},
 		{
 			MethodName: "ResolveClipHash",
@@ -2201,10 +2043,6 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ResolveIdentifier",
 			Handler:    _InternalService_ResolveIdentifier_Handler,
-		},
-		{
-			MethodName: "RegisterVod",
-			Handler:    _InternalService_RegisterVod_Handler,
 		},
 		{
 			MethodName: "ResolveVodHash",
@@ -4277,7 +4115,6 @@ var DeveloperService_ServiceDesc = grpc.ServiceDesc{
 
 const (
 	ClipService_CreateClip_FullMethodName = "/commodore.ClipService/CreateClip"
-	ClipService_GetClips_FullMethodName   = "/commodore.ClipService/GetClips"
 	ClipService_GetClip_FullMethodName    = "/commodore.ClipService/GetClip"
 	ClipService_DeleteClip_FullMethodName = "/commodore.ClipService/DeleteClip"
 )
@@ -4287,7 +4124,6 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ClipServiceClient interface {
 	CreateClip(ctx context.Context, in *shared.CreateClipRequest, opts ...grpc.CallOption) (*shared.CreateClipResponse, error)
-	GetClips(ctx context.Context, in *shared.GetClipsRequest, opts ...grpc.CallOption) (*shared.GetClipsResponse, error)
 	GetClip(ctx context.Context, in *shared.GetClipRequest, opts ...grpc.CallOption) (*shared.ClipInfo, error)
 	DeleteClip(ctx context.Context, in *shared.DeleteClipRequest, opts ...grpc.CallOption) (*shared.DeleteClipResponse, error)
 }
@@ -4304,16 +4140,6 @@ func (c *clipServiceClient) CreateClip(ctx context.Context, in *shared.CreateCli
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(shared.CreateClipResponse)
 	err := c.cc.Invoke(ctx, ClipService_CreateClip_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *clipServiceClient) GetClips(ctx context.Context, in *shared.GetClipsRequest, opts ...grpc.CallOption) (*shared.GetClipsResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(shared.GetClipsResponse)
-	err := c.cc.Invoke(ctx, ClipService_GetClips_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -4345,7 +4171,6 @@ func (c *clipServiceClient) DeleteClip(ctx context.Context, in *shared.DeleteCli
 // for forward compatibility.
 type ClipServiceServer interface {
 	CreateClip(context.Context, *shared.CreateClipRequest) (*shared.CreateClipResponse, error)
-	GetClips(context.Context, *shared.GetClipsRequest) (*shared.GetClipsResponse, error)
 	GetClip(context.Context, *shared.GetClipRequest) (*shared.ClipInfo, error)
 	DeleteClip(context.Context, *shared.DeleteClipRequest) (*shared.DeleteClipResponse, error)
 	mustEmbedUnimplementedClipServiceServer()
@@ -4360,9 +4185,6 @@ type UnimplementedClipServiceServer struct{}
 
 func (UnimplementedClipServiceServer) CreateClip(context.Context, *shared.CreateClipRequest) (*shared.CreateClipResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateClip not implemented")
-}
-func (UnimplementedClipServiceServer) GetClips(context.Context, *shared.GetClipsRequest) (*shared.GetClipsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetClips not implemented")
 }
 func (UnimplementedClipServiceServer) GetClip(context.Context, *shared.GetClipRequest) (*shared.ClipInfo, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetClip not implemented")
@@ -4405,24 +4227,6 @@ func _ClipService_CreateClip_Handler(srv interface{}, ctx context.Context, dec f
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ClipServiceServer).CreateClip(ctx, req.(*shared.CreateClipRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ClipService_GetClips_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(shared.GetClipsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ClipServiceServer).GetClips(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ClipService_GetClips_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ClipServiceServer).GetClips(ctx, req.(*shared.GetClipsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -4475,10 +4279,6 @@ var ClipService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ClipService_CreateClip_Handler,
 		},
 		{
-			MethodName: "GetClips",
-			Handler:    _ClipService_GetClips_Handler,
-		},
-		{
 			MethodName: "GetClip",
 			Handler:    _ClipService_GetClip_Handler,
 		},
@@ -4492,9 +4292,8 @@ var ClipService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	DVRService_StopDVR_FullMethodName         = "/commodore.DVRService/StopDVR"
-	DVRService_DeleteDVR_FullMethodName       = "/commodore.DVRService/DeleteDVR"
-	DVRService_ListDVRRequests_FullMethodName = "/commodore.DVRService/ListDVRRequests"
+	DVRService_StopDVR_FullMethodName   = "/commodore.DVRService/StopDVR"
+	DVRService_DeleteDVR_FullMethodName = "/commodore.DVRService/DeleteDVR"
 )
 
 // DVRServiceClient is the client API for DVRService service.
@@ -4503,7 +4302,6 @@ const (
 type DVRServiceClient interface {
 	StopDVR(ctx context.Context, in *shared.StopDVRRequest, opts ...grpc.CallOption) (*shared.StopDVRResponse, error)
 	DeleteDVR(ctx context.Context, in *shared.DeleteDVRRequest, opts ...grpc.CallOption) (*shared.DeleteDVRResponse, error)
-	ListDVRRequests(ctx context.Context, in *shared.ListDVRRecordingsRequest, opts ...grpc.CallOption) (*shared.ListDVRRecordingsResponse, error)
 }
 
 type dVRServiceClient struct {
@@ -4534,23 +4332,12 @@ func (c *dVRServiceClient) DeleteDVR(ctx context.Context, in *shared.DeleteDVRRe
 	return out, nil
 }
 
-func (c *dVRServiceClient) ListDVRRequests(ctx context.Context, in *shared.ListDVRRecordingsRequest, opts ...grpc.CallOption) (*shared.ListDVRRecordingsResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(shared.ListDVRRecordingsResponse)
-	err := c.cc.Invoke(ctx, DVRService_ListDVRRequests_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // DVRServiceServer is the server API for DVRService service.
 // All implementations must embed UnimplementedDVRServiceServer
 // for forward compatibility.
 type DVRServiceServer interface {
 	StopDVR(context.Context, *shared.StopDVRRequest) (*shared.StopDVRResponse, error)
 	DeleteDVR(context.Context, *shared.DeleteDVRRequest) (*shared.DeleteDVRResponse, error)
-	ListDVRRequests(context.Context, *shared.ListDVRRecordingsRequest) (*shared.ListDVRRecordingsResponse, error)
 	mustEmbedUnimplementedDVRServiceServer()
 }
 
@@ -4566,9 +4353,6 @@ func (UnimplementedDVRServiceServer) StopDVR(context.Context, *shared.StopDVRReq
 }
 func (UnimplementedDVRServiceServer) DeleteDVR(context.Context, *shared.DeleteDVRRequest) (*shared.DeleteDVRResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteDVR not implemented")
-}
-func (UnimplementedDVRServiceServer) ListDVRRequests(context.Context, *shared.ListDVRRecordingsRequest) (*shared.ListDVRRecordingsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListDVRRequests not implemented")
 }
 func (UnimplementedDVRServiceServer) mustEmbedUnimplementedDVRServiceServer() {}
 func (UnimplementedDVRServiceServer) testEmbeddedByValue()                    {}
@@ -4627,24 +4411,6 @@ func _DVRService_DeleteDVR_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
-func _DVRService_ListDVRRequests_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(shared.ListDVRRecordingsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(DVRServiceServer).ListDVRRequests(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: DVRService_ListDVRRequests_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(DVRServiceServer).ListDVRRequests(ctx, req.(*shared.ListDVRRecordingsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // DVRService_ServiceDesc is the grpc.ServiceDesc for DVRService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -4659,10 +4425,6 @@ var DVRService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteDVR",
 			Handler:    _DVRService_DeleteDVR_Handler,
-		},
-		{
-			MethodName: "ListDVRRequests",
-			Handler:    _DVRService_ListDVRRequests_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
@@ -4814,8 +4576,6 @@ const (
 	VodService_CompleteVodUpload_FullMethodName  = "/commodore.VodService/CompleteVodUpload"
 	VodService_AbortVodUpload_FullMethodName     = "/commodore.VodService/AbortVodUpload"
 	VodService_GetVodUploadStatus_FullMethodName = "/commodore.VodService/GetVodUploadStatus"
-	VodService_GetVodAsset_FullMethodName        = "/commodore.VodService/GetVodAsset"
-	VodService_ListVodAssets_FullMethodName      = "/commodore.VodService/ListVodAssets"
 	VodService_DeleteVodAsset_FullMethodName     = "/commodore.VodService/DeleteVodAsset"
 )
 
@@ -4836,10 +4596,8 @@ type VodServiceClient interface {
 	AbortVodUpload(ctx context.Context, in *shared.AbortVodUploadRequest, opts ...grpc.CallOption) (*shared.AbortVodUploadResponse, error)
 	// Read upload status (proxies to Foghorn; tenant_id from auth context).
 	GetVodUploadStatus(ctx context.Context, in *shared.GetVodUploadStatusRequest, opts ...grpc.CallOption) (*shared.GetVodUploadStatusResponse, error)
-	// Get single VOD asset
-	GetVodAsset(ctx context.Context, in *shared.GetVodAssetRequest, opts ...grpc.CallOption) (*shared.VodAssetInfo, error)
-	// List VOD assets with pagination
-	ListVodAssets(ctx context.Context, in *shared.ListVodAssetsRequest, opts ...grpc.CallOption) (*shared.ListVodAssetsResponse, error)
+	// VOD reads (single + list) go through the unified ListStorageArtifacts catalog, not a
+	// VOD-only RPC.
 	// Delete VOD asset
 	DeleteVodAsset(ctx context.Context, in *shared.DeleteVodAssetRequest, opts ...grpc.CallOption) (*shared.DeleteVodAssetResponse, error)
 }
@@ -4892,26 +4650,6 @@ func (c *vodServiceClient) GetVodUploadStatus(ctx context.Context, in *shared.Ge
 	return out, nil
 }
 
-func (c *vodServiceClient) GetVodAsset(ctx context.Context, in *shared.GetVodAssetRequest, opts ...grpc.CallOption) (*shared.VodAssetInfo, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(shared.VodAssetInfo)
-	err := c.cc.Invoke(ctx, VodService_GetVodAsset_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *vodServiceClient) ListVodAssets(ctx context.Context, in *shared.ListVodAssetsRequest, opts ...grpc.CallOption) (*shared.ListVodAssetsResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(shared.ListVodAssetsResponse)
-	err := c.cc.Invoke(ctx, VodService_ListVodAssets_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *vodServiceClient) DeleteVodAsset(ctx context.Context, in *shared.DeleteVodAssetRequest, opts ...grpc.CallOption) (*shared.DeleteVodAssetResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(shared.DeleteVodAssetResponse)
@@ -4939,10 +4677,8 @@ type VodServiceServer interface {
 	AbortVodUpload(context.Context, *shared.AbortVodUploadRequest) (*shared.AbortVodUploadResponse, error)
 	// Read upload status (proxies to Foghorn; tenant_id from auth context).
 	GetVodUploadStatus(context.Context, *shared.GetVodUploadStatusRequest) (*shared.GetVodUploadStatusResponse, error)
-	// Get single VOD asset
-	GetVodAsset(context.Context, *shared.GetVodAssetRequest) (*shared.VodAssetInfo, error)
-	// List VOD assets with pagination
-	ListVodAssets(context.Context, *shared.ListVodAssetsRequest) (*shared.ListVodAssetsResponse, error)
+	// VOD reads (single + list) go through the unified ListStorageArtifacts catalog, not a
+	// VOD-only RPC.
 	// Delete VOD asset
 	DeleteVodAsset(context.Context, *shared.DeleteVodAssetRequest) (*shared.DeleteVodAssetResponse, error)
 	mustEmbedUnimplementedVodServiceServer()
@@ -4966,12 +4702,6 @@ func (UnimplementedVodServiceServer) AbortVodUpload(context.Context, *shared.Abo
 }
 func (UnimplementedVodServiceServer) GetVodUploadStatus(context.Context, *shared.GetVodUploadStatusRequest) (*shared.GetVodUploadStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetVodUploadStatus not implemented")
-}
-func (UnimplementedVodServiceServer) GetVodAsset(context.Context, *shared.GetVodAssetRequest) (*shared.VodAssetInfo, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetVodAsset not implemented")
-}
-func (UnimplementedVodServiceServer) ListVodAssets(context.Context, *shared.ListVodAssetsRequest) (*shared.ListVodAssetsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListVodAssets not implemented")
 }
 func (UnimplementedVodServiceServer) DeleteVodAsset(context.Context, *shared.DeleteVodAssetRequest) (*shared.DeleteVodAssetResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteVodAsset not implemented")
@@ -5069,42 +4799,6 @@ func _VodService_GetVodUploadStatus_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
-func _VodService_GetVodAsset_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(shared.GetVodAssetRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VodServiceServer).GetVodAsset(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: VodService_GetVodAsset_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VodServiceServer).GetVodAsset(ctx, req.(*shared.GetVodAssetRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _VodService_ListVodAssets_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(shared.ListVodAssetsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VodServiceServer).ListVodAssets(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: VodService_ListVodAssets_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VodServiceServer).ListVodAssets(ctx, req.(*shared.ListVodAssetsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _VodService_DeleteVodAsset_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(shared.DeleteVodAssetRequest)
 	if err := dec(in); err != nil {
@@ -5145,14 +4839,6 @@ var VodService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetVodUploadStatus",
 			Handler:    _VodService_GetVodUploadStatus_Handler,
-		},
-		{
-			MethodName: "GetVodAsset",
-			Handler:    _VodService_GetVodAsset_Handler,
-		},
-		{
-			MethodName: "ListVodAssets",
-			Handler:    _VodService_ListVodAssets_Handler,
 		},
 		{
 			MethodName: "DeleteVodAsset",
