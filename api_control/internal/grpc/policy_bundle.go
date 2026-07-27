@@ -51,8 +51,8 @@ type signedBundleClaims struct {
 // Revocation: callers (Purser plan downgrade, Quartermaster entitlement
 // removal, etc.) enqueue a `bundle_revoke` row into
 // playback_policy_invalidation_outbox with the minimum-acceptable
-// bundle_version in internal_names. Foghorn's cache watermark bumps to that
-// value on receipt, invalidating prior bundles.
+// bundle_version in the bundle_min_version column. Foghorn's cache watermark
+// bumps to that value on receipt, invalidating prior bundles.
 func (s *CommodoreServer) GetSignedPolicyBundle(ctx context.Context, req *commodorepb.GetSignedPolicyBundleRequest) (*commodorepb.GetSignedPolicyBundleResponse, error) {
 	tenantID := strings.TrimSpace(req.GetTenantId())
 	streamID := strings.TrimSpace(req.GetStreamId())

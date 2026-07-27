@@ -23,62 +23,6 @@ func expectUniqueArtifactIdentifiers(mock sqlmock.Sqlmock) {
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 }
 
-func TestRegisterClip(t *testing.T) {
-	t.Run("missing_required_fields", func(t *testing.T) {
-		s, _, done := newMockServer(t)
-		defer done()
-		_, err := s.RegisterClip(context.Background(), &commodorepb.RegisterClipRequest{TenantId: "t1", UserId: "u1"})
-		wantCode(t, err, codes.InvalidArgument)
-	})
-
-	t.Run("stream_not_found", func(t *testing.T) {
-		s, mock, done := newMockServer(t)
-		defer done()
-		expectUniqueArtifactIdentifiers(mock)
-		mock.ExpectQuery("FROM commodore.streams").
-			WithArgs("s1", "t1").
-			WillReturnError(sql.ErrNoRows)
-		_, err := s.RegisterClip(context.Background(), &commodorepb.RegisterClipRequest{
-			TenantId: "t1", UserId: "u1", StreamId: "s1",
-		})
-		wantCode(t, err, codes.NotFound)
-		if err := mock.ExpectationsWereMet(); err != nil {
-			t.Fatalf("expectations: %v", err)
-		}
-	})
-
-	t.Run("happy_path_inherits_source_auth_and_emits", func(t *testing.T) {
-		s, mock, done := newMockServer(t)
-		defer done()
-		expectUniqueArtifactIdentifiers(mock)
-		// Clip inherits the source stream's auth/policy so a private stream's
-		// clips stay private.
-		mock.ExpectQuery("FROM commodore.streams").
-			WithArgs("s1", "t1").
-			WillReturnRows(sqlmock.NewRows([]string{"requires_auth", "playback_policy", "playback_webhook_secret_enc"}).
-				AddRow(true, `{"type":"jwt"}`, nil))
-		mock.ExpectExec("INSERT INTO commodore.clips").
-			WillReturnResult(sqlmock.NewResult(0, 1))
-		expectOutboxInsert(mock)
-
-		resp, err := s.RegisterClip(context.Background(), &commodorepb.RegisterClipRequest{
-			TenantId: "t1", UserId: "u1", StreamId: "s1", Title: "clip",
-		})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if resp.GetClipHash() == "" || resp.GetClipId() == "" {
-			t.Errorf("expected generated clip hash and id, got %+v", resp)
-		}
-		if resp.GetPlaybackId() == "" || resp.GetInternalName() == "" {
-			t.Errorf("expected generated artifact identifiers, got %+v", resp)
-		}
-		if err := mock.ExpectationsWereMet(); err != nil {
-			t.Fatalf("expectations: %v", err)
-		}
-	})
-}
-
 func TestRegisterDVR(t *testing.T) {
 	t.Run("missing_required_fields", func(t *testing.T) {
 		s, _, done := newMockServer(t)
@@ -114,12 +58,19 @@ func TestRegisterDVR(t *testing.T) {
 		mock.ExpectQuery("FROM commodore.streams WHERE internal_name").
 			WithArgs("live+stream1", "t1").
 			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("stream-uuid-1"))
+		// The business row and its durable creation intent are inserted atomically.
+		mock.ExpectBegin()
 		mock.ExpectExec("INSERT INTO commodore.dvr_recordings").
 			WillReturnResult(sqlmock.NewResult(0, 1))
+		// upsertCreationIntent RETURNS the persisted request_id (Query, not Exec).
+		mock.ExpectQuery("INSERT INTO commodore.artifact_creation_intents").
+			WillReturnRows(sqlmock.NewRows([]string{"request_id"}).AddRow("00000000-0000-0000-0000-0000000000d1"))
+		mock.ExpectCommit()
 		expectOutboxInsert(mock)
 
 		resp, err := s.RegisterDVR(context.Background(), &commodorepb.RegisterDVRRequest{
 			TenantId: "t1", UserId: "u1", StreamInternalName: "live+stream1",
+			OriginClusterId: "cluster-a",
 		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -130,6 +81,10 @@ func TestRegisterDVR(t *testing.T) {
 		}
 		if resp.GetDvrHash() == "" || resp.GetDvrId() == "" {
 			t.Errorf("expected generated DVR hash and id, got %+v", resp)
+		}
+		// The intent request_id is returned so Foghorn can key its command ledger.
+		if resp.GetRequestId() == "" {
+			t.Errorf("expected creation-intent request_id in response, got %+v", resp)
 		}
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatalf("expectations: %v", err)

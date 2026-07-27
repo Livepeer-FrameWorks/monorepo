@@ -349,30 +349,34 @@ func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *commodorep
 
 	requiresAuth := policyType != "public"
 
+	// The UPDATE is guarded to the LIVE row and RETURNs the canonical identifier in ONE statement, so a
+	// deleted asset (business row present but tombstoned, or already removed) never gets its policy
+	// mutated and invalidation dispatched only to fail an after-the-fact existence check: zero rows →
+	// NotFound BEFORE any commit or invalidation. Live = business row present AND no tombstone marker
+	// (vod_asset/clip only; streams are not catalog artifacts).
+	returningExpr, tombstoneGuard := setPolicyTargetSQL(target)
+
 	q := fmt.Sprintf(`
-			UPDATE commodore.%s
+			UPDATE commodore.%s AS c
 			SET requires_auth = $1,
 			    playback_policy = $2,
-		    playback_webhook_secret_enc = $3,
-		    updated_at = NOW()
-			WHERE %s AND tenant_id = $5
-		`, tableCol, whereCol)
+			    playback_webhook_secret_enc = $3,
+			    updated_at = NOW()
+			WHERE %s AND c.tenant_id = $5%s
+			RETURNING %s
+		`, tableCol, whereCol, tombstoneGuard, returningExpr)
 
-	res, err := tx.ExecContext(ctx, q, requiresAuth, database.JSONText(policyJSON), webhookSecretEnc, target.id, tenantID)
+	var responseID string
+	err = tx.QueryRowContext(ctx, q, requiresAuth, database.JSONText(policyJSON), webhookSecretEnc, target.id, tenantID).Scan(&responseID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Errorf(codes.NotFound, "%s not found", target.kind)
+	}
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
 			"target": target.kind,
 			"error":  err,
 		}).Error("update playback policy failed")
 		return nil, status.Errorf(codes.Internal, "database error")
-	}
-	rowsAffected, raErr := res.RowsAffected()
-	if raErr != nil {
-		s.logger.WithError(raErr).Error("RowsAffected after policy update failed")
-		return nil, status.Errorf(codes.Internal, "database error")
-	}
-	if rowsAffected == 0 {
-		return nil, status.Errorf(codes.NotFound, "%s not found", target.kind)
 	}
 
 	// Snapshot the changed object's internal_name so the worker can replay an
@@ -390,11 +394,6 @@ func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *commodorep
 	}
 
 	s.tryDispatchInvalidationOutbox(ctx, outboxID, tenantID, "policy_change", scopedNames)
-
-	responseID, err := s.canonicalPlaybackPolicyTargetID(ctx, tenantID, target)
-	if err != nil {
-		return nil, err
-	}
 
 	resp := &commodorepb.SetPlaybackPolicyResponse{RequiresAuth: requiresAuth}
 	switch target.kind {
@@ -562,40 +561,19 @@ func lookupExistingWebhookSecret(ctx context.Context, tx *sql.Tx, tableName stri
 	return existing, nil
 }
 
-func (s *CommodoreServer) canonicalPlaybackPolicyTargetID(ctx context.Context, tenantID string, target policyTarget) (string, error) {
+// setPolicyTargetSQL returns the canonical identifier the guarded SetPlaybackPolicy UPDATE RETURNs
+// (stream id / vod_hash / clip_hash) and, for catalog artifacts, the live-row tombstone guard that
+// keeps a deleted asset (a present tombstone marker) from being mutated. Streams are not catalog
+// artifacts, so they carry no guard.
+func setPolicyTargetSQL(target policyTarget) (returningExpr, tombstoneGuard string) {
 	switch target.kind {
-	case "stream":
-		return target.id, nil
 	case "vod_asset":
-		var vodHash string
-		if err := s.db.QueryRowContext(ctx, `
-			SELECT vod_hash
-			FROM commodore.vod_assets
-			WHERE tenant_id = $1 AND (id::text = $2 OR vod_hash = $2)
-		`, tenantID, target.id).Scan(&vodHash); err != nil {
-			s.logger.WithError(err).WithField("target", target.id).Error("resolve canonical VOD policy target failed")
-			if errors.Is(err, sql.ErrNoRows) {
-				return "", status.Error(codes.NotFound, "vod_asset not found")
-			}
-			return "", status.Error(codes.Internal, "database error")
-		}
-		return vodHash, nil
+		return "c.vod_hash", " AND NOT EXISTS (SELECT 1 FROM commodore.artifact_catalog_tombstones t WHERE t.tenant_id = c.tenant_id AND t.kind = 'vod' AND t.artifact_hash = c.vod_hash)"
 	case "clip":
-		var clipHash string
-		if err := s.db.QueryRowContext(ctx, `
-			SELECT clip_hash
-			FROM commodore.clips
-			WHERE tenant_id = $1 AND (id::text = $2 OR clip_hash = $2)
-		`, tenantID, target.id).Scan(&clipHash); err != nil {
-			s.logger.WithError(err).WithField("target", target.id).Error("resolve canonical clip policy target failed")
-			if errors.Is(err, sql.ErrNoRows) {
-				return "", status.Error(codes.NotFound, "clip not found")
-			}
-			return "", status.Error(codes.Internal, "database error")
-		}
-		return clipHash, nil
+		return "c.clip_hash", " AND NOT EXISTS (SELECT 1 FROM commodore.artifact_catalog_tombstones t WHERE t.tenant_id = c.tenant_id AND t.kind = 'clip' AND t.artifact_hash = c.clip_hash)"
+	default:
+		return "c.id::text", ""
 	}
-	return "", status.Error(codes.InvalidArgument, "unknown playback policy target")
 }
 
 func pickPolicyTarget(req *commodorepb.SetPlaybackPolicyRequest) (policyTarget, error) {
@@ -808,8 +786,7 @@ func (s *CommodoreServer) lookupPolicyByPlaybackID(ctx context.Context, playback
 	// VOD assets.
 	fetchErr = s.db.QueryRowContext(ctx, `
 		SELECT playback_policy, playback_webhook_secret_enc, tenant_id
-		FROM commodore.vod_assets WHERE playback_id = $1
-	`, playbackID).Scan(&policy, &secret, &tenantID)
+		FROM commodore.vod_assets WHERE playback_id = $1	`, playbackID).Scan(&policy, &secret, &tenantID)
 	if fetchErr == nil {
 		out := append([]byte(nil), policy...)
 		return out, secret, tenantID, nil
@@ -822,8 +799,7 @@ func (s *CommodoreServer) lookupPolicyByPlaybackID(ctx context.Context, playback
 	// Clips.
 	fetchErr = s.db.QueryRowContext(ctx, `
 		SELECT playback_policy, playback_webhook_secret_enc, tenant_id
-		FROM commodore.clips WHERE playback_id = $1
-	`, playbackID).Scan(&policy, &secret, &tenantID)
+		FROM commodore.clips WHERE playback_id = $1	`, playbackID).Scan(&policy, &secret, &tenantID)
 	if fetchErr == nil {
 		out := append([]byte(nil), policy...)
 		return out, secret, tenantID, nil
@@ -838,8 +814,7 @@ func (s *CommodoreServer) lookupPolicyByPlaybackID(ctx context.Context, playback
 		SELECT s.playback_policy, s.playback_webhook_secret_enc, s.tenant_id
 		FROM commodore.dvr_recordings d
 		JOIN commodore.streams s ON s.id = d.stream_id
-		WHERE d.playback_id = $1
-	`, playbackID).Scan(&policy, &secret, &tenantID)
+		WHERE d.playback_id = $1	`, playbackID).Scan(&policy, &secret, &tenantID)
 	if fetchErr == nil {
 		out := append([]byte(nil), policy...)
 		return out, secret, tenantID, nil
@@ -878,8 +853,7 @@ func (s *CommodoreServer) lookupPolicyByInternalName(ctx context.Context, intern
 
 	fetchErr = s.db.QueryRowContext(ctx, `
 		SELECT playback_policy, playback_webhook_secret_enc, tenant_id
-		FROM commodore.vod_assets WHERE internal_name = $1
-	`, internalName).Scan(&policy, &secret, &tenantID)
+		FROM commodore.vod_assets WHERE internal_name = $1	`, internalName).Scan(&policy, &secret, &tenantID)
 	if fetchErr == nil {
 		out := append([]byte(nil), policy...)
 		return out, secret, tenantID, nil
@@ -891,8 +865,7 @@ func (s *CommodoreServer) lookupPolicyByInternalName(ctx context.Context, intern
 
 	fetchErr = s.db.QueryRowContext(ctx, `
 		SELECT playback_policy, playback_webhook_secret_enc, tenant_id
-		FROM commodore.clips WHERE internal_name = $1
-	`, internalName).Scan(&policy, &secret, &tenantID)
+		FROM commodore.clips WHERE internal_name = $1	`, internalName).Scan(&policy, &secret, &tenantID)
 	if fetchErr == nil {
 		out := append([]byte(nil), policy...)
 		return out, secret, tenantID, nil
@@ -906,8 +879,7 @@ func (s *CommodoreServer) lookupPolicyByInternalName(ctx context.Context, intern
 		SELECT s.playback_policy, s.playback_webhook_secret_enc, s.tenant_id
 		FROM commodore.dvr_recordings d
 		JOIN commodore.streams s ON s.id = d.stream_id
-		WHERE d.internal_name = $1
-	`, internalName).Scan(&policy, &secret, &tenantID)
+		WHERE d.internal_name = $1	`, internalName).Scan(&policy, &secret, &tenantID)
 	if fetchErr == nil {
 		out := append([]byte(nil), policy...)
 		return out, secret, tenantID, nil
@@ -973,10 +945,11 @@ func (s *CommodoreServer) scopeInternalNames(ctx context.Context, tenantID strin
 	case "stream":
 		query = `SELECT internal_name FROM commodore.streams WHERE id::text = $1 AND tenant_id = $2`
 	case "vod_asset":
-		query = `SELECT internal_name FROM commodore.vod_assets WHERE (id::text = $1 OR vod_hash = $1) AND tenant_id = $2`
+		// Same live-row predicate as the guarded policy UPDATE: a tombstoned asset resolves no name.
+		query = `SELECT internal_name FROM commodore.vod_assets v WHERE (v.id::text = $1 OR v.vod_hash = $1) AND v.tenant_id = $2 AND NOT EXISTS (SELECT 1 FROM commodore.artifact_catalog_tombstones t WHERE t.tenant_id = v.tenant_id AND t.kind = 'vod' AND t.artifact_hash = v.vod_hash)`
 		prefix = "vod+"
 	case "clip":
-		query = `SELECT internal_name FROM commodore.clips WHERE (id::text = $1 OR clip_hash = $1) AND tenant_id = $2`
+		query = `SELECT internal_name FROM commodore.clips c WHERE (c.id::text = $1 OR c.clip_hash = $1) AND c.tenant_id = $2 AND NOT EXISTS (SELECT 1 FROM commodore.artifact_catalog_tombstones t WHERE t.tenant_id = c.tenant_id AND t.kind = 'clip' AND t.artifact_hash = c.clip_hash)`
 		prefix = "vod+"
 	default:
 		return nil

@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/netip"
 	"strings"
@@ -12,7 +13,31 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"github.com/sirupsen/logrus"
+	"google.golang.org/grpc/codes"
 )
+
+// A SetPlaybackPolicy against a deleted asset (business row present-but-tombstoned or already removed)
+// must NOT mutate the row, commit, or dispatch invalidation: the guarded UPDATE — live row AND no
+// tombstone marker — matches zero rows and RETURNs nothing, so the handler returns NotFound BEFORE any
+// commit. The sqlmock ordering (Begin, guarded UPDATE→no rows, Rollback; no Commit) proves it.
+func TestSetPlaybackPolicy_DeletedAssetReturnsNotFoundNoMutation(t *testing.T) {
+	s, mock, done := newMockServer(t)
+	defer done()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)UPDATE commodore.vod_assets AS c.*NOT EXISTS.*artifact_catalog_tombstones.*RETURNING c.vod_hash`).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectRollback()
+
+	_, err := s.SetPlaybackPolicy(ctxAs("u1", "t1", "owner"), &commodorepb.SetPlaybackPolicyRequest{
+		VodAssetId: "vod-1",
+		Type:       "public",
+	})
+	wantCode(t, err, codes.NotFound)
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet: %v", err)
+	}
+}
 
 func TestValidateWebhookURL(t *testing.T) {
 	cases := []struct {

@@ -26,6 +26,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
+	commodoreclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	foghornclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/listmonk"
@@ -1104,24 +1105,20 @@ func (s *CommodoreServer) resolveArtifactRouteForContent(ctx context.Context, co
 			SELECT tenant_id,
 			       COALESCE(NULLIF(storage_cluster_id, ''), NULLIF(origin_cluster_id, '')) AS cluster_id
 			  FROM commodore.clips
-			 WHERE playback_id = $1 OR clip_hash = $1
-			UNION ALL
+			 WHERE (playback_id = $1 OR clip_hash = $1)			UNION ALL
 			SELECT tenant_id,
 			       COALESCE(NULLIF(storage_cluster_id, ''), NULLIF(origin_cluster_id, '')) AS cluster_id
 			  FROM commodore.vod_assets
-			 WHERE playback_id = $1 OR vod_hash = $1
-			UNION ALL
+			 WHERE (playback_id = $1 OR vod_hash = $1)			UNION ALL
 			SELECT tenant_id,
 			       COALESCE(NULLIF(storage_cluster_id, ''), NULLIF(origin_cluster_id, '')) AS cluster_id
 			  FROM commodore.dvr_recordings
-			 WHERE playback_id = $1 OR dvr_hash = $1
-			UNION ALL
+			 WHERE (playback_id = $1 OR dvr_hash = $1)			UNION ALL
 			SELECT cp.tenant_id,
 			       COALESCE(NULLIF(va.storage_cluster_id, ''), NULLIF(va.origin_cluster_id, '')) AS cluster_id
 			  FROM commodore.dvr_chapter_playback cp
-			  LEFT JOIN commodore.vod_assets va ON va.vod_hash = cp.artifact_hash
-			 WHERE cp.playback_id = $1
-		  ) resolved
+			  JOIN commodore.vod_assets va ON va.tenant_id = cp.tenant_id AND va.vod_hash = cp.artifact_hash
+			 WHERE cp.playback_id = $1		  ) resolved
 		 LIMIT 1
 	`, contentID).Scan(&tenantID, &clusterID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -2513,11 +2510,26 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *sharedpb.StartDVRRe
 
 	resp, trailers, err := foghornClient.StartDVR(ctx, foghornReq)
 	if err != nil {
+		// Ambiguous/failed start: the RegisterDVR-minted creation intent stays
+		// pending. The sweep resolves it from Foghorn's command ledger — committed if
+		// the DVR artifact was persisted, otherwise the catalog-only row is removed
+		// and the intent aborted.
 		s.logger.WithError(err).WithFields(logging.Fields{
 			"tenant_id":     tenantID,
 			"internal_name": internalName,
 		}).Error("Failed to start DVR via Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
+	}
+	// A successful response means Foghorn durably inserted its DVR artifact, so
+	// the creation intent has reached its live-catalog outcome (the business row
+	// already exists). Terminalize it inline so the common path never waits on the
+	// sweep.
+	if resp.GetDvrHash() != "" {
+		if cErr := s.commitCreationIntent(ctx,
+			creationIntentRow{tenantID: tenantID, kind: creationIntentKindDVR, artifactHash: resp.GetDvrHash()},
+			"", nil); cErr != nil && !errors.Is(cErr, errIntentCASMiss) {
+			s.logger.WithError(cErr).WithField("dvr_hash", resp.GetDvrHash()).Warn("Failed to mark DVR creation intent committed")
+		}
 	}
 	return resp, nil
 }
@@ -2527,94 +2539,6 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *sharedpb.StartDVRRe
 // Business registry for clips and DVR recordings.
 // See: docs/architecture/clips-dvr.md
 // ============================================================================
-
-// RegisterClip creates a new clip in the business registry
-// Called by Foghorn during the CreateClip flow
-func (s *CommodoreServer) RegisterClip(ctx context.Context, req *commodorepb.RegisterClipRequest) (*commodorepb.RegisterClipResponse, error) {
-	tenantID := req.GetTenantId()
-	userID := req.GetUserId()
-	streamID := req.GetStreamId()
-
-	if tenantID == "" || userID == "" || streamID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id, user_id, and stream_id are required")
-	}
-
-	// Generate clip hash
-	clipHash, err := generateClipHash()
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to generate clip hash: %v", err)
-	}
-	clipID := uuid.New().String()
-	artifactInternalName, playbackID, err := s.generateUniqueArtifactIdentifiers(ctx)
-	if err != nil {
-		s.logger.WithFields(logging.Fields{
-			"tenant_id": tenantID,
-			"stream_id": streamID,
-			"error":     err,
-		}).Error("Failed to generate artifact identifiers for clip")
-		return nil, status.Errorf(codes.Internal, "failed to generate clip identifiers: %v", err)
-	}
-
-	var (
-		sourceRequiresAuth bool
-		sourcePolicyJSON   sql.NullString
-		sourceSecretEnc    sql.NullString
-	)
-	err = s.db.QueryRowContext(ctx, `
-		SELECT requires_auth, playback_policy::text, playback_webhook_secret_enc
-		FROM commodore.streams
-		WHERE id = $1 AND tenant_id = $2
-	`, streamID, tenantID).Scan(&sourceRequiresAuth, &sourcePolicyJSON, &sourceSecretEnc)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, status.Error(codes.NotFound, "stream not found")
-		}
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-
-	// Insert into business registry
-	storageClusterID := sql.NullString{String: req.GetStorageClusterId(), Valid: req.GetStorageClusterId() != ""}
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO commodore.clips (
-			id, tenant_id, user_id, stream_id, clip_hash, internal_name, playback_id,
-			title, description, start_time, duration, clip_mode, requested_params,
-			origin_cluster_id, storage_cluster_id, requires_auth, playback_policy, playback_webhook_secret_enc,
-			created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18, NOW(), NOW())
-	`, clipID, tenantID, userID, streamID, clipHash, artifactInternalName, playbackID,
-		req.GetTitle(), req.GetDescription(), req.GetStartTime(), req.GetDuration(),
-		req.GetClipMode(), req.GetRequestedParams(), req.GetOriginClusterId(), storageClusterID,
-		sourceRequiresAuth, sourcePolicyJSON, sourceSecretEnc)
-
-	if err != nil {
-		s.logger.WithFields(logging.Fields{
-			"tenant_id": tenantID,
-			"stream_id": streamID,
-			"error":     err,
-		}).Error("Failed to register clip in business registry")
-		return nil, status.Errorf(codes.Internal, "failed to register clip: %v", err)
-	}
-
-	s.logger.WithFields(logging.Fields{
-		"tenant_id": tenantID,
-		"clip_hash": clipHash,
-		"clip_id":   clipID,
-	}).Info("Registered clip in business registry")
-
-	var expiresAt *int64
-	if req.GetRetentionUntil() != nil {
-		ts := req.GetRetentionUntil().AsTime().Unix()
-		expiresAt = &ts
-	}
-	s.emitArtifactEvent(ctx, eventArtifactRegistered, tenantID, userID, ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP, clipHash, streamID, "registered", expiresAt)
-
-	return &commodorepb.RegisterClipResponse{
-		ClipHash:     clipHash,
-		ClipId:       clipID,
-		PlaybackId:   playbackID,
-		InternalName: artifactInternalName,
-	}, nil
-}
 
 // RegisterDVR creates a new DVR recording in the business registry
 // Called by Foghorn during the StartDVR flow
@@ -2668,20 +2592,38 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *commodorepb.Regi
 		retentionUntilArg = req.GetRetentionUntil().AsTime()
 	}
 	storageClusterID := sql.NullString{String: req.GetStorageClusterId(), Valid: req.GetStorageClusterId() != ""}
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO commodore.dvr_recordings (
-			id, tenant_id, user_id, stream_id, dvr_hash, internal_name, playback_id, stream_internal_name,
-			origin_cluster_id, storage_cluster_id, retention_until, created_at, updated_at
-		) VALUES ($1, $2, $3, $4::uuid, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
-	`, dvrID, tenantID, userID, streamID, dvrHash, artifactInternalName, playbackID, internalName, req.GetOriginClusterId(), storageClusterID, retentionUntilArg)
-
-	if err != nil {
+	// Register the business row and its durable creation intent ATOMICALLY. Foghorn
+	// inserts its own artifact row AFTER this call returns, so the intent is what
+	// lets the convergence sweep resolve a DVR whose media-plane start then fails:
+	// no Foghorn artifact ever appears → the sweep removes this catalog-only row, a
+	// clean absence, instead of the old "retention_until=now" that left a dangling,
+	// artifact-less DVR. request_id ties the intent to this registration.
+	intentRequestID := uuid.New().String()
+	dvrErr := fwdb.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		if _, execErr := tx.ExecContext(ctx, `
+			INSERT INTO commodore.dvr_recordings (
+				id, tenant_id, user_id, stream_id, dvr_hash, internal_name, playback_id, stream_internal_name,
+				origin_cluster_id, storage_cluster_id, retention_until, created_at, updated_at
+			) VALUES ($1, $2, $3, $4::uuid, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+		`, dvrID, tenantID, userID, streamID, dvrHash, artifactInternalName, playbackID, internalName, req.GetOriginClusterId(), storageClusterID, retentionUntilArg); execErr != nil {
+			return execErr
+		}
+		// Use the PERSISTED request_id (a fresh dvr_hash makes this the freshly minted
+		// one, but the caller must never key Foghorn on a value the intent did not store).
+		persisted, upErr := upsertCreationIntent(ctx, tx, tenantID, creationIntentKindDVR, dvrHash, intentRequestID, req.GetOriginClusterId(), nil)
+		if upErr != nil {
+			return upErr
+		}
+		intentRequestID = persisted
+		return nil
+	})
+	if dvrErr != nil {
 		s.logger.WithFields(logging.Fields{
 			"tenant_id":     tenantID,
 			"internal_name": internalName,
-			"error":         err,
+			"error":         dvrErr,
 		}).Error("Failed to register DVR in business registry")
-		return nil, status.Errorf(codes.Internal, "failed to register DVR: %v", err)
+		return nil, status.Errorf(codes.Internal, "failed to register DVR: %v", dvrErr)
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -2704,6 +2646,7 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *commodorepb.Regi
 		PlaybackId:   playbackID,
 		InternalName: artifactInternalName,
 		StreamId:     streamID,
+		RequestId:    intentRequestID,
 	}, nil
 }
 
@@ -2761,8 +2704,7 @@ func (s *CommodoreServer) ResolveClipHash(ctx context.Context, req *commodorepb.
 			   c.playback_id, c.internal_name, c.origin_cluster_id
 		FROM commodore.clips c
 		LEFT JOIN commodore.streams s ON c.stream_id = s.id
-		WHERE c.clip_hash = $1
-	`, clipHash).Scan(&tenantID, &userID, &streamID, &title, &description,
+		WHERE c.clip_hash = $1	`, clipHash).Scan(&tenantID, &userID, &streamID, &title, &description,
 		&startTime, &duration, &clipMode, &internalName, &playbackID, &artifactInternalName, &originClusterID)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -2812,8 +2754,7 @@ func (s *CommodoreServer) ResolveDVRHash(ctx context.Context, req *commodorepb.R
 		return s.db.QueryRowContext(ctx, `
 			SELECT tenant_id, user_id, stream_id, stream_internal_name, playback_id, internal_name, origin_cluster_id
 			FROM commodore.dvr_recordings
-			WHERE dvr_hash = $1
-		`, dvrHash).Scan(&tenantID, &userID, &streamID, &internalName, &playbackID, &artifactInternalName, &originClusterID)
+			WHERE dvr_hash = $1		`, dvrHash).Scan(&tenantID, &userID, &streamID, &internalName, &playbackID, &artifactInternalName, &originClusterID)
 	})
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -2842,75 +2783,6 @@ func (s *CommodoreServer) ResolveDVRHash(ctx context.Context, req *commodorepb.R
 	}, nil
 }
 
-// RegisterVod registers a new VOD asset in the business registry
-// Called by Foghorn during CreateVodUpload flow (mirrors DVR/clip pattern)
-func (s *CommodoreServer) RegisterVod(ctx context.Context, req *commodorepb.RegisterVodRequest) (*commodorepb.RegisterVodResponse, error) {
-	tenantID := req.GetTenantId()
-	userID := req.GetUserId()
-	filename := req.GetFilename()
-
-	if tenantID == "" || userID == "" || filename == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id, user_id, and filename are required")
-	}
-
-	// Generate VOD hash
-	vodHash, err := generateVodHash()
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to generate VOD hash: %v", err)
-	}
-	vodID := uuid.New().String()
-	artifactInternalName, playbackID, err := s.generateUniqueArtifactIdentifiers(ctx)
-	if err != nil {
-		s.logger.WithFields(logging.Fields{
-			"tenant_id": tenantID,
-			"filename":  filename,
-			"error":     err,
-		}).Error("Failed to generate artifact identifiers for VOD")
-		return nil, status.Errorf(codes.Internal, "failed to generate VOD identifiers: %v", err)
-	}
-
-	// Resolve retention (default 90 days for VOD)
-	retentionUntil := time.Now().Add(90 * 24 * time.Hour)
-
-	// Insert into business registry
-	storageClusterID := sql.NullString{String: req.GetStorageClusterId(), Valid: req.GetStorageClusterId() != ""}
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO commodore.vod_assets (
-			id, tenant_id, user_id, vod_hash, internal_name, playback_id,
-			title, description, filename, content_type, size_bytes,
-			origin_cluster_id, storage_cluster_id, retention_until, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW())
-	`, vodID, tenantID, userID, vodHash, artifactInternalName, playbackID,
-		req.GetTitle(), req.GetDescription(), filename, req.GetContentType(), req.GetSizeBytes(),
-		req.GetOriginClusterId(), storageClusterID, retentionUntil)
-
-	if err != nil {
-		s.logger.WithFields(logging.Fields{
-			"tenant_id": tenantID,
-			"filename":  filename,
-			"error":     err,
-		}).Error("Failed to register VOD in business registry")
-		return nil, status.Errorf(codes.Internal, "failed to register VOD: %v", err)
-	}
-
-	s.logger.WithFields(logging.Fields{
-		"tenant_id": tenantID,
-		"vod_hash":  vodHash,
-		"vod_id":    vodID,
-		"filename":  filename,
-	}).Info("Registered VOD in business registry")
-
-	expiresAt := retentionUntil.Unix()
-	s.emitArtifactEvent(ctx, eventArtifactRegistered, tenantID, userID, ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD, vodHash, "", "registered", &expiresAt)
-
-	return &commodorepb.RegisterVodResponse{
-		VodHash:      vodHash,
-		VodId:        vodID,
-		PlaybackId:   playbackID,
-		InternalName: artifactInternalName,
-	}, nil
-}
-
 // ResolveVodHash resolves a VOD hash to tenant context
 // Used for analytics enrichment, playback authorization, and lifecycle operations
 func (s *CommodoreServer) ResolveVodHash(ctx context.Context, req *commodorepb.ResolveVodHashRequest) (*commodorepb.ResolveVodHashResponse, error) {
@@ -2927,8 +2799,7 @@ func (s *CommodoreServer) ResolveVodHash(ctx context.Context, req *commodorepb.R
 		return s.db.QueryRowContext(ctx, `
 			SELECT tenant_id, user_id, filename, title, description, playback_id, internal_name, origin_cluster_id
 			FROM commodore.vod_assets
-			WHERE vod_hash = $1
-		`, vodHash).Scan(&tenantID, &userID, &filename, &title, &description, &playbackID, &artifactInternalName, &originClusterID)
+			WHERE vod_hash = $1		`, vodHash).Scan(&tenantID, &userID, &filename, &title, &description, &playbackID, &artifactInternalName, &originClusterID)
 	})
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -2974,8 +2845,7 @@ func (s *CommodoreServer) ResolveVodID(ctx context.Context, req *commodorepb.Res
 		return s.db.QueryRowContext(ctx, `
 			SELECT tenant_id, user_id, vod_hash, playback_id, internal_name
 			FROM commodore.vod_assets
-			WHERE id = $1
-		`, vodID).Scan(&tenantID, &userID, &vodHash, &playbackID, &artifactInternalName)
+			WHERE id = $1		`, vodID).Scan(&tenantID, &userID, &vodHash, &playbackID, &artifactInternalName)
 	})
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -3024,26 +2894,6 @@ func (s *CommodoreServer) MintChapterPlaybackID(ctx context.Context, req *commod
 		return nil, status.Errorf(codes.Internal, "failed to generate playback ID: %v", err)
 	}
 
-	var stored string
-	err = s.db.QueryRowContext(ctx, `
-		INSERT INTO commodore.dvr_chapter_playback (
-			chapter_id, tenant_id, playback_id, artifact_hash, created_at, updated_at
-		) VALUES ($1, $2::uuid, $3, $4, NOW(), NOW())
-		ON CONFLICT (chapter_id) DO UPDATE
-			SET artifact_hash = EXCLUDED.artifact_hash,
-			    updated_at    = NOW()
-		RETURNING playback_id
-	`, chapterID, tenantID, playbackID, artifactHash).Scan(&stored)
-	if err != nil {
-		s.logger.WithFields(logging.Fields{
-			"chapter_id":    chapterID,
-			"tenant_id":     tenantID,
-			"artifact_hash": artifactHash,
-			"error":         err,
-		}).Error("Failed to mint chapter playback id")
-		return nil, status.Errorf(codes.Internal, "mint chapter playback id: %v", err)
-	}
-
 	filename := req.GetFilename()
 	if filename == "" {
 		filename = "dvr-chapter-" + chapterID + ".mkv"
@@ -3054,7 +2904,62 @@ func (s *CommodoreServer) MintChapterPlaybackID(ctx context.Context, req *commod
 	}
 	description := req.GetDescription()
 	contentType := "video/x-matroska"
-	_, err = s.db.ExecContext(ctx, `
+
+	// The marker check and both upserts run in ONE transaction under a per-artifact advisory lock that
+	// the catalog delete projection also takes, so a concurrent delete cannot interleave between the
+	// check and the writes — closing the absent-row TOCTOU that a FOR UPDATE on the maybe-absent business
+	// row could not (an absent row locks nothing). A present tombstone marker means the chapter's
+	// vod_hash was deleted (chapters are content-addressed — a retry reuses the same vod_hash), so refuse
+	// with FailedPrecondition and write nothing rather than resurrect a deleted asset. No marker → proceed.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "mint chapter begin: %v", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			tx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
+		}
+	}()
+
+	if _, lErr := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, tenantID+":vod:"+artifactHash); lErr != nil {
+		return nil, status.Errorf(codes.Internal, "mint chapter lock: %v", lErr)
+	}
+	var markerRevision sql.NullInt64
+	tErr := tx.QueryRowContext(ctx,
+		`SELECT deletion_revision FROM commodore.artifact_catalog_tombstones WHERE tenant_id = $1::uuid AND kind = 'vod' AND artifact_hash = $2 FOR UPDATE`,
+		tenantID, artifactHash).Scan(&markerRevision)
+	switch {
+	case tErr == nil:
+		return nil, status.Error(codes.FailedPrecondition, "chapter artifact was deleted; not resurrecting catalog row")
+	case errors.Is(tErr, sql.ErrNoRows):
+		// No tombstone marker → the chapter is live or fresh; proceed to register it.
+	default:
+		return nil, status.Errorf(codes.Internal, "chapter tombstone check failed: %v", tErr)
+	}
+
+	var stored string
+	err = tx.QueryRowContext(ctx, `
+		INSERT INTO commodore.dvr_chapter_playback (
+			chapter_id, tenant_id, playback_id, artifact_hash, dvr_hash, created_at, updated_at
+		) VALUES ($1, $2::uuid, $3, $4, NULLIF($5, ''), NOW(), NOW())
+		ON CONFLICT (chapter_id) DO UPDATE
+			SET artifact_hash = EXCLUDED.artifact_hash,
+			    dvr_hash      = COALESCE(EXCLUDED.dvr_hash, commodore.dvr_chapter_playback.dvr_hash),
+			    updated_at    = NOW()
+		RETURNING playback_id
+	`, chapterID, tenantID, playbackID, artifactHash, req.GetDvrHash()).Scan(&stored)
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"chapter_id":    chapterID,
+			"tenant_id":     tenantID,
+			"artifact_hash": artifactHash,
+			"error":         err,
+		}).Error("Failed to mint chapter playback id")
+		return nil, status.Errorf(codes.Internal, "mint chapter playback id: %v", err)
+	}
+
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO commodore.vod_assets (
 			id, tenant_id, user_id, stream_id, vod_hash, internal_name, playback_id,
 			title, description, filename, content_type,
@@ -3096,6 +3001,11 @@ func (s *CommodoreServer) MintChapterPlaybackID(ctx context.Context, req *commod
 		return nil, status.Errorf(codes.Internal, "register chapter VOD asset: %v", err)
 	}
 
+	if err := tx.Commit(); err != nil {
+		return nil, status.Errorf(codes.Internal, "mint chapter commit: %v", err)
+	}
+	committed = true
+
 	return &commodorepb.MintChapterPlaybackIDResponse{PlaybackId: stored}, nil
 }
 
@@ -3133,11 +3043,15 @@ func (s *CommodoreServer) ResolveChapterPlaybackID(ctx context.Context, req *com
 		chapterID, artifactHash string
 		tenantID                string
 	)
+	// Join the parent VOD row and require it live: a chapter of a tombstoned asset must not resolve
+	// (its mapping is removed on deletion, but the join closes the window before that lands).
 	err := s.retryPostgres(ctx, func() error {
 		return s.db.QueryRowContext(ctx, `
-			SELECT chapter_id, tenant_id::text, artifact_hash
-			  FROM commodore.dvr_chapter_playback
-			 WHERE lower(playback_id::text) = lower($1)
+			SELECT cp.chapter_id, cp.tenant_id::text, cp.artifact_hash
+			  FROM commodore.dvr_chapter_playback cp
+			  JOIN commodore.vod_assets v
+			    ON v.tenant_id = cp.tenant_id AND v.vod_hash = cp.artifact_hash
+			 WHERE cp.playback_id = $1
 		`, playbackID).Scan(&chapterID, &tenantID, &artifactHash)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -3176,8 +3090,7 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *co
 		return s.db.QueryRowContext(ctx, `
 			SELECT clip_hash, internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id, requires_auth
 			FROM commodore.clips
-			WHERE playback_id = $1
-		`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &requiresAuth)
+			WHERE playback_id = $1		`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &requiresAuth)
 	})
 	if err == nil {
 		resp := &commodorepb.ResolveArtifactPlaybackIDResponse{
@@ -3215,8 +3128,7 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *co
 			       d.origin_cluster_id, s.requires_auth
 			FROM commodore.dvr_recordings d
 			LEFT JOIN commodore.streams s ON s.id = d.stream_id
-			WHERE d.playback_id = $1
-		`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &dvrSourceRequiresAuth)
+			WHERE d.playback_id = $1		`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &dvrSourceRequiresAuth)
 	})
 	if err == nil {
 		// Missing source stream → treat as protected so a deleted-stream race
@@ -3252,8 +3164,7 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *co
 		return s.db.QueryRowContext(ctx, `
 			SELECT vod_hash, internal_name, tenant_id, user_id, origin_cluster_id, requires_auth
 			FROM commodore.vod_assets
-			WHERE playback_id = $1
-		`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &originClusterID, &requiresAuth)
+			WHERE playback_id = $1		`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &originClusterID, &requiresAuth)
 	})
 	if err == nil {
 		resp := &commodorepb.ResolveArtifactPlaybackIDResponse{
@@ -3310,8 +3221,7 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 		return s.db.QueryRowContext(ctx, `
 			SELECT clip_hash, internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id, requires_auth
 			FROM commodore.clips
-			WHERE internal_name = $1
-		`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &requiresAuth)
+			WHERE internal_name = $1		`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &requiresAuth)
 	})
 	if err == nil {
 		resp := &commodorepb.ResolveArtifactInternalNameResponse{
@@ -3345,8 +3255,7 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 			       d.origin_cluster_id, s.requires_auth
 			FROM commodore.dvr_recordings d
 			LEFT JOIN commodore.streams s ON s.id = d.stream_id
-			WHERE d.internal_name = $1
-		`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &dvrSourceRequiresAuth)
+			WHERE d.internal_name = $1		`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &dvrSourceRequiresAuth)
 	})
 	if err == nil {
 		resp := &commodorepb.ResolveArtifactInternalNameResponse{
@@ -3378,8 +3287,7 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 		return s.db.QueryRowContext(ctx, `
 			SELECT vod_hash, internal_name, tenant_id, user_id, origin_cluster_id, requires_auth
 			FROM commodore.vod_assets
-			WHERE internal_name = $1
-		`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &originClusterID, &requiresAuth)
+			WHERE internal_name = $1		`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &originClusterID, &requiresAuth)
 	})
 	if err == nil {
 		resp := &commodorepb.ResolveArtifactInternalNameResponse{
@@ -3460,8 +3368,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *comm
 		err = s.retryPostgres(ctx, func() error {
 			return s.db.QueryRowContext(ctx, `
 				SELECT tenant_id, user_id, requires_auth
-				FROM commodore.vod_assets WHERE id = $1
-			`, identifier).Scan(&vodTenantID, &vodUserID, &requiresAuth)
+				FROM commodore.vod_assets WHERE id = $1			`, identifier).Scan(&vodTenantID, &vodUserID, &requiresAuth)
 		})
 		if err == nil {
 			return &commodorepb.ResolveIdentifierResponse{
@@ -3526,8 +3433,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *comm
 		SELECT c.tenant_id, c.user_id, s.internal_name, c.stream_id, c.requires_auth
 		FROM commodore.clips c
 		LEFT JOIN commodore.streams s ON c.stream_id = s.id
-		WHERE c.playback_id = $1
-	`, identifier).Scan(&tenantID, &userID, &parentInternalName, &streamID, &clipRequiresAuth)
+		WHERE c.playback_id = $1	`, identifier).Scan(&tenantID, &userID, &parentInternalName, &streamID, &clipRequiresAuth)
 	if err == nil {
 		return &commodorepb.ResolveIdentifierResponse{
 			Found:          true,
@@ -3548,8 +3454,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *comm
 		SELECT d.tenant_id, d.user_id, d.internal_name, d.stream_id, s.requires_auth
 		FROM commodore.dvr_recordings d
 		LEFT JOIN commodore.streams s ON s.id = d.stream_id
-		WHERE d.playback_id = $1
-	`, identifier).Scan(&tenantID, &userID, &internalName, &streamID, &dvrRequiresAuth)
+		WHERE d.playback_id = $1	`, identifier).Scan(&tenantID, &userID, &internalName, &streamID, &dvrRequiresAuth)
 	if err == nil {
 		return &commodorepb.ResolveIdentifierResponse{
 			Found:          true,
@@ -3568,8 +3473,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *comm
 	err = s.db.QueryRowContext(ctx, `
 		SELECT tenant_id, user_id, requires_auth
 		FROM commodore.vod_assets
-		WHERE playback_id = $1
-	`, identifier).Scan(&tenantID, &userID, &requiresAuth)
+		WHERE playback_id = $1	`, identifier).Scan(&tenantID, &userID, &requiresAuth)
 	if err == nil {
 		return &commodorepb.ResolveIdentifierResponse{
 			Found:          true,
@@ -3587,8 +3491,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *comm
 		SELECT c.tenant_id, c.user_id, s.internal_name, c.stream_id, c.requires_auth
 		FROM commodore.clips c
 		LEFT JOIN commodore.streams s ON c.stream_id = s.id
-		WHERE c.internal_name = $1
-	`, identifier).Scan(&tenantID, &userID, &parentInternalName, &streamID, &clipRequiresAuth)
+		WHERE c.internal_name = $1	`, identifier).Scan(&tenantID, &userID, &parentInternalName, &streamID, &clipRequiresAuth)
 	if err == nil {
 		return &commodorepb.ResolveIdentifierResponse{
 			Found:          true,
@@ -3609,8 +3512,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *comm
 		SELECT d.tenant_id, d.user_id, d.internal_name, d.stream_id, s.requires_auth
 		FROM commodore.dvr_recordings d
 		LEFT JOIN commodore.streams s ON s.id = d.stream_id
-		WHERE d.internal_name = $1
-	`, identifier).Scan(&tenantID, &userID, &internalName, &streamID, &dvrRequiresAuth)
+		WHERE d.internal_name = $1	`, identifier).Scan(&tenantID, &userID, &internalName, &streamID, &dvrRequiresAuth)
 	if err == nil {
 		return &commodorepb.ResolveIdentifierResponse{
 			Found:          true,
@@ -3629,8 +3531,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *comm
 	err = s.db.QueryRowContext(ctx, `
 		SELECT tenant_id, user_id, requires_auth
 		FROM commodore.vod_assets
-		WHERE internal_name = $1
-	`, identifier).Scan(&tenantID, &userID, &requiresAuth)
+		WHERE internal_name = $1	`, identifier).Scan(&tenantID, &userID, &requiresAuth)
 	if err == nil {
 		return &commodorepb.ResolveIdentifierResponse{
 			Found:          true,
@@ -3648,8 +3549,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *comm
 		SELECT c.tenant_id, c.user_id, s.internal_name, c.stream_id, c.requires_auth
 		FROM commodore.clips c
 		LEFT JOIN commodore.streams s ON c.stream_id = s.id
-		WHERE c.clip_hash = $1
-	`, identifier).Scan(&tenantID, &userID, &parentInternalName, &streamID, &clipRequiresAuth)
+		WHERE c.clip_hash = $1	`, identifier).Scan(&tenantID, &userID, &parentInternalName, &streamID, &clipRequiresAuth)
 	if err == nil {
 		return &commodorepb.ResolveIdentifierResponse{
 			Found:          true,
@@ -3670,8 +3570,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *comm
 		SELECT d.tenant_id, d.user_id, d.internal_name, d.stream_id, s.requires_auth
 		FROM commodore.dvr_recordings d
 		LEFT JOIN commodore.streams s ON s.id = d.stream_id
-		WHERE d.dvr_hash = $1
-	`, identifier).Scan(&tenantID, &userID, &internalName, &streamID, &dvrRequiresAuth)
+		WHERE d.dvr_hash = $1	`, identifier).Scan(&tenantID, &userID, &internalName, &streamID, &dvrRequiresAuth)
 	if err == nil {
 		return &commodorepb.ResolveIdentifierResponse{
 			Found:          true,
@@ -3688,8 +3587,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *comm
 
 	// 5. Try VOD by vod_hash
 	err = s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, user_id, requires_auth FROM commodore.vod_assets WHERE vod_hash = $1
-	`, identifier).Scan(&tenantID, &userID, &requiresAuth)
+		SELECT tenant_id, user_id, requires_auth FROM commodore.vod_assets WHERE vod_hash = $1	`, identifier).Scan(&tenantID, &userID, &requiresAuth)
 	if err == nil {
 		return &commodorepb.ResolveIdentifierResponse{
 			Found:          true,
@@ -6145,12 +6043,22 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *commodorepb.List
 		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
 	}
 
+	// Optional name search — makes the streams picker account-wide (not just the
+	// first page), filtering by title/internal_name server-side.
+	var searchLike string
+	if search := strings.TrimSpace(req.GetSearch()); search != "" {
+		searchLike = "%" + strings.ToLower(search) + "%"
+	}
+
 	// Get total count
 	var total int32
-	err = s.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM commodore.streams WHERE user_id = $1 AND tenant_id = $2
-	`, userID, tenantID).Scan(&total)
-	if err != nil {
+	countQuery := `SELECT COUNT(*) FROM commodore.streams WHERE user_id = $1 AND tenant_id = $2`
+	countArgs := []any{userID, tenantID}
+	if searchLike != "" {
+		countQuery += " AND (LOWER(title) LIKE $3 OR LOWER(internal_name) LIKE $3)"
+		countArgs = append(countArgs, searchLike)
+	}
+	if err = s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
@@ -6173,6 +6081,12 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *commodorepb.List
 		WHERE s.user_id = $1 AND s.tenant_id = $2`
 	args := []any{userID, tenantID}
 	argIdx := 3
+
+	if searchLike != "" {
+		query += fmt.Sprintf(" AND (LOWER(s.title) LIKE $%d OR LOWER(s.internal_name) LIKE $%d)", argIdx, argIdx)
+		args = append(args, searchLike)
+		argIdx++
+	}
 
 	// Add keyset condition if cursor provided
 	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
@@ -6593,8 +6507,7 @@ func (s *CommodoreServer) DeleteStream(ctx context.Context, req *commodorepb.Del
 	if clipFoghorn, _, resolveErr := s.resolveFoghornForTenant(ctx, tenantID); resolveErr == nil {
 		rows, queryErr := s.db.QueryContext(ctx, `
 				SELECT clip_hash FROM commodore.clips
-				WHERE stream_id = $1 AND tenant_id = $2
-			`, streamID, tenantID)
+				WHERE stream_id = $1 AND tenant_id = $2			`, streamID, tenantID)
 		if queryErr != nil {
 			s.logger.WithError(queryErr).Warn("Failed to list clips for stream deletion cleanup")
 		} else {
@@ -6632,6 +6545,20 @@ func (s *CommodoreServer) DeleteStream(ctx context.Context, req *commodorepb.Del
 
 	if err := tx.Commit(); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to commit: %v", err)
+	}
+
+	// Clean the live stream's OWN thumbnails AFTER the stream is durably deleted, so a rolled-back delete never
+	// strands a live stream without thumbnails. A live stream (asset_key = stream_id) has no artifact row for
+	// Foghorn's purge job and its final active version is never GC-superseded, so without this the pointer +
+	// object leak. This call is best-effort: a Foghorn failure is logged, not durably retried, so the objects
+	// can persist until a repeat delete of the same stream_id re-attempts. The stream row is already gone either
+	// way, so the resolver reports the asset as GONE and nothing is served in the interim.
+	if clipFoghorn, _, resolveErr := s.resolveFoghornForTenant(ctx, tenantID); resolveErr == nil {
+		if resp, delErr := clipFoghorn.DeleteStreamThumbnails(ctx, streamID, tenantID); delErr != nil {
+			s.logger.WithError(delErr).WithField("stream_id", streamID).Warn("Failed to delete stream thumbnails after stream deletion (not retried; objects may leak until a later delete)")
+		} else if resp != nil && !resp.GetSuccess() {
+			s.logger.WithFields(logging.Fields{"stream_id": streamID, "message": resp.GetMessage()}).Warn("Stream thumbnail cleanup did not fully succeed (not retried)")
+		}
 	}
 
 	s.emitStreamChangeEvent(ctx, eventStreamDeleted, tenantID, userID, streamID, nil)
@@ -7573,10 +7500,10 @@ const (
 // emitServiceEvent enqueues a service event into
 // commodore.service_event_outbox. The drain worker (started in
 // NewGRPCServer via runServiceEventOutboxWorker) dispatches pending rows
-// to Decklog with exponential backoff. Replaces the previous async
-// fire-and-forget SendServiceEvent path so a Decklog outage no longer
-// drops stream/policy mutation events. For strict atomicity with a
-// caller-held state-mutation tx, use EnqueueServiceEventTx(ctx, tx, event).
+// to Decklog with exponential backoff, so a Decklog outage degrades to
+// outbox-backlog growth rather than dropped stream/policy mutation events.
+// For strict atomicity with a caller-held state-mutation tx, use
+// EnqueueServiceEventTx(ctx, tx, event).
 func (s *CommodoreServer) emitServiceEvent(ctx context.Context, event *ipcpb.ServiceEvent) {
 	if event == nil {
 		return
@@ -8244,7 +8171,10 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *sharedpb.CreateCl
 	if req.DurationSec != nil {
 		requestedParams["duration_sec"] = *req.DurationSec
 	}
-	paramsJSON, _ := json.Marshal(requestedParams)
+	paramsJSON, err := json.Marshal(requestedParams)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "marshal clip params: %v", err)
+	}
 
 	// Build Foghorn request with pre-generated hash
 	foghornReq := &sharedpb.CreateClipRequest{
@@ -8278,58 +8208,97 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *sharedpb.CreateCl
 		foghornReq.RetentionDays = &days
 	}
 
-	// Call Foghorn for artifact lifecycle management. Nothing is written to
-	// commodore.clips until Foghorn succeeds, so a rejection needs no cleanup.
+	// Durable creation intent BEFORE the cross-service call. Keyed by the same
+	// (tenant, kind, clip_hash) identity Foghorn dedups on, it captures everything
+	// needed to finish the commodore.clips row (the fulfilled timing is fetched
+	// from Foghorn on convergence). A crash or a lost/ambiguous response then
+	// leaves a recoverable intent instead of a live Foghorn clip with no catalog
+	// row — the sweep completes it (committed) or removes the catalog-only row (aborted).
+	intentRequestID := uuid.New().String()
+	var retentionUnix *int64
+	if retentionUntil != nil {
+		u := retentionUntil.Unix()
+		retentionUnix = &u
+	}
+	var policyPtr *string
+	if sourcePolicyJSON.Valid {
+		v := sourcePolicyJSON.String
+		policyPtr = &v
+	}
+	var secretPtr *string
+	if sourceSecretEnc.Valid {
+		v := sourceSecretEnc.String
+		secretPtr = &v
+	}
+	intentPayload := clipCreationPayload{
+		ClipID:           clipID,
+		UserID:           userID,
+		StreamID:         streamID,
+		InternalName:     artifactInternalName,
+		PlaybackID:       playbackID,
+		Title:            req.Title,
+		Description:      req.Description,
+		ClipMode:         req.Mode.String(),
+		RequestedParams:  string(paramsJSON),
+		OriginClusterID:  clipClusterID,
+		RetentionUnixSec: retentionUnix,
+		RequiresAuth:     sourceRequiresAuth,
+		PlaybackPolicy:   policyPtr,
+		WebhookSecretEnc: secretPtr,
+	}
+	persistedRequestID, intentErr := upsertCreationIntent(ctx, s.db, tenantID, creationIntentKindClip, clipHash, intentRequestID, clipClusterID, intentPayload)
+	if intentErr != nil {
+		return nil, status.Errorf(codes.Internal, "failed to record clip creation intent: %v", intentErr)
+	}
+	// A retry of the same (tenant, clip) reuses the intent's ALREADY-PERSISTED
+	// request_id; keying Foghorn on a freshly minted one would mismatch the ledger.
+	intentRequestID = persistedRequestID
+
+	// Carry the intent request_id so Foghorn keys its command ledger on it — the
+	// sweep resolves this attempt's outcome by request_id, not by artifact presence.
+	foghornReq.RequestId = &intentRequestID
+
+	// Call Foghorn for artifact lifecycle management.
 	resp, trailers, err := foghornClient.CreateClip(ctx, foghornReq)
 	if err != nil {
+		// An RPC error does NOT prove rejection: Foghorn may have committed the
+		// clip before the response was lost. Only a DEFINITIVE rejection (an
+		// application-level negative response) may abort now; an ambiguous error
+		// leaves the intent PENDING for the sweep. Never compensate-delete here —
+		// deleting a clip Foghorn committed is exactly the phantom this avoids.
+		if creationCreateErrorIsDefinitive(err) {
+			if abErr := s.abortCreationIntent(ctx,
+				creationIntentRow{tenantID: tenantID, kind: creationIntentKindClip, artifactHash: clipHash, originClusterID: clipClusterID},
+				"", "foghorn rejected clip create", true); abErr != nil && !errors.Is(abErr, errIntentCASMiss) {
+				s.logger.WithError(abErr).WithField("clip_hash", clipHash).Warn("Failed to abort clip creation intent")
+			}
+		}
 		s.logger.WithError(err).WithField("clip_hash", clipHash).Error("Failed to create clip artifact via Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
-	// Foghorn has now created the artifact and queued its processing job. If we
-	// cannot complete the registry write, compensate by deleting the Foghorn
-	// artifact (and its job) so an invisible clip never lingers or processes,
-	// then surface the failure rather than returning an unseeable success.
-	cleanupOrphanedClip := func(reason string) {
-		// Detached context: the registry write may have failed because the
-		// request context was canceled/expired, and reusing it would skip the
-		// cleanup too. A short independent deadline lets compensation run.
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if _, _, delErr := foghornClient.DeleteClip(cleanupCtx, clipHash, &tenantID); delErr != nil {
-			s.logger.WithError(delErr).WithField("clip_hash", clipHash).Error("Failed to delete orphaned Foghorn clip; artifact is retention-bounded")
-		}
-		s.logger.WithFields(logging.Fields{
-			"tenant_id":     tenantID,
-			"clip_hash":     clipHash,
-			"internal_name": internalName,
-			"reason":        reason,
-		}).Error("Clip created in Foghorn but registry not written; compensated")
-	}
-
-	// Register in commodore.clips (business registry) with the fulfilled range
-	// Foghorn harvested. Foghorn is the only place that resolves relative /
-	// media-time and best-effort timing into a wall-clock range, so it is the
-	// single authoritative source of start_time/duration; a successful clip
-	// that reports none is a contract violation we fail closed on.
+	// Foghorn durably holds the clip. Register commodore.clips with the fulfilled
+	// range Foghorn harvested (the single authoritative source of
+	// start_time/duration). On a local write failure or a missing range we do NOT
+	// fail the create or delete the Foghorn artifact: the intent stays pending and
+	// the convergence sweep completes the catalog row from Foghorn's authoritative
+	// timing.
 	startTime, duration, haveTiming := fulfilledClipTiming(resp)
 	if !haveTiming {
-		cleanupOrphanedClip("foghorn returned no fulfilled timing range")
-		return nil, status.Error(codes.Internal, "clip source returned no fulfilled timing range")
+		s.logger.WithFields(logging.Fields{
+			"tenant_id": tenantID,
+			"clip_hash": clipHash,
+		}).Warn("Foghorn clip commit returned no fulfilled timing; catalog row deferred to convergence sweep")
+		return resp, nil
 	}
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO commodore.clips (
-			id, tenant_id, user_id, stream_id, clip_hash, internal_name, playback_id,
-			title, description, start_time, duration, clip_mode, requested_params,
-			origin_cluster_id, retention_until, requires_auth, playback_policy,
-			playback_webhook_secret_enc, created_at, updated_at
-		) VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18, NOW(), NOW())
-	`, clipID, tenantID, userID, streamID, clipHash, artifactInternalName, playbackID,
-		req.Title, req.Description, startTime, duration, req.Mode.String(), string(paramsJSON),
-		clipClusterID, retentionUntil, sourceRequiresAuth, sourcePolicyJSON, sourceSecretEnc)
-	if err != nil {
-		cleanupOrphanedClip("registry write failed")
-		return nil, status.Errorf(codes.Internal, "failed to register clip: %v", err)
+	// Write the clips row and terminalize the intent through the shared terminalizer,
+	// under the same per-artifact advisory lock + deletion-marker check the sweep and
+	// delete paths use (so this create cannot insert a live row behind a deletion
+	// marker). On any failure the intent stays pending and the sweep completes it.
+	clipRow := creationIntentRow{tenantID: tenantID, kind: creationIntentKindClip, artifactHash: clipHash, originClusterID: clipClusterID}
+	if cErr := s.commitCreationIntent(ctx, clipRow, "", clipCatalogRowMutator(clipRow, intentPayload, startTime, duration)); cErr != nil && !errors.Is(cErr, errIntentCASMiss) {
+		s.logger.WithError(cErr).WithField("clip_hash", clipHash).Warn("Clip registry write failed after Foghorn commit; left to convergence sweep")
+		return resp, nil
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -8355,244 +8324,6 @@ func fulfilledClipTiming(resp *sharedpb.CreateClipResponse) (startTimeMs, durati
 	return startTimeMs, durationMs, startTimeMs > 0 && durationMs > 0
 }
 
-func mediaListSortDirection(raw string) string {
-	if strings.EqualFold(raw, "asc") {
-		return "ASC"
-	}
-	return "DESC"
-}
-
-func clipListSortColumn(raw string) string {
-	switch raw {
-	case "title":
-		return "COALESCE(c.title, '')"
-	case "size_bytes":
-		return "c.size_bytes"
-	case "expires_at":
-		return "c.retention_until"
-	default:
-		return "c.created_at"
-	}
-}
-
-func dvrListSortColumn(raw string) string {
-	switch raw {
-	case "title":
-		return "COALESCE(st.title, d.internal_name, '')"
-	case "size_bytes":
-		return "d.size_bytes"
-	case "expires_at":
-		return "d.retention_until"
-	default:
-		return "d.created_at"
-	}
-}
-
-func vodListSortColumn(raw string) string {
-	switch raw {
-	case "title":
-		return "COALESCE(title, filename, '')"
-	case "size_bytes":
-		return "size_bytes"
-	case "expires_at":
-		return "retention_until"
-	default:
-		return "created_at"
-	}
-}
-
-// GetClips returns clips from Commodore business registry
-// Lifecycle data (status, size, storage) comes from Periscope via GraphQL field resolvers
-func (s *CommodoreServer) GetClips(ctx context.Context, req *sharedpb.GetClipsRequest) (*sharedpb.GetClipsResponse, error) {
-	_, tenantID, err := extractUserContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	params, err := pagination.Parse(req.GetPagination())
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
-	}
-
-	// Build WHERE clause with optional stream filter
-	whereClause := "c.tenant_id = $1"
-	args := []any{tenantID}
-	argIdx := 2
-
-	if streamID := req.GetStreamId(); streamID != "" {
-		whereClause += fmt.Sprintf(" AND c.stream_id = $%d", argIdx)
-		args = append(args, streamID)
-		argIdx++
-	}
-	if search := strings.TrimSpace(req.GetSearch()); search != "" {
-		whereClause += fmt.Sprintf(" AND (LOWER(COALESCE(c.title, '')) LIKE $%d OR LOWER(COALESCE(c.description, '')) LIKE $%d OR LOWER(c.clip_hash) LIKE $%d)", argIdx, argIdx, argIdx)
-		args = append(args, "%"+strings.ToLower(search)+"%")
-		argIdx++
-	}
-
-	// Get total count
-	var total int32
-	countQuery := fmt.Sprintf(`
-		SELECT COUNT(*) FROM commodore.clips c
-		WHERE %s`, whereClause)
-	if countErr := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); countErr != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", countErr)
-	}
-
-	// Build keyset pagination query
-	builder := &pagination.KeysetBuilder{
-		TimestampColumn: "c.created_at",
-		IDColumn:        "c.clip_hash",
-	}
-
-	// Base query. Artifact thumbnails are served from storage_cluster_id when
-	// present; origin_cluster_id is the storage owner for rows without a
-	// separate storage cluster.
-	query := fmt.Sprintf(`
-		SELECT c.id, c.clip_hash, c.playback_id, c.stream_id::text, c.title, c.description,
-		       c.start_time, c.duration, c.clip_mode, c.requested_params,
-		       c.size_bytes, c.retention_until, COALESCE(c.retention_source, ''), c.created_at, c.updated_at,
-		       COALESCE(c.storage_cluster_id, c.origin_cluster_id), c.has_thumbnails
-		FROM commodore.clips c
-		WHERE %s`, whereClause)
-
-	offsetMode := req.Offset != nil || req.GetSortField() != "" || req.GetSortDirection() != ""
-	offset := int32(0)
-	if req.Offset != nil && req.GetOffset() > 0 {
-		offset = req.GetOffset()
-	}
-	if offsetMode {
-		query += fmt.Sprintf(" ORDER BY %s %s NULLS LAST, c.created_at DESC, c.clip_hash DESC LIMIT %d OFFSET %d",
-			clipListSortColumn(req.GetSortField()), mediaListSortDirection(req.GetSortDirection()), params.Limit+1, offset)
-	} else {
-		// Add keyset condition if cursor provided
-		if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
-			query += " AND " + condition
-			args = append(args, cursorArgs...)
-		}
-		query += " " + builder.OrderBy(params)
-		query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
-	}
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var clips []*sharedpb.ClipInfo
-	for rows.Next() {
-		var (
-			id, clipHash, playbackID, streamID string
-			title, description                 sql.NullString
-			startTime, duration                int64
-			clipMode                           sql.NullString
-			requestedParams                    sql.NullString
-			sizeBytes                          sql.NullInt64
-			retentionUntil                     sql.NullTime
-			retentionSource                    string
-			createdAt, updatedAt               time.Time
-			thumbnailCluster                   sql.NullString
-			hasThumbnails                      bool
-		)
-		if err := rows.Scan(&id, &clipHash, &playbackID, &streamID, &title, &description,
-			&startTime, &duration, &clipMode, &requestedParams,
-			&sizeBytes, &retentionUntil, &retentionSource, &createdAt, &updatedAt,
-			&thumbnailCluster, &hasThumbnails); err != nil {
-			s.logger.WithError(err).Warn("Error scanning clip")
-			continue
-		}
-
-		clip := &sharedpb.ClipInfo{
-			Id:         id,
-			ClipHash:   clipHash,
-			PlaybackId: playbackID,
-			StreamId:   streamID,
-			StartTime:  startTime / 1000, // Convert ms to seconds
-			Duration:   duration / 1000,  // Convert ms to seconds
-			Status:     "registry",       // Indicates business registry data, lifecycle from Foghorn
-			CreatedAt:  timestamppb.New(createdAt),
-			UpdatedAt:  timestamppb.New(updatedAt),
-		}
-		if title.Valid {
-			clip.Title = title.String
-		}
-		if description.Valid {
-			clip.Description = description.String
-		}
-		if clipMode.Valid {
-			clip.ClipMode = &clipMode.String
-		}
-		if requestedParams.Valid {
-			clip.RequestedParams = &requestedParams.String
-		}
-		if retentionSource != "" {
-			src := retentionSource
-			clip.RetentionSource = &src
-		}
-		if sizeBytes.Valid {
-			size := sizeBytes.Int64
-			clip.SizeBytes = &size
-		}
-		if retentionUntil.Valid {
-			expiresAt := timestamppb.New(retentionUntil.Time)
-			clip.ExpiresAt = expiresAt
-		}
-		clip.ThumbnailAssets = s.buildArtifactThumbnailAssets(hasThumbnails, thumbnailCluster, clipHash)
-
-		clips = append(clips, clip)
-	}
-
-	// Detect hasMore and trim results
-	hasMore := len(clips) > params.Limit
-	if hasMore {
-		clips = clips[:params.Limit]
-	}
-
-	// Reverse results if backward pagination
-	if params.Direction == pagination.Backward && len(clips) > 0 {
-		for i, j := 0, len(clips)-1; i < j; i, j = i+1, j-1 {
-			clips[i], clips[j] = clips[j], clips[i]
-		}
-	}
-
-	// Build cursors from results
-	var startCursor, endCursor string
-	if len(clips) > 0 {
-		first := clips[0]
-		last := clips[len(clips)-1]
-		startCursor = pagination.EncodeCursor(first.CreatedAt.AsTime(), first.ClipHash)
-		endCursor = pagination.EncodeCursor(last.CreatedAt.AsTime(), last.ClipHash)
-	}
-
-	// Build response
-	resp := &sharedpb.GetClipsResponse{
-		Clips: clips,
-		Pagination: &commonpb.CursorPaginationResponse{
-			TotalCount: total,
-		},
-	}
-	if startCursor != "" {
-		resp.Pagination.StartCursor = &startCursor
-	}
-	if endCursor != "" {
-		resp.Pagination.EndCursor = &endCursor
-	}
-	if params.Direction == pagination.Forward {
-		resp.Pagination.HasNextPage = hasMore
-		resp.Pagination.HasPreviousPage = params.Cursor != nil
-	} else {
-		resp.Pagination.HasPreviousPage = hasMore
-		resp.Pagination.HasNextPage = params.Cursor != nil
-	}
-	if offsetMode {
-		resp.Pagination.HasNextPage = hasMore
-		resp.Pagination.HasPreviousPage = offset > 0
-	}
-
-	return resp, nil
-}
-
 // GetClip returns clip business registry metadata (no lifecycle data).
 // Lifecycle/access data must come from Periscope (data plane).
 func (s *CommodoreServer) GetClip(ctx context.Context, req *sharedpb.GetClipRequest) (*sharedpb.ClipInfo, error) {
@@ -8611,8 +8342,7 @@ func (s *CommodoreServer) GetClip(ctx context.Context, req *sharedpb.GetClipRequ
 		       c.size_bytes, c.retention_until, COALESCE(c.retention_source, ''), c.created_at, c.updated_at,
 		       COALESCE(c.storage_cluster_id, c.origin_cluster_id), c.has_thumbnails
 		FROM commodore.clips c
-		WHERE c.tenant_id = $1 AND c.clip_hash = $2
-	`
+		WHERE c.tenant_id = $1 AND c.clip_hash = $2	`
 
 	var (
 		id, streamID, playbackID string
@@ -8706,16 +8436,11 @@ func (s *CommodoreServer) DeleteClip(ctx context.Context, req *sharedpb.DeleteCl
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
-	// Delete from business registry (matches VOD pattern)
+	// The catalog deletion is projected by the Foghorn artifact reconciler, the sole revision authority:
+	// Foghorn soft-deletes its media-plane row here (bumping catalog_revision), and the reconciler writes
+	// the durable tombstone marker at that authoritative revision. Commodore performs no local catalog
+	// mutation, so no non-authoritative revision can beat a stalled snapshot and resurrect the asset.
 	if resp.Success {
-		_, delErr := s.db.ExecContext(ctx, `
-			DELETE FROM commodore.clips
-			WHERE clip_hash = $1 AND tenant_id = $2
-		`, req.ClipHash, tenantID)
-		if delErr != nil {
-			s.logger.WithError(delErr).WithField("clip_hash", req.ClipHash).Warn("Failed to delete clip from business registry")
-		}
-
 		s.emitArtifactEvent(ctx, eventArtifactDeleted, tenantID, userID, ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP, req.ClipHash, streamID, "deleted", nil)
 	}
 
@@ -8784,193 +8509,14 @@ func (s *CommodoreServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteDVR
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
-	// Delete from business registry (matches VOD pattern)
+	// The catalog deletion of the parent DVR AND its chapters is projected by the Foghorn artifact
+	// reconciler, the sole revision authority: Foghorn soft-deletes the parent and cascades its child
+	// chapter artifacts here (bumping each row's catalog_revision), and the reconciler writes a durable
+	// tombstone marker for each at its authoritative revision — removing the business row and the
+	// dvr_chapter_playback mapping in the same projection. Commodore performs no local catalog mutation,
+	// so no non-authoritative revision can resurrect a deleted asset.
 	if resp.Success {
-		_, delErr := s.db.ExecContext(ctx, `
-			DELETE FROM commodore.dvr_recordings
-			WHERE dvr_hash = $1 AND tenant_id = $2
-		`, req.DvrHash, tenantID)
-		if delErr != nil {
-			s.logger.WithError(delErr).WithField("dvr_hash", req.DvrHash).Warn("Failed to delete DVR from business registry")
-		}
-
 		s.emitArtifactEvent(ctx, eventArtifactDeleted, tenantID, userID, ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR, req.DvrHash, streamID, "deleted", nil)
-	}
-
-	return resp, nil
-}
-
-// ListDVRRequests returns DVR recordings from Commodore business registry
-// Lifecycle data (status, size, storage) comes from Periscope via GraphQL field resolvers
-func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *sharedpb.ListDVRRecordingsRequest) (*sharedpb.ListDVRRecordingsResponse, error) {
-	_, tenantID, err := extractUserContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	params, err := pagination.Parse(req.GetPagination())
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
-	}
-
-	// Build WHERE clause with optional stream filter
-	whereClause := "d.tenant_id = $1 AND (d.retention_until IS NULL OR d.retention_until > NOW())"
-	args := []any{tenantID}
-	argIdx := 2
-
-	if streamID := req.GetStreamId(); streamID != "" {
-		whereClause += fmt.Sprintf(" AND d.stream_id = $%d", argIdx)
-		args = append(args, streamID)
-		argIdx++
-	}
-	if search := strings.TrimSpace(req.GetSearch()); search != "" {
-		whereClause += fmt.Sprintf(" AND (LOWER(COALESCE(st.title, '')) LIKE $%d OR LOWER(d.dvr_hash) LIKE $%d OR LOWER(d.internal_name) LIKE $%d)", argIdx, argIdx, argIdx)
-		args = append(args, "%"+strings.ToLower(search)+"%")
-		argIdx++
-	}
-
-	// Get total count
-	var total int32
-	countQuery := fmt.Sprintf(`
-		SELECT COUNT(*)
-		  FROM commodore.dvr_recordings d
-		  LEFT JOIN commodore.streams st ON d.stream_id = st.id
-		 WHERE %s`, whereClause)
-	if countErr := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); countErr != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", countErr)
-	}
-
-	// Build keyset pagination query
-	builder := &pagination.KeysetBuilder{
-		TimestampColumn: "d.created_at",
-		IDColumn:        "d.dvr_hash",
-	}
-
-	// Base query - join with streams to get title
-	query := fmt.Sprintf(`
-			SELECT d.id, d.dvr_hash, d.playback_id, d.internal_name, d.stream_id::text, COALESCE(st.title, d.internal_name),
-			       d.size_bytes, d.retention_until, COALESCE(d.retention_source, ''), d.created_at, d.updated_at,
-			       COALESCE(d.storage_cluster_id, d.origin_cluster_id), d.has_thumbnails,
-			       st.active_ingest_cluster_id
-			FROM commodore.dvr_recordings d
-			LEFT JOIN commodore.streams st ON d.stream_id = st.id
-			WHERE %s`, whereClause)
-
-	offsetMode := req.Offset != nil || req.GetSortField() != "" || req.GetSortDirection() != ""
-	offset := int32(0)
-	if req.Offset != nil && req.GetOffset() > 0 {
-		offset = req.GetOffset()
-	}
-	if offsetMode {
-		query += fmt.Sprintf(" ORDER BY %s %s NULLS LAST, d.created_at DESC, d.dvr_hash DESC LIMIT %d OFFSET %d",
-			dvrListSortColumn(req.GetSortField()), mediaListSortDirection(req.GetSortDirection()), params.Limit+1, offset)
-	} else {
-		// Add keyset condition if cursor provided
-		if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
-			query += " AND " + condition
-			args = append(args, cursorArgs...)
-		}
-		query += " " + builder.OrderBy(params)
-		query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
-	}
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var recordings []*sharedpb.DVRInfo
-	for rows.Next() {
-		var (
-			id, dvrHash, playbackID, internalName, streamID, title string
-			retentionSource                                        string
-			sizeBytes                                              sql.NullInt64
-			retentionUntil                                         sql.NullTime
-			createdAt, updatedAt                                   time.Time
-			thumbnailCluster                                       sql.NullString
-			hasThumbnails                                          bool
-			activeIngestCluster                                    sql.NullString
-		)
-		if err := rows.Scan(&id, &dvrHash, &playbackID, &internalName, &streamID, &title,
-			&sizeBytes, &retentionUntil, &retentionSource, &createdAt, &updatedAt,
-			&thumbnailCluster, &hasThumbnails, &activeIngestCluster); err != nil {
-			s.logger.WithError(err).Warn("Error scanning DVR recording")
-			continue
-		}
-
-		recording := &sharedpb.DVRInfo{
-			Id:              &id,
-			DvrHash:         dvrHash,
-			PlaybackId:      &playbackID,
-			InternalName:    internalName,
-			StreamId:        &streamID,
-			Title:           &title,
-			RetentionSource: &retentionSource,
-			CreatedAt:       timestamppb.New(createdAt),
-			UpdatedAt:       timestamppb.New(updatedAt),
-		}
-		if retentionUntil.Valid {
-			expiresAt := timestamppb.New(retentionUntil.Time)
-			recording.ExpiresAt = expiresAt
-		}
-		if sizeBytes.Valid {
-			size := sizeBytes.Int64
-			recording.SizeBytes = &size
-		}
-		recording.ThumbnailAssets = s.buildArtifactThumbnailAssets(hasThumbnails, thumbnailCluster, dvrHash)
-		if recording.ThumbnailAssets == nil {
-			recording.ThumbnailAssets = posterOnlyThumbnailAssets(s.buildStreamThumbnailAssets(activeIngestCluster, streamID))
-		}
-
-		recordings = append(recordings, recording)
-	}
-
-	// Detect hasMore and trim results
-	hasMore := len(recordings) > params.Limit
-	if hasMore {
-		recordings = recordings[:params.Limit]
-	}
-
-	// Reverse results if backward pagination
-	if params.Direction == pagination.Backward && len(recordings) > 0 {
-		for i, j := 0, len(recordings)-1; i < j; i, j = i+1, j-1 {
-			recordings[i], recordings[j] = recordings[j], recordings[i]
-		}
-	}
-
-	// Build cursors from results
-	var startCursor, endCursor string
-	if len(recordings) > 0 {
-		first := recordings[0]
-		last := recordings[len(recordings)-1]
-		startCursor = pagination.EncodeCursor(first.CreatedAt.AsTime(), first.DvrHash)
-		endCursor = pagination.EncodeCursor(last.CreatedAt.AsTime(), last.DvrHash)
-	}
-
-	// Build response
-	resp := &sharedpb.ListDVRRecordingsResponse{
-		DvrRecordings: recordings,
-		Pagination: &commonpb.CursorPaginationResponse{
-			TotalCount: total,
-		},
-	}
-	if startCursor != "" {
-		resp.Pagination.StartCursor = &startCursor
-	}
-	if endCursor != "" {
-		resp.Pagination.EndCursor = &endCursor
-	}
-	if params.Direction == pagination.Forward {
-		resp.Pagination.HasNextPage = hasMore
-		resp.Pagination.HasPreviousPage = params.Cursor != nil
-	} else {
-		resp.Pagination.HasPreviousPage = hasMore
-		resp.Pagination.HasNextPage = params.Cursor != nil
-	}
-	if offsetMode {
-		resp.Pagination.HasNextPage = hasMore
-		resp.Pagination.HasPreviousPage = offset > 0
 	}
 
 	return resp, nil
@@ -9062,16 +8608,13 @@ func (s *CommodoreServer) normalizeArtifactPlaybackID(ctx context.Context, conte
 		  FROM (
 			SELECT playback_id
 			  FROM commodore.clips
-			 WHERE clip_hash = $1
-			UNION ALL
+			 WHERE clip_hash = $1			UNION ALL
 			SELECT playback_id
 			  FROM commodore.vod_assets
-			 WHERE vod_hash = $1
-			UNION ALL
+			 WHERE vod_hash = $1			UNION ALL
 			SELECT playback_id
 			  FROM commodore.dvr_recordings
-			 WHERE dvr_hash = $1
-		  ) resolved
+			 WHERE dvr_hash = $1		  ) resolved
 		 WHERE playback_id IS NOT NULL
 		   AND playback_id != ''
 		 LIMIT 1
@@ -9306,10 +8849,16 @@ func NewGRPCServer(cfg CommodoreServerConfig) *grpc.Server {
 	// response (NodesFailed > 0). Runs for the lifetime of the binary.
 	go commodoreServer.runInvalidationOutboxWorker(context.Background())
 
-	// Drain commodore.service_event_outbox to Decklog. Replaces the previous
-	// async fire-and-forget go-routine — a Decklog outage now degrades to
+	// Drain commodore.service_event_outbox to Decklog: a Decklog outage degrades to
 	// outbox-backlog growth rather than dropped events.
 	go commodoreServer.runServiceEventOutboxWorker(context.Background())
+
+	// Drain pending artifact creation intents. Converges every create whose
+	// cross-service Foghorn response was lost or ambiguous to a durable terminal
+	// outcome — a live catalog row (Foghorn committed) or a clean row absence
+	// (Foghorn rejected; no tombstone, since an aborted create never had a Foghorn
+	// revision) — so no Clip/VOD/DVR creation strands one plane.
+	go commodoreServer.runCreationIntentSweep(context.Background())
 
 	// Register all services
 	commodorepb.RegisterInternalServiceServer(server, commodoreServer)
@@ -9519,24 +9068,42 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *sharedpb.Cre
 		retentionUntil = sql.NullTime{Valid: true, Time: time.Now().UTC().Add(time.Duration(resolvedDays) * 24 * time.Hour)}
 	}
 
-	// Register in commodore.vod_assets (business registry)
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO commodore.vod_assets (
-			id, tenant_id, user_id, vod_hash, internal_name, playback_id,
-			title, description, filename, content_type, size_bytes,
-			origin_cluster_id, retention_until, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
-	`, vodID, tenantID, userID, vodHash, artifactInternalName, playbackID,
-		req.GetTitle(), req.GetDescription(), req.Filename, req.GetContentType(), req.SizeBytes,
-		vodRoute.clusterID, retentionUntil)
-
-	if err != nil {
+	// Register the vod_assets business row AND its durable creation intent in ONE
+	// transaction, BEFORE the Foghorn call. Writing them together closes the
+	// crash-between-them window that would otherwise leave a catalog-only phantom
+	// (a vod_assets row with no intent to reconcile it). The intent guards the row:
+	// an ambiguous Foghorn error must NOT drop it (Foghorn may have committed the
+	// artifact + multipart + outbox before the response was lost); only the sweep
+	// (or a definitive rejection here) removes it.
+	intentRequestID := uuid.New().String()
+	regErr := fwdb.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		if _, execErr := tx.ExecContext(ctx, `
+			INSERT INTO commodore.vod_assets (
+				id, tenant_id, user_id, vod_hash, internal_name, playback_id,
+				title, description, filename, content_type, size_bytes,
+				origin_cluster_id, retention_until, created_at, updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
+		`, vodID, tenantID, userID, vodHash, artifactInternalName, playbackID,
+			req.GetTitle(), req.GetDescription(), req.Filename, req.GetContentType(), req.SizeBytes,
+			vodRoute.clusterID, retentionUntil); execErr != nil {
+			return execErr
+		}
+		// A retry of the same (tenant, vod) reuses the intent's ALREADY-PERSISTED
+		// request_id; keying Foghorn on a freshly minted one would mismatch the ledger.
+		persisted, upErr := upsertCreationIntent(ctx, tx, tenantID, creationIntentKindVOD, vodHash, intentRequestID, vodRoute.clusterID, nil)
+		if upErr != nil {
+			return upErr
+		}
+		intentRequestID = persisted
+		return nil
+	})
+	if regErr != nil {
 		s.logger.WithFields(logging.Fields{
 			"tenant_id": tenantID,
 			"filename":  req.Filename,
-			"error":     err,
-		}).Error("Failed to register VOD asset in business registry")
-		return nil, status.Errorf(codes.Internal, "failed to register VOD asset: %v", err)
+			"error":     regErr,
+		}).Error("Failed to register VOD asset + creation intent")
+		return nil, status.Errorf(codes.Internal, "failed to register VOD asset: %v", regErr)
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -9546,7 +9113,8 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *sharedpb.Cre
 		"filename":  req.Filename,
 	}).Info("Registered VOD asset in business registry")
 
-	// Build Foghorn request with pre-generated hash
+	// Build Foghorn request with pre-generated hash. request_id keys Foghorn's
+	// command ledger so the sweep resolves this attempt by request_id.
 	foghornReq := &sharedpb.CreateVodUploadRequest{
 		TenantId:      tenantID,
 		UserId:        userID,
@@ -9560,19 +9128,33 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *sharedpb.Cre
 		InternalName:  &artifactInternalName,
 		ClusterId:     vodRoute.clusterID,
 		RetentionDays: &resolvedDays,
+		RequestId:     &intentRequestID,
 	}
 
 	// Call Foghorn for S3 multipart upload setup
 	resp, trailers, err := foghornClient.CreateVodUpload(ctx, foghornReq)
 	if err != nil {
 		s.logger.WithError(err).WithField("vod_hash", vodHash).Error("Failed to create VOD upload via Foghorn")
-		if _, cleanupErr := s.db.ExecContext(context.Background(), `
-			DELETE FROM commodore.vod_assets
-			WHERE id = $1 AND tenant_id = $2
-		`, vodID, tenantID); cleanupErr != nil {
-			s.logger.WithError(cleanupErr).WithField("vod_hash", vodHash).Error("Failed to remove VOD registry row after Foghorn rejection")
+		// An RPC error does NOT prove rejection. Only a DEFINITIVE rejection aborts
+		// now (proven not-created): the shared terminalizer removes the catalog-only
+		// row and aborts the intent atomically. An ambiguous error leaves both the row
+		// and the pending intent so the sweep can converge once Foghorn's actual state
+		// is known. No tombstone is written — an aborted create never had a Foghorn
+		// artifact/revision.
+		if creationCreateErrorIsDefinitive(err) {
+			if abErr := s.abortCreationIntent(context.Background(),
+				creationIntentRow{tenantID: tenantID, kind: creationIntentKindVOD, artifactHash: vodHash, originClusterID: vodRoute.clusterID},
+				"", "foghorn rejected vod upload create", true); abErr != nil && !errors.Is(abErr, errIntentCASMiss) {
+				s.logger.WithError(abErr).WithField("vod_hash", vodHash).Warn("Failed to abort VOD creation intent")
+			}
 		}
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
+	}
+
+	if cErr := s.commitCreationIntent(ctx,
+		creationIntentRow{tenantID: tenantID, kind: creationIntentKindVOD, artifactHash: vodHash, originClusterID: vodRoute.clusterID},
+		"", nil); cErr != nil && !errors.Is(cErr, errIntentCASMiss) {
+		s.logger.WithError(cErr).WithField("vod_hash", vodHash).Warn("Failed to mark VOD creation intent committed")
 	}
 
 	if resp != nil && resp.PlaybackId == "" {
@@ -9655,8 +9237,7 @@ func (s *CommodoreServer) GetVodUploadStatus(ctx context.Context, req *sharedpb.
 	err = s.db.QueryRowContext(ctx, `
 		SELECT playback_id
 		FROM commodore.vod_assets
-		WHERE tenant_id = $1 AND vod_hash = $2
-	`, tenantID, resp.ArtifactHash).Scan(&playbackID)
+		WHERE tenant_id = $1 AND vod_hash = $2	`, tenantID, resp.ArtifactHash).Scan(&playbackID)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithFields(logging.Fields{
 			"tenant_id":      tenantID,
@@ -9694,7 +9275,9 @@ func (s *CommodoreServer) AbortVodUpload(ctx context.Context, req *sharedpb.Abor
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
-	// TODO: Clean up orphaned business registry entry (or let retention job handle it)
+	// No business-row cleanup here: Foghorn's abort deletes the artifact and the reconciler
+	// projects that deletion through UpdateArtifactCatalogSnapshot (deleted=true), which removes
+	// the catalog row and writes the tombstone marker. Deleting it here would race that projection.
 
 	s.logger.WithFields(logging.Fields{
 		"tenant_id": tenantID,
@@ -9704,295 +9287,38 @@ func (s *CommodoreServer) AbortVodUpload(ctx context.Context, req *sharedpb.Abor
 	return resp, nil
 }
 
-// GetVodAsset returns VOD business metadata from Commodore registry
-// Lifecycle data (status, size, storage) comes from Periscope via Gateway's ArtifactLifecycleLoader
-func (s *CommodoreServer) GetVodAsset(ctx context.Context, req *sharedpb.GetVodAssetRequest) (*sharedpb.VodAssetInfo, error) {
-	// Get tenant context from metadata
-	_, tenantID, err := extractUserContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	// Query business metadata from Commodore registry ONLY - no Foghorn call
-	var (
-		id                   string
-		vodHash              string
-		playbackID           string
-		streamID             string
-		originType           string
-		originID             string
-		title, description   sql.NullString
-		filename             string
-		contentType          sql.NullString
-		sizeBytes            sql.NullInt64
-		retentionUntil       sql.NullTime
-		retentionSource      sql.NullString
-		createdAt, updatedAt time.Time
-	)
-	var (
-		thumbnailCluster sql.NullString
-		hasThumbnails    bool
-	)
-	err = s.db.QueryRowContext(ctx, `
-		SELECT id, vod_hash, playback_id, COALESCE(stream_id::text, ''), COALESCE(origin_type, ''), COALESCE(origin_id, ''),
-		       title, description, filename, content_type,
-		       size_bytes, retention_until, retention_source, created_at, updated_at,
-		       COALESCE(storage_cluster_id, origin_cluster_id), has_thumbnails
-		FROM commodore.vod_assets
-		WHERE vod_hash = $1 AND tenant_id = $2 AND library_visible = true
-	`, req.ArtifactHash, tenantID).Scan(
-		&id, &vodHash, &playbackID, &streamID, &originType, &originID, &title, &description, &filename, &contentType,
-		&sizeBytes, &retentionUntil, &retentionSource, &createdAt, &updatedAt,
-		&thumbnailCluster, &hasThumbnails,
-	)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, status.Error(codes.NotFound, "VOD asset not found")
-		}
-		s.logger.WithError(err).WithField("artifact_hash", req.ArtifactHash).Error("Failed to get VOD asset")
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-
-	// Build response with business metadata only
-	// Status/storageLocation will be enriched by Gateway via Periscope
-	asset := &sharedpb.VodAssetInfo{
-		Id:           id,
-		ArtifactHash: vodHash,
-		PlaybackId:   &playbackID,
-		Filename:     filename,
-		Status:       sharedpb.VodStatus_VOD_STATUS_UPLOADING, // Default - Gateway enriches from Periscope
-		CreatedAt:    timestamppb.New(createdAt),
-		UpdatedAt:    timestamppb.New(updatedAt),
-	}
-	if title.Valid {
-		asset.Title = title.String
-	}
-	if description.Valid {
-		asset.Description = description.String
-	}
-	if streamID != "" {
-		asset.StreamId = &streamID
-	}
-	if originType != "" {
-		asset.OriginType = &originType
-	}
-	if originID != "" {
-		asset.OriginId = &originID
-	}
-	if sizeBytes.Valid {
-		size := sizeBytes.Int64
-		asset.SizeBytes = &size
-	}
-	if retentionUntil.Valid {
-		asset.ExpiresAt = timestamppb.New(retentionUntil.Time)
-	}
-	if retentionSource.Valid && retentionSource.String != "" {
-		src := retentionSource.String
-		asset.RetentionSource = &src
-	}
-	asset.ThumbnailAssets = s.buildArtifactThumbnailAssets(hasThumbnails, thumbnailCluster, vodHash)
-
-	return asset, nil
-}
-
-// ListVodAssets returns VOD assets from Commodore business registry with pagination
-// Lifecycle data (status, size, storage) comes from Periscope via Gateway's ArtifactLifecycleLoader
-func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *sharedpb.ListVodAssetsRequest) (*sharedpb.ListVodAssetsResponse, error) {
-	// Get tenant context from metadata
-	_, tenantID, err := extractUserContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	params, err := pagination.Parse(req.GetPagination())
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
-	}
-
-	whereClause := "tenant_id = $1"
-	args := []any{tenantID}
-	argIdx := 2
-	if streamID := req.GetStreamId(); streamID != "" {
-		whereClause += fmt.Sprintf(" AND stream_id = $%d::uuid", argIdx)
-		args = append(args, streamID)
-		argIdx++
-	} else {
-		whereClause += " AND library_visible = true"
-	}
-	if search := strings.TrimSpace(req.GetSearch()); search != "" {
-		whereClause += fmt.Sprintf(" AND (LOWER(COALESCE(title, '')) LIKE $%d OR LOWER(COALESCE(filename, '')) LIKE $%d OR LOWER(vod_hash) LIKE $%d)", argIdx, argIdx, argIdx)
-		args = append(args, "%"+strings.ToLower(search)+"%")
-		argIdx++
-	}
-
-	// Get total count
-	var total int32
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM commodore.vod_assets WHERE %s", whereClause)
-	if countErr := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); countErr != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", countErr)
-	}
-
-	// Build keyset pagination query
-	builder := &pagination.KeysetBuilder{
-		TimestampColumn: "created_at",
-		IDColumn:        "vod_hash",
-	}
-
-	// Base query
-	query := fmt.Sprintf(`
-		SELECT id, vod_hash, playback_id, COALESCE(stream_id::text, ''), COALESCE(origin_type, ''), COALESCE(origin_id, ''),
-		       title, description, filename, content_type,
-		       size_bytes, retention_until, retention_source, created_at, updated_at,
-		       COALESCE(storage_cluster_id, origin_cluster_id), has_thumbnails
-		FROM commodore.vod_assets
-		WHERE %s`, whereClause)
-
-	offsetMode := req.Offset != nil || req.GetSortField() != "" || req.GetSortDirection() != ""
-	offset := int32(0)
-	if req.Offset != nil && req.GetOffset() > 0 {
-		offset = req.GetOffset()
-	}
-	if offsetMode {
-		query += fmt.Sprintf(" ORDER BY %s %s NULLS LAST, created_at DESC, vod_hash DESC LIMIT %d OFFSET %d",
-			vodListSortColumn(req.GetSortField()), mediaListSortDirection(req.GetSortDirection()), params.Limit+1, offset)
-	} else {
-		// Add keyset condition if cursor provided
-		if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
-			query += " AND " + condition
-			args = append(args, cursorArgs...)
-		}
-		query += " " + builder.OrderBy(params)
-		query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
-	}
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var assets []*sharedpb.VodAssetInfo
-	for rows.Next() {
-		var (
-			id                   string
-			vodHash              string
-			playbackID           string
-			streamID             string
-			originType           string
-			originID             string
-			title, description   sql.NullString
-			filename             string
-			contentType          sql.NullString
-			sizeBytes            sql.NullInt64
-			retentionUntil       sql.NullTime
-			retentionSource      sql.NullString
-			createdAt, updatedAt time.Time
-			thumbnailCluster     sql.NullString
-			hasThumbnails        bool
-		)
-		if err := rows.Scan(&id, &vodHash, &playbackID, &streamID, &originType, &originID, &title, &description, &filename, &contentType,
-			&sizeBytes, &retentionUntil, &retentionSource, &createdAt, &updatedAt,
-			&thumbnailCluster, &hasThumbnails); err != nil {
-			s.logger.WithError(err).Warn("Error scanning VOD asset")
-			continue
-		}
-
-		// Build asset with business metadata only
-		// Status/storageLocation will be enriched by Gateway via Periscope
-		asset := &sharedpb.VodAssetInfo{
-			Id:           id,
-			ArtifactHash: vodHash,
-			PlaybackId:   &playbackID,
-			Filename:     filename,
-			Status:       sharedpb.VodStatus_VOD_STATUS_UPLOADING, // Default - Gateway enriches from Periscope
-			CreatedAt:    timestamppb.New(createdAt),
-			UpdatedAt:    timestamppb.New(updatedAt),
-		}
-		if title.Valid {
-			asset.Title = title.String
-		}
-		if description.Valid {
-			asset.Description = description.String
-		}
-		if streamID != "" {
-			asset.StreamId = &streamID
-		}
-		if originType != "" {
-			asset.OriginType = &originType
-		}
-		if originID != "" {
-			asset.OriginId = &originID
-		}
-		if sizeBytes.Valid {
-			size := sizeBytes.Int64
-			asset.SizeBytes = &size
-		}
-		if retentionUntil.Valid {
-			asset.ExpiresAt = timestamppb.New(retentionUntil.Time)
-		}
-		if retentionSource.Valid && retentionSource.String != "" {
-			src := retentionSource.String
-			asset.RetentionSource = &src
-		}
-		asset.ThumbnailAssets = s.buildArtifactThumbnailAssets(hasThumbnails, thumbnailCluster, vodHash)
-
-		assets = append(assets, asset)
-	}
-
-	// Detect hasMore and trim results
-	hasMore := len(assets) > params.Limit
-	if hasMore {
-		assets = assets[:params.Limit]
-	}
-
-	// Reverse results if backward pagination
-	if params.Direction == pagination.Backward && len(assets) > 0 {
-		for i, j := 0, len(assets)-1; i < j; i, j = i+1, j-1 {
-			assets[i], assets[j] = assets[j], assets[i]
-		}
-	}
-
-	// Build cursors from results
-	var startCursor, endCursor string
-	if len(assets) > 0 {
-		first := assets[0]
-		last := assets[len(assets)-1]
-		startCursor = pagination.EncodeCursor(first.CreatedAt.AsTime(), first.ArtifactHash)
-		endCursor = pagination.EncodeCursor(last.CreatedAt.AsTime(), last.ArtifactHash)
-	}
-
-	// Build response
-	resp := &sharedpb.ListVodAssetsResponse{
-		Assets: assets,
-		Pagination: &commonpb.CursorPaginationResponse{
-			TotalCount: total,
-		},
-	}
-	if startCursor != "" {
-		resp.Pagination.StartCursor = &startCursor
-	}
-	if endCursor != "" {
-		resp.Pagination.EndCursor = &endCursor
-	}
-	if params.Direction == pagination.Forward {
-		resp.Pagination.HasNextPage = hasMore
-		resp.Pagination.HasPreviousPage = params.Cursor != nil
-	} else {
-		resp.Pagination.HasPreviousPage = hasMore
-		resp.Pagination.HasNextPage = params.Cursor != nil
-	}
-	if offsetMode {
-		resp.Pagination.HasNextPage = hasMore
-		resp.Pagination.HasPreviousPage = offset > 0
-	}
-
-	return resp, nil
-}
-
 // ListStorageArtifacts returns the account storage browser's canonical
 // registry projection. This is intentionally served from Commodore instead of
 // Bridge joining one page each of clips/DVR/VOD, so search, sorting, and
 // pagination run against the full tenant dataset.
+// maxBatchArtifactHashes bounds a batch exact-hash lookup so a pathological caller can't ask for
+// an unbounded ANY() list. Top Assets enrichment is at most a page of ranked assets.
+const maxBatchArtifactHashes = 500
+
+// cleanArtifactHashes trims, drops empty entries, and de-duplicates a batch hash filter
+// (preserving first-seen order). An all-whitespace input returns an empty slice; the caller must
+// treat "batch requested but nothing valid" as match-nothing, NOT as an unfiltered query. The
+// caller rejects an oversized request BEFORE calling this (no silent truncation).
+func cleanArtifactHashes(hashes []string) []string {
+	if len(hashes) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(hashes))
+	out := make([]string, 0, len(hashes))
+	for _, h := range hashes {
+		h = strings.TrimSpace(h)
+		if h == "" {
+			continue
+		}
+		if _, dup := seen[h]; dup {
+			continue
+		}
+		seen[h] = struct{}{}
+		out = append(out, h)
+	}
+	return out
+}
+
 func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodorepb.ListStorageArtifactsRequest) (*commodorepb.ListStorageArtifactsResponse, error) {
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
@@ -10000,6 +9326,11 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodo
 	}
 	if req.GetTenantId() != "" && req.GetTenantId() != tenantID {
 		return nil, status.Error(codes.PermissionDenied, "tenant mismatch")
+	}
+	// Reject an oversized batch outright rather than silently truncating it (which would return a
+	// plausible-but-partial result the caller can't distinguish from a complete one).
+	if len(req.GetArtifactHashes()) > maxBatchArtifactHashes {
+		return nil, status.Errorf(codes.InvalidArgument, "artifact_hashes batch too large (%d > %d)", len(req.GetArtifactHashes()), maxBatchArtifactHashes)
 	}
 
 	limit := int(req.GetLimit())
@@ -10012,6 +9343,14 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodo
 	offset := int(req.GetOffset())
 	if offset < 0 {
 		offset = 0
+	}
+
+	// status is a closed set (the derived lifecycle status). Reject unknown values rather than
+	// silently returning an empty catalog for a typo.
+	switch strings.TrimSpace(req.GetStatus()) {
+	case "", "ready", "failed", "processing", "expired":
+	default:
+		return nil, status.Errorf(codes.InvalidArgument, "unknown status filter %q (want ready|failed|processing|expired)", req.GetStatus())
 	}
 
 	args := []any{tenantID}
@@ -10033,14 +9372,43 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodo
 				placeholders = append(placeholders, fmt.Sprintf("$%d", argIdx))
 				args = append(args, normalized)
 				argIdx++
+			default:
+				// Reject an unknown kind rather than dropping it — a request whose kinds ALL normalize
+				// away would otherwise fall through to an unfiltered scan and return every kind.
+				return nil, status.Errorf(codes.InvalidArgument, "unknown kind filter %q (want vod|dvr|chapter|clip)", kind)
 			}
 		}
-		if len(placeholders) > 0 {
-			filters = append(filters, fmt.Sprintf("kind IN (%s)", strings.Join(placeholders, ", ")))
-		}
+		filters = append(filters, fmt.Sprintf("kind IN (%s)", strings.Join(placeholders, ", ")))
 	}
 
-	if search := strings.TrimSpace(req.GetSearch()); search != "" {
+	if status := strings.TrimSpace(req.GetStatus()); status != "" {
+		filters = append(filters, fmt.Sprintf("status = $%d", argIdx))
+		args = append(args, status)
+		argIdx++
+	}
+
+	if len(req.GetArtifactHashes()) > 0 {
+		// Batch exact lookup (Top Assets enrichment): one query for many hashes, replacing a
+		// fan-out of single-hash calls. Takes precedence over single artifact_hash and search. A
+		// batch that cleans to nothing (all blank/duplicate) must match NOTHING, never fall through
+		// to an unfiltered tenant scan.
+		batch := cleanArtifactHashes(req.GetArtifactHashes())
+		if len(batch) == 0 {
+			filters = append(filters, "FALSE")
+		} else {
+			filters = append(filters, fmt.Sprintf("artifact_hash = ANY($%d)", argIdx))
+			args = append(args, pq.Array(batch))
+			// An exact-hash batch returns EVERY accepted hash in a single page: override the generic
+			// page clamp (100) so a 101–500 batch — already bounded by maxBatchArtifactHashes above —
+			// isn't silently truncated. Enrichment callers depend on receiving all requested hashes.
+			limit = len(batch)
+		}
+	} else if artifactHash := strings.TrimSpace(req.GetArtifactHash()); artifactHash != "" {
+		// Exact detail lookup — takes precedence over fuzzy search. Last filter, so
+		// argIdx isn't advanced.
+		filters = append(filters, fmt.Sprintf("artifact_hash = $%d", argIdx))
+		args = append(args, artifactHash)
+	} else if search := strings.TrimSpace(req.GetSearch()); search != "" {
 		filters = append(filters, fmt.Sprintf("(LOWER(title) LIKE $%d OR LOWER(artifact_hash) LIKE $%d OR LOWER(stream_title) LIKE $%d OR LOWER(secondary_label) LIKE $%d)", argIdx, argIdx, argIdx, argIdx))
 		args = append(args, "%"+strings.ToLower(search)+"%")
 	}
@@ -10061,8 +9429,9 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodo
 
 	baseQuery := `
 		SELECT kind, id, artifact_hash, playback_id, stream_id, stream_title, title, secondary_label,
-		       size_bytes, status, storage_location, is_frozen, created_at, updated_at, expires_at,
-		       retention_source, origin_type, origin_id, storage_cluster_id, has_thumbnails
+		       size_bytes, status, storage_location, created_at, updated_at, expires_at,
+		       retention_source, origin_type, origin_id, storage_cluster_id, has_thumbnails, duration_ms,
+		       tracks, sync_status, is_synced, is_finalized, description, error_message
 		FROM (
 			SELECT
 				CASE WHEN COALESCE(v.origin_type, '') = 'dvr_chapter' THEN 'chapter' ELSE 'vod' END AS kind,
@@ -10074,9 +9443,11 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodo
 				COALESCE(NULLIF(v.title, ''), NULLIF(v.filename, ''), v.vod_hash) AS title,
 				COALESCE(NULLIF(v.filename, ''), v.content_type, '') AS secondary_label,
 				v.size_bytes AS size_bytes,
-				'registry' AS status,
-				NULL::text AS storage_location,
-				NULL::boolean AS is_frozen,
+				CASE WHEN v.retention_until IS NOT NULL AND v.retention_until <= NOW() THEN 'expired'
+				     WHEN v.lifecycle_status IN ('failed', 'aborted') OR v.sync_status IN ('failed', 'lost_local') THEN 'failed'
+				     WHEN v.lifecycle_status IN ('ready', 'completed', 'completed_partial') OR COALESCE(v.is_synced, false) THEN 'ready'
+				     ELSE 'processing' END AS status,
+				v.storage_location AS storage_location,
 				v.created_at AS created_at,
 				v.updated_at AS updated_at,
 				v.retention_until AS expires_at,
@@ -10084,7 +9455,14 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodo
 				COALESCE(v.origin_type, '') AS origin_type,
 				COALESCE(v.origin_id, '') AS origin_id,
 				COALESCE(v.storage_cluster_id, v.origin_cluster_id, '') AS storage_cluster_id,
-				v.has_thumbnails AS has_thumbnails
+				v.has_thumbnails AS has_thumbnails,
+				v.duration AS duration_ms,
+				v.tracks AS tracks,
+				v.sync_status AS sync_status,
+				v.is_synced AS is_synced,
+				v.is_finalized AS is_finalized,
+				COALESCE(v.description, '') AS description,
+				COALESCE(v.error_message, '') AS error_message
 			FROM commodore.vod_assets v
 			LEFT JOIN commodore.streams st ON st.id = v.stream_id AND st.tenant_id = v.tenant_id
 			WHERE v.tenant_id = $1
@@ -10102,9 +9480,11 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodo
 				COALESCE(st.title, d.internal_name, d.dvr_hash) AS title,
 				COALESCE(d.internal_name, '') AS secondary_label,
 				d.size_bytes AS size_bytes,
-				'registry' AS status,
-				NULL::text AS storage_location,
-				NULL::boolean AS is_frozen,
+				CASE WHEN d.retention_until IS NOT NULL AND d.retention_until <= NOW() THEN 'expired'
+				     WHEN d.lifecycle_status IN ('failed', 'aborted') OR d.sync_status IN ('failed', 'lost_local') THEN 'failed'
+				     WHEN d.lifecycle_status IN ('ready', 'completed', 'completed_partial') OR COALESCE(d.is_synced, false) THEN 'ready'
+				     ELSE 'processing' END AS status,
+				d.storage_location AS storage_location,
 				d.created_at AS created_at,
 				d.updated_at AS updated_at,
 				d.retention_until AS expires_at,
@@ -10112,10 +9492,17 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodo
 				'' AS origin_type,
 				'' AS origin_id,
 				COALESCE(d.storage_cluster_id, d.origin_cluster_id, '') AS storage_cluster_id,
-				d.has_thumbnails AS has_thumbnails
+				d.has_thumbnails AS has_thumbnails,
+				d.duration AS duration_ms,
+				d.tracks AS tracks,
+				d.sync_status AS sync_status,
+				d.is_synced AS is_synced,
+				d.is_finalized AS is_finalized,
+				'' AS description,
+				COALESCE(d.error_message, '') AS error_message
 			FROM commodore.dvr_recordings d
 			LEFT JOIN commodore.streams st ON st.id = d.stream_id AND st.tenant_id = d.tenant_id
-			WHERE d.tenant_id = $1 AND (d.retention_until IS NULL OR d.retention_until > NOW())
+			WHERE d.tenant_id = $1
 
 			UNION ALL
 
@@ -10129,9 +9516,11 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodo
 				COALESCE(NULLIF(c.title, ''), c.clip_hash) AS title,
 				COALESCE(c.clip_mode, '') AS secondary_label,
 				c.size_bytes AS size_bytes,
-				'registry' AS status,
-				NULL::text AS storage_location,
-				NULL::boolean AS is_frozen,
+				CASE WHEN c.retention_until IS NOT NULL AND c.retention_until <= NOW() THEN 'expired'
+				     WHEN c.lifecycle_status IN ('failed', 'aborted') OR c.sync_status IN ('failed', 'lost_local') THEN 'failed'
+				     WHEN c.lifecycle_status IN ('ready', 'completed', 'completed_partial') OR COALESCE(c.is_synced, false) THEN 'ready'
+				     ELSE 'processing' END AS status,
+				c.storage_location AS storage_location,
 				c.created_at AS created_at,
 				c.updated_at AS updated_at,
 				c.retention_until AS expires_at,
@@ -10139,7 +9528,14 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodo
 				'' AS origin_type,
 				'' AS origin_id,
 				COALESCE(c.storage_cluster_id, c.origin_cluster_id, '') AS storage_cluster_id,
-				c.has_thumbnails AS has_thumbnails
+				c.has_thumbnails AS has_thumbnails,
+				c.duration AS duration_ms,
+				c.tracks AS tracks,
+				c.sync_status AS sync_status,
+				c.is_synced AS is_synced,
+				c.is_finalized AS is_finalized,
+				COALESCE(c.description, '') AS description,
+				COALESCE(c.error_message, '') AS error_message
 			FROM commodore.clips c
 			LEFT JOIN commodore.streams st ON st.id = c.stream_id AND st.tenant_id = c.tenant_id
 			WHERE c.tenant_id = $1
@@ -10150,6 +9546,59 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodo
 	var total int32
 	if countErr := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); countErr != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", countErr)
+	}
+
+	// Authoritative per-kind facet counts under the same search/stream scope but WITHOUT
+	// the kind filter, so the UI's per-kind tabs show true account totals rather than
+	// page-local counts. Built with an independent arg list to avoid placeholder shifts.
+	facetArgs := []any{tenantID}
+	facetFilters := []string{"TRUE"}
+	fIdx := 2
+	if streamID := req.GetStreamId(); streamID != "" {
+		facetFilters = append(facetFilters, fmt.Sprintf("stream_id = $%d", fIdx))
+		facetArgs = append(facetArgs, streamID)
+		fIdx++
+	}
+	if status := strings.TrimSpace(req.GetStatus()); status != "" {
+		facetFilters = append(facetFilters, fmt.Sprintf("status = $%d", fIdx))
+		facetArgs = append(facetArgs, status)
+		fIdx++
+	}
+	if len(req.GetArtifactHashes()) > 0 {
+		batch := cleanArtifactHashes(req.GetArtifactHashes())
+		if len(batch) == 0 {
+			facetFilters = append(facetFilters, "FALSE")
+		} else {
+			facetFilters = append(facetFilters, fmt.Sprintf("artifact_hash = ANY($%d)", fIdx))
+			facetArgs = append(facetArgs, pq.Array(batch))
+		}
+	} else if artifactHash := strings.TrimSpace(req.GetArtifactHash()); artifactHash != "" {
+		facetFilters = append(facetFilters, fmt.Sprintf("artifact_hash = $%d", fIdx))
+		facetArgs = append(facetArgs, artifactHash)
+	} else if search := strings.TrimSpace(req.GetSearch()); search != "" {
+		facetFilters = append(facetFilters, fmt.Sprintf("(LOWER(title) LIKE $%d OR LOWER(artifact_hash) LIKE $%d OR LOWER(stream_title) LIKE $%d OR LOWER(secondary_label) LIKE $%d)", fIdx, fIdx, fIdx, fIdx))
+		facetArgs = append(facetArgs, "%"+strings.ToLower(search)+"%")
+	}
+	kindCounts := map[string]int32{}
+	facetQuery := fmt.Sprintf("SELECT kind, COUNT(*) FROM (%s WHERE %s) f GROUP BY kind", baseQuery, strings.Join(facetFilters, " AND "))
+	facetErr := func() error {
+		frows, ferr := s.db.QueryContext(ctx, facetQuery, facetArgs...)
+		if ferr != nil {
+			return ferr
+		}
+		defer func() { _ = frows.Close() }()
+		for frows.Next() {
+			var k string
+			var c int32
+			if scanErr := frows.Scan(&k, &c); scanErr != nil {
+				return scanErr
+			}
+			kindCounts[k] = c
+		}
+		return frows.Err()
+	}()
+	if facetErr != nil {
+		return nil, status.Errorf(codes.Internal, "facet count error: %v", facetErr)
 	}
 
 	dataArgs := append([]any{}, args...)
@@ -10171,17 +9620,23 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodo
 			kind, id, hash, playbackID, streamID, streamTitle, title, secondary string
 			sizeBytes                                                           sql.NullInt64
 			statusText, storageLocation                                         sql.NullString
-			isFrozen                                                            sql.NullBool
+			isSynced, isFinalized                                               sql.NullBool
+			syncStatus                                                          sql.NullString
 			createdAt, updatedAt                                                time.Time
 			expiresAt                                                           sql.NullTime
 			retentionSource, originType, originID, storageClusterID             string
 			hasThumbnails                                                       bool
+			durationMs                                                          sql.NullInt64
+			tracksJSON                                                          sql.NullString
+			description, errorMessage                                           string
 		)
 		if err := rows.Scan(&kind, &id, &hash, &playbackID, &streamID, &streamTitle, &title, &secondary,
-			&sizeBytes, &statusText, &storageLocation, &isFrozen, &createdAt, &updatedAt, &expiresAt,
-			&retentionSource, &originType, &originID, &storageClusterID, &hasThumbnails); err != nil {
-			s.logger.WithError(err).Warn("Error scanning storage artifact")
-			continue
+			&sizeBytes, &statusText, &storageLocation, &createdAt, &updatedAt, &expiresAt,
+			&retentionSource, &originType, &originID, &storageClusterID, &hasThumbnails, &durationMs, &tracksJSON,
+			&syncStatus, &isSynced, &isFinalized, &description, &errorMessage); err != nil {
+			// Fail closed: a scan error means a corrupt/partial row; returning a
+			// truncated catalog silently would misrepresent the account inventory.
+			return nil, status.Errorf(codes.Internal, "scan storage artifact: %v", err)
 		}
 
 		artifact := &commodorepb.StorageArtifactInfo{
@@ -10211,10 +9666,6 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodo
 			value := storageLocation.String
 			artifact.StorageLocation = &value
 		}
-		if isFrozen.Valid {
-			value := isFrozen.Bool
-			artifact.IsFrozen = &value
-		}
 		if expiresAt.Valid {
 			artifact.ExpiresAt = timestamppb.New(expiresAt.Time)
 		}
@@ -10227,9 +9678,43 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodo
 		if originID != "" {
 			artifact.OriginId = &originID
 		}
+		if description != "" {
+			artifact.Description = &description
+		}
+		if errorMessage != "" {
+			artifact.ErrorMessage = &errorMessage
+		}
+		if durationMs.Valid {
+			value := durationMs.Int64
+			artifact.DurationMs = &value
+		}
+		if tracksJSON.Valid && tracksJSON.String != "" {
+			parsed, terr := commodoreclient.UnmarshalMediaTracks([]byte(tracksJSON.String))
+			if terr != nil {
+				// Fail closed on malformed track JSON rather than silently dropping it.
+				return nil, status.Errorf(codes.Internal, "decode tracks for %s: %v", hash, terr)
+			}
+			artifact.Tracks = parsed
+		}
+		// Durable S3 lifecycle projected from foghorn.artifacts (reconciler-repaired).
+		if syncStatus.Valid && syncStatus.String != "" {
+			v := syncStatus.String
+			artifact.SyncStatus = &v
+		}
+		if isSynced.Valid {
+			v := isSynced.Bool
+			artifact.IsSynced = &v
+		}
+		if isFinalized.Valid {
+			v := isFinalized.Bool
+			artifact.IsFinalized = &v
+		}
 		artifact.ThumbnailAssets = s.buildArtifactThumbnailAssets(hasThumbnails, sql.NullString{String: storageClusterID, Valid: storageClusterID != ""}, hash)
 
 		artifacts = append(artifacts, artifact)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, status.Errorf(codes.Internal, "iterate storage artifacts: %v", rowsErr)
 	}
 
 	hasNext := len(artifacts) > limit
@@ -10241,6 +9726,7 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodo
 		Artifacts:   artifacts,
 		TotalCount:  total,
 		HasNextPage: hasNext,
+		KindCounts:  kindCounts,
 	}, nil
 }
 
@@ -10271,16 +9757,10 @@ func (s *CommodoreServer) DeleteVodAsset(ctx context.Context, req *sharedpb.Dele
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
-	// Delete from business registry
-	_, delErr := s.db.ExecContext(ctx, `
-		DELETE FROM commodore.vod_assets
-		WHERE vod_hash = $1 AND tenant_id = $2
-	`, req.ArtifactHash, tenantID)
-	if delErr != nil {
-		s.logger.WithError(delErr).WithField("artifact_hash", req.ArtifactHash).Warn("Failed to delete VOD from business registry (will be cleaned up by retention job)")
-	}
-
-	// Emit deletion event
+	// The catalog deletion is projected by the Foghorn artifact reconciler, the sole revision authority:
+	// Foghorn soft-deletes its media-plane row here (bumping catalog_revision), and the reconciler writes
+	// the durable tombstone marker at that authoritative revision — removing the business row and any
+	// dvr_chapter_playback mapping. Commodore performs no local catalog mutation.
 	if resp.Success {
 		s.emitArtifactEvent(ctx, eventArtifactDeleted, tenantID, userID, ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD, req.ArtifactHash, "", "deleted", nil)
 	}

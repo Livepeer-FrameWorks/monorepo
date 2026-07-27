@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -20,13 +21,21 @@ func TestMintChapterPlaybackID_IdempotentOnChapterID(t *testing.T) {
 	}
 	defer db.Close()
 
+	// Tombstone guard: under the per-artifact advisory lock, the chapter's marker check misses (not
+	// deleted), so registration proceeds inside the same transaction as the upserts.
+	mock.ExpectBegin()
+	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs("tenant-1:vod:artifact-aaa").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT deletion_revision FROM commodore\.artifact_catalog_tombstones .* FOR UPDATE`).
+		WithArgs("tenant-1", "artifact-aaa").
+		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery(`INSERT INTO commodore\.dvr_chapter_playback`).
-		WithArgs("chap-1", "tenant-1", sqlmock.AnyArg(), "artifact-aaa").
+		WithArgs("chap-1", "tenant-1", sqlmock.AnyArg(), "artifact-aaa", "dvr-parent-aaa").
 		WillReturnRows(sqlmock.NewRows([]string{"playback_id"}).AddRow("pb_existing_chapter"))
 	mock.ExpectExec(`INSERT INTO commodore\.vod_assets`).
 		WithArgs(sqlmock.AnyArg(), "tenant-1", "user-1", "stream-1", "artifact-aaa", "artifact-aaa", "pb_existing_chapter",
 			"DVR chapter", "", "chapter.mkv", "video/x-matroska", "cluster-1", "", "chap-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	server := &CommodoreServer{db: db, logger: logrus.New()}
 	resp, err := server.MintChapterPlaybackID(context.Background(), &commodorepb.MintChapterPlaybackIDRequest{
@@ -37,6 +46,7 @@ func TestMintChapterPlaybackID_IdempotentOnChapterID(t *testing.T) {
 		Filename:        "chapter.mkv",
 		OriginClusterId: "cluster-1",
 		StreamId:        "stream-1",
+		DvrHash:         "dvr-parent-aaa",
 	})
 	if err != nil {
 		t.Fatalf("MintChapterPlaybackID: %v", err)
@@ -80,7 +90,7 @@ func TestResolveChapterPlaybackID_Roundtrip(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectQuery(`SELECT chapter_id, tenant_id::text, artifact_hash`).
+	mock.ExpectQuery(`SELECT cp.chapter_id, cp.tenant_id::text, cp.artifact_hash`).
 		WithArgs("pb_existing_chapter").
 		WillReturnRows(sqlmock.NewRows([]string{"chapter_id", "tenant_id", "artifact_hash"}).
 			AddRow("chap-1", "tenant-1", "artifact-aaa"))
@@ -110,7 +120,7 @@ func TestResolveChapterPlaybackID_NotFoundReturnsFoundFalse(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectQuery(`SELECT chapter_id, tenant_id::text, artifact_hash`).
+	mock.ExpectQuery(`SELECT cp.chapter_id, cp.tenant_id::text, cp.artifact_hash`).
 		WithArgs("pb_missing").
 		WillReturnRows(sqlmock.NewRows([]string{"chapter_id", "tenant_id", "artifact_hash"}))
 

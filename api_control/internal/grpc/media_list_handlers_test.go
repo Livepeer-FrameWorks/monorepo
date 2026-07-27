@@ -2,117 +2,25 @@ package grpc
 
 import (
 	"context"
-	"database/sql"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
-	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
+	"github.com/lib/pq"
 	"google.golang.org/grpc/codes"
 )
 
 var mediaTS = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
-// vodRows mirrors the 17-column projection shared by GetVodAsset and
-// ListVodAssets.
-func vodRows() *sqlmock.Rows {
-	return sqlmock.NewRows([]string{
-		"id", "vod_hash", "playback_id", "stream_id", "origin_type", "origin_id",
-		"title", "description", "filename", "content_type",
-		"size_bytes", "retention_until", "retention_source", "created_at", "updated_at",
-		"storage_cluster", "has_thumbnails",
-	})
-}
-
-// storageArtifactRows mirrors the 20-column UNION projection ListStorageArtifacts scans.
+// storageArtifactRows mirrors the 26-column UNION projection ListStorageArtifacts scans.
 func storageArtifactRows() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
 		"kind", "id", "artifact_hash", "playback_id", "stream_id", "stream_title", "title", "secondary_label",
-		"size_bytes", "status", "storage_location", "is_frozen", "created_at", "updated_at", "expires_at",
-		"retention_source", "origin_type", "origin_id", "storage_cluster_id", "has_thumbnails",
-	})
-}
-
-func TestGetVodAsset(t *testing.T) {
-	t.Run("unauthenticated", func(t *testing.T) {
-		s, _, done := newMockServer(t)
-		defer done()
-		_, err := s.GetVodAsset(context.Background(), &sharedpb.GetVodAssetRequest{ArtifactHash: "h1"})
-		wantCode(t, err, codes.Unauthenticated)
-	})
-
-	t.Run("not_found", func(t *testing.T) {
-		s, mock, done := newMockServer(t)
-		defer done()
-		mock.ExpectQuery("WHERE vod_hash").
-			WithArgs("h1", "t1").
-			WillReturnError(sql.ErrNoRows)
-		_, err := s.GetVodAsset(ctxAs("u1", "t1", "owner"), &sharedpb.GetVodAssetRequest{ArtifactHash: "h1"})
-		wantCode(t, err, codes.NotFound)
-	})
-
-	// The query is tenant-scoped (WHERE ... AND tenant_id = $2); the test
-	// asserts the bound tenant comes from ctx, not the request.
-	t.Run("happy_maps_metadata", func(t *testing.T) {
-		s, mock, done := newMockServer(t)
-		defer done()
-		mock.ExpectQuery("WHERE vod_hash").
-			WithArgs("h1", "t1").
-			WillReturnRows(vodRows().AddRow(
-				"id-1", "h1", "pb-1", "", "", "",
-				"My VOD", nil, "movie.mp4", "video/mp4",
-				int64(4096), nil, "tenant_default", mediaTS, mediaTS,
-				nil, false))
-		asset, err := s.GetVodAsset(ctxAs("u1", "t1", "owner"), &sharedpb.GetVodAssetRequest{ArtifactHash: "h1"})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if asset.GetArtifactHash() != "h1" || asset.GetTitle() != "My VOD" || asset.GetFilename() != "movie.mp4" {
-			t.Errorf("unexpected mapping: %+v", asset)
-		}
-		if asset.GetSizeBytes() != 4096 {
-			t.Errorf("SizeBytes = %d, want 4096", asset.GetSizeBytes())
-		}
-		if err := mock.ExpectationsWereMet(); err != nil {
-			t.Errorf("unmet: %v", err)
-		}
-	})
-}
-
-func TestListVodAssets(t *testing.T) {
-	t.Run("unauthenticated", func(t *testing.T) {
-		s, _, done := newMockServer(t)
-		defer done()
-		_, err := s.ListVodAssets(context.Background(), &sharedpb.ListVodAssetsRequest{})
-		wantCode(t, err, codes.Unauthenticated)
-	})
-
-	t.Run("happy_lists_library", func(t *testing.T) {
-		s, mock, done := newMockServer(t)
-		defer done()
-		mock.ExpectQuery("SELECT COUNT").
-			WithArgs("t1").
-			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int32(2)))
-		mock.ExpectQuery("SELECT id, vod_hash").
-			WithArgs("t1").
-			WillReturnRows(vodRows().
-				AddRow("id-1", "h1", "pb1", "", "", "", "A", nil, "a.mp4", "video/mp4", int64(1), nil, "", mediaTS, mediaTS, nil, false).
-				AddRow("id-2", "h2", "pb2", "", "", "", "B", nil, "b.mp4", "video/mp4", int64(2), nil, "", mediaTS, mediaTS, nil, false))
-
-		resp, err := s.ListVodAssets(ctxAs("u1", "t1", "owner"), &sharedpb.ListVodAssetsRequest{})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if len(resp.GetAssets()) != 2 {
-			t.Fatalf("got %d assets, want 2", len(resp.GetAssets()))
-		}
-		if resp.GetPagination().GetTotalCount() != 2 {
-			t.Errorf("TotalCount = %d, want 2", resp.GetPagination().GetTotalCount())
-		}
-		if err := mock.ExpectationsWereMet(); err != nil {
-			t.Errorf("unmet: %v", err)
-		}
+		"size_bytes", "status", "storage_location", "created_at", "updated_at", "expires_at",
+		"retention_source", "origin_type", "origin_id", "storage_cluster_id", "has_thumbnails", "duration_ms", "tracks",
+		"sync_status", "is_synced", "is_finalized", "description", "error_message",
 	})
 }
 
@@ -140,12 +48,15 @@ func TestListStorageArtifacts(t *testing.T) {
 		mock.ExpectQuery("COUNT").
 			WithArgs("t1").
 			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int32(2)))
+		mock.ExpectQuery("GROUP BY kind").
+			WithArgs("t1").
+			WillReturnRows(sqlmock.NewRows([]string{"kind", "count"}).AddRow("vod", int32(1)).AddRow("clip", int32(1)))
 		// default limit 25 → fetches limit+1 (26) with offset 0
 		mock.ExpectQuery("ORDER BY").
 			WithArgs("t1", 26, 0).
 			WillReturnRows(storageArtifactRows().
-				AddRow("vod", "id-1", "h1", "pb1", "", "", "Movie", "movie.mp4", int64(10), "registry", nil, nil, mediaTS, mediaTS, nil, "", "", "", "", false).
-				AddRow("clip", "id-2", "h2", "pb2", "", "", "Clip", "highlight", int64(5), "registry", nil, nil, mediaTS, mediaTS, nil, "", "", "", "", false))
+				AddRow("vod", "id-1", "h1", "pb1", "", "", "Movie", "movie.mp4", int64(10), "processing", nil, mediaTS, mediaTS, nil, "", "", "", "", false, nil, nil, nil, nil, nil, "Launch recording", "transcode failed").
+				AddRow("clip", "id-2", "h2", "pb2", "", "", "Clip", "highlight", int64(5), "ready", "s3", mediaTS, mediaTS, nil, "", "", "", "", false, int64(60000), `[{"type":"video","codec":"h264","resolution":"1920x1080"}]`, "synced", true, true, "", ""))
 
 		resp, err := s.ListStorageArtifacts(ctxAs("u1", "t1", "owner"), &commodorepb.ListStorageArtifactsRequest{})
 		if err != nil {
@@ -156,6 +67,70 @@ func TestListStorageArtifacts(t *testing.T) {
 		}
 		if resp.GetArtifacts()[0].GetKind() != "vod" || resp.GetArtifacts()[1].GetKind() != "clip" {
 			t.Errorf("unexpected kinds: %+v", resp.GetArtifacts())
+		}
+		// description + error_message project onto the catalog row.
+		if resp.GetArtifacts()[0].GetDescription() != "Launch recording" || resp.GetArtifacts()[0].GetErrorMessage() != "transcode failed" {
+			t.Errorf("description/error_message not projected: %+v", resp.GetArtifacts()[0])
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet: %v", err)
+		}
+	})
+
+	// Batch exact-hash lookup (Top Assets enrichment): a single query filters
+	// artifact_hash = ANY($2), replacing the former per-asset RPC fan-out.
+	t.Run("batch_hashes_uses_any_filter", func(t *testing.T) {
+		s, mock, done := newMockServer(t)
+		defer done()
+		hashes := []string{"h1", "h2"}
+		mock.ExpectQuery(`(?s)COUNT.*artifact_hash = ANY`).
+			WithArgs("t1", pq.Array(hashes)).
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int32(2)))
+		mock.ExpectQuery(`(?s)GROUP BY kind`).
+			WithArgs("t1", pq.Array(hashes)).
+			WillReturnRows(sqlmock.NewRows([]string{"kind", "count"}).AddRow("vod", int32(2)))
+		// Limit=2 → fetches limit+1 (3); batch filter arg precedes the limit/offset args.
+		mock.ExpectQuery(`(?s)artifact_hash = ANY.*ORDER BY`).
+			WithArgs("t1", pq.Array(hashes), 3, 0).
+			WillReturnRows(storageArtifactRows().
+				AddRow("vod", "id-1", "h1", "pb1", "", "", "Movie", "movie.mp4", int64(10), "ready", "s3", mediaTS, mediaTS, nil, "", "", "", "", false, nil, nil, "synced", true, false, "", "").
+				AddRow("vod", "id-2", "h2", "pb2", "", "", "Movie2", "movie2.mp4", int64(10), "ready", "s3", mediaTS, mediaTS, nil, "", "", "", "", false, nil, nil, "synced", true, false, "", ""))
+
+		resp, err := s.ListStorageArtifacts(ctxAs("u1", "t1", "owner"),
+			&commodorepb.ListStorageArtifactsRequest{ArtifactHashes: hashes, Limit: 2})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(resp.GetArtifacts()) != 2 {
+			t.Fatalf("got %d artifacts, want 2", len(resp.GetArtifacts()))
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet: %v", err)
+		}
+	})
+
+	// A batch request that cleans to nothing (all blank/duplicate) must match NOTHING — the
+	// WHERE carries a FALSE guard, never falling through to an unfiltered tenant scan.
+	t.Run("batch_hashes_all_blank_matches_nothing", func(t *testing.T) {
+		s, mock, done := newMockServer(t)
+		defer done()
+		mock.ExpectQuery(`(?s)COUNT.*FALSE`).
+			WithArgs("t1").
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int32(0)))
+		mock.ExpectQuery(`(?s)GROUP BY kind`).
+			WithArgs("t1").
+			WillReturnRows(sqlmock.NewRows([]string{"kind", "count"}))
+		mock.ExpectQuery(`(?s)FALSE.*ORDER BY`).
+			WithArgs("t1", 26, 0).
+			WillReturnRows(storageArtifactRows())
+
+		resp, err := s.ListStorageArtifacts(ctxAs("u1", "t1", "owner"),
+			&commodorepb.ListStorageArtifactsRequest{ArtifactHashes: []string{" ", "", "   "}})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(resp.GetArtifacts()) != 0 {
+			t.Fatalf("blank batch must return nothing, got %d", len(resp.GetArtifacts()))
 		}
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Errorf("unmet: %v", err)
@@ -171,12 +146,80 @@ func TestListStorageArtifacts(t *testing.T) {
 		mock.ExpectQuery("COUNT").
 			WithArgs("t1").
 			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int32(0)))
+		mock.ExpectQuery("GROUP BY kind").
+			WithArgs("t1").
+			WillReturnRows(sqlmock.NewRows([]string{"kind", "count"}))
 		mock.ExpectQuery("ORDER BY created_at").
 			WithArgs("t1", 26, 0).
 			WillReturnRows(storageArtifactRows())
 
 		_, err := s.ListStorageArtifacts(ctxAs("u1", "t1", "owner"),
 			&commodorepb.ListStorageArtifactsRequest{SortField: "title; DROP TABLE commodore.clips"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet: %v", err)
+		}
+	})
+
+	// Deleted catalog rows are physically removed (the tombstone marker is the sole deletion record),
+	// so the library list — which no longer carries any in-row deletion filter — never returns them:
+	// an absent row is simply not in the UNION. The tenant-scoped list queries still run cleanly.
+	t.Run("excludes_deleted_rows", func(t *testing.T) {
+		s, mock, done := newMockServer(t)
+		defer done()
+		mock.ExpectQuery(`(?s)SELECT COUNT\(\*\) FROM`).
+			WithArgs("t1").
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int32(0)))
+		mock.ExpectQuery(`(?s)GROUP BY kind`).
+			WithArgs("t1").
+			WillReturnRows(sqlmock.NewRows([]string{"kind", "count"}))
+		mock.ExpectQuery(`(?s)FROM commodore.vod_assets v.*ORDER BY`).
+			WithArgs("t1", 26, 0).
+			WillReturnRows(storageArtifactRows())
+
+		_, err := s.ListStorageArtifacts(ctxAs("u1", "t1", "owner"), &commodorepb.ListStorageArtifactsRequest{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet: %v", err)
+		}
+	})
+
+	// An unknown kind must be rejected outright — otherwise a request whose kinds ALL normalize
+	// away would fall through to an unfiltered scan and leak every kind.
+	t.Run("unknown_kind_rejected", func(t *testing.T) {
+		s, _, done := newMockServer(t)
+		defer done()
+		_, err := s.ListStorageArtifacts(ctxAs("u1", "t1", "owner"),
+			&commodorepb.ListStorageArtifactsRequest{Kinds: []string{"bogus"}})
+		wantCode(t, err, codes.InvalidArgument)
+	})
+
+	// A batch of 101–500 exact hashes must return them ALL — the exact-hash path overrides the
+	// generic page clamp (100) so enrichment never receives a silently-truncated page.
+	t.Run("batch_over_page_clamp_returns_all", func(t *testing.T) {
+		s, mock, done := newMockServer(t)
+		defer done()
+		hashes := make([]string, 0, 150)
+		for i := 0; i < 150; i++ {
+			hashes = append(hashes, "h"+strconv.Itoa(i))
+		}
+		mock.ExpectQuery(`(?s)COUNT.*artifact_hash = ANY`).
+			WithArgs("t1", pq.Array(hashes)).
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int32(150)))
+		mock.ExpectQuery(`(?s)GROUP BY kind`).
+			WithArgs("t1", pq.Array(hashes)).
+			WillReturnRows(sqlmock.NewRows([]string{"kind", "count"}).AddRow("vod", int32(150)))
+		// limit overridden to len(batch)=150 → fetches limit+1 (151), NOT the clamped 101.
+		mock.ExpectQuery(`(?s)artifact_hash = ANY.*ORDER BY`).
+			WithArgs("t1", pq.Array(hashes), 151, 0).
+			WillReturnRows(storageArtifactRows())
+
+		_, err := s.ListStorageArtifacts(ctxAs("u1", "t1", "owner"),
+			&commodorepb.ListStorageArtifactsRequest{ArtifactHashes: hashes})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

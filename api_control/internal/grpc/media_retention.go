@@ -663,17 +663,24 @@ func (s *CommodoreServer) assertVodTenant(ctx context.Context, identifier, tenan
 	if identifier == "" {
 		return "", "", status.Error(codes.InvalidArgument, "vod asset id is required")
 	}
+	var originType string
 	if scanErr := s.db.QueryRowContext(ctx,
-		`SELECT COALESCE(origin_cluster_id, ''), vod_hash
+		`SELECT COALESCE(origin_cluster_id, ''), vod_hash, COALESCE(origin_type, '')
 		   FROM commodore.vod_assets
 		  WHERE tenant_id = $2::uuid
 		    AND (vod_hash = $1 OR id::text = $1)`,
 		identifier, tenantID,
-	).Scan(&originClusterID, &vodHash); scanErr != nil {
+	).Scan(&originClusterID, &vodHash, &originType); scanErr != nil {
 		if errors.Is(scanErr, sql.ErrNoRows) {
 			return "", "", status.Error(codes.NotFound, "vod asset not found")
 		}
 		return "", "", status.Errorf(codes.Internal, "tenant lookup failed: %v", scanErr)
+	}
+	// A DVR chapter is stored as a vod_asset (origin_type='dvr_chapter') but its retention is
+	// governed by the parent DVR's policy/ledger, not per-asset VOD retention. Editing it here
+	// would desync the chapter from its recording, so reject — chapter retention is chapter-aware.
+	if originType == "dvr_chapter" {
+		return "", "", status.Error(codes.FailedPrecondition, "asset is a DVR chapter; retention is managed by the parent recording")
 	}
 	if originClusterID == "" {
 		return "", "", status.Error(codes.FailedPrecondition, "vod asset origin cluster is missing")
