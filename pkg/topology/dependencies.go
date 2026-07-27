@@ -53,6 +53,7 @@ var serviceDependencies = map[string][]ServiceDependency{
 	},
 	"chandler": {
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "bootstrap and storage cluster lookup"},
+		{TargetServiceID: "foghorn", EnvKey: "FOGHORN_INTERNAL_URL", Transport: "http", Purpose: "in-cell thumbnail active-version resolve (cold-miss)"},
 	},
 	"commodore": {
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "tenant aliases, cluster capabilities, and cluster URL cache"},
