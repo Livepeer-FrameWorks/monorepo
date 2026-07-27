@@ -879,6 +879,181 @@ func setupScanLogger(t *testing.T) {
 	t.Cleanup(func() { monitorLogger = old })
 }
 
+// Until a COMPLETE scan has populated the index, the reported snapshot must be flagged incomplete so
+// Foghorn does not treat an empty/partial index as an authoritative "node holds nothing".
+func TestCaptureArtifactSnapshot_IncompleteUntilTrusted(t *testing.T) {
+	setupScanLogger(t)
+	oldMonitor := prometheusMonitor
+	prometheusMonitor = &PrometheusMonitor{artifactIndex: make(map[string]*ClipInfo)}
+	t.Cleanup(func() { prometheusMonitor = oldMonitor })
+
+	if _, _, incomplete := captureArtifactSnapshot(); !incomplete {
+		t.Fatal("expected incomplete=true before any complete scan")
+	}
+
+	// A complete scan marks the index trusted AND the current scan healthy.
+	prometheusMonitor.mutex.Lock()
+	prometheusMonitor.artifactIndexTrusted = true
+	prometheusMonitor.artifactScanHealthy = true
+	prometheusMonitor.mutex.Unlock()
+
+	if _, _, incomplete := captureArtifactSnapshot(); incomplete {
+		t.Fatal("expected incomplete=false once the index is trusted and the scan is healthy")
+	}
+
+	// A subsequent FAILED scan drops scan health (while the trusted last-good index is retained), which
+	// MUST re-flag the report incomplete so Foghorn re-arms the artifact cordon for this node.
+	prometheusMonitor.mutex.Lock()
+	prometheusMonitor.artifactScanHealthy = false
+	prometheusMonitor.mutex.Unlock()
+
+	if _, _, incomplete := captureArtifactSnapshot(); !incomplete {
+		t.Fatal("expected incomplete=true after a failed scan drops scan health, even though the index stays trusted")
+	}
+}
+
+// A scan of a fully readable tree is complete and marks the index trusted.
+func TestScanLocalArtifacts_CompleteMarksTrusted(t *testing.T) {
+	setupScanLogger(t)
+	oldMonitor := prometheusMonitor
+	prometheusMonitor = &PrometheusMonitor{artifactIndex: make(map[string]*ClipInfo)}
+	t.Cleanup(func() { prometheusMonitor = oldMonitor })
+
+	base := t.TempDir() // empty but existing base: all sub-dirs absent → complete
+	_, _, complete := scanLocalArtifacts(base)
+	if !complete {
+		t.Fatal("expected complete=true for a readable (empty) tree")
+	}
+	prometheusMonitor.mutex.RLock()
+	trusted := prometheusMonitor.artifactIndexTrusted
+	prometheusMonitor.mutex.RUnlock()
+	if !trusted {
+		t.Fatal("expected artifactIndexTrusted=true after a complete scan")
+	}
+}
+
+// A directory-read failure makes the scan incomplete; the last-good index must be RETAINED rather
+// than truncated, so a transient IO error can never orphan live copies at Foghorn.
+func TestScanLocalArtifacts_IncompleteRetainsLastGood(t *testing.T) {
+	setupScanLogger(t)
+	if os.Geteuid() == 0 {
+		t.Skip("permission-based unreadable-dir failure cannot be simulated as root")
+	}
+	oldMonitor := prometheusMonitor
+	prometheusMonitor = &PrometheusMonitor{
+		artifactIndex:        map[string]*ClipInfo{"lastgoodhash0001": {FilePath: "/x", ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP}},
+		artifactIndexTrusted: true,
+	}
+	t.Cleanup(func() { prometheusMonitor = oldMonitor })
+
+	base := t.TempDir()
+	clipsDir := filepath.Join(base, "clips")
+	streamDir := filepath.Join(clipsDir, "stream-a")
+	if err := os.MkdirAll(streamDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Make the per-stream subdir unreadable so scanClipsDirectory fails its listing.
+	if err := os.Chmod(streamDir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(streamDir, 0o755) })
+
+	_, _, complete := scanLocalArtifacts(base)
+	if complete {
+		t.Fatal("expected complete=false when a stream subdir is unreadable")
+	}
+
+	prometheusMonitor.mutex.RLock()
+	_, retained := prometheusMonitor.artifactIndex["lastgoodhash0001"]
+	prometheusMonitor.mutex.RUnlock()
+	if !retained {
+		t.Fatal("last-good index entry was dropped by an incomplete scan (inventory truncated)")
+	}
+}
+
+// A missing storage ROOT (unmounted disk) must make the scan incomplete and retain the last-good index
+// rather than report an authoritative EMPTY inventory, which would orphan every live copy at Foghorn.
+func TestScanLocalArtifacts_MissingRootIncompleteNotEmpty(t *testing.T) {
+	setupScanLogger(t)
+	oldMonitor := prometheusMonitor
+	prometheusMonitor = &PrometheusMonitor{
+		artifactIndex:        map[string]*ClipInfo{"lastgoodhash0001": {FilePath: "/x", ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP}},
+		artifactIndexTrusted: true,
+	}
+	t.Cleanup(func() { prometheusMonitor = oldMonitor })
+
+	// A path that does not exist stands in for an unmounted storage disk.
+	missing := filepath.Join(t.TempDir(), "not-mounted")
+	_, count, complete := scanLocalArtifacts(missing)
+	if complete {
+		t.Fatal("expected complete=false for a missing storage root")
+	}
+	if count != 0 {
+		t.Fatalf("expected 0 scanned artifacts, got %d", count)
+	}
+
+	prometheusMonitor.mutex.RLock()
+	_, retained := prometheusMonitor.artifactIndex["lastgoodhash0001"]
+	trusted := prometheusMonitor.artifactIndexTrusted
+	prometheusMonitor.mutex.RUnlock()
+	if !retained {
+		t.Fatal("last-good index entry was dropped for a missing root (inventory truncated to empty)")
+	}
+	if !trusted {
+		t.Fatal("expected artifactIndexTrusted to remain true (last-good retained, not replaced by empty)")
+	}
+}
+
+// A candidate artifact younger than fileStabilityThreshold is skipped for stability, but a transient
+// young file is NOT a traversal failure: it must NOT cordon the whole node (complete stays true, scan
+// stays healthy). If the artifact was ALREADY reported (a rewritten/re-finalized live copy), it is
+// RETAINED from the last-good index so it is never dropped; a brand-new young file is omitted until it
+// stabilises. Only a traversal/mount failure — never a routine young file — cordons the node.
+func TestScanLocalArtifacts_YoungFileDoesNotCordonRetainsPrior(t *testing.T) {
+	setupScanLogger(t)
+	youngHash := "aabbccddeeff001122"
+	oldMonitor := prometheusMonitor
+	// Seed the prior index with the SAME hash the young on-disk file will have, simulating a rewritten
+	// live copy that must be retained rather than dropped.
+	prometheusMonitor = &PrometheusMonitor{
+		artifactIndex: map[string]*ClipInfo{
+			youngHash: {FilePath: "/prior/aabbcc.mp4", SizeBytes: 4096, ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD},
+		},
+		artifactIndexTrusted: true,
+		artifactScanHealthy:  true,
+	}
+	t.Cleanup(func() { prometheusMonitor = oldMonitor })
+
+	// Keep the default threshold (10s): a file written just now is too young to be considered stable.
+	base := t.TempDir()
+	vodDir := filepath.Join(base, "vod")
+	if err := os.MkdirAll(vodDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(vodDir, youngHash+".mp4"), make([]byte, 4096), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, count, complete := scanLocalArtifacts(base)
+	if !complete {
+		t.Fatal("a young file is not a traversal failure; the scan must stay complete (not cordon the whole node)")
+	}
+	if count != 1 {
+		t.Fatalf("a young file already in the index must be RETAINED from last-good (count 1), got %d", count)
+	}
+
+	prometheusMonitor.mutex.RLock()
+	_, retained := prometheusMonitor.artifactIndex[youngHash]
+	healthy := prometheusMonitor.artifactScanHealthy
+	prometheusMonitor.mutex.RUnlock()
+	if !retained {
+		t.Fatal("a rewritten young file already reported must be retained, not dropped")
+	}
+	if !healthy {
+		t.Fatal("a young-file skip must NOT mark the scan unhealthy (only traversal/mount failures cordon)")
+	}
+}
+
 func TestScanVODDirectory_Empty(t *testing.T) {
 	setupScanLogger(t)
 
@@ -888,7 +1063,7 @@ func TestScanVODDirectory_Empty(t *testing.T) {
 	}
 
 	idx := make(map[string]*ClipInfo)
-	size, count := scanVODDirectory(vodDir, idx)
+	size, count, _ := scanVODDirectory(vodDir, idx, nil)
 
 	if size != 0 || count != 0 {
 		t.Fatalf("expected 0/0, got size=%d count=%d", size, count)
@@ -901,7 +1076,7 @@ func TestScanVODDirectory_Empty(t *testing.T) {
 func TestScanVODDirectory_NonExistent(t *testing.T) {
 	setupScanLogger(t)
 	idx := make(map[string]*ClipInfo)
-	size, count := scanVODDirectory("/nonexistent/vod", idx)
+	size, count, _ := scanVODDirectory("/nonexistent/vod", idx, nil)
 	if size != 0 || count != 0 {
 		t.Fatalf("expected 0/0 for non-existent dir, got %d/%d", size, count)
 	}
@@ -939,7 +1114,7 @@ func TestScanVODDirectory_WithFiles(t *testing.T) {
 	}
 
 	idx := make(map[string]*ClipInfo)
-	size, count := scanVODDirectory(vodDir, idx)
+	size, count, _ := scanVODDirectory(vodDir, idx, nil)
 
 	if count != 1 {
 		t.Fatalf("expected 1 artifact, got %d", count)
@@ -980,7 +1155,7 @@ func TestScanVODDirectory_DuplicateHashKeepsFirstSortedFile(t *testing.T) {
 	}
 
 	idx := make(map[string]*ClipInfo)
-	size, count := scanVODDirectory(vodDir, idx)
+	size, count, _ := scanVODDirectory(vodDir, idx, nil)
 
 	if count != 1 {
 		t.Fatalf("expected one indexed artifact, got %d", count)
@@ -1079,7 +1254,7 @@ func TestScanClipsDirectory_Empty(t *testing.T) {
 	}
 
 	idx := make(map[string]*ClipInfo)
-	size, count := scanClipsDirectory(clipsDir, idx)
+	size, count, _ := scanClipsDirectory(clipsDir, idx, nil)
 	if size != 0 || count != 0 {
 		t.Fatalf("expected 0/0, got %d/%d", size, count)
 	}
@@ -1088,7 +1263,7 @@ func TestScanClipsDirectory_Empty(t *testing.T) {
 func TestScanClipsDirectory_NonExistent(t *testing.T) {
 	setupScanLogger(t)
 	idx := make(map[string]*ClipInfo)
-	size, count := scanClipsDirectory("/nonexistent/clips", idx)
+	size, count, _ := scanClipsDirectory("/nonexistent/clips", idx, nil)
 	if size != 0 || count != 0 {
 		t.Fatalf("expected 0/0 for non-existent dir, got %d/%d", size, count)
 	}
@@ -1115,7 +1290,7 @@ func TestScanClipsDirectory_NestedStreamDirs(t *testing.T) {
 	}
 
 	idx := make(map[string]*ClipInfo)
-	size, count := scanClipsDirectory(clipsDir, idx)
+	size, count, _ := scanClipsDirectory(clipsDir, idx, nil)
 
 	if count != 1 {
 		t.Fatalf("expected 1 clip, got %d", count)
@@ -1158,7 +1333,7 @@ func TestScanClipsDirectory_WithDtsh(t *testing.T) {
 	}
 
 	idx := make(map[string]*ClipInfo)
-	scanClipsDirectory(clipsDir, idx)
+	scanClipsDirectory(clipsDir, idx, nil)
 
 	info := idx[hash]
 	if info == nil {
@@ -1199,7 +1374,7 @@ func TestScanDVRDirectory_NestedStructure(t *testing.T) {
 	}
 
 	idx := make(map[string]*ClipInfo)
-	size, count := scanDVRDirectory(dvrDir, idx)
+	size, count, _ := scanDVRDirectory(dvrDir, idx)
 
 	if count != 1 {
 		t.Fatalf("expected 1 DVR artifact, got %d", count)
@@ -1228,7 +1403,7 @@ func TestScanDVRDirectory_NestedStructure(t *testing.T) {
 func TestScanDVRDirectory_NonExistent(t *testing.T) {
 	setupScanLogger(t)
 	idx := make(map[string]*ClipInfo)
-	size, count := scanDVRDirectory("/nonexistent/dvr", idx)
+	size, count, _ := scanDVRDirectory("/nonexistent/dvr", idx)
 	if size != 0 || count != 0 {
 		t.Fatalf("expected 0/0, got %d/%d", size, count)
 	}

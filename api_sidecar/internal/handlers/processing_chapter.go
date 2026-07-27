@@ -370,7 +370,14 @@ loop:
 	}
 	outputs, speedFields := processingSpeedTelemetry(outputs, recordingEnd, speedSampler, pushStartWallMs)
 	log.WithFields(speedFields).Info("Chapter finalize completed")
-	h.sendResult(send, req.GetJobId(), "completed", "", outputs, outputPath, outputSizeBytes)
+	var chapterTracks []*ipcpb.StreamTrack
+	chapterTracksPresent := recordingEnd != nil
+	var chapterDurationMs int64
+	if recordingEnd != nil {
+		chapterTracks = recordingEnd.FullTracks
+		chapterDurationMs = recordingEnd.MediaDurationMs // measured muxed output duration → catalog
+	}
+	h.sendCompletedResult(send, req.GetJobId(), outputs, outputPath, outputSizeBytes, chapterDurationMs, chapterTracks, chapterTracksPresent)
 	log.Info("Chapter finalize result sent, artifact registered with Foghorn")
 
 	// Proactive DTSH generation, mirrored from the VOD processing path

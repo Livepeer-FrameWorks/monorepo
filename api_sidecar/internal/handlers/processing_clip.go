@@ -305,7 +305,8 @@ loop:
 
 	streamOutputs, speedFields := processingSpeedTelemetry(streamOutputs, recordingEnd, speedSampler, pushStartWallMs)
 	log.WithFields(speedFields).Info("Clip processing completed")
-	h.sendResultWithMediaDuration(send, req.GetJobId(), "completed", "", streamOutputs, outputPath, outputSizeBytes, recordingEnd.MediaDurationMs)
+	// recordingEnd is guaranteed set on this path, so tracks are authoritative (present=true).
+	h.sendCompletedResult(send, req.GetJobId(), streamOutputs, outputPath, outputSizeBytes, recordingEnd.MediaDurationMs, recordingEnd.FullTracks, true)
 	log.Info("Clip processing result sent, artifact registered with Foghorn")
 
 	// Trigger storage check so the .mkv + .dtsh freeze to S3 promptly.

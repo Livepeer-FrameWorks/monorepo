@@ -19,9 +19,10 @@ import (
 )
 
 // TriggerWAL durably stores MistTrigger payloads for non-blocking final
-// triggers (USER_END, STREAM_END, PUSH_END, RECORDING_END,
-// RECORDING_SEGMENT, LIVEPEER_SEGMENT_COMPLETE,
-// PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE). Entries persist until Foghorn
+// triggers (USER_END, STREAM_END, PUSH_END, PUSH_INPUT_CLOSE,
+// RECORDING_END, RECORDING_SEGMENT, LIVEPEER_SEGMENT_COMPLETE,
+// PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE — the mist.IsDurableTriggerType
+// set). Entries persist until Foghorn
 // returns a positive MistTriggerAck. On disconnect or restart the
 // forwarder replays all entries; identical re-deliveries from Mist are
 // idempotent because the natural key is the source_event_id which is

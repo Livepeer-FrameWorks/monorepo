@@ -81,6 +81,21 @@ type PrometheusMonitor struct {
 	// Artifact index for fast VOD lookups
 	artifactIndex    map[string]*ClipInfo // clipHash -> ClipInfo
 	lastArtifactScan time.Time
+	// artifactIndexTrusted is set once a COMPLETE filesystem scan has populated artifactIndex. A scan
+	// that hit a directory-read error is not allowed to replace the index (last-good is retained), and
+	// until the first complete scan the reported snapshot is marked incomplete so Foghorn does not
+	// treat an empty/partial index as an authoritative "node holds nothing" and orphan real copies.
+	artifactIndexTrusted bool
+	// artifactScanHealthy tracks the CURRENT scan's health, SEPARATELY from the sticky artifactIndexTrusted.
+	// A complete scan sets it true; an incomplete scan (lost mount / read error) sets it FALSE while the
+	// last-good index is retained for observability. captureArtifactSnapshot flags the report incomplete
+	// whenever this is false, so Foghorn cordons the node from artifact routing instead of routing to a
+	// stale inventory the disk can no longer back. Without this, a failed scan after a good one would
+	// still report "complete" (trusted stays true) and leave vanished copies routable.
+	artifactScanHealthy bool
+	// lastScanGen is the generation of the newest scan whose result has been published. A slower OLDER
+	// scan (lower generation) that finishes after a newer one must NOT overwrite it.
+	lastScanGen uint64
 
 	// Shared Mist API client
 	mistClient *mist.Client
@@ -113,6 +128,55 @@ type PrometheusMonitor struct {
 var prometheusMonitor *PrometheusMonitor
 var monitorLogger logging.Logger
 var fileStabilityThreshold = 10 * time.Second
+
+// Artifact-report ordering. forwardNodeMetrics runs on concurrent goroutines, so the whole-node
+// artifact snapshot and its sequence must be captured together, under one lock, or a newer snapshot
+// could be paired with an older sequence. artifactReportSeq is a strictly-monotonic per-process
+// counter (only ever increments). It orders reports WITHIN one control connection; Foghorn pairs it
+// with the connection's ownership fence to order across reconnects.
+var (
+	artifactReportMu  sync.Mutex
+	artifactReportSeq int64
+)
+
+// artifactScanGen issues a strictly-monotonic generation to each scanLocalArtifacts call at its START,
+// so a slow older scan's result can be discarded at commit time if a newer scan already published
+// (generation-checked publication — prevents overlapping scans from committing out of order).
+var artifactScanGen atomic.Uint64
+
+// artifactMutationGen is bumped by every POINT mutation of artifactIndex (a deletion or a DTSH update).
+// A scan records it at start and rejects its own publish if it changed, because a scan enumerates disk
+// WITHOUT the lock: a delete/DTSH that committed after enumeration but before publication would
+// otherwise be silently reverted by the scan replacing the whole index. Generation-ordering alone only
+// orders scan-vs-scan; this orders scan-vs-point-mutation.
+var artifactMutationGen atomic.Uint64
+
+// captureArtifactSnapshot returns the current whole-node artifact snapshot paired atomically with a
+// fresh monotonic sequence, so sequence order always matches snapshot-capture order. incomplete is true
+// when the inventory is not authoritative — either no COMPLETE scan has ever populated the index
+// (artifactIndexTrusted false) OR the most recent scan hit a traversal/mount failure
+// (artifactScanHealthy false). Foghorn must then NOT apply the snapshot as an authoritative whole-node
+// inventory, and cordons the node from artifact routing, because a partial/empty/stale list would
+// orphan real copies. A healthy complete scan clears both flags.
+func captureArtifactSnapshot() (artifacts []*ipcpb.StoredArtifact, seq int64, incomplete bool) {
+	artifactReportMu.Lock()
+	defer artifactReportMu.Unlock()
+	artifactReportSeq++
+	trusted, healthy := true, true
+	var arts []*ipcpb.StoredArtifact
+	if prometheusMonitor != nil {
+		// Read the readiness flags and the inventory under ONE lock acquisition, so an incomplete scan
+		// committing concurrently can never yield incomplete=false paired with a stale inventory.
+		prometheusMonitor.mutex.RLock()
+		trusted = prometheusMonitor.artifactIndexTrusted
+		healthy = prometheusMonitor.artifactScanHealthy
+		arts = storedArtifactsLocked()
+		prometheusMonitor.mutex.RUnlock()
+	}
+	// Incomplete when there has never been a complete scan (!trusted) OR the most recent scan failed
+	// (!healthy). The latter re-arms Foghorn's artifact cordon after a disk disappears.
+	return arts, artifactReportSeq, !trusted || !healthy
+}
 
 var (
 	streamViewers = promauto.NewGaugeVec(
@@ -378,6 +442,9 @@ func (pm *PrometheusMonitor) monitorNodes() {
 	defer artifactTicker.Stop()
 
 	var clientTickCount uint64
+
+	// The initial startup scan is performed synchronously in Init (handlers.go); do NOT launch a second
+	// one here — two concurrent startup scans could publish out of order. Periodic rescans run below.
 
 	for {
 		select {
@@ -1495,48 +1562,118 @@ func (pm *PrometheusMonitor) getLastJSONData() map[string]any {
 	return nil
 }
 
-// scanLocalArtifacts scans the local storage for clip and DVR artifacts and updates the artifact index
-func scanLocalArtifacts(basePath string) (uint64, int) {
+// scanLocalArtifacts rebuilds the whole-node artifact index from the filesystem. complete is false
+// when any directory listing failed, meaning the freshly-built index may be MISSING real artifacts.
+// In that case the index is NOT replaced — the last-good index is retained — so a transient IO error
+// can never truncate the node's reported inventory and make Foghorn orphan live copies.
+func scanLocalArtifacts(basePath string) (totalSize uint64, artifactCount int, complete bool) {
 	if basePath == "" {
-		return 0, 0
+		return 0, 0, true
 	}
 
-	var totalSize uint64
-	artifactCount := 0
+	// This scan's generation, taken at START. At commit, a stale (lower-generation) result is discarded
+	// so a slow older scan never overwrites a newer scan's already-published inventory.
+	gen := artifactScanGen.Add(1)
+	// Point-mutation generation at scan START. This scan enumerates disk WITHOUT the lock; if a
+	// delete/DTSH point mutation commits before we publish, artifactMutationGen changes and the scan's
+	// whole-index replacement is stale (it could resurrect a deleted entry or erase a newer mutation),
+	// so it is discarded at commit.
+	baseMut := artifactMutationGen.Load()
+
 	newArtifactIndex := make(map[string]*ClipInfo)
+	complete = true
+
+	// Snapshot the last-good index so a transient young/unstable file (which is NOT a traversal
+	// failure) can be RETAINED rather than dropped. This is a DEEP copy taken under the lock: the live
+	// map and its *ClipInfo values are mutated in place by the DTSH/deletion handlers (also under the
+	// lock), so aliasing the map and reading it after unlock would be a data race / concurrent-map
+	// panic. The copy is an immutable read-only view the scan can consult without the lock.
+	var priorIndex map[string]*ClipInfo
+	if prometheusMonitor != nil {
+		prometheusMonitor.mutex.RLock()
+		priorIndex = make(map[string]*ClipInfo, len(prometheusMonitor.artifactIndex))
+		for k, v := range prometheusMonitor.artifactIndex {
+			cp := *v
+			priorIndex[k] = &cp
+		}
+		prometheusMonitor.mutex.RUnlock()
+	}
+
+	// A missing/unreadable storage ROOT (e.g. an unmounted disk) must NOT be reported as an empty
+	// inventory — that would orphan every real local copy at Foghorn. Treat it as an incomplete scan so
+	// the last-good index is retained. An intentionally-absent optional subdirectory (clips/dvr/vod) with
+	// the root present is still handled per-subdir as legitimately empty. Fail closed: any stat error
+	// (not-exist, permission, mount gone) marks the scan incomplete.
+	if _, err := os.Stat(basePath); err != nil {
+		monitorLogger.WithError(err).WithField("base_path", basePath).Warn("Storage root unavailable; marking artifact scan incomplete, retaining last-good index")
+		complete = false
+	}
 
 	// Scan clips directory
 	clipsDir := fmt.Sprintf("%s/clips", basePath)
-	clipSize, clipCount := scanClipsDirectory(clipsDir, newArtifactIndex)
+	clipSize, clipCount, clipOK := scanClipsDirectory(clipsDir, newArtifactIndex, priorIndex)
 	totalSize += clipSize
 	artifactCount += clipCount
+	complete = complete && clipOK
 
 	// Scan DVR directory
 	dvrDir := fmt.Sprintf("%s/dvr", basePath)
-	dvrSize, dvrCount := scanDVRDirectory(dvrDir, newArtifactIndex)
+	dvrSize, dvrCount, dvrOK := scanDVRDirectory(dvrDir, newArtifactIndex)
 	totalSize += dvrSize
 	artifactCount += dvrCount
+	complete = complete && dvrOK
 
 	// Scan VOD directory
 	vodDir := fmt.Sprintf("%s/vod", basePath)
-	vodSize, vodCount := scanVODDirectory(vodDir, newArtifactIndex)
+	vodSize, vodCount, vodOK := scanVODDirectory(vodDir, newArtifactIndex, priorIndex)
 	totalSize += vodSize
 	artifactCount += vodCount
+	complete = complete && vodOK
 
-	// Update the PrometheusMonitor artifact index atomically
 	if prometheusMonitor != nil {
 		prometheusMonitor.mutex.Lock()
-		prometheusMonitor.artifactIndex = newArtifactIndex
-		prometheusMonitor.lastArtifactScan = time.Now()
+		// Generation-checked publication: discard this scan's result if a NEWER scan already published
+		// (out-of-order slow scan) OR a point mutation (delete/DTSH) raced it after enumeration. Either
+		// way replacing the whole index would resurrect a stale/deleted entry or clobber a fresher one.
+		stale := gen <= prometheusMonitor.lastScanGen || artifactMutationGen.Load() != baseMut
+		if !stale {
+			prometheusMonitor.lastScanGen = gen
+			prometheusMonitor.lastArtifactScan = time.Now()
+			if complete {
+				// Only a complete scan may replace the authoritative index and mark it trusted + healthy.
+				prometheusMonitor.artifactIndex = newArtifactIndex
+				prometheusMonitor.artifactIndexTrusted = true
+				prometheusMonitor.artifactScanHealthy = true
+			} else {
+				// Retain the last-good index for observability, but mark the CURRENT inventory unhealthy so
+				// the next report is flagged incomplete and Foghorn cordons this node from artifact routing.
+				prometheusMonitor.artifactScanHealthy = false
+			}
+		}
+		trusted := prometheusMonitor.artifactIndexTrusted
+		healthy := prometheusMonitor.artifactScanHealthy
+		retained := len(prometheusMonitor.artifactIndex)
 		prometheusMonitor.mutex.Unlock()
 
-		monitorLogger.WithFields(logging.Fields{
-			"total_artifacts": len(newArtifactIndex),
-			"total_size":      totalSize,
-		}).Debug("Updated artifact index from filesystem scan")
+		switch {
+		case stale:
+			monitorLogger.WithField("base_path", basePath).Debug("Discarded out-of-order artifact scan result; a newer scan already published")
+		case complete:
+			monitorLogger.WithFields(logging.Fields{
+				"total_artifacts": len(newArtifactIndex),
+				"total_size":      totalSize,
+			}).Debug("Updated artifact index from filesystem scan")
+		default:
+			monitorLogger.WithFields(logging.Fields{
+				"scanned_artifacts": artifactCount,
+				"retained_index":    retained,
+				"index_trusted":     trusted,
+				"scan_healthy":      healthy,
+			}).Warn("Artifact scan incomplete (mount/read error); retaining last-good index, marking inventory unhealthy so Foghorn cordons this node")
+		}
 	}
 
-	return totalSize, artifactCount
+	return totalSize, artifactCount, complete
 }
 
 func markLocalDtshPresent(kind, hash, localPath string) {
@@ -1580,6 +1717,7 @@ func markLocalDtshPresent(kind, hash, localPath string) {
 	existing.Format = strings.TrimPrefix(ext, ".")
 	existing.SizeBytes = uint64(info.Size())
 	existing.HasDtsh = true
+	artifactMutationGen.Add(1) // point mutation — invalidate any in-flight scan's publish
 	existing.ArtifactType = artifactType
 	if existing.CreatedAt.IsZero() {
 		existing.CreatedAt = info.ModTime()
@@ -1606,19 +1744,22 @@ func streamNameFromClipPath(path string) string {
 	return ""
 }
 
-// scanVODDirectory scans the VOD directory for user-uploaded assets
-func scanVODDirectory(vodDir string, artifactIndex map[string]*ClipInfo) (uint64, int) {
+// scanVODDirectory scans the VOD directory for user-uploaded assets. The bool return is false when a
+// directory listing OR a per-file metadata read failed (other than the file legitimately vanishing),
+// so the caller can retain the last-good index instead of truncating and orphaning live copies.
+func scanVODDirectory(vodDir string, artifactIndex, priorIndex map[string]*ClipInfo) (uint64, int, bool) {
 	if _, err := os.Stat(vodDir); os.IsNotExist(err) {
-		return 0, 0
+		return 0, 0, true
 	}
 
 	var totalSize uint64
 	artifactCount := 0
+	complete := true
 
 	entries, err := os.ReadDir(vodDir)
 	if err != nil {
 		monitorLogger.WithError(err).Error("Failed to read VOD directory")
-		return 0, 0
+		return 0, 0, false
 	}
 
 	for _, entry := range entries {
@@ -1645,9 +1786,25 @@ func scanVODDirectory(vodDir string, artifactIndex map[string]*ClipInfo) (uint64
 
 		info, err := entry.Info()
 		if err != nil {
+			// A file that vanished between ReadDir and Info legitimately left the inventory; any other
+			// metadata error means we may be OMITTING a live artifact, so mark the scan incomplete.
+			if !os.IsNotExist(err) {
+				monitorLogger.WithError(err).WithField("file_name", name).Warn("VOD file metadata read failed; marking scan incomplete")
+				complete = false
+			}
 			continue
 		}
 		if time.Since(info.ModTime()) < fileStabilityThreshold {
+			// A just-finalized VOD is still settling. A transient young file is NOT a traversal failure, so
+			// do NOT mark the whole scan incomplete — that would cordon EVERY artifact on the node for a
+			// routine finalization. Retain the last-good entry if we already reported this artifact (so a
+			// rewritten live copy is never dropped); a brand-new file is simply omitted until it stabilises.
+			if prior, ok := priorIndex[hash]; ok {
+				artifactIndex[hash] = prior
+				artifactCount++
+				totalSize += prior.SizeBytes
+			}
+			monitorLogger.WithField("file_name", name).Debug("VOD file too new to be stable; retained last-good entry (scan stays complete)")
 			continue
 		}
 
@@ -1668,7 +1825,7 @@ func scanVODDirectory(vodDir string, artifactIndex map[string]*ClipInfo) (uint64
 		artifactCount++
 	}
 
-	return totalSize, artifactCount
+	return totalSize, artifactCount, complete
 }
 
 func isHex(value string) bool {
@@ -1679,23 +1836,25 @@ func isHex(value string) bool {
 	return err == nil
 }
 
-// scanClipsDirectory scans the clips directory for clip artifacts
-func scanClipsDirectory(clipsDir string, artifactIndex map[string]*ClipInfo) (uint64, int) {
+// scanClipsDirectory scans the clips directory for clip artifacts. The bool return is false when a
+// directory listing failed (root or a per-stream subdir), signalling a possibly-truncated result.
+func scanClipsDirectory(clipsDir string, artifactIndex, priorIndex map[string]*ClipInfo) (uint64, int, bool) {
 	// Check if clips directory exists
 	if _, err := os.Stat(clipsDir); os.IsNotExist(err) {
-		return 0, 0
+		return 0, 0, true
 	}
 
 	vodDir := filepath.Clean(filepath.Join(filepath.Dir(clipsDir), "vod"))
 
 	var totalSize uint64
 	artifactCount := 0
+	complete := true
 
 	// Walk the clips directory structure
 	entries, err := os.ReadDir(clipsDir)
 	if err != nil {
 		monitorLogger.WithError(err).Error("Failed to read clips directory")
-		return 0, 0
+		return 0, 0, false
 	}
 
 	for _, entry := range entries {
@@ -1709,8 +1868,27 @@ func scanClipsDirectory(clipsDir string, artifactIndex map[string]*ClipInfo) (ui
 					filePath := fmt.Sprintf("%s/%s", clipsDir, entry.Name())
 
 					// Get file info
-					if fileInfo, err := os.Stat(filePath); err == nil {
+					fileInfo, err := os.Stat(filePath)
+					if err != nil {
+						// A file that vanished mid-scan legitimately left; any other metadata error means we may
+						// be OMITTING a live clip, so mark the scan incomplete rather than truncate.
+						if !os.IsNotExist(err) {
+							monitorLogger.WithError(err).WithField("file_path", filePath).Warn("Clip file metadata read failed; marking scan incomplete")
+							complete = false
+						}
+						continue
+					}
+					{
 						if time.Since(fileInfo.ModTime()) < fileStabilityThreshold {
+							// A just-finalized clip is still settling. A transient young file is NOT a traversal
+							// failure, so do NOT cordon the whole node — retain the last-good entry if already
+							// reported (never drop a rewritten live copy); a brand-new file is omitted until stable.
+							if prior, ok := priorIndex[clipHash]; ok {
+								artifactIndex[clipHash] = prior
+								artifactCount++
+								totalSize += prior.SizeBytes
+							}
+							monitorLogger.WithField("file_path", filePath).Debug("Clip file too new to be stable; retained last-good entry (scan stays complete)")
 							continue
 						}
 						// Try to determine stream name from symlink target
@@ -1765,6 +1943,9 @@ func scanClipsDirectory(clipsDir string, artifactIndex map[string]*ClipInfo) (ui
 
 		streamEntries, err := os.ReadDir(streamDir)
 		if err != nil {
+			// A per-stream listing failure would silently drop that stream's clips from the report.
+			monitorLogger.WithError(err).WithField("stream_dir", streamDir).Warn("Failed to read clip stream directory; marking scan incomplete")
+			complete = false
 			continue
 		}
 
@@ -1786,8 +1967,27 @@ func scanClipsDirectory(clipsDir string, artifactIndex map[string]*ClipInfo) (ui
 			filePath := fmt.Sprintf("%s/%s", streamDir, clipFile.Name())
 
 			// Get file info
-			if fileInfo, err := os.Stat(filePath); err == nil {
+			fileInfo, err := os.Stat(filePath)
+			if err != nil {
+				// A file that vanished mid-scan legitimately left; any other metadata error means we may
+				// be OMITTING a live clip, so mark the scan incomplete rather than truncate.
+				if !os.IsNotExist(err) {
+					monitorLogger.WithError(err).WithField("file_path", filePath).Warn("Clip file metadata read failed; marking scan incomplete")
+					complete = false
+				}
+				continue
+			}
+			{
 				if time.Since(fileInfo.ModTime()) < fileStabilityThreshold {
+					// A just-finalized clip is still settling. A transient young file is NOT a traversal
+					// failure, so do NOT cordon the whole node — retain the last-good entry if already
+					// reported (never drop a rewritten live copy); a brand-new file is omitted until stable.
+					if prior, ok := priorIndex[clipHash]; ok {
+						artifactIndex[clipHash] = prior
+						artifactCount++
+						totalSize += prior.SizeBytes
+					}
+					monitorLogger.WithField("file_path", filePath).Debug("Clip file too new to be stable; retained last-good entry (scan stays complete)")
 					continue
 				}
 				hasDtsh := validLocalDtsh(filePath + ".dtsh")
@@ -1811,7 +2011,7 @@ func scanClipsDirectory(clipsDir string, artifactIndex map[string]*ClipInfo) (ui
 		}
 	}
 
-	return totalSize, artifactCount
+	return totalSize, artifactCount, complete
 }
 
 // calculateDVRSegmentSize parses an HLS manifest and sums up segment file sizes
@@ -1843,21 +2043,23 @@ func calculateDVRSegmentSize(manifestPath, baseDir string) (uint64, int) {
 	return totalSize, segmentCount
 }
 
-// scanDVRDirectory scans the DVR directory for DVR manifest files
-func scanDVRDirectory(dvrDir string, artifactIndex map[string]*ClipInfo) (uint64, int) {
+// scanDVRDirectory scans the DVR directory for DVR manifest files. The bool return is false when a
+// directory listing failed (root or a per-stream subdir), signalling a possibly-truncated result.
+func scanDVRDirectory(dvrDir string, artifactIndex map[string]*ClipInfo) (uint64, int, bool) {
 	// Check if DVR directory exists
 	if _, err := os.Stat(dvrDir); os.IsNotExist(err) {
-		return 0, 0
+		return 0, 0, true
 	}
 
 	var totalSize uint64
 	artifactCount := 0
+	complete := true
 
 	// Walk the DVR directory structure: /dvr/{stream_id}/{dvr_hash}/{dvr_hash}.m3u8
 	entries, err := os.ReadDir(dvrDir)
 	if err != nil {
 		monitorLogger.WithError(err).Error("Failed to read DVR directory")
-		return 0, 0
+		return 0, 0, false
 	}
 
 	activeDVRs := control.GetActiveDVRHashes()
@@ -1873,6 +2075,9 @@ func scanDVRDirectory(dvrDir string, artifactIndex map[string]*ClipInfo) (uint64
 
 		streamEntries, err := os.ReadDir(streamDVRDir)
 		if err != nil {
+			// A per-stream listing failure would silently drop that stream's DVRs from the report.
+			monitorLogger.WithError(err).WithField("stream_dvr_dir", streamDVRDir).Warn("Failed to read DVR stream directory; marking scan incomplete")
+			complete = false
 			continue
 		}
 
@@ -1896,6 +2101,12 @@ func scanDVRDirectory(dvrDir string, artifactIndex map[string]*ClipInfo) (uint64
 			// Check if manifest exists
 			fileInfo, err := os.Stat(manifestPath)
 			if err != nil {
+				// No manifest (not-exist) legitimately skips; any other error means we may be OMITTING a
+				// live DVR whose manifest we simply couldn't read, so mark the scan incomplete.
+				if !os.IsNotExist(err) {
+					monitorLogger.WithError(err).WithField("manifest_path", manifestPath).Warn("DVR manifest metadata read failed; marking scan incomplete")
+					complete = false
+				}
 				continue // No manifest in this directory
 			}
 
@@ -1935,7 +2146,7 @@ func scanDVRDirectory(dvrDir string, artifactIndex map[string]*ClipInfo) (uint64
 		}
 	}
 
-	return totalSize, artifactCount
+	return totalSize, artifactCount, complete
 }
 
 // GetStoredArtifacts returns artifacts from the global prometheusMonitor's artifactIndex
@@ -1943,10 +2154,16 @@ func GetStoredArtifacts() []*ipcpb.StoredArtifact {
 	if prometheusMonitor == nil {
 		return nil
 	}
-
 	prometheusMonitor.mutex.RLock()
 	defer prometheusMonitor.mutex.RUnlock()
+	return storedArtifactsLocked()
+}
 
+// storedArtifactsLocked builds the whole-node artifact slice from artifactIndex. The caller MUST hold
+// prometheusMonitor.mutex. A caller that also reads the readiness flags (artifactIndexTrusted /
+// artifactScanHealthy) must do so under the SAME lock acquisition, so the reported inventory and its
+// flags are one consistent snapshot — an incomplete scan can never commit between the two reads.
+func storedArtifactsLocked() []*ipcpb.StoredArtifact {
 	var artifacts []*ipcpb.StoredArtifact
 	for clipHash, clipInfo := range prometheusMonitor.artifactIndex {
 		artifact := &ipcpb.StoredArtifact{
@@ -2006,6 +2223,9 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 		DeployMode:        firstNonEmptyString(os.Getenv("DEPLOY_MODE"), "native"),
 		Os:                runtime.GOOS,
 		Arch:              runtime.GOARCH,
+		// artifacts_report_revision is assigned atomically WITH the artifact snapshot in
+		// enrichNodeLifecycleTrigger (captureArtifactSnapshot), not here — pairing them here would
+		// let a concurrent report attach a newer snapshot to this older revision.
 	}
 
 	if jsonData != nil {
@@ -2377,8 +2597,9 @@ func enrichNodeLifecycleTrigger(mistTrigger *ipcpb.MistTrigger, capIngest, capEd
 			nodeUpdate.Limits = limits
 		}
 
-		// Add artifacts from artifactIndex
-		nodeUpdate.Artifacts = GetStoredArtifacts()
+		// Add artifacts from artifactIndex, paired atomically with this report's sequence. incomplete
+		// tells Foghorn not to treat a pre-first-complete-scan snapshot as authoritative inventory.
+		nodeUpdate.Artifacts, nodeUpdate.ArtifactsReportSeq, nodeUpdate.ArtifactsSnapshotIncomplete = captureArtifactSnapshot()
 
 		// Attach tenant_id from last ConfigSeed (provided by Foghorn)
 		if t := sidecarcfg.GetTenantID(); t != "" {

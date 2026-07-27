@@ -2,6 +2,9 @@ package handlers
 
 import (
 	"math"
+	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,6 +13,63 @@ import (
 
 func newTestCleanupMonitor() *CleanupMonitor {
 	return &CleanupMonitor{logger: logrus.New()}
+}
+
+// TestGetCleanupCandidates_ConcurrentDtshMutationNoRace is the aliasing regression: getCleanupCandidates
+// snapshots the artifact index under the monitor lock and then reads each entry's CreatedAt/AccessCount/
+// LastAccessed AFTER releasing it. Before the fix the snapshot used maps.Copy, which duplicated only the
+// map buckets and left every *ClipInfo shared with the live index — so those post-unlock reads raced the
+// DTSH/access mutations other handlers apply under the lock. The deep-copy snapshot makes the read view
+// immutable. Run under -race: with aliasing this fails; with the value-struct copy it is clean.
+func TestGetCleanupCandidates_ConcurrentDtshMutationNoRace(t *testing.T) {
+	oldMonitor := prometheusMonitor
+	t.Cleanup(func() { prometheusMonitor = oldMonitor })
+
+	const hash = "202401011200abcdef1234" // >=18 chars so extractArtifactHashFromPath accepts it
+	prometheusMonitor = &PrometheusMonitor{artifactIndex: map[string]*ClipInfo{
+		hash: {CreatedAt: time.Now().Add(-2 * time.Hour), AccessCount: 1, LastAccessed: time.Now()},
+	}}
+
+	clipsDir := t.TempDir()
+	clipPath := filepath.Join(clipsDir, hash+".mp4")
+	if err := os.WriteFile(clipPath, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * time.Hour) // older than minRetentionHours so it becomes a candidate
+	if err := os.Chtimes(clipPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	cm := &CleanupMonitor{logger: logrus.New(), minRetentionHours: 1}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	// Reader: repeatedly snapshot + read the *ClipInfo fields after unlocking.
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			if _, err := cm.getCleanupCandidates(clipsDir, "clip"); err != nil {
+				t.Errorf("getCleanupCandidates: %v", err)
+				return
+			}
+		}
+	}()
+	// Mutator: mutate the live entry's fields under the monitor lock, exactly as markLocalDtshPresent /
+	// access recording do.
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			prometheusMonitor.mutex.Lock()
+			if ci := prometheusMonitor.artifactIndex[hash]; ci != nil {
+				ci.HasDtsh = true
+				ci.AccessCount++
+				ci.LastAccessed = time.Now()
+				ci.CreatedAt = ci.CreatedAt.Add(time.Millisecond)
+			}
+			prometheusMonitor.mutex.Unlock()
+		}
+	}()
+	wg.Wait()
 }
 
 func TestCalculateCleanupPriority_OldUnaccessed(t *testing.T) {

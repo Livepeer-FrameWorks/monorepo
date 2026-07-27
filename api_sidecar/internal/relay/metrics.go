@@ -96,16 +96,6 @@ var (
 		},
 		[]string{"source", "status"},
 	)
-
-	// dtshUpload counts direct .dtsh uploads from the relay to S3.
-	dtshUpload = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "helmsman",
-			Name:      "dtsh_upload_total",
-			Help:      "Direct .dtsh sidecar uploads from the relay to S3 by status",
-		},
-		[]string{"status"},
-	)
 )
 
 // relayFormatLabel reduces a filename to a bounded container-format label.

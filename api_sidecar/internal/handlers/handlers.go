@@ -134,11 +134,12 @@ func Init(log logging.Logger, m *HandlerMetrics, nodeID string) {
 
 	// Perform initial artifact scan
 	if storagePath := os.Getenv("HELMSMAN_STORAGE_LOCAL_PATH"); storagePath != "" {
-		totalBytes, artifactCount := scanLocalArtifacts(storagePath)
+		totalBytes, artifactCount, complete := scanLocalArtifacts(storagePath)
 		logger.WithFields(logging.Fields{
 			"storage_path": storagePath,
 			"artifacts":    artifactCount,
 			"bytes":        totalBytes,
+			"complete":     complete,
 		}).Info("Initial artifact scan completed")
 	}
 
@@ -328,6 +329,7 @@ func (h *Handlers) deleteClipImmediate(clipHash string) (uint64, error) {
 	if !leaseHeld && prometheusMonitor != nil {
 		prometheusMonitor.mutex.Lock()
 		delete(prometheusMonitor.artifactIndex, clipHash)
+		artifactMutationGen.Add(1) // point mutation — invalidate any in-flight scan's publish
 		prometheusMonitor.mutex.Unlock()
 	}
 
@@ -539,6 +541,7 @@ func (h *Handlers) deleteVODImmediate(vodHash string) (uint64, error) {
 	if !leaseHeld && prometheusMonitor != nil {
 		prometheusMonitor.mutex.Lock()
 		delete(prometheusMonitor.artifactIndex, vodHash)
+		artifactMutationGen.Add(1) // point mutation — invalidate any in-flight scan's publish
 		prometheusMonitor.mutex.Unlock()
 	}
 
@@ -1827,6 +1830,7 @@ func processingRecordingEndEvent(rec *ipcpb.RecordingCompleteTrigger) Processing
 		ExitReason:      rec.GetExitReason(),
 		HumanExitReason: rec.GetHumanExitReason(),
 		Tracks:          processingTracksFromProto(rec.GetTracks()),
+		FullTracks:      rec.GetTracks(),
 		ProcessingSpeed: rec.GetProcessingSpeed(),
 	}
 }

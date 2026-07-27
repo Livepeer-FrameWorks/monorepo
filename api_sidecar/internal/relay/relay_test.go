@@ -413,30 +413,27 @@ func TestDtshPutLandsLocallyAndHandsOffFreeze(t *testing.T) {
 	}
 }
 
-func TestDtshPutUsesCachedPresignedUpload(t *testing.T) {
+// A .dtsh PUT NEVER triggers a direct relay upload to S3: that bypass (an unverified, untracked write under a
+// synthesized request id, and its writable-URL wire field) was removed. The freshly-written index lands on
+// local disk and is handed to the freeze subsystem, which drives the server-assigned STAGED publication.
+func TestDtshPutNoDirectUpload_UsesStagedHandoff(t *testing.T) {
 	dir := t.TempDir()
 	hash := "abc"
 	file := hash + ".mkv.dtsh"
 	body := validDtshBytes()
-	uploaded := make(chan []byte, 1)
+	hit := make(chan struct{}, 1)
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPut {
-			t.Errorf("method=%s want PUT", r.Method)
-		}
-		got, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Errorf("read upload body: %v", err)
-		}
-		uploaded <- got
+		hit <- struct{}{} // must NEVER fire — no direct upload path remains
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer up.Close()
 
-	s := newTestServer(t, dir, admission.CacheToDisk, &fakeResolver{}, nil)
+	fz := &fakeFreeze{}
+	s := newTestServer(t, dir, admission.CacheToDisk, &fakeResolver{}, fz)
+	// A cached resolve result carries NO writable .dtsh URL — the field is gone; the relay never uploads.
 	s.cache.Put("vod", hash, &ResolveResult{
-		DtshPresignedPut: up.URL,
-		URLTTLSeconds:    60,
-		cachedAt:         time.Now(),
+		URLTTLSeconds: 60,
+		cachedAt:      time.Now(),
 	})
 	ts := mount(t, s)
 	defer ts.Close()
@@ -451,13 +448,23 @@ func TestDtshPutUsesCachedPresignedUpload(t *testing.T) {
 		t.Fatalf("status=%d", resp.StatusCode)
 	}
 
+	// The index landed locally.
+	got, err := os.ReadFile(filepath.Join(dir, "vod", file))
+	if err != nil {
+		t.Fatalf("expected dtsh on disk: %v", err)
+	}
+	if !bytes.Equal(got, body) {
+		t.Fatalf("local dtsh=%q want=%q", got, body)
+	}
+	// The staged freeze handoff was invoked instead of a direct upload.
+	if len(fz.calls) != 1 {
+		t.Fatalf("expected exactly one staged freeze handoff, got %v", fz.calls)
+	}
+	// No direct upload was attempted.
 	select {
-	case got := <-uploaded:
-		if !bytes.Equal(got, body) {
-			t.Fatalf("uploaded=%q want=%q", got, body)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for direct .dtsh upload")
+	case <-hit:
+		t.Fatal("relay must NOT perform a direct .dtsh upload; the staged path is the only writer")
+	case <-time.After(300 * time.Millisecond):
 	}
 }
 

@@ -73,6 +73,10 @@ type ProcessingRecordingEndEvent struct {
 	ExitReason      string
 	HumanExitReason string
 	Tracks          []processingMetaVideoTrack
+	// FullTracks is the unreduced A/V track set from the RECORDING_END (codec/geometry/fps/
+	// bitrate/channels/sample_rate). Tracks above is a video-only reduction for completeness
+	// checks; FullTracks is what a completed job reports to Foghorn for durable persistence.
+	FullTracks      []*ipcpb.StreamTrack
 	ProcessingSpeed *ipcpb.ProcessingSpeedStats // Mist feeder speed stats, when reported
 }
 
@@ -931,7 +935,14 @@ loop:
 	// race for freshly-created clips.
 	outputs, speedFields := processingSpeedTelemetry(outputs, recordingEnd, speedSampler, pushStartWallMs)
 	log.WithFields(speedFields).Info("Processing completed")
-	h.sendResult(send, req.GetJobId(), "completed", "", outputs, outputPath, outputSizeBytes)
+	var vodTracks []*ipcpb.StreamTrack
+	var vodDurationMs int64
+	vodTracksPresent := recordingEnd != nil // captured a validated RECORDING_END → tracks authoritative
+	if recordingEnd != nil {
+		vodTracks = recordingEnd.FullTracks
+		vodDurationMs = recordingEnd.MediaDurationMs // real output duration → catalog duration
+	}
+	h.sendCompletedResult(send, req.GetJobId(), outputs, outputPath, outputSizeBytes, vodDurationMs, vodTracks, vodTracksPresent)
 	log.Info("Processing job result sent, artifact registered with Foghorn")
 
 	// Trigger storage check so the .mkv + .dtsh freeze to S3 promptly
@@ -2688,23 +2699,29 @@ func (h *ProcessingJobHandler) sendResult(send func(*ipcpb.ControlMessage), jobI
 	})
 }
 
-// sendResultWithMediaDuration is sendResult with the output's measured media
-// duration attached, so Foghorn can compare it against the requested span and
-// mark the artifact partial.
-func (h *ProcessingJobHandler) sendResultWithMediaDuration(send func(*ipcpb.ControlMessage), jobID, status, errMsg string, outputs map[string]string, outputPath string, outputSizeBytes, mediaDurationMs int64) {
+// sendCompletedResult reports a VALIDATED, completed processing job. It carries the accepted
+// full A/V track set (from the completion-gated RECORDING_END) and, when known, the output
+// media duration. This is the sole authoritative track-capture point — behind Helmsman's
+// stale/failed/retired-generation rejection — so Foghorn persists tracks by the already-resolved
+// artifact_hash alongside size/duration/readiness, rather than trusting a raw RECORDING_END.
+func (h *ProcessingJobHandler) sendCompletedResult(send func(*ipcpb.ControlMessage), jobID string, outputs map[string]string, outputPath string, outputSizeBytes, mediaDurationMs int64, tracks []*ipcpb.StreamTrack, tracksPresent bool) {
 	if send == nil {
 		return
 	}
+	res := &ipcpb.ProcessingJobResult{
+		JobId:           jobID,
+		Status:          "completed",
+		Outputs:         outputs,
+		OutputPath:      outputPath,
+		OutputSizeBytes: outputSizeBytes,
+		Tracks:          tracks,
+		TracksPresent:   tracksPresent,
+	}
+	if mediaDurationMs > 0 {
+		res.MediaDurationMs = &mediaDurationMs
+	}
 	send(&ipcpb.ControlMessage{
-		Payload: &ipcpb.ControlMessage_ProcessingJobResult{ProcessingJobResult: &ipcpb.ProcessingJobResult{
-			JobId:           jobID,
-			Status:          status,
-			Error:           errMsg,
-			Outputs:         outputs,
-			OutputPath:      outputPath,
-			OutputSizeBytes: outputSizeBytes,
-			MediaDurationMs: &mediaDurationMs,
-		}},
-		SentAt: timestamppb.Now(),
+		Payload: &ipcpb.ControlMessage_ProcessingJobResult{ProcessingJobResult: res},
+		SentAt:  timestamppb.Now(),
 	})
 }

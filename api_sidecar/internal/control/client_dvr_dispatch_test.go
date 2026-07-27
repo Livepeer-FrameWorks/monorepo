@@ -23,24 +23,52 @@ func withTestDVRManager(t *testing.T, dm *DVRManager) {
 	t.Cleanup(func() { dvrManager = prev })
 }
 
-func TestHandleDVRStartAlreadyActiveReportsFailure(t *testing.T) {
+// A repeat start for the SAME hash+stream is an idempotent ack (Foghorn's stale-'starting' recovery
+// re-dispatches lost starts): the handler must NOT emit a failed DVRStopped — the existing job's
+// progress keeps driving the recording.
+func TestHandleDVRStartRepeatSameStreamIsIdempotentAck(t *testing.T) {
 	dm := &DVRManager{
 		logger:      logging.NewLogger(),
-		jobs:        map[string]*DVRJob{"dvr-1": {DVRHash: "dvr-1", Status: "recording"}},
+		jobs:        map[string]*DVRJob{"dvr-1": {DVRHash: "dvr-1", InternalName: "stream-int", Status: "recording"}},
 		storagePath: t.TempDir(),
 	}
 	withTestDVRManager(t, dm)
 
 	var got *ipcpb.DVRStopped
 	handleDVRStart(logging.NewLogger(), &ipcpb.DVRStartRequest{
-		DvrHash:   "dvr-1",
-		StreamId:  "stream-1",
-		RequestId: "req-1",
-		Config:    &ipcpb.DVRConfig{Format: "hls"},
+		DvrHash:      "dvr-1",
+		InternalName: "stream-int",
+		StreamId:     "stream-1",
+		RequestId:    "req-1",
+		Config:       &ipcpb.DVRConfig{Format: "hls"},
+	}, func(m *ipcpb.ControlMessage) { got = m.GetDvrStopped() })
+
+	if got != nil {
+		t.Fatalf("idempotent repeat start must not emit a failed DVRStopped, got %+v", got)
+	}
+}
+
+// A start for a DIFFERENT stream on the same hash is a genuine conflict: the handler MUST emit a
+// terminal DVRStopped{status:"failed"} so Foghorn releases the request.
+func TestHandleDVRStartDifferentStreamReportsFailure(t *testing.T) {
+	dm := &DVRManager{
+		logger:      logging.NewLogger(),
+		jobs:        map[string]*DVRJob{"dvr-1": {DVRHash: "dvr-1", InternalName: "stream-A", Status: "recording"}},
+		storagePath: t.TempDir(),
+	}
+	withTestDVRManager(t, dm)
+
+	var got *ipcpb.DVRStopped
+	handleDVRStart(logging.NewLogger(), &ipcpb.DVRStartRequest{
+		DvrHash:      "dvr-1",
+		InternalName: "stream-B",
+		StreamId:     "stream-1",
+		RequestId:    "req-1",
+		Config:       &ipcpb.DVRConfig{Format: "hls"},
 	}, func(m *ipcpb.ControlMessage) { got = m.GetDvrStopped() })
 
 	if got == nil {
-		t.Fatal("a failed start must emit a terminal DVRStopped so Foghorn can release the request")
+		t.Fatal("a conflicting start (different stream, same hash) must emit a terminal DVRStopped")
 	}
 	if got.GetStatus() != "failed" || got.GetDvrHash() != "dvr-1" || got.GetRequestId() != "req-1" {
 		t.Fatalf("failure notification mismatch: %+v", got)

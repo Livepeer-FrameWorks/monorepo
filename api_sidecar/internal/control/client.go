@@ -38,6 +38,16 @@ import (
 
 const foghornInternalServerName = "foghorn.internal"
 
+// controlProtocolVersion is the control-protocol version this sidecar declares to Foghorn at registration.
+// Foghorn gates protocol-dependent dispatch on this OBSERVED value. Bump only in lockstep with a wire-contract
+// change Foghorn must gate on (and raise the corresponding *StagedProtocolMin there).
+//   - Version 1 = honors the staged freeze contract: uploads to the attempt-scoped staging key the presigned PUT
+//     targets and echoes the server-minted attempt id as SyncComplete.request_id.
+//   - Version 2 = ALSO honors the staged THUMBNAIL contract: the presigned thumbnail PUTs target per-attempt
+//     staging keys and this sidecar echoes ThumbnailUploadResponse.attempt_id in ThumbnailUploaded
+//     (ThumbnailStagedProtocolMin=2 on Foghorn). Serving it below this version gets no thumbnail mint.
+const controlProtocolVersion int32 = 2
+
 // DeleteClipFunc is the function type for clip deletion
 type DeleteClipFunc func(clipHash string) (uint64, error)
 
@@ -791,23 +801,24 @@ func runClient(addr string, logger logging.Logger) error {
 	hwSpecs := sidecarcfg.DetectHardware(cfg.StorageLocalPath)
 
 	reg := &ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_Register{Register: &ipcpb.Register{
-		NodeId:                nodeID,
-		Roles:                 roles,
-		CapIngest:             cfg.CapIngest,
-		CapEdge:               cfg.CapEdge,
-		CapStorage:            cfg.CapStorage,
-		CapProcessing:         cfg.CapProcessing,
-		StorageLocal:          cfg.StorageLocalPath,
-		StorageBucket:         cfg.StorageS3Bucket,
-		StoragePrefix:         cfg.StorageS3Prefix,
-		EnrollmentToken:       cfg.EnrollmentToken,
-		Fingerprint:           collectNodeFingerprint(),
-		CpuCores:              &hwSpecs.CPUCores,
-		MemoryGb:              &hwSpecs.MemoryGB,
-		DiskGb:                &hwSpecs.DiskGB,
-		RequestedMode:         parseRequestedMode(cfg.RequestedMode),
-		RelayBaseUrl:          relayBaseURL(),
-		AppliedManagedStreams: snapshotAppliedManagedStreamsForRegister(),
+		NodeId:                 nodeID,
+		Roles:                  roles,
+		CapIngest:              cfg.CapIngest,
+		CapEdge:                cfg.CapEdge,
+		CapStorage:             cfg.CapStorage,
+		CapProcessing:          cfg.CapProcessing,
+		StorageLocal:           cfg.StorageLocalPath,
+		StorageBucket:          cfg.StorageS3Bucket,
+		StoragePrefix:          cfg.StorageS3Prefix,
+		EnrollmentToken:        cfg.EnrollmentToken,
+		Fingerprint:            collectNodeFingerprint(),
+		CpuCores:               &hwSpecs.CPUCores,
+		MemoryGb:               &hwSpecs.MemoryGB,
+		DiskGb:                 &hwSpecs.DiskGB,
+		RequestedMode:          parseRequestedMode(cfg.RequestedMode),
+		RelayBaseUrl:           relayBaseURL(),
+		AppliedManagedStreams:  snapshotAppliedManagedStreamsForRegister(),
+		ControlProtocolVersion: controlProtocolVersion,
 	}}}
 	if err := stream.Send(reg); err != nil {
 		return err
@@ -982,7 +993,14 @@ func runClient(addr string, logger logging.Logger) error {
 			case *ipcpb.ControlMessage_EdgeMistAdminSessionResponse:
 				handleEdgeMistAdminSessionResponse(msg.GetRequestId(), x.EdgeMistAdminSessionResponse)
 			case *ipcpb.ControlMessage_ThumbnailUploadResponse:
-				go handleThumbnailUploadResponse(logger, x.ThumbnailUploadResponse, func(m *ipcpb.ControlMessage) { _ = stream.Send(m) }) //nolint:errcheck // best-effort report
+				// The ThumbnailUploaded echo is what drives Foghorn's publication (verify → CAS → publish); a
+				// dropped send would silently strand the attempt, so route it through the retry outbox — a send
+				// that fails (or a disconnected stream) is queued and redelivered on reconnect rather than lost.
+				go handleThumbnailUploadResponse(logger, x.ThumbnailUploadResponse, func(m *ipcpb.ControlMessage) {
+					if err := sendOrEnqueue(m); err != nil {
+						logger.WithError(err).Warn("ThumbnailUploaded completion queued for retry on reconnect")
+					}
+				})
 			case *ipcpb.ControlMessage_ProcessingJobRequest:
 				if processingJobHandler != nil {
 					go processingJobHandler(x.ProcessingJobRequest, func(m *ipcpb.ControlMessage) {
@@ -1510,7 +1528,7 @@ func SetProcessingJobHandler(handler ProcessingJobHandler) {
 
 // RequestFreezePermission asks Foghorn for permission and presigned URL to freeze an asset.
 // This is a blocking call that waits for Foghorn's response.
-func RequestFreezePermission(ctx context.Context, assetType, assetHash, localPath string, sizeBytes uint64, filenames []string) (*ipcpb.FreezePermissionResponse, error) {
+func RequestFreezePermission(ctx context.Context, assetType, assetHash string, sizeBytes uint64) (*ipcpb.FreezePermissionResponse, error) {
 	stream := getStream()
 	if stream == nil {
 		return nil, fmt.Errorf("gRPC control stream not connected")
@@ -1529,10 +1547,7 @@ func RequestFreezePermission(ctx context.Context, assetType, assetHash, localPat
 		RequestId: requestID,
 		AssetType: assetType,
 		AssetHash: assetHash,
-		LocalPath: localPath,
 		SizeBytes: sizeBytes,
-		NodeId:    getNodeID(),
-		Filenames: filenames,
 	}
 
 	msg := &ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_FreezePermissionRequest{FreezePermissionRequest: req}}
@@ -1889,24 +1904,6 @@ func SendFreezeProgress(requestID, assetHash string, percent uint32, bytesUpload
 	return stream.Send(msg)
 }
 
-// SendFreezeComplete sends freeze completion status to Foghorn.
-// Set localMissing=true when the local source file is gone (ENOENT) so Foghorn
-// can transition the row to sync_status='lost_local' and stop retrying.
-func SendFreezeComplete(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, localMissing bool) error {
-	complete := &ipcpb.FreezeComplete{
-		RequestId:    requestID,
-		AssetHash:    assetHash,
-		Status:       status,
-		S3Url:        s3URL,
-		SizeBytes:    sizeBytes,
-		Error:        errMsg,
-		LocalMissing: localMissing,
-	}
-
-	msg := &ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_FreezeComplete{FreezeComplete: complete}}
-	return sendOrEnqueue(msg)
-}
-
 // SendStorageLifecycle sends a storage lifecycle event to Foghorn (for analytics).
 // Queued for retry on disconnect since these feed ClickHouse storage_events.
 func SendStorageLifecycle(data *ipcpb.StorageLifecycleData) error {
@@ -2185,15 +2182,13 @@ func handleAuthorizeRelayPullResponse(response *ipcpb.AuthorizeRelayPullResponse
 // dtshIncluded indicates whether the .dtsh index file was included in the sync.
 // localMissing=true signals the local source file is gone (ENOENT) before sync;
 // Foghorn marks the row sync_status='lost_local' (terminal) and stops retries.
-func SendSyncComplete(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, dtshIncluded bool, localMissing bool) error {
+func SendSyncComplete(requestID, assetHash, status string, sizeBytes uint64, errMsg string, dtshIncluded bool, localMissing bool) error {
 	complete := &ipcpb.SyncComplete{
 		RequestId:    requestID,
 		AssetHash:    assetHash,
 		Status:       status,
-		S3Url:        s3URL,
 		SizeBytes:    sizeBytes,
 		Error:        errMsg,
-		NodeId:       getNodeID(),
 		DtshIncluded: dtshIncluded,
 		LocalMissing: localMissing,
 	}
@@ -2834,10 +2829,12 @@ func handleThumbnailUploadResponse(logger logging.Logger, resp *ipcpb.ThumbnailU
 		return
 	}
 
-	// Notify Foghorn that upload is complete
+	// Notify Foghorn that upload is complete. Echo the server-minted attempt id so Foghorn can bind this
+	// confirmation to the assignment it minted (the presigned s3_key values were per-attempt STAGING keys).
 	uploaded := &ipcpb.ThumbnailUploaded{
 		ThumbnailKey: thumbnailKey,
 		S3Keys:       uploadedKeys,
+		AttemptId:    resp.GetAttemptId(),
 	}
 	send(&ipcpb.ControlMessage{
 		SentAt:  timestamppb.Now(),

@@ -85,13 +85,16 @@ type StorageManager struct {
 	presignedClient PresignedTransfer
 
 	// Control IPC — function fields so tests can inject fakes
-	requestFreezePermission func(ctx context.Context, assetType, assetHash, localPath string, sizeBytes uint64, filenames []string) (*ipcpb.FreezePermissionResponse, error)
-	sendSyncComplete        func(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, dtshIncluded bool, localMissing bool) error
-	sendFreezeComplete      func(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, localMissing bool) error
+	requestFreezePermission func(ctx context.Context, assetType, assetHash string, sizeBytes uint64) (*ipcpb.FreezePermissionResponse, error)
+	sendSyncComplete        func(requestID, assetHash, status string, sizeBytes uint64, errMsg string, dtshIncluded bool, localMissing bool) error
 	sendFreezeProgress      func(requestID, assetHash string, percent uint32, bytesUploaded uint64) error
 	sendStorageLifecycle    func(data *ipcpb.StorageLifecycleData) error
 	requestCanDelete        func(ctx context.Context, assetHash string) (bool, string, int64, error)
 	sendArtifactDeleted     func(assetHash, filePath, reason, assetType string, sizeBytes uint64) error
+	// DVR reclaim seams — function fields so tests can drive the active-DVR eviction stage of
+	// reclaimToTarget without a live control-plane DVR manager. Default to the real control globals.
+	activeDVRHashes    func() map[string]bool
+	evictDVRSegmentsFn func(dvrHash string, targetBytes uint64) (segments int, freedBytes uint64)
 
 	// Thresholds
 	freezeThreshold      float64       // Start freezing at this % (default: 85%)
@@ -149,12 +152,13 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 
 		requestFreezePermission: control.RequestFreezePermission,
 		sendSyncComplete:        control.SendSyncComplete,
-		sendFreezeComplete:      control.SendFreezeComplete,
 		sendFreezeProgress:      control.SendFreezeProgress,
 		sendStorageLifecycle:    control.SendStorageLifecycle,
 		requestCanDelete:        control.RequestCanDelete,
 		sendArtifactDeleted:     control.SendArtifactDeleted,
+		activeDVRHashes:         control.GetActiveDVRHashes,
 	}
+	storageManager.evictDVRSegmentsFn = storageManager.dropPressuredDVRSegments
 
 	storageManager.freezeTracker.inFlight = make(map[string]bool)
 
@@ -282,7 +286,7 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 		if len(names) == 0 {
 			return
 		}
-		deleted := dm.EvictUploadedSegments(req.GetDvrHash(), names, "chapter_reclaim")
+		deleted, _ := dm.EvictUploadedSegments(req.GetDvrHash(), names, "chapter_reclaim")
 		logger.WithFields(logging.Fields{
 			"dvr_hash": req.GetDvrHash(),
 			"deleted":  deleted,
@@ -404,7 +408,6 @@ func (sm *StorageManager) start() {
 func (sm *StorageManager) checkAndManageStorage() error {
 	// Check clips directory
 	clipsDir := filepath.Join(sm.basePath, "clips")
-	vodDir := filepath.Join(sm.basePath, "vod")
 
 	// Get current storage usage
 	usagePercent, usedBytes, totalBytes, err := sm.getStorageUsage(sm.basePath)
@@ -446,55 +449,168 @@ func (sm *StorageManager) checkAndManageStorage() error {
 	targetBytes := uint64(float64(totalBytes) * sm.targetThreshold)
 	bytesToFree := usedBytes - targetBytes
 
-	// Get freeze candidates from clips and VOD. DVR uses ledger-backed
-	// per-segment eviction only; whole-directory DVR freeze would recreate an
-	// edge-authored archive manifest.
-	var candidates []FreezeCandidate
+	// Run the single ordered reclaim engine: block caches → safe DVR segments →
+	// CanDelete-approved full clip/VOD copies. Normal pressure must use the SAME
+	// cheapest-transient-first order as the emergency path so a valuable full
+	// copy is never evicted while cheaper .blocks caches or safe DVR segments
+	// remain. Freezing only UPLOADS an asset to S3 and RETAINS the local file, so
+	// it frees zero disk and never counts toward the target; unsynced candidates
+	// are uploaded (frozen) so a later pass can evict them once Foghorn reports
+	// them durable.
+	res := sm.reclaimToTarget(clipsDir, bytesToFree)
 
-	clipCandidates, err := sm.getFreezeCandidates(clipsDir, AssetTypeClip)
-	if err != nil {
-		sm.logger.WithError(err).Warn("Failed to get clip freeze candidates")
-	} else {
-		candidates = append(candidates, clipCandidates...)
+	if res.uncatalogedCount > 0 {
+		sm.logger.WithFields(logging.Fields{
+			"candidate_count": res.uncatalogedCount,
+			"sample_hashes":   res.uncatalogedSamples,
+		}).Warn("Skipped freeze candidates that are not cataloged")
 	}
 
-	// Skip VOD freeze candidates while any degraded VOD source lease is
-	// held: a degraded lease has no path mapping (boot rebuild couldn't
-	// resolve internal_name → artifact_hash on this node), so the freeze
-	// path's exact-path-lease check at the candidate level cannot
-	// protect the right file. Without this gate, skip_upload responses
-	// would happily evict the backing file of an active VOD stream.
+	sm.logger.WithFields(logging.Fields{
+		"deleted_count":  res.deletedCount,
+		"sync_triggered": res.syncTriggered,
+		"freed_gb":       float64(res.freedBytes) / (1024 * 1024 * 1024),
+		"initial_usage":  usagePercent,
+	}).Info("Storage pressure pass completed")
+
+	return nil
+}
+
+// pressureEvictionResult summarizes one normal-pressure eviction pass.
+type pressureEvictionResult struct {
+	freedBytes         uint64 // bytes ACTUALLY deleted from local disk
+	deletedCount       int    // assets whose local copy was evicted
+	syncTriggered      int    // unsynced assets uploaded for a later eviction pass
+	uncatalogedCount   int
+	uncatalogedSamples []string
+}
+
+// reclaimToTarget is the single ordered local-disk reclaim engine shared by
+// every storage-pressure path: normal pressure (checkAndManageStorage between
+// the freeze and delete thresholds), emergency cleanup (fallbackCleanup above
+// the delete threshold), and disk-write admission (ensureRoomForDiskWrite /
+// kickoffBackgroundCleanup via fallbackCleanupWithTarget). Reclaim runs
+// cheapest-transient-first so a valuable full clip/VOD copy is the LAST class
+// evicted, never the first:
+//
+//  1. .blocks relay block caches — rebuildable transient partial-cache data,
+//     not authoritative storage, so no CanDelete check is needed.
+//  2. safe-to-evict active-DVR segments — transient already-uploaded segments
+//     outside the effective live window, chosen by Foghorn.
+//  3. CanDelete-approved full clip/VOD copies — authoritative, evicted only
+//     when Foghorn confirms a durable S3 copy exists.
+//
+// Only bytes ACTUALLY deleted from local disk count toward bytesToFree; an
+// unsynced full-copy candidate is UPLOADED (frozen) so a LATER pass can evict
+// it, which frees no disk now and never counts — the freeze is ADDITIONAL to
+// the reclaim, making future eviction possible. Destructive classes
+// (block/DVR/clip/VOD deletion) are gated on IsDestructiveCleanupAllowed so the
+// boot pause cannot evict a file whose lease isn't established yet; the
+// non-destructive freeze-upload still proceeds under the pause.
+func (sm *StorageManager) reclaimToTarget(clipsDir string, bytesToFree uint64) pressureEvictionResult {
+	res := pressureEvictionResult{uncatalogedSamples: make([]string, 0, 5)}
+	if bytesToFree == 0 {
+		return res
+	}
+	destructiveAllowed := leases.IsDestructiveCleanupAllowed()
+
+	// 1. Block caches — cheapest, rebuildable, non-authoritative. They must lose
+	// before any full copy. RemoveAll is destructive, so gate on the boot pause.
+	if destructiveAllowed {
+		if freed := sm.evictBlockCaches(bytesToFree); freed > 0 {
+			res.freedBytes += freed
+			if res.freedBytes >= bytesToFree {
+				return res
+			}
+		}
+	}
+
+	// 2. Active-DVR safe segments. getFreezeCandidates skips active DVR hashes (so cleanup never
+	// RemoveAlls an active recording's directory), so segment-level eviction of already-uploaded
+	// segments outside the rolling window happens here, before the full-copy loop. Foghorn picks the
+	// safe set. Destructive, so boot-gated. The DELETED BYTES count toward the target, so once DVR
+	// reclaim alone satisfies the deficit the engine STOPS before deleting any valuable full copy.
+	if destructiveAllowed {
+		for activeHash := range sm.activeDVRHashes() {
+			if res.freedBytes >= bytesToFree {
+				return res
+			}
+			// Pass the REMAINING deficit so this DVR stops evicting once the target is met, rather than
+			// deleting up to 10*500 segments per active DVR regardless of how little is still needed.
+			segs, freedBytes := sm.evictDVRSegmentsFn(activeHash, bytesToFree-res.freedBytes)
+			if segs > 0 {
+				res.freedBytes += freedBytes
+				sm.logger.WithFields(logging.Fields{
+					"dvr_hash":         activeHash,
+					"segments_evicted": segs,
+					"bytes_evicted":    freedBytes,
+				}).Info("Evicted segments from active DVR under storage pressure")
+			}
+		}
+	}
+
+	// The DVR loop above may, on its final (or only) active DVR, free MORE than the remaining deficit;
+	// the top-of-loop check cannot catch an overshoot on the last iteration. Return here before the
+	// full-copy stage so the uint64 (bytesToFree - res.freedBytes) passed below can never underflow into
+	// an enormous target that would evict every eligible full copy.
+	if res.freedBytes >= bytesToFree {
+		return res
+	}
+
+	// 3. Full clip/VOD copies last — authoritative, CanDelete-gated. DVR is not
+	// a candidate here; whole-directory DVR freeze would recreate an edge-authored
+	// archive manifest, and DVR is reclaimed segment-wise in stage 2.
+	candidates, err := sm.getFreezeCandidates(clipsDir, AssetTypeClip)
+	if err != nil {
+		sm.logger.WithError(err).Warn("Failed to get clip freeze candidates")
+	}
+
+	// Skip VOD candidates while any degraded VOD source lease is held: a degraded
+	// lease has no path mapping (boot rebuild couldn't resolve internal_name →
+	// artifact_hash on this node), so the candidate-level exact-path-lease check
+	// cannot protect the file Mist is actively reading. Clips/DVR can still be
+	// reclaimed.
 	if tracker := leases.GlobalTracker(); tracker == nil || !tracker.DegradedVodCleanupActive() {
-		vodCandidates, err := sm.getFreezeCandidates(vodDir, AssetTypeVOD)
-		if err != nil {
-			sm.logger.WithError(err).Warn("Failed to get VOD freeze candidates")
+		vodDir := filepath.Join(sm.basePath, "vod")
+		vodCandidates, verr := sm.getFreezeCandidates(vodDir, AssetTypeVOD)
+		if verr != nil {
+			sm.logger.WithError(verr).Warn("Failed to get VOD freeze candidates")
 		} else {
 			candidates = append(candidates, vodCandidates...)
 		}
 	}
 
-	if len(candidates) == 0 {
-		sm.logger.Warn("No freeze candidates found despite high storage usage")
-		return nil
-	}
-
-	// Sort candidates by priority (lowest = first to freeze)
+	// Sort candidates by priority (lowest = first to reclaim).
 	sort.Slice(candidates, func(i, j int) bool {
 		return candidates[i].Priority < candidates[j].Priority
 	})
 
-	// Freeze assets until we reach target threshold
-	var totalFreed uint64
-	var frozenCount int
-	var uncatalogedCount int
-	uncatalogedSamples := make([]string, 0, 5)
+	loopRes := sm.evictClipVodCandidates(candidates, bytesToFree-res.freedBytes)
+	res.freedBytes += loopRes.freedBytes
+	res.deletedCount += loopRes.deletedCount
+	res.syncTriggered += loopRes.syncTriggered
+	res.uncatalogedCount += loopRes.uncatalogedCount
+	res.uncatalogedSamples = append(res.uncatalogedSamples, loopRes.uncatalogedSamples...)
+	return res
+}
+
+// evictClipVodCandidates is stage 3 of reclaimToTarget: the CanDelete-guarded
+// eviction loop over full clip/VOD copies. A candidate's bytes count toward
+// bytesToFree only when Foghorn confirms the asset is durably synced to S3
+// (CanDelete) and the local copy is then deleted. A candidate that is not yet
+// synced is uploaded (frozen) so a LATER pass can evict it — freezing retains
+// the local file and frees no disk, so it never counts toward the target.
+// Candidates are clip/VOD only; DVR eviction is ledger-driven in stage 2.
+func (sm *StorageManager) evictClipVodCandidates(candidates []FreezeCandidate, bytesToFree uint64) pressureEvictionResult {
+	res := pressureEvictionResult{uncatalogedSamples: make([]string, 0, 5)}
+	destructiveAllowed := leases.IsDestructiveCleanupAllowed()
 
 	for _, candidate := range candidates {
-		if totalFreed >= bytesToFree {
+		if res.freedBytes >= bytesToFree {
 			break
 		}
 
-		// Skip if already being frozen
+		// Skip if an upload is already in flight for this asset.
 		sm.freezeTracker.mu.RLock()
 		alreadyFreezing := sm.freezeTracker.inFlight[candidate.AssetHash]
 		sm.freezeTracker.mu.RUnlock()
@@ -502,51 +618,112 @@ func (sm *StorageManager) checkAndManageStorage() error {
 			continue
 		}
 
-		if err := sm.freezeAsset(context.Background(), candidate); err != nil {
-			if strings.Contains(err.Error(), "freeze not approved: asset_not_found") {
-				uncatalogedCount++
-				if len(uncatalogedSamples) < cap(uncatalogedSamples) {
-					uncatalogedSamples = append(uncatalogedSamples, candidate.AssetHash)
-				}
-				continue
-			}
-			sm.logger.WithError(err).WithField("asset_hash", candidate.AssetHash).Error("Failed to freeze asset")
+		// Dual-storage: only delete once Foghorn confirms the asset is durably
+		// synced to S3. Same guard the emergency fallbackCleanupWithTarget path
+		// uses — do not invent a second delete authority.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		safeToDelete, reason, warmDurationMs, err := sm.requestCanDelete(ctx, candidate.AssetHash)
+		cancel()
+		if err != nil {
+			// Foghorn unreachable — never delete blind (data safety first).
+			sm.logger.WithError(err).WithField("asset_hash", candidate.AssetHash).Warn("Failed to check if asset can be deleted")
 			continue
 		}
 
-		totalFreed += candidate.SizeBytes
-		frozenCount++
-	}
-	if uncatalogedCount > 0 {
+		if !safeToDelete {
+			// Not durable on S3 yet: upload it (freeze) so a later pass can
+			// evict it. This retains the local file and frees no disk, so it
+			// must NOT count toward bytesToFree.
+			if err := sm.freezeAsset(context.Background(), candidate); err != nil {
+				if strings.Contains(err.Error(), "freeze not approved: asset_not_found") {
+					res.uncatalogedCount++
+					if len(res.uncatalogedSamples) < cap(res.uncatalogedSamples) {
+						res.uncatalogedSamples = append(res.uncatalogedSamples, candidate.AssetHash)
+					}
+					continue
+				}
+				sm.logger.WithError(err).WithField("asset_hash", candidate.AssetHash).Error("Failed to freeze asset for later eviction")
+				continue
+			}
+			sm.logger.WithFields(logging.Fields{
+				"asset_hash": candidate.AssetHash,
+				"reason":     reason,
+			}).Debug("Asset not safe to delete; uploaded for a later eviction pass")
+			res.syncTriggered++
+			continue
+		}
+
+		// CanDelete approved. Deleting local files is destructive, so respect
+		// the boot pause exactly like fallbackCleanupWithTarget: before Mist
+		// reconcile completes, leases may not yet be established and a file that
+		// should be pinned isn't. A later post-reconcile pass evicts it.
+		if !destructiveAllowed {
+			continue
+		}
+
+		// Synced to S3: delete the local copy and count the reclaimed bytes.
+		deleteErr := leases.DeleteFileIfUnleased(candidate.FilePath)
+		if errors.Is(deleteErr, leases.ErrLeaseHeld) {
+			sm.logger.WithField("file", candidate.FilePath).Info("Normal-pressure eviction skipped: lease held")
+			continue
+		}
+		if deleteErr != nil {
+			sm.logger.WithError(deleteErr).WithField("asset_hash", candidate.AssetHash).Warn("Failed to delete local copy")
+			errStr := deleteErr.Error()
+			_ = sm.sendStorageLifecycle(&ipcpb.StorageLifecycleData{ //nolint:errcheck // best-effort report
+				Action:    ipcpb.StorageLifecycleData_ACTION_EVICT_FAILED,
+				AssetType: string(candidate.AssetType),
+				AssetHash: candidate.AssetHash,
+				SizeBytes: candidate.SizeBytes,
+				Error:     &errStr,
+			})
+			continue
+		}
+		// Clean up auxiliary sidecars after the main file deletion succeeds.
+		_ = os.Remove(candidate.FilePath + ".dtsh")
+		_ = os.Remove(candidate.FilePath + ".gop")
+
+		_ = sm.sendStorageLifecycle(&ipcpb.StorageLifecycleData{ //nolint:errcheck // best-effort report
+			Action:         ipcpb.StorageLifecycleData_ACTION_EVICTED,
+			AssetType:      string(candidate.AssetType),
+			AssetHash:      candidate.AssetHash,
+			SizeBytes:      candidate.SizeBytes,
+			WarmDurationMs: &warmDurationMs,
+		})
+		_ = sm.sendArtifactDeleted(candidate.AssetHash, candidate.FilePath, "eviction", string(candidate.AssetType), candidate.SizeBytes) //nolint:errcheck // best-effort report
+
+		res.freedBytes += candidate.SizeBytes
+		res.deletedCount++
 		sm.logger.WithFields(logging.Fields{
-			"candidate_count": uncatalogedCount,
-			"sample_hashes":   uncatalogedSamples,
-		}).Warn("Skipped freeze candidates that are not cataloged")
+			"asset_hash":       candidate.AssetHash,
+			"asset_type":       candidate.AssetType,
+			"size_mb":          float64(candidate.SizeBytes) / (1024 * 1024),
+			"warm_duration_ms": warmDurationMs,
+		}).Info("Evicted synced asset from local storage")
 	}
 
-	sm.logger.WithFields(logging.Fields{
-		"frozen_count":  frozenCount,
-		"freed_gb":      float64(totalFreed) / (1024 * 1024 * 1024),
-		"initial_usage": usagePercent,
-	}).Info("Freeze operation completed")
-
-	return nil
+	return res
 }
 
 // dropPressuredDVRSegments asks Foghorn for the authoritative list of
 // safe-to-evict segments for an active DVR and deletes the matching local
 // files. Used during storage-pressure passes so the choice respects the
-// effective live window even if the local uploaded cache has drifted.
-// Returns the number of files deleted.
-func (sm *StorageManager) dropPressuredDVRSegments(dvrHash string) int {
+// effective live window even if the local uploaded cache has drifted. It stops once evicted bytes reach
+// targetBytes (0 = no budget). Returns the number of segments deleted and their total bytes.
+func (sm *StorageManager) dropPressuredDVRSegments(dvrHash string, targetBytes uint64) (segments int, freedBytes uint64) {
 	dm := control.GetDVRManager()
 	if dm == nil {
-		return 0
+		return 0, 0
 	}
 	const batchSize int32 = 500
 	const maxBatches = 10
-	total := 0
 	for batch := 0; batch < maxBatches; batch++ {
+		// Stop the moment this DVR's evicted bytes satisfy the remaining pressure target — do not keep
+		// deleting further batches (up to 500 segments each) the target no longer needs. targetBytes==0
+		// means "no byte budget" (non-pressure callers), so run to completion.
+		if targetBytes > 0 && freedBytes >= targetBytes {
+			break
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		resp, err := control.RequestEvictableSegments(ctx, dvrHash, batchSize)
 		cancel()
@@ -559,13 +736,14 @@ func (sm *StorageManager) dropPressuredDVRSegments(dvrHash string) int {
 		if len(resp.GetSegmentNames()) == 0 {
 			break
 		}
-		evicted := dm.EvictUploadedSegments(dvrHash, resp.GetSegmentNames(), "disk_pressure")
-		total += evicted
+		evicted, evictedBytes := dm.EvictUploadedSegments(dvrHash, resp.GetSegmentNames(), "disk_pressure")
+		segments += evicted
+		freedBytes += evictedBytes
 		if evicted == 0 || len(resp.GetSegmentNames()) < int(batchSize) {
 			break
 		}
 	}
-	return total
+	return segments, freedBytes
 }
 
 // getFreezeCandidates returns assets that are candidates for freezing
@@ -690,7 +868,7 @@ func (sm *StorageManager) HandleFreezeRequest(req *ipcpb.FreezeRequest) {
 	if req.AssetType == "dvr" {
 		errMsg := "whole-DVR freeze is unsupported; use ledger segment eviction"
 		sm.logger.WithField("asset_hash", req.AssetHash).Warn(errMsg)
-		if err := sm.sendSyncComplete(req.RequestId, req.AssetHash, "failed", "", 0, errMsg, false, false); err != nil {
+		if err := sm.sendSyncComplete(req.RequestId, req.AssetHash, "failed", 0, errMsg, false, false); err != nil {
 			sm.logger.WithError(err).WithField("asset_hash", req.AssetHash).Warn("Failed to report rejected DVR freeze")
 		}
 		return
@@ -701,7 +879,7 @@ func (sm *StorageManager) HandleFreezeRequest(req *ipcpb.FreezeRequest) {
 		sm.logger.WithError(err).WithField("path", req.LocalPath).Error("Freeze request: local path not found")
 		// ENOENT here is the same terminal lost_local condition as inside the
 		// upload path: caller asked us to freeze a file that's gone.
-		_ = sm.sendSyncComplete(req.RequestId, req.AssetHash, "failed", "", 0, "local file not found: "+err.Error(), false, errors.Is(err, fs.ErrNotExist)) //nolint:errcheck // best-effort report; reconnect retries on stream loss
+		_ = sm.sendSyncComplete(req.RequestId, req.AssetHash, "failed", 0, "local file not found: "+err.Error(), false, errors.Is(err, fs.ErrNotExist)) //nolint:errcheck // best-effort report; reconnect retries on stream loss
 		return
 	}
 
@@ -726,7 +904,6 @@ func (sm *StorageManager) HandleFreezeRequest(req *ipcpb.FreezeRequest) {
 		Approved:         true,
 		PresignedPutUrl:  req.PresignedPutUrl,
 		UrlExpirySeconds: req.UrlExpirySeconds,
-		SegmentUrls:      req.SegmentUrls,
 	}
 
 	if err := sm.uploadAsset(ctx, asset, permResp); err != nil {
@@ -753,21 +930,9 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 		sm.freezeTracker.mu.Unlock()
 	}()
 
-	// Collect filenames (needed for presigned URL generation)
-	var filenames []string
-	switch asset.AssetType {
-	case AssetTypeClip, AssetTypeVOD:
-		// Clip and VOD are single-file uploads
-		filenames = append(filenames, filepath.Base(asset.FilePath))
-		if err := dtsh.ValidateFile(asset.FilePath + ".dtsh"); err == nil {
-			filenames = append(filenames, filepath.Base(asset.FilePath)+".dtsh")
-		} else if !os.IsNotExist(err) {
-			sm.logger.WithError(err).WithField("asset_hash", asset.AssetHash).Warn("Skipping invalid .dtsh during freeze permission request")
-		}
-	}
-
-	// Request permission and presigned URL from Foghorn
-	permResp, err := sm.requestFreezePermission(ctx, string(asset.AssetType), asset.AssetHash, asset.FilePath, asset.SizeBytes, filenames)
+	// Request permission and presigned URL from Foghorn. The server derives the canonical object key from
+	// its own catalog (not a node-supplied path or filename list), so only the asset identity + size are sent.
+	permResp, err := sm.requestFreezePermission(ctx, string(asset.AssetType), asset.AssetHash, asset.SizeBytes)
 	if err != nil {
 		return fmt.Errorf("failed to get freeze permission: %w", err)
 	}
@@ -817,7 +982,13 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 		sm.freezeTracker.mu.Unlock()
 	}()
 
-	requestID := permResp.RequestId
+	// The completion must carry the SERVER-MINTED attempt id (interactive freeze-permission path); Foghorn
+	// matches it against the persisted attempt. Foghorn-initiated FreezeRequest pushes carry no attempt id,
+	// so fall back to the request id Foghorn assigned on that path.
+	requestID := permResp.GetAttemptId()
+	if requestID == "" {
+		requestID = permResp.RequestId
+	}
 
 	_ = sm.sendStorageLifecycle(&ipcpb.StorageLifecycleData{ //nolint:errcheck // best-effort report
 		Action:    ipcpb.StorageLifecycleData_ACTION_SYNC_STARTED,
@@ -831,43 +1002,16 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 	dtshIncluded := false
 
 	if asset.AssetType == AssetTypeClip || asset.AssetType == AssetTypeVOD {
-		if len(permResp.SegmentUrls) > 0 {
-			baseName := filepath.Base(asset.FilePath)
-
-			if url, ok := permResp.SegmentUrls[baseName]; ok {
-				err := sm.presignedClient.UploadFileToPresignedURL(ctx, url, asset.FilePath, func(uploaded int64) {
-					percent := uint32((uploaded * 100) / int64(asset.SizeBytes))
-					_ = sm.sendFreezeProgress(requestID, asset.AssetHash, percent, uint64(uploaded))
-				})
-				if err != nil {
-					uploadErr = fmt.Errorf("failed to upload %s: %w", asset.AssetType, err)
-				}
-			} else {
-				uploadErr = fmt.Errorf("no URL provided for main %s file", asset.AssetType)
-			}
-
-			dtshName := baseName + ".dtsh"
-			if url, ok := permResp.SegmentUrls[dtshName]; ok && uploadErr == nil {
-				dtshPath := asset.FilePath + ".dtsh"
-				if err := dtsh.ValidateFile(dtshPath); err != nil {
-					sm.logger.WithError(err).Warn("Skipping invalid .dtsh file")
-				} else if err := sm.presignedClient.UploadFileToPresignedURL(ctx, url, dtshPath, nil); err != nil {
-					sm.logger.WithError(err).Warn("Failed to upload .dtsh file")
-				} else {
-					dtshIncluded = true
-				}
-			}
-		} else {
-			presignedURL := permResp.PresignedPutUrl
-			if presignedURL == "" {
-				return fmt.Errorf("no presigned URL provided for %s freeze", asset.AssetType)
-			}
-
-			uploadErr = sm.presignedClient.UploadFileToPresignedURL(ctx, presignedURL, asset.FilePath, func(uploaded int64) {
-				percent := uint32((uploaded * 100) / int64(asset.SizeBytes))
-				_ = sm.sendFreezeProgress(requestID, asset.AssetHash, percent, uint64(uploaded))
-			})
+		// clip/VOD is a single-object upload to the server-minted presigned PUT. Any .dtsh index is synced
+		// separately (SyncDtshOnly / TriggerDtshSync), so no per-file URL map is involved.
+		presignedURL := permResp.PresignedPutUrl
+		if presignedURL == "" {
+			return fmt.Errorf("no presigned URL provided for %s freeze", asset.AssetType)
 		}
+		uploadErr = sm.presignedClient.UploadFileToPresignedURL(ctx, presignedURL, asset.FilePath, func(uploaded int64) {
+			percent := uint32((uploaded * 100) / int64(asset.SizeBytes))
+			_ = sm.sendFreezeProgress(requestID, asset.AssetHash, percent, uint64(uploaded)) //nolint:errcheck // best-effort progress report
+		})
 	} else {
 		return fmt.Errorf("unsupported asset type for freeze: %s", asset.AssetType)
 	}
@@ -897,7 +1041,7 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 			Error:      &errStr,
 			DurationMs: &durationMs,
 		})
-		_ = sm.sendFreezeComplete(requestID, asset.AssetHash, "failed", "", 0, uploadErr.Error(), localMissing) //nolint:errcheck // best-effort report
+		_ = sm.sendSyncComplete(requestID, asset.AssetHash, "failed", 0, uploadErr.Error(), dtshIncluded, localMissing) //nolint:errcheck // best-effort report
 		return fmt.Errorf("failed to upload to S3: %w", uploadErr)
 	}
 
@@ -919,7 +1063,7 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 		DtshIncluded: &dtshIncluded,
 	})
 
-	_ = sm.sendSyncComplete(requestID, asset.AssetHash, "success", "", actualSizeBytes, "", dtshIncluded, false) //nolint:errcheck // best-effort report
+	_ = sm.sendSyncComplete(requestID, asset.AssetHash, "success", actualSizeBytes, "", dtshIncluded, false) //nolint:errcheck // best-effort report
 
 	freezeUploads.WithLabelValues(string(asset.AssetType), "success").Inc()
 	freezeUploadBytes.WithLabelValues(string(asset.AssetType)).Add(float64(actualSizeBytes))
@@ -1123,10 +1267,14 @@ func (sm *StorageManager) fallbackCleanup(clipsDir string, usedBytes, totalBytes
 	return sm.fallbackCleanupWithTarget(clipsDir, bytesToFree)
 }
 
-// fallbackCleanupWithTarget runs the same eviction loop as fallbackCleanup but
-// with an explicit byte target. Used by the disk-write admission path
-// (admitDiskWrite / ensureRoomForDiskWrite) which knows exactly how much room
-// it needs and does not want to aggressively trim back to targetThreshold.
+// fallbackCleanupWithTarget is the emergency/admission entry into the shared
+// ordered reclaim engine (reclaimToTarget) with an explicit byte target. Used
+// by the disk-write admission path (ensureRoomForDiskWrite /
+// kickoffBackgroundCleanup) which knows exactly how much room it needs and does
+// not want to aggressively trim back to targetThreshold, and by fallbackCleanup
+// above the delete threshold. Unlike the normal-pressure path, this entry
+// hard-gates the WHOLE pass on the boot pause: admission callers fail fast and
+// pick a different node rather than partially reclaim during boot.
 func (sm *StorageManager) fallbackCleanupWithTarget(clipsDir string, bytesToFree uint64) error {
 	if !leases.IsDestructiveCleanupAllowed() {
 		sm.logger.Debug("fallbackCleanupWithTarget skipped: destructive cleanup paused")
@@ -1136,166 +1284,16 @@ func (sm *StorageManager) fallbackCleanupWithTarget(clipsDir string, bytesToFree
 		return nil
 	}
 
-	// First pass: evict relay block caches under vod/ and clips/. These
-	// are best-effort local caches rebuildable from S3; per the admission
-	// priority order (DVRRecording / ProcessingOutput > PlaybackCache),
-	// they must lose first when a higher-priority intent needs disk. No
-	// Foghorn safe-to-delete check is needed — block caches are not
-	// authoritative storage. Skips leased paths.
-	if freed := sm.evictBlockCaches(bytesToFree); freed > 0 {
-		if freed >= bytesToFree {
-			return nil
-		}
-		bytesToFree -= freed
+	res := sm.reclaimToTarget(clipsDir, bytesToFree)
+
+	if res.uncatalogedCount > 0 {
+		sm.logger.WithFields(logging.Fields{
+			"candidate_count": res.uncatalogedCount,
+			"sample_hashes":   res.uncatalogedSamples,
+		}).Warn("Skipped cleanup candidates that are not cataloged")
 	}
-
-	// Active-DVR-first pass. getFreezeCandidates skips active DVR hashes (so
-	// emergency cleanup never RemoveAlls an active recording's directory),
-	// which means any "evict from active DVR under pressure" decision must
-	// happen here, before the candidate loop. We ask Foghorn for the
-	// authoritative list of safe-to-evict segments per active DVR and let
-	// EvictUploadedSegments delete individual .ts files.
-	for activeHash := range control.GetActiveDVRHashes() {
-		evicted := sm.dropPressuredDVRSegments(activeHash)
-		if evicted > 0 {
-			sm.logger.WithFields(logging.Fields{
-				"dvr_hash":         activeHash,
-				"segments_evicted": evicted,
-			}).Info("Evicted segments from active DVR under storage pressure")
-		}
-	}
-
-	candidates, err := sm.getFreezeCandidates(clipsDir, AssetTypeClip)
-	if err != nil {
-		return err
-	}
-
-	// Skip VOD when any source lease is degraded: the lease cannot point
-	// at a specific file (internal_name → artifact_hash unresolved on
-	// this node) and the candidate list is LRU/heat-ordered, so we'd
-	// happily evict the file Mist is actively reading. Clips/DVR can
-	// still be reclaimed.
-	if tracker := leases.GlobalTracker(); tracker == nil || !tracker.DegradedVodCleanupActive() {
-		vodDir := filepath.Join(sm.basePath, "vod")
-		vodCandidates, err := sm.getFreezeCandidates(vodDir, AssetTypeVOD)
-		if err == nil {
-			candidates = append(candidates, vodCandidates...)
-		}
-	}
-
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].Priority < candidates[j].Priority
-	})
-
-	var totalFreed uint64
-	var syncTriggered int
-
-	for _, candidate := range candidates {
-		if totalFreed >= bytesToFree {
-			break
-		}
-
-		// Dual-storage: Ask Foghorn if it's safe to delete (i.e., synced to S3)
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		safeToDelete, reason, warmDurationMs, err := sm.requestCanDelete(ctx, candidate.AssetHash)
-		cancel()
-
-		if err != nil {
-			sm.logger.WithError(err).WithField("asset_hash", candidate.AssetHash).Warn("Failed to check if asset can be deleted")
-			// If Foghorn is unreachable, don't delete (data safety first)
-			continue
-		}
-
-		if safeToDelete {
-			// Asset is synced to S3, safe to delete local copy
-			var deleteErr error
-			if candidate.AssetType == AssetTypeClip || candidate.AssetType == AssetTypeVOD {
-				deleteErr = leases.DeleteFileIfUnleased(candidate.FilePath)
-				if errors.Is(deleteErr, leases.ErrLeaseHeld) {
-					sm.logger.WithField("file", candidate.FilePath).Info("fallbackCleanup skipped: lease held")
-					continue
-				}
-				if deleteErr == nil {
-					// Clean up auxiliary files after main file deletion succeeds.
-					_ = os.Remove(candidate.FilePath + ".dtsh")
-					_ = os.Remove(candidate.FilePath + ".gop")
-				}
-			} else {
-				// DVR: never RemoveAll an active DVR directory. For inactive
-				// DVRs the whole tree may be reclaimed; for active ones, only
-				// individual uploaded segments outside the rolling window are
-				// safe to evict; drive that via the segment-level path.
-				if control.IsActiveDVR(candidate.AssetHash) {
-					evicted := sm.dropPressuredDVRSegments(candidate.AssetHash)
-					if evicted > 0 {
-						sm.logger.WithFields(logging.Fields{
-							"dvr_hash":         candidate.AssetHash,
-							"segments_evicted": evicted,
-						}).Info("Evicted DVR segments under storage pressure")
-					}
-					// Skip the directory-level delete and keep iterating. The
-					// freed-bytes accounting catches up via subsequent passes.
-					continue
-				}
-				deleteErr = leases.DeleteDVRDirIfUnleased(candidate.FilePath, candidate.AssetHash)
-				if errors.Is(deleteErr, leases.ErrLeaseHeld) {
-					sm.logger.WithField("dvr_hash", candidate.AssetHash).Info("fallbackCleanup skipped: DVR chapter lease held")
-					continue
-				}
-			}
-
-			if deleteErr != nil {
-				sm.logger.WithError(deleteErr).WithField("asset_hash", candidate.AssetHash).Warn("Failed to delete local copy")
-				errStr := deleteErr.Error()
-				_ = sm.sendStorageLifecycle(&ipcpb.StorageLifecycleData{ //nolint:errcheck // best-effort report
-					Action:    ipcpb.StorageLifecycleData_ACTION_EVICT_FAILED,
-					AssetType: string(candidate.AssetType),
-					AssetHash: candidate.AssetHash,
-					SizeBytes: candidate.SizeBytes,
-					Error:     &errStr,
-				})
-				continue
-			}
-
-			// Notify deletion (eviction from local cache) with warm duration metric
-			_ = sm.sendStorageLifecycle(&ipcpb.StorageLifecycleData{ //nolint:errcheck // best-effort report
-				Action:         ipcpb.StorageLifecycleData_ACTION_EVICTED,
-				AssetType:      string(candidate.AssetType),
-				AssetHash:      candidate.AssetHash,
-				SizeBytes:      candidate.SizeBytes,
-				WarmDurationMs: &warmDurationMs,
-			})
-			_ = sm.sendArtifactDeleted(candidate.AssetHash, candidate.FilePath, "eviction", string(candidate.AssetType), candidate.SizeBytes)
-
-			totalFreed += candidate.SizeBytes
-			sm.logger.WithFields(logging.Fields{
-				"asset_hash":       candidate.AssetHash,
-				"asset_type":       candidate.AssetType,
-				"size_mb":          float64(candidate.SizeBytes) / (1024 * 1024),
-				"warm_duration_ms": warmDurationMs,
-			}).Info("Evicted synced asset from local storage")
-		} else {
-			// Asset not synced - trigger sync instead of deleting
-			sm.logger.WithFields(logging.Fields{
-				"asset_hash": candidate.AssetHash,
-				"reason":     reason,
-			}).Info("Asset not safe to delete, triggering sync")
-
-			// Trigger freeze/sync operation (this will upload to S3)
-			go func(c FreezeCandidate) {
-				ctx := context.Background()
-				if err := sm.freezeAsset(ctx, c); err != nil {
-					sm.logger.WithError(err).WithField("asset_hash", c.AssetHash).Error("Failed to sync asset for eviction")
-				}
-			}(candidate)
-			syncTriggered++
-
-			// Don't count as freed yet - will be available for eviction after sync
-		}
-	}
-
-	if syncTriggered > 0 {
-		sm.logger.WithField("sync_triggered", syncTriggered).Info("Triggered sync for unsynced assets during cleanup")
+	if res.syncTriggered > 0 {
+		sm.logger.WithField("sync_triggered", res.syncTriggered).Info("Triggered sync for unsynced assets during cleanup")
 	}
 
 	return nil
@@ -1402,48 +1400,22 @@ func (sm *StorageManager) SyncDtshOnly(ctx context.Context, req *ipcpb.DtshSyncR
 				"dtsh_path":  dtshPath,
 			}).Info("Uploaded vod .dtsh file")
 		}
-	} else if assetType == "dvr" {
-		// For DVR: may have multiple .dtsh files in the directory
-		dtshURLs := req.GetDtshUrls()
-		if len(dtshURLs) == 0 {
-			return fmt.Errorf("no presigned URLs provided for DVR .dtsh files")
-		}
-
-		// Check what .dtsh files exist locally and upload them
-		for dtshName, presignedURL := range dtshURLs {
-			dtshPath := filepath.Join(localPath, dtshName)
-			if err := dtsh.ValidateFile(dtshPath); err != nil {
-				if !os.IsNotExist(err) {
-					sm.logger.WithError(err).WithField("dtsh_name", dtshName).Warn("Skipping invalid DVR .dtsh file")
-				}
-				continue
-			}
-
-			if err := sm.presignedClient.UploadFileToPresignedURL(ctx, presignedURL, dtshPath, nil); err != nil {
-				sm.logger.WithError(err).WithField("dtsh_name", dtshName).Warn("Failed to upload DVR .dtsh file")
-				continue
-			}
-
-			dtshUploaded = true
-			sm.logger.WithFields(logging.Fields{
-				"asset_hash": assetHash,
-				"dtsh_name":  dtshName,
-			}).Info("Uploaded DVR .dtsh file")
-		}
-
-		if !dtshUploaded {
-			uploadErr = fmt.Errorf("no DVR .dtsh files found or uploaded")
-		}
+	} else {
+		// Only clip and vod have a single canonical .dtsh index that Foghorn stages and promotes. Whole-DVR
+		// .dtsh sync was retired (a DVR is reclaimed segment-wise; its chapters are frozen as their own VOD
+		// artifacts) and Foghorn's TriggerDtshSync rejects asset_type="dvr" before any request is sent, so
+		// this is unreachable in practice — reject rather than silently report a no-op success.
+		return fmt.Errorf("unsupported asset_type %q for incremental .dtsh sync", assetType)
 	}
 
 	if uploadErr != nil {
 		// .dtsh sync — if the source file is gone, surface as local_missing.
-		_ = sm.sendSyncComplete(requestID, assetHash, "failed", "", 0, uploadErr.Error(), false, errors.Is(uploadErr, fs.ErrNotExist)) //nolint:errcheck // best-effort report
+		_ = sm.sendSyncComplete(requestID, assetHash, "failed", 0, uploadErr.Error(), false, errors.Is(uploadErr, fs.ErrNotExist)) //nolint:errcheck // best-effort report
 		return uploadErr
 	}
 
 	// Send success notification with dtsh_included=true
-	_ = sm.sendSyncComplete(requestID, assetHash, "success", "", 0, "", dtshUploaded, false) //nolint:errcheck // best-effort report
+	_ = sm.sendSyncComplete(requestID, assetHash, "success", 0, "", dtshUploaded, false) //nolint:errcheck // best-effort report
 
 	sm.logger.WithFields(logging.Fields{
 		"request_id": requestID,

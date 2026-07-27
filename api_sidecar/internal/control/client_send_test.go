@@ -7,83 +7,6 @@ import (
 	"time"
 )
 
-// --- SendFreezeComplete ---
-
-func TestSendFreezeComplete_Connected(t *testing.T) {
-	stream := &fakeControlStream{}
-	storeConn(stream, "test-node")
-	t.Cleanup(clearConn)
-
-	err := SendFreezeComplete("req-1", "hash-abc", "completed", "s3://bucket/key", 4096, "", false)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(stream.sent) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(stream.sent))
-	}
-
-	fc := stream.sent[0].GetFreezeComplete()
-	if fc == nil {
-		t.Fatal("expected FreezeComplete payload")
-	}
-	if fc.RequestId != "req-1" {
-		t.Fatalf("expected request ID 'req-1', got %q", fc.RequestId)
-	}
-	if fc.AssetHash != "hash-abc" {
-		t.Fatalf("expected asset hash 'hash-abc', got %q", fc.AssetHash)
-	}
-	if fc.Status != "completed" {
-		t.Fatalf("expected status 'completed', got %q", fc.Status)
-	}
-	if fc.S3Url != "s3://bucket/key" {
-		t.Fatalf("expected S3 URL, got %q", fc.S3Url)
-	}
-	if fc.SizeBytes != 4096 {
-		t.Fatalf("expected 4096 bytes, got %d", fc.SizeBytes)
-	}
-	if fc.Error != "" {
-		t.Fatalf("expected empty error, got %q", fc.Error)
-	}
-}
-
-func TestSendFreezeComplete_WithError(t *testing.T) {
-	stream := &fakeControlStream{}
-	storeConn(stream, "test-node")
-	t.Cleanup(clearConn)
-
-	err := SendFreezeComplete("req-2", "hash-xyz", "failed", "", 0, "upload failed", false)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	fc := stream.sent[0].GetFreezeComplete()
-	if fc.Status != "failed" {
-		t.Fatalf("expected status 'failed', got %q", fc.Status)
-	}
-	if fc.Error != "upload failed" {
-		t.Fatalf("expected error msg, got %q", fc.Error)
-	}
-	if fc.LocalMissing {
-		t.Fatalf("expected LocalMissing=false for transient error")
-	}
-}
-
-func TestSendFreezeComplete_LocalMissingPropagates(t *testing.T) {
-	stream := &fakeControlStream{}
-	storeConn(stream, "test-node")
-	t.Cleanup(clearConn)
-
-	err := SendFreezeComplete("req-3", "hash-gone", "failed", "", 0, "open: no such file", true)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	fc := stream.sent[0].GetFreezeComplete()
-	if !fc.LocalMissing {
-		t.Fatalf("expected LocalMissing=true to propagate to wire")
-	}
-}
-
 // --- SendSyncComplete ---
 
 func TestSendSyncComplete_Connected(t *testing.T) {
@@ -91,7 +14,7 @@ func TestSendSyncComplete_Connected(t *testing.T) {
 	storeConn(stream, "test-node")
 	t.Cleanup(clearConn)
 
-	err := SendSyncComplete("req-3", "hash-sync", "synced", "s3://bucket/synced", 8192, "", true, false)
+	err := SendSyncComplete("req-3", "hash-sync", "synced", 8192, "", true, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -106,9 +29,6 @@ func TestSendSyncComplete_Connected(t *testing.T) {
 	if sc.AssetHash != "hash-sync" {
 		t.Fatalf("expected hash, got %q", sc.AssetHash)
 	}
-	if sc.NodeId != "test-node" {
-		t.Fatalf("expected node ID 'test-node', got %q", sc.NodeId)
-	}
 	if !sc.DtshIncluded {
 		t.Fatal("expected dtsh_included=true")
 	}
@@ -122,7 +42,7 @@ func TestSendSyncComplete_DtshFalse(t *testing.T) {
 	storeConn(stream, "test-node")
 	t.Cleanup(clearConn)
 
-	_ = SendSyncComplete("req-4", "hash-no-dtsh", "synced", "s3://k", 1024, "", false, false)
+	_ = SendSyncComplete("req-4", "hash-no-dtsh", "synced", 1024, "", false, false)
 
 	sc := stream.sent[0].GetSyncComplete()
 	if sc.DtshIncluded {
@@ -244,7 +164,7 @@ func TestRequestFreezePermission_Approved(t *testing.T) {
 
 	go func() {
 		defer close(done)
-		resp, err = RequestFreezePermission(ctx, "clip", "hash-perm", "/data/clips/hash.mp4", 4096, []string{"hash.mp4"})
+		resp, err = RequestFreezePermission(ctx, "clip", "hash-perm", 4096)
 	}()
 
 	// Wait for the request to be sent
@@ -301,7 +221,7 @@ func TestRequestFreezePermission_Timeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	_, err := RequestFreezePermission(ctx, "clip", "hash-timeout", "/path", 100, nil)
+	_, err := RequestFreezePermission(ctx, "clip", "hash-timeout", 100)
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
@@ -310,7 +230,7 @@ func TestRequestFreezePermission_Timeout(t *testing.T) {
 func TestRequestFreezePermission_Disconnected(t *testing.T) {
 	clearConn()
 
-	_, err := RequestFreezePermission(context.Background(), "clip", "h", "/p", 100, nil)
+	_, err := RequestFreezePermission(context.Background(), "clip", "h", 100)
 	if err == nil {
 		t.Fatal("expected error for disconnected stream")
 	}

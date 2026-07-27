@@ -1,7 +1,6 @@
 package relay
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,7 +11,6 @@ import (
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/gin-gonic/gin"
 
-	"frameworks/api_sidecar/internal/control"
 	"frameworks/api_sidecar/internal/dtsh"
 )
 
@@ -217,19 +215,14 @@ func (s *Server) putClipRoute(c *gin.Context) {
 }
 
 // putSidecarWithStream handles PUT /internal/artifact/.../<file>.dtsh from
-// Mist's externalWriter path. Two sinks for the body:
-//
-//  1. Local disk under the canonical sidecar path (tmpfile → fsync →
-//     atomic rename). For stream-scoped clips this is the nested
-//     clips/<stream>/<file> path so the sidecar lands next to the
-//     writer's media file. Mist gets 200 OK as soon as this completes;
-//     next cold playback on this node skips header generation.
-//  2. S3 via the dtsh_presigned_put URL Foghorn handed back on the most
-//     recent RelayResolve for this asset. Done in a background goroutine
-//     so Mist isn't blocked on S3 latency. The FreezeHandoff is still
-//     called as a backstop — the existing freeze reconciler picks the
-//     sidecar up on its next pass if the direct PUT failed or no
-//     presigned URL was minted.
+// Mist's externalWriter path. The body is written to local disk under the
+// canonical sidecar path (tmpfile → fsync → atomic rename); for stream-scoped
+// clips this is the nested clips/<stream>/<file> path so the sidecar lands next
+// to the writer's media file. Mist gets 200 OK as soon as this completes, and
+// the next cold playback on this node skips header generation. Durable storage
+// of the index is the freeze subsystem's responsibility: OnLocalDtshGenerated
+// hands the local file to it so Foghorn drives the verified, attempt-scoped
+// staged publication. The relay never writes the .dtsh to S3 directly.
 func (s *Server) putSidecarWithStream(c *gin.Context, kind, streamInternal string) {
 	forceCloseForMistReader(c)
 
@@ -304,14 +297,11 @@ func (s *Server) putSidecarWithStream(c *gin.Context, kind, streamInternal strin
 		return
 	}
 
-	// S3 PUT via the presigned URL the relay cached on the last resolve.
-	// Async + best-effort: the local file is durable; freeze reconciler
-	// covers misses. On PUT success we send SyncComplete with
-	// dtsh_included=true so Foghorn flips foghorn.artifacts.dtsh_synced and
-	// future cold nodes see DtshPresignedGet on resolve.
-	if putURL := s.cachedDtshPutURL(kind, hash); putURL != "" {
-		go s.uploadDtshToS3(kind, hash, putURL, localPath)
-	}
+	// Persisting the freshly-generated .dtsh to durable storage is the freeze subsystem's job, via the
+	// server-assigned STAGED publication: OnLocalDtshGenerated records the local index so the next lifecycle
+	// report advertises has_dtsh and Foghorn drives a verified, attempt-scoped TriggerDtshSync. The relay does
+	// NOT upload the .dtsh directly — a direct PUT to a fixed key wrote an unverified, untracked object whose
+	// synthesized completion matched no persisted attempt.
 	if s.freeze != nil {
 		s.freeze.OnLocalDtshGenerated(kind, hash, localPath)
 	}
@@ -330,77 +320,4 @@ func (s *Server) nestedSidecarPathFor(kind, file, streamInternal string) string 
 		return ""
 	}
 	return filepath.Join(s.basePath, "clips", streamInternal, file)
-}
-
-// cachedDtshPutURL returns the .dtsh PUT URL Foghorn minted on the most
-// recent RelayResolve for this asset, or "" if none is cached. Only
-// consults the in-memory resolve cache — does not issue a fresh resolve to
-// avoid a control-stream roundtrip on every PUT.
-func (s *Server) cachedDtshPutURL(kind, hash string) string {
-	if s.cache == nil {
-		return ""
-	}
-	if r, ok := s.cache.Get(kind, hash); ok {
-		return r.DtshPresignedPut
-	}
-	return ""
-}
-
-// uploadDtshToS3 PUTs the local .dtsh file to the supplied presigned URL
-// and, on success, sends a SyncComplete to Foghorn with dtsh_included=true
-// so the artifact row gets dtsh_synced=true and future cold-node resolves
-// can return DtshPresignedGet. Best-effort: failures fall through to the
-// freeze reconciler.
-func (s *Server) uploadDtshToS3(kind, hash, putURL, localPath string) {
-	body, err := os.Open(localPath)
-	if err != nil {
-		dtshUpload.WithLabelValues("error").Inc()
-		if s.logger != nil {
-			s.logger.WithError(err).WithField("local_path", localPath).Debug("relay direct .dtsh upload: open local file failed")
-		}
-		return
-	}
-	defer body.Close()
-	info, err := body.Stat()
-	if err != nil {
-		dtshUpload.WithLabelValues("error").Inc()
-		return
-	}
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPut, putURL, body)
-	if err != nil {
-		dtshUpload.WithLabelValues("error").Inc()
-		return
-	}
-	req.ContentLength = info.Size()
-	resp, err := s.httpc.Do(req)
-	if err != nil {
-		dtshUpload.WithLabelValues("error").Inc()
-		if s.logger != nil {
-			s.logger.WithError(err).Debug("relay direct .dtsh upload: PUT failed")
-		}
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		dtshUpload.WithLabelValues("error").Inc()
-		if s.logger != nil {
-			s.logger.WithField("status", resp.StatusCode).Debug("relay direct .dtsh upload: non-2xx")
-		}
-		return
-	}
-	dtshUpload.WithLabelValues("ok").Inc()
-
-	// Tell Foghorn the sidecar is durable. Synthesizes a request_id so the
-	// SyncComplete is well-formed; assetHash is the artifact (vod/clip)
-	// hash — DVR sidecars don't flow through this path.
-	if kind != "vod" && kind != "clip" {
-		return
-	}
-	rid, idErr := newRequestID()
-	if idErr != nil {
-		return
-	}
-	if err := control.SendSyncComplete(rid, hash, "success", "", 0, "", true, false); err != nil && s.logger != nil {
-		s.logger.WithError(err).WithField("asset_hash", hash).Debug("relay direct .dtsh upload: SyncComplete send failed; freeze reconciler will retry")
-	}
 }

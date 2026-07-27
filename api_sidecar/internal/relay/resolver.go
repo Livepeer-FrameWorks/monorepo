@@ -28,7 +28,6 @@ type ResolveResult struct {
 	State              ipcpb.AssetState
 	MediaPresignedURL  string
 	DtshPresignedGet   string
-	DtshPresignedPut   string
 	ExpectedSizeBytes  uint64
 	ContentType        string
 	URLTTLSeconds      int64
@@ -105,7 +104,6 @@ func (r *controlResolver) Resolve(rc ResolveContext) (*ResolveResult, error) {
 		State:              resp.GetState(),
 		MediaPresignedURL:  resp.GetMediaPresignedUrl(),
 		DtshPresignedGet:   resp.GetDtshPresignedGet(),
-		DtshPresignedPut:   resp.GetDtshPresignedPut(),
 		ExpectedSizeBytes:  resp.GetExpectedSizeBytes(),
 		ContentType:        resp.GetContentType(),
 		URLTTLSeconds:      resp.GetUrlTtlSeconds(),

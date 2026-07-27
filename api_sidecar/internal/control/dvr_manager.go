@@ -229,9 +229,9 @@ func SegmentInRollingManifest(job *DVRJob, segmentName string) bool {
 // DVRSegmentDropped(was_uploaded=true) so Foghorn marks deleted_local.
 //
 // Returns the number of files actually deleted.
-func (dm *DVRManager) EvictUploadedSegments(dvrHash string, candidates []string, reason string) int {
+func (dm *DVRManager) EvictUploadedSegments(dvrHash string, candidates []string, reason string) (deleted int, freedBytes uint64) {
 	if len(candidates) == 0 {
-		return 0
+		return 0, 0
 	}
 	job, jobActive := LookupActiveDVR(dvrHash)
 	// Resolve the DVR segments directory. While the DVR job is active
@@ -257,10 +257,9 @@ func (dm *DVRManager) EvictUploadedSegments(dvrHash string, candidates []string,
 					logger.WithError(dropErr).WithField("segment", name).Debug("Failed to report missing segment as dropped (post-stop, no dir)")
 				}
 			}
-			return 0
+			return 0, 0
 		}
 	}
-	deleted := 0
 	idx := localSegmentIndex
 	for _, name := range candidates {
 		// Rolling-manifest pin is only meaningful while the DVR is
@@ -304,8 +303,9 @@ func (dm *DVRManager) EvictUploadedSegments(dvrHash string, candidates []string,
 			idx.Forget(dvrHash, name)
 		}
 		deleted++
+		freedBytes += uint64(info.Size())
 	}
-	return deleted
+	return deleted, freedBytes
 }
 
 // resolveDVRSegmentsDirByHash scans storage/dvr/*/<dvr_hash>/segments for
@@ -668,9 +668,18 @@ func (dm *DVRManager) StartRecording(dvrHash, streamID, internalName, sourceRunt
 	dm.mutex.Lock()
 	defer dm.mutex.Unlock()
 
-	// Check if already recording
-	if _, exists := dm.jobs[dvrHash]; exists {
-		return fmt.Errorf("DVR recording already active for hash %s", dvrHash)
+	// A repeat start for the same hash is an IDEMPOTENT ack, not an error: Foghorn's stale-'starting'
+	// recovery re-dispatches SendDVRStart when a prior attempt's ack was lost, and re-issuing must
+	// CONVERGE rather than emit a spurious failed DVRStopped. If a recording for this hash is already
+	// active/starting for the SAME stream, report success and let the existing job's progress keep
+	// driving the recording transition. A start for a DIFFERENT stream on the same hash is a genuine
+	// conflict and stays an error.
+	if existing, exists := dm.jobs[dvrHash]; exists {
+		if existing.InternalName == internalName {
+			dm.logger.WithField("dvr_hash", dvrHash).Info("DVR start repeated for already-active recording; treating as idempotent ack")
+			return nil
+		}
+		return fmt.Errorf("DVR recording already active for hash %s on a different stream (%s != %s)", dvrHash, existing.InternalName, internalName)
 	}
 
 	if err := os.MkdirAll(dm.storagePath, 0755); err != nil {
@@ -1130,7 +1139,7 @@ func (dm *DVRManager) monitorJob(job *DVRJob) {
 					if evictErr != nil || resp == nil || len(resp.GetSegmentNames()) == 0 {
 						break
 					}
-					evicted := dm.EvictUploadedSegments(job.DVRHash, resp.GetSegmentNames(), "disk_pressure")
+					evicted, _ := dm.EvictUploadedSegments(job.DVRHash, resp.GetSegmentNames(), "disk_pressure")
 					totalEvicted += evicted
 					if evicted == 0 {
 						break

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -248,12 +247,17 @@ func (cm *CleanupMonitor) getCleanupCandidates(dir string, assetType string) ([]
 	var candidates []ClipCleanupInfo
 	minAge := time.Now().Add(-time.Duration(cm.minRetentionHours) * time.Hour)
 
-	// Get current artifact index for access information
+	// Snapshot the artifact index under the lock, deep-copying each value: the candidate reads below run
+	// after the lock is released while DTSH/deletion handlers mutate these entries under it, so the read
+	// view must own its ClipInfo copies rather than alias the live ones.
 	var artifactIndex map[string]*ClipInfo
 	if prometheusMonitor != nil {
 		prometheusMonitor.mutex.RLock()
-		artifactIndex = make(map[string]*ClipInfo)
-		maps.Copy(artifactIndex, prometheusMonitor.artifactIndex)
+		artifactIndex = make(map[string]*ClipInfo, len(prometheusMonitor.artifactIndex))
+		for k, v := range prometheusMonitor.artifactIndex {
+			cp := *v
+			artifactIndex[k] = &cp
+		}
 		prometheusMonitor.mutex.RUnlock()
 	}
 
@@ -570,6 +574,7 @@ func (cm *CleanupMonitor) cleanupClip(artifact ClipCleanupInfo) error {
 	if prometheusMonitor != nil {
 		prometheusMonitor.mutex.Lock()
 		delete(prometheusMonitor.artifactIndex, artifact.ClipHash)
+		artifactMutationGen.Add(1) // point mutation — invalidate any in-flight scan's publish
 		prometheusMonitor.mutex.Unlock()
 	}
 
