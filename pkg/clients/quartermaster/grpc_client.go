@@ -331,12 +331,42 @@ func (c *GRPCClient) ListClustersByOwner(ctx context.Context, ownerTenantID stri
 	})
 }
 
-// ListOfficialClusters lists all platform-official clusters.
+// ListOfficialClusters lists ALL platform-official clusters, following pagination to completion — a single
+// request would return only the first page (default page size), silently truncating the authority/entitlement
+// set for consumers (Foghorn platform-shared authority, Purser tier access). The aggregated clusters are
+// returned in one response with no pagination cursor.
 func (c *GRPCClient) ListOfficialClusters(ctx context.Context) (*quartermasterpb.ListClustersResponse, error) {
 	t := true
-	return c.cluster.ListClusters(ctx, &quartermasterpb.ListClustersRequest{
-		IsPlatformOfficial: &t,
-	})
+	const pageSize = 200
+	var all []*quartermasterpb.InfrastructureCluster
+	after := ""
+	for {
+		req := &quartermasterpb.ListClustersRequest{
+			IsPlatformOfficial: &t,
+			Pagination:         &commonpb.CursorPaginationRequest{First: pageSize},
+		}
+		if after != "" {
+			a := after
+			req.Pagination.After = &a
+		}
+		resp, err := c.cluster.ListClusters(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, resp.GetClusters()...)
+		p := resp.GetPagination()
+		if p == nil || !p.GetHasNextPage() {
+			break
+		}
+		// hasNextPage=true but no advancing cursor is an INCONSISTENT page: silently stopping here would
+		// publish a truncated authority/entitlement set. Fail the whole refresh instead.
+		end := p.GetEndCursor()
+		if end == "" || end == after {
+			return nil, fmt.Errorf("list official clusters: inconsistent pagination (has_next_page but cursor %q did not advance)", end)
+		}
+		after = end
+	}
+	return &quartermasterpb.ListClustersResponse{Clusters: all}, nil
 }
 
 // ListPublicTopologyClusters lists clusters visible on public topology maps.

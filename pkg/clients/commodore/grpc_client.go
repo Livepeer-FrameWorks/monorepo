@@ -424,64 +424,17 @@ func (c *GRPCClient) StartDVR(ctx context.Context, req *sharedpb.StartDVRRequest
 // See: docs/architecture/clips-dvr.md
 // ============================================================================
 
-// RegisterClip registers a new clip in the business registry
-// Called by Foghorn during the CreateClip flow
-func (c *GRPCClient) RegisterClip(ctx context.Context, req *commodorepb.RegisterClipRequest) (*commodorepb.RegisterClipResponse, error) {
-	return c.internal.RegisterClip(ctx, req)
-}
-
 // RegisterDVR registers a new DVR recording in the business registry
 // Called by Foghorn during the StartDVR flow
 func (c *GRPCClient) RegisterDVR(ctx context.Context, req *commodorepb.RegisterDVRRequest) (*commodorepb.RegisterDVRResponse, error) {
 	return c.internal.RegisterDVR(ctx, req)
 }
 
-// MarkArtifactThumbnailsReady flips has_thumbnails=TRUE and stamps
-// storage_cluster_id on the commodore.{clips, dvr_recordings, vod_assets}
-// row matching (tenant_id, asset_key). Idempotent. Called from Foghorn's
-// processThumbnailUploaded confirmation site.
-func (c *GRPCClient) MarkArtifactThumbnailsReady(ctx context.Context, tenantID string, assetType commodorepb.ArtifactAssetType, assetKey, storageClusterID string) (*commodorepb.MarkArtifactThumbnailsReadyResponse, error) {
-	return c.internal.MarkArtifactThumbnailsReady(ctx, &commodorepb.MarkArtifactThumbnailsReadyRequest{
-		TenantId:         tenantID,
-		AssetType:        assetType,
-		AssetKey:         assetKey,
-		StorageClusterId: storageClusterID,
-	})
-}
-
-// UpdateArtifactStorageCluster updates storage_cluster_id only — never
-// touches has_thumbnails. Called whenever Foghorn mutates
-// foghorn.artifacts.storage_cluster_id.
-func (c *GRPCClient) UpdateArtifactStorageCluster(ctx context.Context, tenantID string, assetType commodorepb.ArtifactAssetType, assetKey, storageClusterID string) (*commodorepb.UpdateArtifactStorageClusterResponse, error) {
-	return c.internal.UpdateArtifactStorageCluster(ctx, &commodorepb.UpdateArtifactStorageClusterRequest{
-		TenantId:         tenantID,
-		AssetType:        assetType,
-		AssetKey:         assetKey,
-		StorageClusterId: storageClusterID,
-	})
-}
-
-// UpdateArtifactSize projects Foghorn's authoritative artifact byte count into
-// the Commodore registry row used for catalog pagination and sorting.
-func (c *GRPCClient) UpdateArtifactSize(ctx context.Context, tenantID string, assetType commodorepb.ArtifactAssetType, assetKey string, sizeBytes int64) (*commodorepb.UpdateArtifactSizeResponse, error) {
-	return c.internal.UpdateArtifactSize(ctx, &commodorepb.UpdateArtifactSizeRequest{
-		TenantId:  tenantID,
-		AssetType: assetType,
-		AssetKey:  assetKey,
-		SizeBytes: sizeBytes,
-	})
-}
-
-// UpdateClipDuration projects the measured output duration onto the
-// commodore clip registry row, so a partial clip (live buffer shallower than
-// the requested range) lists with its real length.
-func (c *GRPCClient) UpdateClipDuration(ctx context.Context, tenantID, clipHash string, durationMs int64) (*commodorepb.UpdateArtifactSizeResponse, error) {
-	return c.internal.UpdateArtifactSize(ctx, &commodorepb.UpdateArtifactSizeRequest{
-		TenantId:   tenantID,
-		AssetType:  commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_CLIP,
-		AssetKey:   clipHash,
-		DurationMs: &durationMs,
-	})
+// UpdateArtifactCatalogSnapshot applies a whole authoritative catalog snapshot in one
+// revision-guarded write (the reconciler's single-writer projection path). This is the only
+// artifact-catalog projection RPC; the former per-field update RPCs were removed.
+func (c *GRPCClient) UpdateArtifactCatalogSnapshot(ctx context.Context, req *commodorepb.UpdateArtifactCatalogSnapshotRequest) (*commodorepb.UpdateArtifactCatalogSnapshotResponse, error) {
+	return c.internal.UpdateArtifactCatalogSnapshot(ctx, req)
 }
 
 // UpdateDVRRetention back-fills retention_until on a finalized DVR.
@@ -616,29 +569,6 @@ func (c *GRPCClient) ResolveIdentifier(ctx context.Context, identifier string) (
 	})
 }
 
-// RegisterVod registers a new VOD asset in the business registry
-// Called by Foghorn during CreateVodUpload flow (mirrors DVR/clip pattern)
-func (c *GRPCClient) RegisterVod(ctx context.Context, tenantID, userID, filename string, title, description, contentType *string, sizeBytes *int64) (*commodorepb.RegisterVodResponse, error) {
-	req := &commodorepb.RegisterVodRequest{
-		TenantId: tenantID,
-		UserId:   userID,
-		Filename: filename,
-	}
-	if title != nil {
-		req.Title = title
-	}
-	if description != nil {
-		req.Description = description
-	}
-	if contentType != nil {
-		req.ContentType = contentType
-	}
-	if sizeBytes != nil {
-		req.SizeBytes = sizeBytes
-	}
-	return c.internal.RegisterVod(ctx, req)
-}
-
 // ResolveVodHash resolves a VOD hash to tenant context
 // Used for analytics enrichment, playback authorization, and lifecycle operations
 func (c *GRPCClient) ResolveVodHash(ctx context.Context, vodHash string) (*commodorepb.ResolveVodHashResponse, error) {
@@ -673,7 +603,7 @@ func (c *GRPCClient) ResolveVodID(ctx context.Context, vodID string) (*commodore
 // MintChapterPlaybackID asks Commodore to mint (or return the existing)
 // public playback_id for a hidden chapter artifact. Idempotent on
 // chapter_id.
-func (c *GRPCClient) MintChapterPlaybackID(ctx context.Context, chapterID, tenantID, artifactHash, userID, filename, originClusterID, storageClusterID, streamID string) (*commodorepb.MintChapterPlaybackIDResponse, error) {
+func (c *GRPCClient) MintChapterPlaybackID(ctx context.Context, chapterID, tenantID, artifactHash, userID, filename, originClusterID, storageClusterID, streamID, dvrHash string) (*commodorepb.MintChapterPlaybackIDResponse, error) {
 	return c.internal.MintChapterPlaybackID(ctx, &commodorepb.MintChapterPlaybackIDRequest{
 		ChapterId:        chapterID,
 		TenantId:         tenantID,
@@ -683,6 +613,7 @@ func (c *GRPCClient) MintChapterPlaybackID(ctx context.Context, chapterID, tenan
 		OriginClusterId:  originClusterID,
 		StorageClusterId: storageClusterID,
 		StreamId:         streamID,
+		DvrHash:          dvrHash,
 	})
 }
 
@@ -770,9 +701,10 @@ func (c *GRPCClient) GetStreamsBatch(ctx context.Context, streamIDs []string) (*
 }
 
 // ListStreams lists streams with cursor pagination
-func (c *GRPCClient) ListStreams(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*commodorepb.ListStreamsResponse, error) {
+func (c *GRPCClient) ListStreams(ctx context.Context, pagination *commonpb.CursorPaginationRequest, search string) (*commodorepb.ListStreamsResponse, error) {
 	return c.stream.ListStreams(ctx, &commodorepb.ListStreamsRequest{
 		Pagination: pagination,
+		Search:     search,
 	})
 }
 
@@ -1017,29 +949,9 @@ func (c *GRPCClient) RevokeAPIToken(ctx context.Context, tokenID string) (*commo
 // CLIP OPERATIONS (Gateway → Commodore → Foghorn proxy)
 // ============================================================================
 
-type MediaListOptions struct {
-	Search        string
-	SortField     string
-	SortDirection string
-	Offset        *int32
-}
-
 // CreateClip creates a new clip
 func (c *GRPCClient) CreateClip(ctx context.Context, req *sharedpb.CreateClipRequest) (*sharedpb.CreateClipResponse, error) {
 	return c.clip.CreateClip(ctx, req)
-}
-
-// GetClips lists clips with optional stream_id filter
-func (c *GRPCClient) GetClips(ctx context.Context, tenantID string, streamID *string, pagination *commonpb.CursorPaginationRequest, opts ...MediaListOptions) (*sharedpb.GetClipsResponse, error) {
-	req := &sharedpb.GetClipsRequest{
-		TenantId:   tenantID,
-		Pagination: pagination,
-	}
-	if streamID != nil {
-		req.StreamId = streamID
-	}
-	applyMediaListOptionsToClips(req, opts...)
-	return c.clip.GetClips(ctx, req)
 }
 
 // GetClip gets a single clip by hash
@@ -1070,11 +982,16 @@ func (c *GRPCClient) StopDVR(ctx context.Context, dvrHash string) error {
 }
 
 // DeleteDVR deletes a DVR recording
-func (c *GRPCClient) DeleteDVR(ctx context.Context, dvrHash string) error {
-	_, err := c.dvr.DeleteDVR(ctx, &sharedpb.DeleteDVRRequest{
+// DeleteDVR returns (deleted, err): deleted is false when the DVR was already deleted (idempotent
+// no-op) so the caller can avoid emitting a duplicate delete event.
+func (c *GRPCClient) DeleteDVR(ctx context.Context, dvrHash string) (bool, error) {
+	resp, err := c.dvr.DeleteDVR(ctx, &sharedpb.DeleteDVRRequest{
 		DvrHash: dvrHash,
 	})
-	return err
+	if err != nil {
+		return false, err
+	}
+	return resp.GetSuccess(), nil
 }
 
 // RetrieveDVRChapter returns chapter metadata (state, range, public
@@ -1092,19 +1009,6 @@ func (c *GRPCClient) ListDVRChapters(ctx context.Context, req *foghorncontrolpb.
 // ListStorageArtifacts returns the unified account storage browser projection.
 func (c *GRPCClient) ListStorageArtifacts(ctx context.Context, req *commodorepb.ListStorageArtifactsRequest) (*commodorepb.ListStorageArtifactsResponse, error) {
 	return c.internal.ListStorageArtifacts(ctx, req)
-}
-
-// ListDVRRequests lists DVR recordings with filters
-func (c *GRPCClient) ListDVRRequests(ctx context.Context, tenantID string, streamID *string, pagination *commonpb.CursorPaginationRequest, opts ...MediaListOptions) (*sharedpb.ListDVRRecordingsResponse, error) {
-	req := &sharedpb.ListDVRRecordingsRequest{
-		TenantId:   tenantID,
-		Pagination: pagination,
-	}
-	if streamID != nil {
-		req.StreamId = streamID
-	}
-	applyMediaListOptionsToDVR(req, opts...)
-	return c.dvr.ListDVRRequests(ctx, req)
 }
 
 // ============================================================================
@@ -1177,58 +1081,6 @@ func (c *GRPCClient) GetVodUploadStatus(ctx context.Context, tenantID, uploadID 
 		TenantId: tenantID,
 		UploadId: uploadID,
 	})
-}
-
-// GetVodAsset gets a single VOD asset by hash
-func (c *GRPCClient) GetVodAsset(ctx context.Context, tenantID, artifactHash string) (*sharedpb.VodAssetInfo, error) {
-	return c.vod.GetVodAsset(ctx, &sharedpb.GetVodAssetRequest{
-		TenantId:     tenantID,
-		ArtifactHash: artifactHash,
-	})
-}
-
-// ListVodAssets lists VOD assets with pagination
-func (c *GRPCClient) ListVodAssets(ctx context.Context, tenantID string, pagination *commonpb.CursorPaginationRequest, streamID *string, opts ...MediaListOptions) (*sharedpb.ListVodAssetsResponse, error) {
-	req := &sharedpb.ListVodAssetsRequest{
-		TenantId:   tenantID,
-		Pagination: pagination,
-		StreamId:   streamID,
-	}
-	applyMediaListOptionsToVod(req, opts...)
-	return c.vod.ListVodAssets(ctx, req)
-}
-
-func applyMediaListOptionsToClips(req *sharedpb.GetClipsRequest, opts ...MediaListOptions) {
-	if len(opts) == 0 {
-		return
-	}
-	opt := opts[0]
-	req.Search = opt.Search
-	req.SortField = opt.SortField
-	req.SortDirection = opt.SortDirection
-	req.Offset = opt.Offset
-}
-
-func applyMediaListOptionsToDVR(req *sharedpb.ListDVRRecordingsRequest, opts ...MediaListOptions) {
-	if len(opts) == 0 {
-		return
-	}
-	opt := opts[0]
-	req.Search = opt.Search
-	req.SortField = opt.SortField
-	req.SortDirection = opt.SortDirection
-	req.Offset = opt.Offset
-}
-
-func applyMediaListOptionsToVod(req *sharedpb.ListVodAssetsRequest, opts ...MediaListOptions) {
-	if len(opts) == 0 {
-		return
-	}
-	opt := opts[0]
-	req.Search = opt.Search
-	req.SortField = opt.SortField
-	req.SortDirection = opt.SortDirection
-	req.Offset = opt.Offset
 }
 
 // DeleteVodAsset deletes a VOD asset

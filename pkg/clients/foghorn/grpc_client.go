@@ -10,7 +10,6 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	foghornrelaypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_relay"
@@ -231,6 +230,14 @@ func (c *GRPCClient) DeleteClip(ctx context.Context, clipHash string, tenantID *
 	return resp, trailers, err
 }
 
+// DeleteStreamThumbnails removes a live stream's thumbnail control rows + objects on Foghorn (called at stream
+// deletion, since a live stream has no artifact row for the purge job and its final version is never GC'd).
+func (c *GRPCClient) DeleteStreamThumbnails(ctx context.Context, streamID, tenantID string) (*sharedpb.DeleteStreamThumbnailsResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	return c.clip.DeleteStreamThumbnails(ctx, &sharedpb.DeleteStreamThumbnailsRequest{StreamId: streamID, TenantId: tenantID})
+}
+
 // =============================================================================
 // DVR OPERATIONS
 // =============================================================================
@@ -419,34 +426,6 @@ func (c *GRPCClient) GetVodUploadStatus(ctx context.Context, tenantID, uploadID 
 	resp, err := c.vod.GetVodUploadStatus(ctx, &sharedpb.GetVodUploadStatusRequest{
 		TenantId: tenantID,
 		UploadId: uploadID,
-	}, grpc.Trailer(&trailers))
-	return resp, trailers, err
-}
-
-// GetVodAsset returns a single VOD asset by hash.
-// Returns any trailers emitted by the downstream service.
-func (c *GRPCClient) GetVodAsset(ctx context.Context, tenantID, artifactHash string) (*sharedpb.VodAssetInfo, metadata.MD, error) {
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
-	defer cancel()
-
-	var trailers metadata.MD
-	resp, err := c.vod.GetVodAsset(ctx, &sharedpb.GetVodAssetRequest{
-		TenantId:     tenantID,
-		ArtifactHash: artifactHash,
-	}, grpc.Trailer(&trailers))
-	return resp, trailers, err
-}
-
-// ListVodAssets returns paginated list of VOD assets for a tenant.
-// Returns any trailers emitted by the downstream service.
-func (c *GRPCClient) ListVodAssets(ctx context.Context, tenantID string, pagination *commonpb.CursorPaginationRequest) (*sharedpb.ListVodAssetsResponse, metadata.MD, error) {
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
-	defer cancel()
-
-	var trailers metadata.MD
-	resp, err := c.vod.ListVodAssets(ctx, &sharedpb.ListVodAssetsRequest{
-		TenantId:   tenantID,
-		Pagination: pagination,
 	}, grpc.Trailer(&trailers))
 	return resp, trailers, err
 }
