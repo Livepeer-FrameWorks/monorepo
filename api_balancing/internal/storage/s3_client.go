@@ -26,6 +26,7 @@ type s3API interface {
 	PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
 	DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
 	DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error)
+	CopyObject(ctx context.Context, params *s3.CopyObjectInput, optFns ...func(*s3.Options)) (*s3.CopyObjectOutput, error)
 	HeadObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
 	ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
 	CreateMultipartUpload(ctx context.Context, params *s3.CreateMultipartUploadInput, optFns ...func(*s3.Options)) (*s3.CreateMultipartUploadOutput, error)
@@ -305,6 +306,57 @@ func (c *S3Client) Exists(ctx context.Context, key string) (bool, error) {
 	return true, nil
 }
 
+// HeadObjectInfo returns existence, size, and the object's ETag in a single HEAD. The ETag pins the exact
+// bytes so a subsequent conditional promotion (PromoteObject) fails if the object was overwritten.
+func (c *S3Client) HeadObjectInfo(ctx context.Context, key string) (bool, int64, string, error) {
+	fullKey := c.fullKey(key)
+	resp, err := c.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(c.config.Bucket),
+		Key:    aws.String(fullKey),
+	})
+	if err != nil {
+		if isNotFoundError(err) {
+			return false, 0, "", nil
+		}
+		return false, 0, "", fmt.Errorf("failed to head object: %w", err)
+	}
+	var size int64
+	if resp.ContentLength != nil {
+		size = *resp.ContentLength
+	}
+	etag := ""
+	if resp.ETag != nil {
+		etag = *resp.ETag
+	}
+	return true, size, etag, nil
+}
+
+// PromoteObject copies srcKey to dstKey CONDITIONALLY on the source ETag (x-amz-copy-source-if-match), so a
+// concurrent overwrite of the staging object between verification and promotion fails the copy instead of
+// producing corrupt/unbilled bytes at the destination. dstKey is a FRESH, attempt-versioned CANDIDATE key
+// (control.FreezePublish{,Dtsh}Key), never a fixed served address — it becomes the active object only when the
+// caller's guarded CAS flips active_object_key to it, so this copy can never overwrite live bytes. It does NOT
+// delete the staging source: staging is kept until the caller's DURABLE commit succeeds (then DeleteStaging),
+// so a crash/DB-failure after the copy but before commit leaves the exact staging bytes for an idempotent
+// retry. The copy itself is idempotent (same bytes → same candidate object). ifMatchETag is REQUIRED — an
+// empty ETag would silently degrade the conditional copy to an unconditional one, so it is rejected.
+func (c *S3Client) PromoteObject(ctx context.Context, srcKey, dstKey, ifMatchETag string) error {
+	if strings.TrimSpace(ifMatchETag) == "" {
+		return fmt.Errorf("promote staging object: refusing an unconditional copy (empty source ETag)")
+	}
+	srcFull := c.fullKey(srcKey)
+	dstFull := c.fullKey(dstKey)
+	if _, err := c.client.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:            aws.String(c.config.Bucket),
+		Key:               aws.String(dstFull),
+		CopySource:        aws.String(c.config.Bucket + "/" + srcFull),
+		CopySourceIfMatch: aws.String(ifMatchETag),
+	}); err != nil {
+		return fmt.Errorf("failed to promote staging object to candidate key: %w", err)
+	}
+	return nil
+}
+
 // isNotFoundError checks if the error is a "not found" type error
 func isNotFoundError(err error) bool {
 	if err == nil {
@@ -384,6 +436,25 @@ func (c *S3Client) ParseS3URL(s3URL string) (string, error) {
 		fullKey = strings.TrimPrefix(fullKey, prefix)
 	}
 	return fullKey, nil
+}
+
+// ParseLocalS3URL is ParseS3URL with a BUCKET GUARD: it returns an error unless the URL's bucket is THIS
+// client's configured bucket. ParseS3URL discards the bucket, so applying it to a foreign/remote-provider URL
+// silently yields a key under the wrong backend. Callers that persist or route on the parsed key for a row
+// whose backend ownership is not already proven local (e.g. the active_object_key backfill) MUST use this so a
+// remote pointer can never be rewritten as a local one.
+func (c *S3Client) ParseLocalS3URL(s3URL string) (string, error) {
+	if !strings.HasPrefix(s3URL, "s3://") {
+		return "", fmt.Errorf("not an s3:// URL: %s", s3URL)
+	}
+	bucket, _, ok := strings.Cut(strings.TrimPrefix(s3URL, "s3://"), "/")
+	if !ok {
+		return "", fmt.Errorf("no key in s3 URL: %s", s3URL)
+	}
+	if bucket != c.config.Bucket {
+		return "", fmt.Errorf("s3 URL bucket %q is not the local bucket %q", bucket, c.config.Bucket)
+	}
+	return c.ParseS3URL(s3URL)
 }
 
 // DeleteByURL parses an s3://bucket/key URL and deletes the object.

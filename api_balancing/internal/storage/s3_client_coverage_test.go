@@ -57,6 +57,10 @@ func (f *fakeS3API) DeleteObject(_ context.Context, params *s3.DeleteObjectInput
 	return &s3.DeleteObjectOutput{}, nil
 }
 
+func (f *fakeS3API) CopyObject(_ context.Context, _ *s3.CopyObjectInput, _ ...func(*s3.Options)) (*s3.CopyObjectOutput, error) {
+	return &s3.CopyObjectOutput{}, nil
+}
+
 func (f *fakeS3API) DeleteObjects(_ context.Context, params *s3.DeleteObjectsInput, _ ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
 	f.delObjsIn = append(f.delObjsIn, params)
 	if f.delObjsErr != nil {
