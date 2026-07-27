@@ -658,6 +658,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *quarte
 		WHERE tca.tenant_id = $1
 		  AND tca.is_active = TRUE
 		  AND tca.subscription_status = 'active'
+		  AND (tca.expires_at IS NULL OR tca.expires_at > NOW())
 		  AND ic.is_active = TRUE
 		ORDER BY ic.cluster_id ASC
 	`, tenantID)
@@ -3509,8 +3510,10 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *quartermast
 		`
 		baseCountArgs = append(baseCountArgs, ownerTenantID)
 	} else if publicPlatformOfficialScope {
+		// Only ACTIVE official clusters confer platform authority / tier access; an inactive one must not be
+		// listed as official-serving (mirrors the topology scope below).
 		baseWhere = `
-			WHERE c.is_platform_official = true
+			WHERE c.is_platform_official = true AND c.is_active = true
 		`
 	} else if publicTopologyScope {
 		baseWhere = `
@@ -3627,10 +3630,14 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *quartermast
 	for rows.Next() {
 		cluster, err := scanCluster(rows) // scanCluster needs to be updated for is_default_cluster
 		if err != nil {
-			s.logger.WithError(err).Warn("Failed to scan cluster")
-			continue
+			// FAIL CLOSED: silently dropping a row would return a TRUNCATED cluster set to authority/entitlement
+			// consumers. Surface the error instead.
+			return nil, status.Errorf(codes.Internal, "failed to scan cluster: %v", err)
 		}
 		clusters = append(clusters, cluster)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "cluster row iteration error: %v", err)
 	}
 
 	// Detect hasMore and trim results
