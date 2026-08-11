@@ -87,7 +87,7 @@ func TestPreDeployBlockers_EmptyRBVDefaultGate(t *testing.T) {
 			reqs := []Requirement{
 				{ID: "x", Service: "purser", IntroducedIn: tt.introducedIn},
 			}
-			got, err := PreDeployBlockers(context.Background(), src, reqs, "v0.3.0", "v0.5.0", trivialSemver)
+			got, err := PreDeployBlockers(context.Background(), src, reqs, "v0.5.0", trivialSemver, trivialBase)
 			if err != nil {
 				t.Fatalf("err = %v", err)
 			}

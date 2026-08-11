@@ -19,6 +19,15 @@ func trivialSemver(a, b string) int {
 	return 1
 }
 
+// trivialBase strips any -rc/build suffix, mirroring releases.BaseVersion for
+// tests. The real catalog supplies releases.BaseVersion.
+func trivialBase(v string) string {
+	if i := strings.IndexAny(v, "-+"); i >= 0 {
+		return v[:i]
+	}
+	return v
+}
+
 func staticSource(t *testing.T, statuses map[string]LiveStatus) StateSource {
 	t.Helper()
 	return func(_ context.Context, service, id string) LiveStatus {
@@ -30,7 +39,7 @@ func staticSource(t *testing.T, statuses map[string]LiveStatus) StateSource {
 }
 
 func TestPreDeployBlockers_EmptyRequirements(t *testing.T) {
-	got, err := PreDeployBlockers(context.Background(), staticSource(t, nil), nil, "v0.4.0", "v0.5.0", trivialSemver)
+	got, err := PreDeployBlockers(context.Background(), staticSource(t, nil), nil, "v0.5.0", trivialSemver, trivialBase)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -46,7 +55,7 @@ func TestPreDeployBlockers_PriorPendingBlocks(t *testing.T) {
 	src := staticSource(t, map[string]LiveStatus{
 		"purser.m1": {ID: "m1", Service: "purser", Status: StatusPending},
 	})
-	got, err := PreDeployBlockers(context.Background(), src, reqs, "v0.3.0", "v0.5.0", trivialSemver)
+	got, err := PreDeployBlockers(context.Background(), src, reqs, "v0.5.0", trivialSemver, trivialBase)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -65,7 +74,7 @@ func TestPreDeployBlockers_PriorCompletedPasses(t *testing.T) {
 	src := staticSource(t, map[string]LiveStatus{
 		"purser.m1": {ID: "m1", Service: "purser", Status: StatusCompleted},
 	})
-	got, err := PreDeployBlockers(context.Background(), src, reqs, "v0.3.0", "v0.5.0", trivialSemver)
+	got, err := PreDeployBlockers(context.Background(), src, reqs, "v0.5.0", trivialSemver, trivialBase)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -79,7 +88,7 @@ func TestPreDeployBlockers_NotAdoptedBlocks(t *testing.T) {
 		{ID: "m1", Service: "purser", IntroducedIn: "v0.4.0", RequiredBeforeVersion: "v0.5.0"},
 	}
 	// staticSource fallback returns NotAdopted for unknown ids.
-	got, err := PreDeployBlockers(context.Background(), staticSource(t, nil), reqs, "v0.3.0", "v0.5.0", trivialSemver)
+	got, err := PreDeployBlockers(context.Background(), staticSource(t, nil), reqs, "v0.5.0", trivialSemver, trivialBase)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -95,7 +104,7 @@ func TestPreDeployBlockers_NotRegisteredBlocks(t *testing.T) {
 	src := staticSource(t, map[string]LiveStatus{
 		"purser.m1": {ID: "m1", Service: "purser", NotRegistered: true},
 	})
-	got, err := PreDeployBlockers(context.Background(), src, reqs, "v0.3.0", "v0.5.0", trivialSemver)
+	got, err := PreDeployBlockers(context.Background(), src, reqs, "v0.5.0", trivialSemver, trivialBase)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -111,7 +120,7 @@ func TestPreDeployBlockers_FetchErrorBlocks(t *testing.T) {
 	src := staticSource(t, map[string]LiveStatus{
 		"purser.m1": {ID: "m1", Service: "purser", FetchError: errors.New("ssh died")},
 	})
-	got, err := PreDeployBlockers(context.Background(), src, reqs, "v0.3.0", "v0.5.0", trivialSemver)
+	got, err := PreDeployBlockers(context.Background(), src, reqs, "v0.5.0", trivialSemver, trivialBase)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -126,7 +135,7 @@ func TestPreDeployBlockers_TargetMigrationsExcluded(t *testing.T) {
 	reqs := []Requirement{
 		{ID: "target", Service: "purser", IntroducedIn: "v0.5.0"},
 	}
-	got, err := PreDeployBlockers(context.Background(), staticSource(t, nil), reqs, "v0.4.0", "v0.5.0", trivialSemver)
+	got, err := PreDeployBlockers(context.Background(), staticSource(t, nil), reqs, "v0.5.0", trivialSemver, trivialBase)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -142,7 +151,7 @@ func TestPrePostdeployBlockers_TargetPendingBlocks(t *testing.T) {
 	src := staticSource(t, map[string]LiveStatus{
 		"purser.m1": {ID: "m1", Service: "purser", Status: StatusPending},
 	})
-	got, err := PrePostdeployBlockers(context.Background(), src, reqs, "v0.5.0", trivialSemver)
+	got, err := PrePostdeployBlockers(context.Background(), src, reqs, "v0.5.0", trivialSemver, trivialBase)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -155,7 +164,7 @@ func TestPrePostdeployBlockers_NonPostdeployIgnored(t *testing.T) {
 	reqs := []Requirement{
 		{ID: "m1", Service: "purser", IntroducedIn: "v0.5.0", RequiredBeforePhase: "contract"},
 	}
-	got, err := PrePostdeployBlockers(context.Background(), staticSource(t, nil), reqs, "v0.5.0", trivialSemver)
+	got, err := PrePostdeployBlockers(context.Background(), staticSource(t, nil), reqs, "v0.5.0", trivialSemver, trivialBase)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -171,7 +180,7 @@ func TestPrePhaseBlockers_ContractPendingBlocks(t *testing.T) {
 	src := staticSource(t, map[string]LiveStatus{
 		"purser.m1": {ID: "m1", Service: "purser", Status: StatusPending},
 	})
-	got, err := PrePhaseBlockers(context.Background(), src, reqs, "contract", "v0.5.0", trivialSemver)
+	got, err := PrePhaseBlockers(context.Background(), src, reqs, "contract", "v0.5.0", trivialSemver, trivialBase)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -180,28 +189,78 @@ func TestPrePhaseBlockers_ContractPendingBlocks(t *testing.T) {
 	}
 }
 
+// TestPrePhaseBlockers_RCTargetGatesOwnRelease pins the base-version fix: a
+// requirement introduced in the FINAL release (v0.5.0) must still gate the
+// postdeploy/contract phase when the deploy target is a CANARY of that release
+// (v0.5.0-rc1). A raw comparison would drop it because final > RC.
+func TestPrePhaseBlockers_RCTargetGatesOwnRelease(t *testing.T) {
+	reqs := []Requirement{
+		{ID: "m1", Service: "purser", IntroducedIn: "v0.5.0", RequiredBeforePhase: "postdeploy"},
+	}
+	src := staticSource(t, map[string]LiveStatus{
+		"purser.m1": {ID: "m1", Service: "purser", Status: StatusPending},
+	})
+	got, err := PrePhaseBlockers(context.Background(), src, reqs, "postdeploy", "v0.5.0-rc1", trivialSemver, trivialBase)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("RC target must gate its own release's postdeploy migration; got %d blockers", len(got))
+	}
+}
+
+// TestPreDeployBlockers_RCTargetExcludesOwnRelease is the pre-deploy mirror: a
+// requirement introduced in the target's own release line is the postdeploy
+// gate's concern, so it must NOT appear as a prior blocker even when the target
+// is a canary (v0.5.0-rc1) whose raw string differs from IntroducedIn (v0.5.0).
+func TestPreDeployBlockers_RCTargetExcludesOwnRelease(t *testing.T) {
+	reqs := []Requirement{
+		{ID: "m1", Service: "purser", IntroducedIn: "v0.5.0"},
+	}
+	got, err := PreDeployBlockers(context.Background(), staticSource(t, nil), reqs, "v0.5.0-rc1", trivialSemver, trivialBase)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("target-line migration must not be a prior pre-deploy blocker for its own RC; got %d", len(got))
+	}
+}
+
 func TestBlockersRejectNilSource(t *testing.T) {
-	if _, err := PreDeployBlockers(context.Background(), nil, nil, "", "", trivialSemver); err == nil {
+	if _, err := PreDeployBlockers(context.Background(), nil, nil, "", trivialSemver, trivialBase); err == nil {
 		t.Error("nil StateSource must error")
 	}
-	if _, err := PrePostdeployBlockers(context.Background(), nil, nil, "", trivialSemver); err == nil {
+	if _, err := PrePostdeployBlockers(context.Background(), nil, nil, "", trivialSemver, trivialBase); err == nil {
 		t.Error("nil StateSource must error")
 	}
-	if _, err := PrePhaseBlockers(context.Background(), nil, nil, "contract", "", trivialSemver); err == nil {
+	if _, err := PrePhaseBlockers(context.Background(), nil, nil, "contract", "", trivialSemver, trivialBase); err == nil {
 		t.Error("nil StateSource must error")
 	}
 }
 
 func TestBlockersRejectNilCompare(t *testing.T) {
 	src := staticSource(t, nil)
-	if _, err := PreDeployBlockers(context.Background(), src, nil, "", "", nil); err == nil {
+	if _, err := PreDeployBlockers(context.Background(), src, nil, "", nil, trivialBase); err == nil {
 		t.Error("nil semverCompare must error")
 	}
-	if _, err := PrePostdeployBlockers(context.Background(), src, nil, "", nil); err == nil {
+	if _, err := PrePostdeployBlockers(context.Background(), src, nil, "", nil, trivialBase); err == nil {
 		t.Error("nil semverCompare must error")
 	}
-	if _, err := PrePhaseBlockers(context.Background(), src, nil, "contract", "", nil); err == nil {
+	if _, err := PrePhaseBlockers(context.Background(), src, nil, "contract", "", nil, trivialBase); err == nil {
 		t.Error("nil semverCompare must error")
+	}
+}
+
+func TestBlockersRejectNilBase(t *testing.T) {
+	src := staticSource(t, nil)
+	if _, err := PreDeployBlockers(context.Background(), src, nil, "", trivialSemver, nil); err == nil {
+		t.Error("nil baseVersion must error")
+	}
+	if _, err := PrePostdeployBlockers(context.Background(), src, nil, "", trivialSemver, nil); err == nil {
+		t.Error("nil baseVersion must error")
+	}
+	if _, err := PrePhaseBlockers(context.Background(), src, nil, "contract", "", trivialSemver, nil); err == nil {
+		t.Error("nil baseVersion must error")
 	}
 }
 

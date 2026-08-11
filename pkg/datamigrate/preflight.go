@@ -63,9 +63,16 @@ type Blocker struct {
 	Reason string
 }
 
-// PreDeployBlockers returns every required PRIOR-version data migration
-// across (currentVersion, targetVersion] that is not completed. "Prior"
-// means RequiredBeforeVersion <= targetVersion AND IntroducedIn != targetVersion.
+// PreDeployBlockers returns every required PRIOR data migration that is not completed before deploying targetVersion.
+// "Prior" is TARGET-RELATIVE and does NOT depend on the currently-running version: a requirement blocks when its
+// RequiredBeforeVersion <= targetVersion (or, when unset, when targetVersion > IntroducedIn) AND IntroducedIn !=
+// targetVersion. The requirement's own RequiredBeforeVersion window decides, checked against live migration state.
+//
+// All release-line comparisons are made on BASE versions (baseVersion strips any -rc/build suffix): a catalog
+// requirement's IntroducedIn is a base release (e.g. v0.3.0), while the deploy target may be a canary of it
+// (v0.3.0-rc1). Comparing raw would treat the RC as strictly below its own release and either mis-identify the target's
+// own migration as prior (raw !=) or, in the phase gates, skip it entirely (final > RC). Normalizing both sides keeps
+// this consistent with the catalog selection in CatalogRequirements, which already filters by base version.
 //
 // The pre-deploy gate cannot require a target-version data migration to be
 // completed because completing it requires the target's code. Target data
@@ -75,23 +82,25 @@ type Blocker struct {
 // migrations completed". An empty result with 0 declared requirements is
 // also honest: "no required prior data migrations declared in this window."
 // Callers must surface these distinctly.
-func PreDeployBlockers(ctx context.Context, src StateSource, reqs []Requirement, currentVersion, targetVersion string, semverCompare func(a, b string) int) ([]Blocker, error) {
+func PreDeployBlockers(ctx context.Context, src StateSource, reqs []Requirement, targetVersion string, semverCompare func(a, b string) int, baseVersion func(v string) string) ([]Blocker, error) {
 	if src == nil {
 		return nil, errors.New("PreDeployBlockers: nil StateSource")
 	}
 	if semverCompare == nil {
 		return nil, errors.New("PreDeployBlockers: nil semverCompare")
 	}
+	if baseVersion == nil {
+		return nil, errors.New("PreDeployBlockers: nil baseVersion")
+	}
+	targetBase := baseVersion(targetVersion)
 	var out []Blocker
 	for _, r := range reqs {
-		if r.IntroducedIn == "" || r.IntroducedIn == targetVersion {
+		introBase := baseVersion(r.IntroducedIn)
+		// Exclude unversioned requirements and the target's OWN release-line migration (its postdeploy runs after the
+		// deploy; PrePostdeployBlockers gates it). Base-normalized so an RC target excludes its own final release.
+		if introBase == "" || introBase == targetBase {
 			continue
 		}
-		// IntroducedIn relative to currentVersion is informational only:
-		// even migrations introduced before currentVersion can still block
-		// when their RequiredBeforeVersion lies inside our (current, target]
-		// window. The RequiredBeforeVersion gate below is what decides.
-		_ = currentVersion
 
 		// RequiredBeforeVersion gate: if set, only block when target is at or
 		// past that version. If unset, treat as "blocks anything past
@@ -100,10 +109,10 @@ func PreDeployBlockers(ctx context.Context, src StateSource, reqs []Requirement,
 		if rbv == "" {
 			// Default: required before the next release after IntroducedIn,
 			// which we approximate as "any target > IntroducedIn".
-			if semverCompare(targetVersion, r.IntroducedIn) <= 0 {
+			if semverCompare(targetBase, introBase) <= 0 {
 				continue
 			}
-		} else if semverCompare(targetVersion, rbv) < 0 {
+		} else if semverCompare(targetBase, baseVersion(rbv)) < 0 {
 			continue
 		}
 
@@ -119,29 +128,35 @@ func PreDeployBlockers(ctx context.Context, src StateSource, reqs []Requirement,
 // (RequiredBeforePhase = "postdeploy") that is not completed. Used to gate
 // `cluster migrate --phase postdeploy --to-version vT`. Same fail-closed
 // semantics as PreDeployBlockers.
-func PrePostdeployBlockers(ctx context.Context, src StateSource, reqs []Requirement, targetVersion string, semverCompare func(a, b string) int) ([]Blocker, error) {
-	return PrePhaseBlockers(ctx, src, reqs, "postdeploy", targetVersion, semverCompare)
+func PrePostdeployBlockers(ctx context.Context, src StateSource, reqs []Requirement, targetVersion string, semverCompare func(a, b string) int, baseVersion func(v string) string) ([]Blocker, error) {
+	return PrePhaseBlockers(ctx, src, reqs, "postdeploy", targetVersion, semverCompare, baseVersion)
 }
 
 // PrePhaseBlockers returns every required data migration for phase whose
 // introduced version is at or before targetVersion and whose live state is not
-// completed. Used before postdeploy and contract SQL phases.
-func PrePhaseBlockers(ctx context.Context, src StateSource, reqs []Requirement, phase, targetVersion string, semverCompare func(a, b string) int) ([]Blocker, error) {
+// completed. Used before postdeploy and contract SQL phases. Versions compare
+// on their BASE (see PreDeployBlockers) so a canary/RC target still gates its
+// own release's postdeploy/contract migration (a raw final > RC would skip it).
+func PrePhaseBlockers(ctx context.Context, src StateSource, reqs []Requirement, phase, targetVersion string, semverCompare func(a, b string) int, baseVersion func(v string) string) ([]Blocker, error) {
 	if src == nil {
 		return nil, errors.New("PrePhaseBlockers: nil StateSource")
 	}
 	if semverCompare == nil {
 		return nil, errors.New("PrePhaseBlockers: nil semverCompare")
 	}
+	if baseVersion == nil {
+		return nil, errors.New("PrePhaseBlockers: nil baseVersion")
+	}
 	if phase == "" {
 		return nil, errors.New("PrePhaseBlockers: empty phase")
 	}
+	targetBase := baseVersion(targetVersion)
 	var out []Blocker
 	for _, r := range reqs {
 		if r.RequiredBeforePhase != phase {
 			continue
 		}
-		if semverCompare(r.IntroducedIn, targetVersion) > 0 {
+		if semverCompare(baseVersion(r.IntroducedIn), targetBase) > 0 {
 			continue
 		}
 		live := src(ctx, r.Service, r.ID)
