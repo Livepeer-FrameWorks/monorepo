@@ -1,0 +1,110 @@
+---
+- name: ClickHouse | ensure system group
+  ansible.builtin.group:
+    name: clickhouse
+    system: true
+    state: present
+
+- name: ClickHouse | ensure system user
+  ansible.builtin.user:
+    name: clickhouse
+    group: clickhouse
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+- name: ClickHouse | ensure base directory
+  ansible.builtin.file:
+    path: "{{ clickhouse_path }}"
+    state: directory
+    owner: clickhouse
+    group: clickhouse
+    mode: "0700"
+
+- name: ClickHouse | install repository prerequisites
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - python3-debian
+    state: present
+    update_cache: true
+
+# The Deb822 source replaces this known legacy source path. Keeping both makes
+# APT query the same repository twice on hosts upgraded in place.
+- name: ClickHouse | remove legacy repository source
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/packages_clickhouse_com_deb.list
+    state: absent
+
+- name: ClickHouse | configure scoped Deb822 repository
+  ansible.builtin.deb822_repository:
+    name: clickhouse
+    types:
+      - deb
+    uris:
+      - https://packages.clickhouse.com/deb
+    suites:
+      - "{{ clickhouse_release_type }}"
+    components:
+      - main
+    signed_by: "{{ clickhouse_repository_key_url }}"
+    state: present
+
+- name: ClickHouse | install pinned packages
+  ansible.builtin.apt:
+    name: "{{ frameworks_clickhouse_packages }}"
+    state: present
+    update_cache: true
+    allow_downgrades: true
+
+- name: ClickHouse | inspect installed server unit
+  ansible.builtin.stat:
+    path: /lib/systemd/system/clickhouse-server.service
+  register: frameworks_clickhouse_server_unit
+
+- name: ClickHouse | assert server package installed its unit
+  ansible.builtin.assert:
+    that:
+      - frameworks_clickhouse_server_unit.stat.isreg | default(false)
+    fail_msg: >-
+      The pinned clickhouse-server package did not install
+      /lib/systemd/system/clickhouse-server.service.
+
+- name: ClickHouse | ensure data directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: clickhouse
+    group: clickhouse
+    mode: "0750"
+  loop:
+    - "{{ clickhouse_path }}/access"
+    - "{{ clickhouse_path }}/user_files"
+
+- name: ClickHouse | ensure configuration directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: clickhouse
+    group: clickhouse
+    mode: "0700"
+  loop:
+    - /etc/clickhouse-server
+    - /etc/clickhouse-server/config.d
+    - /etc/clickhouse-server/users.d
+
+- name: ClickHouse | ensure temporary directory
+  ansible.builtin.file:
+    path: "{{ clickhouse_tmp_path }}"
+    state: directory
+    owner: clickhouse
+    group: clickhouse
+    mode: "0755"
+
+- name: ClickHouse | ensure log directory
+  ansible.builtin.file:
+    path: "{{ clickhouse_log_path }}"
+    state: directory
+    owner: clickhouse
+    group: clickhouse
+    mode: "0740"

@@ -1,7 +1,13 @@
 ---
-# Version supplied by the CLI from the release manifest. idealista.clickhouse
-# installs from Altinity's apt/yum repos, so this is the repo package version.
+# Version supplied by the CLI from the release manifest.
 clickhouse_version: "24.8.9.95"
+clickhouse_release_type: lts
+clickhouse_repository_key_url: https://packages.clickhouse.com/rpm/lts/repodata/repomd.xml.key
+frameworks_clickhouse_packages:
+  - procps
+  - "clickhouse-client={{ clickhouse_version }}"
+  - "clickhouse-common-static={{ clickhouse_version }}"
+  - "clickhouse-server={{ clickhouse_version }}"
 
 # Keep direct role use loopback-only unless the caller explicitly publishes
 # ClickHouse. Cluster provisioning passes clickhouse_listen_hosts with

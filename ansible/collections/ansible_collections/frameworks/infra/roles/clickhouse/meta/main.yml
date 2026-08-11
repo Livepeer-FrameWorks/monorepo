@@ -3,13 +3,14 @@ galaxy_info:
   role_name: clickhouse
   author: FrameWorks Infra
   description: >-
-    Thin wrapper over idealista.clickhouse. Pins version, listen host,
-    databases, and user passwords from the FrameWorks release manifest.
+    Installs ClickHouse and configures it through idealista.clickhouse. Pins
+    version, listen host, databases, and user passwords from the FrameWorks
+    release manifest.
   license: AGPL-3.0-or-later
   min_ansible_version: "2.15"
   platforms:
     - name: Ubuntu
-      versions: [jammy, noble]
+      versions: [jammy, noble, resolute]
     - name: Debian
       versions: [bookworm]
 

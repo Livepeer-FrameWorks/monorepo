@@ -23,8 +23,22 @@ driver:
   name: docker
 
 platforms:
-  - name: clickhouse-instance
+  - name: clickhouse-ubuntu2404
     image: geerlingguy/docker-ubuntu2404-ansible:latest
+    pre_build_image: true
+    privileged: true
+    command: /usr/sbin/init
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    dns_servers:
+      - "1.1.1.1"
+      - "8.8.8.8"
+    tmpfs:
+      - /run
+      - /tmp
+  - name: clickhouse-ubuntu2604
+    image: geerlingguy/docker-ubuntu2604-ansible:latest
     pre_build_image: true
     privileged: true
     command: /usr/sbin/init
@@ -45,7 +59,7 @@ provisioner:
   inventory:
     group_vars:
       all:
-        clickhouse_version: "24.8.9.95"
+        clickhouse_version: "26.3.10.62"
         clickhouse_listen_host: "0.0.0.0"
         clickhouse_default_password: "molecule-test-password"
         clickhouse_databases:

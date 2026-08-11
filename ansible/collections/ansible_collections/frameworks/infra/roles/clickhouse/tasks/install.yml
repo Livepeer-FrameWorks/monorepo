@@ -1,16 +1,7 @@
 ---
-- name: Install ClickHouse packages via idealista.clickhouse (Debian family)
-  ansible.builtin.import_role:
-    name: idealista.clickhouse
-    tasks_from: install-Debian.yml
+- name: Install ClickHouse packages (Debian family)
+  ansible.builtin.import_tasks: install-debian.yml
   tags: [install]
-  vars:
-    clickhouse_http_port: "{{ clickhouse_port_http }}"
-    clickhouse_tcp_port: "{{ clickhouse_port_tcp }}"
-    clickhouse_interserver_http_port: "{{ clickhouse_port_interserver }}"
-    clickhouse_default_password_sha256: "{{ clickhouse_default_password | hash('sha256') }}"
-    clickhouse_default_users: "{{ frameworks_clickhouse_default_users }}"
-    clickhouse_default_quotas: "{{ frameworks_clickhouse_default_quotas }}"
 
 - name: Configure ClickHouse via idealista.clickhouse
   ansible.builtin.import_role:
@@ -64,12 +55,8 @@
 - name: Configure standalone ClickHouse Keeper + cluster
   when: clickhouse_keeper_nodes | default([]) | length > 0
   block:
-    - name: Install clickhouse-keeper package (Altinity/ClickHouse repo added by idealista)
-      ansible.builtin.apt:
-        name: clickhouse-keeper
-        state: present
-        update_cache: true
-
+    # clickhouse-server ships the standalone Keeper binary and systemd unit.
+    # The separate clickhouse-keeper package conflicts with clickhouse-server.
     - name: Ensure ClickHouse Keeper directories exist
       ansible.builtin.file:
         path: "{{ item }}"
@@ -289,10 +276,13 @@
         msg: |-
           clickhouse-server failed to start cleanly
           systemctl status:
-          {{ clickhouse_systemctl_status.stdout | default('(no output)') }}
+          {{ clickhouse_systemctl_status.stdout | default('') }}
+          {{ clickhouse_systemctl_status.stderr | default('') }}
 
           journalctl:
-          {{ clickhouse_journal.stdout | default('(no output)') }}
+          {{ clickhouse_journal.stdout | default('') }}
+          {{ clickhouse_journal.stderr | default('') }}
 
           clickhouse-server.err.log:
-          {{ clickhouse_err_log.stdout | default('(no output)') }}
+          {{ clickhouse_err_log.stdout | default('') }}
+          {{ clickhouse_err_log.stderr | default('') }}

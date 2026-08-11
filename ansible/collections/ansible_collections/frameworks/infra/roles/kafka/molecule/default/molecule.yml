@@ -30,7 +30,7 @@ provisioner:
         kafka_version: "4.2.0"
         kafka_artifact_url: >-
           {{ lookup('env', 'KAFKA_ARTIFACT_URL') |
-             default('https://downloads.apache.org/kafka/4.2.0/kafka_2.13-4.2.0.tgz', true) }}
+             default('https://archive.apache.org/dist/kafka/4.2.0/kafka_2.13-4.2.0.tgz', true) }}
         kafka_artifact_checksum: >-
           {{ lookup('env', 'KAFKA_ARTIFACT_CHECKSUM') |
              default(
