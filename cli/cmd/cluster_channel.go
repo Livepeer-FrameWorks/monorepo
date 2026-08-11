@@ -32,18 +32,20 @@ when no explicit version is given.`,
 				return err
 			}
 			defer rc.Cleanup()
-			return runSetChannel(cmd, rc.Manifest, rc.ManifestPath, args[0])
+			return runSetChannel(cmd, rc, args[0])
 		},
 	}
 
 	return cmd
 }
 
-func runSetChannel(cmd *cobra.Command, manifest *inventory.Manifest, manifestPath, channel string) error {
+func runSetChannel(cmd *cobra.Command, rc *resolvedCluster, channel string) error {
 	if !isValidChannel(channel) {
 		return fmt.Errorf("invalid channel %q: must be one of %v", channel, validChannels)
 	}
 
+	manifest := rc.Manifest
+	manifestPath := rc.ManifestPath
 	out := cmd.OutOrStdout()
 	current := manifest.ResolvedChannel()
 	if current == channel {
@@ -51,13 +53,24 @@ func runSetChannel(cmd *cobra.Command, manifest *inventory.Manifest, manifestPat
 		return nil
 	}
 
-	manifest.Channel = channel
-
-	if err := inventory.Save(manifestPath, manifest); err != nil {
-		return fmt.Errorf("failed to save manifest: %w", err)
+	// Refuse to report success against a source we cannot actually persist to. A GitHub-fetched manifest lives in a
+	// temporary checkout that Cleanup removes, so a patch there would be silently discarded — the operator must edit
+	// the channel in the source repo (and commit) or run against a local gitops checkout / manifest file.
+	if !rc.SourcePersistsManifest {
+		return fmt.Errorf("cannot persist the channel: this manifest was resolved from a non-writable source (%s) — "+
+			"a GitHub-fetched manifest is a temporary checkout. Set `channel: %s` in the source gitops repository and "+
+			"commit it, or run set-channel against a local gitops directory / manifest file", rc.Source, channel)
 	}
 
-	ux.Success(out, fmt.Sprintf("Channel updated: %s -> %s", current, channel))
+	// Persist ONLY the channel by patching the SOURCE manifest in place (comments and key order preserved). The
+	// resolved manifest in memory has SOPS-decrypted host inventory merged in; serializing it would leak host
+	// IPs/users/key-paths into the plaintext manifest, so never Save the resolved struct here.
+	if err := inventory.PatchManifestField(manifestPath, "channel", channel); err != nil {
+		return fmt.Errorf("failed to update channel in %s: %w", manifestPath, err)
+	}
+	manifest.Channel = channel
+
+	ux.Success(out, fmt.Sprintf("Channel updated in %s: %s -> %s", manifestPath, current, channel))
 	if channel == "rc" {
 		ux.Warn(out, "Release candidates are pre-production — review the changelog before upgrading.")
 	}
