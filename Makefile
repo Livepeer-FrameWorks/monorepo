@@ -561,13 +561,28 @@ validate-migrations:
 	@echo "Validating embedded SQL migrations..."
 	@cd cli && go run . cluster migrate validate
 
-# Schema-consolidation verification harness (Docker). Proves the baseline schema
-# files equal the baseline + every post-floor migration replayed on a real engine
-# — the invariant that keeps the squash + baseline floor safe, and the permanent
-# guard against baseline/migration drift. Needs a running Docker daemon; gated
+# Real-engine schema + behavior verification harness (Docker). Runs the ENTIRE schema_verify-tagged
+# suite: the baseline==baseline+migrations drift guards (Postgres + ClickHouse) AND the real-engine
+# behavior tests that run production SQL against a live engine — the freeze-attempt state machine,
+# creation-command CAS/lease, playback-index upgrade, artifact-events dedup, etc. These are the durable
+# gate for concurrency/constraint properties sqlmock can't prove. Needs a running Docker daemon; gated
 # behind the schema_verify build tag so a plain `make test` never needs Docker.
-verify-schema: verify-schema-postgres verify-schema-clickhouse
+SCHEMA_VERIFY_TESTS := TestPostgresBaselineEqualsReplay|TestClickHouseBaselineEqualsReplay|TestArtifactEventsDedupedPreservesLegacyRows|TestArtifactPlaybackIndexUpgradeFromReleasedLower|TestCreationCommandAckLeaseClaim|TestCreationCommandAckLeaseTokenFencesStaleSettlement|TestCreationCommandCASMutualExclusion
 
+verify-schema:
+	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-schema requires a running Docker daemon (real-engine tests must run, not skip)"; exit 1; }
+	@echo "Verifying schema convergence + real-engine behavior tests (Docker)..."
+	@# Explicit -run list so ONLY the real-engine schema tests execute — the schema_verify build tag is
+	@# additive and would otherwise also run the package's ordinary (untagged) unit tests.
+	@cd cli && go test -tags schema_verify -run '$(SCHEMA_VERIFY_TESTS)' -count=1 -timeout 1200s ./pkg/provisioner/
+	@echo "Running real-engine production-path freeze + chapter-auth + thumbnail-foundation tests (Docker: claim concurrency, ledger atomicity, NULL-safe constraints, finalize-node binding, thumbnail publish/completion, deletion-saga tombstone fences, HA recovery lease)..."
+	@cd api_balancing && go test -tags schema_verify -run 'TestClaimFreezeAttempt_RealPG|TestClaimFreezeAttempt_LedgerAtomicity_RealPG|TestFreezeConstraints_RealPG|TestChapterFinalizeNodeBinding_RealPG|TestThumbnailPublication_RealPG|TestThumbnailCompletion_RealPG|TestThumbnailProjectionFence_RealPG|TestThumbnailProjectionRecoveryPoison_RealPG|TestThumbnailProjectionReassert_RealPG|TestThumbnailReassertClaim_LeaseAndLimit_RealPG|TestThumbnailServingClusterTriggersReprojection_RealPG|TestStreamCleanupSaga_TombstoneFences_RealPG|TestThumbnailRecoveryLease_RealPG|TestThumbnailPromoteVsDeleteLeak_RealPG|TestThumbnailPublishLease_RealPG|TestThumbnailPublishTokenFence_RealPG|TestThumbnailRecoveryRedrivesTokenizedPublishing_RealPG|TestThumbnailPublishingRequiresToken_RealPG|TestEnforceImmutableLocalBackend_RealPG|TestEnforceImmutableLocalBackend_ExactMatchNotNormalized_RealPG|TestEnforceImmutableLocalBackend_ConcurrentFirstBootRace_RealPG|TestAdoptOrEnforceLocalBackend_FirstBootAdoption_RealPG' -count=1 -timeout 600s ./internal/control/
+	@echo "Running real-engine production-path cleanup + purge-ownership + stream-cleanup drainer + thumbnail-lifecycle integration tests (Docker: multipart-vs-stale-freeze cleanup, ownership filter NULL semantics, durable stream-cleanup convergence + local-alias routing, full publish→delete→drain lifecycle)..."
+	@cd api_balancing && go test -tags schema_verify -run 'TestStaleFreezeCleanup_RealPG|TestPurgeOwnershipFilter_RealPG|TestStreamCleanupDrainer_ConvergesFromDurableRow_RealPG|TestStreamCleanupDrainer_LocallyBackedAliasSweepsLocally_RealPG|TestThumbnailLifecycleIntegration_RealPG|TestStreamCleanupDrainer_RepointGuardFailsClosed_RealPG|TestStreamCleanupDrainer_DelayedResweep_RealPG|TestStreamCleanupDrainer_FinalizeAtomicOnControlCleanupFailure_RealPG' -count=1 -timeout 600s ./internal/jobs/
+	@echo "Running real-engine Commodore two-phase deletion saga test (Docker: outbox claim/lease/finalize converges a stream deletion through a Foghorn delivery outage — coordination only, Foghorn RPCs faked)..."
+	@cd api_control && go test -tags schema_verify -run 'TestStreamCleanupOutboxLoop_DeliveryOutageConverges_RealPG|TestUpdateArtifactCatalogSnapshot_ServingClusterEqualRevisionRepair_RealPG|TestStreamThumbnailCleanup_DispatchesEveryOwningCell_RealPG|TestRecordStreamActiveCluster_ServiceOnly_DoesNotTouchServingSet_RealPG|TestDeleteStream_RoutesToEveryServingCell_RealPG|TestRegisterStreamThumbnailServingCell_FencesOnDeletion_RealPG|TestStreamThumbnailCleanup_HangingCellDoesNotStarveSiblings_RealPG|TestRegisterVsDeleteStream_Linearizes_RealPG|TestStreamCleanupOutbox_ThumbnailPhaseMarkedThenSkipped_RealPG' -count=1 -timeout 600s ./internal/grpc/
+
+# Granular subsets of the suite above, for iterating on one engine without the full run.
 verify-schema-postgres:
 	@echo "Verifying Postgres baseline == baseline + post-floor migrations (Docker)..."
 	@cd cli && go test -tags schema_verify -run TestPostgresBaselineEqualsReplay -count=1 -timeout 600s ./pkg/provisioner/
@@ -577,15 +592,14 @@ verify-schema-clickhouse:
 	@cd cli && go test -tags schema_verify -run TestClickHouseBaselineEqualsReplay -count=1 -timeout 600s ./pkg/provisioner/
 
 verify-feature-registry:
-	@echo "Validating docs/platform-features.yaml and regenerating renderers..."
-	@cd scripts/registry && go run .
-	@if ! git diff --quiet website_application/src/lib/features/registry.json website_docs/src/content/docs/platform/feature-matrix.mdx 2>/dev/null; then \
-		echo "✗ Generated feature artifacts are out of date."; \
-		echo "  Run 'make verify-feature-registry' locally and commit the result."; \
-		git diff --stat website_application/src/lib/features/registry.json website_docs/src/content/docs/platform/feature-matrix.mdx; \
-		exit 1; \
-	fi
+	@echo "Validating docs/platform-features.yaml and checking generated renderers..."
+	@cd scripts/registry && go run . -check
 	@echo "✓ Feature registry verified"
+
+# Regenerate the feature-registry artifacts in place (registry.json, feature-matrix.mdx,
+# platform-capabilities.mdx). Run this after editing docs/platform-features.yaml, then commit.
+generate-feature-registry:
+	@cd scripts/registry && go run .
 
 ci-local:
 	@failed=0; \
