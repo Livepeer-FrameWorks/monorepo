@@ -65,6 +65,8 @@ invocation. Explicit flags always win over saved context defaults.`,
 	cluster.AddCommand(newClusterSnapshotCmd())
 	cluster.AddCommand(newClusterRestartCmd())
 	cluster.AddCommand(newClusterUpgradeCmd())
+	cluster.AddCommand(newClusterReleaseCmd())
+	cluster.AddCommand(newClusterStorageCmd())
 	cluster.AddCommand(newClusterBackupCmd())
 	cluster.AddCommand(newClusterRestoreCmd())
 	cluster.AddCommand(newClusterDiagnoseCmd())
@@ -99,6 +101,12 @@ type resolvedCluster struct {
 	// into platform-only operations like provision/init/migrate.
 	Persona     fwcfg.Persona
 	ContextName string
+
+	// SourcePersistsManifest is true when ManifestPath is a real on-disk file that survives this process (local
+	// manifest/gitops-dir/cwd, or a context pointing at a local checkout). It is FALSE for a GitHub-fetched source,
+	// whose ManifestPath is a temporary checkout removed by Cleanup — so a command that writes to ManifestPath must
+	// NOT report success against a GitHub source, since the change would be discarded.
+	SourcePersistsManifest bool
 
 	sharedEnvOnce sync.Once
 	sharedEnv     map[string]string
@@ -211,16 +219,36 @@ func resolveClusterManifest(cmd *cobra.Command) (*resolvedCluster, error) {
 	}
 
 	return &resolvedCluster{
-		Manifest:     manifest,
-		ManifestPath: rm.Path,
-		AgeKey:       rm.AgeKey,
-		Source:       source,
-		Cluster:      rm.Cluster,
-		ReleaseRepos: resolveReleaseRepositories(cmd, cfg, ctxCfg, rm, cwd),
-		Cleanup:      rm.Cleanup,
-		Persona:      ctxCfg.Persona,
-		ContextName:  ctxCfg.Name,
+		Manifest:               manifest,
+		ManifestPath:           rm.Path,
+		AgeKey:                 rm.AgeKey,
+		Source:                 source,
+		Cluster:                rm.Cluster,
+		ReleaseRepos:           resolveReleaseRepositories(cmd, cfg, ctxCfg, rm, cwd),
+		Cleanup:                rm.Cleanup,
+		Persona:                ctxCfg.Persona,
+		ContextName:            ctxCfg.Name,
+		SourcePersistsManifest: manifestSourcePersistsToDisk(source, ctxCfg),
 	}, nil
+}
+
+// manifestSourcePersistsToDisk reports whether a resolved manifest source is a real on-disk file that outlives this
+// process. GitHub sources fetch into a temp checkout removed by Cleanup, so a write to ManifestPath there is lost;
+// callers that persist must refuse those explicitly rather than silently discard.
+func manifestSourcePersistsToDisk(source inventory.ManifestSource, ctx fwcfg.Context) bool {
+	switch source {
+	case inventory.SourceManifestFlag, inventory.SourceManifestEnv,
+		inventory.SourceGitopsDirFlag, inventory.SourceGitopsDirEnv,
+		inventory.SourceCwdHeuristic, inventory.SourceContextLastManifest:
+		return true
+	case inventory.SourceGithubRepoFlag, inventory.SourceGithubRepoEnv:
+		return false
+	case inventory.SourceContext:
+		// A context sources from a local checkout / manifest file (persistent) or a GitHub repo (temp checkout).
+		return ctx.Gitops == nil || ctx.Gitops.Source != fwcfg.GitopsGitHub
+	default:
+		return false
+	}
 }
 
 // requirePlatformIfImplicitManifest gates lifecycle commands (provision, init,
@@ -886,7 +914,7 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 			}
 
 			totalChecks++
-			dmResult := doctorDataMigrations(cmd.Context(), doctorSSHPool, manifest, "", doctorTarget)
+			dmResult := doctorDataMigrations(cmd.Context(), doctorSSHPool, manifest, doctorTarget)
 			printHealthResult(cmd, "Data migrations", dmResult)
 			if dmResult.OK {
 				passedChecks++
@@ -1079,10 +1107,13 @@ func doctorServiceProbe(name string, svc inventory.ServiceConfig) doctorProbe {
 	case "grpc", "tcp":
 		return doctorProbe{Protocol: "tcp"}
 	case "http":
-		if def.HealthPath == "" {
+		// Probe READINESS (ReadyPath when set, else HealthPath): the doctor gate
+		// must fail a service that is live but cannot serve — e.g. Chandler whose
+		// /health is up before its immutable store is proven reachable.
+		if def.ReadinessPath() == "" {
 			return doctorProbe{Protocol: "tcp"}
 		}
-		return doctorProbe{Protocol: "http", Path: def.HealthPath}
+		return doctorProbe{Protocol: "http", Path: def.ReadinessPath()}
 	default:
 		return doctorProbe{Protocol: "http", Path: "/health"}
 	}

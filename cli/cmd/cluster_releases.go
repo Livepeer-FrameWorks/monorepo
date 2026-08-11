@@ -342,11 +342,27 @@ func syncClusterEdgeReleaseTargetFromGitOps(cmd *cobra.Command, rc *resolvedClus
 		selector = rc.Manifest.ResolvedChannel()
 	}
 	channel, resolved := gitops.ResolveVersion(selector)
-	releaseManifest, err := gitops.FetchFromRepositories(gitops.FetchOptions{}, rc.ReleaseRepos, channel, resolved)
+	return syncEdgeReleaseTargetResolved(cmd, rc, channel, resolved, selector, sharedEnv)
+}
+
+// syncClusterEdgeReleaseTargetPinned pins the edge release target to an EXACT (channel, concreteVersion). Used by
+// `cluster release apply` so the edge fleet cannot drift onto a NEWER channel build than the control plane just
+// deployed: it fetches that exact version and sets it as the concrete target (not "track the channel's latest").
+func syncClusterEdgeReleaseTargetPinned(cmd *cobra.Command, rc *resolvedCluster, channel, concreteVersion string, sharedEnv map[string]string) error {
+	if rc == nil || rc.Manifest == nil {
+		return nil
+	}
+	// Passing the concrete version as the "selector" makes releaseTargetVersionForSelector return the concrete
+	// PlatformVersion (a pinned target) rather than "" (track-latest).
+	return syncEdgeReleaseTargetResolved(cmd, rc, channel, concreteVersion, concreteVersion, sharedEnv)
+}
+
+func syncEdgeReleaseTargetResolved(cmd *cobra.Command, rc *resolvedCluster, channel, fetchVersion, targetSelector string, sharedEnv map[string]string) error {
+	releaseManifest, err := gitops.FetchFromRepositories(gitops.FetchOptions{}, rc.ReleaseRepos, channel, fetchVersion)
 	if err != nil {
 		return fmt.Errorf("fetch edge release manifest for target sync: %w", err)
 	}
-	targetVersion := releaseTargetVersionForSelector(selector, releaseManifest.PlatformVersion)
+	targetVersion := releaseTargetVersionForSelector(targetSelector, releaseManifest.PlatformVersion)
 
 	qm, ctxCfg, cleanup, err := edgeReleaseQMClientForGitOpsSync(cmd, rc, sharedEnv)
 	if err != nil {
