@@ -16,13 +16,15 @@ func TestBuildExecutorPlan_ReloadVsRestart(t *testing.T) {
 			"h2": {Name: "h2"},
 		},
 	}
-	// "bridge" supports SIGHUP reload (servicedefs), so env-only diffs reload
-	// while a binary diff forces a restart.
+	// "bridge" supports SIGHUP reload (servicedefs), so an env-only diff reloads
+	// while a non-env executable diff (a cert rotation here) forces a restart.
+	// (A binary diff never reaches execution — it is routed to `cluster upgrade`;
+	// see TestBuildClusterApplyReportBlocksBinaryDiffs.)
 	svc := clusterApplyService{
 		Service: "bridge",
 		Waves: []clusterApplyWave{
 			{Index: 0, Hosts: []clusterApplyHost{{Host: "h1", Kinds: []orchestrator.DiffKind{orchestrator.DiffEnv}}}},
-			{Index: 1, Hosts: []clusterApplyHost{{Host: "h2", Kinds: []orchestrator.DiffKind{orchestrator.DiffBinary}}}},
+			{Index: 1, Hosts: []clusterApplyHost{{Host: "h2", Kinds: []orchestrator.DiffKind{orchestrator.DiffCert}}}},
 		},
 	}
 
@@ -40,7 +42,7 @@ func TestBuildExecutorPlan_ReloadVsRestart(t *testing.T) {
 		t.Errorf("h1 (env-only) action = %q, want reload", got)
 	}
 	if got := inputs["bridge@h2"].Action; got != orchestrator.ActionRestart {
-		t.Errorf("h2 (binary) action = %q, want restart", got)
+		t.Errorf("h2 (cert) action = %q, want restart", got)
 	}
 	// Resolved host is carried from the manifest, not re-resolved later.
 	if inputs["bridge@h1"].Host.Name != "h1" {
@@ -95,11 +97,13 @@ func TestRenderClusterApplyText_Empty(t *testing.T) {
 func TestRenderClusterApplyText_PopulatedAndSkipped(t *testing.T) {
 	rep := clusterApplyReport{
 		Cluster: "eu-1",
+		// Services carry only executable NON-version rollouts (a binary/version diff is routed to Skipped, never a wave),
+		// so this renders a unit change.
 		Services: []clusterApplyService{{
 			Service:  "foghorn",
 			Strategy: orchestrator.UpdateStrategy{MaxUnavailable: 2, Canary: 1},
 			Waves: []clusterApplyWave{
-				{Index: 0, Hosts: []clusterApplyHost{{Host: "h1", Kinds: []orchestrator.DiffKind{orchestrator.DiffBinary}, Details: []string{"bin changed"}}}},
+				{Index: 0, Hosts: []clusterApplyHost{{Host: "h1", Kinds: []orchestrator.DiffKind{orchestrator.DiffUnit}, Details: []string{"unit changed"}}}},
 			},
 		}},
 		Skipped: []clusterDiffEntry{{
@@ -117,7 +121,7 @@ func TestRenderClusterApplyText_PopulatedAndSkipped(t *testing.T) {
 		"max_unavailable=2",
 		"canary=1",
 		"h1",
-		"bin changed",
+		"unit changed",
 		"Skipped",
 		"postgres",
 		"infra diff",

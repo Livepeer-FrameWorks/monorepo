@@ -28,8 +28,11 @@ func newClusterApplyCmd() *cobra.Command {
 strategy (max_unavailable, region_stagger, canary, primary_last) and
 print the waves ` + "`cluster apply --confirm`" + ` executes.
 
-Refuses any topology that contains an ` + "`unknown`" + ` or ` + "`infra`" + ` diff —
-those go through ` + "`cluster provision`" + ` instead.
+Restricted to NON-VERSION rollouts (env, unit, cert). A ` + "`binary`" + ` diff is a
+service version change and must go through the release-gated ` + "`cluster upgrade`" + `
+(compatibility, schema/data-migration, storage-backend, and rollback gates);
+` + "`infra`" + ` and ` + "`unknown`" + ` diffs go through ` + "`cluster provision`" + `. Any such diff is
+refused here.
 
 Without --confirm this command is read-only.`,
 		Example: `  frameworks cluster apply
@@ -76,9 +79,10 @@ type clusterApplyService struct {
 	Waves    []clusterApplyWave          `json:"waves"`
 }
 
-// clusterApplyReport is the top-level read-only artifact. Skipped lists
-// the entries that would block execution (unknown/infra kinds) so an
-// operator can see exactly which services need `cluster provision`.
+// clusterApplyReport is the top-level read-only artifact. Services holds only executable NON-VERSION rollouts
+// (env/unit/cert). Skipped holds entries the fast path must not run — a binary (version) change routes to the
+// release-gated `cluster upgrade`, and an infra/unknown change to `cluster provision` — so an operator sees exactly
+// which command each one needs.
 type clusterApplyReport struct {
 	Cluster  string                `json:"cluster"`
 	Services []clusterApplyService `json:"services"`
@@ -155,14 +159,14 @@ func runClusterApply(cmd *cobra.Command, rc *resolvedCluster) error {
 		renderClusterApplyText(cmd.OutOrStdout(), rep)
 	}
 
-	// Refuse-on-unknown is the fast-path safety guarantee. Skipped is
-	// non-empty whenever a host's diff includes unknown or infra — those
-	// must go through `cluster provision`. Exit non-zero so CI gates
-	// catch them before someone runs apply for real.
+	// Refuse-on-blocking is the fast-path safety guarantee. Skipped is non-empty whenever a host's diff includes a
+	// binary (version), infra, or unknown kind — a binary change must go through the release-gated `cluster upgrade`,
+	// and infra/unknown through `cluster provision`. Exit non-zero so CI gates catch them before someone runs apply for
+	// real.
 	if len(rep.Skipped) > 0 {
 		return &ExitCodeError{
 			Code: 1,
-			Message: fmt.Sprintf("%d entr(y/ies) contain unknown or infra diffs; run `cluster provision` for those",
+			Message: fmt.Sprintf("%d entr(y/ies) contain binary, infra, or unknown diffs; binary (version) changes go through `cluster upgrade` (release-gated), infra/unknown through `cluster provision`",
 				len(rep.Skipped)),
 		}
 	}
@@ -322,6 +326,10 @@ func buildApplyTargets(
 					return nil, fmt.Errorf("manifest has no host %q", h.Host)
 				}
 				task := orchestrator.NewServiceTask(deploy, svc.Service, h.Host, h.Host, inferApplyPhase(svc, manifest))
+				// The ClusterID MUST be set so buildTaskConfig layers the service's cluster env_files (regional
+				// STORAGE_S3_* credentials + descriptor). Omitting it renders shared/empty S3 config — the same defect
+				// the upgrade path already fixed. Resolve the service's explicit cluster, else its host's cluster.
+				task.ClusterID = effectiveApplyCluster(manifest, svc.Service, h.Host)
 				cfg, err := buildTaskConfig(task, manifest, runtimeData, false, manifestDir, sharedEnv, clusterEnvs, releaseRepos)
 				if err != nil {
 					return nil, fmt.Errorf("%s on %s: %w", svc.Service, h.Host, err)
@@ -331,6 +339,35 @@ func buildApplyTargets(
 		}
 	}
 	return targets, nil
+}
+
+// effectiveApplyCluster resolves the cluster a service+host apply targets: the service's explicit
+// Clusters[0]/Cluster assignment, else the host's cluster. Mirrors the upgrade path's ClusterID resolution so
+// cluster-scoped env_files (regional STORAGE_S3_* credentials + descriptor) are layered into the apply config.
+func effectiveApplyCluster(manifest *inventory.Manifest, serviceID, hostName string) string {
+	lookup := func(m map[string]inventory.ServiceConfig) (string, bool) {
+		s, ok := m[serviceID]
+		if !ok {
+			return "", false
+		}
+		if len(s.Clusters) > 0 {
+			return s.Clusters[0], true
+		}
+		if s.Cluster != "" {
+			return s.Cluster, true
+		}
+		return "", true
+	}
+	if c, ok := lookup(manifest.Services); ok && c != "" {
+		return c
+	}
+	if c, ok := lookup(manifest.Interfaces); ok && c != "" {
+		return c
+	}
+	if c, ok := lookup(manifest.Observability); ok && c != "" {
+		return c
+	}
+	return manifest.HostCluster(hostName)
 }
 
 func inferApplyPhase(svc clusterApplyService, manifest *inventory.Manifest) orchestrator.Phase {
@@ -532,18 +569,30 @@ func applyUpdateStrategyOverride(base orchestrator.UpdateStrategy, override *inv
 	return base
 }
 
-// entryIsBlocking reports whether a diff entry would force `cluster
-// apply` to fall through to `cluster provision`. Unknown means the
-// fingerprinter doesn't model this kind; infra means a structural
-// change (DB schema, package, kernel sysctl) that the fast path
-// shouldn't attempt.
+// entryIsBlocking reports whether a diff entry must NOT be executed by the fast rolling-update path. Unknown means the
+// fingerprinter doesn't model this kind; infra means a structural change (DB schema, package, kernel sysctl); binary
+// means a SERVICE VERSION CHANGE — deploying a new binary must go through the release-gated path (`cluster upgrade`),
+// which proves fetched-release/min-CLI compatibility, schema + data-migration readiness, storage-backend descriptor
+// agreement, and rollback policy BEFORE any host is mutated. `cluster apply` runs none of those gates, so it is
+// restricted to non-version rollouts (env/unit/cert); a binary diff is routed out rather than deployed unguarded.
 func entryIsBlocking(e clusterDiffEntry) bool {
 	for _, k := range e.Kinds {
-		if k == orchestrator.DiffUnknown || k == orchestrator.DiffInfra {
+		if k == orchestrator.DiffUnknown || k == orchestrator.DiffInfra || k == orchestrator.DiffBinary {
 			return true
 		}
 	}
 	return false
+}
+
+// blockingDestination returns the command an operator must use for a blocked entry: a binary (version) change is
+// release-gated via `cluster upgrade`; a structural/unmodeled change goes through `cluster provision`.
+func blockingDestination(e clusterDiffEntry) string {
+	for _, k := range e.Kinds {
+		if k == orchestrator.DiffBinary {
+			return "cluster upgrade"
+		}
+	}
+	return "cluster provision"
 }
 
 // lookupEntryByHost returns the diff kinds + per-kind detail strings for
@@ -601,9 +650,9 @@ func renderClusterApplyText(w io.Writer, rep clusterApplyReport) {
 	}
 
 	if len(rep.Skipped) > 0 {
-		fmt.Fprintf(w, "Skipped (run `cluster provision` for these — unknown or infra diff):\n")
+		fmt.Fprintf(w, "Skipped (binary → `cluster upgrade`; infra/unknown → `cluster provision`):\n")
 		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(tw, "  HOST\tSERVICE\tKINDS\tREASON")
+		fmt.Fprintln(tw, "  HOST\tSERVICE\tKINDS\tRUN\tREASON")
 		for _, e := range rep.Skipped {
 			kinds := make([]string, 0, len(e.Kinds))
 			for _, k := range e.Kinds {
@@ -616,7 +665,7 @@ func renderClusterApplyText(w io.Writer, rep clusterApplyReport) {
 					break
 				}
 			}
-			fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", e.Host, e.Service, strings.Join(kinds, ","), reason)
+			fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\n", e.Host, e.Service, strings.Join(kinds, ","), blockingDestination(e), reason)
 		}
 		_ = tw.Flush()
 	}

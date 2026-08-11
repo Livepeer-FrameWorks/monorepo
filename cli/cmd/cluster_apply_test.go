@@ -32,10 +32,12 @@ func TestBuildClusterApplyReportHonorsManifestUpdateStrategy(t *testing.T) {
 			},
 		},
 	}
+	// Unit diffs are a NON-VERSION rollout the fast path handles (a binary diff would be routed to `cluster upgrade`;
+	// see TestBuildClusterApplyReportBlocksBinaryDiffs). This case exercises strategy → wave building.
 	entries := []clusterDiffEntry{
-		{Host: "h1", Service: "foghorn", Deploy: "foghorn", Kinds: []orchestrator.DiffKind{orchestrator.DiffBinary}},
-		{Host: "h2", Service: "foghorn", Deploy: "foghorn", Kinds: []orchestrator.DiffKind{orchestrator.DiffBinary}},
-		{Host: "h3", Service: "foghorn", Deploy: "foghorn", Kinds: []orchestrator.DiffKind{orchestrator.DiffBinary}},
+		{Host: "h1", Service: "foghorn", Deploy: "foghorn", Kinds: []orchestrator.DiffKind{orchestrator.DiffUnit}},
+		{Host: "h2", Service: "foghorn", Deploy: "foghorn", Kinds: []orchestrator.DiffKind{orchestrator.DiffUnit}},
+		{Host: "h3", Service: "foghorn", Deploy: "foghorn", Kinds: []orchestrator.DiffKind{orchestrator.DiffUnit}},
 	}
 
 	report := buildClusterApplyReport(manifest, entries)
@@ -54,6 +56,33 @@ func TestBuildClusterApplyReportHonorsManifestUpdateStrategy(t *testing.T) {
 	}
 	if got := hostsInApplyWave(service.Waves[1]); !equalStrings(got, []string{"h3"}) {
 		t.Fatalf("wave 2 hosts = %v, want [h3]", got)
+	}
+}
+
+// TestBuildClusterApplyReportBlocksBinaryDiffs pins the safety boundary: a binary (version) diff must NEVER become a
+// fast-path wave — it is routed to Skipped so the operator uses the release-gated `cluster upgrade` instead of
+// deploying a new binary without the compatibility/schema/storage/rollback gates.
+func TestBuildClusterApplyReportBlocksBinaryDiffs(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Type:    "cluster",
+		Profile: "test",
+		Hosts:   map[string]inventory.Host{"h1": {Name: "h1"}},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn": {Enabled: true, Hosts: []string{"h1"}},
+		},
+	}
+	entries := []clusterDiffEntry{
+		{Host: "h1", Service: "foghorn", Deploy: "foghorn", Kinds: []orchestrator.DiffKind{orchestrator.DiffBinary}},
+	}
+	report := buildClusterApplyReport(manifest, entries)
+	if len(report.Services) != 0 {
+		t.Fatalf("binary diff must not produce a rollout wave, got services=%+v", report.Services)
+	}
+	if len(report.Skipped) != 1 {
+		t.Fatalf("binary diff must be Skipped, got %d skipped", len(report.Skipped))
+	}
+	if got := blockingDestination(report.Skipped[0]); got != "cluster upgrade" {
+		t.Fatalf("binary diff must route to `cluster upgrade`, got %q", got)
 	}
 }
 

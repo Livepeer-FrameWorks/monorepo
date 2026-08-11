@@ -190,6 +190,36 @@ func effectiveServiceCluster(svc inventory.ServiceConfig, hostName string, manif
 	return manifest.HostCluster(hostName)
 }
 
+// tasksByClusterForDeploy maps each cluster that runs the given deploy to the task name(s) serving it. It resolves by
+// DEPLOY NAME (alias-aware, so a first-class alias key like "chandler-eu" / "foghorn-eu" is matched) and keys by
+// CLUSTER so the Foghorn/Chandler cell-topology check binds the components in the SAME cell — not any literal key that
+// might live elsewhere. The task-name convention mirrors NewServiceTask (serviceID, or serviceID@host when multi-host).
+func (p *Planner) tasksByClusterForDeploy(deployName string) (map[string][]string, error) {
+	out := map[string][]string{}
+	for name, svc := range p.manifest.Services {
+		if !svc.Enabled {
+			continue
+		}
+		deploy, ok := servicedefs.DeployName(name, svc.Deploy)
+		if !ok {
+			return nil, fmt.Errorf("unknown service id: %s", name)
+		}
+		if deploy != deployName {
+			continue
+		}
+		hosts := resolveHosts(svc)
+		for _, host := range hosts {
+			taskName := name
+			if len(hosts) > 1 {
+				taskName = name + "@" + host
+			}
+			cluster := effectiveServiceCluster(svc, host, p.manifest)
+			out[cluster] = append(out[cluster], taskName)
+		}
+	}
+	return out, nil
+}
+
 func (p *Planner) topologyInfraTaskDeps(serviceID string, svc inventory.ServiceConfig, clusterID string, appendIfInGraph func([]string, ...string) []string) []string {
 	var deps []string
 	for _, dep := range topology.InfraDependencies(serviceID) {
@@ -629,6 +659,19 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 		}
 	}
 
+	// Chandlers keyed by cluster (deploy-name + cluster resolved, alias-aware) — used to enforce the cell topology
+	// requirement that a Foghorn has an in-cell Chandler to serve its thumbnails.
+	chandlerByCluster, cErr := p.tasksByClusterForDeploy("chandler")
+	if cErr != nil {
+		return cErr
+	}
+	// Foghorns keyed by cluster — used to ORDER Chandler after the in-cell Foghorn (below): Foghorn establishes the
+	// readiness sentinel Chandler's /ready reads, so Chandler must not deploy/validate before it exists.
+	foghornByCluster, fErr := p.tasksByClusterForDeploy("foghorn")
+	if fErr != nil {
+		return fErr
+	}
+
 	for name, svc := range p.manifest.Services {
 		if !svc.Enabled {
 			continue
@@ -661,6 +704,29 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 						task.DependsOn = append(task.DependsOn, "bridge")
 					}
 				}
+			}
+			// TOPOLOGY: a Foghorn and an in-cell Chandler are MUTUALLY required. A Foghorn publishes thumbnails to the
+			// cell's object store; a Chandler in the SAME cluster serves them from a DETERMINISTIC static key AND reads
+			// the readiness sentinel that Foghorn — the cell's only writer of this bucket — establishes at boot. So a
+			// Foghorn with no in-cell Chandler leaves its thumbnails unservable, and a Chandler with no in-cell Foghorn
+			// can NEVER become ready (nothing writes its `/ready` sentinel). Both topologies are REJECTED.
+			if deploy == "foghorn" && len(chandlerByCluster[task.ClusterID]) == 0 {
+				return fmt.Errorf("foghorn (task %q, cluster %q) is enabled without a chandler in the same cluster: "+
+					"Foghorn publishes thumbnails that only an in-cell chandler can serve — enable a chandler in cluster %q",
+					task.Name, task.ClusterID, task.ClusterID)
+			}
+			if deploy == "chandler" && len(foghornByCluster[task.ClusterID]) == 0 {
+				return fmt.Errorf("chandler (task %q, cluster %q) is enabled without a foghorn in the same cluster: "+
+					"Chandler's /ready reads a sentinel only the in-cell Foghorn establishes, so it could never become "+
+					"ready — enable a foghorn in cluster %q",
+					task.Name, task.ClusterID, task.ClusterID)
+			}
+			// INSTALL ORDER: Chandler validates by READING the readiness sentinel the in-cell Foghorn establishes at
+			// boot, so Chandler must deploy AFTER that Foghorn — otherwise a fresh cell's Chandler /ready 503s and stops
+			// the rollout before the object exists. This is an install-time ordering edge, NOT a request-time resolver
+			// call; at serving time Chandler still hits the deterministic key with no Foghorn IPC.
+			if deploy == "chandler" {
+				task.DependsOn = append(task.DependsOn, foghornByCluster[task.ClusterID]...)
 			}
 			graph.AddTask(task)
 		}

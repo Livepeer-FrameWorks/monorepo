@@ -347,6 +347,61 @@ func TestPlan_ClickHouseDependsOnSameHostYugabyte(t *testing.T) {
 	}
 }
 
+// TestPlan_DatabaseConsumerOrderedAfterVanillaPostgres pins the DB-ordering invariant the data-migration gate relies
+// on: a database-backed application task is planned into a strictly LATER batch than the database infrastructure task it
+// depends on — for vanilla PostgreSQL, not just Yugabyte (which TestPlan_ClickHouseDependsOnSameHostYugabyte covers).
+// The executor runs schema init between the final database batch and the application batches, so this ordering is what
+// guarantees no consumer starts against an uninitialized schema. This is a graph property (a real DependsOn edge), not
+// a positional coincidence.
+func TestPlan_DatabaseConsumerOrderedAfterVanillaPostgres(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"db-1":  {ExternalIP: "10.0.0.1"},
+			"app-1": {ExternalIP: "10.0.0.2"},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Postgres: &inventory.PostgresConfig{
+				Enabled: true,
+				Mode:    "native",
+				Host:    "db-1",
+			},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			// Quartermaster is database-backed (topology InfraDatabase) and, unlike other apps, carries only its infra
+			// dependencies (no privateer-mesh barrier), keeping this fixture minimal.
+			"quartermaster": {Enabled: true, Host: "app-1"},
+		},
+	}
+
+	plan, err := NewPlanner(manifest).Plan(context.Background(), ProvisionOptions{Phase: PhaseAll})
+	if err != nil {
+		t.Fatalf("Plan() failed: %v", err)
+	}
+
+	pgBatch, qmBatch := -1, -1
+	var qmTask *Task
+	for batchIdx, batch := range plan.Batches {
+		for _, task := range batch {
+			switch {
+			case task.Name == "postgres":
+				pgBatch = batchIdx
+			case task.ServiceID == "quartermaster":
+				qmTask = task
+				qmBatch = batchIdx
+			}
+		}
+	}
+	if pgBatch == -1 || qmBatch == -1 {
+		t.Fatalf("expected both postgres and quartermaster in plan, got batches: %+v", plan.Batches)
+	}
+	if qmBatch <= pgBatch {
+		t.Fatalf("quartermaster (batch %d) must be planned strictly after postgres (batch %d) so schema init runs first", qmBatch, pgBatch)
+	}
+	if !slices.Contains(qmTask.DependsOn, "postgres") {
+		t.Fatalf("quartermaster must depend on the postgres task, got %v", qmTask.DependsOn)
+	}
+}
+
 func TestPlan_KafkaMirrorMakerHostsFanOut(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Hosts: map[string]inventory.Host{
@@ -557,5 +612,140 @@ func TestPlan_SkipperDependsOnBridge(t *testing.T) {
 	}
 	if !slices.Contains(skipper.DependsOn, "bridge") {
 		t.Fatalf("expected skipper to depend on bridge, got %v", skipper.DependsOn)
+	}
+}
+
+// Serving is runtime-independent: Chandler resolves nothing at request time (a dumb path→S3-key cache), so it has no
+// runtime dependency on Foghorn's version. INSTALL is ordered: Chandler reads the /ready sentinel the in-cell Foghorn
+// establishes, so the planner adds a Chandler→Foghorn deploy edge and requires the pair per cell. See
+// docs/architecture/durable-media-storage.md (I5).
+// Chandler validates by READING the readiness sentinel the in-cell Foghorn establishes at boot, so the planner ORDERS
+// Chandler after that Foghorn (install-time edge). Foghorn does NOT depend on Chandler. This is a deploy-order edge
+// only — serving still hits the deterministic key with no Foghorn IPC.
+func TestPlan_ChandlerDependsOnInCellFoghorn(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"core1": {ExternalIP: "10.0.0.1", WireguardIP: "10.88.0.2", Roles: []string{"control"}},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"quartermaster": {Enabled: true, Host: "core1"},
+			"chandler":      {Enabled: true, Host: "core1"},
+			"foghorn":       {Enabled: true, Host: "core1"},
+		},
+	}
+
+	plan, err := NewPlanner(manifest).Plan(context.Background(), ProvisionOptions{Phase: PhaseApplications})
+	if err != nil {
+		t.Fatalf("Plan(--only applications) failed: %v", err)
+	}
+
+	var chandler, foghorn *Task
+	for _, task := range plan.AllTasks {
+		switch task.Name {
+		case "chandler":
+			chandler = task
+		case "foghorn":
+			foghorn = task
+		}
+	}
+	if chandler == nil || foghorn == nil {
+		t.Fatal("expected chandler and foghorn tasks")
+	}
+	if !slices.Contains(chandler.DependsOn, "foghorn") {
+		t.Fatalf("chandler must depend on the in-cell foghorn (it reads Foghorn's readiness sentinel), got %v", chandler.DependsOn)
+	}
+	if slices.Contains(foghorn.DependsOn, "chandler") {
+		t.Fatalf("foghorn must NOT depend on chandler, got %v", foghorn.DependsOn)
+	}
+}
+
+// The ordering edge resolves by DEPLOY NAME + CLUSTER (alias-aware): chandler-eu depends on the in-cell foghorn-eu.
+func TestPlan_ChandlerDependsOnFoghornAliasSameCluster(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"eu1": {ExternalIP: "10.0.0.1", WireguardIP: "10.88.0.2", Roles: []string{"control"}},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"quartermaster": {Enabled: true, Host: "eu1"},
+			"chandler-eu":   {Enabled: true, Deploy: "chandler", Cluster: "media-eu", Host: "eu1"},
+			"foghorn-eu":    {Enabled: true, Deploy: "foghorn", Cluster: "media-eu", Host: "eu1"},
+		},
+	}
+
+	plan, err := NewPlanner(manifest).Plan(context.Background(), ProvisionOptions{Phase: PhaseApplications})
+	if err != nil {
+		t.Fatalf("Plan failed: %v", err)
+	}
+	var chandler *Task
+	for _, task := range plan.AllTasks {
+		if task.Name == "chandler-eu" {
+			chandler = task
+		}
+	}
+	if chandler == nil {
+		t.Fatal("expected chandler-eu task")
+	}
+	if !slices.Contains(chandler.DependsOn, "foghorn-eu") {
+		t.Fatalf("chandler-eu must depend on the in-cell foghorn-eu, got %v", chandler.DependsOn)
+	}
+}
+
+// A Foghorn whose cluster has no Chandler is rejected even if a Chandler exists in a DIFFERENT cluster.
+func TestPlan_FoghornChandlerDifferentClusterFails(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"eu1": {ExternalIP: "10.0.0.1", WireguardIP: "10.88.0.2", Roles: []string{"control"}},
+			"us1": {ExternalIP: "10.0.1.1", WireguardIP: "10.88.1.2", Roles: []string{"control"}},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"quartermaster": {Enabled: true, Host: "eu1"},
+			"chandler-eu":   {Enabled: true, Deploy: "chandler", Cluster: "media-eu", Host: "eu1"},
+			"foghorn-us":    {Enabled: true, Deploy: "foghorn", Cluster: "media-us", Host: "us1"},
+		},
+	}
+	_, err := NewPlanner(manifest).Plan(context.Background(), ProvisionOptions{Phase: PhaseApplications})
+	if err == nil {
+		t.Fatal("Plan must reject foghorn in a cluster with no chandler")
+	}
+}
+
+// A Chandler with no in-cell Foghorn is rejected: nothing would establish its /ready sentinel, so it could never
+// become ready. This makes the sentinel-ownership coupling explicit at plan time rather than as a silent deadlock.
+func TestPlan_ChandlerWithoutFoghornFails(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"eu1": {ExternalIP: "10.0.0.1", WireguardIP: "10.88.0.2", Roles: []string{"control"}},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"quartermaster": {Enabled: true, Host: "eu1"},
+			"chandler":      {Enabled: true, Host: "eu1"}, // no foghorn in this cluster
+		},
+	}
+	_, err := NewPlanner(manifest).Plan(context.Background(), ProvisionOptions{Phase: PhaseApplications})
+	if err == nil {
+		t.Fatal("Plan must reject a chandler with no in-cell foghorn (nothing establishes its readiness sentinel)")
+	}
+}
+
+// A Foghorn cluster with no Chandler is a REJECTED topology (I5): Foghorn publishes thumbnails to Chandler's
+// deterministic served key, so a cluster that mints them with no Chandler to serve them has a publisher with
+// nothing to serve.
+func TestPlan_FoghornWithoutChandlerFailsPlanning(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"core1": {ExternalIP: "10.0.0.1", WireguardIP: "10.88.0.2", Roles: []string{"control"}},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"quartermaster": {Enabled: true, Host: "core1"},
+			"foghorn":       {Enabled: true, Host: "core1"},
+		},
+	}
+
+	_, err := NewPlanner(manifest).Plan(context.Background(), ProvisionOptions{Phase: PhaseApplications})
+	if err == nil {
+		t.Fatal("Plan must reject foghorn enabled without chandler")
+	}
+	if !strings.Contains(err.Error(), "chandler") {
+		t.Fatalf("error should name the missing chandler dependency, got: %v", err)
 	}
 }
