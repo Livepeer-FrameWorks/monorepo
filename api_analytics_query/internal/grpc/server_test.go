@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -229,17 +230,17 @@ func TestGetLiveUsageSummaryAllQueriesFail(t *testing.T) {
 	_, server, mock := newLiveUsageSummaryServer(t)
 
 	setupLiveUsageSummaryMocks(t, mock, map[string]error{
-		liveRuntimeSummaryPattern:      sql.ErrConnDone,
-		liveViewerUsagePattern:         sql.ErrConnDone,
-		"FROM client_qoe_5m":           sql.ErrConnDone,
-		"FROM storage_gb_seconds_5m_v": sql.ErrConnDone,
-		"FROM processing_5m_v":         sql.ErrConnDone,
-		liveGeoSummaryPattern:          sql.ErrConnDone,
-		liveGeoBreakdownPattern:        sql.ErrConnDone,
-		"FROM artifact_events":         sql.ErrConnDone,
-		"storage_scope = 'hot'":        sql.ErrConnDone,
-		"storage_scope = 'cold'":       sql.ErrConnDone,
-		"FROM storage_events":          sql.ErrConnDone,
+		liveRuntimeSummaryPattern:           sql.ErrConnDone,
+		liveViewerUsagePattern:              sql.ErrConnDone,
+		"FROM client_qoe_5m":                sql.ErrConnDone,
+		"FROM storage_gb_seconds_5m_v":      sql.ErrConnDone,
+		"FROM processing_5m_v":              sql.ErrConnDone,
+		liveGeoSummaryPattern:               sql.ErrConnDone,
+		liveGeoBreakdownPattern:             sql.ErrConnDone,
+		"FROM artifact_events":              sql.ErrConnDone,
+		"storage_scope = 'hot'":             sql.ErrConnDone,
+		"storage_scope = 'cold'":            sql.ErrConnDone,
+		"FROM artifact_state_current FINAL": sql.ErrConnDone,
 	})
 
 	_, err := server.GetLiveUsageSummary(context.Background(), &periscopepb.GetLiveUsageSummaryRequest{
@@ -482,7 +483,7 @@ func setupLiveUsageSummaryMocks(t *testing.T, mock sqlmock.Sqlmock, overrides ma
 	}, []any{uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0)})
 	expectQuery("storage_scope = 'hot'", []string{"clip_bytes", "dvr_bytes", "vod_bytes"}, []any{uint64(0), uint64(0), uint64(0)})
 	expectQuery("storage_scope = 'cold'", []string{"frozen_clip_bytes", "frozen_dvr_bytes", "frozen_vod_bytes"}, []any{uint64(0), uint64(0), uint64(0)})
-	expectQuery("FROM storage_events", []string{"freeze_count", "freeze_bytes"}, []any{uint32(0), uint64(0)})
+	expectQuery("FROM artifact_state_current FINAL", []string{"synced_artifact_count", "synced_artifact_bytes"}, []any{uint32(0), uint64(0)})
 }
 
 func TestGetAPIUsageCursorPredicateStaysInWhere(t *testing.T) {
@@ -1363,4 +1364,143 @@ func TestBuildStreamSummaryCursor(t *testing.T) {
 			}
 		})
 	}
+}
+
+// GetArtifactState derives has_local_copy from a complete present copy via a
+// LEFT JOIN on node-copy presence. The subquery's tenant filter is the first
+// bind parameter because it precedes the outer WHERE in the query text.
+func TestGetArtifactState_JoinsNodeCopyPresence(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	s := &PeriscopeServer{clickhouse: db, logger: logging.NewLoggerWithService("periscope-query-test")}
+
+	ts := time.Unix(0, 0).UTC()
+	cols := []string{
+		"tenant_id", "request_id", "stream_id", "content_type", "stage",
+		"progress_percent", "error_message", "requested_at", "started_at", "completed_at",
+		"clip_start_unix", "clip_stop_unix", "segment_count", "manifest_path",
+		"file_path", "s3_url", "size_bytes", "processing_node_id", "updated_at", "expires_at",
+		"storage_location", "sync_status", "has_local_copy", "is_synced", "is_finalized",
+	}
+	row := sqlmock.NewRows(cols).AddRow(
+		"t1", "req-1", "s1", "clip", "done",
+		uint8(100), nil, ts, nil, nil,
+		nil, nil, nil, nil,
+		nil, nil, nil, nil, ts, nil,
+		nil, "synced", true, true, true,
+	)
+	// Param order: subquery tenant filter, then outer WHERE tenant, then request_id.
+	mock.ExpectQuery(`LEFT JOIN\s*\(\s*SELECT artifact_hash, max\(present AND is_complete\) AS has_present.*FROM artifact_node_copy_current FINAL`).
+		WithArgs("t1", "t1", "req-1").
+		WillReturnRows(row)
+
+	resp, err := s.GetArtifactState(context.Background(), &periscopepb.GetArtifactStateRequest{TenantId: "t1", RequestId: "req-1"})
+	if err != nil {
+		t.Fatalf("GetArtifactState: %v", err)
+	}
+	got := resp.GetArtifact()
+	if got.GetHasLocalCopy() != true || got.GetIsSynced() != true {
+		t.Fatalf("derived flags = has_local_copy:%v synced:%v", got.HasLocalCopy, got.IsSynced)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet: %v", err)
+	}
+}
+
+// GetArtifactState maps only sql.ErrNoRows to NotFound; backend and decode
+// failures remain infrastructure errors.
+func TestGetArtifactState_BackendErrorIsNotNotFound(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	s := &PeriscopeServer{clickhouse: db, logger: logging.NewLoggerWithService("periscope-query-test")}
+
+	// sql.ErrNoRows maps to NotFound.
+	mock.ExpectQuery(`FROM artifact_state_current FINAL`).WithArgs("t1", "t1", "req-1").WillReturnError(sql.ErrNoRows)
+	if _, err := s.GetArtifactState(context.Background(), &periscopepb.GetArtifactStateRequest{TenantId: "t1", RequestId: "req-1"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("ErrNoRows: got code %v, want NotFound", status.Code(err))
+	}
+	// A generic backend error must NOT be NotFound.
+	mock.ExpectQuery(`FROM artifact_state_current FINAL`).WithArgs("t1", "t1", "req-1").WillReturnError(errors.New("clickhouse connection refused"))
+	if _, err := s.GetArtifactState(context.Background(), &periscopepb.GetArtifactStateRequest{TenantId: "t1", RequestId: "req-1"}); status.Code(err) == codes.NotFound {
+		t.Fatalf("backend error must not map to NotFound, got %v", status.Code(err))
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet: %v", err)
+	}
+}
+
+func TestGetArtifactNodeCopiesTruncation(t *testing.T) {
+	newServer := func(t *testing.T) (*PeriscopeServer, sqlmock.Sqlmock, func()) {
+		t.Helper()
+		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+		if err != nil {
+			t.Fatalf("sqlmock: %v", err)
+		}
+		s := &PeriscopeServer{
+			clickhouse: db,
+			logger:     logging.NewLoggerWithService("periscope-query-test"),
+		}
+		return s, mock, func() { db.Close() }
+	}
+
+	nodeRows := func(n int) *sqlmock.Rows {
+		rows := sqlmock.NewRows([]string{"node_id", "role", "is_complete", "size_bytes", "updated_at"})
+		for i := 0; i < n; i++ {
+			rows.AddRow("node-"+strconv.Itoa(i), "cache", true, uint64(1024), time.Unix(0, 0).UTC())
+		}
+		return rows
+	}
+
+	t.Run("flags_truncated_at_cap", func(t *testing.T) {
+		s, mock, done := newServer(t)
+		defer done()
+		// 501 rows come back (cap+1). The handler returns exactly 500 and sets Truncated.
+		mock.ExpectQuery(`FROM artifact_node_copy_current FINAL`).
+			WithArgs("t1", "h1", 501).
+			WillReturnRows(nodeRows(501))
+		resp, err := s.GetArtifactNodeCopies(context.Background(), &periscopepb.GetArtifactNodeCopiesRequest{
+			TenantId: "t1", ArtifactHash: "h1",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(resp.GetCopies()) != 500 {
+			t.Errorf("got %d copies, want 500 (capped)", len(resp.GetCopies()))
+		}
+		if !resp.GetTruncated() {
+			t.Error("expected Truncated=true when overflow row present")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet: %v", err)
+		}
+	})
+
+	t.Run("not_truncated_under_cap", func(t *testing.T) {
+		s, mock, done := newServer(t)
+		defer done()
+		mock.ExpectQuery(`FROM artifact_node_copy_current FINAL`).
+			WithArgs("t1", "h1", 501).
+			WillReturnRows(nodeRows(3))
+		resp, err := s.GetArtifactNodeCopies(context.Background(), &periscopepb.GetArtifactNodeCopiesRequest{
+			TenantId: "t1", ArtifactHash: "h1",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(resp.GetCopies()) != 3 {
+			t.Errorf("got %d copies, want 3", len(resp.GetCopies()))
+		}
+		if resp.GetTruncated() {
+			t.Error("expected Truncated=false when under cap")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet: %v", err)
+		}
+	})
 }

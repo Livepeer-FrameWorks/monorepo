@@ -100,7 +100,7 @@ func validateRelatedTenantIDs(ctx context.Context, relatedIDs []string) error {
 	}
 
 	// related_tenant_ids are used by Gateway calls (user JWT) to fetch routing/live-node
-	// data across subscribed clusters. Don’t block purely because a tenant_id exists.
+	// data across subscribed clusters. Don't block purely because a tenant_id exists.
 	// If we want to restrict this further, we need to check for actual service creds/role,
 	// not just the presence of tenant context.
 	if middleware.IsServiceCall(ctx) {
@@ -813,7 +813,7 @@ func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *peris
 			m.FrameJitterMs = &v
 		}
 
-		// Assign health issue fields (previously scanned but not assigned)
+		// Assign health issue fields.
 		if hasIssues != nil {
 			hi := *hasIssues != 0
 			m.HasIssues = &hi
@@ -3189,7 +3189,10 @@ func (s *PeriscopeServer) GetClipEvents(ctx context.Context, req *periscopepb.Ge
 	streamID := req.GetStreamId()
 	stage := req.GetStage()
 	contentType := req.GetContentType()
-	countQuery := `SELECT count(*) FROM periscope.artifact_events WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?`
+	// Count over the canonical deduped artifact-event surface so totalCount and
+	// listed rows use the same identity for a given filter.
+	countQuery := `SELECT count() FROM periscope.artifact_events_deduped
+		WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?`
 	countArgs := []any{tenantID, startTime, endTime}
 	if contentType != "" {
 		countQuery += " AND content_type = ?"
@@ -3205,34 +3208,37 @@ func (s *PeriscopeServer) GetClipEvents(ctx context.Context, req *periscopepb.Ge
 	}
 	countCh := s.countAsync(ctx, countQuery, countArgs...)
 
-	query := `
-		SELECT request_id, timestamp, stream_id, stage, content_type,
-		       start_unix, stop_unix, ingest_node_id, percent, message, file_path, s3_url, size_bytes, expires_at
-		FROM periscope.artifact_events
-		WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?
-	`
+	// List from the same deduped surface as the count; keyset pagination,
+	// ordering, and LIMIT all run after the artifact-event identity is stable.
+	innerWhere := "WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?"
 	args := []any{tenantID, startTime, endTime}
 
 	if contentType != "" {
-		query += " AND content_type = ?"
+		innerWhere += " AND content_type = ?"
 		args = append(args, contentType)
 	}
 
 	if streamID != "" {
-		query += " AND stream_id = ?"
+		innerWhere += " AND stream_id = ?"
 		args = append(args, streamID)
 	}
 
 	if stage != "" {
-		query += " AND stage = ?"
+		innerWhere += " AND stage = ?"
 		args = append(args, stage)
 	}
 
 	keysetCond, keysetArgs := buildKeysetCondition(params, "timestamp", "request_id")
 	if keysetCond != "" {
-		query += keysetCond
+		innerWhere += keysetCond
 		args = append(args, keysetArgs...)
 	}
+
+	query := `
+		SELECT request_id, timestamp, stream_id, stage, content_type,
+		       start_unix, stop_unix, ingest_node_id, percent, message, file_path, s3_url, size_bytes, expires_at
+		FROM periscope.artifact_events_deduped
+		` + innerWhere
 
 	query += buildOrderBy(params, "timestamp", "request_id")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
@@ -3301,6 +3307,113 @@ func (s *PeriscopeServer) GetClipEvents(ctx context.Context, req *periscopepb.Ge
 }
 
 // GetArtifactState returns the current state of a single artifact (clip/DVR)
+// ListTopAssets ranks stored assets by audience sessions in the requested
+// window. content_type identifies the artifact kind; watch_hours is summed
+// played time; total_sessions counts distinct content/session pairs.
+func (s *PeriscopeServer) ListTopAssets(ctx context.Context, req *periscopepb.ListTopAssetsRequest) (*periscopepb.ListTopAssetsResponse, error) {
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
+	}
+	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
+	}
+	limit := req.GetLimit()
+	if limit <= 0 || limit > 100 {
+		limit = 10
+	}
+
+	query := `
+		SELECT
+			artifact_hash,
+			argMax(content_type, timestamp) AS content_type,
+			toInt64(count(DISTINCT content_id, session_id)) AS total_sessions,
+			toFloat64(sum(played_ms)) / 3600000.0 AS watch_hours,
+			toInt32(max(asset_duration_s)) AS duration_s
+		FROM client_qoe_session_deltas FINAL
+		WHERE tenant_id = ? AND artifact_hash != '' AND timestamp >= ? AND timestamp < ?
+		GROUP BY artifact_hash
+		ORDER BY total_sessions DESC, watch_hours DESC, artifact_hash
+		LIMIT ?
+	`
+	rows, err := s.clickhouse.QueryContext(ctx, query, tenantID, startTime, endTime, limit)
+	if err != nil {
+		return nil, wrapClickhouseError(err, "database error")
+	}
+	defer func() { _ = rows.Close() }()
+
+	resp := &periscopepb.ListTopAssetsResponse{}
+	for rows.Next() {
+		var a periscopepb.TopAsset
+		if scanErr := rows.Scan(&a.ArtifactHash, &a.ContentType, &a.TotalSessions, &a.WatchHours, &a.DurationS); scanErr != nil {
+			s.logger.WithError(scanErr).Error("Failed to scan top asset row")
+			return nil, status.Error(codes.Internal, "failed to read top asset rows")
+		}
+		resp.Assets = append(resp.Assets, &a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, wrapClickhouseError(err, "database error")
+	}
+	return resp, nil
+}
+
+// GetArtifactNodeCopies returns the nodes currently holding a local copy of one
+// artifact (present copies only) from artifact_node_copy_current.
+func (s *PeriscopeServer) GetArtifactNodeCopies(ctx context.Context, req *periscopepb.GetArtifactNodeCopiesRequest) (*periscopepb.GetArtifactNodeCopiesResponse, error) {
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
+	}
+	artifactHash := req.GetArtifactHash()
+	if artifactHash == "" {
+		return nil, status.Error(codes.InvalidArgument, "artifact_hash required")
+	}
+
+	// Bound the result so a pathological copy fan-out cannot drive an unbounded
+	// gateway attribution loop. Fetch cap+1 to report truncation honestly.
+	const maxNodeCopies = 500
+	query := `
+		SELECT node_id, role, is_complete, size_bytes, updated_at
+		FROM artifact_node_copy_current FINAL
+		WHERE tenant_id = ? AND artifact_hash = ? AND present
+		ORDER BY role, node_id
+		LIMIT ?
+	`
+	rows, err := s.clickhouse.QueryContext(ctx, query, tenantID, artifactHash, maxNodeCopies+1)
+	if err != nil {
+		s.logger.WithError(err).WithField("artifact_hash", artifactHash).Error("Failed to query artifact node copies")
+		return nil, status.Error(codes.Internal, "failed to query artifact node copies")
+	}
+	defer rows.Close()
+
+	resp := &periscopepb.GetArtifactNodeCopiesResponse{}
+	for rows.Next() {
+		// The overflow row proves more copies exist; do not include it.
+		if len(resp.Copies) >= maxNodeCopies {
+			resp.Truncated = true
+			break
+		}
+		var c periscopepb.ArtifactNodeCopy
+		var sizeBytes *uint64
+		var updatedAt time.Time
+		if scanErr := rows.Scan(&c.NodeId, &c.Role, &c.IsComplete, &sizeBytes, &updatedAt); scanErr != nil {
+			// Fail closed: a decode failure is unavailable data, not "node absent".
+			s.logger.WithError(scanErr).WithField("artifact_hash", artifactHash).Error("Failed to scan artifact node copy row")
+			return nil, status.Error(codes.Internal, "failed to read artifact node copy rows")
+		}
+		if sizeBytes != nil {
+			c.SizeBytes = int64(*sizeBytes)
+		}
+		c.UpdatedAtMs = updatedAt.UnixMilli()
+		resp.Copies = append(resp.Copies, &c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, status.Error(codes.Internal, "failed to read artifact node copy rows")
+	}
+	return resp, nil
+}
+
 func (s *PeriscopeServer) GetArtifactState(ctx context.Context, req *periscopepb.GetArtifactStateRequest) (*periscopepb.GetArtifactStateResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
@@ -3312,13 +3425,24 @@ func (s *PeriscopeServer) GetArtifactState(ctx context.Context, req *periscopepb
 		return nil, status.Error(codes.InvalidArgument, "request_id required")
 	}
 
+	// has_local_copy is derived from current node-copy presence. A present but
+	// incomplete copy does not count; no node-copy telemetry yields NULL/unknown.
 	query := `
 		SELECT tenant_id, request_id, stream_id, content_type, stage,
 		       progress_percent, error_message, requested_at, started_at, completed_at,
 		       clip_start_unix, clip_stop_unix, segment_count, manifest_path,
 		       file_path, s3_url, size_bytes, processing_node_id, updated_at, expires_at,
-		       storage_location, sync_status, is_hot, is_synced, is_finalized, is_frozen
+		       storage_location, sync_status,
+		       if(nc.n = 0, NULL, nc.has_present > 0) AS has_local_copy,
+		       is_synced,
+		       is_finalized
 		FROM artifact_state_current FINAL
+		LEFT JOIN (
+			SELECT artifact_hash, max(present AND is_complete) AS has_present, count() AS n
+			FROM artifact_node_copy_current FINAL
+			WHERE tenant_id = ?
+			GROUP BY artifact_hash
+		) nc ON nc.artifact_hash = request_id
 		WHERE tenant_id = ? AND request_id = ?
 	`
 
@@ -3331,18 +3455,22 @@ func (s *PeriscopeServer) GetArtifactState(ctx context.Context, req *periscopepb
 	var requestedAt, updatedAt time.Time
 	var expiresAt *time.Time
 	var progressPercent uint8
-	var isHot, isSynced, isFinalized, isFrozen *bool
+	var hasLocalCopy, isSynced, isFinalized *bool
 
-	err = s.clickhouse.QueryRowContext(ctx, query, tenantID, requestID).Scan(
+	err = s.clickhouse.QueryRowContext(ctx, query, tenantID, tenantID, requestID).Scan(
 		&artifact.TenantId, &artifact.RequestId, &artifact.StreamId, &artifact.ContentType, &artifact.Stage,
 		&progressPercent, &errorMessage, &requestedAt, &startedAt, &completedAt,
 		&clipStartUnix, &clipStopUnix, &segmentCount, &manifestPath,
 		&filePath, &s3URL, &sizeBytes, &processingNodeID, &updatedAt, &expiresAt,
-		&storageLocation, &syncStatus, &isHot, &isSynced, &isFinalized, &isFrozen,
+		&storageLocation, &syncStatus, &hasLocalCopy, &isSynced, &isFinalized,
 	)
-	if err != nil {
-		s.logger.WithError(err).WithField("request_id", requestID).Info("Artifact not found")
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "artifact not found")
+	}
+	if err != nil {
+		// Backend and decode failures are infrastructure errors, not absence.
+		s.logger.WithError(err).WithField("request_id", requestID).Error("GetArtifactState query failed")
+		return nil, wrapClickhouseError(err, "get artifact state")
 	}
 
 	artifact.ProgressPercent = uint32(progressPercent)
@@ -3368,10 +3496,9 @@ func (s *PeriscopeServer) GetArtifactState(ctx context.Context, req *periscopepb
 	}
 	artifact.StorageLocation = storageLocation
 	artifact.SyncStatus = syncStatus
-	artifact.IsHot = isHot
+	artifact.HasLocalCopy = hasLocalCopy
 	artifact.IsSynced = isSynced
 	artifact.IsFinalized = isFinalized
-	artifact.IsFrozen = isFrozen
 
 	return &periscopepb.GetArtifactStateResponse{
 		Artifact: &artifact,
@@ -3416,16 +3543,27 @@ func (s *PeriscopeServer) GetArtifactStates(ctx context.Context, req *periscopep
 	}
 	countCh := s.countAsync(ctx, countQuery, countArgs...)
 
+	// has_local_copy derives from current node-copy presence. The subquery's
+	// tenant filter is the first bind parameter, so args lead with tenantID twice.
 	query := `
 		SELECT tenant_id, request_id, stream_id, content_type, stage,
 		       progress_percent, error_message, requested_at, started_at, completed_at,
 		       clip_start_unix, clip_stop_unix, segment_count, manifest_path,
 		       file_path, s3_url, size_bytes, processing_node_id, updated_at, expires_at,
-		       storage_location, sync_status, is_hot, is_synced, is_finalized, is_frozen
+		       storage_location, sync_status,
+		       if(nc.n = 0, NULL, nc.has_present > 0) AS has_local_copy,
+		       is_synced,
+		       is_finalized
 		FROM artifact_state_current FINAL
+		LEFT JOIN (
+			SELECT artifact_hash, max(present AND is_complete) AS has_present, count() AS n
+			FROM artifact_node_copy_current FINAL
+			WHERE tenant_id = ?
+			GROUP BY artifact_hash
+		) nc ON nc.artifact_hash = request_id
 		WHERE tenant_id = ?
 	`
-	args := []any{tenantID}
+	args := []any{tenantID, tenantID}
 
 	if streamID != "" {
 		query += " AND stream_id = ?"
@@ -3474,18 +3612,18 @@ func (s *PeriscopeServer) GetArtifactStates(ctx context.Context, req *periscopep
 		var requestedAt, updatedAt time.Time
 		var expiresAt *time.Time
 		var progressPercent uint8
-		var isHot, isSynced, isFinalized, isFrozen *bool
+		var hasLocalCopy, isSynced, isFinalized *bool
 
 		err := rows.Scan(
 			&artifact.TenantId, &artifact.RequestId, &artifact.StreamId, &artifact.ContentType, &artifact.Stage,
 			&progressPercent, &errorMessage, &requestedAt, &startedAt, &completedAt,
 			&clipStartUnix, &clipStopUnix, &segmentCount, &manifestPath,
 			&filePath, &s3URL, &sizeBytes, &processingNodeID, &updatedAt, &expiresAt,
-			&storageLocation, &syncStatus, &isHot, &isSynced, &isFinalized, &isFrozen,
+			&storageLocation, &syncStatus, &hasLocalCopy, &isSynced, &isFinalized,
 		)
 		if err != nil {
-			s.logger.WithError(err).Error("Failed to scan artifact row")
-			continue
+			// A scan failure means the result set is not fully decodable.
+			return nil, status.Errorf(codes.Internal, "scan artifact state row: %v", err)
 		}
 
 		artifact.ProgressPercent = uint32(progressPercent)
@@ -3511,10 +3649,9 @@ func (s *PeriscopeServer) GetArtifactStates(ctx context.Context, req *periscopep
 		}
 		artifact.StorageLocation = storageLocation
 		artifact.SyncStatus = syncStatus
-		artifact.IsHot = isHot
+		artifact.HasLocalCopy = hasLocalCopy
 		artifact.IsSynced = isSynced
 		artifact.IsFinalized = isFinalized
-		artifact.IsFrozen = isFrozen
 
 		if idx, ok := artifactIndex[artifact.GetRequestId()]; ok {
 			if preferArtifactState(artifact, artifacts[idx]) {
@@ -3524,6 +3661,11 @@ func (s *PeriscopeServer) GetArtifactStates(ctx context.Context, req *periscopep
 		}
 		artifactIndex[artifact.GetRequestId()] = len(artifacts)
 		artifacts = append(artifacts, artifact)
+	}
+	// Iteration failures surface via rows.Err(); returning partial rows would
+	// make pagination and counts look authoritative when they are not.
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "iterate artifact state rows: %v", err)
 	}
 
 	resultsLen := len(artifacts)
@@ -6668,6 +6810,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscop
 	var clipsCreated, clipsDeleted, dvrCreated, dvrDeleted, vodCreated, vodDeleted uint32
 	queryCount++
 	queryCtx, cancel = withClickhouseTimeout(ctx)
+	// Count over the same deduped artifact-event surface used by history reads.
 	err = s.clickhouse.QueryRowContext(queryCtx, `
 		SELECT
 			countIf(content_type = 'clip' AND stage = 'completed') AS clips_created,
@@ -6676,7 +6819,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscop
 			countIf(content_type = 'dvr' AND stage = 'deleted') AS dvr_deleted,
 			countIf(content_type = 'vod' AND stage = 'completed') AS vod_created,
 			countIf(content_type = 'vod' AND stage = 'deleted') AS vod_deleted
-		FROM artifact_events
+		FROM artifact_events_deduped
 		WHERE tenant_id = ? AND timestamp BETWEEN ? AND ?
 	`, tenantID, startTime, endTime).Scan(
 		&clipsCreated, &clipsDeleted, &dvrCreated, &dvrDeleted, &vodCreated, &vodDeleted,
@@ -6730,26 +6873,25 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscop
 	summary.FrozenDvrBytes = coldFrozenDvrBytes
 	summary.FrozenVodBytes = coldFrozenVodBytes
 
-	// Freeze (S3 upload) operations from storage_events. Read-through cache
-	// fills are tracked separately as relay observability, not as a tenant
-	// usage metric.
-	var freezeCount uint32
-	var freezeBytes uint64
+	// Point-in-time analytics count and bytes for artifacts currently synced to
+	// S3. This uses the lifecycle projection instead of node diagnostic events.
+	var syncedArtifactCount uint32
+	var syncedArtifactBytes uint64
 	queryCount++
 	queryCtx, cancel = withClickhouseTimeout(ctx)
 	err = s.clickhouse.QueryRowContext(queryCtx, `
 			SELECT
-				countIf(action = 'synced') AS freeze_count,
-				sumIf(size_bytes, action = 'synced') AS freeze_bytes
-			FROM storage_events
-			WHERE tenant_id = ? AND timestamp BETWEEN ? AND ?
-		`, tenantID, startTime, endTime).Scan(
-		&freezeCount, &freezeBytes,
+				countIf(is_synced = true) AS synced_artifact_count,
+				sumIf(size_bytes, is_synced = true) AS synced_artifact_bytes
+			FROM artifact_state_current FINAL
+			WHERE tenant_id = ?
+		`, tenantID).Scan(
+		&syncedArtifactCount, &syncedArtifactBytes,
 	)
 	cancel()
-	recordQueryError(err, "Failed to query storage_events for freeze operations")
-	summary.FreezeCount = freezeCount
-	summary.FreezeBytes = freezeBytes
+	recordQueryError(err, "Failed to query artifact_state_current for synced artifacts")
+	summary.SyncedArtifactCount = syncedArtifactCount
+	summary.SyncedArtifactBytes = syncedArtifactBytes
 
 	if queryFailures > 0 {
 		return nil, wrapClickhouseError(lastErr, "database error")

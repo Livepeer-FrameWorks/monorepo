@@ -1746,9 +1746,9 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
 
 // processClientLifecycleBatch handles per-client QoE samples coalesced by Foghorn
 // into a single ClientLifecycleBatch trigger. Each batch becomes one ClickHouse
-// INSERT into client_qoe_samples — collapsing what was previously one insert per
-// active viewer per Helmsman poll into one insert per (tenant, stream, node) per
-// flush window.
+// INSERT into client_qoe_samples — one insert per (tenant, stream, node) per flush
+// window, coalescing the per-viewer, per-Helmsman-poll samples rather than inserting
+// each individually.
 //
 // Viewer-count and billing semantics live on the USER_NEW / USER_END trigger
 // path (viewer_connection_events); these QoE samples are diagnostic-only.

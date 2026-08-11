@@ -8525,15 +8525,6 @@
               "expr": "sum(rate(helmsman_dtsh_generation_total[5m])) by (source)",
               "legendFormat": "gen {{source}}",
               "refId": "A"
-            },
-            {
-              "datasource": {
-                "type": "victoriametrics-metrics-datasource",
-                "uid": "victoriametrics"
-              },
-              "expr": "sum(rate(helmsman_dtsh_upload_total[5m])) by (status)",
-              "legendFormat": "upload {{status}}",
-              "refId": "B"
             }
           ],
           "title": "DTSH sidecar activity",

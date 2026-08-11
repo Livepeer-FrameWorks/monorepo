@@ -550,6 +550,17 @@ func (c *GRPCClient) GetArtifactState(ctx context.Context, tenantID string, requ
 	})
 }
 
+// GetArtifactNodeCopies returns the nodes currently holding a local copy of one artifact.
+func (c *GRPCClient) GetArtifactNodeCopies(ctx context.Context, tenantID string, artifactHash string) (*periscopepb.GetArtifactNodeCopiesResponse, error) {
+	if err := requireTenantID(tenantID); err != nil {
+		return nil, err
+	}
+	return c.clip.GetArtifactNodeCopies(ctx, &periscopepb.GetArtifactNodeCopiesRequest{
+		TenantId:     tenantID,
+		ArtifactHash: artifactHash,
+	})
+}
+
 // GetArtifactStates returns a list of artifact states with optional filtering
 func (c *GRPCClient) GetArtifactStates(ctx context.Context, tenantID string, streamID *string, contentType *string, stage *string, opts *CursorPaginationOpts) (*periscopepb.GetArtifactStatesResponse, error) {
 	if err := requireTenantID(tenantID); err != nil {
@@ -1115,6 +1126,19 @@ func (c *GRPCClient) ListVodRetentionAssets(ctx context.Context, tenantID string
 		Pagination: buildCursorPagination(opts),
 	}
 	return c.aggregated.ListVodRetentionAssets(ctx, req)
+}
+
+// ListTopAssets returns the tenant's cross-kind Top Assets ranked by audience sessions
+// in the window. The gateway composes human title/playback_id from the catalog.
+func (c *GRPCClient) ListTopAssets(ctx context.Context, tenantID string, timeRange *TimeRangeOpts, limit int32) (*periscopepb.ListTopAssetsResponse, error) {
+	if err := requireTenantID(tenantID); err != nil {
+		return nil, err
+	}
+	return c.aggregated.ListTopAssets(ctx, &periscopepb.ListTopAssetsRequest{
+		TenantId:  tenantID,
+		TimeRange: buildTimeRange(timeRange),
+		Limit:     limit,
+	})
 }
 
 // ListOrchestrators lists vantage-independent orchestrator state for a tenant.

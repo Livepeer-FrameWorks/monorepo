@@ -747,10 +747,10 @@ message ArtifactState {
   optional google.protobuf.Timestamp expires_at = 20;
   optional string storage_location = 21; // "local", "s3", "freezing"
   optional string sync_status = 22;      // "pending", "in_progress", "synced", "failed", "lost_local"
-  optional bool is_hot = 23;             // A warm edge copy is available.
+  optional bool has_local_copy = 23;     // A node holds a present full local copy (origin or cache); nullable/unset = unknown.
   optional bool is_synced = 24;          // S3 has an authoritative copy.
   optional bool is_finalized = 25;       // S3 sync included the .dtsh index.
-  optional bool is_frozen = 26;          // No warm edge copy remains; playback served via relay read-through from S3.
+  reserved 26;                           // was is_frozen, a placement-derived alias of has_local_copy + is_synced
 }
 
 message GetArtifactStateRequest {
@@ -774,6 +774,24 @@ message GetArtifactStatesRequest {
 message GetArtifactStatesResponse {
   common.CursorPaginationResponse pagination = 1;
   repeated ArtifactState artifacts = 2;
+}
+
+// One artifact's current local copy on one node (from artifact_node_copy_current).
+message ArtifactNodeCopy {
+  string node_id = 1;
+  string role = 3;         // 'origin' (producer/relay source) | 'cache' (synced pull)
+  bool is_complete = 5;
+  int64 size_bytes = 6;
+  int64 updated_at_ms = 7;
+}
+message GetArtifactNodeCopiesRequest {
+  string tenant_id = 1;
+  string artifact_hash = 2;
+}
+message GetArtifactNodeCopiesResponse {
+  repeated ArtifactNodeCopy copies = 1; // present copies only
+  bool truncated = 2;                   // true when more copies exist than were returned (hit the
+                                        // per-request cap); consumers must not present the list as exact
 }
 
 // ============================================================================
@@ -908,6 +926,8 @@ service ClipAnalyticsService {
   // Artifact state queries (live_artifacts table - current state)
   rpc GetArtifactState(GetArtifactStateRequest) returns (GetArtifactStateResponse);
   rpc GetArtifactStates(GetArtifactStatesRequest) returns (GetArtifactStatesResponse);
+  // Nodes currently holding a local copy of an artifact (present copies only).
+  rpc GetArtifactNodeCopies(GetArtifactNodeCopiesRequest) returns (GetArtifactNodeCopiesResponse);
 }
 
 // ============================================================================
@@ -1127,9 +1147,10 @@ message LiveUsageSummary {
   uint64 frozen_dvr_bytes = 40;
   uint64 frozen_vod_bytes = 41;
 
-  // Freeze + read-through cache fill operations
-  uint32 freeze_count = 42;
-  uint64 freeze_bytes = 43;
+  // Point-in-time count/bytes of artifacts currently synced to S3
+  // (durable, Foghorn-validated via artifact_state_current)
+  uint32 synced_artifact_count = 42;
+  uint64 synced_artifact_bytes = 43;
   reserved 44, 45;
   reserved "defrost_count", "defrost_bytes";
 }
@@ -1248,6 +1269,8 @@ service AggregatedAnalyticsService {
   rpc GetPlayerBootTimeSeries(GetPlayerBootTimeSeriesRequest) returns (GetPlayerBootTimeSeriesResponse);
   rpc GetSessionQoeTimeSeries(GetSessionQoeTimeSeriesRequest) returns (GetSessionQoeTimeSeriesResponse);
   rpc ListVodRetentionAssets(ListVodRetentionAssetsRequest) returns (ListVodRetentionAssetsResponse);
+  // Cross-kind Top Assets ranked server-side by audience sessions.
+  rpc ListTopAssets(ListTopAssetsRequest) returns (ListTopAssetsResponse);
   rpc GetNetworkUsage(GetNetworkUsageRequest) returns (GetNetworkUsageResponse);
   rpc GetAcquisitionFunnel(GetAcquisitionFunnelRequest) returns (GetAcquisitionFunnelResponse);
   rpc GetAcquisitionCohortUsage(GetAcquisitionCohortUsageRequest) returns (GetAcquisitionCohortUsageResponse);
@@ -2102,6 +2125,26 @@ message ListVodRetentionAssetsRequest {
 message ListVodRetentionAssetsResponse {
   common.CursorPaginationResponse pagination = 1;
   repeated VodRetentionAsset assets = 2;
+}
+
+// One ranked asset for the Top Assets surface — cross-kind (vod/clip/dvr/chapter),
+// ranked server-side by audience.
+message TopAsset {
+  string artifact_hash = 1;
+  string content_type = 2;   // 'vod' | 'clip' | 'dvr' | 'chapter'
+  int64 total_sessions = 3;
+  double watch_hours = 4;
+  int32 duration_s = 5;
+}
+
+message ListTopAssetsRequest {
+  string tenant_id = 1;
+  common.TimeRange time_range = 2;
+  int32 limit = 3;           // top N by sessions (clamped)
+}
+
+message ListTopAssetsResponse {
+  repeated TopAsset assets = 1;
 }
 
 // ============================================================================

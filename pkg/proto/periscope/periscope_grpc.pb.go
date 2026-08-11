@@ -1377,9 +1377,10 @@ var PlatformAnalyticsService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	ClipAnalyticsService_GetClipEvents_FullMethodName     = "/periscope.ClipAnalyticsService/GetClipEvents"
-	ClipAnalyticsService_GetArtifactState_FullMethodName  = "/periscope.ClipAnalyticsService/GetArtifactState"
-	ClipAnalyticsService_GetArtifactStates_FullMethodName = "/periscope.ClipAnalyticsService/GetArtifactStates"
+	ClipAnalyticsService_GetClipEvents_FullMethodName         = "/periscope.ClipAnalyticsService/GetClipEvents"
+	ClipAnalyticsService_GetArtifactState_FullMethodName      = "/periscope.ClipAnalyticsService/GetArtifactState"
+	ClipAnalyticsService_GetArtifactStates_FullMethodName     = "/periscope.ClipAnalyticsService/GetArtifactStates"
+	ClipAnalyticsService_GetArtifactNodeCopies_FullMethodName = "/periscope.ClipAnalyticsService/GetArtifactNodeCopies"
 )
 
 // ClipAnalyticsServiceClient is the client API for ClipAnalyticsService service.
@@ -1390,6 +1391,8 @@ type ClipAnalyticsServiceClient interface {
 	// Artifact state queries (live_artifacts table - current state)
 	GetArtifactState(ctx context.Context, in *GetArtifactStateRequest, opts ...grpc.CallOption) (*GetArtifactStateResponse, error)
 	GetArtifactStates(ctx context.Context, in *GetArtifactStatesRequest, opts ...grpc.CallOption) (*GetArtifactStatesResponse, error)
+	// Nodes currently holding a local copy of an artifact (present copies only).
+	GetArtifactNodeCopies(ctx context.Context, in *GetArtifactNodeCopiesRequest, opts ...grpc.CallOption) (*GetArtifactNodeCopiesResponse, error)
 }
 
 type clipAnalyticsServiceClient struct {
@@ -1430,6 +1433,16 @@ func (c *clipAnalyticsServiceClient) GetArtifactStates(ctx context.Context, in *
 	return out, nil
 }
 
+func (c *clipAnalyticsServiceClient) GetArtifactNodeCopies(ctx context.Context, in *GetArtifactNodeCopiesRequest, opts ...grpc.CallOption) (*GetArtifactNodeCopiesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetArtifactNodeCopiesResponse)
+	err := c.cc.Invoke(ctx, ClipAnalyticsService_GetArtifactNodeCopies_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ClipAnalyticsServiceServer is the server API for ClipAnalyticsService service.
 // All implementations must embed UnimplementedClipAnalyticsServiceServer
 // for forward compatibility.
@@ -1438,6 +1451,8 @@ type ClipAnalyticsServiceServer interface {
 	// Artifact state queries (live_artifacts table - current state)
 	GetArtifactState(context.Context, *GetArtifactStateRequest) (*GetArtifactStateResponse, error)
 	GetArtifactStates(context.Context, *GetArtifactStatesRequest) (*GetArtifactStatesResponse, error)
+	// Nodes currently holding a local copy of an artifact (present copies only).
+	GetArtifactNodeCopies(context.Context, *GetArtifactNodeCopiesRequest) (*GetArtifactNodeCopiesResponse, error)
 	mustEmbedUnimplementedClipAnalyticsServiceServer()
 }
 
@@ -1456,6 +1471,9 @@ func (UnimplementedClipAnalyticsServiceServer) GetArtifactState(context.Context,
 }
 func (UnimplementedClipAnalyticsServiceServer) GetArtifactStates(context.Context, *GetArtifactStatesRequest) (*GetArtifactStatesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetArtifactStates not implemented")
+}
+func (UnimplementedClipAnalyticsServiceServer) GetArtifactNodeCopies(context.Context, *GetArtifactNodeCopiesRequest) (*GetArtifactNodeCopiesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetArtifactNodeCopies not implemented")
 }
 func (UnimplementedClipAnalyticsServiceServer) mustEmbedUnimplementedClipAnalyticsServiceServer() {}
 func (UnimplementedClipAnalyticsServiceServer) testEmbeddedByValue()                              {}
@@ -1532,6 +1550,24 @@ func _ClipAnalyticsService_GetArtifactStates_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ClipAnalyticsService_GetArtifactNodeCopies_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetArtifactNodeCopiesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClipAnalyticsServiceServer).GetArtifactNodeCopies(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClipAnalyticsService_GetArtifactNodeCopies_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClipAnalyticsServiceServer).GetArtifactNodeCopies(ctx, req.(*GetArtifactNodeCopiesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ClipAnalyticsService_ServiceDesc is the grpc.ServiceDesc for ClipAnalyticsService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1550,6 +1586,10 @@ var ClipAnalyticsService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetArtifactStates",
 			Handler:    _ClipAnalyticsService_GetArtifactStates_Handler,
+		},
+		{
+			MethodName: "GetArtifactNodeCopies",
+			Handler:    _ClipAnalyticsService_GetArtifactNodeCopies_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
@@ -1585,6 +1625,7 @@ const (
 	AggregatedAnalyticsService_GetPlayerBootTimeSeries_FullMethodName     = "/periscope.AggregatedAnalyticsService/GetPlayerBootTimeSeries"
 	AggregatedAnalyticsService_GetSessionQoeTimeSeries_FullMethodName     = "/periscope.AggregatedAnalyticsService/GetSessionQoeTimeSeries"
 	AggregatedAnalyticsService_ListVodRetentionAssets_FullMethodName      = "/periscope.AggregatedAnalyticsService/ListVodRetentionAssets"
+	AggregatedAnalyticsService_ListTopAssets_FullMethodName               = "/periscope.AggregatedAnalyticsService/ListTopAssets"
 	AggregatedAnalyticsService_GetNetworkUsage_FullMethodName             = "/periscope.AggregatedAnalyticsService/GetNetworkUsage"
 	AggregatedAnalyticsService_GetAcquisitionFunnel_FullMethodName        = "/periscope.AggregatedAnalyticsService/GetAcquisitionFunnel"
 	AggregatedAnalyticsService_GetAcquisitionCohortUsage_FullMethodName   = "/periscope.AggregatedAnalyticsService/GetAcquisitionCohortUsage"
@@ -1634,6 +1675,8 @@ type AggregatedAnalyticsServiceClient interface {
 	GetPlayerBootTimeSeries(ctx context.Context, in *GetPlayerBootTimeSeriesRequest, opts ...grpc.CallOption) (*GetPlayerBootTimeSeriesResponse, error)
 	GetSessionQoeTimeSeries(ctx context.Context, in *GetSessionQoeTimeSeriesRequest, opts ...grpc.CallOption) (*GetSessionQoeTimeSeriesResponse, error)
 	ListVodRetentionAssets(ctx context.Context, in *ListVodRetentionAssetsRequest, opts ...grpc.CallOption) (*ListVodRetentionAssetsResponse, error)
+	// Cross-kind Top Assets ranked server-side by audience sessions.
+	ListTopAssets(ctx context.Context, in *ListTopAssetsRequest, opts ...grpc.CallOption) (*ListTopAssetsResponse, error)
 	GetNetworkUsage(ctx context.Context, in *GetNetworkUsageRequest, opts ...grpc.CallOption) (*GetNetworkUsageResponse, error)
 	GetAcquisitionFunnel(ctx context.Context, in *GetAcquisitionFunnelRequest, opts ...grpc.CallOption) (*GetAcquisitionFunnelResponse, error)
 	GetAcquisitionCohortUsage(ctx context.Context, in *GetAcquisitionCohortUsageRequest, opts ...grpc.CallOption) (*GetAcquisitionCohortUsageResponse, error)
@@ -1927,6 +1970,16 @@ func (c *aggregatedAnalyticsServiceClient) ListVodRetentionAssets(ctx context.Co
 	return out, nil
 }
 
+func (c *aggregatedAnalyticsServiceClient) ListTopAssets(ctx context.Context, in *ListTopAssetsRequest, opts ...grpc.CallOption) (*ListTopAssetsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTopAssetsResponse)
+	err := c.cc.Invoke(ctx, AggregatedAnalyticsService_ListTopAssets_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *aggregatedAnalyticsServiceClient) GetNetworkUsage(ctx context.Context, in *GetNetworkUsageRequest, opts ...grpc.CallOption) (*GetNetworkUsageResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetNetworkUsageResponse)
@@ -2001,6 +2054,8 @@ type AggregatedAnalyticsServiceServer interface {
 	GetPlayerBootTimeSeries(context.Context, *GetPlayerBootTimeSeriesRequest) (*GetPlayerBootTimeSeriesResponse, error)
 	GetSessionQoeTimeSeries(context.Context, *GetSessionQoeTimeSeriesRequest) (*GetSessionQoeTimeSeriesResponse, error)
 	ListVodRetentionAssets(context.Context, *ListVodRetentionAssetsRequest) (*ListVodRetentionAssetsResponse, error)
+	// Cross-kind Top Assets ranked server-side by audience sessions.
+	ListTopAssets(context.Context, *ListTopAssetsRequest) (*ListTopAssetsResponse, error)
 	GetNetworkUsage(context.Context, *GetNetworkUsageRequest) (*GetNetworkUsageResponse, error)
 	GetAcquisitionFunnel(context.Context, *GetAcquisitionFunnelRequest) (*GetAcquisitionFunnelResponse, error)
 	GetAcquisitionCohortUsage(context.Context, *GetAcquisitionCohortUsageRequest) (*GetAcquisitionCohortUsageResponse, error)
@@ -2097,6 +2152,9 @@ func (UnimplementedAggregatedAnalyticsServiceServer) GetSessionQoeTimeSeries(con
 }
 func (UnimplementedAggregatedAnalyticsServiceServer) ListVodRetentionAssets(context.Context, *ListVodRetentionAssetsRequest) (*ListVodRetentionAssetsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListVodRetentionAssets not implemented")
+}
+func (UnimplementedAggregatedAnalyticsServiceServer) ListTopAssets(context.Context, *ListTopAssetsRequest) (*ListTopAssetsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListTopAssets not implemented")
 }
 func (UnimplementedAggregatedAnalyticsServiceServer) GetNetworkUsage(context.Context, *GetNetworkUsageRequest) (*GetNetworkUsageResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetNetworkUsage not implemented")
@@ -2633,6 +2691,24 @@ func _AggregatedAnalyticsService_ListVodRetentionAssets_Handler(srv interface{},
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AggregatedAnalyticsService_ListTopAssets_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTopAssetsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AggregatedAnalyticsServiceServer).ListTopAssets(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AggregatedAnalyticsService_ListTopAssets_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AggregatedAnalyticsServiceServer).ListTopAssets(ctx, req.(*ListTopAssetsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AggregatedAnalyticsService_GetNetworkUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetNetworkUsageRequest)
 	if err := dec(in); err != nil {
@@ -2805,6 +2881,10 @@ var AggregatedAnalyticsService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListVodRetentionAssets",
 			Handler:    _AggregatedAnalyticsService_ListVodRetentionAssets_Handler,
+		},
+		{
+			MethodName: "ListTopAssets",
+			Handler:    _AggregatedAnalyticsService_ListTopAssets_Handler,
 		},
 		{
 			MethodName: "GetNetworkUsage",

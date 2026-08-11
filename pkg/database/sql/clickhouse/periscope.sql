@@ -22,9 +22,10 @@ USE periscope;
 -- source_request_id (sha256(node_id || NUL || trigger_type || NUL || payload_raw)), so
 -- ReplacingMergeTree(ingested_at_ms) + argMax-on-read collapses duplicates.
 --
--- Currently scoped to the seven final-event triggers (USER_END,
--- STREAM_END, PUSH_END, RECORDING_END, RECORDING_SEGMENT,
--- LIVEPEER_SEGMENT_COMPLETE, PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE). The
+-- Currently scoped to the eight final-event triggers (USER_END,
+-- STREAM_END, PUSH_END, PUSH_INPUT_CLOSE, RECORDING_END,
+-- RECORDING_SEGMENT, LIVEPEER_SEGMENT_COMPLETE,
+-- PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE). The
 -- table schema accepts any trigger_type so the WAL can be extended later
 -- without DDL changes.
 -- ============================================================================
@@ -1073,6 +1074,25 @@ GROUP BY timestamp_1h, tenant_id, cluster_id, node_id;
 -- ARTIFACT EVENTS + STATE (clips, DVR, VOD)
 -- ============================================================================
 
+-- artifact_events is the append-only lifecycle HISTORY (clip/DVR/VOD stage transitions),
+-- counted by analytics through the artifact_events_deduped view defined below. Its rows
+-- arrive via the Foghorn durable outbox, which is at-least-once: an ack-lost redelivery
+-- re-sends the SAME event with the SAME stable event_id (the outbox row id) and the SAME
+-- source timestamp, so a redelivery is a byte-identical row. The engine is a plain
+-- ReplicatedMergeTree (no collapse); redeliveries are deduped at READ time by the
+-- artifact_events_deduped view, never by the storage engine.
+--
+-- Every reader that counts or lists this table MUST read periscope.artifact_events_deduped
+-- so counts, lists, and summaries share one identity and totals agree with listed rows (see
+-- the api_analytics_query artifact_events reads and the Metabase artifact cards). Rows
+-- written before event_id existed (event_id='') carry no trustworthy dedup identity, so the
+-- view passes them through verbatim — one view row per legacy base row, never collapsed with
+-- each other regardless of shared tenant/stream/second/request_id/stage.
+--
+-- For the identity to be stable across redeliveries, `timestamp` must be stable too, so the
+-- ingest handler stamps it with the SOURCE transition time (source_updated_at_ms = the
+-- outbox row's created_at) rather than Decklog receipt time (which would differ per delivery
+-- and defeat both the dedup identity and the toYYYYMM(timestamp) partition).
 CREATE TABLE IF NOT EXISTS artifact_events (
     timestamp DateTime,
     tenant_id UUID,
@@ -1112,13 +1132,52 @@ CREATE TABLE IF NOT EXISTS artifact_events (
     hard_slow_ticks Nullable(UInt32),
     stale_hold_ticks Nullable(UInt32),
     lockout_ticks Nullable(UInt32),
-    drain_ms Nullable(UInt64)
+    drain_ms Nullable(UInt64),
+
+    -- event_id is the outbox row id (stable across at-least-once redeliveries). It is the
+    -- dedup key of the artifact_events_deduped view, NOT the ORDER BY: a non-empty event_id
+    -- collapses redeliveries to one row, while legacy event_id='' rows carry no trustworthy
+    -- dedup identity and pass through the view verbatim (one view row per base row). The engine
+    -- stays a plain ReplicatedMergeTree (no engine collapse).
+    event_id String DEFAULT ''
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp, request_id)
 TTL timestamp + INTERVAL 90 DAY;
 
+-- Canonical read-time dedup surface for artifact_events. artifact_events is a plain
+-- ReplicatedMergeTree, so an at-least-once outbox redelivery appends a byte-identical row.
+-- Every reader (api_analytics_query counts/lists/summaries and the Metabase artifact cards)
+-- reads this view so they share ONE identity and counts agree with the rows they list.
+--
+-- Invariant: only rows carrying a non-empty event_id (the stable outbox row id) are deduped.
+-- The second UNION ALL branch collapses their redeliveries with LIMIT 1 BY event_id (one row
+-- per event_id). Legacy rows (event_id='') have NO trustworthy dedup identity, so the first
+-- branch passes them through verbatim — one view row per base row. Two legacy rows that share
+-- tenant/stream/second/request_id/stage but differ in any other column (percent, message,
+-- file_path, s3_url, size_bytes, …) are therefore BOTH kept; history is never collapsed away.
+-- Per ClickHouse UNION ALL semantics LIMIT 1 BY binds to its own SELECT, not the whole union,
+-- so it never touches the legacy branch. The first branch is SELECT * FROM artifact_events so
+-- downstream column inheritance still resolves to the base table.
+-- A plain (non-materialized) VIEW is metadata-only, so adding it is rolling-safe.
+CREATE VIEW IF NOT EXISTS artifact_events_deduped AS
+SELECT * FROM artifact_events WHERE event_id = ''
+UNION ALL
+SELECT * FROM artifact_events WHERE event_id != '' LIMIT 1 BY event_id;
 
+
+-- artifact_state_current is a BEST-EFFORT analytics projection of an artifact's storage lifecycle —
+-- NOT an authoritative record. The ReplacingMergeTree collapses on updated_at (see the column comment
+-- below): for outbox-delivered lifecycle events that is the source transition time (outbox created_at)
+-- which usually orders sequential transitions correctly and survives replay, but it is wall-clock, NOT
+-- a source-owned monotonic revision — concurrent transitions can tie or invert within a millisecond,
+-- and events without a stamped source time fall back to Decklog receipt time. So ordering here is
+-- best-effort, not deterministic: a true total order would require a source-owned per-transition
+-- revision, which this projection does not carry. The authoritative storage lifecycle lives in
+-- Foghorn/Commodore (foghorn.artifacts + the
+-- Commodore catalog); durable per-node placement lives in foghorn.artifact_nodes, and the versioned
+-- artifact_node_copy_current projection below is a best-effort analytics view of it, not the operational
+-- source of truth. UI overlays treat a missing/stale value as unknown (nullable), never as fact.
 CREATE TABLE IF NOT EXISTS artifact_state_current (
     tenant_id UUID,
     stream_id UUID,
@@ -1147,17 +1206,72 @@ CREATE TABLE IF NOT EXISTS artifact_state_current (
 
     processing_node_id Nullable(String),
 
-    updated_at DateTime,
+    -- updated_at is the ReplacingMergeTree collapse key (highest value wins). For an outbox-delivered
+    -- lifecycle event it is the SOURCE transition time (source_updated_at_ms = the outbox row's
+    -- created_at, ms), which is STABLE across at-least-once redeliveries — so a replayed older
+    -- transition keeps its original time and, in the common SEQUENTIAL case (each transition commits
+    -- before the next starts), an older COMPLETED does not outrank a later DELETED. It is NOT a rigorous
+    -- total order: created_at is transaction-start wall-clock (NOW()), so concurrent transitions can
+    -- tie or invert within the millisecond, and ReplacingMergeTree cannot deterministically resolve a
+    -- tie. Events with no stamped source time fall back to Decklog receipt time. Best-effort only.
+    updated_at DateTime64(3),
     expires_at Nullable(DateTime),
 
     storage_location Nullable(String),
     sync_status Nullable(String),
-    is_hot Nullable(Bool),
-    is_synced Nullable(Bool),
-    is_finalized Nullable(Bool),
-    is_frozen Nullable(Bool)
+    is_synced Nullable(Bool),    -- durable S3 fact: S3 holds an authoritative copy
+    is_finalized Nullable(Bool), -- durable S3 fact: the S3 sync included the .dtsh index
+    -- has_local_copy: a node holds a full local copy (origin or synced cache); nullable = unknown.
+    -- This is the last-written placement snapshot; GetArtifactState overlays it with live
+    -- artifact_node_copy_current presence, so the authoritative read derives has_local_copy there.
+    has_local_copy Nullable(Bool)
 ) ENGINE = ReplicatedReplacingMergeTree(updated_at)
 ORDER BY (tenant_id, request_id);
+
+-- Per-(artifact, node) transitions for transient LOCAL NODE COPIES of an artifact
+-- (producer/origin copy or synced cache copy) — not the durable copy, which lives in
+-- object storage and is tracked via the artifact's storage lifecycle. Fed by Foghorn
+-- ArtifactNodeCopyEvent via the service_events topic
+-- (docs/architecture/analytics-pipeline.md). Emitted from the node write paths:
+-- origin register, cache-fill, orphan/loss, and explicit delete. ReplacingMergeTree
+-- keyed on event_id so at-least-once Kafka replays dedupe.
+CREATE TABLE IF NOT EXISTS artifact_node_copy_events (
+    event_id String,
+    timestamp DateTime,
+    tenant_id UUID,
+    artifact_hash String,
+    node_id LowCardinality(String),
+    role LowCardinality(String) DEFAULT '',       -- 'origin' | 'cache'
+    transition LowCardinality(String) DEFAULT '', -- 'gained' | 'lost' | 'updated'
+    is_complete Bool DEFAULT false,
+    size_bytes Nullable(UInt64),
+    version UInt64 DEFAULT 0,                      -- Foghorn monotonic revision
+    source_region LowCardinality(String) DEFAULT '',
+    schema_version UInt8 DEFAULT 0
+) ENGINE = ReplicatedReplacingMergeTree()
+PARTITION BY (toYYYYMM(timestamp), tenant_id)
+ORDER BY (tenant_id, artifact_hash, node_id, event_id)
+TTL timestamp + INTERVAL 90 DAY;
+
+-- Latest local-copy state per (artifact, node) — best-effort, eventually-consistent
+-- observability of which nodes hold a local copy (origin or synced cache), not the
+-- durable object-storage copy. present=false after a LOST transition; query with FINAL
+-- and filter present to get the nodes currently holding a copy.
+CREATE TABLE IF NOT EXISTS artifact_node_copy_current (
+    tenant_id UUID,
+    artifact_hash String,
+    node_id LowCardinality(String),
+    role LowCardinality(String) DEFAULT '',
+    present Bool DEFAULT true,
+    is_complete Bool DEFAULT false,
+    size_bytes Nullable(UInt64),
+    -- version is Foghorn's monotonic revision (assigned transactionally) and is the
+    -- ReplacingMergeTree version, so concurrent updates converge deterministically —
+    -- wall-clock updated_at would tie within the same millisecond.
+    version UInt64 DEFAULT 0,
+    updated_at DateTime64(3)
+) ENGINE = ReplicatedReplacingMergeTree(version)
+ORDER BY (tenant_id, artifact_hash, node_id);
 
 -- ============================================================================
 -- STORAGE SNAPSHOTS + LIFECYCLE
@@ -2009,7 +2123,7 @@ GROUP BY tenant_id, node_id, stream_id, source_event_id;
 -- ANOMALY TABLES — stale closes and operator-visible non-billable facts.
 -- ----------------------------------------------------------------------------
 -- Physically separate from *_final so rated billing reads cannot reach them.
--- The stale-close worker in api_sidecar writes here when a session/stream
+-- The stale-close worker in api_analytics_ingest writes here when a session/stream
 -- lingers past stale_close_timeout without a real USER_END/STREAM_END.
 -- Operational meters (e.g. stale_session_minutes) read from these tables.
 -- ============================================================================
@@ -2294,7 +2408,7 @@ TTL toDateTime(observed_at_ms / 1000) + INTERVAL 90 DAY;
 -- rewrites the affected source-time buckets into the append store.
 --
 -- Migration from earlier MV/table shapes is handled by
--- pkg/database/sql/clickhouse/migrations/periscope/v0.2.64/contract/001.
+-- pkg/database/sql/clickhouse/migrations/periscope/v0.2.82/contract/001_rollup_canonical_swap.sql.
 -- Greenfield init via this file installs the canonical shape directly.
 
 CREATE TABLE IF NOT EXISTS tenant_usage_5m_store (

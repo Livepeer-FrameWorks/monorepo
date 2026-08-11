@@ -72,7 +72,7 @@ cards:
              content_type,
              stage,
              count() AS events
-      FROM periscope.artifact_events
+      FROM periscope.artifact_events_deduped
       WHERE timestamp >= now() - INTERVAL 7 DAY
       GROUP BY hour, ingest_node_id, content_type, stage
       ORDER BY hour DESC, events DESC
@@ -86,7 +86,7 @@ cards:
       SELECT count() AS events,
              countIf(ingest_node_id = '') AS missing_ingest_node,
              round(missing_ingest_node / nullIf(events, 0), 4) AS missing_ratio
-      FROM periscope.artifact_events
+      FROM periscope.artifact_events_deduped
       WHERE timestamp >= now() - INTERVAL 24 HOUR
 
   - slug: periscope.raw-mist-triggers-by-type
