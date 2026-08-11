@@ -19,7 +19,8 @@
     expiresAt?: string | null;
     durationSeconds?: number | null;
     sizeBytes?: number | null;
-    isFrozen?: boolean | null;
+    isSynced?: boolean | null;
+    hasLocalCopy?: boolean | null;
   }
 
   interface Clip {
@@ -34,7 +35,8 @@
     expiresAt?: string | null;
     duration?: number | null;
     sizeBytes?: number | null;
-    isFrozen?: boolean | null;
+    isSynced?: boolean | null;
+    hasLocalCopy?: boolean | null;
   }
 
   interface VodArtifact {
@@ -65,13 +67,20 @@
   let expandedItem = $state<string | null>(null);
   let activeTab = $state<"all" | "dvr" | "clips" | "vod">("all");
 
+  // S3-only ("frozen", read-through relay): durable sync is confirmed AND the placement overlay
+  // affirmatively reports no warm edge copy. A null overlay (unknown placement) is NOT claimed as
+  // S3-only. Durable isSynced and observed hasLocalCopy are distinct facts, never conflated.
+  function isS3Only(a: { isSynced?: boolean | null; hasLocalCopy?: boolean | null }): boolean {
+    return a.isSynced === true && a.hasLocalCopy === false;
+  }
+
   // Storage calculations
   const storageStats = $derived.by(() => {
     const dvrBytes = recordings.reduce((sum, r) => sum + (r.sizeBytes || 0), 0);
     const clipBytes = clips.reduce((sum, c) => sum + (c.sizeBytes || 0), 0);
     const vodBytes = vodArtifacts.reduce((sum, v) => sum + (v.sizeBytes || 0), 0);
-    const frozenDvr = recordings.filter((r) => r.isFrozen).length;
-    const frozenClips = clips.filter((c) => c.isFrozen).length;
+    const frozenDvr = recordings.filter(isS3Only).length;
+    const frozenClips = clips.filter(isS3Only).length;
 
     return {
       totalBytes: dvrBytes + clipBytes + vodBytes,
@@ -296,7 +305,7 @@
                   >
                     {recording.status || "Ready"}
                   </span>
-                  {#if recording.isFrozen}
+                  {#if isS3Only(recording)}
                     <SnowflakeIcon class="w-3.5 h-3.5 text-blue-400" title="Archived" />
                   {/if}
                 </div>
@@ -383,7 +392,7 @@
                   >
                     {clip.status || "Ready"}
                   </span>
-                  {#if clip.isFrozen}
+                  {#if isS3Only(clip)}
                     <SnowflakeIcon class="w-3.5 h-3.5 text-blue-400" title="Archived" />
                   {/if}
                 </div>

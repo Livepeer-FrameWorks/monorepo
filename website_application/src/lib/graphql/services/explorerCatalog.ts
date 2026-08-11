@@ -454,30 +454,6 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
     description: "VOD, clips, DVR, retained artifacts, and storage policy.",
     examples: [
       {
-        id: "vod-assets",
-        title: "VOD Assets",
-        description: "Paginated uploaded VOD assets.",
-        operationType: "query",
-        templatePath: "operations/queries/GetVodAssetsConnection.gql",
-        tags: ["core", "media"],
-      },
-      {
-        id: "clips",
-        title: "Clips",
-        description: "Paginated clips with metadata and lifecycle state.",
-        operationType: "query",
-        templatePath: "operations/queries/GetClipsConnection.gql",
-        tags: ["core", "media"],
-      },
-      {
-        id: "dvr-recordings",
-        title: "DVR Recordings",
-        description: "Paginated DVR recordings and recording metadata.",
-        operationType: "query",
-        templatePath: "operations/queries/GetDVRRequests.gql",
-        tags: ["core", "media"],
-      },
-      {
         id: "storage-artifacts",
         title: "Storage Artifacts",
         description: "Artifact storage inventory with retention filters.",

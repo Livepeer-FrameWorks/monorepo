@@ -1,7 +1,13 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from "svelte";
   import { SvelteMap } from "svelte/reactivity";
-  import type { Map as LeafletMap, LayerGroup, GeoJSON as LeafletGeoJSON, Layer } from "leaflet";
+  import type {
+    Map as LeafletMap,
+    LayerGroup,
+    GeoJSON as LeafletGeoJSON,
+    Layer,
+    CircleMarker,
+  } from "leaflet";
   import type { Feature } from "geojson";
   import { getIconComponent } from "$lib/iconUtils";
   import { iso2ToIso3, iso3ToIso2, getCountryName } from "$lib/utils/country-names";
@@ -9,9 +15,10 @@
   import { palette, heatGradient } from "./theme";
   import "leaflet/dist/leaflet.css";
 
-  // One layered geo view for the audience analytics maps, with a layer toggle:
-  // viewer-demand heat, country choropleth, client-to-edge routes, and H3 buckets.
-  // Driven by the audience geographic + routing queries.
+  // One alive audience map. A base layer (viewer-demand heat OR country choropleth,
+  // mutually exclusive) with a routing overlay toggled on top: curved client-to-edge
+  // arcs with animated traveling pulses, H3 routing buckets, and glowing edge nodes.
+  // Mirrors the marketing GeoPanel; driven by the audience geographic + routing queries.
   interface HeatPoint {
     lat: number;
     lng: number;
@@ -39,7 +46,7 @@
     kind: "client" | "node";
     stats?: { count?: number; successRate?: number; avgDistance?: number };
   }
-  type ViewKind = "heat" | "countries" | "routes" | "buckets";
+  type BaseKind = "heat" | "countries";
 
   interface Props {
     heat?: HeatPoint[];
@@ -50,7 +57,11 @@
     height?: number;
     selectedBucket?: string | null;
     onBucketClick?: (id: string) => void;
-    initialView?: ViewKind;
+    // Only "countries" flips the default base off heat.
+    initialView?: "heat" | "countries" | "routes" | "buckets";
+    // "audience" (default): viewer heat/countries + routing overlay. "placement":
+    // a plain node map (edges holding an asset) — no base legend or routing toggle.
+    variant?: "audience" | "placement";
   }
 
   let {
@@ -63,6 +74,7 @@
     selectedBucket = null,
     onBucketClick,
     initialView = "heat",
+    variant = "audience",
   }: Props = $props();
 
   const TILE = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
@@ -76,21 +88,29 @@
   let worldFeatures: Feature[] = [];
   let ready = $state(false);
 
-  let view = $state<ViewKind>(untrack(() => initialView));
+  // Mutually-exclusive base; routing rides on top.
+  let base = $state<BaseKind>(
+    untrack(() =>
+      initialView === "countries" ? "countries" : heat.length > 0 ? "heat" : "countries"
+    )
+  );
+  let showRouting = $state(true);
   let isFullscreen = $state(false);
   let showHint = $state(true);
 
-  // One layer group per concern; only the active view's group is on the map.
+  // Base layer (only one at a time) plus one group per routing concern so bucket
+  // reselection doesn't restart the pulse animation.
   let heatGroup: LayerGroup | null = null;
-  let routeGroup: LayerGroup | null = null;
   let geoLayer: LeafletGeoJSON | null = null;
+  let routeGroup: LayerGroup | null = null;
+  let pulseGroup: LayerGroup | null = null;
+  let bucketGroup: LayerGroup | null = null;
+  let nodeGroup: LayerGroup | null = null;
+  let pulseTimers: ReturnType<typeof setInterval>[] = [];
 
-  const AVAILABLE = $derived<{ id: ViewKind; label: string; on: boolean }[]>([
-    { id: "heat", label: "Heat", on: heat.length > 0 },
-    { id: "countries", label: "Countries", on: countries.length > 0 },
-    { id: "routes", label: "Routes", on: routes.length > 0 },
-    { id: "buckets", label: "Buckets", on: buckets.length > 0 },
-  ]);
+  const heatAvailable = $derived(heat.length > 0);
+  const countriesAvailable = $derived(countries.length > 0);
+  const routingAvailable = $derived(routes.length > 0 || buckets.length > 0 || nodes.length > 0);
 
   onMount(async () => {
     const mod = await import("leaflet");
@@ -102,11 +122,17 @@
   });
 
   onDestroy(() => {
+    clearPulses();
     if (map) {
       map.remove();
       map = null;
     }
   });
+
+  function clearPulses() {
+    pulseTimers.forEach(clearInterval);
+    pulseTimers = [];
+  }
 
   function initMap() {
     if (!L || !mapContainer) return;
@@ -135,58 +161,33 @@
       { passive: false }
     );
     ready = true;
-    draw();
+    drawBase();
+    drawArcs();
+    drawBuckets();
+    drawNodes();
   }
 
-  function clearLayers() {
-    if (!map) return;
+  function drawBase() {
+    if (!map || !L) return;
     if (heatGroup) {
       map.removeLayer(heatGroup);
       heatGroup = null;
-    }
-    if (routeGroup) {
-      map.removeLayer(routeGroup);
-      routeGroup = null;
     }
     if (geoLayer) {
       map.removeLayer(geoLayer);
       geoLayer = null;
     }
-  }
 
-  function drawNodes(group: LayerGroup) {
-    if (!L) return;
-    nodes.forEach((n) => {
-      const icon = L!.divIcon({
-        className: "geoview__marker",
-        html: `<span class="geoview__node"></span>`,
-        iconSize: [12, 12],
-        iconAnchor: [6, 6],
-      });
-      L!
-        .marker([n.lat, n.lng], { icon })
-        .addTo(group)
-        .bindTooltip(`${n.name} (${n.count ?? 0})`, {
-          direction: "top",
-          className: "dark-tooltip",
-        });
-    });
-  }
-
-  function draw() {
-    if (!map || !L || !ready) return;
-    clearLayers();
-
-    if (view === "heat") {
+    if (base === "heat") {
       heatGroup = L.layerGroup().addTo(map);
-      // leaflet.heat augments L.heatLayer at runtime
+      // leaflet.heat augments L.heatLayer at runtime.
       (L as typeof L & { heatLayer: (pts: [number, number, number][], opts: object) => Layer })
         .heatLayer(
           heat.map((p) => [p.lat, p.lng, p.intensity]),
           { radius: 30, blur: 18, minOpacity: 0.3, maxZoom: 10, gradient: heatGradient }
         )
         .addTo(heatGroup);
-    } else if (view === "countries") {
+    } else {
       const valueMap = new SvelteMap<string, number>();
       countries.forEach((d) => {
         const iso3 = iso2ToIso3[d.countryCode.toUpperCase()];
@@ -216,63 +217,158 @@
           if (val > 0) {
             layer.bindTooltip(
               `${getCountryName(iso3ToIso2[iso3] || iso3)}<br>${val.toLocaleString()} viewers`,
-              {
-                direction: "top",
-                className: "dark-tooltip",
-              }
+              { direction: "top", className: "dark-tooltip" }
             );
           }
         },
       }).addTo(map);
-    } else if (view === "routes") {
-      routeGroup = L.layerGroup().addTo(map);
-      routes.forEach((r) => {
-        const ok = r.status === "success" || r.status === "ok";
-        L!
-          .polyline(samplePath(r.from, r.to), {
-            color: ok ? palette.green : palette.red,
-            weight: 1.5,
-            opacity: ok ? 0.7 : 0.5,
-            dashArray: "7 6",
-            interactive: false,
-          })
-          .addTo(routeGroup!);
-      });
-      drawNodes(routeGroup);
-    } else if (view === "buckets") {
-      routeGroup = L.layerGroup().addTo(map);
-      buckets.forEach((b) => {
-        const isClient = b.kind === "client";
-        const selected = selectedBucket === b.id;
-        const poly = L!
-          .polygon(b.coords, {
-            color: isClient ? "rgba(125, 207, 255, 0.6)" : "rgba(122, 162, 247, 0.6)",
-            weight: selected ? 2.5 : 1,
-            fillColor: isClient ? "rgb(125, 207, 255)" : "rgb(122, 162, 247)",
-            fillOpacity: selected ? 0.25 : 0.08,
-          })
-          .addTo(routeGroup!);
-        if (b.stats?.count != null) {
-          poly.bindTooltip(`${b.stats.count} events`, {
-            direction: "top",
-            className: "dark-tooltip",
-          });
-        }
-        poly.on("click", () => onBucketClick?.(b.id));
-      });
-      drawNodes(routeGroup);
     }
   }
 
-  // Redraw on view change or data change once the map exists.
+  function drawArcs() {
+    if (!map || !L) return;
+    clearPulses();
+    if (routeGroup) {
+      map.removeLayer(routeGroup);
+      routeGroup = null;
+    }
+    if (pulseGroup) {
+      map.removeLayer(pulseGroup);
+      pulseGroup = null;
+    }
+    if (!showRouting || routes.length === 0) return;
+
+    routeGroup = L.layerGroup().addTo(map);
+    pulseGroup = L.layerGroup().addTo(map);
+    routes.forEach((r) => {
+      const ok = r.status === "success" || r.status === "ok";
+      const color = ok ? palette.green : palette.red;
+      const pts = samplePath(r.from, r.to);
+      L!
+        .polyline(pts, {
+          color,
+          weight: 1.5,
+          opacity: ok ? 0.75 : 0.5,
+          dashArray: "7 6",
+          interactive: false,
+        })
+        .addTo(routeGroup!);
+
+      // Pulse traveling client -> edge along the visible arc, fading at the ends.
+      let step = 0;
+      let pulse: CircleMarker | null = null;
+      const id = setInterval(() => {
+        if (!L || !pulseGroup) return;
+        const idx = Math.floor((step / 60) * (pts.length - 1));
+        const at = pts[idx];
+        if (!pulse) {
+          pulse = L.circleMarker(at, {
+            radius: 3,
+            fillColor: color,
+            fillOpacity: 0.9,
+            stroke: false,
+            interactive: false,
+          }).addTo(pulseGroup);
+        } else {
+          pulse.setLatLng(at);
+        }
+        const t = step / 60;
+        pulse.setStyle({ fillOpacity: t < 0.1 ? t / 0.1 : t > 0.9 ? (1 - t) / 0.1 : 0.9 });
+        step = (step + 1) % 60;
+      }, 50);
+      pulseTimers.push(id);
+    });
+  }
+
+  function drawBuckets() {
+    if (!map || !L) return;
+    if (bucketGroup) {
+      map.removeLayer(bucketGroup);
+      bucketGroup = null;
+    }
+    if (!showRouting || buckets.length === 0) return;
+
+    bucketGroup = L.layerGroup().addTo(map);
+    buckets.forEach((b) => {
+      const isClient = b.kind === "client";
+      const selected = selectedBucket === b.id;
+      const poly = L!
+        .polygon(b.coords, {
+          color: isClient ? "rgba(125, 207, 255, 0.6)" : "rgba(122, 162, 247, 0.6)",
+          weight: selected ? 2.5 : 1,
+          fillColor: isClient ? "rgb(125, 207, 255)" : "rgb(122, 162, 247)",
+          fillOpacity: selected ? 0.25 : 0.08,
+        })
+        .addTo(bucketGroup!);
+      if (b.stats?.count != null) {
+        poly.bindTooltip(`${b.stats.count} events`, {
+          direction: "top",
+          className: "dark-tooltip",
+        });
+      }
+      poly.on("click", () => onBucketClick?.(b.id));
+    });
+  }
+
+  function drawNodes() {
+    if (!map || !L) return;
+    if (nodeGroup) {
+      map.removeLayer(nodeGroup);
+      nodeGroup = null;
+    }
+    if (!showRouting || nodes.length === 0) return;
+
+    nodeGroup = L.layerGroup().addTo(map);
+    nodes.forEach((n) => {
+      const icon = L!.divIcon({
+        className: "geoview__marker",
+        html: `<span class="geoview__node"></span>`,
+        iconSize: [12, 12],
+        iconAnchor: [6, 6],
+      });
+      L!
+        .marker([n.lat, n.lng], { icon })
+        .addTo(nodeGroup!)
+        .bindTooltip(n.count != null ? `${n.name} (${n.count})` : n.name, {
+          direction: "top",
+          className: "dark-tooltip",
+        });
+    });
+  }
+
+  // Redraw the base when its layer or data changes.
   $effect(() => {
-    void view;
+    void base;
     void heat;
     void countries;
+    if (ready) drawBase();
+  });
+
+  // Arcs + pulses depend only on routing toggle + route data (not bucket selection),
+  // so reselecting a bucket never restarts the animation.
+  $effect(() => {
+    void showRouting;
     void routes;
+    if (ready) drawArcs();
+  });
+
+  $effect(() => {
+    void showRouting;
     void buckets;
     void selectedBucket;
-    if (ready) draw();
+    if (ready) drawBuckets();
+  });
+
+  $effect(() => {
+    void showRouting;
+    void nodes;
+    if (ready) drawNodes();
+  });
+
+  // If the current base loses its data, fall back to the other one.
+  $effect(() => {
+    if (base === "heat" && !heatAvailable && countriesAvailable) base = "countries";
+    else if (base === "countries" && !countriesAvailable && heatAvailable) base = "heat";
   });
 
   function resetView() {
@@ -291,18 +387,27 @@
 >
   <div bind:this={mapContainer} class="geoview__map"></div>
 
-  <div class="geoview__layers">
-    {#each AVAILABLE.filter((a) => a.on) as a (a.id)}
+  <!-- Base toggle: heatmap vs countries (mutually exclusive) -->
+  {#if heatAvailable && countriesAvailable}
+    <div class="geoview__base">
       <button
         type="button"
-        class="geoview__layer-btn"
-        class:geoview__layer-btn--on={view === a.id}
-        onclick={() => (view = a.id)}
+        class="geoview__seg"
+        class:geoview__seg--on={base === "heat"}
+        onclick={() => (base = "heat")}
       >
-        {a.label}
+        Heatmap
       </button>
-    {/each}
-  </div>
+      <button
+        type="button"
+        class="geoview__seg"
+        class:geoview__seg--on={base === "countries"}
+        onclick={() => (base = "countries")}
+      >
+        Countries
+      </button>
+    </div>
+  {/if}
 
   <div class="geoview__controls">
     <button class="geoview__ctrl" onclick={resetView} title="Reset view"
@@ -324,18 +429,28 @@
   {/if}
 
   <div class="geoview__legend">
-    {#if view === "heat" || view === "countries"}
-      <span class="geoview__lg-grad"></span>
-      <span>fewer</span>
-      <span>more viewers</span>
-    {:else if view === "routes"}
-      <span><i class="geoview__lg-line geoview__lg-line--ok"></i> success</span>
-      <span><i class="geoview__lg-line geoview__lg-line--fail"></i> failed</span>
-      <span><i class="geoview__lg-dot"></i> edge node</span>
+    {#if variant === "placement"}
+      <span><i class="geoview__lg-dot"></i> edge holding asset</span>
     {:else}
-      <span><i class="geoview__lg-sq geoview__lg-sq--client"></i> client</span>
-      <span><i class="geoview__lg-sq geoview__lg-sq--node"></i> node</span>
-      <span><i class="geoview__lg-dot"></i> edge node</span>
+      {#if routingAvailable}
+        <button
+          type="button"
+          class="geoview__toggle"
+          class:geoview__toggle--on={showRouting}
+          onclick={() => (showRouting = !showRouting)}
+        >
+          {showRouting ? "Hide routing" : "Show routing"}
+        </button>
+      {/if}
+      {#if base === "heat"}
+        <span><i class="geoview__lg-grad"></i> viewer demand</span>
+      {:else}
+        <span><i class="geoview__lg-grad geoview__lg-grad--country"></i> viewers / country</span>
+      {/if}
+      {#if showRouting && routingAvailable}
+        <span><i class="geoview__lg-line geoview__lg-line--ok"></i> served</span>
+        <span><i class="geoview__lg-dot"></i> edge node</span>
+      {/if}
     {/if}
   </div>
 </div>
@@ -382,6 +497,9 @@
       rgb(247, 118, 142)
     );
   }
+  .geoview__lg-grad--country {
+    background: linear-gradient(90deg, rgb(115, 218, 202), rgb(122, 162, 247), rgb(255, 158, 100));
+  }
   .geoview__lg-line {
     width: 1.1rem;
     height: 0.14rem;
@@ -390,9 +508,6 @@
   .geoview__lg-line--ok {
     background: hsl(var(--tn-green));
   }
-  .geoview__lg-line--fail {
-    background: hsl(var(--tn-red));
-  }
   .geoview__lg-dot {
     width: 0.55rem;
     height: 0.55rem;
@@ -400,18 +515,20 @@
     background: hsl(var(--tn-cyan));
     box-shadow: 0 0 6px hsl(var(--tn-cyan));
   }
-  .geoview__lg-sq {
-    width: 0.6rem;
-    height: 0.6rem;
-    border-radius: 2px;
+  .geoview__toggle {
+    padding: 0.15rem 0.5rem;
+    border-radius: 0.3rem;
+    font-size: 0.66rem;
+    font-weight: 600;
+    color: hsl(var(--tn-fg-dark));
+    background: transparent;
+    border: 1px solid hsl(var(--tn-blue) / 0.3);
+    cursor: pointer;
   }
-  .geoview__lg-sq--client {
-    background: rgba(125, 207, 255, 0.5);
-    border: 1px solid rgb(125, 207, 255);
-  }
-  .geoview__lg-sq--node {
-    background: rgba(122, 162, 247, 0.5);
-    border: 1px solid rgb(122, 162, 247);
+  .geoview__toggle--on {
+    background: hsl(var(--tn-green) / 0.16);
+    border-color: hsl(var(--tn-green) / 0.4);
+    color: hsl(var(--tn-green));
   }
   .geoview--fullscreen {
     position: fixed;
@@ -437,21 +554,21 @@
     border: 2px solid rgba(22, 22, 30, 0.8);
     box-shadow: 0 0 8px hsl(var(--tn-cyan) / 0.9);
   }
-  .geoview__layers {
+  .geoview__base {
     position: absolute;
     top: 0.75rem;
     left: 0.75rem;
     z-index: 20;
     display: flex;
-    gap: 0.25rem;
+    gap: 0.2rem;
     padding: 0.2rem;
     border-radius: 0.5rem;
     background: hsl(var(--tn-bg-dark) / 0.82);
     border: 1px solid hsl(var(--tn-blue) / 0.22);
     backdrop-filter: blur(6px);
   }
-  .geoview__layer-btn {
-    padding: 0.2rem 0.6rem;
+  .geoview__seg {
+    padding: 0.2rem 0.7rem;
     border-radius: 0.35rem;
     font-size: 0.72rem;
     font-weight: 600;
@@ -460,7 +577,7 @@
     border: none;
     cursor: pointer;
   }
-  .geoview__layer-btn--on {
+  .geoview__seg--on {
     background: hsl(var(--tn-blue) / 0.18);
     color: hsl(var(--tn-blue));
   }

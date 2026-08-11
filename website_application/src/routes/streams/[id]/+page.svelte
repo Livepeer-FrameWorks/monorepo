@@ -8,9 +8,6 @@
     GetStreamStore,
     GetStreamKeysStore,
     GetStorageArtifactsConnectionStore,
-    GetStreamOverviewCoreStore,
-    GetStreamOverviewChartsStore,
-    GetStreamAnalyticsDailyConnectionStore,
     UpdateStreamStore,
     SetStreamRetentionOverridesStore,
     DeleteStreamStore,
@@ -18,33 +15,24 @@
     CreateStreamKeyStore,
     DeleteStreamKeyStore,
     StreamEventsStore,
-    GetStreamEventsStore,
     GetPushTargetsStore,
     CreatePushTargetStore,
     UpdatePushTargetStore,
     DeletePushTargetStore,
-    ViewerMetricsStreamStore,
     TrackListUpdatesStore,
-    ClipLifecycleStore,
-    DvrLifecycleStore,
     StreamCoreFieldsStore,
     StreamMetricsFieldsStore,
   } from "$houdini";
   import type {
     StreamEvents$result,
-    ViewerMetricsStream$result,
     TrackListUpdates$result,
-    ClipLifecycle$result,
-    DvrLifecycle$result,
     GetStorageArtifactsConnection$result,
   } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
-  import { streamMetrics as realtimeStreamMetrics } from "$lib/stores/realtime";
   import LoadingCard from "$lib/components/LoadingCard.svelte";
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
   import { Tabs, TabsContent, TabsList, TabsTrigger } from "$lib/components/ui/tabs";
-  import { Select, SelectContent, SelectItem, SelectTrigger } from "$lib/components/ui/select";
   import {
     StreamEditModal,
     StreamDeleteModal,
@@ -55,8 +43,6 @@
     OverviewTabPanel,
     ArtefactsTabPanel,
     PlaybackTabPanel,
-    HealthSidebar,
-    EventLog,
     StreamSetupPanel,
     PushTargetsTabPanel,
     PushTargetCreateModal,
@@ -64,10 +50,7 @@
     PlaybackAuthTabPanel,
   } from "$lib/components/stream-details";
   import { SectionDivider } from "$lib/components/layout";
-  import type { StreamEvent, EventType } from "$lib/components/stream-details/EventLog.svelte";
-  import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
   import { resolveOperationalStreamId } from "$lib/route-ids";
-  import { Sheet, SheetContent } from "$lib/components/ui/sheet";
   import {
     DropdownMenu,
     DropdownMenuContent,
@@ -82,8 +65,6 @@
   const streamStore = new GetStreamStore();
   const streamKeysStore = new GetStreamKeysStore();
   const storageArtifactsStore = new GetStorageArtifactsConnectionStore();
-  const streamOverviewCoreStore = new GetStreamOverviewCoreStore();
-  const streamOverviewChartsStore = new GetStreamOverviewChartsStore();
   const updateStreamMutation = new UpdateStreamStore();
   const setStreamRetentionOverridesMutation = new SetStreamRetentionOverridesStore();
   const deleteStreamMutation = new DeleteStreamStore();
@@ -95,12 +76,7 @@
   const updatePushTargetMutation = new UpdatePushTargetStore();
   const deletePushTargetMutation = new DeletePushTargetStore();
   const streamEventsSub = new StreamEventsStore();
-  const streamEventsStore = new GetStreamEventsStore();
-  const viewerMetricsSub = new ViewerMetricsStreamStore();
   const trackListSub = new TrackListUpdatesStore();
-  const clipLifecycleSub = new ClipLifecycleStore();
-  const dvrLifecycleSub = new DvrLifecycleStore();
-  const streamDailyStore = new GetStreamAnalyticsDailyConnectionStore();
 
   // Fragment stores for unmasking nested data
   const streamCoreStore = new StreamCoreFieldsStore();
@@ -129,7 +105,8 @@
     sizeBytes?: number | null;
     status?: string | null;
     storageLocation?: string | null;
-    isFrozen?: boolean | null;
+    isSynced?: boolean | null;
+    hasLocalCopy?: boolean | null;
     createdAt?: string | null;
     updatedAt?: string | null;
     expiresAt?: string | null;
@@ -213,7 +190,8 @@
         durationSeconds: null,
         sizeBytes: asset.sizeBytes,
         storageLocation: asset.storageLocation,
-        isFrozen: asset.isFrozen,
+        isSynced: asset.isSynced,
+        hasLocalCopy: asset.hasLocalCopy,
       }))
   );
   let clips = $derived(
@@ -232,7 +210,8 @@
         duration: null,
         sizeBytes: asset.sizeBytes,
         storageLocation: asset.storageLocation,
-        isFrozen: asset.isFrozen,
+        isSynced: asset.isSynced,
+        hasLocalCopy: asset.hasLocalCopy,
       }))
   );
   let vodArtifacts = $derived(
@@ -256,140 +235,8 @@
       }))
   );
 
-  // Analytics and health from GetStreamOverview query
-  let streamAnalyticsSummary = $derived(
-    $streamOverviewCoreStore.data?.analytics?.usage?.streaming?.streamAnalyticsSummary ?? null
-  );
-  let analytics = $derived.by(() => {
-    if (!streamAnalyticsSummary && !stream?.metrics) return null;
-    const metrics = stream?.metrics;
-    const summary = streamAnalyticsSummary;
-    return {
-      currentViewers: metrics?.currentViewers ?? 0,
-      peakViewers: summary?.rangePeakConcurrentViewers ?? 0,
-      totalSessionDuration: summary?.rangeViewerHours != null ? summary.rangeViewerHours * 3600 : 0,
-      packetsSent: metrics?.packetsSent ?? null,
-      packetsLost: metrics?.packetsLost ?? null,
-      packetsRetrans: metrics?.packetsRetransmitted ?? null,
-      packetLossRate: summary?.rangePacketLossRate ?? null,
-    };
-  });
-  let healthMetrics = $derived(
-    ($streamOverviewChartsStore.data?.analytics?.health?.streamHealthConnection?.edges ?? []).map(
-      (e) => e.node
-    )
-  );
-  let baseHealth = $derived(healthMetrics.length > 0 ? healthMetrics[0] : null);
-  // Merge base health (from GraphQL query) with real-time metrics (from subscription)
-  let health = $derived.by(() => {
-    const realtimeKey = resolveOperationalStreamId({
-      routeParamId: streamId,
-      streamUuid: stream?.streamId,
-    });
-    const realtime = realtimeKey ? $realtimeStreamMetrics[realtimeKey] : null;
-    if (!baseHealth && !realtime) return null;
-    return {
-      ...baseHealth,
-      // Real-time buffer/jitter data from STREAM_BUFFER subscription (overrides if present)
-      bufferState: realtime?.bufferState ?? baseHealth?.bufferState,
-      streamBufferMs: realtime?.streamBufferMs,
-      streamJitterMs: realtime?.streamJitterMs,
-      maxKeepawaMs: realtime?.maxKeepawaMs,
-      hasIssues: realtime?.hasIssues,
-      issuesDescription: realtime?.issuesDescription ?? baseHealth?.issuesDescription,
-      mistIssues: realtime?.mistIssues,
-      trackCount: realtime?.trackCount,
-      qualityTier: realtime?.qualityTier ?? baseHealth?.qualityTier,
-    };
-  });
-
-  // Stream daily analytics history
-  let streamDailyAnalytics = $derived.by(() => {
-    const edges =
-      $streamDailyStore.data?.analytics?.usage?.streaming?.streamAnalyticsDailyConnection?.edges ??
-      [];
-    if (edges.length === 0) return [];
-    return edges
-      .map((edge) => ({
-        day: edge.node.day,
-        streamId: edge.node.streamId,
-        totalViews: edge.node.totalViews,
-        uniqueViewers: edge.node.uniqueViewers,
-        uniqueCountries: edge.node.uniqueCountries,
-        uniqueCities: edge.node.uniqueCities,
-        egressBytes: edge.node.egressBytes,
-        egressGb: edge.node.egressBytes / (1024 * 1024 * 1024),
-      }))
-      .sort((a, b) => new Date(a.day).getTime() - new Date(b.day).getTime());
-  });
-
-  // Time range state (moved here so it's defined before useDailyTrend)
-  let timeRange = $state("24h");
-  let currentRange = $derived(resolveTimeRange(timeRange));
-  const timeRangeOptions = TIME_RANGE_OPTIONS.filter((option) =>
-    ["24h", "7d", "30d"].includes(option.value)
-  );
-
-  const useDailyTrend = $derived(currentRange.days > 7);
-
-  let viewerMetrics = $derived.by(() => {
-    if (useDailyTrend) {
-      return streamDailyAnalytics.map((d) => ({
-        timestamp: d.day,
-        viewerCount: d.uniqueViewers,
-        stream: d.streamId,
-      }));
-    }
-    const timeSeriesEdges =
-      $streamOverviewCoreStore.data?.analytics?.usage?.streaming?.viewerTimeSeriesConnection
-        ?.edges ?? [];
-    return timeSeriesEdges.map((e) => ({
-      timestamp: e.node.timestamp,
-      viewerCount: e.node.viewerCount,
-      stream: e.node.streamId,
-    }));
-  });
-
-  // Quality tier + codec distribution (range aggregates)
-  let qualityTierSummary = $derived.by(() => {
-    const rangeQuality = streamAnalyticsSummary?.rangeQuality;
-    if (!rangeQuality) return null;
-    const totalMinutes =
-      (rangeQuality.tier2160pMinutes ?? 0) +
-      (rangeQuality.tier1440pMinutes ?? 0) +
-      (rangeQuality.tier1080pMinutes ?? 0) +
-      (rangeQuality.tier720pMinutes ?? 0) +
-      (rangeQuality.tier480pMinutes ?? 0) +
-      (rangeQuality.tierSdMinutes ?? 0);
-    return {
-      tier2160pMinutes: rangeQuality.tier2160pMinutes ?? 0,
-      tier1440pMinutes: rangeQuality.tier1440pMinutes ?? 0,
-      tier1080pMinutes: rangeQuality.tier1080pMinutes ?? 0,
-      tier720pMinutes: rangeQuality.tier720pMinutes ?? 0,
-      tier480pMinutes: rangeQuality.tier480pMinutes ?? 0,
-      tierSdMinutes: rangeQuality.tierSdMinutes ?? 0,
-      codecH264Minutes: rangeQuality.codecH264Minutes ?? 0,
-      codecH265Minutes: rangeQuality.codecH265Minutes ?? 0,
-      totalMinutes,
-      avgBitrate: streamAnalyticsSummary?.rangeAvgBitrate ?? null,
-      avgFps: streamAnalyticsSummary?.rangeAvgFps ?? null,
-    };
-  });
-
-  let codecDistribution = $derived.by(() => {
-    if (!qualityTierSummary) return [];
-    const otherMinutes = Math.max(
-      0,
-      (qualityTierSummary.totalMinutes ?? 0) -
-        (qualityTierSummary.codecH264Minutes ?? 0) -
-        (qualityTierSummary.codecH265Minutes ?? 0)
-    );
-    return [
-      { codec: "H.264", minutes: qualityTierSummary.codecH264Minutes ?? 0 },
-      { codec: "H.265", minutes: qualityTierSummary.codecH265Minutes ?? 0 },
-      { codec: "Other", minutes: otherMinutes },
-    ].filter((entry) => entry.minutes > 0);
-  });
+  // This is the config page: viewer counts, quality/daily analytics, and health live
+  // on the dedicated /streams/[id]/analytics and /streams/[id]/health routes.
 
   let error = $state<string | null>(null);
   let loading = $derived(!error && ($streamStore.fetching || $streamKeysStore.fetching));
@@ -411,29 +258,6 @@
     togglePushTarget: null as string | null,
   });
 
-  // Health sidebar state
-  let healthSidebarCollapsed = $state(false);
-  let sheetOpen = $state(false);
-
-  // Event log state
-  let eventLogCollapsed = $state(true);
-  let historicalStreamEvents = $state<StreamEvent[]>([]);
-  let liveStreamEvents = $state<StreamEvent[]>([]);
-  let streamEvents = $derived.by(() => {
-    const merged = [...liveStreamEvents, ...historicalStreamEvents];
-    return merged.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-  });
-
-  const getViewerSeriesConfig = (range: { days: number }) => {
-    if (range.days <= 2) {
-      return { viewerInterval: "5m", viewerFirst: range.days * 24 * 12 };
-    }
-    if (range.days <= 7) {
-      return { viewerInterval: "1h", viewerFirst: range.days * 24 };
-    }
-    return { viewerInterval: "1h", viewerFirst: 168 };
-  };
-
   function normalizeStreamArtifact(asset: StorageArtifactNode): StreamArtifact {
     const rawKind = asset.kind.toLowerCase() as StreamArtifactKind;
     return {
@@ -448,7 +272,8 @@
       sizeBytes: asset.sizeBytes,
       status: asset.status,
       storageLocation: asset.storageLocation,
-      isFrozen: asset.isFrozen,
+      isSynced: asset.isSynced,
+      hasLocalCopy: asset.hasLocalCopy,
       createdAt: asset.createdAt,
       updatedAt: asset.updatedAt,
       expiresAt: asset.expiresAt,
@@ -461,10 +286,6 @@
 
   // Auto-refresh interval for live data (fallback)
   let refreshInterval: ReturnType<typeof setInterval> | null = null;
-  let healthRefreshInterval: ReturnType<typeof setInterval> | null = null;
-
-  // Real-time metrics from subscription
-  let realtimeViewers = $state(0);
 
   // Current track info from subscription
   let currentTracks = $state<TrackInfo | null>(null);
@@ -522,17 +343,8 @@
     if ($streamEventsSub.errors?.length) {
       console.warn("Stream events subscription error:", $streamEventsSub.errors);
     }
-    if ($viewerMetricsSub.errors?.length) {
-      console.warn("Viewer metrics subscription error:", $viewerMetricsSub.errors);
-    }
     if ($trackListSub.errors?.length) {
       console.warn("Track list subscription error:", $trackListSub.errors);
-    }
-    if ($clipLifecycleSub.errors?.length) {
-      console.warn("Clip lifecycle subscription error:", $clipLifecycleSub.errors);
-    }
-    if ($dvrLifecycleSub.errors?.length) {
-      console.warn("DVR lifecycle subscription error:", $dvrLifecycleSub.errors);
     }
   });
 
@@ -545,47 +357,12 @@
     }
   });
 
-  // Effect to handle viewer metrics subscription
-  $effect(() => {
-    const metrics = $viewerMetricsSub.data?.liveViewerMetrics;
-    if (metrics) {
-      untrack(() => handleViewerMetrics(metrics));
-    }
-  });
-
   // Effect to handle track list subscription
   $effect(() => {
     const tracks = $trackListSub.data?.liveTrackListUpdates;
     if (tracks) {
       untrack(() => {
         currentTracks = tracks;
-        addEvent("track_change", `Track list updated: ${tracks.totalTracks} track(s)`);
-      });
-    }
-  });
-
-  $effect(() => {
-    const event = $clipLifecycleSub.data?.liveClipLifecycle;
-    if (event) {
-      untrack(() => handleClipLifecycleEvent(event));
-    }
-  });
-
-  $effect(() => {
-    const event = $dvrLifecycleSub.data?.liveDvrLifecycle;
-    if (event) {
-      untrack(() => handleDvrLifecycleEvent(event));
-    }
-  });
-
-  // Auto-expand health sidebar when stream goes live
-  $effect(() => {
-    if (isLive) {
-      untrack(() => {
-        // Check healthSidebarCollapsed INSIDE untrack to avoid reactive dependency
-        if (healthSidebarCollapsed) {
-          healthSidebarCollapsed = false;
-        }
       });
     }
   });
@@ -595,47 +372,12 @@
 
     // Set up auto-refresh every 60 seconds as fallback
     refreshInterval = setInterval(loadLiveData, 60000);
-
-    // Refresh health every 30 seconds when live (both Core + Charts stores)
-    healthRefreshInterval = setInterval(async () => {
-      const operationalStreamId = resolveOperationalStreamId({
-        routeParamId: streamId,
-        streamUuid: stream?.streamId,
-      });
-      if (isLive && operationalStreamId) {
-        const range = resolveTimeRange(timeRange);
-        currentRange = range;
-        const timeRangeInput = { start: range.start, end: range.end };
-        const { viewerInterval, viewerFirst } = getViewerSeriesConfig(range);
-        await Promise.all([
-          streamOverviewCoreStore.fetch({
-            variables: {
-              id: streamId,
-              streamId: operationalStreamId,
-              timeRange: timeRangeInput,
-              viewerFirst,
-              viewerInterval,
-            },
-          }),
-          streamOverviewChartsStore.fetch({
-            variables: {
-              streamId: operationalStreamId,
-              timeRange: timeRangeInput,
-            },
-          }),
-        ]);
-      }
-    }, 30000);
   });
 
   onDestroy(() => {
     if (refreshInterval) clearInterval(refreshInterval);
-    if (healthRefreshInterval) clearInterval(healthRefreshInterval);
     streamEventsSub.unlisten();
-    viewerMetricsSub.unlisten();
     trackListSub.unlisten();
-    clipLifecycleSub.unlisten();
-    dvrLifecycleSub.unlisten();
   });
 
   function startSubscriptions() {
@@ -646,200 +388,17 @@
     if (!operationalStreamId) return;
 
     streamEventsSub.listen({ streamId: operationalStreamId });
-    viewerMetricsSub.listen({ streamId: operationalStreamId });
     trackListSub.listen({ streamId: operationalStreamId });
-    clipLifecycleSub.listen({ streamId: operationalStreamId });
-    dvrLifecycleSub.listen({ streamId: operationalStreamId });
   }
-
-  function addEvent(type: EventType, message: string, details?: string) {
-    // Use untrack to prevent reading streamEvents from creating a reactive dependency
-    // when this function is called from within $effect blocks
-    untrack(() => {
-      const event: StreamEvent = {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        timestamp: new Date().toISOString(),
-        type,
-        message,
-        details,
-        streamName: stream?.name,
-      };
-      liveStreamEvents = [event, ...liveStreamEvents].slice(0, 200);
-    });
-  }
-
-  function mapLifecycleEvent(event: {
-    eventId: string;
-    type: string;
-    timestamp: string;
-    details?: string | null;
-    status?: string | null;
-    payload?: unknown;
-    source?: string | null;
-  }): StreamEvent {
-    const eventType = event.type;
-    let type: EventType = "info";
-    let message = "Stream event";
-
-    switch (eventType) {
-      case "STREAM_START":
-        type = "stream_start";
-        message = "Stream started";
-        break;
-      case "STREAM_END":
-        type = "stream_end";
-        message = "Stream ended";
-        break;
-      case "BUFFER_UPDATE":
-        type = "warning";
-        message = "Buffer update";
-        break;
-      case "TRACK_LIST_UPDATE":
-        type = "track_change";
-        message = "Track list updated";
-        break;
-      case "STREAM_LIFECYCLE_UPDATE":
-        type = "info";
-        message = "Lifecycle update";
-        break;
-      default:
-        type = "info";
-        message = "Stream event";
-    }
-
-    let details = event.details ?? undefined;
-    if (!details && event.status) {
-      details = `Status: ${event.status}`;
-    }
-
-    if (!details && event.payload) {
-      details = "Payload attached";
-    }
-
-    return {
-      id: event.eventId,
-      timestamp: event.timestamp,
-      type,
-      message,
-      details,
-      streamName: stream?.name,
-    };
-  }
-
-  function setHistoricalStreamEvents(events: StreamEvent[]) {
-    historicalStreamEvents = events;
-  }
-
-  // Clip Lifecycle Stages (mapped from proto/ipc.proto)
-  const ClipLifecycleStage = {
-    REQUESTED: 1,
-    QUEUED: 2,
-    PROGRESS: 3,
-    DONE: 4,
-    FAILED: 5,
-    DELETED: 6,
-  };
 
   function handleStreamEvent(event: NonNullable<StreamEvents$result["liveStreamEvents"]>) {
     if (event.type === "STREAM_START") {
       toast.success("Stream is now live!");
-      addEvent("stream_start", "Stream started");
-      eventLogCollapsed = false;
       return;
     }
 
     if (event.type === "STREAM_END") {
       toast.info("Stream ended");
-      addEvent("stream_end", "Stream ended");
-      return;
-    }
-
-    if (event.type === "BUFFER_UPDATE" && event.payload && typeof event.payload === "object") {
-      const payload = event.payload as Record<string, unknown>;
-      const bufferState =
-        (payload.bufferState as string | undefined) ?? (payload.buffer_state as string | undefined);
-      if (bufferState === "DRY" || bufferState === "EMPTY") {
-        addEvent("warning", "Buffer issue", `Buffer state: ${bufferState}`);
-      }
-    }
-  }
-
-  function handleViewerMetrics(
-    metrics: NonNullable<ViewerMetricsStream$result["liveViewerMetrics"]>
-  ) {
-    // Note: realtimeViewers mutations are safe here because this function is called
-    // from within untrack() in the $effect, and addEvent also uses untrack() internally
-    if (metrics.action === "connect") {
-      realtimeViewers++;
-      addEvent("viewer_connect", "Viewer connected");
-    } else if (metrics.action === "disconnect") {
-      realtimeViewers = Math.max(0, realtimeViewers - 1);
-      addEvent("viewer_disconnect", "Viewer disconnected");
-    }
-  }
-
-  function sanitizeLifecycleError(error: string | null | undefined) {
-    if (!error) {
-      return "Operation failed. Please retry or contact support.";
-    }
-
-    const normalized = error.toLowerCase();
-    if (
-      normalized.includes("insufficient") ||
-      normalized.includes("out of space") ||
-      normalized.includes("disk full")
-    ) {
-      return "Storage node is out of space. Please free space or retry later.";
-    }
-    if (normalized.includes("statfs")) {
-      return "Storage unavailable. Please retry.";
-    }
-    if (normalized.includes("path=") || normalized.includes("need=")) {
-      return "Storage error. Please retry or contact support.";
-    }
-    return "Operation failed. Please retry or contact support.";
-  }
-
-  function handleClipLifecycleEvent(event: NonNullable<ClipLifecycle$result["liveClipLifecycle"]>) {
-    if (event.stage === ClipLifecycleStage.DONE) {
-      if (event.s3Url) {
-        addEvent("info", `Clip '${event.clipHash}' uploaded`, `URL: ${event.s3Url}`);
-      } else if (event.filePath) {
-        addEvent("info", `Clip '${event.clipHash}' created`, `Path: ${event.filePath}`);
-      } else {
-        addEvent("info", `Clip '${event.clipHash}' created`, "Details restricted (admin/owner)");
-      }
-    } else if (event.stage === ClipLifecycleStage.FAILED) {
-      addEvent(
-        "error",
-        `Clip '${event.clipHash}' failed`,
-        `Error: ${sanitizeLifecycleError(event.error)}`
-      );
-    } else if (event.stage === ClipLifecycleStage.DELETED) {
-      addEvent("info", `Clip '${event.clipHash}' deleted`);
-    } else if (event.stage === ClipLifecycleStage.REQUESTED) {
-      addEvent("info", `Clip '${event.clipHash}' requested`);
-    }
-  }
-
-  function handleDvrLifecycleEvent(event: NonNullable<DvrLifecycle$result["liveDvrLifecycle"]>) {
-    const displayStreamId = event.stream?.streamId ?? event.streamId ?? "stream";
-    if (event.status === "RECORDING") {
-      addEvent("dvr_start", `DVR recording started for '${displayStreamId}'`);
-    } else if (event.status === "COMPLETED") {
-      addEvent(
-        "dvr_stop",
-        `DVR recording completed for '${displayStreamId}'`,
-        `Segments: ${event.segmentCount}`
-      );
-    } else if (event.status === "FAILED") {
-      addEvent(
-        "error",
-        `DVR recording failed for '${displayStreamId}'`,
-        `Error: ${sanitizeLifecycleError(event.error)}`
-      );
-    } else if (event.status === "DELETED") {
-      addEvent("info", `DVR recording deleted for '${displayStreamId}'`);
     }
   }
 
@@ -870,10 +429,6 @@
         return;
       }
 
-      const range = resolveTimeRange(timeRange);
-      currentRange = range;
-      const timeRangeInput = { start: range.start, end: range.end };
-      const { viewerInterval, viewerFirst } = getViewerSeriesConfig(range);
       await Promise.all([
         streamKeysStore.fetch({ variables: { streamId: resolvedStreamId } }),
         pushTargetsStore.fetch({ variables: { streamId } }),
@@ -890,55 +445,9 @@
             },
           },
         }),
-        streamOverviewCoreStore
-          .fetch({
-            variables: {
-              id: streamId,
-              streamId: resolvedStreamId,
-              timeRange: timeRangeInput,
-              viewerFirst,
-              viewerInterval,
-            },
-          })
-          .catch(() => null),
-        streamOverviewChartsStore
-          .fetch({
-            variables: {
-              streamId: resolvedStreamId,
-              timeRange: timeRangeInput,
-            },
-          })
-          .catch(() => null),
-        streamDailyStore
-          .fetch({
-            variables: {
-              streamId: resolvedStreamId,
-              timeRange: timeRangeInput,
-              first: Math.min(range.days, 60),
-            },
-          })
-          .catch(() => null),
-        streamEventsStore
-          .fetch({
-            variables: { streamId: resolvedStreamId, timeRange: timeRangeInput, first: 200 },
-          })
-          .catch(() => null),
       ]);
 
-      const historicalEdges =
-        $streamEventsStore.data?.analytics?.lifecycle?.streamEventsConnection?.edges ?? [];
-      if (historicalEdges.length > 0) {
-        const mapped = historicalEdges
-          .map((edge) => edge.node)
-          .filter(Boolean)
-          .map((node) => mapLifecycleEvent(node));
-        setHistoricalStreamEvents(mapped);
-      }
-
       startSubscriptions();
-
-      // Add initial event
-      addEvent("info", "Stream data loaded");
     } catch (err) {
       console.error("Failed to load stream data:", err);
       error = "Failed to load stream data";
@@ -947,31 +456,11 @@
 
   async function loadLiveData() {
     try {
-      const range = resolveTimeRange(timeRange);
-      currentRange = range;
-      const timeRangeInput = { start: range.start, end: range.end };
-      const { viewerInterval, viewerFirst } = getViewerSeriesConfig(range);
       const analyticsStreamId = resolveOperationalStreamId({
         routeParamId: streamId,
         streamUuid: stream?.streamId,
       });
-
-      await Promise.all([
-        streamStore.fetch({ variables: { id: streamId, streamId: analyticsStreamId } }),
-        analyticsStreamId
-          ? streamOverviewCoreStore
-              .fetch({
-                variables: {
-                  id: streamId,
-                  streamId: analyticsStreamId,
-                  timeRange: timeRangeInput,
-                  viewerFirst,
-                  viewerInterval,
-                },
-              })
-              .catch(() => null)
-          : Promise.resolve(),
-      ]);
+      await streamStore.fetch({ variables: { id: streamId, streamId: analyticsStreamId } });
     } catch (err) {
       console.error("Failed to refresh live data:", err);
     }
@@ -985,7 +474,6 @@
       const result = await refreshStreamKeyMutation.mutate({ id: streamId });
       if (result.data?.refreshStreamKey?.__typename === "Stream") {
         toast.success("Stream key refreshed successfully!");
-        addEvent("info", "Stream key refreshed");
         const analyticsStreamId = resolveOperationalStreamId({
           routeParamId: streamId,
           streamUuid: stream?.streamId,
@@ -1106,7 +594,6 @@
 
       showEditModal = false;
       toast.success("Stream updated successfully!");
-      addEvent("info", "Stream settings updated");
       const analyticsStreamId = resolveOperationalStreamId({
         routeParamId: streamId,
         streamUuid: stream?.streamId,
@@ -1129,6 +616,13 @@
       actionLoading.deleteStream = true;
       const result = await deleteStreamMutation.mutate({ id: streamId });
       if (result.data?.deleteStream?.__typename === "DeleteSuccess") {
+        // The two-phase deletion may still be finalizing (pending) when the serving cell was briefly unreachable;
+        // it converges automatically. Tell the user rather than implying an instant, complete delete.
+        if (result.data.deleteStream.pending) {
+          toast.success("Stream deletion is finalizing and will complete shortly.");
+        } else {
+          toast.success("Stream deleted.");
+        }
         goto(resolve("/streams"));
       } else {
         const errorResult = result.data?.deleteStream as unknown as { message?: string };
@@ -1152,7 +646,6 @@
       if (result.data?.createStreamKey?.__typename === "StreamKey") {
         showCreateKeyModal = false;
         toast.success("Stream key created successfully!");
-        addEvent("info", `Stream key "${formData.keyName}" created`);
         await streamKeysStore.fetch({ variables: { streamId } });
       } else {
         const errorResult = result.data?.createStreamKey as unknown as { message?: string };
@@ -1172,7 +665,6 @@
       const result = await deleteStreamKeyMutation.mutate({ streamId, keyId });
       if (result.data?.deleteStreamKey?.__typename === "DeleteSuccess") {
         toast.success("Stream key deleted successfully!");
-        addEvent("info", "Stream key deleted");
         await streamKeysStore.fetch({ variables: { streamId } });
       } else {
         const errorResult = result.data?.deleteStreamKey as unknown as { message?: string };
@@ -1199,7 +691,6 @@
       });
       showCreatePushTargetModal = false;
       toast.success("Push target added");
-      addEvent("info", `Push target "${formData.name}" added`);
       await pushTargetsStore.fetch({ variables: { streamId } });
     } catch (err) {
       console.error("Failed to create push target:", err);
@@ -1255,7 +746,6 @@
       actionLoading.deletePushTarget = targetId;
       await deletePushTargetMutation.mutate({ id: targetId });
       toast.success("Push target deleted");
-      addEvent("info", "Push target deleted");
       await pushTargetsStore.fetch({ variables: { streamId } });
     } catch (err) {
       console.error("Failed to delete push target:", err);
@@ -1275,18 +765,9 @@
     goto(resolve("/streams"));
   }
 
-  function toggleHealthSidebar() {
-    healthSidebarCollapsed = !healthSidebarCollapsed;
-  }
-
-  function toggleEventLog() {
-    eventLogCollapsed = !eventLogCollapsed;
-  }
-
   const ArrowLeftIcon = getIconComponent("ArrowLeft");
   const EditIcon = getIconComponent("Edit");
   const Trash2Icon = getIconComponent("Trash2");
-  const ActivityIcon = getIconComponent("Activity");
   const CircleIcon = getIconComponent("Circle");
   const InfoIcon = getIconComponent("Info");
   const SettingsIcon = getIconComponent("Settings");
@@ -1296,7 +777,6 @@
   const VideoIcon = getIconComponent("Video");
   const PlayIcon = getIconComponent("Play");
   const ShieldCheckIcon = getIconComponent("ShieldCheck");
-  const CalendarIcon = getIconComponent("Calendar");
 </script>
 
 <svelte:head>
@@ -1348,28 +828,6 @@
 
       {#if stream && !loading}
         <div class="flex items-center space-x-2">
-          <div class="hidden sm:block">
-            <Select
-              value={timeRange}
-              onValueChange={(value) => {
-                timeRange = value;
-                loadStreamData();
-              }}
-              type="single"
-            >
-              <SelectTrigger class="min-w-[150px]">
-                <CalendarIcon class="w-4 h-4 mr-2 text-muted-foreground" />
-                {currentRange.label}
-              </SelectTrigger>
-              <SelectContent>
-                {#each timeRangeOptions as option (option.value)}
-                  <SelectItem value={option.value}>{option.label}</SelectItem>
-                {/each}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <!-- Health Toggle (Desktop) -->
           <!-- Analytics Button -->
           <Button
             variant="ghost"
@@ -1379,29 +837,6 @@
           >
             <BarChart2Icon class="w-4 h-4" />
             Analytics
-          </Button>
-
-          <!-- Health Sidebar Toggle (Desktop) -->
-          <Button
-            variant="ghost"
-            size="sm"
-            class="hidden lg:flex gap-2 {healthSidebarCollapsed
-              ? ''
-              : 'bg-[hsl(var(--tn-bg-visual))] text-primary'}"
-            onclick={toggleHealthSidebar}
-          >
-            <ActivityIcon class="w-4 h-4" />
-            Health
-          </Button>
-
-          <!-- Health Trigger (Mobile) -->
-          <Button
-            variant="ghost"
-            size="icon"
-            class="lg:hidden text-muted-foreground hover:text-foreground"
-            onclick={() => (sheetOpen = true)}
-          >
-            <ActivityIcon class="w-5 h-5" />
           </Button>
 
           <!-- Actions Dropdown -->
@@ -1468,7 +903,7 @@
           <div
             class="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-[hsl(var(--tn-fg-gutter)/0.3)] bg-background"
           >
-            <StreamStatusCard {stream} {analytics} />
+            <StreamStatusCard {stream} />
             <StreamKeyCard
               {stream}
               loading={actionLoading.refreshKey}
@@ -1538,12 +973,7 @@
                   {stream}
                   {streamKeys}
                   {recordings}
-                  {analytics}
                   tracks={currentTracks ?? fallbackTracks}
-                  {viewerMetrics}
-                  dailyAnalytics={streamDailyAnalytics}
-                  {qualityTierSummary}
-                  {codecDistribution}
                 />
               </TabsContent>
 
@@ -1598,53 +1028,8 @@
               </TabsContent>
             </Tabs>
           </div>
-
-          <!-- Event Log (collapsible) -->
-          <EventLog
-            events={streamEvents}
-            title="Event Log"
-            collapsed={eventLogCollapsed}
-            onToggle={toggleEventLog}
-          />
         </div>
       </div>
-
-      <!-- Health Sidebar (right side, collapsible) -->
-      <div class="hidden lg:block shrink-0 {healthSidebarCollapsed ? 'w-10' : 'w-72'}">
-        <HealthSidebar
-          streamId={resolveOperationalStreamId({
-            routeParamId: streamId,
-            streamUuid: stream?.streamId,
-          }) || streamId}
-          streamName={stream.name}
-          {isLive}
-          {health}
-          {analytics}
-          collapsed={healthSidebarCollapsed}
-          onToggle={toggleHealthSidebar}
-        />
-      </div>
-
-      <!-- Health Sidebar (Mobile Sheet) -->
-      <Sheet bind:open={sheetOpen}>
-        <SheetContent
-          side="right"
-          class="w-[85vw] sm:w-[400px] p-0 border-l border-[hsl(var(--tn-fg-gutter)/0.3)]"
-        >
-          <HealthSidebar
-            streamId={resolveOperationalStreamId({
-              routeParamId: streamId,
-              streamUuid: stream?.streamId,
-            }) || streamId}
-            streamName={stream.name}
-            {isLive}
-            {health}
-            {analytics}
-            collapsed={false}
-            onToggle={undefined}
-          />
-        </SheetContent>
-      </Sheet>
     {/if}
   </div>
 

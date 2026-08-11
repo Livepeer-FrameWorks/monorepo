@@ -1,6 +1,7 @@
 node_modules
 .svelte-kit
 build
+coverage
 .DS_Store
 package-lock.json
 components.json

@@ -62,7 +62,8 @@
     sizeBytes: number | null;
     status: string;
     storageLocation?: string;
-    isFrozen: boolean | null;
+    isSynced: boolean | null;
+    hasLocalCopy: boolean | null;
     createdAt: string | null;
     updatedAt: string | null;
     expiresAt: string | null;
@@ -494,7 +495,9 @@
               <div class="flex flex-col gap-0.5">
                 <span class="font-mono text-xs">{asset.status || "unknown"}</span>
                 <span class="text-xs text-muted-foreground">
-                  {asset.isFrozen ? "cold" : (asset.storageLocation ?? "local")}
+                  {asset.isSynced && asset.hasLocalCopy === false
+                    ? "cold"
+                    : (asset.storageLocation ?? "local")}
                 </span>
               </div>
             </td>

@@ -2,7 +2,7 @@
   import { getIconComponent } from "$lib/iconUtils";
   import { getStatusColor, getStatusIcon } from "$lib/utils/stream-helpers";
 
-  let { stream, analytics } = $props();
+  let { stream } = $props();
 
   const resolvedStatus = $derived(stream?.status ?? stream?.metrics?.status);
   const statusIcon = $derived(getStatusIcon(resolvedStatus));
@@ -32,11 +32,5 @@
         {stream?.record ? "Enabled" : "Disabled"}
       </span>
     </div>
-    {#if analytics?.currentViewers !== undefined}
-      <div class="flex justify-between items-center">
-        <span class="text-sm text-muted-foreground">Viewers:</span>
-        <span class="font-mono text-info font-medium text-sm">{analytics.currentViewers}</span>
-      </div>
-    {/if}
   </div>
 </div>

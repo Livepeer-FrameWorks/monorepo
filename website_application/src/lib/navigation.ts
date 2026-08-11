@@ -80,6 +80,26 @@ const dynamicRoutes: Array<{
     ],
   },
   {
+    pattern: /^\/library\/[^/]+$/,
+    route: { name: "Asset", parent: "Content" },
+    breadcrumb: [
+      { name: "Dashboard", href: "/" },
+      { name: "Content" },
+      { name: "Library", href: "/library" },
+      { name: "Asset" },
+    ],
+  },
+  {
+    pattern: /^\/library\/[^/]+\/analytics$/,
+    route: { name: "Asset Analytics", parent: "Content" },
+    breadcrumb: [
+      { name: "Dashboard", href: "/" },
+      { name: "Content" },
+      { name: "Library", href: "/library" },
+      { name: "Asset Analytics" },
+    ],
+  },
+  {
     pattern: /^\/messages\/[^/]+$/,
     route: { name: "Conversation", parent: "Support" },
     breadcrumb: [
@@ -205,7 +225,7 @@ export const navigationConfig: Record<string, NavigationItem> = {
         href: "/analytics/player-experience",
         icon: "Rocket",
         active: true,
-        description: "Startup, playback quality (rebuffering, bitrate), and VOD retention",
+        description: "Startup and playback quality (rebuffering, bitrate)",
       },
       usage: {
         name: "Usage & Costs",

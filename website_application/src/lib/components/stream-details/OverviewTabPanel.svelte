@@ -1,12 +1,7 @@
 <script lang="ts">
   import type { TrackListUpdates$result } from "$houdini";
-  import { formatDate, formatDuration } from "$lib/utils/stream-helpers";
-  import { formatNumber } from "$lib/utils/formatters";
+  import { formatDate } from "$lib/utils/stream-helpers";
   import { getIconComponent } from "$lib/iconUtils";
-  import TrendChart from "$lib/components/charts/TrendChart.svelte";
-  import { palette } from "$lib/components/charts/theme";
-  import BreakdownChart from "$lib/components/charts/BreakdownChart.svelte";
-  import EmptyState from "$lib/components/EmptyState.svelte";
   import {
     classifyTrack,
     formatTrackBitrate,
@@ -19,42 +14,6 @@
 
   type TrackInfo = NonNullable<TrackListUpdates$result["liveTrackListUpdates"]>;
   type StreamTrack = NonNullable<TrackInfo["tracks"]>[number];
-
-  interface ViewerMetric {
-    timestamp: string;
-    viewerCount: number;
-    stream?: string | null;
-  }
-
-  interface DailyAnalytics {
-    day: string;
-    streamId: string;
-    totalViews: number;
-    uniqueViewers: number;
-    uniqueCountries: number;
-    uniqueCities: number;
-    egressBytes: number;
-    egressGb: number;
-  }
-
-  interface QualityTierSummary {
-    tier2160pMinutes: number;
-    tier1440pMinutes: number;
-    tier1080pMinutes: number;
-    tier720pMinutes: number;
-    tier480pMinutes: number;
-    tierSdMinutes: number;
-    codecH264Minutes?: number;
-    codecH265Minutes?: number;
-    totalMinutes?: number;
-    avgBitrate?: number | null;
-    avgFps?: number | null;
-  }
-
-  interface CodecData {
-    codec: string;
-    minutes: number;
-  }
 
   interface StreamData {
     name: string;
@@ -71,31 +30,19 @@
     keyValue?: string;
   }
 
-  interface AnalyticsData {
-    peakViewers?: number | null;
-    totalSessionDuration?: number | null;
-  }
-
+  // Overview is a config/status panel: live tracks, stream metadata, config counts.
+  // Historical analytics (viewer trend, quality/codec mix, daily breakdown) live on
+  // the dedicated /streams/[id]/analytics route, not here.
   let {
     stream,
     streamKeys,
     recordings,
-    analytics,
     tracks = null,
-    viewerMetrics = [],
-    dailyAnalytics = [],
-    qualityTierSummary = null,
-    codecDistribution = [],
   }: {
     stream: StreamData;
     streamKeys: StreamKeyData[];
     recordings: unknown[];
-    analytics: AnalyticsData | null;
     tracks?: TrackInfo | null;
-    viewerMetrics?: ViewerMetric[];
-    dailyAnalytics?: DailyAnalytics[];
-    qualityTierSummary?: QualityTierSummary | null;
-    codecDistribution?: CodecData[];
   } = $props();
 
   // Separate source media tracks from generated thumbnail/sprite outputs.
@@ -112,23 +59,9 @@
     videoTracks.length + audioTracks.length + generatedTracks.length
   );
 
-  // Map viewer metrics for the chart
-  const chartData = $derived(
-    viewerMetrics.map((m) => ({ timestamp: m.timestamp, viewers: m.viewerCount }))
-  );
-
   const VideoIcon = $derived(getIconComponent("Video"));
   const MicIcon = $derived(getIconComponent("Mic"));
   const ActivityIcon = $derived(getIconComponent("Activity"));
-  const TrendingUpIcon = $derived(getIconComponent("TrendingUp"));
-  const CalendarIcon = $derived(getIconComponent("Calendar"));
-  const GlobeIcon = $derived(getIconComponent("Globe"));
-
-  function formatMinutes(minutes: number | null | undefined): string {
-    if (minutes === null || minutes === undefined) return "0m";
-    if (minutes >= 60) return `${(minutes / 60).toFixed(1)}h`;
-    return `${Math.round(minutes)}m`;
-  }
 
   function trackKey(track: TrackLike, index: number): string {
     return `${trackDisplayName(track, index)}:${trackCodec(track)}:${index}`;
@@ -310,7 +243,7 @@
     </div>
   </div>
 
-  <!-- Quick Stats -->
+  <!-- Quick Stats (config counts; historical metrics live on the analytics route) -->
   <div class="slab">
     <div class="slab-header">
       <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
@@ -326,241 +259,6 @@
         <span class="text-muted-foreground">Total Recordings:</span>
         <span class="font-mono text-info font-medium">{recordings.length}</span>
       </div>
-      {#if analytics}
-        <div class="flex justify-between items-center">
-          <span class="text-muted-foreground">24h Peak Viewers:</span>
-          <span class="font-mono text-info font-medium">{analytics.peakViewers || 0}</span>
-        </div>
-        <div class="flex justify-between items-center">
-          <span class="text-muted-foreground">Total Watch Time:</span>
-          <span class="font-mono text-info font-medium"
-            >{formatDuration(analytics.totalSessionDuration || 0)}</span
-          >
-        </div>
-      {/if}
     </div>
   </div>
-
-  <!-- Quality + Codec Distribution -->
-  {#if qualityTierSummary}
-    <div class="slab col-span-full">
-      <div class="slab-header flex items-center gap-2">
-        <VideoIcon class="w-5 h-5 text-success" />
-        <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
-          Quality Mix
-        </h3>
-        {#if qualityTierSummary.totalMinutes}
-          <span class="text-xs text-muted-foreground ml-auto">
-            {formatMinutes(qualityTierSummary.totalMinutes)} analyzed
-          </span>
-        {/if}
-      </div>
-      <div class="slab-body--padded">
-        <div class="grid grid-cols-1 md:grid-cols-2 border border-border/30">
-          <div class="p-4 border-b border-border/30 md:border-b-0 md:border-r border-border/30">
-            <BreakdownChart
-              mode="doughnut"
-              height={200}
-              format="minutes"
-              emptyText="No quality tier data available"
-              items={qualityTierSummary
-                ? [
-                    {
-                      label: "2160p",
-                      value: qualityTierSummary.tier2160pMinutes,
-                      color: palette.cyan,
-                    },
-                    {
-                      label: "1440p",
-                      value: qualityTierSummary.tier1440pMinutes,
-                      color: palette.green,
-                    },
-                    {
-                      label: "1080p",
-                      value: qualityTierSummary.tier1080pMinutes,
-                      color: palette.blue,
-                    },
-                    {
-                      label: "720p",
-                      value: qualityTierSummary.tier720pMinutes,
-                      color: palette.yellow,
-                    },
-                    {
-                      label: "480p",
-                      value: qualityTierSummary.tier480pMinutes,
-                      color: palette.orange,
-                    },
-                    { label: "SD", value: qualityTierSummary.tierSdMinutes, color: palette.fgDark },
-                  ]
-                : []}
-            />
-          </div>
-          <div class="p-4">
-            <BreakdownChart
-              mode="doughnut"
-              height={200}
-              format="minutes"
-              emptyText="No codec data available"
-              items={codecDistribution.map((c) => ({ label: c.codec, value: c.minutes }))}
-            />
-          </div>
-        </div>
-
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
-          <div>
-            <span class="text-sm text-muted-foreground">Avg Bitrate</span>
-            <p class="font-mono text-lg text-foreground">
-              {qualityTierSummary.avgBitrate
-                ? `${Math.round(qualityTierSummary.avgBitrate / 1000)} kbps`
-                : "N/A"}
-            </p>
-          </div>
-          <div>
-            <span class="text-sm text-muted-foreground">Avg FPS</span>
-            <p class="font-mono text-lg text-foreground">
-              {qualityTierSummary.avgFps ? qualityTierSummary.avgFps.toFixed(1) : "N/A"}
-            </p>
-          </div>
-          <div>
-            <span class="text-sm text-muted-foreground">H.264 Minutes</span>
-            <p class="font-mono text-lg text-foreground">
-              {formatMinutes(qualityTierSummary.codecH264Minutes ?? 0)}
-            </p>
-          </div>
-          <div>
-            <span class="text-sm text-muted-foreground">H.265 Minutes</span>
-            <p class="font-mono text-lg text-foreground">
-              {formatMinutes(qualityTierSummary.codecH265Minutes ?? 0)}
-            </p>
-          </div>
-        </div>
-      </div>
-    </div>
-  {/if}
-
-  <!-- Viewer Trend Chart -->
-  <div class="slab col-span-full">
-    <div class="slab-header flex items-center gap-2">
-      <TrendingUpIcon class="w-5 h-5 text-primary" />
-      <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
-        Viewer Trend (24h)
-      </h3>
-    </div>
-    <div class="slab-body--padded">
-      {#if chartData.length > 0}
-        <TrendChart
-          data={chartData}
-          height={200}
-          series={[
-            {
-              key: "viewers",
-              label: "Viewers",
-              color: palette.blue,
-              filled: true,
-              format: (v) => `${v} viewers`,
-            },
-          ]}
-        />
-      {:else}
-        <div class="h-[200px] flex items-center justify-center">
-          <EmptyState
-            iconName="Users"
-            title="No viewer data"
-            description="Viewer activity for the last 24 hours will appear here."
-          />
-        </div>
-      {/if}
-    </div>
-  </div>
-
-  <!-- Daily Analytics History -->
-  {#if dailyAnalytics.length > 0}
-    <div class="slab col-span-full">
-      <div class="slab-header flex items-center gap-2">
-        <CalendarIcon class="w-5 h-5 text-info" />
-        <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
-          Daily Analytics (Last 30 Days)
-        </h3>
-        <span class="text-xs text-muted-foreground ml-auto">{dailyAnalytics.length} days</span>
-      </div>
-
-      <!-- Summary Cards -->
-      <div
-        class="slab-body--padded grid grid-cols-2 md:grid-cols-4 gap-4 pb-4 border-b border-border/30"
-      >
-        <div>
-          <span class="text-sm text-muted-foreground">Total Views</span>
-          <p class="font-mono text-lg text-info font-medium">
-            {formatNumber(dailyAnalytics.reduce((sum, d) => sum + d.totalViews, 0))}
-          </p>
-        </div>
-        <div>
-          <span class="text-sm text-muted-foreground">Unique Viewers</span>
-          <p class="font-mono text-lg text-success font-medium">
-            {formatNumber(Math.max(...dailyAnalytics.map((d) => d.uniqueViewers)))}
-            <span class="text-xs text-muted-foreground">peak</span>
-          </p>
-        </div>
-        <div>
-          <span class="text-sm text-muted-foreground">Countries Reached</span>
-          <p class="font-mono text-lg text-accent-purple font-medium flex items-center gap-1">
-            <GlobeIcon class="w-4 h-4" />
-            {Math.max(...dailyAnalytics.map((d) => d.uniqueCountries))}
-          </p>
-        </div>
-        <div>
-          <span class="text-sm text-muted-foreground">Total Bandwidth</span>
-          <p class="font-mono text-lg text-warning font-medium">
-            {dailyAnalytics.reduce((sum, d) => sum + d.egressGb, 0).toFixed(2)} GB
-          </p>
-        </div>
-      </div>
-
-      <!-- Daily Breakdown Table -->
-      <div class="slab-body--padded overflow-x-auto">
-        <table class="w-full text-sm">
-          <thead>
-            <tr
-              class="text-muted-foreground text-xs uppercase tracking-wide border-b border-border/30"
-            >
-              <th class="text-left py-2 px-2">Date</th>
-              <th class="text-right py-2 px-2">Views</th>
-              <th class="text-right py-2 px-2">Unique Viewers</th>
-              <th class="text-right py-2 px-2">Countries</th>
-              <th class="text-right py-2 px-2">Cities</th>
-              <th class="text-right py-2 px-2">Bandwidth</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each dailyAnalytics.slice().reverse() as day, i (`${day.day}-${i}`)}
-              <tr class="border-b border-border/20 hover:bg-muted/20">
-                <td class="py-2 px-2 font-mono text-foreground">
-                  {new Date(day.day).toLocaleDateString(undefined, {
-                    month: "short",
-                    day: "numeric",
-                    year: "numeric",
-                  })}
-                </td>
-                <td class="py-2 px-2 text-right font-mono text-info">
-                  {formatNumber(day.totalViews)}
-                </td>
-                <td class="py-2 px-2 text-right font-mono text-success">
-                  {formatNumber(day.uniqueViewers)}
-                </td>
-                <td class="py-2 px-2 text-right font-mono text-accent-purple">
-                  {day.uniqueCountries}
-                </td>
-                <td class="py-2 px-2 text-right font-mono text-muted-foreground">
-                  {day.uniqueCities}
-                </td>
-                <td class="py-2 px-2 text-right font-mono text-warning">
-                  {day.egressGb.toFixed(2)} GB
-                </td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  {/if}
 </div>

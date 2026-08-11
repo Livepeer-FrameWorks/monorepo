@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, untrack } from "svelte";
   import { SvelteMap, SvelteSet } from "svelte/reactivity";
   import { get } from "svelte/store";
   import { goto } from "$app/navigation";
@@ -9,9 +9,7 @@
   import {
     fragment,
     GetStreamsConnectionStore,
-    GetClipsConnectionStore,
-    GetDVRRequestsStore,
-    GetVodAssetsConnectionStore,
+    GetStorageArtifactsConnectionStore,
     GetArtifactEventsConnectionStore,
     GetArtifactStatesConnectionStore,
     GetStorageEventsConnectionStore,
@@ -27,6 +25,7 @@
     DvrLifecycleStore,
     VodLifecycleStore,
     ClipCreationMode,
+    StorageArtifactKind,
     StreamCoreFieldsStore,
   } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
@@ -36,7 +35,7 @@
   import DeleteClipModal from "$lib/components/clips/DeleteClipModal.svelte";
   import DeleteRecordingModal from "$lib/components/recordings/DeleteRecordingModal.svelte";
   import AssetRetentionDialog from "$lib/components/library/AssetRetentionDialog.svelte";
-  import type { MediaRetentionTarget$options } from "$houdini";
+  import type { MediaRetentionTarget$options, StorageArtifactKind$options } from "$houdini";
   import {
     Dialog,
     DialogContent,
@@ -76,7 +75,10 @@
   } from "$lib/uploads";
 
   // Type definitions
-  type ArtifactType = "all" | "clips" | "dvr" | "vod";
+  // "other" is the fail-closed bucket for an unrecognized kind — never silently coerce an unknown
+  // type into a specific one (getTypeLabel renders it "Unknown", retention maps it to no action, and
+  // the kind filters only surface it under "all").
+  type ArtifactType = "all" | "clips" | "dvr" | "vod" | "other";
 
   interface ThumbnailAssetsView {
     posterUrl: string;
@@ -94,26 +96,25 @@
     streamId: string | null;
     displayStreamId: string | null;
     status: string;
+    description?: string | null;
+    errorMessage?: string | null;
     duration: number | null;
     sizeBytes: number | null;
     segmentCount?: number | null;
     createdAt: string | null;
     expiresAt: string | null;
-    isFrozen?: boolean;
+    hasLocalCopy?: boolean | null;
     storageLocation?: string;
     syncStatus?: string | null;
-    isHot?: boolean | null;
     isSynced?: boolean | null;
     isFinalized?: boolean | null;
     thumbnailAssets: ThumbnailAssetsView | null;
-    rawData: ClipData | DvrData | VodData;
+    rawData: StorageArtifactNode;
   }
 
   // Houdini stores
   const streamsStore = new GetStreamsConnectionStore();
-  const clipsStore = new GetClipsConnectionStore();
-  const dvrStore = new GetDVRRequestsStore();
-  const vodStore = new GetVodAssetsConnectionStore();
+  const artifactsStore = new GetStorageArtifactsConnectionStore();
   const artifactEventsStore = new GetArtifactEventsConnectionStore();
   const artifactStatesStore = new GetArtifactStatesConnectionStore();
   const storageEventsStore = new GetStorageEventsConnectionStore();
@@ -136,16 +137,24 @@
   // Fragment stores
   const streamCoreStore = new StreamCoreFieldsStore();
 
-  // Types from stores
-  type ClipData = NonNullable<
-    NonNullable<NonNullable<typeof $clipsStore.data>["clipsConnection"]>["edges"]
-  >[0]["node"];
-  type DvrData = NonNullable<
-    NonNullable<NonNullable<typeof $dvrStore.data>["dvrRecordingsConnection"]>["edges"]
-  >[0]["node"];
-  type VodData = NonNullable<
-    NonNullable<NonNullable<typeof $vodStore.data>["vodAssetsConnection"]>["edges"]
-  >[0]["node"];
+  // Types from stores — the single unified catalog node backs every library row.
+  type StorageArtifactNode = NonNullable<
+    NonNullable<typeof $artifactsStore.data>["storageArtifactsConnection"]
+  >["nodes"][number];
+
+  // Connection metadata (pagination + facet counts) copied off an accepted fetch. Held in
+  // local generation-scoped state — not read straight off the Houdini store — so a late,
+  // stale response from a superseded filter/search cannot overwrite the counts and
+  // "Load more" affordance while the accumulated rows stay correctly guarded.
+  type StorageArtifactKindCounts = NonNullable<
+    NonNullable<typeof $artifactsStore.data>["storageArtifactsConnection"]
+  >["kindCounts"];
+  type StorageArtifactConnectionMeta = {
+    hasNextPage: boolean;
+    totalCount: number;
+    // null until the first accepted response; all reads null-guard via kindCounts?.
+    kindCounts: StorageArtifactKindCounts | null;
+  };
 
   type LifecycleEventRow = {
     eventKey: string;
@@ -159,12 +168,122 @@
   let isAuthenticated = false;
 
   // Loading state
-  let loading = $derived(
-    $streamsStore.fetching || $clipsStore.fetching || $dvrStore.fetching || $vodStore.fetching
-  );
+  let loading = $derived($streamsStore.fetching || $artifactsStore.fetching);
 
   // Type filter from URL or state
   let typeFilter = $state<ArtifactType>("all");
+
+  // Offset/limit pagination for the unified connection. Commodore clamps `first`/limit
+  // to 100, so we page: each fetch pulls PAGE_SIZE rows at a growing offset and appends
+  // to a local accumulator. The store's connection metadata (hasNextPage, totalCount,
+  // kindCounts) always reflects the last-fetched window — exactly what the tiles and
+  // "Load more" affordance need.
+  const PAGE_SIZE = 25;
+  // Rows accumulated across pages. Reset to page 0 whenever the kind filter or search
+  // changes; appended on "Load more".
+  let accumulatedNodes = $state<StorageArtifactNode[]>([]);
+  // Connection metadata for the accumulated window, installed atomically with
+  // `accumulatedNodes` under the same generation guard (see reloadArtifacts/loadMore).
+  let connectionMeta = $state<StorageArtifactConnectionMeta>({
+    hasNextPage: false,
+    totalCount: 0,
+    kindCounts: null,
+  });
+  // Debounce handle for server-side search; cleared on destroy.
+  let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  // Guards the filter/search-driven refetch effects from firing before onMount's first load.
+  let filterInitialized = false;
+  // Monotonic request-generation counter. Bumped at the start of every reset-reload
+  // (kind/search/status change, retention refetch, mutation refresh); each fetch captures
+  // the value it started under and drops its result if a newer generation has begun. This
+  // keeps overlapping requests from installing stale rows/metadata out of order and stops a
+  // late page from a superseded filter being appended by "Load more".
+  let requestGeneration = 0;
+  // Surfaced when a fetch returns in-band GraphQL errors. Set instead of clearing the
+  // accumulator so a partial/failed response never blanks a valid list.
+  let loadError = $state<string | null>(null);
+  // False until a catalog response has SUCCESSFULLY installed metadata at least once. Guards the
+  // stat tiles and the empty-state from rendering fabricated zeros / "No items found" when the very
+  // first fetch failed (nothing was actually queried — the counts are unknown, not zero).
+  let catalogLoaded = $state(false);
+
+  // Kind filter tabs map to the server-side `kinds` input so the connection returns
+  // only the requested artifact kinds (all → omit; vod → VOD + CHAPTER).
+  function kindsForFilter(t: ArtifactType): StorageArtifactKind$options[] | undefined {
+    if (t === "clips") return [StorageArtifactKind.CLIP];
+    if (t === "dvr") return [StorageArtifactKind.DVR];
+    if (t === "vod") return [StorageArtifactKind.VOD, StorageArtifactKind.CHAPTER];
+    return undefined;
+  }
+
+  // UI status bucket → the server-side `status` input value. The connection applies this
+  // account-wide before count/facets/pagination, so it is authoritative (no client-side
+  // status filter over the loaded window). "all" clears the filter (undefined = all).
+  function statusForFilter(s: string): string | undefined {
+    if (s === "processing" || s === "ready" || s === "failed") return s;
+    return undefined;
+  }
+
+  // Fetch a single page at `offset`. Server-side `search` narrows the whole account
+  // scope, not just the loaded window.
+  function fetchPage(offset: number, opts?: { policy?: "NetworkOnly" }) {
+    return artifactsStore.fetch({
+      variables: {
+        input: {
+          first: PAGE_SIZE,
+          offset,
+          kinds: kindsForFilter(typeFilter),
+          search: searchQuery.trim() || undefined,
+          status: statusForFilter(statusFilter),
+        },
+      },
+      ...(opts?.policy ? { policy: opts.policy } : {}),
+    });
+  }
+
+  // Read Houdini's in-band `errors` array off a fetch result. A GraphQL error can arrive
+  // alongside a `null`/empty `data`, so callers use this to avoid overwriting a valid list
+  // with an empty one.
+  function resultErrors(result: unknown): unknown[] | null {
+    const errs = (result as { errors?: unknown[] })?.errors;
+    return Array.isArray(errs) && errs.length ? errs : null;
+  }
+
+  // Reset the accumulator and load page 0. Used on initial load, filter/search/status
+  // change, and after mutations/retention edits. Each call bumps the request generation and
+  // captures it: if a newer reset started while this fetch was in flight, the stale result
+  // is dropped (no accumulator/metadata overwrite). In-band GraphQL errors surface a
+  // message but leave the previously accumulated rows intact.
+  async function reloadArtifacts(opts?: { policy?: "NetworkOnly" }) {
+    const gen = ++requestGeneration;
+    let res: Awaited<ReturnType<typeof fetchPage>>;
+    try {
+      res = await fetchPage(0, opts);
+    } catch (error) {
+      // Transport failure. Surface a user-visible error but keep the previously
+      // accumulated rows and metadata — a failed request must never blank a valid list.
+      if (gen !== requestGeneration) return;
+      console.error("Failed to load library items:", error);
+      loadError = "Some library items could not be loaded. Showing the last successful results.";
+      return;
+    }
+    if (gen !== requestGeneration) return;
+    if (resultErrors(res)) {
+      loadError = "Some library items could not be loaded. Showing the last successful results.";
+      return;
+    }
+    loadError = null;
+    // Install rows and connection metadata together, only now that the generation is
+    // confirmed current, so a stale late response cannot overwrite either.
+    const connection = res.data?.storageArtifactsConnection;
+    accumulatedNodes = connection?.nodes ?? [];
+    connectionMeta = {
+      hasNextPage: connection?.hasNextPage ?? false,
+      totalCount: connection?.totalCount ?? 0,
+      kindCounts: connection?.kindCounts ?? null,
+    };
+    catalogLoaded = true;
+  }
 
   // Initialize from URL params
   $effect(() => {
@@ -174,16 +293,24 @@
     }
   });
 
+  // Refetch the catalog whenever the kind filter changes (server filters by `kinds`).
+  // Skips the very first run — onMount does the initial fetch with the resolved filter.
+  $effect(() => {
+    void typeFilter;
+    if (!filterInitialized) return;
+    untrack(() => {
+      void reloadArtifacts({ policy: "NetworkOnly" });
+    });
+  });
+
   // Raw data from stores
   let maskedStreams = $derived(
     $streamsStore.data?.streamsConnection?.edges?.map((e) => e.node) ?? []
   );
   let streams = $derived(maskedStreams.map((node) => get(fragment(node, streamCoreStore))));
-  let clips = $derived($clipsStore.data?.clipsConnection?.edges?.map((e) => e.node) ?? []);
-  let dvrRecordings = $derived(
-    $dvrStore.data?.dvrRecordingsConnection?.edges?.map((e) => e.node) ?? []
-  );
-  let vodAssets = $derived($vodStore.data?.vodAssetsConnection?.edges?.map((e) => e.node) ?? []);
+  // Rows shown come from the local accumulator (all loaded pages), not just the last
+  // store page.
+  let artifactNodes = $derived(accumulatedNodes);
 
   // Artifact states for in-progress operations
   let artifactStates = $derived(
@@ -222,106 +349,50 @@
     });
   });
 
-  // Pagination state
-  let clipsPageInfo = $derived($clipsStore.data?.clipsConnection?.pageInfo);
-  let dvrPageInfo = $derived($dvrStore.data?.dvrRecordingsConnection?.pageInfo);
-  let vodPageInfo = $derived($vodStore.data?.vodAssetsConnection?.pageInfo);
+  // Pagination state — single offset/limit connection.
   let loadingMore = $state(false);
+  let hasMoreItems = $derived(connectionMeta.hasNextPage);
 
-  let hasMoreItems = $derived.by(() => {
-    if (typeFilter === "clips") return clipsPageInfo?.hasNextPage ?? false;
-    if (typeFilter === "dvr") return dvrPageInfo?.hasNextPage ?? false;
-    if (typeFilter === "vod") return vodPageInfo?.hasNextPage ?? false;
-    // For 'all', show load more if any type has more
-    return (
-      (clipsPageInfo?.hasNextPage || dvrPageInfo?.hasNextPage || vodPageInfo?.hasNextPage) ?? false
-    );
-  });
+  // StorageArtifactKind → the page's coarse ArtifactType. CHAPTER plays back as VOD.
+  function kindToType(kind: StorageArtifactNode["kind"]): ArtifactType {
+    if (kind === "CLIP") return "clips";
+    if (kind === "DVR") return "dvr";
+    return "vod"; // VOD + CHAPTER
+  }
 
-  // Unified artifacts
+  // Unified artifacts — one row per catalog node.
   let allArtifacts = $derived.by(() => {
     const unified: UnifiedArtifact[] = [];
 
-    // Add clips
-    for (const clip of clips) {
-      const lifecycle = lifecycleStateForPlaybackId(clip.playbackId);
+    for (const node of artifactNodes) {
+      const lifecycle = lifecycleStateForPlaybackId(node.playbackId);
       unified.push({
-        id: clip.id,
-        type: "clips",
-        title: clip.title || clip.clipHash || "Untitled Clip",
-        hash: clip.clipHash || "",
-        playbackId: clip.playbackId,
-        streamId: clip.streamId,
-        displayStreamId: clip.sourceStreamId ?? null,
-        status: displayArtifactStage(artifactRowStage(clip.status, lifecycle?.stage)),
-        duration: clip.duration,
-        sizeBytes: lifecycle?.sizeBytes ?? clip.sizeBytes,
-        createdAt: clip.createdAt,
-        expiresAt: clip.expiresAt,
-        isFrozen: clip.isFrozen ?? undefined,
-        storageLocation: clip.storageLocation ?? undefined,
-        syncStatus: clip.syncStatus ?? null,
-        isHot: clip.isHot ?? null,
-        isSynced: clip.isSynced ?? null,
-        isFinalized: clip.isFinalized ?? null,
-        thumbnailAssets: clip.thumbnailAssets ?? null,
-        rawData: clip,
-      });
-    }
-
-    // Add DVR recordings
-    for (const dvr of dvrRecordings) {
-      const lifecycle = lifecycleStateForPlaybackId(dvr.playbackId);
-      const dvrConnectionStage =
-        dvr.status || (dvr.endedAt ? "completed" : dvr.expiresAt ? "completed" : "started");
-      unified.push({
-        id: dvr.dvrHash,
-        type: "dvr",
-        title: dvr.title || dvr.manifestPath || dvr.dvrHash,
-        hash: dvr.dvrHash,
-        playbackId: dvr.playbackId,
-        streamId: dvr.streamId,
-        displayStreamId: dvr.sourceStreamId ?? null,
-        status: displayArtifactStage(artifactRowStage(dvrConnectionStage, lifecycle?.stage)),
-        duration: dvr.durationSeconds,
-        sizeBytes: lifecycle?.sizeBytes ?? dvr.sizeBytes,
+        id: node.id,
+        type: kindToType(node.kind),
+        title: node.title,
+        hash: node.hash,
+        playbackId: node.playbackId ?? null,
+        streamId: node.streamId ?? null,
+        displayStreamId: node.streamTitle || null,
+        status: displayArtifactStage(artifactRowStage(node.status, lifecycle?.stage)),
+        // Catalog-projected metadata: description (VOD uploads) + processing-failure detail.
+        description: node.description ?? null,
+        errorMessage: node.errorMessage ?? null,
+        // durationSeconds is the measured length in seconds for any kind; null until finalized.
+        duration: node.durationSeconds ?? null,
+        // Catalog size is authoritative for a registered row; the feed only fills in a size for a
+        // not-yet-catalogued in-progress artifact.
+        sizeBytes: node.sizeBytes ?? lifecycle?.sizeBytes ?? null,
         segmentCount: lifecycle?.segmentCount ?? null,
-        createdAt: dvr.createdAt,
-        expiresAt: dvr.expiresAt,
-        isFrozen: dvr.isFrozen ?? undefined,
-        storageLocation: lifecycle?.s3Url ? "s3" : (dvr.storageLocation ?? undefined),
-        syncStatus: dvr.syncStatus ?? null,
-        isHot: dvr.isHot ?? null,
-        isSynced: dvr.isSynced ?? null,
-        isFinalized: dvr.isFinalized ?? null,
-        thumbnailAssets: dvr.thumbnailAssets ?? null,
-        rawData: dvr,
-      });
-    }
-
-    // Add VOD assets
-    for (const vod of vodAssets) {
-      const lifecycle = lifecycleStateForPlaybackId(vod.playbackId);
-      unified.push({
-        id: vod.id,
-        type: "vod",
-        title: vod.title || vod.filename || "Untitled Video",
-        hash: vod.artifactHash || "",
-        playbackId: vod.playbackId,
-        streamId: vod.streamId ?? null,
-        displayStreamId: vod.streamId ?? null,
-        status: displayArtifactStage(artifactRowStage(vod.status, lifecycle?.stage)),
-        duration: vod.durationMs ? Math.floor(vod.durationMs / 1000) : null,
-        sizeBytes: lifecycle?.sizeBytes ?? vod.sizeBytes,
-        createdAt: vod.createdAt,
-        expiresAt: vod.expiresAt,
-        storageLocation: vod.storageLocation ?? undefined,
-        syncStatus: vod.syncStatus ?? null,
-        isHot: vod.isHot ?? null,
-        isSynced: vod.isSynced ?? null,
-        isFinalized: vod.isFinalized ?? null,
-        thumbnailAssets: vod.thumbnailAssets ?? null,
-        rawData: vod,
+        createdAt: node.createdAt,
+        expiresAt: node.expiresAt ?? null,
+        hasLocalCopy: node.hasLocalCopy ?? null,
+        storageLocation: node.storageLocation ?? undefined,
+        syncStatus: node.syncStatus ?? null,
+        isSynced: node.isSynced ?? null,
+        isFinalized: node.isFinalized ?? null,
+        thumbnailAssets: node.thumbnailAssets ?? null,
+        rawData: node,
       });
     }
 
@@ -358,47 +429,58 @@
   let searchQuery = $state("");
   let statusFilter = $state("all");
 
+  // Debounced server-side search. Resets the accumulator and refetches from offset 0
+  // whenever the search box settles (~250ms), so the query narrows the whole account
+  // scope rather than only the loaded window. Timer is cleared on destroy.
+  $effect(() => {
+    void searchQuery;
+    if (!filterInitialized) return;
+    if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => {
+      void reloadArtifacts({ policy: "NetworkOnly" });
+    }, 250);
+  });
+
+  // Status is filtered server-side (input.status) account-wide, so a change resets the
+  // accumulator and refetches from offset 0 — same reset+generation path as kind/search.
+  $effect(() => {
+    void statusFilter;
+    if (!filterInitialized) return;
+    untrack(() => {
+      void reloadArtifacts({ policy: "NetworkOnly" });
+    });
+  });
+
   let filteredArtifacts = $derived.by(() => {
     let result = allArtifacts;
 
-    // Filter by type
+    // Filter by type. Redundant with the server-side `kinds` input (which already
+    // scopes the fetched rows) but harmless — kept as a belt-and-suspenders guard.
     if (typeFilter !== "all") {
       result = result.filter((a) => a.type === typeFilter);
     }
 
-    // Filter by search
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      result = result.filter(
-        (a) =>
-          a.title.toLowerCase().includes(query) ||
-          a.hash.toLowerCase().includes(query) ||
-          a.playbackId?.toLowerCase().includes(query) ||
-          a.displayStreamId?.toLowerCase().includes(query) ||
-          a.streamId?.toLowerCase().includes(query)
-      );
-    }
-
-    // Filter by status
-    if (statusFilter !== "all") {
-      result = result.filter((a) => {
-        const s = a.status.toLowerCase();
-        if (statusFilter === "processing")
-          return ["processing", "recording", "uploading", "requested"].includes(s);
-        if (statusFilter === "ready") return ["available", "completed", "ready"].includes(s);
-        if (statusFilter === "failed") return s === "failed";
-        return true;
-      });
-    }
+    // Search (input.search) and status (input.status) are both applied server-side
+    // account-wide before pagination, so the accumulated rows are already scoped to the
+    // query and status bucket — no client-side title/hash or status filter here.
 
     return result;
   });
 
-  // Stats
-  let totalClips = $derived(clips.length);
-  let totalDvr = $derived(dvrRecordings.length);
-  let totalVod = $derived(vodAssets.length);
-  let totalAll = $derived(allArtifacts.length);
+  // Stats. `kindCounts` is server-authoritative over the active search/stream scope
+  // (it ignores the kind filter), so the tiles show true account totals — not
+  // page-local counts. VOD combines VOD + CHAPTER (chapters play back as VOD).
+  let kindCounts = $derived(connectionMeta.kindCounts ?? null);
+  let totalAll = $derived(kindCounts?.total ?? connectionMeta.totalCount ?? allArtifacts.length);
+  let totalClips = $derived(kindCounts?.clip ?? 0);
+  let totalDvr = $derived(kindCounts?.dvr ?? 0);
+  let totalVod = $derived((kindCounts?.vod ?? 0) + (kindCounts?.chapter ?? 0));
+  // Until a catalog response has landed the counts are UNKNOWN, not zero: render "—" so a failed
+  // first fetch never shows fabricated zeros.
+  let statTotalAll = $derived<string | number>(catalogLoaded ? totalAll : "—");
+  let statTotalClips = $derived<string | number>(catalogLoaded ? totalClips : "—");
+  let statTotalDvr = $derived<string | number>(catalogLoaded ? totalDvr : "—");
+  let statTotalVod = $derived<string | number>(catalogLoaded ? totalVod : "—");
 
   // Lifecycle events
   let lifecycleRange = $state("7d");
@@ -433,17 +515,17 @@
   // Expanded row
   let expandedArtifact = $state<string | null>(null);
 
-  // Delete modals
+  // Delete modals — the selected row's raw catalog node backs each dialog.
   let showDeleteClipModal = $state(false);
-  let clipToDelete = $state<ClipData | null>(null);
+  let clipToDelete = $state<StorageArtifactNode | null>(null);
   let deletingClipId = $state("");
 
   let showDeleteDvrModal = $state(false);
-  let dvrToDelete = $state<DvrData | null>(null);
+  let dvrToDelete = $state<StorageArtifactNode | null>(null);
   let deletingDvrHash = $state("");
 
   let showDeleteVodModal = $state(false);
-  let vodToDelete = $state<VodData | null>(null);
+  let vodToDelete = $state<StorageArtifactNode | null>(null);
   let deletingVodId = $state("");
 
   // Retention editor — one dialog instance driven by the selected artifact.
@@ -481,14 +563,9 @@
   }
 
   async function refetchLibraryAfterRetention() {
-    // After a retention change, the row's expiresAt is stale. Refetch the
-    // relevant connection (covers all three asset types — simpler than
-    // tracking which list backed the row).
-    await Promise.all([
-      clipsStore.fetch({ policy: "NetworkOnly" }),
-      dvrStore.fetch({ policy: "NetworkOnly" }),
-      vodStore.fetch({ policy: "NetworkOnly" }),
-    ]);
+    // After a retention change the row's expiresAt is stale. Refetch from page 0 to
+    // pick up the new expiry (this collapses the list back to the first page).
+    await reloadArtifacts({ policy: "NetworkOnly" });
   }
 
   // Create clip modal
@@ -559,6 +636,7 @@
 
   onDestroy(() => {
     unsubscribeAuth();
+    if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
     clipLifecycleSub.unlisten();
     dvrLifecycleSub.unlisten();
     vodLifecycleSub.unlisten();
@@ -570,9 +648,7 @@
 
       await Promise.all([
         streamsStore.fetch(),
-        clipsStore.fetch(),
-        dvrStore.fetch(),
-        vodStore.fetch(),
+        reloadArtifacts(),
         artifactEventsStore
           .fetch({
             variables: {
@@ -593,6 +669,8 @@
           })
           .catch(() => null),
       ]);
+      // Subsequent filter changes drive their own refetch via the $effect above.
+      filterInitialized = true;
 
       // Start subscriptions for live updates
       if (streams.length > 0) {
@@ -610,30 +688,31 @@
   async function loadMore() {
     if (loadingMore) return;
     loadingMore = true;
+    // Capture the generation this page belongs to. A reset-reload (filter/search/status
+    // change) bumps the counter, so if one starts mid-flight we drop this page rather than
+    // appending rows from a superseded filter.
+    const gen = requestGeneration;
 
     try {
-      const promises: Promise<unknown>[] = [];
-
-      // Load more based on current filter or load all if viewing all
-      if (typeFilter === "clips" || typeFilter === "all") {
-        if (clipsPageInfo?.hasNextPage && clipsPageInfo.endCursor) {
-          promises.push(
-            clipsStore.fetch({ variables: { first: 25, after: clipsPageInfo.endCursor } })
-          );
-        }
+      // Fetch the NEXT page at offset = rows already loaded, then append. Dedupe by id
+      // in case an insert between pages shifted offsets (avoids keyed-each collisions).
+      const res = await fetchPage(accumulatedNodes.length, { policy: "NetworkOnly" });
+      if (gen !== requestGeneration) return;
+      if (resultErrors(res)) {
+        toast.error("Failed to load more items.");
+        return;
       }
-      if (typeFilter === "dvr" || typeFilter === "all") {
-        if (dvrPageInfo?.hasNextPage && dvrPageInfo.endCursor) {
-          promises.push(dvrStore.fetch({ variables: { first: 25, after: dvrPageInfo.endCursor } }));
-        }
-      }
-      if (typeFilter === "vod" || typeFilter === "all") {
-        if (vodPageInfo?.hasNextPage && vodPageInfo.endCursor) {
-          promises.push(vodStore.fetch({ variables: { first: 25, after: vodPageInfo.endCursor } }));
-        }
-      }
-
-      await Promise.all(promises);
+      // Append rows and refresh the connection metadata together, only after the
+      // generation is confirmed current, so a superseded page updates neither.
+      const connection = res.data?.storageArtifactsConnection;
+      const newNodes = connection?.nodes ?? [];
+      const seen = new SvelteSet(accumulatedNodes.map((n) => n.id));
+      accumulatedNodes = [...accumulatedNodes, ...newNodes.filter((n) => !seen.has(n.id))];
+      connectionMeta = {
+        hasNextPage: connection?.hasNextPage ?? false,
+        totalCount: connection?.totalCount ?? connectionMeta.totalCount,
+        kindCounts: connection?.kindCounts ?? connectionMeta.kindCounts,
+      };
     } catch (error) {
       console.error("Failed to load more items:", error);
       toast.error("Failed to load more items.");
@@ -711,8 +790,10 @@
     clipEndTime = 300;
   }
 
-  // Delete handlers
-  function confirmDeleteClip(clip: ClipData) {
+  // Delete handlers. Every delete is hash-keyed at the service layer (Commodore
+  // DeleteClip/DeleteVodAsset/DeleteDVR all take the artifact hash), and the unified
+  // node exposes that hash as both `hash` and `deleteId`.
+  function confirmDeleteClip(clip: StorageArtifactNode) {
     clipToDelete = clip;
     showDeleteClipModal = true;
   }
@@ -720,8 +801,8 @@
   async function deleteClip() {
     if (!clipToDelete) return;
     try {
-      deletingClipId = clipToDelete.id;
-      const result = await deleteClipMutation.mutate({ id: clipToDelete.id });
+      deletingClipId = clipToDelete.deleteId;
+      const result = await deleteClipMutation.mutate({ id: clipToDelete.deleteId });
       if (result.data?.deleteClip?.__typename === "DeleteSuccess") {
         toast.success("Clip deleted successfully!");
         loadData();
@@ -735,7 +816,7 @@
     }
   }
 
-  function confirmDeleteDvr(dvr: DvrData) {
+  function confirmDeleteDvr(dvr: StorageArtifactNode) {
     dvrToDelete = dvr;
     showDeleteDvrModal = true;
   }
@@ -743,8 +824,8 @@
   async function deleteDvr() {
     if (!dvrToDelete) return;
     try {
-      deletingDvrHash = dvrToDelete.dvrHash;
-      const result = await deleteDvrMutation.mutate({ dvrHash: dvrToDelete.dvrHash });
+      deletingDvrHash = dvrToDelete.hash;
+      const result = await deleteDvrMutation.mutate({ dvrHash: dvrToDelete.hash });
       if (result.data?.deleteDVR?.__typename === "DeleteSuccess") {
         toast.success("Recording deleted successfully!");
         loadData();
@@ -758,7 +839,7 @@
     }
   }
 
-  function confirmDeleteVod(vod: VodData) {
+  function confirmDeleteVod(vod: StorageArtifactNode) {
     vodToDelete = vod;
     showDeleteVodModal = true;
   }
@@ -766,8 +847,8 @@
   async function deleteVod() {
     if (!vodToDelete) return;
     try {
-      deletingVodId = vodToDelete.id;
-      const result = await deleteVodMutation.mutate({ id: vodToDelete.id });
+      deletingVodId = vodToDelete.deleteId;
+      const result = await deleteVodMutation.mutate({ id: vodToDelete.deleteId });
       if (result.data?.deleteVodAsset?.__typename === "DeleteSuccess") {
         toast.success("Video deleted successfully!");
         loadData();
@@ -1155,7 +1236,7 @@
     if (t === "clip" || t === "clips") return "clips";
     if (t === "dvr") return "dvr";
     if (t === "vod") return "vod";
-    return "clips";
+    return "other"; // fail closed: never mislabel an unknown kind as clips
   }
 
   function isTerminalArtifactStage(stage: string | null | undefined): boolean {
@@ -1182,15 +1263,22 @@
     const connection = connectionStage?.toLowerCase();
     const feed = feedStage?.toLowerCase();
 
-    if (connection && isTerminalArtifactStage(connection) && !isTerminalArtifactStage(feed)) {
-      return connection;
+    // The durable catalog is the source of truth for a REGISTERED row. The analytics feed has no
+    // revision relationship to the catalog, so a stale terminal event (e.g. an old `completed`)
+    // must never override the catalog — that could show a catalog-`failed` row as completed, even
+    // inside the server-filtered Failed view.
+    const registered = !!connection && connection !== "registry" && connection !== "unknown";
+    if (registered) {
+      // A terminal catalog status wins outright. While the catalog is still in-progress, the feed
+      // may only REFINE the live progress display with another non-terminal stage — it may never
+      // declare a terminal state the catalog hasn't itself reached.
+      if (isTerminalArtifactStage(connection)) return connection!;
+      if (feed && !isTerminalArtifactStage(feed)) return feed;
+      return connection!;
     }
-    if (feed && isTerminalArtifactStage(feed)) {
-      return feed;
-    }
-    if (connection && connection !== "registry" && connection !== "unknown") {
-      return connection;
-    }
+
+    // Uncatalogued / placeholder rows: fall back to the feed for progress (or an in-progress
+    // placeholder), then to whatever the connection carried.
     return feed || connection || "unknown";
   }
 
@@ -1220,6 +1308,13 @@
     if (s === "failed") return "text-destructive bg-destructive/10 border-destructive/20";
     if (s === "deleted") return "text-muted-foreground bg-muted border-border opacity-70";
     return "text-muted-foreground bg-muted border-border";
+  }
+
+  // Expired assets now come back in the catalog with status "expired"; render a proper
+  // label and never let a past-expiry row read as a live "Ready"/"Completed" state.
+  function statusLabel(status: string, expired: boolean): string {
+    if (expired || status.toLowerCase() === "expired") return "Expired";
+    return status || "Unknown";
   }
 
   function getTypeColor(type: ArtifactType): string {
@@ -1265,7 +1360,7 @@
 
   function hasPlayableStorage(artifact: UnifiedArtifact): boolean {
     return (
-      artifact.isHot === true ||
+      artifact.hasLocalCopy === true ||
       artifact.isSynced === true ||
       artifact.isFinalized === true ||
       artifact.syncStatus?.toLowerCase() === "synced"
@@ -1281,6 +1376,10 @@
   }
 
   function canPlayArtifact(artifact: UnifiedArtifact): boolean {
+    // Fail closed on an unknown kind: we can't pick a correct player/protocol for it, and every
+    // downstream render (download link, PlaybackProtocols) is gated on this, so an "other" asset is
+    // never presented as playable-as-VOD.
+    if (artifact.type === "other") return false;
     if (artifact.type === "dvr") {
       if (!artifact.playbackId && !artifact.hash) return false;
     } else if (!artifact.playbackId) return false;
@@ -1350,6 +1449,8 @@
   const FileVideoIcon = getIconComponent("FileVideo");
   const CloudIcon = getIconComponent("Cloud");
   const LoaderIcon = getIconComponent("Loader");
+  const BarChart2Icon = getIconComponent("BarChart2");
+  const Maximize2Icon = getIconComponent("Maximize2");
 </script>
 
 <svelte:head>
@@ -1427,7 +1528,7 @@
             <DashboardMetricCard
               icon={FolderOpenIcon}
               iconColor="text-primary"
-              value={totalAll}
+              value={statTotalAll}
               valueColor="text-primary"
               label="Total Items"
             />
@@ -1436,7 +1537,7 @@
             <DashboardMetricCard
               icon={ScissorsIcon}
               iconColor="text-primary"
-              value={totalClips}
+              value={statTotalClips}
               valueColor="text-primary"
               label="Clips"
             />
@@ -1445,7 +1546,7 @@
             <DashboardMetricCard
               icon={FilmIcon}
               iconColor="text-info"
-              value={totalDvr}
+              value={statTotalDvr}
               valueColor="text-info"
               label="Recordings"
             />
@@ -1454,7 +1555,7 @@
             <DashboardMetricCard
               icon={VideoIcon}
               iconColor="text-success"
-              value={totalVod}
+              value={statTotalVod}
               valueColor="text-success"
               label="VOD Assets"
             />
@@ -1578,7 +1679,27 @@
               </div>
             </div>
             <div class="slab-body--flush">
-              {#if filteredArtifacts.length === 0}
+              {#if loadError}
+                <div
+                  class="mx-4 mt-4 rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                  role="alert"
+                >
+                  {loadError}
+                </div>
+              {/if}
+              {#if filteredArtifacts.length === 0 && !catalogLoaded}
+                <!-- Never successfully loaded the catalog: don't assert an empty library. If it was
+                     an error, loadError above explains; otherwise this is the initial load. -->
+                {#if !loadError}
+                  <div class="p-8">
+                    <EmptyState
+                      iconName="FolderOpen"
+                      title="Loading your library…"
+                      description="Fetching your clips, recordings, and VOD assets."
+                    />
+                  </div>
+                {/if}
+              {:else if filteredArtifacts.length === 0}
                 <div class="p-8">
                   <EmptyState
                     iconName="FolderOpen"
@@ -1645,6 +1766,7 @@
                       {#each filteredArtifacts as artifact (artifact.id)}
                         {@const isExpiredArtifact = isExpired(artifact.expiresAt)}
                         {@const isDeleted = artifact.status.toLowerCase() === "deleted"}
+                        {@const isChapter = artifact.rawData.kind === "CHAPTER"}
                         <TableRow
                           class="transition-colors group {isDeleted || isExpiredArtifact
                             ? 'opacity-60 bg-muted/30 cursor-not-allowed'
@@ -1667,8 +1789,8 @@
                                 <span class="text-[10px] text-muted-foreground px-2 italic"
                                   >Deleted</span
                                 >
-                              {:else if canPlayArtifact(artifact) && (artifact.type === "dvr" || artifact.playbackId)}
-                                {#if artifact.type !== "dvr" && artifact.playbackId}
+                              {:else}
+                                {#if canPlayArtifact(artifact) && artifact.type !== "dvr" && artifact.playbackId}
                                   {@const urls = getContentDeliveryUrls(
                                     artifact.playbackId,
                                     artifact.type === "clips" ? "clip" : "vod"
@@ -1685,6 +1807,40 @@
                                     <DownloadIcon class="w-3.5 h-3.5" />
                                   </Button>
                                 {/if}
+                                <!-- Open + analytics are keyed on the artifact hash, not on
+                                     playability, so a still-processing or failed asset is still
+                                     inspectable. -->
+                                {#if artifact.hash}
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    class="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+                                    title="Open asset"
+                                    onclick={(e) => {
+                                      e.stopPropagation();
+                                      goto(resolve(`/library/${artifact.hash}`));
+                                    }}
+                                  >
+                                    <Maximize2Icon class="w-3.5 h-3.5" />
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    class="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+                                    title="Asset analytics"
+                                    onclick={(e) => {
+                                      e.stopPropagation();
+                                      goto(resolve(`/library/${artifact.hash}/analytics`));
+                                    }}
+                                  >
+                                    <BarChart2Icon class="w-3.5 h-3.5" />
+                                  </Button>
+                                {/if}
+                                {#if !canPlayArtifact(artifact)}
+                                  <span class="text-[10px] text-warning animate-pulse px-2"
+                                    >Processing...</span
+                                  >
+                                {/if}
                                 <Button
                                   variant="ghost"
                                   size="sm"
@@ -1700,26 +1856,27 @@
                                     <Share2Icon class="w-3.5 h-3.5" />
                                   {/if}
                                 </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  class="h-7 w-7 p-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity focus:opacity-100"
-                                  title="Delete"
-                                  onclick={() => {
-                                    if (artifact.type === "clips")
-                                      confirmDeleteClip(artifact.rawData as ClipData);
-                                    else if (artifact.type === "dvr")
-                                      confirmDeleteDvr(artifact.rawData as DvrData);
-                                    else if (artifact.type === "vod")
-                                      confirmDeleteVod(artifact.rawData as VodData);
-                                  }}
-                                >
-                                  <Trash2Icon class="w-3.5 h-3.5" />
-                                </Button>
-                              {:else}
-                                <span class="text-[10px] text-warning animate-pulse px-2"
-                                  >Processing...</span
-                                >
+                                <!-- A DVR chapter is managed via its parent recording; deleting it
+                                     through the VOD path would orphan the recording's ledger, so
+                                     the backend rejects it. Withhold the action entirely. -->
+                                {#if !isChapter}
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    class="h-7 w-7 p-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity focus:opacity-100"
+                                    title="Delete"
+                                    onclick={() => {
+                                      if (artifact.type === "clips")
+                                        confirmDeleteClip(artifact.rawData);
+                                      else if (artifact.type === "dvr")
+                                        confirmDeleteDvr(artifact.rawData);
+                                      else if (artifact.type === "vod")
+                                        confirmDeleteVod(artifact.rawData);
+                                    }}
+                                  >
+                                    <Trash2Icon class="w-3.5 h-3.5" />
+                                  </Button>
+                                {/if}
                               {/if}
                             </div>
                           </TableCell>
@@ -1751,6 +1908,14 @@
                                 >
                                   {artifact.title}
                                 </div>
+                                {#if artifact.description}
+                                  <div
+                                    class="text-[11px] text-muted-foreground truncate max-w-xs"
+                                    title={artifact.description}
+                                  >
+                                    {artifact.description}
+                                  </div>
+                                {/if}
                                 <div class="text-[10px] text-muted-foreground font-mono">
                                   {artifact.hash?.slice(0, 8) || "N/A"}...
                                 </div>
@@ -1768,11 +1933,13 @@
                             <div class="flex items-center gap-2 flex-wrap">
                               <span
                                 class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border {getStatusColor(
-                                  artifact.status
+                                  isExpiredArtifact ? 'expired' : artifact.status
                                 )}"
                               >
-                                {artifact.status || "Unknown"}
+                                {statusLabel(artifact.status, isExpiredArtifact)}
                               </span>
+                              <!-- Durable (S3) state: freezing → frozen → synced is a genuine
+                                   progression, so these are mutually exclusive. -->
                               {#if artifact.storageLocation === "freezing"}
                                 <span
                                   class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border text-cyan-400 bg-cyan-400/10 border-cyan-400/20"
@@ -1780,19 +1947,12 @@
                                   <LoaderIcon class="w-3 h-3 animate-spin" />
                                   Freezing...
                                 </span>
-                              {:else if artifact.isFrozen}
+                              {:else if artifact.isSynced && artifact.hasLocalCopy === false}
                                 <span
                                   class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border text-blue-400 bg-blue-400/10 border-blue-400/20"
                                 >
                                   <SnowflakeIcon class="w-3 h-3" />
                                   Frozen
-                                </span>
-                              {:else if artifact.isHot}
-                                <span
-                                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border text-amber-400 bg-amber-400/10 border-amber-400/20"
-                                >
-                                  <ZapIcon class="w-3 h-3" />
-                                  Hot
                                 </span>
                               {:else if artifact.isSynced}
                                 <span
@@ -1800,6 +1960,16 @@
                                 >
                                   <CloudIcon class="w-3 h-3" />
                                   Synced
+                                </span>
+                              {/if}
+                              <!-- A present local node copy is INDEPENDENT of durable state — an asset
+                                   can be synced/frozen AND have a local copy at once, so it's a separate badge. -->
+                              {#if artifact.hasLocalCopy}
+                                <span
+                                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border text-amber-400 bg-amber-400/10 border-amber-400/20"
+                                >
+                                  <ZapIcon class="w-3 h-3" />
+                                  Local copy
                                 </span>
                               {/if}
                               {#if artifact.isFinalized}
@@ -1811,6 +1981,14 @@
                                 </span>
                               {/if}
                             </div>
+                            {#if artifact.errorMessage && artifact.status === "failed"}
+                              <p
+                                class="text-[11px] text-destructive mt-1 max-w-xs"
+                                title={artifact.errorMessage}
+                              >
+                                {artifact.errorMessage}
+                              </p>
+                            {/if}
                           </TableCell>
 
                           <!-- Duration -->
@@ -1830,17 +2008,23 @@
 
                           <!-- Expires -->
                           <TableCell class="px-4 py-2 text-sm text-foreground">
-                            <button
-                              type="button"
-                              class="text-left hover:text-primary hover:underline"
-                              title="Edit retention"
-                              onclick={(e) => {
-                                e.stopPropagation();
-                                openRetentionEditor(artifact);
-                              }}
-                            >
-                              {formatExpiry(artifact.expiresAt)}
-                            </button>
+                            {#if isChapter}
+                              <!-- A chapter's retention follows its parent recording; it can't be
+                                   edited independently, so show the expiry as static text. -->
+                              <span>{formatExpiry(artifact.expiresAt)}</span>
+                            {:else}
+                              <button
+                                type="button"
+                                class="text-left hover:text-primary hover:underline"
+                                title="Edit retention"
+                                onclick={(e) => {
+                                  e.stopPropagation();
+                                  openRetentionEditor(artifact);
+                                }}
+                              >
+                                {formatExpiry(artifact.expiresAt)}
+                              </button>
+                            {/if}
                           </TableCell>
                         </TableRow>
 
@@ -2102,10 +2286,12 @@
   </div>
 </div>
 
-<!-- Delete Clip Modal -->
+<!-- Delete Clip Modal — adapt the unified node to the modal's {id,title,clipHash} shape. -->
 <DeleteClipModal
   open={showDeleteClipModal && !!clipToDelete}
-  clip={clipToDelete}
+  clip={clipToDelete
+    ? { id: clipToDelete.deleteId, title: clipToDelete.title, clipHash: clipToDelete.hash }
+    : null}
   deleting={!!deletingClipId}
   onConfirm={deleteClip}
   onCancel={() => {
@@ -2114,10 +2300,16 @@
   }}
 />
 
-<!-- Delete DVR Modal -->
+<!-- Delete DVR Modal — streamTitle drives the modal's source label. -->
 <DeleteRecordingModal
   open={showDeleteDvrModal && !!dvrToDelete}
-  recording={dvrToDelete}
+  recording={dvrToDelete
+    ? {
+        dvrHash: dvrToDelete.hash,
+        streamId: dvrToDelete.streamId,
+        sourceStreamId: dvrToDelete.streamTitle,
+      }
+    : null}
   deleting={!!deletingDvrHash}
   onConfirm={deleteDvr}
   onCancel={() => {
@@ -2150,7 +2342,7 @@
     <div class="slab-body--padded">
       <p class="text-sm text-foreground">
         Are you sure you want to delete <strong
-          >{vodToDelete?.title || vodToDelete?.filename || "this video"}</strong
+          >{vodToDelete?.title || vodToDelete?.secondaryLabel || "this video"}</strong
         >?
       </p>
     </div>

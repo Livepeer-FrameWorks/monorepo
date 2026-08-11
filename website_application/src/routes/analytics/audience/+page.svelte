@@ -116,6 +116,8 @@
   // Viewer events from connection events store (with pagination support)
   let viewerEvents = $derived(connectionEvents);
   let selectedBucket = $state<string | null>(null);
+  // Routing-analysis panels are operator detail; hidden by default for a clean view.
+  let showRoutingDetails = $state(false);
 
   // Prepare data for Heatmap from Top Cities
   let heatmapData = $derived.by(() => {
@@ -604,6 +606,8 @@
 
   // Icons
   const Globe2Icon = getIconComponent("Globe2");
+  const ChevronUpIcon = getIconComponent("ChevronUp");
+  const ChevronDownIcon = getIconComponent("ChevronDown");
   const UsersIcon = getIconComponent("Users");
   const MapPinIcon = getIconComponent("Target");
   const CalendarIcon = getIconComponent("Calendar");
@@ -963,582 +967,624 @@
             </div>
           {/if}
 
-          <!-- Routing Efficiency Slab -->
-          {#if routingEfficiency.totalDecisions > 0}
-            <div class="slab">
-              <div class="slab-header">
-                <div class="flex items-center gap-2">
-                  <ActivityIcon class="w-4 h-4 text-success" />
-                  <h3>Routing Efficiency</h3>
-                </div>
-              </div>
-              <div class="slab-body--padded">
-                <div class="grid grid-cols-2 gap-3 mb-4">
-                  <div class="p-3 text-center border border-border/30 bg-muted/20">
-                    <p class="text-xs text-muted-foreground uppercase mb-1">Success Rate</p>
-                    <p class="text-xl font-bold text-success">
-                      {routingEfficiency.efficiency?.toFixed(1) || 0}%
-                    </p>
-                  </div>
-                  <div class="p-3 text-center border border-border/30 bg-muted/20">
-                    <p class="text-xs text-muted-foreground uppercase mb-1">Avg Score</p>
-                    <p class="text-xl font-bold text-primary">
-                      {routingEfficiency.avgScore?.toFixed(1) || 0}
-                    </p>
-                  </div>
-                  <div class="p-3 text-center border border-border/30 bg-muted/20">
-                    <p class="text-xs text-muted-foreground uppercase mb-1">Decisions</p>
-                    <p class="text-xl font-bold text-accent-purple">
-                      {routingEfficiency.totalDecisions || 0}
-                    </p>
-                  </div>
-                  <div class="p-3 text-center border border-border/30 bg-muted/20">
-                    <p class="text-xs text-muted-foreground uppercase mb-1">Avg Distance</p>
-                    <p class="text-xl font-bold text-warning">
-                      {routingEfficiency.avgDistance?.toFixed(0) || 0}km
-                    </p>
+          <!-- Routing analysis (operator detail): collapsed by default -->
+          {#if routingEfficiency.totalDecisions > 0 || viewerEvents.length > 0 || mostPopularNodes.length > 0}
+            <div class="col-span-full">
+              <button
+                type="button"
+                class="flex items-center gap-2 text-sm font-semibold text-foreground cursor-pointer hover:text-primary transition-colors"
+                onclick={() => (showRoutingDetails = !showRoutingDetails)}
+              >
+                {#if showRoutingDetails}
+                  <ChevronUpIcon class="w-4 h-4" />
+                {:else}
+                  <ChevronDownIcon class="w-4 h-4" />
+                {/if}
+                Routing analysis
+                <span class="text-xs font-normal text-muted-foreground"
+                  >efficiency, buckets, flows, connection events</span
+                >
+              </button>
+            </div>
+          {/if}
+
+          {#if showRoutingDetails}
+            <!-- Routing Efficiency Slab -->
+            {#if routingEfficiency.totalDecisions > 0}
+              <div class="slab">
+                <div class="slab-header">
+                  <div class="flex items-center gap-2">
+                    <ActivityIcon class="w-4 h-4 text-success" />
+                    <h3>Routing Efficiency</h3>
                   </div>
                 </div>
-                {#if routingEfficiency.avgLatency > 0}
-                  <div class="p-3 border border-info/30 bg-info/5 mb-4">
-                    <div class="flex items-center justify-between">
-                      <div>
-                        <p class="text-xs text-muted-foreground uppercase mb-1">Routing Latency</p>
-                        <p class="text-lg font-bold text-info">
-                          {routingEfficiency.avgLatency.toFixed(1)}ms
-                        </p>
-                      </div>
-                      <div class="text-right text-xs text-muted-foreground">
-                        <p>Time to select optimal node</p>
-                        <p
-                          class="font-mono {routingEfficiency.avgLatency < 50
-                            ? 'text-success'
-                            : routingEfficiency.avgLatency < 100
-                              ? 'text-warning'
-                              : 'text-destructive'}"
-                        >
-                          {routingEfficiency.avgLatency < 50
-                            ? "Excellent"
-                            : routingEfficiency.avgLatency < 100
-                              ? "Good"
-                              : "Needs attention"}
-                        </p>
-                      </div>
+                <div class="slab-body--padded">
+                  <div class="grid grid-cols-2 gap-3 mb-4">
+                    <div class="p-3 text-center border border-border/30 bg-muted/20">
+                      <p class="text-xs text-muted-foreground uppercase mb-1">Success Rate</p>
+                      <p class="text-xl font-bold text-success">
+                        {routingEfficiency.efficiency?.toFixed(1) || 0}%
+                      </p>
+                    </div>
+                    <div class="p-3 text-center border border-border/30 bg-muted/20">
+                      <p class="text-xs text-muted-foreground uppercase mb-1">Avg Score</p>
+                      <p class="text-xl font-bold text-primary">
+                        {routingEfficiency.avgScore?.toFixed(1) || 0}
+                      </p>
+                    </div>
+                    <div class="p-3 text-center border border-border/30 bg-muted/20">
+                      <p class="text-xs text-muted-foreground uppercase mb-1">Decisions</p>
+                      <p class="text-xl font-bold text-accent-purple">
+                        {routingEfficiency.totalDecisions || 0}
+                      </p>
+                    </div>
+                    <div class="p-3 text-center border border-border/30 bg-muted/20">
+                      <p class="text-xs text-muted-foreground uppercase mb-1">Avg Distance</p>
+                      <p class="text-xl font-bold text-warning">
+                        {routingEfficiency.avgDistance?.toFixed(0) || 0}km
+                      </p>
                     </div>
                   </div>
-                {/if}
-
-                <!-- Connection Quality by Distance -->
-                {#if connectionQualityByDistance.hasData}
-                  {@const quality = connectionQualityByDistance}
-                  <div class="pt-3 border-t border-border/30">
-                    <p class="text-xs text-muted-foreground uppercase tracking-wide mb-3">
-                      Quality by Distance
-                    </p>
-                    <div class="space-y-2">
-                      <div class="flex justify-between items-center text-sm">
-                        <span class="text-muted-foreground">&lt;500km</span>
-                        <div class="flex items-center gap-2">
-                          <div class="w-20 bg-muted rounded-full h-1.5">
-                            <div
-                              class="h-1.5 rounded-full {quality.short >= 80
-                                ? 'bg-success'
-                                : quality.short >= 60
-                                  ? 'bg-warning'
-                                  : 'bg-destructive'}"
-                              style="width: {quality.short}%"
-                            ></div>
-                          </div>
-                          <span
-                            class="text-xs font-mono w-10 text-right {quality.short >= 80
-                              ? 'text-success'
-                              : quality.short >= 60
-                                ? 'text-warning'
-                                : 'text-destructive'}">{quality.short}%</span
-                          >
+                  {#if routingEfficiency.avgLatency > 0}
+                    <div class="p-3 border border-info/30 bg-info/5 mb-4">
+                      <div class="flex items-center justify-between">
+                        <div>
+                          <p class="text-xs text-muted-foreground uppercase mb-1">
+                            Routing Latency
+                          </p>
+                          <p class="text-lg font-bold text-info">
+                            {routingEfficiency.avgLatency.toFixed(1)}ms
+                          </p>
                         </div>
-                      </div>
-                      <div class="flex justify-between items-center text-sm">
-                        <span class="text-muted-foreground">500-2000km</span>
-                        <div class="flex items-center gap-2">
-                          <div class="w-20 bg-muted rounded-full h-1.5">
-                            <div
-                              class="h-1.5 rounded-full {quality.medium >= 80
-                                ? 'bg-success'
-                                : quality.medium >= 60
-                                  ? 'bg-warning'
-                                  : 'bg-destructive'}"
-                              style="width: {quality.medium}%"
-                            ></div>
-                          </div>
-                          <span
-                            class="text-xs font-mono w-10 text-right {quality.medium >= 80
+                        <div class="text-right text-xs text-muted-foreground">
+                          <p>Time to select optimal node</p>
+                          <p
+                            class="font-mono {routingEfficiency.avgLatency < 50
                               ? 'text-success'
-                              : quality.medium >= 60
+                              : routingEfficiency.avgLatency < 100
                                 ? 'text-warning'
-                                : 'text-destructive'}">{quality.medium}%</span
+                                : 'text-destructive'}"
                           >
-                        </div>
-                      </div>
-                      <div class="flex justify-between items-center text-sm">
-                        <span class="text-muted-foreground">&gt;2000km</span>
-                        <div class="flex items-center gap-2">
-                          <div class="w-20 bg-muted rounded-full h-1.5">
-                            <div
-                              class="h-1.5 rounded-full {quality.long >= 80
-                                ? 'bg-success'
-                                : quality.long >= 60
-                                  ? 'bg-warning'
-                                  : 'bg-destructive'}"
-                              style="width: {quality.long}%"
-                            ></div>
-                          </div>
-                          <span
-                            class="text-xs font-mono w-10 text-right {quality.long >= 80
-                              ? 'text-success'
-                              : quality.long >= 60
-                                ? 'text-warning'
-                                : 'text-destructive'}">{quality.long}%</span
-                          >
+                            {routingEfficiency.avgLatency < 50
+                              ? "Excellent"
+                              : routingEfficiency.avgLatency < 100
+                                ? "Good"
+                                : "Needs attention"}
+                          </p>
                         </div>
                       </div>
                     </div>
-                  </div>
-                {/if}
-              </div>
-            </div>
-          {/if}
+                  {/if}
 
-          <!-- Bucket Hotspots Slab -->
-          {#if bucketHotspots.length > 0}
-            <div class="slab">
-              <div class="slab-header">
-                <div class="flex items-center gap-2">
-                  <MapPinIcon class="w-4 h-4 text-primary" />
-                  <h3>Top Buckets (Clients)</h3>
-                </div>
-              </div>
-              <div class="slab-body--padded">
-                <div class="space-y-2">
-                  {#each bucketHotspots.slice(0, 8) as b (b.id)}
-                    <div
-                      class="flex items-center justify-between p-2 border border-border/30 bg-muted/10"
-                    >
-                      <div class="flex items-center gap-2">
-                        <span
-                          class="font-mono text-xs px-2 py-0.5 bg-primary/10 text-primary rounded"
-                          title={b.id}>{b.label}</span
-                        >
-                        <span class="text-muted-foreground text-xs">{b.pct}%</span>
-                      </div>
-                      <div class="flex items-center gap-3 text-xs">
-                        <span class="font-semibold text-foreground">{b.count} events</span>
-                        <span
-                          class={b.successRate >= 80
-                            ? "text-success"
-                            : b.successRate >= 60
-                              ? "text-warning"
-                              : "text-destructive"}
-                        >
-                          {b.successRate}% success
-                        </span>
-                        <span class="text-muted-foreground">· {Math.round(b.avgDistance)} km</span>
-                      </div>
-                    </div>
-                  {/each}
-                </div>
-              </div>
-            </div>
-          {/if}
-
-          <!-- Distance Hotspots Slab -->
-          {#if bucketHotspots.length > 0}
-            <div class="slab">
-              <div class="slab-header">
-                <div class="flex items-center gap-2">
-                  <ActivityIcon class="w-4 h-4 text-warning" />
-                  <h3>Distance Hotspots</h3>
-                </div>
-              </div>
-              <div class="slab-body--padded">
-                <div class="space-y-2">
-                  {#each bucketHotspots
-                    .filter((b) => b.avgDistance > 0)
-                    .sort((a, b) => b.avgDistance - a.avgDistance)
-                    .slice(0, 6) as b (b.id)}
-                    <div
-                      class="flex items-center justify-between p-2 border border-border/30 bg-muted/10"
-                    >
-                      <div class="flex items-center gap-2">
-                        <span
-                          class="font-mono text-xs px-2 py-0.5 bg-warning/10 text-warning rounded"
-                          title={b.id}>{b.label}</span
-                        >
-                        <span class="text-muted-foreground text-xs"
-                          >{Math.round(b.avgDistance)} km avg</span
-                        >
-                      </div>
-                      <div class="text-xs text-muted-foreground flex items-center gap-2">
-                        <span>{b.count} events</span>
-                        {#if b.avgDistance > 1500}
-                          <span
-                            class="px-2 py-0.5 rounded bg-destructive/10 text-destructive font-mono"
-                            >long-haul</span
-                          >
-                        {:else if b.avgDistance > 800}
-                          <span class="px-2 py-0.5 rounded bg-warning/10 text-warning font-mono"
-                            >elevated</span
-                          >
-                        {/if}
-                      </div>
-                    </div>
-                  {/each}
-                </div>
-              </div>
-            </div>
-          {/if}
-
-          <!-- Top Bucket Flows -->
-          {#if bucketFlows.length > 0}
-            <div class="slab col-span-full">
-              <div class="slab-header">
-                <div class="flex items-center gap-2">
-                  <ActivityIcon class="w-4 h-4 text-accent-purple" />
-                  <h3>Top Bucket Flows</h3>
-                </div>
-              </div>
-              <div class="slab-body--flush">
-                <div class="overflow-x-auto">
-                  <table class="w-full text-sm">
-                    <thead>
-                      <tr class="border-b border-border bg-muted/30">
-                        <th class="text-left py-2 px-4 text-muted-foreground font-medium">From</th>
-                        <th class="text-left py-2 px-4 text-muted-foreground font-medium">To</th>
-                        <th class="text-left py-2 px-4 text-muted-foreground font-medium">Events</th
-                        >
-                        <th class="text-left py-2 px-4 text-muted-foreground font-medium"
-                          >Avg Distance</th
-                        >
-                        <th class="text-left py-2 px-4 text-muted-foreground font-medium">Badge</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {#each bucketFlows.slice(0, 10) as flow, i (`${flow.from}:${flow.to}:${flow.crossCluster}:${i}`)}
-                        <tr class="border-b border-border/30 hover:bg-muted/15">
-                          <td class="py-2 px-4 text-xs font-mono" title={flow.from}>
-                            {resolveBucketLocation(flow.from, bucketCountryMap)}
-                          </td>
-                          <td class="py-2 px-4 text-xs font-mono" title={flow.to}>
-                            {resolveBucketLocation(flow.to, bucketCountryMap)}
-                          </td>
-                          <td class="py-2 px-4 font-semibold text-foreground">{flow.count}</td>
-                          <td class="py-2 px-4 text-xs text-muted-foreground"
-                            >{Math.round(flow.avgDistance)} km</td
-                          >
-                          <td class="py-2 px-4">
-                            {#if flow.avgDistance > 1500}
-                              <span
-                                class="px-2 py-0.5 rounded bg-destructive/15 text-destructive text-[11px] font-mono"
-                                >long-haul</span
-                              >
-                            {:else if flow.avgDistance > 800}
-                              <span
-                                class="px-2 py-0.5 rounded bg-warning/15 text-warning text-[11px] font-mono"
-                                >elevated</span
-                              >
-                            {:else}
-                              <span
-                                class="px-2 py-0.5 rounded bg-success/10 text-success text-[11px] font-mono"
-                                >localish</span
-                              >
-                            {/if}
-                          </td>
-                        </tr>
-                      {/each}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          {/if}
-
-          <!-- Coverage Gaps Slab -->
-          {#if bucketHotspots.some((b) => !b.nodeSeen)}
-            <div class="slab">
-              <div class="slab-header">
-                <div class="flex items-center gap-2">
-                  <AlertCircleIcon class="w-4 h-4 text-destructive" />
-                  <h3>Coverage Gaps (no node bucket seen)</h3>
-                </div>
-              </div>
-              <div class="slab-body--padded">
-                <div class="space-y-2">
-                  {#each bucketHotspots.filter((b) => !b.nodeSeen).slice(0, 6) as b (b.id)}
-                    <div
-                      class="flex items-center justify-between p-2 border border-destructive/20 bg-destructive/5"
-                    >
-                      <div class="flex items-center gap-2">
-                        <span
-                          class="font-mono text-xs px-2 py-0.5 bg-destructive/20 text-destructive rounded"
-                          title={b.id}>{b.label}</span
-                        >
-                        <span class="text-muted-foreground text-xs">{b.count} events</span>
-                      </div>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        class="text-xs"
-                        onclick={() => {
-                          selectedBucket = b.id;
-                        }}
-                      >
-                        Focus
-                      </Button>
-                    </div>
-                  {/each}
-                </div>
-                {#if bucketHotspots.filter((b) => !b.nodeSeen).length > 6}
-                  <p class="text-[11px] text-muted-foreground mt-2">Showing top 6 coverage gaps.</p>
-                {/if}
-              </div>
-            </div>
-          {/if}
-
-          <!-- Recent Routing Events Slab -->
-          {#if recentRoutingEvents.length > 0}
-            <div class="slab col-span-full">
-              <div class="slab-header">
-                <div class="flex items-center gap-2">
-                  <ActivityIcon class="w-4 h-4 text-info" />
-                  <h3>Recent Routing Decisions</h3>
-                </div>
-              </div>
-              <div class="slab-body--flush">
-                <div class="overflow-x-auto">
-                  <table class="w-full text-sm">
-                    <thead>
-                      <tr class="border-b border-border bg-muted/30">
-                        <th class="text-left py-2 px-4 text-muted-foreground font-medium">Time</th>
-                        <th class="text-left py-2 px-4 text-muted-foreground font-medium">Stream</th
-                        >
-                        <th class="text-left py-2 px-4 text-muted-foreground font-medium"
-                          >Client Bucket</th
-                        >
-                        <th class="text-left py-2 px-4 text-muted-foreground font-medium"
-                          >Node Bucket</th
-                        >
-                        <th class="text-left py-2 px-4 text-muted-foreground font-medium"
-                          >Selected Node</th
-                        >
-                        <th class="text-left py-2 px-4 text-muted-foreground font-medium">Route</th>
-                        <th class="text-left py-2 px-4 text-muted-foreground font-medium">Status</th
-                        >
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {#each recentRoutingEvents as evt, i (i)}
-                        {@const displayStreamId = evt.streamId}
-                        {@const isCrossCluster = !!(
-                          evt.remoteClusterId && evt.remoteClusterId !== evt.clusterId
-                        )}
-                        <tr class="border-b border-border/30 hover:bg-muted/15">
-                          <td class="py-2 px-4 text-xs text-muted-foreground"
-                            >{new Date(evt.timestamp).toLocaleTimeString()}</td
-                          >
-                          <td class="py-2 px-4 font-mono text-xs">{displayStreamId}</td>
-                          <td
-                            class="py-2 px-4 text-xs font-mono"
-                            title={evt.clientBucket?.h3Index || ""}
-                          >
-                            {evt.clientBucket?.h3Index
-                              ? resolveBucketLocation(evt.clientBucket.h3Index, bucketCountryMap)
-                              : "—"}
-                          </td>
-                          <td
-                            class="py-2 px-4 text-xs font-mono"
-                            title={evt.nodeBucket?.h3Index || ""}
-                          >
-                            {evt.nodeBucket?.h3Index
-                              ? resolveBucketLocation(evt.nodeBucket.h3Index, bucketCountryMap)
-                              : "—"}
-                          </td>
-                          <td class="py-2 px-4 font-mono text-xs">{evt.selectedNode}</td>
-                          <td class="py-2 px-4">
-                            {#if isCrossCluster}
-                              <span
-                                class="px-2 py-0.5 rounded text-[10px] font-mono bg-amber-500/20 text-amber-400"
-                                title="Routed via {evt.remoteClusterId}"
-                              >
-                                cross-cluster
-                              </span>
-                            {:else}
-                              <span class="text-xs text-muted-foreground">local</span>
-                            {/if}
-                          </td>
-                          <td class="py-2 px-4">
+                  <!-- Connection Quality by Distance -->
+                  {#if connectionQualityByDistance.hasData}
+                    {@const quality = connectionQualityByDistance}
+                    <div class="pt-3 border-t border-border/30">
+                      <p class="text-xs text-muted-foreground uppercase tracking-wide mb-3">
+                        Quality by Distance
+                      </p>
+                      <div class="space-y-2">
+                        <div class="flex justify-between items-center text-sm">
+                          <span class="text-muted-foreground">&lt;500km</span>
+                          <div class="flex items-center gap-2">
+                            <div class="w-20 bg-muted rounded-full h-1.5">
+                              <div
+                                class="h-1.5 rounded-full {quality.short >= 80
+                                  ? 'bg-success'
+                                  : quality.short >= 60
+                                    ? 'bg-warning'
+                                    : 'bg-destructive'}"
+                                style="width: {quality.short}%"
+                              ></div>
+                            </div>
                             <span
-                              class="px-2 py-0.5 rounded text-xs font-mono {evt.status ===
-                                'success' || evt.status === 'SUCCESS'
-                                ? 'bg-success/20 text-success'
-                                : 'bg-destructive/20 text-destructive'}"
+                              class="text-xs font-mono w-10 text-right {quality.short >= 80
+                                ? 'text-success'
+                                : quality.short >= 60
+                                  ? 'text-warning'
+                                  : 'text-destructive'}">{quality.short}%</span
                             >
-                              {evt.status}
-                            </span>
-                          </td>
-                        </tr>
-                      {/each}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          {/if}
-
-          <!-- Popular Nodes Slab -->
-          {#if mostPopularNodes.length > 0}
-            <div class="slab">
-              <div class="slab-header">
-                <div class="flex items-center gap-2">
-                  <ServerIcon class="w-4 h-4 text-info" />
-                  <h3>Popular Routing Targets</h3>
-                </div>
-              </div>
-              <div class="slab-body--padded">
-                <div class="space-y-2">
-                  {#each mostPopularNodes.slice(0, 6) as node, i (`${node.nodeName}:${i}`)}
-                    <div
-                      class="flex justify-between items-center p-2 rounded border border-border/30 bg-muted/20"
-                    >
-                      <span class="font-mono text-sm">{node.nodeName}</span>
-                      <span class="font-semibold text-primary">{node.connectionCount}</span>
+                          </div>
+                        </div>
+                        <div class="flex justify-between items-center text-sm">
+                          <span class="text-muted-foreground">500-2000km</span>
+                          <div class="flex items-center gap-2">
+                            <div class="w-20 bg-muted rounded-full h-1.5">
+                              <div
+                                class="h-1.5 rounded-full {quality.medium >= 80
+                                  ? 'bg-success'
+                                  : quality.medium >= 60
+                                    ? 'bg-warning'
+                                    : 'bg-destructive'}"
+                                style="width: {quality.medium}%"
+                              ></div>
+                            </div>
+                            <span
+                              class="text-xs font-mono w-10 text-right {quality.medium >= 80
+                                ? 'text-success'
+                                : quality.medium >= 60
+                                  ? 'text-warning'
+                                  : 'text-destructive'}">{quality.medium}%</span
+                            >
+                          </div>
+                        </div>
+                        <div class="flex justify-between items-center text-sm">
+                          <span class="text-muted-foreground">&gt;2000km</span>
+                          <div class="flex items-center gap-2">
+                            <div class="w-20 bg-muted rounded-full h-1.5">
+                              <div
+                                class="h-1.5 rounded-full {quality.long >= 80
+                                  ? 'bg-success'
+                                  : quality.long >= 60
+                                    ? 'bg-warning'
+                                    : 'bg-destructive'}"
+                                style="width: {quality.long}%"
+                              ></div>
+                            </div>
+                            <span
+                              class="text-xs font-mono w-10 text-right {quality.long >= 80
+                                ? 'text-success'
+                                : quality.long >= 60
+                                  ? 'text-warning'
+                                  : 'text-destructive'}">{quality.long}%</span
+                            >
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                  {/each}
+                  {/if}
                 </div>
               </div>
-              <div class="slab-actions">
-                <Button href={resolve("/infrastructure")} variant="ghost" class="gap-2">
-                  <ServerIcon class="w-4 h-4" />
-                  View Infrastructure
-                </Button>
-              </div>
-            </div>
-          {/if}
+            {/if}
 
-          <!-- Viewer Connection Events Slab -->
-          {#if viewerEvents.length > 0}
-            <div class="slab col-span-full">
-              <div class="slab-header">
-                <div class="flex items-center justify-between w-full">
-                  <h3>Viewer Connection Events</h3>
-                  <span class="text-xs text-muted-foreground">
-                    Showing {viewerEvents.length} of {totalEventsCount} events
-                  </span>
+            <!-- Bucket Hotspots Slab -->
+            {#if bucketHotspots.length > 0}
+              <div class="slab">
+                <div class="slab-header">
+                  <div class="flex items-center gap-2">
+                    <MapPinIcon class="w-4 h-4 text-primary" />
+                    <h3>Top Buckets (Clients)</h3>
+                  </div>
+                </div>
+                <div class="slab-body--padded">
+                  <div class="space-y-2">
+                    {#each bucketHotspots.slice(0, 8) as b (b.id)}
+                      <div
+                        class="flex items-center justify-between p-2 border border-border/30 bg-muted/10"
+                      >
+                        <div class="flex items-center gap-2">
+                          <span
+                            class="font-mono text-xs px-2 py-0.5 bg-primary/10 text-primary rounded"
+                            title={b.id}>{b.label}</span
+                          >
+                          <span class="text-muted-foreground text-xs">{b.pct}%</span>
+                        </div>
+                        <div class="flex items-center gap-3 text-xs">
+                          <span class="font-semibold text-foreground">{b.count} events</span>
+                          <span
+                            class={b.successRate >= 80
+                              ? "text-success"
+                              : b.successRate >= 60
+                                ? "text-warning"
+                                : "text-destructive"}
+                          >
+                            {b.successRate}% success
+                          </span>
+                          <span class="text-muted-foreground">· {Math.round(b.avgDistance)} km</span
+                          >
+                        </div>
+                      </div>
+                    {/each}
+                  </div>
                 </div>
               </div>
-              <div class="slab-body--flush">
-                <div class="overflow-x-auto">
-                  <table class="w-full text-sm">
-                    <thead>
-                      <tr class="border-b border-border bg-muted/30">
-                        <th class="text-left py-2 px-4 text-muted-foreground font-medium">Time</th>
-                        <th class="text-left py-2 px-4 text-muted-foreground font-medium">Event</th>
-                        <th class="text-left py-2 px-4 text-muted-foreground font-medium">Stream</th
-                        >
-                        <th class="text-left py-2 px-4 text-muted-foreground font-medium"
-                          >Location (centroid)</th
-                        >
-                        <th class="text-left py-2 px-4 text-muted-foreground font-medium">Node</th>
-                        <th class="text-left py-2 px-4 text-muted-foreground font-medium"
-                          >Details</th
-                        >
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {#each viewerEvents as event, i (`${event.eventId ?? "event"}:${i}`)}
-                        {@const displayStreamId = event.stream?.streamId ?? event.streamId}
-                        <tr class="border-b border-border/30 hover:bg-muted/20">
-                          <td class="py-2 px-4 text-xs text-muted-foreground"
-                            >{new Date(event.timestamp).toLocaleTimeString()}</td
+            {/if}
+
+            <!-- Distance Hotspots Slab -->
+            {#if bucketHotspots.length > 0}
+              <div class="slab">
+                <div class="slab-header">
+                  <div class="flex items-center gap-2">
+                    <ActivityIcon class="w-4 h-4 text-warning" />
+                    <h3>Distance Hotspots</h3>
+                  </div>
+                </div>
+                <div class="slab-body--padded">
+                  <div class="space-y-2">
+                    {#each bucketHotspots
+                      .filter((b) => b.avgDistance > 0)
+                      .sort((a, b) => b.avgDistance - a.avgDistance)
+                      .slice(0, 6) as b (b.id)}
+                      <div
+                        class="flex items-center justify-between p-2 border border-border/30 bg-muted/10"
+                      >
+                        <div class="flex items-center gap-2">
+                          <span
+                            class="font-mono text-xs px-2 py-0.5 bg-warning/10 text-warning rounded"
+                            title={b.id}>{b.label}</span
                           >
-                          <td class="py-2 px-4">
-                            {#if event.eventType}
-                              <span
-                                class="px-2 py-0.5 rounded text-xs font-mono {event.eventType ===
-                                'connect'
-                                  ? 'bg-success/20 text-success'
-                                  : event.eventType === 'disconnect'
-                                    ? 'bg-destructive/20 text-destructive'
-                                    : 'bg-primary/20 text-primary'}"
-                              >
-                                {event.eventType}
-                              </span>
-                            {:else}
-                              <span class="text-muted-foreground text-xs">-</span>
-                            {/if}
-                          </td>
-                          <td class="py-2 px-4 font-mono text-xs">{displayStreamId || "-"}</td>
-                          <td class="py-2 px-4">
-                            {#if event.city || event.countryCode}
-                              <span class="text-foreground text-xs">{event.city || ""}</span>
-                              {#if event.countryCode}
-                                <span class="text-[10px] text-muted-foreground ml-1"
-                                  >({getCountryName(event.countryCode)})</span
+                          <span class="text-muted-foreground text-xs"
+                            >{Math.round(b.avgDistance)} km avg</span
+                          >
+                        </div>
+                        <div class="text-xs text-muted-foreground flex items-center gap-2">
+                          <span>{b.count} events</span>
+                          {#if b.avgDistance > 1500}
+                            <span
+                              class="px-2 py-0.5 rounded bg-destructive/10 text-destructive font-mono"
+                              >long-haul</span
+                            >
+                          {:else if b.avgDistance > 800}
+                            <span class="px-2 py-0.5 rounded bg-warning/10 text-warning font-mono"
+                              >elevated</span
+                            >
+                          {/if}
+                        </div>
+                      </div>
+                    {/each}
+                  </div>
+                </div>
+              </div>
+            {/if}
+
+            <!-- Top Bucket Flows -->
+            {#if bucketFlows.length > 0}
+              <div class="slab col-span-full">
+                <div class="slab-header">
+                  <div class="flex items-center gap-2">
+                    <ActivityIcon class="w-4 h-4 text-accent-purple" />
+                    <h3>Top Bucket Flows</h3>
+                  </div>
+                </div>
+                <div class="slab-body--flush">
+                  <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                      <thead>
+                        <tr class="border-b border-border bg-muted/30">
+                          <th class="text-left py-2 px-4 text-muted-foreground font-medium">From</th
+                          >
+                          <th class="text-left py-2 px-4 text-muted-foreground font-medium">To</th>
+                          <th class="text-left py-2 px-4 text-muted-foreground font-medium"
+                            >Events</th
+                          >
+                          <th class="text-left py-2 px-4 text-muted-foreground font-medium"
+                            >Avg Distance</th
+                          >
+                          <th class="text-left py-2 px-4 text-muted-foreground font-medium"
+                            >Badge</th
+                          >
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {#each bucketFlows.slice(0, 10) as flow, i (`${flow.from}:${flow.to}:${flow.crossCluster}:${i}`)}
+                          <tr class="border-b border-border/30 hover:bg-muted/15">
+                            <td class="py-2 px-4 text-xs font-mono" title={flow.from}>
+                              {resolveBucketLocation(flow.from, bucketCountryMap)}
+                            </td>
+                            <td class="py-2 px-4 text-xs font-mono" title={flow.to}>
+                              {resolveBucketLocation(flow.to, bucketCountryMap)}
+                            </td>
+                            <td class="py-2 px-4 font-semibold text-foreground">{flow.count}</td>
+                            <td class="py-2 px-4 text-xs text-muted-foreground"
+                              >{Math.round(flow.avgDistance)} km</td
+                            >
+                            <td class="py-2 px-4">
+                              {#if flow.avgDistance > 1500}
+                                <span
+                                  class="px-2 py-0.5 rounded bg-destructive/15 text-destructive text-[11px] font-mono"
+                                  >long-haul</span
+                                >
+                              {:else if flow.avgDistance > 800}
+                                <span
+                                  class="px-2 py-0.5 rounded bg-warning/15 text-warning text-[11px] font-mono"
+                                  >elevated</span
+                                >
+                              {:else}
+                                <span
+                                  class="px-2 py-0.5 rounded bg-success/10 text-success text-[11px] font-mono"
+                                  >localish</span
                                 >
                               {/if}
-                            {:else}
-                              <span class="text-muted-foreground text-xs">Unknown</span>
-                            {/if}
-                          </td>
-                          <td class="py-2 px-4 font-mono text-xs">{event.nodeId || "-"}</td>
-                          <td class="py-2 px-4">
-                            {#if event.eventType === "disconnect" && event.sessionDurationSeconds}
-                              <span class="text-xs text-foreground">
-                                {formatDuration(event.sessionDurationSeconds)}
-                              </span>
-                              {#if event.bytesTransferred}
-                                <span class="text-[10px] text-muted-foreground ml-1">
-                                  ({formatBytes(event.bytesTransferred)})
-                                </span>
-                              {/if}
-                            {:else if event.eventType === "connect" && event.connector}
-                              <span
-                                class="px-1.5 py-0.5 rounded text-[10px] bg-primary/10 text-primary font-mono"
-                              >
-                                {event.connector}
-                              </span>
-                            {:else}
-                              <span class="text-muted-foreground text-xs">—</span>
-                            {/if}
-                          </td>
-                        </tr>
-                      {/each}
-                    </tbody>
-                  </table>
-                </div>
-                {#if hasMoreEvents}
-                  <div class="flex justify-center py-3 border-t border-border/30">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onclick={loadMoreEvents}
-                      disabled={loadingMoreEvents}
-                    >
-                      {#if loadingMoreEvents}
-                        Loading...
-                      {:else}
-                        Load More Events
-                      {/if}
-                    </Button>
+                            </td>
+                          </tr>
+                        {/each}
+                      </tbody>
+                    </table>
                   </div>
-                {:else if viewerEvents.length > 0}
-                  <p
-                    class="text-xs text-muted-foreground text-center py-3 border-t border-border/30"
-                  >
-                    All {totalEventsCount} events loaded
-                  </p>
-                {/if}
+                </div>
               </div>
-            </div>
+            {/if}
+
+            <!-- Coverage Gaps Slab -->
+            {#if bucketHotspots.some((b) => !b.nodeSeen)}
+              <div class="slab">
+                <div class="slab-header">
+                  <div class="flex items-center gap-2">
+                    <AlertCircleIcon class="w-4 h-4 text-destructive" />
+                    <h3>Coverage Gaps (no node bucket seen)</h3>
+                  </div>
+                </div>
+                <div class="slab-body--padded">
+                  <div class="space-y-2">
+                    {#each bucketHotspots.filter((b) => !b.nodeSeen).slice(0, 6) as b (b.id)}
+                      <div
+                        class="flex items-center justify-between p-2 border border-destructive/20 bg-destructive/5"
+                      >
+                        <div class="flex items-center gap-2">
+                          <span
+                            class="font-mono text-xs px-2 py-0.5 bg-destructive/20 text-destructive rounded"
+                            title={b.id}>{b.label}</span
+                          >
+                          <span class="text-muted-foreground text-xs">{b.count} events</span>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          class="text-xs"
+                          onclick={() => {
+                            selectedBucket = b.id;
+                          }}
+                        >
+                          Focus
+                        </Button>
+                      </div>
+                    {/each}
+                  </div>
+                  {#if bucketHotspots.filter((b) => !b.nodeSeen).length > 6}
+                    <p class="text-[11px] text-muted-foreground mt-2">
+                      Showing top 6 coverage gaps.
+                    </p>
+                  {/if}
+                </div>
+              </div>
+            {/if}
+
+            <!-- Recent Routing Events Slab -->
+            {#if recentRoutingEvents.length > 0}
+              <div class="slab col-span-full">
+                <div class="slab-header">
+                  <div class="flex items-center gap-2">
+                    <ActivityIcon class="w-4 h-4 text-info" />
+                    <h3>Recent Routing Decisions</h3>
+                  </div>
+                </div>
+                <div class="slab-body--flush">
+                  <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                      <thead>
+                        <tr class="border-b border-border bg-muted/30">
+                          <th class="text-left py-2 px-4 text-muted-foreground font-medium">Time</th
+                          >
+                          <th class="text-left py-2 px-4 text-muted-foreground font-medium"
+                            >Stream</th
+                          >
+                          <th class="text-left py-2 px-4 text-muted-foreground font-medium"
+                            >Client Bucket</th
+                          >
+                          <th class="text-left py-2 px-4 text-muted-foreground font-medium"
+                            >Node Bucket</th
+                          >
+                          <th class="text-left py-2 px-4 text-muted-foreground font-medium"
+                            >Selected Node</th
+                          >
+                          <th class="text-left py-2 px-4 text-muted-foreground font-medium"
+                            >Route</th
+                          >
+                          <th class="text-left py-2 px-4 text-muted-foreground font-medium"
+                            >Status</th
+                          >
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {#each recentRoutingEvents as evt, i (i)}
+                          {@const displayStreamId = evt.streamId}
+                          {@const isCrossCluster = !!(
+                            evt.remoteClusterId && evt.remoteClusterId !== evt.clusterId
+                          )}
+                          <tr class="border-b border-border/30 hover:bg-muted/15">
+                            <td class="py-2 px-4 text-xs text-muted-foreground"
+                              >{new Date(evt.timestamp).toLocaleTimeString()}</td
+                            >
+                            <td class="py-2 px-4 font-mono text-xs">{displayStreamId}</td>
+                            <td
+                              class="py-2 px-4 text-xs font-mono"
+                              title={evt.clientBucket?.h3Index || ""}
+                            >
+                              {evt.clientBucket?.h3Index
+                                ? resolveBucketLocation(evt.clientBucket.h3Index, bucketCountryMap)
+                                : "—"}
+                            </td>
+                            <td
+                              class="py-2 px-4 text-xs font-mono"
+                              title={evt.nodeBucket?.h3Index || ""}
+                            >
+                              {evt.nodeBucket?.h3Index
+                                ? resolveBucketLocation(evt.nodeBucket.h3Index, bucketCountryMap)
+                                : "—"}
+                            </td>
+                            <td class="py-2 px-4 font-mono text-xs">{evt.selectedNode}</td>
+                            <td class="py-2 px-4">
+                              {#if isCrossCluster}
+                                <span
+                                  class="px-2 py-0.5 rounded text-[10px] font-mono bg-amber-500/20 text-amber-400"
+                                  title="Routed via {evt.remoteClusterId}"
+                                >
+                                  cross-cluster
+                                </span>
+                              {:else}
+                                <span class="text-xs text-muted-foreground">local</span>
+                              {/if}
+                            </td>
+                            <td class="py-2 px-4">
+                              <span
+                                class="px-2 py-0.5 rounded text-xs font-mono {evt.status ===
+                                  'success' || evt.status === 'SUCCESS'
+                                  ? 'bg-success/20 text-success'
+                                  : 'bg-destructive/20 text-destructive'}"
+                              >
+                                {evt.status}
+                              </span>
+                            </td>
+                          </tr>
+                        {/each}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            {/if}
+
+            <!-- Popular Nodes Slab -->
+            {#if mostPopularNodes.length > 0}
+              <div class="slab">
+                <div class="slab-header">
+                  <div class="flex items-center gap-2">
+                    <ServerIcon class="w-4 h-4 text-info" />
+                    <h3>Popular Routing Targets</h3>
+                  </div>
+                </div>
+                <div class="slab-body--padded">
+                  <div class="space-y-2">
+                    {#each mostPopularNodes.slice(0, 6) as node, i (`${node.nodeName}:${i}`)}
+                      <div
+                        class="flex justify-between items-center p-2 rounded border border-border/30 bg-muted/20"
+                      >
+                        <span class="font-mono text-sm">{node.nodeName}</span>
+                        <span class="font-semibold text-primary">{node.connectionCount}</span>
+                      </div>
+                    {/each}
+                  </div>
+                </div>
+                <div class="slab-actions">
+                  <Button href={resolve("/infrastructure")} variant="ghost" class="gap-2">
+                    <ServerIcon class="w-4 h-4" />
+                    View Infrastructure
+                  </Button>
+                </div>
+              </div>
+            {/if}
+
+            <!-- Viewer Connection Events Slab -->
+            {#if viewerEvents.length > 0}
+              <div class="slab col-span-full">
+                <div class="slab-header">
+                  <div class="flex items-center justify-between w-full">
+                    <h3>Viewer Connection Events</h3>
+                    <span class="text-xs text-muted-foreground">
+                      Showing {viewerEvents.length} of {totalEventsCount} events
+                    </span>
+                  </div>
+                </div>
+                <div class="slab-body--flush">
+                  <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                      <thead>
+                        <tr class="border-b border-border bg-muted/30">
+                          <th class="text-left py-2 px-4 text-muted-foreground font-medium">Time</th
+                          >
+                          <th class="text-left py-2 px-4 text-muted-foreground font-medium"
+                            >Event</th
+                          >
+                          <th class="text-left py-2 px-4 text-muted-foreground font-medium"
+                            >Stream</th
+                          >
+                          <th class="text-left py-2 px-4 text-muted-foreground font-medium"
+                            >Location (centroid)</th
+                          >
+                          <th class="text-left py-2 px-4 text-muted-foreground font-medium">Node</th
+                          >
+                          <th class="text-left py-2 px-4 text-muted-foreground font-medium"
+                            >Details</th
+                          >
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {#each viewerEvents as event, i (`${event.eventId ?? "event"}:${i}`)}
+                          {@const displayStreamId = event.stream?.streamId ?? event.streamId}
+                          <tr class="border-b border-border/30 hover:bg-muted/20">
+                            <td class="py-2 px-4 text-xs text-muted-foreground"
+                              >{new Date(event.timestamp).toLocaleTimeString()}</td
+                            >
+                            <td class="py-2 px-4">
+                              {#if event.eventType}
+                                <span
+                                  class="px-2 py-0.5 rounded text-xs font-mono {event.eventType ===
+                                  'connect'
+                                    ? 'bg-success/20 text-success'
+                                    : event.eventType === 'disconnect'
+                                      ? 'bg-destructive/20 text-destructive'
+                                      : 'bg-primary/20 text-primary'}"
+                                >
+                                  {event.eventType}
+                                </span>
+                              {:else}
+                                <span class="text-muted-foreground text-xs">-</span>
+                              {/if}
+                            </td>
+                            <td class="py-2 px-4 font-mono text-xs">{displayStreamId || "-"}</td>
+                            <td class="py-2 px-4">
+                              {#if event.city || event.countryCode}
+                                <span class="text-foreground text-xs">{event.city || ""}</span>
+                                {#if event.countryCode}
+                                  <span class="text-[10px] text-muted-foreground ml-1"
+                                    >({getCountryName(event.countryCode)})</span
+                                  >
+                                {/if}
+                              {:else}
+                                <span class="text-muted-foreground text-xs">Unknown</span>
+                              {/if}
+                            </td>
+                            <td class="py-2 px-4 font-mono text-xs">{event.nodeId || "-"}</td>
+                            <td class="py-2 px-4">
+                              {#if event.eventType === "disconnect" && event.sessionDurationSeconds}
+                                <span class="text-xs text-foreground">
+                                  {formatDuration(event.sessionDurationSeconds)}
+                                </span>
+                                {#if event.bytesTransferred}
+                                  <span class="text-[10px] text-muted-foreground ml-1">
+                                    ({formatBytes(event.bytesTransferred)})
+                                  </span>
+                                {/if}
+                              {:else if event.eventType === "connect" && event.connector}
+                                <span
+                                  class="px-1.5 py-0.5 rounded text-[10px] bg-primary/10 text-primary font-mono"
+                                >
+                                  {event.connector}
+                                </span>
+                              {:else}
+                                <span class="text-muted-foreground text-xs">—</span>
+                              {/if}
+                            </td>
+                          </tr>
+                        {/each}
+                      </tbody>
+                    </table>
+                  </div>
+                  {#if hasMoreEvents}
+                    <div class="flex justify-center py-3 border-t border-border/30">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onclick={loadMoreEvents}
+                        disabled={loadingMoreEvents}
+                      >
+                        {#if loadingMoreEvents}
+                          Loading...
+                        {:else}
+                          Load More Events
+                        {/if}
+                      </Button>
+                    </div>
+                  {:else if viewerEvents.length > 0}
+                    <p
+                      class="text-xs text-muted-foreground text-center py-3 border-t border-border/30"
+                    >
+                      All {totalEventsCount} events loaded
+                    </p>
+                  {/if}
+                </div>
+              </div>
+            {/if}
           {/if}
 
           {#if !hasAnyData}

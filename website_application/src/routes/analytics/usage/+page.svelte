@@ -1647,7 +1647,7 @@
               (storageSource?.clipsCreated ?? 0) > 0 ||
               (storageSource?.dvrCreated ?? 0) > 0 ||
               (storageSource?.vodCreated ?? 0) > 0 ||
-              (storageSource?.freezeCount ?? 0) > 0}
+              (storageSource?.syncedArtifactCount ?? 0) > 0}
             {#if hasStorageActivity}
               <div class="slab">
                 <div class="slab-header">
@@ -1738,15 +1738,15 @@
                     </div>
                   </div>
 
-                  <!-- Freeze (S3 upload) Operations -->
-                  {#if (storageSource?.freezeCount ?? 0) > 0}
+                  <!-- Point-in-time artifacts currently synced to S3 -->
+                  {#if (storageSource?.syncedArtifactCount ?? 0) > 0}
                     <div class="border-t border-border/30 pt-4">
-                      <div class="text-xs text-muted-foreground mb-2">Tier Operations</div>
+                      <div class="text-xs text-muted-foreground mb-2">Synced to S3</div>
                       <div class="flex justify-between text-sm">
-                        <span class="text-info">Frozen</span>
+                        <span class="text-info">Synced artifacts</span>
                         <span class="font-mono">
-                          {storageSource?.freezeCount ?? 0} ({formatBytes(
-                            storageSource?.freezeBytes ?? 0
+                          {storageSource?.syncedArtifactCount ?? 0} ({formatBytes(
+                            storageSource?.syncedArtifactBytes ?? 0
                           )})
                         </span>
                       </div>

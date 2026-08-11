@@ -9,6 +9,7 @@
     GetStreamsConnectionStore,
     GetPlatformOverviewStore,
     GetStreamAnalyticsSummariesConnectionStore,
+    GetTopAssetsStore,
     StreamStatus,
     StreamCoreFieldsStore,
     StreamMetricsListFieldsStore,
@@ -27,6 +28,7 @@
   const streamsStore = new GetStreamsConnectionStore();
   const platformOverviewStore = new GetPlatformOverviewStore();
   const summariesStore = new GetStreamAnalyticsSummariesConnectionStore();
+  const assetsStore = new GetTopAssetsStore();
 
   // Fragment stores for unmasking nested data
   const streamCoreStore = new StreamCoreFieldsStore();
@@ -85,6 +87,29 @@
     });
   });
 
+  let assetsError = $state(false);
+
+  // Top assets by audience — server-ranked across every kind (VOD/clip/DVR/chapter).
+  let topAssets = $derived(
+    ($assetsStore.data?.analytics?.health?.topAssets ?? []).map((a) => ({
+      hash: a.artifactHash,
+      kind: a.kind,
+      title: a.title || `${a.artifactHash.slice(0, 12)}…`,
+      sessions: a.totalSessions,
+      watchHours: a.watchHours,
+      durationS: a.durationS,
+    }))
+  );
+
+  function fmtDuration(seconds: number): string {
+    if (!seconds || seconds <= 0) return "—";
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    const pad = (n: number) => n.toString().padStart(2, "0");
+    return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+  }
+
   // Subscribe to auth store
   const unsubscribeAuth = auth.subscribe((authState) => {
     isAuthenticated = authState.isAuthenticated;
@@ -102,6 +127,7 @@
   });
 
   async function loadData() {
+    assetsError = false;
     try {
       const range = resolveTimeRange(timeRange);
 
@@ -123,6 +149,26 @@
             },
           })
           .catch(() => null),
+        assetsStore
+          .fetch({
+            variables: {
+              timeRange: { start: range.start, end: range.end },
+              limit: 10,
+            },
+          })
+          .then((r) => {
+            // Houdini may resolve with an in-band errors array instead of rejecting;
+            // treat that as a failed load, not a silently empty table.
+            const errs = (r as { errors?: unknown[] })?.errors;
+            if (Array.isArray(errs) && errs.length > 0) {
+              assetsError = true;
+            }
+            return r;
+          })
+          .catch(() => {
+            assetsError = true;
+            return null;
+          }),
       ]);
     } catch (error) {
       console.error("Failed to load data:", error);
@@ -148,6 +194,7 @@
   const ClockIcon = getIconComponent("Clock");
   const CalendarIcon = getIconComponent("Calendar");
   const BarChart2Icon = getIconComponent("BarChart2");
+  const FilmIcon = getIconComponent("Film");
 </script>
 
 <svelte:head>
@@ -434,6 +481,95 @@
                   actionText="Go to Streams"
                   onAction={() => goto(resolve("/streams"))}
                 />
+              </div>
+            </div>
+          {/if}
+
+          <!-- Top assets by audience, server-ranked across all kinds. Error wins over
+               any retained (now-stale) rows so a failed range refresh isn't shown as
+               current data. -->
+          {#if assetsError}
+            <div class="slab">
+              <div class="slab-header flex items-center gap-2">
+                <FilmIcon class="w-4 h-4 text-primary" />
+                <h3>Top Assets</h3>
+              </div>
+              <div class="slab-body--padded flex items-center gap-3">
+                <p class="text-sm text-destructive">Couldn't load top assets.</p>
+                <Button variant="outline" size="sm" onclick={() => loadData()}>Retry</Button>
+              </div>
+            </div>
+          {:else if topAssets.length > 0}
+            <div class="slab">
+              <div class="slab-header flex justify-between items-center">
+                <div class="flex items-center gap-2">
+                  <FilmIcon class="w-4 h-4 text-primary" />
+                  <h3>Top Assets</h3>
+                </div>
+                <span class="text-xs text-muted-foreground">
+                  {topAssets.length} assets by audience
+                </span>
+              </div>
+              <div class="slab-body--flush overflow-x-auto">
+                <table class="w-full text-sm">
+                  <thead>
+                    <tr
+                      class="border-b border-border/50 text-muted-foreground text-xs uppercase tracking-wide"
+                    >
+                      <th class="text-left py-3 px-4">Asset</th>
+                      <th class="text-right py-3 px-4">Sessions</th>
+                      <th class="text-right py-3 px-4">Watch hrs</th>
+                      <th class="text-right py-3 px-4">Duration</th>
+                      <th class="text-right py-3 px-4"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {#each topAssets as asset (asset.hash)}
+                      <tr
+                        class="border-b border-border/30 hover:bg-muted/10 cursor-pointer"
+                        onclick={() => goto(resolve(`/library/${asset.hash}/analytics`))}
+                      >
+                        <td class="py-3 px-4">
+                          <span class="inline-flex items-center gap-2">
+                            <Badge variant="outline" class="text-[10px] shrink-0"
+                              >{asset.kind}</Badge
+                            >
+                            <span class="font-medium text-foreground">{asset.title}</span>
+                          </span>
+                        </td>
+                        <td class="py-3 px-4 text-right font-mono text-info">
+                          {asset.sessions.toLocaleString()}
+                        </td>
+                        <td class="py-3 px-4 text-right font-mono text-muted-foreground">
+                          {asset.watchHours.toFixed(1)}
+                        </td>
+                        <td class="py-3 px-4 text-right font-mono text-muted-foreground">
+                          {fmtDuration(asset.durationS)}
+                        </td>
+                        <td class="py-3 px-4 text-right">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            class="gap-1 text-muted-foreground hover:text-foreground"
+                            onclick={(e) => {
+                              e.stopPropagation();
+                              goto(resolve(`/library/${asset.hash}/analytics`));
+                            }}
+                          >
+                            <BarChart2Icon class="w-3 h-3" />
+                            Analytics
+                          </Button>
+                        </td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+              <div class="slab-actions">
+                <Button href={resolve("/library")} variant="ghost" class="gap-2">
+                  <FilmIcon class="w-4 h-4" />
+                  Browse Library
+                </Button>
               </div>
             </div>
           {/if}
