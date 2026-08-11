@@ -2,9 +2,9 @@
 #
 # One-time thumbnail-ownership cutover: enumerate the OWNER-LESS legacy live streams and wipe ONLY their
 # live-thumbnail prefixes, fail-closed, then verify every enumerated prefix is gone in BOTH cells before any
-# service or traffic starts. This is the destructive core of the cutover in PLAN_MEDIA_AUTHORITY_FOUNDATION.md;
-# the operator runs it AFTER stopping old minters and provisioning infrastructure (so the v0.2.97 EXPAND migrations
-# have created thumbnail_serving_cluster_ids), and provisions applications AFTER it.
+# service or traffic starts. This is the destructive core of the legacy ownership cutover documented in
+# docs/architecture/thumbnails.md; the operator runs it AFTER stopping old minters and provisioning infrastructure
+# (so the v0.2.97 EXPAND migrations have created thumbnail_serving_cluster_ids), and provisions applications AFTER it.
 #
 # It NEVER touches the whole thumbnails/ namespace: artifact thumbnails (thumbnails/{artifact_hash}/) route via
 # origin_cluster_id and are preserved. It only removes thumbnails/{stream_id}/ for streams whose serving-cell set is
