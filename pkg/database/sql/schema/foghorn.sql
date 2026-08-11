@@ -43,6 +43,12 @@ CREATE TABLE IF NOT EXISTS foghorn.artifacts (
     -- when a local mint is claimed/completed or a VOD is uploaded to local S3; left FALSE for playback-federation
     -- adopted-remote rows (bytes on another provider's backend). Cross-provider settlement is the RFC's scope.
     durable_backend_local BOOLEAN NOT NULL DEFAULT false,
+    -- Deterministic fingerprint (BackendFingerprint over kind/bucket/endpoint/region/prefix) of the immutable local
+    -- store these bytes were written to, recorded when storage is ASSIGNED (upload/artifact creation; freeze at claim).
+    -- Cleanup deletes locally ONLY on an EXACT match against the cell's current store and fails closed otherwise
+    -- (empty/legacy or a mismatch after a forbidden repoint → retained, never a guessed-store delete). Legacy NULL rows
+    -- are adopted once at boot; a remote-owned row routes via the federation delegate, never this column.
+    backend_id TEXT,
 
     -- ===== LIFECYCLE STATE =====
     status VARCHAR(50) DEFAULT 'requested',
@@ -144,6 +150,11 @@ CREATE TABLE IF NOT EXISTS foghorn.artifacts (
 
     -- ===== THUMBNAIL STATE =====
     has_thumbnails BOOLEAN DEFAULT FALSE,   -- True after THUMBNAIL_UPDATED upload completes (DVR sprite sheets)
+    -- The cluster whose Chandler serves the thumbnail — the tenant's OFFICIAL durable cluster the winning assignment
+    -- projected to, NOT necessarily storage_cluster_id (bytes) or origin_cluster_id (provenance). Recorded at projection
+    -- settlement alongside has_thumbnails (same catalog-revision bump). NULL = legacy/unprojected → readers COALESCE to
+    -- storage/origin. Evidence-based, so a BYOC/cross-cell artifact links the correct Chandler.
+    thumbnail_serving_cluster_id VARCHAR(100),
 
     -- ===== ACCESS TRACKING =====
     access_count INTEGER DEFAULT 0,
@@ -273,6 +284,7 @@ CREATE TRIGGER artifact_catalog_revision_upd
             OR OLD.storage_location IS DISTINCT FROM NEW.storage_location
             OR OLD.storage_cluster_id IS DISTINCT FROM NEW.storage_cluster_id
             OR OLD.has_thumbnails IS DISTINCT FROM NEW.has_thumbnails
+            OR OLD.thumbnail_serving_cluster_id IS DISTINCT FROM NEW.thumbnail_serving_cluster_id
             OR OLD.retention_until IS DISTINCT FROM NEW.retention_until
             OR OLD.error_message IS DISTINCT FROM NEW.error_message
         )
@@ -294,19 +306,22 @@ BEGIN
     -- and promoted to <k>.dtsh.att-<req>), mirroring control.applySyncCompletionFailure's enqueue set:
     -- staging <k>.staging.<req>; .dtsh staging <k>.dtsh.staging.<req>; media candidate <k>.att-<req>;
     -- .dtsh candidate <k>.dtsh.att-<req>.
+    -- backend_id carries the artifact's recorded owner (OLD.backend_id) onto each queued key: these staging objects
+    -- live on the artifact's OWN store, so the strict cleanup worker resolves that recorded backend rather than the
+    -- current store. NULL only for a legacy artifact not yet adopted (the worker then retains the row, never guesses).
     IF OLD.sync_object_key IS NOT NULL AND OLD.sync_object_key <> '' THEN
         IF OLD.sync_request_id IS NOT NULL AND OLD.sync_request_id <> '' THEN
-            INSERT INTO foghorn.staging_cleanup_queue (object_key) VALUES
-                (OLD.sync_object_key || '.staging.' || OLD.sync_request_id),
-                (OLD.sync_object_key || '.dtsh.staging.' || OLD.sync_request_id),
-                (OLD.sync_object_key || '.att-' || OLD.sync_request_id),
-                (OLD.sync_object_key || '.dtsh.att-' || OLD.sync_request_id)
+            INSERT INTO foghorn.staging_cleanup_queue (object_key, backend_id) VALUES
+                (OLD.sync_object_key || '.staging.' || OLD.sync_request_id, OLD.backend_id),
+                (OLD.sync_object_key || '.dtsh.staging.' || OLD.sync_request_id, OLD.backend_id),
+                (OLD.sync_object_key || '.att-' || OLD.sync_request_id, OLD.backend_id),
+                (OLD.sync_object_key || '.dtsh.att-' || OLD.sync_request_id, OLD.backend_id)
             ON CONFLICT (object_key) DO NOTHING;
         END IF;
         IF OLD.dtsh_sync_request_id IS NOT NULL AND OLD.dtsh_sync_request_id <> '' THEN
-            INSERT INTO foghorn.staging_cleanup_queue (object_key) VALUES
-                (OLD.sync_object_key || '.dtsh.staging.' || OLD.dtsh_sync_request_id),
-                (OLD.sync_object_key || '.dtsh.att-' || OLD.dtsh_sync_request_id)
+            INSERT INTO foghorn.staging_cleanup_queue (object_key, backend_id) VALUES
+                (OLD.sync_object_key || '.dtsh.staging.' || OLD.dtsh_sync_request_id, OLD.backend_id),
+                (OLD.sync_object_key || '.dtsh.att-' || OLD.dtsh_sync_request_id, OLD.backend_id)
             ON CONFLICT (object_key) DO NOTHING;
         END IF;
     END IF;
@@ -714,7 +729,8 @@ CREATE TABLE IF NOT EXISTS foghorn.staging_cleanup_queue (
     leased_until     TIMESTAMPTZ,                     -- in-flight lease; a worker claims a row past next_attempt_at and unleased, so HA replicas do not double-process
     lease_token      TEXT,                            -- fences the lease: settlement matches object_key AND this token, so a worker whose lease expired and was re-claimed cannot settle another worker's row
     attempts         INTEGER NOT NULL DEFAULT 0,
-    last_error       TEXT
+    last_error       TEXT,
+    backend_id       TEXT                            -- physical backend the object was written to; the worker deletes ONLY on an exact match to the cell's current store and fails closed otherwise (empty/legacy or repoint → retained, never a guessed-store delete). Fresh enqueues attribute it; legacy rows are adopted once at boot.
 );
 CREATE INDEX IF NOT EXISTS idx_foghorn_staging_cleanup_due ON foghorn.staging_cleanup_queue(next_attempt_at);
 
@@ -752,7 +768,8 @@ CREATE TABLE IF NOT EXISTS foghorn.freeze_publication_ledger (
     tenant_id     TEXT NOT NULL,
     request_id    TEXT NOT NULL,
     guarded       BOOLEAN NOT NULL,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    backend_id    TEXT                                -- physical backend the candidate/staging object was written to; carried onto the staging_cleanup_queue row when the reconciler collects an orphan, so the delete routes to (or fails closed on) the recorded store. NULL = legacy.
 );
 CREATE INDEX IF NOT EXISTS idx_foghorn_freeze_pub_ledger_age ON foghorn.freeze_publication_ledger(created_at);
 
@@ -764,6 +781,32 @@ CREATE TABLE IF NOT EXISTS foghorn.freeze_publication_ledger_cursor (
     last_key TEXT NOT NULL DEFAULT ''
 );
 INSERT INTO foghorn.freeze_publication_ledger_cursor (id) VALUES (true) ON CONFLICT (id) DO NOTHING;
+
+-- The cell's committed local S3 backend descriptor, enforced immutable at startup. Backend
+-- REPOINTING (changing bucket/endpoint/region/prefix) is not supported — historical cleanup routes by
+-- the object's recorded backend and this cell wires only its current store, so a silent repoint would target the wrong
+-- backend. Foghorn records its descriptor here on first boot and refuses to start if it later differs (credentials are
+-- NOT part of the identity, so key rotation is fine). Makes unchanged-S3 a code-enforced invariant. Single row.
+CREATE TABLE IF NOT EXISTS foghorn.cell_storage_identity (
+    id           BOOLEAN PRIMARY KEY DEFAULT true CHECK (id),  -- single-row guard
+    backend_id   TEXT NOT NULL,                                -- BackendFingerprint(kind,bucket,endpoint,region,prefix)
+    bucket       TEXT NOT NULL,
+    endpoint     TEXT NOT NULL,
+    region       TEXT NOT NULL,
+    prefix       TEXT NOT NULL,
+    committed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Single-row durable cutoff for the ONE-TIME attribution of legacy NULL-owner rows across every backend-owned table:
+-- artifacts, thumbnail_task_assignment, stream_cleanup_obligation, staging_cleanup_queue, and freeze_publication_ledger.
+-- A boot that finds no marker claims it and, in the same transaction, stamps the proven cell fingerprint onto those
+-- rows' NULL backend_id; the claim makes it run exactly once, so a NULL backend appearing later is a genuine ownership
+-- regression that cleanup fails closed on rather than re-attributing.
+CREATE TABLE IF NOT EXISTS foghorn.backend_adoption (
+    id         BOOLEAN PRIMARY KEY DEFAULT true,
+    adopted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT backend_adoption_singleton CHECK (id)
+);
 
 -- Crash-safe thumbnail publication. Server-minted, node-bound assignments; per-attempt staging + immutable
 -- versioned objects; an active pointer (keyed by the globally-unique asset_key) switched transactionally. Live
@@ -782,14 +825,61 @@ CREATE TABLE IF NOT EXISTS foghorn.thumbnail_task_assignment (
     destination_cluster TEXT NOT NULL,             -- official-durable destination cluster
     status              TEXT NOT NULL CHECK (status IN ('assigned','uploading','verifying','publishing','published','failed')),
     version             TEXT NOT NULL DEFAULT '',  -- immutable version segment once promoted
+    -- Write-time backend evidence (I2): the strict resolver's StorageMintLocal verdict for this attempt's official
+    -- destination cluster. Cleanup routes local when true — even for a locally-backed official ALIAS whose
+    -- cluster id differs from this cell's — instead of misrouting to (disabled) federation and leaking the bytes.
+    durable_backend_local BOOLEAN NOT NULL DEFAULT false,
     claim_seq           BIGINT NOT NULL DEFAULT nextval('foghorn.thumbnail_attempt_seq'), -- monotonic pointer-CAS rank
     superseded_at       TIMESTAMPTZ,               -- set when a newer version displaces this one; GC horizon anchor
     expiry              TIMESTAMPTZ NOT NULL,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- HA-safe crash-recovery lease + poison backoff for re-driving lost completions (see thumbnail_recovery.go).
+    -- A worker LEASES a batch of due, unleased non-terminal attempts (fencing token) so replicas never double-drive
+    -- the same one, and a not-progressed attempt is BACKED OFF (recovery_next_attempt_at) instead of re-selected at
+    -- the head of every pass — so a poison attempt cannot starve other lost completions.
+    recovery_leased_until    TIMESTAMPTZ,          -- in-flight recovery lease; a worker skips a leased row until it expires
+    recovery_lease_token     TEXT,                 -- fences settlement against a stolen/expired lease
+    recovery_attempts        INTEGER NOT NULL DEFAULT 0,
+    recovery_next_attempt_at TIMESTAMPTZ,          -- due time; a backed-off attempt is not re-selected until this passes
+    recovery_last_error      TEXT,
+    -- Publication lease: a completion acquires this BEFORE it HEAD-verifies + promotes the staging objects. It is
+    -- fenced by publish_lease_token: AcquireThumbnailPublishLease mints a token, and every settlement CASes it, so a
+    -- STALE holder (lease expired, peer re-acquired) matches zero rows and cannot publish. The recovery fail-sweep
+    -- HONORS the live lease (publish_leased_until). The promoted object is a per-token candidate (v/{token}/…), so a
+    -- stale holder can only overwrite its OWN candidate, never the winner's.
+    publish_leased_until     TIMESTAMPTZ,
+    publish_lease_token      TEXT,
+    -- Deterministic fingerprint (BackendFingerprint) of the immutable local store this attempt's objects were written
+    -- to, captured at claim. Cleanup compares THIS recorded id against the cell's current store and deletes ONLY on an
+    -- exact match; an empty/legacy id or a mismatch (forbidden repoint) fails closed (retained), never a guessed store.
+    backend_id               TEXT,
+    -- Durable-projection marker: stamped when the winner's objects have been projected to the DETERMINISTIC served key
+    -- (thumbnails/{asset}/{file}). has_thumbnails is exposed only after this is set; recovery re-drives 'published'
+    -- attempts still NULL here (a crash between the pointer CAS and the deterministic copy). NULL = not yet projected.
+    deterministic_projected_at TIMESTAMPTZ,
+    -- Bounded-reassert clock: the deterministic copy is a non-transactional S3 op whose destination write is
+    -- unconditional, so a late straggler copy from an earlier loser can overwrite the winner's bytes. Set at settle to
+    -- NOW() + max-copy-window; the reassert reconciler re-copies the still-active winner once past that window (correcting
+    -- any straggler) and clears it to NULL. NULL = converged / superseded. The contract is EVENTUAL, not strict.
+    deterministic_reassert_at TIMESTAMPTZ,
+    -- A row may only be in a token-gated state ('publishing'/'published') if it carries a nonblank lease token. The
+    -- token-fenced path (EnterThumbnailPublishingToken / PublishThumbnailAttemptToken) is the only way to reach those
+    -- states in code; this makes the invariant a DB fact, so no path can create tokenless publication state.
+    CONSTRAINT chk_foghorn_thumbnail_publishing_requires_token
+        CHECK (status NOT IN ('publishing','published') OR (publish_lease_token IS NOT NULL AND publish_lease_token <> ''))
 );
 CREATE INDEX IF NOT EXISTS idx_foghorn_thumb_task_resource ON foghorn.thumbnail_task_assignment(asset_key, tenant_id);
 CREATE INDEX IF NOT EXISTS idx_foghorn_thumb_task_recovery ON foghorn.thumbnail_task_assignment(status, expiry);
+CREATE INDEX IF NOT EXISTS idx_foghorn_thumb_recovery_due
+    ON foghorn.thumbnail_task_assignment(recovery_next_attempt_at)
+    WHERE status IN ('assigned', 'uploading', 'verifying', 'publishing');
+CREATE INDEX IF NOT EXISTS idx_foghorn_thumb_unprojected
+    ON foghorn.thumbnail_task_assignment(updated_at)
+    WHERE status = 'published' AND deterministic_projected_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_foghorn_thumb_reassert_due
+    ON foghorn.thumbnail_task_assignment(deterministic_reassert_at)
+    WHERE deterministic_reassert_at IS NOT NULL;
 
 -- One row per file an attempt owns (allowlisted: poster.jpg / sprite.jpg / sprite.vtt). staging_key is the
 -- per-attempt upload target; version_key is the immutable published object; etag/size are provider-observed at
@@ -818,8 +908,47 @@ CREATE TABLE IF NOT EXISTS foghorn.thumbnail_active_pointer (
     -- FK to the active attempt: deleting that assignment CASCADES the pointer, so purge can never leave a
     -- dangling pointer that outlives its backing objects (the pointer and its assignment are removed together).
     active_version TEXT NOT NULL REFERENCES foghorn.thumbnail_task_assignment(attempt_id) ON DELETE CASCADE,
-    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    -- The winning completion's per-token PRIVATE candidate segment (v/{token}/…). It is the projection SOURCE, not a
+    -- served address: the winner is copied from v/{token}/… to the DETERMINISTIC served key (thumbnails/{asset}/{file})
+    -- that Chandler serves; Chandler never resolves this token. A publish REQUIRES a non-empty lease token, so a
+    -- published pointer ALWAYS has active_token set — the CHECK makes that a DB fact. active_version above holds the
+    -- attempt_id PURELY for the FK cascade + monotonic CAS/GC anchor.
+    active_token   TEXT,
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_foghorn_active_token_present CHECK (active_token IS NOT NULL)
 );
+
+-- Durable stream tombstone + thumbnail-cleanup obligation. A LIVE stream's thumbnails are keyed by
+-- asset_key = stream_id, which has NO foghorn.artifacts row — so the purge job never reaches it, version GC
+-- never reclaims its final version, and the terminal-status fences (which read foghorn.artifacts) never fire.
+-- On stream deletion Foghorn records ONE row here inside a guarded transaction; its EXISTENCE is the durable
+-- tombstone that fences claim/publish/projection for the (rowless) live stream (a projection re-check sees it and
+-- skips; the delayed second sweep reclaims any straggler copy), and its drain state (status + lease/backoff) is the
+-- fenced queue a background worker (StreamCleanupJob) works until the S3 bytes are confirmed gone and the control
+-- rows dropped, then marks it 'cleaned'. asset_key/stream_id are globally-unique and never reused, so the tombstone
+-- may persist indefinitely without colliding a future asset.
+--
+-- One Foghorn database belongs to ONE cell and ONE immutable S3 backend (cell_storage_identity), so an obligation has
+-- a SINGLE sweep target: this cell's local store. backend_id snapshots that store's recorded fingerprint; the sweep
+-- fails closed if it no longer matches the cell's current store (a forbidden repoint). Cross-cell / multi-backend
+-- placement is out of scope: obligations never target another cell's store.
+CREATE TABLE IF NOT EXISTS foghorn.stream_cleanup_obligation (
+    asset_key            TEXT PRIMARY KEY,                         -- deleted asset's globally-unique key (live stream_id). Existence = tombstone.
+    tenant_id            TEXT NOT NULL,                            -- ownership attribution: the tenant the deletion was authorized for
+    backend_id           TEXT,                                     -- recorded fingerprint of the cell's immutable store; sweep deletes ONLY on an exact match and fails closed otherwise (empty/legacy or mismatch → retained). Recorded at record time; legacy rows adopted once at boot
+    status               TEXT NOT NULL DEFAULT 'pending'
+                         CHECK (status IN ('pending','cleaned')),  -- pending = bytes not yet swept; cleaned = bytes gone + control rows dropped. Row PERSISTS as the tombstone either way.
+    enqueued_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),       -- window anchor: the delayed second sweep fires at enqueued_at + DeterministicCopyWindow
+    first_swept_at       TIMESTAMPTZ,                              -- set on the first sweep; arms the delayed resurrection second sweep
+    next_attempt_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),       -- drainer due time; bumped with backoff on a failed sweep, and to enqueued_at + window after the first sweep
+    leased_until         TIMESTAMPTZ,                              -- in-flight lease; a worker claims a pending, due, unleased row so HA replicas do not double-sweep
+    lease_token          TEXT,                                     -- fences the lease: settlement matches asset_key AND this token
+    attempts             INTEGER NOT NULL DEFAULT 0,               -- capped-linear backoff counter on failing sweeps
+    last_error           TEXT,
+    cleaned_at           TIMESTAMPTZ                               -- set when the sweep confirmed the bytes gone + control rows dropped
+);
+-- Drainer scan: only pending rows are due for a sweep (cleaned rows persist purely as the tombstone).
+CREATE INDEX IF NOT EXISTS idx_foghorn_stream_cleanup_due ON foghorn.stream_cleanup_obligation(next_attempt_at) WHERE status = 'pending';
 
 CREATE TABLE IF NOT EXISTS foghorn.vod_metadata (
     -- ===== IDENTITY =====

@@ -185,9 +185,12 @@ CREATE TABLE IF NOT EXISTS quartermaster.infrastructure_clusters (
     updated_at TIMESTAMP DEFAULT NOW(),
 
     -- ===== S3 STORAGE CONFIGURATION =====
+    -- The immutable physical backend descriptor (bucket/endpoint/region/prefix) — the authoritative full tuple a
+    -- Foghorn cell adopts its identity from and Chandler serves under. Credentials stay env-only.
     s3_bucket VARCHAR(255),
     s3_endpoint VARCHAR(500),
     s3_region VARCHAR(50),
+    s3_prefix VARCHAR(255),
 
     -- ===== WIREGUARD MESH CONFIGURATION =====
     -- IPv4 CIDR for the cluster's WireGuard mesh. Used by

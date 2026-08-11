@@ -277,10 +277,23 @@ CREATE TABLE IF NOT EXISTS commodore.streams (
     -- tenant default origin when set.
     active_ingest_cluster_id VARCHAR(100),
     active_ingest_cluster_updated_at TIMESTAMP,
+    -- Durable, append-only set of every media cluster that has served this stream's live thumbnails. SOLE writer:
+    -- RegisterStreamThumbnailServingCell (the service-fenced register-before-mint call), so a cell is here iff it
+    -- registered before minting any object. active_ingest_cluster_id is NOT a writer (it names only the current ingest
+    -- cell and is cleared when ingest stops). Never cleared, so the stream-cleanup outbox dispatches the thumbnail-
+    -- cleanup obligation to EVERY owning cell (per-cell Foghorn databases) and finalizes only after all acknowledge.
+    thumbnail_serving_cluster_ids TEXT[] NOT NULL DEFAULT '{}',
+
+    -- Two-phase deletion: set when DeleteStream soft-deletes the stream (phase 1). The stream is excluded from all
+    -- user-facing + serving/resolve reads while non-NULL, and HARD-deleted (finalized) only after Foghorn acks the
+    -- thumbnail-cleanup obligation — so a caller is never told "deleted" before the serving authority holds the
+    -- tombstone. A NULL value is a live stream. See DeleteStream + the stream-cleanup outbox worker.
+    deleted_at TIMESTAMPTZ,
 
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_commodore_streams_deleting ON commodore.streams(deleted_at) WHERE deleted_at IS NOT NULL;
 
 -- Stream authentication keys (multiple keys per stream for rotation)
 CREATE TABLE IF NOT EXISTS commodore.stream_keys (
@@ -509,8 +522,38 @@ CREATE TABLE IF NOT EXISTS commodore.clips (
     -- ===== SIZE PROJECTION =====
     size_bytes BIGINT,
 
+    -- Finalized A/V track summary (array of {type,codec,width,height,fps,resolution,
+    -- bitrateKbps,channels,sampleRate}), captured from the completion-validated
+    -- ProcessingJobResult and projected onto the catalog by the artifact reconciler.
+    tracks JSONB,
+
     -- ===== THUMBNAIL PROJECTION =====
     has_thumbnails BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Authoritative thumbnail serving cluster (projected from foghorn.artifacts): the OFFICIAL durable cluster the
+    -- thumbnail was written to, NOT necessarily storage_cluster_id (bytes) or origin (provenance). URL builders prefer
+    -- COALESCE(thumbnail_serving_cluster_id, storage_cluster_id, origin_cluster_id). NULL = legacy → fall back.
+    thumbnail_serving_cluster_id VARCHAR(100),
+
+    -- ===== S3 LIFECYCLE (projected from foghorn.artifacts; durable, reconciler-repaired) =====
+    sync_status VARCHAR(20),
+    is_synced BOOLEAN,
+    is_finalized BOOLEAN,
+    storage_location VARCHAR(20),
+    -- Monotonic source revision of the last applied catalog snapshot, sourced from the
+    -- foghorn.artifact_catalog_revision_seq sequence (bumped by trigger on any catalog-relevant
+    -- change) — NOT a timestamp. The projection RPC applies only if the incoming revision is
+    -- newer, so a stale reconciler snapshot or a non-authoritative cluster can't regress newer
+    -- state.
+    catalog_revision BIGINT,
+    -- Authoritative artifact lifecycle status, projected from foghorn.artifacts.status
+    -- (processing/ready/completed/completed_partial/failed/aborted). The library display status
+    -- derives from this (playable terminal states → "ready", failed/aborted → "failed"),
+    -- SEPARATELY from durable S3 sync (is_synced). Playback readiness happens before S3 upload,
+    -- and DVR terminal states are completed/completed_partial (not "ready"), so a boolean was
+    -- insufficient.
+    lifecycle_status VARCHAR(20),
+    -- Processing failure detail, projected from foghorn.artifacts.error_message (whole-state).
+    error_message TEXT,
 
     -- ===== LIFECYCLE =====
     retention_until TIMESTAMP,
@@ -531,8 +574,11 @@ CREATE INDEX IF NOT EXISTS idx_commodore_clips_stream ON commodore.clips(stream_
 CREATE INDEX IF NOT EXISTS idx_commodore_clips_user ON commodore.clips(user_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_clips_hash ON commodore.clips(clip_hash);
 CREATE INDEX IF NOT EXISTS idx_commodore_clips_internal ON commodore.clips(internal_name);
+-- playback_id is CITEXT, so a plain btree on the column enforces case-insensitive uniqueness AND is
+-- usable by the resolvers' `WHERE playback_id = $1` equality (a functional lower(playback_id::text)
+-- index is not).
 CREATE UNIQUE INDEX IF NOT EXISTS idx_commodore_clips_playback_ci
-    ON commodore.clips((lower(playback_id::text)));
+    ON commodore.clips(playback_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_clips_created ON commodore.clips(created_at);
 
 -- DVR recording business registry (metadata only, lifecycle in Foghorn)
@@ -556,8 +602,44 @@ CREATE TABLE IF NOT EXISTS commodore.dvr_recordings (
     -- ===== SIZE PROJECTION =====
     size_bytes BIGINT,
 
+    -- Measured media duration (ms), projected by Foghorn at FinalizeDVR from the
+    -- recording's media length. NULL until the recording finalizes.
+    duration BIGINT,
+
+    -- A/V track summary (array of {type,codec,width,height,fps,resolution,bitrateKbps,
+    -- channels,sampleRate}). The parent DVR is a segment LEDGER, never muxed into one file
+    -- and never processed, so it receives no ProcessingJobResult: this stays NULL. The
+    -- finalized per-file track summary lives on the chapter vod_assets rows (each chapter IS
+    -- processed).
+    tracks JSONB,
+
     -- ===== THUMBNAIL PROJECTION =====
     has_thumbnails BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Authoritative thumbnail serving cluster (projected from foghorn.artifacts): the OFFICIAL durable cluster the
+    -- thumbnail was written to, NOT necessarily storage_cluster_id (bytes) or origin (provenance). URL builders prefer
+    -- COALESCE(thumbnail_serving_cluster_id, storage_cluster_id, origin_cluster_id). NULL = legacy → fall back.
+    thumbnail_serving_cluster_id VARCHAR(100),
+
+    -- ===== S3 LIFECYCLE (projected from foghorn.artifacts; durable, reconciler-repaired) =====
+    sync_status VARCHAR(20),
+    is_synced BOOLEAN,
+    is_finalized BOOLEAN,
+    storage_location VARCHAR(20),
+    -- Monotonic source revision of the last applied catalog snapshot, sourced from the
+    -- foghorn.artifact_catalog_revision_seq sequence (bumped by trigger on any catalog-relevant
+    -- change) — NOT a timestamp. The projection RPC applies only if the incoming revision is
+    -- newer, so a stale reconciler snapshot or a non-authoritative cluster can't regress newer
+    -- state.
+    catalog_revision BIGINT,
+    -- Authoritative artifact lifecycle status, projected from foghorn.artifacts.status
+    -- (processing/ready/completed/completed_partial/failed/aborted). The library display status
+    -- derives from this (playable terminal states → "ready", failed/aborted → "failed"),
+    -- SEPARATELY from durable S3 sync (is_synced). Playback readiness happens before S3 upload,
+    -- and DVR terminal states are completed/completed_partial (not "ready"), so a boolean was
+    -- insufficient.
+    lifecycle_status VARCHAR(20),
+    -- Processing failure detail, projected from foghorn.artifacts.error_message (whole-state).
+    error_message TEXT,
 
     -- ===== LIFECYCLE =====
     retention_until TIMESTAMP,
@@ -579,8 +661,10 @@ CREATE INDEX IF NOT EXISTS idx_commodore_dvr_user ON commodore.dvr_recordings(us
 CREATE INDEX IF NOT EXISTS idx_commodore_dvr_hash ON commodore.dvr_recordings(dvr_hash);
 CREATE INDEX IF NOT EXISTS idx_commodore_dvr_stream_internal ON commodore.dvr_recordings(stream_internal_name);
 CREATE INDEX IF NOT EXISTS idx_commodore_dvr_internal ON commodore.dvr_recordings(internal_name);
+-- playback_id is CITEXT: a plain btree enforces case-insensitive uniqueness and is usable by the
+-- resolvers' `WHERE playback_id = $1` equality.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_commodore_dvr_playback_ci
-    ON commodore.dvr_recordings((lower(playback_id::text)));
+    ON commodore.dvr_recordings(playback_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_dvr_created ON commodore.dvr_recordings(created_at);
 
 -- Generate clip hash (deterministic based on stream + timing)
@@ -644,15 +728,49 @@ CREATE TABLE IF NOT EXISTS commodore.vod_assets (
     -- ===== SIZE =====
     size_bytes BIGINT,                      -- Expected file size
 
+    -- Measured media duration (ms), projected by Foghorn when processing
+    -- finalizes the output. NULL until finalized.
+    duration BIGINT,
+
+    -- Finalized A/V track summary (array of {type,codec,width,height,fps,resolution,
+    -- bitrateKbps,channels,sampleRate}), captured from the completion-validated
+    -- ProcessingJobResult and projected onto the catalog by the artifact reconciler.
+    tracks JSONB,
+
     -- ===== CLUSTER ORIGIN / STORAGE =====
     origin_cluster_id VARCHAR(100),
     storage_cluster_id VARCHAR(100),
 
     -- ===== THUMBNAIL PROJECTION =====
     has_thumbnails BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Authoritative thumbnail serving cluster (projected from foghorn.artifacts): the OFFICIAL durable cluster the
+    -- thumbnail was written to, NOT necessarily storage_cluster_id (bytes) or origin (provenance). URL builders prefer
+    -- COALESCE(thumbnail_serving_cluster_id, storage_cluster_id, origin_cluster_id). NULL = legacy → fall back.
+    thumbnail_serving_cluster_id VARCHAR(100),
     library_visible BOOLEAN NOT NULL DEFAULT TRUE,
     origin_type VARCHAR(32),
     origin_id VARCHAR(64),
+
+    -- ===== S3 LIFECYCLE (projected from foghorn.artifacts; durable, reconciler-repaired) =====
+    sync_status VARCHAR(20),
+    is_synced BOOLEAN,
+    is_finalized BOOLEAN,
+    storage_location VARCHAR(20),
+    -- Monotonic source revision of the last applied catalog snapshot, sourced from the
+    -- foghorn.artifact_catalog_revision_seq sequence (bumped by trigger on any catalog-relevant
+    -- change) — NOT a timestamp. The projection RPC applies only if the incoming revision is
+    -- newer, so a stale reconciler snapshot or a non-authoritative cluster can't regress newer
+    -- state.
+    catalog_revision BIGINT,
+    -- Authoritative artifact lifecycle status, projected from foghorn.artifacts.status
+    -- (processing/ready/completed/completed_partial/failed/aborted). The library display status
+    -- derives from this (playable terminal states → "ready", failed/aborted → "failed"),
+    -- SEPARATELY from durable S3 sync (is_synced). Playback readiness happens before S3 upload,
+    -- and DVR terminal states are completed/completed_partial (not "ready"), so a boolean was
+    -- insufficient.
+    lifecycle_status VARCHAR(20),
+    -- Processing failure detail, projected from foghorn.artifacts.error_message (whole-state).
+    error_message TEXT,
 
     -- ===== LIFECYCLE =====
     retention_until TIMESTAMP,
@@ -673,8 +791,10 @@ CREATE INDEX IF NOT EXISTS idx_commodore_vod_stream ON commodore.vod_assets(stre
     WHERE stream_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_commodore_vod_hash ON commodore.vod_assets(vod_hash);
 CREATE INDEX IF NOT EXISTS idx_commodore_vod_internal ON commodore.vod_assets(internal_name);
+-- playback_id is CITEXT: a plain btree enforces case-insensitive uniqueness and is usable by the
+-- resolvers' `WHERE playback_id = $1` equality.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_commodore_vod_playback_ci
-    ON commodore.vod_assets((lower(playback_id::text)));
+    ON commodore.vod_assets(playback_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_vod_created ON commodore.vod_assets(created_at);
 CREATE INDEX IF NOT EXISTS idx_commodore_vod_origin
     ON commodore.vod_assets(origin_type, origin_id)
@@ -693,16 +813,142 @@ CREATE TABLE IF NOT EXISTS commodore.dvr_chapter_playback (
     tenant_id     UUID NOT NULL,
     playback_id   CITEXT NOT NULL,
     artifact_hash VARCHAR(32) NOT NULL,
+    dvr_hash      VARCHAR(32),            -- parent DVR artifact_hash; lets DeleteDVR cascade the
+                                          -- chapter catalog by parent (atomic + retryable)
     created_at    TIMESTAMP DEFAULT NOW(),
     updated_at    TIMESTAMP DEFAULT NOW()
 );
 
+-- playback_id is CITEXT: a plain btree enforces case-insensitive uniqueness and is usable by the
+-- chapter resolver's `WHERE playback_id = $1` equality.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_commodore_dvr_chapter_playback_pid_ci
-    ON commodore.dvr_chapter_playback((lower(playback_id::text)));
+    ON commodore.dvr_chapter_playback(playback_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_dvr_chapter_playback_tenant
     ON commodore.dvr_chapter_playback(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_dvr_chapter_playback_artifact
     ON commodore.dvr_chapter_playback(artifact_hash);
+CREATE INDEX IF NOT EXISTS idx_commodore_dvr_chapter_playback_dvr
+    ON commodore.dvr_chapter_playback(dvr_hash) WHERE dvr_hash IS NOT NULL;
+
+-- ============================================================================
+-- ARTIFACT CATALOG TOMBSTONES (durable, revisioned deletion markers)
+-- ============================================================================
+-- The sole durable record of an artifact catalog deletion. A deletion removes the business row
+-- (clips / dvr_recordings / vod_assets) and writes a marker here; ordinary readers query only the
+-- business tables, so an absent business row already reads as not-live and no per-row flag is kept.
+-- The marker is compact (no business metadata) and carries Foghorn's AUTHORITATIVE deletion_revision,
+-- sourced from foghorn.artifact_catalog_revision_seq via the reconciler's delete projection — the
+-- single revision writer. It exists INDEPENDENTLY of the business row, so a delete that lands before
+-- registration is representable. deletion_revision advances only to a STRICTLY-GREATER authoritative
+-- revision (monotonic upsert): a delayed/stale writer at a revision <= the marker cannot resurrect
+-- the asset. MintChapterPlaybackID and the snapshot revive path consult this marker inside their
+-- transaction (serialized with the delete projection by a per-artifact advisory lock) so a
+-- re-registration reusing the artifact_hash cannot revive a deleted asset. Markers are permanent: the
+-- marker must outlive the business row so a late lower-revision writer (or a re-registration reusing the
+-- hash) can never resurrect a deleted asset. kind is the artifact class ('clip' | 'dvr' | 'vod'); DVR
+-- chapters are vod-kind, keyed by
+-- their vod_hash. The PK is the hot lookup for every reader/mutator and the reconciler.
+CREATE TABLE IF NOT EXISTS commodore.artifact_catalog_tombstones (
+    tenant_id UUID NOT NULL,
+    kind VARCHAR(16) NOT NULL,
+    artifact_hash VARCHAR(32) NOT NULL,
+    -- origin_cluster_id is the authoritative deleting cluster. NOT NULL and non-empty: the revive
+    -- path rejects a snapshot whose source cluster differs (revisions are cluster-local and
+    -- incomparable), so a foreign cluster can never clear another origin's tombstone. A snapshot
+    -- always carries a required source_cluster_id, so every marker is attributed.
+    origin_cluster_id VARCHAR(100) NOT NULL,
+    deletion_revision BIGINT NOT NULL,
+    deleted_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, kind, artifact_hash)
+);
+
+-- Durable, idempotent artifact CREATION intents. Written BEFORE the cross-service
+-- Foghorn create so a crash or a lost/ambiguous create response leaves a
+-- recoverable record instead of one plane silently missing. Keyed by the same
+-- identity Foghorn dedups on — (tenant_id, kind, artifact_hash) — so re-inserting
+-- the same intent is a no-op and a retried create cannot fork a second saga.
+-- status: 'pending' (create in flight / response unknown), 'committed' (Foghorn
+-- durably holds the artifact and the business row is written), 'aborted' (Foghorn
+-- definitively rejected the create; the catalog-only business row, if any, is
+-- removed and the intent terminalized — no tombstone marker, since an aborted
+-- create never had a Foghorn artifact/revision to protect against resurrection).
+-- The convergence sweep drains 'pending' rows: it asks Foghorn
+-- (ArtifactCreationStatusService, keyed by request_id) for the recorded outcome and
+-- never treats an ambiguous RPC error or a missing answer as rejection. request_id
+-- is the ledger key Foghorn matches; payload carries what the sweep needs to finish
+-- the catalog write for a lost success.
+--
+-- lease_token / leased_until let multiple Commodore replicas run the sweep safely:
+-- a replica CLAIMS a batch of pending rows by stamping a fresh lease_token +
+-- leased_until, and every terminal transition CAS-checks that token so two sweepers
+-- never both terminalize the same intent (the loser's guarded update matches 0 rows
+-- and does nothing destructive).
+--
+-- command_ack_pending / command_acked_at / command_ack_attempts / command_ack_next_at /
+-- command_ack_leased_until carry the DURABLE ack obligation to Foghorn: an intent that
+-- terminalized from a KNOWN Foghorn command (a commit, or a definitive rejection) sets
+-- command_ack_pending=TRUE in the SAME transaction as the terminal transition, seeding
+-- command_ack_attempts=0 and command_ack_next_at=NOW() (due immediately). The ack-drain
+-- worker claims DUE obligations under FOR UPDATE SKIP LOCKED, stamping command_ack_leased_until
+-- = NOW() + a fixed lease that EXCLUDES the row until it passes (so a claimed row cannot be
+-- reclaimed by another replica while its ack RPC is in flight) AND a fresh command_ack_lease_token
+-- the claimant owns; every settlement (clear/backoff) CAS-matches that token, so a stale worker
+-- whose lease was reclaimed mutates zero rows even if it resumes after its lease expired. The
+-- claimed batch is processed CONCURRENTLY so it finishes well within the lease. The lease is a SEPARATE axis from the
+-- retry schedule: only a NON-discharging outcome pushes command_ack_next_at forward by a capped
+-- exponential of command_ack_attempts (incremented in the same statement), so a poison
+-- obligation backs off without occupying the batch. A terminal-consumed outcome (COMMITTED or
+-- REJECTED), or a MISSING (the command was consumed+GC'd past Foghorn's retention horizon —
+-- nothing left to converge), clears the flag (command_acked_at set); the MISSING discharge is
+-- an operationally notable anomaly logged by the drain. The obligation survives a restart (it
+-- is column state, not in-memory), so Foghorn's GC only reclaims a command row after this ack
+-- consumes it. A MISSING-*abort* during convergence (no Foghorn command ever existed) leaves
+-- the flag FALSE and the schedule NULL.
+-- kind/status are closed by CHECK constraints and request_id is UNIQUE: the
+-- convergence sweep keys Foghorn's command ledger on request_id, so a duplicated
+-- request_id minting two local intents (only one of which matches the ledger) is
+-- rejected at the database rather than silently forked. The PRIMARY KEY on the
+-- (tenant_id, kind, artifact_hash) identity is the ON CONFLICT target upsertCreationIntent
+-- dedups on; UNIQUE(request_id) is an orthogonal guard on the ledger key.
+CREATE TABLE IF NOT EXISTS commodore.artifact_creation_intents (
+    tenant_id UUID NOT NULL,
+    kind VARCHAR(16) NOT NULL,
+    artifact_hash VARCHAR(32) NOT NULL,
+    request_id UUID NOT NULL,
+    origin_cluster_id VARCHAR(100),
+    status VARCHAR(16) NOT NULL DEFAULT 'pending',
+    attempts INT NOT NULL DEFAULT 0,
+    last_error TEXT,
+    payload JSONB,
+    lease_token UUID,
+    leased_until TIMESTAMP,
+    command_ack_pending BOOLEAN NOT NULL DEFAULT FALSE,
+    command_acked_at TIMESTAMP,
+    command_ack_attempts INT NOT NULL DEFAULT 0,
+    command_ack_next_at TIMESTAMP,
+    command_ack_leased_until TIMESTAMP,
+    command_ack_lease_token UUID,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    CONSTRAINT artifact_creation_intents_kind_check CHECK (kind IN ('clip', 'dvr', 'vod')),
+    CONSTRAINT artifact_creation_intents_status_check CHECK (status IN ('pending', 'committed', 'aborted')),
+    CONSTRAINT artifact_creation_intents_origin_cluster_check CHECK (origin_cluster_id IS NOT NULL AND origin_cluster_id <> ''),
+    CONSTRAINT artifact_creation_intents_request_id_key UNIQUE (request_id),
+    PRIMARY KEY (tenant_id, kind, artifact_hash)
+);
+
+-- Sweep scan index: pending intents oldest-first. Partial so committed/aborted
+-- terminal rows (kept as an idempotency ledger) never widen the hot scan.
+CREATE INDEX IF NOT EXISTS idx_commodore_creation_intents_pending
+    ON commodore.artifact_creation_intents(updated_at)
+    WHERE status = 'pending';
+
+-- Ack-drain claim index: outstanding ack obligations ordered by their next-due schedule,
+-- so the drain claims DUE rows (command_ack_next_at past) soonest-first. Partial so it
+-- touches only outstanding obligations, not the terminal rows already acked.
+CREATE INDEX IF NOT EXISTS idx_commodore_creation_intents_ack_pending
+    ON commodore.artifact_creation_intents(command_ack_next_at)
+    WHERE command_ack_pending = TRUE;
 
 -- Generate VOD hash (includes tenant + user + filename + timestamp for uniqueness)
 CREATE OR REPLACE FUNCTION commodore.generate_vod_hash(
@@ -930,6 +1176,31 @@ CREATE INDEX IF NOT EXISTS idx_commodore_service_event_outbox_pending
 
 CREATE INDEX IF NOT EXISTS idx_commodore_service_event_outbox_tenant
     ON commodore.service_event_outbox(tenant_id, created_at DESC);
+
+-- ============================================================================
+-- STREAM CLEANUP OUTBOX
+-- ============================================================================
+-- Durable delivery of a deleted stream's thumbnail-cleanup obligation to Foghorn. Commodore owns the stream row
+-- but not the thumbnail bytes; on DeleteStream it inserts ONE row here inside the SAME transaction that deletes
+-- the stream, so the cleanup obligation is atomic with the deletion. A background worker drains it: it calls
+-- Foghorn's DeleteStreamThumbnails (which durably records the tombstone + cleanup obligation on its side) and
+-- marks the row completed only on a positive ack, retrying with backoff otherwise — closing the previous
+-- best-effort, unretried after-commit RPC that leaked a live stream's thumbnails on any transport/partial failure.
+CREATE TABLE IF NOT EXISTS commodore.stream_cleanup_outbox (
+    stream_id       UUID PRIMARY KEY,                       -- deleted stream (asset_key); idempotent on re-delete
+    tenant_id       UUID NOT NULL,                          -- ownership attribution the deletion was authorized for
+    status          TEXT NOT NULL DEFAULT 'pending',        -- 'pending' | 'completed' (Foghorn acked the obligation)
+    attempts        INT NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMP NOT NULL DEFAULT NOW(),       -- due time; bumped with exponential backoff on failure
+    last_error      TEXT,
+    created_at      TIMESTAMP NOT NULL DEFAULT NOW(),
+    completed_at    TIMESTAMP,
+    lease_token     TEXT,                                   -- fences settlement: the claim stamps a fresh token, every settlement CAS-checks it so a stale worker can't settle a row a peer re-claimed
+    thumbnail_cleanup_acked_at TIMESTAMP                    -- durable phase-1 marker: once Foghorn ACKED the thumbnail-cleanup obligation for every owning cell (tombstone held; NOT proof bytes are gone), the worker skips the phase and gives the whole item budget to the child cascade (so a slow thumbnail cell can't starve child cleanup every retry). NULL = not yet acked
+);
+CREATE INDEX IF NOT EXISTS idx_commodore_stream_cleanup_outbox_pending
+    ON commodore.stream_cleanup_outbox(next_attempt_at)
+    WHERE status = 'pending';
 
 -- ============================================================================
 -- SIGNING-KEY AUDIT LOG
