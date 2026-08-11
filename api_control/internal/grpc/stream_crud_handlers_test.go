@@ -272,9 +272,10 @@ func TestDeleteStream(t *testing.T) {
 		wantCode(t, err, codes.NotFound)
 	})
 
-	// Happy delete: nil quartermaster skips the foghorn clip-cleanup branch, so
-	// the path is the keys+stream delete tx followed by the outbox emit.
-	t.Run("happy_deletes_and_emits", func(t *testing.T) {
+	// Two-phase delete: phase 1 SOFT-deletes the stream (deleted_at) + drops keys + enqueues the outbox, in one tx.
+	// nil quartermaster skips both the clip-cleanup branch AND the phase-2 Foghorn delivery, so the deletion is not
+	// finalized here — the RPC returns deletion_pending and the stream row is NOT hard-deleted.
+	t.Run("soft_deletes_and_returns_pending", func(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
 		mock.ExpectQuery("SELECT internal_name, title FROM commodore.streams").
@@ -282,11 +283,15 @@ func TestDeleteStream(t *testing.T) {
 			WillReturnRows(sqlmock.NewRows([]string{"internal_name", "title"}).AddRow("live+abc", "My Stream"))
 		mock.ExpectBegin()
 		mock.ExpectExec("DELETE FROM commodore.stream_keys").
-			WithArgs("s1").WillReturnResult(sqlmock.NewResult(0, 1))
-		mock.ExpectExec("DELETE FROM commodore.streams").
-			WithArgs("s1").WillReturnResult(sqlmock.NewResult(0, 1))
+			WithArgs("s1", "t1").WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("UPDATE commodore.streams SET deleted_at").
+			WithArgs("s1", "t1").WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectQuery("INSERT INTO commodore.stream_cleanup_outbox").
+			WithArgs("s1", "t1").
+			WillReturnRows(sqlmock.NewRows([]string{"stream_id"}).AddRow("s1"))
 		mock.ExpectCommit()
-		expectOutboxInsert(mock)
+		// nil QM ⇒ resolveFoghornForTenant errors ⇒ no finalize, no hard-delete, and NO terminal stream_deleted
+		// event (it is emitted only on actual finalization, never at soft-delete time).
 
 		resp, err := s.DeleteStream(ctxAs("u1", "t1", "owner"), &commodorepb.DeleteStreamRequest{StreamId: "s1"})
 		if err != nil {
@@ -294,6 +299,9 @@ func TestDeleteStream(t *testing.T) {
 		}
 		if resp.GetStreamId() != "s1" || resp.GetStreamTitle() != "My Stream" {
 			t.Errorf("resp = (%s,%s), want (s1, My Stream)", resp.GetStreamId(), resp.GetStreamTitle())
+		}
+		if resp.GetDeletionStatus() != "deletion_pending" {
+			t.Errorf("deletion_status = %q, want deletion_pending (Foghorn not reachable, not finalized)", resp.GetDeletionStatus())
 		}
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Errorf("unmet: %v", err)

@@ -116,22 +116,29 @@ func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (s
 			COALESCE(eligible_serving_cell_ids, ARRAY[]::TEXT[]),
 			COALESCE(s3_bucket, ''),
 			COALESCE(s3_endpoint, ''),
-			COALESCE(s3_region, '')
+			COALESCE(s3_region, ''),
+			(s3_prefix IS NOT NULL),
+			COALESCE(s3_prefix, '')
 		FROM quartermaster.infrastructure_clusters
-		WHERE cluster_id = $1`
+		WHERE cluster_id = $1
+		FOR UPDATE`
 	var (
 		curName, curType, curOwner, curBaseURL, curCIDR                     string
 		curListenPort                                                       int
 		curIsDefault, curIsPlatform, curPublicTopology, curAllowPrivatePull bool
 		curRegion, curCell, curClass, curControlCell                        string
 		curEligibleCells                                                    []string
-		curS3Bucket, curS3Endpoint, curS3Region                             string
+		curS3Bucket, curS3Endpoint, curS3Region, curS3Prefix                string
+		// curS3PrefixSet distinguishes a NULL s3_prefix (a row that predates the prefix column — the descriptor was
+		// established without a known prefix, i.e. NOT YET ADOPTED) from an explicit empty string (a KNOWN-EMPTY prefix
+		// that is part of an established, frozen descriptor).
+		curS3PrefixSet bool
 	)
 	probeErr := exec.QueryRowContext(ctx, probeSQL, c.ID).Scan(
 		&curName, &curType, &curOwner, &curBaseURL, &curCIDR, &curListenPort,
 		&curIsDefault, &curIsPlatform, &curPublicTopology, &curAllowPrivatePull,
 		&curRegion, &curCell, &curClass, &curControlCell, database.ArrayScan(&curEligibleCells),
-		&curS3Bucket, &curS3Endpoint, &curS3Region,
+		&curS3Bucket, &curS3Endpoint, &curS3Region, &curS3PrefixSet, &curS3Prefix,
 	)
 	switch {
 	case errors.Is(probeErr, sql.ErrNoRows):
@@ -143,7 +150,7 @@ func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (s
 				is_default_cluster, is_platform_official, public_topology, allow_private_pull_sources,
 				region_id, cell_id, cluster_class,
 				control_cell_id, eligible_serving_cell_ids,
-				s3_bucket, s3_endpoint, s3_region,
+				s3_bucket, s3_endpoint, s3_region, s3_prefix,
 				created_at, updated_at
 			) VALUES (
 				$1, $2, $3,
@@ -152,7 +159,7 @@ func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (s
 				$8, $9, $10, $11,
 				NULLIF($12, ''), NULLIF($13, ''), NULLIF($14, ''),
 				NULLIF($15, ''), $16,
-				NULLIF($17, ''), NULLIF($18, ''), NULLIF($19, ''),
+				NULLIF($17, ''), NULLIF($18, ''), NULLIF($19, ''), $20,
 				NOW(), NOW()
 			)`
 		if _, insertErr := exec.ExecContext(ctx, insertSQL,
@@ -162,7 +169,7 @@ func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (s
 			c.IsDefault, c.IsPlatformOfficial, c.PublicTopology, c.AllowPrivatePullSources,
 			c.Region, c.Cell, c.Class,
 			c.ControlCell, pq.Array(c.EligibleServingCells),
-			c.S3Bucket, c.S3Endpoint, c.S3Region,
+			c.S3Bucket, c.S3Endpoint, c.S3Region, c.S3Prefix,
 		); insertErr != nil {
 			return "", fmt.Errorf("insert: %w", insertErr)
 		}
@@ -190,6 +197,34 @@ func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (s
 	if curCell != "" && curCell != c.Cell {
 		return "", fmt.Errorf("cell drift: db=%q desired=%q (cell_id is stable once set; refusing rewrite)", curCell, c.Cell)
 	}
+	// S3 backend descriptor is IMMUTABLE once established: repointing a cluster's bucket/endpoint/region would misroute
+	// cleanup and serving of historical bytes. Chandler reads THIS row for its effective descriptor and Foghorn
+	// enforces the same invariant locally (cell_storage_identity). Once the descriptor is established (bucket set),
+	// bucket/endpoint/region are frozen. Region compares on its EFFECTIVE value (empty→us-east-1) — the same
+	// normalization the AdoptClusterStorageDescriptor RPC and every reader apply — so an omitted region does not
+	// false-drift against a us-east-1 one; bucket/endpoint compare exactly.
+	effCurS3Region := curS3Region
+	if effCurS3Region == "" {
+		effCurS3Region = "us-east-1"
+	}
+	effReqS3Region := c.S3Region
+	if effReqS3Region == "" {
+		effReqS3Region = "us-east-1"
+	}
+	if curS3Bucket != "" && (c.S3Bucket != curS3Bucket || c.S3Endpoint != curS3Endpoint || effReqS3Region != effCurS3Region) {
+		return "", fmt.Errorf("s3 descriptor drift: db=(bucket=%q,endpoint=%q,region=%q) desired=(bucket=%q,endpoint=%q,region=%q) — the cluster S3 backend is immutable once set (repoint/clear/partial-fill all refused); decommissioning is a separate explicit operation",
+			curS3Bucket, curS3Endpoint, curS3Region, c.S3Bucket, c.S3Endpoint, c.S3Region)
+	}
+	// Prefix has a ONE-TIME adoption state on top of the same immutability. A row whose descriptor was established
+	// before the s3_prefix column existed carries a NULL prefix (curS3PrefixSet==false) — its true prefix lived only in
+	// env. That row is allowed to adopt a prefix ONCE (any value, including the explicit empty string), which persists
+	// as a non-NULL value and marks the descriptor complete. After adoption (curS3PrefixSet==true), the prefix is frozen
+	// exactly like the rest of the tuple: a known-empty '' and a value are both immutable; changing or clearing either
+	// is a refused repoint. This is what lets an existing prefixed cell migrate onto the new column without a repoint.
+	if curS3Bucket != "" && curS3PrefixSet && c.S3Prefix != curS3Prefix {
+		return "", fmt.Errorf("s3 prefix drift: db=%q desired=%q — the cluster S3 prefix is immutable once adopted (repoint/clear refused); to migrate a pre-existing cell's prefix, adopt it once while it is still unset",
+			curS3Prefix, c.S3Prefix)
+	}
 
 	eligibleNoop := stringSlicesEqual(curEligibleCells, c.EligibleServingCells)
 
@@ -208,7 +243,10 @@ func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (s
 		eligibleNoop &&
 		curS3Bucket == c.S3Bucket &&
 		curS3Endpoint == c.S3Endpoint &&
-		curS3Region == c.S3Region {
+		curS3Region == c.S3Region &&
+		// An unadopted (NULL) prefix is NOT a noop even when the desired value is also empty: the write must persist an
+		// explicit '' to mark the descriptor adopted, so require the prefix to already be set AND equal.
+		curS3PrefixSet && curS3Prefix == c.S3Prefix {
 		return "noop", nil
 	}
 
@@ -230,6 +268,9 @@ func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (s
 		    s3_bucket = NULLIF($15, ''),
 		    s3_endpoint = NULLIF($16, ''),
 		    s3_region = NULLIF($17, ''),
+		    -- prefix is written verbatim (not NULLIF): adopting a known-empty prefix must persist an explicit ''
+		    -- so the row becomes s3_prefix IS NOT NULL (adopted), distinct from the pre-migration NULL (unadopted).
+		    s3_prefix = $18,
 		    updated_at = NOW()
 		WHERE cluster_id = $1`
 	if _, err := exec.ExecContext(ctx, updateSQL,
@@ -238,7 +279,7 @@ func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (s
 		c.IsDefault, c.IsPlatformOfficial, c.PublicTopology, c.AllowPrivatePullSources,
 		c.Region, c.Cell, c.Class,
 		c.ControlCell, pq.Array(c.EligibleServingCells),
-		c.S3Bucket, c.S3Endpoint, c.S3Region,
+		c.S3Bucket, c.S3Endpoint, c.S3Region, c.S3Prefix,
 	); err != nil {
 		return "", fmt.Errorf("update: %w", err)
 	}

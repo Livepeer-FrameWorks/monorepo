@@ -615,7 +615,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *quarte
 	// without a second round-trip.
 	peerRows, peerErr := s.db.QueryContext(ctx, `
 		SELECT ic.cluster_id, ic.cluster_name, ic.cluster_type, ic.base_url,
-		       COALESCE(ic.s3_bucket, ''), COALESCE(ic.s3_endpoint, ''), COALESCE(ic.s3_region, ''),
+		       COALESCE(ic.s3_bucket, ''), COALESCE(ic.s3_endpoint, ''), COALESCE(ic.s3_region, ''), COALESCE(ic.s3_prefix, ''), (ic.s3_prefix IS NOT NULL),
 		       COALESCE(ic.region_id, ''), COALESCE(ic.cell_id, ''),
 		       COALESCE(ic.cluster_class, ''),
 		       COALESCE(ic.health_status, ''),
@@ -669,13 +669,14 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *quarte
 			officialID = officialClusterID.String
 		}
 		for peerRows.Next() {
-			var cID, cName, cType, cBaseURL, s3Bucket, s3Endpoint, s3Region string
+			var cID, cName, cType, cBaseURL, s3Bucket, s3Endpoint, s3Region, s3Prefix string
+			var s3PrefixPresent bool
 			var regionID, cellID, clusterClass, healthStatus string
 			var foghornHost sql.NullString
 			var foghornPort sql.NullInt32
 			if err := peerRows.Scan(
 				&cID, &cName, &cType, &cBaseURL,
-				&s3Bucket, &s3Endpoint, &s3Region,
+				&s3Bucket, &s3Endpoint, &s3Region, &s3Prefix, &s3PrefixPresent,
 				&regionID, &cellID, &clusterClass,
 				&healthStatus,
 				&foghornHost, &foghornPort,
@@ -703,6 +704,8 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *quarte
 				S3Bucket:        s3Bucket,
 				S3Endpoint:      s3Endpoint,
 				S3Region:        s3Region,
+				S3Prefix:        s3Prefix,
+				S3PrefixPresent: s3PrefixPresent,
 				RegionId:        regionID,
 				CellId:          cellID,
 				ClusterClass:    clusterClass,
@@ -3414,7 +3417,7 @@ func (s *QuartermasterServer) tenantSubdomainAvailable(ctx context.Context, cand
 //   - tenant_cluster_access.is_active = TRUE
 //   - tenants.deployment_tier alias-eligible (sqlAliasTierEligible)
 //   - tenants.is_active = TRUE
-//   - tenants.subdomain IS NOT NULL AND <> ”
+//   - tenants.subdomain IS NOT NULL and is not the empty string
 //
 // Cert readiness happens at the caller via Navigator; this method
 // returns candidates without crossing service boundaries.
@@ -3989,6 +3992,120 @@ func (s *QuartermasterServer) UpdateClusterMeshConfig(ctx context.Context, req *
 		MeshCidr:     meshCIDR,
 		WgListenPort: port,
 	}, nil
+}
+
+// AdoptClusterStorageDescriptor sets a cluster's immutable S3 backend
+// descriptor directly from an operator tool, mirroring the freeze/adopt rules
+// the bootstrap reconcile applies in upsertCluster (bootstrap/clusters.go):
+//
+//   - Once s3_bucket is established (non-empty), bucket/endpoint/region are
+//     FROZEN — any repoint, clear, or partial-fill is refused. Chandler reads
+//     this row for its effective descriptor and Foghorn enforces the same
+//     invariant locally; repointing would misroute cleanup and serving of
+//     historical bytes.
+//   - s3_prefix carries a ONE-TIME adoption on top of the same immutability. A
+//     row whose descriptor predates the s3_prefix column carries a NULL prefix
+//     (not yet adopted) and may adopt a prefix ONCE — any value, including the
+//     explicit empty string, which persists as a non-NULL empty string
+//     (known-empty adopted). After adoption the prefix is frozen like the rest of
+//     the tuple.
+//
+// The read-modify-write runs in one transaction with the row locked FOR
+// UPDATE; the cluster is re-read after commit so the caller gets the persisted
+// descriptor back.
+func (s *QuartermasterServer) AdoptClusterStorageDescriptor(ctx context.Context, req *quartermasterpb.AdoptClusterStorageDescriptorRequest) (*quartermasterpb.ClusterResponse, error) {
+	// Permanently establishing (or one-time-filling) a cell's IMMUTABLE storage descriptor is a privileged operator
+	// action, not routine service-to-service traffic. The platform-wide SERVICE_TOKEN carries no caller or cluster
+	// identity, so accepting it would let any compromised internal service initialize an empty descriptor or consume
+	// the one-time prefix adoption. Require a verified platform-operator JWT (RFC 9068 platform_operator role); the
+	// automated new-cell establishment path is the desired-state bootstrap (upsertCluster), not this RPC.
+	if !ctxkeys.IsPlatformOperator(ctx) {
+		return nil, status.Error(codes.PermissionDenied, "AdoptClusterStorageDescriptor requires platform-operator authorization")
+	}
+	clusterID := req.GetClusterId()
+	if clusterID == "" {
+		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
+	}
+	reqBucket := req.GetS3Bucket()
+	reqEndpoint := req.GetS3Endpoint()
+	reqRegion := req.GetS3Region()
+	reqPrefix := req.GetS3Prefix()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	var (
+		curBucket, curEndpoint, curRegion, curPrefix string
+		// curPrefixSet distinguishes a NULL s3_prefix (a row that predates the
+		// prefix column — NOT YET ADOPTED) from an explicit '' (a KNOWN-EMPTY
+		// prefix that is part of an established, frozen descriptor).
+		curPrefixSet bool
+	)
+	scanErr := tx.QueryRowContext(ctx, `
+		SELECT COALESCE(s3_bucket, ''), COALESCE(s3_endpoint, ''), COALESCE(s3_region, ''),
+		       (s3_prefix IS NOT NULL), COALESCE(s3_prefix, '')
+		FROM quartermaster.infrastructure_clusters
+		WHERE cluster_id = $1
+		FOR UPDATE
+	`, clusterID).Scan(&curBucket, &curEndpoint, &curRegion, &curPrefixSet, &curPrefix)
+	if errors.Is(scanErr, sql.ErrNoRows) {
+		return nil, status.Error(codes.NotFound, "cluster not found")
+	}
+	if scanErr != nil {
+		return nil, status.Errorf(codes.Internal, "probe cluster: %v", scanErr)
+	}
+
+	// Canonicalize region at the authority boundary: an omitted region means us-east-1 on every reader (Foghorn,
+	// Chandler, the CLI gate), so the row stores and compares the EFFECTIVE value. Otherwise a legacy row with a NULL
+	// region and a deployed us-east-1 would be a false repoint. Bucket and endpoint compare exactly.
+	effReqRegion := reqRegion
+	if effReqRegion == "" {
+		effReqRegion = "us-east-1"
+	}
+	effCurRegion := curRegion
+	if effCurRegion == "" {
+		effCurRegion = "us-east-1"
+	}
+	// Once the descriptor is established (bucket set), bucket/endpoint/region are frozen — clearing or repointing any
+	// is refused.
+	if curBucket != "" && (reqBucket != curBucket || reqEndpoint != curEndpoint || effReqRegion != effCurRegion) {
+		return nil, status.Error(codes.FailedPrecondition, "s3 descriptor is immutable once set")
+	}
+	// Prefix is frozen after adoption (non-NULL): a known-empty '' and a value
+	// are both immutable.
+	if curBucket != "" && curPrefixSet && reqPrefix != curPrefix {
+		return nil, status.Error(codes.FailedPrecondition, "s3 prefix is immutable once adopted")
+	}
+
+	if _, execErr := tx.ExecContext(ctx, `
+		UPDATE quartermaster.infrastructure_clusters
+		SET s3_bucket = NULLIF($2, ''),
+		    s3_endpoint = NULLIF($3, ''),
+		    -- region is stored as the EFFECTIVE value (empty→us-east-1) so the row is canonical and future comparisons
+		    -- (here, Foghorn, Chandler) agree without re-normalizing.
+		    s3_region = $4,
+		    -- prefix is written verbatim (not NULLIF): adopting a known-empty
+		    -- prefix must persist an explicit '' so the row becomes
+		    -- s3_prefix IS NOT NULL (adopted), distinct from the pre-migration NULL.
+		    s3_prefix = $5,
+		    updated_at = NOW()
+		WHERE cluster_id = $1
+	`, clusterID, reqBucket, reqEndpoint, effReqRegion, reqPrefix); execErr != nil {
+		return nil, status.Errorf(codes.Internal, "update storage descriptor: %v", execErr)
+	}
+
+	if commitErr := tx.Commit(); commitErr != nil {
+		return nil, status.Errorf(codes.Internal, "commit: %v", commitErr)
+	}
+
+	cluster, qErr := s.queryCluster(ctx, clusterID)
+	if qErr != nil {
+		return nil, qErr
+	}
+	return &quartermasterpb.ClusterResponse{Cluster: cluster}, nil
 }
 
 // ListClustersForTenant returns clusters accessible to a tenant
@@ -10556,7 +10673,8 @@ func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string
 		       max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
 		       health_status, is_active, is_default_cluster, is_platform_official, public_topology, created_at, updated_at,
 		       visibility, requires_approval, short_description,
-		       COALESCE(s3_bucket, ''), COALESCE(s3_endpoint, ''), COALESCE(s3_region, ''),
+		       COALESCE(s3_bucket, ''), COALESCE(s3_endpoint, ''), COALESCE(s3_region, ''), COALESCE(s3_prefix, ''),
+		       (s3_prefix IS NOT NULL),
 		       COALESCE(region_id, ''), COALESCE(cell_id, ''), COALESCE(cluster_class, ''),
 		       COALESCE(control_cell_id, ''), COALESCE(eligible_serving_cell_ids, ARRAY[]::TEXT[])
 		FROM quartermaster.infrastructure_clusters
@@ -10579,7 +10697,8 @@ func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string
 		&cluster.MaxBandwidthMbps, &cluster.HealthStatus, &cluster.IsActive, &cluster.IsDefaultCluster,
 		&cluster.IsPlatformOfficial, &cluster.PublicTopology, &createdAt, &updatedAt,
 		&visibility, &requiresApproval, &shortDescription,
-		&cluster.S3Bucket, &cluster.S3Endpoint, &cluster.S3Region,
+		&cluster.S3Bucket, &cluster.S3Endpoint, &cluster.S3Region, &cluster.S3Prefix,
+		&cluster.S3PrefixPresent,
 		&cluster.RegionId, &cluster.CellId, &cluster.ClusterClass,
 		&cluster.ControlCellId, database.ArrayScan(&eligibleCells),
 	)

@@ -65,10 +65,12 @@ type Cluster struct {
 	ControlCell          string   `yaml:"control_cell,omitempty"`
 	EligibleServingCells []string `yaml:"eligible_serving_cells,omitempty"`
 
-	// S3 storage backend on the cluster row (credentials stay env-only).
+	// S3 storage backend on the cluster row (credentials stay env-only). Bucket/endpoint/region/prefix form the
+	// immutable physical descriptor a Foghorn cell adopts its identity from.
 	S3Bucket   string `yaml:"s3_bucket,omitempty"`
 	S3Endpoint string `yaml:"s3_endpoint,omitempty"`
 	S3Region   string `yaml:"s3_region,omitempty"`
+	S3Prefix   string `yaml:"s3_prefix,omitempty"`
 }
 
 type ClusterMesh struct {

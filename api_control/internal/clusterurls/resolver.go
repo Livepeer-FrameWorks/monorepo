@@ -153,6 +153,10 @@ func (r *Resolver) BuildThumbnailAssets(clusterID, assetKey string) *sharedpb.Th
 	if chandlerBase == "" {
 		return nil
 	}
+	// The served path is /assets/{assetKey}/{file}: Chandler's sole public route, served deterministically with no
+	// per-request resolver, so a URL producer and the media-cell Chandler can upgrade in any order without either
+	// emitting or receiving a path the other cannot serve. chandlerBase is the serving-cluster hostname (cluster
+	// safety in the host). See docs/architecture/thumbnails.md.
 	prefix := strings.TrimRight(chandlerBase, "/") + "/assets/" + assetKey
 	return &sharedpb.ThumbnailAssets{
 		PosterUrl:    prefix + "/poster.jpg",
