@@ -42,7 +42,7 @@ func TestChatwootEnvMapUsesNamedPostgresAndRedis(t *testing.T) {
 
 func TestChatwootRoleVarsResolvesPinnedImageFromReleaseManifest(t *testing.T) {
 	repo := writeTestGitopsRelease(t, `
-platform_version: vtest
+platform_version: v9.9.9
 infrastructure:
   - name: chatwoot
     image: chatwoot/chatwoot:v4.13.0

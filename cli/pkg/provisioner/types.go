@@ -13,8 +13,13 @@ type Provisioner interface {
 	// Detect checks if service exists and returns current state
 	Detect(ctx context.Context, host inventory.Host) (*detect.ServiceState, error)
 
-	// Provision installs/configures service (idempotent)
+	// Provision installs/configures/starts AND validates the service (idempotent).
 	Provision(ctx context.Context, host inventory.Host, config ServiceConfig) error
+
+	// Deploy installs/configures/starts WITHOUT the validate phase, so a caller (cluster upgrade) can own validation
+	// — and the rollback it drives — separately. Provision is Deploy + validate; a readiness failure inside Provision
+	// would return before the orchestrator's rollback block, so upgrade uses Deploy then validates explicitly.
+	Deploy(ctx context.Context, host inventory.Host, config ServiceConfig) error
 
 	// Validate checks if service is healthy and reachable
 	Validate(ctx context.Context, host inventory.Host, config ServiceConfig) error

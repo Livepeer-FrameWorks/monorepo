@@ -8,6 +8,7 @@ import (
 
 	"frameworks/cli/pkg/inventory"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
 func TestServiceVarsBuilderCleanupOnlySkipsInstallInputs(t *testing.T) {
@@ -80,6 +81,114 @@ func TestServiceComposeVarsUsesSeparateContainerPortAndHealthPath(t *testing.T) 
 	}
 	if got := service["health_path"]; got != "/api/health" {
 		t.Fatalf("health_path got %v, want /api/health", got)
+	}
+}
+
+// The compose rollout gate (compose_stack validate.yml waits on health_path
+// until 200) must probe Chandler's READINESS endpoint, not its liveness one.
+// Chandler's /health is up before its immutable S3 backend is proven reachable,
+// so gating rollout on /health would deploy an instance that returns 503 for
+// every asset. GetProvisioner wires cfg.HealthPath from servicedefs.ReadinessPath;
+// this pins the whole chain: servicedefs declares /ready, and the compose vars
+// propagate it to the gate. Paired with the /ready-returns-503-on-unreachable-store
+// handler test, an unreachable store therefore fails rollout.
+func TestChandlerComposeRolloutGateProbesReadiness(t *testing.T) {
+	def, ok := servicedefs.Lookup("chandler")
+	if !ok {
+		t.Fatal("servicedefs.Lookup(chandler) not found")
+	}
+	if def.ReadinessPath() != "/ready" {
+		t.Fatalf("chandler ReadinessPath = %q, want /ready", def.ReadinessPath())
+	}
+	if def.HealthPath != "/health" {
+		t.Fatalf("chandler HealthPath (liveness) = %q, want /health", def.HealthPath)
+	}
+
+	// Reproduce the registry's generic-service wiring: cfg.HealthPath = ReadinessPath().
+	vars, err := serviceComposeVars(context.Background(), ServiceRoleConfig{
+		ServiceName: "chandler",
+		DefaultPort: def.DefaultPort,
+		HealthPath:  def.ReadinessPath(),
+	}, inventory.Host{Name: "central-eu-1"}, ServiceConfig{
+		Mode:     "docker",
+		Metadata: map[string]any{},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("serviceComposeVars: %v", err)
+	}
+	service, ok := vars["compose_stack_service"].(map[string]any)
+	if !ok {
+		t.Fatalf("compose_stack_service got %T, want map[string]any", vars["compose_stack_service"])
+	}
+	if got := service["health_path"]; got != "/ready" {
+		t.Fatalf("chandler rollout-gate health_path = %v, want /ready", got)
+	}
+}
+
+// Production Chandler deploys in native (go_service) mode, so the NATIVE rollout gate must probe readiness — not just
+// the listener. serviceNativeVars must surface Chandler's /ready path + http protocol so go_service validate.yml GETs
+// it (200 required) and a store-unreachable Chandler fails rollout instead of reporting healthy. BinaryURL
+// short-circuits artifact resolution (no network).
+func TestServiceNativeVarsWiresReadinessProbe(t *testing.T) {
+	vars, err := serviceNativeVars(context.Background(), ServiceRoleConfig{
+		ServiceName: "chandler",
+		DefaultPort: 18020,
+		HealthPath:  servicedefs.Services["chandler"].ReadinessPath(), // registry wires this (= /ready)
+	}, inventory.Host{Name: "media-eu-1"}, ServiceConfig{
+		Mode:      "native",
+		BinaryURL: "http://example.invalid/chandler.tar.gz",
+		Metadata:  map[string]any{},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("serviceNativeVars: %v", err)
+	}
+	if got := vars["go_service_health_path"]; got != "/ready" {
+		t.Fatalf("go_service_health_path = %v, want /ready", got)
+	}
+	if got := vars["go_service_health_protocol"]; got != "http" {
+		t.Fatalf("go_service_health_protocol = %v, want http", got)
+	}
+}
+
+// The readiness path is AUTHORITATIVE: request metadata must NOT be able to override it. A stale/accidental
+// `health_path: /health` must not downgrade Chandler's store-backed /ready gate to plain liveness (which would let a
+// broken Chandler deploy green). The native readiness var stays /ready regardless of the metadata value.
+func TestServiceNativeVarsReadinessPathNotMetadataOverridable(t *testing.T) {
+	vars, err := serviceNativeVars(context.Background(), ServiceRoleConfig{
+		ServiceName: "chandler",
+		DefaultPort: 18020,
+		HealthPath:  servicedefs.Services["chandler"].ReadinessPath(), // /ready
+	}, inventory.Host{Name: "media-eu-1"}, ServiceConfig{
+		Mode:      "native",
+		BinaryURL: "http://example.invalid/chandler.tar.gz",
+		Metadata:  map[string]any{"health_path": "/health"}, // attempted downgrade — must be ignored
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("serviceNativeVars: %v", err)
+	}
+	if got := vars["go_service_health_path"]; got != "/ready" {
+		t.Fatalf("readiness path = %v, want /ready (metadata must not downgrade it)", got)
+	}
+}
+
+// A gRPC-readiness native service (decklog) declares no HTTP readiness, so the native gate falls back to the TCP
+// listener check: health_protocol is non-http, and validate.yml gates the wait_for on that. This keeps the TCP
+// fallback for services without an HTTP readiness endpoint.
+func TestServiceNativeVarsNonHTTPReadinessFallsBackToPort(t *testing.T) {
+	vars, err := serviceNativeVars(context.Background(), ServiceRoleConfig{
+		ServiceName: "decklog",
+		DefaultPort: 18006,
+		HealthPath:  servicedefs.Services["decklog"].ReadinessPath(),
+	}, inventory.Host{Name: "data-eu-1"}, ServiceConfig{
+		Mode:      "native",
+		BinaryURL: "http://example.invalid/decklog.tar.gz",
+		Metadata:  map[string]any{},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("serviceNativeVars: %v", err)
+	}
+	if got := vars["go_service_health_protocol"]; got == "http" {
+		t.Fatalf("decklog health_protocol = %v, want non-http (grpc) so validate.yml uses the TCP fallback", got)
 	}
 }
 

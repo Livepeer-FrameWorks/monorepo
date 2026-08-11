@@ -217,6 +217,12 @@ func (r *RolePlaybookProvisioner) Provision(ctx context.Context, host inventory.
 	return r.runWithTags(ctx, host, config, []string{"install", "configure", "service", "validate"})
 }
 
+// Deploy runs install+configure+service WITHOUT the validate tag, so a caller (cluster upgrade) can gate on validation
+// and roll back a failed readiness check itself. Provision is Deploy + the validate tag.
+func (r *RolePlaybookProvisioner) Deploy(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	return r.runWithTags(ctx, host, config, []string{"install", "configure", "service"})
+}
+
 // Validate re-runs only the validate tag. No state mutation.
 func (r *RolePlaybookProvisioner) Validate(ctx context.Context, host inventory.Host, config ServiceConfig) error {
 	return r.runWithTags(ctx, host, config, []string{"validate"})

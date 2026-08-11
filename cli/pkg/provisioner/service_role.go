@@ -149,7 +149,10 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, _ inventory.Ho
 	if containerPort == 0 {
 		containerPort = port
 	}
-	healthPath := firstNonEmpty(metaString(config.Metadata, "health_path"), cfg.HealthPath)
+	// Authoritative readiness path (cfg.HealthPath = servicedefs.ReadinessPath): the Compose rollout gate
+	// (compose_stack validate.yml) waits on it. Not metadata-overridable, so nothing can silently downgrade a
+	// store-backed /ready gate to plain liveness.
+	healthPath := cfg.HealthPath
 	image, err := resolveGenericImage(cfg, config)
 	if err != nil {
 		return nil, err
@@ -351,12 +354,26 @@ func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventor
 	if cfg.ServiceName == "livepeer-gateway" {
 		validateTimeout = 300
 	}
+	// Readiness probe for the native rollout gate (go_service validate.yml). The readiness path is AUTHORITATIVE —
+	// cfg.HealthPath, which the registry sets from servicedefs.ReadinessPath (/ready for Chandler, /health for the
+	// rest). It is deliberately NOT overridable by request metadata: a stale or accidental value must never downgrade
+	// a store-backed /ready gate to plain liveness and let a broken Chandler deploy green. The protocol decides HOW
+	// validate.yml probes: "http" ⇒ GET the path and require 200 (so a store-unreachable Chandler fails rollout);
+	// anything else ⇒ the TCP listener check. This aligns the native gate with the Compose gate and the orchestrator's
+	// HTTPReady, closing the hole where native only proved the port opened.
+	readinessPath := cfg.HealthPath
+	readinessProtocol := ""
+	if def, ok := servicedefs.Lookup(cfg.ServiceName); ok {
+		readinessProtocol = def.HealthProtocol
+	}
 	vars := map[string]any{
 		"go_service_name":                             cfg.ServiceName,
 		"go_service_artifact_url":                     url,
 		"go_service_artifact_checksum":                checksum,
 		"go_service_version":                          firstNonEmpty(artifactVersion, config.Version, metaString(config.Metadata, "version")),
 		"go_service_port":                             port,
+		"go_service_health_path":                      readinessPath,
+		"go_service_health_protocol":                  readinessProtocol,
 		"go_service_validate_timeout":                 validateTimeout,
 		"go_service_env":                              envAny,
 		"go_service_args":                             nonNilStringSlice(args),

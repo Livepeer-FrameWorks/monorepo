@@ -166,16 +166,18 @@ func (g SystemdActive) Wait(ctx context.Context, host inventory.Host, run ProbeF
 }
 
 // GateForService returns the readiness gate appropriate for a service ID,
-// auto-selected from pkg/servicedefs. Services with an HTTP health
-// endpoint (HealthProtocol "http" + non-empty HealthPath + non-zero
-// DefaultPort) get HTTPReady; everything else falls back to
-// SystemdActive on `frameworks-<id>`. Unknown service IDs also fall back
-// to the SystemdActive default — keeps the gate selection total without
-// requiring a hand-maintained per-service table.
+// auto-selected from pkg/servicedefs. Services with an HTTP readiness
+// endpoint (HealthProtocol "http" + non-empty ReadinessPath + non-zero
+// DefaultPort) get HTTPReady on the READINESS path (ReadyPath when set, else
+// HealthPath) — so a service like Chandler, whose /health is up before its
+// backing store is proven, gates rollout on /ready instead. Everything else
+// falls back to SystemdActive on `frameworks-<id>`. Unknown service IDs also
+// fall back to the SystemdActive default — keeps the gate selection total
+// without requiring a hand-maintained per-service table.
 func GateForService(id string) Gate {
 	s, ok := servicedefs.Lookup(id)
-	if ok && s.HealthProtocol == "http" && s.HealthPath != "" && s.DefaultPort != 0 {
-		return HTTPReady{Port: s.DefaultPort, Path: s.HealthPath}
+	if ok && s.HealthProtocol == "http" && s.ReadinessPath() != "" && s.DefaultPort != 0 {
+		return HTTPReady{Port: s.DefaultPort, Path: s.ReadinessPath()}
 	}
 	return SystemdActive{Unit: "frameworks-" + id}
 }

@@ -6,6 +6,11 @@ import (
 	"testing"
 )
 
+// The role provisioner implements the full Provisioner contract, including Deploy (install/configure/start without
+// validate) so cluster upgrade can own the readiness gate + rollback (a readiness failure inside Provision would
+// bypass the rollback block).
+var _ Provisioner = (*RolePlaybookProvisioner)(nil)
+
 func TestAnsibleCollectionsPathPrefersRepoCollection(t *testing.T) {
 	root := filepath.Join("repo", "ansible")
 	cache := filepath.Join("cache", "collections")

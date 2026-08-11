@@ -156,6 +156,11 @@ func TestGateForService(t *testing.T) {
 		{"foghorn", "HTTPReady", "HTTPReady{127.0.0.1:18008/health}"},
 		{"bridge", "HTTPReady", "HTTPReady{127.0.0.1:18000/health}"},
 		{"commodore", "HTTPReady", "HTTPReady{127.0.0.1:18001/health}"},
+		// Chandler declares a distinct ReadyPath: the rollout gate MUST probe
+		// /ready (store-backed), not /health (up before the backend is proven),
+		// so an unreachable/misconfigured store fails rollout instead of
+		// deploying an instance that 503s every asset.
+		{"chandler", "HTTPReady", "HTTPReady{127.0.0.1:18020/ready}"},
 		// gRPC service → no HTTP health → SystemdActive
 		{"decklog", "SystemdActive", "SystemdActive{frameworks-decklog}"},
 		// TCP-protocol infra → SystemdActive

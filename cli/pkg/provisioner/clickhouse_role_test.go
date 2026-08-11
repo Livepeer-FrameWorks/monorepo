@@ -126,7 +126,7 @@ func TestClickHouseRoleVarsPassesNamedCollections(t *testing.T) {
 
 func TestClickHouseRoleVarsResolvesVersionFromReleaseManifest(t *testing.T) {
 	repo := writeTestGitopsRelease(t, `
-platform_version: vtest
+platform_version: v9.9.9
 infrastructure:
   - name: clickhouse
     version: "26.3.10.62"

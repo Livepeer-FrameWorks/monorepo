@@ -82,7 +82,7 @@ func TestListmonkRoleVarsWiresPublicURLReconcileDatabase(t *testing.T) {
 
 func TestListmonkRoleVarsResolvesPinnedImageFromReleaseManifest(t *testing.T) {
 	repo := writeTestGitopsRelease(t, `
-platform_version: vtest
+platform_version: v9.9.9
 infrastructure:
   - name: listmonk
     image: listmonk/listmonk:v6.1.0

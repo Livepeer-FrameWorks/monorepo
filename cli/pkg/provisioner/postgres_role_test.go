@@ -157,7 +157,7 @@ func TestPostgresRoleVarsUsesMajorPackageVersion(t *testing.T) {
 
 func TestPostgresRoleVarsResolvesVersionFromReleaseManifest(t *testing.T) {
 	repo := writeTestGitopsRelease(t, `
-platform_version: vtest
+platform_version: v9.9.9
 infrastructure:
   - name: postgresql
     version: "18.4"

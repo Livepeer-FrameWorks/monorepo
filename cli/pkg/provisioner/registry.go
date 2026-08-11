@@ -4,6 +4,8 @@ import (
 	"fmt"
 
 	"frameworks/cli/pkg/ssh"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
 // ServicePorts maps service names to their default ports.
@@ -131,6 +133,16 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 			cfg.HealthPath = "/api/health"
 		case "grafana":
 			cfg.HealthPath = "/api/health"
+		}
+		// The compose rollout gate (compose_stack validate.yml) waits on this path.
+		// Use the service's READINESS path so a service that is live but cannot serve
+		// — Chandler before its immutable store is reachable — fails the rollout
+		// rather than deploying green. ReadinessPath() == HealthPath for everyone
+		// except services that declare a distinct ReadyPath.
+		if cfg.HealthPath == "" {
+			if def, ok := servicedefs.Lookup(serviceName); ok {
+				cfg.HealthPath = def.ReadinessPath()
+			}
 		}
 		if serviceName == "livepeer-gateway" || serviceName == "livepeer-signer" {
 			cfg.DebianRuntimePackages = []string{"libva-drm2"}
