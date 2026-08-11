@@ -26,15 +26,17 @@ const (
 type TenantClusterPeer struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	ClusterId       string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
-	ClusterSlug     string                 `protobuf:"bytes,2,opt,name=cluster_slug,json=clusterSlug,proto3" json:"cluster_slug,omitempty"`               // DNS-safe label
-	BaseUrl         string                 `protobuf:"bytes,3,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`                           // e.g., "frameworks.cloud"
-	ClusterName     string                 `protobuf:"bytes,4,opt,name=cluster_name,json=clusterName,proto3" json:"cluster_name,omitempty"`               // Human label for UX
-	Role            string                 `protobuf:"bytes,5,opt,name=role,proto3" json:"role,omitempty"`                                                // "preferred", "official", "subscribed"
-	ClusterType     string                 `protobuf:"bytes,6,opt,name=cluster_type,json=clusterType,proto3" json:"cluster_type,omitempty"`               // "shared-community", "shared-lb", "dedicated", "self-hosted"
-	FoghornGrpcAddr string                 `protobuf:"bytes,7,opt,name=foghorn_grpc_addr,json=foghornGrpcAddr,proto3" json:"foghorn_grpc_addr,omitempty"` // Resolved Foghorn gRPC address (host:port) from service_instances
-	S3Bucket        string                 `protobuf:"bytes,20,opt,name=s3_bucket,json=s3Bucket,proto3" json:"s3_bucket,omitempty"`                       // Cluster S3 bucket (for cross-cluster artifact affinity)
-	S3Endpoint      string                 `protobuf:"bytes,21,opt,name=s3_endpoint,json=s3Endpoint,proto3" json:"s3_endpoint,omitempty"`                 // S3 endpoint URL
-	S3Region        string                 `protobuf:"bytes,22,opt,name=s3_region,json=s3Region,proto3" json:"s3_region,omitempty"`                       // S3 region
+	ClusterSlug     string                 `protobuf:"bytes,2,opt,name=cluster_slug,json=clusterSlug,proto3" json:"cluster_slug,omitempty"`                 // DNS-safe label
+	BaseUrl         string                 `protobuf:"bytes,3,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`                             // e.g., "frameworks.cloud"
+	ClusterName     string                 `protobuf:"bytes,4,opt,name=cluster_name,json=clusterName,proto3" json:"cluster_name,omitempty"`                 // Human label for UX
+	Role            string                 `protobuf:"bytes,5,opt,name=role,proto3" json:"role,omitempty"`                                                  // "preferred", "official", "subscribed"
+	ClusterType     string                 `protobuf:"bytes,6,opt,name=cluster_type,json=clusterType,proto3" json:"cluster_type,omitempty"`                 // "shared-community", "shared-lb", "dedicated", "self-hosted"
+	FoghornGrpcAddr string                 `protobuf:"bytes,7,opt,name=foghorn_grpc_addr,json=foghornGrpcAddr,proto3" json:"foghorn_grpc_addr,omitempty"`   // Resolved Foghorn gRPC address (host:port) from service_instances
+	S3Bucket        string                 `protobuf:"bytes,20,opt,name=s3_bucket,json=s3Bucket,proto3" json:"s3_bucket,omitempty"`                         // Cluster S3 bucket (for cross-cluster artifact affinity)
+	S3Endpoint      string                 `protobuf:"bytes,21,opt,name=s3_endpoint,json=s3Endpoint,proto3" json:"s3_endpoint,omitempty"`                   // S3 endpoint URL
+	S3Region        string                 `protobuf:"bytes,22,opt,name=s3_region,json=s3Region,proto3" json:"s3_region,omitempty"`                         // S3 region
+	S3Prefix        string                 `protobuf:"bytes,23,opt,name=s3_prefix,json=s3Prefix,proto3" json:"s3_prefix,omitempty"`                         // S3 keyspace prefix — part of the physical-identity tuple: mint routing compares it exactly so a shared bucket under different prefixes is NOT treated as the same backing
+	S3PrefixPresent bool                   `protobuf:"varint,24,opt,name=s3_prefix_present,json=s3PrefixPresent,proto3" json:"s3_prefix_present,omitempty"` // whether the cluster's s3_prefix is ADOPTED (not NULL). false ⇒ INCOMPLETE descriptor: mint routing must fail closed rather than treat a collapsed empty prefix as a real one
 	// Multi-region routing fields surfaced for Commodore route filtering.
 	// region_id (e.g. "eu-west", "us-east", "ap-tokyo").
 	RegionId string `protobuf:"bytes,30,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
@@ -152,6 +154,20 @@ func (x *TenantClusterPeer) GetS3Region() string {
 	return ""
 }
 
+func (x *TenantClusterPeer) GetS3Prefix() string {
+	if x != nil {
+		return x.S3Prefix
+	}
+	return ""
+}
+
+func (x *TenantClusterPeer) GetS3PrefixPresent() bool {
+	if x != nil {
+		return x.S3PrefixPresent
+	}
+	return false
+}
+
 func (x *TenantClusterPeer) GetRegionId() string {
 	if x != nil {
 		return x.RegionId
@@ -184,7 +200,7 @@ var File_cluster_peer_proto protoreflect.FileDescriptor
 
 const file_cluster_peer_proto_rawDesc = "" +
 	"\n" +
-	"\x12cluster_peer.proto\x12\fcluster_peer\"\xd1\x03\n" +
+	"\x12cluster_peer.proto\x12\fcluster_peer\"\x9a\x04\n" +
 	"\x11TenantClusterPeer\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12!\n" +
@@ -198,6 +214,8 @@ const file_cluster_peer_proto_rawDesc = "" +
 	"\vs3_endpoint\x18\x15 \x01(\tR\n" +
 	"s3Endpoint\x12\x1b\n" +
 	"\ts3_region\x18\x16 \x01(\tR\bs3Region\x12\x1b\n" +
+	"\ts3_prefix\x18\x17 \x01(\tR\bs3Prefix\x12*\n" +
+	"\x11s3_prefix_present\x18\x18 \x01(\bR\x0fs3PrefixPresent\x12\x1b\n" +
 	"\tregion_id\x18\x1e \x01(\tR\bregionId\x12\x17\n" +
 	"\acell_id\x18\x1f \x01(\tR\x06cellId\x12#\n" +
 	"\rcluster_class\x18  \x01(\tR\fclusterClass\x12#\n" +

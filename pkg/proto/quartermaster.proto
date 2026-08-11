@@ -90,6 +90,14 @@ service ClusterService {
   rpc UpdateCluster(UpdateClusterRequest) returns (ClusterResponse);
   rpc UpdateClusterMeshConfig(UpdateClusterMeshConfigRequest) returns (UpdateClusterMeshConfigResponse);
 
+  // AdoptClusterStorageDescriptor sets the cluster's immutable S3 backend
+  // descriptor (bucket/endpoint/region + one-time prefix adoption) directly
+  // from an operator tool, applying the same freeze semantics as the bootstrap
+  // reconcile: once the bucket is established the tuple is frozen, and a
+  // pre-migration NULL prefix may be filled exactly once. Returns the
+  // re-read cluster row.
+  rpc AdoptClusterStorageDescriptor(AdoptClusterStorageDescriptorRequest) returns (ClusterResponse);
+
   // Get clusters accessible to a tenant
   rpc ListClustersForTenant(ListClustersForTenantRequest) returns (ClustersAccessResponse);
 
@@ -622,6 +630,14 @@ message InfrastructureCluster {
   string s3_bucket = 26;
   string s3_endpoint = 27;
   string s3_region = 28;
+  // s3_prefix completes the immutable physical backend descriptor on the cluster row, so Quartermaster owns the FULL
+  // (bucket, endpoint, region, prefix) tuple that Foghorn adopts its cell identity from and Chandler serves under —
+  // no separate Chandler round-trip is needed to learn the prefix at first boot.
+  string s3_prefix = 35;
+  // s3_prefix_present reports whether s3_prefix is NON-NULL on the row. The column deliberately uses NULL for "not yet
+  // adopted" (a pre-migration row whose prefix lived only in env) versus '' for "known-empty adopted", a distinction a
+  // bare string field cannot carry. Readers that must classify adoption state (the release reconciler) use this.
+  bool s3_prefix_present = 36;
 
   // Geographic region this cluster lives in.
   string region_id = 29;
@@ -720,6 +736,19 @@ message UpdateClusterMeshConfigResponse {
   string cluster_id = 1;
   string mesh_cidr = 2;
   int32 wg_listen_port = 3;
+}
+
+// Sets the cluster's immutable S3 storage descriptor. bucket/endpoint/region
+// are frozen once the bucket is established; s3_prefix carries a one-time
+// adoption from a pre-migration NULL (any value, including empty). An empty
+// s3_prefix on an unadopted row persists as an explicit '' (known-empty
+// adopted), distinct from the pre-migration NULL.
+message AdoptClusterStorageDescriptorRequest {
+  string cluster_id = 1;
+  string s3_bucket = 2;
+  string s3_endpoint = 3;
+  string s3_region = 4;
+  string s3_prefix = 5;
 }
 
 message ListClustersForTenantRequest {

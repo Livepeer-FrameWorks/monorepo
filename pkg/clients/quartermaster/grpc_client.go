@@ -394,6 +394,20 @@ func (c *GRPCClient) UpdateClusterMeshConfig(ctx context.Context, req *quarterma
 	return c.cluster.UpdateClusterMeshConfig(ctx, req)
 }
 
+// AdoptClusterStorageDescriptor sets the cluster's immutable S3 storage
+// descriptor directly. bucket/endpoint/region freeze once the bucket is set;
+// prefix carries a one-time adoption from a pre-migration NULL. Returns the
+// re-read cluster row.
+func (c *GRPCClient) AdoptClusterStorageDescriptor(ctx context.Context, clusterID, bucket, endpoint, region, prefix string) (*quartermasterpb.ClusterResponse, error) {
+	return c.cluster.AdoptClusterStorageDescriptor(ctx, &quartermasterpb.AdoptClusterStorageDescriptorRequest{
+		ClusterId:  clusterID,
+		S3Bucket:   bucket,
+		S3Endpoint: endpoint,
+		S3Region:   region,
+		S3Prefix:   prefix,
+	})
+}
+
 // SetNodeEnrollmentOrigin flips a node's enrollment_origin. Used by
 // `frameworks mesh reconcile` to promote enrolled nodes into GitOps.
 func (c *GRPCClient) SetNodeEnrollmentOrigin(ctx context.Context, req *quartermasterpb.SetNodeEnrollmentOriginRequest) (*quartermasterpb.SetNodeEnrollmentOriginResponse, error) {

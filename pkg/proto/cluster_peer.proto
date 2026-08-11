@@ -17,6 +17,8 @@ message TenantClusterPeer {
   string s3_bucket = 20;        // Cluster S3 bucket (for cross-cluster artifact affinity)
   string s3_endpoint = 21;      // S3 endpoint URL
   string s3_region = 22;        // S3 region
+  string s3_prefix = 23;        // S3 keyspace prefix — part of the physical-identity tuple: mint routing compares it exactly so a shared bucket under different prefixes is NOT treated as the same backing
+  bool s3_prefix_present = 24;  // whether the cluster's s3_prefix is ADOPTED (not NULL). false ⇒ INCOMPLETE descriptor: mint routing must fail closed rather than treat a collapsed empty prefix as a real one
 
   // Multi-region routing fields surfaced for Commodore route filtering.
   // region_id (e.g. "eu-west", "us-east", "ap-tokyo").
