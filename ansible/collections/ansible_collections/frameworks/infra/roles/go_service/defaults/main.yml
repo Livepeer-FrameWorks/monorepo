@@ -9,6 +9,10 @@ go_service_artifact_url: "" # pinned tarball/zip URL
 go_service_artifact_checksum: ""
 go_service_version: ""
 go_service_port: 0
+# Optional rollout readiness gate. HTTP readiness requires a 200 response from
+# the path; empty values keep the historical port-only validation.
+go_service_health_path: ""
+go_service_health_protocol: ""
 go_service_validate_timeout: 15
 go_service_env: {}
 go_service_args: []

@@ -14,6 +14,23 @@
         - go_service_port | int > 0
         - go_service_livepeer_expected_keystore_dir | length > 0
 
+    # HTTP readiness proves the service can serve, not just bind a port.
+    # Services without a readiness path use the TCP listener check below.
+    - name: Wait for service readiness endpoint (HTTP)
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ go_service_port }}{{ go_service_health_path }}"
+        method: GET
+        status_code: 200
+      register: go_service_validate_readiness
+      retries: "{{ ((go_service_validate_timeout | int) / 2) | round(0, 'ceil') | int }}"
+      delay: 2
+      until: go_service_validate_readiness.status == 200
+      when:
+        - go_service_port | int > 0
+        - go_service_livepeer_expected_keystore_dir | length == 0
+        - go_service_health_protocol == 'http'
+        - go_service_health_path | length > 0
+
     - name: Wait for service port (when defined)
       ansible.builtin.wait_for:
         host: 127.0.0.1
@@ -22,6 +39,7 @@
       when:
         - go_service_port | int > 0
         - go_service_livepeer_expected_keystore_dir | length == 0
+        - not (go_service_health_protocol == 'http' and (go_service_health_path | length > 0))
 
     - name: Find Livepeer keystore files after start
       ansible.builtin.find:
