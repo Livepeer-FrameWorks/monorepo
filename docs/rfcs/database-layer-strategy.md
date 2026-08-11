@@ -11,11 +11,15 @@ Draft
 - Enforce tenant isolation at the database level with PostgreSQL RLS.
 - Incremental adoption — no ORM, no big-bang rewrite.
 
+## Owning services / modules
+
+Cross-cutting: `pkg/database` owns connection setup and the `sql/schema/` + `sql/migrations/` trees; every database-backed service (api_billing, api_control, api_balancing, api_tenants, api_dns, api_consultant, and related packages) adopts sqlc/migrations/RLS incrementally in its own store code.
+
 ## Current State
 
 Database-backed services mostly use raw `database/sql` with `lib/pq`. SQL is written inline in gRPC handlers and service stores across api_billing, api_control, api_balancing, api_tenants, api_dns, api_consultant, and related packages. Query results are commonly mapped field-by-field via manual `.Scan()` calls. Tenant isolation relies primarily on application-level `WHERE tenant_id = $1` and service-boundary discipline — there is no broad database-level RLS safety net if a query omits the filter.
 
-Baseline schema definitions live in `pkg/database/sql/schema/` as monolithic SQL files (commodore.sql, purser.sql, foghorn.sql, quartermaster.sql, and others). The `pkg/database/sql/migrations/` directory now contains versioned migrations, including `v0.2.11/001_bootstrap_tenant_aliases.sql` and `v0.2.11/002_crypto_wallet_status_and_quote.sql`, but migrations are still not the primary schema-authoring model and most schema history remains encoded in the monolithic baseline files.
+Baseline schema definitions live in `pkg/database/sql/schema/` as monolithic SQL files (commodore.sql, purser.sql, foghorn.sql, quartermaster.sql, and others). The `pkg/database/sql/migrations/` directory now contains versioned migrations organized per service and release (`migrations/<service>/<version>/{expand,postdeploy}/`, e.g. `commodore/v0.2.32/expand/002_pull_streams.sql`), but migrations are still not the primary schema-authoring model and most schema history remains encoded in the monolithic baseline files.
 
 PG-specific features are used throughout: JSONB columns, `pq.Array` for array types, and pgvector in api_consultant for embedding similarity search. YugabyteDB is listed as a production alternative in cluster manifests and provisioner roles, but compatibility should be validated per feature instead of assumed for every PostgreSQL extension, index type, and RLS policy.
 
@@ -23,8 +27,7 @@ Evidence:
 
 - `pkg/database/postgres.go`
 - `pkg/database/sql/schema/`
-- `pkg/database/sql/migrations/v0.2.11/001_bootstrap_tenant_aliases.sql`
-- `pkg/database/sql/migrations/v0.2.11/002_crypto_wallet_status_and_quote.sql`
+- `pkg/database/sql/migrations/` (per-service version dirs, e.g. `commodore/v0.2.32/expand/`)
 - `api_billing/internal/grpc/server.go`
 - `api_control/internal/grpc/server.go`
 - `api_balancing/internal/grpc/server.go`
@@ -106,8 +109,7 @@ Consolidate all SQL for a given service module into dedicated query files with s
 
 - [Evidence] `pkg/database/postgres.go`
 - [Evidence] `pkg/database/sql/schema/` (9 schema files)
-- [Evidence] `pkg/database/sql/migrations/v0.2.11/001_bootstrap_tenant_aliases.sql`
-- [Evidence] `pkg/database/sql/migrations/v0.2.11/002_crypto_wallet_status_and_quote.sql`
+- [Evidence] `pkg/database/sql/migrations/` (per-service version dirs, e.g. `commodore/v0.2.32/expand/002_pull_streams.sql`)
 - [Evidence] `api_billing/internal/grpc/server.go` (inline SQL + manual .Scan)
 - [Evidence] `api_control/internal/grpc/server.go` (inline SQL + manual .Scan)
 - [Evidence] `api_balancing/internal/grpc/server.go`

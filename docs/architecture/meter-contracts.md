@@ -207,6 +207,20 @@ The third clause is the corrections guardrail. A pure replay/reprojection only a
 
 Settlement lag (`targetEnd = now - settlement_lag`, default 2 min) absorbs in-Kafka reorderings between parser instances. Anything older than the lag is assumed durably visible.
 
+## Billing summarizer
+
+The component that executes the cursor walk is the billing summarizer in Periscope Query (`api_analytics_query/internal/handlers/billing.go`, driven by `internal/scheduler` on a 5-minute tick). Per run:
+
+1. **Tenant set.** Active tenants are discovered from the canonical billing surfaces themselves (finalized-fact tables, storage snapshots, canonical ledgers, projection divergences over the last 7 days) — sourcing from these tables, not event logs, guarantees any tenant the rated meters can see is a tenant the cursor walks. That set is unioned with every tenant that already has a cursor row, so a tenant that goes quiet still gets its trailing slices closed.
+2. **Cursor.** Each tenant has one row in `periscope.billing_cursors` — a **Postgres** (Yugabyte) table, not ClickHouse. A first-seen tenant's cursor is initialized from its earliest canonical billing fact. The walk target is `targetEnd = now − 2 min settlement lag`, truncated to the 5-minute grid.
+3. **Slices.** The walk emits exact, half-open, 5-minute slices from the cursor to the target — a catch-up after downtime produces many 5-minute records, never one wide record. Per slice the summarizer runs the hand-written `billable_at_ms` cursor queries against the rated fact tables (viewer sessions, processing segments) and the closed storage ledger, plus window reads of the operational ledgers (`stream_runtime_5m_v`, `api_usage_5m_v`), ships the resulting `UsageSummary` rows to Kafka `billing.usage_reports`, and only then advances the cursor. Empty slices still advance it; a mid-walk failure stops advancement so nothing is skipped, and the next tick resumes from the same slice.
+
+**Per-cluster, fail-closed attribution.** One `UsageSummary` is emitted per `(tenant, cluster)` with canonical usage in the slice. A viewer row's billable cluster is its `origin_cluster_id` when known, else the serving `cluster_id`; a viewer or stream-runtime row with **no** cluster identity fails the whole tenant slice (error, retry next tick) rather than attributing usage to a default cluster — mis-attribution is treated as worse than deferral. Storage and processing meters carry their own cluster identity from the ledgers. Tenant-wide gauges that have no natural cluster (peak bandwidth, API counters, MTD unique users) attach to the tenant's primary cluster, resolved via Quartermaster gRPC — a resolution failure likewise fails the slice. See [cross-cluster-billing.md](cross-cluster-billing.md) for the settlement model this feeds.
+
+**Storage-provider usage split.** From the closed storage ledger the summarizer produces two shapes at once: customer-facing per-`(cluster, scope)` GiB-second sums (what the tenant is billed — by where their content sits, not who hosted it), and provider-keyed `StorageProviderUsage` rows preserving provider tenant/cluster, backend, and scope, which Purser persists in `purser.storage_provider_usage_records` for marketplace revenue allocation (see Storage scope split below). Supported `projection_divergences` rows are converted into additive `usage_adjustments` on the same summaries (see Corrections).
+
+**Custom periods.** `TriggerCustomPeriodSummary` → `SummarizeUsageForPeriod` re-summarizes an explicit range: it validates 5-minute alignment, walks the same slices, and emits the same canonical rows — but never touches cursors. Re-emitting an already-billed slice is safe because Purser's `UNIQUE (tenant_id, cluster_id, usage_type, period_start, period_end)` constraint keeps canonical `minute_5` rows from double-counting.
+
 ## Anomaly invariant
 
 For every rated meter, exactly one of two outcomes per source event:
@@ -273,5 +287,6 @@ A meter that needs to change unit, source event, or anomaly behavior requires:
 - `docs/architecture/trigger-durability.md` — the WAL contract feeding Mist triggers into `raw_mist_triggers`
 - `docs/architecture/analytics-pipeline.md` — the end-to-end flow
 - `docs/architecture/finalized-fact-tables.md` — the table-model details for `*_final` and `*_anomalous`
+- `docs/architecture/clickhouse-conventions.md` — schema-wide engine/rollup/versioning conventions
 - `pkg/database/sql/clickhouse/periscope.sql` — DDL
 - `api_billing/internal/rating/types.go` — `Meter` constants

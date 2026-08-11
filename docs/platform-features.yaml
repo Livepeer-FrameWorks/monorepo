@@ -21,6 +21,12 @@
 #   - kind:       product (default) | foundation. Foundations are building
 #                 blocks whose value shows up through the products built on
 #                 them; renderers mark them and derive what they enable.
+#   - audience:   product (default) | platform. Subitems inherit the parent's
+#                 audience unless set. product rows feed registry.json and the
+#                 public feature matrix; platform rows (infra/trust/orchestration
+#                 internals) appear only on the generated platform-capabilities
+#                 page, so the full inventory stays enumerable without bloating
+#                 the product surfaces.
 #   - depends_on: directional edges to other slugs (cycle-checked); the
 #                 generator derives the reverse `enables` list. related: is
 #                 for non-directional peers only.
@@ -377,7 +383,7 @@ features:
     surfaces:
       graphql:
         mutations: [startDVR, stopDVR, deleteDVR]
-        queries: [dvrRecordingsConnection]
+        queries: [storageArtifactsConnection]
         subscriptions: [liveDvrLifecycle]
       mcp:
         tools: [start_dvr, stop_dvr, delete_dvr]
@@ -439,7 +445,7 @@ features:
     surfaces:
       graphql:
         mutations: [createVodUpload, completeVodUpload, abortVodUpload, deleteVodAsset]
-        queries: [vodAsset, vodAssetsConnection, vodUploadStatus]
+        queries: [vodAsset, storageArtifactsConnection, vodUploadStatus]
         subscriptions: [liveVodLifecycle]
       mcp:
         tools:
@@ -484,7 +490,7 @@ features:
     surfaces:
       graphql:
         mutations: [createClip, deleteClip]
-        queries: [clip, clipsConnection]
+        queries: [clip, storageArtifactsConnection]
         subscriptions: [liveClipLifecycle]
       mcp:
         tools: [create_clip, delete_clip]
@@ -715,6 +721,30 @@ features:
           webapp: { required: true }
           docs: { required: true }
 
+  - slug: workload-cost-model
+    name: Workload cost model (GPU-aware scheduling)
+    area: processing
+    kind: foundation
+    description: Predictive per-job resource cost — codec, resolution, framerate, model size, and realtime factor mapped to expected CPU, GPU/VRAM, and bandwidth — continuously corrected by measured costs of completed jobs, feeding processing placement and admission.
+    status: roadmap
+    gap_reason: |
+      Not designed yet. Processing dispatch today routes by node class and in-flight count only; GPU and VRAM are not
+      measured anywhere, job cost is content-dependent and only knowable after the fact, and co-placed jobs interfere
+      (GPU sharing, memory bandwidth, encoder contention with live serving). Needs supply-side GPU/VRAM telemetry, a
+      demand-side cost predictor with a measured-feedback loop, and an interference term — design tracked in
+      docs/rfcs/workload-cost-model.md.
+    depends_on: [processing]
+    related: [viewer-routing]
+    required_surfaces:
+      graphql:
+        {
+          required: false,
+          reason: "Scheduling foundation; value surfaces through processing and analytics.",
+        }
+      mcp: { required: false, reason: "No direct agent surface planned." }
+      webapp: { required: false, reason: "Feeds capacity views; no standalone workflow." }
+      docs: { required: true }
+
   # ───────────────── Analytics & Observability ─────────────────
 
   - slug: analytics
@@ -941,7 +971,7 @@ features:
       - slug: edge-auto-update
         name: Edge auto-update
         kind: foundation
-        description: Foghorn's release reconciler auto-updates Helmsman, MistServer, and Caddy on edge nodes over the Helmsman control stream — native and single-image container nodes alike.
+        description: Automatic edge component updates — Quartermaster owns the release catalog and per-cluster targets; Foghorn's release reconciler applies them to Helmsman, MistServer, and Caddy over the Helmsman control stream — native and single-image container nodes alike.
         status: shipped
         related: [nodes, edge-iso-cloud-images]
         required_surfaces:
@@ -1151,9 +1181,10 @@ features:
         description: Platform-managed DNS, TLS certificates, media-cluster domains, and tenant streaming domain discovery.
         status: partial
         gap_reason: |
-          Navigator reconciles platform and media-cluster DNS for operated deployments, and the API exposes tenant streaming domains
-          through streamingConfig. The missing product surface is customer-controlled DNS: custom domain onboarding, verification,
-          certificate status, proxy policy, and self-serve dashboard/MCP workflows.
+          Navigator reconciles platform and media-cluster DNS for operated deployments, the API exposes tenant streaming domains
+          through streamingConfig, and the custom-domain backend lifecycle is shipped (domain verification state machine,
+          delegated ACME issuance, certificate status tracking). The missing product surface is customer-facing self-serve:
+          dashboard/MCP workflows for custom domain onboarding, verification and certificate status, and proxy policy.
         required_surfaces:
           graphql: { required: true }
           mcp: { required: true }
@@ -1203,6 +1234,197 @@ features:
           mcp: { required: true }
           webapp: { required: true }
           docs: { required: true }
+
+  - slug: nat-traversal
+    name: NAT-aware routing and traversal
+    area: infrastructure
+    description: NAT-type classification as a first-class routing and placement signal, platform-coordinated hole punching, and platform-managed measurement of inter-server network performance (latency, throughput) feeding routing and capacity decisions — so self-hosted nodes behind NAT participate fully in the federated network.
+    status: roadmap
+    gap_reason: |
+      The Go control plane has not absorbed the media plane's traversal coordination: there is no NAT-type
+      classification store, no punch orchestration (whether, when, and between which nodes a traversal attempt is
+      viable), and no platform-managed probe/relay infrastructure. Inter-server network performance (latency,
+      throughput) is measured nowhere today. Design in docs/rfcs/nat-traversal.md.
+    related: [federation-network, edge-clusters, federation-state-sync]
+    required_surfaces:
+      graphql:
+        { required: false, reason: "Routing-internal signal; no direct API surface planned." }
+      mcp: { required: false, reason: "No agent surface planned." }
+      webapp: { required: false, reason: "Surfaces indirectly via node views." }
+      docs: { required: true }
+
+  - slug: federation-state-sync
+    name: Federation state synchronization
+    area: infrastructure
+    description: Decentral distribution of configuration and state changes across a dynamic federation — clusters and servers join, leave, or drop offline at will — with automatic conflict resolution between concurrent changes and reconvergence after network partitions, without a central coordination point.
+    status: roadmap
+    gap_reason: |
+      Distribution today is central: gitops feeds the control plane, which pushes desired state to clusters and
+      servers through one management point — concurrent conflicting changes are prevented only by everything
+      flowing through that point, and it is a single point of failure for federation-wide changes. No conflict
+      resolution or partition-healing mechanism exists. Design in docs/rfcs/federation-plane-pluggability.md.
+    related: [federation-network, nat-traversal]
+    required_surfaces:
+      graphql:
+        { required: false, reason: "Federation-internal machinery; no direct API surface planned." }
+      mcp: { required: false, reason: "No agent surface planned." }
+      webapp: { required: false, reason: "Surfaces indirectly via cluster/federation views." }
+      docs: { required: true }
+
+  - slug: replication-orchestration
+    name: Stream replication orchestration
+    area: infrastructure
+    description: Pre-emptive stream distribution — spread a stream to a cell or region ahead of demand, explicit hop topology, and per-stream replication policy (max replicas, allowed regions).
+    status: roadmap
+    gap_reason: |
+      Replication today is on-demand only: viewer-driven origin-pull plus direct ingest-edge serving. There is no
+      pre-emptive spread, no hub/hop role between origin and edge, and no per-stream replication policy. The
+      stream-replication RFC is being rewritten with this orchestration scope.
+    related: [federation-network, viewer-routing]
+    required_surfaces:
+      graphql: { required: true }
+      mcp:
+        { required: false, reason: "Operator-facing first; agent surface follows policy design." }
+      webapp: { required: true }
+      docs: { required: true }
+
+  - slug: placement-policy
+    name: Placement policy and storage tiering
+    area: infrastructure
+    description: Two-sided placement policy — cluster-owner and content-owner constraints (data residency, minimum durable copies) compiled into signed enforcement bundles evaluated at serve/ingest/process/store/replicate/peer decision points — over a cold-to-hot storage tier ladder with a backend-keyed placement ledger.
+    status: roadmap
+    gap_reason: |
+      Deferred by design (docs/rfcs/placement-policy-engine.md): today each cluster keeps one implicit durable S3 copy,
+      there is no typed storage-backend registry, no tier ladder, and no two-sided policy evaluation. The signed-bundle
+      channel and per-stream placement intent (stream pins) exist as building blocks.
+    related: [byoc-ownership, standalone-storage-services, replication-orchestration]
+    required_surfaces:
+      graphql: { required: true }
+      mcp: { required: true }
+      webapp: { required: true }
+      docs: { required: true }
+
+  - slug: os-updates
+    name: Drain-integrated OS updates
+    area: infrastructure
+    kind: foundation
+    audience: platform
+    description: Operator-driven host OS updates that drain each role safely before restart — media sessions run out or hand over, database replicas gate on recovery state, brokers transfer leadership — while cluster capacity floors hold.
+    status: roadmap
+    gap_reason: |
+      `cluster os update --check/--apply` ships v1 with serial-only fan-out and no traffic management; per-role
+      drain/undrain hooks and capacity-floor enforcement during update waves are unbuilt — docs/rfcs/cluster-os-update-drain.md.
+    related: [node-mode]
+    required_surfaces:
+      cli: { required: true }
+      docs: { required: true }
+
+  - slug: mesh-dynamic-routing
+    name: Dynamic mesh routing
+    area: infrastructure
+    kind: foundation
+    audience: platform
+    description: Dynamic route propagation over the encrypted WireGuard mesh so the topology adapts to link failure and growth without quadratic static peer configuration.
+    status: roadmap
+    gap_reason: |
+      The mesh is statically configured full-peer today; a link failure needs manual reconfiguration while traffic
+      needs an alternative route. OSPF-over-WireGuard design in docs/rfcs/wireguard-ospf.md; prototype only.
+    related: [wireguard-mesh]
+    required_surfaces:
+      docs: { required: true }
+
+  - slug: service-trust-lifecycle
+    name: Service identity and trust lifecycle
+    area: infrastructure
+    kind: foundation
+    audience: platform
+    description: Live rotation of trust material without service interruption — dual-validity intermediate CA rotation, asymmetric token authority (the signing key never leaves the issuing service), and non-forgeable cluster-bound service identities.
+    status: roadmap
+    gap_reason: |
+      Issuance and renewal are shipped (internal CA, 72h service leaves, node-bound cert_sync tokens); unbuilt are
+      automated intermediate rotation (docs/rfcs/internal-ca-intermediate-rotation.md), the asymmetric token-authority
+      migration beyond the edge path (docs/rfcs/token-authority.md), and cluster-bound service JWTs
+      (docs/rfcs/service-identity-and-cluster-binding.md).
+    related: [internal-pki]
+    required_surfaces:
+      docs: { required: true }
+
+  - slug: foghorn-ha
+    name: Foghorn high availability
+    area: infrastructure
+    kind: foundation
+    audience: platform
+    status: shipped
+    description: Regional balancer HA — Redis-externalized state, leader election, and changelog sync per cell so any Foghorn instance can serve routing decisions and node-mode changes propagate immediately.
+    required_surfaces: {}
+
+  - slug: trigger-durability
+    name: Trigger durability WAL
+    area: infrastructure
+    kind: foundation
+    audience: platform
+    status: shipped
+    description: Edge-local write-ahead log for billing-critical media triggers — acknowledged only after durable append, deterministic event identity for idempotent replay, and an operator replay endpoint on the edge sidecar.
+    required_surfaces: {}
+
+  - slug: internal-pki
+    name: Internal CA and certificate sync
+    area: infrastructure
+    kind: foundation
+    audience: platform
+    status: shipped
+    description: Two-tier internal PKI — 72-hour service leaves issued by Navigator's internal CA via node- and cluster-bound cert_sync tokens, distributed by Privateer; public ACME (DNS-01) covers external listeners.
+    related: [service-trust-lifecycle]
+    required_surfaces: {}
+
+  - slug: wireguard-mesh
+    name: WireGuard mesh and internal DNS
+    area: infrastructure
+    kind: foundation
+    audience: platform
+    status: shipped
+    description: Self-managed encrypted service mesh with no external dependency — three-layer peer configuration (gitops seed, last-known, managed), dependency-derived topology, and a loopback .internal resolver per node.
+    required_surfaces:
+      cli: { required: true }
+      docs: { required: true }
+    surfaces:
+      cli:
+        commands: ["mesh status"]
+      docs:
+        pages: [operators/mesh-bootstrap.mdx]
+
+  - slug: rollout-orchestrator
+    name: Cluster rollout orchestrator
+    area: infrastructure
+    kind: foundation
+    audience: platform
+    status: shipped
+    description: Manifest-driven convergence — dependency-ordered phases, canary and region-staggered waves with health gates, content-addressed release pinning, and automatic rollback on failed health validation.
+    related: [edge-auto-update]
+    required_surfaces:
+      cli: { required: true }
+      docs: { required: true }
+    surfaces:
+      cli:
+        commands:
+          [
+            "cluster provision",
+            "cluster apply",
+            "cluster diff",
+            "cluster upgrade",
+            "cluster migrate",
+          ]
+      docs:
+        pages: [operators/running-upgrades.mdx]
+
+  - slug: livepeer-signer
+    name: Livepeer transaction signer
+    area: infrastructure
+    kind: foundation
+    audience: platform
+    status: shipped
+    description: Keystore-backed remote ETH transaction signer so the Livepeer gateway never holds key custody on media nodes.
+    required_surfaces: {}
 
   # ───────────────── Commerce & Billing ─────────────────
 
@@ -1271,7 +1493,7 @@ features:
     description: Wallet sign-in, linked-wallet account identity, and x402 micropayments.
     status: partial
     gap_reason: |
-      Agent wallet auth and x402 settlement are exposed through get_payment_options and submit_payment.
+      The on-chain stack is live end to end: wallet sign-in/link, x402 gasless settlement (EIP-3009 with the platform paying gas, multi-chain), per-tenant HD deposit addresses with price-locked quotes, and the crypto deposit monitor — exposed through get_payment_options and submit_payment.
       First-class MCP wallet-management tools for listing, linking, and unlinking additional wallets are still missing.
     related: [billing]
     required_surfaces:
@@ -1293,6 +1515,51 @@ features:
         routes: ["/account/balance"]
       docs:
         pages: [builders/wallet-and-crypto.mdx, agents/wallet-auth.mdx, agents/payments.mdx]
+
+  - slug: settlement-attribution
+    name: Operator settlement and attribution
+    area: commerce
+    description: Attribute served traffic to the operators whose clusters actually carried it — manipulation-resistant across independent operators — and settle the full loop, from credit accrual through operator-visible reporting to payout execution.
+    status: roadmap
+    gap_reason: |
+      Accrual primitives exist internally (operator credit ledger with platform-fee basis points, per-cluster usage
+      attribution that fails closed on missing cluster identity), but there is no operator-facing reporting surface,
+      the attribution chain is not yet manipulation-resistant across operators, and no payout execution exists.
+      Design tracked in docs/rfcs/federated-settlement-attribution.md.
+    related: [cluster-marketplace, billing]
+    required_surfaces:
+      graphql: { required: true }
+      mcp: { required: false, reason: "Operator reporting first; agent surface follows." }
+      webapp: { required: true }
+      docs: { required: true }
+
+  - slug: stream-balances
+    name: Stream-level balances
+    area: commerce
+    description: Optional per-stream balances that fund usage before the tenant balance — pay-per-view, tips, sponsor-funded streams — plus promo codes, referral rewards, and volume discounts.
+    status: roadmap
+    gap_reason: |
+      Not built; design in docs/rfcs/stream-balances.md. Referral capture exists at signup, but crediting mechanics,
+      promo codes, and per-stream funding do not.
+    related: [billing, wallet]
+    required_surfaces:
+      graphql: { required: true }
+      mcp: { required: true }
+      webapp: { required: true }
+      docs: { required: true }
+
+  - slug: operator-credit-ledger
+    name: Operator credit ledger
+    area: commerce
+    kind: foundation
+    audience: platform
+    status: partial
+    description: Internal accrual ledger crediting cluster operators for served usage — platform-fee basis points, clawback and reversal support — populated from per-cluster usage attribution.
+    gap_reason: |
+      Accrual and reversal paths are implemented; there is no GraphQL/operator surface and no payout execution —
+      both arrive with settlement-attribution.
+    related: [settlement-attribution]
+    required_surfaces: {}
 
   # ───────────────── Developer Platform & Agents ─────────────────
 
@@ -1418,7 +1685,7 @@ features:
         name: Skipper (in-app consultant agent)
         description: Conversational platform agent for support and investigations.
         status: partial
-        gap_reason: MCP exposes ask_consultant only; conversation management (list/get/send/archive) is not exposed.
+        gap_reason: The MCP spoke exposes ask_consultant, search_knowledge, and search_web (search_support_history is Deckhand's tool); conversation management (list/get/send/archive) is not exposed via MCP.
         required_surfaces:
           graphql: { required: true }
           mcp: { required: true }
@@ -1476,8 +1743,28 @@ features:
     gap_reason: |
       The planned rooms service (api_rooms, codename Parlor) is a stub; the product design (chat, channel points, hype
       trains, leaderboards, flair, stream-synced events, moderator views) is captured in docs/rfcs/parlor.md. Viewer chat
-      is the first surface; real-time A/V rooms live under conferencing.
+      is the first surface; real-time A/V rooms live under conferencing. Build dependency: Signalman needs a presence/room
+      channel type — its channel enum today covers streams, analytics, system, messaging, and AI events, with no
+      presence/room channel.
     related: [conferencing]
+    required_surfaces:
+      graphql: { required: true }
+      mcp: { required: true }
+      webapp: { required: true }
+      docs: { required: true }
+
+  - slug: live-commerce
+    name: Live commerce (shopping and auctions)
+    area: engagement
+    description: Shopping and server-authoritative auctions attached to live streams — product showcases, carts and orders, and auction mechanics that stay fair for viewers at different latencies behind the live edge.
+    status: roadmap
+    gap_reason: |
+      Not built; design in docs/rfcs/live-commerce.md (planned api_commerce and api_auctions services). The hard part
+      is latency fairness: interactive events must bind to the stream timeline — viewers sit at different distances
+      behind the live edge — and competitive interactions like auction closes need one server-authoritative truth
+      that treats differently-delayed viewers fairly.
+    depends_on: [streams]
+    related: [rooms-interactivity, conferencing, stream-balances]
     required_surfaces:
       graphql: { required: true }
       mcp: { required: true }
@@ -1567,3 +1854,12 @@ features:
           mcp: { required: true }
           webapp: { required: true }
           docs: { required: true }
+
+  - slug: operator-god-view
+    name: Platform-operator god view
+    area: account
+    kind: foundation
+    audience: platform
+    status: shipped
+    description: Cross-tenant operational view for platform operators — audit-logged and read-oriented — used for support, incident response, and platform-wide analytics.
+    required_surfaces: {}

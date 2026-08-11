@@ -10,6 +10,10 @@ Draft
 - Current monitoring remains Prometheus/Grafana; Lookout is additive.
 - Start with a minimal ingestion + incident feed; defer complex workflows.
 
+## Owning services / modules
+
+Lookout (`api_incidents`, currently a stub) is the proposed owner of alert ingestion and the incident feed. Skipper (`api_consultant`) is a downstream consumer via its existing `lookout.incidents` Kafka trigger; Prometheus/Grafana monitoring in `infrastructure/` remains separate and additive.
+
 ## Current State
 
 - Monitoring and alerting are handled via Prometheus/Grafana tooling in `infrastructure/`.

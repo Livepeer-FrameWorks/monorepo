@@ -283,7 +283,11 @@ export default defineConfig({
       sidebar: [
         {
           label: "Platform",
-          items: [{ label: "Capabilities", slug: "platform/feature-matrix" }, { slug: "roadmap" }],
+          items: [
+            { label: "Capabilities", slug: "platform/feature-matrix" },
+            { label: "Capability inventory", slug: "platform/platform-capabilities" },
+            { slug: "roadmap" },
+          ],
         },
         {
           label: "Migrate",

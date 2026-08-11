@@ -8,6 +8,10 @@
 - For now, disable/omit rolling-DVR thumbnails at the product/config layer until Mist can process this path correctly.
 - Keep finalized DVR chapter thumbnails on the existing `processing+<hash>` path.
 
+## Owning services / modules
+
+The MistServer fork owns the input/process-controller changes (`MistInHLS`, `InputBuffer`, the extracted process controller). The control plane owns capability gating and process-config stamping for the `dvr+` lane, and keeps finalized chapter processing on `processing+<hash>`.
+
 ## Problem
 
 `dvr+<internal>` is a live-DVR playback surface with a long HLS EVENT buffer. In Mist, that path is handled by `MistInHLS`, not by the same `InputBuffer` process-controller path used by normal live processing.

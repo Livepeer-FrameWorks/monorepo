@@ -221,6 +221,70 @@ sidecar suffix appended. Don't hand-manipulate these prefixes — use
 the artifact APIs and the freeze flow so Foghorn's ledger stays
 consistent.
 
+## Storage Backend Identity & Adoption
+
+Each media cell is bound to exactly one S3 backend, described by a
+four-part tuple: **bucket / endpoint / region / prefix**. That tuple is
+the cell's identity and it is immutable — repointing a live cell at a
+different bucket or prefix would strand every artifact already written
+under the old descriptor, so the platform refuses it.
+
+Three components hold a copy and they must agree:
+
+- **Quartermaster** persists the descriptor on the cluster row
+  (`infrastructure_clusters.s3_bucket/s3_endpoint/s3_region/s3_prefix`).
+  This is the **authority**.
+- **Chandler** reads the full descriptor tuple from **Quartermaster**
+  (`GetCluster`) at boot and serves under it. There is no env-serving
+  fallback: without a usable backend Chandler starts but is **not ready** — it
+  answers `/ready` with 503 and serves 503 for assets. Only credentials come
+  from env. `/health` reports process liveness (the process is up); `/ready`
+  proves this instance can read its immutable backend by **successfully reading
+  a known readiness sentinel object** (`thumbnails/.readiness`) — a real,
+  provisioned object, so an absent or access-denied response cannot look ready,
+  and it needs only object-read permission (no bucket listing). `/ready` is the
+  check that **gates deployment and service discovery** — a Chandler that is up
+  but cannot read its bucket is never rolled out or advertised as serviceable.
+  Foghorn writes the sentinel at boot (it owns writes to the bucket); Chandler
+  only reads it, so there is no request-time Foghorn handshake.
+- **Foghorn** establishes an immutable cell identity on first boot from the
+  Quartermaster descriptor: it adopts the descriptor and refuses to start if its
+  env disagrees. It does **not** self-establish from `STORAGE_S3_*` env — an
+  S3-enabled cell whose Quartermaster row carries no descriptor **fails closed**
+  until the descriptor is established.
+
+The Quartermaster descriptor is established by the **desired-state bootstrap**:
+the operator declares the tuple (bucket/endpoint/region/prefix) in the manifest
+cluster config, and provisioning writes it onto the Quartermaster cluster row.
+
+Credentials (`STORAGE_S3_ACCESS_KEY` / `STORAGE_S3_SECRET_KEY`) are never
+part of the descriptor — they stay in per-cluster env files.
+
+### The pre-deploy gate
+
+`frameworks cluster upgrade` refuses to move an S3-enabled Foghorn whose
+cluster declares **no** descriptor: without one, Chandler has no backend
+and Foghorn would establish an unproven identity. The gate also refuses a
+Foghorn whose env descriptor **disagrees** with the cluster row (a
+repoint). Populate and reconcile the descriptor before upgrading.
+
+Quartermaster is the sole source of truth for the descriptor: set it
+(bucket/endpoint/region/prefix) on the cluster in your **source** gitops manifest
+so the Foghorn pre-deploy gate agrees. `cluster upgrade` (and `cluster upgrade
+--all`) moves **every** host a service runs on, not just the first.
+
+### Dev
+
+S3 is opt-in in the compose stack: `STORAGE_S3_BUCKET` is empty by default
+(storage disabled). Set the `STORAGE_S3_*` variables in `.env` to bind the
+local cell to a backend. The storage initializer writes the descriptor tuple
+(bucket/endpoint/region/prefix) onto the **Quartermaster** cluster row — the
+authority. Foghorn then adopts that descriptor as its immutable cell identity
+at first boot, and Chandler reads the **same** descriptor from Quartermaster to
+serve; only the access/secret **credentials** come from env, for both. The
+example CLI manifest (`cli/examples/cluster-dev.yaml`) shows the
+cluster-descriptor shape on the `demo-media` cell.
+
 ## Multi-Cluster Sourcing
 
 When a viewer's edge isn't the origin cluster for the artifact, the

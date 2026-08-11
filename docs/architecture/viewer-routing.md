@@ -12,7 +12,7 @@ For operator-level documentation, see `website_docs/.../operators/architecture.m
 - gRPC server: `api_balancing/internal/grpc`
 - Playback resolution: `api_balancing/internal/control`
 - Geo bucketing: `api_balancing/internal/geo`
-- Weight config: `api_balancing/cmd/foghorn` (lines 53-56)
+- Weight config: `api_balancing/cmd/foghorn/main.go:168-172`
 
 ## Request Paths
 

@@ -10,6 +10,10 @@ Draft
 - Add optional per-tenant mesh segments for dedicated B2B isolation.
 - Keep shared infrastructure on the shared mesh.
 
+## Owning services / modules
+
+Quartermaster (`api_tenants`) owns the mesh schema and sync APIs; Privateer owns WireGuard config generation and per-node application. Optional tenant-zone DNS resolution would be a follow-on surface.
+
 ## Current State
 
 - Infrastructure nodes are tied to clusters, not tenants.

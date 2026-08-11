@@ -10,6 +10,10 @@ Draft
 - These techniques are only practical on sovereign infrastructure where operators control TLS termination and DNS resolution.
 - Complements existing rate limiting; does not replace it.
 
+## Owning services / modules
+
+Phases 1–2 land in Caddy configuration, Periscope Ingest (`api_analytics_ingest`, new consumer), and a new ClickHouse table. Phase 3 depends on the dns-anycast RFC's self-hosted DNS; Phase 4 is a pure analytics layer over the collected data. Existing services are unaffected.
+
 ## Current State
 
 Rate limiting exists in `api_gateway/internal/middleware/ratelimit.go` as a token bucket per tenant. The Gateway also has authentication, public-operation allowlists, x402 settlement, and prepaid/suspension checks, but those are application/account gates rather than network-level security telemetry.

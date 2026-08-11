@@ -11,6 +11,10 @@ Draft
 - Default behavior remains tenant-only unless enabled per stream.
 - **Promotional system**: Promo codes, referral program, volume discounts.
 
+## Owning services / modules
+
+Purser (`api_billing`) owns the balance schema, crediting, and billing jobs; Bridge exposes the GraphQL mutations/queries; Foghorn (`api_balancing`) enforces suspension on `stream_only` depletion; x402 handles stream-targeted funding. Referral-code tracking already lives in Quartermaster.
+
 ## Current State
 
 - Billing is tenant-level only (prepaid balances in Purser).

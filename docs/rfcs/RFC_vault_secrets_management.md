@@ -11,11 +11,17 @@ Draft
 - Provide optional cached secrets for Vault outages.
 - Orthogonal to SOPS — gitops repo continues using SOPS/age for provisioning-time encryption. Vault addresses what happens at runtime on hosts.
 
+## Owning services / modules
+
+The shipped secrets path is owned by the CLI: SOPS/age decryption lives in `cli/pkg/sops`, and the provisioner renders secrets to hosts as part of the layered desired-state bootstrap (layer 5). `pkg/config` owns the runtime env-read layer that every service goes through (with some remaining direct `os.Getenv` call sites under `api_*`). A Vault deployment would run on central infrastructure, provisioned and unsealed by the CLI, with the client integration landing in `pkg/config`.
+
 ## Current State
 
-- Secrets are loaded from process environment variables. Local development commonly uses `.env` / `.env.dev` files loaded by `pkg/config`; provisioned hosts receive service environment through the CLI/Ansible deployment path.
-- Provisioning-time encryption uses SOPS/age in the gitops repo (`cli/pkg/sops/`). Decrypted credentials are written to `/etc/frameworks/*.env` on each host (`chmod 600`).
-- No Vault client or Vault provisioning exists in the repo.
+SOPS-rendered static secrets are the shipped path, and there is no intent to supersede this RFC because of that — it remains the open design space for what comes next.
+
+- The gitops repo encrypts secrets with SOPS/age; the CLI decrypts them (`cli/pkg/sops`) and renders them to `/etc/frameworks/*.env` on each host (`chmod 600`) as bootstrap layer 5. Services read them from process environment; local development uses `.env` / `.env.dev` files loaded by `pkg/config`.
+- This path is acknowledged as leak-prone: secrets are statically rendered to disk on every host, rotation requires re-provisioning, and every service on a host can read the full env file.
+- Runtime secret management needs further iterations. Vault is the leading explored option and will probably be adopted, but no Vault client or Vault provisioning exists in the repo today.
 - Most services use `pkg/config` helpers for required/defaulted env reads, but some runtime paths still call `os.Getenv` directly. A Vault migration would need to centralize those reads or provide a process-env injection layer.
 
 Evidence:

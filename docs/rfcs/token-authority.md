@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. Phase 1 partially implemented for Edge API path only (Helmsman → Foghorn → Commodore).
+Proposed. The Edge API path (Helmsman → Foghorn → Commodore) already follows the target delegation pattern via `ValidateAPIToken`; the RFC's Phase-1 unified `ValidateToken` RPC is not built, and the asymmetric-signing migration (Phase 2) has not started.
 
 ## TL;DR
 
@@ -10,17 +10,23 @@ Proposed. Phase 1 partially implemented for Edge API path only (Helmsman → Fog
 - Commodore issues normal user/session JWTs. Skipper also mints a WebUI admin JWT
   from the same shared `JWT_SECRET`.
 - Migrate to Commodore as the single token validation authority, then switch to asymmetric signing so the private key never leaves Commodore.
+- Scope: this RFC covers the service/user JWT and developer API-token path only. Quartermaster's bootstrap/enrollment tokens and node fingerprints are a separate, already-shipped token system and are not a target of this centralization.
+
+## Owning services / modules
+
+Commodore (`api_control`) is the token issuer and the target validation authority. `pkg/auth` holds the mint/verify helpers and `pkg/middleware` the gRPC interceptor used by every service. Bridge (`api_gateway`) is the highest-volume verifier. Helmsman (`api_sidecar`) and Foghorn (`api_balancing`) form the shipped Edge API delegation chain. Skipper (`api_consultant`) is the one extra mint site (WebUI admin JWT). Quartermaster's bootstrap/enrollment-token authority is a separate module, out of scope here.
 
 ## Current State
 
 ### JWT tokens
 
-Commodore is the primary user/session issuer — `auth.GenerateJWT()` is called in:
+Commodore is the primary user/session issuer — `auth.GenerateSessionJWT()` is called in:
 
 - `PasswordLogin` (`api_control/internal/grpc/server.go`)
 - `RefreshToken` (`api_control/internal/grpc/server.go`)
 - `WalletLogin` (`api_control/internal/grpc/server.go`)
 - `WalletLoginWithX402` (`api_control/internal/grpc/server.go`)
+- `issueUserSessionTx` (`api_control/internal/grpc/server.go`) — the OAuth device-code and auth-code (PKCE) paths
 
 Skipper also calls `auth.GenerateJWT()` for the WebUI admin flow:
 
@@ -30,7 +36,7 @@ JWTs carry `user_id`, `tenant_id`, `email`, `role` with 15-minute expiry.
 
 **Validation is distributed.** Every service that receives a JWT calls `auth.ValidateJWT(token, jwtSecret)` locally with the same shared HMAC secret:
 
-- Bridge — `api_gateway/internal/middleware/auth_request.go:155`
+- Bridge — `api_gateway/internal/middleware/auth_request.go:160`
 - gRPC interceptor (all services) — `pkg/middleware/grpc.go:104`
 - Skipper — `api_consultant/cmd/skipper/main.go:72`
 
@@ -39,7 +45,7 @@ Quartermaster, Signalman, Periscope (ingest), Purser, and Decklog.
 
 ### API tokens
 
-Long-lived developer tokens, stored as SHA256 hashes in `commodore.api_tokens`. Validated exclusively by Commodore's `ValidateAPIToken` RPC (`api_control/internal/grpc/server.go:858`). Bridge calls this as a fallback when JWT validation fails (`auth_request.go:167`).
+Long-lived developer tokens, stored as SHA256 hashes in `commodore.api_tokens`. Validated exclusively by Commodore's `ValidateAPIToken` RPC (`api_control/internal/grpc/server.go:2162`). Bridge calls this as a fallback when JWT validation fails (`auth_request.go:173`).
 
 ### SERVICE_TOKEN
 
@@ -57,6 +63,10 @@ The Edge API validates API tokens by delegating to the authority chain:
 This works for API tokens today. JWTs are not yet supported because Foghorn's handler
 only calls `ValidateAPIToken`, not a combined validation RPC. The proposed
 `ValidateToken` RPC does not exist yet in `pkg/proto/commodore.proto`.
+
+### Not in scope: bootstrap/enrollment tokens
+
+Quartermaster mints and validates its own bootstrap/enrollment tokens (with node-fingerprint binding) for node enrollment. That is a separate, already-shipped token authority in its own trust domain — it never touches `JWT_SECRET` and is not part of the user/service JWT path this RFC centralizes. Nothing in this RFC changes it.
 
 ## Problem
 
@@ -78,6 +88,7 @@ only calls `ValidateAPIToken`, not a combined validation RPC. The proposed
 ## Non-Goals
 
 - Replace SERVICE_TOKEN in this RFC (separate concern — service identity / mTLS).
+- Quartermaster's bootstrap/enrollment-token and node-fingerprint authority (separate, shipped system — see Current State).
 - Implement fine-grained RBAC (separate RFC).
 - Change the JWT claims structure.
 

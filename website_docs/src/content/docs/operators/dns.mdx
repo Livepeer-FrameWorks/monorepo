@@ -33,9 +33,9 @@ Navigator (`api_dns`) automatically manages DNS based on node inventory from Qua
 2. Navigator fetches nodes for that service type and filters to those with external IPs
 3. Updates the authoritative provider:
    - Root/API/web/admin names → Cloudflare A records or load balancers
-   - Multiple nodes on root/global hostnames → Cloudflare load balancer with one proximity-steered pool per Quartermaster cluster
+   - Multiple nodes on root/global hostnames → Cloudflare load balancer with one pool per origin node IP; proximity steering is enabled only when at least two pools carry coordinates
    - Media cluster names → Bunny A-record sets with geolocation Smart Routing when coordinates are available
-4. Applies proxying rules (default: `chartroom`, `foredeck`, and `logbook`)
+4. Applies proxying rules (default set: `bridge`, `chartroom`, `chatwoot`, `foredeck`, `grafana`, `listmonk`, `logbook`, `metabase`, `steward`; override via `NAVIGATOR_PROXY_SERVICES`)
 5. Handles ACME certificate issuance via DNS-01 challenges
 
 If no nodes are returned for a service type, Navigator skips changes to avoid removing working DNS during a transient outage.

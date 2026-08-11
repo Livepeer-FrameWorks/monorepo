@@ -10,6 +10,10 @@ Draft
 - Subdomains map to HD-derived wallet addresses for donations.
 - Donations credit stream balances (ties to stream-balances RFC).
 
+## Owning services / modules
+
+Proposed owners: Purser (`api_billing`) for the ENS subdomain table and resolver API; Bridge (`api_gateway`) for subdomain-management GraphQL; schema migration in `pkg/database`. Crediting ties into the stream-balances RFC.
+
 ## Current State
 
 **Existing infrastructure:**

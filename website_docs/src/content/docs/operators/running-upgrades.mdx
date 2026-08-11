@@ -90,6 +90,139 @@ rolls back on health-check failure unless `--no-rollback` is set.
 
 </Steps>
 
+### Control plane first, then edges
+
+Deploy and migrate the **control plane first**; a new Foghorn comes up without requiring
+any edge to be ready. Foghorn enforces a **minimum control-protocol version** at sidecar
+registration: a sidecar declaring a version below the deployed minimum is **rejected**
+(`FailedPrecondition`, logged with the observed and required versions) and cannot connect
+until it is upgraded. **Redeploy every edge after** the control plane, and those nodes
+reconnect cleanly. When a release advances the minimum with no mixed-version window, this
+is a hard cut — the specific minimum and any transitional guidance ride in that release's
+notes, not here.
+
+Because a connected sidecar is always on the current protocol, its artifact inventory
+is always a **versioned whole-node snapshot** (a monotonic per-connection sequence),
+which Foghorn treats as authoritative — it can add _and remove_ copies immediately.
+There is no unversioned/legacy inventory handling.
+
+Foghorn still applies an **artifact-only readiness cordon**: on every (re)connect an
+edge node is excluded from **stored-artifact routing** until its active connection
+delivers its first complete versioned snapshot. **Live ingest and stream routing are
+unaffected** — only stored-clip/VOD/DVR playback from that edge is withheld while it
+has not yet reported.
+
+Therefore:
+
+- Upgrade/migrate the **control plane first**; it does not wait on the edge.
+- **Redeploy every edge afterward.** A not-yet-upgraded (or freshly restarted,
+  not-yet-reported) sidecar keeps streaming live, but is rejected at registration if
+  below the minimum, or cordoned for stored artifacts until it sends its first
+  versioned snapshot.
+- A supported N−1 / third-party edge protocol range applies only where a release
+  declares one; absent that, treat the deployed minimum as a hard floor.
+
+### Thumbnails: deterministic serving, install-time ordering
+
+Chandler is a **dumb static-object server**: a request path maps DETERMINISTICALLY to an
+S3 key (`thumbnails/{asset}/{file}`), which it streams and caches. It makes **no
+per-request call to Foghorn** and needs no `FOGHORN_INTERNAL_URL`. `SERVICE_TOKEN` gates
+only its internal cache-invalidation endpoint; serving does not need it.
+
+`has_thumbnails` (and the API URL) is exposed **only after** Foghorn has projected a thumbnail
+to that deterministic served key, so the API never advertises a thumbnail Chandler cannot serve.
+The publish/projection internals (how Foghorn picks and projects the winning attempt, and how it
+recovers a published-but-unprojected one) are in
+[the thumbnails architecture doc](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/docs/architecture/thumbnails.md).
+
+At **serving** time there is no per-request resolver call and no publish-time handshake, so
+Chandler has no runtime dependency on Foghorn's version. Installation carries one ordering
+edge: Chandler's readiness check reads a sentinel the in-cell Foghorn establishes at boot,
+so the planner deploys **Chandler after that Foghorn**. The **topology** rule also stands: a
+Foghorn is rejected if its cluster has no Chandler (a publisher with nothing to serve its
+thumbnails).
+
+The served URL is `{chandlerBase}/assets/{asset}/{file}` — a stable, deterministic shape
+that is Chandler's only public route — so a URL producer that upgrades before the media-cell
+Chandler never emits a path an already-running Chandler cannot serve.
+
+The projection to the deterministic key is **eventually consistent, not strictly serial**
+(a database lock cannot fence a non-atomic S3 copy): a straggler overwrite that lands within
+the max-copy window is corrected by the winner's automatic re-copy, and a straggler that
+resurrects a deleted object within the window is reclaimed by a delayed second cleanup sweep.
+Deletion tombstones the asset (the API stops returning its URL immediately) and sweeps the
+`thumbnails/{asset}/` prefix; the tombstone stops any new projection, and the delayed sweep
+reclaims a copy that lands within the window. A copy whose provider tail exceeds the assumed
+window is **not** reclaimed — the accepted, rare residual risk (a re-exposed cosmetic
+thumbnail), since thumbnails are regenerable derivatives, not primary media.
+
+Live-stream thumbnails are minted on the **ingest cell** (its own per-cell Foghorn database).
+The owning cell is recorded durably before any thumbnail is minted, and deletion fans the cleanup
+out to every recorded owning cell — so per-cell databases converge without a shared DB. An empty
+owner set means "no thumbnails": there is no cross-cell guess.
+
+### The release command: reconciliations run automatically
+
+Cross-service reconciliations are **not** a manual intermission. `frameworks cluster release apply`
+runs the whole release as one ordered, resumable plan and interleaves reconciliation transitions at
+their declared points:
+
+```text
+expand migrations
+→ service upgrades in dependency order, with reconciliation transitions
+  interleaved at their declared points
+→ postdeploy migrations
+```
+
+```bash
+frameworks cluster release apply --dry-run   # show the plan + every gate/Check, mutate nothing
+frameworks cluster release apply --yes        # run it
+```
+
+A reconciliation transition is a constrained **Check → Apply → Verify** node registered
+by a compiled handler id. It converges a declared invariant against natural authoritative
+state, so the release is **resumable**: if a later step fails, rerun `release apply` — each
+transition re-Checks reality and skips whatever is already `Complete`. A `Blocked` transition
+(e.g. authoritative replicas that disagree, or an authority that is unreachable) halts the release
+with a clear reason instead of guessing, and a transition whose precondition does not apply reports
+`Not applicable` rather than mutating.
+
+`cluster migrate`, `cluster upgrade`, and the low-level reconciliation subcommands remain as
+**recovery/debugging tools**; `release apply` is the normal path **for a cluster that is already
+installed** — it upgrades existing services and runs the reconciliation transitions, and it
+refuses to "upgrade" a service that is not yet installed. A **from-scratch** cluster is brought
+up with `cluster provision` (see [When to use provision](#when-to-use-provision)), which is where
+install ordering and initial descriptor establishment happen. After the initial provision, use
+`release apply` for subsequent rollouts. At **serving** time Chandler has no runtime dependency on Foghorn's version (it serves a
+deterministic key with no per-request Foghorn call); the Foghorn-before-Chandler ordering is an
+**install-time** property of the planner, shared by both `provision` and `release apply`. A direct
+`cluster upgrade foghorn` still enforces the storage-descriptor prerequisite. **Upgrade the
+`frameworks` CLI to at least the release's `min_cli_version` before applying** — the CLI
+validates that from the fetched release metadata, but a CLI predating that check cannot be
+stopped by it, so treat the CLI upgrade as the first step.
+
+### Cold-storage freeze: the control-protocol contract
+
+Cold-storage freeze (uploading a stored clip/VOD to durable S3) uses a **staged,
+server-minted** protocol: Foghorn mints the attempt id, presigns an **attempt-scoped
+staging** PUT, and publishes the verified staging object itself — copying it to a fresh
+immutable attempt-versioned key and atomically flipping the object pointer. The sidecar
+must upload to the staging key it is handed and echo the server-minted attempt id at
+completion.
+
+Foghorn gates freeze dispatch on the sidecar's **observed** control-protocol version
+(never a per-request self-asserted flag): a sidecar below the staged-freeze minimum is
+**refused freeze assignments** — both the interactive permission request (denied with
+`sidecar_protocol_unsupported`) and proactive reconciler dispatch fail closed, and the
+artifact simply **stays local and retryable**.
+
+The **registration minimum** (see "Control plane first, then edges" above) is at or above
+every staged-operation minimum — so any sidecar that connects at all already satisfies the
+freeze gate, and a below-minimum sidecar is **rejected at registration** rather than run in
+a degraded mode. There is no
+"upgrade edges first" or "run old sidecars against a new Foghorn" step: deploy the
+control plane, then redeploy every edge.
+
 ## Version selection
 
 `--version` accepts:
@@ -140,9 +273,12 @@ For billing and other audit-sensitive domains:
 - release verification should include counts and totals, not just service
   health.
 
-ClickHouse migrations are not applied by `cluster migrate`. For ClickHouse
-schema changes, follow the release notes and the [ClickHouse Migrations](/operators/clickhouse-migrations)
-runbook before upgrading analytics services.
+`cluster migrate` applies ClickHouse schema migrations (expand/postdeploy/contract
+phases) for the configured ClickHouse databases alongside Postgres, and refuses to
+proceed if the cluster is below the required baseline floor. Follow the
+[ClickHouse Migrations](/operators/clickhouse-migrations) runbook for phase ordering
+and replicated-cluster specifics, and apply the expand phase before upgrading the
+analytics services that depend on it.
 
 ## Rollback behavior
 
@@ -177,10 +313,23 @@ during normal diagnostics.
 
 `frameworks cluster upgrade plan` shows the target rollout order and embedded
 SQL migrations by phase. The CLI embeds a release catalog for service database
-ownership, data-migration requirements, compatibility floors, and hard
-intermediate release requirements. `cluster upgrade` uses that catalog together
-with live `_migrations` and service-owned `_data_migrations` state to refuse
-unsafe DB-backed rollouts before changing binaries.
+ownership, data-migration requirements, and the per-release `min_cli_version`
+tooling floor. `cluster upgrade` uses that catalog together with live
+`_migrations` and `_data_migrations` state to refuse unsafe rollouts before
+changing binaries. Engine schema checks (expand + prior postdeploy) apply to a
+service that owns a PostgreSQL/YugabyteDB or ClickHouse schema; the required
+data-migration check applies to **every** service, because a data migration can
+gate a binary that only reads the migrated data without owning its schema.
+Ordering is enforced against the actual migration ledger, not a version label. A
+non-concrete (dev/unversioned) CLI is refused against a release's
+`min_cli_version` unless you pass `--unsafe-ignore-cli-version-floor`. `cluster
+provision` runs the same required-data-migration gate before it deploys
+applications, so a clean-compute redeploy cannot start newer binaries ahead of a
+required migration on a preserved database. The gate runs after database
+initialization and reads durable `_schema_baseline` provenance: a data migration
+introduced strictly below the floor a database was born at is folded into that
+baseline, so a fresh (baseline-born) database is exempt without special-casing
+database existence.
 
 `frameworks cluster data-migrate` is the first-class surface for resumable
 service-owned data migrations. `list` shows catalog-declared work and adoption
@@ -235,7 +384,7 @@ release this manifest belongs to," and `service_version` per component says
 
 Practical consequences:
 
-- `cluster upgrade --plan` shows each service's target image digest and native
+- `cluster upgrade plan` shows each service's target image digest and native
   tarball checksum, not just version labels. If your installed identity equals
   the target identity, nothing is re-pulled regardless of the umbrella
   version.

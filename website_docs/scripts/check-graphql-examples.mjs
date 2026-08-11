@@ -139,9 +139,14 @@ function topLevelFields(block) {
     }
     if (block[j] === ":" || block[j] === "(" || block[j] === "{") {
       if (block[j] === ":") {
-        const actual = block.slice(j + 1).match(/\s*([A-Za-z_][A-Za-z0-9_]*)/)?.[1] ?? ident;
+        // Alias form `alias: field`: the real field is the token AFTER the colon. The match may skip
+        // whitespace between `:` and the field, so advance i past the WHOLE match (`m[0]` = optional
+        // whitespace + field) rather than by the bare field length — otherwise the cursor lands short
+        // and the loop re-scans the field's tail as phantom sibling fields.
+        const m = block.slice(j + 1).match(/^\s*([A-Za-z_][A-Za-z0-9_]*)/);
+        const actual = m?.[1] ?? ident;
         fields.push(actual);
-        i = j + actual.length;
+        i = m ? j + m[0].length : j;
       } else {
         fields.push(ident);
         i += ident.length - 1;

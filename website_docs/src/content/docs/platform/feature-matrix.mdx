@@ -72,6 +72,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#processing--ai
 | ↳ Gateway-backed transcoding | Expanding | API, Dashboard, Docs | Live ABR renditions through Livepeer Gateway or local processing, with processing usage telemetry. |
 | ↳ Live AI processing | Planned | — | ONNX models running directly on the in-memory stream buffer of media edge nodes — detection, transcription, moderation, audio tagging, and embeddings for semantic search. |
 | ↳ Composition and SSAI | Planned | — | MistServer-native blitter for logos, watermarks, and lower-third overlays; Composer for server-side ad insertion (SSAI), raw-pixel composition, picture-in-picture, and automated clipping. |
+| **Workload cost model (GPU-aware scheduling)** *(foundation)* | Planned | — | Predictive per-job resource cost — codec, resolution, framerate, model size, and realtime factor mapped to expected CPU, GPU/VRAM, and bandwidth — continuously corrected by measured costs of completed jobs, feeding processing placement and admission. |
 
 ### Analytics & Observability
 
@@ -94,7 +95,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#infrastructure
 | ↳ Nodes (edge / ingest / playback) *(foundation)* | Available | API, Agents (MCP), CLI, Dashboard, Docs | Per-node health, info, and discovery. |
 | ↳ Node mode (drain / maintenance) *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Operator controls to drain a node, put it in maintenance, or restore it to active service. |
 | ↳ Federated network status *(foundation)* | Available | API, Dashboard, Docs | Cross-cluster routing visibility and orchestrator vantage points. |
-| ↳ Edge auto-update *(foundation)* | Available | CLI, Docs | Foghorn's release reconciler auto-updates Helmsman, MistServer, and Caddy on edge nodes over the Helmsman control stream — native and single-image container nodes alike. |
+| ↳ Edge auto-update *(foundation)* | Available | CLI, Docs | Automatic edge component updates — Quartermaster owns the release catalog and per-cluster targets; Foghorn's release reconciler applies them to Helmsman, MistServer, and Caddy over the Helmsman control stream — native and single-image container nodes alike. |
 | ↳ Edge ISO and cloud images *(foundation)* | Planned | — | Bootable FrameWorks Edge ISO and prebuilt cloud/marketplace images for on-demand media-cluster scaling. |
 | **Cluster marketplace** | Expanding | API, Agents (MCP), Dashboard, Docs | Browse listed clusters and manage subscriptions. A vetted public marketplace program for third-party capacity is on the roadmap. |
 | ↳ Cluster invites *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Direct invites granting another tenant access to a cluster. |
@@ -107,14 +108,22 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#infrastructure
 | ↳ Managed DNS and cluster domains | Expanding | API, Docs | Platform-managed DNS, TLS certificates, media-cluster domains, and tenant streaming domain discovery. |
 | ↳ Generic proxying and CDN services | Planned | — | Customer-configured proxy/CDN front doors for non-video services and adjacent workloads. |
 | ↳ Standalone object and block storage | Planned | — | Customer-facing storage buckets, volumes, policies, and lifecycle controls outside the video-asset workflow. |
+| **NAT-aware routing and traversal** | Planned | — | NAT-type classification as a first-class routing and placement signal, platform-coordinated hole punching, and platform-managed measurement of inter-server network performance (latency, throughput) feeding routing and capacity decisions — so self-hosted nodes behind NAT participate fully in the federated network. |
+| **Federation state synchronization** | Planned | — | Decentral distribution of configuration and state changes across a dynamic federation — clusters and servers join, leave, or drop offline at will — with automatic conflict resolution between concurrent changes and reconvergence after network partitions, without a central coordination point. |
+| **Stream replication orchestration** | Planned | — | Pre-emptive stream distribution — spread a stream to a cell or region ahead of demand, explicit hop topology, and per-stream replication policy (max replicas, allowed regions). |
+| **Placement policy and storage tiering** | Planned | — | Two-sided placement policy — cluster-owner and content-owner constraints (data residency, minimum durable copies) compiled into signed enforcement bundles evaluated at serve/ingest/process/store/replicate/peer decision points — over a cold-to-hot storage tier ladder with a backend-keyed placement ledger. |
 
 ### Commerce & Billing
+
+Planned items in this area are detailed on the [Roadmap](/roadmap#commerce--billing).
 
 | Capability | Availability | Surfaces | What it unlocks |
 | --- | --- | --- | --- |
 | **Billing & prepaid balance** | Available | API, Agents (MCP), Dashboard, Docs | Card / Mollie / crypto top-ups, billing details, invoices, prepaid balance. |
 | ↳ Usage caps, alerts, retention cost preview | Expanding | — | Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes. |
 | **Wallet & on-chain identity** | Expanding | API, Agents (MCP), Dashboard, Docs | Wallet sign-in, linked-wallet account identity, and x402 micropayments. |
+| **Operator settlement and attribution** | Planned | — | Attribute served traffic to the operators whose clusters actually carried it — manipulation-resistant across independent operators — and settle the full loop, from credit accrual through operator-visible reporting to payout execution. |
+| **Stream-level balances** | Planned | — | Optional per-stream balances that fund usage before the tenant balance — pay-per-view, tips, sponsor-funded streams — plus promo codes, referral rewards, and volume discounts. |
 
 ### Developer Platform & Agents
 
@@ -138,6 +147,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#engagement--in
 | --- | --- | --- | --- |
 | **Conferencing and remote contribution** | Planned | — | Multi-party WebRTC rooms and remote-guest contribution — commentators and callers mixed into a managed stream. |
 | **Rooms, chat, and interactivity (Parlor)** | Planned | — | Viewer chat and engagement primitives — channel points, hype trains, leaderboards, flair, and moderation views — synced to the stream. |
+| **Live commerce (shopping and auctions)** | Planned | — | Shopping and server-authoritative auctions attached to live streams — product showcases, carts and orders, and auction mechanics that stay fair for viewers at different latencies behind the live edge. |
 
 ### Account & Apps
 

@@ -53,7 +53,7 @@ The worker scans `viewer_sessions_current` for sessions whose `last_updated` is 
 
 ## Divergence guardrail
 
-`projection_divergences` is an append-only audit table written when the parser detects that a new projection of an already-seen logical fact carries a different rated-field value beyond a per-meter epsilon. The new row is **still written** to the `*_final` table (append invariant — append always, never refuse), and the divergence is logged with:
+`projection_divergences` is an append-only audit table written when the parser detects that a new projection of an already-seen logical fact carries a different rated-field value beyond a per-meter epsilon. The divergence row is written **before** the new projection is appended to the `*_final` table; if the divergence row cannot be written, the projection insert is refused and the Kafka message retries (see [meter-contracts.md](meter-contracts.md)). Once recorded, the new projection row is still appended, and the divergence is surfaced with:
 
 - a Prometheus counter `periscope_projection_divergence_total{table, meter, field}`,
 - an audit row in `projection_divergences` with the prior value, new value, and `source_event_id` for replay.

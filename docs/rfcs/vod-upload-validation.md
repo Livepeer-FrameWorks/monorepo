@@ -10,6 +10,10 @@ Proposed
 - 2-hour expiry window is excessive for the threat model
 - Post-upload processing now exists, but size/type hardening is still incomplete
 
+## Owning services / modules
+
+Foghorn (`api_balancing`) owns the fixes: `internal/storage` (presign expiry, HeadObject) and `internal/grpc` (validation in CompleteVodUpload / the VOD pipeline). ffprobe integration could reuse existing processing infrastructure; bucket policies live in Terraform/infrastructure.
+
 ## Current State
 
 User-facing VOD upload flow: GraphQL → Commodore → Foghorn → S3 presign.

@@ -10,6 +10,10 @@ Partially implemented. Node-level `normal` / `draining` / `maintenance` operatio
 - Foghorn stops routing new traffic to drained nodes while letting existing sessions complete.
 - Optional DNS integration removes drained nodes from pooled records.
 
+## Owning services / modules
+
+Foghorn (`api_balancing`) owns routing behavior and the drain/mode surfaces (HTTP + gRPC); Quartermaster (`api_tenants`) the schema and gRPC APIs; Helmsman (`api_sidecar`) node lifecycle reporting. Optional: Navigator (`api_dns`) for removing drained nodes from pooled records.
+
 ## Current State
 
 - Node-level operational modes exist: `normal`, `draining`, and `maintenance`.

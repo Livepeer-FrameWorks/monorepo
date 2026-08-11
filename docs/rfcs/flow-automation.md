@@ -11,6 +11,10 @@ Draft
 - Enables auto-clip, alerts, webhooks without custom integration code
 - Integrates with AI detection for intelligent triggers (scene detection, object recognition)
 
+## Owning services / modules
+
+Proposed owners: a workflow engine (new service, or an extension of Commodore) with workflow tables in the Commodore schema; Bridge (`api_gateway`) for the GraphQL additions; the webapp for the visual builder. It consumes Kafka `service_events`/`analytics_events`/`ai_events`, with Listmonk (email) and Signalman (notifications) as action integrations.
+
 ## Current State
 
 - No workflow automation system exists

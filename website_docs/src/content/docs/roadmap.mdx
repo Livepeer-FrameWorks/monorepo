@@ -87,6 +87,14 @@ An ONNX runtime in the media engine is in active development, running ultralight
 
 **Outcome:** run real-time AI where the stream already is — on the edge node — and burst heavy models to dedicated compute without leaving the control plane.
 
+### Workload Cost Model <Badge text="Next" variant="tip" />
+
+Processing placement today routes by node class and current load; what a job will actually cost is only knowable after it runs. The planned cost model predicts a job's footprint — CPU, GPU/VRAM, bandwidth — from its parameters (codec, resolution, framerate, model size, faster/slower-than-realtime factor), corrects those predictions continuously from measured costs of completed jobs, and accounts for interference between co-placed jobs and live serving on the same node. GPU and VRAM become first-class, measured resources.
+
+**Builds on:** processing orchestration and viewer routing's capacity scoring.
+
+**Outcome:** place transcode and AI jobs where they actually fit — before they run — instead of discovering overload after the fact.
+
 ### Composition and SSAI <Badge text="Later" variant="note" />
 
 Composition stays inside the media engine: a MistServer-native blitter for logos, watermarks, and lower-third overlays; MistServer's Composer reused for server-side ad insertion (SSAI) and raw-pixel composition; picture-in-picture and automated clipping layered on top.
@@ -139,6 +147,44 @@ Marketplace primitives — listing, invites, subscription requests, approvals, p
 
 **Outcome:** turn the existing marketplace plumbing into a vetted public program so tenants can buy capacity from third-party operators with a known support and trust contract.
 
+### Placement Policy and Storage Tiering <Badge text="Next" variant="tip" />
+
+Where content lives becomes policy-driven from two sides: cluster owners declare what workload they accept, content owners declare where their material may go — data residency, minimum durable copies — and both compile into signed enforcement bundles evaluated at every decision point (serve, ingest, process, store, replicate, peer). Underneath sits a storage tier ladder from cold archive to hot in-memory, with a ledger of which copies exist where.
+
+**Builds on:** BYOC ownership levels and the cluster marketplace.
+
+**Outcome:** run one policy model across SaaS, self-hosted, and federated deployments — so sovereignty requirements are enforced by the platform, not by operational discipline.
+
+### Stream Replication Orchestration <Badge text="Next" variant="tip" />
+
+Replication today is on-demand: a viewer shows up, the edge pulls the stream. Orchestration adds the proactive half — pre-emptively spreading a stream to a cell or region ahead of expected demand, explicit hop topology between origin and edge, and per-stream replication policy (replica caps, allowed regions).
+
+**Builds on:** the federation network and viewer routing.
+
+**Outcome:** position streams where the audience will be before the audience arrives, under explicit per-stream policy.
+
+### Federation State Synchronization <Badge text="Next" variant="tip" />
+
+Federation-wide configuration and state distribution today flows through one central management point. This work makes it decentral: clusters and servers of independent parties join, leave, or drop offline at will; concurrent changes from multiple parties resolve automatically without a central coordinator; and parts of the network that diverge during a partition reconverge when connectivity returns.
+
+**Builds on:** the federation network.
+
+**Outcome:** a federation where no single party's outage or authority blocks the rest of the network from changing and converging.
+
+### NAT-Aware Routing and Traversal <Badge text="Next" variant="tip" />
+
+Self-hosted nodes often sit behind NAT, where reachability depends on NAT type and connection direction. The control plane gains NAT-type classification as a routing and placement signal, coordination of traversal attempts between the right node pairs, and platform-managed probe/relay infrastructure that also measures inter-server network performance (latency, throughput) as an input to routing and capacity decisions — so a node in an office network participates fully in the federated network.
+
+**Builds on:** edge clusters and the federation network.
+
+**Outcome:** stop treating NAT'd nodes as second-class — route and place around reachability instead of failing on it.
+
+### Platform Trust and Operations Hardening <Badge text="Next" variant="tip" />
+
+Two operational deepenings of the platform itself: live rotation of trust material (intermediate CA rotation with overlapping validity, asymmetric token signing where keys never leave the issuing service, cluster-bound service identity) and drain-integrated OS updates, where each server role defines what a safe restart means — media sessions run out, database replicas gate on recovery, brokers hand over leadership — while cluster capacity floors hold during the update wave.
+
+**Outcome:** long-lived clusters that refresh their own trust and patch their own hosts without maintenance windows or service interruption.
+
 ### Managed DNS, Proxying, and Storage Services <Badge text="Later" variant="note" />
 
 Managed DNS, generic CDN/proxying, and standalone object/block storage are backlog items adjacent to video delivery. FrameWorks already runs DNS automation, service proxying, and media storage internally for operated deployments; the roadmap work is turning the right parts into customer-facing products with domains, origins, Ceph-backed storage resources, self-hosted/Anycast DNS paths, policies, billing, and support boundaries.
@@ -152,6 +198,24 @@ The deepest BYOC level: run the entire stack with no runtime dependency on Frame
 **Builds on:** standalone object/block storage and managed DNS from the Managed DNS, Proxying, and Storage Services item above.
 
 **Outcome:** operate FrameWorks entirely within your own jurisdiction and ownership boundary, with no control-plane dependency on us.
+
+## Commerce & Billing
+
+What ships today in this area: [Platform capabilities → Commerce & Billing](/platform/feature-matrix#commerce--billing).
+
+### Operator Settlement and Attribution <Badge text="Next" variant="tip" />
+
+In a federated network, one viewer session can cross clusters run by different operators. Settlement attributes every served byte to the operator who actually carried it — manipulation-resistant, so no participant can claim traffic they didn't serve — and closes the loop: credit accrual, operator-visible reporting, and payout execution. The accrual ledger exists internally today; the attribution hardening, reporting surface, and payouts are the roadmap work.
+
+**Builds on:** the cluster marketplace and federation network.
+
+**Outcome:** third-party operators get paid for the traffic they serve, with numbers both sides can verify.
+
+### Stream-Level Balances <Badge text="Later" variant="note" />
+
+Optional per-stream balances that fund usage before the tenant balance — enabling pay-per-view, tips, and sponsor-funded streams — plus promo codes, referral rewards, and volume discounts.
+
+**Outcome:** let a stream pay for itself, funded by its audience or its sponsor, without touching the tenant's main balance.
 
 ## Developer Platform & Agents
 
@@ -185,11 +249,19 @@ The next major feature theme after the current telemetry pass. Conferencing brin
 
 **Outcome:** bring guests and commentators into the stream itself and give every stream a live chat, without third-party tooling.
 
-### Rooms and Interactivity (Parlor) <Badge text="Later" variant="note" />
+### Rooms and Interactivity (Parlor) <Badge text="Next" variant="tip" />
 
-Beyond chat, the rooms service grows into engagement primitives synced to the stream: channel points, hype trains, leaderboards, viewer flair, viewer games, and moderation views with per-viewer history.
+Beyond chat, the rooms service grows into engagement primitives synced to the stream: channel points, hype trains, leaderboards, viewer flair, viewer games, and moderation views with per-viewer history. Events bind to the stream timeline per viewer — everyone sees a reaction at the moment it belongs to, regardless of how far behind the live edge they watch.
 
 **Outcome:** give streamers first-class engagement and monetization mechanics on their own infrastructure instead of bolting on overlay services.
+
+### Live Commerce (Shopping and Auctions) <Badge text="Next" variant="tip" />
+
+Shopping and auctions attached to live streams: product showcases, carts and orders, and server-authoritative auction mechanics. The hard problem is latency fairness — viewers watch at different distances behind the live edge, so interactive events must bind to the stream timeline, and competitive interactions like auction closes need one authoritative truth that treats differently-delayed bidders fairly.
+
+**Builds on:** rooms and interactivity, and stream-level balances for funding flows.
+
+**Outcome:** sell and auction inside the stream itself, with mechanics that stay fair at live-streaming latencies.
 
 ## Account & Apps
 

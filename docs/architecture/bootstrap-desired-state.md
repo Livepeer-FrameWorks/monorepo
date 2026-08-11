@@ -70,6 +70,13 @@ owning service's gRPC API.
 things across three services: a Quartermaster tenant shell, a Purser billing+access
 reconcile (after clusters and pricing exist), and a Commodore user attached to the tenant.
 
+Quartermaster's ownership of tenant identity extends past bootstrap into runtime
+intent: tenant aliases and custom domains are decided in Quartermaster and handed to
+Navigator through durable, transactionally-enqueued outboxes
+(`navigator_tenant_alias_outbox`, `navigator_custom_domain_outbox`) plus a periodic
+backstop reconciler. Bootstrap never writes those tables; the pipeline is documented
+in `navigator-aliases.md`.
+
 ---
 
 ## Top-level shape
@@ -94,8 +101,10 @@ purser:
   customer_billing: [ ... ]        # explicit tenant-to-tier billing links
 
 commodore:
-  # users live under accounts (see below); commodore: section is reserved for future
-  # commodore-owned bootstrap state that doesn't fit the account model.
+  # users live under accounts (see below); the commodore: section carries
+  # operator-owned stream declarations.
+  pull_streams: [ ... ]            # stable key: playback_id → commodore.stream_pull_sources
+  mist_native_streams: [ ... ]     # stable key: playback_id → commodore.streams + stream_mist_sources
 
 accounts:
   - kind: system_operator
@@ -107,7 +116,9 @@ accounts:
 ```
 
 The `accounts:` array creates users for a tenant. Billing tier membership is
-tenant-level state and is declared under `purser.customer_billing`. The CLI renderer
+tenant-level state and is declared under `purser.customer_billing`. The
+`commodore bootstrap` subcommand reconciles all three Commodore-owned slices:
+`accounts[*].users`, `commodore.pull_streams`, and `commodore.mist_native_streams`. The CLI renderer
 validates intra-file references, then the service-specific bootstrap commands
 reconcile their owned sections; there is not currently a top-level
 `frameworks bootstrap validate` command.
@@ -199,8 +210,17 @@ nodes:
       port: 51820
 ```
 
-Stable: `id`, `cluster_id`, `external_ip`, `wireguard.ip`. Drift on any of these = fail
-(the existing `CreateNode` handler enforces this; the reconciler keeps that semantic).
+`id` is the probe key. Stable: `external_ip`, `wireguard.ip`, `wireguard.public_key` —
+drift on any of these = fail (refusing rewrite). `cluster_id` is not unconditionally
+stable: for nodes bootstrap owns (`gitops_seed` / `adopted_local`) the reconciler moves
+the node to the desired cluster (`moveBootstrapOwnedNodeCluster`); drift fails only for
+`runtime_enrolled` nodes.
+
+Rows inserted here get `enrollment_origin = gitops_seed`. The reconciler only owns
+nodes whose origin is `gitops_seed` or `adopted_local`; nodes that joined at runtime
+via a bootstrap token (`runtime_enrolled`) are never moved or rewritten by bootstrap.
+The provenance model and the `mesh reconcile --write-gitops` adoption/promotion flow
+are documented in `node-enrollment.md`.
 
 ### `mesh`
 
@@ -423,12 +443,14 @@ step 4).
 
 Commodore reconciler semantics for any user under `accounts[*].users`:
 
-- Lookup by email (global — `commodore.users.email` has no per-tenant uniqueness).
-- If found in the same tenant with matching `role`, `first_name`, `last_name`,
-  `is_active=true`, `verified=true` → no-op.
-- If found in the same tenant with mismatched mutable fields → update.
-- If found in a **different** tenant → fail loud. Bootstrap does not silently move users
-  between tenants.
+- Probe by `(tenant_id, email)` — the lookup itself is tenant-scoped.
+- If found with matching `role`, `first_name`, `last_name`, `permissions`, and
+  `platform_operator` → no-op.
+- If found with mismatched mutable fields → update.
+- If the user exists in a **different** tenant, the tenant-scoped probe misses and the
+  resulting INSERT fails loud against the global case-insensitive unique index
+  `idx_commodore_users_email_ci`. Bootstrap does not silently move users between
+  tenants.
 - Password is rewritten only when the desired-state file declares
   `reset_credentials: true` on the user **and** the bootstrap subcommand is invoked with
   `--reset-credentials`.

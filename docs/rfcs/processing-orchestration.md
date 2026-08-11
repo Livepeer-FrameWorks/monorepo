@@ -1,5 +1,17 @@
 # RFC: Processing Orchestration (Live + VOD)
 
+> **Note:** The _implemented_ artifact job pipeline (clip / VOD-upload / DVR-chapter →
+> `processing+<hash>` → `vod+<internal_name>`, and where tracks/duration/readiness are captured)
+> is now documented canonically in
+> [`docs/architecture/processing-pipeline.md`](../architecture/processing-pipeline.md).
+>
+> This RFC remains OPEN for processing as a first-class orchestrated _capability_, which is still
+> a grey area: capacity- and GPU-aware scheduling, a native transcode path alongside the Livepeer
+> network, AI/GPU task types and batching (e.g. VOD), and live-stream processing policy (today
+> live transcode is implicit Mist/Helmsman config, not job-orchestrated). This is pre-work before
+> processing can be exposed as a product surface, parallel to the storage/policy-engine track.
+> For how the pipeline works _today_, read the architecture doc; for where it's _going_, this RFC.
+
 ## Status
 
 Partially implemented
@@ -10,6 +22,10 @@ Partially implemented
 - Foghorn coordinates VOD job routing and dispatch to processing-capable Helmsman nodes.
 - Processing jobs are a first-class workflow (`queued` -> `dispatched`/`processing` -> `completed`/`failed`).
 - Live processing policy is still mostly outside this pipeline.
+
+## Owning services / modules
+
+Foghorn (`api_balancing`) owns VOD job scheduling and state (`foghorn.processing_jobs`); Helmsman (`api_sidecar`) reports node processing capability and executes dispatched jobs; usage events flow through Decklog/Periscope.
 
 ## Current State
 

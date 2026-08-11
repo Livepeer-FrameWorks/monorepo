@@ -142,10 +142,13 @@ migrate so they cannot drift).
 
 ## Current state: single node; multi-node bootstrap gated
 
-Production runs **one** ClickHouse node today (`clickhouse-eu-1`). The schema,
-Keeper, and config are N>1-ready, but the multi-node _bootstrap_ (Keeper-quorum
-formation ordering, and per-node fan-out for upgrade/restart/preflight) is not yet
-built — `cluster init` **refuses** N>1 with a clear message. Growth to a 3-replica
-cluster is the documented expansion runbook, not an automatic flip. Node identity
-(`id`) is validated unique and positive, shared with the Postgres/Kafka invariant
-(`validateClusterNodeIDs`); ClickHouse and Yugabyte additionally require unique hosts.
+Production runs **one** ClickHouse node. The schema, Keeper, and config are N>1-ready,
+but the multi-node _bootstrap_ (Keeper-quorum formation ordering, and per-node fan-out
+for upgrade/restart/preflight) is not yet built — `cluster init` **refuses** N>1 with a
+clear message. Growth to a 3-replica cluster is the documented expansion runbook, not an
+automatic flip. Moving a single node's analytics onto a new Replicated node is an
+operator-driven `cluster clickhouse migrate` (backfill → sync → verify → cutover); the
+concrete node/endpoint sequence for a given deployment lives in that deployment's internal
+plan, not here. Node identity (`id`) is validated unique and positive, shared with the
+Postgres/Kafka invariant (`validateClusterNodeIDs`); ClickHouse and Yugabyte additionally
+require unique hosts.

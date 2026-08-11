@@ -15,6 +15,10 @@ service/node provisioning, and enrollment tokens for edge auth. See
 - Introduce a service JWT (or similar) to make `cluster_id` non-forgeable.
 - Quartermaster issues and validates service identity for registration.
 
+## Owning services / modules
+
+Quartermaster (`api_tenants`) owns bootstrap/enrollment token issuance and revocation (`internal/bootstrap`, gRPC handlers in `internal/grpc/server.go`); `pkg/middleware` and `pkg/clients/*` carry the shared service-auth interceptor and client wiring; `pkg/auth` holds the token helpers.
+
 ## Current State
 
 - gRPC middleware accepts either a shared `SERVICE_TOKEN` or a user JWT.
@@ -27,7 +31,7 @@ Evidence:
 - `pkg/middleware/grpc.go`
 - `pkg/clients/*/grpc_client.go`
 - `api_tenants/internal/bootstrap`
-- `api_tenants/internal/grpc/bootstrap_tokens.go`
+- `api_tenants/internal/grpc/server.go` (`CreateBootstrapToken` :8283, `CreateEnrollmentToken` :2008, `RevokeBootstrapToken` :8475)
 - `pkg/auth`
 
 ## Problem / Motivation

@@ -10,6 +10,8 @@ Draft
 - NAT type classification becomes a scoring signal in viewer routing.
 - Hole punching coordination becomes a platform-managed feature.
 - Nautophone monitoring gets absorbed into operator dashboards.
+- The plane split: the Go control plane ADMINISTERS classification and ORCHESTRATES punches; the
+  C++ media plane EXECUTES them.
 
 ## Current State
 
@@ -20,6 +22,8 @@ Those MistServer source files are upstream/external context, not files currently
 Nautophone (`mistserver/nautophone/`) provides a web UI and Node.js translator service for monitoring endpoint states.
 
 Go Foghorn (`api_balancing/`) replaced C++ MistUtilLoad-style load-balancing responsibilities in the platform, but it has NOT absorbed C++ Foghorn's NAT traversal capabilities. The two Foghorns serve different purposes today.
+
+Inter-server network performance is not measured anywhere in the platform today: no component measures latency or throughput between platform servers. Node telemetry (CPU, RAM, bandwidth counters) is per-node, and the geo distance used in balancer scoring is a static proxy, not a measurement of the path.
 
 SDKs partially support ICE server configuration: `npm_studio` WhipClient accepts optional `iceServers` in its config (`types.ts`). `npm_player` NativePlayer and MistWebRTCPlayer cast `iceServers` from the source via `as any`; it is NOT in the public `StreamSource` interface.
 
@@ -56,9 +60,18 @@ WebRTC playback (WHEP) and publishing (WHIP) fail behind symmetric NATs and rest
 
 ## Proposal
 
+The division of labor across all phases: the **Go control plane** owns classification
+ADMINISTRATION (keeping every node's NAT type current — collection via Helmsman, periodic
+re-classification, staleness handling), punch ORCHESTRATION (deciding whether, when, and between
+whom a punch happens), and the placement-signal integration (feeding NAT type into balancer scoring
+and into the placement policy engine's `serve`/`process` decision inputs — see
+`docs/rfcs/placement-policy-engine.md`). The **C++ media plane** EXECUTES the punch: MistServer's
+STUN/hole-punch machinery sends the actual packets and holds the resulting paths. The Go side never
+touches media-path packets; the C++ side never decides routing.
+
 ### Phase 1: NAT type as scoring signal
 
-Foghorn already scores edges by CPU, RAM, bandwidth, and geo distance. Add NAT type as a new scoring dimension. OPEN edges receive a bonus for WebRTC viewers; IMPENETRABLE edges get deprioritized. Edge nodes report their NAT type via Helmsman (MistServer already classifies this internally). New field in the EdgeTelemetry protobuf message.
+Foghorn already scores edges by CPU, RAM, bandwidth, and geo distance. Add NAT type as a new scoring dimension. OPEN edges receive a bonus for WebRTC viewers; IMPENETRABLE edges get deprioritized. Edge nodes report their NAT type via Helmsman (MistServer already classifies this internally — Helmsman relays the classification, keeping administration in the control plane while classification measurement stays in the media plane). New field in the EdgeTelemetry protobuf message. The same per-node NAT type doubles as a decision input at the placement policy engine's `serve`/`process` verbs.
 
 ### Phase 2: Built-in coordination server
 
@@ -66,11 +79,36 @@ Port C++ MistUtilFoghorn coordination logic into Go Foghorn. Add the Foghorn UDP
 
 ### Phase 3: Platform-managed hole punching
 
-When Foghorn routes a viewer to an edge, if both sides have compatible NAT types (e.g., CONSISTENT to CONSISTENT), Foghorn coordinates the punch automatically. If both sides are IMPENETRABLE, Foghorn routes through an OPEN edge as a relay instead.
+When Foghorn routes a viewer to an edge, if both sides have compatible NAT types (e.g., CONSISTENT to CONSISTENT), Foghorn orchestrates the punch automatically — the MistServer processes on each side execute it. If both sides are IMPENETRABLE, Foghorn routes through an OPEN edge as a relay instead.
+
+#### Inter-server network performance measurement
+
+The punch/probe machinery gives the platform, for the first time, active probes between its own servers. This phase extends those probes into a measurement capability: coordination exchanges already yield round-trip timings, and scheduled probe runs between server pairs add throughput estimation on top. Inter-server latency and throughput are measured nowhere in the platform today (see Current State); this subsection makes them a structured signal with two consumers:
+
+- **Balancer scoring** — relay selection (which OPEN edge relays an IMPENETRABLE pair) and inter-server routing generally can prefer measured-good paths over the static geo-distance proxy.
+- **The workload/capacity model** — measured network performance joins measured utilization as a placement input; see `docs/rfcs/workload-cost-model.md`, whose continuous-adjustment consumer expects exactly this signal.
+
+How aggressively to probe is a research question in its own right: throughput probing consumes the bandwidth it measures, so probe cadence and sizing must stay subordinate to live traffic. The signal ships as observability first; consumers opt in separately.
 
 ### Phase 4: ICE server injection
 
 Foghorn injects `iceServers` into balancer responses with short-lived TURN credentials when relay is needed. Add `iceServers` to the `StreamSource` interface in `npm_player`. SDKs auto-consume platform-provided ICE servers without operator configuration.
+
+## Owning services / modules
+
+- **Foghorn (api_balancing, control plane)** — classification administration (per-node NAT-type
+  registry, staleness/re-classification policy), punch orchestration (UDP coordination server,
+  punch/relay decisions), NAT-aware scoring, ICE credential injection, the placement-signal feed
+  into the policy engine, and inter-server network-performance measurement (probe scheduling,
+  per-pair latency/throughput registry) feeding balancer scoring and the workload cost model
+  (`docs/rfcs/workload-cost-model.md`).
+- **Helmsman (api_sidecar, media plane edge)** — relays MistServer's NAT classification to Foghorn
+  via EdgeTelemetry.
+- **MistServer (C++ media plane)** — measures NAT type and executes punches (STUN, port
+  randomization, punch threads); OPEN edges double as relays.
+- **pkg/proto** — EdgeTelemetry NAT-type field, coordination messages.
+- **npm_player / npm_studio** — consume injected `iceServers`.
+- **Chartroom/Foredeck** — absorbed Nautophone monitoring surface.
 
 ## Impact / Dependencies
 
@@ -117,5 +155,6 @@ Foghorn injects `iceServers` into balancer responses with short-lived TURN crede
 - [Evidence] `api_balancing/internal/balancer/balancer.go` (current scoring model)
 - [Evidence] `npm_player/packages/core/src/core/PlayerInterface.ts` (iceServers via as any)
 - [Evidence] `npm_studio/packages/core/src/types.ts` (optional iceServers config)
+- [Reference] `docs/rfcs/workload-cost-model.md` (consumer of the inter-server network-performance signal)
 - [Reference] RFC 8489 (STUN)
 - [Reference] RFC 8656 (TURN)

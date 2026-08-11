@@ -203,6 +203,10 @@ See [DNS and Cluster Routing](/operators/dns) for certificate routing and provid
 
 **Providers:** Cloudflare R2 and Hetzner Object Storage are the supported defaults. Any S3-compatible backend works (the AWS SDK v2 client + `BaseEndpoint` + `UsePathStyle = true` cover MinIO, Wasabi, Backblaze B2, AWS S3 itself).
 
+:::caution[A cell's S3 backend is immutable]
+A Foghorn cell's storage **descriptor** — `STORAGE_S3_BUCKET`, `STORAGE_S3_ENDPOINT`, `STORAGE_S3_REGION`, `STORAGE_S3_PREFIX` — is fixed for the life of that cell. Foghorn records it on first boot (`foghorn.cell_storage_identity`) and **refuses to start** if any of those four values later change: cleanup routes each object to the backend it was written to, and a cell wires only its current store, so a silent repoint would delete from (or stall on) the wrong backend. **Credentials rotate freely** — `STORAGE_S3_ACCESS_KEY` / `STORAGE_S3_SECRET_KEY` are not part of the identity. Backend **repointing is not supported**: to move a cell to a different bucket/endpoint/region/prefix, migrate its data off the old backend first, or stand up a new cell.
+:::
+
 **Consumed By:**
 
 - **Foghorn** (`api_balancing`) — mints presigned PUT/GET URLs for clip / DVR / VOD lifecycle, writes manifests directly
@@ -237,6 +241,14 @@ Single-region deployments can use one provider for both EU and US clusters — t
 
 1. Create bucket via Hetzner Cloud Console under the right project + region (`nbg1` Nuremberg, `fsn1` Falkenstein, `hel1` Helsinki).
 2. Generate an access key + secret via the bucket UI.
+3. **Required: set an `AbortIncompleteMultipartUpload` lifecycle rule (e.g. 7 days).** Unlike R2 — which aborts incomplete multipart uploads automatically after 7 days — Hetzner keeps interrupted upload fragments indefinitely without this rule. Foghorn's in-process abort on a failed upload is best-effort and a crash between `CreateMultipartUpload` and the durable row can leave an upload with no database record to retry from, so the bucket lifecycle is the required final backstop against orphaned fragments. Set it with any S3-compatible tool, e.g.:
+
+   ```bash
+   aws s3api put-bucket-lifecycle-configuration --endpoint-url https://<region>.your-objectstorage.com --bucket <bucket> \
+     --lifecycle-configuration '{"Rules":[{"ID":"abort-incomplete-multipart","Status":"Enabled","Filter":{"Prefix":""},"AbortIncompleteMultipartUpload":{"DaysAfterInitiation":7}}]}'
+   ```
+
+   This is the ONLY bucket-level lifecycle FrameWorks requires: it reaps abandoned upload parts only, never completed objects (tenant retention stays FrameWorks-owned).
 
 ### CORS policy (required for VOD uploads)
 
@@ -308,7 +320,7 @@ STORAGE_S3_PREFIX=""              # optional key prefix inside the bucket
 
 In multiregion deployments, EU and US clusters use different providers and therefore different credentials. The CLI assembles env per host so each box receives the credentials for the cluster it serves — see [Credential Delivery](#credential-delivery) above. Cluster-bound services pull `STORAGE_S3_*` from cluster-scoped env_files referenced by the manifest's service definitions.
 
-Chandler also consults `infrastructure_clusters.s3_endpoint` / `s3_bucket` / `s3_region` for the local `CLUSTER_ID` and overrides env defaults with the cluster-row values. Credentials are never stored in `infrastructure_clusters` — they remain env-only.
+When `CLUSTER_ID` is set, Chandler takes the full descriptor tuple (`s3_bucket` / `s3_endpoint` / `s3_region` / `s3_prefix`) **exclusively from Quartermaster's `infrastructure_clusters` row** — the sole authority. There is no env descriptor fallback: without a usable cluster-row descriptor Chandler starts but is not ready (`/ready` → 503). Only the access/secret **credentials** come from env; they are never stored in `infrastructure_clusters`. See [Media storage](/operators/media-storage/) for the full authority chain.
 
 ### Known gotchas
 

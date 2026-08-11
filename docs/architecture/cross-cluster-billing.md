@@ -50,6 +50,27 @@ Paid invoices allocate storage line revenue across those provider rows and
 write `operator_credit_ledger` accruals with
 `source_type='storage_provider_usage'`.
 
+## Operator Credit Accrual
+
+`api_billing/internal/operator/credit.go` turns paid customer invoices into
+cluster-operator revenue. Only `paid` invoices accrue (no provisional revenue),
+and only `third_party_marketplace`-attributed lines produce rows —
+platform-official and tenant-private clusters accrue nothing. Each accrual
+records `gross_cents`, a platform fee resolved from `platform_fee_policy` basis
+points (per-owner row wins over the global marketplace default; missing policy
+fail-softs to 0 bps), and the resulting `payable_cents`. New accruals start
+`accruing` only for `approved` + `payout_eligible` owners in `cluster_owners`;
+everyone else accrues as `held` — complete for audit, parked for payout.
+Writers are idempotent via partial unique indexes per source
+(`invoice_line_item_id`, `storage_provider_usage_record_id`,
+`usage_adjustment_id`, `stripe_invoice_id`). Payment reversals
+(refunds/chargebacks) write negating `entry_type='clawback'` rows referencing
+the original accrual via `reverses_ledger_id`, deduplicated through
+`operator_credit_clawback_reversals`. Payout execution and operator-visible
+reporting are not built; the productization of this ledger into the full
+attribution → accrual → payout loop is
+`docs/rfcs/federated-settlement-attribution.md`.
+
 ## Key Files
 
 | File                                             | Purpose                                                                              |
@@ -57,6 +78,7 @@ write `operator_credit_ledger` accruals with
 | `api_balancing/internal/triggers`                | Sets `origin_cluster_id` in streamContext and triggers                               |
 | `api_analytics_ingest/internal/handlers`         | Extracts `cluster_id` + `origin_cluster_id` from MistTrigger into ClickHouse         |
 | `api_analytics_query/internal/handlers`          | Per-cluster billing records (`generateTenantUsageSummary`)                           |
+| `api_billing/internal/operator/credit.go`        | Operator credit-ledger accrual (marketplace lines, storage providers, fee bps)       |
 | `pkg/database/sql/clickhouse`                    | Schema with cluster columns and MVs                                                  |
 | `api_control/internal/grpc`                      | `ResolveIdentifier` enriches with cluster context via `resolveClusterRouteForTenant` |
 | `pkg/proto`                                      | `origin_cluster_id` field on `MistTrigger`                                           |

@@ -50,7 +50,7 @@ Examples:
 
 ### Proto Definition
 
-Location: `pkg/proto`
+Location: `pkg/proto/shared.proto` (generated Go package `pkg/proto/shared`)
 
 ```protobuf
 message WebhookRequest {

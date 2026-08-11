@@ -31,8 +31,8 @@ ensureNodeTuning     (this role)             frameworks cluster os update --chec
         ├─► snapd        (purge + mask)                of pending updates
         ├─► systemd      (mask motd-news, fwupd,
         │                 e2scrub if no LVM)
-        ├─► sysctl       (10-frameworks-baseline)
-        │   + edge addition (20-frameworks-edge)
+        ├─► sysctl       (90-frameworks-baseline)
+        │   + edge addition (91-frameworks-edge)
         └─► limits       (10-frameworks-baseline)
                                                        │
                                                        ▼
@@ -122,7 +122,8 @@ bookworm). Achieved by:
   `distribution_release`.
 - All managed files are drop-ins under `.d/` directories: `/etc/apt/apt.conf.d/`,
   `/etc/needrestart/conf.d/`, `/etc/sysctl.d/`, `/etc/security/limits.d/`.
-  Lex-sorted; our `zz-`-prefixed names always win the sort race.
+  Lex-sorted; only the apt and needrestart drop-ins use `zz-` prefixes to win the
+  sort race (sysctl uses `90-`/`91-`, limits `10-`).
 - `systemctl mask` for timer suppression — survives package reinstall and
   doesn't depend on a specific systemd version.
 

@@ -2,7 +2,7 @@
 
 ## Status
 
-Partially implemented
+Partially implemented — a baseline Prometheus alert rules file exists; the exclusion thresholds, expanded alerts, and N×2 cluster reporting are unbuilt.
 
 ## TL;DR
 
@@ -42,7 +42,9 @@ The N\*2 capacity model (never exceed 50% utilization across the cluster) is a r
 
 - Autoscaling. Operators manage their own infrastructure; the platform reports, it does not provision.
 - QoS tiers or SLA enforcement. Future marketplace feature, not in scope here.
-- Predictive capacity planning or ML-based forecasting.
+- Predictive capacity modeling. Predictive per-job cost estimation (codec/resolution/model-size →
+  CPU/GPU/VRAM/bandwidth) is scoped in `docs/rfcs/workload-cost-model.md`; this RFC stays reactive —
+  thresholds and reporting over observed utilization.
 
 ## Proposal
 
@@ -72,6 +74,10 @@ Ship as `infrastructure/prometheus/rules/frameworks.yml`. Baseline rules:
 Foghorn aggregates cluster-wide utilization: total CPU/RAM/BW used vs total CPU/RAM/BW available across all reporting edges. Exposed as Prometheus gauges (`frameworks_cluster_cpu_utilization_ratio`, etc.) and optionally via a Foghorn API endpoint.
 
 Operators see aggregate numbers in their dashboards: "cluster is at 47% CPU, 32% RAM, 61% BW." A Prometheus alert fires when any resource exceeds 50% cluster-wide, aligning with the N\*2 recommendation.
+
+## Owning services / modules
+
+Foghorn (api_balancing) owns threshold exclusion and cluster-wide aggregation; alert rules live in `infrastructure/prometheus/`; dashboards surface in Chartroom/Foredeck.
 
 ## Impact / Dependencies
 

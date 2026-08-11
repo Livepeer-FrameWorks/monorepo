@@ -230,3 +230,7 @@ Darwin binaries are signed and notarized at build time. A carried-forward Darwin
 - The macOS CLI zip is the shipped notarized container and the only supported macOS CLI release asset.
 - The `GITOPS_APP_ID` variable (not secret) is reused for both gitops and homebrew-tap repo access. The app needs `repositories: homebrew-tap` in the token scope.
 - `libsrtp` Homebrew package is called `srtp`, not `libsrtp`.
+- The edge image's baked dist (`edge/dist/versions.env`) ships a MistServer dev **stub**
+  (`MIST_VERSION=stub-0.0.1` — a shell script that just idles). Real MistServer arrives via
+  the release manifest's `external_dependencies.mistserver` (edgeseed/updater pull), never
+  from the baked dist; `edge/stage-dist.sh` stages real component tarballs for actual builds.

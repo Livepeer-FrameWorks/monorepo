@@ -10,6 +10,10 @@ Draft
 - Results stored as JSONL in object storage with expiring download URLs
 - Not subject to normal rate limits; concurrency-limited per tenant
 
+## Owning services / modules
+
+Proposed owners: Bridge (`api_gateway`) for the GraphQL mutations/queries and job submission; a worker service (new, or an extension of an existing one) for job execution; job tracking in the Purser schema, with JSONL results in object storage. Nothing is implemented today.
+
 ## Current State
 
 - All GraphQL queries are synchronous with pagination via Relay connections

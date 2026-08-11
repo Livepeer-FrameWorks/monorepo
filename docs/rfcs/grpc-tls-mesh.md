@@ -18,6 +18,10 @@ wildcard certificates. mTLS is not implemented. See
 - Continue hardening the rollout and add mTLS later if required.
 - Keep explicit insecure mode for trusted dev/mesh deployments.
 
+## Owning services / modules
+
+`pkg/grpcutil` owns the shared server/client TLS helpers. Every gRPC server (`api_*/internal`) and client (`pkg/clients/*`) consumes them; env/config generation (`config/env/*`, `pkg/config`) carries the TLS knobs, and deployment automation handles cert distribution.
+
 ## Current State
 
 - Shared server/client TLS helpers live in `pkg/grpcutil`.

@@ -1,29 +1,20 @@
 # RFC: Referral attribution + network usage reporting
 
-## Summary
+## Status
 
-FrameWorks now has the core acquisition-attribution and network-usage plumbing, but it is
-not yet exposed through operator GraphQL/UI. Gateway captures attribution for wallet login
-paths, Quartermaster persists tenant attribution/referral code usage, Periscope Ingest writes
-tenant acquisition events, and Periscope Query has network/acquisition query RPCs. Remaining
-work is mainly coverage for all signup paths, operator-facing GraphQL/UI, exports, and
-operational validation.
+Partially implemented — the acquisition-attribution and network-usage plumbing exists end to end (proto → Quartermaster tables → ClickHouse events → Periscope Query RPCs); operator GraphQL/UI exposure, full signup-path coverage, and exports remain.
 
-## Goals
+## TL;DR
 
-- Capture acquisition attribution for **all** signup paths (email/password, wallet browser,
-  wallet agent, x402, API).
-- Correlate attribution cohorts with usage (viewer hours, egress, processing) to prove
-  network-wide impact.
-- Provide operator-facing queries for reporting and export, with an optional public stats
-  endpoint later.
+- Core acquisition-attribution and network-usage plumbing exists end to end (proto → Quartermaster tables → ClickHouse events → Periscope Query RPCs), but is not yet exposed through operator GraphQL/UI.
+- Remaining work is mainly coverage for all signup paths, operator-facing GraphQL/UI, exports, and operational validation.
+- Scope boundary: this RFC is acquisition/marketing attribution — which channel/campaign/referral brought a tenant to the network. Attributing served traffic to serving operators for settlement is a separate concern, covered by `docs/rfcs/federated-settlement-attribution.md`.
 
-## Non-goals
+## Owning services / modules
 
-- No changes to customer-facing billing UI in this iteration.
-- No public stats endpoint in the initial rollout (optional phase 2).
+Bridge (`api_gateway`) captures attribution at the HTTP edge; Commodore (`api_control`) propagates it into `CreateTenant` and emits `tenant_created` service events; Quartermaster (`api_tenants`) owns the `tenant_attribution` and `referral_codes` tables; Periscope Ingest (`api_analytics_ingest`) writes ClickHouse `tenant_acquisition_events`; Periscope Query (`api_analytics_query`) owns the network/acquisition query RPCs. The open GraphQL/UI surfaces land in Bridge and the operator UI.
 
-## Current implementation status
+## Current State
 
 Implemented:
 
@@ -40,6 +31,21 @@ Still open:
 - Verify coverage for email/password, x402, and API-created tenants.
 - Add operator-only GraphQL and UI/export surfaces.
 - Document report date ranges and backfill limitations.
+
+## Goals
+
+- Capture acquisition attribution for **all** signup paths (email/password, wallet browser,
+  wallet agent, x402, API).
+- Correlate attribution cohorts with usage (viewer hours, egress, processing) to prove
+  network-wide impact.
+- Provide operator-facing queries for reporting and export, with an optional public stats
+  endpoint later.
+
+## Non-Goals
+
+- No changes to customer-facing billing UI in this iteration.
+- No public stats endpoint in the initial rollout (optional phase 2).
+- No inter-operator settlement attribution — attributing served traffic to serving operators (and paying them for it) is `docs/rfcs/federated-settlement-attribution.md`, not this RFC.
 
 ## Proposed data model
 

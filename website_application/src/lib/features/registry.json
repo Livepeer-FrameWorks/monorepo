@@ -5,6 +5,7 @@
       "name": "Live streams",
       "area": "streaming",
       "kind": "product",
+      "audience": "product",
       "description": "Push and pull live streams with stream keys and ingest configuration. Push ingest over RTMP/E-RTMP, SRT, and WHIP (WebRTC); pull from RTSP, SRT, RIST, HLS, MPEG-TS, and Mist/DTSC sources.",
       "status": "shipped",
       "required_surfaces": {
@@ -68,6 +69,7 @@
           "name": "Stream keys",
           "area": "",
           "kind": "foundation",
+          "audience": "product",
           "description": "Per-stream ingest credentials with rotation.",
           "status": "shipped",
           "required_surfaces": {
@@ -134,6 +136,7 @@
           "name": "Pull streams",
           "area": "",
           "kind": "product",
+          "audience": "product",
           "description": "Stream inputs pulled from upstream sources (RTSP, SRT, RIST, HLS, etc.) instead of pushed, with resolution-stage lifecycle audit.",
           "status": "partial",
           "gap_reason": "Resolution-stage lifecycle events ship: Foghorn writes pull_source_events rows for STREAM_SOURCE evaluations (resolved / not_found / disabled / blocked_uri / private_not_allowed / commodore_error / foghorn_base_unresolved), exposed via Stream.recentPullSourceEvents and shown on the stream setup panel. Downstream MistServer dial telemetry needs new upstream connect/disconnect/retry trigger types before FrameWorks can show dial-stage health.\n",
@@ -189,6 +192,7 @@
           "name": "Multistream push targets",
           "area": "",
           "kind": "product",
+          "audience": "product",
           "description": "Forward live streams to additional RTMP/SRT destinations.",
           "status": "shipped",
           "required_surfaces": {
@@ -258,6 +262,7 @@
       },
       "enables": [
         "conferencing",
+        "live-commerce",
         "streamcrafter"
       ],
       "family_surfaces": {
@@ -273,6 +278,7 @@
       "name": "StreamCrafter (browser studio)",
       "area": "streaming",
       "kind": "product",
+      "audience": "product",
       "description": "Browser-based broadcasting studio — WHIP/WebRTC ingest, compositing, and multi-source mixing. Ships as npm packages @livepeer-frameworks/streamcrafter-{core,react,svelte,wc} and powers the dashboard's Go Live page.",
       "status": "shipped",
       "required_surfaces": {
@@ -337,6 +343,7 @@
       "name": "Device discovery and contribution inputs",
       "area": "streaming",
       "kind": "product",
+      "audience": "product",
       "description": "Edge-local discovery for cameras, PTZ devices, NDI sources, USB capture, HDMI inputs, and local contribution paths.",
       "status": "roadmap",
       "gap_reason": "Experimental media-engine discovery and local-source creation exist below the FrameWorks product layer. The missing work is\npackaging that capability into FrameWorks Edge, then exposing it through API, dashboard, Tray, CLI, and MCP workflows for managed\nstreams and self-hosted clusters.\n",
@@ -382,6 +389,7 @@
       "name": "Playback",
       "area": "playback",
       "kind": "product",
+      "audience": "product",
       "description": "Resolve a viewer or ingest endpoint for a stream / VOD / clip. Delivery over HLS, LL-HLS (CMAF), DASH, WebRTC (WHEP), and progressive MP4.",
       "status": "shipped",
       "required_surfaces": {
@@ -437,6 +445,7 @@
           "name": "Player SDKs",
           "area": "",
           "kind": "product",
+          "audience": "product",
           "description": "Embeddable player packages — @livepeer-frameworks/player-{core,react,svelte,wc} — with theming, adaptive playback, and built-in boot/QoE telemetry.",
           "status": "shipped",
           "required_surfaces": {
@@ -501,6 +510,7 @@
           "name": "Playback access control",
           "area": "",
           "kind": "product",
+          "audience": "product",
           "description": "Public / JWT / webhook playback authorization policy on streams, clips, and VOD assets, with a dry-run tester and full agent management surface.",
           "status": "shipped",
           "required_surfaces": {
@@ -584,6 +594,7 @@
           "name": "Signing keys",
           "area": "",
           "kind": "foundation",
+          "audience": "product",
           "description": "ES256 keypairs for signing playback JWTs. Private material returned once on creation.",
           "status": "shipped",
           "required_surfaces": {
@@ -650,6 +661,7 @@
           "name": "DRM",
           "area": "",
           "kind": "product",
+          "audience": "product",
           "description": "FairPlay, Widevine, and PlayReady protection for premium playback workflows.",
           "status": "roadmap",
           "gap_reason": "Not shipped. Playback signing keys and webhook/JWT access control are available today, but multi-DRM license packaging and player enforcement are separate work.",
@@ -710,6 +722,7 @@
       "name": "DVR recordings",
       "area": "media-library",
       "kind": "product",
+      "audience": "product",
       "description": "24/7-capable DVR recording with bounded live seekback, continuous archive storage, chapter replay, and VOD-style playback.",
       "status": "shipped",
       "required_surfaces": {
@@ -734,7 +747,7 @@
             "deleteDVR"
           ],
           "queries": [
-            "dvrRecordingsConnection"
+            "storageArtifactsConnection"
           ],
           "subscriptions": [
             "liveDvrLifecycle"
@@ -769,6 +782,7 @@
           "name": "DVR chapters",
           "area": "",
           "kind": "product",
+          "audience": "product",
           "description": "Chapter artifacts that segment a long-running DVR session into replayable windows, so a 24/7 recording can be replayed by window, civil-time range, or explicit range without restarting the live stream.",
           "status": "partial",
           "gap_reason": "Chapter playback and policy controls are present in the dashboard; audit-event coverage for chapter-policy changes still needs verification.",
@@ -833,6 +847,7 @@
           "name": "Scheduled recordings",
           "area": "",
           "kind": "product",
+          "audience": "product",
           "description": "Calendar-driven DVR captures that start and stop on schedule, so streams record themselves on a fixed cadence.",
           "status": "roadmap",
           "gap_reason": "DVR recording is shipped (start_dvr / stop_dvr exist); scheduling is the gap. Requires a schedule store, a sweeper that triggers DVR start/stop at window boundaries, GraphQL mutation + query surface, MCP tools, and a calendar UI. Primary use cases include places of worship, lectures, periodic events, and any scheduled programming.",
@@ -892,6 +907,7 @@
       "name": "VOD assets",
       "area": "media-library",
       "kind": "product",
+      "audience": "product",
       "description": "Multipart VOD upload and lifecycle.",
       "status": "shipped",
       "required_surfaces": {
@@ -918,7 +934,7 @@
           ],
           "queries": [
             "vodAsset",
-            "vodAssetsConnection",
+            "storageArtifactsConnection",
             "vodUploadStatus"
           ],
           "subscriptions": [
@@ -952,6 +968,7 @@
           "name": "Scheduled VOD streams",
           "area": "",
           "kind": "product",
+          "audience": "product",
           "description": "Linear live channels assembled from existing VOD assets, with schedules that make archived media play as a rolling live stream.",
           "status": "roadmap",
           "gap_reason": "Not shipped. Managed Mist-native streams provide the lower-level primitive for platform-owned concrete stream configs, but scheduled VOD streams need a separate product layer:\na schedule/timeline store, VOD artifact selection, asset availability checks, pre-hydration/pinning for frozen assets, failover-aware edge placement, GraphQL/MCP controls,\nand dashboard scheduling workflows. The source material should remain normal finalized VOD artifacts with their existing storage lifecycle; the scheduler turns them into a\nlive channel without bypassing artifact ownership, retention, or billing semantics.\n",
@@ -1011,6 +1028,7 @@
       "name": "Clips",
       "area": "media-library",
       "kind": "product",
+      "audience": "product",
       "description": "Time-range clips extracted from streams or recordings.",
       "status": "shipped",
       "required_surfaces": {
@@ -1035,7 +1053,7 @@
           ],
           "queries": [
             "clip",
-            "clipsConnection"
+            "storageArtifactsConnection"
           ],
           "subscriptions": [
             "liveClipLifecycle"
@@ -1072,6 +1090,7 @@
       "name": "Media retention",
       "area": "media-library",
       "kind": "product",
+      "audience": "product",
       "description": "Tenant-controlled storage policy for 24/7 DVR archives, clips, and VOD assets, with per-asset overrides and entitlement bounds.",
       "status": "shipped",
       "required_surfaces": {
@@ -1163,6 +1182,7 @@
       "name": "Thumbnails and sprite previews",
       "area": "media-library",
       "kind": "product",
+      "audience": "product",
       "description": "Auto-generated poster frames and sprite-tile preview strips for live streams, clips, VOD, and DVR playback.",
       "status": "partial",
       "gap_reason": "Apps can read Chandler poster, sprite JPG, and sprite VTT URLs through resolveViewerEndpoint metadata and the resolve_playback_endpoint MCP tool. The webapp builds bulk library thumbnails by combining streamingConfig.chandlerDomain with stream IDs and artifact hashes from list queries. The remaining gap is a first-class bulk asset URL surface for external apps and agents: streams/clips/DVR/VOD list queries should return ready-to-use preview asset URLs or a shared helper contract, without requiring one resolveViewerEndpoint call per asset. Generation status, regeneration, and troubleshooting remain follow-on operational controls.\n",
@@ -1234,6 +1254,7 @@
       "name": "Processing",
       "area": "processing",
       "kind": "foundation",
+      "audience": "product",
       "description": "Server-side media processing — live ABR transcoding, on-edge AI, and composition — placed on the right nodes across a cluster.",
       "status": "partial",
       "gap_reason": "Livepeer Gateway-backed transcoding is live with processing telemetry (see the transcoding subitem). The orchestration\nremainder is cluster-wide: client-side processing stats in MistServer and processing-aware scheduling in Foghorn, so heavy\njobs (full transcodes, large AI models) land on dedicated compute nodes — leveraging the Livepeer network — while\nultralight work stays on the edge.\n",
@@ -1264,6 +1285,7 @@
           "name": "Gateway-backed transcoding",
           "area": "",
           "kind": "product",
+          "audience": "product",
           "description": "Live ABR renditions through Livepeer Gateway or local processing, with processing usage telemetry.",
           "status": "partial",
           "gap_reason": "The media plane can use Livepeer Gateway-backed processing and the analytics API exposes processing/orchestrator telemetry.\nWhat is still missing is a tenant-facing control surface for rendition ladders, plan-aware defaults, per-stream overrides,\nand agent/dashboard workflows for choosing when Gateway-backed ABR is enabled.\n",
@@ -1326,6 +1348,7 @@
           "name": "Live AI processing",
           "area": "",
           "kind": "product",
+          "audience": "product",
           "description": "ONNX models running directly on the in-memory stream buffer of media edge nodes — detection, transcription, moderation, audio tagging, and embeddings for semantic search.",
           "status": "roadmap",
           "gap_reason": "The media-engine ONNX runtime is in active development: ultralight CPU models run directly on the in-memory stream\nbuffer on edge nodes. Tested so far: object detection and segmentation (YOLO) and audio transcription (Parakeet,\nheavily quantized for CPU). Candidate workloads: content moderation (NSFW / violence), audio event tagging and\nspeaker identification, and frame/text embeddings for semantic search. Heavy models defer to dedicated compute via\nthe Livepeer network. The FrameWorks product layer — model selection, per-stream enablement, output routing to\nanalytics and webhooks, and billing meters — is not designed yet. Pilot access exists via contact-sales.\n",
@@ -1370,6 +1393,7 @@
           "name": "Composition and SSAI",
           "area": "",
           "kind": "product",
+          "audience": "product",
           "description": "MistServer-native blitter for logos, watermarks, and lower-third overlays; Composer for server-side ad insertion (SSAI), raw-pixel composition, picture-in-picture, and automated clipping.",
           "status": "roadmap",
           "gap_reason": "Not shipped. Requires product/API design for overlay placement and lifecycle, SSAI ad-decision integration, billing meters, agent permissions, and dashboard/MCP surfaces for configuring composition.",
@@ -1416,7 +1440,8 @@
       "enables": [
         "composition",
         "gateway-backed-transcoding",
-        "live-ai"
+        "live-ai",
+        "workload-cost-model"
       ],
       "family_surfaces": {
         "cli": false,
@@ -1427,10 +1452,58 @@
       }
     },
     {
+      "slug": "workload-cost-model",
+      "name": "Workload cost model (GPU-aware scheduling)",
+      "area": "processing",
+      "kind": "foundation",
+      "audience": "product",
+      "description": "Predictive per-job resource cost — codec, resolution, framerate, model size, and realtime factor mapped to expected CPU, GPU/VRAM, and bandwidth — continuously corrected by measured costs of completed jobs, feeding processing placement and admission.",
+      "status": "roadmap",
+      "gap_reason": "Not designed yet. Processing dispatch today routes by node class and in-flight count only; GPU and VRAM are not\nmeasured anywhere, job cost is content-dependent and only knowable after the fact, and co-placed jobs interfere\n(GPU sharing, memory bandwidth, encoder contention with live serving). Needs supply-side GPU/VRAM telemetry, a\ndemand-side cost predictor with a measured-feedback loop, and an interference term — design tracked in\ndocs/rfcs/workload-cost-model.md.\n",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": false,
+          "reason": "Scheduling foundation; value surfaces through processing and analytics."
+        },
+        "mcp": {
+          "required": false,
+          "reason": "No direct agent surface planned."
+        },
+        "webapp": {
+          "required": false,
+          "reason": "Feeds capacity views; no standalone workflow."
+        }
+      },
+      "surfaces": {
+        "graphql": {},
+        "mcp": {},
+        "cli": {},
+        "webapp": {},
+        "docs": {}
+      },
+      "depends_on": [
+        "processing"
+      ],
+      "related": [
+        "viewer-routing"
+      ],
+      "actual_surfaces": {
+        "cli": false,
+        "docs": false,
+        "graphql": false,
+        "mcp": false,
+        "webapp": false
+      }
+    },
+    {
       "slug": "analytics",
       "name": "Analytics",
       "area": "analytics",
       "kind": "product",
+      "audience": "product",
       "description": "Stream health, viewers, geographic, routing, quality tiers, federation, node metrics, and view-level player QoE (rebuffering, frame drops, startup, VOD retention) — with cross-player coverage still expanding.",
       "status": "partial",
       "gap_reason": "Stream, routing, server-side QoS, and client QoE are live, plus view-level player QoE from the FrameWorks player: boot telemetry (TTFF waterfall + Resource Timing), viewer-experienced rebuffering, frame drops, bitrate/quality switches, exit-before-start, and per-asset VOD retention/watch-density — across API, dashboard, MCP, and docs.\nStill maturing: QoE from non-FrameWorks / third-party players, broader sampling/rollups, and the next telemetry pass — reducing time-to-first-frame and measuring/reducing cross-region stream-replication time.\n",
@@ -1507,6 +1580,7 @@
       "name": "Incidents and alerts",
       "area": "analytics",
       "kind": "product",
+      "audience": "product",
       "description": "Tenant-scoped incident feed aggregating node-health, certificate, DNS, capacity, and cluster alerts with acknowledge/resolve and realtime delivery.",
       "status": "roadmap",
       "gap_reason": "Not shipped. Prometheus and Grafana cover internal monitoring. The customer-facing gap is a tenant incident feed — Alertmanager webhook ingestion, dedup/fingerprinting, an incident store, GraphQL queries + acknowledge/resolve mutations, realtime delivery via Signalman, and MCP tools so agents can triage. Self-hosted operators get visibility into their own clusters (cert expiry, port reachability, DNS resolution, CPU/memory thresholds) without standing up a separate monitoring stack.\n",
@@ -1547,6 +1621,7 @@
       "name": "Geo-balanced viewer routing",
       "area": "infrastructure",
       "kind": "foundation",
+      "audience": "product",
       "description": "Foghorn resolves each viewer to the optimal edge by geography, load, and node health across federated clusters.",
       "status": "shipped",
       "required_surfaces": {
@@ -1608,6 +1683,7 @@
       "name": "Edge clusters",
       "area": "infrastructure",
       "kind": "foundation",
+      "audience": "product",
       "description": "Tenant-owned edge clusters with bootstrap and node enrollment.",
       "status": "shipped",
       "required_surfaces": {
@@ -1666,6 +1742,7 @@
           "name": "Enrollment / bootstrap tokens",
           "area": "",
           "kind": "foundation",
+          "audience": "product",
           "description": "One-shot tokens used to enroll new edge nodes into a cluster.",
           "status": "shipped",
           "required_surfaces": {
@@ -1727,6 +1804,7 @@
           "name": "Nodes (edge / ingest / playback)",
           "area": "",
           "kind": "foundation",
+          "audience": "product",
           "description": "Per-node health, info, and discovery.",
           "status": "shipped",
           "required_surfaces": {
@@ -1789,6 +1867,7 @@
           "name": "Node mode (drain / maintenance)",
           "area": "",
           "kind": "foundation",
+          "audience": "product",
           "description": "Operator controls to drain a node, put it in maintenance, or restore it to active service.",
           "status": "shipped",
           "required_surfaces": {
@@ -1862,6 +1941,7 @@
           "name": "Federated network status",
           "area": "",
           "kind": "foundation",
+          "audience": "product",
           "description": "Cross-cluster routing visibility and orchestrator vantage points.",
           "status": "shipped",
           "required_surfaces": {
@@ -1921,7 +2001,8 @@
           "name": "Edge auto-update",
           "area": "",
           "kind": "foundation",
-          "description": "Foghorn's release reconciler auto-updates Helmsman, MistServer, and Caddy on edge nodes over the Helmsman control stream — native and single-image container nodes alike.",
+          "audience": "product",
+          "description": "Automatic edge component updates — Quartermaster owns the release catalog and per-cluster targets; Foghorn's release reconciler applies them to Helmsman, MistServer, and Caddy over the Helmsman control stream — native and single-image container nodes alike.",
           "status": "shipped",
           "required_surfaces": {
             "docs": {
@@ -1974,6 +2055,7 @@
           "name": "Edge ISO and cloud images",
           "area": "",
           "kind": "foundation",
+          "audience": "product",
           "description": "Bootable FrameWorks Edge ISO and prebuilt cloud/marketplace images for on-demand media-cluster scaling.",
           "status": "roadmap",
           "gap_reason": "Edge enrollment and bootstrap exist; the missing work is packaging: a bootable ISO for bare metal and prebuilt\nimages with marketplace listings (AWS, GCP, DigitalOcean, Hetzner, Linode, Vultr) so a media cluster can scale on\ndemand — for FrameWorks' own capacity and for BYOC deployments alike. Groundwork for hosted-private-cluster\nprovisioning automation.\n",
@@ -2035,6 +2117,7 @@
       "name": "Cluster marketplace",
       "area": "infrastructure",
       "kind": "product",
+      "audience": "product",
       "description": "Browse listed clusters and manage subscriptions. A vetted public marketplace program for third-party capacity is on the roadmap.",
       "status": "partial",
       "gap_reason": "Marketplace primitives ship across the API, MCP, dashboard, and docs: listing, preferred cluster selection, invites, subscription requests, approval, pricing models, monthly checkout, and metered/custom rating paths. What is still missing is the full public marketplace operating model: operator vetting, published commercial terms, support boundaries, and production onboarding workflow for third-party capacity.\n",
@@ -2101,6 +2184,7 @@
           "name": "Cluster invites",
           "area": "",
           "kind": "foundation",
+          "audience": "product",
           "description": "Direct invites granting another tenant access to a cluster.",
           "status": "shipped",
           "required_surfaces": {
@@ -2163,6 +2247,7 @@
           "name": "Cluster subscription requests",
           "area": "",
           "kind": "foundation",
+          "audience": "product",
           "description": "Tenant-requested subscription to a cluster, requiring operator approval.",
           "status": "shipped",
           "required_surfaces": {
@@ -2239,6 +2324,7 @@
       "name": "BYOC ownership levels",
       "area": "infrastructure",
       "kind": "product",
+      "audience": "product",
       "description": "The deployment ownership spectrum — from bring-your-own edge nodes to fully sovereign self-hosting.",
       "status": "partial",
       "gap_reason": "The first level ships today as edge clusters: bring your own MistServer edge nodes and FrameWorks runs DNS, TLS,\ngeo-balanced routing, federation, tenant subdomains, analytics, playback access control, and billing around them.\nThe deeper levels — private media clusters, hosted private clusters, and fully sovereign self-hosting — are roadmap\nsubitems.\n",
@@ -2273,6 +2359,7 @@
           "name": "Private media cluster (BYOC)",
           "area": "",
           "kind": "product",
+          "audience": "product",
           "description": "Run the media and data plane on your own cloud while using the FrameWorks control plane for tenancy, routing, billing, and access control.",
           "status": "roadmap",
           "gap_reason": "Not shipped as a public workflow. Edge enrollment and cross-cluster federation exist, but running a full media and data cluster on customer-controlled infrastructure needs federation-trust hardening (scoped per-cluster credentials or mutual TLS) and a media-cluster provisioning preset.",
@@ -2314,6 +2401,7 @@
           "name": "Hosted private clusters (BYOC)",
           "area": "",
           "kind": "product",
+          "audience": "product",
           "description": "FrameWorks-provisioned dedicated, isolated clusters for a single tenant, with reserved capacity and fixed-rate pricing.",
           "status": "roadmap",
           "gap_reason": "Not shipped. Private-cluster records and tenant-cluster access exist, but self-serve provisioning of dedicated capacity needs cloud-provider automation (infrastructure-as-code or provider SDKs) that does not exist today, plus a reserved-capacity billing SKU and an operator console.",
@@ -2354,6 +2442,7 @@
           "name": "Fully sovereign self-hosting (BYOC)",
           "area": "",
           "kind": "product",
+          "audience": "product",
           "description": "Run the entire FrameWorks stack with no runtime dependency on FrameWorks, including your own object storage, analytics store, DNS, and an isolated control plane and identity root.",
           "status": "roadmap",
           "gap_reason": "Not shipped as turnkey. Self-hosting the stack is possible today, but full sovereignty needs dedicated-database and identity decoupling from the shared control plane, self-hosted DNS (PowerDNS is planned, not built), and a bring-your-own object-storage and analytics-store path. Today FrameWorks runs ClickHouse and S3-compatible storage for hosted tenants.",
@@ -2411,6 +2500,7 @@
       "name": "Adjacent infrastructure services",
       "area": "infrastructure",
       "kind": "product",
+      "audience": "product",
       "description": "Infrastructure products adjacent to video delivery — managed DNS, generic proxying/CDN, and standalone storage.",
       "status": "partial",
       "gap_reason": "FrameWorks already operates DNS automation, service proxying, and media storage internally for operated deployments,\nand managed media-cluster DNS is partially customer-facing. Turning these into standalone customer products — custom\ndomains, origins, buckets/volumes, policies, billing, and support boundaries — is tracked by the subitems.\n",
@@ -2441,9 +2531,10 @@
           "name": "Managed DNS and cluster domains",
           "area": "",
           "kind": "product",
+          "audience": "product",
           "description": "Platform-managed DNS, TLS certificates, media-cluster domains, and tenant streaming domain discovery.",
           "status": "partial",
-          "gap_reason": "Navigator reconciles platform and media-cluster DNS for operated deployments, and the API exposes tenant streaming domains\nthrough streamingConfig. The missing product surface is customer-controlled DNS: custom domain onboarding, verification,\ncertificate status, proxy policy, and self-serve dashboard/MCP workflows.\n",
+          "gap_reason": "Navigator reconciles platform and media-cluster DNS for operated deployments, the API exposes tenant streaming domains\nthrough streamingConfig, and the custom-domain backend lifecycle is shipped (domain verification state machine,\ndelegated ACME issuance, certificate status tracking). The missing product surface is customer-facing self-serve:\ndashboard/MCP workflows for custom domain onboarding, verification and certificate status, and proxy policy.\n",
           "required_surfaces": {
             "docs": {
               "required": true
@@ -2500,6 +2591,7 @@
           "name": "Generic proxying and CDN services",
           "area": "",
           "kind": "product",
+          "audience": "product",
           "description": "Customer-configured proxy/CDN front doors for non-video services and adjacent workloads.",
           "status": "roadmap",
           "gap_reason": "Navigator can proxy selected platform services for operated deployments. A customer-facing generic proxy/CDN product is not shipped:\nit needs origin onboarding, routing policy, TLS/domain validation, caching controls, abuse controls, billing, and dashboard/API/MCP\nworkflows.\n",
@@ -2537,6 +2629,7 @@
           "name": "Standalone object and block storage",
           "area": "",
           "kind": "product",
+          "audience": "product",
           "description": "Customer-facing storage buckets, volumes, policies, and lifecycle controls outside the video-asset workflow.",
           "status": "roadmap",
           "gap_reason": "FrameWorks already has media storage, cold-storage lifecycle, and cross-cluster S3 delegation for DVR, clips, VOD, thumbnails,\nand preview assets. A standalone object/block storage product is not shipped: it needs resource provisioning, quota/billing,\naccess credentials, policy management, dashboard/API/MCP controls, and operator support boundaries.\n",
@@ -2589,10 +2682,188 @@
       }
     },
     {
+      "slug": "nat-traversal",
+      "name": "NAT-aware routing and traversal",
+      "area": "infrastructure",
+      "kind": "product",
+      "audience": "product",
+      "description": "NAT-type classification as a first-class routing and placement signal, platform-coordinated hole punching, and platform-managed measurement of inter-server network performance (latency, throughput) feeding routing and capacity decisions — so self-hosted nodes behind NAT participate fully in the federated network.",
+      "status": "roadmap",
+      "gap_reason": "The Go control plane has not absorbed the media plane's traversal coordination: there is no NAT-type\nclassification store, no punch orchestration (whether, when, and between which nodes a traversal attempt is\nviable), and no platform-managed probe/relay infrastructure. Inter-server network performance (latency,\nthroughput) is measured nowhere today. Design in docs/rfcs/nat-traversal.md.\n",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": false,
+          "reason": "Routing-internal signal; no direct API surface planned."
+        },
+        "mcp": {
+          "required": false,
+          "reason": "No agent surface planned."
+        },
+        "webapp": {
+          "required": false,
+          "reason": "Surfaces indirectly via node views."
+        }
+      },
+      "surfaces": {
+        "graphql": {},
+        "mcp": {},
+        "cli": {},
+        "webapp": {},
+        "docs": {}
+      },
+      "related": [
+        "federation-network",
+        "edge-clusters",
+        "federation-state-sync"
+      ],
+      "actual_surfaces": {
+        "cli": false,
+        "docs": false,
+        "graphql": false,
+        "mcp": false,
+        "webapp": false
+      }
+    },
+    {
+      "slug": "federation-state-sync",
+      "name": "Federation state synchronization",
+      "area": "infrastructure",
+      "kind": "product",
+      "audience": "product",
+      "description": "Decentral distribution of configuration and state changes across a dynamic federation — clusters and servers join, leave, or drop offline at will — with automatic conflict resolution between concurrent changes and reconvergence after network partitions, without a central coordination point.",
+      "status": "roadmap",
+      "gap_reason": "Distribution today is central: gitops feeds the control plane, which pushes desired state to clusters and\nservers through one management point — concurrent conflicting changes are prevented only by everything\nflowing through that point, and it is a single point of failure for federation-wide changes. No conflict\nresolution or partition-healing mechanism exists. Design in docs/rfcs/federation-plane-pluggability.md.\n",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": false,
+          "reason": "Federation-internal machinery; no direct API surface planned."
+        },
+        "mcp": {
+          "required": false,
+          "reason": "No agent surface planned."
+        },
+        "webapp": {
+          "required": false,
+          "reason": "Surfaces indirectly via cluster/federation views."
+        }
+      },
+      "surfaces": {
+        "graphql": {},
+        "mcp": {},
+        "cli": {},
+        "webapp": {},
+        "docs": {}
+      },
+      "related": [
+        "federation-network",
+        "nat-traversal"
+      ],
+      "actual_surfaces": {
+        "cli": false,
+        "docs": false,
+        "graphql": false,
+        "mcp": false,
+        "webapp": false
+      }
+    },
+    {
+      "slug": "replication-orchestration",
+      "name": "Stream replication orchestration",
+      "area": "infrastructure",
+      "kind": "product",
+      "audience": "product",
+      "description": "Pre-emptive stream distribution — spread a stream to a cell or region ahead of demand, explicit hop topology, and per-stream replication policy (max replicas, allowed regions).",
+      "status": "roadmap",
+      "gap_reason": "Replication today is on-demand only: viewer-driven origin-pull plus direct ingest-edge serving. There is no\npre-emptive spread, no hub/hop role between origin and edge, and no per-stream replication policy. The\nstream-replication RFC is being rewritten with this orchestration scope.\n",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": false,
+          "reason": "Operator-facing first; agent surface follows policy design."
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {},
+        "mcp": {},
+        "cli": {},
+        "webapp": {},
+        "docs": {}
+      },
+      "related": [
+        "federation-network",
+        "viewer-routing"
+      ],
+      "actual_surfaces": {
+        "cli": false,
+        "docs": false,
+        "graphql": false,
+        "mcp": false,
+        "webapp": false
+      }
+    },
+    {
+      "slug": "placement-policy",
+      "name": "Placement policy and storage tiering",
+      "area": "infrastructure",
+      "kind": "product",
+      "audience": "product",
+      "description": "Two-sided placement policy — cluster-owner and content-owner constraints (data residency, minimum durable copies) compiled into signed enforcement bundles evaluated at serve/ingest/process/store/replicate/peer decision points — over a cold-to-hot storage tier ladder with a backend-keyed placement ledger.",
+      "status": "roadmap",
+      "gap_reason": "Deferred by design (docs/rfcs/placement-policy-engine.md): today each cluster keeps one implicit durable S3 copy,\nthere is no typed storage-backend registry, no tier ladder, and no two-sided policy evaluation. The signed-bundle\nchannel and per-stream placement intent (stream pins) exist as building blocks.\n",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {},
+        "mcp": {},
+        "cli": {},
+        "webapp": {},
+        "docs": {}
+      },
+      "related": [
+        "byoc-ownership",
+        "standalone-storage-services",
+        "replication-orchestration"
+      ],
+      "actual_surfaces": {
+        "cli": false,
+        "docs": false,
+        "graphql": false,
+        "mcp": false,
+        "webapp": false
+      }
+    },
+    {
       "slug": "billing",
       "name": "Billing \u0026 prepaid balance",
       "area": "commerce",
       "kind": "product",
+      "audience": "product",
       "description": "Card / Mollie / crypto top-ups, billing details, invoices, prepaid balance.",
       "status": "shipped",
       "required_surfaces": {
@@ -2667,6 +2938,7 @@
           "name": "Usage caps, alerts, retention cost preview",
           "area": "",
           "kind": "product",
+          "audience": "product",
           "description": "Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes.",
           "status": "partial",
           "gap_reason": "Cost preview shipped (2026-05-16): Purser surfaces per-tenant marginal storage pricing via GetTenantBillingStatus.StoragePricing, and pkg/billing/storagecost projects a per-asset $/day + $/month figure used on Clip / DVRRequest / VodAsset.storageCost. The storage browser route lists assets with their cost projection and resolved retention. Remaining gap: customer-set caps (configurable thresholds per meter) and alert delivery infrastructure (dedupe, notification channels, threshold-crossed semantics) — still real engineering projects, tracked as the rest of this row.\n",
@@ -2726,9 +2998,10 @@
       "name": "Wallet \u0026 on-chain identity",
       "area": "commerce",
       "kind": "product",
+      "audience": "product",
       "description": "Wallet sign-in, linked-wallet account identity, and x402 micropayments.",
       "status": "partial",
-      "gap_reason": "Agent wallet auth and x402 settlement are exposed through get_payment_options and submit_payment.\nFirst-class MCP wallet-management tools for listing, linking, and unlinking additional wallets are still missing.\n",
+      "gap_reason": "The on-chain stack is live end to end: wallet sign-in/link, x402 gasless settlement (EIP-3009 with the platform paying gas, multi-chain), per-tenant HD deposit addresses with price-locked quotes, and the crypto deposit monitor — exposed through get_payment_options and submit_payment.\nFirst-class MCP wallet-management tools for listing, linking, and unlinking additional wallets are still missing.\n",
       "required_surfaces": {
         "docs": {
           "required": true
@@ -2789,10 +3062,96 @@
       }
     },
     {
+      "slug": "settlement-attribution",
+      "name": "Operator settlement and attribution",
+      "area": "commerce",
+      "kind": "product",
+      "audience": "product",
+      "description": "Attribute served traffic to the operators whose clusters actually carried it — manipulation-resistant across independent operators — and settle the full loop, from credit accrual through operator-visible reporting to payout execution.",
+      "status": "roadmap",
+      "gap_reason": "Accrual primitives exist internally (operator credit ledger with platform-fee basis points, per-cluster usage\nattribution that fails closed on missing cluster identity), but there is no operator-facing reporting surface,\nthe attribution chain is not yet manipulation-resistant across operators, and no payout execution exists.\nDesign tracked in docs/rfcs/federated-settlement-attribution.md.\n",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": false,
+          "reason": "Operator reporting first; agent surface follows."
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {},
+        "mcp": {},
+        "cli": {},
+        "webapp": {},
+        "docs": {}
+      },
+      "related": [
+        "cluster-marketplace",
+        "billing"
+      ],
+      "actual_surfaces": {
+        "cli": false,
+        "docs": false,
+        "graphql": false,
+        "mcp": false,
+        "webapp": false
+      }
+    },
+    {
+      "slug": "stream-balances",
+      "name": "Stream-level balances",
+      "area": "commerce",
+      "kind": "product",
+      "audience": "product",
+      "description": "Optional per-stream balances that fund usage before the tenant balance — pay-per-view, tips, sponsor-funded streams — plus promo codes, referral rewards, and volume discounts.",
+      "status": "roadmap",
+      "gap_reason": "Not built; design in docs/rfcs/stream-balances.md. Referral capture exists at signup, but crediting mechanics,\npromo codes, and per-stream funding do not.\n",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {},
+        "mcp": {},
+        "cli": {},
+        "webapp": {},
+        "docs": {}
+      },
+      "related": [
+        "billing",
+        "wallet"
+      ],
+      "actual_surfaces": {
+        "cli": false,
+        "docs": false,
+        "graphql": false,
+        "mcp": false,
+        "webapp": false
+      }
+    },
+    {
       "slug": "developer-api",
       "name": "Developer API",
       "area": "developer",
       "kind": "product",
+      "audience": "product",
       "description": "The GraphQL API and the tooling around it — playground, API tokens, webhooks, and server-side SDKs.",
       "status": "partial",
       "gap_reason": "The GraphQL API, playground, and developer tokens ship; outbound webhooks and server-side SDKs are roadmap subitems.",
@@ -2833,6 +3192,7 @@
           "name": "Developer API tokens",
           "area": "",
           "kind": "foundation",
+          "audience": "product",
           "description": "Long-lived API tokens for SDK / CI use.",
           "status": "shipped",
           "required_surfaces": {
@@ -2886,6 +3246,7 @@
           "name": "GraphQL playground",
           "area": "",
           "kind": "product",
+          "audience": "product",
           "description": "Interactive GraphQL explorer wired to the live schema.",
           "status": "shipped",
           "required_surfaces": {
@@ -2932,6 +3293,7 @@
           "name": "Outbound event webhooks",
           "area": "",
           "kind": "product",
+          "audience": "product",
           "description": "Tenant-configured outbound webhooks for stream / clip / VOD lifecycle events.",
           "status": "roadmap",
           "gap_reason": "Not shipped. Inbound playback-auth webhook exists (covered by playback-access-control); outbound delivery is future work.",
@@ -2969,6 +3331,7 @@
           "name": "Backend SDKs",
           "area": "",
           "kind": "product",
+          "audience": "product",
           "description": "Server-side SDKs (Node, Python, PHP, Ruby, Elixir, Java, C#) wrapping the GraphQL API, webhooks, uploads, and access-token/JWT workflows.",
           "status": "roadmap",
           "gap_reason": "Not shipped. Only frontend JS packages (player, StreamCrafter) exist today, and the migration guides disclose the\nmissing server-side SDKs as a parity gap. Phased delivery, starting with Node and Python; each SDK covers API access,\nwebhook verification, uploads, access tokens, and JWT signing.\n",
@@ -3024,6 +3387,7 @@
       "name": "Agents (MCP server)",
       "area": "developer",
       "kind": "product",
+      "audience": "product",
       "description": "Model Context Protocol server exposing FrameWorks operations to agents.",
       "status": "shipped",
       "required_surfaces": {
@@ -3074,9 +3438,10 @@
           "name": "Skipper (in-app consultant agent)",
           "area": "",
           "kind": "product",
+          "audience": "product",
           "description": "Conversational platform agent for support and investigations.",
           "status": "partial",
-          "gap_reason": "MCP exposes ask_consultant only; conversation management (list/get/send/archive) is not exposed.",
+          "gap_reason": "The MCP spoke exposes ask_consultant, search_knowledge, and search_web (search_support_history is Deckhand's tool); conversation management (list/get/send/archive) is not exposed via MCP.",
           "required_surfaces": {
             "docs": {
               "required": true
@@ -3167,6 +3532,7 @@
       "name": "Conferencing and remote contribution",
       "area": "engagement",
       "kind": "product",
+      "audience": "product",
       "description": "Multi-party WebRTC rooms and remote-guest contribution — commentators and callers mixed into a managed stream.",
       "status": "roadmap",
       "gap_reason": "WHIP ingest and WHEP playback ship as single-source paths. Rooms need a session/room model, participant auth,\nserver-side audio (then video) mixing into a managed stream for live-commentator and remote-guest workflows, plus\nAPI, dashboard, and MCP surfaces.\n",
@@ -3210,9 +3576,10 @@
       "name": "Rooms, chat, and interactivity (Parlor)",
       "area": "engagement",
       "kind": "product",
+      "audience": "product",
       "description": "Viewer chat and engagement primitives — channel points, hype trains, leaderboards, flair, and moderation views — synced to the stream.",
       "status": "roadmap",
-      "gap_reason": "The planned rooms service (api_rooms, codename Parlor) is a stub; the product design (chat, channel points, hype\ntrains, leaderboards, flair, stream-synced events, moderator views) is captured in docs/rfcs/parlor.md. Viewer chat\nis the first surface; real-time A/V rooms live under conferencing.\n",
+      "gap_reason": "The planned rooms service (api_rooms, codename Parlor) is a stub; the product design (chat, channel points, hype\ntrains, leaderboards, flair, stream-synced events, moderator views) is captured in docs/rfcs/parlor.md. Viewer chat\nis the first surface; real-time A/V rooms live under conferencing. Build dependency: Signalman needs a presence/room\nchannel type — its channel enum today covers streams, analytics, system, messaging, and AI events, with no\npresence/room channel.\n",
       "required_surfaces": {
         "docs": {
           "required": true
@@ -3246,10 +3613,57 @@
       }
     },
     {
+      "slug": "live-commerce",
+      "name": "Live commerce (shopping and auctions)",
+      "area": "engagement",
+      "kind": "product",
+      "audience": "product",
+      "description": "Shopping and server-authoritative auctions attached to live streams — product showcases, carts and orders, and auction mechanics that stay fair for viewers at different latencies behind the live edge.",
+      "status": "roadmap",
+      "gap_reason": "Not built; design in docs/rfcs/live-commerce.md (planned api_commerce and api_auctions services). The hard part\nis latency fairness: interactive events must bind to the stream timeline — viewers sit at different distances\nbehind the live edge — and competitive interactions like auction closes need one server-authoritative truth\nthat treats differently-delayed viewers fairly.\n",
+      "required_surfaces": {
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": true
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {},
+        "mcp": {},
+        "cli": {},
+        "webapp": {},
+        "docs": {}
+      },
+      "depends_on": [
+        "streams"
+      ],
+      "related": [
+        "rooms-interactivity",
+        "conferencing",
+        "stream-balances"
+      ],
+      "actual_surfaces": {
+        "cli": false,
+        "docs": false,
+        "graphql": false,
+        "mcp": false,
+        "webapp": false
+      }
+    },
+    {
       "slug": "tenant",
       "name": "Tenant settings",
       "area": "account",
       "kind": "product",
+      "audience": "product",
       "description": "Tenant identity, billing setup, retention defaults, routing preferences, and wallet-provisioned account lifecycle.",
       "status": "partial",
       "gap_reason": "Core tenant account setup is live: wallet-provisioned accounts, tenant name, billing details, billing tier/balance, storage retention defaults,\nand preferred cluster/routing settings are exposed. Broader tenant administration is still expanding: team/RBAC, notification preferences,\ncustom domains/branding, security controls, and account lifecycle controls are not yet complete across API, dashboard, MCP, and docs.\n",
@@ -3302,6 +3716,7 @@
           "name": "Teams \u0026 RBAC",
           "area": "",
           "kind": "product",
+          "audience": "product",
           "description": "Multi-user tenants with role-based access control.",
           "status": "roadmap",
           "gap_reason": "Not shipped. Requires tenant membership model, role grants, invitation flow, GraphQL policy checks, MCP permission scoping, and webapp team administration.",
@@ -3355,6 +3770,7 @@
       "name": "Companion apps",
       "area": "account",
       "kind": "product",
+      "audience": "product",
       "description": "Desktop and mobile companions to the dashboard and CLI.",
       "status": "partial",
       "gap_reason": "The macOS tray app ships in the .pkg installer alongside the CLI but is undertested and undocumented; mobile apps\nand the integrated help center are roadmap subitems.\n",
@@ -3388,6 +3804,7 @@
           "name": "Desktop companion (macOS tray)",
           "area": "",
           "kind": "product",
+          "audience": "product",
           "description": "Menu-bar app bundled with the CLI in the macOS installer for local edge and stream control.",
           "status": "partial",
           "gap_reason": "Ships in the macOS .pkg installer, but the app is undertested and underdeveloped — no docs page (deliberately,\nuntil it hardens), no marketing presence, and no Windows/Linux equivalent.\n",
@@ -3428,6 +3845,7 @@
           "name": "Mobile apps and integrated help center",
           "area": "",
           "kind": "product",
+          "audience": "product",
           "description": "Native mobile operations and an in-product help center for support, incidents, and account workflows.",
           "status": "roadmap",
           "gap_reason": "Not shipped as a product surface. Support and messaging infrastructure exists, but native mobile workflows and integrated help-center UX are planned after core platform surfaces.",

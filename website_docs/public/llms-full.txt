@@ -913,7 +913,7 @@ Settlement is built to survive its own failure modes: verification happens befor
 
 ## One MCP surface for the whole platform
 
-The other half of agent-native is what the agent can actually do once it's a customer. The Gateway exposes the platform over [MCP](/agents/mcp): 38 tools — 37 owned by the Gateway, spanning streams, clips, DVR, VOD, playback, QoE diagnostics, billing, support, schema introspection, and infrastructure, plus [Skipper's](/agents/skipper) `ask_consultant` proxied in as the 38th — alongside read-only resources for streams, analytics, nodes, and billing state. A handful of tools work without any authentication at all (payment options, payment submission, playback resolution, marketplace browsing), because an agent needs to be able to discover how to become a customer before it is one.
+The other half of agent-native is what the agent can actually do once it's a customer. The Gateway exposes the platform over [MCP](/agents/mcp): 70 tools — 69 owned by the Gateway, spanning streams, clips, DVR, VOD, playback, QoE diagnostics, billing, support, schema introspection, and infrastructure, plus [Skipper's](/agents/skipper) `ask_consultant` proxied in as the 70th — alongside read-only resources for streams, analytics, nodes, and billing state. A handful of tools work without any authentication at all (payment options, payment submission, playback resolution, marketplace browsing), because an agent needs to be able to discover how to become a customer before it is one.
 
 The hub-and-spoke split keeps responsibilities clean. Skipper consults — its `ask_consultant` pipeline can search knowledge and run diagnostics but has mutation tools blocked, so a free-form consulting answer can never delete a stream as a side effect. State changes go through the dedicated Gateway tools, each with its own authorization and its own preflight. The Gateway injects the caller's tenant context into everything it forwards, so a spoke never sees a request without knowing exactly which tenant it's acting for.
 
@@ -2185,28 +2185,26 @@ subscription {
 
 ## Listing clips
 
-Clips paginate via the standard Relay-style `clipsConnection`. Filter by `streamId` to scope to a single source stream, or omit it to list all clips for the tenant.
+Clips are listed through the unified `storageArtifactsConnection` with `kinds: [CLIP]`. Pass `streamId` to scope to a single source stream, or omit it to list all clips for the tenant. Pagination is offset-based (`first`/`offset`).
 
 ```graphql
 query MyClips {
-  clipsConnection(page: { first: 20 }) {
-    edges {
-      node {
-        id
-        clipId
-        name
-        playbackId
-        startMs
-        endMs
-        createdAt
-        expiresAt
-      }
-    }
-    pageInfo {
-      hasNextPage
-      endCursor
+  storageArtifactsConnection(input: { kinds: [CLIP], first: 20, offset: 0 }) {
+    nodes {
+      id
+      key
+      hash
+      title
+      playbackId
+      streamId
+      createdAt
+      expiresAt
+      durationSeconds
     }
     totalCount
+    hasNextPage
+    limit
+    offset
   }
 }
 ```
@@ -7325,23 +7323,24 @@ query {
 }
 ```
 
-For stream-scoped media views, chapter artifacts also surface through `vodAssetsConnection(streamId: ...)` with `originType: "dvr_chapter"`. Omit `streamId` to get the normal tenant VOD library, which only returns library-visible user uploads.
+For stream-scoped media views, chapter artifacts also surface through `storageArtifactsConnection` when you request `kinds: [VOD, CHAPTER]` and pass a `streamId`. Omit `streamId` to get the normal tenant VOD library, which only returns library-visible user uploads.
 
 ```graphql
 query StreamVodArtifacts {
-  vodAssetsConnection(streamId: "stream-global-id", page: { first: 20 }) {
-    edges {
-      node {
-        id
-        playbackId
-        streamId
-        originType
-        originId
-        title
-        status
-        createdAt
-      }
+  storageArtifactsConnection(
+    input: { kinds: [VOD, CHAPTER], streamId: "stream-global-id", first: 20, offset: 0 }
+  ) {
+    nodes {
+      id
+      kind
+      playbackId
+      streamId
+      title
+      status
+      createdAt
     }
+    totalCount
+    hasNextPage
   }
 }
 ```
@@ -7373,20 +7372,21 @@ The DVR system default is 30 days. A tenant can lift or shorten it per-class via
 
 ```graphql
 query {
-  dvrRecordingsConnection(streamId: "stream-global-id", page: { first: 10 }) {
-    edges {
-      node {
-        dvrHash
-        playbackId
-        title
-        createdAt
-        expiresAt
-        durationSeconds
-        sizeBytes
-        status
-        isExpired
-      }
+  storageArtifactsConnection(
+    input: { kinds: [DVR], streamId: "stream-global-id", first: 10, offset: 0 }
+  ) {
+    nodes {
+      hash
+      playbackId
+      title
+      createdAt
+      expiresAt
+      durationSeconds
+      sizeBytes
+      status
     }
+    totalCount
+    hasNextPage
   }
 }
 ```
@@ -7517,18 +7517,20 @@ Once ready, clips are playable at the same URLs as any other content:
 ```graphql
 # List clips for a stream
 query {
-  clipsConnection(streamId: "stream-global-id", page: { first: 20 }) {
-    edges {
-      node {
-        id
-        title
-        playbackId
-        duration
-        status
-        createdAt
-        sizeBytes
-      }
+  storageArtifactsConnection(
+    input: { kinds: [CLIP], streamId: "stream-global-id", first: 20, offset: 0 }
+  ) {
+    nodes {
+      id
+      title
+      playbackId
+      durationSeconds
+      status
+      createdAt
+      sizeBytes
     }
+    totalCount
+    hasNextPage
   }
 }
 
@@ -7639,36 +7641,37 @@ Same URL pattern as all other content:
 ```graphql
 # List all library VOD uploads
 query {
-  vodAssetsConnection(page: { first: 20 }) {
-    edges {
-      node {
-        id
-        playbackId
-        title
-        status
-        sizeBytes
-        durationSeconds
-        createdAt
-      }
+  storageArtifactsConnection(input: { kinds: [VOD, CHAPTER], first: 20, offset: 0 }) {
+    nodes {
+      id
+      playbackId
+      title
+      status
+      sizeBytes
+      durationSeconds
+      createdAt
     }
+    totalCount
+    hasNextPage
   }
 }
 
 # List VOD-shaped artifacts derived from a stream, including DVR chapters
 query {
-  vodAssetsConnection(streamId: "stream-global-id", page: { first: 20 }) {
-    edges {
-      node {
-        id
-        playbackId
-        streamId
-        originType
-        originId
-        title
-        status
-        createdAt
-      }
+  storageArtifactsConnection(
+    input: { kinds: [VOD, CHAPTER], streamId: "stream-global-id", first: 20, offset: 0 }
+  ) {
+    nodes {
+      id
+      kind
+      playbackId
+      streamId
+      title
+      status
+      createdAt
     }
+    totalCount
+    hasNextPage
   }
 }
 
@@ -7703,9 +7706,11 @@ Storage is one of the larger billing line items for live-streaming workloads, es
 This page explains the underlying model so you can make informed retention decisions.
 
 <Aside type="caution">
-  Retention reduces cost but it also deletes data. Shortening a tenant default or per-asset override
-  schedules data for deletion at the new horizon — there is no "soft-delete" intermediate state
-  today.
+  Retention reduces cost but it also deletes data. When an asset reaches its retention horizon it
+  **disappears from your library** — the sweep runs hourly, so removal happens within about an hour
+  of the deadline. Shortening a tenant default or per-asset override moves that horizon in, so
+  affected assets can leave the library on the next sweep. There is no user-visible recovery window:
+  once an asset is gone from the library you cannot restore it.
 </Aside>
 
 ## What gets stored, when
@@ -7882,21 +7887,19 @@ mutation ResetRetention($input: ResetMediaRetentionOverrideInput!) {
 
 ```graphql
 query DVRRetention($id: ID!) {
-  dvrRecordingsConnection(streamId: $id) {
-    edges {
-      node {
-        dvrHash
-        expiresAt
-        effectiveRetention {
-          retentionDays
-          retentionUntil
-          source
-        }
-        storageCost {
-          perDay
-          perMonth
-          currency
-        }
+  storageArtifactsConnection(input: { kinds: [DVR], streamId: $id }) {
+    nodes {
+      hash
+      expiresAt
+      effectiveRetention {
+        retentionDays
+        retentionUntil
+        source
+      }
+      storageCost {
+        perDay
+        perMonth
+        currency
       }
     }
   }
@@ -8158,23 +8161,23 @@ query LibraryPreviewInputs {
       name
     }
   }
-  clipsConnection(page: { first: 50 }) {
+  clips: storageArtifactsConnection(input: { kinds: [CLIP], first: 50, offset: 0 }) {
     nodes {
-      clipHash
+      hash
       playbackId
       title
     }
   }
-  dvrRecordingsConnection(page: { first: 50 }) {
+  recordings: storageArtifactsConnection(input: { kinds: [DVR], first: 50, offset: 0 }) {
     nodes {
-      dvrHash
+      hash
       playbackId
       title
     }
   }
-  vodAssetsConnection(page: { first: 50 }) {
+  vod: storageArtifactsConnection(input: { kinds: [VOD, CHAPTER], first: 50, offset: 0 }) {
     nodes {
-      artifactHash
+      hash
       playbackId
       title
     }
@@ -8182,7 +8185,7 @@ query LibraryPreviewInputs {
 }
 ```
 
-Use `https://{chandlerDomain}/assets/{assetId}/poster.jpg`, `sprite.jpg`, and `sprite.vtt`. `assetId` is `streamId` for live streams, `clipHash` for clips, `dvrHash` for DVR recordings, and `artifactHash` for VOD.
+Use `https://{chandlerDomain}/assets/{assetId}/poster.jpg`, `sprite.jpg`, and `sprite.vtt`. `assetId` is `streamId` for live streams and the artifact `hash` for clips, DVR recordings, and VOD.
 
 ## In the FrameWorks Player
 
@@ -10238,7 +10241,7 @@ The shapes you know in Bunny, mapped to FrameWorks.
 
 ### VOD assets
 
-Schema-verified mutations and queries: `createVodUpload`, `completeVodUpload`, `abortVodUpload`, `deleteVodAsset`, `vodAsset`, `vodAssetsConnection`, `vodUploadStatus`. There is no `updateVodAsset` mutation today — title and description are set at upload time via [`createVodUpload`](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/pkg/graphql/schema.graphql).
+Schema-verified mutations and queries: `createVodUpload`, `completeVodUpload`, `abortVodUpload`, `deleteVodAsset`, `vodAsset`, `storageArtifactsConnection` (with `kinds: [VOD, CHAPTER]`), `vodUploadStatus`. There is no `updateVodAsset` mutation today — title and description are set at upload time via [`createVodUpload`](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/pkg/graphql/schema.graphql).
 
 | Bunny Stream                                        | FrameWorks                                                               |
 | --------------------------------------------------- | ------------------------------------------------------------------------ |
@@ -10887,7 +10890,7 @@ The shapes you know in Studio, mapped to FrameWorks:
 | Studio                                           | FrameWorks                                                                                 |
 | ------------------------------------------------ | ------------------------------------------------------------------------------------------ |
 | `POST /clip`                                     | `createClip(input)` mutation                                                               |
-| `GET /session/{id}/clips`                        | `clipsConnection` or `clip(id)`                                                            |
+| `GET /session/{id}/clips`                        | `storageArtifactsConnection(input: { kinds: [CLIP] })` or `clip(id)`                       |
 | `POST /asset/request-upload` (direct/TUS upload) | `createVodUpload(input)` → S3 multipart upload                                             |
 | `POST /asset/upload/url`                         | No direct equivalent today                                                                 |
 | Tasks API for upload/transcode progress          | `vodUploadStatus`, `liveVodLifecycle`, or `liveProcessingEvents` depending on the workflow |
@@ -12747,8 +12750,12 @@ canary, primary_last). Per-service `update_strategy` blocks in the manifest
 override those defaults when a service needs a different rollout budget.
 Without `--confirm` it prints the plan and exits (dry-run). With `--confirm`
 it executes each host through the same role provisioner used by
-`cluster provision`, so binaries, env files, systemd units, handlers, and
-validation stay owned by the Ansible roles. The action label is `reload` when
+`cluster provision`, so env files, systemd units, handlers, and validation stay
+owned by the Ansible roles. It handles only **non-version** rollouts (env, unit,
+cert): a `binary` diff is a service version change and is refused, routed to the
+release-gated `cluster upgrade` (which runs the compatibility, schema /
+data-migration, storage-backend, and rollback gates); `infra` and `unknown`
+diffs are routed to `cluster provision`. The action label is `reload` when
 the diff is env-only on a SIGHUP-capable service; otherwise it is `restart`.
 After each wave, `cluster apply` waits for a per-service readiness gate (HTTP
 health for HTTP services, `systemctl is-active` otherwise) before advancing.
@@ -12800,7 +12807,9 @@ frameworks cluster provision [flags]
 4. Transfer files to target hosts via SSH and provision (Ansible for some infra)
 5. Start services
 6. Validate health (unless `--ignore-validation`)
-7. For application/all phases, run database init, static SQL seeds, service-owned bootstrap reconciliation, and edge release target sync
+7. For application/all phases, run static SQL seeds, service-owned bootstrap reconciliation, and edge release target sync
+
+Database initialization (baseline schema + expand migrations, behind the baseline-floor guard) runs before the services that depend on it: inline after each database's infrastructure batch for `--only infrastructure` / `--only all`, and — because `--only applications` targets already-live infrastructure whose plan carries no infrastructure tasks — before the application plan executes for that phase. No application starts against an uninitialized schema.
 
 **Flags:**
 
@@ -12885,14 +12894,16 @@ frameworks cluster finalize [flags]
 
 1. Load the cluster manifest and SOPS-backed `env_files`
 2. Render the same bootstrap desired-state document used by provisioning
-3. Run `purser bootstrap` and `purser bootstrap validate`
-4. Run `commodore bootstrap`
-5. Run control-plane validation
+3. Run `quartermaster bootstrap`
+4. Run `purser bootstrap` and `purser bootstrap validate`
+5. Run `commodore bootstrap`
+6. Reconcile service-cluster assignments
+7. Run control-plane validation
 
 **Flags:**
 
 - Inherits the [Cluster Manifest-Source Flags](#cluster-manifest-source-flags).
-- `--only string` - Finalization slice to run (`all`, `purser`, `commodore`, `validation`)
+- `--only string` - Finalization slice to run (`all`, `quartermaster`, `purser`, `commodore`, `assignments`, `validation`)
 - `--skip-validation` - Skip final control-plane validation when `--only=all`
 - `--ignore-validation` - Continue even if control-plane validation has warnings
 - `--bootstrap-admin-*` / `--bootstrap-reset-credentials` / `--strict-control-plane` - Same bootstrap controls as `cluster provision`
@@ -12903,8 +12914,14 @@ frameworks cluster finalize [flags]
 # Resume every post-provision finalization step
 frameworks cluster finalize --gitops-dir gitops --cluster production
 
+# Bootstrap only Quartermaster (the tenant/entitlement control plane)
+frameworks cluster finalize --gitops-dir gitops --cluster production --only quartermaster
+
 # Retry only Commodore bootstrap after fixing stale stream state
 frameworks cluster finalize --gitops-dir gitops --cluster production --only commodore
+
+# Reconcile only the service-cluster assignments
+frameworks cluster finalize --gitops-dir gitops --cluster production --only assignments
 
 # Run only the final control-plane validation
 frameworks cluster finalize --gitops-dir gitops --cluster production --only validation
@@ -12947,27 +12964,27 @@ frameworks cluster init postgres --manifest production.yaml
 
 ### Additional Cluster Provisioning Commands
 
-| Command                                                 | Purpose                                                                                                                                                                                                                                                                                                                                                          |
-| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `frameworks cluster finalize`                           | Resume service-owned post-provision finalization without provisioning or restarting services; supports `--only purser`, `--only commodore`, and `--only validation`.                                                                                                                                                                                             |
-| `frameworks cluster seed`                               | Apply idempotent static seed data; add `--demo` for sample tenant/user/stream data and `--force` to skip the prompt.                                                                                                                                                                                                                                             |
-| `frameworks cluster migrate`                            | Apply pending PostgreSQL/YugabyteDB schema migrations from `pkg/database/sql/migrations/`; use `--phase expand --dry-run` for Ansible check/diff mode. Filtered to `--to-version vX.Y.Z` (defaults to cluster's resolved platform version).                                                                                                                      |
-| `frameworks cluster migrate validate`                   | Validate migration path layout, checksums-at-source assumptions, and conservative expand-phase SQL safety rules.                                                                                                                                                                                                                                                 |
-| `frameworks cluster data-migrate list`                  | List required data migrations declared in the embedded release catalog up to `--to-version`. Empty catalog reports "no required data migrations declared" — never silent OK.                                                                                                                                                                                     |
-| `frameworks cluster data-migrate status <service>.<id>` | Show persisted state for one data migration on its owning service host (queries the service binary's `data-migrations status --format json`).                                                                                                                                                                                                                    |
-| `frameworks cluster data-migrate run <service>.<id>`    | Run one data migration to completion or until error; honors `--batch-size`, `--dry-run`, `--scope-kind/--scope-value`.                                                                                                                                                                                                                                           |
-| `frameworks cluster data-migrate verify <service>.<id>` | Run the migration's read-only verification on the service host.                                                                                                                                                                                                                                                                                                  |
-| `frameworks cluster data-migrate pause <service>.<id>`  | Mark a data migration paused.                                                                                                                                                                                                                                                                                                                                    |
-| `frameworks cluster data-migrate resume <service>.<id>` | Mark a paused data migration runnable again.                                                                                                                                                                                                                                                                                                                     |
-| `frameworks cluster skipper knowledge reset`            | Clear Skipper knowledge embeddings and crawl cache so configured sources are fetched and embedded again.                                                                                                                                                                                                                                                         |
-| `frameworks cluster skipper posts`                      | Query recent Skipper social post drafts from the skipper database over the manifest-selected SSH/database path.                                                                                                                                                                                                                                                  |
-| `frameworks cluster metabase sync`                      | Sync repo-managed Metabase Periscope cards and attach missing cards to the dashboard without overwriting unmanaged manual edits.                                                                                                                                                                                                                                 |
-| `frameworks cluster sync-geoip`                         | Upload GeoLite2-City MMDB data to Foghorn/Quartermaster hosts; supports `--source maxmind` or `--source file`.                                                                                                                                                                                                                                                   |
-| `frameworks cluster set-channel <channel>`              | Set the manifest release channel. Valid channels are `stable` and `rc`; `cluster upgrade` uses this when no explicit version is given.                                                                                                                                                                                                                           |
-| `frameworks cluster clickhouse migrate backfill`        | Bulk-copy periscope data into the new Replicated node via `remote()` over the WireGuard mesh, using the same idempotent staging + `REPLACE PARTITION`/`EXCHANGE` mechanics as `sync` (re-runnable after a partial failure); stops refreshable MVs for the duration. Requires `--from <source host key>` (and `--from-port` if source/dest run on swapped ports). |
-| `frameworks cluster clickhouse migrate sync`            | Idempotent per-partition re-copy of the growing tail (staging table + atomic `REPLACE PARTITION`; additive-safe — re-runs replace, never double). Unpartitioned tables use an atomic `EXCHANGE`.                                                                                                                                                                 |
-| `frameworks cluster clickhouse migrate verify`          | Parity fingerprint — FINAL row count plus a `cityHash64` content hash over every column (destination vs source); `AggregateFunction` columns are wrapped in `finalizeAggregation()` so they are content-hashed too, not skipped. Plus a catalog-coverage assertion that fails if the live schema has a table the migration catalog doesn't classify.             |
-| `frameworks cluster clickhouse migrate cutover`         | Refuses unless `--ingest-stopped` is passed (periscope-ingest must be stopped first; Kafka buffers). Runs the final idempotent sync + starts refreshable MVs, then prints the operator repoint steps: flip `write_endpoint`, resume periscope-ingest from its committed Kafka offset, drain lag, then flip `read_endpoint`.                                      |
+| Command                                                 | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `frameworks cluster finalize`                           | Resume service-owned post-provision finalization without provisioning or restarting services; supports `--only quartermaster`, `--only purser`, `--only commodore`, `--only assignments`, and `--only validation`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `frameworks cluster seed`                               | Apply idempotent static seed data; add `--demo` for sample tenant/user/stream data and `--force` to skip the prompt.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `frameworks cluster migrate`                            | Apply pending PostgreSQL/YugabyteDB schema migrations from `pkg/database/sql/migrations/`; use `--phase expand --dry-run` for Ansible check/diff mode. Filtered to `--to-version vX.Y.Z` (defaults to cluster's resolved platform version).                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `frameworks cluster migrate validate`                   | Validate migration path layout, checksums-at-source assumptions, and conservative expand-phase SQL safety rules.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `frameworks cluster data-migrate list`                  | List required data migrations declared in the embedded release catalog up to `--to-version`. Empty catalog reports "no required data migrations declared" — never silent OK.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `frameworks cluster data-migrate status <service>.<id>` | Show persisted state for one data migration on its owning service host (queries the service binary's `data-migrations status --format json`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `frameworks cluster data-migrate run <service>.<id>`    | Run one data migration to completion or until error; honors `--batch-size`, `--dry-run`, `--scope-kind/--scope-value`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `frameworks cluster data-migrate verify <service>.<id>` | Run the migration's read-only verification on the service host.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `frameworks cluster data-migrate pause <service>.<id>`  | Mark a data migration paused.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `frameworks cluster data-migrate resume <service>.<id>` | Mark a paused data migration runnable again.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `frameworks cluster skipper knowledge reset`            | Clear Skipper knowledge embeddings and crawl cache so configured sources are fetched and embedded again.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `frameworks cluster skipper posts`                      | Query recent Skipper social post drafts from the skipper database over the manifest-selected SSH/database path.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `frameworks cluster metabase sync`                      | Sync repo-managed Metabase Periscope cards and attach missing cards to the dashboard without overwriting unmanaged manual edits.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `frameworks cluster sync-geoip`                         | Upload GeoLite2-City MMDB data to Foghorn/Quartermaster hosts; supports `--source maxmind` or `--source file`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `frameworks cluster set-channel <channel>`              | Set the manifest release channel. Valid channels are `stable` and `rc`; `cluster upgrade` uses this when no explicit version is given.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `frameworks cluster clickhouse migrate backfill`        | Bulk-copy periscope data into the new Replicated node via `remote()` over the WireGuard mesh, using the same idempotent staging + `REPLACE PARTITION`/`EXCHANGE` mechanics as `sync` (re-runnable after a partial failure); stops refreshable MVs for the duration. Requires `--from <source host key>` (and `--from-port` if source/dest run on swapped ports).                                                                                                                                                                                                                                                                                                                                     |
+| `frameworks cluster clickhouse migrate sync`            | Idempotent per-partition re-copy of the growing tail (staging table + atomic `REPLACE PARTITION`; additive-safe — re-runs replace, never double). Unpartitioned tables use an atomic `EXCHANGE`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `frameworks cluster clickhouse migrate verify`          | Parity fingerprint — FINAL row count plus a `cityHash64` content hash over the shared (source-and-destination) columns, each side normalized to the destination type (`AggregateFunction` columns finalized; a type-evolved source column cast to the destination type). Destination-only/new tables absent on the source are asserted EMPTY instead of hashed. Plus a catalog-coverage assertion that fails if the live schema has a table the migration catalog doesn't classify.                                                                                                                                                                                                                  |
+| `frameworks cluster clickhouse migrate cutover`         | Refuses unless `--ingest-stopped` is passed (periscope-ingest must be stopped first; Kafka buffers). Stops the refreshable MVs on BOTH the source (quiescing the old node so a timer refresh can't race the copy) and the destination, runs the final idempotent sync, RE-VERIFIES parity (aborting before any MV starts on a mismatch), then starts the destination MVs; any post-quiesce failure restores the source MVs so the old node stays usable. It then prints the operator repoint steps — either flip BOTH endpoints (downtime, ingest stays stopped) or write-first/drain/read (online) — plus the rollback path. The endpoint flips are operator gitops steps, not done by the command. |
 
 **Examples:**
 
@@ -13361,12 +13378,21 @@ frameworks cluster upgrade <service> [flags]
 
 **Process:**
 
-1. Detect current state
-2. Fetch GitOps manifest for target version
-3. Stop service
-4. Deploy new version (pull image or download binary)
-5. Start service
-6. Validate health
+1. Fetch GitOps manifest for target version (and fail closed if that fetched
+   metadata says this CLI is too old or is missing a required reconciliation
+   transition)
+2. Run the pre-deploy gate once (schema + data migrations; cluster-level)
+3. For **every** host the service runs on: detect state, deploy the new
+   version (pull image or download binary), and validate health
+
+For an HA service, `upgrade` (and `--all`) moves every replica, not just the
+first — a partial failure aborts the sequence. The CLI does **not** write the
+deployed version back to your local manifest (the resolved manifest carries
+SOPS-decrypted host inventory, so serializing it would leak host IPs/users/key
+paths). There is no durable "deployed version" record: your GitOps manifest holds
+the **desired** release, while the **observed** version is read from actual state
+(edge nodes self-report to `foghorn.node_components`; control-plane services are
+detected on disk). Record the intended version in your source GitOps manifest.
 
 **Flags:**
 
@@ -13408,6 +13434,81 @@ frameworks cluster upgrade --all --yes
   depend on the new schema. Upgrade commands run the same migration and data-migration gates in
   dry-run and apply mode.
 </Aside>
+
+### frameworks cluster release
+
+Run a full cluster release as one ordered, resumable plan: expand migrations → service
+upgrades in dependency order → reconciliation transitions interleaved at their declared
+dependency points → postdeploy migrations. This is the **normal** upgrade path;
+`cluster migrate`, `cluster upgrade`, and the low-level reconciliation subcommands remain
+recovery tools.
+
+**Usage:**
+
+```bash
+frameworks cluster release apply [flags]
+```
+
+A reconciliation transition is a constrained **Check → Apply → Verify** node registered by
+a compiled handler id (never a shell command); an unknown handler or an outdated CLI fails
+the release closed. Each converges a declared invariant against natural authoritative
+state, so a rerun after a mid-release failure re-Checks reality and skips whatever is
+already complete — the release is resumable. `--dry-run` runs every gate and Check and
+prints the planned transitions without mutating anything.
+
+**Flags:**
+
+- `--version string` - Target version (defaults to the cluster channel)
+- `--dry-run` - Show the plan and run every gate/Check without mutating anything
+- `--yes` - Skip the confirmation prompt
+- `--skip-validation` - Skip health validation after each service upgrade
+- `--no-rollback` - Skip automatic rollback on a service health-check failure
+
+**Examples:**
+
+```bash
+# Preview the whole release (migrations, reconciliations, upgrades)
+frameworks cluster release apply --dry-run
+
+# Apply it
+frameworks cluster release apply --version stable --yes
+```
+
+### frameworks cluster storage
+
+Inspect and adopt the immutable S3 storage descriptor a media cell is bound to.
+Each cell is bound to one backend (bucket/endpoint/region/prefix): Quartermaster
+persists it, Chandler serves from it, and Foghorn establishes its cell identity
+against it on first boot. See [Media Storage &
+Playback](/operators/media-storage) for the full model.
+
+**Usage:**
+
+```bash
+frameworks cluster storage adopt <cluster> [flags]
+```
+
+`frameworks cluster storage adopt` brings a cell whose backend lives only in
+`STORAGE_S3_*` env files, with nothing on the Quartermaster cluster row, under the
+authority. It reads the cell's **deployed** descriptor, requires the cell's
+replicas to agree, records it on the Quartermaster cluster row, and verifies it.
+Quartermaster enforces immutability: an unset descriptor is populated, a matching
+one is idempotent, and a diverging one is refused as a repoint. Credentials are
+never touched.
+
+**Flags:**
+
+- `--dry-run` - Read the deployed descriptor and report it without writing Quartermaster
+
+**Examples:**
+
+```bash
+# Read the live replicas and show the descriptor without writing
+frameworks cluster storage adopt media-us --dry-run
+
+# Reconcile the deployed backend into Quartermaster and verify
+frameworks cluster storage adopt media-us
+```
 
 <Aside type="note" title="Background data migration support">
   `frameworks cluster data-migrate` lists and runs service-owned background data migrations declared
@@ -15283,20 +15384,29 @@ ALTER TABLE periscope.artifact_state_current
   ADD COLUMN IF NOT EXISTS filename Nullable(String) AFTER internal_name;
 ```
 
-## Single-node vs replicated
+## Replicated by default
 
-The default schema is single-node. If you run a replicated topology, every
-migration that creates or alters a `Replicated*` table must use `ON CLUSTER
-'{cluster}'`:
+The baseline provisions the analytics databases with a **Replicated database engine**
+(`ENGINE = Replicated('/clickhouse/databases/<db>/{shard}', '{shard}', '{replica}')`) and
+`Replicated*` table engines, backed by a Keeper ensemble. A Replicated database propagates
+DDL to every replica automatically, so migrations use plain `CREATE`/`ALTER` statements and
+must **not** add `ON CLUSTER '{cluster}'` — it is unnecessary here and can conflict with the
+database's own DDL replication:
 
 ```sql
-ALTER TABLE periscope.artifact_events ON CLUSTER '{cluster}'
+ALTER TABLE periscope.artifact_events
   ADD COLUMN IF NOT EXISTS filename Nullable(String) AFTER internal_name;
 ```
 
-The role is single-node aware today; replicated support is a future role var.
-Until then, replicated topologies need to apply migrations on each shard
-themselves.
+**Keeper is required in every topology.** The baseline creates the `Replicated` database and
+`Replicated*` tables unconditionally, and those engines cannot exist without Keeper. A singleton
+(dev / single-node) therefore still runs a **one-node standalone `clickhouse-keeper` service** — a
+separate systemd unit (`/etc/clickhouse-keeper/keeper_config.xml`) that the Ansible role configures
+and orders before `clickhouse-server`, not an in-process/embedded Keeper — and applies the exact same
+migration files with a single shard/replica; only the Keeper ensemble size differs from production.
+The role's empty-`clickhouse_keeper_nodes` "bare" mode creates an ordinary Atomic database with no
+Keeper and is **not** compatible with this always-`Replicated` analytics baseline; do not use it for
+the analytics databases.
 
 ## Rollback
 
@@ -16541,9 +16651,9 @@ Navigator (`api_dns`) automatically manages DNS based on node inventory from Qua
 2. Navigator fetches nodes for that service type and filters to those with external IPs
 3. Updates the authoritative provider:
    - Root/API/web/admin names → Cloudflare A records or load balancers
-   - Multiple nodes on root/global hostnames → Cloudflare load balancer with one proximity-steered pool per Quartermaster cluster
+   - Multiple nodes on root/global hostnames → Cloudflare load balancer with one pool per origin node IP; proximity steering is enabled only when at least two pools carry coordinates
    - Media cluster names → Bunny A-record sets with geolocation Smart Routing when coordinates are available
-4. Applies proxying rules (default: `chartroom`, `foredeck`, and `logbook`)
+4. Applies proxying rules (default set: `bridge`, `chartroom`, `chatwoot`, `foredeck`, `grafana`, `listmonk`, `logbook`, `metabase`, `steward`; override via `NAVIGATOR_PROXY_SERVICES`)
 5. Handles ACME certificate issuance via DNS-01 challenges
 
 If no nodes are returned for a service type, Navigator skips changes to avoid removing working DNS during a transient outage.
@@ -17184,6 +17294,10 @@ See [DNS and Cluster Routing](/operators/dns) for certificate routing and provid
 
 **Providers:** Cloudflare R2 and Hetzner Object Storage are the supported defaults. Any S3-compatible backend works (the AWS SDK v2 client + `BaseEndpoint` + `UsePathStyle = true` cover MinIO, Wasabi, Backblaze B2, AWS S3 itself).
 
+:::caution[A cell's S3 backend is immutable]
+A Foghorn cell's storage **descriptor** — `STORAGE_S3_BUCKET`, `STORAGE_S3_ENDPOINT`, `STORAGE_S3_REGION`, `STORAGE_S3_PREFIX` — is fixed for the life of that cell. Foghorn records it on first boot (`foghorn.cell_storage_identity`) and **refuses to start** if any of those four values later change: cleanup routes each object to the backend it was written to, and a cell wires only its current store, so a silent repoint would delete from (or stall on) the wrong backend. **Credentials rotate freely** — `STORAGE_S3_ACCESS_KEY` / `STORAGE_S3_SECRET_KEY` are not part of the identity. Backend **repointing is not supported**: to move a cell to a different bucket/endpoint/region/prefix, migrate its data off the old backend first, or stand up a new cell.
+:::
+
 **Consumed By:**
 
 - **Foghorn** (`api_balancing`) — mints presigned PUT/GET URLs for clip / DVR / VOD lifecycle, writes manifests directly
@@ -17218,6 +17332,14 @@ Single-region deployments can use one provider for both EU and US clusters — t
 
 1. Create bucket via Hetzner Cloud Console under the right project + region (`nbg1` Nuremberg, `fsn1` Falkenstein, `hel1` Helsinki).
 2. Generate an access key + secret via the bucket UI.
+3. **Required: set an `AbortIncompleteMultipartUpload` lifecycle rule (e.g. 7 days).** Unlike R2 — which aborts incomplete multipart uploads automatically after 7 days — Hetzner keeps interrupted upload fragments indefinitely without this rule. Foghorn's in-process abort on a failed upload is best-effort and a crash between `CreateMultipartUpload` and the durable row can leave an upload with no database record to retry from, so the bucket lifecycle is the required final backstop against orphaned fragments. Set it with any S3-compatible tool, e.g.:
+
+   ```bash
+   aws s3api put-bucket-lifecycle-configuration --endpoint-url https://<region>.your-objectstorage.com --bucket <bucket> \
+     --lifecycle-configuration '{"Rules":[{"ID":"abort-incomplete-multipart","Status":"Enabled","Filter":{"Prefix":""},"AbortIncompleteMultipartUpload":{"DaysAfterInitiation":7}}]}'
+   ```
+
+   This is the ONLY bucket-level lifecycle FrameWorks requires: it reaps abandoned upload parts only, never completed objects (tenant retention stays FrameWorks-owned).
 
 ### CORS policy (required for VOD uploads)
 
@@ -17289,7 +17411,7 @@ STORAGE_S3_PREFIX=""              # optional key prefix inside the bucket
 
 In multiregion deployments, EU and US clusters use different providers and therefore different credentials. The CLI assembles env per host so each box receives the credentials for the cluster it serves — see [Credential Delivery](#credential-delivery) above. Cluster-bound services pull `STORAGE_S3_*` from cluster-scoped env_files referenced by the manifest's service definitions.
 
-Chandler also consults `infrastructure_clusters.s3_endpoint` / `s3_bucket` / `s3_region` for the local `CLUSTER_ID` and overrides env defaults with the cluster-row values. Credentials are never stored in `infrastructure_clusters` — they remain env-only.
+When `CLUSTER_ID` is set, Chandler takes the full descriptor tuple (`s3_bucket` / `s3_endpoint` / `s3_region` / `s3_prefix`) **exclusively from Quartermaster's `infrastructure_clusters` row** — the sole authority. There is no env descriptor fallback: without a usable cluster-row descriptor Chandler starts but is not ready (`/ready` → 503). Only the access/secret **credentials** come from env; they are never stored in `infrastructure_clusters`. See [Media storage](/operators/media-storage/) for the full authority chain.
 
 ### Known gotchas
 
@@ -17790,6 +17912,70 @@ Sidecars (`.dtsh`, `.gop`) live next to their media object with the
 sidecar suffix appended. Don't hand-manipulate these prefixes — use
 the artifact APIs and the freeze flow so Foghorn's ledger stays
 consistent.
+
+## Storage Backend Identity & Adoption
+
+Each media cell is bound to exactly one S3 backend, described by a
+four-part tuple: **bucket / endpoint / region / prefix**. That tuple is
+the cell's identity and it is immutable — repointing a live cell at a
+different bucket or prefix would strand every artifact already written
+under the old descriptor, so the platform refuses it.
+
+Three components hold a copy and they must agree:
+
+- **Quartermaster** persists the descriptor on the cluster row
+  (`infrastructure_clusters.s3_bucket/s3_endpoint/s3_region/s3_prefix`).
+  This is the **authority**.
+- **Chandler** reads the full descriptor tuple from **Quartermaster**
+  (`GetCluster`) at boot and serves under it. There is no env-serving
+  fallback: without a usable backend Chandler starts but is **not ready** — it
+  answers `/ready` with 503 and serves 503 for assets. Only credentials come
+  from env. `/health` reports process liveness (the process is up); `/ready`
+  proves this instance can read its immutable backend by **successfully reading
+  a known readiness sentinel object** (`thumbnails/.readiness`) — a real,
+  provisioned object, so an absent or access-denied response cannot look ready,
+  and it needs only object-read permission (no bucket listing). `/ready` is the
+  check that **gates deployment and service discovery** — a Chandler that is up
+  but cannot read its bucket is never rolled out or advertised as serviceable.
+  Foghorn writes the sentinel at boot (it owns writes to the bucket); Chandler
+  only reads it, so there is no request-time Foghorn handshake.
+- **Foghorn** establishes an immutable cell identity on first boot from the
+  Quartermaster descriptor: it adopts the descriptor and refuses to start if its
+  env disagrees. It does **not** self-establish from `STORAGE_S3_*` env — an
+  S3-enabled cell whose Quartermaster row carries no descriptor **fails closed**
+  until the descriptor is established.
+
+The Quartermaster descriptor is established by the **desired-state bootstrap**:
+the operator declares the tuple (bucket/endpoint/region/prefix) in the manifest
+cluster config, and provisioning writes it onto the Quartermaster cluster row.
+
+Credentials (`STORAGE_S3_ACCESS_KEY` / `STORAGE_S3_SECRET_KEY`) are never
+part of the descriptor — they stay in per-cluster env files.
+
+### The pre-deploy gate
+
+`frameworks cluster upgrade` refuses to move an S3-enabled Foghorn whose
+cluster declares **no** descriptor: without one, Chandler has no backend
+and Foghorn would establish an unproven identity. The gate also refuses a
+Foghorn whose env descriptor **disagrees** with the cluster row (a
+repoint). Populate and reconcile the descriptor before upgrading.
+
+Quartermaster is the sole source of truth for the descriptor: set it
+(bucket/endpoint/region/prefix) on the cluster in your **source** gitops manifest
+so the Foghorn pre-deploy gate agrees. `cluster upgrade` (and `cluster upgrade
+--all`) moves **every** host a service runs on, not just the first.
+
+### Dev
+
+S3 is opt-in in the compose stack: `STORAGE_S3_BUCKET` is empty by default
+(storage disabled). Set the `STORAGE_S3_*` variables in `.env` to bind the
+local cell to a backend. The storage initializer writes the descriptor tuple
+(bucket/endpoint/region/prefix) onto the **Quartermaster** cluster row — the
+authority. Foghorn then adopts that descriptor as its immutable cell identity
+at first boot, and Chandler reads the **same** descriptor from Quartermaster to
+serve; only the access/secret **credentials** come from env, for both. The
+example CLI manifest (`cli/examples/cluster-dev.yaml`) shows the
+cluster-descriptor shape on the `demo-media` cell.
 
 ## Multi-Cluster Sourcing
 
@@ -19010,6 +19196,139 @@ rolls back on health-check failure unless `--no-rollback` is set.
 
 </Steps>
 
+### Control plane first, then edges
+
+Deploy and migrate the **control plane first**; a new Foghorn comes up without requiring
+any edge to be ready. Foghorn enforces a **minimum control-protocol version** at sidecar
+registration: a sidecar declaring a version below the deployed minimum is **rejected**
+(`FailedPrecondition`, logged with the observed and required versions) and cannot connect
+until it is upgraded. **Redeploy every edge after** the control plane, and those nodes
+reconnect cleanly. When a release advances the minimum with no mixed-version window, this
+is a hard cut — the specific minimum and any transitional guidance ride in that release's
+notes, not here.
+
+Because a connected sidecar is always on the current protocol, its artifact inventory
+is always a **versioned whole-node snapshot** (a monotonic per-connection sequence),
+which Foghorn treats as authoritative — it can add _and remove_ copies immediately.
+There is no unversioned/legacy inventory handling.
+
+Foghorn still applies an **artifact-only readiness cordon**: on every (re)connect an
+edge node is excluded from **stored-artifact routing** until its active connection
+delivers its first complete versioned snapshot. **Live ingest and stream routing are
+unaffected** — only stored-clip/VOD/DVR playback from that edge is withheld while it
+has not yet reported.
+
+Therefore:
+
+- Upgrade/migrate the **control plane first**; it does not wait on the edge.
+- **Redeploy every edge afterward.** A not-yet-upgraded (or freshly restarted,
+  not-yet-reported) sidecar keeps streaming live, but is rejected at registration if
+  below the minimum, or cordoned for stored artifacts until it sends its first
+  versioned snapshot.
+- A supported N−1 / third-party edge protocol range applies only where a release
+  declares one; absent that, treat the deployed minimum as a hard floor.
+
+### Thumbnails: deterministic serving, install-time ordering
+
+Chandler is a **dumb static-object server**: a request path maps DETERMINISTICALLY to an
+S3 key (`thumbnails/{asset}/{file}`), which it streams and caches. It makes **no
+per-request call to Foghorn** and needs no `FOGHORN_INTERNAL_URL`. `SERVICE_TOKEN` gates
+only its internal cache-invalidation endpoint; serving does not need it.
+
+`has_thumbnails` (and the API URL) is exposed **only after** Foghorn has projected a thumbnail
+to that deterministic served key, so the API never advertises a thumbnail Chandler cannot serve.
+The publish/projection internals (how Foghorn picks and projects the winning attempt, and how it
+recovers a published-but-unprojected one) are in
+[the thumbnails architecture doc](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/docs/architecture/thumbnails.md).
+
+At **serving** time there is no per-request resolver call and no publish-time handshake, so
+Chandler has no runtime dependency on Foghorn's version. Installation carries one ordering
+edge: Chandler's readiness check reads a sentinel the in-cell Foghorn establishes at boot,
+so the planner deploys **Chandler after that Foghorn**. The **topology** rule also stands: a
+Foghorn is rejected if its cluster has no Chandler (a publisher with nothing to serve its
+thumbnails).
+
+The served URL is `{chandlerBase}/assets/{asset}/{file}` — a stable, deterministic shape
+that is Chandler's only public route — so a URL producer that upgrades before the media-cell
+Chandler never emits a path an already-running Chandler cannot serve.
+
+The projection to the deterministic key is **eventually consistent, not strictly serial**
+(a database lock cannot fence a non-atomic S3 copy): a straggler overwrite that lands within
+the max-copy window is corrected by the winner's automatic re-copy, and a straggler that
+resurrects a deleted object within the window is reclaimed by a delayed second cleanup sweep.
+Deletion tombstones the asset (the API stops returning its URL immediately) and sweeps the
+`thumbnails/{asset}/` prefix; the tombstone stops any new projection, and the delayed sweep
+reclaims a copy that lands within the window. A copy whose provider tail exceeds the assumed
+window is **not** reclaimed — the accepted, rare residual risk (a re-exposed cosmetic
+thumbnail), since thumbnails are regenerable derivatives, not primary media.
+
+Live-stream thumbnails are minted on the **ingest cell** (its own per-cell Foghorn database).
+The owning cell is recorded durably before any thumbnail is minted, and deletion fans the cleanup
+out to every recorded owning cell — so per-cell databases converge without a shared DB. An empty
+owner set means "no thumbnails": there is no cross-cell guess.
+
+### The release command: reconciliations run automatically
+
+Cross-service reconciliations are **not** a manual intermission. `frameworks cluster release apply`
+runs the whole release as one ordered, resumable plan and interleaves reconciliation transitions at
+their declared points:
+
+```text
+expand migrations
+→ service upgrades in dependency order, with reconciliation transitions
+  interleaved at their declared points
+→ postdeploy migrations
+```
+
+```bash
+frameworks cluster release apply --dry-run   # show the plan + every gate/Check, mutate nothing
+frameworks cluster release apply --yes        # run it
+```
+
+A reconciliation transition is a constrained **Check → Apply → Verify** node registered
+by a compiled handler id. It converges a declared invariant against natural authoritative
+state, so the release is **resumable**: if a later step fails, rerun `release apply` — each
+transition re-Checks reality and skips whatever is already `Complete`. A `Blocked` transition
+(e.g. authoritative replicas that disagree, or an authority that is unreachable) halts the release
+with a clear reason instead of guessing, and a transition whose precondition does not apply reports
+`Not applicable` rather than mutating.
+
+`cluster migrate`, `cluster upgrade`, and the low-level reconciliation subcommands remain as
+**recovery/debugging tools**; `release apply` is the normal path **for a cluster that is already
+installed** — it upgrades existing services and runs the reconciliation transitions, and it
+refuses to "upgrade" a service that is not yet installed. A **from-scratch** cluster is brought
+up with `cluster provision` (see [When to use provision](#when-to-use-provision)), which is where
+install ordering and initial descriptor establishment happen. After the initial provision, use
+`release apply` for subsequent rollouts. At **serving** time Chandler has no runtime dependency on Foghorn's version (it serves a
+deterministic key with no per-request Foghorn call); the Foghorn-before-Chandler ordering is an
+**install-time** property of the planner, shared by both `provision` and `release apply`. A direct
+`cluster upgrade foghorn` still enforces the storage-descriptor prerequisite. **Upgrade the
+`frameworks` CLI to at least the release's `min_cli_version` before applying** — the CLI
+validates that from the fetched release metadata, but a CLI predating that check cannot be
+stopped by it, so treat the CLI upgrade as the first step.
+
+### Cold-storage freeze: the control-protocol contract
+
+Cold-storage freeze (uploading a stored clip/VOD to durable S3) uses a **staged,
+server-minted** protocol: Foghorn mints the attempt id, presigns an **attempt-scoped
+staging** PUT, and publishes the verified staging object itself — copying it to a fresh
+immutable attempt-versioned key and atomically flipping the object pointer. The sidecar
+must upload to the staging key it is handed and echo the server-minted attempt id at
+completion.
+
+Foghorn gates freeze dispatch on the sidecar's **observed** control-protocol version
+(never a per-request self-asserted flag): a sidecar below the staged-freeze minimum is
+**refused freeze assignments** — both the interactive permission request (denied with
+`sidecar_protocol_unsupported`) and proactive reconciler dispatch fail closed, and the
+artifact simply **stays local and retryable**.
+
+The **registration minimum** (see "Control plane first, then edges" above) is at or above
+every staged-operation minimum — so any sidecar that connects at all already satisfies the
+freeze gate, and a below-minimum sidecar is **rejected at registration** rather than run in
+a degraded mode. There is no
+"upgrade edges first" or "run old sidecars against a new Foghorn" step: deploy the
+control plane, then redeploy every edge.
+
 ## Version selection
 
 `--version` accepts:
@@ -19060,9 +19379,12 @@ For billing and other audit-sensitive domains:
 - release verification should include counts and totals, not just service
   health.
 
-ClickHouse migrations are not applied by `cluster migrate`. For ClickHouse
-schema changes, follow the release notes and the [ClickHouse Migrations](/operators/clickhouse-migrations)
-runbook before upgrading analytics services.
+`cluster migrate` applies ClickHouse schema migrations (expand/postdeploy/contract
+phases) for the configured ClickHouse databases alongside Postgres, and refuses to
+proceed if the cluster is below the required baseline floor. Follow the
+[ClickHouse Migrations](/operators/clickhouse-migrations) runbook for phase ordering
+and replicated-cluster specifics, and apply the expand phase before upgrading the
+analytics services that depend on it.
 
 ## Rollback behavior
 
@@ -19097,10 +19419,23 @@ during normal diagnostics.
 
 `frameworks cluster upgrade plan` shows the target rollout order and embedded
 SQL migrations by phase. The CLI embeds a release catalog for service database
-ownership, data-migration requirements, compatibility floors, and hard
-intermediate release requirements. `cluster upgrade` uses that catalog together
-with live `_migrations` and service-owned `_data_migrations` state to refuse
-unsafe DB-backed rollouts before changing binaries.
+ownership, data-migration requirements, and the per-release `min_cli_version`
+tooling floor. `cluster upgrade` uses that catalog together with live
+`_migrations` and `_data_migrations` state to refuse unsafe rollouts before
+changing binaries. Engine schema checks (expand + prior postdeploy) apply to a
+service that owns a PostgreSQL/YugabyteDB or ClickHouse schema; the required
+data-migration check applies to **every** service, because a data migration can
+gate a binary that only reads the migrated data without owning its schema.
+Ordering is enforced against the actual migration ledger, not a version label. A
+non-concrete (dev/unversioned) CLI is refused against a release's
+`min_cli_version` unless you pass `--unsafe-ignore-cli-version-floor`. `cluster
+provision` runs the same required-data-migration gate before it deploys
+applications, so a clean-compute redeploy cannot start newer binaries ahead of a
+required migration on a preserved database. The gate runs after database
+initialization and reads durable `_schema_baseline` provenance: a data migration
+introduced strictly below the floor a database was born at is folded into that
+baseline, so a fresh (baseline-born) database is exempt without special-casing
+database existence.
 
 `frameworks cluster data-migrate` is the first-class surface for resumable
 service-owned data migrations. `list` shows catalog-declared work and adoption
@@ -19155,7 +19490,7 @@ release this manifest belongs to," and `service_version` per component says
 
 Practical consequences:
 
-- `cluster upgrade --plan` shows each service's target image digest and native
+- `cluster upgrade plan` shows each service's target image digest and native
   tarball checksum, not just version labels. If your installed identity equals
   the target identity, nothing is re-pulled regardless of the umbrella
   version.
@@ -20083,6 +20418,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#processing--ai
 | ↳ Gateway-backed transcoding | Expanding | API, Dashboard, Docs | Live ABR renditions through Livepeer Gateway or local processing, with processing usage telemetry. |
 | ↳ Live AI processing | Planned | — | ONNX models running directly on the in-memory stream buffer of media edge nodes — detection, transcription, moderation, audio tagging, and embeddings for semantic search. |
 | ↳ Composition and SSAI | Planned | — | MistServer-native blitter for logos, watermarks, and lower-third overlays; Composer for server-side ad insertion (SSAI), raw-pixel composition, picture-in-picture, and automated clipping. |
+| **Workload cost model (GPU-aware scheduling)** *(foundation)* | Planned | — | Predictive per-job resource cost — codec, resolution, framerate, model size, and realtime factor mapped to expected CPU, GPU/VRAM, and bandwidth — continuously corrected by measured costs of completed jobs, feeding processing placement and admission. |
 
 ### Analytics & Observability
 
@@ -20105,7 +20441,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#infrastructure
 | ↳ Nodes (edge / ingest / playback) *(foundation)* | Available | API, Agents (MCP), CLI, Dashboard, Docs | Per-node health, info, and discovery. |
 | ↳ Node mode (drain / maintenance) *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Operator controls to drain a node, put it in maintenance, or restore it to active service. |
 | ↳ Federated network status *(foundation)* | Available | API, Dashboard, Docs | Cross-cluster routing visibility and orchestrator vantage points. |
-| ↳ Edge auto-update *(foundation)* | Available | CLI, Docs | Foghorn's release reconciler auto-updates Helmsman, MistServer, and Caddy on edge nodes over the Helmsman control stream — native and single-image container nodes alike. |
+| ↳ Edge auto-update *(foundation)* | Available | CLI, Docs | Automatic edge component updates — Quartermaster owns the release catalog and per-cluster targets; Foghorn's release reconciler applies them to Helmsman, MistServer, and Caddy over the Helmsman control stream — native and single-image container nodes alike. |
 | ↳ Edge ISO and cloud images *(foundation)* | Planned | — | Bootable FrameWorks Edge ISO and prebuilt cloud/marketplace images for on-demand media-cluster scaling. |
 | **Cluster marketplace** | Expanding | API, Agents (MCP), Dashboard, Docs | Browse listed clusters and manage subscriptions. A vetted public marketplace program for third-party capacity is on the roadmap. |
 | ↳ Cluster invites *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Direct invites granting another tenant access to a cluster. |
@@ -20118,14 +20454,22 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#infrastructure
 | ↳ Managed DNS and cluster domains | Expanding | API, Docs | Platform-managed DNS, TLS certificates, media-cluster domains, and tenant streaming domain discovery. |
 | ↳ Generic proxying and CDN services | Planned | — | Customer-configured proxy/CDN front doors for non-video services and adjacent workloads. |
 | ↳ Standalone object and block storage | Planned | — | Customer-facing storage buckets, volumes, policies, and lifecycle controls outside the video-asset workflow. |
+| **NAT-aware routing and traversal** | Planned | — | NAT-type classification as a first-class routing and placement signal, platform-coordinated hole punching, and platform-managed measurement of inter-server network performance (latency, throughput) feeding routing and capacity decisions — so self-hosted nodes behind NAT participate fully in the federated network. |
+| **Federation state synchronization** | Planned | — | Decentral distribution of configuration and state changes across a dynamic federation — clusters and servers join, leave, or drop offline at will — with automatic conflict resolution between concurrent changes and reconvergence after network partitions, without a central coordination point. |
+| **Stream replication orchestration** | Planned | — | Pre-emptive stream distribution — spread a stream to a cell or region ahead of demand, explicit hop topology, and per-stream replication policy (max replicas, allowed regions). |
+| **Placement policy and storage tiering** | Planned | — | Two-sided placement policy — cluster-owner and content-owner constraints (data residency, minimum durable copies) compiled into signed enforcement bundles evaluated at serve/ingest/process/store/replicate/peer decision points — over a cold-to-hot storage tier ladder with a backend-keyed placement ledger. |
 
 ### Commerce & Billing
+
+Planned items in this area are detailed on the [Roadmap](/roadmap#commerce--billing).
 
 | Capability | Availability | Surfaces | What it unlocks |
 | --- | --- | --- | --- |
 | **Billing & prepaid balance** | Available | API, Agents (MCP), Dashboard, Docs | Card / Mollie / crypto top-ups, billing details, invoices, prepaid balance. |
 | ↳ Usage caps, alerts, retention cost preview | Expanding | — | Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes. |
 | **Wallet & on-chain identity** | Expanding | API, Agents (MCP), Dashboard, Docs | Wallet sign-in, linked-wallet account identity, and x402 micropayments. |
+| **Operator settlement and attribution** | Planned | — | Attribute served traffic to the operators whose clusters actually carried it — manipulation-resistant across independent operators — and settle the full loop, from credit accrual through operator-visible reporting to payout execution. |
+| **Stream-level balances** | Planned | — | Optional per-stream balances that fund usage before the tenant balance — pay-per-view, tips, sponsor-funded streams — plus promo codes, referral rewards, and volume discounts. |
 
 ### Developer Platform & Agents
 
@@ -20149,6 +20493,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#engagement--in
 | --- | --- | --- | --- |
 | **Conferencing and remote contribution** | Planned | — | Multi-party WebRTC rooms and remote-guest contribution — commentators and callers mixed into a managed stream. |
 | **Rooms, chat, and interactivity (Parlor)** | Planned | — | Viewer chat and engagement primitives — channel points, hype trains, leaderboards, flair, and moderation views — synced to the stream. |
+| **Live commerce (shopping and auctions)** | Planned | — | Shopping and server-authoritative auctions attached to live streams — product showcases, carts and orders, and auction mechanics that stay fair for viewers at different latencies behind the live edge. |
 
 ### Account & Apps
 
@@ -20163,6 +20508,145 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#account--apps)
 | ↳ Mobile apps and integrated help center | Planned | — | Native mobile operations and an in-product help center for support, incidents, and account workflows. |
 
 The [Roadmap](/roadmap) carries sequencing and detail for planned work; this matrix shows the full capability scope, shipped and planned alike.
+
+
+---
+# Platform capability inventory
+https://logbook.frameworks.network/platform/platform-capabilities
+
+This page lists the **complete** capability inventory: everything in the [product capability matrix](/platform/feature-matrix) plus platform-audience capabilities — the infrastructure, trust, and orchestration machinery that products are built on. Rows marked *(platform)* are operated capabilities, not customer-facing features.
+
+### Streaming
+
+| Capability | Availability | Surfaces | Description |
+| --- | --- | --- | --- |
+| **Live streams** | Available | API, Agents (MCP), Dashboard, Docs | Push and pull live streams with stream keys and ingest configuration. Push ingest over RTMP/E-RTMP, SRT, and WHIP (WebRTC); pull from RTSP, SRT, RIST, HLS, MPEG-TS, and Mist/DTSC sources. |
+| ↳ Stream keys *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Per-stream ingest credentials with rotation. |
+| ↳ Pull streams | Expanding | API, Agents (MCP), Dashboard, Docs | Stream inputs pulled from upstream sources (RTSP, SRT, RIST, HLS, etc.) instead of pushed, with resolution-stage lifecycle audit. |
+| ↳ Multistream push targets | Available | API, Agents (MCP), Dashboard, Docs | Forward live streams to additional RTMP/SRT destinations. |
+| **StreamCrafter (browser studio)** | Available | API, Dashboard, Docs | Browser-based broadcasting studio — WHIP/WebRTC ingest, compositing, and multi-source mixing. Ships as npm packages @livepeer-frameworks/streamcrafter-&#123;core,react,svelte,wc&#125; and powers the dashboard's Go Live page. |
+| **Device discovery and contribution inputs** | Planned | — | Edge-local discovery for cameras, PTZ devices, NDI sources, USB capture, HDMI inputs, and local contribution paths. |
+
+### Playback
+
+| Capability | Availability | Surfaces | Description |
+| --- | --- | --- | --- |
+| **Playback** | Available | API, Agents (MCP), Dashboard, Docs | Resolve a viewer or ingest endpoint for a stream / VOD / clip. Delivery over HLS, LL-HLS (CMAF), DASH, WebRTC (WHEP), and progressive MP4. |
+| ↳ Player SDKs | Available | API, Dashboard, Docs | Embeddable player packages — @livepeer-frameworks/player-&#123;core,react,svelte,wc&#125; — with theming, adaptive playback, and built-in boot/QoE telemetry. |
+| ↳ Playback access control | Available | API, Agents (MCP), Dashboard, Docs | Public / JWT / webhook playback authorization policy on streams, clips, and VOD assets, with a dry-run tester and full agent management surface. |
+| ↳ Signing keys *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | ES256 keypairs for signing playback JWTs. Private material returned once on creation. |
+| ↳ DRM | Planned | — | FairPlay, Widevine, and PlayReady protection for premium playback workflows. |
+
+### Media Library
+
+| Capability | Availability | Surfaces | Description |
+| --- | --- | --- | --- |
+| **DVR recordings** | Available | API, Agents (MCP), Dashboard, Docs | 24/7-capable DVR recording with bounded live seekback, continuous archive storage, chapter replay, and VOD-style playback. |
+| ↳ DVR chapters | Expanding | API, Agents (MCP), Dashboard, Docs | Chapter artifacts that segment a long-running DVR session into replayable windows, so a 24/7 recording can be replayed by window, civil-time range, or explicit range without restarting the live stream. |
+| ↳ Scheduled recordings | Planned | — | Calendar-driven DVR captures that start and stop on schedule, so streams record themselves on a fixed cadence. |
+| **VOD assets** | Available | API, Agents (MCP), Dashboard, Docs | Multipart VOD upload and lifecycle. |
+| ↳ Scheduled VOD streams | Planned | — | Linear live channels assembled from existing VOD assets, with schedules that make archived media play as a rolling live stream. |
+| **Clips** | Available | API, Agents (MCP), Dashboard, Docs | Time-range clips extracted from streams or recordings. |
+| **Media retention** | Available | API, Agents (MCP), Dashboard, Docs | Tenant-controlled storage policy for 24/7 DVR archives, clips, and VOD assets, with per-asset overrides and entitlement bounds. |
+| **Thumbnails and sprite previews** | Expanding | API, Agents (MCP), Dashboard, Docs | Auto-generated poster frames and sprite-tile preview strips for live streams, clips, VOD, and DVR playback. |
+
+### Processing & AI
+
+| Capability | Availability | Surfaces | Description |
+| --- | --- | --- | --- |
+| **Processing** *(foundation)* | Expanding | API, Dashboard, Docs | Server-side media processing — live ABR transcoding, on-edge AI, and composition — placed on the right nodes across a cluster. |
+| ↳ Gateway-backed transcoding | Expanding | API, Dashboard, Docs | Live ABR renditions through Livepeer Gateway or local processing, with processing usage telemetry. |
+| ↳ Live AI processing | Planned | — | ONNX models running directly on the in-memory stream buffer of media edge nodes — detection, transcription, moderation, audio tagging, and embeddings for semantic search. |
+| ↳ Composition and SSAI | Planned | — | MistServer-native blitter for logos, watermarks, and lower-third overlays; Composer for server-side ad insertion (SSAI), raw-pixel composition, picture-in-picture, and automated clipping. |
+| **Workload cost model (GPU-aware scheduling)** *(foundation)* | Planned | — | Predictive per-job resource cost — codec, resolution, framerate, model size, and realtime factor mapped to expected CPU, GPU/VRAM, and bandwidth — continuously corrected by measured costs of completed jobs, feeding processing placement and admission. |
+
+### Analytics & Observability
+
+| Capability | Availability | Surfaces | Description |
+| --- | --- | --- | --- |
+| **Analytics** | Expanding | API, Agents (MCP), Dashboard, Docs | Stream health, viewers, geographic, routing, quality tiers, federation, node metrics, and view-level player QoE (rebuffering, frame drops, startup, VOD retention) — with cross-player coverage still expanding. |
+| **Incidents and alerts** | Planned | — | Tenant-scoped incident feed aggregating node-health, certificate, DNS, capacity, and cluster alerts with acknowledge/resolve and realtime delivery. |
+
+### Infrastructure & BYOC
+
+| Capability | Availability | Surfaces | Description |
+| --- | --- | --- | --- |
+| **Geo-balanced viewer routing** *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Foghorn resolves each viewer to the optimal edge by geography, load, and node health across federated clusters. |
+| **Edge clusters** *(foundation)* | Available | API, Agents (MCP), CLI, Dashboard, Docs | Tenant-owned edge clusters with bootstrap and node enrollment. |
+| ↳ Enrollment / bootstrap tokens *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | One-shot tokens used to enroll new edge nodes into a cluster. |
+| ↳ Nodes (edge / ingest / playback) *(foundation)* | Available | API, Agents (MCP), CLI, Dashboard, Docs | Per-node health, info, and discovery. |
+| ↳ Node mode (drain / maintenance) *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Operator controls to drain a node, put it in maintenance, or restore it to active service. |
+| ↳ Federated network status *(foundation)* | Available | API, Dashboard, Docs | Cross-cluster routing visibility and orchestrator vantage points. |
+| ↳ Edge auto-update *(foundation)* | Available | CLI, Docs | Automatic edge component updates — Quartermaster owns the release catalog and per-cluster targets; Foghorn's release reconciler applies them to Helmsman, MistServer, and Caddy over the Helmsman control stream — native and single-image container nodes alike. |
+| ↳ Edge ISO and cloud images *(foundation)* | Planned | — | Bootable FrameWorks Edge ISO and prebuilt cloud/marketplace images for on-demand media-cluster scaling. |
+| **Cluster marketplace** | Expanding | API, Agents (MCP), Dashboard, Docs | Browse listed clusters and manage subscriptions. A vetted public marketplace program for third-party capacity is on the roadmap. |
+| ↳ Cluster invites *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Direct invites granting another tenant access to a cluster. |
+| ↳ Cluster subscription requests *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Tenant-requested subscription to a cluster, requiring operator approval. |
+| **BYOC ownership levels** | Expanding | Docs | The deployment ownership spectrum — from bring-your-own edge nodes to fully sovereign self-hosting. |
+| ↳ Private media cluster (BYOC) | Planned | — | Run the media and data plane on your own cloud while using the FrameWorks control plane for tenancy, routing, billing, and access control. |
+| ↳ Hosted private clusters (BYOC) | Planned | — | FrameWorks-provisioned dedicated, isolated clusters for a single tenant, with reserved capacity and fixed-rate pricing. |
+| ↳ Fully sovereign self-hosting (BYOC) | Planned | — | Run the entire FrameWorks stack with no runtime dependency on FrameWorks, including your own object storage, analytics store, DNS, and an isolated control plane and identity root. |
+| **Adjacent infrastructure services** | Expanding | API, Docs | Infrastructure products adjacent to video delivery — managed DNS, generic proxying/CDN, and standalone storage. |
+| ↳ Managed DNS and cluster domains | Expanding | API, Docs | Platform-managed DNS, TLS certificates, media-cluster domains, and tenant streaming domain discovery. |
+| ↳ Generic proxying and CDN services | Planned | — | Customer-configured proxy/CDN front doors for non-video services and adjacent workloads. |
+| ↳ Standalone object and block storage | Planned | — | Customer-facing storage buckets, volumes, policies, and lifecycle controls outside the video-asset workflow. |
+| **NAT-aware routing and traversal** | Planned | — | NAT-type classification as a first-class routing and placement signal, platform-coordinated hole punching, and platform-managed measurement of inter-server network performance (latency, throughput) feeding routing and capacity decisions — so self-hosted nodes behind NAT participate fully in the federated network. |
+| **Federation state synchronization** | Planned | — | Decentral distribution of configuration and state changes across a dynamic federation — clusters and servers join, leave, or drop offline at will — with automatic conflict resolution between concurrent changes and reconvergence after network partitions, without a central coordination point. |
+| **Stream replication orchestration** | Planned | — | Pre-emptive stream distribution — spread a stream to a cell or region ahead of demand, explicit hop topology, and per-stream replication policy (max replicas, allowed regions). |
+| **Placement policy and storage tiering** | Planned | — | Two-sided placement policy — cluster-owner and content-owner constraints (data residency, minimum durable copies) compiled into signed enforcement bundles evaluated at serve/ingest/process/store/replicate/peer decision points — over a cold-to-hot storage tier ladder with a backend-keyed placement ledger. |
+| **Drain-integrated OS updates** *(foundation)* *(platform)* | Planned | — | Operator-driven host OS updates that drain each role safely before restart — media sessions run out or hand over, database replicas gate on recovery state, brokers transfer leadership — while cluster capacity floors hold. |
+| **Dynamic mesh routing** *(foundation)* *(platform)* | Planned | — | Dynamic route propagation over the encrypted WireGuard mesh so the topology adapts to link failure and growth without quadratic static peer configuration. |
+| **Service identity and trust lifecycle** *(foundation)* *(platform)* | Planned | — | Live rotation of trust material without service interruption — dual-validity intermediate CA rotation, asymmetric token authority (the signing key never leaves the issuing service), and non-forgeable cluster-bound service identities. |
+| **Foghorn high availability** *(foundation)* *(platform)* | Available | — | Regional balancer HA — Redis-externalized state, leader election, and changelog sync per cell so any Foghorn instance can serve routing decisions and node-mode changes propagate immediately. |
+| **Trigger durability WAL** *(foundation)* *(platform)* | Available | — | Edge-local write-ahead log for billing-critical media triggers — acknowledged only after durable append, deterministic event identity for idempotent replay, and an operator replay endpoint on the edge sidecar. |
+| **Internal CA and certificate sync** *(foundation)* *(platform)* | Available | — | Two-tier internal PKI — 72-hour service leaves issued by Navigator's internal CA via node- and cluster-bound cert_sync tokens, distributed by Privateer; public ACME (DNS-01) covers external listeners. |
+| **WireGuard mesh and internal DNS** *(foundation)* *(platform)* | Available | CLI, Docs | Self-managed encrypted service mesh with no external dependency — three-layer peer configuration (gitops seed, last-known, managed), dependency-derived topology, and a loopback .internal resolver per node. |
+| **Cluster rollout orchestrator** *(foundation)* *(platform)* | Available | CLI, Docs | Manifest-driven convergence — dependency-ordered phases, canary and region-staggered waves with health gates, content-addressed release pinning, and automatic rollback on failed health validation. |
+| **Livepeer transaction signer** *(foundation)* *(platform)* | Available | — | Keystore-backed remote ETH transaction signer so the Livepeer gateway never holds key custody on media nodes. |
+
+### Commerce & Billing
+
+| Capability | Availability | Surfaces | Description |
+| --- | --- | --- | --- |
+| **Billing & prepaid balance** | Available | API, Agents (MCP), Dashboard, Docs | Card / Mollie / crypto top-ups, billing details, invoices, prepaid balance. |
+| ↳ Usage caps, alerts, retention cost preview | Expanding | — | Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes. |
+| **Wallet & on-chain identity** | Expanding | API, Agents (MCP), Dashboard, Docs | Wallet sign-in, linked-wallet account identity, and x402 micropayments. |
+| **Operator settlement and attribution** | Planned | — | Attribute served traffic to the operators whose clusters actually carried it — manipulation-resistant across independent operators — and settle the full loop, from credit accrual through operator-visible reporting to payout execution. |
+| **Stream-level balances** | Planned | — | Optional per-stream balances that fund usage before the tenant balance — pay-per-view, tips, sponsor-funded streams — plus promo codes, referral rewards, and volume discounts. |
+| **Operator credit ledger** *(foundation)* *(platform)* | Expanding | — | Internal accrual ledger crediting cluster operators for served usage — platform-fee basis points, clawback and reversal support — populated from per-cluster usage attribution. |
+
+### Developer Platform & Agents
+
+| Capability | Availability | Surfaces | Description |
+| --- | --- | --- | --- |
+| **Developer API** | Expanding | API, Dashboard, Docs | The GraphQL API and the tooling around it — playground, API tokens, webhooks, and server-side SDKs. |
+| ↳ Developer API tokens *(foundation)* | Available | API, Dashboard, Docs | Long-lived API tokens for SDK / CI use. |
+| ↳ GraphQL playground | Available | Dashboard, Docs | Interactive GraphQL explorer wired to the live schema. |
+| ↳ Outbound event webhooks | Planned | — | Tenant-configured outbound webhooks for stream / clip / VOD lifecycle events. |
+| ↳ Backend SDKs | Planned | — | Server-side SDKs (Node, Python, PHP, Ruby, Elixir, Java, C#) wrapping the GraphQL API, webhooks, uploads, and access-token/JWT workflows. |
+| **Agents (MCP server)** | Available | API, Agents (MCP), Dashboard, Docs | Model Context Protocol server exposing FrameWorks operations to agents. |
+| ↳ Skipper (in-app consultant agent) | Expanding | API, Agents (MCP), Dashboard, Docs | Conversational platform agent for support and investigations. |
+
+### Engagement & Interactivity
+
+| Capability | Availability | Surfaces | Description |
+| --- | --- | --- | --- |
+| **Conferencing and remote contribution** | Planned | — | Multi-party WebRTC rooms and remote-guest contribution — commentators and callers mixed into a managed stream. |
+| **Rooms, chat, and interactivity (Parlor)** | Planned | — | Viewer chat and engagement primitives — channel points, hype trains, leaderboards, flair, and moderation views — synced to the stream. |
+| **Live commerce (shopping and auctions)** | Planned | — | Shopping and server-authoritative auctions attached to live streams — product showcases, carts and orders, and auction mechanics that stay fair for viewers at different latencies behind the live edge. |
+
+### Account & Apps
+
+| Capability | Availability | Surfaces | Description |
+| --- | --- | --- | --- |
+| **Tenant settings** | Expanding | API, Agents (MCP), Dashboard, Docs | Tenant identity, billing setup, retention defaults, routing preferences, and wallet-provisioned account lifecycle. |
+| ↳ Teams & RBAC | Planned | — | Multi-user tenants with role-based access control. |
+| **Companion apps** | Expanding | — | Desktop and mobile companions to the dashboard and CLI. |
+| ↳ Desktop companion (macOS tray) | Expanding | — | Menu-bar app bundled with the CLI in the macOS installer for local edge and stream control. |
+| ↳ Mobile apps and integrated help center | Planned | — | Native mobile operations and an in-product help center for support, incidents, and account workflows. |
+| **Platform-operator god view** *(foundation)* *(platform)* | Available | — | Cross-tenant operational view for platform operators — audit-logged and read-oriented — used for support, incident response, and platform-wide analytics. |
+
+Product-facing sequencing lives on the [Roadmap](/roadmap); this inventory is regenerated from `docs/platform-features.yaml` by `make generate-feature-registry`.
 
 
 ---
@@ -20249,6 +20733,14 @@ An ONNX runtime in the media engine is in active development, running ultralight
 
 **Outcome:** run real-time AI where the stream already is — on the edge node — and burst heavy models to dedicated compute without leaving the control plane.
 
+### Workload Cost Model <Badge text="Next" variant="tip" />
+
+Processing placement today routes by node class and current load; what a job will actually cost is only knowable after it runs. The planned cost model predicts a job's footprint — CPU, GPU/VRAM, bandwidth — from its parameters (codec, resolution, framerate, model size, faster/slower-than-realtime factor), corrects those predictions continuously from measured costs of completed jobs, and accounts for interference between co-placed jobs and live serving on the same node. GPU and VRAM become first-class, measured resources.
+
+**Builds on:** processing orchestration and viewer routing's capacity scoring.
+
+**Outcome:** place transcode and AI jobs where they actually fit — before they run — instead of discovering overload after the fact.
+
 ### Composition and SSAI <Badge text="Later" variant="note" />
 
 Composition stays inside the media engine: a MistServer-native blitter for logos, watermarks, and lower-third overlays; MistServer's Composer reused for server-side ad insertion (SSAI) and raw-pixel composition; picture-in-picture and automated clipping layered on top.
@@ -20301,6 +20793,44 @@ Marketplace primitives — listing, invites, subscription requests, approvals, p
 
 **Outcome:** turn the existing marketplace plumbing into a vetted public program so tenants can buy capacity from third-party operators with a known support and trust contract.
 
+### Placement Policy and Storage Tiering <Badge text="Next" variant="tip" />
+
+Where content lives becomes policy-driven from two sides: cluster owners declare what workload they accept, content owners declare where their material may go — data residency, minimum durable copies — and both compile into signed enforcement bundles evaluated at every decision point (serve, ingest, process, store, replicate, peer). Underneath sits a storage tier ladder from cold archive to hot in-memory, with a ledger of which copies exist where.
+
+**Builds on:** BYOC ownership levels and the cluster marketplace.
+
+**Outcome:** run one policy model across SaaS, self-hosted, and federated deployments — so sovereignty requirements are enforced by the platform, not by operational discipline.
+
+### Stream Replication Orchestration <Badge text="Next" variant="tip" />
+
+Replication today is on-demand: a viewer shows up, the edge pulls the stream. Orchestration adds the proactive half — pre-emptively spreading a stream to a cell or region ahead of expected demand, explicit hop topology between origin and edge, and per-stream replication policy (replica caps, allowed regions).
+
+**Builds on:** the federation network and viewer routing.
+
+**Outcome:** position streams where the audience will be before the audience arrives, under explicit per-stream policy.
+
+### Federation State Synchronization <Badge text="Next" variant="tip" />
+
+Federation-wide configuration and state distribution today flows through one central management point. This work makes it decentral: clusters and servers of independent parties join, leave, or drop offline at will; concurrent changes from multiple parties resolve automatically without a central coordinator; and parts of the network that diverge during a partition reconverge when connectivity returns.
+
+**Builds on:** the federation network.
+
+**Outcome:** a federation where no single party's outage or authority blocks the rest of the network from changing and converging.
+
+### NAT-Aware Routing and Traversal <Badge text="Next" variant="tip" />
+
+Self-hosted nodes often sit behind NAT, where reachability depends on NAT type and connection direction. The control plane gains NAT-type classification as a routing and placement signal, coordination of traversal attempts between the right node pairs, and platform-managed probe/relay infrastructure that also measures inter-server network performance (latency, throughput) as an input to routing and capacity decisions — so a node in an office network participates fully in the federated network.
+
+**Builds on:** edge clusters and the federation network.
+
+**Outcome:** stop treating NAT'd nodes as second-class — route and place around reachability instead of failing on it.
+
+### Platform Trust and Operations Hardening <Badge text="Next" variant="tip" />
+
+Two operational deepenings of the platform itself: live rotation of trust material (intermediate CA rotation with overlapping validity, asymmetric token signing where keys never leave the issuing service, cluster-bound service identity) and drain-integrated OS updates, where each server role defines what a safe restart means — media sessions run out, database replicas gate on recovery, brokers hand over leadership — while cluster capacity floors hold during the update wave.
+
+**Outcome:** long-lived clusters that refresh their own trust and patch their own hosts without maintenance windows or service interruption.
+
 ### Managed DNS, Proxying, and Storage Services <Badge text="Later" variant="note" />
 
 Managed DNS, generic CDN/proxying, and standalone object/block storage are backlog items adjacent to video delivery. FrameWorks already runs DNS automation, service proxying, and media storage internally for operated deployments; the roadmap work is turning the right parts into customer-facing products with domains, origins, Ceph-backed storage resources, self-hosted/Anycast DNS paths, policies, billing, and support boundaries.
@@ -20314,6 +20844,24 @@ The deepest BYOC level: run the entire stack with no runtime dependency on Frame
 **Builds on:** standalone object/block storage and managed DNS from the Managed DNS, Proxying, and Storage Services item above.
 
 **Outcome:** operate FrameWorks entirely within your own jurisdiction and ownership boundary, with no control-plane dependency on us.
+
+## Commerce & Billing
+
+What ships today in this area: [Platform capabilities → Commerce & Billing](/platform/feature-matrix#commerce--billing).
+
+### Operator Settlement and Attribution <Badge text="Next" variant="tip" />
+
+In a federated network, one viewer session can cross clusters run by different operators. Settlement attributes every served byte to the operator who actually carried it — manipulation-resistant, so no participant can claim traffic they didn't serve — and closes the loop: credit accrual, operator-visible reporting, and payout execution. The accrual ledger exists internally today; the attribution hardening, reporting surface, and payouts are the roadmap work.
+
+**Builds on:** the cluster marketplace and federation network.
+
+**Outcome:** third-party operators get paid for the traffic they serve, with numbers both sides can verify.
+
+### Stream-Level Balances <Badge text="Later" variant="note" />
+
+Optional per-stream balances that fund usage before the tenant balance — enabling pay-per-view, tips, and sponsor-funded streams — plus promo codes, referral rewards, and volume discounts.
+
+**Outcome:** let a stream pay for itself, funded by its audience or its sponsor, without touching the tenant's main balance.
 
 ## Developer Platform & Agents
 
@@ -20347,11 +20895,19 @@ The next major feature theme after the current telemetry pass. Conferencing brin
 
 **Outcome:** bring guests and commentators into the stream itself and give every stream a live chat, without third-party tooling.
 
-### Rooms and Interactivity (Parlor) <Badge text="Later" variant="note" />
+### Rooms and Interactivity (Parlor) <Badge text="Next" variant="tip" />
 
-Beyond chat, the rooms service grows into engagement primitives synced to the stream: channel points, hype trains, leaderboards, viewer flair, viewer games, and moderation views with per-viewer history.
+Beyond chat, the rooms service grows into engagement primitives synced to the stream: channel points, hype trains, leaderboards, viewer flair, viewer games, and moderation views with per-viewer history. Events bind to the stream timeline per viewer — everyone sees a reaction at the moment it belongs to, regardless of how far behind the live edge they watch.
 
 **Outcome:** give streamers first-class engagement and monetization mechanics on their own infrastructure instead of bolting on overlay services.
+
+### Live Commerce (Shopping and Auctions) <Badge text="Next" variant="tip" />
+
+Shopping and auctions attached to live streams: product showcases, carts and orders, and server-authoritative auction mechanics. The hard problem is latency fairness — viewers watch at different distances behind the live edge, so interactive events must bind to the stream timeline, and competitive interactions like auction closes need one authoritative truth that treats differently-delayed bidders fairly.
+
+**Builds on:** rooms and interactivity, and stream-level balances for funding flows.
+
+**Outcome:** sell and auction inside the stream itself, with mechanics that stay fair at live-streaming latencies.
 
 ## Account & Apps
 

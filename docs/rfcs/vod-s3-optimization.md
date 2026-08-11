@@ -11,6 +11,10 @@ Draft
 - Move playback warmup toward S3 pull/proxy playback so first frame does not wait for
   a full local download.
 
+## Owning services / modules
+
+Helmsman (`api_sidecar`) owns the storage manager and MistServer integration this RFC changes; Foghorn (`api_balancing`) owns the VOD upload/presign flow. Coordinates with the processing-orchestration RFC.
+
 ## Current State
 
 - Helmsman downloads full VOD assets to local disk via presigned URLs before Mist can serve.

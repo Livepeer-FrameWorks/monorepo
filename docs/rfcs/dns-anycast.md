@@ -9,10 +9,15 @@ Draft
 - Evaluate running our own Anycast DNS to reduce vendor lock-in and enable app-aware routing.
 - This is a high-risk infra decision; keep it research-only until clear need exists.
 
+## Owning services / modules
+
+Navigator (`api_dns`) owns the managed-DNS layer this RFC would extend. The Anycast/BGP/PowerDNS stack itself is research-only — no owner or code exists in this repo.
+
 ## Current State
 
-- Navigator (`api_dns`) exists, has build/test targets, and manages Cloudflare-backed DNS,
-  ACME/TLS bundle, and internal CA flows. It is still not a service in default dev compose.
+- Navigator (`api_dns`) exists, has build/test targets, and manages DNS through Cloudflare and
+  Bunny providers, plus ACME/TLS bundle and internal CA flows. It is still not a service in
+  default dev compose.
 - There is no Anycast/BGP stack in dev or CI.
 - No PowerDNS/Galera/IXP tooling is present in this repo.
 
@@ -25,7 +30,7 @@ Evidence:
 
 ## Problem / Motivation
 
-Managed DNS limits routing flexibility and introduces vendor lock-in. Anycast could enable lower latency and app-aware routing at the DNS layer. Separately, the implemented DNS manager is Cloudflare-specific today; a self-hosted authoritative DNS path is still future work.
+Managed DNS limits routing flexibility and introduces vendor lock-in. Anycast could enable lower latency and app-aware routing at the DNS layer. Separately, the implemented DNS manager targets managed providers (Cloudflare and Bunny) today; a self-hosted authoritative DNS path is still future work.
 
 ## Goals
 

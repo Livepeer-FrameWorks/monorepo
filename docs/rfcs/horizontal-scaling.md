@@ -15,6 +15,10 @@ identified in this RFC — have not been addressed. No HA strategy exists beyond
 - Retry/circuit breaker utilities are wired into the shared gRPC clients.
 - This RFC defines high-level HA priorities and proposes follow-up RFCs per domain.
 
+## Owning services / modules
+
+Cross-cutting: `pkg/clients` owns the shared retry/circuit-breaker wiring used by the Commodore, Quartermaster, Purser, Foghorn, Periscope, Signalman, Deckhand, and Skipper clients. Per-domain HA ownership is deliberately deferred to the follow-up RFCs this document proposes.
+
 ## Current State
 
 - Circuit breaker/retry helpers exist in `pkg/clients` and are wired into shared

@@ -8,6 +8,10 @@
 
 Modify the GraphQL API rate limiter to deduct tokens based on query complexity instead of flat 1-token-per-request. This aligns with Shopify's cost-based rate limiting model.
 
+## Owning services / modules
+
+Bridge (`api_gateway`) owns this end to end: the token-bucket rate limiter and the complexity-based deduction live in `api_gateway/internal/middleware`.
+
 ## Motivation
 
 ### Current Behavior

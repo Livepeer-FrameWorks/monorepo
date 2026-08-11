@@ -259,6 +259,23 @@ Use Signalman-backed subscriptions for:
 
 Auction acceptance must remain server-authoritative. The client may optimistically render activity, but the accepted bid stream is the source of truth.
 
+### Latency fairness
+
+Viewers of the same live event sit at different distances behind the live edge: a LL-HLS viewer may be two seconds behind, an HLS viewer twenty. Auctions expose this directly. Auction state must have exactly one authoritative truth — the winning bid and the close moment live in `api_auctions`, nowhere else — while every viewer observes that truth delayed by their own playback position.
+
+This creates a structural tension:
+
+- Engagement events can be delayed per viewer so overlays match what is on screen (`docs/rfcs/parlor.md`, Event sync — timeline-bound delivery is the shared mechanism).
+- Auction state cannot be forked per viewer. Delaying "lot closed" per viewer while the server has already closed the lot would let a high-latency viewer bid into a decided auction; showing everyone the server-time close structurally advantages low-latency viewers, who see the closing countdown seconds before everyone else.
+
+The close mechanism must therefore be designed so latency does not decide winners:
+
+- **Stream-timeline-anchored close.** A lot closes at a stream-timeline position, not a wall-clock instant. Every viewer sees the countdown end at the same moment in the broadcast, regardless of how far behind the live edge they are.
+- **Grace window.** After the anchored close position, the server accepts bids for a bounded grace window sized to the supported latency spread, so a viewer who bid on a still-open lot as rendered on their screen is not rejected purely for being behind the edge.
+- **Server-side bid timestamps validated against playback position.** Bids are stamped on arrival at `api_auctions` and validated against the bidder's reported per-viewer playback position (which the analytics pipeline already measures — though today as post-hoc beacon telemetry, not a live per-connection signal available at bid-validation time; a realtime path for it is part of this build). A bid is judged by the stream-timeline position the bidder was actually watching, and implausible position claims are rejected against the measured latency.
+
+Anti-sniping extensions (already in scope) compose with this: an extension moves the anchored close position, and the new position propagates through the same timeline-bound delivery path as any other event.
+
 ### MVP Phasing
 
 #### Phase 1: Live Shopping MVP
@@ -311,6 +328,13 @@ Potential future dependency:
 
 - `api_rooms` / Parlor for richer audience interaction, chat, and presenter-room mechanics
 
+### Owning services / modules
+
+- **`api_commerce`** (new) — catalog, merchandising, carts, checkout sessions, orders, promotions; system of record for transactional commerce state.
+- **`api_auctions`** (new) — authoritative auction state machine: bid ledger, close mechanics (stream-timeline-anchored close, grace window), winner selection, settlement state.
+- **Parlor (`api_rooms`) / Signalman (`api_realtime`)** — timeline-bound event delivery to viewers (see Latency fairness and `docs/rfcs/parlor.md`); Signalman carries the realtime fan-out, Parlor the room/engagement context around live retail events.
+- **Purser (`api_billing`)** — payment rails on the tenant side only (subscriptions, prepaid balances, x402); shopper checkout goes through external PSPs per the non-reuse section above.
+
 ## Alternatives Considered
 
 ### Call it `creator monetization`
@@ -335,7 +359,7 @@ Possible for an MVP, but not preferred. Auction correctness, timing, and dispute
   Mitigation: keep v1 single-seller and stream-attached.
 
 - Risk: auction latency or race conditions create trust problems.
-  Mitigation: server-authoritative bid acceptance, monotonic event ordering, explicit audit logs, anti-sniping rules.
+  Mitigation: server-authoritative bid acceptance, monotonic event ordering, explicit audit logs, anti-sniping rules, and a close mechanism that does not advantage low-latency viewers (see Latency fairness).
 
 - Risk: billing/accounting confusion if shopper and tenant money flows mix.
   Mitigation: keep Purser separate from commerce order flows.

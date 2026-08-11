@@ -111,12 +111,12 @@ Messaging uses dedicated channel and event type:
 
 ```go
 // Channel routing (api_realtime/cmd/signalman/main.go)
-case "message_received", "message_updated", "conversation_created", "conversation_updated":
-    return pb.Channel_CHANNEL_MESSAGING
+case "message_lifecycle", "message_received", "message_updated", "conversation_created", "conversation_updated":
+    return signalmanpb.Channel_CHANNEL_MESSAGING
 
 // Event type mapping
-case "message_received", "message_updated", "conversation_created", "conversation_updated":
-    return pb.EventType_EVENT_TYPE_MESSAGE_LIFECYCLE
+case "message_lifecycle", "message_received", "message_updated", "conversation_created", "conversation_updated":
+    return signalmanpb.EventType_EVENT_TYPE_MESSAGE_LIFECYCLE
 ```
 
 Clients subscribe to `CHANNEL_MESSAGING` to receive real-time message updates.

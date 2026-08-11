@@ -10,6 +10,10 @@ Draft
 - Edge accepts chat ingest and forwards upstream; origin is authoritative.
 - Requires MistServer DTSC changes + player integration.
 
+## Owning services / modules
+
+The MistServer fork owns the DTSC/data-track ingest and edge→origin forwarding changes; the player (`npm_player`) owns data-track consumption and the optional chat UI. No in-repo service work exists yet.
+
 ## Current State
 
 - No chat data-track ingest path exists in this repo.

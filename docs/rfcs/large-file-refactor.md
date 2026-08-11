@@ -10,6 +10,10 @@ Draft
 - Define a light policy for when to split files.
 - Apply refactors opportunistically with low risk.
 
+## Owning services / modules
+
+Cross-cutting policy with no single owner: it applies to any service or package with oversized files, and refactors land opportunistically with the owning service's own changes (coordinated updates to tests and imports).
+
 ## Current State
 
 - Multiple TypeScript and Go files exceed 1,500+ lines.

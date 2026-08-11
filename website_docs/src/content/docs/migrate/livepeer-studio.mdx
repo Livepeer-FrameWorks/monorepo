@@ -48,7 +48,7 @@ The shapes you know in Studio, mapped to FrameWorks:
 | Studio                                           | FrameWorks                                                                                 |
 | ------------------------------------------------ | ------------------------------------------------------------------------------------------ |
 | `POST /clip`                                     | `createClip(input)` mutation                                                               |
-| `GET /session/{id}/clips`                        | `clipsConnection` or `clip(id)`                                                            |
+| `GET /session/{id}/clips`                        | `storageArtifactsConnection(input: { kinds: [CLIP] })` or `clip(id)`                       |
 | `POST /asset/request-upload` (direct/TUS upload) | `createVodUpload(input)` → S3 multipart upload                                             |
 | `POST /asset/upload/url`                         | No direct equivalent today                                                                 |
 | Tasks API for upload/transcode progress          | `vodUploadStatus`, `liveVodLifecycle`, or `liveProcessingEvents` depending on the workflow |

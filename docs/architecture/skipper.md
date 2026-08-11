@@ -13,7 +13,7 @@ Skipper is the AI video consultant service. It provides RAG-grounded, tool-augme
 
 ### Chat Orchestrator
 
-Handles `POST /api/skipper/chat`. Receives a user message, loads conversation history, calls an LLM with tool definitions, executes tool calls in a loop (max 5 rounds), and streams the response via SSE.
+Handles `POST /api/skipper/chat`. Receives a user message, loads conversation history, calls an LLM with tool definitions, executes tool calls in a loop (max 6 rounds), and streams the response via SSE.
 
 ### Knowledge Base (RAG)
 
@@ -238,7 +238,7 @@ Periodic health analysis of active streams per tenant. Runs every `HEARTBEAT_INT
 7. **Per-stream drill-down** — when triage != ok, bulk fetch per-stream metrics, compare each against tenant-wide baseline, run correlation on outliers. Caps at 20 most anomalous streams sorted by max sigma.
 8. **Investigation** (only for `investigate`) — calls the chat orchestrator with a diagnostic system prompt, baseline deviations, correlations, per-stream anomalies, and raw metrics. Produces a JSON report with summary, root cause, and recommendations.
 9. **Flag** (only for `flag`) — sends a lightweight report via the reporter. Cooldown: 2 hours per tenant to suppress noise.
-10. **Reporting** — persisted to `skipper_reports`/`skipper_recommendations`, dispatched via email, WebSocket, or MCP.
+10. **Reporting** — persisted to `skipper_reports` (recommendations are a JSONB column on that table, not a separate table), dispatched via email, WebSocket, or MCP.
 
 ### Infrastructure Monitor
 
@@ -295,7 +295,9 @@ Groups metrics by stream ID, compares each against the tenant-wide baseline (`st
 
 ## Social Posting Agent
 
-Event-driven pipeline that drafts social media posts from platform signals. Located in `internal/social/`.
+Event-driven pipeline that drafts social media posts from platform signals. Located in `internal/social/`, off by default (`SKIPPER_SOCIAL_ENABLED=false`).
+
+**Status: partial** (undocumented until 2026-07). The pipeline detects, drafts, persists, and emails; there is no direct social-platform API integration — "publishing" means emailing a draft for human posting. The module has no registry item and no GraphQL/webapp surface.
 
 ### Pipeline
 
@@ -324,6 +326,10 @@ Publisher (sends draft to configured email for human review)
 | `knowledge`      | Knowledge scheduler                 | Newly embedded documentation page                                                       |
 
 The detector saves a baseline on first observation per content type. Subsequent signals are compared against the baseline. Knowledge signals are deduplicated against the last 20 posts.
+
+### Persistence
+
+Drafts are stored in `skipper.skipper_posts` (`internal/social/store.go`), scoped to the platform system tenant (`pkg/tenants.SystemTenantID`): content type, tweet text, context summary, trigger data (JSONB), and status (`draft` → `sent` once the notification email goes out). The store also backs the daily-limit count and the recent-post lists used for deduplication and theme avoidance.
 
 ### Constraints
 

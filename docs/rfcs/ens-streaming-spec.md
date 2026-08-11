@@ -10,6 +10,10 @@ Draft
 - Fields: playbackId, gateway URL, HLS URL, WHEP URL.
 - Enable portable streaming identity across gateways.
 
+## Owning services / modules
+
+Proposed owners: the NPM player (`npm_player`) for ENS resolution and reading text records; the Gateway API for populating ENS text records at stream creation. ENS itself needs no changes (existing text-record infrastructure). Nothing is implemented today.
+
 ## Current State
 
 - No FrameWorks implementation exists for resolving or publishing streaming endpoints in ENS text records.

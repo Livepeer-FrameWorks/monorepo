@@ -40,7 +40,7 @@ The shapes you know in Bunny, mapped to FrameWorks.
 
 ### VOD assets
 
-Schema-verified mutations and queries: `createVodUpload`, `completeVodUpload`, `abortVodUpload`, `deleteVodAsset`, `vodAsset`, `vodAssetsConnection`, `vodUploadStatus`. There is no `updateVodAsset` mutation today — title and description are set at upload time via [`createVodUpload`](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/pkg/graphql/schema.graphql).
+Schema-verified mutations and queries: `createVodUpload`, `completeVodUpload`, `abortVodUpload`, `deleteVodAsset`, `vodAsset`, `storageArtifactsConnection` (with `kinds: [VOD, CHAPTER]`), `vodUploadStatus`. There is no `updateVodAsset` mutation today — title and description are set at upload time via [`createVodUpload`](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/pkg/graphql/schema.graphql).
 
 | Bunny Stream                                        | FrameWorks                                                               |
 | --------------------------------------------------- | ------------------------------------------------------------------------ |

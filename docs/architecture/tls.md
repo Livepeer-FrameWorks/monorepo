@@ -9,7 +9,33 @@ FrameWorks uses two certificate systems:
 
 There is no separate "mesh TLS" tier. Mesh traffic uses the internal CA. Public
 traffic uses ACME. Authentication is token-over-TLS (`SERVICE_TOKEN`, JWT, or
-enrollment tokens), not transport mTLS.
+enrollment tokens), not transport mTLS. The WireGuard substrate that carries this
+traffic is documented in `privateer-mesh.md`.
+
+## Internal Certificate Distribution
+
+Privateer uses two distinct credentials during internal certificate renewal:
+
+- `SERVICE_TOKEN` authenticates Privateer's gRPC transports to Quartermaster and
+  Navigator.
+- A node- and cluster-bound `cert_sync` bootstrap token authorizes Navigator to
+  issue a particular node's service leaves. Privateer mints this credential from
+  Quartermaster and sends it in each `IssueInternalCert` request.
+
+Internal service leaves are valid for 72 hours and Privateer renews them inside
+the final 36 hours. Runtime-minted issuance tokens are valid for 30 days;
+Privateer refreshes them with seven days remaining. If Navigator rejects an
+issuance token (including an operator-provided token whose expiry is unknown),
+Privateer mints a replacement and retries that issuance once immediately. A
+failed proactive refresh does not discard a token that is still valid.
+
+Three consecutive certificate-sync failures make Privateer's `internal_pki`
+health check unhealthy and return HTTP 503 from its health endpoint. The
+`privateer_internal_cert_sync_operations_total{status}` and
+`privateer_internal_cert_issue_token_refreshes_total{reason}` metrics expose the
+same lifecycle. `frameworks cluster doctor` probes Privateer on every effective
+backend host, and cluster snapshots report each leaf's validity window and
+certificate/key match state.
 
 ## Listener Policy
 

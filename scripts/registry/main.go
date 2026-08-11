@@ -5,10 +5,12 @@
 // JSON copy at website_application/src/lib/features/registry.json for the
 // webapp's /developer/features browser to consume.
 //
-// Run via `make verify-feature-registry` from repo root.
+// Write the artifacts via `make generate-feature-registry`; verify them (non-mutating, CI-safe) via
+// `make verify-feature-registry` (runs this with -check).
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -90,6 +92,7 @@ type Feature struct {
 	Name             string                `yaml:"name" json:"name"`
 	Area             string                `yaml:"area" json:"area"`
 	Kind             string                `yaml:"kind,omitempty" json:"kind"`
+	Audience         string                `yaml:"audience,omitempty" json:"audience"`
 	Description      string                `yaml:"description,omitempty" json:"description,omitempty"`
 	Status           string                `yaml:"status" json:"status"`
 	GapReason        string                `yaml:"gap_reason,omitempty" json:"gap_reason,omitempty"`
@@ -156,7 +159,9 @@ type validator struct {
 
 func main() {
 	var emitJSON bool
+	var checkOnly bool
 	flag.BoolVar(&emitJSON, "emit-json", true, "emit website_application/src/lib/features/registry.json")
+	flag.BoolVar(&checkOnly, "check", false, "verify generated artifacts match on-disk files without writing (drift → exit 1); independent of git so it is correct on a dirty tree")
 	flag.Parse()
 
 	repoRoot, err := findRepoRoot()
@@ -218,28 +223,77 @@ func main() {
 	fmt.Printf("✓ Feature registry validated (%d families, %d features)\n", len(reg.Features), total)
 
 	if emitJSON {
-		outPath := filepath.Join(repoRoot, "website_application", "src", "lib", "features", "registry.json")
-		if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
-			die("mkdir %s: %v", filepath.Dir(outPath), err)
-		}
-		buf, err := json.MarshalIndent(reg, "", "  ")
+		productReg := filterAudience(reg, "product")
+
+		buf, err := json.MarshalIndent(productReg, "", "  ")
 		if err != nil {
 			die("marshal json: %v", err)
 		}
-		if err := os.WriteFile(outPath, append(buf, '\n'), 0o644); err != nil {
-			die("write %s: %v", outPath, err)
-		}
-		fmt.Printf("✓ Wrote %s\n", relativeOrAbs(repoRoot, outPath))
 
-		mdxPath := filepath.Join(repoRoot, "website_docs", "src", "content", "docs", "platform", "feature-matrix.mdx")
-		if err := os.MkdirAll(filepath.Dir(mdxPath), 0o755); err != nil {
-			die("mkdir %s: %v", filepath.Dir(mdxPath), err)
+		// Every generated artifact and its expected bytes. --check compares these against disk directly
+		// (never git), so it is correct even when the working tree already carries the intended new state.
+		outputs := []struct {
+			path    string
+			content []byte
+		}{
+			{filepath.Join(repoRoot, "website_application", "src", "lib", "features", "registry.json"), append(buf, '\n')},
+			{filepath.Join(repoRoot, "website_docs", "src", "content", "docs", "platform", "feature-matrix.mdx"), []byte(renderMatrixMDX(productReg))},
+			{filepath.Join(repoRoot, "website_docs", "src", "content", "docs", "platform", "platform-capabilities.mdx"), []byte(renderCapabilitiesMDX(reg))},
 		}
-		if err := os.WriteFile(mdxPath, []byte(renderMatrixMDX(reg)), 0o644); err != nil {
-			die("write %s: %v", mdxPath, err)
+
+		if checkOnly {
+			var drift []string
+			for _, o := range outputs {
+				existing, err := os.ReadFile(o.path)
+				if err != nil || !bytes.Equal(existing, o.content) {
+					drift = append(drift, relativeOrAbs(repoRoot, o.path))
+				}
+			}
+			if len(drift) > 0 {
+				fmt.Fprintln(os.Stderr, "✗ Generated feature artifacts are out of date:")
+				for _, p := range drift {
+					fmt.Fprintln(os.Stderr, "  - "+p)
+				}
+				fmt.Fprintln(os.Stderr, "  Run 'make generate-feature-registry' locally and commit the result.")
+				os.Exit(1)
+			}
+			fmt.Println("✓ Generated feature artifacts are up to date")
+			return
 		}
-		fmt.Printf("✓ Wrote %s\n", relativeOrAbs(repoRoot, mdxPath))
+
+		for _, o := range outputs {
+			if err := os.MkdirAll(filepath.Dir(o.path), 0o755); err != nil {
+				die("mkdir %s: %v", filepath.Dir(o.path), err)
+			}
+			if err := os.WriteFile(o.path, o.content, 0o644); err != nil {
+				die("write %s: %v", o.path, err)
+			}
+			fmt.Printf("✓ Wrote %s\n", relativeOrAbs(repoRoot, o.path))
+		}
 	}
+}
+
+// filterAudience returns a shallow-copied registry containing only rows whose
+// audience matches. A non-matching parent drops its whole family; a matching
+// parent keeps only its matching subitems.
+func filterAudience(reg Registry, audience string) Registry {
+	out := Registry{Features: make([]Feature, 0, len(reg.Features))}
+	for _, f := range reg.Features {
+		if f.Audience != audience {
+			continue
+		}
+		if len(f.Subitems) > 0 {
+			kept := make([]Feature, 0, len(f.Subitems))
+			for _, s := range f.Subitems {
+				if s.Audience == audience {
+					kept = append(kept, s)
+				}
+			}
+			f.Subitems = kept
+		}
+		out.Features = append(out.Features, f)
+	}
+	return out
 }
 
 // relativeOrAbs returns the path relative to base, falling back to the
@@ -337,6 +391,85 @@ func renderMatrixMDX(reg Registry) string {
 		b.WriteString("\n")
 	}
 	b.WriteString("The [Roadmap](/roadmap) carries sequencing and detail for planned work; this matrix shows the full capability scope, shipped and planned alike.\n")
+	return b.String()
+}
+
+// renderCapabilitiesMDX emits the full-inventory capability page: every
+// registry row regardless of audience, with platform-audience rows marked.
+// The public feature matrix stays the product-only view; this page is the
+// single place the complete platform capability set (including internals
+// like HA, PKI, mesh, and orchestration machinery) is enumerable.
+func renderCapabilitiesMDX(reg Registry) string {
+	areas := map[string][]Feature{}
+	for _, f := range reg.Features {
+		areas[f.Area] = append(areas[f.Area], f)
+	}
+	keys := make([]string, 0, len(pillarOrder))
+	for _, p := range pillarOrder {
+		if len(areas[p]) > 0 {
+			keys = append(keys, p)
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString("---\n")
+	b.WriteString("title: Platform capability inventory\n")
+	b.WriteString("description: The complete FrameWorks capability inventory — product features and platform internals alike.\n")
+	b.WriteString("---\n\n")
+	b.WriteString("This page lists the **complete** capability inventory: everything in the [product capability matrix](/platform/feature-matrix) plus platform-audience capabilities — the infrastructure, trust, and orchestration machinery that products are built on. Rows marked *(platform)* are operated capabilities, not customer-facing features.\n\n")
+
+	surfaceLabel := map[string]string{"graphql": "API", "mcp": "Agents (MCP)", "cli": "CLI", "webapp": "Dashboard", "docs": "Docs"}
+	surfaceKeys := []string{"graphql", "mcp", "cli", "webapp", "docs"}
+	surfaceSummary := func(f Feature) string {
+		if f.Status == "roadmap" {
+			return "—"
+		}
+		actual := f.ActualSurfaces
+		if f.FamilySurfaces != nil {
+			actual = f.FamilySurfaces
+		}
+		available := []string{}
+		for _, s := range surfaceKeys {
+			if actual[s] {
+				available = append(available, surfaceLabel[s])
+			}
+		}
+		if len(available) == 0 {
+			return "—"
+		}
+		return strings.Join(available, ", ")
+	}
+
+	for _, area := range keys {
+		fmt.Fprintf(&b, "### %s\n\n", publicAreaLabel(area))
+		b.WriteString("| Capability | Availability | Surfaces | Description |\n")
+		b.WriteString("| --- | --- | --- | --- |\n")
+		row := func(f Feature, child bool) {
+			description := strings.TrimSpace(f.Description)
+			if description == "" {
+				description = f.Name
+			}
+			name := fmt.Sprintf("**%s**", f.Name)
+			if child {
+				name = "↳ " + f.Name
+			}
+			if f.Kind == "foundation" {
+				name += " *(foundation)*"
+			}
+			if f.Audience == "platform" {
+				name += " *(platform)*"
+			}
+			fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", name, publicStatusLabel(f.Status), escapeMDXCell(surfaceSummary(f)), escapeMDXCell(compactWhitespace(description)))
+		}
+		for _, f := range areas[area] {
+			row(f, false)
+			for _, s := range f.Subitems {
+				row(s, true)
+			}
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("Product-facing sequencing lives on the [Roadmap](/roadmap); this inventory is regenerated from `docs/platform-features.yaml` by `make generate-feature-registry`.\n")
 	return b.String()
 }
 
@@ -497,7 +630,27 @@ func (v *validator) validateRelations(reg *Registry) {
 	for slug := range bySlug {
 		names[slug] = true
 	}
+	// Audience defaults to product; subitems inherit their parent's audience
+	// unless they set their own. Product surfaces (registry.json, the public
+	// feature matrix) only render audience=product; the generated
+	// platform-capabilities page renders the full inventory.
+	for i := range reg.Features {
+		f := &reg.Features[i]
+		if f.Audience == "" {
+			f.Audience = "product"
+		}
+		for j := range f.Subitems {
+			if f.Subitems[j].Audience == "" {
+				f.Subitems[j].Audience = f.Audience
+			}
+		}
+	}
 	walk(func(f *Feature) {
+		switch f.Audience {
+		case "product", "platform":
+		default:
+			v.errf("%s: invalid audience %q (must be product|platform)", f.Slug, f.Audience)
+		}
 		switch f.Kind {
 		case "":
 			f.Kind = "product"

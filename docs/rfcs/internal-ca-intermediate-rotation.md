@@ -9,6 +9,10 @@ Draft
 - The current internal PKI supports initial bootstrap and normal leaf renewal, but it does not yet support clean rollover from one intermediate CA to another.
 - Add dual-intermediate support in Navigator, dual-bundle trust distribution through Privateer, and a simple operator workflow so intermediate rotation does not break live gRPC traffic.
 
+## Owning services / modules
+
+Navigator (`api_dns`) owns internal CA state, leaf issuance, and bundle generation (`api_dns/internal/logic/internal_ca.go`) — the dual current/grace intermediate model lands there. Privateer (`api_mesh`) owns the cert_sync client and distribution of CA bundles + service leaf certs to `/etc/frameworks/pki/...`. Quartermaster (`api_tenants`) owns the node identity that authorizes issuance. Consuming services only reload leaf certs; they need no rotation-specific changes.
+
 ## Problem / Motivation
 
 The current internal PKI implementation is good enough for:
@@ -33,14 +37,14 @@ avoidable validation failures.
 
 ## Current State
 
-Implemented today:
+Shipped today:
 
-- offline-ish root plus online intermediate model in Navigator
-- internal leaf issuance authorized by the Quartermaster + Navigator + Privateer node-based flow
+- root + intermediate internal CA in Navigator: offline-ish root, online signing intermediate
+- internal leaf issuance authorized by the Quartermaster + Navigator + Privateer node-based flow, with node- and cluster-bound cert_sync tokens presented via Privateer
+- `72h` leaf certs, automatically renewed in the final `36h` of validity, repeatedly, under a single intermediate
 - Privateer distribution of CA bundle + service leaf certs to `/etc/frameworks/pki/...`
-- repeated leaf renewal under a single intermediate
 
-Not implemented today:
+The remaining gap is automated intermediate rotation only. Not implemented today:
 
 - storing more than one active/grace intermediate in Navigator
 - returning a dual-intermediate CA bundle during overlap

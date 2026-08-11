@@ -177,20 +177,29 @@ ALTER TABLE periscope.artifact_state_current
   ADD COLUMN IF NOT EXISTS filename Nullable(String) AFTER internal_name;
 ```
 
-## Single-node vs replicated
+## Replicated by default
 
-The default schema is single-node. If you run a replicated topology, every
-migration that creates or alters a `Replicated*` table must use `ON CLUSTER
-'{cluster}'`:
+The baseline provisions the analytics databases with a **Replicated database engine**
+(`ENGINE = Replicated('/clickhouse/databases/<db>/{shard}', '{shard}', '{replica}')`) and
+`Replicated*` table engines, backed by a Keeper ensemble. A Replicated database propagates
+DDL to every replica automatically, so migrations use plain `CREATE`/`ALTER` statements and
+must **not** add `ON CLUSTER '{cluster}'` — it is unnecessary here and can conflict with the
+database's own DDL replication:
 
 ```sql
-ALTER TABLE periscope.artifact_events ON CLUSTER '{cluster}'
+ALTER TABLE periscope.artifact_events
   ADD COLUMN IF NOT EXISTS filename Nullable(String) AFTER internal_name;
 ```
 
-The role is single-node aware today; replicated support is a future role var.
-Until then, replicated topologies need to apply migrations on each shard
-themselves.
+**Keeper is required in every topology.** The baseline creates the `Replicated` database and
+`Replicated*` tables unconditionally, and those engines cannot exist without Keeper. A singleton
+(dev / single-node) therefore still runs a **one-node standalone `clickhouse-keeper` service** — a
+separate systemd unit (`/etc/clickhouse-keeper/keeper_config.xml`) that the Ansible role configures
+and orders before `clickhouse-server`, not an in-process/embedded Keeper — and applies the exact same
+migration files with a single shard/replica; only the Keeper ensemble size differs from production.
+The role's empty-`clickhouse_keeper_nodes` "bare" mode creates an ordinary Atomic database with no
+Keeper and is **not** compatible with this always-`Replicated` analytics baseline; do not use it for
+the analytics databases.
 
 ## Rollback
 

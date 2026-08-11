@@ -4,6 +4,10 @@
 **Owner:** Infra
 **Depends on:** `docs/architecture/os-tuning.md`
 
+## Owning services / modules
+
+Ansible roles in the infra collection own the per-role `tasks/drain.yml`/`tasks/undrain.yml` hooks and the `cluster_os_update.yml` playbook; the `frameworks` Go CLI (`cli/`, e.g. `cli/pkg/inventory/host_roles.go`) computes per-host role sets and drives `cluster os update`.
+
 ## Problem
 
 `frameworks cluster os update --apply` (v1) restarts affected services

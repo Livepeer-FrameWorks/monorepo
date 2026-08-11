@@ -10,6 +10,10 @@ Draft
 - OSPF over WireGuard could reduce config complexity as node count grows.
 - Evaluate hub-and-spoke or partial mesh with dynamic routing.
 
+## Owning services / modules
+
+Privateer owns mesh config generation and per-node application (peers synced from Quartermaster); node provisioning would own the BIRD/OSPF configs. Research-only — no dynamic-routing code exists today.
+
 ## Current State
 
 - Privateer syncs mesh peers from Quartermaster and applies WireGuard configs per node.
