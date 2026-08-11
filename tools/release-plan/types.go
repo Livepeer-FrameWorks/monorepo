@@ -88,13 +88,17 @@ type Artifact struct {
 }
 
 type InterfaceEntry struct {
-	Name         string                   `yaml:"name" json:"name"`
-	Image        string                   `yaml:"image" json:"image"`
-	Digest       string                   `yaml:"digest" json:"digest"`
-	StaticBundle string                   `yaml:"static_bundle,omitempty" json:"static_bundle,omitempty"`
-	Images       map[string]RegistryImage `yaml:"images,omitempty" json:"images,omitempty"`
-	SourceHash   string                   `yaml:"source_hash,omitempty" json:"source_hash,omitempty"`
-	CarriedFrom  string                   `yaml:"carried_from,omitempty" json:"carried_from,omitempty"`
+	Name string `yaml:"name" json:"name"`
+	// ServiceVersion records the platform release that built this interface's bytes. A carried-forward interface keeps
+	// its ORIGINAL build version (older than the current platform tag), so it must be parsed off the baseline manifest
+	// and re-emitted verbatim — never relabeled with the new platform tag — mirroring ServiceEntry.ServiceVersion.
+	ServiceVersion string                   `yaml:"service_version,omitempty" json:"service_version,omitempty"`
+	Image          string                   `yaml:"image" json:"image"`
+	Digest         string                   `yaml:"digest" json:"digest"`
+	StaticBundle   string                   `yaml:"static_bundle,omitempty" json:"static_bundle,omitempty"`
+	Images         map[string]RegistryImage `yaml:"images,omitempty" json:"images,omitempty"`
+	SourceHash     string                   `yaml:"source_hash,omitempty" json:"source_hash,omitempty"`
+	CarriedFrom    string                   `yaml:"carried_from,omitempty" json:"carried_from,omitempty"`
 }
 
 type InfrastructureEntry struct {

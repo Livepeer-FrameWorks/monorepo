@@ -1952,6 +1952,14 @@ jobs:
           echo "Fetched MistServer latest release: ${TAG}"
           echo "Docker tag: ${DOCKER_TAG}, Digest: ${DIGEST}"
 
+      # The CLI's embedded release catalog is the authority for min_cli_version + required_transitions + rollback_disabled;
+      # emit them into the published manifest so an OUTDATED deploying CLI can fail closed before migrations and so
+      # `cluster upgrade` honors this release's rollback policy.
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: cli/go.sum
+
       - name: Generate manifest
         run: |
           set -euo pipefail
@@ -1966,8 +1974,13 @@ jobs:
           platform_version: ${{ github.ref_name }}
           git_commit: ${{ github.sha }}
           release_date: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
-
           YAML
+
+          # Compatibility + rollback metadata (min_cli_version + required_transitions + rollback_disabled) derived from
+          # the CLI's embedded catalog, so publish and the deploying CLI's validation never drift. Reads only the
+          # embedded catalog (no cluster/network).
+          ( cd cli && go run . release-metadata "${{ github.ref_name }}" ) >> dist/manifest.yaml
+          echo "" >> dist/manifest.yaml
 
           # Services (microservices with service_version field)
           echo "services:" >> dist/manifest.yaml
@@ -2211,6 +2224,7 @@ jobs:
 
             cat >> dist/manifest.yaml <<YAML
             - name: ${name}
+              service_version: ${{ github.ref_name }}
               image: ${image}
               digest: ${digest}
               static_bundle: ${bundle}
@@ -2245,8 +2259,13 @@ jobs:
               i_image=$(echo "$iface" | jq -r .image)
               i_digest=$(echo "$iface" | jq -r .digest)
               bundle=$(echo "$iface" | jq -r --arg fallback "${name}-build.tar.gz" '.static_bundle // $fallback')
+              # Preserve the interface's ORIGINAL build version. A carried interface keeps the bytes an older platform
+              # built, so its service_version is the version that built it — not this platform tag. Read it off the
+              # carried baseline entry; fall back to the baseline_tag for pre-field baselines that never recorded it.
+              i_service_version=$(echo "$iface" | jq -r --arg fallback "${cf_from}" '.service_version // $fallback')
               cat >> dist/manifest.yaml <<YAML
             - name: ${name}
+              service_version: ${i_service_version}
               image: ${i_image}
               digest: ${i_digest}
               static_bundle: ${bundle}

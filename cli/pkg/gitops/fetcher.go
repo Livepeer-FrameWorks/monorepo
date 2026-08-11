@@ -1,20 +1,23 @@
 package gitops
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
+	"frameworks/cli/internal/releases"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"gopkg.in/yaml.v3"
 )
 
@@ -152,6 +155,13 @@ func (f *Fetcher) Fetch(channel, version string) (*Manifest, error) {
 	// Check cache first
 	cached, cachedAt, cacheErr := f.loadFromCache(channel, version)
 	if cacheErr == nil {
+		// An identity-mismatched cache entry is unusable — treat it as a miss so a later re-fetch replaces it, rather
+		// than serving a manifest whose release identity does not match what was requested.
+		if idErr := bindManifestIdentity(cached, version); idErr != nil {
+			cacheErr = idErr
+		}
+	}
+	if cacheErr == nil {
 		if validationErr := cached.ValidateServiceArtifacts(); validationErr != nil {
 			cacheErr = validationErr
 		} else {
@@ -227,19 +237,30 @@ func (f *Fetcher) fetchFromRepo(channel, version string) (*Manifest, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch %s channel pointer: %w", channel, err)
 		}
-		var pointer channelPointer
-		if err := yaml.Unmarshal(pointerData, &pointer); err != nil {
-			return nil, fmt.Errorf("failed to parse channel pointer: %w", err)
-		}
-		if pointer.Manifest == "" {
-			return nil, fmt.Errorf("channel pointer %s has no manifest path", channel)
+		pointer, err := parseChannelPointer(pointerData)
+		if err != nil {
+			return nil, fmt.Errorf("channel %q pointer: %w", channel, err)
 		}
 		manifestURL := fmt.Sprintf("%s/%s", f.repository, pointer.Manifest)
-		return f.fetchManifestHTTP(manifestURL)
+		m, err := f.fetchManifestHTTP(manifestURL)
+		if err != nil {
+			return nil, err
+		}
+		if err := bindManifestIdentity(m, pointer.PlatformVersion); err != nil {
+			return nil, fmt.Errorf("channel %q pointer/manifest identity mismatch: %w", channel, err)
+		}
+		return m, nil
 	}
 
 	manifestURL := fmt.Sprintf("%s/releases/%s.yaml", f.repository, version)
-	return f.fetchManifestHTTP(manifestURL)
+	m, err := f.fetchManifestHTTP(manifestURL)
+	if err != nil {
+		return nil, err
+	}
+	if err := bindManifestIdentity(m, version); err != nil {
+		return nil, fmt.Errorf("pinned release %q identity mismatch: %w", version, err)
+	}
+	return m, nil
 }
 
 // fetchHTTP downloads raw bytes from a URL with retries.
@@ -279,17 +300,136 @@ func (f *Fetcher) fetchHTTP(url string) ([]byte, error) {
 	return nil, lastErr
 }
 
+// parseManifest is the SINGLE strict entry point every manifest-loading path (HTTP, cache, local) goes through.
+// Decoding is STRICT (KnownFields), so a misspelled compatibility field — min_cli_verison, rollback_disabld,
+// required_transition — is a HARD ERROR instead of a silently dropped safety gate. The fetched manifest is the
+// primary compatibility authority, so a typo must never quietly remove min_cli_version, required_transitions, or
+// rollback_disabled. It also enforces a SINGLE-DOCUMENT contract: empty input and any trailing `---` document are
+// rejected, so compatibility metadata cannot hide in a second document the loader would ignore. (ExternalDependency
+// preserves its own unknown fields via an inline map, so forward-compatible dependency evolution still parses.) After
+// decoding, the compatibility metadata itself is validated.
+func parseManifest(data []byte) (*Manifest, error) {
+	var manifest Manifest
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&manifest); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("failed to parse manifest: empty document")
+		}
+		return nil, fmt.Errorf("failed to parse manifest: %w", err)
+	}
+	// Reject trailing YAML documents: a second `---` document (e.g. one carrying compatibility/rollback metadata) would
+	// be silently ignored and never gate deployment. Only a single document is a valid manifest.
+	if err := dec.Decode(new(Manifest)); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, fmt.Errorf("invalid release manifest: unexpected trailing YAML document (the manifest must be a single document)")
+		}
+		return nil, fmt.Errorf("failed to parse manifest: %w", err)
+	}
+	if err := validateManifestCompat(&manifest); err != nil {
+		return nil, fmt.Errorf("invalid release manifest: %w", err)
+	}
+	return &manifest, nil
+}
+
+// validateManifestCompat fails closed on corrupt compatibility metadata: a min_cli_version that is present but not a
+// valid version (so the floor can never be compared), an empty required-transition id, or a rollback-disabled name that
+// is empty OR is not a canonical service — a valid-looking typo such as `chandlr` would silently never match
+// IsRollbackDisabled("chandler") and re-enable rollback across a readiness-contract cut. The fetched manifest is the
+// deployment authority, so it validates names INDEPENDENTLY of release generation. platform_version is NOT
+// format-checked here — callers accept channel-ish sentinels for it — but the SAFETY fields must be well-formed.
+func validateManifestCompat(m *Manifest) error {
+	if v := strings.TrimSpace(m.MinCLIVersion); v != "" {
+		if err := releases.ValidateVersion(v); err != nil {
+			return fmt.Errorf("min_cli_version %w", err)
+		}
+	}
+	for _, id := range m.RequiredTransitions {
+		if strings.TrimSpace(id) == "" {
+			return fmt.Errorf("required_transitions contains an empty transition id")
+		}
+		if strings.TrimSpace(id) != id {
+			return fmt.Errorf("required_transitions entry %q has surrounding whitespace; store the canonical id %q", id, strings.TrimSpace(id))
+		}
+	}
+	for _, name := range m.RollbackDisabled {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			return fmt.Errorf("rollback_disabled contains an empty deploy name")
+		}
+		// Reject non-canonical whitespace: the stored slice is matched EXACTLY by IsRollbackDisabled, so a value like
+		// " chandler " would pass a trimmed lookup here yet never match "chandler" at deploy — silently re-enabling
+		// rollback across a readiness-contract cut. Require the stored value to already be canonical.
+		if trimmed != name {
+			return fmt.Errorf("rollback_disabled entry %q has surrounding whitespace; store the canonical name %q", name, trimmed)
+		}
+		if _, ok := servicedefs.Lookup(trimmed); !ok {
+			return fmt.Errorf("rollback_disabled names unknown service %q; every entry must be a canonical service/deploy id", trimmed)
+		}
+	}
+	return nil
+}
+
+// parseChannelPointer strictly decodes a channels/<name>.yaml pointer. Decoding is STRICT (KnownFields) and
+// single-document, so a misspelled key — platform_verison — is a HARD ERROR rather than a silently-empty
+// platform_version that would make bindManifestIdentity accept any concrete manifest. The pointer MUST declare a valid
+// concrete platform_version and a manifest path; both are required before the referenced manifest is bound to it.
+func parseChannelPointer(data []byte) (channelPointer, error) {
+	var p channelPointer
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&p); err != nil {
+		if errors.Is(err, io.EOF) {
+			return p, fmt.Errorf("empty channel pointer")
+		}
+		return p, fmt.Errorf("parse channel pointer: %w", err)
+	}
+	if err := dec.Decode(new(channelPointer)); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return p, fmt.Errorf("channel pointer has an unexpected trailing YAML document")
+		}
+		return p, fmt.Errorf("parse channel pointer: %w", err)
+	}
+	if err := releases.ValidateVersion(p.PlatformVersion); err != nil {
+		return p, fmt.Errorf("channel pointer platform_version %w", err)
+	}
+	if strings.TrimSpace(p.Manifest) == "" {
+		return p, fmt.Errorf("channel pointer names no manifest")
+	}
+	return p, nil
+}
+
+// bindManifestIdentity verifies a fetched manifest actually IS the release it was requested under. Its platform_version
+// must be a CONCRETE version (never a channel-ish sentinel like "cached" or empty), and — when a specific version was
+// requested (a pinned tag, or the version a channel pointer declares) — must equal it EXACTLY. Without this binding,
+// one release's migrations/transitions could run while consuming artifacts and rollback policy from a manifest that is
+// actually a DIFFERENT release. want == "" or "latest" means no concrete identity was requested (only the
+// concrete-platform_version requirement applies).
+func bindManifestIdentity(m *Manifest, want string) error {
+	if err := releases.ValidateVersion(m.PlatformVersion); err != nil {
+		return fmt.Errorf("platform_version %w", err)
+	}
+	if want == "" || want == "latest" {
+		return nil
+	}
+	if err := releases.ValidateVersion(want); err != nil {
+		return fmt.Errorf("requested release %w", err)
+	}
+	// EXACT identity, NOT SemVer precedence: precedence ignores build metadata, so v1.2.3+buildA would otherwise bind
+	// to a manifest declaring v1.2.3+buildB. Both values are validated-canonical, so compare byte-for-byte.
+	if m.PlatformVersion != want {
+		return fmt.Errorf("platform_version %q does not match the requested release %q", m.PlatformVersion, want)
+	}
+	return nil
+}
+
 // fetchManifestHTTP downloads and parses a manifest YAML from a URL.
 func (f *Fetcher) fetchManifestHTTP(url string) (*Manifest, error) {
 	data, err := f.fetchHTTP(url)
 	if err != nil {
 		return nil, err
 	}
-	var manifest Manifest
-	if err := yaml.Unmarshal(data, &manifest); err != nil {
-		return nil, fmt.Errorf("failed to parse manifest: %w", err)
-	}
-	return &manifest, nil
+	return parseManifest(data)
 }
 
 // loadFromCache loads a manifest from local cache
@@ -301,9 +441,9 @@ func (f *Fetcher) loadFromCache(channel, version string) (*Manifest, time.Time, 
 		return nil, time.Time{}, err
 	}
 
-	var manifest Manifest
-	if unmarshalErr := yaml.Unmarshal(data, &manifest); unmarshalErr != nil {
-		return nil, time.Time{}, unmarshalErr
+	manifest, err := parseManifest(data)
+	if err != nil {
+		return nil, time.Time{}, err
 	}
 
 	fetchedAt, err := f.readMetadata(metaPath)
@@ -316,7 +456,7 @@ func (f *Fetcher) loadFromCache(channel, version string) (*Manifest, time.Time, 
 		}
 	}
 
-	return &manifest, fetchedAt, nil
+	return manifest, fetchedAt, nil
 }
 
 // saveToCache saves a manifest to local cache
@@ -338,27 +478,42 @@ func (f *Fetcher) saveToCache(channel, version string, manifest *Manifest) error
 	return f.writeMetadata(metaPath, time.Now().UTC())
 }
 
-// ResolveVersion resolves a version string to channel and version
+// ResolveVersion resolves a version string to channel and version. A concrete tag's channel is derived from its
+// SemVer PRERELEASE identifier (vX.Y.Z-rc1 → "rc"; a plain vX.Y.Z → "stable"), so a release candidate is fetched and
+// published under the rc channel, never mislabeled stable.
 func ResolveVersion(versionStr string) (channel, version string) {
 	if versionStr == "" {
 		return "stable", "latest"
 	}
 
-	// If it looks like a version tag (v1.2.3), use stable channel
-	if len(versionStr) > 0 && versionStr[0] == 'v' {
-		return "stable", versionStr
+	// A concrete version tag (v1.2.3 / v1.2.3-rc1): classify by prerelease.
+	if versionStr[0] == 'v' {
+		return channelForTag(versionStr), versionStr
 	}
 
-	// If it's a release track name, use latest
+	// A release track name uses that channel's latest.
 	switch versionStr {
 	case "stable", "rc":
 		return versionStr, "latest"
 	case "latest":
 		return "stable", "latest"
 	default:
-		// Default to stable channel with specific version
-		return "stable", normalizeVersion(versionStr)
+		nv := normalizeVersion(versionStr)
+		return channelForTag(nv), nv
 	}
+}
+
+// channelForTag maps a concrete SemVer tag to its release channel by its prerelease identifier. A prerelease
+// (the segment after '-', excluding build metadata after '+') means the rc channel; a plain release tag is stable.
+func channelForTag(tag string) string {
+	// Strip build metadata (+...), which is not prerelease.
+	if plus := strings.IndexByte(tag, '+'); plus >= 0 {
+		tag = tag[:plus]
+	}
+	if dash := strings.IndexByte(tag, '-'); dash >= 0 && dash < len(tag)-1 {
+		return "rc"
+	}
+	return "stable"
 }
 
 // GetServiceInfo retrieves service information from a manifest
@@ -393,9 +548,19 @@ func (m *Manifest) GetServiceInfo(serviceName string) (*ServiceInfo, error) {
 	// Search in interfaces
 	for _, iface := range m.Interfaces {
 		if iface.Name == serviceName {
+			// service_version is the interface's artefact provenance and is trusted as written: a freshly built
+			// interface stamps the platform tag, a carried-forward one preserves the OLDER baseline value verbatim
+			// (never relabeled with this platform tag). Fall back to the platform version only when the field is
+			// literally empty — a manifest predating the field — so the deployed version is never blank (an empty
+			// version would make image resolution fall back to latest/stable). The exact image@digest still travels
+			// via FullImage, so the deploy pins the release image regardless of the version label.
+			version := strings.TrimSpace(iface.ServiceVersion)
+			if version == "" {
+				version = strings.TrimSpace(m.PlatformVersion)
+			}
 			return &ServiceInfo{
 				Name:      iface.Name,
-				Version:   "",
+				Version:   version,
 				Image:     iface.Image,
 				Digest:    iface.Digest,
 				Images:    iface.Images,
@@ -541,53 +706,42 @@ func dedupeRepositories(repositories []string) []string {
 
 // fetchFromLocal loads a manifest from local filesystem
 func (f *Fetcher) fetchFromLocal(channel, version string) (*Manifest, error) {
-	var manifestPath string
+	var manifestPath, wantVersion string
 
 	if version == "latest" {
-		// Try channel pointer file first
+		// The channel pointer is REQUIRED and authoritative (matching the HTTP path). A missing, malformed, or
+		// manifest-less pointer fails CLOSED — there is NO directory-scan fallback: a scan cannot know the requested
+		// channel (stable vs rc), so a missing stable pointer could deploy an RC (or vice versa), and lexical filename
+		// order is not SemVer order. Pointer-less release selection is not supported.
 		channelPath := filepath.Join(f.repository, "channels", channel+".yaml")
-		if data, err := os.ReadFile(channelPath); err == nil {
-			var pointer channelPointer
-			if yaml.Unmarshal(data, &pointer) == nil && pointer.Manifest != "" {
-				manifestPath = filepath.Join(f.repository, pointer.Manifest)
+		data, readErr := os.ReadFile(channelPath)
+		if readErr != nil {
+			if os.IsNotExist(readErr) {
+				return nil, fmt.Errorf("channel pointer %s not found; a channel pointer is required (pointer-less release selection is not supported)", channelPath)
 			}
+			return nil, fmt.Errorf("read channel pointer %s: %w", channelPath, readErr)
 		}
-
-		// Fallback: scan releases directory for latest file alphabetically
-		if manifestPath == "" {
-			releasesDir := filepath.Join(f.repository, "releases")
-			files, err := os.ReadDir(releasesDir)
-			if err != nil {
-				return nil, fmt.Errorf("failed to read releases directory: %w", err)
-			}
-
-			var releaseFiles []string
-			for _, file := range files {
-				if !file.IsDir() && filepath.Ext(file.Name()) == ".yaml" {
-					releaseFiles = append(releaseFiles, file.Name())
-				}
-			}
-			sort.Strings(releaseFiles)
-
-			if len(releaseFiles) == 0 {
-				return nil, fmt.Errorf("no release manifests found in %s", releasesDir)
-			}
-			manifestPath = filepath.Join(releasesDir, releaseFiles[len(releaseFiles)-1])
+		pointer, err := parseChannelPointer(data)
+		if err != nil {
+			return nil, fmt.Errorf("channel pointer %s: %w", channelPath, err)
 		}
+		manifestPath = filepath.Join(f.repository, pointer.Manifest)
+		wantVersion = pointer.PlatformVersion
 	} else {
-		// Specific version
 		manifestPath = filepath.Join(f.repository, "releases", version+".yaml")
+		wantVersion = version
 	}
 
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read manifest %s: %w", manifestPath, err)
 	}
-
-	var manifest Manifest
-	if unmarshalErr := yaml.Unmarshal(data, &manifest); unmarshalErr != nil {
-		return nil, fmt.Errorf("failed to parse manifest: %w", unmarshalErr)
+	m, err := parseManifest(data)
+	if err != nil {
+		return nil, err
 	}
-
-	return &manifest, nil
+	if err := bindManifestIdentity(m, wantVersion); err != nil {
+		return nil, fmt.Errorf("local manifest %s identity mismatch: %w", manifestPath, err)
+	}
+	return m, nil
 }

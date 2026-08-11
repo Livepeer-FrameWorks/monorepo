@@ -77,5 +77,6 @@ func NewRootCmd() *cobra.Command {
 	rootCmd.AddCommand(newMeshCmd())
 	rootCmd.AddCommand(newUpdateCmd())
 	rootCmd.AddCommand(newLivepeerCmd())
+	rootCmd.AddCommand(newReleaseMetadataCmd())
 	return rootCmd
 }

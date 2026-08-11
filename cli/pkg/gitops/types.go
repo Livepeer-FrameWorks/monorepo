@@ -2,6 +2,7 @@ package gitops
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -9,9 +10,23 @@ import (
 
 // Manifest represents a release manifest from the gitops repo (actual CI/CD format)
 type Manifest struct {
-	PlatformVersion      string                `yaml:"platform_version"`
-	GitCommit            string                `yaml:"git_commit"`
-	ReleaseDate          time.Time             `yaml:"release_date"`
+	PlatformVersion string    `yaml:"platform_version"`
+	GitCommit       string    `yaml:"git_commit"`
+	ReleaseDate     time.Time `yaml:"release_date"`
+	// MinCLIVersion is the lowest `frameworks` CLI SemVer that may deploy this release. Carried in the FETCHED
+	// metadata (not just the CLI's embedded catalog) so an OUTDATED CLI learns it is too old and fails closed BEFORE
+	// running migrations/upgrades, instead of silently proceeding with stale knowledge.
+	MinCLIVersion string `yaml:"min_cli_version,omitempty"`
+	// RequiredTransitions lists the reconciliation-transition handler ids this release requires the CLI to run. Also
+	// carried in the fetched metadata so a CLI whose compiled registry is missing one fails the release closed rather
+	// than silently skipping a required convergence step it never knew about.
+	RequiredTransitions []string `yaml:"required_transitions,omitempty"`
+	// RollbackDisabled lists deploy names for which THIS release's `cluster upgrade` must NOT attempt automatic
+	// rollback: their readiness contract changed such that a restored previous binary cannot pass the current health
+	// gate (rollback would report a successful restoration as a failed check; recover by redeploy/forward-fix). This is
+	// per-RELEASE metadata read from the fetched manifest, not a permanent code exception — a release that lists no
+	// deploy name here keeps ordinary rollback for every service.
+	RollbackDisabled     []string              `yaml:"rollback_disabled,omitempty"`
 	Services             []ServiceEntry        `yaml:"services"`
 	NativeBinaries       []NativeBinary        `yaml:"native_binaries"`
 	Interfaces           []InterfaceEntry      `yaml:"interfaces"`
@@ -76,13 +91,14 @@ type Artifact struct {
 
 // InterfaceEntry represents an interface service (chartroom, foredeck)
 type InterfaceEntry struct {
-	Name         string                   `yaml:"name"`
-	Image        string                   `yaml:"image"`
-	Digest       string                   `yaml:"digest"`
-	StaticBundle string                   `yaml:"static_bundle,omitempty"`
-	Images       map[string]RegistryImage `yaml:"images,omitempty"`
-	SourceHash   string                   `yaml:"source_hash,omitempty"`
-	CarriedFrom  string                   `yaml:"carried_from,omitempty"`
+	Name           string                   `yaml:"name"`
+	ServiceVersion string                   `yaml:"service_version,omitempty"`
+	Image          string                   `yaml:"image"`
+	Digest         string                   `yaml:"digest"`
+	StaticBundle   string                   `yaml:"static_bundle,omitempty"`
+	Images         map[string]RegistryImage `yaml:"images,omitempty"`
+	SourceHash     string                   `yaml:"source_hash,omitempty"`
+	CarriedFrom    string                   `yaml:"carried_from,omitempty"`
 }
 
 // InfrastructureEntry represents an infrastructure component pinned by a
@@ -106,6 +122,13 @@ func (m *Manifest) GetInfrastructure(name string) *InfrastructureEntry {
 		}
 	}
 	return nil
+}
+
+// IsRollbackDisabled reports whether THIS release's metadata disables automatic rollback for a deploy name (see
+// Manifest.RollbackDisabled). cluster upgrade consults it so a one-release readiness-contract cut is enforced from
+// release data, not a permanent per-service code exception.
+func (m *Manifest) IsRollbackDisabled(deployName string) bool {
+	return slices.Contains(m.RollbackDisabled, deployName)
 }
 
 // GetArtifact returns the artifact for the given arch (linux-amd64, linux-arm64, ...),

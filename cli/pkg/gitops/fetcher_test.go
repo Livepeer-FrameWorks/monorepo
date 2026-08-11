@@ -21,7 +21,10 @@ func TestResolveVersionNormalization(t *testing.T) {
 		{input: "rc", channel: "rc", version: "latest"},
 		{input: "v1.2.3", channel: "stable", version: "v1.2.3"},
 		{input: "1.2.3", channel: "stable", version: "v1.2.3"},
-		{input: "1.2.3-rc1", channel: "stable", version: "v1.2.3-rc1"},
+		// A concrete RC tag resolves to the rc channel (not stable) so it is fetched/published on the rc channel.
+		{input: "1.2.3-rc1", channel: "rc", version: "v1.2.3-rc1"},
+		{input: "v0.2.97-rc1", channel: "rc", version: "v0.2.97-rc1"},
+		{input: "v1.2.3+build7", channel: "stable", version: "v1.2.3+build7"},
 	}
 
 	for _, tc := range tests {
@@ -211,7 +214,9 @@ func TestFetchRetriesTransientFailure(t *testing.T) {
 func TestFetchStaleCacheFallbackOnFetchFailure(t *testing.T) {
 	t.Parallel()
 
-	manifestYAML := []byte("platform_version: cached\nservices: []\nnative_binaries: []\ninterfaces: []\ninfrastructure: []\n")
+	// The cache entry must carry the SAME release identity it is keyed under (v1.2.3); an identity-mismatched or
+	// sentinel platform_version is now rejected as an unusable cache entry.
+	manifestYAML := []byte("platform_version: v1.2.3\nservices: []\nnative_binaries: []\ninterfaces: []\ninfrastructure: []\n")
 	cacheDir := t.TempDir()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -248,8 +253,8 @@ func TestFetchStaleCacheFallbackOnFetchFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected cached fallback, got error: %v", err)
 	}
-	if manifest.PlatformVersion != "cached" {
-		t.Fatalf("expected cached manifest, got %s", manifest.PlatformVersion)
+	if manifest.PlatformVersion != "v1.2.3" {
+		t.Fatalf("expected cached manifest v1.2.3, got %s", manifest.PlatformVersion)
 	}
 }
 
@@ -440,6 +445,38 @@ func TestGetServiceInfoFallsBackToPlatformVersionWhenServiceVersionEmpty(t *test
 	}
 	if info.Version != "v0.2.40" {
 		t.Fatalf("version=%q, want platform_version fallback v0.2.40", info.Version)
+	}
+}
+
+// An interface (chartroom/foredeck/logbook) is pinned by image DIGEST. GetServiceInfo must NOT return an empty
+// version — that makes image resolution fall back to latest/stable and records a blank deployed version. It stamps the
+// service_version when present, else the platform version, and always exposes the exact image@digest via FullImage.
+func TestGetServiceInfoInterfaceVersionNeverEmpty(t *testing.T) {
+	m := &Manifest{
+		PlatformVersion: "v0.2.97",
+		Interfaces: []InterfaceEntry{
+			{Name: "chartroom", Image: "ghcr.io/x/chartroom", Digest: "sha256:abc"},
+			{Name: "foredeck", ServiceVersion: "v0.2.97", Image: "ghcr.io/x/foredeck", Digest: "sha256:def"},
+		},
+	}
+
+	cr, err := m.GetServiceInfo("chartroom")
+	if err != nil {
+		t.Fatalf("chartroom: %v", err)
+	}
+	if cr.Version != "v0.2.97" {
+		t.Fatalf("chartroom version=%q, want platform_version fallback v0.2.97 (not empty)", cr.Version)
+	}
+	if cr.FullImage != "ghcr.io/x/chartroom@sha256:abc" {
+		t.Fatalf("chartroom FullImage=%q, want the pinned image@digest", cr.FullImage)
+	}
+
+	fd, err := m.GetServiceInfo("foredeck")
+	if err != nil {
+		t.Fatalf("foredeck: %v", err)
+	}
+	if fd.Version != "v0.2.97" {
+		t.Fatalf("foredeck version=%q, want its stamped service_version", fd.Version)
 	}
 }
 

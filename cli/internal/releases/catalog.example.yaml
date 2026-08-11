@@ -13,13 +13,14 @@ service_databases:
   periscope-query: periscope
 
 # releases is the upgrade-knowledge surface. Each entry is a real platform
-# release. Path(from, to) walks compatible_from + requires_intermediate to
-# determine which intermediates an upgrade must transit.
+# release. Path(from, to) returns the releases spanned by an upgrade so the
+# migration gate knows which intermediates' migrations to check against the
+# actual _migrations ledger — it is migration ordering, not a version floor.
 releases:
   - version: v0.5.0
     min_cli_version: v0.5.0
-    compatible_from: v0.4.0
-    requires_intermediate: []
+    # rollback_disabled: [<deploy-name>]   # skip automatic rollback this release for a service whose readiness
+    #                                       # contract changed such that a restored older binary can't pass the gate
     required_data_migrations:
       - id: billing-rating-v2
         service: purser
