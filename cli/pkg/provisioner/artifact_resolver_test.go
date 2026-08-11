@@ -15,7 +15,7 @@ func writeTestGitopsRelease(t *testing.T, body string) string {
 	if err := os.MkdirAll(filepath.Join(dir, "releases"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "channels", "stable.yaml"), []byte("platform_version: vtest\nmanifest: releases/vtest.yaml\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "channels", "stable.yaml"), []byte("platform_version: v9.9.9\nmanifest: releases/vtest.yaml\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "releases", "vtest.yaml"), []byte(body), 0o644); err != nil {
@@ -26,7 +26,7 @@ func writeTestGitopsRelease(t *testing.T, body string) string {
 
 func TestResolveReleaseArtifactFindsNativeBinary(t *testing.T) {
 	repo := writeTestGitopsRelease(t, `
-platform_version: vtest
+platform_version: v9.9.9
 native_binaries:
   - name: privateer
     artifacts:
@@ -51,7 +51,7 @@ native_binaries:
 
 func TestImageFromReleaseManifestFindsInfrastructureImage(t *testing.T) {
 	repo := writeTestGitopsRelease(t, `
-platform_version: vtest
+platform_version: v9.9.9
 infrastructure:
   - name: nginx
     version: "1.29.3"
@@ -72,7 +72,7 @@ infrastructure:
 
 func TestImageFromReleaseManifestDefaultsToDockerHubRegistryImage(t *testing.T) {
 	repo := writeTestGitopsRelease(t, `
-platform_version: vtest
+platform_version: v9.9.9
 interfaces:
   - name: chartroom
     image: livepeerframeworks/frameworks-chartroom:vtest
@@ -99,7 +99,7 @@ interfaces:
 
 func TestImageFromReleaseManifestCanSelectGHCRRegistryImage(t *testing.T) {
 	repo := writeTestGitopsRelease(t, `
-platform_version: vtest
+platform_version: v9.9.9
 interfaces:
   - name: chartroom
     image: livepeerframeworks/frameworks-chartroom:vtest
@@ -127,7 +127,7 @@ interfaces:
 
 func TestImageFromReleaseManifestPinsInfrastructureByDigest(t *testing.T) {
 	repo := writeTestGitopsRelease(t, `
-platform_version: vtest
+platform_version: v9.9.9
 infrastructure:
   - name: caddy
     version: "2.8.4"
@@ -148,7 +148,7 @@ infrastructure:
 
 func TestImageFromReleaseManifestInfrastructureRejectsMissingDigest(t *testing.T) {
 	repo := writeTestGitopsRelease(t, `
-platform_version: vtest
+platform_version: v9.9.9
 infrastructure:
   - name: nginx
     version: "1.29.3"
@@ -165,7 +165,7 @@ infrastructure:
 
 func TestImageFromReleaseManifestPinsExternalDepByDigest(t *testing.T) {
 	repo := writeTestGitopsRelease(t, `
-platform_version: vtest
+platform_version: v9.9.9
 external_dependencies:
   - name: go-livepeer
     image: ghcr.io/livepeer-frameworks/go-livepeer:vtest
@@ -185,7 +185,7 @@ external_dependencies:
 
 func TestImageFromReleaseManifestExternalDepRejectsMissingDigest(t *testing.T) {
 	repo := writeTestGitopsRelease(t, `
-platform_version: vtest
+platform_version: v9.9.9
 external_dependencies:
   - name: go-livepeer
     image: ghcr.io/livepeer-frameworks/go-livepeer:vtest
@@ -201,7 +201,7 @@ external_dependencies:
 
 func TestBinaryFromExternalDependencyFindsLivepeerArtifact(t *testing.T) {
 	repo := writeTestGitopsRelease(t, `
-platform_version: vtest
+platform_version: v9.9.9
 external_dependencies:
   - name: go-livepeer
     image: ghcr.io/livepeer-frameworks/go-livepeer:vtest

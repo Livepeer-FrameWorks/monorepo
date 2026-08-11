@@ -222,6 +222,19 @@ services:
       DECKLOG_GRPC_ADDR: ${DECKLOG_GRPC_ADDR}
       CHANDLER_INTERNAL_URL: ${CHANDLER_INTERNAL_URL:-http://chandler:18020}
       CHANDLER_BASE_URL: ${CHANDLER_BASE_URL:-http://localhost:18090}
+      # Artifact storage backend. S3 is opt-in in dev (empty bucket = disabled):
+      # set STORAGE_S3_* in .env to bind this cell to a backend. The storage-init
+      # one-shot establishes the Quartermaster cluster descriptor from this env
+      # before Foghorn/Chandler start; Foghorn then ADOPTS its immutable cell
+      # identity from Quartermaster (and refuses to start if this env disagrees).
+      # Chandler reads the descriptor from Quartermaster too — not from env — so
+      # all three agree on one authoritative tuple.
+      STORAGE_S3_ENDPOINT: ${STORAGE_S3_ENDPOINT:-}
+      STORAGE_S3_BUCKET: ${STORAGE_S3_BUCKET:-}
+      STORAGE_S3_REGION: ${STORAGE_S3_REGION:-us-east-1}
+      STORAGE_S3_ACCESS_KEY: ${STORAGE_S3_ACCESS_KEY:-}
+      STORAGE_S3_SECRET_KEY: ${STORAGE_S3_SECRET_KEY:-}
+      STORAGE_S3_PREFIX: ${STORAGE_S3_PREFIX:-}
       # Load balancing weights
       CPU_WEIGHT: ${CPU_WEIGHT}
       RAM_WEIGHT: ${RAM_WEIGHT}
@@ -245,6 +258,8 @@ services:
         condition: service_healthy
       foghorn-redis:
         condition: service_healthy
+      storage-init:
+        condition: service_completed_successfully
     restart: unless-stopped
     networks:
       - frameworks
@@ -316,6 +331,8 @@ services:
         condition: service_healthy
       foghorn-redis:
         condition: service_healthy
+      storage-init:
+        condition: service_completed_successfully
     restart: unless-stopped
     networks:
       - frameworks
@@ -980,6 +997,53 @@ services:
       retries: 3
       start_period: 10s
 
+  # One-shot: establish the cell's S3 storage descriptor on the Quartermaster
+  # cluster row BEFORE Chandler/Foghorn start. Quartermaster is the sole
+  # authority for the descriptor and Chandler no longer serves from env, so the
+  # env-configured backend must be reconciled onto the row or Chandler starts
+  # disabled (503). Idempotent and additive: it only fills a row whose descriptor
+  # is still unset (first establishment), never repoints one — matching the
+  # immutability invariant. No-op when S3 is disabled (empty STORAGE_S3_BUCKET).
+  storage-init:
+    image: pgvector/pgvector:pg18@sha256:42e7f6b4e1eceb02ff14e3e6bc6108bbe259abbe83879dc1845d0da1ddeb555d
+    container_name: frameworks-storage-init
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      CLUSTER_ID: ${CLUSTER_ID:-central-primary}
+      STORAGE_S3_ENDPOINT: ${STORAGE_S3_ENDPOINT:-}
+      STORAGE_S3_BUCKET: ${STORAGE_S3_BUCKET:-}
+      STORAGE_S3_REGION: ${STORAGE_S3_REGION:-us-east-1}
+      STORAGE_S3_PREFIX: ${STORAGE_S3_PREFIX:-}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        if [ -z "$$STORAGE_S3_BUCKET" ]; then
+          echo "storage-init: S3 disabled (no STORAGE_S3_BUCKET) — nothing to establish"
+          exit 0
+        fi
+        echo "storage-init: establishing S3 descriptor for cluster $$CLUSTER_ID (clean establishment only)"
+        # CLEAN ESTABLISHMENT ONLY: fill the FULL descriptor tuple exactly once, when the row's descriptor is entirely
+        # unset (s3_bucket IS NULL). It never touches an already-established row, so it cannot repoint an immutable
+        # backend. This dev stack is SEEDED and DISPOSABLE — it does not migrate persisted state; if the volume predates
+        # the current schema, recreate it (`docker compose down -v && docker compose up -d`), the standard dev reset. So
+        # there is no legacy same-bucket/NULL-prefix row to handle here. (Env is operator-controlled, so the direct
+        # interpolation is acceptable for dev tooling.)
+        psql "$$DATABASE_URL" -v ON_ERROR_STOP=1 -c \
+          "UPDATE quartermaster.infrastructure_clusters \
+             SET s3_bucket = NULLIF('$$STORAGE_S3_BUCKET', ''), \
+                 s3_endpoint = NULLIF('$$STORAGE_S3_ENDPOINT', ''), \
+                 s3_region = NULLIF('$$STORAGE_S3_REGION', ''), \
+                 s3_prefix = '$$STORAGE_S3_PREFIX', \
+                 updated_at = NOW() \
+           WHERE cluster_id = '$$CLUSTER_ID' AND s3_bucket IS NULL;"
+        echo "storage-init: done"
+    networks:
+      - frameworks
+
   chandler:
     <<: *default-env
     container_name: frameworks-chandler
@@ -1001,11 +1065,15 @@ services:
       STORAGE_S3_PREFIX: ${STORAGE_S3_PREFIX:-}
       QUARTERMASTER_GRPC_ADDR: ${QUARTERMASTER_GRPC_ADDR}
       CHANDLER_HOST: ${CHANDLER_HOST:-chandler}
+      # No FOGHORN_INTERNAL_URL: Chandler serves thumbnails from a deterministic S3 key with no per-request Foghorn
+      # resolver call (docs/architecture/thumbnails.md).
       CLUSTER_ID: central-primary
       NODE_ID: central-node-1
     depends_on:
       quartermaster:
         condition: service_healthy
+      storage-init:
+        condition: service_completed_successfully
     restart: unless-stopped
     networks:
       - frameworks

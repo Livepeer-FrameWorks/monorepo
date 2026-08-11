@@ -117,6 +117,15 @@ func imageFromReleaseManifest(name, platformChannel string, metadata map[string]
 	return "", fmt.Errorf("service %s not found in release manifest", name)
 }
 
+// SelectedReleaseImage is the exported preflight seam over the deploy-time image selector: it runs the SAME
+// registry-aware (image_registry / FRAMEWORKS_IMAGE_REGISTRY) entry + digest resolution the provisioner uses, so a
+// pre-mutation caller can prove a service's image actually resolves — a missing selected-registry entry or absent
+// digest that GetServiceInfo cannot detect — instead of that error surfacing mid-rollout. Callers that already hold a
+// ServiceInfo (fetched once) pass it here to avoid re-fetching the manifest per service.
+func SelectedReleaseImage(svc *gitops.ServiceInfo, metadata map[string]any) (string, error) {
+	return selectedReleaseImage(svc, metadata)
+}
+
 func selectedReleaseImage(svc *gitops.ServiceInfo, metadata map[string]any) (string, error) {
 	requested := normalizeImageRegistry(firstNonEmpty(
 		metaString(metadata, "image_registry"),

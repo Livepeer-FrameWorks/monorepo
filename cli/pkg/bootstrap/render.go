@@ -83,6 +83,11 @@ func Derive(m *inventory.Manifest, opts DeriveOptions) (*Derived, error) {
 			c.S3Bucket = cc.S3Bucket
 			c.S3Endpoint = cc.S3Endpoint
 			c.S3Region = cc.S3Region
+			// ClusterConfig.S3Prefix is a *string (presence-tracked); manifest validation guarantees it is non-nil
+			// whenever a bucket is declared, so a bucket-cluster always carries an explicit (possibly empty) prefix.
+			if cc.S3Prefix != nil {
+				c.S3Prefix = *cc.S3Prefix
+			}
 		}
 		if c.Type == "" {
 			c.Type = m.Type
@@ -364,7 +369,11 @@ func deriveIngressAndRegistry(d *Derived, m *inventory.Manifest, opts DeriveOpti
 					}
 					if hasDefs {
 						entry.Protocol = defs.HealthProtocol
-						entry.HealthEndpoint = defs.HealthPath
+						// Advertise READINESS, not liveness: Quartermaster (and anything
+						// routing off the registry) must consider an instance serviceable
+						// only when it can actually serve. For Chandler that is /ready
+						// (store-backed); for everything else ReadinessPath() == HealthPath.
+						entry.HealthEndpoint = defs.ReadinessPath()
 					}
 					if md := deriveServiceMetadata(serviceType, hostKey, port, m, svc, opts); len(md) > 0 {
 						entry.Metadata = md
@@ -1074,6 +1083,9 @@ func mergeClusterFields(derived, overlay Cluster) (Cluster, error) {
 	}
 	if overlay.S3Region != "" {
 		out.S3Region = overlay.S3Region
+	}
+	if overlay.S3Prefix != "" {
+		out.S3Prefix = overlay.S3Prefix
 	}
 	if overlay.Mesh.ListenPort != 0 {
 		out.Mesh.ListenPort = overlay.Mesh.ListenPort

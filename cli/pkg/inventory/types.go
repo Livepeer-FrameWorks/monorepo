@@ -133,11 +133,16 @@ type ClusterConfig struct {
 	// S3Bucket / S3Endpoint / S3Region carry the artifact storage backend
 	// for this cluster. Reconciled into infrastructure_clusters and read by
 	// Chandler + cross-cluster federation. Credentials stay env-only via
-	// per-cluster env_files; only bucket + endpoint + region live on the
-	// cluster row.
+	// per-cluster env_files; only bucket + endpoint + region + prefix live on
+	// the cluster row.
 	S3Bucket   string `yaml:"s3_bucket,omitempty"`
 	S3Endpoint string `yaml:"s3_endpoint,omitempty"`
 	S3Region   string `yaml:"s3_region,omitempty"`
+	// S3Prefix is a POINTER so absence (nil, unadopted) is distinguishable from a
+	// declared known-empty prefix (non-nil ""). Quartermaster preserves the same
+	// NULL-vs-empty distinction on the row; validation requires an explicit prefix
+	// whenever a bucket is declared (use s3_prefix: "" for a genuinely empty one).
+	S3Prefix *string `yaml:"s3_prefix,omitempty"`
 
 	// AllowPrivatePullSources opts the cluster's pull-source validator in to
 	// RFC1918/multicast literals. Default false (strict) so platform-official

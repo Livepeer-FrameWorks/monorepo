@@ -311,6 +311,34 @@ func (m *Manifest) Validate() error {
 		}
 	}
 
+	// Credential-bearing media services (foghorn/chandler) carry per-cluster STORAGE_S3_* env and bind to a single
+	// per-cell immutable descriptor. Cluster assignment is modelled M:N generally, but for these services a
+	// multi-cluster declaration would silently render one cell's credentials/descriptor to replicas of another (every
+	// consumer uses Clusters[0]) and let adoption converge only one cell. Require exactly one cluster — one alias per
+	// cell — rather than selecting the first element.
+	for name, svc := range m.Services {
+		if !svc.Enabled {
+			continue
+		}
+		deploy := svc.Deploy
+		if deploy == "" {
+			deploy = name
+		}
+		if (deploy == "foghorn" || deploy == "chandler") && len(svc.Clusters) > 1 {
+			return fmt.Errorf("service '%s' (deploy '%s') declares %d clusters %v — a credential-bearing media service must declare exactly one cluster (one alias per cell); split it into per-cell aliases", name, deploy, len(svc.Clusters), svc.Clusters)
+		}
+	}
+
+	// The S3 descriptor is immutable and its prefix is part of it: a cluster that declares a bucket MUST declare an
+	// explicit prefix (an absent prefix is "unadopted", indistinguishable at deploy time from a real omission). Use
+	// s3_prefix: "" for a genuinely empty prefix. This catches the common gitops mistake of declaring bucket without
+	// prefix, which would leave Quartermaster and the deployed STORAGE_S3_PREFIX env disagreeing.
+	for id, cc := range m.Clusters {
+		if strings.TrimSpace(cc.S3Bucket) != "" && cc.S3Prefix == nil {
+			return fmt.Errorf("cluster '%s' declares s3_bucket but no s3_prefix — declare the prefix explicitly (use s3_prefix: \"\" for a genuinely empty prefix); it is part of the immutable descriptor Quartermaster and the deployed STORAGE_S3_PREFIX env must agree on", id)
+		}
+	}
+
 	// Validate host references in infrastructure
 	if m.Infrastructure.Postgres != nil && m.Infrastructure.Postgres.Enabled {
 		for _, pgHost := range m.Infrastructure.Postgres.AllHosts() {
@@ -378,7 +406,7 @@ func (m *Manifest) Validate() error {
 		// single ClickHouse node because bootstrap and direct ops target one coordinator;
 		// rejecting larger manifests prevents silent partial apply.
 		if len(ch.Nodes) > 1 {
-			return fmt.Errorf("clickhouse: multi-node (%d nodes) is unsupported by this release; declare exactly one node", len(ch.Nodes))
+			return fmt.Errorf("clickhouse: multi-node (%d nodes) is unsupported; declare exactly one node", len(ch.Nodes))
 		}
 		// read_endpoint/write_endpoint are host-key overrides for the service
 		// CLICKHOUSE_ADDR (migration cutover); when set they must resolve to a host.
@@ -774,6 +802,61 @@ func Save(path string, manifest *Manifest) error {
 		return fmt.Errorf("failed to marshal manifest: %w", err)
 	}
 	return os.WriteFile(path, data, 0644)
+}
+
+// PatchManifestField sets a single top-level scalar key in the manifest's SOURCE YAML in place, preserving every
+// other key, its order, and all comments. It edits the raw source document via a yaml.Node round-trip rather than
+// re-serializing a parsed/resolved Manifest: the resolved manifest carries SOPS-decrypted host inventory merged from
+// hosts_file, so marshaling IT would both inline those secrets into the plaintext manifest and clobber the operator's
+// comments. Use this for narrow operator-set fields like the release channel.
+func PatchManifestField(path, key, value string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("failed to read manifest file: %w", err)
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("failed to parse manifest YAML: %w", err)
+	}
+	root := &doc
+	if root.Kind == yaml.DocumentNode {
+		if len(root.Content) == 0 {
+			return fmt.Errorf("manifest %s is empty", path)
+		}
+		root = root.Content[0]
+	}
+	if root.Kind != yaml.MappingNode {
+		return fmt.Errorf("manifest %s is not a YAML mapping", path)
+	}
+	setMappingScalar(root, key, value)
+
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2) // match the manifests' 2-space style so the patch is minimal
+	if err := enc.Encode(&doc); err != nil {
+		return fmt.Errorf("failed to marshal manifest: %w", err)
+	}
+	if err := enc.Close(); err != nil {
+		return fmt.Errorf("failed to finalize manifest: %w", err)
+	}
+	return os.WriteFile(path, buf.Bytes(), 0644)
+}
+
+// setMappingScalar sets key=value in a YAML mapping node, updating the existing value in place (keeping its comments)
+// or appending a new key/value pair when the key is absent.
+func setMappingScalar(m *yaml.Node, key, value string) {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			m.Content[i+1].Kind = yaml.ScalarNode
+			m.Content[i+1].Tag = "!!str"
+			m.Content[i+1].Value = value
+			return
+		}
+	}
+	m.Content = append(m.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value},
+	)
 }
 
 // LoadEdgeManifest reads and parses an edge manifest file (edges.yaml)

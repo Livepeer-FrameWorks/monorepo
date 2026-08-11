@@ -93,11 +93,12 @@ type Cluster struct {
 	ControlCell          string   `yaml:"control_cell,omitempty"`
 	EligibleServingCells []string `yaml:"eligible_serving_cells,omitempty"`
 
-	// S3 storage backend. Credentials stay in per-cluster env_files;
-	// only bucket + endpoint + region land on the cluster row.
+	// S3 storage backend. Credentials stay in per-cluster env_files; the
+	// bucket + endpoint + region + prefix tuple lands on the cluster row.
 	S3Bucket   string `yaml:"s3_bucket,omitempty"`
 	S3Endpoint string `yaml:"s3_endpoint,omitempty"`
 	S3Region   string `yaml:"s3_region,omitempty"`
+	S3Prefix   string `yaml:"s3_prefix,omitempty"`
 
 	// Override = true on an Overlay item replaces the manifest-derived entry with
 	// the same ID. Ignored on Derived and Rendered.

@@ -31,7 +31,7 @@ func TestManifestValidateClickHouseTopology(t *testing.T) {
 		{"duplicate_host", &ClickHouseConfig{Enabled: true, Nodes: []ClickHouseNode{{Host: "ch-1", ID: 1}, {Host: "ch-1", ID: 2}}}, "duplicate clickhouse node host"},
 		{"unknown_host", &ClickHouseConfig{Enabled: true, Nodes: []ClickHouseNode{{Host: "nope", ID: 1}}}, "not found in hosts"},
 		{"valid_single_node", &ClickHouseConfig{Enabled: true, Nodes: []ClickHouseNode{{Host: "ch-1", ID: 1}}}, ""},
-		{"multi_node_refused", &ClickHouseConfig{Enabled: true, Nodes: []ClickHouseNode{{Host: "ch-1", ID: 1}, {Host: "ch-2", ID: 2}}}, "multi-node (2 nodes) is unsupported by this release"},
+		{"multi_node_refused", &ClickHouseConfig{Enabled: true, Nodes: []ClickHouseNode{{Host: "ch-1", ID: 1}, {Host: "ch-2", ID: 2}}}, "multi-node (2 nodes) is unsupported"},
 		{"read_endpoint_unknown_host", &ClickHouseConfig{Enabled: true, Nodes: []ClickHouseNode{{Host: "ch-1", ID: 1}}, ReadEndpoint: "nope"}, "read_endpoint host 'nope' not found"},
 		{"write_endpoint_unknown_host", &ClickHouseConfig{Enabled: true, Nodes: []ClickHouseNode{{Host: "ch-1", ID: 1}}, WriteEndpoint: "nope"}, "write_endpoint host 'nope' not found"},
 		{"valid_endpoints_pinned_to_other_host", &ClickHouseConfig{Enabled: true, Nodes: []ClickHouseNode{{Host: "ch-1", ID: 1}}, ReadEndpoint: "ch-2", WriteEndpoint: "ch-2"}, ""},
@@ -813,5 +813,143 @@ func TestManifestValidateKafkaAcceptsThreeRegionTopology(t *testing.T) {
 	}
 	if err := manifest.Validate(); err != nil {
 		t.Fatalf("explicit 3-region topology should validate: %v", err)
+	}
+}
+
+func TestManifestValidateMediaClusterDescriptor(t *testing.T) {
+	base := func(svcClusters []string, cc *ClusterConfig) *Manifest {
+		m := &Manifest{
+			Version: "1",
+			Type:    "cluster",
+			Hosts:   map[string]Host{"h1": {ExternalIP: "10.0.0.1", User: "root"}},
+			Services: map[string]ServiceConfig{
+				"foghorn": {Enabled: true, Deploy: "foghorn", Clusters: svcClusters, Host: "h1"},
+			},
+		}
+		if cc != nil {
+			m.Clusters = map[string]ClusterConfig{"media-us": *cc}
+		}
+		return m
+	}
+	empty := ""
+	prod := "prod"
+
+	cases := []struct {
+		name    string
+		svcClu  []string
+		cc      *ClusterConfig
+		wantErr string
+	}{
+		{"multi-cluster foghorn rejected", []string{"media-us", "media-eu"}, nil, "exactly one cluster"},
+		{"single cluster ok", []string{"media-us"}, nil, ""},
+		{"bucket without prefix rejected", []string{"media-us"}, &ClusterConfig{Name: "media-us", Type: "edge", S3Bucket: "b"}, "no s3_prefix"},
+		{"bucket with explicit empty prefix ok", []string{"media-us"}, &ClusterConfig{Name: "media-us", Type: "edge", S3Bucket: "b", S3Prefix: &empty}, ""},
+		{"bucket with prefix ok", []string{"media-us"}, &ClusterConfig{Name: "media-us", Type: "edge", S3Bucket: "b", S3Prefix: &prod}, ""},
+		{"no bucket no prefix ok", []string{"media-us"}, &ClusterConfig{Name: "media-us", Type: "edge"}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := base(tc.svcClu, tc.cc).Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected pass, got: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got: %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+// TestPatchManifestField verifies the source-aware channel patch: it flips only the target key, preserves comments,
+// key order, and the hosts_file reference, and — crucially — never inlines host inventory (no secret leak).
+func TestPatchManifestField(t *testing.T) {
+	src := `# FrameWorks cluster manifest
+version: "1"
+type: cluster
+channel: stable # release track
+hosts_file: hosts.enc.yaml # SOPS-encrypted inventory
+services:
+  foghorn:
+    enabled: true # in-cell resolver
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cluster.yaml")
+	if err := os.WriteFile(path, []byte(src), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := PatchManifestField(path, "channel", "rc"); err != nil {
+		t.Fatalf("patch: %v", err)
+	}
+	out, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+
+	if !strings.Contains(got, "channel: rc") {
+		t.Fatalf("channel not updated:\n%s", got)
+	}
+	if strings.Contains(got, "channel: stable") {
+		t.Fatalf("old channel still present:\n%s", got)
+	}
+	for _, want := range []string{
+		"# FrameWorks cluster manifest", // head comment preserved
+		"# release track",               // line comment preserved
+		"hosts_file: hosts.enc.yaml",    // inventory stays a REFERENCE, never inlined
+		"# in-cell resolver",            // nested comment preserved
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q preserved, got:\n%s", want, got)
+		}
+	}
+	// Key order preserved: version before channel before services.
+	if strings.Index(got, "version:") >= strings.Index(got, "channel:") ||
+		strings.Index(got, "channel:") >= strings.Index(got, "services:") {
+		t.Fatalf("key order not preserved:\n%s", got)
+	}
+
+	// Patching an ABSENT key appends it without disturbing existing content.
+	if err := PatchManifestField(path, "region", "eu"); err != nil {
+		t.Fatalf("append patch: %v", err)
+	}
+	out2, _ := os.ReadFile(path)
+	if !strings.Contains(string(out2), "region: eu") {
+		t.Fatalf("absent key not appended:\n%s", string(out2))
+	}
+}
+
+// A quoted value with an inline comment is valid YAML; a text-only parser would read it literally as
+// `"prod" # production` and address a nonexistent prefix. The `cluster storage descriptor` command parses the manifest
+// with ParseManifest (canonical Go YAML), which must yield exactly "prod" for this shape — the descriptor that drives
+// the destructive thumbnail wipe depends on it.
+func TestParseManifest_S3PrefixQuotedAndCommented(t *testing.T) {
+	data := []byte(`
+clusters:
+  media-eu-1:
+    s3_bucket: frameworks
+    s3_endpoint: https://nbg1.example.com
+    s3_region: nbg1
+    s3_prefix: "prod" # production
+`)
+	m, err := ParseManifest(data)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	cc, ok := m.Clusters["media-eu-1"]
+	if !ok {
+		t.Fatal("cluster media-eu-1 missing")
+	}
+	if cc.S3Prefix == nil {
+		t.Fatal("s3_prefix parsed as nil")
+	}
+	if *cc.S3Prefix != "prod" {
+		t.Fatalf("s3_prefix = %q, want %q (quoted+commented YAML must not leak the comment)", *cc.S3Prefix, "prod")
+	}
+	if cc.S3Bucket != "frameworks" {
+		t.Fatalf("s3_bucket = %q, want frameworks", cc.S3Bucket)
 	}
 }
