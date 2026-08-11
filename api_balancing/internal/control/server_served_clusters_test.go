@@ -2,12 +2,31 @@ package control
 
 import (
 	"context"
+	"errors"
 	"os"
 	"sync"
 	"testing"
 
-	"github.com/DATA-DOG/go-sqlmock"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
+
+// stubServedClusters is an injectable servedClustersAPI for loadServedClustersFrom tests.
+type stubServedClusters struct {
+	resp        *quartermasterpb.ListServiceClusterAssignmentsResponse
+	err         error
+	calls       int
+	lastInst    string
+	lastType    string
+	hadDeadline bool
+}
+
+func (s *stubServedClusters) ListServiceClusterAssignments(ctx context.Context, instanceID, serviceType string) (*quartermasterpb.ListServiceClusterAssignmentsResponse, error) {
+	s.calls++
+	s.lastInst = instanceID
+	s.lastType = serviceType
+	_, s.hadDeadline = ctx.Deadline()
+	return s.resp, s.err
+}
 
 // resetServedClusters swaps in a fresh empty sync.Map and restores original on cleanup.
 func resetServedClusters(t *testing.T) {
@@ -36,77 +55,109 @@ func setInstanceID(t *testing.T, id string) {
 	})
 }
 
-func TestLoadServedClusters_PopulatesFromDB(t *testing.T) {
+func TestLoadServedClustersFrom_SuccessPopulatesWithCorrectArgs(t *testing.T) {
 	resetServedClusters(t)
-
-	mockDB, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("sqlmock.New: %v", err)
-	}
-	defer mockDB.Close()
-
-	prevDB := db
-	db = mockDB
-	t.Cleanup(func() { db = prevDB })
 	setInstanceID(t, "foghorn-instance-1")
+	stub := &stubServedClusters{resp: &quartermasterpb.ListServiceClusterAssignmentsResponse{
+		ClusterIds: []string{"cluster-a", "cluster-b"},
+	}}
 
-	mock.ExpectQuery("SELECT sca.cluster_id").
-		WithArgs("foghorn-instance-1").
-		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).
-			AddRow("cluster-a").
-			AddRow("cluster-b"))
+	loadServedClustersFrom(stub)
 
-	LoadServedClusters()
-
-	if !isServedCluster("cluster-a") {
-		t.Fatalf("expected cluster-a to be served")
+	if stub.calls != 1 {
+		t.Fatalf("expected one RPC call, got %d", stub.calls)
 	}
-	if !isServedCluster("cluster-b") {
-		t.Fatalf("expected cluster-b to be served")
+	if stub.lastInst != "foghorn-instance-1" || stub.lastType != "foghorn" {
+		t.Fatalf("unexpected RPC args: inst=%q type=%q", stub.lastInst, stub.lastType)
+	}
+	if !stub.hadDeadline {
+		t.Fatalf("expected the RPC context to carry a deadline (5s timeout)")
+	}
+	if !isServedCluster("cluster-a") || !isServedCluster("cluster-b") {
+		t.Fatalf("expected cluster-a and cluster-b to be served")
 	}
 	if isServedCluster("cluster-c") {
 		t.Fatalf("expected cluster-c to NOT be served")
 	}
+}
 
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet expectations: %v", err)
+func TestLoadServedClustersFrom_MissingInstanceIDIsNoOp(t *testing.T) {
+	resetServedClusters(t)
+	servedClusters.Load().Store("existing", true)
+	setInstanceID(t, "")
+	stub := &stubServedClusters{resp: &quartermasterpb.ListServiceClusterAssignmentsResponse{ClusterIds: []string{"cluster-a"}}}
+
+	loadServedClustersFrom(stub)
+
+	if stub.calls != 0 {
+		t.Fatalf("expected no RPC call when instance ID is unset, got %d", stub.calls)
+	}
+	if !isServedCluster("existing") {
+		t.Fatalf("expected snapshot untouched when instance ID is unset")
 	}
 }
 
-func TestLoadServedClusters_SwapsOutStaleEntries(t *testing.T) {
+func TestLoadServedClustersFrom_RPCErrorPreservesSnapshot(t *testing.T) {
+	resetServedClusters(t)
+	servedClusters.Load().Store("existing", true)
+	setInstanceID(t, "foghorn-instance-1")
+	stub := &stubServedClusters{err: errors.New("qm unavailable")}
+
+	loadServedClustersFrom(stub)
+
+	if stub.calls != 1 {
+		t.Fatalf("expected exactly one RPC attempt, got %d", stub.calls)
+	}
+	if !isServedCluster("existing") {
+		t.Fatalf("expected existing cluster to remain on RPC error")
+	}
+}
+
+func TestLoadServedClustersFrom_NilResponsePreservesSnapshot(t *testing.T) {
+	resetServedClusters(t)
+	servedClusters.Load().Store("existing", true)
+	setInstanceID(t, "foghorn-instance-1")
+	stub := &stubServedClusters{resp: nil, err: nil}
+
+	loadServedClustersFrom(stub)
+
+	if !isServedCluster("existing") {
+		t.Fatalf("expected existing cluster to remain on nil response")
+	}
+}
+
+func TestLoadServedClusters_NilClientIsNoOp(t *testing.T) {
+	resetServedClusters(t)
+	servedClusters.Load().Store("existing", true)
+
+	prev := servedClustersClient.Load()
+	servedClustersClient.Store(nil)
+	t.Cleanup(func() { servedClustersClient.Store(prev) })
+
+	LoadServedClusters()
+
+	if !isServedCluster("existing") {
+		t.Fatalf("expected existing cluster to remain when client is nil")
+	}
+}
+
+func TestApplyServedClustersRefresh_SwapsOutStaleEntriesAndPreservesLocal(t *testing.T) {
 	resetServedClusters(t)
 
-	mockDB, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("sqlmock.New: %v", err)
-	}
-	defer mockDB.Close()
+	prevLocal := localClusterID
+	localClusterID = "local-primary"
+	t.Cleanup(func() { localClusterID = prevLocal })
 
-	prevDB := db
-	db = mockDB
-	t.Cleanup(func() { db = prevDB })
-	setInstanceID(t, "foghorn-instance-1")
-
-	// First load: cluster-a + cluster-b
-	mock.ExpectQuery("SELECT sca.cluster_id").
-		WithArgs("foghorn-instance-1").
-		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).
-			AddRow("cluster-a").
-			AddRow("cluster-b"))
-
-	LoadServedClusters()
-
+	applyServedClustersRefresh([]string{"cluster-a", "cluster-b", ""})
 	if !isServedCluster("cluster-a") || !isServedCluster("cluster-b") {
-		t.Fatalf("expected both clusters after first load")
+		t.Fatalf("expected both clusters after first refresh")
+	}
+	if isServedCluster("") {
+		t.Fatalf("empty cluster id must never be stored")
 	}
 
-	// Second load: only cluster-b (cluster-a de-assigned)
-	mock.ExpectQuery("SELECT sca.cluster_id").
-		WithArgs("foghorn-instance-1").
-		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).
-			AddRow("cluster-b"))
-
-	LoadServedClusters()
+	// cluster-a de-assigned; local-primary must survive even though it is never returned.
+	applyServedClustersRefresh([]string{"cluster-b"})
 
 	if isServedCluster("cluster-a") {
 		t.Fatalf("expected cluster-a to be removed after refresh")
@@ -114,98 +165,8 @@ func TestLoadServedClusters_SwapsOutStaleEntries(t *testing.T) {
 	if !isServedCluster("cluster-b") {
 		t.Fatalf("expected cluster-b to survive refresh")
 	}
-
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet expectations: %v", err)
-	}
-}
-
-func TestLoadServedClusters_PreservesLocalClusterID(t *testing.T) {
-	resetServedClusters(t)
-
-	prevLocal := localClusterID
-	localClusterID = "local-primary"
-	t.Cleanup(func() { localClusterID = prevLocal })
-
-	mockDB, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("sqlmock.New: %v", err)
-	}
-	defer mockDB.Close()
-
-	prevDB := db
-	db = mockDB
-	t.Cleanup(func() { db = prevDB })
-	setInstanceID(t, "foghorn-instance-1")
-
-	// DB returns cluster-b only (local-primary not in DB result)
-	mock.ExpectQuery("SELECT sca.cluster_id").
-		WithArgs("foghorn-instance-1").
-		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).
-			AddRow("cluster-b"))
-
-	LoadServedClusters()
-
 	if !isServedCluster("local-primary") {
-		t.Fatalf("expected localClusterID to be preserved even when not in DB")
-	}
-	if !isServedCluster("cluster-b") {
-		t.Fatalf("expected cluster-b from DB")
-	}
-
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet expectations: %v", err)
-	}
-}
-
-func TestLoadServedClusters_NilDB(t *testing.T) {
-	resetServedClusters(t)
-
-	// Pre-populate a cluster
-	servedClusters.Load().Store("existing", true)
-
-	prevDB := db
-	db = nil
-	t.Cleanup(func() { db = prevDB })
-
-	LoadServedClusters()
-
-	// Existing entry should remain (no-op when db is nil)
-	if !isServedCluster("existing") {
-		t.Fatalf("expected existing cluster to remain when db is nil")
-	}
-}
-
-func TestLoadServedClusters_DBError(t *testing.T) {
-	resetServedClusters(t)
-
-	// Pre-populate a cluster
-	servedClusters.Load().Store("existing", true)
-
-	mockDB, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("sqlmock.New: %v", err)
-	}
-	defer mockDB.Close()
-
-	prevDB := db
-	db = mockDB
-	t.Cleanup(func() { db = prevDB })
-	setInstanceID(t, "foghorn-instance-1")
-
-	mock.ExpectQuery("SELECT sca.cluster_id").
-		WithArgs("foghorn-instance-1").
-		WillReturnError(context.DeadlineExceeded)
-
-	LoadServedClusters()
-
-	// Existing entry should remain (load failed, no swap)
-	if !isServedCluster("existing") {
-		t.Fatalf("expected existing cluster to remain on DB error")
-	}
-
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet expectations: %v", err)
+		t.Fatalf("expected localClusterID to be preserved across refreshes")
 	}
 }
 

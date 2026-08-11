@@ -129,6 +129,13 @@ service ClusterService {
   // ListClustersForTenant which exposes a minimal ClusterAccessEntry.
   rpc ListTenantClusterAccess(ListTenantClusterAccessRequest) returns (ListTenantClusterAccessResponse);
 
+  // GetTenantEntitlement returns the cluster IDs a tenant is currently
+  // entitled to serve on (active + subscribed) plus the coarse plan class
+  // (the primary cluster's cluster_class). Service-token only. Owns the
+  // entitlement predicates on Quartermaster's side so Commodore can mint
+  // signed policy bundles without reading quartermaster.* directly.
+  rpc GetTenantEntitlement(GetTenantEntitlementRequest) returns (GetTenantEntitlementResponse);
+
   // Unsubscribe from a cluster
   rpc UnsubscribeFromCluster(UnsubscribeFromClusterRequest) returns (google.protobuf.Empty);
 
@@ -815,6 +822,15 @@ message TenantClusterAccessRow {
 
 message ListTenantClusterAccessResponse {
   repeated TenantClusterAccessRow rows = 1;
+}
+
+message GetTenantEntitlementRequest {
+  string tenant_id = 1;
+}
+
+message GetTenantEntitlementResponse {
+  repeated string allowed_cluster_ids = 1;  // active + subscribed cluster IDs
+  string plan_class = 2;                     // primary cluster's cluster_class; empty = unknown/none
 }
 
 message UnsubscribeFromClusterRequest {
@@ -1570,6 +1586,15 @@ service ServiceRegistryService {
   // running instance/node so Navigator can publish per-node infra DNS records.
   rpc ListServiceInstancesByType(ListServiceInstancesByTypeRequest) returns (ListServiceInstancesByTypeResponse);
 
+  // ListServiceClusterAssignments returns the distinct cluster IDs a specific
+  // service instance is actively assigned to serve, filtered to running
+  // instances of the given service_type. Service-token only. Owns the
+  // service_cluster_assignments join on Quartermaster's side so pool members
+  // (Foghorn) can load their served-cluster set without reading
+  // quartermaster.* directly. Unlike DiscoverServices this is keyed on
+  // instance_id and enforces status='running'.
+  rpc ListServiceClusterAssignments(ListServiceClusterAssignmentsRequest) returns (ListServiceClusterAssignmentsResponse);
+
   // Get health of all service instances
   rpc ListServicesHealth(ListServicesHealthRequest) returns (ListServicesHealthResponse);
 
@@ -1778,6 +1803,15 @@ message ListServiceInstancesByTypeRequest {
 message ListServiceInstancesByTypeResponse {
   repeated PhysicalServiceInstance instances = 1;
   string service_type = 2;
+}
+
+message ListServiceClusterAssignmentsRequest {
+  string instance_id = 1;
+  string service_type = 2;
+}
+
+message ListServiceClusterAssignmentsResponse {
+  repeated string cluster_ids = 1;  // distinct actively-assigned cluster IDs
 }
 
 message ListServicesHealthRequest {

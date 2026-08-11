@@ -727,6 +727,7 @@ const (
 	ClusterService_BootstrapClusterAccess_FullMethodName        = "/quartermaster.ClusterService/BootstrapClusterAccess"
 	ClusterService_DeactivateClusterAccess_FullMethodName       = "/quartermaster.ClusterService/DeactivateClusterAccess"
 	ClusterService_ListTenantClusterAccess_FullMethodName       = "/quartermaster.ClusterService/ListTenantClusterAccess"
+	ClusterService_GetTenantEntitlement_FullMethodName          = "/quartermaster.ClusterService/GetTenantEntitlement"
 	ClusterService_UnsubscribeFromCluster_FullMethodName        = "/quartermaster.ClusterService/UnsubscribeFromCluster"
 	ClusterService_ListMySubscriptions_FullMethodName           = "/quartermaster.ClusterService/ListMySubscriptions"
 	ClusterService_ListMarketplaceClusters_FullMethodName       = "/quartermaster.ClusterService/ListMarketplaceClusters"
@@ -797,6 +798,12 @@ type ClusterServiceClient interface {
 	// tier reconciliation. Service-token only; distinct from the user-facing
 	// ListClustersForTenant which exposes a minimal ClusterAccessEntry.
 	ListTenantClusterAccess(ctx context.Context, in *ListTenantClusterAccessRequest, opts ...grpc.CallOption) (*ListTenantClusterAccessResponse, error)
+	// GetTenantEntitlement returns the cluster IDs a tenant is currently
+	// entitled to serve on (active + subscribed) plus the coarse plan class
+	// (the primary cluster's cluster_class). Service-token only. Owns the
+	// entitlement predicates on Quartermaster's side so Commodore can mint
+	// signed policy bundles without reading quartermaster.* directly.
+	GetTenantEntitlement(ctx context.Context, in *GetTenantEntitlementRequest, opts ...grpc.CallOption) (*GetTenantEntitlementResponse, error)
 	// Unsubscribe from a cluster
 	UnsubscribeFromCluster(ctx context.Context, in *UnsubscribeFromClusterRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// List clusters the tenant is subscribed to
@@ -977,6 +984,16 @@ func (c *clusterServiceClient) ListTenantClusterAccess(ctx context.Context, in *
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListTenantClusterAccessResponse)
 	err := c.cc.Invoke(ctx, ClusterService_ListTenantClusterAccess_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clusterServiceClient) GetTenantEntitlement(ctx context.Context, in *GetTenantEntitlementRequest, opts ...grpc.CallOption) (*GetTenantEntitlementResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetTenantEntitlementResponse)
+	err := c.cc.Invoke(ctx, ClusterService_GetTenantEntitlement_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1285,6 +1302,12 @@ type ClusterServiceServer interface {
 	// tier reconciliation. Service-token only; distinct from the user-facing
 	// ListClustersForTenant which exposes a minimal ClusterAccessEntry.
 	ListTenantClusterAccess(context.Context, *ListTenantClusterAccessRequest) (*ListTenantClusterAccessResponse, error)
+	// GetTenantEntitlement returns the cluster IDs a tenant is currently
+	// entitled to serve on (active + subscribed) plus the coarse plan class
+	// (the primary cluster's cluster_class). Service-token only. Owns the
+	// entitlement predicates on Quartermaster's side so Commodore can mint
+	// signed policy bundles without reading quartermaster.* directly.
+	GetTenantEntitlement(context.Context, *GetTenantEntitlementRequest) (*GetTenantEntitlementResponse, error)
 	// Unsubscribe from a cluster
 	UnsubscribeFromCluster(context.Context, *UnsubscribeFromClusterRequest) (*emptypb.Empty, error)
 	// List clusters the tenant is subscribed to
@@ -1379,6 +1402,9 @@ func (UnimplementedClusterServiceServer) DeactivateClusterAccess(context.Context
 }
 func (UnimplementedClusterServiceServer) ListTenantClusterAccess(context.Context, *ListTenantClusterAccessRequest) (*ListTenantClusterAccessResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListTenantClusterAccess not implemented")
+}
+func (UnimplementedClusterServiceServer) GetTenantEntitlement(context.Context, *GetTenantEntitlementRequest) (*GetTenantEntitlementResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetTenantEntitlement not implemented")
 }
 func (UnimplementedClusterServiceServer) UnsubscribeFromCluster(context.Context, *UnsubscribeFromClusterRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method UnsubscribeFromCluster not implemented")
@@ -1709,6 +1735,24 @@ func _ClusterService_ListTenantClusterAccess_Handler(srv interface{}, ctx contex
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ClusterServiceServer).ListTenantClusterAccess(ctx, req.(*ListTenantClusterAccessRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClusterService_GetTenantEntitlement_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTenantEntitlementRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).GetTenantEntitlement(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_GetTenantEntitlement_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).GetTenantEntitlement(ctx, req.(*GetTenantEntitlementRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2239,6 +2283,10 @@ var ClusterService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListTenantClusterAccess",
 			Handler:    _ClusterService_ListTenantClusterAccess_Handler,
+		},
+		{
+			MethodName: "GetTenantEntitlement",
+			Handler:    _ClusterService_GetTenantEntitlement_Handler,
 		},
 		{
 			MethodName: "UnsubscribeFromCluster",
@@ -3468,13 +3516,14 @@ var MeshService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	ServiceRegistryService_ListServices_FullMethodName               = "/quartermaster.ServiceRegistryService/ListServices"
-	ServiceRegistryService_ListClusterServices_FullMethodName        = "/quartermaster.ServiceRegistryService/ListClusterServices"
-	ServiceRegistryService_ListServiceInstances_FullMethodName       = "/quartermaster.ServiceRegistryService/ListServiceInstances"
-	ServiceRegistryService_ListServiceInstancesByType_FullMethodName = "/quartermaster.ServiceRegistryService/ListServiceInstancesByType"
-	ServiceRegistryService_ListServicesHealth_FullMethodName         = "/quartermaster.ServiceRegistryService/ListServicesHealth"
-	ServiceRegistryService_GetServiceHealth_FullMethodName           = "/quartermaster.ServiceRegistryService/GetServiceHealth"
-	ServiceRegistryService_EnqueueServiceEvent_FullMethodName        = "/quartermaster.ServiceRegistryService/EnqueueServiceEvent"
+	ServiceRegistryService_ListServices_FullMethodName                  = "/quartermaster.ServiceRegistryService/ListServices"
+	ServiceRegistryService_ListClusterServices_FullMethodName           = "/quartermaster.ServiceRegistryService/ListClusterServices"
+	ServiceRegistryService_ListServiceInstances_FullMethodName          = "/quartermaster.ServiceRegistryService/ListServiceInstances"
+	ServiceRegistryService_ListServiceInstancesByType_FullMethodName    = "/quartermaster.ServiceRegistryService/ListServiceInstancesByType"
+	ServiceRegistryService_ListServiceClusterAssignments_FullMethodName = "/quartermaster.ServiceRegistryService/ListServiceClusterAssignments"
+	ServiceRegistryService_ListServicesHealth_FullMethodName            = "/quartermaster.ServiceRegistryService/ListServicesHealth"
+	ServiceRegistryService_GetServiceHealth_FullMethodName              = "/quartermaster.ServiceRegistryService/GetServiceHealth"
+	ServiceRegistryService_EnqueueServiceEvent_FullMethodName           = "/quartermaster.ServiceRegistryService/EnqueueServiceEvent"
 )
 
 // ServiceRegistryServiceClient is the client API for ServiceRegistryService service.
@@ -3493,6 +3542,14 @@ type ServiceRegistryServiceClient interface {
 	// group through service_cluster_assignments — it returns one row per
 	// running instance/node so Navigator can publish per-node infra DNS records.
 	ListServiceInstancesByType(ctx context.Context, in *ListServiceInstancesByTypeRequest, opts ...grpc.CallOption) (*ListServiceInstancesByTypeResponse, error)
+	// ListServiceClusterAssignments returns the distinct cluster IDs a specific
+	// service instance is actively assigned to serve, filtered to running
+	// instances of the given service_type. Service-token only. Owns the
+	// service_cluster_assignments join on Quartermaster's side so pool members
+	// (Foghorn) can load their served-cluster set without reading
+	// quartermaster.* directly. Unlike DiscoverServices this is keyed on
+	// instance_id and enforces status='running'.
+	ListServiceClusterAssignments(ctx context.Context, in *ListServiceClusterAssignmentsRequest, opts ...grpc.CallOption) (*ListServiceClusterAssignmentsResponse, error)
 	// Get health of all service instances
 	ListServicesHealth(ctx context.Context, in *ListServicesHealthRequest, opts ...grpc.CallOption) (*ListServicesHealthResponse, error)
 	// Get health of specific service instances
@@ -3554,6 +3611,16 @@ func (c *serviceRegistryServiceClient) ListServiceInstancesByType(ctx context.Co
 	return out, nil
 }
 
+func (c *serviceRegistryServiceClient) ListServiceClusterAssignments(ctx context.Context, in *ListServiceClusterAssignmentsRequest, opts ...grpc.CallOption) (*ListServiceClusterAssignmentsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListServiceClusterAssignmentsResponse)
+	err := c.cc.Invoke(ctx, ServiceRegistryService_ListServiceClusterAssignments_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *serviceRegistryServiceClient) ListServicesHealth(ctx context.Context, in *ListServicesHealthRequest, opts ...grpc.CallOption) (*ListServicesHealthResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListServicesHealthResponse)
@@ -3600,6 +3667,14 @@ type ServiceRegistryServiceServer interface {
 	// group through service_cluster_assignments — it returns one row per
 	// running instance/node so Navigator can publish per-node infra DNS records.
 	ListServiceInstancesByType(context.Context, *ListServiceInstancesByTypeRequest) (*ListServiceInstancesByTypeResponse, error)
+	// ListServiceClusterAssignments returns the distinct cluster IDs a specific
+	// service instance is actively assigned to serve, filtered to running
+	// instances of the given service_type. Service-token only. Owns the
+	// service_cluster_assignments join on Quartermaster's side so pool members
+	// (Foghorn) can load their served-cluster set without reading
+	// quartermaster.* directly. Unlike DiscoverServices this is keyed on
+	// instance_id and enforces status='running'.
+	ListServiceClusterAssignments(context.Context, *ListServiceClusterAssignmentsRequest) (*ListServiceClusterAssignmentsResponse, error)
 	// Get health of all service instances
 	ListServicesHealth(context.Context, *ListServicesHealthRequest) (*ListServicesHealthResponse, error)
 	// Get health of specific service instances
@@ -3632,6 +3707,9 @@ func (UnimplementedServiceRegistryServiceServer) ListServiceInstances(context.Co
 }
 func (UnimplementedServiceRegistryServiceServer) ListServiceInstancesByType(context.Context, *ListServiceInstancesByTypeRequest) (*ListServiceInstancesByTypeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListServiceInstancesByType not implemented")
+}
+func (UnimplementedServiceRegistryServiceServer) ListServiceClusterAssignments(context.Context, *ListServiceClusterAssignmentsRequest) (*ListServiceClusterAssignmentsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListServiceClusterAssignments not implemented")
 }
 func (UnimplementedServiceRegistryServiceServer) ListServicesHealth(context.Context, *ListServicesHealthRequest) (*ListServicesHealthResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListServicesHealth not implemented")
@@ -3736,6 +3814,24 @@ func _ServiceRegistryService_ListServiceInstancesByType_Handler(srv interface{},
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ServiceRegistryService_ListServiceClusterAssignments_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListServiceClusterAssignmentsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ServiceRegistryServiceServer).ListServiceClusterAssignments(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ServiceRegistryService_ListServiceClusterAssignments_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ServiceRegistryServiceServer).ListServiceClusterAssignments(ctx, req.(*ListServiceClusterAssignmentsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ServiceRegistryService_ListServicesHealth_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListServicesHealthRequest)
 	if err := dec(in); err != nil {
@@ -3812,6 +3908,10 @@ var ServiceRegistryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListServiceInstancesByType",
 			Handler:    _ServiceRegistryService_ListServiceInstancesByType_Handler,
+		},
+		{
+			MethodName: "ListServiceClusterAssignments",
+			Handler:    _ServiceRegistryService_ListServiceClusterAssignments_Handler,
 		},
 		{
 			MethodName: "ListServicesHealth",

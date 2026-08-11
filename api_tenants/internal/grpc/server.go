@@ -4552,6 +4552,105 @@ func (s *QuartermasterServer) ListTenantClusterAccess(ctx context.Context, req *
 	return out, nil
 }
 
+// GetTenantEntitlement returns the cluster IDs a tenant is entitled to serve on
+// (active + subscribed) and the coarse plan class (the primary cluster's
+// cluster_class). Service-token only. This owns the entitlement predicates on
+// Quartermaster's side so Commodore can mint signed policy bundles without
+// reading quartermaster.* directly. Cluster lookup is fail-closed; the plan
+// class is fail-open (a lookup error yields an empty class, bundle still issued).
+func (s *QuartermasterServer) GetTenantEntitlement(ctx context.Context, req *quartermasterpb.GetTenantEntitlementRequest) (*quartermasterpb.GetTenantEntitlementResponse, error) {
+	if ctxkeys.GetAuthType(ctx) != "service" {
+		return nil, status.Error(codes.PermissionDenied, "GetTenantEntitlement requires service token auth")
+	}
+	tenantID := req.GetTenantId()
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT cluster_id
+		FROM quartermaster.tenant_cluster_access
+		WHERE tenant_id = $1::uuid
+		  AND is_active = TRUE
+		  AND subscription_status = 'active'
+		ORDER BY cluster_id
+	`, tenantID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "tenant cluster access lookup: %v", err)
+	}
+	defer rows.Close()
+	out := &quartermasterpb.GetTenantEntitlementResponse{}
+	for rows.Next() {
+		var clusterID string
+		if scanErr := rows.Scan(&clusterID); scanErr != nil {
+			return nil, status.Errorf(codes.Internal, "tenant cluster access scan: %v", scanErr)
+		}
+		out.AllowedClusterIds = append(out.AllowedClusterIds, clusterID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "tenant cluster access rows: %v", err)
+	}
+
+	var planClass sql.NullString
+	if scanErr := s.db.QueryRowContext(ctx, `
+		SELECT c.cluster_class
+		FROM quartermaster.tenants t
+		LEFT JOIN quartermaster.infrastructure_clusters c ON c.cluster_id = t.primary_cluster_id
+		WHERE t.id = $1::uuid
+	`, tenantID).Scan(&planClass); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+		s.logger.WithError(scanErr).WithField("tenant_id", tenantID).
+			Warn("plan class lookup failed; entitlement returned without plan_class")
+	}
+	out.PlanClass = planClass.String
+	return out, nil
+}
+
+// ListServiceClusterAssignments returns the distinct cluster IDs a specific
+// running service instance is actively assigned to serve. Service-token only.
+// This owns the service_cluster_assignments join on Quartermaster's side so
+// pool members (Foghorn) can load their served-cluster set without reading
+// quartermaster.* directly.
+func (s *QuartermasterServer) ListServiceClusterAssignments(ctx context.Context, req *quartermasterpb.ListServiceClusterAssignmentsRequest) (*quartermasterpb.ListServiceClusterAssignmentsResponse, error) {
+	if ctxkeys.GetAuthType(ctx) != "service" {
+		return nil, status.Error(codes.PermissionDenied, "ListServiceClusterAssignments requires service token auth")
+	}
+	instanceID := req.GetInstanceId()
+	if instanceID == "" {
+		return nil, status.Error(codes.InvalidArgument, "instance_id required")
+	}
+	serviceType := req.GetServiceType()
+	if serviceType == "" {
+		return nil, status.Error(codes.InvalidArgument, "service_type required")
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT sca.cluster_id
+		FROM quartermaster.service_cluster_assignments sca
+		JOIN quartermaster.service_instances si ON si.id = sca.service_instance_id
+		JOIN quartermaster.services svc ON svc.service_id = si.service_id
+		WHERE si.instance_id = $1
+		  AND svc.type = $2
+		  AND si.status = 'running'
+		  AND sca.is_active = true
+	`, instanceID, serviceType)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list service cluster assignments: %v", err)
+	}
+	defer rows.Close()
+	out := &quartermasterpb.ListServiceClusterAssignmentsResponse{}
+	for rows.Next() {
+		var clusterID string
+		if scanErr := rows.Scan(&clusterID); scanErr != nil {
+			return nil, status.Errorf(codes.Internal, "scan service cluster assignment: %v", scanErr)
+		}
+		out.ClusterIds = append(out.ClusterIds, clusterID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "iterate service cluster assignments: %v", err)
+	}
+	return out, nil
+}
+
 // SubscribeToCluster subscribes a tenant to a public/shared cluster
 func (s *QuartermasterServer) SubscribeToCluster(ctx context.Context, req *quartermasterpb.SubscribeToClusterRequest) (*emptypb.Empty, error) {
 	tenantID := middleware.GetTenantID(ctx)

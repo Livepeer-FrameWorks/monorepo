@@ -126,11 +126,15 @@ type CommodoreServer struct {
 	commodorepb.UnimplementedNodeManagementServiceServer
 	commodorepb.UnimplementedPushTargetServiceServer
 	commodorepb.UnimplementedPlaybackAccessControlServiceServer
-	db                   *sql.DB
-	dbMaxIdleConns       int
-	logger               logging.Logger
-	foghornPool          *foghornclient.FoghornPool
-	quartermasterClient  *qmclient.GRPCClient
+	db                  *sql.DB
+	dbMaxIdleConns      int
+	logger              logging.Logger
+	foghornPool         *foghornclient.FoghornPool
+	quartermasterClient *qmclient.GRPCClient
+	// qmEntitlements is the narrow Quartermaster surface used by the signed-
+	// policy-bundle path (tenant entitlement lookups). Nil when no
+	// Quartermaster client is configured.
+	qmEntitlements       tenantEntitlementAPI
 	navigatorClient      *navigator.Client
 	purserClient         *purserclient.GRPCClient
 	listmonkClient       *listmonk.Client
@@ -601,7 +605,7 @@ func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
 		cfg.Logger.WithError(err).Fatal("Failed to derive pull source URI field encryption key")
 	}
 
-	return &CommodoreServer{
+	srv := &CommodoreServer{
 		db:                       cfg.DB,
 		dbMaxIdleConns:           cfg.DBMaxIdleConns,
 		logger:                   cfg.Logger,
@@ -624,6 +628,13 @@ func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
 		routeCacheTTL:            5 * time.Minute,
 		foghornCandidateNext:     make(map[string]int),
 	}
+	// Assign conditionally so the interface field stays an untyped nil when no
+	// client is configured (a nil *qmclient.GRPCClient stored in the interface
+	// would defeat the nil-guard in lookupTenantClusterEntitlement).
+	if cfg.QuartermasterClient != nil {
+		srv.qmEntitlements = cfg.QuartermasterClient
+	}
+	return srv
 }
 
 func (s *CommodoreServer) resolveClusterRouteForTenant(ctx context.Context, tenantID string) (*clusterRoute, error) {

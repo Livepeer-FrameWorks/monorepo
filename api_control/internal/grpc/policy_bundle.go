@@ -11,12 +11,20 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/golang-jwt/jwt/v5"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// tenantEntitlementAPI is the narrow Quartermaster surface the signed-policy-
+// bundle path depends on. The concrete *qmclient.GRPCClient satisfies it.
+type tenantEntitlementAPI interface {
+	GetTenantEntitlement(ctx context.Context, tenantID string) (*quartermasterpb.GetTenantEntitlementResponse, error)
+}
 
 const (
 	// policyBundleSoftTTL is how long Foghorn may serve a cached bundle
@@ -54,6 +62,14 @@ type signedBundleClaims struct {
 // bundle_version in the bundle_min_version column. Foghorn's cache watermark
 // bumps to that value on receipt, invalidating prior bundles.
 func (s *CommodoreServer) GetSignedPolicyBundle(ctx context.Context, req *commodorepb.GetSignedPolicyBundleRequest) (*commodorepb.GetSignedPolicyBundleResponse, error) {
+	// Service-token only. The bundle is a Foghorn-facing artifact minted for the
+	// admission path; no user session should reach it. Defense-in-depth — it also
+	// keeps the downstream service-only Quartermaster entitlement RPC reachable
+	// with Commodore's own service token rather than a forwarded user JWT.
+	if ctxkeys.GetAuthType(ctx) != "service" {
+		return nil, status.Error(codes.PermissionDenied, "service token required")
+	}
+
 	tenantID := strings.TrimSpace(req.GetTenantId())
 	streamID := strings.TrimSpace(req.GetStreamId())
 	if tenantID == "" {
@@ -181,45 +197,18 @@ func (s *CommodoreServer) lookupPolicyForStream(ctx context.Context, tenantID, s
 }
 
 // lookupTenantClusterEntitlement returns the cluster IDs this tenant is
-// entitled to use and the coarse plan class. Plan class is sourced from the
-// tenant row's primary_cluster_id's cluster_class for the v1 bundle; a
-// follow-up wires Purser plan tier directly.
+// entitled to use and the coarse plan class, sourced from Quartermaster (the
+// schema owner) via GetTenantEntitlement. Fails closed: a missing client or an
+// RPC error prevents the bundle from being issued.
 func (s *CommodoreServer) lookupTenantClusterEntitlement(ctx context.Context, tenantID string) ([]string, string, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT cluster_id
-		FROM quartermaster.tenant_cluster_access
-		WHERE tenant_id = $1::uuid
-		  AND is_active = TRUE
-		  AND subscription_status = 'active'
-		ORDER BY cluster_id
-	`, tenantID)
+	if s.qmEntitlements == nil {
+		return nil, "", status.Error(codes.Unavailable, "quartermaster not available for tenant entitlement")
+	}
+	resp, err := s.qmEntitlements.GetTenantEntitlement(ctx, tenantID)
 	if err != nil {
-		return nil, "", status.Errorf(codes.Internal, "tenant cluster access lookup: %v", err)
+		return nil, "", status.Errorf(codes.Internal, "tenant entitlement lookup: %v", err)
 	}
-	defer rows.Close()
-	var allowed []string
-	for rows.Next() {
-		var c string
-		if scanErr := rows.Scan(&c); scanErr != nil {
-			return nil, "", status.Errorf(codes.Internal, "tenant cluster access scan: %v", scanErr)
-		}
-		allowed = append(allowed, c)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, "", status.Errorf(codes.Internal, "tenant cluster access rows: %v", err)
-	}
-
-	var planClass sql.NullString
-	if scanErr := s.db.QueryRowContext(ctx, `
-		SELECT c.cluster_class
-		FROM quartermaster.tenants t
-		LEFT JOIN quartermaster.infrastructure_clusters c ON c.cluster_id = t.primary_cluster_id
-		WHERE t.id = $1::uuid
-	`, tenantID).Scan(&planClass); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
-		s.logger.WithError(scanErr).WithField("tenant_id", tenantID).
-			Warn("plan class lookup failed; bundle issued without plan_class")
-	}
-	return allowed, planClass.String, nil
+	return resp.GetAllowedClusterIds(), resp.GetPlanClass(), nil
 }
 
 func (s *CommodoreServer) nextPolicyBundleVersion(ctx context.Context, tenantID, streamID string) (int64, error) {

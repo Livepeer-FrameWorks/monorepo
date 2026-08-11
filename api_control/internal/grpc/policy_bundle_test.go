@@ -5,14 +5,34 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/golang-jwt/jwt/v5"
 	"google.golang.org/grpc/codes"
 )
+
+// svcCtx returns a context authenticated as a service token, as GetSignedPolicyBundle requires.
+func svcCtx() context.Context {
+	return context.WithValue(context.Background(), ctxkeys.KeyAuthType, "service")
+}
+
+// stubEntitlements is a fake tenantEntitlementAPI for the signed-bundle tests.
+type stubEntitlements struct {
+	resp *quartermasterpb.GetTenantEntitlementResponse
+	err  error
+}
+
+func (s stubEntitlements) GetTenantEntitlement(context.Context, string) (*quartermasterpb.GetTenantEntitlementResponse, error) {
+	return s.resp, s.err
+}
 
 // policyBundleSigningSecret is a trust-boundary resolver: an explicit env
 // secret must win verbatim, the SERVICE_TOKEN fallback must be a *derived*
@@ -128,14 +148,40 @@ func TestGetSignedPolicyBundle(t *testing.T) {
 		streamID = "33333333-3333-3333-3333-333333333333"
 	)
 
+	t.Run("requires_service_auth", func(t *testing.T) {
+		s, _, done := newMockServer(t)
+		defer done()
+		t.Setenv("POLICY_BUNDLE_SIGNING_SECRET", "k")
+		_, err := s.GetSignedPolicyBundle(context.Background(), &commodorepb.GetSignedPolicyBundleRequest{
+			TenantId: tenantID, StreamId: streamID,
+		})
+		wantCode(t, err, codes.PermissionDenied)
+	})
+
 	t.Run("requires_ids", func(t *testing.T) {
 		s, _, done := newMockServer(t)
 		defer done()
 		t.Setenv("POLICY_BUNDLE_SIGNING_SECRET", "k")
-		_, err := s.GetSignedPolicyBundle(context.Background(), &commodorepb.GetSignedPolicyBundleRequest{StreamId: streamID})
+		_, err := s.GetSignedPolicyBundle(svcCtx(), &commodorepb.GetSignedPolicyBundleRequest{StreamId: streamID})
 		wantCode(t, err, codes.InvalidArgument)
-		_, err = s.GetSignedPolicyBundle(context.Background(), &commodorepb.GetSignedPolicyBundleRequest{TenantId: tenantID})
+		_, err = s.GetSignedPolicyBundle(svcCtx(), &commodorepb.GetSignedPolicyBundleRequest{TenantId: tenantID})
 		wantCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("entitlement_rpc_error_fails_closed", func(t *testing.T) {
+		t.Setenv("POLICY_BUNDLE_SIGNING_SECRET", "k")
+		s, mock, done := newMockServer(t)
+		defer done()
+		s.qmEntitlements = stubEntitlements{err: errors.New("qm down")}
+		// per-stream policy + ownership resolves before the entitlement lookup
+		mock.ExpectQuery("FROM commodore.streams").
+			WithArgs(streamID).
+			WillReturnRows(sqlmock.NewRows([]string{"policy", "internal_name", "tenant_id"}).
+				AddRow(`{"require_auth":true}`, "live+abc", tenantID))
+		_, err := s.GetSignedPolicyBundle(svcCtx(), &commodorepb.GetSignedPolicyBundleRequest{
+			TenantId: tenantID, StreamId: streamID,
+		})
+		wantCode(t, err, codes.Internal)
 	})
 
 	t.Run("mints_verifiable_jwt", func(t *testing.T) {
@@ -143,30 +189,26 @@ func TestGetSignedPolicyBundle(t *testing.T) {
 		t.Setenv("POLICY_BUNDLE_SIGNING_SECRET", secret)
 		s, mock, done := newMockServer(t)
 		defer done()
+		s.qmEntitlements = stubEntitlements{resp: &quartermasterpb.GetTenantEntitlementResponse{
+			AllowedClusterIds: []string{"cluster-a", "cluster-b"},
+			PlanClass:         "premium",
+		}}
 
 		// 1. per-stream policy + ownership
 		mock.ExpectQuery("FROM commodore.streams").
 			WithArgs(streamID).
 			WillReturnRows(sqlmock.NewRows([]string{"policy", "internal_name", "tenant_id"}).
 				AddRow(`{"require_auth":true}`, "live+abc", tenantID))
-		// 2. entitled clusters
-		mock.ExpectQuery("tenant_cluster_access").
-			WithArgs(tenantID).
-			WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).AddRow("cluster-a").AddRow("cluster-b"))
-		// 3. plan class
-		mock.ExpectQuery("cluster_class").
-			WithArgs(tenantID).
-			WillReturnRows(sqlmock.NewRows([]string{"cluster_class"}).AddRow("premium"))
-		// 4. next monotonic version
+		// 2. next monotonic version (entitlement now comes from the QM RPC stub)
 		mock.ExpectQuery("MAX").
 			WithArgs(tenantID, streamID).
 			WillReturnRows(sqlmock.NewRows([]string{"next"}).AddRow(int64(5)))
-		// 5. persist
+		// 3. persist
 		mock.ExpectExec("INSERT INTO commodore.policy_bundle_versions").
 			WithArgs(tenantID, streamID, int64(5), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 
-		resp, err := s.GetSignedPolicyBundle(context.Background(), &commodorepb.GetSignedPolicyBundleRequest{
+		resp, err := s.GetSignedPolicyBundle(svcCtx(), &commodorepb.GetSignedPolicyBundleRequest{
 			TenantId: tenantID, StreamId: streamID,
 		})
 		if err != nil {
@@ -202,6 +244,54 @@ func TestGetSignedPolicyBundle(t *testing.T) {
 		}
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Errorf("unmet: %v", err)
+		}
+	})
+
+	t.Run("empty_plan_class_omits_claim_but_issues_bundle", func(t *testing.T) {
+		const secret = "k"
+		t.Setenv("POLICY_BUNDLE_SIGNING_SECRET", secret)
+		s, mock, done := newMockServer(t)
+		defer done()
+		s.qmEntitlements = stubEntitlements{resp: &quartermasterpb.GetTenantEntitlementResponse{
+			AllowedClusterIds: []string{"cluster-a"},
+			PlanClass:         "",
+		}}
+		mock.ExpectQuery("FROM commodore.streams").
+			WithArgs(streamID).
+			WillReturnRows(sqlmock.NewRows([]string{"policy", "internal_name", "tenant_id"}).
+				AddRow("", "live+abc", tenantID))
+		mock.ExpectQuery("MAX").
+			WithArgs(tenantID, streamID).
+			WillReturnRows(sqlmock.NewRows([]string{"next"}).AddRow(int64(1)))
+		mock.ExpectExec("INSERT INTO commodore.policy_bundle_versions").
+			WithArgs(tenantID, streamID, int64(1), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+
+		resp, err := s.GetSignedPolicyBundle(svcCtx(), &commodorepb.GetSignedPolicyBundleRequest{
+			TenantId: tenantID, StreamId: streamID,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.GetBundle() == nil {
+			t.Fatalf("expected a bundle to be issued despite empty plan_class")
+		}
+		// Prove the tenant_plan_class claim is actually omitted (omitempty) from
+		// the signed JWT payload, not merely decoded as an empty string.
+		parts := strings.Split(resp.GetBundle().GetBundleJwt(), ".")
+		if len(parts) != 3 {
+			t.Fatalf("malformed JWT: %d segments", len(parts))
+		}
+		payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+		if err != nil {
+			t.Fatalf("decode JWT payload: %v", err)
+		}
+		var rawClaims map[string]any
+		if err := json.Unmarshal(payload, &rawClaims); err != nil {
+			t.Fatalf("unmarshal JWT payload: %v", err)
+		}
+		if _, present := rawClaims["tenant_plan_class"]; present {
+			t.Fatalf("expected tenant_plan_class to be omitted from the bundle, but it is present: %v", rawClaims["tenant_plan_class"])
 		}
 	})
 }

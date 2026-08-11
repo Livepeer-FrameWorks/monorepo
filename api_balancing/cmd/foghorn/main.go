@@ -1443,7 +1443,7 @@ func main() {
 	defer certRefreshCancel()
 	go control.StartCertRefreshLoop(certRefreshCtx, 1*time.Hour, logger)
 
-	// Refresh served cluster assignments from DB every 5 minutes.
+	// Refresh served cluster assignments from Quartermaster every 5 minutes.
 	clusterRefreshCtx, clusterRefreshCancel := context.WithCancel(context.Background())
 	defer clusterRefreshCancel()
 	go control.StartServedClustersRefresh(clusterRefreshCtx, 5*time.Minute, logger)

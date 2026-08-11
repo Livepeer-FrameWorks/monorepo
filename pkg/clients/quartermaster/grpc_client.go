@@ -241,6 +241,15 @@ func (c *GRPCClient) ListTenantClusterAccess(ctx context.Context, tenantID strin
 	})
 }
 
+// GetTenantEntitlement returns the tenant's active+subscribed cluster IDs and
+// coarse plan class. Service-token only; owns the entitlement predicates so
+// Commodore can mint signed policy bundles without reading quartermaster.*.
+func (c *GRPCClient) GetTenantEntitlement(ctx context.Context, tenantID string) (*quartermasterpb.GetTenantEntitlementResponse, error) {
+	return c.cluster.GetTenantEntitlement(ctx, &quartermasterpb.GetTenantEntitlementRequest{
+		TenantId: tenantID,
+	})
+}
+
 // ListTenants lists tenants with cursor pagination
 func (c *GRPCClient) ListTenants(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListTenantsResponse, error) {
 	return c.tenant.ListTenants(ctx, &quartermasterpb.ListTenantsRequest{
@@ -826,6 +835,17 @@ func (c *GRPCClient) ListServiceInstancesByType(ctx context.Context, serviceType
 		ServiceType:           serviceType,
 		ClusterId:             clusterID,
 		StaleThresholdSeconds: staleThresholdSeconds,
+	})
+}
+
+// ListServiceClusterAssignments returns the distinct cluster IDs a running
+// instance of service_type is actively assigned to serve. Service-token only;
+// owns the service_cluster_assignments join so pool members (Foghorn) can load
+// their served-cluster set without reading quartermaster.*.
+func (c *GRPCClient) ListServiceClusterAssignments(ctx context.Context, instanceID, serviceType string) (*quartermasterpb.ListServiceClusterAssignmentsResponse, error) {
+	return c.serviceRegistry.ListServiceClusterAssignments(ctx, &quartermasterpb.ListServiceClusterAssignmentsRequest{
+		InstanceId:  instanceID,
+		ServiceType: serviceType,
 	})
 }
 

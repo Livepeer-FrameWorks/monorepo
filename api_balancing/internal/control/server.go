@@ -525,6 +525,20 @@ func IsPlatformSharedCluster(id string) bool {
 }
 
 var quartermasterClient *qmclient.GRPCClient
+
+// servedClustersAPI is the narrow Quartermaster surface LoadServedClusters
+// needs. The concrete *qmclient.GRPCClient satisfies it; tests supply a stub.
+type servedClustersAPI interface {
+	ListServiceClusterAssignments(ctx context.Context, instanceID, serviceType string) (*quartermasterpb.ListServiceClusterAssignmentsResponse, error)
+}
+
+// servedClustersClient is a synchronized holder for the Quartermaster client
+// used by the periodic served-clusters refresh. The refresh goroutine and the
+// reconnect goroutine (which re-sets the client) run concurrently, so this path
+// reads/writes the client through an atomic pointer rather than the plain
+// quartermasterClient global.
+var servedClustersClient atomic.Pointer[qmclient.GRPCClient]
+
 var navigatorClient *navclient.Client
 var serverCert serverCertHolder
 var errStreamNotCurrent = errors.New("helmsman control stream is not current for node")
@@ -1187,39 +1201,45 @@ func IsServedCluster(id string) bool {
 	return isServedCluster(id)
 }
 
-// LoadServedClusters bulk-loads all active cluster assignments from the DB
-// and atomically swaps the served set. localClusterID is always preserved.
+// LoadServedClusters bulk-loads this instance's active cluster assignments from
+// Quartermaster (the schema owner) and atomically swaps the served set. The
+// client is read from the synchronized holder so this never races the reconnect
+// goroutine. Fail-quiet: a nil client leaves the previous snapshot in place.
 func LoadServedClusters() {
-	if db == nil {
-		return
+	if c := servedClustersClient.Load(); c != nil {
+		loadServedClustersFrom(c)
 	}
+}
+
+// loadServedClustersFrom performs the RPC fetch + snapshot swap against the
+// given client. Fail-quiet: a missing instance ID, RPC error, or nil response
+// leaves the previous snapshot in place. Takes the client as an argument so it
+// is unit-testable with a stub.
+func loadServedClustersFrom(client servedClustersAPI) {
 	instanceID := strings.TrimSpace(os.Getenv("FOGHORN_INSTANCE_ID"))
 	if instanceID == "" {
 		return
 	}
 
-	rows, err := db.QueryContext(context.Background(), `
-		SELECT sca.cluster_id
-		FROM quartermaster.service_cluster_assignments sca
-		JOIN quartermaster.service_instances si ON si.id = sca.service_instance_id
-		JOIN quartermaster.services svc ON svc.service_id = si.service_id
-		WHERE si.instance_id = $1
-		  AND svc.type = 'foghorn'
-		  AND si.status = 'running'
-		  AND sca.is_active = true
-	`, instanceID)
-	if err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := client.ListServiceClusterAssignments(ctx, instanceID, "foghorn")
+	if err != nil || resp == nil {
 		return
 	}
-	defer rows.Close()
+	applyServedClustersRefresh(resp.GetClusterIds())
+}
 
+// applyServedClustersRefresh atomically replaces the served set from the given
+// cluster IDs. localClusterID is always preserved. Split out so the
+// filter/replace logic is unit-testable without a live Quartermaster.
+func applyServedClustersRefresh(clusterIDs []string) {
 	fresh := &sync.Map{}
 	if localClusterID != "" {
 		fresh.Store(localClusterID, true)
 	}
-	for rows.Next() {
-		var clusterID string
-		if rows.Scan(&clusterID) == nil && clusterID != "" {
+	for _, clusterID := range clusterIDs {
+		if clusterID != "" {
 			fresh.Store(clusterID, true)
 		}
 	}
@@ -1239,7 +1259,7 @@ func ServedClustersSnapshot() []string {
 	return ids
 }
 
-// StartServedClustersRefresh periodically reloads cluster assignments from the DB.
+// StartServedClustersRefresh periodically reloads cluster assignments from Quartermaster.
 func StartServedClustersRefresh(ctx context.Context, interval time.Duration, log logging.Logger) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -1250,7 +1270,7 @@ func StartServedClustersRefresh(ctx context.Context, interval time.Duration, log
 		case <-ticker.C:
 			LoadServedClusters()
 			LoadPlatformSharedClusters()
-			log.WithField("clusters", ServedClustersSnapshot()).Debug("Refreshed served + platform-shared clusters from DB")
+			log.WithField("clusters", ServedClustersSnapshot()).Debug("Refreshed served + platform-shared clusters from Quartermaster")
 		}
 	}
 }
@@ -1268,6 +1288,7 @@ var resolveNodeFingerprintFn func(ctx context.Context, req *quartermasterpb.Reso
 
 func SetQuartermasterClient(c *qmclient.GRPCClient) {
 	quartermasterClient = c
+	servedClustersClient.Store(c)
 	if c != nil {
 		resolveNodeFingerprintFn = c.ResolveNodeFingerprint
 	} else {
