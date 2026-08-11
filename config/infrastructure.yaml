@@ -33,10 +33,10 @@ infrastructure:
     digest: sha256:9516fb7634bad307d17c33b589fde9023003b0cb761374f500002b980a3149b9
     artifacts:
       - arch: linux-amd64
-        url: https://downloads.apache.org/kafka/4.2.0/kafka_2.13-4.2.0.tgz
+        url: https://archive.apache.org/dist/kafka/4.2.0/kafka_2.13-4.2.0.tgz
         checksum: sha512:16ce46e590ba915f01b720ea514445e49c88bf129cf4ceab88878b122d54ef24f0dedb88d0eb178957f58057a6c6a9adbea8b8059307585daea13129b85ba1d8
       - arch: linux-arm64
-        url: https://downloads.apache.org/kafka/4.2.0/kafka_2.13-4.2.0.tgz
+        url: https://archive.apache.org/dist/kafka/4.2.0/kafka_2.13-4.2.0.tgz
         checksum: sha512:16ce46e590ba915f01b720ea514445e49c88bf129cf4ceab88878b122d54ef24f0dedb88d0eb178957f58057a6c6a9adbea8b8059307585daea13129b85ba1d8
 
   - name: clickhouse
