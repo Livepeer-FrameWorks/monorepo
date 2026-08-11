@@ -28,6 +28,7 @@ import (
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type fakeMeshClient struct {
@@ -65,6 +66,7 @@ type fakeCertificateClient struct {
 	issueErr                 error
 	issueErrByServiceType    map[string]error
 	issueRejectByServiceType map[string]string
+	issueRejectByToken       map[string]string
 	issueRequests            []*dnspb.IssueInternalCertRequest
 	caRequestCount           int
 	tlsBundles               map[string]*dnspb.GetTLSBundleResponse
@@ -90,6 +92,9 @@ func (f *fakeCertificateClient) IssueInternalCert(_ context.Context, req *dnspb.
 	}
 	if err, ok := f.issueErrByServiceType[req.GetServiceType()]; ok {
 		return nil, err
+	}
+	if msg, ok := f.issueRejectByToken[req.GetIssueToken()]; ok {
+		return &dnspb.IssueInternalCertResponse{Success: false, Error: msg}, nil
 	}
 	if msg, ok := f.issueRejectByServiceType[req.GetServiceType()]; ok {
 		return &dnspb.IssueInternalCertResponse{Success: false, Error: msg}, nil
@@ -996,6 +1001,197 @@ func TestSyncInternalCertificatesMintsTokenWhenMissing(t *testing.T) {
 	}
 	if len(navigator.issueRequests) != 1 || navigator.issueRequests[0].GetIssueToken() != "bt_cert_sync" {
 		t.Fatalf("expected issued cert to use minted token, got %+v", navigator.issueRequests)
+	}
+}
+
+func TestSyncInternalCertificatesRotatesExpiringMintedToken(t *testing.T) {
+	dir := t.TempDir()
+	navigator := &fakeCertificateClient{
+		caResponse: &dnspb.GetCABundleResponse{Found: true, CaPem: "ca-pem"},
+		issueResponse: &dnspb.IssueInternalCertResponse{
+			Success: true,
+			CertPem: "cert-pem",
+			KeyPem:  "key-pem",
+		},
+	}
+	newExpiry := time.Now().Add(certIssueTokenTTL)
+	mesh := &fakeMeshClient{
+		createTokenResponses: []meshCreateTokenResult{{
+			resp: &quartermasterpb.CreateBootstrapTokenResponse{
+				Token: &quartermasterpb.BootstrapToken{
+					Token:     "fresh-token",
+					ExpiresAt: timestamppb.New(newExpiry),
+				},
+			},
+		}},
+	}
+	agent := &Agent{
+		logger:                  logging.NewLogger(),
+		client:                  mesh,
+		nodeID:                  "node-1",
+		clusterID:               "cluster-a",
+		navigatorClient:         navigator,
+		certIssueToken:          "expiring-token",
+		certIssueTokenExpiresAt: time.Now().Add(certIssueTokenRenewWindow - time.Hour),
+		pkiBasePath:             dir,
+		syncTimeout:             time.Second,
+		certSyncInterval:        5 * time.Minute,
+		expectedServices:        []string{"commodore"},
+	}
+
+	if err := agent.syncInternalCertificates(); err != nil {
+		t.Fatalf("syncInternalCertificates returned error: %v", err)
+	}
+	if len(mesh.createTokenRequests) != 1 {
+		t.Fatalf("expected proactive token refresh, got %d create requests", len(mesh.createTokenRequests))
+	}
+	if len(navigator.issueRequests) != 1 || navigator.issueRequests[0].GetIssueToken() != "fresh-token" {
+		t.Fatalf("certificate issuance did not use refreshed token: %+v", navigator.issueRequests)
+	}
+	if got := agent.certIssueTokenExpiresAt; !got.Equal(newExpiry) {
+		t.Fatalf("cached token expiry = %v, want %v", got, newExpiry)
+	}
+}
+
+func TestSyncInternalCertificatesKeepsValidTokenWhenProactiveRefreshFails(t *testing.T) {
+	dir := t.TempDir()
+	navigator := &fakeCertificateClient{
+		caResponse: &dnspb.GetCABundleResponse{Found: true, CaPem: "ca-pem"},
+		issueResponse: &dnspb.IssueInternalCertResponse{
+			Success: true,
+			CertPem: "cert-pem",
+			KeyPem:  "key-pem",
+		},
+	}
+	mesh := &fakeMeshClient{
+		createTokenResponses: []meshCreateTokenResult{{
+			err: status.Error(codes.Unavailable, "quartermaster unavailable"),
+		}},
+	}
+	agent := &Agent{
+		logger:                  logging.NewLogger(),
+		client:                  mesh,
+		nodeID:                  "node-1",
+		clusterID:               "cluster-a",
+		navigatorClient:         navigator,
+		certIssueToken:          "still-valid-token",
+		certIssueTokenExpiresAt: time.Now().Add(certIssueTokenRenewWindow - time.Hour),
+		pkiBasePath:             dir,
+		syncTimeout:             time.Second,
+		certSyncInterval:        5 * time.Minute,
+		expectedServices:        []string{"commodore"},
+	}
+
+	if err := agent.syncInternalCertificates(); err != nil {
+		t.Fatalf("syncInternalCertificates returned error: %v", err)
+	}
+	if len(mesh.createTokenRequests) != 1 {
+		t.Fatalf("expected proactive token refresh attempt, got %d requests", len(mesh.createTokenRequests))
+	}
+	if len(navigator.issueRequests) != 1 || navigator.issueRequests[0].GetIssueToken() != "still-valid-token" {
+		t.Fatalf("certificate issuance did not fall back to the valid token: %+v", navigator.issueRequests)
+	}
+}
+
+func TestSyncInternalCertificatesReplacesRejectedTokenAndRetries(t *testing.T) {
+	dir := t.TempDir()
+	navigator := &fakeCertificateClient{
+		caResponse: &dnspb.GetCABundleResponse{Found: true, CaPem: "ca-pem"},
+		issueResponse: &dnspb.IssueInternalCertResponse{
+			Success: true,
+			CertPem: "cert-pem",
+			KeyPem:  "key-pem",
+		},
+		issueRejectByToken: map[string]string{
+			"expired-token": "issue token rejected: expired",
+		},
+	}
+	mesh := &fakeMeshClient{
+		createTokenResponses: []meshCreateTokenResult{{
+			resp: &quartermasterpb.CreateBootstrapTokenResponse{
+				Token: &quartermasterpb.BootstrapToken{
+					Token:     "replacement-token",
+					ExpiresAt: timestamppb.New(time.Now().Add(certIssueTokenTTL)),
+				},
+			},
+		}},
+	}
+	agent := &Agent{
+		logger:           logging.NewLogger(),
+		client:           mesh,
+		nodeID:           "node-1",
+		clusterID:        "cluster-a",
+		navigatorClient:  navigator,
+		certIssueToken:   "expired-token",
+		pkiBasePath:      dir,
+		syncTimeout:      time.Second,
+		certSyncInterval: 5 * time.Minute,
+		expectedServices: []string{"commodore"},
+	}
+
+	if err := agent.syncInternalCertificates(); err != nil {
+		t.Fatalf("syncInternalCertificates returned error: %v", err)
+	}
+	if len(mesh.createTokenRequests) != 1 {
+		t.Fatalf("expected one replacement token mint, got %d", len(mesh.createTokenRequests))
+	}
+	if len(navigator.issueRequests) != 2 {
+		t.Fatalf("expected rejection plus retry, got %d requests", len(navigator.issueRequests))
+	}
+	if got := navigator.issueRequests[0].GetIssueToken(); got != "expired-token" {
+		t.Fatalf("first issue token = %q, want expired-token", got)
+	}
+	if got := navigator.issueRequests[1].GetIssueToken(); got != "replacement-token" {
+		t.Fatalf("retry issue token = %q, want replacement-token", got)
+	}
+	if agent.lastCertSyncUnix.Load() == 0 {
+		t.Fatal("successful retry should advance the cert sync timestamp")
+	}
+}
+
+func TestInternalPKIHealthFailsClosedAfterRepeatedSyncFailures(t *testing.T) {
+	agent := &Agent{
+		navigatorClient:  &fakeCertificateClient{},
+		expectedServices: []string{"commodore"},
+	}
+	for i := 0; i < certSyncFailureThreshold-1; i++ {
+		agent.recordCertSyncResult(errors.New("renewal failed"))
+	}
+	if !agent.IsInternalPKIHealthy() {
+		t.Fatal("PKI health should tolerate a short transient failure streak")
+	}
+	agent.recordCertSyncResult(errors.New("renewal failed"))
+	if agent.IsInternalPKIHealthy() {
+		t.Fatal("PKI health should fail after repeated renewal failures")
+	}
+	agent.recordCertSyncResult(nil)
+	if !agent.IsInternalPKIHealthy() {
+		t.Fatal("successful renewal should restore PKI health")
+	}
+}
+
+func TestRefreshableIssueTokenRejection(t *testing.T) {
+	t.Parallel()
+
+	for _, message := range []string{
+		"issue token rejected: expired",
+		"issue token kind \"service\" is not allowed for internal certificate issuance",
+		"issue token purpose \"mesh_sync\" is not allowed",
+		"issue token is not valid for node \"node-1\"",
+		"issue token is missing cluster binding",
+	} {
+		if !isRefreshableIssueTokenRejection(message) {
+			t.Errorf("expected refreshable rejection for %q", message)
+		}
+	}
+	for _, message := range []string{
+		"service type is not allowed on node",
+		"internal CA unavailable",
+		"",
+	} {
+		if isRefreshableIssueTokenRejection(message) {
+			t.Errorf("unexpected refreshable rejection for %q", message)
+		}
 	}
 }
 

@@ -40,6 +40,12 @@ import (
 
 var servicePKIReaderGroup = "frameworks"
 
+const (
+	certIssueTokenTTL         = 720 * time.Hour
+	certIssueTokenRenewWindow = 7 * 24 * time.Hour
+	certSyncFailureThreshold  = 3
+)
+
 // Metrics holds Prometheus metrics for the agent. Wireguard resync events
 // are not tracked separately because every resync is a mesh apply, already
 // covered by MeshApplyDuration / MeshApplyFailures with finer-grained
@@ -48,6 +54,12 @@ type Metrics struct {
 	SyncOperations *prometheus.CounterVec
 	PeersConnected *prometheus.GaugeVec
 	DNSQueries     *prometheus.CounterVec
+	// CertSyncOperations records completed internal-PKI sync attempts. A
+	// skipped tick inside certSyncInterval is not an attempt.
+	CertSyncOperations *prometheus.CounterVec
+	// CertIssueTokenRefreshes records successful issuance-token minting by
+	// reason: missing, expiring, or rejected.
+	CertIssueTokenRefreshes *prometheus.CounterVec
 	// LayerApplied reports which layer's config is currently on wg0:
 	// labels: layer="managed" (fresh from Quartermaster)
 	//       | "last_known" (disk cache from prior managed sync)
@@ -137,19 +149,24 @@ type Agent struct {
 	registryClient   serviceRegistryClient
 	ingressClient    ingressClient
 	navigatorClient  certificateClient
+	certIssueTokenMu sync.Mutex
 	certIssueToken   string
-	pkiBasePath      string
-	ingressTLSRoot   string
-	ingressTrigger   string
-	expectedServices []string
-	certSyncInterval time.Duration
-	lastCertSyncUnix atomic.Int64
-	certDenyLogMu    sync.Mutex
-	certDenyLogTimes map[string]int64
-	lastIngressSync  atomic.Int64
-	ingressMu        sync.Mutex
-	ingressVersions  map[string]string
-	cachedIngressIDs []string
+	// certIssueTokenExpiresAt is zero for operator-provided legacy tokens,
+	// whose expiry is unknown until Navigator rejects them.
+	certIssueTokenExpiresAt time.Time
+	pkiBasePath             string
+	ingressTLSRoot          string
+	ingressTrigger          string
+	expectedServices        []string
+	certSyncInterval        time.Duration
+	lastCertSyncUnix        atomic.Int64
+	certSyncFailures        atomic.Int32
+	certDenyLogMu           sync.Mutex
+	certDenyLogTimes        map[string]int64
+	lastIngressSync         atomic.Int64
+	ingressMu               sync.Mutex
+	ingressVersions         map[string]string
+	cachedIngressIDs        []string
 	// Tenant-alias cert materialization (Foghorn hosts only). aliasVersions
 	// is keyed by alias subdomain and shares ingressMu with the ingress state.
 	aliasClient     aliasedTenantsClient
@@ -413,6 +430,16 @@ func (a *Agent) IsHealthy() bool {
 		return false
 	}
 	return true
+}
+
+// IsInternalPKIHealthy reports whether certificate distribution is keeping up.
+// A separate health check keeps mesh substrate health distinguishable from PKI
+// health while still making repeated rotation failures visible to operators.
+func (a *Agent) IsInternalPKIHealthy() bool {
+	if a.navigatorClient == nil || (len(a.expectedServices) == 0 && a.registryClient == nil) {
+		return true
+	}
+	return a.certSyncFailures.Load() < certSyncFailureThreshold
 }
 
 func (a *Agent) Stop() {
@@ -980,9 +1007,25 @@ func (a *Agent) registerNode(ctx context.Context, publicKey string) error {
 }
 
 func (a *Agent) ensureCertIssueToken(ctx context.Context) error {
+	a.certIssueTokenMu.Lock()
+	defer a.certIssueTokenMu.Unlock()
+
+	now := time.Now()
 	if strings.TrimSpace(a.certIssueToken) != "" {
-		return nil
+		// Operator-provided tokens predate expiry tracking. Keep accepting them
+		// until Navigator rejects one, at which point the caller replaces it.
+		if a.certIssueTokenExpiresAt.IsZero() {
+			return nil
+		}
+		if a.certIssueTokenExpiresAt.Sub(now) > certIssueTokenRenewWindow {
+			return nil
+		}
+		return a.mintCertIssueTokenLocked(ctx, "expiring", now)
 	}
+	return a.mintCertIssueTokenLocked(ctx, "missing", now)
+}
+
+func (a *Agent) mintCertIssueTokenLocked(ctx context.Context, reason string, now time.Time) error {
 	if a.client == nil {
 		return fmt.Errorf("quartermaster client unavailable for cert token minting")
 	}
@@ -1000,20 +1043,62 @@ func (a *Agent) ensureCertIssueToken(ctx context.Context) error {
 		Name:      fmt.Sprintf("Internal Cert Sync Token for %s", a.nodeID),
 		Kind:      "infrastructure_node",
 		ClusterId: &a.clusterID,
-		Ttl:       "720h",
+		Ttl:       certIssueTokenTTL.String(),
 		Metadata:  metadata,
 	})
 	if err != nil {
+		// A proactive refresh failure must not discard a token that is still
+		// usable. The next sync will try to refresh it again.
+		if strings.TrimSpace(a.certIssueToken) != "" &&
+			(a.certIssueTokenExpiresAt.IsZero() || now.Before(a.certIssueTokenExpiresAt)) {
+			if a.logger != nil {
+				a.logger.WithError(err).Warn("Failed to refresh cert issuance token; using current token")
+			}
+			return nil
+		}
 		return fmt.Errorf("create cert sync token: %w", err)
 	}
-	a.certIssueToken = resp.GetToken().GetToken()
-	if strings.TrimSpace(a.certIssueToken) == "" {
+	token := resp.GetToken()
+	value := strings.TrimSpace(token.GetToken())
+	if value == "" {
 		return fmt.Errorf("quartermaster returned an empty cert sync token")
+	}
+	expiresAt := now.Add(certIssueTokenTTL)
+	if token.GetExpiresAt() != nil && token.GetExpiresAt().IsValid() {
+		expiresAt = token.GetExpiresAt().AsTime()
+	}
+	a.certIssueToken = value
+	a.certIssueTokenExpiresAt = expiresAt
+	if a.metrics != nil && a.metrics.CertIssueTokenRefreshes != nil {
+		a.metrics.CertIssueTokenRefreshes.WithLabelValues(reason).Inc()
+	}
+	if a.logger != nil {
+		a.logger.WithFields(logging.Fields{
+			"reason":     reason,
+			"expires_at": expiresAt.UTC().Format(time.RFC3339),
+		}).Info("Refreshed internal certificate issuance token")
 	}
 	return nil
 }
 
-func (a *Agent) syncInternalCertificates() error {
+func (a *Agent) certIssueTokenValue() string {
+	a.certIssueTokenMu.Lock()
+	defer a.certIssueTokenMu.Unlock()
+	return a.certIssueToken
+}
+
+func (a *Agent) replaceRejectedCertIssueToken(ctx context.Context, rejected string) error {
+	a.certIssueTokenMu.Lock()
+	defer a.certIssueTokenMu.Unlock()
+	if current := strings.TrimSpace(a.certIssueToken); current != "" && current != rejected {
+		return nil
+	}
+	a.certIssueToken = ""
+	a.certIssueTokenExpiresAt = time.Time{}
+	return a.mintCertIssueTokenLocked(ctx, "rejected", time.Now())
+}
+
+func (a *Agent) syncInternalCertificates() (syncErr error) {
 	if a.navigatorClient == nil {
 		return nil
 	}
@@ -1023,9 +1108,16 @@ func (a *Agent) syncInternalCertificates() error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), a.syncTimeout)
 	defer cancel()
+	attempted := false
+	defer func() {
+		if attempted {
+			a.recordCertSyncResult(syncErr)
+		}
+	}()
 
 	serviceTypes, registeredServiceTypes, registryAvailable, err := a.resolvedServiceTypes(ctx)
 	if err != nil {
+		attempted = true
 		return err
 	}
 
@@ -1034,6 +1126,7 @@ func (a *Agent) syncInternalCertificates() error {
 	if last > 0 && time.Duration(now-last)*time.Second < a.certSyncInterval && !a.missingInternalPKIMaterials(serviceTypes, registeredServiceTypes) {
 		return nil
 	}
+	attempted = true
 	if issueTokenErr := a.ensureCertIssueToken(ctx); issueTokenErr != nil {
 		return issueTokenErr
 	}
@@ -1057,11 +1150,7 @@ func (a *Agent) syncInternalCertificates() error {
 	for _, serviceType := range serviceTypes {
 		_, isRegistered := registeredServiceTypes[serviceType]
 		issueFailureIsFatal := isRegistered || !registryAvailable
-		resp, issueErr := a.navigatorClient.IssueInternalCert(ctx, &dnspb.IssueInternalCertRequest{
-			NodeId:      a.nodeID,
-			ServiceType: serviceType,
-			IssueToken:  a.certIssueToken,
-		})
+		resp, issueErr := a.issueInternalCertificate(ctx, serviceType)
 		if issueErr != nil {
 			err := fmt.Errorf("issue %s: %w", serviceType, issueErr)
 			a.recordCertIssueFailure(serviceType, now, err)
@@ -1092,6 +1181,55 @@ func (a *Agent) syncInternalCertificates() error {
 	}
 	a.lastCertSyncUnix.Store(now)
 	return nil
+}
+
+func (a *Agent) issueInternalCertificate(ctx context.Context, serviceType string) (*dnspb.IssueInternalCertResponse, error) {
+	issue := func(token string) (*dnspb.IssueInternalCertResponse, error) {
+		return a.navigatorClient.IssueInternalCert(ctx, &dnspb.IssueInternalCertRequest{
+			NodeId:      a.nodeID,
+			ServiceType: serviceType,
+			IssueToken:  token,
+		})
+	}
+
+	rejectedToken := a.certIssueTokenValue()
+	resp, err := issue(rejectedToken)
+	if err != nil || resp.GetSuccess() || !isRefreshableIssueTokenRejection(resp.GetError()) {
+		return resp, err
+	}
+	if err := a.replaceRejectedCertIssueToken(ctx, rejectedToken); err != nil {
+		return nil, fmt.Errorf("refresh rejected cert issuance token: %w", err)
+	}
+	return issue(a.certIssueTokenValue())
+}
+
+func isRefreshableIssueTokenRejection(message string) bool {
+	message = strings.ToLower(strings.TrimSpace(message))
+	for _, marker := range []string{
+		"issue token rejected:",
+		"issue token kind ",
+		"issue token purpose ",
+		"issue token is not valid",
+		"issue token is missing",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *Agent) recordCertSyncResult(err error) {
+	status := "success"
+	if err != nil {
+		status = "failed"
+		a.certSyncFailures.Add(1)
+	} else {
+		a.certSyncFailures.Store(0)
+	}
+	if a.metrics != nil && a.metrics.CertSyncOperations != nil {
+		a.metrics.CertSyncOperations.WithLabelValues(status).Inc()
+	}
 }
 
 // certDenyLogCooldown is the minimum interval between two log lines for the

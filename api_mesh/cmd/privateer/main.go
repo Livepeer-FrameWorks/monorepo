@@ -159,6 +159,16 @@ func main() {
 		SyncOperations: metricsCollector.NewCounter("sync_operations_total", "Mesh sync operations", []string{"status"}),
 		PeersConnected: metricsCollector.NewGauge("peers_connected", "Number of connected WireGuard peers", []string{}),
 		DNSQueries:     metricsCollector.NewCounter("dns_queries_total", "DNS queries processed", []string{"type", "status"}),
+		CertSyncOperations: metricsCollector.NewCounter(
+			"internal_cert_sync_operations_total",
+			"Completed internal certificate sync operations",
+			[]string{"status"},
+		),
+		CertIssueTokenRefreshes: metricsCollector.NewCounter(
+			"internal_cert_issue_token_refreshes_total",
+			"Successful internal certificate issuance token refreshes",
+			[]string{"reason"},
+		),
 		// wireguard_resyncs_total dropped: every WG resync is a mesh apply,
 		// which is already covered by mesh_apply_duration_seconds and
 		// mesh_apply_failures_total with finer-grained {layer,reason} labels.
@@ -214,6 +224,12 @@ func main() {
 			return monitoring.CheckResult{Status: "healthy", Message: "agent running"}
 		}
 		return monitoring.CheckResult{Status: "unhealthy", Message: "agent not healthy"}
+	})
+	healthChecker.AddCheck("internal_pki", func() monitoring.CheckResult {
+		if a.IsInternalPKIHealthy() {
+			return monitoring.CheckResult{Status: "healthy", Message: "internal certificate sync healthy"}
+		}
+		return monitoring.CheckResult{Status: "unhealthy", Message: "internal certificate sync repeatedly failing"}
 	})
 
 	// Start Agent in background
