@@ -9,6 +9,16 @@ type Service struct {
 	HealthProtocol string // http|grpc
 	Role           string // control|data|analytics|media|mesh|interface|infra|support|observability
 
+	// ReadyPath is the DEPLOYMENT-READINESS endpoint: what the rollout gate,
+	// doctor probe, and Quartermaster registration advertise. It answers "can
+	// this instance actually serve?" — distinct from HealthPath (process
+	// liveness, e.g. the container HEALTHCHECK). Empty means readiness is
+	// indistinguishable from liveness and ReadinessPath() falls back to
+	// HealthPath. Chandler sets it to /ready because /health is up before its
+	// immutable S3 backend is proven reachable — gating rollout on /health
+	// would deploy an instance that returns 503 for every asset.
+	ReadyPath string
+
 	// SupportsSIGHUPReload is set on services whose main package has
 	// registered a ReloadCallback via pkg/server.RegisterReload. When
 	// true, the go_service Ansible role renders ExecReload= in the
@@ -46,7 +56,7 @@ var Services = map[string]Service{
 	"privateer": {ID: "privateer", DefaultPort: 18012, HealthPath: "/health", HealthProtocol: "http", Role: "mesh"},
 
 	// Assets
-	"chandler": {ID: "chandler", DefaultPort: 18020, HealthPath: "/health", HealthProtocol: "http", Role: "media", SupportsSIGHUPReload: true},
+	"chandler": {ID: "chandler", DefaultPort: 18020, HealthPath: "/health", ReadyPath: "/ready", HealthProtocol: "http", Role: "media", SupportsSIGHUPReload: true},
 
 	// AI / support
 	"skipper":  {ID: "skipper", DefaultPort: 18018, HealthPath: "/health", HealthProtocol: "http", Role: "support", SupportsSIGHUPReload: true},
@@ -78,6 +88,35 @@ var Services = map[string]Service{
 func Lookup(id string) (Service, bool) {
 	s, ok := Services[id]
 	return s, ok
+}
+
+// provisionOnly lists deploy names that are PINNED EXTERNAL images / OS-managed components — provisioned via
+// `cluster provision`, NOT FrameWorks-built artifacts that `cluster release apply` / `cluster upgrade` version and
+// upgrade. Release/upgrade classification skips these; anything NOT listed is treated as an expected FrameWorks
+// artifact and fails closed if its release image is missing. Keep in sync when adding an external component.
+var provisionOnly = map[string]bool{
+	"nginx": true, "caddy": true,
+	"postgres": true, "kafka": true, "kafka-controller": true, "kafka-mirrormaker": true, "clickhouse": true, "redis": true,
+	"victoriametrics": true, "vmagent": true, "vmauth": true, "grafana": true, "metabase": true, "prometheus": true,
+	"listmonk": true, "chatwoot": true, "mistserver": true,
+	"livepeer-gateway": true, "livepeer-signer": true,
+}
+
+// IsProvisionOnly reports whether a deploy name is a pinned external/OS-managed component provisioned (not
+// release-upgraded). Callers exclude these from the upgrade loop; everything else must resolve to a release artifact.
+func IsProvisionOnly(deployName string) bool {
+	return provisionOnly[deployName]
+}
+
+// ReadinessPath is the endpoint that gates deployment and is advertised for
+// serving: ReadyPath when set, otherwise HealthPath. Rollout gate, doctor
+// probe, and Quartermaster registration use this; the container liveness
+// HEALTHCHECK stays on HealthPath.
+func (s Service) ReadinessPath() string {
+	if s.ReadyPath != "" {
+		return s.ReadyPath
+	}
+	return s.HealthPath
 }
 
 // DeployName resolves the deploy slug for a canonical ID with an optional override.

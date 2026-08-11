@@ -108,3 +108,18 @@ func TestListmonkRequiresAdminCredsFromGitOps(t *testing.T) {
 		}
 	}
 }
+
+// IsProvisionOnly distinguishes pinned external/OS-managed components (provisioned, not release-upgraded) from
+// FrameWorks-built services. Release/upgrade classification skips the former and keeps the latter.
+func TestIsProvisionOnly(t *testing.T) {
+	for _, ext := range []string{"nginx", "caddy", "victoriametrics", "vmagent", "grafana", "postgres", "kafka", "clickhouse", "mistserver", "livepeer-gateway"} {
+		if !IsProvisionOnly(ext) {
+			t.Errorf("%s is a pinned external component and must be provision-only", ext)
+		}
+	}
+	for _, fw := range []string{"foghorn", "chandler", "commodore", "quartermaster", "chartroom", "foredeck", "logbook"} {
+		if IsProvisionOnly(fw) {
+			t.Errorf("%s is a FrameWorks-built artifact and must NOT be provision-only (else release apply would silently skip it)", fw)
+		}
+	}
+}
