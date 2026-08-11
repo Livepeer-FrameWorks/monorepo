@@ -2,46 +2,33 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
-	"os"
 	"path"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	smithy "github.com/aws/smithy-go"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"frameworks/api_assets/internal/cache"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mediakeys"
 )
 
 const (
 	defaultAssetCacheMaxAge = 30 * time.Second
 	liveSpriteCacheMaxAge   = 30 * time.Second
-	// thumbnailVersionTTL bounds how long a resolved active-version is trusted before a re-pull confirms it, so
-	// a missed push self-heals. Publishes push a fresh version and reset this; live streams (frequent publishes)
-	// stay warm and never re-pull.
-	thumbnailVersionTTL = 60 * time.Second
-	// defaultFoghornResolveURL is the in-cell Foghorn address (Privateer mesh DNS, cluster-scoped) Chandler uses
-	// to resolve asset_key -> active version on a cold miss. Overridable via FOGHORN_INTERNAL_URL.
-	defaultFoghornResolveURL = "http://foghorn.internal:18008"
 )
-
-// versionEntry caches a resolved active version. version=="" means "resolved: no version" → legacy fallback.
-type versionEntry struct {
-	version    string
-	resolvedAt time.Time
-}
 
 type assetPolicy struct {
 	contentType  string
@@ -82,11 +69,14 @@ type S3Getter interface {
 	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
 }
 
+// AssetHandler is a dumb static-object server over ONE immutable S3 backend: a request path maps DETERMINISTICALLY to
+// an object key, which it streams and caches. It performs no version resolution, no Foghorn call, and knows nothing
+// about tenants, catalogs, or publication — see docs/architecture/thumbnails.md.
 type AssetHandler struct {
 	s3           S3Getter
 	bucket       string
 	prefix       string
-	serviceToken string
+	serviceToken string // gates the internal cache-invalidation endpoint only
 	cache        *cache.LRU
 	logger       logging.Logger
 
@@ -94,15 +84,9 @@ type AssetHandler struct {
 	cacheMisses prometheus.Counter
 	s3Errors    prometheus.Counter
 
-	// In-cell thumbnail version resolution: asset_key -> active version, updated by the push (invalidate) fast
-	// path and confirmed by a cold-miss pull to the cell's Foghorn (foghornResolveURL).
-	versionsMu        sync.RWMutex
-	activeVersions    map[string]versionEntry
-	foghornResolveURL string
-	httpClient        *http.Client
-	// resolveVersionFn overrides the HTTP cold-miss pull (test seam). Returns (version, resolved, gone); nil in
-	// production, where pullActiveVersion performs the real in-cell Foghorn call.
-	resolveVersionFn func(ctx context.Context, assetKey string) (string, bool, bool)
+	// storeReachableFn overrides the /ready store probe (test seam); nil in production, where probeStoreReachable
+	// performs the real bounded GetObject against the immutable backend.
+	storeReachableFn func(ctx context.Context) bool
 }
 
 func NewAssetHandler(cfg S3Config, lru *cache.LRU, logger logging.Logger, cacheHits, cacheMisses, s3Errors prometheus.Counter) (*AssetHandler, error) {
@@ -130,123 +114,96 @@ func NewAssetHandler(cfg S3Config, lru *cache.LRU, logger logging.Logger, cacheH
 
 	client := s3.NewFromConfig(awsCfg, s3Opts...)
 
-	resolveURL := strings.TrimRight(strings.TrimSpace(os.Getenv("FOGHORN_INTERNAL_URL")), "/")
-	if resolveURL == "" {
-		resolveURL = defaultFoghornResolveURL
-	}
-	// The in-cell version resolver is REQUIRED: without a SERVICE_TOKEN, Chandler cannot ask Foghorn which
-	// version an asset serves, so every cold read FAILS CLOSED (503) rather than guessing the legacy key. This is
-	// Chandler's HALF of a Chandler-before-Foghorn rollout — it makes a misconfigured or old Chandler surface
-	// 503s instead of serving stale legacy bytes, but it does NOT stop a newer Foghorn from publishing versioned
-	// objects while an old Chandler is still deployed; that ordering is an OPERATOR obligation (see the operator
-	// upgrade guide's Chandler/Foghorn ordering). Warn loudly so the misconfiguration is visible at boot.
+	// SERVICE_TOKEN gates only the internal cache-invalidation endpoint; without it that route is unregistered and
+	// Chandler self-heals published/deleted objects via the object cache TTL. Serving does not need the token.
 	if strings.TrimSpace(cfg.ServiceToken) == "" {
-		logger.Warn("Chandler started WITHOUT SERVICE_TOKEN: the thumbnail version resolver is unusable, so versioned thumbnail reads will fail closed (503). Set SERVICE_TOKEN and FOGHORN_INTERNAL_URL for a version-capable deployment.")
+		logger.Warn("Chandler started WITHOUT SERVICE_TOKEN: the internal cache-invalidation endpoint is disabled; published/deleted objects self-heal via the cache TTL instead of an immediate push.")
 	}
 
 	return &AssetHandler{
-		s3:                client,
-		bucket:            cfg.Bucket,
-		prefix:            cfg.Prefix,
-		serviceToken:      cfg.ServiceToken,
-		cache:             lru,
-		logger:            logger,
-		cacheHits:         cacheHits,
-		cacheMisses:       cacheMisses,
-		s3Errors:          s3Errors,
-		activeVersions:    map[string]versionEntry{},
-		foghornResolveURL: resolveURL,
-		httpClient:        &http.Client{Timeout: 2 * time.Second},
+		s3:           client,
+		bucket:       cfg.Bucket,
+		prefix:       cfg.Prefix,
+		serviceToken: cfg.ServiceToken,
+		cache:        lru,
+		logger:       logger,
+		cacheHits:    cacheHits,
+		cacheMisses:  cacheMisses,
+		s3Errors:     s3Errors,
 	}, nil
 }
 
-// resolveActiveVersion returns (version, resolved). resolved=false means the active version is UNKNOWN right now
-// (the in-cell Foghorn is unreachable AND nothing is cached) — the caller must FAIL CLOSED rather than guess the
-// legacy un-versioned key, which could serve stale/wrong bytes for an asset that actually has a published
-// version. When resolved=true, an empty version means the asset genuinely has no published version yet (serve
-// the legacy object; migration/never-published fallback). A stale cached mapping is still "resolved" (a
-// last-known version beats a guess).
-func (h *AssetHandler) resolveActiveVersion(ctx context.Context, assetKey string) (version string, resolved bool, gone bool) {
-	h.versionsMu.RLock()
-	entry, ok := h.activeVersions[assetKey]
-	h.versionsMu.RUnlock()
-	if ok && time.Since(entry.resolvedAt) < thumbnailVersionTTL {
-		return entry.version, true, false
-	}
-
-	pull := h.pullActiveVersion
-	if h.resolveVersionFn != nil {
-		pull = h.resolveVersionFn
-	}
-	pulled, ok2, isGone := pull(ctx, assetKey)
-	if isGone {
-		// The parent artifact is terminal — the asset is GONE. EVICT any cached mapping (so a since-published
-		// version isn't served from the map after deletion) and tell the caller to 404 rather than serve legacy.
-		h.versionsMu.Lock()
-		delete(h.activeVersions, assetKey)
-		h.versionsMu.Unlock()
-		return "", true, true
-	}
-	if !ok2 {
-		// Prefer the last-known (even stale) mapping over a guess.
-		if ok {
-			return entry.version, true, false
-		}
-		// The version is UNKNOWN — the resolver is unusable (unconfigured: missing SERVICE_TOKEN / URL) or
-		// unreachable. FAIL CLOSED: a missing resolver is NOT positive proof that the asset has no version, and
-		// serving the legacy key here would hand back a stale object (or 404) for an asset Foghorn published a
-		// versioned object for. Only an AUTHORITATIVE resolver response (below) may select the legacy key. The
-		// resolver is required by contract; Chandler warns loudly at startup if it isn't configured.
-		return "", false, false
-	}
-	h.versionsMu.Lock()
-	h.activeVersions[assetKey] = versionEntry{version: pulled, resolvedAt: time.Now()}
-	h.versionsMu.Unlock()
-	return pulled, true, false
-}
-
-// pullActiveVersion asks the in-cell Foghorn (foghorn.internal) for the asset's serving decision. resolved=false
-// on any transport/auth failure so the caller keeps its last-known mapping instead of caching a bad answer.
-// gone=true means the parent artifact is terminal (the asset is GONE) — the caller must serve nothing.
-func (h *AssetHandler) pullActiveVersion(ctx context.Context, assetKey string) (version string, resolved bool, gone bool) {
-	if h.foghornResolveURL == "" || h.serviceToken == "" {
-		return "", false, false
-	}
-	reqURL := h.foghornResolveURL + "/internal/thumbnails/active-version?assetKey=" + url.QueryEscape(assetKey)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
-	if err != nil {
-		return "", false, false
-	}
-	req.Header.Set("Authorization", "Bearer "+h.serviceToken)
-	resp, err := h.httpClient.Do(req)
-	if err != nil {
-		h.logger.WithError(err).WithField("asset_key", assetKey).Debug("Cold-miss thumbnail version pull failed; keeping last-known")
-		return "", false, false
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", false, false
-	}
-	var body struct {
-		State         string `json:"state"`
-		ActiveVersion string `json:"activeVersion"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return "", false, false
-	}
-	if body.State == "gone" {
-		return "", true, true
-	}
-	return body.ActiveVersion, true, false
-}
-
 func (h *AssetHandler) RegisterRoutes(router *gin.Engine) {
+	// /assets/{assetKey}/{file} is Chandler's SOLE public contract: it maps DETERMINISTICALLY to the object key
+	// thumbnails/{assetKey}/{file} and serves it, with no version resolution and no Foghorn call. No other route
+	// (e.g. a namespaced /static/{ns}/…) is registered — Chandler serves only /assets. See
+	// docs/architecture/thumbnails.md.
 	router.OPTIONS("/assets/:assetKey/:file", h.handleAssetOptions)
 	router.GET("/assets/:assetKey/:file", h.handleGetAsset)
 	router.HEAD("/assets/:assetKey/:file", h.handleGetAsset)
+	// Readiness: proves ONLY that this instance can read its immutable backend (store probe). No resolver, no Foghorn.
+	router.GET("/ready", h.handleReady)
 	if h.serviceToken != "" {
 		router.POST("/internal/assets/cache/invalidate", auth.ServiceAuthMiddleware(h.serviceToken), h.handleInvalidateCache)
 	}
+}
+
+// handleReady reports whether this Chandler can read its immutable backend — the only thing a dumb static-object
+// server needs to prove. A reachable store is 200; anything else is 503. No resolver, no Foghorn, no publication
+// coupling (docs/architecture/thumbnails.md).
+func (h *AssetHandler) handleReady(c *gin.Context) {
+	if h.probeStoreReachable(c.Request.Context()) {
+		c.JSON(http.StatusOK, gin.H{"ready": true, "store": true})
+		return
+	}
+	c.JSON(http.StatusServiceUnavailable, gin.H{"ready": false, "store": false})
+}
+
+// probeStoreReachable does a bounded GetObject of the readiness sentinel (mediakeys.ReadinessSentinelKey, written by
+// Foghorn) and FULLY READS its body: readiness requires the whole tiny object to arrive, so a mid-body transport
+// failure — not just a successful response header — is caught. Any failure (sentinel absent, AccessDenied, wrong
+// bucket/endpoint, bad credentials, a truncated/failed body read, empty body) is NOT ready. The test seam
+// storeReachableFn overrides it.
+func (h *AssetHandler) probeStoreReachable(ctx context.Context) bool {
+	if h.storeReachableFn != nil {
+		return h.storeReachableFn(ctx)
+	}
+	if h.s3 == nil {
+		return false
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	out, err := h.s3.GetObject(probeCtx, &s3.GetObjectInput{
+		Bucket: aws.String(h.bucket),
+		Key:    aws.String(h.fullKey(mediakeys.ReadinessSentinelKey)),
+	})
+	if err != nil {
+		return false
+	}
+	defer out.Body.Close() //nolint:errcheck
+	// Read the whole (tiny) object, bounded, so a stream that fails mid-body cannot report ready. A non-empty read is
+	// the proof; the exact content is not asserted (Foghorn owns it).
+	data, rErr := io.ReadAll(io.LimitReader(out.Body, 256))
+	return rErr == nil && len(data) > 0
+}
+
+// isNotFoundS3Error reports whether err is the object-store's AUTHORITATIVE "no such object" (typed NoSuchKey/NotFound,
+// or an APIError whose code says so). Everything else — a timeout, credential failure, throttle, wrong endpoint, or
+// outage — is NOT proof of absence and must be treated as a backend failure, never a 404.
+func isNotFoundS3Error(err error) bool {
+	var noKey *s3types.NoSuchKey
+	var notFound *s3types.NotFound
+	if errors.As(err, &noKey) || errors.As(err, &notFound) {
+		return true
+	}
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "NoSuchKey", "NotFound", "404":
+			return true
+		}
+	}
+	return false
 }
 
 func (h *AssetHandler) handleAssetOptions(c *gin.Context) {
@@ -257,11 +214,10 @@ func (h *AssetHandler) handleAssetOptions(c *gin.Context) {
 type invalidateCacheRequest struct {
 	AssetKey string   `json:"assetKey"`
 	Files    []string `json:"files"`
-	// ActiveVersion, when present, is the newly-published version this asset now serves. Chandler updates its
-	// in-memory map from it (the push fast path) so subsequent GETs serve the new object without a cold-miss pull.
-	ActiveVersion string `json:"activeVersion,omitempty"`
 }
 
+// handleGetAsset serves /assets/{assetKey}/{file} — Chandler's public contract. It maps the path DETERMINISTICALLY to
+// the thumbnails key `thumbnails/{assetKey}/{file}` and serves it, with NO version resolution and NO Foghorn call.
 func (h *AssetHandler) handleGetAsset(c *gin.Context) {
 	setAssetCORSHeaders(c)
 	assetKey := c.Param("assetKey")
@@ -284,28 +240,12 @@ func (h *AssetHandler) handleGetAsset(c *gin.Context) {
 		return
 	}
 
-	// Resolve the active version and serve the immutable versioned object; fall back to the legacy un-versioned
-	// key ONLY when the asset genuinely has no published version (migration). The public URL is unchanged either
-	// way. If the version is UNRESOLVABLE (in-cell Foghorn unreachable and nothing cached), fail closed rather
-	// than serve a possibly-stale legacy object for what might be a versioned asset.
-	version, resolved, gone := h.resolveActiveVersion(c.Request.Context(), assetKey)
-	if gone {
-		// Parent artifact is terminal — the asset is GONE. Do NOT serve a surviving legacy object; 404.
-		c.Status(http.StatusNotFound)
-		return
-	}
-	if !resolved {
-		c.Status(http.StatusServiceUnavailable)
-		return
-	}
-	var s3Key string
-	if version != "" && !strings.Contains(version, "/") && !strings.Contains(version, "..") {
-		s3Key = h.fullKey(path.Join("thumbnails", assetKey, "v", version, file))
-	} else {
-		s3Key = h.fullKey(path.Join("thumbnails", assetKey, file))
-	}
+	h.serveObjectKey(c, h.fullKey(path.Join("thumbnails", assetKey, file)), policy)
+}
 
-	// Check cache
+// serveObjectKey serves one exact S3 object (cache-or-fetch) under the given policy. It performs NO version
+// resolution and NO Foghorn call — the caller supplies the resolved key. It is key-generic, not thumbnails-specific.
+func (h *AssetHandler) serveObjectKey(c *gin.Context, s3Key string, policy assetPolicy) {
 	if data, ct, hit := h.cache.GetFresh(s3Key, policy.cacheMaxAge); hit {
 		h.cacheHits.Inc()
 		c.Header("Cache-Control", policy.cacheControl)
@@ -314,15 +254,22 @@ func (h *AssetHandler) handleGetAsset(c *gin.Context) {
 	}
 	h.cacheMisses.Inc()
 
-	// Fetch from S3
 	out, err := h.s3.GetObject(c.Request.Context(), &s3.GetObjectInput{
 		Bucket: aws.String(h.bucket),
 		Key:    aws.String(s3Key),
 	})
 	if err != nil {
 		h.s3Errors.Inc()
-		h.logger.WithError(err).WithField("key", s3Key).Debug("S3 GetObject failed")
-		c.Status(http.StatusNotFound)
+		// Distinguish "object absent" (404) from "backend cannot serve" (503). A typed NoSuchKey/NotFound is the
+		// object genuinely not existing; a timeout, credential failure, throttle, or outage is NOT proof of absence
+		// and must not be cached-as-missing or reported as 404 (which a CDN would cache).
+		if isNotFoundS3Error(err) {
+			h.logger.WithError(err).WithField("key", s3Key).Debug("S3 object not found")
+			c.Status(http.StatusNotFound)
+		} else {
+			h.logger.WithError(err).WithField("key", s3Key).Warn("S3 backend failure serving object")
+			c.Status(http.StatusServiceUnavailable)
+		}
 		return
 	}
 	defer out.Body.Close()
@@ -330,8 +277,10 @@ func (h *AssetHandler) handleGetAsset(c *gin.Context) {
 	data, err := io.ReadAll(out.Body)
 	if err != nil {
 		h.s3Errors.Inc()
+		// A mid-stream body read failure is a backend/transport fault (the object exists — GetObject already
+		// succeeded), not a bug in this handler: report 503 like the GetObject failure above, never 500.
 		h.logger.WithError(err).WithField("key", s3Key).Warn("Failed to read S3 object body")
-		c.Status(http.StatusInternalServerError)
+		c.Status(http.StatusServiceUnavailable)
 		return
 	}
 
@@ -369,17 +318,6 @@ func (h *AssetHandler) handleInvalidateCache(c *gin.Context) {
 		}
 	}
 
-	// Push fast path: record the newly-published active version so subsequent GETs serve the new object without
-	// a cold-miss pull. Capture the prior version so its now-superseded cache entries can be freed.
-	newVersion := strings.TrimSpace(req.ActiveVersion)
-	var oldVersion string
-	if newVersion != "" && !strings.Contains(newVersion, "/") && !strings.Contains(newVersion, "..") {
-		h.versionsMu.Lock()
-		oldVersion = h.activeVersions[assetKey].version
-		h.activeVersions[assetKey] = versionEntry{version: newVersion, resolvedAt: time.Now()}
-		h.versionsMu.Unlock()
-	}
-
 	invalidated := 0
 	for _, file := range files {
 		file = strings.TrimSpace(file)
@@ -387,15 +325,9 @@ func (h *AssetHandler) handleInvalidateCache(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file"})
 			return
 		}
-		// Evict the legacy un-versioned entry and any superseded prior version. The new version's key is fresh
-		// (a natural cache miss), so it doesn't need eviction.
+		// Evict the deterministic key so the next request re-pulls the freshly-published (or deleted) object from S3.
 		if h.cache.Delete(h.fullKey(path.Join("thumbnails", assetKey, file))) {
 			invalidated++
-		}
-		if oldVersion != "" {
-			if h.cache.Delete(h.fullKey(path.Join("thumbnails", assetKey, "v", oldVersion, file))) {
-				invalidated++
-			}
 		}
 	}
 

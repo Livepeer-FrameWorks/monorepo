@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -14,6 +15,7 @@ import (
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
@@ -42,13 +44,11 @@ func main() {
 		ServiceToken: serviceToken,
 	}
 
-	if clusterID != "" {
-		if err := applyClusterS3FromQuartermaster(logger, qmAddr, serviceToken, clusterID, &s3Cfg); err != nil {
-			if !config.GetEnvBool("CHANDLER_ALLOW_ENV_S3_FALLBACK", false) {
-				logger.WithError(err).WithField("cluster_id", clusterID).Fatal("Cluster S3 lookup failed")
-			}
-			logger.WithError(err).WithField("cluster_id", clusterID).Warn("Using env S3 config after cluster S3 lookup failed")
-		}
+	adopt := func() error { return applyClusterS3FromQuartermaster(logger, qmAddr, serviceToken, clusterID, &s3Cfg) }
+	if err := resolveChandlerS3Serving(clusterID, config.GetEnvBool("CHANDLER_DEV_ALLOW_ENV_S3", false), adopt, &s3Cfg, logger); err != nil {
+		// Only a genuine authority-lookup failure returns an error; Chandler cannot obtain its authority, so fail closed.
+		// A restart re-attempts once Quartermaster is reachable.
+		logger.WithError(err).WithField("cluster_id", clusterID).Fatal("Cluster S3 lookup failed — cannot resolve the authoritative storage descriptor")
 	}
 	if s3Cfg.Bucket == "" {
 		logger.Warn("S3 bucket not configured (no cluster row, no env) — asset requests will return 503 until configured")
@@ -96,7 +96,15 @@ func main() {
 		}
 		defer func() { _ = qc.Close() }()
 
-		healthEndpoint := "/health"
+		// Advertise READINESS, not liveness: Quartermaster must consider this
+		// instance serviceable only when it can read its immutable backend. /health
+		// is up before the store is proven; /ready (servicedefs ReadyPath) is the
+		// store-backed probe. Keep the two distinct so a bad descriptor deregisters
+		// serving without flapping process liveness.
+		healthEndpoint := "/ready"
+		if def, ok := servicedefs.Lookup("chandler"); ok {
+			healthEndpoint = def.ReadinessPath()
+		}
 		httpPort, _ := strconv.Atoi(serverConfig.Port)
 		if httpPort <= 0 || httpPort > 65535 {
 			logger.Warn("Quartermaster bootstrap skipped: invalid port")
@@ -166,17 +174,70 @@ func applyClusterS3FromQuartermaster(logger logging.Logger, qmAddr, serviceToken
 		return fmt.Errorf("cluster row not found")
 	}
 	cluster := resp.GetCluster()
-	if v := cluster.GetS3Bucket(); v != "" {
-		s3Cfg.Bucket = v
+	if cluster.GetS3Bucket() == "" {
+		return errClusterNoS3Descriptor
 	}
-	if v := cluster.GetS3Endpoint(); v != "" {
-		s3Cfg.Endpoint = v
+	// INCOMPLETE-DESCRIPTOR FENCE (mirrors Foghorn's first-boot guard): a row with a bucket but an unadopted
+	// (NULL) s3_prefix is NOT a complete immutable descriptor — a COALESCE'd empty prefix is indistinguishable
+	// from a known-empty one, so adopting it could make Chandler address the bucket ROOT while Foghorn writes
+	// under a real, non-empty prefix. Fail closed (treat as no-descriptor → serve 503) until the prefix is
+	// adopted (`cluster storage adopt` / `cluster release apply`), so Chandler never serves the wrong keyspace
+	// during an incomplete/mixed Quartermaster rollout.
+	if !cluster.GetS3PrefixPresent() {
+		return errClusterNoS3Descriptor
 	}
-	if v := cluster.GetS3Region(); v != "" {
-		s3Cfg.Region = v
+	// Quartermaster owns the full immutable descriptor tuple. Adopt bucket,
+	// endpoint, and prefix VERBATIM — including legitimately empty endpoint/prefix
+	// — so Chandler addresses EXACTLY the keyspace Foghorn established against the
+	// same row; conditionally retaining env values for these would let the two
+	// diverge. Region applies the shared empty→us-east-1 default, matching
+	// Foghorn's effective descriptor. Credentials remain env-only secrets.
+	s3Cfg.Bucket = cluster.GetS3Bucket()
+	s3Cfg.Endpoint = cluster.GetS3Endpoint()
+	s3Cfg.Prefix = cluster.GetS3Prefix()
+	if r := cluster.GetS3Region(); r != "" {
+		s3Cfg.Region = r
+	} else {
+		s3Cfg.Region = "us-east-1"
 	}
-	if s3Cfg.Bucket == "" {
-		return fmt.Errorf("cluster row has no s3_bucket")
+	return nil
+}
+
+// errClusterNoS3Descriptor signals that the cluster row exists but declares no
+// S3 backend — S3 is not configured for this cell (distinct from a lookup
+// failure). The caller treats it as "disabled", not fatal.
+var errClusterNoS3Descriptor = errors.New("cluster row declares no s3 descriptor")
+
+// resolveChandlerS3Serving decides Chandler's final S3 serving descriptor and writes it into s3Cfg in place (S3
+// disabled = empty bucket). Chandler is intrinsically CELL-SCOPED, so:
+//   - With a CLUSTER_ID: adopt() fetches the authoritative Quartermaster descriptor. A "no descriptor" / unadopted
+//     prefix disables S3 (serve 503 until adopted); an authority-lookup failure returns an error (the caller fails
+//     closed / restarts). There is NO env fallback — serving an env backend the authority never validated is forbidden.
+//   - Without a CLUSTER_ID but with an env bucket: FAIL CLOSED (disable S3) — a production deploy always renders
+//     CLUSTER_ID, so this is a malformed/manual config and serving that unauthorized keyspace is refused. An explicit
+//     dev opt-in (allowEnvS3, from CHANDLER_DEV_ALLOW_ENV_S3) keeps a cluster-less local bring-up working.
+//
+// Extracted from main() so this authority/fail-closed decision is unit-testable without a live Quartermaster.
+func resolveChandlerS3Serving(clusterID string, allowEnvS3 bool, adopt func() error, s3Cfg *handlers.S3Config, logger logging.Logger) error {
+	if clusterID != "" {
+		switch err := adopt(); {
+		case err == nil:
+			// Adopted the authoritative descriptor from Quartermaster.
+		case errors.Is(err, errClusterNoS3Descriptor):
+			s3Cfg.Bucket, s3Cfg.Endpoint, s3Cfg.Prefix = "", "", ""
+			logger.WithField("cluster_id", clusterID).Info("Cluster row declares no S3 descriptor — S3 disabled for this cell (returns 503 until adopted)")
+		default:
+			return fmt.Errorf("cluster S3 lookup failed: %w", err)
+		}
+		return nil
+	}
+	if s3Cfg.Bucket != "" {
+		if allowEnvS3 {
+			logger.Warn("CHANDLER_DEV_ALLOW_ENV_S3 set: serving the env S3 descriptor WITHOUT a CLUSTER_ID (dev only; bypasses the Quartermaster authority)")
+			return nil
+		}
+		s3Cfg.Bucket, s3Cfg.Endpoint, s3Cfg.Prefix = "", "", ""
+		logger.Error("CLUSTER_ID is empty but an env S3 bucket is set — refusing to serve an unauthorized keyspace; S3 disabled (503). Set CLUSTER_ID, or CHANDLER_DEV_ALLOW_ENV_S3=true for a cluster-less dev bring-up.")
 	}
 	return nil
 }
