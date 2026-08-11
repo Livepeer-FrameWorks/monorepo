@@ -236,11 +236,27 @@ func (c *GRPCClient) ListStreamMonitoring(ctx context.Context, tenantID string) 
 // elected placement. Called by Foghorn's reconciler after a successful
 // ApplyManagedStream; routing for public playback/control consults the
 // same column.
-func (c *GRPCClient) RecordStreamActiveCluster(ctx context.Context, streamID, clusterID string) (*commodorepb.RecordStreamActiveClusterResponse, error) {
+func (c *GRPCClient) RecordStreamActiveCluster(ctx context.Context, streamID, tenantID, clusterID string) (*commodorepb.RecordStreamActiveClusterResponse, error) {
 	return c.internal.RecordStreamActiveCluster(ctx, &commodorepb.RecordStreamActiveClusterRequest{
 		StreamId:  streamID,
+		TenantId:  tenantID,
 		ClusterId: clusterID,
 	})
+}
+
+// RegisterStreamThumbnailServingCell durably records this cell as a thumbnail-serving cell for a live stream and
+// returns whether registration succeeded (false = the stream is deleted/absent, so the caller MUST NOT mint). This is
+// the fence Foghorn takes before minting a live-thumbnail upload URL.
+func (c *GRPCClient) RegisterStreamThumbnailServingCell(ctx context.Context, streamID, tenantID, clusterID string) (bool, error) {
+	resp, err := c.internal.RegisterStreamThumbnailServingCell(ctx, &commodorepb.RegisterStreamThumbnailServingCellRequest{
+		StreamId:  streamID,
+		TenantId:  tenantID,
+		ClusterId: clusterID,
+	})
+	if err != nil {
+		return false, err
+	}
+	return resp.GetRegistered(), nil
 }
 
 // ClearStreamActiveCluster nulls commodore.streams.active_ingest_cluster_id

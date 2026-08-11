@@ -158,6 +158,15 @@ type CommodoreServer struct {
 	// project thumbnailAssets onto Stream/Clip/DVR/VOD rows without per-row
 	// network calls.
 	clusterURLs *clusterurls.Resolver
+	// childArtifactDeleteFn is a test seam for the cascade delete of a single stream-owned child artifact
+	// (clip/dvr). Production leaves it nil and deleteStreamChildMedia routes through the origin-cluster Foghorn;
+	// wired tests inject a deterministic fake to exercise the fail→retry→ack coordination without a live Foghorn.
+	childArtifactDeleteFn func(ctx context.Context, kind, hash, cluster, tenantID string) error
+	// streamThumbnailDeleteFn is a test seam for the parent stream's Foghorn thumbnail-cleanup RPC, invoked ONCE PER
+	// recorded owning cell (clusterID is the target cell). Production leaves it nil and deleteStreamThumbnails resolves
+	// each cell via Quartermaster service discovery (resolveFoghornForClusterDirect); wired tests inject a deterministic
+	// fake so the full claim→dispatch→retry→finalize loop can run over real Postgres without a live Foghorn.
+	streamThumbnailDeleteFn func(ctx context.Context, streamID, tenantID, clusterID string) error
 }
 
 func (s *CommodoreServer) retryPostgres(ctx context.Context, fn func() error) error {
@@ -252,6 +261,25 @@ func (s *CommodoreServer) discoverFoghornAddrs(ctx context.Context, clusterID st
 		}
 	}
 	return dedupeAddrs(addrs...)
+}
+
+// resolveFoghornForClusterDirect resolves a cluster's Foghorn via Quartermaster SERVICE DISCOVERY, independent of any
+// tenant plan/entitlement. Stream-cleanup delivery must reach a DURABLY-RECORDED owning cell even after tenant routing
+// changed (a tenant de-entitled from a cluster it once ingested on would drop out of resolveFoghornForCluster's
+// tenant route, stranding that cell's tombstone). This is an async control path — never the request/serving path.
+func (s *CommodoreServer) resolveFoghornForClusterDirect(ctx context.Context, clusterID string) (*foghornclient.GRPCClient, error) {
+	if strings.TrimSpace(clusterID) == "" {
+		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
+	}
+	addr := s.nextFoghornAddr(clusterID, s.discoverFoghornAddrs(ctx, clusterID))
+	if addr == "" {
+		return nil, status.Errorf(codes.NotFound, "no foghorn instance discovered for cluster %s", clusterID)
+	}
+	client, err := s.foghornPool.GetOrCreate(foghornPoolKey(clusterID, addr), addr)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "foghorn connection failed for cluster %s: %v", clusterID, err)
+	}
+	return client, nil
 }
 
 func (s *CommodoreServer) nextFoghornAddr(clusterID string, candidates []string) string {
@@ -1003,9 +1031,10 @@ func (s *CommodoreServer) resolveFoghornForContent(ctx context.Context, contentI
 	}
 
 	var tenantID, activeClusterID sql.NullString
+	// deleted_at IS NULL: a soft-deleted (two-phase deletion-pending) stream must not resolve for serving.
 	err := s.db.QueryRowContext(ctx, `
 		SELECT tenant_id, active_ingest_cluster_id
-		FROM commodore.streams WHERE playback_id = $1
+		FROM commodore.streams WHERE playback_id = $1 AND deleted_at IS NULL
 	`, contentID).Scan(&tenantID, &activeClusterID)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1013,7 +1042,7 @@ func (s *CommodoreServer) resolveFoghornForContent(ctx context.Context, contentI
 		name := strings.TrimPrefix(contentID, "live+")
 		err = s.db.QueryRowContext(ctx, `
 			SELECT tenant_id, active_ingest_cluster_id
-			FROM commodore.streams WHERE internal_name = $1
+			FROM commodore.streams WHERE internal_name = $1 AND deleted_at IS NULL
 		`, name).Scan(&tenantID, &activeClusterID)
 	}
 
@@ -1065,7 +1094,7 @@ func (s *CommodoreServer) resolveFoghornForStreamKey(ctx context.Context, stream
 	var tenantID, activeClusterID sql.NullString
 	err := s.db.QueryRowContext(ctx, `
 		SELECT tenant_id, active_ingest_cluster_id
-		FROM commodore.streams WHERE stream_key = $1
+		FROM commodore.streams WHERE stream_key = $1 AND deleted_at IS NULL
 	`, streamKey).Scan(&tenantID, &activeClusterID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, status.Error(codes.NotFound, "stream key not found")
@@ -1226,7 +1255,7 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 			u.is_active, s.is_recording_enabled, s.playback_id, s.ingest_mode
 		FROM commodore.streams s
 		JOIN commodore.users u ON s.user_id = u.id
-		WHERE s.stream_key = $1
+		WHERE s.stream_key = $1 AND s.deleted_at IS NULL
 	`, streamKey).Scan(&streamID, &userID, &tenantID, &internalName, &isActive, &isRecordingEnabled, &playbackID, &ingestMode)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1388,6 +1417,7 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 				active_ingest_cluster_updated_at = NOW(),
 				updated_at = NOW()
 			WHERE stream_key = $2
+				AND deleted_at IS NULL
 				AND (
 					active_ingest_cluster_id IS NULL
 					OR active_ingest_cluster_id = ''
@@ -1762,17 +1792,27 @@ func (s *CommodoreServer) ListStreamMonitoring(ctx context.Context, req *commodo
 // ValidateStreamKey's push-ingest path so a stale claim cannot overwrite a
 // fresh lease held by a different cluster.
 func (s *CommodoreServer) RecordStreamActiveCluster(ctx context.Context, req *commodorepb.RecordStreamActiveClusterRequest) (*commodorepb.RecordStreamActiveClusterResponse, error) {
+	// SERVICE-TOKEN ONLY: this mutates cluster placement from a caller-supplied stream_id + cluster_id. Only Foghorn
+	// (service auth) records active ingest; a JWT caller must not steer placement.
+	if ctxkeys.GetAuthType(ctx) != "service" {
+		return nil, status.Error(codes.PermissionDenied, "RecordStreamActiveCluster requires service token auth")
+	}
 	streamID := strings.TrimSpace(req.GetStreamId())
 	clusterID := strings.TrimSpace(req.GetClusterId())
-	if streamID == "" || clusterID == "" {
-		return nil, status.Error(codes.InvalidArgument, "stream_id and cluster_id required")
+	tenantID := strings.TrimSpace(req.GetTenantId())
+	if streamID == "" || clusterID == "" || tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "stream_id, cluster_id and tenant_id required")
 	}
+	// Records ONLY active ingest placement — NOT thumbnail_serving_cluster_ids, whose sole writer is the service-fenced
+	// RegisterStreamThumbnailServingCell (register-before-mint). Tenant-scoped per the repo tenant-filter rule.
 	const updateSQL = `
 		UPDATE commodore.streams
 		SET active_ingest_cluster_id = $1,
 		    active_ingest_cluster_updated_at = NOW(),
 		    updated_at = NOW()
 		WHERE id = $2::uuid
+		  AND tenant_id = $3::uuid
+		  AND deleted_at IS NULL
 		  AND (
 		    active_ingest_cluster_id IS NULL
 		    OR active_ingest_cluster_id = ''
@@ -1780,7 +1820,7 @@ func (s *CommodoreServer) RecordStreamActiveCluster(ctx context.Context, req *co
 		    OR active_ingest_cluster_updated_at IS NULL
 		    OR active_ingest_cluster_updated_at < NOW() - INTERVAL '30 seconds'
 		  )`
-	res, err := s.db.ExecContext(ctx, updateSQL, clusterID, streamID)
+	res, err := s.db.ExecContext(ctx, updateSQL, clusterID, streamID, tenantID)
 	if err != nil {
 		s.logger.WithError(err).WithFields(logging.Fields{
 			"stream_id":  streamID,
@@ -1793,6 +1833,53 @@ func (s *CommodoreServer) RecordStreamActiveCluster(ctx context.Context, req *co
 		return nil, status.Errorf(codes.Internal, "rows affected: %v", err)
 	}
 	return &commodorepb.RecordStreamActiveClusterResponse{Updated: rows > 0}, nil
+}
+
+// RegisterStreamThumbnailServingCell durably records a media cluster as a thumbnail-serving cell for a LIVE stream,
+// the fence Foghorn takes BEFORE minting a live-thumbnail upload URL. The update unions the cell into
+// thumbnail_serving_cluster_ids and is fenced by `deleted_at IS NULL`, so it serializes with DeleteStream's soft-delete
+// on the same row: a registration that commits first is included in the deletion's cleanup fan-out; if deletion wins,
+// this matches zero rows and returns registered=false, and Foghorn refuses to mint (no orphan bytes). Idempotent — a
+// re-register of an already-recorded cell on a live stream still matches the row (registered=true). Tenant-scoped.
+func (s *CommodoreServer) RegisterStreamThumbnailServingCell(ctx context.Context, req *commodorepb.RegisterStreamThumbnailServingCellRequest) (*commodorepb.RegisterStreamThumbnailServingCellResponse, error) {
+	// SERVICE-TOKEN ONLY: this mutates durable cleanup authority from a request-supplied tenant_id + cluster_id. The
+	// shared gRPC server also accepts JWTs, so without this a JWT caller could poison a stream's ownership with a bogus
+	// cluster and block deletion convergence. Only Foghorn (service auth) registers a serving cell.
+	if ctxkeys.GetAuthType(ctx) != "service" {
+		return nil, status.Error(codes.PermissionDenied, "RegisterStreamThumbnailServingCell requires service token auth")
+	}
+	streamID := strings.TrimSpace(req.GetStreamId())
+	tenantID := strings.TrimSpace(req.GetTenantId())
+	clusterID := strings.TrimSpace(req.GetClusterId())
+	if streamID == "" || tenantID == "" || clusterID == "" {
+		return nil, status.Error(codes.InvalidArgument, "stream_id, tenant_id and cluster_id required")
+	}
+	// Single UPDATE + RowsAffected so registration LINEARIZES with DeleteStream: a concurrent soft-delete either commits
+	// first (this UPDATE's re-check sees deleted_at set → 0 rows → registered=false) or after (this appends the cell →
+	// registered=true and the cell is in the deletion's cleanup fan-out). A split UPDATE-then-SELECT would race (the
+	// UPDATE's EvalPlanQual re-check and the SELECT's statement snapshot can disagree under a concurrent delete). The
+	// per-mint write frequency is bounded by Foghorn's registration cache, so re-writing updated_at on an
+	// already-recorded cell is negligible. Tenant-scoped.
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE commodore.streams
+		SET thumbnail_serving_cluster_ids = CASE
+		        WHEN $3 = ANY(thumbnail_serving_cluster_ids) THEN thumbnail_serving_cluster_ids
+		        ELSE array_append(thumbnail_serving_cluster_ids, $3)
+		    END,
+		    updated_at = NOW()
+		WHERE id = $1::uuid AND tenant_id = $2::uuid AND deleted_at IS NULL`, streamID, tenantID, clusterID)
+	if err != nil {
+		s.logger.WithError(err).WithFields(logging.Fields{
+			"stream_id":  streamID,
+			"cluster_id": clusterID,
+		}).Error("RegisterStreamThumbnailServingCell: update failed")
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "rows affected: %v", err)
+	}
+	return &commodorepb.RegisterStreamThumbnailServingCellResponse{Registered: rows > 0}, nil
 }
 
 // ClearStreamActiveCluster clears commodore.streams.active_ingest_cluster_id
@@ -1842,7 +1929,7 @@ func (s *CommodoreServer) ResolvePlaybackID(ctx context.Context, req *commodorep
 	err := s.retryPostgres(ctx, func() error {
 		return s.db.QueryRowContext(ctx, `
 			SELECT id, internal_name, tenant_id, requires_auth, ingest_mode, active_ingest_cluster_id
-			FROM commodore.streams WHERE playback_id = $1
+			FROM commodore.streams WHERE playback_id = $1 AND deleted_at IS NULL
 		`, playbackID).Scan(&streamID, &internalName, &tenantID, &requiresAuth, &ingestMode, &activeIngestClusterID)
 	})
 
@@ -1901,7 +1988,7 @@ func (s *CommodoreServer) ResolveInternalName(ctx context.Context, req *commodor
 	var activeIngestClusterID sql.NullString
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, user_id, is_recording_enabled, requires_auth, active_ingest_cluster_id
-		FROM commodore.streams WHERE internal_name = $1
+		FROM commodore.streams WHERE internal_name = $1 AND deleted_at IS NULL
 	`, internalName).Scan(&streamID, &tenantID, &userID, &isRecordingEnabled, &requiresAuth, &activeIngestClusterID)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -2407,9 +2494,10 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *sharedpb.StartDVRRe
 		if streamID == "" {
 			return nil, status.Error(codes.InvalidArgument, "stream_id is required")
 		}
-		// Resolve internal_name from stream_id (public -> internal)
+		// Resolve internal_name from stream_id (public -> internal). A soft-deleted (deletion-pending) stream is not
+		// actionable — StartDVR must not record against a stream the deletion saga is tearing down.
 		if rowErr := s.db.QueryRowContext(ctx, `
-			SELECT internal_name FROM commodore.streams WHERE id = $1 AND tenant_id = $2
+			SELECT internal_name FROM commodore.streams WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
 		`, streamID, tenantID).Scan(&internalName); rowErr != nil {
 			if errors.Is(rowErr, sql.ErrNoRows) {
 				return nil, status.Error(codes.NotFound, "stream not found")
@@ -2421,7 +2509,7 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *sharedpb.StartDVRRe
 	// Verify stream exists in this tenant (tenant isolation) and resolve stream_id if needed.
 	if streamID == "" {
 		if rowErr := s.db.QueryRowContext(ctx, `
-			SELECT id::text FROM commodore.streams WHERE internal_name = $1 AND tenant_id = $2
+			SELECT id::text FROM commodore.streams WHERE internal_name = $1 AND tenant_id = $2 AND deleted_at IS NULL
 		`, internalName, tenantID).Scan(&streamID); rowErr != nil {
 			if errors.Is(rowErr, sql.ErrNoRows) {
 				return nil, status.Error(codes.NotFound, "stream not found")
@@ -2600,6 +2688,11 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *commodorepb.Regi
 	// artifact-less DVR. request_id ties the intent to this registration.
 	intentRequestID := uuid.New().String()
 	dvrErr := fwdb.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		// FENCE the parent against a concurrent deletion IN this tx — a DVR must not register behind a stream that
+		// is being torn down.
+		if fErr := fenceParentStreamLive(ctx, tx, tenantID, streamID); fErr != nil {
+			return fErr
+		}
 		if _, execErr := tx.ExecContext(ctx, `
 			INSERT INTO commodore.dvr_recordings (
 				id, tenant_id, user_id, stream_id, dvr_hash, internal_name, playback_id, stream_internal_name,
@@ -2618,6 +2711,9 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *commodorepb.Regi
 		return nil
 	})
 	if dvrErr != nil {
+		if errors.Is(dvrErr, errParentStreamDeleted) {
+			return nil, status.Error(codes.FailedPrecondition, "stream is being deleted")
+		}
 		s.logger.WithFields(logging.Fields{
 			"tenant_id":     tenantID,
 			"internal_name": internalName,
@@ -3388,7 +3484,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *comm
 	var isRecordingEnabled bool
 	var requiresAuth bool
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, tenant_id, user_id, is_recording_enabled, requires_auth FROM commodore.streams WHERE internal_name = $1
+		SELECT id, tenant_id, user_id, is_recording_enabled, requires_auth FROM commodore.streams WHERE internal_name = $1 AND deleted_at IS NULL
 	`, identifier).Scan(&streamID, &tenantID, &userID, &isRecordingEnabled, &requiresAuth)
 	if err == nil {
 		return &commodorepb.ResolveIdentifierResponse{
@@ -3409,7 +3505,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *comm
 	var internalName string
 	err = s.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, user_id, internal_name, is_recording_enabled, requires_auth
-		FROM commodore.streams WHERE playback_id = $1
+		FROM commodore.streams WHERE playback_id = $1 AND deleted_at IS NULL
 	`, identifier).Scan(&streamID, &tenantID, &userID, &internalName, &isRecordingEnabled, &requiresAuth)
 	if err == nil {
 		return &commodorepb.ResolveIdentifierResponse{
@@ -6052,7 +6148,7 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *commodorepb.List
 
 	// Get total count
 	var total int32
-	countQuery := `SELECT COUNT(*) FROM commodore.streams WHERE user_id = $1 AND tenant_id = $2`
+	countQuery := `SELECT COUNT(*) FROM commodore.streams WHERE user_id = $1 AND tenant_id = $2 AND deleted_at IS NULL`
 	countArgs := []any{userID, tenantID}
 	if searchLike != "" {
 		countQuery += " AND (LOWER(title) LIKE $3 OR LOWER(internal_name) LIKE $3)"
@@ -6078,7 +6174,7 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *commodorepb.List
 		       s.monitoring_enabled
 		FROM commodore.streams s
 		LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
-		WHERE s.user_id = $1 AND s.tenant_id = $2`
+		WHERE s.user_id = $1 AND s.tenant_id = $2 AND s.deleted_at IS NULL`
 	args := []any{userID, tenantID}
 	argIdx := 3
 
@@ -6388,7 +6484,7 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *commodorepb.Upd
 
 	if len(updates) > 0 {
 		updates = append(updates, "updated_at = NOW()")
-		query := fmt.Sprintf("UPDATE commodore.streams SET %s WHERE id = $%d AND user_id = $%d AND tenant_id = $%d",
+		query := fmt.Sprintf("UPDATE commodore.streams SET %s WHERE id = $%d AND user_id = $%d AND tenant_id = $%d AND deleted_at IS NULL",
 			strings.Join(updates, ", "), argIdx, argIdx+1, argIdx+2)
 		args = append(args, streamID, userID, tenantID)
 
@@ -6503,72 +6599,170 @@ func (s *CommodoreServer) DeleteStream(ctx context.Context, req *commodorepb.Del
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	// Delete related clips (best-effort, don't fail stream deletion)
-	if clipFoghorn, _, resolveErr := s.resolveFoghornForTenant(ctx, tenantID); resolveErr == nil {
-		rows, queryErr := s.db.QueryContext(ctx, `
-				SELECT clip_hash FROM commodore.clips
-				WHERE stream_id = $1 AND tenant_id = $2			`, streamID, tenantID)
-		if queryErr != nil {
-			s.logger.WithError(queryErr).Warn("Failed to list clips for stream deletion cleanup")
-		} else {
-			defer func() { _ = rows.Close() }()
-			for rows.Next() {
-				var clipHash string
-				if scanErr := rows.Scan(&clipHash); scanErr != nil {
-					continue
-				}
-				if _, _, delErr := clipFoghorn.DeleteClip(ctx, clipHash, &tenantID); delErr != nil {
-					s.logger.WithError(delErr).WithField("clip_hash", clipHash).Warn("Failed to delete clip during stream cleanup")
-				}
-			}
-		}
-	}
-
-	// Begin transaction
+	// PHASE 1 (deleting): in ONE local tx, SOFT-delete the stream (deleted_at set → excluded from all serving/
+	// listing/resolve reads) + stop ingest (drop stream_keys) + enqueue the thumbnail-cleanup obligation. We do NOT
+	// hard-delete the stream row yet: the deletion is not "done" until the SERVING authority (Foghorn) durably holds
+	// the tombstone. No RPC is held across this tx.
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
-	// Delete related stream_keys (use UUID, not internal_name)
-	_, err = tx.ExecContext(ctx, `DELETE FROM commodore.stream_keys WHERE stream_id = $1`, streamID)
-	if err != nil {
+	if _, err = tx.ExecContext(ctx, `DELETE FROM commodore.stream_keys WHERE stream_id = $1 AND tenant_id = $2::uuid`, streamID, tenantID); err != nil {
 		s.logger.WithError(err).Warn("Failed to delete stream keys")
 	}
-
-	// Delete the stream
-	_, err = tx.ExecContext(ctx, `DELETE FROM commodore.streams WHERE id = $1`, streamID)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to delete stream: %v", err)
+	if _, err = tx.ExecContext(ctx, `UPDATE commodore.streams SET deleted_at = COALESCE(deleted_at, NOW()), updated_at = NOW() WHERE id = $1 AND tenant_id = $2::uuid`, streamID, tenantID); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to soft-delete stream: %v", err)
 	}
 
+	// Enqueue the cleanup obligation ATOMICALLY with the soft-delete (idempotent on re-delete). The stream-cleanup
+	// outbox worker durably delivers it to Foghorn and finalizes the deletion on a positive ack.
+	if oErr := s.enqueueStreamCleanupOutbox(ctx, tx, streamID, tenantID); oErr != nil {
+		return nil, status.Errorf(codes.Internal, "failed to record stream cleanup obligation: %v", oErr)
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to commit: %v", err)
 	}
 
-	// Clean the live stream's OWN thumbnails AFTER the stream is durably deleted, so a rolled-back delete never
-	// strands a live stream without thumbnails. A live stream (asset_key = stream_id) has no artifact row for
-	// Foghorn's purge job and its final active version is never GC-superseded, so without this the pointer +
-	// object leak. This call is best-effort: a Foghorn failure is logged, not durably retried, so the objects
-	// can persist until a repeat delete of the same stream_id re-attempts. The stream row is already gone either
-	// way, so the resolver reports the asset as GONE and nothing is served in the interim.
-	if clipFoghorn, _, resolveErr := s.resolveFoghornForTenant(ctx, tenantID); resolveErr == nil {
-		if resp, delErr := clipFoghorn.DeleteStreamThumbnails(ctx, streamID, tenantID); delErr != nil {
-			s.logger.WithError(delErr).WithField("stream_id", streamID).Warn("Failed to delete stream thumbnails after stream deletion (not retried; objects may leak until a later delete)")
-		} else if resp != nil && !resp.GetSuccess() {
-			s.logger.WithFields(logging.Fields{"stream_id": streamID, "message": resp.GetMessage()}).Warn("Stream thumbnail cleanup did not fully succeed (not retried)")
+	// The TERMINAL stream_deleted event is emitted by finalizeStreamDeletion (below, or by the outbox convergence)
+	// — ONLY after Foghorn acks the tombstone — never here at soft-delete time, so a pending deletion is never
+	// reported as done. Child-media (clip/DVR) deletion is NOT done here best-effort anymore: it is part of the
+	// durable stream-cleanup obligation (dispatchStreamCleanupOutboxRow → deleteStreamChildMedia), so finalization
+	// is gated on every child being gone and a delivery outage can never strand surviving clips/DVR.
+
+	// PHASE 2 (tombstoned → deleted): best-effort SYNCHRONOUS delivery so the common case finalizes promptly. Only a
+	// POSITIVE Foghorn ack of the FULL cascade (thumbnail tombstone + every child clip/DVR) lets us FINALIZE —
+	// hard-delete the row + mark the outbox completed — and report "deleted". Otherwise the row stays soft-deleted
+	// and we return deletion_pending; the outbox worker converges it. We NEVER report "deleted" while any child (or
+	// the tombstone) is unacknowledged.
+	deletionStatus := "deletion_pending"
+	message := "Stream deletion pending: awaiting cleanup acknowledgement from the serving cell"
+	// Route through the SAME multi-cell dispatcher the outbox uses — live thumbnails live on the ingest cell(s), so a
+	// tenant-primary-only sync delivery would finalize while an ingest cell's objects survive. deleteStreamThumbnails
+	// returns nil only once EVERY recorded owning cell has acked.
+	if tErr := s.deleteStreamThumbnails(ctx, streamID, tenantID); tErr == nil {
+		if cErr := s.deleteStreamChildMedia(ctx, streamID, tenantID); cErr != nil {
+			s.logger.WithError(cErr).WithField("stream_id", streamID).Info("stream child-media cleanup incomplete; leaving pending for the outbox worker")
+		} else if fErr := s.finalizeStreamDeletion(ctx, streamID, tenantID, ""); fErr != nil {
+			s.logger.WithError(fErr).WithField("stream_id", streamID).Warn("stream deletion finalize failed after ack; outbox worker will retry")
+		} else {
+			deletionStatus = "deleted"
+			message = "Stream deleted successfully"
 		}
+	} else {
+		s.logger.WithError(tErr).WithField("stream_id", streamID).Info("stream thumbnail cleanup incomplete; leaving pending for the outbox worker")
 	}
 
-	s.emitStreamChangeEvent(ctx, eventStreamDeleted, tenantID, userID, streamID, nil)
-
 	return &commodorepb.DeleteStreamResponse{
-		Message:     "Stream deleted successfully",
-		StreamId:    streamID,
-		StreamTitle: title,
-		DeletedAt:   timestamppb.Now(),
+		Message:        message,
+		StreamId:       streamID,
+		StreamTitle:    title,
+		DeletedAt:      timestamppb.Now(),
+		DeletionStatus: deletionStatus,
 	}, nil
+}
+
+// errParentStreamDeleted fences child-media creation (clip/DVR) against a concurrent stream deletion.
+var errParentStreamDeleted = errors.New("parent stream is being deleted")
+
+// fenceParentStreamLive LOCKS the parent stream row FOR UPDATE inside the caller's transaction and returns
+// errParentStreamDeleted if the stream is soft-deleted or already gone. DeleteStream's phase-1 UPDATE locks the same
+// row, so relative to THIS Commodore transaction the child either commits before the delete or observes the tombstone
+// and is refused. This synchronous fence does not span the cross-service creation (Commodore's business row commits
+// separately from Foghorn's artifact insert); a child that slips through — created against a stream deleted after this
+// check — is durably compensated by the stream-cleanup obligation, whose child-media cascade deletes every enumerated
+// clip/DVR before finalization. streamID may be empty (a parentless VOD artifact) → no fence; tenant_id scopes the
+// lookup per the repo tenant-isolation rule.
+func fenceParentStreamLive(ctx context.Context, tx *sql.Tx, tenantID, streamID string) error {
+	if strings.TrimSpace(streamID) == "" {
+		return nil
+	}
+	var live bool
+	err := tx.QueryRowContext(ctx, `SELECT deleted_at IS NULL FROM commodore.streams WHERE id = $1::uuid AND tenant_id = $2::uuid FOR UPDATE`, streamID, tenantID).Scan(&live)
+	if errors.Is(err, sql.ErrNoRows) {
+		return errParentStreamDeleted
+	}
+	if err != nil {
+		return err
+	}
+	if !live {
+		return errParentStreamDeleted
+	}
+	return nil
+}
+
+// finalizeStreamDeletion completes a two-phase stream deletion after the serving authority (Foghorn) has acked the
+// thumbnail-cleanup obligation. It runs the hard-delete, the outbox completion, and the TERMINAL stream_deleted
+// event ENQUEUE in ONE transaction, so a crash cannot leave a deleted stream without its event (or an event without
+// the delete). Idempotent — a re-run after the row is gone deletes zero rows, marks nothing, and (guarded on
+// RowsAffected) does not re-emit. The event is enqueued via EnqueueServiceEventTx so it commits atomically.
+// finalizeStreamDeletion runs the hard-delete + outbox completion + terminal event in one transaction. leaseToken
+// FENCES the outbox-completion when set (the outbox-worker convergence path): a stale worker whose lease was
+// re-claimed cannot complete a row a peer owns. An empty token is the synchronous DeleteStream fast-path (not a
+// claimed worker), which is not fenced.
+// claimTenantID is the tenant of the CLAIMED outbox row (decoded from the opaque claim identity on the worker path, or
+// the request tenant on the synchronous path); it fences the ownership CAS on tenant in addition to stream_id + lease
+// token. It is REQUIRED: an empty tenant fails the finalize (leaving the row for lease-expiry/retry) rather than
+// settling tenantlessly — the tenant is NOT NULL on the row and always present in a well-formed claim.
+func (s *CommodoreServer) finalizeStreamDeletion(ctx context.Context, streamID, claimTenantID, leaseToken string) error {
+	if claimTenantID == "" {
+		return fmt.Errorf("finalize stream deletion for %s: missing tenant in claim identity", streamID)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin finalize tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
+	// OWNERSHIP GATE: settle the outbox row FIRST, token-fenced, and REQUIRE it to affect a row.
+	// A leased worker whose lease lapsed (the row was re-claimed with a NEW token) — or any duplicate finalize after a
+	// peer already completed the row — matches zero rows here and must NOT hard-delete the stream or emit the terminal
+	// event. Only the tx that flips this pending row to completed owns the finalization; everything below runs for
+	// that single winner, atomically with the settlement. ($2 = '' is the synchronous DeleteStream fast-path, which
+	// still requires a pending row so a converged re-run is a clean no-op.)
+	// RETURNING the obligation's tenant_id makes it the authoritative attribution for the rest of this tx — the
+	// value captured at enqueue time — and lets every query below fence on the owning tenant, not just the (globally
+	// unique) stream_id. Zero rows → sql.ErrNoRows → not our obligation, commit nothing.
+	var tenantID string
+	err = tx.QueryRowContext(ctx, `
+		UPDATE commodore.stream_cleanup_outbox
+		SET status = 'completed', completed_at = NOW(), last_error = NULL
+		WHERE stream_id = $1::uuid AND status = 'pending' AND ($2 = '' OR lease_token = $2)
+		  AND tenant_id = $3::uuid
+		RETURNING tenant_id::text
+	`, streamID, leaseToken, claimTenantID).Scan(&tenantID)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Not our obligation (lease lost, or a peer/fast-path already finalized) — commit nothing.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("settle stream cleanup outbox: %w", err)
+	}
+
+	// We own the finalization. Read attribution (user) from the still-soft-deleted row (present until the DELETE
+	// below), tenant-fenced, so the terminal event carries tenant/user, then hard-delete and emit — all atomic with
+	// the settlement above.
+	var userID sql.NullString
+	if sErr := tx.QueryRowContext(ctx, `SELECT COALESCE(user_id::text,'') FROM commodore.streams WHERE id = $1 AND tenant_id = $2::uuid`, streamID, tenantID).Scan(&userID); sErr != nil && sErr != sql.ErrNoRows {
+		return fmt.Errorf("read finalize attribution: %w", sErr)
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM commodore.streams WHERE id = $1 AND tenant_id = $2::uuid AND deleted_at IS NOT NULL`, streamID, tenantID)
+	if err != nil {
+		return fmt.Errorf("hard-delete finalized stream: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("finalize rows affected: %w", err)
+	}
+	// Enqueue the terminal event ONLY when THIS call performed the hard-delete (RowsAffected > 0), atomically with
+	// it — so a converged re-run never double-emits and a crash never suppresses it. Emitting at soft-delete time
+	// would tell consumers "deleted" while the saga still reports pending.
+	if n > 0 && tenantID != "" {
+		if _, err := s.EnqueueServiceEventTx(ctx, tx, s.buildStreamChangeEvent(eventStreamDeleted, tenantID, userID.String, streamID, nil)); err != nil {
+			return fmt.Errorf("enqueue terminal stream_deleted event: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 // RefreshStreamKey generates a new stream key
@@ -6589,17 +6783,20 @@ func (s *CommodoreServer) RefreshStreamKey(ctx context.Context, req *commodorepb
 		return nil, status.Errorf(codes.Internal, "failed to generate stream key: %v", err)
 	}
 
-	// Update the stream
+	// Update the stream (a deletion-pending stream is not actionable — do not rotate its key).
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE commodore.streams
 		SET stream_key = $1, updated_at = NOW()
-		WHERE id = $2 AND user_id = $3 AND tenant_id = $4
+		WHERE id = $2 AND user_id = $3 AND tenant_id = $4 AND deleted_at IS NULL
 	`, newStreamKey, streamID, userID, tenantID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to refresh stream key: %v", err)
 	}
 
-	rows, _ := result.RowsAffected()
+	rows, raErr := result.RowsAffected()
+	if raErr != nil {
+		return nil, status.Errorf(codes.Internal, "rows affected: %v", raErr)
+	}
 	if rows == 0 {
 		return nil, status.Error(codes.NotFound, "stream not found")
 	}
@@ -6640,7 +6837,7 @@ func (s *CommodoreServer) CreateStreamKey(ctx context.Context, req *commodorepb.
 	// Verify stream ownership
 	var exists bool
 	err = s.db.QueryRowContext(ctx, `
-		SELECT EXISTS(SELECT 1 FROM commodore.streams WHERE id = $1 AND user_id = $2 AND tenant_id = $3)
+		SELECT EXISTS(SELECT 1 FROM commodore.streams WHERE id = $1 AND user_id = $2 AND tenant_id = $3 AND deleted_at IS NULL)
 	`, streamID, userID, tenantID).Scan(&exists)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "stream not found")
@@ -6704,7 +6901,7 @@ func (s *CommodoreServer) ListStreamKeys(ctx context.Context, req *commodorepb.L
 	// Verify stream ownership
 	var exists bool
 	err = s.db.QueryRowContext(ctx, `
-		SELECT EXISTS(SELECT 1 FROM commodore.streams WHERE id = $1 AND user_id = $2 AND tenant_id = $3)
+		SELECT EXISTS(SELECT 1 FROM commodore.streams WHERE id = $1 AND user_id = $2 AND tenant_id = $3 AND deleted_at IS NULL)
 	`, streamID, userID, tenantID).Scan(&exists)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
@@ -6833,7 +7030,7 @@ func (s *CommodoreServer) DeactivateStreamKey(ctx context.Context, req *commodor
 	// Verify stream ownership
 	var exists bool
 	err = s.db.QueryRowContext(ctx, `
-		SELECT EXISTS(SELECT 1 FROM commodore.streams WHERE id = $1 AND user_id = $2 AND tenant_id = $3)
+		SELECT EXISTS(SELECT 1 FROM commodore.streams WHERE id = $1 AND user_id = $2 AND tenant_id = $3 AND deleted_at IS NULL)
 	`, req.GetStreamId(), userID, tenantID).Scan(&exists)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
@@ -6850,7 +7047,10 @@ func (s *CommodoreServer) DeactivateStreamKey(ctx context.Context, req *commodor
 		return nil, status.Errorf(codes.Internal, "failed to deactivate key: %v", err)
 	}
 
-	rows, _ := result.RowsAffected()
+	rows, raErr := result.RowsAffected()
+	if raErr != nil {
+		return nil, status.Errorf(codes.Internal, "rows affected: %v", raErr)
+	}
 	if rows == 0 {
 		return nil, status.Error(codes.NotFound, "stream key not found")
 	}
@@ -6933,7 +7133,7 @@ func (s *CommodoreServer) CreatePushTarget(ctx context.Context, req *commodorepb
 	// Verify stream ownership
 	var exists bool
 	err = s.db.QueryRowContext(ctx, `
-		SELECT EXISTS(SELECT 1 FROM commodore.streams WHERE id = $1 AND user_id = $2 AND tenant_id = $3)
+		SELECT EXISTS(SELECT 1 FROM commodore.streams WHERE id = $1 AND user_id = $2 AND tenant_id = $3 AND deleted_at IS NULL)
 	`, streamID, userID, tenantID).Scan(&exists)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
@@ -7556,12 +7756,10 @@ func (s *CommodoreServer) emitMistAdminSessionMintedEvent(ctx context.Context, u
 	s.emitServiceEvent(ctx, event)
 }
 
-func (s *CommodoreServer) emitStreamChangeEvent(ctx context.Context, eventType, tenantID, userID, streamID string, changedFields []string) {
-	payload := &ipcpb.StreamChangeEvent{
-		StreamId:      streamID,
-		ChangedFields: changedFields,
-	}
-	event := &ipcpb.ServiceEvent{
+// buildStreamChangeEvent constructs the stream service event; shared by the best-effort emitter and the
+// transactional finalize enqueue so both produce an identical event.
+func (s *CommodoreServer) buildStreamChangeEvent(eventType, tenantID, userID, streamID string, changedFields []string) *ipcpb.ServiceEvent {
+	return &ipcpb.ServiceEvent{
 		EventType:    eventType,
 		Timestamp:    timestamppb.Now(),
 		Source:       "commodore",
@@ -7569,9 +7767,12 @@ func (s *CommodoreServer) emitStreamChangeEvent(ctx context.Context, eventType, 
 		UserId:       userID,
 		ResourceType: "stream",
 		ResourceId:   streamID,
-		Payload:      &ipcpb.ServiceEvent_StreamChangeEvent{StreamChangeEvent: payload},
+		Payload:      &ipcpb.ServiceEvent_StreamChangeEvent{StreamChangeEvent: &ipcpb.StreamChangeEvent{StreamId: streamID, ChangedFields: changedFields}},
 	}
-	s.emitServiceEvent(ctx, event)
+}
+
+func (s *CommodoreServer) emitStreamChangeEvent(ctx context.Context, eventType, tenantID, userID, streamID string, changedFields []string) {
+	s.emitServiceEvent(ctx, s.buildStreamChangeEvent(eventType, tenantID, userID, streamID, changedFields))
 }
 
 func (s *CommodoreServer) emitArtifactEvent(ctx context.Context, eventType, tenantID, userID string, artifactType ipcpb.ArtifactEvent_ArtifactType, artifactID, streamID, status string, expiresAt *int64) {
@@ -7695,7 +7896,7 @@ func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, ten
 		       s.monitoring_enabled
 		FROM commodore.streams s
 		LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
-		WHERE s.id = $1 AND s.user_id = $2 AND s.tenant_id = $3
+		WHERE s.id = $1 AND s.user_id = $2 AND s.tenant_id = $3 AND s.deleted_at IS NULL
 	`, streamID, userID, tenantID).Scan(&stream.StreamId, &stream.InternalName, &stream.StreamKey, &stream.PlaybackId,
 		&stream.Title, &description, &stream.IsRecordingEnabled, &createdAt, &updatedAt,
 		&stream.IngestMode, &sourceURIEnc, &pullEnabled, fwdb.ArrayScan(&pullAllowedClusters),
@@ -7773,6 +7974,14 @@ func (s *CommodoreServer) populateStreamOriginRegion(ctx context.Context, tenant
 // (active_ingest_cluster_id, stream_id) via the in-process clusterurls
 // resolver. Returns nil when the stream has never been live or the cluster
 // is unknown to the resolver. No I/O: the resolver is a map lookup.
+//
+// active_ingest is authoritative for a live stream's thumbnail: Foghorn stores
+// LIVE thumbnails on the INGEST cell (a local mint — they are ephemeral
+// derivatives served while the stream is live, not durable media), so the
+// object always lives on active_ingest's Chandler. There is no official-cluster
+// resolution or remote drop for live, so a cross-cell-ingest stream still gets a
+// working URL. (Artifacts differ: they persist durably on the tenant's official
+// cluster and record thumbnail_serving_cluster_id for their URL.)
 func (s *CommodoreServer) buildStreamThumbnailAssets(activeIngest sql.NullString, streamID string) *sharedpb.ThumbnailAssets {
 	if s.clusterURLs == nil || !activeIngest.Valid || activeIngest.String == "" || streamID == "" {
 		return nil
@@ -7782,8 +7991,10 @@ func (s *CommodoreServer) buildStreamThumbnailAssets(activeIngest sql.NullString
 
 // buildArtifactThumbnailAssets projects ThumbnailAssets for a clip/DVR/VOD
 // artifact. Returns nil unless has_thumbnails is TRUE and a cluster is
-// known. Caller supplies COALESCE(storage_cluster_id, origin_cluster_id)
-// as the authoritative thumbnail cluster.
+// known. Caller supplies COALESCE(thumbnail_serving_cluster_id,
+// storage_cluster_id, origin_cluster_id) — the authoritative serving cluster
+// where the thumbnail bytes actually live, falling back to byte-storage/origin
+// only for legacy rows not yet projected with the serving cluster.
 func (s *CommodoreServer) buildArtifactThumbnailAssets(hasThumbnails bool, cluster sql.NullString, assetKey string) *sharedpb.ThumbnailAssets {
 	if !hasThumbnails || s.clusterURLs == nil || !cluster.Valid || cluster.String == "" || assetKey == "" {
 		return nil
@@ -8065,7 +8276,7 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *sharedpb.CreateCl
 		SELECT internal_name, active_ingest_cluster_id, active_ingest_cluster_updated_at,
 		       requires_auth, playback_policy::text, playback_webhook_secret_enc
 		FROM commodore.streams
-		WHERE id = $1 AND tenant_id = $2
+		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
 	`, streamID, tenantID).Scan(
 		&internalName, &activeIngestClusterID, &activeIngestClusterUpdatedAt,
 		&sourceRequiresAuth, &sourcePolicyJSON, &sourceSecretEnc,
@@ -8340,7 +8551,7 @@ func (s *CommodoreServer) GetClip(ctx context.Context, req *sharedpb.GetClipRequ
 		SELECT c.id, c.clip_hash, c.playback_id, c.stream_id::text, c.title, c.description,
 		       c.start_time, c.duration, c.clip_mode, c.requested_params,
 		       c.size_bytes, c.retention_until, COALESCE(c.retention_source, ''), c.created_at, c.updated_at,
-		       COALESCE(c.storage_cluster_id, c.origin_cluster_id), c.has_thumbnails
+		       COALESCE(c.thumbnail_serving_cluster_id, c.storage_cluster_id, c.origin_cluster_id), c.has_thumbnails
 		FROM commodore.clips c
 		WHERE c.tenant_id = $1 AND c.clip_hash = $2	`
 
@@ -8848,6 +9059,10 @@ func NewGRPCServer(cfg CommodoreServerConfig) *grpc.Server {
 	// synchronous Foghorn dispatch failed or returned a partial-success
 	// response (NodesFailed > 0). Runs for the lifetime of the binary.
 	go commodoreServer.runInvalidationOutboxWorker(context.Background())
+
+	// Drain commodore.stream_cleanup_outbox: durably deliver a deleted stream's thumbnail-cleanup obligation to
+	// Foghorn, retried until acked, so a live stream's thumbnails never leak on a best-effort delivery failure.
+	go commodoreServer.runStreamCleanupOutboxWorker(context.Background())
 
 	// Drain commodore.service_event_outbox to Decklog: a Decklog outage degrades to
 	// outbox-backlog growth rather than dropped events.
@@ -9431,7 +9646,7 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodo
 		SELECT kind, id, artifact_hash, playback_id, stream_id, stream_title, title, secondary_label,
 		       size_bytes, status, storage_location, created_at, updated_at, expires_at,
 		       retention_source, origin_type, origin_id, storage_cluster_id, has_thumbnails, duration_ms,
-		       tracks, sync_status, is_synced, is_finalized, description, error_message
+		       tracks, sync_status, is_synced, is_finalized, description, error_message, thumbnail_serving_cluster
 		FROM (
 			SELECT
 				CASE WHEN COALESCE(v.origin_type, '') = 'dvr_chapter' THEN 'chapter' ELSE 'vod' END AS kind,
@@ -9462,7 +9677,8 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodo
 				v.is_synced AS is_synced,
 				v.is_finalized AS is_finalized,
 				COALESCE(v.description, '') AS description,
-				COALESCE(v.error_message, '') AS error_message
+				COALESCE(v.error_message, '') AS error_message,
+				COALESCE(v.thumbnail_serving_cluster_id, v.storage_cluster_id, v.origin_cluster_id, '') AS thumbnail_serving_cluster
 			FROM commodore.vod_assets v
 			LEFT JOIN commodore.streams st ON st.id = v.stream_id AND st.tenant_id = v.tenant_id
 			WHERE v.tenant_id = $1
@@ -9499,7 +9715,8 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodo
 				d.is_synced AS is_synced,
 				d.is_finalized AS is_finalized,
 				'' AS description,
-				COALESCE(d.error_message, '') AS error_message
+				COALESCE(d.error_message, '') AS error_message,
+				COALESCE(d.thumbnail_serving_cluster_id, d.storage_cluster_id, d.origin_cluster_id, '') AS thumbnail_serving_cluster
 			FROM commodore.dvr_recordings d
 			LEFT JOIN commodore.streams st ON st.id = d.stream_id AND st.tenant_id = d.tenant_id
 			WHERE d.tenant_id = $1
@@ -9535,7 +9752,8 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodo
 				c.is_synced AS is_synced,
 				c.is_finalized AS is_finalized,
 				COALESCE(c.description, '') AS description,
-				COALESCE(c.error_message, '') AS error_message
+				COALESCE(c.error_message, '') AS error_message,
+				COALESCE(c.thumbnail_serving_cluster_id, c.storage_cluster_id, c.origin_cluster_id, '') AS thumbnail_serving_cluster
 			FROM commodore.clips c
 			LEFT JOIN commodore.streams st ON st.id = c.stream_id AND st.tenant_id = c.tenant_id
 			WHERE c.tenant_id = $1
@@ -9625,6 +9843,7 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodo
 			createdAt, updatedAt                                                time.Time
 			expiresAt                                                           sql.NullTime
 			retentionSource, originType, originID, storageClusterID             string
+			thumbnailServingCluster                                             string
 			hasThumbnails                                                       bool
 			durationMs                                                          sql.NullInt64
 			tracksJSON                                                          sql.NullString
@@ -9633,7 +9852,7 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodo
 		if err := rows.Scan(&kind, &id, &hash, &playbackID, &streamID, &streamTitle, &title, &secondary,
 			&sizeBytes, &statusText, &storageLocation, &createdAt, &updatedAt, &expiresAt,
 			&retentionSource, &originType, &originID, &storageClusterID, &hasThumbnails, &durationMs, &tracksJSON,
-			&syncStatus, &isSynced, &isFinalized, &description, &errorMessage); err != nil {
+			&syncStatus, &isSynced, &isFinalized, &description, &errorMessage, &thumbnailServingCluster); err != nil {
 			// Fail closed: a scan error means a corrupt/partial row; returning a
 			// truncated catalog silently would misrepresent the account inventory.
 			return nil, status.Errorf(codes.Internal, "scan storage artifact: %v", err)
@@ -9709,7 +9928,7 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodo
 			v := isFinalized.Bool
 			artifact.IsFinalized = &v
 		}
-		artifact.ThumbnailAssets = s.buildArtifactThumbnailAssets(hasThumbnails, sql.NullString{String: storageClusterID, Valid: storageClusterID != ""}, hash)
+		artifact.ThumbnailAssets = s.buildArtifactThumbnailAssets(hasThumbnails, sql.NullString{String: thumbnailServingCluster, Valid: thumbnailServingCluster != ""}, hash)
 
 		artifacts = append(artifacts, artifact)
 	}

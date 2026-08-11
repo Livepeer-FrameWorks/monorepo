@@ -163,7 +163,7 @@ func (s *CommodoreServer) lookupPolicyForStream(ctx context.Context, tenantID, s
 	err := s.db.QueryRowContext(ctx, `
 		SELECT COALESCE(playback_policy::text, ''), internal_name, tenant_id::text
 		FROM commodore.streams
-		WHERE id = $1::uuid
+		WHERE id = $1::uuid AND deleted_at IS NULL
 	`, streamID).Scan(&policy, &internalName, &rowTenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, "", status.Error(codes.NotFound, "stream not found")

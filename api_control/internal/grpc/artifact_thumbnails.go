@@ -249,6 +249,7 @@ func (s *CommodoreServer) UpdateArtifactCatalogSnapshot(ctx context.Context, req
 	//   - origin_cluster_id <> $16   → a non-origin cluster; the WHERE matches 0 rows and the
 	//     read-back below distinguishes this (PermissionDenied) from a mere revision-behind.
 	var newRevision sql.NullInt64
+	var appliedServingCluster sql.NullString
 	execErr := reviveTx.QueryRowContext(ctx, `UPDATE `+table+`
 		SET size_bytes = $1,
 		    duration = $2,
@@ -262,24 +263,35 @@ func (s *CommodoreServer) UpdateArtifactCatalogSnapshot(ctx context.Context, req
 		    origin_cluster_id = COALESCE(origin_cluster_id, $15),
 		    retention_until = to_timestamp($16::bigint),
 		    error_message = $17,
+		    -- COALESCE-PRESERVE (like has_thumbnails): an absent value keeps the stored serving cluster, so an old
+		    -- Foghorn's snapshot (no field) never ERASES a value a new one set — mixed-version safe.
+		    thumbnail_serving_cluster_id = COALESCE($18::varchar, thumbnail_serving_cluster_id),
 		    catalog_revision = $11::bigint,
 		    updated_at = NOW()
 		WHERE tenant_id = $12::uuid AND `+keyCol+` = $13
-		  AND (catalog_revision IS NULL OR catalog_revision < $11::bigint)
+		  AND (catalog_revision IS NULL OR catalog_revision < $11::bigint
+		       -- EQUAL-REVISION REPAIR: an old Commodore may have stored this exact revision while DISCARDING the
+		       -- serving cluster (unknown field 21), so the new one must be able to backfill the NULL at the same
+		       -- revision — otherwise the strict less-than guard rejects the retry forever and the field is lost. Only a
+		       -- NULL→non-null fill is permitted here; a conflicting non-null value is caught in the readback below.
+		       -- $18 is cast in BOTH uses: an IS NOT NULL predicate gives Postgres no type to infer (42P08).
+		       OR (catalog_revision = $11::bigint AND thumbnail_serving_cluster_id IS NULL AND $18::varchar IS NOT NULL))
 		  AND (origin_cluster_id IS NULL OR origin_cluster_id = $15)
-		RETURNING catalog_revision`,
+		RETURNING catalog_revision, thumbnail_serving_cluster_id`,
 		nullableInt64(req.SizeBytes), nullableInt64(req.DurationMs), req.GetTracksPresent(), tracksArg,
 		nullableString(req.SyncStatus), req.IsSynced, req.IsFinalized,
 		nullableString(req.StorageLocation), nullableString(req.StorageClusterId), req.HasThumbnails,
 		req.GetSourceRevision(), tenantID, assetKey, nullableString(req.LifecycleStatus),
-		sourceCluster, nullableInt64(req.RetentionUntilUnix), nullableString(req.ErrorMessage)).Scan(&newRevision)
+		sourceCluster, nullableInt64(req.RetentionUntilUnix), nullableString(req.ErrorMessage),
+		nullableString(req.ThumbnailServingClusterId)).Scan(&newRevision, &appliedServingCluster)
 	if execErr == nil {
 		// Applied: the row's revision is now source_revision.
 		if commitErr := reviveTx.Commit(); commitErr != nil {
 			return nil, status.Errorf(codes.Internal, "catalog snapshot commit: %v", commitErr)
 		}
 		reviveCommitted = true
-		return &commodorepb.UpdateArtifactCatalogSnapshotResponse{Found: true, CurrentRevision: newRevision.Int64}, nil
+		// Echo the STORED serving cluster so the caller can confirm a NEW Commodore applied field 21 (mixed-version ack).
+		return &commodorepb.UpdateArtifactCatalogSnapshotResponse{Found: true, CurrentRevision: newRevision.Int64, ThumbnailServingClusterId: nullStringToPtr(appliedServingCluster)}, nil
 	}
 	if !errors.Is(execErr, sql.ErrNoRows) {
 		s.logger.WithError(execErr).WithFields(logging.Fields{
@@ -295,10 +307,10 @@ func (s *CommodoreServer) UpdateArtifactCatalogSnapshot(ctx context.Context, req
 	// non-origin caller must get an explicit PermissionDenied, never a false "covered". Any marker
 	// clear above is committed so a genuine re-creation is unblocked.
 	var storedRevision sql.NullInt64
-	var originCluster sql.NullString
+	var originCluster, storedServingCluster sql.NullString
 	qErr := reviveTx.QueryRowContext(ctx,
-		`SELECT origin_cluster_id, catalog_revision FROM `+table+` WHERE tenant_id = $1::uuid AND `+keyCol+` = $2`,
-		tenantID, assetKey).Scan(&originCluster, &storedRevision)
+		`SELECT origin_cluster_id, catalog_revision, thumbnail_serving_cluster_id FROM `+table+` WHERE tenant_id = $1::uuid AND `+keyCol+` = $2`,
+		tenantID, assetKey).Scan(&originCluster, &storedRevision, &storedServingCluster)
 	if errors.Is(qErr, sql.ErrNoRows) {
 		if commitErr := reviveTx.Commit(); commitErr != nil {
 			return nil, status.Errorf(codes.Internal, "catalog snapshot commit: %v", commitErr)
@@ -315,11 +327,21 @@ func (s *CommodoreServer) UpdateArtifactCatalogSnapshot(ctx context.Context, req
 		return nil, status.Errorf(codes.PermissionDenied,
 			"source cluster %q is not the origin cluster %q for %s", sourceCluster, originCluster.String, assetKey)
 	}
+	// WRITE-ONCE CONFLICT: the serving cluster is stable (the tenant's official cluster). A stored non-null value that
+	// DIFFERS from a non-empty incoming one is a real invariant violation (a thumbnail re-projected to a different
+	// official cluster) — fail LOUDLY rather than silently loop or overwrite. A NULL→value fill already applied above.
+	if incoming := strings.TrimSpace(req.GetThumbnailServingClusterId()); incoming != "" &&
+		storedServingCluster.Valid && storedServingCluster.String != "" && storedServingCluster.String != incoming {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"thumbnail serving cluster conflict for %s: stored %q, incoming %q (write-once)", assetKey, storedServingCluster.String, incoming)
+	}
 	if commitErr := reviveTx.Commit(); commitErr != nil {
 		return nil, status.Errorf(codes.Internal, "catalog snapshot commit: %v", commitErr)
 	}
 	reviveCommitted = true
-	return &commodorepb.UpdateArtifactCatalogSnapshotResponse{Found: true, CurrentRevision: storedRevision.Int64}, nil
+	// Echo the stored serving cluster here too, so a caller that is revision-behind (its projection already superseded)
+	// can still confirm the field is stored and advance without re-projecting forever.
+	return &commodorepb.UpdateArtifactCatalogSnapshotResponse{Found: true, CurrentRevision: storedRevision.Int64, ThumbnailServingClusterId: nullStringToPtr(storedServingCluster)}, nil
 }
 
 func nullableInt64(v *int64) any {
@@ -334,4 +356,13 @@ func nullableString(v *string) any {
 		return nil
 	}
 	return *v
+}
+
+// nullStringToPtr converts a scanned sql.NullString to the *string an optional proto field expects (nil when NULL).
+func nullStringToPtr(v sql.NullString) *string {
+	if !v.Valid {
+		return nil
+	}
+	s := v.String
+	return &s
 }

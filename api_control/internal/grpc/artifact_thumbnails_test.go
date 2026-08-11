@@ -292,7 +292,7 @@ func TestUpdateArtifactCatalogSnapshot(t *testing.T) {
 		mock.ExpectQuery(`SELECT deletion_revision, origin_cluster_id FROM commodore.artifact_catalog_tombstones[\s\S]*FOR UPDATE`).
 			WithArgs("t1", "vod", "vod-1").WillReturnError(sql.ErrNoRows)
 		mock.ExpectQuery(`UPDATE commodore.vod_assets`).
-			WillReturnRows(sqlmock.NewRows([]string{"catalog_revision"}).AddRow(int64(7)))
+			WillReturnRows(sqlmock.NewRows([]string{"catalog_revision", "thumbnail_serving_cluster_id"}).AddRow(int64(7), "media-official"))
 		mock.ExpectCommit()
 		resp, err := s.UpdateArtifactCatalogSnapshot(context.Background(), &commodorepb.UpdateArtifactCatalogSnapshotRequest{
 			TenantId: "t1", AssetKey: "vod-1", SourceRevision: 7,
@@ -321,9 +321,9 @@ func TestUpdateArtifactCatalogSnapshot(t *testing.T) {
 		mock.ExpectQuery(`SELECT deletion_revision, origin_cluster_id FROM commodore.artifact_catalog_tombstones[\s\S]*FOR UPDATE`).
 			WillReturnError(sql.ErrNoRows)
 		mock.ExpectQuery(`UPDATE commodore.vod_assets`).WillReturnError(sql.ErrNoRows)
-		mock.ExpectQuery(`SELECT origin_cluster_id, catalog_revision FROM commodore.vod_assets`).
+		mock.ExpectQuery(`SELECT origin_cluster_id, catalog_revision, thumbnail_serving_cluster_id FROM commodore.vod_assets`).
 			WithArgs("t1", "vod-1").
-			WillReturnRows(sqlmock.NewRows([]string{"origin_cluster_id", "catalog_revision"}).AddRow("media-us-1", int64(9)))
+			WillReturnRows(sqlmock.NewRows([]string{"origin_cluster_id", "catalog_revision", "thumbnail_serving_cluster_id"}).AddRow("media-us-1", int64(9), nil))
 		mock.ExpectCommit()
 		resp, err := s.UpdateArtifactCatalogSnapshot(context.Background(), &commodorepb.UpdateArtifactCatalogSnapshotRequest{
 			TenantId: "t1", AssetKey: "vod-1", SourceRevision: 7,
@@ -352,9 +352,9 @@ func TestUpdateArtifactCatalogSnapshot(t *testing.T) {
 			WillReturnError(sql.ErrNoRows)
 		mock.ExpectQuery(`UPDATE commodore.vod_assets[\s\S]*origin_cluster_id IS NULL OR origin_cluster_id = \$15`).
 			WillReturnError(sql.ErrNoRows)
-		mock.ExpectQuery(`SELECT origin_cluster_id, catalog_revision FROM commodore.vod_assets`).
+		mock.ExpectQuery(`SELECT origin_cluster_id, catalog_revision, thumbnail_serving_cluster_id FROM commodore.vod_assets`).
 			WithArgs("t1", "vod-1").
-			WillReturnRows(sqlmock.NewRows([]string{"origin_cluster_id", "catalog_revision"}).AddRow("media-us-1", int64(4)))
+			WillReturnRows(sqlmock.NewRows([]string{"origin_cluster_id", "catalog_revision", "thumbnail_serving_cluster_id"}).AddRow("media-us-1", int64(4), nil))
 		mock.ExpectRollback()
 		_, err := s.UpdateArtifactCatalogSnapshot(context.Background(), &commodorepb.UpdateArtifactCatalogSnapshotRequest{
 			TenantId: "t1", AssetKey: "vod-1", SourceRevision: 7,
@@ -376,7 +376,7 @@ func TestUpdateArtifactCatalogSnapshot(t *testing.T) {
 		mock.ExpectQuery(`SELECT deletion_revision, origin_cluster_id FROM commodore.artifact_catalog_tombstones[\s\S]*FOR UPDATE`).
 			WillReturnError(sql.ErrNoRows)
 		mock.ExpectQuery(`UPDATE commodore.vod_assets`).WillReturnError(sql.ErrNoRows)
-		mock.ExpectQuery(`SELECT origin_cluster_id, catalog_revision FROM commodore.vod_assets`).
+		mock.ExpectQuery(`SELECT origin_cluster_id, catalog_revision, thumbnail_serving_cluster_id FROM commodore.vod_assets`).
 			WithArgs("t1", "vod-1").WillReturnError(sql.ErrNoRows)
 		mock.ExpectCommit()
 		resp, err := s.UpdateArtifactCatalogSnapshot(context.Background(), &commodorepb.UpdateArtifactCatalogSnapshotRequest{
@@ -435,7 +435,7 @@ func TestUpdateArtifactCatalogSnapshot(t *testing.T) {
 		mock.ExpectExec(`DELETE FROM commodore.artifact_catalog_tombstones`).
 			WithArgs("t1", "vod", "vod-1").WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectQuery(`UPDATE commodore.vod_assets`).
-			WillReturnRows(sqlmock.NewRows([]string{"catalog_revision"}).AddRow(int64(9)))
+			WillReturnRows(sqlmock.NewRows([]string{"catalog_revision", "thumbnail_serving_cluster_id"}).AddRow(int64(9), nil))
 		mock.ExpectCommit()
 		resp, err := s.UpdateArtifactCatalogSnapshot(context.Background(), &commodorepb.UpdateArtifactCatalogSnapshotRequest{
 			TenantId: "t1", AssetKey: "vod-1", SourceRevision: 9,

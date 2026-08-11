@@ -18,7 +18,7 @@ type Interface interface {
 	ValidateStreamKey(ctx context.Context, streamKey string, clusterID ...string) (*commodorepb.ValidateStreamKeyResponse, error)
 	ListManagedStreams(ctx context.Context, clusterID string) (*commodorepb.ListManagedStreamsResponse, error)
 	ListStreamMonitoring(ctx context.Context, tenantID string) (*commodorepb.ListStreamMonitoringResponse, error)
-	RecordStreamActiveCluster(ctx context.Context, streamID, clusterID string) (*commodorepb.RecordStreamActiveClusterResponse, error)
+	RecordStreamActiveCluster(ctx context.Context, streamID, tenantID, clusterID string) (*commodorepb.RecordStreamActiveClusterResponse, error)
 	ClearStreamActiveCluster(ctx context.Context, streamID, expectedClusterID string) (*commodorepb.ClearStreamActiveClusterResponse, error)
 	ResolveStreamContext(ctx context.Context, streamID, playbackID, internalName, clusterID string) (*commodorepb.ResolveStreamContextResponse, error)
 	ResolvePlaybackID(ctx context.Context, playbackID string) (*commodorepb.ResolvePlaybackIDResponse, error)

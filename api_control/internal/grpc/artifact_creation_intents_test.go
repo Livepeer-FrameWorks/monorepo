@@ -335,9 +335,57 @@ func TestConvergeCommittedIntent_ClipWritesCatalogRow(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT deletion_revision FROM commodore\.artifact_catalog_tombstones`).
 		WillReturnError(sql.ErrNoRows)
+	// Parent-deletion fence: the clip's parent stream is still live.
+	mock.ExpectQuery(`SELECT deleted_at IS NULL FROM commodore\.streams WHERE id = .* AND tenant_id = .* FOR UPDATE`).
+		WithArgs("stream-1", "t1").
+		WillReturnRows(sqlmock.NewRows([]string{"live"}).AddRow(true))
 	mock.ExpectExec(`INSERT INTO commodore\.clips`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
+
+	s.convergeCommittedIntent(context.Background(),
+		creationIntentRow{tenantID: "t1", kind: creationIntentKindClip, artifactHash: "clip1", originClusterID: "c1", payload: payload},
+		&sharedpb.GetArtifactCreationStatusResponse{EffectiveStartMs: 100000, EffectiveDurationMs: 30000})
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A lost-success clip whose parent stream is deleted mid-convergence must be COMPENSATED, never abandoned. The
+// commit hits the parent-deletion fence and rolls back; convergence then tries to durably delete the orphaned
+// Foghorn artifact (compensation) before aborting the intent. When Foghorn is UNREACHABLE (no pool here), the
+// compensation cannot proceed, so the intent stays pending/recoverable (attempts bumped) rather than aborting while
+// the artifact is still live — it is never left pending FOREVER, and never aborted with a live orphan. The
+// successful compensate→abort path is covered by the wired integration test (real Foghorn).
+func TestConvergeCommittedIntent_ClipDeletedParentStaysRecoverable(t *testing.T) {
+	s, mock, done := newMockServer(t)
+	defer done()
+
+	payload, _ := json.Marshal(clipCreationPayload{
+		ClipID:       "clip-id-1",
+		UserID:       "user-1",
+		StreamID:     "stream-1",
+		InternalName: "vod+abc",
+		PlaybackID:   "pb-1",
+		ClipMode:     "absolute",
+	})
+	// tx1: the commit attempt hits the parent-deletion fence (parent not live) → rolls back with no catalog row.
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE commodore\.artifact_creation_intents`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT deletion_revision FROM commodore\.artifact_catalog_tombstones`).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`SELECT deleted_at IS NULL FROM commodore\.streams WHERE id = .* AND tenant_id = .* FOR UPDATE`).
+		WithArgs("stream-1", "t1").
+		WillReturnRows(sqlmock.NewRows([]string{"live"}).AddRow(false))
+	mock.ExpectRollback()
+	// Compensation is attempted (resolveFoghornForArtifact) but there is no Foghorn pool here → it fails, so the
+	// intent is only NOTED (attempts bumped, still 'pending') — NOT aborted while the artifact may still be live.
+	mock.ExpectExec(`UPDATE commodore\.artifact_creation_intents\s+SET attempts = attempts \+ 1`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	s.convergeCommittedIntent(context.Background(),
 		creationIntentRow{tenantID: "t1", kind: creationIntentKindClip, artifactHash: "clip1", originClusterID: "c1", payload: payload},

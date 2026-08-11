@@ -20,7 +20,7 @@ func storageArtifactRows() *sqlmock.Rows {
 		"kind", "id", "artifact_hash", "playback_id", "stream_id", "stream_title", "title", "secondary_label",
 		"size_bytes", "status", "storage_location", "created_at", "updated_at", "expires_at",
 		"retention_source", "origin_type", "origin_id", "storage_cluster_id", "has_thumbnails", "duration_ms", "tracks",
-		"sync_status", "is_synced", "is_finalized", "description", "error_message",
+		"sync_status", "is_synced", "is_finalized", "description", "error_message", "thumbnail_serving_cluster",
 	})
 }
 
@@ -55,8 +55,8 @@ func TestListStorageArtifacts(t *testing.T) {
 		mock.ExpectQuery("ORDER BY").
 			WithArgs("t1", 26, 0).
 			WillReturnRows(storageArtifactRows().
-				AddRow("vod", "id-1", "h1", "pb1", "", "", "Movie", "movie.mp4", int64(10), "processing", nil, mediaTS, mediaTS, nil, "", "", "", "", false, nil, nil, nil, nil, nil, "Launch recording", "transcode failed").
-				AddRow("clip", "id-2", "h2", "pb2", "", "", "Clip", "highlight", int64(5), "ready", "s3", mediaTS, mediaTS, nil, "", "", "", "", false, int64(60000), `[{"type":"video","codec":"h264","resolution":"1920x1080"}]`, "synced", true, true, "", ""))
+				AddRow("vod", "id-1", "h1", "pb1", "", "", "Movie", "movie.mp4", int64(10), "processing", nil, mediaTS, mediaTS, nil, "", "", "", "", false, nil, nil, nil, nil, nil, "Launch recording", "transcode failed", "").
+				AddRow("clip", "id-2", "h2", "pb2", "", "", "Clip", "highlight", int64(5), "ready", "s3", mediaTS, mediaTS, nil, "", "", "", "", false, int64(60000), `[{"type":"video","codec":"h264","resolution":"1920x1080"}]`, "synced", true, true, "", "", "cluster-a"))
 
 		resp, err := s.ListStorageArtifacts(ctxAs("u1", "t1", "owner"), &commodorepb.ListStorageArtifactsRequest{})
 		if err != nil {
@@ -93,8 +93,8 @@ func TestListStorageArtifacts(t *testing.T) {
 		mock.ExpectQuery(`(?s)artifact_hash = ANY.*ORDER BY`).
 			WithArgs("t1", pq.Array(hashes), 3, 0).
 			WillReturnRows(storageArtifactRows().
-				AddRow("vod", "id-1", "h1", "pb1", "", "", "Movie", "movie.mp4", int64(10), "ready", "s3", mediaTS, mediaTS, nil, "", "", "", "", false, nil, nil, "synced", true, false, "", "").
-				AddRow("vod", "id-2", "h2", "pb2", "", "", "Movie2", "movie2.mp4", int64(10), "ready", "s3", mediaTS, mediaTS, nil, "", "", "", "", false, nil, nil, "synced", true, false, "", ""))
+				AddRow("vod", "id-1", "h1", "pb1", "", "", "Movie", "movie.mp4", int64(10), "ready", "s3", mediaTS, mediaTS, nil, "", "", "", "", false, nil, nil, "synced", true, false, "", "", "").
+				AddRow("vod", "id-2", "h2", "pb2", "", "", "Movie2", "movie2.mp4", int64(10), "ready", "s3", mediaTS, mediaTS, nil, "", "", "", "", false, nil, nil, "synced", true, false, "", "", ""))
 
 		resp, err := s.ListStorageArtifacts(ctxAs("u1", "t1", "owner"),
 			&commodorepb.ListStorageArtifactsRequest{ArtifactHashes: hashes, Limit: 2})

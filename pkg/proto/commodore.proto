@@ -75,6 +75,13 @@ service InternalService {
   // wrong Foghorn. Same column push ingest writes during PUSH_REWRITE.
   rpc RecordStreamActiveCluster(RecordStreamActiveClusterRequest) returns (RecordStreamActiveClusterResponse);
 
+  // Durably registers a media cluster as a thumbnail-serving cell for a LIVE stream, BEFORE Foghorn mints an upload
+  // URL. Foghorn must receive registered=true before minting: the update is fenced by deleted_at IS NULL, so it
+  // serializes with DeleteStream on the stream row — a registration that commits first is included in the deletion's
+  // cleanup fan-out; if deletion wins, registration returns registered=false and Foghorn does not mint (no orphan
+  // bytes). Idempotent (unions the cell into streams.thumbnail_serving_cluster_ids).
+  rpc RegisterStreamThumbnailServingCell(RegisterStreamThumbnailServingCellRequest) returns (RegisterStreamThumbnailServingCellResponse);
+
   // Clears commodore.streams.active_ingest_cluster_id for a managed stream
   // once Foghorn has confirmed the Mist config is gone (verified retract).
   // Without this, a disabled / suspended / removed managed stream keeps
@@ -513,12 +520,23 @@ message ListStreamMonitoringResponse {
 message RecordStreamActiveClusterRequest {
   string stream_id = 1;
   string cluster_id = 2;
+  string tenant_id = 3; // tenant-scopes the placement mutation (repo tenant-filter rule)
 }
 
 message RecordStreamActiveClusterResponse {
   // updated=false when the row already records the requested cluster (noop),
   // or when a fresher claim from a different cluster holds the column.
   bool updated = 1;
+}
+message RegisterStreamThumbnailServingCellRequest {
+  string stream_id = 1;  // the live stream's Commodore UUID (asset_key)
+  string tenant_id = 2;  // owning tenant (tenant-isolation filter)
+  string cluster_id = 3; // the ingest/serving media cluster whose Foghorn is about to mint
+}
+message RegisterStreamThumbnailServingCellResponse {
+  // true = the cell is durably recorded on a LIVE stream (safe to mint). false = the stream is deleted/soft-deleted or
+  // not found (Foghorn MUST NOT mint — deletion won the race).
+  bool registered = 1;
 }
 
 message ClearStreamActiveClusterRequest {
@@ -875,6 +893,13 @@ message UpdateArtifactCatalogSnapshotRequest {
   // and /library shows the asset as Ready forever. For a dvr_chapter this also removes its
   // dvr_chapter_playback row.
   bool deleted = 19;
+  // AUTHORITATIVE thumbnail serving cluster: the tenant's official-durable cluster the thumbnail was projected to
+  // (foghorn.artifacts.thumbnail_serving_cluster_id), which is NOT necessarily storage_cluster_id (bytes) or the origin
+  // (provenance). Commodore prefers it when building the Chandler URL so a BYOC/cross-cell artifact links the cluster
+  // that actually holds the thumbnail. Whole-state, but write-once in practice; absent → NULL, readers fall back to
+  // COALESCE(thumbnail_serving_cluster_id, storage_cluster_id, origin_cluster_id). An OLD Commodore ignores this unknown
+  // field and the reader fallback covers it until the row re-projects — so mixed-version rollout is safe.
+  optional string thumbnail_serving_cluster_id = 21;
 }
 
 message UpdateArtifactCatalogSnapshotResponse {
@@ -883,6 +908,11 @@ message UpdateArtifactCatalogSnapshotResponse {
                               // watermark only when found AND current_revision >= source_revision, so a
                               // row inserted between the guarded UPDATE and the readback (with a lower
                               // revision) is never mistaken for coverage.
+  // ECHO of the STORED thumbnail_serving_cluster_id after the write. The caller (Foghorn reconciler) advances its
+  // watermark for a row it projected a NON-EMPTY serving cluster for ONLY when this echo matches — proof a NEW
+  // Commodore actually stored the field. An OLD Commodore ignores the unknown request field 21 AND returns "" here, so
+  // the caller keeps the row dirty and re-projects after Commodore upgrades. This closes the mixed-version loss window.
+  optional string thumbnail_serving_cluster_id = 3;
 }
 
 // Resolve clip hash to tenant context
@@ -1675,6 +1705,10 @@ message DeleteStreamResponse {
   string stream_id = 2;                 // json:"stream_id"
   string stream_title = 3;              // json:"stream_title"
   google.protobuf.Timestamp deleted_at = 4; // json:"deleted_at"
+  // Two-phase deletion phase: "deleted" when the serving authority (Foghorn) has durably acknowledged the
+  // thumbnail-cleanup obligation and the stream is finalized; "deletion_pending" when the stream is soft-deleted
+  // (excluded from serving/listing) but finalization is still awaiting Foghorn — the cleanup worker converges it.
+  string deletion_status = 5;           // json:"deletion_status"
 }
 
 // ============================================================================

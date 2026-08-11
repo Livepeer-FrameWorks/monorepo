@@ -840,6 +840,22 @@ func (s *CommodoreServer) convergeCommittedIntent(ctx context.Context, r creatio
 			// Another sweeper (or the inline create) already terminalized this intent.
 			return
 		}
+		if errors.Is(err, errParentStreamDeleted) {
+			// COMPENSATION: the parent stream is being deleted, so this committed clip can never be catalogued —
+			// and because its catalog row was never written, the stream-deletion cascade (which enumerates
+			// commodore.clips) can never find it. So convergence itself must reclaim the orphaned Foghorn artifact:
+			// durably DeleteClip, THEN abort the intent. If the compensation delete fails, keep the intent pending
+			// (recoverable retry) — never abort while the artifact is still live, and never leave it pending forever
+			// once compensated.
+			if cErr := s.compensateOrphanedClipIntent(ctx, r); cErr != nil {
+				s.noteCreationIntentAttempt(ctx, r, "clip parent deleted; compensation pending: "+cErr.Error())
+				return
+			}
+			if aErr := s.abortCreationIntent(ctx, r, r.leaseToken, "parent stream deleted; committed clip compensated", false); aErr != nil && !errors.Is(aErr, errIntentCASMiss) {
+				s.noteCreationIntentAttempt(ctx, r, "clip compensation abort failed: "+aErr.Error())
+			}
+			return
+		}
 		s.noteCreationIntentAttempt(ctx, r, "clip catalog completion failed: "+err.Error())
 		return
 	}
@@ -851,6 +867,20 @@ func (s *CommodoreServer) convergeCommittedIntent(ctx context.Context, r creatio
 		"kind":          r.kind,
 		"artifact_hash": r.artifactHash,
 	}).Info("Creation intent converged to committed (live catalog)")
+}
+
+// compensateOrphanedClipIntent durably deletes the committed Foghorn clip artifact for an intent whose parent stream
+// was deleted mid-convergence, so the orphan (never catalogued, so invisible to the stream-deletion cascade) is
+// reclaimed. Uses the same idempotent DeleteClip the normal delete path uses, routed to the clip's origin-cluster
+// Foghorn; an already-deleted artifact is a benign no-op (childDeleteAcked). Returns an error to keep the intent
+// pending for retry if the artifact is still live and the delete could not be confirmed.
+func (s *CommodoreServer) compensateOrphanedClipIntent(ctx context.Context, r creationIntentRow) error {
+	fc, err := s.resolveFoghornForArtifact(ctx, r.tenantID, r.originClusterID)
+	if err != nil {
+		return fmt.Errorf("resolve foghorn: %w", err)
+	}
+	resp, _, dErr := fc.DeleteClip(ctx, r.artifactHash, &r.tenantID)
+	return childDeleteAcked("clip", r.artifactHash, resp, dErr)
 }
 
 // clipCatalogRowMutator inserts the commodore.clips row a lost-success clip never
@@ -888,6 +918,14 @@ func clipCatalogRowMutator(r creationIntentRow, p clipCreationPayload, startMs, 
 		var secretArg any
 		if p.WebhookSecretEnc != nil {
 			secretArg = *p.WebhookSecretEnc
+		}
+		// FENCE the parent against a concurrent deletion IN this tx — a clip must not be catalogued behind a stream
+		// that is being torn down (the clip's own artifact would then survive the parent's finalization). On a gone
+		// parent this returns errParentStreamDeleted; a lost-success convergence keeps the intent pending/recoverable
+		// (never terminalizes it, which would strand the committed Foghorn artifact). NOTE: this synchronous lock
+		// serializes Commodore transactions only — it does not span Foghorn's separate artifact commit.
+		if fErr := fenceParentStreamLive(ctx, tx, r.tenantID, p.StreamID); fErr != nil {
+			return fErr
 		}
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO commodore.clips (

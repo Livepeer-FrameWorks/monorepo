@@ -772,7 +772,7 @@ func (s *CommodoreServer) lookupPolicyByPlaybackID(ctx context.Context, playback
 	)
 	fetchErr = s.db.QueryRowContext(ctx, `
 		SELECT playback_policy, playback_webhook_secret_enc, tenant_id
-		FROM commodore.streams WHERE playback_id = $1
+		FROM commodore.streams WHERE playback_id = $1 AND deleted_at IS NULL
 	`, playbackID).Scan(&policy, &secret, &tenantID)
 	if fetchErr == nil {
 		out := append([]byte(nil), policy...)
@@ -840,7 +840,7 @@ func (s *CommodoreServer) lookupPolicyByInternalName(ctx context.Context, intern
 	)
 	fetchErr = s.db.QueryRowContext(ctx, `
 		SELECT playback_policy, playback_webhook_secret_enc, tenant_id
-		FROM commodore.streams WHERE internal_name = $1
+		FROM commodore.streams WHERE internal_name = $1 AND deleted_at IS NULL
 	`, internalName).Scan(&policy, &secret, &tenantID)
 	if fetchErr == nil {
 		out := append([]byte(nil), policy...)

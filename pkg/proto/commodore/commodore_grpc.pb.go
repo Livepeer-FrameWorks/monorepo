@@ -22,52 +22,53 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	InternalService_ValidateStreamKey_FullMethodName               = "/commodore.InternalService/ValidateStreamKey"
-	InternalService_ResolveStreamContext_FullMethodName            = "/commodore.InternalService/ResolveStreamContext"
-	InternalService_ListManagedStreams_FullMethodName              = "/commodore.InternalService/ListManagedStreams"
-	InternalService_ListStreamMonitoring_FullMethodName            = "/commodore.InternalService/ListStreamMonitoring"
-	InternalService_RecordStreamActiveCluster_FullMethodName       = "/commodore.InternalService/RecordStreamActiveCluster"
-	InternalService_ClearStreamActiveCluster_FullMethodName        = "/commodore.InternalService/ClearStreamActiveCluster"
-	InternalService_ResolvePlaybackID_FullMethodName               = "/commodore.InternalService/ResolvePlaybackID"
-	InternalService_ResolvePullSourceByInternalName_FullMethodName = "/commodore.InternalService/ResolvePullSourceByInternalName"
-	InternalService_ResolvePlaybackPolicy_FullMethodName           = "/commodore.InternalService/ResolvePlaybackPolicy"
-	InternalService_GetSignedPolicyBundle_FullMethodName           = "/commodore.InternalService/GetSignedPolicyBundle"
-	InternalService_RecordSigningKeyUse_FullMethodName             = "/commodore.InternalService/RecordSigningKeyUse"
-	InternalService_ResolveInternalName_FullMethodName             = "/commodore.InternalService/ResolveInternalName"
-	InternalService_ValidateAPIToken_FullMethodName                = "/commodore.InternalService/ValidateAPIToken"
-	InternalService_MintMistAdminSession_FullMethodName            = "/commodore.InternalService/MintMistAdminSession"
-	InternalService_ValidateMistAdminSession_FullMethodName        = "/commodore.InternalService/ValidateMistAdminSession"
-	InternalService_StartDVR_FullMethodName                        = "/commodore.InternalService/StartDVR"
-	InternalService_RetrieveDVRChapter_FullMethodName              = "/commodore.InternalService/RetrieveDVRChapter"
-	InternalService_ListDVRChapters_FullMethodName                 = "/commodore.InternalService/ListDVRChapters"
-	InternalService_RegisterDVR_FullMethodName                     = "/commodore.InternalService/RegisterDVR"
-	InternalService_UpdateDVRRetention_FullMethodName              = "/commodore.InternalService/UpdateDVRRetention"
-	InternalService_UpdateArtifactCatalogSnapshot_FullMethodName   = "/commodore.InternalService/UpdateArtifactCatalogSnapshot"
-	InternalService_ResolveClipHash_FullMethodName                 = "/commodore.InternalService/ResolveClipHash"
-	InternalService_ResolveDVRHash_FullMethodName                  = "/commodore.InternalService/ResolveDVRHash"
-	InternalService_ResolveArtifactPlaybackID_FullMethodName       = "/commodore.InternalService/ResolveArtifactPlaybackID"
-	InternalService_ResolveArtifactInternalName_FullMethodName     = "/commodore.InternalService/ResolveArtifactInternalName"
-	InternalService_ResolveIdentifier_FullMethodName               = "/commodore.InternalService/ResolveIdentifier"
-	InternalService_ResolveVodHash_FullMethodName                  = "/commodore.InternalService/ResolveVodHash"
-	InternalService_ResolveVodID_FullMethodName                    = "/commodore.InternalService/ResolveVodID"
-	InternalService_MintChapterPlaybackID_FullMethodName           = "/commodore.InternalService/MintChapterPlaybackID"
-	InternalService_ResolveChapterPlaybackID_FullMethodName        = "/commodore.InternalService/ResolveChapterPlaybackID"
-	InternalService_GetTenantProcessesJSON_FullMethodName          = "/commodore.InternalService/GetTenantProcessesJSON"
-	InternalService_ListStorageArtifacts_FullMethodName            = "/commodore.InternalService/ListStorageArtifacts"
-	InternalService_GetOrCreateWalletUser_FullMethodName           = "/commodore.InternalService/GetOrCreateWalletUser"
-	InternalService_TerminateTenantStreams_FullMethodName          = "/commodore.InternalService/TerminateTenantStreams"
-	InternalService_InvalidateTenantCache_FullMethodName           = "/commodore.InternalService/InvalidateTenantCache"
-	InternalService_GetTenantUserCount_FullMethodName              = "/commodore.InternalService/GetTenantUserCount"
-	InternalService_GetTenantPrimaryUser_FullMethodName            = "/commodore.InternalService/GetTenantPrimaryUser"
-	InternalService_CreateUserInTenant_FullMethodName              = "/commodore.InternalService/CreateUserInTenant"
-	InternalService_GetMediaRetentionPolicy_FullMethodName         = "/commodore.InternalService/GetMediaRetentionPolicy"
-	InternalService_SetMediaRetentionPolicy_FullMethodName         = "/commodore.InternalService/SetMediaRetentionPolicy"
-	InternalService_UpdateAssetRetention_FullMethodName            = "/commodore.InternalService/UpdateAssetRetention"
-	InternalService_ResetAssetRetention_FullMethodName             = "/commodore.InternalService/ResetAssetRetention"
-	InternalService_SetStreamRetentionOverrides_FullMethodName     = "/commodore.InternalService/SetStreamRetentionOverrides"
-	InternalService_TestPlaybackAccess_FullMethodName              = "/commodore.InternalService/TestPlaybackAccess"
-	InternalService_RecordPullSourceEvent_FullMethodName           = "/commodore.InternalService/RecordPullSourceEvent"
-	InternalService_ListPullSourceEvents_FullMethodName            = "/commodore.InternalService/ListPullSourceEvents"
+	InternalService_ValidateStreamKey_FullMethodName                  = "/commodore.InternalService/ValidateStreamKey"
+	InternalService_ResolveStreamContext_FullMethodName               = "/commodore.InternalService/ResolveStreamContext"
+	InternalService_ListManagedStreams_FullMethodName                 = "/commodore.InternalService/ListManagedStreams"
+	InternalService_ListStreamMonitoring_FullMethodName               = "/commodore.InternalService/ListStreamMonitoring"
+	InternalService_RecordStreamActiveCluster_FullMethodName          = "/commodore.InternalService/RecordStreamActiveCluster"
+	InternalService_RegisterStreamThumbnailServingCell_FullMethodName = "/commodore.InternalService/RegisterStreamThumbnailServingCell"
+	InternalService_ClearStreamActiveCluster_FullMethodName           = "/commodore.InternalService/ClearStreamActiveCluster"
+	InternalService_ResolvePlaybackID_FullMethodName                  = "/commodore.InternalService/ResolvePlaybackID"
+	InternalService_ResolvePullSourceByInternalName_FullMethodName    = "/commodore.InternalService/ResolvePullSourceByInternalName"
+	InternalService_ResolvePlaybackPolicy_FullMethodName              = "/commodore.InternalService/ResolvePlaybackPolicy"
+	InternalService_GetSignedPolicyBundle_FullMethodName              = "/commodore.InternalService/GetSignedPolicyBundle"
+	InternalService_RecordSigningKeyUse_FullMethodName                = "/commodore.InternalService/RecordSigningKeyUse"
+	InternalService_ResolveInternalName_FullMethodName                = "/commodore.InternalService/ResolveInternalName"
+	InternalService_ValidateAPIToken_FullMethodName                   = "/commodore.InternalService/ValidateAPIToken"
+	InternalService_MintMistAdminSession_FullMethodName               = "/commodore.InternalService/MintMistAdminSession"
+	InternalService_ValidateMistAdminSession_FullMethodName           = "/commodore.InternalService/ValidateMistAdminSession"
+	InternalService_StartDVR_FullMethodName                           = "/commodore.InternalService/StartDVR"
+	InternalService_RetrieveDVRChapter_FullMethodName                 = "/commodore.InternalService/RetrieveDVRChapter"
+	InternalService_ListDVRChapters_FullMethodName                    = "/commodore.InternalService/ListDVRChapters"
+	InternalService_RegisterDVR_FullMethodName                        = "/commodore.InternalService/RegisterDVR"
+	InternalService_UpdateDVRRetention_FullMethodName                 = "/commodore.InternalService/UpdateDVRRetention"
+	InternalService_UpdateArtifactCatalogSnapshot_FullMethodName      = "/commodore.InternalService/UpdateArtifactCatalogSnapshot"
+	InternalService_ResolveClipHash_FullMethodName                    = "/commodore.InternalService/ResolveClipHash"
+	InternalService_ResolveDVRHash_FullMethodName                     = "/commodore.InternalService/ResolveDVRHash"
+	InternalService_ResolveArtifactPlaybackID_FullMethodName          = "/commodore.InternalService/ResolveArtifactPlaybackID"
+	InternalService_ResolveArtifactInternalName_FullMethodName        = "/commodore.InternalService/ResolveArtifactInternalName"
+	InternalService_ResolveIdentifier_FullMethodName                  = "/commodore.InternalService/ResolveIdentifier"
+	InternalService_ResolveVodHash_FullMethodName                     = "/commodore.InternalService/ResolveVodHash"
+	InternalService_ResolveVodID_FullMethodName                       = "/commodore.InternalService/ResolveVodID"
+	InternalService_MintChapterPlaybackID_FullMethodName              = "/commodore.InternalService/MintChapterPlaybackID"
+	InternalService_ResolveChapterPlaybackID_FullMethodName           = "/commodore.InternalService/ResolveChapterPlaybackID"
+	InternalService_GetTenantProcessesJSON_FullMethodName             = "/commodore.InternalService/GetTenantProcessesJSON"
+	InternalService_ListStorageArtifacts_FullMethodName               = "/commodore.InternalService/ListStorageArtifacts"
+	InternalService_GetOrCreateWalletUser_FullMethodName              = "/commodore.InternalService/GetOrCreateWalletUser"
+	InternalService_TerminateTenantStreams_FullMethodName             = "/commodore.InternalService/TerminateTenantStreams"
+	InternalService_InvalidateTenantCache_FullMethodName              = "/commodore.InternalService/InvalidateTenantCache"
+	InternalService_GetTenantUserCount_FullMethodName                 = "/commodore.InternalService/GetTenantUserCount"
+	InternalService_GetTenantPrimaryUser_FullMethodName               = "/commodore.InternalService/GetTenantPrimaryUser"
+	InternalService_CreateUserInTenant_FullMethodName                 = "/commodore.InternalService/CreateUserInTenant"
+	InternalService_GetMediaRetentionPolicy_FullMethodName            = "/commodore.InternalService/GetMediaRetentionPolicy"
+	InternalService_SetMediaRetentionPolicy_FullMethodName            = "/commodore.InternalService/SetMediaRetentionPolicy"
+	InternalService_UpdateAssetRetention_FullMethodName               = "/commodore.InternalService/UpdateAssetRetention"
+	InternalService_ResetAssetRetention_FullMethodName                = "/commodore.InternalService/ResetAssetRetention"
+	InternalService_SetStreamRetentionOverrides_FullMethodName        = "/commodore.InternalService/SetStreamRetentionOverrides"
+	InternalService_TestPlaybackAccess_FullMethodName                 = "/commodore.InternalService/TestPlaybackAccess"
+	InternalService_RecordPullSourceEvent_FullMethodName              = "/commodore.InternalService/RecordPullSourceEvent"
+	InternalService_ListPullSourceEvents_FullMethodName               = "/commodore.InternalService/ListPullSourceEvents"
 )
 
 // InternalServiceClient is the client API for InternalService service.
@@ -119,6 +120,12 @@ type InternalServiceClient interface {
 	// a managed stream pinned to a non-default cluster gets routed to the
 	// wrong Foghorn. Same column push ingest writes during PUSH_REWRITE.
 	RecordStreamActiveCluster(ctx context.Context, in *RecordStreamActiveClusterRequest, opts ...grpc.CallOption) (*RecordStreamActiveClusterResponse, error)
+	// Durably registers a media cluster as a thumbnail-serving cell for a LIVE stream, BEFORE Foghorn mints an upload
+	// URL. Foghorn must receive registered=true before minting: the update is fenced by deleted_at IS NULL, so it
+	// serializes with DeleteStream on the stream row — a registration that commits first is included in the deletion's
+	// cleanup fan-out; if deletion wins, registration returns registered=false and Foghorn does not mint (no orphan
+	// bytes). Idempotent (unions the cell into streams.thumbnail_serving_cluster_ids).
+	RegisterStreamThumbnailServingCell(ctx context.Context, in *RegisterStreamThumbnailServingCellRequest, opts ...grpc.CallOption) (*RegisterStreamThumbnailServingCellResponse, error)
 	// Clears commodore.streams.active_ingest_cluster_id for a managed stream
 	// once Foghorn has confirmed the Mist config is gone (verified retract).
 	// Without this, a disabled / suspended / removed managed stream keeps
@@ -322,6 +329,16 @@ func (c *internalServiceClient) RecordStreamActiveCluster(ctx context.Context, i
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RecordStreamActiveClusterResponse)
 	err := c.cc.Invoke(ctx, InternalService_RecordStreamActiveCluster_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) RegisterStreamThumbnailServingCell(ctx context.Context, in *RegisterStreamThumbnailServingCellRequest, opts ...grpc.CallOption) (*RegisterStreamThumbnailServingCellResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RegisterStreamThumbnailServingCellResponse)
+	err := c.cc.Invoke(ctx, InternalService_RegisterStreamThumbnailServingCell_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -787,6 +804,12 @@ type InternalServiceServer interface {
 	// a managed stream pinned to a non-default cluster gets routed to the
 	// wrong Foghorn. Same column push ingest writes during PUSH_REWRITE.
 	RecordStreamActiveCluster(context.Context, *RecordStreamActiveClusterRequest) (*RecordStreamActiveClusterResponse, error)
+	// Durably registers a media cluster as a thumbnail-serving cell for a LIVE stream, BEFORE Foghorn mints an upload
+	// URL. Foghorn must receive registered=true before minting: the update is fenced by deleted_at IS NULL, so it
+	// serializes with DeleteStream on the stream row — a registration that commits first is included in the deletion's
+	// cleanup fan-out; if deletion wins, registration returns registered=false and Foghorn does not mint (no orphan
+	// bytes). Idempotent (unions the cell into streams.thumbnail_serving_cluster_ids).
+	RegisterStreamThumbnailServingCell(context.Context, *RegisterStreamThumbnailServingCellRequest) (*RegisterStreamThumbnailServingCellResponse, error)
 	// Clears commodore.streams.active_ingest_cluster_id for a managed stream
 	// once Foghorn has confirmed the Mist config is gone (verified retract).
 	// Without this, a disabled / suspended / removed managed stream keeps
@@ -960,6 +983,9 @@ func (UnimplementedInternalServiceServer) ListStreamMonitoring(context.Context, 
 }
 func (UnimplementedInternalServiceServer) RecordStreamActiveCluster(context.Context, *RecordStreamActiveClusterRequest) (*RecordStreamActiveClusterResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RecordStreamActiveCluster not implemented")
+}
+func (UnimplementedInternalServiceServer) RegisterStreamThumbnailServingCell(context.Context, *RegisterStreamThumbnailServingCellRequest) (*RegisterStreamThumbnailServingCellResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RegisterStreamThumbnailServingCell not implemented")
 }
 func (UnimplementedInternalServiceServer) ClearStreamActiveCluster(context.Context, *ClearStreamActiveClusterRequest) (*ClearStreamActiveClusterResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ClearStreamActiveCluster not implemented")
@@ -1191,6 +1217,24 @@ func _InternalService_RecordStreamActiveCluster_Handler(srv interface{}, ctx con
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(InternalServiceServer).RecordStreamActiveCluster(ctx, req.(*RecordStreamActiveClusterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_RegisterStreamThumbnailServingCell_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RegisterStreamThumbnailServingCellRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).RegisterStreamThumbnailServingCell(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_RegisterStreamThumbnailServingCell_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).RegisterStreamThumbnailServingCell(ctx, req.(*RegisterStreamThumbnailServingCellRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1959,6 +2003,10 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RecordStreamActiveCluster",
 			Handler:    _InternalService_RecordStreamActiveCluster_Handler,
+		},
+		{
+			MethodName: "RegisterStreamThumbnailServingCell",
+			Handler:    _InternalService_RegisterStreamThumbnailServingCell_Handler,
 		},
 		{
 			MethodName: "ClearStreamActiveCluster",
