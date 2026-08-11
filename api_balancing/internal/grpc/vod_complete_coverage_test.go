@@ -20,6 +20,11 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// testStubBackendID is the backend fingerprint that s.localBackendID() computes for the VOD S3 stubs (whose
+// BackendDescriptor returns this exact tuple). Recorded backend_id in mocks must equal it so the ownership fence
+// (recorded == local) passes for owned rows; a different value models a foreign backend.
+var testStubBackendID = control.BackendFingerprint("s3", "test-bucket", "https://s3.example", "eu-central", "prod")
+
 // completeVodS3Stub is a VOD S3 seam whose CompleteMultipartUpload actually
 // records its inputs (the production fakeVodS3Client panics on it). Named with
 // the -VodComplete suffix to avoid colliding with the other grpc test agent.
@@ -72,14 +77,21 @@ func (f *completeVodS3Stub) GeneratePresignedGET(string, time.Duration) (string,
 	return "https://example.com/presigned", nil
 }
 
+// BackendDescriptor gives the stub a non-empty local backend fingerprint so CompleteVodUpload's I2 verify (the recorded
+// backend must be present) actually runs in tests rather than being skipped for a descriptor-less store.
+func (f *completeVodS3Stub) BackendDescriptor() (bucket, endpoint, region, prefix string) {
+	return "test-bucket", "https://s3.example", "eu-central", "prod"
+}
+
 // expectVodCompletionContractLoad stubs the authoritative-contract SELECT that CompleteVodUpload issues
-// after the claim: it returns the persisted vod_completion_descriptor (the ordered part set + upload id)
-// and processes_json the RPC must use instead of the retry request's parts/spec.
+// after the claim: it returns the persisted vod_completion_descriptor (the ordered part set + upload id),
+// processes_json the RPC must use instead of the retry request's parts/spec, and the backend_id recorded
+// when the upload was created (verified, never reconstructed).
 func expectVodCompletionContractLoad(mock sqlmock.Sqlmock, hash, descriptorJSON string) {
-	mock.ExpectQuery(`SELECT COALESCE\(vod_completion_descriptor::text`).
+	mock.ExpectQuery(`SELECT COALESCE\(v.vod_completion_descriptor::text`).
 		WithArgs(hash).
-		WillReturnRows(sqlmock.NewRows([]string{"vod_completion_descriptor", "processes_json"}).
-			AddRow(descriptorJSON, ""))
+		WillReturnRows(sqlmock.NewRows([]string{"vod_completion_descriptor", "processes_json", "backend_id"}).
+			AddRow(descriptorJSON, "", testStubBackendID))
 }
 
 func newCompleteVodServer(t *testing.T, s3 *completeVodS3Stub) (*FoghornGRPCServer, sqlmock.Sqlmock, func()) {
@@ -295,7 +307,7 @@ func TestCompleteVodUpload_HappyPathTransitionsToProcessing(t *testing.T) {
 	}
 }
 
-// Invariant (F2 reconciliation): a retry where the multipart already completed on a prior attempt
+// Reconciliation invariant: a retry where the multipart already completed on a prior attempt
 // (S3 returns NoSuchUpload) but the durable PG transition never committed must NOT record 'failed'.
 // The row is already claimed ('completing'); with the final object present (Exists=true) the RPC
 // converges idempotently to 'processing' by running ONLY the durable transition — it never re-runs
@@ -373,7 +385,7 @@ func TestCompleteVodUpload_NoSuchUploadWithObjectConvergesToProcessing(t *testin
 	}
 }
 
-// Invariant (F2 idempotency): a retry that finds the artifact already 'processing' returns the asset
+// Idempotency invariant: a retry that finds the artifact already 'processing' returns the asset
 // without calling S3 again or re-running the durable transition. This is the converged terminal of
 // the reconciliation flow — the second call must be a pure no-op against storage.
 func TestCompleteVodUpload_RetryAlreadyProcessingIsNoOp(t *testing.T) {
@@ -452,6 +464,52 @@ func TestCompleteVodUpload_CompletingRetryDivergentPartsRejected(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+// Invariant (I2): completion FENCES on exact backend ownership recorded when the upload was CREATED — recorded
+// backend_id must EQUAL this cell's local store. A missing (unattributed) OR mismatched (foreign) backend is refused
+// BEFORE the irreversible S3 completion or any state transition. Presence alone is NOT enough; only exact equality
+// lets a foreign object never be finalized on the current store (which cleanup would then refuse to delete, leaking it).
+func TestCompleteVodUpload_BackendOwnershipFence(t *testing.T) {
+	cases := []struct {
+		name     string
+		recorded string
+	}{
+		{"missing (unattributed)", ""},
+		{"mismatch (foreign backend)", "some-other-cell-backend"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s3 := &completeVodS3Stub{} // BackendDescriptor => localBackendID() is this cell's real fingerprint
+			srv, mock, cleanup := newCompleteVodServer(t, s3)
+			defer cleanup()
+
+			mock.ExpectQuery(`SELECT v\.artifact_hash, v\.s3_key, a\.size_bytes, a\.user_id, a\.status`).
+				WithArgs("up-1", "t1").
+				WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_key", "size_bytes", "user_id", "status"}).
+					AddRow("hash-1", "vod/t1/hash-1/video.mp4", int64(2048), "user-1", "completing"))
+			mock.ExpectQuery(`SELECT COALESCE\(v.vod_completion_descriptor::text`).
+				WithArgs("hash-1").
+				WillReturnRows(sqlmock.NewRows([]string{"vod_completion_descriptor", "processes_json", "backend_id"}).
+					AddRow(`{"s3_key":"vod/t1/hash-1/video.mp4","upload_id":"up-1","parts":[{"part_number":1,"etag":"et-1"}]}`, "", tc.recorded))
+			// No further expectations: the RPC must fail closed before any S3 completion or state write.
+
+			_, err := srv.CompleteVodUpload(context.Background(), &sharedpb.CompleteVodUploadRequest{
+				TenantId: "t1",
+				UploadId: "up-1",
+				Parts:    []*sharedpb.VodCompletedPart{{PartNumber: 1, Etag: "et-1"}},
+			})
+			if got := status.Code(err); got != codes.Internal {
+				t.Fatalf("expected Internal for %s, got %s (err=%v)", tc.name, got, err)
+			}
+			if s3.completeKey != "" || s3.existsCalls != 0 {
+				t.Fatalf("S3 must not be touched on a fenced row: completeKey=%q existsCalls=%d", s3.completeKey, s3.existsCalls)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unmet SQL expectations: %v", err)
+			}
+		})
 	}
 }
 

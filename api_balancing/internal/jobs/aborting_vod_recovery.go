@@ -11,6 +11,7 @@ import (
 	smithy "github.com/aws/smithy-go"
 
 	"frameworks/api_balancing/internal/artifactoutbox"
+	"frameworks/api_balancing/internal/artifacts"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -32,24 +33,26 @@ type AbortingVodRecoveryS3 interface {
 // tenant-scoped, so it is idempotent on every replica and against a concurrent client abort finishing
 // the same row.
 type AbortingVodRecoveryJob struct {
-	db         *sql.DB
-	s3         AbortingVodRecoveryS3
-	logger     logging.Logger
-	interval   time.Duration
-	staleAfter time.Duration // re-run the abort for rows whose last attempt is older than this
-	batchSize  int
-	stopCh     chan struct{}
-	wg         sync.WaitGroup
+	db             *sql.DB
+	s3             AbortingVodRecoveryS3
+	logger         logging.Logger
+	interval       time.Duration
+	staleAfter     time.Duration // re-run the abort for rows whose last attempt is older than this
+	batchSize      int
+	localBackendID string // this cell's local backend fingerprint; the abort re-run is fenced on recorded == local
+	stopCh         chan struct{}
+	wg             sync.WaitGroup
 }
 
 // AbortingVodRecoveryConfig configures the recovery scan.
 type AbortingVodRecoveryConfig struct {
-	DB         *sql.DB
-	S3         AbortingVodRecoveryS3
-	Logger     logging.Logger
-	Interval   time.Duration // How often to run (default: 2 minutes)
-	StaleAfter time.Duration // Re-run 'aborting' rows older than this (default: 5 minutes)
-	BatchSize  int           // Max rows per pass (default: 50)
+	DB             *sql.DB
+	S3             AbortingVodRecoveryS3
+	Logger         logging.Logger
+	Interval       time.Duration // How often to run (default: 2 minutes)
+	StaleAfter     time.Duration // Re-run 'aborting' rows older than this (default: 5 minutes)
+	BatchSize      int           // Max rows per pass (default: 50)
+	LocalBackendID string        // this cell's local backend fingerprint; the abort re-run is fenced on recorded == local
 }
 
 // NewAbortingVodRecoveryJob builds the recovery scan with defaulted thresholds. A nil S3 client yields
@@ -69,13 +72,14 @@ func NewAbortingVodRecoveryJob(cfg AbortingVodRecoveryConfig) *AbortingVodRecove
 		batchSize = 50
 	}
 	return &AbortingVodRecoveryJob{
-		db:         cfg.DB,
-		s3:         cfg.S3,
-		logger:     cfg.Logger,
-		interval:   interval,
-		staleAfter: staleAfter,
-		batchSize:  batchSize,
-		stopCh:     make(chan struct{}),
+		db:             cfg.DB,
+		s3:             cfg.S3,
+		logger:         cfg.Logger,
+		interval:       interval,
+		staleAfter:     staleAfter,
+		batchSize:      batchSize,
+		localBackendID: cfg.LocalBackendID,
+		stopCh:         make(chan struct{}),
 	}
 }
 
@@ -115,6 +119,7 @@ type abortingVodRow struct {
 	userID       string
 	s3Key        string
 	uploadID     string
+	backendID    string // recorded backend owner; the abort re-run is fenced on backendID == j.localBackendID
 }
 
 func (j *AbortingVodRecoveryJob) reconcile() {
@@ -134,7 +139,8 @@ func (j *AbortingVodRecoveryJob) reconcile() {
 		       a.tenant_id::text,
 		       COALESCE(a.user_id::text, ''),
 		       COALESCE(v.s3_key, ''),
-		       COALESCE(v.s3_upload_id, '')
+		       COALESCE(v.s3_upload_id, ''),
+		       COALESCE(a.backend_id, '')
 		FROM foghorn.artifacts a
 		JOIN foghorn.vod_metadata v ON v.artifact_hash = a.artifact_hash
 		WHERE a.artifact_type = 'vod'
@@ -150,7 +156,7 @@ func (j *AbortingVodRecoveryJob) reconcile() {
 	var batch []abortingVodRow
 	for rows.Next() {
 		var r abortingVodRow
-		if scanErr := rows.Scan(&r.artifactHash, &r.tenantID, &r.userID, &r.s3Key, &r.uploadID); scanErr != nil {
+		if scanErr := rows.Scan(&r.artifactHash, &r.tenantID, &r.userID, &r.s3Key, &r.uploadID, &r.backendID); scanErr != nil {
 			j.logger.WithError(scanErr).Warn("Aborting-VOD recovery: row scan failed")
 			continue
 		}
@@ -173,6 +179,13 @@ func (j *AbortingVodRecoveryJob) reconcile() {
 }
 
 func (j *AbortingVodRecoveryJob) reconcileOne(ctx context.Context, r abortingVodRow) {
+	// FENCE FIRST, before ANY S3 call: only re-run the abort for a multipart this cell owns (recorded backend ==
+	// local). A foreign/unattributed row is left 'aborting' untouched — no AbortMultipartUpload, no state change — so
+	// this cell never tears down an upload on a store it must not write.
+	if ownErr := artifacts.VerifyLocalMultipartOwnership(r.backendID, j.localBackendID); ownErr != nil {
+		j.logger.WithError(ownErr).WithField("artifact_hash", r.artifactHash).Warn("Aborting-VOD recovery: ownership fence — leaving row untouched (zero S3 calls)")
+		return
+	}
 	// Re-run AbortMultipartUpload idempotently. A NoSuchUpload/already-aborted result means a prior
 	// attempt already tore the multipart upload down — that is success, converge. Any other error leaves
 	// the row 'aborting' for a later pass; do NOT delete metadata or emit DELETED while the multipart

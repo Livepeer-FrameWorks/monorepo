@@ -38,7 +38,7 @@ func (f *fakeS3) ParseS3URL(s3URL string) (string, error) {
 
 func TestCleaner_LocalClipUsesFormatColumn(t *testing.T) {
 	s3 := &fakeS3{}
-	c := &Cleaner{LocalCluster: "eu-west", S3: s3}
+	c := &Cleaner{LocalCluster: "eu-west", S3: s3, LocalBackendID: "local-backend"}
 
 	err := c.Delete(context.Background(), ArtifactRef{
 		Hash:           "clip-1",
@@ -46,6 +46,7 @@ func TestCleaner_LocalClipUsesFormatColumn(t *testing.T) {
 		TenantID:       "tenant-a",
 		StreamInternal: "stream-x",
 		Format:         "webm",
+		BackendID:      "local-backend",
 	})
 	if err != nil {
 		t.Fatalf("Delete err = %v", err)
@@ -62,15 +63,88 @@ func TestCleaner_LocalClipUsesFormatColumn(t *testing.T) {
 	}
 }
 
+// Under the immutable-single-backend model, a local delete whose recorded backend_id EXACTLY matches the cell's
+// current store sweeps that store. This is the common production case: the backend never changes and every local row
+// carries the fingerprint (attributed at write, or once at boot for legacy rows), so the recorded id matches.
+func TestCleaner_LocalDelete_MatchingBackendSweepsCurrentStore(t *testing.T) {
+	current := &fakeS3{}
+	c := &Cleaner{LocalCluster: "eu-west", S3: current, LocalBackendID: "the-backend"}
+
+	err := c.Delete(context.Background(), ArtifactRef{
+		Hash:           "clip-1",
+		Type:           "clip",
+		TenantID:       "tenant-a",
+		StreamInternal: "stream-x",
+		Format:         "webm",
+		BackendID:      "the-backend", // the immutable current store
+	})
+	if err != nil {
+		t.Fatalf("Delete err = %v", err)
+	}
+	// The current store got the media object + its .dtsh.
+	if len(current.deleteCalls) != 2 {
+		t.Fatalf("current store delete calls = %d, want 2 (media + dtsh)", len(current.deleteCalls))
+	}
+	if got, want := current.deleteCalls[0], "clips/tenant-a/stream-x/clip-1.webm"; got != want {
+		t.Errorf("key = %q, want %q", got, want)
+	}
+}
+
+// A recorded backend_id that does NOT match the cell's current store must fail closed with ErrRecordedBackendMismatch
+// — never silently sweep the wrong (current) store. Under the immutable-backend invariant this cannot arise for a live
+// cell; it is the defensive guard against a stale/foreign recorded id.
+func TestCleaner_LocalDelete_MismatchedBackendFailsClosed(t *testing.T) {
+	current := &fakeS3{}
+	c := &Cleaner{LocalCluster: "eu-west", S3: current, LocalBackendID: "NEW-backend"}
+
+	err := c.Delete(context.Background(), ArtifactRef{
+		Hash:           "clip-1",
+		Type:           "clip",
+		TenantID:       "tenant-a",
+		StreamInternal: "stream-x",
+		Format:         "webm",
+		BackendID:      "OLD-backend", // not this cell's current store
+	})
+	if !errors.Is(err, ErrRecordedBackendMismatch) {
+		t.Fatalf("Delete err = %v, want ErrRecordedBackendMismatch", err)
+	}
+	if len(current.deleteCalls) != 0 {
+		t.Fatalf("fail-closed must not sweep the current store, got %v", current.deleteCalls)
+	}
+}
+
+// A recorded non-empty backend_id with an EMPTY LocalBackendID (an unwired local fingerprint) must ALSO fail closed:
+// a missing local identity is not proof of a match, and must never license deleting from the current store.
+func TestCleaner_LocalDelete_RecordedBackendWithoutLocalIdentityFailsClosed(t *testing.T) {
+	current := &fakeS3{}
+	c := &Cleaner{LocalCluster: "eu-west", S3: current} // LocalBackendID deliberately unset
+
+	err := c.Delete(context.Background(), ArtifactRef{
+		Hash:           "clip-2",
+		Type:           "clip",
+		TenantID:       "tenant-a",
+		StreamInternal: "stream-x",
+		Format:         "webm",
+		BackendID:      "SOME-backend", // recorded, but this cell has no local fingerprint to match it against
+	})
+	if !errors.Is(err, ErrRecordedBackendMismatch) {
+		t.Fatalf("Delete err = %v, want ErrRecordedBackendMismatch (missing local identity must fail closed)", err)
+	}
+	if len(current.deleteCalls) != 0 {
+		t.Fatalf("an unmatched recorded backend must not sweep the current store, got %v", current.deleteCalls)
+	}
+}
+
 func TestCleaner_LocalDVRUsesPrefix(t *testing.T) {
 	s3 := &fakeS3{}
-	c := &Cleaner{LocalCluster: "eu-west", S3: s3}
+	c := &Cleaner{LocalCluster: "eu-west", S3: s3, LocalBackendID: "local-backend"}
 
 	err := c.Delete(context.Background(), ArtifactRef{
 		Hash:           "dvr-1",
 		Type:           "dvr",
 		TenantID:       "tenant-a",
 		StreamInternal: "stream-x",
+		BackendID:      "local-backend",
 	})
 	if err != nil {
 		t.Fatalf("Delete err = %v", err)
@@ -85,13 +159,14 @@ func TestCleaner_LocalDVRUsesPrefix(t *testing.T) {
 
 func TestCleaner_LocalVODUsesS3Key(t *testing.T) {
 	s3 := &fakeS3{}
-	c := &Cleaner{LocalCluster: "eu-west", S3: s3}
+	c := &Cleaner{LocalCluster: "eu-west", S3: s3, LocalBackendID: "local-backend"}
 
 	err := c.Delete(context.Background(), ArtifactRef{
-		Hash:     "vod-1",
-		Type:     "vod",
-		TenantID: "tenant-a",
-		VODS3Key: "vod/tenant-a/vod-1/movie.mp4",
+		Hash:      "vod-1",
+		Type:      "vod",
+		TenantID:  "tenant-a",
+		VODS3Key:  "vod/tenant-a/vod-1/movie.mp4",
+		BackendID: "local-backend",
 	})
 	if err != nil {
 		t.Fatalf("Delete err = %v", err)
@@ -113,7 +188,7 @@ func TestCleaner_LocalVODUsesS3Key(t *testing.T) {
 // deletion target, so an authorized-but-late upload can't leak.
 func TestCleaner_DeletesPendingObjectKey(t *testing.T) {
 	s3 := &fakeS3{}
-	c := &Cleaner{LocalCluster: "eu-west", S3: s3}
+	c := &Cleaner{LocalCluster: "eu-west", S3: s3, LocalBackendID: "local-backend"}
 
 	err := c.Delete(context.Background(), ArtifactRef{
 		Hash:             "vod-1",
@@ -121,6 +196,7 @@ func TestCleaner_DeletesPendingObjectKey(t *testing.T) {
 		TenantID:         "tenant-a",
 		VODS3Key:         "vod/tenant-a/vod-1/movie.mp4",
 		PendingObjectKey: "vod/tenant-a/vod-1/vod-1.mkv", // a differently-formatted pending freeze target
+		BackendID:        "local-backend",
 	})
 	if err != nil {
 		t.Fatalf("Delete err = %v", err)
@@ -139,7 +215,7 @@ func TestCleaner_DeletesPendingObjectKey(t *testing.T) {
 // ErrMissingTarget and leak it.
 func TestCleaner_MissingTargetStillDeletesPendingObject(t *testing.T) {
 	s3 := &fakeS3{}
-	c := &Cleaner{LocalCluster: "eu-west", S3: s3}
+	c := &Cleaner{LocalCluster: "eu-west", S3: s3, LocalBackendID: "local-backend"}
 
 	err := c.Delete(context.Background(), ArtifactRef{
 		Hash:     "clip-1",
@@ -147,6 +223,7 @@ func TestCleaner_MissingTargetStillDeletesPendingObject(t *testing.T) {
 		TenantID: "tenant-a",
 		// StreamInternal + Format absent → resolveTarget returns ErrMissingTarget
 		PendingObjectKey: "clips/tenant-a/stream-x/clip-1.mp4",
+		BackendID:        "local-backend",
 	})
 	if err != nil {
 		t.Fatalf("Delete err = %v (pending object must be freed despite missing main target)", err)
@@ -161,13 +238,14 @@ func TestCleaner_VODFallsBackToS3URL(t *testing.T) {
 	// (legacy / non-upload paths). We must derive the key from the URL
 	// and clean the bytes; never silently soft-delete + drop.
 	s3 := &fakeS3{}
-	c := &Cleaner{LocalCluster: "eu-west", S3: s3}
+	c := &Cleaner{LocalCluster: "eu-west", S3: s3, LocalBackendID: "local-backend"}
 
 	err := c.Delete(context.Background(), ArtifactRef{
-		Hash:     "vod-1",
-		Type:     "vod",
-		TenantID: "tenant-a",
-		S3URL:    "s3://bucket/vod/tenant-a/vod-1/movie.mp4",
+		Hash:      "vod-1",
+		Type:      "vod",
+		TenantID:  "tenant-a",
+		S3URL:     "s3://bucket/vod/tenant-a/vod-1/movie.mp4",
+		BackendID: "local-backend",
 	})
 	if err != nil {
 		t.Fatalf("Delete err = %v", err)
@@ -182,7 +260,7 @@ func TestCleaner_VODWithoutRecordedKeyFailsClosed(t *testing.T) {
 	// with just tenant+hash+format and no recorded key is NOT deleted at a reconstructed key — it fails
 	// closed with ErrMissingTarget so the purge job never frees a guessed object.
 	s3 := &fakeS3{}
-	c := &Cleaner{LocalCluster: "eu-west", S3: s3}
+	c := &Cleaner{LocalCluster: "eu-west", S3: s3, LocalBackendID: "local-backend"}
 
 	err := c.Delete(context.Background(), ArtifactRef{
 		Hash:     "vod-1",
@@ -232,12 +310,13 @@ func TestCleaner_LocalDeleteWithNilS3ReturnsTypedErr(t *testing.T) {
 	// We can't free anything without local S3; surface a typed error so
 	// the purge job keeps the row and the gRPC handler reports cleanup
 	// pending.
-	c := &Cleaner{LocalCluster: "eu-west", S3: nil}
+	c := &Cleaner{LocalCluster: "eu-west", S3: nil, LocalBackendID: "local-backend"}
 	err := c.Delete(context.Background(), ArtifactRef{
-		Hash:     "vod-1",
-		Type:     "vod",
-		TenantID: "tenant-a",
-		VODS3Key: "vod/tenant-a/vod-1/movie.mp4",
+		Hash:      "vod-1",
+		Type:      "vod",
+		TenantID:  "tenant-a",
+		VODS3Key:  "vod/tenant-a/vod-1/movie.mp4",
+		BackendID: "local-backend",
 	})
 	if !errors.Is(err, ErrLocalS3Missing) {
 		t.Fatalf("err = %v, want ErrLocalS3Missing", err)
@@ -246,7 +325,7 @@ func TestCleaner_LocalDeleteWithNilS3ReturnsTypedErr(t *testing.T) {
 
 func TestCleaner_MissingFieldsReturnTypedError(t *testing.T) {
 	s3 := &fakeS3{}
-	c := &Cleaner{LocalCluster: "eu-west", S3: s3}
+	c := &Cleaner{LocalCluster: "eu-west", S3: s3, LocalBackendID: "local-backend"}
 
 	cases := []struct {
 		name string
@@ -359,6 +438,77 @@ func TestCleaner_RemoteWithoutDelegateReturnsErr(t *testing.T) {
 	}
 }
 
+// I2 acceptance: a locally-backed OFFICIAL ALIAS — storage_cluster_id names a cluster other than this cell, but
+// the STABLE write-time fact durable_backend_local=true records that the bytes landed on THIS cell's S3 — must be
+// deleted LOCALLY. Delete routing reads the recorded evidence, so the cluster-id mismatch does NOT misroute the
+// delete to a federation peer (which would leave the local bytes leaked and delegate a delete of nothing).
+func TestCleaner_LocallyBackedOfficialAliasDeletesLocally(t *testing.T) {
+	s3 := &fakeS3{}
+	delegateCalls := 0
+	delegate := func(_ context.Context, _ string, _ *foghornfederationpb.DeleteStorageObjectsRequest) (*foghornfederationpb.DeleteStorageObjectsResponse, error) {
+		delegateCalls++
+		return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: true}, nil
+	}
+	c := &Cleaner{LocalCluster: "eu-west", S3: s3, Delegate: delegate, LocalBackendID: "local-backend"}
+
+	err := c.Delete(context.Background(), ArtifactRef{
+		Hash:                "vod-alias",
+		Type:                "vod",
+		TenantID:            "tenant-a",
+		VODS3Key:            "vod/tenant-a/vod-alias/movie.mp4",
+		StorageClusterID:    "official-alias", // attribution cluster id != this cell...
+		DurableBackendLocal: true,             // ...but the bytes are on THIS cell's backend.
+		BackendID:           "local-backend",  // recorded on this cell's store
+	})
+	if err != nil {
+		t.Fatalf("Delete err = %v", err)
+	}
+	if delegateCalls != 0 {
+		t.Fatalf("locally-backed alias must not delegate to a peer; delegate called %d times", delegateCalls)
+	}
+	// The main object is freed locally (the co-located .dtsh index is deleted alongside it).
+	foundMain := false
+	for _, k := range s3.deleteCalls {
+		if k == "vod/tenant-a/vod-alias/movie.mp4" {
+			foundMain = true
+		}
+	}
+	if !foundMain {
+		t.Fatalf("expected local delete of the recorded key; got %v", s3.deleteCalls)
+	}
+}
+
+// The converse guard: without the durable_backend_local fact, the SAME cluster-id mismatch DOES route remotely —
+// the override is what flips routing, not a coincidence of the key/type. Proves the two tests are distinguishing
+// on the recorded evidence and nothing else.
+func TestCleaner_RemoteAliasWithoutLocalBackingDelegates(t *testing.T) {
+	s3 := &fakeS3{}
+	delegateCalls := 0
+	delegate := func(_ context.Context, _ string, _ *foghornfederationpb.DeleteStorageObjectsRequest) (*foghornfederationpb.DeleteStorageObjectsResponse, error) {
+		delegateCalls++
+		return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: true}, nil
+	}
+	c := &Cleaner{LocalCluster: "eu-west", S3: s3, Delegate: delegate}
+
+	err := c.Delete(context.Background(), ArtifactRef{
+		Hash:                "vod-remote",
+		Type:                "vod",
+		TenantID:            "tenant-a",
+		VODS3Key:            "vod/tenant-a/vod-remote/movie.mp4",
+		StorageClusterID:    "official-alias",
+		DurableBackendLocal: false, // no recorded local backing → route by cluster id → remote.
+	})
+	if err != nil {
+		t.Fatalf("Delete err = %v", err)
+	}
+	if delegateCalls == 0 {
+		t.Fatalf("remote alias without local backing must delegate to the owning peer")
+	}
+	if len(s3.deleteCalls) != 0 {
+		t.Fatalf("remote alias must not touch local S3; got %v", s3.deleteCalls)
+	}
+}
+
 func TestCleaner_RemoteRejectionPropagatesReason(t *testing.T) {
 	delegate := func(_ context.Context, _ string, _ *foghornfederationpb.DeleteStorageObjectsRequest) (*foghornfederationpb.DeleteStorageObjectsResponse, error) {
 		return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: false, Reason: "tenant_mismatch"}, nil
@@ -411,7 +561,7 @@ func TestCleaner_LocalClusterMatchUsesLocalS3(t *testing.T) {
 		t.Fatal("delegate should not be called when storage_cluster_id == local")
 		return nil, nil
 	}
-	c := &Cleaner{LocalCluster: "eu-west", S3: s3, Delegate: delegate}
+	c := &Cleaner{LocalCluster: "eu-west", S3: s3, Delegate: delegate, LocalBackendID: "local-backend"}
 
 	err := c.Delete(context.Background(), ArtifactRef{
 		Hash:             "clip-4",
@@ -420,6 +570,7 @@ func TestCleaner_LocalClusterMatchUsesLocalS3(t *testing.T) {
 		StreamInternal:   "s",
 		Format:           "mp4",
 		StorageClusterID: "eu-west",
+		BackendID:        "local-backend",
 	})
 	if err != nil {
 		t.Fatalf("Delete err = %v", err)

@@ -282,13 +282,12 @@ func (r *ArtifactReconciler) reconcile() {
 	}
 }
 
-// reconcileBillingAttribution runs the identity-aware durable_backend_local reconciliation under its OWN
+// reconcileBillingAttribution runs the recorded-evidence durable_backend_local reconciliation under its OWN
 // single-flight advisory lock ('artifact_billing_attribution') and its own timeout — deliberately NOT the
-// 'artifact_reconciler' projection lock. It claims legitimate historical local rows (authoritative cluster is
-// this cell's, or resolves LOCAL per-tenant) that predate durable_backend_local / the conservative both-null
-// backfill. Because it issues external per-tenant resolver calls, decoupling it keeps a slow resolver from
-// blocking catalog projection / orphan reconciliation. Idempotent (only flips false→true); a lost lock (a peer
-// holds it) or a busy pass simply retries next tick.
+// 'artifact_reconciler' projection lock, so its bounded per-pass scan/update never delays catalog projection /
+// orphan reconciliation. It claims historical local rows by RECORDED EVIDENCE ONLY (authoritative cluster empty
+// or == this cell's id); it never consults the live resolver/backing (I2). Idempotent (only flips false→true); a
+// lost lock (a peer holds it) or a busy pass simply retries next tick.
 func (r *ArtifactReconciler) reconcileBillingAttribution() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -460,7 +459,7 @@ func (r *ArtifactReconciler) reconcileFreezePublicationLedger(ctx context.Contex
 	// Keyset PAST the cursor by object_key (the PK), so rows skipped-because-retrying advance the cursor and
 	// cannot starve later rows; the grace period keeps an in-flight completion from being raced.
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT object_key, artifact_hash, tenant_id, request_id, guarded
+		SELECT object_key, artifact_hash, tenant_id, request_id, guarded, COALESCE(backend_id, '')
 		FROM foghorn.freeze_publication_ledger
 		WHERE created_at < NOW() - INTERVAL '15 minutes'
 		  AND object_key > $1
@@ -471,13 +470,13 @@ func (r *ArtifactReconciler) reconcileFreezePublicationLedger(ctx context.Contex
 		return false
 	}
 	type ledgerRow struct {
-		objectKey, hash, tenant, req string
-		guarded                      bool
+		objectKey, hash, tenant, req, backendID string
+		guarded                                 bool
 	}
 	var pending []ledgerRow
 	for rows.Next() {
 		var lr ledgerRow
-		if scanErr := rows.Scan(&lr.objectKey, &lr.hash, &lr.tenant, &lr.req, &lr.guarded); scanErr != nil {
+		if scanErr := rows.Scan(&lr.objectKey, &lr.hash, &lr.tenant, &lr.req, &lr.guarded, &lr.backendID); scanErr != nil {
 			rows.Close() //nolint:errcheck,sqlclosecheck
 			r.logger.WithError(scanErr).Warn("freeze publication ledger scan row failed")
 			return false
@@ -522,7 +521,7 @@ func (r *ArtifactReconciler) reconcileFreezePublicationLedger(ctx context.Contex
 			r.logger.WithError(txErr).Debug("freeze publication ledger: begin tx failed")
 			continue
 		}
-		if _, eErr := tx.ExecContext(ctx, `INSERT INTO foghorn.staging_cleanup_queue (object_key) VALUES ($1) ON CONFLICT (object_key) DO NOTHING`, lr.objectKey); eErr != nil {
+		if _, eErr := tx.ExecContext(ctx, `INSERT INTO foghorn.staging_cleanup_queue (object_key, backend_id) VALUES ($1, NULLIF($2, '')) ON CONFLICT (object_key) DO NOTHING`, lr.objectKey, lr.backendID); eErr != nil {
 			tx.Rollback() //nolint:errcheck
 			r.logger.WithError(eErr).WithField("object_key", lr.objectKey).Debug("freeze publication ledger: enqueue failed")
 			continue
@@ -675,7 +674,7 @@ func (r *ArtifactReconciler) projectCommodoreArtifactState(ctx context.Context) 
 			       sync_status, dtsh_synced, storage_location,
 			       catalog_revision, status,
 			       EXTRACT(EPOCH FROM retention_until)::bigint,
-			       error_message
+			       error_message, thumbnail_serving_cluster_id
 			FROM foghorn.artifacts
 			WHERE tenant_id IS NOT NULL
 			  -- Deleted rows are INCLUDED so the reconciler can project the DELETION onto the catalog
@@ -706,11 +705,11 @@ func (r *ArtifactReconciler) projectCommodoreArtifactState(ctx context.Context) 
 		var hash, artifactType, tenantID string
 		var storageCluster, syncStatus, storageLocation, tracksJSON sql.NullString
 		var hasThumbnails, dtshSynced sql.NullBool
-		var lifecycleStatus, errorMessage sql.NullString
+		var lifecycleStatus, errorMessage, thumbServingCluster sql.NullString
 		var sizeBytes, durationMs, retentionUnix sql.NullInt64
 		var revision int64
 		if err := rows.Scan(&hash, &artifactType, &tenantID, &storageCluster, &hasThumbnails, &sizeBytes,
-			&durationMs, &tracksJSON, &syncStatus, &dtshSynced, &storageLocation, &revision, &lifecycleStatus, &retentionUnix, &errorMessage); err != nil {
+			&durationMs, &tracksJSON, &syncStatus, &dtshSynced, &storageLocation, &revision, &lifecycleStatus, &retentionUnix, &errorMessage, &thumbServingCluster); err != nil {
 			r.logger.WithError(err).Warn("Failed to scan artifact projection row")
 			continue
 		}
@@ -778,8 +777,11 @@ func (r *ArtifactReconciler) projectCommodoreArtifactState(ctx context.Context) 
 			StorageLocation:  nullStringPtr(storageLocation),
 			StorageClusterId: nullStringPtr(storageCluster),
 			HasThumbnails:    boolPtr(hasThumbnails.Valid && hasThumbnails.Bool),
-			LifecycleStatus:  nullStringPtr(lifecycleStatus),
-			ErrorMessage:     nullStringPtr(errorMessage),
+			// Authoritative thumbnail serving cluster (the official-durable cluster the thumbnail was projected to);
+			// Commodore prefers it over storage/origin when building the Chandler URL. Absent → NULL, readers fall back.
+			ThumbnailServingClusterId: nullStringPtr(thumbServingCluster),
+			LifecycleStatus:           nullStringPtr(lifecycleStatus),
+			ErrorMessage:              nullStringPtr(errorMessage),
 			// Assert this cluster as the projection source so Commodore enforces origin authority:
 			// only the origin cluster may mutate the artifact's catalog state.
 			SourceClusterId: strPtrOrNil(r.clusterID),
@@ -805,6 +807,14 @@ func (r *ArtifactReconciler) projectCommodoreArtifactState(ctx context.Context) 
 			// Found, but Commodore's stored revision is behind what we asked for: a concurrent
 			// insert landed between the guarded UPDATE and the readback, or the guard rejected a
 			// stale attempt. Coverage is NOT proven for this revision — back off and retry.
+			r.backoffCatalogRow(ctx, hash)
+			continue
+		}
+		// MIXED-VERSION ACK: when we projected a NON-EMPTY thumbnail serving cluster, the row is COVERED only once
+		// Commodore ECHOES it back — proof a new Commodore stored field 21. An old Commodore ignores the unknown field
+		// and echoes "", so we do NOT advance; the row stays dirty and re-projects after Commodore upgrades (bounded to
+		// thumbnailed rows during the window). Rows with no serving cluster (NULL) need no ack.
+		if sent := snapshot.GetThumbnailServingClusterId(); sent != "" && resp.GetThumbnailServingClusterId() != sent {
 			r.backoffCatalogRow(ctx, hash)
 			continue
 		}

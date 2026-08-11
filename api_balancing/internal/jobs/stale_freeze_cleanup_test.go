@@ -41,6 +41,10 @@ func TestStaleFreezeCleanup_ResetsToLocalPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer mockDB.Close()
+	// The reset re-enqueues staging garbage, which now requires a local backend fingerprint to attribute — wire the
+	// control S3 client, matching a production cell that always has a local store.
+	control.SetS3Client(controlS3Stub{})
+	t.Cleanup(func() { control.SetS3Client(nil) })
 
 	j := &StaleFreezeCleanupJob{
 		db:         mockDB,
@@ -66,7 +70,7 @@ func TestStaleFreezeCleanup_ResetsToLocalPending(t *testing.T) {
 		control.FreezePublishDtshKey(k, a),
 	} {
 		mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
-			WithArgs(key).
+			WithArgs(key, sqlmock.AnyArg()).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 	}
 	mock.ExpectCommit()

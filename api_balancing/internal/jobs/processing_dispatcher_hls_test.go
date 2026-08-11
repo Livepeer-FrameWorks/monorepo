@@ -58,6 +58,9 @@ func (f *fakeHLSPresigner) HeadObjectInfo(context.Context, string) (bool, int64,
 	return true, 0, "", nil
 }
 func (f *fakeHLSPresigner) PromoteObject(context.Context, string, string, string) error { return nil }
+func (f *fakeHLSPresigner) BackendDescriptor() (bucket, endpoint, region, prefix string) {
+	return "bucket", "", "us-east-1", ""
+}
 
 func newHLSDispatcher() *ProcessingDispatcher {
 	return NewProcessingDispatcher(ProcessingDispatcherConfig{Logger: logging.NewLogger()})

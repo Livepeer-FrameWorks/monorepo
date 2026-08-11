@@ -83,7 +83,6 @@ type peerState struct {
 	dropped     atomic.Uint64                         // frames evicted (drop-oldest) because the mailbox was full (backpressured peer)
 	lastRefresh time.Time
 	connected   bool
-	s3Config    *ClusterS3Config
 	lat         float64
 	lon         float64
 	location    string
@@ -297,16 +296,6 @@ func (pm *PeerManager) GetPeerAddr(clusterID string) string {
 	return ""
 }
 
-// GetPeerS3Config returns the S3 configuration for a peer cluster, or nil if unknown.
-func (pm *PeerManager) GetPeerS3Config(clusterID string) *ClusterS3Config {
-	pm.mu.RLock()
-	defer pm.mu.RUnlock()
-	if ps, ok := pm.peers[clusterID]; ok {
-		return ps.s3Config
-	}
-	return nil
-}
-
 // IsPeerConnected returns whether the PeerChannel to a given cluster is active.
 func (pm *PeerManager) IsPeerConnected(clusterID string) bool {
 	pm.mu.RLock()
@@ -347,12 +336,6 @@ func (pm *PeerManager) NotifyPeers(peers []*clusterpeerpb.TenantClusterPeer, ten
 			existing.addr = addr
 			existing.lifecycle = lifecycle
 			existing.lastRefresh = time.Now()
-			existing.s3Config = &ClusterS3Config{
-				ClusterID:  peer.GetClusterId(),
-				S3Bucket:   peer.GetS3Bucket(),
-				S3Endpoint: peer.GetS3Endpoint(),
-				S3Region:   peer.GetS3Region(),
-			}
 			continue
 		}
 
@@ -366,12 +349,6 @@ func (pm *PeerManager) NotifyPeers(peers []*clusterpeerpb.TenantClusterPeer, ten
 			tenantIDs:   seedTenants,
 			fromRedis:   false,
 			lastRefresh: time.Now(),
-			s3Config: &ClusterS3Config{
-				ClusterID:  peer.GetClusterId(),
-				S3Bucket:   peer.GetS3Bucket(),
-				S3Endpoint: peer.GetS3Endpoint(),
-				S3Region:   peer.GetS3Region(),
-			},
 		}
 		pm.peers[peer.GetClusterId()] = ps
 		changed = true
@@ -682,12 +659,8 @@ func (pm *PeerManager) refreshPeers() {
 		}
 
 		// New peer or address changed — (re)connect
-		var existingS3 *ClusterS3Config
-		if ok {
-			existingS3 = existing.s3Config
-			if existing.cancel != nil {
-				existing.cancel()
-			}
+		if ok && existing.cancel != nil {
+			existing.cancel()
 		}
 
 		ps := &peerState{
@@ -695,7 +668,6 @@ func (pm *PeerManager) refreshPeers() {
 			tenantIDs:   peer.SharedTenantIds,
 			fromRedis:   false,
 			lastRefresh: time.Now(),
-			s3Config:    existingS3,
 		}
 		pm.peers[peer.ClusterId] = ps
 

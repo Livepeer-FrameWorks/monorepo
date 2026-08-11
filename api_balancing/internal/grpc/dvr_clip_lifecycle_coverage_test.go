@@ -80,8 +80,8 @@ func TestDeleteClip_SoftDeleteIssuesTenantScopedUpdate(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{
 			"status", "size_bytes", "retention_until", "stream_internal_name",
 			"tenant_id", "user_id", "format", "storage_cluster_id", "origin_cluster_id", "active_object_key",
-			"active_dtsh_key", "sync_object_key", "durable_backend_local",
-		}).AddRow("ready", nil, nil, "live+stream-1", "tenant-a", "user-1", "mkv", nil, nil, nil, nil, nil, false))
+			"active_dtsh_key", "sync_object_key", "durable_backend_local", "backend_id",
+		}).AddRow("ready", nil, nil, "live+stream-1", "tenant-a", "user-1", "mkv", nil, nil, nil, nil, nil, false, nil))
 	// node lookup: no live storage node -> skip Helmsman send
 	mock.ExpectQuery(`SELECT node_id FROM foghorn.artifact_nodes`).
 		WithArgs("clip-h").

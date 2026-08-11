@@ -66,7 +66,7 @@ func defaultCanMintOfficialLocally(ctx context.Context, tenantID, official strin
 	// The factory is tenant-scoped (the backing lookup needs the artifact tenant's context).
 	if storageResolverFactory != nil {
 		if resolver := storageResolverFactory(ctx, tenantID); resolver != nil {
-			dest, mode := resolver.Resolve(storage.ResolverInput{OfficialClusterID: official})
+			dest, mode := resolver.ResolveOfficialDurable(official)
 			return dest == official && mode == storage.StorageMintLocal
 		}
 	}

@@ -306,21 +306,20 @@ func (s *FoghornGRPCServer) SetStorageResolverFactory(f storageResolverFactory) 
 	s.storageResolver = f
 }
 
-// resolveVodStorageCluster runs the storage resolver for a VOD upload.
-// Origin candidate is the caller-supplied cluster_id (the tenant's intended
-// ingest cluster). Official candidate comes from Quartermaster's
-// GetClusterRouting if a Quartermaster client is wired. Returns
-// (cluster, mode); when no resolver factory is configured (tests / minimal
-// dev setups), falls back to local-mint against the caller-supplied cluster.
-func (s *FoghornGRPCServer) resolveVodStorageCluster(ctx context.Context, tenantID, ingestClusterID string) (string, storage.StorageMintMode) {
+// resolveVodStorageCluster runs the STRICT durable resolver for a VOD upload (invariant I1). The only durable
+// destination is the tenant's OFFICIAL cluster, drawn from Quartermaster's GetClusterRouting; the caller-supplied
+// ingest cluster is never a candidate. Returns (cluster, mode); a nil resolver factory or an unresolved official
+// cluster FAILS CLOSED with StorageUnavailable — it never falls back to the caller's or this cell's cluster.
+func (s *FoghornGRPCServer) resolveVodStorageCluster(ctx context.Context, tenantID, _ string) (string, storage.StorageMintMode) {
+	// I1: a durable write requires a positively-resolved official cluster. A missing/nil resolver cannot resolve
+	// one, so it FAILS CLOSED (StorageUnavailable) — it must NOT fall back to the caller's ingest cluster (that
+	// would place/bill bytes on a non-official backend). Tests/dev that need a mint must wire a resolver.
 	if s.storageResolver == nil {
-		// No resolver wired (tests / minimal dev setups) — preserve current
-		// behaviour: assume local mint against the caller's cluster.
-		return ingestClusterID, storage.StorageMintLocal
+		return "", storage.StorageUnavailable
 	}
 	resolver := s.storageResolver(ctx, tenantID)
 	if resolver == nil {
-		return ingestClusterID, storage.StorageMintLocal
+		return "", storage.StorageUnavailable
 	}
 	officialCluster := ""
 	if s.quartermasterClient != nil {
@@ -335,12 +334,9 @@ func (s *FoghornGRPCServer) resolveVodStorageCluster(ctx context.Context, tenant
 			}
 		}
 	}
-	// Durable destination is the tenant's OFFICIAL cluster only (mirrors the freeze contract). The ingest/origin
-	// cluster is source-authority attribution, NOT a durable-storage candidate — an advertised BYOC origin must
-	// never win the durable write. A remote official → federation; an unresolved official → unavailable.
-	return resolver.Resolve(storage.ResolverInput{
-		OfficialClusterID: officialCluster,
-	})
+	// Durable destination is the tenant's OFFICIAL cluster only, via the STRICT resolver: the ingest/origin
+	// cluster is never a candidate, and an unresolved official is StorageUnavailable (no local/caller fallback).
+	return resolver.ResolveOfficialDurable(officialCluster)
 }
 
 func (s *FoghornGRPCServer) SetPeerManager(pm *federation.PeerManager) {
@@ -1318,46 +1314,31 @@ resolve:
 	}, nil
 }
 
-// DeleteStreamThumbnails removes a live stream's thumbnail control rows + objects. Commodore calls this on stream
-// deletion: a live stream (asset_key = stream_id) has no artifact row, so the purge job never reaches it, and its
-// FINAL active version is never superseded, so version-supersession GC never reclaims it — without this the
-// pointer + objects would be stranded. S3 deletion is routed by the thumbnail's OWN destination cluster.
+// DeleteStreamThumbnails durably records a deleted live stream's thumbnail-cleanup obligation and ACKS. Commodore
+// calls this on stream deletion: a live stream (asset_key = stream_id) has no artifact row, so the purge job
+// never reaches it, and its FINAL active version is never superseded, so version-supersession GC never reclaims
+// it — without this the pointer + objects would be stranded. Rather than sweep S3 synchronously (a one-shot that
+// leaks on any transport/partial failure), this records ONE durable obligation row inside a guarded transaction:
+// its existence is the tombstone that fences claim/publish/projection immediately, and StreamCleanupJob then
+// sweeps the bytes (routed by the snapshotted destination clusters) and drops the
+// control rows, retried from the durable row until confirmed gone. Idempotent: a re-delivered obligation is a
+// no-op. Success=true means the obligation is durably recorded (the caller's delivery outbox may clear), NOT that
+// the bytes are already gone.
 func (s *FoghornGRPCServer) DeleteStreamThumbnails(ctx context.Context, req *sharedpb.DeleteStreamThumbnailsRequest) (*sharedpb.DeleteStreamThumbnailsResponse, error) {
 	streamID := strings.TrimSpace(req.GetStreamId())
 	tenantID := strings.TrimSpace(req.GetTenantId())
 	if streamID == "" || tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "stream_id and tenant_id are required")
 	}
-	dbh := control.GetDB()
-	// Order: read destinations → sweep S3 → ONLY THEN drop the control rows. Sweeping S3 BEFORE deleting the rows
-	// means a sweep failure RETAINS the rows (and their destination attribution) so a retry can complete, instead
-	// of losing where the objects live; and we NEVER report success when cleanup didn't happen (no false ack).
-	// A live stream is being deleted, so there is no concurrent publication to fence against (unlike the purge
-	// job, which drops rows first to fence artifact republication).
-	if s.artifactCleaner == nil {
-		s.logger.WithField("stream_id", streamID).Warn("Artifact cleaner not wired; stream thumbnails NOT cleaned")
-		return &sharedpb.DeleteStreamThumbnailsResponse{Success: false, Message: "cleaner not wired; thumbnails not cleaned"}, nil
+	if dErr := control.RecordStreamCleanupObligation(ctx, control.GetDB(), tenantID, streamID); dErr != nil {
+		// Not durably recorded → return an error (no false ack) so the caller's delivery outbox retries.
+		return nil, status.Errorf(codes.Internal, "record stream cleanup obligation: %v", dErr)
 	}
-	clusters, cErr := control.ThumbnailDestinationClusters(ctx, dbh, tenantID, streamID)
-	if cErr != nil {
-		return nil, status.Errorf(codes.Internal, "read thumbnail destinations: %v", cErr)
-	}
-	if len(clusters) == 0 {
-		clusters = []string{""}
-	}
-	for _, c := range clusters {
-		if sErr := s.artifactCleaner.DeleteThumbnailsOnCluster(ctx, tenantID, streamID, c); sErr != nil {
-			// Retain the control rows (destination attribution) for a retry; report the honest failure.
-			s.logger.WithError(sErr).WithFields(logging.Fields{"stream_id": streamID, "destination_cluster": c}).
-				Warn("Stream thumbnail S3 sweep failed; control rows retained for retry")
-			return &sharedpb.DeleteStreamThumbnailsResponse{Success: false, Message: "s3 cleanup failed: " + sErr.Error()}, nil
-		}
-	}
-	// S3 objects confirmed gone → drop the control rows. A failure here leaves harmless orphan rows (the objects
-	// are already deleted); surface it as an internal error so the caller can log/retry.
-	if dErr := control.DeleteThumbnailControlRows(ctx, dbh, tenantID, streamID); dErr != nil {
-		return nil, status.Errorf(codes.Internal, "delete thumbnail control rows: %v", dErr)
-	}
+	// Best-effort cache eviction: evict the in-cell Chandler's cached thumbnail objects so a warm cache does not
+	// keep serving bytes the cleanup sweep is removing. The durable tombstone (recorded above, which fences
+	// re-publication) plus the prefix sweep are the authority; this only shrinks the cached-after-delete window, so
+	// a failure here is not surfaced.
+	control.PushChandlerThumbnailInvalidate(streamID, s.logger)
 	return &sharedpb.DeleteStreamThumbnailsResponse{Success: true}, nil
 }
 
@@ -1383,14 +1364,15 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 		activeDtshKey    sql.NullString
 		syncObjectKey    sql.NullString
 		durableLocal     sql.NullBool
+		backendID        sql.NullString
 	)
 	err := s.db.QueryRowContext(ctx, `
 		SELECT status, size_bytes, retention_until, stream_internal_name, tenant_id, user_id,
 		       format, storage_cluster_id, origin_cluster_id, active_object_key,
-		       active_dtsh_key, sync_object_key, durable_backend_local
+		       active_dtsh_key, sync_object_key, durable_backend_local, backend_id
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND artifact_type = 'clip' AND tenant_id = $2
-	`, req.ClipHash, req.GetTenantId()).Scan(&currentStatus, &sizeBytes, &retentionUntil, &internalName, &denormTenantID, &denormUserID, &format, &storageClusterID, &originClusterID, &activeObjectKey, &activeDtshKey, &syncObjectKey, &durableLocal)
+	`, req.ClipHash, req.GetTenantId()).Scan(&currentStatus, &sizeBytes, &retentionUntil, &internalName, &denormTenantID, &denormUserID, &format, &storageClusterID, &originClusterID, &activeObjectKey, &activeDtshKey, &syncObjectKey, &durableLocal, &backendID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		if handled, _ := s.forwardArtifactToFederation(ctx, "delete_clip", req.ClipHash, req.GetTenantId(), ""); handled {
@@ -1519,6 +1501,7 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 		ActiveDtshKey:       activeDtshKey.String,
 		PendingObjectKey:    syncObjectKey.String,
 		DurableBackendLocal: durableLocal.Bool,
+		BackendID:           backendID.String,
 	}); errCleanup != nil {
 		if cleanupError != "" {
 			cleanupError += "; "
@@ -2380,14 +2363,15 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteD
 		activeDtshKey    sql.NullString
 		syncObjectKey    sql.NullString
 		durableLocal     sql.NullBool
+		backendID        sql.NullString
 	)
 
 	err := s.db.QueryRowContext(ctx, `
 		SELECT status, COALESCE(stream_internal_name, ''), size_bytes, retention_until, started_at, ended_at, tenant_id, user_id,
-		       storage_cluster_id, origin_cluster_id, active_object_key, active_dtsh_key, sync_object_key, durable_backend_local
+		       storage_cluster_id, origin_cluster_id, active_object_key, active_dtsh_key, sync_object_key, durable_backend_local, backend_id
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND tenant_id = $2
-	`, req.DvrHash, req.GetTenantId()).Scan(&dvrStatus, &internalName, &sizeBytes, &retentionUntil, &startedAt, &endedAt, &denormTenantID, &denormUserID, &storageClusterID, &originClusterID, &activeObjectKey, &activeDtshKey, &syncObjectKey, &durableLocal)
+	`, req.DvrHash, req.GetTenantId()).Scan(&dvrStatus, &internalName, &sizeBytes, &retentionUntil, &startedAt, &endedAt, &denormTenantID, &denormUserID, &storageClusterID, &originClusterID, &activeObjectKey, &activeDtshKey, &syncObjectKey, &durableLocal, &backendID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		if handled, _ := s.forwardArtifactToFederation(ctx, "delete_dvr", req.DvrHash, req.GetTenantId(), ""); handled {
@@ -2493,6 +2477,7 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteD
 		ActiveDtshKey:       activeDtshKey.String,
 		PendingObjectKey:    syncObjectKey.String,
 		DurableBackendLocal: durableLocal.Bool,
+		BackendID:           backendID.String,
 	}); errCleanup != nil {
 		if cleanupError != "" {
 			cleanupError += "; "
@@ -2594,7 +2579,7 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *shar
 
 	switch resolvedType {
 	case "live":
-		response, err = s.resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.RoutingInternalName(), resolution.TenantId, resolution.StreamId, resolution.ClusterPeers)
+		response, err = s.resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.RoutingInternalName(), resolution.TenantId, resolution.StreamId, resolution.ClusterPeers, resolution.ActiveIngestClusterID)
 	case "dvr":
 		response, err = s.resolveDVRViewerEndpoint(ctx, req, lat, lon, resolution)
 	case "clip", "vod":
@@ -2674,7 +2659,7 @@ func (s *FoghornGRPCServer) enforceResolvePlaybackPolicy(ctx context.Context, re
 	return nil
 }
 
-func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, internalName, tenantID, streamID string, clusterPeers []*clusterpeerpb.TenantClusterPeer) (*sharedpb.ViewerEndpointResponse, error) {
+func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, internalName, tenantID, streamID string, clusterPeers []*clusterpeerpb.TenantClusterPeer, activeIngestClusterID string) (*sharedpb.ViewerEndpointResponse, error) {
 	start := time.Now()
 	deps := &control.PlaybackDependencies{
 		DB:             s.db,
@@ -2728,7 +2713,7 @@ func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *
 		})
 	}
 
-	response, err := control.ResolveLivePlayback(ctx, deps, req.ContentId, internalName, streamID, tenantID)
+	response, err := control.ResolveLivePlayback(ctx, deps, req.ContentId, internalName, streamID, tenantID, activeIngestClusterID)
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "%v", err)
 	}
@@ -3145,7 +3130,7 @@ func (s *FoghornGRPCServer) resolveDVRViewerEndpoint(ctx context.Context, req *s
 			}).Warn("Active DVR has no resolvable recording origin; refusing to fall back to archive routing")
 			return nil, status.Error(codes.Unavailable, "active DVR recording origin not yet registered; retry")
 		}
-		resp, err := s.resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.InternalName, resolution.TenantId, resolution.StreamId, resolution.ClusterPeers)
+		resp, err := s.resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.InternalName, resolution.TenantId, resolution.StreamId, resolution.ClusterPeers, resolution.ActiveIngestClusterID)
 		if err != nil {
 			return nil, err
 		}
@@ -3388,6 +3373,20 @@ func generateVodHash(tenantID, filename string, timestamp time.Time) string {
 	return hex.EncodeToString(hash[:])[:32] // 32 char hash like clips
 }
 
+// localBackendID fingerprints THIS cell's current local S3 store — the immutable backend a durable upload lands on — so
+// backend ownership is recorded WHEN storage is assigned (invariant I2), derived from the store itself rather than the
+// optional cleanup helper. Empty when no local store is wired or its concrete type exposes no descriptor.
+func (s *FoghornGRPCServer) localBackendID() string {
+	bd, ok := s.s3Client.(interface {
+		BackendDescriptor() (bucket, endpoint, region, prefix string)
+	})
+	if !ok {
+		return ""
+	}
+	bucket, endpoint, region, prefix := bd.BackendDescriptor()
+	return control.BackendFingerprint("s3", bucket, endpoint, region, prefix)
+}
+
 // CreateVodUpload initiates a multipart upload and returns presigned URLs. It records the
 // attempt in Foghorn's command ledger — 'accepted' before any fallible precheck and before
 // the external S3 multipart create, then 'committed' atomically with the artifact row, or a
@@ -3414,13 +3413,14 @@ func (s *FoghornGRPCServer) existingVodUploadResult(ctx context.Context, tenantI
 		existingS3Key     string
 		existingParts     int
 		existingExpiresAt time.Time
+		existingBackendID string
 	)
 	idErr := s.db.QueryRowContext(ctx, `
-		SELECT m.s3_upload_id, m.s3_key, m.total_parts, m.upload_expires_at
+		SELECT m.s3_upload_id, m.s3_key, m.total_parts, m.upload_expires_at, COALESCE(a.backend_id, '')
 		  FROM foghorn.artifacts a
 		  JOIN foghorn.vod_metadata m ON m.artifact_hash = a.artifact_hash
 		 WHERE a.artifact_hash = $1 AND a.artifact_type = 'vod' AND a.tenant_id = $2
-	`, artifactHash, tenantID).Scan(&existingUploadID, &existingS3Key, &existingParts, &existingExpiresAt)
+	`, artifactHash, tenantID).Scan(&existingUploadID, &existingS3Key, &existingParts, &existingExpiresAt, &existingBackendID)
 	if errors.Is(idErr, sql.ErrNoRows) {
 		return nil, false, nil
 	}
@@ -3429,6 +3429,11 @@ func (s *FoghornGRPCServer) existingVodUploadResult(ctx context.Context, tenantI
 	}
 	if s.s3Client == nil {
 		return nil, false, status.Error(codes.FailedPrecondition, "S3 storage not configured")
+	}
+	// FENCE before re-signing: only re-issue presigned part URLs for a multipart this cell owns (recorded backend ==
+	// local). Re-signing a foreign/unattributed upload would hand a client URLs against a store this cell must not write.
+	if ownErr := artifacts.VerifyLocalMultipartOwnership(existingBackendID, s.localBackendID()); ownErr != nil {
+		return nil, false, status.Errorf(codes.Internal, "refusing to re-sign existing VOD upload: %v", ownErr)
 	}
 	reParts, reErr := s.s3Client.GeneratePresignedUploadParts(existingS3Key, existingUploadID, existingParts, 2*time.Hour)
 	if reErr != nil {
@@ -3571,6 +3576,15 @@ func (s *FoghornGRPCServer) createVodUploadImpl(ctx context.Context, req *shared
 		contentType = "video/mp4" // default
 	}
 
+	// Record backend ownership WHEN storage is assigned (invariant I2): fingerprint the local store the multipart
+	// upload will land on BEFORE starting it, and fail closed if it cannot be attributed. We never begin an upload
+	// whose bytes we could not later route or bill by recorded evidence — a fingerprint fault must not silently
+	// degrade fresh data onto the legacy current-store fallback.
+	backendID := s.localBackendID()
+	if backendID == "" {
+		return nil, status.Errorf(codes.Internal, "cannot create VOD upload: local backend fingerprint unavailable")
+	}
+
 	// Create S3 multipart upload
 	uploadID, err := s.s3Client.CreateMultipartUpload(ctx, s3Key, contentType)
 	if err != nil {
@@ -3637,11 +3651,11 @@ func (s *FoghornGRPCServer) createVodUploadImpl(ctx context.Context, req *shared
 			INSERT INTO foghorn.artifacts (
 				artifact_hash, artifact_type, internal_name,
 				tenant_id, user_id, status,
-				sync_status, size_bytes, s3_url, format, origin_cluster_id, storage_cluster_id, retention_until, created_at, updated_at
+				sync_status, size_bytes, s3_url, format, origin_cluster_id, storage_cluster_id, retention_until, backend_id, created_at, updated_at
 			)
 			VALUES ($1, 'vod', $2, NULLIF($3, '')::uuid, NULLIF($4, '')::uuid, 'uploading',
-			        'in_progress', $5, $6, $7, $8, $9, $10, NOW(), NOW())
-		`, artifactHash, req.GetInternalName(), req.TenantId, req.UserId, req.SizeBytes, s.s3Client.BuildS3URL(s3Key), vodFormat, req.GetClusterId(), storageClusterArg, vodRetentionUntil); execErr != nil {
+			        'in_progress', $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+		`, artifactHash, req.GetInternalName(), req.TenantId, req.UserId, req.SizeBytes, s.s3Client.BuildS3URL(s3Key), vodFormat, req.GetClusterId(), storageClusterArg, vodRetentionUntil, backendID); execErr != nil {
 			return execErr
 		}
 		if _, execErr := tx.ExecContext(ctx, `
@@ -3724,15 +3738,16 @@ func (s *FoghornGRPCServer) GetVodUploadStatus(ctx context.Context, req *sharedp
 		uploadExpiresAt sql.NullTime
 		totalParts      sql.NullInt64
 	)
+	var recordedBackendID string
 	err := s.db.QueryRowContext(ctx, `
 			SELECT v.artifact_hash, COALESCE(v.s3_key, ''), a.status,
-			       a.error_message, a.retention_until, v.upload_expires_at, v.total_parts
+			       a.error_message, a.retention_until, v.upload_expires_at, v.total_parts, COALESCE(a.backend_id, '')
 			FROM foghorn.vod_metadata v
 			JOIN foghorn.artifacts a ON v.artifact_hash = a.artifact_hash
 			WHERE v.s3_upload_id = $1 AND a.tenant_id = $2
 		`, req.UploadId, req.TenantId).Scan(
 		&artifactHash, &s3Key, &artStatus,
-		&errorMessage, &retentionUntil, &uploadExpiresAt, &totalParts,
+		&errorMessage, &retentionUntil, &uploadExpiresAt, &totalParts, &recordedBackendID,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		// Wrong-tenant or missing upload — collapse both into NotFound to avoid existence leak.
@@ -3773,9 +3788,17 @@ func (s *FoghornGRPCServer) GetVodUploadStatus(ctx context.Context, req *sharedp
 		return resp, nil
 	}
 
-	// Live session: reconcile against S3.
+	// Live session: reconcile against S3 — but only for a multipart THIS cell owns. ListUploadedParts is a multipart
+	// S3 operation, so it goes through the same exact-identity fence: a foreign or unattributed row reports its DB
+	// state without an S3 call rather than probing the current cell's store for parts it does not own.
 	if s.s3Client == nil {
 		return resp, nil
+	}
+	if ownErr := artifacts.VerifyLocalMultipartOwnership(recordedBackendID, s.localBackendID()); ownErr != nil {
+		// Not an RPC error: a foreign/unattributed upload is reported with its recorded DB state and no S3 probe, the
+		// same graceful-degradation shape as a failed ListUploadedParts below.
+		resp.LastErrorCode = "storage_not_owned"
+		return resp, nil //nolint:nilerr // intentional: fence skips reconciliation, returns DB state without erroring
 	}
 	uploaded, err := s.s3Client.ListUploadedParts(ctx, s3Key, req.UploadId)
 	if err != nil {
@@ -4126,11 +4149,14 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *sharedpb
 	// converge the SAME multipart part set and dispatch the SAME requested outputs the first claim
 	// persisted — never the retry request's parts/spec, which a concurrent or stale caller could have
 	// diverged into a DIFFERENT object or output set.
-	var persistedDescriptorJSON, authoritativeProcessesJSON string
+	var persistedDescriptorJSON, authoritativeProcessesJSON, recordedBackendID string
 	if scanErr := s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(vod_completion_descriptor::text, ''), COALESCE(processes_json, '')
-		  FROM foghorn.vod_metadata WHERE artifact_hash = $1
-	`, artifactHash).Scan(&persistedDescriptorJSON, &authoritativeProcessesJSON); scanErr != nil {
+		SELECT COALESCE(v.vod_completion_descriptor::text, ''), COALESCE(v.processes_json, ''),
+		       COALESCE(a.backend_id, '')
+		  FROM foghorn.vod_metadata v
+		  JOIN foghorn.artifacts a ON a.artifact_hash = v.artifact_hash
+		 WHERE v.artifact_hash = $1
+	`, artifactHash).Scan(&persistedDescriptorJSON, &authoritativeProcessesJSON, &recordedBackendID); scanErr != nil {
 		s.logger.WithError(scanErr).WithField("artifact_hash", artifactHash).Error("Failed to load persisted VOD completion contract")
 		return nil, status.Error(codes.Internal, "failed to load upload completion contract")
 	}
@@ -4140,6 +4166,15 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *sharedpb
 		// deterministic part set, so fail rather than fall back to the retry request's parts.
 		s.logger.WithField("artifact_hash", artifactHash).Error("Claimed VOD upload has no usable completion contract")
 		return nil, status.Error(codes.Internal, "upload completion contract missing or unusable")
+	}
+
+	// FENCE on the backend identity recorded when the upload was CREATED (invariant I2): completion may proceed only if
+	// the recorded backend_id EXACTLY equals this cell's local store — not merely that it is non-empty. A foreign or
+	// unattributed row is refused BEFORE the irreversible S3 completion, so it is never finalized on the current store
+	// (which cleanup would then correctly refuse to delete, leaking the object). Same shared fence as abort/recovery.
+	if ownErr := artifacts.VerifyLocalMultipartOwnership(recordedBackendID, s.localBackendID()); ownErr != nil {
+		s.logger.WithError(ownErr).WithField("artifact_hash", artifactHash).Error("VOD completion refused: recorded backend is not this cell's store")
+		return nil, status.Errorf(codes.Internal, "refusing to complete VOD upload: %v", ownErr)
 	}
 
 	// Reject a retry whose upload id / parts / processing spec DIVERGE from the persisted contract rather
@@ -4303,6 +4338,8 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *sharedpb
 			    frozen_at = COALESCE(frozen_at, NOW()),
 			    s3_url = COALESCE(s3_url, $2),
 			    -- The multipart upload landed on THIS cell's local S3 backend; persist stable billing attribution.
+			    -- backend_id itself is NOT written here: it was recorded when the upload was CREATED (invariant I2)
+			    -- and verified above, so completion must not reconstruct or overwrite the recorded owner.
 			    durable_backend_local = true,
 			    -- Populate the authoritative object pointer from the recorded multipart key so reads/deletion
 			    -- resolve active_object_key uniformly (a direct upload has no freeze candidate; the key is the
@@ -4422,18 +4459,26 @@ func (s *FoghornGRPCServer) AbortVodUpload(ctx context.Context, req *sharedpb.Ab
 	// NOTE: tenant_id validation happens at Commodore level (matches clips pattern)
 	var artifactHash, s3Key string
 	var userID sql.NullString
+	var recordedBackendID string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT v.artifact_hash, v.s3_key, a.user_id
+		SELECT v.artifact_hash, v.s3_key, a.user_id, COALESCE(a.backend_id, '')
 		FROM foghorn.vod_metadata v
 		JOIN foghorn.artifacts a ON v.artifact_hash = a.artifact_hash
 		WHERE v.s3_upload_id = $1 AND a.status = 'uploading' AND a.tenant_id = $2
-	`, req.UploadId, req.TenantId).Scan(&artifactHash, &s3Key, &userID)
+	`, req.UploadId, req.TenantId).Scan(&artifactHash, &s3Key, &userID, &recordedBackendID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "upload not found or already completed")
 	} else if err != nil {
 		s.logger.WithError(err).Error("Failed to fetch upload info")
 		return nil, status.Error(codes.Internal, "failed to fetch upload info")
+	}
+
+	// FENCE before claiming/aborting: only tear down a multipart this cell owns (recorded backend == local). A
+	// foreign/unattributed row is refused with zero S3 calls, so this cell never aborts an upload on another backend.
+	if ownErr := artifacts.VerifyLocalMultipartOwnership(recordedBackendID, s.localBackendID()); ownErr != nil {
+		s.logger.WithError(ownErr).WithField("artifact_hash", artifactHash).Error("VOD abort refused: recorded backend is not this cell's store")
+		return nil, status.Errorf(codes.FailedPrecondition, "refusing to abort VOD upload: %v", ownErr)
 	}
 
 	// Claim ownership of the abort with a GUARDED transition 'uploading'->'aborting' (tenant-scoped,
@@ -4554,16 +4599,17 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 		activeDtshKey    sql.NullString
 		syncObjectKey    sql.NullString
 		durableLocal     sql.NullBool
+		backendID        sql.NullString
 	)
 	err := s.db.QueryRowContext(ctx, `
 		SELECT a.status, COALESCE(v.s3_key, ''), a.s3_url, a.format,
 		       a.size_bytes, a.retention_until, a.user_id,
 		       a.storage_cluster_id, a.origin_cluster_id, COALESCE(a.origin_type, ''),
-		       a.active_object_key, a.active_dtsh_key, a.sync_object_key, a.durable_backend_local
+		       a.active_object_key, a.active_dtsh_key, a.sync_object_key, a.durable_backend_local, a.backend_id
 		FROM foghorn.artifacts a
 		LEFT JOIN foghorn.vod_metadata v ON a.artifact_hash = v.artifact_hash
 		WHERE a.artifact_hash = $1 AND a.artifact_type = 'vod' AND a.tenant_id = $2
-	`, req.ArtifactHash, req.GetTenantId()).Scan(&currentStatus, &s3Key, &s3URL, &formatStr, &sizeBytes, &retentionUntil, &userID, &storageClusterID, &originClusterID, &originType, &activeObjectKey, &activeDtshKey, &syncObjectKey, &durableLocal)
+	`, req.ArtifactHash, req.GetTenantId()).Scan(&currentStatus, &s3Key, &s3URL, &formatStr, &sizeBytes, &retentionUntil, &userID, &storageClusterID, &originClusterID, &originType, &activeObjectKey, &activeDtshKey, &syncObjectKey, &durableLocal, &backendID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		if handled, _ := s.forwardArtifactToFederation(ctx, "delete_vod", req.ArtifactHash, req.GetTenantId(), ""); handled {
@@ -4589,6 +4635,29 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 			Success: false,
 			Message: "VOD asset is already deleted",
 		}, nil
+	}
+
+	// An 'uploading' VOD has no completed object and no node copies — only an in-progress multipart upload. Route it
+	// through the DURABLE aborting saga rather than soft-deleting and then best-effort aborting: a best-effort abort can
+	// fail after the row is already 'deleted', and no job scans 'deleted' rows for a stranded multipart, so the parts
+	// would leak forever. Claiming 'uploading'->'aborting' (guarded, tenant-scoped) records the teardown as a durable
+	// obligation the AbortingVodRecoveryJob drains — it aborts the multipart idempotently, then converges to 'deleted'
+	// (deleting vod_metadata + emitting DELETED). AbortVodUpload uses the same claim.
+	if currentStatus == "uploading" {
+		claimRes, claimErr := s.db.ExecContext(ctx, `
+			UPDATE foghorn.artifacts SET status = 'aborting', updated_at = NOW()
+			WHERE artifact_hash = $1 AND tenant_id = $2 AND status = 'uploading'
+		`, req.ArtifactHash, req.GetTenantId())
+		if claimErr != nil {
+			s.logger.WithError(claimErr).WithField("artifact_hash", req.ArtifactHash).Error("Failed to claim uploading VOD for abort-on-delete")
+			return nil, status.Error(codes.Internal, "failed to delete uploading VOD")
+		}
+		if n, raErr := claimRes.RowsAffected(); raErr != nil || n == 0 {
+			// A concurrent complete/abort moved the row off 'uploading'; do not claim success against a row we did not
+			// transition. The client can retry; the row is converging on its own path.
+			return &sharedpb.DeleteVodAssetResponse{Success: false, Message: "VOD upload state changed concurrently; retry delete"}, nil
+		}
+		return &sharedpb.DeleteVodAssetResponse{Success: true, Message: "VOD upload aborting; deletion will finalize"}, nil
 	}
 
 	// DURABLE STATE FIRST: soft-delete the VOD and record the STATUS_DELETED lifecycle event in ONE
@@ -4663,22 +4732,8 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 
 	// Physical cleanup runs ONLY after the soft-delete committed. Failures are non-fatal: the
 	// catalog is already durably deleted, so any lingering bytes are storage garbage the
-	// orphan/purge job reclaims, not a correctness bug.
-
-	// If it was still uploading, abort the multipart upload so no orphaned parts linger.
-	if currentStatus == "uploading" {
-		var uploadID string
-		if scanErr := s.db.QueryRowContext(ctx, `
-			SELECT s3_upload_id FROM foghorn.vod_metadata WHERE artifact_hash = $1
-		`, req.ArtifactHash).Scan(&uploadID); scanErr != nil {
-			s.logger.WithError(scanErr).WithField("artifact_hash", req.ArtifactHash).Warn("Failed to look up multipart upload id for abort, deferring to purge job")
-		}
-		if uploadID != "" && s3Key != "" && s.s3Client != nil {
-			if abortErr := s.s3Client.AbortMultipartUpload(ctx, s3Key, uploadID); abortErr != nil {
-				s.logger.WithError(abortErr).WithField("artifact_hash", req.ArtifactHash).Warn("Failed to abort multipart upload, will be retried by purge job")
-			}
-		}
-	}
+	// orphan/purge job reclaims, not a correctness bug. (An 'uploading' VOD never reaches here — it is
+	// routed through the durable aborting saga above so its multipart teardown is a tracked obligation.)
 
 	// Send delete request to nodes that have this VOD cached
 	rows, queryErr := s.db.QueryContext(ctx, `
@@ -4734,6 +4789,7 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 			ActiveDtshKey:       activeDtshKey.String,
 			PendingObjectKey:    syncObjectKey.String,
 			DurableBackendLocal: durableLocal.Bool,
+			BackendID:           backendID.String,
 		}); errDelete != nil {
 			s.logger.WithFields(logging.Fields{
 				"artifact_hash": req.ArtifactHash,

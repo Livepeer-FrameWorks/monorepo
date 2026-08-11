@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/artifactoutbox"
+	"frameworks/api_balancing/internal/artifacts"
 	"frameworks/api_balancing/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -65,8 +66,12 @@ type CompletingVodRecoveryJob struct {
 	staleAfter time.Duration // probe rows whose last attempt is older than this
 	failAfter  time.Duration // only mark 'failed' (object absent) once older than this grace
 	batchSize  int
-	stopCh     chan struct{}
-	wg         sync.WaitGroup
+	// localBackendID is this cell's local S3 backend fingerprint (control.BackendFingerprint). Recovery does NOT write
+	// backend_id (it is set at upload creation); this is the value reconcileOne fences on — a row is reconciled only
+	// when its recorded backend_id EXACTLY equals this, so a foreign/unattributed row is left untouched.
+	localBackendID string
+	stopCh         chan struct{}
+	wg             sync.WaitGroup
 }
 
 // CompletingVodRecoveryConfig configures the recovery scan.
@@ -78,6 +83,9 @@ type CompletingVodRecoveryConfig struct {
 	StaleAfter time.Duration // Probe 'completing' rows older than this (default: 5 minutes)
 	FailAfter  time.Duration // Mark absent objects failed only past this grace (default: 1 hour)
 	BatchSize  int           // Max rows per pass (default: 50)
+	// LocalBackendID is this cell's local S3 backend fingerprint, used to FENCE reconciliation on recorded ownership
+	// (recorded backend_id == local). Pass main.go's localBackendFingerprint(localS3). Empty fails every row closed.
+	LocalBackendID string
 }
 
 // NewCompletingVodRecoveryJob builds the recovery scan with defaulted thresholds. A nil S3 client
@@ -104,14 +112,15 @@ func NewCompletingVodRecoveryJob(cfg CompletingVodRecoveryConfig) *CompletingVod
 		batchSize = 50
 	}
 	return &CompletingVodRecoveryJob{
-		db:         cfg.DB,
-		s3:         cfg.S3,
-		logger:     cfg.Logger,
-		interval:   interval,
-		staleAfter: staleAfter,
-		failAfter:  failAfter,
-		batchSize:  batchSize,
-		stopCh:     make(chan struct{}),
+		db:             cfg.DB,
+		s3:             cfg.S3,
+		logger:         cfg.Logger,
+		interval:       interval,
+		staleAfter:     staleAfter,
+		failAfter:      failAfter,
+		batchSize:      batchSize,
+		localBackendID: cfg.LocalBackendID,
+		stopCh:         make(chan struct{}),
 	}
 }
 
@@ -153,6 +162,7 @@ type completingVodRow struct {
 	s3Key         string
 	uploadID      string
 	processesJSON string
+	backendID     string // backend identity recorded when the upload was CREATED (invariant I2); verified, never reconstructed
 	descriptor    VodCompletionDescriptor
 	hasDescriptor bool
 	pastFailGrace bool
@@ -182,6 +192,7 @@ func (j *CompletingVodRecoveryJob) reconcile() {
 		       COALESCE(v.s3_key, ''),
 		       COALESCE(v.s3_upload_id, ''),
 		       COALESCE(v.processes_json, ''),
+		       COALESCE(a.backend_id, ''),
 		       COALESCE(v.vod_completion_descriptor::text, ''),
 		       (COALESCE(a.last_sync_attempt, a.updated_at) < NOW() - ($2 * INTERVAL '1 second')) AS past_fail_grace
 		FROM foghorn.artifacts a
@@ -201,7 +212,7 @@ func (j *CompletingVodRecoveryJob) reconcile() {
 	for rows.Next() {
 		var r completingVodRow
 		var descriptorJSON string
-		if scanErr := rows.Scan(&r.artifactHash, &r.tenantID, &r.userID, &r.sizeBytes, &r.s3Key, &r.uploadID, &r.processesJSON, &descriptorJSON, &r.pastFailGrace); scanErr != nil {
+		if scanErr := rows.Scan(&r.artifactHash, &r.tenantID, &r.userID, &r.sizeBytes, &r.s3Key, &r.uploadID, &r.processesJSON, &r.backendID, &descriptorJSON, &r.pastFailGrace); scanErr != nil {
 			j.logger.WithError(scanErr).Warn("Completing-VOD recovery: row scan failed")
 			continue
 		}
@@ -231,6 +242,16 @@ func (j *CompletingVodRecoveryJob) reconcile() {
 }
 
 func (j *CompletingVodRecoveryJob) reconcileOne(ctx context.Context, r completingVodRow) {
+	// FENCE FIRST, before ANY S3 call: only reconcile a multipart this cell owns (recorded backend == local). A
+	// foreign or unattributed row is left untouched — no CompleteMultipartUpload, no Exists probe, no state change —
+	// so recovery never completes an upload on a store this cell must not write (which cleanup would then refuse to
+	// delete, leaking it). Pre-cut rows are adopted from the proven cell identity at boot, so a persistent mismatch
+	// here is genuinely foreign.
+	if ownErr := artifacts.VerifyLocalMultipartOwnership(r.backendID, j.localBackendID); ownErr != nil {
+		j.logger.WithError(ownErr).WithField("artifact_hash", r.artifactHash).Warn("Completing-VOD recovery: ownership fence — leaving row untouched (zero S3 calls)")
+		return
+	}
+
 	// With a persisted completion descriptor, RETRY CompleteMultipartUpload first: a crash BEFORE the
 	// client's original completion call leaves a valid multipart upload that only this retry can converge
 	// (existence-probing alone would eventually FAIL it even though it was completable). S3 completion is
@@ -288,6 +309,8 @@ func (j *CompletingVodRecoveryJob) reconcileOne(ctx context.Context, r completin
 // dedups to any job already inserted by a concurrent client completion, so a re-run converges without
 // creating a duplicate.
 func (j *CompletingVodRecoveryJob) convergeToProcessing(ctx context.Context, r completingVodRow) {
+	// Ownership is already fenced at reconcileOne entry (recorded backend == local), so by here the row is provably
+	// owned; backend_id is recorded at creation (invariant I2) and never reconstructed here.
 	s3URL := j.s3.BuildS3URL(r.s3Key)
 	moved := false
 	err := database.WithRetryablePostgresTx(ctx, j.db, nil, func(tx *sql.Tx) error {
@@ -301,6 +324,8 @@ func (j *CompletingVodRecoveryJob) convergeToProcessing(ctx context.Context, r c
 			    frozen_at = COALESCE(frozen_at, NOW()),
 			    s3_url = COALESCE(s3_url, $2),
 			    -- The recovered multipart upload is durable on THIS cell's local S3 backend; persist attribution.
+			    -- backend_id is NOT written here: it was recorded when the upload was CREATED (invariant I2) and
+			    -- verified above, so recovery must not reconstruct or overwrite the recorded owner.
 			    durable_backend_local = true,
 			    -- Populate the authoritative object pointer from the recorded multipart key (see CompleteVodUpload).
 			    active_object_key = COALESCE(active_object_key, (SELECT s3_key FROM foghorn.vod_metadata WHERE artifact_hash = foghorn.artifacts.artifact_hash)),

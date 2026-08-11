@@ -10,12 +10,29 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+// mockQMRouting is a minimal Quartermaster routing resolver for the durable-storage tests. It returns the
+// tenant's official cluster (or, when officialClusterID is empty, the primary clusterID — mirroring
+// Quartermaster's omit-when-equal-primary behavior) so the strict resolver can positively resolve a destination.
+type mockQMRouting struct {
+	officialClusterID string
+	clusterID         string
+}
+
+func (m *mockQMRouting) GetClusterRouting(_ context.Context, _ *quartermasterpb.GetClusterRoutingRequest) (*quartermasterpb.ClusterRoutingResponse, error) {
+	resp := &quartermasterpb.ClusterRoutingResponse{ClusterId: m.clusterID}
+	if m.officialClusterID != "" {
+		resp.OfficialClusterId = &m.officialClusterID
+	}
+	return resp, nil
+}
 
 type mockCacheInvalidator struct {
 	lastTenant string
@@ -40,9 +57,13 @@ func (m *mockCacheInvalidator) GetClusterPeers(internalName, tenantID string) []
 	return nil
 }
 
+// When the tenant's official cluster IS this cell (Quartermaster resolves it to central-primary) and this cell
+// has an S3 client, the strict durable resolver mints locally — a positive resolution of the official
+// destination, not a dev/test fallback.
 func TestResolveVodStorageClusterUsesConfiguredLocalCluster(t *testing.T) {
 	server := NewFoghornGRPCServer(nil, logging.NewLogger(), nil, nil, nil, nil, nil, nil)
 	server.SetClusterID("central-primary")
+	server.SetQuartermasterClient(&mockQMRouting{clusterID: "central-primary"})
 	server.SetStorageResolverFactory(func(ctx context.Context, tenantID string) *storage.ClusterResolver {
 		return &storage.ClusterResolver{
 			LocalClusterID:       "central-primary",
@@ -56,11 +77,44 @@ func TestResolveVodStorageClusterUsesConfiguredLocalCluster(t *testing.T) {
 	}
 }
 
+// I1: a durable VOD write must fail closed when the tenant's official cluster does not positively resolve. With
+// no Quartermaster wired the official cluster is unresolved, so the resolver must NOT fall back to the caller's
+// ingest cluster or this cell's local cluster — it surfaces StorageUnavailable and mints nothing.
+func TestResolveVodStorageCluster_UnresolvedOfficialFailsClosed(t *testing.T) {
+	server := NewFoghornGRPCServer(nil, logging.NewLogger(), nil, nil, nil, nil, nil, nil)
+	server.SetClusterID("central-primary")
+	server.SetStorageResolverFactory(func(ctx context.Context, tenantID string) *storage.ClusterResolver {
+		return &storage.ClusterResolver{
+			LocalClusterID:       "central-primary",
+			LocalS3ClientPresent: true,
+		}
+	})
+
+	cluster, mode := server.resolveVodStorageCluster(context.Background(), "tenant-1", "byoc-origin")
+	if cluster != "" || mode != storage.StorageUnavailable {
+		t.Fatalf("unresolved official must fail closed; got (%q, %s), want (\"\", unavailable)", cluster, mode)
+	}
+}
+
+// I1: a nil resolver factory cannot positively resolve an official cluster, so the durable path fails closed even
+// when Quartermaster does return an official cluster.
+func TestResolveVodStorageCluster_NilResolverFailsClosed(t *testing.T) {
+	server := NewFoghornGRPCServer(nil, logging.NewLogger(), nil, nil, nil, nil, nil, nil)
+	server.SetClusterID("central-primary")
+	server.SetQuartermasterClient(&mockQMRouting{clusterID: "central-primary"})
+
+	cluster, mode := server.resolveVodStorageCluster(context.Background(), "tenant-1", "demo-media")
+	if cluster != "" || mode != storage.StorageUnavailable {
+		t.Fatalf("nil resolver must fail closed; got (%q, %s), want (\"\", unavailable)", cluster, mode)
+	}
+}
+
 // The durable destination is the tenant's official cluster only: an advertised BYOC INGEST/origin cluster must
 // NOT win the durable write, even when it advertises a locally-mintable backing (the pre-fix origin-first bug).
 func TestResolveVodStorageCluster_IgnoresOriginAdvertisedBacking(t *testing.T) {
 	server := NewFoghornGRPCServer(nil, logging.NewLogger(), nil, nil, nil, nil, nil, nil)
 	server.SetClusterID("central-primary")
+	server.SetQuartermasterClient(&mockQMRouting{clusterID: "central-primary"})
 	server.SetStorageResolverFactory(func(ctx context.Context, tenantID string) *storage.ClusterResolver {
 		return &storage.ClusterResolver{
 			LocalClusterID:       "central-primary",
@@ -68,8 +122,8 @@ func TestResolveVodStorageCluster_IgnoresOriginAdvertisedBacking(t *testing.T) {
 			LocalS3ClientPresent: true,
 			LocalS3Backing:       storage.S3Backing{Bucket: "b", Endpoint: "e", Region: "r"},
 			AdvertisedBacking: func(id string) (storage.S3Backing, bool) {
-				// The origin advertises a backing this cell could mint locally — under the old origin-first
-				// contract it would win. Official/local advertise nothing.
+				// The origin advertises a backing this cell could mint locally; official/local advertise nothing.
+				// Local minting takes precedence over the origin's advertisement.
 				if id == "byoc-origin" {
 					return storage.S3Backing{Bucket: "b", Endpoint: "e", Region: "r"}, true
 				}
@@ -78,8 +132,9 @@ func TestResolveVodStorageCluster_IgnoresOriginAdvertisedBacking(t *testing.T) {
 		}
 	})
 
-	// The ingest/origin cluster is "byoc-origin"; with no Quartermaster the official resolves empty, so the
-	// only durable candidate is the local cluster. The origin must be ignored → local mint on central-primary.
+	// The ingest/origin cluster is "byoc-origin"; Quartermaster resolves the official cluster to central-primary.
+	// The strict resolver considers ONLY the official cluster — the origin's advertised backing is never queried —
+	// so the origin is ignored and the official destination mints locally on central-primary.
 	cluster, mode := server.resolveVodStorageCluster(context.Background(), "tenant-1", "byoc-origin")
 	if cluster != "central-primary" || mode != storage.StorageMintLocal {
 		t.Fatalf("BYOC origin must not win durable destination; got (%q, %s), want (central-primary, local)", cluster, mode)

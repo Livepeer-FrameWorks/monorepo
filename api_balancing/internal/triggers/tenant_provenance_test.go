@@ -16,7 +16,7 @@ func newDecklogSendCounter() *prometheus.CounterVec {
 	return prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_decklog_sends"}, []string{"trigger_type", "status"})
 }
 
-// F10: the node-originated lifecycle families attribute an event to a tenant. When a node ASSERTS a tenant but
+// The node-originated lifecycle families attribute an event to a tenant. When a node ASSERTS a tenant but
 // the resource owner cannot be resolved, the assertion is unverifiable (the conflict check has nothing
 // authoritative to contradict). The pure-analytics families (storage / DVR / client QoE) must DROP such an
 // event before forwarding — never letting an unverified node claim pollute another tenant's rollup — matching

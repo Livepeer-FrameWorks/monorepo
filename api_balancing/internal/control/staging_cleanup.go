@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 
 	"github.com/lib/pq"
@@ -13,16 +14,26 @@ import (
 // co-located .dtsh) — any object the committing transition orphans (a completion commit, a stale-recovery
 // reset, or the terminal identity-clearing trigger). S3 deletion is not transactional with Postgres, so
 // enqueuing in-tx + draining with a retry worker (StagingCleanupJob) is what makes cleanup durable — a failed
-// or crashed delete is retried from this row instead of leaking unbilled provider storage. Idempotent: ON
-// CONFLICT DO NOTHING, so a retried completion or a re-enqueued key is a no-op.
+// or crashed delete is retried from this row instead of leaking unbilled provider storage. Idempotent: ON CONFLICT the
+// row's schedule/lease are unchanged EXCEPT that a missing (NULL) backend owner is filled from this cell's fingerprint,
+// so a re-enqueue never leaves the row unattributed for the strict worker.
 func EnqueueStagingCleanupTx(ctx context.Context, tx *sql.Tx, objectKey string) error {
 	if strings.TrimSpace(objectKey) == "" {
 		return nil
 	}
+	// Capture the backend the object lives on so the cleanup worker deletes from — or fails closed on — the RECORDED
+	// store, not whatever is current after a repoint. Freeze garbage is always on THIS cell's current local store at
+	// enqueue time. FAIL CLOSED on an empty fingerprint (a cell producing freeze garbage has a local store), and on
+	// conflict FILL a pre-existing NULL owner rather than leaving it unattributed for the strict worker.
+	bid := localBackendFingerprint()
+	if bid == "" {
+		return fmt.Errorf("enqueue staging cleanup: no local backend fingerprint to attribute %s", objectKey)
+	}
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO foghorn.staging_cleanup_queue (object_key)
-		VALUES ($1)
-		ON CONFLICT (object_key) DO NOTHING`, objectKey)
+		INSERT INTO foghorn.staging_cleanup_queue (object_key, backend_id)
+		VALUES ($1, $2)
+		ON CONFLICT (object_key) DO UPDATE
+		  SET backend_id = COALESCE(foghorn.staging_cleanup_queue.backend_id, EXCLUDED.backend_id)`, objectKey, bid)
 	return err
 }
 
@@ -57,10 +68,15 @@ func RecordPublicationPairDB(ctx context.Context, dbh *sql.DB, artifactHash, ten
 	if dbh == nil || strings.TrimSpace(stagingKey) == "" || strings.TrimSpace(candidateKey) == "" {
 		return nil
 	}
+	bid := localBackendFingerprint()
+	if bid == "" {
+		return fmt.Errorf("record publication pair: no local backend fingerprint to attribute %s", stagingKey)
+	}
 	_, err := dbh.ExecContext(ctx, `
-		INSERT INTO foghorn.freeze_publication_ledger (object_key, artifact_hash, tenant_id, request_id, guarded)
-		VALUES ($1, $3, $4, $5, false), ($2, $3, $4, $5, true)
-		ON CONFLICT (object_key) DO NOTHING`, stagingKey, candidateKey, artifactHash, tenant, requestID)
+		INSERT INTO foghorn.freeze_publication_ledger (object_key, artifact_hash, tenant_id, request_id, guarded, backend_id)
+		VALUES ($1, $3, $4, $5, false, $6), ($2, $3, $4, $5, true, $6)
+		ON CONFLICT (object_key) DO UPDATE
+		  SET backend_id = COALESCE(foghorn.freeze_publication_ledger.backend_id, EXCLUDED.backend_id)`, stagingKey, candidateKey, artifactHash, tenant, requestID, bid)
 	return err
 }
 
@@ -75,13 +91,19 @@ func RecordFreezePublicationLedgerTx(ctx context.Context, tx *sql.Tx, artifactHa
 	if strings.TrimSpace(objectKey) == "" || strings.TrimSpace(requestID) == "" {
 		return nil
 	}
+	bid := localBackendFingerprint()
+	if bid == "" {
+		return fmt.Errorf("record freeze publication ledger: no local backend fingerprint to attribute %s", objectKey)
+	}
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO foghorn.freeze_publication_ledger (object_key, artifact_hash, tenant_id, request_id, guarded)
-		VALUES ($1, $5, $6, $7, false), ($2, $5, $6, $7, true), ($3, $5, $6, $7, false), ($4, $5, $6, $7, true)
-		ON CONFLICT (object_key) DO NOTHING`,
+		INSERT INTO foghorn.freeze_publication_ledger (object_key, artifact_hash, tenant_id, request_id, guarded, backend_id)
+		VALUES ($1, $5, $6, $7, false, $8), ($2, $5, $6, $7, true, $8),
+		       ($3, $5, $6, $7, false, $8), ($4, $5, $6, $7, true, $8)
+		ON CONFLICT (object_key) DO UPDATE
+		  SET backend_id = COALESCE(foghorn.freeze_publication_ledger.backend_id, EXCLUDED.backend_id)`,
 		FreezeStagingKey(objectKey, requestID), FreezePublishKey(objectKey, requestID),
 		FreezeStagingKey(objectKey+".dtsh", requestID), FreezePublishDtshKey(objectKey, requestID),
-		artifactHash, tenant, requestID)
+		artifactHash, tenant, requestID, bid)
 	return err
 }
 

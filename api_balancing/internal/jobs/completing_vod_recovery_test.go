@@ -38,9 +38,10 @@ func newRecoveryJob(t *testing.T, s3 CompletingVodRecoveryS3) (*CompletingVodRec
 		t.Fatal(err)
 	}
 	j := NewCompletingVodRecoveryJob(CompletingVodRecoveryConfig{
-		DB:     db,
-		S3:     s3,
-		Logger: logging.NewLogger(),
+		DB:             db,
+		S3:             s3,
+		Logger:         logging.NewLogger(),
+		LocalBackendID: "backend-x", // matches the scan rows' backend_id so the ownership fence passes
 	})
 	return j, mock, func() { _ = db.Close() }
 }
@@ -49,8 +50,8 @@ func newRecoveryJob(t *testing.T, s3 CompletingVodRecoveryS3) (*CompletingVodRec
 // the existence-probe path.
 func recoveryScanRows(pastGrace bool) *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
-		"artifact_hash", "tenant_id", "user_id", "size_bytes", "s3_key", "s3_upload_id", "processes_json", "vod_completion_descriptor", "past_fail_grace",
-	}).AddRow("hash-1", "t1", "user-1", int64(2048), "vod/t1/hash-1/video.mp4", "up-1", "", "", pastGrace)
+		"artifact_hash", "tenant_id", "user_id", "size_bytes", "s3_key", "s3_upload_id", "processes_json", "backend_id", "vod_completion_descriptor", "past_fail_grace",
+	}).AddRow("hash-1", "t1", "user-1", int64(2048), "vod/t1/hash-1/video.mp4", "up-1", "", "backend-x", "", pastGrace)
 }
 
 // recoveryScanRowsWithDescriptor builds a scan row carrying a durable completion descriptor, so
@@ -58,8 +59,8 @@ func recoveryScanRows(pastGrace bool) *sqlmock.Rows {
 func recoveryScanRowsWithDescriptor(pastGrace bool) *sqlmock.Rows {
 	descriptor := `{"s3_key":"vod/t1/hash-1/video.mp4","upload_id":"up-1","parts":[{"part_number":1,"etag":"etag-1"}]}`
 	return sqlmock.NewRows([]string{
-		"artifact_hash", "tenant_id", "user_id", "size_bytes", "s3_key", "s3_upload_id", "processes_json", "vod_completion_descriptor", "past_fail_grace",
-	}).AddRow("hash-1", "t1", "user-1", int64(2048), "vod/t1/hash-1/video.mp4", "up-1", "", descriptor, pastGrace)
+		"artifact_hash", "tenant_id", "user_id", "size_bytes", "s3_key", "s3_upload_id", "processes_json", "backend_id", "vod_completion_descriptor", "past_fail_grace",
+	}).AddRow("hash-1", "t1", "user-1", int64(2048), "vod/t1/hash-1/video.mp4", "up-1", "", "backend-x", descriptor, pastGrace)
 }
 
 // A stranded 'completing' row whose object is PRESENT converges to 'processing' (+ PROCESSING lifecycle

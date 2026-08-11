@@ -19,7 +19,6 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"frameworks/api_balancing/internal/storage"
 	"frameworks/api_balancing/internal/triggers"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
@@ -31,6 +30,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mediakeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -86,6 +86,138 @@ func (cs *clientState) commodoreStatus() (bool, error) {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 	return cs.commodoreOK, cs.commodoreErr
+}
+
+// localBackendFingerprint returns the fingerprint of this cell's currently-configured local S3 store, so the cleaner
+// can fail closed when a recorded backend_id no longer matches (a repoint). Empty when no local S3 is wired or its
+// concrete type exposes no descriptor. An empty fingerprint does NOT disable the guard: cleanup treats a recorded
+// non-empty backend_id with an empty local fingerprint as an unproven match and fails closed (only a NULL/empty
+// recorded id routes to the current store).
+func localBackendFingerprint(s3 artifacts.S3Client) string {
+	bd, ok := s3.(interface {
+		BackendDescriptor() (bucket, endpoint, region, prefix string)
+	})
+	if !ok {
+		return ""
+	}
+	bucket, endpoint, region, prefix := bd.BackendDescriptor()
+	return control.BackendFingerprint("s3", bucket, endpoint, region, prefix)
+}
+
+// buildFirstBootBackendAuthority assembles the first-boot ADOPTION authority from Quartermaster, which owns the FULL
+// immutable descriptor tuple (bucket/endpoint/region/prefix). It is only consequential on a first boot of an
+// established cluster; AdoptOrEnforceLocalBackend ignores it once an identity exists. Quartermaster is the SOLE source
+// of the authority — no serving component is consulted — so adoption never depends on another service being ready and
+// has no boot-ordering coupling. QM unreachable / no client → Established+!Complete (first boot fails closed). QM
+// descriptor empty → Established+!Complete as well: Foghorn does not establish an identity from its own env, so an
+// S3-enabled cell with no QM descriptor FAILS CLOSED until the descriptor is established in QM (bootstrap or `cluster
+// storage adopt` / `cluster release apply`). QM descriptor set → established + complete (adopt it).
+func buildFirstBootBackendAuthority(qmClient *qmclient.GRPCClient, clusterID string, logger logging.Logger) control.LocalBackendAuthority {
+	if qmClient == nil {
+		logger.Warn("No Quartermaster client wired; a first boot cannot prove the existing backend and will fail closed")
+		return control.LocalBackendAuthority{Established: true}
+	}
+	qmCtx, qmCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	cr, qErr := qmClient.GetCluster(qmCtx, clusterID)
+	qmCancel()
+	if qErr != nil {
+		logger.WithError(qErr).Warn("Quartermaster unreachable for first-boot backend adoption; a first boot will fail closed until it is reachable")
+		return control.LocalBackendAuthority{Established: true}
+	}
+	cl := cr.GetCluster()
+	if cl == nil || strings.TrimSpace(cl.GetS3Bucket()) == "" {
+		// Quartermaster has NO descriptor for this cell. Because this Foghorn reached here it HAS S3 configured (the
+		// caller only builds the authority when S3 is enabled), and Quartermaster is the sole authority — Foghorn does
+		// not establish an identity from its own env. Return Established (so the incomplete-descriptor guard fails the
+		// boot closed) rather than committing from env: the descriptor must be established in Quartermaster first
+		// (desired-state bootstrap, or `cluster storage adopt`).
+		logger.WithField("cluster_id", clusterID).Warn("Quartermaster has no S3 descriptor for this S3-enabled cell; first boot fails closed until the descriptor is established (bootstrap/adopt)")
+		return control.LocalBackendAuthority{Established: true}
+	}
+	if !cl.GetS3PrefixPresent() {
+		// The descriptor has a bucket but its s3_prefix is NULL (unset). The tuple is INCOMPLETE: a COALESCE'd empty
+		// prefix is not proof the real prefix is empty. Established-but-incomplete → first boot FAILS CLOSED until the
+		// prefix is set (desired-state bootstrap / `cluster storage adopt`), so Foghorn never commits an identity from
+		// an unset prefix.
+		logger.WithField("cluster_id", clusterID).Warn("Quartermaster descriptor has a bucket but s3_prefix is unadopted (NULL); first boot fails closed until the descriptor is adopted")
+		return control.LocalBackendAuthority{Established: true}
+	}
+	return control.LocalBackendAuthority{
+		Established: true,
+		Complete:    true,
+		Bucket:      cl.GetS3Bucket(),
+		Endpoint:    cl.GetS3Endpoint(),
+		Region:      cl.GetS3Region(),
+		Prefix:      cl.GetS3Prefix(),
+	}
+}
+
+// Readiness-sentinel establishment tuning (package vars so tests can shrink them). Each PutObject attempt is bounded
+// by its own timeout; on failure we back off and retry up to the attempt cap before the caller fails closed.
+var (
+	readinessSentinelAttempts       = 5
+	readinessSentinelAttemptTimeout = 5 * time.Second
+	readinessSentinelBackoff        = 2 * time.Second
+)
+
+// sentinelWriter is the write subset used to establish the readiness sentinel (satisfied by *storage.S3Client).
+type sentinelWriter interface {
+	PutObject(ctx context.Context, key string, body []byte, contentType string) error
+}
+
+// establishReadinessSentinel writes mediakeys.ReadinessSentinelKey CONVERGENTLY: bounded per-attempt timeout + backoff
+// retry, so a transient S3 blip does not leave Chandler permanently unready. It returns an error only after the whole
+// retry budget is exhausted (the caller then fails closed) or the parent context is cancelled. Idempotent — the PUT
+// just overwrites. PutObject prepends the cell prefix, matching Chandler's read path.
+func establishReadinessSentinel(ctx context.Context, w sentinelWriter, logger logging.Logger) error {
+	var lastErr error
+	for attempt := 1; attempt <= readinessSentinelAttempts; attempt++ {
+		attemptCtx, cancel := context.WithTimeout(ctx, readinessSentinelAttemptTimeout)
+		lastErr = w.PutObject(attemptCtx, mediakeys.ReadinessSentinelKey, []byte("ready\n"), "text/plain")
+		cancel()
+		if lastErr == nil {
+			return nil
+		}
+		logger.WithError(lastErr).WithField("attempt", attempt).Warn("Chandler readiness sentinel write failed; retrying")
+		if attempt < readinessSentinelAttempts {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(readinessSentinelBackoff):
+			}
+		}
+	}
+	return fmt.Errorf("establish readiness sentinel after %d attempts: %w", readinessSentinelAttempts, lastErr)
+}
+
+// clusterPeerBacking is the subset of a Quartermaster cluster-peer descriptor needed to derive an S3 backing.
+// *cluster_peer.TenantClusterPeer satisfies it; the interface keeps backingFromPeer unit-testable without a full proto.
+type clusterPeerBacking interface {
+	GetS3Bucket() string
+	GetS3Endpoint() string
+	GetS3Region() string
+	GetS3Prefix() string
+	GetS3PrefixPresent() bool
+}
+
+// backingFromPeer derives a federation S3 backing from a cluster-peer descriptor, FAILING CLOSED on an incomplete
+// one. A peer with no bucket, or a bucket but an unadopted (NULL) prefix, has no usable identity: its collapsed empty
+// prefix could false-match a local empty prefix and mint to the wrong keyspace, so it reports (zero, false) and the
+// resolver never local-mints against it. Only a fully-adopted descriptor (bucket + present prefix) yields a backing.
+func backingFromPeer(peer clusterPeerBacking) (federation.S3Backing, bool) {
+	bucket := peer.GetS3Bucket()
+	if bucket == "" {
+		return federation.S3Backing{}, false
+	}
+	if !peer.GetS3PrefixPresent() {
+		return federation.S3Backing{}, false
+	}
+	return federation.S3Backing{
+		Bucket:   bucket,
+		Endpoint: peer.GetS3Endpoint(),
+		Region:   peer.GetS3Region(),
+		Prefix:   peer.GetS3Prefix(),
+	}, true
 }
 
 func main() {
@@ -537,23 +669,78 @@ func main() {
 			Bucket:   s3Config.Bucket,
 			Endpoint: s3Config.Endpoint,
 			Region:   s3Config.Region,
+			Prefix:   s3Config.Prefix,
 		}
 		client, s3Err := storage.NewS3Client(s3Config, logger)
 		if s3Err != nil {
-			logger.WithError(s3Err).Error("Failed to initialize S3 client for cold storage")
+			// STORAGE_S3_BUCKET is configured, so durable storage is REQUIRED. Starting with S3 disabled would let a
+			// cell run without its committed backend (and bypass the immutability guard). Fail closed.
+			logger.WithError(s3Err).Fatal("STORAGE_S3_BUCKET is configured but the S3 client failed to initialize; refusing to start without durable storage")
 		} else {
 			// Only assign to interfaces if successfully created (avoids typed nil issue)
 			s3ForGRPC = client
 			s3ForReconciler = client
 			s3ForFederation = client
 			control.SetS3Client(client)
+			// Enforce the immutable-backend invariant. On steady-state boots the committed cell_storage_identity governs
+			// (exact descriptor match). On a FIRST boot (freshly-created identity table) of an ESTABLISHED cluster
+			// (existing data — the Quartermaster row carries a descriptor), Foghorn must PROVE the existing backend
+			// before recording an identity: Quartermaster is the SOLE authority and supplies the FULL tuple
+			// (bucket/endpoint/region/prefix), and the env must match all four. No serving component is consulted, so
+			// adoption has no dependency on another service being ready. If the authority cannot be positively read (Quartermaster
+			// unreachable or its descriptor incomplete), the first boot FAILS CLOSED — no identity is recorded — so a
+			// repointed/unproven descriptor can never strand historical bytes. An S3-enabled cell whose Quartermaster
+			// descriptor is EMPTY also fails closed (buildFirstBootBackendAuthority returns established-but-incomplete):
+			// Quartermaster is the sole authority, so the descriptor must be established there first (desired-state
+			// bootstrap, or `cluster storage adopt`). Foghorn does not establish an identity from its own env.
+			auth := buildFirstBootBackendAuthority(qmClient, foghornCfg.ClusterID, logger)
+			if bErr := control.AdoptOrEnforceLocalBackend(context.Background(), db, auth); bErr != nil {
+				logger.WithError(bErr).Fatal("Refusing to start: could not prove or match this cell's immutable S3 backend (backend repointing is not supported)")
+			}
 			logger.WithFields(logging.Fields{
 				"bucket": s3Bucket,
 				"prefix": s3Config.Prefix,
 			}).Info("S3 cold storage enabled")
+			// Establish the readiness sentinel Chandler reads to prove GetObject on the served namespace, BEFORE this
+			// process starts serving — so the object exists ahead of Chandler's readiness gate (the planner also orders
+			// Chandler after Foghorn). CONVERGENT and BOUNDED: each attempt has its own deadline and we retry with
+			// backoff; a persistent failure is FATAL so the service manager restarts and reconverges (Foghorn cannot
+			// publish thumbnails without a writable backend anyway). Idempotent — a re-boot just re-PUTs it.
+			if sErr := establishReadinessSentinel(context.Background(), client, logger); sErr != nil {
+				logger.WithError(sErr).Fatal("Refusing to start: could not establish the Chandler readiness sentinel after retries; the thumbnail backend is not writable")
+			}
 		}
 	} else {
-		logger.Info("S3 cold storage disabled (no STORAGE_S3_BUCKET configured)")
+		// No STORAGE_S3_BUCKET. If this cell ALREADY committed an immutable backend identity, starting S3-disabled
+		// would strand every artifact recorded against that backend — refuse. A genuinely storage-less cell (that
+		// never committed one) may start.
+		if committed, cErr := control.LocalBackendCommitted(context.Background(), db); cErr != nil {
+			logger.WithError(cErr).Fatal("Could not check committed storage identity; refusing to start")
+		} else if committed {
+			logger.Fatal("This cell committed an immutable S3 backend on a prior boot, but STORAGE_S3_BUCKET is now unset; refusing to start S3-disabled (restore the original descriptor — credentials may rotate)")
+		}
+		// On a clean redeploy cell_storage_identity is empty, so the committed check above cannot catch a MISCONFIGURED
+		// storage-less start. A storage-less start requires POSITIVE PROOF — a missing/unreachable authority is NOT
+		// proof, and silently disabling durable storage would strand every durable write after a config omission. Valid
+		// only when: STORAGE_MODE=none is explicitly set, OR a REACHABLE Quartermaster declares NO S3 backend for this
+		// cluster. Otherwise (unreachable QM, no QM client, or QM declares a bucket) fail closed.
+		if strings.EqualFold(strings.TrimSpace(config.GetEnv("STORAGE_MODE", "")), "none") {
+			logger.Info("S3 cold storage disabled (STORAGE_MODE=none)")
+		} else if qmClient == nil {
+			logger.Fatal("No STORAGE_S3_BUCKET and no Quartermaster client to confirm this cell is storage-less; refusing to start S3-disabled (set STORAGE_MODE=none for a genuinely storage-less cell, or set STORAGE_S3_*)")
+		} else {
+			qmCtx, qmCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			cr, qErr := qmClient.GetCluster(qmCtx, foghornCfg.ClusterID)
+			qmCancel()
+			switch {
+			case qErr != nil:
+				logger.WithError(qErr).Fatal("No STORAGE_S3_BUCKET and Quartermaster is unreachable to confirm this cell is storage-less; refusing to start S3-disabled (durable writes would silently fail). Restore connectivity, set STORAGE_S3_*, or set STORAGE_MODE=none for a genuinely storage-less cell")
+			case cr.GetCluster() != nil && strings.TrimSpace(cr.GetCluster().GetS3Bucket()) != "":
+				logger.WithField("cluster_id", foghornCfg.ClusterID).Fatal("Quartermaster declares an S3 backend for this cluster but STORAGE_S3_BUCKET is unset; refusing to start S3-disabled (durable writes would silently fail). Set STORAGE_S3_* to the cluster descriptor, or clear the cluster descriptor for a storage-less cell")
+			default:
+				logger.Info("S3 cold storage disabled (Quartermaster confirms no S3 backend for this cluster)")
+			}
+		}
 	}
 
 	// Initialize handlers with injected clients before bootstrap metadata is applied.
@@ -650,15 +837,7 @@ func main() {
 			if peer.GetClusterId() != clusterID {
 				continue
 			}
-			bucket := peer.GetS3Bucket()
-			if bucket == "" {
-				return federation.S3Backing{}, false
-			}
-			return federation.S3Backing{
-				Bucket:   bucket,
-				Endpoint: peer.GetS3Endpoint(),
-				Region:   peer.GetS3Region(),
-			}, true
+			return backingFromPeer(peer)
 		}
 		return federation.S3Backing{}, false
 	}
@@ -677,6 +856,7 @@ func main() {
 				Bucket:   localS3Backing.Bucket,
 				Endpoint: localS3Backing.Endpoint,
 				Region:   localS3Backing.Region,
+				Prefix:   localS3Backing.Prefix,
 			},
 			AdvertisedBacking: advertisedBackingForTenant,
 			IsServedCluster:   control.IsServedCluster,
@@ -1065,7 +1245,7 @@ func main() {
 				if !ok {
 					return storage.S3Backing{}, false
 				}
-				return storage.S3Backing{Bucket: b.Bucket, Endpoint: b.Endpoint, Region: b.Region}, true
+				return storage.S3Backing{Bucket: b.Bucket, Endpoint: b.Endpoint, Region: b.Region, Prefix: b.Prefix}, true
 			},
 			Logger:  logger,
 			Metrics: serviceResolutionRejected,
@@ -1149,7 +1329,7 @@ func main() {
 				if !ok {
 					return storage.S3Backing{}, false
 				}
-				return storage.S3Backing{Bucket: b.Bucket, Endpoint: b.Endpoint, Region: b.Region}, true
+				return storage.S3Backing{Bucket: b.Bucket, Endpoint: b.Endpoint, Region: b.Region, Prefix: b.Prefix}, true
 			},
 			Logger:  logger,
 			Metrics: serviceResolutionRejected,
@@ -1177,16 +1357,23 @@ func main() {
 			return d(ctx, targetClusterID, req)
 		}
 	}
+	// One fully-populated cleaner, shared by the gRPC delete handlers, the purge job, and stream cleanup so every
+	// path agrees on backend identity. LocalBackendID (this cell's immutable store fingerprint) is what cleanup and the
+	// multipart-ownership fence compare an object's recorded backend_id against (backend_id itself is written at upload
+	// creation, and adopted at boot for pre-cut in-flight rows) to fail closed on a foreign or unattributed row.
+	var artifactCleaner *artifacts.Cleaner
 	if s3ForFederation != nil || deleteDelegate != nil {
 		var localS3 artifacts.S3Client
 		if s3ForFederation != nil {
 			localS3 = s3ForFederation
 		}
-		foghornServer.SetArtifactCleaner(&artifacts.Cleaner{
-			LocalCluster: foghornCfg.ClusterID,
-			S3:           localS3,
-			Delegate:     deleteDelegate,
-		})
+		artifactCleaner = &artifacts.Cleaner{
+			LocalCluster:   foghornCfg.ClusterID,
+			S3:             localS3,
+			Delegate:       deleteDelegate,
+			LocalBackendID: localBackendFingerprint(localS3),
+		}
+		foghornServer.SetArtifactCleaner(artifactCleaner)
 	}
 	if federationServer != nil {
 		federationServer.SetStorageMintMetric(metrics.StorageMint)
@@ -1359,6 +1546,16 @@ func main() {
 		Complete: func(ctx context.Context, attemptID string) (bool, error) {
 			return control.CompleteThumbnailAttemptForRecovery(ctx, attemptID, logger)
 		},
+		// Re-drive published-but-unprojected attempts (a crash between the publish CAS and the deterministic
+		// copy): re-project the winning version objects to the served key and, on success, expose has_thumbnails.
+		Reproject: func(ctx context.Context, attemptID string) (bool, error) {
+			return control.ReprojectPublishedThumbnailAttempt(ctx, attemptID)
+		},
+		// Bounded eventual convergence: past the max-copy window, re-copy the current winner to the deterministic
+		// key once to correct any straggler overwrite from an earlier loser, then clear the reassert clock.
+		Reassert: func(ctx context.Context, attemptID string) (bool, error) {
+			return control.ReassertThumbnailProjection(ctx, attemptID)
+		},
 	})
 	thumbnailRecoveryJob.Start()
 	defer thumbnailRecoveryJob.Stop()
@@ -1369,9 +1566,10 @@ func main() {
 	// makes it a no-op drain.
 	if s3ForReconciler != nil {
 		stagingCleanupJob := jobs.NewStagingCleanupJob(jobs.StagingCleanupConfig{
-			DB:     db,
-			S3:     s3ForReconciler,
-			Logger: logger,
+			DB:             db,
+			S3:             s3ForReconciler,
+			Logger:         logger,
+			LocalBackendID: localBackendFingerprint(s3ForFederation),
 		})
 		stagingCleanupJob.Start()
 		defer stagingCleanupJob.Stop()
@@ -1397,12 +1595,13 @@ func main() {
 	// no S3 is configured. Uses s3ForFederation (a *storage.S3Client with Exists + BuildS3URL).
 	if s3ForFederation != nil {
 		completingVodRecoveryJob := jobs.NewCompletingVodRecoveryJob(jobs.CompletingVodRecoveryConfig{
-			DB:         db,
-			S3:         s3ForFederation,
-			Logger:     logger,
-			Interval:   2 * time.Minute,
-			StaleAfter: 5 * time.Minute,
-			FailAfter:  1 * time.Hour,
+			DB:             db,
+			S3:             s3ForFederation,
+			Logger:         logger,
+			Interval:       2 * time.Minute,
+			StaleAfter:     5 * time.Minute,
+			FailAfter:      1 * time.Hour,
+			LocalBackendID: localBackendFingerprint(s3ForFederation),
 		})
 		completingVodRecoveryJob.Start()
 		defer completingVodRecoveryJob.Stop()
@@ -1411,11 +1610,12 @@ func main() {
 		// AbortVodUpload — see AbortVodUpload). Needs S3 to re-run the multipart abort idempotently;
 		// skipped when no S3 is configured. Uses the same s3ForFederation *storage.S3Client.
 		abortingVodRecoveryJob := jobs.NewAbortingVodRecoveryJob(jobs.AbortingVodRecoveryConfig{
-			DB:         db,
-			S3:         s3ForFederation,
-			Logger:     logger,
-			Interval:   2 * time.Minute,
-			StaleAfter: 5 * time.Minute,
+			DB:             db,
+			S3:             s3ForFederation,
+			Logger:         logger,
+			Interval:       2 * time.Minute,
+			StaleAfter:     5 * time.Minute,
+			LocalBackendID: localBackendFingerprint(s3ForFederation),
 		})
 		abortingVodRecoveryJob.Start()
 		defer abortingVodRecoveryJob.Stop()
@@ -1446,29 +1646,31 @@ func main() {
 
 	// Start purge job (hard-deletes old soft-deleted records, frees S3
 	// bytes via the shared cleaner so cross-cluster deletes route
-	// through the federation delegate).
-	var purgeCleaner *artifacts.Cleaner
-	if s3ForFederation != nil || deleteDelegate != nil {
-		var localS3 artifacts.S3Client
-		if s3ForFederation != nil {
-			localS3 = s3ForFederation
-		}
-		purgeCleaner = &artifacts.Cleaner{
-			LocalCluster: foghornCfg.ClusterID,
-			S3:           localS3,
-			Delegate:     deleteDelegate,
-		}
-	}
+	// through the federation delegate). Reuses the SAME fully-populated
+	// cleaner wired into the gRPC delete handlers above, so both paths
+	// resolve the recorded backend identically (nil when no S3/delegate).
+	purgeCleaner := artifactCleaner
 	purgeDeletedJob := jobs.NewPurgeDeletedJob(jobs.PurgeDeletedConfig{
 		DB:           db,
 		Logger:       logger,
 		Interval:     24 * time.Hour,
 		RetentionAge: 30 * 24 * time.Hour, // 30 days
 		Cleaner:      purgeCleaner,
-		S3Aborter:    s3ForFederation,
 	})
 	purgeDeletedJob.Start()
 	defer purgeDeletedJob.Stop()
+
+	// Drains foghorn.stream_cleanup_obligation: sweeps a deleted LIVE stream's thumbnail bytes (no artifact row, so
+	// purge/GC never reach it) and drops the control rows, retried from the durable tombstone until confirmed gone.
+	// Reuses the purge cleaner so cross-cluster bytes route through the same federation delegate.
+	streamCleanupJob := jobs.NewStreamCleanupJob(jobs.StreamCleanupConfig{
+		DB:       db,
+		Cleaner:  purgeCleaner,
+		Logger:   logger,
+		Interval: 1 * time.Minute,
+	})
+	streamCleanupJob.Start()
+	defer streamCleanupJob.Stop()
 
 	// Start artifact reconciler (retries failed syncs, advances pending, onboards orphaned)
 	artifactReconciler := jobs.NewArtifactReconciler(jobs.ArtifactReconcilerConfig{
@@ -1556,12 +1758,8 @@ func main() {
 	// Livepeer gateway auth webhook — validates incoming segments against active streams
 	router.POST("/webhooks/livepeer/auth", handlers.HandleLivepeerAuth)
 
-	// In-cell thumbnail resolver: a co-located Chandler (reached via mesh DNS foghorn.internal) resolves
-	// asset_key -> active version on a cold cache miss. Service-token guarded (same trust as the Foghorn ->
-	// Chandler invalidation channel). Any HA instance answers from shared Postgres.
-	if thumbToken := strings.TrimSpace(os.Getenv("SERVICE_TOKEN")); thumbToken != "" {
-		router.GET("/internal/thumbnails/active-version", auth.ServiceAuthMiddleware(thumbToken), handlers.HandleResolveActiveThumbnailVersion)
-	}
+	// No in-cell thumbnail resolver / capability endpoint: Chandler serves thumbnails from a DETERMINISTIC static key
+	// with no cold-miss Foghorn call, so Foghorn no longer runs a per-request resolver (docs/architecture/thumbnails.md).
 
 	// MistServer Compatibility - stream key routing for Helmsman/MistServer
 	router.NoRoute(handlers.MistServerCompatibilityHandler)

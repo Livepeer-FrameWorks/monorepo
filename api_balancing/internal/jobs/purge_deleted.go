@@ -33,19 +33,11 @@ type PurgeDeletedJob struct {
 	stopCh       chan struct{}
 	wg           sync.WaitGroup
 	cleaner      *artifacts.Cleaner
-	s3Aborter    UploadAborter
 	// crossClusterDeleteEnabled mirrors the federation server's mutation gate. While it is false (the default),
 	// remote-owned bytes can never be freed (the delegate delete fails closed), so the bytes+rows sweep skips
 	// remote rows entirely — otherwise a page of permanently-undeletable remote rows would occupy every fixed
 	// LIMIT pass and starve reapable local rows. When true, remote rows are re-admitted to the sweep.
 	crossClusterDeleteEnabled bool
-}
-
-// UploadAborter is the local-S3 surface needed for stale uploading-VOD
-// cleanup. Multipart abort is not exposed via the federation delegate, so
-// rows whose bytes live on a peer cluster are skipped and logged.
-type UploadAborter interface {
-	AbortMultipartUpload(ctx context.Context, key, uploadID string) error
 }
 
 // PurgeDeletedConfig holds configuration for the purge job
@@ -55,7 +47,6 @@ type PurgeDeletedConfig struct {
 	Interval     time.Duration
 	RetentionAge time.Duration
 	Cleaner      *artifacts.Cleaner
-	S3Aborter    UploadAborter
 	// AllowCrossClusterDelete must match the federation server's AllowFederationMutations. Leave false (the
 	// default) until cluster-bound delete identity exists; the bytes+rows sweep then skips remote rows so they
 	// cannot starve local reaping. See PurgeDeletedJob.crossClusterDeleteEnabled.
@@ -79,7 +70,6 @@ func NewPurgeDeletedJob(cfg PurgeDeletedConfig) *PurgeDeletedJob {
 		retentionAge:              retentionAge,
 		stopCh:                    make(chan struct{}),
 		cleaner:                   cfg.Cleaner,
-		s3Aborter:                 cfg.S3Aborter,
 		crossClusterDeleteEnabled: cfg.AllowCrossClusterDelete,
 	}
 }
@@ -180,28 +170,27 @@ func (j *PurgeDeletedJob) purgeArtifactBytesAndRows(ctx context.Context) {
 	}
 	j.markFailedArtifactsDeleted(ctx)
 
-	// While cross-cluster deletion is disabled, exclude remote-owned rows: their bytes can't be freed, so a
-	// page full of them would occupy every fixed-LIMIT pass and starve reapable local rows. They are retained
-	// (never lost) until a cluster-bound delete path lands. localCluster empty (unknown) → don't filter.
-	//
-	// "Local" = the authoritative durable_backend_local flag is true, OR the row has NO remote owner recorded
-	// (both cluster columns NULL/empty → the third COALESCE arg makes that '' rather than NULL, so it is kept —
-	// a plain `IN ('', $2)` would drop both-NULL rows because NULL never matches IN, leaking local rows), OR the
-	// resolved owner equals this cluster.
-	localCluster := ""
+	// BACKEND AFFINITY: only claim rows recorded on THIS cell's store — ownership is read from recorded evidence, never
+	// reconstructed (invariant I2). A row's backend_id names the physical store its bytes live on; a bare delete against
+	// the wrong store is a no-op success that would then hard-delete the row and orphan the real bytes. So we claim ONLY
+	// `backend_id = this cell's fingerprint`. A NULL backend is NOT claimed by cluster: legacy local rows are attributed
+	// once at boot (adoptLegacyLocalBackends), so a remaining NULL is unattributed and RETAINED — a safe row leak, never
+	// byte orphaning, and never a guessed-store delete. A cell without a fingerprint cannot prove ownership of anything.
+	localBackendID := ""
 	if j.cleaner != nil {
-		localCluster = j.cleaner.LocalCluster
+		localBackendID = j.cleaner.LocalBackendID
 	}
 	remoteClause := ""
 	args := []any{j.retentionAge.String()}
-	if !j.crossClusterDeleteEnabled && localCluster != "" {
-		remoteClause = `
-		  AND (
-		        a.durable_backend_local = true
-		     OR COALESCE(NULLIF(a.storage_cluster_id, ''), NULLIF(a.origin_cluster_id, ''), '') = ''
-		     OR COALESCE(NULLIF(a.storage_cluster_id, ''), NULLIF(a.origin_cluster_id, '')) = $2
-		  )`
-		args = append(args, localCluster)
+	switch {
+	case j.crossClusterDeleteEnabled:
+		// No affinity filter: cross-cluster delegation frees remote bytes through their owner.
+	case localBackendID != "":
+		remoteClause = ` AND a.backend_id = $2`
+		args = append(args, localBackendID)
+	default:
+		// No fingerprint → cannot prove ownership of any row; claim nothing (fail closed).
+		remoteClause = ` AND false`
 	}
 
 	rows, err := j.db.QueryContext(ctx, `
@@ -216,6 +205,7 @@ func (j *PurgeDeletedJob) purgeArtifactBytesAndRows(ctx context.Context) {
 		       COALESCE(a.active_object_key, ''),
 		       COALESCE(a.active_dtsh_key, ''),
 		       COALESCE(a.durable_backend_local, false),
+		       COALESCE(a.backend_id, ''),
 		       a.status
 		FROM foghorn.artifacts a
 		LEFT JOIN foghorn.vod_metadata v ON v.artifact_hash = a.artifact_hash
@@ -249,12 +239,13 @@ func (j *PurgeDeletedJob) purgeArtifactBytesAndRows(ctx context.Context) {
 		vodS3Key, s3URL, pendingObjectKey, activeObjectKey   string
 		activeDtshKey                                        string
 		durableBackendLocal                                  bool
+		backendID                                            string
 		status                                               string
 	}
 	var batch []purgeRow
 	for rows.Next() {
 		var r purgeRow
-		if errScan := rows.Scan(&r.hash, &r.artifactType, &r.tenantID, &r.streamInternal, &r.format, &r.storageClusterID, &r.originClusterID, &r.vodS3Key, &r.s3URL, &r.pendingObjectKey, &r.activeObjectKey, &r.activeDtshKey, &r.durableBackendLocal, &r.status); errScan != nil {
+		if errScan := rows.Scan(&r.hash, &r.artifactType, &r.tenantID, &r.streamInternal, &r.format, &r.storageClusterID, &r.originClusterID, &r.vodS3Key, &r.s3URL, &r.pendingObjectKey, &r.activeObjectKey, &r.activeDtshKey, &r.durableBackendLocal, &r.backendID, &r.status); errScan != nil {
 			j.logger.WithError(errScan).Warn("Failed to scan artifact purge row")
 			continue
 		}
@@ -280,6 +271,7 @@ func (j *PurgeDeletedJob) purgeArtifactBytesAndRows(ctx context.Context) {
 			ActiveDtshKey:       r.activeDtshKey,
 			DurableBackendLocal: r.durableBackendLocal,
 			PendingObjectKey:    r.pendingObjectKey,
+			BackendID:           r.backendID,
 		}
 		errDel := j.cleaner.Delete(ctx, ref)
 		switch {
@@ -321,18 +313,20 @@ func (j *PurgeDeletedJob) purgeArtifactBytesAndRows(ctx context.Context) {
 			j.logger.WithError(errTC).WithField("artifact_hash", r.hash).Warn("Purge: thumbnail control-row cleanup failed; keeping DB row for retry")
 			continue
 		}
-		// Sweep the prefix on the thumbnail's OWN destination cluster(s). If none recorded (no attempts), fall
-		// back to a local sweep so a stray legacy object is still reclaimed.
+		// Sweep the prefix on the thumbnail's OWN destination cluster(s), routed by the recorded backend-local
+		// fact. If none recorded (no attempts), fall back to a LOCAL sweep on this artifact's recorded backend (this
+		// cell's store) so a stray legacy object is reclaimed — never an empty identity, which the strict adapter
+		// refuses.
 		if len(thumbClusters) == 0 {
-			thumbClusters = []string{""}
+			thumbClusters = []control.ThumbnailDestination{{BackendID: r.backendID, BackendLocal: true}}
 		}
 		thumbErr := false
 		for _, tc := range thumbClusters {
-			if errThumb := j.cleaner.DeleteThumbnailsOnCluster(ctx, r.tenantID, r.hash, tc); errThumb != nil {
+			if errThumb := j.cleaner.DeleteThumbnailsOnCluster(ctx, r.tenantID, r.hash, tc.Cluster, tc.BackendLocal, tc.BackendID); errThumb != nil {
 				j.logger.WithError(errThumb).WithFields(logging.Fields{
 					"artifact_hash":       r.hash,
 					"artifact_type":       r.artifactType,
-					"destination_cluster": tc,
+					"destination_cluster": tc.Cluster,
 				}).Warn("Purge: thumbnail byte cleanup not confirmed; keeping DB row for retry")
 				thumbErr = true
 				break
@@ -366,18 +360,20 @@ func (j *PurgeDeletedJob) purgeArtifactBytesAndRows(ctx context.Context) {
 	}
 }
 
-// purgeStaleUploadingVODs aborts multipart uploads whose
-// upload_expires_at has passed and soft-deletes the artifact row so the
-// next purge cycle reaps it. Multipart abort isn't exposed via the
-// federation delegate; rows whose storage_cluster_id points to a peer
-// cluster are skipped+logged.
+// purgeStaleUploadingVODs claims expired multipart uploads for teardown by transitioning the row
+// 'uploading' -> 'aborting' (durable, guarded, tenant-scoped) — it does NOT abort S3 itself. The
+// AbortingVodRecoveryJob then owns the idempotent S3 abort and convergence to 'deleted'. Aborting S3 here
+// (before the claim) would race CompleteVodUpload: completion can move the row 'uploading' -> 'completing'
+// after this SELECT, so a bare abort would destroy a multipart another path now owns while its own UPDATE
+// affected zero rows. The guarded CAS claim makes the race safe — a row already moved off 'uploading' matches
+// 0 rows and is left alone. Rows whose storage_cluster_id points to a peer cluster are skipped+logged.
 func (j *PurgeDeletedJob) purgeStaleUploadingVODs(ctx context.Context) {
 	rows, err := j.db.QueryContext(ctx, `
 		SELECT a.artifact_hash,
+		       a.tenant_id::text,
 		       COALESCE(a.storage_cluster_id, ''),
 		       COALESCE(a.origin_cluster_id, ''),
-		       COALESCE(v.s3_key, ''),
-		       COALESCE(v.s3_upload_id, '')
+		       COALESCE(a.backend_id, '')
 		FROM foghorn.artifacts a
 		JOIN foghorn.vod_metadata v ON v.artifact_hash = a.artifact_hash
 		WHERE a.status = 'uploading'
@@ -392,18 +388,22 @@ func (j *PurgeDeletedJob) purgeStaleUploadingVODs(ctx context.Context) {
 	defer func() { _ = rows.Close() }()
 
 	type uploadRow struct {
-		hash, storageClusterID, originClusterID, s3Key, uploadID string
+		hash, tenantID, storageClusterID, originClusterID, backendID string
 	}
 	var batch []uploadRow
 	for rows.Next() {
 		var r uploadRow
-		if errScan := rows.Scan(&r.hash, &r.storageClusterID, &r.originClusterID, &r.s3Key, &r.uploadID); errScan != nil {
+		if errScan := rows.Scan(&r.hash, &r.tenantID, &r.storageClusterID, &r.originClusterID, &r.backendID); errScan != nil {
 			continue
 		}
 		batch = append(batch, r)
 	}
+	localBackendID := ""
+	if j.cleaner != nil {
+		localBackendID = j.cleaner.LocalBackendID
+	}
 
-	var aborted int
+	var claimed int
 	for _, r := range batch {
 		owner := r.storageClusterID
 		if owner == "" {
@@ -418,23 +418,35 @@ func (j *PurgeDeletedJob) purgeStaleUploadingVODs(ctx context.Context) {
 			}).Warn("Stale uploading VOD on remote cluster; abort not yet delegated")
 			continue
 		}
-		if r.s3Key != "" && r.uploadID != "" && j.s3Aborter != nil {
-			if errAbort := j.s3Aborter.AbortMultipartUpload(ctx, r.s3Key, r.uploadID); errAbort != nil {
-				j.logger.WithError(errAbort).WithField("artifact_hash", r.hash).Warn("Stale upload abort failed; will retry next cycle")
-				continue
-			}
-		}
-		if _, errMark := j.db.ExecContext(ctx, `
-			UPDATE foghorn.artifacts SET status = 'deleted', updated_at = NOW()
-			WHERE artifact_hash = $1 AND status = 'uploading'
-		`, r.hash); errMark != nil {
-			j.logger.WithError(errMark).WithField("artifact_hash", r.hash).Warn("Stale upload soft-delete failed")
+		// FENCE before claiming: only take ownership of a multipart this cell owns (recorded backend == local). A
+		// foreign/unattributed row is left untouched, so the purge never routes an upload on another backend into the
+		// local aborting saga.
+		if ownErr := artifacts.VerifyLocalMultipartOwnership(r.backendID, localBackendID); ownErr != nil {
+			j.logger.WithError(ownErr).WithField("artifact_hash", r.hash).Warn("Stale uploading VOD failed ownership fence; leaving untouched")
 			continue
 		}
-		aborted++
+		// Guarded CAS claim 'uploading' -> 'aborting', tenant-scoped. Do NOT touch S3 here — the AbortingVodRecoveryJob
+		// aborts the multipart idempotently and converges to 'deleted'. A row concurrently completed matches 0 rows.
+		res, errClaim := j.db.ExecContext(ctx, `
+			UPDATE foghorn.artifacts SET status = 'aborting', updated_at = NOW()
+			WHERE artifact_hash = $1 AND tenant_id = $2 AND status = 'uploading'
+		`, r.hash, r.tenantID)
+		if errClaim != nil {
+			j.logger.WithError(errClaim).WithField("artifact_hash", r.hash).Warn("Stale upload abort-claim failed; will retry next cycle")
+			continue
+		}
+		n, raErr := res.RowsAffected()
+		if raErr != nil {
+			j.logger.WithError(raErr).WithField("artifact_hash", r.hash).Warn("Stale upload abort-claim RowsAffected failed")
+			continue
+		}
+		if n == 0 {
+			continue // concurrently completed/aborted — left alone
+		}
+		claimed++
 	}
-	if aborted > 0 {
-		j.logger.WithField("count", aborted).Info("Aborted stale uploading VODs")
+	if claimed > 0 {
+		j.logger.WithField("count", claimed).Info("Claimed stale uploading VODs for abort (aborting saga will tear down S3)")
 	}
 }
 

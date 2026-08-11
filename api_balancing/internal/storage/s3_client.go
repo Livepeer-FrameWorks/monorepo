@@ -141,6 +141,11 @@ func (c *S3Client) fullKey(key string) string {
 	return strings.TrimSuffix(c.config.Prefix, "/") + "/" + strings.TrimPrefix(key, "/")
 }
 
+// BackendDescriptor returns this client's immutable storage-backend identity (bucket, endpoint, region, prefix).
+func (c *S3Client) BackendDescriptor() (bucket, endpoint, region, prefix string) {
+	return c.config.Bucket, c.config.Endpoint, c.config.Region, c.config.Prefix
+}
+
 // GeneratePresignedPUT generates a presigned URL for uploading an object.
 // The URL is time-limited and scoped to this specific object.
 // Send this URL to Helmsman for secure uploads without exposing credentials.

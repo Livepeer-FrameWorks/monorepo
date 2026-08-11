@@ -58,8 +58,14 @@ type ArtifactRef struct {
 	// local). It OVERRIDES cluster-id comparison for delete routing — cluster id is attribution, not backend
 	// ownership, so a locally-backed alias must be deleted locally, never delegated to a peer.
 	DurableBackendLocal bool
-	VODS3Key            string // VOD only; from foghorn.vod_metadata.s3_key
-	S3URL               string // fallback when active_object_key/vod_metadata.s3_key absent; foghorn.artifacts.s3_url
+	// BackendID is foghorn.artifacts.backend_id: the physical store the bytes were written to. A cell's backend is
+	// immutable (enforced at startup). A local delete is licensed ONLY on an EXACT match to this cell's current store;
+	// an empty (unattributed) or mismatched recorded id fails closed (ErrRecordedBackendMismatch) rather than sweeping a
+	// guessed store. Write sites attribute the id and legacy rows are adopted at boot; cross-backend repointing is not
+	// supported.
+	BackendID string
+	VODS3Key  string // VOD only; from foghorn.vod_metadata.s3_key
+	S3URL     string // fallback when active_object_key/vod_metadata.s3_key absent; foghorn.artifacts.s3_url
 	// ActiveObjectKey is foghorn.artifacts.active_object_key: the AUTHORITATIVE published object key (the
 	// attempt-versioned key completion flipped the pointer to). It is the exact stored object, so deletion
 	// prefers it over any reconstructed/canonical key. Empty for legacy rows (fall back to VODS3Key/S3URL/
@@ -102,6 +108,13 @@ type Cleaner struct {
 	LocalCluster string
 	S3           S3Client
 	Delegate     DeleteDelegate
+	// LocalBackendID is the fingerprint (control.BackendFingerprint) of THIS cell's currently-configured local S3
+	// store. A locally-backed row's recorded backend_id is swept locally ONLY on an EXACT match against it. Everything
+	// else fails closed: an empty recorded id (unattributed), an empty LocalBackendID (unwired fingerprint), or a
+	// mismatch (a store this cell does not control) — none license deleting from a guessed current store. Write-time
+	// sites attribute the id and legacy rows are adopted at boot, so an empty recorded id is a genuine anomaly, retained
+	// rather than swept. Cross-backend repointing is not supported.
+	LocalBackendID string
 }
 
 // Sentinel errors callers can switch on. Keep stable: gRPC handlers map
@@ -123,7 +136,30 @@ var (
 	// ErrRemoteRejected — peer cluster returned accepted=false. The
 	// wrapped error carries the reason string.
 	ErrRemoteRejected = errors.New("artifact cleanup: remote cluster rejected delete")
+	// ErrRecordedBackendMismatch — a locally-backed obligation's recorded backend_id does not match this cell's current
+	// local store (LocalBackendID). Under the immutable-backend invariant this cannot occur for a live cell (the
+	// recorded id is always the current store or empty); it is the defensive fail-closed path that refuses to sweep the
+	// wrong store should a stale/foreign id ever be recorded. Cross-backend repointing is not supported.
+	ErrRecordedBackendMismatch = errors.New("artifact cleanup: recorded storage backend is not this cell's current store")
 )
+
+// localAdapterFor resolves the S3 adapter for a locally-backed delete recorded under backendID. Ownership is read from
+// recorded evidence, never reconstructed (invariant I2): the delete is licensed ONLY when the recorded backend_id
+// EXACTLY equals this cell's current store (LocalBackendID). FAIL CLOSED otherwise — an EMPTY recorded id (an
+// unattributed row: cleanup must not guess the current store), an unwired LocalBackendID, or a mismatch (a store this
+// cell does not control). Every write-time site attributes backend_id at creation (artifacts, thumbnail assignments,
+// stream-cleanup obligations) and legacy rows are adopted ONCE at boot, so a still-empty id here is a genuine anomaly;
+// retaining the row (a safe leak) beats orphaning its bytes.
+func (c *Cleaner) localAdapterFor(backendID string) (S3Client, error) {
+	id := strings.TrimSpace(backendID)
+	if id == "" || c.LocalBackendID == "" || id != c.LocalBackendID {
+		return nil, ErrRecordedBackendMismatch
+	}
+	if c.S3 == nil {
+		return nil, ErrLocalS3Missing
+	}
+	return c.S3, nil
+}
 
 // Delete removes the artifact's S3 bytes from whichever cluster owns
 // them. NotFound on the resolved key/prefix is treated as success
@@ -145,8 +181,14 @@ func (c *Cleaner) Delete(ctx context.Context, ref ArtifactRef) error {
 		if delErr := c.deleteRemote(ctx, ref, target); delErr != nil {
 			return delErr
 		}
-	} else if delErr := c.deleteLocal(ctx, target); delErr != nil {
-		return delErr
+	} else {
+		s3, rErr := c.localAdapterFor(ref.BackendID)
+		if rErr != nil {
+			return rErr
+		}
+		if delErr := c.deleteLocalVia(ctx, s3, target); delErr != nil {
+			return delErr
+		}
 	}
 	// Free the .dtsh index for a single-object clip/vod (never for a DVR prefix). Prefer the authoritative
 	// version-addressed active_dtsh_key; legacy rows fall back to the co-located <media>.dtsh. NotFound is
@@ -171,29 +213,46 @@ func (c *Cleaner) Delete(ctx context.Context, ref ArtifactRef) error {
 // the thumbnails/{hash}/ prefix from the cluster that actually STORES them — the thumbnail publication's
 // official-durable destination cluster, which is INDEPENDENT of where the parent artifact's own bytes live.
 // Routing by the parent artifact would delegate to the wrong cluster for a BYOC-origin artifact whose thumbnails
-// were stored on platform-official storage, leaking the locally-billed objects. An empty destination (unknown /
-// legacy) or one equal to this cluster deletes locally; otherwise it delegates to the owning cluster. DeletePrefix
-// on an empty prefix is idempotent success, so an asset that never had thumbnails is a clean no-op.
-func (c *Cleaner) DeleteThumbnailsOnCluster(ctx context.Context, tenantID, artifactHash, destinationCluster string) error {
+// were stored on platform-official storage, leaking the locally-billed objects.
+//
+// backendLocal is the recorded write-time evidence (I2): true means the bytes are on THIS cell's local S3 even
+// though the destination cluster id differs (a locally-backed official alias), so we delete LOCALLY and do NOT
+// misroute to (disabled) federation. Otherwise an empty destination or one equal to this cluster deletes locally;
+// a differing cluster delegates to its owner. DeletePrefix on an empty prefix is an idempotent no-op.
+//
+// backendID is the recorded backend_id snapshot: a local sweep is licensed ONLY when it exactly equals this cell's
+// current store (LocalBackendID). An empty or mismatched id fails closed (ErrRecordedBackendMismatch) rather than
+// sweeping the wrong store.
+func (c *Cleaner) DeleteThumbnailsOnCluster(ctx context.Context, tenantID, artifactHash, destinationCluster string, backendLocal bool, backendID string) error {
 	hash := strings.TrimSpace(artifactHash)
 	if hash == "" {
 		return nil
 	}
 	target := deletionTarget{S3Prefix: BuildThumbnailPrefix(hash)}
 	owner := strings.TrimSpace(destinationCluster)
-	if owner == "" || owner == c.LocalCluster {
-		return c.deleteLocal(ctx, target)
+	if backendLocal || owner == "" || owner == c.LocalCluster {
+		s3, err := c.localAdapterFor(backendID)
+		if err != nil {
+			return err
+		}
+		return c.deleteLocalVia(ctx, s3, target)
 	}
 	return c.deleteRemote(ctx, ArtifactRef{Hash: hash, Type: "thumbnail", TenantID: tenantID, StorageClusterID: owner}, target)
 }
 
-// deleteKey frees a single explicit S3 key (local pool or, for a peer-owned artifact, via the delegate).
+// deleteKey frees a single explicit S3 key (local pool or, for a peer-owned artifact, via the delegate). A local
+// delete requires the recorded backend_id to exactly match this cell's current store (immutable-backend model): an
+// exact match frees the co-located index / pending object from that store; an empty or mismatched id fails closed.
 func (c *Cleaner) deleteKey(ctx context.Context, ref ArtifactRef, key string) error {
 	t := deletionTarget{S3Key: key}
 	if c.isRemote(ref) {
 		return c.deleteRemote(ctx, ref, t)
 	}
-	return c.deleteLocal(ctx, t)
+	s3, rErr := c.localAdapterFor(ref.BackendID)
+	if rErr != nil {
+		return rErr
+	}
+	return c.deleteLocalVia(ctx, s3, t)
 }
 
 // deletionTarget is what we send on the wire (and use locally). Exactly
@@ -278,14 +337,16 @@ func (c *Cleaner) isRemote(ref ArtifactRef) bool {
 	return owner != c.LocalCluster
 }
 
-func (c *Cleaner) deleteLocal(ctx context.Context, target deletionTarget) error {
-	if c.S3 == nil {
+// deleteLocalVia frees a target through the resolved local S3 adapter (this cell's current store). A nil adapter is
+// ErrLocalS3Missing.
+func (c *Cleaner) deleteLocalVia(ctx context.Context, s3 S3Client, target deletionTarget) error {
+	if s3 == nil {
 		return ErrLocalS3Missing
 	}
 	if target.S3Key != "" {
-		return c.S3.Delete(ctx, target.S3Key)
+		return s3.Delete(ctx, target.S3Key)
 	}
-	if _, err := c.S3.DeletePrefix(ctx, target.S3Prefix); err != nil {
+	if _, err := s3.DeletePrefix(ctx, target.S3Prefix); err != nil {
 		return err
 	}
 	return nil

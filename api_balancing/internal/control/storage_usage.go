@@ -14,18 +14,19 @@ import (
 // (never restarts at the same prefix), and wraps to the start on reaching the end.
 const billingAttributionBatch = 200
 
-// ReconcileBillingAttribution marks synced artifacts that are UNAMBIGUOUSLY on THIS cell's local backend but
-// were written before durable_backend_local existed (or before the claim set it). It is IDENTITY-AWARE — it
-// uses this cell's runtime cluster identity, not a blind SQL rule — so it can claim legitimate historical
-// local rows (authoritative cluster == the local cluster, or a served cluster whose per-tenant backing
-// resolves LOCAL) that the conservative both-null postdeploy backfill deliberately skipped. Idempotent (only
-// flips false→true). Returns the number of rows marked. Federation-adopted remote rows are never claimed here.
+// ReconcileBillingAttribution marks synced artifacts that are UNAMBIGUOUSLY on THIS cell's local backend by
+// RECORDED EVIDENCE ONLY — the row's own persisted authoritative cluster is empty (schema convention: NULL =
+// local) or equals this cell's runtime cluster id. It does NOT consult the storage resolver / current advertised
+// backing (invariant I2): a cluster that re-points its backing to this cell AFTER bytes were written elsewhere
+// must NOT retroactively become "local" — current topology is not evidence of where historical bytes live. Rows
+// whose backend cannot be established from recorded evidence are left unattributed for a pre-billing-launch
+// evidence-based backfill (persisted object URLs/backend ids, provider inventory), never today's resolver.
+// Idempotent (only flips false→true). Returns the number of rows marked. Federation-adopted remote rows are never
+// claimed here.
 //
-// BOUNDED, DURABLE KEYSET PROGRESS: earlier this scanned ALL unmarked pairs with the resolver in the row loop
-// under a shared timeout — if the ctx expired mid-scan, every pass restarted at the same prefix and a large or
-// slow prefix could permanently STARVE later locally-owned pairs. Now each pass reviews at most
-// billingAttributionBatch pairs PAST a durable cursor and advances it, so all pairs are reached within a
-// bounded number of passes; on reaching the end the cursor wraps to re-review pairs whose access may change.
+// BOUNDED, DURABLE KEYSET PROGRESS: each pass reviews at most billingAttributionBatch DISTINCT (tenant, cluster)
+// pairs PAST a durable cursor and advances it, bounding per-pass scan/update volume on a large table; on reaching
+// the end the cursor wraps to re-review from the top (cheap: the marked pairs have left the unmarked set).
 func ReconcileBillingAttribution(ctx context.Context) (int, error) {
 	if db == nil {
 		return 0, nil
@@ -64,10 +65,10 @@ func ReconcileBillingAttribution(ctx context.Context) (int, error) {
 			return 0, scanErr
 		}
 		page = append(page, p)
-		// Owned when: pure-local (empty cluster), the authoritative cluster IS this cell's local cluster, or
-		// the tenant's own resolver maps that cluster to a LOCAL mint on this cell's backend (the only external
-		// call — and it is now bounded to at most billingAttributionBatch per pass).
-		if p.cluster == "" || (local != "" && p.cluster == local) || canMintOfficialLocallyFn(ctx, p.tenant, p.cluster) {
+		// Owned by RECORDED EVIDENCE ONLY (I2): the row's persisted authoritative cluster is empty (NULL = local
+		// by schema convention) or equals this cell's cluster id. The current advertised backing is NOT consulted —
+		// a resolver verdict is topology-now, not evidence of where the historical bytes were written.
+		if p.cluster == "" || (local != "" && p.cluster == local) {
 			owned = append(owned, p)
 		}
 	}

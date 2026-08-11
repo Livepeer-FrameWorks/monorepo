@@ -77,7 +77,7 @@ func newLiveDeps(sm *state.StreamStateManager, lat, lon float64) *PlaybackDepend
 // cannot pick an edge without the balancer, so it must error rather than return
 // an empty/degenerate endpoint set.
 func TestResolveLivePlayback_NilLoadBalancerErrors(t *testing.T) {
-	if _, err := ResolveLivePlayback(context.Background(), &PlaybackDependencies{}, "vk", "live+s", "stream-1", "t1"); err == nil {
+	if _, err := ResolveLivePlayback(context.Background(), &PlaybackDependencies{}, "vk", "live+s", "stream-1", "t1", ""); err == nil {
 		t.Fatal("nil load balancer must error")
 	}
 }
@@ -93,7 +93,7 @@ func TestResolveLivePlayback_LocalEdgeHappyPath(t *testing.T) {
 	markLiveStreamPresent(sm, "demo_stream", "edge-local-1", "tenant-A")
 
 	deps := newLiveDeps(sm, 52.0, 5.0)
-	resp, err := ResolveLivePlayback(context.Background(), deps, "view-key-1", "live+demo_stream", "stream-77", "tenant-A")
+	resp, err := ResolveLivePlayback(context.Background(), deps, "view-key-1", "live+demo_stream", "stream-77", "tenant-A", "")
 	if err != nil {
 		t.Fatalf("live resolution failed: %v", err)
 	}
@@ -137,12 +137,12 @@ func TestResolveLivePlayback_TenantIsolation(t *testing.T) {
 	deps := newLiveDeps(sm, 52.0, 5.0)
 
 	// Same tenant resolves fine (sanity: the node IS otherwise eligible).
-	if _, err := ResolveLivePlayback(context.Background(), deps, "vk", "live+s", "stream-1", "tenant-X"); err != nil {
+	if _, err := ResolveLivePlayback(context.Background(), deps, "vk", "live+s", "stream-1", "tenant-X", ""); err != nil {
 		t.Fatalf("same-tenant live resolution should succeed, got %v", err)
 	}
 
 	// Foreign tenant must not be routed to tenant-X's node.
-	if _, err := ResolveLivePlayback(context.Background(), deps, "vk", "live+s", "stream-1", "tenant-Y"); err == nil {
+	if _, err := ResolveLivePlayback(context.Background(), deps, "vk", "live+s", "stream-1", "tenant-Y", ""); err == nil {
 		t.Fatal("a foreign tenant must not be offered another tenant's edge node")
 	}
 }
@@ -173,7 +173,7 @@ func TestResolveLivePlayback_RemoteEdgeRedirect(t *testing.T) {
 		CPUPercent:  5,
 	}}
 
-	resp, err := ResolveLivePlayback(context.Background(), deps, "view-key-9", "live+s", "stream-9", "tenant-A")
+	resp, err := ResolveLivePlayback(context.Background(), deps, "view-key-9", "live+s", "stream-9", "tenant-A", "")
 	if err != nil {
 		t.Fatalf("remote-edge live resolution failed: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestResolveLivePlayback_RemoteEdgeRedirectNormalizesFullBaseURL(t *testing.
 		CPUPercent:  5,
 	}}
 
-	resp, err := ResolveLivePlayback(context.Background(), deps, "view-key-9", "live+s", "stream-9", "tenant-A")
+	resp, err := ResolveLivePlayback(context.Background(), deps, "view-key-9", "live+s", "stream-9", "tenant-A", "")
 	if err != nil {
 		t.Fatalf("remote-edge live resolution failed: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestResolveLivePlayback_GeoNearRemoteWinsPrimary(t *testing.T) {
 		CPUPercent:  0,
 	}}
 
-	resp, err := ResolveLivePlayback(context.Background(), deps, "vk", "live+s", "stream-1", "tenant-A")
+	resp, err := ResolveLivePlayback(context.Background(), deps, "vk", "live+s", "stream-1", "tenant-A", "")
 	if err != nil {
 		t.Fatalf("merge resolution failed: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestResolveLivePlayback_EnrichesFromStreamState(t *testing.T) {
 	markLiveStreamPresent(sm, "demo_stream", "edge-enrich-1", "tenant-A")
 
 	deps := newLiveDeps(sm, 52.0, 5.0)
-	resp, err := ResolveLivePlayback(context.Background(), deps, "vk", "live+demo_stream", "stream-1", "tenant-A")
+	resp, err := ResolveLivePlayback(context.Background(), deps, "vk", "live+demo_stream", "stream-1", "tenant-A", "")
 	if err != nil {
 		t.Fatalf("resolution failed: %v", err)
 	}

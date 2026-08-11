@@ -24,8 +24,13 @@ type StagingCleanupJob struct {
 	backoffBase time.Duration
 	leaseTTL    time.Duration // how long a claimed batch stays leased before another worker may re-claim it
 	itemTimeout time.Duration // per-item S3 delete deadline
-	stopCh      chan struct{}
-	wg          sync.WaitGroup
+	// localBackendID is this cell's current local backend fingerprint. A queued object is deleted ONLY when its recorded
+	// backend_id EXACTLY equals this; empty (unattributed), unwired (empty localBackendID), and mismatched ownership all
+	// fail closed (the row is retained), never deleted from a guessed store. A cell's backend is immutable (enforced at
+	// startup); fresh enqueues attribute it and legacy rows are adopted once at boot.
+	localBackendID string
+	stopCh         chan struct{}
+	wg             sync.WaitGroup
 }
 
 // StagingCleanupConfig configures the staging cleanup worker.
@@ -36,6 +41,9 @@ type StagingCleanupConfig struct {
 	Interval    time.Duration // how often to drain (default: 1 minute)
 	BatchSize   int           // max rows per pass (default: 100)
 	BackoffBase time.Duration // per-attempt backoff step, capped (default: 1 minute)
+	// LocalBackendID is this cell's current local backend fingerprint. Pass main.go's localBackendFingerprint(localS3)
+	// so a queued object recorded on a repointed backend fails closed instead of deleting from the wrong store.
+	LocalBackendID string
 }
 
 // NewStagingCleanupJob creates a new staging cleanup worker.
@@ -67,15 +75,16 @@ func NewStagingCleanupJob(cfg StagingCleanupConfig) *StagingCleanupJob {
 		batchSize = maxBatch
 	}
 	return &StagingCleanupJob{
-		db:          cfg.DB,
-		s3:          cfg.S3,
-		logger:      cfg.Logger,
-		interval:    interval,
-		batchSize:   batchSize,
-		backoffBase: backoffBase,
-		leaseTTL:    leaseTTL,
-		itemTimeout: itemTimeout,
-		stopCh:      make(chan struct{}),
+		db:             cfg.DB,
+		s3:             cfg.S3,
+		logger:         cfg.Logger,
+		interval:       interval,
+		batchSize:      batchSize,
+		backoffBase:    backoffBase,
+		leaseTTL:       leaseTTL,
+		itemTimeout:    itemTimeout,
+		localBackendID: cfg.LocalBackendID,
+		stopCh:         make(chan struct{}),
 	}
 }
 
@@ -138,9 +147,10 @@ func (j *StagingCleanupJob) drain() {
 }
 
 type stagingCleanupItem struct {
-	key      string
-	attempts int
-	token    string // the lease token this claim minted; every settlement CASes on it
+	key       string
+	attempts  int
+	token     string // the lease token this claim minted; every settlement CASes on it
+	backendID string // recorded write-time backend; a repoint mismatch fails closed rather than deleting from the wrong store
 }
 
 // claimBatch atomically leases a batch of due, unleased rows with a FRESH per-claim token and returns them.
@@ -161,7 +171,7 @@ func (j *StagingCleanupJob) claimBatch(ctx context.Context) ([]stagingCleanupIte
 			LIMIT $1
 			FOR UPDATE SKIP LOCKED
 		)
-		RETURNING q.object_key, q.attempts, q.lease_token`, j.batchSize, int64(j.leaseTTL.Seconds()))
+		RETURNING q.object_key, q.attempts, q.lease_token, COALESCE(q.backend_id, '')`, j.batchSize, int64(j.leaseTTL.Seconds()))
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +180,7 @@ func (j *StagingCleanupJob) claimBatch(ctx context.Context) ([]stagingCleanupIte
 	var items []stagingCleanupItem
 	for rows.Next() {
 		var it stagingCleanupItem
-		if scanErr := rows.Scan(&it.key, &it.attempts, &it.token); scanErr != nil {
+		if scanErr := rows.Scan(&it.key, &it.attempts, &it.token, &it.backendID); scanErr != nil {
 			return nil, scanErr
 		}
 		items = append(items, it)
@@ -185,6 +195,15 @@ func (j *StagingCleanupJob) claimBatch(ctx context.Context) ([]stagingCleanupIte
 func (j *StagingCleanupJob) settleOne(it stagingCleanupItem) (deleted bool) {
 	delCtx, cancel := context.WithTimeout(context.Background(), j.itemTimeout)
 	defer cancel()
+	// OWNERSHIP GUARD (I2): delete ONLY from this cell's recorded store — the object's recorded backend_id must EXACTLY
+	// equal this cell's local fingerprint. Fail closed (backoff + release the lease) otherwise: an EMPTY recorded id
+	// (unattributed — fresh enqueues attribute, and legacy rows are adopted at boot), an unwired localBackendID, or a
+	// mismatch (a store this cell does not control). Never guess the current store. Draining a retained backend is not
+	// supported.
+	if it.backendID == "" || j.localBackendID == "" || it.backendID != j.localBackendID {
+		j.recordRepointDeferral(it)
+		return false
+	}
 	if delErr := j.s3.Delete(delCtx, it.key); delErr != nil {
 		// Capped-linear backoff so a persistently-failing key doesn't spin: base * min(attempts+1, 30). Release
 		// the lease so the row is eligible again after the backoff. Fresh context (delCtx may be spent).
@@ -216,4 +235,24 @@ func (j *StagingCleanupJob) settleOne(it stagingCleanupItem) (deleted bool) {
 		return false // lease was stolen (token mismatch) — the current owner will settle it
 	}
 	return true
+}
+
+// recordRepointDeferral applies the same capped backoff + lease release as a failed delete, with a repoint reason, so
+// a queued object whose backend was repointed retries later (safely, never deleting from the wrong store) instead of
+// spinning. Token-fenced: a stolen lease makes it a harmless no-op.
+func (j *StagingCleanupJob) recordRepointDeferral(it stagingCleanupItem) {
+	backoff := j.backoffBase * time.Duration(min(it.attempts+1, 30))
+	upCtx, upCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer upCancel()
+	msg := "storage backend repointed (recorded " + it.backendID + " != current " + j.localBackendID + "); refusing to delete from the wrong store"
+	if _, upErr := j.db.ExecContext(upCtx, `
+		UPDATE foghorn.staging_cleanup_queue
+		SET attempts = attempts + 1,
+		    next_attempt_at = NOW() + ($2 * INTERVAL '1 second'),
+		    leased_until = NULL,
+		    lease_token = NULL,
+		    last_error = $3
+		WHERE object_key = $1 AND lease_token = $4`, it.key, int64(backoff.Seconds()), msg, it.token); upErr != nil {
+		j.logger.WithError(upErr).WithField("object_key", it.key).Debug("Failed to record staging cleanup repoint deferral")
+	}
 }

@@ -339,9 +339,9 @@ func ResolveArtifactByHash(ctx context.Context, artifactHash string) (*StreamTar
 		IsVod: true,
 	}
 
-	applyArtifactPlacement(ctx, artifactHash, target)
-
-	// Resolve TenantID and ContentType via Commodore (business registry owner)
+	// Resolve TenantID and ContentType via Commodore (business registry owner) BEFORE placement: applyArtifactPlacement
+	// entitlement-filters candidate holders by target.TenantID, so the tenant must be resolved first or the filter would
+	// fail closed and leave FixedNode unset. First resolver match wins.
 	if CommodoreClient != nil {
 		if resp, err := CommodoreClient.ResolveClipHash(ctx, artifactHash); err == nil && resp.Found {
 			target.TenantID = resp.TenantId
@@ -350,27 +350,23 @@ func ResolveArtifactByHash(ctx context.Context, artifactHash string) (*StreamTar
 			if resp.InternalName != "" {
 				target.InternalName = "vod+" + resp.InternalName
 			}
-			return target, nil
-		}
-		if resp, err := CommodoreClient.ResolveDVRHash(ctx, artifactHash); err == nil && resp.Found {
+		} else if resp, err := CommodoreClient.ResolveDVRHash(ctx, artifactHash); err == nil && resp.Found {
 			target.TenantID = resp.TenantId
 			target.StreamID = resp.StreamId
 			target.ContentType = "dvr"
 			if resp.InternalName != "" {
 				target.InternalName = "vod+" + resp.InternalName
 			}
-			return target, nil
-		}
-		if resp, err := CommodoreClient.ResolveVodHash(ctx, artifactHash); err == nil && resp.Found {
+		} else if resp, err := CommodoreClient.ResolveVodHash(ctx, artifactHash); err == nil && resp.Found {
 			target.TenantID = resp.TenantId
 			target.ContentType = "vod"
 			if resp.InternalName != "" {
 				target.InternalName = "vod+" + resp.InternalName
 			}
-			return target, nil
 		}
 	}
 
+	applyArtifactPlacement(ctx, artifactHash, target)
 	return target, nil
 }
 
@@ -379,24 +375,36 @@ func applyArtifactPlacement(ctx context.Context, artifactHash string, target *St
 		return
 	}
 
+	// SECURITY: FixedNode BYPASSES the tenant-scoped balancer — handleStreamBalancing returns it verbatim, skipping the
+	// KeyClusterScope gate. So every candidate MUST be entitlement-filtered here against target.TenantID, or a node in a
+	// cluster not entitled to this tenant (e.g. a third-party edge advertising storage, or holding an artifact copy)
+	// could capture and blackhole/redirect the tenant's playback routing. Capability/holdership stay scheduler input;
+	// ClusterAccessibleForTenant is the authorization gate. An empty/unresolved tenant fails the predicate closed, so no
+	// FixedNode is set and the request falls through to the normal balancer.
+	tenantID := target.TenantID
+
 	if manager := state.DefaultManager(); manager != nil {
 		nodes := manager.FindNodesByArtifactHash(artifactHash)
-		if len(nodes) > 0 {
-			best := nodes[0]
-			for _, n := range nodes[1:] {
-				if n.Score > best.Score {
-					best = n
-				}
+		var best state.ArtifactNodeInfo
+		found := false
+		for _, n := range nodes {
+			if !ClusterAccessibleForTenant(n.ClusterID, tenantID) {
+				continue // holder's cluster is not entitled to this tenant's media
 			}
+			if !found || n.Score > best.Score {
+				best = n
+				found = true
+			}
+		}
+		if found {
 			target.FixedNode = best.Host
 			target.FixedNodeID = best.NodeID
 			return
 		}
 	}
 
-	// Cache miss: no local nodes have the artifact. Pick any storage-capable
-	// edge — Helmsman's read-through relay will fetch from S3 on demand the
-	// first time a viewer requests it. No bulk-copy step.
+	// Cache miss: no ENTITLED local node holds the artifact. Pick any storage-capable edge IN AN ENTITLED CLUSTER —
+	// Helmsman's read-through relay fetches from S3 on demand the first time a viewer requests it. No bulk-copy step.
 	if artifactRepo != nil {
 		if info, err := artifactRepo.GetArtifactSyncInfo(ctx, artifactHash); err == nil && info != nil && info.SyncStatus == "synced" && info.S3URL != "" {
 			if target.ContentType == "" {
@@ -404,7 +412,7 @@ func applyArtifactPlacement(ctx context.Context, artifactHash string, target *St
 			}
 			if loadBalancerInstance != nil {
 				for _, node := range loadBalancerInstance.GetNodes() {
-					if node.CapStorage && node.IsHealthy {
+					if node.CapStorage && node.IsHealthy && ClusterAccessibleForTenant(node.ClusterID, tenantID) {
 						target.FixedNodeID = node.NodeID
 						if baseURL, err := loadBalancerInstance.GetNodeByID(node.NodeID); err == nil {
 							target.FixedNode = baseURL

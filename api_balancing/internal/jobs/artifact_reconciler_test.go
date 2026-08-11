@@ -289,6 +289,10 @@ func TestSendFreezeForArtifact_SendFailureRevertsToFailed(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer mockDB.Close()
+	// The revert re-enqueues staging garbage, which now requires a local backend fingerprint — wire the control S3
+	// client, matching a production cell that always has a local store.
+	control.SetS3Client(controlS3Stub{})
+	t.Cleanup(func() { control.SetS3Client(nil) })
 
 	failingSend := func(nodeID string, req *ipcpb.FreezeRequest) error { return fmt.Errorf("stream send failed") }
 	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, nil, failingSend)
@@ -301,7 +305,7 @@ func TestSendFreezeForArtifact_SendFailureRevertsToFailed(t *testing.T) {
 		WithArgs("clip-hash", "att-clip-hash", "node-1", "tenant1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
-		WithArgs(control.FreezeStagingKey("k/clip-hash", "att-clip-hash")).
+		WithArgs(control.FreezeStagingKey("k/clip-hash", "att-clip-hash"), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
@@ -681,9 +685,9 @@ func TestProjectCommodoreArtifactStateRepairsStorageAndThumbnailProjection(t *te
 	// Nullable columns: nil clears; a null tracks column → tracks_present false.
 	rows := sqlmock.NewRows(projectionRowCols).
 		AddRow("vod-hash", "vod", "tenant-1", "media-us-1", true, int64(1024),
-			int64(120500), `[{"type":"video","codec":"h264"}]`, "synced", true, "local", int64(7), "ready", int64(1800000000), nil).
+			int64(120500), `[{"type":"video","codec":"h264"}]`, "synced", true, "local", int64(7), "ready", int64(1800000000), nil, "media-official").
 		AddRow("clip-hash", "clip", "tenant-1", nil, nil, nil,
-			nil, nil, "processing", nil, nil, int64(9), "processing", nil, nil)
+			nil, nil, "processing", nil, nil, int64(9), "processing", nil, nil, nil)
 
 	mock.ExpectQuery("FROM foghorn.artifacts").
 		WithArgs(10, "media-us-1").
@@ -706,6 +710,11 @@ func TestProjectCommodoreArtifactStateRepairsStorageAndThumbnailProjection(t *te
 	if vod.GetAssetKey() != "vod-hash" || vod.GetDurationMs() != 120500 || !vod.GetTracksPresent() ||
 		!vod.GetIsSynced() || vod.GetSourceRevision() != 7 || vod.GetStorageClusterId() != "media-us-1" {
 		t.Fatalf("unexpected vod snapshot: %+v", vod)
+	}
+	// The AUTHORITATIVE thumbnail serving cluster projects INDEPENDENTLY of storage_cluster_id (here "media-official"
+	// != the byte-storage "media-us-1"), so a BYOC/cross-cell artifact links the cluster that holds the thumbnail.
+	if vod.GetThumbnailServingClusterId() != "media-official" {
+		t.Fatalf("expected thumbnail_serving_cluster_id=media-official, got %q", vod.GetThumbnailServingClusterId())
 	}
 	// Source authority: the snapshot asserts this cluster as the projection source so Commodore
 	// can enforce origin ownership.
@@ -782,8 +791,8 @@ func TestProjectCommodoreArtifactState_ReportsScannedForBatchFull(t *testing.T) 
 	r.clusterID = "c1"
 
 	rows := sqlmock.NewRows(projectionRowCols).
-		AddRow("h1", "vod", "t1", "c1", true, int64(1), int64(1000), nil, "synced", true, "local", int64(5), "ready", nil, nil).
-		AddRow("h2", "vod", "t1", "c1", true, int64(1), int64(1000), nil, "synced", true, "local", int64(6), "ready", nil, nil)
+		AddRow("h1", "vod", "t1", "c1", true, int64(1), int64(1000), nil, "synced", true, "local", int64(5), "ready", nil, nil, nil).
+		AddRow("h2", "vod", "t1", "c1", true, int64(1), int64(1000), nil, "synced", true, "local", int64(6), "ready", nil, nil, nil)
 	mock.ExpectQuery("FROM foghorn.artifacts").WithArgs(2, "c1").WillReturnRows(rows)
 	mock.ExpectExec("UPDATE foghorn.artifacts SET catalog_synced_rev").
 		WithArgs(int64(5), "h1").WillReturnResult(sqlmock.NewResult(0, 1))
@@ -817,7 +826,7 @@ func TestProjectCommodoreArtifactState_ProjectsDeletion(t *testing.T) {
 	mock.ExpectQuery("FROM foghorn.artifacts").WithArgs(10, "c1").
 		WillReturnRows(sqlmock.NewRows(projectionRowCols).AddRow(
 			"gone-hash", "vod", "t1", "c1", true, int64(1),
-			int64(1000), nil, "synced", true, "local", int64(8), "deleted", nil, nil))
+			int64(1000), nil, "synced", true, "local", int64(8), "deleted", nil, nil, nil))
 	// Watermark advances once the deletion is projected (mock returns Found:true, rev=8).
 	mock.ExpectExec("UPDATE foghorn.artifacts SET catalog_synced_rev").
 		WithArgs(int64(8), "gone-hash").WillReturnResult(sqlmock.NewResult(0, 1))
@@ -858,7 +867,7 @@ func TestProjectCommodoreArtifactState_DeletionAbsentDoesNotAdvance(t *testing.T
 	mock.ExpectQuery("FROM foghorn.artifacts").WithArgs(10, "c1").
 		WillReturnRows(sqlmock.NewRows(projectionRowCols).AddRow(
 			"gone-hash", "vod", "t1", "c1", true, int64(1),
-			int64(1000), nil, "synced", true, "local", int64(8), "deleted", nil, nil))
+			int64(1000), nil, "synced", true, "local", int64(8), "deleted", nil, nil, nil))
 	// No catalog_synced_rev advance — the absent (uncovered) deletion is backed off.
 	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET catalog_projection_attempts = catalog_projection_attempts \+ 1`).
 		WithArgs("gone-hash", sqlmock.AnyArg()).
@@ -880,7 +889,7 @@ func TestProjectCommodoreArtifactState_DeletionAbsentDoesNotAdvance(t *testing.T
 var projectionRowCols = []string{
 	"artifact_hash", "artifact_type", "tenant_id", "storage_cluster_id", "has_thumbnails", "size_bytes",
 	"duration_ms", "tracks", "sync_status", "dtsh_synced", "storage_location", "catalog_revision",
-	"lifecycle_status", "retention_unix", "error_message",
+	"lifecycle_status", "retention_unix", "error_message", "thumbnail_serving_cluster_id",
 }
 
 // Fairness: the scan must order by catalog_synced_rev (projection age), not catalog_revision
@@ -923,7 +932,7 @@ func TestProjectCommodoreArtifactState_QuarantinesUnsupportedType(t *testing.T) 
 
 	rows := sqlmock.NewRows(projectionRowCols).AddRow(
 		"bad-hash", "weird-type", "t1", nil, nil, nil,
-		nil, nil, "processing", nil, nil, int64(3), false, nil, nil)
+		nil, nil, "processing", nil, nil, int64(3), false, nil, nil, nil)
 	mock.ExpectQuery("FROM foghorn.artifacts").WithArgs(10, "c1").WillReturnRows(rows)
 	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET catalog_quarantined_rev = \$1, catalog_quarantine_error = \$3`).
 		WithArgs(int64(3), "bad-hash", sqlmock.AnyArg()).
@@ -964,8 +973,8 @@ func TestProjectCommodoreArtifactState_FailingRowDoesNotBlockValidRow(t *testing
 	r.clusterID = "c1"
 
 	rows := sqlmock.NewRows(projectionRowCols).
-		AddRow("stuck-hash", "vod", "t1", "c1", true, int64(1), int64(1), `[]`, "pending", false, "local", int64(5), "processing", nil, nil).
-		AddRow("good-hash", "vod", "t1", "c1", true, int64(2), int64(2), `[]`, "synced", true, "local", int64(6), "ready", nil, nil)
+		AddRow("stuck-hash", "vod", "t1", "c1", true, int64(1), int64(1), `[]`, "pending", false, "local", int64(5), "processing", nil, nil, nil).
+		AddRow("good-hash", "vod", "t1", "c1", true, int64(2), int64(2), `[]`, "synced", true, "local", int64(6), "ready", nil, nil, nil)
 	mock.ExpectQuery("FROM foghorn.artifacts").WithArgs(10, "c1").WillReturnRows(rows)
 	// stuck-hash backs off (not-found), good-hash advances — the failing row doesn't block it.
 	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET catalog_projection_attempts = catalog_projection_attempts \+ 1`).
@@ -1004,7 +1013,7 @@ func TestProjectCommodoreArtifactState_NotCoveredDoesNotAdvance(t *testing.T) {
 
 	rows := sqlmock.NewRows(projectionRowCols).AddRow(
 		"vod-hash", "vod", "t1", "c1", true, int64(1024),
-		int64(1000), `[]`, "synced", true, "local", int64(7), "ready", nil, nil)
+		int64(1000), `[]`, "synced", true, "local", int64(7), "ready", nil, nil, nil)
 	mock.ExpectQuery("FROM foghorn.artifacts").WithArgs(10, "c1").WillReturnRows(rows)
 	// No watermark advance — but the uncovered row is backed off (exponential) so it can't
 	// head-of-line block.
@@ -1247,12 +1256,12 @@ func TestReconcileFreezePublicationLedger(t *testing.T) {
 	mock.ExpectQuery(`SELECT last_key FROM foghorn.freeze_publication_ledger_cursor WHERE id = true`).
 		WillReturnRows(sqlmock.NewRows([]string{"last_key"}).AddRow(""))
 	// Three aged ledger rows for one artifact: a staging object, a LIVE candidate, and an ORPHANED candidate.
-	mock.ExpectQuery(`SELECT object_key, artifact_hash, tenant_id, request_id, guarded\s+FROM foghorn.freeze_publication_ledger`).
+	mock.ExpectQuery(`SELECT object_key, artifact_hash, tenant_id, request_id, guarded, COALESCE\(backend_id, ''\)\s+FROM foghorn.freeze_publication_ledger`).
 		WithArgs("", 500).
-		WillReturnRows(sqlmock.NewRows([]string{"object_key", "artifact_hash", "tenant_id", "request_id", "guarded"}).
-			AddRow("obj.staging.reqOLD", "hash-1", "t1", "reqOLD", false).
-			AddRow("obj.att-reqOLD", "hash-1", "t1", "reqOLD", true).
-			AddRow("obj.dtsh.att-reqOLD", "hash-1", "t1", "reqOLD", true))
+		WillReturnRows(sqlmock.NewRows([]string{"object_key", "artifact_hash", "tenant_id", "request_id", "guarded", "backend_id"}).
+			AddRow("obj.staging.reqOLD", "hash-1", "t1", "reqOLD", false, "").
+			AddRow("obj.att-reqOLD", "hash-1", "t1", "reqOLD", true, "").
+			AddRow("obj.dtsh.att-reqOLD", "hash-1", "t1", "reqOLD", true, ""))
 	// Per-row artifact re-read: attempt reqOLD is NO LONGER on the row (a newer/blank attempt), active pointers
 	// name only the media candidate → the .dtsh candidate is orphaned.
 	reread := func() {
@@ -1264,7 +1273,7 @@ func TestReconcileFreezePublicationLedger(t *testing.T) {
 	// Row 1 (staging): enqueue + drop, in one tx.
 	reread()
 	mock.ExpectBegin()
-	mock.ExpectExec(`INSERT INTO foghorn.staging_cleanup_queue`).WithArgs("obj.staging.reqOLD").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO foghorn.staging_cleanup_queue`).WithArgs("obj.staging.reqOLD", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`DELETE FROM foghorn.freeze_publication_ledger`).WithArgs("obj.staging.reqOLD").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	// Row 2 (LIVE candidate == active_object_key): drop the ledger row only, KEEP the object.
@@ -1273,7 +1282,7 @@ func TestReconcileFreezePublicationLedger(t *testing.T) {
 	// Row 3 (ORPHANED .dtsh candidate): enqueue + drop.
 	reread()
 	mock.ExpectBegin()
-	mock.ExpectExec(`INSERT INTO foghorn.staging_cleanup_queue`).WithArgs("obj.dtsh.att-reqOLD").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO foghorn.staging_cleanup_queue`).WithArgs("obj.dtsh.att-reqOLD", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`DELETE FROM foghorn.freeze_publication_ledger`).WithArgs("obj.dtsh.att-reqOLD").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	// Short page (< batch) ⇒ cursor WRAPS to the start.
@@ -1298,10 +1307,10 @@ func TestReconcileFreezePublicationLedger_SkipsRetryingAttempt(t *testing.T) {
 
 	mock.ExpectQuery(`SELECT last_key FROM foghorn.freeze_publication_ledger_cursor WHERE id = true`).
 		WillReturnRows(sqlmock.NewRows([]string{"last_key"}).AddRow(""))
-	mock.ExpectQuery(`SELECT object_key, artifact_hash, tenant_id, request_id, guarded\s+FROM foghorn.freeze_publication_ledger`).
+	mock.ExpectQuery(`SELECT object_key, artifact_hash, tenant_id, request_id, guarded, COALESCE\(backend_id, ''\)\s+FROM foghorn.freeze_publication_ledger`).
 		WithArgs("", 500).
-		WillReturnRows(sqlmock.NewRows([]string{"object_key", "artifact_hash", "tenant_id", "request_id", "guarded"}).
-			AddRow("obj.att-reqLIVE", "hash-1", "t1", "reqLIVE", true))
+		WillReturnRows(sqlmock.NewRows([]string{"object_key", "artifact_hash", "tenant_id", "request_id", "guarded", "backend_id"}).
+			AddRow("obj.att-reqLIVE", "hash-1", "t1", "reqLIVE", true, ""))
 	// The attempt reqLIVE is STILL the row's sync_request_id → retrying → no cleanup, no ledger delete.
 	mock.ExpectQuery(`FROM foghorn.artifacts`).
 		WithArgs("hash-1", "t1").
@@ -1313,6 +1322,50 @@ func TestReconcileFreezePublicationLedger_SkipsRetryingAttempt(t *testing.T) {
 
 	r.reconcileFreezePublicationLedger(context.Background())
 
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// When Foghorn projects a NON-EMPTY serving cluster but Commodore does not echo it back (a Commodore that ignores
+// field 21), the row must NOT be marked covered — it is backed off and re-projected until the value is echoed, so
+// thumbnail_serving_cluster_id is never permanently lost. A row with no serving cluster (NULL) needs no ack and
+// advances normally.
+func TestProjectCommodoreArtifactState_ThumbnailServingClusterAck(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mockDB.Close()
+
+	// Compatibility case: a Commodore that acks the snapshot (Found + covered revision) but does not echo
+	// thumbnail_serving_cluster_id in its response — the reconciler must not treat the serving cluster as acknowledged.
+	commodore := &mockCommodoreClient{
+		snapshotRespFn: func(req *commodorepb.UpdateArtifactCatalogSnapshotRequest) (*commodorepb.UpdateArtifactCatalogSnapshotResponse, error) {
+			return &commodorepb.UpdateArtifactCatalogSnapshotResponse{Found: true, CurrentRevision: req.GetSourceRevision()}, nil
+		},
+	}
+	r := newTestReconciler(t, mockDB, nil, commodore, nil)
+	r.batchSize = 10
+	r.clusterID = "c1"
+
+	// One row WITH a serving cluster (must NOT advance against the non-echoing Commodore) and one WITHOUT (advances).
+	rows := sqlmock.NewRows(projectionRowCols).
+		AddRow("with-serving", "vod", "t1", "c1", true, int64(1), int64(1000), nil, "synced", true, "local", int64(7), "ready", nil, nil, "media-official").
+		AddRow("no-serving", "vod", "t1", "c1", true, int64(1), int64(1000), nil, "synced", true, "local", int64(8), "ready", nil, nil, nil)
+	mock.ExpectQuery("FROM foghorn.artifacts").WithArgs(10, "c1").WillReturnRows(rows)
+	// with-serving: NOT acked → backed off (no watermark advance).
+	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET catalog_projection_attempts = catalog_projection_attempts \+ 1`).
+		WithArgs("with-serving", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	// no-serving: needs no ack → watermark advances.
+	mock.ExpectExec("UPDATE foghorn.artifacts SET catalog_synced_rev").
+		WithArgs(int64(8), "no-serving").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	count, _ := r.projectCommodoreArtifactState(context.Background())
+	if count != 1 {
+		t.Fatalf("only the no-serving row should count as covered against a non-echoing Commodore, got %d", count)
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}

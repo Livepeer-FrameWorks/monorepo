@@ -2127,6 +2127,7 @@ func (sm *StreamStateManager) SetNodeConnectionInfo(ctx context.Context, nodeID 
 type ArtifactNodeInfo struct {
 	NodeID       string
 	Host         string // Base URL
+	ClusterID    string // Virtual cluster of the holding node — for tenant-entitlement filtering by the consumer
 	Score        int64  // Load balancing score (higher is better — idleness scale, same direction as the balancer's rate())
 	Artifact     *ipcpb.StoredArtifact
 	GeoLatitude  float64
@@ -2148,10 +2149,10 @@ func (sm *StreamStateManager) FindNodesByArtifactHash(hash string) []ArtifactNod
 			continue
 		}
 		// Artifact-only readiness cordon: a node whose active connection hasn't delivered a versioned
-		// complete inventory (legacy/mixed-version sidecar, or freshly rehydrated-but-unconfirmed) is
-		// excluded from ARTIFACT routing even though it stays eligible for live-stream routing. Its
-		// in-memory Artifacts list can't be trusted as authoritative yet, so serving from it risks
-		// routing to a copy the node no longer holds.
+		// complete inventory (freshly rehydrated-but-unconfirmed, or an incomplete-scan report) is excluded
+		// from ARTIFACT routing even though it stays eligible for live-stream routing. Its in-memory Artifacts
+		// list can't be trusted as authoritative yet, so serving from it risks routing to a copy the node no
+		// longer holds. Readiness lifts only on an AUTHORITATIVE versioned report that wins the fenced CAS.
 		if !node.ArtifactInventoryReady {
 			continue
 		}
@@ -2162,6 +2163,7 @@ func (sm *StreamStateManager) FindNodesByArtifactHash(hash string) []ArtifactNod
 				nodes = append(nodes, ArtifactNodeInfo{
 					NodeID:       node.NodeID,
 					Host:         node.Host,
+					ClusterID:    node.ClusterID,
 					Score:        combinedScore,
 					Artifact:     artifact,
 					GeoLatitude:  node.GeoLatitude,

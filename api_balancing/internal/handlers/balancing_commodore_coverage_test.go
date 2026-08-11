@@ -306,12 +306,19 @@ func TestStreamBalancing_PostpaidIgnoresSuspensionFlags(t *testing.T) {
 // ResolveStream's vod+ branch) finds it via FindNodesByArtifactHash and pins
 // target.FixedNode to this node's host. The node must be probe-verified
 // (active:true) because FindNodesByArtifactHash skips non-active nodes.
+// artifactHolderCluster is a platform-shared cluster the seeded artifact holder belongs to. applyArtifactPlacement now
+// gates FixedNode by ClusterAccessibleForTenant, so a holder must be in a cluster ENTITLED to the resolved tenant, not
+// merely present; a platform-shared cluster is entitled to any tenant, which is what these fixed-node fixtures need.
+const artifactHolderCluster = "art-shared-edge"
+
 func seedArtifactNode(t *testing.T, sm *state.StreamStateManager, nodeID, host, clipHash string) {
 	t.Helper()
 	seedNodeWithStream(t, sm, seedNode{
 		nodeID: nodeID, host: host, active: true,
 		ramMax: 100, ramCur: 10,
 	}, "", 0, 0, 0)
+	control.AddPlatformSharedCluster(artifactHolderCluster)
+	sm.SetNodeConnectionInfo(context.Background(), nodeID, host, "", artifactHolderCluster, nil)
 	sm.SetNodeArtifacts(nodeID, []*ipcpb.StoredArtifact{
 		{ClipHash: clipHash, FilePath: "/data/" + clipHash + ".mp4", StreamName: "vod+art"},
 	}, state.ArtifactReportOrder{Fence: 1, Seq: 1})

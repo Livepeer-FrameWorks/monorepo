@@ -251,16 +251,16 @@ func TestGenericViewerPlayback_UnresolvableViewKeyReturns404(t *testing.T) {
 // authoritative cluster is empty (so AuthoritativeClusterServable passes for the
 // local cluster). The 10 scanned columns are: internal_name, status,
 // duration_seconds, size_bytes, created_at, format, storage_location,
-// sync_status, has_thumbnails, authoritative_cluster.
+// sync_status, has_thumbnails, authoritative_cluster, thumbnail_serving_cluster.
 func expectArtifactRowArms(mock sqlmock.Sqlmock, hash string) {
 	rows := sqlmock.NewRows([]string{
 		"internal_name", "status", "duration_seconds", "size_bytes",
 		"created_at", "format", "storage_location", "sync_status",
-		"has_thumbnails", "authoritative_cluster",
+		"has_thumbnails", "authoritative_cluster", "thumbnail_serving_cluster",
 	}).AddRow(
 		"art", "ready", int64(120), int64(4096),
 		time.Now(), "mp4", "node", "synced",
-		false, "",
+		false, "", "",
 	)
 	mock.ExpectQuery(`FROM foghorn\.artifacts`).
 		WithArgs(hash, "vod", "tenant-vod").

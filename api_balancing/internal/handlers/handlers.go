@@ -2112,7 +2112,7 @@ func getTotalViewers(node state.EnhancedBalancerNodeSnapshot) uint64 {
 }
 
 // resolveLiveViewerEndpoint uses load balancer to find optimal edge nodes with fallbacks
-func resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, internalName, streamTenantID, streamID string, clusterPeers []*clusterpeerpb.TenantClusterPeer) (*sharedpb.ViewerEndpointResponse, error) {
+func resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, internalName, streamTenantID, streamID string, clusterPeers []*clusterpeerpb.TenantClusterPeer, activeIngestClusterID string) (*sharedpb.ViewerEndpointResponse, error) {
 	start := time.Now()
 	// Delegate to consolidated control package function
 	deps := &control.PlaybackDependencies{
@@ -2165,7 +2165,7 @@ func resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpoint
 		deps.RemoteEdges = queryStreamFanOutShared(ctx, internalName, streamTenantID, lat, lon, allPeers)
 	}
 
-	response, err := control.ResolveLivePlayback(ctx, deps, req.ContentId, internalName, streamID, streamTenantID)
+	response, err := control.ResolveLivePlayback(ctx, deps, req.ContentId, internalName, streamID, streamTenantID, activeIngestClusterID)
 	if err != nil {
 		return nil, err
 	}
@@ -2583,7 +2583,7 @@ func resolveDVRViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointR
 			}).Warn("Active DVR has no resolvable recording origin; refusing to fall back to archive routing")
 			return nil, fmt.Errorf("active DVR recording origin not yet registered; retry")
 		}
-		resp, err := resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.InternalName, resolution.TenantId, resolution.StreamId, resolution.ClusterPeers)
+		resp, err := resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.InternalName, resolution.TenantId, resolution.StreamId, resolution.ClusterPeers, resolution.ActiveIngestClusterID)
 		if err != nil {
 			return nil, err
 		}
@@ -2775,7 +2775,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	var response *sharedpb.ViewerEndpointResponse
 	switch contentType {
 	case "live":
-		response, err = resolveLiveViewerEndpoint(c.Request.Context(), req, lat, lon, resolution.RoutingInternalName(), resolution.TenantId, resolution.StreamId, resolution.ClusterPeers)
+		response, err = resolveLiveViewerEndpoint(c.Request.Context(), req, lat, lon, resolution.RoutingInternalName(), resolution.TenantId, resolution.StreamId, resolution.ClusterPeers, resolution.ActiveIngestClusterID)
 	case "dvr":
 		response, err = resolveDVRViewerEndpoint(c.Request.Context(), req, lat, lon, resolution)
 	default:

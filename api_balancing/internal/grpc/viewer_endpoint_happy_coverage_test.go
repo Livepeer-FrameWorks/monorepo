@@ -281,8 +281,8 @@ func TestResolveViewerEndpoint_VodDispatchesToStorageNode(t *testing.T) {
 		WithArgs("vodhash1", "vod", "tenant-vod").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"internal_name", "status", "duration_seconds", "size_bytes", "created_at",
-			"format", "storage_location", "sync_status", "has_thumbnails", "authoritative_cluster",
-		}).AddRow("art", "ready", int64(120), int64(1000), time.Now(), "mp4", "node", "synced", false, ""))
+			"format", "storage_location", "sync_status", "has_thumbnails", "authoritative_cluster", "thumbnail_serving_cluster",
+		}).AddRow("art", "ready", int64(120), int64(1000), time.Now(), "mp4", "node", "synced", false, "", ""))
 
 	startViewerHappyCommodoreFake(t, &commodoreViewerHappyFake{
 		artifactPlayback: func(_ context.Context, req *commodorepb.ResolveArtifactPlaybackIDRequest) (*commodorepb.ResolveArtifactPlaybackIDResponse, error) {

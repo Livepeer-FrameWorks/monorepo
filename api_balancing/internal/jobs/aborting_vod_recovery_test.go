@@ -44,17 +44,18 @@ func newAbortRecoveryJob(t *testing.T, s3 AbortingVodRecoveryS3) (*AbortingVodRe
 		t.Fatal(err)
 	}
 	j := NewAbortingVodRecoveryJob(AbortingVodRecoveryConfig{
-		DB:     db,
-		S3:     s3,
-		Logger: logging.NewLogger(),
+		DB:             db,
+		S3:             s3,
+		Logger:         logging.NewLogger(),
+		LocalBackendID: "backend-x", // matches the scan rows' backend_id so the ownership fence passes
 	})
 	return j, mock, func() { _ = db.Close() }
 }
 
 func abortRecoveryScanRows() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
-		"artifact_hash", "tenant_id", "user_id", "s3_key", "s3_upload_id",
-	}).AddRow("hash-1", "t1", "user-1", "vod/t1/hash-1/video.mp4", "up-1")
+		"artifact_hash", "tenant_id", "user_id", "s3_key", "s3_upload_id", "backend_id",
+	}).AddRow("hash-1", "t1", "user-1", "vod/t1/hash-1/video.mp4", "up-1", "backend-x")
 }
 
 // A stranded 'aborting' row whose multipart upload aborts cleanly converges to 'deleted' (metadata

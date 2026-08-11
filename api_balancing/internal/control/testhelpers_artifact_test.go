@@ -38,6 +38,9 @@ type mockS3Client struct {
 	promoteObjectFn        func(ctx context.Context, srcKey, dstKey, ifMatchETag string) error
 	promoteCalls           []string
 
+	// Optional descriptor override for BackendDescriptor (immutable-backend guard tests). Empty bucket → defaults.
+	descBucket, descEndpoint, descRegion, descPrefix string
+
 	presignPUTCalls   []string
 	presignGETCalls   []string
 	deleteCalls       []string
@@ -200,6 +203,13 @@ func (m *mockS3Client) PromoteObject(ctx context.Context, srcKey, dstKey, ifMatc
 		return m.promoteObjectFn(ctx, srcKey, dstKey, ifMatchETag)
 	}
 	return nil
+}
+
+func (m *mockS3Client) BackendDescriptor() (bucket, endpoint, region, prefix string) {
+	if m.descBucket != "" {
+		return m.descBucket, m.descEndpoint, m.descRegion, m.descPrefix
+	}
+	return "mock-bucket", "https://mock.s3", "us-east-1", "thumbnails"
 }
 
 func (m *mockS3Client) BuildS3URL(key string) string {

@@ -463,8 +463,8 @@ var db *sql.DB
 var localClusterID string
 var servedClusters atomic.Pointer[sync.Map]
 
-// The platform-shared allowlist names the only clusters on which a TENANTLESS node may serve arbitrary
-// tenants' durable bytes. It is NOT servedClusters (which only means "this Foghorn operates the cluster"; a
+// The platform-shared allowlist names the clusters that may serve ANY resolved tenant's durable bytes (the fast path
+// in ClusterAccessibleForTenant). It is NOT servedClusters (which only means "this Foghorn operates the cluster"; a
 // served cluster can be tenant-dedicated/BYOC). It has two independent sources kept in separate sets so
 // revocation works correctly:
 //   - platformSharedConfig: operator-declared via FOGHORN_PLATFORM_SHARED_CLUSTERS, set once at startup.
@@ -472,8 +472,9 @@ var servedClusters atomic.Pointer[sync.Map]
 //     refresh (LoadPlatformSharedClusters) so a revoked cluster stops being authorized on the next successful
 //     refresh — a set that only accumulated would keep a revoked cluster authorized forever.
 //
-// Empty (both sets) ⇒ tenantless nodes serve nothing (fail closed). Per-tenant serve entitlement across
-// clusters remains the cross-cluster subscribed-storage RFC.
+// Empty (both sets) ⇒ no cluster is platform-shared (that fast path authorizes nothing). Per-tenant, per-cluster serve
+// entitlement is enforced separately by ClusterAccessibleForTenant — the tenant's official cluster plus its active
+// cluster_cluster_access peer set — so a non-shared cluster still serves a tenant it is specifically entitled to.
 var platformSharedConfig atomic.Pointer[sync.Map]
 var platformSharedDerived atomic.Pointer[sync.Map]
 
@@ -661,6 +662,68 @@ func wildcardMatches(pattern, serverName string) bool {
 var validateBootstrapTokenFn func(ctx context.Context, token string) (*quartermasterpb.ValidateBootstrapTokenResponse, error)
 var getNodeOwnerFn func(ctx context.Context, nodeID string) (*quartermasterpb.NodeOwnerResponse, error)
 var getClusterFn func(ctx context.Context, clusterID string) (*quartermasterpb.InfrastructureCluster, error)
+
+// registerThumbnailServingCellFn is the register-before-mint call to Commodore; overridable in tests. In production it
+// dials the live CommodoreClient. Returns registered=false with an error when no client is wired.
+var registerThumbnailServingCellFn = func(ctx context.Context, streamID, tenantID, clusterID string) (bool, error) {
+	if CommodoreClient == nil {
+		return false, errNoCommodoreForThumbnailRegister
+	}
+	return CommodoreClient.RegisterStreamThumbnailServingCell(ctx, streamID, tenantID, clusterID)
+}
+
+var errNoCommodoreForThumbnailRegister = errors.New("no commodore client to register the thumbnail serving cell")
+
+// thumbnailRegistrationCacheTTL bounds how often a live stream's serving cell is re-registered. Live thumbnails refresh
+// every few seconds, but the ownership fact (this stream's thumbnails are served by THIS cell) is stable, so
+// registering once and caching the positive result collapses a per-refresh cross-service write into at most one write
+// per interval. This is a WRITE-AMPLIFICATION optimization ONLY — it is NOT a deletion-safety mechanism, and its value
+// is not a safety ceiling. Deletion safety is enforced per attempt by ClaimThumbnailAttempt's tombstone fence
+// (thumbnail_publication.go): once a stream is deleted a durable cleanup tombstone exists, and NO further presigned
+// upload authority is issued, regardless of whether the ownership registration is still cached. A presigned PUT from an
+// attempt that CLAIMED before the tombstone can still land up to thumbnailUploadTTL later; those stragglers are
+// reclaimed by the deletion's delayed sweep and are bounded by the upload TTL, not by this cache TTL.
+const thumbnailRegistrationCacheTTL = 2 * time.Minute
+
+// thumbnailRegistrationCache memoizes a SUCCESSFUL serving-cell registration per live stream (key = stream id; the cell
+// is always this Foghorn's localClusterID). Refusals/errors are NOT cached — they are re-checked on the next mint.
+var thumbnailRegistrationCache = cache.New(cache.Options{
+	TTL:        thumbnailRegistrationCacheTTL,
+	MaxEntries: 200000,
+}, cache.MetricsHooks{})
+
+// liveThumbnailMintMayProceed is the register-before-mint fence: a live thumbnail may be minted ONLY once this cell is
+// durably registered as a serving cell (so a later deletion can reach the bytes). Returns false — dropping the upload —
+// when registration errors (no client / transport) OR is refused (registered=false: the stream was deleted, deletion
+// won the serialize race, no object must be created). A prior success is cached for thumbnailRegistrationCacheTTL, so a
+// steady stream registers at most once per interval rather than on every refresh.
+func liveThumbnailMintMayProceed(streamID, tenantID, clusterID string, logger logging.Logger) bool {
+	v, ok, err := thumbnailRegistrationCache.Get(context.Background(), streamID, func(loadCtx context.Context, _ string) (interface{}, bool, error) {
+		regCtx, regCancel := context.WithTimeout(loadCtx, 5*time.Second)
+		defer regCancel()
+		registered, rErr := registerThumbnailServingCellFn(regCtx, streamID, tenantID, clusterID)
+		if rErr != nil {
+			return false, false, rErr // do not cache transport/no-client errors
+		}
+		if !registered {
+			return false, false, nil // do not cache a refusal (deleted stream) — re-check on the next mint
+		}
+		return true, true, nil // cache the permanent ownership fact for the TTL
+	})
+	if err != nil {
+		logger.WithError(err).WithFields(logging.Fields{"thumbnail_key": streamID, "tenant_id": tenantID}).
+			Warn("Failed to register live thumbnail serving cell; dropping (mint fenced on durable ownership)")
+		return false
+	}
+	if !ok {
+		logger.WithFields(logging.Fields{"thumbnail_key": streamID, "tenant_id": tenantID}).
+			Info("Live thumbnail serving-cell registration refused (stream deleted); dropping upload")
+		return false
+	}
+	registered, isBool := v.(bool)
+	return isBool && registered
+}
+
 var geoipCache *cache.Cache
 var decklogClient *decklog.BatchedClient
 var dvrStopRegistry DVRStopRegistry
@@ -1381,6 +1444,22 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 			if p, _ := peer.FromContext(stream.Context()); p != nil {
 				peerAddr = p.Addr.String()
 			}
+			// HARD PROTOCOL CUT: reject any sidecar below the minimum at the EARLIEST point — before fence allocation,
+			// fingerprint authentication, ownership acquisition, or registry publication — so a not-yet-upgraded (or
+			// third-party) sidecar mutates NO state and simply fails closed with FailedPrecondition. There is no code
+			// path that admits a below-minimum sidecar. This is also what makes inventory authority session-owned: past
+			// here every admitted session is
+			// inventory-authoritative, so the processor never trusts a payload field to decide.
+			connProtocolVersion = x.Register.GetControlProtocolVersion()
+			if connProtocolVersion < MinControlProtocolVersion {
+				registry.log.WithFields(logging.Fields{
+					"node_id":          nodeID,
+					"protocol_version": connProtocolVersion,
+					"minimum":          MinControlProtocolVersion,
+				}).Warn("Rejecting control registration below the minimum protocol version; upgrade the edge sidecar")
+				return status.Errorf(codes.FailedPrecondition, "control protocol version %d is below the minimum %d; upgrade the edge sidecar", connProtocolVersion, MinControlProtocolVersion)
+			}
+
 			// Issue this connection its ownership fence BEFORE it becomes dispatch-visible. Fail CLOSED: a
 			// connection with no fence would emit unversioned reports that bypass ordering, so we
 			// reject registration and let Helmsman reconnect rather than accept an unfenced owner.
@@ -1390,7 +1469,6 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 				return status.Error(codes.Unavailable, "control fence allocation failed")
 			}
 			connFence = fence
-			connProtocolVersion = x.Register.GetControlProtocolVersion()
 
 			// Build the connection but keep it OUT of the dispatchable registry until every ownership claim
 			// below succeeds. Concurrent command dispatch resolves connections through registry.conns, so a
@@ -2734,9 +2812,48 @@ const FreezeStagedProtocolMin int32 = 1
 // ThumbnailStagedProtocolMin is the minimum control-protocol version a sidecar must declare to be handed a
 // staged, server-minted thumbnail publication. Below it, the sidecar neither uploads to the per-attempt staging
 // keys nor echoes the attempt id, so it can neither be verified nor bound to the completion CAS — the mint
-// FAILS CLOSED (no legacy fixed-key overwrite path). Bumped above FreezeStagedProtocolMin because thumbnail
-// staging is a distinct, later capability; sidecar-first rollout declares this version before Foghorn enforces.
+// FAILS CLOSED (no legacy fixed-key overwrite path). It is above FreezeStagedProtocolMin because thumbnail staging
+// is a distinct capability gated separately from freeze. Registration enforces MinControlProtocolVersion (>= this),
+// so every connected sidecar satisfies the gate.
 const ThumbnailStagedProtocolMin int32 = 2
+
+// AuthoritativeInventoryProtocolMin is the minimum control-protocol version at which a sidecar emits a VERSIONED
+// whole-node artifact inventory (a monotonic report_seq plus the incomplete-scan flag). A report's own report_seq is
+// the per-report proof that a specific inventory is authoritative (fence-tied acceptance). Because registration
+// rejects any sidecar below MinControlProtocolVersion (>= this), EVERY connected session is inventory-authoritative —
+// there is no legacy inventory path.
+const AuthoritativeInventoryProtocolMin int32 = ThumbnailStagedProtocolMin
+
+// MinControlProtocolVersion is the HARD minimum a sidecar must declare in Register to connect at all. A registration
+// below this is REJECTED (FailedPrecondition), not admitted under a compatibility path. This is what makes inventory
+// authority session-owned rather than payload-selected: a sub-min sidecar cannot connect, so every report the
+// processor sees is from an authoritative session.
+const MinControlProtocolVersion int32 = AuthoritativeInventoryProtocolMin
+
+// ControlFeatures is the SINGLE place a sidecar session's protocol-gated capabilities are decided. It is derived
+// once from the negotiated control-protocol version (Register.control_protocol_version) and consumed by placement
+// and handlers, so protocol behavior lives in one contract instead of scattered `if version < X` checks. Registration
+// enforces MinControlProtocolVersion, so for a connected session every capability below is currently always true.
+//
+// A false capability never means "drop the node": a dispatched operation the session cannot do FAILS CLOSED and the
+// work stays local/retryable until the sidecar is upgraded.
+type ControlFeatures struct {
+	StagedFreeze           bool // server-minted staged freeze (>= FreezeStagedProtocolMin)
+	StagedThumbnail        bool // server-minted staged thumbnail publication (>= ThumbnailStagedProtocolMin)
+	AuthoritativeInventory bool // versioned whole-node artifact inventory (>= AuthoritativeInventoryProtocolMin)
+}
+
+// ControlFeaturesForProtocol derives the capability set a declared control-protocol version supports.
+func ControlFeaturesForProtocol(v int32) ControlFeatures {
+	return ControlFeatures{
+		StagedFreeze:           v >= FreezeStagedProtocolMin,
+		StagedThumbnail:        v >= ThumbnailStagedProtocolMin,
+		AuthoritativeInventory: v >= AuthoritativeInventoryProtocolMin,
+	}
+}
+
+// features returns the control capabilities this connection's declared protocol version supports.
+func (c *conn) features() ControlFeatures { return ControlFeaturesForProtocol(c.protocolVersion) }
 
 // connIsCurrentOwner reports whether the node's currently-registered control connection is the SAME one that
 // carried a request (matched by ownership fence). A goroutine dispatched from a since-superseded connection
@@ -2767,7 +2884,7 @@ func NodeFreezeProtocolOK(nodeID string) (ok bool, known bool) {
 	if c == nil {
 		return false, false
 	}
-	return c.protocolVersion >= FreezeStagedProtocolMin, true
+	return c.features().StagedFreeze, true
 }
 
 // shouldRelay reports whether a local send error warrants a relay attempt.
@@ -4349,6 +4466,9 @@ type S3ClientInterface interface {
 	// an attempt-scoped staging upload without ever exposing a canonical-key PUT to the node.
 	HeadObjectInfo(ctx context.Context, key string) (bool, int64, string, error)
 	PromoteObject(ctx context.Context, srcKey, dstKey, ifMatchETag string) error
+	// BackendDescriptor returns this client's IMMUTABLE storage-backend identity (bucket, endpoint, region, prefix),
+	// so a write can capture the backend_id fingerprint (BackendFingerprint) it landed on for repoint-safe cleanup later.
+	BackendDescriptor() (bucket, endpoint, region, prefix string)
 }
 
 var s3Client S3ClientInterface
@@ -4513,12 +4633,12 @@ func PrepareLocalFreezeAssignment(ctx context.Context, assetType, assetHash, ten
 	return FreezeAssignment{AttemptID: attemptID, CanonicalKey: canonicalKey, StagingURL: stagingURL, DestCluster: destCluster}, "", true
 }
 
-// resolveThumbnailStorageCluster runs the storage resolver for the
-// thumbnail upload flow. Origin candidate is the artifact / live stream's
-// authoritative cluster; official candidate comes from the cached
-// Quartermaster lookup. Mirrors resolveFreezeStorageCluster's fallback
-// behaviour when no factory is wired (tests / minimal dev setups).
-func resolveThumbnailStorageCluster(ctx context.Context, tenantID, originClusterID string) (string, storage.StorageMintMode) {
+// resolveThumbnailStorageCluster runs the STRICT official-durable resolver for the thumbnail upload flow. The only
+// durable destination is the tenant's OFFICIAL cluster (from the cached Quartermaster lookup); the origin/ingest
+// cluster is never a candidate. A missing resolver or an unresolved official FAILS CLOSED (StorageUnavailable) —
+// there is no local/caller fallback, so a routing failure never silently mints a tenant's thumbnails locally or
+// onto a BYOC origin. A remote official resolves to federation (which the mint then drops, see the caller).
+func resolveThumbnailStorageCluster(ctx context.Context, tenantID, _ string) (string, storage.StorageMintMode) {
 	// FAIL CLOSED when no storage resolver is wired: without it there is no proof of the tenant's official
 	// durable destination, and assuming the origin cluster is locally mintable would contradict official-durable
 	// selection (and could mint a tenant's thumbnails onto a BYOC origin). A missing resolver is unavailable.
@@ -4529,12 +4649,11 @@ func resolveThumbnailStorageCluster(ctx context.Context, tenantID, originCluster
 	if resolver == nil {
 		return "", storage.StorageUnavailable
 	}
-	// Durable destination is the tenant's OFFICIAL cluster only (mirrors the freeze contract). The origin
-	// cluster is source-authority attribution, NOT a durable-storage candidate — an advertised BYOC origin
-	// must never win the durable thumbnail write. A remote official → federation; unresolved → unavailable.
-	return resolver.Resolve(storage.ResolverInput{
-		OfficialClusterID: resolveOfficialClusterID(ctx, tenantID),
-	})
+	// Durable destination is the tenant's OFFICIAL cluster only, via the STRICT resolver: the origin cluster is
+	// never a candidate, and an unresolved official is StorageUnavailable (no local/caller fallback) — an
+	// advertised BYOC origin can never win the durable thumbnail write, and a routing/config failure never
+	// silently mints locally. A remote official → federation.
+	return resolver.ResolveOfficialDurable(resolveOfficialClusterID(ctx, tenantID))
 }
 
 func resolveOfficialClusterID(ctx context.Context, tenantID string) string {
@@ -4610,7 +4729,7 @@ func processFreezePermissionRequest(req *ipcpb.FreezePermissionRequest, nodeID s
 	// CAPTURED for THIS session at Register (passed in), so the check and the response below are bound to the
 	// same connection that made the request — a concurrent reconnect cannot admit this request under a
 	// different session's version.
-	if connProtocolVersion < FreezeStagedProtocolMin {
+	if !ControlFeaturesForProtocol(connProtocolVersion).StagedFreeze {
 		logger.WithFields(logging.Fields{"node_id": nodeID, "protocol_version": connProtocolVersion, "required": FreezeStagedProtocolMin}).
 			Warn("Denying freeze: sidecar control-protocol version predates staged freeze; upgrade the sidecar")
 		sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
@@ -4864,6 +4983,13 @@ func ClaimFreezeAttempt(ctx context.Context, dbh *sql.DB, assetHash, requestID, 
 	if objectKey == "" {
 		return false, nil // no server-derived descriptor → cannot bind the object → deny (fail closed)
 	}
+	// The winning (re)publication writes the object to THIS cell's CURRENT store, so the row MUST adopt the proven
+	// current fingerprint. Require it: no local fingerprint (no S3 wired) means we cannot attribute the freeze, so deny
+	// rather than fall back to a stale/empty backend the strict cleanup worker would later refuse.
+	localBID := localBackendFingerprint()
+	if localBID == "" {
+		return false, fmt.Errorf("claim freeze attempt %s: no local backend fingerprint (no local S3 store) to attribute the freeze", requestID)
+	}
 	// status = 'ready' is the lifecycle-ready gate: a clip/vod is freezable ONLY after processing has
 	// published it. A complete copy reported while the artifact is still 'uploading'/'processing' must NOT
 	// be claimable, because the processing completion resets sync_status/storage_location (and may rewrite
@@ -4891,6 +5017,11 @@ func ClaimFreezeAttempt(ctx context.Context, dbh *sql.DB, assetHash, requestID, 
 		    -- bytes will be durable on THIS cell's backend. Persist that billing attribution now (stable; the
 		    -- read side never recomputes it from mutable tenant routing).
 		    durable_backend_local = true,
+		    -- Record the backend the WINNING (re)publication's bytes land on: this UPDATE can re-claim an
+		    -- already-'synced' row (a republish), which writes a NEW object to the CURRENT store — so the active row
+		    -- ALWAYS adopts the proven current fingerprint ($7, required non-empty above), never preserving a superseded
+		    -- object's id.
+		    backend_id = $7,
 		    last_sync_attempt = NOW(), updated_at = NOW()
 		WHERE artifact_hash = $1
 		  AND tenant_id::text = $4
@@ -4906,7 +5037,7 @@ func ClaimFreezeAttempt(ctx context.Context, dbh *sql.DB, assetHash, requestID, 
 		         AND sync_object_key = $6
 		         AND storage_cluster_id IS NOT DISTINCT FROM NULLIF($5, ''))
 		  )`,
-		assetHash, requestID, nodeID, tenantID, storageCluster, objectKey)
+		assetHash, requestID, nodeID, tenantID, storageCluster, objectKey, localBID)
 	if execErr != nil {
 		return false, execErr
 	}
@@ -5152,7 +5283,7 @@ func SendLocalFreezeRequest(nodeID string, req *ipcpb.FreezeRequest) error {
 	// so the CURRENT session's declared protocol MUST be validated here, immediately before transmitting.
 	// Fail closed with a non-relayable error (shouldRelay leaves a present-but-old conn un-relayed) so an old
 	// sidecar can never receive a staged freeze it would mishandle.
-	if c.protocolVersion < FreezeStagedProtocolMin {
+	if !c.features().StagedFreeze {
 		return ErrFreezeProtocolUnsupported
 	}
 	// FENCE dispatch to THIS connection generation: hold sendGate across the superseded check AND the Send, so
@@ -7993,7 +8124,7 @@ func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadR
 	// Strict protocol gate (fail closed, no legacy path): only a sidecar that declares the staged-thumbnail
 	// protocol uploads to the per-attempt staging keys and echoes the attempt id at completion. A sidecar below
 	// it could neither be verified nor bound to the publication CAS, so it gets NO mint.
-	if connProtocolVersion < ThumbnailStagedProtocolMin {
+	if !ControlFeaturesForProtocol(connProtocolVersion).StagedThumbnail {
 		logger.WithFields(logging.Fields{
 			"internal_name":    internalName,
 			"node_id":          nodeID,
@@ -8001,6 +8132,10 @@ func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadR
 		}).Warn("Thumbnail upload denied: sidecar control-protocol version below staged-thumbnail minimum")
 		return
 	}
+
+	// No Chandler capability handshake: thumbnails are served from a DETERMINISTIC static key, so publication does not
+	// depend on Chandler being reachable/ready. The bytes land safely and serving resumes when Chandler returns
+	// (docs/architecture/thumbnails.md). Foghorn/Chandler backend agreement is enforced at deploy by the CLI.
 
 	// Note: s3Client nil-check moved to inside the StorageMintLocal branch
 	// so a self-host pool with no local S3 can still federate to platform
@@ -8223,9 +8358,19 @@ func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadR
 		return
 	}
 
-	// Run the same official-durable storage resolver used by freeze and CreateVodUpload: the destination is the
-	// tenant's official cluster; the origin cluster is attribution only, never a durable-write candidate.
-	storageCluster, mintMode := resolveThumbnailStorageCluster(context.Background(), thumbTenantID, thumbOriginCluster)
+	// Resolve the storage destination. LIVE thumbnails are EPHEMERAL derivatives served from the INGEST cell while the
+	// stream is live — Commodore builds their URL from active_ingest_cluster_id, so they must be stored on THIS (ingest)
+	// cell, not the tenant's official durable cluster. Resolving official for a cross-cell live stream would return a
+	// remote destination that federated publication then DROPS, leaving a URL to an object never published. Local mint
+	// keeps live publication and its URL on the same cell (active_ingest is authoritative). ARTIFACT thumbnails are
+	// durable and still resolve the official cluster (recorded as thumbnail_serving_cluster_id).
+	var storageCluster string
+	var mintMode storage.StorageMintMode
+	if isLive {
+		storageCluster, mintMode = localClusterID, storage.StorageMintLocal
+	} else {
+		storageCluster, mintMode = resolveThumbnailStorageCluster(context.Background(), thumbTenantID, thumbOriginCluster)
+	}
 	if mintMode == storage.StorageUnavailable {
 		logger.WithFields(logging.Fields{
 			"internal_name":  internalName,
@@ -8234,16 +8379,20 @@ func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadR
 		}).Warn("Storage resolver returned unavailable for thumbnail upload — dropping")
 		return
 	}
-	// FAIL CLOSED on a remote (federated) destination: completion verifies + promotes only through the LOCAL S3
-	// client, so a federated attempt would upload to a remote staging key that this cell can never HEAD/promote —
-	// the attempt would strand and its remote objects leak. A destination-side attest/promote/settle path does
-	// not exist, so this cell never mints a federated thumbnail attempt. This is BEFORE the attempt is minted.
+	// Fail closed on a remote (federated) ARTIFACT-thumbnail destination — CONSISTENT with byte storage, not a
+	// thumbnail-specific gap: a durable artifact's bytes are themselves fail-closed cross-cell (VOD upload to a remote
+	// official returns storage_delegation_unsupported_for_vod; freeze authorizes only a local official), so in a
+	// supported single-backend-per-cell deployment an artifact lives on its origin cell and its thumbnail mints there
+	// too — this branch is only reached by an unsupported cross-cell topology. Completion verifies + promotes only
+	// through the LOCAL S3 client, so a federated attempt would strand on a remote staging key it can never
+	// HEAD/promote; this cell never mints one. (Live thumbnails differ — minted locally on the ingest cell by the
+	// isLive branch above, so they DO serve cross-cell.) See docs/architecture/durable-media-storage.md.
 	if mintMode == storage.StorageMintViaFederation {
 		logger.WithFields(logging.Fields{
 			"internal_name":   internalName,
 			"tenant_id":       thumbTenantID,
 			"storage_cluster": storageCluster,
-		}).Warn("Thumbnail durable destination is a remote cell; federated thumbnail publication is not yet supported — dropping (fail closed)")
+		}).Warn("Artifact thumbnail durable destination is a remote cell; cross-cell artifact thumbnail publication is unsupported — dropping produced bytes (fail closed)")
 		return
 	}
 
@@ -8273,6 +8422,15 @@ func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadR
 		return
 	}
 
+	// REGISTER-BEFORE-MINT (live only): a live stream's thumbnails are minted on THIS ingest cell's own per-cell
+	// Foghorn database, so deletion cleanup can only reach them if this cell is durably recorded as a serving cell
+	// FIRST. The registration is fenced by deleted_at IS NULL, so it serializes with DeleteStream on the stream row:
+	// register wins → the cell is in the deletion's cleanup fan-out; deletion wins → the fence refuses and we drop here
+	// rather than mint an object no cleanup will reach. thumbnailKey is the live stream's Commodore UUID.
+	if isLive && !liveThumbnailMintMayProceed(thumbnailKey, thumbTenantID, localClusterID, logger) {
+		return
+	}
+
 	// Mint the server-owned attempt and persist the assignment + per-file STAGING object rows BEFORE handing
 	// any presigned URL. The node uploads to per-attempt staging keys and echoes attempt_id at completion, so
 	// the completion binds a Foghorn-ASSIGNED operation. Fail closed on a crypto/rand or claim failure.
@@ -8285,8 +8443,13 @@ func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadR
 	for _, t := range targets {
 		fileNames = append(fileNames, t.fileName)
 	}
-	expiry := 15 * time.Minute
+	// Presigned-upload lifetime. This same constant bounds the deletion delayed-sweep window (DeterministicCopyWindow),
+	// so a PUT issued just before a deletion cannot land after cleanup finalized and strand an object.
+	expiry := thumbnailUploadTTL
 	claimCtx, claimCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// backend evidence (I2): the mint only reaches here for a StorageMintLocal destination (Unavailable + remote
+	// federation are dropped above), so ClaimThumbnailAttempt records durable_backend_local from that invariant —
+	// cleanup then routes the sweep local even when the official destination is a locally-backed ALIAS.
 	claimed, claimErr := ClaimThumbnailAttempt(claimCtx, GetDB(), attemptID, thumbTenantID, thumbnailKey, nodeID, storageCluster, fileNames, time.Now().Add(expiry))
 	claimCancel()
 	if claimErr != nil || !claimed {
@@ -8415,6 +8578,16 @@ func completeThumbnailPublication(ctx context.Context, attemptID, echoedKey, nod
 // attribution; the publication itself is bound to the server-minted attempt id.
 func finishThumbnailPublication(ctx context.Context, dbh *sql.DB, a ThumbnailAssignment, objs []ThumbnailObject, nodeID string, logger logging.Logger) {
 	attemptID := a.AttemptID
+	// BOUND the S3 verify/promote/settle work to well under the candidate-cleanup grace (thumbnailCompletionDeadline
+	// << thumbnailCandidateCleanupGrace). This does NOT prove the object store cannot land a CopyObject after our
+	// context is cancelled — a provider may still complete it server-side — so it is not an absolute fence. What it
+	// DOES do: (1) callers pass context.Background(), so without a bound a single stuck op could run for hours; the
+	// bound aborts it and leaves the attempt for recovery, and (2) the residual risk is only a per-token ORPHAN
+	// (`v/{token}/…` is private to this completion, so a stale late copy can never overwrite the live winner — no
+	// data corruption). Such an orphan is reclaimed by the grace-delayed candidate cleanup, and the reconciler's
+	// prefix-delete on asset deletion is the backstop. Corruption-safe; leak-bounded, not leak-proof.
+	ctx, cancel := context.WithTimeout(ctx, thumbnailCompletionDeadline)
+	defer cancel()
 	// EXPIRY FENCE: refuse to complete an attempt past its lease. It stays in a recovery-eligible state, so the
 	// reconciler fails + sweeps it. Because recovery only fails EXPIRED attempts, a non-expired attempt promoted
 	// below can never be concurrently failed — closing the promote-vs-fail leak for the common path.
@@ -8439,6 +8612,20 @@ func finishThumbnailPublication(ctx context.Context, dbh *sql.DB, a ThumbnailAss
 		failCancel()
 		return
 	}
+	// PUBLICATION LEASE: acquire the single-flight fence BEFORE any S3 HEAD/promote. This makes the promotion of
+	// this attempt's version objects single-flight (a concurrent completion of the same attempt cannot double-copy
+	// and overwrite the immutable version key), and it blocks the recovery fail-sweep from expiring the attempt
+	// while this promotion is in flight (failAndSweep honors publish_leased_until). If we cannot acquire it —
+	// another completion holds it, or the attempt is terminal/expired — leave it for that holder / recovery.
+	publishToken, lErr := AcquireThumbnailPublishLease(ctx, GetDB(), attemptID, 2*time.Minute)
+	if lErr != nil {
+		logger.WithError(lErr).WithField("attempt_id", attemptID).Warn("Thumbnail completion: acquire publication lease failed; leaving for recovery")
+		return
+	}
+	if publishToken == "" {
+		logger.WithField("attempt_id", attemptID).Debug("Thumbnail completion: publication lease held by another completion (or attempt terminal/expired); leaving")
+		return
+	}
 	if s3Client == nil {
 		// Local verify/promote needs the S3 client. A federated destination (official cluster on another cell)
 		// is not completed here — its staged objects live on another cell's S3, which this cell cannot verify.
@@ -8446,15 +8633,31 @@ func finishThumbnailPublication(ctx context.Context, dbh *sql.DB, a ThumbnailAss
 		return
 	}
 
-	// Verify + promote EVERY object to its immutable version key. All must succeed to publish — a missing/empty
-	// staged object or a transient error returns and leaves the attempt for retry/sweep (no partial publish).
-	//
-	// A promoted version object is NEVER enqueued for deletion from here: the version key is deterministic per
-	// attempt (asset_key/attempt_id/file), so a concurrent completion OF THE SAME ATTEMPT can publish that exact
-	// key. Enqueuing it while the attempt is still retryable could delete a NEWLY-LIVE object. Instead, any exit
-	// below simply leaves the attempt for the recovery reconciler, whose fail-sweep is GUARDED (it enqueues the
-	// reconstructed keys ONLY if it wins the terminal transition, i.e. the attempt did NOT publish) — so a live
-	// version is never queued for deletion, and an abandoned attempt's promoted objects are still reclaimed.
+	// RECORD CLEANUP BEFORE PROMOTION: enqueue this holder's per-token CANDIDATE keys (`v/{token}/…`) for deletion
+	// BEFORE copying any bytes there. If this completion then loses (a peer re-acquired the lease), fails, or
+	// crashes between promote and publish, its private candidate is already queued and the shared StagingCleanupJob
+	// reclaims it. The WINNER de-registers exactly these keys inside its publish CAS (they become the live version),
+	// so only a non-winning holder's candidate stays queued — and a stale holder's key is distinct per token, so it
+	// can never dequeue or overwrite the winner's object.
+	candidateKeys := make([]string, 0, len(objs))
+	for _, o := range objs {
+		candidateKeys = append(candidateKeys, ThumbnailVersionKey(a.AssetKey, publishToken, o.FileName))
+	}
+	// GRACE-DELAYED so the shared cleanup worker cannot claim + settle the row before promotion creates the object
+	// (a delete of the absent key would drop the row and orphan the promoted object). The winner de-registers these
+	// keys inside its publish CAS well within the grace; a loser/crash fires after the grace, object present.
+	if cErr := EnqueueThumbnailCleanupDeferred(ctx, GetDB(), candidateKeys, thumbnailCandidateCleanupGrace); cErr != nil {
+		logger.WithError(cErr).WithField("attempt_id", attemptID).Warn("Thumbnail completion: pre-promotion candidate enqueue failed; leaving for recovery")
+		return
+	}
+
+	// Verify + promote EVERY object to its per-token CANDIDATE key (`v/{token}/…`). All must succeed to publish — a
+	// missing/empty staged object or a transient error returns and leaves the attempt for retry/sweep (no partial
+	// publish). No leak-cleanup is needed on any exit below: this holder's candidate keys were enqueued for deletion
+	// BEFORE the first promote, so a loss/failure/crash here leaves them queued and the StagingCleanupJob reclaims
+	// them; the winning completion de-registers exactly these keys inside its publish CAS. Because the candidate
+	// segment is the holder's private token, a stale holder can only ever write (and later have cleaned) its OWN
+	// objects — it can never overwrite or dequeue the winner's.
 	for _, o := range objs {
 		exists, size, etag, hErr := s3Client.HeadObjectInfo(ctx, o.StagingKey)
 		if hErr != nil {
@@ -8467,61 +8670,227 @@ func finishThumbnailPublication(ctx context.Context, dbh *sql.DB, a ThumbnailAss
 				Warn("Thumbnail completion: staged object missing/empty; leaving for recovery")
 			return
 		}
-		versionKey := ThumbnailVersionKey(a.AssetKey, a.Version, o.FileName)
+		versionKey := ThumbnailVersionKey(a.AssetKey, publishToken, o.FileName)
 		if pErr := s3Client.PromoteObject(ctx, o.StagingKey, versionKey, etag); pErr != nil {
 			logger.WithError(pErr).WithFields(logging.Fields{"attempt_id": attemptID, "version_key": versionKey}).
-				Warn("Thumbnail completion: promote to version key failed (transient); leaving for retry")
+				Warn("Thumbnail completion: promote to candidate key failed (transient); leaving for retry")
 			return
 		}
-		moved, mErr := MarkThumbnailObjectVerified(ctx, dbh, attemptID, o.FileName, versionKey, etag, size)
+		moved, mErr := MarkThumbnailObjectVerifiedToken(ctx, dbh, attemptID, o.FileName, versionKey, etag, size, publishToken)
 		if mErr != nil {
-			// Already promoted; record-failed. LEAVE it for recovery (guarded) — never enqueue the candidate here.
 			logger.WithError(mErr).WithField("attempt_id", attemptID).Warn("Thumbnail completion: recording verified object failed; leaving for recovery")
 			return
 		}
 		if !moved {
-			// The assignment is no longer in a fenced non-terminal state (a concurrent completion published it, or
-			// a lease-expiry sweep failed it). Either way this attempt must not act; leave it for recovery. If it
-			// published, the promoted key is the LIVE version and must NOT be deleted; if it failed, recovery
-			// reclaims the reconstructed keys under its guarded transition.
-			logger.WithField("attempt_id", attemptID).Warn("Thumbnail completion: assignment no longer fenced mid-promote; leaving for recovery")
+			// The assignment is no longer fenced under THIS token (a peer re-acquired the lease, it expired, or the
+			// asset is gone). Our promoted candidate is our OWN private key — re-arm it due-now (object exists) for
+			// prompt reclamation instead of waiting out the grace (which still reclaims it if this fails).
+			if reErr := EnqueueThumbnailCleanup(ctx, dbh, candidateKeys); reErr != nil {
+				logger.WithError(reErr).WithField("attempt_id", attemptID).Debug("Thumbnail completion: candidate re-arm failed; grace-delayed enqueue still reclaims")
+			}
+			logger.WithField("attempt_id", attemptID).Warn("Thumbnail completion: assignment no longer fenced under this lease; leaving for recovery")
 			return
 		}
 	}
 
-	// Enter the durable publishing state, then CAS the active pointer to this attempt's version. If it can't
-	// enter publishing (a concurrent completion already did, or it expired/failed), LEAVE it for recovery —
-	// never enqueue the promoted objects here, since a concurrent completion may publish the same version key.
-	entered, eErr := EnterThumbnailPublishing(ctx, dbh, attemptID)
+	// Enter the durable publishing state (token-fenced), then CAS the active pointer to this token's candidate. Any
+	// non-winning exit leaves the candidate queued (enqueued pre-promotion) for reclamation — no cleanup here.
+	entered, eErr := EnterThumbnailPublishingToken(ctx, dbh, attemptID, publishToken)
 	if eErr != nil {
 		logger.WithError(eErr).WithField("attempt_id", attemptID).Warn("Thumbnail completion: enter-publishing failed; leaving for retry")
 		return
 	}
 	if !entered {
-		logger.WithField("attempt_id", attemptID).Warn("Thumbnail completion: could not enter publishing (concurrent completion/expiry); leaving for recovery")
+		// Object exists but this holder cannot publish (concurrent completion / expiry / lost lease). Re-arm its
+		// private candidate due-now for prompt reclamation (the grace-delayed enqueue still reclaims if this fails).
+		if reErr := EnqueueThumbnailCleanup(ctx, dbh, candidateKeys); reErr != nil {
+			logger.WithError(reErr).WithField("attempt_id", attemptID).Debug("Thumbnail completion: candidate re-arm failed; grace-delayed enqueue still reclaims")
+		}
+		logger.WithField("attempt_id", attemptID).Warn("Thumbnail completion: could not enter publishing (concurrent completion/expiry/lost lease); leaving for recovery")
 		return
 	}
-	activated, pErr := PublishThumbnailAttempt(ctx, dbh, attemptID)
+	activated, pErr := PublishThumbnailAttemptToken(ctx, dbh, attemptID, publishToken)
 	if pErr != nil {
 		logger.WithError(pErr).WithField("attempt_id", attemptID).Warn("Thumbnail completion: publish CAS failed; leaving for retry")
 		return
 	}
-	logger.WithFields(logging.Fields{"attempt_id": attemptID, "asset_key": a.AssetKey, "version": a.Version, "activated": activated}).
+	logger.WithFields(logging.Fields{"attempt_id": attemptID, "asset_key": a.AssetKey, "token": publishToken, "activated": activated}).
 		Info("Thumbnail attempt published")
 
-	// has_thumbnails and the staging-cleanup enqueue are committed ATOMICALLY inside PublishThumbnailAttempt (so
-	// a crash after the CAS can never skip them). Here we only run the BEST-EFFORT, self-healing side effects on
-	// the activated winner: the origin-cluster backfill / Commodore projection (via markArtifactHasThumbnails,
-	// idempotent) and the Chandler cache invalidation (Chandler otherwise self-heals via its short TTL +
-	// cold-miss resolve). A loser that didn't activate leaves the live version's side effects untouched.
+	// The staging-cleanup enqueue is committed ATOMICALLY with the pointer CAS inside PublishThumbnailAttempt (so a
+	// crash after the CAS can never skip it). has_thumbnails is deferred to the fenced projection below. Here we run
+	// the winner's projection + best-effort side effects: the origin-cluster backfill / Commodore projection (via
+	// markArtifactHasThumbnails, idempotent) and the Chandler cache invalidation (Chandler otherwise self-heals via
+	// its short object-cache TTL). A loser that didn't activate leaves the live version's side effects untouched.
 	if activated {
-		markArtifactHasThumbnails(a.AssetKey, nodeID, logger)
 		fileNames := make([]string, 0, len(objs))
 		for _, o := range objs {
 			fileNames = append(fileNames, o.FileName)
 		}
-		invalidateChandlerThumbnailCache(a.AssetKey, a.Version, fileNames, logger)
+		// DURABLE PROJECTION (winner only), EVENTUAL. The publish CAS marked the attempt 'published' but left it
+		// UNPROJECTED. projectAndMarkThumbnailFromToken CLAIMS (short lock), COPIES the winning version objects to the
+		// DETERMINISTIC served keys (thumbnails/{asset}/{file}) OUTSIDE any lock, then CAS-SETTLES: it stamps projected +
+		// exposes has_thumbnails only for the still-active winner and arms a one-shot reassert. A PostgreSQL lock cannot
+		// strictly serialize the S3 copy (its destination write is unconditional and an accepted copy can complete after
+		// the context is cancelled), so a loser's straggler overwrite is corrected by the winner's reassert (and a
+		// resurrection by the delayed delete sweep) when it lands within the copy window — the contract is eventual,
+		// with a straggler past the assumed provider tail an accepted residual risk. See docs/architecture/thumbnails.md.
+		if marked, mErr := projectAndMarkThumbnailFromToken(ctx, dbh, s3Client, attemptID, a.AssetKey, a.TenantID, a.DestinationCluster, publishToken, fileNames, logger); mErr != nil {
+			logger.WithError(mErr).WithField("attempt_id", attemptID).Warn("Thumbnail projection failed; leaving unprojected for recovery")
+		} else if marked {
+			// Node-authorized convergence: has_thumbnails is already flipped by the settle; this backfills a MISSING
+			// (both-NULL) artifact origin cluster from the reporting node's own cluster — legitimate provenance for a
+			// live upload. It does NOT stamp the thumbnail's official STORAGE destination onto origin (that would corrupt
+			// provenance); recovery, which has no reporting node, simply skips this.
+			markArtifactHasThumbnails(a.AssetKey, nodeID, logger)
+		}
+		// Chandler's invalidation evicts the deterministic thumbnails/{asset}/{file} key so the next request re-pulls
+		// the freshly projected object. Best-effort (outside any tx) — Chandler self-heals via its cache TTL.
+		invalidateChandlerThumbnailCache(a.AssetKey, fileNames, logger)
 	}
+}
+
+const (
+	deterministicPromoteRetries = 3
+	deterministicPromoteBackoff = 200 * time.Millisecond
+)
+
+// copyThumbnailObjectsToDeterministic copies each object's VersionKey → its deterministic served key
+// (thumbnails/{asset}/{file}) with a bounded per-object retry. It is PURE S3 and runs OUTSIDE any transaction/lock (a
+// PostgreSQL lock cannot serialize this network copy), between the CLAIM and SETTLE fences of projectAndMarkThumbnail.
+// The destination write is unconditional, so a stale straggler is possible; the winner's reassert + the delayed delete
+// sweep converge it. Returns true iff EVERY object was copied (an empty or absent source, or a retry-exhausted transport
+// error, returns false → the caller commits nothing and recovery re-drives).
+func copyThumbnailObjectsToDeterministic(ctx context.Context, client S3ClientInterface, assetKey string, objs []ThumbnailObject, logger logging.Logger) bool {
+	if client == nil {
+		return false
+	}
+	allCopied := true
+	for _, o := range objs {
+		if strings.TrimSpace(o.VersionKey) == "" {
+			allCopied = false // no source recorded yet → leave for recovery once verification has landed it
+			continue
+		}
+		detKey := ThumbnailDeterministicKey(assetKey, o.FileName)
+		var lastErr error
+		copied := false
+		absent := false
+		for attempt := 0; attempt < deterministicPromoteRetries; attempt++ {
+			exists, _, etag, hErr := client.HeadObjectInfo(ctx, o.VersionKey)
+			if hErr != nil {
+				lastErr = hErr // transient — retry
+			} else if !exists || strings.TrimSpace(etag) == "" {
+				absent = true // authoritative absence — the source object isn't there yet; do not retry
+				break
+			} else if pErr := client.PromoteObject(ctx, o.VersionKey, detKey, etag); pErr != nil {
+				lastErr = pErr // transient — retry
+			} else {
+				copied = true
+				lastErr = nil
+				break // success
+			}
+			if attempt < deterministicPromoteRetries-1 {
+				select {
+				case <-ctx.Done():
+					lastErr = ctx.Err()
+					attempt = deterministicPromoteRetries // stop
+				case <-time.After(deterministicPromoteBackoff):
+				}
+			}
+		}
+		if !copied {
+			allCopied = false
+			if absent {
+				logger.WithField("version_key", o.VersionKey).Debug("Deterministic projection: source version object not present yet; leaving unprojected")
+			} else if lastErr != nil {
+				logger.WithError(lastErr).WithField("deterministic_key", detKey).
+					Warn("Deterministic thumbnail projection failed after retries; leaving unprojected for recovery to re-drive")
+			}
+		}
+	}
+	return allCopied
+}
+
+// projectAndMarkThumbnailFromToken is the publish-path entry to the fenced projection: it computes each source
+// version key from the winning publishToken (ThumbnailVersionKey) — the just-loaded attempt does not carry the
+// version_key in memory (verification writes it to the DB, not to the in-memory objects) — then runs the fenced
+// project+mark. Returns marked=true only when every object was copied AND the projection stamp committed.
+func projectAndMarkThumbnailFromToken(ctx context.Context, dbh *sql.DB, client S3ClientInterface, attemptID, assetKey, tenantID, servingCluster, publishToken string, fileNames []string, logger logging.Logger) (bool, error) {
+	return projectAndMarkThumbnail(ctx, dbh, client, attemptID, assetKey, tenantID, servingCluster, thumbnailObjectsFromToken(assetKey, publishToken, fileNames), logger)
+}
+
+// thumbnailObjectsFromToken builds the projection source objects for the publish path: each file's source is its
+// per-token version key COMPUTED from the winning publishToken (ThumbnailVersionKey), NOT a possibly-stale/empty
+// in-memory version_key — the just-loaded attempt does not carry it (verification writes it to the DB, not to the
+// in-memory objects). Recovery, by contrast, loads the persisted version_key via LoadThumbnailAttempt.
+func thumbnailObjectsFromToken(assetKey, publishToken string, fileNames []string) []ThumbnailObject {
+	objs := make([]ThumbnailObject, 0, len(fileNames))
+	for _, file := range fileNames {
+		objs = append(objs, ThumbnailObject{FileName: file, VersionKey: ThumbnailVersionKey(assetKey, publishToken, file)})
+	}
+	return objs
+}
+
+// ReprojectPublishedThumbnailAttempt is the recovery re-drive for a published-but-unprojected attempt: it loads the
+// attempt — whose objects carry their DB-persisted version_key (written at verification) — and runs the fenced
+// project+mark. Returns progressed=true ONLY when the projection actually stamped this pass (real progress), so the
+// leased recovery worker settles a genuinely-projected attempt and BACKS OFF one whose source is still absent or whose
+// copy failed (poison isolation) rather than re-selecting it at the head every tick. A superseded/already-projected/
+// tombstoned attempt returns progressed=false with no error (the fence rejected it). No local S3 client → nothing to
+// project (not progress).
+func ReprojectPublishedThumbnailAttempt(ctx context.Context, attemptID string) (bool, error) {
+	dbh := GetDB()
+	a, objs, found, err := LoadThumbnailAttempt(ctx, dbh, attemptID)
+	if err != nil {
+		return false, err
+	}
+	if !found || a.Status != "published" || s3Client == nil {
+		return false, nil
+	}
+	logger := logging.NewLoggerWithService("foghorn-thumbnail-recovery")
+	// Recovery records the same AUTHORITATIVE thumbnail_serving_cluster_id as the immediate path — the winning
+	// assignment's persisted destination_cluster (the official-durable cluster the thumbnail was projected to). It never
+	// touches origin/storage cluster (provenance / byte placement), which a dedicated serving-cluster field replaces.
+	return projectAndMarkThumbnail(ctx, dbh, s3Client, attemptID, a.AssetKey, a.TenantID, a.DestinationCluster, objs, logger)
+}
+
+// ReassertThumbnailProjection is the eventual-convergence step: past the max-copy window, the CURRENT winner re-copies
+// its version objects to the deterministic served key ONCE, correcting a straggler overwrite from an earlier loser
+// whose accepted copy completed within that window, then clears the reassert clock. A straggler that lands AFTER the
+// window (i.e. the provider tail exceeded projectionProviderAmbiguityWindow) is NOT corrected by this one-shot pass —
+// the accepted, rare cosmetic residual risk documented there. If the asset was superseded or has gone
+// terminal/tombstoned, no re-copy is done — the clock is simply cleared (one-shot). Returns progressed=true when
+// the clock was cleared this pass (converged) so the recovery worker settles it; a failed re-copy leaves the clock set
+// for a later retry (progressed=false → backoff). No local S3 client → nothing to do.
+func ReassertThumbnailProjection(ctx context.Context, attemptID string) (bool, error) {
+	dbh := GetDB()
+	if dbh == nil || s3Client == nil {
+		return false, nil
+	}
+	a, objs, found, err := LoadThumbnailAttempt(ctx, dbh, attemptID)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		// Row gone (e.g. GC'd / deleted): the clock went with it. Nothing to re-copy; treat as converged.
+		return true, nil
+	}
+	logger := logging.NewLoggerWithService("foghorn-thumbnail-reassert")
+	// Re-copy ONLY while still the live, projected winner. gateThumbnailProjection(allowProjected=true) rejects a
+	// superseded/tombstoned/terminal asset — then we skip the copy and just clear the clock (nothing to re-assert).
+	live, gErr := gateThumbnailProjection(ctx, dbh, attemptID, a.AssetKey, true)
+	if gErr != nil {
+		return false, gErr
+	}
+	if live {
+		if !copyThumbnailObjectsToDeterministic(ctx, s3Client, a.AssetKey, objs, logger) {
+			return false, nil // transient copy failure → leave the clock set for a later pass
+		}
+	}
+	if cErr := clearThumbnailReassert(ctx, dbh, attemptID); cErr != nil {
+		return false, cErr
+	}
+	return true, nil
 }
 
 // CompleteThumbnailAttemptForRecovery re-drives a completion whose ThumbnailUploaded confirmation was lost (a
@@ -8564,23 +8933,27 @@ func CompleteThumbnailAttemptForRecovery(ctx context.Context, attemptID string, 
 type chandlerInvalidateRequest struct {
 	AssetKey string   `json:"assetKey"`
 	Files    []string `json:"files"`
-	// ActiveVersion is the newly-published version this asset now serves. Chandler updates its in-memory
-	// asset_key -> version map from it (the push fast path), so it serves the new backing object WITHOUT a
-	// cold-miss resolve. Empty => version-unaware invalidation (legacy cache bust only).
-	ActiveVersion string `json:"activeVersion,omitempty"`
 }
 
-func invalidateChandlerThumbnailCache(thumbnailKey, activeVersion string, s3Keys []string, logger logging.Logger) {
+// canonicalThumbnailFiles is the fixed allowlist of thumbnail files an asset owns (mirrors Chandler's allowlist).
+var canonicalThumbnailFiles = []string{"poster.jpg", "sprite.jpg", "sprite.vtt"}
+
+// PushChandlerThumbnailInvalidate best-effort evicts a deleted asset's cached thumbnail objects from the in-cell
+// Chandler so a warm cache does not keep serving bytes the cleanup sweep is removing. Chandler is a dumb cache with
+// no delete/GONE semantics — the durable authority is the stream_cleanup_obligation tombstone (which fences
+// re-publication) plus the prefix sweep that removes the objects; this only shrinks the cached-after-delete window
+// below the cache TTL. Safe on any path that tombstones an asset (live-stream deletion, artifact soft-delete).
+func PushChandlerThumbnailInvalidate(assetKey string, logger logging.Logger) {
+	postChandlerInvalidate(chandlerInvalidateRequest{
+		AssetKey: assetKey,
+		Files:    canonicalThumbnailFiles,
+	}, logger)
+}
+
+func invalidateChandlerThumbnailCache(thumbnailKey string, s3Keys []string, logger logging.Logger) {
 	if thumbnailKey == "" || len(s3Keys) == 0 {
 		return
 	}
-
-	serviceToken := strings.TrimSpace(os.Getenv("SERVICE_TOKEN"))
-	if serviceToken == "" {
-		logger.Warn("SERVICE_TOKEN missing, skipping Chandler thumbnail cache invalidation")
-		return
-	}
-
 	files := make([]string, 0, len(s3Keys))
 	seen := make(map[string]bool, len(s3Keys))
 	for _, key := range s3Keys {
@@ -8596,18 +8969,32 @@ func invalidateChandlerThumbnailCache(thumbnailKey, activeVersion string, s3Keys
 	if len(files) == 0 {
 		return
 	}
+	postChandlerInvalidate(chandlerInvalidateRequest{
+		AssetKey: thumbnailKey,
+		Files:    files,
+	}, logger)
+}
 
+// postChandlerInvalidate fans the invalidation request out to every configured in-cell Chandler, best-effort:
+// missing token/URL or any transport/non-2xx failure is logged and skipped, never surfaced. Shared by the
+// publish push (invalidateChandlerThumbnailCache) and the delete-eviction push (PushChandlerThumbnailInvalidate).
+func postChandlerInvalidate(req chandlerInvalidateRequest, logger logging.Logger) {
+	if req.AssetKey == "" || len(req.Files) == 0 {
+		return
+	}
+	serviceToken := strings.TrimSpace(os.Getenv("SERVICE_TOKEN"))
+	if serviceToken == "" {
+		logger.Warn("SERVICE_TOKEN missing, skipping Chandler thumbnail cache invalidation")
+		return
+	}
 	baseURLs := getChandlerInternalBaseURLs()
 	if len(baseURLs) == 0 {
 		logger.Warn("Chandler URL missing, skipping thumbnail cache invalidation")
 		return
 	}
-
-	body, err := json.Marshal(chandlerInvalidateRequest{
-		AssetKey:      thumbnailKey,
-		Files:         files,
-		ActiveVersion: activeVersion,
-	})
+	thumbnailKey := req.AssetKey
+	files := req.Files
+	body, err := json.Marshal(req)
 	if err != nil {
 		logger.WithError(err).Warn("Failed to encode Chandler cache invalidation request")
 		return
@@ -8810,6 +9197,15 @@ func getChandlerBaseURL() string {
 		chandlerBase = "http://" + chandlerHost + ":" + chandlerPort
 	}
 	return chandlerBase
+}
+
+// explicitLocalChandlerConfigured reports whether this deployment names ONE explicit local Chandler origin via
+// CHANDLER_BASE_URL — the single-cluster / local-nginx model where every asset URL is served from this cell. It is the
+// only positive signal that the local Chandler is the correct serving origin for a stream whose ingest cluster is
+// unknown; a managed multi-cell deployment leaves it empty (per-cluster origins are derived from Quartermaster), where
+// an unresolved cluster must NOT silently resolve to this cell.
+func explicitLocalChandlerConfigured() bool {
+	return strings.TrimSpace(os.Getenv("CHANDLER_BASE_URL")) != ""
 }
 
 // chandlerPerClusterCache caches per-cluster Chandler asset origins resolved

@@ -319,6 +319,7 @@ func TestApplyArtifactPlacement(t *testing.T) {
 		// idler holder has the higher combined score — same direction as the
 		// main balancer's rate().
 		_, _, _ = setupArtifactTestDeps(t) // resets state manager + swaps deps
+		stubClusterEntitlements(t, map[string][]string{"t1": {"c1"}})
 		sm := state.DefaultManager()
 		for _, n := range []struct {
 			id   string
@@ -326,6 +327,7 @@ func TestApplyArtifactPlacement(t *testing.T) {
 			host string
 		}{{"n-busy", 90, "https://busy"}, {"n-idle", 5, "https://idle"}} {
 			sm.SetNodeInfo(n.id, n.host, true, nil, nil, "", "", nil)
+			sm.SetNodeConnectionInfo(ctx, n.id, n.host, "", "c1", nil)
 			sm.UpdateNodeMetrics(n.id, struct {
 				CPU                  float64
 				RAMMax               float64
@@ -347,28 +349,66 @@ func TestApplyArtifactPlacement(t *testing.T) {
 			sm.SetNodeArtifacts(n.id, []*ipcpb.StoredArtifact{{ClipHash: h}}, state.ArtifactReportOrder{Fence: 1, Seq: 1})
 		}
 
-		tgt := &StreamTarget{}
+		tgt := &StreamTarget{TenantID: "t1"}
 		applyArtifactPlacement(ctx, h, tgt)
 		if tgt.FixedNodeID != "n-idle" {
 			t.Fatalf("expected idlest holder n-idle, got %q (%+v)", tgt.FixedNodeID, tgt)
 		}
 	})
 
+	t.Run("holder in a cluster not entitled to the tenant is skipped", func(t *testing.T) {
+		// SECURITY: a node holding the artifact copy in a cluster NOT entitled to this tenant must not capture the
+		// FixedNode (which bypasses the balancer). Here c1 is entitled to t1 but the only holder sits in c-rogue.
+		_, _, _ = setupArtifactTestDeps(t)
+		stubClusterEntitlements(t, map[string][]string{"t1": {"c1"}})
+		sm := state.DefaultManager()
+		sm.SetNodeInfo("rogue", "https://rogue", true, nil, nil, "", "", nil)
+		sm.SetNodeConnectionInfo(ctx, "rogue", "https://rogue", "", "c-rogue", nil)
+		sm.UpdateNodeMetrics("rogue", struct {
+			CPU                  float64
+			RAMMax               float64
+			RAMCurrent           float64
+			UpSpeed              float64
+			DownSpeed            float64
+			BWLimit              float64
+			CapIngest            bool
+			CapEdge              bool
+			CapStorage           bool
+			CapProcessing        bool
+			Roles                []string
+			StorageCapacityBytes uint64
+			StorageUsedBytes     uint64
+			ProcessingClasses    map[string]state.ClassCapacity
+		}{CPU: 5, CapStorage: true})
+		sm.TouchNode("rogue", true)
+		sm.SetProbeVerified("rogue", true)
+		sm.SetNodeArtifacts("rogue", []*ipcpb.StoredArtifact{{ClipHash: h}}, state.ArtifactReportOrder{Fence: 1, Seq: 1})
+
+		tgt := &StreamTarget{TenantID: "t1"}
+		applyArtifactPlacement(ctx, h, tgt)
+		if tgt.FixedNodeID != "" || tgt.FixedNode != "" {
+			t.Fatalf("a holder in an unentitled cluster must not be pinned, got %+v", tgt)
+		}
+	})
+
 	t.Run("cache miss pins synced storage edge", func(t *testing.T) {
 		_, _, repo := setupArtifactTestDeps(t)
+		stubClusterEntitlements(t, map[string][]string{"t1": {"c1"}})
 		repo.getArtifactSyncInfoFn = func(_ context.Context, hash string) (*state.ArtifactSyncInfo, error) {
 			return &state.ArtifactSyncInfo{ArtifactHash: hash, ArtifactType: "vod", SyncStatus: "synced", S3URL: "s3://b/k"}, nil
 		}
 		prevLB := loadBalancerInstance
 		loadBalancerInstance = &fakeLoadBalancer{nodes: map[string]state.NodeState{
-			"edge": {NodeID: "edge", BaseURL: "https://edge", CapStorage: true, IsHealthy: true},
+			// An unentitled storage edge (c-rogue) plus the entitled one (c1); only the entitled edge may be pinned.
+			"rogue": {NodeID: "rogue", BaseURL: "https://rogue", ClusterID: "c-rogue", CapStorage: true, IsHealthy: true},
+			"edge":  {NodeID: "edge", BaseURL: "https://edge", ClusterID: "c1", CapStorage: true, IsHealthy: true},
 		}}
 		t.Cleanup(func() { loadBalancerInstance = prevLB })
 
-		tgt := &StreamTarget{}
+		tgt := &StreamTarget{TenantID: "t1"}
 		applyArtifactPlacement(ctx, h, tgt)
 		if tgt.FixedNodeID != "edge" || tgt.FixedNode != "https://edge" || tgt.ContentType != "vod" {
-			t.Fatalf("expected synced edge placement, got %+v", tgt)
+			t.Fatalf("expected synced entitled edge placement, got %+v", tgt)
 		}
 	})
 

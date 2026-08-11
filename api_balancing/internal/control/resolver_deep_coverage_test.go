@@ -170,8 +170,8 @@ func TestResolveArtifactPlayback_ChapterPath(t *testing.T) {
 		WithArgs(chapterHash32, "vod", "t-chap").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"internal_name", "status", "duration_seconds", "size_bytes", "created_at",
-			"format", "storage_location", "sync_status", "has_thumbnails", "authoritative_cluster",
-		}).AddRow("vod+"+chapterHash32, "ready", int64(30), int64(1234), nil, "mkv", "local", "pending", false, ""))
+			"format", "storage_location", "sync_status", "has_thumbnails", "authoritative_cluster", "thumbnail_serving_cluster",
+		}).AddRow("vod+"+chapterHash32, "ready", int64(30), int64(1234), nil, "mkv", "local", "pending", false, "", ""))
 
 	resp, err := ResolveArtifactPlayback(ctx, &PlaybackDependencies{DB: mockDB, LocalClusterID: "c1", GeoLat: 52, GeoLon: 5}, "pb-chap")
 	if err != nil {
@@ -220,8 +220,8 @@ func TestResolveArtifactPlayback_ClipArm(t *testing.T) {
 		WithArgs("cliphash1", "clip", "tclip").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"internal_name", "status", "duration_seconds", "size_bytes", "created_at",
-			"format", "storage_location", "sync_status", "has_thumbnails", "authoritative_cluster",
-		}).AddRow("live+source", "ready", int64(8), int64(2048), nil, "mp4", "local", "synced", false, ""))
+			"format", "storage_location", "sync_status", "has_thumbnails", "authoritative_cluster", "thumbnail_serving_cluster",
+		}).AddRow("live+source", "ready", int64(8), int64(2048), nil, "mp4", "local", "synced", false, "", ""))
 
 	resp, err := ResolveArtifactPlayback(ctx, &PlaybackDependencies{DB: mockDB, LocalClusterID: "c1", GeoLat: 52, GeoLon: 5}, "clip-pb")
 	if err != nil {
@@ -274,8 +274,8 @@ func TestResolveArtifactPlayback_DvrArmIsLive(t *testing.T) {
 		WithArgs("dvrhash1", "dvr", "tdvr").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"internal_name", "status", "duration_seconds", "size_bytes", "created_at",
-			"format", "storage_location", "sync_status", "has_thumbnails", "authoritative_cluster",
-		}).AddRow("dvr+x", "recording", int64(0), int64(0), nil, "mp4", "local", "synced", false, ""))
+			"format", "storage_location", "sync_status", "has_thumbnails", "authoritative_cluster", "thumbnail_serving_cluster",
+		}).AddRow("dvr+x", "recording", int64(0), int64(0), nil, "mp4", "local", "synced", false, "", ""))
 
 	resp, err := ResolveArtifactPlayback(ctx, &PlaybackDependencies{DB: mockDB, LocalClusterID: "c1", GeoLat: 52, GeoLon: 5}, "dvr-pb")
 	if err != nil {

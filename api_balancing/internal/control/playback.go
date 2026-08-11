@@ -15,7 +15,6 @@ import (
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/geo"
 	"frameworks/api_balancing/internal/state"
-	"frameworks/api_balancing/internal/storage"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
@@ -40,6 +39,10 @@ type ContentResolution struct {
 	IngestMode   string                             // "push" or "pull" for live streams
 	ClusterPeers []*clusterpeerpb.TenantClusterPeer // Tenant's cluster context from Commodore (free with every resolve)
 	RequiresAuth bool
+	// ActiveIngestClusterID is the cluster where a live stream currently ingests,
+	// authoritative as of this resolve. Thumbnail URL construction reuses it to pick
+	// the ingest cell's Chandler instead of issuing a second per-viewer Commodore RPC.
+	ActiveIngestClusterID string
 }
 
 // DVRChapterPolicyPlaybackID resolves a chapter playback ID to its
@@ -250,14 +253,15 @@ func ResolveContent(ctx context.Context, input string) (*ContentResolution, erro
 	if CommodoreClient != nil {
 		if resp, err := CommodoreClient.ResolvePlaybackID(ctx, input); err == nil && resp.InternalName != "" {
 			return &ContentResolution{
-				ContentType:  "live",
-				ContentId:    input,
-				TenantId:     resp.TenantId,
-				StreamId:     resp.StreamId,
-				InternalName: resp.InternalName,
-				IngestMode:   resp.GetIngestMode(),
-				ClusterPeers: resp.ClusterPeers,
-				RequiresAuth: resp.GetRequiresAuth(),
+				ContentType:           "live",
+				ContentId:             input,
+				TenantId:              resp.TenantId,
+				StreamId:              resp.StreamId,
+				InternalName:          resp.InternalName,
+				IngestMode:            resp.GetIngestMode(),
+				ClusterPeers:          resp.ClusterPeers,
+				RequiresAuth:          resp.GetRequiresAuth(),
+				ActiveIngestClusterID: resp.GetOriginClusterId(),
 			}, nil
 		}
 	}
@@ -554,6 +558,11 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 	var syncStatus sql.NullString
 	var hasThumbnails bool
 	var authoritativeCluster sql.NullString
+	// The thumbnail SERVING cluster is DISTINCT from the artifact's byte-storage cluster: a thumbnail is projected to
+	// the tenant's official-durable cluster, which may differ from where the bytes live (BYOC/cross-cell). Read it
+	// separately so the thumbnail URL points at the Chandler that actually holds it, while authoritativeCluster stays
+	// the byte-placement / authorization cluster. NULL falls back to storage/origin (legacy rows).
+	var thumbnailServingCluster sql.NullString
 
 	err := deps.DB.QueryRowContext(ctx, `
 		SELECT COALESCE(internal_name, ''),
@@ -565,10 +574,11 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 		       COALESCE(storage_location, ''),
 		       COALESCE(sync_status, ''),
 		       COALESCE(has_thumbnails, false),
-		       COALESCE(storage_cluster_id, origin_cluster_id)
+		       COALESCE(storage_cluster_id, origin_cluster_id),
+		       COALESCE(thumbnail_serving_cluster_id, storage_cluster_id, origin_cluster_id)
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND artifact_type = $2 AND status != 'deleted' AND tenant_id = $3
-	`, artifactResp.ArtifactHash, artifactType, tenantID).Scan(&internalName, &status, &durationSeconds, &sizeBytes, &createdAt, &format, &storageLocation, &syncStatus, &hasThumbnails, &authoritativeCluster)
+	`, artifactResp.ArtifactHash, artifactType, tenantID).Scan(&internalName, &status, &durationSeconds, &sizeBytes, &createdAt, &format, &storageLocation, &syncStatus, &hasThumbnails, &authoritativeCluster, &thumbnailServingCluster)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			if originClusterID != "" && originClusterID != deps.LocalClusterID && deps.FedClient != nil {
@@ -774,21 +784,24 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 	// thumbnail/sprite assets the same way DVR/clip does. Expose them
 	// on chapter playback so the player has a poster/storyboard.
 	if hasThumbnails && (contentType == "dvr" || contentType == "clip" || contentType == "vod") {
-		// Pick the Chandler whose S3 actually serves this artifact's
-		// thumbnail. authoritativeCluster = COALESCE(storage_cluster_id,
-		// origin_cluster_id) — NULL on storage_cluster_id falls back to
-		// origin. Empty or unresolvable cluster context falls back to the
-		// local Chandler URL.
-		chandlerBase := getChandlerBaseURL()
-		if authoritativeCluster.Valid && authoritativeCluster.String != "" {
-			if perCluster := getChandlerBaseURLForCluster(authoritativeCluster.String); perCluster != "" {
-				chandlerBase = perCluster
-			}
+		// Serve from the Chandler of the authoritative thumbnail serving cluster
+		// (thumbnail_serving_cluster_id, falling back to storage/origin for legacy
+		// rows), NOT the byte-storage cluster, which can differ for a BYOC/cross-cell
+		// artifact. Same fail-closed rule as the live path: a KNOWN serving cluster
+		// that cannot be mapped yields NO thumbnail (not a wrong-cell local URL); an
+		// empty/unknown cluster only falls back to the local Chandler under an
+		// explicit single-cell origin.
+		servingCluster := ""
+		if thumbnailServingCluster.Valid {
+			servingCluster = thumbnailServingCluster.String
 		}
+		chandlerBase := resolveThumbnailChandlerBase(servingCluster)
 		metadata.ThumbnailAssets = buildThumbnailAssets(chandlerBase, artifactResp.ArtifactHash)
 	}
 	if metadata.ThumbnailAssets == nil && contentType == "dvr" && streamID != "" && streamInternalName != "" {
-		chandlerBase := resolveLiveThumbnailChandlerBase(ctx, tenantID, streamInternalName)
+		// The parent stream's live poster lives on the ingest cell that created this DVR
+		// (origin_cluster_id); reuse it so a cross-cell DVR poster names the right Chandler.
+		chandlerBase := resolveThumbnailChandlerBase(artifactResp.GetOriginClusterId())
 		metadata.ThumbnailAssets = buildPosterThumbnailAssets(chandlerBase, streamID)
 	}
 
@@ -898,7 +911,7 @@ func preferredArtifactOutputKeys(format string) []string {
 }
 
 // ResolveLivePlayback resolves playback endpoints for a live stream using load balancing
-func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKey string, internalName string, streamID string, tenantID string) (*sharedpb.ViewerEndpointResponse, error) {
+func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKey string, internalName string, streamID string, tenantID string, activeIngestClusterID string) (*sharedpb.ViewerEndpointResponse, error) {
 	if deps.LB == nil {
 		return nil, fmt.Errorf("load balancer not available")
 	}
@@ -1022,7 +1035,7 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 		// Live streams: Helmsman uploads thumbnails to Chandler whenever
 		// Mist's process_thumbs runs. The asset may 404 for streams that
 		// have never been live; the player's fallback chain handles that.
-		chandlerBase := resolveLiveThumbnailChandlerBase(ctx, tenantID, internalName)
+		chandlerBase := resolveThumbnailChandlerBase(activeIngestClusterID)
 		metadata.ThumbnailAssets = buildThumbnailAssets(chandlerBase, streamID)
 	}
 
@@ -1049,39 +1062,40 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 	}, nil
 }
 
-// resolveLiveThumbnailChandlerBase picks the Chandler base URL whose S3
-// the thumbnail upload path will write to for this stream. Mirrors the
-// chain processThumbnailUploadRequest uses — origin from Commodore plus
-// official from cached Quartermaster routing — so write and read end up
-// at the same cluster's Chandler. Uses the local Chandler base URL when
-// cluster context is unavailable so single-cluster deployments keep serving
-// thumbnails.
-func resolveLiveThumbnailChandlerBase(ctx context.Context, tenantID, internalName string) string {
-	originCluster := ""
-	if CommodoreClient != nil && internalName != "" {
-		rctx, cancel := context.WithTimeout(ctx, 1*time.Second)
-		defer cancel()
-		if resp, err := CommodoreClient.ResolveInternalName(rctx, internalName); err == nil && resp != nil {
-			originCluster = resp.GetOriginClusterId()
-			if tenantID == "" {
-				tenantID = resp.GetTenantId()
-			}
-		}
+// resolveThumbnailChandlerBase picks the Chandler base URL that serves a thumbnail whose serving cell is servingClusterID.
+// It is the single fail-closed rule for BOTH live thumbnails (servingClusterID = the ingest cell that locally minted
+// them) and durable artifact thumbnails (servingClusterID = thumbnail_serving_cluster_id). The URL must name the cell
+// whose S3 actually holds the object, never the tenant's byte-storage or this viewer's local cell — a cross-cell
+// mismatch would 404.
+//
+// A KNOWN serving cluster that cannot be mapped to a Chandler returns "" — no thumbnail — rather than a wrong-cell local
+// URL.
+//
+// An EMPTY serving cluster is NOT proof of a single-cell deployment: it can equally be unresolved authority (a legacy
+// row, or a resolve that could not name the cell). Falling back to the local Chandler is therefore correct ONLY when
+// this deployment explicitly serves every asset from one local origin (CHANDLER_BASE_URL — the single-cluster /
+// local-nginx model). In a managed multi-cell deployment an empty cluster means unknown authority, so return "" (no
+// thumbnail) rather than manufacture a wrong-cell local URL.
+func resolveThumbnailChandlerBase(servingClusterID string) string {
+	if servingClusterID != "" {
+		return getChandlerBaseURLForCluster(servingClusterID)
 	}
-	storageCluster, mode := resolveThumbnailStorageCluster(ctx, tenantID, originCluster)
-	if mode == storage.StorageUnavailable || storageCluster == "" {
+	if explicitLocalChandlerConfigured() {
 		return getChandlerBaseURL()
 	}
-	if perCluster := getChandlerBaseURLForCluster(storageCluster); perCluster != "" {
-		return perCluster
-	}
-	return getChandlerBaseURL()
+	return ""
 }
 
 func buildThumbnailAssets(chandlerBase, assetKey string) *sharedpb.ThumbnailAssets {
 	if chandlerBase == "" || assetKey == "" {
 		return nil
 	}
+	// The served path is /assets/{assetKey}/{file}: Chandler's SOLE public route, which it serves deterministically
+	// (thumbnails/{assetKey}/{file}) with no per-request resolver. A fixed, resolver-free path is what makes a URL
+	// producer and the media-cell Chandler compatible at REQUEST TIME regardless of their relative versions — neither
+	// can emit or receive a path the other cannot serve. (Install-time ordering is separate: the planner still brings
+	// the in-cell Foghorn up before Chandler to establish Chandler's readiness sentinel.) chandlerBase is this asset's
+	// serving-cluster hostname (cluster safety is in the host). See docs/architecture/thumbnails.md.
 	base := strings.TrimRight(chandlerBase, "/") + "/assets/" + assetKey
 	return &sharedpb.ThumbnailAssets{
 		PosterUrl:    base + "/poster.jpg",

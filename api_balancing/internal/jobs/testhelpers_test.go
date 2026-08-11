@@ -152,7 +152,8 @@ func (m *mockCommodoreClient) UpdateArtifactCatalogSnapshot(_ context.Context, r
 	if m.snapshotRespFn != nil {
 		return m.snapshotRespFn(req)
 	}
-	return &commodorepb.UpdateArtifactCatalogSnapshotResponse{Found: true, CurrentRevision: req.GetSourceRevision()}, nil
+	// Default = a NEW Commodore: echo the stored serving cluster so the reconciler's mixed-version ack passes.
+	return &commodorepb.UpdateArtifactCatalogSnapshotResponse{Found: true, CurrentRevision: req.GetSourceRevision(), ThumbnailServingClusterId: req.ThumbnailServingClusterId}, nil
 }
 
 // freezeCapture records calls to SendFreeze for assertion.

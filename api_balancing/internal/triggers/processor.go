@@ -3739,8 +3739,10 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *ipcpb.MistTrigger) (strin
 	// Bind to the AUTHENTICATED connection: processMistTrigger stamped the envelope node_id from the
 	// connection identity, so overwrite the nested self-asserted node_id with it. This update can then only
 	// mutate the reporting node's OWN heartbeat/inventory/metrics/roles state — never another node's by naming
-	// it in the payload. (Bounding self-advertised cap_storage/cap_processing against enrollment authority is
-	// the broader server-owned NodeSession work, still open — see PLAN P1-6.)
+	// it in the payload. Self-advertised cap_storage/cap_processing/roles are SCHEDULER INPUT by design (a node
+	// declares what it can do); they are NOT an authorization claim. Cross-tenant authorization is the authenticated
+	// node->cluster binding plus Quartermaster cluster<->tenant entitlement, enforced where capability is CONSUMED
+	// (placement/serve via ClusterAccessibleForTenant), not by bounding the report here.
 	if authNode := strings.TrimSpace(trigger.GetNodeId()); authNode != "" {
 		nu.NodeId = authNode
 	}
@@ -3899,18 +3901,15 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *ipcpb.MistTrigger) (strin
 		return nodeState.Artifacts
 	}()
 
-	// Update artifacts directly from protobuf - this is critical for VOD playback.
-	// Applied as an AUTHORITATIVE whole-node inventory: an empty slice clears stale artifacts from a
-	// node that has lost all local files (prevents ghost artifacts in routing). Two guards keep a
-	// non-authoritative report from orphaning live copies:
-	//   1. A snapshot the sidecar FLAGS as incomplete (no complete filesystem scan yet) is skipped.
-	//   2. A report lacking the versioned-complete contract (report_seq is a sidecar-set monotonic
-	//      counter; a report_seq of 0 means a legacy sidecar that predates both the incomplete flag AND
-	//      the sequence) is ALSO skipped. Its absent `artifacts_snapshot_incomplete` defaults to false,
-	//      so without this guard a legacy sidecar's partial/empty scan would pass as "complete" and
-	//      clear routing-visible copies during a mixed-version rollout. We fail closed: keep the last
-	//      trusted inventory until a versioned report arrives. (The fence is Foghorn-stamped, so it is
-	//      the sidecar-owned seq that proves the capability.)
+	// Update artifacts directly from protobuf - this is critical for VOD playback. Every connected sidecar is
+	// inventory-authoritative (registration enforces MinControlProtocolVersion), so inventory authority is
+	// session-owned, never selected by a payload field. Two apply modes remain:
+	//   1. A snapshot the sidecar FLAGS as incomplete (no complete filesystem scan yet) is not applied and cordons
+	//      the node — the sidecar's own "I could not scan" signal.
+	//   2. A VERSIONED report (report_seq > 0) is applied as an AUTHORITATIVE whole-node inventory: an empty slice
+	//      clears stale artifacts from a node that has lost all local files (prevents ghost routing).
+	// A report with report_seq <= 0 from an authoritative session is a protocol violation (not a legacy downgrade —
+	// there is no legacy path): it is dropped, never silently applied under weaker semantics.
 	switch {
 	case nu.GetArtifactsSnapshotIncomplete():
 		// The sidecar could not complete its scan (cold start OR a lost mount / read error): its last
@@ -3927,8 +3926,11 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *ipcpb.MistTrigger) (strin
 				Warn("Cordoned node from artifact routing: sidecar reported an incomplete scan (last-good inventory retained, not orphaned)")
 		}
 	case nu.GetArtifactsReportSeq() <= 0:
+		// Protocol violation: an authoritative session (the only kind that can connect) must send a versioned
+		// report. Drop it rather than apply an unordered whole-node snapshot; the node stays on its last accepted
+		// inventory until a valid versioned report arrives.
 		p.logger.WithField("node_id", nu.GetNodeId()).
-			Warn("Skipping unversioned node artifact report (legacy sidecar without the versioned-complete contract); not orphaning inventory")
+			Warn("Dropping unversioned artifact report from an authoritative session (report_seq<=0); expected a versioned report")
 	default:
 		// A superseded report (a newer connection fence already won the artifact inventory) leaves
 		// this node cordoned; there is no accepted inventory change to propagate downstream, so only
@@ -4446,13 +4448,11 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 	}
 
 	coldTenantID := p.ownerTenantID
-	// Provider attribution = this emitting Foghorn's owner tenant + cluster. This is CORRECT BY
-	// CONSTRUCTION this release: freeze authorization restricts durable writes to the tenant's platform-
-	// official backend that THIS cell mints+verifies locally, and federated freeze is rejected — so every
-	// synced row's bytes live in a cluster this Foghorn operates. Once cross-cluster durable replication
-	// (see docs/rfcs/cross-cluster-durable-replication-v1.md) lands, the destination/provider will be read
-	// from the persisted replication assignment instead of inferred from the emitter. Customer billing
-	// rates the usage tenant; settlement views route by these provider fields.
+	// Provider attribution = this emitting Foghorn's owner tenant + cluster. This is CORRECT BY CONSTRUCTION:
+	// freeze authorization restricts durable writes to the tenant's platform-official backend that THIS cell
+	// mints+verifies locally, and federated freeze is rejected — so every synced row's bytes live in a cluster this
+	// Foghorn operates, making the emitter the authoritative provider. Customer billing rates the usage tenant;
+	// settlement views route by these provider fields.
 	coldSnapshot := &ipcpb.StorageSnapshot{
 		NodeId:                   "s3",
 		Timestamp:                time.Now().Unix(),

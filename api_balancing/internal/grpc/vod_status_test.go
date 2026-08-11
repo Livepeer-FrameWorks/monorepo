@@ -69,6 +69,12 @@ func (f *fakeVodS3Client) GeneratePresignedGET(string, time.Duration) (string, e
 	return "https://example.com/presigned", nil
 }
 
+// BackendDescriptor lets CreateVodUpload resolve a non-empty local backend fingerprint (invariant I2), so a create
+// records backend ownership up front rather than failing closed on an unattributable store.
+func (f *fakeVodS3Client) BackendDescriptor() (bucket, endpoint, region, prefix string) {
+	return "test-bucket", "https://s3.example", "eu-central", "prod"
+}
+
 func newStatusServer(t *testing.T, s3 *fakeVodS3Client) (*FoghornGRPCServer, sqlmock.Sqlmock, func()) {
 	t.Helper()
 	db, mock, err := sqlmock.New()
@@ -76,6 +82,13 @@ func newStatusServer(t *testing.T, s3 *fakeVodS3Client) (*FoghornGRPCServer, sql
 		t.Fatal(err)
 	}
 	srv := NewFoghornGRPCServer(db, logging.NewLogger(), nil, nil, nil, nil, s3, nil)
+	// The VOD upload path resolves the tenant's official durable cluster (I1). Wire a Quartermaster that resolves
+	// it to this cell plus a local-mint resolver so CreateVodUpload reaches the S3/DB flow the tests exercise.
+	srv.SetClusterID("central-primary")
+	srv.SetQuartermasterClient(&mockQMRouting{clusterID: "central-primary"})
+	srv.SetStorageResolverFactory(func(_ context.Context, _ string) *storage.ClusterResolver {
+		return &storage.ClusterResolver{LocalClusterID: "central-primary", LocalS3ClientPresent: true}
+	})
 	return srv, mock, func() { _ = db.Close() }
 }
 
@@ -84,7 +97,7 @@ const statusSelect = `SELECT v.artifact_hash, COALESCE\(v.s3_key, ''\), a.status
 
 func statusRows() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
-		"artifact_hash", "s3_key", "status", "error_message", "retention_until", "upload_expires_at", "total_parts",
+		"artifact_hash", "s3_key", "status", "error_message", "retention_until", "upload_expires_at", "total_parts", "backend_id",
 	})
 }
 
@@ -219,7 +232,7 @@ func TestGetVodUploadStatus_TerminalStateSkipsS3(t *testing.T) {
 	mock.ExpectQuery(statusSelect).
 		WithArgs("up-1", "t1").
 		WillReturnRows(statusRows().AddRow("hash-1", "vod/t1/hash-1/hash-1.mp4", "ready",
-			nil, time.Now().Add(30*24*time.Hour), nil, nil))
+			nil, time.Now().Add(30*24*time.Hour), nil, nil, ""))
 
 	resp, err := srv.GetVodUploadStatus(context.Background(), &sharedpb.GetVodUploadStatusRequest{
 		TenantId: "t1",
@@ -254,7 +267,7 @@ func TestGetVodUploadStatus_FailedStateReturnsErrorCode(t *testing.T) {
 	mock.ExpectQuery(statusSelect).
 		WithArgs("up-1", "t1").
 		WillReturnRows(statusRows().AddRow("hash-1", "vod/t1/hash-1/hash-1.mp4", "failed",
-			"transcode crashed", nil, nil, nil))
+			"transcode crashed", nil, nil, nil, ""))
 
 	resp, err := srv.GetVodUploadStatus(context.Background(), &sharedpb.GetVodUploadStatusRequest{
 		TenantId: "t1",
@@ -277,7 +290,7 @@ func TestGetVodUploadStatus_ProcessingSkipsExpiryAndS3(t *testing.T) {
 	mock.ExpectQuery(statusSelect).
 		WithArgs("up-1", "t1").
 		WillReturnRows(statusRows().AddRow("hash-1", "vod/t1/hash-1/hash-1.mp4", "processing",
-			nil, nil, expired, 5))
+			nil, nil, expired, 5, ""))
 
 	resp, err := srv.GetVodUploadStatus(context.Background(), &sharedpb.GetVodUploadStatusRequest{
 		TenantId: "t1",
@@ -302,7 +315,7 @@ func TestGetVodUploadStatus_ExpiredSession(t *testing.T) {
 	expired := time.Now().Add(-1 * time.Hour)
 	mock.ExpectQuery(statusSelect).
 		WithArgs("up-1", "t1").
-		WillReturnRows(statusRows().AddRow("hash-1", "key", "uploading", nil, nil, expired, 5))
+		WillReturnRows(statusRows().AddRow("hash-1", "key", "uploading", nil, nil, expired, 5, ""))
 
 	resp, err := srv.GetVodUploadStatus(context.Background(), &sharedpb.GetVodUploadStatusRequest{
 		TenantId: "t1",
@@ -333,7 +346,7 @@ func TestGetVodUploadStatus_LiveReconciliation(t *testing.T) {
 	mock.ExpectQuery(statusSelect).
 		WithArgs("up-1", "t1").
 		WillReturnRows(statusRows().AddRow("hash-1", "vod/t1/hash-1/hash-1.mp4", "uploading",
-			nil, nil, future, 4))
+			nil, nil, future, 4, testStubBackendID)) // owned by this cell → live reconciliation runs
 
 	resp, err := srv.GetVodUploadStatus(context.Background(), &sharedpb.GetVodUploadStatusRequest{
 		TenantId: "t1",

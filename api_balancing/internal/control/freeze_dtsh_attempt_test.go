@@ -17,10 +17,9 @@ func storagePeerSet(ids ...string) []*clusterpeerpb.TenantClusterPeer {
 	return peers
 }
 
-// Storage authority (single-provider interim): the ONLY authorized durable destination is the tenant's
-// platform-OFFICIAL cluster with active/unexpired access (peer membership). Subscribed/generic peers are
-// NOT storage destinations, and possession (checked elsewhere) is self-attested so the SOURCE must also be
-// tenant-owned / origin / official.
+// Storage authority: the ONLY authorized durable destination is the tenant's platform-OFFICIAL cluster with
+// active/unexpired access (peer membership). Subscribed/generic peers are NOT storage destinations, and
+// possession (checked elsewhere) is self-attested so the SOURCE must also be tenant-owned / origin / official.
 func TestAuthorizeStorageReplication(t *testing.T) {
 	// Tenant-A's entitlement: official cluster "official-a" (active, unexpired). "subscribed-remote" is an
 	// active peer but NOT the official cluster, so it is not a storage destination. An EXPIRED grant to the
@@ -42,7 +41,7 @@ func TestAuthorizeStorageReplication(t *testing.T) {
 		{"same-origin cross-tenant node denied", "tenant-b", "byoc-a", "tenant-a", "official-a", rA, false},
 		// Cross-tenant: a tenant-B node self-reports possession of tenant-A's hash → denied.
 		{"cross-tenant source denied", "tenant-b", "byoc-b", "tenant-a", "official-a", rA, false},
-		// A subscribed remote (active peer) is NOT a storage destination this release.
+		// A subscribed remote (active peer) is NOT a valid storage destination.
 		{"subscribed-remote destination denied", "tenant-a", "byoc-a", "tenant-a", "subscribed-remote", rA, false},
 		// Destination is the official cluster but the tenant's access to it is expired (absent from peers).
 		{"expired official access denied", "tenant-a", "byoc-a", "tenant-a", "official-a", rExpired, false},
@@ -104,7 +103,7 @@ func TestClaimFreezeAttempt_TenantScopedClaimableStates(t *testing.T) {
 	// The claim + its publication-ledger rows commit in one transaction.
 	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_object_key = \\$6.*tenant_id::text = \\$4.*status = 'ready'.*is_complete = true AND an.is_orphaned = false.*sync_status IN \\('pending', 'failed', 'synced'\\).*sync_status = 'in_progress' AND sync_request_id = \\$2 AND sync_node_id = \\$3.*sync_object_key = \\$6.*storage_cluster_id IS NOT DISTINCT FROM NULLIF\\(\\$5, ''\\)").
-		WithArgs("hash-1", "req-1", "node-1", "tenant-1", "", "key-1").
+		WithArgs("hash-1", "req-1", "node-1", "tenant-1", "", "key-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO foghorn.freeze_publication_ledger").WillReturnResult(sqlmock.NewResult(0, 4))
 	mock.ExpectCommit()
@@ -126,7 +125,7 @@ func TestClaimFreezeAttempt_UnclaimableDenies(t *testing.T) {
 	// Zero rows claimed → the transaction rolls back with no ledger rows.
 	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status IN \\('pending', 'failed', 'synced'\\)").
-		WithArgs("hash-1", "req-1", "node-1", "tenant-1", "", "key-1").
+		WithArgs("hash-1", "req-1", "node-1", "tenant-1", "", "key-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectRollback()
 
@@ -187,10 +186,10 @@ func TestApplyDtshCompletionFailure_MatchesAttempt(t *testing.T) {
 		WithArgs("hash-d", "dtsh-req", "node-1", "boom", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"sync_object_key"}).AddRow("obj/hash-d"))
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
-		WithArgs(FreezeStagingKey("obj/hash-d.dtsh", "dtsh-req")).
+		WithArgs(FreezeStagingKey("obj/hash-d.dtsh", "dtsh-req"), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
-		WithArgs(FreezePublishDtshKey("obj/hash-d", "dtsh-req")).
+		WithArgs(FreezePublishDtshKey("obj/hash-d", "dtsh-req"), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 

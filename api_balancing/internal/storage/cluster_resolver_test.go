@@ -21,9 +21,15 @@ func TestS3BackingEqual_FullTuple(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "case + whitespace differences in endpoint/region normalized",
+			name: "case/whitespace in endpoint/region is a DIFFERENT descriptor (byte-exact, matches immutable identity)",
 			a:    S3Backing{Bucket: "frameworks", Endpoint: " https://S3.US-EAST-1.amazonaws.com ", Region: " US-EAST-1 "},
 			b:    S3Backing{Bucket: "frameworks", Endpoint: "https://s3.us-east-1.amazonaws.com", Region: "us-east-1"},
+			want: false,
+		},
+		{
+			name: "empty region defaults to us-east-1 (the ONLY normalization)",
+			a:    S3Backing{Bucket: "frameworks", Endpoint: "https://s3.amazonaws.com", Region: ""},
+			b:    S3Backing{Bucket: "frameworks", Endpoint: "https://s3.amazonaws.com", Region: "us-east-1"},
 			want: true,
 		},
 		{
@@ -49,6 +55,24 @@ func TestS3BackingEqual_FullTuple(t *testing.T) {
 			a:    S3Backing{Bucket: "frameworks", Region: "us-east-1"},
 			b:    S3Backing{Bucket: "frameworks", Region: "us-east-1"},
 			want: true,
+		},
+		{
+			name: "same provider tuple, DIFFERENT prefix — must NOT match (shared bucket, distinct keyspace)",
+			a:    S3Backing{Bucket: "frameworks", Endpoint: "https://nbg1.your-objectstorage.com", Region: "nbg1", Prefix: "prod"},
+			b:    S3Backing{Bucket: "frameworks", Endpoint: "https://nbg1.your-objectstorage.com", Region: "nbg1", Prefix: "staging"},
+			want: false,
+		},
+		{
+			name: "same provider tuple + same prefix — match",
+			a:    S3Backing{Bucket: "frameworks", Endpoint: "https://nbg1.your-objectstorage.com", Region: "nbg1", Prefix: "prod"},
+			b:    S3Backing{Bucket: "frameworks", Endpoint: "https://nbg1.your-objectstorage.com", Region: "nbg1", Prefix: "prod"},
+			want: true,
+		},
+		{
+			name: "prefix compared EXACTLY — whitespace/case is a different keyspace",
+			a:    S3Backing{Bucket: "frameworks", Region: "nbg1", Prefix: "prod"},
+			b:    S3Backing{Bucket: "frameworks", Region: "nbg1", Prefix: " Prod"},
+			want: false,
 		},
 	}
 	for _, tc := range cases {
@@ -149,6 +173,28 @@ func TestClusterResolver_OriginAdvertisedButBucketDiffers_DelegatesNotLocalMint(
 	})
 	if cluster != "selfhost-eu" || mode != StorageMintViaFederation {
 		t.Fatalf("got (%q, %s); want (selfhost-eu, federation) — same bucket name across endpoints must NOT pass local-mint", cluster, mode)
+	}
+}
+
+func TestClusterResolver_OriginAdvertisedButPrefixDiffers_DelegatesNotLocalMint(t *testing.T) {
+	// Both clusters share the SAME provider tuple (bucket/endpoint/region) but write under DIFFERENT prefixes. This
+	// cell is configured for `prod`; the origin cluster addresses `staging`. Minting locally would write through THIS
+	// cell's `prod` prefix at a key the origin's `staging` keyspace can never address — wrong placement + broken URLs.
+	// The resolver MUST delegate (federated), not local-mint.
+	originBacking := S3Backing{Bucket: "frameworks", Endpoint: "https://nbg1.your-objectstorage.com", Region: "nbg1", Prefix: "staging"}
+	localBacking := S3Backing{Bucket: "frameworks", Endpoint: "https://nbg1.your-objectstorage.com", Region: "nbg1", Prefix: "prod"}
+	f := &resolverFixture{
+		localCluster:   "platform-eu",
+		servedClusters: map[string]bool{"platform-eu": true, "selfhost-eu": true},
+		localS3Backing: localBacking,
+		localS3Present: true,
+		advertised:     map[string]S3Backing{"selfhost-eu": originBacking},
+	}
+	r := f.build()
+
+	cluster, mode := r.Resolve(ResolverInput{OriginClusterID: "selfhost-eu"})
+	if cluster != "selfhost-eu" || mode != StorageMintViaFederation {
+		t.Fatalf("got (%q, %s); want (selfhost-eu, federation) — a shared bucket under a different prefix must NOT pass local-mint", cluster, mode)
 	}
 }
 

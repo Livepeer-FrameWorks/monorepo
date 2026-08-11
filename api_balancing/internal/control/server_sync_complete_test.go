@@ -59,7 +59,7 @@ func expectMetadata(mock sqlmock.Sqlmock, hash, requestID, node, artifactType, i
 // one statement per attempt-object pair (staging + candidate). The staging key pins it; the rest is loose.
 func expectLedgerRecord(mock sqlmock.Sqlmock, stagingKey string) {
 	mock.ExpectExec("INSERT INTO foghorn.freeze_publication_ledger").
-		WithArgs(stagingKey, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs(stagingKey, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 }
 
@@ -130,10 +130,10 @@ func TestProcessSyncComplete_Success_AppliesGuardedTransaction(t *testing.T) {
 	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").WillReturnResult(sqlmock.NewResult(0, 1))
 	// Both staging objects are durably enqueued for deletion IN the transaction (main then .dtsh).
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
-		WithArgs(FreezeStagingKey("tenant-1/vods/hash-1/hash-1.mp4", "req-1")).
+		WithArgs(FreezeStagingKey("tenant-1/vods/hash-1/hash-1.mp4", "req-1"), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
-		WithArgs(FreezeStagingKey("tenant-1/vods/hash-1/hash-1.mp4.dtsh", "req-1")).
+		WithArgs(FreezeStagingKey("tenant-1/vods/hash-1/hash-1.mp4.dtsh", "req-1"), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectLedgerClear(mock)
 	mock.ExpectCommit()
@@ -173,10 +173,10 @@ func TestProcessSyncComplete_BundledDtshEnqueuesOverlappingIncrementalAttempt(t 
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// The overlapping incremental .dtsh attempt's staging + candidate are enqueued (before the node copy).
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
-		WithArgs(FreezeStagingKey(obj+".dtsh", "old-dtsh")).
+		WithArgs(FreezeStagingKey(obj+".dtsh", "old-dtsh"), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
-		WithArgs(FreezePublishDtshKey(obj, "old-dtsh")).
+		WithArgs(FreezePublishDtshKey(obj, "old-dtsh"), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectNodeCopyGained(mock, "hash-1", "node-1", 1024)
 	mock.ExpectExec("INSERT INTO foghorn.vod_metadata").
@@ -185,10 +185,10 @@ func TestProcessSyncComplete_BundledDtshEnqueuesOverlappingIncrementalAttempt(t 
 	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").WillReturnResult(sqlmock.NewResult(0, 1))
 	// This attempt's OWN main + bundled .dtsh staging objects (req-1) are enqueued last.
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
-		WithArgs(FreezeStagingKey(obj, "req-1")).
+		WithArgs(FreezeStagingKey(obj, "req-1"), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
-		WithArgs(FreezeStagingKey(obj+".dtsh", "req-1")).
+		WithArgs(FreezeStagingKey(obj+".dtsh", "req-1"), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectLedgerClear(mock)
 	mock.ExpectCommit()
@@ -242,7 +242,7 @@ func TestProcessSyncComplete_DtshAbsentNotFinalized(t *testing.T) {
 	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").WillReturnResult(sqlmock.NewResult(0, 1))
 	// Only the MAIN staging object is enqueued (the .dtsh was absent, so it was never promoted).
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
-		WithArgs(FreezeStagingKey("tenant-1/vods/hash-1/hash-1.mp4", "req-1")).
+		WithArgs(FreezeStagingKey("tenant-1/vods/hash-1/hash-1.mp4", "req-1"), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectLedgerClear(mock)
 	mock.ExpectCommit()
@@ -288,10 +288,10 @@ func TestProcessSyncComplete_DtshPromoteFailsStillCleansDtshStaging(t *testing.T
 	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").WillReturnResult(sqlmock.NewResult(0, 1))
 	// BOTH staging objects are enqueued — the main and the .dtsh (present-but-not-finalized) — so neither leaks.
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
-		WithArgs(FreezeStagingKey(obj, "req-1")).
+		WithArgs(FreezeStagingKey(obj, "req-1"), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
-		WithArgs(FreezeStagingKey(obj+".dtsh", "req-1")).
+		WithArgs(FreezeStagingKey(obj+".dtsh", "req-1"), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectLedgerClear(mock)
 	mock.ExpectCommit()
@@ -479,10 +479,10 @@ func TestProcessSyncComplete_UsesProviderObservedSize(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
-		WithArgs(FreezeStagingKey("tenant-1/vods/hash-1/hash-1.mp4", "req-1")).
+		WithArgs(FreezeStagingKey("tenant-1/vods/hash-1/hash-1.mp4", "req-1"), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
-		WithArgs(FreezeStagingKey("tenant-1/vods/hash-1/hash-1.mp4.dtsh", "req-1")).
+		WithArgs(FreezeStagingKey("tenant-1/vods/hash-1/hash-1.mp4.dtsh", "req-1"), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectLedgerClear(mock)
 	mock.ExpectCommit()
@@ -516,10 +516,10 @@ func TestProcessSyncComplete_ConsumesPersistedObjectKey(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
-		WithArgs(FreezeStagingKey("tenant-1/frozen/hash-k.custom", "req-k")).
+		WithArgs(FreezeStagingKey("tenant-1/frozen/hash-k.custom", "req-k"), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
-		WithArgs(FreezeStagingKey("tenant-1/frozen/hash-k.custom.dtsh", "req-k")).
+		WithArgs(FreezeStagingKey("tenant-1/frozen/hash-k.custom.dtsh", "req-k"), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectLedgerClear(mock)
 	mock.ExpectCommit()
@@ -558,7 +558,7 @@ func TestProcessSyncComplete_DtshOnlyOnSyncedArtifact(t *testing.T) {
 	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").WillReturnResult(sqlmock.NewResult(0, 1))
 	// The promoted .dtsh staging object is durably enqueued for deletion IN the dtsh-only transaction.
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
-		WithArgs(FreezeStagingKey("tenant-1/clip-int/clips/hash-d.mp4.dtsh", "req-d")).
+		WithArgs(FreezeStagingKey("tenant-1/clip-int/clips/hash-d.mp4.dtsh", "req-d"), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectLedgerClear(mock)
 	mock.ExpectCommit()
@@ -668,7 +668,7 @@ func TestProcessSyncComplete_PayloadNodeIDIgnored_UsesConnectionIdentity(t *test
 	expectNodeCopyGained(mock, "hash-1", "fallback-node", 1024)
 	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
-		WithArgs(FreezeStagingKey("tenant-1/clip-int/clips/hash-1.mp4", "")).
+		WithArgs(FreezeStagingKey("tenant-1/clip-int/clips/hash-1.mp4", ""), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectLedgerClear(mock)
 	mock.ExpectCommit()
@@ -700,15 +700,15 @@ func TestProcessSyncComplete_RepublishEnqueuesSupersededObject(t *testing.T) {
 		WithArgs("s3://bucket/tenant-1/vods/vod-hash/vod-hash.mp4.att-", false, "vod-hash", int64(1024), "", "node-1", "tenant-1", "tenant-1/vods/vod-hash/vod-hash.mp4", "tenant-1/vods/vod-hash/vod-hash.mp4.att-", "").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// Superseded MEDIA object + its version-addressed .dtsh index enqueued (before node-copy).
-	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").WithArgs(prev).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").WithArgs(prevDtsh).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").WithArgs(prev, sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").WithArgs(prevDtsh, sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
 	expectNodeCopyGained(mock, "vod-hash", "node-1", 1024)
 	mock.ExpectExec("INSERT INTO foghorn.vod_metadata").
 		WithArgs("vod-hash", "tenant-1/vods/vod-hash/vod-hash.mp4.att-", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
-		WithArgs(FreezeStagingKey("tenant-1/vods/vod-hash/vod-hash.mp4", "")).
+		WithArgs(FreezeStagingKey("tenant-1/vods/vod-hash/vod-hash.mp4", ""), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectLedgerClear(mock)
 	mock.ExpectCommit()
@@ -742,15 +742,15 @@ func TestProcessSyncComplete_LegacyRepublishRecoversSupersededObjectFromS3URL(t 
 		WithArgs("s3://bucket/"+legacyKey+".att-", false, "legacy-hash", int64(1024), "", "node-1", "tenant-1", legacyKey, legacyKey+".att-", "").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// The prior object recovered from s3_url (== legacyKey) and its co-located .dtsh are enqueued as superseded.
-	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").WithArgs(legacyKey).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").WithArgs(legacyKey + ".dtsh").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").WithArgs(legacyKey, sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").WithArgs(legacyKey+".dtsh", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
 	expectNodeCopyGained(mock, "legacy-hash", "node-1", 1024)
 	mock.ExpectExec("INSERT INTO foghorn.vod_metadata").
 		WithArgs("legacy-hash", legacyKey+".att-", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
-		WithArgs(FreezeStagingKey(legacyKey, "")).
+		WithArgs(FreezeStagingKey(legacyKey, ""), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectLedgerClear(mock)
 	mock.ExpectCommit()
@@ -792,7 +792,7 @@ func TestProcessSyncComplete_Failed(t *testing.T) {
 		FreezePublishDtshKey("obj/hash-fail", "req-9"),
 	} {
 		mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
-			WithArgs(k).
+			WithArgs(k, sqlmock.AnyArg()).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 	}
 	mock.ExpectCommit()
@@ -872,7 +872,7 @@ func TestProcessSyncComplete_LocalMissing_OtherCopySurvives(t *testing.T) {
 		FreezePublishDtshKey("obj/hash-lm", "req-lm"),
 	} {
 		mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
-			WithArgs(k).
+			WithArgs(k, sqlmock.AnyArg()).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 	}
 	mock.ExpectCommit()

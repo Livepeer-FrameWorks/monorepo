@@ -76,7 +76,7 @@ func TestConnectRejectsAndHidesConnectionWhenOwnershipLost(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"nextval"}).AddRow(int64(2)))
 
 	stream := &registerOnceStream{msgs: []*ipcpb.ControlMessage{
-		{Payload: &ipcpb.ControlMessage_Register{Register: &ipcpb.Register{NodeId: "node-x"}}},
+		{Payload: &ipcpb.ControlMessage_Register{Register: &ipcpb.Register{NodeId: "node-x", ControlProtocolVersion: MinControlProtocolVersion}}},
 	}}
 
 	srv := &Server{}
@@ -89,6 +89,50 @@ func TestConnectRejectsAndHidesConnectionWhenOwnershipLost(t *testing.T) {
 	registry.mu.RUnlock()
 	if got != nil {
 		t.Fatal("connection that lost the fenced ownership race must NOT be dispatch-visible in registry.conns")
+	}
+}
+
+// A sidecar declaring a control-protocol version BELOW the minimum is rejected at registration with
+// FailedPrecondition at the EARLIEST point — before fence allocation, fingerprint authentication, ownership
+// acquisition, or registry publication. It mutates no state: the fingerprint resolver fatals if called, and the DB
+// mock expects no query, so a fence allocation (SELECT nextval) would surface as Unavailable, not FailedPrecondition.
+func TestConnectRejectsSubMinimumProtocolBeforeAnyMutation(t *testing.T) {
+	ensureRegistry(t)
+
+	// Authentication (fingerprint resolution) must NOT be reached.
+	prevResolve := resolveNodeFingerprintFn
+	resolveNodeFingerprintFn = func(context.Context, *quartermasterpb.ResolveNodeFingerprintRequest) (*quartermasterpb.ResolveNodeFingerprintResponse, error) {
+		t.Fatal("fingerprint resolution must not run for a sub-minimum registration")
+		return nil, nil
+	}
+	t.Cleanup(func() { resolveNodeFingerprintFn = prevResolve })
+
+	// No DB mutation (e.g. the fence-allocation nextval) must run: the mock expects no query.
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prevDB := db
+	db = mockDB
+	t.Cleanup(func() { db = prevDB; mockDB.Close() })
+
+	stream := &registerOnceStream{msgs: []*ipcpb.ControlMessage{
+		{Payload: &ipcpb.ControlMessage_Register{Register: &ipcpb.Register{NodeId: "node-old", ControlProtocolVersion: MinControlProtocolVersion - 1}}},
+	}}
+
+	srv := &Server{}
+	if cerr := srv.Connect(stream); status.Code(cerr) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition for a sub-minimum protocol, got %v", cerr)
+	}
+
+	registry.mu.RLock()
+	got := registry.conns["node-old"]
+	registry.mu.RUnlock()
+	if got != nil {
+		t.Fatal("a rejected sub-minimum registration must never be published to registry.conns")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("no DB mutation expected for a sub-minimum registration: %v", err)
 	}
 }
 
@@ -131,7 +175,7 @@ func TestConnectRejectsWhenTakeoverMarkerSuperseded(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"nextval"}).AddRow(int64(2)))
 
 	stream := &registerOnceStream{msgs: []*ipcpb.ControlMessage{
-		{Payload: &ipcpb.ControlMessage_Register{Register: &ipcpb.Register{NodeId: "node-y"}}},
+		{Payload: &ipcpb.ControlMessage_Register{Register: &ipcpb.Register{NodeId: "node-y", ControlProtocolVersion: MinControlProtocolVersion}}},
 	}}
 
 	srv := &Server{}
@@ -165,7 +209,7 @@ func TestConnectRejectsWhenTakeoverMarkerSuperseded(t *testing.T) {
 	}
 }
 
-// SECURITY (F1): a connection that asserts an EXISTING node's id but fails to authenticate (no fingerprint
+// SECURITY: a connection that asserts an EXISTING node's id but fails to authenticate (no fingerprint
 // match, no enrollment token) must be rejected WITHOUT touching that node's ownership or artifact readiness —
 // otherwise it could cordon/steal a live node by naming it. Ownership is acquired only post-resolution.
 func TestConnectRejectedRegistrationDoesNotStealAssertedNodeOwnership(t *testing.T) {
@@ -187,8 +231,8 @@ func TestConnectRejectedRegistrationDoesNotStealAssertedNodeOwnership(t *testing
 		t.Fatalf("seed victim owner: %v", err)
 	}
 
-	// The attacker's connection would get a HIGHER fence (9) — under the old pre-resolution acquisition it
-	// would steal ownership before enrollment even ran.
+	// The attacker's connection carries a HIGHER fence (9); ownership is acquired only AFTER identity resolution and
+	// enrollment, so a higher fence cannot steal ownership ahead of authentication.
 	mockDB, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -200,7 +244,7 @@ func TestConnectRejectedRegistrationDoesNotStealAssertedNodeOwnership(t *testing
 		WillReturnRows(sqlmock.NewRows([]string{"nextval"}).AddRow(int64(9)))
 
 	stream := &registerOnceStream{msgs: []*ipcpb.ControlMessage{
-		{Payload: &ipcpb.ControlMessage_Register{Register: &ipcpb.Register{NodeId: "victim"}}},
+		{Payload: &ipcpb.ControlMessage_Register{Register: &ipcpb.Register{NodeId: "victim", ControlProtocolVersion: MinControlProtocolVersion}}},
 	}}
 	srv := &Server{}
 	_ = srv.Connect(stream) // rejected with an ENROLLMENT_REQUIRED control error (returns nil), before ownership
@@ -225,7 +269,7 @@ func TestConnectRejectedRegistrationDoesNotStealAssertedNodeOwnership(t *testing
 	}
 }
 
-// SECURITY (F1): a connection that AUTHENTICATES as canonical id A (via fingerprint) but ASSERTS a raw id B it
+// SECURITY: a connection that AUTHENTICATES as canonical id A (via fingerprint) but ASSERTS a raw id B it
 // does not own must be published ONLY under A — it must NOT retire/replace node B's live registry connection or
 // mutate B's state. Only the canonical id is fenced; the raw asserted id is unverified.
 func TestConnectAssertingForeignRawIDDoesNotHijackVictim(t *testing.T) {
@@ -259,7 +303,7 @@ func TestConnectAssertingForeignRawIDDoesNotHijackVictim(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"nextval"}).AddRow(int64(7)))
 
 	stream := &registerOnceStream{msgs: []*ipcpb.ControlMessage{
-		{Payload: &ipcpb.ControlMessage_Register{Register: &ipcpb.Register{NodeId: "victim"}}},
+		{Payload: &ipcpb.ControlMessage_Register{Register: &ipcpb.Register{NodeId: "victim", ControlProtocolVersion: MinControlProtocolVersion}}},
 	}}
 	srv := &Server{}
 	_ = srv.Connect(stream) // succeeds under canonical "attacker-A", then EOFs
@@ -273,7 +317,7 @@ func TestConnectAssertingForeignRawIDDoesNotHijackVictim(t *testing.T) {
 	}
 }
 
-// SECURITY (F2): the ArtifactDeleted DB callback (which removes a node's artifact_nodes placement) must be
+// SECURITY: the ArtifactDeleted DB callback (which removes a node's artifact_nodes placement) must be
 // bound to the AUTHENTICATED canonical session id, not the node-asserted payload node_id — otherwise a
 // connection could evict a peer's placement by naming it.
 func TestArtifactDeletedCallbackUsesAuthenticatedNodeID(t *testing.T) {
@@ -308,7 +352,7 @@ func TestArtifactDeletedCallbackUsesAuthenticatedNodeID(t *testing.T) {
 	mock.ExpectQuery(`SELECT nextval`).WillReturnRows(sqlmock.NewRows([]string{"nextval"}).AddRow(int64(3)))
 
 	stream := &registerOnceStream{msgs: []*ipcpb.ControlMessage{
-		{Payload: &ipcpb.ControlMessage_Register{Register: &ipcpb.Register{NodeId: "node-real"}}},
+		{Payload: &ipcpb.ControlMessage_Register{Register: &ipcpb.Register{NodeId: "node-real", ControlProtocolVersion: MinControlProtocolVersion}}},
 		// A FORGED payload node_id — the callback must ignore it in favor of the authenticated session id.
 		{Payload: &ipcpb.ControlMessage_ArtifactDeleted{ArtifactDeleted: &ipcpb.ArtifactDeleted{ArtifactHash: "h", NodeId: "victim-node", Reason: "evict"}}},
 	}}

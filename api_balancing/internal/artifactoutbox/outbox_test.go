@@ -335,7 +335,7 @@ func TestEnqueueTxRoutesInsertThroughCallerTx(t *testing.T) {
 }
 
 // Federation events from the system tenant carry an empty tenant id; enqueue
-// passes "" through and the SQL coerces it to NULL (NULLIF($2,”)::uuid). We
+// passes "" through and the SQL coerces it to NULL (NULLIF over the empty string, cast to uuid). We
 // assert the literal "" reaches the driver — the NULL coercion is the column's
 // job, but the contract is that we never fabricate a fake tenant uuid.
 func TestEnqueueFederationEmptyTenantCoercesToNull(t *testing.T) {

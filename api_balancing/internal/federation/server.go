@@ -133,12 +133,23 @@ type S3Backing struct {
 	Bucket   string
 	Endpoint string
 	Region   string
+	Prefix   string // S3 keyspace prefix — part of the identity; compared EXACTLY (a different prefix is a different keyspace)
 }
 
+// Equal uses the canonical descriptor semantics shared with storage.S3Backing and control.BackendFingerprint:
+// bucket/endpoint/prefix compared BYTE-FOR-BYTE, region's only transformation being empty→us-east-1. Case-folding or
+// trimming here would disagree with the immutable-backend identity and let a remote be treated as locally mintable.
 func (b S3Backing) Equal(other S3Backing) bool {
-	return strings.EqualFold(strings.TrimSpace(b.Bucket), strings.TrimSpace(other.Bucket)) &&
-		strings.EqualFold(strings.TrimSpace(b.Endpoint), strings.TrimSpace(other.Endpoint)) &&
-		strings.EqualFold(strings.TrimSpace(b.Region), strings.TrimSpace(other.Region))
+	region := func(r string) string {
+		if r == "" {
+			return "us-east-1"
+		}
+		return r
+	}
+	return b.Bucket == other.Bucket &&
+		b.Endpoint == other.Endpoint &&
+		region(b.Region) == region(other.Region) &&
+		b.Prefix == other.Prefix
 }
 
 // PeerAddrResolver resolves gRPC addresses for peer clusters.
@@ -1016,8 +1027,8 @@ func (s *FederationServer) DeleteStorageObjects(ctx context.Context, req *foghor
 		// namespace + artifact hash). The cleaner sends the main, .dtsh, and pending keys as SEPARATE requests,
 		// so each must delete its own supplied object — the owner MUST NOT collapse them onto one resolved key.
 		// NOTE: a cross-provider caller whose backend PREFIX differs from this provider's cannot form a correct
-		// key here; that (and provider-relative active_object_key/active_dtsh_key transfer) is the cross-cluster
-		// durable-replication RFC, out of scope for this single-provider release.
+		// key here, so this owner handles only same-provider keys; provider-relative
+		// active_object_key/active_dtsh_key transfer is not modeled.
 		key := strings.TrimSpace(req.GetS3Key())
 		if key == "" {
 			return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: false, Reason: "missing_target"}, nil

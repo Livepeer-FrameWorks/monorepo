@@ -8,31 +8,40 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// S3Backing identifies an S3 (or S3-compatible) bucket. Equality on the full
-// tuple is required for "this Foghorn can mint locally for that backing" — bucket
-// name alone collides across providers (MinIO, R2, Bunny Storage, etc.) where
-// the same bucket name lives behind different endpoints.
+// S3Backing identifies the physical S3 (or S3-compatible) KEYSPACE a Foghorn can sign for —
+// bucket/endpoint/region/prefix. Equality on this tuple answers "this Foghorn can mint locally for that backing".
+// Bucket name alone collides across providers (MinIO, R2, Bunny Storage, etc.) where the same bucket name lives behind
+// different endpoints; and two clusters can share one provider tuple (bucket/endpoint/region) but write under DIFFERENT
+// prefixes — so prefix is part of the identity. Without it, this Foghorn (configured for one prefix) would classify a
+// cluster addressing another prefix as locally mintable and write objects through its OWN prefix, at a key nothing else
+// can address.
 type S3Backing struct {
 	Bucket   string
 	Endpoint string // empty == AWS default endpoint
 	Region   string
+	Prefix   string // S3 keyspace prefix; compared EXACTLY (a different prefix is a different keyspace)
 }
 
-// Normalize lowercases endpoint/region and trims surrounding whitespace so two
-// equivalent backings compare equal.
+// Normalize applies the ONE canonical descriptor normalization shared with the immutable-backend identity
+// (control.BackendFingerprint), the first-boot adoption guard, and the CLI deploy gate: bucket/endpoint/prefix are
+// compared BYTE-FOR-BYTE (a case/whitespace difference names a different physical keyspace and must NOT collapse), and
+// the ONLY transformation is an empty region defaulting to us-east-1. Diverging from that (e.g. lowercasing the
+// endpoint) would let this resolver classify a remote descriptor as locally mintable that the backend-identity layer
+// treats as a DIFFERENT backend — minting an object whose recorded backend_id cleanup can never match.
 func (b S3Backing) Normalize() S3Backing {
-	return S3Backing{
-		Bucket:   strings.TrimSpace(b.Bucket),
-		Endpoint: strings.ToLower(strings.TrimSpace(b.Endpoint)),
-		Region:   strings.ToLower(strings.TrimSpace(b.Region)),
+	region := b.Region
+	if region == "" {
+		region = "us-east-1"
 	}
+	return S3Backing{Bucket: b.Bucket, Endpoint: b.Endpoint, Region: region, Prefix: b.Prefix}
 }
 
-// Equal reports whether two backings are the same after normalization.
+// Equal reports whether two backings are the same physical keyspace under the canonical descriptor semantics
+// (bucket/endpoint/prefix exact, region empty→us-east-1).
 func (b S3Backing) Equal(other S3Backing) bool {
 	a := b.Normalize()
 	o := other.Normalize()
-	return a.Bucket == o.Bucket && a.Endpoint == o.Endpoint && a.Region == o.Region
+	return a.Bucket == o.Bucket && a.Endpoint == o.Endpoint && a.Region == o.Region && a.Prefix == o.Prefix
 }
 
 // StorageMintMode is the resolver's verdict on how to mint presigned URLs for
@@ -160,17 +169,49 @@ func (r *ClusterResolver) Resolve(in ResolverInput) (clusterID string, mode Stor
 		return localClusterID, StorageMintLocal
 	}
 
+	return "", r.unavailable(logging.Fields{
+		"origin":        in.OriginClusterID,
+		"official":      in.OfficialClusterID,
+		"local_cluster": localClusterID,
+	})
+}
+
+// ResolveOfficialDurable resolves ONLY the tenant's official cluster for a DURABLE write. Unlike Resolve it has
+// NO origin candidate and NO generic local fallback: an unresolved/empty official cluster returns
+// StorageUnavailable rather than silently minting (and billing) against this cell. The one local outcome it still
+// allows is the official cluster BEING this cell — same cluster id AND a configured S3 client — which is a
+// positive local resolution of the official destination, not a fall-through to a different/local cluster. This is
+// the strict durable-write path (invariant I1); read/generality callers use Resolve.
+func (r *ClusterResolver) ResolveOfficialDurable(officialClusterID string) (clusterID string, mode StorageMintMode) {
+	official := strings.TrimSpace(officialClusterID)
+	if official == "" {
+		return "", r.unavailable(logging.Fields{"official": officialClusterID, "reason": "official cluster unresolved"})
+	}
+	if r.AdvertisedBacking != nil {
+		if backing, ok := r.AdvertisedBacking(official); ok && strings.TrimSpace(backing.Bucket) != "" {
+			if r.canMintLocally(official, backing) {
+				return official, StorageMintLocal
+			}
+			return official, StorageMintViaFederation
+		}
+	}
+	// No advertised backing for the official cluster: mint locally ONLY when the official cluster IS this cell
+	// (id match + S3 client present) — that is the official destination being local, not a fallback.
+	if official == strings.TrimSpace(r.LocalClusterID) && r.LocalS3ClientPresent {
+		return official, StorageMintLocal
+	}
+	return "", r.unavailable(logging.Fields{"official": official, "reason": "official cluster has no usable backing"})
+}
+
+// unavailable records the rejected-storage metric + a warn log and returns StorageUnavailable.
+func (r *ClusterResolver) unavailable(fields logging.Fields) StorageMintMode {
 	if r.Metrics != nil {
 		r.Metrics.WithLabelValues("service_unavailable", "storage").Inc()
 	}
 	if r.Logger != nil {
-		r.Logger.WithFields(logging.Fields{
-			"origin":        in.OriginClusterID,
-			"official":      in.OfficialClusterID,
-			"local_cluster": localClusterID,
-		}).Warn("storage resolver: no candidate cluster has usable backing")
+		r.Logger.WithFields(fields).Warn("storage resolver: no usable official-durable backing")
 	}
-	return "", StorageUnavailable
+	return StorageUnavailable
 }
 
 func (r *ClusterResolver) canMintLocally(clusterID string, backing S3Backing) bool {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/testutil/dockerpg"
 	_ "github.com/lib/pq"
 )
 
@@ -28,29 +29,19 @@ func startRealPG(t *testing.T) *sql.DB {
 		t.Skip("docker not available")
 	}
 	name := fmt.Sprintf("fw-freeze-realpg-%d", time.Now().UnixNano())
-	run := func(args ...string) (string, error) {
-		out, err := exec.Command("docker", args...).CombinedOutput()
-		return string(out), err
-	}
-	if out, err := run("run", "-d", "--name", name, "-P", "-e", "POSTGRES_PASSWORD=harness", realPGImage); err != nil {
+	run := dockerpg.CLI
+	// Register cleanup BEFORE `docker run`: the name is fixed, and a run that times out (e.g. a slow image pull) may
+	// still have created the container, so cleanup must be armed even if run returns an error. -v removes the
+	// container's anonymous data volume too: the pgvector/postgres image declares /var/lib/postgresql/data as a VOLUME,
+	// so `rm -f` (no -v) leaks a ~40MB volume per test run until the Docker VM fills and PostgreSQL fails with ENOSPC.
+	t.Cleanup(func() { _, _ = run("rm", "-fv", name) })
+	if out, err := dockerpg.Run("run", "-d", "--name", name, "-P", "-e", "POSTGRES_PASSWORD=harness", realPGImage); err != nil {
 		t.Fatalf("docker run: %v\n%s", err, out)
 	}
-	t.Cleanup(func() { _, _ = run("rm", "-f", name) })
 
-	portOut, err := run("port", name, "5432/tcp")
+	port, err := dockerpg.DiscoverPublishedHostPort(name, "5432/tcp")
 	if err != nil {
-		t.Fatalf("docker port: %v\n%s", err, portOut)
-	}
-	// "0.0.0.0:49153\n" (possibly an IPv6 line too) → take the host port.
-	port := ""
-	for _, line := range strings.Split(strings.TrimSpace(portOut), "\n") {
-		if i := strings.LastIndex(line, ":"); i >= 0 {
-			port = strings.TrimSpace(line[i+1:])
-			break
-		}
-	}
-	if port == "" {
-		t.Fatalf("could not parse host port from %q", portOut)
+		t.Fatalf("%v", err)
 	}
 
 	dsn := fmt.Sprintf("postgres://postgres:harness@127.0.0.1:%s/postgres?sslmode=disable", port)
@@ -60,16 +51,8 @@ func startRealPG(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 
-	deadline := time.Now().Add(90 * time.Second)
-	for {
-		if err := conn.Ping(); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			logs, _ := run("logs", "--tail", "40", name)
-			t.Fatalf("postgres did not become ready:\n%s", logs)
-		}
-		time.Sleep(time.Second)
+	if err := dockerpg.WaitReady(conn, name); err != nil {
+		t.Fatalf("%v", err)
 	}
 
 	schema, rerr := dbsql.Content.ReadFile("schema/foghorn.sql")
@@ -219,7 +202,7 @@ func TestClaimFreezeAttempt_RealPG(t *testing.T) {
 	}
 	// The main attempt can BUNDLE a .dtsh, so the trigger must enqueue ALL FOUR keys it can produce —
 	// staging + .dtsh staging + media candidate + .dtsh candidate — mirroring applySyncCompletionFailure.
-	// (An earlier version omitted the bundled .dtsh staging key, leaking it.)
+	// Omitting the bundled .dtsh staging key leaks it.
 	for _, want := range []string{
 		FreezeStagingKey("vod/tenant/hash-deldv/hash-deldv.mp4", "req-deldv"),
 		FreezeStagingKey("vod/tenant/hash-deldv/hash-deldv.mp4.dtsh", "req-deldv"),
@@ -416,7 +399,7 @@ func TestChapterFinalizeNodeBinding_RealPG(t *testing.T) {
 		t.Fatalf("retry must clear finalize_node_id, got %q", nodeAfter.String)
 	}
 
-	// --- The reviewer's deterministic stale-node sequence: after A's retry bounced the chapter to 'closed',
+	// --- Deterministic stale-node sequence: after A's retry bounced the chapter to 'closed',
 	// a DELAYED terminal-failure report from A must be a NO-OP (a node-reported terminal transition requires
 	// state='finalizing'), so it cannot terminalize the re-queued chapter before redispatch. ---
 	if err := MarkChapterFailed(ctx, "chap-rt", ChapterStateFailedSourceMissing, "delayed-A", "node-A"); err != nil {

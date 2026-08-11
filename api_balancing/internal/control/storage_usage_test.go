@@ -15,11 +15,8 @@ func TestReconcileBillingAttribution_BoundedKeysetCursor(t *testing.T) {
 	mock, _, _ := setupArtifactTestDeps(t)
 	prevLocal := localClusterID
 	SetLocalClusterID("official-a")
-	prevMint := canMintOfficialLocallyFn
-	canMintOfficialLocallyFn = func(context.Context, string, string) bool { return false } // remote pairs are NOT owned
 	t.Cleanup(func() {
 		SetLocalClusterID(prevLocal)
-		canMintOfficialLocallyFn = prevMint
 	})
 
 	// 1) Durable cursor read (start).
@@ -58,11 +55,8 @@ func TestReconcileBillingAttribution_FullPageAdvancesCursor(t *testing.T) {
 	mock, _, _ := setupArtifactTestDeps(t)
 	prevLocal := localClusterID
 	SetLocalClusterID("official-a")
-	prevMint := canMintOfficialLocallyFn
-	canMintOfficialLocallyFn = func(context.Context, string, string) bool { return false }
 	t.Cleanup(func() {
 		SetLocalClusterID(prevLocal)
-		canMintOfficialLocallyFn = prevMint
 	})
 
 	mock.ExpectQuery(`SELECT last_tenant, last_cluster FROM foghorn.billing_attribution_cursor WHERE id = true`).
@@ -90,6 +84,47 @@ func TestReconcileBillingAttribution_FullPageAdvancesCursor(t *testing.T) {
 	}
 	if marked != 0 {
 		t.Fatalf("expected 0 rows marked (all remote), got %d", marked)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// I2 regression: changing a cluster's CURRENT advertised backing must NOT alter historical attribution. Here the
+// live resolver is forced to report the row's remote cluster as locally-mintable NOW (canMintOfficialLocallyFn →
+// true) — simulating a cluster that re-pointed its backing to this cell after the bytes were written elsewhere.
+// The reconciler must IGNORE that (topology-now ≠ evidence-of-where-bytes-live): the remote-cluster row stays
+// unmarked, no UPDATE fires. If the resolver clause is ever re-introduced this test fails.
+func TestReconcileBillingAttribution_IgnoresCurrentBackingForHistoricalRows(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	prevLocal := localClusterID
+	SetLocalClusterID("official-a")
+	prevMint := canMintOfficialLocallyFn
+	// The live resolver now says "yes, that cluster mints locally" — the exact drift I2 forbids from re-attributing.
+	canMintOfficialLocallyFn = func(context.Context, string, string) bool { return true }
+	t.Cleanup(func() {
+		SetLocalClusterID(prevLocal)
+		canMintOfficialLocallyFn = prevMint
+	})
+
+	mock.ExpectQuery(`SELECT last_tenant, last_cluster FROM foghorn.billing_attribution_cursor WHERE id = true`).
+		WillReturnRows(sqlmock.NewRows([]string{"last_tenant", "last_cluster"}).AddRow("", ""))
+	// One historical row on a REMOTE cluster (its recorded cluster != this cell). Recorded evidence says remote.
+	mock.ExpectQuery(`SELECT p.tenant, p.cluster FROM`).
+		WithArgs("", "", billingAttributionBatch).
+		WillReturnRows(sqlmock.NewRows([]string{"tenant", "cluster"}).AddRow("t1", "remote-x"))
+	// NO `UPDATE foghorn.artifacts` — the current backing must not re-attribute the historical row. Only the cursor
+	// advances (short page ⇒ wrap to start).
+	mock.ExpectExec(`UPDATE foghorn.billing_attribution_cursor SET last_tenant = \$1, last_cluster = \$2 WHERE id = true`).
+		WithArgs("", "").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	marked, err := ReconcileBillingAttribution(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if marked != 0 {
+		t.Fatalf("current backing must not re-attribute a historical remote row; marked %d", marked)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

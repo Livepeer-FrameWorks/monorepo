@@ -208,7 +208,7 @@ func TestInvalidateChandlerThumbnailCache(t *testing.T) {
 	t.Setenv("SERVICE_TOKEN", "svc-token")
 	t.Setenv("CHANDLER_INTERNAL_URL", srvA.URL+","+srvB.URL)
 
-	invalidateChandlerThumbnailCache("stream-id", "v-1", []string{
+	invalidateChandlerThumbnailCache("stream-id", []string{
 		"thumbnails/stream-id/sprite.jpg",
 		"thumbnails/stream-id/sprite.vtt",
 		"thumbnails/stream-id/sprite.vtt",
@@ -411,6 +411,96 @@ func TestGetChandlerBaseURLForCluster_DoesNotMutateLegacyResolvedURL(t *testing.
 	}
 }
 
+// resolveThumbnailChandlerBase is the single fail-closed rule for BOTH live thumbnails (serving cluster = the ingest
+// cell) and durable artifact thumbnails (serving cluster = thumbnail_serving_cluster_id). It must name the serving
+// cell's Chandler, NOT the local/official cluster. The three branches this locks:
+//   - serving≠local: a thumbnail served from a remote cell resolves to THAT cell's Chandler, never this foghorn's
+//     local one (which never holds the object → would 404).
+//   - known-but-unmappable serving cluster: return "" (no thumbnail) rather than
+//     falling back to the local Chandler and manufacturing a wrong-cell URL.
+//   - empty (unresolved) cluster in a managed multi-cell deployment: return "" —
+//     unknown authority must not silently resolve to this cell.
+func TestResolveThumbnailChandlerBase_UsesServingClusterNotLocal(t *testing.T) {
+	prevClusterID := localClusterID
+	prevGetCluster := getClusterFn
+	clearResolvedChandlerBaseURL()
+	clearChandlerPerClusterCache()
+	t.Cleanup(func() {
+		localClusterID = prevClusterID
+		getClusterFn = prevGetCluster
+		clearResolvedChandlerBaseURL()
+		clearChandlerPerClusterCache()
+	})
+
+	// No explicit override: force the per-cluster derivation path so the ingest
+	// cluster genuinely drives the hostname.
+	t.Setenv("CHANDLER_BASE_URL", "")
+	t.Setenv("CHANDLER_HOST", "")
+	t.Setenv("CHANDLER_PORT", "")
+
+	// This foghorn's official/local cluster is media-eu-1; the stream ingests on
+	// media-us-1. Only media-us-1 is mappable to a Chandler.
+	localClusterID = "media-eu-1"
+	getClusterFn = func(_ context.Context, clusterID string) (*quartermasterpb.InfrastructureCluster, error) {
+		if clusterID == "media-us-1" {
+			return &quartermasterpb.InfrastructureCluster{
+				ClusterId:   "media-us-1",
+				ClusterName: "Media US 1",
+				BaseUrl:     "frameworks.network",
+			}, nil
+		}
+		return nil, errors.New("unmappable cluster")
+	}
+
+	// official≠ingest: the URL names the ingest cell, not the local cluster.
+	got := resolveThumbnailChandlerBase("media-us-1")
+	if got != "https://chandler.media-us-1.frameworks.network" {
+		t.Fatalf("expected the ingest cell's Chandler, got %q", got)
+	}
+	if got == getChandlerBaseURL() {
+		t.Fatalf("ingest-cell Chandler must differ from the local/official Chandler %q", got)
+	}
+
+	// known-but-unmappable ingest cluster: no thumbnail, NOT a local fallback URL.
+	if got := resolveThumbnailChandlerBase("media-ap-1"); got != "" {
+		t.Fatalf("unmappable ingest cluster must yield no thumbnail base, got %q", got)
+	}
+	// buildThumbnailAssets on an empty base returns nil so the player gets no
+	// (wrong-cell) thumbnail rather than a URL that 404s.
+	if assets := buildThumbnailAssets(resolveThumbnailChandlerBase("media-ap-1"), "stream-77"); assets != nil {
+		t.Fatalf("unmappable ingest cluster must produce nil thumbnail assets, got %+v", assets)
+	}
+
+	// empty (unresolved) cluster in a managed multi-cell deployment (no CHANDLER_BASE_URL): unknown authority must
+	// yield NO thumbnail, not a local fallback that could be the wrong cell.
+	if got := resolveThumbnailChandlerBase(""); got != "" {
+		t.Fatalf("empty ingest cluster without explicit local Chandler must yield no thumbnail, got %q", got)
+	}
+}
+
+// With an EXPLICIT single-cluster / local-nginx origin (CHANDLER_BASE_URL), an empty ingest cluster legitimately
+// resolves to that one local Chandler — that deployment serves every asset from a single origin, so there is no
+// wrong-cell risk.
+func TestResolveThumbnailChandlerBase_EmptyClusterFallsBackOnlyWithExplicitLocal(t *testing.T) {
+	prevGetCluster := getClusterFn
+	clearResolvedChandlerBaseURL()
+	clearChandlerPerClusterCache()
+	t.Cleanup(func() {
+		getClusterFn = prevGetCluster
+		clearResolvedChandlerBaseURL()
+		clearChandlerPerClusterCache()
+	})
+
+	t.Setenv("CHANDLER_BASE_URL", "https://assets.example.network")
+	getClusterFn = func(context.Context, string) (*quartermasterpb.InfrastructureCluster, error) {
+		return nil, errors.New("must not resolve a cluster for the explicit-local path")
+	}
+
+	if got := resolveThumbnailChandlerBase(""); got != "https://assets.example.network" {
+		t.Fatalf("explicit local Chandler must serve an empty-cluster stream, got %q", got)
+	}
+}
+
 func TestInvalidateChandlerThumbnailCacheDeduplicatesBaseURLs(t *testing.T) {
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -425,7 +515,7 @@ func TestInvalidateChandlerThumbnailCacheDeduplicatesBaseURLs(t *testing.T) {
 	t.Setenv("SERVICE_TOKEN", "svc-token")
 	t.Setenv("CHANDLER_INTERNAL_URL", srv.URL+","+srv.URL+"/")
 
-	invalidateChandlerThumbnailCache("stream-id", "v-1", []string{
+	invalidateChandlerThumbnailCache("stream-id", []string{
 		"thumbnails/stream-id/sprite.jpg",
 	}, logging.NewLoggerWithService("test"))
 

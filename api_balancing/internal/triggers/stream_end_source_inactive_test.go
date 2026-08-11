@@ -187,7 +187,7 @@ func TestOfflineIsStreamWide_ReplicaNeverStreamWide(t *testing.T) {
 // concurrent-stream count drops, push-target tracking clears, and
 // SourceActive flips so the publisher's reconnect takes the resume path
 // instead of being rejected as a duplicate.
-// F6: when the stream owner is UNRESOLVABLE and the node merely ASSERTS a tenant, the owner-vanish path must
+// When the stream owner is UNRESOLVABLE and the node merely ASSERTS a tenant, the owner-vanish path must
 // still run the NODE-authoritative effects (source-inactive, push untrack) but must NOT drive the TENANT-scoped
 // effects (concurrent-stream decrement, federation lifecycle broadcast) under the unverified asserted tenant —
 // otherwise a node could decrement/relabel a tenant that may not own the stream.

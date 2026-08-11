@@ -98,8 +98,8 @@ func TestAbortVodUpload_AbortsS3AndSoftDeletes_RpcHandlers(t *testing.T) {
 
 	mock.ExpectQuery(`SELECT v.artifact_hash, v.s3_key, a.user_id`).
 		WithArgs("u1", "t1").
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_key", "user_id"}).
-			AddRow("hash-1", "vod/t1/hash/video.mp4", sql.NullString{}))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_key", "user_id", "backend_id"}).
+			AddRow("hash-1", "vod/t1/hash/video.mp4", sql.NullString{}, testStubBackendID))
 	// Durable claim FIRST (tenant-scoped, 'uploading'->'aborting'), BEFORE any S3 call.
 	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'aborting'.*WHERE artifact_hash = \$1 AND tenant_id = \$2 AND status = 'uploading'`).
 		WithArgs("hash-1", "t1").
@@ -144,8 +144,8 @@ func TestAbortVodUpload_LostRaceLeavesS3Untouched_RpcHandlers(t *testing.T) {
 
 	mock.ExpectQuery(`SELECT v.artifact_hash, v.s3_key, a.user_id`).
 		WithArgs("u1", "t1").
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_key", "user_id"}).
-			AddRow("hash-1", "vod/t1/hash/video.mp4", sql.NullString{}))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_key", "user_id", "backend_id"}).
+			AddRow("hash-1", "vod/t1/hash/video.mp4", sql.NullString{}, testStubBackendID))
 	// Guarded claim matches nothing (status is no longer 'uploading'); no S3 call, no tx.
 	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'aborting'.*status = 'uploading'`).
 		WithArgs("hash-1", "t1").
@@ -171,8 +171,8 @@ func TestAbortVodUpload_S3AbortFailureLeavesAborting_RpcHandlers(t *testing.T) {
 
 	mock.ExpectQuery(`SELECT v.artifact_hash, v.s3_key, a.user_id`).
 		WithArgs("u1", "t1").
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_key", "user_id"}).
-			AddRow("hash-1", "vod/t1/hash/video.mp4", sql.NullString{}))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_key", "user_id", "backend_id"}).
+			AddRow("hash-1", "vod/t1/hash/video.mp4", sql.NullString{}, testStubBackendID))
 	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'aborting'.*status = 'uploading'`).
 		WithArgs("hash-1", "t1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -208,7 +208,7 @@ func deleteLookupCols() []string {
 		"status", "s3_key", "s3_url", "format",
 		"size_bytes", "retention_until", "user_id",
 		"storage_cluster_id", "origin_cluster_id", "origin_type",
-		"active_object_key", "active_dtsh_key", "sync_object_key", "durable_backend_local",
+		"active_object_key", "active_dtsh_key", "sync_object_key", "durable_backend_local", "backend_id",
 	}
 }
 
@@ -245,7 +245,7 @@ func TestDeleteVodAsset_AlreadyDeletedIsNoOp_RpcHandlers(t *testing.T) {
 			"deleted", "", sql.NullString{}, sql.NullString{},
 			sql.NullInt64{}, sql.NullTime{}, sql.NullString{},
 			sql.NullString{}, sql.NullString{}, "",
-			sql.NullString{}, sql.NullString{}, sql.NullString{}, false,
+			sql.NullString{}, sql.NullString{}, sql.NullString{}, false, sql.NullString{},
 		))
 
 	resp, err := srv.DeleteVodAsset(context.Background(), &sharedpb.DeleteVodAssetRequest{
@@ -275,7 +275,7 @@ func TestDeleteVodAsset_SoftDeletesReadyAsset_RpcHandlers(t *testing.T) {
 			"synced", "vod/t1/hash/video.mp4", sql.NullString{}, sql.NullString{},
 			sql.NullInt64{Int64: 2048, Valid: true}, sql.NullTime{}, sql.NullString{},
 			sql.NullString{}, sql.NullString{}, "",
-			sql.NullString{}, sql.NullString{}, sql.NullString{}, false,
+			sql.NullString{}, sql.NullString{}, sql.NullString{}, false, sql.NullString{},
 		))
 	// DURABLE STATE FIRST: soft-delete (guarded, tenant-scoped) + DELETED lifecycle event commit
 	// atomically BEFORE any physical cleanup.

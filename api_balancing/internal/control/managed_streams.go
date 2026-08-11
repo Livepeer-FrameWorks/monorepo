@@ -397,7 +397,7 @@ func reconcileClusterManagedStreams(ctx context.Context, log logging.Logger, clu
 			// pin routing at a cluster where playback would 404. Uses
 			// the elected node's cluster, not the reconciler's loop var.
 			if verifiedApplied {
-				recordActiveClusterForManagedStream(log, electedClusterID, sid)
+				recordActiveClusterForManagedStream(log, electedClusterID, sid, streamCtx.GetTenantId())
 			}
 		}
 	}
@@ -552,10 +552,10 @@ func sendApplyManagedStream(log logging.Logger, clusterID, nodeID string, row *c
 // routing at a cluster where playback would 404. Idempotent on retry —
 // the same UPDATE runs every subsequent tick that re-verifies, so a
 // transient RPC error converges on the next tick.
-func recordActiveClusterForManagedStream(log logging.Logger, clusterID, streamID string) {
+func recordActiveClusterForManagedStream(log logging.Logger, clusterID, streamID, tenantID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	resp, err := CommodoreClient.RecordStreamActiveCluster(ctx, streamID, clusterID)
+	resp, err := CommodoreClient.RecordStreamActiveCluster(ctx, streamID, tenantID, clusterID)
 	if err != nil {
 		log.WithError(err).WithFields(logging.Fields{
 			"stream_id":  streamID,

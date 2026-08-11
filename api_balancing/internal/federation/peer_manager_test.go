@@ -611,9 +611,6 @@ func TestNotifyPeers_UpdatesExistingPeerMetadata(t *testing.T) {
 	if ps.lifecycle != peerAlwaysOn {
 		t.Fatalf("expected lifecycle peerAlwaysOn, got %v", ps.lifecycle)
 	}
-	if ps.s3Config == nil || ps.s3Config.S3Bucket != "bucket-a" {
-		t.Fatalf("unexpected s3 config: %+v", ps.s3Config)
-	}
 }
 
 func TestNotifyPeers_LeaderSyncsToRedisOnAddressChange(t *testing.T) {
@@ -751,29 +748,6 @@ func TestIsStreamLiveOnPeer_RejectsTenantMismatch(t *testing.T) {
 
 	if cluster, ok := pm.IsStreamLiveOnPeer(ctx, "stream-1", "tenant-a"); !ok || cluster != "remote-cluster" {
 		t.Fatalf("expected tenant match to return remote cluster, got cluster=%q ok=%v", cluster, ok)
-	}
-}
-
-func TestGetPeerS3Config(t *testing.T) {
-	pm := newTestPeerManager(t, "local-cluster", nil, false)
-
-	pm.mu.Lock()
-	pm.peers["remote"] = &peerState{
-		s3Config: &ClusterS3Config{
-			ClusterID:  "remote",
-			S3Bucket:   "bucket-a",
-			S3Endpoint: "s3.example.com",
-			S3Region:   "us-east-1",
-		},
-	}
-	pm.mu.Unlock()
-
-	cfg := pm.GetPeerS3Config("remote")
-	if cfg == nil || cfg.S3Bucket != "bucket-a" {
-		t.Fatalf("unexpected s3 config: %+v", cfg)
-	}
-	if got := pm.GetPeerS3Config("missing"); got != nil {
-		t.Fatalf("expected nil config for missing peer, got %+v", got)
 	}
 }
 
@@ -1620,14 +1594,12 @@ func TestRefreshPeers_ReconcilesAddUpdateAndRemove(t *testing.T) {
 		tenantIDs: []string{"tenant-old"},
 	}
 	changedCanceled := 0
-	changedS3 := &ClusterS3Config{ClusterID: "changed", S3Bucket: "bucket-a"}
 	changed := &peerState{
 		addr:      "old:18029",
 		connected: true,
 		cancel: func() {
 			changedCanceled++
 		},
-		s3Config: changedS3,
 	}
 	staleCanceled := 0
 	stale := &peerState{
@@ -1677,9 +1649,6 @@ func TestRefreshPeers_ReconcilesAddUpdateAndRemove(t *testing.T) {
 	}
 	if updated.addr != "new:18029" {
 		t.Fatalf("expected changed peer address to update, got %q", updated.addr)
-	}
-	if updated.s3Config != changedS3 {
-		t.Fatal("expected changed peer to retain previous s3 config")
 	}
 
 	if _, ok := pm.peers["stale"]; ok {
