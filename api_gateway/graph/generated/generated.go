@@ -233,6 +233,7 @@ type ComplexityRoot struct {
 	}
 
 	AnalyticsHealth struct {
+		ArtifactNodeCopies          func(childComplexity int, artifactHash string) int
 		ClientQoeConnection         func(childComplexity int, page *model.ConnectionInput, streamID *string, nodeID *string, timeRange *model.TimeRangeInput, noCache *bool) int
 		ClientQoeSummary            func(childComplexity int, streamID *string, timeRange *model.TimeRangeInput, noCache *bool) int
 		PlayerBootSummary           func(childComplexity int, streamID *string, artifactHash *string, timeRange *model.TimeRangeInput, noCache *bool) int
@@ -243,6 +244,7 @@ type ComplexityRoot struct {
 		StreamHealth5mConnection    func(childComplexity int, page *model.ConnectionInput, streamID string, timeRange *model.TimeRangeInput, noCache *bool) int
 		StreamHealthConnection      func(childComplexity int, page *model.ConnectionInput, streamID *string, timeRange *model.TimeRangeInput, noCache *bool) int
 		StreamHealthSummary         func(childComplexity int, streamID *string, timeRange *model.TimeRangeInput, noCache *bool) int
+		TopAssets                   func(childComplexity int, timeRange *model.TimeRangeInput, limit *int) int
 		VodRetention                func(childComplexity int, artifactHash string, timeRange *model.TimeRangeInput, noCache *bool) int
 		VodRetentionAssets          func(childComplexity int, page *model.ConnectionInput, timeRange *model.TimeRangeInput, noCache *bool) int
 	}
@@ -344,6 +346,36 @@ type ComplexityRoot struct {
 		Nodes      func(childComplexity int) int
 		PageInfo   func(childComplexity int) int
 		TotalCount func(childComplexity int) int
+	}
+
+	ArtifactTrack struct {
+		BitrateKbps func(childComplexity int) int
+		Channels    func(childComplexity int) int
+		Codec       func(childComplexity int) int
+		Fps         func(childComplexity int) int
+		Height      func(childComplexity int) int
+		Resolution  func(childComplexity int) int
+		SampleRate  func(childComplexity int) int
+		Type        func(childComplexity int) int
+		Width       func(childComplexity int) int
+	}
+
+	AssetNodeCopies struct {
+		Copies    func(childComplexity int) int
+		Truncated func(childComplexity int) int
+	}
+
+	AssetNodeCopy struct {
+		ClusterID  func(childComplexity int) int
+		IsComplete func(childComplexity int) int
+		Latitude   func(childComplexity int) int
+		Longitude  func(childComplexity int) int
+		NodeID     func(childComplexity int) int
+		NodeName   func(childComplexity int) int
+		Region     func(childComplexity int) int
+		Role       func(childComplexity int) int
+		SizeBytes  func(childComplexity int) int
+		UpdatedAt  func(childComplexity int) int
 	}
 
 	AuthError struct {
@@ -579,11 +611,10 @@ type ComplexityRoot struct {
 		Duration           func(childComplexity int) int
 		EffectiveRetention func(childComplexity int) int
 		ExpiresAt          func(childComplexity int) int
+		HasLocalCopy       func(childComplexity int) int
 		ID                 func(childComplexity int) int
 		IsExpired          func(childComplexity int) int
 		IsFinalized        func(childComplexity int) int
-		IsFrozen           func(childComplexity int) int
-		IsHot              func(childComplexity int) int
 		IsSynced           func(childComplexity int) int
 		NodeID             func(childComplexity int) int
 		PlaybackId         func(childComplexity int) int
@@ -604,11 +635,6 @@ type ComplexityRoot struct {
 		UpdatedAt          func(childComplexity int) int
 	}
 
-	ClipEdge struct {
-		Cursor func(childComplexity int) int
-		Node   func(childComplexity int) int
-	}
-
 	ClipLifecycle struct {
 		ClipHash        func(childComplexity int) int
 		ClipMode        func(childComplexity int) int
@@ -627,13 +653,6 @@ type ComplexityRoot struct {
 		StopUnix        func(childComplexity int) int
 		Stream          func(childComplexity int) int
 		StreamID        func(childComplexity int) int
-	}
-
-	ClipsConnection struct {
-		Edges      func(childComplexity int) int
-		Nodes      func(childComplexity int) int
-		PageInfo   func(childComplexity int) int
-		TotalCount func(childComplexity int) int
 	}
 
 	Cluster struct {
@@ -992,18 +1011,6 @@ type ComplexityRoot struct {
 		StreamID     func(childComplexity int) int
 	}
 
-	DVRRecordingEdge struct {
-		Cursor func(childComplexity int) int
-		Node   func(childComplexity int) int
-	}
-
-	DVRRecordingsConnection struct {
-		Edges      func(childComplexity int) int
-		Nodes      func(childComplexity int) int
-		PageInfo   func(childComplexity int) int
-		TotalCount func(childComplexity int) int
-	}
-
 	DVRRequest struct {
 		CreatedAt          func(childComplexity int) int
 		DurationSeconds    func(childComplexity int) int
@@ -1013,11 +1020,10 @@ type ComplexityRoot struct {
 		ErrorMessage       func(childComplexity int) int
 		ExpiresAt          func(childComplexity int) int
 		FrozenAt           func(childComplexity int) int
+		HasLocalCopy       func(childComplexity int) int
 		Id                 func(childComplexity int) int
 		IsExpired          func(childComplexity int) int
 		IsFinalized        func(childComplexity int) int
-		IsFrozen           func(childComplexity int) int
-		IsHot              func(childComplexity int) int
 		IsSynced           func(childComplexity int) int
 		ManifestPath       func(childComplexity int) int
 		PlaybackId         func(childComplexity int) int
@@ -1039,6 +1045,7 @@ type ComplexityRoot struct {
 
 	DeleteSuccess struct {
 		DeletedID func(childComplexity int) int
+		Pending   func(childComplexity int) int
 		Success   func(childComplexity int) int
 	}
 
@@ -1283,8 +1290,6 @@ type ComplexityRoot struct {
 		DvrCreated            func(childComplexity int) int
 		DvrDeleted            func(childComplexity int) int
 		EgressGb              func(childComplexity int) int
-		FreezeBytes           func(childComplexity int) int
-		FreezeCount           func(childComplexity int) int
 		FrozenClipBytes       func(childComplexity int) int
 		FrozenDvrBytes        func(childComplexity int) int
 		FrozenVodBytes        func(childComplexity int) int
@@ -1308,6 +1313,8 @@ type ComplexityRoot struct {
 		PeriodEnd             func(childComplexity int) int
 		PeriodStart           func(childComplexity int) int
 		StreamHours           func(childComplexity int) int
+		SyncedArtifactBytes   func(childComplexity int) int
+		SyncedArtifactCount   func(childComplexity int) int
 		TenantId              func(childComplexity int) int
 		TotalStreams          func(childComplexity int) int
 		TotalViewers          func(childComplexity int) int
@@ -2124,7 +2131,6 @@ type ComplexityRoot struct {
 		BillingTiers                   func(childComplexity int) int
 		BootstrapTokensConnection      func(childComplexity int, page *model.ConnectionInput, kind *string) int
 		Clip                           func(childComplexity int, id string) int
-		ClipsConnection                func(childComplexity int, page *model.ConnectionInput, streamID *string, input *model.MediaArtifactConnectionInput) int
 		Cluster                        func(childComplexity int, id string) int
 		ClusterInvites                 func(childComplexity int, clusterID string) int
 		ClusterInvitesConnection       func(childComplexity int, page *model.ConnectionInput, clusterID string) int
@@ -2139,7 +2145,6 @@ type ComplexityRoot struct {
 		DiscoverServicesConnection     func(childComplexity int, page *model.ConnectionInput, typeArg string, clusterID *string) int
 		DvrChapter                     func(childComplexity int, dvrID string, mode *model.DVRChapterMode, intervalSeconds *int, startMs float64, endMs float64) int
 		DvrChapters                    func(childComplexity int, dvrID string, mode *model.DVRChapterMode, intervalSeconds *int, rangeStartMs *float64, rangeEndMs *float64, pageSize *int, pageToken *string) int
-		DvrRecordingsConnection        func(childComplexity int, page *model.ConnectionInput, streamID *string, input *model.MediaArtifactConnectionInput) int
 		Invoice                        func(childComplexity int, id string) int
 		InvoicesConnection             func(childComplexity int, page *model.ConnectionInput) int
 		MarketplaceCluster             func(childComplexity int, clusterID string) int
@@ -2178,14 +2183,13 @@ type ComplexityRoot struct {
 		Stream                         func(childComplexity int, id string) int
 		StreamKeysConnection           func(childComplexity int, page *model.ConnectionInput, streamID string) int
 		StreamingConfig                func(childComplexity int) int
-		StreamsConnection              func(childComplexity int, page *model.ConnectionInput) int
+		StreamsConnection              func(childComplexity int, page *model.ConnectionInput, search *string) int
 		Tenant                         func(childComplexity int) int
 		TenantUsage                    func(childComplexity int, timeRange *model.TimeRangeInput) int
 		UsageAggregates                func(childComplexity int, timeRange model.TimeRangeInput, granularity *string, usageTypes []string) int
 		UsageRecordsConnection         func(childComplexity int, page *model.ConnectionInput, timeRange *model.TimeRangeInput) int
 		ValidateStreamKey              func(childComplexity int, streamKey string) int
 		VodAsset                       func(childComplexity int, id string) int
-		VodAssetsConnection            func(childComplexity int, page *model.ConnectionInput, streamID *string, input *model.MediaArtifactConnectionInput) int
 		VodUploadStatus                func(childComplexity int, uploadID string) int
 	}
 
@@ -2465,13 +2469,15 @@ type ComplexityRoot struct {
 	StorageArtifact struct {
 		CreatedAt          func(childComplexity int) int
 		DeleteID           func(childComplexity int) int
+		Description        func(childComplexity int) int
+		DurationSeconds    func(childComplexity int) int
 		EffectiveRetention func(childComplexity int) int
+		ErrorMessage       func(childComplexity int) int
 		ExpiresAt          func(childComplexity int) int
+		HasLocalCopy       func(childComplexity int) int
 		Hash               func(childComplexity int) int
 		ID                 func(childComplexity int) int
 		IsFinalized        func(childComplexity int) int
-		IsFrozen           func(childComplexity int) int
-		IsHot              func(childComplexity int) int
 		IsSynced           func(childComplexity int) int
 		Key                func(childComplexity int) int
 		Kind               func(childComplexity int) int
@@ -2480,22 +2486,35 @@ type ComplexityRoot struct {
 		SecondaryLabel     func(childComplexity int) int
 		SizeBytes          func(childComplexity int) int
 		Status             func(childComplexity int) int
+		StorageClusterID   func(childComplexity int) int
 		StorageCost        func(childComplexity int) int
 		StorageLocation    func(childComplexity int) int
 		StreamID           func(childComplexity int) int
 		StreamTitle        func(childComplexity int) int
 		SyncStatus         func(childComplexity int) int
+		ThumbnailAssets    func(childComplexity int) int
 		ThumbnailURL       func(childComplexity int) int
 		Title              func(childComplexity int) int
+		Tracks             func(childComplexity int) int
 		UpdatedAt          func(childComplexity int) int
 	}
 
+	StorageArtifactKindCounts struct {
+		Chapter func(childComplexity int) int
+		Clip    func(childComplexity int) int
+		Dvr     func(childComplexity int) int
+		Total   func(childComplexity int) int
+		Vod     func(childComplexity int) int
+	}
+
 	StorageArtifactsConnection struct {
-		HasNextPage func(childComplexity int) int
-		Limit       func(childComplexity int) int
-		Nodes       func(childComplexity int) int
-		Offset      func(childComplexity int) int
-		TotalCount  func(childComplexity int) int
+		HasNextPage        func(childComplexity int) int
+		KindCounts         func(childComplexity int) int
+		LifecycleAvailable func(childComplexity int) int
+		Limit              func(childComplexity int) int
+		Nodes              func(childComplexity int) int
+		Offset             func(childComplexity int) int
+		TotalCount         func(childComplexity int) int
 	}
 
 	StorageCostProjection struct {
@@ -3156,6 +3175,16 @@ type ComplexityRoot struct {
 		Start func(childComplexity int) int
 	}
 
+	TopAssetEntry struct {
+		ArtifactHash  func(childComplexity int) int
+		DurationS     func(childComplexity int) int
+		Kind          func(childComplexity int) int
+		PlaybackID    func(childComplexity int) int
+		Title         func(childComplexity int) int
+		TotalSessions func(childComplexity int) int
+		WatchHours    func(childComplexity int) int
+	}
+
 	TrackListEvent struct {
 		ID         func(childComplexity int) int
 		NodeId     func(childComplexity int) int
@@ -3431,10 +3460,9 @@ type ComplexityRoot struct {
 		ErrorMessage       func(childComplexity int) int
 		ExpiresAt          func(childComplexity int) int
 		Filename           func(childComplexity int) int
+		HasLocalCopy       func(childComplexity int) int
 		ID                 func(childComplexity int) int
 		IsFinalized        func(childComplexity int) int
-		IsFrozen           func(childComplexity int) int
-		IsHot              func(childComplexity int) int
 		IsSynced           func(childComplexity int) int
 		OriginID           func(childComplexity int) int
 		OriginType         func(childComplexity int) int
@@ -3451,18 +3479,6 @@ type ComplexityRoot struct {
 		Title              func(childComplexity int) int
 		UpdatedAt          func(childComplexity int) int
 		VideoCodec         func(childComplexity int) int
-	}
-
-	VodAssetEdge struct {
-		Cursor func(childComplexity int) int
-		Node   func(childComplexity int) int
-	}
-
-	VodAssetsConnection struct {
-		Edges      func(childComplexity int) int
-		Nodes      func(childComplexity int) int
-		PageInfo   func(childComplexity int) int
-		TotalCount func(childComplexity int) int
 	}
 
 	VodLifecycle struct {
@@ -3630,6 +3646,8 @@ type AnalyticsHealthResolver interface {
 	PlayerBootTimeSeries(ctx context.Context, obj *markers.AnalyticsHealth, streamID *string, artifactHash *string, timeRange *model.TimeRangeInput, interval *string, noCache *bool) ([]*periscopepb.PlayerBootTimeSeriesBucket, error)
 	SessionQoeTimeSeries(ctx context.Context, obj *markers.AnalyticsHealth, streamID *string, artifactHash *string, timeRange *model.TimeRangeInput, interval *string, noCache *bool) ([]*periscopepb.SessionQoeTimeSeriesBucket, error)
 	VodRetentionAssets(ctx context.Context, obj *markers.AnalyticsHealth, page *model.ConnectionInput, timeRange *model.TimeRangeInput, noCache *bool) (*model.VodRetentionAssetConnection, error)
+	TopAssets(ctx context.Context, obj *markers.AnalyticsHealth, timeRange *model.TimeRangeInput, limit *int) ([]*model.TopAssetEntry, error)
+	ArtifactNodeCopies(ctx context.Context, obj *markers.AnalyticsHealth, artifactHash string) (*model.AssetNodeCopies, error)
 }
 type AnalyticsInfraResolver interface {
 	RoutingEventsConnection(ctx context.Context, obj *markers.AnalyticsInfra, page *model.ConnectionInput, streamID *string, timeRange *model.TimeRangeInput, subjectTenantID *string, clusterID *string, noCache *bool) (*model.RoutingEventsConnection, error)
@@ -3953,8 +3971,8 @@ type LiveUsageSummaryResolver interface {
 	FrozenClipBytes(ctx context.Context, obj *periscopepb.LiveUsageSummary) (int, error)
 	FrozenDvrBytes(ctx context.Context, obj *periscopepb.LiveUsageSummary) (int, error)
 	FrozenVodBytes(ctx context.Context, obj *periscopepb.LiveUsageSummary) (int, error)
-	FreezeCount(ctx context.Context, obj *periscopepb.LiveUsageSummary) (int, error)
-	FreezeBytes(ctx context.Context, obj *periscopepb.LiveUsageSummary) (int, error)
+	SyncedArtifactCount(ctx context.Context, obj *periscopepb.LiveUsageSummary) (int, error)
+	SyncedArtifactBytes(ctx context.Context, obj *periscopepb.LiveUsageSummary) (int, error)
 }
 type MollieMandateResolver interface {
 	MandateID(ctx context.Context, obj *purserpb.MollieMandate) (string, error)
@@ -4239,11 +4257,10 @@ type QualityTierSummaryResolver interface {
 type QueryResolver interface {
 	Analytics(ctx context.Context) (*markers.Analytics, error)
 	Platform(ctx context.Context) (*markers.Platform, error)
-	StreamsConnection(ctx context.Context, page *model.ConnectionInput) (*model.StreamsConnection, error)
+	StreamsConnection(ctx context.Context, page *model.ConnectionInput, search *string) (*model.StreamsConnection, error)
 	Stream(ctx context.Context, id string) (*commodorepb.Stream, error)
 	ValidateStreamKey(ctx context.Context, streamKey string) (*model.StreamValidation, error)
 	StreamKeysConnection(ctx context.Context, page *model.ConnectionInput, streamID string) (*model.StreamKeysConnection, error)
-	ClipsConnection(ctx context.Context, page *model.ConnectionInput, streamID *string, input *model.MediaArtifactConnectionInput) (*model.ClipsConnection, error)
 	Clip(ctx context.Context, id string) (*sharedpb.ClipInfo, error)
 	BillingTiers(ctx context.Context) ([]*purserpb.BillingTier, error)
 	InvoicesConnection(ctx context.Context, page *model.ConnectionInput) (*model.InvoicesConnection, error)
@@ -4289,11 +4306,9 @@ type QueryResolver interface {
 	SigningKey(ctx context.Context, id string) (*commodorepb.SigningKey, error)
 	SigningKeysConnection(ctx context.Context, status *string, page *model.ConnectionInput) (*model.SigningKeysConnection, error)
 	BootstrapTokensConnection(ctx context.Context, page *model.ConnectionInput, kind *string) (*model.BootstrapTokenConnection, error)
-	DvrRecordingsConnection(ctx context.Context, page *model.ConnectionInput, streamID *string, input *model.MediaArtifactConnectionInput) (*model.DVRRecordingsConnection, error)
 	DvrChapter(ctx context.Context, dvrID string, mode *model.DVRChapterMode, intervalSeconds *int, startMs float64, endMs float64) (*model.DVRChapter, error)
 	DvrChapters(ctx context.Context, dvrID string, mode *model.DVRChapterMode, intervalSeconds *int, rangeStartMs *float64, rangeEndMs *float64, pageSize *int, pageToken *string) (*model.DVRChaptersPage, error)
 	VodAsset(ctx context.Context, id string) (*model.VodAsset, error)
-	VodAssetsConnection(ctx context.Context, page *model.ConnectionInput, streamID *string, input *model.MediaArtifactConnectionInput) (*model.VodAssetsConnection, error)
 	StorageArtifactsConnection(ctx context.Context, input *model.StorageArtifactsInput) (*model.StorageArtifactsConnection, error)
 	VodUploadStatus(ctx context.Context, uploadID string) (model.VodUploadStatusResult, error)
 	ResolveViewerEndpoint(ctx context.Context, contentID string) (*sharedpb.ViewerEndpointResponse, error)
@@ -5031,6 +5046,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.Analytics.Usage(childComplexity), true
 
+	case "AnalyticsHealth.artifactNodeCopies":
+		if e.complexity.AnalyticsHealth.ArtifactNodeCopies == nil {
+			break
+		}
+
+		args, err := ec.field_AnalyticsHealth_artifactNodeCopies_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.AnalyticsHealth.ArtifactNodeCopies(childComplexity, args["artifactHash"].(string)), true
+
 	case "AnalyticsHealth.clientQoeConnection":
 		if e.complexity.AnalyticsHealth.ClientQoeConnection == nil {
 			break
@@ -5150,6 +5177,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.AnalyticsHealth.StreamHealthSummary(childComplexity, args["streamId"].(*string), args["timeRange"].(*model.TimeRangeInput), args["noCache"].(*bool)), true
+
+	case "AnalyticsHealth.topAssets":
+		if e.complexity.AnalyticsHealth.TopAssets == nil {
+			break
+		}
+
+		args, err := ec.field_AnalyticsHealth_topAssets_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.AnalyticsHealth.TopAssets(childComplexity, args["timeRange"].(*model.TimeRangeInput), args["limit"].(*int)), true
 
 	case "AnalyticsHealth.vodRetention":
 		if e.complexity.AnalyticsHealth.VodRetention == nil {
@@ -5783,6 +5822,153 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.ArtifactStatesConnection.TotalCount(childComplexity), true
+
+	case "ArtifactTrack.bitrateKbps":
+		if e.complexity.ArtifactTrack.BitrateKbps == nil {
+			break
+		}
+
+		return e.complexity.ArtifactTrack.BitrateKbps(childComplexity), true
+
+	case "ArtifactTrack.channels":
+		if e.complexity.ArtifactTrack.Channels == nil {
+			break
+		}
+
+		return e.complexity.ArtifactTrack.Channels(childComplexity), true
+
+	case "ArtifactTrack.codec":
+		if e.complexity.ArtifactTrack.Codec == nil {
+			break
+		}
+
+		return e.complexity.ArtifactTrack.Codec(childComplexity), true
+
+	case "ArtifactTrack.fps":
+		if e.complexity.ArtifactTrack.Fps == nil {
+			break
+		}
+
+		return e.complexity.ArtifactTrack.Fps(childComplexity), true
+
+	case "ArtifactTrack.height":
+		if e.complexity.ArtifactTrack.Height == nil {
+			break
+		}
+
+		return e.complexity.ArtifactTrack.Height(childComplexity), true
+
+	case "ArtifactTrack.resolution":
+		if e.complexity.ArtifactTrack.Resolution == nil {
+			break
+		}
+
+		return e.complexity.ArtifactTrack.Resolution(childComplexity), true
+
+	case "ArtifactTrack.sampleRate":
+		if e.complexity.ArtifactTrack.SampleRate == nil {
+			break
+		}
+
+		return e.complexity.ArtifactTrack.SampleRate(childComplexity), true
+
+	case "ArtifactTrack.type":
+		if e.complexity.ArtifactTrack.Type == nil {
+			break
+		}
+
+		return e.complexity.ArtifactTrack.Type(childComplexity), true
+
+	case "ArtifactTrack.width":
+		if e.complexity.ArtifactTrack.Width == nil {
+			break
+		}
+
+		return e.complexity.ArtifactTrack.Width(childComplexity), true
+
+	case "AssetNodeCopies.copies":
+		if e.complexity.AssetNodeCopies.Copies == nil {
+			break
+		}
+
+		return e.complexity.AssetNodeCopies.Copies(childComplexity), true
+
+	case "AssetNodeCopies.truncated":
+		if e.complexity.AssetNodeCopies.Truncated == nil {
+			break
+		}
+
+		return e.complexity.AssetNodeCopies.Truncated(childComplexity), true
+
+	case "AssetNodeCopy.clusterId":
+		if e.complexity.AssetNodeCopy.ClusterID == nil {
+			break
+		}
+
+		return e.complexity.AssetNodeCopy.ClusterID(childComplexity), true
+
+	case "AssetNodeCopy.isComplete":
+		if e.complexity.AssetNodeCopy.IsComplete == nil {
+			break
+		}
+
+		return e.complexity.AssetNodeCopy.IsComplete(childComplexity), true
+
+	case "AssetNodeCopy.latitude":
+		if e.complexity.AssetNodeCopy.Latitude == nil {
+			break
+		}
+
+		return e.complexity.AssetNodeCopy.Latitude(childComplexity), true
+
+	case "AssetNodeCopy.longitude":
+		if e.complexity.AssetNodeCopy.Longitude == nil {
+			break
+		}
+
+		return e.complexity.AssetNodeCopy.Longitude(childComplexity), true
+
+	case "AssetNodeCopy.nodeId":
+		if e.complexity.AssetNodeCopy.NodeID == nil {
+			break
+		}
+
+		return e.complexity.AssetNodeCopy.NodeID(childComplexity), true
+
+	case "AssetNodeCopy.nodeName":
+		if e.complexity.AssetNodeCopy.NodeName == nil {
+			break
+		}
+
+		return e.complexity.AssetNodeCopy.NodeName(childComplexity), true
+
+	case "AssetNodeCopy.region":
+		if e.complexity.AssetNodeCopy.Region == nil {
+			break
+		}
+
+		return e.complexity.AssetNodeCopy.Region(childComplexity), true
+
+	case "AssetNodeCopy.role":
+		if e.complexity.AssetNodeCopy.Role == nil {
+			break
+		}
+
+		return e.complexity.AssetNodeCopy.Role(childComplexity), true
+
+	case "AssetNodeCopy.sizeBytes":
+		if e.complexity.AssetNodeCopy.SizeBytes == nil {
+			break
+		}
+
+		return e.complexity.AssetNodeCopy.SizeBytes(childComplexity), true
+
+	case "AssetNodeCopy.updatedAt":
+		if e.complexity.AssetNodeCopy.UpdatedAt == nil {
+			break
+		}
+
+		return e.complexity.AssetNodeCopy.UpdatedAt(childComplexity), true
 
 	case "AuthError.code":
 		if e.complexity.AuthError.Code == nil {
@@ -6862,6 +7048,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.Clip.ExpiresAt(childComplexity), true
 
+	case "Clip.hasLocalCopy":
+		if e.complexity.Clip.HasLocalCopy == nil {
+			break
+		}
+
+		return e.complexity.Clip.HasLocalCopy(childComplexity), true
+
 	case "Clip.id":
 		if e.complexity.Clip.ID == nil {
 			break
@@ -6882,20 +7075,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.Clip.IsFinalized(childComplexity), true
-
-	case "Clip.isFrozen":
-		if e.complexity.Clip.IsFrozen == nil {
-			break
-		}
-
-		return e.complexity.Clip.IsFrozen(childComplexity), true
-
-	case "Clip.isHot":
-		if e.complexity.Clip.IsHot == nil {
-			break
-		}
-
-		return e.complexity.Clip.IsHot(childComplexity), true
 
 	case "Clip.isSynced":
 		if e.complexity.Clip.IsSynced == nil {
@@ -7023,20 +7202,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.Clip.UpdatedAt(childComplexity), true
 
-	case "ClipEdge.cursor":
-		if e.complexity.ClipEdge.Cursor == nil {
-			break
-		}
-
-		return e.complexity.ClipEdge.Cursor(childComplexity), true
-
-	case "ClipEdge.node":
-		if e.complexity.ClipEdge.Node == nil {
-			break
-		}
-
-		return e.complexity.ClipEdge.Node(childComplexity), true
-
 	case "ClipLifecycle.clipHash":
 		if e.complexity.ClipLifecycle.ClipHash == nil {
 			break
@@ -7155,34 +7320,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.ClipLifecycle.StreamID(childComplexity), true
-
-	case "ClipsConnection.edges":
-		if e.complexity.ClipsConnection.Edges == nil {
-			break
-		}
-
-		return e.complexity.ClipsConnection.Edges(childComplexity), true
-
-	case "ClipsConnection.nodes":
-		if e.complexity.ClipsConnection.Nodes == nil {
-			break
-		}
-
-		return e.complexity.ClipsConnection.Nodes(childComplexity), true
-
-	case "ClipsConnection.pageInfo":
-		if e.complexity.ClipsConnection.PageInfo == nil {
-			break
-		}
-
-		return e.complexity.ClipsConnection.PageInfo(childComplexity), true
-
-	case "ClipsConnection.totalCount":
-		if e.complexity.ClipsConnection.TotalCount == nil {
-			break
-		}
-
-		return e.complexity.ClipsConnection.TotalCount(childComplexity), true
 
 	case "Cluster.baseUrl":
 		if e.complexity.Cluster.BaseUrl == nil {
@@ -8904,48 +9041,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.DVREvent.StreamID(childComplexity), true
 
-	case "DVRRecordingEdge.cursor":
-		if e.complexity.DVRRecordingEdge.Cursor == nil {
-			break
-		}
-
-		return e.complexity.DVRRecordingEdge.Cursor(childComplexity), true
-
-	case "DVRRecordingEdge.node":
-		if e.complexity.DVRRecordingEdge.Node == nil {
-			break
-		}
-
-		return e.complexity.DVRRecordingEdge.Node(childComplexity), true
-
-	case "DVRRecordingsConnection.edges":
-		if e.complexity.DVRRecordingsConnection.Edges == nil {
-			break
-		}
-
-		return e.complexity.DVRRecordingsConnection.Edges(childComplexity), true
-
-	case "DVRRecordingsConnection.nodes":
-		if e.complexity.DVRRecordingsConnection.Nodes == nil {
-			break
-		}
-
-		return e.complexity.DVRRecordingsConnection.Nodes(childComplexity), true
-
-	case "DVRRecordingsConnection.pageInfo":
-		if e.complexity.DVRRecordingsConnection.PageInfo == nil {
-			break
-		}
-
-		return e.complexity.DVRRecordingsConnection.PageInfo(childComplexity), true
-
-	case "DVRRecordingsConnection.totalCount":
-		if e.complexity.DVRRecordingsConnection.TotalCount == nil {
-			break
-		}
-
-		return e.complexity.DVRRecordingsConnection.TotalCount(childComplexity), true
-
 	case "DVRRequest.createdAt":
 		if e.complexity.DVRRequest.CreatedAt == nil {
 			break
@@ -9002,6 +9097,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.DVRRequest.FrozenAt(childComplexity), true
 
+	case "DVRRequest.hasLocalCopy":
+		if e.complexity.DVRRequest.HasLocalCopy == nil {
+			break
+		}
+
+		return e.complexity.DVRRequest.HasLocalCopy(childComplexity), true
+
 	case "DVRRequest.id":
 		if e.complexity.DVRRequest.Id == nil {
 			break
@@ -9022,20 +9124,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.DVRRequest.IsFinalized(childComplexity), true
-
-	case "DVRRequest.isFrozen":
-		if e.complexity.DVRRequest.IsFrozen == nil {
-			break
-		}
-
-		return e.complexity.DVRRequest.IsFrozen(childComplexity), true
-
-	case "DVRRequest.isHot":
-		if e.complexity.DVRRequest.IsHot == nil {
-			break
-		}
-
-		return e.complexity.DVRRequest.IsHot(childComplexity), true
 
 	case "DVRRequest.isSynced":
 		if e.complexity.DVRRequest.IsSynced == nil {
@@ -9162,6 +9250,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.DeleteSuccess.DeletedID(childComplexity), true
+
+	case "DeleteSuccess.pending":
+		if e.complexity.DeleteSuccess.Pending == nil {
+			break
+		}
+
+		return e.complexity.DeleteSuccess.Pending(childComplexity), true
 
 	case "DeleteSuccess.success":
 		if e.complexity.DeleteSuccess.Success == nil {
@@ -10377,20 +10472,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.LiveUsageSummary.EgressGb(childComplexity), true
 
-	case "LiveUsageSummary.freezeBytes":
-		if e.complexity.LiveUsageSummary.FreezeBytes == nil {
-			break
-		}
-
-		return e.complexity.LiveUsageSummary.FreezeBytes(childComplexity), true
-
-	case "LiveUsageSummary.freezeCount":
-		if e.complexity.LiveUsageSummary.FreezeCount == nil {
-			break
-		}
-
-		return e.complexity.LiveUsageSummary.FreezeCount(childComplexity), true
-
 	case "LiveUsageSummary.frozenClipBytes":
 		if e.complexity.LiveUsageSummary.FrozenClipBytes == nil {
 			break
@@ -10551,6 +10632,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.LiveUsageSummary.StreamHours(childComplexity), true
+
+	case "LiveUsageSummary.syncedArtifactBytes":
+		if e.complexity.LiveUsageSummary.SyncedArtifactBytes == nil {
+			break
+		}
+
+		return e.complexity.LiveUsageSummary.SyncedArtifactBytes(childComplexity), true
+
+	case "LiveUsageSummary.syncedArtifactCount":
+		if e.complexity.LiveUsageSummary.SyncedArtifactCount == nil {
+			break
+		}
+
+		return e.complexity.LiveUsageSummary.SyncedArtifactCount(childComplexity), true
 
 	case "LiveUsageSummary.tenantId":
 		if e.complexity.LiveUsageSummary.TenantId == nil {
@@ -15127,18 +15222,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.Query.Clip(childComplexity, args["id"].(string)), true
 
-	case "Query.clipsConnection":
-		if e.complexity.Query.ClipsConnection == nil {
-			break
-		}
-
-		args, err := ec.field_Query_clipsConnection_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.complexity.Query.ClipsConnection(childComplexity, args["page"].(*model.ConnectionInput), args["streamId"].(*string), args["input"].(*model.MediaArtifactConnectionInput)), true
-
 	case "Query.cluster":
 		if e.complexity.Query.Cluster == nil {
 			break
@@ -15306,18 +15389,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.Query.DvrChapters(childComplexity, args["dvrId"].(string), args["mode"].(*model.DVRChapterMode), args["intervalSeconds"].(*int), args["rangeStartMs"].(*float64), args["rangeEndMs"].(*float64), args["pageSize"].(*int), args["pageToken"].(*string)), true
-
-	case "Query.dvrRecordingsConnection":
-		if e.complexity.Query.DvrRecordingsConnection == nil {
-			break
-		}
-
-		args, err := ec.field_Query_dvrRecordingsConnection_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.complexity.Query.DvrRecordingsConnection(childComplexity, args["page"].(*model.ConnectionInput), args["streamId"].(*string), args["input"].(*model.MediaArtifactConnectionInput)), true
 
 	case "Query.invoice":
 		if e.complexity.Query.Invoice == nil {
@@ -15750,7 +15821,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.complexity.Query.StreamsConnection(childComplexity, args["page"].(*model.ConnectionInput)), true
+		return e.complexity.Query.StreamsConnection(childComplexity, args["page"].(*model.ConnectionInput), args["search"].(*string)), true
 
 	case "Query.tenant":
 		if e.complexity.Query.Tenant == nil {
@@ -15818,18 +15889,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.Query.VodAsset(childComplexity, args["id"].(string)), true
-
-	case "Query.vodAssetsConnection":
-		if e.complexity.Query.VodAssetsConnection == nil {
-			break
-		}
-
-		args, err := ec.field_Query_vodAssetsConnection_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.complexity.Query.VodAssetsConnection(childComplexity, args["page"].(*model.ConnectionInput), args["streamId"].(*string), args["input"].(*model.MediaArtifactConnectionInput)), true
 
 	case "Query.vodUploadStatus":
 		if e.complexity.Query.VodUploadStatus == nil {
@@ -17054,6 +17113,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.StorageArtifact.DeleteID(childComplexity), true
 
+	case "StorageArtifact.description":
+		if e.complexity.StorageArtifact.Description == nil {
+			break
+		}
+
+		return e.complexity.StorageArtifact.Description(childComplexity), true
+
+	case "StorageArtifact.durationSeconds":
+		if e.complexity.StorageArtifact.DurationSeconds == nil {
+			break
+		}
+
+		return e.complexity.StorageArtifact.DurationSeconds(childComplexity), true
+
 	case "StorageArtifact.effectiveRetention":
 		if e.complexity.StorageArtifact.EffectiveRetention == nil {
 			break
@@ -17061,12 +17134,26 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.StorageArtifact.EffectiveRetention(childComplexity), true
 
+	case "StorageArtifact.errorMessage":
+		if e.complexity.StorageArtifact.ErrorMessage == nil {
+			break
+		}
+
+		return e.complexity.StorageArtifact.ErrorMessage(childComplexity), true
+
 	case "StorageArtifact.expiresAt":
 		if e.complexity.StorageArtifact.ExpiresAt == nil {
 			break
 		}
 
 		return e.complexity.StorageArtifact.ExpiresAt(childComplexity), true
+
+	case "StorageArtifact.hasLocalCopy":
+		if e.complexity.StorageArtifact.HasLocalCopy == nil {
+			break
+		}
+
+		return e.complexity.StorageArtifact.HasLocalCopy(childComplexity), true
 
 	case "StorageArtifact.hash":
 		if e.complexity.StorageArtifact.Hash == nil {
@@ -17088,20 +17175,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.StorageArtifact.IsFinalized(childComplexity), true
-
-	case "StorageArtifact.isFrozen":
-		if e.complexity.StorageArtifact.IsFrozen == nil {
-			break
-		}
-
-		return e.complexity.StorageArtifact.IsFrozen(childComplexity), true
-
-	case "StorageArtifact.isHot":
-		if e.complexity.StorageArtifact.IsHot == nil {
-			break
-		}
-
-		return e.complexity.StorageArtifact.IsHot(childComplexity), true
 
 	case "StorageArtifact.isSynced":
 		if e.complexity.StorageArtifact.IsSynced == nil {
@@ -17159,6 +17232,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.StorageArtifact.Status(childComplexity), true
 
+	case "StorageArtifact.storageClusterId":
+		if e.complexity.StorageArtifact.StorageClusterID == nil {
+			break
+		}
+
+		return e.complexity.StorageArtifact.StorageClusterID(childComplexity), true
+
 	case "StorageArtifact.storageCost":
 		if e.complexity.StorageArtifact.StorageCost == nil {
 			break
@@ -17194,6 +17274,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.StorageArtifact.SyncStatus(childComplexity), true
 
+	case "StorageArtifact.thumbnailAssets":
+		if e.complexity.StorageArtifact.ThumbnailAssets == nil {
+			break
+		}
+
+		return e.complexity.StorageArtifact.ThumbnailAssets(childComplexity), true
+
 	case "StorageArtifact.thumbnailUrl":
 		if e.complexity.StorageArtifact.ThumbnailURL == nil {
 			break
@@ -17208,6 +17295,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.StorageArtifact.Title(childComplexity), true
 
+	case "StorageArtifact.tracks":
+		if e.complexity.StorageArtifact.Tracks == nil {
+			break
+		}
+
+		return e.complexity.StorageArtifact.Tracks(childComplexity), true
+
 	case "StorageArtifact.updatedAt":
 		if e.complexity.StorageArtifact.UpdatedAt == nil {
 			break
@@ -17215,12 +17309,61 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.StorageArtifact.UpdatedAt(childComplexity), true
 
+	case "StorageArtifactKindCounts.chapter":
+		if e.complexity.StorageArtifactKindCounts.Chapter == nil {
+			break
+		}
+
+		return e.complexity.StorageArtifactKindCounts.Chapter(childComplexity), true
+
+	case "StorageArtifactKindCounts.clip":
+		if e.complexity.StorageArtifactKindCounts.Clip == nil {
+			break
+		}
+
+		return e.complexity.StorageArtifactKindCounts.Clip(childComplexity), true
+
+	case "StorageArtifactKindCounts.dvr":
+		if e.complexity.StorageArtifactKindCounts.Dvr == nil {
+			break
+		}
+
+		return e.complexity.StorageArtifactKindCounts.Dvr(childComplexity), true
+
+	case "StorageArtifactKindCounts.total":
+		if e.complexity.StorageArtifactKindCounts.Total == nil {
+			break
+		}
+
+		return e.complexity.StorageArtifactKindCounts.Total(childComplexity), true
+
+	case "StorageArtifactKindCounts.vod":
+		if e.complexity.StorageArtifactKindCounts.Vod == nil {
+			break
+		}
+
+		return e.complexity.StorageArtifactKindCounts.Vod(childComplexity), true
+
 	case "StorageArtifactsConnection.hasNextPage":
 		if e.complexity.StorageArtifactsConnection.HasNextPage == nil {
 			break
 		}
 
 		return e.complexity.StorageArtifactsConnection.HasNextPage(childComplexity), true
+
+	case "StorageArtifactsConnection.kindCounts":
+		if e.complexity.StorageArtifactsConnection.KindCounts == nil {
+			break
+		}
+
+		return e.complexity.StorageArtifactsConnection.KindCounts(childComplexity), true
+
+	case "StorageArtifactsConnection.lifecycleAvailable":
+		if e.complexity.StorageArtifactsConnection.LifecycleAvailable == nil {
+			break
+		}
+
+		return e.complexity.StorageArtifactsConnection.LifecycleAvailable(childComplexity), true
 
 	case "StorageArtifactsConnection.limit":
 		if e.complexity.StorageArtifactsConnection.Limit == nil {
@@ -20746,6 +20889,55 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.TimeRange.Start(childComplexity), true
 
+	case "TopAssetEntry.artifactHash":
+		if e.complexity.TopAssetEntry.ArtifactHash == nil {
+			break
+		}
+
+		return e.complexity.TopAssetEntry.ArtifactHash(childComplexity), true
+
+	case "TopAssetEntry.durationS":
+		if e.complexity.TopAssetEntry.DurationS == nil {
+			break
+		}
+
+		return e.complexity.TopAssetEntry.DurationS(childComplexity), true
+
+	case "TopAssetEntry.kind":
+		if e.complexity.TopAssetEntry.Kind == nil {
+			break
+		}
+
+		return e.complexity.TopAssetEntry.Kind(childComplexity), true
+
+	case "TopAssetEntry.playbackId":
+		if e.complexity.TopAssetEntry.PlaybackID == nil {
+			break
+		}
+
+		return e.complexity.TopAssetEntry.PlaybackID(childComplexity), true
+
+	case "TopAssetEntry.title":
+		if e.complexity.TopAssetEntry.Title == nil {
+			break
+		}
+
+		return e.complexity.TopAssetEntry.Title(childComplexity), true
+
+	case "TopAssetEntry.totalSessions":
+		if e.complexity.TopAssetEntry.TotalSessions == nil {
+			break
+		}
+
+		return e.complexity.TopAssetEntry.TotalSessions(childComplexity), true
+
+	case "TopAssetEntry.watchHours":
+		if e.complexity.TopAssetEntry.WatchHours == nil {
+			break
+		}
+
+		return e.complexity.TopAssetEntry.WatchHours(childComplexity), true
+
 	case "TrackListEvent.id":
 		if e.complexity.TrackListEvent.ID == nil {
 			break
@@ -22055,6 +22247,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.VodAsset.Filename(childComplexity), true
 
+	case "VodAsset.hasLocalCopy":
+		if e.complexity.VodAsset.HasLocalCopy == nil {
+			break
+		}
+
+		return e.complexity.VodAsset.HasLocalCopy(childComplexity), true
+
 	case "VodAsset.id":
 		if e.complexity.VodAsset.ID == nil {
 			break
@@ -22068,20 +22267,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.VodAsset.IsFinalized(childComplexity), true
-
-	case "VodAsset.isFrozen":
-		if e.complexity.VodAsset.IsFrozen == nil {
-			break
-		}
-
-		return e.complexity.VodAsset.IsFrozen(childComplexity), true
-
-	case "VodAsset.isHot":
-		if e.complexity.VodAsset.IsHot == nil {
-			break
-		}
-
-		return e.complexity.VodAsset.IsHot(childComplexity), true
 
 	case "VodAsset.isSynced":
 		if e.complexity.VodAsset.IsSynced == nil {
@@ -22194,48 +22379,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.VodAsset.VideoCodec(childComplexity), true
-
-	case "VodAssetEdge.cursor":
-		if e.complexity.VodAssetEdge.Cursor == nil {
-			break
-		}
-
-		return e.complexity.VodAssetEdge.Cursor(childComplexity), true
-
-	case "VodAssetEdge.node":
-		if e.complexity.VodAssetEdge.Node == nil {
-			break
-		}
-
-		return e.complexity.VodAssetEdge.Node(childComplexity), true
-
-	case "VodAssetsConnection.edges":
-		if e.complexity.VodAssetsConnection.Edges == nil {
-			break
-		}
-
-		return e.complexity.VodAssetsConnection.Edges(childComplexity), true
-
-	case "VodAssetsConnection.nodes":
-		if e.complexity.VodAssetsConnection.Nodes == nil {
-			break
-		}
-
-		return e.complexity.VodAssetsConnection.Nodes(childComplexity), true
-
-	case "VodAssetsConnection.pageInfo":
-		if e.complexity.VodAssetsConnection.PageInfo == nil {
-			break
-		}
-
-		return e.complexity.VodAssetsConnection.PageInfo(childComplexity), true
-
-	case "VodAssetsConnection.totalCount":
-		if e.complexity.VodAssetsConnection.TotalCount == nil {
-			break
-		}
-
-		return e.complexity.VodAssetsConnection.TotalCount(childComplexity), true
 
 	case "VodLifecycle.audioCodec":
 		if e.complexity.VodLifecycle.AudioCodec == nil {
@@ -22784,7 +22927,6 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputCreateVodUploadInput,
 		ec.unmarshalInputEntitlementEntryInput,
 		ec.unmarshalInputLinkEmailInput,
-		ec.unmarshalInputMediaArtifactConnectionInput,
 		ec.unmarshalInputOpenMistAdminSessionInput,
 		ec.unmarshalInputPlaybackJwtClaimRequirementInput,
 		ec.unmarshalInputPlaybackJwtPolicyInput,
@@ -23026,6 +23168,11 @@ type Query {
     Pagination options.
     """
     page: ConnectionInput
+    """
+    Optional server-side name search (title / internal name). Enables an account-wide
+    picker instead of only the first page.
+    """
+    search: String
   ): StreamsConnection!
 
   """
@@ -23061,24 +23208,6 @@ type Query {
     """
     streamId: ID!
   ): StreamKeysConnection!
-
-  """
-  List clips created from streams.
-  """
-  clipsConnection(
-    """
-    Pagination options.
-    """
-    page: ConnectionInput
-    """
-    Filter by stream ID (Stream.id, Relay global ID).
-    """
-    streamId: ID
-    """
-    Server-side search and sorting for clip lists.
-    """
-    input: MediaArtifactConnectionInput
-  ): ClipsConnection!
 
   """
   Fetch a single clip by its global ID.
@@ -23504,25 +23633,6 @@ type Query {
   ): BootstrapTokenConnection!
 
   """
-  List DVR recording requests for live streams.
-  DVR allows viewers to seek back in a live stream.
-  """
-  dvrRecordingsConnection(
-    """
-    Pagination options.
-    """
-    page: ConnectionInput
-    """
-    Filter by stream ID (Stream.id, Relay global ID).
-    """
-    streamId: ID
-    """
-    Server-side search and sorting for DVR recording lists.
-    """
-    input: MediaArtifactConnectionInput
-  ): DVRRecordingsConnection
-
-  """
   Retrieve a single DVR chapter, including its finalized playbackId.
 
   Chapters are produced by the finalization queue as canonical .mkv
@@ -23576,19 +23686,6 @@ type Query {
     """
     id: ID!
   ): VodAsset
-
-  """
-  List VOD-shaped assets. By default this is the tenant's library-visible
-  uploads. When streamId is supplied, returns VOD-shaped artifacts derived
-  from that stream, including hidden DVR chapter artifacts.
-  """
-  vodAssetsConnection(
-    page: ConnectionInput
-    "Filter by source stream ID (Stream.id, Relay global ID)."
-    streamId: ID
-    "Server-side search and sorting for VOD asset lists."
-    input: MediaArtifactConnectionInput
-  ): VodAssetsConnection!
 
   """
   Unified storage artifact browser for the account Storage page.
@@ -23987,6 +24084,48 @@ type AnalyticsHealth {
     timeRange: TimeRangeInput
     noCache: Boolean = false
   ): VodRetentionAssetConnection!
+  """
+  Top assets by audience in the window — server-ranked by sessions, across every kind
+  (VOD, clip, DVR, chapter). Backs the "Top Assets" table on the analytics overview.
+  title/playbackId are composed from the catalog by artifactHash.
+  """
+  topAssets(timeRange: TimeRangeInput, limit: Int = 10): [TopAssetEntry!]!
+  """
+  Nodes currently holding a transient LOCAL COPY of one artifact (not the durable
+  object-storage copy), from the node-copy telemetry the media plane emits. ` + "`" + `role` + "`" + `
+  is ` + "`" + `origin` + "`" + ` (producer/relay source) or ` + "`" + `cache` + "`" + ` (synced pull); ` + "`" + `isComplete` + "`" + ` marks a
+  full local copy. Read-through relay block caches are not represented. Node geo is
+  enriched from the infrastructure registry. ` + "`" + `artifactHash` + "`" + ` is required. When
+  ` + "`" + `truncated` + "`" + ` is true the node set was capped and is NOT exhaustive.
+  """
+  artifactNodeCopies(artifactHash: String!): AssetNodeCopies!
+}
+
+"""
+A node-copy listing plus whether it was capped at the per-request limit. When
+` + "`" + `truncated` + "`" + ` is true, ` + "`" + `copies` + "`" + ` is not exhaustive — present the count as a lower bound
+(e.g. "500+") or a "results truncated" note, never as an exact total.
+"""
+type AssetNodeCopies {
+  copies: [AssetNodeCopy!]!
+  truncated: Boolean!
+}
+
+"""
+One node's current local copy of an artifact. ` + "`" + `role` + "`" + ` is ` + "`" + `origin` + "`" + ` (a producer node's
+copy) or ` + "`" + `cache` + "`" + ` (a synced copy on another node).
+"""
+type AssetNodeCopy {
+  nodeId: String!
+  nodeName: String
+  clusterId: String
+  region: String
+  latitude: Float
+  longitude: Float
+  role: String!
+  isComplete: Boolean!
+  sizeBytes: Float
+  updatedAt: Time
 }
 
 """
@@ -24923,6 +25062,11 @@ type RateLimitError implements Error {
 type DeleteSuccess {
   success: Boolean!
   deletedId: ID!
+  """
+  True when the delete was accepted but is NOT yet finalized (e.g. a stream deletion awaiting the serving cell's
+  cleanup-tombstone acknowledgement). The operation converges asynchronously; false means fully deleted.
+  """
+  pending: Boolean
 }
 
 # Mutation Result union types
@@ -25432,14 +25576,12 @@ type DVRRequest {
   storageLocation: String # "local", "s3", "freezing"
   "Current S3 sync state (pending, in_progress, synced, failed, lost_local)."
   syncStatus: String
-  "True when at least one edge has a warm local copy."
-  isHot: Boolean
+  "Present full local node copy (origin or cache): true when at least one node holds a complete local copy, false when none remain (playback via read-through relay from S3). Null when the placement overlay (Periscope) is unavailable — unknown, not 'no local copy'. Durable S3-only state is derived by consumers as isSynced && hasLocalCopy == false."
+  hasLocalCopy: Boolean
   "True when S3 has an authoritative copy."
   isSynced: Boolean
   "True when the S3 copy includes the Mist .dtsh index."
   isFinalized: Boolean
-  "True when no warm edge copy remains; playback streams via Helmsman's read-through relay from S3."
-  isFrozen: Boolean
   frozenAt: Time
   s3Url: String
   """
@@ -25447,19 +25589,6 @@ type DVRRequest {
   Null until Foghorn confirms the thumbnail upload.
   """
   thumbnailAssets: ThumbnailAssets
-}
-
-# DVR Recordings Connection (cursor-paginated)
-type DVRRecordingsConnection {
-  edges: [DVRRecordingEdge!]!
-  nodes: [DVRRequest!]!
-  pageInfo: PageInfo!
-  totalCount: Int!
-}
-
-type DVRRecordingEdge {
-  cursor: String!
-  node: DVRRequest!
 }
 
 # ============================================================================
@@ -25735,14 +25864,12 @@ type VodAsset implements Node {
   storageLocation: String!
   "Current S3 sync state (pending, in_progress, synced, failed, lost_local)."
   syncStatus: String
-  "True when at least one edge has a warm local copy."
-  isHot: Boolean!
+  "Present full local node copy (origin or cache): true when at least one node holds a complete local copy, false when none remain (playback via Helmsman's read-through relay from S3). Null when the placement overlay (Periscope) is unavailable — unknown, not 'no local copy'. Durable S3-only state is derived by consumers as isSynced && hasLocalCopy == false."
+  hasLocalCopy: Boolean
   "True when S3 has an authoritative copy."
   isSynced: Boolean!
   "True when the S3 copy includes the Mist .dtsh index."
   isFinalized: Boolean!
-  "True when no warm edge copy remains; playback streams via Helmsman's read-through relay from S3."
-  isFrozen: Boolean!
 
   "File size in bytes (available after validation)."
   sizeBytes: Float
@@ -25788,19 +25915,6 @@ type VodAsset implements Node {
   storageCost: StorageCostProjection
 }
 
-# VOD Assets Connection (cursor-paginated)
-type VodAssetsConnection {
-  edges: [VodAssetEdge!]!
-  nodes: [VodAsset!]!
-  pageInfo: PageInfo!
-  totalCount: Int!
-}
-
-type VodAssetEdge {
-  cursor: String!
-  node: VodAsset!
-}
-
 enum StorageArtifactKind {
   VOD
   DVR
@@ -25827,15 +25941,16 @@ input StorageArtifactsInput {
   streamId: ID
   kinds: [StorageArtifactKind!]
   search: String
+  "Account-wide status filter applied server-side before count/facets/pagination: \"ready\" | \"failed\" | \"processing\" | \"expired\". Empty = all."
+  status: String
+  """
+  Exact artifact-hash match — the canonical lookup for asset detail/analytics routes.
+  Takes precedence over ` + "`" + `search` + "`" + `; combine with ` + "`" + `first: 1` + "`" + ` to fetch a single artifact
+  without a fuzzy scan or page cap.
+  """
+  artifactHash: String
   sort: StorageArtifactSortField = CREATED_AT
   direction: SortDirection = DESC
-}
-
-input MediaArtifactConnectionInput {
-  search: String
-  sort: StorageArtifactSortField = CREATED_AT
-  direction: SortDirection = DESC
-  offset: Int = 0
 }
 
 type StorageArtifact {
@@ -25848,14 +25963,20 @@ type StorageArtifact {
   streamTitle: String!
   title: String!
   secondaryLabel: String!
+  "User-provided description (VOD uploads and clips); null when unset."
+  description: String
+  "Processing failure detail for a failed artifact; null when not failed."
+  errorMessage: String
   sizeBytes: Float
   status: String!
   storageLocation: String
+  "ID of the storage cluster the artifact is durably stored in (control-plane truth from Commodore)."
+  storageClusterId: String
   syncStatus: String
-  isHot: Boolean
+  "Present full local node copy (origin or cache): true when at least one node holds a complete local copy, false when none remain (playback via read-through relay from S3). Null when the placement overlay (Periscope) is unavailable — unknown, not 'no local copy'. Durable S3-only state is derived by consumers as isSynced && hasLocalCopy == false."
+  hasLocalCopy: Boolean
   isSynced: Boolean
   isFinalized: Boolean
-  isFrozen: Boolean
   createdAt: Time!
   updatedAt: Time!
   expiresAt: Time
@@ -25864,6 +25985,26 @@ type StorageArtifact {
   deleteId: ID!
   retentionId: ID!
   thumbnailUrl: String
+  "Poster + hover-scrub sprite assets, when the artifact has thumbnails."
+  thumbnailAssets: ThumbnailAssets
+  "Measured media duration in seconds (all kinds); null until the artifact finalizes."
+  durationSeconds: Float
+  "Finalized A/V track summary (per track), captured from the completion-validated processing result and projected onto the catalog. Empty until finalized."
+  tracks: [ArtifactTrack!]!
+}
+
+"A single A/V (or meta) track of a finalized artifact."
+type ArtifactTrack {
+  "\"video\" | \"audio\" | \"meta\""
+  type: String!
+  codec: String!
+  width: Int
+  height: Int
+  fps: Float
+  resolution: String
+  bitrateKbps: Int
+  channels: Int
+  sampleRate: Int
 }
 
 type StorageArtifactsConnection {
@@ -25872,6 +26013,24 @@ type StorageArtifactsConnection {
   hasNextPage: Boolean!
   limit: Int!
   offset: Int!
+  """
+  True only when EVERY returned row's lifecycle is actually known — resolved from the
+  durable catalog projection or the live overlay. A not-yet-projected/backfilled row makes
+  this false so the client shows an "unknown" lifecycle state rather than reporting the
+  artifacts as not-synced. Per-row availability is derivable from whether syncStatus is set.
+  """
+  lifecycleAvailable: Boolean!
+  "Authoritative per-kind counts under the active search/stream scope (ignoring the kind filter)."
+  kindCounts: StorageArtifactKindCounts!
+}
+
+"Per-kind artifact counts for the account (or filtered scope), for the library tabs/tiles."
+type StorageArtifactKindCounts {
+  total: Int!
+  vod: Int!
+  dvr: Int!
+  chapter: Int!
+  clip: Int!
 }
 
 input CreatePaymentInput {
@@ -27605,19 +27764,6 @@ type StreamsConnection {
   totalCount: Int!
 }
 
-# Clips Connection (for paginated clips list)
-type ClipEdge {
-  cursor: String!
-  node: Clip!
-}
-
-type ClipsConnection {
-  edges: [ClipEdge!]!
-  nodes: [Clip!]!
-  pageInfo: PageInfo!
-  totalCount: Int!
-}
-
 # Clusters Connection (for paginated clusters list)
 type ClusterEdge {
   cursor: String!
@@ -28060,9 +28206,10 @@ type LiveUsageSummary {
   frozenDvrBytes: Int!
   frozenVodBytes: Int!
 
-  # Freeze (S3 upload) operations
-  freezeCount: Int!
-  freezeBytes: Int!
+  # Point-in-time count/bytes of artifacts currently synced to S3
+  # (durable, Foghorn-validated via artifact_state_current)
+  syncedArtifactCount: Int!
+  syncedArtifactBytes: Int!
 }
 
 type CountryMetrics {
@@ -28660,14 +28807,12 @@ type Clip implements Node {
   storageLocation: String
   "Current S3 sync state (pending, in_progress, synced, failed, lost_local)."
   syncStatus: String
-  "True when at least one edge has a warm local copy."
-  isHot: Boolean
+  "Present full local node copy (origin or cache): true when at least one node holds a complete local copy, false when none remain (playback via read-through relay from S3). Null when the placement overlay (Periscope) is unavailable — unknown, not 'no local copy'. Durable S3-only state is derived by consumers as isSynced && hasLocalCopy == false."
+  hasLocalCopy: Boolean
   "True when S3 has an authoritative copy."
   isSynced: Boolean
   "True when the S3 copy includes the Mist .dtsh index."
   isFinalized: Boolean
-  "True when no warm edge copy remains; playback streams via Helmsman's read-through relay from S3."
-  isFrozen: Boolean
   "When the clip will be auto-deleted."
   expiresAt: Time
   "Whether the clip has passed its retention date (expiresAt < now)."
@@ -29443,6 +29588,22 @@ type VodRetentionAsset {
   title: String
   playbackId: String
 }
+
+"""
+One ranked asset for the Top Assets surface — cross-kind, ranked server-side by
+audience sessions in the window. ` + "`" + `kind` + "`" + ` badges the asset type; title/playbackId are
+composed from the catalog. (Named distinctly from the periscope proto TopAsset to
+avoid gqlgen autobinding to that message.)
+"""
+type TopAssetEntry {
+  artifactHash: String!
+  kind: StorageArtifactKind!
+  totalSessions: Int!
+  watchHours: Float!
+  durationS: Int!
+  title: String
+  playbackId: String
+}
 type VodRetentionAssetEdge {
   cursor: String!
   node: VodRetentionAsset!
@@ -29691,9 +29852,9 @@ type PlaybackMetadata {
 """
 Chandler-served thumbnail asset URLs (poster, sprite, VTT cues). URL shape
 is ` + "`" + `{chandlerBase}/assets/{assetKey}/poster.jpg` + "`" + `,
-` + "`" + `/assets/{assetKey}/sprite.jpg` + "`" + `, ` + "`" + `/assets/{assetKey}/sprite.vtt` + "`" + `. assetKey
-is stream_id for live streams; clip_hash / dvr_hash / vod_hash
-(= artifact_hash) for artifacts.
+` + "`" + `/assets/{assetKey}/sprite.jpg` + "`" + `, ` + "`" + `/assets/{assetKey}/sprite.vtt` + "`" + ` — Chandler
+serves the object key directly, no version resolution. assetKey is stream_id
+for live streams; clip_hash / dvr_hash / vod_hash (= artifact_hash) for artifacts.
 """
 type ThumbnailAssets {
   posterUrl: String!
@@ -30764,6 +30925,17 @@ func (ec *executionContext) field_APIUsage_apiUsageConnection_args(ctx context.C
 	return args, nil
 }
 
+func (ec *executionContext) field_AnalyticsHealth_artifactNodeCopies_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "artifactHash", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["artifactHash"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_AnalyticsHealth_clientQoeConnection_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -31031,6 +31203,22 @@ func (ec *executionContext) field_AnalyticsHealth_streamHealthSummary_args(ctx c
 		return nil, err
 	}
 	args["noCache"] = arg2
+	return args, nil
+}
+
+func (ec *executionContext) field_AnalyticsHealth_topAssets_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "timeRange", ec.unmarshalOTimeRangeInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐTimeRangeInput)
+	if err != nil {
+		return nil, err
+	}
+	args["timeRange"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "limit", ec.unmarshalOInt2ᚖint)
+	if err != nil {
+		return nil, err
+	}
+	args["limit"] = arg1
 	return args, nil
 }
 
@@ -32622,27 +32810,6 @@ func (ec *executionContext) field_Query_clip_args(ctx context.Context, rawArgs m
 	return args, nil
 }
 
-func (ec *executionContext) field_Query_clipsConnection_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
-	var err error
-	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "page", ec.unmarshalOConnectionInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐConnectionInput)
-	if err != nil {
-		return nil, err
-	}
-	args["page"] = arg0
-	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "streamId", ec.unmarshalOID2ᚖstring)
-	if err != nil {
-		return nil, err
-	}
-	args["streamId"] = arg1
-	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalOMediaArtifactConnectionInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaArtifactConnectionInput)
-	if err != nil {
-		return nil, err
-	}
-	args["input"] = arg2
-	return args, nil
-}
-
 func (ec *executionContext) field_Query_clusterInvitesConnection_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -32869,27 +33036,6 @@ func (ec *executionContext) field_Query_dvrChapters_args(ctx context.Context, ra
 		return nil, err
 	}
 	args["pageToken"] = arg6
-	return args, nil
-}
-
-func (ec *executionContext) field_Query_dvrRecordingsConnection_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
-	var err error
-	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "page", ec.unmarshalOConnectionInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐConnectionInput)
-	if err != nil {
-		return nil, err
-	}
-	args["page"] = arg0
-	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "streamId", ec.unmarshalOID2ᚖstring)
-	if err != nil {
-		return nil, err
-	}
-	args["streamId"] = arg1
-	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalOMediaArtifactConnectionInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaArtifactConnectionInput)
-	if err != nil {
-		return nil, err
-	}
-	args["input"] = arg2
 	return args, nil
 }
 
@@ -33322,6 +33468,11 @@ func (ec *executionContext) field_Query_streamsConnection_args(ctx context.Conte
 		return nil, err
 	}
 	args["page"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "search", ec.unmarshalOString2ᚖstring)
+	if err != nil {
+		return nil, err
+	}
+	args["search"] = arg1
 	return args, nil
 }
 
@@ -33392,27 +33543,6 @@ func (ec *executionContext) field_Query_vodAsset_args(ctx context.Context, rawAr
 		return nil, err
 	}
 	args["id"] = arg0
-	return args, nil
-}
-
-func (ec *executionContext) field_Query_vodAssetsConnection_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
-	var err error
-	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "page", ec.unmarshalOConnectionInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐConnectionInput)
-	if err != nil {
-		return nil, err
-	}
-	args["page"] = arg0
-	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "streamId", ec.unmarshalOID2ᚖstring)
-	if err != nil {
-		return nil, err
-	}
-	args["streamId"] = arg1
-	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalOMediaArtifactConnectionInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaArtifactConnectionInput)
-	if err != nil {
-		return nil, err
-	}
-	args["input"] = arg2
 	return args, nil
 }
 
@@ -35805,6 +35935,10 @@ func (ec *executionContext) fieldContext_Analytics_health(_ context.Context, fie
 				return ec.fieldContext_AnalyticsHealth_sessionQoeTimeSeries(ctx, field)
 			case "vodRetentionAssets":
 				return ec.fieldContext_AnalyticsHealth_vodRetentionAssets(ctx, field)
+			case "topAssets":
+				return ec.fieldContext_AnalyticsHealth_topAssets(ctx, field)
+			case "artifactNodeCopies":
+				return ec.fieldContext_AnalyticsHealth_artifactNodeCopies(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type AnalyticsHealth", field.Name)
 		},
@@ -36766,6 +36900,138 @@ func (ec *executionContext) fieldContext_AnalyticsHealth_vodRetentionAssets(ctx 
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_AnalyticsHealth_vodRetentionAssets_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AnalyticsHealth_topAssets(ctx context.Context, field graphql.CollectedField, obj *markers.AnalyticsHealth) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AnalyticsHealth_topAssets(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.AnalyticsHealth().TopAssets(rctx, obj, fc.Args["timeRange"].(*model.TimeRangeInput), fc.Args["limit"].(*int))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]*model.TopAssetEntry)
+	fc.Result = res
+	return ec.marshalNTopAssetEntry2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐTopAssetEntryᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AnalyticsHealth_topAssets(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AnalyticsHealth",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "artifactHash":
+				return ec.fieldContext_TopAssetEntry_artifactHash(ctx, field)
+			case "kind":
+				return ec.fieldContext_TopAssetEntry_kind(ctx, field)
+			case "totalSessions":
+				return ec.fieldContext_TopAssetEntry_totalSessions(ctx, field)
+			case "watchHours":
+				return ec.fieldContext_TopAssetEntry_watchHours(ctx, field)
+			case "durationS":
+				return ec.fieldContext_TopAssetEntry_durationS(ctx, field)
+			case "title":
+				return ec.fieldContext_TopAssetEntry_title(ctx, field)
+			case "playbackId":
+				return ec.fieldContext_TopAssetEntry_playbackId(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type TopAssetEntry", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_AnalyticsHealth_topAssets_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AnalyticsHealth_artifactNodeCopies(ctx context.Context, field graphql.CollectedField, obj *markers.AnalyticsHealth) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AnalyticsHealth_artifactNodeCopies(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.AnalyticsHealth().ArtifactNodeCopies(rctx, obj, fc.Args["artifactHash"].(string))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(*model.AssetNodeCopies)
+	fc.Result = res
+	return ec.marshalNAssetNodeCopies2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐAssetNodeCopies(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AnalyticsHealth_artifactNodeCopies(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AnalyticsHealth",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "copies":
+				return ec.fieldContext_AssetNodeCopies_copies(ctx, field)
+			case "truncated":
+				return ec.fieldContext_AssetNodeCopies_truncated(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type AssetNodeCopies", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_AnalyticsHealth_artifactNodeCopies_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -40650,6 +40916,910 @@ func (ec *executionContext) fieldContext_ArtifactStatesConnection_totalCount(_ c
 	return fc, nil
 }
 
+func (ec *executionContext) _ArtifactTrack_type(ctx context.Context, field graphql.CollectedField, obj *model.ArtifactTrack) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ArtifactTrack_type(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Type, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ArtifactTrack_type(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ArtifactTrack",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ArtifactTrack_codec(ctx context.Context, field graphql.CollectedField, obj *model.ArtifactTrack) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ArtifactTrack_codec(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Codec, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ArtifactTrack_codec(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ArtifactTrack",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ArtifactTrack_width(ctx context.Context, field graphql.CollectedField, obj *model.ArtifactTrack) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ArtifactTrack_width(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Width, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ArtifactTrack_width(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ArtifactTrack",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ArtifactTrack_height(ctx context.Context, field graphql.CollectedField, obj *model.ArtifactTrack) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ArtifactTrack_height(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Height, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ArtifactTrack_height(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ArtifactTrack",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ArtifactTrack_fps(ctx context.Context, field graphql.CollectedField, obj *model.ArtifactTrack) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ArtifactTrack_fps(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Fps, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ArtifactTrack_fps(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ArtifactTrack",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ArtifactTrack_resolution(ctx context.Context, field graphql.CollectedField, obj *model.ArtifactTrack) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ArtifactTrack_resolution(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Resolution, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ArtifactTrack_resolution(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ArtifactTrack",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ArtifactTrack_bitrateKbps(ctx context.Context, field graphql.CollectedField, obj *model.ArtifactTrack) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ArtifactTrack_bitrateKbps(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.BitrateKbps, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ArtifactTrack_bitrateKbps(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ArtifactTrack",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ArtifactTrack_channels(ctx context.Context, field graphql.CollectedField, obj *model.ArtifactTrack) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ArtifactTrack_channels(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Channels, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ArtifactTrack_channels(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ArtifactTrack",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ArtifactTrack_sampleRate(ctx context.Context, field graphql.CollectedField, obj *model.ArtifactTrack) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ArtifactTrack_sampleRate(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.SampleRate, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ArtifactTrack_sampleRate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ArtifactTrack",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AssetNodeCopies_copies(ctx context.Context, field graphql.CollectedField, obj *model.AssetNodeCopies) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AssetNodeCopies_copies(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Copies, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]*model.AssetNodeCopy)
+	fc.Result = res
+	return ec.marshalNAssetNodeCopy2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐAssetNodeCopyᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AssetNodeCopies_copies(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AssetNodeCopies",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "nodeId":
+				return ec.fieldContext_AssetNodeCopy_nodeId(ctx, field)
+			case "nodeName":
+				return ec.fieldContext_AssetNodeCopy_nodeName(ctx, field)
+			case "clusterId":
+				return ec.fieldContext_AssetNodeCopy_clusterId(ctx, field)
+			case "region":
+				return ec.fieldContext_AssetNodeCopy_region(ctx, field)
+			case "latitude":
+				return ec.fieldContext_AssetNodeCopy_latitude(ctx, field)
+			case "longitude":
+				return ec.fieldContext_AssetNodeCopy_longitude(ctx, field)
+			case "role":
+				return ec.fieldContext_AssetNodeCopy_role(ctx, field)
+			case "isComplete":
+				return ec.fieldContext_AssetNodeCopy_isComplete(ctx, field)
+			case "sizeBytes":
+				return ec.fieldContext_AssetNodeCopy_sizeBytes(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_AssetNodeCopy_updatedAt(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type AssetNodeCopy", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AssetNodeCopies_truncated(ctx context.Context, field graphql.CollectedField, obj *model.AssetNodeCopies) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AssetNodeCopies_truncated(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Truncated, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AssetNodeCopies_truncated(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AssetNodeCopies",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AssetNodeCopy_nodeId(ctx context.Context, field graphql.CollectedField, obj *model.AssetNodeCopy) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AssetNodeCopy_nodeId(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.NodeID, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AssetNodeCopy_nodeId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AssetNodeCopy",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AssetNodeCopy_nodeName(ctx context.Context, field graphql.CollectedField, obj *model.AssetNodeCopy) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AssetNodeCopy_nodeName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.NodeName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AssetNodeCopy_nodeName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AssetNodeCopy",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AssetNodeCopy_clusterId(ctx context.Context, field graphql.CollectedField, obj *model.AssetNodeCopy) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AssetNodeCopy_clusterId(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ClusterID, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AssetNodeCopy_clusterId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AssetNodeCopy",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AssetNodeCopy_region(ctx context.Context, field graphql.CollectedField, obj *model.AssetNodeCopy) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AssetNodeCopy_region(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Region, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AssetNodeCopy_region(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AssetNodeCopy",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AssetNodeCopy_latitude(ctx context.Context, field graphql.CollectedField, obj *model.AssetNodeCopy) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AssetNodeCopy_latitude(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Latitude, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AssetNodeCopy_latitude(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AssetNodeCopy",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AssetNodeCopy_longitude(ctx context.Context, field graphql.CollectedField, obj *model.AssetNodeCopy) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AssetNodeCopy_longitude(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Longitude, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AssetNodeCopy_longitude(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AssetNodeCopy",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AssetNodeCopy_role(ctx context.Context, field graphql.CollectedField, obj *model.AssetNodeCopy) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AssetNodeCopy_role(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Role, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AssetNodeCopy_role(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AssetNodeCopy",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AssetNodeCopy_isComplete(ctx context.Context, field graphql.CollectedField, obj *model.AssetNodeCopy) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AssetNodeCopy_isComplete(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.IsComplete, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AssetNodeCopy_isComplete(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AssetNodeCopy",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AssetNodeCopy_sizeBytes(ctx context.Context, field graphql.CollectedField, obj *model.AssetNodeCopy) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AssetNodeCopy_sizeBytes(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.SizeBytes, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AssetNodeCopy_sizeBytes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AssetNodeCopy",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AssetNodeCopy_updatedAt(ctx context.Context, field graphql.CollectedField, obj *model.AssetNodeCopy) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AssetNodeCopy_updatedAt(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.UpdatedAt, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*time.Time)
+	fc.Result = res
+	return ec.marshalOTime2ᚖtimeᚐTime(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AssetNodeCopy_updatedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AssetNodeCopy",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _AuthError_message(ctx context.Context, field graphql.CollectedField, obj *model.AuthError) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_AuthError_message(ctx, field)
 	if err != nil {
@@ -43193,10 +44363,10 @@ func (ec *executionContext) fieldContext_BillingStatus_liveUsage(_ context.Conte
 				return ec.fieldContext_LiveUsageSummary_frozenDvrBytes(ctx, field)
 			case "frozenVodBytes":
 				return ec.fieldContext_LiveUsageSummary_frozenVodBytes(ctx, field)
-			case "freezeCount":
-				return ec.fieldContext_LiveUsageSummary_freezeCount(ctx, field)
-			case "freezeBytes":
-				return ec.fieldContext_LiveUsageSummary_freezeBytes(ctx, field)
+			case "syncedArtifactCount":
+				return ec.fieldContext_LiveUsageSummary_syncedArtifactCount(ctx, field)
+			case "syncedArtifactBytes":
+				return ec.fieldContext_LiveUsageSummary_syncedArtifactBytes(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type LiveUsageSummary", field.Name)
 		},
@@ -48501,8 +49671,8 @@ func (ec *executionContext) fieldContext_Clip_syncStatus(_ context.Context, fiel
 	return fc, nil
 }
 
-func (ec *executionContext) _Clip_isHot(ctx context.Context, field graphql.CollectedField, obj *sharedpb.ClipInfo) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Clip_isHot(ctx, field)
+func (ec *executionContext) _Clip_hasLocalCopy(ctx context.Context, field graphql.CollectedField, obj *sharedpb.ClipInfo) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Clip_hasLocalCopy(ctx, field)
 	if err != nil {
 		return graphql.Null
 	}
@@ -48515,7 +49685,7 @@ func (ec *executionContext) _Clip_isHot(ctx context.Context, field graphql.Colle
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.IsHot, nil
+		return obj.HasLocalCopy, nil
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -48529,7 +49699,7 @@ func (ec *executionContext) _Clip_isHot(ctx context.Context, field graphql.Colle
 	return ec.marshalOBoolean2ᚖbool(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) fieldContext_Clip_isHot(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_Clip_hasLocalCopy(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "Clip",
 		Field:      field,
@@ -48612,47 +49782,6 @@ func (ec *executionContext) _Clip_isFinalized(ctx context.Context, field graphql
 }
 
 func (ec *executionContext) fieldContext_Clip_isFinalized(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Clip",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Boolean does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Clip_isFrozen(ctx context.Context, field graphql.CollectedField, obj *sharedpb.ClipInfo) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Clip_isFrozen(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.IsFrozen, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.(*bool)
-	fc.Result = res
-	return ec.marshalOBoolean2ᚖbool(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Clip_isFrozen(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "Clip",
 		Field:      field,
@@ -48943,156 +50072,6 @@ func (ec *executionContext) fieldContext_Clip_storageCost(_ context.Context, fie
 				return ec.fieldContext_StorageCostProjection_currency(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type StorageCostProjection", field.Name)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _ClipEdge_cursor(ctx context.Context, field graphql.CollectedField, obj *model.ClipEdge) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_ClipEdge_cursor(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Cursor, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalNString2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_ClipEdge_cursor(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "ClipEdge",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _ClipEdge_node(ctx context.Context, field graphql.CollectedField, obj *model.ClipEdge) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_ClipEdge_node(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Node, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(*sharedpb.ClipInfo)
-	fc.Result = res
-	return ec.marshalNClip2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋsharedᚐClipInfo(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_ClipEdge_node(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "ClipEdge",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "id":
-				return ec.fieldContext_Clip_id(ctx, field)
-			case "clipHash":
-				return ec.fieldContext_Clip_clipHash(ctx, field)
-			case "playbackId":
-				return ec.fieldContext_Clip_playbackId(ctx, field)
-			case "streamId":
-				return ec.fieldContext_Clip_streamId(ctx, field)
-			case "sourceStreamId":
-				return ec.fieldContext_Clip_sourceStreamId(ctx, field)
-			case "stream":
-				return ec.fieldContext_Clip_stream(ctx, field)
-			case "title":
-				return ec.fieldContext_Clip_title(ctx, field)
-			case "description":
-				return ec.fieldContext_Clip_description(ctx, field)
-			case "startTime":
-				return ec.fieldContext_Clip_startTime(ctx, field)
-			case "duration":
-				return ec.fieldContext_Clip_duration(ctx, field)
-			case "nodeId":
-				return ec.fieldContext_Clip_nodeId(ctx, field)
-			case "storagePath":
-				return ec.fieldContext_Clip_storagePath(ctx, field)
-			case "sizeBytes":
-				return ec.fieldContext_Clip_sizeBytes(ctx, field)
-			case "status":
-				return ec.fieldContext_Clip_status(ctx, field)
-			case "createdAt":
-				return ec.fieldContext_Clip_createdAt(ctx, field)
-			case "updatedAt":
-				return ec.fieldContext_Clip_updatedAt(ctx, field)
-			case "clipMode":
-				return ec.fieldContext_Clip_clipMode(ctx, field)
-			case "requestedParams":
-				return ec.fieldContext_Clip_requestedParams(ctx, field)
-			case "storageLocation":
-				return ec.fieldContext_Clip_storageLocation(ctx, field)
-			case "syncStatus":
-				return ec.fieldContext_Clip_syncStatus(ctx, field)
-			case "isHot":
-				return ec.fieldContext_Clip_isHot(ctx, field)
-			case "isSynced":
-				return ec.fieldContext_Clip_isSynced(ctx, field)
-			case "isFinalized":
-				return ec.fieldContext_Clip_isFinalized(ctx, field)
-			case "isFrozen":
-				return ec.fieldContext_Clip_isFrozen(ctx, field)
-			case "expiresAt":
-				return ec.fieldContext_Clip_expiresAt(ctx, field)
-			case "isExpired":
-				return ec.fieldContext_Clip_isExpired(ctx, field)
-			case "playbackPolicy":
-				return ec.fieldContext_Clip_playbackPolicy(ctx, field)
-			case "thumbnailAssets":
-				return ec.fieldContext_Clip_thumbnailAssets(ctx, field)
-			case "effectiveRetention":
-				return ec.fieldContext_Clip_effectiveRetention(ctx, field)
-			case "storageCost":
-				return ec.fieldContext_Clip_storageCost(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type Clip", field.Name)
 		},
 	}
 	return fc, nil
@@ -49838,260 +50817,6 @@ func (ec *executionContext) fieldContext_ClipLifecycle_clipMode(_ context.Contex
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _ClipsConnection_edges(ctx context.Context, field graphql.CollectedField, obj *model.ClipsConnection) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_ClipsConnection_edges(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Edges, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.([]*model.ClipEdge)
-	fc.Result = res
-	return ec.marshalNClipEdge2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐClipEdgeᚄ(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_ClipsConnection_edges(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "ClipsConnection",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "cursor":
-				return ec.fieldContext_ClipEdge_cursor(ctx, field)
-			case "node":
-				return ec.fieldContext_ClipEdge_node(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type ClipEdge", field.Name)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _ClipsConnection_nodes(ctx context.Context, field graphql.CollectedField, obj *model.ClipsConnection) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_ClipsConnection_nodes(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Nodes, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.([]*sharedpb.ClipInfo)
-	fc.Result = res
-	return ec.marshalNClip2ᚕᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋsharedᚐClipInfoᚄ(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_ClipsConnection_nodes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "ClipsConnection",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "id":
-				return ec.fieldContext_Clip_id(ctx, field)
-			case "clipHash":
-				return ec.fieldContext_Clip_clipHash(ctx, field)
-			case "playbackId":
-				return ec.fieldContext_Clip_playbackId(ctx, field)
-			case "streamId":
-				return ec.fieldContext_Clip_streamId(ctx, field)
-			case "sourceStreamId":
-				return ec.fieldContext_Clip_sourceStreamId(ctx, field)
-			case "stream":
-				return ec.fieldContext_Clip_stream(ctx, field)
-			case "title":
-				return ec.fieldContext_Clip_title(ctx, field)
-			case "description":
-				return ec.fieldContext_Clip_description(ctx, field)
-			case "startTime":
-				return ec.fieldContext_Clip_startTime(ctx, field)
-			case "duration":
-				return ec.fieldContext_Clip_duration(ctx, field)
-			case "nodeId":
-				return ec.fieldContext_Clip_nodeId(ctx, field)
-			case "storagePath":
-				return ec.fieldContext_Clip_storagePath(ctx, field)
-			case "sizeBytes":
-				return ec.fieldContext_Clip_sizeBytes(ctx, field)
-			case "status":
-				return ec.fieldContext_Clip_status(ctx, field)
-			case "createdAt":
-				return ec.fieldContext_Clip_createdAt(ctx, field)
-			case "updatedAt":
-				return ec.fieldContext_Clip_updatedAt(ctx, field)
-			case "clipMode":
-				return ec.fieldContext_Clip_clipMode(ctx, field)
-			case "requestedParams":
-				return ec.fieldContext_Clip_requestedParams(ctx, field)
-			case "storageLocation":
-				return ec.fieldContext_Clip_storageLocation(ctx, field)
-			case "syncStatus":
-				return ec.fieldContext_Clip_syncStatus(ctx, field)
-			case "isHot":
-				return ec.fieldContext_Clip_isHot(ctx, field)
-			case "isSynced":
-				return ec.fieldContext_Clip_isSynced(ctx, field)
-			case "isFinalized":
-				return ec.fieldContext_Clip_isFinalized(ctx, field)
-			case "isFrozen":
-				return ec.fieldContext_Clip_isFrozen(ctx, field)
-			case "expiresAt":
-				return ec.fieldContext_Clip_expiresAt(ctx, field)
-			case "isExpired":
-				return ec.fieldContext_Clip_isExpired(ctx, field)
-			case "playbackPolicy":
-				return ec.fieldContext_Clip_playbackPolicy(ctx, field)
-			case "thumbnailAssets":
-				return ec.fieldContext_Clip_thumbnailAssets(ctx, field)
-			case "effectiveRetention":
-				return ec.fieldContext_Clip_effectiveRetention(ctx, field)
-			case "storageCost":
-				return ec.fieldContext_Clip_storageCost(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type Clip", field.Name)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _ClipsConnection_pageInfo(ctx context.Context, field graphql.CollectedField, obj *model.ClipsConnection) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_ClipsConnection_pageInfo(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.PageInfo, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(*model.PageInfo)
-	fc.Result = res
-	return ec.marshalNPageInfo2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPageInfo(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_ClipsConnection_pageInfo(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "ClipsConnection",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "startCursor":
-				return ec.fieldContext_PageInfo_startCursor(ctx, field)
-			case "endCursor":
-				return ec.fieldContext_PageInfo_endCursor(ctx, field)
-			case "hasNextPage":
-				return ec.fieldContext_PageInfo_hasNextPage(ctx, field)
-			case "hasPreviousPage":
-				return ec.fieldContext_PageInfo_hasPreviousPage(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type PageInfo", field.Name)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _ClipsConnection_totalCount(ctx context.Context, field graphql.CollectedField, obj *model.ClipsConnection) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_ClipsConnection_totalCount(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.TotalCount, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(int)
-	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_ClipsConnection_totalCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "ClipsConnection",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
 		},
 	}
 	return fc, nil
@@ -61474,410 +62199,6 @@ func (ec *executionContext) fieldContext_DVREvent_stream(_ context.Context, fiel
 	return fc, nil
 }
 
-func (ec *executionContext) _DVRRecordingEdge_cursor(ctx context.Context, field graphql.CollectedField, obj *model.DVRRecordingEdge) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_DVRRecordingEdge_cursor(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Cursor, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalNString2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_DVRRecordingEdge_cursor(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "DVRRecordingEdge",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _DVRRecordingEdge_node(ctx context.Context, field graphql.CollectedField, obj *model.DVRRecordingEdge) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_DVRRecordingEdge_node(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Node, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(*sharedpb.DVRInfo)
-	fc.Result = res
-	return ec.marshalNDVRRequest2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋsharedᚐDVRInfo(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_DVRRecordingEdge_node(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "DVRRecordingEdge",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "id":
-				return ec.fieldContext_DVRRequest_id(ctx, field)
-			case "dvrHash":
-				return ec.fieldContext_DVRRequest_dvrHash(ctx, field)
-			case "playbackId":
-				return ec.fieldContext_DVRRequest_playbackId(ctx, field)
-			case "streamId":
-				return ec.fieldContext_DVRRequest_streamId(ctx, field)
-			case "sourceStreamId":
-				return ec.fieldContext_DVRRequest_sourceStreamId(ctx, field)
-			case "stream":
-				return ec.fieldContext_DVRRequest_stream(ctx, field)
-			case "title":
-				return ec.fieldContext_DVRRequest_title(ctx, field)
-			case "createdAt":
-				return ec.fieldContext_DVRRequest_createdAt(ctx, field)
-			case "updatedAt":
-				return ec.fieldContext_DVRRequest_updatedAt(ctx, field)
-			case "expiresAt":
-				return ec.fieldContext_DVRRequest_expiresAt(ctx, field)
-			case "isExpired":
-				return ec.fieldContext_DVRRequest_isExpired(ctx, field)
-			case "effectiveRetention":
-				return ec.fieldContext_DVRRequest_effectiveRetention(ctx, field)
-			case "storageCost":
-				return ec.fieldContext_DVRRequest_storageCost(ctx, field)
-			case "storageNodeId":
-				return ec.fieldContext_DVRRequest_storageNodeId(ctx, field)
-			case "status":
-				return ec.fieldContext_DVRRequest_status(ctx, field)
-			case "startedAt":
-				return ec.fieldContext_DVRRequest_startedAt(ctx, field)
-			case "endedAt":
-				return ec.fieldContext_DVRRequest_endedAt(ctx, field)
-			case "durationSeconds":
-				return ec.fieldContext_DVRRequest_durationSeconds(ctx, field)
-			case "sizeBytes":
-				return ec.fieldContext_DVRRequest_sizeBytes(ctx, field)
-			case "manifestPath":
-				return ec.fieldContext_DVRRequest_manifestPath(ctx, field)
-			case "errorMessage":
-				return ec.fieldContext_DVRRequest_errorMessage(ctx, field)
-			case "storageLocation":
-				return ec.fieldContext_DVRRequest_storageLocation(ctx, field)
-			case "syncStatus":
-				return ec.fieldContext_DVRRequest_syncStatus(ctx, field)
-			case "isHot":
-				return ec.fieldContext_DVRRequest_isHot(ctx, field)
-			case "isSynced":
-				return ec.fieldContext_DVRRequest_isSynced(ctx, field)
-			case "isFinalized":
-				return ec.fieldContext_DVRRequest_isFinalized(ctx, field)
-			case "isFrozen":
-				return ec.fieldContext_DVRRequest_isFrozen(ctx, field)
-			case "frozenAt":
-				return ec.fieldContext_DVRRequest_frozenAt(ctx, field)
-			case "s3Url":
-				return ec.fieldContext_DVRRequest_s3Url(ctx, field)
-			case "thumbnailAssets":
-				return ec.fieldContext_DVRRequest_thumbnailAssets(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type DVRRequest", field.Name)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _DVRRecordingsConnection_edges(ctx context.Context, field graphql.CollectedField, obj *model.DVRRecordingsConnection) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_DVRRecordingsConnection_edges(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Edges, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.([]*model.DVRRecordingEdge)
-	fc.Result = res
-	return ec.marshalNDVRRecordingEdge2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐDVRRecordingEdgeᚄ(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_DVRRecordingsConnection_edges(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "DVRRecordingsConnection",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "cursor":
-				return ec.fieldContext_DVRRecordingEdge_cursor(ctx, field)
-			case "node":
-				return ec.fieldContext_DVRRecordingEdge_node(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type DVRRecordingEdge", field.Name)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _DVRRecordingsConnection_nodes(ctx context.Context, field graphql.CollectedField, obj *model.DVRRecordingsConnection) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_DVRRecordingsConnection_nodes(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Nodes, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.([]*sharedpb.DVRInfo)
-	fc.Result = res
-	return ec.marshalNDVRRequest2ᚕᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋsharedᚐDVRInfoᚄ(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_DVRRecordingsConnection_nodes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "DVRRecordingsConnection",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "id":
-				return ec.fieldContext_DVRRequest_id(ctx, field)
-			case "dvrHash":
-				return ec.fieldContext_DVRRequest_dvrHash(ctx, field)
-			case "playbackId":
-				return ec.fieldContext_DVRRequest_playbackId(ctx, field)
-			case "streamId":
-				return ec.fieldContext_DVRRequest_streamId(ctx, field)
-			case "sourceStreamId":
-				return ec.fieldContext_DVRRequest_sourceStreamId(ctx, field)
-			case "stream":
-				return ec.fieldContext_DVRRequest_stream(ctx, field)
-			case "title":
-				return ec.fieldContext_DVRRequest_title(ctx, field)
-			case "createdAt":
-				return ec.fieldContext_DVRRequest_createdAt(ctx, field)
-			case "updatedAt":
-				return ec.fieldContext_DVRRequest_updatedAt(ctx, field)
-			case "expiresAt":
-				return ec.fieldContext_DVRRequest_expiresAt(ctx, field)
-			case "isExpired":
-				return ec.fieldContext_DVRRequest_isExpired(ctx, field)
-			case "effectiveRetention":
-				return ec.fieldContext_DVRRequest_effectiveRetention(ctx, field)
-			case "storageCost":
-				return ec.fieldContext_DVRRequest_storageCost(ctx, field)
-			case "storageNodeId":
-				return ec.fieldContext_DVRRequest_storageNodeId(ctx, field)
-			case "status":
-				return ec.fieldContext_DVRRequest_status(ctx, field)
-			case "startedAt":
-				return ec.fieldContext_DVRRequest_startedAt(ctx, field)
-			case "endedAt":
-				return ec.fieldContext_DVRRequest_endedAt(ctx, field)
-			case "durationSeconds":
-				return ec.fieldContext_DVRRequest_durationSeconds(ctx, field)
-			case "sizeBytes":
-				return ec.fieldContext_DVRRequest_sizeBytes(ctx, field)
-			case "manifestPath":
-				return ec.fieldContext_DVRRequest_manifestPath(ctx, field)
-			case "errorMessage":
-				return ec.fieldContext_DVRRequest_errorMessage(ctx, field)
-			case "storageLocation":
-				return ec.fieldContext_DVRRequest_storageLocation(ctx, field)
-			case "syncStatus":
-				return ec.fieldContext_DVRRequest_syncStatus(ctx, field)
-			case "isHot":
-				return ec.fieldContext_DVRRequest_isHot(ctx, field)
-			case "isSynced":
-				return ec.fieldContext_DVRRequest_isSynced(ctx, field)
-			case "isFinalized":
-				return ec.fieldContext_DVRRequest_isFinalized(ctx, field)
-			case "isFrozen":
-				return ec.fieldContext_DVRRequest_isFrozen(ctx, field)
-			case "frozenAt":
-				return ec.fieldContext_DVRRequest_frozenAt(ctx, field)
-			case "s3Url":
-				return ec.fieldContext_DVRRequest_s3Url(ctx, field)
-			case "thumbnailAssets":
-				return ec.fieldContext_DVRRequest_thumbnailAssets(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type DVRRequest", field.Name)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _DVRRecordingsConnection_pageInfo(ctx context.Context, field graphql.CollectedField, obj *model.DVRRecordingsConnection) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_DVRRecordingsConnection_pageInfo(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.PageInfo, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(*model.PageInfo)
-	fc.Result = res
-	return ec.marshalNPageInfo2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPageInfo(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_DVRRecordingsConnection_pageInfo(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "DVRRecordingsConnection",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "startCursor":
-				return ec.fieldContext_PageInfo_startCursor(ctx, field)
-			case "endCursor":
-				return ec.fieldContext_PageInfo_endCursor(ctx, field)
-			case "hasNextPage":
-				return ec.fieldContext_PageInfo_hasNextPage(ctx, field)
-			case "hasPreviousPage":
-				return ec.fieldContext_PageInfo_hasPreviousPage(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type PageInfo", field.Name)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _DVRRecordingsConnection_totalCount(ctx context.Context, field graphql.CollectedField, obj *model.DVRRecordingsConnection) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_DVRRecordingsConnection_totalCount(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.TotalCount, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(int)
-	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_DVRRecordingsConnection_totalCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "DVRRecordingsConnection",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _DVRRequest_id(ctx context.Context, field graphql.CollectedField, obj *sharedpb.DVRInfo) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_DVRRequest_id(ctx, field)
 	if err != nil {
@@ -62897,8 +63218,8 @@ func (ec *executionContext) fieldContext_DVRRequest_syncStatus(_ context.Context
 	return fc, nil
 }
 
-func (ec *executionContext) _DVRRequest_isHot(ctx context.Context, field graphql.CollectedField, obj *sharedpb.DVRInfo) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_DVRRequest_isHot(ctx, field)
+func (ec *executionContext) _DVRRequest_hasLocalCopy(ctx context.Context, field graphql.CollectedField, obj *sharedpb.DVRInfo) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_DVRRequest_hasLocalCopy(ctx, field)
 	if err != nil {
 		return graphql.Null
 	}
@@ -62911,7 +63232,7 @@ func (ec *executionContext) _DVRRequest_isHot(ctx context.Context, field graphql
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.IsHot, nil
+		return obj.HasLocalCopy, nil
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -62925,7 +63246,7 @@ func (ec *executionContext) _DVRRequest_isHot(ctx context.Context, field graphql
 	return ec.marshalOBoolean2ᚖbool(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) fieldContext_DVRRequest_isHot(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_DVRRequest_hasLocalCopy(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "DVRRequest",
 		Field:      field,
@@ -63008,47 +63329,6 @@ func (ec *executionContext) _DVRRequest_isFinalized(ctx context.Context, field g
 }
 
 func (ec *executionContext) fieldContext_DVRRequest_isFinalized(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "DVRRequest",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Boolean does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _DVRRequest_isFrozen(ctx context.Context, field graphql.CollectedField, obj *sharedpb.DVRInfo) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_DVRRequest_isFrozen(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.IsFrozen, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.(*bool)
-	fc.Result = res
-	return ec.marshalOBoolean2ᚖbool(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_DVRRequest_isFrozen(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "DVRRequest",
 		Field:      field,
@@ -63277,6 +63557,47 @@ func (ec *executionContext) fieldContext_DeleteSuccess_deletedId(_ context.Conte
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DeleteSuccess_pending(ctx context.Context, field graphql.CollectedField, obj *model.DeleteSuccess) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_DeleteSuccess_pending(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Pending, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*bool)
+	fc.Result = res
+	return ec.marshalOBoolean2ᚖbool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_DeleteSuccess_pending(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DeleteSuccess",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
 		},
 	}
 	return fc, nil
@@ -72570,8 +72891,8 @@ func (ec *executionContext) fieldContext_LiveUsageSummary_frozenVodBytes(_ conte
 	return fc, nil
 }
 
-func (ec *executionContext) _LiveUsageSummary_freezeCount(ctx context.Context, field graphql.CollectedField, obj *periscopepb.LiveUsageSummary) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_LiveUsageSummary_freezeCount(ctx, field)
+func (ec *executionContext) _LiveUsageSummary_syncedArtifactCount(ctx context.Context, field graphql.CollectedField, obj *periscopepb.LiveUsageSummary) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_LiveUsageSummary_syncedArtifactCount(ctx, field)
 	if err != nil {
 		return graphql.Null
 	}
@@ -72584,7 +72905,7 @@ func (ec *executionContext) _LiveUsageSummary_freezeCount(ctx context.Context, f
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.LiveUsageSummary().FreezeCount(rctx, obj)
+		return ec.resolvers.LiveUsageSummary().SyncedArtifactCount(rctx, obj)
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -72601,7 +72922,7 @@ func (ec *executionContext) _LiveUsageSummary_freezeCount(ctx context.Context, f
 	return ec.marshalNInt2int(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) fieldContext_LiveUsageSummary_freezeCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_LiveUsageSummary_syncedArtifactCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "LiveUsageSummary",
 		Field:      field,
@@ -72614,8 +72935,8 @@ func (ec *executionContext) fieldContext_LiveUsageSummary_freezeCount(_ context.
 	return fc, nil
 }
 
-func (ec *executionContext) _LiveUsageSummary_freezeBytes(ctx context.Context, field graphql.CollectedField, obj *periscopepb.LiveUsageSummary) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_LiveUsageSummary_freezeBytes(ctx, field)
+func (ec *executionContext) _LiveUsageSummary_syncedArtifactBytes(ctx context.Context, field graphql.CollectedField, obj *periscopepb.LiveUsageSummary) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_LiveUsageSummary_syncedArtifactBytes(ctx, field)
 	if err != nil {
 		return graphql.Null
 	}
@@ -72628,7 +72949,7 @@ func (ec *executionContext) _LiveUsageSummary_freezeBytes(ctx context.Context, f
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.LiveUsageSummary().FreezeBytes(rctx, obj)
+		return ec.resolvers.LiveUsageSummary().SyncedArtifactBytes(rctx, obj)
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -72645,7 +72966,7 @@ func (ec *executionContext) _LiveUsageSummary_freezeBytes(ctx context.Context, f
 	return ec.marshalNInt2int(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) fieldContext_LiveUsageSummary_freezeBytes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_LiveUsageSummary_syncedArtifactBytes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "LiveUsageSummary",
 		Field:      field,
@@ -78091,6 +78412,8 @@ func (ec *executionContext) fieldContext_Mutation_deletePushTarget(ctx context.C
 				return ec.fieldContext_DeleteSuccess_success(ctx, field)
 			case "deletedId":
 				return ec.fieldContext_DeleteSuccess_deletedId(ctx, field)
+			case "pending":
+				return ec.fieldContext_DeleteSuccess_pending(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type DeleteSuccess", field.Name)
 		},
@@ -100431,7 +100754,7 @@ func (ec *executionContext) _Query_streamsConnection(ctx context.Context, field 
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Query().StreamsConnection(rctx, fc.Args["page"].(*model.ConnectionInput))
+		return ec.resolvers.Query().StreamsConnection(rctx, fc.Args["page"].(*model.ConnectionInput), fc.Args["search"].(*string))
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -100701,71 +101024,6 @@ func (ec *executionContext) fieldContext_Query_streamKeysConnection(ctx context.
 	return fc, nil
 }
 
-func (ec *executionContext) _Query_clipsConnection(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Query_clipsConnection(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Query().ClipsConnection(rctx, fc.Args["page"].(*model.ConnectionInput), fc.Args["streamId"].(*string), fc.Args["input"].(*model.MediaArtifactConnectionInput))
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(*model.ClipsConnection)
-	fc.Result = res
-	return ec.marshalNClipsConnection2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐClipsConnection(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Query_clipsConnection(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Query",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "edges":
-				return ec.fieldContext_ClipsConnection_edges(ctx, field)
-			case "nodes":
-				return ec.fieldContext_ClipsConnection_nodes(ctx, field)
-			case "pageInfo":
-				return ec.fieldContext_ClipsConnection_pageInfo(ctx, field)
-			case "totalCount":
-				return ec.fieldContext_ClipsConnection_totalCount(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type ClipsConnection", field.Name)
-		},
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			err = ec.Recover(ctx, r)
-			ec.Error(ctx, err)
-		}
-	}()
-	ctx = graphql.WithFieldContext(ctx, fc)
-	if fc.Args, err = ec.field_Query_clipsConnection_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
-		ec.Error(ctx, err)
-		return fc, err
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _Query_clip(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_Query_clip(ctx, field)
 	if err != nil {
@@ -100842,14 +101100,12 @@ func (ec *executionContext) fieldContext_Query_clip(ctx context.Context, field g
 				return ec.fieldContext_Clip_storageLocation(ctx, field)
 			case "syncStatus":
 				return ec.fieldContext_Clip_syncStatus(ctx, field)
-			case "isHot":
-				return ec.fieldContext_Clip_isHot(ctx, field)
+			case "hasLocalCopy":
+				return ec.fieldContext_Clip_hasLocalCopy(ctx, field)
 			case "isSynced":
 				return ec.fieldContext_Clip_isSynced(ctx, field)
 			case "isFinalized":
 				return ec.fieldContext_Clip_isFinalized(ctx, field)
-			case "isFrozen":
-				return ec.fieldContext_Clip_isFrozen(ctx, field)
 			case "expiresAt":
 				return ec.fieldContext_Clip_expiresAt(ctx, field)
 			case "isExpired":
@@ -104007,68 +104263,6 @@ func (ec *executionContext) fieldContext_Query_bootstrapTokensConnection(ctx con
 	return fc, nil
 }
 
-func (ec *executionContext) _Query_dvrRecordingsConnection(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Query_dvrRecordingsConnection(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Query().DvrRecordingsConnection(rctx, fc.Args["page"].(*model.ConnectionInput), fc.Args["streamId"].(*string), fc.Args["input"].(*model.MediaArtifactConnectionInput))
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.(*model.DVRRecordingsConnection)
-	fc.Result = res
-	return ec.marshalODVRRecordingsConnection2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐDVRRecordingsConnection(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Query_dvrRecordingsConnection(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Query",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "edges":
-				return ec.fieldContext_DVRRecordingsConnection_edges(ctx, field)
-			case "nodes":
-				return ec.fieldContext_DVRRecordingsConnection_nodes(ctx, field)
-			case "pageInfo":
-				return ec.fieldContext_DVRRecordingsConnection_pageInfo(ctx, field)
-			case "totalCount":
-				return ec.fieldContext_DVRRecordingsConnection_totalCount(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type DVRRecordingsConnection", field.Name)
-		},
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			err = ec.Recover(ctx, r)
-			ec.Error(ctx, err)
-		}
-	}()
-	ctx = graphql.WithFieldContext(ctx, fc)
-	if fc.Args, err = ec.field_Query_dvrRecordingsConnection_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
-		ec.Error(ctx, err)
-		return fc, err
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _Query_dvrChapter(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_Query_dvrChapter(ctx, field)
 	if err != nil {
@@ -104261,14 +104455,12 @@ func (ec *executionContext) fieldContext_Query_vodAsset(ctx context.Context, fie
 				return ec.fieldContext_VodAsset_storageLocation(ctx, field)
 			case "syncStatus":
 				return ec.fieldContext_VodAsset_syncStatus(ctx, field)
-			case "isHot":
-				return ec.fieldContext_VodAsset_isHot(ctx, field)
+			case "hasLocalCopy":
+				return ec.fieldContext_VodAsset_hasLocalCopy(ctx, field)
 			case "isSynced":
 				return ec.fieldContext_VodAsset_isSynced(ctx, field)
 			case "isFinalized":
 				return ec.fieldContext_VodAsset_isFinalized(ctx, field)
-			case "isFrozen":
-				return ec.fieldContext_VodAsset_isFrozen(ctx, field)
 			case "sizeBytes":
 				return ec.fieldContext_VodAsset_sizeBytes(ctx, field)
 			case "durationMs":
@@ -104309,71 +104501,6 @@ func (ec *executionContext) fieldContext_Query_vodAsset(ctx context.Context, fie
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Query_vodAsset_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
-		ec.Error(ctx, err)
-		return fc, err
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Query_vodAssetsConnection(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Query_vodAssetsConnection(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Query().VodAssetsConnection(rctx, fc.Args["page"].(*model.ConnectionInput), fc.Args["streamId"].(*string), fc.Args["input"].(*model.MediaArtifactConnectionInput))
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(*model.VodAssetsConnection)
-	fc.Result = res
-	return ec.marshalNVodAssetsConnection2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐVodAssetsConnection(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Query_vodAssetsConnection(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Query",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "edges":
-				return ec.fieldContext_VodAssetsConnection_edges(ctx, field)
-			case "nodes":
-				return ec.fieldContext_VodAssetsConnection_nodes(ctx, field)
-			case "pageInfo":
-				return ec.fieldContext_VodAssetsConnection_pageInfo(ctx, field)
-			case "totalCount":
-				return ec.fieldContext_VodAssetsConnection_totalCount(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type VodAssetsConnection", field.Name)
-		},
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			err = ec.Recover(ctx, r)
-			ec.Error(ctx, err)
-		}
-	}()
-	ctx = graphql.WithFieldContext(ctx, fc)
-	if fc.Args, err = ec.field_Query_vodAssetsConnection_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -104429,6 +104556,10 @@ func (ec *executionContext) fieldContext_Query_storageArtifactsConnection(ctx co
 				return ec.fieldContext_StorageArtifactsConnection_limit(ctx, field)
 			case "offset":
 				return ec.fieldContext_StorageArtifactsConnection_offset(ctx, field)
+			case "lifecycleAvailable":
+				return ec.fieldContext_StorageArtifactsConnection_lifecycleAvailable(ctx, field)
+			case "kindCounts":
+				return ec.fieldContext_StorageArtifactsConnection_kindCounts(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type StorageArtifactsConnection", field.Name)
 		},
@@ -113585,6 +113716,88 @@ func (ec *executionContext) fieldContext_StorageArtifact_secondaryLabel(_ contex
 	return fc, nil
 }
 
+func (ec *executionContext) _StorageArtifact_description(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifact) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StorageArtifact_description(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Description, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StorageArtifact_description(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StorageArtifact",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StorageArtifact_errorMessage(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifact) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StorageArtifact_errorMessage(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ErrorMessage, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StorageArtifact_errorMessage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StorageArtifact",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _StorageArtifact_sizeBytes(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifact) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_StorageArtifact_sizeBytes(ctx, field)
 	if err != nil {
@@ -113711,6 +113924,47 @@ func (ec *executionContext) fieldContext_StorageArtifact_storageLocation(_ conte
 	return fc, nil
 }
 
+func (ec *executionContext) _StorageArtifact_storageClusterId(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifact) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StorageArtifact_storageClusterId(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.StorageClusterID, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StorageArtifact_storageClusterId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StorageArtifact",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _StorageArtifact_syncStatus(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifact) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_StorageArtifact_syncStatus(ctx, field)
 	if err != nil {
@@ -113752,8 +114006,8 @@ func (ec *executionContext) fieldContext_StorageArtifact_syncStatus(_ context.Co
 	return fc, nil
 }
 
-func (ec *executionContext) _StorageArtifact_isHot(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifact) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_StorageArtifact_isHot(ctx, field)
+func (ec *executionContext) _StorageArtifact_hasLocalCopy(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifact) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StorageArtifact_hasLocalCopy(ctx, field)
 	if err != nil {
 		return graphql.Null
 	}
@@ -113766,7 +114020,7 @@ func (ec *executionContext) _StorageArtifact_isHot(ctx context.Context, field gr
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.IsHot, nil
+		return obj.HasLocalCopy, nil
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -113780,7 +114034,7 @@ func (ec *executionContext) _StorageArtifact_isHot(ctx context.Context, field gr
 	return ec.marshalOBoolean2ᚖbool(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) fieldContext_StorageArtifact_isHot(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_StorageArtifact_hasLocalCopy(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "StorageArtifact",
 		Field:      field,
@@ -113863,47 +114117,6 @@ func (ec *executionContext) _StorageArtifact_isFinalized(ctx context.Context, fi
 }
 
 func (ec *executionContext) fieldContext_StorageArtifact_isFinalized(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "StorageArtifact",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Boolean does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _StorageArtifact_isFrozen(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifact) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_StorageArtifact_isFrozen(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.IsFrozen, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.(*bool)
-	fc.Result = res
-	return ec.marshalOBoolean2ᚖbool(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_StorageArtifact_isFrozen(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "StorageArtifact",
 		Field:      field,
@@ -114272,6 +114485,382 @@ func (ec *executionContext) fieldContext_StorageArtifact_thumbnailUrl(_ context.
 	return fc, nil
 }
 
+func (ec *executionContext) _StorageArtifact_thumbnailAssets(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifact) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StorageArtifact_thumbnailAssets(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ThumbnailAssets, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*sharedpb.ThumbnailAssets)
+	fc.Result = res
+	return ec.marshalOThumbnailAssets2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋsharedᚐThumbnailAssets(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StorageArtifact_thumbnailAssets(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StorageArtifact",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "posterUrl":
+				return ec.fieldContext_ThumbnailAssets_posterUrl(ctx, field)
+			case "spriteVttUrl":
+				return ec.fieldContext_ThumbnailAssets_spriteVttUrl(ctx, field)
+			case "spriteJpgUrl":
+				return ec.fieldContext_ThumbnailAssets_spriteJpgUrl(ctx, field)
+			case "assetKey":
+				return ec.fieldContext_ThumbnailAssets_assetKey(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type ThumbnailAssets", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StorageArtifact_durationSeconds(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifact) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StorageArtifact_durationSeconds(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.DurationSeconds, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StorageArtifact_durationSeconds(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StorageArtifact",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StorageArtifact_tracks(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifact) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StorageArtifact_tracks(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Tracks, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]*model.ArtifactTrack)
+	fc.Result = res
+	return ec.marshalNArtifactTrack2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐArtifactTrackᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StorageArtifact_tracks(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StorageArtifact",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "type":
+				return ec.fieldContext_ArtifactTrack_type(ctx, field)
+			case "codec":
+				return ec.fieldContext_ArtifactTrack_codec(ctx, field)
+			case "width":
+				return ec.fieldContext_ArtifactTrack_width(ctx, field)
+			case "height":
+				return ec.fieldContext_ArtifactTrack_height(ctx, field)
+			case "fps":
+				return ec.fieldContext_ArtifactTrack_fps(ctx, field)
+			case "resolution":
+				return ec.fieldContext_ArtifactTrack_resolution(ctx, field)
+			case "bitrateKbps":
+				return ec.fieldContext_ArtifactTrack_bitrateKbps(ctx, field)
+			case "channels":
+				return ec.fieldContext_ArtifactTrack_channels(ctx, field)
+			case "sampleRate":
+				return ec.fieldContext_ArtifactTrack_sampleRate(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type ArtifactTrack", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StorageArtifactKindCounts_total(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifactKindCounts) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StorageArtifactKindCounts_total(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Total, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StorageArtifactKindCounts_total(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StorageArtifactKindCounts",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StorageArtifactKindCounts_vod(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifactKindCounts) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StorageArtifactKindCounts_vod(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Vod, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StorageArtifactKindCounts_vod(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StorageArtifactKindCounts",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StorageArtifactKindCounts_dvr(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifactKindCounts) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StorageArtifactKindCounts_dvr(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Dvr, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StorageArtifactKindCounts_dvr(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StorageArtifactKindCounts",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StorageArtifactKindCounts_chapter(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifactKindCounts) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StorageArtifactKindCounts_chapter(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Chapter, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StorageArtifactKindCounts_chapter(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StorageArtifactKindCounts",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StorageArtifactKindCounts_clip(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifactKindCounts) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StorageArtifactKindCounts_clip(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Clip, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StorageArtifactKindCounts_clip(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StorageArtifactKindCounts",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _StorageArtifactsConnection_nodes(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifactsConnection) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_StorageArtifactsConnection_nodes(ctx, field)
 	if err != nil {
@@ -114329,22 +114918,26 @@ func (ec *executionContext) fieldContext_StorageArtifactsConnection_nodes(_ cont
 				return ec.fieldContext_StorageArtifact_title(ctx, field)
 			case "secondaryLabel":
 				return ec.fieldContext_StorageArtifact_secondaryLabel(ctx, field)
+			case "description":
+				return ec.fieldContext_StorageArtifact_description(ctx, field)
+			case "errorMessage":
+				return ec.fieldContext_StorageArtifact_errorMessage(ctx, field)
 			case "sizeBytes":
 				return ec.fieldContext_StorageArtifact_sizeBytes(ctx, field)
 			case "status":
 				return ec.fieldContext_StorageArtifact_status(ctx, field)
 			case "storageLocation":
 				return ec.fieldContext_StorageArtifact_storageLocation(ctx, field)
+			case "storageClusterId":
+				return ec.fieldContext_StorageArtifact_storageClusterId(ctx, field)
 			case "syncStatus":
 				return ec.fieldContext_StorageArtifact_syncStatus(ctx, field)
-			case "isHot":
-				return ec.fieldContext_StorageArtifact_isHot(ctx, field)
+			case "hasLocalCopy":
+				return ec.fieldContext_StorageArtifact_hasLocalCopy(ctx, field)
 			case "isSynced":
 				return ec.fieldContext_StorageArtifact_isSynced(ctx, field)
 			case "isFinalized":
 				return ec.fieldContext_StorageArtifact_isFinalized(ctx, field)
-			case "isFrozen":
-				return ec.fieldContext_StorageArtifact_isFrozen(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_StorageArtifact_createdAt(ctx, field)
 			case "updatedAt":
@@ -114361,6 +114954,12 @@ func (ec *executionContext) fieldContext_StorageArtifactsConnection_nodes(_ cont
 				return ec.fieldContext_StorageArtifact_retentionId(ctx, field)
 			case "thumbnailUrl":
 				return ec.fieldContext_StorageArtifact_thumbnailUrl(ctx, field)
+			case "thumbnailAssets":
+				return ec.fieldContext_StorageArtifact_thumbnailAssets(ctx, field)
+			case "durationSeconds":
+				return ec.fieldContext_StorageArtifact_durationSeconds(ctx, field)
+			case "tracks":
+				return ec.fieldContext_StorageArtifact_tracks(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type StorageArtifact", field.Name)
 		},
@@ -114539,6 +115138,106 @@ func (ec *executionContext) fieldContext_StorageArtifactsConnection_offset(_ con
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StorageArtifactsConnection_lifecycleAvailable(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifactsConnection) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StorageArtifactsConnection_lifecycleAvailable(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.LifecycleAvailable, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StorageArtifactsConnection_lifecycleAvailable(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StorageArtifactsConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StorageArtifactsConnection_kindCounts(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifactsConnection) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StorageArtifactsConnection_kindCounts(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.KindCounts, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(*model.StorageArtifactKindCounts)
+	fc.Result = res
+	return ec.marshalNStorageArtifactKindCounts2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStorageArtifactKindCounts(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StorageArtifactsConnection_kindCounts(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StorageArtifactsConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "total":
+				return ec.fieldContext_StorageArtifactKindCounts_total(ctx, field)
+			case "vod":
+				return ec.fieldContext_StorageArtifactKindCounts_vod(ctx, field)
+			case "dvr":
+				return ec.fieldContext_StorageArtifactKindCounts_dvr(ctx, field)
+			case "chapter":
+				return ec.fieldContext_StorageArtifactKindCounts_chapter(ctx, field)
+			case "clip":
+				return ec.fieldContext_StorageArtifactKindCounts_clip(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type StorageArtifactKindCounts", field.Name)
 		},
 	}
 	return fc, nil
@@ -138446,6 +139145,308 @@ func (ec *executionContext) fieldContext_TimeRange_end(_ context.Context, field 
 	return fc, nil
 }
 
+func (ec *executionContext) _TopAssetEntry_artifactHash(ctx context.Context, field graphql.CollectedField, obj *model.TopAssetEntry) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TopAssetEntry_artifactHash(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ArtifactHash, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TopAssetEntry_artifactHash(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TopAssetEntry",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TopAssetEntry_kind(ctx context.Context, field graphql.CollectedField, obj *model.TopAssetEntry) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TopAssetEntry_kind(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Kind, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(model.StorageArtifactKind)
+	fc.Result = res
+	return ec.marshalNStorageArtifactKind2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐStorageArtifactKind(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TopAssetEntry_kind(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TopAssetEntry",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type StorageArtifactKind does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TopAssetEntry_totalSessions(ctx context.Context, field graphql.CollectedField, obj *model.TopAssetEntry) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TopAssetEntry_totalSessions(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.TotalSessions, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TopAssetEntry_totalSessions(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TopAssetEntry",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TopAssetEntry_watchHours(ctx context.Context, field graphql.CollectedField, obj *model.TopAssetEntry) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TopAssetEntry_watchHours(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.WatchHours, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(float64)
+	fc.Result = res
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TopAssetEntry_watchHours(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TopAssetEntry",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TopAssetEntry_durationS(ctx context.Context, field graphql.CollectedField, obj *model.TopAssetEntry) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TopAssetEntry_durationS(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.DurationS, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TopAssetEntry_durationS(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TopAssetEntry",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TopAssetEntry_title(ctx context.Context, field graphql.CollectedField, obj *model.TopAssetEntry) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TopAssetEntry_title(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Title, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TopAssetEntry_title(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TopAssetEntry",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TopAssetEntry_playbackId(ctx context.Context, field graphql.CollectedField, obj *model.TopAssetEntry) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TopAssetEntry_playbackId(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.PlaybackID, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TopAssetEntry_playbackId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TopAssetEntry",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _TrackListEvent_id(ctx context.Context, field graphql.CollectedField, obj *periscopepb.TrackListEvent) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_TrackListEvent_id(ctx, field)
 	if err != nil {
@@ -147349,8 +148350,8 @@ func (ec *executionContext) fieldContext_VodAsset_syncStatus(_ context.Context, 
 	return fc, nil
 }
 
-func (ec *executionContext) _VodAsset_isHot(ctx context.Context, field graphql.CollectedField, obj *model.VodAsset) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_VodAsset_isHot(ctx, field)
+func (ec *executionContext) _VodAsset_hasLocalCopy(ctx context.Context, field graphql.CollectedField, obj *model.VodAsset) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_VodAsset_hasLocalCopy(ctx, field)
 	if err != nil {
 		return graphql.Null
 	}
@@ -147363,24 +148364,21 @@ func (ec *executionContext) _VodAsset_isHot(ctx context.Context, field graphql.C
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.IsHot, nil
+		return obj.HasLocalCopy, nil
 	})
 	if err != nil {
 		ec.Error(ctx, err)
 		return graphql.Null
 	}
 	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
 		return graphql.Null
 	}
-	res := resTmp.(bool)
+	res := resTmp.(*bool)
 	fc.Result = res
-	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+	return ec.marshalOBoolean2ᚖbool(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) fieldContext_VodAsset_isHot(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_VodAsset_hasLocalCopy(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "VodAsset",
 		Field:      field,
@@ -147469,50 +148467,6 @@ func (ec *executionContext) _VodAsset_isFinalized(ctx context.Context, field gra
 }
 
 func (ec *executionContext) fieldContext_VodAsset_isFinalized(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "VodAsset",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Boolean does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _VodAsset_isFrozen(ctx context.Context, field graphql.CollectedField, obj *model.VodAsset) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_VodAsset_isFrozen(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.IsFrozen, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(bool)
-	fc.Result = res
-	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_VodAsset_isFrozen(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "VodAsset",
 		Field:      field,
@@ -148134,410 +149088,6 @@ func (ec *executionContext) fieldContext_VodAsset_storageCost(_ context.Context,
 				return ec.fieldContext_StorageCostProjection_currency(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type StorageCostProjection", field.Name)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _VodAssetEdge_cursor(ctx context.Context, field graphql.CollectedField, obj *model.VodAssetEdge) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_VodAssetEdge_cursor(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Cursor, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalNString2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_VodAssetEdge_cursor(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "VodAssetEdge",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _VodAssetEdge_node(ctx context.Context, field graphql.CollectedField, obj *model.VodAssetEdge) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_VodAssetEdge_node(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Node, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(*model.VodAsset)
-	fc.Result = res
-	return ec.marshalNVodAsset2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐVodAsset(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_VodAssetEdge_node(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "VodAssetEdge",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "id":
-				return ec.fieldContext_VodAsset_id(ctx, field)
-			case "artifactHash":
-				return ec.fieldContext_VodAsset_artifactHash(ctx, field)
-			case "playbackId":
-				return ec.fieldContext_VodAsset_playbackId(ctx, field)
-			case "streamId":
-				return ec.fieldContext_VodAsset_streamId(ctx, field)
-			case "originType":
-				return ec.fieldContext_VodAsset_originType(ctx, field)
-			case "originId":
-				return ec.fieldContext_VodAsset_originId(ctx, field)
-			case "title":
-				return ec.fieldContext_VodAsset_title(ctx, field)
-			case "description":
-				return ec.fieldContext_VodAsset_description(ctx, field)
-			case "filename":
-				return ec.fieldContext_VodAsset_filename(ctx, field)
-			case "status":
-				return ec.fieldContext_VodAsset_status(ctx, field)
-			case "storageLocation":
-				return ec.fieldContext_VodAsset_storageLocation(ctx, field)
-			case "syncStatus":
-				return ec.fieldContext_VodAsset_syncStatus(ctx, field)
-			case "isHot":
-				return ec.fieldContext_VodAsset_isHot(ctx, field)
-			case "isSynced":
-				return ec.fieldContext_VodAsset_isSynced(ctx, field)
-			case "isFinalized":
-				return ec.fieldContext_VodAsset_isFinalized(ctx, field)
-			case "isFrozen":
-				return ec.fieldContext_VodAsset_isFrozen(ctx, field)
-			case "sizeBytes":
-				return ec.fieldContext_VodAsset_sizeBytes(ctx, field)
-			case "durationMs":
-				return ec.fieldContext_VodAsset_durationMs(ctx, field)
-			case "resolution":
-				return ec.fieldContext_VodAsset_resolution(ctx, field)
-			case "videoCodec":
-				return ec.fieldContext_VodAsset_videoCodec(ctx, field)
-			case "audioCodec":
-				return ec.fieldContext_VodAsset_audioCodec(ctx, field)
-			case "bitrateKbps":
-				return ec.fieldContext_VodAsset_bitrateKbps(ctx, field)
-			case "createdAt":
-				return ec.fieldContext_VodAsset_createdAt(ctx, field)
-			case "updatedAt":
-				return ec.fieldContext_VodAsset_updatedAt(ctx, field)
-			case "expiresAt":
-				return ec.fieldContext_VodAsset_expiresAt(ctx, field)
-			case "errorMessage":
-				return ec.fieldContext_VodAsset_errorMessage(ctx, field)
-			case "playbackPolicy":
-				return ec.fieldContext_VodAsset_playbackPolicy(ctx, field)
-			case "thumbnailAssets":
-				return ec.fieldContext_VodAsset_thumbnailAssets(ctx, field)
-			case "effectiveRetention":
-				return ec.fieldContext_VodAsset_effectiveRetention(ctx, field)
-			case "storageCost":
-				return ec.fieldContext_VodAsset_storageCost(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type VodAsset", field.Name)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _VodAssetsConnection_edges(ctx context.Context, field graphql.CollectedField, obj *model.VodAssetsConnection) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_VodAssetsConnection_edges(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Edges, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.([]*model.VodAssetEdge)
-	fc.Result = res
-	return ec.marshalNVodAssetEdge2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐVodAssetEdgeᚄ(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_VodAssetsConnection_edges(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "VodAssetsConnection",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "cursor":
-				return ec.fieldContext_VodAssetEdge_cursor(ctx, field)
-			case "node":
-				return ec.fieldContext_VodAssetEdge_node(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type VodAssetEdge", field.Name)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _VodAssetsConnection_nodes(ctx context.Context, field graphql.CollectedField, obj *model.VodAssetsConnection) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_VodAssetsConnection_nodes(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Nodes, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.([]*model.VodAsset)
-	fc.Result = res
-	return ec.marshalNVodAsset2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐVodAssetᚄ(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_VodAssetsConnection_nodes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "VodAssetsConnection",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "id":
-				return ec.fieldContext_VodAsset_id(ctx, field)
-			case "artifactHash":
-				return ec.fieldContext_VodAsset_artifactHash(ctx, field)
-			case "playbackId":
-				return ec.fieldContext_VodAsset_playbackId(ctx, field)
-			case "streamId":
-				return ec.fieldContext_VodAsset_streamId(ctx, field)
-			case "originType":
-				return ec.fieldContext_VodAsset_originType(ctx, field)
-			case "originId":
-				return ec.fieldContext_VodAsset_originId(ctx, field)
-			case "title":
-				return ec.fieldContext_VodAsset_title(ctx, field)
-			case "description":
-				return ec.fieldContext_VodAsset_description(ctx, field)
-			case "filename":
-				return ec.fieldContext_VodAsset_filename(ctx, field)
-			case "status":
-				return ec.fieldContext_VodAsset_status(ctx, field)
-			case "storageLocation":
-				return ec.fieldContext_VodAsset_storageLocation(ctx, field)
-			case "syncStatus":
-				return ec.fieldContext_VodAsset_syncStatus(ctx, field)
-			case "isHot":
-				return ec.fieldContext_VodAsset_isHot(ctx, field)
-			case "isSynced":
-				return ec.fieldContext_VodAsset_isSynced(ctx, field)
-			case "isFinalized":
-				return ec.fieldContext_VodAsset_isFinalized(ctx, field)
-			case "isFrozen":
-				return ec.fieldContext_VodAsset_isFrozen(ctx, field)
-			case "sizeBytes":
-				return ec.fieldContext_VodAsset_sizeBytes(ctx, field)
-			case "durationMs":
-				return ec.fieldContext_VodAsset_durationMs(ctx, field)
-			case "resolution":
-				return ec.fieldContext_VodAsset_resolution(ctx, field)
-			case "videoCodec":
-				return ec.fieldContext_VodAsset_videoCodec(ctx, field)
-			case "audioCodec":
-				return ec.fieldContext_VodAsset_audioCodec(ctx, field)
-			case "bitrateKbps":
-				return ec.fieldContext_VodAsset_bitrateKbps(ctx, field)
-			case "createdAt":
-				return ec.fieldContext_VodAsset_createdAt(ctx, field)
-			case "updatedAt":
-				return ec.fieldContext_VodAsset_updatedAt(ctx, field)
-			case "expiresAt":
-				return ec.fieldContext_VodAsset_expiresAt(ctx, field)
-			case "errorMessage":
-				return ec.fieldContext_VodAsset_errorMessage(ctx, field)
-			case "playbackPolicy":
-				return ec.fieldContext_VodAsset_playbackPolicy(ctx, field)
-			case "thumbnailAssets":
-				return ec.fieldContext_VodAsset_thumbnailAssets(ctx, field)
-			case "effectiveRetention":
-				return ec.fieldContext_VodAsset_effectiveRetention(ctx, field)
-			case "storageCost":
-				return ec.fieldContext_VodAsset_storageCost(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type VodAsset", field.Name)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _VodAssetsConnection_pageInfo(ctx context.Context, field graphql.CollectedField, obj *model.VodAssetsConnection) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_VodAssetsConnection_pageInfo(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.PageInfo, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(*model.PageInfo)
-	fc.Result = res
-	return ec.marshalNPageInfo2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPageInfo(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_VodAssetsConnection_pageInfo(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "VodAssetsConnection",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "startCursor":
-				return ec.fieldContext_PageInfo_startCursor(ctx, field)
-			case "endCursor":
-				return ec.fieldContext_PageInfo_endCursor(ctx, field)
-			case "hasNextPage":
-				return ec.fieldContext_PageInfo_hasNextPage(ctx, field)
-			case "hasPreviousPage":
-				return ec.fieldContext_PageInfo_hasPreviousPage(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type PageInfo", field.Name)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _VodAssetsConnection_totalCount(ctx context.Context, field graphql.CollectedField, obj *model.VodAssetsConnection) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_VodAssetsConnection_totalCount(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.TotalCount, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(int)
-	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_VodAssetsConnection_totalCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "VodAssetsConnection",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
 		},
 	}
 	return fc, nil
@@ -154778,64 +155328,6 @@ func (ec *executionContext) unmarshalInputLinkEmailInput(ctx context.Context, ob
 	return it, nil
 }
 
-func (ec *executionContext) unmarshalInputMediaArtifactConnectionInput(ctx context.Context, obj any) (model.MediaArtifactConnectionInput, error) {
-	var it model.MediaArtifactConnectionInput
-	asMap := map[string]any{}
-	for k, v := range obj.(map[string]any) {
-		asMap[k] = v
-	}
-
-	if _, present := asMap["sort"]; !present {
-		asMap["sort"] = "CREATED_AT"
-	}
-	if _, present := asMap["direction"]; !present {
-		asMap["direction"] = "DESC"
-	}
-	if _, present := asMap["offset"]; !present {
-		asMap["offset"] = 0
-	}
-
-	fieldsInOrder := [...]string{"search", "sort", "direction", "offset"}
-	for _, k := range fieldsInOrder {
-		v, ok := asMap[k]
-		if !ok {
-			continue
-		}
-		switch k {
-		case "search":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("search"))
-			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.Search = data
-		case "sort":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sort"))
-			data, err := ec.unmarshalOStorageArtifactSortField2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStorageArtifactSortField(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.Sort = data
-		case "direction":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("direction"))
-			data, err := ec.unmarshalOSortDirection2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐSortDirection(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.Direction = data
-		case "offset":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("offset"))
-			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.Offset = data
-		}
-	}
-
-	return it, nil
-}
-
 func (ec *executionContext) unmarshalInputOpenMistAdminSessionInput(ctx context.Context, obj any) (model.OpenMistAdminSessionInput, error) {
 	var it model.OpenMistAdminSessionInput
 	asMap := map[string]any{}
@@ -155475,7 +155967,7 @@ func (ec *executionContext) unmarshalInputStorageArtifactsInput(ctx context.Cont
 		asMap["direction"] = "DESC"
 	}
 
-	fieldsInOrder := [...]string{"first", "offset", "streamId", "kinds", "search", "sort", "direction"}
+	fieldsInOrder := [...]string{"first", "offset", "streamId", "kinds", "search", "status", "artifactHash", "sort", "direction"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -155517,6 +156009,20 @@ func (ec *executionContext) unmarshalInputStorageArtifactsInput(ctx context.Cont
 				return it, err
 			}
 			it.Search = data
+		case "status":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("status"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Status = data
+		case "artifactHash":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("artifactHash"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ArtifactHash = data
 		case "sort":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sort"))
 			data, err := ec.unmarshalOStorageArtifactSortField2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStorageArtifactSortField(ctx, v)
@@ -159675,6 +160181,78 @@ func (ec *executionContext) _AnalyticsHealth(ctx context.Context, sel ast.Select
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "topAssets":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._AnalyticsHealth_topAssets(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "artifactNodeCopies":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._AnalyticsHealth_artifactNodeCopies(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -161717,6 +162295,171 @@ func (ec *executionContext) _ArtifactStatesConnection(ctx context.Context, sel a
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var artifactTrackImplementors = []string{"ArtifactTrack"}
+
+func (ec *executionContext) _ArtifactTrack(ctx context.Context, sel ast.SelectionSet, obj *model.ArtifactTrack) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, artifactTrackImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ArtifactTrack")
+		case "type":
+			out.Values[i] = ec._ArtifactTrack_type(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "codec":
+			out.Values[i] = ec._ArtifactTrack_codec(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "width":
+			out.Values[i] = ec._ArtifactTrack_width(ctx, field, obj)
+		case "height":
+			out.Values[i] = ec._ArtifactTrack_height(ctx, field, obj)
+		case "fps":
+			out.Values[i] = ec._ArtifactTrack_fps(ctx, field, obj)
+		case "resolution":
+			out.Values[i] = ec._ArtifactTrack_resolution(ctx, field, obj)
+		case "bitrateKbps":
+			out.Values[i] = ec._ArtifactTrack_bitrateKbps(ctx, field, obj)
+		case "channels":
+			out.Values[i] = ec._ArtifactTrack_channels(ctx, field, obj)
+		case "sampleRate":
+			out.Values[i] = ec._ArtifactTrack_sampleRate(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var assetNodeCopiesImplementors = []string{"AssetNodeCopies"}
+
+func (ec *executionContext) _AssetNodeCopies(ctx context.Context, sel ast.SelectionSet, obj *model.AssetNodeCopies) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, assetNodeCopiesImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("AssetNodeCopies")
+		case "copies":
+			out.Values[i] = ec._AssetNodeCopies_copies(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "truncated":
+			out.Values[i] = ec._AssetNodeCopies_truncated(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var assetNodeCopyImplementors = []string{"AssetNodeCopy"}
+
+func (ec *executionContext) _AssetNodeCopy(ctx context.Context, sel ast.SelectionSet, obj *model.AssetNodeCopy) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, assetNodeCopyImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("AssetNodeCopy")
+		case "nodeId":
+			out.Values[i] = ec._AssetNodeCopy_nodeId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "nodeName":
+			out.Values[i] = ec._AssetNodeCopy_nodeName(ctx, field, obj)
+		case "clusterId":
+			out.Values[i] = ec._AssetNodeCopy_clusterId(ctx, field, obj)
+		case "region":
+			out.Values[i] = ec._AssetNodeCopy_region(ctx, field, obj)
+		case "latitude":
+			out.Values[i] = ec._AssetNodeCopy_latitude(ctx, field, obj)
+		case "longitude":
+			out.Values[i] = ec._AssetNodeCopy_longitude(ctx, field, obj)
+		case "role":
+			out.Values[i] = ec._AssetNodeCopy_role(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "isComplete":
+			out.Values[i] = ec._AssetNodeCopy_isComplete(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "sizeBytes":
+			out.Values[i] = ec._AssetNodeCopy_sizeBytes(ctx, field, obj)
+		case "updatedAt":
+			out.Values[i] = ec._AssetNodeCopy_updatedAt(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -164390,14 +165133,12 @@ func (ec *executionContext) _Clip(ctx context.Context, sel ast.SelectionSet, obj
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "syncStatus":
 			out.Values[i] = ec._Clip_syncStatus(ctx, field, obj)
-		case "isHot":
-			out.Values[i] = ec._Clip_isHot(ctx, field, obj)
+		case "hasLocalCopy":
+			out.Values[i] = ec._Clip_hasLocalCopy(ctx, field, obj)
 		case "isSynced":
 			out.Values[i] = ec._Clip_isSynced(ctx, field, obj)
 		case "isFinalized":
 			out.Values[i] = ec._Clip_isFinalized(ctx, field, obj)
-		case "isFrozen":
-			out.Values[i] = ec._Clip_isFrozen(ctx, field, obj)
 		case "expiresAt":
 			field := field
 
@@ -164568,50 +165309,6 @@ func (ec *executionContext) _Clip(ctx context.Context, sel ast.SelectionSet, obj
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
-
-	for label, dfs := range deferred {
-		ec.processDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
-var clipEdgeImplementors = []string{"ClipEdge"}
-
-func (ec *executionContext) _ClipEdge(ctx context.Context, sel ast.SelectionSet, obj *model.ClipEdge) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, clipEdgeImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("ClipEdge")
-		case "cursor":
-			out.Values[i] = ec._ClipEdge_cursor(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "node":
-			out.Values[i] = ec._ClipEdge_node(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -164934,60 +165631,6 @@ func (ec *executionContext) _ClipLifecycle(ctx context.Context, sel ast.Selectio
 			out.Values[i] = ec._ClipLifecycle_durationSec(ctx, field, obj)
 		case "clipMode":
 			out.Values[i] = ec._ClipLifecycle_clipMode(ctx, field, obj)
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
-
-	for label, dfs := range deferred {
-		ec.processDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
-var clipsConnectionImplementors = []string{"ClipsConnection"}
-
-func (ec *executionContext) _ClipsConnection(ctx context.Context, sel ast.SelectionSet, obj *model.ClipsConnection) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, clipsConnectionImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("ClipsConnection")
-		case "edges":
-			out.Values[i] = ec._ClipsConnection_edges(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "nodes":
-			out.Values[i] = ec._ClipsConnection_nodes(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "pageInfo":
-			out.Values[i] = ec._ClipsConnection_pageInfo(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "totalCount":
-			out.Values[i] = ec._ClipsConnection_totalCount(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -168202,104 +168845,6 @@ func (ec *executionContext) _DVREvent(ctx context.Context, sel ast.SelectionSet,
 	return out
 }
 
-var dVRRecordingEdgeImplementors = []string{"DVRRecordingEdge"}
-
-func (ec *executionContext) _DVRRecordingEdge(ctx context.Context, sel ast.SelectionSet, obj *model.DVRRecordingEdge) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, dVRRecordingEdgeImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("DVRRecordingEdge")
-		case "cursor":
-			out.Values[i] = ec._DVRRecordingEdge_cursor(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "node":
-			out.Values[i] = ec._DVRRecordingEdge_node(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
-
-	for label, dfs := range deferred {
-		ec.processDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
-var dVRRecordingsConnectionImplementors = []string{"DVRRecordingsConnection"}
-
-func (ec *executionContext) _DVRRecordingsConnection(ctx context.Context, sel ast.SelectionSet, obj *model.DVRRecordingsConnection) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, dVRRecordingsConnectionImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("DVRRecordingsConnection")
-		case "edges":
-			out.Values[i] = ec._DVRRecordingsConnection_edges(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "nodes":
-			out.Values[i] = ec._DVRRecordingsConnection_nodes(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "pageInfo":
-			out.Values[i] = ec._DVRRecordingsConnection_pageInfo(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "totalCount":
-			out.Values[i] = ec._DVRRecordingsConnection_totalCount(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
-
-	for label, dfs := range deferred {
-		ec.processDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
 var dVRRequestImplementors = []string{"DVRRequest", "StartDVRResult"}
 
 func (ec *executionContext) _DVRRequest(ctx context.Context, sel ast.SelectionSet, obj *sharedpb.DVRInfo) graphql.Marshaler {
@@ -168933,14 +169478,12 @@ func (ec *executionContext) _DVRRequest(ctx context.Context, sel ast.SelectionSe
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "syncStatus":
 			out.Values[i] = ec._DVRRequest_syncStatus(ctx, field, obj)
-		case "isHot":
-			out.Values[i] = ec._DVRRequest_isHot(ctx, field, obj)
+		case "hasLocalCopy":
+			out.Values[i] = ec._DVRRequest_hasLocalCopy(ctx, field, obj)
 		case "isSynced":
 			out.Values[i] = ec._DVRRequest_isSynced(ctx, field, obj)
 		case "isFinalized":
 			out.Values[i] = ec._DVRRequest_isFinalized(ctx, field, obj)
-		case "isFrozen":
-			out.Values[i] = ec._DVRRequest_isFrozen(ctx, field, obj)
 		case "frozenAt":
 			field := field
 
@@ -169053,6 +169596,8 @@ func (ec *executionContext) _DeleteSuccess(ctx context.Context, sel ast.Selectio
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "pending":
+			out.Values[i] = ec._DeleteSuccess_pending(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -172910,7 +173455,7 @@ func (ec *executionContext) _LiveUsageSummary(ctx context.Context, sel ast.Selec
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-		case "freezeCount":
+		case "syncedArtifactCount":
 			field := field
 
 			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
@@ -172919,7 +173464,7 @@ func (ec *executionContext) _LiveUsageSummary(ctx context.Context, sel ast.Selec
 						ec.Error(ctx, ec.Recover(ctx, r))
 					}
 				}()
-				res = ec._LiveUsageSummary_freezeCount(ctx, field, obj)
+				res = ec._LiveUsageSummary_syncedArtifactCount(ctx, field, obj)
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
@@ -172946,7 +173491,7 @@ func (ec *executionContext) _LiveUsageSummary(ctx context.Context, sel ast.Selec
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-		case "freezeBytes":
+		case "syncedArtifactBytes":
 			field := field
 
 			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
@@ -172955,7 +173500,7 @@ func (ec *executionContext) _LiveUsageSummary(ctx context.Context, sel ast.Selec
 						ec.Error(ctx, ec.Recover(ctx, r))
 					}
 				}()
-				res = ec._LiveUsageSummary_freezeBytes(ctx, field, obj)
+				res = ec._LiveUsageSummary_syncedArtifactBytes(ctx, field, obj)
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
@@ -182545,28 +183090,6 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
-		case "clipsConnection":
-			field := field
-
-			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._Query_clipsConnection(ctx, field)
-				if res == graphql.Null {
-					atomic.AddUint32(&fs.Invalids, 1)
-				}
-				return res
-			}
-
-			rrm := func(ctx context.Context) graphql.Marshaler {
-				return ec.OperationContext.RootResolverMiddleware(ctx,
-					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "clip":
 			field := field
 
@@ -183503,25 +184026,6 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
-		case "dvrRecordingsConnection":
-			field := field
-
-			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._Query_dvrRecordingsConnection(ctx, field)
-				return res
-			}
-
-			rrm := func(ctx context.Context) graphql.Marshaler {
-				return ec.OperationContext.RootResolverMiddleware(ctx,
-					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "dvrChapter":
 			field := field
 
@@ -183570,28 +184074,6 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 					}
 				}()
 				res = ec._Query_vodAsset(ctx, field)
-				return res
-			}
-
-			rrm := func(ctx context.Context) graphql.Marshaler {
-				return ec.OperationContext.RootResolverMiddleware(ctx,
-					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
-		case "vodAssetsConnection":
-			field := field
-
-			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._Query_vodAssetsConnection(ctx, field)
-				if res == graphql.Null {
-					atomic.AddUint32(&fs.Invalids, 1)
-				}
 				return res
 			}
 
@@ -186861,6 +187343,10 @@ func (ec *executionContext) _StorageArtifact(ctx context.Context, sel ast.Select
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "description":
+			out.Values[i] = ec._StorageArtifact_description(ctx, field, obj)
+		case "errorMessage":
+			out.Values[i] = ec._StorageArtifact_errorMessage(ctx, field, obj)
 		case "sizeBytes":
 			out.Values[i] = ec._StorageArtifact_sizeBytes(ctx, field, obj)
 		case "status":
@@ -186870,16 +187356,16 @@ func (ec *executionContext) _StorageArtifact(ctx context.Context, sel ast.Select
 			}
 		case "storageLocation":
 			out.Values[i] = ec._StorageArtifact_storageLocation(ctx, field, obj)
+		case "storageClusterId":
+			out.Values[i] = ec._StorageArtifact_storageClusterId(ctx, field, obj)
 		case "syncStatus":
 			out.Values[i] = ec._StorageArtifact_syncStatus(ctx, field, obj)
-		case "isHot":
-			out.Values[i] = ec._StorageArtifact_isHot(ctx, field, obj)
+		case "hasLocalCopy":
+			out.Values[i] = ec._StorageArtifact_hasLocalCopy(ctx, field, obj)
 		case "isSynced":
 			out.Values[i] = ec._StorageArtifact_isSynced(ctx, field, obj)
 		case "isFinalized":
 			out.Values[i] = ec._StorageArtifact_isFinalized(ctx, field, obj)
-		case "isFrozen":
-			out.Values[i] = ec._StorageArtifact_isFrozen(ctx, field, obj)
 		case "createdAt":
 			out.Values[i] = ec._StorageArtifact_createdAt(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -186908,6 +187394,74 @@ func (ec *executionContext) _StorageArtifact(ctx context.Context, sel ast.Select
 			}
 		case "thumbnailUrl":
 			out.Values[i] = ec._StorageArtifact_thumbnailUrl(ctx, field, obj)
+		case "thumbnailAssets":
+			out.Values[i] = ec._StorageArtifact_thumbnailAssets(ctx, field, obj)
+		case "durationSeconds":
+			out.Values[i] = ec._StorageArtifact_durationSeconds(ctx, field, obj)
+		case "tracks":
+			out.Values[i] = ec._StorageArtifact_tracks(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var storageArtifactKindCountsImplementors = []string{"StorageArtifactKindCounts"}
+
+func (ec *executionContext) _StorageArtifactKindCounts(ctx context.Context, sel ast.SelectionSet, obj *model.StorageArtifactKindCounts) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, storageArtifactKindCountsImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("StorageArtifactKindCounts")
+		case "total":
+			out.Values[i] = ec._StorageArtifactKindCounts_total(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "vod":
+			out.Values[i] = ec._StorageArtifactKindCounts_vod(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "dvr":
+			out.Values[i] = ec._StorageArtifactKindCounts_dvr(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "chapter":
+			out.Values[i] = ec._StorageArtifactKindCounts_chapter(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "clip":
+			out.Values[i] = ec._StorageArtifactKindCounts_clip(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -186964,6 +187518,16 @@ func (ec *executionContext) _StorageArtifactsConnection(ctx context.Context, sel
 			}
 		case "offset":
 			out.Values[i] = ec._StorageArtifactsConnection_offset(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "lifecycleAvailable":
+			out.Values[i] = ec._StorageArtifactsConnection_lifecycleAvailable(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "kindCounts":
+			out.Values[i] = ec._StorageArtifactsConnection_kindCounts(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -195714,6 +196278,69 @@ func (ec *executionContext) _TimeRange(ctx context.Context, sel ast.SelectionSet
 	return out
 }
 
+var topAssetEntryImplementors = []string{"TopAssetEntry"}
+
+func (ec *executionContext) _TopAssetEntry(ctx context.Context, sel ast.SelectionSet, obj *model.TopAssetEntry) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, topAssetEntryImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("TopAssetEntry")
+		case "artifactHash":
+			out.Values[i] = ec._TopAssetEntry_artifactHash(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "kind":
+			out.Values[i] = ec._TopAssetEntry_kind(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "totalSessions":
+			out.Values[i] = ec._TopAssetEntry_totalSessions(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "watchHours":
+			out.Values[i] = ec._TopAssetEntry_watchHours(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "durationS":
+			out.Values[i] = ec._TopAssetEntry_durationS(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "title":
+			out.Values[i] = ec._TopAssetEntry_title(ctx, field, obj)
+		case "playbackId":
+			out.Values[i] = ec._TopAssetEntry_playbackId(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var trackListEventImplementors = []string{"TrackListEvent", "Node"}
 
 func (ec *executionContext) _TrackListEvent(ctx context.Context, sel ast.SelectionSet, obj *periscopepb.TrackListEvent) graphql.Marshaler {
@@ -199144,11 +199771,8 @@ func (ec *executionContext) _VodAsset(ctx context.Context, sel ast.SelectionSet,
 			}
 		case "syncStatus":
 			out.Values[i] = ec._VodAsset_syncStatus(ctx, field, obj)
-		case "isHot":
-			out.Values[i] = ec._VodAsset_isHot(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
-			}
+		case "hasLocalCopy":
+			out.Values[i] = ec._VodAsset_hasLocalCopy(ctx, field, obj)
 		case "isSynced":
 			out.Values[i] = ec._VodAsset_isSynced(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -199156,11 +199780,6 @@ func (ec *executionContext) _VodAsset(ctx context.Context, sel ast.SelectionSet,
 			}
 		case "isFinalized":
 			out.Values[i] = ec._VodAsset_isFinalized(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
-			}
-		case "isFrozen":
-			out.Values[i] = ec._VodAsset_isFrozen(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				atomic.AddUint32(&out.Invalids, 1)
 			}
@@ -199291,104 +199910,6 @@ func (ec *executionContext) _VodAsset(ctx context.Context, sel ast.SelectionSet,
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
-
-	for label, dfs := range deferred {
-		ec.processDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
-var vodAssetEdgeImplementors = []string{"VodAssetEdge"}
-
-func (ec *executionContext) _VodAssetEdge(ctx context.Context, sel ast.SelectionSet, obj *model.VodAssetEdge) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, vodAssetEdgeImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("VodAssetEdge")
-		case "cursor":
-			out.Values[i] = ec._VodAssetEdge_cursor(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "node":
-			out.Values[i] = ec._VodAssetEdge_node(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
-
-	for label, dfs := range deferred {
-		ec.processDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
-var vodAssetsConnectionImplementors = []string{"VodAssetsConnection"}
-
-func (ec *executionContext) _VodAssetsConnection(ctx context.Context, sel ast.SelectionSet, obj *model.VodAssetsConnection) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, vodAssetsConnectionImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("VodAssetsConnection")
-		case "edges":
-			out.Values[i] = ec._VodAssetsConnection_edges(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "nodes":
-			out.Values[i] = ec._VodAssetsConnection_nodes(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "pageInfo":
-			out.Values[i] = ec._VodAssetsConnection_pageInfo(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "totalCount":
-			out.Values[i] = ec._VodAssetsConnection_totalCount(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -201235,6 +201756,128 @@ func (ec *executionContext) marshalNArtifactStatesConnection2ᚖframeworksᚋapi
 	return ec._ArtifactStatesConnection(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalNArtifactTrack2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐArtifactTrackᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.ArtifactTrack) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNArtifactTrack2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐArtifactTrack(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNArtifactTrack2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐArtifactTrack(ctx context.Context, sel ast.SelectionSet, v *model.ArtifactTrack) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._ArtifactTrack(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNAssetNodeCopies2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐAssetNodeCopies(ctx context.Context, sel ast.SelectionSet, v model.AssetNodeCopies) graphql.Marshaler {
+	return ec._AssetNodeCopies(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNAssetNodeCopies2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐAssetNodeCopies(ctx context.Context, sel ast.SelectionSet, v *model.AssetNodeCopies) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._AssetNodeCopies(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNAssetNodeCopy2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐAssetNodeCopyᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.AssetNodeCopy) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNAssetNodeCopy2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐAssetNodeCopy(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNAssetNodeCopy2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐAssetNodeCopy(ctx context.Context, sel ast.SelectionSet, v *model.AssetNodeCopy) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._AssetNodeCopy(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalNAvailableCluster2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐAvailableClusterᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.AvailableCluster) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	var wg sync.WaitGroup
@@ -202054,114 +202697,6 @@ func (ec *executionContext) marshalNClientQoeSummary2ᚖframeworksᚋapi_gateway
 	return ec._ClientQoeSummary(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNClip2ᚕᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋsharedᚐClipInfoᚄ(ctx context.Context, sel ast.SelectionSet, v []*sharedpb.ClipInfo) graphql.Marshaler {
-	ret := make(graphql.Array, len(v))
-	var wg sync.WaitGroup
-	isLen1 := len(v) == 1
-	if !isLen1 {
-		wg.Add(len(v))
-	}
-	for i := range v {
-		i := i
-		fc := &graphql.FieldContext{
-			Index:  &i,
-			Result: &v[i],
-		}
-		ctx := graphql.WithFieldContext(ctx, fc)
-		f := func(i int) {
-			defer func() {
-				if r := recover(); r != nil {
-					ec.Error(ctx, ec.Recover(ctx, r))
-					ret = nil
-				}
-			}()
-			if !isLen1 {
-				defer wg.Done()
-			}
-			ret[i] = ec.marshalNClip2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋsharedᚐClipInfo(ctx, sel, v[i])
-		}
-		if isLen1 {
-			f(i)
-		} else {
-			go f(i)
-		}
-
-	}
-	wg.Wait()
-
-	for _, e := range ret {
-		if e == graphql.Null {
-			return graphql.Null
-		}
-	}
-
-	return ret
-}
-
-func (ec *executionContext) marshalNClip2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋsharedᚐClipInfo(ctx context.Context, sel ast.SelectionSet, v *sharedpb.ClipInfo) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._Clip(ctx, sel, v)
-}
-
-func (ec *executionContext) marshalNClipEdge2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐClipEdgeᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.ClipEdge) graphql.Marshaler {
-	ret := make(graphql.Array, len(v))
-	var wg sync.WaitGroup
-	isLen1 := len(v) == 1
-	if !isLen1 {
-		wg.Add(len(v))
-	}
-	for i := range v {
-		i := i
-		fc := &graphql.FieldContext{
-			Index:  &i,
-			Result: &v[i],
-		}
-		ctx := graphql.WithFieldContext(ctx, fc)
-		f := func(i int) {
-			defer func() {
-				if r := recover(); r != nil {
-					ec.Error(ctx, ec.Recover(ctx, r))
-					ret = nil
-				}
-			}()
-			if !isLen1 {
-				defer wg.Done()
-			}
-			ret[i] = ec.marshalNClipEdge2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐClipEdge(ctx, sel, v[i])
-		}
-		if isLen1 {
-			f(i)
-		} else {
-			go f(i)
-		}
-
-	}
-	wg.Wait()
-
-	for _, e := range ret {
-		if e == graphql.Null {
-			return graphql.Null
-		}
-	}
-
-	return ret
-}
-
-func (ec *executionContext) marshalNClipEdge2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐClipEdge(ctx context.Context, sel ast.SelectionSet, v *model.ClipEdge) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._ClipEdge(ctx, sel, v)
-}
-
 func (ec *executionContext) marshalNClipLifecycle2githubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋipcᚐClipLifecycleData(ctx context.Context, sel ast.SelectionSet, v ipcpb.ClipLifecycleData) graphql.Marshaler {
 	return ec._ClipLifecycle(ctx, sel, &v)
 }
@@ -202174,20 +202709,6 @@ func (ec *executionContext) marshalNClipLifecycle2ᚖgithubᚗcomᚋLivepeerᚑF
 		return graphql.Null
 	}
 	return ec._ClipLifecycle(ctx, sel, v)
-}
-
-func (ec *executionContext) marshalNClipsConnection2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐClipsConnection(ctx context.Context, sel ast.SelectionSet, v model.ClipsConnection) graphql.Marshaler {
-	return ec._ClipsConnection(ctx, sel, &v)
-}
-
-func (ec *executionContext) marshalNClipsConnection2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐClipsConnection(ctx context.Context, sel ast.SelectionSet, v *model.ClipsConnection) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._ClipsConnection(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNCluster2ᚕᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋquartermasterᚐInfrastructureClusterᚄ(ctx context.Context, sel ast.SelectionSet, v []*quartermasterpb.InfrastructureCluster) graphql.Marshaler {
@@ -203713,114 +204234,6 @@ func (ec *executionContext) marshalNDVREvent2ᚖgithubᚗcomᚋLivepeerᚑFrameW
 		return graphql.Null
 	}
 	return ec._DVREvent(ctx, sel, v)
-}
-
-func (ec *executionContext) marshalNDVRRecordingEdge2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐDVRRecordingEdgeᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.DVRRecordingEdge) graphql.Marshaler {
-	ret := make(graphql.Array, len(v))
-	var wg sync.WaitGroup
-	isLen1 := len(v) == 1
-	if !isLen1 {
-		wg.Add(len(v))
-	}
-	for i := range v {
-		i := i
-		fc := &graphql.FieldContext{
-			Index:  &i,
-			Result: &v[i],
-		}
-		ctx := graphql.WithFieldContext(ctx, fc)
-		f := func(i int) {
-			defer func() {
-				if r := recover(); r != nil {
-					ec.Error(ctx, ec.Recover(ctx, r))
-					ret = nil
-				}
-			}()
-			if !isLen1 {
-				defer wg.Done()
-			}
-			ret[i] = ec.marshalNDVRRecordingEdge2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐDVRRecordingEdge(ctx, sel, v[i])
-		}
-		if isLen1 {
-			f(i)
-		} else {
-			go f(i)
-		}
-
-	}
-	wg.Wait()
-
-	for _, e := range ret {
-		if e == graphql.Null {
-			return graphql.Null
-		}
-	}
-
-	return ret
-}
-
-func (ec *executionContext) marshalNDVRRecordingEdge2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐDVRRecordingEdge(ctx context.Context, sel ast.SelectionSet, v *model.DVRRecordingEdge) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._DVRRecordingEdge(ctx, sel, v)
-}
-
-func (ec *executionContext) marshalNDVRRequest2ᚕᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋsharedᚐDVRInfoᚄ(ctx context.Context, sel ast.SelectionSet, v []*sharedpb.DVRInfo) graphql.Marshaler {
-	ret := make(graphql.Array, len(v))
-	var wg sync.WaitGroup
-	isLen1 := len(v) == 1
-	if !isLen1 {
-		wg.Add(len(v))
-	}
-	for i := range v {
-		i := i
-		fc := &graphql.FieldContext{
-			Index:  &i,
-			Result: &v[i],
-		}
-		ctx := graphql.WithFieldContext(ctx, fc)
-		f := func(i int) {
-			defer func() {
-				if r := recover(); r != nil {
-					ec.Error(ctx, ec.Recover(ctx, r))
-					ret = nil
-				}
-			}()
-			if !isLen1 {
-				defer wg.Done()
-			}
-			ret[i] = ec.marshalNDVRRequest2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋsharedᚐDVRInfo(ctx, sel, v[i])
-		}
-		if isLen1 {
-			f(i)
-		} else {
-			go f(i)
-		}
-
-	}
-	wg.Wait()
-
-	for _, e := range ret {
-		if e == graphql.Null {
-			return graphql.Null
-		}
-	}
-
-	return ret
-}
-
-func (ec *executionContext) marshalNDVRRequest2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋsharedᚐDVRInfo(ctx context.Context, sel ast.SelectionSet, v *sharedpb.DVRInfo) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._DVRRequest(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNDeleteClipResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐDeleteClipResult(ctx context.Context, sel ast.SelectionSet, v model.DeleteClipResult) graphql.Marshaler {
@@ -208201,6 +208614,16 @@ func (ec *executionContext) marshalNStorageArtifactKind2frameworksᚋapi_gateway
 	return v
 }
 
+func (ec *executionContext) marshalNStorageArtifactKindCounts2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStorageArtifactKindCounts(ctx context.Context, sel ast.SelectionSet, v *model.StorageArtifactKindCounts) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._StorageArtifactKindCounts(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalNStorageArtifactsConnection2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐStorageArtifactsConnection(ctx context.Context, sel ast.SelectionSet, v model.StorageArtifactsConnection) graphql.Marshaler {
 	return ec._StorageArtifactsConnection(ctx, sel, &v)
 }
@@ -210049,6 +210472,60 @@ func (ec *executionContext) unmarshalNTimeRangeInput2frameworksᚋapi_gatewayᚋ
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
+func (ec *executionContext) marshalNTopAssetEntry2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐTopAssetEntryᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.TopAssetEntry) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNTopAssetEntry2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐTopAssetEntry(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNTopAssetEntry2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐTopAssetEntry(ctx context.Context, sel ast.SelectionSet, v *model.TopAssetEntry) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._TopAssetEntry(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalNTrackListEvent2ᚕᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋperiscopeᚐTrackListEventᚄ(ctx context.Context, sel ast.SelectionSet, v []*periscopepb.TrackListEvent) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	var wg sync.WaitGroup
@@ -211198,114 +211675,6 @@ func (ec *executionContext) marshalNViewerTimeSeriesConnection2ᚖframeworksᚋa
 	return ec._ViewerTimeSeriesConnection(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNVodAsset2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐVodAssetᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.VodAsset) graphql.Marshaler {
-	ret := make(graphql.Array, len(v))
-	var wg sync.WaitGroup
-	isLen1 := len(v) == 1
-	if !isLen1 {
-		wg.Add(len(v))
-	}
-	for i := range v {
-		i := i
-		fc := &graphql.FieldContext{
-			Index:  &i,
-			Result: &v[i],
-		}
-		ctx := graphql.WithFieldContext(ctx, fc)
-		f := func(i int) {
-			defer func() {
-				if r := recover(); r != nil {
-					ec.Error(ctx, ec.Recover(ctx, r))
-					ret = nil
-				}
-			}()
-			if !isLen1 {
-				defer wg.Done()
-			}
-			ret[i] = ec.marshalNVodAsset2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐVodAsset(ctx, sel, v[i])
-		}
-		if isLen1 {
-			f(i)
-		} else {
-			go f(i)
-		}
-
-	}
-	wg.Wait()
-
-	for _, e := range ret {
-		if e == graphql.Null {
-			return graphql.Null
-		}
-	}
-
-	return ret
-}
-
-func (ec *executionContext) marshalNVodAsset2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐVodAsset(ctx context.Context, sel ast.SelectionSet, v *model.VodAsset) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._VodAsset(ctx, sel, v)
-}
-
-func (ec *executionContext) marshalNVodAssetEdge2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐVodAssetEdgeᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.VodAssetEdge) graphql.Marshaler {
-	ret := make(graphql.Array, len(v))
-	var wg sync.WaitGroup
-	isLen1 := len(v) == 1
-	if !isLen1 {
-		wg.Add(len(v))
-	}
-	for i := range v {
-		i := i
-		fc := &graphql.FieldContext{
-			Index:  &i,
-			Result: &v[i],
-		}
-		ctx := graphql.WithFieldContext(ctx, fc)
-		f := func(i int) {
-			defer func() {
-				if r := recover(); r != nil {
-					ec.Error(ctx, ec.Recover(ctx, r))
-					ret = nil
-				}
-			}()
-			if !isLen1 {
-				defer wg.Done()
-			}
-			ret[i] = ec.marshalNVodAssetEdge2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐVodAssetEdge(ctx, sel, v[i])
-		}
-		if isLen1 {
-			f(i)
-		} else {
-			go f(i)
-		}
-
-	}
-	wg.Wait()
-
-	for _, e := range ret {
-		if e == graphql.Null {
-			return graphql.Null
-		}
-	}
-
-	return ret
-}
-
-func (ec *executionContext) marshalNVodAssetEdge2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐVodAssetEdge(ctx context.Context, sel ast.SelectionSet, v *model.VodAssetEdge) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._VodAssetEdge(ctx, sel, v)
-}
-
 func (ec *executionContext) unmarshalNVodAssetStatus2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐVodAssetStatus(ctx context.Context, v any) (model.VodAssetStatus, error) {
 	var res model.VodAssetStatus
 	err := res.UnmarshalGQL(v)
@@ -211314,20 +211683,6 @@ func (ec *executionContext) unmarshalNVodAssetStatus2frameworksᚋapi_gatewayᚋ
 
 func (ec *executionContext) marshalNVodAssetStatus2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐVodAssetStatus(ctx context.Context, sel ast.SelectionSet, v model.VodAssetStatus) graphql.Marshaler {
 	return v
-}
-
-func (ec *executionContext) marshalNVodAssetsConnection2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐVodAssetsConnection(ctx context.Context, sel ast.SelectionSet, v model.VodAssetsConnection) graphql.Marshaler {
-	return ec._VodAssetsConnection(ctx, sel, &v)
-}
-
-func (ec *executionContext) marshalNVodAssetsConnection2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐVodAssetsConnection(ctx context.Context, sel ast.SelectionSet, v *model.VodAssetsConnection) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._VodAssetsConnection(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNVodLifecycle2githubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋipcᚐVodLifecycleData(ctx context.Context, sel ast.SelectionSet, v ipcpb.VodLifecycleData) graphql.Marshaler {
@@ -212368,13 +212723,6 @@ func (ec *executionContext) marshalODVREvent2ᚖgithubᚗcomᚋLivepeerᚑFrameW
 	return ec._DVREvent(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalODVRRecordingsConnection2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐDVRRecordingsConnection(ctx context.Context, sel ast.SelectionSet, v *model.DVRRecordingsConnection) graphql.Marshaler {
-	if v == nil {
-		return graphql.Null
-	}
-	return ec._DVRRecordingsConnection(ctx, sel, v)
-}
-
 func (ec *executionContext) marshalOEdgeTelemetrySetup2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐEdgeTelemetrySetup(ctx context.Context, sel ast.SelectionSet, v *model.EdgeTelemetrySetup) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
@@ -212676,14 +213024,6 @@ func (ec *executionContext) marshalOMarketplaceCluster2ᚖgithubᚗcomᚋLivepee
 		return graphql.Null
 	}
 	return ec._MarketplaceCluster(ctx, sel, v)
-}
-
-func (ec *executionContext) unmarshalOMediaArtifactConnectionInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaArtifactConnectionInput(ctx context.Context, v any) (*model.MediaArtifactConnectionInput, error) {
-	if v == nil {
-		return nil, nil
-	}
-	res, err := ec.unmarshalInputMediaArtifactConnectionInput(ctx, v)
-	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) marshalOMessage2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMessage(ctx context.Context, sel ast.SelectionSet, v *model.Message) graphql.Marshaler {

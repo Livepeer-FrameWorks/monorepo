@@ -45,7 +45,6 @@ var mustSucceedQueries = []string{
 	"developerTokensConnection",
 	"signingKeysConnection",
 	"streamKeysConnection",
-	"vodAssetsConnection",
 	"storageArtifactsConnection",
 	"mediaRetentionPolicy",
 	"networkStatus",

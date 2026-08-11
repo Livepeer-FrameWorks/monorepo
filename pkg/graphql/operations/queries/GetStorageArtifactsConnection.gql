@@ -10,10 +10,16 @@ query GetStorageArtifactsConnection($input: StorageArtifactsInput) {
       streamTitle
       title
       secondaryLabel
+      description
+      errorMessage
       sizeBytes
       status
       storageLocation
-      isFrozen
+      storageClusterId
+      syncStatus
+      isSynced
+      isFinalized
+      hasLocalCopy
       createdAt
       updatedAt
       expiresAt
@@ -30,10 +36,36 @@ query GetStorageArtifactsConnection($input: StorageArtifactsInput) {
       deleteId
       retentionId
       thumbnailUrl
+      durationSeconds
+      tracks {
+        type
+        codec
+        width
+        height
+        fps
+        resolution
+        bitrateKbps
+        channels
+        sampleRate
+      }
+      thumbnailAssets {
+        posterUrl
+        spriteVttUrl
+        spriteJpgUrl
+        assetKey
+      }
     }
     totalCount
     hasNextPage
     limit
     offset
+    lifecycleAvailable
+    kindCounts {
+      total
+      vod
+      dvr
+      chapter
+      clip
+    }
   }
 }

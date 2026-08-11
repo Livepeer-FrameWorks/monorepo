@@ -27,6 +27,14 @@ func (f *FakePeriscope) GetArtifactState(ctx context.Context, tenantID string, r
 	return f.GetArtifactStateFn(ctx, tenantID, requestID)
 }
 
+func (f *FakePeriscope) GetArtifactNodeCopies(ctx context.Context, tenantID string, artifactHash string) (*periscopepb.GetArtifactNodeCopiesResponse, error) {
+	f.Calls++
+	if f.GetArtifactNodeCopiesFn == nil {
+		return &periscopepb.GetArtifactNodeCopiesResponse{}, nil
+	}
+	return f.GetArtifactNodeCopiesFn(ctx, tenantID, artifactHash)
+}
+
 func (f *FakePeriscope) GetArtifactStates(ctx context.Context, tenantID string, streamID *string, contentType *string, stage *string, opts *periscope.CursorPaginationOpts) (*periscopepb.GetArtifactStatesResponse, error) {
 	f.Calls++
 	if f.GetArtifactStatesFn == nil {
@@ -305,6 +313,14 @@ func (f *FakePeriscope) ListVodRetentionAssets(ctx context.Context, tenantID str
 		panic("FakePeriscope.ListVodRetentionAssets not stubbed")
 	}
 	return f.ListVodRetentionAssetsFn(ctx, tenantID, timeRange, opts)
+}
+
+func (f *FakePeriscope) ListTopAssets(ctx context.Context, tenantID string, timeRange *periscope.TimeRangeOpts, limit int32) (*periscopepb.ListTopAssetsResponse, error) {
+	f.Calls++
+	if f.ListTopAssetsFn == nil {
+		panic("FakePeriscope.ListTopAssets not stubbed")
+	}
+	return f.ListTopAssetsFn(ctx, tenantID, timeRange, limit)
 }
 
 func (f *FakePeriscope) GetNodePerformance5m(ctx context.Context, tenantID string, nodeID *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*periscopepb.GetNodePerformance5MResponse, error) {

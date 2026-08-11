@@ -10,7 +10,6 @@ import (
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/loaders"
 	"frameworks/api_gateway/internal/middleware"
-	commodoreclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
@@ -48,7 +47,7 @@ func (r *Resolver) DoGetStreams(ctx context.Context) ([]*commodorepb.Stream, err
 		return demo.GenerateStreams(), nil
 	}
 
-	resp, err := r.Clients.Commodore.ListStreams(ctx, nil)
+	resp, err := r.Clients.Commodore.ListStreams(ctx, nil, "")
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get streams")
 		if r.Metrics != nil {
@@ -223,7 +222,7 @@ func (r *Resolver) DoDeleteStream(ctx context.Context, id string) (model.DeleteS
 	}
 
 	// Call Commodore gRPC (context metadata carries auth)
-	_, err := r.Clients.Commodore.DeleteStream(ctx, id)
+	resp, err := r.Clients.Commodore.DeleteStream(ctx, id)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to delete stream")
 		// Check if it's a not found error
@@ -238,18 +237,27 @@ func (r *Resolver) DoDeleteStream(ctx context.Context, id string) (model.DeleteS
 		return nil, fmt.Errorf("failed to delete stream: %w", err)
 	}
 
-	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-		EventType:    apiEventStreamDeleted,
-		ResourceType: "stream",
-		ResourceId:   id,
-		Payload: &ipcpb.ServiceEvent_StreamChangeEvent{
-			StreamChangeEvent: &ipcpb.StreamChangeEvent{
-				StreamId: id,
+	// The two-phase deletion saga returns "deleted" only once the serving cell acked the cleanup tombstone;
+	// otherwise it is deletion_pending and converges asynchronously via the outbox worker. Emit the TERMINAL
+	// stream_deleted event ONLY on actual finalization — a pending deletion must not be broadcast as done.
+	finalized := resp.GetDeletionStatus() == "deleted"
+	if finalized {
+		r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
+			EventType:    apiEventStreamDeleted,
+			ResourceType: "stream",
+			ResourceId:   id,
+			Payload: &ipcpb.ServiceEvent_StreamChangeEvent{
+				StreamChangeEvent: &ipcpb.StreamChangeEvent{
+					StreamId: id,
+				},
 			},
-		},
-	})
+		})
+	}
 
-	return &model.DeleteSuccess{Success: true, DeletedID: id}, nil
+	// Surface the saga state truthfully: the delete was ACCEPTED (success), but pending=true until the serving cell
+	// acks the tombstone (the outbox worker converges it). The client must not treat a pending delete as final.
+	pending := !finalized
+	return &model.DeleteSuccess{Success: true, DeletedID: id, Pending: &pending}, nil
 }
 
 // DoRefreshStreamKey refreshes the stream key for a stream
@@ -850,34 +858,6 @@ func (r *Resolver) DoDeleteStreamKey(ctx context.Context, streamID, keyID string
 	return &model.DeleteSuccess{Success: true, DeletedID: keyID}, nil
 }
 
-// DoGetClips retrieves all clips for the authenticated user
-func (r *Resolver) DoGetClips(ctx context.Context, streamID *string) ([]*sharedpb.ClipInfo, error) {
-	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo clips")
-		return demo.GenerateClips(), nil
-	}
-
-	normalizedStreamID, err := normalizeStreamIDPtr(streamID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Get tenant_id from context
-	tenantID := ctxkeys.GetTenantID(ctx)
-	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
-	}
-
-	// Call Commodore gRPC (context metadata carries auth)
-	clipsResp, err := r.Clients.Commodore.GetClips(ctx, tenantID, normalizedStreamID, nil)
-	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get clips")
-		return nil, fmt.Errorf("failed to get clips: %w", err)
-	}
-
-	return clipsResp.Clips, nil
-}
-
 // DoGetClip retrieves a specific clip by ID
 func (r *Resolver) DoGetClip(ctx context.Context, id string) (*sharedpb.ClipInfo, error) {
 	if middleware.IsDemoMode(ctx) {
@@ -904,6 +884,10 @@ func (r *Resolver) DoGetClip(ctx context.Context, id string) (*sharedpb.ClipInfo
 		r.Logger.WithError(err).Error("Failed to get clip")
 		return nil, fmt.Errorf("failed to get clip: %w", err)
 	}
+	// hasLocalCopy (the proto's has_local_copy field) is placement-derived and sourced solely from
+	// Periscope — clear any catalog frozen_at-derived value so a missing overlay reports null (unknown),
+	// not the durable fact.
+	clip.HasLocalCopy = nil
 	if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
 		if l := loaders.FromContext(ctx); l != nil && l.ArtifactLifecycle != nil {
 			if state, stateErr := l.ArtifactLifecycle.Load(ctx, tenantID, clip.GetClipHash()); stateErr != nil {
@@ -1046,7 +1030,8 @@ func (r *Resolver) DoDeleteDVR(ctx context.Context, dvrHash string) (model.Delet
 	}
 
 	// Call Commodore gRPC (context metadata carries auth)
-	if err := r.Clients.Commodore.DeleteDVR(ctx, dvrHash); err != nil {
+	deleted, err := r.Clients.Commodore.DeleteDVR(ctx, dvrHash)
+	if err != nil {
 		r.Logger.WithError(err).Error("Failed to delete DVR")
 		if strings.Contains(err.Error(), "not found") {
 			return &model.NotFoundError{
@@ -1057,6 +1042,12 @@ func (r *Resolver) DoDeleteDVR(ctx context.Context, dvrHash string) (model.Delet
 			}, nil
 		}
 		return nil, fmt.Errorf("failed to delete DVR: %w", err)
+	}
+
+	// Only emit the delete event on a REAL deletion. An already-deleted DVR (idempotent no-op)
+	// must not fire a duplicate DVR-deleted event.
+	if !deleted {
+		return &model.DeleteSuccess{Success: true, DeletedID: dvrHash}, nil
 	}
 
 	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
@@ -1075,71 +1066,8 @@ func (r *Resolver) DoDeleteDVR(ctx context.Context, dvrHash string) (model.Delet
 	return &model.DeleteSuccess{Success: true, DeletedID: dvrHash}, nil
 }
 
-// DoListDVRRequests lists DVR recordings with cursor pagination
-func (r *Resolver) DoListDVRRequests(ctx context.Context, streamID *string, pagination *commonpb.CursorPaginationRequest, opts ...commodoreclient.MediaListOptions) (*sharedpb.ListDVRRecordingsResponse, error) {
-	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Demo: list DVR requests")
-		now := time.Now()
-		duration1 := int32(3600)   // 1 hour
-		duration2 := int32(1800)   // 30 minutes so far
-		size1 := int64(5368709120) // ~5 GB
-		size2 := int64(1073741824) // ~1 GB so far
-		return &sharedpb.ListDVRRecordingsResponse{
-			DvrRecordings: []*sharedpb.DVRInfo{
-				{
-					DvrHash:         "pb_dvr_demo_1",
-					InternalName:    "stream_demo_1",
-					StreamId:        stringPtr("stream_demo_1"),
-					PlaybackId:      stringPtr("pl_dvr_demo_1"),
-					Status:          "completed",
-					StartedAt:       timestamppb.New(now.Add(-48 * time.Hour)),
-					EndedAt:         timestamppb.New(now.Add(-47 * time.Hour)),
-					DurationSeconds: &duration1,
-					SizeBytes:       &size1,
-					CreatedAt:       timestamppb.New(now.Add(-48 * time.Hour)),
-					UpdatedAt:       timestamppb.New(now.Add(-47 * time.Hour)),
-				},
-				{
-					DvrHash:         "pb_dvr_demo_2",
-					InternalName:    "stream_demo_2",
-					StreamId:        stringPtr("stream_demo_2"),
-					PlaybackId:      stringPtr("pl_dvr_demo_2"),
-					Status:          "recording",
-					StartedAt:       timestamppb.New(now.Add(-30 * time.Minute)),
-					DurationSeconds: &duration2,
-					SizeBytes:       &size2,
-					CreatedAt:       timestamppb.New(now.Add(-30 * time.Minute)),
-					UpdatedAt:       timestamppb.New(now),
-				},
-			},
-			Pagination: &commonpb.CursorPaginationResponse{
-				TotalCount:  2,
-				HasNextPage: false,
-			},
-		}, nil
-	}
-
-	// Get tenant_id from context
-	tenantID := ctxkeys.GetTenantID(ctx)
-	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
-	}
-
-	// Call Commodore gRPC (context metadata carries auth)
-	normalizedStreamID, err := normalizeStreamIDPtr(streamID)
-	if err != nil {
-		return nil, err
-	}
-	out, err := r.Clients.Commodore.ListDVRRequests(ctx, tenantID, normalizedStreamID, pagination, opts...)
-	if err != nil {
-		r.Logger.WithError(err).Error("Failed to list DVR requests")
-		return nil, fmt.Errorf("failed to list DVR requests: %w", err)
-	}
-	return out, nil
-}
-
 // DoGetStreamsConnection retrieves streams with Relay-style cursor pagination
-func (r *Resolver) DoGetStreamsConnection(ctx context.Context, first *int, after *string, last *int, before *string) (*model.StreamsConnection, error) {
+func (r *Resolver) DoGetStreamsConnection(ctx context.Context, first *int, after *string, last *int, before *string, search *string) (*model.StreamsConnection, error) {
 	start := time.Now()
 
 	defer func() {
@@ -1159,8 +1087,8 @@ func (r *Resolver) DoGetStreamsConnection(ctx context.Context, first *int, after
 	// Build bidirectional pagination request
 	paginationReq := buildStreamsPaginationRequest(first, after, last, before)
 
-	// Call Commodore with pagination (gRPC uses context metadata for auth)
-	resp, err := r.Clients.Commodore.ListStreams(ctx, paginationReq)
+	// Call Commodore with pagination + optional name search (context carries auth)
+	resp, err := r.Clients.Commodore.ListStreams(ctx, paginationReq, strings.TrimSpace(strValue(search)))
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get streams")
 		if r.Metrics != nil {
@@ -1355,293 +1283,34 @@ func (r *Resolver) buildStreamsConnectionFromSlice(streams []*commodorepb.Stream
 	}
 }
 
-// DoGetClipsConnection retrieves clips with Relay-style cursor pagination
-func (r *Resolver) DoGetClipsConnection(ctx context.Context, streamID *string, first *int, after *string, last *int, before *string, input ...*model.MediaArtifactConnectionInput) (*model.ClipsConnection, error) {
-	// Build cursor pagination request with bidirectional support
-	paginationReq := &commonpb.CursorPaginationRequest{
-		First: int32(pagination.DefaultLimit),
-	}
-	if first != nil {
-		paginationReq.First = int32(pagination.ClampLimit(*first))
-	}
-	if after != nil && *after != "" {
-		paginationReq.After = after
-	}
-	if last != nil {
-		paginationReq.Last = int32(pagination.ClampLimit(*last))
-	}
-	if before != nil && *before != "" {
-		paginationReq.Before = before
-	}
-
-	normalizedStreamID, err := normalizeStreamIDPtr(streamID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Check for demo mode
-	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo clips connection")
-		clips, _ := r.DoGetClips(ctx, normalizedStreamID)
-		return r.buildClipsConnectionFromProto(clips, nil), nil
-	}
-
-	// Get tenant_id from context
-	tenantID := ctxkeys.GetTenantID(ctx)
-	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
-	}
-
-	// gRPC uses context metadata for auth (set by userContextInterceptor)
-	var opts commodoreclient.MediaListOptions
-	if len(input) > 0 {
-		opts = mediaListOptionsFromInput(input[0])
-	}
-	clipsResp, err := r.Clients.Commodore.GetClips(ctx, tenantID, normalizedStreamID, paginationReq, opts)
-	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get clips")
-		return nil, fmt.Errorf("failed to get clips: %w", err)
-	}
-
-	// Enrich with lifecycle data from Periscope (size_bytes, status, storage_location, etc.)
-	if l := loaders.FromContext(ctx); l != nil && l.ArtifactLifecycle != nil && len(clipsResp.Clips) > 0 {
-		hashes := make([]string, len(clipsResp.Clips))
-		for i, clip := range clipsResp.Clips {
-			hashes[i] = clip.ClipHash
-		}
-
-		states, err := l.ArtifactLifecycle.LoadMany(ctx, tenantID, hashes)
-		if err != nil {
-			r.Logger.WithError(err).Warn("Failed to load clip lifecycle data")
-		} else {
-			for _, clip := range clipsResp.Clips {
-				if state, ok := states[clip.ClipHash]; ok && state != nil {
-					if state.GetStreamId() != "" {
-						clip.StreamId = state.GetStreamId()
-					}
-					// Convert uint64 to int64 for size_bytes
-					if state.SizeBytes != nil {
-						sizeInt64 := int64(*state.SizeBytes)
-						clip.SizeBytes = &sizeInt64
-					}
-					if artifactLifecycleStageCanOverrideRegistry(clip.Status, state.Stage) {
-						clip.Status = state.Stage
-					}
-					if state.FilePath != nil {
-						clip.StoragePath = *state.FilePath
-					}
-					applyArtifactStorageStateToClip(clip, state)
-				}
-			}
-		}
-	}
-
-	streamIDs := make([]string, len(clipsResp.Clips))
-	for i, c := range clipsResp.Clips {
-		streamIDs[i] = c.GetStreamId()
-	}
-	loaders.PreloadStreams(ctx, tenantID, streamIDs)
-
-	return r.buildClipsConnectionFromProto(clipsResp.Clips, clipsResp.Pagination), nil
-}
-
-// buildClipsConnectionFromProto constructs a ClipsConnection from proto response with keyset pagination
-func (r *Resolver) buildClipsConnectionFromProto(clips []*sharedpb.ClipInfo, paginationResp *commonpb.CursorPaginationResponse) *model.ClipsConnection {
-	edges := make([]*model.ClipEdge, len(clips))
-	for i, clip := range clips {
-		// Use keyset cursor (timestamp + clip_hash) for stable pagination
-		cursor := pagination.EncodeCursor(clip.CreatedAt.AsTime(), clip.ClipHash)
-		edges[i] = &model.ClipEdge{
-			Cursor: cursor,
-			Node:   clip,
-		}
-	}
-
-	// Build page info from proto pagination response
-	pageInfo := &model.PageInfo{
-		HasPreviousPage: paginationResp != nil && paginationResp.HasPreviousPage,
-		HasNextPage:     paginationResp != nil && paginationResp.HasNextPage,
-	}
-	if paginationResp != nil {
-		pageInfo.StartCursor = paginationResp.StartCursor
-		pageInfo.EndCursor = paginationResp.EndCursor
-	}
-
-	totalCount := 0
-	if paginationResp != nil {
-		totalCount = int(paginationResp.TotalCount)
-	} else {
-		// Fallback for demo mode where pagination is nil
-		totalCount = len(clips)
-	}
-
-	edgeNodes := make([]*sharedpb.ClipInfo, 0, len(edges))
-	for _, edge := range edges {
-		if edge != nil {
-			edgeNodes = append(edgeNodes, edge.Node)
-		}
-	}
-
-	return &model.ClipsConnection{
-		Edges:      edges,
-		Nodes:      edgeNodes,
-		PageInfo:   pageInfo,
-		TotalCount: totalCount,
-	}
-}
-
 func applyArtifactStorageStateToClip(clip *sharedpb.ClipInfo, state *periscopepb.ArtifactState) {
 	if clip == nil || state == nil {
 		return
 	}
-	if state.StorageLocation != nil && *state.StorageLocation != "" {
-		clip.StorageLocation = state.StorageLocation
-	} else if state.FilePath != nil && *state.FilePath != "" {
-		loc := "local"
-		clip.StorageLocation = &loc
-	}
-	clip.SyncStatus = state.SyncStatus
-	clip.IsHot = state.IsHot
-	clip.IsSynced = state.IsSynced
-	clip.IsFinalized = state.IsFinalized
-	clip.IsFrozen = state.IsFrozen
-}
-
-func applyArtifactStorageStateToDVR(dvr *sharedpb.DVRInfo, state *periscopepb.ArtifactState) {
-	if dvr == nil || state == nil {
-		return
-	}
-	if state.S3Url != nil {
-		dvr.S3Url = state.S3Url
-	}
-	if state.StorageLocation != nil && *state.StorageLocation != "" {
-		dvr.StorageLocation = state.StorageLocation
-	} else if state.FilePath != nil && *state.FilePath != "" {
-		loc := "local"
-		dvr.StorageLocation = &loc
-	}
-	dvr.SyncStatus = state.SyncStatus
-	dvr.IsHot = state.IsHot
-	dvr.IsSynced = state.IsSynced
-	dvr.IsFinalized = state.IsFinalized
-	dvr.IsFrozen = state.IsFrozen
-}
-
-// DoGetDVRRecordingsConnection retrieves DVR recordings with Relay-style cursor pagination
-func (r *Resolver) DoGetDVRRecordingsConnection(ctx context.Context, streamID *string, first *int, after *string, last *int, before *string, input ...*model.MediaArtifactConnectionInput) (*model.DVRRecordingsConnection, error) {
-	// Build cursor pagination request with bidirectional support
-	paginationReq := &commonpb.CursorPaginationRequest{
-		First: int32(pagination.DefaultLimit),
-	}
-	if first != nil {
-		paginationReq.First = int32(pagination.ClampLimit(*first))
-	}
-	if after != nil && *after != "" {
-		paginationReq.After = after
-	}
-	if last != nil {
-		paginationReq.Last = int32(pagination.ClampLimit(*last))
-	}
-	if before != nil && *before != "" {
-		paginationReq.Before = before
-	}
-
-	// Call the internal method that fetches from gRPC
-	var opts commodoreclient.MediaListOptions
-	if len(input) > 0 {
-		opts = mediaListOptionsFromInput(input[0])
-	}
-	response, err := r.DoListDVRRequests(ctx, streamID, paginationReq, opts)
-	if err != nil {
-		return nil, err
-	}
-
-	// Extract tenant_id for lifecycle lookup
-	tenantID := ctxkeys.GetTenantID(ctx)
-
-	// Enrich with lifecycle data from Periscope (size_bytes, status, storage_location, etc.)
-	if l := loaders.FromContext(ctx); l != nil && l.ArtifactLifecycle != nil && tenantID != "" && len(response.DvrRecordings) > 0 {
-		hashes := make([]string, len(response.DvrRecordings))
-		for i, dvr := range response.DvrRecordings {
-			hashes[i] = dvr.DvrHash
-		}
-
-		states, err := l.ArtifactLifecycle.LoadMany(ctx, tenantID, hashes)
-		if err != nil {
-			r.Logger.WithError(err).Warn("Failed to load DVR lifecycle data")
-		} else {
-			for _, dvr := range response.DvrRecordings {
-				if state, ok := states[dvr.DvrHash]; ok && state != nil {
-					if state.GetStreamId() != "" {
-						sourceStreamID := state.GetStreamId()
-						dvr.StreamId = &sourceStreamID
-					}
-					// Convert uint64 to int64 for size_bytes
-					if state.SizeBytes != nil {
-						sizeInt64 := int64(*state.SizeBytes)
-						dvr.SizeBytes = &sizeInt64
-					}
-					if artifactLifecycleStageCanOverrideRegistry(dvr.Status, state.Stage) {
-						dvr.Status = state.Stage
-					}
-					if state.StartedAt != nil {
-						dvr.StartedAt = state.StartedAt
-					}
-					if state.CompletedAt != nil {
-						dvr.EndedAt = state.CompletedAt
-					}
-					if state.ManifestPath != nil {
-						dvr.ManifestPath = *state.ManifestPath
-					}
-					applyArtifactStorageStateToDVR(dvr, state)
-				}
-			}
+	// Durable lifecycle (storageLocation/syncStatus/isSynced/isFinalized) is catalog-authoritative:
+	// fill from Periscope only when the catalog hasn't projected it yet, never overwrite the durable
+	// value — otherwise a Periscope wipe or lag would clobber the source of truth.
+	if clip.StorageLocation == nil || *clip.StorageLocation == "" {
+		if state.StorageLocation != nil && *state.StorageLocation != "" {
+			clip.StorageLocation = state.StorageLocation
+		} else if state.FilePath != nil && *state.FilePath != "" {
+			loc := "local"
+			clip.StorageLocation = &loc
 		}
 	}
-
-	streamIDs := make([]string, len(response.DvrRecordings))
-	for i, d := range response.DvrRecordings {
-		streamIDs[i] = d.GetStreamId()
+	if clip.SyncStatus == nil {
+		clip.SyncStatus = state.SyncStatus
 	}
-	loaders.PreloadStreams(ctx, tenantID, streamIDs)
-
-	// Build edges from proto response (DVRInfo maps to DVRRequest via autobind)
-	edges := make([]*model.DVRRecordingEdge, len(response.DvrRecordings))
-	for i, dvrInfo := range response.DvrRecordings {
-		// Use keyset cursor (timestamp + dvr_hash) for stable pagination
-		cursor := pagination.EncodeCursor(dvrInfo.CreatedAt.AsTime(), dvrInfo.DvrHash)
-		edges[i] = &model.DVRRecordingEdge{
-			Cursor: cursor,
-			Node:   dvrInfo, // pb.DVRInfo autobinds to DVRRequest
-		}
+	if clip.IsSynced == nil {
+		clip.IsSynced = state.IsSynced
 	}
-
-	// Build page info from proto pagination response
-	pageInfo := &model.PageInfo{
-		HasPreviousPage: response.Pagination != nil && response.Pagination.HasPreviousPage,
-		HasNextPage:     response.Pagination != nil && response.Pagination.HasNextPage,
+	if clip.IsFinalized == nil {
+		clip.IsFinalized = state.IsFinalized
 	}
-	if response.Pagination != nil {
-		pageInfo.StartCursor = response.Pagination.StartCursor
-		pageInfo.EndCursor = response.Pagination.EndCursor
+	// hasLocalCopy (the proto's has_local_copy field) is PLACEMENT-derived (full-local-node-copy
+	// presence, origin or cache), sourced solely from Periscope. The caller clears the catalog value
+	// first, so null here means unknown placement.
+	if state.HasLocalCopy != nil {
+		clip.HasLocalCopy = state.HasLocalCopy
 	}
-
-	totalCount := 0
-	if response.Pagination != nil {
-		totalCount = int(response.Pagination.TotalCount)
-	}
-
-	edgeNodes := make([]*sharedpb.DVRInfo, 0, len(edges))
-	for _, edge := range edges {
-		if edge != nil {
-			edgeNodes = append(edgeNodes, edge.Node)
-		}
-	}
-
-	return &model.DVRRecordingsConnection{
-		Edges:      edges,
-		Nodes:      edgeNodes,
-		PageInfo:   pageInfo,
-		TotalCount: totalCount,
-	}, nil
 }

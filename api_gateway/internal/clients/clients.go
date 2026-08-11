@@ -194,17 +194,27 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 		}
 	}
 
-	return &ServiceClients{
+	sc := &ServiceClients{
 		Commodore:     commodoreClient,
-		Deckhand:      deckhandClient,
 		Decklog:       decklogClient,
-		Navigator:     navigatorClient,
 		Periscope:     periscopeClient,
 		Purser:        purserClient,
 		Quartermaster: quartermasterClient,
 		Signalman:     signalmanClient,
-		Skipper:       skipperClient,
-	}, nil
+	}
+	// Optional clients: assign only when constructed. Storing a nil concrete
+	// pointer in the interface field would make it non-nil (typed nil), so
+	// callers' nil checks would pass and calls would panic.
+	if navigatorClient != nil {
+		sc.Navigator = navigatorClient
+	}
+	if deckhandClient != nil {
+		sc.Deckhand = deckhandClient
+	}
+	if skipperClient != nil {
+		sc.Skipper = skipperClient
+	}
+	return sc, nil
 }
 
 // Close closes all gRPC connections

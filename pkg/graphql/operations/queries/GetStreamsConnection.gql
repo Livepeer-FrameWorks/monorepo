@@ -1,6 +1,6 @@
 # Fetch paginated list of streams with core fields and live status metrics
-query GetStreamsConnection($first: Int = 50, $after: String) {
-  streamsConnection(page: { first: $first, after: $after }) @paginate {
+query GetStreamsConnection($first: Int = 50, $after: String, $search: String) {
+  streamsConnection(page: { first: $first, after: $after }, search: $search) @paginate {
     edges {
       cursor
       node {

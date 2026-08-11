@@ -204,9 +204,6 @@ func SetupComplexity(c *generated.ComplexityRoot) {
 	c.Query.BootstrapTokensConnection = func(childComplexity int, page *model.ConnectionInput, _ *string) int {
 		return connectionComplexity(childComplexity, page)
 	}
-	c.Query.ClipsConnection = func(childComplexity int, page *model.ConnectionInput, _ *string, _ *model.MediaArtifactConnectionInput) int {
-		return connectionComplexity(childComplexity, page)
-	}
 	c.Query.ClusterInvitesConnection = func(childComplexity int, page *model.ConnectionInput, _ string) int {
 		return connectionComplexity(childComplexity, page)
 	}
@@ -226,9 +223,6 @@ func SetupComplexity(c *generated.ComplexityRoot) {
 		return connectionComplexity(childComplexity, page)
 	}
 	c.Query.DiscoverServicesConnection = func(childComplexity int, page *model.ConnectionInput, _ string, _ *string) int {
-		return connectionComplexity(childComplexity, page)
-	}
-	c.Query.DvrRecordingsConnection = func(childComplexity int, page *model.ConnectionInput, _ *string, _ *model.MediaArtifactConnectionInput) int {
 		return connectionComplexity(childComplexity, page)
 	}
 	c.Query.InvoicesConnection = func(childComplexity int, page *model.ConnectionInput) int {
@@ -255,13 +249,10 @@ func SetupComplexity(c *generated.ComplexityRoot) {
 	c.Query.StreamKeysConnection = func(childComplexity int, page *model.ConnectionInput, _ string) int {
 		return connectionComplexity(childComplexity, page)
 	}
-	c.Query.StreamsConnection = func(childComplexity int, page *model.ConnectionInput) int {
+	c.Query.StreamsConnection = func(childComplexity int, page *model.ConnectionInput, _ *string) int {
 		return connectionComplexity(childComplexity, page)
 	}
 	c.Query.UsageRecordsConnection = func(childComplexity int, page *model.ConnectionInput, _ *model.TimeRangeInput) int {
-		return connectionComplexity(childComplexity, page)
-	}
-	c.Query.VodAssetsConnection = func(childComplexity int, page *model.ConnectionInput, _ *string, _ *model.MediaArtifactConnectionInput) int {
 		return connectionComplexity(childComplexity, page)
 	}
 

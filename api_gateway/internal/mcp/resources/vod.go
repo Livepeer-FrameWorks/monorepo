@@ -4,22 +4,20 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
+	"frameworks/api_gateway/internal/catalogview"
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/mcp/mcperrors"
-	"frameworks/api_gateway/internal/resolvers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
-	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // RegisterVODResources registers VOD asset-related MCP resources.
-func RegisterVODResources(server *mcp.Server, clients *clients.ServiceClients, resolver *resolvers.Resolver, logger logging.Logger) {
+func RegisterVODResources(server *mcp.Server, clients *clients.ServiceClients, logger logging.Logger) {
 	// vod://list - List all VOD assets
 	server.AddResource(&mcp.Resource{
 		URI:         "vod://list",
@@ -76,34 +74,32 @@ func handleVODList(ctx context.Context, clients *clients.ServiceClients, logger 
 		return nil, mcperrors.AuthRequired()
 	}
 
-	// Build pagination request
-	pagination := &commonpb.CursorPaginationRequest{
-		First: 50,
-	}
-
-	// Get VOD assets from Commodore
-	resp, err := clients.Commodore.ListVodAssets(ctx, tenantID, pagination, nil)
+	// Read the CANONICAL catalog for VOD-kind artifacts: its derived status/duration/track summary
+	// is authoritative, so ready/failed assets and their metadata are reported correctly.
+	resp, err := clients.Commodore.ListStorageArtifacts(ctx, &commodorepb.ListStorageArtifactsRequest{
+		TenantId: tenantID,
+		Kinds:    []string{"vod"},
+		Limit:    50,
+	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to list VOD assets")
 		return nil, fmt.Errorf("failed to list VOD assets: %w", err)
 	}
 
-	assets := make([]VODAssetInfo, 0, len(resp.Assets))
-	for _, a := range resp.Assets {
-		info := protoToVODAssetInfo(a)
-		assets = append(assets, info)
+	assets := make([]VODAssetInfo, 0, len(resp.GetArtifacts()))
+	for _, a := range resp.GetArtifacts() {
+		assets = append(assets, storageArtifactToVODAssetInfo(a))
 	}
 
-	hasMore := resp.Pagination != nil && resp.Pagination.HasNextPage
 	total := len(assets)
-	if resp.Pagination != nil {
-		total = int(resp.Pagination.TotalCount)
+	if resp.GetTotalCount() > 0 {
+		total = int(resp.GetTotalCount())
 	}
 
 	return marshalResourceResult("vod://list", VODListResponse{
 		Assets:  assets,
 		Total:   total,
-		HasMore: hasMore,
+		HasMore: resp.GetHasNextPage(),
 	})
 }
 
@@ -124,97 +120,94 @@ func handleVODByID(ctx context.Context, uri string, clients *clients.ServiceClie
 		return nil, err
 	}
 
-	// Get VOD asset from Commodore
-	asset, err := clients.Commodore.GetVodAsset(ctx, tenantID, artifactHash)
+	// Exact-hash lookup against the CANONICAL catalog (single source of truth). Restricted to
+	// kind=vod: the vod:// resource is for uploaded VOD assets, and the catalog unions other kinds
+	// (clip/dvr/chapter) under the same hash space, so a non-VOD hash must not resolve here.
+	resp, err := clients.Commodore.ListStorageArtifacts(ctx, &commodorepb.ListStorageArtifactsRequest{
+		TenantId:       tenantID,
+		ArtifactHashes: []string{artifactHash},
+		Kinds:          []string{"vod"},
+		Limit:          1,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("VOD asset not found: %w", err)
+		return nil, fmt.Errorf("failed to read VOD asset: %w", err)
 	}
-
-	info := protoToVODAssetInfo(asset)
-	return marshalResourceResult(uri, info)
+	arts := resp.GetArtifacts()
+	if len(arts) == 0 {
+		return nil, fmt.Errorf("VOD asset not found")
+	}
+	return marshalResourceResult(uri, storageArtifactToVODAssetInfo(arts[0]))
 }
 
-func protoToVODAssetInfo(p *sharedpb.VodAssetInfo) VODAssetInfo {
-	vodID := p.ArtifactHash
+// storageArtifactToVODAssetInfo maps a canonical catalog row onto the MCP VOD resource. Status is
+// the catalog's DERIVED lifecycle status (not a hardcoded default); duration/resolution/codecs come
+// from the finalized track summary; filename is the catalog's secondary_label projection;
+// description and error_message are projected onto the catalog row.
+func storageArtifactToVODAssetInfo(a *commodorepb.StorageArtifactInfo) VODAssetInfo {
+	vodID := a.GetArtifactHash()
 	if vodID == "" {
-		vodID = p.Id
+		vodID = a.GetId()
 	}
 	info := VODAssetInfo{
 		ID:              globalid.Encode(globalid.TypeVodAsset, vodID),
-		ArtifactHash:    p.ArtifactHash,
-		StorageLocation: p.StorageLocation,
+		ArtifactHash:    a.GetArtifactHash(),
+		PlaybackID:      a.GetPlaybackId(),
+		Status:          vodStatusLabel(a.GetStatus()),
+		StorageLocation: a.GetStorageLocation(),
 	}
 
-	// Map status
-	switch p.Status {
-	case sharedpb.VodStatus_VOD_STATUS_UPLOADING:
-		info.Status = "UPLOADING"
-	case sharedpb.VodStatus_VOD_STATUS_PROCESSING:
-		info.Status = "PROCESSING"
-	case sharedpb.VodStatus_VOD_STATUS_READY:
-		info.Status = "READY"
-	case sharedpb.VodStatus_VOD_STATUS_FAILED:
-		info.Status = "FAILED"
-	case sharedpb.VodStatus_VOD_STATUS_DELETED:
-		info.Status = "DELETED"
-	default:
-		info.Status = "UNKNOWN"
+	if v := a.GetTitle(); v != "" {
+		info.Title = &v
 	}
-
-	if p.ExpiresAt != nil && p.ExpiresAt.AsTime().Before(time.Now()) {
-		info.Status = "DELETED"
+	if v := a.GetSecondaryLabel(); v != "" {
+		info.Filename = &v
 	}
-
-	// Optional fields
-	if p.PlaybackId != nil && *p.PlaybackId != "" {
-		info.PlaybackID = *p.PlaybackId
+	if v := a.GetDescription(); v != "" {
+		info.Description = &v
 	}
-	if p.Title != "" {
-		info.Title = &p.Title
+	if v := a.GetErrorMessage(); v != "" {
+		info.ErrorMessage = &v
 	}
-	if p.Description != "" {
-		info.Description = &p.Description
+	if a.SizeBytes != nil {
+		sz := a.GetSizeBytes()
+		info.SizeBytes = &sz
 	}
-	if p.Filename != "" {
-		info.Filename = &p.Filename
-	}
-	if p.SizeBytes != nil {
-		info.SizeBytes = p.SizeBytes
-	}
-	if p.DurationMs != nil {
-		dur := int(*p.DurationMs)
+	if a.DurationMs != nil {
+		dur := int(a.GetDurationMs())
 		info.DurationMs = &dur
 	}
-	if p.Resolution != nil {
-		info.Resolution = p.Resolution
-	}
-	if p.VideoCodec != nil {
-		info.VideoCodec = p.VideoCodec
-	}
-	if p.AudioCodec != nil {
-		info.AudioCodec = p.AudioCodec
-	}
-	if p.BitrateKbps != nil {
-		br := int(*p.BitrateKbps)
-		info.BitrateKbps = &br
-	}
-	if p.ErrorMessage != nil {
-		info.ErrorMessage = p.ErrorMessage
-	}
+	info.Resolution, info.VideoCodec, info.AudioCodec, info.BitrateKbps = catalogview.TrackSummary(a.GetTracks())
 
-	// Timestamps
-	if p.CreatedAt != nil {
-		info.CreatedAt = p.CreatedAt.AsTime().Format("2006-01-02T15:04:05Z")
+	if a.CreatedAt != nil {
+		info.CreatedAt = a.GetCreatedAt().AsTime().Format("2006-01-02T15:04:05Z")
 	}
-	if p.UpdatedAt != nil {
-		info.UpdatedAt = p.UpdatedAt.AsTime().Format("2006-01-02T15:04:05Z")
+	if a.UpdatedAt != nil {
+		info.UpdatedAt = a.GetUpdatedAt().AsTime().Format("2006-01-02T15:04:05Z")
 	}
-	if p.ExpiresAt != nil {
-		exp := p.ExpiresAt.AsTime().Format("2006-01-02T15:04:05Z")
+	if a.ExpiresAt != nil {
+		exp := a.GetExpiresAt().AsTime().Format("2006-01-02T15:04:05Z")
 		info.ExpiresAt = &exp
 	}
 
 	return info
+}
+
+// vodStatusLabel maps the catalog's derived lifecycle status string onto the MCP status label.
+func vodStatusLabel(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "ready", "completed", "complete", "done", "synced":
+		return "READY"
+	case "processing":
+		return "PROCESSING"
+	case "failed", "error":
+		return "FAILED"
+	case "deleted", "expired", "evicted":
+		return "DELETED"
+	case "uploading", "requested", "queued":
+		return "UPLOADING"
+	default:
+		return "UNKNOWN"
+	}
 }
 
 func resolveVodIdentifier(ctx context.Context, input string, clients *clients.ServiceClients) (string, error) {

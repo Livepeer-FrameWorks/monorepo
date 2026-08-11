@@ -7,6 +7,7 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/clients/clientstest"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -225,14 +226,20 @@ func TestDoGetVodUploadStatus(t *testing.T) {
 	}
 }
 
-// DoGetVodAsset returns the mapped asset on success and (nil, nil) — not an error
-// — when the backend reports the asset is gone.
+// DoGetVodAsset reads the CANONICAL catalog (exact-hash ListStorageArtifacts): it returns the
+// mapped asset on success, (nil, nil) when the catalog has no such row, and surfaces transport
+// errors. Status comes from the catalog's derived status string (not a hardcoded default).
 func TestDoGetVodAsset(t *testing.T) {
-	var gotTenant, gotID string
+	var gotHashes, gotKinds []string
 	commo := &clientstest.FakeCommodore{
-		GetVodAssetFn: func(_ context.Context, tenantID, artifactHash string) (*sharedpb.VodAssetInfo, error) {
-			gotTenant, gotID = tenantID, artifactHash
-			return &sharedpb.VodAssetInfo{ArtifactHash: "hash1", Status: sharedpb.VodStatus_VOD_STATUS_READY}, nil
+		ListStorageArtifactsFn: func(_ context.Context, req *commodorepb.ListStorageArtifactsRequest) (*commodorepb.ListStorageArtifactsResponse, error) {
+			gotHashes = req.GetArtifactHashes()
+			gotKinds = req.GetKinds()
+			return &commodorepb.ListStorageArtifactsResponse{
+				Artifacts: []*commodorepb.StorageArtifactInfo{
+					{ArtifactHash: "hash1", Kind: "vod", Status: "ready"},
+				},
+			}, nil
 		},
 	}
 	r := commoR(commo)
@@ -240,17 +247,25 @@ func TestDoGetVodAsset(t *testing.T) {
 	if err != nil || asset == nil {
 		t.Fatalf("DoGetVodAsset = (%+v, %v)", asset, err)
 	}
-	if gotTenant != "t1" || gotID != "hash1" {
-		t.Fatalf("tenant/id not forwarded: %q %q", gotTenant, gotID)
+	if len(gotHashes) != 1 || gotHashes[0] != "hash1" {
+		t.Fatalf("exact-hash lookup not forwarded: %v", gotHashes)
+	}
+	// The lookup MUST be kind-restricted so a clip/DVR hash can't be returned as a VodAsset.
+	gotKindSet := map[string]bool{}
+	for _, k := range gotKinds {
+		gotKindSet[k] = true
+	}
+	if !gotKindSet["vod"] || !gotKindSet["chapter"] {
+		t.Fatalf("expected kind filter to include vod+chapter, got %v", gotKinds)
 	}
 	if asset.ArtifactHash != "hash1" || asset.Status != model.VodAssetStatusReady {
 		t.Fatalf("asset not mapped: %+v", asset)
 	}
 
-	// "not found" maps to nil asset, nil error (nullable GraphQL field).
+	// Empty catalog result maps to nil asset, nil error (nullable GraphQL field).
 	rNF := commoR(&clientstest.FakeCommodore{
-		GetVodAssetFn: func(context.Context, string, string) (*sharedpb.VodAssetInfo, error) {
-			return nil, errors.New("asset not found")
+		ListStorageArtifactsFn: func(context.Context, *commodorepb.ListStorageArtifactsRequest) (*commodorepb.ListStorageArtifactsResponse, error) {
+			return &commodorepb.ListStorageArtifactsResponse{}, nil
 		},
 	})
 	asset, err = rNF.DoGetVodAsset(clientstest.AuthedCtx("t1"), "ghost")
@@ -258,14 +273,14 @@ func TestDoGetVodAsset(t *testing.T) {
 		t.Fatalf("not-found should be (nil, nil), got (%+v, %v)", asset, err)
 	}
 
-	// Non-not-found backend error surfaces.
+	// Transport error surfaces.
 	rErr := commoR(&clientstest.FakeCommodore{
-		GetVodAssetFn: func(context.Context, string, string) (*sharedpb.VodAssetInfo, error) {
+		ListStorageArtifactsFn: func(context.Context, *commodorepb.ListStorageArtifactsRequest) (*commodorepb.ListStorageArtifactsResponse, error) {
 			return nil, errors.New("commodore down")
 		},
 	})
 	if _, err := rErr.DoGetVodAsset(clientstest.AuthedCtx("t1"), "x"); err == nil {
-		t.Fatal("non-not-found backend error should surface")
+		t.Fatal("transport error should surface")
 	}
 
 	// No tenant → guard fires before backend.

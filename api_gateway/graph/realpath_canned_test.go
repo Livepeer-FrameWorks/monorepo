@@ -16,7 +16,7 @@ import (
 // runs (rather than panicking at the nil-interface call). Add overrides here to
 // extend real-path coverage to more resolver families.
 
-func (fakeCommodore) ListStreams(_ context.Context, _ *commonpb.CursorPaginationRequest) (*commodorepb.ListStreamsResponse, error) {
+func (fakeCommodore) ListStreams(_ context.Context, _ *commonpb.CursorPaginationRequest, _ string) (*commodorepb.ListStreamsResponse, error) {
 	return &commodorepb.ListStreamsResponse{Streams: demo.GenerateStreams()}, nil
 }
 

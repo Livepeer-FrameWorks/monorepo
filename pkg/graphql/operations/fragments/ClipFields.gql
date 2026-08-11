@@ -19,10 +19,9 @@ fragment ClipFields on Clip {
   requestedParams
   storageLocation
   syncStatus
-  isHot
+  hasLocalCopy
   isSynced
   isFinalized
-  isFrozen
   expiresAt
   thumbnailAssets {
     posterUrl

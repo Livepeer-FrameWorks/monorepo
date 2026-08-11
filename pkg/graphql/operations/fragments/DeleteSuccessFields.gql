@@ -2,4 +2,5 @@ fragment DeleteSuccessFields on DeleteSuccess {
   __typename
   success
   deletedId
+  pending
 }

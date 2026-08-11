@@ -571,9 +571,9 @@ func GenerateLiveUsageSummary() *periscopepb.LiveUsageSummary {
 		FrozenDvrBytes:  3_221_225_472, // 3 GB
 		FrozenVodBytes:  8_589_934_592, // 8 GB
 
-		// Freeze (S3 upload) operations
-		FreezeCount: 12,
-		FreezeBytes: 4_294_967_296, // 4 GB
+		// Point-in-time artifacts currently synced to S3
+		SyncedArtifactCount: 12,
+		SyncedArtifactBytes: 4_294_967_296, // 4 GB
 	}
 }
 
@@ -3209,47 +3209,6 @@ func GenerateInfrastructureClusters() []*quartermasterpb.InfrastructureCluster {
 		result[i] = edge.Node
 	}
 	return result
-}
-
-// GenerateClips returns a slice of demo clips matching shared.ClipInfo
-func GenerateClips() []*sharedpb.ClipInfo {
-	now := time.Now()
-	return []*sharedpb.ClipInfo{
-		{
-			Id:          "clip_info_demo_001",
-			ClipHash:    "a1b2c3d4e5f6789012345678901234ab",
-			PlaybackId:  "pl_demo_clip_001",
-			StreamId:    "00000000-0000-0000-0000-000000000001",
-			Title:       "Best Moments",
-			Description: "Highlights from the stream",
-			StartTime:   now.Add(-90 * time.Minute).Unix(),
-			Duration:    300,
-			NodeId:      "node_demo_us_west_01",
-			StoragePath: "/var/lib/mistserver/recordings/clips/demo_live_stream_001/a1b2c3d4e5f6789012345678901234ab.mp4",
-			SizeBytes:   int64Ptr(15000000),
-			Status:      "ready",
-			CreatedAt:   timestamppb.New(now.Add(-30 * time.Minute)),
-			UpdatedAt:   timestamppb.New(now.Add(-30 * time.Minute)),
-			ClipMode:    stringPtr("absolute"),
-		},
-		{
-			Id:          "clip_info_demo_002",
-			ClipHash:    "b2c3d4e5f678901234567890123456bc",
-			PlaybackId:  "pl_demo_clip_002",
-			StreamId:    "00000000-0000-0000-0000-000000000001",
-			Title:       "Intro Sequence",
-			Description: "Stream introduction",
-			StartTime:   now.Add(-120 * time.Minute).Unix(),
-			Duration:    60,
-			NodeId:      "node_demo_us_west_01",
-			StoragePath: "/var/lib/mistserver/recordings/clips/demo_live_stream_001/b2c3d4e5f678901234567890123456bc.mp4",
-			SizeBytes:   int64Ptr(5000000),
-			Status:      "ready",
-			CreatedAt:   timestamppb.New(now.Add(-45 * time.Minute)),
-			UpdatedAt:   timestamppb.New(now.Add(-45 * time.Minute)),
-			ClipMode:    stringPtr("absolute"),
-		},
-	}
 }
 
 // ============================================================================

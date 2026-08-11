@@ -5,193 +5,142 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
-	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func TestProtoToVODAssetInfo_StatusMapping(t *testing.T) {
+func TestVodStatusLabel_Mapping(t *testing.T) {
 	tests := []struct {
-		name   string
-		status sharedpb.VodStatus
-		want   string
+		name string
+		in   string
+		want string
 	}{
-		{
-			name:   "uploading",
-			status: sharedpb.VodStatus_VOD_STATUS_UPLOADING,
-			want:   "UPLOADING",
-		},
-		{
-			name:   "processing",
-			status: sharedpb.VodStatus_VOD_STATUS_PROCESSING,
-			want:   "PROCESSING",
-		},
-		{
-			name:   "ready",
-			status: sharedpb.VodStatus_VOD_STATUS_READY,
-			want:   "READY",
-		},
-		{
-			name:   "failed",
-			status: sharedpb.VodStatus_VOD_STATUS_FAILED,
-			want:   "FAILED",
-		},
-		{
-			name:   "deleted",
-			status: sharedpb.VodStatus_VOD_STATUS_DELETED,
-			want:   "DELETED",
-		},
-		{
-			name:   "unknown fallback",
-			status: sharedpb.VodStatus(999),
-			want:   "UNKNOWN",
-		},
+		{"ready", "ready", "READY"},
+		{"processing", "processing", "PROCESSING"},
+		{"failed", "failed", "FAILED"},
+		{"expired maps to deleted", "expired", "DELETED"},
+		{"uploading", "uploading", "UPLOADING"},
+		{"unknown fallback", "weird", "UNKNOWN"},
 	}
-
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := protoToVODAssetInfo(&sharedpb.VodAssetInfo{
-				ArtifactHash: "artifact-hash-1",
-				Status:       tc.status,
-			})
-			if got.Status != tc.want {
-				t.Fatalf("Status: got %q, want %q", got.Status, tc.want)
+			if got := vodStatusLabel(tc.in); got != tc.want {
+				t.Fatalf("vodStatusLabel(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}
 }
 
-func TestProtoToVODAssetInfo_FieldMappingAndIDFallback(t *testing.T) {
-	playbackID := "playback-key-1"
+// The MCP status is the catalog's DERIVED lifecycle status: a ready/failed asset maps to
+// READY/FAILED. Fields (description/errorMessage/tracks/timestamps) map from the catalog row.
+func TestStorageArtifactToVODAssetInfo_FieldMappingAndIDFallback(t *testing.T) {
 	sizeBytes := int64(1024)
-	durationMs := int32(45000)
-	resolution := "1920x1080"
-	videoCodec := "h264"
-	audioCodec := "aac"
-	bitrateKbps := int32(2500)
-	errorMessage := "transcode failed"
-	expiresAt := time.Date(2026, 2, 21, 11, 45, 9, 0, time.UTC)
+	durationMs := int64(45000)
+	playbackID := "playback-key-1"
+	secondaryLabel := "launch.mp4"
 	createdAt := time.Date(2026, 2, 10, 6, 7, 8, 0, time.UTC)
 	updatedAt := time.Date(2026, 2, 11, 9, 10, 11, 0, time.UTC)
+	expiresAt := time.Date(2026, 2, 21, 11, 45, 9, 0, time.UTC)
 
-	p := &sharedpb.VodAssetInfo{
+	a := &commodorepb.StorageArtifactInfo{
 		Id:              "vod-uuid-1",
 		ArtifactHash:    "",
+		Kind:            "vod",
 		Title:           "Launch Stream",
-		Description:     "Product launch recording",
-		Filename:        "launch.mp4",
-		Status:          sharedpb.VodStatus_VOD_STATUS_READY,
-		StorageLocation: "s3",
+		SecondaryLabel:  secondaryLabel,
+		Description:     strp("Product launch recording"),
+		ErrorMessage:    strp("transcode failed"),
+		Status:          "ready",
+		StorageLocation: strp("s3"),
+		PlaybackId:      &playbackID,
 		SizeBytes:       &sizeBytes,
 		DurationMs:      &durationMs,
-		Resolution:      &resolution,
-		VideoCodec:      &videoCodec,
-		AudioCodec:      &audioCodec,
-		BitrateKbps:     &bitrateKbps,
-		CreatedAt:       timestamppb.New(createdAt),
-		UpdatedAt:       timestamppb.New(updatedAt),
-		ExpiresAt:       timestamppb.New(expiresAt),
-		ErrorMessage:    &errorMessage,
-		PlaybackId:      &playbackID,
+		Tracks: []*commodorepb.MediaTrack{
+			{Type: "video", Codec: "h264", Resolution: strp("1920x1080"), BitrateKbps: i32p(2500)},
+			{Type: "audio", Codec: "aac"},
+		},
+		CreatedAt: timestamppb.New(createdAt),
+		UpdatedAt: timestamppb.New(updatedAt),
+		ExpiresAt: timestamppb.New(expiresAt),
 	}
 
-	got := protoToVODAssetInfo(p)
+	got := storageArtifactToVODAssetInfo(a)
 
-	wantID := globalid.Encode(globalid.TypeVodAsset, "vod-uuid-1")
-	if got.ID != wantID {
-		t.Fatalf("ID: got %q, want %q", got.ID, wantID)
+	if want := globalid.Encode(globalid.TypeVodAsset, "vod-uuid-1"); got.ID != want {
+		t.Fatalf("ID: got %q, want %q (id fallback when hash empty)", got.ID, want)
+	}
+	if got.Status != "READY" {
+		t.Fatalf("Status: got %q, want READY", got.Status)
 	}
 	if got.PlaybackID != playbackID {
-		t.Fatalf("PlaybackID: got %q, want %q", got.PlaybackID, playbackID)
-	}
-	if got.ArtifactHash != "" {
-		t.Fatalf("ArtifactHash: got %q, want empty string", got.ArtifactHash)
+		t.Fatalf("PlaybackID: got %q", got.PlaybackID)
 	}
 	if got.StorageLocation != "s3" {
-		t.Fatalf("StorageLocation: got %q, want %q", got.StorageLocation, "s3")
+		t.Fatalf("StorageLocation: got %q", got.StorageLocation)
 	}
 	if got.Title == nil || *got.Title != "Launch Stream" {
-		t.Fatalf("Title: got %v, want %q", got.Title, "Launch Stream")
+		t.Fatalf("Title: got %v", got.Title)
+	}
+	if got.Filename == nil || *got.Filename != secondaryLabel {
+		t.Fatalf("Filename (from secondary_label): got %v", got.Filename)
 	}
 	if got.Description == nil || *got.Description != "Product launch recording" {
-		t.Fatalf("Description: got %v, want %q", got.Description, "Product launch recording")
+		t.Fatalf("Description: got %v", got.Description)
 	}
-	if got.Filename == nil || *got.Filename != "launch.mp4" {
-		t.Fatalf("Filename: got %v, want %q", got.Filename, "launch.mp4")
+	if got.ErrorMessage == nil || *got.ErrorMessage != "transcode failed" {
+		t.Fatalf("ErrorMessage: got %v", got.ErrorMessage)
 	}
 	if got.SizeBytes == nil || *got.SizeBytes != sizeBytes {
-		t.Fatalf("SizeBytes: got %v, want %d", got.SizeBytes, sizeBytes)
+		t.Fatalf("SizeBytes: got %v", got.SizeBytes)
 	}
 	if got.DurationMs == nil || *got.DurationMs != int(durationMs) {
-		t.Fatalf("DurationMs: got %v, want %d", got.DurationMs, durationMs)
+		t.Fatalf("DurationMs: got %v", got.DurationMs)
 	}
-	if got.Resolution == nil || *got.Resolution != resolution {
-		t.Fatalf("Resolution: got %v, want %q", got.Resolution, resolution)
+	if got.Resolution == nil || *got.Resolution != "1920x1080" {
+		t.Fatalf("Resolution (from video track): got %v", got.Resolution)
 	}
-	if got.VideoCodec == nil || *got.VideoCodec != videoCodec {
-		t.Fatalf("VideoCodec: got %v, want %q", got.VideoCodec, videoCodec)
+	if got.VideoCodec == nil || *got.VideoCodec != "h264" {
+		t.Fatalf("VideoCodec: got %v", got.VideoCodec)
 	}
-	if got.AudioCodec == nil || *got.AudioCodec != audioCodec {
-		t.Fatalf("AudioCodec: got %v, want %q", got.AudioCodec, audioCodec)
+	if got.AudioCodec == nil || *got.AudioCodec != "aac" {
+		t.Fatalf("AudioCodec: got %v", got.AudioCodec)
 	}
-	if got.BitrateKbps == nil || *got.BitrateKbps != int(bitrateKbps) {
-		t.Fatalf("BitrateKbps: got %v, want %d", got.BitrateKbps, bitrateKbps)
-	}
-	if got.ErrorMessage == nil || *got.ErrorMessage != errorMessage {
-		t.Fatalf("ErrorMessage: got %v, want %q", got.ErrorMessage, errorMessage)
+	if got.BitrateKbps == nil || *got.BitrateKbps != 2500 {
+		t.Fatalf("BitrateKbps: got %v", got.BitrateKbps)
 	}
 	if got.CreatedAt != "2026-02-10T06:07:08Z" {
-		t.Fatalf("CreatedAt: got %q, want %q", got.CreatedAt, "2026-02-10T06:07:08Z")
-	}
-	if got.UpdatedAt != "2026-02-11T09:10:11Z" {
-		t.Fatalf("UpdatedAt: got %q, want %q", got.UpdatedAt, "2026-02-11T09:10:11Z")
+		t.Fatalf("CreatedAt: got %q", got.CreatedAt)
 	}
 	if got.ExpiresAt == nil || *got.ExpiresAt != "2026-02-21T11:45:09Z" {
-		t.Fatalf("ExpiresAt: got %v, want %q", got.ExpiresAt, "2026-02-21T11:45:09Z")
+		t.Fatalf("ExpiresAt: got %v", got.ExpiresAt)
 	}
 }
 
-func TestProtoToVODAssetInfo_OmitsEmptyOptionalFields(t *testing.T) {
-	emptyPlaybackID := ""
-
-	p := &sharedpb.VodAssetInfo{
+func TestStorageArtifactToVODAssetInfo_OmitsEmptyOptionalFields(t *testing.T) {
+	a := &commodorepb.StorageArtifactInfo{
 		Id:           "vod-uuid-2",
 		ArtifactHash: "artifact-2",
-		Status:       sharedpb.VodStatus_VOD_STATUS_UPLOADING,
-		PlaybackId:   &emptyPlaybackID,
+		Kind:         "vod",
+		Status:       "processing",
 	}
 
-	got := protoToVODAssetInfo(p)
+	got := storageArtifactToVODAssetInfo(a)
 
-	wantID := globalid.Encode(globalid.TypeVodAsset, "artifact-2")
-	if got.ID != wantID {
-		t.Fatalf("ID: got %q, want %q", got.ID, wantID)
+	if want := globalid.Encode(globalid.TypeVodAsset, "artifact-2"); got.ID != want {
+		t.Fatalf("ID: got %q, want %q", got.ID, want)
+	}
+	if got.Status != "PROCESSING" {
+		t.Fatalf("Status: got %q, want PROCESSING", got.Status)
 	}
 	if got.PlaybackID != "" {
-		t.Fatalf("PlaybackID: got %q, want empty string when playback_id is empty", got.PlaybackID)
+		t.Fatalf("PlaybackID: got %q, want empty", got.PlaybackID)
 	}
-	if got.Title != nil {
-		t.Fatalf("Title: got %v, want nil", got.Title)
-	}
-	if got.Description != nil {
-		t.Fatalf("Description: got %v, want nil", got.Description)
-	}
-	if got.Filename != nil {
-		t.Fatalf("Filename: got %v, want nil", got.Filename)
-	}
-	if got.SizeBytes != nil {
-		t.Fatalf("SizeBytes: got %v, want nil", got.SizeBytes)
-	}
-	if got.DurationMs != nil {
-		t.Fatalf("DurationMs: got %v, want nil", got.DurationMs)
-	}
-	if got.BitrateKbps != nil {
-		t.Fatalf("BitrateKbps: got %v, want nil", got.BitrateKbps)
-	}
-	if got.ErrorMessage != nil {
-		t.Fatalf("ErrorMessage: got %v, want nil", got.ErrorMessage)
-	}
-	if got.ExpiresAt != nil {
-		t.Fatalf("ExpiresAt: got %v, want nil", got.ExpiresAt)
+	if got.Title != nil || got.Filename != nil || got.SizeBytes != nil ||
+		got.DurationMs != nil || got.Resolution != nil || got.BitrateKbps != nil || got.ExpiresAt != nil {
+		t.Fatalf("expected empty optionals, got %+v", got)
 	}
 }
+
+func strp(s string) *string { return &s }
+func i32p(v int32) *int32   { return &v }

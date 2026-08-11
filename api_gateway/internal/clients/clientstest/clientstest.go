@@ -128,18 +128,15 @@ type FakeCommodore struct {
 	DeleteClipFn func(ctx context.Context, clipHash string) error
 
 	ValidateStreamKeyFn func(ctx context.Context, streamKey string, clusterID ...string) (*commodorepb.ValidateStreamKeyResponse, error)
-	GetClipsFn          func(ctx context.Context, tenantID string, streamID *string, pagination *commonpb.CursorPaginationRequest, opts ...commodore.MediaListOptions) (*sharedpb.GetClipsResponse, error)
 	GetClipFn           func(ctx context.Context, clipHash string) (*sharedpb.ClipInfo, error)
 	StartDVRFn          func(ctx context.Context, req *sharedpb.StartDVRRequest) (*sharedpb.StartDVRResponse, error)
 	StopDVRFn           func(ctx context.Context, dvrHash string) error
-	DeleteDVRFn         func(ctx context.Context, dvrHash string) error
-	ListDVRRequestsFn   func(ctx context.Context, tenantID string, streamID *string, pagination *commonpb.CursorPaginationRequest, opts ...commodore.MediaListOptions) (*sharedpb.ListDVRRecordingsResponse, error)
+	DeleteDVRFn         func(ctx context.Context, dvrHash string) (bool, error)
 
 	CreateVodUploadFn    func(ctx context.Context, req *sharedpb.CreateVodUploadRequest) (*sharedpb.CreateVodUploadResponse, error)
 	CompleteVodUploadFn  func(ctx context.Context, req *sharedpb.CompleteVodUploadRequest) (*sharedpb.CompleteVodUploadResponse, error)
 	AbortVodUploadFn     func(ctx context.Context, tenantID, uploadID string) (*sharedpb.AbortVodUploadResponse, error)
 	GetVodUploadStatusFn func(ctx context.Context, tenantID, uploadID string) (*sharedpb.GetVodUploadStatusResponse, error)
-	GetVodAssetFn        func(ctx context.Context, tenantID, artifactHash string) (*sharedpb.VodAssetInfo, error)
 	DeleteVodAssetFn     func(ctx context.Context, tenantID, artifactHash string) (*sharedpb.DeleteVodAssetResponse, error)
 
 	GetSigningKeyFn               func(ctx context.Context, id string) (*commodorepb.SigningKey, error)
@@ -149,7 +146,6 @@ type FakeCommodore struct {
 	ListPullSourceEventsFn        func(ctx context.Context, req *commodorepb.ListPullSourceEventsRequest) (*commodorepb.ListPullSourceEventsResponse, error)
 	ListStorageArtifactsFn        func(ctx context.Context, req *commodorepb.ListStorageArtifactsRequest) (*commodorepb.ListStorageArtifactsResponse, error)
 	GetTenantUserCountFn          func(ctx context.Context, tenantID string) (*commodorepb.GetTenantUserCountResponse, error)
-	ListVodAssetsFn               func(ctx context.Context, tenantID string, pagination *commonpb.CursorPaginationRequest, streamID *string, opts ...commodore.MediaListOptions) (*sharedpb.ListVodAssetsResponse, error)
 	LoginFn                       func(ctx context.Context, req *commodorepb.LoginRequest) (*commodorepb.AuthResponse, error)
 	RefreshTokenFn                func(ctx context.Context, refreshToken string) (*commodorepb.AuthResponse, error)
 	MintMistAdminSessionFn        func(ctx context.Context, req *commodorepb.MintMistAdminSessionRequest) (*commodorepb.MintMistAdminSessionResponse, error)
@@ -255,7 +251,7 @@ func (f *FakeCommodore) ResolveChapterPlaybackID(ctx context.Context, playbackID
 	return f.ResolveChapterPlaybackIDFn(ctx, playbackID)
 }
 
-func (f *FakeCommodore) ListStreams(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*commodorepb.ListStreamsResponse, error) {
+func (f *FakeCommodore) ListStreams(ctx context.Context, pagination *commonpb.CursorPaginationRequest, _ string) (*commodorepb.ListStreamsResponse, error) {
 	f.Calls++
 	if f.ListStreamsFn == nil {
 		panic("FakeCommodore.ListStreams not stubbed")
@@ -391,14 +387,6 @@ func (f *FakeCommodore) ValidateStreamKey(ctx context.Context, streamKey string,
 	return f.ValidateStreamKeyFn(ctx, streamKey, clusterID...)
 }
 
-func (f *FakeCommodore) GetClips(ctx context.Context, tenantID string, streamID *string, pagination *commonpb.CursorPaginationRequest, opts ...commodore.MediaListOptions) (*sharedpb.GetClipsResponse, error) {
-	f.Calls++
-	if f.GetClipsFn == nil {
-		panic("FakeCommodore.GetClips not stubbed")
-	}
-	return f.GetClipsFn(ctx, tenantID, streamID, pagination, opts...)
-}
-
 func (f *FakeCommodore) GetClip(ctx context.Context, clipHash string) (*sharedpb.ClipInfo, error) {
 	f.Calls++
 	if f.GetClipFn == nil {
@@ -423,20 +411,12 @@ func (f *FakeCommodore) StopDVR(ctx context.Context, dvrHash string) error {
 	return f.StopDVRFn(ctx, dvrHash)
 }
 
-func (f *FakeCommodore) DeleteDVR(ctx context.Context, dvrHash string) error {
+func (f *FakeCommodore) DeleteDVR(ctx context.Context, dvrHash string) (bool, error) {
 	f.Calls++
 	if f.DeleteDVRFn == nil {
 		panic("FakeCommodore.DeleteDVR not stubbed")
 	}
 	return f.DeleteDVRFn(ctx, dvrHash)
-}
-
-func (f *FakeCommodore) ListDVRRequests(ctx context.Context, tenantID string, streamID *string, pagination *commonpb.CursorPaginationRequest, opts ...commodore.MediaListOptions) (*sharedpb.ListDVRRecordingsResponse, error) {
-	f.Calls++
-	if f.ListDVRRequestsFn == nil {
-		panic("FakeCommodore.ListDVRRequests not stubbed")
-	}
-	return f.ListDVRRequestsFn(ctx, tenantID, streamID, pagination, opts...)
 }
 
 func (f *FakeCommodore) CreateVodUpload(ctx context.Context, req *sharedpb.CreateVodUploadRequest) (*sharedpb.CreateVodUploadResponse, error) {
@@ -469,14 +449,6 @@ func (f *FakeCommodore) GetVodUploadStatus(ctx context.Context, tenantID, upload
 		panic("FakeCommodore.GetVodUploadStatus not stubbed")
 	}
 	return f.GetVodUploadStatusFn(ctx, tenantID, uploadID)
-}
-
-func (f *FakeCommodore) GetVodAsset(ctx context.Context, tenantID, artifactHash string) (*sharedpb.VodAssetInfo, error) {
-	f.Calls++
-	if f.GetVodAssetFn == nil {
-		panic("FakeCommodore.GetVodAsset not stubbed")
-	}
-	return f.GetVodAssetFn(ctx, tenantID, artifactHash)
 }
 
 func (f *FakeCommodore) DeleteVodAsset(ctx context.Context, tenantID, artifactHash string) (*sharedpb.DeleteVodAssetResponse, error) {
@@ -529,6 +501,7 @@ type FakePeriscope struct {
 
 	GetAPIUsageFn                      func(ctx context.Context, tenantID string, authType *string, operationType *string, operationName *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts, summaryOnly bool) (*periscopepb.GetAPIUsageResponse, error)
 	GetArtifactStateFn                 func(ctx context.Context, tenantID string, requestID string) (*periscopepb.GetArtifactStateResponse, error)
+	GetArtifactNodeCopiesFn            func(ctx context.Context, tenantID string, artifactHash string) (*periscopepb.GetArtifactNodeCopiesResponse, error)
 	GetArtifactStatesFn                func(ctx context.Context, tenantID string, streamID *string, contentType *string, stage *string, opts *periscope.CursorPaginationOpts) (*periscopepb.GetArtifactStatesResponse, error)
 	GetBufferEventsFn                  func(ctx context.Context, tenantID string, streamID string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*periscopepb.GetBufferEventsResponse, error)
 	GetClientQoeSummaryFn              func(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts) (*periscopepb.GetClientQoeSummaryResponse, error)
@@ -564,6 +537,7 @@ type FakePeriscope struct {
 	ListOrchestratorsFn                func(ctx context.Context, tenantID string, orchAddr *string, opts *periscope.CursorPaginationOpts) (*periscopepb.ListOrchestratorsResponse, error)
 	ListOrchestratorVantagesFn         func(ctx context.Context, tenantID string, orchAddr *string) (*periscopepb.ListOrchestratorVantagesResponse, error)
 	ListVodRetentionAssetsFn           func(ctx context.Context, tenantID string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*periscopepb.ListVodRetentionAssetsResponse, error)
+	ListTopAssetsFn                    func(ctx context.Context, tenantID string, timeRange *periscope.TimeRangeOpts, limit int32) (*periscopepb.ListTopAssetsResponse, error)
 }
 
 func (f *FakePeriscope) GetArtifactStatesByIDs(ctx context.Context, tenantID string, requestIDs []string, contentType *string) (*periscopepb.GetArtifactStatesResponse, error) {

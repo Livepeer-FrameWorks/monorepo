@@ -98,6 +98,11 @@ type Query {
     Pagination options.
     """
     page: ConnectionInput
+    """
+    Optional server-side name search (title / internal name). Enables an account-wide
+    picker instead of only the first page.
+    """
+    search: String
   ): StreamsConnection!
 
   """
@@ -133,24 +138,6 @@ type Query {
     """
     streamId: ID!
   ): StreamKeysConnection!
-
-  """
-  List clips created from streams.
-  """
-  clipsConnection(
-    """
-    Pagination options.
-    """
-    page: ConnectionInput
-    """
-    Filter by stream ID (Stream.id, Relay global ID).
-    """
-    streamId: ID
-    """
-    Server-side search and sorting for clip lists.
-    """
-    input: MediaArtifactConnectionInput
-  ): ClipsConnection!
 
   """
   Fetch a single clip by its global ID.
@@ -576,25 +563,6 @@ type Query {
   ): BootstrapTokenConnection!
 
   """
-  List DVR recording requests for live streams.
-  DVR allows viewers to seek back in a live stream.
-  """
-  dvrRecordingsConnection(
-    """
-    Pagination options.
-    """
-    page: ConnectionInput
-    """
-    Filter by stream ID (Stream.id, Relay global ID).
-    """
-    streamId: ID
-    """
-    Server-side search and sorting for DVR recording lists.
-    """
-    input: MediaArtifactConnectionInput
-  ): DVRRecordingsConnection
-
-  """
   Retrieve a single DVR chapter, including its finalized playbackId.
 
   Chapters are produced by the finalization queue as canonical .mkv
@@ -648,19 +616,6 @@ type Query {
     """
     id: ID!
   ): VodAsset
-
-  """
-  List VOD-shaped assets. By default this is the tenant's library-visible
-  uploads. When streamId is supplied, returns VOD-shaped artifacts derived
-  from that stream, including hidden DVR chapter artifacts.
-  """
-  vodAssetsConnection(
-    page: ConnectionInput
-    "Filter by source stream ID (Stream.id, Relay global ID)."
-    streamId: ID
-    "Server-side search and sorting for VOD asset lists."
-    input: MediaArtifactConnectionInput
-  ): VodAssetsConnection!
 
   """
   Unified storage artifact browser for the account Storage page.
@@ -1059,6 +1014,48 @@ type AnalyticsHealth {
     timeRange: TimeRangeInput
     noCache: Boolean = false
   ): VodRetentionAssetConnection!
+  """
+  Top assets by audience in the window — server-ranked by sessions, across every kind
+  (VOD, clip, DVR, chapter). Backs the "Top Assets" table on the analytics overview.
+  title/playbackId are composed from the catalog by artifactHash.
+  """
+  topAssets(timeRange: TimeRangeInput, limit: Int = 10): [TopAssetEntry!]!
+  """
+  Nodes currently holding a transient LOCAL COPY of one artifact (not the durable
+  object-storage copy), from the node-copy telemetry the media plane emits. `role`
+  is `origin` (producer/relay source) or `cache` (synced pull); `isComplete` marks a
+  full local copy. Read-through relay block caches are not represented. Node geo is
+  enriched from the infrastructure registry. `artifactHash` is required. When
+  `truncated` is true the node set was capped and is NOT exhaustive.
+  """
+  artifactNodeCopies(artifactHash: String!): AssetNodeCopies!
+}
+
+"""
+A node-copy listing plus whether it was capped at the per-request limit. When
+`truncated` is true, `copies` is not exhaustive — present the count as a lower bound
+(e.g. "500+") or a "results truncated" note, never as an exact total.
+"""
+type AssetNodeCopies {
+  copies: [AssetNodeCopy!]!
+  truncated: Boolean!
+}
+
+"""
+One node's current local copy of an artifact. `role` is `origin` (a producer node's
+copy) or `cache` (a synced copy on another node).
+"""
+type AssetNodeCopy {
+  nodeId: String!
+  nodeName: String
+  clusterId: String
+  region: String
+  latitude: Float
+  longitude: Float
+  role: String!
+  isComplete: Boolean!
+  sizeBytes: Float
+  updatedAt: Time
 }
 
 """
@@ -1995,6 +1992,11 @@ type RateLimitError implements Error {
 type DeleteSuccess {
   success: Boolean!
   deletedId: ID!
+  """
+  True when the delete was accepted but is NOT yet finalized (e.g. a stream deletion awaiting the serving cell's
+  cleanup-tombstone acknowledgement). The operation converges asynchronously; false means fully deleted.
+  """
+  pending: Boolean
 }
 
 # Mutation Result union types
@@ -2504,14 +2506,12 @@ type DVRRequest {
   storageLocation: String # "local", "s3", "freezing"
   "Current S3 sync state (pending, in_progress, synced, failed, lost_local)."
   syncStatus: String
-  "True when at least one edge has a warm local copy."
-  isHot: Boolean
+  "Present full local node copy (origin or cache): true when at least one node holds a complete local copy, false when none remain (playback via read-through relay from S3). Null when the placement overlay (Periscope) is unavailable — unknown, not 'no local copy'. Durable S3-only state is derived by consumers as isSynced && hasLocalCopy == false."
+  hasLocalCopy: Boolean
   "True when S3 has an authoritative copy."
   isSynced: Boolean
   "True when the S3 copy includes the Mist .dtsh index."
   isFinalized: Boolean
-  "True when no warm edge copy remains; playback streams via Helmsman's read-through relay from S3."
-  isFrozen: Boolean
   frozenAt: Time
   s3Url: String
   """
@@ -2519,19 +2519,6 @@ type DVRRequest {
   Null until Foghorn confirms the thumbnail upload.
   """
   thumbnailAssets: ThumbnailAssets
-}
-
-# DVR Recordings Connection (cursor-paginated)
-type DVRRecordingsConnection {
-  edges: [DVRRecordingEdge!]!
-  nodes: [DVRRequest!]!
-  pageInfo: PageInfo!
-  totalCount: Int!
-}
-
-type DVRRecordingEdge {
-  cursor: String!
-  node: DVRRequest!
 }
 
 # ============================================================================
@@ -2807,14 +2794,12 @@ type VodAsset implements Node {
   storageLocation: String!
   "Current S3 sync state (pending, in_progress, synced, failed, lost_local)."
   syncStatus: String
-  "True when at least one edge has a warm local copy."
-  isHot: Boolean!
+  "Present full local node copy (origin or cache): true when at least one node holds a complete local copy, false when none remain (playback via Helmsman's read-through relay from S3). Null when the placement overlay (Periscope) is unavailable — unknown, not 'no local copy'. Durable S3-only state is derived by consumers as isSynced && hasLocalCopy == false."
+  hasLocalCopy: Boolean
   "True when S3 has an authoritative copy."
   isSynced: Boolean!
   "True when the S3 copy includes the Mist .dtsh index."
   isFinalized: Boolean!
-  "True when no warm edge copy remains; playback streams via Helmsman's read-through relay from S3."
-  isFrozen: Boolean!
 
   "File size in bytes (available after validation)."
   sizeBytes: Float
@@ -2860,19 +2845,6 @@ type VodAsset implements Node {
   storageCost: StorageCostProjection
 }
 
-# VOD Assets Connection (cursor-paginated)
-type VodAssetsConnection {
-  edges: [VodAssetEdge!]!
-  nodes: [VodAsset!]!
-  pageInfo: PageInfo!
-  totalCount: Int!
-}
-
-type VodAssetEdge {
-  cursor: String!
-  node: VodAsset!
-}
-
 enum StorageArtifactKind {
   VOD
   DVR
@@ -2899,15 +2871,16 @@ input StorageArtifactsInput {
   streamId: ID
   kinds: [StorageArtifactKind!]
   search: String
+  "Account-wide status filter applied server-side before count/facets/pagination: \"ready\" | \"failed\" | \"processing\" | \"expired\". Empty = all."
+  status: String
+  """
+  Exact artifact-hash match — the canonical lookup for asset detail/analytics routes.
+  Takes precedence over `search`; combine with `first: 1` to fetch a single artifact
+  without a fuzzy scan or page cap.
+  """
+  artifactHash: String
   sort: StorageArtifactSortField = CREATED_AT
   direction: SortDirection = DESC
-}
-
-input MediaArtifactConnectionInput {
-  search: String
-  sort: StorageArtifactSortField = CREATED_AT
-  direction: SortDirection = DESC
-  offset: Int = 0
 }
 
 type StorageArtifact {
@@ -2920,14 +2893,20 @@ type StorageArtifact {
   streamTitle: String!
   title: String!
   secondaryLabel: String!
+  "User-provided description (VOD uploads and clips); null when unset."
+  description: String
+  "Processing failure detail for a failed artifact; null when not failed."
+  errorMessage: String
   sizeBytes: Float
   status: String!
   storageLocation: String
+  "ID of the storage cluster the artifact is durably stored in (control-plane truth from Commodore)."
+  storageClusterId: String
   syncStatus: String
-  isHot: Boolean
+  "Present full local node copy (origin or cache): true when at least one node holds a complete local copy, false when none remain (playback via read-through relay from S3). Null when the placement overlay (Periscope) is unavailable — unknown, not 'no local copy'. Durable S3-only state is derived by consumers as isSynced && hasLocalCopy == false."
+  hasLocalCopy: Boolean
   isSynced: Boolean
   isFinalized: Boolean
-  isFrozen: Boolean
   createdAt: Time!
   updatedAt: Time!
   expiresAt: Time
@@ -2936,6 +2915,26 @@ type StorageArtifact {
   deleteId: ID!
   retentionId: ID!
   thumbnailUrl: String
+  "Poster + hover-scrub sprite assets, when the artifact has thumbnails."
+  thumbnailAssets: ThumbnailAssets
+  "Measured media duration in seconds (all kinds); null until the artifact finalizes."
+  durationSeconds: Float
+  "Finalized A/V track summary (per track), captured from the completion-validated processing result and projected onto the catalog. Empty until finalized."
+  tracks: [ArtifactTrack!]!
+}
+
+"A single A/V (or meta) track of a finalized artifact."
+type ArtifactTrack {
+  "\"video\" | \"audio\" | \"meta\""
+  type: String!
+  codec: String!
+  width: Int
+  height: Int
+  fps: Float
+  resolution: String
+  bitrateKbps: Int
+  channels: Int
+  sampleRate: Int
 }
 
 type StorageArtifactsConnection {
@@ -2944,6 +2943,24 @@ type StorageArtifactsConnection {
   hasNextPage: Boolean!
   limit: Int!
   offset: Int!
+  """
+  True only when EVERY returned row's lifecycle is actually known — resolved from the
+  durable catalog projection or the live overlay. A not-yet-projected/backfilled row makes
+  this false so the client shows an "unknown" lifecycle state rather than reporting the
+  artifacts as not-synced. Per-row availability is derivable from whether syncStatus is set.
+  """
+  lifecycleAvailable: Boolean!
+  "Authoritative per-kind counts under the active search/stream scope (ignoring the kind filter)."
+  kindCounts: StorageArtifactKindCounts!
+}
+
+"Per-kind artifact counts for the account (or filtered scope), for the library tabs/tiles."
+type StorageArtifactKindCounts {
+  total: Int!
+  vod: Int!
+  dvr: Int!
+  chapter: Int!
+  clip: Int!
 }
 
 input CreatePaymentInput {
@@ -4677,19 +4694,6 @@ type StreamsConnection {
   totalCount: Int!
 }
 
-# Clips Connection (for paginated clips list)
-type ClipEdge {
-  cursor: String!
-  node: Clip!
-}
-
-type ClipsConnection {
-  edges: [ClipEdge!]!
-  nodes: [Clip!]!
-  pageInfo: PageInfo!
-  totalCount: Int!
-}
-
 # Clusters Connection (for paginated clusters list)
 type ClusterEdge {
   cursor: String!
@@ -5132,9 +5136,10 @@ type LiveUsageSummary {
   frozenDvrBytes: Int!
   frozenVodBytes: Int!
 
-  # Freeze (S3 upload) operations
-  freezeCount: Int!
-  freezeBytes: Int!
+  # Point-in-time count/bytes of artifacts currently synced to S3
+  # (durable, Foghorn-validated via artifact_state_current)
+  syncedArtifactCount: Int!
+  syncedArtifactBytes: Int!
 }
 
 type CountryMetrics {
@@ -5732,14 +5737,12 @@ type Clip implements Node {
   storageLocation: String
   "Current S3 sync state (pending, in_progress, synced, failed, lost_local)."
   syncStatus: String
-  "True when at least one edge has a warm local copy."
-  isHot: Boolean
+  "Present full local node copy (origin or cache): true when at least one node holds a complete local copy, false when none remain (playback via read-through relay from S3). Null when the placement overlay (Periscope) is unavailable — unknown, not 'no local copy'. Durable S3-only state is derived by consumers as isSynced && hasLocalCopy == false."
+  hasLocalCopy: Boolean
   "True when S3 has an authoritative copy."
   isSynced: Boolean
   "True when the S3 copy includes the Mist .dtsh index."
   isFinalized: Boolean
-  "True when no warm edge copy remains; playback streams via Helmsman's read-through relay from S3."
-  isFrozen: Boolean
   "When the clip will be auto-deleted."
   expiresAt: Time
   "Whether the clip has passed its retention date (expiresAt < now)."
@@ -6515,6 +6518,22 @@ type VodRetentionAsset {
   title: String
   playbackId: String
 }
+
+"""
+One ranked asset for the Top Assets surface — cross-kind, ranked server-side by
+audience sessions in the window. `kind` badges the asset type; title/playbackId are
+composed from the catalog. (Named distinctly from the periscope proto TopAsset to
+avoid gqlgen autobinding to that message.)
+"""
+type TopAssetEntry {
+  artifactHash: String!
+  kind: StorageArtifactKind!
+  totalSessions: Int!
+  watchHours: Float!
+  durationS: Int!
+  title: String
+  playbackId: String
+}
 type VodRetentionAssetEdge {
   cursor: String!
   node: VodRetentionAsset!
@@ -6763,9 +6782,9 @@ type PlaybackMetadata {
 """
 Chandler-served thumbnail asset URLs (poster, sprite, VTT cues). URL shape
 is `{chandlerBase}/assets/{assetKey}/poster.jpg`,
-`/assets/{assetKey}/sprite.jpg`, `/assets/{assetKey}/sprite.vtt`. assetKey
-is stream_id for live streams; clip_hash / dvr_hash / vod_hash
-(= artifact_hash) for artifacts.
+`/assets/{assetKey}/sprite.jpg`, `/assets/{assetKey}/sprite.vtt` — Chandler
+serves the object key directly, no version resolution. assetKey is stream_id
+for live streams; clip_hash / dvr_hash / vod_hash (= artifact_hash) for artifacts.
 """
 type ThumbnailAssets {
   posterUrl: String!

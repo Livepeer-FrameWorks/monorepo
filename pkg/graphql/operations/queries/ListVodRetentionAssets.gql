@@ -1,6 +1,6 @@
-# VOD assets that have retention data in the window — backs the clickable asset
-# picker on the player-experience Retention tab. title/playbackId are composed from
-# the catalog and may be null for uncatalogued assets (render the hash client-side).
+# VOD/clip assets that have retention data in the window — backs the Recent Assets
+# table on the analytics overview. title/playbackId are composed from the catalog
+# and may be null for uncatalogued assets (render the hash client-side).
 query ListVodRetentionAssets($page: ConnectionInput, $timeRange: TimeRangeInput) {
   analytics {
     health {

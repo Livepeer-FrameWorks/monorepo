@@ -287,7 +287,10 @@ type DeleteStreamResult struct {
 	ID       string `json:"id"`
 	StreamID string `json:"stream_id"`
 	Deleted  bool   `json:"deleted"`
-	Message  string `json:"message"`
+	// Pending is true when the deletion was accepted but is NOT yet finalized — the serving cell has not yet
+	// acknowledged the cleanup tombstone (deletion_pending). The two-phase saga converges via the outbox worker.
+	Pending bool   `json:"pending"`
+	Message string `json:"message"`
 }
 
 func handleDeleteStream(ctx context.Context, args DeleteStreamInput, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -318,10 +321,14 @@ func handleDeleteStream(ctx context.Context, args DeleteStreamInput, clients *cl
 		return toolError(fmt.Sprintf("Failed to delete stream: %v", err))
 	}
 
+	// Report the TRUTHFUL saga state: deletion is "deleted" only after the serving cell acked the tombstone;
+	// otherwise it is pending (the outbox worker converges it). resp.Message already carries the pending text.
+	finalized := resp.GetDeletionStatus() == "deleted"
 	result := DeleteStreamResult{
 		ID:       globalid.Encode(globalid.TypeStream, resp.StreamId),
 		StreamID: resp.StreamId,
-		Deleted:  true,
+		Deleted:  finalized,
+		Pending:  !finalized,
 		Message:  resp.Message,
 	}
 

@@ -81,7 +81,7 @@ func handleStreamsList(ctx context.Context, clients *clients.ServiceClients, log
 	}
 
 	// Get streams from Commodore (tenantID is passed via context metadata)
-	resp, err := clients.Commodore.ListStreams(ctx, pagination)
+	resp, err := clients.Commodore.ListStreams(ctx, pagination, "")
 	if err != nil {
 		logger.WithError(err).Warn("Failed to list streams")
 		return nil, fmt.Errorf("failed to list streams: %w", err)

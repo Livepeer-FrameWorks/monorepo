@@ -126,7 +126,8 @@ func TestHandleCreateStream_CommodoreErrorIsToolError(t *testing.T) {
 func TestHandleDeleteStream_SuccessAndValidation(t *testing.T) {
 	commo := &clientstest.FakeCommodore{
 		DeleteStreamFn: func(_ context.Context, id string) (*commodorepb.DeleteStreamResponse, error) {
-			return &commodorepb.DeleteStreamResponse{StreamId: id, Message: "deleted"}, nil
+			// A FINALIZED deletion (the serving cell acked the tombstone).
+			return &commodorepb.DeleteStreamResponse{StreamId: id, Message: "Stream deleted successfully", DeletionStatus: "deleted"}, nil
 		},
 	}
 	sc, checker, ctx := streamToolSetup(commo, clientstest.SolventPurser())
@@ -135,8 +136,21 @@ func TestHandleDeleteStream_SuccessAndValidation(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("delete should succeed: err=%v text=%s", err, extractToolText(res))
 	}
-	if dr := out.(DeleteStreamResult); !dr.Deleted || dr.StreamID != "stream-123" {
+	if dr := out.(DeleteStreamResult); !dr.Deleted || dr.Pending || dr.StreamID != "stream-123" {
 		t.Fatalf("unexpected delete result: %+v", dr)
+	}
+
+	// A deletion_pending response (serving cell not yet acked) must report Deleted:false, Pending:true — never
+	// claim the stream is gone while the saga says it is not.
+	commo.DeleteStreamFn = func(_ context.Context, id string) (*commodorepb.DeleteStreamResponse, error) {
+		return &commodorepb.DeleteStreamResponse{StreamId: id, Message: "Stream deletion pending", DeletionStatus: "deletion_pending"}, nil
+	}
+	_, out, err = handleDeleteStream(ctx, DeleteStreamInput{StreamID: "stream-123"}, sc, checker, clientstest.DiscardLogger())
+	if err != nil {
+		t.Fatalf("pending delete should not error: %v", err)
+	}
+	if dr := out.(DeleteStreamResult); dr.Deleted || !dr.Pending {
+		t.Fatalf("pending deletion must report Deleted=false Pending=true, got %+v", dr)
 	}
 
 	// Missing stream_id → tool error.

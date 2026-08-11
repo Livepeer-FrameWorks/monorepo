@@ -19,10 +19,9 @@ fragment DVRRequestFields on DVRRequest {
   errorMessage
   storageLocation
   syncStatus
-  isHot
+  hasLocalCopy
   isSynced
   isFinalized
-  isFrozen
   thumbnailAssets {
     posterUrl
     spriteVttUrl

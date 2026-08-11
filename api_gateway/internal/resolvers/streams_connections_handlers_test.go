@@ -6,10 +6,8 @@ import (
 	"testing"
 
 	"frameworks/api_gateway/internal/clients/clientstest"
-	commodore "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
-	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -25,7 +23,7 @@ func TestDoGetStreamsConnection(t *testing.T) {
 		},
 	}
 	first := 7
-	conn, err := commoB3(commo).DoGetStreamsConnection(clientstest.AuthedCtx("t1"), &first, nil, nil, nil)
+	conn, err := commoB3(commo).DoGetStreamsConnection(clientstest.AuthedCtx("t1"), &first, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("DoGetStreamsConnection err: %v", err)
 	}
@@ -45,7 +43,7 @@ func TestDoGetStreamsConnection(t *testing.T) {
 			return nil, errors.New("down")
 		},
 	})
-	if _, err := failing.DoGetStreamsConnection(clientstest.AuthedCtx("t1"), nil, nil, nil, nil); err == nil {
+	if _, err := failing.DoGetStreamsConnection(clientstest.AuthedCtx("t1"), nil, nil, nil, nil, nil); err == nil {
 		t.Fatal("backend error should surface")
 	}
 }
@@ -80,82 +78,6 @@ func TestDoGetStreamKeysConnection(t *testing.T) {
 		},
 	})
 	if _, err := failing.DoGetStreamKeysConnection(clientstest.AuthedCtx("t1"), "stream-7", nil, nil, nil, nil); err == nil {
-		t.Fatal("backend error should surface")
-	}
-}
-
-func TestDoGetClipsConnection(t *testing.T) {
-	var gotTenant string
-	var gotStreamID *string
-	commo := &clientstest.FakeCommodore{
-		GetClipsFn: func(_ context.Context, tenantID string, streamID *string, _ *commonpb.CursorPaginationRequest, _ ...commodore.MediaListOptions) (*sharedpb.GetClipsResponse, error) {
-			gotTenant, gotStreamID = tenantID, streamID
-			return &sharedpb.GetClipsResponse{
-				Clips:      []*sharedpb.ClipInfo{{ClipHash: "c1", CreatedAt: timestamppb.Now()}},
-				Pagination: &commonpb.CursorPaginationResponse{TotalCount: 1},
-			}, nil
-		},
-	}
-	sid := "stream-9"
-	conn, err := commoB3(commo).DoGetClipsConnection(clientstest.AuthedCtx("t1"), &sid, nil, nil, nil, nil)
-	if err != nil {
-		t.Fatalf("DoGetClipsConnection err: %v", err)
-	}
-	// Tenant pulled from ctx; stream filter forwarded.
-	if gotTenant != "t1" || gotStreamID == nil || *gotStreamID != "stream-9" {
-		t.Fatalf("forwarded tenant=%q stream=%v", gotTenant, gotStreamID)
-	}
-	if len(conn.Nodes) != 1 || conn.Nodes[0].ClipHash != "c1" {
-		t.Fatalf("conn = %+v", conn)
-	}
-
-	// Missing tenant context → error before backend.
-	guard := &clientstest.FakeCommodore{}
-	if _, err := commoB3(guard).DoGetClipsConnection(context.Background(), nil, nil, nil, nil, nil); err == nil {
-		t.Fatal("missing tenant should error")
-	}
-	if guard.Calls != 0 {
-		t.Fatalf("guard hit backend %d times", guard.Calls)
-	}
-
-	failing := commoB3(&clientstest.FakeCommodore{
-		GetClipsFn: func(context.Context, string, *string, *commonpb.CursorPaginationRequest, ...commodore.MediaListOptions) (*sharedpb.GetClipsResponse, error) {
-			return nil, errors.New("down")
-		},
-	})
-	if _, err := failing.DoGetClipsConnection(clientstest.AuthedCtx("t1"), nil, nil, nil, nil, nil); err == nil {
-		t.Fatal("backend error should surface")
-	}
-}
-
-func TestDoGetDVRRecordingsConnection(t *testing.T) {
-	var gotTenant string
-	commo := &clientstest.FakeCommodore{
-		ListDVRRequestsFn: func(_ context.Context, tenantID string, _ *string, _ *commonpb.CursorPaginationRequest, _ ...commodore.MediaListOptions) (*sharedpb.ListDVRRecordingsResponse, error) {
-			gotTenant = tenantID
-			return &sharedpb.ListDVRRecordingsResponse{
-				DvrRecordings: []*sharedpb.DVRInfo{{DvrHash: "d1", CreatedAt: timestamppb.Now()}},
-				Pagination:    &commonpb.CursorPaginationResponse{TotalCount: 1},
-			}, nil
-		},
-	}
-	conn, err := commoB3(commo).DoGetDVRRecordingsConnection(clientstest.AuthedCtx("t1"), nil, nil, nil, nil, nil)
-	if err != nil {
-		t.Fatalf("DoGetDVRRecordingsConnection err: %v", err)
-	}
-	if gotTenant != "t1" {
-		t.Fatalf("forwarded tenant = %q", gotTenant)
-	}
-	if len(conn.Nodes) != 1 || conn.Nodes[0].DvrHash != "d1" {
-		t.Fatalf("conn = %+v", conn)
-	}
-
-	failing := commoB3(&clientstest.FakeCommodore{
-		ListDVRRequestsFn: func(context.Context, string, *string, *commonpb.CursorPaginationRequest, ...commodore.MediaListOptions) (*sharedpb.ListDVRRecordingsResponse, error) {
-			return nil, errors.New("down")
-		},
-	})
-	if _, err := failing.DoGetDVRRecordingsConnection(clientstest.AuthedCtx("t1"), nil, nil, nil, nil, nil); err == nil {
 		t.Fatal("backend error should surface")
 	}
 }

@@ -16,7 +16,6 @@ import (
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
-	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -660,12 +659,16 @@ func TestDoListVodRetentionAssets_MapsAssetsAndHydratesCatalog(t *testing.T) {
 			}, nil
 		},
 	}
-	var gotHash string
+	var gotHashes []string
 	c := &clientstest.FakeCommodore{
-		GetVodAssetFn: func(_ context.Context, _ string, artifactHash string) (*sharedpb.VodAssetInfo, error) {
-			gotHash = artifactHash
+		ListStorageArtifactsFn: func(_ context.Context, req *commodorepb.ListStorageArtifactsRequest) (*commodorepb.ListStorageArtifactsResponse, error) {
+			gotHashes = req.GetArtifactHashes()
 			pb := "pb-1"
-			return &sharedpb.VodAssetInfo{Title: "My VOD", PlaybackId: &pb}, nil
+			return &commodorepb.ListStorageArtifactsResponse{
+				Artifacts: []*commodorepb.StorageArtifactInfo{
+					{ArtifactHash: "ah1", Title: "My VOD", PlaybackId: &pb},
+				},
+			}, nil
 		},
 	}
 	r := &Resolver{
@@ -679,9 +682,9 @@ func TestDoListVodRetentionAssets_MapsAssetsAndHydratesCatalog(t *testing.T) {
 	if gotTenant != "t1" {
 		t.Fatalf("tenant = %q", gotTenant)
 	}
-	// The Periscope artifact_hash must drive the Commodore catalog lookup.
-	if gotHash != "ah1" {
-		t.Fatalf("catalog not hydrated by artifact_hash: %q", gotHash)
+	// The Periscope artifact_hash must drive the single batch catalog lookup (no per-kind fan-out).
+	if len(gotHashes) != 1 || gotHashes[0] != "ah1" {
+		t.Fatalf("catalog not hydrated by batch artifact_hash: %v", gotHashes)
 	}
 	if len(got.Nodes) != 1 {
 		t.Fatalf("expected 1 node: %+v", got.Nodes)

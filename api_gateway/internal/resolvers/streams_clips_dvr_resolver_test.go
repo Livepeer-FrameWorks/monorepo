@@ -7,9 +7,7 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/clients/clientstest"
-	commodoreclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
-	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -46,49 +44,6 @@ func TestDoGetClip(t *testing.T) {
 	})
 	if _, err := failing.DoGetClip(clientstest.AuthedCtx("t1"), "x"); err == nil {
 		t.Fatal("DoGetClip should surface backend error")
-	}
-}
-
-func TestDoGetClips(t *testing.T) {
-	// Happy path forwards the tenant from context and the optional streamID filter.
-	var gotTenant string
-	var gotStream *string
-	commo := &clientstest.FakeCommodore{
-		GetClipsFn: func(_ context.Context, tenantID string, streamID *string, _ *commonpb.CursorPaginationRequest, _ ...commodoreclient.MediaListOptions) (*sharedpb.GetClipsResponse, error) {
-			gotTenant = tenantID
-			gotStream = streamID
-			return &sharedpb.GetClipsResponse{Clips: []*sharedpb.ClipInfo{{Id: "c1"}}}, nil
-		},
-	}
-	r := commoR(commo)
-	sid := "s1"
-	clips, err := r.DoGetClips(clientstest.AuthedCtx("t1"), &sid)
-	if err != nil || len(clips) != 1 || clips[0].Id != "c1" {
-		t.Fatalf("DoGetClips = (%+v, %v)", clips, err)
-	}
-	if gotTenant != "t1" {
-		t.Errorf("tenant not forwarded: %q", gotTenant)
-	}
-	if gotStream == nil || *gotStream != "s1" {
-		t.Errorf("streamID filter not forwarded: %v", gotStream)
-	}
-
-	// No tenant in context → guard fires before the backend.
-	guard := commoR(&clientstest.FakeCommodore{})
-	if _, err := guard.DoGetClips(context.Background(), nil); err == nil {
-		t.Fatal("DoGetClips should require tenant context")
-	}
-	if guard.Clients.Commodore.(*clientstest.FakeCommodore).Calls != 0 {
-		t.Fatal("tenant guard must short-circuit before backend")
-	}
-
-	failing := commoR(&clientstest.FakeCommodore{
-		GetClipsFn: func(context.Context, string, *string, *commonpb.CursorPaginationRequest, ...commodoreclient.MediaListOptions) (*sharedpb.GetClipsResponse, error) {
-			return nil, errors.New("boom")
-		},
-	})
-	if _, err := failing.DoGetClips(clientstest.AuthedCtx("t1"), nil); err == nil {
-		t.Fatal("DoGetClips should surface backend error")
 	}
 }
 
@@ -279,7 +234,7 @@ func TestDoDeleteDVR(t *testing.T) {
 	ctx := clientstest.AuthedCtx("t1")
 
 	r := commoR(&clientstest.FakeCommodore{
-		DeleteDVRFn: func(context.Context, string) error { return nil },
+		DeleteDVRFn: func(context.Context, string) (bool, error) { return true, nil },
 	})
 	res, err := r.DoDeleteDVR(ctx, "dvr1")
 	if err != nil {
@@ -290,7 +245,7 @@ func TestDoDeleteDVR(t *testing.T) {
 	}
 
 	rNF := commoR(&clientstest.FakeCommodore{
-		DeleteDVRFn: func(context.Context, string) error { return errors.New("recording not found") },
+		DeleteDVRFn: func(context.Context, string) (bool, error) { return false, errors.New("recording not found") },
 	})
 	res, err = rNF.DoDeleteDVR(ctx, "ghost")
 	if err != nil {
@@ -298,41 +253,6 @@ func TestDoDeleteDVR(t *testing.T) {
 	}
 	if nf, isNF := res.(*model.NotFoundError); !isNF || nf.ResourceType != "DVRRequest" || nf.ResourceID != "ghost" {
 		t.Fatalf("expected DVRRequest NotFoundError, got %T %+v", res, res)
-	}
-}
-
-func TestDoListDVRRequests(t *testing.T) {
-	var gotTenant string
-	var gotStream *string
-	commo := &clientstest.FakeCommodore{
-		ListDVRRequestsFn: func(_ context.Context, tenantID string, streamID *string, _ *commonpb.CursorPaginationRequest, _ ...commodoreclient.MediaListOptions) (*sharedpb.ListDVRRecordingsResponse, error) {
-			gotTenant = tenantID
-			gotStream = streamID
-			return &sharedpb.ListDVRRecordingsResponse{
-				DvrRecordings: []*sharedpb.DVRInfo{{DvrHash: "d1"}},
-			}, nil
-		},
-	}
-	r := commoR(commo)
-	sid := "s1"
-	out, err := r.DoListDVRRequests(clientstest.AuthedCtx("t1"), &sid, nil)
-	if err != nil || len(out.DvrRecordings) != 1 || out.DvrRecordings[0].DvrHash != "d1" {
-		t.Fatalf("DoListDVRRequests = (%+v, %v)", out, err)
-	}
-	if gotTenant != "t1" {
-		t.Errorf("tenant not forwarded: %q", gotTenant)
-	}
-	if gotStream == nil || *gotStream != "s1" {
-		t.Errorf("streamID not forwarded: %v", gotStream)
-	}
-
-	// No tenant → guard short-circuits before the backend.
-	guard := commoR(&clientstest.FakeCommodore{})
-	if _, err := guard.DoListDVRRequests(context.Background(), nil, nil); err == nil {
-		t.Fatal("DoListDVRRequests should require tenant context")
-	}
-	if guard.Clients.Commodore.(*clientstest.FakeCommodore).Calls != 0 {
-		t.Fatal("tenant guard must short-circuit before backend")
 	}
 }
 

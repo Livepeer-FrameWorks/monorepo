@@ -266,6 +266,43 @@ type ArtifactStatesConnection struct {
 	TotalCount int                          `json:"totalCount"`
 }
 
+// A single A/V (or meta) track of a finalized artifact.
+type ArtifactTrack struct {
+	// "video" | "audio" | "meta"
+	Type        string   `json:"type"`
+	Codec       string   `json:"codec"`
+	Width       *int     `json:"width,omitempty"`
+	Height      *int     `json:"height,omitempty"`
+	Fps         *float64 `json:"fps,omitempty"`
+	Resolution  *string  `json:"resolution,omitempty"`
+	BitrateKbps *int     `json:"bitrateKbps,omitempty"`
+	Channels    *int     `json:"channels,omitempty"`
+	SampleRate  *int     `json:"sampleRate,omitempty"`
+}
+
+// A node-copy listing plus whether it was capped at the per-request limit. When
+// `truncated` is true, `copies` is not exhaustive — present the count as a lower bound
+// (e.g. "500+") or a "results truncated" note, never as an exact total.
+type AssetNodeCopies struct {
+	Copies    []*AssetNodeCopy `json:"copies"`
+	Truncated bool             `json:"truncated"`
+}
+
+// One node's current local copy of an artifact. `role` is `origin` (a producer node's
+// copy) or `cache` (a synced copy on another node).
+type AssetNodeCopy struct {
+	NodeID     string     `json:"nodeId"`
+	NodeName   *string    `json:"nodeName,omitempty"`
+	ClusterID  *string    `json:"clusterId,omitempty"`
+	Region     *string    `json:"region,omitempty"`
+	Latitude   *float64   `json:"latitude,omitempty"`
+	Longitude  *float64   `json:"longitude,omitempty"`
+	Role       string     `json:"role"`
+	IsComplete bool       `json:"isComplete"`
+	SizeBytes  *float64   `json:"sizeBytes,omitempty"`
+	UpdatedAt  *time.Time `json:"updatedAt,omitempty"`
+}
+
 type AuthError struct {
 	Message string  `json:"message"`
 	Code    *string `json:"code,omitempty"`
@@ -526,18 +563,6 @@ type ClientMetrics5mConnection struct {
 type ClientMetrics5mEdge struct {
 	Cursor string                       `json:"cursor"`
 	Node   *periscopepb.ClientMetrics5M `json:"node"`
-}
-
-type ClipEdge struct {
-	Cursor string             `json:"cursor"`
-	Node   *sharedpb.ClipInfo `json:"node"`
-}
-
-type ClipsConnection struct {
-	Edges      []*ClipEdge          `json:"edges"`
-	Nodes      []*sharedpb.ClipInfo `json:"nodes"`
-	PageInfo   *PageInfo            `json:"pageInfo"`
-	TotalCount int                  `json:"totalCount"`
 }
 
 type ClusterAccess struct {
@@ -1050,21 +1075,12 @@ type DVRChaptersPage struct {
 	NextPageToken *string          `json:"nextPageToken,omitempty"`
 }
 
-type DVRRecordingEdge struct {
-	Cursor string            `json:"cursor"`
-	Node   *sharedpb.DVRInfo `json:"node"`
-}
-
-type DVRRecordingsConnection struct {
-	Edges      []*DVRRecordingEdge `json:"edges"`
-	Nodes      []*sharedpb.DVRInfo `json:"nodes"`
-	PageInfo   *PageInfo           `json:"pageInfo"`
-	TotalCount int                 `json:"totalCount"`
-}
-
 type DeleteSuccess struct {
 	Success   bool   `json:"success"`
 	DeletedID string `json:"deletedId"`
+	// True when the delete was accepted but is NOT yet finalized (e.g. a stream deletion awaiting the serving cell's
+	// cleanup-tombstone acknowledgement). The operation converges asynchronously; false means fully deleted.
+	Pending *bool `json:"pending,omitempty"`
 }
 
 func (DeleteSuccess) IsDeleteStreamResult() {}
@@ -1185,13 +1201,6 @@ type MarketplaceClusterConnection struct {
 type MarketplaceClusterEdge struct {
 	Cursor string                                   `json:"cursor"`
 	Node   *quartermasterpb.MarketplaceClusterEntry `json:"node"`
-}
-
-type MediaArtifactConnectionInput struct {
-	Search    *string                   `json:"search,omitempty"`
-	Sort      *StorageArtifactSortField `json:"sort,omitempty"`
-	Direction *SortDirection            `json:"direction,omitempty"`
-	Offset    *int                      `json:"offset,omitempty"`
 }
 
 // Tenant-default retention policy: per-class overrides + the values the
@@ -1814,23 +1823,29 @@ type SkipperReportsConnection struct {
 }
 
 type StorageArtifact struct {
-	Key                string                 `json:"key"`
-	Kind               StorageArtifactKind    `json:"kind"`
-	ID                 string                 `json:"id"`
-	Hash               string                 `json:"hash"`
-	PlaybackID         *string                `json:"playbackId,omitempty"`
-	StreamID           *string                `json:"streamId,omitempty"`
-	StreamTitle        string                 `json:"streamTitle"`
-	Title              string                 `json:"title"`
-	SecondaryLabel     string                 `json:"secondaryLabel"`
-	SizeBytes          *float64               `json:"sizeBytes,omitempty"`
-	Status             string                 `json:"status"`
-	StorageLocation    *string                `json:"storageLocation,omitempty"`
-	SyncStatus         *string                `json:"syncStatus,omitempty"`
-	IsHot              *bool                  `json:"isHot,omitempty"`
+	Key            string              `json:"key"`
+	Kind           StorageArtifactKind `json:"kind"`
+	ID             string              `json:"id"`
+	Hash           string              `json:"hash"`
+	PlaybackID     *string             `json:"playbackId,omitempty"`
+	StreamID       *string             `json:"streamId,omitempty"`
+	StreamTitle    string              `json:"streamTitle"`
+	Title          string              `json:"title"`
+	SecondaryLabel string              `json:"secondaryLabel"`
+	// User-provided description (VOD uploads and clips); null when unset.
+	Description *string `json:"description,omitempty"`
+	// Processing failure detail for a failed artifact; null when not failed.
+	ErrorMessage    *string  `json:"errorMessage,omitempty"`
+	SizeBytes       *float64 `json:"sizeBytes,omitempty"`
+	Status          string   `json:"status"`
+	StorageLocation *string  `json:"storageLocation,omitempty"`
+	// ID of the storage cluster the artifact is durably stored in (control-plane truth from Commodore).
+	StorageClusterID *string `json:"storageClusterId,omitempty"`
+	SyncStatus       *string `json:"syncStatus,omitempty"`
+	// Present full local node copy (origin or cache): true when at least one node holds a complete local copy, false when none remain (playback via read-through relay from S3). Null when the placement overlay (Periscope) is unavailable — unknown, not 'no local copy'. Durable S3-only state is derived by consumers as isSynced && hasLocalCopy == false.
+	HasLocalCopy       *bool                  `json:"hasLocalCopy,omitempty"`
 	IsSynced           *bool                  `json:"isSynced,omitempty"`
 	IsFinalized        *bool                  `json:"isFinalized,omitempty"`
-	IsFrozen           *bool                  `json:"isFrozen,omitempty"`
 	CreatedAt          time.Time              `json:"createdAt"`
 	UpdatedAt          time.Time              `json:"updatedAt"`
 	ExpiresAt          *time.Time             `json:"expiresAt,omitempty"`
@@ -1839,6 +1854,21 @@ type StorageArtifact struct {
 	DeleteID           string                 `json:"deleteId"`
 	RetentionID        string                 `json:"retentionId"`
 	ThumbnailURL       *string                `json:"thumbnailUrl,omitempty"`
+	// Poster + hover-scrub sprite assets, when the artifact has thumbnails.
+	ThumbnailAssets *sharedpb.ThumbnailAssets `json:"thumbnailAssets,omitempty"`
+	// Measured media duration in seconds (all kinds); null until the artifact finalizes.
+	DurationSeconds *float64 `json:"durationSeconds,omitempty"`
+	// Finalized A/V track summary (per track), captured from the completion-validated processing result and projected onto the catalog. Empty until finalized.
+	Tracks []*ArtifactTrack `json:"tracks"`
+}
+
+// Per-kind artifact counts for the account (or filtered scope), for the library tabs/tiles.
+type StorageArtifactKindCounts struct {
+	Total   int `json:"total"`
+	Vod     int `json:"vod"`
+	Dvr     int `json:"dvr"`
+	Chapter int `json:"chapter"`
+	Clip    int `json:"clip"`
 }
 
 type StorageArtifactsConnection struct {
@@ -1847,16 +1877,29 @@ type StorageArtifactsConnection struct {
 	HasNextPage bool               `json:"hasNextPage"`
 	Limit       int                `json:"limit"`
 	Offset      int                `json:"offset"`
+	// True only when EVERY returned row's lifecycle is actually known — resolved from the
+	// durable catalog projection or the live overlay. A not-yet-projected/backfilled row makes
+	// this false so the client shows an "unknown" lifecycle state rather than reporting the
+	// artifacts as not-synced. Per-row availability is derivable from whether syncStatus is set.
+	LifecycleAvailable bool `json:"lifecycleAvailable"`
+	// Authoritative per-kind counts under the active search/stream scope (ignoring the kind filter).
+	KindCounts *StorageArtifactKindCounts `json:"kindCounts"`
 }
 
 type StorageArtifactsInput struct {
-	First     *int                      `json:"first,omitempty"`
-	Offset    *int                      `json:"offset,omitempty"`
-	StreamID  *string                   `json:"streamId,omitempty"`
-	Kinds     []StorageArtifactKind     `json:"kinds,omitempty"`
-	Search    *string                   `json:"search,omitempty"`
-	Sort      *StorageArtifactSortField `json:"sort,omitempty"`
-	Direction *SortDirection            `json:"direction,omitempty"`
+	First    *int                  `json:"first,omitempty"`
+	Offset   *int                  `json:"offset,omitempty"`
+	StreamID *string               `json:"streamId,omitempty"`
+	Kinds    []StorageArtifactKind `json:"kinds,omitempty"`
+	Search   *string               `json:"search,omitempty"`
+	// Account-wide status filter applied server-side before count/facets/pagination: "ready" | "failed" | "processing" | "expired". Empty = all.
+	Status *string `json:"status,omitempty"`
+	// Exact artifact-hash match — the canonical lookup for asset detail/analytics routes.
+	// Takes precedence over `search`; combine with `first: 1` to fetch a single artifact
+	// without a fuzzy scan or page cap.
+	ArtifactHash *string                   `json:"artifactHash,omitempty"`
+	Sort         *StorageArtifactSortField `json:"sort,omitempty"`
+	Direction    *SortDirection            `json:"direction,omitempty"`
 }
 
 // Marginal per-asset storage cost projection. Used by the customer-facing
@@ -2140,6 +2183,20 @@ type TimeRangeInput struct {
 	Start time.Time `json:"start"`
 	// End of the time range.
 	End time.Time `json:"end"`
+}
+
+// One ranked asset for the Top Assets surface — cross-kind, ranked server-side by
+// audience sessions in the window. `kind` badges the asset type; title/playbackId are
+// composed from the catalog. (Named distinctly from the periscope proto TopAsset to
+// avoid gqlgen autobinding to that message.)
+type TopAssetEntry struct {
+	ArtifactHash  string              `json:"artifactHash"`
+	Kind          StorageArtifactKind `json:"kind"`
+	TotalSessions int                 `json:"totalSessions"`
+	WatchHours    float64             `json:"watchHours"`
+	DurationS     int                 `json:"durationS"`
+	Title         *string             `json:"title,omitempty"`
+	PlaybackID    *string             `json:"playbackId,omitempty"`
 }
 
 type TrackListEventEdge struct {
@@ -2440,14 +2497,12 @@ type VodAsset struct {
 	StorageLocation string `json:"storageLocation"`
 	// Current S3 sync state (pending, in_progress, synced, failed, lost_local).
 	SyncStatus *string `json:"syncStatus,omitempty"`
-	// True when at least one edge has a warm local copy.
-	IsHot bool `json:"isHot"`
+	// Present full local node copy (origin or cache): true when at least one node holds a complete local copy, false when none remain (playback via Helmsman's read-through relay from S3). Null when the placement overlay (Periscope) is unavailable — unknown, not 'no local copy'. Durable S3-only state is derived by consumers as isSynced && hasLocalCopy == false.
+	HasLocalCopy *bool `json:"hasLocalCopy,omitempty"`
 	// True when S3 has an authoritative copy.
 	IsSynced bool `json:"isSynced"`
 	// True when the S3 copy includes the Mist .dtsh index.
 	IsFinalized bool `json:"isFinalized"`
-	// True when no warm edge copy remains; playback streams via Helmsman's read-through relay from S3.
-	IsFrozen bool `json:"isFrozen"`
 	// File size in bytes (available after validation).
 	SizeBytes *float64 `json:"sizeBytes,omitempty"`
 	// Video duration in milliseconds.
@@ -2488,18 +2543,6 @@ func (VodAsset) IsCompleteVodUploadResult() {}
 func (VodAsset) IsSetPlaybackPolicyResult() {}
 
 func (VodAsset) IsNode() {}
-
-type VodAssetEdge struct {
-	Cursor string    `json:"cursor"`
-	Node   *VodAsset `json:"node"`
-}
-
-type VodAssetsConnection struct {
-	Edges      []*VodAssetEdge `json:"edges"`
-	Nodes      []*VodAsset     `json:"nodes"`
-	PageInfo   *PageInfo       `json:"pageInfo"`
-	TotalCount int             `json:"totalCount"`
-}
 
 type VodRetentionAssetConnection struct {
 	Edges      []*VodRetentionAssetEdge `json:"edges"`

@@ -139,7 +139,6 @@ func TestDemoListGeneratorsNonEmpty(t *testing.T) {
 		{"BootstrapTokens", GenerateBootstrapTokens()},
 		{"InfrastructureNodes", GenerateInfrastructureNodes()},
 		{"InfrastructureClusters", GenerateInfrastructureClusters()},
-		{"Clips", GenerateClips()},
 		{"MarketplaceClusters", GenerateMarketplaceClusters()},
 		{"MySubscriptions", GenerateMySubscriptions()},
 		{"ClusterInvites", GenerateClusterInvites()},

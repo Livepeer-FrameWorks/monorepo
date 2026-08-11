@@ -1,0 +1,21 @@
+query GetArtifactNodeCopies($artifactHash: String!) {
+  analytics {
+    health {
+      artifactNodeCopies(artifactHash: $artifactHash) {
+        truncated
+        copies {
+          nodeId
+          nodeName
+          clusterId
+          region
+          latitude
+          longitude
+          role
+          isComplete
+          sizeBytes
+          updatedAt
+        }
+      }
+    }
+  }
+}

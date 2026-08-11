@@ -240,6 +240,16 @@ func (r *analyticsHealthResolver) VodRetentionAssets(ctx context.Context, obj *m
 	return r.DoListVodRetentionAssets(ctx, first, after, last, before, timeRange, noCache)
 }
 
+// TopAssets is the resolver for the topAssets field.
+func (r *analyticsHealthResolver) TopAssets(ctx context.Context, obj *markers.AnalyticsHealth, timeRange *model.TimeRangeInput, limit *int) ([]*model.TopAssetEntry, error) {
+	return r.DoListTopAssets(ctx, timeRange, limit)
+}
+
+// ArtifactNodeCopies is the resolver for the artifactNodeCopies field.
+func (r *analyticsHealthResolver) ArtifactNodeCopies(ctx context.Context, obj *markers.AnalyticsHealth, artifactHash string) (*model.AssetNodeCopies, error) {
+	return r.DoGetArtifactNodeCopies(ctx, artifactHash)
+}
+
 // RoutingEventsConnection is the resolver for the routingEventsConnection field.
 func (r *analyticsInfraResolver) RoutingEventsConnection(ctx context.Context, obj *markers.AnalyticsInfra, page *model.ConnectionInput, streamID *string, timeRange *model.TimeRangeInput, subjectTenantID *string, clusterID *string, noCache *bool) (*model.RoutingEventsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
@@ -2023,14 +2033,14 @@ func (r *liveUsageSummaryResolver) FrozenVodBytes(ctx context.Context, obj *peri
 	return int(obj.GetFrozenVodBytes()), nil
 }
 
-// FreezeCount is the resolver for the freezeCount field.
-func (r *liveUsageSummaryResolver) FreezeCount(ctx context.Context, obj *periscopepb.LiveUsageSummary) (int, error) {
-	return int(obj.GetFreezeCount()), nil
+// SyncedArtifactCount is the resolver for the syncedArtifactCount field.
+func (r *liveUsageSummaryResolver) SyncedArtifactCount(ctx context.Context, obj *periscopepb.LiveUsageSummary) (int, error) {
+	return int(obj.GetSyncedArtifactCount()), nil
 }
 
-// FreezeBytes is the resolver for the freezeBytes field.
-func (r *liveUsageSummaryResolver) FreezeBytes(ctx context.Context, obj *periscopepb.LiveUsageSummary) (int, error) {
-	return int(obj.GetFreezeBytes()), nil
+// SyncedArtifactBytes is the resolver for the syncedArtifactBytes field.
+func (r *liveUsageSummaryResolver) SyncedArtifactBytes(ctx context.Context, obj *periscopepb.LiveUsageSummary) (int, error) {
+	return int(obj.GetSyncedArtifactBytes()), nil
 }
 
 // MandateID is the resolver for the mandateId field.
@@ -3325,9 +3335,9 @@ func (r *queryResolver) Platform(ctx context.Context) (*markers.Platform, error)
 }
 
 // StreamsConnection is the resolver for the streamsConnection field.
-func (r *queryResolver) StreamsConnection(ctx context.Context, page *model.ConnectionInput) (*model.StreamsConnection, error) {
+func (r *queryResolver) StreamsConnection(ctx context.Context, page *model.ConnectionInput, search *string) (*model.StreamsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.DoGetStreamsConnection(ctx, first, after, last, before)
+	return r.DoGetStreamsConnection(ctx, first, after, last, before, search)
 }
 
 // Stream is the resolver for the stream field.
@@ -3348,12 +3358,6 @@ func (r *queryResolver) ValidateStreamKey(ctx context.Context, streamKey string)
 func (r *queryResolver) StreamKeysConnection(ctx context.Context, page *model.ConnectionInput, streamID string) (*model.StreamKeysConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
 	return r.DoGetStreamKeysConnection(ctx, streamID, first, after, last, before)
-}
-
-// ClipsConnection is the resolver for the clipsConnection field.
-func (r *queryResolver) ClipsConnection(ctx context.Context, page *model.ConnectionInput, streamID *string, input *model.MediaArtifactConnectionInput) (*model.ClipsConnection, error) {
-	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.DoGetClipsConnection(ctx, streamID, first, after, last, before, input)
 }
 
 // Clip is the resolver for the clip field.
@@ -4181,12 +4185,6 @@ func (r *queryResolver) BootstrapTokensConnection(ctx context.Context, page *mod
 	return r.DoGetBootstrapTokensConnection(ctx, kind, first, after, last, before)
 }
 
-// DvrRecordingsConnection is the resolver for the dvrRecordingsConnection field.
-func (r *queryResolver) DvrRecordingsConnection(ctx context.Context, page *model.ConnectionInput, streamID *string, input *model.MediaArtifactConnectionInput) (*model.DVRRecordingsConnection, error) {
-	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.DoGetDVRRecordingsConnection(ctx, streamID, first, after, last, before, input)
-}
-
 // DvrChapter is the resolver for the dvrChapter field.
 func (r *queryResolver) DvrChapter(ctx context.Context, dvrID string, mode *model.DVRChapterMode, intervalSeconds *int, startMs float64, endMs float64) (*model.DVRChapter, error) {
 	dvrHash, err := resolvers.NormalizeDvrID(dvrID)
@@ -4243,12 +4241,6 @@ func (r *queryResolver) VodAsset(ctx context.Context, id string) (*model.VodAsse
 		return nil, err
 	}
 	return r.DoGetVodAsset(ctx, rawID)
-}
-
-// VodAssetsConnection is the resolver for the vodAssetsConnection field.
-func (r *queryResolver) VodAssetsConnection(ctx context.Context, page *model.ConnectionInput, streamID *string, input *model.MediaArtifactConnectionInput) (*model.VodAssetsConnection, error) {
-	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.DoGetVodAssetsConnectionFiltered(ctx, streamID, first, after, last, before, input)
 }
 
 // StorageArtifactsConnection is the resolver for the storageArtifactsConnection field.

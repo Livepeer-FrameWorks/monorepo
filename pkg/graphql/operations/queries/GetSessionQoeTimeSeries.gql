@@ -1,5 +1,5 @@
 # Viewer-experienced QoE bucketed over time — drives the rebuffering/bitrate trend
-# chart on the player-experience Playback tab.
+# chart on the player-experience page.
 query GetSessionQoeTimeSeries(
   $streamId: ID
   $artifactHash: String

@@ -92,10 +92,9 @@ enum GQL {
     requestedParams
     storageLocation
     syncStatus
-    isHot
+    hasLocalCopy
     isSynced
     isFinalized
-    isFrozen
     expiresAt
     thumbnailAssets {
       posterUrl
@@ -143,6 +142,7 @@ enum GQL {
     __typename
     success
     deletedId
+    pending
   }
   """
 
@@ -168,10 +168,9 @@ enum GQL {
     errorMessage
     storageLocation
     syncStatus
-    isHot
+    hasLocalCopy
     isSynced
     isFinalized
-    isFrozen
     thumbnailAssets {
       posterUrl
       spriteVttUrl
@@ -237,9 +236,9 @@ enum GQL {
     frozenClipBytes
     frozenDvrBytes
     frozenVodBytes
-    # Freeze (S3 upload) operations
-    freezeCount
-    freezeBytes
+    # Point-in-time artifacts currently synced to S3
+    syncedArtifactCount
+    syncedArtifactBytes
   }
   """
 
@@ -818,6 +817,30 @@ enum GQL {
   }
   """
 
+  static let GetArtifactNodeCopies = """
+  query GetArtifactNodeCopies($artifactHash: String!) {
+    analytics {
+      health {
+        artifactNodeCopies(artifactHash: $artifactHash) {
+          truncated
+          copies {
+            nodeId
+            nodeName
+            clusterId
+            region
+            latitude
+            longitude
+            role
+            isComplete
+            sizeBytes
+            updatedAt
+          }
+        }
+      }
+    }
+  }
+  """
+
   static let GetArtifactStatesConnection = """
   # Fetch paginated artifact lifecycle states for DVR/clip processing
   # Returns real-time status, progress, and storage paths for ongoing artifact operations
@@ -1062,80 +1085,6 @@ enum GQL {
   }
   """
 
-  static let GetClipsConnection = """
-  # Fetch paginated list of clips with metadata and lifecycle status
-  # Returns clip metadata from Commodore (use artifactStatesConnection for live status)
-  query GetClipsConnection(
-    $streamId: ID
-    $first: Int = 50
-    $after: String
-    $input: MediaArtifactConnectionInput
-  ) {
-    clipsConnection(streamId: $streamId, page: { first: $first, after: $after }, input: $input)
-   {
-      edges {
-        cursor
-        node {
-          # Business metadata (from Commodore)
-          id
-          clipHash
-          playbackId
-          streamId
-          sourceStreamId
-          title
-          description
-          startTime
-          duration
-          clipMode
-          requestedParams
-          createdAt
-          updatedAt
-          expiresAt
-          # Lifecycle data (null from Commodore, use artifactStatesConnection for live status)
-          nodeId
-          storagePath
-          sizeBytes
-          status
-          storageLocation
-          syncStatus
-          isHot
-          isSynced
-          isFinalized
-          isFrozen
-          # Marginal storage cost for this clip on the tenant's tier. Null for
-          # self-hosted / fully tenant-private clusters.
-          storageCost {
-            perDay
-            perMonth
-            currency
-          }
-          # Resolved retention horizon for the storage browser UI.
-          effectiveRetention {
-            retentionDays
-            retentionUntil
-            source
-          }
-          # Chandler-generated poster + sprite assets (null when processing
-          # hasn't produced thumbnails yet).
-          thumbnailAssets {
-            posterUrl
-            spriteVttUrl
-            spriteJpgUrl
-            assetKey
-          }
-        }
-      }
-      pageInfo {
-        hasNextPage
-        hasPreviousPage
-        startCursor
-        endCursor
-      }
-      totalCount
-    }
-  }
-  """
-
   static let GetClusterBootOps = """
   # Cluster-ops boot aggregate (operator view, token-attributed rows only)
   query GetClusterBootOps($clusterId: ID, $timeRange: TimeRangeInput) {
@@ -1325,78 +1274,6 @@ enum GQL {
             content
             sender
             createdAt
-          }
-        }
-      }
-      pageInfo {
-        hasNextPage
-        hasPreviousPage
-        startCursor
-        endCursor
-      }
-      totalCount
-    }
-  }
-  """
-
-  static let GetDVRRequests = """
-  # Fetch paginated list of DVR recordings with lifecycle status and storage paths
-  # Returns DVR metadata from Commodore (use artifactStatesConnection for live status)
-  query GetDVRRequests(
-    $streamId: ID
-    $first: Int = 50
-    $after: String
-    $input: MediaArtifactConnectionInput
-  ) {
-    dvrRecordingsConnection(
-      streamId: $streamId
-      page: { first: $first, after: $after }
-      input: $input
-    ) {
-      edges {
-        cursor
-        node {
-          # Business metadata (from Commodore)
-          id
-          dvrHash
-          playbackId
-          streamId
-          sourceStreamId
-          title
-          createdAt
-          updatedAt
-          expiresAt
-          # Lifecycle data (null from Commodore, use artifactStatesConnection for live status)
-          storageNodeId
-          status
-          startedAt
-          endedAt
-          durationSeconds
-          sizeBytes
-          manifestPath
-          errorMessage
-          storageLocation
-          syncStatus
-          isHot
-          isSynced
-          isFinalized
-          isFrozen
-          # Marginal storage cost for this recording on the tenant's tier.
-          storageCost {
-            perDay
-            perMonth
-            currency
-          }
-          effectiveRetention {
-            retentionDays
-            retentionUntil
-            source
-          }
-          thumbnailAssets {
-            posterUrl
-            spriteVttUrl
-            spriteJpgUrl
-            assetKey
           }
         }
       }
@@ -2430,7 +2307,7 @@ enum GQL {
 
   static let GetPlayerBootTimeSeries = """
   # Player startup (boot) summary bucketed over time — drives the TTF percentile
-  # trend chart on the player-experience Startup tab.
+  # trend chart on the player-experience page.
   query GetPlayerBootTimeSeries(
     $streamId: ID
     $artifactHash: String
@@ -2833,7 +2710,7 @@ enum GQL {
 
   static let GetSessionQoeTimeSeries = """
   # Viewer-experienced QoE bucketed over time — drives the rebuffering/bitrate trend
-  # chart on the player-experience Playback tab.
+  # chart on the player-experience page.
   query GetSessionQoeTimeSeries(
     $streamId: ID
     $artifactHash: String
@@ -2972,10 +2849,16 @@ enum GQL {
         streamTitle
         title
         secondaryLabel
+        description
+        errorMessage
         sizeBytes
         status
         storageLocation
-        isFrozen
+        storageClusterId
+        syncStatus
+        isSynced
+        isFinalized
+        hasLocalCopy
         createdAt
         updatedAt
         expiresAt
@@ -2992,11 +2875,37 @@ enum GQL {
         deleteId
         retentionId
         thumbnailUrl
+        durationSeconds
+        tracks {
+          type
+          codec
+          width
+          height
+          fps
+          resolution
+          bitrateKbps
+          channels
+          sampleRate
+        }
+        thumbnailAssets {
+          posterUrl
+          spriteVttUrl
+          spriteJpgUrl
+          assetKey
+        }
       }
       totalCount
       hasNextPage
       limit
       offset
+      lifecycleAvailable
+      kindCounts {
+        total
+        vod
+        dvr
+        chapter
+        clip
+      }
     }
   }
   """
@@ -3788,8 +3697,8 @@ enum GQL {
 
   static let GetStreamsConnection = """
   # Fetch paginated list of streams with core fields and live status metrics
-  query GetStreamsConnection($first: Int = 50, $after: String) {
-    streamsConnection(page: { first: $first, after: $after }) {
+  query GetStreamsConnection($first: Int = 50, $after: String, $search: String) {
+    streamsConnection(page: { first: $first, after: $after }, search: $search) {
       edges {
         cursor
         node {
@@ -3882,6 +3791,24 @@ enum GQL {
             }
             totalCount
           }
+        }
+      }
+    }
+  }
+  """
+
+  static let GetTopAssets = """
+  query GetTopAssets($timeRange: TimeRangeInput, $limit: Int) {
+    analytics {
+      health {
+        topAssets(timeRange: $timeRange, limit: $limit) {
+          artifactHash
+          kind
+          totalSessions
+          watchHours
+          durationS
+          title
+          playbackId
         }
       }
     }
@@ -4042,77 +3969,6 @@ enum GQL {
   }
   """
 
-  static let GetVodAssetsConnection = """
-  query GetVodAssetsConnection(
-    $streamId: ID
-    $first: Int = 50
-    $after: String
-    $last: Int
-    $before: String
-    $input: MediaArtifactConnectionInput
-  ) {
-    vodAssetsConnection(
-      streamId: $streamId
-      page: { first: $first, after: $after, last: $last, before: $before }
-      input: $input
-    ) {
-      edges {
-        cursor
-        node {
-          id
-          artifactHash
-          playbackId
-          streamId
-          originType
-          originId
-          title
-          description
-          filename
-          status
-          storageLocation
-          syncStatus
-          isHot
-          isSynced
-          isFinalized
-          sizeBytes
-          durationMs
-          resolution
-          videoCodec
-          audioCodec
-          bitrateKbps
-          createdAt
-          updatedAt
-          expiresAt
-          errorMessage
-          thumbnailAssets {
-            posterUrl
-            spriteVttUrl
-            spriteJpgUrl
-            assetKey
-          }
-          storageCost {
-            perDay
-            perMonth
-            currency
-          }
-          effectiveRetention {
-            retentionDays
-            retentionUntil
-            source
-          }
-        }
-      }
-      pageInfo {
-        hasNextPage
-        hasPreviousPage
-        startCursor
-        endCursor
-      }
-      totalCount
-    }
-  }
-  """
-
   static let GetVodRetention = """
   # VOD retention curve for one artifact: per-bucket watched-seconds (density) and
   # reached-count audience retention (sessions reaching each bucket). Drives the heatmap.
@@ -4170,9 +4026,9 @@ enum GQL {
   """
 
   static let ListVodRetentionAssets = """
-  # VOD assets that have retention data in the window — backs the clickable asset
-  # picker on the player-experience Retention tab. title/playbackId are composed from
-  # the catalog and may be null for uncatalogued assets (render the hash client-side).
+  # VOD/clip assets that have retention data in the window — backs the Recent Assets
+  # table on the analytics overview. title/playbackId are composed from the catalog
+  # and may be null for uncatalogued assets (render the hash client-side).
   query ListVodRetentionAssets($page: ConnectionInput, $timeRange: TimeRangeInput) {
     analytics {
       health {

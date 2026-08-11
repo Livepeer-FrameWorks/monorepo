@@ -10,16 +10,14 @@ import (
 	"google.golang.org/grpc/status"
 
 	"frameworks/api_gateway/graph/model"
+	"frameworks/api_gateway/internal/catalogview"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/loaders"
 	"frameworks/api_gateway/internal/middleware"
-	commodoreclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
-	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
-	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 )
 
@@ -442,8 +440,10 @@ func (r *Resolver) DoDeleteVodAsset(ctx context.Context, id string) (model.Delet
 	return &model.DeleteSuccess{Success: true, DeletedID: id}, nil
 }
 
-// DoGetVodAsset retrieves a single VOD asset by ID
-// Business metadata comes from Commodore, lifecycle data from Periscope
+// DoGetVodAsset retrieves a single VOD asset by artifact hash. An exact-hash, kind-restricted
+// ListStorageArtifacts lookup is the source of truth for durable facts (derived lifecycle status,
+// duration, finalized track summary, sync state); the live Periscope overlay then fills the
+// transient has_local_copy placement signal, mirroring the connection resolver.
 func (r *Resolver) DoGetVodAsset(ctx context.Context, id string) (*model.VodAsset, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo VOD asset")
@@ -456,153 +456,127 @@ func (r *Resolver) DoGetVodAsset(ctx context.Context, id string) (*model.VodAsse
 		return nil, fmt.Errorf("tenant context required")
 	}
 
-	// 1. Get business metadata from Commodore
-	asset, err := r.Clients.Commodore.GetVodAsset(ctx, tenantID, id)
+	// Restrict to VOD-kind artifacts. The catalog unions clips/DVRs/chapters/VODs, so without a
+	// kind filter a clip/DVR hash could be returned through the VodAsset contract. A VodAsset
+	// legitimately covers uploaded VODs AND finalized DVR chapters (both playable, origin_type
+	// dvr_chapter), so both kinds are accepted here.
+	resp, err := r.Clients.Commodore.ListStorageArtifacts(ctx, &commodorepb.ListStorageArtifactsRequest{
+		TenantId:       tenantID,
+		ArtifactHashes: []string{id},
+		Kinds:          []string{"vod", "chapter"},
+		Limit:          1,
+	})
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get VOD asset")
-		if strings.Contains(err.Error(), "not found") {
-			return nil, nil // GraphQL nullable field - return nil for not found
-		}
 		return nil, fmt.Errorf("failed to get VOD asset: %w", err)
 	}
+	arts := resp.GetArtifacts()
+	if len(arts) == 0 {
+		return nil, nil // GraphQL nullable field — return nil for not found
+	}
+	artifact := arts[0]
 
-	// 2. Enrich with lifecycle data from Periscope via ArtifactLifecycleLoader
+	// hasLocalCopy is a PLACEMENT fact (full-local-node-copy presence, origin or cache), carried on the
+	// proto's has_local_copy field and sourced SOLELY from Periscope — the catalog's frozen_at-derived
+	// value must never masquerade as placement. Clear it first so a missing/failed overlay reports null
+	// (unknown placement), then overlay from actual placement.
+	artifact.HasLocalCopy = nil
 	if l := loaders.FromContext(ctx); l != nil && l.ArtifactLifecycle != nil {
-		state, err := l.ArtifactLifecycle.Load(ctx, tenantID, asset.ArtifactHash)
-		if err != nil {
-			r.Logger.WithError(err).Warn("Failed to load VOD lifecycle data")
+		if state, lerr := l.ArtifactLifecycle.Load(ctx, tenantID, artifact.GetArtifactHash()); lerr != nil {
+			r.Logger.WithError(lerr).Warn("VOD asset lifecycle overlay failed; using durable catalog lifecycle")
 		} else if state != nil {
-			// Merge lifecycle data into proto
-			enrichVodAssetWithLifecycle(asset, state)
+			applyArtifactStorageStateToStorageArtifact(artifact, state)
 		}
 	}
-
-	return protoToVodAsset(asset), nil
+	return storageArtifactToVodAsset(artifact), nil
 }
 
-// DoGetVodAssetsConnection retrieves VOD assets with Relay-style cursor pagination
-// Business metadata comes from Commodore, lifecycle data from Periscope
-func (r *Resolver) DoGetVodAssetsConnection(ctx context.Context, first *int, after *string, last *int, before *string) (*model.VodAssetsConnection, error) {
-	return r.DoGetVodAssetsConnectionFiltered(ctx, nil, first, after, last, before)
+// storageStatusToVodAssetStatus maps the catalog's derived lifecycle status string onto the
+// GraphQL VOD status enum.
+func storageStatusToVodAssetStatus(s string) model.VodAssetStatus {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "ready", "completed", "complete", "done", "synced":
+		return model.VodAssetStatusReady
+	case "processing":
+		return model.VodAssetStatusProcessing
+	case "failed", "error":
+		return model.VodAssetStatusFailed
+	case "deleted", "expired", "evicted":
+		return model.VodAssetStatusDeleted
+	default:
+		return model.VodAssetStatusUploading
+	}
 }
 
-// DoGetVodAssetsConnectionFiltered retrieves VOD assets, optionally scoped to
-// stream-derived VOD artifacts for a single source stream.
-func (r *Resolver) DoGetVodAssetsConnectionFiltered(ctx context.Context, streamID *string, first *int, after *string, last *int, before *string, input ...*model.MediaArtifactConnectionInput) (*model.VodAssetsConnection, error) {
-	// Build cursor pagination request with bidirectional support
-	paginationReq := &commonpb.CursorPaginationRequest{
-		First: int32(pagination.DefaultLimit),
+// storageArtifactToVodAsset maps a canonical catalog row onto the GraphQL VodAsset. Filename comes
+// from secondary_label (the catalog's filename/content-type projection); description and
+// error_message are projected on the catalog row (the latter from foghorn.artifacts.error_message).
+func storageArtifactToVodAsset(a *commodorepb.StorageArtifactInfo) *model.VodAsset {
+	if a == nil {
+		return nil
 	}
-	if first != nil {
-		paginationReq.First = int32(pagination.ClampLimit(*first))
+	vodID := a.GetArtifactHash()
+	if vodID == "" {
+		vodID = a.GetId()
 	}
-	if after != nil && *after != "" {
-		paginationReq.After = after
+	resolution, videoCodec, audioCodec, bitrateKbps := catalogview.TrackSummary(a.GetTracks())
+	asset := &model.VodAsset{
+		ID:              globalid.Encode(globalid.TypeVodAsset, vodID),
+		ArtifactHash:    a.GetArtifactHash(),
+		PlaybackID:      a.GetPlaybackId(),
+		Status:          storageStatusToVodAssetStatus(a.GetStatus()),
+		StorageLocation: a.GetStorageLocation(),
+		// hasLocalCopy is a placement fact: preserve the pointer so nil = live placement overlay
+		// unavailable (unknown), NOT "no local copy". isSynced/isFinalized are durable catalog facts.
+		IsSynced:        a.GetIsSynced(),
+		IsFinalized:     a.GetIsFinalized(),
+		HasLocalCopy:    a.HasLocalCopy,
+		CreatedAt:       a.GetCreatedAt().AsTime(),
+		UpdatedAt:       a.GetUpdatedAt().AsTime(),
+		Resolution:      resolution,
+		VideoCodec:      videoCodec,
+		AudioCodec:      audioCodec,
+		BitrateKbps:     bitrateKbps,
+		ThumbnailAssets: a.GetThumbnailAssets(),
 	}
-	if last != nil {
-		paginationReq.Last = int32(pagination.ClampLimit(*last))
+	if v := a.GetSyncStatus(); v != "" {
+		asset.SyncStatus = &v
 	}
-	if before != nil && *before != "" {
-		paginationReq.Before = before
+	if v := a.GetStreamId(); v != "" {
+		asset.StreamID = &v
 	}
-
-	// Check for demo mode
-	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo VOD assets connection")
-		assets := demo.GenerateVodAssets()
-		return r.buildVodAssetsConnection(assets, nil), nil
+	if v := a.GetOriginType(); v != "" {
+		asset.OriginType = &v
 	}
-
-	// Get tenant from context
-	tenantID := ctxkeys.GetTenantID(ctx)
-	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+	if v := a.GetOriginId(); v != "" {
+		asset.OriginID = &v
 	}
-
-	// 1. Get business metadata from Commodore
-	var opts commodoreclient.MediaListOptions
-	if len(input) > 0 {
-		opts = mediaListOptionsFromInput(input[0])
+	if v := a.GetTitle(); v != "" {
+		asset.Title = &v
 	}
-	resp, err := r.Clients.Commodore.ListVodAssets(ctx, tenantID, paginationReq, streamID, opts)
-	if err != nil {
-		r.Logger.WithError(err).Error("Failed to list VOD assets")
-		return nil, fmt.Errorf("failed to list VOD assets: %w", err)
+	if v := a.GetSecondaryLabel(); v != "" {
+		asset.Filename = &v
 	}
-
-	// 2. Batch enrich with lifecycle data from Periscope via ArtifactLifecycleLoader
-	if l := loaders.FromContext(ctx); l != nil && l.ArtifactLifecycle != nil && len(resp.Assets) > 0 {
-		hashes := make([]string, len(resp.Assets))
-		for i, a := range resp.Assets {
-			hashes[i] = a.ArtifactHash
-		}
-
-		states, err := l.ArtifactLifecycle.LoadMany(ctx, tenantID, hashes)
-		if err != nil {
-			r.Logger.WithError(err).Warn("Failed to load VOD lifecycle data")
-		} else {
-			// 3. Merge lifecycle data into each asset
-			for _, asset := range resp.Assets {
-				if state, ok := states[asset.ArtifactHash]; ok && state != nil {
-					enrichVodAssetWithLifecycle(asset, state)
-				}
-			}
-		}
+	if v := a.GetDescription(); v != "" {
+		asset.Description = &v
 	}
-
-	// Convert proto assets to model assets
-	assets := make([]*model.VodAsset, len(resp.Assets))
-	for i, a := range resp.Assets {
-		assets[i] = protoToVodAsset(a)
+	if v := a.GetErrorMessage(); v != "" {
+		asset.ErrorMessage = &v
 	}
-
-	return r.buildVodAssetsConnection(assets, resp.Pagination), nil
-}
-
-// buildVodAssetsConnection constructs a VodAssetsConnection from a slice of assets
-func (r *Resolver) buildVodAssetsConnection(assets []*model.VodAsset, paginationResp *commonpb.CursorPaginationResponse) *model.VodAssetsConnection {
-	edges := make([]*model.VodAssetEdge, len(assets))
-	for i, asset := range assets {
-		cursor := pagination.EncodeCursor(asset.CreatedAt, asset.ArtifactHash)
-		edges[i] = &model.VodAssetEdge{
-			Cursor: cursor,
-			Node:   asset,
-		}
+	if a.SizeBytes != nil {
+		sz := float64(a.GetSizeBytes())
+		asset.SizeBytes = &sz
 	}
-
-	// Build page info from proto pagination response
-	pageInfo := &model.PageInfo{
-		HasPreviousPage: paginationResp != nil && paginationResp.HasPreviousPage,
-		HasNextPage:     paginationResp != nil && paginationResp.HasNextPage,
+	if a.DurationMs != nil {
+		d := int(a.GetDurationMs())
+		asset.DurationMs = &d
 	}
-	if paginationResp != nil {
-		pageInfo.StartCursor = paginationResp.StartCursor
-		pageInfo.EndCursor = paginationResp.EndCursor
-	} else if len(edges) > 0 {
-		pageInfo.StartCursor = &edges[0].Cursor
-		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
+	if a.ExpiresAt != nil {
+		t := a.GetExpiresAt().AsTime()
+		asset.ExpiresAt = &t
 	}
-
-	totalCount := 0
-	if paginationResp != nil {
-		totalCount = int(paginationResp.TotalCount)
-	} else {
-		totalCount = len(assets)
-	}
-
-	edgeNodes := make([]*model.VodAsset, 0, len(edges))
-	for _, edge := range edges {
-		if edge != nil {
-			edgeNodes = append(edgeNodes, edge.Node)
-		}
-	}
-
-	return &model.VodAssetsConnection{
-		Edges:      edges,
-		Nodes:      edgeNodes,
-		PageInfo:   pageInfo,
-		TotalCount: totalCount,
-	}
+	asset.EffectiveRetention = buildVodEffectiveRetention(asset.ExpiresAt, a.RetentionSource)
+	return asset
 }
 
 // protoToVodAsset converts a proto VodAssetInfo to a GraphQL VodAsset
@@ -636,16 +610,18 @@ func protoToVodAsset(p *sharedpb.VodAssetInfo) *model.VodAsset {
 	if vodID == "" {
 		vodID = p.Id
 	}
+	// The upload-completion response carries a concrete has_local_copy (plain bool) full-local-node-copy
+	// signal; the GraphQL field is nullable, so surface the known value as a non-nil pointer.
+	hasLocalCopy := p.HasLocalCopy
 	asset := &model.VodAsset{
 		ID:              globalid.Encode(globalid.TypeVodAsset, vodID),
 		ArtifactHash:    p.ArtifactHash,
 		PlaybackID:      "",
 		Status:          status,
 		StorageLocation: p.StorageLocation,
-		IsHot:           p.GetIsHot(),
 		IsSynced:        p.GetIsSynced(),
 		IsFinalized:     p.GetIsFinalized(),
-		IsFrozen:        p.GetIsFrozen(),
+		HasLocalCopy:    &hasLocalCopy,
 		CreatedAt:       p.CreatedAt.AsTime(),
 		UpdatedAt:       p.UpdatedAt.AsTime(),
 	}
@@ -752,56 +728,5 @@ func vodRetentionSource(s *string) model.RetentionSource {
 		return model.RetentionSourceTierEntitlement
 	default:
 		return model.RetentionSourceTierEntitlement
-	}
-}
-
-// enrichVodAssetWithLifecycle merges lifecycle data from Periscope into VOD proto
-// Maps ArtifactState fields to VodAssetInfo fields
-func enrichVodAssetWithLifecycle(asset *sharedpb.VodAssetInfo, state *periscopepb.ArtifactState) {
-	if asset == nil || state == nil {
-		return
-	}
-
-	if artifactLifecycleStageCanOverrideRegistry(asset.Status.String(), state.Stage) {
-		// Map stage to VodStatus
-		switch state.Stage {
-		case "requested", "queued", "uploading":
-			asset.Status = sharedpb.VodStatus_VOD_STATUS_UPLOADING
-		case "processing":
-			asset.Status = sharedpb.VodStatus_VOD_STATUS_PROCESSING
-		case "completed", "complete", "done", "ready", "synced":
-			asset.Status = sharedpb.VodStatus_VOD_STATUS_READY
-		case "failed", "failed_terminal", "error", "lost_local":
-			asset.Status = sharedpb.VodStatus_VOD_STATUS_FAILED
-		case "deleted", "evicted":
-			asset.Status = sharedpb.VodStatus_VOD_STATUS_DELETED
-		}
-	}
-
-	// Size from lifecycle (actual file size, not expected)
-	if state.SizeBytes != nil {
-		sizeInt64 := int64(*state.SizeBytes)
-		asset.SizeBytes = &sizeInt64
-	}
-
-	if state.StorageLocation != nil && *state.StorageLocation != "" {
-		asset.StorageLocation = *state.StorageLocation
-	} else if state.FilePath != nil && *state.FilePath != "" {
-		asset.StorageLocation = "local"
-	}
-	asset.SyncStatus = state.GetSyncStatus()
-	asset.IsHot = state.GetIsHot()
-	asset.IsSynced = state.GetIsSynced()
-	asset.IsFinalized = state.GetIsFinalized()
-	asset.IsFrozen = state.GetIsFrozen()
-
-	// Error message
-	if state.ErrorMessage != nil {
-		asset.ErrorMessage = state.ErrorMessage
-	}
-
-	// Expiration from lifecycle
-	if state.ExpiresAt != nil {
-		asset.ExpiresAt = state.ExpiresAt
 	}
 }

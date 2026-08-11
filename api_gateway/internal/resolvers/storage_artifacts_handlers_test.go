@@ -10,6 +10,29 @@ import (
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 )
 
+// An unrecognized artifact kind must FAIL CLOSED (surface an error), not silently mislabel the row
+// as VOD, which would misreport its kind/kind-count/retention/playback surface.
+func TestDoStorageArtifactsConnection_UnknownKindFailsClosed(t *testing.T) {
+	commo := &clientstest.FakeCommodore{
+		ListStorageArtifactsFn: func(_ context.Context, _ *commodorepb.ListStorageArtifactsRequest) (*commodorepb.ListStorageArtifactsResponse, error) {
+			return &commodorepb.ListStorageArtifactsResponse{
+				Artifacts: []*commodorepb.StorageArtifactInfo{
+					{Kind: "clip", Id: "a1", ArtifactHash: "h1", Title: "Clip"},
+					{Kind: "sasquatch", Id: "a2", ArtifactHash: "h2", Title: "Mystery"},
+				},
+				TotalCount: 2,
+			}, nil
+		},
+	}
+	conn, err := commoB3(commo).DoStorageArtifactsConnection(clientstest.AuthedCtx("t1"), nil)
+	if err == nil {
+		t.Fatalf("expected fail-closed error for unknown kind, got conn=%+v", conn)
+	}
+	if conn != nil {
+		t.Fatalf("expected nil connection on fail-closed, got %+v", conn)
+	}
+}
+
 func TestDoStorageArtifactsConnection(t *testing.T) {
 	// Nil SizeBytes keeps storageArtifactFromProto off the Purser cost path.
 	var gotReq *commodorepb.ListStorageArtifactsRequest

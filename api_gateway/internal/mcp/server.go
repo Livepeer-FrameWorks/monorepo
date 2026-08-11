@@ -125,7 +125,7 @@ func (s *Server) registerResources() {
 	resources.RegisterClusterResources(s.mcpServer, s.serviceClients, s.resolver, s.logger)
 
 	// VOD resources
-	resources.RegisterVODResources(s.mcpServer, s.serviceClients, s.resolver, s.logger)
+	resources.RegisterVODResources(s.mcpServer, s.serviceClients, s.logger)
 
 	// Knowledge resources (video streaming expertise)
 	resources.RegisterKnowledgeResources(s.mcpServer, s.serviceClients, s.resolver, s.logger)

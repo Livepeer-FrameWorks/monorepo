@@ -1,0 +1,15 @@
+query GetTopAssets($timeRange: TimeRangeInput, $limit: Int) {
+  analytics {
+    health {
+      topAssets(timeRange: $timeRange, limit: $limit) {
+        artifactHash
+        kind
+        totalSessions
+        watchHours
+        durationS
+        title
+        playbackId
+      }
+    }
+  }
+}

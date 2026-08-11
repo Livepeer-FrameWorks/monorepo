@@ -5,7 +5,6 @@ package clientstest
 import (
 	"context"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
@@ -54,14 +53,6 @@ func (f *FakeCommodore) ListStorageArtifacts(ctx context.Context, req *commodore
 		panic("FakeCommodore.ListStorageArtifacts not stubbed")
 	}
 	return f.ListStorageArtifactsFn(ctx, req)
-}
-
-func (f *FakeCommodore) ListVodAssets(ctx context.Context, tenantID string, pagination *commonpb.CursorPaginationRequest, streamID *string, opts ...commodore.MediaListOptions) (*sharedpb.ListVodAssetsResponse, error) {
-	f.Calls++
-	if f.ListVodAssetsFn == nil {
-		panic("FakeCommodore.ListVodAssets not stubbed")
-	}
-	return f.ListVodAssetsFn(ctx, tenantID, pagination, streamID, opts...)
 }
 
 func (f *FakeCommodore) Login(ctx context.Context, req *commodorepb.LoginRequest) (*commodorepb.AuthResponse, error) {

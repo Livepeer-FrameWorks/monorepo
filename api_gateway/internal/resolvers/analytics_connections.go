@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"frameworks/api_gateway/graph/model"
@@ -3371,9 +3372,124 @@ func (r *Resolver) DoGetClientQoeSummary(ctx context.Context, streamID *string, 
 	}, nil
 }
 
-// DoGetPlayerBootSummary returns the tenant-scoped player startup summary. The
-// GraphQL PlayerBootSummary type is autobound to the proto message, so this
-// returns the proto summary directly.
+// DoGetArtifactNodeCopies returns the nodes currently holding a local copy of one
+// artifact, enriched best-effort with node geo from the infrastructure registry (geo
+// is null when the registry lookup is unavailable for the caller).
+func (r *Resolver) DoGetArtifactNodeCopies(ctx context.Context, artifactHash string) (*model.AssetNodeCopies, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
+	if middleware.IsDemoMode(ctx) {
+		return &model.AssetNodeCopies{Copies: []*model.AssetNodeCopy{}}, nil
+	}
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+	if artifactHash == "" {
+		return nil, fmt.Errorf("artifactHash required")
+	}
+
+	resp, err := r.Clients.Periscope.GetArtifactNodeCopies(ctx, tenantID, artifactHash)
+	if err != nil {
+		return nil, err
+	}
+	truncated := resp.GetTruncated()
+	if truncated {
+		// The per-request cap was hit — the list is NOT exact. Surface it in ops AND carry it
+		// through the API so the UI presents the count as a lower bound, never as an exact total.
+		r.Logger.WithField("artifact_hash", artifactHash).Warn("artifact node copies truncated at cap; list is not exhaustive")
+	}
+	copies := resp.GetCopies()
+	if len(copies) == 0 {
+		return &model.AssetNodeCopies{Copies: []*model.AssetNodeCopy{}, Truncated: truncated}, nil
+	}
+
+	// Best-effort node geo enrichment (registry may be operator-scoped). Resolve only the unique
+	// nodes that actually hold this artifact — one GetNode per unique node, run with BOUNDED
+	// CONCURRENCY rather than sequentially, so a handful (bounded by the query's LIMIT) resolves
+	// in parallel without fanning out unboundedly.
+	uniqueNodeIDs := make([]string, 0, len(copies))
+	seenNode := make(map[string]struct{}, len(copies))
+	for _, c := range copies {
+		id := c.GetNodeId()
+		if id == "" {
+			continue
+		}
+		if _, seen := seenNode[id]; seen {
+			continue
+		}
+		seenNode[id] = struct{}{}
+		uniqueNodeIDs = append(uniqueNodeIDs, id)
+	}
+	nodeGeo := make(map[string]*quartermasterpb.InfrastructureNode, len(uniqueNodeIDs))
+	var nodeGeoMu sync.Mutex
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(8)
+	for _, id := range uniqueNodeIDs {
+		id := id
+		g.Go(func() error {
+			nr, nerr := r.Clients.Quartermaster.GetNode(gctx, id)
+			if nerr != nil {
+				// A lookup failure leaves this node's cluster/geo null (— in the table). Log it so a
+				// registry outage is visible in ops rather than looking like no attribution. Never
+				// fail the whole request for a best-effort enrichment miss.
+				r.Logger.WithError(nerr).WithField("node_id", id).Warn("artifact node copies: node attribution lookup failed")
+				return nil
+			}
+			if n := nr.GetNode(); n != nil {
+				nodeGeoMu.Lock()
+				nodeGeo[id] = n
+				nodeGeoMu.Unlock()
+			}
+			return nil
+		})
+	}
+	// Every task returns nil (each logs its own lookup failure), so Wait only awaits completion.
+	_ = g.Wait() //nolint:errcheck // group never surfaces an error by construction
+
+	out := make([]*model.AssetNodeCopy, 0, len(copies))
+	for _, c := range copies {
+		m := &model.AssetNodeCopy{
+			NodeID:     c.GetNodeId(),
+			Role:       c.GetRole(),
+			IsComplete: c.GetIsComplete(),
+		}
+		if sb := c.GetSizeBytes(); sb > 0 {
+			f := float64(sb)
+			m.SizeBytes = &f
+		}
+		if ms := c.GetUpdatedAtMs(); ms > 0 {
+			t := time.UnixMilli(ms)
+			m.UpdatedAt = &t
+		}
+		if n := nodeGeo[c.GetNodeId()]; n != nil {
+			if name := n.GetNodeName(); name != "" {
+				m.NodeName = &name
+			}
+			// The node's own cluster is authoritative — the event carries no cluster.
+			if n.GetClusterId() != "" {
+				cid := n.GetClusterId()
+				m.ClusterID = &cid
+			}
+			if n.Region != nil {
+				reg := n.GetRegion()
+				m.Region = &reg
+			}
+			if n.Latitude != nil {
+				lat := n.GetLatitude()
+				m.Latitude = &lat
+			}
+			if n.Longitude != nil {
+				lng := n.GetLongitude()
+				m.Longitude = &lng
+			}
+		}
+		out = append(out, m)
+	}
+	return &model.AssetNodeCopies{Copies: out, Truncated: truncated}, nil
+}
+
 func (r *Resolver) DoGetPlayerBootSummary(ctx context.Context, streamID *string, artifactHash *string, timeRange *model.TimeRangeInput, noCache *bool) (*periscopepb.PlayerBootSummary, error) {
 	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
 		return nil, err
@@ -3649,12 +3765,134 @@ func (r *Resolver) DoGetSessionQoeTimeSeries(ctx context.Context, streamID *stri
 	return resp.GetBuckets(), nil
 }
 
+// topAssetContentTypeToKind maps a content-type token to the kind enum. ok is false for an
+// unrecognized value so callers don't silently mislabel an authoritative catalog kind as VOD.
+func topAssetContentTypeToKind(ct string) (model.StorageArtifactKind, bool) {
+	switch strings.ToLower(strings.TrimSpace(ct)) {
+	case "clip":
+		return model.StorageArtifactKindClip, true
+	case "dvr":
+		return model.StorageArtifactKindDvr, true
+	case "chapter":
+		return model.StorageArtifactKindChapter, true
+	case "vod":
+		return model.StorageArtifactKindVod, true
+	default:
+		return "", false
+	}
+}
+
+// DoListTopAssets returns the tenant's cross-kind Top Assets, ranked server-side by
+// audience sessions in the window. Stats/ranking come from Periscope; kind, title and
+// playbackId are resolved authoritatively from the catalog via a SINGLE batch exact-hash
+// lookup (artifact_hashes). An uncatalogued asset keeps the telemetry kind and degrades to a
+// null title.
+func (r *Resolver) DoListTopAssets(ctx context.Context, timeRange *model.TimeRangeInput, limit *int) ([]*model.TopAssetEntry, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
+	if middleware.IsDemoMode(ctx) {
+		return []*model.TopAssetEntry{}, nil
+	}
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	n := int32(10)
+	if limit != nil && *limit > 0 && *limit <= 100 {
+		n = int32(*limit)
+	}
+	startTime, endTime := parseTimeRange(timeRange)
+	resp, err := r.Clients.Periscope.ListTopAssets(ctx, tenantID, timePtrsToTimeRangeOpts(startTime, endTime), n)
+	if err != nil {
+		return nil, err
+	}
+
+	assets := resp.GetAssets()
+	out := make([]*model.TopAssetEntry, len(assets))
+	// kindResolved[i] is true once the entry has a KNOWN kind (from telemetry or the catalog). If ANY
+	// entry's kind is never resolved the whole request FAILS below — an unknown asset must not appear
+	// mislabeled, nor be silently dropped from a top-N (which would understate the leaderboard).
+	kindResolved := make([]bool, len(assets))
+	for i, a := range assets {
+		kind, ok := topAssetContentTypeToKind(a.GetContentType())
+		kindResolved[i] = ok
+		out[i] = &model.TopAssetEntry{
+			ArtifactHash:  a.GetArtifactHash(),
+			Kind:          kind, // "" when telemetry unknown; resolved by the catalog below or the request fails
+			TotalSessions: int(a.GetTotalSessions()),
+			WatchHours:    a.GetWatchHours(),
+			DurationS:     int(a.GetDurationS()),
+		}
+	}
+
+	// Enrich authoritatively from the catalog via a SINGLE batch exact-hash lookup covering
+	// every kind (VOD/clip/DVR/chapter) — so title, playbackId AND kind come from the canonical
+	// record, not just telemetry. One RPC replaces the former per-asset fan-out. Misses degrade
+	// to the telemetry kind and a null title.
+	hashes := make([]string, 0, len(out))
+	for _, e := range out {
+		if e.ArtifactHash != "" {
+			hashes = append(hashes, e.ArtifactHash)
+		}
+	}
+	if len(hashes) > 0 {
+		resp, err := r.Clients.Commodore.ListStorageArtifacts(ctx, &commodorepb.ListStorageArtifactsRequest{
+			ArtifactHashes: hashes,
+			Limit:          int32(len(hashes)),
+		})
+		if err != nil {
+			// A transport/resolver failure is NOT a catalog miss: we don't know the authoritative
+			// kind/title, so surfacing it as uncatalogued would present a silently-degraded list as
+			// authoritative. Fail the whole request.
+			r.Logger.WithError(err).Warn("ListTopAssets: catalog enrichment failed")
+			return nil, fmt.Errorf("catalog enrichment: %w", err)
+		}
+		byHash := make(map[string]*commodorepb.StorageArtifactInfo, len(resp.GetArtifacts()))
+		for _, a := range resp.GetArtifacts() {
+			byHash[a.GetArtifactHash()] = a
+		}
+		for i := range out {
+			e := out[i]
+			a, ok := byHash[e.ArtifactHash]
+			if !ok {
+				continue // genuine miss: asset not in the catalog — keep telemetry kind + null title
+			}
+			// Only override with a KNOWN authoritative catalog kind — never mislabel an unrecognized
+			// catalog value as VOD; a known catalog kind also resolves an unknown telemetry kind.
+			if k, ok := topAssetContentTypeToKind(a.GetKind()); ok {
+				e.Kind = k
+				kindResolved[i] = true
+			}
+			if t := a.GetTitle(); t != "" {
+				e.Title = &t
+			}
+			if p := a.GetPlaybackId(); p != "" {
+				e.PlaybackID = &p
+			}
+		}
+	}
+	// Fail closed on any entry whose kind never resolved to a known value. Silently DROPPING it would
+	// shorten a requested top-N and present a truncated leaderboard as complete (fail-silent);
+	// mislabeling it as a guessed kind is worse. An unresolved kind means malformed telemetry/catalog
+	// data — surface it loudly rather than hide it.
+	for i := range out {
+		if !kindResolved[i] {
+			r.Logger.WithField("artifact_hash", out[i].ArtifactHash).
+				Warn("ListTopAssets: asset has an unrecognized kind")
+			return nil, fmt.Errorf("top assets: asset %s has an unrecognized kind; refusing to present a partial or mislabeled leaderboard", out[i].ArtifactHash)
+		}
+	}
+	return out, nil
+}
+
 // DoListVodRetentionAssets lists the tenant's VOD assets that have retention data
 // in the window (cursor-paginated). Eligibility + stats come from Periscope; the
-// human title/playbackId are composed from the catalog by artifact_hash. There is
-// no batch-by-hash catalog API, so enrichment fans out bounded-parallel GetVodAsset
-// calls over the page (page size bounds the fan-out). An uncatalogued asset (e.g.
-// deleted but retention still within TTL) degrades to a null title/playbackId.
+// human title/playbackId are composed from the catalog by artifact_hash via a SINGLE
+// batch exact-hash lookup (ListStorageArtifacts(artifact_hashes)) — no per-asset
+// fan-out. An uncatalogued asset (e.g. deleted but retention still within TTL)
+// degrades to a null title/playbackId.
 func (r *Resolver) DoListVodRetentionAssets(ctx context.Context, first *int, after *string, last *int, before *string, timeRange *model.TimeRangeInput, noCache *bool) (*model.VodRetentionAssetConnection, error) {
 	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
 		return nil, err
@@ -3700,31 +3938,41 @@ func (r *Resolver) DoListVodRetentionAssets(ctx context.Context, first *int, aft
 		}
 	}
 
-	// Compose catalog title/playbackId by artifact_hash. Errors/misses degrade to a
-	// null title (render the hash client-side); they never fail the listing.
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(8)
-	for i := range nodes {
-		g.Go(func() error {
-			asset, err := r.Clients.Commodore.GetVodAsset(gctx, tenantID, nodes[i].ArtifactHash)
-			if err != nil {
-				r.Logger.WithError(err).WithField("artifact_hash", nodes[i].ArtifactHash).Debug("ListVodRetentionAssets: failed to hydrate VOD catalog metadata")
-				return nil
-			}
-			if asset == nil {
-				return nil
-			}
-			if title := asset.GetTitle(); title != "" {
-				nodes[i].Title = &title
-			}
-			if pid := asset.GetPlaybackId(); pid != "" {
-				nodes[i].PlaybackID = &pid
-			}
-			return nil
-		})
+	// Compose catalog title/playbackId by artifact_hash with ONE batch exact-hash lookup — the
+	// unified catalog spans every kind (VOD/clip/DVR/chapter), so no per-kind fan-out is needed.
+	// A transport error fails the listing (we can't silently hand back partial enrichment as
+	// authoritative); a genuine catalog miss degrades to a null title (rendered as the hash).
+	hashes := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		if n.ArtifactHash != "" {
+			hashes = append(hashes, n.ArtifactHash)
+		}
 	}
-	if err := g.Wait(); err != nil {
-		return nil, err
+	if len(hashes) > 0 {
+		catResp, err := r.Clients.Commodore.ListStorageArtifacts(ctx, &commodorepb.ListStorageArtifactsRequest{
+			ArtifactHashes: hashes,
+			Limit:          int32(len(hashes)),
+		})
+		if err != nil {
+			r.Logger.WithError(err).Warn("ListVodRetentionAssets: catalog enrichment failed")
+			return nil, fmt.Errorf("catalog enrichment: %w", err)
+		}
+		byHash := make(map[string]*commodorepb.StorageArtifactInfo, len(catResp.GetArtifacts()))
+		for _, a := range catResp.GetArtifacts() {
+			byHash[a.GetArtifactHash()] = a
+		}
+		for _, n := range nodes {
+			a, ok := byHash[n.ArtifactHash]
+			if !ok {
+				continue
+			}
+			if title := a.GetTitle(); title != "" {
+				n.Title = &title
+			}
+			if pid := a.GetPlaybackId(); pid != "" {
+				n.PlaybackID = &pid
+			}
+		}
 	}
 
 	edges := make([]*model.VodRetentionAssetEdge, len(nodes))
