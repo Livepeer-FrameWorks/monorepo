@@ -3,24 +3,23 @@ package cmd
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
-	"frameworks/cli/internal/releases"
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/detect"
-	serviceexec "frameworks/cli/pkg/exec"
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"github.com/spf13/cobra"
 )
 
@@ -30,47 +29,6 @@ func copyMetadata(in map[string]any) map[string]any {
 	out := make(map[string]any, len(in))
 	maps.Copy(out, in)
 	return out
-}
-
-func detectServicePlatformVersion(ctx context.Context, sshPool *ssh.Pool, host inventory.Host, runtime string, state *detect.ServiceState) (string, error) {
-	mode := serviceexec.Mode(state.Mode)
-	if mode != serviceexec.ModeDocker {
-		mode = serviceexec.ModeNative
-	}
-	shellCmd, err := serviceexec.Command(serviceexec.Spec{
-		Mode:          mode,
-		ContainerName: state.Metadata["container_name"],
-		BinaryName:    runtime,
-	}, []string{"version", "--json"})
-	if err != nil {
-		return "", err
-	}
-	cfg := &ssh.ConnectionConfig{
-		Address:  host.ExternalIP,
-		Port:     22,
-		User:     host.User,
-		HostName: host.Name,
-		Timeout:  30 * time.Second,
-	}
-	runCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	result, err := sshPool.Run(runCtx, cfg, shellCmd)
-	if err != nil {
-		return "", fmt.Errorf("ssh run: %w", err)
-	}
-	if result.ExitCode != 0 {
-		return "", fmt.Errorf("exit %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
-	}
-	var payload struct {
-		Version string `json:"version"`
-	}
-	if err := json.Unmarshal([]byte(result.Stdout), &payload); err != nil {
-		return "", fmt.Errorf("parse version output: %w", err)
-	}
-	if strings.TrimSpace(payload.Version) == "" {
-		return "", fmt.Errorf("version output did not include platform version")
-	}
-	return strings.TrimSpace(payload.Version), nil
 }
 
 // newClusterUpgradeCmd creates the upgrade command
@@ -134,7 +92,7 @@ and required data migrations must follow the target release notes.`,
 			if all {
 				return runUpgradeAll(cmd, rc, version, dryRun, skipValidation, yes, noRollback, skipMigrationCheck, skipDataMigrationCheck)
 			}
-			return runUpgrade(cmd, rc, args[0], version, dryRun, skipValidation, yes, noRollback, skipMigrationCheck, skipDataMigrationCheck)
+			return runUpgrade(cmd, rc, args[0], version, dryRun, skipValidation, yes, noRollback, skipMigrationCheck, skipDataMigrationCheck, false)
 		},
 	}
 
@@ -146,6 +104,7 @@ and required data migrations must follow the target release notes.`,
 	cmd.Flags().BoolVar(&all, "all", false, "Upgrade all enabled services in dependency order")
 	cmd.Flags().BoolVar(&skipMigrationCheck, "skip-migration-check", false, "DANGEROUS: skip pre-deploy schema migration gate (expand + prior postdeploy)")
 	cmd.Flags().BoolVar(&skipDataMigrationCheck, "skip-data-migration-check", false, "DANGEROUS: skip pre-deploy data migration gate (prior required data migrations)")
+	cmd.Flags().Bool(unsafeCLIFloorFlag, false, "UNSAFE: let a non-concrete (dev/unversioned) CLI bypass the release's min_cli_version floor")
 
 	cmd.AddCommand(newClusterUpgradePlanCmd())
 
@@ -203,7 +162,7 @@ func resolveUpgradePlanTarget(rc *resolvedCluster, version string) (string, erro
 		return "", fmt.Errorf("resolve upgrade plan target from %s/%s: %w", channel, resolvedVersion, err)
 	}
 	target := strings.TrimSpace(gitopsManifest.PlatformVersion)
-	if !concreteVersionPattern.MatchString(target) {
+	if !isConcreteVersion(target) {
 		return "", fmt.Errorf("selected release manifest has non-concrete platform_version %q; expected vX.Y.Z", target)
 	}
 	return target, nil
@@ -341,8 +300,29 @@ func printMigrationPlanPhase(cmd *cobra.Command, phase string, items []map[strin
 	}
 }
 
+// preflightReleaseTransitionBlockers refuses a direct `cluster upgrade --all` up front — before any confirmation or
+// deployment — if ANY service in the list sits on the downstream side (BeforeServices) of a required release
+// transition. Direct upgrade neither runs nor verifies transitions, so a transition-gated service must go through
+// `release apply`; checking the whole list here (not per-service inside the deploy loop) is what guarantees zero
+// mutation when the command is refused. Pure over the provided inputs (no SSH/deploy), so it is unit-testable.
+func preflightReleaseTransitionBlockers(manifest *inventory.Manifest, platformVersion string, services []string) error {
+	transitions, err := selectReleaseTransitions(platformVersion)
+	if err != nil {
+		return err
+	}
+	for _, svc := range services {
+		deploy := releaseDeployName(manifest, svc)
+		for _, t := range transitions {
+			if stringInSlice(deploy, t.BeforeServices()) {
+				return fmt.Errorf("cluster upgrade --all cannot proceed: %s (deploy %q) is gated by required release transition %q (%s), which `cluster upgrade` does not run or verify — use `frameworks cluster release apply` so the transition runs first", svc, deploy, t.ID(), t.Title())
+			}
+		}
+	}
+	return nil
+}
+
 // runUpgrade executes the upgrade command against an already-resolved manifest.
-func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version string, dryRun, skipValidation, yes, noRollback, skipMigrationCheck, skipDataMigrationCheck bool) error {
+func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version string, dryRun, skipValidation, yes, noRollback, skipMigrationCheck, skipDataMigrationCheck, withinRelease bool) error {
 	manifest := rc.Manifest
 	manifestPath := rc.ManifestPath
 	var err error
@@ -367,76 +347,21 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 		}
 	}
 
-	// Find host for service
-	var host inventory.Host
-	var found bool
-
-	// Check infrastructure — every role-backed infra service resolves to a
-	// single primary host for single-node upgrades. Multi-host infra
-	// (ensemble Yugabyte, Kafka KRaft) upgrades one host at a time via
-	// Provision's idempotent role-run; the CLI currently targets the first
-	// node in each case.
-	switch serviceName {
-	case "postgres":
-		if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
-			host, found = manifest.GetHost(pg.Host)
-		}
-	case "yugabyte":
-		if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled && pg.IsYugabyte() && len(pg.Nodes) > 0 {
-			host, found = manifest.GetHost(pg.Nodes[0].Host)
-		}
-	case "kafka":
-		if k := manifest.Infrastructure.Kafka; k != nil && k.Enabled && len(k.Brokers) > 0 {
-			host, found = manifest.GetHost(k.Brokers[0].Host)
-		}
-	case "kafka-controller":
-		if k := manifest.Infrastructure.Kafka; k != nil && k.Enabled && len(k.Controllers) > 0 {
-			host, found = manifest.GetHost(k.Controllers[0].Host)
-		}
-	case "clickhouse":
-		if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled {
-			host, found = manifest.GetHost(ch.CoordinatorHost())
-		}
-	case "redis":
-		if r := manifest.Infrastructure.Redis; r != nil && r.Enabled && len(r.Instances) > 0 {
-			host, found = manifest.GetHost(r.Instances[0].Host)
-		}
-	}
-
-	// Check application services
-	if !found {
-		if svcConfig, ok := manifest.Services[serviceName]; ok {
-			if svcConfig.Enabled {
-				host, found = firstServiceHost(manifest, svcConfig)
-			}
-		}
-	}
-
-	// Check interfaces
-	if !found {
-		if ifaceConfig, ok := manifest.Interfaces[serviceName]; ok {
-			if ifaceConfig.Enabled {
-				host, found = firstServiceHost(manifest, ifaceConfig)
-			}
-		}
-	}
-
-	// Check observability
-	if !found {
-		if obsConfig, ok := manifest.Observability[serviceName]; ok {
-			if obsConfig.Enabled {
-				host, found = firstServiceHost(manifest, obsConfig)
-			}
-		}
-	}
-
-	if !found {
+	// Resolve EVERY host the upgrade must touch. Infrastructure services resolve
+	// to their single documented primary host; application services, interfaces,
+	// and observability components resolve to all hosts they run on so HA
+	// replicas move together. Persisting the manifest version is deferred until
+	// every replica succeeds (below).
+	hosts, found := resolveUpgradeHosts(manifest, serviceName)
+	if !found || len(hosts) == 0 {
 		return fmt.Errorf("service %s not found or not enabled in manifest", serviceName)
 	}
 
-	ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Upgrading %s on %s to version: %s", serviceName, host.ExternalIP, version))
+	ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Upgrading %s (%d host(s)) to version: %s", serviceName, len(hosts), version))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	// Scale the deadline with replica count — each host runs the full
+	// provision+health cycle sequentially.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(len(hosts))*10*time.Minute)
 	defer cancel()
 
 	// Create SSH pool
@@ -444,40 +369,13 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 	sshPool := ssh.NewPool(30*time.Second, sshKey)
 	defer sshPool.Close()
 
-	// Detect current state
-	fmt.Fprintf(cmd.OutOrStdout(), "\n[1/6] Detecting current state...\n")
-	detector := detect.NewDetector(sshPool, host)
-	state, err := detector.Detect(ctx, deployName)
-	if err != nil {
-		return fmt.Errorf("failed to detect service: %w", err)
-	}
+	// At SERVING time Chandler has no runtime dependency on Foghorn's version: it serves thumbnails from a
+	// DETERMINISTIC static key with no per-request Foghorn resolver call. The planner does impose an INSTALL-time
+	// order (Chandler after the in-cell Foghorn, which establishes Chandler's /ready sentinel) — a deploy-order edge,
+	// not request-time coupling (see docs/architecture/thumbnails.md).
 
-	if !state.Exists {
-		return fmt.Errorf("service %s does not exist on %s (cannot upgrade non-existent service)", serviceName, host.ExternalIP)
-	}
-
-	// Store previous version for potential rollback
-	previousVersion := state.Version
-	previousMode := state.Mode
-	canRollback := upgradeRollbackSupported(previousVersion, previousMode)
-
-	fmt.Fprintf(cmd.OutOrStdout(), "  Current: %s (mode: %s, running: %v)\n", state.Version, state.Mode, state.Running)
-	if !canRollback {
-		fmt.Fprintf(cmd.OutOrStderr(), "  WARNING: automatic rollback disabled; current version/mode is incomplete (version=%q mode=%q)\n", previousVersion, previousMode)
-	}
-	currentPlatformVersion := ""
-	if releases.ServiceDatabase(serviceName) != "" {
-		platformVersion, platformVersionErr := detectServicePlatformVersion(ctx, sshPool, host, deployName, state)
-		if platformVersionErr != nil {
-			fmt.Fprintf(cmd.OutOrStderr(), "  WARNING: could not read current platform version from %s version --json: %v\n", deployName, platformVersionErr)
-		} else {
-			currentPlatformVersion = platformVersion
-			fmt.Fprintf(cmd.OutOrStdout(), "  Current platform: %s\n", currentPlatformVersion)
-		}
-	}
-
-	// Fetch GitOps manifest for new version
-	fmt.Fprintf(cmd.OutOrStdout(), "\n[2/6] Fetching GitOps manifest...\n")
+	// Fetch GitOps manifest once — the target version is cluster-wide.
+	fmt.Fprintf(cmd.OutOrStdout(), "\n[1/4] Fetching GitOps manifest...\n")
 	channel, resolvedVersion := gitops.ResolveVersion(version)
 	fmt.Fprintf(cmd.OutOrStdout(), "  Channel: %s, Version: %s\n", channel, resolvedVersion)
 
@@ -486,89 +384,61 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 		return fmt.Errorf("failed to fetch gitops manifest: %w", err)
 	}
 
+	// Fail closed BEFORE the migration gate / deploy if the FETCHED metadata says this CLI is too old or is missing a
+	// required reconciliation transition — an outdated CLI must not proceed on stale embedded knowledge.
+	if compatErr := validateFetchedReleaseCompatibility(cmd.ErrOrStderr(), gitopsManifest, unsafeCLIFloor(cmd)); compatErr != nil {
+		return compatErr
+	}
+
+	// Required release transitions are executed and VERIFIED only by `release apply`, which interleaves them with the
+	// dependency-ordered upgrades. A DIRECT `cluster upgrade` (including `--all`) neither runs nor proves them, so
+	// deploying a service that sits on a transition's downstream side (BeforeServices) here could start it before, e.g.,
+	// storage-descriptor-adoption and then fail its live-state boot check. Refuse and route to `release apply`, which
+	// runs the transition first. Skipped when this upgrade is already being driven BY `release apply` (withinRelease),
+	// which owns the ordering itself.
+	if !withinRelease {
+		transitions, tErr := selectReleaseTransitions(gitopsManifest.PlatformVersion)
+		if tErr != nil {
+			return tErr
+		}
+		for _, t := range transitions {
+			if stringInSlice(deployName, t.BeforeServices()) {
+				return fmt.Errorf("%s (deploy %q) is gated by required release transition %q (%s), which `cluster upgrade` does not run or verify — use `frameworks cluster release apply` so the transition runs before this service deploys", serviceName, deployName, t.ID(), t.Title())
+			}
+		}
+	}
+
 	svcInfo, err := gitopsManifest.GetServiceInfo(deployName)
 	if err != nil {
 		return fmt.Errorf("service %s not found in GitOps manifest: %w", deployName, err)
 	}
-
 	fmt.Fprintf(cmd.OutOrStdout(), "  New version: %s\n", svcInfo.Version)
-	if state.Mode == "docker" {
-		fmt.Fprintf(cmd.OutOrStdout(), "  New image: %s\n", svcInfo.FullImage)
+
+	// The fetched release manifest may list this service under rollback_disabled: its readiness contract changed such
+	// that a restored previous binary cannot pass the current gate, so automatic rollback is unsafe for this upgrade
+	// and is turned off from release data (not a permanent code exception — a release that omits the entry keeps
+	// ordinary rollback). This composes with the operator's --no-rollback.
+	if !noRollback && gitopsManifest.IsRollbackDisabled(deployName) {
+		fmt.Fprintf(cmd.OutOrStdout(), "  NOTE: this release disables automatic rollback for %s (readiness-contract change); on a health failure recover by redeploy/forward-fix.\n", deployName)
+		noRollback = true
 	}
 
-	// Check if already at target version
-	if state.Version == svcInfo.Version && !dryRun {
-		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Already at version %s, nothing to do", svcInfo.Version))
-		return nil
-	}
-
-	// Build the same ServiceConfig the real provision flow uses — role vars
-	// builders depend on env + manifest-derived metadata, not just
-	// Mode/Version/Port. A synthetic orchestrator.Task feeds buildTaskConfig.
-	task := &orchestrator.Task{
-		Name:       serviceName,
-		Type:       deployName,
-		ServiceID:  serviceName,
-		InstanceID: "",
-		Host:       host.Name,
-		Phase:      orchestrator.PhaseApplications,
-		Idempotent: true,
-	}
-	manifestDir := filepath.Dir(rc.ManifestPath)
-	sharedEnv, envErr := rc.SharedEnv()
-	if envErr != nil {
-		return fmt.Errorf("load manifest env_files: %w", envErr)
-	}
-	clusterEnvs, clusterEnvsErr := rc.ClusterEnvs()
-	if clusterEnvsErr != nil {
-		return fmt.Errorf("load cluster env_files: %w", clusterEnvsErr)
-	}
-	config, err := buildTaskConfig(task, manifest, map[string]any{}, true, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos)
-	if err != nil {
-		return fmt.Errorf("build upgrade config: %w", err)
-	}
-	if validateErr := validateProductionServiceEnv(manifest, serviceName, config.EnvVars); validateErr != nil {
-		return fmt.Errorf("upgrade target %s: %w", deployName, validateErr)
-	}
-	// Use the concrete artifact version from the selected GitOps release.
-	// Selectors such as "stable" are not installable service versions.
-	config.Version = svcInfo.Version
-	config.Mode = state.Mode
-	rc.applyReleaseMetadata(config.Metadata)
-
-	// Pre-deploy gate: schema + prior data migrations. Runs in dry-run too —
-	// gate is read-only and fail-closed semantics matter most when the
-	// operator is about to commit.
-	if gateErr := runUpgradePreDeployGate(ctx, cmd, rc, sshPool, manifest, gitopsManifest.PlatformVersion, currentPlatformVersion, serviceName, skipMigrationCheck, skipDataMigrationCheck); gateErr != nil {
+	// Pre-deploy gate once: schema + prior data migrations are cluster-level, not per-replica. Runs in dry-run too —
+	// fail-closed semantics matter most when about to commit.
+	fmt.Fprintf(cmd.OutOrStdout(), "\n[2/4] Pre-deploy gate (schema + data migrations)...\n")
+	// Migration completeness is proven SOLELY from the migration ledgers plus target-relative catalog metadata: the
+	// prior-postdeploy scan reads EVERY catalog release below the target from the ledger, so a skewed/unreadable replica
+	// version after an interrupted HA rollout can neither block nor narrow the gate — the gate reads no running-service
+	// version at all. There is no version compatibility floor either — a DB-less service (e.g. Chandler) has none; its
+	// cross-version contract is the runtime /ready sentinel, enforced at deploy by install ordering + the sentinel gate
+	// + rollback_disabled.
+	if gateErr := runUpgradePreDeployGate(ctx, cmd, rc, sshPool, manifest, gitopsManifest.PlatformVersion, serviceName, deployName, skipMigrationCheck, skipDataMigrationCheck); gateErr != nil {
 		return gateErr
 	}
 
-	if dryRun {
-		fmt.Fprintf(cmd.OutOrStdout(), "\n[DRY-RUN] Would upgrade %s from %s to %s\n", serviceName, state.Version, svcInfo.Version)
-		fmt.Fprintf(cmd.OutOrStdout(), "  Mode: %s\n", state.Mode)
-		if state.Mode == "docker" {
-			fmt.Fprintf(cmd.OutOrStdout(), "  New image: %s\n", svcInfo.FullImage)
-		}
-		prov, provErr := provisioner.GetProvisioner(deployName, sshPool)
-		if provErr != nil {
-			return fmt.Errorf("failed to get provisioner: %w", provErr)
-		}
-		checker, ok := prov.(provisioner.CheckDiffer)
-		if !ok {
-			fmt.Fprintln(cmd.OutOrStdout(), "\n(provisioner does not support --check --diff; preview above is the summary)")
-			return nil
-		}
-		fmt.Fprintln(cmd.OutOrStdout(), "\nRunning ansible-playbook --check --diff against the target...")
-		if checkErr := checker.CheckDiff(ctx, host, config); checkErr != nil {
-			return fmt.Errorf("dry-run: %w", checkErr)
-		}
-		fmt.Fprintln(cmd.OutOrStdout(), "\nDry-run complete. Use without --dry-run to execute.")
-		return nil
-	}
-
-	// Require confirmation for upgrade (destructive operation)
-	if !yes {
-		fmt.Fprintf(os.Stderr, "\nUpgrade %s from %s to %s? [y/N]: ", serviceName, previousVersion, svcInfo.Version)
+	// Confirmation once, before touching any replica.
+	if !dryRun && !yes {
+		fmt.Fprintf(os.Stderr, "\nUpgrade %s (%d host(s)) to %s? [y/N]: ", serviceName, len(hosts), svcInfo.Version)
 		reader := bufio.NewReader(os.Stdin)
 		response, errRead := reader.ReadString('\n')
 		if errRead != nil {
@@ -581,41 +451,271 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 		}
 	}
 
+	// Upgrade every replica in turn. A per-host failure aborts the sequence and
+	// returns immediately — the manifest version is NOT advanced, so a partial
+	// rollout never advertises a version the pool is not fully running.
+	fmt.Fprintf(cmd.OutOrStdout(), "\n[3/4] Deploying to %d host(s)...\n", len(hosts))
+	anyUpgraded := false
+	for i, host := range hosts {
+		if len(hosts) > 1 {
+			fmt.Fprintf(cmd.OutOrStdout(), "\n--- Replica %d/%d: %s ---\n", i+1, len(hosts), host.ExternalIP)
+		}
+		upgraded, hostErr := upgradeServiceOnHost(ctx, cmd, rc, sshPool, manifest, host, serviceName, deployName, svcInfo, dryRun, skipValidation, noRollback)
+		if hostErr != nil {
+			return hostErr
+		}
+		if upgraded {
+			anyUpgraded = true
+		}
+	}
+
+	if dryRun {
+		fmt.Fprintln(cmd.OutOrStdout(), "\nDry-run complete. Use without --dry-run to execute.")
+		return nil
+	}
+
+	// Record the deployed version on the in-memory manifest for this run's remaining steps only. It is deliberately NOT
+	// written to the local manifest, and this CLI does not persist a completed-release record anywhere: the OBSERVED
+	// version lives in actual-state stores — edge nodes self-report per-component versions into foghorn.node_components
+	// (scraped by Foghorn's reconciler) and control-plane hosts expose it via disk-local state (detect.NewDetector) —
+	// while GitOps carries DESIRED release data. Serializing the resolved manifest would also leak decrypted host
+	// inventory (see saveUpgradedVersion). So this advance is an in-session note, not a disk write or an authority.
+	fmt.Fprintf(cmd.OutOrStdout(), "\n[4/4] Noting deployed version for this session (observed state lives in node self-report/host detection; local manifest not modified)...\n")
+	if anyUpgraded {
+		saveUpgradedVersion(manifest, serviceName, svcInfo.Version, manifestPath, cmd)
+	}
+	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("%s upgraded to %s across %d host(s)", serviceName, svcInfo.Version, len(hosts)))
+
+	return nil
+}
+
+// resolveUpgradeHosts returns every host an upgrade must touch for serviceName.
+//
+// Infrastructure services resolve to their single documented primary host —
+// multi-node infra (ensemble Yugabyte, Kafka KRaft, ClickHouse) upgrades one
+// node at a time via Provision's idempotent role run, and the CLI targets the
+// coordinator/first node in each case. Application services, interfaces, and
+// observability components resolve to ALL hosts they run on so HA replicas are
+// upgraded together rather than leaving stale replicas behind.
+func resolveUpgradeHosts(manifest *inventory.Manifest, serviceName string) ([]inventory.Host, bool) {
+	switch serviceName {
+	case "postgres":
+		if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
+			if host, ok := manifest.GetHost(pg.Host); ok {
+				return []inventory.Host{host}, true
+			}
+		}
+		return nil, false
+	case "yugabyte":
+		if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled && pg.IsYugabyte() && len(pg.Nodes) > 0 {
+			if host, ok := manifest.GetHost(pg.Nodes[0].Host); ok {
+				return []inventory.Host{host}, true
+			}
+		}
+		return nil, false
+	case "kafka":
+		if k := manifest.Infrastructure.Kafka; k != nil && k.Enabled && len(k.Brokers) > 0 {
+			if host, ok := manifest.GetHost(k.Brokers[0].Host); ok {
+				return []inventory.Host{host}, true
+			}
+		}
+		return nil, false
+	case "kafka-controller":
+		if k := manifest.Infrastructure.Kafka; k != nil && k.Enabled && len(k.Controllers) > 0 {
+			if host, ok := manifest.GetHost(k.Controllers[0].Host); ok {
+				return []inventory.Host{host}, true
+			}
+		}
+		return nil, false
+	case "clickhouse":
+		if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled {
+			if host, ok := manifest.GetHost(ch.CoordinatorHost()); ok {
+				return []inventory.Host{host}, true
+			}
+		}
+		return nil, false
+	case "redis":
+		if r := manifest.Infrastructure.Redis; r != nil && r.Enabled && len(r.Instances) > 0 {
+			if host, ok := manifest.GetHost(r.Instances[0].Host); ok {
+				return []inventory.Host{host}, true
+			}
+		}
+		return nil, false
+	}
+
+	// Application services / interfaces / observability — every enabled host.
+	var svc inventory.ServiceConfig
+	var ok bool
+	if s, found := manifest.Services[serviceName]; found {
+		svc, ok = s, true
+	} else if s, found := manifest.Interfaces[serviceName]; found {
+		svc, ok = s, true
+	} else if s, found := manifest.Observability[serviceName]; found {
+		svc, ok = s, true
+	}
+	if !ok || !svc.Enabled {
+		return nil, false
+	}
+	var hosts []inventory.Host
+	for _, name := range serviceHosts(svc) {
+		if host, hostOK := manifest.GetHost(name); hostOK {
+			hosts = append(hosts, host)
+		}
+	}
+	if len(hosts) == 0 {
+		return nil, false
+	}
+	return hosts, true
+}
+
+// upgradeServiceOnHost runs the detect → build → deploy → health → rollback
+// cycle for one replica. It returns whether the host was actually upgraded
+// (false when already at target or in dry-run) so the caller can decide whether
+// to advance the manifest version. GitOps fetch, the pre-deploy gate, and the
+// operator confirmation are performed once by the caller, not per host.
+func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, sshPool *ssh.Pool, manifest *inventory.Manifest, host inventory.Host, serviceName, deployName string, svcInfo *gitops.ServiceInfo, dryRun, skipValidation, noRollback bool) (bool, error) {
+	// Detect current state on this replica.
+	fmt.Fprintf(cmd.OutOrStdout(), "  [detect] %s...\n", host.ExternalIP)
+	detector := detect.NewDetector(sshPool, host)
+	state, err := detector.Detect(ctx, deployName)
+	if err != nil {
+		return false, fmt.Errorf("failed to detect service on %s: %w", host.ExternalIP, err)
+	}
+	if !state.Exists {
+		return false, fmt.Errorf("service %s does not exist on %s (cannot upgrade non-existent service)", serviceName, host.ExternalIP)
+	}
+
+	previousVersion := state.Version
+	previousMode := state.Mode
+	canRollback := upgradeRollbackSupported(previousVersion, previousMode)
+	rollbackDisabledReason := ""
+	if !canRollback {
+		rollbackDisabledReason = fmt.Sprintf("current version/mode is incomplete (version=%q mode=%q)", previousVersion, previousMode)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "    Current: %s (mode: %s, running: %v)\n", state.Version, state.Mode, state.Running)
+	if !canRollback {
+		fmt.Fprintf(cmd.OutOrStderr(), "    WARNING: automatic rollback disabled: %s\n", rollbackDisabledReason)
+	}
+	if state.Mode == "docker" {
+		fmt.Fprintf(cmd.OutOrStdout(), "    New image: %s\n", svcInfo.FullImage)
+	}
+
+	// Skip replicas already at the target version (not in dry-run, which always
+	// runs the check-diff preview).
+	if state.Version == svcInfo.Version && !dryRun {
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("  %s already at version %s, nothing to do", host.ExternalIP, svcInfo.Version))
+		return false, nil
+	}
+
+	// Build the same ServiceConfig the real provision flow uses — role vars
+	// builders depend on env + manifest-derived metadata, not just
+	// Mode/Version/Port. A synthetic orchestrator.Task feeds buildTaskConfig.
+	//
+	// The ClusterID MUST be set: buildServiceEnvVars only layers a cluster's env_files (which carry regional
+	// STORAGE_S3_* credentials + descriptor) when task.ClusterID is set. Omitting it renders shared/empty S3 config,
+	// which the storage-backend agreement gate would then skip on an empty bucket. Resolve the service's effective
+	// cluster — its explicit assignment, else the target host's cluster.
+	clusterID := ""
+	if svcCfg, ok := manifest.Services[serviceName]; ok {
+		if len(svcCfg.Clusters) > 0 {
+			clusterID = svcCfg.Clusters[0]
+		} else if svcCfg.Cluster != "" {
+			clusterID = svcCfg.Cluster
+		}
+	}
+	if clusterID == "" {
+		clusterID = host.Cluster
+	}
+	task := &orchestrator.Task{
+		Name:       serviceName,
+		Type:       deployName,
+		ServiceID:  serviceName,
+		InstanceID: "",
+		Host:       host.Name,
+		ClusterID:  clusterID,
+		Phase:      orchestrator.PhaseApplications,
+		Idempotent: true,
+	}
+	manifestDir := filepath.Dir(rc.ManifestPath)
+	sharedEnv, envErr := rc.SharedEnv()
+	if envErr != nil {
+		return false, fmt.Errorf("load manifest env_files: %w", envErr)
+	}
+	clusterEnvs, clusterEnvsErr := rc.ClusterEnvs()
+	if clusterEnvsErr != nil {
+		return false, fmt.Errorf("load cluster env_files: %w", clusterEnvsErr)
+	}
+	config, err := buildTaskConfig(task, manifest, map[string]any{}, true, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos)
+	if err != nil {
+		return false, fmt.Errorf("build upgrade config: %w", err)
+	}
+	if validateErr := validateProductionServiceEnv(manifest, serviceName, config.EnvVars); validateErr != nil {
+		return false, fmt.Errorf("upgrade target %s: %w", deployName, validateErr)
+	}
+	// Foghorn's S3 descriptor env must agree with the cluster row Quartermaster persists and Chandler serves from —
+	// catch a divergent/repointed backend before deploying, not at Foghorn's crash-on-boot immutability guard.
+	if agreeErr := validateStorageBackendAgreement(manifest, serviceName, deployName, clusterID, config.EnvVars); agreeErr != nil {
+		return false, fmt.Errorf("upgrade target %s: %w", deployName, agreeErr)
+	}
+	// Use the concrete artifact version from the selected GitOps release; selectors such as "stable" are not
+	// installable service versions. The image is resolved from this version by the provisioner
+	// (resolveGenericImage → selectedReleaseImage), which is REGISTRY-AWARE (honors image_registry /
+	// FRAMEWORKS_IMAGE_REGISTRY) and digest-pinned — so we do NOT pin config.Image here. Pinning it to the target
+	// digest would (a) ignore the selected registry and (b) leak into the rollback config below, "restoring" the
+	// failed target image instead of the previous one; leaving Version to drive resolution restores the correct
+	// image for whichever version is being deployed (forward or rollback). Interfaces still pin by digest because
+	// their config.Version is now a real version (GetServiceInfo stamps service_version / platform version).
+	config.Version = svcInfo.Version
+	config.Mode = state.Mode
+	rc.applyReleaseMetadata(config.Metadata)
+
+	if dryRun {
+		fmt.Fprintf(cmd.OutOrStdout(), "    [DRY-RUN] Would upgrade %s from %s to %s (mode: %s)\n", host.ExternalIP, state.Version, svcInfo.Version, state.Mode)
+		prov, provErr := provisioner.GetProvisioner(deployName, sshPool)
+		if provErr != nil {
+			return false, fmt.Errorf("failed to get provisioner: %w", provErr)
+		}
+		checker, ok := prov.(provisioner.CheckDiffer)
+		if !ok {
+			fmt.Fprintln(cmd.OutOrStdout(), "    (provisioner does not support --check --diff; preview above is the summary)")
+			return false, nil
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), "    Running ansible-playbook --check --diff against the target...")
+		if checkErr := checker.CheckDiff(ctx, host, config); checkErr != nil {
+			return false, fmt.Errorf("dry-run: %w", checkErr)
+		}
+		return false, nil
+	}
+
 	// Role-backed services handle stop/restart via handlers notified on
 	// binary/config change — explicit stop between install phases would
 	// only duplicate work the role already does.
-	fmt.Fprintf(cmd.OutOrStdout(), "\n[3/6] Getting provisioner...\n")
 	prov, err := provisioner.GetProvisioner(deployName, sshPool)
 	if err != nil {
-		return fmt.Errorf("failed to get provisioner: %w", err)
+		return false, fmt.Errorf("failed to get provisioner: %w", err)
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Provisioner ready\n")
 
-	// Deploy new version
-	fmt.Fprintf(cmd.OutOrStdout(), "\n[4/6] Deploying new version...\n")
-
-	// Provision (this pulls new image or downloads new binary and starts)
-	if err := prov.Provision(ctx, host, config); err != nil {
-		return fmt.Errorf("failed to provision new version: %w", err)
+	// DEPLOY WITHOUT validating (pull image / download binary + start). Validation is a SEPARATE step below so a
+	// readiness failure lands in the health-check rollback block rather than returning here — Provision bundles the
+	// validate tag, which would abort before rollback. Deploy is part of the Provisioner contract.
+	if err := prov.Deploy(ctx, host, config); err != nil {
+		return false, fmt.Errorf("failed to provision new version on %s: %w", host.ExternalIP, err)
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ New version deployed\n")
-
 	if err := prov.Initialize(ctx, host, config); err != nil {
-		return fmt.Errorf("failed to initialize %s: %w", serviceName, err)
+		return false, fmt.Errorf("failed to initialize %s on %s: %w", serviceName, host.ExternalIP, err)
 	}
+	fmt.Fprintf(cmd.OutOrStdout(), "    ✓ Deployed %s\n", svcInfo.Version)
 
 	// Validate health
 	if !skipValidation {
-		fmt.Fprintf(cmd.OutOrStdout(), "\n[5/6] Validating health...\n")
-
 		if err := waitForHealth(ctx, func() error {
 			return prov.Validate(ctx, host, config)
 		}, 5*time.Second, 90*time.Second); err != nil {
-			fmt.Fprintf(cmd.OutOrStderr(), "  ✗ Health check failed: %v\n", err)
+			fmt.Fprintf(cmd.OutOrStderr(), "    ✗ Health check failed on %s: %v\n", host.ExternalIP, err)
 
 			// Attempt rollback unless --no-rollback is set
 			if !noRollback && canRollback {
-				fmt.Fprintf(cmd.OutOrStdout(), "\n[ROLLBACK] Reverting to previous version %s...\n", previousVersion)
+				fmt.Fprintf(cmd.OutOrStdout(), "    [ROLLBACK] Reverting %s to previous version %s...\n", host.ExternalIP, previousVersion)
 
 				// Rollback uses the same config surface but pinned to the
 				// previous version/mode the host was running before upgrade.
@@ -627,75 +727,65 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 				rc.applyReleaseMetadata(rollbackConfig.Metadata)
 
 				if cleanupErr := prov.Cleanup(ctx, host, rollbackConfig); cleanupErr != nil {
-					fmt.Fprintf(cmd.OutOrStderr(), "  ⚠ Rollback cleanup warning: %v\n", cleanupErr)
+					fmt.Fprintf(cmd.OutOrStderr(), "    ⚠ Rollback cleanup warning: %v\n", cleanupErr)
 				}
 
-				if rollbackErr := prov.Provision(ctx, host, rollbackConfig); rollbackErr != nil {
-					fmt.Fprintf(cmd.OutOrStderr(), "  ✗ Rollback failed: %v\n", rollbackErr)
+				if rollbackErr := prov.Deploy(ctx, host, rollbackConfig); rollbackErr != nil {
+					fmt.Fprintf(cmd.OutOrStderr(), "    ✗ Rollback failed: %v\n", rollbackErr)
 					fmt.Fprintln(cmd.OutOrStderr(), "\nCRITICAL: Service may be in broken state!")
 					fmt.Fprintln(cmd.OutOrStderr(), "Manual intervention required. Check logs with: frameworks cluster logs "+serviceName)
-					return fmt.Errorf("upgrade failed and rollback failed: %w", rollbackErr)
+					return false, fmt.Errorf("upgrade failed and rollback failed on %s: %w", host.ExternalIP, rollbackErr)
 				}
 
 				if err := prov.Initialize(ctx, host, rollbackConfig); err != nil {
-					fmt.Fprintf(cmd.OutOrStderr(), "  ✗ Rollback initialization failed: %v\n", err)
-					return fmt.Errorf("upgrade failed, rollback initialization failed: %w", err)
+					fmt.Fprintf(cmd.OutOrStderr(), "    ✗ Rollback initialization failed: %v\n", err)
+					return false, fmt.Errorf("upgrade failed, rollback initialization failed on %s: %w", host.ExternalIP, err)
 				}
 
 				if err := waitForHealth(ctx, func() error {
 					return prov.Validate(ctx, host, rollbackConfig)
 				}, 5*time.Second, 90*time.Second); err != nil {
-					fmt.Fprintf(cmd.OutOrStderr(), "  ✗ Rollback health check failed: %v\n", err)
-					return fmt.Errorf("upgrade failed, rollback health check failed: %w", err)
+					fmt.Fprintf(cmd.OutOrStderr(), "    ✗ Rollback health check failed: %v\n", err)
+					return false, fmt.Errorf("upgrade failed, rollback health check failed on %s: %w", host.ExternalIP, err)
 				}
 
-				fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Rolled back to %s\n", previousVersion)
-				return fmt.Errorf("upgrade failed, rolled back to %s", previousVersion)
+				fmt.Fprintf(cmd.OutOrStdout(), "    ✓ Rolled back to %s\n", previousVersion)
+				return false, fmt.Errorf("upgrade failed on %s, rolled back to %s", host.ExternalIP, previousVersion)
 			}
 			if !noRollback && !canRollback {
 				fmt.Fprintln(cmd.OutOrStderr(), "\nWARNING: Service upgraded but health check failed and automatic rollback is unavailable.")
-				fmt.Fprintln(cmd.OutOrStderr(), "Rollback requires a detected docker/native mode and concrete previous version.")
-				fmt.Fprintln(cmd.OutOrStderr(), "Check service logs with: frameworks cluster logs "+serviceName)
-				return fmt.Errorf("health validation failed; rollback unavailable")
+				fmt.Fprintf(cmd.OutOrStderr(), "Reason: %s\n", rollbackDisabledReason)
+				fmt.Fprintln(cmd.OutOrStderr(), "Recover manually: redeploy the previous version or clean-redeploy this service, then check logs with: frameworks cluster logs "+serviceName)
+				return false, fmt.Errorf("health validation failed on %s; automatic rollback unavailable (%s)", host.ExternalIP, rollbackDisabledReason)
 			}
 
 			fmt.Fprintln(cmd.OutOrStderr(), "\nWARNING: Service upgraded but health check failed!")
 			fmt.Fprintln(cmd.OutOrStderr(), "Check service logs with: frameworks cluster logs "+serviceName)
-			return fmt.Errorf("health validation failed")
+			return false, fmt.Errorf("health validation failed on %s", host.ExternalIP)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Service is healthy\n")
+		fmt.Fprintf(cmd.OutOrStdout(), "    ✓ Healthy\n")
 	}
 
-	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("%s upgraded from %s to %s", serviceName, previousVersion, svcInfo.Version))
-
-	// Persist the new version back to the cluster manifest. The resolver
-	// hands us the on-disk path of whichever source it chose; writing
-	// into a github-sourced tempdir is harmless (discarded on Cleanup).
-	saveUpgradedVersion(manifest, serviceName, svcInfo.Version, manifestPath, cmd)
-
-	return nil
+	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("  %s upgraded from %s to %s", host.ExternalIP, previousVersion, svcInfo.Version))
+	return true, nil
 }
 
-// saveUpgradedVersion updates the service version in the manifest and writes it back.
-func saveUpgradedVersion(manifest *inventory.Manifest, serviceName, newVersion, manifestPath string, cmd *cobra.Command) {
-	updated := false
+// saveUpgradedVersion records the deployed version on the IN-MEMORY manifest only, for the rest of this run's steps. It
+// does NOT write the manifest to disk: the RESOLVED manifest carries host inventory decrypted+merged from the encrypted
+// hosts file, so serializing it would materialize external IPs / SSH users / key-file metadata into plaintext
+// cluster.yaml (and clobber comments/order). No completed-release record is persisted anywhere: GitOps holds DESIRED
+// release data, and the OBSERVED version lives in actual-state stores (edge node self-report in foghorn.node_components,
+// control-plane disk-local detection) — not written by this function.
+func saveUpgradedVersion(manifest *inventory.Manifest, serviceName, newVersion, _ string, _ *cobra.Command) {
 	if svc, ok := manifest.Services[serviceName]; ok {
 		svc.Version = newVersion
 		manifest.Services[serviceName] = svc
-		updated = true
 	} else if iface, ok := manifest.Interfaces[serviceName]; ok {
 		iface.Version = newVersion
 		manifest.Interfaces[serviceName] = iface
-		updated = true
 	} else if obs, ok := manifest.Observability[serviceName]; ok {
 		obs.Version = newVersion
 		manifest.Observability[serviceName] = obs
-		updated = true
-	}
-	if updated {
-		if err := inventory.Save(manifestPath, manifest); err != nil {
-			fmt.Fprintf(cmd.OutOrStderr(), "Warning: could not save manifest: %v\n", err)
-		}
 	}
 }
 
@@ -704,6 +794,21 @@ func runUpgradeAll(cmd *cobra.Command, rc *resolvedCluster, version string, dryR
 	manifest := rc.Manifest
 	var err error
 	version = resolveUpgradeVersion(cmd, manifest, version)
+
+	// Pin the channel to ONE concrete platform version before the loop. `--all` upgrades many services in sequence; if
+	// `version` is a moving channel (e.g. "stable"), each per-service runUpgrade re-resolves it independently, so a
+	// release published mid-run would tear the cluster across two platform versions. Fetch the release manifest once
+	// here, pin that exact tag for every service, and reuse the manifest for the preflight below.
+	pinChannel, pinResolved := gitops.ResolveVersion(version)
+	gm, err := gitops.FetchFromRepositories(gitops.FetchOptions{}, rc.ReleaseRepos, pinChannel, pinResolved)
+	if err != nil {
+		return fmt.Errorf("fetch release manifest for --all: %w", err)
+	}
+	pinnedVersion := strings.TrimSpace(gm.PlatformVersion)
+	if !isConcreteVersion(pinnedVersion) {
+		return fmt.Errorf("selected release manifest has non-concrete platform_version %q; expected vX.Y.Z", pinnedVersion)
+	}
+	version = pinnedVersion
 
 	// Build dependency-ordered execution plan
 	planner := orchestrator.NewPlanner(manifest)
@@ -714,11 +819,35 @@ func runUpgradeAll(cmd *cobra.Command, rc *resolvedCluster, version string, dryR
 		return fmt.Errorf("failed to build execution plan: %w", err)
 	}
 
-	services := collectUpgradeableServices(plan)
+	// Same fail-closed classification `release apply` uses: skip pinned provision-only roles (nginx/observability) so
+	// `--all` cannot abort after partially upgrading applications, while a missing FrameWorks artifact still fails
+	// closed in runUpgrade.
+	services, err := classifyUpgradeableServices(cmd, manifest, collectUpgradeableServices(plan))
+	if err != nil {
+		return err
+	}
+
+	// Preflight: every planned artifact must resolve in the fetched manifest BEFORE upgrading any service (image digest
+	// for docker; per-host arch binary for native, detected read-only over SSH), so a missing artifact aborts while the
+	// cluster is still untouched rather than mid-sequence after earlier services moved.
+	preflightPool := ssh.NewPool(30*time.Second, stringFlag(cmd, "ssh-key").Value)
+	defer preflightPool.Close()
+	archResolver := provisioner.NewBaseProvisioner("preflight", preflightPool).DetectRemoteArch
+	if resolveErr := ensurePlannedArtifactsResolvable(cmd.Context(), gm, manifest, services, archResolver); resolveErr != nil {
+		return resolveErr
+	}
 
 	if len(services) == 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "No upgradeable services found in manifest.")
 		return nil
+	}
+
+	// Preflight transition blockers across the WHOLE list BEFORE any confirmation or mutation. The per-service refusal
+	// inside runUpgrade would otherwise let predecessors (e.g. Quartermaster) deploy before a later gated service
+	// (Foghorn/Chandler) aborts the sequence — a partial deploy. Refuse the entire command up front and route to
+	// `release apply`, which runs the transition. (Same reason the artifact preflight above runs before any mutation.)
+	if blockErr := preflightReleaseTransitionBlockers(manifest, gm.PlatformVersion, services); blockErr != nil {
+		return blockErr
 	}
 
 	ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Upgrading %d services (channel: %s, version: %s)", len(services), manifest.ResolvedChannel(), version))
@@ -745,7 +874,7 @@ func runUpgradeAll(cmd *cobra.Command, rc *resolvedCluster, version string, dryR
 	var succeeded, failed []string
 	for i, svc := range services {
 		fmt.Fprintf(cmd.OutOrStdout(), "\n[%d/%d] Upgrading %s...\n", i+1, len(services), svc)
-		if err := runUpgrade(cmd, rc, svc, version, dryRun, skipValidation, true, noRollback, skipMigrationCheck, skipDataMigrationCheck); err != nil {
+		if err := runUpgrade(cmd, rc, svc, version, dryRun, skipValidation, true, noRollback, skipMigrationCheck, skipDataMigrationCheck, false); err != nil {
 			fmt.Fprintf(cmd.OutOrStderr(), "  ✗ %s failed: %v\n", svc, err)
 			failed = append(failed, svc)
 			fmt.Fprintf(cmd.OutOrStderr(), "\nStopping upgrade sequence. Succeeded: %v, Failed: %v, Remaining: %v\n",
@@ -823,4 +952,184 @@ func collectUpgradeableServices(plan *orchestrator.ExecutionPlan) []string {
 		}
 	}
 	return services
+}
+
+// classifyUpgradeableServices is the SHARED, FAIL-CLOSED classification both `release apply` and `upgrade --all` run
+// before any mutation. It EXCLUDES only EXPLICITLY provision-only roles — pinned external/OS-managed components
+// (nginx, VictoriaMetrics, …) provisioned via `cluster provision`, which the interface/application phases also collect
+// but which carry no FrameWorks release artifact. Everything else is treated as an EXPECTED FrameWorks artifact and
+// kept; whether each kept service's image actually resolves in the fetched release manifest is verified separately by
+// ensurePlannedArtifactsResolvable (also before mutation), so a missing artifact aborts the release up front rather
+// than mid-rollout. A deploy-name that cannot be resolved is a hard error here, not an ignored skip. Alias-aware.
+func classifyUpgradeableServices(cmd *cobra.Command, manifest *inventory.Manifest, services []string) ([]string, error) {
+	var kept, skipped []string
+	for _, svcID := range services {
+		deployName, err := classificationDeployName(manifest, svcID)
+		if err != nil {
+			return nil, fmt.Errorf("cannot classify %q for release: %w", svcID, err)
+		}
+		if servicedefs.IsProvisionOnly(deployName) {
+			skipped = append(skipped, svcID)
+			continue
+		}
+		kept = append(kept, svcID)
+	}
+	if len(skipped) > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "  provisioned via `cluster provision`, not upgraded here: %s\n", strings.Join(skipped, ", "))
+	}
+	return kept, nil
+}
+
+// ensurePlannedArtifactsResolvable verifies that EVERY classified service actually RESOLVES to a deployable artifact in
+// the already-fetched release manifest BEFORE any mutation (migration expand, service upgrade, reconciliation), using
+// the service's EFFECTIVE MODE — the manifest's declared mode, or "docker" when omitted, exactly as buildTaskConfig
+// resolves it at deploy — not a bare entry-presence check and not a guess from the artifacts present:
+//   - native mode: the manifest must carry native binaries and every declared arch must have BOTH a download URL and a
+//     checksum (the full identity the deploy-time native provisioner requires). Production control services run mode:
+//     native, so checking the image here would validate an unused artifact and miss the binary the deploy installs.
+//   - docker mode: provisioner.SelectedReleaseImage must resolve — it applies the registry selector (image_registry /
+//     FRAMEWORKS_IMAGE_REGISTRY) and requires a digest, catching a missing selected-registry entry or absent digest
+//     that GetServiceInfo alone would pass.
+//
+// For native services the PER-HOST-ARCHITECTURE binary is also resolved: archResolver detects each planned host's
+// OS/arch — the SAME DetectRemoteArch the provisioner uses at deploy — read-only, before any mutation, and the release
+// must carry a binary for it (svc.GetBinary), so an arm64-only release can no longer pass preflight for an amd64 host
+// and tear the rollout later. Detection is cached per host. A nil archResolver skips only the per-host check (the
+// well-formed binary check still runs). All failures are AGGREGATED so one run reports every problem and the whole
+// release fails closed while the cluster is untouched. Registry metadata mirrors deploy: image_registry is env-driven,
+// so an empty map selects identically.
+func ensurePlannedArtifactsResolvable(ctx context.Context, gm *gitops.Manifest, manifest *inventory.Manifest, services []string, archResolver hostArchResolver) error {
+	var problems []string
+	archCache := map[string]detectedArch{}
+	for _, svcID := range services {
+		deployName, err := classificationDeployName(manifest, svcID)
+		if err != nil {
+			return fmt.Errorf("cannot resolve deploy name for planned service %q: %w", svcID, err)
+		}
+		svc, err := gm.GetServiceInfo(deployName)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("%s (%s): %v", svcID, deployName, err))
+			continue
+		}
+		// Resolve the SAME effective mode buildTaskConfig deploys with: the manifest's declared mode, or "docker" when
+		// omitted (buildTaskConfig's default). Guessing from the available artifacts would let a binaries-only entry with
+		// no declared mode pass here as native and then fail at deploy, which defaults it to docker and finds no image.
+		mode := plannedServiceMode(manifest, svcID)
+		if mode == "" {
+			mode = "docker"
+		}
+		switch mode {
+		case "native":
+			if err := validateNativeBinariesResolvable(svc); err != nil {
+				problems = append(problems, fmt.Sprintf("%s (%s): %v", svcID, deployName, err))
+				continue
+			}
+			hosts, _ := resolveUpgradeHosts(manifest, svcID)
+			problems = append(problems, nativeHostArchProblems(ctx, svc, svcID, hosts, archResolver, archCache)...)
+		case "docker":
+			if _, err := provisioner.SelectedReleaseImage(svc, nil); err != nil {
+				problems = append(problems, fmt.Sprintf("%s (%s): %v", svcID, deployName, err))
+			}
+		default:
+			// An explicitly-declared mode the deploy provisioner does not support (only docker/native exist) — it would
+			// reject this at deploy, so fail closed here too.
+			problems = append(problems, fmt.Sprintf("%s (%s): unsupported deploy mode %q", svcID, deployName, mode))
+		}
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("release artifacts do not resolve for planned service(s), refusing before mutating the cluster (upgrade the CLI/release or fix the manifest):\n  - %s", strings.Join(problems, "\n  - "))
+	}
+	return nil
+}
+
+// hostArchResolver detects a host's OS and Go architecture (e.g. "linux", "amd64"). It matches
+// provisioner.BaseProvisioner.DetectRemoteArch, so the preflight resolves architecture exactly as deploy does.
+type hostArchResolver func(ctx context.Context, host inventory.Host) (osName, arch string, err error)
+
+// detectedArch caches one host's resolution (or its failure) so hosts shared by several services are probed once.
+type detectedArch struct {
+	os, arch string
+	err      error
+}
+
+// nativeHostArchProblems confirms the release carries a binary for the detected OS/arch of every host the native
+// service will land on — the same per-host selection deploy performs (resolveGenericBinary → svc.GetBinary), done
+// read-only before mutation. A detection failure is itself a problem (fail closed: an unreachable/unknowable host
+// cannot be proven deployable). With no resolver or no hosts the per-host check is skipped.
+func nativeHostArchProblems(ctx context.Context, svc *gitops.ServiceInfo, svcID string, hosts []inventory.Host, archResolver hostArchResolver, cache map[string]detectedArch) []string {
+	if archResolver == nil || len(hosts) == 0 {
+		return nil
+	}
+	var problems []string
+	for _, h := range hosts {
+		da, seen := cache[h.ExternalIP]
+		if !seen {
+			os, arch, err := archResolver(ctx, h)
+			da = detectedArch{os: os, arch: arch, err: err}
+			cache[h.ExternalIP] = da
+		}
+		if da.err != nil {
+			problems = append(problems, fmt.Sprintf("%s: cannot detect architecture of host %s: %v", svcID, h.ExternalIP, da.err))
+			continue
+		}
+		if _, err := svc.GetBinary(da.os, da.arch); err != nil {
+			problems = append(problems, fmt.Sprintf("%s: release has no %s-%s binary for host %s", svcID, da.os, da.arch, h.ExternalIP))
+		}
+	}
+	return problems
+}
+
+// plannedServiceMode returns the deploy mode declared for svcID in the manifest. It returns "" both when svcID is not a
+// manifest service/interface/observability entry AND when the entry declares no mode; callers treat "" as the deploy
+// default (docker), which is what buildTaskConfig also does for an omitted mode.
+func plannedServiceMode(manifest *inventory.Manifest, svcID string) string {
+	if cfg, ok := manifest.Services[svcID]; ok {
+		return strings.ToLower(strings.TrimSpace(cfg.Mode))
+	}
+	if cfg, ok := manifest.Interfaces[svcID]; ok {
+		return strings.ToLower(strings.TrimSpace(cfg.Mode))
+	}
+	if cfg, ok := manifest.Observability[svcID]; ok {
+		return strings.ToLower(strings.TrimSpace(cfg.Mode))
+	}
+	return ""
+}
+
+// validateNativeBinariesResolvable proves a native service's release entry carries a well-formed binary set: at least
+// one binary, and every declared arch has BOTH a download URL and a checksum — the full identity the deploy-time native
+// provisioner requires (serviceRoleFingerprint rejects a binary whose url or checksum is empty). Per-host arch
+// selection happens at deploy, where the target architecture is detected.
+func validateNativeBinariesResolvable(svc *gitops.ServiceInfo) error {
+	if len(svc.Binaries) == 0 {
+		return fmt.Errorf("native service %s has no binary artifacts in the release manifest", svc.Name)
+	}
+	var missing []string
+	for arch, bin := range svc.Binaries {
+		if strings.TrimSpace(bin.URL) == "" {
+			missing = append(missing, arch+" (url)")
+		}
+		if strings.TrimSpace(bin.Checksum) == "" {
+			missing = append(missing, arch+" (checksum)")
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return fmt.Errorf("native service %s has incomplete binary identity for: %s", svc.Name, strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+// classificationDeployName resolves a service id to its canonical deploy name (alias-aware) for classification. A
+// resolution failure is returned as an error so a malformed alias fails closed rather than being silently kept.
+func classificationDeployName(manifest *inventory.Manifest, svcID string) (string, error) {
+	if cfg, ok := manifest.Services[svcID]; ok {
+		return resolveDeployName(svcID, cfg)
+	}
+	if cfg, ok := manifest.Interfaces[svcID]; ok {
+		return resolveDeployName(svcID, cfg)
+	}
+	if cfg, ok := manifest.Observability[svcID]; ok {
+		return resolveDeployName(svcID, cfg)
+	}
+	return svcID, nil // not a manifest service/interface/observability key: use the id verbatim
 }

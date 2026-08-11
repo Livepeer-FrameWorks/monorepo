@@ -54,11 +54,19 @@ func chStart(t *testing.T, name string) {
 		t.Fatalf("resolve config.xml: %v", err)
 	}
 	rmContainer(t, name)
+	// CLICKHOUSE_SKIP_USER_SETUP=1: without it (and with no CLICKHOUSE_USER/PASSWORD) recent images disable network
+	// access for the `default` user, so the harness never answers queries and the gate times out. This is an
+	// isolated throwaway container, so skipping user setup is safe.
 	if _, err := docker(t, "", "run", "-d", "--name", name,
+		"-e", "CLICKHOUSE_SKIP_USER_SETUP=1",
 		"-v", cfg+":/etc/clickhouse-server/config.d/zz-keeper.xml:ro",
 		chHarnessImage); err != nil {
 		t.Fatalf("start %s: %v", name, err)
 	}
+	// Register cleanup NOW — before readiness — so a readiness Fatalf below cannot leak the container + its volume
+	// (the caller installs its defer only after this returns). A caller that also defers rmContainer double-removes
+	// harmlessly.
+	t.Cleanup(func() { rmContainer(t, name) })
 	deadline := time.Now().Add(90 * time.Second)
 	for {
 		if out, err := docker(t, "", "exec", name, "clickhouse-client", "-q", "SELECT 1"); err == nil && strings.TrimSpace(out) == "1" {

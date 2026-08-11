@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
 )
 
@@ -88,6 +89,60 @@ func TestCollectUpgradeableServices_SkipsPrivateerMeshRole(t *testing.T) {
 	}
 	if got[0] != "bridge" {
 		t.Fatalf("expected [bridge], got %v", got)
+	}
+}
+
+// TestResolveUpgradeHosts_MultiReplicaAppReturnsAllHosts pins that `cluster upgrade` (and `--all`) resolves EVERY
+// replica of an HA service, not just the first host — otherwise an upgrade would leave stale replicas behind. A
+// two-Foghorn / two-Chandler cluster must resolve to every replica, in manifest order, while single-primary
+// infrastructure still resolves to exactly one host.
+func TestResolveUpgradeHosts_MultiReplicaAppReturnsAllHosts(t *testing.T) {
+	t.Parallel()
+
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"edge-a": {Name: "edge-a", ExternalIP: "10.0.0.1", Cluster: "media-us"},
+			"edge-b": {Name: "edge-b", ExternalIP: "10.0.0.2", Cluster: "media-us"},
+			"db-a":   {Name: "db-a", ExternalIP: "10.0.0.9", Cluster: "core"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn":  {Enabled: true, Hosts: []string{"edge-a", "edge-b"}},
+			"chandler": {Enabled: true, Hosts: []string{"edge-a", "edge-b"}},
+			"disabled": {Enabled: false, Hosts: []string{"edge-a"}},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Postgres: &inventory.PostgresConfig{Enabled: true, Host: "db-a"},
+		},
+	}
+
+	for _, svc := range []string{"foghorn", "chandler"} {
+		hosts, found := resolveUpgradeHosts(manifest, svc)
+		if !found {
+			t.Fatalf("%s: expected to resolve hosts", svc)
+		}
+		got := []string{}
+		for _, h := range hosts {
+			got = append(got, h.Name)
+		}
+		if len(got) != 2 || got[0] != "edge-a" || got[1] != "edge-b" {
+			t.Fatalf("%s: expected [edge-a edge-b] in order, got %v", svc, got)
+		}
+	}
+
+	// Single-primary infrastructure resolves to exactly one host.
+	pgHosts, pgFound := resolveUpgradeHosts(manifest, "postgres")
+	if !pgFound || len(pgHosts) != 1 || pgHosts[0].Name != "db-a" {
+		t.Fatalf("postgres: expected single host [db-a], got found=%v hosts=%v", pgFound, pgHosts)
+	}
+
+	// A disabled service resolves to nothing.
+	if _, found := resolveUpgradeHosts(manifest, "disabled"); found {
+		t.Fatalf("disabled: expected no hosts")
+	}
+
+	// An unknown service resolves to nothing.
+	if _, found := resolveUpgradeHosts(manifest, "does-not-exist"); found {
+		t.Fatalf("unknown: expected no hosts")
 	}
 }
 

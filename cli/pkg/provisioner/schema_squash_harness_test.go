@@ -54,10 +54,12 @@ func requireDocker(t *testing.T) {
 	}
 }
 
-// rmContainer force-removes a container, ignoring errors (used in cleanup).
+// rmContainer force-removes a container AND its anonymous volumes, ignoring errors (used in cleanup). -v matters:
+// the postgres/clickhouse images declare data VOLUMEs, so `rm -f` alone leaks one per run until the Docker VM
+// fills and containers fail with ENOSPC.
 func rmContainer(t *testing.T, name string) {
 	t.Helper()
-	_, _ = docker(t, "", "rm", "-f", name)
+	_, _ = docker(t, "", "rm", "-fv", name)
 }
 
 // collapseWS collapses all runs of whitespace to a single space and trims.

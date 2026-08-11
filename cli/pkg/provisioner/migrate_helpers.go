@@ -3,6 +3,8 @@ package provisioner
 import (
 	"fmt"
 
+	"frameworks/cli/internal/releases"
+
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 )
 
@@ -45,6 +47,9 @@ func BuildMigrationItemsForDatabases(databases []SchemaDatabase, phase, targetVe
 // the embedded tree (which the consolidation floor + deletion change over time).
 func buildMigrationItemsFromList(all []Migration, databases []SchemaDatabase, phase, targetVersion string) []map[string]any {
 	bySource := targetsBySource(databases)
+	// Compare against the target's BASE version: a canary (e.g. v0.2.97-rc1, which sorts BEFORE the final v0.2.97)
+	// still runs every migration the v0.2.97 line introduces — the rc binary needs that schema.
+	baseTarget := releases.BaseVersion(targetVersion)
 
 	items := make([]map[string]any, 0, len(all))
 	for _, m := range all {
@@ -58,7 +63,7 @@ func buildMigrationItemsFromList(all []Migration, databases []SchemaDatabase, ph
 		if len(targets) == 0 {
 			continue
 		}
-		if compareSemver(m.Version, targetVersion) > 0 {
+		if compareSemver(m.Version, baseTarget) > 0 {
 			continue
 		}
 		for _, target := range targets {
@@ -184,6 +189,7 @@ func BuildClickHouseMigrationItems(dbNames []string, phase, targetVersion string
 	for _, db := range dbNames {
 		enabledDBs[db] = true
 	}
+	baseTarget := releases.BaseVersion(targetVersion)
 	items := make([]map[string]any, 0, len(all))
 	for _, m := range all {
 		if m.Phase != phase || !enabledDBs[m.Database] {
@@ -192,7 +198,7 @@ func BuildClickHouseMigrationItems(dbNames []string, phase, targetVersion string
 		if belowBaselineFloor(m) {
 			continue
 		}
-		if compareSemver(m.Version, targetVersion) > 0 {
+		if compareSemver(m.Version, baseTarget) > 0 {
 			continue
 		}
 		items = append(items, map[string]any{

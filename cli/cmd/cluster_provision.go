@@ -112,6 +112,7 @@ save a default, or pass them explicitly.`,
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show plan without executing")
 	cmd.Flags().BoolVar(&force, "force", false, "Force re-provision even if exists")
 	cmd.Flags().BoolVar(&ignoreValidation, "ignore-validation", false, "Continue even if health validation fails (DANGEROUS)")
+	cmd.Flags().Bool(unsafeCLIFloorFlag, false, "UNSAFE: let a non-concrete (dev/unversioned) CLI bypass the release's min_cli_version floor")
 
 	cmd.Flags().String("bootstrap-admin-email", "", "Create an initial operator user with this email")
 	cmd.Flags().String("bootstrap-admin-password", "", "Plaintext password for bootstrap admin (prefer --bootstrap-admin-password-env or --bootstrap-admin-password-file)")
@@ -164,6 +165,10 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, 
 		return fmt.Errorf("invalid manifest: %w", err)
 	}
 
+	if err := validateClusteredFoghornDatabases(manifest); err != nil {
+		return fmt.Errorf("invalid manifest: %w", err)
+	}
+
 	if phaseRequiresGatewayMeshValidation(phase) {
 		if err := validateGatewayMeshCoverage(manifest); err != nil {
 			return fmt.Errorf("invalid manifest: %w", err)
@@ -183,6 +188,20 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, 
 		fmt.Fprintf(out, "Platform release: %s -> %s\n\n", releaseSelector, releaseVersion)
 	} else {
 		fmt.Fprintf(out, "Platform release: %s\n\n", releaseVersion)
+	}
+
+	// Clean install is the from-scratch path, so it must honor the SAME fetched-release compatibility gate as
+	// `release apply` / `cluster upgrade`: fetch the concrete release manifest and fail closed if this CLI is below the
+	// release's min_cli_version or is missing a required reconciliation transition, BEFORE planning or mutating
+	// anything. Without this a too-old CLI could greenfield-install a release whose transitions it cannot run. The
+	// fetch is cached, so per-task artifact resolution below reuses it rather than re-fetching.
+	provChannel, provResolved := gitops.ResolveVersion(releaseVersion)
+	provGitops, provErr := gitops.FetchFromRepositories(gitops.FetchOptions{}, rc.ReleaseRepos, provChannel, provResolved)
+	if provErr != nil {
+		return fmt.Errorf("fetch release metadata for provision compatibility check: %w", provErr)
+	}
+	if compatErr := validateFetchedReleaseCompatibility(cmd.ErrOrStderr(), provGitops, unsafeCLIFloor(cmd)); compatErr != nil {
+		return compatErr
 	}
 
 	// Load and validate shared env_files up front. SERVICE_TOKEN and other
@@ -222,6 +241,39 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, 
 		return fmt.Errorf("failed to create execution plan: %w", err)
 	}
 
+	// A clean provision does NOT run the reconciliation-transition DAG (Check→Apply→Verify) — Quartermaster's
+	// desired-state bootstrap establishes the relevant invariants (e.g. the storage descriptor) as part of install,
+	// before the in-cell downstream services deploy. Assert every REQUIRED transition for this release is satisfiable by
+	// a clean provision: one that must be EXECUTED fails closed and is routed to `release apply`, and a bootstrap-
+	// established one must name its establishing service(s) AND have them SCHEDULED in this plan (checked against the
+	// planned deploy set, not merely manifest enablement) — so a future required transition can never be silently
+	// omitted on install. Runs after planning so the planned-phase membership is known; still before any mutation.
+	provTransitions, tErr := selectReleaseTransitions(provGitops.PlatformVersion)
+	if tErr != nil {
+		return tErr
+	}
+	if satErr := assertProvisionSatisfiesTransitions(provGitops.PlatformVersion, plannedDeployNames(plan, manifest), provTransitions); satErr != nil {
+		return satErr
+	}
+
+	// Artifact preflight for the FrameWorks SERVICE tier: every planned service artifact must RESOLVE (mode-aware —
+	// image digest for docker, url+checksum per detected host arch for native) in the fetched release manifest before
+	// the dry-run summary or any node/database mutation. Provision-only roles (nginx, observability, …) are dropped by
+	// the classifier. INFRASTRUCTURE artifacts (Yugabyte/Kafka tarballs, ClickHouse/Postgres) are NOT preflighted here:
+	// each infra role owns its own resolution contract (native tarball with a version↔URL drift check, package version,
+	// or image), and each role resolves and validates its artifact when it runs.
+	provServices, provClassifyErr := classifyUpgradeableServices(cmd, manifest, collectUpgradeableServices(plan))
+	if provClassifyErr != nil {
+		return provClassifyErr
+	}
+	preflightPool := ssh.NewPool(30*time.Second, stringFlag(cmd, "ssh-key").Value)
+	preflightArchResolver := provisioner.NewBaseProvisioner("preflight", preflightPool).DetectRemoteArch
+	if resolveErr := ensurePlannedArtifactsResolvable(ctx, provGitops, manifest, provServices, preflightArchResolver); resolveErr != nil {
+		preflightPool.Close()
+		return resolveErr
+	}
+	preflightPool.Close()
+
 	// Show plan. In dry-run mode, annotate each task with a desired-vs-observed
 	// config diff summary so operators see the real change surface before applying.
 	annotateTask := func(task *orchestrator.Task) string { return "" }
@@ -252,7 +304,37 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, 
 		return nil
 	}
 
-	if err := executeProvision(ctx, cmd, manifest, plan, phase, force, ignoreValidation, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos); err != nil {
+	// `--only applications` runs against already-live infrastructure, so its plan contains NO infrastructure tasks —
+	// which means the inline database barriers inside executeProvision never fire. Initialize the (already-running)
+	// databases/Kafka/ClickHouse BEFORE the application plan executes, so an application never starts or validates
+	// against an uninitialized or stale schema. For PhaseAll the inline barriers already do this during executeProvision;
+	// postdeploy migrations and seeds still run after executeProvision below for both phases.
+	preInitRan := false
+	if phase == orchestrator.PhaseApplications {
+		ux.Heading(out, "Initializing infrastructure before applications")
+		if err := runInit(cmd, rc, "all"); err != nil {
+			return fmt.Errorf("pre-application infrastructure init: %w", err)
+		}
+		preInitRan = true
+	}
+
+	// Release-level data-migration gate for the APPLICATIONS-only phase: the pre-init above has already initialized the
+	// (already-live) databases, so it runs here — after DB init, before the application plan. For PhaseAll the gate runs
+	// INSIDE executeProvision, at the first application batch (after the in-cell DB-init barriers), so a greenfield
+	// install reaches it only once the database and its `_schema_baseline` provenance exist. No-op when the catalog
+	// declares no data migrations.
+	if phase == orchestrator.PhaseApplications {
+		dmPool := ssh.NewPool(30*time.Second, stringFlag(cmd, "ssh-key").Value)
+		// PhaseApplications: the pre-init above already initialized the (already-live) infrastructure, so no database
+		// task is pending — dbInfraPending is false.
+		dmErr := runProvisionDataMigrationPreflight(ctx, cmd, rc, dmPool, manifest, releaseVersion, false)
+		dmPool.Close()
+		if dmErr != nil {
+			return dmErr
+		}
+	}
+
+	if err := executeProvision(ctx, cmd, rc, manifest, plan, phase, force, ignoreValidation, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos, releaseVersion); err != nil {
 		return fmt.Errorf("provisioning failed: %w", err)
 	}
 
@@ -260,13 +342,26 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, 
 		rememberLastManifest(cmd, rc.ManifestPath)
 	}
 
-	initRan, seedsRan := false, false
+	initRan, seedsRan := preInitRan, false
 	if phaseRunsPostProvisionInit(phase) {
-		ux.Heading(out, "Reconciling platform data")
-		if err := runInit(cmd, rc, "all"); err != nil {
-			return fmt.Errorf("cluster init: %w", err)
+		// Skip the post-provision init pass when it already ran BEFORE the application plan (PhaseApplications, above) —
+		// re-running would be a redundant idempotent pass. PhaseAll still reconciles here as the catch-up after the
+		// inline infra-batch barriers. Postdeploy migrations and seeds run for both phases regardless.
+		if !preInitRan {
+			ux.Heading(out, "Reconciling platform data")
+			if err := runInit(cmd, rc, "all"); err != nil {
+				return fmt.Errorf("cluster init: %w", err)
+			}
+			initRan = true
 		}
-		initRan = true
+		// Postdeploy migrations converge the target release's backfills/constraints. init applies only EXPAND, so on a
+		// clean redeploy onto PRESERVED databases the release's postdeploy work (e.g. backfills, added constraints) would
+		// otherwise stay unapplied. Run it here — after services are deployed (executeProvision) and expand is applied
+		// (init), before the edge target sync and success — mirroring release apply's postdeploy phase. Pinned to the
+		// frozen concrete releaseVersion; a no-op when the target declares no postdeploy migrations.
+		if err := runMigrate(cmd, rc, false, "postdeploy", true, releaseVersion, false); err != nil {
+			return fmt.Errorf("postdeploy migrations: %w", err)
+		}
 		if err := runSeed(cmd, rc, false, true); err != nil {
 			return fmt.Errorf("cluster seed: %w", err)
 		}
@@ -315,14 +410,14 @@ func freezeProvisionReleaseManifestWithFetchOptions(manifest *inventory.Manifest
 	}
 	selector := manifest.ResolvedChannel()
 	channel, version := gitops.ResolveVersion(selector)
-	if !concreteVersionPattern.MatchString(version) {
+	if !isConcreteVersion(version) {
 		releaseManifest, err := gitops.FetchFromRepositories(opts, releaseRepos, channel, version)
 		if err != nil {
 			return nil, selector, "", fmt.Errorf("resolve platform release from cluster channel %q: %w", selector, err)
 		}
 		version = strings.TrimSpace(releaseManifest.PlatformVersion)
 	}
-	if !concreteVersionPattern.MatchString(version) {
+	if !isConcreteVersion(version) {
 		return nil, selector, version, fmt.Errorf("cluster channel %q resolved to non-concrete platform release %q", selector, version)
 	}
 	frozen := *manifest
@@ -551,8 +646,28 @@ type taskProvisionOutcome struct {
 	deferred    bool
 }
 
+// plannedDeployNames returns the set of DEPLOY names scheduled in this provision plan (the application-tier services
+// collectUpgradeableServices surfaces, resolved to deploy names). Used to hold a bootstrap-established transition's
+// AfterServices to a service that is actually being deployed THIS run — not merely enabled in the manifest.
+func plannedDeployNames(plan *orchestrator.ExecutionPlan, manifest *inventory.Manifest) map[string]bool {
+	out := map[string]bool{}
+	if plan == nil || manifest == nil {
+		return out
+	}
+	for _, id := range collectUpgradeableServices(plan) {
+		cfg, ok := manifest.Services[id]
+		if !ok {
+			continue
+		}
+		if dn, err := resolveDeployName(id, cfg); err == nil {
+			out[dn] = true
+		}
+	}
+	return out
+}
+
 // executeProvision runs the provisioning tasks
-func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, phase orchestrator.Phase, force, ignoreValidation bool, manifestDir string, sharedEnv map[string]string, clusterEnvs map[string]map[string]string, releaseRepos []string) error {
+func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, phase orchestrator.Phase, force, ignoreValidation bool, manifestDir string, sharedEnv map[string]string, clusterEnvs map[string]map[string]string, releaseRepos []string, releaseVersion string) error {
 	sshKey := stringFlag(cmd, "ssh-key").Value
 	sshPool := ssh.NewPool(30*time.Second, sshKey)
 	defer sshPool.Close()
@@ -608,7 +723,22 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 		runtimeData["internal_pki_bootstrap"] = pki
 	}
 
+	dataMigrationGateRan := false
 	for batchNum, batch := range plan.Batches {
+		// Release-level data-migration gate for PhaseAll: run ONCE, immediately before the first application batch. By
+		// this point the in-cell database-init barriers below have run in earlier batches (baseline schema + expand
+		// applied), so the databases and their `_schema_baseline` provenance exist, and no application binary has
+		// deployed yet. PhaseApplications runs the same gate before executeProvision (after its explicit pre-init).
+		if phase == orchestrator.PhaseAll && !dataMigrationGateRan && batchContainsApplicationTask(batch) {
+			dataMigrationGateRan = true
+			// The gate reads the initialized database, so every database-infrastructure task it depends on must be in an
+			// EARLIER batch. If a database task is co-scheduled with (or after) this first application batch, the gate
+			// fails closed rather than reading a half-initialized database.
+			dbInfraPending := batchesContainDatabaseInfra(plan.Batches[batchNum:])
+			if err := runProvisionDataMigrationPreflight(ctx, cmd, rc, sshPool, manifest, releaseVersion, dbInfraPending); err != nil {
+				return err
+			}
+		}
 		ux.Subheading(cmd.OutOrStdout(), fmt.Sprintf("Executing Batch %d/%d (%d task(s))", batchNum+1, len(plan.Batches), len(batch)))
 
 		type batchResult struct {
@@ -823,6 +953,36 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Kafka topic initialization failed: %v", err))
 				reportAutomaticRollbackSkipped(cmd.OutOrStdout(), "Kafka topic initialization failed")
 				return fmt.Errorf("kafka topic initialization failed: %w", err)
+			}
+		}
+
+		// Database schema + expand migrations run HERE — after the final infrastructure batch for each engine and before
+		// any application batch — so a consumer never starts against a stale schema. Each engine has its own barrier
+		// because they are distinct task types finishing in different batches; runInit re-runs them idempotently after
+		// provisioning, and running them here also means `--only infrastructure` (which never reaches runInit) still
+		// initializes every database. Each init is a no-op when its engine is disabled.
+		//
+		// ClickHouse: consumers (Periscope) read the expand schema (event_id, has_local_copy, the dedup view) from Kafka,
+		// so those objects must exist before Periscope starts.
+		if batchContainsService(batch, "clickhouse") && !remainingBatchesContainService(plan.Batches[batchNum+1:], "clickhouse") {
+			fmt.Fprintln(cmd.OutOrStdout(), "")
+			if err := initClickHouse(ctx, cmd, rc, sshPool); err != nil {
+				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("ClickHouse initialization failed: %v", err))
+				reportAutomaticRollbackSkipped(cmd.OutOrStdout(), "ClickHouse initialization failed")
+				return fmt.Errorf("clickhouse initialization failed: %w", err)
+			}
+		}
+
+		// Vanilla PostgreSQL: standalone Postgres initializes its schema HERE, so a postgres-backed application never
+		// starts against an uninitialized schema. Matched by task TYPE ("postgres") so it never double-fires for a
+		// Yugabyte manifest (Yugabyte shares ServiceID "postgres" but has its own deferred init above). initPostgres
+		// resolves the vanilla path for a non-Yugabyte manifest.
+		if batchContainsTaskType(batch, "postgres") && !remainingBatchesContainTaskType(plan.Batches[batchNum+1:], "postgres") {
+			fmt.Fprintln(cmd.OutOrStdout(), "")
+			if err := initPostgres(ctx, cmd, rc, sshPool); err != nil {
+				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("PostgreSQL initialization failed: %v", err))
+				reportAutomaticRollbackSkipped(cmd.OutOrStdout(), "PostgreSQL initialization failed")
+				return fmt.Errorf("postgres initialization failed: %w", err)
 			}
 		}
 
@@ -1120,9 +1280,53 @@ func batchContainsService(batch []*orchestrator.Task, serviceName string) bool {
 	return false
 }
 
+// batchContainsApplicationTask reports whether a batch schedules any FrameWorks application-tier service (as opposed to
+// infrastructure/mesh tasks). Used to fire the release-level data-migration gate immediately before the first such batch.
+func batchContainsApplicationTask(batch []*orchestrator.Task) bool {
+	for _, task := range batch {
+		if task.Phase == orchestrator.PhaseApplications {
+			return true
+		}
+	}
+	return false
+}
+
+// batchesContainDatabaseInfra reports whether any of the given batches schedules a primary-database infrastructure task
+// (vanilla Postgres or Yugabyte) — the engines the data-migration gate reads. Used to fail the gate closed when database
+// initialization is not guaranteed to have completed before the first application batch.
+func batchesContainDatabaseInfra(batches [][]*orchestrator.Task) bool {
+	for _, batch := range batches {
+		if batchContainsTaskType(batch, "postgres") || batchContainsTaskType(batch, "yugabyte") {
+			return true
+		}
+	}
+	return false
+}
+
 func remainingBatchesContainService(batches [][]*orchestrator.Task, serviceName string) bool {
 	for _, batch := range batches {
 		if batchContainsService(batch, serviceName) {
+			return true
+		}
+	}
+	return false
+}
+
+// batchContainsTaskType matches on task TYPE only. Needed to single out vanilla PostgreSQL ("postgres") from Yugabyte,
+// which shares the ServiceID "postgres" but has task Type "yugabyte" — batchContainsService(…, "postgres") would match
+// both.
+func batchContainsTaskType(batch []*orchestrator.Task, taskType string) bool {
+	for _, task := range batch {
+		if task.Type == taskType {
+			return true
+		}
+	}
+	return false
+}
+
+func remainingBatchesContainTaskType(batches [][]*orchestrator.Task, taskType string) bool {
+	for _, batch := range batches {
+		if batchContainsTaskType(batch, taskType) {
 			return true
 		}
 	}
@@ -1246,7 +1450,7 @@ func initializeDeferredYugabyte(ctx context.Context, cmd *cobra.Command, manifes
 	if err := prov.Initialize(ctx, host, config); err != nil {
 		return err
 	}
-	if err := applyPostgresSchemasAndMigrations(ctx, cmd.OutOrStdout(), "yugabyte", host, config, prov, schemaDatabases, targetVersion); err != nil {
+	if err := applyPostgresSchemasAndMigrations(ctx, cmd.OutOrStdout(), "yugabyte", host, config, prov, schemaDatabases, targetVersion, pool, pg, password); err != nil {
 		return err
 	}
 	ux.Success(cmd.OutOrStdout(), "YugabyteDB initialized")
@@ -4939,6 +5143,49 @@ func addSchemaDatabase(items *[]provisioner.SchemaDatabase, seen map[string]stru
 	seen[key] = struct{}{}
 }
 
+// validateClusteredFoghornDatabases fails during planning when a CLUSTERED, ALIASED Foghorn (e.g. foghorn-eu with a
+// cluster, deploying as foghorn) has no per-cell physical database declared. Each cell REQUIRES its own physical
+// Foghorn database because cell_storage_identity is a singleton — two cells sharing one database clash at first boot.
+// The DSN resolver no longer falls back to the shared deploy database for an aliased service, so an undeclared per-cell
+// database would otherwise surface only as a boot failure after a "successful" provision; refuse it up front instead.
+func validateClusteredFoghornDatabases(manifest *inventory.Manifest) error {
+	if manifest == nil {
+		return nil
+	}
+	pg := manifest.Infrastructure.Postgres
+	if pg == nil || !pg.Enabled {
+		return nil
+	}
+	declared := map[string]struct{}{}
+	for _, db := range expandedYugabyteDatabaseConfigs(pg.Databases, manifest) {
+		declared[strings.TrimSpace(db.Name)] = struct{}{}
+	}
+	for i := range pg.Instances {
+		for _, db := range pg.Instances[i].Databases {
+			declared[strings.TrimSpace(db.Name)] = struct{}{}
+		}
+	}
+	for serviceID, svc := range manifest.Services {
+		if !svc.Enabled {
+			continue
+		}
+		deploy := strings.TrimSpace(svc.Deploy)
+		if deploy == "" {
+			deploy = serviceID
+		}
+		// Only a clustered, aliased Foghorn is a cell that needs a dedicated database. A non-aliased single Foghorn
+		// (ServiceID == deploy) binds the deploy database directly; a cluster-less alias is not a cell.
+		alias := strings.ReplaceAll(serviceID, "-", "_")
+		if deploy != "foghorn" || alias == deploy || strings.TrimSpace(svc.Cluster) == "" {
+			continue
+		}
+		if _, ok := declared[alias]; !ok {
+			return fmt.Errorf("clustered Foghorn %q requires its own per-cell database %q, but it is not declared; each cell needs a separate physical Foghorn database because cell_storage_identity is a singleton. Declare the logical `foghorn` database so it expands per cell, or declare %q explicitly", serviceID, alias, alias)
+		}
+	}
+	return nil
+}
+
 func clusterScopedDatabaseAliases(db inventory.DatabaseConfig, manifest *inventory.Manifest) []inventory.DatabaseConfig {
 	logicalName := strings.TrimSpace(db.Name)
 	if logicalName == "" {
@@ -6101,6 +6348,8 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	// different clusters (e.g. foghorn-eu + foghorn-us both deploy foghorn)
 	// share the same env wiring.
 	baseName := task.Type
+	// Chandler no longer calls Foghorn: it serves thumbnails from a DETERMINISTIC static key, so it needs no
+	// FOGHORN_INTERNAL_URL (docs/architecture/thumbnails.md).
 	if baseName == "foghorn" {
 		internalPort := 18019
 		externalPort := 18029
@@ -6551,6 +6800,13 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	if err := validateProductionServiceEnv(manifest, baseName, env); err != nil {
 		return nil, err
 	}
+	// Storage-backend agreement is enforced on the PROVISION path too (not only upgrade): a fresh or re-provisioned
+	// S3-enabled Foghorn must not reach startup with an absent/inconsistent cluster descriptor and fail after
+	// mutations have begun. baseName is the deploy name (gates on "foghorn"); task.ServiceID resolves cluster
+	// membership; task.ClusterID is the effective (host-resolved) cluster.
+	if err := validateStorageBackendAgreement(manifest, task.ServiceID, baseName, task.ClusterID, env); err != nil {
+		return nil, err
+	}
 
 	if baseName == "livepeer-gateway" || baseName == "livepeer-signer" {
 		applyLivepeerRPCPool(env, livepeerServiceHostIndex(task, manifest))
@@ -6569,7 +6825,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	}
 	applySharedPostgresDatabaseDefaults(baseName, env)
 	if env["DATABASE_USER"] == "" {
-		env["DATABASE_USER"] = strings.ReplaceAll(task.ServiceID, "-", "_")
+		env["DATABASE_USER"] = strings.ReplaceAll(task.Type, "-", "_")
 	}
 	applyDeclaredPostgresDatabaseDefaults(task, manifest, env)
 
@@ -6583,14 +6839,103 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		if dbPort == "" {
 			dbPort = "5432"
 		}
-		dbName := strings.ReplaceAll(task.ServiceID, "-", "_")
+		dbName := strings.ReplaceAll(task.Type, "-", "_")
 		if env["DATABASE_NAME"] != "" {
 			dbName = env["DATABASE_NAME"]
 		}
 		env["DATABASE_URL"] = buildDatabaseURL(manifest, env["DATABASE_HOST"], dbPort, dbUser, dbPass, dbName)
 	}
 
+	// Final per-cell binding check for a clustered Foghorn: the EFFECTIVE database (from DATABASE_URL, or DATABASE_NAME)
+	// must be this cell's own alias. This runs on EVERY deployment path that builds task env (provision, apply, diff,
+	// dry-run), so an explicit DATABASE_URL/DATABASE_NAME — or a fallback to the shared deploy database — that points a
+	// cell at the wrong (or shared) database is refused here, not discovered at boot.
+	if err := validateClusteredFoghornEffectiveDB(task, manifest, env); err != nil {
+		return nil, err
+	}
+
 	return env, nil
+}
+
+// validateClusteredFoghornEffectiveDB fails when a CLUSTERED, ALIASED Foghorn's rendered env would connect to anything
+// other than its own per-cell physical database. cell_storage_identity is a singleton, so a cell bound to the shared
+// deploy database or another cell's database clashes at first boot. The planning-time validateClusteredFoghornDatabases
+// proves the per-cell databases EXIST; this proves the effective DSN SELECTS the matching one.
+func validateClusteredFoghornEffectiveDB(task *orchestrator.Task, manifest *inventory.Manifest, env map[string]string) error {
+	if task == nil || manifest == nil || task.Type != "foghorn" {
+		return nil
+	}
+	alias := strings.ReplaceAll(task.ServiceID, "-", "_")
+	if alias == task.Type {
+		return nil // a non-aliased single Foghorn binds its deploy database directly
+	}
+	svc, ok := manifest.Services[task.ServiceID]
+	if !ok || strings.TrimSpace(svc.Cluster) == "" {
+		return nil // not a cell (no cluster assignment)
+	}
+	// The invariant is about the RENDERED DSN, not whether THIS manifest provisions managed Postgres: a clustered
+	// Foghorn can receive an explicit DATABASE_URL/DATABASE_NAME pointing at an externally managed database. So the
+	// per-cell match is enforced whenever any database config is rendered, even with Postgres disabled or omitted.
+	effective := effectiveDatabaseName(env)
+	if effective == alias {
+		return nil // the good case: the rendered env binds this cell's own per-cell database
+	}
+	// effective != alias — either the DSN names a different (shared/cross-cell) database, or it names none explicitly.
+	// The ONLY safe skip is a manifest that renders NO database config at all AND provisions no managed Postgres (e.g.
+	// a partial/TLS-only manifest): there is genuinely nothing to bind. Anything else must fail closed.
+	hasDBConfig := strings.TrimSpace(env["DATABASE_URL"]) != "" || strings.TrimSpace(env["DATABASE_NAME"]) != ""
+	pgEnabled := manifest.Infrastructure.Postgres != nil && manifest.Infrastructure.Postgres.Enabled
+	if effective == "" && !hasDBConfig && !pgEnabled {
+		return nil
+	}
+	if effective == "" {
+		return fmt.Errorf("clustered Foghorn %q renders no explicit, canonical database; it must bind its own per-cell database %q with a canonical postgres URL (no dbname override, no whitespace/trailing-slash, no ambient PG* reliance)", task.ServiceID, alias)
+	}
+	return fmt.Errorf("clustered Foghorn %q would connect to database %q but must bind its own per-cell database %q (cell_storage_identity is singleton; a shared or cross-cell database clashes at boot). Fix the cell's DATABASE_URL/DATABASE_NAME", task.ServiceID, effective, alias)
+}
+
+// effectiveDatabaseName returns the database the rendered env EXPLICITLY names, WITHOUT consulting ambient PG* process
+// environment (which pgx.ParseConfig would merge in). A DATABASE_URL is accepted only in a STRICT CANONICAL form (see
+// canonicalDatabaseFromURL); anything outside that subset yields "" so the caller fails closed rather than guessing at
+// libpq semantics a partial parser cannot reproduce. With no DATABASE_URL, DATABASE_NAME is the explicit database,
+// taken VERBATIM (no trimming) so a whitespace-bearing name — a genuinely different database to the driver — is not
+// normalized into a false match.
+func effectiveDatabaseName(env map[string]string) string {
+	raw := env["DATABASE_URL"]
+	// TrimSpace is used ONLY to decide presence. The RAW value is validated byte-for-byte, because the runtime driver
+	// parses the original string (withPgxExecMode → url.Parse), so a whitespace-wrapped " postgres://…/foghorn_eu " that
+	// a trimmed check would accept fails at runtime. Passing the raw value keeps the fence and the runtime in agreement.
+	if strings.TrimSpace(raw) != "" {
+		if db, ok := canonicalDatabaseFromURL(raw); ok {
+			return db
+		}
+		return "" // non-canonical DSN (including surrounding whitespace) → fail closed
+	}
+	return env["DATABASE_NAME"]
+}
+
+// canonicalDatabaseFromURL extracts the database from a STRICT CANONICAL postgres URL DSN. To avoid maintaining a
+// partial libpq parser that could disagree with the runtime driver, it accepts ONLY the canonical rendered form and
+// refuses everything else (ok=false, caller fails closed):
+//   - the scheme must be postgres/postgresql (a keyword/value DSN, with its own quoting/escaping rules, is refused);
+//   - a `dbname` query parameter is refused outright — pgx would let it override the path (including to EMPTY), and the
+//     canonical rendered form never uses it, so its presence marks a non-canonical DSN we will not resolve;
+//   - the database is the URL path minus its single leading slash, taken VERBATIM and matched byte-for-byte against how
+//     pgx reads it; a trailing slash or embedded whitespace (which pgx PRESERVES) makes it non-canonical, so a database
+//     containing '/', a space, or a tab is refused rather than normalized away; an empty database is refused too.
+func canonicalDatabaseFromURL(dsn string) (string, bool) {
+	u, err := url.Parse(dsn)
+	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
+		return "", false
+	}
+	if u.Query().Has("dbname") {
+		return "", false
+	}
+	db := strings.TrimPrefix(u.Path, "/")
+	if db == "" || strings.ContainsAny(db, "/ \t") {
+		return "", false
+	}
+	return db, true
 }
 
 // buildClickHouseAddr returns the comma-separated mesh host:port list consumed by
@@ -6738,6 +7083,32 @@ func applyDeclaredPostgresDatabaseDefaults(task *orchestrator.Task, manifest *in
 		return
 	}
 
+	owner := db.Owner
+	if owner == "" {
+		owner = db.Name
+	}
+
+	if inst == nil {
+		// Top-level Yugabyte database: DATABASE_HOST/DATABASE_PORT were already derived from the
+		// Yugabyte nodes (pg.Nodes + pg.EffectivePort) earlier in buildServiceEnvVars, exactly as for
+		// the other top-level services (quartermaster/commodore/purser). Bind only the per-cell physical
+		// name/owner here. The per-cluster DATABASE_PASSWORD merged from the cluster env_file already
+		// matches this alias, so it is preserved unless a more specific POSTGRES_<db>_PASSWORD is declared.
+		if db.Name != "" {
+			env["DATABASE_NAME"] = db.Name
+		}
+		if owner != "" {
+			env["DATABASE_USER"] = owner
+		}
+		for _, key := range declaredPostgresPasswordEnvKeys("", db.Name, owner) {
+			if password := strings.TrimSpace(env[key]); password != "" {
+				env["DATABASE_PASSWORD"] = password
+				break
+			}
+		}
+		return
+	}
+
 	prefix := "POSTGRES_" + envNameToken(inst.Name)
 	if host := strings.TrimSpace(env[prefix+"_HOST"]); host != "" {
 		env["DATABASE_HOST"] = host
@@ -6754,10 +7125,6 @@ func applyDeclaredPostgresDatabaseDefaults(task *orchestrator.Task, manifest *in
 	}
 	if db.Name != "" {
 		env["DATABASE_NAME"] = db.Name
-	}
-	owner := db.Owner
-	if owner == "" {
-		owner = db.Name
 	}
 	if owner != "" {
 		env["DATABASE_USER"] = owner
@@ -6794,31 +7161,62 @@ func declaredPostgresPasswordEnvKeys(instancePrefix, dbName, owner string) []str
 	return keys
 }
 
+// declaredPostgresDatabaseForService resolves the physical database a task must bind. A nil
+// *inventory.PostgresInstance with ok==true signals a TOP-LEVEL Yugabyte database (declared under
+// pg.Databases, not an instances[] entry): its host/port come from the Yugabyte nodes, so the caller
+// must not derive them from an instance.
 func declaredPostgresDatabaseForService(task *orchestrator.Task, manifest *inventory.Manifest, env map[string]string) (*inventory.PostgresInstance, inventory.DatabaseConfig, bool) {
 	pg := manifest.Infrastructure.Postgres
 	if pg == nil {
 		return nil, inventory.DatabaseConfig{}, false
 	}
-	serviceDBName := strings.ReplaceAll(task.ServiceID, "-", "_")
-	targetNames := map[string]struct{}{}
-	for _, value := range []string{serviceDBName, env["DATABASE_NAME"], env["DATABASE_USER"]} {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			targetNames[value] = struct{}{}
-		}
+	// Resolve the declared database in PRECEDENCE order (first match wins):
+	//   1. an operator-set DATABASE_NAME;
+	//   2. the PER-ALIAS database (the manifest ServiceID, e.g. foghorn-eu → foghorn_eu);
+	//   3. the DEPLOY-slug database (the deploy Type, e.g. foghorn) — ONLY for a NON-ALIASED service.
+	// The deploy-slug fallback is deliberately EXCLUDED for an aliased deployment (ServiceID != Type): a clustered
+	// foghorn-eu/foghorn-us must bind its OWN per-cell physical database and must NEVER silently share the deploy
+	// database `foghorn`, because cell_storage_identity is a singleton and two cells on one database clash at first
+	// boot. A non-aliased service (ServiceID == Type, e.g. quartermaster) still binds its deploy database directly.
+	// The auto-derived DATABASE_USER (the deploy-name fallback set just before this) is deliberately NOT a candidate:
+	// it would shadow a dedicated per-alias database with the deploy name.
+	candidates := []string{
+		strings.TrimSpace(env["DATABASE_NAME"]),
+		strings.ReplaceAll(task.ServiceID, "-", "_"),
 	}
-	for i := range pg.Instances {
-		inst := &pg.Instances[i]
-		for _, db := range inst.Databases {
+	if task.ServiceID == task.Type {
+		candidates = append(candidates, strings.ReplaceAll(task.Type, "-", "_"))
+	}
+	// Top-level Yugabyte databases are declared once per LOGICAL service (e.g. `foghorn`) and expanded to the
+	// SAME per-cell physical aliases that provisioning creates. Reusing expandedYugabyteDatabaseConfigs (the exact
+	// function the schema/migration path runs against) is what keeps provisioning and runtime DSN rendering from
+	// drifting: for foghorn-eu the ServiceID candidate `foghorn_eu` matches the expanded physical alias, never the
+	// nonexistent logical `foghorn`. For an un-clustered service (quartermaster) expansion is a no-op, so the deploy
+	// slug still matches its top-level database.
+	topLevel := expandedYugabyteDatabaseConfigs(pg.Databases, manifest)
+	for _, want := range candidates {
+		if want == "" {
+			continue
+		}
+		for i := range pg.Instances {
+			inst := &pg.Instances[i]
+			for _, db := range inst.Databases {
+				owner := db.Owner
+				if owner == "" {
+					owner = db.Name
+				}
+				if db.Name == want || owner == want {
+					return inst, db, true
+				}
+			}
+		}
+		for _, db := range topLevel {
 			owner := db.Owner
 			if owner == "" {
 				owner = db.Name
 			}
-			if _, ok := targetNames[db.Name]; ok {
-				return inst, db, true
-			}
-			if _, ok := targetNames[owner]; ok {
-				return inst, db, true
+			if db.Name == want || owner == want {
+				return nil, db, true
 			}
 		}
 	}

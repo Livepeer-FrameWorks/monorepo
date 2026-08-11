@@ -136,6 +136,38 @@ func MissingMigrationsForDatabases(
 	return diffExpectedAgainstLedger(expected, ledger), nil
 }
 
+// MissingClickHouseMigrationsForDatabases is the ClickHouse analogue of MissingMigrationsForDatabases: it returns the
+// embedded ClickHouse migrations for `phase` up to `targetVersion` (excluding those folded below the baseline floor,
+// which the below-floor guard covers separately) that are ABSENT from the coordinator's _migrations ledger. Empty means
+// every such migration is applied. Reuses the shared expected-vs-ledger diff so the engines stay consistent.
+func MissingClickHouseMigrationsForDatabases(
+	ctx context.Context,
+	sshPool *ssh.Pool,
+	host inventory.Host,
+	port int,
+	password string,
+	dbNames []string,
+	phase string,
+	targetVersion string,
+) ([]MigrationKey, error) {
+	expected, err := BuildClickHouseMigrationItems(dbNames, phase, targetVersion)
+	if err != nil {
+		return nil, err
+	}
+	if len(expected) == 0 {
+		return nil, nil
+	}
+	ledger := make(map[string][]LedgerEntry, len(dbNames))
+	for _, db := range dbNames {
+		entries, rErr := ReadClickHouseMigrationLedger(ctx, sshPool, host, port, password, db)
+		if rErr != nil {
+			return nil, fmt.Errorf("%s: %w", db, rErr)
+		}
+		ledger[db] = entries
+	}
+	return diffExpectedAgainstLedger(expected, ledger), nil
+}
+
 func migrationLedgerDatabaseNames(databases []SchemaDatabase) []string {
 	out := make([]string, 0, len(databases))
 	seen := map[string]struct{}{}

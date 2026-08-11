@@ -66,6 +66,11 @@ func pgStart(t *testing.T, name string) {
 		"-e", "POSTGRES_PASSWORD=harness", pgHarnessImage); err != nil {
 		t.Fatalf("start %s: %v", name, err)
 	}
+	// Register cleanup NOW — the moment the container exists — not after readiness. A readiness Fatalf below would
+	// otherwise leak the container + its anonymous data volume, because the caller only installs its defer AFTER
+	// this function returns. (A caller that also defers rmContainer double-removes harmlessly: rm -fv on a gone
+	// container is a no-op.)
+	t.Cleanup(func() { rmContainer(t, name) })
 	deadline := time.Now().Add(90 * time.Second)
 	for {
 		if out, err := docker(t, "", "exec", name, "psql", "-U", "postgres", "-tAc", "SELECT 1"); err == nil && strings.TrimSpace(out) == "1" {

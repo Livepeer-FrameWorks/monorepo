@@ -199,7 +199,7 @@ func initPostgres(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, 
 			return fmt.Errorf("resolve init target version: %w", targetErr)
 		}
 	}
-	return applyPostgresSchemasAndMigrations(ctx, cmd.OutOrStdout(), service, host, config, prov, schemaDatabases, target)
+	return applyPostgresSchemasAndMigrations(ctx, cmd.OutOrStdout(), service, host, config, prov, schemaDatabases, target, pool, pg, password)
 }
 
 func applyPostgresSchemasAndMigrations(
@@ -211,6 +211,9 @@ func applyPostgresSchemasAndMigrations(
 	prov provisioner.Provisioner,
 	databases []provisioner.SchemaDatabase,
 	targetVersion string,
+	sshPool *ssh.Pool,
+	pg *inventory.PostgresConfig,
+	password string,
 ) error {
 	schemaItems, schemaCleanup, err := provisioner.BuildSchemaItems(databases)
 	defer schemaCleanup()
@@ -245,6 +248,26 @@ func applyPostgresSchemasAndMigrations(
 		}
 		return fmt.Errorf("target version required when embedded expand migrations exist")
 	}
+	// Baseline-floor guard: the baseline schema just established the durable _schema_baseline marker, so now — before
+	// applying any post-floor expand migration — refuse if this database is missing a below-floor migration that was
+	// folded into the baseline (it would otherwise be silently skipped and the expand migrations would build on an
+	// incomplete schema). This is the same guard `cluster migrate` runs; provisioning applies baseline+expand directly,
+	// so without it a preserved database missing a folded ledger entry would be silently stranded. Read-only; fail-closed.
+	// The engine label is always "postgres" (the postgres family, incl. Yugabyte) to match the guard's refusal message.
+	//
+	// MANDATORY here: this point is reached only when expand migrations WILL be applied (targetVersion != ""). A nil ssh
+	// pool or postgres config cannot verify the floor, and silently skipping would defeat the guard — so refuse rather
+	// than apply expand unverified. (Callers doing a schema-only apply pass no target and return above, never reaching
+	// here.) ClickHouse's equivalent guard is likewise unconditional.
+	if sshPool == nil || pg == nil {
+		return fmt.Errorf("apply %s expand migrations: baseline-floor guard requires a database connection (ssh pool and postgres config), but one was nil; refusing to apply expand without verifying the floor", service)
+	}
+	if gap, gErr := provisioner.PostgresBelowFloorGap(ctx, sshPool, host, pg, password, databases); gErr != nil {
+		return fmt.Errorf("baseline-floor check (%s): %w", service, gErr)
+	} else if len(gap) > 0 {
+		return fmt.Errorf("%s", provisioner.FormatBelowFloorRefusal("postgres", gap))
+	}
+
 	fmt.Fprintf(out, "Applying %s expand migrations up to %s...\n", service, targetVersion)
 	migrationItems, err := provisioner.BuildMigrationItemsForDatabases(databases, "expand", targetVersion)
 	if err != nil {
@@ -435,6 +458,17 @@ func initClickHouse(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster
 	if !hasMigrations {
 		return nil
 	}
+
+	// Baseline-floor guard (see applyPostgresSchemasAndMigrations): the baseline schema established the durable marker,
+	// so refuse before applying post-floor expand migrations if this database is missing a folded below-floor migration.
+	// Provisioning applies ClickHouse baseline+expand directly, so without this a preserved analytics store missing a
+	// folded ledger entry would be silently stranded. Read-only; fail-closed.
+	if gap, gErr := provisioner.ClickHouseBelowFloorGap(ctx, pool, host, ch.EffectivePort(), chPassword, ch.Databases); gErr != nil {
+		return fmt.Errorf("baseline-floor check (clickhouse): %w", gErr)
+	} else if len(gap) > 0 {
+		return fmt.Errorf("%s", provisioner.FormatBelowFloorRefusal("clickhouse", gap))
+	}
+
 	target, targetErr := resolveMigrationTarget(rc, "")
 	if targetErr != nil {
 		return fmt.Errorf("resolve init target version: %w", targetErr)

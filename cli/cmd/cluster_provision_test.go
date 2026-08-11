@@ -1352,8 +1352,17 @@ func TestBuildServiceEnvVarsClusterEnvOverridesSharedAndIsOverriddenByInline(t *
 			"media-us-1": {
 				Name:     "Media US East 1",
 				EnvFiles: []string{usEnv},
+				// Cluster S3 descriptor must agree with the Foghorn's EFFECTIVE env (inline bucket wins; endpoint from
+				// this cluster's env file). Region unset → us-east-1 on both sides.
+				S3Bucket:   "inline-override",
+				S3Endpoint: "https://r2.example",
 			},
-			"media-eu-1": {Name: "Media EU 1"},
+			"media-eu-1": {
+				Name: "Media EU 1",
+				// EU has no cluster env_file, so it inherits the shared endpoint; the inline bucket still wins.
+				S3Bucket:   "inline-override",
+				S3Endpoint: "https://platform.example",
+			},
 		},
 		Services: map[string]inventory.ServiceConfig{
 			"foghorn": {
@@ -2075,6 +2084,195 @@ func TestDatabaseConfigsToMetadataUsesPerDatabasePassword(t *testing.T) {
 	}
 	if got["metabase"] != "metabase-secret" {
 		t.Fatalf("metabase password = %q, want metabase-secret", got["metabase"])
+	}
+}
+
+// TestDeclaredPostgresDatabase_AliasedFoghornRequiresPerCellDB asserts an ALIASED Foghorn (foghorn-eu deploying
+// as foghorn) must NEVER fall back to the shared deploy database `foghorn`. Each cell needs its own physical database
+// (cell_storage_identity is singleton), so with no per-cell database declared the resolver reports "not found" rather
+// than silently binding the shared one. A non-aliased Foghorn still binds its deploy database directly.
+func TestDeclaredPostgresDatabase_AliasedFoghornRequiresPerCellDB(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Infrastructure: inventory.InfrastructureConfig{
+			Postgres: &inventory.PostgresConfig{
+				Enabled:   true,
+				Databases: []inventory.DatabaseConfig{{Name: "foghorn"}},
+			},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			// Aliased but NOT clustered, so `foghorn` stays un-expanded and only the shared DB exists.
+			"foghorn-eu": {Enabled: true, Deploy: "foghorn"},
+		},
+	}
+	aliased := &orchestrator.Task{ServiceID: "foghorn-eu", Type: "foghorn"}
+	if _, _, ok := declaredPostgresDatabaseForService(aliased, manifest, map[string]string{}); ok {
+		t.Fatal("aliased foghorn-eu must NOT fall back to the shared deploy database `foghorn`")
+	}
+	nonAliased := &orchestrator.Task{ServiceID: "foghorn", Type: "foghorn"}
+	if _, db, ok := declaredPostgresDatabaseForService(nonAliased, manifest, map[string]string{}); !ok || db.Name != "foghorn" {
+		t.Fatalf("non-aliased foghorn must bind the deploy database, got ok=%v db=%q", ok, db.Name)
+	}
+}
+
+// TestValidateClusteredFoghornDatabases pins the planning-time refusal: a clustered, aliased Foghorn without a per-cell
+// database is rejected up front, while the canonical per-cell expansion satisfies it.
+func TestValidateClusteredFoghornDatabases(t *testing.T) {
+	build := func(dbs []inventory.DatabaseConfig) *inventory.Manifest {
+		return &inventory.Manifest{
+			Infrastructure: inventory.InfrastructureConfig{
+				Postgres: &inventory.PostgresConfig{Enabled: true, Databases: dbs},
+			},
+			Services: map[string]inventory.ServiceConfig{
+				"foghorn-eu": {Enabled: true, Deploy: "foghorn", Cluster: "media-eu-1"},
+				"foghorn-us": {Enabled: true, Deploy: "foghorn", Cluster: "media-us-1"},
+			},
+		}
+	}
+	// The logical `foghorn` expands to foghorn_eu/foghorn_us per cell → satisfied.
+	if err := validateClusteredFoghornDatabases(build([]inventory.DatabaseConfig{{Name: "foghorn"}})); err != nil {
+		t.Fatalf("per-cell expansion must satisfy the check: %v", err)
+	}
+	// No Foghorn database declared → the clustered aliases have no per-cell database → refuse.
+	if err := validateClusteredFoghornDatabases(build(nil)); err == nil {
+		t.Fatal("a clustered Foghorn with no per-cell database must be rejected during planning")
+	}
+}
+
+// TestValidateClusteredFoghornEffectiveDB asserts the FINAL rendered DSN/name for a clustered Foghorn must be
+// its own per-cell database. An explicit DATABASE_NAME/DATABASE_URL — or a fallback to the shared deploy database —
+// that points a cell elsewhere is refused, on every env-building path (provision, apply, diff, dry-run).
+func TestValidateClusteredFoghornEffectiveDB(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Infrastructure: inventory.InfrastructureConfig{
+			Postgres: &inventory.PostgresConfig{Enabled: true, Databases: []inventory.DatabaseConfig{{Name: "foghorn"}}},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn-eu": {Enabled: true, Deploy: "foghorn", Cluster: "media-eu-1"},
+		},
+	}
+	eu := &orchestrator.Task{Type: "foghorn", ServiceID: "foghorn-eu"}
+
+	pass := []struct {
+		name string
+		env  map[string]string
+	}{
+		{"matching DATABASE_NAME", map[string]string{"DATABASE_NAME": "foghorn_eu"}},
+		{"matching DATABASE_URL", map[string]string{"DATABASE_URL": "postgres://u:p@h:5432/foghorn_eu?load_balance=true"}},
+	}
+	for _, c := range pass {
+		if err := validateClusteredFoghornEffectiveDB(eu, manifest, c.env); err != nil {
+			t.Errorf("%s must pass: %v", c.name, err)
+		}
+	}
+
+	refuse := []struct {
+		name string
+		env  map[string]string
+	}{
+		{"cross-cell via DATABASE_NAME", map[string]string{"DATABASE_NAME": "foghorn_us"}},
+		{"cross-cell via DATABASE_URL", map[string]string{"DATABASE_URL": "postgres://h/foghorn_us"}},
+		// pgx honors ?dbname= AFTER the path: path says foghorn_eu but the driver connects to foghorn_us. A path-only
+		// reader would wrongly pass this; the runtime pgx parser catches it.
+		{"cross-cell via dbname override", map[string]string{"DATABASE_URL": "postgres://h:5432/foghorn_eu?dbname=foghorn_us"}},
+		{"shared deploy database", map[string]string{"DATABASE_NAME": "foghorn"}},
+		{"no resolvable database", map[string]string{}},
+	}
+	for _, c := range refuse {
+		if err := validateClusteredFoghornEffectiveDB(eu, manifest, c.env); err == nil {
+			t.Errorf("%s must be refused", c.name)
+		}
+	}
+
+	// A non-aliased single Foghorn is unaffected (binds its deploy database directly).
+	solo := &orchestrator.Task{Type: "foghorn", ServiceID: "foghorn"}
+	if err := validateClusteredFoghornEffectiveDB(solo, manifest, map[string]string{"DATABASE_NAME": "foghorn"}); err != nil {
+		t.Errorf("non-aliased foghorn must be unaffected: %v", err)
+	}
+
+	// EXTERNAL database (managed Postgres disabled/omitted): the fence still applies to the rendered DSN. A clustered
+	// cell given an explicit cross-cell/shared DATABASE_URL must be refused; with no DSN at all there is nothing to bind.
+	external := &inventory.Manifest{
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn-eu": {Enabled: true, Deploy: "foghorn", Cluster: "media-eu-1"},
+		},
+	}
+	if err := validateClusteredFoghornEffectiveDB(eu, external, map[string]string{"DATABASE_URL": "postgres://h/foghorn_us"}); err == nil {
+		t.Error("external cross-cell DATABASE_URL must be refused even with managed Postgres disabled")
+	}
+	if err := validateClusteredFoghornEffectiveDB(eu, external, map[string]string{"DATABASE_URL": "postgres://h/foghorn_eu"}); err != nil {
+		t.Errorf("external matching DATABASE_URL must pass: %v", err)
+	}
+	if err := validateClusteredFoghornEffectiveDB(eu, external, map[string]string{}); err != nil {
+		t.Errorf("no DSN and no managed Postgres must be a no-op: %v", err)
+	}
+}
+
+// TestValidateClusteredFoghornEffectiveDB_IgnoresAmbientPGEnv asserts the fence reflects ONLY the explicit rendered DSN,
+// never the provisioning shell's ambient PG* environment (which pgx.ParseConfig would otherwise merge in but which the
+// deployed Foghorn does not receive). A hostile PGDATABASE must neither rescue an incomplete DSN nor change a good one.
+func TestValidateClusteredFoghornEffectiveDB_IgnoresAmbientPGEnv(t *testing.T) {
+	// Hostile ambient environment for the whole test.
+	t.Setenv("PGDATABASE", "foghorn_us")
+	t.Setenv("PGSERVICE", "foghorn-us")
+
+	manifest := &inventory.Manifest{
+		Infrastructure: inventory.InfrastructureConfig{
+			Postgres: &inventory.PostgresConfig{Enabled: true, Databases: []inventory.DatabaseConfig{{Name: "foghorn"}}},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn-eu": {Enabled: true, Deploy: "foghorn", Cluster: "media-eu-1"},
+		},
+	}
+	eu := &orchestrator.Task{Type: "foghorn", ServiceID: "foghorn-eu"}
+
+	// An explicit, correct per-cell DSN must pass even though PGDATABASE names a different cell.
+	if err := validateClusteredFoghornEffectiveDB(eu, manifest, map[string]string{"DATABASE_URL": "postgres://h:5432/foghorn_eu"}); err != nil {
+		t.Errorf("explicit foghorn_eu DSN must pass regardless of ambient PGDATABASE: %v", err)
+	}
+	// A DSN with NO explicit database must FAIL closed — the ambient PGDATABASE=foghorn_eu must NOT rescue it.
+	if err := validateClusteredFoghornEffectiveDB(eu, manifest, map[string]string{"DATABASE_URL": "postgres://h:5432/"}); err == nil {
+		t.Error("a DSN with no explicit database must fail closed, not inherit ambient PGDATABASE")
+	}
+	// Sanity: the extractor itself never reads ambient env.
+	if db, ok := canonicalDatabaseFromURL("postgres://h:5432/"); ok {
+		t.Errorf("canonicalDatabaseFromURL must reject a db-less DSN, got %q (ambient leak?)", db)
+	}
+}
+
+// TestCanonicalDatabaseFromURL pins that the DSN fence accepts ONLY the strict canonical form and refuses every state
+// the runtime pgx driver would read differently — so a partial-parser normalization can never let a cross-cell or
+// db-less DSN pass the per-cell fence.
+func TestCanonicalDatabaseFromURL(t *testing.T) {
+	accept := map[string]string{
+		"postgres://h:5432/foghorn_eu":                              "foghorn_eu",
+		"postgresql://h/foghorn_eu":                                 "foghorn_eu",
+		"postgres://u:p@h1,h2,h3/foghorn_eu?load_balance=true":      "foghorn_eu", // canonical multi-host form
+		"postgres://h/foghorn_eu?sslmode=disable&connect_timeout=5": "foghorn_eu", // non-dbname query params are fine
+	}
+	for dsn, want := range accept {
+		if db, ok := canonicalDatabaseFromURL(dsn); !ok || db != want {
+			t.Errorf("canonicalDatabaseFromURL(%q) = (%q, %v), want (%q, true)", dsn, db, ok, want)
+		}
+	}
+	// Every counterexample the driver reads differently than a partial parser would — all must be REFUSED (fail closed).
+	refuse := []string{
+		"postgres://h/foghorn_eu?dbname=",                 // pgx: empty database override; a path-fallback parser would pass foghorn_eu
+		"postgres://h/foghorn_eu?dbname=foghorn_us",       // pgx: dbname overrides path (cross-cell)
+		"postgres://h/foghorn_eu?dbname=%20foghorn_eu%20", // pgx preserves the spaces
+		"postgres://h/foghorn_eu/",                        // pgx retains the trailing slash in the database name
+		"postgres://h/%20foghorn_eu%20",                   // pgx preserves whitespace in the database name
+		"host=h dbname=foghorn_eu",                        // keyword/value DSN: quoting/escaping a Fields split cannot model
+		"postgres://h/",                                   // no database
+		"postgres://h",                                    // no path
+		"not a dsn",                                       // not a URL
+		" postgres://h/foghorn_eu",                        // leading whitespace the runtime parses verbatim
+		"postgres://h/foghorn_eu ",                        // trailing whitespace
+		" postgres://h/foghorn_eu ",                       // both
+	}
+	for _, dsn := range refuse {
+		if db, ok := canonicalDatabaseFromURL(dsn); ok {
+			t.Errorf("canonicalDatabaseFromURL(%q) must be refused, got (%q, true)", dsn, db)
+		}
 	}
 }
 

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/cli/internal/releases"
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/exec"
 	"frameworks/cli/pkg/inventory"
@@ -67,7 +66,12 @@ func newDMListCmd() *cobra.Command {
 }
 
 func runDataMigrateList(cmd *cobra.Command, rc *resolvedCluster, targetVersion, format string) error {
-	catalog := releases.Catalog()
+	catalog, err := loadReleaseCatalog()
+	if err != nil {
+		// Fail closed: a corrupt catalog must not read as "no required data migrations" — that would tell an operator
+		// nothing is outstanding when the catalog was never actually consulted.
+		return fmt.Errorf("embedded release catalog failed to load: %w; cannot list required data migrations", err)
+	}
 	if len(catalog) == 0 {
 		if format == "json" {
 			return jsonEncode(cmd, map[string]any{

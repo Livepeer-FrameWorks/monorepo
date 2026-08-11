@@ -39,9 +39,10 @@ be passed explicitly.
 
 Routine rolling upgrades should only apply expand-compatible migrations here:
 additive tables/columns/indexes, nullable/defaulted fields, or broader
-constraints that the currently running binaries can still tolerate. Background
-data migrations, read/write flips, and destructive contract steps are
-release-specific operations and are not run by this command.
+constraints that the currently running binaries can still tolerate. Destructive
+contract steps run only when explicitly requested with '--phase contract' (never
+during a routine expand upgrade); background data migrations and read/write flips
+are release-specific operations run by other commands, not this one.
 
 The underlying Ansible role filters applied vs pending on the target; in
 --dry-run mode the role runs under ansible-playbook --check --diff so

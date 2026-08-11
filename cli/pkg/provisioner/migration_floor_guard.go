@@ -8,11 +8,27 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/cli/internal/releases"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 )
+
+// validateBaselineFloor refuses a non-empty `_schema_baseline` marker that is not a canonical version. CompareSemver
+// deliberately normalizes malformed numeric components, so a corrupt "high-looking" marker could otherwise classify
+// required below-floor work as folded (fail open). A marker read from the database is trusted only if it is a real
+// version; "" (no marker — an existing pre-baseline cluster) is allowed and never folds. This is the shared read
+// boundary for BOTH the schema below-floor guard and the provision data-migration gate.
+func validateBaselineFloor(dbName, floor string) error {
+	if strings.TrimSpace(floor) == "" {
+		return nil
+	}
+	if err := releases.ValidateVersion(floor); err != nil {
+		return fmt.Errorf("database %q has a corrupt _schema_baseline marker %q: %w; refusing (cannot trust baseline provenance)", dbName, floor, err)
+	}
+	return nil
+}
 
 // Minimum-upgrade-version guard.
 //
@@ -63,6 +79,23 @@ func PostgresBelowFloorGap(
 		markers[db] = floor
 	}
 	return belowFloorGap(expected, ledger, markers), nil
+}
+
+// ReadPostgresBaselineFloors returns the `_schema_baseline` floor each database was BORN at, keyed by physical database
+// name. A "" floor means the marker table is absent — an existing in-place (pre-baseline) cluster. Callers fold work
+// STRICTLY BELOW a database's floor (it was born with that folded into its baseline) and check the rest against the
+// ledger. This is the durable fresh-vs-preserved signal (baseline provenance), not database existence or installation.
+func ReadPostgresBaselineFloors(ctx context.Context, sshPool *ssh.Pool, host inventory.Host, pg *inventory.PostgresConfig, databases []SchemaDatabase) (map[string]string, error) {
+	names := migrationLedgerDatabaseNames(databases)
+	out := make(map[string]string, len(names))
+	for _, db := range names {
+		floor, err := readPostgresBaselineMarker(ctx, sshPool, host, pg, db)
+		if err != nil {
+			return nil, fmt.Errorf("read baseline marker %s: %w", db, err)
+		}
+		out[db] = floor
+	}
+	return out, nil
 }
 
 // belowFloorGap returns the below-floor migrations that a database genuinely still
@@ -249,10 +282,22 @@ func readPostgresBaselineMarker(ctx context.Context, sshPool *ssh.Pool, host inv
 	if !simpleDBIdentifier.MatchString(dbName) {
 		return "", fmt.Errorf("invalid database name %q", dbName)
 	}
+	var (
+		floor string
+		err   error
+	)
 	if pg != nil && pg.IsYugabyte() {
-		return readBaselineMarkerYugabyteSSH(ctx, sshPool, host, pg, dbName)
+		floor, err = readBaselineMarkerYugabyteSSH(ctx, sshPool, host, pg, dbName)
+	} else {
+		floor, err = readBaselineMarkerPsqlSSH(ctx, sshPool, host, dbName)
 	}
-	return readBaselineMarkerPsqlSSH(ctx, sshPool, host, dbName)
+	if err != nil {
+		return "", err
+	}
+	if vErr := validateBaselineFloor(dbName, floor); vErr != nil {
+		return "", vErr
+	}
+	return floor, nil
 }
 
 func readBaselineMarkerPsqlSSH(ctx context.Context, sshPool *ssh.Pool, host inventory.Host, dbName string) (string, error) {
@@ -339,7 +384,11 @@ func readClickHouseBaselineMarker(ctx context.Context, sshPool *ssh.Pool, host i
 		}
 		return "", fmt.Errorf("clickhouse-client exit %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
 	}
-	return strings.TrimSpace(result.Stdout), nil
+	floor := strings.TrimSpace(result.Stdout)
+	if vErr := validateBaselineFloor(dbName, floor); vErr != nil {
+		return "", vErr
+	}
+	return floor, nil
 }
 
 // FormatBelowFloorRefusal builds the operator-facing stepping-stone message for a

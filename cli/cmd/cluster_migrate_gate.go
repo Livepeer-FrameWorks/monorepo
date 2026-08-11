@@ -32,7 +32,10 @@ func runPhaseDataMigrationGate(
 		fmt.Fprintf(cmd.OutOrStderr(), "[gate] WARNING: --skip-data-migration-check active; pre-%s gate bypassed.\n", phase)
 		return nil
 	}
-	catalog := releases.Catalog()
+	catalog, err := loadReleaseCatalog()
+	if err != nil {
+		return fmt.Errorf("[gate] embedded release catalog failed to load: %w; refusing to apply %s SQL (cannot verify required data migrations)", err, phase)
+	}
 	if len(catalog) == 0 {
 		fmt.Fprintf(cmd.OutOrStdout(), "[gate] release catalog is empty; no %s data migrations to check.\n", phase)
 		return nil
@@ -43,7 +46,7 @@ func runPhaseDataMigrationGate(
 		return nil
 	}
 	src := preflight.SSHStateSource(sshPool, manifestHostFor(rc.Manifest), manifestRuntimeFor(rc.Manifest))
-	blockers, err := datamigrate.PrePhaseBlockers(ctx, src, reqs, phase, targetVersion, releases.CompareSemver)
+	blockers, err := datamigrate.PrePhaseBlockers(ctx, src, reqs, phase, targetVersion, releases.CompareSemver, releases.BaseVersion)
 	if err != nil {
 		return fmt.Errorf("[gate] check %s data migrations: %w", phase, err)
 	}

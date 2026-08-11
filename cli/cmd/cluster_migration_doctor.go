@@ -147,7 +147,7 @@ func doctorDataMigrations(
 	ctx context.Context,
 	sshPool *ssh.Pool,
 	manifest *inventory.Manifest,
-	currentVersion, targetVersion string,
+	targetVersion string,
 ) *health.CheckResult {
 	result := &health.CheckResult{
 		Name:      "data_migration_state",
@@ -162,7 +162,15 @@ func doctorDataMigrations(
 		return result
 	}
 
-	catalog := releases.Catalog()
+	catalog, err := loadReleaseCatalog()
+	if err != nil {
+		// Fail closed: a corrupt catalog must report degraded, not "healthy — nothing declared". Reporting healthy
+		// off an unread catalog would green-light a deploy whose data-migration preconditions were never checked.
+		result.OK = false
+		result.Status = "degraded"
+		result.Error = fmt.Sprintf("embedded release catalog failed to load: %v", err)
+		return result
+	}
 	if len(catalog) == 0 {
 		result.OK = true
 		result.Status = "healthy"
@@ -178,7 +186,7 @@ func doctorDataMigrations(
 	}
 
 	src := preflight.SSHStateSource(sshPool, manifestHostFor(manifest), manifestRuntimeFor(manifest))
-	blockers, err := datamigrate.PreDeployBlockers(ctx, src, reqs, currentVersion, targetVersion, releases.CompareSemver)
+	blockers, err := datamigrate.PreDeployBlockers(ctx, src, reqs, targetVersion, releases.CompareSemver, releases.BaseVersion)
 	if err != nil {
 		result.OK = false
 		result.Status = "degraded"

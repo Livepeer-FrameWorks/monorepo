@@ -62,18 +62,35 @@ const migStageSuffix = "__migstage"
 // REPLACEs the destination partition by ID, then truncates staging. `REPLACE
 // PARTITION … FROM` is local-only, so staging is the cross-host landing zone.
 // Idempotent for additive engines (Summing/Aggregating): a re-run REPLACES, never adds.
-func SyncPartitionSQL(src RemoteSource, db, table, partitionID string) []string {
+//
+// insertCols is the EXPLICIT, ordered list of destination columns to fill — the intersection of the source and
+// destination schemas (backtick-quoted). selectExprs is the matching list of expressions pulled FROM the source: a bare
+// `col` when the types agree, or a `CAST(col AS <destType>)` when the column's type evolved (e.g. DateTime ->
+// DateTime64(3)). Never a positional `SELECT *`: the destination is created from the new baseline while the source is
+// the pre-release schema, so a new/removed column would misalign a positional copy. Destination-only columns (absent
+// from insertCols) take their DEFAULT; retired source-only columns are not selected.
+func SyncPartitionSQL(src RemoteSource, db, table, partitionID string, insertCols, selectExprs []string) []string {
 	stage := table + migStageSuffix
 	pid := escapeCHString(partitionID)
+	ins := strings.Join(insertCols, ", ")
+	sel := strings.Join(selectExprs, ", ")
 	return []string{
 		fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s.%s AS %s.%s", db, stage, db, table),
 		fmt.Sprintf("TRUNCATE TABLE IF EXISTS %s.%s", db, stage),
-		fmt.Sprintf("INSERT INTO %s.%s SELECT * FROM %s WHERE _partition_id = '%s'",
-			db, stage, src.table(table), pid),
+		fmt.Sprintf("INSERT INTO %s.%s (%s) SELECT %s FROM %s WHERE _partition_id = '%s'",
+			db, stage, ins, sel, src.table(table), pid),
 		fmt.Sprintf("ALTER TABLE %s.%s REPLACE PARTITION ID '%s' FROM %s.%s",
 			db, table, pid, db, stage),
 		fmt.Sprintf("TRUNCATE TABLE %s.%s", db, stage),
 	}
+}
+
+// DropPartitionSQL removes a single partition (by stable partition_id) from the DESTINATION table. Used during sync to
+// reconcile a destination-only partition — one copied on an earlier run whose SOURCE partition has since been removed
+// (TTL deletion runs asynchronously during background merges). Keyed on partition_id (not the formatted `partition`
+// value) so it is correct for any partition shape, matching SyncPartitionSQL. Runs on the destination only.
+func DropPartitionSQL(db, table, partitionID string) string {
+	return fmt.Sprintf("ALTER TABLE %s.%s DROP PARTITION ID '%s'", db, table, escapeCHString(partitionID))
 }
 
 // DropStagingSQL removes a table's migration staging sibling. Run after a table's
@@ -87,13 +104,17 @@ func DropStagingSQL(db, table string) string {
 // from the source, then atomically EXCHANGE it with the destination, then drop
 // staging. EXCHANGE TABLES is atomic on Atomic/Replicated databases, so readers
 // never see an empty table. Used for current-state / unpartitioned tables that
-// have no partition key to slice on.
-func FullReplaceTableSQL(src RemoteSource, db, table string) []string {
+// have no partition key to slice on. insertCols/selectExprs are the explicit
+// shared (source-and-destination) column list and matching (possibly cast) source expressions
+// (see SyncPartitionSQL) — never a positional `SELECT *`.
+func FullReplaceTableSQL(src RemoteSource, db, table string, insertCols, selectExprs []string) []string {
 	stage := table + migStageSuffix
+	ins := strings.Join(insertCols, ", ")
+	sel := strings.Join(selectExprs, ", ")
 	return []string{
 		fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s.%s AS %s.%s", db, stage, db, table),
 		fmt.Sprintf("TRUNCATE TABLE IF EXISTS %s.%s", db, stage),
-		fmt.Sprintf("INSERT INTO %s.%s SELECT * FROM %s", db, stage, src.table(table)),
+		fmt.Sprintf("INSERT INTO %s.%s (%s) SELECT %s FROM %s", db, stage, ins, sel, src.table(table)),
 		fmt.Sprintf("EXCHANGE TABLES %s.%s AND %s.%s", db, table, db, stage),
 		fmt.Sprintf("DROP TABLE IF EXISTS %s.%s SYNC", db, stage),
 	}
