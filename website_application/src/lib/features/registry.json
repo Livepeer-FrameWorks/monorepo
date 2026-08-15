@@ -2823,7 +2823,7 @@
       "audience": "product",
       "description": "Two-sided placement policy — cluster-owner and content-owner constraints (data residency, minimum durable copies) compiled into signed enforcement bundles evaluated at serve/ingest/process/store/replicate/peer decision points — over a cold-to-hot storage tier ladder with a backend-keyed placement ledger.",
       "status": "roadmap",
-      "gap_reason": "Deferred by design (docs/rfcs/placement-policy-engine.md): today each cluster keeps one implicit durable S3 copy,\nthere is no typed storage-backend registry, no tier ladder, and no two-sided policy evaluation. The signed-bundle\nchannel and per-stream placement intent (stream pins) exist as building blocks.\n",
+      "gap_reason": "Partially built. A typed single-backend immutable storage descriptor ships today (AdoptClusterStorageDescriptor\nRPC with fingerprinted backend ownership and fail-closed guards; see docs/architecture/durable-media-storage.md),\ngiving each cluster a typed, durable storage backend rather than an untyped implicit copy. Still deferred by design\n(docs/rfcs/placement-policy-engine.md): the multi-backend storage registry (cluster_storage_backends /\nartifact_locations), the cold-to-hot tier ladder, and the two-sided (cluster-owner + content-owner) policy engine.\nThe signed-bundle channel and per-stream placement intent (stream pins) exist as building blocks.\n",
       "required_surfaces": {
         "docs": {
           "required": true
