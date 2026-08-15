@@ -84,6 +84,6 @@ func (m *MockCommodoreClient) ResolveVodID(ctx context.Context, vodID string) (*
 	return m.VodResponse, m.VodError
 }
 
-func (m *MockCommodoreClient) ValidateStreamKey(ctx context.Context, streamKey string, _ ...string) (*commodorepb.ValidateStreamKeyResponse, error) {
+func (m *MockCommodoreClient) ValidateStreamKey(ctx context.Context, streamKey string) (*commodorepb.ValidateStreamKeyResponse, error) {
 	return m.StreamKeyResponse, m.StreamKeyError
 }

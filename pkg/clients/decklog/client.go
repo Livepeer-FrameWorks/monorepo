@@ -313,9 +313,17 @@ func (c *BatchedClient) SendTriggerContext(ctx context.Context, trigger *ipcpb.M
 	return nil
 }
 
-// SendLoadBalancing sends load balancing data to Decklog
+// SendLoadBalancing sends load balancing data to Decklog on a background
+// context with no deadline. Prefer SendLoadBalancingContext from any path where
+// a stalled Decklog must not pin the caller indefinitely.
 func (c *BatchedClient) SendLoadBalancing(data *ipcpb.LoadBalancingData) error {
-	ctx := c.authContext()
+	return c.SendLoadBalancingContext(context.Background(), data)
+}
+
+// SendLoadBalancingContext sends load balancing data, honouring the caller's
+// deadline and cancellation.
+func (c *BatchedClient) SendLoadBalancingContext(ctx context.Context, data *ipcpb.LoadBalancingData) error {
+	ctx = c.authContextFrom(ctx)
 	// Wrap into unified envelope
 	trigger := &ipcpb.MistTrigger{
 		TriggerType: "LOAD_BALANCING",
