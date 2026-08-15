@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -eo pipefail
 
 # Refuses commits that add or modify migration files outside the next
 # release version dir. Released migrations are immutable; post-release
@@ -81,35 +81,24 @@ check_deleted() {
   fi
 }
 
-entries=()
-mapfile -d '' entries < <(git diff --cached --name-status -z -- "$@")
-
-i=0
-while [ "$i" -lt "${#entries[@]}" ]; do
-  status=${entries[$i]}
-  i=$((i + 1))
-
+while IFS= read -r -d '' status; do
   case "$status" in
     R*|C*)
-      old_path=${entries[$i]}
-      i=$((i + 1))
-      new_path=${entries[$i]}
-      i=$((i + 1))
+      IFS= read -r -d '' old_path
+      IFS= read -r -d '' new_path
       check_deleted "$old_path"
       check_added_or_modified "$new_path"
       ;;
     D*)
-      path=${entries[$i]}
-      i=$((i + 1))
+      IFS= read -r -d '' path
       check_deleted "$path"
       ;;
     *)
-      path=${entries[$i]}
-      i=$((i + 1))
+      IFS= read -r -d '' path
       check_added_or_modified "$path"
       ;;
   esac
-done
+done < <(git diff --cached --name-status -z -- "$@")
 
 if [ ${#seen_versions[@]} -gt 1 ]; then
   violations+=("  staged migrations use multiple next version dirs: ${seen_versions[*]}")
