@@ -322,7 +322,8 @@ VOD retention (`analytics.health.sessionQoeSummary` / `.vodRetention`) and a
 only). The dashboard surfaces them at `/analytics/qoe` (rebuffering ratio, frame
 drops, EBVS, bitrate + a VOD retention heatmap). The 5m num/denom rollup is deferred
 until volume demands it — reads compute ratios at read time over the raw deduped
-(`FINAL`) tables.
+(`FINAL`) tables. The design home for the versioned num/denom aggregate is
+[docs/rfcs/federated-settlement-attribution.md](../rfcs/federated-settlement-attribution.md).
 
 > Status: live end-to-end — player → Bridge → Decklog →
 > `client_qoe_session_deltas` + `vod_retention_buckets` → Periscope query

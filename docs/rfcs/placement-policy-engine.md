@@ -23,13 +23,19 @@ next-release storage-tiering and placement design.
 
 ## Current State
 
-The shipped model has one implicit durable location (an S3 object, attributed to the artifact's
-`storageClusterId`, gated on its sync/frozen lifecycle) plus N transient **local node copies**
+The shipped model records one durable location per artifact — an S3 object attributed to the artifact's
+`storageClusterId`, gated on its sync/frozen lifecycle — plus N transient **local node copies**
 (producer/origin or synced cache), observed from `foghorn.artifact_nodes` and projected to analytics
-as `ArtifactNodeCopyEvent`. The asset UI composes "one durable S3 location + N local node copies."
-There is no notion of _multiple durable backends_, _tiers_, or _where copies should live_. Read-through
-relay block caches (`<asset>.blocks/`) are deliberately excluded from the node-copy index (a partial
-cache must never advertise a complete copy — a routing-correctness hazard).
+as `ArtifactNodeCopyEvent`. The asset UI composes "one durable S3 location + N local node copies." That
+single backend is no longer implicit: it is now a **typed, immutable per-cell descriptor** — one Foghorn
+database bound to one immutable S3 backend, its physical identity frozen as a deterministic `backend_id`
+fingerprint over `(kind, bucket, endpoint, region, prefix)` and enforced fail-closed at boot and cleanup
+(`docs/architecture/durable-media-storage.md`; adopted via Quartermaster's
+`AdoptClusterStorageDescriptor`). What still does not exist is a registry of _multiple durable backends_,
+_tiers_, or _where copies should live_ — the descriptor names one backend per cell, not a set, and this
+RFC's `cluster_storage_backends` / `artifact_locations` registry and tier ladder generalize it.
+Read-through relay block caches (`<asset>.blocks/`) are deliberately excluded from the node-copy index (a
+partial cache must never advertise a complete copy — a routing-correctness hazard).
 
 ### Seams already in place for storage-less / self-hosted clusters
 
@@ -148,11 +154,13 @@ domain-ownership lines and keeping resolution at the enactor:
 
 - **Phase 1 — owner-compiled halves, central enactment.**
   - **Quartermaster** compiles the infra/capacity section (backends, cluster capabilities,
-    tenant↔cluster entitlement) and serves it via an owner RPC. The seed of that RPC is the narrow
-    tenant-entitlement RPC introduced by the cross-schema-read fix (see
-    `PLAN_FIX_CROSS_SCHEMA_READS.md`), which replaces Commodore's current direct SQL read of
-    `quartermaster.tenant_cluster_access` / `tenants` / `infrastructure_clusters` in the bundle-mint
-    path; the placement section evolves from that RPC rather than adding a parallel one.
+    tenant↔cluster entitlement) and serves it via an owner RPC. The seed of that RPC has landed:
+    the narrow **`GetTenantEntitlement`** RPC (`pkg/proto/quartermaster.proto:137`, served by
+    api_tenants) already replaced Commodore's direct SQL read of `quartermaster.tenant_cluster_access`
+    / `tenants` / `infrastructure_clusters` in the bundle-mint path — Commodore now reads the
+    infra-owned entitlement through `qmEntitlements.GetTenantEntitlement`, fail-closed
+    (`api_control/internal/grpc/policy_bundle.go:207`). The placement section evolves from that RPC
+    rather than adding a parallel one.
   - **Commodore** compiles the stream/tenant side (from `stream_cluster_pins` + `playback_policy`)
     and stays the bundle **assembler and signer** — it owns `policy_bundle_versions` and the
     invalidation outbox, so signing and revocation remain a single authority.
@@ -179,21 +187,24 @@ domain-ownership lines and keeping resolution at the enactor:
 
 ## Impact / Dependencies
 
-- **Prerequisite from the storage-artifact-catalog beta (must land before placement lets two clusters share a bucket
-  under different prefixes):** the mint-ROUTING tuple `storage.S3Backing` (and the `TenantClusterPeer` proto) currently
-  omit `prefix` and normalize case/whitespace. This is safe in the current beta (EU/US use distinct buckets, and the
-  exact immutable identity `BackendFingerprint` already includes prefix + compares exactly), but placement/federation
-  that co-locates clusters in one bucket under different prefixes MUST first thread `prefix` through `S3Backing`
-  (struct/Normalize/Equal), `TenantClusterPeer`, the local-backing constructors, and compare it exactly — otherwise a
-  Foghorn configured for one prefix could mint-local for a cluster addressing another. Marked in code at
-  `api_balancing/internal/storage/cluster_resolver.go`.
+- **Prerequisite from the storage-artifact-catalog beta — SHIPPED.** Co-locating two clusters in one bucket under
+  different prefixes requires the mint-ROUTING tuple to carry `prefix`, not just the immutable-identity fingerprint
+  (`BackendFingerprint`, which already included prefix and compared it exactly). That threading has landed: `prefix` is
+  now a field of `storage.S3Backing`, and its `Normalize`/`Equal` compare it BYTE-FOR-BYTE
+  (`api_balancing/internal/storage/cluster_resolver.go:22,44`); the `TenantClusterPeer` proto carries `s3_prefix` plus an
+  `s3_prefix_present` flag that fails mint routing closed on an unadopted (NULL) prefix rather than collapsing it to
+  empty (`pkg/proto/cluster_peer.proto:20-21`); and the local-backing constructors thread it through. A Foghorn
+  configured for one prefix therefore no longer classifies a cluster addressing another prefix as locally mintable. The
+  shared-bucket / different-prefix topology this engine assumes is now routable at the resolver layer; what remains
+  unbuilt is the placement policy that would exercise it.
 - **Hard dependency:** [`cross-cluster-durable-replication-v1.md`](cross-cluster-durable-replication-v1.md).
   This engine SELECTS AMONG destinations that protocol authorizes, mints, verifies, attests, and attributes;
   it must not be built before that single-destination contract exists (multi-copy placement generalizes it).
 - **Schemas:** new Postgres tables (`cluster_storage_backends`, `artifact_locations`) + a source-owned
   version sequence; new ClickHouse per-edge/per-tier occupancy table(s).
-- **Services:** see "Owning services / modules" above; additionally the Quartermaster owner RPC from
-  `PLAN_FIX_CROSS_SCHEMA_READS.md` is a hard dependency for the Phase-1 split in §7.
+- **Services:** see "Owning services / modules" above; the Quartermaster owner RPC that the Phase-1
+  split in §7 stands on (`GetTenantEntitlement`) has landed, so the placement section extends an
+  existing entitlement RPC rather than waiting on one to be introduced.
 - **Proto:** placement events + policy bundle messages.
 
 ## Alternatives Considered

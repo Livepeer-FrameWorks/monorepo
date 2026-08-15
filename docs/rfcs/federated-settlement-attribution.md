@@ -179,6 +179,24 @@ verifiable from the record itself plus published cluster keys, not from trust in
 central Periscope having ingested them. Central ClickHouse is the Phase 1 evaluation
 venue, explicitly interim; the evidence format is the contract.
 
+**Versioned QoE rollups (numerator/denominator).** The same append-only, versioned
+discipline the settlement tables use is the design home for the platform's composite QoE
+metrics. Ratio-shaped QoE — rebuffering ratio, EBVS, frame-drop rate — is today computed at
+read time over the deduped (`FINAL`) QoE facts, with the 5-minute rollup deferred until
+volume demands it (`docs/architecture/analytics-pipeline.md`, which already points here as
+that rollup's home). Phase 1 gives it that home: each composite metric materializes as a
+pair of **versioned numerator and denominator aggregates** (e.g. rebuffering ratio =
+buffering-ms numerator / played-ms denominator), never a pre-divided ratio, so any period
+can be re-aggregated, sliced by cluster/tenant/meter, and compared without re-deriving from
+raw events — and a divide-by-zero denominator stays a visible absence rather than a silent
+value. The aggregates are built ONLY from deduped/finalized facts — the same
+`USER_END` / `viewer_sessions_final` sessions and token-attested QoE deltas the corroboration
+pass consumes — never from lossy in-flight telemetry, and they carry the source-owned version
+of the canonical ledgers so a recomputed rollup supersedes its predecessor rather than
+double-counting. Keeping numerator and denominator separate and versioned is what lets a
+Phase 2 operator statement reconcile a served-quality figure to the finalized facts behind
+it, on the same evidentiary footing as the payable-usage figures.
+
 ### Phase 2: Operator-visible reporting
 
 - **GraphQL**: Bridge exposes the ledger for the authenticated operator tenant — entries

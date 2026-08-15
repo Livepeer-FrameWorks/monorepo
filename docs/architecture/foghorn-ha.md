@@ -298,17 +298,23 @@ Be precise about what does **not** exist yet — until v0.2.33 this model lived 
 
 ### Federation Telemetry (RemoteEdgeCache)
 
-| Key Pattern                                                     | Value                                                   | TTL |
-| --------------------------------------------------------------- | ------------------------------------------------------- | --- |
-| `{cluster_id}:remote_edges:{peer_cluster}:{node_id}`            | JSON: EdgeTelemetry (BW, CPU, RAM, geo)                 | 30s |
-| `{cluster_id}:remote_replications:{stream_name}:{peer_cluster}` | JSON: ReplicationEvent (available, DTSC URL)            | 5m  |
-| `{cluster_id}:edge_summary:{peer_cluster}`                      | JSON: EdgeSummaryRecord (smoothed per-edge data)        | 60s |
-| `{cluster_id}:remote_live_streams:{tenant_id}:{internal_name}`  | JSON: RemoteLiveStreamEntry                             | 30s |
-| `{cluster_id}:remote_artifacts:{peer}:{artifact_hash}:{node}`   | JSON: RemoteArtifactEntry                               | 90s |
-| `{cluster_id}:stream_peers:{peer_cluster}`                      | JSON: active stream names for a stream-scoped peer      | 60s |
-| `{cluster_id}:leader:{role}`                                    | String: instance_id                                     | 15s |
-| `{cluster_id}:peer_addresses`                                   | Hash: cluster_id → addr                                 | 30s |
-| `{cluster_id}:peer_heartbeat:{peer_cluster}`                    | JSON: PeerHeartbeatRecord (version, streams, BW, edges) | 30s |
+| Key Pattern                                                                                | Value                                                                                          | TTL                               |
+| ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- | --------------------------------- |
+| `{cluster_id}:remote_edges:{peer_cluster}:{node_id}`                                       | JSON: EdgeTelemetry (BW, CPU, RAM, geo)                                                        | 30s                               |
+| `{cluster_id}:remote_replications:{stream_name}:{peer_cluster}`                            | JSON: ReplicationEvent (available, DTSC URL)                                                   | 5m                                |
+| `{cluster_id}:edge_summary:{peer_cluster}`                                                 | JSON: EdgeSummaryRecord (smoothed per-edge data)                                               | 60s                               |
+| `{cluster_id}:remote_live_streams:v3:records:{tenant_id}:{internal_name}:{origin_cluster}` | Revision-fenced live/offline RemoteLiveStreamEntry for one origin                              | 30s live / 1h offline             |
+| `{cluster_id}:remote_live_streams:v3:origins:{tenant_id}:{internal_name}`                  | Origin-cluster index for lifecycle lookup                                                      | 1h, refreshed by lifecycle events |
+| `{cluster_id}:remote_artifacts:{peer}:{artifact_hash}:{node}`                              | JSON: RemoteArtifactEntry                                                                      | 90s                               |
+| `{cluster_id}:stream_peers:{peer_cluster}`                                                 | JSON: active stream names for a stream-scoped peer                                             | 60s                               |
+| `{cluster_id}:leader:{role}`                                                               | String: instance_id                                                                            | 15s                               |
+| `{cluster_id}:peer_hints:v2:{contributor_id}`                                              | JSON: one writer's replaceable peer-hint authority snapshot (address, lifecycle, tenant scope) | 30s                               |
+| `{cluster_id}:peer_heartbeat:{peer_cluster}`                                               | JSON: PeerHeartbeatRecord (version, streams, BW, edges)                                        | 30s                               |
+
+Peer-hint contributors are leased independently: tenant-validation discoveries and the active
+leader's Quartermaster snapshot use separate keys. Imports aggregate only live v2 contributions,
+so replacing or expiring one writer revokes its authority without another writer extending it. The
+legacy `{cluster_id}:peer_addresses` raw-string hash is not read by v2 code and expires in place.
 
 ### Stream Registry (control.StreamRegistry)
 

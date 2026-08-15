@@ -1,8 +1,9 @@
 # Edge-to-Foghorn Authentication
 
-Edge nodes authenticate to Foghorn over the public internet using three layers:
-transport encryption via TLS, identity enrollment through Quartermaster-validated
-tokens, and service-to-service authorization via a shared static token.
+Edge nodes authenticate to Foghorn over the public internet using TLS plus
+Quartermaster-backed enrollment or a previously bound node fingerprint.
+`HelmsmanControl.Connect` and edge bootstrap validate that identity in-method;
+self-hosted edges do not receive the provider-internal `SERVICE_TOKEN`.
 
 ## Transport: Split gRPC Listeners
 

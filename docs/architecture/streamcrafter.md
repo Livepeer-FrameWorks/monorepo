@@ -196,8 +196,20 @@ When consumers pass `gatewayUrl` + `streamKey` (instead of a direct `whipUrl`):
 
 Gateway resolution must run from the publisher's browser/device when geo routing
 should reflect the publisher location. Backend-side resolution scores the
-backend/proxy IP instead. Server-side publishers and external encoders should
-use the tenant/global/cluster `edge-ingest` DNS name directly.
+backend/proxy IP instead.
+
+Server-side publishers and external encoders have two options: the
+`edge-ingest` DNS name (geo-only steering) or Foghorn's ingest front door at
+`/ingest/{streamKey}`, which applies the same load-and-distance scoring as this
+resolver without requiring a GraphQL client. `POST` there returns a 307 to the
+chosen node's WHIP URL; `GET` returns the candidate set as JSON.
+
+The resolver terminates in Foghorn's `ResolveIngestEndpoint`, which resolves
+admission through Commodore's `ResolveStreamContext` — deliberately _not_
+`ValidateStreamKey`, which claims a 30-second ingest lease. Resolving an
+endpoint must never take placement for a stream that may never start;
+`PUSH_REWRITE` remains the only push-ingest caller that claims through
+`ValidateStreamKey`.
 
 ## Development workflow (local)
 

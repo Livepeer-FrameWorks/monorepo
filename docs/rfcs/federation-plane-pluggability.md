@@ -73,10 +73,12 @@ for an operator's cluster to keep local authority over its own domain while inte
 clusters under other authorities. Plane pluggability appears nowhere in the docs corpus today.
 
 **Boundary hygiene is partially ahead of this RFC.** Two production cross-schema DB reads
-(Commodore and Foghorn reading Quartermaster-owned tables directly) were identified in the 2026-07
-platform audit and are being replaced with owner RPCs via `pkg/clients`
-(`PLAN_FIX_CROSS_SCHEMA_READS.md`). That work is the first concrete instance of the Phase 1 posture
-proposed here.
+(Commodore and Foghorn reading Quartermaster-owned tables directly), identified in the 2026-07
+platform audit, have been eliminated: both now read through owner RPCs via `pkg/clients` —
+Commodore's bundle-mint entitlement read via `GetTenantEntitlement` and Foghorn's served-cluster
+load via `ListServiceClusterAssignments`, with zero live `FROM quartermaster.*` reads remaining in
+`api_control` / `api_balancing`. That work is the first realized instance of the Phase 1 posture
+proposed here — boundary hygiene shipped for these two, not merely planned.
 
 ## Problem / Motivation
 
@@ -141,8 +143,9 @@ The gatekeeper stays the sole authority, but every dependency on it becomes an e
 interface:
 
 - **No cross-schema reads, anywhere.** Every service reads another service's domain only through
-  that service's RPCs via `pkg/clients` (the `PLAN_FIX_CROSS_SCHEMA_READS.md` work is the seed;
-  the CLAUDE.md service-boundary rule becomes load-bearing for federation, not just hygiene).
+  that service's RPCs via `pkg/clients`. The first two production cross-schema reads have already
+  been eliminated this way (`GetTenantEntitlement`, `ListServiceClusterAssignments`); the CLAUDE.md
+  service-boundary rule is now load-bearing for federation, not just hygiene.
 - **Enumerate authority surfaces.** For each of Commodore, Quartermaster, and Periscope, document
   the interface through which its authority is consumed: identity/entitlement resolution and
   policy-bundle distribution (Commodore); cluster registry, peer discovery, access grants, mesh
@@ -314,9 +317,10 @@ belongs here.
 
 Phases as above, sequenced by dependency, with no dates:
 
-1. **Phase 1** rides on already-planned work: cross-schema-read elimination, the module map's
-   authority-surface inventory, and continued preference for signed artifacts. No behavior change,
-   no operator-visible change.
+1. **Phase 1** rides partly on work already done: cross-schema-read elimination has landed for the
+   first two production reads (owner RPCs via `pkg/clients`); the module map's authority-surface
+   inventory and continued preference for signed artifacts remain. No behavior change, no
+   operator-visible change.
 2. **Phase 2** ships per-domain behind explicit cluster-level opt-in (a capability flag on the
    cluster record), with the central path as the default and permanent fallback. Domain order is
    an open question (below), but each domain's move requires: its interface from Phase 1 proven in
@@ -355,8 +359,8 @@ expand/contract migration discipline.
   (no plane decoupling).
 - [Evidence] `PLAN_PLATFORM_MODULE_MAP.md` (2026-07-22 audit) — central-gatekeeper dependency
   inventory across Commodore/Quartermaster/Periscope; finding that plane pluggability appears in no
-  existing doc or RFC; cross-schema-read findings and fix hand-off
-  (`PLAN_FIX_CROSS_SCHEMA_READS.md`).
+  existing doc or RFC; the cross-schema-read findings, whose fix has since shipped — the two reads
+  now go through `GetTenantEntitlement` (Commodore) and `ListServiceClusterAssignments` (Foghorn).
 - [Reference] `docs/rfcs/placement-policy-engine.md` — signed policy bundle + local verification at
   decision-point hook-ins; the distribution pattern Phase 2 entitlement enforcement extends.
 - [Reference] `docs/rfcs/federated-settlement-attribution.md` — settlement/attribution side of the

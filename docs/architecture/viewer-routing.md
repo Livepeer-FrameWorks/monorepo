@@ -258,6 +258,54 @@ Stored in: `periscope.routing_decisions` (ClickHouse)
 
 When `RemoteClusterID` is set and differs from `ClusterID`, the routing decision involved cross-cluster serving (origin-pull or redirect). The UI audience page uses this to render cross-cluster flows in amber on the routing map and tag routing events with a "cross-cluster" badge.
 
+## Ingest Routing
+
+Publishers are routed by the same scorer, through a separate front door.
+
+|                   | Viewers                                    | Publishers                         |
+| ----------------- | ------------------------------------------ | ---------------------------------- |
+| Entry point       | `GET /play/{viewKey}`                      | `GET`/`POST` `/ingest/{streamKey}` |
+| Capability filter | `edge`                                     | `ingest`                           |
+| Redirect          | 307 per protocol                           | 307 to WHIP (`POST` only)          |
+| Fallback path     | cross-cluster origin-pull or peer redirect | geo-DNS `edge-ingest` name         |
+
+Both resolve in `api_balancing/internal/control` (`ResolveLivePlayback` and
+`ResolveIngestEndpoints`) and filter candidates by capability. Ingest then
+keeps candidates inside the cluster-peer envelope Commodore returned with the
+resolve — the same envelope playback authorizes cross-cluster candidates
+against. It is Quartermaster's cluster↔tenant grant already narrowed by the
+tenant's plan classes and by cluster health, so neither side re-derives
+entitlement. `NodeState.TenantID` is ownership metadata, not routing authority.
+
+One physical Foghorn serves many virtual media clusters and accepts any valid
+stream key, so nothing about the listener, the hostname, or its own
+`CLUSTER_ID` bounds the candidate set. It names no cluster on the resolve.
+
+A live ingest claim is the one thing that narrows it: while a publisher holds
+the stream, `active_ingest_cluster_id` pins reconnects to the cluster already
+ingesting, because `PUSH_REWRITE` would refuse anywhere else as
+`DUPLICATE_INGEST`.
+
+Two things differ:
+
+- **Only WHIP can be redirected.** RTMP and SRT have no redirect mechanism, so
+  those protocols fall back to the geo-DNS `edge-ingest` name, which steers on
+  location alone. The JSON `GET` form exists so encoder tooling can still read a
+  load-aware URL.
+- **Resolution never claims placement.** Admission goes through Commodore's
+  `ResolveStreamContext`, not `ValidateStreamKey`: the latter writes
+  `active_ingest_cluster_id` under a 30-second lease and rejects other clusters
+  with `DUPLICATE_INGEST`. A `GET` resolve or an abandoned WHIP attempt must not
+  lock out the cluster that actually ingests. `PUSH_REWRITE` stays the
+  enforcement gate and the only path that arbitrates contention for a claim,
+  and still applies the gates the front door deliberately skips (free-tier load
+  admission, per-tenant stream caps, duplicate-ingest detection). Placement is
+  afterwards re-asserted from Foghorn's live source-presence, under the same
+  contention rule, for as long as the publisher stays connected.
+
+Ingest decisions emit `ingest_resolve` routing events to the same
+`periscope.routing_decisions` table.
+
 ## Modifying the Algorithm
 
 ### Adding a new weight

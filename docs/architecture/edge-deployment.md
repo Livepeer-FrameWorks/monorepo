@@ -90,6 +90,13 @@ The Helmsman control stream also carries `DesiredStateUpdate` and `UpdateApplyRe
 
 Foghorn runs an edge release reconciler against Quartermaster's `cluster_release_targets`. It resolves the target release row, diffs **per-component** desired versions against `foghorn.node_components`, and pushes direct Helmsman/Caddy updates over the existing Helmsman stream. The diff is per-component, not row-level: a new release whose row-level `EdgeRelease.Version` advances but whose per-component `service_version` strings are unchanged (because those components carried forward — see `docs/architecture/build-and-packaging.md`) does not roll any edge node.
 
+That in-band update path exists only after Helmsman has passed Foghorn's minimum
+control-protocol check. An edge below the minimum is rejected before its control
+connection is published, so it cannot receive an updater command over that
+connection. Any release that raises the minimum without a mixed-version window
+must require operators to redeploy affected edges out of band and must describe
+the resulting routing interruption in its upgrade notes.
+
 `service_version` in the release manifest is **artefact provenance** — which release actually produced the component's bytes — and may differ from `platform_version` per component. A `v0.2.40` release manifest can legitimately list `helmsman` with `service_version: v0.2.37` when helmsman's source was unchanged since v0.2.37; that older string flows through into `quartermaster.edge_releases.components_json.helmsman.version` and matches what edge nodes already report in `foghorn.node_components.current_version`, so reconciliation correctly decides "no-op." Config-schema versions are reported for visibility and compatibility checks; runtime configuration changes still flow through the existing ConfigSeed path, not release artifact convergence. Provider provision and `cluster upgrade --all` runs publish the selected GitOps release manifest into `quartermaster.edge_releases` and sync every manifest cluster to the selected track/version. `frameworks cluster releases publish` and `frameworks cluster releases target set` are platform repair/override commands, not the normal release path.
 Release rows must include at least one updateable native edge component (`helmsman`, `mist`, or `caddy`); config-schema-only rows are rejected because they do not drive runtime convergence.
 Rollout-plan JSON only accepts controls that are implemented by the current reconciler, such as canary, batch size, and error-abort limits. Capacity-floor fields are rejected until disruptive drain rollouts need them.

@@ -41,16 +41,18 @@ Producer                            Cluster A                                Clu
 ### Ingest: Producer → Origin Node
 
 ```
-Producer pushes RTMP/E-RTMP/SRT/WHIP to edge-ingest.{cluster}.{base}:1935
-  → DNS resolves to an edge node in the cluster
-  → MistServer accepts the push
-  → MistServer fires PUSH_REWRITE trigger → Helmsman → Foghorn
-  → Foghorn: ValidateStreamKey via Commodore → gets tenant_id, stream_id
-  → Foghorn: state.UpdateStreamInstanceInfo(stream, node, {Inputs: 1, Replicated: false})
-  → Node is now the origin for this stream
+Producer discovers ingest through HTTP, GraphQL, or gRPC
+  → One physical Foghorn ranks nodes across the tenant's authorized healthy virtual clusters
+  → Resolution returns URLs but does not claim placement
+  → WHIP POST follows a 307 to the selected node; RTMP/SRT clients use the discovered URL directly
+  → MistServer accepts the transport and fires PUSH_REWRITE → Helmsman → Foghorn
+  → Foghorn claims placement, creates the durable ingest generation, and projects the DB winner
+  → Only the confirmed projection publishes live state and becomes the stream origin
 ```
 
-**Origin identification**: A node is treated as an origin candidate when `StreamInstanceState.Inputs > 0` and `StreamInstanceState.Replicated == false`. Duplicate ingest protection is intended to keep one active origin per stream, but source selection still treats origin as state-derived rather than a separate topology record.
+**Origin identification**: A node is an origin candidate when `StreamInstanceState.Inputs > 0`
+and `Replicated == false`. Durable admission permits one active ingest generation per tenant stream;
+the registry projects that generation into runtime source ownership.
 
 ### Intra-Cluster Replication: Origin → Edges
 
@@ -283,7 +285,6 @@ Everything above is the demand-driven half. The proactive half — orchestrated 
 - `api_balancing/internal/control` - `StreamRegistry` per-stream `Locations[cluster].{ReplicatingFrom, PullDTSCURL, DestNodeID, DestNodeBaseURL, PullSourceNodeID, OutboundPullers}` — replaces the federation cache's per-stream `ActiveReplicationRecord` / `StreamAdRecord` / `PlaybackIndex` (deleted)
 - `api_balancing/internal/control` - `SweepStaleLocations` (30s tick / 5-min maxAge) — ages out stale Locations + per-OutboundPull entries; replaces the federation cache's TTL-based expiry
 - `api_balancing/internal/federation` - `RemoteEdgeCache` (still in use) — edge telemetry, peer heartbeat, remote-artifact locations, edge summary; stream identity and per-stream replication state moved to StreamRegistry
-- `pkg/proto/ipc.proto` - `DVRUpdateSourceRequest` (control message 164) — Foghorn → Helmsman, refreshes the DVR storage node's source override when the publisher takes over to a different ingest node
 
 ## Gotchas
 
@@ -293,6 +294,20 @@ Everything above is the demand-driven half. The proactive half — orchestrated 
 - **The registry's replication mark bridges a timing gap**. Between `NotifyOriginPull` (arrangement) and the stream actually appearing in local state (MistServer pulls and reports metrics), `Location[local].ReplicatingFrom + PullDTSCURL + DestNodeID` on the StreamRegistry tells subsequent viewers "a pull is in progress, serve from expected local edge." `SweepStaleLocations` ages this out at the same 5-min budget the prior federation cache TTL used.
 - **Sweeper preserves active state**. `SweepStaleLocations` evicts Locations only when SourceActive=false, OwnerNodeID empty, ReplicatingFrom empty, and OutboundPullers empty. A long-running publisher with no admission events still has its admission state retained — only explicit clearing edges (PUSH_INPUT_CLOSE, ClearReplicating, ClearOutboundPull) zero those fields, and only then can the sweeper claim the Location.
 - **Registry hydration preserves Locations**. `store()` (called from `hydrate` on TTL refresh) merges identity into the existing cachedEntry rather than replacing it, so duplicate-ingest protection and origin-pull state survive cache refreshes.
-- **Publisher takeover propagates to in-flight DVRs**. When `AdmitAndReserve` returns `AcceptTakeover` for a stream that has an active DVR row, Foghorn dispatches `DVRUpdateSourceRequest` to the DVR's storage node so its push override is refreshed to the new ingest node's DTSC URL. Without this, the recording's pull would keep targeting the now-empty old source until retry budget exhausted.
-- **Drain on takeover uses `nuke_stream`, not `deletestream`**. `live+<x>` is a wildcard-derived runtime instance — `deletestream` only removes configured stream entries (`Controller::Storage["streams"]`), so it no-ops on the lingering runtime buffer. Helmsman's `handleDrainStream` calls `nuke_stream` after `StopSessions` to actually clear the buffer + viewer sessions.
+- **An ingest session has a durable identity**. Every accepted publisher connection has a distinct
+  `foghorn.ingest_sessions` generation, including a same-node reconnect. The stream advisory lock and
+  partial unique constraint allow one active generation per tenant stream. Source projection remains
+  pending until its ordered Redis CAS succeeds; failed or abandoned projections are durably retired.
+- **Offline teardown is a durable transition**. `PUSH_INPUT_CLOSE` ends the exact generation.
+  `STREAM_END` is an event-time-fenced aggregate backstop, and hard node disconnects use a guarded
+  presence reaper. Stream-wide effects are leased from `ingest_offline_effects`, rechecked and applied
+  under the same stream lock as admission, so a reconnect either supersedes teardown or projects after
+  it completes.
+- **A DVR never changes publisher sessions**. A recording binds to the generation that created it;
+  reconnecting creates a fresh session and, when recording is enabled, a fresh recording. The close
+  finalizer ends that generation and claims its DVR stop in one transaction. Recovery replays durable
+  DVR intent and requires the persisted source descriptor. There is no running-source migration API.
+- **Draining a replaced source uses `nuke_stream`, not `deletestream`**. `live+<x>` is a
+  wildcard-derived runtime instance, so Helmsman stops sessions and nukes the runtime buffer on the
+  node replaced by the DB-confirmed projection.
 - **Cross-cluster replication is over public internet**. DTSC between MistServer nodes on different clusters traverses the public internet. No WireGuard mesh for edges. TLS on Foghorn gRPC; DTSC itself is unencrypted (media-only, no auth data).

@@ -10,6 +10,8 @@ service/node provisioning, and enrollment tokens for edge auth. See
 ## TL;DR
 
 - Current service-to-service auth uses a shared static `SERVICE_TOKEN`.
+- The current federation trust boundary contains only provider-operated physical Foghorns;
+  self-hosted Helmsmans do not receive the token or participate in Foghorn federation.
 - Desired-state/bootstrap flows now create service and node inventory through
   Quartermaster, but those records are not yet used as signed runtime service identity.
 - Introduce a service JWT (or similar) to make `cluster_id` non-forgeable.
@@ -23,6 +25,8 @@ Quartermaster (`api_tenants`) owns bootstrap/enrollment token issuance and revoc
 
 - gRPC middleware accepts either a shared `SERVICE_TOKEN` or a user JWT.
 - Shared gRPC clients forward a user JWT when present and fall back to the service token.
+- Provider-operated Foghorns use the shared token as their first-party federation trust boundary;
+  request cluster IDs are routing attribution within that boundary.
 - Service/node bootstrap tokens carry tenant/cluster/node constraints during provisioning,
   but runtime S2S calls still use the static service token model.
 
@@ -36,7 +40,10 @@ Evidence:
 
 ## Problem / Motivation
 
-A shared static token cannot carry trustworthy identity or cluster claims. Multi-cluster setups require verifiable service identity and cluster binding to prevent accidental or malicious mis-registration.
+A shared static token cannot carry trustworthy identity or cluster claims. Admitting third-party or
+sovereign Foghorns therefore requires verifiable service identity and cluster binding to prevent
+accidental or malicious impersonation. This does not block federation among provider-operated
+Foghorns that are already inside the shared-token trust boundary.
 
 ## Goals
 
@@ -48,6 +55,8 @@ A shared static token cannot carry trustworthy identity or cluster claims. Multi
 
 - Replacing user JWTs.
 - Full OIDC or SPIFFE integration in this RFC.
+- Replacing the trusted first-party Foghorn federation boundary before third-party Foghorns are
+  admitted.
 
 ## Proposal
 

@@ -1,13 +1,37 @@
-# Cluster Rollout - CLI Orchestration of Provision, Apply, Upgrade, and OS Updates
+# Cluster Rollout - CLI Orchestration of Release, Provision, Apply, Upgrade, and OS Updates
 
 How the operator CLI turns a cluster manifest into ordered, health-gated change on
-hosts. Three commands share the machinery in `cli/pkg/orchestrator/`:
-`cluster provision` (full desired state), `cluster diff`/`cluster apply` (typed
-rolling updates), and `cluster upgrade` (release-manifest version moves).
-`cluster os update` (OS package maintenance) does not use the orchestrator: it
-renders an Ansible inventory and runs the `cluster_os_update.yml` playbook
-directly. Edge components have a separate Foghorn-driven in-place update path
-documented in `edge-deployment.md`.
+hosts. `cluster release apply` (`cli/cmd/cluster_release.go`) is the primary
+operator rollout path: one ordered, resumable plan that sequences migrations,
+cross-service reconciliations, and upgrades behind fail-closed release-metadata
+validation — see below. It composes the lower-level commands that share the
+machinery in `cli/pkg/orchestrator/`: `cluster provision` (full desired state),
+`cluster diff`/`cluster apply` (typed rolling updates), and `cluster upgrade`
+(release-manifest version moves). `cluster os update` (OS package maintenance)
+does not use the orchestrator: it renders an Ansible inventory and runs the
+`cluster_os_update.yml` playbook directly. Edge components have a separate
+Foghorn-driven in-place update path documented in `edge-deployment.md`.
+
+## `cluster release apply`: the ordered release plan
+
+`cluster release apply` runs a single ordered, resumable plan for a whole release
+rather than leaving the operator to drive migrations, reconciliations, and version
+moves by hand. Release-metadata validation is fail-closed: a malformed or
+unresolved release manifest aborts the plan before any host is touched. Rollout
+gating distinguishes **readiness** from **liveness** at the level of which check a
+step waits on. An HTTP service gates on its _readiness_ path — `ReadyPath` when the
+service defines one, otherwise its HTTP `HealthPath` — via `HTTPReady`
+(`GateForService`, `cli/pkg/orchestrator/gate.go`; `Service.ReadinessPath()`,
+`pkg/servicedefs/servicedefs.go`). A service with a defined `ReadyPath` (e.g.
+Chandler) therefore gates on `/ready`, which proves the backing store rather than
+merely that the process is up, while the container liveness `HEALTHCHECK` stays on
+`HealthPath`. Only a service with no usable HTTP readiness path (non-HTTP, or no
+port) falls back to gating on `systemd` unit activity. This is gate selection
+only — there is no host cordon, drain, or re-admission mechanism. Because the plan
+is resumable, an interrupted run picks up at the first incomplete step instead of
+restarting the whole release. Operator-facing usage (dry-run plan preview, gates,
+and the `--yes` execution flow) is documented in
+[operators/running-upgrades.mdx](../../website_docs/src/content/docs/operators/running-upgrades.mdx).
 
 ## Planner and dependency graph
 
