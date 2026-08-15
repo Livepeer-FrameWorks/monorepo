@@ -566,14 +566,30 @@ func TestResolveFoghornForArtifact_RoutesToOriginCluster(t *testing.T) {
 }
 
 func TestResolveIngestEndpoint_FailsClosedWhenQuartermasterUnavailable(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
 	server := &CommodoreServer{
+		db:            db,
 		logger:        logrus.New(),
+		foghornPool:   newTestPool(t),
 		routeCache:    make(map[string]*clusterRoute),
 		routeCacheTTL: 5 * time.Minute,
 	}
 
+	// Routing resolves from the stream key even for an authenticated caller, so
+	// the key lookup runs first; with no lease it falls through to the owner's
+	// placement, which is what fails closed here.
+	mock.ExpectQuery("SELECT tenant_id, active_ingest_cluster_id").
+		WithArgs("sk_test").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "active_ingest_cluster_id", "lease_fresh"}).
+			AddRow("tenant-owner", nil, nil))
+
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-1")
-	_, err := server.ResolveIngestEndpoint(ctx, &sharedpb.IngestEndpointRequest{StreamKey: "sk_test"})
+	_, err = server.ResolveIngestEndpoint(ctx, &sharedpb.IngestEndpointRequest{StreamKey: "sk_test"})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -624,9 +640,9 @@ func TestResolveFoghornForStreamKeyQueriesByStreamKey(t *testing.T) {
 		routeCacheTTL: 5 * time.Minute,
 	}
 
-	mock.ExpectQuery("SELECT tenant_id, active_ingest_cluster_id\\s+FROM commodore.streams WHERE stream_key = \\$1").
+	mock.ExpectQuery("SELECT tenant_id, active_ingest_cluster_id").
 		WithArgs("sk_test").
-		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "active_ingest_cluster_id"}).AddRow("tenant-1", nil))
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "active_ingest_cluster_id", "lease_fresh"}).AddRow("tenant-1", nil, nil))
 
 	_, _, err = server.resolveFoghornForStreamKey(context.Background(), "sk_test")
 	if err == nil {
@@ -641,5 +657,126 @@ func TestResolveFoghornForStreamKeyQueriesByStreamKey(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestResolveFoghornForStreamKeyIgnoresExpiredIngestLease(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	pool := newTestPool(t)
+	if _, poolErr := pool.GetOrCreate("stale-cluster", "127.0.0.1:1"); poolErr != nil {
+		t.Fatalf("seed stale cluster client: %v", poolErr)
+	}
+	server := &CommodoreServer{
+		db:            db,
+		logger:        logrus.New(),
+		foghornPool:   pool,
+		routeCache:    make(map[string]*clusterRoute),
+		routeCacheTTL: 5 * time.Minute,
+	}
+
+	// Freshness is computed in SQL, so the row reports it directly.
+	mock.ExpectQuery("SELECT tenant_id, active_ingest_cluster_id").
+		WithArgs("sk_stale").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "active_ingest_cluster_id", "lease_fresh"}).
+			AddRow("tenant-1", "stale-cluster", false))
+
+	_, _, err = server.resolveFoghornForStreamKey(context.Background(), "sk_stale")
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("expired lease selected its stale pooled client: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+// While a lease holds, its cluster owns ingest: any other cluster would reject
+// the publish as a duplicate. So failing to reach the leased cluster is a
+// transient condition, not licence to hand back a different cluster's endpoint
+// that the publisher already cannot use.
+func TestResolveFoghornForStreamKeyFreshLeaseUnresolvableIsTransient(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := &CommodoreServer{
+		db:            db,
+		logger:        logrus.New(),
+		foghornPool:   newTestPool(t), // leased cluster is NOT pooled
+		routeCache:    make(map[string]*clusterRoute),
+		routeCacheTTL: 5 * time.Minute,
+		// quartermasterClient nil ⇒ resolveFoghornForCluster cannot resolve it.
+	}
+
+	mock.ExpectQuery("SELECT tenant_id, active_ingest_cluster_id").
+		WithArgs("sk_leased").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "active_ingest_cluster_id", "lease_fresh"}).
+			AddRow("tenant-1", "leased-cluster", true))
+
+	client, route, err := server.resolveFoghornForStreamKey(context.Background(), "sk_leased")
+	if err == nil {
+		t.Fatalf("resolution fell through to tenant placement; got route %+v", route)
+	}
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("want Unavailable for an unreachable lease holder, got %v", err)
+	}
+	if client != nil {
+		t.Error("a client was returned alongside the error")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+// Routing follows the stream key, never the caller's tenant. resolveIngestEndpoint
+// accepts an optional JWT, so the authenticated owner is the ordinary SDK case:
+// routing by their tenant would hand back their primary cluster while the lease
+// sits elsewhere, and PUSH_REWRITE would then reject the publish as a duplicate.
+func TestResolveIngestEndpoint_AuthenticatedStillHonoursLease(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := &CommodoreServer{
+		db:          db,
+		logger:      logrus.New(),
+		foghornPool: newTestPool(t), // leased cluster is not pooled or resolvable
+		routeCache: map[string]*clusterRoute{
+			// The caller's own tenant has a perfectly good route. If routing
+			// consulted the caller, resolution would succeed against this and
+			// never touch the lease.
+			"tenant-caller": {
+				clusterID:           "caller-cluster",
+				foghornAddr:         "foghorn-caller:50051",
+				resolvedAt:          time.Now(),
+				admissionResolvedAt: time.Now(),
+			},
+		},
+		routeCacheTTL: 5 * time.Minute,
+	}
+
+	mock.ExpectQuery("SELECT tenant_id, active_ingest_cluster_id").
+		WithArgs("sk_owned_elsewhere").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "active_ingest_cluster_id", "lease_fresh"}).
+			AddRow("tenant-owner", "leased-cluster", true))
+
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-caller")
+	_, err = server.ResolveIngestEndpoint(ctx, &sharedpb.IngestEndpointRequest{StreamKey: "sk_owned_elsewhere"})
+	if err == nil {
+		t.Fatal("authenticated caller was routed by its own tenant, ignoring the stream's active lease")
+	}
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("want Unavailable for an unreachable lease holder, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("stream-key lookup did not run: %v", err)
 	}
 }

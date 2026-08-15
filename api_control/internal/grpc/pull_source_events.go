@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -25,6 +26,14 @@ const (
 // tenant_id is required so the row is correctly attributed; stream_id can be
 // empty when resolution couldn't reach a tenant (e.g. commodore_error).
 func (s *CommodoreServer) RecordPullSourceEvent(ctx context.Context, req *commodorepb.RecordPullSourceEventRequest) (*emptypb.Empty, error) {
+	// SERVICE-TOKEN ONLY, checked before the insert and before the placement
+	// write below. The tenant, stream, and cluster all come from the request,
+	// and the shared interceptor also accepts JWTs — so without this a
+	// logged-in user could write another tenant's source-event history and
+	// steer a pull stream's placement.
+	if ctxkeys.GetAuthType(ctx) != "service" {
+		return nil, status.Error(codes.PermissionDenied, "RecordPullSourceEvent requires service token auth")
+	}
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
@@ -44,14 +53,31 @@ func (s *CommodoreServer) RecordPullSourceEvent(ctx context.Context, req *commod
 	if req.GetEventKind() == "resolved" && req.GetStreamId() != "" {
 		clusterID := strings.TrimSpace(req.GetDetail())
 		if clusterID != "" {
+			// Owned and contention-guarded like every other writer of this
+			// column. A pull stream's placement is owned by the stream (its
+			// resolver is the single writer for it), so an unrelated cluster's
+			// stale resolve cannot take over a live placement, and a push
+			// publisher's token-owned claim is never overwritten. Restricted to
+			// ingest_mode='pull' as before, which already excludes push rows.
 			if _, execErr := s.db.ExecContext(ctx, `
 				UPDATE commodore.streams
 				   SET active_ingest_cluster_id = $1,
-				       active_ingest_cluster_updated_at = NOW()
+				       active_ingest_cluster_updated_at = NOW(),
+				       active_ingest_claim_id = $4
 				 WHERE id = $2::uuid
 				   AND tenant_id = $3::uuid
 				   AND ingest_mode = 'pull'
-			`, clusterID, req.GetStreamId(), req.GetTenantId()); execErr != nil {
+				   AND (
+				     active_ingest_cluster_id IS NULL
+				     OR active_ingest_cluster_id = ''
+				     OR active_ingest_cluster_updated_at IS NULL
+				     OR active_ingest_cluster_updated_at < NOW() - `+activeIngestLeaseInterval+`
+				     OR (
+				       active_ingest_cluster_id = $1
+				       AND (active_ingest_claim_id IS NULL OR active_ingest_claim_id = '' OR active_ingest_claim_id = $4)
+				     )
+				   )
+			`, clusterID, req.GetStreamId(), req.GetTenantId(), pullClaimToken(req.GetStreamId())); execErr != nil {
 				s.logger.WithError(execErr).WithField("stream_id", req.GetStreamId()).Warn("Failed to stamp pull stream active ingest cluster")
 			}
 		}

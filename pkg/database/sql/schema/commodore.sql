@@ -264,19 +264,35 @@ CREATE TABLE IF NOT EXISTS commodore.streams (
 
     -- ===== CLUSTER TRACKING =====
     -- Cluster currently sinking the stream's ingest, recorded by Foghorn:
-    --   * push streams      → set by ValidateStreamKey on PUSH_REWRITE
+    --   * push streams      → claimed by ValidateStreamKey on PUSH_REWRITE,
+    --                          then re-asserted by SyncActiveIngestPlacement
+    --                          from Foghorn's live source-presence state:
+    --                          renewed on a cadence inside the lease window,
+    --                          released when that publisher's close flips the
+    --                          source inactive
     --   * mist_native       → set by RecordStreamActiveCluster after the
     --                          managed-stream Apply is verified by the
     --                          sidecar's Heartbeat-borne applied set
     --                          (cleared by ClearStreamActiveCluster on
     --                          verified retract)
-    -- Both writers share the 30 s contended-update guard so a stale claim
-    -- cannot overwrite a fresh lease from a different cluster.
+    -- Every writer shares the 30 s contended-update guard, so a stale claim
+    -- cannot overwrite a fresh one from a different cluster; release is
+    -- additionally fenced on the caller still holding the claim, so a late
+    -- close cannot unpin a publisher that has moved on.
+    -- A lapsed timestamp means renewal stopped: either the publisher left or
+    -- the cluster serving it can no longer reach Commodore. It is a lease,
+    -- not a liveness record, and routing treats it as one.
     -- Consumed by Commodore to route stream-scoped commands (CreateClip,
     -- etc.) and by ResolvePlaybackID/ResolveInternalName to override the
     -- tenant default origin when set.
     active_ingest_cluster_id VARCHAR(100),
     active_ingest_cluster_updated_at TIMESTAMP,
+    -- Owner of the current claim: the Mist trigger UUID of the publisher connection that took it
+    -- (unique per connection for its lifetime, and the identity foghorn.ingest_sessions keys a
+    -- session by). Stamped by every writer that acquires or refreshes the claim. Release matches on
+    -- it, so an attempt that took no claim — or a different node in the same cluster — cannot clear
+    -- a live publisher's placement. NULL when nothing holds the claim.
+    active_ingest_claim_id VARCHAR(64),
     -- Durable, append-only set of every media cluster that has served this stream's live thumbnails. SOLE writer:
     -- RegisterStreamThumbnailServingCell (the service-fenced register-before-mint call), so a cell is here iff it
     -- registered before minting any object. active_ingest_cluster_id is NOT a writer (it names only the current ingest

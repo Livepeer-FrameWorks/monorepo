@@ -15,12 +15,15 @@ import (
 type Interface interface {
 	Close() error
 	InvalidateTenantCacheKeys(tenantID string)
-	ValidateStreamKey(ctx context.Context, streamKey string, clusterID ...string) (*commodorepb.ValidateStreamKeyResponse, error)
+	ValidateStreamKey(ctx context.Context, streamKey string) (*commodorepb.ValidateStreamKeyResponse, error)
+	ValidateStreamKeyForClaim(ctx context.Context, streamKey, clusterID, claimToken string) (*commodorepb.ValidateStreamKeyResponse, error)
 	ListManagedStreams(ctx context.Context, clusterID string) (*commodorepb.ListManagedStreamsResponse, error)
 	ListStreamMonitoring(ctx context.Context, tenantID string) (*commodorepb.ListStreamMonitoringResponse, error)
 	RecordStreamActiveCluster(ctx context.Context, streamID, tenantID, clusterID string) (*commodorepb.RecordStreamActiveClusterResponse, error)
-	ClearStreamActiveCluster(ctx context.Context, streamID, expectedClusterID string) (*commodorepb.ClearStreamActiveClusterResponse, error)
+	ClearStreamActiveCluster(ctx context.Context, streamID, expectedClusterID, tenantID string) (*commodorepb.ClearStreamActiveClusterResponse, error)
+	SyncActiveIngestPlacement(ctx context.Context, clusterID string, renew, release []*commodorepb.ActiveIngestStream) (*commodorepb.SyncActiveIngestPlacementResponse, error)
 	ResolveStreamContext(ctx context.Context, streamID, playbackID, internalName, clusterID string) (*commodorepb.ResolveStreamContextResponse, error)
+	ResolveStreamContextByStreamKey(ctx context.Context, streamKey, clusterID string) (*commodorepb.ResolveStreamContextResponse, error)
 	ResolvePlaybackID(ctx context.Context, playbackID string) (*commodorepb.ResolvePlaybackIDResponse, error)
 	ResolveInternalName(ctx context.Context, internalName string) (*commodorepb.ResolveInternalNameResponse, error)
 	ResolveArtifactPlaybackID(ctx context.Context, playbackID string) (*commodorepb.ResolveArtifactPlaybackIDResponse, error)

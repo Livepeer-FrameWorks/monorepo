@@ -114,7 +114,7 @@ func TestValidateStreamKeyBypassesCache(t *testing.T) {
 	}
 }
 
-func TestValidateStreamKeyFallsBackToCachedAdmissionOnBackendError(t *testing.T) {
+func TestValidateStreamKeyCacheFallbackExcludesClaims(t *testing.T) {
 	c := cache.New(cache.Options{
 		TTL:                  time.Hour,
 		StaleWhileRevalidate: time.Hour,
@@ -123,6 +123,7 @@ func TestValidateStreamKeyFallsBackToCachedAdmissionOnBackendError(t *testing.T)
 	}, cache.MetricsHooks{})
 	cached := &commodorepb.ValidateStreamKeyResponse{Valid: true, IsRecordingEnabled: true}
 	c.SetDefault(buildValidateStreamKeyCacheKey("sk_live_abc", "demo-media"), cached)
+	c.SetDefault(buildValidateStreamKeyCacheKey("sk_live_abc", ""), cached)
 
 	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
@@ -150,14 +151,19 @@ func TestValidateStreamKeyFallsBackToCachedAdmissionOnBackendError(t *testing.T)
 	}
 	t.Cleanup(func() { _ = client.Close() })
 
-	got, err := client.ValidateStreamKey(context.Background(), "sk_live_abc", "demo-media")
+	claimed, err := client.ValidateStreamKeyForClaim(context.Background(), "sk_live_abc", "demo-media", "conn-1")
+	if err == nil || claimed != nil {
+		t.Fatalf("claiming validation = (%v, %v), want backend error and no cached response", claimed, err)
+	}
+
+	got, err := client.ValidateStreamKey(context.Background(), "sk_live_abc")
 	if err != nil {
-		t.Fatalf("ValidateStreamKey returned backend error instead of cached admission: %v", err)
+		t.Fatalf("non-claiming validation did not use bounded cache: %v", err)
 	}
 	if got != cached {
-		t.Fatalf("ValidateStreamKey did not return cached admission snapshot")
+		t.Fatalf("non-claiming validation did not return cached admission snapshot")
 	}
-	if stub.calls.Load() != 1 {
-		t.Fatalf("ValidateStreamKey called backend %d times, want 1", stub.calls.Load())
+	if stub.calls.Load() != 2 {
+		t.Fatalf("ValidateStreamKey called backend %d times, want 2", stub.calls.Load())
 	}
 }

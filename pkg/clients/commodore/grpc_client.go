@@ -19,6 +19,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/proto"
 )
 
 const DefaultServerName = "commodore.internal"
@@ -59,6 +60,29 @@ type GRPCConfig struct {
 	CACertFile    string
 	CACertPEM     string
 	ServerName    string
+}
+
+// timeoutInterceptor bounds every call at the configured timeout.
+//
+// Calls dial with WaitForReady(true), so without a deadline an unreachable
+// Commodore parks the caller indefinitely — including PUSH_REWRITE, which
+// invokes validation on a background context. Applying it here rather than
+// per method means a new call site cannot forget it.
+//
+// The effective deadline is the sooner of the caller's and the configured
+// maximum: a caller may ask for less time, never more.
+func timeoutInterceptor(timeout time.Duration) grpc.UnaryClientInterceptor {
+	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		if timeout <= 0 {
+			return invoker(ctx, method, req, reply, cc, opts...)
+		}
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= timeout {
+			return invoker(ctx, method, req, reply, cc, opts...)
+		}
+		ctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		return invoker(ctx, method, req, reply, cc, opts...)
+	}
 }
 
 // authInterceptor propagates authentication to gRPC metadata.
@@ -126,6 +150,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		transport,
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
 		grpc.WithChainUnaryInterceptor(
+			timeoutInterceptor(config.Timeout),
 			authInterceptor(config.ServiceToken),
 			clients.FailsafeUnaryInterceptor("commodore", config.Logger),
 		),
@@ -185,26 +210,43 @@ func buildValidateStreamKeyCacheKey(streamKey, clusterID string) string {
 // INTERNAL SERVICE OPERATIONS (Foghorn, Sidecar → Commodore)
 // ============================================================================
 
-// ValidateStreamKey validates a stream key (called by Foghorn on PUSH_REWRITE).
-// clusterID is optional — when provided, Commodore records which cluster the stream is ingesting on.
-func (c *GRPCClient) ValidateStreamKey(ctx context.Context, streamKey string, clusterID ...string) (*commodorepb.ValidateStreamKeyResponse, error) {
-	cid := ""
-	if len(clusterID) > 0 {
-		cid = clusterID[0]
-	}
+// ValidateStreamKey checks a stream key and takes NO placement claim — the
+// GraphQL and MCP key checks, which only ask whether a key is usable.
+//
+// Claiming placement is ValidateStreamKeyForClaim, deliberately a separate
+// call: naming a cluster is what claims, and a claim needs an owner, so the two
+// arguments are not independently optional.
+func (c *GRPCClient) ValidateStreamKey(ctx context.Context, streamKey string) (*commodorepb.ValidateStreamKeyResponse, error) {
+	return c.ValidateStreamKeyForClaim(ctx, streamKey, "", "")
+}
+
+// ValidateStreamKeyForClaim validates and claims ingest placement in cid for the
+// publisher connection named by claimToken, which becomes the claim's owner and
+// is what a later release must prove (see ValidateStreamKeyRequest.claim_token).
+func (c *GRPCClient) ValidateStreamKeyForClaim(ctx context.Context, streamKey, cid, claimToken string) (*commodorepb.ValidateStreamKeyResponse, error) {
 	cacheKey := buildValidateStreamKeyCacheKey(streamKey, cid)
 	resp, err := c.internal.ValidateStreamKey(ctx, &commodorepb.ValidateStreamKeyRequest{
-		StreamKey: streamKey,
-		ClusterId: cid,
+		StreamKey:  streamKey,
+		ClusterId:  cid,
+		ClaimToken: claimToken,
 	})
 	if err == nil {
 		if c.cache != nil && resp != nil && resp.GetValid() {
-			c.cache.SetDefault(cacheKey, resp)
+			// Cache the admission, never the claim: claim_acquired describes one
+			// specific call's effect on the placement row, and replaying it later
+			// would tell a caller it owns a claim nothing took.
+			if cached, ok := proto.Clone(resp).(*commodorepb.ValidateStreamKeyResponse); ok {
+				cached.ClaimAcquired = false
+				c.cache.SetDefault(cacheKey, cached)
+			}
 		}
 		return resp, nil
 	}
 
-	if c.cache != nil {
+	// A claim-taking admission must fail closed when Commodore is unreachable: cached validation can
+	// prove the key was once valid, but cannot serialize placement against another cell. Plain
+	// non-claiming validation may still use the bounded cache.
+	if strings.TrimSpace(cid) == "" && strings.TrimSpace(claimToken) == "" && c.cache != nil {
 		if cached, ok := c.cache.Peek(cacheKey); ok {
 			if cachedResp, ok := cached.(*commodorepb.ValidateStreamKeyResponse); ok && cachedResp.GetValid() {
 				return cachedResp, nil
@@ -264,10 +306,26 @@ func (c *GRPCClient) RegisterStreamThumbnailServingCell(ctx context.Context, str
 // expected_cluster_id is the cluster the caller believes is currently
 // recorded; the update is conditional so a stale retract cannot wipe a
 // fresher claim from a peer cluster.
-func (c *GRPCClient) ClearStreamActiveCluster(ctx context.Context, streamID, expectedClusterID string) (*commodorepb.ClearStreamActiveClusterResponse, error) {
+func (c *GRPCClient) ClearStreamActiveCluster(ctx context.Context, streamID, expectedClusterID, tenantID string) (*commodorepb.ClearStreamActiveClusterResponse, error) {
 	return c.internal.ClearStreamActiveCluster(ctx, &commodorepb.ClearStreamActiveClusterRequest{
 		StreamId:          streamID,
 		ExpectedClusterId: expectedClusterID,
+		TenantId:          tenantID,
+	})
+}
+
+// SyncActiveIngestPlacement renews the ingest claim for streams still being
+// pushed to this cluster and releases the ones whose push just ended. Renewal
+// follows PUSH_REWRITE's contention rule — refresh this cluster's claim, and
+// acquire one only where the row holds none or a lapsed one — so it can
+// establish placement for an unplaced publisher without ever moving a live
+// one. Release only clears a claim this cluster still holds, so a late close
+// cannot unpin a publisher who has moved on.
+func (c *GRPCClient) SyncActiveIngestPlacement(ctx context.Context, clusterID string, renew, release []*commodorepb.ActiveIngestStream) (*commodorepb.SyncActiveIngestPlacementResponse, error) {
+	return c.internal.SyncActiveIngestPlacement(ctx, &commodorepb.SyncActiveIngestPlacementRequest{
+		ClusterId: clusterID,
+		Renew:     renew,
+		Release:   release,
 	})
 }
 
@@ -293,6 +351,22 @@ func (c *GRPCClient) ResolveStreamContext(ctx context.Context, streamID, playbac
 		return nil, fmt.Errorf("ResolveStreamContext requires exactly one of stream_id / playback_id / internal_name")
 	}
 	return c.internal.ResolveStreamContext(ctx, req)
+}
+
+// ResolveStreamContextByStreamKey resolves the same fact set as
+// ResolveStreamContext, keyed on the publisher's stream key. It is the
+// non-claiming counterpart to ValidateStreamKey: endpoint resolution must
+// never take the ingest lease, which ValidateStreamKey does whenever a
+// cluster resolves. Responses are deliberately not cached so a Commodore
+// outage surfaces as an error rather than a stale admission.
+func (c *GRPCClient) ResolveStreamContextByStreamKey(ctx context.Context, streamKey, clusterID string) (*commodorepb.ResolveStreamContextResponse, error) {
+	if streamKey == "" {
+		return nil, fmt.Errorf("ResolveStreamContextByStreamKey requires a stream key")
+	}
+	return c.internal.ResolveStreamContext(ctx, &commodorepb.ResolveStreamContextRequest{
+		ClusterId:  clusterID,
+		Identifier: &commodorepb.ResolveStreamContextRequest_StreamKey{StreamKey: streamKey},
+	})
 }
 
 // ResolvePlaybackID resolves a playback ID to internal stream name

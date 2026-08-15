@@ -398,9 +398,10 @@ func TestBuildClusterFanoutTargets_DistinctOfficial(t *testing.T) {
 
 func TestFilterPeersByPolicy_AllowsSelfHostedGrantRegardlessOfPlanClass(t *testing.T) {
 	peers := []*clusterpeerpb.TenantClusterPeer{
-		{ClusterId: "official", ClusterClass: "platform_official", ClusterType: "shared-lb"},
-		{ClusterId: "self-hosted", ClusterClass: "tenant_private", ClusterType: "self-hosted"},
-		{ClusterId: "private", ClusterClass: "tenant_private", ClusterType: "dedicated"},
+		{ClusterId: "official", ClusterClass: "platform_official", ClusterType: "shared-lb", HealthStatus: "healthy"},
+		{ClusterId: "self-hosted", ClusterClass: "tenant_private", ClusterType: "self-hosted", HealthStatus: "healthy"},
+		{ClusterId: "private", ClusterClass: "tenant_private", ClusterType: "dedicated", HealthStatus: "healthy"},
+		{ClusterId: "unclassified", ClusterType: "shared-lb", HealthStatus: "healthy"},
 	}
 	filtered := filterPeersByPolicy(peers, map[string]struct{}{"platform_official": {}})
 	if len(filtered) != 2 {
@@ -411,13 +412,42 @@ func TestFilterPeersByPolicy_AllowsSelfHostedGrantRegardlessOfPlanClass(t *testi
 	}
 }
 
-func TestFilterPeersByPolicy_DropsUnhealthySelfHostedPeer(t *testing.T) {
+func TestFilterHealthyPeers_DropsEveryNonHealthyState(t *testing.T) {
 	peers := []*clusterpeerpb.TenantClusterPeer{
+		{ClusterId: "healthy", HealthStatus: " healthy "},
 		{ClusterId: "self-hosted", ClusterClass: "tenant_private", ClusterType: "self-hosted", HealthStatus: "offline"},
+		{ClusterId: "degraded", HealthStatus: "degraded"},
+		{ClusterId: "unknown", HealthStatus: "unknown"},
+		{ClusterId: "empty"},
 	}
-	filtered := filterPeersByPolicy(peers, map[string]struct{}{"platform_official": {}})
-	if len(filtered) != 0 {
-		t.Fatalf("expected no peers, got %d", len(filtered))
+	filtered := filterHealthyPeers(peers)
+	if len(filtered) != 1 || filtered[0].GetClusterId() != "healthy" {
+		t.Fatalf("expected only the explicitly healthy peer, got %+v", filtered)
+	}
+}
+
+func TestClusterAdmissionPeer_DistinguishesEntitlementFromHealth(t *testing.T) {
+	route := &clusterRoute{admissionPeers: []*clusterpeerpb.TenantClusterPeer{
+		{ClusterId: "healthy", HealthStatus: "healthy"},
+		{ClusterId: "degraded", HealthStatus: "degraded"},
+		{ClusterId: "unknown"},
+	}}
+	tests := []struct {
+		clusterID string
+		want      commodorepb.StreamKeyRejectionReason
+	}{
+		{clusterID: "healthy", want: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_UNSPECIFIED},
+		{clusterID: "degraded", want: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY},
+		{clusterID: "unknown", want: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY},
+		{clusterID: "not-entitled", want: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED},
+	}
+	for _, test := range tests {
+		t.Run(test.clusterID, func(t *testing.T) {
+			_, got := clusterAdmissionPeer(route, test.clusterID)
+			if got != test.want {
+				t.Fatalf("clusterAdmissionPeer(%q) = %v, want %v", test.clusterID, got, test.want)
+			}
+		})
 	}
 }
 

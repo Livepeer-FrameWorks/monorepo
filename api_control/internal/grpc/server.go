@@ -56,11 +56,13 @@ import (
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	tenantlimitspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/turnstile"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 	"github.com/prometheus/client_golang/prometheus"
+	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
@@ -151,10 +153,16 @@ type CommodoreServer struct {
 	// Separate FieldEncryptor for pull-input source URIs (purpose
 	// "pull-source-uri"). Used by ResolvePullSourceByInternalName and the
 	// commodore bootstrap reconciler when persisting stream_pull_sources.
-	pullSourceEncryptor  *fieldcrypt.FieldEncryptor
-	routeCache           map[string]*clusterRoute
-	routeCacheMu         sync.RWMutex
-	routeCacheTTL        time.Duration
+	pullSourceEncryptor *fieldcrypt.FieldEncryptor
+	routeCache          map[string]*clusterRoute
+	routeCacheMu        sync.RWMutex
+	routeCacheTTL       time.Duration
+	// admissionRefresh collapses concurrent admission-state refreshes for the
+	// same tenant into one Quartermaster/Purser round trip.
+	admissionRefresh singleflight.Group
+	// routeBuild collapses concurrent full route constructions for the same
+	// tenant; each one fans out to Quartermaster, Purser, and Foghorn discovery.
+	routeBuild           singleflight.Group
 	foghornCandidateMu   sync.Mutex
 	foghornCandidateNext map[string]int
 	// clusterURLs resolves cluster_id → Chandler base URL from an in-process
@@ -207,9 +215,15 @@ type clusterRoute struct {
 	officialClusterName     string
 	officialFoghornGrpcAddr string
 	foghornAddrsByCluster   map[string][]string
-	clusterPeers            []*clusterpeerpb.TenantClusterPeer   // full tenant cluster context (includes per-peer foghorn addrs)
+	clusterPeers            []*clusterpeerpb.TenantClusterPeer   // healthy peers eligible for routing
+	admissionPeers          []*clusterpeerpb.TenantClusterPeer   // plan-entitled peers, including unhealthy peers needed for structured admission denials
 	tenantResourceLimits    *tenantlimitspb.TenantResourceLimits // access-specific cap override; nil = use Purser tier entitlement
 	resolvedAt              time.Time
+	// admissionResolvedAt ages the peer sets separately from the rest of the
+	// route. Addresses and slugs change rarely; peer health and plan
+	// entitlement decide whether a publish is admitted, and must not be served
+	// from a route-length cache.
+	admissionResolvedAt time.Time
 }
 
 type clusterFanoutTarget struct {
@@ -217,7 +231,22 @@ type clusterFanoutTarget struct {
 	addr      string
 }
 
-const activeIngestClusterFreshnessWindow = 2 * time.Minute
+// activeIngestLease is how long a cluster's claim on a stream's ingest holds.
+//
+// One constant governs every side: the SQL claim, after which another cluster
+// may take the placement; the freshness window discovery uses to decide whether
+// a recorded placement still means anything; and Foghorn's renewal cadence,
+// which must re-assert inside it. They must be the same value, or a cluster can
+// hold the lease while publishers are routed elsewhere — so it is shared rather
+// than restated here.
+const activeIngestLease = streamident.ActiveIngestLease
+
+// activeIngestClusterFreshnessWindow is the discovery-side view of the lease.
+const activeIngestClusterFreshnessWindow = activeIngestLease
+
+// activeIngestLeaseInterval renders the lease as a SQL interval, so the claim
+// predicate and the discovery window come from the same constant.
+var activeIngestLeaseInterval = fmt.Sprintf("INTERVAL '%d seconds'", int(activeIngestLease.Seconds()))
 
 func dedupeAddrs(addrs ...string) []string {
 	seen := make(map[string]struct{}, len(addrs))
@@ -637,25 +666,79 @@ func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
 	return srv
 }
 
+// resolveClusterRouteForTenant returns the tenant's cached route, building it
+// when absent or expired.
+//
+// The build is collapsed per tenant for the same reason the admission refresh
+// is, and more so: it fans out to Quartermaster, Purser, and one Foghorn
+// discovery per cluster in the route. At expiry every concurrent request for
+// that tenant would otherwise repeat all of it.
 func (s *CommodoreServer) resolveClusterRouteForTenant(ctx context.Context, tenantID string) (*clusterRoute, error) {
-	s.routeCacheMu.RLock()
-	if route, ok := s.routeCache[tenantID]; ok && time.Since(route.resolvedAt) < s.routeCacheTTL {
-		s.routeCacheMu.RUnlock()
+	if route, ok := s.freshCachedClusterRoute(tenantID); ok {
 		return route, nil
 	}
-	s.routeCacheMu.RUnlock()
 
 	if s.quartermasterClient == nil {
 		return nil, status.Error(codes.Unavailable, "quartermaster not available for cluster routing")
 	}
 
+	// DoChan, not Do: the shared build must not die with whichever caller
+	// happened to lead it. See resolveAdmissionRouteForTenant.
+	shared := s.routeBuild.DoChan(tenantID, func() (any, error) {
+		// A follower that joined just as the leader finished would otherwise
+		// trigger a second identical build.
+		if route, ok := s.freshCachedClusterRoute(tenantID); ok {
+			return route, nil
+		}
+		buildCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), routeBuildTimeout)
+		defer cancel()
+		return s.buildClusterRoute(buildCtx, tenantID)
+	})
+
+	select {
+	case <-ctx.Done():
+		return nil, status.FromContextError(ctx.Err()).Err()
+	case result := <-shared:
+		if result.Err != nil {
+			return nil, result.Err
+		}
+		route, ok := result.Val.(*clusterRoute)
+		if !ok {
+			return nil, status.Error(codes.Internal, "cluster route build returned an unexpected type")
+		}
+		return route, nil
+	}
+}
+
+// routeBuildTimeout bounds the shared route build, which is detached from any
+// one caller's deadline. It is longer than the admission refresh's because the
+// build additionally runs Foghorn discovery per cluster.
+const routeBuildTimeout = 15 * time.Second
+
+func (s *CommodoreServer) freshCachedClusterRoute(tenantID string) (*clusterRoute, bool) {
+	s.routeCacheMu.RLock()
+	defer s.routeCacheMu.RUnlock()
+	route, ok := s.routeCache[tenantID]
+	if !ok || time.Since(route.resolvedAt) >= s.routeCacheTTL {
+		return nil, false
+	}
+	return route, true
+}
+
+func (s *CommodoreServer) buildClusterRoute(ctx context.Context, tenantID string) (*clusterRoute, error) {
 	resp, err := s.quartermasterClient.GetClusterRouting(ctx, &quartermasterpb.GetClusterRoutingRequest{TenantId: tenantID})
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "cluster routing failed: %v", err)
 	}
 
-	allowedClasses := s.allowedClusterClassesForTenant(ctx, tenantID)
-	filteredPeers := filterPeersByPolicy(resp.GetClusterPeers(), allowedClasses)
+	// Never cache a route built from an unresolved entitlement: a demoted peer
+	// set would be served for the whole TTL.
+	allowedClasses, err := s.allowedClusterClassesForTenant(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	admissionPeers := filterPeersByPolicy(resp.GetClusterPeers(), allowedClasses)
+	routingPeers := filterHealthyPeers(admissionPeers)
 
 	route := &clusterRoute{
 		clusterID:               resp.GetClusterId(),
@@ -669,9 +752,11 @@ func (s *CommodoreServer) resolveClusterRouteForTenant(ctx context.Context, tena
 		officialClusterName:     resp.GetOfficialClusterName(),
 		officialFoghornGrpcAddr: resp.GetOfficialFoghornGrpcAddr(),
 		foghornAddrsByCluster:   make(map[string][]string),
-		clusterPeers:            filteredPeers,
+		clusterPeers:            routingPeers,
+		admissionPeers:          admissionPeers,
 		tenantResourceLimits:    resp.GetTenantResourceLimits(),
 		resolvedAt:              time.Now(),
+		admissionResolvedAt:     time.Now(),
 	}
 	for _, cid := range routeClusterIDs(route) {
 		discovered := s.discoverFoghornAddrs(ctx, cid)
@@ -679,6 +764,9 @@ func (s *CommodoreServer) resolveClusterRouteForTenant(ctx context.Context, tena
 	}
 	normalizeClusterRoute(route)
 
+	// Unconditional, unlike an admission refresh: this resolved every field
+	// rather than patching two of them, and singleflight means no second build
+	// for this tenant ran alongside it.
 	s.routeCacheMu.Lock()
 	s.routeCache[tenantID] = route
 	s.routeCacheMu.Unlock()
@@ -686,18 +774,147 @@ func (s *CommodoreServer) resolveClusterRouteForTenant(ctx context.Context, tena
 	return route, nil
 }
 
-func (s *CommodoreServer) allowedClusterClassesForTenant(ctx context.Context, tenantID string) map[string]struct{} {
+// admissionRouteFreshness bounds how stale peer health and plan entitlement may
+// be when they gate a publish.
+//
+// The route cache exists for addresses and slugs, which change rarely; a
+// cluster's health and a tenant's plan do not. Served at route-cache age, a
+// cluster that has degraded stays admissible and one that has recovered stays
+// rejected for minutes, and a plan change lands just as late. Admission
+// re-resolves those two facts on its own, much shorter, clock.
+const admissionRouteFreshness = 15 * time.Second
+
+// resolveAdmissionRouteForTenant returns a route whose peer sets are fresh
+// enough to decide admission. The static parts stay cached.
+//
+// Refreshes are collapsed per tenant: when an entry ages out, every concurrent
+// admission would otherwise issue its own Quartermaster and Purser lookups for
+// the same answer.
+func (s *CommodoreServer) resolveAdmissionRouteForTenant(ctx context.Context, tenantID string) (*clusterRoute, error) {
+	route, err := s.resolveClusterRouteForTenant(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if time.Since(route.admissionResolvedAt) <= admissionRouteFreshness {
+		return route, nil
+	}
+
+	// The shared lookup runs on a bounded context of its own, not on whichever
+	// caller happened to arrive first: with Do the leader's context is the one
+	// captured, so its cancellation would abort the lookup every follower is
+	// waiting on. DoChan lets each caller stop waiting when its own context
+	// ends, while the shared work continues for the others.
+	shared := s.admissionRefresh.DoChan(tenantID, func() (any, error) {
+		refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), admissionRefreshTimeout)
+		defer cancel()
+		return s.refreshAdmissionRoute(refreshCtx, tenantID, route)
+	})
+
+	select {
+	case <-ctx.Done():
+		return nil, status.FromContextError(ctx.Err()).Err()
+	case result := <-shared:
+		if result.Err != nil {
+			return nil, result.Err
+		}
+		refreshed, ok := result.Val.(*clusterRoute)
+		if !ok {
+			return nil, status.Error(codes.Internal, "admission route refresh returned an unexpected type")
+		}
+		return refreshed, nil
+	}
+}
+
+// admissionRefreshTimeout bounds the shared admission lookup. It is detached
+// from any one caller's deadline, so it needs its own.
+const admissionRefreshTimeout = 10 * time.Second
+
+func (s *CommodoreServer) refreshAdmissionRoute(ctx context.Context, tenantID string, route *clusterRoute) (*clusterRoute, error) {
+	if s.quartermasterClient == nil {
+		return nil, status.Error(codes.Unavailable, "quartermaster not available for cluster routing")
+	}
+
+	resp, err := s.quartermasterClient.GetClusterRouting(ctx, &quartermasterpb.GetClusterRoutingRequest{TenantId: tenantID})
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "cluster routing refresh failed: %v", err)
+	}
+	allowedClasses, err := s.allowedClusterClassesForTenant(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Copy rather than mutate: the cached route is shared with in-flight
+	// readers, and a torn peer slice would be worse than a stale one.
+	refreshed := *route
+	refreshed.admissionPeers = filterPeersByPolicy(resp.GetClusterPeers(), allowedClasses)
+	refreshed.clusterPeers = filterHealthyPeers(refreshed.admissionPeers)
+	refreshed.tenantResourceLimits = resp.GetTenantResourceLimits()
+	refreshed.admissionResolvedAt = time.Now()
+
+	return s.installRefreshedAdmissionRoute(tenantID, route, &refreshed), nil
+}
+
+// installRefreshedAdmissionRoute publishes a refreshed route only over the
+// exact entry the refresh started from, and returns the route the caller should
+// use.
+//
+// Two things can have happened while the lookups ran. Another refresh may have
+// finished first, in which case overwriting would replace current health with
+// older state and stamp it fresh for another window. Or a failed dial may have
+// deliberately evicted the entry — reinserting the route it just invalidated
+// would undo that. In both cases the cache is left alone and the caller simply
+// uses this result.
+func (s *CommodoreServer) installRefreshedAdmissionRoute(tenantID string, from, refreshed *clusterRoute) *clusterRoute {
+	s.routeCacheMu.Lock()
+	defer s.routeCacheMu.Unlock()
+
+	current, ok := s.routeCache[tenantID]
+	if !ok {
+		// Deliberately evicted while this refresh ran; do not reinsert.
+		return refreshed
+	}
+	if current != from {
+		// Something replaced the entry: a newer full-route build, or another
+		// refresh. It wins outright rather than on timestamp — these stamp
+		// completion, not when Quartermaster and Purser produced the snapshot,
+		// so a slow reader of old state can finish last and look newer.
+		return current
+	}
+	s.routeCache[tenantID] = refreshed
+	return refreshed
+}
+
+// allowedClusterClassesForTenant resolves which cluster classes a tenant's
+// plan permits.
+//
+// A Purser *failure* is not a free tier. Returning the free set on a transport
+// error would silently demote a paying tenant, and because the caller caches
+// the resulting route, that demotion would stick for the cache TTL and surface
+// as CLUSTER_NOT_ENTITLED — a permanent-looking denial produced by a transient
+// blip. Errors propagate instead, so the caller can fail closed as transient.
+//
+// A tenant with no subscription is a real answer, not a failure: that is the
+// free tier.
+func (s *CommodoreServer) allowedClusterClassesForTenant(ctx context.Context, tenantID string) (map[string]struct{}, error) {
 	free := map[string]struct{}{"platform_official": {}}
+	// Purser not wired up at all is a deployment shape (dev stacks), not a
+	// failed lookup.
 	if s.purserClient == nil {
-		return free
+		return free, nil
 	}
 	subResp, err := s.purserClient.GetSubscription(ctx, tenantID)
-	if err != nil || subResp == nil || subResp.GetSubscription() == nil {
-		return free
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "subscription lookup failed: %v", err)
+	}
+	if subResp == nil || subResp.GetSubscription() == nil {
+		return free, nil
 	}
 	tier, err := s.purserClient.GetBillingTier(ctx, subResp.GetSubscription().GetTierId())
-	if err != nil || tier == nil {
-		return free
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "billing tier lookup failed: %v", err)
+	}
+	if tier == nil {
+		return free, nil
 	}
 	out := map[string]struct{}{"platform_official": {}}
 	switch level := tier.GetTierLevel(); {
@@ -707,7 +924,7 @@ func (s *CommodoreServer) allowedClusterClassesForTenant(ctx context.Context, te
 	case level >= 2:
 		out["third_party_marketplace"] = struct{}{}
 	}
-	return out
+	return out, nil
 }
 
 func findPeerByClusterID(peers []*clusterpeerpb.TenantClusterPeer, clusterID string) *clusterpeerpb.TenantClusterPeer {
@@ -745,19 +962,46 @@ func filterPeersByPolicy(peers []*clusterpeerpb.TenantClusterPeer, allowedClasse
 		if peer == nil {
 			continue
 		}
-		class := peer.GetClusterClass()
-		if class != "" && !isSelfHostedPeer(peer) {
+		if !isSelfHostedPeer(peer) {
+			class := strings.ToLower(strings.TrimSpace(peer.GetClusterClass()))
 			if _, ok := allowedClasses[class]; !ok {
 				continue
 			}
 		}
-		switch peer.GetHealthStatus() {
-		case "offline", "degraded":
-			continue
-		}
 		out = append(out, peer)
 	}
 	return out
+}
+
+func filterHealthyPeers(peers []*clusterpeerpb.TenantClusterPeer) []*clusterpeerpb.TenantClusterPeer {
+	if len(peers) == 0 {
+		return peers
+	}
+	out := make([]*clusterpeerpb.TenantClusterPeer, 0, len(peers))
+	for _, peer := range peers {
+		if peer != nil && peerIsHealthy(peer) {
+			out = append(out, peer)
+		}
+	}
+	return out
+}
+
+func peerIsHealthy(peer *clusterpeerpb.TenantClusterPeer) bool {
+	return peer != nil && strings.EqualFold(strings.TrimSpace(peer.GetHealthStatus()), "healthy")
+}
+
+func clusterAdmissionPeer(route *clusterRoute, clusterID string) (*clusterpeerpb.TenantClusterPeer, commodorepb.StreamKeyRejectionReason) {
+	if route == nil {
+		return nil, commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED
+	}
+	peer := findPeerByClusterID(route.admissionPeers, clusterID)
+	if peer == nil {
+		return nil, commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED
+	}
+	if !peerIsHealthy(peer) {
+		return peer, commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY
+	}
+	return peer, commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_UNSPECIFIED
 }
 
 func isSelfHostedPeer(peer *clusterpeerpb.TenantClusterPeer) bool {
@@ -1095,18 +1339,25 @@ func (s *CommodoreServer) resolveFoghornForContent(ctx context.Context, contentI
 	return client, route, nil
 }
 
-// resolveFoghornForStreamKey resolves a Foghorn client using the ingest stream key.
-// Used by unauthenticated resolveIngestEndpoint where no tenant context is available.
+// resolveFoghornForStreamKey resolves a Foghorn client from the ingest stream
+// key: it honours an active ingest lease, and otherwise falls back to the
+// placement of the tenant that owns the key — not the caller's.
 func (s *CommodoreServer) resolveFoghornForStreamKey(ctx context.Context, streamKey string) (*foghornclient.GRPCClient, *clusterRoute, error) {
 	if streamKey == "" {
 		return nil, nil, status.Error(codes.InvalidArgument, "stream_key required")
 	}
 
 	var tenantID, activeClusterID sql.NullString
+	// Freshness is computed by the database, in the same clock domain that
+	// writes and expires the claim. Comparing a database timestamp against this
+	// process's wall clock would let skew declare a just-taken lease stale, or
+	// hold an expired one open past its window.
+	var leaseFresh sql.NullBool
 	err := s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, active_ingest_cluster_id
+		SELECT tenant_id, active_ingest_cluster_id,
+		       active_ingest_cluster_updated_at > NOW() - `+activeIngestLeaseInterval+` AS lease_fresh
 		FROM commodore.streams WHERE stream_key = $1 AND deleted_at IS NULL
-	`, streamKey).Scan(&tenantID, &activeClusterID)
+	`, streamKey).Scan(&tenantID, &activeClusterID, &leaseFresh)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, status.Error(codes.NotFound, "stream key not found")
 	}
@@ -1114,16 +1365,29 @@ func (s *CommodoreServer) resolveFoghornForStreamKey(ctx context.Context, stream
 		return nil, nil, status.Errorf(codes.Internal, "database error resolving stream key: %v", err)
 	}
 
-	// Direct pool hit via active_ingest_cluster_id (set by ValidateStreamKey at ingest time)
-	if activeClusterID.Valid && activeClusterID.String != "" {
-		if client, ok := s.foghornPool.Get(foghornPoolKey(activeClusterID.String, "")); ok {
-			return client, &clusterRoute{clusterID: activeClusterID.String}, nil
+	// The placement field is a lease, not a permanent route. Once it expires,
+	// resolve through the tenant route rather than pinning endpoint discovery to
+	// a cluster that no longer ingests the stream.
+	//
+	// While it holds, though, it is authoritative: that cluster owns ingest and
+	// any other cluster would reject the publish as a duplicate. So a failure to
+	// reach it is transient, not a reason to hand back a different cluster's
+	// endpoint that we already know the publisher cannot use.
+	if activeClusterID.Valid && activeClusterID.String != "" && leaseFresh.Valid && leaseFresh.Bool {
+		leasedClusterID := activeClusterID.String
+		if client, ok := s.foghornPool.Get(foghornPoolKey(leasedClusterID, "")); ok {
+			return client, &clusterRoute{clusterID: leasedClusterID}, nil
 		}
-		if tenantID.Valid && tenantID.String != "" {
-			if client, clusterErr := s.resolveFoghornForCluster(ctx, activeClusterID.String, tenantID.String); clusterErr == nil {
-				return client, &clusterRoute{clusterID: activeClusterID.String}, nil
-			}
+		if !tenantID.Valid || tenantID.String == "" {
+			return nil, nil, status.Errorf(codes.Unavailable,
+				"stream holds an active ingest lease on cluster %s but its tenant is unknown", leasedClusterID)
 		}
+		client, clusterErr := s.resolveFoghornForCluster(ctx, leasedClusterID, tenantID.String)
+		if clusterErr != nil {
+			return nil, nil, status.Errorf(codes.Unavailable,
+				"ingest is leased to cluster %s, which could not be resolved: %v", leasedClusterID, clusterErr)
+		}
+		return client, &clusterRoute{clusterID: leasedClusterID}, nil
 	}
 
 	// Fall back to tenant-based routing (populates pool for next time)
@@ -1186,6 +1450,25 @@ func canOwnLiveIngest(clusterType string) bool {
 	default:
 		return false
 	}
+}
+
+// liveIngestClusterID answers which media cluster a publish for this stream
+// belongs to.
+//
+// A caller that named a cluster is speaking for the cluster it runs, and that
+// answer stands (subject to entitlement) — a Foghorn handling the stream knows
+// where it landed better than any recorded column. Only when nothing was named
+// does the recorded ingest lease decide, and only while it is fresh: the
+// publisher is mid-session on that cluster, so routing a reconnect to the
+// tenant's default instead would hand them an endpoint PUSH_REWRITE refuses as
+// a duplicate. With no lease and no declaration, the tenant's route decides.
+func liveIngestClusterID(route *clusterRoute, requestedClusterID string, leasedClusterID sql.NullString, leaseFresh sql.NullBool) string {
+	if requestedClusterID == "" && leaseFresh.Valid && leaseFresh.Bool && leasedClusterID.Valid {
+		if leased := strings.TrimSpace(leasedClusterID.String); leased != "" {
+			return leased
+		}
+	}
+	return resolveLiveIngestClusterID(route, requestedClusterID)
 }
 
 func resolveLiveIngestClusterID(route *clusterRoute, requestedClusterID string) string {
@@ -1255,6 +1538,16 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 			Error: "stream_key required",
 		}, nil
 	}
+	// A claim must have an owner. Declaring a cluster is what takes the
+	// placement claim, so a caller that names one without naming the publisher
+	// connection would take a claim nobody can give back: release is
+	// owner-fenced, so an unowned claim can only expire, holding the stream's
+	// placement for the rest of the lease window. Refused before any write.
+	// Callers that name no cluster (the GraphQL/MCP key check) take no claim and
+	// need no token.
+	if strings.TrimSpace(req.GetClusterId()) != "" && strings.TrimSpace(req.GetClaimToken()) == "" {
+		return nil, status.Error(codes.InvalidArgument, "claim_token is required when cluster_id is set")
+	}
 
 	// Query stream info from commodore tables only (no cross-service DB access)
 	var streamID, userID, tenantID, internalName, playbackID, ingestMode string
@@ -1279,7 +1572,7 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
-			"stream_key": streamKey,
+			"stream_key": logging.RedactSecret(streamKey),
 			"error":      err,
 		}).Error("Database error validating stream key")
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
@@ -1300,18 +1593,29 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 		}, nil
 	}
 
-	// Plan-aware cluster admission. The route here is already filtered by
-	// allowedClusterClassesForTenant against the peer's cluster_class
-	// metadata and excludes degraded/offline peers. Confirm the requested
-	// ingest cluster is in the filtered set and reject with a structured
-	// reason otherwise. Quartermaster dial failures fall through so a
-	// transient route-lookup failure doesn't block ingest; cluster_id is
-	// still recorded for placement.
+	// Plan-aware cluster admission. The admission envelope is filtered by
+	// allowedClusterClassesForTenant against the peer's cluster_class metadata,
+	// but retains health state so an entitled unhealthy cluster can be
+	// distinguished from an unentitled cluster.
+	//
+	// A route that will not resolve is a transient failure, not an admission:
+	// falling through would let a direct RTMP/SRT/WHIP push bypass the
+	// entitlement gate the resolver applies — and then claim the placement
+	// lease on an unverified cluster — for as long as the control plane is
+	// down. Unavailable instead, before any placement write.
 	requestedClusterID := strings.TrimSpace(req.GetClusterId())
 	if requestedClusterID != "" {
-		if route, routeErr := s.resolveClusterRouteForTenant(ctx, tenantID); routeErr == nil {
-			peer := findPeerByClusterID(route.clusterPeers, requestedClusterID)
-			if peer == nil {
+		route, routeErr := s.resolveAdmissionRouteForTenant(ctx, tenantID)
+		if routeErr != nil {
+			s.logger.WithError(routeErr).WithFields(logging.Fields{
+				"tenant_id":  tenantID,
+				"cluster_id": requestedClusterID,
+			}).Warn("ValidateStreamKey: cluster route lookup failed; failing closed as transient")
+			return nil, status.Errorf(codes.Unavailable, "cluster route lookup failed: %v", routeErr)
+		}
+		{
+			peer, rejectionReason := clusterAdmissionPeer(route, requestedClusterID)
+			if rejectionReason == commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED {
 				s.logger.WithFields(logging.Fields{
 					"tenant_id":  tenantID,
 					"cluster_id": requestedClusterID,
@@ -1322,10 +1626,14 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 					RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED,
 				}, nil
 			}
-			if status := peer.GetHealthStatus(); status == "offline" || status == "degraded" {
+			if rejectionReason == commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY {
+				peerStatus := strings.TrimSpace(peer.GetHealthStatus())
+				if peerStatus == "" {
+					peerStatus = "unknown"
+				}
 				return &commodorepb.ValidateStreamKeyResponse{
 					Valid:           false,
-					Error:           "Ingest cluster " + requestedClusterID + " is " + status,
+					Error:           "Ingest cluster " + requestedClusterID + " is " + peerStatus,
 					RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY,
 				}, nil
 			}
@@ -1417,73 +1725,137 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 	resp.DvrProcessesJson = s.resolveProcessesJSON(ctx, tenantID, streamID, processClusterID, "dvr")
 
 	// Track the media cluster this stream ingests on.
-	activeIngestClusterID := req.GetClusterId()
-	if originClusterID := resp.GetOriginClusterId(); originClusterID != "" {
-		activeIngestClusterID = originClusterID
+	//
+	// Only a caller that names its ingest cluster claims placement. This RPC is
+	// also used for plain key validation — the GraphQL and MCP validate tools,
+	// and x402 resource resolution — which pass no cluster; deriving one from
+	// the tenant's route would let a validation or payment lookup take the
+	// 30-second lease and make the real ingest fail with DUPLICATE_INGEST on
+	// another cluster. PUSH_REWRITE is the only push-ingest caller that names
+	// its cluster and therefore claims through this RPC.
+	// The value written is still the resolved origin (a Foghorn on a central
+	// cluster records the media cluster ingest actually lands on); only the
+	// decision to write at all is gated on the caller declaring one.
+	activeIngestClusterID := ""
+	if strings.TrimSpace(req.GetClusterId()) != "" {
+		activeIngestClusterID = req.GetClusterId()
+		if originClusterID := resp.GetOriginClusterId(); originClusterID != "" {
+			activeIngestClusterID = originClusterID
+		}
 	}
 	if activeIngestClusterID != "" {
-		res, updateErr := s.db.ExecContext(ctx, `
-			UPDATE commodore.streams
+		// The claim is stamped with its owner — the publisher connection that
+		// took it — so a later release can prove the claim is its own.
+		//
+		// Same cluster is NOT the same owner. A second connection reaching this
+		// cluster must not overwrite the live owner's token: it would then be
+		// told it holds the claim, and its own rejection would hand back
+		// placement belonging to the publisher that is actually streaming. So a
+		// claim that is currently held may only be refreshed BY ITS OWNER;
+		// anyone else has to wait for it to lapse, exactly as they would in
+		// another cluster. A live claim naming no owner is not adoptable either
+		// — every writer names one, so an unowned live claim is an anomaly, and
+		// adopting it is how a rejected adopter would gain licence to release
+		// somebody else's placement.
+		//
+		// The pre-state is captured in the same statement, under the row lock,
+		// so claim_acquired can distinguish RESERVING a free claim from
+		// REFRESHING one already held. Only a reservation may be released on
+		// rejection: giving back a refresh would unpin the live session that
+		// re-fired PUSH_REWRITE.
+		claimToken := strings.TrimSpace(req.GetClaimToken())
+		var prevCluster, prevToken sql.NullString
+		var prevFresh sql.NullBool
+		claimErr := s.db.QueryRowContext(ctx, `
+			WITH held AS (
+				SELECT id,
+				       active_ingest_cluster_id AS prev_cluster,
+				       active_ingest_claim_id AS prev_token,
+				       (active_ingest_cluster_id IS NOT NULL
+				        AND active_ingest_cluster_id <> ''
+				        AND active_ingest_cluster_updated_at IS NOT NULL
+				        AND active_ingest_cluster_updated_at >= NOW() - `+activeIngestLeaseInterval+`) AS prev_fresh
+				FROM commodore.streams
+				WHERE stream_key = $2 AND deleted_at IS NULL
+				FOR UPDATE
+			)
+			UPDATE commodore.streams s
 			SET active_ingest_cluster_id = $1,
 				active_ingest_cluster_updated_at = NOW(),
+				active_ingest_claim_id = $3,
 				updated_at = NOW()
-			WHERE stream_key = $2
-				AND deleted_at IS NULL
+			FROM held
+			WHERE s.id = held.id
 				AND (
-					active_ingest_cluster_id IS NULL
-					OR active_ingest_cluster_id = ''
-					OR active_ingest_cluster_id = $1
-					OR active_ingest_cluster_updated_at IS NULL
-					OR active_ingest_cluster_updated_at < NOW() - INTERVAL '30 seconds'
+					NOT held.prev_fresh
+					OR (held.prev_cluster = $1 AND held.prev_token = $3)
 				)
-		`, activeIngestClusterID, streamKey)
-		if updateErr != nil {
-			s.logger.WithError(updateErr).WithField("stream_key", streamKey).Warn("Failed to record ingest cluster")
-		} else if rows, rowsErr := res.RowsAffected(); rowsErr == nil && rows == 0 {
-			// Concurrent-claim guard: a fresh lease exists held by some
-			// cluster. If it's not the cluster trying to ingest now, reject
-			// the claim — single-active-ingest per stream is a hard
-			// invariant. Belt-and-suspenders to the PeerChannel
-			// StreamAdvertisement broadcast (which surfaces the same fact
-			// at federation cadence ~10s; this gate fires synchronously at
-			// admission time).
-			var heldCluster sql.NullString
+			RETURNING held.prev_cluster, held.prev_token, held.prev_fresh
+		`, activeIngestClusterID, streamKey, claimToken).Scan(&prevCluster, &prevToken, &prevFresh)
+		switch {
+		case claimErr != nil && !errors.Is(claimErr, sql.ErrNoRows):
+			s.logger.WithError(claimErr).WithField("stream_key", logging.RedactSecret(streamKey)).Warn("Failed to record ingest cluster")
+		case claimErr == nil:
+			// Reserved rather than refreshed when nothing live held it, or when
+			// the live claim was in another cluster's name or ownerless.
+			reserved := !prevFresh.Bool ||
+				prevCluster.String != activeIngestClusterID ||
+				prevToken.String != claimToken
+			resp.ClaimAcquired = reserved
+		default:
+			// Concurrent-claim guard: a live claim exists and it is not this
+			// connection's. Single-active-ingest per stream is a hard
+			// invariant, and the owner is what decides that — a second
+			// publisher landing in the SAME cluster is just as much a
+			// duplicate as one in a peer, and must be told so rather than
+			// handed valid=true with no claim. Belt-and-suspenders to the
+			// PeerChannel StreamAdvertisement broadcast (which surfaces the
+			// same fact at federation cadence ~10s; this gate fires
+			// synchronously at admission time).
+			var heldCluster, heldOwner sql.NullString
 			if scanErr := s.db.QueryRowContext(ctx, `
-				SELECT active_ingest_cluster_id
+				SELECT active_ingest_cluster_id, active_ingest_claim_id
 				FROM commodore.streams
 				WHERE stream_key = $1
-			`, streamKey).Scan(&heldCluster); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
-				s.logger.WithError(scanErr).WithField("stream_key", streamKey).Warn("ValidateStreamKey: active-ingest lookup failed")
+			`, streamKey).Scan(&heldCluster, &heldOwner); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+				s.logger.WithError(scanErr).WithField("stream_key", logging.RedactSecret(streamKey)).Warn("ValidateStreamKey: active-ingest lookup failed")
 			}
-			if heldCluster.Valid && heldCluster.String != "" && heldCluster.String != activeIngestClusterID {
+			if heldCluster.Valid && heldCluster.String != "" && heldOwner.String != claimToken {
+				where := "cluster " + heldCluster.String
+				if heldCluster.String == activeIngestClusterID {
+					where = "this cluster by another publisher"
+				}
 				s.logger.WithFields(logging.Fields{
-					"stream_key":            streamKey,
+					"stream_key":            logging.RedactSecret(streamKey),
 					"requesting_cluster_id": activeIngestClusterID,
 					"active_ingest_cluster": heldCluster.String,
-				}).Warn("ValidateStreamKey rejected: duplicate ingest claim against fresh lease on another cluster")
+				}).Warn("ValidateStreamKey rejected: duplicate ingest claim against a live claim held by another publisher")
 				return &commodorepb.ValidateStreamKeyResponse{
 					Valid:           false,
-					Error:           "Stream is already ingesting on cluster " + heldCluster.String,
+					Error:           "Stream is already ingesting on " + where,
 					RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_DUPLICATE_INGEST,
 				}, nil
 			}
 			s.logger.WithFields(logging.Fields{
-				"stream_key":        streamKey,
+				"stream_key":        logging.RedactSecret(streamKey),
 				"ingest_cluster_id": activeIngestClusterID,
-			}).Debug("Skipped ingest cluster update due to active lease (same cluster)")
+			}).Debug("Skipped ingest cluster update: this connection already holds the claim")
 		}
 	}
 
 	return resp, nil
 }
 
-// ResolveStreamContext returns the materialization fact set as ValidateStreamKey
-// but is keyed by stream identifier (stream_id / playback_id / internal_name)
-// rather than stream key. Two callers: Foghorn's managed-stream reconciler for
-// ingest modes that bypass PUSH_REWRITE (notably mist_native), and Foghorn's
-// stream-registry hydrate on the live PLAY_REWRITE playback-resolve path, for
-// all streams (incl. customer streams), where it also supplies requires_auth +
-// cluster_peers.
+// ResolveStreamContext returns the same materialization fact set as
+// ValidateStreamKey, keyed by any of stream_id / playback_id / internal_name /
+// stream_key. Unlike ValidateStreamKey it claims no ingest placement, which is
+// what makes it usable for resolution rather than admission.
+//
+// Callers: Foghorn's managed-stream reconciler for ingest modes that bypass
+// PUSH_REWRITE (notably mist_native); Foghorn's stream-registry hydrate on the
+// live PLAY_REWRITE playback-resolve path, where it also supplies requires_auth
+// and cluster_peers; and ingest-endpoint resolution (HTTP front door and gRPC),
+// which uses the stream_key identifier.
 //
 // Admission semantics: `admitted` rolls user-active, cluster entitlement,
 // suspension, and negative-balance into a single boolean. Free-tier-load and
@@ -1499,11 +1871,17 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodorepb.ResolveStreamContextRequest) (*commodorepb.ResolveStreamContextResponse, error) {
 	var streamID, userID, tenantID, internalName, playbackID, ingestMode string
 	var isActive, isRecordingEnabled, requiresAuth bool
+	var leasedIngestClusterID sql.NullString
+	var leaseFresh sql.NullBool
 
-	const baseSelect = `
+	// lease_fresh is computed in SQL, on the database's clock: comparing a
+	// returned timestamp against this process's clock would make placement
+	// depend on how far the two have drifted.
+	baseSelect := `
 		SELECT s.id, s.user_id, s.tenant_id, s.internal_name,
 		       u.is_active, s.is_recording_enabled, s.playback_id, s.ingest_mode,
-		       s.requires_auth
+		       s.requires_auth, s.active_ingest_cluster_id,
+		       s.active_ingest_cluster_updated_at > NOW() - ` + activeIngestLeaseInterval + ` AS lease_fresh
 		FROM commodore.streams s
 		JOIN commodore.users u ON s.user_id = u.id
 		WHERE `
@@ -1512,6 +1890,12 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodo
 		query string
 		arg   string
 		field string
+		// A stream key is a publishing credential, not an identifier: it must
+		// never reach a log line.
+		identifierIsSecret bool
+		// Only a publisher holds the stream key, so a resolve by key is asking
+		// where to publish rather than reporting where a stream already landed.
+		identifierIsPublishIntent bool
 	)
 	switch id := req.GetIdentifier().(type) {
 	case *commodorepb.ResolveStreamContextRequest_StreamId:
@@ -1523,8 +1907,16 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodo
 	case *commodorepb.ResolveStreamContextRequest_InternalName:
 		field, arg = "internal_name", id.InternalName
 		query = baseSelect + "s.internal_name = $1"
+	case *commodorepb.ResolveStreamContextRequest_StreamKey:
+		// Soft-deleted streams are excluded here: a stream key is held by the
+		// publisher and outlives deletion in encoder configs, so a deleted
+		// stream must stop accepting it. Matches ValidateStreamKey's lookup.
+		field, arg = "stream_key", id.StreamKey
+		query = baseSelect + "s.stream_key = $1 AND s.deleted_at IS NULL"
+		identifierIsSecret = true
+		identifierIsPublishIntent = true
 	default:
-		return nil, status.Error(codes.InvalidArgument, "identifier required (stream_id | playback_id | internal_name)")
+		return nil, status.Error(codes.InvalidArgument, "identifier required (stream_id | playback_id | internal_name | stream_key)")
 	}
 	if arg == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "%s must be non-empty", field)
@@ -1533,7 +1925,7 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodo
 	err := s.db.QueryRowContext(ctx, query, arg).Scan(
 		&streamID, &userID, &tenantID, &internalName,
 		&isActive, &isRecordingEnabled, &playbackID, &ingestMode,
-		&requiresAuth,
+		&requiresAuth, &leasedIngestClusterID, &leaseFresh,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return &commodorepb.ResolveStreamContextResponse{
@@ -1543,9 +1935,13 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodo
 		}, nil
 	}
 	if err != nil {
+		loggedIdentifier := arg
+		if identifierIsSecret {
+			loggedIdentifier = "<redacted>"
+		}
 		s.logger.WithFields(logging.Fields{
 			"identifier_field": field,
-			"identifier_value": arg,
+			"identifier_value": loggedIdentifier,
 			"error":            err,
 		}).Error("Database error resolving stream context")
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
@@ -1569,16 +1965,34 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodo
 		return resp, nil
 	}
 
-	// Cluster admission (only if caller supplied cluster_id — mist_native streams
-	// without allowed_cluster_ids skip this gate and rely on placement scoping).
-	// Fail-closed-as-transient: when a cluster_id is supplied the route MUST
-	// resolve so entitlement and health can be checked. A Quartermaster blip
-	// returns codes.Unavailable, which the caller (Foghorn's managed-stream
-	// reconciler) treats as transient — preserve existing applied state, do
-	// not newly Apply onto an unverified cluster.
+	// Cluster admission. Two caller shapes reach here.
+	//
+	// A caller that names a cluster is asserting where this stream is landing —
+	// every Foghorn trigger, reconciler, and registry path, each speaking for
+	// the cluster it runs. That named cluster is gated.
+	//
+	// A publish-intent resolve names nothing, because it cannot: it holds a
+	// stream key and is asking where to publish. It is gated on the envelope
+	// instead of on one cluster. Picking a cluster here and gating that would
+	// reject a publisher whose default cluster is degraded while another
+	// authorized cluster is healthy — the caller ranks across the whole
+	// envelope, so admission has to ask the same question the caller will.
+	// A publisher that already holds the stream is the exception: their
+	// reconnect can only go back to the claiming cluster, so that one is gated.
+	//
+	// mist_native streams without allowed_cluster_ids name nothing and are not
+	// publish-intent; they skip the gate and rely on placement scoping.
+	//
+	// Fail-closed-as-transient: whenever there is anything to gate, the route
+	// MUST resolve so entitlement and health can be checked. A Quartermaster
+	// blip returns codes.Unavailable, which callers treat as transient —
+	// preserve existing applied state, do not newly Apply onto an unverified
+	// cluster.
 	requestedClusterID := strings.TrimSpace(req.GetClusterId())
-	if requestedClusterID != "" {
-		route, routeErr := s.resolveClusterRouteForTenant(ctx, tenantID)
+	admissionClusterID := requestedClusterID
+	var admissionRoute *clusterRoute
+	if admissionClusterID != "" || identifierIsPublishIntent {
+		route, routeErr := s.resolveAdmissionRouteForTenant(ctx, tenantID)
 		if routeErr != nil {
 			s.logger.WithError(routeErr).WithFields(logging.Fields{
 				"tenant_id":  tenantID,
@@ -1586,16 +2000,40 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodo
 			}).Warn("ResolveStreamContext: cluster route lookup failed; failing closed as transient")
 			return nil, status.Errorf(codes.Unavailable, "cluster route lookup failed: %v", routeErr)
 		}
-		peer := findPeerByClusterID(route.clusterPeers, requestedClusterID)
-		if peer == nil {
+		admissionRoute = route
+		if admissionClusterID == "" && leaseFresh.Valid && leaseFresh.Bool && leasedIngestClusterID.Valid {
+			admissionClusterID = strings.TrimSpace(leasedIngestClusterID.String)
+		}
+
+		if admissionClusterID != "" {
+			peer, rejectionReason := clusterAdmissionPeer(route, admissionClusterID)
+			if rejectionReason == commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED {
+				resp.Admitted = false
+				resp.AdmissionReason = "Tenant not entitled to cluster " + admissionClusterID
+				resp.RejectionReason = commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED
+				return resp, nil
+			}
+			if rejectionReason == commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY {
+				peerStatus := strings.TrimSpace(peer.GetHealthStatus())
+				if peerStatus == "" {
+					peerStatus = "unknown"
+				}
+				resp.Admitted = false
+				resp.AdmissionReason = "Cluster " + admissionClusterID + " is " + peerStatus
+				resp.RejectionReason = commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY
+				return resp, nil
+			}
+		} else if len(route.admissionPeers) == 0 {
+			// No cluster the tenant's plan permits at all.
 			resp.Admitted = false
-			resp.AdmissionReason = "Tenant not entitled to cluster " + requestedClusterID
+			resp.AdmissionReason = "Tenant is not entitled to any ingest cluster"
 			resp.RejectionReason = commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED
 			return resp, nil
-		}
-		if peerStatus := peer.GetHealthStatus(); peerStatus == "offline" || peerStatus == "degraded" {
+		} else if len(route.clusterPeers) == 0 {
+			// Entitled, but nothing healthy to publish into. Reported as its
+			// own reason: a degraded fleet is not a plan problem.
 			resp.Admitted = false
-			resp.AdmissionReason = "Cluster " + requestedClusterID + " is " + peerStatus
+			resp.AdmissionReason = "No healthy ingest cluster available for tenant"
 			resp.RejectionReason = commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY
 			return resp, nil
 		}
@@ -1631,10 +2069,30 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodo
 	resp.Allowances = billingStatus.Allowances
 	resp.TenantResourceLimits = billingStatus.GetTenantResourceLimits()
 
+	// A live claim pins placement; see the field's contract. Populated
+	// regardless of identifier, since every caller routes on the same fact.
+	if leaseFresh.Valid && leaseFresh.Bool && leasedIngestClusterID.Valid {
+		if leased := strings.TrimSpace(leasedIngestClusterID.String); leased != "" {
+			resp.ActiveIngestClusterId = &leased
+		}
+	}
+
 	// Routing fields (origin/official cluster, peers, resource-limit merge) —
 	// same shape ValidateStreamKey returns.
-	if route, err := s.resolveClusterRouteForTenant(ctx, tenantID); err == nil {
-		resolvedOriginClusterID := resolveLiveIngestClusterID(route, requestedClusterID)
+	//
+	// The admission route is reused when one was resolved. Looking it up again
+	// would let the response route on a different envelope than the one that
+	// passed the gate: an eviction between the two (a failed Foghorn dial does
+	// that) makes the second lookup fail, and the response would otherwise be
+	// admitted carrying no routing at all.
+	route := admissionRoute
+	if route == nil {
+		if cached, err := s.resolveClusterRouteForTenant(ctx, tenantID); err == nil {
+			route = cached
+		}
+	}
+	if route != nil {
+		resolvedOriginClusterID := liveIngestClusterID(route, requestedClusterID, leasedIngestClusterID, leaseFresh)
 		resp.OriginClusterId = &resolvedOriginClusterID
 		if route.officialClusterID != "" {
 			resp.OfficialClusterId = &route.officialClusterID
@@ -1643,6 +2101,13 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodo
 		if hasTenantResourceLimits(route.tenantResourceLimits) {
 			resp.TenantResourceLimits = mergeTenantResourceLimits(resp.TenantResourceLimits, route.tenantResourceLimits)
 		}
+	}
+
+	// A publish-intent resolve that reached here without routing has nothing to
+	// hand a publisher: the cluster that passed the gate could not be named.
+	// Fail closed as transient rather than admit an unroutable publish.
+	if identifierIsPublishIntent && strings.TrimSpace(resp.GetOriginClusterId()) == "" {
+		return nil, status.Error(codes.Unavailable, "cluster routing unavailable for publish")
 	}
 
 	// Processes JSON via the same tier/override resolution path ValidateStreamKey
@@ -1798,6 +2263,17 @@ func (s *CommodoreServer) ListStreamMonitoring(ctx context.Context, req *commodo
 	return resp, nil
 }
 
+// managedClaimToken is the owner a managed stream's placement claim is stamped
+// with. Push ingest is owned by the publisher connection that took the claim;
+// a managed stream has no connection, and its reconciler is the stream's single
+// managed writer, so the stream itself is the owner. Namespaced so it can never
+// collide with a Mist trigger UUID.
+func managedClaimToken(streamID string) string { return "managed:" + streamID }
+
+// pullClaimToken is the same idea for a pull stream, whose placement is written
+// by its source resolver rather than by a publisher connection.
+func pullClaimToken(streamID string) string { return "pull:" + streamID }
+
 // RecordStreamActiveCluster updates commodore.streams.active_ingest_cluster_id
 // for a managed stream. Mirrors the contended-update guard from
 // ValidateStreamKey's push-ingest path so a stale claim cannot overwrite a
@@ -1816,10 +2292,16 @@ func (s *CommodoreServer) RecordStreamActiveCluster(ctx context.Context, req *co
 	}
 	// Records ONLY active ingest placement — NOT thumbnail_serving_cluster_ids, whose sole writer is the service-fenced
 	// RegisterStreamThumbnailServingCell (register-before-mint). Tenant-scoped per the repo tenant-filter rule.
-	const updateSQL = `
+	//
+	// Ownership is the same invariant push ingest holds: a claim that is live may be refreshed only by the owner that
+	// took it, so a managed reconciler cannot take over a push publisher's placement (nor another managed writer's) by
+	// virtue of naming the same cluster. A managed placement is owned by its stream — the reconciler is that stream's
+	// single managed writer — so the token is derived from the stream id rather than a connection.
+	updateSQL := `
 		UPDATE commodore.streams
 		SET active_ingest_cluster_id = $1,
 		    active_ingest_cluster_updated_at = NOW(),
+		    active_ingest_claim_id = $4,
 		    updated_at = NOW()
 		WHERE id = $2::uuid
 		  AND tenant_id = $3::uuid
@@ -1827,11 +2309,14 @@ func (s *CommodoreServer) RecordStreamActiveCluster(ctx context.Context, req *co
 		  AND (
 		    active_ingest_cluster_id IS NULL
 		    OR active_ingest_cluster_id = ''
-		    OR active_ingest_cluster_id = $1
 		    OR active_ingest_cluster_updated_at IS NULL
-		    OR active_ingest_cluster_updated_at < NOW() - INTERVAL '30 seconds'
+		    OR active_ingest_cluster_updated_at < NOW() - ` + activeIngestLeaseInterval + `
+		    OR (
+		      active_ingest_cluster_id = $1
+		      AND active_ingest_claim_id = $4
+		    )
 		  )`
-	res, err := s.db.ExecContext(ctx, updateSQL, clusterID, streamID, tenantID)
+	res, err := s.db.ExecContext(ctx, updateSQL, clusterID, streamID, tenantID, managedClaimToken(streamID))
 	if err != nil {
 		s.logger.WithError(err).WithFields(logging.Fields{
 			"stream_id":  streamID,
@@ -1899,19 +2384,34 @@ func (s *CommodoreServer) RegisterStreamThumbnailServingCell(ctx context.Context
 // clobbering a fresher claim from a peer cluster — the column only
 // transitions to NULL when the recorded value matches the caller.
 func (s *CommodoreServer) ClearStreamActiveCluster(ctx context.Context, req *commodorepb.ClearStreamActiveClusterRequest) (*commodorepb.ClearStreamActiveClusterResponse, error) {
+	// SERVICE-TOKEN ONLY: same reasoning as RecordStreamActiveCluster, whose
+	// guard this mirrors. Clearing placement from caller-supplied identifiers
+	// is a placement mutation, not a user operation.
+	if ctxkeys.GetAuthType(ctx) != "service" {
+		return nil, status.Error(codes.PermissionDenied, "ClearStreamActiveCluster requires service token auth")
+	}
 	streamID := strings.TrimSpace(req.GetStreamId())
 	expected := strings.TrimSpace(req.GetExpectedClusterId())
-	if streamID == "" || expected == "" {
-		return nil, status.Error(codes.InvalidArgument, "stream_id and expected_cluster_id required")
+	tenantID := strings.TrimSpace(req.GetTenantId())
+	if streamID == "" || expected == "" || tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "stream_id, expected_cluster_id and tenant_id required")
 	}
+	// Tenant-scoped per the repo tenant-filter rule, like the Record path, and
+	// owner-fenced like every other release: a retract may only clear the
+	// placement its own reconciler recorded. Without that, a delayed retract
+	// arriving after a push publisher took the same cluster would clear that
+	// publisher's claim.
 	const clearSQL = `
 		UPDATE commodore.streams
 		SET active_ingest_cluster_id = NULL,
 		    active_ingest_cluster_updated_at = NOW(),
+		    active_ingest_claim_id = NULL,
 		    updated_at = NOW()
 		WHERE id = $1::uuid
-		  AND active_ingest_cluster_id = $2`
-	res, err := s.db.ExecContext(ctx, clearSQL, streamID, expected)
+		  AND tenant_id = $3::uuid
+		  AND active_ingest_cluster_id = $2
+		  AND active_ingest_claim_id = $4`
+	res, err := s.db.ExecContext(ctx, clearSQL, streamID, expected, tenantID, managedClaimToken(streamID))
 	if err != nil {
 		s.logger.WithError(err).WithFields(logging.Fields{
 			"stream_id":  streamID,
@@ -1924,6 +2424,196 @@ func (s *CommodoreServer) ClearStreamActiveCluster(ctx context.Context, req *com
 		return nil, status.Errorf(codes.Internal, "rows affected: %v", err)
 	}
 	return &commodorepb.ClearStreamActiveClusterResponse{Cleared: rows > 0}, nil
+}
+
+// maxActiveIngestPlacementSync bounds one sync's payload. A cluster with more
+// live pushes than this syncs across several calls rather than issuing one
+// unbounded UPDATE.
+const maxActiveIngestPlacementSync = 500
+
+// SyncActiveIngestPlacement re-asserts active_ingest_cluster_id for ordinary
+// push ingest from the publisher liveness Foghorn holds, the way the
+// managed-stream reconciler does for mist_native. Callers sync on a cadence
+// inside the claim's lease window.
+//
+// renew applies the same contention rule PUSH_REWRITE applies: it refreshes a
+// claim this cluster holds, and takes one only where the row holds none or
+// holds one that has already lapsed. A fresh claim held by another cluster is
+// never disturbed, so this cannot move a live publisher's placement; it can
+// establish placement for one that has none.
+//
+// release is stricter: it clears only a claim this cluster still holds, so a
+// close arriving after the publisher moved to a peer cannot unpin them.
+func (s *CommodoreServer) SyncActiveIngestPlacement(ctx context.Context, req *commodorepb.SyncActiveIngestPlacementRequest) (*commodorepb.SyncActiveIngestPlacementResponse, error) {
+	// SERVICE-TOKEN ONLY, as with every other placement mutation: the cluster,
+	// tenant, and stream all come from the caller. The shared interceptor also
+	// accepts JWTs, so without this a logged-in user could renew or release
+	// any stream's ingest placement.
+	if ctxkeys.GetAuthType(ctx) != "service" {
+		return nil, status.Error(codes.PermissionDenied, "SyncActiveIngestPlacement requires service token auth")
+	}
+	clusterID := strings.TrimSpace(req.GetClusterId())
+	if len(req.GetRenew())+len(req.GetRelease()) > maxActiveIngestPlacementSync {
+		return nil, status.Errorf(codes.InvalidArgument, "at most %d streams per sync", maxActiveIngestPlacementSync)
+	}
+
+	// Renewal is owner-fenced exactly like the direct claim: naming a cluster
+	// is not proof of owning what is in it. A live claim may only be refreshed
+	// by its owner; anything else must wait for it to lapse. Only an absent or
+	// expired claim is acquirable, and then the renewing owner is stamped on it.
+	//
+	// The cluster comes from each entry, so one call can carry every cluster a
+	// Foghorn serves — a call per cluster cannot re-assert a large fleet inside
+	// one lease window.
+	renewed, renewRefused, err := s.applyActiveIngestPlacement(ctx, clusterID, req.GetRenew(), true, `
+		UPDATE commodore.streams s
+		SET active_ingest_cluster_id = t.cluster_id,
+		    active_ingest_cluster_updated_at = NOW(),
+		    active_ingest_claim_id = t.claim_token
+		FROM unnest($1::uuid[], $2::text[], $3::text[], $4::text[]) AS t(tenant_id, internal_name, claim_token, cluster_id)
+		WHERE s.tenant_id = t.tenant_id
+		  AND s.internal_name = t.internal_name
+		  AND (
+		      s.active_ingest_cluster_id IS NULL
+		   OR s.active_ingest_cluster_id = ''
+		   OR s.active_ingest_cluster_updated_at IS NULL
+		   OR s.active_ingest_cluster_updated_at < NOW() - `+activeIngestLeaseInterval+`
+		   OR (s.active_ingest_cluster_id = t.cluster_id AND s.active_ingest_claim_id = t.claim_token)
+		  )`)
+	if err != nil {
+		return nil, err
+	}
+
+	// Release matches the OWNER as well as the cluster. Without that, an
+	// attempt that never took the claim — a different node in this cluster, or
+	// a Foghorn admitting from its validation cache while Commodore was down —
+	// would clear a live publisher's placement.
+	released, releaseRefused, err := s.applyActiveIngestPlacement(ctx, clusterID, req.GetRelease(), false, `
+		UPDATE commodore.streams s
+		SET active_ingest_cluster_id = NULL,
+		    active_ingest_cluster_updated_at = NOW(),
+		    active_ingest_claim_id = NULL,
+		    updated_at = NOW()
+		FROM unnest($1::uuid[], $2::text[], $3::text[], $4::text[]) AS t(tenant_id, internal_name, claim_token, cluster_id)
+		WHERE s.tenant_id = t.tenant_id
+		  AND s.internal_name = t.internal_name
+		  AND s.active_ingest_cluster_id = t.cluster_id
+		  AND s.active_ingest_claim_id = t.claim_token`)
+	if err != nil {
+		return nil, err
+	}
+
+	return &commodorepb.SyncActiveIngestPlacementResponse{
+		Renewed:        int32(renewed),
+		Released:       int32(released),
+		RenewRefused:   renewRefused,
+		ReleaseRefused: releaseRefused,
+	}, nil
+}
+
+// applyActiveIngestPlacement runs one placement statement over a batch. Every
+// column is unnested as a tuple rather than passed as independent ANY() lists:
+// with separate lists any tenant in the batch would match any internal name in
+// it, and any entry would match any cluster.
+//
+// defaultClusterID fills in for entries that name no cluster, so a caller that
+// only ever speaks for one still works unchanged.
+func (s *CommodoreServer) applyActiveIngestPlacement(ctx context.Context, defaultClusterID string, streams []*commodorepb.ActiveIngestStream, verifyOwned bool, stmt string) (int64, []*commodorepb.ActiveIngestStream, error) {
+	tenantIDs := make([]string, 0, len(streams))
+	internalNames := make([]string, 0, len(streams))
+	claimTokens := make([]string, 0, len(streams))
+	clusterIDs := make([]string, 0, len(streams))
+	for _, stream := range streams {
+		tenantID := strings.TrimSpace(stream.GetTenantId())
+		internalName := strings.TrimSpace(stream.GetInternalName())
+		claimToken := strings.TrimSpace(stream.GetClaimToken())
+		clusterID := strings.TrimSpace(stream.GetClusterId())
+		if clusterID == "" {
+			clusterID = defaultClusterID
+		}
+		if tenantID == "" || internalName == "" {
+			return 0, nil, status.Error(codes.InvalidArgument, "each stream requires tenant_id and internal_name")
+		}
+		// Both halves are owner-fenced, and an empty token matches no owner, so
+		// a tokenless entry could only ever be a caller trying to act on a claim
+		// it cannot name. Refused rather than silently matching nothing.
+		if claimToken == "" {
+			return 0, nil, status.Error(codes.InvalidArgument, "each stream requires claim_token")
+		}
+		if clusterID == "" {
+			return 0, nil, status.Error(codes.InvalidArgument, "each stream requires cluster_id (or a request-level default)")
+		}
+		tenantIDs = append(tenantIDs, tenantID)
+		internalNames = append(internalNames, internalName)
+		claimTokens = append(claimTokens, claimToken)
+		clusterIDs = append(clusterIDs, clusterID)
+	}
+	if len(tenantIDs) == 0 {
+		return 0, nil, nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, nil, status.Errorf(codes.Internal, "begin placement sync: %v", err)
+	}
+	defer s.rollbackTx(tx)
+	res, err := tx.ExecContext(ctx, stmt, pq.Array(tenantIDs), pq.Array(internalNames), pq.Array(claimTokens), pq.Array(clusterIDs))
+	if err != nil {
+		s.logger.WithError(err).WithFields(logging.Fields{
+			"default_cluster_id": defaultClusterID,
+			"streams":            len(tenantIDs),
+		}).Error("SyncActiveIngestPlacement: update failed")
+		return 0, nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return 0, nil, status.Errorf(codes.Internal, "rows affected: %v", err)
+	}
+	verification := `
+		SELECT t.tenant_id::text, t.internal_name, t.claim_token, t.cluster_id
+		  FROM unnest($1::uuid[], $2::text[], $3::text[], $4::text[]) AS t(tenant_id, internal_name, claim_token, cluster_id)
+		 WHERE `
+	if verifyOwned {
+		verification += `NOT EXISTS (
+			SELECT 1 FROM commodore.streams s
+			 WHERE s.tenant_id=t.tenant_id AND s.internal_name=t.internal_name AND s.deleted_at IS NULL
+			   AND s.active_ingest_cluster_id=t.cluster_id AND s.active_ingest_claim_id=t.claim_token
+			   AND s.active_ingest_cluster_updated_at >= NOW() - ` + activeIngestLeaseInterval + `
+		)`
+	} else {
+		verification += `EXISTS (
+			SELECT 1 FROM commodore.streams s
+			 WHERE s.tenant_id=t.tenant_id AND s.internal_name=t.internal_name AND s.deleted_at IS NULL
+			   AND s.active_ingest_cluster_id=t.cluster_id AND s.active_ingest_claim_id=t.claim_token
+		)`
+	}
+	refusedRows, err := tx.QueryContext(ctx, verification, pq.Array(tenantIDs), pq.Array(internalNames), pq.Array(claimTokens), pq.Array(clusterIDs))
+	if err != nil {
+		return 0, nil, status.Errorf(codes.Internal, "verify placement sync: %v", err)
+	}
+	defer func() {
+		if closeErr := refusedRows.Close(); closeErr != nil {
+			s.logger.WithError(closeErr).Debug("placement verification rows close failed")
+		}
+	}()
+	var refused []*commodorepb.ActiveIngestStream
+	for refusedRows.Next() {
+		entry := &commodorepb.ActiveIngestStream{}
+		if scanErr := refusedRows.Scan(&entry.TenantId, &entry.InternalName, &entry.ClaimToken, &entry.ClusterId); scanErr != nil {
+			return 0, nil, status.Errorf(codes.Internal, "scan placement refusal: %v", scanErr)
+		}
+		refused = append(refused, entry)
+	}
+	if rowsErr := refusedRows.Err(); rowsErr != nil {
+		return 0, nil, status.Errorf(codes.Internal, "iterate placement refusals: %v", rowsErr)
+	}
+	if err := refusedRows.Close(); err != nil {
+		return 0, nil, status.Errorf(codes.Internal, "close placement verification: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, nil, status.Errorf(codes.Internal, "commit placement sync: %v", err)
+	}
+	return rows, refused, nil
 }
 
 // ResolvePlaybackID resolves a playback ID to internal name for MistServer PLAY_REWRITE trigger
@@ -8855,13 +9545,17 @@ func (s *CommodoreServer) normalizeArtifactPlaybackID(ctx context.Context, conte
 func (s *CommodoreServer) ResolveIngestEndpoint(ctx context.Context, req *sharedpb.IngestEndpointRequest) (*sharedpb.IngestEndpointResponse, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 
-	var foghornClient *foghornclient.GRPCClient
-	var err error
-	if tenantID == "" {
-		foghornClient, _, err = s.resolveFoghornForStreamKey(ctx, req.StreamKey)
-	} else {
-		foghornClient, _, err = s.resolveFoghornForTenant(ctx, tenantID)
-	}
+	// Routing always follows the stream key, never the caller.
+	//
+	// The key identifies the stream, so it is the only input that can honour the
+	// active ingest lease and reach the stream owner's placement. Routing by the
+	// caller's tenant instead — which an optional JWT makes the common SDK case —
+	// would hand an owner an endpoint on their primary cluster while the lease
+	// sits elsewhere, and PUSH_REWRITE would then reject the publish as a
+	// duplicate; for a non-owner it would resolve against the wrong tenant
+	// entirely. Authentication decides what metadata comes back, in
+	// finalizeIngestResponse below, and nothing else.
+	foghornClient, _, err := s.resolveFoghornForStreamKey(ctx, req.StreamKey)
 	if err != nil {
 		return nil, err
 	}

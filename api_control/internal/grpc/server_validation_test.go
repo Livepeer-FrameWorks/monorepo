@@ -12,6 +12,8 @@ import (
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	tenantlimitspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
 	"github.com/sirupsen/logrus"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestValidateStreamKey(t *testing.T) {
@@ -97,12 +99,13 @@ func TestValidateStreamKey(t *testing.T) {
 		},
 		{
 			name: "active_user",
-			req:  &commodorepb.ValidateStreamKeyRequest{StreamKey: "good-key", ClusterId: "cluster-us"},
+			req:  &commodorepb.ValidateStreamKeyRequest{StreamKey: "good-key", ClusterId: "cluster-us", ClaimToken: "conn-1"},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
 					AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push")
 				mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
-				mock.ExpectExec("UPDATE commodore.streams").WithArgs("cluster-us", "good-key").WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectQuery("UPDATE commodore.streams").WithArgs("cluster-us", "good-key", "conn-1").
+					WillReturnRows(claimReserved())
 			},
 			assert: func(t *testing.T, resp *commodorepb.ValidateStreamKeyResponse, err error) {
 				if err != nil {
@@ -121,12 +124,13 @@ func TestValidateStreamKey(t *testing.T) {
 		},
 		{
 			name: "active_user_cluster_update_contended",
-			req:  &commodorepb.ValidateStreamKeyRequest{StreamKey: "contended-key", ClusterId: "cluster-eu"},
+			req:  &commodorepb.ValidateStreamKeyRequest{StreamKey: "contended-key", ClusterId: "cluster-eu", ClaimToken: "conn-2"},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
 					AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push")
 				mock.ExpectQuery("FROM commodore.streams").WithArgs("contended-key").WillReturnRows(rows)
-				mock.ExpectExec("UPDATE commodore.streams").WithArgs("cluster-eu", "contended-key").WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectQuery("UPDATE commodore.streams").WithArgs("cluster-eu", "contended-key", "conn-2").
+					WillReturnError(sql.ErrNoRows)
 			},
 			assert: func(t *testing.T, resp *commodorepb.ValidateStreamKeyResponse, err error) {
 				if err != nil {
@@ -153,7 +157,15 @@ func TestValidateStreamKey(t *testing.T) {
 				test.setupMock(mock)
 			}
 
-			server := &CommodoreServer{db: db, logger: logrus.New()}
+			// Cluster admission is fail-closed: a route that will not resolve
+			// returns Unavailable before any placement write. These cases test
+			// admission outcomes, so the route is pre-resolved in the cache.
+			server := &CommodoreServer{
+				db:            db,
+				logger:        logrus.New(),
+				routeCache:    map[string]*clusterRoute{"tenant-id": admittingRoute("cluster-us", "cluster-eu")},
+				routeCacheTTL: 5 * time.Minute,
+			}
 			resp, err := server.ValidateStreamKey(ctx, test.req)
 			test.assert(t, resp, err)
 
@@ -168,7 +180,7 @@ func TestValidateStreamKey(t *testing.T) {
 
 func TestResolveStreamContext(t *testing.T) {
 	ctx := context.Background()
-	cols := []string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode", "requires_auth"}
+	cols := []string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode", "requires_auth", "active_ingest_cluster_id", "lease_fresh"}
 	tests := []struct {
 		name      string
 		req       *commodorepb.ResolveStreamContextRequest
@@ -206,7 +218,7 @@ func TestResolveStreamContext(t *testing.T) {
 			req:  &commodorepb.ResolveStreamContextRequest{Identifier: &commodorepb.ResolveStreamContextRequest_PlaybackId{PlaybackId: "pk_inactive"}},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				rows := sqlmock.NewRows(cols).
-					AddRow("stream-id", "user-id", "tenant-id", "internal", false, true, "pk_inactive", "mist_native", false)
+					AddRow("stream-id", "user-id", "tenant-id", "internal", false, true, "pk_inactive", "mist_native", false, nil, nil)
 				mock.ExpectQuery(`WHERE s\.playback_id = \$1`).WithArgs("pk_inactive").WillReturnRows(rows)
 			},
 			assert: func(t *testing.T, resp *commodorepb.ResolveStreamContextResponse) {
@@ -232,7 +244,7 @@ func TestResolveStreamContext(t *testing.T) {
 			wantErr: true,
 			setupMock: func(mock sqlmock.Sqlmock) {
 				rows := sqlmock.NewRows(cols).
-					AddRow("stream-id", "user-id", "tenant-id", "internal-name-1", true, false, "pk_demo", "mist_native", false)
+					AddRow("stream-id", "user-id", "tenant-id", "internal-name-1", true, false, "pk_demo", "mist_native", false, nil, nil)
 				mock.ExpectQuery(`WHERE s\.internal_name = \$1`).WithArgs("internal-name-1").WillReturnRows(rows)
 			},
 		},
@@ -249,8 +261,47 @@ func TestResolveStreamContext(t *testing.T) {
 			wantErr: true,
 			setupMock: func(mock sqlmock.Sqlmock) {
 				rows := sqlmock.NewRows(cols).
-					AddRow("stream-id", "user-id", "tenant-id", "internal-name-2", true, false, "pk_demo", "mist_native", true)
+					AddRow("stream-id", "user-id", "tenant-id", "internal-name-2", true, false, "pk_demo", "mist_native", true, nil, nil)
 				mock.ExpectQuery(`WHERE s\.internal_name = \$1`).WithArgs("internal-name-2").WillReturnRows(rows)
+			},
+		},
+		{
+			name:    "empty_stream_key",
+			req:     &commodorepb.ResolveStreamContextRequest{Identifier: &commodorepb.ResolveStreamContextRequest_StreamKey{StreamKey: ""}},
+			wantErr: true,
+		},
+		{
+			// The stream-key identifier is what ingest-endpoint resolution
+			// uses, so it must resolve the same identity the other identifiers
+			// do — without ValidateStreamKey's placement claim.
+			name: "stream_key_resolves_identity",
+			req:  &commodorepb.ResolveStreamContextRequest{Identifier: &commodorepb.ResolveStreamContextRequest_StreamKey{StreamKey: "sk_live_1"}},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				rows := sqlmock.NewRows(cols).
+					AddRow("stream-id", "user-id", "tenant-id", "internal", false, true, "pk_demo", "push", false, nil, nil)
+				mock.ExpectQuery(`WHERE s\.stream_key = \$1 AND s\.deleted_at IS NULL`).
+					WithArgs("sk_live_1").WillReturnRows(rows)
+			},
+			assert: func(t *testing.T, resp *commodorepb.ResolveStreamContextResponse) {
+				if resp.StreamId != "stream-id" || resp.TenantId != "tenant-id" || resp.IngestMode != "push" {
+					t.Fatalf("identity not populated from stream key: %+v", resp)
+				}
+			},
+		},
+		{
+			name: "stream_key_not_found",
+			req:  &commodorepb.ResolveStreamContextRequest{Identifier: &commodorepb.ResolveStreamContextRequest_StreamKey{StreamKey: "sk_bogus"}},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(`WHERE s\.stream_key = \$1 AND s\.deleted_at IS NULL`).
+					WithArgs("sk_bogus").WillReturnError(sql.ErrNoRows)
+			},
+			assert: func(t *testing.T, resp *commodorepb.ResolveStreamContextResponse) {
+				if resp.Admitted {
+					t.Fatalf("expected admitted=false for unknown stream key")
+				}
+				if resp.RejectionReason != commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_INVALID_KEY {
+					t.Fatalf("unexpected rejection reason: %v", resp.RejectionReason)
+				}
 			},
 		},
 	}
@@ -520,7 +571,8 @@ func TestValidateStreamKey_OriginClusterUsesIngestClusterWhenProvided(t *testing
 	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
 		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push")
 	mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
-	mock.ExpectExec("UPDATE commodore.streams SET active_ingest_cluster_id").WithArgs("cluster-ingest", "good-key").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("SET active_ingest_cluster_id").WithArgs("cluster-ingest", "good-key", "conn-ingest").
+		WillReturnRows(claimReserved())
 
 	server := &CommodoreServer{
 		db:     db,
@@ -529,18 +581,24 @@ func TestValidateStreamKey_OriginClusterUsesIngestClusterWhenProvided(t *testing
 			"tenant-id": {
 				clusterID: "cluster-primary",
 				clusterPeers: []*clusterpeerpb.TenantClusterPeer{
-					{ClusterId: "cluster-primary"},
-					{ClusterId: "cluster-ingest"},
+					{ClusterId: "cluster-primary", HealthStatus: "healthy"},
+					{ClusterId: "cluster-ingest", HealthStatus: "healthy"},
 				},
-				resolvedAt: time.Now(),
+				admissionPeers: []*clusterpeerpb.TenantClusterPeer{
+					{ClusterId: "cluster-primary", HealthStatus: "healthy"},
+					{ClusterId: "cluster-ingest", HealthStatus: "healthy"},
+				},
+				resolvedAt:          time.Now(),
+				admissionResolvedAt: time.Now(),
 			},
 		},
 		routeCacheTTL: 5 * time.Minute,
 	}
 
 	resp, err := server.ValidateStreamKey(context.Background(), &commodorepb.ValidateStreamKeyRequest{
-		StreamKey: "good-key",
-		ClusterId: "cluster-ingest",
+		StreamKey:  "good-key",
+		ClusterId:  "cluster-ingest",
+		ClaimToken: "conn-ingest",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -554,6 +612,63 @@ func TestValidateStreamKey_OriginClusterUsesIngestClusterWhenProvided(t *testing
 	}
 }
 
+// Plain key validation must not claim ingest placement. The GraphQL and MCP
+// validate tools and x402 resource resolution all call this RPC with no cluster
+// id; deriving one from the tenant's route would take the 30-second lease and
+// make a later real ingest on another cluster fail with DUPLICATE_INGEST.
+// PUSH_REWRITE names its cluster and stays the only claimant.
+func TestValidateStreamKey_WithoutClusterDoesNotClaimPlacement(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
+		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push")
+	mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
+	// Registered so it can be asserted UNFULFILLED below: sqlmock's
+	// ExpectationsWereMet reports expectations that did not happen, but says
+	// nothing about unexpected calls, so "expect the claim, require that it
+	// never ran" is what actually detects a regression here.
+	mock.ExpectQuery("SET active_ingest_cluster_id").
+		WillReturnRows(claimReserved())
+
+	server := &CommodoreServer{
+		db:     db,
+		logger: logrus.New(),
+		routeCache: map[string]*clusterRoute{
+			"tenant-id": {
+				clusterID: "cluster-primary",
+				clusterPeers: []*clusterpeerpb.TenantClusterPeer{
+					{ClusterId: "cluster-primary"},
+				},
+				resolvedAt:          time.Now(),
+				admissionResolvedAt: time.Now(),
+			},
+		},
+		routeCacheTTL: 5 * time.Minute,
+	}
+
+	resp, err := server.ValidateStreamKey(context.Background(), &commodorepb.ValidateStreamKeyRequest{
+		StreamKey: "good-key",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resp.GetValid() {
+		t.Fatalf("expected the key to validate: %+v", resp)
+	}
+	// The routing hint is still returned; only the claiming write is withheld.
+	if resp.GetOriginClusterId() == "" {
+		t.Error("origin cluster hint should still be resolved for routing")
+	}
+
+	if err := mock.ExpectationsWereMet(); err == nil {
+		t.Fatal("validation without a cluster claimed ingest placement; PUSH_REWRITE must be the only claimant")
+	}
+}
+
 func TestValidateStreamKey_UsesMediaClusterWhenFoghornRunsOnPlatformCluster(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -564,7 +679,8 @@ func TestValidateStreamKey_UsesMediaClusterWhenFoghornRunsOnPlatformCluster(t *t
 	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
 		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push")
 	mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
-	mock.ExpectExec("UPDATE commodore.streams SET active_ingest_cluster_id").WithArgs("demo-media", "good-key").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("SET active_ingest_cluster_id").WithArgs("demo-media", "good-key", "conn-media").
+		WillReturnRows(claimReserved())
 
 	server := &CommodoreServer{
 		db:     db,
@@ -573,18 +689,24 @@ func TestValidateStreamKey_UsesMediaClusterWhenFoghornRunsOnPlatformCluster(t *t
 			"tenant-id": {
 				clusterID: "demo-media",
 				clusterPeers: []*clusterpeerpb.TenantClusterPeer{
-					{ClusterId: "central-primary", ClusterType: "central"},
-					{ClusterId: "demo-media", ClusterType: "edge"},
+					{ClusterId: "central-primary", ClusterType: "central", HealthStatus: "healthy"},
+					{ClusterId: "demo-media", ClusterType: "edge", HealthStatus: "healthy"},
 				},
-				resolvedAt: time.Now(),
+				admissionPeers: []*clusterpeerpb.TenantClusterPeer{
+					{ClusterId: "central-primary", ClusterType: "central", HealthStatus: "healthy"},
+					{ClusterId: "demo-media", ClusterType: "edge", HealthStatus: "healthy"},
+				},
+				resolvedAt:          time.Now(),
+				admissionResolvedAt: time.Now(),
 			},
 		},
 		routeCacheTTL: 5 * time.Minute,
 	}
 
 	resp, err := server.ValidateStreamKey(context.Background(), &commodorepb.ValidateStreamKeyRequest{
-		StreamKey: "good-key",
-		ClusterId: "central-primary",
+		StreamKey:  "good-key",
+		ClusterId:  "central-primary",
+		ClaimToken: "conn-media",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -638,5 +760,70 @@ func TestSelectActiveIngestCluster(t *testing.T) {
 				t.Fatalf("expected cluster id %q, got %q", tc.wantID, gotID)
 			}
 		})
+	}
+}
+
+// claimReserved is the pre-state the claim statement returns when nothing held
+// the claim, so this call reserved it. Ownership semantics themselves are proven
+// against a real Postgres in active_ingest_claim_realpg_test.go — sqlmock can be
+// told what to return, it cannot show what the SQL would do.
+func claimReserved() *sqlmock.Rows {
+	return sqlmock.NewRows([]string{"prev_cluster", "prev_token", "prev_fresh"}).
+		AddRow(nil, nil, false)
+}
+
+// admittingRoute is a cached route that admits each named cluster: entitled by
+// plan and healthy.
+func admittingRoute(clusterIDs ...string) *clusterRoute {
+	peers := make([]*clusterpeerpb.TenantClusterPeer, 0, len(clusterIDs))
+	for _, id := range clusterIDs {
+		peers = append(peers, &clusterpeerpb.TenantClusterPeer{ClusterId: id, HealthStatus: "healthy"})
+	}
+	return &clusterRoute{
+		clusterID:           clusterIDs[0],
+		admissionPeers:      peers,
+		clusterPeers:        peers,
+		resolvedAt:          time.Now(),
+		admissionResolvedAt: time.Now(),
+	}
+}
+
+// A push must not slip past cluster entitlement while the control plane is
+// down. Falling through on a route-lookup failure would let a direct
+// RTMP/SRT/WHIP publish bypass the gate the resolver applies AND take the
+// placement lease on an unverified cluster.
+func TestValidateStreamKey_RouteFailureIsTransientAndWritesNoPlacement(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
+		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push")
+	mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
+	// Registered so an unexpected placement write is caught rather than ignored:
+	// ExpectationsWereMet only reports UNFULFILLED expectations, so the check
+	// below asserts it stayed unfulfilled.
+	mock.ExpectQuery("UPDATE commodore.streams").WillReturnRows(claimReserved())
+
+	// quartermasterClient nil ⇒ the route cannot resolve.
+	server := &CommodoreServer{
+		db:            db,
+		logger:        logrus.New(),
+		routeCache:    map[string]*clusterRoute{},
+		routeCacheTTL: 5 * time.Minute,
+	}
+
+	_, err = server.ValidateStreamKey(context.Background(), &commodorepb.ValidateStreamKeyRequest{
+		StreamKey:  "good-key",
+		ClusterId:  "cluster-us",
+		ClaimToken: "conn-route-fail",
+	})
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("err = %v, want Unavailable", err)
+	}
+	if mock.ExpectationsWereMet() == nil {
+		t.Fatal("placement was written despite an unresolved entitlement route")
 	}
 }
