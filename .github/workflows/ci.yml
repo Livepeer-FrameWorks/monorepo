@@ -74,7 +74,7 @@ jobs:
           rm /tmp/protoc.zip
       - name: Install Go protoc plugins
         run: |
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
       - name: Install gqlgen
         run: go install github.com/99designs/gqlgen@v0.17.86
@@ -109,7 +109,7 @@ jobs:
           rm /tmp/protoc.zip
       - name: Install Go protoc plugins
         run: |
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
       - name: Install gqlgen
         run: go install github.com/99designs/gqlgen@v0.17.86
