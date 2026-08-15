@@ -6697,8 +6697,9 @@ func (s *QuartermasterServer) CreateNode(ctx context.Context, req *quartermaster
 		                                                region, availability_zone,
 		                                                latitude, longitude,
 		                                                cpu_cores, memory_gb, disk_gb, status,
+		                                                enrollment_origin,
 		                                                created_at, updated_at)
-		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'active', $17, $17)
+		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'active', 'runtime_enrolled', $17, $17)
 		ON CONFLICT (node_id) DO UPDATE SET
 			cluster_id            = EXCLUDED.cluster_id,
 			node_name             = EXCLUDED.node_name,
@@ -12555,7 +12556,9 @@ func (s *QuartermasterServer) RejectClusterSubscription(ctx context.Context, req
 }
 
 // ListPeers returns clusters that share at least one tenant with the requesting cluster.
-// Used by Foghorn federation to discover peers for cross-cluster stream routing.
+// Used only by provider-operated Foghorns authenticated with the internal service credential. The request's
+// cluster ID is routing attribution within that trust boundary; third-party callers require cluster-bound
+// identity from the service-identity RFC.
 func (s *QuartermasterServer) ListPeers(ctx context.Context, req *quartermasterpb.ListPeersRequest) (*quartermasterpb.ListPeersResponse, error) {
 	clusterID := req.GetClusterId()
 	if clusterID == "" {

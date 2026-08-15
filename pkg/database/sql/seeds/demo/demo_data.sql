@@ -3,17 +3,20 @@
 -- Platform cluster (control + data plane: gateway, commodore, purser, skipper, quartermaster, decklog, signalman, periscope)
 INSERT INTO quartermaster.infrastructure_clusters (
     cluster_id, cluster_name, cluster_type, base_url,
+    cluster_class,
     max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
     is_default_cluster, is_platform_official, public_topology,
     visibility, short_description
 )
 VALUES (
     'central-primary', 'Central Platform', 'central', 'platform.demo.frameworks.network',
+    'platform_official',
     0, 0, 0,
     FALSE, TRUE, TRUE,
     'public', 'Platform services: API, billing, analytics, events'
 )
 ON CONFLICT (cluster_id) DO UPDATE SET
+    cluster_class = EXCLUDED.cluster_class,
     is_platform_official = TRUE,
     public_topology = TRUE,
     visibility = 'public',
@@ -22,17 +25,20 @@ ON CONFLICT (cluster_id) DO UPDATE SET
 -- Media cluster (edge nodes enroll here, served by foghorn via cluster_assignments)
 INSERT INTO quartermaster.infrastructure_clusters (
     cluster_id, cluster_name, cluster_type, base_url,
+    cluster_class,
     max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
     is_default_cluster, is_platform_official, public_topology,
     visibility, short_description
 )
 VALUES (
     'demo-media', 'Demo Media Cluster', 'edge', 'demo.frameworks.network',
+    'platform_official',
     0, 0, 0,
     TRUE, TRUE, TRUE,
     'public', 'Media cluster: edge nodes, stream routing, viewer delivery'
 )
 ON CONFLICT (cluster_id) DO UPDATE SET
+    cluster_class = EXCLUDED.cluster_class,
     is_default_cluster = TRUE,
     is_platform_official = TRUE,
     public_topology = TRUE,
@@ -52,20 +58,21 @@ ON CONFLICT (id) DO UPDATE SET
 -- free_unmetered.
 INSERT INTO quartermaster.infrastructure_clusters (
     cluster_id, cluster_name, cluster_type, base_url,
-    owner_tenant_id,
+    owner_tenant_id, cluster_class,
     max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
     is_default_cluster, is_platform_official, public_topology,
     visibility, short_description
 )
 VALUES (
     'demo-selfhosted', 'Demo Self-hosted Cluster', 'edge', 'selfhosted.demo.frameworks.network',
-    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'tenant_private',
     0, 0, 0,
     FALSE, FALSE, FALSE,
     'private', 'Tenant-owned media cluster for local offload testing'
 )
 ON CONFLICT (cluster_id) DO UPDATE SET
     owner_tenant_id = EXCLUDED.owner_tenant_id,
+    cluster_class = EXCLUDED.cluster_class,
     is_platform_official = FALSE,
     public_topology = FALSE,
     visibility = 'private',
