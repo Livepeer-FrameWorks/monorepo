@@ -86,7 +86,7 @@ func TestBuildServiceEnvVars_TopLevelYugabyteFoghornResolvesPerCellDatabase(t *t
 			ClusterID: tc.cluster,
 			Phase:     orchestrator.PhaseApplications,
 		}
-		env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", map[string]string{}, clusterEnvs)
+		env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", map[string]string{}, clusterEnvs, "native")
 		if err != nil {
 			t.Fatalf("%s: buildServiceEnvVars: %v", tc.serviceID, err)
 		}
@@ -123,7 +123,7 @@ func TestBuildServiceEnvVars_TopLevelYugabyteUnclusteredKeepsLogicalDatabase(t *
 		Host:      "yuga-eu-1",
 		Phase:     orchestrator.PhaseApplications,
 	}
-	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", map[string]string{}, nil)
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", map[string]string{}, nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestBuildServiceEnvVars_InstanceScopedDatabaseStillResolves(t *testing.T) {
 		Host:      "core1",
 		Phase:     orchestrator.PhaseApplications,
 	}
-	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", map[string]string{}, nil)
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", map[string]string{}, nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars: %v", err)
 	}

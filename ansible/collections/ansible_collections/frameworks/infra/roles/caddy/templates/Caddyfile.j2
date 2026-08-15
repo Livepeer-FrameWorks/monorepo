@@ -3,6 +3,18 @@
     email {{ caddy_global_options.email }}
 {% endif %}
     admin {{ caddy_admin_listen }}
+{# Global, not per-site: a site log directive covers access logs only, while
+   upstream failures come from the default logger and carry the full request
+   URI — which for /webrtc/<streamKey> and /ingest/<streamKey> is a publishing
+   credential. #}
+    log {
+        format filter {
+            wrap json
+            fields {
+                request>uri regexp "/(webrtc|ingest)/[^/?]+" "/${1}/REDACTED"
+            }
+        }
+    }
 }
 
 {% for site in caddy_sites %}

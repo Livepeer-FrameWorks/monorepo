@@ -3374,7 +3374,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 	// Generate merged env vars for application/interface services.
 	// Infrastructure services (postgres, kafka, etc.) manage their own config.
 	if task.Phase != orchestrator.PhaseInfrastructure && manifest != nil {
-		envVars, err := buildServiceEnvVars(task, manifest, runtimeData, config.EnvFile, manifestDir, sharedEnv, clusterEnvs)
+		envVars, err := buildServiceEnvVars(task, manifest, runtimeData, config.EnvFile, manifestDir, sharedEnv, clusterEnvs, config.Mode)
 		if err != nil {
 			return config, fmt.Errorf("service %s: %w", task.Name, err)
 		}
@@ -6161,11 +6161,43 @@ func serviceRegistrationMetadata(name, hostName, clusterID string, manifest *inv
 	return metadata, nil
 }
 
+// dockerBridgeTrustCIDRs covers the common 172.x portion of Docker's built-in
+// IPv4 address pools. Docker allocates a host-specific subnet at runtime; the
+// manifest does not contain the resulting gateway address.
+// This is therefore a coarse proxy-attribution default, not proof that every
+// address in the range is local. Operators whose backend listener is reachable
+// from another 172.16/12 network should override it with the actual bridge
+// gateway address.
+const dockerBridgeTrustCIDRs = "172.16.0.0/12"
+
+const loopbackTrustCIDRs = "127.0.0.1/32,::1/128"
+
+// localProxyTrustCIDRs returns the peer addresses a co-located reverse proxy
+// can reach a service from, given how the service is deployed.
+func localProxyTrustCIDRs(deployMode string) string {
+	if strings.TrimSpace(deployMode) == "docker" {
+		// Container-to-container, or container-to-host via the gateway alias.
+		return loopbackTrustCIDRs + "," + dockerBridgeTrustCIDRs
+	}
+	return loopbackTrustCIDRs
+}
+
 // buildServiceEnvVars generates merged environment variables for a service.
 // Merge order (later wins): auto-generated → shared env_files → cluster
 // env_files (matched by task.ClusterID) → per-service env_file → inline config.
-func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]any, perServiceEnvFile string, manifestDir string, sharedEnv map[string]string, clusterEnvs map[string]map[string]string) (map[string]string, error) {
+func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]any, perServiceEnvFile string, manifestDir string, sharedEnv map[string]string, clusterEnvs map[string]map[string]string, deployMode string) (map[string]string, error) {
 	env := make(map[string]string)
+
+	// Which peer may be believed when it sets X-Forwarded-For. This exists to
+	// stop a *remote* caller forging the header to escape per-IP rate limiting
+	// and choose its own geo-routing location; it is not a defence against a
+	// compromised host, where the service is lost regardless.
+	//
+	// Native mode can name loopback exactly. Docker mode cannot know the
+	// dynamically allocated bridge gateway from the manifest, so it uses the
+	// documented coarse pool above; operator configuration still wins later in
+	// the merge. The mesh range is deliberately absent.
+	env["TRUSTED_PROXY_CIDRS"] = localProxyTrustCIDRs(deployMode)
 
 	// 1. Auto-generated infrastructure env vars
 	if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {

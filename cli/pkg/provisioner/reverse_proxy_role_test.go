@@ -644,3 +644,87 @@ func readRepoFile(t *testing.T, path string) string {
 func nilHost() inventory.Host {
 	return inventory.Host{}
 }
+
+func renderSite(site proxySite) string {
+	var b strings.Builder
+	writeNginxServer(&b, 80, "", site)
+	return b.String()
+}
+
+// A log policy must not widen what a site routes. Sites restricted to specific
+// prefixes must not gain /ingest/ or /webrtc/ locations pointing at an upstream
+// that never served them.
+func TestNginxCredentialLocationsDoNotWidenRestrictedSites(t *testing.T) {
+	out := renderSite(proxySite{
+		Name:         "bridge",
+		Domains:      []string{"bridge.example.com"},
+		Upstream:     "127.0.0.1:18000",
+		PathPrefixes: []string{"/graphql"},
+	})
+
+	for _, unwanted := range []string{"location ^~ /ingest/", "location ^~ /webrtc/"} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("restricted site gained %q:\n%s", unwanted, out)
+		}
+	}
+	if !strings.Contains(out, "location /graphql {") {
+		t.Errorf("site lost its own location:\n%s", out)
+	}
+}
+
+// A catch-all site already routes those paths, so decorating them changes no
+// routing — only the error-log sink for the credential-bearing requests.
+func TestNginxCredentialLocationsDecorateCatchAllSites(t *testing.T) {
+	out := renderSite(proxySite{
+		Name:     "foghorn",
+		Domains:  []string{"foghorn.example.com"},
+		Upstream: "127.0.0.1:18008",
+	})
+
+	for _, want := range []string{"location ^~ /ingest/", "location ^~ /webrtc/", "error_log /dev/null crit;"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("catch-all site missing %q:\n%s", want, out)
+		}
+	}
+	if !strings.Contains(out, "location / {") {
+		t.Errorf("catch-all location missing:\n%s", out)
+	}
+}
+
+// A site that declares the prefix itself must not get a duplicate location —
+// but it must still get the error-log suppression, or declaring the path
+// explicitly would silently opt out of the credential protection.
+func TestNginxSelfDeclaredCredentialPrefixStillSuppressesErrorLog(t *testing.T) {
+	out := renderSite(proxySite{
+		Name:         "edge",
+		Domains:      []string{"edge.example.com"},
+		Upstream:     "127.0.0.1:8080",
+		PathPrefixes: []string{"/ingest/"},
+	})
+
+	if got := strings.Count(out, "location"); got != 1 {
+		t.Errorf("expected exactly one location block, got %d:\n%s", got, out)
+	}
+	if !strings.Contains(out, "error_log /dev/null crit;") {
+		t.Errorf("self-declared credential path lost error-log suppression:\n%s", out)
+	}
+}
+
+func TestSiteServesPath(t *testing.T) {
+	cases := []struct {
+		name  string
+		site  proxySite
+		path  string
+		serve bool
+	}{
+		{"no prefixes serves everything", proxySite{}, "/ingest/", true},
+		{"root prefix serves everything", proxySite{PathPrefixes: []string{"/"}}, "/webrtc/", true},
+		{"narrow prefix does not", proxySite{PathPrefixes: []string{"/graphql"}}, "/ingest/", false},
+		{"matching prefix does", proxySite{PathPrefixes: []string{"/ingest/"}}, "/ingest/", true},
+	}
+	for _, tc := range cases {
+		if got := siteServesPath(tc.site, tc.path); got != tc.serve {
+			t.Errorf("%s: got %v want %v", tc.name, got, tc.serve)
+		}
+	}
+}

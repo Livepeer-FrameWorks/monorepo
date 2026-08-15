@@ -216,14 +216,42 @@ http {
     keepalive_requests 10000;
     send_timeout 60s;
 
+    # Publishing credentials travel in the path (/ingest/<streamKey> on Foghorn,
+    # /webrtc/<streamKey> for WHIP). The default combined format would write them
+    # to disk on every request, so the logged URI is redacted instead.
+    map $request_uri $frameworks_logged_uri {
+        "~^(?<fw_prefix>/(?:ingest|webrtc)/)[^/?]+(?<fw_rest>.*)$" "${fw_prefix}REDACTED${fw_rest}";
+        default $request_uri;
+    }
+    log_format frameworks_redacted '$remote_addr - $remote_user [$time_local] '
+                                   '"$request_method $frameworks_logged_uri $server_protocol" '
+                                   '$status $body_bytes_sent "$http_referer" "$http_user_agent"';
+    access_log /var/log/nginx/access.log frameworks_redacted;
+
     include %s;
 }
 `, includePath)
 }
 
+// caddyCredentialLogBlock redacts credential-bearing request URIs in Caddy's
+// global logger. It must be global, not per-site: a site-level log directive
+// covers access logs only, while upstream failures are emitted by the default
+// logger and carry the full request URI.
+const caddyCredentialLogBlock = `    log {
+        format filter {
+            wrap json
+            fields {
+                request>uri regexp "/(webrtc|ingest)/[^/?]+" "/${1}/REDACTED"
+            }
+        }
+    }
+`
+
 func renderCaddyfile(sites []proxySite) string {
 	var b strings.Builder
-	b.WriteString("{\n    admin localhost:2019\n}\n\n")
+	b.WriteString("{\n    admin localhost:2019\n")
+	b.WriteString(caddyCredentialLogBlock)
+	b.WriteString("}\n\n")
 	if len(sites) == 0 {
 		b.WriteString(":80 {\n    respond \"FrameWorks reverse proxy\" 200\n}\n")
 		return b.String()
@@ -374,8 +402,10 @@ func writeNginxTenantAliasPlayback(b *strings.Builder, tap *tenantAliasPlayback)
 	// Docker-mode nginx reaches the host-native foghorn via the compose
 	// extra_hosts gateway alias, matching normalizeProxyUpstream's rewrite.
 	upstream := fmt.Sprintf("host.docker.internal:%d", tap.UpstreamPort)
+	aliasSite := proxySite{Upstream: upstream, Profile: "media_delivery"}
+	writeNginxCredentialPathLocation(b, aliasSite)
 	b.WriteString("\n    location / {\n")
-	writeNginxProxyBlock(b, proxySite{Upstream: upstream, Profile: "media_delivery"})
+	writeNginxProxyBlock(b, aliasSite)
 	b.WriteString("    }\n}\n\n")
 }
 
@@ -435,12 +465,89 @@ func writeNginxServer(b *strings.Builder, port int, listenSuffix string, site pr
 	if len(paths) == 0 {
 		paths = []string{"/"}
 	}
+	writeNginxCredentialPathLocation(b, site)
 	for _, path := range paths {
 		fmt.Fprintf(b, "\n    location %s {\n", path)
+		// A site that declares a credential-bearing prefix itself gets the
+		// error-log suppression on its own location rather than a second one.
+		if isCredentialPath(path) {
+			b.WriteString("        error_log /dev/null crit;\n")
+		}
 		writeNginxProxyBlock(b, site)
 		b.WriteString("    }\n")
 	}
 	b.WriteString("}\n\n")
+}
+
+// credentialPathPrefixes are request paths whose first segment is a publishing
+// credential rather than an identifier.
+var credentialPathPrefixes = []string{"/ingest/", "/webrtc/"}
+
+// writeNginxCredentialPathLocation carves the credential-bearing paths a site
+// already serves out into their own locations so their error logging can be
+// suppressed.
+//
+// The access log is redacted by log_format, but nginx's error log has no
+// configurable format and includes the full request line ("POST /ingest/<key>")
+// on upstream failures — a timeout or refused connection would write the
+// publisher's credential to disk. This location discards its error log because
+// severity filtering cannot guarantee that a request-bearing critical entry
+// will never be emitted; startup and configuration errors still use the global
+// log.
+//
+// Only paths the site would already route are decorated: a log policy must not
+// widen a site's routing surface, and a site restricted to (say) /graphql must
+// not start proxying /ingest/ to its upstream.
+func writeNginxCredentialPathLocation(b *strings.Builder, site proxySite) {
+	for _, prefix := range credentialPathPrefixes {
+		if !siteServesPath(site, prefix) || siteDeclaresPath(site, prefix) {
+			continue
+		}
+		fmt.Fprintf(b, "\n    location ^~ %s {\n", prefix)
+		b.WriteString("        error_log /dev/null crit;\n")
+		writeNginxProxyBlock(b, site)
+		b.WriteString("    }\n")
+	}
+}
+
+// siteServesPath reports whether the site's configured prefixes already route
+// the given path. A site with no explicit prefixes serves "/" and so serves
+// everything.
+func siteServesPath(site proxySite, path string) bool {
+	if len(site.PathPrefixes) == 0 {
+		return true
+	}
+	for _, prefix := range site.PathPrefixes {
+		if prefix == "" {
+			continue
+		}
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// siteDeclaresPath reports whether the site already renders its own location
+// for exactly this prefix, which would collide with the decorated one.
+func siteDeclaresPath(site proxySite, path string) bool {
+	for _, prefix := range site.PathPrefixes {
+		if strings.TrimSuffix(prefix, "/") == strings.TrimSuffix(path, "/") {
+			return true
+		}
+	}
+	return false
+}
+
+// isCredentialPath reports whether a site-declared prefix is one of the
+// credential-bearing paths.
+func isCredentialPath(path string) bool {
+	for _, prefix := range credentialPathPrefixes {
+		if strings.TrimSuffix(prefix, "/") == strings.TrimSuffix(path, "/") {
+			return true
+		}
+	}
+	return false
 }
 
 func writeNginxProxyBlock(b *strings.Builder, site proxySite) {

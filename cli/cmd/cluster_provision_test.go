@@ -1386,7 +1386,7 @@ func TestBuildServiceEnvVarsClusterEnvOverridesSharedAndIsOverriddenByInline(t *
 		Type:      "foghorn",
 		ServiceID: "foghorn",
 		ClusterID: "media-us-1",
-	}, manifest, map[string]any{}, "", "", sharedEnv, clusterEnvs)
+	}, manifest, map[string]any{}, "", "", sharedEnv, clusterEnvs, "native")
 	if err != nil {
 		t.Fatalf("US buildServiceEnvVars: %v", err)
 	}
@@ -1406,7 +1406,7 @@ func TestBuildServiceEnvVarsClusterEnvOverridesSharedAndIsOverriddenByInline(t *
 		Type:      "foghorn",
 		ServiceID: "foghorn",
 		ClusterID: "media-eu-1",
-	}, manifest, map[string]any{}, "", "", sharedEnv, clusterEnvs)
+	}, manifest, map[string]any{}, "", "", sharedEnv, clusterEnvs, "native")
 	if err != nil {
 		t.Fatalf("EU buildServiceEnvVars: %v", err)
 	}
@@ -1437,7 +1437,7 @@ func TestBuildServiceEnvVarsKeepsInternalLeafForFoghornControl(t *testing.T) {
 		Host:      "regional-us-1",
 		ClusterID: "media-us-1",
 		Phase:     orchestrator.PhaseApplications,
-	}, manifest, map[string]any{"service_token": "runtime-service-token"}, "", "", nil, nil)
+	}, manifest, map[string]any{"service_token": "runtime-service-token"}, "", "", nil, nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -1450,6 +1450,74 @@ func TestBuildServiceEnvVarsKeepsInternalLeafForFoghornControl(t *testing.T) {
 	}
 	if got := env["CLUSTER_ID"]; got != "media-us-1" {
 		t.Fatalf("CLUSTER_ID = %q, want media-us-1", got)
+	}
+}
+
+// The reverse proxy is always co-located with the service it fronts, so the
+// peer whose X-Forwarded-For may be believed follows from the deploy mode.
+// Without this, a proxied service attributes every caller to the proxy: one
+// shared rate-limit bucket and proxy-located geo scoring.
+func TestBuildServiceEnvVarsDerivesProxyTrustFromDeployMode(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile:    "production",
+		RootDomain: "frameworks.network",
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn": {Enabled: true, Host: "regional-eu-1", Cluster: "media-eu-1"},
+		},
+	}
+	newTask := func() *orchestrator.Task {
+		return &orchestrator.Task{
+			Name: "foghorn@regional-eu-1", Type: "foghorn", ServiceID: "foghorn",
+			Host: "regional-eu-1", ClusterID: "media-eu-1", Phase: orchestrator.PhaseApplications,
+		}
+	}
+
+	native, err := buildServiceEnvVars(newTask(), manifest, map[string]any{}, "", "", nil, nil, "native")
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars(native): %v", err)
+	}
+	if got := native["TRUSTED_PROXY_CIDRS"]; got != "127.0.0.1/32,::1/128" {
+		t.Errorf("native TRUSTED_PROXY_CIDRS = %q, want loopback only", got)
+	}
+
+	docker, err := buildServiceEnvVars(newTask(), manifest, map[string]any{}, "", "", nil, nil, "docker")
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars(docker): %v", err)
+	}
+	if !strings.Contains(docker["TRUSTED_PROXY_CIDRS"], "172.16.0.0/12") {
+		t.Errorf("docker TRUSTED_PROXY_CIDRS = %q, want the compose bridge range", docker["TRUSTED_PROXY_CIDRS"])
+	}
+
+	// Mesh peers are other machines, not a co-located proxy. Trusting them
+	// would let any node in the cluster forge a caller's address.
+	for mode, env := range map[string]map[string]string{"native": native, "docker": docker} {
+		if strings.Contains(env["TRUSTED_PROXY_CIDRS"], "10.") {
+			t.Errorf("%s TRUSTED_PROXY_CIDRS = %q, must not include the WireGuard mesh range", mode, env["TRUSTED_PROXY_CIDRS"])
+		}
+	}
+}
+
+// Operators must be able to override the derived value for a topology we did
+// not anticipate, so it has to sit at the lowest precedence.
+func TestBuildServiceEnvVarsProxyTrustIsOverridable(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile:    "production",
+		RootDomain: "frameworks.network",
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn": {Enabled: true, Host: "regional-eu-1"},
+		},
+	}
+
+	env, err := buildServiceEnvVars(&orchestrator.Task{
+		Name: "foghorn@regional-eu-1", Type: "foghorn", ServiceID: "foghorn",
+		Host: "regional-eu-1", Phase: orchestrator.PhaseApplications,
+	}, manifest, map[string]any{}, "", "",
+		map[string]string{"TRUSTED_PROXY_CIDRS": "203.0.113.7/32"}, nil, "native")
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars: %v", err)
+	}
+	if got := env["TRUSTED_PROXY_CIDRS"]; got != "203.0.113.7/32" {
+		t.Fatalf("TRUSTED_PROXY_CIDRS = %q, want the operator's value", got)
 	}
 }
 
@@ -1481,7 +1549,7 @@ func TestBuildServiceEnvVarsLoadsSplitManifestEnvFiles(t *testing.T) {
 		Type:      "livepeer-gateway",
 		ServiceID: "livepeer-gateway",
 		ClusterID: "media-central-primary",
-	}, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	}, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -1516,7 +1584,7 @@ func TestBuildServiceEnvVarsDerivesSharedRuntimeValues(t *testing.T) {
 		Name:      "foghorn",
 		Type:      "foghorn",
 		ServiceID: "foghorn",
-	}, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	}, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -1555,7 +1623,7 @@ func TestBuildServiceEnvVarsDerivesRegionFromHostLabels(t *testing.T) {
 		Type:      "foghorn",
 		ServiceID: "foghorn",
 		Host:      "regional-us-1",
-	}, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	}, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -1617,7 +1685,7 @@ func TestBuildServiceEnvVarsProductionForcesSecureDefaults(t *testing.T) {
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -1660,7 +1728,7 @@ func TestBuildServiceEnvVarsProductionRequiresNavigatorManagedCA(t *testing.T) {
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	_, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	_, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err == nil {
 		t.Fatal("expected managed CA env validation to fail")
 	}
@@ -1696,7 +1764,7 @@ func TestBuildServiceEnvVarsProductionAcceptsNavigatorManagedCABase64Env(t *test
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	if _, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil); err != nil {
+	if _, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native"); err != nil {
 		t.Fatalf("expected base64 CA envs to satisfy prod validation, got %v", err)
 	}
 }
@@ -1762,7 +1830,7 @@ func TestBuildServiceEnvVarsUsesMeshHostsForBackendDependencies(t *testing.T) {
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -1837,7 +1905,7 @@ func TestBuildServiceEnvVarsUsesMeshIPForColocatedChatwootRedis(t *testing.T) {
 
 	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", map[string]string{
 		"REDIS_CHATWOOT_PASSWORD": "redis-secret",
-	}, nil)
+	}, nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -1878,7 +1946,7 @@ func TestBuildServiceEnvVarsIncludesFoghornRedisPasswordInURL(t *testing.T) {
 
 	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", map[string]string{
 		"REDIS_FOGHORN_PASSWORD": "redis secret",
-	}, nil)
+	}, nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -1928,7 +1996,7 @@ func TestBuildServiceEnvVarsIncludesFoghornSentinelPassword(t *testing.T) {
 
 	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", map[string]string{
 		"REDIS_FOGHORN_PASSWORD": "redis secret",
-	}, nil)
+	}, nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -1989,7 +2057,7 @@ func TestBuildServiceEnvVarsBindsDeclaredPostgresInstanceDatabase(t *testing.T) 
 		Phase:     orchestrator.PhaseApplications,
 	}, manifest, map[string]any{}, "", "", map[string]string{}, map[string]map[string]string{
 		"media-eu-1": {"DATABASE_PASSWORD": "wrong-cluster-default"},
-	})
+	}, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -2051,7 +2119,7 @@ func TestBuildServiceEnvVarsPrefersDeclaredDatabasePassword(t *testing.T) {
 	}, manifest, map[string]any{}, "", "", map[string]string{
 		"POSTGRES_SUPPORT_PASSWORD":  "support-secret",
 		"POSTGRES_METABASE_PASSWORD": "metabase-secret",
-	}, nil)
+	}, nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -2451,7 +2519,7 @@ func TestBuildServiceEnvVarsDerivesAllChandlerInternalURLs(t *testing.T) {
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -2499,7 +2567,7 @@ func TestBuildServiceEnvVarsDerivesOrderedGatewayMCPURLs(t *testing.T) {
 		ServiceID: "skipper",
 		Host:      "central-1",
 		Phase:     orchestrator.PhaseApplications,
-	}, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	}, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars skipper: %v", err)
 	}
@@ -2700,7 +2768,7 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 				Host:      "central-eu-1",
 				ClusterID: "core-central-primary",
 				Phase:     orchestrator.PhaseApplications,
-			}, manifest, runtimeData, "", "", sharedEnv, nil)
+			}, manifest, runtimeData, "", "", sharedEnv, nil, "native")
 			if err != nil {
 				t.Fatalf("buildServiceEnvVars returned error: %v", err)
 			}
@@ -2764,7 +2832,7 @@ func TestBuildServiceEnvVarsEscapesDatabaseURLPassword(t *testing.T) {
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -2808,7 +2876,7 @@ func TestBuildServiceEnvVarsUsesSharedPeriscopeDatabaseRole(t *testing.T) {
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -3072,7 +3140,7 @@ func TestBuildServiceEnvVarsSetsMirrorPrefixesForEveryPeriscopeReplica(t *testin
 	}
 
 	euPeriscope := &orchestrator.Task{Type: "periscope-ingest", ServiceID: "periscope-ingest", Host: "regional-eu-1", ClusterID: "media-eu-1"}
-	euEnv, err := buildServiceEnvVars(euPeriscope, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	euEnv, err := buildServiceEnvVars(euPeriscope, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars eu periscope: %v", err)
 	}
@@ -3081,7 +3149,7 @@ func TestBuildServiceEnvVarsSetsMirrorPrefixesForEveryPeriscopeReplica(t *testin
 	}
 
 	usSignalman := &orchestrator.Task{Type: "signalman", ServiceID: "signalman", Host: "regional-us-1", ClusterID: "media-us-1"}
-	usEnv, err := buildServiceEnvVars(usSignalman, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	usEnv, err := buildServiceEnvVars(usSignalman, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars us signalman: %v", err)
 	}
@@ -3090,7 +3158,7 @@ func TestBuildServiceEnvVarsSetsMirrorPrefixesForEveryPeriscopeReplica(t *testin
 	}
 
 	usPeriscope := &orchestrator.Task{Type: "periscope-ingest", ServiceID: "periscope-ingest", Host: "regional-us-1", ClusterID: "media-us-1"}
-	periscopeEnv, err := buildServiceEnvVars(usPeriscope, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	periscopeEnv, err := buildServiceEnvVars(usPeriscope, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars us periscope: %v", err)
 	}
@@ -3123,7 +3191,7 @@ func TestBuildServiceEnvVarsSelectsKafkaFromHostRegionForGenericRegionalService(
 	}
 
 	usDecklog := &orchestrator.Task{Type: "decklog", ServiceID: "decklog", Host: "regional-us-1"}
-	usEnv, err := buildServiceEnvVars(usDecklog, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	usEnv, err := buildServiceEnvVars(usDecklog, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars us decklog: %v", err)
 	}
@@ -3135,7 +3203,7 @@ func TestBuildServiceEnvVarsSelectsKafkaFromHostRegionForGenericRegionalService(
 	}
 
 	euDecklog := &orchestrator.Task{Type: "decklog", ServiceID: "decklog", Host: "regional-eu-1"}
-	euEnv, err := buildServiceEnvVars(euDecklog, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	euEnv, err := buildServiceEnvVars(euDecklog, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars eu decklog: %v", err)
 	}
@@ -3391,7 +3459,7 @@ func TestBuildServiceEnvVarsVMAgentPrefersVMAUTHWriteURL(t *testing.T) {
 		Type:      "vmagent",
 		ServiceID: "vmagent",
 		Host:      "regional-1",
-	}, manifest, map[string]any{}, "", "", nil, nil)
+	}, manifest, map[string]any{}, "", "", nil, nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars vmagent: %v", err)
 	}
@@ -3426,7 +3494,7 @@ func TestBuildServiceEnvVarsVMAgentFallsBackToVictoriaMetricsAlias(t *testing.T)
 		Type:      "vmagent",
 		ServiceID: "vmagent",
 		Host:      "regional-1",
-	}, manifest, map[string]any{}, "", "", nil, nil)
+	}, manifest, map[string]any{}, "", "", nil, nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars vmagent: %v", err)
 	}
@@ -3454,7 +3522,7 @@ func TestBuildServiceEnvVarsVMAUTHUpstreamUsesVictoriaMetricsAlias(t *testing.T)
 		Type:      "vmauth",
 		ServiceID: "vmauth",
 		Host:      "central-1",
-	}, manifest, map[string]any{}, "", "", nil, nil)
+	}, manifest, map[string]any{}, "", "", nil, nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars vmauth: %v", err)
 	}
@@ -4493,7 +4561,7 @@ func TestBuildServiceEnvVarsAggregatorPinnedServicesIgnoreHostRegion(t *testing.
 	for _, svc := range pinned {
 		for _, host := range []string{"regional-eu-1", "regional-us-1", "regional-ap-1"} {
 			task := &orchestrator.Task{Type: svc, ServiceID: svc, Host: host}
-			env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+			env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
 			if err != nil {
 				t.Fatalf("buildServiceEnvVars(%s on %s): %v", svc, host, err)
 			}
@@ -4518,7 +4586,7 @@ func TestBuildServiceEnvVarsSignalmanPerInstanceKafkaIdentity(t *testing.T) {
 	envByHost := map[string]map[string]string{}
 	for _, host := range []string{"regional-us-1", "regional-us-2", "regional-us-3"} {
 		task := &orchestrator.Task{Type: "signalman", ServiceID: "signalman", Host: host}
-		env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+		env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
 		if err != nil {
 			t.Fatalf("buildServiceEnvVars signalman on %s: %v", host, err)
 		}
@@ -4544,7 +4612,7 @@ func TestBuildServiceEnvVarsSignalmanPerInstanceKafkaIdentity(t *testing.T) {
 	}
 
 	// Stability across reruns: same host, same env.
-	again, err := buildServiceEnvVars(&orchestrator.Task{Type: "signalman", ServiceID: "signalman", Host: "regional-us-1"}, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	again, err := buildServiceEnvVars(&orchestrator.Task{Type: "signalman", ServiceID: "signalman", Host: "regional-us-1"}, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("rerun: %v", err)
 	}
@@ -4560,7 +4628,7 @@ func TestBuildServiceEnvVarsBridgeMultiTargetSignalman(t *testing.T) {
 	manifest := threeRegionKafkaManifest()
 
 	task := &orchestrator.Task{Type: "bridge", ServiceID: "bridge", Host: "regional-eu-1"}
-	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars bridge: %v", err)
 	}
@@ -4597,7 +4665,7 @@ func TestBuildServiceEnvVarsBridgeRegionalHostIncludesControlPlaneGRPCDeps(t *te
 	}
 
 	task := &orchestrator.Task{Type: "bridge", ServiceID: "bridge", Host: "regional-eu-2", ClusterID: "eu-kafka"}
-	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars bridge: %v", err)
 	}

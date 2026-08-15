@@ -1,3 +1,51 @@
+{# Credential-bearing paths (/ingest/<streamKey>, /webrtc/<streamKey>) are
+   carved out of the site's normal locations so their error logging can be
+   suppressed. The access log is redacted via log_format, but nginx's error log
+   has no configurable format and includes the full request line on upstream
+   failures, which would write a publisher's stream key to disk. Severity
+   filtering cannot guarantee that a request-bearing critical entry is absent,
+   so these locations discard their error log; startup and config errors still
+   use the global log. #}
+{% macro credential_path_locations(site, profile) %}
+{% set site_prefixes = site.path_prefixes | default(['/']) %}
+{% for cred_prefix in ['/ingest/', '/webrtc/'] %}
+{# Only decorate paths the site already routes: a log policy must not widen a
+   site's routing surface. A broader declared prefix such as /ing already
+   serves /ingest, while an exact /ingest[/] declaration owns its own error-log
+   suppression below. #}
+{% set route = namespace(serves=false, declares=false) %}
+{% for site_prefix in site_prefixes %}
+{% if site_prefix and cred_prefix.startswith(site_prefix) %}
+{% set route.serves = true %}
+{% endif %}
+{% if site_prefix in [cred_prefix, cred_prefix[:-1]] %}
+{% set route.declares = true %}
+{% endif %}
+{% endfor %}
+{% if route.serves and not route.declares %}
+    location ^~ {{ cred_prefix }} {
+        error_log /dev/null crit;
+        proxy_pass {{ site.proxy_pass }};
+        proxy_http_version 1.1;
+        client_max_body_size {{ site.client_max_body_size | default(profile.client_max_body_size) }};
+        client_body_timeout {{ site.client_body_timeout | default(profile.client_body_timeout) }};
+        send_timeout {{ site.send_timeout | default(profile.send_timeout) }};
+        proxy_request_buffering {{ 'on' if site.proxy_request_buffering | default(profile.proxy_request_buffering) else 'off' }};
+        proxy_buffering {{ 'on' if site.proxy_buffering | default(profile.proxy_buffering) else 'off' }};
+        proxy_buffer_size {{ site.proxy_buffer_size | default(profile.proxy_buffer_size) }};
+        proxy_buffers {{ site.proxy_buffers | default(profile.proxy_buffers) }};
+        proxy_busy_buffers_size {{ site.proxy_busy_buffers_size | default(profile.proxy_busy_buffers_size) }};
+        proxy_connect_timeout {{ site.proxy_connect_timeout | default(profile.proxy_connect_timeout) }};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout {{ site.proxy_read_timeout | default(profile.proxy_read_timeout) }};
+        proxy_send_timeout {{ site.proxy_send_timeout | default(profile.proxy_send_timeout) }};
+    }
+{% endif %}
+{% endfor %}
+{% endmacro %}
 {% if nginx_sites | length == 0 %}
 server {
     listen {{ nginx_http_port }} default_server;
@@ -40,6 +88,23 @@ server {
     ssl_certificate {{ nginx_ingress_tls_root }}/tenant-alias/$fw_tenant_alias_sub/tls.crt;
     ssl_certificate_key {{ nginx_ingress_tls_root }}/tenant-alias/$fw_tenant_alias_sub/tls.key;
 
+{% for cred_prefix in ['/ingest/', '/webrtc/'] %}
+    location ^~ {{ cred_prefix }} {
+        error_log /dev/null crit;
+        proxy_pass http://127.0.0.1:{{ tap.upstream_port | default(18008) }};
+        proxy_http_version 1.1;
+        client_max_body_size {{ tap_profile.client_max_body_size }};
+        proxy_request_buffering {{ 'on' if tap_profile.proxy_request_buffering else 'off' }};
+        proxy_buffering {{ 'on' if tap_profile.proxy_buffering else 'off' }};
+        proxy_connect_timeout {{ tap_profile.proxy_connect_timeout }};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout {{ tap_profile.proxy_read_timeout }};
+        proxy_send_timeout {{ tap_profile.proxy_send_timeout }};
+    }
+{% endfor %}
     location / {
         proxy_pass http://127.0.0.1:{{ tap.upstream_port | default(18008) }};
         proxy_http_version 1.1;
@@ -68,8 +133,14 @@ server {
     listen {{ nginx_http_port }};
     server_name {{ site.domains | join(' ') }};
 
+{{ credential_path_locations(site, profile) }}
 {% for path_prefix in site.path_prefixes | default(['/']) %}
     location {{ path_prefix }} {
+{% if path_prefix in ['/ingest/', '/webrtc/', '/ingest', '/webrtc'] %}
+{# Declared explicitly by the site: suppress error logging here rather
+   than emitting a duplicate decorated location. #}
+        error_log /dev/null crit;
+{% endif %}
         proxy_pass {{ site.proxy_pass }};
         proxy_http_version 1.1;
         client_max_body_size {{ site.client_max_body_size | default(profile.client_max_body_size) }};
@@ -156,8 +227,14 @@ server {
     ssl_certificate_key {{ site.tls_key_path }};
     add_header Strict-Transport-Security "max-age=31536000" always;
 
+{{ credential_path_locations(site, profile) }}
 {% for path_prefix in site.path_prefixes | default(['/']) %}
     location {{ path_prefix }} {
+{% if path_prefix in ['/ingest/', '/webrtc/', '/ingest', '/webrtc'] %}
+{# Declared explicitly by the site: suppress error logging here rather
+   than emitting a duplicate decorated location. #}
+        error_log /dev/null crit;
+{% endif %}
         proxy_pass {{ site.proxy_pass }};
         proxy_http_version 1.1;
         client_max_body_size {{ site.client_max_body_size | default(profile.client_max_body_size) }};
