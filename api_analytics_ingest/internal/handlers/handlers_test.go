@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1661,12 +1662,17 @@ func TestPushRewritePreservesZeroPublisherCoordinateWhenPresent(t *testing.T) {
 	if batch == nil || len(batch.rows) != 1 {
 		t.Fatalf("expected stream_event_log row, got %#v", batch)
 	}
+	// Positional: stream_event_log's INSERT column list is
+	//   0 timestamp, 1 event_id, 2 tenant_id, 3 stream_id, 4 internal_name,
+	//   5 node_id, 6 cluster_id, 7 event_type, 8 status,
+	//   9 request_url, 10 protocol, 11 latitude, 12 longitude, ...
 	row := batch.rows[0]
-	if row[12] != lat {
-		t.Fatalf("expected latitude %v, got %#v", lat, row[12])
+	const latIdx, lonIdx = 11, 12
+	if row[latIdx] != lat {
+		t.Fatalf("expected latitude %v, got %#v", lat, row[latIdx])
 	}
-	if row[13] != lon {
-		t.Fatalf("expected longitude %v, got %#v", lon, row[13])
+	if row[lonIdx] != lon {
+		t.Fatalf("expected longitude %v, got %#v", lon, row[lonIdx])
 	}
 	stateBatch := conn.batches["stream_state_current"]
 	if stateBatch == nil || len(stateBatch.rows) != 1 {
@@ -2706,4 +2712,214 @@ func uint16Ptr(v uint16) *uint16 {
 
 func uuidPtr(v uuid.UUID) *uuid.UUID {
 	return &v
+}
+
+// Periscope is a durable, replayable consumer, so it enforces the
+// credential-free producer contract itself.
+func TestPushRewriteDropsCredentialBearingEvent(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	streamID := uuid.NewString()
+
+	const rawKey = "sk_live_secret_key"
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
+		StreamId: &streamID,
+		NodeId:   "edge-eu-1",
+		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
+			PushRewrite: &ipcpb.PushRewriteTrigger{
+				StreamName: rawKey,
+				PushUrl:    "rtmp://edge-ingest.example/live/" + rawKey,
+			},
+		},
+	})
+
+	err := handler.HandleAnalyticsEvent(kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "push_rewrite",
+		Timestamp: time.Now(),
+		Source:    "decklog",
+		TenantID:  uuid.NewString(),
+		Data:      data,
+	})
+	if err != nil {
+		t.Fatalf("dropping a credential-bearing event should not error: %v", err)
+	}
+
+	if batch := conn.batches["stream_event_log"]; batch != nil && len(batch.rows) > 0 {
+		t.Fatalf("credential-bearing event was persisted: %#v", batch.rows)
+	}
+	if batch := conn.batches["stream_state_current"]; batch != nil && len(batch.rows) > 0 {
+		t.Fatalf("credential-bearing event reached stream_state_current: %#v", batch.rows)
+	}
+}
+
+func TestPushRewriteUnknownFieldCannotBypassCredentialGuard(t *testing.T) {
+	const rawKey = "sk_live_unknown_field_secret"
+	var captured bytes.Buffer
+	logger := logging.NewLogger()
+	logger.SetOutput(&captured)
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logger, nil)
+	streamID := uuid.NewString()
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
+		StreamId: &streamID,
+		NodeId:   "edge-eu-1",
+		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
+			PushRewrite: &ipcpb.PushRewriteTrigger{
+				StreamName: "live+internal-name",
+				PushUrl:    "rtmp://edge-ingest.example/live/sk#redacted",
+			},
+		},
+	})
+	data["unknownCredentialCopy"] = rawKey
+
+	if err := handler.HandleAnalyticsEvent(kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "push_rewrite",
+		Timestamp: time.Now(),
+		Source:    "decklog",
+		TenantID:  "",
+		Data:      data,
+	}); err != nil {
+		t.Fatalf("contract-violating event should be dropped cleanly: %v", err)
+	}
+	if strings.Contains(captured.String(), rawKey) {
+		t.Fatalf("unknown credential field leaked through parse logging: %s", captured.String())
+	}
+	for name, batch := range conn.batches {
+		if batch != nil && len(batch.rows) > 0 {
+			t.Fatalf("unknown credential field reached ClickHouse batch %q: %#v", name, batch.rows)
+		}
+	}
+}
+
+func TestPushRewriteCredentialGuardPrecedesTenantErrorDLQ(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	streamID := uuid.NewString()
+	const rawKey = "sk_live_secret_key"
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
+		StreamId: &streamID,
+		NodeId:   "edge-eu-1",
+		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
+			PushRewrite: &ipcpb.PushRewriteTrigger{
+				StreamName: rawKey,
+				PushUrl:    "rtmp://edge-ingest.example/live/" + rawKey,
+			},
+		},
+	})
+
+	if err := handler.HandleAnalyticsEvent(kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "push_rewrite",
+		Timestamp: time.Now(),
+		Source:    "decklog",
+		TenantID:  "",
+		Data:      data,
+	}); err != nil {
+		t.Fatalf("credential-bearing event should be dropped cleanly: %v", err)
+	}
+
+	for name, batch := range conn.batches {
+		if batch != nil && len(batch.rows) > 0 {
+			t.Fatalf("credential-bearing event reached ClickHouse batch %q: %#v", name, batch.rows)
+		}
+	}
+}
+
+func TestPushRewriteMalformedPayloadDoesNotLogCredential(t *testing.T) {
+	const rawKey = "sk_live_malformed_secret"
+	var captured bytes.Buffer
+	logger := logging.NewLogger()
+	logger.SetOutput(&captured)
+	handler := NewAnalyticsHandler(newFakeClickhouseConn(), logger, nil)
+
+	if err := handler.HandleAnalyticsEvent(kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "push_rewrite",
+		Timestamp: time.Now(),
+		Source:    "decklog",
+		TenantID:  uuid.NewString(),
+		Data: map[string]any{
+			// nodeId must be a string. A parser is allowed to quote a rejected
+			// value in its error, so put the credential inside that value.
+			"nodeId": map[string]any{"value": rawKey},
+		},
+	}); err != nil {
+		t.Fatalf("malformed credential-bearing event should be dropped cleanly: %v", err)
+	}
+	if strings.Contains(captured.String(), rawKey) {
+		t.Fatalf("malformed payload leaked through its parse error: %s", captured.String())
+	}
+}
+
+func TestPushRewriteDropsPartiallySanitizedPayload(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	streamID := uuid.NewString()
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
+		StreamId: &streamID,
+		NodeId:   "edge-eu-1",
+		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
+			PushRewrite: &ipcpb.PushRewriteTrigger{
+				StreamName: "live+internal-name",
+				PushUrl:    "rtmp://edge-ingest.example/live/sk_secret_still_present",
+			},
+		},
+	})
+
+	if err := handler.HandleAnalyticsEvent(kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "push_rewrite",
+		Timestamp: time.Now(),
+		Source:    "decklog",
+		TenantID:  uuid.NewString(),
+		Data:      data,
+	}); err != nil {
+		t.Fatalf("partially sanitized event should be dropped cleanly: %v", err)
+	}
+
+	for name, batch := range conn.batches {
+		if batch != nil && len(batch.rows) > 0 {
+			t.Fatalf("partially sanitized event reached ClickHouse batch %q: %#v", name, batch.rows)
+		}
+	}
+}
+
+// The sanitized shape is the normal case and must still be written.
+func TestPushRewriteAcceptsSanitizedEvent(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	streamID := uuid.NewString()
+
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
+		StreamId: &streamID,
+		NodeId:   "edge-eu-1",
+		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
+			PushRewrite: &ipcpb.PushRewriteTrigger{
+				StreamName: "live+internal-name",
+				PushUrl:    "rtmp://edge-ingest.example/live/sk#deadbeef",
+			},
+		},
+	})
+
+	if err := handler.HandleAnalyticsEvent(kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "push_rewrite",
+		Timestamp: time.Now(),
+		Source:    "decklog",
+		TenantID:  uuid.NewString(),
+		Data:      data,
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	batch := conn.batches["stream_event_log"]
+	if batch == nil || len(batch.rows) != 1 {
+		t.Fatalf("expected the sanitized event to be persisted, got %#v", batch)
+	}
+	// internal_name (index 4) must be the resolved stream, not the wildcard name.
+	if got := batch.rows[0][4]; got != "internal-name" {
+		t.Fatalf("internal_name = %#v, want %q", got, "internal-name")
+	}
 }

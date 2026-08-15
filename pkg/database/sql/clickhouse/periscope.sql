@@ -81,8 +81,10 @@ CREATE TABLE IF NOT EXISTS stream_event_log (
     total_outputs Nullable(UInt16),
     viewer_seconds Nullable(UInt64),
 
-    -- Ingest / routing details (where present)
-    stream_key Nullable(String),
+    -- Ingest / routing details (where present).
+    -- No stream_key column by design: it is a publishing credential, and the
+    -- stream is identified by stream_id/internal_name.
+    -- request_url has any embedded key masked before it is written.
     user_id Nullable(String),
     request_url Nullable(String),
     protocol Nullable(String),

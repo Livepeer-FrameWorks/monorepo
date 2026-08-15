@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -162,6 +163,17 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(event kafka.AnalyticsEvent) erro
 		}
 	}
 
+	// PUSH_REWRITE producers must replace the publishing key with the resolved
+	// internal name before emission. Enforce that contract before any generic
+	// error/DLQ path serializes the payload; tenant validation below deliberately
+	// writes event.Data on failure.
+	if event.EventType == "push_rewrite" && !h.pushRewritePayloadSatisfiesContract(event) {
+		if h.metrics != nil {
+			h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "dropped").Inc()
+		}
+		return nil
+	}
+
 	// Strict enforcement: drop + DLQ missing/invalid tenant_id
 	if err := h.requireTenantID(ctx, event); err != nil {
 		return err
@@ -274,6 +286,51 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(event kafka.AnalyticsEvent) erro
 
 	return nil
 }
+
+func (h *AnalyticsHandler) pushRewritePayloadSatisfiesContract(event kafka.AnalyticsEvent) bool {
+	var mt ipcpb.MistTrigger
+	jsonData, marshalErr := json.Marshal(event.Data)
+	if marshalErr != nil {
+		h.logger.WithField("event_id", event.EventID).
+			Warn("Dropping malformed push_rewrite before durable error handling")
+		return false
+	}
+	// This boundary is intentionally stricter than the generic analytics parser:
+	// the original map can be written to a DLQ, so an unknown field must not ride
+	// past validation with a publishing credential hidden inside it.
+	if err := protojson.Unmarshal(jsonData, &mt); err != nil {
+		// Proto parse errors may quote the rejected field value. The malformed
+		// payload is untrusted and may contain a publishing credential, so only
+		// its envelope identity is safe to log here.
+		h.logger.WithField("event_id", event.EventID).
+			Warn("Dropping malformed push_rewrite before durable error handling")
+		return false
+	}
+	tp, ok := mt.GetTriggerPayload().(*ipcpb.MistTrigger_PushRewrite)
+	if !ok || tp == nil || tp.PushRewrite == nil {
+		h.logger.WithField("event_id", event.EventID).
+			Warn("Dropping malformed push_rewrite before durable error handling")
+		return false
+	}
+	streamName := tp.PushRewrite.GetStreamName()
+	pushURL := tp.PushRewrite.GetPushUrl()
+	if strings.HasPrefix(streamName, "live+") && !streamKeyTokenPattern.MatchString(pushURL) {
+		return true
+	}
+	fields := logging.Fields{"event_id": event.EventID}
+	if !strings.HasPrefix(streamName, "live+") {
+		fields["stream_key"] = logging.RedactSecret(streamName)
+	}
+	h.logger.WithFields(fields).
+		Warn("Dropping push_rewrite event that violates the credential-free payload contract")
+	return false
+}
+
+// Generated stream keys begin with sk_. Require a token boundary so an
+// unrelated hostname or path fragment containing those letters is not treated
+// as a credential. The producer replaces the key with its sk# log tag before
+// publishing, so a matching token in push_url is always the unsafe shape.
+var streamKeyTokenPattern = regexp.MustCompile(`(?:^|[^A-Za-z0-9])sk_[A-Za-z0-9_-]+`)
 
 // HandleServiceEvent processes service-plane events from the service_events topic.
 func (h *AnalyticsHandler) HandleServiceEvent(event kafka.ServiceEvent) error {
@@ -1542,7 +1599,7 @@ func (h *AnalyticsHandler) processPushRewrite(ctx context.Context, event kafka.A
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
         INSERT INTO stream_event_log (
             timestamp, event_id, tenant_id, stream_id, internal_name, node_id, cluster_id, event_type, status,
-            stream_key, request_url, protocol,
+            request_url, protocol,
             latitude, longitude, location, country_code, city,
             event_data, source_region, stream_origin_region, stream_origin_cluster_id, schema_version
         )`)
@@ -1588,7 +1645,6 @@ func (h *AnalyticsHandler) processPushRewrite(ctx context.Context, event kafka.A
 		mt.GetClusterId(),
 		"stream_start",
 		"live",
-		pr.GetStreamName(), // Original stream_key for reference
 		pr.GetPushUrl(),
 		prot,
 		lat,
