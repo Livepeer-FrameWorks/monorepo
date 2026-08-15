@@ -91,6 +91,23 @@ service InternalService {
   // cluster cannot have its pin nuked by a stale retract.
   rpc ClearStreamActiveCluster(ClearStreamActiveClusterRequest) returns (ClearStreamActiveClusterResponse);
 
+  // Re-asserts commodore.streams.active_ingest_cluster_id for ORDINARY push
+  // ingest from the publisher liveness Foghorn holds, the way the
+  // managed-stream reconciler does for mist_native. Called on a cadence well
+  // inside the claim's lease window.
+  //
+  // renew applies the same contention rule PUSH_REWRITE applies: it refreshes
+  // a claim this cluster holds, and acquires one where the row holds none or
+  // holds one that has already lapsed — so it both keeps a live publisher's
+  // placement current and establishes placement for one admitted without it. A fresh claim held by another cluster is
+  // never disturbed, so this cannot move a live publisher's placement — but it
+  // can establish placement for a publisher that has none. release is stricter:
+  // it clears only a claim this cluster still holds.
+  //
+  // Keyed by (tenant_id, internal_name): the caller identifies a publisher by
+  // the stream it is pushing, not by a Commodore row id.
+  rpc SyncActiveIngestPlacement(SyncActiveIngestPlacementRequest) returns (SyncActiveIngestPlacementResponse);
+
   // Called by edge nodes to resolve playback ID to internal name
   // Source: pkg/api/commodore/types.go:ResolvePlaybackIDResponse
   rpc ResolvePlaybackID(ResolvePlaybackIDRequest) returns (ResolvePlaybackIDResponse);
@@ -303,6 +320,16 @@ service InternalService {
 message ValidateStreamKeyRequest {
   string stream_key = 1;
   string cluster_id = 2;  // Cluster where Foghorn is processing this ingest (for stream→cluster tracking)
+  // Opaque identity of the admission asking to publish: Mist's X-Trigger-UUID, which identifies one
+  // trigger EXECUTION — stable across Mist's retries of it, minted afresh when a publisher
+  // reconnects. It becomes the OWNER of the placement claim this call takes, so a later release can
+  // prove the claim is the caller's own. Commodore treats it as opaque; it is not a connection or
+  // connector identity.
+  //
+  // REQUIRED whenever cluster_id is set, since that is what takes the claim: an unowned claim can
+  // never be released (release is owner-fenced) and would hold the stream's placement until it
+  // expires. Callers that name no cluster take no claim and need no token.
+  string claim_token = 3;
 }
 
 // StreamKeyRejectionReason categorizes ValidateStreamKey rejections so
@@ -325,6 +352,15 @@ enum StreamKeyRejectionReason {
 // Matches pkg/api/commodore/types.go:ValidateStreamKeyResponse exactly
 message ValidateStreamKeyResponse {
   bool valid = 1;                       // json:"valid"
+  // True only when THIS call RESERVED the placement claim — took one that nothing else held, under
+  // claim_token. It is the caller's sole licence to release, so refreshing a claim this connection
+  // already owned reports FALSE: that is a re-fire of a live publisher, and returning its placement
+  // because a later gate rejected the retry would unpin the session that is still streaming.
+  //
+  // Also false when no cluster was declared (nothing is claimed), when the claim is held by another
+  // owner, and — critically — on any response the caller did not receive from Commodore, such as a
+  // client-cached admission served during an outage, which took no claim at all.
+  bool claim_acquired = 32;
   string user_id = 2;                   // json:"user_id,omitempty"
   string tenant_id = 3;                 // json:"tenant_id,omitempty"
   string internal_name = 4;             // json:"internal_name,omitempty"
@@ -391,17 +427,10 @@ message ValidateStreamKeyResponse {
 // ============================================================================
 // STREAM CONTEXT RESOLUTION (Foghorn → Commodore, mist_native / non-key paths)
 //
-// Authoritative admission/materialization RPC keyed by stream identifier
-// (stream_id / playback_id / internal_name) rather than stream key. Returns
-// the same fact set ValidateStreamKey does so Foghorn can populate
-// PUSH_REWRITE-equivalent caches (tenantId:internalName, process:internalName)
-// for ingest modes that never fire PUSH_REWRITE.
-//
-// Admission scope is intentionally narrower than ValidateStreamKey: see
-// the `admitted` field doc on ResolveStreamContextResponse. Free-tier load
-// and per-tenant stream caps are NOT enforced here; today this RPC is
-// render-gated to the operator/system tenant, so the missing gates do
-// not affect customer billing. Layer caller-side gates before widening.
+// Authoritative, non-claiming stream resolution keyed by a durable identifier or stream key. It
+// returns the fact set Foghorn uses for managed-stream materialization and for public ingest-endpoint
+// selection. `admitted` means the durable stream/account policy permits resolution; transport-local
+// load and concurrent-stream gates are applied by the caller at actual PUSH_REWRITE admission.
 // ============================================================================
 
 message ResolveStreamContextRequest {
@@ -409,13 +438,17 @@ message ResolveStreamContextRequest {
     string stream_id = 1;
     string playback_id = 2;
     string internal_name = 3;
+    // stream_key resolves the publisher-facing secret. Unlike ValidateStreamKey
+    // this claims no ingest placement, so it is the identifier ingest-endpoint
+    // resolution uses; PUSH_REWRITE keeps ValidateStreamKey and its lease.
+    string stream_key = 5;
   }
   string cluster_id = 4;  // Cluster context for routing-aware fields (origin/official cluster, peers)
 }
 
 message ResolveStreamContextResponse {
   // ===== ADMISSION =====
-  bool admitted = 1;                     // false ⇒ caller must omit the stream from the seed
+  bool admitted = 1;                     // false ⇒ caller must not materialize or advertise ingest
   string admission_reason = 2;           // human-readable detail (free text)
   StreamKeyRejectionReason rejection_reason = 3;  // reused enum; structured form of admission_reason
 
@@ -445,6 +478,14 @@ message ResolveStreamContextResponse {
   optional string origin_cluster_id = 14;
   optional string official_cluster_id = 15;
   repeated cluster_peer.TenantClusterPeer cluster_peers = 16;
+  // Set only while a publisher holds a fresh claim on this stream, naming the
+  // cluster it is publishing into. It PINS a placement decision that would
+  // otherwise be free: an ingest resolve normally ranks across every cluster
+  // the owner is entitled to, but a reconnect must return to the cluster
+  // already ingesting or PUSH_REWRITE refuses it as a duplicate. Absent when
+  // nothing is publishing, which is not the same as origin_cluster_id (that
+  // falls back to the tenant's route and is always populated).
+  optional string active_ingest_cluster_id = 23;
 
   // ===== PROCESSING / DVR POLICY =====
   // Same lifecycle-aware resolution path ValidateStreamKey uses. For
@@ -544,10 +585,52 @@ message ClearStreamActiveClusterRequest {
   // expected_cluster_id guards against clobbering a fresher claim from a
   // peer cluster. Required: clear only when the recorded value matches.
   string expected_cluster_id = 2;
+  string tenant_id = 3; // tenant-scopes the placement mutation (repo tenant-filter rule)
 }
 
 message ClearStreamActiveClusterResponse {
   bool cleared = 1;
+}
+
+// A stream identified the way an ingest session records it.
+message ActiveIngestStream {
+  string tenant_id = 1;
+  string internal_name = 2;
+  // The virtual media cluster this stream's claim names. Set per entry so one
+  // call can carry a whole fleet: a Foghorn serving hundreds of virtual clusters
+  // must be able to re-assert every claim within one lease window, which a call
+  // per cluster cannot guarantee. Falls back to the request's cluster_id when
+  // empty, for callers that only ever speak for one cluster.
+  string cluster_id = 4;
+  // The admission that owns this stream's claim (see ValidateStreamKeyRequest.claim_token — an
+  // opaque token, not a connection identity). renew stamps it so a claim it acquires is owned by the
+  // live session; release matches on it and clears nothing otherwise.
+  string claim_token = 3;
+}
+
+message SyncActiveIngestPlacementRequest {
+  // Default media cluster for entries that name none. A caller serving many
+  // virtual clusters sets ActiveIngestStream.cluster_id per entry instead and
+  // may leave this empty.
+  string cluster_id = 1;
+  // Streams with a live ingest session here: refresh the claim, and acquire one
+  // where the row holds none or holds one that has already lapsed. A live claim
+  // held elsewhere is never taken, so this keeps a publisher's placement current
+  // and establishes placement for one admitted without it.
+  repeated ActiveIngestStream renew = 2;
+  // Streams whose ingest just ended here: clear the claim, but only where this
+  // cluster holds it AND claim_token names its owner, so neither a late close
+  // nor another connection in the same cluster can unpin a live publisher.
+  repeated ActiveIngestStream release = 3;
+}
+
+message SyncActiveIngestPlacementResponse {
+  int32 renewed = 1;
+  int32 released = 2;
+  // Entries that did not own/acquire the live claim. The caller must fence these publishers; an
+  // aggregate count cannot identify the loser after a lease lapse or cross-cell contention.
+  repeated ActiveIngestStream renew_refused = 3;
+  repeated ActiveIngestStream release_refused = 4;
 }
 
 // ============================================================================

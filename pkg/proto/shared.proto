@@ -205,6 +205,12 @@ message StartDVRRequest {
   optional string dvr_chapter_mode = 9;
   optional int32 dvr_chapter_interval_seconds = 10;
   string processes_json = 11;     // Resolved Commodore process config snapshot for DVR thumbnails
+  // Durable ingest-session id (foghorn.ingest_sessions.id) minted at the accepted
+  // PUSH_REWRITE that started this publisher connection. The recording is bound to
+  // this session so a same-node reconnect (new connector PID → new session) is a NEW
+  // recording, and PUSH_INPUT_CLOSE finalizes exactly this session's DVR. Empty for a
+  // manual StartDVR that is not tied to a specific ingest connection.
+  string ingest_generation = 12;
 }
 
 // StartDVRResponse - response from starting DVR

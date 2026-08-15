@@ -20,6 +20,13 @@ message ForwardCommandRequest {
   reserved "defrost";
   reserved 11;          // retired clip_pull — clip creation enqueues a processing job, never forwards a ClipPull
   reserved "clip_pull";
+  reserved 29;
+  reserved "dvr_update_source";
+  reserved 20;          // retired activate_push_targets — activation is LOCAL-ONLY: the admission-effects
+                        // worker tracks push-target metadata on the connection-owner replica immediately
+                        // before dispatch, so relaying would split tracking from the replica that
+                        // receives PUSH_OUT_START/PUSH_END
+  reserved "activate_push_targets";
   string target_node_id = 1;
   oneof command {
     helmsmancontrol.ConfigSeed config_seed = 10;
@@ -30,7 +37,6 @@ message ForwardCommandRequest {
     helmsmancontrol.VodDeleteRequest vod_delete = 16;
     helmsmancontrol.DtshSyncRequest dtsh_sync = 18;
     helmsmancontrol.StopSessionsRequest stop_sessions = 19;
-    helmsmancontrol.ActivatePushTargets activate_push_targets = 20;
     helmsmancontrol.DeactivatePushTargets deactivate_push_targets = 21;
     helmsmancontrol.ProcessingJobRequest processing_job = 22;
     helmsmancontrol.FreezeRequest freeze = 23;
@@ -47,11 +53,6 @@ message ForwardCommandRequest {
     // bidi stream; relay so the unload + session-disconnect lands on the
     // right Helmsman.
     helmsmancontrol.DrainStreamRequest drain_stream = 28;
-    // Storage-node DVR source refresh on takeover. The DVR's recording
-    // node may not be connected to the same Foghorn that handled the
-    // takeover PUSH_REWRITE; relay so the override refresh + push
-    // recreate lands on the right Helmsman.
-    helmsmancontrol.DVRUpdateSourceRequest dvr_update_source = 29;
   }
 }
 

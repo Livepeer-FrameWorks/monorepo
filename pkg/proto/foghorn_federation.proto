@@ -248,6 +248,7 @@ message StreamLifecycleEvent {
   string cluster_id = 3;
   bool is_live = 4;
   int64 timestamp_unix = 5;
+  int64 source_revision = 6;
 }
 
 // EdgeTelemetry is pushed every 5s for edges involved in active replications.

@@ -29,6 +29,7 @@ const (
 	InternalService_RecordStreamActiveCluster_FullMethodName          = "/commodore.InternalService/RecordStreamActiveCluster"
 	InternalService_RegisterStreamThumbnailServingCell_FullMethodName = "/commodore.InternalService/RegisterStreamThumbnailServingCell"
 	InternalService_ClearStreamActiveCluster_FullMethodName           = "/commodore.InternalService/ClearStreamActiveCluster"
+	InternalService_SyncActiveIngestPlacement_FullMethodName          = "/commodore.InternalService/SyncActiveIngestPlacement"
 	InternalService_ResolvePlaybackID_FullMethodName                  = "/commodore.InternalService/ResolvePlaybackID"
 	InternalService_ResolvePullSourceByInternalName_FullMethodName    = "/commodore.InternalService/ResolvePullSourceByInternalName"
 	InternalService_ResolvePlaybackPolicy_FullMethodName              = "/commodore.InternalService/ResolvePlaybackPolicy"
@@ -134,6 +135,22 @@ type InternalServiceClient interface {
 	// the caller's expected_cluster_id, so concurrent placement on a peer
 	// cluster cannot have its pin nuked by a stale retract.
 	ClearStreamActiveCluster(ctx context.Context, in *ClearStreamActiveClusterRequest, opts ...grpc.CallOption) (*ClearStreamActiveClusterResponse, error)
+	// Re-asserts commodore.streams.active_ingest_cluster_id for ORDINARY push
+	// ingest from the publisher liveness Foghorn holds, the way the
+	// managed-stream reconciler does for mist_native. Called on a cadence well
+	// inside the claim's lease window.
+	//
+	// renew applies the same contention rule PUSH_REWRITE applies: it refreshes
+	// a claim this cluster holds, and acquires one where the row holds none or
+	// holds one that has already lapsed — so it both keeps a live publisher's
+	// placement current and establishes placement for one admitted without it. A fresh claim held by another cluster is
+	// never disturbed, so this cannot move a live publisher's placement — but it
+	// can establish placement for a publisher that has none. release is stricter:
+	// it clears only a claim this cluster still holds.
+	//
+	// Keyed by (tenant_id, internal_name): the caller identifies a publisher by
+	// the stream it is pushing, not by a Commodore row id.
+	SyncActiveIngestPlacement(ctx context.Context, in *SyncActiveIngestPlacementRequest, opts ...grpc.CallOption) (*SyncActiveIngestPlacementResponse, error)
 	// Called by edge nodes to resolve playback ID to internal name
 	// Source: pkg/api/commodore/types.go:ResolvePlaybackIDResponse
 	ResolvePlaybackID(ctx context.Context, in *ResolvePlaybackIDRequest, opts ...grpc.CallOption) (*ResolvePlaybackIDResponse, error)
@@ -349,6 +366,16 @@ func (c *internalServiceClient) ClearStreamActiveCluster(ctx context.Context, in
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ClearStreamActiveClusterResponse)
 	err := c.cc.Invoke(ctx, InternalService_ClearStreamActiveCluster_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) SyncActiveIngestPlacement(ctx context.Context, in *SyncActiveIngestPlacementRequest, opts ...grpc.CallOption) (*SyncActiveIngestPlacementResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SyncActiveIngestPlacementResponse)
+	err := c.cc.Invoke(ctx, InternalService_SyncActiveIngestPlacement_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -818,6 +845,22 @@ type InternalServiceServer interface {
 	// the caller's expected_cluster_id, so concurrent placement on a peer
 	// cluster cannot have its pin nuked by a stale retract.
 	ClearStreamActiveCluster(context.Context, *ClearStreamActiveClusterRequest) (*ClearStreamActiveClusterResponse, error)
+	// Re-asserts commodore.streams.active_ingest_cluster_id for ORDINARY push
+	// ingest from the publisher liveness Foghorn holds, the way the
+	// managed-stream reconciler does for mist_native. Called on a cadence well
+	// inside the claim's lease window.
+	//
+	// renew applies the same contention rule PUSH_REWRITE applies: it refreshes
+	// a claim this cluster holds, and acquires one where the row holds none or
+	// holds one that has already lapsed — so it both keeps a live publisher's
+	// placement current and establishes placement for one admitted without it. A fresh claim held by another cluster is
+	// never disturbed, so this cannot move a live publisher's placement — but it
+	// can establish placement for a publisher that has none. release is stricter:
+	// it clears only a claim this cluster still holds.
+	//
+	// Keyed by (tenant_id, internal_name): the caller identifies a publisher by
+	// the stream it is pushing, not by a Commodore row id.
+	SyncActiveIngestPlacement(context.Context, *SyncActiveIngestPlacementRequest) (*SyncActiveIngestPlacementResponse, error)
 	// Called by edge nodes to resolve playback ID to internal name
 	// Source: pkg/api/commodore/types.go:ResolvePlaybackIDResponse
 	ResolvePlaybackID(context.Context, *ResolvePlaybackIDRequest) (*ResolvePlaybackIDResponse, error)
@@ -989,6 +1032,9 @@ func (UnimplementedInternalServiceServer) RegisterStreamThumbnailServingCell(con
 }
 func (UnimplementedInternalServiceServer) ClearStreamActiveCluster(context.Context, *ClearStreamActiveClusterRequest) (*ClearStreamActiveClusterResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ClearStreamActiveCluster not implemented")
+}
+func (UnimplementedInternalServiceServer) SyncActiveIngestPlacement(context.Context, *SyncActiveIngestPlacementRequest) (*SyncActiveIngestPlacementResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SyncActiveIngestPlacement not implemented")
 }
 func (UnimplementedInternalServiceServer) ResolvePlaybackID(context.Context, *ResolvePlaybackIDRequest) (*ResolvePlaybackIDResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolvePlaybackID not implemented")
@@ -1253,6 +1299,24 @@ func _InternalService_ClearStreamActiveCluster_Handler(srv interface{}, ctx cont
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(InternalServiceServer).ClearStreamActiveCluster(ctx, req.(*ClearStreamActiveClusterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_SyncActiveIngestPlacement_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SyncActiveIngestPlacementRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).SyncActiveIngestPlacement(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_SyncActiveIngestPlacement_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).SyncActiveIngestPlacement(ctx, req.(*SyncActiveIngestPlacementRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2011,6 +2075,10 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ClearStreamActiveCluster",
 			Handler:    _InternalService_ClearStreamActiveCluster_Handler,
+		},
+		{
+			MethodName: "SyncActiveIngestPlacement",
+			Handler:    _InternalService_SyncActiveIngestPlacement_Handler,
 		},
 		{
 			MethodName: "ResolvePlaybackID",

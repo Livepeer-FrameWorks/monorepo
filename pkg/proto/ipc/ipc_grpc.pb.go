@@ -170,7 +170,18 @@ const (
 //   - GatewayTelemetryEvent: per-orchestrator discovery / state / outcome
 //     telemetry from Livepeer gateways (cluster-scoped or session-scoped).
 //
-// All producers MUST preserve the original payload (no rewriting).
+// Producers MUST NOT reinterpret or enrich a field into a different meaning:
+// what arrives here is what the consumer records, so a rewritten value becomes
+// a false fact in analytics.
+//
+// The one required transformation is the opposite of enrichment. A payload
+// carrying a credential MUST be projected to its non-secret identity before
+// SendEvent, because Decklog persists these messages durably. PUSH_REWRITE is
+// the case that exists: MistServer reports the publisher's stream key as the
+// stream name and embeds it in the push URL, so Foghorn substitutes the
+// resolved "live+<internal_name>" and masks the URL. Consumers rely on that —
+// Periscope rejects a PUSH_REWRITE whose stream name is not a Mist wildcard
+// name, since that is the unsanitized shape.
 type DecklogServiceClient interface {
 	// Unified entrypoint for media-plane events.
 	SendEvent(ctx context.Context, in *MistTrigger, opts ...grpc.CallOption) (*emptypb.Empty, error)
@@ -231,7 +242,18 @@ func (c *decklogServiceClient) SendGatewayTelemetry(ctx context.Context, in *Gat
 //   - GatewayTelemetryEvent: per-orchestrator discovery / state / outcome
 //     telemetry from Livepeer gateways (cluster-scoped or session-scoped).
 //
-// All producers MUST preserve the original payload (no rewriting).
+// Producers MUST NOT reinterpret or enrich a field into a different meaning:
+// what arrives here is what the consumer records, so a rewritten value becomes
+// a false fact in analytics.
+//
+// The one required transformation is the opposite of enrichment. A payload
+// carrying a credential MUST be projected to its non-secret identity before
+// SendEvent, because Decklog persists these messages durably. PUSH_REWRITE is
+// the case that exists: MistServer reports the publisher's stream key as the
+// stream name and embeds it in the push URL, so Foghorn substitutes the
+// resolved "live+<internal_name>" and masks the URL. Consumers rely on that —
+// Periscope rejects a PUSH_REWRITE whose stream name is not a Mist wildcard
+// name, since that is the unsanitized shape.
 type DecklogServiceServer interface {
 	// Unified entrypoint for media-plane events.
 	SendEvent(context.Context, *MistTrigger) (*emptypb.Empty, error)

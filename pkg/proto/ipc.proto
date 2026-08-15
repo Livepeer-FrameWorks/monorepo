@@ -29,7 +29,18 @@ service HelmsmanControl {
 // - ServiceEvent: service-plane telemetry (API usage, messaging, etc.)
 // - GatewayTelemetryEvent: per-orchestrator discovery / state / outcome
 //   telemetry from Livepeer gateways (cluster-scoped or session-scoped).
-// All producers MUST preserve the original payload (no rewriting).
+// Producers MUST NOT reinterpret or enrich a field into a different meaning:
+// what arrives here is what the consumer records, so a rewritten value becomes
+// a false fact in analytics.
+//
+// The one required transformation is the opposite of enrichment. A payload
+// carrying a credential MUST be projected to its non-secret identity before
+// SendEvent, because Decklog persists these messages durably. PUSH_REWRITE is
+// the case that exists: MistServer reports the publisher's stream key as the
+// stream name and embeds it in the push URL, so Foghorn substitutes the
+// resolved "live+<internal_name>" and masks the URL. Consumers rely on that —
+// Periscope rejects a PUSH_REWRITE whose stream name is not a Mist wildcard
+// name, since that is the unsanitized shape.
 service DecklogService {
   // Unified entrypoint for media-plane events.
   rpc SendEvent(MistTrigger) returns (google.protobuf.Empty);
@@ -203,6 +214,8 @@ message ControlMessage {
   reserved "clip_pull_request";
   reserved 13, 14;              // retired clip_progress / clip_done — clip lifecycle analytics now emitted by the processing pipeline
   reserved "clip_progress", "clip_done";
+  reserved 164, 165;
+  reserved "dvr_update_source_request", "dvr_update_source_response";
 
   string request_id = 1; // Correlates requests/responses
   google.protobuf.Timestamp sent_at = 2;
@@ -316,24 +329,24 @@ message ControlMessage {
     ApplyManagedStream apply_managed_stream = 160;
     RetractManagedStream retract_managed_stream = 161;
     // Foghorn -> Helmsman: drain a specific runtime stream from the local
-    // Mist process. Issued from the AdmitAndReserve takeover path before
-    // the new owner is admitted, so old viewer sessions don't keep talking
-    // to the stale lingering buffer. Idempotent — missing stream is success.
+    // Mist process. Issued when a DB-confirmed projection change moves the
+    // source to a new node, to drain the OLD owner so old viewer sessions
+    // don't keep talking to the stale lingering buffer. Idempotent — missing
+    // stream is success.
     DrainStreamRequest drain_stream_request = 162;
     DrainStreamResponse drain_stream_response = 163;
-    // Foghorn -> Helmsman: refresh the DVR source override on the storage
-    // node when the source publisher takes over to a different ingest
-    // node. Without this, the DVR's registered override keeps pointing at
-    // the now-dead source URL and the push pull stalls until retry budget
-    // exhausts. Idempotent — missing job is a no-op success.
-    DVRUpdateSourceRequest dvr_update_source_request = 164;
-    DVRUpdateSourceResponse dvr_update_source_response = 165;
     // Helmsman (serving edge) -> Foghorn: authorize an inbound peer-relay
     // pull that presented a peer_relay_grant_id. Foghorn responds on the
     // same stream. Same sidecar-originated request/response pattern as
     // RelayResolve.
     AuthorizeRelayPullRequest authorize_relay_pull_request = 166;
     AuthorizeRelayPullResponse authorize_relay_pull_response = 167;
+    // Helmsman -> Foghorn: outcome of an ActivatePushTargets command. The
+    // durable admission-effect obligation stays pending until this reports
+    // converged=true, so a Helmsman crash after receiving the command, a
+    // Mist push-list failure, or a failed PushStart is re-driven by the
+    // obligation's next retry instead of being silently lost.
+    ActivatePushTargetsResult activate_push_targets_result = 168;
   }
 }
 
@@ -367,40 +380,33 @@ message RetractManagedStream {
   string stream_id = 2;           // commodore.streams.id; for logging/correlation
 }
 
-// DrainStreamRequest is sent by Foghorn when admission moves ingest
-// ownership to a different node (takeover). The old owner must unload its
+// DrainStreamRequest is sent by Foghorn when a new publisher session replaces
+// an ended publisher on another node. The old owner must unload its
 // lingering Mist buffer and disconnect viewer sessions for that runtime
 // name so viewers don't keep talking to the stale buffer. Idempotent —
 // when the stream is absent locally, Helmsman returns unloaded=false with
 // sessions_disconnected=0 and no error.
 message DrainStreamRequest {
   string runtime_name = 1;        // exact Mist source name to nuke
-  string reason = 2;              // e.g. "takeover_by_node:edge-us-2"
+  string reason = 2;              // e.g. "publisher_replaced_by_node:edge-us-2"
+  // Obligation identity: the admitting ingest generation whose durable drain leg this command
+  // serves. Echoed verbatim in the response so the acknowledgement completes EXACTLY that
+  // obligation — a delayed response from an earlier generation must not complete a later one.
+  string source_generation = 3;
+  // Exact generation that occupied runtime_name on the drained node when this obligation was
+  // created. Helmsman refuses the command after it has admitted a different local generation.
+  string prior_owner_source_generation = 4;
 }
 
-// DVRUpdateSourceRequest is sent by Foghorn when the source publisher
-// moves to a different ingest node mid-recording. The storage node has
-// a registered DVR source override pinning the push to the old source's
-// DTSC URL; this message refreshes that override so the next
-// createOrRecreatePush succeeds against the new owner. Idempotent —
-// missing dvr_hash is success.
-message DVRUpdateSourceRequest {
-  string dvr_hash = 1;            // identifies the in-flight recording job
-  string source_runtime_name = 2; // new Mist runtime name (live+<x> / pull+<x> / bare native)
-  string source_base_url = 3;     // new DTSC URL captured by Foghorn from the new source node
-}
-
-message DVRUpdateSourceResponse {
-  string dvr_hash = 1;
-  bool   refreshed = 2;           // true if the override was updated; false if no active job
-  string error = 3;               // empty on success; populated on partial failure
-}
-
+// DrainStreamResponse acknowledges the drain COMMAND. nuke_stream launches MistUtilNuke
+// asynchronously, so unloaded=true means "accepted and dispatched to Mist", not "buffer proven
+// destroyed" — Mist owns the teardown from there.
 message DrainStreamResponse {
   string runtime_name = 1;
   bool   unloaded = 2;
   uint32 sessions_disconnected = 3;
   string error = 4;               // empty on success; populated on partial failure
+  string source_generation = 5;   // echoed from the request for exact obligation correlation
 }
 
 // ModeChangeRequest is sent by Helmsman when a local agent or CLI requests
@@ -471,6 +477,9 @@ message InvalidateSessionsRequest {
 message ActivatePushTargets {
   string stream_name = 1;                  // MistServer stream name (e.g., "live+abc123")
   repeated PushTargetSpec targets = 2;
+  // Obligation identity: the admitting ingest generation. Echoed in ActivatePushTargetsResult so
+  // the acknowledgement completes exactly that obligation.
+  string source_generation = 3;
 }
 
 // PushTargetSpec is a single push destination for Helmsman to activate.
@@ -484,6 +493,18 @@ message PushTargetSpec {
 // Sent by Foghorn when a stream ends (STREAM_END trigger).
 message DeactivatePushTargets {
   string stream_name = 1;                  // MistServer stream name
+  string source_generation = 2;            // ended generation; ignored after a successor is admitted
+}
+
+// ActivatePushTargetsResult reports an ActivatePushTargets command's outcome back to Foghorn.
+// converged=true means every requested target is now pushing (already live or freshly started);
+// false means at least one target could not be confirmed (push-list unavailable, PushStart failed)
+// and the durable obligation must retry the activation.
+message ActivatePushTargetsResult {
+  string stream_name = 1;                  // MistServer stream name the command named
+  bool   converged = 2;
+  string error = 3;                        // empty when converged; first failure otherwise
+  string source_generation = 4;            // echoed from the request for exact obligation correlation
 }
 
 // PushTargetStatusReport is sent by Helmsman to Foghorn to report push lifecycle events.
@@ -751,6 +772,12 @@ message MistTriggerResponse {
   string response = 2;        // What to return to MistServer (empty string aborts for blocking triggers)
   bool abort = 3;             // Explicit abort flag
   IngestErrorCode error_code = 4;
+  // Present on an accepted PUSH_REWRITE. Helmsman records this as the current runtime generation
+  // and fences delayed activation/deactivation commands against publisher replacement.
+  string ingest_generation = 5;
+  // Mist connector PID bound to ingest_generation. Persisted with the fence so a delayed
+  // PUSH_INPUT_CLOSE can tombstone only the generation whose connector actually ended.
+  int64 ingest_connector_pid = 6;
 }
 
 // MistTriggerAck is Foghorn's durable acknowledgement for non-blocking
@@ -866,6 +893,18 @@ message DVRStartRequest {
   // (ingest_mode, internal_name): live+<x> for push, pull+<x> for pull, bare
   // <x> for mist_native. Helmsman uses verbatim — never re-derives.
   string source_runtime_name = 9;
+  // Monotonic per-recording command generation, assigned by Foghorn. Helmsman
+  // applies DVRStart/DVRStop by generation with an IN-MEMORY per-hash stop tombstone
+  // (NOT durable across a Helmsman restart): a DVRStop tombstones the recording at its
+  // generation, so a lower-or-equal DVRStart arriving shortly after is rejected. This is
+  // a best-effort ordering guard for the ms-scale stop-overtakes-start race on one
+  // connected node — it is NOT the correctness boundary. The durable boundary is
+  // Foghorn's ingest_sessions.ended_at plus artifacts.status: the only path that
+  // re-delivers a start (DVRStartingRecoveryJob) revalidates against it, so a start for
+  // an ended/superseded session is never re-dispatched even after the in-memory tombstone
+  // is lost. A stop always carries a strictly higher generation than the start it
+  // supersedes; a DVR hash is never reused (time-seeded + UNIQUE), so start=1 < stop=2 holds.
+  int64 command_generation = 10;
 }
 
 // DVRConfig is the resolved per-session DVR configuration Foghorn passes to
@@ -913,6 +952,7 @@ message DVRStopRequest {
   string dvr_hash = 1;           // Unique DVR identifier to stop (empty = stop all for internal_name)
   string request_id = 2;         // Request ID for tracking
   optional string internal_name = 3;  // Stream internal name (for stopping all DVR recordings for a stream)
+  int64 command_generation = 4;  // See DVRStartRequest.command_generation. A stop tombstones the recording at this generation.
 }
 
 // On every Mist RECORDING_SEGMENT, the sidecar records the segment with
@@ -1378,6 +1418,17 @@ message PushRewriteTrigger {
   optional GeoBucket publisher_bucket = 15;
   optional GeoBucket node_bucket = 16;
   optional string stream_id = 17; // Enriched by Foghorn (UUID)
+
+  // MistServer publisher-connection identity, captured by Helmsman from the trigger
+  // HTTP headers (X-PID, X-Trigger-UUID, X-Trigger-UnixMillis; lib/triggers.cpp).
+  // PUSH_REWRITE runs inside the publisher connector process, so `pid` identifies the
+  // actual ingest connection. The same connector emits PUSH_INPUT_CLOSE carrying the
+  // same pid in its typed payload, so Foghorn correlates start↔end by (tenant, node,
+  // pid). trigger_uuid/trigger_unix_millis fence delayed closes and PID reuse. These
+  // are the ingest-session identity STREAM_END and tkn cannot provide.
+  int64 pid = 18;
+  string trigger_uuid = 19;
+  int64 trigger_unix_millis = 20;
 }
 
 // ViewerResolveTrigger represents a viewer-side resolve of a playback request.
@@ -1459,6 +1510,17 @@ message PushInputCloseTrigger {
   string tracks_json = 7;    // raw JSON Mist provides; parsed downstream only if needed
   optional string node_id = 8;
   optional string stream_id = 9; // Enriched by Foghorn (UUID)
+  // trigger_unix_millis is MistServer's X-Trigger-UnixMillis header (the
+  // controller's own event time), captured by Helmsman. Used to fence a
+  // delayed close against ingest-session PID reuse: a close is only allowed
+  // to finalize the session whose start preceded it. Field 4 (pid) plus this
+  // event time key the close to the exact ingest generation.
+  int64 trigger_unix_millis = 10;
+  // trigger_uuid is MistServer's X-Trigger-UUID (MIST_TUUID) — stable across a
+  // trigger's retries, distinct per logical trigger. It is folded into the WAL
+  // source_event_id so two legitimately-distinct closes with IDENTICAL bodies
+  // (same stream + reused PID) are not collapsed to one dedup key and dropped.
+  string trigger_uuid = 11;
 }
 
 // ViewerConnectTrigger (formerly USER_NEW) indicates a viewer connection.
@@ -1561,6 +1623,16 @@ message StreamEndTrigger {
   optional int64 viewer_seconds = 7;
   optional string node_id = 8;
   optional string stream_id = 9;           // Enriched by Foghorn (UUID)
+  // MistServer's X-Trigger-UnixMillis header (event time of the stream ending). Foghorn uses it as
+  // the event-time fence for the ingest-session reaper: STREAM_END ends only sessions that started
+  // at or before this time, so a reconnect that came up AFTER the stream ended is preserved.
+  int64 trigger_unix_millis = 10;
+  // MistServer's X-Trigger-UUID header. Stable across a single trigger's retries but distinct per
+  // logical STREAM_END, so it (with trigger_unix_millis) makes the durable WAL identity distinguish
+  // two same-body STREAM_ENDs — otherwise two later events with identical metrics bodies collapse to
+  // one WAL record while Foghorn is unavailable, and replaying the older event time can miss the
+  // newer generation.
+  string trigger_uuid = 11;
 }
 
 // StreamTrackListTrigger (formerly LIVE_TRACK_LIST) provides track inventory.

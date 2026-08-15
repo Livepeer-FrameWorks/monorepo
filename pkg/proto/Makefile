@@ -20,8 +20,18 @@
 # - skipper.proto: AI consultant chat service
 # - foghorn_federation.proto: Cross-cluster federation (Foghorn ↔ Foghorn)
 # - foghorn_relay.proto: Intra-cluster HA command relay (Foghorn ↔ Foghorn)
-proto: clean
-	protoc -I. \
+# The generator stamps its own version into every file's header, so generating
+# with anything other than the pinned plugin rewrites all 19 outputs and fails
+# CI's pinned-regeneration diff check. A system-installed protoc-gen-go
+# (homebrew, distro) usually shadows the pinned one on PATH, so put the Go bin
+# directory first rather than trusting whatever PATH resolves to.
+GOBIN_DIR := $(shell go env GOBIN)
+ifeq ($(GOBIN_DIR),)
+GOBIN_DIR := $(shell go env GOPATH)/bin
+endif
+
+proto: clean install-tools
+	PATH="$(GOBIN_DIR):$$PATH" protoc -I. \
 		--go_out=. \
 		--go_opt=module=github.com/Livepeer-FrameWorks/monorepo/pkg/proto \
 		--go-grpc_out=. \
@@ -36,5 +46,5 @@ clean:
 
 # Install required tools
 install-tools:
-	go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+	go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
 	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
