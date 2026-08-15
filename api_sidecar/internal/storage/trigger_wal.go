@@ -56,15 +56,27 @@ func DefaultTriggerWALDir() string {
 	return filepath.Join(os.TempDir(), "frameworks-trigger-wal")
 }
 
-// ComputeSourceEventID derives the stable id for a trigger. Retries from
-// Mist for the same logical event collide on this key.
-func ComputeSourceEventID(nodeID, triggerType string, payload []byte) string {
+// ComputeSourceEventID derives the stable id for a trigger. Retries from Mist for the
+// same logical event collide on this key.
+//
+// naturalKey is an optional distinguishing identity folded into the hash when non-empty
+// — MistServer's X-Trigger-UUID for triggers that carry one. Without it a PUSH_INPUT_CLOSE
+// dedups on (node, type, body) alone, and two legitimately-distinct closes with identical
+// bodies (same stream + an OS-reused connector PID) would collapse to one key: the second,
+// real close would be dropped as a duplicate. The trigger UUID is stable across a single
+// trigger's retries (so retry-dedup still works) but distinct per logical trigger (so the
+// two real closes stay distinct). Empty preserves the pre-existing (node, type, body) key.
+func ComputeSourceEventID(nodeID, triggerType string, payload []byte, naturalKey string) string {
 	h := sha256.New()
 	h.Write([]byte(nodeID))
 	h.Write([]byte{0})
 	h.Write([]byte(triggerType))
 	h.Write([]byte{0})
 	h.Write(payload)
+	if naturalKey != "" {
+		h.Write([]byte{0})
+		h.Write([]byte(naturalKey))
+	}
 	return hex.EncodeToString(h.Sum(nil))
 }
 

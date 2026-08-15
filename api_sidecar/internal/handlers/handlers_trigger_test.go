@@ -31,6 +31,9 @@ func newWebhookContext(body string) (*gin.Context, *httptest.ResponseRecorder) {
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewBufferString(body))
+	// Mist stamps its trigger identity headers on every trigger; PUSH_INPUT_CLOSE now
+	// requires X-Trigger-UUID (fail-closed on a malformed/non-Mist close), so seed it here.
+	req.Header.Set("X-Trigger-UUID", "test-trigger-uuid")
 	ctx.Request = req
 	return ctx, recorder
 }

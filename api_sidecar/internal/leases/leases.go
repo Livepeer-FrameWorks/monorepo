@@ -73,13 +73,19 @@ type Tracker struct {
 	pathViewer  map[string]map[string]struct{}   // localPath → set of sessionIDs
 	assetSource map[AssetKey]map[string]struct{} // assetKey → set of streamNames
 
-	// Segment-level refcount fan-out for DVR. Nil-safe: when nil, AcquireSource
-	// for DVR still tracks the SegmentNames in the SourceLease but skips view
-	// refcounting (useful in tests).
+	// Segment-level refcount fan-out for DVR. Nil-safe: when nil, a resolved
+	// DVR source lease still tracks the SegmentNames in the SourceLease but skips
+	// view refcounting (useful in tests).
 	segments SegmentIndex
 
 	// Heat is bumped on viewer first-acquire.
 	heat *HeatTracker
+
+	// registry, when attached, is kept consistent with the source leases under
+	// t.mu: ReconcileResolvedSource records and ReleaseSource forgets its entry
+	// in the same critical section, so a lease and its registry entry cannot be
+	// observed to disagree or be torn against a concurrent STREAM_END.
+	registry *SourceRegistry
 
 	// degradedDvrCount is the count of DVR source leases with Degraded=true.
 	// When >0, DVR destructive cleanup must pause.
@@ -109,24 +115,68 @@ func NewTracker(segments SegmentIndex, heat *HeatTracker) *Tracker {
 	}
 }
 
-// AcquireSource installs (or refreshes) a SourceLease for streamName. For DVR
-// leases with a non-empty segmentNames list, every named segment gets an
-// AcquireView call on the underlying segment index. Calling AcquireSource
-// again for the same streamName with the same segment list refreshes LastSeen
-// without double-incrementing ActiveViews.
-func (t *Tracker) AcquireSource(streamName string, localPaths []string, key AssetKey, segmentNames []string, degraded bool) {
+// AcquireResolvedSource is the authoritative STREAM_SOURCE writer. Unlike the
+// poller's ReconcileResolvedSource (which preserves a resolved lease because the
+// artifact scan is not authoritative), STREAM_SOURCE IS the authority for the
+// path/key, so this method installs the resolution over any degraded or stale
+// scanner-derived lease:
+//   - no lease → install resolved,
+//   - degraded or differing lease → replace in place (clears the degraded
+//     posture and its counter, pins the real path/key),
+//   - exact resolved match → refresh liveness only.
+//
+// The source-registry entry is recorded under the SAME lock, so a stream's lease
+// and registry entry cannot be torn against a concurrent STREAM_END or reconcile.
+func (t *Tracker) AcquireResolvedSource(streamName string, localPaths []string, key AssetKey, segmentNames []string, entry SourceEntry) {
 	if t == nil || streamName == "" {
 		return
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-
 	if existing, ok := t.sources[streamName]; ok {
-		existing.LastSeen = time.Now()
-		existing.missingPolls = 0
-		return
+		if resolvedSourceMatches(existing, localPaths, key, segmentNames) {
+			existing.LastSeen = time.Now()
+			existing.missingPolls = 0
+		} else {
+			t.replaceSourceResolutionLocked(existing, streamName, localPaths, key, segmentNames)
+		}
+	} else {
+		t.installSourceLocked(streamName, localPaths, key, segmentNames, false)
 	}
+	t.recordRegistryLocked(streamName, entry)
+}
 
+// resolvedSourceMatches reports whether an existing lease is already the resolved
+// state STREAM_SOURCE would install: not degraded, same asset key, same local
+// paths and segment names (order-insensitive). Only then may the authoritative
+// writer skip the replace and merely refresh liveness.
+func resolvedSourceMatches(existing *SourceLease, localPaths []string, key AssetKey, segmentNames []string) bool {
+	return !existing.Degraded &&
+		existing.Key == key &&
+		equalStringSet(existing.LocalPaths, localPaths) &&
+		equalStringSet(existing.SegmentNames, segmentNames)
+}
+
+func equalStringSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]int, len(a))
+	for _, s := range a {
+		seen[s]++
+	}
+	for _, s := range b {
+		if seen[s] == 0 {
+			return false
+		}
+		seen[s]--
+	}
+	return true
+}
+
+// installSourceLocked creates a fresh SourceLease and its index/refcount/counter
+// bookkeeping. Caller holds t.mu and has verified no lease exists for streamName.
+func (t *Tracker) installSourceLocked(streamName string, localPaths []string, key AssetKey, segmentNames []string, degraded bool) {
 	lease := &SourceLease{
 		StreamName:   streamName,
 		LocalPaths:   append([]string(nil), localPaths...),
@@ -137,20 +187,17 @@ func (t *Tracker) AcquireSource(streamName string, localPaths []string, key Asse
 		LastSeen:     time.Now(),
 	}
 	t.sources[streamName] = lease
-
 	for _, p := range lease.LocalPaths {
 		t.addPathSource(p, streamName)
 	}
 	if key.Hash != "" || key.Type != "" {
 		t.addAssetSource(key, streamName)
 	}
-
 	if key.Type == "dvr" && t.segments != nil {
 		for _, seg := range lease.SegmentNames {
 			t.segments.AcquireView(key.Hash, seg)
 		}
 	}
-
 	if degraded {
 		switch key.Type {
 		case "dvr":
@@ -161,8 +208,158 @@ func (t *Tracker) AcquireSource(streamName string, localPaths []string, key Asse
 	}
 }
 
-// ReleaseSource removes a SourceLease and undoes its segment refcounts.
-// Idempotent for unknown streamName.
+// replaceSourceResolutionLocked rewrites an existing lease in place to the
+// resolved (non-degraded) data, keeping the map entry. Caller holds t.mu. It
+// undoes the old resolution's index entries and segment refcounts (mirroring
+// releaseSourceLocked), decrements the degraded counter iff the old lease was
+// degraded, then installs the new resolution and clears Degraded — leaving
+// pathSource, assetSource, the segment index and degradedDvrCount/degradedVodCount
+// consistent whether the old lease was degraded or a stale resolved one.
+func (t *Tracker) replaceSourceResolutionLocked(existing *SourceLease, streamName string, localPaths []string, key AssetKey, segmentNames []string) {
+	for _, p := range existing.LocalPaths {
+		t.removePathSource(p, streamName)
+	}
+	if existing.Key.Hash != "" || existing.Key.Type != "" {
+		t.removeAssetSource(existing.Key, streamName)
+	}
+	if existing.Key.Type == "dvr" && t.segments != nil {
+		for _, seg := range existing.SegmentNames {
+			t.segments.ReleaseView(existing.Key.Hash, seg)
+		}
+	}
+	if existing.Degraded {
+		switch existing.Key.Type {
+		case "dvr":
+			if t.degradedDvrCount > 0 {
+				t.degradedDvrCount--
+			}
+		case "vod":
+			if t.degradedVodCount > 0 {
+				t.degradedVodCount--
+			}
+		}
+	}
+
+	existing.LocalPaths = append([]string(nil), localPaths...)
+	existing.Key = key
+	existing.SegmentNames = append([]string(nil), segmentNames...)
+	existing.Degraded = false
+	existing.LastSeen = time.Now()
+	existing.missingPolls = 0
+
+	for _, p := range existing.LocalPaths {
+		t.addPathSource(p, streamName)
+	}
+	if key.Hash != "" || key.Type != "" {
+		t.addAssetSource(key, streamName)
+	}
+	if key.Type == "dvr" && t.segments != nil {
+		for _, seg := range existing.SegmentNames {
+			t.segments.AcquireView(key.Hash, seg)
+		}
+	}
+}
+
+// SourceOutcome reports what a reconcile call did, so the poller can log only on
+// real state transitions. The source registry is recorded internally, under the
+// tracker lock, on create/upgrade — the poller must NOT record it separately.
+type SourceOutcome int
+
+const (
+	SourceUnchanged SourceOutcome = iota // existing lease refreshed, nothing changed
+	SourceCreated                        // a missing lease was created
+	SourceUpgraded                       // a degraded lease was resolved
+)
+
+// ReconcileResolvedSource is the poller's reconciliation entry for an active
+// stream the scanner could resolve. STREAM_SOURCE is authoritative for a
+// resolved lease's path/key (independent of the artifact scan, which can be
+// stale after an incomplete pass), so reconciliation must NEVER rewrite a
+// resolved lease from scan data — doing so could unpin the live file. Under one
+// lock it:
+//   - creates a missing lease (returns SourceCreated),
+//   - upgrades a degraded lease to resolved (SourceUpgraded),
+//   - refreshes an existing resolved lease WITHOUT touching its path/key
+//     (SourceUnchanged).
+//
+// On create/upgrade it records the supplied source-registry entry under the SAME
+// lock, so the lease and the registry cannot disagree and cannot be torn against
+// a concurrent STREAM_END (which removes both via ReleaseSource under this lock).
+// Callers must NOT call SourceRegistry.Record separately.
+func (t *Tracker) ReconcileResolvedSource(streamName string, localPaths []string, key AssetKey, segmentNames []string, entry SourceEntry) SourceOutcome {
+	if t == nil || streamName == "" {
+		return SourceUnchanged
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	existing, ok := t.sources[streamName]
+	if !ok {
+		t.installSourceLocked(streamName, localPaths, key, segmentNames, false)
+		t.recordRegistryLocked(streamName, entry)
+		return SourceCreated
+	}
+	if existing.Degraded {
+		t.replaceSourceResolutionLocked(existing, streamName, localPaths, key, segmentNames)
+		t.recordRegistryLocked(streamName, entry)
+		return SourceUpgraded
+	}
+	// Resolved lease is authoritative — preserve path/key, refresh liveness only.
+	existing.LastSeen = time.Now()
+	existing.missingPolls = 0
+	return SourceUnchanged
+}
+
+// EnsureDegradedSource is the poller's entry for an active stream it could NOT
+// resolve. It installs a type-only degraded lease when none exists (returns
+// SourceCreated) so destructive cleanup pauses fail-closed, but never downgrades
+// an existing resolved lease — an existing lease of either kind is only refreshed
+// (SourceUnchanged). The outcome lets the caller warn only on the transition.
+func (t *Tracker) EnsureDegradedSource(streamName string, key AssetKey) SourceOutcome {
+	if t == nil || streamName == "" {
+		return SourceUnchanged
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if existing, ok := t.sources[streamName]; ok {
+		existing.LastSeen = time.Now()
+		existing.missingPolls = 0
+		return SourceUnchanged
+	}
+	t.installSourceLocked(streamName, nil, key, nil, true)
+	return SourceCreated
+}
+
+// recordRegistryLocked records a source-registry entry under the SAME streamName
+// as the lease, while the caller holds t.mu — keeping the lease and registry
+// mutations atomic AND under one key, so a caller cannot install a lease and a
+// registry entry under different names. Lock ordering is always tracker.mu →
+// registry.mu; nothing takes them in the reverse order.
+func (t *Tracker) recordRegistryLocked(streamName string, entry SourceEntry) {
+	if t.registry == nil || streamName == "" {
+		return
+	}
+	entry.StreamName = streamName
+	t.registry.Record(entry)
+}
+
+// AttachSourceRegistry couples a SourceRegistry to this tracker so lease and
+// registry mutations for a stream happen in the same critical section. A nil
+// registry is a no-op (it never detaches), so re-installing a tracker without a
+// registry argument keeps its existing one.
+func (t *Tracker) AttachSourceRegistry(r *SourceRegistry) {
+	if t == nil || r == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.registry = r
+}
+
+// ReleaseSource removes a SourceLease, undoes its segment refcounts, and forgets
+// the attached registry entry — all under one lock so a stream's lease and
+// registry entry are removed atomically (STREAM_END counterpart to
+// ReconcileResolvedSource). Idempotent for unknown streamName.
 func (t *Tracker) ReleaseSource(streamName string) {
 	if t == nil || streamName == "" {
 		return
@@ -170,6 +367,9 @@ func (t *Tracker) ReleaseSource(streamName string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.releaseSourceLocked(streamName)
+	if t.registry != nil {
+		t.registry.Forget(streamName)
+	}
 }
 
 func (t *Tracker) releaseSourceLocked(streamName string) {
@@ -261,23 +461,10 @@ func (t *Tracker) releaseViewerLocked(sessionID string) {
 	}
 }
 
-// HasSourceLease reports whether streamName already has a SourceLease.
-// Used by the boot-recovery rebuild path to avoid clobbering an existing
-// lease with a fresh one.
-func (t *Tracker) HasSourceLease(streamName string) bool {
-	if t == nil || streamName == "" {
-		return false
-	}
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	_, ok := t.sources[streamName]
-	return ok
-}
-
 // DeletePathIfUnleased is the TOCTOU-safe deletion path for clip/VOD files.
 // The lease check and the os.Remove run under the same lock, so a STREAM_SOURCE
-// arriving between the check and the remove cannot interleave: AcquireSource
-// will block until this function returns, then either install the lease for a
+// arriving between the check and the remove cannot interleave: the resolved-source
+// writer will block until this function returns, then either install the lease for a
 // still-present file (cleanup didn't fire) or against a gone path (cleanup
 // succeeded — Mist's STREAM_SOURCE will then resolve elsewhere).
 //
@@ -412,8 +599,31 @@ func (t *Tracker) ReconcileSources(present map[string]struct{}) []string {
 	}
 	for _, name := range released {
 		t.releaseSourceLocked(name)
+		// Forget the registry entry under the SAME lock as the lease removal.
+		// A separate post-reconcile forget by the poller could race a concurrent
+		// STREAM_SOURCE that reinstalled the lease+entry, deleting the fresh entry.
+		if t.registry != nil {
+			t.registry.Forget(name)
+		}
 	}
 	return released
+}
+
+// LookupSource returns the source-registry entry for streamName under the
+// tracker lock, so a reader observes registry state through the same
+// synchronization boundary that mutates the lease and the entry together
+// (recordRegistryLocked / ReleaseSource / ReconcileSources). Returns false when
+// unregistered or when no registry is attached.
+func (t *Tracker) LookupSource(streamName string) (SourceEntry, bool) {
+	if t == nil || streamName == "" {
+		return SourceEntry{}, false
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.registry == nil {
+		return SourceEntry{}, false
+	}
+	return t.registry.Lookup(streamName)
 }
 
 // ReconcileViewers does the same for ViewerLeases against active-clients.

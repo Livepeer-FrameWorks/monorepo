@@ -19,25 +19,28 @@ const (
 // Process-global instances. Construct once in main; access via the package
 // accessors below.
 var (
-	globalMu             sync.RWMutex
-	globalTracker        *Tracker
-	globalSourceRegistry *SourceRegistry
-	globalHeat           *HeatTracker
-	globalDeferredStore  *DeferredStore
+	globalMu            sync.RWMutex
+	globalTracker       *Tracker
+	globalHeat          *HeatTracker
+	globalDeferredStore *DeferredStore
 
 	cleanupState      = int32(StateBootPaused)
 	mistReconcileDone = false
 	bootMu            sync.Mutex
 )
 
-// Install wires the singletons. Safe to call once at startup. Subsequent
-// calls overwrite, which is useful for tests; production callers should
-// invoke this exactly once.
+// Install wires the singletons. Safe to call once at startup. Subsequent calls
+// overwrite, which is useful for tests; production callers should invoke this
+// exactly once. The source registry is OWNED by the tracker (AttachSourceRegistry)
+// — there is no global registry accessor; reads go through Tracker.LookupSource.
+// A nil sources leaves the tracker's existing registry in place.
 func Install(tracker *Tracker, sources *SourceRegistry, heat *HeatTracker, deferred *DeferredStore) {
+	if tracker != nil {
+		tracker.AttachSourceRegistry(sources)
+	}
 	globalMu.Lock()
 	defer globalMu.Unlock()
 	globalTracker = tracker
-	globalSourceRegistry = sources
 	globalHeat = heat
 	globalDeferredStore = deferred
 }
@@ -46,12 +49,6 @@ func GlobalTracker() *Tracker {
 	globalMu.RLock()
 	defer globalMu.RUnlock()
 	return globalTracker
-}
-
-func GlobalSourceRegistry() *SourceRegistry {
-	globalMu.RLock()
-	defer globalMu.RUnlock()
-	return globalSourceRegistry
 }
 
 func GlobalHeat() *HeatTracker {

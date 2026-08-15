@@ -49,6 +49,24 @@ func TestRenderCaddyfile_MistAdminRouteRenderedWhenEdgeDomainSet(t *testing.T) {
 	}
 }
 
+func TestRenderCaddyfile_RedactsPublishingCredentialsFromAllLogs(t *testing.T) {
+	out, err := RenderCaddyfile(baseParams())
+	if err != nil {
+		t.Fatalf("RenderCaddyfile: %v", err)
+	}
+
+	const filter = `request>uri regexp "/(webrtc|ingest)/[^/?]+" "/${1}/REDACTED"`
+	// The global logger covers runtime and upstream-error events. The site logger covers access
+	// events. Both must apply the same filter because either event class can carry the publishing
+	// credential in its request URI.
+	if got := strings.Count(out, filter); got != 2 {
+		t.Fatalf("publishing credential filter count = %d, want 2; rendered:\n%s", got, out)
+	}
+	if strings.Contains(out, "format json") {
+		t.Fatalf("unfiltered JSON logger can expose publishing credentials; rendered:\n%s", out)
+	}
+}
+
 func TestRenderCaddyfile_MistAdminRouteAbsentWhenEdgeDomainEmpty(t *testing.T) {
 	p := baseParams()
 	p.EdgeDomain = ""

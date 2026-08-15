@@ -42,6 +42,19 @@ const caddyfileTmpl = `{
 {{- if .AcmeEmail}}
 	email {{.AcmeEmail}}
 {{- end}}
+	# Runtime/error logging is configured globally: a site-level log directive
+	# only covers access logs, while upstream failures are emitted by the
+	# default logger and carry the full request URI — which for WHIP publishes
+	# (/webrtc/<streamKey>) and the ingest front door is a credential.
+	log {
+		output stdout
+		format filter {
+			wrap json
+			fields {
+				request>uri regexp "/(webrtc|ingest)/[^/?]+" "/${1}/REDACTED"
+			}
+		}
+	}
 	servers {
 		protocols h1 h2 h3
 	}
@@ -161,7 +174,14 @@ const caddyfileTmpl = `{
 
 	log {
 		output stdout
-		format json
+		# WHIP publishes to /webrtc/<streamKey>, so the raw URI carries a
+		# publishing credential; redact it rather than shipping it to logs.
+		format filter {
+			wrap json
+			fields {
+				request>uri regexp "/(webrtc|ingest)/[^/?]+" "/${1}/REDACTED"
+			}
+		}
 	}
 }
 

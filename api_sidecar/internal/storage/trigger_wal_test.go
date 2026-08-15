@@ -16,21 +16,21 @@ func newTrigger(t *testing.T, nodeID, triggerType string, body []byte) *ipcpb.Mi
 		NodeId:      nodeID,
 		Timestamp:   1700000000123,
 		Blocking:    false,
-		RequestId:   ComputeSourceEventID(nodeID, triggerType, body),
+		RequestId:   ComputeSourceEventID(nodeID, triggerType, body, ""),
 	}
 }
 
 func TestComputeSourceEventIDStable(t *testing.T) {
-	id1 := ComputeSourceEventID("node-1", "USER_END", []byte("payload"))
-	id2 := ComputeSourceEventID("node-1", "USER_END", []byte("payload"))
+	id1 := ComputeSourceEventID("node-1", "USER_END", []byte("payload"), "")
+	id2 := ComputeSourceEventID("node-1", "USER_END", []byte("payload"), "")
 	if id1 != id2 {
 		t.Fatalf("same inputs must hash identically, got %q vs %q", id1, id2)
 	}
-	id3 := ComputeSourceEventID("node-2", "USER_END", []byte("payload"))
+	id3 := ComputeSourceEventID("node-2", "USER_END", []byte("payload"), "")
 	if id1 == id3 {
 		t.Fatalf("different node_id must produce different hash")
 	}
-	id4 := ComputeSourceEventID("node-1", "STREAM_END", []byte("payload"))
+	id4 := ComputeSourceEventID("node-1", "STREAM_END", []byte("payload"), "")
 	if id1 == id4 {
 		t.Fatalf("different trigger_type must produce different hash")
 	}
@@ -42,22 +42,44 @@ func TestComputeSourceEventIDStable(t *testing.T) {
 // triggers into one WAL entry, silently dropping one.
 func TestComputeSourceEventIDFieldBoundaries(t *testing.T) {
 	payload := []byte("payload")
-	a := ComputeSourceEventID("ab", "", payload)
-	b := ComputeSourceEventID("a", "b", payload)
+	a := ComputeSourceEventID("ab", "", payload, "")
+	b := ComputeSourceEventID("a", "b", payload, "")
 	if a == b {
 		t.Fatal("field boundary not preserved: (\"ab\",\"\") and (\"a\",\"b\") must differ")
 	}
 
 	// The separator must also distinguish a payload boundary from a type boundary.
-	c := ComputeSourceEventID("a", "b", []byte("c"))
-	d := ComputeSourceEventID("a", "", []byte("bc"))
+	c := ComputeSourceEventID("a", "b", []byte("c"), "")
+	d := ComputeSourceEventID("a", "", []byte("bc"), "")
 	if c == d {
 		t.Fatal("type/payload boundary not preserved")
 	}
 }
 
+// TestComputeSourceEventIDNaturalKey: two PUSH_INPUT_CLOSE with
+// IDENTICAL (node, type, body) — the case of an OS-reused connector PID — must NOT collapse
+// to one WAL dedup key when they carry distinct Mist trigger UUIDs, or the second (real)
+// close is dropped as a duplicate. A single close's retries reuse the same UUID and still
+// dedup. An empty natural key preserves the legacy body-only identity.
+func TestComputeSourceEventIDNaturalKey(t *testing.T) {
+	node, typ, body := "node-1", "PUSH_INPUT_CLOSE", []byte("live+s\x00host\x00MistInRTMP\x0042\x00...")
+	closeA := ComputeSourceEventID(node, typ, body, "trigger-uuid-A")
+	closeB := ComputeSourceEventID(node, typ, body, "trigger-uuid-B")
+	if closeA == closeB {
+		t.Fatal("two identical-body closes with distinct trigger UUIDs must NOT dedup to one key")
+	}
+	// Same UUID (a single close's retry) still collides — retry dedup preserved.
+	if ComputeSourceEventID(node, typ, body, "trigger-uuid-A") != closeA {
+		t.Fatal("a close retry (same UUID) must keep the same dedup key")
+	}
+	// Empty natural key preserves the legacy (node, type, body) identity.
+	if ComputeSourceEventID(node, typ, body, "") == closeA {
+		t.Fatal("an empty natural key must differ from a keyed id")
+	}
+}
+
 func TestComputeTypedEventID(t *testing.T) {
-	src := ComputeSourceEventID("node-1", "USER_END", []byte("payload"))
+	src := ComputeSourceEventID("node-1", "USER_END", []byte("payload"), "")
 
 	id1 := ComputeTypedEventID(src)
 	id2 := ComputeTypedEventID(src)
@@ -65,7 +87,7 @@ func TestComputeTypedEventID(t *testing.T) {
 		t.Fatalf("ComputeTypedEventID not deterministic: %q vs %q", id1, id2)
 	}
 
-	other := ComputeTypedEventID(ComputeSourceEventID("node-2", "USER_END", []byte("payload")))
+	other := ComputeTypedEventID(ComputeSourceEventID("node-2", "USER_END", []byte("payload"), ""))
 	if id1 == other {
 		t.Fatal("distinct source ids must yield distinct typed ids")
 	}

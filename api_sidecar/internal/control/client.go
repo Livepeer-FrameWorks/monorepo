@@ -46,7 +46,9 @@ const foghornInternalServerName = "foghorn.internal"
 //   - Version 2 = ALSO honors the staged THUMBNAIL contract: the presigned thumbnail PUTs target per-attempt
 //     staging keys and this sidecar echoes ThumbnailUploadResponse.attempt_id in ThumbnailUploaded
 //     (ThumbnailStagedProtocolMin=2 on Foghorn). Serving it below this version gets no thumbnail mint.
-const controlProtocolVersion int32 = 2
+//   - Version 3 = durably records admitted ingest generations and rejects stale drain/push-target
+//     commands whose exact source generation no longer owns the local runtime.
+const controlProtocolVersion int32 = 3
 
 // DeleteClipFunc is the function type for clip deletion
 type DeleteClipFunc func(clipHash string) (uint64, error)
@@ -82,6 +84,193 @@ func (s *lockedClientStream) Send(msg *ipcpb.ControlMessage) error {
 }
 
 var activeConn atomic.Pointer[streamConn]
+
+type ingestGenerationFence struct {
+	sync.Mutex
+	generation   string
+	connectorPID int64
+	active       bool
+	references   int
+	evictPending bool
+}
+
+type lockedIngestGenerationFence struct {
+	*ingestGenerationFence
+	runtimeName string
+}
+
+var admittedIngestGenerations = struct {
+	sync.Mutex
+	byRuntime map[string]*ingestGenerationFence
+}{byRuntime: make(map[string]*ingestGenerationFence)}
+
+var (
+	ingestGenerationStoreMu sync.RWMutex
+	ingestGenerationStore   *storage.IngestGenerationStore
+)
+
+// lockIngestFence pins the map entry before waiting for its runtime lock. The global map mutex is
+// never held across that wait, so a blocked operation for one runtime cannot convoy other streams.
+func lockIngestFence(runtimeName string, create bool) (*lockedIngestGenerationFence, bool) {
+	runtimeName = strings.TrimSpace(runtimeName)
+	if runtimeName == "" {
+		return nil, false
+	}
+	admittedIngestGenerations.Lock()
+	fence := admittedIngestGenerations.byRuntime[runtimeName]
+	if fence == nil && create {
+		fence = &ingestGenerationFence{}
+		admittedIngestGenerations.byRuntime[runtimeName] = fence
+	}
+	if fence != nil {
+		fence.references++
+	}
+	admittedIngestGenerations.Unlock()
+	if fence == nil {
+		return nil, false
+	}
+	fence.Lock()
+	return &lockedIngestGenerationFence{ingestGenerationFence: fence, runtimeName: runtimeName}, true
+}
+
+func (f *lockedIngestGenerationFence) Unlock() {
+	f.ingestGenerationFence.Unlock()
+	admittedIngestGenerations.Lock()
+	f.references--
+	if f.references == 0 && f.evictPending {
+		f.Lock()
+		if !f.active && admittedIngestGenerations.byRuntime[f.runtimeName] == f.ingestGenerationFence {
+			delete(admittedIngestGenerations.byRuntime, f.runtimeName)
+		}
+		f.evictPending = false
+		f.ingestGenerationFence.Unlock()
+	}
+	admittedIngestGenerations.Unlock()
+}
+
+// RecordAdmittedIngestGeneration records the generation returned with an accepted PUSH_REWRITE.
+// After stream end the value becomes a bounded tombstone that lets late control commands prove
+// they still target the exact local publisher generation they were created for.
+func RecordAdmittedIngestGeneration(runtimeName, generation string, connectorPID int64) error {
+	runtimeName = strings.TrimSpace(runtimeName)
+	generation = strings.TrimSpace(generation)
+	if runtimeName == "" || generation == "" || connectorPID <= 0 {
+		return errors.New("accepted ingest requires runtime, generation, and positive connector PID")
+	}
+	fence, _ := lockIngestFence(runtimeName, true)
+	defer fence.Unlock()
+	ingestGenerationStoreMu.RLock()
+	store := ingestGenerationStore
+	ingestGenerationStoreMu.RUnlock()
+	if store != nil {
+		if err := store.Put(runtimeName, generation, connectorPID); err != nil {
+			return err
+		}
+	}
+	fence.generation = generation
+	fence.connectorPID = connectorPID
+	fence.active = true
+	return nil
+}
+
+// MarkAdmittedIngestGenerationEnded converts the current generation to a bounded tombstone after
+// PUSH_INPUT_CLOSE is durably accepted. The in-memory value remains available for reordered
+// commands, while the disk store can age/cap ended runtimes without evicting active publishers.
+func MarkAdmittedIngestGenerationEnded(runtimeName string, connectorPID int64) error {
+	runtimeName = strings.TrimSpace(runtimeName)
+	if runtimeName == "" || connectorPID <= 0 {
+		return errors.New("ended ingest requires runtime and positive connector PID")
+	}
+	fence, ok := lockIngestFence(runtimeName, false)
+	if !ok {
+		return nil
+	}
+	if fence.generation == "" {
+		fence.Unlock()
+		return nil
+	}
+	ingestGenerationStoreMu.RLock()
+	store := ingestGenerationStore
+	ingestGenerationStoreMu.RUnlock()
+	if connectorPID != fence.connectorPID {
+		fence.Unlock()
+		return nil
+	}
+	if store != nil {
+		if err := store.MarkEnded(runtimeName, fence.generation, connectorPID); err != nil {
+			fence.Unlock()
+			return err
+		}
+	}
+	fence.active = false
+	fence.Unlock()
+	if store != nil {
+		store.SchedulePrune(func(evicted []string, maintenanceErr error) {
+			evictInMemoryGenerationFences(evicted)
+			if maintenanceErr != nil && pkgLogger != nil {
+				pkgLogger.WithError(maintenanceErr).Warn("Ingest generation tombstone maintenance failed; automatic retry scheduled")
+			}
+		})
+	}
+	return nil
+}
+
+func initIngestGenerationStore(logger logging.Logger) {
+	store, err := storage.NewIngestGenerationStore(storage.DefaultIngestGenerationStorePath())
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to open ingest-generation fence store")
+		return
+	}
+	records, err := store.Load()
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to load ingest-generation fence store")
+		return
+	}
+	rehydrateIngestGenerationFences(records)
+	ingestGenerationStoreMu.Lock()
+	ingestGenerationStore = store
+	ingestGenerationStoreMu.Unlock()
+	logger.WithField("generation_fences", len(records)).Info("Rehydrated persisted ingest-generation fences")
+}
+
+func rehydrateIngestGenerationFences(records map[string]storage.IngestGenerationRecord) {
+	for runtimeName, record := range records {
+		fence, _ := lockIngestFence(runtimeName, true)
+		fence.generation = record.Generation
+		fence.connectorPID = record.ConnectorPID
+		fence.active = record.Active
+		fence.Unlock()
+	}
+}
+
+func evictInMemoryGenerationFences(runtimeNames []string) {
+	for _, runtimeName := range runtimeNames {
+		admittedIngestGenerations.Lock()
+		fence := admittedIngestGenerations.byRuntime[runtimeName]
+		if fence != nil {
+			if fence.references > 0 {
+				fence.evictPending = true
+			} else {
+				fence.Lock()
+				if !fence.active {
+					delete(admittedIngestGenerations.byRuntime, runtimeName)
+				}
+				fence.Unlock()
+			}
+		}
+		admittedIngestGenerations.Unlock()
+	}
+}
+
+func admittedIngestGeneration(runtimeName string) (string, bool) {
+	fence, ok := lockIngestFence(runtimeName, false)
+	if !ok {
+		return "", false
+	}
+	generation := fence.generation
+	fence.Unlock()
+	return generation, generation != ""
+}
 
 func getStream() ipcpb.HelmsmanControl_ConnectClient {
 	c := activeConn.Load()
@@ -202,6 +391,7 @@ func Start(logger logging.Logger, cfg *sidecarcfg.HelmsmanConfig) {
 		logger.WithField("grace_ms", blockingGraceMs).Info("Blocking trigger grace period enabled")
 	}
 	initTriggerForwarder(logger)
+	initIngestGenerationStore(logger)
 	// Recover managed-stream ownership from Mist's persisted config so
 	// Foghorn-issued Retract commands work across sidecar restarts.
 	HydrateAppliedManagedStreamsFromMist(logger)
@@ -231,9 +421,10 @@ func GetCurrentNodeID() string {
 
 // MistTriggerResult carries the full response from Foghorn for blocking triggers
 type MistTriggerResult struct {
-	Response  string
-	Abort     bool
-	ErrorCode ipcpb.IngestErrorCode
+	Response         string
+	Abort            bool
+	ErrorCode        ipcpb.IngestErrorCode
+	IngestGeneration string
 }
 
 // SendMistTrigger forwards a typed MistServer trigger to Foghorn and returns response for blocking triggers
@@ -369,9 +560,10 @@ func awaitMistTriggerResponse(responseCh chan *ipcpb.MistTriggerResponse, reques
 		<-pendingMutex
 
 		return &MistTriggerResult{
-			Response:  response.Response,
-			Abort:     response.Abort,
-			ErrorCode: response.ErrorCode,
+			Response:         response.Response,
+			Abort:            response.Abort,
+			ErrorCode:        response.ErrorCode,
+			IngestGeneration: response.GetIngestGeneration(),
 		}, nil
 	case <-disconnectCh:
 		pendingMutex <- struct{}{}
@@ -396,6 +588,19 @@ func awaitMistTriggerResponse(responseCh chan *ipcpb.MistTriggerResponse, reques
 
 // handleMistTriggerResponse processes MistTriggerResponse messages from the stream
 func handleMistTriggerResponse(response *ipcpb.MistTriggerResponse) {
+	if response != nil && !response.GetAbort() {
+		// Record before releasing the waiting HTTP handler. The Recv loop may immediately observe a
+		// queued control command after this response; updating synchronously makes stream ordering a
+		// generation fence even before the PUSH_REWRITE handler returns the approval to Mist.
+		if err := RecordAdmittedIngestGeneration(response.GetResponse(), response.GetIngestGeneration(), response.GetIngestConnectorPid()); err != nil {
+			if pkgLogger != nil {
+				pkgLogger.WithError(err).WithField("runtime_name", response.GetResponse()).Error("Failed to persist accepted ingest generation; refusing publisher")
+			}
+			response.Abort = true
+			response.Response = ""
+			response.ErrorCode = ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL
+		}
+	}
 	pendingMutex <- struct{}{}
 	responseChan, exists := pendingMistTriggers[response.RequestId]
 	<-pendingMutex
@@ -873,7 +1078,10 @@ func runClient(addr string, logger logging.Logger) error {
 			case *ipcpb.ControlMessage_VodDelete:
 				go handleVodDelete(logger, x.VodDelete, func(m *ipcpb.ControlMessage) { _ = stream.Send(m) }) //nolint:errcheck // best-effort report
 			case *ipcpb.ControlMessage_MistTriggerResponse:
-				go handleMistTriggerResponse(x.MistTriggerResponse)
+				// Record accepted ingest generations in receive order. This may briefly wait for an
+				// already-running command on the same runtime; that serialization is the fence that
+				// prevents the command from mutating Mist after a successor is accepted.
+				handleMistTriggerResponse(x.MistTriggerResponse)
 			case *ipcpb.ControlMessage_MistTriggerAck:
 				go handleMistTriggerAck(x.MistTriggerAck)
 			case *ipcpb.ControlMessage_Error:
@@ -962,27 +1170,66 @@ func runClient(addr string, logger logging.Logger) error {
 				// or signing-key change. Does NOT disconnect viewers.
 				go handleInvalidateSessions(logger, x.InvalidateSessionsRequest)
 			case *ipcpb.ControlMessage_DrainStreamRequest:
-				// Old-owner drain on publisher takeover: unload lingering
+				// Old-owner drain after publisher replacement: unload lingering
 				// buffer + disconnect viewers so they reselect via the new
-				// owner. Idempotent.
+				// owner. Idempotent. STALENESS FENCE: nuke_stream destroys by
+				// runtime NAME with no session fencing at Mist, so a drain
+				// that sat in a stalled control stream must NOT execute late —
+				// by then the name may belong to a replacement publisher. A
+				// command older than the acceptance window is refused with an
+				// error response; the durable obligation re-dispatches a fresh
+				// one if the drain is still owed.
+				if sentAt := msg.GetSentAt(); sentAt == nil || time.Since(sentAt.AsTime()) > 15*time.Second {
+					logger.WithFields(logging.Fields{
+						"runtime_name": x.DrainStreamRequest.GetRuntimeName(),
+						"age": func() string {
+							if sentAt == nil {
+								return "missing"
+							}
+							return time.Since(sentAt.AsTime()).String()
+						}(),
+					}).Warn("Refusing stale drain command (possible replacement publisher on this runtime name)")
+					resp := &ipcpb.ControlMessage{Payload: &ipcpb.ControlMessage_DrainStreamResponse{
+						DrainStreamResponse: &ipcpb.DrainStreamResponse{
+							RuntimeName:      x.DrainStreamRequest.GetRuntimeName(),
+							Error:            "drain command expired in transit",
+							SourceGeneration: x.DrainStreamRequest.GetSourceGeneration(),
+						},
+					}}
+					if err := stream.Send(resp); err != nil {
+						logger.WithError(err).Warn("Failed to send stale-drain refusal")
+					}
+					continue
+				}
 				go handleDrainStream(logger, x.DrainStreamRequest, func(m *ipcpb.ControlMessage) {
 					if err := stream.Send(m); err != nil {
 						logger.WithError(err).Warn("Failed to send DrainStreamResponse")
 					}
 				})
-			case *ipcpb.ControlMessage_DvrUpdateSourceRequest:
-				// Storage-node DVR source refresh on publisher takeover:
-				// the source moved to a different ingest node, so the
-				// recorded override URL is stale. Refresh + force-recreate
-				// the push so the next pull lands on the new source.
-				go handleDVRUpdateSource(logger, x.DvrUpdateSourceRequest, func(m *ipcpb.ControlMessage) {
+			case *ipcpb.ControlMessage_ActivatePushTargets:
+				if sentAt := msg.GetSentAt(); sentAt == nil || time.Since(sentAt.AsTime()) > 15*time.Second {
+					logger.WithField("stream_name", x.ActivatePushTargets.GetStreamName()).Warn("Refusing stale push-target activation command")
+					if err := stream.Send(&ipcpb.ControlMessage{Payload: &ipcpb.ControlMessage_ActivatePushTargetsResult{
+						ActivatePushTargetsResult: &ipcpb.ActivatePushTargetsResult{
+							StreamName:       x.ActivatePushTargets.GetStreamName(),
+							Error:            "activation command expired in transit",
+							SourceGeneration: x.ActivatePushTargets.GetSourceGeneration(),
+						},
+					}}); err != nil {
+						logger.WithError(err).Warn("Failed to send stale-activation refusal")
+					}
+					continue
+				}
+				go handleActivatePushTargets(logger, x.ActivatePushTargets, func(m *ipcpb.ControlMessage) {
 					if err := stream.Send(m); err != nil {
-						logger.WithError(err).Warn("Failed to send DVRUpdateSourceResponse")
+						logger.WithError(err).Warn("Failed to send ActivatePushTargetsResult")
 					}
 				})
-			case *ipcpb.ControlMessage_ActivatePushTargets:
-				go handleActivatePushTargets(logger, x.ActivatePushTargets)
 			case *ipcpb.ControlMessage_DeactivatePushTargets:
+				if sentAt := msg.GetSentAt(); sentAt == nil || time.Since(sentAt.AsTime()) > 15*time.Second {
+					logger.WithField("stream_name", x.DeactivatePushTargets.GetStreamName()).Warn("Refusing stale push-target deactivation command")
+					continue
+				}
 				go handleDeactivatePushTargets(logger, x.DeactivatePushTargets)
 			case *ipcpb.ControlMessage_ApplyManagedStream:
 				go handleApplyManagedStream(logger, x.ApplyManagedStream)
@@ -1249,6 +1496,22 @@ func handleDVRStart(logger logging.Logger, req *ipcpb.DVRStartRequest, send func
 	// Initialize DVR manager if not already done
 	initDVRManager()
 
+	// Reject a start that a newer stop has already superseded. This closes the
+	// stop-overtakes-start race: if the DVRStop for this recording reached us before
+	// its DVRStart (the start committed 'starting' on Foghorn but lost the send race),
+	// starting now would leave a live Mist writer behind a terminal Foghorn row. The
+	// stop tombstone at generation >= this start's generation means the stop won, so
+	// this start is a no-op. Foghorn's row is already stopping/terminal, so we emit no
+	// report — the stop path owns the terminal state.
+	if dvrManager.dvrStartSupersededByStop(dvrHash, req.GetCommandGeneration()) {
+		logger.WithFields(logging.Fields{
+			"dvr_hash":         dvrHash,
+			"start_generation": req.GetCommandGeneration(),
+			"request_id":       requestID,
+		}).Warn("DVR start superseded by a newer stop (stop overtook start); rejecting idempotently, not starting")
+		return
+	}
+
 	// Start the DVR recording job
 	if err := dvrManager.StartRecording(dvrHash, streamID, internalName, sourceRuntimeName, sourceURL, config, send); err != nil {
 		logger.WithFields(logging.Fields{
@@ -1286,6 +1549,11 @@ func handleDVRStop(logger logging.Logger, req *ipcpb.DVRStopRequest, send func(*
 
 	// Initialize DVR manager if not already done
 	initDVRManager()
+
+	// Record the stop tombstone FIRST, before applying the stop, so a stop that
+	// arrived ahead of its own DVRStart (the start still in flight) blocks that racing
+	// start from creating a live writer behind this terminal stop.
+	dvrManager.recordDVRStopTombstone(dvrHash, req.GetCommandGeneration())
 
 	// Stop the DVR recording job
 	if err := dvrManager.StopRecordingWithSender(dvrHash, send); err != nil {
@@ -1374,8 +1642,14 @@ func handleDVRDelete(logger logging.Logger, req *ipcpb.DVRDeleteRequest, send fu
 	// Initialize DVR manager if not already done
 	initDVRManager()
 
-	// Stop the recording first if it's active
-	_ = dvrManager.StopRecording(dvrHash)
+	// Confirm the recording's Mist push is stopped BEFORE removing files: deleting
+	// while a writer is live would leave Mist writing into a removed/recreated path.
+	// If it cannot be confirmed (list failure, or a live push that won't stop), defer
+	// the delete — Foghorn re-drives it.
+	if !dvrManager.ConfirmDVRPushStopped(dvrHash) {
+		logger.WithField("dvr_hash", dvrHash).Warn("DVR delete deferred: recording stop not confirmed; will retry")
+		return
+	}
 
 	// Use the registered delete handler
 	if deleteDVRFn == nil {
@@ -2287,25 +2561,72 @@ func handleInvalidateSessions(logger logging.Logger, req *ipcpb.InvalidateSessio
 }
 
 // handleDrainStream drops the lingering Mist buffer for a runtime name
-// and disconnects its viewer sessions on this node. Issued by Foghorn
-// from the AdmitAndReserve takeover path before the new owner is
-// admitted, so viewers don't keep talking to a stale buffer after the
-// publisher moves nodes. Idempotent — when the stream is absent we still
-// return success with unloaded=false.
+// and disconnects its viewer sessions on this node. Issued by Foghorn's
+// admission-effects worker after the database-confirmed source projection moves to a new publisher
+// node; the durable obligation keeps re-dispatching until the DrainStreamResponse confirms the
+// drain, so viewers do not remain on a stale buffer. Idempotent — an absent stream returns success
+// with unloaded=false.
 func handleDrainStream(logger logging.Logger, req *ipcpb.DrainStreamRequest, send func(*ipcpb.ControlMessage)) {
 	runtimeName := strings.TrimSpace(req.GetRuntimeName())
 	if runtimeName == "" {
 		return
 	}
+	priorGeneration := strings.TrimSpace(req.GetPriorOwnerSourceGeneration())
+	generationFence, generationKnown := lockIngestFence(runtimeName, false)
+	currentGeneration := ""
+	if generationKnown {
+		currentGeneration = generationFence.generation
+		generationKnown = currentGeneration != ""
+	}
+	if priorGeneration == "" || !generationKnown {
+		if generationFence != nil {
+			generationFence.Unlock()
+		}
+		logger.WithFields(logging.Fields{
+			"runtime_name":              runtimeName,
+			"expected_prior_generation": priorGeneration,
+		}).Warn("Refusing drain without an exact local publisher generation")
+		if send != nil {
+			send(&ipcpb.ControlMessage{Payload: &ipcpb.ControlMessage_DrainStreamResponse{
+				DrainStreamResponse: &ipcpb.DrainStreamResponse{
+					RuntimeName:      runtimeName,
+					Error:            "local publisher generation is unknown",
+					SourceGeneration: req.GetSourceGeneration(),
+				},
+			}})
+		}
+		return
+	}
+	if currentGeneration != priorGeneration {
+		generationFence.Unlock()
+		logger.WithFields(logging.Fields{
+			"runtime_name":              runtimeName,
+			"expected_prior_generation": priorGeneration,
+			"current_generation":        currentGeneration,
+		}).Warn("Refusing drain for a superseded local publisher generation")
+		// A different admitted generation proves the exact prior generation is no longer the local
+		// runtime owner. Complete the drain obligation without touching Mist.
+		if send != nil {
+			send(&ipcpb.ControlMessage{Payload: &ipcpb.ControlMessage_DrainStreamResponse{
+				DrainStreamResponse: &ipcpb.DrainStreamResponse{
+					RuntimeName:      runtimeName,
+					SourceGeneration: req.GetSourceGeneration(),
+				},
+			}})
+		}
+		return
+	}
 
 	cfg := currentConfig
 	if cfg == nil {
+		generationFence.Unlock()
 		logger.WithField("runtime_name", runtimeName).Warn("config not initialized; cannot drain stream")
 		if send != nil {
 			send(&ipcpb.ControlMessage{Payload: &ipcpb.ControlMessage_DrainStreamResponse{
 				DrainStreamResponse: &ipcpb.DrainStreamResponse{
-					RuntimeName: runtimeName,
-					Error:       "config not initialized",
+					RuntimeName:      runtimeName,
+					Error:            "config not initialized",
+					SourceGeneration: req.GetSourceGeneration(),
 				},
 			}})
 		}
@@ -2319,7 +2640,7 @@ func handleDrainStream(logger logging.Logger, req *ipcpb.DrainStreamRequest, sen
 	logger.WithFields(logging.Fields{
 		"runtime_name": runtimeName,
 		"reason":       req.GetReason(),
-	}).Info("Draining lingering Mist stream on takeover")
+	}).Info("Draining lingering Mist stream after publisher replacement")
 
 	// Disconnect viewer sessions first so they reselect via PLAY_REWRITE
 	// at the new owner. The Mist stop_sessions API doesn't return a count;
@@ -2355,72 +2676,72 @@ func handleDrainStream(logger logging.Logger, req *ipcpb.DrainStreamRequest, sen
 		unloaded = true
 	}
 
-	// Clear any DVR override the previous owner registered for this
-	// runtime name so a takeover doesn't leave a stale STREAM_SOURCE
-	// override pointing at a now-gone source URL.
+	// Clear any DVR override the previous owner registered for this runtime name so publisher
+	// replacement does not leave a STREAM_SOURCE override pointing at a closed publisher.
 	ClearDVRSourceOverride(runtimeName)
+	// The destructive Mist operations and generation recording share this runtime fence. A
+	// successor response either won before our check (making this command a no-op) or waits until
+	// the exact prior generation is fully drained.
+	generationFence.Unlock()
 
 	if send != nil {
 		send(&ipcpb.ControlMessage{Payload: &ipcpb.ControlMessage_DrainStreamResponse{
 			DrainStreamResponse: &ipcpb.DrainStreamResponse{
-				RuntimeName: runtimeName,
-				Unloaded:    unloaded,
-				Error:       partialErr,
+				RuntimeName:      runtimeName,
+				Unloaded:         unloaded,
+				Error:            partialErr,
+				SourceGeneration: req.GetSourceGeneration(),
 			},
 		}})
 	}
 }
 
-// handleDVRUpdateSource refreshes the DVR source override + force-recreates
-// the Mist push for the named dvr_hash. Issued by Foghorn from the
-// AdmitAndReserve takeover path when the new ingest owner is on a
-// different node from where the DVR was first set up — without this, the
-// recorded sourceURL points at the now-empty old source and the push
-// stalls until retry budget exhausts. Idempotent: missing job returns
-// refreshed=false with no error.
-func handleDVRUpdateSource(logger logging.Logger, req *ipcpb.DVRUpdateSourceRequest, send func(*ipcpb.ControlMessage)) {
-	dvrHash := strings.TrimSpace(req.GetDvrHash())
-	if dvrHash == "" {
+func handleActivatePushTargets(logger logging.Logger, req *ipcpb.ActivatePushTargets, respond func(*ipcpb.ControlMessage)) {
+	if req == nil || len(req.Targets) == 0 {
 		return
 	}
-	logger.WithFields(logging.Fields{
-		"dvr_hash":            dvrHash,
-		"source_runtime_name": req.GetSourceRuntimeName(),
-		"source_base_url":     req.GetSourceBaseUrl(),
-	}).Info("DVR source refresh requested on takeover")
-
-	initDVRManager()
-	refreshed, err := dvrManager.UpdateSource(dvrHash, req.GetSourceRuntimeName(), req.GetSourceBaseUrl())
-	var errMsg string
-	if err != nil {
-		errMsg = err.Error()
-	}
-	if send != nil {
-		send(&ipcpb.ControlMessage{Payload: &ipcpb.ControlMessage_DvrUpdateSourceResponse{
-			DvrUpdateSourceResponse: &ipcpb.DVRUpdateSourceResponse{
-				DvrHash:   dvrHash,
-				Refreshed: refreshed,
-				Error:     errMsg,
+	// report sends the correlated outcome back to Foghorn. converged=true is the ONLY completion
+	// signal for the durable activation obligation — a delivery-only model would silently lose the
+	// command to a crash, list failure, or PushStart failure.
+	report := func(converged bool, cause string) {
+		if respond == nil {
+			return
+		}
+		respond(&ipcpb.ControlMessage{Payload: &ipcpb.ControlMessage_ActivatePushTargetsResult{
+			ActivatePushTargetsResult: &ipcpb.ActivatePushTargetsResult{
+				StreamName:       req.StreamName,
+				Converged:        converged,
+				Error:            cause,
+				SourceGeneration: req.GetSourceGeneration(),
 			},
 		}})
 	}
-}
-
-// activePushes tracks MistServer push IDs for multistream targets.
-// Key: stream_name, Value: map of target_id -> mist push ID.
-var (
-	activePushesMu sync.Mutex
-	activePushes   = map[string]map[string]int{}
-)
-
-func handleActivatePushTargets(logger logging.Logger, req *ipcpb.ActivatePushTargets) {
-	if req == nil || len(req.Targets) == 0 {
+	requestedGeneration := strings.TrimSpace(req.GetSourceGeneration())
+	generationFence, generationKnown := lockIngestFence(req.GetStreamName(), false)
+	currentGeneration := ""
+	activeGeneration := false
+	if generationKnown {
+		currentGeneration = generationFence.generation
+		activeGeneration = generationFence.active
+	}
+	if requestedGeneration == "" || currentGeneration == "" || currentGeneration != requestedGeneration || !activeGeneration {
+		if generationFence != nil {
+			generationFence.Unlock()
+		}
+		logger.WithFields(logging.Fields{
+			"stream_name":        req.GetStreamName(),
+			"command_generation": requestedGeneration,
+			"current_generation": currentGeneration,
+		}).Warn("Refusing push-target activation for a superseded ingest generation")
+		report(false, "activation generation is not current")
 		return
 	}
 
 	cfg := currentConfig
 	if cfg == nil {
+		generationFence.Unlock()
 		logger.Warn("config not initialized; cannot activate push targets")
+		report(false, "config not initialized")
 		return
 	}
 
@@ -2434,12 +2755,12 @@ func handleActivatePushTargets(logger logging.Logger, req *ipcpb.ActivatePushTar
 		"target_count": len(req.Targets),
 	}).Info("Activating multistream push targets")
 
-	activePushesMu.Lock()
-	if activePushes[req.StreamName] == nil {
-		activePushes[req.StreamName] = map[string]int{}
-	}
-	activePushesMu.Unlock()
-
+	// Request start, then confirm presence. Mist's controller serializes startPush and internally
+	// dedupes an already-active (stream, target) pair, so re-dispatched activations (the durable
+	// obligation retries until the converged acknowledgement) cannot create duplicate writers — no
+	// Helmsman-side locking or pre-listing is needed for that.
+	firstFailure := ""
+	started := false
 	for _, target := range req.Targets {
 		err := mistClient.PushStart(req.StreamName, target.TargetUri)
 		if err != nil {
@@ -2449,8 +2770,12 @@ func handleActivatePushTargets(logger logging.Logger, req *ipcpb.ActivatePushTar
 				"target_name": target.Name,
 				"error":       err,
 			}).Error("Failed to start push to target")
+			if firstFailure == "" {
+				firstFailure = err.Error()
+			}
 			continue
 		}
+		started = true
 
 		logger.WithFields(logging.Fields{
 			"stream_name": req.StreamName,
@@ -2458,15 +2783,66 @@ func handleActivatePushTargets(logger logging.Logger, req *ipcpb.ActivatePushTar
 			"target_name": target.Name,
 		}).Info("Started push to multistream target")
 	}
+	// Confirm PROCESS CREATION, not just command parsing: Mist's push_start API succeeds even when
+	// the push process could not be spawned, so re-list and require every requested target to be
+	// present before reporting converged. Anything beyond creation is Mist's contract — a one-shot
+	// push that later dies emits PUSH_END (and only configured auto_push entries restart), so
+	// continuing health is deliberately NOT this acknowledgement's business.
+	if firstFailure == "" && started {
+		if confirm, confirmErr := mistClient.PushList(); confirmErr != nil {
+			firstFailure = "post-start push list unavailable: " + confirmErr.Error()
+		} else {
+			nowLive := livePushTargetURIs(confirm, req.StreamName)
+			for _, target := range req.Targets {
+				if !nowLive[target.TargetUri] {
+					firstFailure = "push process not created for " + target.TargetId
+					break
+				}
+			}
+		}
+	}
+	generationFence.Unlock()
+	report(firstFailure == "", firstFailure)
+}
+
+// livePushTargetURIs maps the target URIs that currently have a live Mist push for the stream. Used
+// for the POST-start confirmation: every requested target must be present before the handler
+// acknowledges converged (process creation proof — Mist itself dedupes duplicate starts).
+func livePushTargetURIs(pushes []mist.PushInfo, streamName string) map[string]bool {
+	live := make(map[string]bool, len(pushes))
+	for _, push := range pushes {
+		if push.StreamName == streamName && push.TargetURI != "" {
+			live[push.TargetURI] = true
+		}
+	}
+	return live
 }
 
 func handleDeactivatePushTargets(logger logging.Logger, req *ipcpb.DeactivatePushTargets) {
 	if req == nil || req.StreamName == "" {
 		return
 	}
+	requestedGeneration := strings.TrimSpace(req.GetSourceGeneration())
+	generationFence, generationKnown := lockIngestFence(req.GetStreamName(), false)
+	currentGeneration := ""
+	if generationKnown {
+		currentGeneration = generationFence.generation
+	}
+	if requestedGeneration == "" || currentGeneration == "" || currentGeneration != requestedGeneration {
+		if generationFence != nil {
+			generationFence.Unlock()
+		}
+		logger.WithFields(logging.Fields{
+			"stream_name":        req.GetStreamName(),
+			"command_generation": requestedGeneration,
+			"current_generation": currentGeneration,
+		}).Warn("Refusing push-target deactivation for a superseded ingest generation")
+		return
+	}
 
 	cfg := currentConfig
 	if cfg == nil {
+		generationFence.Unlock()
 		return
 	}
 
@@ -2478,6 +2854,7 @@ func handleDeactivatePushTargets(logger logging.Logger, req *ipcpb.DeactivatePus
 	// List active pushes and stop any matching this stream
 	pushes, err := mistClient.PushList()
 	if err != nil {
+		generationFence.Unlock()
 		logger.WithFields(logging.Fields{
 			"stream_name": req.StreamName,
 			"error":       err,
@@ -2499,10 +2876,7 @@ func handleDeactivatePushTargets(logger logging.Logger, req *ipcpb.DeactivatePus
 			}
 		}
 	}
-
-	activePushesMu.Lock()
-	delete(activePushes, req.StreamName)
-	activePushesMu.Unlock()
+	generationFence.Unlock()
 
 	if stopped > 0 {
 		logger.WithFields(logging.Fields{

@@ -562,17 +562,13 @@ func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
 		// no source lease yet because STREAM_SOURCE only fires once per
 		// session. Install leases for everything Mist currently serves before
 		// reconciliation releases anything.
-		rebuildSourceLeasesFromMist(tracker, present)
+		rebuildSourceLeasesFromMist(tracker, present, control.LookupActiveDVRByInternalName)
 
+		// ReconcileSources forgets each released stream's source-registry entry
+		// under the tracker lock (atomic with the lease removal), so no separate
+		// registry forget is needed here — doing it separately could race a
+		// concurrent STREAM_SOURCE reinstalling the lease+entry.
 		if released := tracker.ReconcileSources(present); len(released) > 0 {
-			// The source registry holds the (streamName → localPath) mapping
-			// USER_NEW reads to acquire viewer leases. Forget released names so
-			// a stale registry entry can't serve a path that's no longer leased.
-			if reg := leases.GlobalSourceRegistry(); reg != nil {
-				for _, name := range released {
-					reg.Forget(name)
-				}
-			}
 			monitorLogger.WithField("released", released).Info("Source leases released by Mist reconciliation")
 		}
 	}
@@ -724,6 +720,12 @@ func buildOfflineLifecycleTrigger(nodeID, internalName string) *ipcpb.MistTrigge
 	}
 }
 
+// dvrRollingResolver maps a rolling-DVR playback token (the internal_name after
+// the "dvr+" prefix) to its dvr_hash and rolling manifest path. Production passes
+// control.LookupActiveDVRByInternalName; tests inject a stub. It is passed in per
+// call so the seam carries no shared state.
+type dvrRollingResolver func(internalName string) (dvrHash, manifestPath string, ok bool)
+
 // rebuildSourceLeasesFromMist installs SourceLeases for active Mist streams
 // that don't currently have one. Used in two situations:
 //
@@ -734,19 +736,37 @@ func buildOfflineLifecycleTrigger(nodeID, internalName string) *ipcpb.MistTrigge
 //     cached source resolution). Reconciliation backfills.
 //
 // VOD streams resolve via prometheusMonitor.artifactIndex (file scan).
-// DVR streams resolve via the chapter registry. Anything unresolved gets a
-// degraded source lease so cleanup paths see the protection — for DVR via
-// DegradedDvrCleanupActive; VOD path-keyed cleanup is safe because nothing
-// pins the (unknown) path, but operator DeleteVOD refuses because the
-// asset-keyed lease entry exists.
-func rebuildSourceLeasesFromMist(tracker *leases.Tracker, present map[string]struct{}) {
+// DVR streams (dvr+<internal_name>) resolve via the recovered DVR manager's
+// race-safe snapshot (internal_name → {dvr_hash, manifest path}). Anything
+// unresolved gets a degraded source lease so cleanup paths see the protection
+// — for DVR via DegradedDvrCleanupActive; VOD path-keyed cleanup is safe
+// because nothing pins the (unknown) path, but operator DeleteVOD refuses
+// because the asset-keyed lease entry exists.
+func sourceOutcomeLabel(o leases.SourceOutcome) string {
+	switch o {
+	case leases.SourceCreated:
+		return "created"
+	case leases.SourceUpgraded:
+		return "upgraded"
+	default:
+		return "unchanged"
+	}
+}
+
+func rebuildSourceLeasesFromMist(tracker *leases.Tracker, present map[string]struct{}, resolveDVR dvrRollingResolver) {
 	if tracker == nil {
 		return
 	}
 	for streamName := range present {
-		if tracker.HasSourceLease(streamName) {
-			continue
-		}
+		// Every present VOD/DVR stream is reconciled each poll through
+		// tracker.ReconcileResolvedSource — there is no separate
+		// has-lease/is-degraded pre-check, which could tear against a concurrent
+		// release and leave a present stream unprotected. Reconciliation creates a
+		// missing lease or upgrades a degraded one, but PRESERVES a resolved
+		// (STREAM_SOURCE-authoritative) lease — the artifact scan may lag and must
+		// never rewrite the authoritative path. Lease and source-registry entry
+		// update under one lock. Streams the poller cannot resolve get a degraded
+		// lease so destructive cleanup stays paused fail-closed.
 		if internalName, ok := leases.ParseVODInternalName(streamName); ok {
 			localPath := ""
 			if prometheusMonitor != nil {
@@ -764,42 +784,77 @@ func rebuildSourceLeasesFromMist(tracker *leases.Tracker, present map[string]str
 						paths = append(paths, sidecar)
 					}
 				}
-				tracker.AcquireSource(streamName, paths, key, nil, false)
-				if reg := leases.GlobalSourceRegistry(); reg != nil {
-					reg.Record(leases.SourceEntry{
-						StreamName:   streamName,
-						LocalPath:    localPath,
-						AssetType:    "vod",
-						InternalName: internalName,
-					})
+				entry := leases.SourceEntry{
+					StreamName:   streamName,
+					LocalPath:    localPath,
+					AssetType:    "vod",
+					InternalName: internalName,
 				}
-				monitorLogger.WithFields(logging.Fields{
-					"stream_name": streamName,
-					"local_path":  localPath,
-				}).Info("Rebuilt VOD source lease for active Mist stream")
+				// Reconcile: create if missing / upgrade if degraded, but never
+				// overwrite a resolved (STREAM_SOURCE-authoritative) lease with
+				// this possibly-stale scan path. Lease + registry update together.
+				if outcome := tracker.ReconcileResolvedSource(streamName, paths, key, nil, entry); outcome != leases.SourceUnchanged {
+					monitorLogger.WithFields(logging.Fields{
+						"stream_name": streamName,
+						"local_path":  localPath,
+						"outcome":     sourceOutcomeLabel(outcome),
+					}).Info("Rebuilt VOD source lease for active Mist stream")
+				}
 				continue
 			}
 			// VOD path unresolved: install a degraded asset-only lease so
 			// operator DeleteVOD refuses. Path-keyed cleanup paths cannot
-			// match this lease (no LocalPaths) — log loudly so ops can act.
-			tracker.AcquireSource(streamName, nil, key, nil, true)
-			monitorLogger.WithFields(logging.Fields{
-				"stream_name":   streamName,
-				"internal_name": internalName,
-			}).Warn("Active VOD stream has no local-path mapping; installed degraded lease (DeleteVOD will refuse; path-keyed cleanup cannot protect)")
+			// match this lease (no LocalPaths). Warn only on the transition to
+			// degraded, not every poll.
+			if tracker.EnsureDegradedSource(streamName, key) == leases.SourceCreated {
+				monitorLogger.WithFields(logging.Fields{
+					"stream_name":   streamName,
+					"internal_name": internalName,
+				}).Warn("Active VOD stream has no local-path mapping; installed degraded lease (DeleteVOD will refuse; path-keyed cleanup cannot protect)")
+			}
 			continue
 		}
-		// Active rolling DVR surface — rebuild artifact-level lease from
-		// the local rolling manifest path. Chapter playback flows
-		// through vod+ now, not dvr+.
-		if _, ok := leases.ParseDVRRollingPlaybackID(streamName); ok {
-			if dvrHash := leases.DeriveDvrHashFromRollingManifestPath(""); dvrHash != "" {
+		// Active rolling DVR surface — dvr+<internal_name>. Resolve it
+		// through the recovered DVR manager (jobs keyed by dvr_hash; a
+		// race-safe snapshot lookup maps internal_name → {dvr_hash,
+		// manifest path}). Chapter playback flows through vod+ now, not
+		// dvr+.
+		if internalName, ok := leases.ParseDVRRollingPlaybackID(streamName); ok {
+			if dvrHash, manifestPath, resolved := resolveDVR(internalName); resolved && dvrHash != "" {
+				// Resolved: install a NORMAL artifact-level lease pinning
+				// the rolling manifest. The DVR Manager owns rotation and
+				// per-segment cleanup, not the lease layer.
 				key := leases.AssetKey{Type: "dvr", Hash: dvrHash}
-				tracker.AcquireSource(streamName, nil, key, nil, true)
+				var paths []string
+				if manifestPath != "" {
+					paths = []string{manifestPath}
+				}
+				entry := leases.SourceEntry{
+					StreamName: streamName,
+					LocalPath:  manifestPath,
+					AssetType:  "dvr",
+					DvrHash:    dvrHash,
+				}
+				if outcome := tracker.ReconcileResolvedSource(streamName, paths, key, nil, entry); outcome != leases.SourceUnchanged {
+					monitorLogger.WithFields(logging.Fields{
+						"stream_name":   streamName,
+						"internal_name": internalName,
+						"dvr_hash":      dvrHash,
+						"outcome":       sourceOutcomeLabel(outcome),
+					}).Info("Rebuilt DVR source lease for active Mist stream")
+				}
+				continue
+			}
+			// Unresolved: the DVR job is not (yet) recovered, so we cannot
+			// map the stream to a dvr_hash or manifest path. Install a
+			// TYPE-ONLY degraded DVR lease so degradedDvrCount rises and
+			// DegradedDvrCleanupActive() becomes true — DVR destructive
+			// cleanup pauses fail-closed. Warn only on the transition.
+			if tracker.EnsureDegradedSource(streamName, leases.AssetKey{Type: "dvr"}) == leases.SourceCreated {
 				monitorLogger.WithFields(logging.Fields{
-					"stream_name": streamName,
-					"dvr_hash":    dvrHash,
-				}).Debug("Rebuilt DVR rolling lease for active Mist stream")
+					"stream_name":   streamName,
+					"internal_name": internalName,
+				}).Warn("Active DVR stream has no recovered DVR job; installed degraded DVR lease (destructive DVR cleanup paused fail-closed)")
 			}
 		}
 	}

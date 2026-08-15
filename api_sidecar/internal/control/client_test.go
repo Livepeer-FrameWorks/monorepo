@@ -458,8 +458,10 @@ func TestSendMistTriggerReconnectsAndReceivesResponse(t *testing.T) {
 	waitForControlMessage(t, stream.sendCh, "reconnected Mist trigger send")
 	waitForPendingTrigger(t, trigger.RequestId)
 	handleMistTriggerResponse(&ipcpb.MistTriggerResponse{
-		RequestId: "req-reconnect",
-		Response:  "ok",
+		RequestId:          "req-reconnect",
+		Response:           "ok",
+		IngestGeneration:   "generation-reconnect",
+		IngestConnectorPid: 301,
 	})
 
 	result := waitForMistTriggerResult(t, resultCh, "Mist trigger result after reconnect")
@@ -469,6 +471,9 @@ func TestSendMistTriggerReconnectsAndReceivesResponse(t *testing.T) {
 	}
 	if result.Response != "ok" {
 		t.Fatalf("expected response ok, got %q", result.Response)
+	}
+	if result.IngestGeneration != "generation-reconnect" {
+		t.Fatalf("expected ingest generation propagation, got %q", result.IngestGeneration)
 	}
 	if len(stream.sent) != 1 {
 		t.Fatalf("expected 1 send, got %d", len(stream.sent))
@@ -580,8 +585,10 @@ func TestSendMistTriggerRetriesAfterDisconnect(t *testing.T) {
 
 	waitForControlMessage(t, stream2.sendCh, "retried Mist trigger send after reconnect")
 	handleMistTriggerResponse(&ipcpb.MistTriggerResponse{
-		RequestId: trigger.RequestId,
-		Response:  "ack",
+		RequestId:          trigger.RequestId,
+		Response:           "ack",
+		IngestGeneration:   "generation-retry",
+		IngestConnectorPid: 302,
 	})
 
 	result := waitForMistTriggerResult(t, resultCh, "Mist trigger retry result")

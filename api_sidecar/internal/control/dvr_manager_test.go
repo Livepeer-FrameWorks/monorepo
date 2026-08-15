@@ -1,6 +1,7 @@
 package control
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,8 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
+
+var errTestListFail = errors.New("push list unavailable")
 
 func TestGetActiveDVRHashes_Empty(t *testing.T) {
 	prevDM := dvrManager
@@ -198,6 +201,10 @@ segments/seg0.ts
 	if err := os.WriteFile(filepath.Join(segmentsDir, "seg0.ts"), []byte("segment-zero"), 0644); err != nil {
 		t.Fatalf("write segment: %v", err)
 	}
+	// Recovery requires a valid descriptor naming the runtime the live push runs under.
+	if err := writeDVRJobMeta(outputDir, dvrJobMeta{InternalName: "internal", SourceRuntimeName: "live+internal"}); err != nil {
+		t.Fatalf("write descriptor: %v", err)
+	}
 
 	fakeMist := &fakeMistClient{
 		pushListItems: []mist.PushInfo{{
@@ -364,5 +371,92 @@ func TestStartRecording_AlreadyActive(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "already active") {
 		t.Fatalf("expected 'already active' error, got: %s", err.Error())
+	}
+}
+
+// seedOnDiskDVR writes a minimal on-disk DVR layout and returns its output dir.
+func seedOnDiskDVR(t *testing.T, storagePath, streamID, dvrHash string) string {
+	t.Helper()
+	outputDir := filepath.Join(storagePath, "dvr", streamID, dvrHash)
+	segmentsDir := filepath.Join(outputDir, "segments")
+	if err := os.MkdirAll(segmentsDir, 0755); err != nil {
+		t.Fatalf("mkdir segments: %v", err)
+	}
+	manifest := "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:6\n#EXTINF:6.000,\nsegments/seg0.ts\n#EXT-X-ENDLIST"
+	if err := os.WriteFile(filepath.Join(outputDir, dvrHash+".m3u8"), []byte(manifest), 0644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(segmentsDir, "seg0.ts"), []byte("seg-zero"), 0644); err != nil {
+		t.Fatalf("write seg0: %v", err)
+	}
+	return outputDir
+}
+
+// The on-disk recovery stop (in-memory job lost after a restart) must confirm the
+// writer is stopped: a live Mist push for this DVR (matched by the hash in its
+// target, since the stream name is unknown here) is stopped BEFORE completion.
+func TestStopRecoveredRecording_StopsLivePushBeforeCompletion(t *testing.T) {
+	clearConn()
+	storagePath := t.TempDir()
+	t.Setenv("HELMSMAN_STORAGE_LOCAL_PATH", storagePath)
+	dvrHash := "hash-recovered-live"
+	seedOnDiskDVR(t, storagePath, "stream-1", dvrHash)
+
+	mc := &fakeMistClient{pushListItems: []mist.PushInfo{
+		{ID: 99, StreamName: "live+x", TargetURI: "/data/dvr/s/" + dvrHash + "/segments/$c.ts"},
+	}}
+	dm := &DVRManager{logger: logging.NewLogger(), jobs: make(map[string]*DVRJob), storagePath: storagePath, mistClient: mc}
+
+	var sent []*ipcpb.ControlMessage
+	if err := dm.StopRecordingWithSender(dvrHash, func(m *ipcpb.ControlMessage) { sent = append(sent, m) }); err != nil {
+		t.Fatalf("StopRecordingWithSender: %v", err)
+	}
+	if mc.pushStopCalls != 1 || mc.lastStopID != 99 {
+		t.Fatalf("recovery must stop the live push (id 99) before completing; stopCalls=%d lastStopID=%d", mc.pushStopCalls, mc.lastStopID)
+	}
+	if len(sent) != 1 || sent[0].GetDvrStopped() == nil {
+		t.Fatalf("expected a single DVRStopped completion, got %d messages", len(sent))
+	}
+}
+
+// If the recovery stop cannot list pushes, it must NOT report completion (a live
+// writer may remain); the durable stop obligation re-drives it.
+func TestStopRecoveredRecording_ListFailureEmitsNoCompletion(t *testing.T) {
+	clearConn()
+	storagePath := t.TempDir()
+	t.Setenv("HELMSMAN_STORAGE_LOCAL_PATH", storagePath)
+	dvrHash := "hash-recovered-listfail"
+	seedOnDiskDVR(t, storagePath, "stream-1", dvrHash)
+
+	mc := &fakeMistClient{pushListErr: errTestListFail}
+	dm := &DVRManager{logger: logging.NewLogger(), jobs: make(map[string]*DVRJob), storagePath: storagePath, mistClient: mc}
+
+	var sent []*ipcpb.ControlMessage
+	if err := dm.StopRecordingWithSender(dvrHash, func(m *ipcpb.ControlMessage) { sent = append(sent, m) }); err != nil {
+		t.Fatalf("StopRecordingWithSender: %v", err)
+	}
+	if len(sent) != 0 {
+		t.Fatalf("no completion may be emitted when the push list cannot be confirmed, got %d messages", len(sent))
+	}
+}
+
+// The stop tombstone closes the stop-overtakes-start race: a stop at a generation
+// supersedes any start at a lower-or-equal generation for the same hash, but never a
+// strictly-newer start or an unrelated hash.
+func TestDVRStopTombstoneSupersedesStart(t *testing.T) {
+	dm := &DVRManager{logger: logging.NewLogger(), jobs: make(map[string]*DVRJob)}
+	dm.recordDVRStopTombstone("hash-race", 2)
+
+	if !dm.dvrStartSupersededByStop("hash-race", 1) {
+		t.Fatal("a start below the stop generation must be superseded")
+	}
+	if !dm.dvrStartSupersededByStop("hash-race", 2) {
+		t.Fatal("a start at the stop generation must be superseded (stop is terminal)")
+	}
+	if dm.dvrStartSupersededByStop("hash-race", 3) {
+		t.Fatal("a strictly-newer start must NOT be superseded by an older stop")
+	}
+	if dm.dvrStartSupersededByStop("other-hash", 1) {
+		t.Fatal("an unrelated hash must not be superseded")
 	}
 }

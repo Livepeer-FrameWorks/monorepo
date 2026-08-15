@@ -17,7 +17,6 @@ func resetGlobalsAfter(t *testing.T) {
 	savedReconcile := mistReconcileDone
 	bootMu.Unlock()
 	savedTracker := GlobalTracker()
-	savedSources := GlobalSourceRegistry()
 	savedHeat := GlobalHeat()
 	savedDeferred := GlobalDeferredStore()
 	t.Cleanup(func() {
@@ -25,7 +24,9 @@ func resetGlobalsAfter(t *testing.T) {
 		cleanupState = savedState
 		mistReconcileDone = savedReconcile
 		bootMu.Unlock()
-		Install(savedTracker, savedSources, savedHeat, savedDeferred)
+		// The tracker owns its registry, so restoring it with a nil registry
+		// (a no-op attach) keeps whatever registry it already had.
+		Install(savedTracker, nil, savedHeat, savedDeferred)
 	})
 }
 
@@ -108,7 +109,7 @@ func TestDeleteFileIfUnleased_Wrapper(t *testing.T) {
 			t.Fatal(err)
 		}
 		tr := NewTracker(nil, NewHeatTracker())
-		tr.AcquireSource("vod+abc", []string{path}, AssetKey{Type: "vod", Hash: "abc"}, nil, false)
+		tr.acquireSourceForTest("vod+abc", []string{path}, AssetKey{Type: "vod", Hash: "abc"}, nil, false)
 		Install(tr, nil, nil, nil)
 
 		if err := DeleteFileIfUnleased(path); !errors.Is(err, ErrLeaseHeld) {

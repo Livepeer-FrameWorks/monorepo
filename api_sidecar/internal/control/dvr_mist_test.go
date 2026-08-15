@@ -339,13 +339,16 @@ func TestStopRecording_PushStopError(t *testing.T) {
 		t.Fatalf("start failed: %v", err)
 	}
 
+	// StopRecording is the FORCE teardown (delete / startup deadline): it removes the
+	// job even if PushStop failed. The conservative Foghorn-stop path
+	// (StopRecordingWithSender) keeps the job on an unconfirmed stop — covered by
+	// TestStopRecording_UnconfirmedStopKeepsJobAndEmitsNoReport.
 	err = dm.StopRecording("hash-stoperr")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
 	if _, exists := dm.jobs["hash-stoperr"]; exists {
-		t.Fatal("expected job to be removed even after PushStop error")
+		t.Fatal("force teardown must remove the job even after PushStop error")
 	}
 }
 
@@ -368,7 +371,7 @@ func TestCreateOrRecreatePush_New(t *testing.T) {
 		Logger:     logging.NewLogger(),
 	}
 
-	pushID, err := dm.createOrRecreatePush(jobPushSnap(job), job.Logger)
+	pushID, _, err := dm.createOrRecreatePush(jobPushSnap(job))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -388,7 +391,7 @@ func TestCreateOrRecreatePush_WaitsForPushListVisibility(t *testing.T) {
 		Logger:     logging.NewLogger(),
 	}
 
-	pushID, err := dm.createOrRecreatePush(jobPushSnap(job), job.Logger)
+	pushID, _, err := dm.createOrRecreatePush(jobPushSnap(job))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -397,7 +400,10 @@ func TestCreateOrRecreatePush_WaitsForPushListVisibility(t *testing.T) {
 	}
 }
 
-func TestCreateOrRecreatePush_StaleCleanup(t *testing.T) {
+// An existing push with the EXACT identity is ADOPTED idempotently, not
+// stop-then-restarted — that avoids churn and, more importantly, a duplicate
+// writer if a retry raced the restart.
+func TestCreateOrRecreatePush_AdoptsExistingExactPush(t *testing.T) {
 	mc := &staleCleanupFakeMist{
 		existingPushes: []mist.PushInfo{
 			{ID: 10, StreamName: "live+test", TargetURI: "/data/dvr/hash-stale"},
@@ -413,15 +419,18 @@ func TestCreateOrRecreatePush_StaleCleanup(t *testing.T) {
 		Logger:     logging.NewLogger(),
 	}
 
-	pushID, err := dm.createOrRecreatePush(jobPushSnap(job), job.Logger)
+	pushID, _, err := dm.createOrRecreatePush(jobPushSnap(job))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if pushID != 99 {
-		t.Fatalf("expected push ID 99, got %d", pushID)
+	if pushID != 10 {
+		t.Fatalf("expected the existing exact push (10) to be adopted, got %d", pushID)
 	}
-	if len(mc.stoppedIDs) != 1 || mc.stoppedIDs[0] != 10 {
-		t.Fatalf("expected old push 10 to be stopped, got %v", mc.stoppedIDs)
+	if len(mc.stoppedIDs) != 0 {
+		t.Fatalf("adoption must not stop the existing push, stopped %v", mc.stoppedIDs)
+	}
+	if mc.pushStarted {
+		t.Fatal("adoption must not start a duplicate push")
 	}
 }
 
@@ -440,7 +449,7 @@ func TestCreateOrRecreatePush_MatchesMistExpandedDVRTarget(t *testing.T) {
 		Logger:     logging.NewLogger(),
 	}
 
-	pushID, err := dm.createOrRecreatePush(jobPushSnap(job), job.Logger)
+	pushID, _, err := dm.createOrRecreatePush(jobPushSnap(job))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -452,7 +461,10 @@ func TestCreateOrRecreatePush_MatchesMistExpandedDVRTarget(t *testing.T) {
 	}
 }
 
-func TestCreateOrRecreatePush_CleansMistExpandedStaleDVRTarget(t *testing.T) {
+// A push whose target Mist has EXPANDED (differs from the one we sent but still
+// carries our hash under our runtime) is our push — it is adopted by exact
+// runtime + hash identity, not restarted.
+func TestCreateOrRecreatePush_AdoptsMistExpandedDVRTarget(t *testing.T) {
 	const dvrHash = "20260526212719e6b54001bbf15619"
 	mc := &staleCleanupFakeMist{
 		existingPushes: []mist.PushInfo{
@@ -473,15 +485,15 @@ func TestCreateOrRecreatePush_CleansMistExpandedStaleDVRTarget(t *testing.T) {
 		Logger:     logging.NewLogger(),
 	}
 
-	pushID, err := dm.createOrRecreatePush(jobPushSnap(job), job.Logger)
+	pushID, _, err := dm.createOrRecreatePush(jobPushSnap(job))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if pushID != 99 {
-		t.Fatalf("expected push ID 99, got %d", pushID)
+	if pushID != 10 {
+		t.Fatalf("expected the Mist-expanded existing push (10) to be adopted, got %d", pushID)
 	}
-	if len(mc.stoppedIDs) != 1 || mc.stoppedIDs[0] != 10 {
-		t.Fatalf("expected old push 10 to be stopped, got %v", mc.stoppedIDs)
+	if len(mc.stoppedIDs) != 0 || mc.pushStarted {
+		t.Fatalf("adoption must not stop or restart; stopped=%v started=%v", mc.stoppedIDs, mc.pushStarted)
 	}
 }
 
@@ -500,7 +512,7 @@ func TestCreateOrRecreatePush_PushListError(t *testing.T) {
 	}
 
 	// PushStart will succeed but subsequent PushList to find new push will fail
-	_, err := dm.createOrRecreatePush(jobPushSnap(job), job.Logger)
+	_, _, err := dm.createOrRecreatePush(jobPushSnap(job))
 	if err == nil {
 		t.Fatal("expected error when PushList fails after PushStart")
 	}
@@ -592,9 +604,8 @@ func TestMaintainPushStatus_FinalizingJobSkipped(t *testing.T) {
 	mc := &fakeMistClient{}
 	dm := newDVRManagerWithMist(t, mc)
 
-	// finalizing replaces stopped under the new state machine; either way
-	// maintainPushStatus must not poke MistServer for a job that's on its
-	// way out.
+	// A finalizing job is on its way out; maintainPushStatus must not poke
+	// MistServer for it.
 	job := &DVRJob{
 		DVRHash: "hash-finalizing",
 		Status:  "finalizing",
@@ -710,5 +721,266 @@ func TestMaintainPushStatus_MissingPushWithSegmentsDoesNotRecreate(t *testing.T)
 	}
 	if !completionSent {
 		t.Fatal("expected completion notification to be sent")
+	}
+}
+
+// erroredPushFakeMist holds a push that reports error logs; PushStop removes it,
+// PushStart adds a fresh (clean) push. It records stop/start calls.
+type erroredPushFakeMist struct {
+	pushes     []mist.PushInfo
+	stopCalls  []int
+	startCalls int
+	nextID     int
+}
+
+func (e *erroredPushFakeMist) PushList() ([]mist.PushInfo, error) {
+	out := make([]mist.PushInfo, len(e.pushes))
+	copy(out, e.pushes)
+	return out, nil
+}
+func (e *erroredPushFakeMist) PushStop(id int) error {
+	e.stopCalls = append(e.stopCalls, id)
+	kept := e.pushes[:0]
+	for _, p := range e.pushes {
+		if p.ID != id {
+			kept = append(kept, p)
+		}
+	}
+	e.pushes = kept
+	return nil
+}
+func (e *erroredPushFakeMist) PushStart(s, tURI string) error {
+	e.startCalls++
+	e.nextID++
+	e.pushes = append(e.pushes, mist.PushInfo{ID: 900 + e.nextID, StreamName: s, TargetURI: tURI})
+	return nil
+}
+
+// An errored (but present) push must be STOPPED and REPLACED by the monitor, not
+// adopted as-is — otherwise a wedged push lingers forever.
+func TestMaintainPushStatus_ErroredPushIsStoppedAndReplaced(t *testing.T) {
+	useFastInitialPushRetry(t)
+	const dvrHash = "hash-errored"
+	target := "/data/dvr/s/" + dvrHash + "/segments/$c.ts#m3u8=../" + dvrHash + ".m3u8"
+	mc := &erroredPushFakeMist{pushes: []mist.PushInfo{
+		{ID: 7, StreamName: "live+x", TargetURI: target, Logs: []string{"error: DTSC connection reset"}},
+	}}
+	job := &DVRJob{
+		DVRHash: dvrHash, InternalName: "x", StreamName: "live+x", TargetURI: target, PushID: 7,
+		Config: &ipcpb.DVRConfig{}, Status: "recording", MaxRetries: MaxDVRRetries, SegmentCount: 3,
+		Logger: logging.NewLogger(), SendFunc: func(*ipcpb.ControlMessage) {}, SyncedSegments: make(map[string]bool),
+	}
+	dm := &DVRManager{logger: logging.NewLogger(), jobs: map[string]*DVRJob{dvrHash: job}, mistClient: mc}
+
+	dm.maintainPushStatus(job)
+
+	if len(mc.stopCalls) != 1 || mc.stopCalls[0] != 7 {
+		t.Fatalf("errored push (7) must be stopped, stopCalls=%v", mc.stopCalls)
+	}
+	if mc.startCalls != 1 {
+		t.Fatalf("a fresh push must be started, startCalls=%d", mc.startCalls)
+	}
+	dm.mutex.RLock()
+	pid := dm.jobs[dvrHash].PushID
+	dm.mutex.RUnlock()
+	if pid == 7 || pid == 0 {
+		t.Fatalf("job must point at the NEW push, got PushID=%d", pid)
+	}
+}
+
+// startOnceNeverVisibleFakeMist accepts PushStart but never lists the push
+// (accepted-but-unconfirmed). It counts PushStart calls.
+type startOnceNeverVisibleFakeMist struct{ startCalls int }
+
+func (s *startOnceNeverVisibleFakeMist) PushList() ([]mist.PushInfo, error) { return nil, nil }
+func (s *startOnceNeverVisibleFakeMist) PushStop(int) error                 { return nil }
+func (s *startOnceNeverVisibleFakeMist) PushStart(string, string) error     { s.startCalls++; return nil }
+
+// A recreate whose PushStart is accepted but never confirmed must NOT be
+// re-issued on the next monitor pass (that would create a second writer). The
+// job is quarantined at PushID 0 and only adopted by identity thereafter.
+func TestMaintainPushStatus_UnconfirmedRecreateDoesNotReissue(t *testing.T) {
+	useFastInitialPushRetry(t)
+	const dvrHash = "hash-unconfirmed"
+	target := "/data/dvr/s/" + dvrHash + "/segments/$c.ts#m3u8=../" + dvrHash + ".m3u8"
+	mc := &startOnceNeverVisibleFakeMist{}
+	job := &DVRJob{
+		DVRHash: dvrHash, InternalName: "x", StreamName: "live+x", TargetURI: target, PushID: 7,
+		Config: &ipcpb.DVRConfig{}, Status: "recording", MaxRetries: MaxDVRRetries, SegmentCount: 0,
+		Logger: logging.NewLogger(), SendFunc: func(*ipcpb.ControlMessage) {}, SyncedSegments: make(map[string]bool),
+	}
+	dm := &DVRManager{logger: logging.NewLogger(), jobs: map[string]*DVRJob{dvrHash: job}, mistClient: mc}
+
+	// Pass 1: push gone → recreate → PushStart accepted but never visible.
+	dm.maintainPushStatus(job)
+	dm.mutex.RLock()
+	pid := dm.jobs[dvrHash].PushID
+	dm.mutex.RUnlock()
+	if pid != 0 {
+		t.Fatalf("an unconfirmed recreate must quarantine at PushID 0, got %d", pid)
+	}
+	// Pass 2 (and 3): must NOT issue another PushStart.
+	dm.maintainPushStatus(job)
+	dm.maintainPushStatus(job)
+	if mc.startCalls != 1 {
+		t.Fatalf("PushStart must be issued exactly once across retries, got %d", mc.startCalls)
+	}
+}
+
+// On stop, an accepted-but-unconfirmed push (we hold no id, PushID 0) must still
+// be stopped by IDENTITY — never skipped — so a live writer is not orphaned and
+// the recording is not falsely reported complete over it.
+func TestStopRecording_UnconfirmedPushStoppedByIdentity(t *testing.T) {
+	mc := &startAwareFakeMist{pushIDToReturn: 91}
+	dm := newDVRManagerWithMist(t, mc)
+	if err := dm.StartRecording("hash-unconf-stop", "stream-1", "test-u", "live+test-u", "http://source", &ipcpb.DVRConfig{}, nil); err != nil {
+		t.Fatalf("start failed: %v", err)
+	}
+	// A push is live under our identity, but the job holds no id (quarantined).
+	dm.mutex.Lock()
+	dm.jobs["hash-unconf-stop"].PushID = 0
+	dm.mutex.Unlock()
+
+	if err := dm.StopRecording("hash-unconf-stop"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if atomic.LoadInt64(&mc.pushStopCalls) != 1 {
+		t.Fatalf("a live push under our identity must be stopped even with PushID 0, got %d PushStop calls", atomic.LoadInt64(&mc.pushStopCalls))
+	}
+}
+
+// A quarantined (PushID 0) recording whose accepted-but-unconfirmed push is not
+// visible in the push list must NEVER re-issue PushStart — the command may have
+// been accepted while Mist has not yet listed it, and re-issuing would create a
+// second writer against the same target. Even with the retry grace long elapsed,
+// the monitor adopts-if-listed and otherwise waits; convergence is the session
+// lifecycle's job (Foghorn's STREAM_END → StopDVRForEndedSource), not a re-issue.
+func TestMaintainPushStatus_QuarantinedPushNeverReissues(t *testing.T) {
+	useFastInitialPushRetry(t)
+	mc := &startAwareFakeMist{pushIDToReturn: 45}
+	dm := newDVRManagerWithMist(t, mc)
+	if err := dm.StartRecording("hash-quarantine", "stream-1", "test-q", "live+test-q", "http://source", &ipcpb.DVRConfig{}, nil); err != nil {
+		t.Fatalf("start failed: %v", err)
+	}
+	dm.mutex.Lock()
+	j := dm.jobs["hash-quarantine"]
+	j.PushID = 0
+	j.RetryCount = 1
+	j.LastPushAttempt = time.Now().Add(-10 * time.Minute) // grace long elapsed
+	dm.mutex.Unlock()
+	mc.started = false // accepted-but-unlistable: push never appears in the list
+	startsBefore := mc.startCalls
+
+	dm.maintainPushStatus(j)
+	dm.maintainPushStatus(j)
+
+	if mc.startCalls != startsBefore {
+		t.Fatalf("quarantined push must NOT re-issue (double-writer hazard), startCalls %d -> %d", startsBefore, mc.startCalls)
+	}
+}
+
+// listFailFakeMist cannot confirm the push list (PushList errors), so an id-unknown
+// stop can never prove nothing is live.
+type listFailFakeMist struct{}
+
+func (listFailFakeMist) PushList() ([]mist.PushInfo, error) { return nil, fmt.Errorf("list boom") }
+func (listFailFakeMist) PushStop(int) error                 { return nil }
+func (listFailFakeMist) PushStart(string, string) error     { return nil }
+
+// When PushStop fails, the writer may still be live: the stop is NOT confirmed, so
+// no DVRStopped (success OR failed) may be emitted — a failed report would
+// terminalize the artifact on Foghorn and clear its stop obligation — and the job
+// must be kept so the durable stop obligation re-drives the stop.
+func TestStopRecording_UnconfirmedStopKeepsJobAndEmitsNoReport(t *testing.T) {
+	mc := &startAwareFakeMist{pushIDToReturn: 55, pushStopErr: fmt.Errorf("mist unreachable")}
+	dm := newDVRManagerWithMist(t, mc)
+	if err := dm.StartRecording("hash-nostop", "stream-1", "test-n", "live+test-n", "http://source", &ipcpb.DVRConfig{}, nil); err != nil {
+		t.Fatalf("start failed: %v", err)
+	}
+	stopped := 0
+	sendFunc := func(m *ipcpb.ControlMessage) {
+		if m.GetDvrStopped() != nil {
+			stopped++
+		}
+	}
+	if err := dm.StopRecordingWithSender("hash-nostop", sendFunc); err != nil {
+		t.Fatalf("unconfirmed stop must return nil (no failed report), got %v", err)
+	}
+	if stopped != 0 {
+		t.Fatalf("no DVRStopped may be emitted while the writer may be live, got %d", stopped)
+	}
+	dm.mutex.RLock()
+	_, exists := dm.jobs["hash-nostop"]
+	dm.mutex.RUnlock()
+	if !exists {
+		t.Fatal("job must be kept for stop-obligation retry when the stop is unconfirmed")
+	}
+}
+
+// When the id is unknown (PushID 0) and PushList fails, we cannot confirm nothing
+// is live — same invariant: no terminal report, keep the job.
+func TestStopRecording_UnconfirmedListFailureKeepsJob(t *testing.T) {
+	dm := newDVRManagerWithMist(t, listFailFakeMist{})
+	job := &DVRJob{
+		DVRHash: "hash-listfail", StreamName: "live+x", TargetURI: "/data/dvr/x/seg.ts",
+		PushID: 0, Status: "recording", Config: &ipcpb.DVRConfig{},
+		Logger: logging.NewLogger(), SyncedSegments: make(map[string]bool), StartTime: time.Now(),
+	}
+	dm.mutex.Lock()
+	dm.jobs["hash-listfail"] = job
+	dm.mutex.Unlock()
+
+	stopped := 0
+	sendFunc := func(m *ipcpb.ControlMessage) {
+		if m.GetDvrStopped() != nil {
+			stopped++
+		}
+	}
+	if err := dm.StopRecordingWithSender("hash-listfail", sendFunc); err != nil {
+		t.Fatalf("unconfirmed stop must return nil, got %v", err)
+	}
+	if stopped != 0 {
+		t.Fatalf("no DVRStopped for an unconfirmable stop, got %d", stopped)
+	}
+	dm.mutex.RLock()
+	_, exists := dm.jobs["hash-listfail"]
+	dm.mutex.RUnlock()
+	if !exists {
+		t.Fatal("job must be kept when the stop cannot be confirmed")
+	}
+}
+
+// PushID 0 with an EMPTY successful list must NOT confirm a stop: an accepted push
+// can be live but unlisted (the same non-authoritative-absence invariant the
+// monitor uses). No DVRStopped is emitted and the job is kept for the durable
+// stop-obligation retry — never a false completion over a possibly-live writer.
+func TestStopRecording_UnconfirmedEmptyListIsNotAuthoritative(t *testing.T) {
+	dm := newDVRManagerWithMist(t, &startOnceNeverVisibleFakeMist{})
+	job := &DVRJob{
+		DVRHash: "hash-empty", StreamName: "live+x", TargetURI: "/data/dvr/x/seg.ts",
+		PushID: 0, Status: "recording", Config: &ipcpb.DVRConfig{},
+		Logger: logging.NewLogger(), SyncedSegments: make(map[string]bool), StartTime: time.Now(),
+	}
+	dm.mutex.Lock()
+	dm.jobs["hash-empty"] = job
+	dm.mutex.Unlock()
+
+	stopped := 0
+	sendFunc := func(m *ipcpb.ControlMessage) {
+		if m.GetDvrStopped() != nil {
+			stopped++
+		}
+	}
+	if err := dm.StopRecordingWithSender("hash-empty", sendFunc); err != nil {
+		t.Fatalf("unconfirmed stop must return nil, got %v", err)
+	}
+	if stopped != 0 {
+		t.Fatalf("an empty list is not authoritative; no DVRStopped may be emitted, got %d", stopped)
+	}
+	dm.mutex.RLock()
+	_, exists := dm.jobs["hash-empty"]
+	dm.mutex.RUnlock()
+	if !exists {
+		t.Fatal("job must be kept when an empty list cannot confirm the stop")
 	}
 }

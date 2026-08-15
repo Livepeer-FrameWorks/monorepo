@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -45,16 +47,20 @@ const (
 	MaxDVRRetries         = 10               // Maximum push recreation attempts
 	InitialRetryDelay     = 5 * time.Second  // Initial delay between retries
 	MaxRetryDelay         = 60 * time.Second // Maximum delay between retries
-	PushMonitorInterval   = 5 * time.Second  // How often to check push status
 	dvrEvictionBatchSize  = 500
 	maxDVREvictionBatches = 10
 )
 
 var (
+	PushMonitorInterval       = 5 * time.Second // How often to check push status (var so tests can shorten it)
 	initialPushRetryFor       = 30 * time.Second
 	initialPushRetryEvery     = 2 * time.Second
 	pushListVisibilityFor     = 2 * time.Second
 	pushListVisibilityPollFor = 100 * time.Millisecond
+	// dvrStartupTimeout bounds how long a job may stay "starting" (e.g. an
+	// accepted-but-unconfirmed push whose exact identity never appears) before
+	// the monitor stops it. A var so tests can shorten it.
+	dvrStartupTimeout = 5 * time.Minute
 )
 
 // DVRJob represents a running DVR recording session
@@ -95,8 +101,8 @@ type DVRJob struct {
 	// identity (PushID / StreamName / TargetURI) or terminal status. A push
 	// recreator snapshots it before releasing the lock for Mist network calls
 	// and commits a new PushID only if it is unchanged; a bumped generation
-	// means another writer (source takeover, stop, or a concurrent recreate)
-	// won the race, so the freshly-created push is stale and must be stopped.
+	// means another writer (a stop or a concurrent recreate) won the race, so
+	// the freshly-created push is stale and must be stopped.
 	pushGeneration uint64
 }
 
@@ -119,6 +125,188 @@ type DVRManager struct {
 	// Tests inject a stub so they don't depend on host disk pressure.
 	// Nil means use the production storage admission check.
 	diskCheck func(path string, requiredBytes uint64) error
+	// metaWriter persists the DVR job identity sidecar. Nil means production
+	// writeDVRJobMeta; tests inject a per-manager stub for deterministic fault
+	// injection (avoids mutable package-global shared state under parallel tests).
+	metaWriter func(outputDir string, meta dvrJobMeta) error
+
+	// startupTimeout / pushMonitorInterval override the package defaults per
+	// manager. Zero means use the default. Kept per-manager (not a mutable
+	// global) so tests can shorten them without racing monitor goroutines that
+	// other tests left running.
+	startupTimeout      time.Duration
+	pushMonitorInterval time.Duration
+
+	// stopTombstones records, per dvr_hash, the highest DVRStop command generation
+	// seen. A DVRStart whose generation is <= a hash's stop tombstone is superseded by
+	// a newer stop and MUST be rejected idempotently — otherwise a stop that overtook a
+	// start (the start committed 'starting' on Foghorn but its DVRStart lost the race
+	// to the DVRStop) would start a live writer behind a terminal Foghorn row. Bounded
+	// by TTL eviction. Guarded by mutex.
+	stopTombstones map[string]dvrStopTombstone
+
+	// absenceEvidence accumulates, per dvr_hash, evidence that a recording's Mist push is
+	// genuinely gone before any DESTRUCTIVE teardown (delete, restart-recovery completion,
+	// startup-deadline terminalization). A single empty PushList is NOT proof of absence —
+	// an accepted push can be momentarily unlisted — so a terminal action requires
+	// dvrAbsenceThreshold observations, spaced at least dvrAbsenceMinInterval apart and
+	// spanning at least dvrAbsenceGrace, that all found the push absent from a successful
+	// list AND saw an UNCHANGED on-disk fingerprint (segment-file count, total bytes, and the
+	// newest segment's name + mtime — see dvrFingerprint). Any change — a new segment, a growing
+	// current segment, a rolling window advancing its newest — resets it, so a writer that is still
+	// PROGRESSING on disk is never classified absent. Bounded residual (honest): a writer that is
+	// genuinely live but STALLED (absent from a successful list AND advancing no segment for the full
+	// convergence window) IS terminalized after the grace — this is a bounded-confidence filesystem
+	// policy, not a liveness proof. Guarded by mutex.
+	absenceEvidence map[string]*dvrAbsenceState
+
+	// nowFn is the clock (nil = time.Now); tests inject a controllable clock so the
+	// time-based absence grace/interval are deterministic.
+	nowFn func() time.Time
+}
+
+const (
+	// dvrAbsenceThreshold is the minimum number of no-progress absent observations.
+	dvrAbsenceThreshold = 3
+	// dvrAbsenceGrace is the minimum wall-clock span from the first absent observation to
+	// convergence — a real elapsed grace, not just a count, so a burst of re-drives can never
+	// terminalize a recording that has only briefly been unlisted.
+	dvrAbsenceGrace = 30 * time.Second
+	// dvrAbsenceMinInterval is the minimum spacing between COUNTED observations, so N rapid
+	// concurrent teardown commands collapse to one observation instead of converging at once.
+	dvrAbsenceMinInterval = 5 * time.Second
+)
+
+// dvrAbsenceState is the per-hash bounded-absence evidence.
+type dvrAbsenceState struct {
+	observations    int       // spaced no-change absent observations
+	observed        bool      // at least one observation recorded (lastFingerprint is valid)
+	lastFingerprint string    // recording fingerprint at the last observation
+	firstAbsentAt   time.Time // first counted absent observation (grace anchor)
+	lastCountedAt   time.Time // last counted observation (min-interval rate limit)
+}
+
+func (dm *DVRManager) now() time.Time {
+	if dm.nowFn != nil {
+		return dm.nowFn()
+	}
+	return time.Now()
+}
+
+type dvrStopTombstone struct {
+	gen int64
+	at  time.Time
+}
+
+// dvrStopTombstoneTTL bounds the tombstone map. It must exceed the window in which a
+// stale DVRStart can still be (re-)dispatched for a stopped hash — comfortably past
+// DVRStartingRecoveryJob's hard grace — so a real superseding start is never missed.
+const dvrStopTombstoneTTL = time.Hour
+
+// recordDVRStopTombstone marks dvrHash stopped at command generation gen (highest
+// wins), so a later-arriving lower-or-equal-generation DVRStart is rejected. Called
+// on every DVRStop, before the stop is applied, so a stop that arrives before its
+// recording even exists still blocks the racing start.
+func (dm *DVRManager) recordDVRStopTombstone(dvrHash string, gen int64) {
+	if dvrHash == "" {
+		return
+	}
+	now := time.Now()
+	dm.mutex.Lock()
+	defer dm.mutex.Unlock()
+	if dm.stopTombstones == nil {
+		dm.stopTombstones = make(map[string]dvrStopTombstone)
+	}
+	if cur, ok := dm.stopTombstones[dvrHash]; !ok || gen > cur.gen {
+		dm.stopTombstones[dvrHash] = dvrStopTombstone{gen: gen, at: now}
+	}
+	// Opportunistic eviction keeps the map bounded (small in practice).
+	for h, t := range dm.stopTombstones {
+		if now.Sub(t.at) > dvrStopTombstoneTTL {
+			delete(dm.stopTombstones, h)
+		}
+	}
+}
+
+// observeAbsenceConverged records ONE bounded-absence observation for a DVR whose push was
+// found absent from a SUCCESSFUL PushList, and reports whether the evidence has converged
+// (the push is now treated as genuinely gone). segments/sizeBytes are the recording's
+// current manifest segment count and total recorded byte size; readOK is false when the
+// recording could not be located/read (inconclusive — NEVER counts as idle, never converges).
+//
+// Progress since the last observation — MORE segments OR a LARGER byte size (a live writer
+// still appending to its current segment grows the bytes even without a new manifest entry)
+// — resets the evidence. Convergence requires all of: >= dvrAbsenceThreshold observations,
+// each spaced >= dvrAbsenceMinInterval apart (so rapid re-drives collapse to one), and a
+// total span >= dvrAbsenceGrace. A caller MUST NOT do anything destructive until this
+// returns true.
+func (dm *DVRManager) observeAbsenceConverged(dvrHash, fingerprint string, readOK bool) bool {
+	if dvrHash == "" || !readOK {
+		return false
+	}
+	now := dm.now()
+	dm.mutex.Lock()
+	defer dm.mutex.Unlock()
+	if dm.absenceEvidence == nil {
+		dm.absenceEvidence = make(map[string]*dvrAbsenceState)
+	}
+	st := dm.absenceEvidence[dvrHash]
+	if st == nil {
+		st = &dvrAbsenceState{}
+		dm.absenceEvidence[dvrHash] = st
+	}
+	if st.observed && fingerprint != st.lastFingerprint {
+		// ANY change to the fingerprint (a new segment in a bounded rolling window — where
+		// count stays constant and bytes can stay flat or fall — a growing current segment, a
+		// new newest-segment mtime/name) means the writer is still live. Reset the window.
+		st.observations = 0
+		st.lastFingerprint = fingerprint
+		st.firstAbsentAt = time.Time{}
+		st.lastCountedAt = time.Time{}
+		return false
+	}
+	// Rate-limit: an observation closer than the min interval to the last counted one does not
+	// advance the evidence (bounds a burst of concurrent/rapid teardown attempts).
+	if st.observed && !st.lastCountedAt.IsZero() && now.Sub(st.lastCountedAt) < dvrAbsenceMinInterval {
+		return false
+	}
+	if st.firstAbsentAt.IsZero() {
+		st.firstAbsentAt = now
+	}
+	st.observed = true
+	st.lastFingerprint = fingerprint
+	st.lastCountedAt = now
+	st.observations++
+	return st.observations >= dvrAbsenceThreshold && now.Sub(st.firstAbsentAt) >= dvrAbsenceGrace
+}
+
+// clearAbsenceEvidence drops a DVR's accumulated absence evidence — called when a live push
+// is found (or the recording is otherwise resolved) so a later absence starts a fresh count.
+func (dm *DVRManager) clearAbsenceEvidence(dvrHash string) {
+	if dvrHash == "" {
+		return
+	}
+	dm.mutex.Lock()
+	delete(dm.absenceEvidence, dvrHash)
+	dm.mutex.Unlock()
+}
+
+// dvrStartSupersededByStop reports whether a DVRStart at startGen for dvrHash is
+// superseded by an already-recorded stop (tombstone generation >= startGen).
+func (dm *DVRManager) dvrStartSupersededByStop(dvrHash string, startGen int64) bool {
+	dm.mutex.RLock()
+	defer dm.mutex.RUnlock()
+	t, ok := dm.stopTombstones[dvrHash]
+	return ok && t.gen >= startGen
+}
+
+// persistJobMeta writes the start-descriptor sidecar via the manager's injected
+// writer (production writeDVRJobMeta when unset).
+func (dm *DVRManager) persistJobMeta(outputDir string, meta dvrJobMeta) error {
+	if dm.metaWriter != nil {
+		return dm.metaWriter(outputDir, meta)
+	}
+	return writeDVRJobMeta(outputDir, meta)
 }
 
 func (dm *DVRManager) hasSpaceFor(path string, requiredBytes uint64) error {
@@ -202,6 +390,40 @@ func LookupActiveDVR(dvrHash string) (*DVRJob, bool) {
 	defer dvrManager.mutex.RUnlock()
 	job, ok := dvrManager.jobs[dvrHash]
 	return job, ok
+}
+
+// LookupActiveDVRByInternalName resolves a rolling-DVR playback token (the
+// internal_name after the "dvr+" prefix, which the edge serves as
+// dvr+<internal_name>) to the recording's dvr_hash and rolling manifest path.
+// The jobs map is keyed by dvr_hash, so this scans under the read lock and
+// returns a value snapshot — no *DVRJob escapes the lock, so the caller can
+// never race a concurrent mutation of the job's fields.
+//
+// It returns ok=false (unresolved) both when NO active recording matches and when
+// MORE THAN ONE does. Fresh-per-session recording can leave an old and a new
+// recording sharing an internal_name (possibly on the same node); there is no stable
+// identity here to pick the right one, so it FAILS CLOSED rather than returning an
+// arbitrary map-iteration match — the caller then installs a degraded DVR lease and
+// destructive cleanup pauses for the internal_name (protecting both) instead of
+// pinning one manifest and leaving the other's files exposed.
+func LookupActiveDVRByInternalName(internalName string) (dvrHash, manifestPath string, ok bool) {
+	if dvrManager == nil || internalName == "" {
+		return "", "", false
+	}
+	dvrManager.mutex.RLock()
+	defer dvrManager.mutex.RUnlock()
+	var matchHash, matchManifest string
+	matches := 0
+	for _, job := range dvrManager.jobs {
+		if job.InternalName == internalName {
+			matches++
+			matchHash, matchManifest = job.DVRHash, job.ManifestPath
+		}
+	}
+	if matches != 1 {
+		return "", "", false
+	}
+	return matchHash, matchManifest, true
 }
 
 // SegmentInRollingManifest reports whether a segment file is referenced by
@@ -313,10 +535,23 @@ func (dm *DVRManager) EvictUploadedSegments(dvrHash string, candidates []string,
 // exists on disk. Used by post-stop reclaim where LookupActiveDVR
 // misses; mirrors the resolveDVRDir helper used by chapter finalize.
 func resolveDVRSegmentsDirByHash(dvrHash string) string {
+	dir, _ := resolveDVRSegmentsDirByHashChecked(dvrHash)
+	return dir
+}
+
+// resolveDVRSegmentsDirByHashChecked is resolveDVRSegmentsDirByHash with the scan status the
+// absence-convergence path needs: scanOK is FALSE only when the storage root itself could not be
+// scanned (a genuine read error → inconclusive). scanOK is TRUE when the scan succeeded — including
+// when NO layout for the hash exists (dir==""), which is the STRONGEST evidence the recording is gone
+// and MUST count toward absence convergence rather than being treated as an inconclusive read failure.
+func resolveDVRSegmentsDirByHashChecked(dvrHash string) (segmentsDir string, scanOK bool) {
 	dvrRoot := filepath.Join(sidecarcfg.GetStoragePath(), "dvr")
 	entries, err := os.ReadDir(dvrRoot)
 	if err != nil {
-		return ""
+		if os.IsNotExist(err) {
+			return "", true // no dvr root at all → nothing is recorded → genuinely absent
+		}
+		return "", false // genuine read error → inconclusive
 	}
 	for _, e := range entries {
 		if !e.IsDir() {
@@ -324,10 +559,10 @@ func resolveDVRSegmentsDirByHash(dvrHash string) string {
 		}
 		candidate := filepath.Join(dvrRoot, e.Name(), dvrHash, "segments")
 		if info, statErr := os.Stat(candidate); statErr == nil && info.IsDir() {
-			return candidate
+			return candidate, true
 		}
 	}
-	return ""
+	return "", true // scanned the root, no layout for this hash → genuinely absent
 }
 
 // DropUnsyncedSegment force-evicts a single segment that has NOT been
@@ -552,114 +787,6 @@ func (dm *DVRManager) syncSpecificSegment(job *DVRJob, filePath string, mediaSta
 	// instead of a recovery bridge.
 }
 
-// UpdateSource refreshes the DVR source override + force-recreates the
-// Mist push for an existing job when the source publisher moves to a
-// different ingest node mid-recording. Called from the takeover-aware
-// DVRUpdateSourceRequest handler. Returns refreshed=false if no job for
-// the given hash exists locally (e.g. the storage node restarted and the
-// job is gone).
-//
-// Sequence is order-critical:
-//
-//  1. Stop the old push by recorded PushID — dvrPushMatchesJob inside
-//     createOrRecreatePush only matches on the CURRENT job.StreamName /
-//     TargetURI, so once we mutate StreamName the old push becomes
-//     orphan-invisible to that helper. Stop it first.
-//  2. Refresh overrides (clear old name, register new).
-//  3. Mutate job.StreamName + SourceURL + SourceRuntimeName.
-//  4. Recreate the push and write the returned PushID back into the job
-//     so monitor/stop paths point at the new push, not the old one.
-func (dm *DVRManager) UpdateSource(dvrHash, sourceRuntimeName, sourceURL string) (refreshed bool, err error) {
-	// The source change is authoritative state: commit the new identity under
-	// the lock and bump the generation so a concurrent monitor recreate (which
-	// snapshotted the old generation) goes stale and won't fight us. Snapshot
-	// the values needed for the unlocked Mist calls in the same critical
-	// section.
-	var (
-		oldStreamName string
-		oldPushID     int
-		newStreamName string
-		logger        logging.Logger
-		snap          pushIdentity
-	)
-	dm.mutex.Lock()
-	job, exists := dm.jobs[dvrHash]
-	if !exists {
-		dm.mutex.Unlock()
-		return false, nil
-	}
-	oldStreamName = strings.TrimSpace(job.StreamName)
-	oldPushID = job.PushID
-	newStreamName = strings.TrimSpace(sourceRuntimeName)
-	if newStreamName == "" {
-		newStreamName = job.InternalName
-	}
-	job.SourceRuntimeName = sourceRuntimeName
-	job.SourceURL = sourceURL
-	job.StreamName = newStreamName
-	job.pushGeneration++
-	logger = job.Logger
-	snap = pushIdentity{
-		streamName: newStreamName,
-		targetURI:  job.TargetURI,
-		dvrHash:    dvrHash,
-		pushID:     oldPushID,
-		generation: job.pushGeneration,
-	}
-	dm.mutex.Unlock()
-
-	// Stop the old Mist push by its recorded ID. dvrPushMatches inside
-	// createOrRecreatePush keys on the NEW stream name, so the old push is
-	// orphan-invisible to that helper — stop it explicitly first.
-	if oldPushID > 0 {
-		if stopErr := dm.mistClient.PushStop(oldPushID); stopErr != nil {
-			logger.WithError(stopErr).WithFields(logging.Fields{
-				"dvr_hash":    dvrHash,
-				"old_push_id": oldPushID,
-			}).Warn("DVR update-source: stop of old push failed; continuing with recreate")
-		}
-	}
-
-	if oldStreamName != "" && oldStreamName != newStreamName {
-		ClearDVRSourceOverride(oldStreamName)
-	}
-	if strings.TrimSpace(sourceURL) != "" {
-		RegisterDVRSourceOverride(newStreamName, sourceURL)
-	}
-
-	// Recreate the push without holding the lock, then commit the new PushID
-	// only if no other writer raced us. The monitor loop retries on failure.
-	newPushID, pushErr := dm.createOrRecreatePush(snap, logger)
-	if pushErr != nil {
-		logger.WithError(pushErr).WithFields(logging.Fields{
-			"dvr_hash":            dvrHash,
-			"source_runtime_name": sourceRuntimeName,
-		}).Warn("DVR update-source push recreate failed; will retry via monitor loop")
-		return true, pushErr
-	}
-	committed := dm.withFreshGeneration(snap, func(j *DVRJob) {
-		j.PushID = newPushID
-		j.pushGeneration++
-	})
-	if !committed {
-		// A concurrent takeover/stop won after we bumped the generation; the
-		// push we just created is orphaned. Stop it so it doesn't double-write.
-		if stopErr := dm.mistClient.PushStop(newPushID); stopErr != nil {
-			logger.WithError(stopErr).WithField("orphan_push_id", newPushID).Warn("DVR update-source: failed to stop orphaned push after stale recreate")
-		}
-		return true, nil
-	}
-
-	logger.WithFields(logging.Fields{
-		"dvr_hash":            dvrHash,
-		"source_runtime_name": sourceRuntimeName,
-		"new_source_url":      sourceURL,
-		"old_push_id":         oldPushID,
-		"new_push_id":         newPushID,
-	}).Info("DVR source refreshed and push recreated for takeover")
-	return true, nil
-}
-
 // StartRecording starts a new DVR recording job. sourceRuntimeName is the
 // Foghorn-authoritative Mist runtime name for the source stream (live+<x>
 // / pull+<x> / bare native). Helmsman uses it verbatim as the Mist
@@ -667,6 +794,13 @@ func (dm *DVRManager) UpdateSource(dvrHash, sourceRuntimeName, sourceURL string)
 func (dm *DVRManager) StartRecording(dvrHash, streamID, internalName, sourceRuntimeName, sourceURL string, config *ipcpb.DVRConfig, sendFunc func(*ipcpb.ControlMessage)) error {
 	dm.mutex.Lock()
 	defer dm.mutex.Unlock()
+
+	// A DVR recording is keyed by dvr+<internal_name>; an empty identity cannot be
+	// persisted, recovered, or resolved, so reject it before creating anything.
+	internalName = strings.TrimSpace(internalName)
+	if internalName == "" {
+		return fmt.Errorf("cannot start DVR recording %s: empty source internal_name", dvrHash)
+	}
 
 	// A repeat start for the same hash is an IDEMPOTENT ack, not an error: Foghorn's stale-'starting'
 	// recovery re-dispatches SendDVRStart when a prior attempt's ack was lost, and re-issuing must
@@ -676,6 +810,11 @@ func (dm *DVRManager) StartRecording(dvrHash, streamID, internalName, sourceRunt
 	// conflict and stays an error.
 	if existing, exists := dm.jobs[dvrHash]; exists {
 		if existing.InternalName == internalName {
+			// Reconcile the re-dispatched descriptor against the live job. Recovery
+			// already restores the descriptor from job.json, so this is normally a
+			// coherent no-op; it still folds in any newer source identity the
+			// re-dispatch carries (and fails closed on a runtime mismatch).
+			dm.reconcileDVRJobDescriptorLocked(existing, sourceRuntimeName, sourceURL, config)
 			dm.logger.WithField("dvr_hash", dvrHash).Info("DVR start repeated for already-active recording; treating as idempotent ack")
 			return nil
 		}
@@ -689,10 +828,98 @@ func (dm *DVRManager) StartRecording(dvrHash, streamID, internalName, sourceRunt
 		return fmt.Errorf("insufficient disk space for DVR recording: %w", err)
 	}
 
-	// Create output directory: /storage/dvr/{stream_id}/{dvr_hash}/
 	outputDir := filepath.Join(dm.storagePath, "dvr", streamID, dvrHash)
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return fmt.Errorf("failed to create DVR output directory: %w", err)
+	manifestPath := filepath.Join(outputDir, fmt.Sprintf("%s.m3u8", dvrHash))
+
+	// Classify a pre-existing on-disk directory BEFORE mutating anything.
+	// Recovery runs async on reconnect, so a re-dispatched start can reach here
+	// before recovery registered the on-disk job; we must never overwrite the
+	// identity, start a duplicate push over a live one, or delete data we did
+	// not create.
+	reuseExistingDir := false
+	if info, statErr := os.Stat(outputDir); statErr == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("DVR output path %s exists but is not a directory", outputDir)
+		}
+		persisted, ok := readDVRJobInternalName(outputDir)
+		if !ok {
+			return fmt.Errorf("existing DVR directory for %s has missing or unreadable identity; refusing to overwrite", dvrHash)
+		}
+		if persisted != internalName {
+			return fmt.Errorf("existing DVR recording %s belongs to a different stream (%s); refusing to overwrite", dvrHash, persisted)
+		}
+		// Exact identity match: adopt an already-running recording idempotently
+		// rather than starting a duplicate push.
+		adopted, aerr := dm.adoptExistingDVRJobLocked(dvrHash, internalName, outputDir, manifestPath, sourceRuntimeName, sourceURL, config)
+		if aerr != nil {
+			return fmt.Errorf("adopt existing DVR recording %s: %w", dvrHash, aerr)
+		}
+		if adopted {
+			return nil
+		}
+		// Identity matches but no live push. If the directory already holds
+		// recorded media, the recording completed (or was interrupted) while we
+		// were disconnected — Mist finished it and dropped the push. Restarting a
+		// push with append=1&noendlist=1 over those segments would open a SECOND
+		// writer against a stopped source and corrupt the rolling manifest (the
+		// exact hazard monitorJob treats as terminal at "push gone + segments>0").
+		// Fail closed: the media stays on disk for recovery/backfill; only an
+		// EMPTY interrupted start (no media yet) may be reused and restarted.
+		if dvrDirHasMedia(outputDir, manifestPath) {
+			return fmt.Errorf("existing DVR recording %s has media but no live push; refusing to restart a completed/interrupted recording", dvrHash)
+		}
+		// Empty interrupted start: reuse the verified directory and restart,
+		// WITHOUT rewriting the already-correct sidecar (never replace an identity).
+		reuseExistingDir = true
+	} else if !os.IsNotExist(statErr) {
+		return fmt.Errorf("stat DVR output dir %s: %w", outputDir, statErr)
+	}
+
+	// createdDirs holds exactly the directories THIS call created (shallow→deep),
+	// fsynced level-by-level so every new entry is crash-durable — not only the
+	// leaf's immediate parent.
+	var createdDirs []string
+	if !reuseExistingDir {
+		dirs, err := mkdirAllDurable(outputDir)
+		if err != nil {
+			removeCreatedDirs(dirs, func(path string, rbErr error) {
+				dm.logger.WithError(rbErr).WithField("path", path).Warn("Left partially created DVR directory in place (non-empty)")
+			})
+			return fmt.Errorf("failed to create DVR output directory: %w", err)
+		}
+		createdDirs = dirs
+	}
+	// removeIfCreated rolls back ONLY what this attempt created: its own metadata
+	// sidecar, then the created directories deepest-first with a NON-recursive
+	// Remove. A directory that now holds foreign content (a live push's segments,
+	// a sibling recording) is preserved, never wiped.
+	removeIfCreated := func() {
+		if len(createdDirs) == 0 {
+			return
+		}
+		_ = os.Remove(filepath.Join(outputDir, dvrJobMetaFile))
+		removeCreatedDirs(createdDirs, func(path string, rmErr error) {
+			dm.logger.WithError(rmErr).WithField("path", path).Warn("Preserved non-empty DVR directory created by this start attempt")
+		})
+	}
+
+	// Durably record the source internal_name into a dir WE created, before the
+	// push (stream_id is NOT the internal_name). Mandatory: a recording whose
+	// identity is not persisted must not start. The reuse path skips this — the
+	// existing sidecar already matches and must not be replaced.
+	if !reuseExistingDir {
+		meta := dvrJobMeta{
+			InternalName:      internalName,
+			SourceRuntimeName: strings.TrimSpace(sourceRuntimeName),
+			SourceURL:         strings.TrimSpace(sourceURL),
+			SegmentDuration:   config.GetSegmentDuration(),
+			DvrWindowSeconds:  config.GetDvrWindowSeconds(),
+			MaxEntries:        config.GetMaxEntries(),
+		}
+		if err := dm.persistJobMeta(outputDir, meta); err != nil {
+			removeIfCreated()
+			return fmt.Errorf("persist DVR job metadata: %w", err)
+		}
 	}
 
 	// Create DVR job
@@ -704,7 +931,7 @@ func (dm *DVRManager) StartRecording(dvrHash, streamID, internalName, sourceRunt
 		Config:            config,
 		StartTime:         time.Now(),
 		OutputDir:         outputDir,
-		ManifestPath:      filepath.Join(outputDir, fmt.Sprintf("%s.m3u8", dvrHash)),
+		ManifestPath:      manifestPath,
 		SendFunc:          sendFunc,
 		Logger:            dm.logger,
 		Status:            "starting",
@@ -713,12 +940,13 @@ func (dm *DVRManager) StartRecording(dvrHash, streamID, internalName, sourceRunt
 		SyncedSegments:    make(map[string]bool), // Initialize sync tracking
 	}
 
-	// Start the recording process via MistServer push
+	// Start the recording process via MistServer push. startDVRPush's state
+	// machine returns an error ONLY for dvrPushNotStarted (no push was ever
+	// created) — the only case where rolling the directory back is safe. An
+	// accepted-but-unconfirmed push returns nil (job registered as "starting",
+	// metadata kept) so we never delete a directory a live push may be writing.
 	if err := dm.startDVRPush(job); err != nil {
-		// Cleanup created directory on failure
-		if rmErr := os.RemoveAll(outputDir); rmErr != nil {
-			dm.logger.WithError(rmErr).WithField("path", outputDir).Warn("Failed to cleanup DVR directory after failed start")
-		}
+		removeIfCreated()
 		return fmt.Errorf("failed to start DVR push: %w", err)
 	}
 
@@ -732,11 +960,338 @@ func (dm *DVRManager) StartRecording(dvrHash, streamID, internalName, sourceRunt
 	return nil
 }
 
+// dvrJobMetaFile is a small metadata sidecar written into a DVR job's
+// OutputDir at recording start. It durably records the Mist internal_name of
+// the source stream, which is DISTINCT from the stream_id path component of
+// /storage/dvr/{stream_id}/{dvr_hash}/. Restart recovery reconstructs a job
+// from the on-disk layout, where only stream_id is recoverable from the path;
+// without this sidecar the recovered job cannot be resolved by internal_name
+// (LookupActiveDVRByInternalName), so the rolling-DVR playback token
+// dvr+<internal_name> would miss and install a degraded cleanup pause.
+const dvrJobMetaFile = "job.json"
+
+// dvrJobMetaVersion is the current descriptor format. readDVRJobMeta rejects a
+// sidecar whose version differs, so a job.json that lacks the source identity
+// resolves as unresolved (degraded protection) rather than as a recording
+// without the source override the design depends on.
+const dvrJobMetaVersion = 1
+
+// dvrJobMeta is the durable start descriptor. Beyond internal_name it records
+// the Foghorn-authoritative source identity (runtime name + remote source URL)
+// and the config fields needed to rebuild the push target, so restart recovery
+// restores a coherent {runtime, URL, config} tuple and re-pins the remote source
+// override — Foghorn only re-dispatches requested/starting rows, never an
+// established `recording`, so recovery, not re-dispatch, must carry this. A valid
+// descriptor REQUIRES version + internal_name + source_runtime_name; source_url
+// is legitimately empty for a local (non-remote) source, and the config fields
+// fall back to defaults.
+type dvrJobMeta struct {
+	Version           int    `json:"version"`
+	InternalName      string `json:"internal_name"`
+	SourceRuntimeName string `json:"source_runtime_name"`
+	SourceURL         string `json:"source_url,omitempty"`
+	SegmentDuration   int32  `json:"segment_duration,omitempty"`
+	DvrWindowSeconds  int32  `json:"dvr_window_seconds,omitempty"`
+	MaxEntries        int32  `json:"max_entries,omitempty"`
+}
+
+// dvrConfig reconstructs the DVRConfig from the persisted descriptor.
+func (m dvrJobMeta) dvrConfig() *ipcpb.DVRConfig {
+	if m.SegmentDuration == 0 && m.DvrWindowSeconds == 0 && m.MaxEntries == 0 {
+		return nil
+	}
+	return &ipcpb.DVRConfig{
+		SegmentDuration:  m.SegmentDuration,
+		DvrWindowSeconds: m.DvrWindowSeconds,
+		MaxEntries:       m.MaxEntries,
+	}
+}
+
+// writeDVRJobMeta atomically persists the start descriptor alongside the
+// recording so restart recovery restores it exactly. It writes a temp file,
+// fsyncs, and renames into place, and returns any error — the caller must not
+// start a recording whose identity was not durably recorded, because a restart
+// would otherwise resolve it under a substituted identity or a lost source.
+func writeDVRJobMeta(outputDir string, meta dvrJobMeta) error {
+	// Refuse an empty output dir — otherwise the temp file + rename would land in
+	// the process working directory rather than the DVR job directory.
+	if strings.TrimSpace(outputDir) == "" {
+		return fmt.Errorf("refusing to persist DVR job metadata with an empty output dir")
+	}
+	meta.Version = dvrJobMetaVersion // stamp the current format; callers need not set it
+	data, err := json.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("marshal DVR job metadata: %w", err)
+	}
+	tmp, err := os.CreateTemp(outputDir, dvrJobMetaFile+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create DVR job metadata temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+	if _, err = tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("write DVR job metadata: %w", err)
+	}
+	if err = tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("sync DVR job metadata: %w", err)
+	}
+	if err = tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("close DVR job metadata: %w", err)
+	}
+	if err = os.Rename(tmpName, filepath.Join(outputDir, dvrJobMetaFile)); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("rename DVR job metadata into place: %w", err)
+	}
+	// fsync the containing directory so the rename is durable across a crash,
+	// not just the file contents.
+	if err := syncDir(outputDir); err != nil {
+		return fmt.Errorf("sync DVR job dir: %w", err)
+	}
+	return nil
+}
+
+// syncDir fsyncs a directory so a create/rename within it is durable across a
+// crash, not just the affected file's contents.
+func syncDir(path string) error {
+	d, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	if err := d.Sync(); err != nil {
+		_ = d.Close()
+		return err
+	}
+	return d.Close()
+}
+
+// mkdirAllDurable creates dir and every missing ancestor, fsyncing each new
+// directory's parent so the new entries survive a crash — MkdirAll + a single
+// parent sync leaves intermediate ancestors (e.g. a freshly created dvr/) not
+// durable. It returns exactly the directories THIS call created (shallowest
+// first), so a caller can roll back precisely its own contribution. A level that
+// already existed (Mkdir → EEXIST) is NOT reported as created, so rollback never
+// touches a pre-existing directory. On error it returns the levels created so
+// far, so the caller can still roll them back.
+func mkdirAllDurable(dir string) (created []string, err error) {
+	// Collect missing levels from the target up to the deepest existing ancestor.
+	var missing []string
+	for p := filepath.Clean(dir); ; {
+		info, statErr := os.Stat(p)
+		if statErr == nil {
+			if !info.IsDir() {
+				return nil, fmt.Errorf("%s exists but is not a directory", p)
+			}
+			break
+		}
+		if !os.IsNotExist(statErr) {
+			return nil, statErr
+		}
+		missing = append(missing, p)
+		parent := filepath.Dir(p)
+		if parent == p {
+			break // reached the filesystem root without an existing ancestor
+		}
+		p = parent
+	}
+	// Create shallowest→deepest, fsyncing each parent after the entry appears.
+	for i := len(missing) - 1; i >= 0; i-- {
+		p := missing[i]
+		if mkErr := os.Mkdir(p, 0755); mkErr != nil {
+			if os.IsExist(mkErr) {
+				continue // appeared concurrently — not ours to roll back
+			}
+			return created, mkErr
+		}
+		created = append(created, p)
+		if syncErr := syncDir(filepath.Dir(p)); syncErr != nil {
+			return created, syncErr
+		}
+	}
+	return created, nil
+}
+
+// removeCreatedDirs removes ONLY the directories this start attempt created,
+// deepest-first, with a non-recursive Remove so a directory that unexpectedly
+// holds foreign content (a live push's segments, a sibling recording) is
+// preserved rather than wiped. It stops at the first non-empty directory (every
+// shallower one is then non-empty too). Once ALL created dirs are removed it
+// fsyncs the parent of the shallowest (the stable pre-existing ancestor) once so
+// the removal is crash-durable. logf reports a preserved (or unsyncable) dir.
+func removeCreatedDirs(created []string, logf func(path string, err error)) {
+	for i := len(created) - 1; i >= 0; i-- {
+		p := created[i]
+		if rmErr := os.Remove(p); rmErr != nil {
+			if logf != nil {
+				logf(p, rmErr)
+			}
+			return
+		}
+	}
+	// All created dirs removed: fsync the parent of the shallowest (the stable
+	// pre-existing ancestor) so the removal is durable across a crash.
+	if len(created) > 0 {
+		if syncErr := syncDir(filepath.Dir(created[0])); syncErr != nil && logf != nil {
+			logf(filepath.Dir(created[0]), syncErr)
+		}
+	}
+}
+
+// readDVRJobInternalName reads the persisted internal_name for a recovered DVR
+// job. Returns ok=false when the sidecar is absent, unreadable, corrupt, or
+// empty; the caller then leaves InternalName empty so the job stays unresolved
+// (degraded cleanup protection) rather than adopting a substituted identity.
+func readDVRJobInternalName(outputDir string) (string, bool) {
+	meta, ok := readDVRJobMeta(outputDir)
+	if !ok {
+		return "", false
+	}
+	return meta.InternalName, true
+}
+
+// readDVRJobMeta reads the full start descriptor. ok=false when the sidecar is
+// absent, unreadable, corrupt, or has an empty internal_name (the identity
+// invariant); the caller then leaves the job unresolved rather than adopting a
+// substituted identity.
+func readDVRJobMeta(outputDir string) (dvrJobMeta, bool) {
+	data, err := os.ReadFile(filepath.Join(outputDir, dvrJobMetaFile))
+	if err != nil {
+		return dvrJobMeta{}, false
+	}
+	var meta dvrJobMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return dvrJobMeta{}, false
+	}
+	// Require the current format and both source-identity fields. Incomplete metadata is rejected:
+	// the job stays unresolved
+	// (degraded protection) rather than resolving without its source identity.
+	if meta.Version != dvrJobMetaVersion ||
+		strings.TrimSpace(meta.InternalName) == "" ||
+		strings.TrimSpace(meta.SourceRuntimeName) == "" {
+		return dvrJobMeta{}, false
+	}
+	return meta, true
+}
+
 type localDVRDirectory struct {
 	streamID     string
 	dvrHash      string
 	outputDir    string
 	manifestPath string
+}
+
+// adoptExistingDVRJobLocked adopts an on-disk recording whose identity already
+// matches the requested start but which in-memory state does not yet know about
+// (async recovery has not registered it). If a live Mist push for the hash
+// exists, it registers the recovered job and returns adopted=true (idempotent
+// ack — no duplicate push, no metadata rewrite). If no live push exists it
+// returns adopted=false so the caller can restart into the verified directory.
+// The re-dispatched start descriptor (sourceRuntimeName/sourceURL/config) is
+// reconciled onto the adopted job so a later push recreation keeps the remote
+// DVR source override. Caller holds dm.mutex.
+func (dm *DVRManager) adoptExistingDVRJobLocked(dvrHash, internalName, outputDir, manifestPath, sourceRuntimeName, sourceURL string, config *ipcpb.DVRConfig) (bool, error) {
+	pushes, err := dm.mistClient.PushList()
+	if err != nil {
+		return false, fmt.Errorf("list Mist pushes: %w", err)
+	}
+	// Adopt only a push whose EXACT identity (runtime + hash) matches this start —
+	// never a foreign push that merely shares the hash string, which would map our
+	// recording to someone else's runtime.
+	push, ok := findExactDVRPush(pushes, strings.TrimSpace(sourceRuntimeName), "", dvrHash)
+	if !ok {
+		return false, nil
+	}
+	if existing, exists := dm.jobs[dvrHash]; exists {
+		dm.reconcileDVRJobDescriptorLocked(existing, sourceRuntimeName, sourceURL, config)
+		return true, nil
+	}
+	duration := dvrManifestDuration(manifestPath)
+	startTime := time.Now()
+	if duration > 0 {
+		startTime = startTime.Add(-duration)
+	}
+	job := &DVRJob{
+		DVRHash:      dvrHash,
+		InternalName: internalName,
+		StartTime:    startTime,
+		PushID:       push.ID,
+		OutputDir:    outputDir,
+		ManifestPath: manifestPath,
+		SendFunc: func(msg *ipcpb.ControlMessage) {
+			if serr := sendOrEnqueue(msg); serr != nil {
+				dm.logger.WithError(serr).WithField("dvr_hash", dvrHash).Warn("Adopted DVR completion queued for retry")
+			}
+		},
+		Logger:         dm.logger,
+		SegmentCount:   dvrManifestSegmentCount(manifestPath),
+		TotalSizeBytes: dvrDirectorySize(outputDir),
+		Status:         "recording",
+		TargetURI:      push.TargetURI,
+		StreamName:     push.StreamName,
+		MaxRetries:     MaxDVRRetries,
+		SyncedSegments: make(map[string]bool),
+	}
+	// Fold the authoritative start descriptor into the Mist/disk-derived job and
+	// re-register the source override BEFORE it is discoverable/monitored.
+	dm.reconcileDVRJobDescriptorLocked(job, sourceRuntimeName, sourceURL, config)
+	dm.jobs[dvrHash] = job
+	go dm.monitorJob(job)
+	dm.logger.WithFields(logging.Fields{
+		"dvr_hash":      dvrHash,
+		"internal_name": internalName,
+		"push_id":       push.ID,
+	}).Info("Adopted existing active DVR recording (idempotent start)")
+	return true, nil
+}
+
+// reconcileDVRJobDescriptorLocked folds the durable start descriptor into a job
+// restored from Mist+disk alone and re-registers the DVR source override so a
+// later push recreation keeps the remote source. The {runtime, URL} pair must
+// stay COHERENT: the descriptor's source_url belongs to the descriptor's
+// source_runtime_name, so if the live push runs under a DIFFERENT runtime (the
+// descriptor is stale relative to the push actually on disk) it is NOT valid to
+// map the live runtime to the descriptor's URL — that would point the override
+// at the wrong source. On such a mismatch we fail closed: keep the live push
+// untouched and register no override. config is source-identity-independent and
+// is always restored when missing. Caller holds dm.mutex.
+func (dm *DVRManager) reconcileDVRJobDescriptorLocked(job *DVRJob, sourceRuntimeName, sourceURL string, config *ipcpb.DVRConfig) {
+	if job.Config == nil {
+		job.Config = config
+	}
+	sourceRuntimeName = strings.TrimSpace(sourceRuntimeName)
+	sourceURL = strings.TrimSpace(sourceURL)
+	if sourceRuntimeName == "" {
+		return // no authoritative source identity to reconcile
+	}
+	if job.StreamName != "" && job.StreamName != sourceRuntimeName {
+		// Incompatible identities — do NOT mix. Leave the live push as-is and
+		// register nothing; a mismatched override would map the running runtime
+		// to a stale source URL.
+		dm.logger.WithFields(logging.Fields{
+			"dvr_hash":        job.DVRHash,
+			"push_stream":     job.StreamName,
+			"descriptor_name": sourceRuntimeName,
+		}).Warn("DVR start descriptor runtime differs from the live push; NOT registering a mismatched source override (fail closed)")
+		return
+	}
+	// Coherent tuple: the descriptor's runtime matches the live push (or the job
+	// has no push name yet). Restore the identity and pin the override.
+	if job.SourceRuntimeName == "" {
+		job.SourceRuntimeName = sourceRuntimeName
+	}
+	if job.SourceURL == "" {
+		job.SourceURL = sourceURL
+	}
+	overrideName := strings.TrimSpace(job.StreamName)
+	if overrideName == "" {
+		overrideName = strings.TrimSpace(job.SourceRuntimeName)
+	}
+	if overrideName != "" && strings.TrimSpace(job.SourceURL) != "" {
+		RegisterDVRSourceOverride(overrideName, job.SourceURL)
+	}
 }
 
 func (dm *DVRManager) recoverActiveDVRJobsFromMist(basePath string, logger logging.Logger) error {
@@ -749,58 +1304,77 @@ func (dm *DVRManager) recoverActiveDVRJobsFromMist(basePath string, logger loggi
 		return err
 	}
 	for _, dir := range dirs {
-		dm.mutex.RLock()
-		_, active := dm.jobs[dir.dvrHash]
-		dm.mutex.RUnlock()
-		if active {
-			continue
-		}
-		push, ok := findDVRPush(pushes, dir.dvrHash)
-		if !ok {
-			continue
-		}
-		duration := dvrManifestDuration(dir.manifestPath)
-		startTime := time.Now()
-		if duration > 0 {
-			startTime = startTime.Add(-duration)
-		}
-		job := &DVRJob{
-			DVRHash:      dir.dvrHash,
-			InternalName: dir.streamID,
-			StartTime:    startTime,
-			PushID:       push.ID,
-			OutputDir:    dir.outputDir,
-			ManifestPath: dir.manifestPath,
-			SendFunc: func(msg *ipcpb.ControlMessage) {
-				if err := sendOrEnqueue(msg); err != nil {
-					logger.WithError(err).WithField("dvr_hash", dir.dvrHash).Warn("Recovered DVR completion queued for retry")
-				}
-			},
-			Logger:         dm.logger,
-			SegmentCount:   dvrManifestSegmentCount(dir.manifestPath),
-			TotalSizeBytes: dvrDirectorySize(dir.outputDir),
-			Status:         "recording",
-			TargetURI:      push.TargetURI,
-			StreamName:     push.StreamName,
-			MaxRetries:     MaxDVRRetries,
-			SyncedSegments: make(map[string]bool),
-		}
-
-		dm.mutex.Lock()
-		if _, exists := dm.jobs[dir.dvrHash]; !exists {
-			dm.jobs[dir.dvrHash] = job
-			go dm.monitorJob(job)
-			logger.WithFields(logging.Fields{
-				"dvr_hash":      dir.dvrHash,
-				"stream_id":     dir.streamID,
-				"push_id":       push.ID,
-				"stream_name":   push.StreamName,
-				"manifest_path": dir.manifestPath,
-			}).Warn("Recovered active DVR job from Mist push after restart")
-		}
-		dm.mutex.Unlock()
+		dm.recoverOneDVRDir(dir, pushes, logger)
 	}
 	return nil
+}
+
+// recoverOneDVRDir matches a single on-disk recording to its live push and
+// reinstates the job (identity, push binding, and source override) under
+// dm.mutex, so recovery is one serialized transition.
+func (dm *DVRManager) recoverOneDVRDir(dir localDVRDirectory, pushes []mist.PushInfo, logger logging.Logger) {
+	// A valid descriptor is REQUIRED: it names the exact runtime the push must run
+	// under. Without it the on-disk job cannot be safely matched to a push, so skip
+	// (the poller's degraded protection still pauses cleanup).
+	meta, ok := readDVRJobMeta(dir.outputDir)
+	if !ok {
+		return
+	}
+	// Match ONLY a push under the descriptor's exact runtime — never a foreign push
+	// that merely contains the DVR hash string under a different runtime.
+	push, found := findExactDVRPush(pushes, meta.SourceRuntimeName, "", dir.dvrHash)
+	if !found {
+		return
+	}
+
+	dm.mutex.Lock()
+	defer dm.mutex.Unlock()
+	if _, active := dm.jobs[dir.dvrHash]; active {
+		return
+	}
+
+	duration := dvrManifestDuration(dir.manifestPath)
+	startTime := time.Now()
+	if duration > 0 {
+		startTime = startTime.Add(-duration)
+	}
+	job := &DVRJob{
+		DVRHash:           dir.dvrHash,
+		InternalName:      meta.InternalName,
+		SourceRuntimeName: meta.SourceRuntimeName,
+		SourceURL:         meta.SourceURL,
+		StreamName:        push.StreamName,
+		Config:            meta.dvrConfig(),
+		StartTime:         startTime,
+		PushID:            push.ID,
+		OutputDir:         dir.outputDir,
+		ManifestPath:      dir.manifestPath,
+		TargetURI:         push.TargetURI,
+		SendFunc: func(msg *ipcpb.ControlMessage) {
+			if err := sendOrEnqueue(msg); err != nil {
+				logger.WithError(err).WithField("dvr_hash", dir.dvrHash).Warn("Recovered DVR completion queued for retry")
+			}
+		},
+		Logger:         dm.logger,
+		SegmentCount:   dvrManifestSegmentCount(dir.manifestPath),
+		TotalSizeBytes: dvrDirectorySize(dir.outputDir),
+		Status:         "recording",
+		MaxRetries:     MaxDVRRetries,
+		SyncedSegments: make(map[string]bool),
+	}
+	// Re-pin the source override so a later push recreation keeps the remote source.
+	if meta.SourceURL != "" {
+		RegisterDVRSourceOverride(meta.SourceRuntimeName, meta.SourceURL)
+	}
+	dm.jobs[dir.dvrHash] = job
+	go dm.monitorJob(job)
+	logger.WithFields(logging.Fields{
+		"dvr_hash":      dir.dvrHash,
+		"stream_id":     dir.streamID,
+		"push_id":       push.ID,
+		"stream_name":   push.StreamName,
+		"manifest_path": dir.manifestPath,
+	}).Warn("Recovered active DVR job from Mist after restart")
 }
 
 func scanLocalDVRDirectories(basePath string) ([]localDVRDirectory, error) {
@@ -833,6 +1407,9 @@ func scanLocalDVRDirectories(basePath string) ([]localDVRDirectory, error) {
 				continue
 			}
 			manifestPath := filepath.Join(outputDir, dvrHash+".m3u8")
+			// The identity comes from the descriptor (readDVRJobMeta) at recovery
+			// time, not from the path — recovery never substitutes the stream_id
+			// path component for the internal_name.
 			dirs = append(dirs, localDVRDirectory{
 				streamID:     streamID,
 				dvrHash:      dvrHash,
@@ -844,26 +1421,116 @@ func scanLocalDVRDirectories(basePath string) ([]localDVRDirectory, error) {
 	return dirs, nil
 }
 
-func findDVRPush(pushes []mist.PushInfo, dvrHash string) (mist.PushInfo, bool) {
-	for _, push := range pushes {
-		if strings.Contains(push.TargetURI, dvrHash) || strings.Contains(push.ActualURI, dvrHash) {
-			return push, true
+// StopRecording FORCE-tears-down a DVR recording job (used by the startup-deadline
+// path, which has already established via its own PushList that no live push
+// exists). It terminalizes even if the push id is unknown.
+func (dm *DVRManager) StopRecording(dvrHash string) error {
+	return dm.stopRecording(dvrHash, nil, true)
+}
+
+// ConfirmDVRPushStopped stops any live Mist push for dvrHash and reports whether a
+// DESTRUCTIVE teardown (delete) may proceed. It emits no lifecycle event — the caller
+// sends its own terminal report (e.g. 'deleted'). It returns false — DEFERRING the delete,
+// files retained — when a writer may still be live: the push list could not be read, a
+// present push would not stop, OR the push is merely ABSENT from a successful list and
+// bounded-absence has not yet converged (an accepted push can be momentarily unlisted, so
+// an empty list is NOT proof of absence). It returns true only when the push was found and
+// stopped, or its absence converged via observeAbsenceConverged (repeated absence over a
+// real grace with no segment/byte progress). The delete is re-driven by Foghorn's durable
+// stop_pending obligation until convergence.
+func (dm *DVRManager) ConfirmDVRPushStopped(dvrHash string) bool {
+	dm.mutex.Lock()
+	job, exists := dm.jobs[dvrHash]
+	var streamName, targetURI string
+	var pushID int
+	if exists {
+		job.Status = "finalizing"
+		job.pushGeneration++
+		pushID = job.PushID
+		streamName, targetURI = job.StreamName, job.TargetURI
+	}
+	dm.mutex.Unlock()
+
+	if dm.mistClient == nil {
+		// Fail CLOSED: with no Mist client we cannot confirm the push is stopped, so we must
+		// NOT authorize a destructive delete over a possibly-live writer. Defer. (In production
+		// the client is always wired; tests inject a fake instead of relying on this path.)
+		dm.logger.WithField("dvr_hash", dvrHash).Warn("DVR delete: no Mist client to confirm push stopped; deferring (fail closed)")
+		return false
+	}
+
+	confirmed := false
+	if pushID > 0 {
+		if err := dm.mistClient.PushStop(pushID); err != nil {
+			dm.logger.WithError(err).WithField("dvr_hash", dvrHash).Warn("DVR delete: failed to stop live push; deferring delete")
+			return false
+		}
+		confirmed = true
+	} else {
+		pushes, listErr := dm.mistClient.PushList()
+		if listErr != nil {
+			dm.logger.WithError(listErr).WithField("dvr_hash", dvrHash).Warn("DVR delete: cannot list pushes to confirm; deferring delete")
+			return false
+		}
+		// Match by exact identity when we know the stream name, else by the hash in
+		// the target (the in-memory job may be gone after a restart).
+		var push mist.PushInfo
+		var ok bool
+		if exists {
+			push, ok = findExactDVRPush(pushes, streamName, targetURI, dvrHash)
+		} else {
+			push, ok = findDVRPushByHash(pushes, dvrHash)
+		}
+		if ok {
+			// A live push is present: reset absence evidence and stop it.
+			dm.clearAbsenceEvidence(dvrHash)
+			if err := dm.mistClient.PushStop(push.ID); err != nil {
+				dm.logger.WithError(err).WithFields(logging.Fields{"dvr_hash": dvrHash, "push_id": push.ID}).Warn("DVR delete: failed to stop live push; deferring delete")
+				return false
+			}
+			confirmed = true
+		} else {
+			// Absent from a successful list is NOT proof of absence — an accepted push can be
+			// momentarily unlisted. Require bounded-absence convergence (repeated absence over a
+			// real grace + no segment/byte progress) before a DESTRUCTIVE delete. Until then
+			// DEFER: return false so the caller retains the files (delete_pending) rather than
+			// removing them while a possibly-live-but-unlisted writer might still exist.
+			fp, readOK := dvrFingerprintByHash(dvrHash)
+			if !dm.observeAbsenceConverged(dvrHash, fp, readOK) {
+				dm.logger.WithField("dvr_hash", dvrHash).Info("DVR delete: push absent from list but absence not yet converged; deferring delete (files retained)")
+				return false
+			}
+			dm.clearAbsenceEvidence(dvrHash)
+			confirmed = true
 		}
 	}
-	return mist.PushInfo{}, false
+
+	if confirmed && exists {
+		dm.mutex.Lock()
+		if dm.jobs[dvrHash] == job {
+			delete(dm.jobs, dvrHash)
+			ClearDVRSourceOverride(job.StreamName)
+		}
+		dm.mutex.Unlock()
+	}
+	return confirmed
 }
 
-// StopRecording stops a DVR recording job.
-func (dm *DVRManager) StopRecording(dvrHash string) error {
-	return dm.StopRecordingWithSender(dvrHash, nil)
-}
-
-// StopRecordingWithSender stops a DVR recording job and sends the terminal
-// notification through sendFunc. If Helmsman restarted after Mist finished
-// writing the recording, the in-memory job is gone but the on-disk DVR
-// layout is still authoritative enough to emit completion and let Foghorn
-// finalize the chapter.
+// StopRecordingWithSender stops a DVR recording job on a Foghorn stop command and
+// sends the terminal notification through sendFunc. It is CONSERVATIVE: it never
+// reports completion while the writer may still be live (an unconfirmed stop leaves
+// the job and the durable stop obligation open for retry). If Helmsman restarted
+// after Mist finished writing the recording, the in-memory job is gone but the
+// on-disk DVR layout is still authoritative enough to emit completion.
 func (dm *DVRManager) StopRecordingWithSender(dvrHash string, sendFunc func(*ipcpb.ControlMessage)) error {
+	return dm.stopRecording(dvrHash, sendFunc, false)
+}
+
+// stopRecording is the shared body. authoritative=true means the caller has already
+// established there is nothing live to orphan (or is a destructive teardown), so an
+// unconfirmed stop still terminalizes; authoritative=false keeps the job open on an
+// unconfirmed stop so a live writer is never falsely reported complete.
+func (dm *DVRManager) stopRecording(dvrHash string, sendFunc func(*ipcpb.ControlMessage), authoritative bool) error {
 	dm.mutex.Lock()
 	job, exists := dm.jobs[dvrHash]
 	if !exists {
@@ -885,11 +1552,49 @@ func (dm *DVRManager) StopRecordingWithSender(dvrHash string, sendFunc func(*ipc
 	stopPushID := job.PushID
 	dm.mutex.Unlock()
 
-	// Stop the MistServer push if running (no lock held across the Mist call).
+	// Stop the MistServer push (no lock held across the Mist call) and track whether
+	// the stop is CONFIRMED. We must never report completion or delete the job while
+	// a writer may still be live.
+	stopConfirmed := true
 	if stopPushID > 0 {
 		if err := dm.mistClient.PushStop(stopPushID); err != nil {
-			job.Logger.WithError(err).Warn("Failed to stop MistServer push")
+			job.Logger.WithError(err).Warn("Failed to stop MistServer push; leaving stop obligation open")
+			stopConfirmed = false
 		}
+	} else {
+		// PushID 0 means an accepted-but-unconfirmed start/recreate whose id we never
+		// resolved. A push MAY be live under our identity. We can ONLY confirm a stop
+		// by finding it in the list and stopping it: absence from a successful list is
+		// NOT authoritative here (the same reason the monitor never treats an empty
+		// list as "not started" for a PushID-0 job) — the accepted push may be live
+		// but unlisted. So an empty or failed list leaves the stop unconfirmed and the
+		// obligation open; Foghorn's stop_pending obligation re-sends DVRStop, which
+		// re-drives this until the push becomes listable and is adopted then stopped.
+		stopConfirmed = false
+		if pushes, listErr := dm.mistClient.PushList(); listErr != nil {
+			job.Logger.WithError(listErr).Warn("Failed to list pushes to confirm DVR stop; leaving stop obligation open")
+		} else if push, ok := findExactDVRPush(pushes, job.StreamName, job.TargetURI, job.DVRHash); ok {
+			if stopErr := dm.mistClient.PushStop(push.ID); stopErr != nil {
+				job.Logger.WithError(stopErr).WithField("push_id", push.ID).Warn("Failed to stop unconfirmed DVR push by identity; leaving stop obligation open")
+			} else {
+				stopConfirmed = true // found and stopped the live push — confirmed
+			}
+		} else {
+			job.Logger.Warn("Unconfirmed DVR push not present in a successful list; cannot confirm stop (absence is not authoritative), leaving obligation open")
+		}
+	}
+
+	if !stopConfirmed && !authoritative {
+		// A Foghorn stop we could not confirm: emit NO DVRStopped — neither success
+		// nor failed. A 'failed' report would terminalize the artifact on Foghorn and
+		// clear its stop obligation while the writer may still be live (handleDVRStop
+		// turns our returned error into a failed report). Keep the job at 'finalizing'
+		// so maintainPushStatus does not recreate the push, and return nil so no
+		// terminal report is sent. Foghorn's durable stop_pending obligation re-sends
+		// DVRStop, re-driving this stop until PushStop confirms. A force teardown
+		// (delete / startup deadline) sets authoritative and terminalizes regardless.
+		job.Logger.Warn("DVR stop not confirmed; leaving job for stop-obligation retry (no terminal report emitted)")
+		return nil
 	}
 
 	// Final sync: flush remaining segments to S3. syncNewSegments uses
@@ -904,7 +1609,9 @@ func (dm *DVRManager) StopRecordingWithSender(dvrHash string, sendFunc func(*ipc
 	dm.mutex.Unlock()
 
 	// Job is removed and now goroutine-private; send the terminal notification
-	// without holding the manager lock across the control-stream write.
+	// without holding the manager lock across the control-stream write. A lost
+	// DVRStopped is backstopped by Foghorn's stop_pending obligation, which re-sends
+	// DVRStop (then handled via stopRecoveredRecording) until the ack lands.
 	dm.sendCompletion(job, "completed", "")
 
 	job.Logger.Info("DVR recording job stopped")
@@ -944,6 +1651,38 @@ func (dm *DVRManager) stopRecoveredRecording(dvrHash string, sendFunc func(*ipcp
 		"output_dir":    outputDir,
 	}).Warn("Recovered DVR stop from on-disk recording after missing in-memory job")
 
+	// A live Mist push may still be writing this DVR even though the in-memory job
+	// was lost (a stop that arrived before restart recovery rebuilt the job map).
+	// Confirm the writer is stopped BEFORE reporting completion; matched by the hash
+	// in the push target since the runtime stream name is unknown here. If we cannot
+	// confirm (list failed, or a found push would not stop), emit NO terminal report
+	// so Foghorn's durable stop_pending obligation re-sends DVRStop and re-drives it.
+	if dm.mistClient != nil {
+		if pushes, listErr := dm.mistClient.PushList(); listErr != nil {
+			dm.logger.WithError(listErr).WithField("dvr_hash", dvrHash).Warn("Recovered DVR stop: cannot list pushes to confirm; leaving stop obligation open")
+			return nil
+		} else if push, ok := findDVRPushByHash(pushes, dvrHash); ok {
+			// A live push is present: reset any absence evidence and stop it.
+			dm.clearAbsenceEvidence(dvrHash)
+			if stopErr := dm.mistClient.PushStop(push.ID); stopErr != nil {
+				dm.logger.WithError(stopErr).WithFields(logging.Fields{"dvr_hash": dvrHash, "push_id": push.ID}).Warn("Recovered DVR stop: failed to stop live push; leaving stop obligation open")
+				return nil
+			}
+		} else {
+			// Push ABSENT from a successful list is NOT proof of absence — an accepted push can
+			// be momentarily unlisted. Accumulate bounded evidence (repeated absence over a real
+			// grace + no segment/byte progress) and complete ONLY once it converges. Until then
+			// defer: emit no terminal report, so Foghorn's durable stop_pending obligation
+			// re-sends DVRStop and re-drives this — each re-send is one observation.
+			fp, readOK := dvrFingerprint(outputDir)
+			if !dm.observeAbsenceConverged(dvrHash, fp, readOK) {
+				dm.logger.WithField("dvr_hash", dvrHash).Info("Recovered DVR stop: push absent from list but absence not yet converged; deferring completion")
+				return nil
+			}
+			dm.clearAbsenceEvidence(dvrHash)
+		}
+	}
+
 	dm.syncNewSegments(job)
 	dm.sendCompletion(job, "completed", "")
 	return nil
@@ -968,6 +1707,26 @@ func dvrManifestDuration(manifestPath string) time.Duration {
 	return total
 }
 
+// dvrDirHasMedia reports whether a DVR output directory already contains recorded
+// media: either the manifest lists at least one segment, or a .ts segment file
+// exists under segments/. A directory with media must never be restarted into
+// (see StartRecording), only adopted (live push) or left for recovery/backfill.
+func dvrDirHasMedia(outputDir, manifestPath string) bool {
+	if dvrManifestSegmentCount(manifestPath) > 0 {
+		return true
+	}
+	entries, err := os.ReadDir(filepath.Join(outputDir, "segments"))
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".ts") {
+			return true
+		}
+	}
+	return false
+}
+
 func dvrManifestSegmentCount(manifestPath string) int {
 	manifestBody, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -978,6 +1737,67 @@ func dvrManifestSegmentCount(manifestPath string) int {
 		return 0
 	}
 	return len(parsed.Segments)
+}
+
+// dvrFingerprint returns a change-detecting fingerprint of the recording's on-disk state —
+// segment-file count, total bytes, and the NEWEST segment's name + mtime — plus readOK. It reads
+// ONLY the segment files' own metadata, NOT the manifest: a manifest parse yielding 0 is
+// indistinguishable from an idle writer, so it must not feed the absence signal. The segment files
+// alone carry writer progress: any write activity changes the fingerprint, INCLUDING a bounded
+// rolling window where old segments are evicted as new ones arrive (count constant, bytes
+// flat/falling) but the newest segment name/mtime advances; a stalled writer leaves it identical.
+// readOK is false ONLY on a genuine read error (a ReadDir or per-entry Info failure): absence must
+// never be inferred from a failed read. A not-yet-existent segments dir is a legitimate empty
+// recording (readOK, stable "empty").
+func dvrFingerprint(outputDir string) (fingerprint string, readOK bool) {
+	if outputDir == "" {
+		return "", false
+	}
+	segmentsDir := filepath.Join(outputDir, "segments")
+	entries, err := os.ReadDir(segmentsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "empty", true // nothing written yet / already removed — definitively empty
+		}
+		return "", false // genuine read error → inconclusive, never converge
+	}
+	var count int
+	var totalBytes, newestMtime int64
+	var newestName string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".ts") {
+			continue
+		}
+		info, ierr := e.Info()
+		if ierr != nil {
+			return "", false // partial read → inconclusive, do NOT report a partial fingerprint
+		}
+		count++
+		totalBytes += info.Size()
+		if mt := info.ModTime().UnixNano(); mt > newestMtime || (mt == newestMtime && e.Name() > newestName) {
+			newestMtime = mt
+			newestName = e.Name()
+		}
+	}
+	return fmt.Sprintf("c=%d;b=%d;n=%s;m=%d", count, totalBytes, newestName, newestMtime), true
+}
+
+// dvrFingerprintByHash resolves a DVR's recording from its hash (the in-memory job may be
+// gone) and returns its fingerprint for bounded-absence convergence on the delete path. A recording
+// whose on-disk layout is genuinely gone reports the stable "absent" fingerprint with readOK=true, so
+// repeated observations CONVERGE and the durable delete/stop obligation completes — the strongest
+// absence evidence must not be mistaken for an inconclusive read (which would strand the obligation
+// forever). readOK is false only when storage itself could not be scanned.
+func dvrFingerprintByHash(dvrHash string) (string, bool) {
+	segmentsDir, scanOK := resolveDVRSegmentsDirByHashChecked(dvrHash)
+	if !scanOK {
+		return "", false // storage unscannable → inconclusive
+	}
+	if segmentsDir == "" {
+		return "absent", true // scanned, no layout for the hash → genuinely gone, converges
+	}
+	outputDir := filepath.Dir(segmentsDir)
+	return dvrFingerprint(outputDir)
 }
 
 func dvrDirectorySize(outputDir string) uint64 {
@@ -1004,51 +1824,42 @@ func dvrDirectorySize(outputDir string) uint64 {
 	return total
 }
 
-// startDVRPush starts DVR recording via MistServer push API
-func (dm *DVRManager) startDVRPush(job *DVRJob) error {
-	// Build DVR target URI with proper parameters
-	segmentDuration := int(job.Config.GetSegmentDuration())
+// dvrTargetURI builds the Mist push target for a DVR recording from its output
+// dir, hash, and config. It is deterministic, so recovery and monitor recreate
+// can rebuild the exact same target as the original start.
+func dvrTargetURI(outputDir, dvrHash string, config *ipcpb.DVRConfig) string {
+	segmentDuration := int(config.GetSegmentDuration())
 	if segmentDuration <= 0 {
 		segmentDuration = 6 // Default 6 seconds
 	}
-
-	// Live DVR window for Mist's targetAge. Foghorn resolves the effective
-	// window via pkg/dvrpolicy and stamps it into DVRConfig.dvr_window_seconds.
-	windowSeconds := int(job.Config.GetDvrWindowSeconds())
+	// Live DVR window for Mist's targetAge. Foghorn resolves the effective window
+	// via pkg/dvrpolicy and stamps it into DVRConfig.dvr_window_seconds.
+	windowSeconds := int(config.GetDvrWindowSeconds())
 	if windowSeconds <= 0 {
 		windowSeconds = 7200 // 2 hours default
 	}
 	// maxEntries caps manifest playlist size to avoid huge multi-day playlists
-	// breaking HLS parsers. Foghorn-resolved value already accounts for tier
-	// + cluster ceilings; fall back to ceil(window/segment) if not provided.
-	maxEntries := int(job.Config.GetMaxEntries())
+	// breaking HLS parsers. Foghorn-resolved value already accounts for tier +
+	// cluster ceilings; fall back to ceil(window/segment) if not provided.
+	maxEntries := int(config.GetMaxEntries())
 	if maxEntries <= 0 {
 		maxEntries = (windowSeconds + segmentDuration - 1) / segmentDuration
 		if maxEntries < 1 {
 			maxEntries = 1
 		}
 	}
-
-	// Build DVR target path
-	// Segments go to {outputDir}/segments/, manifest at {outputDir}/{hash}.m3u8
-	// From segments/, ../ goes to outputDir where manifest lives
-	// nounlink=1 stops Mist from deleting segment files when pruning the
-	// rolling playlist. With ledger + segment-level eviction in place,
-	// segment removal is owned by the chapter reclaim sweep — only after the
-	// covering chapter is frozen (artifact + .dtsh durable on S3) and any
-	// overlapping clip leases have drained — so segments are never lost
-	// silently.
-	// Record only source A/V tracks. Live processing may add Opus or other
-	// derived renditions to the stream buffer; writing those into MPEG-TS/HLS
-	// makes MistInHLS reject the rolling DVR playlist on playback.
-	targetURI := fmt.Sprintf("%s/%s/$minute_$segmentCounter.ts#m3u8=../%s.m3u8&audio=source&video=source&subtitle=none&meta=none&split=%d&targetAge=%d&maxEntries=%d&append=1&noendlist=1&nounlink=1",
-		job.OutputDir,
-		"segments",
-		job.DVRHash,
-		segmentDuration,
-		windowSeconds,
-		maxEntries,
+	// Segments go to {outputDir}/segments/, manifest at {outputDir}/{hash}.m3u8.
+	// nounlink=1 stops Mist deleting segment files when pruning the rolling
+	// playlist (segment removal is owned by the chapter reclaim sweep). Record
+	// only source A/V tracks — derived renditions make MistInHLS reject the playlist.
+	return fmt.Sprintf("%s/%s/$minute_$segmentCounter.ts#m3u8=../%s.m3u8&audio=source&video=source&subtitle=none&meta=none&split=%d&targetAge=%d&maxEntries=%d&append=1&noendlist=1&nounlink=1",
+		outputDir, "segments", dvrHash, segmentDuration, windowSeconds, maxEntries,
 	)
+}
+
+// startDVRPush starts DVR recording via MistServer push API
+func (dm *DVRManager) startDVRPush(job *DVRJob) error {
+	targetURI := dvrTargetURI(job.OutputDir, job.DVRHash, job.Config)
 
 	// Foghorn is the sole authority for the source runtime name —
 	// resolved from the stream registry's RuntimeNameFor(ingest_mode,
@@ -1066,53 +1877,71 @@ func (dm *DVRManager) startDVRPush(job *DVRJob) error {
 		sourceOverrideRegistered = true
 	}
 
-	var (
-		pushID int
-		err    error
-	)
 	// The job is still private (not yet in dm.jobs and no monitor running),
 	// so reading its identity here races with no other writer.
 	snap := pushIdentity{streamName: job.StreamName, targetURI: job.TargetURI, dvrHash: job.DVRHash}
-	deadline := time.Now().Add(initialPushRetryFor)
-	for attempt := 0; ; attempt++ {
-		pushID, err = dm.createOrRecreatePush(snap, job.Logger)
-		if err == nil {
-			break
-		}
-		if time.Now().Add(initialPushRetryEvery).After(deadline) {
-			if sourceOverrideRegistered {
-				ClearDVRSourceOverride(streamName)
-			}
-			return fmt.Errorf("failed to create initial push: %w", err)
-		}
+	pushID, outcome, err := dm.ensureInitialPush(snap, job.Logger)
+	switch outcome {
+	case dvrPushConfirmed:
+		job.PushID = pushID
+		job.Status = "recording"
 		job.Logger.WithFields(logging.Fields{
-			"attempt":     attempt + 1,
-			"retry_after": initialPushRetryEvery.String(),
-			"stream":      streamName,
-			"error":       err,
-		}).Warn("DVR initial push not ready; retrying")
-		time.Sleep(initialPushRetryEvery)
+			"push_id": pushID,
+			"stream":  streamName,
+			"target":  targetURI,
+		}).Info("Started DVR recording via MistServer push")
+		return nil
+	case dvrPushAcceptedUnconfirmed:
+		// PushStart was accepted but we could not confirm the push within the
+		// window. A push may be live and writing, so we must NOT retry creation
+		// (double writer) nor fail closed (which would delete recovery metadata).
+		// Register the job as still-starting with an unknown PushID; the monitor
+		// loop reconciles it by exact identity (maintainPushStatus) and the
+		// startup timeout is the backstop if it never confirms.
+		job.PushID = 0
+		job.Status = "starting"
+		job.Logger.WithFields(logging.Fields{
+			"stream": streamName,
+			"target": targetURI,
+			"error":  errString(err),
+		}).Warn("DVR push accepted but unconfirmed; monitor will reconcile by identity")
+		return nil
+	default: // dvrPushNotStarted — no push was ever created; safe for the caller to roll back.
+		if sourceOverrideRegistered {
+			ClearDVRSourceOverride(streamName)
+		}
+		return fmt.Errorf("failed to start DVR push: %w", err)
 	}
+}
 
-	job.PushID = pushID
-	job.Status = "recording"
-	job.Logger.WithFields(logging.Fields{
-		"push_id": pushID,
-		"stream":  streamName,
-		"target":  targetURI,
-	}).Info("Started DVR recording via MistServer push")
-
-	return nil
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // monitorJob monitors a DVR job's progress and performs incremental sync
 func (dm *DVRManager) monitorJob(job *DVRJob) {
+	pushInterval := dm.pushMonitorInterval
+	if pushInterval <= 0 {
+		pushInterval = PushMonitorInterval
+	}
+	startupTimeout := dm.startupTimeout
+	if startupTimeout <= 0 {
+		startupTimeout = dvrStartupTimeout
+	}
 	progressTicker := time.NewTicker(30 * time.Second) // Progress updates every 30s
-	pushTicker := time.NewTicker(PushMonitorInterval)  // Push monitoring every 5s
+	pushTicker := time.NewTicker(pushInterval)         // Push monitoring
 	syncTicker := time.NewTicker(10 * time.Second)     // Incremental sync every 10s
+	// One-shot startup deadline, created once outside the select so it actually
+	// elapses (a time.After in the select would be rebuilt on every ticker fire).
+	// It bounds how long a job may stay unconfirmed before final reconciliation.
+	startupTimer := time.NewTimer(startupTimeout)
 	defer progressTicker.Stop()
 	defer pushTicker.Stop()
 	defer syncTicker.Stop()
+	defer startupTimer.Stop()
 
 	for {
 		select {
@@ -1214,17 +2043,52 @@ func (dm *DVRManager) monitorJob(job *DVRJob) {
 			// Dual-storage: Sync new segments to S3
 			dm.syncNewSegments(job)
 
-		case <-time.After(5 * time.Minute): // Timeout if no updates
+		case <-startupTimer.C: // one-shot startup deadline
 			dm.mutex.RLock()
 			status := job.Status
+			snap := pushIdentity{streamName: job.StreamName, targetURI: job.TargetURI, dvrHash: job.DVRHash, generation: job.pushGeneration}
 			dm.mutex.RUnlock()
-			if status == "starting" {
-				job.Logger.Warn("DVR job timeout during startup")
-				if err := dm.StopRecording(job.DVRHash); err != nil {
-					job.Logger.WithError(err).Warn("Failed to stop timed-out DVR job")
-				}
-				return
+			if status != "starting" {
+				continue // confirmed in time — nothing to reconcile
 			}
+			// AUTHORITATIVE final reconciliation before declaring the writer stopped.
+			// An accepted-but-unconfirmed push (PushID 0) may still be live; we must
+			// not blindly StopRecording (which cannot stop it by an unknown ID).
+			pushes, listErr := dm.mistClient.PushList()
+			if listErr != nil {
+				// Mist is unreachable — absence was never established. RETAIN the job
+				// (quarantined protection) rather than declaring it stopped, and
+				// re-arm the deadline to reconcile again later.
+				job.Logger.WithError(listErr).Warn("DVR startup deadline reached but Mist is unavailable; retaining quarantined job")
+				startupTimer.Reset(startupTimeout)
+				continue
+			}
+			if push, ok := findExactDVRPush(pushes, snap.streamName, snap.targetURI, snap.dvrHash); ok {
+				// The push IS live — adopt it by real ID instead of stopping it.
+				dm.clearAbsenceEvidence(snap.dvrHash)
+				dm.withFreshGeneration(snap, func(j *DVRJob) {
+					j.PushID = push.ID
+					j.Status = "recording"
+				})
+				job.Logger.WithField("push_id", push.ID).Info("DVR push confirmed by identity at startup deadline; adopted")
+				continue
+			}
+			// Mist responded and no matching push exists. A single absence is NOT proof — an
+			// accepted push can be momentarily unlisted. Require bounded-absence convergence
+			// (repeated absence over a real grace + no segment/byte progress) before
+			// terminalizing; otherwise re-arm the deadline and reconcile again, retaining the job.
+			fp, readOK := dvrFingerprint(job.OutputDir)
+			if !dm.observeAbsenceConverged(snap.dvrHash, fp, readOK) {
+				job.Logger.Info("DVR startup deadline: no live push but absence not yet converged; re-arming to reconcile again")
+				startupTimer.Reset(startupTimeout)
+				continue
+			}
+			dm.clearAbsenceEvidence(snap.dvrHash)
+			job.Logger.Warn("DVR push never confirmed within the startup deadline (converged absence); stopping")
+			if err := dm.StopRecording(job.DVRHash); err != nil {
+				job.Logger.WithError(err).Warn("Failed to stop timed-out DVR job")
+			}
+			return
 		}
 	}
 }
@@ -1317,6 +2181,30 @@ func (dm *DVRManager) maintainPushStatus(job *DVRJob) {
 		return
 	}
 
+	// A job with PushID 0 is an accepted-but-unconfirmed start/recreate: ADOPT the
+	// push by identity if it appears, and otherwise WAIT — never re-issue PushStart.
+	// The command may have been accepted while Mist has not yet exposed it in the
+	// push list; re-issuing would create a SECOND writer against the same target,
+	// and adopt-by-identity cannot protect against a push the list does not reveal
+	// (there is no idempotency key or authoritative rejection signal). A quarantined
+	// job that never resolves is bounded by the session lifecycle: the source's
+	// STREAM_END drives StopDVRForEndedSource on Foghorn, which finalizes it. Stop
+	// remains safe regardless — StopRecordingWithSender stops by identity when the
+	// push id is unknown.
+	if snap.pushID == 0 {
+		if push, ok := findExactDVRPush(pushes, snap.streamName, snap.targetURI, snap.dvrHash); ok {
+			dm.withFreshGeneration(snap, func(j *DVRJob) {
+				j.PushID = push.ID
+				j.Status = "recording"
+			})
+			job.Logger.WithFields(logging.Fields{
+				"dvr_hash": snap.dvrHash,
+				"push_id":  push.ID,
+			}).Info("Reconciled accepted-but-unconfirmed DVR push by identity")
+		}
+		return
+	}
+
 	// Look for our push
 	pushFound := false
 	pushHasErrors := false
@@ -1372,16 +2260,35 @@ func (dm *DVRManager) maintainPushStatus(job *DVRJob) {
 			"has_errors":  pushHasErrors,
 		}).Info("Recreating DVR push due to failure or absence")
 
+		// If the current push is PRESENT but errored, STOP it by ID first —
+		// otherwise createOrRecreatePush adopts the same broken push and nothing is
+		// actually replaced. If it cannot be stopped, back off rather than risk a
+		// second writer against the same DVR target.
+		if pushHasErrors && snap.pushID > 0 {
+			if stopErr := dm.mistClient.PushStop(snap.pushID); stopErr != nil {
+				dm.withFreshGeneration(snap, func(j *DVRJob) {
+					j.RetryCount++
+					j.LastPushAttempt = time.Now()
+				})
+				job.Logger.WithError(stopErr).Warn("Failed to stop errored DVR push before recreate; backing off")
+				return
+			}
+		}
+
 		// Attempt to recreate push without the lock held.
-		newPushID, err := dm.createOrRecreatePush(snap, job.Logger)
+		newPushID, issued, err := dm.createOrRecreatePush(snap)
 		if err != nil {
-			// Advance retry bookkeeping only if a takeover/stop didn't win
-			// meanwhile; no push identity change, so don't bump generation.
 			dm.withFreshGeneration(snap, func(j *DVRJob) {
 				j.RetryCount++
 				j.LastPushAttempt = time.Now()
+				if issued {
+					// A push may be live but unconfirmed — the next pass must NOT
+					// re-issue PushStart (double writer). PushID 0 routes it to the
+					// adopt-by-identity path, which reconciles the accepted push.
+					j.PushID = 0
+				}
 			})
-			job.Logger.WithError(err).WithField("retry_count", retryCount).Warn("Failed to recreate push")
+			job.Logger.WithError(err).WithFields(logging.Fields{"retry_count": retryCount, "issued": issued}).Warn("Failed to recreate push")
 			return
 		}
 
@@ -1393,9 +2300,9 @@ func (dm *DVRManager) maintainPushStatus(job *DVRJob) {
 			j.LastPushAttempt = time.Now()
 		})
 		if !committed {
-			// A source takeover / stop / concurrent recreate won; the push we
-			// just started is orphaned and must be stopped to avoid a
-			// double-writer onto the same DVR target.
+			// A stop or a concurrent recreate won; the push we just started is
+			// orphaned and must be stopped to avoid a double-writer onto the
+			// same DVR target.
 			if stopErr := dm.mistClient.PushStop(newPushID); stopErr != nil {
 				job.Logger.WithError(stopErr).WithField("orphan_push_id", newPushID).Warn("Failed to stop orphaned DVR push after stale recreate")
 			}
@@ -1461,41 +2368,46 @@ func (dm *DVRManager) withFreshGeneration(snap pushIdentity, fn func(job *DVRJob
 	return true
 }
 
-// createOrRecreatePush creates or recreates a MistServer push for DVR
-// recording. It reads only the snapshot, never the live job, so it can run
-// without the manager lock held.
-func (dm *DVRManager) createOrRecreatePush(snap pushIdentity, logger logging.Logger) (int, error) {
-	// First, try to stop any existing push with the same stream/target
-	pushes, err := dm.mistClient.PushList()
-	if err != nil {
-		logger.WithError(err).Debug("Could not list existing pushes for cleanup")
-	} else {
-		// Clean up any existing pushes for this stream/target combination
-		for _, push := range pushes {
-			if dvrPushMatches(push, snap.streamName, snap.targetURI, snap.dvrHash) {
-				if stopErr := dm.mistClient.PushStop(push.ID); stopErr != nil {
-					logger.WithError(stopErr).WithField("old_push_id", push.ID).Debug("Failed to stop old push")
-				} else {
-					logger.WithField("old_push_id", push.ID).Debug("Cleaned up old push")
+// createOrRecreatePush ensures a MistServer push exists for the snapshot's
+// identity, returning its ID. It reads only the snapshot (no lock held). It first
+// ADOPTS an existing exact-identity push and issues PushStart (non-idempotent)
+// only when none exists, so a caller that retries re-adopts rather than
+// duplicating. Callers that need to REPLACE a specific push (e.g. an errored one)
+// must PushStop it by ID first, so this function does not adopt the very push
+// being replaced.
+//
+// `issued` reports whether this call issued a PushStart. When it did AND the push
+// could not be confirmed (ambiguous error, or accepted-but-not-yet-visible), the
+// error is returned WITH issued=true: the caller must NOT re-issue PushStart (a
+// second writer), and should reconcile the accepted push by identity instead.
+func (dm *DVRManager) createOrRecreatePush(snap pushIdentity) (pushID int, issued bool, err error) {
+	if pushes, e := dm.mistClient.PushList(); e == nil {
+		if push, ok := findExactDVRPush(pushes, snap.streamName, snap.targetURI, snap.dvrHash); ok {
+			return push.ID, false, nil // adopted an existing push; nothing issued
+		}
+	}
+
+	if pushErr := dm.mistClient.PushStart(snap.streamName, snap.targetURI); pushErr != nil {
+		if errors.Is(pushErr, mist.ErrMistAmbiguous) {
+			// The start may have been ACCEPTED despite the lost response. Try to
+			// confirm; either way mark issued so the caller never re-issues.
+			if pushes, listErr := dm.mistClient.PushList(); listErr == nil {
+				if push, ok := findExactDVRPush(pushes, snap.streamName, snap.targetURI, snap.dvrHash); ok {
+					return push.ID, true, nil
 				}
 			}
+			return 0, true, fmt.Errorf("push start ambiguous, unconfirmed: %w", pushErr)
 		}
+		// A clean rejection means nothing was created — safe for the caller to retry.
+		return 0, false, fmt.Errorf("failed to start push: %w", pushErr)
 	}
 
-	// Create new push
-	if pushErr := dm.mistClient.PushStart(snap.streamName, snap.targetURI); pushErr != nil {
-		return 0, fmt.Errorf("failed to start push: %w", pushErr)
-	}
-
+	// PushStart succeeded — a push exists even if the listing hasn't caught up.
 	deadline := time.Now().Add(pushListVisibilityFor)
 	for {
-		pushes, err = dm.mistClient.PushList()
-		if err != nil {
-			return 0, fmt.Errorf("failed to get push list after creation: %w", err)
-		}
-		for _, push := range pushes {
-			if dvrPushMatches(push, snap.streamName, snap.targetURI, snap.dvrHash) {
-				return push.ID, nil
+		if pushes, e := dm.mistClient.PushList(); e == nil {
+			if push, ok := findExactDVRPush(pushes, snap.streamName, snap.targetURI, snap.dvrHash); ok {
+				return push.ID, true, nil
 			}
 		}
 		if time.Now().Add(pushListVisibilityPollFor).After(deadline) {
@@ -1504,7 +2416,100 @@ func (dm *DVRManager) createOrRecreatePush(snap pushIdentity, logger logging.Log
 		time.Sleep(pushListVisibilityPollFor)
 	}
 
-	return 0, fmt.Errorf("failed to find created push in push list")
+	return 0, true, fmt.Errorf("push started but not confirmed in push list")
+}
+
+// dvrPushOutcome distinguishes the three states an initial push attempt can end
+// in — critical because PushStart is NON-idempotent, so "we never started" and
+// "we started but couldn't confirm" must be handled differently: the former may
+// retry / roll back; the latter must NOT retry PushStart and must NOT delete
+// recovery metadata, because a live push may already be writing.
+type dvrPushOutcome int
+
+const (
+	dvrPushConfirmed           dvrPushOutcome = iota // an exact-identity push is confirmed live
+	dvrPushAcceptedUnconfirmed                       // PushStart was accepted; a push may be live but is unconfirmed
+	dvrPushNotStarted                                // PushStart never succeeded; no push was created
+)
+
+// findExactDVRPush returns the push whose RUNTIME matches streamName exactly and
+// whose target either equals targetURI or contains dvrHash. The runtime match is
+// the hard guarantee (a foreign publisher's push under a different runtime never
+// matches); the target side falls back to hash containment because Mist expands
+// the target we send (see dvrPushMatches). Callers pass targetURI="" when they
+// only know the runtime + hash.
+func findExactDVRPush(pushes []mist.PushInfo, streamName, targetURI, dvrHash string) (mist.PushInfo, bool) {
+	for _, push := range pushes {
+		if dvrPushMatches(push, streamName, targetURI, dvrHash) {
+			return push, true
+		}
+	}
+	return mist.PushInfo{}, false
+}
+
+// findDVRPushByHash matches any push writing this DVR's target by the hash embedded
+// in the target path, WITHOUT requiring the runtime stream name. Used only by the
+// on-disk recovery stop, where the in-memory job (and thus the stream name) was
+// lost, so the exact-identity match cannot be used.
+func findDVRPushByHash(pushes []mist.PushInfo, dvrHash string) (mist.PushInfo, bool) {
+	if dvrHash == "" {
+		return mist.PushInfo{}, false
+	}
+	for _, push := range pushes {
+		if strings.Contains(push.TargetURI, dvrHash) || strings.Contains(push.ActualURI, dvrHash) {
+			return push, true
+		}
+	}
+	return mist.PushInfo{}, false
+}
+
+// ensureInitialPush drives the initial DVR push as an idempotent state machine.
+// It issues at most ONE PushStart for the whole call: each iteration first tries
+// to CONFIRM an exact-identity push (adopting a prior iteration's accepted push
+// or any pre-existing identical one); only if none is found and no start has yet
+// been accepted does it PushStart. This never creates a second writer. It returns
+// dvrPushConfirmed with the live PushID, dvrPushAcceptedUnconfirmed when a start
+// was accepted but never confirmed within the window (caller keeps the job +
+// metadata; the monitor reconciles by identity), or dvrPushNotStarted when
+// PushStart never succeeded (caller may roll back).
+func (dm *DVRManager) ensureInitialPush(snap pushIdentity, logger logging.Logger) (int, dvrPushOutcome, error) {
+	pushStartAccepted := false
+	var lastErr error
+	deadline := time.Now().Add(initialPushRetryFor)
+	for attempt := 0; ; attempt++ {
+		if pushes, listErr := dm.mistClient.PushList(); listErr == nil {
+			if push, ok := findExactDVRPush(pushes, snap.streamName, snap.targetURI, snap.dvrHash); ok {
+				return push.ID, dvrPushConfirmed, nil
+			}
+		} else {
+			lastErr = listErr
+		}
+		// Issue PushStart at most once across the whole call — it is non-idempotent.
+		// A CLEAN rejection (Mist answered non-200) leaves us free to retry; an
+		// AMBIGUOUS error (transport/decode after send) may have been accepted, so
+		// we must treat it as issued and confirm via PushList, never re-issue.
+		if !pushStartAccepted {
+			startErr := dm.mistClient.PushStart(snap.streamName, snap.targetURI)
+			if startErr == nil || errors.Is(startErr, mist.ErrMistAmbiguous) {
+				pushStartAccepted = true
+			}
+			if startErr != nil {
+				lastErr = startErr
+			}
+		}
+		if time.Now().Add(initialPushRetryEvery).After(deadline) {
+			if pushStartAccepted {
+				return 0, dvrPushAcceptedUnconfirmed, lastErr
+			}
+			return 0, dvrPushNotStarted, lastErr
+		}
+		logger.WithFields(logging.Fields{
+			"attempt":  attempt + 1,
+			"accepted": pushStartAccepted,
+			"stream":   snap.streamName,
+		}).Warn("DVR initial push not confirmed yet; retrying")
+		time.Sleep(initialPushRetryEvery)
+	}
 }
 
 func dvrPushMatches(push mist.PushInfo, streamName, targetURI, dvrHash string) bool {

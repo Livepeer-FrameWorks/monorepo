@@ -7,6 +7,33 @@ import (
 	"time"
 )
 
+// Two STREAM_END triggers with an IDENTICAL body but distinct Mist trigger identity (UUID +
+// event time) must yield distinct WAL natural keys — otherwise they collapse to one WAL record while
+// Foghorn is unavailable, and replaying the older event time can miss the newer generation. Retries
+// of ONE STREAM_END (same UUID + time) share the key so retry-dedup still holds.
+func TestWALNaturalKey_StreamEndDistinguishesByUUIDAndTime(t *testing.T) {
+	mk := func(uuid string, ms int64) *ipcpb.MistTrigger {
+		return &ipcpb.MistTrigger{
+			NodeId: "node-1",
+			TriggerPayload: &ipcpb.MistTrigger_StreamEnd{
+				StreamEnd: &ipcpb.StreamEndTrigger{StreamName: "live+s", TriggerUuid: uuid, TriggerUnixMillis: ms},
+			},
+		}
+	}
+	a := walNaturalKey(mk("uuid-1", 1000))
+	b := walNaturalKey(mk("uuid-2", 2000)) // distinct logical STREAM_END
+	retry := walNaturalKey(mk("uuid-1", 1000))
+	if a == "" {
+		t.Fatal("STREAM_END must produce a non-empty natural key")
+	}
+	if a == b {
+		t.Fatalf("two distinct STREAM_ENDs must have distinct WAL natural keys, both %q", a)
+	}
+	if a != retry {
+		t.Fatalf("a retry of one STREAM_END must share the natural key, got %q vs %q", a, retry)
+	}
+}
+
 func TestExtractVODHash(t *testing.T) {
 	tests := []struct {
 		name   string

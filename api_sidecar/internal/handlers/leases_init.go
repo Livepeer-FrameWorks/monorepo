@@ -58,6 +58,8 @@ func InitLeases(logger logging.Logger, storagePath string) {
 	heat := leases.NewHeatTracker()
 	tracker := leases.NewTracker(segIndex, heat)
 	sourceReg := leases.NewSourceRegistry()
+	// leases.Install couples the tracker to the registry so a stream's lease and
+	// its source-registry entry are recorded/forgotten in one critical section.
 
 	// Deferred-delete store: when an operator delete arrives for a leased
 	// asset, the intent persists here and a retry loop drains as leases

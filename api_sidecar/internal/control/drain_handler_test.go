@@ -1,7 +1,12 @@
 package control
 
 import (
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	sidecarcfg "frameworks/api_sidecar/internal/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -38,7 +43,8 @@ func TestHandleDrainStream_ConfigMissing_ReportsError(t *testing.T) {
 	t.Cleanup(func() { currentConfig = prev })
 
 	var got *ipcpb.DrainStreamResponse
-	handleDrainStream(logging.NewLogger(), &ipcpb.DrainStreamRequest{RuntimeName: "live+abc"}, func(m *ipcpb.ControlMessage) {
+	RecordAdmittedIngestGeneration("live+abc", "prior-err", 101)
+	handleDrainStream(logging.NewLogger(), &ipcpb.DrainStreamRequest{RuntimeName: "live+abc", SourceGeneration: "gen-err", PriorOwnerSourceGeneration: "prior-err"}, func(m *ipcpb.ControlMessage) {
 		got = m.GetDrainStreamResponse()
 	})
 
@@ -48,6 +54,11 @@ func TestHandleDrainStream_ConfigMissing_ReportsError(t *testing.T) {
 	if got.GetRuntimeName() != "live+abc" {
 		t.Errorf("runtime echo = %q, want live+abc", got.GetRuntimeName())
 	}
+	// The obligation identity must be echoed even on the error path — a response without it cannot
+	// be correlated to its durable drain leg and the obligation would redispatch forever.
+	if got.GetSourceGeneration() != "gen-err" {
+		t.Errorf("source_generation echo = %q, want gen-err", got.GetSourceGeneration())
+	}
 	if got.GetError() == "" {
 		t.Error("expected error message when config missing")
 	}
@@ -56,13 +67,13 @@ func TestHandleDrainStream_ConfigMissing_ReportsError(t *testing.T) {
 	}
 }
 
-// TestHandleDrainStream_HappyPath confirms the operational sequence on
-// takeover: StopSessions (boot viewers off the stale buffer so they
-// reselect via PLAY_REWRITE), NukeStream (the correct API for wildcard
-// instances — deletestream is a no-op on runtime-only entries), and
-// ClearDVRSourceOverride (so the next start doesn't pull from a gone
-// source). All three are required; missing any one is a known
-// foot-gun the audit flagged.
+// TestHandleDrainStream_HappyPath confirms the operational sequence when a
+// replacement publisher session displaces the prior owner: StopSessions
+// (boot viewers off the stale buffer so they reselect via PLAY_REWRITE),
+// NukeStream (the correct API for wildcard instances — deletestream is a
+// no-op on runtime-only entries), and ClearDVRSourceOverride (so the next
+// start doesn't pull from a gone source). All three are required; missing
+// any one leaves stale state.
 func TestHandleDrainStream_HappyPath(t *testing.T) {
 	mock := newMockMistServer(t)
 	prev := currentConfig
@@ -74,9 +85,12 @@ func TestHandleDrainStream_HappyPath(t *testing.T) {
 	t.Cleanup(func() { ClearDVRSourceOverride("live+drain-target") })
 
 	var got *ipcpb.DrainStreamResponse
+	RecordAdmittedIngestGeneration("live+drain-target", "prior-ok", 102)
 	handleDrainStream(logging.NewLogger(), &ipcpb.DrainStreamRequest{
-		RuntimeName: "live+drain-target",
-		Reason:      "takeover_test",
+		RuntimeName:                "live+drain-target",
+		Reason:                     "publisher_replaced_test",
+		SourceGeneration:           "gen-ok",
+		PriorOwnerSourceGeneration: "prior-ok",
 	}, func(m *ipcpb.ControlMessage) {
 		got = m.GetDrainStreamResponse()
 	})
@@ -86,6 +100,9 @@ func TestHandleDrainStream_HappyPath(t *testing.T) {
 	}
 	if !got.GetUnloaded() {
 		t.Errorf("unloaded = false on happy path; want true (response: %+v)", got)
+	}
+	if got.GetSourceGeneration() != "gen-ok" {
+		t.Errorf("source_generation echo = %q, want gen-ok (the drain leg cannot complete without it)", got.GetSourceGeneration())
 	}
 	if got.GetError() != "" {
 		t.Errorf("unexpected error: %q", got.GetError())
@@ -105,52 +122,98 @@ func TestHandleDrainStream_HappyPath(t *testing.T) {
 	}
 }
 
-// TestHandleDVRUpdateSource_EmptyHash_NoOp guards the dispatch boundary.
-// An empty dvr_hash is unaddressable — the response would be keyed by
-// empty string and ambiguate Foghorn's relay table.
-func TestHandleDVRUpdateSource_EmptyHash_NoOp(t *testing.T) {
-	var sent []*ipcpb.ControlMessage
-	handleDVRUpdateSource(logging.NewLogger(), &ipcpb.DVRUpdateSourceRequest{DvrHash: ""}, func(m *ipcpb.ControlMessage) {
-		sent = append(sent, m)
+func TestHandleDrainStream_UnknownGenerationFailsClosed(t *testing.T) {
+	const runtimeName = "live+drain-unknown-generation"
+	var got *ipcpb.DrainStreamResponse
+	handleDrainStream(logging.NewLogger(), &ipcpb.DrainStreamRequest{
+		RuntimeName:                runtimeName,
+		SourceGeneration:           "replacement-obligation",
+		PriorOwnerSourceGeneration: "unproven-prior-generation",
+	}, func(m *ipcpb.ControlMessage) {
+		got = m.GetDrainStreamResponse()
 	})
-	if len(sent) != 0 {
-		t.Fatalf("empty hash should not respond; got %d", len(sent))
+	if got == nil || got.GetError() == "" || got.GetUnloaded() {
+		t.Fatalf("unknown local generation must fail closed without touching Mist, got %+v", got)
 	}
 }
 
-// TestHandleDVRUpdateSource_MissingJob_Idempotent: Foghorn dispatches one
-// DVR-update-source per takeover. If the named DVR isn't running on this
-// node (e.g. the artifact was cleaned up between artifact lookup and
-// dispatch arrival), refresh=false + no error keeps the takeover path
-// from spuriously alarming.
-func TestHandleDVRUpdateSource_MissingJob_Idempotent(t *testing.T) {
-	prevDM := dvrManager
-	dvrManager = &DVRManager{
-		logger: logging.NewLogger(),
-		jobs:   map[string]*DVRJob{},
-	}
-	dvrManagerOnce.Do(func() {}) // mark Once as done so initDVRManager() inside handler is a no-op
-	t.Cleanup(func() { dvrManager = prevDM })
-
-	var got *ipcpb.DVRUpdateSourceResponse
-	handleDVRUpdateSource(logging.NewLogger(), &ipcpb.DVRUpdateSourceRequest{
-		DvrHash:           "unknown-hash",
-		SourceRuntimeName: "live+x",
-		SourceBaseUrl:     "dtsc://new-node/live+x",
+func TestHandleDrainStream_SuccessorGenerationFencesLateCommand(t *testing.T) {
+	const runtimeName = "live+drain-successor-fence"
+	RecordAdmittedIngestGeneration(runtimeName, "successor-generation", 103)
+	var got *ipcpb.DrainStreamResponse
+	handleDrainStream(logging.NewLogger(), &ipcpb.DrainStreamRequest{
+		RuntimeName:                runtimeName,
+		SourceGeneration:           "replacement-obligation",
+		PriorOwnerSourceGeneration: "retired-generation",
 	}, func(m *ipcpb.ControlMessage) {
-		got = m.GetDvrUpdateSourceResponse()
+		got = m.GetDrainStreamResponse()
 	})
+	if got == nil || got.GetError() != "" || got.GetUnloaded() {
+		t.Fatalf("generation-fenced drain should complete without touching Mist, got %+v", got)
+	}
+	if got.GetSourceGeneration() != "replacement-obligation" {
+		t.Fatalf("source generation echo = %q", got.GetSourceGeneration())
+	}
+}
 
-	if got == nil {
-		t.Fatal("expected response")
+func TestHandleDrainStream_SerializesSuccessorAdmissionWithMistMutation(t *testing.T) {
+	const runtimeName = "live+drain-generation-serialization"
+	RecordAdmittedIngestGeneration(runtimeName, "prior-generation", 104)
+	nukeStarted := make(chan struct{})
+	releaseNuke := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var command map[string]any
+		if raw := r.URL.Query().Get("command"); raw != "" {
+			_ = json.Unmarshal([]byte(raw), &command)
+		} else {
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &command)
+		}
+		if _, ok := command["authorize"]; ok {
+			_, _ = w.Write([]byte(`{"authorize":{"status":"OK"}}`))
+			return
+		}
+		if _, ok := command["nuke_stream"]; ok {
+			close(nukeStarted)
+			<-releaseNuke
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+	withConfig(t, &sidecarcfg.HelmsmanConfig{MistServerURL: srv.URL})
+
+	drainDone := make(chan struct{})
+	go func() {
+		handleDrainStream(logging.NewLogger(), &ipcpb.DrainStreamRequest{
+			RuntimeName:                runtimeName,
+			SourceGeneration:           "replacement-obligation",
+			PriorOwnerSourceGeneration: "prior-generation",
+		}, func(*ipcpb.ControlMessage) {})
+		close(drainDone)
+	}()
+	select {
+	case <-nukeStarted:
+	case <-time.After(5 * time.Second):
+		close(releaseNuke)
+		t.Fatal("drain never reached the destructive Mist operation")
 	}
-	if got.GetDvrHash() != "unknown-hash" {
-		t.Errorf("hash echo = %q", got.GetDvrHash())
+
+	recordDone := make(chan struct{})
+	go func() {
+		RecordAdmittedIngestGeneration(runtimeName, "successor-generation", 105)
+		close(recordDone)
+	}()
+	select {
+	case <-recordDone:
+		close(releaseNuke)
+		<-drainDone
+		t.Fatal("successor generation was recorded while prior-generation drain still mutated Mist")
+	case <-time.After(100 * time.Millisecond):
+		close(releaseNuke)
 	}
-	if got.GetRefreshed() {
-		t.Error("Refreshed should be false for unknown job")
-	}
-	if got.GetError() != "" {
-		t.Errorf("unexpected error: %q", got.GetError())
+	<-drainDone
+	<-recordDone
+	if current, known := admittedIngestGeneration(runtimeName); !known || current != "successor-generation" {
+		t.Fatalf("current generation = %q, known=%v", current, known)
 	}
 }

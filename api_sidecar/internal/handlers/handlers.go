@@ -81,13 +81,32 @@ func applyTenantContext(trigger *ipcpb.MistTrigger) {
 // dedupe. Returns the stable id so callers can include it in structured logs.
 func forwardDurable(triggerType string, body []byte, mistTrigger *ipcpb.MistTrigger) (string, error) {
 	nodeID := control.GetCurrentNodeID()
-	sourceEventID := storage.ComputeSourceEventID(nodeID, triggerType, body)
+	sourceEventID := storage.ComputeSourceEventID(nodeID, triggerType, body, walNaturalKey(mistTrigger))
 	if !mist.IsDurableTriggerType(triggerType) {
 		return sourceEventID, fmt.Errorf("trigger type %s is not registered durable", triggerType)
 	}
 	mistTrigger.RequestId = sourceEventID
 	mistTrigger.EventId = storage.ComputeTypedEventID(sourceEventID)
 	return sourceEventID, sendDurableMistTrigger(mistTrigger)
+}
+
+// walNaturalKey returns MistServer's per-logical-trigger identity to distinguish two
+// otherwise-identical durable trigger bodies in the WAL dedup key. A PUSH_INPUT_CLOSE for
+// a reused connector PID has an identical body to the prior session's close; the trigger
+// UUID keeps the two real closes distinct while still colliding a single close's retries.
+// Empty for triggers without a captured UUID (falls back to the body-only key).
+func walNaturalKey(mistTrigger *ipcpb.MistTrigger) string {
+	if pic := mistTrigger.GetPushInputClose(); pic != nil {
+		return pic.GetTriggerUuid()
+	}
+	if se := mistTrigger.GetStreamEnd(); se != nil {
+		// Fold the trigger UUID AND event time so two legitimately-distinct STREAM_ENDs with
+		// identical metrics bodies do not collapse to one WAL record (which would let a replay of the
+		// older event time miss the newer generation). Retries of ONE STREAM_END carry the same UUID
+		// and time, so retry-dedup still holds.
+		return se.GetTriggerUuid() + ":" + strconv.FormatInt(se.GetTriggerUnixMillis(), 10)
+	}
+	return ""
 }
 
 func forwardDurableParseFailure(triggerType string, body []byte, parseErr error) (string, error) {
@@ -610,6 +629,64 @@ func HealthCheck(c *gin.Context) {
 
 // HandlePushRewrite handles the PUSH_REWRITE trigger from MistServer
 // This is a critical blocking trigger - validates stream keys and routes to wildcard streams
+// capturePushRewriteIdentity reads MistServer's publisher-connection identity from the
+// trigger HTTP headers (X-PID / X-Trigger-UUID / X-Trigger-UnixMillis; MistServer
+// lib/triggers.cpp sets these on every trigger) onto the PushRewriteTrigger. For
+// PUSH_REWRITE the connector process IS the ingest connection, so its PID is the
+// ingest-session identity Foghorn correlates against the same connector's later
+// PUSH_INPUT_CLOSE. These are Mist's OWN values — never re-synthesized at receive time
+// — and are kept separate from FrameWorks' request_id/event_id (WAL dedup).
+func capturePushRewriteIdentity(pr *ipcpb.PushRewriteTrigger, header http.Header) {
+	if pr == nil {
+		return
+	}
+	if pidStr := strings.TrimSpace(header.Get("X-PID")); pidStr != "" {
+		if pid, err := strconv.ParseInt(pidStr, 10, 64); err == nil {
+			pr.Pid = pid
+		}
+	}
+	pr.TriggerUuid = strings.TrimSpace(header.Get("X-Trigger-UUID"))
+	pr.TriggerUnixMillis = triggerUnixMillis(header)
+}
+
+// triggerUnixMillis reads MistServer's X-Trigger-UnixMillis header (the controller's
+// own event time). Returns 0 when absent or unparseable so callers can treat it as
+// "unknown" rather than fabricating a receive-time value.
+func triggerUnixMillis(header http.Header) int64 {
+	if msStr := strings.TrimSpace(header.Get("X-Trigger-UnixMillis")); msStr != "" {
+		if ms, err := strconv.ParseInt(msStr, 10, 64); err == nil {
+			return ms
+		}
+	}
+	return 0
+}
+
+// capturePushInputCloseIdentity records Mist's event time onto the PUSH_INPUT_CLOSE
+// payload so Foghorn can fence a delayed close against ingest-session PID reuse. The
+// connector PID already rides the typed payload (field 4); the event time keys the
+// close to the exact ingest generation that started before it.
+func capturePushInputCloseIdentity(pic *ipcpb.PushInputCloseTrigger, header http.Header) {
+	if pic == nil {
+		return
+	}
+	pic.TriggerUnixMillis = triggerUnixMillis(header)
+	pic.TriggerUuid = strings.TrimSpace(header.Get("X-Trigger-UUID"))
+}
+
+// captureStreamEndIdentity records Mist's event time onto the STREAM_END payload so Foghorn can run
+// the ingest-session reaper event-time-fenced: STREAM_END ends only sessions that started at or
+// before this time, so a reconnect that came up AFTER the stream ended is not reaped. STREAM_END
+// carries no connector PID (it is aggregate stream inactivity), so the event time is the only fence
+// it can supply. 0 when absent (old Mist / missing header) → Foghorn skips the reaper and falls back
+// to its conservative offline fence.
+func captureStreamEndIdentity(se *ipcpb.StreamEndTrigger, header http.Header) {
+	if se == nil {
+		return
+	}
+	se.TriggerUnixMillis = triggerUnixMillis(header)
+	se.TriggerUuid = strings.TrimSpace(header.Get("X-Trigger-UUID"))
+}
+
 func HandlePushRewrite(c *gin.Context) {
 	start := time.Now()
 	incMistWebhook("PUSH_REWRITE", "received")
@@ -656,6 +733,9 @@ func HandlePushRewrite(c *gin.Context) {
 		return
 	}
 
+	// Capture MistServer's publisher-connection identity from the trigger HTTP headers.
+	capturePushRewriteIdentity(mistTrigger.GetPushRewrite(), c.Request.Header)
+
 	// Forward trigger to Foghorn via gRPC and get response
 	applyTenantContext(mistTrigger)
 	result, err := sendMistTrigger(mistTrigger, logger)
@@ -688,7 +768,6 @@ func HandlePushRewrite(c *gin.Context) {
 		c.String(http.StatusOK, "") // Empty response denies the push
 		return
 	}
-
 	logger.WithFields(logging.Fields{
 		"response": result.Response,
 	}).Info("PUSH_REWRITE approved by Foghorn")
@@ -1152,15 +1231,12 @@ func acquireSourceLeaseForStream(streamName, response string) {
 			}
 		}
 		key := leases.AssetKey{Type: "vod", Hash: internal}
-		tracker.AcquireSource(streamName, paths, key, nil, false)
-		if reg := leases.GlobalSourceRegistry(); reg != nil {
-			reg.Record(leases.SourceEntry{
-				StreamName:   streamName,
-				LocalPath:    response,
-				AssetType:    "vod",
-				InternalName: internal,
-			})
-		}
+		tracker.AcquireResolvedSource(streamName, paths, key, nil, leases.SourceEntry{
+			StreamName:   streamName,
+			LocalPath:    response,
+			AssetType:    "vod",
+			InternalName: internal,
+		})
 		return
 	}
 
@@ -1171,15 +1247,12 @@ func acquireSourceLeaseForStream(streamName, response string) {
 		// per-segment cleanup, not the lease layer.
 		if dvrHash := leases.DeriveDvrHashFromRollingManifestPath(response); dvrHash != "" {
 			key := leases.AssetKey{Type: "dvr", Hash: dvrHash}
-			tracker.AcquireSource(streamName, []string{response}, key, nil, false)
-			if reg := leases.GlobalSourceRegistry(); reg != nil {
-				reg.Record(leases.SourceEntry{
-					StreamName: streamName,
-					LocalPath:  response,
-					AssetType:  "dvr",
-					DvrHash:    dvrHash,
-				})
-			}
+			tracker.AcquireResolvedSource(streamName, []string{response}, key, nil, leases.SourceEntry{
+				StreamName: streamName,
+				LocalPath:  response,
+				AssetType:  "dvr",
+				DvrHash:    dvrHash,
+			})
 		}
 	}
 }
@@ -1202,27 +1275,23 @@ func acquireSourceLeaseFromRelayURL(streamName, response string, tracker *leases
 	switch key.Type {
 	case "vod", "clip", "upload":
 		paths := leases.DeterministicPathsForAsset(basePath, key, mediaExt, streamInternal, nil)
-		tracker.AcquireSource(streamName, paths, key, nil, false)
-		if reg := leases.GlobalSourceRegistry(); reg != nil {
-			internal := ""
-			if v, ok := leases.ParseVODInternalName(streamName); ok {
-				internal = v
-			}
-			// LocalPath is the canonical media file the viewer is most
-			// likely to actually read. For clips, that's the nested
-			// clips/<stream>/<hash>.<ext> the writer produces — record
-			// against THAT so HeatTracker.Touch bumps the right file's
-			// LRU position, not the flat fallback path that almost never
-			// exists for stream-tied clips. VOD/upload always use the
-			// flat layout (paths[0]).
-			canonicalLocal := preferredHeatPath(basePath, key, mediaExt, streamInternal, paths)
-			reg.Record(leases.SourceEntry{
-				StreamName:   streamName,
-				LocalPath:    canonicalLocal,
-				AssetType:    key.Type,
-				InternalName: internal,
-			})
+		internal := ""
+		if v, ok := leases.ParseVODInternalName(streamName); ok {
+			internal = v
 		}
+		// LocalPath is the canonical media file the viewer is most likely to
+		// actually read. For clips, that's the nested clips/<stream>/<hash>.<ext>
+		// the writer produces — record against THAT so HeatTracker.Touch bumps
+		// the right file's LRU position, not the flat fallback path that almost
+		// never exists for stream-tied clips. VOD/upload always use the flat
+		// layout (paths[0]).
+		canonicalLocal := preferredHeatPath(basePath, key, mediaExt, streamInternal, paths)
+		tracker.AcquireResolvedSource(streamName, paths, key, nil, leases.SourceEntry{
+			StreamName:   streamName,
+			LocalPath:    canonicalLocal,
+			AssetType:    key.Type,
+			InternalName: internal,
+		})
 	}
 	// DVR relay URLs (dvr/<dvr_hash>/chapter/...) are no longer
 	// parsed — chapter playback flows through vod/<chapter_hash>
@@ -1239,10 +1308,10 @@ func acquireViewerLeaseForSession(sessionID, streamName string) {
 		return
 	}
 	localPath := ""
-	if reg := leases.GlobalSourceRegistry(); reg != nil {
-		if entry, ok := reg.Lookup(streamName); ok {
-			localPath = entry.LocalPath
-		}
+	// Read the registry through the tracker so lease and registry state are
+	// observed under the same lock that mutates them together.
+	if entry, ok := tracker.LookupSource(streamName); ok {
+		localPath = entry.LocalPath
 	}
 	if localPath == "" {
 		// Fall back to the artifact index: STREAM_SOURCE may have been
@@ -1267,16 +1336,15 @@ func acquireViewerLeaseForSession(sessionID, streamName string) {
 	tracker.AcquireViewer(sessionID, streamName, localPath)
 }
 
-// releaseSourceLeaseForStream is the STREAM_END counterpart.
+// releaseSourceLeaseForStream is the STREAM_END counterpart. ReleaseSource
+// atomically drops both the lease and its attached registry entry under one
+// lock, so they cannot be torn against a concurrent reconcile.
 func releaseSourceLeaseForStream(streamName string) {
 	if streamName == "" {
 		return
 	}
 	if tracker := leases.GlobalTracker(); tracker != nil {
 		tracker.ReleaseSource(streamName)
-	}
-	if reg := leases.GlobalSourceRegistry(); reg != nil {
-		reg.Forget(streamName)
 	}
 }
 
@@ -1376,11 +1444,33 @@ func HandlePushInputClose(c *gin.Context) {
 		return
 	}
 
+	// Capture Mist's event identity (trigger UUID + event time) so Foghorn can fence a
+	// delayed close against ingest-session PID reuse; the connector PID is already in the
+	// payload. The trigger UUID is REQUIRED — it is the WAL dedup key that keeps two
+	// identical-body closes under a reused PID distinct, so a close without it is malformed
+	// and fails closed (Mist supplies it on every trigger, so this cannot wedge a real close).
+	pic := mistTrigger.GetPushInputClose()
+	capturePushInputCloseIdentity(pic, c.Request.Header)
+	if pic != nil && !strings.HasPrefix(pic.GetStreamName(), "processing+") && pic.GetTriggerUuid() == "" {
+		incMistWebhook("PUSH_INPUT_CLOSE", "missing_trigger_uuid")
+		logger.WithField("stream_name", pic.GetStreamName()).
+			Error("PUSH_INPUT_CLOSE missing X-Trigger-UUID; failing closed (malformed/non-Mist)")
+		c.String(http.StatusBadRequest, "missing trigger identity")
+		return
+	}
+
 	applyTenantContext(mistTrigger)
 	sourceEventID, err := forwardDurable(string(mist.TriggerPushInputClose), body, mistTrigger)
 	if err != nil {
 		respondDurableEnqueueError(c, logger, "PUSH_INPUT_CLOSE", sourceEventID, err)
 		return
+	}
+	if pic != nil {
+		if err := control.MarkAdmittedIngestGenerationEnded(pic.GetStreamName(), pic.GetPid()); err != nil {
+			logger.WithError(err).WithField("stream_name", pic.GetStreamName()).Error("Failed to persist ended ingest-generation tombstone")
+			c.String(http.StatusServiceUnavailable, "failed to persist generation fence")
+			return
+		}
 	}
 	incMistWebhook("PUSH_INPUT_CLOSE", "durably_enqueued")
 	c.String(http.StatusOK, "OK")
@@ -1539,6 +1629,9 @@ func HandleStreamEnd(c *gin.Context) {
 	// no longer read this file; cleanup may proceed (subject to any viewer
 	// lease still pinning the path for ongoing playback).
 	if se := mistTrigger.GetStreamEnd(); se != nil {
+		// Capture Mist's event time so Foghorn's ingest-session reaper can end only sessions that
+		// started at or before this STREAM_END, preserving a later reconnect.
+		captureStreamEndIdentity(se, c.Request.Header)
 		releaseSourceLeaseForStream(se.GetStreamName())
 	}
 

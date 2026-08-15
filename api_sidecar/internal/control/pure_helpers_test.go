@@ -87,22 +87,25 @@ func TestSanitizeDvrStorageError(t *testing.T) {
 	}
 }
 
-func TestFindDVRPush(t *testing.T) {
+func TestFindExactDVRPush(t *testing.T) {
 	pushes := []mist.PushInfo{
-		{ID: 1, TargetURI: "s3://bucket/other/seg.ts"},
-		{ID: 2, TargetURI: "dtsc://node/dvr+abc123/seg.ts"},
-		{ID: 3, ActualURI: "https://peer/relay/def456/manifest.m3u8"},
+		{ID: 1, StreamName: "live+other", TargetURI: "s3://bucket/other/abc123/seg.ts"},
+		{ID: 2, StreamName: "live+mine", TargetURI: "dtsc://node/dvr+abc123/seg.ts"},
+		{ID: 3, StreamName: "live+peer", ActualURI: "https://peer/relay/def456/manifest.m3u8"},
 	}
-	if got, ok := findDVRPush(pushes, "abc123"); !ok || got.ID != 2 {
-		t.Errorf("match in TargetURI: got=%+v ok=%v", got, ok)
+	// Exact runtime + hash-in-target matches only the push under that runtime.
+	if got, ok := findExactDVRPush(pushes, "live+mine", "", "abc123"); !ok || got.ID != 2 {
+		t.Errorf("runtime+hash match: got=%+v ok=%v", got, ok)
 	}
-	if got, ok := findDVRPush(pushes, "def456"); !ok || got.ID != 3 {
-		t.Errorf("match in ActualURI: got=%+v ok=%v", got, ok)
+	// A foreign runtime that merely shares the hash must NOT match.
+	if _, ok := findExactDVRPush(pushes, "live+mine", "", "def456"); ok {
+		t.Error("must not match a hash under a different runtime")
 	}
-	if _, ok := findDVRPush(pushes, "missing"); ok {
-		t.Error("unexpected match for absent hash")
+	// The runtime must match even when the hash is present under another runtime.
+	if _, ok := findExactDVRPush(pushes, "live+nobody", "", "abc123"); ok {
+		t.Error("must not match when no push runs under the requested runtime")
 	}
-	if _, ok := findDVRPush(nil, "abc123"); ok {
+	if _, ok := findExactDVRPush(nil, "live+mine", "", "abc123"); ok {
 		t.Error("unexpected match in empty push list")
 	}
 }
