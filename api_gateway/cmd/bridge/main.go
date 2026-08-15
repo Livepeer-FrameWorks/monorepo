@@ -95,11 +95,16 @@ func main() {
 	})
 	defer usageTracker.Stop()
 
-	trustedProxies, invalidProxies := middleware.ParseTrustedProxies(config.GetEnv("TRUSTED_PROXY_CIDRS", ""))
-	if len(invalidProxies) > 0 {
-		logger.WithField("invalid_entries", strings.Join(invalidProxies, ", ")).
-			Warn("Ignoring invalid trusted proxy entries")
-	}
+	// Env-backed so a SIGHUP env reload takes effect, and so Bridge and Foghorn
+	// cannot drift apart on who a caller is after a change.
+	trustedProxies := middleware.TrustedProxiesFromEnv(
+		"TRUSTED_PROXY_CIDRS",
+		func(key string) string { return config.GetEnv(key, "") },
+		func(invalid []string) {
+			logger.WithField("invalid_entries", strings.Join(invalid, ", ")).
+				Warn("Ignoring invalid trusted proxy entries")
+		},
+	)
 
 	// Parse CORS allowed origins for WebSocket CheckOrigin
 	wsDevMode := config.GetEnv("GIN_MODE", "debug") != "release"
@@ -213,6 +218,12 @@ func main() {
 		})
 		logger.WithField("max_depth", maxDepth).Info("GraphQL depth limit enabled")
 	}
+
+	// WebSocket upgrades pass the HTTP auth and rate-limit layers because their
+	// connectionParams are processed later. Enforce the same public-operation
+	// boundary after InitFunc has resolved identity, then charge the operation.
+	gqlHandler.AroundOperations(middleware.GraphQLOperationAuth())
+	gqlHandler.AroundOperations(middleware.GraphQLOperationRateLimit(rateLimiter, tenantCache.GetLimitsFunc()))
 
 	gqlHandler.AroundResponses(func(ctx context.Context, next graphql.ResponseHandler) *graphql.Response {
 		resp := next(ctx)
@@ -607,6 +618,13 @@ func main() {
 				ctx = context.WithValue(ctx, ctxkeys.KeyWSCookieToken, cookieToken)
 			}
 			ctx = context.WithValue(ctx, ctxkeys.KeyHTTPRequest, c.Request)
+			// Resolve the caller once here, the same way the HTTP middleware
+			// does: WS never passes through it, so without this the throttle
+			// below and any resolver reading the client IP would fall back to
+			// forgeable forwarding headers.
+			if clientIP := middleware.TrustedClientIP(c, trustedProxies); clientIP != "" {
+				ctx = context.WithValue(ctx, ctxkeys.KeyClientIP, clientIP)
+			}
 			c.Request = c.Request.WithContext(ctx)
 			gqlHandler.ServeHTTP(c.Writer, c.Request)
 		})

@@ -71,11 +71,12 @@ func RequireJWTAuth(secret []byte) gin.HandlerFunc {
 
 // PublicOrJWTAuth allows unauthenticated access for a small allowlist of read-only
 // GraphQL queries; otherwise requires a valid JWT or service token. WebSocket upgrades
-// pass through here and are authenticated in the GraphQL InitFunc.
+// pass through here so InitFunc can resolve identity; operation middleware enforces
+// this same public allowlist after the upgrade.
 // Supports both Authorization header and httpOnly cookies for JWT.
 //
 // Flow:
-// 1. WebSocket upgrades → pass through (auth in InitFunc)
+// 1. WebSocket upgrades → pass through (identity in InitFunc, auth at operation time)
 // 2. POST requests → check allowlist FIRST
 //   - If allowlisted → do NOT require auth, but apply an OPTIONAL JWT when one is
 //     present so the caller's tenant/identity is available downstream (e.g. to
@@ -87,8 +88,8 @@ func RequireJWTAuth(secret []byte) gin.HandlerFunc {
 // 3. Other methods → require auth
 func PublicOrJWTAuth(secret []byte, serviceClients *clients.ServiceClients) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Allow WebSocket upgrades; auth handled by WS init
-		if c.GetHeader("Upgrade") == "websocket" && strings.Contains(c.GetHeader("Connection"), "Upgrade") {
+		// Allow WebSocket upgrades; operation auth runs after WS identity setup.
+		if auth.IsWebSocketUpgrade(c.Request) {
 			c.Next()
 			return
 		}

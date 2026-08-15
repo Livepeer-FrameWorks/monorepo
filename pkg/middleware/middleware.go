@@ -27,14 +27,62 @@ func LoggingMiddleware(logger logging.Logger) gin.HandlerFunc {
 		logger.WithFields(logging.Fields{
 			"status":     c.Writer.Status(),
 			"method":     c.Request.Method,
-			"path":       c.Request.URL.Path,
+			"path":       redactSecretPathSegments(c.Request.URL.Path),
 			"latency":    time.Since(start),
-			"client_ip":  c.ClientIP(),
+			"client_ip":  attributedClientIP(c),
 			"user_agent": c.Request.UserAgent(),
 			"tenant_id":  c.GetString(string(ctxkeys.KeyTenantID)),
 			"user_id":    c.GetString(string(ctxkeys.KeyUserID)),
 		}).Info("HTTP request")
 	}
+}
+
+// attributedClientIP returns the address this request was resolved to, so logs
+// name the same caller that rate limiting and routing telemetry did.
+//
+// Gin's ClientIP believes X-Forwarded-For from any peer, because services here
+// do not configure SetTrustedProxies. Using it would let a direct caller write
+// a chosen address into the access and panic logs while the rest of the request
+// is attributed to their real one — the logs would then misattribute exactly
+// the traffic someone had a reason to disguise.
+func attributedClientIP(c *gin.Context) string {
+	if resolved, ok := c.Get(string(ctxkeys.KeyClientIP)); ok {
+		if ip, ok := resolved.(string); ok && ip != "" {
+			return ip
+		}
+	}
+	if c.Request != nil {
+		if ip, ok := c.Request.Context().Value(ctxkeys.KeyClientIP).(string); ok && ip != "" {
+			return ip
+		}
+	}
+	// No trusted resolution ran for this route: fall back to the peer address
+	// rather than a forgeable header.
+	return RemoteAddrIP(c.Request)
+}
+
+// secretPathPrefixes are routes whose first path segment is a credential
+// rather than an identifier. Request logs are durable and widely shipped, so
+// the segment is replaced before it reaches a log line.
+var secretPathPrefixes = []string{"/ingest/", "/webrtc/"}
+
+// redactSecretPathSegments masks credential-bearing path segments, e.g.
+// "/ingest/sk_live_abc/x" becomes "/ingest/<redacted>/x".
+func redactSecretPathSegments(path string) string {
+	for _, prefix := range secretPathPrefixes {
+		if !strings.HasPrefix(path, prefix) {
+			continue
+		}
+		rest := path[len(prefix):]
+		if rest == "" {
+			return path
+		}
+		if _, tail, found := strings.Cut(rest, "/"); found {
+			return prefix + "<redacted>/" + tail
+		}
+		return prefix + "<redacted>"
+	}
+	return path
 }
 
 const publicCORSAllowHeaders = "Content-Type, Authorization, X-Tenant-Id, X-Request-Id, X-PAYMENT, PAYMENT-SIGNATURE, X-Wallet-Address, X-Wallet-Signature, X-Wallet-Message, Mcp-Session-Id, Last-Event-ID"
@@ -86,6 +134,12 @@ func CORSMiddleware(allowedOrigins []string, devMode bool) gin.HandlerFunc {
 		origin := c.GetHeader("Origin")
 		allowed := origin != "" && isAllowed(origin)
 		publicAPI := origin != "" && isPublicCORSPath(c.Request.URL.Path)
+		if strings.HasPrefix(c.Request.URL.Path, "/ingest/") {
+			// The publishing credential is part of the request URI. Apply the
+			// cache policy here so OPTIONS responses that abort in this middleware
+			// receive the same protection as handler responses.
+			c.Header("Cache-Control", "no-store")
+		}
 
 		if allowed {
 			c.Header("Access-Control-Allow-Origin", origin)
@@ -147,6 +201,12 @@ func isPublicCORSPath(path string) bool {
 	case "/.well-known/mcp.json", "/.well-known/oauth-protected-resource", "/.well-known/did.json":
 		return true
 	}
+	// Foghorn's ingest front door: a browser WHIP publish POSTs
+	// application/sdp, which is never a CORS-simple content type, so it always
+	// preflights from whatever origin the customer's page is served on.
+	if strings.HasPrefix(path, "/ingest/") {
+		return true
+	}
 	return strings.HasPrefix(path, "/mcp/")
 }
 
@@ -158,9 +218,9 @@ func RecoveryMiddleware(logger logging.Logger) gin.HandlerFunc {
 				logger.WithFields(logging.Fields{
 					"error":      err,
 					"stacktrace": string(debug.Stack()),
-					"client_ip":  c.ClientIP(),
+					"client_ip":  attributedClientIP(c),
 					"method":     c.Request.Method,
-					"path":       c.Request.URL.Path,
+					"path":       redactSecretPathSegments(c.Request.URL.Path),
 				}).Error("Request handler panic")
 
 				if c.Writer.Written() {

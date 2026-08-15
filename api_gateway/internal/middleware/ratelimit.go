@@ -311,9 +311,18 @@ func rateLimitMiddlewareInternal(rl *RateLimiter, getLimits func(tenantID string
 			}
 		}
 
+		// Resolved once and published on the context so downstream resolvers
+		// score the same address this request is limited by. Reading gin's
+		// ClientIP() later would reintroduce a spoofable second identity.
+		clientIP := ClientIPFromRequestWithTrust(c.Request, tp)
+		if clientIP != "" {
+			c.Set(string(ctxkeys.KeyClientIP), clientIP)
+			c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), ctxkeys.KeyClientIP, clientIP))
+		}
+
 		decision := EvaluateAccess(c.Request.Context(), AccessRequest{
 			TenantID:          tenantIDStr,
-			ClientIP:          ClientIPFromRequestWithTrust(c.Request, tp),
+			ClientIP:          clientIP,
 			Path:              resourcePath,
 			OperationName:     opName,
 			XPayment:          GetX402PaymentHeader(c.Request),
@@ -717,6 +726,21 @@ func graphqlClipResourceID(input string) string {
 // isPublicTenant returns true if the tenant ID represents a public/unauthenticated request
 func isPublicTenant(tenantID string) bool {
 	return len(tenantID) > 7 && tenantID[:7] == "public:"
+}
+
+// RateLimitBucketKey returns the throttle identity for a caller: its tenant
+// when authenticated, otherwise a per-IP public bucket. Exported so transports
+// that cannot use the HTTP middleware — GraphQL over WebSocket, which
+// authenticates later in the connection InitFunc — bucket callers exactly the
+// same way, instead of inventing a second convention.
+func RateLimitBucketKey(tenantID, clientIP string) string {
+	if tenantID != "" {
+		return tenantID
+	}
+	if clientIP == "" {
+		clientIP = "unknown"
+	}
+	return "public:" + clientIP
 }
 
 // =============================================================================

@@ -1,9 +1,11 @@
 package middleware
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/sirupsen/logrus"
 )
 
 func TestRequestIDMiddleware(t *testing.T) {
@@ -167,6 +170,117 @@ func TestCORSMiddlewareAllowsPublicProtocolPreflightWithoutCredentials(t *testin
 	}
 	if got := w.Header().Get("Access-Control-Allow-Headers"); got != "content-type,x-payment,x-wallet-address" {
 		t.Fatalf("expected requested headers to be reflected, got %q", got)
+	}
+}
+
+// A stream key is a publishing credential. Request logs are durable and widely
+// shipped, so the /ingest/ path segment must never reach a log line verbatim.
+func TestRedactSecretPathSegments(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"/ingest/sk_live_abc123", "/ingest/<redacted>"},
+		{"/ingest/sk_live_abc123/", "/ingest/<redacted>/"},
+		{"/ingest/sk_live_abc123/extra", "/ingest/<redacted>/extra"},
+		{"/ingest/", "/ingest/"},
+		{"/webrtc/sk_live_abc123", "/webrtc/<redacted>"},
+		{"/play/pb_public_id", "/play/pb_public_id"},
+		{"/graphql", "/graphql"},
+	}
+	for _, tc := range cases {
+		if got := redactSecretPathSegments(tc.in); got != tc.want {
+			t.Errorf("redact(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// End-to-end guard on the logging middleware itself: whatever the request path
+// contains, the emitted log entry must not carry the key.
+func TestLoggingMiddlewareRedactsStreamKey(t *testing.T) {
+	logger := logrus.New()
+	var captured bytes.Buffer
+	logger.SetOutput(&captured)
+	logger.SetFormatter(&logrus.JSONFormatter{})
+
+	r := gin.New()
+	r.Use(LoggingMiddleware(logger))
+	r.POST("/ingest/:streamKey", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/ingest/sk_live_secret", nil)
+	r.ServeHTTP(w, req)
+
+	if strings.Contains(captured.String(), "sk_live_secret") {
+		t.Fatalf("stream key leaked into request log: %s", captured.String())
+	}
+	// The JSON formatter HTML-escapes the angle brackets, so match the word.
+	if !strings.Contains(captured.String(), "redacted") {
+		t.Fatalf("expected redacted path in log, got: %s", captured.String())
+	}
+}
+
+// A panicking handler logs its own path, so the credential must be redacted on
+// that route too — a crash is exactly when logs get shipped and read.
+func TestRecoveryMiddlewareRedactsStreamKey(t *testing.T) {
+	logger := logrus.New()
+	var captured bytes.Buffer
+	logger.SetOutput(&captured)
+	logger.SetFormatter(&logrus.JSONFormatter{})
+
+	r := gin.New()
+	r.Use(RecoveryMiddleware(logger))
+	r.POST("/ingest/:streamKey", func(c *gin.Context) { panic("boom") })
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/ingest/sk_live_secret", nil)
+	r.ServeHTTP(w, req)
+
+	if strings.Contains(captured.String(), "sk_live_secret") {
+		t.Fatalf("stream key leaked into panic log: %s", captured.String())
+	}
+	if !strings.Contains(captured.String(), "redacted") {
+		t.Fatalf("expected redacted path in panic log, got: %s", captured.String())
+	}
+}
+
+// Foghorn's ingest front door is published to customer pages: a browser WHIP
+// publish POSTs application/sdp, which is never a CORS-simple content type, so
+// it always preflights from an origin that cannot be in ALLOWED_ORIGINS.
+func TestCORSMiddlewareAllowsIngestFrontDoorPreflight(t *testing.T) {
+	r := gin.New()
+	r.Use(CORSMiddleware([]string{"https://app.frameworks.network"}, false))
+	r.POST("/ingest/:streamKey", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodOptions, "/ingest/sk_live_1", nil)
+	req.Header.Set("Origin", "https://customer.example")
+	req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	req.Header.Set("Access-Control-Request-Headers", "content-type")
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected WHIP preflight to pass, got %d", w.Code)
+	}
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("expected wildcard public CORS, got %q", got)
+	}
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("expected credential-bearing preflight to be non-cacheable, got %q", got)
+	}
+}
+
+// The ingest prefix must not widen CORS for unrelated paths.
+func TestCORSMiddlewareStillBlocksNonPublicPreflight(t *testing.T) {
+	r := gin.New()
+	r.Use(CORSMiddleware([]string{"https://app.frameworks.network"}, false))
+	r.POST("/internal/thumbnails", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodOptions, "/internal/thumbnails", nil)
+	req.Header.Set("Origin", "https://customer.example")
+	req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected non-public preflight to be blocked, got %d", w.Code)
 	}
 }
 

@@ -461,3 +461,35 @@ func TestEvaluateAccessRateLimitAddsDocumentation(t *testing.T) {
 		t.Fatalf("expected documentation URL, got %#v", decision.Body["documentation"])
 	}
 }
+
+// GraphQL over WebSocket cannot use the HTTP rate-limit middleware (it
+// authenticates later, in the connection InitFunc), so it throttles at the
+// operation level instead. It must bucket callers exactly as the HTTP path
+// does, or the two transports would maintain separate allowances for the same
+// caller.
+func TestRateLimitBucketKeyMatchesHTTPConvention(t *testing.T) {
+	cases := []struct {
+		name     string
+		tenantID string
+		clientIP string
+		want     string
+	}{
+		{"authenticated caller buckets on tenant", "tenant-abc", "203.0.113.9", "tenant-abc"},
+		{"anonymous caller buckets per IP", "", "203.0.113.9", "public:203.0.113.9"},
+		{"unknown IP still lands in a public bucket", "", "", "public:unknown"},
+	}
+	for _, tc := range cases {
+		if got := RateLimitBucketKey(tc.tenantID, tc.clientIP); got != tc.want {
+			t.Errorf("%s: got %q want %q", tc.name, got, tc.want)
+		}
+	}
+
+	// The anonymous keys must be the ones isPublicTenant recognises, otherwise
+	// they would silently escape the public throttle.
+	if !isPublicTenant(RateLimitBucketKey("", "203.0.113.9")) {
+		t.Error("anonymous bucket not classified as public")
+	}
+	if isPublicTenant(RateLimitBucketKey("tenant-abc", "203.0.113.9")) {
+		t.Error("tenant bucket misclassified as public")
+	}
+}

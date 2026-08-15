@@ -321,8 +321,8 @@ func TestPublicOrJWTAuthWebSocketUpgradePassesThrough(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "/graphql", nil)
-	req.Header.Set("Connection", "Upgrade")
-	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Connection", "keep-alive, upgrade")
+	req.Header.Set("Upgrade", "WebSocket")
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {

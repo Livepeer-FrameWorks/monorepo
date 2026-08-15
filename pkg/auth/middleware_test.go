@@ -143,8 +143,8 @@ func TestJWTAuthMiddleware_WebSocketUpgrade(t *testing.T) {
 	// WebSocket upgrade request -> allowed through without auth
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequestWithContext(context.Background(), "GET", "/ws", nil)
-	req.Header.Set("Upgrade", "websocket")
-	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "WebSocket")
+	req.Header.Set("Connection", "keep-alive, upgrade")
 	r.ServeHTTP(w, req)
 	if w.Code != 200 {
 		t.Fatalf("WebSocket upgrade should pass without auth, got %d", w.Code)

@@ -51,6 +51,21 @@ type jwtMiddlewareConfig struct {
 // JWTOption configures optional behaviour for JWTAuthMiddleware.
 type JWTOption func(*jwtMiddlewareConfig)
 
+// IsWebSocketUpgrade reports whether the request carries the two HTTP upgrade
+// tokens required for a WebSocket handshake. Header token matching is
+// case-insensitive and comma-aware per HTTP semantics.
+func IsWebSocketUpgrade(r *http.Request) bool {
+	if r == nil || !strings.EqualFold(strings.TrimSpace(r.Header.Get("Upgrade")), "websocket") {
+		return false
+	}
+	for token := range strings.SplitSeq(r.Header.Get("Connection"), ",") {
+		if strings.EqualFold(strings.TrimSpace(token), "upgrade") {
+			return true
+		}
+	}
+	return false
+}
+
 // WithAPIKeys registers static API keys that are accepted as Bearer tokens.
 // When a request's bearer token matches a key, the associated identity is
 // injected into the Gin context and JWT validation is skipped.
@@ -70,8 +85,7 @@ func JWTAuthMiddleware(secret []byte, opts ...JWTOption) gin.HandlerFunc {
 
 	return func(c *gin.Context) {
 		// Check if this is a WebSocket upgrade request
-		if c.GetHeader("Upgrade") == "websocket" &&
-			strings.Contains(c.GetHeader("Connection"), "Upgrade") {
+		if IsWebSocketUpgrade(c.Request) {
 			c.Next()
 			return
 		}
