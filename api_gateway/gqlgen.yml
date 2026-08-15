@@ -626,6 +626,15 @@ models:
   PlaybackInstance:
     model:
       - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared.PlaybackInstance
+  IngestEndpointResponse:
+    model:
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared.IngestEndpointResponse
+  IngestEndpoint:
+    model:
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared.IngestEndpoint
+  IngestEndpointKind:
+    model:
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared.IngestEndpointKind
   IngestMetadata:
     model:
       - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared.IngestMetadata

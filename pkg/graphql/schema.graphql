@@ -6708,6 +6708,14 @@ type IngestEndpointResponse {
 }
 
 # Individual ingest endpoint with node and protocol info
+enum IngestEndpointKind {
+  INGEST_ENDPOINT_KIND_UNSPECIFIED
+  INGEST_ENDPOINT_KIND_TENANT_ALIAS
+  INGEST_ENDPOINT_KIND_ROOT_POOL
+  INGEST_ENDPOINT_KIND_CLUSTER_POOL
+  INGEST_ENDPOINT_KIND_NODE_SPECIFIC
+}
+
 type IngestEndpoint {
   nodeId: String!
   baseUrl: String!
@@ -6716,6 +6724,8 @@ type IngestEndpoint {
   srtUrl: String # SRT ingest URL
   region: String
   loadScore: Float
+  kind: IngestEndpointKind!
+  clusterId: String!
 }
 
 # Ingest metadata for the stream

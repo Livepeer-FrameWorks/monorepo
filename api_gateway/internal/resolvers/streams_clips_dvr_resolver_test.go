@@ -263,7 +263,7 @@ func TestDoValidateStreamKey(t *testing.T) {
 
 	// Valid key.
 	rValid := commoR(&clientstest.FakeCommodore{
-		ValidateStreamKeyFn: func(_ context.Context, key string, _ ...string) (*commodorepb.ValidateStreamKeyResponse, error) {
+		ValidateStreamKeyFn: func(_ context.Context, key string) (*commodorepb.ValidateStreamKeyResponse, error) {
 			return &commodorepb.ValidateStreamKeyResponse{Valid: true}, nil
 		},
 	})
@@ -277,7 +277,7 @@ func TestDoValidateStreamKey(t *testing.T) {
 
 	// Invalid key with a reason.
 	rInvalid := commoR(&clientstest.FakeCommodore{
-		ValidateStreamKeyFn: func(context.Context, string, ...string) (*commodorepb.ValidateStreamKeyResponse, error) {
+		ValidateStreamKeyFn: func(context.Context, string) (*commodorepb.ValidateStreamKeyResponse, error) {
 			return &commodorepb.ValidateStreamKeyResponse{Valid: false, Error: "revoked"}, nil
 		},
 	})
@@ -291,7 +291,7 @@ func TestDoValidateStreamKey(t *testing.T) {
 
 	// Backend error → ERROR status, never a Go error.
 	rErr := commoR(&clientstest.FakeCommodore{
-		ValidateStreamKeyFn: func(context.Context, string, ...string) (*commodorepb.ValidateStreamKeyResponse, error) {
+		ValidateStreamKeyFn: func(context.Context, string) (*commodorepb.ValidateStreamKeyResponse, error) {
 			return nil, errors.New("commodore down")
 		},
 	})

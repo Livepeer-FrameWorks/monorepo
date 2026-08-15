@@ -127,7 +127,7 @@ type FakeCommodore struct {
 	CreateClipFn func(ctx context.Context, req *sharedpb.CreateClipRequest) (*sharedpb.CreateClipResponse, error)
 	DeleteClipFn func(ctx context.Context, clipHash string) error
 
-	ValidateStreamKeyFn func(ctx context.Context, streamKey string, clusterID ...string) (*commodorepb.ValidateStreamKeyResponse, error)
+	ValidateStreamKeyFn func(ctx context.Context, streamKey string) (*commodorepb.ValidateStreamKeyResponse, error)
 	GetClipFn           func(ctx context.Context, clipHash string) (*sharedpb.ClipInfo, error)
 	StartDVRFn          func(ctx context.Context, req *sharedpb.StartDVRRequest) (*sharedpb.StartDVRResponse, error)
 	StopDVRFn           func(ctx context.Context, dvrHash string) error
@@ -379,12 +379,18 @@ func (f *FakeCommodore) DeleteClip(ctx context.Context, clipHash string) error {
 	return f.DeleteClipFn(ctx, clipHash)
 }
 
-func (f *FakeCommodore) ValidateStreamKey(ctx context.Context, streamKey string, clusterID ...string) (*commodorepb.ValidateStreamKeyResponse, error) {
+func (f *FakeCommodore) ValidateStreamKey(ctx context.Context, streamKey string) (*commodorepb.ValidateStreamKeyResponse, error) {
 	f.Calls++
 	if f.ValidateStreamKeyFn == nil {
 		panic("FakeCommodore.ValidateStreamKey not stubbed")
 	}
-	return f.ValidateStreamKeyFn(ctx, streamKey, clusterID...)
+	return f.ValidateStreamKeyFn(ctx, streamKey)
+}
+
+// ValidateStreamKeyForClaim is the claiming variant; the gateway never claims,
+// so it shares the same stub.
+func (f *FakeCommodore) ValidateStreamKeyForClaim(ctx context.Context, streamKey, _, _ string) (*commodorepb.ValidateStreamKeyResponse, error) {
+	return f.ValidateStreamKey(ctx, streamKey)
 }
 
 func (f *FakeCommodore) GetClip(ctx context.Context, clipHash string) (*sharedpb.ClipInfo, error) {

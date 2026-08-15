@@ -1184,6 +1184,8 @@ type ComplexityRoot struct {
 
 	IngestEndpoint struct {
 		BaseUrl   func(childComplexity int) int
+		ClusterId func(childComplexity int) int
+		Kind      func(childComplexity int) int
 		LoadScore func(childComplexity int) int
 		NodeId    func(childComplexity int) int
 		Region    func(childComplexity int) int
@@ -9918,6 +9920,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.IngestEndpoint.BaseUrl(childComplexity), true
+
+	case "IngestEndpoint.clusterId":
+		if e.complexity.IngestEndpoint.ClusterId == nil {
+			break
+		}
+
+		return e.complexity.IngestEndpoint.ClusterId(childComplexity), true
+
+	case "IngestEndpoint.kind":
+		if e.complexity.IngestEndpoint.Kind == nil {
+			break
+		}
+
+		return e.complexity.IngestEndpoint.Kind(childComplexity), true
 
 	case "IngestEndpoint.loadScore":
 		if e.complexity.IngestEndpoint.LoadScore == nil {
@@ -29778,6 +29794,14 @@ type IngestEndpointResponse {
 }
 
 # Individual ingest endpoint with node and protocol info
+enum IngestEndpointKind {
+  INGEST_ENDPOINT_KIND_UNSPECIFIED
+  INGEST_ENDPOINT_KIND_TENANT_ALIAS
+  INGEST_ENDPOINT_KIND_ROOT_POOL
+  INGEST_ENDPOINT_KIND_CLUSTER_POOL
+  INGEST_ENDPOINT_KIND_NODE_SPECIFIC
+}
+
 type IngestEndpoint {
   nodeId: String!
   baseUrl: String!
@@ -29786,6 +29810,8 @@ type IngestEndpoint {
   srtUrl: String # SRT ingest URL
   region: String
   loadScore: Float
+  kind: IngestEndpointKind!
+  clusterId: String!
 }
 
 # Ingest metadata for the stream
@@ -68058,6 +68084,94 @@ func (ec *executionContext) fieldContext_IngestEndpoint_loadScore(_ context.Cont
 	return fc, nil
 }
 
+func (ec *executionContext) _IngestEndpoint_kind(ctx context.Context, field graphql.CollectedField, obj *sharedpb.IngestEndpoint) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_IngestEndpoint_kind(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Kind, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(sharedpb.IngestEndpointKind)
+	fc.Result = res
+	return ec.marshalNIngestEndpointKind2githubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋsharedᚐIngestEndpointKind(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_IngestEndpoint_kind(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IngestEndpoint",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type IngestEndpointKind does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IngestEndpoint_clusterId(ctx context.Context, field graphql.CollectedField, obj *sharedpb.IngestEndpoint) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_IngestEndpoint_clusterId(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ClusterId, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_IngestEndpoint_clusterId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IngestEndpoint",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _IngestEndpointResponse_primary(ctx context.Context, field graphql.CollectedField, obj *sharedpb.IngestEndpointResponse) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_IngestEndpointResponse_primary(ctx, field)
 	if err != nil {
@@ -68111,6 +68225,10 @@ func (ec *executionContext) fieldContext_IngestEndpointResponse_primary(_ contex
 				return ec.fieldContext_IngestEndpoint_region(ctx, field)
 			case "loadScore":
 				return ec.fieldContext_IngestEndpoint_loadScore(ctx, field)
+			case "kind":
+				return ec.fieldContext_IngestEndpoint_kind(ctx, field)
+			case "clusterId":
+				return ec.fieldContext_IngestEndpoint_clusterId(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type IngestEndpoint", field.Name)
 		},
@@ -68171,6 +68289,10 @@ func (ec *executionContext) fieldContext_IngestEndpointResponse_fallbacks(_ cont
 				return ec.fieldContext_IngestEndpoint_region(ctx, field)
 			case "loadScore":
 				return ec.fieldContext_IngestEndpoint_loadScore(ctx, field)
+			case "kind":
+				return ec.fieldContext_IngestEndpoint_kind(ctx, field)
+			case "clusterId":
+				return ec.fieldContext_IngestEndpoint_clusterId(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type IngestEndpoint", field.Name)
 		},
@@ -171455,6 +171577,16 @@ func (ec *executionContext) _IngestEndpoint(ctx context.Context, sel ast.Selecti
 			out.Values[i] = ec._IngestEndpoint_region(ctx, field, obj)
 		case "loadScore":
 			out.Values[i] = ec._IngestEndpoint_loadScore(ctx, field, obj)
+		case "kind":
+			out.Values[i] = ec._IngestEndpoint_kind(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "clusterId":
+			out.Values[i] = ec._IngestEndpoint_clusterId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -204765,6 +204897,16 @@ func (ec *executionContext) marshalNIngestEndpoint2ᚖgithubᚗcomᚋLivepeerᚑ
 		return graphql.Null
 	}
 	return ec._IngestEndpoint(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNIngestEndpointKind2githubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋsharedᚐIngestEndpointKind(ctx context.Context, v any) (sharedpb.IngestEndpointKind, error) {
+	var res sharedpb.IngestEndpointKind
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNIngestEndpointKind2githubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋsharedᚐIngestEndpointKind(ctx context.Context, sel ast.SelectionSet, v sharedpb.IngestEndpointKind) graphql.Marshaler {
+	return v
 }
 
 func (ec *executionContext) unmarshalNIngestMode2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐIngestMode(ctx context.Context, v any) (model.IngestMode, error) {

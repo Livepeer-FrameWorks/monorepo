@@ -4301,34 +4301,24 @@ func (r *queryResolver) ResolveViewerEndpoint(ctx context.Context, contentID str
 
 // ResolveIngestEndpoint is the resolver for the resolveIngestEndpoint field.
 func (r *queryResolver) ResolveIngestEndpoint(ctx context.Context, streamKey string) (*sharedpb.IngestEndpointResponse, error) {
-	// Extract client IP from request context for geo-routing
+	// Geo-routing address. Prefer the trusted client IP the rate-limit
+	// middleware already resolved: gin's ClientIP() honours X-Forwarded-For
+	// from any peer, which would let a publisher be limited as themselves
+	// while being routed as somewhere else.
 	var viewerIP *string
 
-	if ginCtx := ctx.Value(ctxkeys.KeyGinContext); ginCtx != nil {
-		if c, ok := ginCtx.(*gin.Context); ok {
-			clientIP := c.ClientIP()
-			viewerIP = &clientIP
-		}
+	if trusted := ctxkeys.GetClientIP(ctx); trusted != "" {
+		viewerIP = &trusted
 	}
 
-	// Fallback: try to get from raw HTTP request
 	if viewerIP == nil {
-		if req := ctx.Value(ctxkeys.KeyHTTPRequest); req != nil {
-			if httpReq, ok := req.(*http.Request); ok && httpReq != nil {
-				clientIP := httpReq.Header.Get("X-Forwarded-For")
-				if clientIP == "" {
-					clientIP = httpReq.Header.Get("X-Real-IP")
+		if ginCtx := ctx.Value(ctxkeys.KeyGinContext); ginCtx != nil {
+			if c, ok := ginCtx.(*gin.Context); ok {
+				if trusted, ok := c.Get(string(ctxkeys.KeyClientIP)); ok {
+					if ip, ok := trusted.(string); ok && ip != "" {
+						viewerIP = &ip
+					}
 				}
-				if clientIP == "" {
-					clientIP = httpReq.RemoteAddr
-				}
-				if idx := strings.LastIndex(clientIP, ":"); idx != -1 {
-					clientIP = clientIP[:idx]
-				}
-				if strings.Contains(clientIP, ",") {
-					clientIP = strings.TrimSpace(strings.Split(clientIP, ",")[0])
-				}
-				viewerIP = &clientIP
 			}
 		}
 	}
