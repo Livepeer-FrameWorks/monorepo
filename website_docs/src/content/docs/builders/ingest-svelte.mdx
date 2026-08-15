@@ -41,8 +41,8 @@ The `<StreamCrafter />` component is fully self-contained.
 ```
 
 Gateway resolution calls the public `resolveIngestEndpoint` GraphQL field from the publisher's
-browser. Use direct `whipUrl` unless that resolver is enabled in your environment, and prefer the
-dashboard DNS ingest URL for backend or encoder-side publishing.
+browser, so routing reflects the publisher's location. For backend or encoder-side publishing, use
+the dashboard DNS ingest URL or Foghorn's `/ingest/{streamKey}` front door instead.
 
 ## Composable Components
 

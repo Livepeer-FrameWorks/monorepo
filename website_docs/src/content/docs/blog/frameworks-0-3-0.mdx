@@ -12,6 +12,19 @@ tags:
 
 0.3.0 is the next FrameWorks tag.
 
+## Upgrade note: edge protocol v3 hard cut
+
+This release intentionally raises Foghorn's minimum Helmsman control protocol from
+v2 to v3 without a mixed-version window. The provider control plane upgrades before
+the desired edge release is synchronized. During that window, existing v2 edges are
+rejected, disappear from platform routing, and cannot receive their in-band updater
+command.
+
+Edge-only self-hosters must manually redeploy the 0.3.0 edge image after the control
+plane rollout. The same applies to a v2 edge that was offline during the rollout and
+returns later. It cannot reconnect until it has been updated to v3. This one-time edge
+interruption is an explicit release decision; the generation fence remains fail closed.
+
 The theme is the operating layer: the pieces that make FrameWorks easier to run as a live-video platform. Platform admin, analytics, edge resilience, agent workflows, and the real-time foundation for chat and conferencing.
 
 Platform admin is the most direct change. The cross-tenant admin API, admin console, and explicit operator grant model give operators a supported place to inspect tenants, clusters, billing, and content. That matters for hosted operations and for anyone running more than one cluster. Admin access should be a permission with a paper trail, not an accident of which account was created first.

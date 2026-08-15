@@ -119,6 +119,30 @@ WHIP (WebRTC-HTTP Ingestion Protocol) provides a modern approach for browser-bas
 
 If you’re self‑hosting behind a proxy, make sure the WHIP path is reachable on your ingest endpoint.
 
+### Load-aware WHIP URL
+
+`%INGEST_URL%` is a geo-DNS name: it resolves to the nearest healthy ingest node, but does not
+account for how loaded that node is. Foghorn's ingest front door adds load awareness to WHIP:
+
+```
+%PLAY_URL%/ingest/{stream-key}
+```
+
+Publishing a WHIP `POST` there returns a `307 Temporary Redirect` to the selected node's WHIP URL.
+[RFC 9725](https://www.rfc-editor.org/rfc/rfc9725.html#section-4.5) requires WHIP clients to support
+redirects on the initial `POST`, and `307` preserves the method and SDP offer, so any spec-compliant
+WHIP client can use this URL in place of a fixed node URL.
+
+The same path answers `GET` with JSON, which is useful in setup scripts that need a concrete node
+URL for a protocol that cannot follow redirects:
+
+```bash
+curl %PLAY_URL%/ingest/{stream-key}
+```
+
+RTMP and SRT have no redirect mechanism, so those protocols use either the geo-DNS `%INGEST_HOSTNAME%`
+name above or the `rtmpUrl` / `srtUrl` from that JSON response.
+
 ## Choosing the Right Bitrate
 
 Selecting the correct bitrate is key to stream stability. A higher bitrate improves quality but requires a stronger internet connection. Use these ranges as a starting point:

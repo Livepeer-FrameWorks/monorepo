@@ -96,10 +96,18 @@ Deploy and migrate the **control plane first**; a new Foghorn comes up without r
 any edge to be ready. Foghorn enforces a **minimum control-protocol version** at sidecar
 registration: a sidecar declaring a version below the deployed minimum is **rejected**
 (`FailedPrecondition`, logged with the observed and required versions) and cannot connect
-until it is upgraded. **Redeploy every edge after** the control plane, and those nodes
-reconnect cleanly. When a release advances the minimum with no mixed-version window, this
-is a hard cut — the specific minimum and any transitional guidance ride in that release's
-notes, not here.
+until it is upgraded. Because rejection happens before the control stream is established,
+that sidecar cannot receive an in-band updater command. When a release advances the
+minimum with no mixed-version window, operators must redeploy affected edges out of band;
+the specific minimum and interruption window belong in that release's notes.
+
+<Aside type="caution" title="0.3.0 makes a one-time protocol-v3 hard cut">
+  Foghorn 0.3.0 rejects protocol-v2 Helmsmans. The provider control plane is upgraded before the
+  edge release target is synchronized, so existing v2 edges temporarily disappear from platform
+  routing and cannot auto-update over their rejected control stream. After the control-plane
+  rollout, manually redeploy every self-hosted edge to the 0.3.0 edge image. An offline v2 edge
+  returning later must also be manually updated before it can reconnect.
+</Aside>
 
 Because a connected sidecar is always on the current protocol, its artifact inventory
 is always a **versioned whole-node snapshot** (a monotonic per-connection sequence),
@@ -115,10 +123,11 @@ has not yet reported.
 Therefore:
 
 - Upgrade/migrate the **control plane first**; it does not wait on the edge.
-- **Redeploy every edge afterward.** A not-yet-upgraded (or freshly restarted,
-  not-yet-reported) sidecar keeps streaming live, but is rejected at registration if
-  below the minimum, or cordoned for stored artifacts until it sends its first
-  versioned snapshot.
+- **Redeploy every edge afterward.** A sidecar below the minimum is absent from platform
+  routing until it reconnects on a supported protocol. Existing local media processes may
+  continue running, but that does not make the rejected node available for new platform
+  assignments. A supported sidecar is cordoned only for stored artifacts until it sends
+  its first versioned snapshot.
 - A supported N−1 / third-party edge protocol range applies only where a release
   declares one; absent that, treat the deployed minimum as a hard floor.
 

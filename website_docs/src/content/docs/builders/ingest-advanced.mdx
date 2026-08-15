@@ -121,7 +121,7 @@ studio.reactiveState.on("reconnecting", (isReconnecting) => {
 ## Gateway Resolution
 
 The SDK can call the public `resolveIngestEndpoint` GraphQL field to resolve a WHIP endpoint from a
-stream key when that resolver is enabled in your environment:
+stream key:
 
 ```ts
 const studio = createStreamCrafter({
@@ -131,7 +131,7 @@ const studio = createStreamCrafter({
 });
 ```
 
-When enabled, the resolver can choose an ingest node based on:
+The resolver chooses an ingest node based on:
 
 - Geographic proximity
 - Node load and capacity
@@ -139,12 +139,13 @@ When enabled, the resolver can choose an ingest node based on:
 
 Run Gateway resolution from the publisher's browser or device. If your application backend resolves
 the ingest endpoint, Foghorn scores the backend or proxy IP instead of the publisher location. For
-OBS, hardware encoders, or server-side publishing, prefer the dashboard DNS ingest URL
-(`edge-ingest.{tenant}.cdn.{base}` when present, then global or cluster-concrete fallback).
+OBS, hardware encoders, or server-side publishing, use the dashboard DNS ingest URL
+(`edge-ingest.{tenant}.cdn.{base}` when present, then global or cluster-concrete fallback) or
+Foghorn's `/ingest/{streamKey}` front door, which applies the same scoring without a GraphQL client.
 
 ### Manual Gateway Resolution
 
-For custom UIs that need to resolve a WHIP URL before initializing in resolver-backed environments:
+For custom UIs that need to resolve a WHIP URL before initializing:
 
 ```ts
 import { IngestClient } from "@livepeer-frameworks/streamcrafter-core";

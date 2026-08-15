@@ -69,8 +69,8 @@ Best for: Custom layouts, adding your own UI around standard controls, brand-spe
 
 <Aside type="note" title="Studio endpoint resolution">
   StreamCrafter accepts `gatewayUrl` + `streamKey` and resolves the WHIP endpoint via the public
-  `resolveIngestEndpoint` GraphQL field. If your cluster doesn't expose that resolver, pass the
-  dashboard WHIP URL directly as `whipUrl` instead.
+  `resolveIngestEndpoint` GraphQL field. Passing the dashboard WHIP URL directly as `whipUrl` also
+  works and takes priority when both are set.
 </Aside>
 
 ---
