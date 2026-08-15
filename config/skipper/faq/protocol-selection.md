@@ -49,6 +49,24 @@ Best for: browser-based ingest, lowest-latency scenarios.
 
 FrameWorks URL: `https://edge-ingest.{media-cluster}.frameworks.network/webrtc/{streamKey}`
 
+## Ingest Front Door (load-aware routing)
+
+The `edge-ingest` names above are geo-DNS: they resolve to the nearest healthy ingest node, but know
+nothing about node load. Foghorn's ingest front door adds load awareness:
+
+- `POST https://foghorn.frameworks.network/ingest/{streamKey}` — validates the key,
+  scores candidates on load and distance, and `307`s to the chosen node's WHIP URL. WHIP clients
+  follow the redirect (RFC 9725 §4.5) and `307` preserves the POST body, so the SDP offer survives.
+- `GET` on the same path returns the candidate list as JSON with per-protocol URLs.
+
+Tenant and cluster-branded Foghorn aliases may reach the same physical control cell, but the listener
+hostname does not restrict selection. Commodore's authorized healthy cluster envelope and any live
+placement claim are the routing authority.
+
+Only WHIP can follow a redirect; RTMP and SRT have no such mechanism, so they use the geo-DNS name
+or a URL read from the JSON response. Resolution claims no ingest placement, so it is safe to call
+before or without publishing.
+
 ## SRT Parameter Tuning
 
 Source: https://github.com/Haivision/srt/blob/master/docs/API/API-socket-options.md

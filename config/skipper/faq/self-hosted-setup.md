@@ -109,8 +109,10 @@ frameworks edge provision --manifest edges.yaml --parallel 4
 
 When a streamer sets a self-hosted cluster as their preferred cluster:
 
-- **Ingest URLs change**: to cluster-scoped domains like `edge-ingest.{cluster}.frameworks.network`
-- **Playback URLs change**: to `foghorn.{cluster}.frameworks.network/play/{playbackId}/hls/index.m3u8`
+- **Dashboard aliases change**: the self-hosted cluster's concrete ingest and playback aliases are
+  presented first
+- **Shared ingest stays multi-cluster**: the public front door still ranks every healthy cluster the
+  stream is entitled to use
 - **Existing embeds still work**: Playback IDs resolve via Commodore regardless of which cluster the stream is on
 
 ### Peering and viewer routing
@@ -121,4 +123,6 @@ When a streamer sets a self-hosted cluster as their preferred cluster:
 
 So a viewer connecting to any subscribed cluster can reach the stream — it just takes one demand-driven lookup to establish the peering, after which subsequent viewers are served from cache.
 
-If the preferred cluster differs from the official (billing-tier) cluster, streamers see ingest URLs for both clusters — they can choose based on geographic proximity.
+If the preferred cluster differs from the official cluster, both concrete aliases remain available,
+while the shared front door chooses across the authorized healthy candidates and an active placement
+claim pins reconnects.
