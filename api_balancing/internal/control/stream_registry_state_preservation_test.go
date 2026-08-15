@@ -17,11 +17,9 @@ func TestStorePreservesLocationsOnHydrationRefresh(t *testing.T) {
 	r := newPopulatedRegistry(t)
 	const internal = "60546679b497415db2338cd5cae54992"
 
-	// Admit a publisher; this populates Locations with SourceActive +
+	// Project a publisher; this populates Locations with SourceActive +
 	// OwnerNodeID and refreshes ce.cached.
-	if res := r.AdmitAndReserve(internal, "node-A", nil); res.Decision != AdmissionAcceptNew {
-		t.Fatalf("seed admit: %v", res.Decision)
-	}
+	projectSourceForTest(t, r, internal, "node-A", 0, "", "gen-seed", 1)
 
 	// Force TTL expiry without going through the normal cache-cooling
 	// path, then trigger a resolve. ResolveSourceByInternalName must
@@ -46,11 +44,11 @@ func TestStorePreservesLocationsOnHydrationRefresh(t *testing.T) {
 		t.Errorf("OwnerNodeID=%q after hydrate refresh; want node-A", loc.OwnerNodeID)
 	}
 
-	// Subsequent duplicate-publisher push from a different node must
-	// still be rejected because SourceActive survived.
-	res := r.AdmitAndReserve(internal, "node-B", nil)
-	if res.Decision != AdmissionRejectDuplicate {
-		t.Errorf("duplicate after refresh: decision=%v, want RejectDuplicate", res.Decision)
+	// SourceActive must have SURVIVED the hydrate refresh: the stream-scoped snapshot still reports the
+	// source active on node-A. Had store() wiped SourceActive, this would report inactive — exactly the
+	// regression this guards.
+	if gen, active, ok := r.SourceGenerationSnapshot(internal, ""); !ok || !active || gen != "gen-seed" {
+		t.Errorf("source did not survive the hydrate refresh (gen=%q active=%v ok=%v)", gen, active, ok)
 	}
 }
 
@@ -64,9 +62,7 @@ func TestSweeperPreservesActiveSourceLocation(t *testing.T) {
 	r := newPopulatedRegistry(t)
 	const internal = "60546679b497415db2338cd5cae54992"
 
-	if res := r.AdmitAndReserve(internal, "node-A", nil); res.Decision != AdmissionAcceptNew {
-		t.Fatalf("seed admit: %v", res.Decision)
-	}
+	projectSourceForTest(t, r, internal, "node-A", 0, "", "gen-seed", 1)
 	// Backdate UpdatedAt so the sweeper's cutoff is past.
 	r.mu.Lock()
 	loc := r.byInt[internal].entry.Locations["cluster-A"]

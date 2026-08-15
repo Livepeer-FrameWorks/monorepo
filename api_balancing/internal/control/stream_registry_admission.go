@@ -1,6 +1,8 @@
 package control
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"time"
 )
@@ -9,7 +11,7 @@ import (
 // for a source stream identified by its internal name. Returns the bare
 // internal name when no entry is hydrated yet — admission-time callers
 // pass freshly-validated streams that may not have hit the registry yet,
-// and the takeover drain target should fall back to a sensible literal
+// and a replaced-source drain target must still have a usable runtime name
 // rather than fail closed.
 func RuntimeNameForStream(r *StreamRegistry, internalName string) string {
 	internalName = strings.TrimSpace(internalName)
@@ -24,121 +26,30 @@ func RuntimeNameForStream(r *StreamRegistry, internalName string) string {
 	return internalName
 }
 
-// AdmissionDecision is the outcome of AdmitAndReserve.
-type AdmissionDecision int
-
-const (
-	// AdmissionRejectDuplicate: another publisher is actively pushing this
-	// stream (source_active=true) and the new attempt is not a provable
-	// same-session reconnect. Mist response is empty (denies the push).
-	AdmissionRejectDuplicate AdmissionDecision = iota + 1
-	// AdmissionAcceptNew: no prior owner is recorded for this stream on
-	// this cluster. Normal first-time admission.
-	AdmissionAcceptNew
-	// AdmissionAcceptResume: source is inactive and the candidate is the
-	// recorded owner node. Mist's resume path can reuse the lingering
-	// buffer.
-	AdmissionAcceptResume
-	// AdmissionAcceptTakeover: source is inactive and the candidate is a
-	// different node from the recorded owner. Old owner must be drained
-	// before viewers race to the new node.
-	AdmissionAcceptTakeover
-)
-
-func (d AdmissionDecision) String() string {
-	switch d {
-	case AdmissionRejectDuplicate:
-		return "reject_duplicate"
-	case AdmissionAcceptNew:
-		return "accept_new"
-	case AdmissionAcceptResume:
-		return "accept_resume"
-	case AdmissionAcceptTakeover:
-		return "accept_takeover"
-	default:
-		return "unknown"
-	}
+// ProjectSource publishes the DB-confirmed publisher generation cluster-wide. The caller supplies a
+// positive revision allocated while holding the stream advisory lock; lower revisions mutate nothing.
+// priorOwnerNodeID identifies a different projected node that the caller must drain. Pull ownership
+// uses MarkSourceOwnerIfUnset instead of this versioned push-source transition.
+func (r *StreamRegistry) ProjectSource(internalName, nodeID string, connectorPID int64, triggerUUID, generation string, revision int64) (priorOwnerNodeID string, applied bool, err error) {
+	priorOwnerNodeID, _, applied, err = r.projectSourceWithPriorGeneration(internalName, nodeID, connectorPID, triggerUUID, generation, revision)
+	return priorOwnerNodeID, applied, err
 }
 
-// AdmissionResult bundles the decision plus any context the caller needs
-// to act on it. OldOwnerNodeID is populated only for AdmissionAcceptTakeover.
-type AdmissionResult struct {
-	Decision       AdmissionDecision
-	OldOwnerNodeID string
-}
-
-// AdmitAndReserve is the source-presence admission decision for a new
-// PUSH_REWRITE on this cluster, combining the decision read and the
-// source-active flip under a single write lock. Atomicity prevents
-// two concurrent same-stream PUSH_REWRITEs from both reading
-// SourceActive=false and both accepting.
-//
-// Decision table:
-//   - source_active=true (any node): reject as duplicate. Same-session
-//     reconnect detection is deferred — without a publisher conn-id
-//     marker, the conservative default is to reject; the legitimate
-//     case (Mist-internal retry) will succeed once PUSH_INPUT_CLOSE
-//     fires.
-//   - source_active=false, same node as recorded owner: accept_resume.
-//     Mist's resume path matches unclaimed tracks against the lingering
-//     buffer.
-//   - source_active=false, different node from recorded owner:
-//     accept_takeover. Caller must drain the old owner before admitting
-//     viewers to the new node.
-//   - no recorded owner: accept_new. First publisher for this stream.
-//
-// ownerHealthy is an optional callback the caller can supply to short-
-// circuit "source_active=true but the owner node is stale/down" into
-// the source_active=false branch. Nil means "trust the recorded flag".
-// It runs UNDER r.mu, establishing the lock order registry.mu → state.mu
-// (the production callback reads StreamStateManager under its RLock).
-// Safe because state never calls into control; keep the callback free of
-// registry methods and other I/O.
-//
-// On any Accept variant, atomically sets SourceActive=true +
-// OwnerNodeID=candidateNodeID + clears SourceInactiveAt. On Reject,
-// no mutation. Creates a minimal StreamEntry if none exists for the
-// AcceptNew case; the caller's UpsertLocalSource later refines
-// identity fields. Callers must NOT also stamp ownership separately
-// (MarkSourceOwnerIfUnset is for pull sources) — the flip is part of
-// the same critical section as the decision.
-func (r *StreamRegistry) AdmitAndReserve(internalName, candidateNodeID string, ownerHealthy func(nodeID string) bool) AdmissionResult {
+func (r *StreamRegistry) projectSourceWithPriorGeneration(internalName, nodeID string, connectorPID int64, triggerUUID, generation string, revision int64) (priorOwnerNodeID, priorOwnerSourceGeneration string, applied bool, err error) {
 	internalName = strings.TrimSpace(internalName)
-	candidateNodeID = strings.TrimSpace(candidateNodeID)
-	if internalName == "" || candidateNodeID == "" {
-		return AdmissionResult{Decision: AdmissionAcceptNew}
+	nodeID = strings.TrimSpace(nodeID)
+	if internalName == "" || nodeID == "" {
+		return "", "", false, nil
 	}
-
+	if revision <= 0 {
+		return "", "", false, errors.New("project source requires a positive revision")
+	}
+	var snapshot StreamEntry
+	var before Location
+	var beforePresent bool
 	r.mu.Lock()
 	ce, ok := r.byInt[internalName]
-	var loc Location
-	var locPresent bool
-	if ok {
-		loc, locPresent = ce.entry.Locations[r.clusterID]
-	}
-
-	var result AdmissionResult
-	if !locPresent || loc.OwnerNodeID == "" {
-		result = AdmissionResult{Decision: AdmissionAcceptNew}
-	} else {
-		sourceActive := loc.SourceActive
-		if sourceActive && ownerHealthy != nil && !ownerHealthy(loc.OwnerNodeID) {
-			sourceActive = false
-		}
-		switch {
-		case sourceActive:
-			r.mu.Unlock()
-			return AdmissionResult{Decision: AdmissionRejectDuplicate}
-		case loc.OwnerNodeID == candidateNodeID:
-			result = AdmissionResult{Decision: AdmissionAcceptResume}
-		default:
-			result = AdmissionResult{Decision: AdmissionAcceptTakeover, OldOwnerNodeID: loc.OwnerNodeID}
-		}
-	}
-
-	// Atomic reservation: flip source-active + owner in the same lock
-	// scope as the decision read.
-	if ce == nil {
+	if !ok {
 		ce = &cachedEntry{
 			entry: StreamEntry{
 				InternalName: internalName,
@@ -152,18 +63,61 @@ func (r *StreamRegistry) AdmitAndReserve(internalName, candidateNodeID string, o
 	if ce.entry.Locations == nil {
 		ce.entry.Locations = make(map[string]Location)
 	}
-	loc = ce.entry.Locations[r.clusterID]
+	loc := ce.entry.Locations[r.clusterID]
+	before, beforePresent = loc, loc.ClusterID != "" || loc.OwnerNodeID != "" || loc.SourceRevision != 0
+	triggerUUID = strings.TrimSpace(triggerUUID)
+	generation = strings.TrimSpace(generation)
+	if loc.SourceRevision > revision {
+		r.mu.Unlock()
+		return "", "", false, nil
+	}
+	// Equal revisions are idempotent only for the exact same transition. A revision is allocated
+	// once under the stream lock and cannot legitimately describe another publisher identity.
+	if loc.SourceRevision == revision && revision != 0 && (!loc.SourceActive ||
+		loc.OwnerNodeID != nodeID || loc.SourceConnectorPID != connectorPID ||
+		loc.SourceTriggerUUID != triggerUUID || loc.SourceGeneration != generation) {
+		r.mu.Unlock()
+		return "", "", false, nil
+	}
+	if prior := strings.TrimSpace(loc.OwnerNodeID); prior != "" && prior != nodeID {
+		priorOwnerNodeID = prior
+		priorOwnerSourceGeneration = strings.TrimSpace(loc.SourceGeneration)
+	}
 	loc.ClusterID = r.clusterID
 	loc.SourceActive = true
 	loc.SourceInactiveAt = time.Time{}
-	loc.OwnerNodeID = candidateNodeID
+	loc.OwnerNodeID = nodeID
+	loc.SourceConnectorPID = connectorPID
+	loc.SourceTriggerUUID = triggerUUID
+	loc.SourceGeneration = generation
+	loc.SourceRevision = revision
 	loc.UpdatedAt = time.Now()
 	ce.entry.Locations[r.clusterID] = loc
 	ce.cached = time.Now()
-	snapshot := ce.entry
+	snapshot = ce.entry
 	r.mu.Unlock()
-	r.publishUpsertSource(snapshot)
-	return result
+	applied, err = r.publishUpsertSourceFenced(snapshot)
+	if err == nil && applied {
+		return priorOwnerNodeID, priorOwnerSourceGeneration, true, nil
+	}
+	// The Redis CAS is the shared authority. Undo only this exact local revision; a concurrent newer
+	// transition must remain intact.
+	r.mu.Lock()
+	if current, ok := r.byInt[internalName]; ok {
+		locNow := current.entry.Locations[r.clusterID]
+		if locNow.SourceRevision == revision && locNow.SourceGeneration == generation {
+			if beforePresent {
+				current.entry.Locations[r.clusterID] = before
+			} else {
+				delete(current.entry.Locations, r.clusterID)
+			}
+		}
+	}
+	r.mu.Unlock()
+	if err != nil {
+		return "", "", false, err
+	}
+	return "", "", false, nil
 }
 
 // MarkSourceOwnerIfUnset atomically stamps nodeID as the stream's source
@@ -171,12 +125,12 @@ func (r *StreamRegistry) AdmitAndReserve(internalName, candidateNodeID string, o
 // Location. First dialer wins: an existing owner (same or different node)
 // is returned untouched, so a later /source call — a relay, a probe, a
 // double-dial — can never flip ownership. This is the ownership stamp for
-// pull sources, the counterpart of AdmitAndReserve's inline stamp for
-// push ingest; offlineIsStreamWide consumes it to type offline edges.
+// pull sources, the counterpart of ProjectSource's owner stamp for push
+// ingest; offlineIsStreamWide consumes it to type offline edges.
 //
-// A missing entry is created minimally (same pattern as AdmitAndReserve's
-// AcceptNew and MarkReplicating; no network under the lock, resolvers
-// refine identity later). Callers only invoke this after positively
+// A missing entry is created minimally (same pattern as ProjectSource and
+// MarkReplicating; no network under the lock, resolvers refine identity
+// later). Callers only invoke this after positively
 // resolving the stream (the /source pull path has just confirmed an
 // enabled pull source with Commodore), so the stamp must not silently
 // degrade to backstop-only offline just because the local cache lacked
@@ -228,13 +182,9 @@ func (r *StreamRegistry) MarkSourceOwnerIfUnset(internalName, nodeID string) (st
 	return owner, stamped
 }
 
-// SourceOwner returns the local cluster's recorded source-owner node for a
-// stream. Ownership types offline edges: only the owner's STREAM_END or
-// vanish is a stream-wide fact — a replica/relay node ending the stream is
-// a node-local fact that must not flip the stream's user-visible status.
-// OwnerNodeID survives MarkSourceInactive (retained for the reconnect
-// resume path), so the owner is still known when the delayed STREAM_END
-// arrives after PUSH_INPUT_CLOSE.
+// SourceOwner returns the local cluster's recorded source-owner node for a stream. Only the owner's
+// STREAM_END or vanish is stream-wide; a replica or relay ending is node-local. Inactive source
+// projections retain the owner so a delayed aggregate edge is still typed correctly.
 func (r *StreamRegistry) SourceOwner(internalName string) (string, bool) {
 	internalName = sourceInternalKey(internalName)
 	if internalName == "" {
@@ -274,44 +224,124 @@ func (r *StreamRegistry) OriginCluster(internalName string) (string, bool) {
 	return origin, true
 }
 
-// MarkSourceInactive flips SourceActive to false on the local cluster's
-// Location and stamps SourceInactiveAt. Retains OwnerNodeID so a same-node
-// PUSH_REWRITE reconnect can take the Mist resume path. Called from the
-// PUSH_INPUT_CLOSE handler (the publisher-source-disconnected edge).
-// Idempotent — repeat calls just refresh the timestamp.
-//
-// If nodeID is supplied and does not match the recorded OwnerNodeID, the
-// call is a no-op: PUSH_INPUT_CLOSE on a stale/wrong node must not clear
-// the live owner's state. Empty nodeID skips the match check (defensive
-// for older trigger payloads).
-func (r *StreamRegistry) MarkSourceInactive(internalName, nodeID string) {
+// PublishSourceInactive upserts an INACTIVE source Location stamped with `revision` and publishes it,
+// CREATING the entry if this replica is cache-cold (has no local source). It never no-ops on a
+// missing/already-inactive entry — the point is to PROPAGATE a genuine offline (its
+// higher revision supersedes any active projection another replica/Redis still holds) rather than
+// silently do nothing. The caller MUST have confirmed under the (tenant, stream) advisory lock that no
+// active session exists, so there is no live source to protect. The ending node IS the owner, so it is
+// stamped as OwnerNodeID (retained for resume typing) and its generation preserved. Never regresses the
+// revision.
+func (r *StreamRegistry) PublishSourceInactive(internalName, nodeID, generation string, revision int64) (bool, error) {
+	return r.PublishSourceInactiveContext(context.Background(), internalName, nodeID, generation, revision)
+}
+
+// PublishSourceInactiveContext is PublishSourceInactive with caller-owned cancellation. Durable
+// offline effects use it while holding the admission advisory lock, so Redis persistence cannot
+// outlive the transaction context that protects teardown from a reconnect.
+func (r *StreamRegistry) PublishSourceInactiveContext(ctx context.Context, internalName, nodeID, generation string, revision int64) (bool, error) {
 	internalName = strings.TrimSpace(internalName)
 	if internalName == "" {
-		return
+		return false, nil
+	}
+	if revision <= 0 {
+		return false, errors.New("publish source inactive requires a positive revision")
 	}
 	nodeID = strings.TrimSpace(nodeID)
+	generation = strings.TrimSpace(generation)
 	var snapshot StreamEntry
-	var changed bool
+	var before Location
+	var beforePresent bool
 	r.mu.Lock()
-	if ce, ok := r.byInt[internalName]; ok {
-		if loc, present := ce.entry.Locations[r.clusterID]; present {
-			if nodeID != "" && loc.OwnerNodeID != "" && loc.OwnerNodeID != nodeID {
-				r.mu.Unlock()
-				return
-			}
-			if loc.SourceActive || loc.SourceInactiveAt.IsZero() {
-				loc.SourceActive = false
-				loc.SourceInactiveAt = time.Now()
-				loc.UpdatedAt = time.Now()
-				ce.entry.Locations[r.clusterID] = loc
-				ce.cached = time.Now()
-				snapshot = ce.entry
-				changed = true
+	ce, ok := r.byInt[internalName]
+	if !ok {
+		ce = &cachedEntry{
+			entry: StreamEntry{
+				InternalName: internalName,
+				Locations:    make(map[string]Location),
+				HydratedAt:   time.Now(),
+			},
+			cached: time.Now(),
+		}
+		r.byInt[internalName] = ce
+	}
+	if ce.entry.Locations == nil {
+		ce.entry.Locations = make(map[string]Location)
+	}
+	loc := ce.entry.Locations[r.clusterID]
+	before, beforePresent = loc, loc.ClusterID != "" || loc.OwnerNodeID != "" || loc.SourceRevision != 0
+	if loc.SourceRevision > revision {
+		r.mu.Unlock()
+		return false, nil
+	}
+	if loc.SourceRevision == revision && revision != 0 && (loc.SourceActive ||
+		(nodeID != "" && loc.OwnerNodeID != "" && loc.OwnerNodeID != nodeID) ||
+		(generation != "" && loc.SourceGeneration != "" && loc.SourceGeneration != generation)) {
+		r.mu.Unlock()
+		return false, nil
+	}
+	loc.ClusterID = r.clusterID
+	loc.SourceActive = false
+	if loc.SourceInactiveAt.IsZero() {
+		loc.SourceInactiveAt = time.Now()
+	}
+	if strings.TrimSpace(loc.OwnerNodeID) == "" && nodeID != "" {
+		loc.OwnerNodeID = nodeID
+	}
+	if strings.TrimSpace(loc.SourceGeneration) == "" && generation != "" {
+		loc.SourceGeneration = generation
+	}
+	loc.SourceRevision = revision
+	loc.UpdatedAt = time.Now()
+	ce.entry.Locations[r.clusterID] = loc
+	ce.cached = time.Now()
+	snapshot = ce.entry
+	r.mu.Unlock()
+	applied, err := r.publishUpsertSourceFencedContext(ctx, snapshot)
+	if err == nil && applied {
+		return true, nil
+	}
+	// Redis owns the cross-replica revision order. Undo only this exact local transition when a
+	// higher revision already won or persistence failed; a concurrent newer transition remains.
+	r.mu.Lock()
+	if current, ok := r.byInt[internalName]; ok {
+		locNow := current.entry.Locations[r.clusterID]
+		if locNow.SourceRevision == revision && !locNow.SourceActive {
+			if beforePresent {
+				current.entry.Locations[r.clusterID] = before
+			} else {
+				delete(current.entry.Locations, r.clusterID)
 			}
 		}
 	}
 	r.mu.Unlock()
-	if changed {
-		r.publishUpsertSource(snapshot)
+	if err != nil {
+		return false, err
 	}
+	return false, nil
+}
+
+// SourceGenerationSnapshot returns the current source's DURABLE generation (the ingest-session id) and
+// active flag for (internalName, nodeID), and ok=false when there is no matching active-or-recorded
+// source on this node. Offline intents retain this generation as the transition they supersede.
+func (r *StreamRegistry) SourceGenerationSnapshot(internalName, nodeID string) (generation string, active bool, ok bool) {
+	internalName = strings.TrimSpace(internalName)
+	nodeID = strings.TrimSpace(nodeID)
+	if internalName == "" {
+		return "", false, false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	ce, present := r.byInt[internalName]
+	if !present {
+		return "", false, false
+	}
+	loc, has := ce.entry.Locations[r.clusterID]
+	if !has || strings.TrimSpace(loc.OwnerNodeID) == "" {
+		return "", false, false
+	}
+	if nodeID != "" && loc.OwnerNodeID != nodeID {
+		return "", false, false
+	}
+	return loc.SourceGeneration, loc.SourceActive, true
 }

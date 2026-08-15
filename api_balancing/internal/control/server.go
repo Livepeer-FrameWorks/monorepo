@@ -34,7 +34,6 @@ import (
 	"frameworks/api_balancing/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	navclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/navigator"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
@@ -300,16 +299,14 @@ type removedConn struct {
 	fence int64
 }
 
-// retireConn marks a connection superseded UNDER its sendGate, so an in-flight SendLocalFreezeRequest (which
-// holds the same gate across its superseded check + Send) either finishes first on the still-current
-// connection or observes the flag and aborts. Serialized this way, no command is ever sent over a retired
-// connection. MUST be called WITHOUT holding registry.mu: it blocks on the conn's sendGate until any in-flight
-// send finishes, and holding registry.mu across that wait would stall every registration/lookup behind one
-// slow send. Callers unlink the conn from the registry under the lock, release it, then retire.
+// retireConn marks a connection superseded. Senders hold sendGate across their superseded check AND
+// their Send, so this store alone preserves the invariant: a sender either passed its check before
+// the store (it was in flight — it completes on the connection it validated) or acquires the gate
+// afterward, observes the flag, and aborts. Deliberately does NOT acquire sendGate itself: a Send
+// stalled on gRPC flow control holds the gate indefinitely, and retirement (and the registration
+// replacing the connection) must never block behind a dead peer's stalled write.
 func retireConn(c *conn) {
-	c.sendGate.Lock()
 	c.superseded.Store(true)
-	c.sendGate.Unlock()
 }
 
 func removeCurrentControlConn(nodeID, canonicalID string, stream ipcpb.HelmsmanControl_ConnectServer) []removedConn {
@@ -739,18 +736,6 @@ func liveThumbnailMintMayProceed(streamID, tenantID, clusterID string, logger lo
 }
 
 var geoipCache *cache.Cache
-var decklogClient *decklog.BatchedClient
-var dvrStopRegistry DVRStopRegistry
-
-type DVRStopRegistry interface {
-	RegisterPendingDVRStop(internalName string)
-}
-
-// SetDVRStopRegistry sets the registry used for deferring DVR stop requests.
-func SetDVRStopRegistry(registry DVRStopRegistry) { dvrStopRegistry = registry }
-
-// SetDecklogClient sets the Decklog client for DVR lifecycle emissions.
-func SetDecklogClient(client *decklog.BatchedClient) { decklogClient = client }
 
 // GetStreamSource returns the source node and base URL for a given internal_name if known
 func GetStreamSource(internalName string) (nodeID string, baseURL string, ok bool) {
@@ -1070,8 +1055,6 @@ func RelayCommandType(req *foghornrelaypb.ForwardCommandRequest) string {
 		return "stop_sessions"
 	case *foghornrelaypb.ForwardCommandRequest_InvalidateSessions:
 		return "invalidate_sessions"
-	case *foghornrelaypb.ForwardCommandRequest_ActivatePushTargets:
-		return "activate_push_targets"
 	case *foghornrelaypb.ForwardCommandRequest_DeactivatePushTargets:
 		return "deactivate_push_targets"
 	case *foghornrelaypb.ForwardCommandRequest_ProcessingJob:
@@ -1112,7 +1095,7 @@ func RelayRequestID(req *foghornrelaypb.ForwardCommandRequest) string {
 	}
 }
 
-// SetDB sets the database connection for clip operations.
+// SetDB sets the shared database connection for control-plane repositories and lifecycle ledgers.
 func SetDB(database *sql.DB) {
 	db = database
 }
@@ -1657,6 +1640,18 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 				return status.Error(codes.Unavailable, "artifact takeover marker publish failed")
 			}
 
+			// Renewal follows control-connection ownership. Reserve capacity for the publishers that
+			// move with this node before making the connection dispatch-visible; otherwise a replica
+			// failover could overload the placement job even though every original admission passed.
+			releaseConnectionCapacity, capacityErr := reserveLocalIngestNodeConnection(canonicalNodeID, streamident.MaxPublishersPerFoghorn)
+			if capacityErr != nil {
+				releaseConnOwnerForDisconnect(canonicalNodeID, connFence, registry.log)
+				cleanup()
+				registry.log.WithError(capacityErr).WithField("node_id", canonicalNodeID).
+					Error("Rejecting Helmsman registration: local placement-renewal capacity exhausted")
+				return status.Error(codes.ResourceExhausted, "ingest placement-renewal capacity exhausted")
+			}
+
 			// Persist resolved tenant/cluster ownership + the peer IP on the CANONICAL (authenticated) node state.
 			// This is the FIRST node connection-info write of the registration — deferred to here
 			// (post-resolution) so only an authenticated node's canonical id ever mutates liveness/routing state
@@ -1709,6 +1704,7 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 			}
 			registry.conns[canonicalNodeID] = newConn
 			registry.mu.Unlock()
+			releaseConnectionCapacity()
 			// Retire the replaced connection OUTSIDE registry.mu (see retireConn): it is no longer the
 			// registered conn, so retiring it can't block a new dispatch, only in-flight ones.
 			if retire != nil {
@@ -1965,6 +1961,43 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 			// at resolve time, bound to the same authenticated CANONICAL identity as the mint (consistent
 			// mint↔authorize), on top of the opaque grant (exact path + hash + 5-min TTL + origin-cluster-only).
 			go processAuthorizeRelayPullRequest(x.AuthorizeRelayPullRequest, connSession.NodeID(), stream, registry.log)
+		case *ipcpb.ControlMessage_DrainStreamResponse:
+			// Correlated completion of a prior-owner drain dispatched by the admission-effects
+			// worker. unloaded=false with an empty error means the stream was already absent — an
+			// idempotent success. A reported error leaves the obligation leg pending for retry.
+			go func(resp *ipcpb.DrainStreamResponse, nodeID string) {
+				if resp.GetError() != "" {
+					registry.log.WithFields(logging.Fields{
+						"node_id":      nodeID,
+						"runtime_name": resp.GetRuntimeName(),
+						"error":        resp.GetError(),
+					}).Warn("Prior-owner drain reported failure; obligation leg stays pending")
+					return
+				}
+				ackCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				if err := MarkAdmissionDrainDone(ackCtx, nodeID, resp.GetSourceGeneration()); err != nil {
+					registry.log.WithError(err).WithField("node_id", nodeID).Warn("Failed to record drain acknowledgement")
+				}
+			}(x.DrainStreamResponse, connSession.NodeID())
+		case *ipcpb.ControlMessage_ActivatePushTargetsResult:
+			// Correlated completion of a push-target activation dispatched by the admission-effects
+			// worker. Only converged=true completes the leg; otherwise the obligation retries.
+			go func(result *ipcpb.ActivatePushTargetsResult, nodeID string) {
+				if !result.GetConverged() {
+					registry.log.WithFields(logging.Fields{
+						"node_id":     nodeID,
+						"stream_name": result.GetStreamName(),
+						"error":       result.GetError(),
+					}).Warn("Push-target activation did not converge; obligation leg stays pending")
+					return
+				}
+				ackCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				if err := MarkAdmissionActivationDone(ackCtx, nodeID, result.GetSourceGeneration()); err != nil {
+					registry.log.WithError(err).WithField("node_id", nodeID).Warn("Failed to record activation acknowledgement")
+				}
+			}(x.ActivatePushTargetsResult, connSession.NodeID())
 		case *ipcpb.ControlMessage_SyncComplete:
 			// Handle sync completion from Helmsman (dual-storage architecture)
 			go processSyncComplete(x.SyncComplete, connSession.NodeID(), registry.log)
@@ -2071,11 +2104,59 @@ func CleanupLocalConnOwners(ctx context.Context) {
 	}
 }
 
-// SendLocalDrainStream dispatches an old-owner drain over the named node's
-// local bidi stream. Used by the PUSH_REWRITE takeover path to unload the
-// lingering Mist buffer and disconnect viewer sessions on the previous
-// owner before admitting the new publisher.
-func SendLocalDrainStream(nodeID string, req *ipcpb.DrainStreamRequest) error {
+// sendOnConnBounded runs a gate-fenced send with a caller deadline (the earlier of timeout and ctx).
+// stream.Send has no cancellation primitive of its own (gRPC flow control can block it indefinitely),
+// so this deadline does not pretend to stop the underlying write goroutine. A timeout is treated as
+// evidence the connection is DEAD (a healthy peer drains
+// its receive window in milliseconds): the connection is RETIRED — superseded flag set and unlinked
+// from the registry — so every queued or future sender aborts instead of piling more commands
+// behind the stalled write, and dispatches fail fast with ErrNotConnected until the node
+// re-registers on a fresh stream. The one stalled Send may remain until the old transport closes
+// and may still be delivered; every worker-driven destructive command is therefore fenced at
+// Helmsman by both transport age and exact ingest generation (prior owner for drain, admitted
+// generation for activation, ended generation for deactivation).
+func sendOnConnBounded(ctx context.Context, nodeID string, c *conn, msg *ipcpb.ControlMessage, timeout time.Duration) error {
+	done := make(chan error, 1)
+	go func() {
+		c.sendGate.Lock()
+		defer c.sendGate.Unlock()
+		if c.superseded.Load() || !connIsCurrentlyRegistered(nodeID, c) {
+			done <- ErrConnSuperseded
+			return
+		}
+		done <- c.stream.Send(msg)
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		retireStalledConn(nodeID, c)
+		return fmt.Errorf("control-stream send to %s canceled: %w", nodeID, ctx.Err())
+	case <-timer.C:
+		retireStalledConn(nodeID, c)
+		return fmt.Errorf("control-stream send to %s timed out after %s; connection retired", nodeID, timeout)
+	}
+}
+
+// retireStalledConn retires a connection whose Send exceeded its deadline: flags it superseded (all
+// queued/future senders abort) and unlinks it from the registry if it is still the current entry,
+// so new dispatches fail fast rather than queueing behind a dead peer.
+func retireStalledConn(nodeID string, c *conn) {
+	retireConn(c)
+	registry.mu.Lock()
+	if cur, ok := registry.conns[nodeID]; ok && cur == c {
+		delete(registry.conns, nodeID)
+	}
+	registry.mu.Unlock()
+}
+
+// SendLocalDrainStream dispatches a prior-owner drain over the named node's local bidi stream.
+// Used by the admission-effects worker when a projection change replaced the publisher on this
+// node. Gated to THIS connection generation: the superseded check and the Send are atomic under
+// sendGate, so a command is never transmitted over a stream a reconnect already retired.
+func SendLocalDrainStream(ctx context.Context, nodeID string, req *ipcpb.DrainStreamRequest) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
@@ -2086,67 +2167,25 @@ func SendLocalDrainStream(nodeID string, req *ipcpb.DrainStreamRequest) error {
 		Payload: &ipcpb.ControlMessage_DrainStreamRequest{DrainStreamRequest: req},
 		SentAt:  timestamppb.Now(),
 	}
-	return c.stream.Send(msg)
+	return sendOnConnBounded(ctx, nodeID, c, msg, 5*time.Second)
 }
 
 // SendDrainStream sends a DrainStreamRequest to the named node, relaying
 // via HA if the target's bidi stream is held by a different Foghorn
 // instance.
-func SendDrainStream(nodeID string, req *ipcpb.DrainStreamRequest) error {
-	err := SendLocalDrainStream(nodeID, req)
+func SendDrainStream(ctx context.Context, nodeID string, req *ipcpb.DrainStreamRequest) error {
+	err := SendLocalDrainStream(ctx, nodeID, req)
 	if !shouldRelay(nodeID, err) {
 		return err
 	}
 	if commandRelay == nil {
 		return ErrNotConnected
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if relayErr := commandRelay.forward(ctx, &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
 		Command:      &foghornrelaypb.ForwardCommandRequest_DrainStream{DrainStream: req},
-	}); relayErr != nil {
-		return relayFailure(err, relayErr)
-	}
-	return nil
-}
-
-func SendLocalDVRUpdateSource(nodeID string, req *ipcpb.DVRUpdateSourceRequest) error {
-	registry.mu.RLock()
-	c := registry.conns[nodeID]
-	registry.mu.RUnlock()
-	if c == nil {
-		return ErrNotConnected
-	}
-	msg := &ipcpb.ControlMessage{
-		Payload: &ipcpb.ControlMessage_DvrUpdateSourceRequest{DvrUpdateSourceRequest: req},
-		SentAt:  timestamppb.Now(),
-	}
-	return c.stream.Send(msg)
-}
-
-// sendDVRUpdateSourceFn is the dispatcher RefreshActiveDVRSourceOnTakeover
-// uses to deliver the refresh. Indirection lets tests capture the
-// dispatch without standing up a real Helmsman control conn or HA relay.
-var sendDVRUpdateSourceFn = SendDVRUpdateSource
-
-// SendDVRUpdateSource sends a DVRUpdateSourceRequest to the named storage
-// node, relaying via HA if the target's bidi stream is held by a
-// different Foghorn instance. Issued from the takeover path when the
-// source publisher moved nodes mid-recording.
-func SendDVRUpdateSource(nodeID string, req *ipcpb.DVRUpdateSourceRequest) error {
-	err := SendLocalDVRUpdateSource(nodeID, req)
-	if !shouldRelay(nodeID, err) {
-		return err
-	}
-	if commandRelay == nil {
-		return ErrNotConnected
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if relayErr := commandRelay.forward(ctx, &foghornrelaypb.ForwardCommandRequest{
-		TargetNodeId: nodeID,
-		Command:      &foghornrelaypb.ForwardCommandRequest_DvrUpdateSource{DvrUpdateSource: req},
 	}); relayErr != nil {
 		return relayFailure(err, relayErr)
 	}
@@ -2323,221 +2362,962 @@ func SendVodDelete(nodeID string, req *ipcpb.VodDeleteRequest) error {
 	return nil
 }
 
-// StopDVRByInternalName finds an active DVR for a stream and sends a stop to its storage node
-func StopDVRByInternalName(internalName string, logger logging.Logger) {
-	if db == nil || internalName == "" {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	// Query foghorn.artifacts for active DVR, join with artifact_nodes for node_id
-	var dvrHash, storageNodeID string
-	err := db.QueryRowContext(ctx, `
-        SELECT a.artifact_hash, COALESCE(an.node_id,'')
-        FROM foghorn.artifacts a
-        LEFT JOIN foghorn.artifact_nodes an ON a.artifact_hash = an.artifact_hash
-        WHERE a.stream_internal_name = $1 AND a.artifact_type = 'dvr'
-              AND a.status IN ('requested','starting','recording')
-        ORDER BY a.created_at DESC
-        LIMIT 1`, internalName).Scan(&dvrHash, &storageNodeID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) && dvrStopRegistry != nil {
-			dvrStopRegistry.RegisterPendingDVRStop(internalName)
-		}
-		return
-	}
-	if storageNodeID == "" || dvrHash == "" {
-		if dvrHash == "" && dvrStopRegistry != nil {
-			dvrStopRegistry.RegisterPendingDVRStop(internalName)
-		}
-		return
-	}
-	if err := SendDVRStop(storageNodeID, &ipcpb.DVRStopRequest{DvrHash: dvrHash, RequestId: dvrHash}); err != nil {
-		logger.WithError(err).WithFields(logging.Fields{
-			"dvr_hash": dvrHash,
-			"node_id":  storageNodeID,
-		}).Warn("Failed to send DVR stop command")
-		return
-	}
-	updateCtx, updateCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer updateCancel()
-	if _, err := db.ExecContext(updateCtx, `UPDATE foghorn.artifacts SET status = 'stopping', updated_at = NOW() WHERE artifact_hash = $1`, dvrHash); err != nil {
-		logger.WithError(err).WithField("dvr_hash", dvrHash).Warn("Failed to update DVR status to stopping")
-	}
-}
-
-// RefreshActiveDVRSourceOnTakeover refreshes the DVR source override on
-// the storage node when the source publisher takes over to a different
-// ingest node. Without this, the DVR's pinned sourceURL keeps targeting
-// the old source's DTSC URL and the push pull stalls until retry budget
-// exhausts.
+// CreateIngestSession durably mints — or idempotently returns — the ingest session for
+// a publisher connection identified by (tenant, node, MistServer connector PID), fenced
+// by the start trigger's UUID/time. Foghorn calls this on an ACCEPTED PUSH_REWRITE,
+// BEFORE launching any async DVR work, and binds the recording to the returned session
+// id. A same-node reconnect is a NEW connector process → a new PID → a new session, so
+// its recording is genuinely fresh.
 //
-// Runs as a goroutine. Polls StreamStateManager until the new owner's
-// stream state lands (publisher has started streaming on the new node),
-// then dispatches DVRUpdateSourceRequest to the storage node. Gives up
-// after maxWait if the new owner never reports live (DVR will continue
-// failing on stale URL; logged so operators see it).
-func RefreshActiveDVRSourceOnTakeover(internalName, newOwnerNodeID string, logger logging.Logger) {
-	if db == nil || internalName == "" || newOwnerNodeID == "" {
-		return
-	}
-	queryCtx, queryCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer queryCancel()
-	var dvrHash string
-	err := db.QueryRowContext(queryCtx, `
-        SELECT artifact_hash
-          FROM foghorn.artifacts
-         WHERE stream_internal_name = $1
-           AND artifact_type = 'dvr'
-           AND status IN ('requested','starting','recording')
-         ORDER BY created_at DESC
-         LIMIT 1`, internalName).Scan(&dvrHash)
-	if err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			logger.WithError(err).WithField("internal_name", internalName).
-				Debug("RefreshActiveDVRSourceOnTakeover: artifact lookup failed")
-		}
-		return
-	}
-	if dvrHash == "" {
-		return
-	}
+// Idempotency + PID-reuse fencing, serialized by a (tenant,node,pid) advisory lock so the
+// identity comparison always runs against a committed predecessor (never two inserters
+// racing) and the partial-unique active-PID index is never violated: a repeat PUSH_REWRITE
+// for the same connection (same trigger UUID, same stream) returns the existing session; a
+// PID the OS reused for a NEWER connector (different UUID, later start) ends the stale
+// still-active session (its PUSH_INPUT_CLOSE was lost) AND atomically claims its orphaned
+// DVR's stop, then mints fresh; a DIFFERENT-UUID OLDER trigger is REJECTED (a stale
+// reordered trigger for a superseded connection must not borrow the replacement generation);
+// a same-UUID different-stream is rejected. Fails CLOSED (returns an error) when db is nil —
+// a push cannot be admitted without a durable generation.
+// dvrIntent is the durable DVR start intent (JSON of the StartDVR inputs) for a
+// record:true session, or nil for a non-recording session. It is written in the SAME
+// insert as the session so a record:true stream's recording obligation is durable
+// before the push is approved — DVRIntentRecovery replays it if the async StartDVR is
+// lost to a crash. On a duplicate/idempotent path the existing row's intent is kept.
+// IngestSessionOutcome is the typed lifecycle result of CreateIngestSession, so the caller can
+// distinguish an admissible session from a trigger whose session has ALREADY ENDED (which must be
+// denied, not admitted — see the AlreadyEnded value). Only meaningful when the returned error is nil.
+type IngestSessionOutcome int
 
-	// Resolve the recording (storage) node with the same orphan-aware
-	// invariant ResolveDVRArtifactDispatch uses: exactly one non-orphaned
-	// artifact_nodes row wins; ambiguous (multiple non-orphaned) refuses
-	// to dispatch rather than risk routing to a stale warm-cache edge;
-	// 0-non-orphaned + 1-orphaned uses the orphaned row as a fallback so a
-	// transient cleanup race doesn't wedge a live recording.
-	storageNodeID, dispatchErr := resolveDVRStorageNode(queryCtx, dvrHash)
-	if dispatchErr != nil {
-		logger.WithError(dispatchErr).WithFields(logging.Fields{
-			"internal_name": internalName,
-			"dvr_hash":      dvrHash,
-		}).Warn("RefreshActiveDVRSourceOnTakeover: storage-node resolution refused")
-		return
-	}
-	if storageNodeID == "" {
-		logger.WithFields(logging.Fields{
-			"internal_name": internalName,
-			"dvr_hash":      dvrHash,
-		}).Warn("RefreshActiveDVRSourceOnTakeover: no storage node resolved; skipping refresh")
-		return
-	}
+const (
+	// IngestSessionActive: an OPEN session backs this push — freshly minted, an idempotent
+	// duplicate of the same connection, or a same-node PID-reuse replacement. The push may be
+	// admitted; the returned id is the durable generation.
+	IngestSessionActive IngestSessionOutcome = iota + 1
+	// IngestSessionAlreadyEnded: this EXACT trigger's session has already been closed (its own
+	// PUSH_INPUT_CLOSE won the race and ended it first). The returned id is that ended session's,
+	// for idempotency/logging — but the caller MUST deny/no-op the admission rather than run
+	// admission side effects (input state, capacity, drain, Decklog, DVR) for a connector that is
+	// already gone.
+	IngestSessionAlreadyEnded
+	// IngestSessionRejectedDuplicate: a DIFFERENT active publisher already holds this stream (on
+	// this or another node / replica). The DB, under the stream-scoped advisory lock, is the
+	// authority for single-publisher-per-stream; the caller MUST deny the push. A genuine reconnect
+	// succeeds once the incumbent's session is ended by its close or the STREAM_END reaper. Returned
+	// id is empty.
+	IngestSessionRejectedDuplicate
+)
 
-	// Wait briefly for the new owner's stream state to land. PUSH_REWRITE
-	// has just admitted the new publisher; STREAM_BUFFER (FULL) typically
-	// arrives within a couple seconds.
-	const (
-		pollEvery = 250 * time.Millisecond
-		maxWait   = 10 * time.Second
-	)
-	deadline := time.Now().Add(maxWait)
-	var newSourceBaseURL string
-	for time.Now().Before(deadline) {
-		if ss := state.DefaultManager().GetStreamState(internalName); ss != nil && ss.NodeID == newOwnerNodeID {
-			if ns := state.DefaultManager().GetNodeState(newOwnerNodeID); ns != nil && ns.BaseURL != "" {
-				// Compute the new DTSC URL for this owner. Runtime name
-				// resolved via registry (push gives live+<x>; mist-native
-				// gives bare; etc.)
-				runtimeName := internalName
-				if StreamRegistryInstance != nil {
-					if entry, lookupErr := StreamRegistryInstance.ResolveSourceByInternalName(context.Background(), internalName); lookupErr == nil && entry.IngestMode != 0 {
-						runtimeName = RuntimeNameFor(entry.IngestMode, internalName)
-					}
-				}
-				newSourceBaseURL = BuildDTSCURI(newOwnerNodeID, runtimeName, logger)
-				break
-			}
-		}
-		time.Sleep(pollEvery)
-	}
-	if newSourceBaseURL == "" {
-		logger.WithFields(logging.Fields{
-			"internal_name":  internalName,
-			"new_owner_node": newOwnerNodeID,
-			"dvr_hash":       dvrHash,
-			"storage_node":   storageNodeID,
-			"max_wait":       maxWait.String(),
-		}).Warn("RefreshActiveDVRSourceOnTakeover: new owner state never landed; DVR may stall on stale source URL")
-		return
-	}
-
-	// Resolve runtime name once for the dispatched message too.
-	runtimeName := internalName
-	if StreamRegistryInstance != nil {
-		if entry, lookupErr := StreamRegistryInstance.ResolveSourceByInternalName(context.Background(), internalName); lookupErr == nil && entry.IngestMode != 0 {
-			runtimeName = RuntimeNameFor(entry.IngestMode, internalName)
-		}
-	}
-	req := &ipcpb.DVRUpdateSourceRequest{
-		DvrHash:           dvrHash,
-		SourceRuntimeName: runtimeName,
-		SourceBaseUrl:     newSourceBaseURL,
-	}
-	if err := sendDVRUpdateSourceFn(storageNodeID, req); err != nil {
-		logger.WithError(err).WithFields(logging.Fields{
-			"dvr_hash":     dvrHash,
-			"storage_node": storageNodeID,
-		}).Warn("RefreshActiveDVRSourceOnTakeover: dispatch to storage node failed")
-		return
-	}
-	logger.WithFields(logging.Fields{
-		"internal_name":       internalName,
-		"new_owner_node":      newOwnerNodeID,
-		"dvr_hash":            dvrHash,
-		"storage_node":        storageNodeID,
-		"source_runtime_name": runtimeName,
-		"source_base_url":     newSourceBaseURL,
-	}).Info("RefreshActiveDVRSourceOnTakeover: dispatched")
+// ingestStreamAdvisoryLockKey is the (tenant, stream) advisory-lock key that serializes ingest
+// admission (CreateIngestSession) and close (FinalizeIngestSessionClose) across replicas. BOTH MUST
+// use this exact key so a close-before-insert fully serializes against the mint. Length-prefixed,
+// colon-joined so distinct (tenant, stream) pairs never collide; NUL is avoided because hashtext()
+// rejects 0x00.
+func ingestStreamAdvisoryLockKey(tenantID, internalName string) string {
+	return strconv.Itoa(len(tenantID)) + ":" + tenantID + ":" + strconv.Itoa(len(internalName)) + ":" + internalName
 }
 
-// resolveDVRStorageNode picks the storage node for an active DVR via the
-// same orphan-aware invariant ResolveDVRArtifactDispatch enforces. Exactly
-// one non-orphaned artifact_nodes row wins. Multiple non-orphaned rows
-// returns an error (invariant violation; caller must refuse the
-// dispatch). Zero non-orphaned + one orphaned uses the orphaned row as a
-// defensive fallback so transient cleanup races don't wedge a live job.
-func resolveDVRStorageNode(ctx context.Context, dvrHash string) (string, error) {
-	rows, err := db.QueryContext(ctx, `
-        SELECT node_id, COALESCE(is_orphaned, false)
-          FROM foghorn.artifact_nodes
-         WHERE artifact_hash = $1
-    `, dvrHash)
+func CreateIngestSession(ctx context.Context, tenantID, nodeID, internalName string, connectorPID int64, triggerUUID string, startedAtMillis int64, dvrIntent []byte, ingestClusterID string, logger logging.Logger) (string, IngestSessionOutcome, error) {
+	if db == nil {
+		// Fail CLOSED: without a DB we cannot persist the session identity the source-presence
+		// fence and DVR obligation depend on, so the caller must deny the push rather than admit
+		// one with no durable generation. (Production always wires db; tests inject a mock DB.)
+		return "", 0, fmt.Errorf("ingest session cannot be persisted: no database configured")
+	}
+	if tenantID == "" || nodeID == "" || connectorPID <= 0 || triggerUUID == "" || startedAtMillis <= 0 {
+		// Fail closed on any missing Mist identity: every Mist HTTP trigger carries X-PID,
+		// X-Trigger-UUID and X-Trigger-UnixMillis, so an absent value is a malformed/non-Mist
+		// request that must not mint an unidentifiable session (the schema CHECKs reject it too).
+		return "", 0, fmt.Errorf("ingest session missing required identity: tenant=%q node=%q pid=%d trigger_uuid=%q started_millis=%d", tenantID, nodeID, connectorPID, triggerUUID, startedAtMillis)
+	}
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return "", err
+		return "", 0, fmt.Errorf("begin ingest-session tx: %w", err)
+	}
+	defer func() {
+		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+			logger.WithError(rbErr).Warn("Failed to roll back ingest-session tx")
+		}
+	}()
+
+	// STREAM-scoped advisory lock: serialize ALL admissions for this (tenant, stream) — across
+	// Foghorn REPLICAS, since the lock is held in the shared per-cell database. This is the HA
+	// authority the process-local StreamRegistry cannot be: two replicas handling PUSH_REWRITEs for
+	// the same stream on different nodes contend here, so exactly one wins the admission decision.
+	// A (node, PID)-scoped lock could not provide this — two nodes' admissions for one stream would
+	// never contend on it. A connector PID maps to exactly one stream, so the stream lock also
+	// subsumes same-PID serialization. FinalizeIngestSessionClose takes the SAME lock, so a close-before-insert fully
+	// serializes against this mint (the close's tombstone is committed before the mint reads it, or
+	// this mint commits before the close runs and the close ends the row). Released on commit/rollback.
+	if _, lockErr := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
+		return "", 0, fmt.Errorf("acquire ingest-session stream lock: %w", lockErr)
+	}
+
+	// 1. Has THIS exact trigger EXECUTION (keyed (tenant, node, UUID); the UUID identifies one trigger
+	// firing and is stable across its blocking-trigger retries) already minted a session? Resolves
+	// idempotent re-fires and the already-ended race without consulting the stream incumbent.
+	var uuidID, uuidStream string
+	var uuidEnded bool
+	var uuidPID int64
+	uuidErr := tx.QueryRowContext(ctx, `
+		SELECT id::text, stream_internal_name, (ended_at IS NOT NULL), connector_pid
+		  FROM foghorn.ingest_sessions
+		 WHERE tenant_id = $1::uuid AND node_id = $2 AND start_trigger_uuid = $3
+		 FOR UPDATE
+	`, tenantID, nodeID, triggerUUID).Scan(&uuidID, &uuidStream, &uuidEnded, &uuidPID)
+	switch {
+	case uuidErr == nil:
+		if uuidStream != internalName || uuidPID != connectorPID {
+			// Same trigger UUID bound to a DIFFERENT stream or connector PID — an anomaly (a UUID
+			// identifies one trigger execution, which belongs to one connector admitting one
+			// stream). A same-UUID/different-PID replay is not a retry of the persisted connection;
+			// fail closed rather than resume a row whose identity does not match the caller.
+			return "", IngestSessionRejectedDuplicate, tx.Commit()
+		}
+		if uuidEnded {
+			// This exact trigger already CLOSED (its own PUSH_INPUT_CLOSE won the race). Deny — never
+			// re-admit an already-gone connector.
+			return uuidID, IngestSessionAlreadyEnded, tx.Commit()
+		}
+		// Idempotent duplicate PUSH_REWRITE for the SAME still-open connection.
+		return uuidID, IngestSessionActive, tx.Commit()
+	case errors.Is(uuidErr, sql.ErrNoRows):
+		// New trigger UUID — fall through to the stream-incumbent decision.
+	default:
+		return "", 0, fmt.Errorf("look up ingest session by trigger UUID: %w", uuidErr)
+	}
+
+	// 2. Is a DIFFERENT publisher already the ACTIVE source for this STREAM? At most one row here
+	// (uq_foghorn_ingest_sessions_active_per_stream). Under the stream lock this is the authoritative
+	// single-publisher decision.
+	var incID, incNode string
+	var incPID, incMillis int64
+	var staleStopClaims []DVRStopClaim // dispatched AFTER commit (PID-reuse orphan stop)
+	incErr := tx.QueryRowContext(ctx, `
+		SELECT id::text, node_id, connector_pid, started_at_unix_millis
+		  FROM foghorn.ingest_sessions
+		 WHERE tenant_id = $1::uuid AND stream_internal_name = $2 AND ended_at IS NULL
+		 FOR UPDATE
+	`, tenantID, internalName).Scan(&incID, &incNode, &incPID, &incMillis)
+	switch {
+	case incErr == nil:
+		// An incumbent holds the stream. The ONLY case that supersedes it is the OS reusing this
+		// exact (node, PID) for a NEWER connector while the incumbent's row still lingers active
+		// (its close was lost) — a genuine same-connection-slot replacement. Anything else (a
+		// different node, a different PID on the same node, or an older/equal trigger time) is a
+		// duplicate publisher and is REJECTED to protect the incumbent; a real reconnect is admitted
+		// once the incumbent is ended by its close or the STREAM_END reaper.
+		if incNode == nodeID && incPID == connectorPID && startedAtMillis > incMillis {
+			if _, endErr := tx.ExecContext(ctx, `
+				UPDATE foghorn.ingest_sessions
+				   SET ended_at = NOW(), ended_at_unix_millis = $2, ended_reason = 'superseded_pid_reuse'
+				 WHERE id = $1::uuid AND ended_at IS NULL
+			`, incID, startedAtMillis); endErr != nil {
+				return "", 0, fmt.Errorf("end stale ingest session on PID reuse: %w", endErr)
+			}
+			claims, claimErr := ClaimDVRStops(ctx, tx, `ingest_generation = $1::uuid AND tenant_id::text = $2`, incID, tenantID)
+			if claimErr != nil {
+				return "", 0, fmt.Errorf("claim stale DVR stop on PID reuse: %w", claimErr)
+			}
+			staleStopClaims = claims
+		} else {
+			return "", IngestSessionRejectedDuplicate, tx.Commit()
+		}
+	case errors.Is(incErr, sql.ErrNoRows):
+		// No active publisher — mint fresh below.
+	default:
+		return "", 0, fmt.Errorf("look up active stream ingest session: %w", incErr)
+	}
+
+	// 2b. Close-before-insert tombstone: did a PUSH_INPUT_CLOSE for THIS connector already commit
+	// while no session row existed (concurrent dispatch / WAL redelivery processed the close before
+	// this rewrite)? Under the shared stream lock, a tombstone whose close event is at or after this
+	// session's start means the publisher is already gone — deny rather than mint an active session
+	// for a dead connector. The event-time bound (close >= start) keeps a genuine LATER reconnect on
+	// a reused (node, PID) — which starts after the old close — from being blocked.
+	var tombstoned bool
+	if tsErr := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM foghorn.ingest_close_tombstones
+			 WHERE tenant_id = $1::uuid AND node_id = $2 AND connector_pid = $3
+			       AND stream_internal_name = $4 AND close_unix_millis >= $5
+		)
+	`, tenantID, nodeID, connectorPID, internalName, startedAtMillis).Scan(&tombstoned); tsErr != nil {
+		return "", 0, fmt.Errorf("check ingest close tombstone: %w", tsErr)
+	}
+	if tombstoned {
+		return "", IngestSessionAlreadyEnded, tx.Commit()
+	}
+
+	// 3. Mint. No ON CONFLICT clause: the stream lock has already serialized this decision, and the
+	// partial unique (tenant, stream) / (tenant, node, PID) / (tenant, node, UUID) indexes are the
+	// durable backstop — a violation here means a bug or lock-hash collision, so surface it (fail
+	// closed) rather than silently absorb it.
+	var intentArg interface{}
+	if len(dvrIntent) > 0 {
+		intentArg = string(dvrIntent)
+	}
+	var newID string
+	if insErr := tx.QueryRowContext(ctx, `
+		INSERT INTO foghorn.ingest_sessions
+			(tenant_id, node_id, stream_internal_name, connector_pid, start_trigger_uuid, started_at_unix_millis, dvr_intent, ingest_cluster_id, projection_state)
+		VALUES ($1::uuid, $2, $3, $4, $5, $6, $7::jsonb, NULLIF($8, ''), 'pending')
+		RETURNING id::text
+	`, tenantID, nodeID, internalName, connectorPID, triggerUUID, startedAtMillis, intentArg, ingestClusterID).Scan(&newID); insErr != nil {
+		return "", 0, fmt.Errorf("insert ingest session: %w", insErr)
+	}
+	if commitErr := tx.Commit(); commitErr != nil {
+		return "", 0, fmt.Errorf("commit ingest session: %w", commitErr)
+	}
+	// The stale session's orphaned DVR stop (if any) is durable now — dispatch best-effort.
+	DispatchDVRStops(staleStopClaims, logger)
+	return newID, IngestSessionActive, nil
+}
+
+// DVR command generations Foghorn stamps on DVRStart/DVRStop. A stop's generation is
+// strictly higher than a start's, so Helmsman — which applies highest-generation-wins
+// with a stop tombstone — rejects a start that a newer stop has already superseded.
+// This closes the stop-overtakes-start race: a start that committed status='starting'
+// but has not yet sent DVRStart can be superseded by a stop; if the stop reaches
+// Helmsman first, the late start is rejected idempotently instead of creating a live
+// writer behind a terminal Foghorn row.
+const (
+	DVRStartCommandGeneration int64 = 1
+	DVRStopCommandGeneration  int64 = 2
+)
+
+// DVRStartLockKey is the (stream, source node) key startDVR takes a Postgres advisory
+// lock on to serialize concurrent starts for the same (stream, source node)
+// (duplicate-start prevention). It is NODE-scoped, NOT an ingest-session identity: it
+// cannot distinguish a same-node reconnect from the original session. COLON-joined (NOT
+// NUL: PostgreSQL text passed to hashtext() rejects 0x00 with "invalid byte sequence for
+// encoding UTF8", which would fail EVERY real startDVR at its advisory lock). A hash
+// collision between distinct pairs only over-serializes two unrelated starts — never
+// incorrect. Length-prefixed so "a:b"+"c" and "a"+"b:c" cannot collide as raw text.
+func DVRStartLockKey(internalName, sourceNodeID string) string {
+	return strconv.Itoa(len(internalName)) + ":" + internalName + ":" + sourceNodeID
+}
+
+// dvrStopQueryer is satisfied by both *sql.DB and *sql.Tx, so a stop can be claimed
+// standalone or inside a larger transaction (e.g. atomically with a session end).
+type dvrStopQueryer interface {
+	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
+}
+
+// DVRStopClaim is one durably-claimed stop obligation ready to dispatch.
+type DVRStopClaim struct {
+	DVRHash       string
+	StorageNodeID string
+}
+
+// ClaimDVRStops is the DURABLE half of the single claim-before-send DVR-stop primitive
+// used by every stop path (StopDVR RPC, STREAM_END backstop, PUSH_INPUT_CLOSE finalizer).
+// It transitions every ACTIVE dvr row matched by whereSQL to status='stopping' +
+// dvr_start_dispatch.state='stop_pending' — the durable obligation the recovery drain
+// re-sends until DVRStopped acks — and returns the claims to dispatch. Two invariants it
+// enforces that a bare "send then write status" cannot:
+//
+//   - claim BEFORE send: the obligation is durable first, so a lost/accepted send is
+//     redriven by DVRStartingRecoveryJob instead of vanishing.
+//   - active-status guard: a row a fast DVRStopped already moved terminal is NOT
+//     re-claimed, so a stop can never overwrite a completed recording back to 'stopping'.
+//
+// whereSQL is a TRUSTED internal fragment (never user input); its placeholders continue
+// from the fixed guard, so its first placeholder is $1. Pass a *sql.Tx as q to claim
+// inside a larger transaction; the caller dispatches with DispatchDVRStops AFTER commit.
+func ClaimDVRStops(ctx context.Context, q dvrStopQueryer, whereSQL string, args ...interface{}) ([]DVRStopClaim, error) {
+	rows, err := q.QueryContext(ctx, `
+		UPDATE foghorn.artifacts
+		   SET dvr_start_dispatch = jsonb_set(COALESCE(dvr_start_dispatch, '{}'::jsonb), '{state}', '"stop_pending"'::jsonb),
+		       status = 'stopping',
+		       updated_at = NOW()
+		 WHERE artifact_type = 'dvr'
+		       AND status IN ('requested','starting','recording')
+		       AND (`+whereSQL+`)
+		RETURNING artifact_hash, COALESCE(dvr_start_dispatch->>'node_id','')
+	`, args...)
+	if err != nil {
+		return nil, err
 	}
 	defer rows.Close()
-	var nonOrphaned, orphaned []string
+	var claims []DVRStopClaim
 	for rows.Next() {
-		var nodeID string
-		var isOrphaned bool
-		if scanErr := rows.Scan(&nodeID, &isOrphaned); scanErr != nil {
-			return "", scanErr
+		var c DVRStopClaim
+		if scanErr := rows.Scan(&c.DVRHash, &c.StorageNodeID); scanErr != nil {
+			return nil, scanErr
 		}
-		if nodeID == "" {
+		claims = append(claims, c)
+	}
+	return claims, rows.Err()
+}
+
+// DispatchDVRStops is the SEND half of the primitive: a best-effort immediate DVRStop per
+// claim so a healthy node stops promptly. The obligation is already durable, so a failed
+// send is left for the recovery drain — never surfaced as a caller error.
+func DispatchDVRStops(claims []DVRStopClaim, logger logging.Logger) {
+	for _, c := range claims {
+		if c.StorageNodeID == "" {
 			continue
 		}
-		if isOrphaned {
-			orphaned = append(orphaned, nodeID)
-		} else {
-			nonOrphaned = append(nonOrphaned, nodeID)
+		if sendErr := SendDVRStop(c.StorageNodeID, &ipcpb.DVRStopRequest{DvrHash: c.DVRHash, RequestId: c.DVRHash, CommandGeneration: DVRStopCommandGeneration}); sendErr != nil {
+			logger.WithError(sendErr).WithFields(logging.Fields{
+				"dvr_hash": c.DVRHash,
+				"node_id":  c.StorageNodeID,
+			}).Info("Immediate DVR stop send failed; recovery drain will re-send (obligation is durable)")
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return "", err
+}
+
+// StopDVRForEndedSource claims the durable stop obligation on the active DVR whose
+// recorded source node is endedSourceNodeID for internalName. DVR finalization is
+// node-local (keyed on the source node), not stream-wide: a recording belongs to the
+// node that produced its source, so it is stopped on that node's STREAM_END
+// regardless of current stream ownership (the takeover case where this node is no
+// longer the owner and the stream-wide stop would be suppressed).
+//
+// The claim is one guarded atomic UPDATE (state='stop_pending' + status='stopping',
+// re-guarded on active status so a fast DVRStopped is not resurrected), scoped by
+// tenant and artifact type; then a best-effort stop is sent and DVRStartingRecoveryJob
+// re-sends on failure. A nil DB is an unconfigured/test no-op; missing scope or a
+// query failure fails CLOSED (returns an error) so the durable STREAM_END gets a
+// retryable negative ack rather than truncating the WAL.
+//
+// This is the node-keyed BACKSTOP; the precise primary finalizer is
+// FinalizeIngestSessionClose on PUSH_INPUT_CLOSE (keyed on the ingest generation). A
+// start that committed status='starting' but not yet sent DVRStart, then loses to a stop
+// claimed here, no longer creates a live writer behind a terminal row: DVRStart carries a
+// command generation below the stop's, so Helmsman rejects the superseded start, and the
+// start-redelivery path (DVRStartingRecoveryJob) revalidates against the durable
+// ingest_sessions.ended_at before re-dispatching. An early STREAM_END that beats the
+// async DVR insert is handled by the close-before-start fence in startDVR
+// (ingest_sessions.ended_at) and by DVRIntentRecovery replaying the durable intent.
+func StopDVRForEndedSource(internalName, tenantID, endedSourceNodeID string, logger logging.Logger) error {
+	if db == nil {
+		// Not a runtime "database unavailable" (that path is the query failing below,
+		// which fails closed): db is wired once at startup and is never nil at runtime.
+		// A nil here means an unconfigured/test process with no DB, so there is no DVR
+		// state to stop — a genuine no-op, not a swallowed failure.
+		return nil
 	}
-	switch len(nonOrphaned) {
-	case 0:
-		if len(orphaned) == 1 {
-			return orphaned[0], nil
-		}
+	if internalName == "" || tenantID == "" || endedSourceNodeID == "" {
+		return fmt.Errorf("DVR stop missing required scope: internal_name=%q tenant_id=%q source_node=%q", internalName, tenantID, endedSourceNodeID)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// Claim every ORPHANED DVR for this (stream, source node), not just the newest. Same-node
+	// sessions can OVERLAP now (a reconnect mints a fresh generation while a prior session whose
+	// PUSH_INPUT_CLOSE was lost still lingers 'recording'); a LIMIT 1 would leave that older
+	// writer running forever. But the fence below is critical: a DVR bound to a STILL-ACTIVE
+	// ingest session must NOT be stopped. STREAM_END/vanish for one connection can race a live
+	// reconnect that already re-minted a generation and bound its own DVR — stopping ALL DVRs on
+	// the node would kill that live recording. So claim only DVRs whose bound ingest_generation
+	// is ENDED (its session's ended_at IS NOT NULL) or NULL (legacy/unbound); leave any bound to
+	// an active session running.
+	claims, err := ClaimDVRStops(ctx, db,
+		`stream_internal_name = $1 AND dvr_start_dispatch->>'source_node_id' = $2 AND tenant_id::text = $3
+		 AND (ingest_generation IS NULL OR NOT EXISTS (
+		     SELECT 1 FROM foghorn.ingest_sessions s
+		      WHERE s.id = foghorn.artifacts.ingest_generation AND s.ended_at IS NULL))`,
+		internalName, endedSourceNodeID, tenantID)
+	if err != nil {
+		return fmt.Errorf("claim DVR stop obligation for ended source session: %w", err)
+	}
+	DispatchDVRStops(claims, logger)
+	return nil
+}
+
+// OpenIngestSessionCluster returns the virtual media cluster an OPEN ingest
+// session for this exact publisher connection was admitted into, or "" when the
+// connection has no open session.
+//
+// PUSH_REWRITE consults it BEFORE claiming placement, so an idempotent re-fire
+// claims the cluster its session is bound to rather than whatever the node is
+// registered in now. Without that, a node reassigned mid-session has its retry
+// either refused against the still-live claim in the old cluster, or claiming
+// the new one and then finding the session permanently bound to the old — with
+// renewal asserting one cluster while the record says another.
+//
+// Keyed on the mint's own identity — (tenant, node, trigger UUID) — so it reads
+// only this tenant's rows. The caller therefore resolves the tenant first, from
+// a non-claiming validation, and claims placement only after this returns.
+func OpenIngestSessionCluster(ctx context.Context, tenantID, nodeID, triggerUUID string) (string, error) {
+	if db == nil || tenantID == "" || nodeID == "" || triggerUUID == "" {
 		return "", nil
-	case 1:
-		return nonOrphaned[0], nil
-	default:
-		return "", fmt.Errorf("active DVR %q has %d non-orphaned artifact_nodes rows; storage node ambiguous", dvrHash, len(nonOrphaned))
 	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	var clusterID string
+	err := db.QueryRowContext(ctx, `
+		SELECT COALESCE(ingest_cluster_id, '')
+		  FROM foghorn.ingest_sessions
+		 WHERE tenant_id = $1::uuid AND node_id = $2 AND start_trigger_uuid = $3 AND ended_at IS NULL
+	`, tenantID, nodeID, triggerUUID).Scan(&clusterID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("look up open ingest session cluster: %w", err)
+	}
+	return clusterID, nil
+}
+
+// EndIngestSessionsForStreamEnd is the STREAM_END / vanish REAPER: it durably ends every ACTIVE
+// ingest session for (tenant, node, stream) whose start is AT OR BEFORE the offline edge's event
+// time, and claims each one's bound DVR stop, in ONE transaction. This is what makes STREAM_END a
+// real backstop for a LOST PUSH_INPUT_CLOSE — without it a lost close leaves the session open
+// forever, and (because admission now protects the incumbent) wedges every reconnect. The
+// event-time fence (started_at_unix_millis <= eventMillis) preserves a reconnect that came up AFTER
+// the stream ended (its session started later, so it is left active). eventMillis <= 0 (old Mist /
+// missing X-Trigger-UnixMillis header) is a deliberate NO-OP: with no reliable event time we cannot
+// fence a reconnect, so we end nothing and let the conservative offline fence handle it. Returns the
+// number of sessions ended. Fails closed (error) on a query failure; nil DB is a no-op.
+func EndIngestSessionsForStreamEnd(ctx context.Context, tenantID, nodeID, internalName string, eventMillis int64, logger logging.Logger) (int, error) {
+	if db == nil || eventMillis <= 0 {
+		return 0, nil
+	}
+	if tenantID == "" || nodeID == "" || internalName == "" {
+		return 0, fmt.Errorf("stream-end reaper missing scope: tenant=%q node=%q stream=%q", tenantID, nodeID, internalName)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin stream-end reaper tx: %w", err)
+	}
+	defer func() {
+		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+			logger.WithError(rbErr).Warn("Failed to roll back stream-end reaper tx")
+		}
+	}()
+	// Scope the rows in a closure so defer rows.Close() runs BEFORE the ClaimDVRStops queries below
+	// reuse the transaction (a tx cannot have open rows while issuing the next query).
+	var endedIDs []string
+	if scanErr := func() error {
+		rows, err := tx.QueryContext(ctx, `
+			UPDATE foghorn.ingest_sessions
+			   SET ended_at = NOW(), ended_at_unix_millis = $4, ended_reason = 'stream_end_reaped'
+			 WHERE tenant_id = $1::uuid AND node_id = $2 AND stream_internal_name = $3
+			       AND ended_at IS NULL AND started_at_unix_millis <= $4
+			RETURNING id::text
+		`, tenantID, nodeID, internalName, eventMillis)
+		if err != nil {
+			return fmt.Errorf("reap ingest sessions on stream end: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return fmt.Errorf("scan reaped session id: %w", err)
+			}
+			endedIDs = append(endedIDs, id)
+		}
+		return rows.Err()
+	}(); scanErr != nil {
+		return 0, scanErr
+	}
+	// Claim each reaped session's bound DVR stop in the SAME transaction, so a lost close can never
+	// leave a live writer behind a reaped session.
+	var allClaims []DVRStopClaim
+	for _, id := range endedIDs {
+		claims, claimErr := ClaimDVRStops(ctx, tx, `ingest_generation = $1::uuid AND tenant_id::text = $2`, id, tenantID)
+		if claimErr != nil {
+			return 0, fmt.Errorf("claim DVR stop for reaped session %s: %w", id, claimErr)
+		}
+		allClaims = append(allClaims, claims...)
+	}
+	if commitErr := tx.Commit(); commitErr != nil {
+		return 0, fmt.Errorf("commit stream-end reaper: %w", commitErr)
+	}
+	DispatchDVRStops(allClaims, logger)
+	return len(endedIDs), nil
+}
+
+// FenceOfflineBackstop serializes a session-agnostic offline edge with admission. Under the shared
+// stream advisory lock it suppresses the edge when any ingest session remains open; otherwise it
+// allocates an ordered source revision and persists the requested offline effects in the same
+// transaction. The immediate inactive projection updates routing, while the durable worker retries
+// all external effects under this lock. Errors fail closed.
+func FenceOfflineBackstop(ctx context.Context, registry *StreamRegistry, tenantID, nodeID, internalName string, intent OfflineEffectIntent) (bool, int64, error) {
+	if registry == nil {
+		return false, 0, nil
+	}
+	// Retain the source generation on the inactive projection for identity and diagnostics.
+	generation, active, ok := registry.SourceGenerationSnapshot(internalName, nodeID)
+
+	if db == nil {
+		return false, 0, fmt.Errorf("offline fence requires the durable session store")
+	}
+	_ = active
+	_ = ok
+	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(internalName) == "" || strings.TrimSpace(nodeID) == "" {
+		return false, 0, fmt.Errorf("offline fence missing scope: tenant=%q stream=%q", tenantID, internalName)
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, 0, fmt.Errorf("begin offline-fence tx: %w", err)
+	}
+	defer func() {
+		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+			logging.NewLogger().WithError(rbErr).Warn("Failed to roll back offline-fence tx")
+		}
+	}()
+	if _, lockErr := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
+		return false, 0, fmt.Errorf("acquire offline-fence stream lock: %w", lockErr)
+	}
+	var hasActive bool
+	if probeErr := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM foghorn.ingest_sessions
+			 WHERE tenant_id = $1::uuid AND stream_internal_name = $2 AND ended_at IS NULL
+		)`, tenantID, internalName).Scan(&hasActive); probeErr != nil {
+		return false, 0, fmt.Errorf("offline-fence active probe: %w", probeErr)
+	}
+	if hasActive {
+		return false, 0, tx.Commit()
+	}
+	rev, revErr := nextSourceRevision(ctx, tx)
+	if revErr != nil {
+		return false, 0, revErr
+	}
+	if enqueueErr := enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, nodeID, generation, rev, intent); enqueueErr != nil {
+		return false, 0, enqueueErr
+	}
+	if commitErr := tx.Commit(); commitErr != nil {
+		return false, 0, fmt.Errorf("commit offline-fence: %w", commitErr)
+	}
+	// Publish the source-ownership transition immediately for routing. The durable effect row remains
+	// the retry boundary: a Redis failure is returned to durable trigger callers, and the worker later
+	// replays the same revision. A reconnect admitted after this transaction receives a higher revision,
+	// so Redis rejects this inactive publish if it arrives late.
+	applied, publishErr := registry.PublishSourceInactive(internalName, nodeID, generation, rev)
+	if publishErr != nil {
+		return false, rev, fmt.Errorf("publish offline source projection: %w", publishErr)
+	}
+	if !applied {
+		return false, rev, nil
+	}
+	return true, rev, nil
+}
+
+// ProjectSourceIfCurrent allocates the DB winner's revision and publishes it only while generation
+// remains the active session under the stream advisory lock. applied=false means the generation ended
+// before projection; callers must deny it without admission side effects. The prior owner is returned
+// only for an applied projection and is the node that must be drained. DB, lock, and Redis failures
+// fail closed and durably retire a still-pending session.
+func ProjectSourceIfCurrent(ctx context.Context, registry *StreamRegistry, tenantID, nodeID, internalName string, connectorPID int64, triggerUUID, generation string, intent AdmissionEffectIntent) (applied bool, resumed bool, err error) {
+	if registry == nil {
+		return false, false, nil
+	}
+	if db == nil {
+		return false, false, fmt.Errorf("project-if-current requires the durable session store")
+	}
+	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(internalName) == "" || strings.TrimSpace(generation) == "" {
+		return false, false, fmt.Errorf("project-if-current missing scope: tenant=%q stream=%q generation=%q", tenantID, internalName, generation)
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, false, fmt.Errorf("begin project-if-current tx: %w", err)
+	}
+	defer func() {
+		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+			logging.NewLogger().WithError(rbErr).Warn("Failed to roll back project-if-current tx")
+		}
+	}()
+	if _, lockErr := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
+		return false, false, fmt.Errorf("acquire project-if-current stream lock: %w", lockErr)
+	}
+	var isCurrent bool
+	var revision sql.NullInt64
+	var projectionState sql.NullString
+	if probeErr := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM foghorn.ingest_sessions
+			 WHERE tenant_id = $1::uuid AND stream_internal_name = $2 AND id = $3::uuid AND ended_at IS NULL
+		), (SELECT source_revision FROM foghorn.ingest_sessions WHERE id = $3::uuid AND tenant_id = $1::uuid),
+		   (SELECT projection_state FROM foghorn.ingest_sessions WHERE id = $3::uuid AND tenant_id = $1::uuid)
+	`, tenantID, internalName, generation).Scan(&isCurrent, &revision, &projectionState); probeErr != nil {
+		return false, false, fmt.Errorf("project-if-current active-session probe: %w", probeErr)
+	}
+	if !isCurrent {
+		// This session ended (its own close won) or was superseded by a newer admission while this
+		// projection was delayed — drop it, and signal the caller to DENY (no side effects).
+		return false, false, tx.Commit()
+	}
+	if projectionState.String == "active" {
+		// A RESUMED projection: this exact generation already crossed the shared CAS and was durably
+		// confirmed — this call is a blocking-trigger retry whose first response was lost (or a
+		// replica re-handling the trigger). The once-only admission effects are owed by the durable
+		// obligation inserted with the confirmation (applied by the admission-effects worker), so
+		// the caller has nothing to re-run or skip here. An active row must carry the revision the
+		// CAS accepted; its absence is an invariant violation, not a resumable state — fail closed.
+		if !revision.Valid || revision.Int64 <= 0 {
+			return false, false, fmt.Errorf("resumed projection %s has no persisted source revision (invariant violation)", generation)
+		}
+		if commitErr := tx.Commit(); commitErr != nil {
+			return false, false, fmt.Errorf("commit project-if-current resume: %w", commitErr)
+		}
+		// Re-assert the registry projection at the persisted revision so a cache-cold replica repairs
+		// its local view (the equal-revision CAS is idempotent for the exact same identity). The
+		// result is CHECKED, not assumed: applied=false means the shared registry holds a strictly
+		// newer transition (or this exact revision under a DIFFERENT identity) — this publisher is
+		// not the routable source, so accepting it would admit an unroutable/superseded connection.
+		// An error leaves the shared state unknown; both deny (fail closed, Mist retries).
+		_, projected, republishErr := registry.ProjectSource(internalName, nodeID, connectorPID, triggerUUID, generation, revision.Int64)
+		if republishErr != nil {
+			return false, false, fmt.Errorf("resumed projection re-publish: %w", republishErr)
+		}
+		if !projected {
+			return false, false, nil
+		}
+		return true, true, nil
+	}
+	// Draw the monotonic source revision UNDER the lock, so this projection orders strictly after any
+	// prior transition for the stream and a stale replica's write cannot make old ownership look newer.
+	rev := revision.Int64
+	if !revision.Valid || rev <= 0 {
+		var revErr error
+		rev, revErr = nextSourceRevision(ctx, tx)
+		if revErr != nil {
+			return false, false, revErr
+		}
+		if _, updateErr := tx.ExecContext(ctx, `
+			UPDATE foghorn.ingest_sessions
+			   SET source_revision=$2
+			 WHERE id=$1::uuid AND ended_at IS NULL AND projection_state='pending'
+		`, generation, rev); updateErr != nil {
+			return false, false, fmt.Errorf("persist source projection revision: %w", updateErr)
+		}
+	}
+	if commitErr := tx.Commit(); commitErr != nil {
+		return false, false, fmt.Errorf("commit project-if-current: %w", commitErr)
+	}
+	prior, priorGeneration, projected, projectErr := registry.projectSourceWithPriorGeneration(internalName, nodeID, connectorPID, triggerUUID, generation, rev)
+	if projectErr != nil {
+		cause := fmt.Errorf("publish source projection: %w", projectErr)
+		return false, false, errors.Join(cause, abortPendingSourceProjection(ctx, tenantID, internalName, generation))
+	}
+	if !projected {
+		cause := fmt.Errorf("source projection revision %d lost the shared CAS", rev)
+		return false, false, errors.Join(cause, abortPendingSourceProjection(ctx, tenantID, internalName, generation))
+	}
+	// Confirm the projection AND persist the once-only admission-effect obligation ATOMICALLY: the
+	// obligation (push-target activation, prior-owner drain from the CAS result, federation live
+	// broadcast) exists if and only if this generation was confirmed, so a crash at ANY later point
+	// cannot lose the effects (the admission-effects worker applies them under the stream lock) and
+	// a trigger retry cannot duplicate them (one obligation per generation).
+	confirmTx, confirmErr := db.BeginTx(ctx, nil)
+	if confirmErr != nil {
+		cause := fmt.Errorf("begin projection confirmation: %w", confirmErr)
+		return false, false, errors.Join(cause, abortPendingSourceProjection(ctx, tenantID, internalName, generation))
+	}
+	defer rollbackQuiet(confirmTx)
+	res, markErr := confirmTx.ExecContext(ctx, `
+		UPDATE foghorn.ingest_sessions
+		   SET projection_state='active', projected_at=COALESCE(projected_at, NOW())
+		 WHERE id=$1::uuid AND tenant_id=$2::uuid AND stream_internal_name=$3
+			   AND ended_at IS NULL AND source_revision=$4
+			   AND projection_state='pending'
+	`, generation, tenantID, internalName, rev)
+	if markErr != nil {
+		cause := fmt.Errorf("confirm source projection: %w", markErr)
+		return false, false, errors.Join(cause, abortPendingSourceProjection(ctx, tenantID, internalName, generation))
+	}
+	marked, markRowsErr := res.RowsAffected()
+	if markRowsErr != nil {
+		cause := fmt.Errorf("confirm source projection rows: %w", markRowsErr)
+		return false, false, errors.Join(cause, abortPendingSourceProjection(ctx, tenantID, internalName, generation))
+	}
+	if marked != 1 {
+		cause := fmt.Errorf("source session ended before projection confirmation")
+		return false, false, errors.Join(cause, abortPendingSourceProjection(ctx, tenantID, internalName, generation))
+	}
+	if enqueueErr := enqueueAdmissionEffectTx(ctx, confirmTx, tenantID, internalName, nodeID, generation, rev, prior, priorGeneration, intent); enqueueErr != nil {
+		cause := fmt.Errorf("enqueue admission effects: %w", enqueueErr)
+		return false, false, errors.Join(cause, abortPendingSourceProjection(ctx, tenantID, internalName, generation))
+	}
+	if commitErr := confirmTx.Commit(); commitErr != nil {
+		cause := fmt.Errorf("commit projection confirmation: %w", commitErr)
+		return false, false, errors.Join(cause, abortPendingSourceProjection(ctx, tenantID, internalName, generation))
+	}
+	return true, false, nil
+}
+
+// abortPendingSourceProjection releases stream authority after a projection that could not be
+// confirmed. The session end and inactive projection intent commit together under the stream lock,
+// so a denied PUSH_REWRITE cannot leave an open row blocking later publishers.
+func abortPendingSourceProjection(ctx context.Context, tenantID, internalName, generation string) error {
+	if db == nil {
+		return errors.New("abort pending source projection: no database configured")
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin abort pending source projection: %w", err)
+	}
+	defer rollbackQuiet(tx)
+	if _, lockErr := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
+		return fmt.Errorf("lock abort pending source projection: %w", lockErr)
+	}
+	var nodeID string
+	err = tx.QueryRowContext(ctx, `
+		UPDATE foghorn.ingest_sessions
+		   SET ended_at=NOW(), ended_at_unix_millis=(EXTRACT(EPOCH FROM NOW())*1000)::bigint,
+		       ended_reason='projection_failed'
+		 WHERE id=$1::uuid AND tenant_id=$2::uuid AND stream_internal_name=$3
+		   AND ended_at IS NULL AND projection_state='pending'
+		 RETURNING node_id
+	`, generation, tenantID, internalName).Scan(&nodeID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return tx.Commit()
+	}
+	if err != nil {
+		return fmt.Errorf("end pending source projection: %w", err)
+	}
+	revision, err := nextSourceRevision(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if err := enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, nodeID, generation, revision, OfflineEffectIntent{}); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit abort pending source projection: %w", err)
+	}
+	return nil
+}
+
+// nextSourceRevision draws the next monotonic source-ordering epoch from foghorn.source_projection_revision
+// within the caller's advisory-locked tx.
+func nextSourceRevision(ctx context.Context, tx *sql.Tx) (int64, error) {
+	var rev int64
+	if err := tx.QueryRowContext(ctx, `SELECT nextval('foghorn.source_projection_revision')`).Scan(&rev); err != nil {
+		return 0, fmt.Errorf("draw source projection revision: %w", err)
+	}
+	return rev, nil
+}
+
+// CloseFinalization is the durable result of FinalizeIngestSessionClose.
+type CloseFinalization struct {
+	// EndedSessionID is the session this close ended, or "" when the close was fenced
+	// (an older event than the active session's start under PID reuse) or the session
+	// was already ended. "" means nothing was finalized.
+	EndedSessionID string
+	// ClaimToken / ClusterID are the placement claim the ended session held: the
+	// publisher connection that owns it and the cluster it was admitted into.
+	// The release matches on both, so a close cannot clear a claim that is not
+	// this session's.
+	ClaimToken string
+	ClusterID  string
+	// DVRHash / StorageNodeID identify the DVR whose stop obligation was claimed in the
+	// same transaction, for a best-effort immediate send. Empty when no active DVR was
+	// bound; the recovery drain re-sends regardless once stop_pending is durable.
+	DVRHash       string
+	StorageNodeID string
+}
+
+// FinalizeIngestSessionClose ends the exact ingest generation, claims its DVR stop, and queues its
+// source-offline effects in one stream-locked transaction. The committed stop is drained by
+// DVRStartingRecoveryJob when immediate dispatch is unavailable; an uncommitted close is retried
+// from Helmsman's trigger WAL.
+//
+// The event-time fence (started_at_unix_millis <= closeMillis) leaves a newer same-node
+// session intact when the OS reused the connector PID; a fenced or already-ended close
+// ends nothing, claims nothing, and returns an empty result (idempotent).
+func FinalizeIngestSessionClose(ctx context.Context, tenantID, nodeID string, connectorPID, closeMillis int64, internalName string, logger logging.Logger) (CloseFinalization, error) {
+	var res CloseFinalization
+	if db == nil {
+		return res, errors.New("ingest session close cannot be finalized: no database configured")
+	}
+	if tenantID == "" || nodeID == "" || connectorPID <= 0 || closeMillis <= 0 || internalName == "" {
+		// Fail closed on a malformed close. Mist supplies X-PID and X-Trigger-UnixMillis on
+		// every trigger, so a missing PID or event time is a malformed/non-Mist close — and a
+		// zero event time cannot be fenced against PID reuse. The stream name scopes the
+		// session end (a PID maps to one stream). Reject rather than finalize unfenced or
+		// cross-stream (the caller surfaces this as a retryable NACK).
+		return res, fmt.Errorf("ingest session close missing required identity: tenant=%q node=%q pid=%d close_millis=%d stream=%q", tenantID, nodeID, connectorPID, closeMillis, internalName)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return res, fmt.Errorf("begin ingest-close tx: %w", err)
+	}
+	defer func() {
+		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+			logger.WithError(rbErr).Warn("Failed to roll back ingest-close tx")
+		}
+	}()
+
+	// Serialize against CreateIngestSession on the SAME (tenant, stream) lock so a close-before-insert
+	// is ordered: either this close's tombstone commits before the mint reads it (the mint then denies
+	// the dead connector), or the mint commits first and the UPDATE below ends the row it created.
+	if _, lockErr := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
+		return res, fmt.Errorf("acquire ingest-close stream lock: %w", lockErr)
+	}
+
+	var endedID, endedClaimToken, endedClusterID string
+	endErr := tx.QueryRowContext(ctx, `
+		UPDATE foghorn.ingest_sessions
+		   SET ended_at = NOW(), ended_at_unix_millis = $4, ended_reason = 'push_input_close'
+		 WHERE tenant_id = $1::uuid AND node_id = $2 AND connector_pid = $3 AND ended_at IS NULL
+		       AND stream_internal_name = $5
+		       AND started_at_unix_millis <= $4
+		RETURNING id::text, start_trigger_uuid, COALESCE(ingest_cluster_id, '')
+	`, tenantID, nodeID, connectorPID, closeMillis, internalName).Scan(&endedID, &endedClaimToken, &endedClusterID)
+	if errors.Is(endErr, sql.ErrNoRows) {
+		// No active session to end — either a duplicate / already-ended / event-time-fenced close, OR
+		// this close arrived BEFORE its own PUSH_REWRITE could mint the session (concurrent trigger
+		// dispatch + WAL redelivery). Record a durable tombstone so CreateIngestSession denies the late
+		// rewrite instead of resurrecting a dead publisher as an active session. Harmless when the close
+		// was merely a duplicate: a genuine reconnect starts AFTER this close's event time and so is not
+		// blocked, and the reaper sweeps the tombstone on a TTL.
+		if _, insErr := tx.ExecContext(ctx, `
+			INSERT INTO foghorn.ingest_close_tombstones
+				(tenant_id, node_id, connector_pid, stream_internal_name, close_unix_millis)
+			VALUES ($1::uuid, $2, $3, $4, $5)
+		`, tenantID, nodeID, connectorPID, internalName, closeMillis); insErr != nil {
+			return res, fmt.Errorf("record ingest close tombstone: %w", insErr)
+		}
+		return res, tx.Commit()
+	}
+	if endErr != nil {
+		return res, fmt.Errorf("end ingest session on close: %w", endErr)
+	}
+	res.EndedSessionID = endedID
+	res.ClaimToken = endedClaimToken
+	res.ClusterID = endedClusterID
+
+	// Claim the stop obligation for the DVR bound to THIS generation, in the SAME tx as the
+	// session end (atomic: either both commit and the durable stop_pending is drained by
+	// recovery even if the send below fails, or neither commits and the close is retried).
+	claims, claimErr := ClaimDVRStops(ctx, tx,
+		`ingest_generation = $1::uuid AND tenant_id::text = $2`, endedID, tenantID)
+	if claimErr != nil {
+		return CloseFinalization{}, fmt.Errorf("claim DVR stop obligation for ingest generation: %w", claimErr)
+	}
+	revision, revisionErr := nextSourceRevision(ctx, tx)
+	if revisionErr != nil {
+		return CloseFinalization{}, revisionErr
+	}
+	if enqueueErr := enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, nodeID, endedID, revision, OfflineEffectIntent{
+		SetNodeOffline: true, TeardownStream: true, BroadcastOffline: true,
+	}); enqueueErr != nil {
+		return CloseFinalization{}, enqueueErr
+	}
+
+	if commitErr := tx.Commit(); commitErr != nil {
+		return CloseFinalization{}, fmt.Errorf("commit ingest-close finalize: %w", commitErr)
+	}
+
+	// Durable now (survives the send failing). Dispatch best-effort AFTER commit.
+	if len(claims) > 0 {
+		res.DVRHash = claims[0].DVRHash
+		res.StorageNodeID = claims[0].StorageNodeID
+	}
+	DispatchDVRStops(claims, logger)
+	return res, nil
+}
+
+// UnstartedDVRIntent is an active ingest session whose durable DVR intent has not yet
+// produced a bound recording — the crash-recovery seed for a record:true stream.
+type UnstartedDVRIntent struct {
+	SessionID    string
+	TenantID     string
+	InternalName string
+	NodeID       string
+	Intent       []byte
+	Attempts     int // post-claim attempt count (informational; there is no cap — transient failures retry while active)
+}
+
+// DVRIntentLeaseDuration is how long a claimed intent is leased to one replica. It doubles
+// as retry backoff: a transiently-failing intent is not re-claimed until the lease expires.
+// There is NO attempt cap: a transient StartDVR failure retries for as long as the session is
+// active (ClaimUnstartedDVRIntents selects ended_at IS NULL only), so a recoverable outage never
+// permanently abandons a required recording. Only a structurally-invalid (undecodable) intent is
+// moved to the terminal dvr_intent_error state.
+const DVRIntentLeaseDuration = 5 * time.Minute
+
+// ClaimUnstartedDVRIntents ATOMICALLY claims (leases + counts) active sessions carrying a DVR
+// intent that have no bound DVR artifact, are not terminally errored, are older than the grace,
+// and whose lease has expired. The lease makes it HA-safe (a
+// concurrent Foghorn replica claiming the same row is excluded until the lease lapses) and is
+// the retry backoff. Returns the claimed rows (with post-increment attempt count) for the
+// caller to replay. DVRIntentRecovery replays StartDVR for each so a crash between the
+// synchronous intent persist and the async StartDVR insert cannot drop a recording.
+func ClaimUnstartedDVRIntents(ctx context.Context, olderThan time.Duration, limit int) ([]UnstartedDVRIntent, error) {
+	if db == nil {
+		return nil, nil
+	}
+	graceSeconds := int64(olderThan / time.Second)
+	leaseSeconds := int64(DVRIntentLeaseDuration / time.Second)
+	// Selection bounds the retry to LIVE work: only intents for a session that is still active
+	// (ended_at IS NULL) with no terminal error and no bound DVR artifact yet, off-lease and past
+	// the grace. There is no attempt-cap filter — transient StartDVR failures retry under the lease
+	// for as long as the session is active (a recoverable outage must not permanently abandon a
+	// recording); once the stream ends, ended_at drops the row from the scan. dvr_intent_attempts is
+	// informational (it grows in a persistent-failure loop, bounded in RATE by the lease).
+	rows, err := db.QueryContext(ctx, `
+		WITH claimed AS (
+			SELECT s.id
+			  FROM foghorn.ingest_sessions s
+			 WHERE s.dvr_intent IS NOT NULL
+			   AND s.ended_at IS NULL
+			   AND s.dvr_intent_error IS NULL
+			   AND (s.dvr_intent_lease_until IS NULL OR s.dvr_intent_lease_until < NOW())
+			   AND s.started_at < NOW() - ($1 * INTERVAL '1 second')
+			   AND NOT EXISTS (
+			       SELECT 1 FROM foghorn.artifacts a
+			        WHERE a.ingest_generation = s.id AND a.artifact_type = 'dvr'
+			   )
+			 ORDER BY s.started_at
+			 FOR UPDATE SKIP LOCKED
+			 LIMIT $2
+		)
+		UPDATE foghorn.ingest_sessions u
+		   SET dvr_intent_attempts = u.dvr_intent_attempts + 1,
+		       dvr_intent_lease_until = NOW() + ($3 * INTERVAL '1 second')
+		  FROM claimed
+		 WHERE u.id = claimed.id
+		RETURNING u.id::text, u.tenant_id::text, u.stream_internal_name, u.node_id, u.dvr_intent::text, u.dvr_intent_attempts
+	`, graceSeconds, limit, leaseSeconds)
+	if err != nil {
+		return nil, fmt.Errorf("claim unstarted DVR intents: %w", err)
+	}
+	defer rows.Close()
+	var out []UnstartedDVRIntent
+	for rows.Next() {
+		var it UnstartedDVRIntent
+		var intent string
+		if scanErr := rows.Scan(&it.SessionID, &it.TenantID, &it.InternalName, &it.NodeID, &intent, &it.Attempts); scanErr != nil {
+			return nil, fmt.Errorf("scan claimed DVR intent: %w", scanErr)
+		}
+		it.Intent = []byte(intent)
+		out = append(out, it)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, fmt.Errorf("iterate claimed DVR intents: %w", rowsErr)
+	}
+	return out, nil
+}
+
+// FailDVRIntent records an EXPLICIT terminal error on a session's DVR intent so it is never
+// re-claimed and the abandonment is operator-visible — used ONLY for a permanently-undecodable
+// (structurally invalid) payload. Transient StartDVR failures are NOT terminalized here; they
+// retry under the lease while the session stays active.
+func FailDVRIntent(ctx context.Context, tenantID, sessionID, reason string) error {
+	if db == nil {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE foghorn.ingest_sessions
+		   SET dvr_intent_error = $3, dvr_intent_lease_until = NULL
+		 WHERE id = $1::uuid AND tenant_id = $2::uuid AND dvr_intent_error IS NULL
+	`, sessionID, tenantID, reason); err != nil {
+		return fmt.Errorf("record DVR intent terminal error: %w", err)
+	}
+	return nil
 }
 
 // ServiceRegistrar is a function that registers additional gRPC services
@@ -2845,11 +3625,17 @@ const ThumbnailStagedProtocolMin int32 = 2
 // there is no legacy inventory path.
 const AuthoritativeInventoryProtocolMin int32 = ThumbnailStagedProtocolMin
 
+// IngestGenerationFencingProtocolMin is the first control protocol that records the accepted
+// PUSH_REWRITE generation and rejects stale drain/activation/deactivation commands at Helmsman.
+// The durable outboxes rely on this receiver fence because a timed-out bidi Send is not transport
+// cancellation and may surface later on the old connection.
+const IngestGenerationFencingProtocolMin int32 = 3
+
 // MinControlProtocolVersion is the HARD minimum a sidecar must declare in Register to connect at all. A registration
 // below this is REJECTED (FailedPrecondition), not admitted under a compatibility path. This is what makes inventory
 // authority session-owned rather than payload-selected: a sub-min sidecar cannot connect, so every report the
 // processor sees is from an authoritative session.
-const MinControlProtocolVersion int32 = AuthoritativeInventoryProtocolMin
+const MinControlProtocolVersion int32 = IngestGenerationFencingProtocolMin
 
 // ControlFeatures is the SINGLE place a sidecar session's protocol-gated capabilities are decided. It is derived
 // once from the negotiated control-protocol version (Register.control_protocol_version) and consumed by placement
@@ -3456,6 +4242,10 @@ func processMistTrigger(trigger *ipcpb.MistTrigger, session NodeSession, stream 
 		RequestId: requestID,
 		Response:  responseText,
 		Abort:     shouldAbort,
+	}
+	if !shouldAbort && trigger.GetPushRewrite() != nil {
+		response.IngestGeneration = trigger.GetEventId()
+		response.IngestConnectorPid = trigger.GetPushRewrite().GetPid()
 	}
 
 	sendMistTriggerResponse(stream, response, logger)
@@ -5427,8 +6217,15 @@ func SendInvalidateSessions(nodeID string, req *ipcpb.InvalidateSessionsRequest)
 	}))
 }
 
-// SendLocalActivatePushTargets sends an ActivatePushTargets message to a local Helmsman.
-func SendLocalActivatePushTargets(nodeID string, req *ipcpb.ActivatePushTargets) error {
+// SendLocalActivatePushTargets dispatches push-target activation over THIS replica's control
+// connection only — deliberately no HA relay: the admission-effects worker tracks the targets in
+// its process-local status map immediately before this send, and PUSH_OUT_START/PUSH_END
+// attribution resolves against that map on the connection-owner replica, so tracking and dispatch
+// must stay on one replica. Gated to THIS connection generation: the superseded check and the Send
+// are atomic under sendGate, so a reconnect moving the node to another replica between the worker's
+// ownership check and this send fails the dispatch (the obligation retries on the new owner, which
+// re-tracks) instead of transmitting over a retired stream.
+func SendLocalActivatePushTargets(ctx context.Context, nodeID string, req *ipcpb.ActivatePushTargets) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
@@ -5439,29 +6236,11 @@ func SendLocalActivatePushTargets(nodeID string, req *ipcpb.ActivatePushTargets)
 		Payload: &ipcpb.ControlMessage_ActivatePushTargets{ActivatePushTargets: req},
 		SentAt:  timestamppb.Now(),
 	}
-	return c.stream.Send(msg)
-}
-
-// SendActivatePushTargets sends ActivatePushTargets to the given node, relaying via HA if needed.
-func SendActivatePushTargets(nodeID string, req *ipcpb.ActivatePushTargets) error {
-	err := SendLocalActivatePushTargets(nodeID, req)
-	if !shouldRelay(nodeID, err) {
-		return err
-	}
-	if commandRelay == nil {
-		return ErrNotConnected
-	}
-	return relayFailure(err, commandRelay.forward(context.Background(), &foghornrelaypb.ForwardCommandRequest{
-		TargetNodeId: nodeID,
-		Command:      &foghornrelaypb.ForwardCommandRequest_ActivatePushTargets{ActivatePushTargets: req},
-	}))
+	return sendOnConnBounded(ctx, nodeID, c, msg, 5*time.Second)
 }
 
 // SendLocalDeactivatePushTargets sends a DeactivatePushTargets message to a local Helmsman.
-func SendLocalDeactivatePushTargets(nodeID string, req *ipcpb.DeactivatePushTargets) error {
-	if registry == nil {
-		return ErrNotConnected
-	}
+func SendLocalDeactivatePushTargets(ctx context.Context, nodeID string, req *ipcpb.DeactivatePushTargets) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
@@ -5472,19 +6251,22 @@ func SendLocalDeactivatePushTargets(nodeID string, req *ipcpb.DeactivatePushTarg
 		Payload: &ipcpb.ControlMessage_DeactivatePushTargets{DeactivatePushTargets: req},
 		SentAt:  timestamppb.Now(),
 	}
-	return c.stream.Send(msg)
+	// Caller-bounded like the other worker-driven dispatches. Retirement bounds the callback and
+	// prevents queue growth; Helmsman's exact ended-generation fence protects a successor if the
+	// already-running transport write surfaces late.
+	return sendOnConnBounded(ctx, nodeID, c, msg, 5*time.Second)
 }
 
 // SendDeactivatePushTargets sends DeactivatePushTargets to the given node, relaying via HA if needed.
-func SendDeactivatePushTargets(nodeID string, req *ipcpb.DeactivatePushTargets) error {
-	err := SendLocalDeactivatePushTargets(nodeID, req)
+func SendDeactivatePushTargets(ctx context.Context, nodeID string, req *ipcpb.DeactivatePushTargets) error {
+	err := SendLocalDeactivatePushTargets(ctx, nodeID, req)
 	if !shouldRelay(nodeID, err) {
 		return err
 	}
 	if commandRelay == nil {
 		return ErrNotConnected
 	}
-	return relayFailure(err, commandRelay.forward(context.Background(), &foghornrelaypb.ForwardCommandRequest{
+	return relayFailure(err, commandRelay.forward(ctx, &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
 		Command:      &foghornrelaypb.ForwardCommandRequest_DeactivatePushTargets{DeactivatePushTargets: req},
 	}))
@@ -8190,7 +8972,8 @@ func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadR
 		}
 		if !bareMistNative && CommodoreClient != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			resp, err := CommodoreClient.ResolveStreamContext(ctx, "", "", bareName, localClusterID)
+			// Identifier-only read: declare no cluster (see resolveRoutingStreamIdentity).
+			resp, err := CommodoreClient.ResolveStreamContext(ctx, "", "", bareName, "")
 			cancel()
 			if err == nil && resp != nil && resp.GetAdmitted() && resp.GetIngestMode() == "mist_native" {
 				bareMistNative = true

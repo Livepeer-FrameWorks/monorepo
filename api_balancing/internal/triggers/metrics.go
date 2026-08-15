@@ -30,10 +30,11 @@ type ProcessorMetrics struct {
 	// Labels: reason ("send_failed", "retry_succeeded").
 	ClientLifecycleBatchDrops *prometheus.CounterVec
 
-	// DrainDispatch counts AcceptTakeover drain dispatches to the prior owner
-	// node. Drain is fire-and-forget so failures don't block takeover, but a
-	// non-zero failed rate correlates with "phantom buffer after takeover"
-	// reports — viewers may keep talking to the stale buffer until Mist's
-	// natural session timeout. Labels: result ("ok", "failed").
+	// DrainDispatch counts prior-owner drain dispatches by the admission-effects worker — issued
+	// when a DB-confirmed projection change moves the source to a different node. A failed dispatch
+	// releases the obligation's lease for retry, and completion is the generation-correlated
+	// DrainStreamResponse; a persistently non-zero failed rate correlates with viewers lingering on
+	// a replaced publisher's stale buffer until Mist's natural session timeout.
+	// Labels: result ("ok", "failed").
 	DrainDispatch *prometheus.CounterVec
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"sort"
 	"strings"
 
 	"frameworks/api_balancing/internal/geo"
@@ -343,14 +344,17 @@ func (lb *LoadBalancer) GetTopNodesWithScores(ctx context.Context, streamName st
 		return nil, fmt.Errorf("no suitable nodes available")
 	}
 
-	// Sort by score (highest first)
-	for i := 0; i < len(scoredNodes); i++ {
-		for j := i + 1; j < len(scoredNodes); j++ {
-			if scoredNodes[j].score > scoredNodes[i].score {
-				scoredNodes[i], scoredNodes[j] = scoredNodes[j], scoredNodes[i]
-			}
+	// Sort by score (highest first), breaking ties on node ID. Snapshots come
+	// from map iteration, so without a secondary key equal-scoring nodes would
+	// flap between identical requests — changing the primary a publisher or
+	// viewer is sent to for no reason. This runs over every eligible node
+	// regardless of maxNodes, which only truncates the sorted result below.
+	sort.Slice(scoredNodes, func(i, j int) bool {
+		if scoredNodes[i].score != scoredNodes[j].score {
+			return scoredNodes[i].score > scoredNodes[j].score
 		}
-	}
+		return scoredNodes[i].snap.NodeID < scoredNodes[j].snap.NodeID
+	})
 
 	if maxNodes > 0 && len(scoredNodes) > maxNodes {
 		scoredNodes = scoredNodes[:maxNodes]

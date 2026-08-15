@@ -76,10 +76,8 @@ func (s *RelayServer) ForwardCommand(ctx context.Context, req *foghornrelaypb.Fo
 		err = control.SendLocalStopSessions(req.TargetNodeId, cmd.StopSessions)
 	case *foghornrelaypb.ForwardCommandRequest_InvalidateSessions:
 		err = control.SendLocalInvalidateSessions(req.TargetNodeId, cmd.InvalidateSessions)
-	case *foghornrelaypb.ForwardCommandRequest_ActivatePushTargets:
-		err = control.SendLocalActivatePushTargets(req.TargetNodeId, cmd.ActivatePushTargets)
 	case *foghornrelaypb.ForwardCommandRequest_DeactivatePushTargets:
-		err = control.SendLocalDeactivatePushTargets(req.TargetNodeId, cmd.DeactivatePushTargets)
+		err = control.SendLocalDeactivatePushTargets(ctx, req.TargetNodeId, cmd.DeactivatePushTargets)
 	case *foghornrelaypb.ForwardCommandRequest_ProcessingJob:
 		err = control.SendLocalProcessingJob(req.TargetNodeId, cmd.ProcessingJob)
 	case *foghornrelaypb.ForwardCommandRequest_Freeze:
@@ -91,9 +89,7 @@ func (s *RelayServer) ForwardCommand(ctx context.Context, req *foghornrelaypb.Fo
 	case *foghornrelaypb.ForwardCommandRequest_RetractManagedStream:
 		err = control.SendLocalRetractManagedStream(req.TargetNodeId, cmd.RetractManagedStream)
 	case *foghornrelaypb.ForwardCommandRequest_DrainStream:
-		err = control.SendLocalDrainStream(req.TargetNodeId, cmd.DrainStream)
-	case *foghornrelaypb.ForwardCommandRequest_DvrUpdateSource:
-		err = control.SendLocalDVRUpdateSource(req.TargetNodeId, cmd.DvrUpdateSource)
+		err = control.SendLocalDrainStream(ctx, req.TargetNodeId, cmd.DrainStream)
 	default:
 		return nil, status.Error(codes.InvalidArgument, "unknown command type")
 	}

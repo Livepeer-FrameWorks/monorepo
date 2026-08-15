@@ -24,6 +24,35 @@ func (noopDVRCreator) StartDVR(context.Context, *sharedpb.StartDVRRequest) (*sha
 	return &sharedpb.StartDVRResponse{}, nil
 }
 
+func TestHandleStreamLifecycle_RevisionFencesChannelReordering(t *testing.T) {
+	cache, _ := setupTestCache(t)
+	srv := NewFederationServer(FederationServerConfig{Logger: testLogger(), ClusterID: "cluster-a", Cache: cache})
+	event := func(stream string, revision int64, live bool) *foghornfederationpb.StreamLifecycleEvent {
+		return &foghornfederationpb.StreamLifecycleEvent{
+			InternalName: stream, TenantId: "tenant-a", ClusterId: "authenticated-peer",
+			IsLive: live, SourceRevision: revision,
+		}
+	}
+
+	srv.handleStreamLifecycle(context.Background(), "authenticated-peer", event("new-live", 20, true))
+	srv.handleStreamLifecycle(context.Background(), "authenticated-peer", event("new-live", 19, false))
+	srv.handleStreamLifecycle(context.Background(), "authenticated-peer", event("new-offline", 30, false))
+	srv.handleStreamLifecycle(context.Background(), "authenticated-peer", event("new-offline", 29, true))
+	mismatch := event("spoofed", 999, true)
+	mismatch.ClusterId = "other-cluster"
+	srv.handleStreamLifecycle(context.Background(), "authenticated-peer", mismatch)
+
+	if live, err := cache.GetRemoteLiveStream(context.Background(), "tenant-a", "new-live"); err != nil || live == nil || live.ClusterID != "authenticated-peer" {
+		t.Fatalf("stale offline removed newer live event: live=%+v err=%v", live, err)
+	}
+	if live, err := cache.GetRemoteLiveStream(context.Background(), "tenant-a", "new-offline"); err != nil || live != nil {
+		t.Fatalf("stale live resurrected newer offline event: live=%+v err=%v", live, err)
+	}
+	if live, err := cache.GetRemoteLiveStream(context.Background(), "tenant-a", "spoofed"); err != nil || live != nil {
+		t.Fatalf("mismatched payload identity was accepted: live=%+v err=%v", live, err)
+	}
+}
+
 func TestPeerChannel_StoresIncomingPayloadsInCache(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	// Stream-ad + playback-index now live on the unified registry.
@@ -88,19 +117,21 @@ func TestPeerChannel_StoresIncomingPayloadsInCache(t *testing.T) {
 			{
 				ClusterId: peerCluster,
 				Payload: &foghornfederationpb.PeerMessage_StreamLifecycle{StreamLifecycle: &foghornfederationpb.StreamLifecycleEvent{
-					InternalName: "stream-live",
-					TenantId:     "tenant-a",
-					ClusterId:    peerCluster,
-					IsLive:       true,
+					InternalName:   "stream-live",
+					TenantId:       "tenant-a",
+					ClusterId:      peerCluster,
+					IsLive:         true,
+					SourceRevision: 1,
 				}},
 			},
 			{
 				ClusterId: peerCluster,
 				Payload: &foghornfederationpb.PeerMessage_StreamLifecycle{StreamLifecycle: &foghornfederationpb.StreamLifecycleEvent{
-					InternalName: "stream-live",
-					TenantId:     "tenant-a",
-					ClusterId:    peerCluster,
-					IsLive:       false,
+					InternalName:   "stream-live",
+					TenantId:       "tenant-a",
+					ClusterId:      peerCluster,
+					IsLive:         false,
+					SourceRevision: 2,
 				}},
 			},
 			{

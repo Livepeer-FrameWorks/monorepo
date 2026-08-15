@@ -46,7 +46,7 @@ func newDeleteServer(t *testing.T, fake *fakeDeleteS3Client) (*FederationServer,
 		ClusterID:                "platform-eu",
 		DB:                       mockDB,
 		S3Client:                 fake,
-		AllowFederationMutations: true, // exercise the delete logic; production defaults to disabled (see below)
+		AllowFederationMutations: true, // exercise the enabled provider-federation path
 		LocalS3Backing: S3Backing{
 			Bucket:   "frameworks",
 			Endpoint: "https://s3.example.com",
@@ -70,8 +70,7 @@ func expectTenantMatch(mock sqlmock.Sqlmock, hash, tenant string) {
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow(tenant))
 }
 
-// By DEFAULT (no cluster-bound caller identity) the destructive RPC fails closed at the boundary — before any
-// tenant/shape/S3 work — because the shared service token cannot authorize cross-cluster deletion.
+// The zero-value gate fails closed before tenant, shape, or S3 work when federation is disabled.
 func TestDeleteStorageObjects_DisabledByDefault(t *testing.T) {
 	fake := &fakeDeleteS3Client{}
 	mockDB, _, err := sqlmock.New()
@@ -330,7 +329,7 @@ func TestDeleteStorageObjects_TenantMismatchAgainstLocalRow(t *testing.T) {
 			}
 			return S3Backing{}, false
 		},
-		AllowFederationMutations: true, // exercise the tenant cross-check (production defaults to disabled)
+		AllowFederationMutations: true, // exercise the enabled path's tenant cross-check
 	}
 	srv := NewFederationServer(cfg)
 

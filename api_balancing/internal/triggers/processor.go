@@ -3,6 +3,7 @@ package triggers
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -40,6 +41,8 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
 	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 // streamContext holds cached tenant and user information for a stream
@@ -78,11 +81,16 @@ type streamContext struct {
 // Covers peer discovery, stream tracking, and cross-cluster ingest dedup.
 // Implemented by PeerManager which delegates reads to Redis internally.
 type PeerNotifier interface {
-	NotifyPeers(peers []*clusterpeerpb.TenantClusterPeer, tenantID string)
-	TrackStream(streamName string, clusterIDs []string)
-	UntrackStream(streamName string)
-	BroadcastStreamLifecycle(internalName, tenantID string, isLive bool)
+	TrackStream(ctx context.Context, streamName, tenantID, sourceGeneration string, sourceRevision int64, peerHints []control.AdmissionPeerHint) (bool, error)
+	UntrackStream(ctx context.Context, streamName, tenantID, sourceGeneration string, sourceRevision int64) error
+	BroadcastStreamLifecycle(ctx context.Context, internalName, tenantID string, sourceRevision int64, isLive bool) error
 	IsStreamLiveOnPeer(ctx context.Context, internalName, tenantID string) (clusterID string, ok bool)
+	// IsLeader reports whether this replica holds PeerManager leadership — only the leader has open
+	// peer channels, so lifecycle broadcasts from a non-leader reach zero peers.
+	IsLeader() bool
+	// LeaderInstanceID identifies the current leader ("" when unknown), for routing leader-affine
+	// durable obligations to the replica that can execute them.
+	LeaderInstanceID() string
 }
 
 // DVRStarter handles DVR recording orchestration.
@@ -147,16 +155,22 @@ type Processor struct {
 	// drainStream dispatches a DrainStreamRequest to the named owner node
 	// over the long-lived Connect(stream ControlMessage) channel. Set by
 	// the gRPC server bootstrap once the Helmsman control stream router
-	// is available. Nil-safe: AdmitAndReserve's takeover path no-ops the
-	// drain when unset (used in tests + unit-test contexts where the
-	// control plane isn't wired).
-	drainStream func(nodeID, runtimeName, reason string) error
+	// is available. A missing dispatcher is reported as a bootstrap failure.
+	drainStream func(ctx context.Context, nodeID, runtimeName, reason, sourceGeneration, priorOwnerSourceGeneration string) error
+	// nodeOwnedLocally overrides control.NodeConnOwnedLocally for the node-affine admission legs
+	// (tests inject ownership; production leaves it nil).
+	nodeOwnedLocally func(nodeID string) bool
+	// sendActivateLocal overrides the local-only activation dispatch (tests; production nil).
+	sendActivateLocal func(ctx context.Context, nodeID string, req *ipcpb.ActivatePushTargets) error
+
+	// sendDeactivatePushTargets is the durable offline worker's node-dispatch boundary.
+	sendDeactivatePushTargets func(ctx context.Context, nodeID string, req *ipcpb.DeactivatePushTargets) error
 }
 
-// SetDrainStreamDispatcher wires the drain command dispatcher used by the
-// takeover path. Called from the gRPC server bootstrap once the Helmsman
-// control-stream router is constructed.
-func (p *Processor) SetDrainStreamDispatcher(fn func(nodeID, runtimeName, reason string) error) {
+// SetDrainStreamDispatcher wires the command used to clear a replaced publisher's lingering
+// buffer and viewer sessions. The gRPC bootstrap installs it after constructing the Helmsman
+// control-stream router.
+func (p *Processor) SetDrainStreamDispatcher(fn func(ctx context.Context, nodeID, runtimeName, reason, sourceGeneration, priorOwnerSourceGeneration string) error) {
 	if p == nil {
 		return
 	}
@@ -186,13 +200,14 @@ type livepeerGatewayDiscoverer interface {
 // NewProcessor creates a new MistServer trigger processor
 func NewProcessor(logger logging.Logger, commodoreClient *commodore.GRPCClient, decklogClient *decklog.BatchedClient, loadBalancer *balancer.LoadBalancer, geoipClient *geoip.Reader) *Processor {
 	p := &Processor{
-		logger:          logger,
-		commodoreClient: commodoreClient,
-		decklogClient:   decklogClient,
-		loadBalancer:    loadBalancer,
-		geoipClient:     geoipClient,
-		nodeID:          os.Getenv("NODE_ID"),
-		clusterID:       os.Getenv("CLUSTER_ID"),
+		logger:                    logger,
+		commodoreClient:           commodoreClient,
+		decklogClient:             decklogClient,
+		loadBalancer:              loadBalancer,
+		geoipClient:               geoipClient,
+		nodeID:                    os.Getenv("NODE_ID"),
+		clusterID:                 os.Getenv("CLUSTER_ID"),
+		sendDeactivatePushTargets: control.SendDeactivatePushTargets,
 	}
 
 	p.streamCache = cache.New(cache.Options{
@@ -1242,36 +1257,141 @@ func (p *Processor) handleDVRLifecycleData(trigger *ipcpb.MistTrigger) (string, 
 }
 
 // handlePushRewrite processes PUSH_REWRITE trigger (blocking)
-func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (string, bool, error) {
+func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ bool, retErr error) {
 	payload, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_PushRewrite)
 	if !ok {
 		return "", false, fmt.Errorf("unexpected payload type for PushRewrite: %T", trigger.GetTriggerPayload())
 	}
 	pushRewrite := payload.PushRewrite
 	p.logger.WithFields(logging.Fields{
-		"stream_key": pushRewrite.GetStreamName(), // This is the stream key
+		// The Mist stream name on PUSH_REWRITE *is* the publishing credential,
+		// so it is logged only as a stable non-reversible tag.
+		"stream_key": logging.RedactSecret(pushRewrite.GetStreamName()),
 		"node_id":    trigger.GetNodeId(),
-		"push_url":   pushRewrite.GetPushUrl(),
-		"hostname":   pushRewrite.GetHostname(),
+		// push_url embeds the same credential as the stream name.
+		"push_url": logging.RedactSecret(pushRewrite.GetPushUrl()),
+		"hostname": pushRewrite.GetHostname(),
 	}).Debug("Processing PUSH_REWRITE trigger")
 
-	ingestClusterID := strings.TrimSpace(p.resolveNodeClusterID(trigger.GetNodeId()))
-	if ingestClusterID == "" {
-		ingestClusterID = strings.TrimSpace(trigger.GetClusterId())
-	}
-	if ingestClusterID == "" {
-		ingestClusterID = strings.TrimSpace(p.clusterID)
+	// Mist's X-Trigger-UUID identifies THIS TRIGGER EXECUTION — stable across
+	// Mist's own retries of it, minted afresh when a publisher reconnects. That
+	// is exactly the identity an admission needs: a re-delivery resolves to the
+	// same session, and a reconnect is a new one. It is used here as an opaque
+	// admission token and becomes the owner of the placement claim, so only an
+	// attempt Commodore told "you took it" may later give it back. It is NOT a
+	// connector or connection identity; nothing may treat it as one.
+	//
+	// Checked BEFORE validation, because validation is what takes the claim. A
+	// push with no connection identity is rejected by the durable session mint
+	// anyway; letting it claim first would leave placement owned by nobody, and
+	// an unowned claim can only expire — it holds the stream for the rest of the
+	// lease window. Mist sends X-Trigger-UUID on every trigger, so an absent one
+	// is a malformed or non-Mist request.
+	claimToken := strings.TrimSpace(pushRewrite.GetTriggerUuid())
+	if claimToken == "" {
+		p.logger.WithField("node_id", trigger.GetNodeId()).
+			Error("PUSH_REWRITE has no Mist trigger UUID; denying before placement is claimed")
+		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "push rewrite missing trigger identity")
 	}
 
-	streamValidation, err := p.commodoreClient.ValidateStreamKey(context.Background(), pushRewrite.GetStreamName(), ingestClusterID)
+	// Admission runs in three steps, in this order for two reasons that pull
+	// against each other: the cluster to claim depends on the connection's
+	// existing session, and reading that session must be tenant-scoped — but the
+	// tenant is only known from the stream key.
+	//
+	//  1. Resolve the tenant WITHOUT claiming.
+	//  2. Read this connection's open session, scoped to that tenant.
+	//  3. Claim, under the cluster the session was admitted into.
+	//
+	// Reading the session before resolving the tenant would mean reading across
+	// tenants, and claiming before that read could be checked — placement taken
+	// under a foreign session's cluster before the mismatch is even visible.
+	identity, err := p.commodoreClient.ValidateStreamKey(context.Background(), pushRewrite.GetStreamName())
 	if err != nil {
 		p.logger.WithFields(logging.Fields{
-			"stream_key": pushRewrite.GetStreamName(),
+			"stream_key": logging.RedactSecret(pushRewrite.GetStreamName()),
+			"error":      err,
+		}).Error("Failed to validate stream key with Commodore")
+		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "failed to validate stream key")
+	}
+	if !identity.Valid {
+		message := identity.Error
+		if message == "" {
+			message = "invalid stream key"
+		}
+		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INVALID_STREAM_KEY, message)
+	}
+
+	// An existing session's cluster outranks the node's present registration:
+	// this is a re-fire of a connection already admitted somewhere, and its
+	// session is permanently bound to that cluster, so claiming anywhere else
+	// would record placement the session can never match.
+	//
+	// Only "no session exists" falls through to node attribution. A FAILED
+	// lookup is not evidence of absence — falling back would claim the node's
+	// current cluster for a connection bound to another. Retryable; the next
+	// PUSH_REWRITE re-asks.
+	sessionClusterID, sessionErr := control.OpenIngestSessionCluster(
+		context.Background(), identity.GetTenantId(), trigger.GetNodeId(), claimToken)
+	if sessionErr != nil {
+		p.logger.WithError(sessionErr).WithField("node_id", trigger.GetNodeId()).
+			Error("PUSH_REWRITE: open-session cluster lookup failed; denying (retryable) rather than claiming a possibly-wrong cluster")
+		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "ingest session lookup unavailable")
+	}
+	ingestClusterID := sessionClusterID
+	if ingestClusterID == "" {
+		// New connection: attribution is required, because an unattributed node
+		// cannot be entitlement-checked and claiming for it would name a cluster
+		// the publisher is not on. Retryable — attribution recovers when
+		// Quartermaster does or when the node's next heartbeat lands.
+		ingestClusterID = p.IngestClusterIDForNode(trigger.GetNodeId())
+	}
+	if ingestClusterID == "" {
+		p.logger.WithField("node_id", trigger.GetNodeId()).
+			Error("PUSH_REWRITE: publishing node has no attributable media cluster; denying (retryable)")
+		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "node cluster attribution unavailable")
+	}
+	// A new publisher consumes one of this replica's guaranteed placement-renewal slots. Existing
+	// sessions retry without reserving again. The in-flight reservation closes concurrent bursts before
+	// the source enters LocallyPublishedStreams.
+	if sessionClusterID == "" {
+		releaseAdmissionSlot, reserveErr := control.ReserveLocalIngestAdmission(streamident.MaxPublishersPerFoghorn)
+		if reserveErr != nil {
+			p.logger.WithError(reserveErr).WithField("capacity", streamident.MaxPublishersPerFoghorn).Error("PUSH_REWRITE denied: Foghorn cannot guarantee placement renewal")
+			return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "ingest replica at publisher capacity")
+		}
+		defer releaseAdmissionSlot()
+	}
+
+	streamValidation, err := p.commodoreClient.ValidateStreamKeyForClaim(context.Background(), pushRewrite.GetStreamName(), ingestClusterID, claimToken)
+	if err != nil {
+		p.logger.WithFields(logging.Fields{
+			"stream_key": logging.RedactSecret(pushRewrite.GetStreamName()),
 			"error":      err,
 		}).Error("Failed to validate stream key with Commodore")
 		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "failed to validate stream key")
 	}
 
+	// Installed immediately after the claiming call, so EVERY later return —
+	// including ones added in future — gives the claim back. The gates below can
+	// each reject, and a rejected publisher holding the claim blocks any other
+	// entitled cluster from accepting them for the rest of the lease window.
+	//
+	// Only a claim Commodore reported this connection RESERVED is released, and
+	// the release carries its token: an attempt that took none — a different
+	// node in this cluster, or an admission answered from the validation cache
+	// while Commodore was unreachable — cannot clear a live publisher's
+	// placement.
+	admitted := false
+	defer func() {
+		if admitted || retErr == nil || !streamValidation.GetClaimAcquired() {
+			return
+		}
+		p.releaseActiveIngestPlacement(ingestClusterID, streamValidation.GetTenantId(), streamValidation.GetInternalName(), claimToken)
+	}()
+
+	// The claiming call re-checks everything the identity call did, so a stream
+	// deleted or suspended between the two is caught here.
 	if !streamValidation.Valid {
 		message := streamValidation.Error
 		if message == "" {
@@ -1284,7 +1404,7 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 	// Reject new ingests for suspended tenants
 	if streamValidation.IsSuspended {
 		p.logger.WithFields(logging.Fields{
-			"stream_key": pushRewrite.GetStreamName(),
+			"stream_key": logging.RedactSecret(pushRewrite.GetStreamName()),
 			"tenant_id":  streamValidation.TenantId,
 		}).Warn("Rejecting ingest: tenant suspended due to negative balance")
 		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_ACCOUNT_SUSPENDED, "account suspended - please top up your balance")
@@ -1294,7 +1414,7 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 	// Return 402-style error for new ingests requiring payment
 	if streamValidation.IsBalanceNegative {
 		p.logger.WithFields(logging.Fields{
-			"stream_key": pushRewrite.GetStreamName(),
+			"stream_key": logging.RedactSecret(pushRewrite.GetStreamName()),
 			"tenant_id":  streamValidation.TenantId,
 		}).Warn("Rejecting ingest: insufficient balance (402 Payment Required)")
 		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_PAYMENT_REQUIRED, "payment required - please top up your balance")
@@ -1307,7 +1427,7 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 	// Active streams are never killed here; only new PUSH_REWRITE is gated.
 	if reason, blocked := p.evaluateFreeTierAdmission(streamValidation, ingestClusterID); blocked {
 		p.logger.WithFields(logging.Fields{
-			"stream_key": pushRewrite.GetStreamName(),
+			"stream_key": logging.RedactSecret(pushRewrite.GetStreamName()),
 			"tenant_id":  streamValidation.TenantId,
 			"reason":     reason,
 		}).Warn("Rejecting ingest: free-tier allowance exhausted under cluster load")
@@ -1330,7 +1450,7 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 		alreadyTracked := tc.HasStream(streamValidation.TenantId, internalName)
 		if !alreadyTracked && int32(current) >= caps.GetMaxStreams() {
 			p.logger.WithFields(logging.Fields{
-				"stream_key":  pushRewrite.GetStreamName(),
+				"stream_key":  logging.RedactSecret(pushRewrite.GetStreamName()),
 				"tenant_id":   streamValidation.TenantId,
 				"current":     current,
 				"max_streams": caps.GetMaxStreams(),
@@ -1354,17 +1474,9 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 		}
 	}
 
-	// Source-presence admission: reject duplicates while a publisher is
-	// actively pushing on any node in this cluster; allow same-node resume
-	// after PUSH_INPUT_CLOSE; allow different-node takeover (with drain)
-	// after PUSH_INPUT_CLOSE. See docs in
-	// api_balancing/internal/control/stream_registry_admission.go.
-	//
-	// Fail closed when the registry is unavailable: this is the only
-	// duplicate-ingest gate, and silently admitting on a nil registry
-	// would split-brain ingest. A nil registry here is a bootstrap bug
-	// (registry is wired before the gRPC trigger listener) — surface it
-	// loudly rather than letting traffic through.
+	// Admission requires the shared registry projection. The database decides which publisher
+	// generation is current; the registry exposes only that confirmed winner to routing and drains
+	// any replaced node. A missing registry is a bootstrap failure and must deny the push.
 	registry := control.StreamRegistryInstance
 	if registry == nil {
 		p.logger.WithFields(logging.Fields{
@@ -1376,187 +1488,36 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 			"ingest admission unavailable",
 		)
 	}
-	var admission control.AdmissionResult
-	// AdmitAndReserve atomically decides + flips SourceActive/OwnerNodeID
-	// under one write lock, so a second concurrent PUSH_REWRITE for the
-	// same stream cannot see stale "SourceActive=false" and also decide
-	// AcceptTakeover.
-	{
-		admission = registry.AdmitAndReserve(
-			streamValidation.GetInternalName(),
-			trigger.GetNodeId(),
-			func(ownerNodeID string) bool {
-				return p.isNodeHealthyForAdmission(ownerNodeID)
-			},
-		)
-		switch admission.Decision {
-		case control.AdmissionRejectDuplicate:
-			p.logger.WithFields(logging.Fields{
-				"internal_name":  streamValidation.GetInternalName(),
-				"candidate_node": trigger.GetNodeId(),
-			}).Warn("Rejecting duplicate ingest — publisher already active on this stream")
-			return "", true, ingesterrors.New(
-				ipcpb.IngestErrorCode_INGEST_ERROR_DUPLICATE_INGEST,
-				"another publisher is currently active on this stream",
-			)
-		}
-		// On any accept decision, mark the new owner as having the input
-		// so the balancer (rateNodeWithReason: rejects Inputs==0) picks
-		// it before the first STREAM_BUFFER arrives at Foghorn. Otherwise
-		// viewers landing in that ~poll-cadence window see no eligible
-		// node and the balancer returns "no suitable nodes".
-		state.DefaultManager().SetStreamInstanceInputs(
-			streamValidation.GetInternalName(),
-			trigger.GetNodeId(),
-			1,
-		)
-		switch admission.Decision {
-		case control.AdmissionAcceptTakeover:
-			p.logger.WithFields(logging.Fields{
-				"internal_name": streamValidation.GetInternalName(),
-				"new_owner":     trigger.GetNodeId(),
-				"old_owner":     admission.OldOwnerNodeID,
-			}).Info("Admitting publisher takeover; draining old owner")
-			// Mark old owner as having no input so the balancer stops
-			// selecting it before the drain RPC completes and before A's
-			// next poll/STREAM_BUFFER reports the buffer gone. Without
-			// this the balancer happily routes viewers to a node whose
-			// buffer is being nuked.
-			state.DefaultManager().SetStreamInstanceInputs(
-				streamValidation.GetInternalName(),
-				admission.OldOwnerNodeID,
-				0,
-			)
-			p.drainOldOwner(
-				admission.OldOwnerNodeID,
-				control.RuntimeNameForStream(registry, streamValidation.GetInternalName()),
-				fmt.Sprintf("takeover_by_node:%s", trigger.GetNodeId()),
-			)
-			// Refresh any active DVR's pinned source URL so the recording
-			// follows the publisher to the new owner. Runs async — waits
-			// for the new owner's STREAM_BUFFER to land before dispatching.
-			go control.RefreshActiveDVRSourceOnTakeover(
-				streamValidation.GetInternalName(),
-				trigger.GetNodeId(),
-				p.logger,
-			)
-		case control.AdmissionAcceptResume:
-			p.logger.WithFields(logging.Fields{
-				"internal_name": streamValidation.GetInternalName(),
-				"owner_node":    trigger.GetNodeId(),
-			}).Debug("Admitting same-node publisher resume")
-		}
+	// Every accepted PUSH_REWRITE is bound to its Mist connector PID (X-PID). Mist stamps it
+	// on every trigger, so a missing PID is a malformed/non-Mist push with no session
+	// identity to fence source presence — fail closed before touching the registry rather
+	// than admit an unfenceable publisher.
+	connectorPID := pushRewrite.GetPid()
+	if connectorPID <= 0 {
+		p.logger.WithField("internal_name", streamValidation.GetInternalName()).
+			Error("PUSH_REWRITE has no Mist connector PID; denying (fail closed)")
+		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "ingest identity missing")
 	}
+	recording := streamValidation.IsRecordingEnabled
+	var ingestGeneration string
+	var dvrReq *sharedpb.StartDVRRequest
 
-	if registerTenantStream {
-		state.DefaultTenantCapacity().RegisterStream(streamValidation.TenantId, streamValidation.GetInternalName())
-	}
+	// resumedProjection: this trigger's generation was already projected and confirmed — a
+	// blocking-trigger retry whose first accept response was lost. The once-only admission effects
+	// (push-target activation, prior-owner drain, federation live broadcast) are owned by the
+	// durable per-generation obligation persisted with the confirmation and applied by the
+	// admission-effects worker — never by this goroutine — so a retry has nothing to re-run or
+	// skip for them. The flag only gates the fast-path DVR dispatch (the durable dvr_intent +
+	// DVRIntentRecovery own the crash story) and the Decklog ingest event is re-sent on every pass
+	// with a deterministic event_id (the generation), deduplicated downstream. The idempotent state
+	// refreshes (inputs, capacity, identity mirror, stream cache) always re-run so a cache-cold
+	// replica handling the retry still repairs its local view.
+	resumedProjection := false
 
-	// Mirror identity into the unified stream registry so /balance,
-	// /source, clip, DVR, and diagnostics see the same TenantID/StreamID
-	// the analytics cache is about to record. Single-source-of-truth for
-	// identity prevents the two stores from drifting after independent
-	// invalidations. ValidateStreamKey does not return ingest_mode; the
-	// registry's IngestMode/RuntimeName fields fill in on the next
-	// resolver hit (ResolveStreamContext) — for PUSH_REWRITE, this stream
-	// is definitively push, so we set it explicitly.
-	if control.StreamRegistryInstance != nil && streamValidation.GetInternalName() != "" {
-		control.StreamRegistryInstance.UpsertLocalSource(control.StreamEntry{
-			StreamID:        streamValidation.GetStreamId(),
-			TenantID:        streamValidation.GetTenantId(),
-			PlaybackID:      streamValidation.GetPlaybackId(),
-			InternalName:    streamValidation.GetInternalName(),
-			IngestMode:      control.IngestPush,
-			OriginClusterID: streamValidation.GetOriginClusterId(),
-		})
-	}
-
-	// Cache stream context (tenant + user + billing info)
-	if p.streamCache != nil {
-		isFree, exhausted := freeTierAllowanceState(streamValidation.GetAllowances())
-		caps := streamValidation.GetTenantResourceLimits()
-		info := streamContext{
-			TenantID:           streamValidation.TenantId,
-			UserID:             streamValidation.UserId,
-			StreamID:           streamValidation.StreamId,
-			Source:             "validate_stream_key",
-			UpdatedAt:          time.Now(),
-			BillingModel:       streamValidation.BillingModel,
-			IsSuspended:        streamValidation.IsSuspended,
-			IsBalanceNegative:  streamValidation.IsBalanceNegative,
-			OfficialClusterID:  streamValidation.GetOfficialClusterId(),
-			OriginClusterID:    streamValidation.GetOriginClusterId(),
-			ClusterPeers:       streamValidation.GetClusterPeers(),
-			ProcessesJSON:      streamValidation.GetProcessesJson(),
-			DVRPolicy:          streamValidation.GetDvrPolicy(),
-			MaxStreams:         caps.GetMaxStreams(),
-			MaxViewers:         caps.GetMaxViewers(),
-			IsFreeTier:         isFree,
-			AllowanceExhausted: exhausted,
-		}
-		if p.peerNotifier != nil && len(info.ClusterPeers) > 0 {
-			p.peerNotifier.NotifyPeers(info.ClusterPeers, streamValidation.TenantId)
-			var cids []string
-			for _, peer := range info.ClusterPeers {
-				cids = append(cids, peer.GetClusterId())
-			}
-			p.peerNotifier.TrackStream(streamValidation.InternalName, cids)
-		}
-		// Use shorter cache TTL for prepaid tenants (1 min vs 10 min)
-		// This ensures faster enforcement of balance changes
-		cacheTTL := 10 * time.Minute
-		if streamValidation.BillingModel == "prepaid" {
-			cacheTTL = 1 * time.Minute
-		}
-		if streamValidation.TenantId != "" {
-			cacheKey := streamValidation.TenantId + ":" + streamValidation.InternalName
-			p.streamCache.Set(cacheKey, info, cacheTTL)
-		}
-		// Secondary index for STREAM_PROCESS lookup (keyed by internal name only).
-		// Fill the Livepeer broadcaster list with origin-first cluster resolution
-		// so a self-host operator's own gateway wins over the platform fallback.
-		if info.ProcessesJSON != "" {
-			candidates := []string{
-				streamValidation.GetOriginClusterId(),
-				streamValidation.GetOfficialClusterId(),
-				p.clusterID,
-			}
-			info.ProcessesJSON = p.ApplyLivepeerBroadcasters(info.ProcessesJSON, candidates)
-			info.ProcessesJSON = p.ApplyLivepeerWorkload(info.ProcessesJSON, mist.WorkloadLive)
-			p.streamCache.Set("process:"+streamValidation.InternalName, info.ProcessesJSON, cacheTTL)
-		}
-		p.streamCacheMetaMu.Lock()
-		p.streamCacheLastAt = info.UpdatedAt
-		p.streamCacheLastErr = ""
-		p.streamCacheMetaMu.Unlock()
-	}
-	if streamValidation.TenantId != "" {
-		trigger.TenantId = &streamValidation.TenantId
-	}
-	if streamValidation.UserId != "" {
-		trigger.UserId = &streamValidation.UserId
-	}
-	if streamValidation.StreamId != "" {
-		trigger.StreamId = &streamValidation.StreamId
-	}
-	if streamValidation.StreamId != "" {
-		streamID := streamValidation.StreamId
-		pushRewrite.StreamId = &streamID
-	}
-	if trigger.GetNodeId() != "" && streamValidation.GetInternalName() != "" {
-		state.DefaultManager().UpdateNodeStats(streamValidation.GetInternalName(), trigger.GetNodeId(), 0, 1, 0, 0, false)
-	}
-	if originClusterID := streamValidation.GetOriginClusterId(); originClusterID != "" {
-		trigger.OriginClusterId = &originClusterID
-	}
-	if originClusterID := streamValidation.GetOriginClusterId(); originClusterID != "" &&
-		(trigger.ClusterId == nil || strings.TrimSpace(trigger.GetClusterId()) == "" || strings.TrimSpace(trigger.GetClusterId()) == strings.TrimSpace(p.clusterID)) {
-		trigger.ClusterId = &originClusterID
-	} else if (trigger.ClusterId == nil || strings.TrimSpace(trigger.GetClusterId()) == "") && ingestClusterID != "" {
-		clusterID := ingestClusterID
-		trigger.ClusterId = &clusterID
-	}
-
+	// Enrich + redact the trigger BEFORE the mint: the admission's Decklog ingest event is part of
+	// the durable admission-effect obligation, so its final (geo-enriched, credential-redacted)
+	// bytes must exist when the projection confirmation persists the intent. Pure trigger
+	// mutations — no side effects — so running them ahead of a possible deny is harmless.
 	// Detect protocol from push URL
 	protocol := p.detectProtocol(pushRewrite.GetPushUrl())
 
@@ -1615,46 +1576,316 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 		}
 	}
 
-	// Forward the enriched MistTrigger directly to Decklog (Data Plane)
-	// This flows to Periscope for operational state tracking
-	if err := p.sendTriggerToDecklog(trigger); err != nil {
-		p.logger.WithFields(logging.Fields{
-			"stream_key": pushRewrite.GetStreamName(),
-			"error":      err,
-		}).Error("Failed to send stream ingest event to Decklog")
+	// Resolve the credential out of the payload before it leaves the process.
+	//
+	// On PUSH_REWRITE the stream name Mist reports is the publishing key (it is
+	// what ValidateStreamKey above was given), and the push URL embeds it.
+	// Decklog persists this payload into ClickHouse, so forwarding it verbatim
+	// would write a credential into request_url and the serialized event data.
+	//
+	// The substituted name is the same "live+<internal>" this handler returns to
+	// Mist, which is also what Periscope needs: it derives internal_name from
+	// this field with ExtractInternalName, so a bare key would be recorded as
+	// the stream's identity and would not match the stream's later events.
+	publishedKey := pushRewrite.GetStreamName()
+	pushRewrite.StreamName = "live+" + streamValidation.InternalName
+	if pushURL := pushRewrite.GetPushUrl(); pushURL != "" {
+		pushRewrite.PushUrl = redactStreamKeyInURL(pushURL, publishedKey)
 	}
 
-	// Control-plane stream lifecycle is derived from Decklog events.
+	{
+		// Mandatory durable session mint = the admission decision. BEFORE any irreversible side
+		// effect (input state, old-owner drain, capacity, Decklog): a push that cannot persist its
+		// session identity — or that the DB rejects/finds-already-ended — is DENIED (fail closed).
+		// Every admitted publisher gets a session; the source-presence fence and, for record:true,
+		// the durable DVR start intent both require it.
+		{
+			var dvrIntent []byte
+			if recording {
+				userID := streamValidation.UserId
+				dvrReq = &sharedpb.StartDVRRequest{
+					TenantId:      streamValidation.TenantId,
+					InternalName:  streamValidation.InternalName,
+					UserId:        &userID,
+					ClusterId:     streamValidation.GetOriginClusterId(),
+					DvrPolicy:     streamValidation.GetDvrPolicy(),
+					ProcessesJson: streamValidation.GetDvrProcessesJson(),
+				}
+				b, mErr := protojson.Marshal(dvrReq)
+				if mErr != nil {
+					p.logger.WithError(mErr).WithField("internal_name", streamValidation.InternalName).
+						Error("Cannot serialize DVR start intent; denying push (fail closed)")
+					return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "recording could not be provisioned")
+				}
+				dvrIntent = b
+			}
+			mintCtx, mintCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			sid, outcome, sErr := control.CreateIngestSession(mintCtx, streamValidation.TenantId, trigger.GetNodeId(), streamValidation.InternalName, connectorPID, pushRewrite.GetTriggerUuid(), pushRewrite.GetTriggerUnixMillis(), dvrIntent, ingestClusterID, p.logger)
+			mintCancel()
+			if sErr != nil {
+				p.logger.WithError(sErr).WithFields(logging.Fields{
+					"internal_name": streamValidation.InternalName,
+					"connector_pid": connectorPID,
+				}).Error("Cannot persist ingest session; denying push (fail closed)")
+				return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "ingest session could not be persisted")
+			}
+			if outcome == control.IngestSessionAlreadyEnded {
+				// This exact trigger's session already CLOSED (its own PUSH_INPUT_CLOSE won the race).
+				// The connector is gone — DENY, running no admission side effect. Nothing to roll back.
+				p.logger.WithFields(logging.Fields{
+					"internal_name":     streamValidation.InternalName,
+					"connector_pid":     connectorPID,
+					"ingest_generation": sid,
+				}).Warn("PUSH_REWRITE for an already-ended ingest session; denying (connector already closed)")
+				return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "ingest session already ended")
+			}
+			if outcome == control.IngestSessionRejectedDuplicate {
+				// The DATABASE (cross-replica authority under the stream lock) reports a DIFFERENT active
+				// publisher already holds this stream. DENY as a duplicate; nothing was projected here.
+				p.logger.WithFields(logging.Fields{
+					"internal_name": streamValidation.InternalName,
+					"connector_pid": connectorPID,
+				}).Warn("PUSH_REWRITE rejected by DB stream authority — another publisher holds this stream; denying (duplicate)")
+				return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_DUPLICATE_INGEST, "another publisher is currently active on this stream")
+			}
+			ingestGeneration = sid
+			// PROJECT the confirmed DB winner onto the registry — but ONLY if this session is STILL the
+			// active one under the (tenant, stream) advisory lock. This goroutine can be descheduled
+			// between CreateIngestSession and here; if in that window this session's own close ended it
+			// and a newer publisher was admitted + projected, projecting now would clobber the live
+			// publisher and drain it as a phantom "prior owner". ProjectSourceIfCurrent drops such a
+			// stale projection and reports applied=false — the connection this push belongs to is no
+			// longer the live publisher, so DENY here BEFORE any admission side effect (input=1,
+			// capacity, Decklog, DVR, federation). A DB error also fails closed (deny).
+			if ingestGeneration != "" {
+				// The once-only admission effects (push-target activation, prior-owner drain,
+				// federation live broadcast) are DURABLE OBLIGATIONS: their intent is persisted in
+				// the same transaction that confirms the projection, and the admission-effects
+				// worker applies them under the stream lock. This goroutine never runs them inline,
+				// so a crash at any point after confirmation cannot lose them and a trigger retry
+				// cannot duplicate them.
+				intent := control.AdmissionEffectIntent{BroadcastLive: true}
+				for _, peer := range streamValidation.GetClusterPeers() {
+					if peer == nil {
+						continue
+					}
+					clusterID := strings.TrimSpace(peer.GetClusterId())
+					addr := strings.TrimSpace(peer.GetFoghornGrpcAddr())
+					if clusterID == p.clusterID || control.IsServedCluster(clusterID) {
+						continue
+					}
+					role := strings.TrimSpace(peer.GetRole())
+					intent.PeerHints = append(intent.PeerHints, control.AdmissionPeerHint{
+						ClusterID: clusterID,
+						Addr:      addr,
+						AlwaysOn:  role == "official" || role == "preferred",
+					})
+				}
+				// The admission's Decklog ingest event, with its DETERMINISTIC event_id (the
+				// generation): the obligation owns delivery, so a send failure or a crash is
+				// re-driven by the worker, and any duplicate collapses downstream by event_id.
+				// The envelope tenant is stamped here (Decklog's send guard requires it), from the
+				// validation that just admitted this publisher.
+				trigger.TenantId = &streamValidation.TenantId
+				trigger.EventId = ingestGeneration
+				if raw, marshalErr := proto.Marshal(trigger); marshalErr != nil {
+					p.logger.WithError(marshalErr).WithField("internal_name", streamValidation.InternalName).
+						Error("Cannot serialize admission Decklog event; denying push")
+					return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "admission event serialization failed")
+				} else {
+					intent.DecklogTrigger = raw
+				}
+				if targets := streamValidation.GetPushTargets(); len(targets) > 0 {
+					specs := make([]*ipcpb.PushTargetSpec, 0, len(targets))
+					for _, t := range targets {
+						specs = append(specs, &ipcpb.PushTargetSpec{TargetId: t.GetId(), TargetUri: t.GetTargetUri(), Name: t.GetName()})
+					}
+					if raw, marshalErr := proto.Marshal(&ipcpb.ActivatePushTargets{
+						StreamName: "live+" + streamValidation.GetInternalName(),
+						Targets:    specs,
+					}); marshalErr != nil {
+						// Fail closed: admitting without the persisted activation intent would
+						// silently drop multistreaming for this session.
+						p.logger.WithError(marshalErr).WithField("internal_name", streamValidation.InternalName).
+							Error("Cannot serialize push-target activation intent; denying push")
+						return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "push-target intent serialization failed")
+					} else {
+						intent.PushTargets = raw
+					}
+				}
+				applied, resumed, projErr := control.ProjectSourceIfCurrent(context.Background(), registry, streamValidation.TenantId, trigger.GetNodeId(), streamValidation.InternalName, connectorPID, pushRewrite.GetTriggerUuid(), ingestGeneration, intent)
+				if projErr != nil {
+					p.logger.WithError(projErr).WithField("internal_name", streamValidation.InternalName).
+						Error("Cannot project ingest source; denying push (fail closed)")
+					return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "ingest source projection failed")
+				}
+				if !applied {
+					// The session ended or was superseded while this push was in flight — this connection
+					// is no longer the stream's live publisher. Deny before running any side effect.
+					p.logger.WithFields(logging.Fields{
+						"internal_name":     streamValidation.InternalName,
+						"ingest_generation": ingestGeneration,
+					}).Warn("PUSH_REWRITE projection is no longer the active session; denying (superseded/ended)")
+					return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "ingest session superseded before projection")
+				}
+				resumedProjection = resumed
+				if resumed {
+					p.logger.WithFields(logging.Fields{
+						"internal_name":     streamValidation.InternalName,
+						"ingest_generation": ingestGeneration,
+					}).Info("PUSH_REWRITE retry for an already-projected session; the durable obligation owns the once-only effects")
+				}
+			}
+			if recording && !resumedProjection {
+				p.logger.WithField("internal_name", streamValidation.InternalName).Info("DVR recording enabled; ingest session minted with durable start intent")
+			}
+		}
 
-	// Check if DVR recording is enabled for this stream and start it
-	if streamValidation.IsRecordingEnabled {
-		p.logger.WithFields(logging.Fields{
-			"internal_name": streamValidation.InternalName,
-		}).Info("DVR recording enabled for stream, starting DVR")
+		// On any accept decision, mark the new owner as having the input
+		// so the balancer (rateNodeWithReason: rejects Inputs==0) picks
+		// it before the first STREAM_BUFFER arrives at Foghorn. Otherwise
+		// viewers landing in that ~poll-cadence window see no eligible
+		// node and the balancer returns "no suitable nodes".
+		state.DefaultManager().SetStreamInstanceInputs(
+			streamValidation.GetInternalName(),
+			trigger.GetNodeId(),
+			1,
+		)
+		// The prior-owner drain is NOT run here: the node the projection replaced is persisted on the
+		// durable admission-effect obligation at confirmation time and drained by the
+		// admission-effects worker (ApplyAdmissionEffect) — a crash between projection and drain can
+		// no longer leave the replaced node serving its stale buffer, because the obligation
+		// survives the crash and any replica's worker replays it.
+	}
 
-		// Stream validation already resolved tenant DVR policy; Foghorn owns
-		// the recording session and chapter materialization state.
+	if registerTenantStream {
+		state.DefaultTenantCapacity().RegisterStream(streamValidation.TenantId, streamValidation.GetInternalName())
+	}
+
+	// Mirror identity into the unified stream registry so /balance,
+	// /source, clip, DVR, and diagnostics see the same TenantID/StreamID
+	// the analytics cache is about to record. Single-source-of-truth for
+	// identity prevents the two stores from drifting after independent
+	// invalidations. ValidateStreamKey does not return ingest_mode; the
+	// registry's IngestMode/RuntimeName fields fill in on the next
+	// resolver hit (ResolveStreamContext) — for PUSH_REWRITE, this stream
+	// is definitively push, so we set it explicitly.
+	if control.StreamRegistryInstance != nil && streamValidation.GetInternalName() != "" {
+		control.StreamRegistryInstance.UpsertLocalSource(control.StreamEntry{
+			StreamID:        streamValidation.GetStreamId(),
+			TenantID:        streamValidation.GetTenantId(),
+			PlaybackID:      streamValidation.GetPlaybackId(),
+			InternalName:    streamValidation.GetInternalName(),
+			IngestMode:      control.IngestPush,
+			OriginClusterID: streamValidation.GetOriginClusterId(),
+		})
+	}
+
+	// Cache stream context (tenant + user + billing info)
+	if p.streamCache != nil {
+		isFree, exhausted := freeTierAllowanceState(streamValidation.GetAllowances())
+		caps := streamValidation.GetTenantResourceLimits()
+		info := streamContext{
+			TenantID:           streamValidation.TenantId,
+			UserID:             streamValidation.UserId,
+			StreamID:           streamValidation.StreamId,
+			Source:             "validate_stream_key",
+			UpdatedAt:          time.Now(),
+			BillingModel:       streamValidation.BillingModel,
+			IsSuspended:        streamValidation.IsSuspended,
+			IsBalanceNegative:  streamValidation.IsBalanceNegative,
+			OfficialClusterID:  streamValidation.GetOfficialClusterId(),
+			OriginClusterID:    streamValidation.GetOriginClusterId(),
+			ClusterPeers:       streamValidation.GetClusterPeers(),
+			ProcessesJSON:      streamValidation.GetProcessesJson(),
+			DVRPolicy:          streamValidation.GetDvrPolicy(),
+			MaxStreams:         caps.GetMaxStreams(),
+			MaxViewers:         caps.GetMaxViewers(),
+			IsFreeTier:         isFree,
+			AllowanceExhausted: exhausted,
+		}
+		// Use shorter cache TTL for prepaid tenants (1 min vs 10 min)
+		// This ensures faster enforcement of balance changes
+		cacheTTL := 10 * time.Minute
+		if streamValidation.BillingModel == "prepaid" {
+			cacheTTL = 1 * time.Minute
+		}
+		if streamValidation.TenantId != "" {
+			cacheKey := streamValidation.TenantId + ":" + streamValidation.InternalName
+			p.streamCache.Set(cacheKey, info, cacheTTL)
+		}
+		// Secondary index for STREAM_PROCESS lookup (keyed by internal name only).
+		// Fill the Livepeer broadcaster list with origin-first cluster resolution
+		// so a self-host operator's own gateway wins over the platform fallback.
+		if info.ProcessesJSON != "" {
+			candidates := []string{
+				streamValidation.GetOriginClusterId(),
+				streamValidation.GetOfficialClusterId(),
+				p.clusterID,
+			}
+			info.ProcessesJSON = p.ApplyLivepeerBroadcasters(info.ProcessesJSON, candidates)
+			info.ProcessesJSON = p.ApplyLivepeerWorkload(info.ProcessesJSON, mist.WorkloadLive)
+			p.streamCache.Set("process:"+streamValidation.InternalName, info.ProcessesJSON, cacheTTL)
+		}
+		p.streamCacheMetaMu.Lock()
+		p.streamCacheLastAt = info.UpdatedAt
+		p.streamCacheLastErr = ""
+		p.streamCacheMetaMu.Unlock()
+	}
+	if streamValidation.TenantId != "" {
+		trigger.TenantId = &streamValidation.TenantId
+	}
+	if streamValidation.UserId != "" {
+		trigger.UserId = &streamValidation.UserId
+	}
+	if streamValidation.StreamId != "" {
+		trigger.StreamId = &streamValidation.StreamId
+	}
+	if streamValidation.StreamId != "" {
+		streamID := streamValidation.StreamId
+		pushRewrite.StreamId = &streamID
+	}
+	if trigger.GetNodeId() != "" && streamValidation.GetInternalName() != "" {
+		state.DefaultManager().UpdateNodeStats(streamValidation.GetInternalName(), trigger.GetNodeId(), 0, 1, 0, 0, false)
+	}
+	if originClusterID := streamValidation.GetOriginClusterId(); originClusterID != "" {
+		trigger.OriginClusterId = &originClusterID
+	}
+	if originClusterID := streamValidation.GetOriginClusterId(); originClusterID != "" &&
+		(trigger.ClusterId == nil || strings.TrimSpace(trigger.GetClusterId()) == "" || strings.TrimSpace(trigger.GetClusterId()) == strings.TrimSpace(p.clusterID)) {
+		trigger.ClusterId = &originClusterID
+	} else if (trigger.ClusterId == nil || strings.TrimSpace(trigger.GetClusterId()) == "") && ingestClusterID != "" {
+		clusterID := ingestClusterID
+		trigger.ClusterId = &clusterID
+	}
+
+	// The admission's Decklog ingest event is NOT sent here: it is a leg of the durable
+	// admission-effect obligation (serialized at intent-build time with event_id = the generation),
+	// delivered by the admission-effects worker and retried until the send succeeds. Control-plane
+	// stream lifecycle is derived from Decklog events, so delivery must be owed durably rather than
+	// logged away on failure.
+
+	// Fast-path DVR dispatch. The durable obligation (the session's dvr_intent, persisted
+	// atomically with the session mint above BEFORE admission side effects) already exists,
+	// so DVRIntentRecovery is the crash backstop; this immediate start is the common case.
+	// Dispatched here — after the registry identity mirror below is in place — so StartDVR's
+	// source resolution sees a hydrated entry. Skipped on a resumed retry (the first pass
+	// dispatched it; the durable intent + DVRIntentRecovery cover a first pass that died first).
+	if recording && dvrReq != nil && !resumedProjection {
+		dvrReq.IngestGeneration = ingestGeneration
+		sourceNodeHint := trigger.GetNodeId()
 		go func() {
 			if p.dvrService == nil {
 				p.logger.WithField("internal_name", streamValidation.InternalName).
-					Error("DVR service not configured, cannot start recording")
+					Error("DVR service not configured, cannot start recording (DVRIntentRecovery will retry)")
 				return
 			}
-			userID := streamValidation.UserId
 			dvrCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			dvrReq := &sharedpb.StartDVRRequest{
-				TenantId:      streamValidation.TenantId,
-				InternalName:  streamValidation.InternalName,
-				UserId:        &userID,
-				ClusterId:     streamValidation.GetOriginClusterId(),
-				DvrPolicy:     streamValidation.GetDvrPolicy(),
-				ProcessesJson: streamValidation.GetDvrProcessesJson(),
-			}
 			var dvrResponse *sharedpb.StartDVRResponse
 			var err error
 			if hinted, ok := p.dvrService.(DVRStarterWithSourceHint); ok {
-				dvrResponse, err = hinted.StartDVRWithSourceHint(dvrCtx, dvrReq, trigger.GetNodeId())
+				dvrResponse, err = hinted.StartDVRWithSourceHint(dvrCtx, dvrReq, sourceNodeHint)
 			} else {
 				dvrResponse, err = p.dvrService.StartDVR(dvrCtx, dvrReq)
 			}
@@ -1663,7 +1894,7 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 					"internal_name": streamValidation.InternalName,
 					"tenant_id":     streamValidation.TenantId,
 					"error":         err,
-				}).Error("Failed to start DVR recording")
+				}).Error("Failed to start DVR recording (DVRIntentRecovery will retry from the durable intent)")
 			} else {
 				p.logger.WithFields(logging.Fields{
 					"internal_name": streamValidation.InternalName,
@@ -1675,15 +1906,9 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 		}()
 	}
 
-	// Activate multistream push targets if any are configured
-	if len(streamValidation.GetPushTargets()) > 0 {
-		go p.activatePushTargets(
-			trigger.GetNodeId(),
-			streamValidation.InternalName,
-			streamValidation.GetTenantId(),
-			streamValidation.GetPushTargets(),
-		)
-	}
+	// Push-target activation is NOT dispatched here: it is part of the durable admission-effect
+	// obligation (persisted with the projection confirmation, applied by the admission-effects
+	// worker), so a crash cannot lose it and a retry cannot double-dispatch it.
 
 	// Set playback_id and stream_id on stream state for federation and thumbnail S3 keying
 	if streamValidation.PlaybackId != "" {
@@ -1693,18 +1918,11 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 		state.DefaultManager().SetStreamStreamID(streamValidation.InternalName, streamValidation.StreamId)
 	}
 
-	// Broadcast stream-live to federated peers for cross-cluster dedup
-	if p.peerNotifier != nil {
-		p.peerNotifier.BroadcastStreamLifecycle(streamValidation.InternalName, streamValidation.TenantId, true)
-	}
-
-	// Source-active flip happened atomically inside AdmitAndReserve at
-	// the admission decision above — no separate ownership stamp is
-	// needed here. The matching MarkSourceInactive fires from
-	// handlePushInputClose when the publisher disconnects, or from
-	// handleStreamEnd as a belt-and-suspenders if PUSH_INPUT_CLOSE was lost.
+	// The federation live broadcast is NOT sent here: it is part of the durable admission-effect
+	// obligation, applied by the admission-effects worker.
 
 	// Return wildcard stream name for MistServer routing (live+ format)
+	admitted = true
 	return fmt.Sprintf("live+%s", streamValidation.InternalName), false, nil
 }
 
@@ -2465,7 +2683,11 @@ func (p *Processor) resolvePullSource(streamName string, trigger *ipcpb.MistTrig
 
 func (p *Processor) resolveBareManagedStreamContext(streamName string) (*commodorepb.ResolveStreamContextResponse, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	resp, err := p.commodoreClient.ResolveStreamContext(ctx, "", "", streamName, p.clusterID)
+	// Identifier-only read: declare no cluster. This Foghorn's CLUSTER_ID names
+	// the process, which serves many virtual media clusters, so declaring it
+	// would submit an infrastructure cluster to the entitlement gate and would
+	// override the stream's actual placement in the answer.
+	resp, err := p.commodoreClient.ResolveStreamContext(ctx, "", "", streamName, "")
 	cancel()
 	if err != nil {
 		return nil, "internal_name", err
@@ -2475,7 +2697,7 @@ func (p *Processor) resolveBareManagedStreamContext(streamName string) (*commodo
 	}
 
 	ctx, cancel = context.WithTimeout(context.Background(), 3*time.Second)
-	resp, err = p.commodoreClient.ResolveStreamContext(ctx, "", streamName, "", p.clusterID)
+	resp, err = p.commodoreClient.ResolveStreamContext(ctx, "", streamName, "", "")
 	cancel()
 	if err != nil {
 		return nil, "playback_id", err
@@ -2804,8 +3026,9 @@ func (p *Processor) handlePushEnd(trigger *ipcpb.MistTrigger) (string, bool, err
 }
 
 // handlePushInputClose processes PUSH_INPUT_CLOSE (publisher source
-// disconnected). This is the canonical "source_active=false" edge that
-// the AdmitAndReserve admission state machine relies on. Non-blocking:
+// disconnected). This is the canonical "source_active=false" edge that lets
+// the next PUSH_REWRITE resume rather than contend with a stale live source.
+// Non-blocking:
 // the response is ignored by Mist (this is an async trigger). Failure to
 // flip registry state still forwards the trigger to Decklog for audit.
 func (p *Processor) handlePushInputClose(trigger *ipcpb.MistTrigger) (string, bool, error) {
@@ -2831,24 +3054,59 @@ func (p *Processor) handlePushInputClose(trigger *ipcpb.MistTrigger) (string, bo
 		pic.NodeId = &nodeID
 	}
 
-	// Flip the registry's source-presence state. AdmitAndReserve reads
-	// this on the next PUSH_REWRITE for the same stream to decide
-	// resume vs takeover vs reject.
-	if registry := control.StreamRegistryInstance; registry != nil && internalName != "" {
-		registry.MarkSourceInactive(internalName, trigger.GetNodeId())
-	}
-
-	// Announce stream-offline to federated peers so a cross-cluster
-	// takeover doesn't have to wait ~10s for Mist's natural STREAM_END.
-	// Intra-cluster takeover is already responsive via the registry's
-	// source_active flip; this is the cross-cluster equivalent.
-	if p.peerNotifier != nil && internalName != "" {
-		p.peerNotifier.BroadcastStreamLifecycle(internalName, trigger.GetTenantId(), false)
+	// Primary DVR finalizer: the publisher this close belongs to IS the ingest session
+	// that produced the recording. Atomically end that exact generation (event-time fenced
+	// against PID reuse) AND claim the stop obligation for its bound DVR, in one
+	// transaction, so a crash between the two can never strand a live writer. Requires
+	// Mist's connector PID (payload field 4); when absent, finalization falls to the
+	// node-keyed STREAM_END backstop. A finalize error is surfaced (retryable NACK) so the
+	// durable close is re-sent rather than silently acked.
+	var closeFinalizeErr error
+	pid := pic.GetPid()
+	if pid <= 0 {
+		// Fail closed: Mist supplies the connector PID on PUSH_INPUT_CLOSE (payload field 4);
+		// a missing one is malformed and cannot finalize its session or fence the registry
+		// flip. NACK (retryable) rather than silently ack a close that finalizes nothing.
+		closeFinalizeErr = fmt.Errorf("PUSH_INPUT_CLOSE missing connector PID for stream %q", internalName)
+		p.logger.WithField("internal_name", internalName).
+			Error("PUSH_INPUT_CLOSE has no Mist connector PID; failing closed (retryable NACK)")
+	} else {
+		fin, finErr := control.FinalizeIngestSessionClose(context.Background(), trigger.GetTenantId(), trigger.GetNodeId(), pid, pic.GetTriggerUnixMillis(), internalName, p.logger)
+		switch {
+		case finErr != nil:
+			// Finalization FAILED (e.g. DB outage): surface a retryable NACK and mutate NO
+			// volatile state — do NOT flip the source inactive. Flipping here would admit
+			// another publisher while the close is still unresolved.
+			closeFinalizeErr = finErr
+			p.logger.WithError(finErr).WithFields(logging.Fields{
+				"internal_name": internalName,
+				"node_id":       trigger.GetNodeId(),
+				"connector_pid": pid,
+			}).Error("Failed to finalize ingest session on PUSH_INPUT_CLOSE; returning retryable error (no source flip)")
+		case fin.EndedSessionID == "":
+			// A delayed close is fenced by event time; an idempotent retry finds the session already
+			// ended. The transaction that first ended a session also persisted its offline obligation.
+			p.logger.WithFields(logging.Fields{"internal_name": internalName, "connector_pid": pid}).
+				Debug("PUSH_INPUT_CLOSE fenced or already finalized")
+		default:
+			p.logger.WithFields(logging.Fields{
+				"internal_name":     internalName,
+				"ingest_generation": fin.EndedSessionID,
+				"dvr_hash":          fin.DVRHash,
+			}).Info("PUSH_INPUT_CLOSE finalized ingest session")
+			// Release THIS session's placement claim whenever it was durably ended — INDEPENDENT of
+			// whether this replica's local registry still holds the projection to flip. The release is
+			// token-fenced (fin.ClaimToken), so it gives back only this session's claim and never a
+			// replacement's; gating it on a local cache flip would strand the claim on a replica whose
+			// projection was missed. The cluster/owner come from the ended session, not the node's
+			// present registration, so a node reassigned mid-session still gives back the right claim.
+			p.releaseActiveIngestPlacement(fin.ClusterID, trigger.GetTenantId(), internalName, fin.ClaimToken)
+		}
 	}
 
 	// Forward to Decklog for audit. Periscope must NOT use this event to
 	// mutate stream_state_current — ingest session ownership stays with
-	// AdmitAndReserve's accepted PUSH_REWRITE.
+	// the DB-confirmed source projection (ProjectSource after CreateIngestSession).
 	if err := p.sendTriggerToDecklog(trigger); err != nil {
 		p.logger.WithFields(logging.Fields{
 			"internal_name":  internalName,
@@ -2860,6 +3118,11 @@ func (p *Processor) handlePushInputClose(trigger *ipcpb.MistTrigger) (string, bo
 		if shouldSurfaceDecklogError(trigger) {
 			return "", false, err
 		}
+	}
+	// Surface a finalize failure as a retryable NACK so Helmsman re-sends the durable
+	// close (every effect above is idempotent on the retry) rather than truncating its WAL.
+	if closeFinalizeErr != nil {
+		return "", false, closeFinalizeErr
 	}
 	return "", false, nil
 }
@@ -3050,6 +3313,31 @@ func (p *Processor) handleUserNew(trigger *ipcpb.MistTrigger) (string, bool, err
 	return decision, false, nil
 }
 
+// releaseActiveIngestPlacement tells Commodore this cluster is no longer the
+// stream's ingest cluster.
+//
+// Advisory: the claim also lapses on its own lease clock, so a failure here
+// costs a stale routing answer for the rest of the window rather than
+// correctness, and the close must still ack. Commodore fences the release on
+// this cluster still holding the claim, so a late close cannot unpin a
+// publisher who has already moved to a peer.
+func (p *Processor) releaseActiveIngestPlacement(ingestClusterID, tenantID, internalName, claimToken string) {
+	if p.commodoreClient == nil || tenantID == "" || internalName == "" || claimToken == "" {
+		return
+	}
+	if ingestClusterID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	released := []*commodorepb.ActiveIngestStream{{TenantId: tenantID, InternalName: internalName, ClaimToken: claimToken}}
+	if _, err := p.commodoreClient.SyncActiveIngestPlacement(ctx, ingestClusterID, nil, released); err != nil {
+		p.logger.WithError(err).WithField("internal_name", internalName).
+			Warn("Failed to release active ingest placement; it will lapse with the lease")
+	}
+}
+
 // handleStreamBuffer processes STREAM_BUFFER trigger (non-blocking)
 // Forwards the original StreamBufferTrigger to Decklog with full track data and health metrics.
 func (p *Processor) handleStreamBuffer(trigger *ipcpb.MistTrigger) (string, bool, error) {
@@ -3128,50 +3416,115 @@ func (p *Processor) handleStreamEnd(trigger *ipcpb.MistTrigger) (string, bool, e
 		streamEnd.StreamId = &streamID
 	}
 
-	var decklogErr error
-
 	// STREAM_END is only globally authoritative when the ending node is
 	// the source owner (Periscope writes stream_state_current offline
 	// unconditionally on receipt). A replica/relay node draining its
 	// buffer fires the same trigger and means nothing stream-wide — for
 	// it, only the node-local effects below may run.
 	streamWide := p.offlineIsStreamWide(internalName, nodeID)
+
+	// REAPER (event-time fenced): end this node's ingest session(s) for the stream whose start is at
+	// or before the STREAM_END event, and claim their DVR stops. This is what turns STREAM_END into a
+	// real backstop for a LOST PUSH_INPUT_CLOSE — without it a lost close leaves the session open and
+	// (since admission protects the incumbent) wedges every reconnect. The event-time fence preserves
+	// a reconnect that came up AFTER the stream ended. Node-scoped and idempotent, so it runs
+	// regardless of streamWide; on a query failure it surfaces a retryable error (STREAM_END is
+	// durable) via reapErr below. When Mist supplies no event time it is a no-op.
+	reaped, reapErr := control.EndIngestSessionsForStreamEnd(context.Background(), trigger.GetTenantId(), nodeID, internalName, streamEnd.GetTriggerUnixMillis(), p.logger)
+	if reapErr != nil {
+		p.logger.WithError(reapErr).WithFields(logging.Fields{
+			"internal_name": internalName,
+			"source_node":   nodeID,
+		}).Error("STREAM_END ingest-session reaper failed; returning a retryable error")
+	} else if reaped > 0 {
+		p.logger.WithFields(logging.Fields{
+			"internal_name":  internalName,
+			"source_node":    nodeID,
+			"sessions_ended": reaped,
+		}).Info("STREAM_END reaped ingest session(s) (event-time fenced)")
+	}
+
+	// STREAM_END has no publisher-generation identity, so the durable offline transition resolves
+	// authority against the ingest-session table and records all stream-wide effects for ordered,
+	// retryable application. A live reconnect supersedes the transition. Node-local state and DVR
+	// recovery remain independent because a relay ending is not stream-wide.
+	offlineQueued := false
+	var fenceDBErr error
 	if streamWide {
-		if err := p.sendTriggerToDecklog(trigger); err != nil {
-			p.logger.WithFields(logging.Fields{
-				"internal_name": internalName,
-				"trigger_type":  trigger.GetTriggerType(),
-				"error":         err,
-			}).Error("Failed to send stream end trigger to Decklog")
-			decklogErr = err
+		if registry := control.StreamRegistryInstance; registry != nil {
+			decklogPayload, marshalErr := proto.Marshal(trigger)
+			if marshalErr != nil {
+				fenceDBErr = marshalErr
+			} else {
+				ok, _, fenceErr := control.FenceOfflineBackstop(context.Background(), registry, trigger.GetTenantId(), nodeID, internalName, control.OfflineEffectIntent{
+					SetNodeOffline: true, TeardownStream: true, BroadcastOffline: true, DecklogTrigger: decklogPayload,
+				})
+				if fenceErr != nil {
+					// Fail closed AND surface: STREAM_END is a DURABLE trigger. Suppress the offline
+					// effects under an unknown DB state, and return a retryable error below so Helmsman
+					// re-sends from its WAL instead of ACKing (which would DROP the offline edge). All
+					// effects here are idempotent on the retry.
+					fenceDBErr = fenceErr
+					p.logger.WithError(fenceErr).WithFields(logging.Fields{
+						"internal_name": internalName,
+						"source_node":   nodeID,
+					}).Error("STREAM_END offline fence failed; suppressing effects and returning a retryable error")
+				} else {
+					offlineQueued = ok
+				}
+			}
+			if !offlineQueued && fenceDBErr == nil {
+				p.logger.WithFields(logging.Fields{
+					"internal_name": internalName,
+					"source_node":   nodeID,
+				}).Info("STREAM_END superseded by a live reconnect (or already finalized); suppressing all stream-wide offline effects")
+			}
+		} else {
+			fenceDBErr = errors.New("stream registry unavailable")
 		}
-	} else {
+	}
+
+	if !streamWide {
 		p.logger.WithFields(offlineSuppressionLogFields(internalName, nodeID)).Info("Node-local STREAM_END; suppressing stream-wide effects")
 	}
 
-	// Node-local effects — this node lost its copy of the stream.
-
-	// Update state offline (per-node: zeroes this instance's presence; the
-	// union only flips when no other node still actively carries it)
-	state.DefaultManager().SetOffline(internalName, nodeID)
-
-	// Belt-and-suspenders source-presence flip: if PUSH_INPUT_CLOSE was
-	// lost (Helmsman crash mid-trigger, transport blip, parse error),
-	// STREAM_END is the corrective edge — by the time Mist declares the
-	// stream gone, any publisher must already be disconnected. The
-	// node-match guard inside MarkSourceInactive no-ops if the recorded
-	// OwnerNodeID doesn't match, so a STREAM_END on a stale node won't
-	// clear a different owner's live state.
-	if registry := control.StreamRegistryInstance; registry != nil {
-		registry.MarkSourceInactive(internalName, nodeID)
+	// Node-local per-node state. For a replica (non-owner) this is the only effect and always runs;
+	// for the owner it is gated with the other offline effects so a live reconnect's input/viewer
+	// state on THIS node is not zeroed. (FenceOfflineBackstop above already performed the registry
+	// source flip when it returned proceed=true.)
+	if !streamWide {
+		state.DefaultManager().SetOffline(internalName, nodeID)
 	}
 
-	if streamWide {
-		p.finalizeStreamWideOffline(internalName, nodeID, trigger.GetTenantId())
+	// Backstop DVR stop, node-locally — runs REGARDLESS of the offline fence above (a stale
+	// STREAM_END that a live reconnect suppresses for stream state must still be safe here). The
+	// PRIMARY DVR finalizer is the publisher's PUSH_INPUT_CLOSE, which stops the recording keyed on
+	// its exact ingest generation (handlePushInputClose). STREAM_END is aggregate stream inactivity
+	// and cannot identify an ingest session, so it can only key on the ended source node — a coarser
+	// claim used solely as recovery when the precise close was lost (Helmsman crash mid-trigger,
+	// transport blip, parse error). It is safe even against a live reconnect because
+	// StopDVRForEndedSource is GENERATION-FENCED in SQL: it claims only DVRs bound to an ENDED or
+	// NULL ingest_generation, so a reconnect's active-generation recording is left running; if the
+	// close already finalized the DVR the row is no longer active and this is a no-op.
+	stopErr := control.StopDVRForEndedSource(internalName, trigger.GetTenantId(), nodeID, p.logger)
+	if stopErr != nil {
+		p.logger.WithError(stopErr).WithFields(logging.Fields{
+			"internal_name": internalName,
+			"source_node":   nodeID,
+		}).Error("Failed to claim DVR stop obligation on STREAM_END backstop; returning a retryable error so Helmsman re-sends the durable trigger")
 	}
 
-	if decklogErr != nil && shouldSurfaceDecklogError(trigger) {
-		return "", false, decklogErr
+	// Return a retryable error if the durable Decklog forward, the DVR stop obligation, OR the
+	// offline fence's DB probe failed, so Helmsman does not truncate its WAL and re-sends STREAM_END
+	// (all effects above are idempotent on the retry).
+	if stopErr != nil {
+		return "", false, stopErr
+	}
+	if reapErr != nil {
+		return "", false, fmt.Errorf("STREAM_END ingest-session reaper failed (retryable): %w", reapErr)
+	}
+	if fenceDBErr != nil {
+		return "", false, fmt.Errorf("STREAM_END offline fence DB probe failed (retryable): %w", fenceDBErr)
 	}
 	return "", false, nil
 }
@@ -3183,7 +3536,7 @@ func (p *Processor) handleStreamEnd(trigger *ipcpb.MistTrigger) (string, bool, e
 // for would leave push targets, tenant capacity, federation and DVR state
 // stale. Every effect is idempotent, so a late real STREAM_END re-running
 // them is a no-op.
-func (p *Processor) finalizeStreamWideOffline(internalName, nodeID, tenantID string) {
+func (p *Processor) finalizeStreamWideOffline(ctx context.Context, internalName, nodeID, tenantID, sourceGeneration string, sourceRevision int64) error {
 	// Deactivate multistream push targets. Stream-wide despite the
 	// node-scoped RPC: the tracking map is process-global keyed by
 	// activatePushTargets' own "live+<internal>" construction, and pushes
@@ -3191,7 +3544,7 @@ func (p *Processor) finalizeStreamWideOffline(internalName, nodeID, tenantID str
 	// async.
 	pushStreamName := "live+" + internalName
 	untrackPushTargets(pushStreamName)
-	go p.deactivatePushTargets(nodeID, pushStreamName)
+	deactivateErr := p.deactivatePushTargets(ctx, nodeID, pushStreamName, sourceGeneration)
 
 	// Decrement the broadcaster's concurrent-stream count. Idempotent: a
 	// stream not in the set is a no-op. TenantID may be empty when
@@ -3202,16 +3555,231 @@ func (p *Processor) finalizeStreamWideOffline(internalName, nodeID, tenantID str
 	// Broadcast stream-offline to federated peers + clean up stream-scoped peers. Skip the tenant-attributed
 	// broadcast when ownership is unresolved (empty tenant): peers filter federated lifecycle by tenant, so an
 	// empty tenant would bypass those filters and leak the event cross-tenant — consistent with UnregisterStream
-	// above short-circuiting on an empty tenant. UntrackStream is stream-local (no tenant) and always runs.
+	// above short-circuiting on an empty tenant. Retain stream tracking when an attributed broadcast
+	// cannot enqueue to every required peer, so the durable retry cannot lose its required set.
 	if p.peerNotifier != nil {
 		if strings.TrimSpace(tenantID) != "" {
-			p.peerNotifier.BroadcastStreamLifecycle(internalName, tenantID, false)
+			broadcastErr := p.peerNotifier.BroadcastStreamLifecycle(ctx, internalName, tenantID, sourceRevision, false)
+			deactivateErr = errors.Join(deactivateErr, broadcastErr)
+			if broadcastErr == nil {
+				deactivateErr = errors.Join(deactivateErr, p.peerNotifier.UntrackStream(ctx, internalName, tenantID, sourceGeneration, sourceRevision))
+			}
+		} else {
+			deactivateErr = errors.Join(deactivateErr, p.peerNotifier.UntrackStream(ctx, internalName, tenantID, sourceGeneration, sourceRevision))
 		}
-		p.peerNotifier.UntrackStream(internalName)
+	}
+	// No DVR stop here: the precise per-generation finalizer is the publisher's
+	// PUSH_INPUT_CLOSE (FinalizeIngestSessionClose); the STREAM_END / vanish
+	// control.StopDVRForEndedSource path is a node-keyed backstop, not a stream-wide effect.
+	return deactivateErr
+}
+
+// ApplyOfflineEffect applies one durable transition while the control layer holds the stream
+// advisory lock. Every operation is idempotent; an error leaves the outbox row pending for retry.
+func (p *Processor) ApplyOfflineEffect(ctx context.Context, effect control.OfflineEffect) error {
+	registry := control.StreamRegistryInstance
+	if registry == nil {
+		return errors.New("stream registry unavailable")
+	}
+	// The peer-facing parts (federation offline broadcast, stream-scoped peer untrack inside the
+	// teardown) are LEADER-owned: only the PeerManager leader holds open peer channels, so a
+	// non-leader would broadcast to zero peers while consuming the row. Defer the whole effect to
+	// the leader when peer-facing work is owed — the remaining state mutations (registry publish,
+	// SetOffline, capacity) are Redis-synced and equally correct on the leader.
+	if p.peerNotifier != nil && (effect.TeardownStream || effect.BroadcastOffline) && !p.peerNotifier.IsLeader() {
+		return control.ErrOfflineEffectDeferred
+	}
+	applied, err := registry.PublishSourceInactiveContext(ctx, effect.InternalName, effect.NodeID, effect.SourceGeneration, effect.SourceRevision)
+	if err != nil {
+		return fmt.Errorf("publish inactive source revision: %w", err)
+	}
+	if !applied {
+		return control.ErrOfflineEffectSuperseded
+	}
+	var effectErr error
+	if len(effect.DecklogTrigger) > 0 {
+		var trigger ipcpb.MistTrigger
+		if err := proto.Unmarshal(effect.DecklogTrigger, &trigger); err != nil {
+			effectErr = errors.Join(effectErr, fmt.Errorf("decode offline Decklog trigger: %w", err))
+		} else if err := p.sendTriggerToDecklogContext(ctx, &trigger); err != nil {
+			effectErr = errors.Join(effectErr, fmt.Errorf("forward offline trigger to Decklog: %w", err))
+		}
+	}
+	if effect.SetNodeOffline {
+		effectErr = errors.Join(effectErr, state.DefaultManager().SetOfflineContext(ctx, effect.InternalName, effect.NodeID))
+	}
+	if effect.TeardownStream {
+		effectErr = errors.Join(effectErr, p.finalizeStreamWideOffline(ctx, effect.InternalName, effect.NodeID, effect.TenantID, effect.SourceGeneration, effect.SourceRevision))
+	} else if effect.BroadcastOffline && p.peerNotifier != nil {
+		effectErr = errors.Join(effectErr, p.peerNotifier.BroadcastStreamLifecycle(ctx, effect.InternalName, effect.TenantID, effect.SourceRevision, false))
+	}
+	return effectErr
+}
+
+// ApplyAdmissionEffect drives the owed legs of a confirmed generation's obligation one step, each
+// leg guarded by its REAL authority domain:
+//
+//   - replica-independent legs (Decklog delivery, the drain DISPATCH — its acknowledgement lands at
+//     the prior node's connection owner and completes via the shared DB) run on any claimant;
+//   - the activation leg runs only on the replica owning the PUBLISHING node's control connection,
+//     and dispatches LOCALLY (never via the HA relay): push-target tracking must live on the
+//     replica that receives PUSH_OUT_START/PUSH_END, so tracking and dispatch stay on one replica —
+//     if the connection moved after the ownership check, the local send fails and the retry lands
+//     on the new owner, which re-tracks;
+//   - the federation broadcast leg runs only on the PeerManager LEADER — only the leader holds open
+//     peer channels, so a non-leader broadcast would reach zero peers while looking successful.
+//
+// A claimant that skipped an owed leg for lack of authority reports Deferred; the worker releases
+// the lease without a failure penalty and the authoritative replica picks the obligation up on its
+// own tick. Remote legs are only DISPATCHED here — completion arrives via Helmsman's
+// generation-correlated acknowledgements. Local control-stream dispatch callers are bounded by
+// sendOnConnBounded, while a stalled underlying gRPC write may outlive that caller and is made safe
+// by the receiver's age/generation fences. Decklog is bounded by ctx; no lock is held here in any
+// case (the worker's phase split). All legs are idempotent; errors release the lease for retry.
+func (p *Processor) ApplyAdmissionEffect(ctx context.Context, effect control.AdmissionEffect) (control.AdmissionEffectLegResults, error) {
+	var legs control.AdmissionEffectLegResults
+	var effectErr error
+
+	// Replica-independent: prior-owner drain dispatch. Only owed while the admitting generation is
+	// active (the worker moots it otherwise — a late drain could nuke a newer session's buffer).
+	if !effect.DrainDone {
+		if prior := strings.TrimSpace(effect.PriorOwnerNodeID); prior != "" && prior != effect.NodeID {
+			state.DefaultManager().SetStreamInstanceInputs(effect.InternalName, prior, 0)
+			runtimeName := effect.InternalName
+			if registry := control.StreamRegistryInstance; registry != nil {
+				runtimeName = control.RuntimeNameForStream(registry, effect.InternalName)
+			}
+			if p.drainStream == nil {
+				effectErr = errors.Join(effectErr, errors.New("drain dispatcher unavailable"))
+			} else if err := p.drainStream(ctx, prior, runtimeName, fmt.Sprintf("publisher_replaced_by_node:%s", effect.NodeID), effect.SourceGeneration, effect.PriorOwnerSourceGeneration); err != nil {
+				if p.metrics != nil && p.metrics.DrainDispatch != nil {
+					p.metrics.DrainDispatch.WithLabelValues("failed").Inc()
+				}
+				effectErr = errors.Join(effectErr, fmt.Errorf("dispatch prior-owner drain: %w", err))
+			} else if p.metrics != nil && p.metrics.DrainDispatch != nil {
+				p.metrics.DrainDispatch.WithLabelValues("ok").Inc()
+			}
+		}
 	}
 
-	// Stop DVR on its storage node if active
-	control.StopDVRByInternalName(internalName, p.logger)
+	// Replica-independent: the admission's Decklog ingest event.
+	if !effect.DecklogDone && len(effect.DecklogTrigger) > 0 {
+		var trigger ipcpb.MistTrigger
+		if err := proto.Unmarshal(effect.DecklogTrigger, &trigger); err != nil {
+			// Per-leg poison: an undecodable payload cannot be delivered by any retry. Mark the leg
+			// settled with loud diagnostics rather than quarantining unrelated valid legs.
+			p.logger.WithError(err).WithField("internal_name", effect.InternalName).
+				Error("Admission obligation: Decklog event undecodable; leg abandoned (poison)")
+			legs.DecklogDone = true
+			legs.PoisonNote = appendPoisonNote(legs.PoisonNote, "decklog payload undecodable: "+err.Error())
+		} else if err := p.sendTriggerToDecklogContext(ctx, &trigger); err != nil {
+			effectErr = errors.Join(effectErr, fmt.Errorf("deliver admission Decklog event: %w", err))
+		} else {
+			legs.DecklogDone = true
+		}
+	}
+
+	// Node-affine: push-target activation. Local dispatch only — tracking and the RPC must stay on
+	// the replica that will receive PUSH_OUT_START/PUSH_END.
+	if !effect.ActivationDone && len(effect.PushTargets) > 0 {
+		ownedLocally := control.NodeConnOwnedLocally
+		if p.nodeOwnedLocally != nil {
+			ownedLocally = p.nodeOwnedLocally
+		}
+		if !ownedLocally(effect.NodeID) {
+			legs.Deferred = true
+			if legs.AuthorityInstance == "" {
+				legs.AuthorityInstance = control.NodeConnOwnerInstance(ctx, effect.NodeID)
+			}
+		} else {
+			var activation ipcpb.ActivatePushTargets
+			if err := proto.Unmarshal(effect.PushTargets, &activation); err != nil {
+				p.logger.WithError(err).WithField("internal_name", effect.InternalName).
+					Error("Admission obligation: push-target intent undecodable; leg abandoned (poison)")
+				legs.ActivationPoisoned = true
+				legs.PoisonNote = appendPoisonNote(legs.PoisonNote, "push-target payload undecodable: "+err.Error())
+			} else {
+				targets := make([]*commodorepb.PushTargetInternal, 0, len(activation.GetTargets()))
+				for _, spec := range activation.GetTargets() {
+					targets = append(targets, &commodorepb.PushTargetInternal{Id: spec.GetTargetId(), TargetUri: spec.GetTargetUri(), Name: spec.GetName()})
+				}
+				trackPushTargets(activation.GetStreamName(), effect.TenantID, targets)
+				activation.SourceGeneration = effect.SourceGeneration
+				if err := p.sendActivatePushTargetsLocal(ctx, effect.NodeID, &activation); err != nil {
+					effectErr = errors.Join(effectErr, fmt.Errorf("dispatch push-target activation: %w", err))
+				}
+			}
+		}
+	}
+
+	// Federation-leader: the live broadcast — only the leader has open peer channels.
+	if !effect.BroadcastDone && effect.BroadcastLive {
+		switch {
+		case effect.PeerHintsInvalid:
+			// Per-leg poison: the durable filter input is undecodable; broadcasting anyway would
+			// fail open. Settle the leg with diagnostics.
+			p.logger.WithField("internal_name", effect.InternalName).
+				Error("Admission obligation: peer set undecodable; broadcast leg abandoned (poison)")
+			legs.BroadcastPoisoned = true
+			legs.PoisonNote = appendPoisonNote(legs.PoisonNote, "peer_clusters undecodable")
+		case p.peerNotifier == nil:
+			legs.BroadcastDone = true
+		case !p.peerNotifier.IsLeader():
+			legs.Deferred = true
+			if legs.AuthorityInstance == "" {
+				legs.AuthorityInstance = p.peerNotifier.LeaderInstanceID()
+			}
+		default:
+			// (Re-)establish the leader's stream tracking from the complete DURABLE peer hints
+			// before broadcasting. The obligation is sufficient even after cache expiry or leader
+			// replacement, so completion never depends on process-local discovery state.
+			current, err := p.peerNotifier.TrackStream(ctx, effect.InternalName, effect.TenantID,
+				effect.SourceGeneration, effect.SourceRevision, effect.PeerHints)
+			if err != nil {
+				effectErr = errors.Join(effectErr, fmt.Errorf("persist federation stream tracking: %w", err))
+				break
+			}
+			if !current {
+				// Phase 3 rechecks the database generation under the stream lock. Do not broadcast
+				// after Redis has already fenced this generation as ended or superseded.
+				break
+			}
+			if err := p.peerNotifier.BroadcastStreamLifecycle(ctx, effect.InternalName, effect.TenantID, effect.SourceRevision, true); err != nil {
+				effectErr = errors.Join(effectErr, fmt.Errorf("broadcast federation stream lifecycle: %w", err))
+				break
+			}
+			legs.BroadcastDone = true
+		}
+	}
+	return legs, effectErr
+}
+
+// FederationLeaderInstance identifies the current PeerManager leader ("" when unknown) — the
+// authority for leader-affine offline effects (peer broadcasts/untracks).
+func (p *Processor) FederationLeaderInstance() string {
+	if p.peerNotifier == nil {
+		return ""
+	}
+	return p.peerNotifier.LeaderInstanceID()
+}
+
+// appendPoisonNote accumulates per-leg poison diagnostics for the obligation's last_error. The
+// "poison:" prefix marks the note permanent — FailAdmissionEffect appends transient failures after
+// it instead of overwriting it.
+func appendPoisonNote(existing, note string) string {
+	if existing == "" {
+		return "poison: " + note
+	}
+	return existing + "; " + note
+}
+
+// sendActivatePushTargetsLocal dispatches activation over THIS replica's control connection only
+// (no HA relay); injectable for tests.
+func (p *Processor) sendActivatePushTargetsLocal(ctx context.Context, nodeID string, req *ipcpb.ActivatePushTargets) error {
+	if p.sendActivateLocal != nil {
+		return p.sendActivateLocal(ctx, nodeID, req)
+	}
+	return control.SendLocalActivatePushTargets(ctx, nodeID, req)
 }
 
 // handleUserEnd processes USER_END trigger (non-blocking)
@@ -3545,45 +4113,89 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 	}
 
 	if slu.GetStatus() == "offline" {
-		// This node lost the stream either way; per-node state must record it.
-		state.DefaultManager().SetOffline(internal, nodeID)
-		// stream_state_current is keyed per stream, not per node. Only the
-		// recorded source owner's vanish may reach Periscope; a replica,
-		// relay, or ownerless carrier losing the stream is a node-local
-		// fact and forwarding it would flap the user-visible status.
-		if !p.offlineIsStreamWide(internal, nodeID) {
-			p.logger.WithFields(offlineSuppressionLogFields(internal, nodeID)).Info("Suppressing offline lifecycle forward; not a stream-wide ending")
-			return "", false, nil
-		}
-		if !suppressUnverifiedForward {
-			if err := p.sendTriggerToDecklog(trigger); err != nil {
-				p.logger.WithFields(logging.Fields{
-					"internal_name": internal,
-					"trigger_type":  trigger.GetTriggerType(),
-					"error":         err,
-				}).Error("Failed to send stream lifecycle update to Decklog")
-			}
-		}
-		// The owner's vanish stands in for a missed/delayed STREAM_END, so
-		// it must run the same source-inactive flip and stream-wide
-		// finalization — otherwise admission stays blocked on
-		// SourceActive=true and push/capacity/federation/DVR state stays
-		// stale until (or unless) the real STREAM_END arrives. All
-		// idempotent; a late STREAM_END re-runs them as no-ops.
-		if registry := control.StreamRegistryInstance; registry != nil {
-			registry.MarkSourceInactive(internal, nodeID)
-		}
-		// The node-scoped effects above are node-authoritative. The TENANT-scoped effects
-		// (capacity decrement, federation lifecycle broadcast) must NOT run under an unverified
-		// node-asserted tenant: when the owner is unresolvable we have no authoritative tenant, so pass empty
-		// (UnregisterStream/BroadcastStreamLifecycle short-circuit) rather than attribute them to a tenant that
-		// may not own the stream. When resolved, slu's tenant is the server-stamped owner.
+		// stream_state_current is keyed per stream, not per node. Only the recorded source owner's
+		// vanish may reach Periscope; a replica, relay, or ownerless carrier losing the stream is a
+		// node-local fact and forwarding it would flap the user-visible status.
+		isStreamWide := p.offlineIsStreamWide(internal, nodeID)
+
+		// The TENANT-scoped effects (capacity decrement, federation broadcast, and the fence's
+		// active-session probe) must NOT run under an unverified node-asserted tenant: when the
+		// owner is unresolvable we have no authoritative tenant, so use empty (UnregisterStream /
+		// BroadcastStreamLifecycle short-circuit, and the fence fails closed → suppresses).
 		finalizationTenant := slu.GetTenantId()
 		if suppressUnverifiedForward {
 			finalizationTenant = ""
 		}
-		p.finalizeStreamWideOffline(internal, nodeID, finalizationTenant)
-		return "", false, nil
+
+		// ONE coherent, generation-fenced decision gates every stream-wide offline effect, exactly as on
+		// the STREAM_END path: the owner's vanish stands in for a missed/delayed STREAM_END, but it
+		// too carries no connector PID or generation, so FenceOfflineBackstop resolves ONCE whether
+		// the source is genuinely gone or a live reconnect superseded it. When a reconnect is live,
+		// NONE of the offline effects run — per-node state, Decklog, the registry flip, capacity,
+		// push targets and federation all stay live.
+		var proceed bool
+		if isStreamWide {
+			if registry := control.StreamRegistryInstance; registry != nil {
+				decklogPayload, marshalErr := proto.Marshal(trigger)
+				if marshalErr != nil {
+					proceed = false
+					p.logger.WithError(marshalErr).Warn("Vanish trigger could not be serialized for durable offline effects")
+				} else {
+					ok, _, fenceErr := control.FenceOfflineBackstop(context.Background(), registry, finalizationTenant, nodeID, internal, control.OfflineEffectIntent{
+						SetNodeOffline: true, TeardownStream: true, BroadcastOffline: true, DecklogTrigger: decklogPayload,
+					})
+					if fenceErr != nil {
+						proceed = false
+						p.logger.WithError(fenceErr).WithFields(logging.Fields{
+							"internal_name": internal,
+							"source_node":   nodeID,
+						}).Warn("Vanish offline fence failed; suppressing stream-wide offline effects")
+					} else {
+						proceed = ok
+					}
+				}
+				if !proceed {
+					p.logger.WithFields(logging.Fields{
+						"internal_name": internal,
+						"source_node":   nodeID,
+					}).Info("Vanish superseded by a live reconnect (or already finalized); suppressing all stream-wide offline effects")
+				}
+			} else {
+				proceed = false
+			}
+		}
+
+		// Per-node state: for a replica (non-owner) always; for the owner only when the fence says
+		// the source is genuinely gone (so a live reconnect's input/viewer state is not zeroed).
+		if !isStreamWide {
+			state.DefaultManager().SetOffline(internal, nodeID)
+		}
+
+		// Stop this node's DVR recordings node-locally (node-keyed, generation-fenced backstop),
+		// for the same reason as the STREAM_END path — runs regardless of the offline fence since
+		// it only claims DVRs bound to an ENDED/NULL generation. Only when the tenant is verified.
+		// NOTE: STREAM_LIFECYCLE_UPDATE is NOT a durable trigger, so a returned error here is only
+		// logged, not WAL-retried — the durable STREAM_END and the storage node's own DVRStopped
+		// are the primary finalizers. The error is still returned for surfacing/metrics.
+		var vanishStopErr error
+		if t := slu.GetTenantId(); t != "" {
+			vanishStopErr = control.StopDVRForEndedSource(internal, t, nodeID, p.logger)
+			if vanishStopErr != nil {
+				p.logger.WithError(vanishStopErr).WithFields(logging.Fields{
+					"internal_name": internal,
+					"source_node":   nodeID,
+				}).Error("Failed to claim DVR stop obligation on vanish-offline (best-effort; not WAL-retried)")
+			}
+		}
+
+		if !isStreamWide {
+			p.logger.WithFields(offlineSuppressionLogFields(internal, nodeID)).Info("Suppressing offline lifecycle forward; not a stream-wide ending")
+			return "", false, vanishStopErr
+		}
+		if !proceed {
+			return "", false, vanishStopErr
+		}
+		return "", false, vanishStopErr
 	}
 
 	// Forward the enriched StreamLifecycleUpdate to Decklog (unless the tenant is a node assertion we couldn't
@@ -3611,7 +4223,7 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 
 // offlineIsStreamWide types an offline edge (STREAM_END or a vanish-diff
 // lifecycle offline) by recorded source authority. Authority is stamped
-// when the source STARTS — AdmitAndReserve for push ingest, the /source
+// when the source STARTS — ProjectSource for push ingest, the /source
 // pull stamp for upstream pulls — and only the recorded owner ending its
 // stream is a stream-wide fact; replicas still draining inputs cannot
 // veto it. No recorded owner means node-local, always: replicas never
@@ -4142,22 +4754,6 @@ func (p *Processor) resolveNodeClusterID(nodeID string) string {
 	return ""
 }
 
-// isNodeHealthyForAdmission reports whether a node currently has a fresh
-// health beat from the perspective of source-presence admission. Used by
-// AdmitAndReserve to short-circuit a stale source_active=true flag when
-// the recorded owner is down or unreachable — otherwise a node crash
-// without PUSH_INPUT_CLOSE would block legitimate takeover indefinitely.
-func (p *Processor) isNodeHealthyForAdmission(nodeID string) bool {
-	if strings.TrimSpace(nodeID) == "" {
-		return false
-	}
-	ns := state.DefaultManager().GetNodeState(nodeID)
-	if ns == nil {
-		return false
-	}
-	return ns.IsHealthy && !ns.IsStale
-}
-
 // tryArrangeDVRCrossCluster arranges a cross-cluster DTSC pull for
 // dvr+<token> when the source stream's federation cache says a peer
 // cluster is recording it. Returns (peerDTSC, true) on success.
@@ -4221,35 +4817,6 @@ func (p *Processor) tryArrangeDVRCrossCluster(ctx context.Context, runtimeName s
 		"dtsc_url":       result.PullDTSCURL,
 	}).Info("STREAM_SOURCE dvr+: cross-cluster origin-pull arranged from recording node")
 	return result.PullDTSCURL, true
-}
-
-// drainOldOwner asks the prior owner node to unload the lingering Mist
-// buffer and disconnect viewer sessions for the runtime name, so viewers
-// don't keep talking to the stale buffer after takeover. Fire-and-forget:
-// admission must not block on completion (the new owner serves viewers
-// immediately). Dispatched as a DrainStreamRequest over the long-lived
-// Connect(stream ControlMessage) channel; the actual stop_sessions +
-// nuke_stream + DVR-override clear happens in
-// api_sidecar/internal/control/client.go handleDrainStream.
-func (p *Processor) drainOldOwner(oldOwnerNodeID, runtimeName, reason string) {
-	if p == nil || p.drainStream == nil || strings.TrimSpace(oldOwnerNodeID) == "" || strings.TrimSpace(runtimeName) == "" {
-		return
-	}
-	if err := p.drainStream(oldOwnerNodeID, runtimeName, reason); err != nil {
-		if p.metrics != nil && p.metrics.DrainDispatch != nil {
-			p.metrics.DrainDispatch.WithLabelValues("failed").Inc()
-		}
-		p.logger.WithFields(logging.Fields{
-			"old_owner":    oldOwnerNodeID,
-			"runtime_name": runtimeName,
-			"reason":       reason,
-			"error":        err,
-		}).Warn("drain dispatch to old owner failed; proceeding with takeover")
-		return
-	}
-	if p.metrics != nil && p.metrics.DrainDispatch != nil {
-		p.metrics.DrainDispatch.WithLabelValues("ok").Inc()
-	}
 }
 
 // resolveClusterOwnerTenantID resolves a cluster_id to its owner_tenant_id.
@@ -4718,6 +5285,18 @@ func (p *Processor) applyStreamContext(trigger *ipcpb.MistTrigger, streamName st
 	return info
 }
 
+// redactStreamKeyInURL replaces the publishing credential inside an ingest URL
+// with its log tag, keeping the rest of the URL — scheme, host, port, path
+// shape — intact so analytics can still see how and where a publisher
+// connected. Returns the URL unchanged when the key does not appear in it.
+func redactStreamKeyInURL(pushURL, streamKey string) string {
+	streamKey = strings.TrimSpace(streamKey)
+	if streamKey == "" || !strings.Contains(pushURL, streamKey) {
+		return pushURL
+	}
+	return strings.ReplaceAll(pushURL, streamKey, logging.RedactSecret(streamKey))
+}
+
 // detectProtocol extracts protocol from push URL
 func (p *Processor) detectProtocol(pushURL string) string {
 	if pushURL == "" {
@@ -4810,56 +5389,25 @@ func lookupPushTarget(streamName, targetURI string) (pushTargetInfo, bool) {
 	return pushTargetInfo{}, false
 }
 
-// activatePushTargets sends push targets (from ValidateStreamKeyResponse) to the
-// origin node's Helmsman for activation. Called asynchronously from handlePushRewrite.
-func (p *Processor) activatePushTargets(nodeID, internalName, tenantID string, targets []*commodorepb.PushTargetInternal) {
-	specs := make([]*ipcpb.PushTargetSpec, 0, len(targets))
-	for _, t := range targets {
-		specs = append(specs, &ipcpb.PushTargetSpec{
-			TargetId:  t.GetId(),
-			TargetUri: t.GetTargetUri(),
-			Name:      t.GetName(),
-		})
-	}
-
-	streamName := fmt.Sprintf("live+%s", internalName)
-
-	// Track targets so PUSH_OUT_START/PUSH_END can update status
-	trackPushTargets(streamName, tenantID, targets)
-
-	if err := control.SendActivatePushTargets(nodeID, &ipcpb.ActivatePushTargets{
-		StreamName: streamName,
-		Targets:    specs,
-	}); err != nil {
-		p.logger.WithFields(logging.Fields{
-			"node_id":      nodeID,
-			"stream_name":  streamName,
-			"target_count": len(specs),
-			"error":        err,
-		}).Error("Failed to send ActivatePushTargets to Helmsman")
-		return
-	}
-
-	p.logger.WithFields(logging.Fields{
-		"node_id":      nodeID,
-		"stream_name":  streamName,
-		"target_count": len(specs),
-	}).Info("Activated multistream push targets")
-}
-
 // deactivatePushTargets tells Helmsman to stop all pushes for a stream.
 // Untracking is the caller's job (handleStreamEnd does it synchronously in
 // its stream-wide branch) — this function only performs the node RPC.
-func (p *Processor) deactivatePushTargets(nodeID, streamName string) {
-	if err := control.SendDeactivatePushTargets(nodeID, &ipcpb.DeactivatePushTargets{
-		StreamName: streamName,
+func (p *Processor) deactivatePushTargets(ctx context.Context, nodeID, streamName, sourceGeneration string) error {
+	if p.sendDeactivatePushTargets == nil {
+		return errors.New("deactivate push-target dispatcher unavailable")
+	}
+	if err := p.sendDeactivatePushTargets(ctx, nodeID, &ipcpb.DeactivatePushTargets{
+		StreamName:       streamName,
+		SourceGeneration: sourceGeneration,
 	}); err != nil {
 		p.logger.WithFields(logging.Fields{
 			"node_id":     nodeID,
 			"stream_name": streamName,
 			"error":       err,
 		}).Warn("Failed to send DeactivatePushTargets to Helmsman")
+		return err
 	}
+	return nil
 }
 
 // updatePushTargetStatus updates push target status in Commodore when a
@@ -5085,4 +5633,38 @@ func (p *Processor) evaluateViewerAdmission(ctx streamContext, clusterID string)
 		), true
 	}
 	return "", false
+}
+
+// IngestClusterIDForNode resolves the virtual media cluster a node publishes
+// into, or "" when it cannot be attributed.
+//
+// This is the derivation for ingest placement — PUSH_REWRITE claims under it,
+// the renewal job re-asserts under it, and PUSH_INPUT_CLOSE releases under it.
+//
+// Node state is consulted first, and is the same source endpoint selection
+// reads: the cluster written there is the Quartermaster-resolved binding
+// persisted at registration under the node's canonical, authenticated id, so
+// it is authoritative and refreshes when the node reconnects. The Quartermaster
+// lookup behind it is cached for an hour, so preferring it would let a
+// reassignment go unnoticed — and would let selection advertise one cluster
+// while placement claimed another.
+//
+// The two can still disagree across a reassignment that lands between a claim
+// and its release. Binding the cluster to the accepted reservation, so all
+// three phases replay one immutable value, is the durable fix and is tracked
+// separately.
+//
+// There is deliberately no fall back to this Foghorn's own CLUSTER_ID. One
+// process serves many virtual media clusters, so its identity is not a
+// media-cluster answer: substituting it would claim placement in a cluster the
+// publisher is not on, and could deny a valid publisher whose tenant has no
+// grant to the process cluster. An unattributable node is refused instead,
+// which is what the endpoint selector already does.
+func (p *Processor) IngestClusterIDForNode(nodeID string) string {
+	if ns := state.DefaultManager().GetNodeState(nodeID); ns != nil {
+		if clusterID := strings.TrimSpace(ns.ClusterID); clusterID != "" {
+			return clusterID
+		}
+	}
+	return strings.TrimSpace(p.resolveNodeClusterID(nodeID))
 }

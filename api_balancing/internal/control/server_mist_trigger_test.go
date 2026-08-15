@@ -12,8 +12,10 @@ import (
 )
 
 type captureMistTriggerProcessor struct {
-	last *ipcpb.MistTrigger
-	err  error
+	last             *ipcpb.MistTrigger
+	err              error
+	response         string
+	ingestGeneration string
 }
 
 func (c *captureMistTriggerProcessor) ProcessTrigger(_ string, _ []byte, _ string) (string, bool, error) {
@@ -22,7 +24,29 @@ func (c *captureMistTriggerProcessor) ProcessTrigger(_ string, _ []byte, _ strin
 
 func (c *captureMistTriggerProcessor) ProcessTypedTrigger(trigger *ipcpb.MistTrigger) (string, bool, error) {
 	c.last = trigger
-	return "", false, c.err
+	if c.ingestGeneration != "" {
+		trigger.EventId = c.ingestGeneration
+	}
+	return c.response, false, c.err
+}
+
+func TestProcessMistTrigger_AcceptedPushCarriesGenerationAndConnectorIdentity(t *testing.T) {
+	prevProcessor := mistTriggerProcessor
+	t.Cleanup(func() { mistTriggerProcessor = prevProcessor })
+	mistTriggerProcessor = &captureMistTriggerProcessor{response: "live+abc", ingestGeneration: "generation-a"}
+	stream := &captureStream{}
+	processMistTrigger(&ipcpb.MistTrigger{
+		TriggerType: "PUSH_REWRITE",
+		Blocking:    true,
+		RequestId:   "req-push",
+		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
+			PushRewrite: &ipcpb.PushRewriteTrigger{StreamName: "public-key", Pid: 42},
+		},
+	}, NodeSession{CanonicalNodeID: "node-1"}, stream, logging.Logger(logrus.New()))
+	response := stream.lastSent().GetMistTriggerResponse()
+	if response.GetIngestGeneration() != "generation-a" || response.GetIngestConnectorPid() != 42 {
+		t.Fatalf("generation fence identity = (%q,%d)", response.GetIngestGeneration(), response.GetIngestConnectorPid())
+	}
 }
 
 // There is NO local-cluster fallback: the cluster is whatever the authenticated session carries. A session

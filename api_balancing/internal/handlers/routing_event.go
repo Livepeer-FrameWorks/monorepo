@@ -8,13 +8,13 @@ import (
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
-// RoutingEvent captures all context for a viewer routing decision.
+// RoutingEvent captures the context for a viewer or ingest routing decision.
 // Callers fill the fields they have; BuildLoadBalancingData handles
 // bucketing, distance, and optional-field nil-wrapping.
 type RoutingEvent struct {
 	// Decision outcome
 	Status  string // "success", "failed", "redirect", "remote_redirect", "cross_cluster_dtsc"
-	Details string // redirect URL, error message, DTSC URL, etc.
+	Details string // non-secret outcome detail; credential-bearing URLs must never be stored here
 	Score   uint64
 
 	// Stream identity (pre-resolved by caller, or resolved via enrichClient)
@@ -42,7 +42,7 @@ type RoutingEvent struct {
 	CandidatesCount int32
 
 	// Event classification
-	EventType string // "load_balancing", "play_rewrite", "grpc_resolve"
+	EventType string // "load_balancing", "play_rewrite", "grpc_resolve", "ingest_resolve"
 	Source    string // "http", "grpc"
 
 	// Federation: set when the decision routes to a remote cluster

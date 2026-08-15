@@ -5,6 +5,7 @@ import (
 	"errors"
 	"hash/fnv"
 	"sort"
+	"strings"
 	"time"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -38,8 +39,8 @@ type ManagedStreamMaterializer interface {
 
 	// EnsureManagedStreamDVR idempotently starts DVR for (stream_id, source_node_id)
 	// when is_recording_enabled is true. Must be a no-op if a live DVR for
-	// (stream_id, source_node_id) already exists; placement-change cleanup
-	// happens via the natural STREAM_END → StopDVRByInternalName path.
+	// (stream_id, source_node_id) already exists; cleanup happens via the natural
+	// STREAM_END → control.StopDVRForEndedSource path (node-keyed backstop).
 	EnsureManagedStreamDVR(ctx context.Context, streamCtx *commodorepb.ResolveStreamContextResponse, sourceNodeID string)
 }
 
@@ -61,13 +62,16 @@ type managedStreamSnapshot struct {
 	alwaysOn     bool
 	ingestMode   string
 	internalName string
+	tenantID     string
 }
 
 // applyKey returns the subset of fields that defines whether Foghorn must
-// emit a fresh ApplyManagedStream. internalName is intentionally excluded:
-// it is stable per stream_id and only carried for Retract.
+// emit a fresh ApplyManagedStream. internalName and tenantID are intentionally
+// excluded: both are stable per stream_id and only carried for Retract, which
+// needs them after the commodore.streams row may already be gone.
 func (s managedStreamSnapshot) applyKey() managedStreamSnapshot {
 	s.internalName = ""
+	s.tenantID = ""
 	return s
 }
 
@@ -380,6 +384,7 @@ func reconcileClusterManagedStreams(ctx context.Context, log logging.Logger, clu
 					continue
 				}
 				snap.internalName = streamCtx.GetInternalName()
+				snap.tenantID = streamCtx.GetTenantId()
 				StreamRegistryInstance.ManagedSetLastSent(clusterID, nodeID, sid, snap)
 				// Keep the local snapshot consistent for the retract pass
 				// below (same tick).
@@ -437,7 +442,7 @@ func reconcileClusterManagedStreams(ctx context.Context, log logging.Logger, clu
 			// content routing stops pointing at the now-empty cluster.
 			// Conditional on the recorded value matching this cluster,
 			// so a concurrent peer-cluster placement isn't clobbered.
-			clearActiveClusterForManagedStream(log, clusterID, sid)
+			clearActiveClusterForManagedStream(log, clusterID, sid, prevSnap.tenantID, prevSnap.internalName)
 			StreamRegistryInstance.ManagedDeleteLastSent(clusterID, nodeID, sid)
 		}
 	}
@@ -448,10 +453,30 @@ func reconcileClusterManagedStreams(ctx context.Context, log logging.Logger, clu
 // from Mist. The conditional UPDATE (matches on expected_cluster_id)
 // makes this safe to call from any reconciler tick — concurrent peer
 // activity in another cluster won't have its pin wiped.
-func clearActiveClusterForManagedStream(log logging.Logger, clusterID, streamID string) {
+func clearActiveClusterForManagedStream(log logging.Logger, clusterID, streamID, tenantID, internalName string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if _, err := CommodoreClient.ClearStreamActiveCluster(ctx, streamID, clusterID); err != nil {
+
+	// A snapshot hydrated from a sidecar's applied set after a Foghorn restart
+	// carries no tenant: the wire snapshot deliberately does not, since tenant
+	// identity is not exposed on edge nodes. Resolve it from the registry
+	// instead, which is where Foghorn already keeps stream→tenant.
+	if tenantID == "" && StreamRegistryInstance != nil && internalName != "" {
+		if entry, err := StreamRegistryInstance.ResolveSourceByInternalName(ctx, internalName); err == nil {
+			tenantID = strings.TrimSpace(entry.TenantID)
+		}
+	}
+	if tenantID == "" {
+		// Tenant-scoped mutation: without it Commodore rejects the call, and
+		// clearing an unscoped row is exactly what that rule prevents. The
+		// claim still lapses on its lease clock.
+		log.WithFields(logging.Fields{
+			"stream_id":  streamID,
+			"cluster_id": clusterID,
+		}).Warn("Skipping ClearStreamActiveCluster: stream tenant unresolved")
+		return
+	}
+	if _, err := CommodoreClient.ClearStreamActiveCluster(ctx, streamID, clusterID, tenantID); err != nil {
 		log.WithError(err).WithFields(logging.Fields{
 			"stream_id":  streamID,
 			"cluster_id": clusterID,

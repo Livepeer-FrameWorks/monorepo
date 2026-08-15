@@ -2,12 +2,62 @@ package mist
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
+
+// Ambiguity must distinguish "the mutation may have reached Mist" (accepted-but-
+// unconfirmed) from "authentication failed before the mutation was ever sent".
+// Only the former is ErrMistAmbiguous; the latter proves the command was not sent.
+func TestPushStartAmbiguityClassification(t *testing.T) {
+	t.Run("auth transport failure is not ambiguous", func(t *testing.T) {
+		// Close the server so the auth handshake's transport fails. Auth runs
+		// before the command is transmitted, so the command was never sent.
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+		u := srv.URL
+		srv.Close()
+
+		c := NewClient(logging.NewLogger())
+		c.BaseURL = u
+
+		err := c.PushStart("live+x", "/data/dvr/x/seg.ts")
+		if err == nil {
+			t.Fatal("expected an error when the auth transport fails")
+		}
+		if errors.Is(err, ErrMistAmbiguous) {
+			t.Fatalf("auth-time failure must NOT be ambiguous (command never sent), got: %v", err)
+		}
+	})
+
+	t.Run("command failure after auth stays ambiguous", func(t *testing.T) {
+		// Auth succeeds; the push_start response body is unparseable, so Mist may
+		// have accepted the mutation but we cannot confirm — genuinely ambiguous.
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.Contains(r.URL.Query().Get("command"), "authorize") {
+				_, _ = w.Write([]byte(`{"authorize":{"status":"OK"}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{not-json`))
+		}))
+		defer srv.Close()
+
+		c := NewClient(logging.NewLogger())
+		c.BaseURL = srv.URL
+
+		err := c.PushStart("live+x", "/data/dvr/x/seg.ts")
+		if err == nil {
+			t.Fatal("expected an error when the command response is unparseable")
+		}
+		if !errors.Is(err, ErrMistAmbiguous) {
+			t.Fatalf("a failed command send after successful auth must stay ambiguous, got: %v", err)
+		}
+	})
+}
 
 func TestParsePushList_NullMeansEmpty(t *testing.T) {
 	pushes, err := parsePushList(nil)

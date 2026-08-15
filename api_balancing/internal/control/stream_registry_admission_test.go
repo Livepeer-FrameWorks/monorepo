@@ -2,8 +2,6 @@ package control
 
 import (
 	"context"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -17,139 +15,109 @@ func newPopulatedRegistry(t *testing.T) *StreamRegistry {
 	return r
 }
 
-func TestAdmitAndReserve_AcceptNewWhenNoOwner(t *testing.T) {
+func projectSourceForTest(t *testing.T, r *StreamRegistry, stream, node string, pid int64, triggerUUID, generation string, revision int64) string {
+	t.Helper()
+	prior, applied, err := r.ProjectSource(stream, node, pid, triggerUUID, generation, revision)
+	if err != nil {
+		t.Fatalf("project source: %v", err)
+	}
+	if !applied {
+		t.Fatalf("project source revision %d was not applied", revision)
+	}
+	return prior
+}
+
+func markSourceInactiveForTest(t *testing.T, r *StreamRegistry, stream, node, generation string, revision int64) bool {
+	t.Helper()
+	flipped, err := r.PublishSourceInactive(stream, node, generation, revision)
+	if err != nil {
+		t.Fatalf("mark source inactive: %v", err)
+	}
+	return flipped
+}
+
+// ProjectSource is the DB winner's projection: it sets SourceActive + owner + PID + trigger UUID +
+// generation on the local Location, publishes, and a later projection (a reconnect) supersedes the
+// generation — which is what the offline fence keys on.
+func TestProjectSource_ProjectsWinnerAndStampsGeneration(t *testing.T) {
+	const stream = "60546679b497415db2338cd5cae54992"
 	r := newPopulatedRegistry(t)
-	got := r.AdmitAndReserve("60546679b497415db2338cd5cae54992", "node-1", nil)
-	if got.Decision != AdmissionAcceptNew {
-		t.Errorf("decision = %v, want AdmissionAcceptNew", got.Decision)
+
+	projectSourceForTest(t, r, stream, "node-1", 100, "uuid-1", "gen-1", 1)
+	if gen, active, ok := r.SourceGenerationSnapshot(stream, "node-1"); !ok || !active || gen != "gen-1" {
+		t.Fatalf("after projection: ok=%v active=%v gen=%q, want active on gen-1", ok, active, gen)
 	}
-	if got.OldOwnerNodeID != "" {
-		t.Errorf("OldOwnerNodeID = %q, want empty for new", got.OldOwnerNodeID)
-	}
-	// Atomic reservation: source-active flip happens in the same critical
-	// section as the decision. After AcceptNew, SourceActive must be true
-	// and OwnerNodeID must be the candidate.
-	loc, ok := r.LocalReplication(context.Background(), "60546679b497415db2338cd5cae54992")
-	_ = loc
-	_ = ok
 	r.mu.RLock()
-	entry := r.byInt["60546679b497415db2338cd5cae54992"]
+	l := r.byInt[stream].entry.Locations["cluster-A"]
 	r.mu.RUnlock()
-	if entry == nil {
-		t.Fatal("entry missing after accept")
+	if l.OwnerNodeID != "node-1" || l.SourceConnectorPID != 100 || l.SourceTriggerUUID != "uuid-1" || l.SourceGeneration != "gen-1" {
+		t.Fatalf("projected location = %+v, want owner=node-1 pid=100 uuid=uuid-1 gen=gen-1", l)
 	}
-	l := entry.entry.Locations["cluster-A"]
-	if !l.SourceActive || l.OwnerNodeID != "node-1" {
-		t.Errorf("after AcceptNew: SourceActive=%v OwnerNodeID=%q, want true / node-1", l.SourceActive, l.OwnerNodeID)
+
+	// A reconnect projection supersedes the generation (a globally-unique DB session id).
+	projectSourceForTest(t, r, stream, "node-1", 100, "uuid-1", "gen-2", 2)
+	if gen, _, ok := r.SourceGenerationSnapshot(stream, "node-1"); !ok || gen != "gen-2" {
+		t.Fatalf("after reconnect projection: gen=%q ok=%v, want gen-2", gen, ok)
 	}
 }
 
-func TestAdmitAndReserve_AcceptNewWhenStreamUnknown(t *testing.T) {
-	r := NewStreamRegistry(&fakeCommodore{resp: nativeResp()}, "cluster-A", time.Minute)
-	got := r.AdmitAndReserve("never-seen", "node-1", nil)
-	if got.Decision != AdmissionAcceptNew {
-		t.Errorf("decision = %v, want AdmissionAcceptNew", got.Decision)
+func TestPublishSourceInactive_RollsBackLocalStateWhenRedisHasNewerRevision(t *testing.T) {
+	const stream = "60546679b497415db2338cd5cae54992"
+	r := newPopulatedRegistry(t)
+	projectSourceForTest(t, r, stream, "node-old", 100, "trigger-old", "gen-old", 1)
+
+	store, _, _ := newTestRedis(t)
+	newer := StreamEntry{InternalName: stream, Locations: map[string]Location{
+		"cluster-test": {
+			ClusterID:        "cluster-test",
+			SourceActive:     true,
+			OwnerNodeID:      "node-new",
+			SourceGeneration: "gen-new",
+			SourceRevision:   3,
+		},
+	}}
+	change := RegistryChange{InstanceID: "peer", Entity: RegistryEntitySource, Operation: RegistryOpUpsert, Key: stream, SourceRevision: 3}
+	if applied, err := store.SetSourceRevisioned(context.Background(), newer, change, 3); err != nil || !applied {
+		t.Fatalf("seed newer Redis source: applied=%v err=%v", applied, err)
 	}
-	// Atomic reservation creates a minimal entry so subsequent
-	// concurrent PUSH_REWRITEs can't both AcceptNew.
-	r.mu.RLock()
-	entry, present := r.byInt["never-seen"]
-	r.mu.RUnlock()
-	if !present {
-		t.Fatal("entry not created for unknown stream after AcceptNew")
+	r.mu.Lock()
+	r.redisStore = store
+	r.instanceID = "local"
+	r.mu.Unlock()
+
+	applied, err := r.PublishSourceInactive(stream, "node-old", "gen-old", 2)
+	if err != nil {
+		t.Fatalf("publish inactive: %v", err)
 	}
-	if l := entry.entry.Locations["cluster-A"]; !l.SourceActive || l.OwnerNodeID != "node-1" {
-		t.Errorf("minimal entry: SourceActive=%v OwnerNodeID=%q, want true / node-1", l.SourceActive, l.OwnerNodeID)
+	if applied {
+		t.Fatal("stale inactive transition unexpectedly won Redis revision CAS")
+	}
+	if generation, active, ok := r.SourceGenerationSnapshot(stream, "node-old"); !ok || !active || generation != "gen-old" {
+		t.Fatalf("local state after lost CAS = generation %q active=%v ok=%v, want original active gen-old", generation, active, ok)
 	}
 }
 
-func TestAdmitAndReserve_RejectWhileSourceActive(t *testing.T) {
+// ProjectSource reports the node it REPLACED so the processor can drain it. This is the drain
+// authority: it fires on the ACTUAL projection change, so a stale projection whose owner was still
+// marked active+healthy (the plan would predict Resume) is STILL surfaced for drain once the DB admits
+// a different node. A new source or a same-node reprojection reports no prior owner.
+func TestProjectSource_ReportsPriorOwnerOnNodeChange(t *testing.T) {
+	const stream = "60546679b497415db2338cd5cae54992"
 	r := newPopulatedRegistry(t)
-	// First admit owns the stream.
-	if got := r.AdmitAndReserve("60546679b497415db2338cd5cae54992", "node-1", nil); got.Decision != AdmissionAcceptNew {
-		t.Fatalf("seed admit: %v", got.Decision)
-	}
-	// Same-node duplicate while active rejects — only PUSH_INPUT_CLOSE
-	// flips source_active to false. A second concurrent publisher on
-	// the owner node is a duplicate, not resume.
-	got := r.AdmitAndReserve("60546679b497415db2338cd5cae54992", "node-1", nil)
-	if got.Decision != AdmissionRejectDuplicate {
-		t.Errorf("same-node while active: decision = %v, want AdmissionRejectDuplicate", got.Decision)
-	}
-	// Different node — reject duplicate.
-	got = r.AdmitAndReserve("60546679b497415db2338cd5cae54992", "node-2", nil)
-	if got.Decision != AdmissionRejectDuplicate {
-		t.Errorf("different-node while active: decision = %v, want AdmissionRejectDuplicate", got.Decision)
-	}
-	// Reject path must NOT mutate state. Owner stays node-1.
-	r.mu.RLock()
-	l := r.byInt["60546679b497415db2338cd5cae54992"].entry.Locations["cluster-A"]
-	r.mu.RUnlock()
-	if l.OwnerNodeID != "node-1" {
-		t.Errorf("reject mutated owner: got %q, want node-1 untouched", l.OwnerNodeID)
-	}
-}
 
-func TestAdmitAndReserve_AcceptResumeSameNodeAfterClose(t *testing.T) {
-	r := newPopulatedRegistry(t)
-	if got := r.AdmitAndReserve("60546679b497415db2338cd5cae54992", "node-1", nil); got.Decision != AdmissionAcceptNew {
-		t.Fatalf("seed admit: %v", got.Decision)
+	// First projection: no prior owner.
+	if prior := projectSourceForTest(t, r, stream, "node-A", 100, "uuid-a", "gen-a", 1); prior != "" {
+		t.Fatalf("first projection prior owner = %q, want empty", prior)
 	}
-	r.MarkSourceInactive("60546679b497415db2338cd5cae54992", "node-1")
-
-	got := r.AdmitAndReserve("60546679b497415db2338cd5cae54992", "node-1", nil)
-	if got.Decision != AdmissionAcceptResume {
-		t.Errorf("decision = %v, want AdmissionAcceptResume", got.Decision)
+	// Same node reprojection (a resume): still no prior owner to drain.
+	if prior := projectSourceForTest(t, r, stream, "node-A", 100, "uuid-a", "gen-a2", 2); prior != "" {
+		t.Fatalf("same-node reprojection prior owner = %q, want empty", prior)
 	}
-	// Resume re-flips SourceActive to true on the same owner.
-	r.mu.RLock()
-	l := r.byInt["60546679b497415db2338cd5cae54992"].entry.Locations["cluster-A"]
-	r.mu.RUnlock()
-	if !l.SourceActive || l.OwnerNodeID != "node-1" {
-		t.Errorf("after resume: SourceActive=%v OwnerNodeID=%q, want true / node-1", l.SourceActive, l.OwnerNodeID)
-	}
-}
-
-func TestAdmitAndReserve_AcceptTakeoverDifferentNodeAfterClose(t *testing.T) {
-	r := newPopulatedRegistry(t)
-	if got := r.AdmitAndReserve("60546679b497415db2338cd5cae54992", "node-1", nil); got.Decision != AdmissionAcceptNew {
-		t.Fatalf("seed admit: %v", got.Decision)
-	}
-	r.MarkSourceInactive("60546679b497415db2338cd5cae54992", "node-1")
-
-	got := r.AdmitAndReserve("60546679b497415db2338cd5cae54992", "node-2", nil)
-	if got.Decision != AdmissionAcceptTakeover {
-		t.Fatalf("decision = %v, want AdmissionAcceptTakeover", got.Decision)
-	}
-	if got.OldOwnerNodeID != "node-1" {
-		t.Errorf("OldOwnerNodeID = %q, want node-1", got.OldOwnerNodeID)
-	}
-	// Takeover atomically flips OwnerNodeID to the new node + SourceActive=true.
-	r.mu.RLock()
-	l := r.byInt["60546679b497415db2338cd5cae54992"].entry.Locations["cluster-A"]
-	r.mu.RUnlock()
-	if !l.SourceActive || l.OwnerNodeID != "node-2" {
-		t.Errorf("after takeover: SourceActive=%v OwnerNodeID=%q, want true / node-2", l.SourceActive, l.OwnerNodeID)
-	}
-}
-
-func TestAdmitAndReserve_OwnerUnhealthyShortCircuitsActive(t *testing.T) {
-	r := newPopulatedRegistry(t)
-	if got := r.AdmitAndReserve("60546679b497415db2338cd5cae54992", "node-1", nil); got.Decision != AdmissionAcceptNew {
-		t.Fatalf("seed admit: %v", got.Decision)
-	}
-
-	// Without an ownerHealthy callback we'd reject. With node-1 reported
-	// unhealthy, we treat source as inactive and allow takeover on
-	// node-2 — safety net for a PUSH_INPUT_CLOSE that never arrived
-	// because the owner node crashed.
-	ownerHealthy := func(nodeID string) bool { return nodeID != "node-1" }
-	got := r.AdmitAndReserve("60546679b497415db2338cd5cae54992", "node-2", ownerHealthy)
-	if got.Decision != AdmissionAcceptTakeover {
-		t.Fatalf("decision = %v, want AdmissionAcceptTakeover", got.Decision)
-	}
-	if got.OldOwnerNodeID != "node-1" {
-		t.Errorf("OldOwnerNodeID = %q, want node-1", got.OldOwnerNodeID)
+	// A different node may project while the registry still shows the ended session's owner.
+	// The replaced owner must be returned for drain from the actual DB-confirmed projection.
+	// node-A MUST be reported for drain regardless of its stale active state.
+	if prior := projectSourceForTest(t, r, stream, "node-B", 200, "uuid-b", "gen-b", 3); prior != "node-A" {
+		t.Fatalf("cross-node projection prior owner = %q, want node-A (must be drained)", prior)
 	}
 }
 
@@ -157,8 +125,8 @@ func TestAdmitAndReserve_OwnerUnhealthyShortCircuitsActive(t *testing.T) {
 // a missing entry is created minimally (callers stamp only after a
 // positive resolve, so a cold local cache must not degrade the stream to
 // backstop-only offline), the first dialer wins atomically, a later
-// caller never flips ownership, and the stamp survives MarkSourceInactive
-// just like admission-stamped ownership does.
+// caller never flips ownership, and an inactive projection retains the owner
+// so aggregate offline events remain correctly typed.
 func TestMarkSourceOwnerIfUnset(t *testing.T) {
 	const internal = "60546679b497415db2338cd5cae54992"
 
@@ -186,68 +154,10 @@ func TestMarkSourceOwnerIfUnset(t *testing.T) {
 	}
 
 	// Ownership survives the source-inactive flip (reconnect/resume path).
-	r.MarkSourceInactive(internal, "node-1")
+	markSourceInactiveForTest(t, r, internal, "node-1", "", 1)
 	if got, known := r.SourceOwner(internal); !known || got != "node-1" {
 		t.Fatalf("SourceOwner after inactive = (%q, %v), want retained (node-1, true)", got, known)
 	}
-}
-
-func TestMarkSourceInactiveIgnoresWrongOwner(t *testing.T) {
-	r := newPopulatedRegistry(t)
-	r.MarkSourceOwnerIfUnset("60546679b497415db2338cd5cae54992", "node-1")
-	// Stale PUSH_INPUT_CLOSE from node-2 (e.g. replay or wrong-node leak)
-	// must not clear node-1's live ownership.
-	r.MarkSourceInactive("60546679b497415db2338cd5cae54992", "node-2")
-	got := r.AdmitAndReserve("60546679b497415db2338cd5cae54992", "node-3", nil)
-	if got.Decision != AdmissionRejectDuplicate {
-		t.Errorf("decision = %v, want AdmissionRejectDuplicate (stale close must be ignored)", got.Decision)
-	}
-}
-
-// TestAdmitAndReserve_RaceExactlyOneAccepts is the core reason this
-// function exists. N goroutines concurrently call AdmitAndReserve for the
-// same stream on different candidate nodes. Exactly one must come back
-// with an accept decision; the rest must reject. Any non-atomic split
-// of the decision read and the SourceActive flip would let multiple
-// goroutines all read SourceActive=false and all AcceptNew, producing
-// split-brain ingest.
-func TestAdmitAndReserve_RaceExactlyOneAccepts(t *testing.T) {
-	r := newPopulatedRegistry(t)
-
-	const candidates = 32
-	var accepts atomic.Int32
-	var rejects atomic.Int32
-	var wg sync.WaitGroup
-	wg.Add(candidates)
-	start := make(chan struct{})
-
-	for i := 0; i < candidates; i++ {
-		nodeID := nodeName(i)
-		go func() {
-			defer wg.Done()
-			<-start
-			res := r.AdmitAndReserve("60546679b497415db2338cd5cae54992", nodeID, nil)
-			switch res.Decision {
-			case AdmissionAcceptNew, AdmissionAcceptResume, AdmissionAcceptTakeover:
-				accepts.Add(1)
-			case AdmissionRejectDuplicate:
-				rejects.Add(1)
-			}
-		}()
-	}
-	close(start)
-	wg.Wait()
-
-	if accepts.Load() != 1 {
-		t.Errorf("accepts = %d, want exactly 1", accepts.Load())
-	}
-	if rejects.Load() != candidates-1 {
-		t.Errorf("rejects = %d, want %d", rejects.Load(), candidates-1)
-	}
-}
-
-func nodeName(i int) string {
-	return "node-" + string(rune('a'+i%26)) + string(rune('a'+(i/26)%26))
 }
 
 func TestRuntimeNameForStream(t *testing.T) {

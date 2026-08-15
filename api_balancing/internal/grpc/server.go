@@ -131,8 +131,6 @@ type FoghornGRPCServer struct {
 	// fanOutShared dedups + memoizes cold QueryStream fan-outs per
 	// (tenant, stream), same machinery as the HTTP /play path.
 	fanOutShared    *balancer.SharedFanOut
-	pendingDVRStops map[string]time.Time
-	pendingDVRMu    sync.Mutex
 	originPullMu    sync.Mutex
 	originPulling   map[string]struct{}
 	artifactCleaner *artifacts.Cleaner
@@ -178,17 +176,16 @@ func NewFoghornGRPCServer(
 	purserClient *purserclient.GRPCClient,
 ) *FoghornGRPCServer {
 	return &FoghornGRPCServer{
-		db:              db,
-		logger:          logger,
-		lb:              lb,
-		geoipReader:     geoReader,
-		geoipCache:      geoCache,
-		decklogClient:   decklogClient,
-		s3Client:        s3Client,
-		purserClient:    purserClient,
-		fanOutShared:    balancer.NewSharedFanOut(5 * time.Second),
-		pendingDVRStops: make(map[string]time.Time),
-		originPulling:   make(map[string]struct{}),
+		db:            db,
+		logger:        logger,
+		lb:            lb,
+		geoipReader:   geoReader,
+		geoipCache:    geoCache,
+		decklogClient: decklogClient,
+		s3Client:      s3Client,
+		purserClient:  purserClient,
+		fanOutShared:  balancer.NewSharedFanOut(5 * time.Second),
+		originPulling: make(map[string]struct{}),
 	}
 }
 
@@ -440,41 +437,6 @@ func (a *remoteArtifactAdapter) GetRemoteArtifacts(ctx context.Context, artifact
 	return infos, nil
 }
 
-func (s *FoghornGRPCServer) RegisterPendingDVRStop(internalName string) {
-	if internalName == "" {
-		return
-	}
-	if s.redisStore != nil {
-		if err := s.redisStore.RegisterPendingDVRStop(context.Background(), internalName, time.Now()); err != nil {
-			s.logger.WithError(err).WithField("internal_name", internalName).Warn("Failed to register pending DVR stop in Redis")
-		}
-		return
-	}
-	s.pendingDVRMu.Lock()
-	s.pendingDVRStops[internalName] = time.Now()
-	s.pendingDVRMu.Unlock()
-}
-
-func (s *FoghornGRPCServer) consumePendingDVRStop(internalName string) bool {
-	if internalName == "" {
-		return false
-	}
-	if s.redisStore != nil {
-		ok, err := s.redisStore.ConsumePendingDVRStop(context.Background(), internalName)
-		if err != nil {
-			s.logger.WithError(err).WithField("internal_name", internalName).Warn("Failed to consume pending DVR stop from Redis")
-		}
-		return ok
-	}
-	s.pendingDVRMu.Lock()
-	_, ok := s.pendingDVRStops[internalName]
-	if ok {
-		delete(s.pendingDVRStops, internalName)
-	}
-	s.pendingDVRMu.Unlock()
-	return ok
-}
-
 func (s *FoghornGRPCServer) emitDVRStartFailure(req *sharedpb.StartDVRRequest, reason string) {
 	// No foghorn.artifacts row exists yet at the early-validation failures that call this
 	// (source/storage resolution rejects before the DVR INSERT), so there is no state row to
@@ -684,8 +646,7 @@ func (s *FoghornGRPCServer) dvrClusterPolicy() *dvrpolicy.Cluster {
 	}
 }
 
-// emitRoutingEvent sends a routing decision event via the shared builder.
-// Delegates to handlers.SendRoutingEvent with the server's decklog client.
+// emitRoutingEvent submits a routing decision to the shared bounded queue.
 func (s *FoghornGRPCServer) emitRoutingEvent(
 	primary *sharedpb.ViewerEndpoint,
 	viewerLat, viewerLon, nodeLat, nodeLon float64,
@@ -703,7 +664,7 @@ func (s *FoghornGRPCServer) emitRoutingEvent(
 		selectedNode = primary.Url
 	}
 
-	go handlers.SendRoutingEvent(s.decklogClient, &handlers.RoutingEvent{
+	handlers.EnqueueRoutingEvent(s.decklogClient, &handlers.RoutingEvent{
 		Status:          "success",
 		Details:         "grpc_resolve",
 		Score:           uint64(primary.LoadScore),
@@ -1612,6 +1573,100 @@ func (s *FoghornGRPCServer) StartDVRWithSourceHint(ctx context.Context, req *sha
 	return s.startDVR(ctx, req, sourceNodeID)
 }
 
+// dvrRecordingSupersededSession reports whether an existing active DVR row belongs to
+// a DIFFERENT ingest session than the one now starting — so the caller records fresh
+// instead of adopting it. When both sides carry an ingest generation it compares those
+// (a PRECISE session identity: tenant + node + connector PID), which correctly treats a
+// same-node reconnect — new connector PID → new generation — as a new session. When a
+// generation is missing (legacy row, or the PID was unavailable) it falls back to the
+// node-only comparison. Conservative: a missing/unparseable descriptor returns false so
+// a genuine same-session retry keeps the already_started/reconcile path.
+func dvrRecordingSupersededSession(dispatch sql.NullString, liveSourceNodeID, liveIngestGeneration string) bool {
+	if !dispatch.Valid || dispatch.String == "" {
+		return false
+	}
+	var d jobs.DVRStartDispatch
+	if err := json.Unmarshal([]byte(dispatch.String), &d); err != nil {
+		return false
+	}
+	if liveIngestGeneration != "" && d.IngestGeneration != "" {
+		return d.IngestGeneration != liveIngestGeneration
+	}
+	if liveSourceNodeID == "" {
+		return false
+	}
+	return d.SourceNodeID != "" && d.SourceNodeID != liveSourceNodeID
+}
+
+// respondExistingActiveDVR returns the correct start response for an already-active
+// DVR row for this stream: the honest reconciled in-flight state for a
+// requested/starting row (never a false already_started-dead), or already_started
+// for a confirmed recording. Shared by the up-front existing-active check and the
+// concurrency-loser path so a duplicate start always resolves to the winner.
+//
+// Storage placement is read from the EXISTING recording's own durable descriptor,
+// NOT the caller's freshly-selected storage — a concurrency loser (or a retry that
+// re-ran placement) may have picked a different storage node than where the winner
+// actually records, and StorageNodeId is forwarded to the API caller.
+func (s *FoghornGRPCServer) respondExistingActiveDVR(ctx context.Context, req *sharedpb.StartDVRRequest, existingHash, existingStatus, ingestHost string) (*sharedpb.StartDVRResponse, error) {
+	playbackID := ""
+	if control.CommodoreClient != nil {
+		if resp, errResolve := control.CommodoreClient.ResolveDVRHash(ctx, existingHash); errResolve == nil && resp.Found {
+			playbackID = resp.PlaybackId
+		}
+	}
+	// Resolve the EXISTING recording's own storage placement from its durable
+	// descriptor. This read is the whole reason the function exists (to return the
+	// WINNER's placement to a loser/retry), so it FAILS CLOSED — a DB error, a null
+	// descriptor, or an undecodable one returns an error rather than an
+	// apparently-valid response with empty storage. Tenant-scoped per the multi-tenant
+	// query contract.
+	storageHost, storageNodeID := "", ""
+	var dispatch sql.NullString
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT dvr_start_dispatch FROM foghorn.artifacts WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND tenant_id::text = $2
+	`, existingHash, req.GetTenantId()).Scan(&dispatch); err != nil {
+		return nil, status.Errorf(codes.Internal, "resolve existing DVR placement: %v", err)
+	}
+	if !dispatch.Valid || dispatch.String == "" {
+		return nil, status.Error(codes.Internal, "existing DVR has no start descriptor")
+	}
+	var d jobs.DVRStartDispatch
+	if err := json.Unmarshal([]byte(dispatch.String), &d); err != nil {
+		return nil, status.Errorf(codes.Internal, "decode existing DVR descriptor: %v", err)
+	}
+	// node_id is a required descriptor field: an empty one (e.g. a valid but empty
+	// {} descriptor) would return a success with no storage placement, which the API
+	// forwards to the caller. Fail closed instead.
+	if d.NodeID == "" {
+		return nil, status.Error(codes.Internal, "existing DVR descriptor has no storage node")
+	}
+	storageNodeID = d.NodeID
+	storageHost = d.NodeBaseURL
+	if existingStatus == "starting" || existingStatus == "requested" {
+		reconciledStatus, recErr := s.reconcileStartingDVR(ctx, req, existingHash)
+		if recErr != nil {
+			return nil, recErr
+		}
+		return &sharedpb.StartDVRResponse{
+			Status:        reconciledStatus,
+			DvrHash:       existingHash,
+			IngestHost:    ingestHost,
+			StorageHost:   storageHost,
+			StorageNodeId: storageNodeID,
+			PlaybackId:    playbackID,
+		}, nil
+	}
+	return &sharedpb.StartDVRResponse{
+		Status:        "already_started",
+		DvrHash:       existingHash,
+		IngestHost:    ingestHost,
+		StorageHost:   storageHost,
+		StorageNodeId: storageNodeID,
+		PlaybackId:    playbackID,
+	}, nil
+}
+
 func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVRRequest, sourceNodeHint string) (resp *sharedpb.StartDVRResponse, retErr error) {
 	if req.InternalName == "" {
 		return nil, status.Error(codes.InvalidArgument, "internal_name is required")
@@ -1682,47 +1737,37 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 	// attempt left in 'starting' (the storage node was told to record but the durable transition was
 	// never confirmed). Do NOT blindly report already_started for that: reconcile it below.
 	var existingHash, existingStatus string
-	_ = s.db.QueryRowContext(ctx, `
-		SELECT artifact_hash, status FROM foghorn.artifacts
+	var existingDispatch sql.NullString
+	if scanErr := s.db.QueryRowContext(ctx, `
+		SELECT artifact_hash, status, dvr_start_dispatch FROM foghorn.artifacts
 		WHERE stream_internal_name=$1 AND artifact_type='dvr' AND status IN ('requested','starting','recording') AND tenant_id = $2
 		ORDER BY created_at DESC LIMIT 1
-	`, req.InternalName, req.TenantId).Scan(&existingHash, &existingStatus)
+	`, req.InternalName, req.TenantId).Scan(&existingHash, &existingStatus, &existingDispatch); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+		// Unexpected DB error (not "no active DVR"): log and proceed as if none exists;
+		// a genuine duplicate is still caught by the advisory-lock re-check below.
+		s.logger.WithError(scanErr).WithField("internal_name", req.InternalName).Warn("Failed to check for existing active DVR")
+	}
+
+	if existingHash != "" && dvrRecordingSupersededSession(existingDispatch, sourceNodeID, req.GetIngestGeneration()) {
+		// An ingest session is node-bound. This active DVR (any active status) was
+		// started for a DIFFERENT source node than the one now live for the stream,
+		// so it belongs to a superseded prior session (a reconnect is a new session,
+		// here on another node). Do NOT adopt it and do NOT stop it from here: the
+		// prior session's own STREAM_END finalizes it node-locally via
+		// StopDVRForEndedSource, independent of stream ownership. Fall through and
+		// record the new session fresh, instead of returning a false already_started
+		// against a push that no longer captures anything.
+		s.logger.WithFields(logging.Fields{
+			"internal_name":     req.InternalName,
+			"superseded_dvr":    existingHash,
+			"superseded_status": existingStatus,
+			"live_source_node":  sourceNodeID,
+		}).Info("Existing DVR belongs to a superseded ingest session on another node; recording the new session fresh")
+		existingHash = "" // fall through to create the new session's recording
+	}
 
 	if existingHash != "" {
-		playbackID := ""
-		if control.CommodoreClient != nil {
-			if resp, errResolve := control.CommodoreClient.ResolveDVRHash(ctx, existingHash); errResolve == nil && resp.Found {
-				playbackID = resp.PlaybackId
-			}
-		}
-		if existingStatus == "starting" || existingStatus == "requested" {
-			// Reconcile the unconfirmed prior attempt instead of returning a false already_started. A
-			// 'requested' row now also carries the durable dvr_start_dispatch descriptor (written with the
-			// insert), so the recovery worker can resume it — a retry must return the HONEST in-flight state,
-			// never already_started-dead. reconcileStartingDVR reports "already_started" only if the node
-			// already confirmed (row is 'recording'), "starting" if still in flight ('requested'/'starting'),
-			// or an error if the row went terminal. It never optimistically promotes to 'recording'.
-			reconciledStatus, recErr := s.reconcileStartingDVR(ctx, req, existingHash)
-			if recErr != nil {
-				return nil, recErr
-			}
-			return &sharedpb.StartDVRResponse{
-				Status:        reconciledStatus,
-				DvrHash:       existingHash,
-				IngestHost:    baseURL,
-				StorageHost:   storageHost,
-				StorageNodeId: storageNodeID,
-				PlaybackId:    playbackID,
-			}, nil
-		}
-		return &sharedpb.StartDVRResponse{
-			Status:        "already_started",
-			DvrHash:       existingHash,
-			IngestHost:    baseURL,
-			StorageHost:   storageHost,
-			StorageNodeId: storageNodeID,
-			PlaybackId:    playbackID,
-		}, nil
+		return s.respondExistingActiveDVR(ctx, req, existingHash, existingStatus, baseURL)
 	}
 
 	// Register DVR in Commodore business registry to get hash
@@ -1840,6 +1885,8 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 		NodeBaseURL:       storageHost,
 		SourceRuntimeName: sourceStreamName,
 		SourceBaseURL:     sourceBaseURL,
+		SourceNodeID:      sourceNodeID,
+		IngestGeneration:  req.GetIngestGeneration(),
 		SegmentSeconds:    int32(effective.SegmentDurationSeconds),
 		WindowSeconds:     int32(effective.DVRWindowSeconds),
 		MaxEntries:        int32(effective.MaxEntries),
@@ -1860,32 +1907,79 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 	// with a forever-'accepted' intent; committing them together removes that window.
 	// On failure the deferred finalizer records 'rejected' and the Commodore sweep
 	// removes the catalog-only dvr_recordings row on abort — no best-effort cleanup here.
+	// errDVRRaceLost aborts the insert tx when a CONCURRENT start already created an
+	// active DVR for this (stream, source node) during the RegisterDVR window. The
+	// first existing-active check ran before RegisterDVR, so two starts (auto-record
+	// + manual, or retries) can both pass it and reach here. A transactional
+	// advisory lock keyed on (stream, source node) serializes those, and the loser
+	// re-check finds the winner's row and abandons its own minted hash (the deferred
+	// finalizer records 'rejected'; the Commodore sweep removes the orphaned intent).
+	var raceWinnerHash, raceWinnerStatus string
+	errDVRRaceLost := errors.New("dvr start lost concurrent race")
 	if txErr := s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
+		// Serialize concurrent starts for the same session (auto-record + manual, or
+		// retries): the duplicate-start re-check and the insert run under one advisory
+		// lock, so two starts cannot both pass the check and register duplicate DVRs.
+		if _, lockErr := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, control.DVRStartLockKey(req.InternalName, sourceNodeID)); lockErr != nil {
+			return lockErr
+		}
+		// Re-check under the lock: a concurrent winner may have inserted its row after
+		// our up-front check. Key on the INGEST GENERATION when present so only a true
+		// duplicate/retry of THIS publisher session is treated as the winner — a same-node
+		// reconnect (same source node, NEW generation) must NOT match the prior session's
+		// row and get adopted. When no generation is present (manual/legacy start) fall
+		// back to source-node scoping. The uq_foghorn_artifacts_active_dvr_per_generation
+		// index is the durable backstop if two starts for one generation still race here.
+		var wHash, wStatus string
+		reErr := tx.QueryRowContext(ctx, `
+			SELECT artifact_hash, status FROM foghorn.artifacts
+			WHERE stream_internal_name=$1 AND artifact_type='dvr'
+			      AND status IN ('requested','starting','recording')
+			      AND tenant_id=$2
+			      AND (
+			          ($4 <> '' AND ingest_generation = $4::uuid)
+			          OR ($4 = '' AND dvr_start_dispatch->>'source_node_id'=$3)
+			      )
+			ORDER BY created_at DESC LIMIT 1
+		`, req.InternalName, req.TenantId, sourceNodeID, req.GetIngestGeneration()).Scan(&wHash, &wStatus)
+		if reErr == nil {
+			raceWinnerHash, raceWinnerStatus = wHash, wStatus
+			return errDVRRaceLost
+		} else if !errors.Is(reErr, sql.ErrNoRows) {
+			return reErr
+		}
 		if _, execErr := tx.ExecContext(ctx, `
 			INSERT INTO foghorn.artifacts (
 				artifact_hash, artifact_type, stream_internal_name, internal_name,
 				stream_id, tenant_id, user_id,
 				status, request_id, format, origin_cluster_id,
 				dvr_window_seconds, dvr_chapter_mode, dvr_chapter_interval, dvr_retention_days, dvr_processes_json,
-				dvr_start_dispatch,
+				dvr_start_dispatch, ingest_generation,
 				created_at, updated_at
 			)
 			VALUES ($1, 'dvr', $2, $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, NULLIF($6, '')::uuid,
 			        'requested', $7, 'm3u8', $8, $9, NULLIF($10, '')::text, NULLIF($11, 0)::int, NULLIF($12, 0)::int, NULLIF($13, '')::text,
-			        $14::jsonb,
+			        $14::jsonb, NULLIF($15, '')::uuid,
 			        NOW(), NOW())
 		`,
 			dvrHash, req.InternalName, artifactInternalName, streamID, req.TenantId, req.GetUserId(), requestID, dvrCluster,
 			effective.DVRWindowSeconds, chapterMode, chapterInterval, retentionDays, dvrProcessesJSON,
-			string(dispatchJSON),
+			string(dispatchJSON), req.GetIngestGeneration(),
 		); execErr != nil {
 			return execErr
 		}
 		// Composed into the SAME tx so the 'committed' ledger row (with the artifact's
 		// catalog_revision, read from the row just inserted above) is durable together
 		// with the DVR artifact.
-		return recordCreationCommandCommitted(ctx, tx, intentRequestID, req.TenantId, "dvr", dvrHash)
+		if cmdErr := recordCreationCommandCommitted(ctx, tx, intentRequestID, req.TenantId, "dvr", dvrHash); cmdErr != nil {
+			return cmdErr
+		}
+		return nil
 	}); txErr != nil {
+		if errors.Is(txErr, errDVRRaceLost) {
+			// The deferred finalizer records 'rejected' for our abandoned intent.
+			return s.respondExistingActiveDVR(ctx, req, raceWinnerHash, raceWinnerStatus, baseURL)
+		}
 		s.logger.WithFields(logging.Fields{
 			"dvr_hash":      dvrHash,
 			"internal_name": req.InternalName,
@@ -1896,40 +1990,6 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 	// The DVR artifact row and its 'committed' ledger row committed together; the
 	// deferred finalizer must not now record a contradictory 'rejected'.
 	ledgerProg.committed = true
-
-	if s.consumePendingDVRStop(req.InternalName) {
-		final, finalErr := control.FinalizeDVR(ctx, dvrHash, control.FinalizeOptions{
-			ReportedStatus: "failed",
-			ReportedError:  "stream ended before DVR start",
-			StorageNodeID:  storageNodeID,
-		})
-		if finalErr != nil && final.ArtifactStatus == "" {
-			s.logger.WithError(finalErr).WithField("dvr_hash", dvrHash).Error("Failed to finalize DVR after pending stream stop")
-			return nil, status.Error(codes.Internal, "failed to finalize stopped DVR")
-		}
-		if finalErr != nil {
-			s.logger.WithError(finalErr).WithFields(logging.Fields{
-				"dvr_hash":     dvrHash,
-				"final_status": final.ArtifactStatus,
-			}).Warn("Pending-stop DVR finalized with follow-up error")
-		}
-		responseStatus := final.ArtifactStatus
-		if responseStatus == "" {
-			responseStatus = "failed"
-		}
-		// control.FinalizeDVR (called above) enqueues the terminal STOPPED lifecycle event INSIDE its
-		// own finalize transaction (see dvr_finalize.go), so the state transition and its event commit
-		// atomically. A second independent enqueue here would produce a DUPLICATE STOPPED event, so we
-		// deliberately do not emit one on this pending-stop path.
-		return &sharedpb.StartDVRResponse{
-			Status:        responseStatus,
-			DvrHash:       dvrHash,
-			IngestHost:    baseURL,
-			StorageHost:   storageHost,
-			StorageNodeId: storageNodeID,
-			PlaybackId:    playbackID,
-		}, nil
-	}
 
 	// Store node assignment in foghorn.artifact_nodes. The recording
 	// node is the origin (writes segments as they land); is_complete
@@ -1978,10 +2038,22 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 	// matches zero rows (a concurrent stop/finalize already moved the row terminal), we MUST NOT send the
 	// external start command: launching a recording with no durable backing is exactly the inconsistency
 	// this ordering prevents. Return an error; nothing was sent, so there is nothing to compensate.
+	// The NOT EXISTS clause is the close-before-start fence: if the publisher's
+	// PUSH_INPUT_CLOSE already ended this recording's ingest generation while the
+	// start was in flight, the transition matches zero rows and no start command is
+	// sent — we never command a writer that nothing will stop. Recordings with no
+	// bound generation (ingest_generation IS NULL) are unaffected. The insert above
+	// is already committed, so a concurrent close's StopDVRForIngestSession can see
+	// this row; this fence only covers the narrow window where the close's stop ran
+	// before our insert committed and thus found nothing to claim.
 	startingRes, startingErr := s.db.ExecContext(ctx, `
 		UPDATE foghorn.artifacts
 		   SET status = 'starting', dvr_start_dispatch = $3::jsonb, updated_at = NOW()
 		 WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND tenant_id = $2 AND status = 'requested'
+		   AND NOT EXISTS (
+		       SELECT 1 FROM foghorn.ingest_sessions s
+		        WHERE s.id = foghorn.artifacts.ingest_generation AND s.ended_at IS NOT NULL
+		   )
 	`, dvrHash, req.TenantId, string(dispatchJSON))
 	if startingErr != nil {
 		s.logger.WithError(startingErr).WithFields(logging.Fields{
@@ -1996,6 +2068,32 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 		return nil, status.Error(codes.Internal, "failed to persist DVR start command attempt")
 	}
 	if startingRows == 0 {
+		// Zero rows means either a concurrent stop/finalize already advanced the row, or
+		// the close-before-start fence blocked the transition because this ingest
+		// generation ended. Re-read to tell them apart: a row still 'requested' is the
+		// fence firing on a row no stop path ever claimed (the close's stop ran before our
+		// insert committed), so we own its finalization — leaving it 'requested' would
+		// orphan a recording that was never commanded. A row already advanced is owned by
+		// the concurrent stop path, which finalizes it.
+		var curStatus string
+		reReadErr := s.db.QueryRowContext(ctx, `
+			SELECT status FROM foghorn.artifacts WHERE artifact_hash = $1 AND tenant_id = $2
+		`, dvrHash, req.TenantId).Scan(&curStatus)
+		if reReadErr == nil && curStatus == "requested" {
+			s.logger.WithFields(logging.Fields{
+				"dvr_hash":          dvrHash,
+				"tenant_id":         req.TenantId,
+				"ingest_generation": req.GetIngestGeneration(),
+			}).Info("Ingest session ended before DVR start dispatch (close-before-start); finalizing without commanding a recording")
+			if final, finalErr := control.FinalizeDVR(ctx, dvrHash, control.FinalizeOptions{
+				ReportedStatus: "failed",
+				ReportedError:  "ingest session ended before DVR start dispatch (close-before-start)",
+				StorageNodeID:  storageNodeID,
+			}); finalErr != nil && final.ArtifactStatus == "" {
+				s.logger.WithError(finalErr).WithField("dvr_hash", dvrHash).Error("Failed to finalize DVR after close-before-start")
+			}
+			return nil, status.Error(codes.FailedPrecondition, "ingest session ended before DVR start dispatch")
+		}
 		// The row left 'requested' before we could claim it (concurrent stop/finalize). Do not send.
 		s.logger.WithFields(logging.Fields{
 			"dvr_hash":  dvrHash,
@@ -2015,6 +2113,7 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 		RequestId:         dvrHash,
 		Config:            config,
 		StreamId:          streamID,
+		CommandGeneration: control.DVRStartCommandGeneration,
 	}
 
 	if err := control.SendDVRStart(storageNodeID, dvrReq); err != nil {
@@ -2296,29 +2395,26 @@ func (s *FoghornGRPCServer) StopDVR(ctx context.Context, req *sharedpb.StopDVRRe
 		}, nil
 	}
 
-	if nodeID == "" {
-		return nil, status.Error(codes.Unavailable, "no storage node available for this DVR")
+	// Claim-before-send via the shared primitive: durably record status='stopping' +
+	// stop_pending (guarded on active status, so a fast DVRStopped that already finalized
+	// this row is NOT overwritten back to 'stopping') BEFORE dispatching, then send
+	// best-effort. A lost/accepted send is redriven by DVRStartingRecoveryJob, so a durable
+	// claim is a real success — no more send-then-write with a silently-swallowed DB error.
+	claims, claimErr := control.ClaimDVRStops(ctx, s.db,
+		`artifact_hash = $1 AND tenant_id = $2`, req.DvrHash, req.GetTenantId())
+	if claimErr != nil {
+		s.logger.WithError(claimErr).WithField("dvr_hash", req.DvrHash).Error("Failed to claim DVR stop obligation")
+		return nil, status.Error(codes.Internal, "failed to claim DVR stop obligation")
 	}
-
-	// Send stop command to storage Helmsman
-	stopReq := &ipcpb.DVRStopRequest{
-		DvrHash:   req.DvrHash,
-		RequestId: req.DvrHash,
+	if len(claims) == 0 {
+		// The row went terminal between the status read above and the claim (a concurrent
+		// finalize). Nothing active to stop — report honestly rather than a false 'stopping'.
+		return &sharedpb.StopDVRResponse{
+			Success: false,
+			Message: "DVR recording already finishing",
+		}, nil
 	}
-
-	if errStop := control.SendDVRStop(nodeID, stopReq); errStop != nil {
-		return nil, status.Errorf(codes.Unavailable, "storage node unavailable: %v", errStop)
-	}
-
-	// Update status in foghorn.artifacts
-	_, err = s.db.ExecContext(ctx, `
-		UPDATE foghorn.artifacts SET status = 'stopping', updated_at = NOW()
-		WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND tenant_id = $2
-	`, req.DvrHash, req.GetTenantId())
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to update DVR status to stopping")
-	}
-
+	control.DispatchDVRStops(claims, s.logger)
 	return &sharedpb.StopDVRResponse{
 		Success: true,
 		Message: "DVR recording stopping",
@@ -2391,21 +2487,19 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteD
 		ORDER BY last_seen_at DESC LIMIT 1
 	`, req.DvrHash).Scan(&nodeID)
 
-	// If still recording, stop it first
+	// If still recording, DURABLY claim the stop obligation before the terminal delete —
+	// routed through the same claim-before-send primitive as every other stop path, not a
+	// best-effort raw send whose failure was swallowed. The obligation (stop_pending) is
+	// durable, so a lost send is redriven by DVRStartingRecoveryJob rather than leaving a
+	// live Mist writer behind a deleted row.
 	if dvrStatus == "recording" || dvrStatus == "requested" || dvrStatus == "starting" {
-		if nodeID != "" {
-			stopReq := &ipcpb.DVRStopRequest{
-				DvrHash:   req.DvrHash,
-				RequestId: req.DvrHash,
-			}
-			if errStop := control.SendDVRStop(nodeID, stopReq); errStop != nil {
-				s.logger.WithFields(logging.Fields{
-					"dvr_hash": req.DvrHash,
-					"node_id":  nodeID,
-					"error":    errStop,
-				}).Warn("Failed to send DVR stop before delete")
-			}
+		claims, claimErr := control.ClaimDVRStops(ctx, s.db,
+			`artifact_hash = $1 AND tenant_id = $2`, req.DvrHash, req.GetTenantId())
+		if claimErr != nil {
+			s.logger.WithError(claimErr).WithField("dvr_hash", req.DvrHash).Error("Failed to claim DVR stop before delete")
+			return nil, status.Error(codes.Internal, "failed to claim DVR stop before delete")
 		}
+		control.DispatchDVRStops(claims, s.logger)
 	}
 
 	// DURABLE STATE FIRST: soft-delete the parent DVR, cascade its child chapter artifacts, and

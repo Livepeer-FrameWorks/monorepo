@@ -73,20 +73,17 @@ type FederationServer struct {
 	artifactHandler ArtifactCommandHandler
 	peerManager     PeerAddrResolver
 	fedClient       *FederationClient
-	// allowFederationMutations is the central gate for the ENTIRE inbound cross-cluster RPC surface. It is OFF
-	// by default: the shared federation service token proves only auth_type==service and carries no trustworthy
-	// caller cluster (requesting_cluster is self-declared), so no caller can be authorized for another cluster's
-	// tenant data — not even for reads, since QueryStream leaks routing data and PrepareArtifact can hand back a
-	// presigned URL / relay grant. Every inbound RPC calls federationMutationsDisabled() after service auth and
-	// fails closed when this is false, so the surface is disabled as ONE policy. There is intentionally NO
-	// read-only allowlist until cluster-bound identity + tenant entitlement exist.
+	// allowFederationMutations is the central gate for the entire inbound cross-cluster RPC surface. Production
+	// enables it only with FEDERATION_ENABLED, where the shared service token is restricted to provider-operated
+	// Foghorns. Self-hosted Helmsmans do not receive that credential or participate in federation. Cluster IDs are
+	// routing attribution inside this first-party trust boundary, not cryptographic caller identity; third-party
+	// Foghorns require the service-identity-and-cluster-binding RFC before joining it.
 	//
 	//   GATED (all inbound RPCs): QueryStream, PrepareArtifact, NotifyOriginPull, PeerChannel, MintStorageURLs,
 	//   CreateRemoteClip, CreateRemoteDVR, DeleteStorageObjects, ForwardArtifactCommand, MigrateArtifactMetadata,
 	//   ListTenantArtifacts.
 	//
-	// In the single-provider release FEDERATION_ENABLED is false so the server is not even registered; this
-	// default only matters for a federation-enabled deployment that has not opted into the surface.
+	// The zero value remains fail-closed for disabled deployments and focused server construction in tests.
 	allowFederationMutations bool
 
 	// Storage-cluster ownership inputs. Both PrepareArtifact (read-side
@@ -178,9 +175,8 @@ type FederationServerConfig struct {
 	LocalS3Backing    S3Backing
 	AdvertisedBacking AdvertisedBackingFunc
 	IsServedCluster   func(clusterID string) bool
-	// AllowFederationMutations enables the ENTIRE inbound federation RPC surface (see the full list on
-	// FederationServer.allowFederationMutations). Leave false (the default) until cluster-bound federation
-	// identity + tenant entitlement exist; every inbound RPC fails closed while it is false.
+	// AllowFederationMutations enables the entire inbound federation RPC surface for provider-controlled
+	// Foghorns. The entrypoint sets it with FEDERATION_ENABLED; its zero value remains fail-closed.
 	AllowFederationMutations bool
 }
 
@@ -206,9 +202,8 @@ func NewFederationServer(cfg FederationServerConfig) *FederationServer {
 	}
 }
 
-// federationMutationsDisabled reports whether the cross-cluster mutation surface is fail-closed. Every mutation
-// / enumeration RPC calls this right after service auth and returns a benign not-handled response when true, so
-// the whole surface is disabled as a unit rather than one RPC at a time. See allowFederationMutations.
+// federationMutationsDisabled reports whether the cross-cluster surface is fail-closed. Every inbound RPC calls
+// this after service auth so FEDERATION_ENABLED disables and enables the surface as one unit.
 func (s *FederationServer) federationMutationsDisabled() bool {
 	return !s.allowFederationMutations
 }
@@ -266,9 +261,7 @@ func (s *FederationServer) QueryStream(ctx context.Context, req *foghornfederati
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
 	}
-	// FAIL CLOSED with the rest of the surface: this exposes routing/edge data to a self-declared caller
-	// cluster the shared service token cannot authenticate. No RPC is a safe read-only allowlist until
-	// cluster-bound identity exists.
+	// Keep the entire surface fail-closed when federation is disabled, including read-side routing data.
 	if s.federationMutationsDisabled() {
 		return nil, status.Error(codes.FailedPrecondition, "federation_mutations_disabled")
 	}
@@ -381,8 +374,7 @@ func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *foghornfed
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
 	}
-	// FAIL CLOSED with the mutation surface: this drives cross-cluster origin-pull replication (a control
-	// mutation of routing state) and the shared service token cannot bind the caller cluster.
+	// Origin-pull routing changes are governed by the same all-or-nothing federation gate.
 	if s.federationMutationsDisabled() {
 		return &foghornfederationpb.OriginPullAck{Accepted: false, Reason: "federation_mutations_disabled"}, nil
 	}
@@ -553,9 +545,7 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *foghornfede
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
 	}
-	// FAIL CLOSED with the rest of the surface: this trusts a caller-supplied tenant/hash and can hand back a
-	// presigned object URL or a relay capability, so it is NOT a safe read-only RPC under the shared service
-	// token. Gated until cluster-bound caller identity + tenant entitlement exist.
+	// Keep presigned URLs and relay capabilities behind the same federation gate as mutation RPCs.
 	if s.federationMutationsDisabled() {
 		return nil, status.Error(codes.FailedPrecondition, "federation_mutations_disabled")
 	}
@@ -849,8 +839,7 @@ func (s *FederationServer) MintStorageURLs(ctx context.Context, req *foghornfede
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
 	}
-	// FAIL CLOSED with the mutation surface: this mints WRITE (PUT) URLs against a storage cluster, and the
-	// shared service token cannot bind the caller cluster. Disabled by default.
+	// Storage writes are governed by the same all-or-nothing federation gate.
 	if s.federationMutationsDisabled() {
 		s.recordStorageMint("federation_mutations_disabled")
 		return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "federation_mutations_disabled"}, nil
@@ -954,12 +943,10 @@ func (s *FederationServer) DeleteStorageObjects(ctx context.Context, req *foghor
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
 	}
-	// FAIL CLOSED at the boundary: this RPC destructively deletes provider bytes, but the shared service token
-	// does not bind the caller to requesting_cluster, so it cannot authorize cross-cluster deletion. Disabled by
-	// default with the rest of the mutation surface until cluster-bound identity lands (workload-identity RFC).
+	// Cross-cluster deletion is available only inside the enabled provider-operated federation trust boundary.
 	if s.federationMutationsDisabled() {
 		s.logger.WithField("requesting_cluster", req.GetRequestingCluster()).
-			Warn("DeleteStorageObjects: federation mutations are disabled (no cluster-bound caller identity)")
+			Warn("DeleteStorageObjects: federation surface is disabled")
 		return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: false, Reason: "federation_mutations_disabled"}, nil
 	}
 	if req.GetTenantId() == "" {
@@ -1129,13 +1116,9 @@ func dvrPrefixMatchesHash(prefix, hash string) bool {
 
 // tenantMatchesLocalRow FAILS CLOSED: it returns true only when a local foghorn.artifacts row for the hash
 // exists AND its tenant_id matches the claimed tenant. A missing row, a NULL tenant, or a nil DB all return
-// false — a destructive delete under the shared federation service token must bind to a positive local tenant
-// match, not proceed on absence.
+// false — a destructive delete must bind to a positive local tenant match, not proceed on absence.
 func (s *FederationServer) tenantMatchesLocalRow(ctx context.Context, artifactHash, claimedTenant string) bool {
-	// FAIL CLOSED. A destructive delete under the shared federation service token (requesting_cluster is
-	// self-declared, not yet cluster-bound — that is the workload-identity RFC) must be able to POSITIVELY bind
-	// the target to the claimed tenant against THIS provider's own row. No DB, no local row, or a NULL tenant
-	// means we cannot prove ownership → reject, rather than trusting a caller-supplied shape.
+	// No DB, local row, or tenant means ownership cannot be proved, so reject instead of trusting request shape.
 	if s.db == nil {
 		return false
 	}
@@ -1428,9 +1411,7 @@ func (s *FederationServer) PeerChannel(stream foghornfederationpb.FoghornFederat
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return err
 	}
-	// FAIL CLOSED with the mutation surface: PeerChannel accepts inbound telemetry/replication events that
-	// mutate routing state (EdgeTelemetry, ReplicationEvent, StreamLifecycle, artifact/stream advertisements),
-	// and the shared service token cannot authenticate the peer cluster. Disabled by default.
+	// Telemetry and routing mutations are governed by the same all-or-nothing federation gate.
 	if s.federationMutationsDisabled() {
 		return status.Error(codes.FailedPrecondition, "federation_mutations_disabled")
 	}
@@ -1541,28 +1522,23 @@ func (s *FederationServer) handleReplicationEvent(ctx context.Context, peerClust
 }
 
 func (s *FederationServer) handleStreamLifecycle(ctx context.Context, peerClusterID string, ev *foghornfederationpb.StreamLifecycleEvent) {
-	if ev.GetIsLive() {
-		clusterID := peerClusterID
-		if clusterID == "" {
-			clusterID = ev.GetClusterId()
-		}
-		if err := s.cache.SetRemoteLiveStream(ctx, ev.GetTenantId(), ev.GetInternalName(), &RemoteLiveStreamEntry{
-			ClusterID: clusterID,
-			TenantID:  ev.GetTenantId(),
-			UpdatedAt: time.Now().Unix(),
-		}); err != nil {
-			s.logger.WithError(err).WithFields(logging.Fields{
-				"peer_cluster":  peerClusterID,
-				"internal_name": ev.GetInternalName(),
-			}).Warn("Failed to cache remote live stream")
-		}
-	} else {
-		if err := s.cache.DeleteRemoteLiveStream(ctx, ev.GetTenantId(), ev.GetInternalName()); err != nil {
-			s.logger.WithError(err).WithFields(logging.Fields{
-				"peer_cluster":  peerClusterID,
-				"internal_name": ev.GetInternalName(),
-			}).Warn("Failed to delete remote live stream")
-		}
+	if ev == nil || strings.TrimSpace(peerClusterID) == "" || strings.TrimSpace(ev.GetClusterId()) != peerClusterID {
+		s.logger.WithFields(logging.Fields{
+			"peer_cluster":    peerClusterID,
+			"claimed_cluster": ev.GetClusterId(),
+		}).Warn("Rejected stream lifecycle with mismatched PeerChannel identity")
+		return
+	}
+	if _, err := s.cache.ApplyRemoteStreamLifecycle(ctx, ev.GetTenantId(), ev.GetInternalName(), &RemoteLiveStreamEntry{
+		ClusterID:      peerClusterID,
+		TenantID:       ev.GetTenantId(),
+		SourceRevision: ev.GetSourceRevision(),
+		UpdatedAt:      time.Now().Unix(),
+	}, ev.GetIsLive()); err != nil {
+		s.logger.WithError(err).WithFields(logging.Fields{
+			"peer_cluster":  peerClusterID,
+			"internal_name": ev.GetInternalName(),
+		}).Warn("Failed to apply remote stream lifecycle")
 	}
 }
 
@@ -1709,14 +1685,12 @@ func (s *FederationServer) ListTenantArtifacts(ctx context.Context, req *foghorn
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
 	}
-	// FAIL CLOSED with the mutation surface: this enumerates a tenant's artifact hashes, the exact inventory the
-	// forwarded-delete and metadata-migration paths target. Without cluster-bound caller identity an unbound
-	// service-token holder must not enumerate another cluster's tenant data. Disabled by default.
+	// Tenant inventory is governed by the same all-or-nothing federation gate as mutation RPCs.
 	if s.federationMutationsDisabled() {
 		s.logger.WithFields(logging.Fields{
 			"tenant_id":          req.GetTenantId(),
 			"requesting_cluster": req.GetRequestingCluster(),
-		}).Warn("ListTenantArtifacts: federation mutations are disabled (no cluster-bound caller identity)")
+		}).Warn("ListTenantArtifacts: federation surface is disabled")
 		return nil, status.Error(codes.FailedPrecondition, "federation_mutations_disabled")
 	}
 	tenantID := req.GetTenantId()
@@ -1772,13 +1746,12 @@ func (s *FederationServer) MigrateArtifactMetadata(ctx context.Context, req *fog
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
 	}
-	// FAIL CLOSED with the mutation surface: this writes local artifact rows sourced from a peer, and the shared
-	// service token cannot bind the caller to source_cluster_id. Disabled by default (workload-identity RFC).
+	// Metadata migration is governed by the same all-or-nothing federation gate as the other inbound RPCs.
 	if s.federationMutationsDisabled() {
 		s.logger.WithFields(logging.Fields{
 			"tenant_id":      req.GetTenantId(),
 			"source_cluster": req.GetSourceClusterId(),
-		}).Warn("MigrateArtifactMetadata: federation mutations are disabled (no cluster-bound caller identity)")
+		}).Warn("MigrateArtifactMetadata: federation surface is disabled")
 		return &foghornfederationpb.MigrateArtifactMetadataResponse{Error: "federation_mutations_disabled"}, nil
 	}
 	tenantID := req.GetTenantId()
@@ -1902,14 +1875,12 @@ func (s *FederationServer) ForwardArtifactCommand(ctx context.Context, req *fogh
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
 	}
-	// FAIL CLOSED with the rest of the mutation surface: a peer-forwarded delete_clip/stop_dvr/delete_dvr/
-	// delete_vod destroys local artifacts, and the shared service token cannot authorize the calling cluster.
-	// Revalidating that the row exists is not authorization. Disabled by default (workload-identity RFC).
+	// Forwarded commands are governed by the same all-or-nothing federation gate as direct storage deletion.
 	if s.federationMutationsDisabled() {
 		s.logger.WithFields(logging.Fields{
 			"command":       req.GetCommand(),
 			"artifact_hash": req.GetArtifactHash(),
-		}).Warn("ForwardArtifactCommand: federation mutations are disabled (no cluster-bound caller identity)")
+		}).Warn("ForwardArtifactCommand: federation surface is disabled")
 		return &foghornfederationpb.ForwardArtifactCommandResponse{Handled: false, Error: "federation_mutations_disabled"}, nil
 	}
 	if req.GetArtifactHash() == "" {

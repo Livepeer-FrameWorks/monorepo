@@ -63,7 +63,7 @@ func TestPayloadTypeAssertions(t *testing.T) {
 			},
 			invalidTrigger: &ipcpb.MistTrigger{
 				TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
-					PushRewrite: &ipcpb.PushRewriteTrigger{},
+					PushRewrite: &ipcpb.PushRewriteTrigger{Pid: 4242, TriggerUuid: "test-trigger-uuid", TriggerUnixMillis: 1},
 				},
 			},
 			expectedErr: "unexpected payload type for ProcessBilling",
@@ -103,7 +103,7 @@ func TestPayloadTypeAssertions(t *testing.T) {
 			handler: p.handlePushRewrite,
 			validTrigger: &ipcpb.MistTrigger{
 				TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
-					PushRewrite: &ipcpb.PushRewriteTrigger{},
+					PushRewrite: &ipcpb.PushRewriteTrigger{Pid: 4242, TriggerUuid: "test-trigger-uuid", TriggerUnixMillis: 1},
 				},
 			},
 			invalidTrigger: &ipcpb.MistTrigger{
@@ -573,7 +573,7 @@ func TestPayloadTypeAssertions_ValidTypes(t *testing.T) {
 			name: "PushRewrite",
 			trigger: &ipcpb.MistTrigger{
 				TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
-					PushRewrite: &ipcpb.PushRewriteTrigger{},
+					PushRewrite: &ipcpb.PushRewriteTrigger{Pid: 4242, TriggerUuid: "test-trigger-uuid", TriggerUnixMillis: 1},
 				},
 			},
 		},
@@ -782,10 +782,9 @@ func TestHandleStreamSource_LiveOriginPullReturnsDTSC(t *testing.T) {
 // pre-arranged origin-pull, live+ returns balance:<base> so Mist's balancer
 // asks /source — the SAME unified resolver bare mist-native and pull+ use.
 // /source then runs local best-node selection, on-demand cross-cluster
-// origin-pull arrange, and the live+ push:// terminal. Dead-ending at "" here
-// (the old behavior) skipped straight to the local push input, so a viewer
-// landing directly on an edge before /play arranged the pull never discovered
-// a remote origin (US-ingest / EU-playback).
+// origin-pull arrange, and the live+ push:// terminal. This ensures a viewer
+// landing directly on an edge before /play arranged the pull can discover a
+// remote origin (US-ingest / EU-playback).
 func TestHandleStreamSource_LiveWithoutOriginPullDelegatesToSource(t *testing.T) {
 	t.Setenv("BRAND_DOMAIN", "frameworks.network")
 	prevRegistry := control.StreamRegistryInstance
@@ -1848,9 +1847,11 @@ func TestHandleDVRLifecycleData_UsesDVRHashFallback(t *testing.T) {
 }
 
 func TestHandlePushRewrite_CachesBillingContext(t *testing.T) {
+	installIngestSessionMintMock(t)
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 	sm.SetNodeInfo("edge-node-1", "http://edge.example/view", true, nil, nil, "", "", nil)
+	sm.SetNodeConnectionInfo(context.Background(), "edge-node-1", "edge-node-1:18090", "", "demo-media", nil)
 	prevRegistry := control.StreamRegistryInstance
 	control.SetStreamRegistry(control.NewStreamRegistry(nil, "cluster-local", time.Minute))
 	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
@@ -1874,7 +1875,7 @@ func TestHandlePushRewrite_CachesBillingContext(t *testing.T) {
 	trigger := &ipcpb.MistTrigger{
 		NodeId: "edge-node-1",
 		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
-			PushRewrite: &ipcpb.PushRewriteTrigger{
+			PushRewrite: &ipcpb.PushRewriteTrigger{Pid: 4242, TriggerUuid: "test-trigger-uuid", TriggerUnixMillis: 1,
 				StreamName: "push-stream",
 				PushUrl:    "rtmp://example.com/live",
 			},
@@ -1937,8 +1938,9 @@ func TestHandlePushRewrite_RejectsSuspendedTenant(t *testing.T) {
 	processor.commodoreClient = commodoreClient
 
 	trigger := &ipcpb.MistTrigger{
+		NodeId: "edge-node-1",
 		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
-			PushRewrite: &ipcpb.PushRewriteTrigger{
+			PushRewrite: &ipcpb.PushRewriteTrigger{Pid: 4242, TriggerUuid: "test-trigger-uuid", TriggerUnixMillis: 1,
 				StreamName: "suspended-stream",
 			},
 		},
@@ -1974,8 +1976,9 @@ func TestHandlePushRewrite_RejectsNegativeBalanceTenant(t *testing.T) {
 	processor.commodoreClient = commodoreClient
 
 	trigger := &ipcpb.MistTrigger{
+		NodeId: "edge-node-1",
 		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
-			PushRewrite: &ipcpb.PushRewriteTrigger{
+			PushRewrite: &ipcpb.PushRewriteTrigger{Pid: 4242, TriggerUuid: "test-trigger-uuid", TriggerUnixMillis: 1,
 				StreamName: "negative-balance-stream",
 			},
 		},
@@ -2094,6 +2097,7 @@ func TestApplyStreamContext_UsesTenantHintToAvoidCrossTenantMixups(t *testing.T)
 }
 
 func TestHandlePushRewrite_PopulatesClusterContextFields(t *testing.T) {
+	installIngestSessionMintMock(t)
 	prevRegistry := control.StreamRegistryInstance
 	control.SetStreamRegistry(control.NewStreamRegistry(nil, "cluster-origin", time.Minute))
 	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
@@ -2114,8 +2118,9 @@ func TestHandlePushRewrite_PopulatesClusterContextFields(t *testing.T) {
 	processor.clusterID = "cluster-local"
 
 	trigger := &ipcpb.MistTrigger{
+		NodeId: "edge-node-1",
 		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
-			PushRewrite: &ipcpb.PushRewriteTrigger{StreamName: "stream-a", Hostname: "127.0.0.1"},
+			PushRewrite: &ipcpb.PushRewriteTrigger{Pid: 4242, TriggerUuid: "test-trigger-uuid", TriggerUnixMillis: 1, StreamName: "stream-a", Hostname: "127.0.0.1"},
 		},
 	}
 
@@ -2134,7 +2139,60 @@ func TestHandlePushRewrite_PopulatesClusterContextFields(t *testing.T) {
 	}
 }
 
-func TestHandlePushRewrite_ValidatesUsingTriggerMediaCluster(t *testing.T) {
+// CreateIngestSession returns IngestSessionAlreadyEnded when THIS exact trigger's session has
+// already closed (its own PUSH_INPUT_CLOSE won the race). The handler
+// must DENY the push (blocking, error) rather than stamp that ended id and run admission side
+// effects for an already-gone connector — and it must release the admission reservation so the
+// registry source does not linger active. The registry-only interleaving tests cannot catch this.
+func TestHandlePushRewrite_DeniesAlreadyEndedSession(t *testing.T) {
+	installIngestSessionEndedMock(t)
+	prevRegistry := control.StreamRegistryInstance
+	reg := control.NewStreamRegistry(nil, "cluster-origin", time.Minute)
+	control.SetStreamRegistry(reg)
+	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
+
+	response := &commodorepb.ValidateStreamKeyResponse{
+		Valid:           true,
+		TenantId:        "tenant-1",
+		UserId:          "user-1",
+		StreamId:        "stream-id-1",
+		InternalName:    "stream-a",
+		OriginClusterId: func() *string { s := "cluster-origin"; return &s }(),
+	}
+	commodoreClient, cleanup := setupCommodoreClient(t, response, nil)
+	t.Cleanup(cleanup)
+
+	processor := newTestProcessor(t)
+	processor.commodoreClient = commodoreClient
+	processor.clusterID = "cluster-local"
+
+	trigger := &ipcpb.MistTrigger{
+		NodeId: "edge-node-1",
+		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
+			PushRewrite: &ipcpb.PushRewriteTrigger{Pid: 4242, TriggerUuid: "test-trigger-uuid", TriggerUnixMillis: 1, StreamName: "stream-a", Hostname: "127.0.0.1"},
+		},
+	}
+
+	_, blocking, err := processor.handlePushRewrite(trigger)
+	if err == nil || !blocking {
+		t.Fatalf("an already-ended session must DENY the push (blocking=true, err set); got blocking=%v err=%v", blocking, err)
+	}
+	// The admission reservation must be released — the registry source must not linger active.
+	if _, active, ok := reg.SourceGenerationSnapshot("stream-a", "edge-node-1"); ok && active {
+		t.Fatal("the reservation must be released after an already-ended denial (source must not stay active)")
+	}
+}
+
+// Placement is claimed under the PUBLISHING NODE's virtual media cluster, from
+// node state when Quartermaster is unreachable. Foghorn's own CLUSTER_ID names
+// the process, which serves many virtual clusters, and a PUSH_REWRITE trigger
+// carries no cluster of its own — Foghorn stamps that field during later
+// enrichment, well after this claim.
+func TestHandlePushRewrite_ValidatesUsingPublishingNodeMediaCluster(t *testing.T) {
+	installIngestSessionMintMock(t)
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	sm.SetNodeConnectionInfo(context.Background(), "edge-node-1", "edge-node-1:18090", "", "demo-media", nil)
 	prevRegistry := control.StreamRegistryInstance
 	control.SetStreamRegistry(control.NewStreamRegistry(nil, "demo-media", time.Minute))
 	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
@@ -2154,12 +2212,10 @@ func TestHandlePushRewrite_ValidatesUsingTriggerMediaCluster(t *testing.T) {
 	processor.commodoreClient = commodoreClient
 	processor.clusterID = "central-primary"
 
-	mediaClusterID := "demo-media"
 	trigger := &ipcpb.MistTrigger{
-		NodeId:    "edge-node-1",
-		ClusterId: &mediaClusterID,
+		NodeId: "edge-node-1",
 		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
-			PushRewrite: &ipcpb.PushRewriteTrigger{StreamName: "stream-a", Hostname: "127.0.0.1"},
+			PushRewrite: &ipcpb.PushRewriteTrigger{Pid: 4242, TriggerUuid: "test-trigger-uuid", TriggerUnixMillis: 1, StreamName: "stream-a", Hostname: "127.0.0.1"},
 		},
 	}
 
@@ -2246,8 +2302,7 @@ func newGatewayProcessor(t *testing.T, disc livepeerGatewayDiscoverer, localClus
 	return p
 }
 
-// Livepeer process configs no longer carry a {{gateway_url}} placeholder:
-// Foghorn fills hardcoded_broadcasters structurally from discovery.
+// Foghorn fills hardcoded_broadcasters structurally from gateway discovery.
 const gatewayTemplate = `[{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","target_profiles":[{"name":"360p","height":360}]}]`
 const gatewayProfileTemplate = `[{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","target_profiles":[{"name":"360p","bitrate":900000,"fps":30,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"}]}]`
 

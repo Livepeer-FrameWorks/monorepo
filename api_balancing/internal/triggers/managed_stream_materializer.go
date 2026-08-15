@@ -136,10 +136,11 @@ func (m *ManagedStreamMaterializer) PopulateStreamContext(streamCtx *commodorepb
 //     return the existing session (same contract PUSH_REWRITE relies on at
 //     processor.go:1325-1370).
 //
-// Placement-change cleanup of the previous source node's DVR session is
-// handled by the natural STREAM_END → control.StopDVRByInternalName path
-// (processor.go:2487) when Foghorn sends RetractManagedStream and Mist
-// emits STREAM_END for the bare name.
+// Cleanup of the previous source node's DVR session is handled by the natural
+// STREAM_END → control.StopDVRForEndedSource path (node-keyed backstop; the precise
+// per-generation finalizer is PUSH_INPUT_CLOSE → FinalizeIngestSessionClose)
+// when Foghorn sends RetractManagedStream and Mist emits STREAM_END for the
+// bare name.
 func (m *ManagedStreamMaterializer) EnsureManagedStreamDVR(ctx context.Context, streamCtx *commodorepb.ResolveStreamContextResponse, sourceNodeID string) {
 	if m == nil || m.p == nil || m.p.dvrService == nil || streamCtx == nil {
 		return

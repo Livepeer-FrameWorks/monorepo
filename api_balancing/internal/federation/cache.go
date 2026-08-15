@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,14 +36,15 @@ func NewRemoteEdgeCache(client goredis.UniversalClient, clusterID string, logger
 // TTLs for remote state. Short TTLs ensure stale data expires quickly when
 // a PeerChannel drops or a replication ends.
 const (
-	remoteEdgeTTL        = 30 * time.Second
-	remoteReplicationTTL = 5 * time.Minute
-	originPullLockTTL    = 15 * time.Second
-	edgeSummaryTTL       = 60 * time.Second
-	leaderLeaseTTL       = 15 * time.Second
-	peerAddrTTL          = 30 * time.Second
-	remoteLiveStreamTTL  = 30 * time.Second // refreshed every 5s by heartbeat
-	peerHeartbeatTTL     = 30 * time.Second // 3 missed 10s heartbeats = dead
+	remoteEdgeTTL         = 30 * time.Second
+	remoteReplicationTTL  = 5 * time.Minute
+	originPullLockTTL     = 15 * time.Second
+	edgeSummaryTTL        = 60 * time.Second
+	leaderLeaseTTL        = 15 * time.Second
+	peerAddrTTL           = 30 * time.Second
+	remoteLiveStreamTTL   = 30 * time.Second // refreshed every 5s by heartbeat
+	remoteOfflineFenceTTL = time.Hour
+	peerHeartbeatTTL      = 30 * time.Second // 3 missed 10s heartbeats = dead
 )
 
 // TryAcquireLeaderLease attempts to acquire a leader lease for the given role.
@@ -60,8 +63,7 @@ func (c *RemoteEdgeCache) TryAcquireLeaderLease(ctx context.Context, role, insta
 	return err == nil && val == instanceID
 }
 
-// Lua scripts for atomic lease operations. Using EVALSHA with EVAL fallback
-// avoids the GET-then-mutate TOCTOU race in the previous implementation.
+// Lua scripts keep lease ownership verification and mutation atomic.
 var renewLeaseScript = goredis.NewScript(`
 if redis.call('get', KEYS[1]) == ARGV[1] then
   return redis.call('pexpire', KEYS[1], ARGV[2])
@@ -77,6 +79,16 @@ else
   return 0
 end
 `)
+
+// GetLeaderInstance returns the instance currently holding the role's leader lease ("" when none).
+func (c *RemoteEdgeCache) GetLeaderInstance(ctx context.Context, role string) string {
+	key := fmt.Sprintf("{%s}:leader:%s", c.clusterID, role)
+	v, err := c.client.Get(ctx, key).Result()
+	if err != nil {
+		return ""
+	}
+	return v
+}
 
 // RenewLeaderLease atomically extends the TTL if we still hold the lease.
 func (c *RemoteEdgeCache) RenewLeaderLease(ctx context.Context, role, instanceID string) bool {
@@ -118,12 +130,20 @@ func (c *RemoteEdgeCache) keyEdgeSummary(peerClusterID string) string {
 	return fmt.Sprintf("{%s}:edge_summary:%s", c.clusterID, peerClusterID)
 }
 
-func (c *RemoteEdgeCache) keyPeerAddresses() string {
-	return fmt.Sprintf("{%s}:peer_addresses", c.clusterID)
+func (c *RemoteEdgeCache) keyPeerHintContribution(contributorID string) string {
+	return fmt.Sprintf("{%s}:peer_hints:v2:%s", c.clusterID, contributorID)
 }
 
-func (c *RemoteEdgeCache) keyRemoteLiveStream(tenantID, internalName string) string {
-	return fmt.Sprintf("{%s}:remote_live_streams:%s:%s", c.clusterID, tenantID, internalName)
+func (c *RemoteEdgeCache) keyPeerHintContributionPattern() string {
+	return fmt.Sprintf("{%s}:peer_hints:v2:*", c.clusterID)
+}
+
+func (c *RemoteEdgeCache) keyRemoteLiveStream(tenantID, internalName, originClusterID string) string {
+	return fmt.Sprintf("{%s}:remote_live_streams:v3:records:%s:%s:%s", c.clusterID, tenantID, internalName, originClusterID)
+}
+
+func (c *RemoteEdgeCache) keyRemoteLiveStreamOrigins(tenantID, internalName string) string {
+	return fmt.Sprintf("{%s}:remote_live_streams:v3:origins:%s:%s", c.clusterID, tenantID, internalName)
 }
 
 // --- Remote Edge Telemetry (per-node, per-peer, TTL 30s) ---
@@ -269,31 +289,180 @@ func (c *RemoteEdgeCache) GetEdgeSummary(ctx context.Context, peerClusterID stri
 	return &record, nil
 }
 
-// --- Peer Address Cache (leader writes, all replicas read) ---
+// --- Versioned peer-hint contributions ---
 
-// SetPeerAddresses writes the full peer address map to a Redis hash.
-// Called by the leader after refreshPeers or demand-driven discovery.
-func (c *RemoteEdgeCache) SetPeerAddresses(ctx context.Context, addrs map[string]string) error {
-	key := c.keyPeerAddresses()
-	pipe := c.client.TxPipeline()
-	pipe.Del(ctx, key)
-	if len(addrs) > 0 {
-		fields := make(map[string]interface{}, len(addrs))
-		for clusterID, addr := range addrs {
-			fields[clusterID] = addr
-		}
-		pipe.HSet(ctx, key, fields)
-		pipe.Expire(ctx, key, peerAddrTTL)
-	}
-	_, err := pipe.Exec(ctx)
-	return err
+// PeerHint is the shared federation-discovery record: everything a LEADER needs to establish a
+// usable, tenant-authorized peer channel for a peer another replica discovered — address alone is
+// not enough (a Redis-created peer with no lifecycle/tenants filters every scoped broadcast).
+type PeerHint struct {
+	Addr     string   `json:"addr"`
+	AlwaysOn bool     `json:"always_on,omitempty"`
+	Tenants  []string `json:"tenants,omitempty"`
 }
 
-// GetPeerAddresses reads the full peer address map from Redis.
-// Called by non-leaders to populate their local address cache.
-func (c *RemoteEdgeCache) GetPeerAddresses(ctx context.Context) (map[string]string, error) {
-	key := c.keyPeerAddresses()
-	return c.client.HGetAll(ctx, key).Result()
+func normalizePeerHint(h PeerHint) (PeerHint, error) {
+	h.Addr = strings.TrimSpace(h.Addr)
+	if h.Addr == "" {
+		return PeerHint{}, errors.New("peer hint has empty address")
+	}
+	seen := make(map[string]struct{}, len(h.Tenants))
+	tenants := make([]string, 0, len(h.Tenants))
+	for _, tenantID := range h.Tenants {
+		tenantID = strings.TrimSpace(tenantID)
+		if tenantID == "" {
+			continue
+		}
+		if _, ok := seen[tenantID]; ok {
+			continue
+		}
+		seen[tenantID] = struct{}{}
+		tenants = append(tenants, tenantID)
+	}
+	slices.Sort(tenants)
+	h.Tenants = tenants
+	if !h.AlwaysOn && len(h.Tenants) == 0 {
+		return PeerHint{}, errors.New("stream-scoped peer hint has no tenant scope")
+	}
+	return h, nil
+}
+
+const peerHintContributionVersion = uint32(2)
+
+type peerHintContribution struct {
+	Version              uint32              `json:"version"`
+	ContributorID        string              `json:"contributor_id"`
+	PublishedAtUnixMilli int64               `json:"published_at_unix_milli"`
+	Hints                map[string]PeerHint `json:"hints"`
+}
+
+// PublishPeerHints replaces one leased contributor's complete authority snapshot. Empty snapshots
+// are meaningful: they revoke that contributor immediately. Each contributor has its own key and
+// TTL, so refreshing one writer cannot preserve another writer's stale tenants or peers. Readers
+// consume only records from this versioned namespace.
+func (c *RemoteEdgeCache) PublishPeerHints(ctx context.Context, contributorID string, hints map[string]PeerHint) error {
+	contributorID = strings.TrimSpace(contributorID)
+	if contributorID == "" {
+		return errors.New("peer hint contribution has empty contributor id")
+	}
+	normalized := make(map[string]PeerHint, len(hints))
+	for clusterID, hint := range hints {
+		clusterID = strings.TrimSpace(clusterID)
+		if clusterID == "" {
+			return errors.New("peer hint has empty cluster id")
+		}
+		var err error
+		hint, err = normalizePeerHint(hint)
+		if err != nil {
+			return fmt.Errorf("normalize peer hint %s: %w", clusterID, err)
+		}
+		normalized[clusterID] = hint
+	}
+	record := peerHintContribution{
+		Version:              peerHintContributionVersion,
+		ContributorID:        contributorID,
+		PublishedAtUnixMilli: time.Now().UnixMilli(),
+		Hints:                normalized,
+	}
+	raw, err := json.Marshal(record)
+	if err != nil {
+		return fmt.Errorf("marshal peer hint contribution: %w", err)
+	}
+	return c.client.Set(ctx, c.keyPeerHintContribution(contributorID), raw, peerAddrTTL).Err()
+}
+
+type selectedPeerHint struct {
+	hint          PeerHint
+	contributorID string
+	publishedAt   int64
+	unrestricted  bool
+}
+
+// GetPeerAddresses aggregates only live v2 contributions. Tenant scope is the union of CURRENT
+// leases, while lifecycle/address authority is selected deterministically from the strongest,
+// newest contribution. Expired or replaced contributions therefore revoke authority. An invalid
+// contribution is omitted independently, leaving other valid contributions usable.
+func (c *RemoteEdgeCache) GetPeerAddresses(ctx context.Context) (map[string]PeerHint, error) {
+	keys, err := c.scanKeys(ctx, c.keyPeerHintContributionPattern())
+	if err != nil {
+		return nil, err
+	}
+	selected := make(map[string]selectedPeerHint)
+	for _, key := range keys {
+		raw, getErr := c.client.Get(ctx, key).Bytes()
+		if errors.Is(getErr, goredis.Nil) {
+			continue
+		}
+		if getErr != nil {
+			return nil, getErr
+		}
+		var record peerHintContribution
+		if decodeErr := json.Unmarshal(raw, &record); decodeErr != nil || record.Version != peerHintContributionVersion || strings.TrimSpace(record.ContributorID) == "" {
+			c.logger.WithField("key", key).Warn("Ignoring malformed v2 peer-hint contribution")
+			continue
+		}
+		for clusterID, rawHint := range record.Hints {
+			clusterID = strings.TrimSpace(clusterID)
+			incoming, normalizeErr := normalizePeerHint(rawHint)
+			if clusterID == "" || normalizeErr != nil {
+				c.logger.WithFields(map[string]interface{}{"key": key, "peer_cluster": clusterID}).Warn("Ignoring invalid peer in v2 hint contribution")
+				continue
+			}
+			current, exists := selected[clusterID]
+			if !exists {
+				selected[clusterID] = selectedPeerHint{hint: incoming, contributorID: record.ContributorID, publishedAt: record.PublishedAtUnixMilli, unrestricted: incoming.AlwaysOn && len(incoming.Tenants) == 0}
+				continue
+			}
+			incomingUnrestricted := incoming.AlwaysOn && len(incoming.Tenants) == 0
+			if current.unrestricted || incomingUnrestricted {
+				current.hint.Tenants = nil
+				current.unrestricted = true
+			} else {
+				tenantSet := make(map[string]struct{}, len(current.hint.Tenants)+len(incoming.Tenants))
+				for _, tenantID := range current.hint.Tenants {
+					tenantSet[tenantID] = struct{}{}
+				}
+				for _, tenantID := range incoming.Tenants {
+					tenantSet[tenantID] = struct{}{}
+				}
+				current.hint.Tenants = current.hint.Tenants[:0]
+				for tenantID := range tenantSet {
+					current.hint.Tenants = append(current.hint.Tenants, tenantID)
+				}
+				slices.Sort(current.hint.Tenants)
+			}
+			incomingStronger := incoming.AlwaysOn && !current.hint.AlwaysOn
+			incomingNewer := incoming.AlwaysOn == current.hint.AlwaysOn && (record.PublishedAtUnixMilli > current.publishedAt ||
+				(record.PublishedAtUnixMilli == current.publishedAt && record.ContributorID > current.contributorID))
+			if incomingStronger || incomingNewer {
+				current.hint.Addr = incoming.Addr
+				current.contributorID = record.ContributorID
+				current.publishedAt = record.PublishedAtUnixMilli
+			}
+			current.hint.AlwaysOn = current.hint.AlwaysOn || incoming.AlwaysOn
+			selected[clusterID] = current
+		}
+	}
+	hints := make(map[string]PeerHint, len(selected))
+	for clusterID, selectedHint := range selected {
+		hints[clusterID] = selectedHint.hint
+	}
+	return hints, nil
+}
+
+func (c *RemoteEdgeCache) scanKeys(ctx context.Context, pattern string) ([]string, error) {
+	var keys []string
+	var cursor uint64
+	for {
+		batch, next, err := c.client.Scan(ctx, cursor, pattern, 100).Result()
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, batch...)
+		cursor = next
+		if cursor == 0 {
+			return keys, nil
+		}
+	}
 }
 
 // --- scan helper ---
@@ -335,45 +504,133 @@ func scanEntries[T any](ctx context.Context, client goredis.UniversalClient, pat
 	return entries, nil
 }
 
-// --- Remote Live Streams (cross-cluster ingest dedup, TTL 30s) ---
+// --- Remote Live Streams (cross-cluster ingest dedup; 30s live, 1h offline fence) ---
 
 // RemoteLiveStreamEntry records that a stream is live on a peer cluster.
 type RemoteLiveStreamEntry struct {
-	ClusterID string `json:"cluster_id"`
-	TenantID  string `json:"tenant_id"`
-	UpdatedAt int64  `json:"updated_at"`
+	ClusterID      string `json:"cluster_id"`
+	TenantID       string `json:"tenant_id"`
+	SourceRevision int64  `json:"source_revision"`
+	UpdatedAt      int64  `json:"updated_at"`
 }
 
-// SetRemoteLiveStream records that a stream is live on a peer cluster.
-func (c *RemoteEdgeCache) SetRemoteLiveStream(ctx context.Context, tenantID, internalName string, entry *RemoteLiveStreamEntry) error {
-	data, err := json.Marshal(entry)
-	if err != nil {
-		return fmt.Errorf("marshal remote live stream: %w", err)
+var applyRemoteStreamLifecycleScript = goredis.NewScript(`
+local current = redis.call('get', KEYS[1])
+if current then
+  local current_revision = string.sub(current, 1, 20)
+  local current_state = string.match(current, '^%d+:(%a+):')
+  if not current_state then
+    return redis.error_reply('malformed remote lifecycle fence')
+  end
+  if ARGV[1] < current_revision then
+    return 0
+  end
+  if ARGV[1] == current_revision and current_state == 'offline' and ARGV[2] == 'live' then
+    return 0
+  end
+end
+redis.call('psetex', KEYS[1], ARGV[4], ARGV[3])
+redis.call('sadd', KEYS[2], ARGV[5])
+redis.call('pexpire', KEYS[2], ARGV[6])
+return 1
+`)
+
+// ApplyRemoteStreamLifecycle atomically accepts only current lifecycle revisions. Offline wins an
+// equal-revision tie so a delayed live heartbeat cannot resurrect a generation after its close.
+func (c *RemoteEdgeCache) ApplyRemoteStreamLifecycle(ctx context.Context, tenantID, internalName string, entry *RemoteLiveStreamEntry, isLive bool) (bool, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	internalName = strings.TrimSpace(internalName)
+	if entry == nil || tenantID == "" || internalName == "" || strings.TrimSpace(entry.ClusterID) == "" ||
+		strings.TrimSpace(entry.TenantID) != tenantID || entry.SourceRevision <= 0 {
+		return false, errors.New("remote stream lifecycle requires cluster, tenant, stream, and positive source revision")
 	}
-	key := c.keyRemoteLiveStream(tenantID, internalName)
-	return c.client.Set(ctx, key, data, remoteLiveStreamTTL).Err()
+	originClusterID := strings.TrimSpace(entry.ClusterID)
+	normalized := *entry
+	normalized.ClusterID = originClusterID
+	normalized.TenantID = tenantID
+	data, err := json.Marshal(&normalized)
+	if err != nil {
+		return false, fmt.Errorf("marshal remote live stream: %w", err)
+	}
+	state := "offline"
+	ttl := remoteOfflineFenceTTL
+	if isLive {
+		state = "live"
+		ttl = remoteLiveStreamTTL
+	}
+	revision := fmt.Sprintf("%020d", entry.SourceRevision)
+	value := revision + ":" + state + ":" + string(data)
+	originKey := c.keyRemoteLiveStream(tenantID, internalName, originClusterID)
+	originsKey := c.keyRemoteLiveStreamOrigins(tenantID, internalName)
+	applied, err := applyRemoteStreamLifecycleScript.Run(ctx, c.client, []string{originKey, originsKey},
+		revision, state, value, ttl.Milliseconds(), originClusterID, remoteOfflineFenceTTL.Milliseconds()).Int64()
+	if err != nil {
+		return false, fmt.Errorf("apply remote stream lifecycle: %w", err)
+	}
+	return applied == 1, nil
 }
 
 // GetRemoteLiveStream returns the peer cluster where a stream is live, or nil.
 func (c *RemoteEdgeCache) GetRemoteLiveStream(ctx context.Context, tenantID, internalName string) (*RemoteLiveStreamEntry, error) {
-	key := c.keyRemoteLiveStream(tenantID, internalName)
-	data, err := c.client.Get(ctx, key).Bytes()
-	if errors.Is(err, goredis.Nil) {
+	tenantID = strings.TrimSpace(tenantID)
+	internalName = strings.TrimSpace(internalName)
+	if tenantID == "" || internalName == "" {
 		return nil, nil
 	}
+	originsKey := c.keyRemoteLiveStreamOrigins(tenantID, internalName)
+	originClusterIDs, err := c.client.SMembers(ctx, originsKey).Result()
 	if err != nil {
-		return nil, fmt.Errorf("get remote live stream: %w", err)
+		return nil, fmt.Errorf("get remote live stream origins: %w", err)
 	}
-	var entry RemoteLiveStreamEntry
-	if err := json.Unmarshal(data, &entry); err != nil {
-		return nil, fmt.Errorf("unmarshal remote live stream: %w", err)
+	if len(originClusterIDs) == 0 {
+		return nil, nil
 	}
-	return &entry, nil
+	slices.Sort(originClusterIDs)
+	keys := make([]string, len(originClusterIDs))
+	for i, originClusterID := range originClusterIDs {
+		keys[i] = c.keyRemoteLiveStream(tenantID, internalName, originClusterID)
+	}
+	values, err := c.client.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, fmt.Errorf("get remote live streams: %w", err)
+	}
+	var live *RemoteLiveStreamEntry
+	for i, value := range values {
+		if value == nil {
+			continue
+		}
+		encoded, ok := value.(string)
+		if !ok {
+			return nil, errors.New("unmarshal remote live stream: non-string lifecycle fence")
+		}
+		entry, isLive, decodeErr := decodeRemoteStreamLifecycle(encoded, tenantID, originClusterIDs[i])
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		if isLive && live == nil {
+			live = entry
+		}
+	}
+	return live, nil
 }
 
-// DeleteRemoteLiveStream removes the live-stream record (stream went offline).
-func (c *RemoteEdgeCache) DeleteRemoteLiveStream(ctx context.Context, tenantID, internalName string) error {
-	return c.client.Del(ctx, c.keyRemoteLiveStream(tenantID, internalName)).Err()
+func decodeRemoteStreamLifecycle(data, tenantID, originClusterID string) (*RemoteLiveStreamEntry, bool, error) {
+	parts := strings.SplitN(data, ":", 3)
+	if len(parts) != 3 || (parts[1] != "live" && parts[1] != "offline") {
+		return nil, false, errors.New("unmarshal remote live stream: malformed lifecycle fence")
+	}
+	revision, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || revision <= 0 {
+		return nil, false, errors.New("unmarshal remote live stream: malformed source revision")
+	}
+	var entry RemoteLiveStreamEntry
+	if err := json.Unmarshal([]byte(parts[2]), &entry); err != nil {
+		return nil, false, fmt.Errorf("unmarshal remote live stream: %w", err)
+	}
+	if entry.SourceRevision != revision || entry.TenantID != tenantID || entry.ClusterID != originClusterID {
+		return nil, false, errors.New("unmarshal remote live stream: lifecycle identity mismatch")
+	}
+	return &entry, parts[1] == "live", nil
 }
 
 // --- Remote Artifact Locations (hot artifacts on peer edges, TTL 90s) ---
@@ -475,69 +732,314 @@ func (c *RemoteEdgeCache) GetPeerHeartbeat(ctx context.Context, peerClusterID st
 	return &record, nil
 }
 
-// --- Stream Peers (leader writes, loaded on leader takeover, TTL 60s) ---
+// --- Active stream-to-peer membership ---
 
-const streamPeersTTL = 60 * time.Second
+const streamPeerMembershipVersion = uint32(2)
 
-func (c *RemoteEdgeCache) keyStreamPeers(peerClusterID string) string {
-	return fmt.Sprintf("{%s}:stream_peers:%s", c.clusterID, peerClusterID)
+func (c *RemoteEdgeCache) keyStreamPeerMemberships() string {
+	return fmt.Sprintf("{%s}:stream_peer_memberships:v2", c.clusterID)
 }
 
-// SetStreamPeers persists the set of active stream names for a given peer cluster.
-func (c *RemoteEdgeCache) SetStreamPeers(ctx context.Context, peerClusterID string, streams []string) error {
-	if len(streams) == 0 {
-		return c.client.Del(ctx, c.keyStreamPeers(peerClusterID)).Err()
+func (c *RemoteEdgeCache) keyStreamPeerMembershipRevisions() string {
+	return fmt.Sprintf("{%s}:stream_peer_membership_revisions:v2", c.clusterID)
+}
+
+func (c *RemoteEdgeCache) keyStreamPeerMembershipGenerations() string {
+	return fmt.Sprintf("{%s}:stream_peer_membership_generations:v2", c.clusterID)
+}
+
+func (c *RemoteEdgeCache) keyStreamPeerMembershipStates() string {
+	return fmt.Sprintf("{%s}:stream_peer_membership_states:v2", c.clusterID)
+}
+
+type StreamPeerTarget struct {
+	ClusterID string `json:"cluster_id"`
+	Addr      string `json:"addr"`
+	AlwaysOn  bool   `json:"always_on,omitempty"`
+}
+
+type StreamPeerMembership struct {
+	Version          uint32             `json:"version"`
+	StreamName       string             `json:"stream_name"`
+	TenantID         string             `json:"tenant_id"`
+	SourceGeneration string             `json:"source_generation"`
+	SourceRevision   int64              `json:"source_revision"`
+	Active           bool               `json:"active"`
+	EndedAtUnixMilli int64              `json:"ended_at_unix_milli,omitempty"`
+	Peers            []StreamPeerTarget `json:"peers"`
+}
+
+func normalizeStreamPeerMembership(record StreamPeerMembership) (StreamPeerMembership, error) {
+	record.Version = streamPeerMembershipVersion
+	record.StreamName = strings.TrimSpace(record.StreamName)
+	record.TenantID = strings.TrimSpace(record.TenantID)
+	record.SourceGeneration = strings.TrimSpace(record.SourceGeneration)
+	if record.StreamName == "" || record.TenantID == "" || record.SourceGeneration == "" || record.SourceRevision <= 0 {
+		return StreamPeerMembership{}, errors.New("stream peer membership requires stream, tenant, generation, and positive revision")
 	}
-	data, err := json.Marshal(streams)
+	seen := make(map[string]StreamPeerTarget, len(record.Peers))
+	peers := make([]StreamPeerTarget, 0, len(record.Peers))
+	for _, peer := range record.Peers {
+		peer.ClusterID = strings.TrimSpace(peer.ClusterID)
+		peer.Addr = strings.TrimSpace(peer.Addr)
+		if peer.ClusterID == "" || peer.Addr == "" {
+			return StreamPeerMembership{}, errors.New("stream peer membership contains an incomplete peer")
+		}
+		if existing, ok := seen[peer.ClusterID]; ok {
+			if existing.Addr != peer.Addr || existing.AlwaysOn != peer.AlwaysOn {
+				return StreamPeerMembership{}, fmt.Errorf("stream peer membership has conflicting peer %s", peer.ClusterID)
+			}
+			continue
+		}
+		seen[peer.ClusterID] = peer
+		peers = append(peers, peer)
+	}
+	slices.SortFunc(peers, func(a, b StreamPeerTarget) int { return strings.Compare(a.ClusterID, b.ClusterID) })
+	if !record.Active && len(peers) != 0 {
+		return StreamPeerMembership{}, errors.New("ended stream peer membership cannot retain peers")
+	}
+	if record.Active && record.EndedAtUnixMilli != 0 {
+		return StreamPeerMembership{}, errors.New("active stream peer membership cannot have an ended timestamp")
+	}
+	if !record.Active && record.EndedAtUnixMilli <= 0 {
+		return StreamPeerMembership{}, errors.New("ended stream peer membership requires an ended timestamp")
+	}
+	record.Peers = peers
+	return record, nil
+}
+
+var setStreamPeerMembershipRevisioned = goredis.NewScript(`
+local current_revision = redis.call('HGET', KEYS[2], ARGV[1])
+if current_revision then
+  if ARGV[2] < current_revision then
+    return 0
+  end
+  if ARGV[2] == current_revision then
+    if redis.call('HGET', KEYS[3], ARGV[1]) ~= ARGV[3] then
+      return -1
+    end
+    if redis.call('HGET', KEYS[4], ARGV[1]) == 'ended' then
+      return 0
+    end
+    if redis.call('HGET', KEYS[1], ARGV[1]) ~= ARGV[4] then
+      return -1
+    end
+    return 2
+  end
+end
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[4])
+redis.call('HSET', KEYS[2], ARGV[1], ARGV[2])
+redis.call('HSET', KEYS[3], ARGV[1], ARGV[3])
+redis.call('HSET', KEYS[4], ARGV[1], 'active')
+return 1
+`)
+
+var endStreamPeerMembershipRevisioned = goredis.NewScript(`
+local current_revision = redis.call('HGET', KEYS[2], ARGV[1])
+if current_revision then
+  if ARGV[2] < current_revision then
+    return 0
+  end
+  if ARGV[2] == current_revision then
+    if redis.call('HGET', KEYS[3], ARGV[1]) ~= ARGV[3] then
+      return -1
+    end
+    if redis.call('HGET', KEYS[4], ARGV[1]) == 'ended' then
+      return 2
+    end
+  end
+end
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[4])
+redis.call('HSET', KEYS[2], ARGV[1], ARGV[2])
+redis.call('HSET', KEYS[3], ARGV[1], ARGV[3])
+redis.call('HSET', KEYS[4], ARGV[1], 'ended')
+return 1
+`)
+
+func streamPeerRevisionToken(revision int64) string {
+	return fmt.Sprintf("%020d", revision)
+}
+
+// SetStreamPeerMembership atomically replaces one generation's complete membership, including an
+// empty set. A lower revision or an ended equal revision is stale and cannot restore authority.
+func (c *RemoteEdgeCache) SetStreamPeerMembership(ctx context.Context, record StreamPeerMembership) (bool, error) {
+	record.Active = true
+	record.EndedAtUnixMilli = 0
+	normalized, err := normalizeStreamPeerMembership(record)
 	if err != nil {
-		return fmt.Errorf("marshal stream peers: %w", err)
+		return false, err
 	}
-	return c.client.Set(ctx, c.keyStreamPeers(peerClusterID), data, streamPeersTTL).Err()
-}
-
-// GetStreamPeers returns the set of active streams for a peer cluster, or nil.
-func (c *RemoteEdgeCache) GetStreamPeers(ctx context.Context, peerClusterID string) ([]string, error) {
-	data, err := c.client.Get(ctx, c.keyStreamPeers(peerClusterID)).Bytes()
-	if errors.Is(err, goredis.Nil) {
-		return nil, nil
-	}
+	raw, err := json.Marshal(normalized)
 	if err != nil {
-		return nil, fmt.Errorf("get stream peers: %w", err)
+		return false, fmt.Errorf("marshal stream peer membership: %w", err)
 	}
-	var streams []string
-	if err := json.Unmarshal(data, &streams); err != nil {
-		return nil, fmt.Errorf("unmarshal stream peers: %w", err)
+	result, err := setStreamPeerMembershipRevisioned.Run(ctx, c.client, []string{
+		c.keyStreamPeerMemberships(), c.keyStreamPeerMembershipRevisions(),
+		c.keyStreamPeerMembershipGenerations(), c.keyStreamPeerMembershipStates(),
+	}, normalized.StreamName, streamPeerRevisionToken(normalized.SourceRevision), normalized.SourceGeneration, raw).Int64()
+	if err != nil {
+		return false, fmt.Errorf("persist stream peer membership: %w", err)
 	}
-	return streams, nil
+	if result < 0 {
+		return false, errors.New("stream peer membership revision has conflicting generation or payload")
+	}
+	return result > 0, nil
 }
 
-// LoadAllStreamPeers loads all stream-peer mappings from Redis (used on leader takeover).
-func (c *RemoteEdgeCache) LoadAllStreamPeers(ctx context.Context) (map[string][]string, error) {
-	pattern := fmt.Sprintf("{%s}:stream_peers:*", c.clusterID)
-	result := make(map[string][]string)
-	prefix := fmt.Sprintf("{%s}:stream_peers:", c.clusterID)
+// EndStreamPeerMembership retains a revision tombstone. Deleting the field would let a delayed
+// TrackStream for the ended generation recreate non-expiring peer authority.
+func (c *RemoteEdgeCache) EndStreamPeerMembership(ctx context.Context, record StreamPeerMembership) (bool, error) {
+	record.Active = false
+	record.Peers = nil
+	if record.EndedAtUnixMilli <= 0 {
+		record.EndedAtUnixMilli = time.Now().UnixMilli()
+	}
+	normalized, err := normalizeStreamPeerMembership(record)
+	if err != nil {
+		return false, err
+	}
+	raw, err := json.Marshal(normalized)
+	if err != nil {
+		return false, fmt.Errorf("marshal ended stream peer membership: %w", err)
+	}
+	result, err := endStreamPeerMembershipRevisioned.Run(ctx, c.client, []string{
+		c.keyStreamPeerMemberships(), c.keyStreamPeerMembershipRevisions(),
+		c.keyStreamPeerMembershipGenerations(), c.keyStreamPeerMembershipStates(),
+	}, normalized.StreamName, streamPeerRevisionToken(normalized.SourceRevision), normalized.SourceGeneration, raw).Int64()
+	if err != nil {
+		return false, fmt.Errorf("end stream peer membership: %w", err)
+	}
+	if result < 0 {
+		return false, errors.New("ended stream peer membership revision has conflicting generation")
+	}
+	return result > 0, nil
+}
 
-	var cursor uint64
-	for {
-		keys, nextCursor, err := c.client.Scan(ctx, cursor, pattern, 100).Result()
+const purgeEndedStreamPeerMembershipLua = `
+if redis.call('HGET', KEYS[2], ARGV[1]) ~= ARGV[2] then
+  return 0
+end
+if redis.call('HGET', KEYS[3], ARGV[1]) ~= ARGV[3] then
+  return 0
+end
+if redis.call('HGET', KEYS[4], ARGV[1]) ~= 'ended' then
+  return 0
+end
+redis.call('HDEL', KEYS[1], ARGV[1])
+redis.call('HDEL', KEYS[2], ARGV[1])
+redis.call('HDEL', KEYS[3], ARGV[1])
+redis.call('HDEL', KEYS[4], ARGV[1])
+return 1
+`
+
+// ScanEndedStreamPeerMemberships advances through the lightweight state hash and loads only ended
+// payloads from the scanned page. Callers retain the cursor between bounded cleanup passes.
+func (c *RemoteEdgeCache) ScanEndedStreamPeerMemberships(ctx context.Context, cursor uint64, count int64) ([]StreamPeerMembership, uint64, error) {
+	if count <= 0 {
+		count = 64
+	}
+	fields, next, err := c.client.HScan(ctx, c.keyStreamPeerMembershipStates(), cursor, "*", count).Result()
+	if err != nil {
+		return nil, cursor, fmt.Errorf("scan ended stream peer memberships: %w", err)
+	}
+	endedNames := make([]string, 0, len(fields)/2)
+	for index := 0; index+1 < len(fields); index += 2 {
+		if fields[index+1] == "ended" {
+			endedNames = append(endedNames, fields[index])
+		}
+	}
+	if len(endedNames) == 0 {
+		return nil, next, nil
+	}
+	values, err := c.client.HMGet(ctx, c.keyStreamPeerMemberships(), endedNames...).Result()
+	if err != nil {
+		return nil, cursor, fmt.Errorf("load ended stream peer memberships: %w", err)
+	}
+	records := make([]StreamPeerMembership, 0, len(values))
+	for index, value := range values {
+		if value == nil {
+			continue
+		}
+		raw, ok := value.(string)
+		if !ok {
+			return nil, cursor, fmt.Errorf("ended stream peer membership %s has non-string payload", endedNames[index])
+		}
+		var record StreamPeerMembership
+		if err = json.Unmarshal([]byte(raw), &record); err != nil {
+			return nil, cursor, fmt.Errorf("decode ended stream peer membership %s: %w", endedNames[index], err)
+		}
+		if record.Version != streamPeerMembershipVersion {
+			return nil, cursor, fmt.Errorf("ended stream peer membership %s has version %d", endedNames[index], record.Version)
+		}
+		record, err = normalizeStreamPeerMembership(record)
 		if err != nil {
-			return nil, fmt.Errorf("scan stream peers: %w", err)
+			return nil, cursor, fmt.Errorf("validate ended stream peer membership %s: %w", endedNames[index], err)
 		}
-		for _, key := range keys {
-			data, err := c.client.Get(ctx, key).Bytes()
-			if err != nil {
-				continue
-			}
-			var streams []string
-			if json.Unmarshal(data, &streams) == nil {
-				peerClusterID := strings.TrimPrefix(key, prefix)
-				result[peerClusterID] = streams
-			}
+		if !record.Active && record.StreamName == endedNames[index] {
+			records = append(records, record)
 		}
-		cursor = nextCursor
-		if cursor == 0 {
-			break
+	}
+	return records, next, nil
+}
+
+// PurgeEndedStreamPeerMemberships pipelines exact-revision deletions. Each Lua command removes all
+// four fields only while its revision/generation is still ended, so a concurrent successor wins.
+func (c *RemoteEdgeCache) PurgeEndedStreamPeerMemberships(ctx context.Context, records []StreamPeerMembership) (int, error) {
+	pipe := c.client.Pipeline()
+	commands := make([]*goredis.Cmd, 0, len(records))
+	for _, record := range records {
+		if record.Active {
+			return 0, errors.New("cannot purge an active stream peer membership")
 		}
+		normalized, err := normalizeStreamPeerMembership(record)
+		if err != nil {
+			return 0, err
+		}
+		commands = append(commands, pipe.Eval(ctx, purgeEndedStreamPeerMembershipLua, []string{
+			c.keyStreamPeerMemberships(), c.keyStreamPeerMembershipRevisions(),
+			c.keyStreamPeerMembershipGenerations(), c.keyStreamPeerMembershipStates(),
+		}, normalized.StreamName, streamPeerRevisionToken(normalized.SourceRevision), normalized.SourceGeneration))
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return 0, fmt.Errorf("purge ended stream peer memberships: %w", err)
+	}
+	purged := 0
+	for _, command := range commands {
+		result, err := command.Int64()
+		if err != nil {
+			return purged, fmt.Errorf("read ended stream peer membership purge result: %w", err)
+		}
+		if result > 0 {
+			purged++
+		}
+	}
+	return purged, nil
+}
+
+// LoadAllStreamPeerMemberships reads one atomic Redis hash snapshot. Any invalid field rejects the
+// complete reconstruction, so a leader never installs partial authority.
+func (c *RemoteEdgeCache) LoadAllStreamPeerMemberships(ctx context.Context) (map[string]StreamPeerMembership, error) {
+	fields, err := c.client.HGetAll(ctx, c.keyStreamPeerMemberships()).Result()
+	if err != nil {
+		return nil, fmt.Errorf("read stream peer memberships: %w", err)
+	}
+	result := make(map[string]StreamPeerMembership, len(fields))
+	for field, raw := range fields {
+		var record StreamPeerMembership
+		if decodeErr := json.Unmarshal([]byte(raw), &record); decodeErr != nil {
+			return nil, fmt.Errorf("decode stream peer membership %s: %w", field, decodeErr)
+		}
+		if record.Version != streamPeerMembershipVersion {
+			return nil, fmt.Errorf("stream peer membership %s has version %d", field, record.Version)
+		}
+		record, err = normalizeStreamPeerMembership(record)
+		if err != nil {
+			return nil, fmt.Errorf("validate stream peer membership %s: %w", field, err)
+		}
+		if record.StreamName != field {
+			return nil, fmt.Errorf("stream peer membership field %s contains stream %s", field, record.StreamName)
+		}
+		result[field] = record
 	}
 	return result, nil
 }

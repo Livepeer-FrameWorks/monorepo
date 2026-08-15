@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -113,8 +114,9 @@ func TestRedisRegistryStore_RoundTripsSource(t *testing.T) {
 			},
 		},
 	}
-	if err := store.SetSource(entry); err != nil {
-		t.Fatal(err)
+	change := RegistryChange{InstanceID: "test", Entity: RegistryEntitySource, Operation: RegistryOpUpsert, Key: entry.InternalName}
+	if applied, err := store.SetSourceRevisioned(context.Background(), entry, change, 0); err != nil || !applied {
+		t.Fatalf("set source: applied=%v err=%v", applied, err)
 	}
 
 	sources, err := store.GetAllSources()
@@ -136,6 +138,103 @@ func TestRedisRegistryStore_RoundTripsSource(t *testing.T) {
 	}
 	if len(got.ClusterPeers) != 1 || got.ClusterPeers[0].GetClusterId() != "peer-X" {
 		t.Errorf("cluster_peers not round-tripped: %+v", got.ClusterPeers)
+	}
+}
+
+func TestRedisRegistryStore_SourceTombstoneRejectsStaleWritesAndRehydratesDelete(t *testing.T) {
+	store, _, _ := newTestRedis(t)
+	const internalName = "revisioned-source"
+	entry := StreamEntry{
+		InternalName: internalName,
+		Locations: map[string]Location{
+			"cluster-test": {ClusterID: "cluster-test", SourceActive: true, SourceRevision: 10},
+		},
+	}
+	upsert := RegistryChange{InstanceID: "writer", Entity: RegistryEntitySource, Operation: RegistryOpUpsert, Key: internalName, SourceRevision: 10}
+	if applied, err := store.SetSourceRevisioned(context.Background(), entry, upsert, 10); err != nil || !applied {
+		t.Fatalf("seed revisioned source: applied=%v err=%v", applied, err)
+	}
+	// A delete strictly BELOW the watermark is a superseded decision — rejected.
+	staleDelete := RegistryChange{InstanceID: "stale", Entity: RegistryEntitySource, Operation: RegistryOpDelete, Key: internalName, SourceRevision: 9}
+	if applied, err := store.DeleteSourceRevisioned(context.Background(), internalName, staleDelete, 9); err != nil || applied {
+		t.Fatalf("a below-watermark delete removed source ownership: applied=%v err=%v", applied, err)
+	}
+	// A delete AT the watermark is delete-if-not-superseded: the deleter acted on the latest
+	// transition (which left the entry evictable), so it applies. This is the revision every real
+	// caller can actually carry — sweeps/withdraws know at most the last written revision, so
+	// requiring strictly-higher would make the tombstone path unreachable in production.
+	equalDelete := RegistryChange{InstanceID: "writer", Entity: RegistryEntitySource, Operation: RegistryOpDelete, Key: internalName, SourceRevision: 10}
+	if applied, err := store.DeleteSourceRevisioned(context.Background(), internalName, equalDelete, 10); err != nil || !applied {
+		t.Fatalf("delete at the watermark must apply: applied=%v err=%v", applied, err)
+	}
+	// The watermark survives the delete, so a DELAYED lower-revision upsert cannot resurrect.
+	staleEntry := entry
+	staleEntry.Locations = map[string]Location{"cluster-test": {ClusterID: "cluster-test", SourceActive: true, SourceRevision: 9}}
+	staleUpsert := RegistryChange{InstanceID: "late", Entity: RegistryEntitySource, Operation: RegistryOpUpsert, Key: internalName, SourceRevision: 9}
+	if applied, err := store.SetSourceRevisioned(context.Background(), staleEntry, staleUpsert, 9); err != nil || applied {
+		t.Fatalf("stale upsert after tombstone: applied=%v err=%v", applied, err)
+	}
+
+	registry := NewStreamRegistry(nil, "cluster-test", time.Minute)
+	projectSourceForTest(t, registry, internalName, "node-stale", 1, "trigger-stale", "generation-stale", 10)
+	if _, ok := registry.lookup(registry.byInt, internalName); !ok {
+		t.Fatal("test setup did not seed stale in-memory source")
+	}
+	registry.rehydrateFromRedis(store, logging.NewLogger())
+	if _, ok := registry.lookup(registry.byInt, internalName); ok {
+		t.Fatal("revisioned Redis tombstone did not remove stale in-memory source during rehydration")
+	}
+}
+
+func TestStreamRegistry_GenericMutationReconcilesHigherSourceRevision(t *testing.T) {
+	store, _, _ := newTestRedis(t)
+	const internalName = "reconciled-source"
+	latest := StreamEntry{
+		InternalName: internalName,
+		Locations: map[string]Location{
+			"cluster-test": {
+				ClusterID: "cluster-test", SourceActive: true, OwnerNodeID: "node-new",
+				SourceGeneration: "generation-new", SourceRevision: 10, UpdatedAt: time.Unix(100, 0),
+			},
+		},
+	}
+	latestPayload, err := json.Marshal(latest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	latestChange := RegistryChange{InstanceID: "winner", Entity: RegistryEntitySource, Operation: RegistryOpUpsert,
+		Key: internalName, Payload: latestPayload, SourceRevision: 10}
+	if applied, storeErr := store.SetSourceRevisioned(context.Background(), latest, latestChange, 10); storeErr != nil || !applied {
+		t.Fatalf("seed latest source: applied=%v err=%v", applied, storeErr)
+	}
+
+	r := NewStreamRegistry(nil, "cluster-test", time.Minute)
+	r.mu.Lock()
+	r.redisStore = store
+	r.instanceID = "stale-writer"
+	r.mu.Unlock()
+	staleMutation := StreamEntry{
+		InternalName: internalName,
+		Locations: map[string]Location{
+			"cluster-test": {
+				ClusterID: "cluster-test", SourceActive: true, OwnerNodeID: "node-old",
+				SourceGeneration: "generation-old", SourceRevision: 5,
+				ReplicatingFrom: "cluster-origin", UpdatedAt: time.Unix(200, 0),
+			},
+		},
+	}
+	r.publishUpsertSource(staleMutation)
+
+	durable, found, err := store.GetSource(context.Background(), internalName)
+	if err != nil || !found {
+		t.Fatalf("read reconciled source: found=%v err=%v", found, err)
+	}
+	loc := durable.Locations["cluster-test"]
+	if loc.SourceRevision != 10 || loc.OwnerNodeID != "node-new" || loc.SourceGeneration != "generation-new" {
+		t.Fatalf("source ownership regressed during generic mutation: %+v", loc)
+	}
+	if loc.ReplicatingFrom != "cluster-origin" {
+		t.Fatalf("generic mutation was discarded behind source CAS: %+v", loc)
 	}
 }
 
@@ -183,8 +282,9 @@ func TestStreamRegistry_EnableRedisSync_RehydratesOnStartup(t *testing.T) {
 		},
 		HydratedAt: time.Now(),
 	}
-	if err := store.SetSource(prior); err != nil {
-		t.Fatal(err)
+	change := RegistryChange{InstanceID: "prior", Entity: RegistryEntitySource, Operation: RegistryOpUpsert, Key: prior.InternalName}
+	if applied, err := store.SetSourceRevisioned(context.Background(), prior, change, 0); err != nil || !applied {
+		t.Fatalf("seed source: applied=%v err=%v", applied, err)
 	}
 	priorArt := ArtifactEntry{
 		Kind:         ArtifactKindVOD,
@@ -275,5 +375,220 @@ func TestStreamRegistry_PublishDoesNotPanicWithoutRedis(t *testing.T) {
 	// No EnableRedisSync — publish path should be a no-op.
 	if _, err := r.ResolveSourceByInternalName(context.Background(), "60546679b497415db2338cd5cae54992"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The sweep's eviction must fire the durable revisioned delete with the revision the Location held
+// BEFORE eviction cleared it. A delete that reads the revision after clearing carries 0, which the
+// versioned watermark rejects — no tombstone is emitted, the durable value survives, and the swept
+// entry resurrects on the next rehydrate. This drives the REAL caller (SweepStaleLocations →
+// publishDeleteSource), not the store API directly.
+func TestSweepStaleLocations_EmitsRevisionedDeleteForVersionedSource(t *testing.T) {
+	store, _, _ := newTestRedis(t)
+	const internalName = "swept-versioned-source"
+
+	// Durable state: the last transition (rev 7) left the source inactive and ownerless — the state
+	// that makes the entry evictable.
+	durable := StreamEntry{
+		InternalName: internalName,
+		Locations: map[string]Location{
+			"cluster-test": {ClusterID: "cluster-test", SourceRevision: 7},
+		},
+	}
+	seed := RegistryChange{InstanceID: "writer", Entity: RegistryEntitySource, Operation: RegistryOpUpsert, Key: internalName, SourceRevision: 7}
+	if applied, err := store.SetSourceRevisioned(context.Background(), durable, seed, 7); err != nil || !applied {
+		t.Fatalf("seed durable source: applied=%v err=%v", applied, err)
+	}
+
+	// In-memory mirror of the same state, stale past the sweep cutoff.
+	r := NewStreamRegistry(nil, "cluster-test", time.Minute)
+	r.mu.Lock()
+	r.redisStore = store
+	r.instanceID = "sweeper"
+	r.byInt[internalName] = &cachedEntry{
+		entry: StreamEntry{
+			InternalName: internalName,
+			Locations: map[string]Location{
+				"cluster-test": {ClusterID: "cluster-test", SourceRevision: 7, UpdatedAt: time.Now().Add(-time.Hour)},
+			},
+		},
+		cached: time.Now(),
+	}
+	r.mu.Unlock()
+
+	if _, evicted := r.SweepStaleLocations(30 * time.Minute); evicted != 1 {
+		t.Fatalf("sweep evicted %d entries, want 1", evicted)
+	}
+
+	// The durable value must be GONE — this is the assertion that fails when the delete carries 0.
+	if _, found, err := store.GetSource(context.Background(), internalName); err != nil || found {
+		t.Fatalf("durable source must be deleted by the sweep's revisioned tombstone (found=%v err=%v)", found, err)
+	}
+	// The watermark survives as the tombstone, so a delayed lower-revision upsert cannot resurrect.
+	if rev, err := store.GetSourceRevision(context.Background(), internalName); err != nil || rev != 7 {
+		t.Fatalf("tombstone watermark = %d err=%v, want 7", rev, err)
+	}
+	stale := durable
+	stale.Locations = map[string]Location{"cluster-test": {ClusterID: "cluster-test", SourceActive: true, SourceRevision: 6}}
+	lateUpsert := RegistryChange{InstanceID: "late", Entity: RegistryEntitySource, Operation: RegistryOpUpsert, Key: internalName, SourceRevision: 6}
+	if applied, err := store.SetSourceRevisioned(context.Background(), stale, lateUpsert, 6); err != nil || applied {
+		t.Fatalf("a stale upsert resurrected the swept source: applied=%v err=%v", applied, err)
+	}
+	// And a rehydrate must NOT bring the swept entry back.
+	r2 := NewStreamRegistry(nil, "cluster-test", time.Minute)
+	r2.mu.Lock()
+	r2.redisStore = store
+	r2.mu.Unlock()
+	r2.rehydrateFromRedis(store, logging.NewLogger())
+	if _, ok := r2.lookup(r2.byInt, internalName); ok {
+		t.Fatal("swept source resurrected on rehydrate despite the revisioned delete")
+	}
+}
+
+// A federated withdraw evicts an entry whose LOCAL location never existed, so the caller has no
+// revision to carry; publishDeleteSource must resolve the durable watermark and delete at it rather
+// than emitting a revision-0 delete a versioned watermark would reject.
+func TestPublishDeleteSource_FallsBackToDurableWatermark(t *testing.T) {
+	store, _, _ := newTestRedis(t)
+	const internalName = "withdrawn-federated-source"
+	durable := StreamEntry{
+		InternalName: internalName,
+		Locations: map[string]Location{
+			"cluster-test": {ClusterID: "cluster-test", SourceRevision: 4},
+		},
+	}
+	seed := RegistryChange{InstanceID: "writer", Entity: RegistryEntitySource, Operation: RegistryOpUpsert, Key: internalName, SourceRevision: 4}
+	if applied, err := store.SetSourceRevisioned(context.Background(), durable, seed, 4); err != nil || !applied {
+		t.Fatalf("seed durable source: applied=%v err=%v", applied, err)
+	}
+
+	r := NewStreamRegistry(nil, "cluster-test", time.Minute)
+	r.mu.Lock()
+	r.redisStore = store
+	r.instanceID = "withdrawer"
+	r.mu.Unlock()
+	// The evicted entry carries no local Location (the withdraw removed a peer's), revision unknown.
+	r.publishDeleteSource(StreamEntry{InternalName: internalName}, 0)
+
+	if _, found, err := store.GetSource(context.Background(), internalName); err != nil || found {
+		t.Fatalf("watermark-fallback delete must remove the durable source (found=%v err=%v)", found, err)
+	}
+	if rev, err := store.GetSourceRevision(context.Background(), internalName); err != nil || rev != 4 {
+		t.Fatalf("tombstone watermark = %d err=%v, want 4", rev, err)
+	}
+}
+
+// A transiently-failing durable delete must RETAIN the local entry (marked pending) so a later sweep
+// retries and eventually settles the tombstone — evicting first would leave nothing to retry from,
+// leaking the durable value until it resurrects the entry on a rehydrate. Failure is injected at the
+// Redis layer, covering both the watermark lookup and the tombstone script.
+func TestSweepStaleLocations_RetainsEntryUntilDurableDeleteSucceeds(t *testing.T) {
+	store, _, mr := newTestRedis(t)
+	const internalName = "swept-retry-source"
+
+	durable := StreamEntry{
+		InternalName: internalName,
+		Locations:    map[string]Location{"cluster-test": {ClusterID: "cluster-test", SourceRevision: 7}},
+	}
+	seed := RegistryChange{InstanceID: "writer", Entity: RegistryEntitySource, Operation: RegistryOpUpsert, Key: internalName, SourceRevision: 7}
+	if applied, err := store.SetSourceRevisioned(context.Background(), durable, seed, 7); err != nil || !applied {
+		t.Fatalf("seed durable source: applied=%v err=%v", applied, err)
+	}
+
+	r := NewStreamRegistry(nil, "cluster-test", time.Minute)
+	r.mu.Lock()
+	r.redisStore = store
+	r.instanceID = "sweeper"
+	r.byInt[internalName] = &cachedEntry{
+		entry: StreamEntry{
+			InternalName: internalName,
+			Locations: map[string]Location{
+				"cluster-test": {ClusterID: "cluster-test", SourceRevision: 7, UpdatedAt: time.Now().Add(-time.Hour)},
+			},
+		},
+		cached: time.Now(),
+	}
+	r.mu.Unlock()
+
+	// Redis is down for the first sweep: the delete must fail WITHOUT evicting locally.
+	mr.SetError("injected redis outage")
+	if _, evicted := r.SweepStaleLocations(30 * time.Minute); evicted != 0 {
+		t.Fatalf("sweep evicted %d entries during a failed durable delete, want 0 (retained for retry)", evicted)
+	}
+	r.mu.RLock()
+	ce, present := r.byInt[internalName]
+	retained := present && ce.pendingSourceDelete
+	r.mu.RUnlock()
+	if !retained {
+		t.Fatal("entry must be retained and marked pending-delete after a failed durable delete")
+	}
+
+	// Redis recovers: the next sweep retries the durable delete and completes the eviction.
+	mr.SetError("")
+	if _, evicted := r.SweepStaleLocations(30 * time.Minute); evicted != 1 {
+		t.Fatalf("retry sweep evicted %d entries, want 1", evicted)
+	}
+	if _, found, err := store.GetSource(context.Background(), internalName); err != nil || found {
+		t.Fatalf("durable source must be deleted after the retry (found=%v err=%v)", found, err)
+	}
+	if rev, err := store.GetSourceRevision(context.Background(), internalName); err != nil || rev != 7 {
+		t.Fatalf("tombstone watermark = %d err=%v, want 7", rev, err)
+	}
+	r.mu.RLock()
+	_, still := r.byInt[internalName]
+	r.mu.RUnlock()
+	if still {
+		t.Fatal("local entry must be evicted once the tombstone is durably published")
+	}
+}
+
+// A federated withdraw whose durable delete fails must also retain the (marked) entry; the periodic
+// sweep then settles it. This injects the failure at the WATERMARK lookup (the withdraw path always
+// resolves the watermark, having no local revision).
+func TestWithdrawFederatedSource_FailedDeleteRetriedBySweep(t *testing.T) {
+	store, _, mr := newTestRedis(t)
+	const internalName = "withdrawn-retry-source"
+
+	durable := StreamEntry{
+		InternalName: internalName,
+		Locations:    map[string]Location{"cluster-test": {ClusterID: "cluster-test", SourceRevision: 4}},
+	}
+	seed := RegistryChange{InstanceID: "writer", Entity: RegistryEntitySource, Operation: RegistryOpUpsert, Key: internalName, SourceRevision: 4}
+	if applied, err := store.SetSourceRevisioned(context.Background(), durable, seed, 4); err != nil || !applied {
+		t.Fatalf("seed durable source: applied=%v err=%v", applied, err)
+	}
+
+	r := NewStreamRegistry(nil, "cluster-test", time.Minute)
+	r.mu.Lock()
+	r.redisStore = store
+	r.instanceID = "withdrawer"
+	r.byInt[internalName] = &cachedEntry{
+		entry: StreamEntry{
+			InternalName: internalName,
+			Locations:    map[string]Location{"peer-B": {ClusterID: "peer-B", UpdatedAt: time.Now()}},
+		},
+		cached: time.Now(),
+	}
+	r.mu.Unlock()
+
+	mr.SetError("injected watermark outage")
+	r.withdrawFederatedSource("peer-B", internalName)
+	r.mu.RLock()
+	ce, present := r.byInt[internalName]
+	retained := present && ce.pendingSourceDelete && len(ce.entry.Locations) == 0
+	r.mu.RUnlock()
+	if !retained {
+		t.Fatal("withdraw must retain the marked empty entry when the durable delete fails")
+	}
+
+	mr.SetError("")
+	if _, evicted := r.SweepStaleLocations(30 * time.Minute); evicted != 1 {
+		t.Fatalf("sweep retry evicted %d entries, want 1", evicted)
+	}
+	if _, found, err := store.GetSource(context.Background(), internalName); err != nil || found {
+		t.Fatalf("durable source must be deleted after the sweep retry (found=%v err=%v)", found, err)
+	}
+	if rev, err := store.GetSourceRevision(context.Background(), internalName); err != nil || rev != 4 {
+		t.Fatalf("tombstone watermark = %d err=%v, want 4", rev, err)
 	}
 }

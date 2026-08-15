@@ -155,7 +155,12 @@ func TestStopDVR_MismatchedTenantNotFound(t *testing.T) {
 // Invariant: an active 'recording' DVR with no known storage node cannot accept
 // the Mist stop, so StopDVR rejects as Unavailable and must NOT issue the
 // 'stopping' UPDATE (the state transition is gated on a reachable node).
-func TestStopDVR_NoStorageNodeUnavailable(t *testing.T) {
+// Claim-before-send: StopDVR durably claims the stop obligation (status='stopping',
+// stop_pending) regardless of whether a storage node is immediately reachable. Without an
+// immediate node the descriptor node is empty, so no send goes out — but the obligation is
+// durable and the recovery drain sends it once a node is available. The RPC therefore
+// SUCCEEDS on a durable claim instead of returning Unavailable.
+func TestStopDVR_NoStorageNodeStillClaimsDurably(t *testing.T) {
 	srv, mock := newLifecycleServer(t)
 	mock.ExpectQuery(`SELECT status, COALESCE\(stream_internal_name`).
 		WithArgs("dvr-h", "tenant-a").
@@ -166,13 +171,20 @@ func TestStopDVR_NoStorageNodeUnavailable(t *testing.T) {
 	mock.ExpectQuery(`SELECT node_id, size_bytes FROM foghorn.artifact_nodes`).
 		WithArgs("dvr-h").
 		WillReturnRows(sqlmock.NewRows([]string{"node_id", "size_bytes"})) // no node
+	// The durable claim runs regardless; descriptor node is empty here, so nothing is sent.
+	mock.ExpectQuery(`UPDATE foghorn.artifacts.*artifact_hash = \$1 AND tenant_id = \$2.*RETURNING`).
+		WithArgs("dvr-h", "tenant-a").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "node_id"}).AddRow("dvr-h", ""))
 
-	_, err := srv.StopDVR(context.Background(), &sharedpb.StopDVRRequest{
+	resp, err := srv.StopDVR(context.Background(), &sharedpb.StopDVRRequest{
 		DvrHash:  "dvr-h",
 		TenantId: "tenant-a",
 	})
-	if status.Code(err) != codes.Unavailable {
-		t.Fatalf("expected Unavailable, got %v", err)
+	if err != nil {
+		t.Fatalf("expected success on a durable claim, got %v", err)
+	}
+	if !resp.GetSuccess() {
+		t.Fatalf("expected Success=true on a durable claim, got %+v", resp)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)

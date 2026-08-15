@@ -31,6 +31,7 @@ func TestLookupConcurrentMapMutationDoesNotPanic(t *testing.T) {
 	)
 	var wg sync.WaitGroup
 	stop := atomic.Bool{}
+	revision := atomic.Int64{}
 
 	wg.Add(readers)
 	for i := 0; i < readers; i++ {
@@ -47,10 +48,9 @@ func TestLookupConcurrentMapMutationDoesNotPanic(t *testing.T) {
 		go func(workerID int) {
 			defer wg.Done()
 			for j := 0; j < ops; j++ {
-				// Cycles AdmitAndReserve + MarkSourceInactive to keep
-				// the local Location churning under the write lock.
-				r.AdmitAndReserve("60546679b497415db2338cd5cae54992", "node-A", nil)
-				r.MarkSourceInactive("60546679b497415db2338cd5cae54992", "node-A")
+				// Churns active and inactive revisions under the registry write lock.
+				r.ProjectSource("60546679b497415db2338cd5cae54992", "node-A", 0, "", "gen-race", revision.Add(1))
+				r.PublishSourceInactive("60546679b497415db2338cd5cae54992", "node-A", "", revision.Add(1))
 			}
 		}(i)
 	}

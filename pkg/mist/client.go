@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,6 +22,14 @@ const (
 	MetricsPath        = "/metrics"
 	MetricsJSONPath    = "/metrics.json"
 )
+
+// ErrMistAmbiguous marks an API error where the request MAY have been accepted
+// by Mist despite the error — a transport, response-read, or decode failure that
+// happened AFTER the request could have reached Mist. Callers of NON-idempotent
+// commands (notably push_start) must NOT blindly retry on this: a second attempt
+// could create a duplicate. An HTTP non-200 from Mist is NOT ambiguous — Mist
+// answered and rejected, so the command was not accepted.
+var ErrMistAmbiguous = errors.New("mist API result ambiguous: request may have been accepted")
 
 // Client handles interactions with MistServer API
 type Client struct {
@@ -83,10 +92,12 @@ func (c *Client) makeAPIRequest(command map[string]interface{}) (map[string]inte
 		return nil, fmt.Errorf("MISTSERVER_URL not configured")
 	}
 
-	// Ensure we're authenticated first
+	// Authentication failure is not an ambiguous command result because the
+	// command has not been sent. Return a new error rather than wrapping so an
+	// ErrMistAmbiguous from the auth handshake does not escape to the caller.
 	if !c.authenticated {
 		if err := c.authenticate(); err != nil {
-			return nil, fmt.Errorf("authentication failed: %w", err)
+			return nil, errors.New("authentication failed, command not sent: " + err.Error())
 		}
 	}
 
@@ -101,7 +112,9 @@ func (c *Client) makeAPIRequest(command map[string]interface{}) (map[string]inte
 			c.Logger.Debug("MistServer session expired, re-authenticating")
 			c.authenticated = false
 			if err := c.authenticate(); err != nil {
-				return nil, fmt.Errorf("re-authentication failed: %w", err)
+				// CHALL means Mist did not execute the command. Do not propagate an
+				// ambiguity marker from the authentication request itself.
+				return nil, errors.New("re-authentication failed, command not sent: " + err.Error())
 			}
 			// Retry the original request
 			return c.callAPI(command)
@@ -136,23 +149,28 @@ func (c *Client) callAPI(command map[string]interface{}) (map[string]interface{}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to make request: %w", err)
+		// The request may have reached Mist and been processed before the
+		// transport error (e.g. a read timeout). Ambiguous — do not assume it was
+		// rejected.
+		return nil, fmt.Errorf("failed to make request: %w: %w", err, ErrMistAmbiguous)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
+		// Mist answered and rejected — the command was NOT accepted (not ambiguous).
 		b, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(b))
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		// Mist accepted the request (200) but the response body was lost.
+		return nil, fmt.Errorf("failed to read response: %w: %w", err, ErrMistAmbiguous)
 	}
 
 	var result map[string]interface{}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal response: %w: %w", err, ErrMistAmbiguous)
 	}
 
 	c.Logger.WithFields(logging.Fields{

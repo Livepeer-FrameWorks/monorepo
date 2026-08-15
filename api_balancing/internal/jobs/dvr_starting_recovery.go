@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -34,12 +35,26 @@ type DVRStartDispatch struct {
 	NodeBaseURL       string `json:"node_base_url"`
 	SourceRuntimeName string `json:"source_runtime_name"`
 	SourceBaseURL     string `json:"source_base_url"`
-	SegmentSeconds    int32  `json:"segment_seconds"`
-	WindowSeconds     int32  `json:"window_seconds"`
-	MaxEntries        int32  `json:"max_entries"`
-	StreamID          string `json:"stream_id"`
-	InternalName      string `json:"internal_name"`
-	DispatchedAt      int64  `json:"dispatched_at"`
+	// SourceNodeID is the ingest node that accepted this recording's session. An
+	// ingest session is node-bound, so a later StartDVR resolving a DIFFERENT live
+	// source node for the same stream is a new session: startDVR records it fresh
+	// (never adopting this row) and this row is finalized by its own source node's
+	// STREAM_END via control.StopDVRForEndedSource. It is also the key
+	// StopDVRForEndedSource matches a STREAM_END against to stop the right session.
+	SourceNodeID string `json:"source_node_id"`
+	// IngestGeneration is the durable ingest-session id (foghorn.ingest_sessions.id)
+	// this recording is bound to. It is a PRECISE session identity (tenant, node,
+	// connector PID) — unlike SourceNodeID which is node-only — so a same-node reconnect
+	// (new PID → new session) is correctly a new recording. Also mirrored to the
+	// artifacts.ingest_generation column (the indexed close-side lookup path). Empty for
+	// a manual start or when the PID was unavailable; callers fall back to SourceNodeID.
+	IngestGeneration string `json:"ingest_generation,omitempty"`
+	SegmentSeconds   int32  `json:"segment_seconds"`
+	WindowSeconds    int32  `json:"window_seconds"`
+	MaxEntries       int32  `json:"max_entries"`
+	StreamID         string `json:"stream_id"`
+	InternalName     string `json:"internal_name"`
+	DispatchedAt     int64  `json:"dispatched_at"`
 }
 
 // DVRStartingRecoveryJob is a SERVICE-OWNED reconciliation for DVR recordings stranded in
@@ -243,7 +258,7 @@ func (j *DVRStartingRecoveryJob) reconcileOne(ctx context.Context, r startingDVR
 	// (FinalizeDVR clears the obligation, retaining only {node_id}). The user-visible status may already be
 	// 'failed' (surfaced when the pending hard grace lapsed) while this drain continues underneath.
 	if d.State == DVRDispatchStateStopPending {
-		stopReq := &ipcpb.DVRStopRequest{DvrHash: r.artifactHash, RequestId: r.artifactHash}
+		stopReq := &ipcpb.DVRStopRequest{DvrHash: r.artifactHash, RequestId: r.artifactHash, CommandGeneration: control.DVRStopCommandGeneration}
 		if stopErr := j.sendStop(d.NodeID, stopReq); stopErr != nil {
 			j.logger.WithError(stopErr).WithField("dvr_hash", r.artifactHash).Warn("DVR starting-recovery: stop re-send failed; will retry")
 			return
@@ -265,12 +280,43 @@ func (j *DVRStartingRecoveryJob) reconcileOne(ctx context.Context, r startingDVR
 			j.logger.WithError(setErr).WithField("dvr_hash", r.artifactHash).Warn("DVR starting-recovery: failed to persist stop obligation before hard-grace finalize; will retry")
 			return
 		}
-		stopReq := &ipcpb.DVRStopRequest{DvrHash: r.artifactHash, RequestId: r.artifactHash}
+		stopReq := &ipcpb.DVRStopRequest{DvrHash: r.artifactHash, RequestId: r.artifactHash, CommandGeneration: control.DVRStopCommandGeneration}
 		if stopErr := j.sendStop(d.NodeID, stopReq); stopErr != nil {
 			j.logger.WithError(stopErr).WithField("dvr_hash", r.artifactHash).Warn("DVR starting-recovery: hard-grace compensating stop send failed; stop_pending persisted for drain")
 		}
 		j.failWithRetainedStopObligation(ctx, r, fmt.Sprintf("no node progress within hard grace (%s); recording unrecoverable", j.failAfter))
 		return
+	}
+
+	// Durable supersession fence on the start-REDELIVERY path. The in-memory Helmsman
+	// command-generation tombstone is lost across a Helmsman restart, so it cannot be the
+	// correctness boundary; the boundary is the durable ingest_sessions.ended_at written by
+	// the publisher's PUSH_INPUT_CLOSE. A stranded 'pending' start whose ingest generation
+	// has already ended is superseded — re-dispatching it would start (or keep) a recording
+	// nothing will stop. Convert it to a stop obligation and drain it (the node treats a stop
+	// for an unknown/undisturbed hash idempotently). Bounded to rows that carry a generation;
+	// a manual start with no generation falls through to the node-scoped STREAM_END backstop.
+	if d.IngestGeneration != "" {
+		ended, endErr := j.ingestGenerationEnded(ctx, r.tenantID, d.IngestGeneration)
+		if endErr != nil {
+			j.logger.WithError(endErr).WithField("dvr_hash", r.artifactHash).Warn("DVR starting-recovery: ingest-generation state check failed; will retry")
+			return
+		}
+		if ended {
+			if setErr := j.persistStopObligation(ctx, r.artifactHash, r.tenantID); setErr != nil {
+				j.logger.WithError(setErr).WithField("dvr_hash", r.artifactHash).Warn("DVR starting-recovery: failed to persist stop obligation for ended ingest generation; will retry")
+				return
+			}
+			stopReq := &ipcpb.DVRStopRequest{DvrHash: r.artifactHash, RequestId: r.artifactHash, CommandGeneration: control.DVRStopCommandGeneration}
+			if stopErr := j.sendStop(d.NodeID, stopReq); stopErr != nil {
+				j.logger.WithError(stopErr).WithField("dvr_hash", r.artifactHash).Warn("DVR starting-recovery: stop send for ended ingest generation failed; stop_pending persisted for drain")
+			}
+			j.logger.WithFields(logging.Fields{
+				"dvr_hash":          r.artifactHash,
+				"ingest_generation": d.IngestGeneration,
+			}).Info("DVR starting-recovery: ingest generation ended; converted stranded start to a stop obligation instead of re-dispatching")
+			return
+		}
 	}
 
 	// state 'pending' within the hard grace: re-run the recording-origin registration (idempotent upsert)
@@ -287,6 +333,7 @@ func (j *DVRStartingRecoveryJob) reconcileOne(ctx context.Context, r startingDVR
 		SourceBaseUrl:     d.SourceBaseURL,
 		RequestId:         r.artifactHash,
 		StreamId:          d.StreamID,
+		CommandGeneration: control.DVRStartCommandGeneration,
 		Config: &ipcpb.DVRConfig{
 			Enabled:          true,
 			Format:           "ts",
@@ -307,6 +354,30 @@ func (j *DVRStartingRecoveryJob) reconcileOne(ctx context.Context, r startingDVR
 		"dvr_hash": r.artifactHash,
 		"node_id":  d.NodeID,
 	}).Info("DVR starting-recovery: re-dispatched start; awaiting node progress ack")
+}
+
+// ingestGenerationEnded reports whether the durable ingest session bound to a stranded
+// start has already ended (its publisher's PUSH_INPUT_CLOSE landed). Fails OPEN on an
+// unknown generation (no row): the durable stop paths (StopDVRForIngestSession, the
+// STREAM_END backstop) remain the authority on stopping, so a missing session row must
+// not strand a legitimate recording; this check only suppresses a provably-superseded
+// re-dispatch.
+func (j *DVRStartingRecoveryJob) ingestGenerationEnded(ctx context.Context, tenantID, ingestGeneration string) (bool, error) {
+	if j.db == nil {
+		return false, sql.ErrConnDone
+	}
+	var ended bool
+	err := j.db.QueryRowContext(ctx, `
+		SELECT ended_at IS NOT NULL FROM foghorn.ingest_sessions
+		 WHERE id = $1::uuid AND tenant_id = $2::uuid
+	`, ingestGeneration, tenantID).Scan(&ended)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return ended, nil
 }
 
 // persistStopObligation durably marks dvr_start_dispatch.state='stop_pending' BEFORE any compensating

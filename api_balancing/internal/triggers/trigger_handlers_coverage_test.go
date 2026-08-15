@@ -7,6 +7,7 @@ import (
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
@@ -52,26 +53,45 @@ func resetStateTrigHandlers(t *testing.T) *state.StreamStateManager {
 // fields. Suffix keeps it from colliding with sibling test helpers.
 func ptrTrigHandlers(s string) *string { return &s }
 
-// TestHandlePushInputClose_FlipsSourceInactiveForResume locks the canonical
-// "source_active=false" edge: PUSH_INPUT_CLOSE (publisher source
-// disconnected) must flip the registry's source-presence state so the next
-// PUSH_REWRITE for the same stream is admitted via the resume path instead of
-// rejected as a duplicate. This is the primary edge AdmitAndReserve relies on
-// (STREAM_END is only the belt-and-suspenders backstop).
-func TestHandlePushInputClose_FlipsSourceInactiveForResume(t *testing.T) {
+// TestHandlePushInputClose_PersistsOfflineEffect verifies the close commits its
+// offline transition with the session end. Registry mutation belongs to the
+// leased outbox worker, not the trigger handler.
+func TestHandlePushInputClose_PersistsOfflineEffect(t *testing.T) {
 	reg := installRegistryTrigHandlers(t)
 	resetStateTrigHandlers(t)
 
-	const internal = "pic-stream-1"
-	if r := reg.AdmitAndReserve(internal, "node-A", nil); r.Decision != control.AdmissionAcceptNew {
-		t.Fatalf("seed admit: %v", r.Decision)
+	// A close now flips the source only when FinalizeIngestSessionClose ends a real session
+	// and returns its generation (the reuse-safe CAS). Wire a mock DB that ends the session
+	// and stamp that generation onto the registry source so the generation CAS matches.
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
 	}
+	prevDB := control.GetDB()
+	control.SetDB(mockDB)
+	t.Cleanup(func() { control.SetDB(prevDB); mockDB.Close() })
+
+	const internal = "pic-stream-1"
+	projectSourceForTest(t, reg, internal, "node-A", 4242, "", "gen-pic", 1)
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`UPDATE foghorn.ingest_sessions.*RETURNING id`).
+		WithArgs("tenant-x", "node-A", int64(4242), int64(1), internal).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "start_trigger_uuid", "ingest_cluster_id"}).AddRow("gen-pic", "trigger-uuid-x", "demo-media"))
+	mock.ExpectQuery(`UPDATE foghorn.artifacts.*RETURNING`).
+		WithArgs("gen-pic", "tenant-x").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "node_id"}))
+	mock.ExpectQuery(`nextval`).WillReturnRows(sqlmock.NewRows([]string{"nextval"}).AddRow(int64(2)))
+	expectOfflineEffectInsert(mock)
+	mock.ExpectCommit()
 
 	p := minimalProcessorTrigHandlers(t)
 	_, abort, err := p.handlePushInputClose(&ipcpb.MistTrigger{
-		NodeId: "node-A",
+		NodeId:   "node-A",
+		TenantId: ptrTrigHandlers("tenant-x"),
 		TriggerPayload: &ipcpb.MistTrigger_PushInputClose{
-			PushInputClose: &ipcpb.PushInputCloseTrigger{StreamName: "live+" + internal},
+			PushInputClose: &ipcpb.PushInputCloseTrigger{StreamName: "live+" + internal, Pid: 4242, TriggerUnixMillis: 1},
 		},
 	})
 	if err != nil {
@@ -81,10 +101,33 @@ func TestHandlePushInputClose_FlipsSourceInactiveForResume(t *testing.T) {
 		t.Fatalf("PUSH_INPUT_CLOSE is async/non-blocking, must not abort")
 	}
 
-	// Source-presence must be cleared so node-A can resume.
-	r := reg.AdmitAndReserve(internal, "node-A", nil)
-	if r.Decision != control.AdmissionAcceptResume {
-		t.Errorf("post-PUSH_INPUT_CLOSE admit = %v, want AdmissionAcceptResume", r.Decision)
+	if _, active, ok := reg.SourceGenerationSnapshot(internal, "node-A"); !ok || !active {
+		t.Errorf("trigger handler mutated source state before the durable worker (active=%v ok=%v)", active, ok)
+	}
+}
+
+func TestHandlePushInputClose_NoDatabaseReturnsRetryableError(t *testing.T) {
+	installRegistryTrigHandlers(t)
+	resetStateTrigHandlers(t)
+	previous := control.GetDB()
+	control.SetDB(nil)
+	t.Cleanup(func() { control.SetDB(previous) })
+
+	p := minimalProcessorTrigHandlers(t)
+	_, abort, err := p.handlePushInputClose(&ipcpb.MistTrigger{
+		NodeId:   "node-A",
+		TenantId: ptrTrigHandlers("tenant-x"),
+		TriggerPayload: &ipcpb.MistTrigger_PushInputClose{
+			PushInputClose: &ipcpb.PushInputCloseTrigger{
+				StreamName: "live+pic-no-db", Pid: 4242, TriggerUnixMillis: 1,
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("unconfigured database close was ACKed")
+	}
+	if abort {
+		t.Fatal("retryable close failure must not become a permanent abort")
 	}
 }
 
@@ -92,15 +135,13 @@ func TestHandlePushInputClose_FlipsSourceInactiveForResume(t *testing.T) {
 // invariant that a processing+ PUSH_INPUT_CLOSE (a transcoding job's input
 // process exiting — sidecar-local job lifecycle, NOT publisher admission)
 // must NOT touch publisher source-presence state. Flipping it here would let
-// a phantom resume/takeover race the live publisher.
+// a phantom replacement admission race the live publisher's session.
 func TestHandlePushInputClose_ProcessingPrefixSkipsRegistryFlip(t *testing.T) {
 	reg := installRegistryTrigHandlers(t)
 	resetStateTrigHandlers(t)
 
 	const internal = "pic-proc-1"
-	if r := reg.AdmitAndReserve(internal, "node-A", nil); r.Decision != control.AdmissionAcceptNew {
-		t.Fatalf("seed admit: %v", r.Decision)
-	}
+	projectSourceForTest(t, reg, internal, "node-A", 0, "", "gen-proc", 1)
 
 	p := minimalProcessorTrigHandlers(t)
 	_, _, err := p.handlePushInputClose(&ipcpb.MistTrigger{
@@ -113,10 +154,10 @@ func TestHandlePushInputClose_ProcessingPrefixSkipsRegistryFlip(t *testing.T) {
 		t.Fatalf("handlePushInputClose err: %v", err)
 	}
 
-	// node-A must still own the live source: a takeover from node-B rejects.
-	r := reg.AdmitAndReserve(internal, "node-B", nil)
-	if r.Decision != control.AdmissionRejectDuplicate {
-		t.Errorf("processing+ PUSH_INPUT_CLOSE must not clear source: admit = %v, want AdmissionRejectDuplicate", r.Decision)
+	// node-A must still own the live source (a processing+ PUSH_INPUT_CLOSE must not clear it); a
+	// later duplicate is the DB's job to reject, so the registry invariant is just that it survives.
+	if _, active, ok := reg.SourceGenerationSnapshot(internal, ""); !ok || !active {
+		t.Errorf("processing+ PUSH_INPUT_CLOSE must not clear the live source (active=%v ok=%v)", active, ok)
 	}
 }
 

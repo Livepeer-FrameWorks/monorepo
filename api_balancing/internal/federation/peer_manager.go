@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -21,7 +22,6 @@ import (
 	foghornfed "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn/federation"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
@@ -29,7 +29,7 @@ import (
 )
 
 // PeerManager manages PeerChannel lifecycles and periodic peer discovery.
-// It refreshes the peer list from Quartermaster every 30s and maintains
+// It reconciles the peer list from Quartermaster every five minutes and maintains
 // one PeerChannel per peer cluster for bidirectional telemetry exchange.
 // In multi-replica deployments, only the leader instance runs the active
 // peering loop (Redis-based leader lease).
@@ -44,15 +44,26 @@ type PeerManager struct {
 	ownerTenantID          string
 	selfGeoFunc            func() (float64, float64, string)
 	artifactTenantResolver func(ctx context.Context, hashes []string) (map[string]string, error)
+	canPurgeMemberships    func(context.Context, []control.AdmissionEffectFence) (map[string]bool, error)
 
-	mu               sync.RWMutex
-	peers            map[string]*peerState      // cluster_id -> peer state
-	streamPeers      map[string]map[string]bool // cluster_id -> set of active stream names
-	metricHistory    map[string][]metricSample  // node_id -> recent BW/CPU samples for 30s averaging
-	done             chan struct{}
-	isLeader         bool
-	startTime        time.Time
-	reconnectBackoff time.Duration
+	mu                            sync.RWMutex
+	peers                         map[string]*peerState      // cluster_id -> peer state
+	streamPeers                   map[string]map[string]bool // cluster_id -> set of active stream names
+	streamTenants                 map[string]string          // stream name -> tenant id
+	streamMemberships             map[string]StreamPeerMembership
+	trackedTenantRefs             map[string]map[string]int
+	trackedAddrRefs               map[string]map[string]map[int64]int
+	trackedAlwaysOnRefs           map[string]int
+	quartermasterHints            map[string]PeerHint       // leader-owned authoritative refresh snapshot
+	quartermasterHintsRefreshedAt time.Time                 // bounds renewal when Quartermaster stops answering
+	metricHistory                 map[string][]metricSample // node_id -> recent BW/CPU samples for 30s averaging
+	nextPeerRunnerToken           uint64
+	done                          chan struct{}
+	isLeader                      bool
+	leaderReady                   bool
+	startTime                     time.Time
+	reconnectBackoff              time.Duration
+	tombstoneScanCursor           uint64
 
 	unresolvedAdMu     sync.Mutex
 	unresolvedAdLogged map[string]time.Time // artifact_hash -> last skip log, throttles the 30s ad loop
@@ -75,17 +86,24 @@ const (
 type peerState struct {
 	addr        string
 	tenantIDs   []string
+	tenantSet   map[string]struct{}
 	lifecycle   peerLifecycleType
-	fromRedis   bool
 	cancel      context.CancelFunc
 	stream      foghornfederationpb.FoghornFederation_PeerChannelClient
 	sendCh      chan *foghornfederationpb.PeerMessage // owned by the per-peer writer goroutine; producers enqueue, never Send directly
 	dropped     atomic.Uint64                         // frames evicted (drop-oldest) because the mailbox was full (backpressured peer)
 	lastRefresh time.Time
 	connected   bool
+	runnerToken uint64
 	lat         float64
 	lon         float64
 	location    string
+}
+
+type peerConnectRequest struct {
+	clusterID string
+	state     *peerState
+	token     uint64
 }
 
 type clusterPeerDiscovery interface {
@@ -148,6 +166,9 @@ type PeerManagerConfig struct {
 	// the artifact registry. Artifacts outlive their streams, so in-memory
 	// stream state alone cannot attribute warm files from ended streams.
 	ArtifactTenantResolver func(ctx context.Context, hashes []string) (map[string]string, error)
+	// CanPurgeMemberships proves through the admission ledger that no pending callback at or below
+	// an ended membership revision can still issue TrackStream.
+	CanPurgeMemberships func(context.Context, []control.AdmissionEffectFence) (map[string]bool, error)
 }
 
 // NewPeerManager creates and starts a new peer manager.
@@ -168,8 +189,15 @@ func NewPeerManager(cfg PeerManagerConfig) *PeerManager {
 		ownerTenantID:          cfg.OwnerTenantID,
 		selfGeoFunc:            cfg.SelfGeoFunc,
 		artifactTenantResolver: cfg.ArtifactTenantResolver,
+		canPurgeMemberships:    cfg.CanPurgeMemberships,
 		peers:                  make(map[string]*peerState),
 		streamPeers:            make(map[string]map[string]bool),
+		streamTenants:          make(map[string]string),
+		streamMemberships:      make(map[string]StreamPeerMembership),
+		trackedTenantRefs:      make(map[string]map[string]int),
+		trackedAddrRefs:        make(map[string]map[string]map[int64]int),
+		trackedAlwaysOnRefs:    make(map[string]int),
+		quartermasterHints:     make(map[string]PeerHint),
 		metricHistory:          make(map[string][]metricSample),
 		done:                   make(chan struct{}),
 		startTime:              time.Now(),
@@ -306,75 +334,39 @@ func (pm *PeerManager) IsPeerConnected(clusterID string) bool {
 	return false
 }
 
-// NotifyPeers accepts peer discovery hints from stream validation.
-// All replicas register addresses (so GetPeerAddr works everywhere);
-// only the leader opens PeerChannel connections.
-func (pm *PeerManager) NotifyPeers(peers []*clusterpeerpb.TenantClusterPeer, tenantID string) {
-	var changed bool
-
+// LeaderInstanceID returns the instance currently holding PeerManager leadership ("" when unknown):
+// self when leading, otherwise the leader-lease holder from Redis. Used to route leader-affine
+// durable obligations (federation broadcasts) to the replica that can actually execute them.
+func (pm *PeerManager) LeaderInstanceID() string {
 	pm.mu.Lock()
-	for _, peer := range peers {
-		if peer.GetClusterId() == pm.clusterID || peer.GetClusterId() == "" || control.IsServedCluster(peer.GetClusterId()) {
-			continue
-		}
-		lifecycle := peerStreamScoped
-		if peer.GetRole() == "official" || peer.GetRole() == "preferred" {
-			lifecycle = peerAlwaysOn
-		}
-
-		addr := peer.GetFoghornGrpcAddr()
-		if addr == "" {
-			pm.logger.WithFields(map[string]interface{}{
-				"peer_cluster": peer.GetClusterId(),
-			}).Warn("Skipping federation peer without internal Foghorn address")
-			continue
-		}
-		if existing, known := pm.peers[peer.GetClusterId()]; known {
-			if existing.addr != addr {
-				changed = true
-			}
-			existing.addr = addr
-			existing.lifecycle = lifecycle
-			existing.lastRefresh = time.Now()
-			continue
-		}
-
-		var seedTenants []string
-		if tenantID != "" {
-			seedTenants = []string{tenantID}
-		}
-		ps := &peerState{
-			addr:        addr,
-			lifecycle:   lifecycle,
-			tenantIDs:   seedTenants,
-			fromRedis:   false,
-			lastRefresh: time.Now(),
-		}
-		pm.peers[peer.GetClusterId()] = ps
-		changed = true
-
-		if pm.isLeader {
-			go pm.connectPeer(peer.GetClusterId(), ps)
-		}
-
-		pm.logger.WithFields(map[string]interface{}{
-			"peer_cluster": peer.GetClusterId(),
-			"addr":         addr,
-			"role":         peer.GetRole(),
-			"lifecycle":    lifecycle,
-			"is_leader":    pm.isLeader,
-		}).Info("Demand-driven peer discovered from stream validation")
-	}
-	isLeader := pm.isLeader
+	leading := pm.isLeader
 	pm.mu.Unlock()
-
-	if changed && isLeader && pm.cache != nil {
-		pm.syncPeerAddressesToRedis()
+	if leading {
+		return pm.instanceID
 	}
+	if pm.cache == nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return pm.cache.GetLeaderInstance(ctx, leaderRole)
+}
+
+// IsLeader reports whether this replica currently holds PeerManager leadership. Only the leader
+// opens PeerChannel connections, so federation lifecycle broadcasts are meaningful only from the
+// leader — a non-leader broadcast would reach zero peers while looking successful.
+func (pm *PeerManager) IsLeader() bool {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	return pm.isLeader && pm.leaderReady
+}
+
+func (pm *PeerManager) quartermasterContributorID() string {
+	return pm.instanceID + ":quartermaster"
 }
 
 func (pm *PeerManager) shouldSendStreamToPeer(peerID string, ps *peerState, streamName, tenantID string) bool {
-	if len(ps.tenantIDs) > 0 && tenantID != "" && !slices.Contains(ps.tenantIDs, tenantID) {
+	if len(ps.tenantIDs) > 0 && tenantID != "" && !peerHasTenant(ps, tenantID) {
 		return false
 	}
 	if tenantID != "" && len(ps.tenantIDs) == 0 && ps.lifecycle == peerStreamScoped {
@@ -389,108 +381,371 @@ func (pm *PeerManager) shouldSendStreamToPeer(peerID string, ps *peerState, stre
 	return true
 }
 
-// TrackStream records that a stream is active and associated with specific peer clusters.
-// Called when a stream goes live (PUSH_REWRITE) to maintain stream-scoped peer lifetimes.
-func (pm *PeerManager) TrackStream(streamName string, clusterIDs []string) {
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
-	for _, cid := range clusterIDs {
-		if cid == pm.clusterID || cid == "" {
+func peerHasTenant(ps *peerState, tenantID string) bool {
+	if ps == nil {
+		return false
+	}
+	if ps.tenantSet != nil {
+		_, ok := ps.tenantSet[tenantID]
+		return ok
+	}
+	return slices.Contains(ps.tenantIDs, tenantID)
+}
+
+func replacePeerTenants(ps *peerState, tenantIDs []string) {
+	ps.tenantIDs = append(ps.tenantIDs[:0], tenantIDs...)
+	ps.tenantSet = make(map[string]struct{}, len(ps.tenantIDs))
+	for _, tenantID := range ps.tenantIDs {
+		ps.tenantSet[tenantID] = struct{}{}
+	}
+}
+
+// TrackStream durably records one generation's complete peer set. The return value is false when a
+// newer revision or an ended equal revision already owns the membership; callers must not emit the
+// stale generation's lifecycle event in that case.
+func (pm *PeerManager) TrackStream(ctx context.Context, streamName, tenantID, sourceGeneration string, sourceRevision int64, admissionHints []control.AdmissionPeerHint) (bool, error) {
+	streamName = strings.TrimSpace(streamName)
+	tenantID = strings.TrimSpace(tenantID)
+	sourceGeneration = strings.TrimSpace(sourceGeneration)
+	if streamName == "" || tenantID == "" || sourceGeneration == "" || sourceRevision <= 0 {
+		return false, errors.New("federation stream tracking requires stream, tenant, generation, and positive revision")
+	}
+	peerHints := make(map[string]PeerHint, len(admissionHints))
+	membership := StreamPeerMembership{
+		StreamName: streamName, TenantID: tenantID, SourceGeneration: sourceGeneration,
+		SourceRevision: sourceRevision, Active: true,
+	}
+	for _, admissionHint := range admissionHints {
+		clusterID := strings.TrimSpace(admissionHint.ClusterID)
+		addr := strings.TrimSpace(admissionHint.Addr)
+		if clusterID == "" || addr == "" {
+			return false, errors.New("federation stream tracking received an incomplete durable peer hint")
+		}
+		if clusterID == pm.clusterID || control.IsServedCluster(clusterID) {
 			continue
 		}
-		if pm.streamPeers[cid] == nil {
-			pm.streamPeers[cid] = make(map[string]bool)
-		}
-		pm.streamPeers[cid][streamName] = true
-		pm.flushStreamPeersToRedis(cid)
-	}
-}
-
-// UntrackStream removes a stream from all peer clusters. If a stream-scoped peer
-// has no remaining active streams, its PeerChannel is closed.
-func (pm *PeerManager) UntrackStream(streamName string) {
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
-	for cid, streams := range pm.streamPeers {
-		delete(streams, streamName)
-		if len(streams) == 0 {
-			delete(pm.streamPeers, cid)
-			pm.flushStreamPeersToRedis(cid)
-			ps, ok := pm.peers[cid]
-			if ok && ps.lifecycle == peerStreamScoped {
-				if ps.cancel != nil {
-					ps.cancel()
-				}
-				delete(pm.peers, cid)
-				pm.logger.WithFields(map[string]interface{}{
-					"peer_cluster": cid,
-					"stream":       streamName,
-				}).Info("Closed stream-scoped peer (no remaining streams)")
+		if existing, ok := peerHints[clusterID]; ok {
+			if existing.Addr != addr || existing.AlwaysOn != admissionHint.AlwaysOn {
+				return false, fmt.Errorf("federation stream tracking has conflicting hints for peer %s", clusterID)
 			}
-		} else {
-			pm.flushStreamPeersToRedis(cid)
+			continue
+		}
+		peerHints[clusterID] = PeerHint{Addr: addr, AlwaysOn: admissionHint.AlwaysOn, Tenants: []string{tenantID}}
+		membership.Peers = append(membership.Peers, StreamPeerTarget{ClusterID: clusterID, Addr: addr, AlwaysOn: admissionHint.AlwaysOn})
+	}
+	var err error
+	membership, err = normalizeStreamPeerMembership(membership)
+	if err != nil {
+		return false, err
+	}
+	if pm.cache != nil {
+		current, persistErr := pm.cache.SetStreamPeerMembership(ctx, membership)
+		if persistErr != nil {
+			return false, fmt.Errorf("persist federation stream membership: %w", persistErr)
+		}
+		if !current {
+			return false, nil
+		}
+	}
+	pm.mu.Lock()
+	var replacedPeers []StreamPeerTarget
+	if previous, ok := pm.streamMemberships[streamName]; ok {
+		switch {
+		case previous.SourceRevision > membership.SourceRevision:
+			pm.mu.Unlock()
+			return false, nil
+		case previous.SourceRevision == membership.SourceRevision && previous.SourceGeneration != membership.SourceGeneration:
+			pm.mu.Unlock()
+			return false, errors.New("federation stream tracking revision conflicts with another generation")
+		case previous.SourceRevision == membership.SourceRevision && !previous.Active:
+			pm.mu.Unlock()
+			return false, nil
+		case previous.SourceRevision == membership.SourceRevision && !streamPeerMembershipEqual(previous, membership):
+			pm.mu.Unlock()
+			return false, errors.New("federation stream tracking revision conflicts with another peer set")
+		case previous.SourceRevision == membership.SourceRevision:
+			toConnect := pm.importAdmissionPeerHintsLocked(peerHints)
+			pm.mu.Unlock()
+			pm.connectAuthorityPeers(toConnect)
+			return true, pm.streamMembershipReadiness(ctx, membership)
+		}
+		pm.removeStreamMembershipLocked(previous)
+		replacedPeers = previous.Peers
+	}
+	pm.addStreamMembershipLocked(membership)
+	pm.closeUntrackedStreamScopedPeersLocked(replacedPeers, streamName)
+	toConnect := pm.importAdmissionPeerHintsLocked(peerHints)
+	pm.mu.Unlock()
+	pm.connectAuthorityPeers(toConnect)
+	return true, pm.streamMembershipReadiness(ctx, membership)
+}
+
+func (pm *PeerManager) streamMembershipReadiness(ctx context.Context, membership StreamPeerMembership) error {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	var readinessErr error
+	for _, peer := range membership.Peers {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(readinessErr, err)
+		}
+		ps := pm.peers[peer.ClusterID]
+		if ps == nil {
+			readinessErr = errors.Join(readinessErr, fmt.Errorf("federation peer %s has no imported discovery hint", peer.ClusterID))
+		} else if !ps.connected || ps.stream == nil {
+			readinessErr = errors.Join(readinessErr, fmt.Errorf("federation peer %s is not connected", peer.ClusterID))
+		}
+	}
+	return readinessErr
+}
+
+// UntrackStream installs a revision tombstone and removes only the matching generation. If a
+// stream-scoped peer has no remaining active streams, its PeerChannel is closed.
+func (pm *PeerManager) UntrackStream(ctx context.Context, streamName, tenantID, sourceGeneration string, sourceRevision int64) error {
+	streamName = strings.TrimSpace(streamName)
+	tenantID = strings.TrimSpace(tenantID)
+	sourceGeneration = strings.TrimSpace(sourceGeneration)
+	if streamName == "" || tenantID == "" || sourceGeneration == "" || sourceRevision <= 0 {
+		return errors.New("federation stream untracking requires stream, tenant, generation, and positive revision")
+	}
+	tombstone := StreamPeerMembership{
+		StreamName: streamName, TenantID: tenantID, SourceGeneration: sourceGeneration,
+		SourceRevision: sourceRevision, Active: false, EndedAtUnixMilli: time.Now().UnixMilli(),
+	}
+	var err error
+	tombstone, err = normalizeStreamPeerMembership(tombstone)
+	if err != nil {
+		return err
+	}
+	if pm.cache != nil {
+		current, err := pm.cache.EndStreamPeerMembership(ctx, tombstone)
+		if err != nil {
+			return fmt.Errorf("end federation stream membership: %w", err)
+		}
+		if !current {
+			return nil
+		}
+	}
+	pm.mu.Lock()
+	previous, tracked := pm.streamMemberships[streamName]
+	if tracked && previous.SourceRevision > sourceRevision {
+		pm.mu.Unlock()
+		return nil
+	}
+	if tracked && previous.SourceRevision == sourceRevision && previous.SourceGeneration != sourceGeneration {
+		pm.mu.Unlock()
+		return errors.New("federation stream untracking revision conflicts with another generation")
+	}
+	if tracked {
+		pm.removeStreamMembershipLocked(previous)
+	}
+	if pm.cache == nil {
+		// Without shared Redis, the in-process tombstone is the only stale callback fence.
+		pm.addStreamMembershipLocked(tombstone)
+	}
+	pm.closeUntrackedStreamScopedPeersLocked(previous.Peers, streamName)
+	pm.mu.Unlock()
+	return ctx.Err()
+}
+
+func streamPeerMembershipEqual(a, b StreamPeerMembership) bool {
+	return a.Version == b.Version && a.StreamName == b.StreamName && a.TenantID == b.TenantID &&
+		a.SourceGeneration == b.SourceGeneration && a.SourceRevision == b.SourceRevision &&
+		a.Active == b.Active && slices.Equal(a.Peers, b.Peers)
+}
+
+func (pm *PeerManager) closeUntrackedStreamScopedPeersLocked(peers []StreamPeerTarget, streamName string) {
+	for _, peer := range peers {
+		ps, ok := pm.peers[peer.ClusterID]
+		if !ok || ps.lifecycle != peerStreamScoped || len(pm.streamPeers[peer.ClusterID]) != 0 {
+			continue
+		}
+		if ps.cancel != nil {
+			ps.cancel()
+		}
+		delete(pm.peers, peer.ClusterID)
+		pm.logger.WithFields(map[string]interface{}{
+			"peer_cluster": peer.ClusterID,
+			"stream":       streamName,
+		}).Info("Closed stream-scoped peer (no remaining streams)")
+	}
+}
+
+func (pm *PeerManager) addStreamMembershipLocked(membership StreamPeerMembership) {
+	pm.streamMemberships[membership.StreamName] = membership
+	if !membership.Active {
+		return
+	}
+	pm.streamTenants[membership.StreamName] = membership.TenantID
+	for _, peer := range membership.Peers {
+		if pm.streamPeers[peer.ClusterID] == nil {
+			pm.streamPeers[peer.ClusterID] = make(map[string]bool)
+		}
+		pm.streamPeers[peer.ClusterID][membership.StreamName] = true
+		if pm.trackedTenantRefs[peer.ClusterID] == nil {
+			pm.trackedTenantRefs[peer.ClusterID] = make(map[string]int)
+		}
+		pm.trackedTenantRefs[peer.ClusterID][membership.TenantID]++
+		if pm.trackedAddrRefs[peer.ClusterID] == nil {
+			pm.trackedAddrRefs[peer.ClusterID] = make(map[string]map[int64]int)
+		}
+		if pm.trackedAddrRefs[peer.ClusterID][peer.Addr] == nil {
+			pm.trackedAddrRefs[peer.ClusterID][peer.Addr] = make(map[int64]int)
+		}
+		pm.trackedAddrRefs[peer.ClusterID][peer.Addr][membership.SourceRevision]++
+		if peer.AlwaysOn {
+			pm.trackedAlwaysOnRefs[peer.ClusterID]++
 		}
 	}
 }
 
-// flushStreamPeersToRedis persists the current stream set for a peer cluster.
-// Must be called with pm.mu held.
-func (pm *PeerManager) flushStreamPeersToRedis(peerClusterID string) {
-	if pm.cache == nil {
+func (pm *PeerManager) removeStreamMembershipLocked(membership StreamPeerMembership) {
+	delete(pm.streamMemberships, membership.StreamName)
+	if !membership.Active {
 		return
 	}
-	streams := pm.streamPeers[peerClusterID]
-	var list []string
-	for s := range streams {
-		list = append(list, s)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := pm.cache.SetStreamPeers(ctx, peerClusterID, list); err != nil {
-		pm.logger.WithError(err).WithField("peer_cluster", peerClusterID).Warn("Failed to flush stream peers to Redis")
+	delete(pm.streamTenants, membership.StreamName)
+	for _, peer := range membership.Peers {
+		if streams := pm.streamPeers[peer.ClusterID]; streams != nil {
+			delete(streams, membership.StreamName)
+			if len(streams) == 0 {
+				delete(pm.streamPeers, peer.ClusterID)
+			}
+		}
+		decrementRef(pm.trackedTenantRefs[peer.ClusterID], membership.TenantID)
+		if len(pm.trackedTenantRefs[peer.ClusterID]) == 0 {
+			delete(pm.trackedTenantRefs, peer.ClusterID)
+		}
+		decrementRevisionRef(pm.trackedAddrRefs[peer.ClusterID][peer.Addr], membership.SourceRevision)
+		if len(pm.trackedAddrRefs[peer.ClusterID][peer.Addr]) == 0 {
+			delete(pm.trackedAddrRefs[peer.ClusterID], peer.Addr)
+		}
+		if len(pm.trackedAddrRefs[peer.ClusterID]) == 0 {
+			delete(pm.trackedAddrRefs, peer.ClusterID)
+		}
+		if peer.AlwaysOn {
+			pm.trackedAlwaysOnRefs[peer.ClusterID]--
+			if pm.trackedAlwaysOnRefs[peer.ClusterID] <= 0 {
+				delete(pm.trackedAlwaysOnRefs, peer.ClusterID)
+			}
+		}
 	}
 }
 
-// loadStreamPeersFromRedis loads persisted stream-peer mappings on leader takeover.
-func (pm *PeerManager) loadStreamPeersFromRedis() {
-	if pm.cache == nil {
+func decrementRevisionRef(refs map[int64]int, revision int64) {
+	if refs == nil {
 		return
+	}
+	refs[revision]--
+	if refs[revision] <= 0 {
+		delete(refs, revision)
+	}
+}
+
+func decrementRef(refs map[string]int, key string) {
+	if refs == nil {
+		return
+	}
+	refs[key]--
+	if refs[key] <= 0 {
+		delete(refs, key)
+	}
+}
+
+// loadStreamPeerMembershipsFromRedis installs only the exact active membership snapshot. Ended
+// records remain in Redis until ledger-coordinated cleanup, but never inflate leader process state.
+func (pm *PeerManager) loadStreamPeerMembershipsFromRedis() error {
+	if pm.cache == nil {
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	all, err := pm.cache.LoadAllStreamPeers(ctx)
+	all, err := pm.cache.LoadAllStreamPeerMemberships(ctx)
 	if err != nil {
-		pm.logger.WithError(err).Warn("Failed to load stream peers from Redis on leader takeover")
-		return
+		return fmt.Errorf("load stream peers on leader takeover: %w", err)
 	}
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
-	for cid, streams := range all {
-		if cid == pm.clusterID || cid == "" {
+	pm.streamPeers = make(map[string]map[string]bool)
+	pm.streamTenants = make(map[string]string)
+	pm.streamMemberships = make(map[string]StreamPeerMembership)
+	pm.trackedTenantRefs = make(map[string]map[string]int)
+	pm.trackedAddrRefs = make(map[string]map[string]map[int64]int)
+	pm.trackedAlwaysOnRefs = make(map[string]int)
+	for _, membership := range all {
+		if !membership.Active {
 			continue
 		}
-		if pm.streamPeers[cid] == nil {
-			pm.streamPeers[cid] = make(map[string]bool)
+		filtered := membership.Peers[:0]
+		for _, peer := range membership.Peers {
+			if peer.ClusterID != pm.clusterID && !control.IsServedCluster(peer.ClusterID) {
+				filtered = append(filtered, peer)
+			}
 		}
-		for _, s := range streams {
-			pm.streamPeers[cid][s] = true
+		membership.Peers = filtered
+		pm.addStreamMembershipLocked(membership)
+	}
+	if len(pm.streamMemberships) > 0 {
+		pm.logger.WithField("active_stream_count", len(pm.streamMemberships)).Info("Restored active stream-peer memberships from Redis")
+	}
+	return nil
+}
+
+func (pm *PeerManager) cleanupStreamMembershipTombstones(ctx context.Context) error {
+	if pm.cache == nil || pm.canPurgeMemberships == nil {
+		return nil
+	}
+	records, next, err := pm.cache.ScanEndedStreamPeerMemberships(ctx, pm.tombstoneScanCursor, streamPeerTombstoneScanCount)
+	if err != nil {
+		return err
+	}
+	pm.tombstoneScanCursor = next
+	cutoff := time.Now().Add(-streamPeerTombstoneRetention).UnixMilli()
+	candidates := make([]StreamPeerMembership, 0, len(records))
+	fences := make([]control.AdmissionEffectFence, 0, len(records))
+	for _, record := range records {
+		if record.EndedAtUnixMilli > cutoff {
+			continue
 		}
+		candidates = append(candidates, record)
+		fences = append(fences, control.AdmissionEffectFence{
+			TenantID: record.TenantID, InternalName: record.StreamName, SourceRevision: record.SourceRevision,
+		})
 	}
-	if len(all) > 0 {
-		pm.logger.WithField("peer_count", len(all)).Info("Restored stream-peer mappings from Redis")
+	if len(fences) == 0 {
+		return nil
 	}
+	purgeable, err := pm.canPurgeMemberships(ctx, fences)
+	if err != nil {
+		return fmt.Errorf("prove ended membership cleanup safety: %w", err)
+	}
+	approved := make([]StreamPeerMembership, 0, len(candidates))
+	for _, record := range candidates {
+		if !purgeable[record.StreamName] {
+			continue
+		}
+		approved = append(approved, record)
+	}
+	if len(approved) == 0 {
+		return nil
+	}
+	if _, err := pm.cache.PurgeEndedStreamPeerMemberships(ctx, approved); err != nil {
+		return err
+	}
+	return nil
 }
 
 const (
-	peerRefreshInterval   = 5 * time.Minute // reconciliation only; demand-driven path handles fast discovery
-	telemetryPushInterval = 5 * time.Second
-	summaryPushInterval   = 15 * time.Second
-	artifactPushInterval  = 30 * time.Second
-	peerReconnectBackoff  = 10 * time.Second
-	heartbeatPushInterval = 10 * time.Second
-	leaderAcquireInterval = 5 * time.Second
-	leaderRole            = "peer_manager"
-	protocolVersion       = uint32(1)
+	peerRefreshInterval          = 5 * time.Minute // reconciliation only; demand-driven path handles fast discovery
+	telemetryPushInterval        = 5 * time.Second
+	summaryPushInterval          = 15 * time.Second
+	artifactPushInterval         = 30 * time.Second
+	peerReconnectBackoff         = 10 * time.Second
+	streamPeerTombstoneRetention = time.Hour
+	streamPeerTombstoneScanCount = int64(512)
+	heartbeatPushInterval        = 10 * time.Second
+	leaderAcquireInterval        = 5 * time.Second
+	leaderRole                   = "peer_manager"
+	protocolVersion              = uint32(1)
 	// peerSendQueueSize bounds the per-peer writer mailbox. Every federation frame
 	// is best-effort with its own backstop (periodic re-push, or a TTL on the
 	// receiver's cache), so on overflow the oldest frame is evicted (latest-wins)
@@ -514,7 +769,9 @@ func (pm *PeerManager) run() {
 			pm.runAsLeader()
 		}
 
-		pm.loadPeerAddressesFromRedis()
+		if err := pm.loadPeerAddressesFromRedis(); err != nil {
+			pm.logger.WithError(err).Debug("Failed to load federation peer authority")
+		}
 
 		select {
 		case <-pm.done:
@@ -548,38 +805,52 @@ func (pm *PeerManager) renewLease() bool {
 func (pm *PeerManager) runAsLeader() {
 	pm.logger.WithField("instance_id", pm.instanceID).Info("Acquired PeerManager leadership")
 
-	pm.mu.Lock()
-	pm.isLeader = true
-	pm.mu.Unlock()
-
-	pm.emitFederationEvent(&ipcpb.FederationEventData{
-		EventType: ipcpb.FederationEventType_LEADER_ACQUIRED,
-		Role:      strPtr("peer_manager"),
-	})
-
 	defer func() {
-		pm.emitFederationEvent(&ipcpb.FederationEventData{
-			EventType: ipcpb.FederationEventType_LEADER_LOST,
-			Role:      strPtr("peer_manager"),
-		})
-
 		pm.mu.Lock()
+		wasReady := pm.leaderReady
 		pm.isLeader = false
+		pm.leaderReady = false
 		pm.mu.Unlock()
+		if wasReady {
+			pm.emitFederationEvent(&ipcpb.FederationEventData{
+				EventType: ipcpb.FederationEventType_LEADER_LOST,
+				Role:      strPtr("peer_manager"),
+			})
+		}
 		pm.disconnectAllPeers()
 		if pm.cache != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
+			if err := pm.cache.PublishPeerHints(ctx, pm.quartermasterContributorID(), map[string]PeerHint{}); err != nil {
+				pm.logger.WithError(err).Debug("Failed to revoke Quartermaster peer contribution on leader exit")
+			}
 			pm.cache.ReleaseLeaderLease(ctx, leaderRole, pm.instanceID)
 		}
 		pm.logger.Info("Released PeerManager leadership")
 	}()
 
-	pm.loadStreamPeersFromRedis()
-	pm.refreshPeers()
-	if pm.cache != nil {
-		pm.syncPeerAddressesToRedis()
+	if err := pm.loadStreamPeerMembershipsFromRedis(); err != nil {
+		pm.logger.WithError(err).Warn("Cannot reconstruct exact stream-peer state; relinquishing leadership")
+		return
 	}
+	pm.mu.Lock()
+	pm.quartermasterHints = make(map[string]PeerHint)
+	pm.quartermasterHintsRefreshedAt = time.Time{}
+	pm.isLeader = true
+	pm.leaderReady = false
+	pm.mu.Unlock()
+	if err := pm.loadPeerAddressesFromRedis(); err != nil {
+		pm.logger.WithError(err).Warn("Cannot establish exact federation authority; relinquishing leadership")
+		return
+	}
+	pm.mu.Lock()
+	pm.leaderReady = true
+	pm.mu.Unlock()
+	pm.emitFederationEvent(&ipcpb.FederationEventData{
+		EventType: ipcpb.FederationEventType_LEADER_ACQUIRED,
+		Role:      strPtr("peer_manager"),
+	})
+	pm.refreshPeers()
 
 	refreshTicker := time.NewTicker(peerRefreshInterval)
 	telemetryTicker := time.NewTicker(telemetryPushInterval)
@@ -597,10 +868,9 @@ func (pm *PeerManager) runAsLeader() {
 		case <-pm.done:
 			return
 		case <-refreshTicker.C:
+			// Replace the leader's authoritative Quartermaster contribution; refreshPeers then
+			// reconciles it with independently leased demand discoveries.
 			pm.refreshPeers()
-			if pm.cache != nil {
-				pm.syncPeerAddressesToRedis()
-			}
 		case <-telemetryTicker.C:
 			if !pm.renewLease() {
 				pm.logger.Warn("Lost PeerManager leader lease, stepping down")
@@ -614,10 +884,18 @@ func (pm *PeerManager) runAsLeader() {
 		case <-artifactTicker.C:
 			pm.pushArtifacts()
 		case <-heartbeatTicker.C:
-			pm.pushHeartbeat()
-			if pm.cache != nil {
-				pm.syncPeerAddressesToRedis()
+			// Quartermaster remains leased. Active membership changes only through incremental
+			// track/untrack records; proven-safe ended fences are collected separately below.
+			pm.publishQuartermasterHints()
+			if err := pm.loadPeerAddressesFromRedis(); err != nil {
+				pm.logger.WithError(err).Warn("Failed to reconcile federation peer authority")
 			}
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if err := pm.cleanupStreamMembershipTombstones(cleanupCtx); err != nil {
+				pm.logger.WithError(err).Warn("Failed to clean ended stream-peer membership fences")
+			}
+			cleanupCancel()
+			pm.pushHeartbeat()
 		}
 	}
 }
@@ -638,125 +916,394 @@ func (pm *PeerManager) refreshPeers() {
 		return
 	}
 
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
-
-	// Track which peers are still valid
-	seen := make(map[string]bool, len(resp.Peers))
-
+	hints := make(map[string]PeerHint, len(resp.Peers))
 	for _, peer := range resp.Peers {
-		if peer.FoghornAddr == "" {
+		if strings.TrimSpace(peer.FoghornAddr) == "" || strings.TrimSpace(peer.ClusterId) == "" || peer.ClusterId == pm.clusterID {
 			continue
 		}
-		seen[peer.ClusterId] = true
-
-		existing, ok := pm.peers[peer.ClusterId]
-		if ok && existing.addr == peer.FoghornAddr && existing.connected {
-			// Peer unchanged and connected, update tenant list
-			existing.tenantIDs = peer.SharedTenantIds
-			existing.lastRefresh = time.Now()
-			continue
-		}
-
-		// New peer or address changed — (re)connect
-		if ok && existing.cancel != nil {
-			existing.cancel()
-		}
-
-		ps := &peerState{
-			addr:        peer.FoghornAddr,
-			tenantIDs:   peer.SharedTenantIds,
-			fromRedis:   false,
-			lastRefresh: time.Now(),
-		}
-		pm.peers[peer.ClusterId] = ps
-
-		go pm.connectPeer(peer.ClusterId, ps)
-	}
-
-	// Remove peers no longer in the list
-	for id, ps := range pm.peers {
-		if !seen[id] {
-			if ps.cancel != nil {
-				ps.cancel()
-			}
-			delete(pm.peers, id)
-			pm.logger.WithField("peer_cluster", id).Info("Removed stale federation peer")
+		hints[peer.ClusterId] = PeerHint{
+			Addr:     peer.FoghornAddr,
+			AlwaysOn: true,
+			Tenants:  append([]string(nil), peer.SharedTenantIds...),
 		}
 	}
-
-	pm.logger.WithField("peer_count", len(pm.peers)).Debug("Federation peers refreshed")
+	pm.mu.Lock()
+	pm.quartermasterHints = hints
+	pm.quartermasterHintsRefreshedAt = time.Now()
+	pm.mu.Unlock()
+	pm.publishQuartermasterHints()
+	if err := pm.loadPeerAddressesFromRedis(); err != nil {
+		pm.logger.WithError(err).Warn("Failed to reconcile refreshed federation peers")
+	}
 }
 
-// syncPeerAddressesToRedis writes the current peer address map to Redis so
-// non-leader replicas can populate their local cache via loadPeerAddressesFromRedis.
-func (pm *PeerManager) syncPeerAddressesToRedis() {
+func (pm *PeerManager) localPeerHints() map[string]PeerHint {
 	pm.mu.RLock()
-	addrs := make(map[string]string, len(pm.peers))
-	for id, ps := range pm.peers {
-		addrs[id] = ps.addr
-	}
-	pm.mu.RUnlock()
+	defer pm.mu.RUnlock()
+	return pm.localPeerHintsLocked()
+}
 
+func (pm *PeerManager) localPeerHintsLocked() map[string]PeerHint {
+	hints := pm.trackedPeerHintsLocked()
+	mergePeerHintMaps(hints, pm.quartermasterHints)
+	return hints
+}
+
+func (pm *PeerManager) trackedPeerHintsLocked() map[string]PeerHint {
+	hints := make(map[string]PeerHint, len(pm.trackedAddrRefs))
+	for clusterID, addresses := range pm.trackedAddrRefs {
+		tenants := pm.trackedTenantRefs[clusterID]
+		if len(addresses) == 0 || len(tenants) == 0 {
+			continue
+		}
+		addr, ok := unambiguousTrackedAddress(addresses)
+		if !ok {
+			// Publisher source revisions do not order topology observations. Omitting a conflicting
+			// peer fails closed unless leased Quartermaster authority supplies it during the merge.
+			continue
+		}
+		tenantList := make([]string, 0, len(tenants))
+		for tenantID := range tenants {
+			tenantList = append(tenantList, tenantID)
+		}
+		slices.Sort(tenantList)
+		hints[clusterID] = PeerHint{
+			Addr:     addr,
+			AlwaysOn: pm.trackedAlwaysOnRefs[clusterID] > 0,
+			Tenants:  tenantList,
+		}
+	}
+	return hints
+}
+
+func unambiguousTrackedAddress(addresses map[string]map[int64]int) (string, bool) {
+	var selected string
+	for addr, revisions := range addresses {
+		for _, count := range revisions {
+			if count > 0 {
+				if selected != "" && selected != addr {
+					return "", false
+				}
+				selected = addr
+				break
+			}
+		}
+	}
+	return selected, selected != ""
+}
+
+func (pm *PeerManager) publishQuartermasterHints() {
+	pm.mu.Lock()
+	if pm.quartermasterHintsRefreshedAt.IsZero() || time.Since(pm.quartermasterHintsRefreshedAt) > peerRefreshInterval+peerAddrTTL {
+		pm.quartermasterHints = make(map[string]PeerHint)
+	}
+	hints := make(map[string]PeerHint, len(pm.quartermasterHints))
+	for clusterID, hint := range pm.quartermasterHints {
+		hints[clusterID] = hint
+	}
+	pm.mu.Unlock()
+	if pm.cache == nil {
+		if err := pm.loadPeerAddressesFromRedis(); err != nil {
+			pm.logger.WithError(err).Warn("Failed to reconcile local federation peers")
+		}
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := pm.cache.SetPeerAddresses(ctx, addrs); err != nil {
-		pm.logger.WithError(err).Debug("Failed to sync peer addresses to Redis")
+	if err := pm.cache.PublishPeerHints(ctx, pm.quartermasterContributorID(), hints); err != nil {
+		pm.logger.WithError(err).Warn("Failed to publish authoritative Quartermaster peer snapshot")
 	}
 }
 
-// loadPeerAddressesFromRedis reads peer addresses from Redis into the local map.
-// New peers are added; existing peers get their address updated if the leader
-// refreshed from Quartermaster. Does not remove peers missing from Redis
-// (demand-driven discoveries may not yet be synced).
-func (pm *PeerManager) loadPeerAddressesFromRedis() {
+// loadPeerAddressesFromRedis reconciles leased Quartermaster authority with non-expiring active
+// stream memberships. A leader uses its exact in-memory membership snapshot; non-leaders read the
+// same authoritative Redis hash so GetPeerAddr remains available on every replica.
+func (pm *PeerManager) loadPeerAddressesFromRedis() error {
 	if pm.cache == nil {
-		return
+		pm.mu.Lock()
+		toConnect := pm.reconcilePeerHintsLocked(pm.localPeerHintsLocked())
+		pm.mu.Unlock()
+		pm.connectAuthorityPeers(toConnect)
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	addrs, err := pm.cache.GetPeerAddresses(ctx)
 	if err != nil {
-		pm.logger.WithError(err).Debug("Failed to load peer addresses from Redis")
-		return
+		return fmt.Errorf("load leased peer addresses: %w", err)
+	}
+	if pm.reconcileLeaderPeerHints(addrs) {
+		return nil
 	}
 
+	memberships, loadErr := pm.cache.LoadAllStreamPeerMemberships(ctx)
+	if loadErr != nil {
+		return fmt.Errorf("load active stream peer addresses: %w", loadErr)
+	}
+	membershipHints := peerHintsFromMemberships(memberships)
+	mergePeerHintMaps(membershipHints, addrs)
+
+	pm.reconcileLoadedPeerHints(membershipHints, addrs)
+	return nil
+}
+
+// reconcileLeaderPeerHints merges externally loaded leases with current process-local membership
+// and applies the resulting authority without releasing pm.mu between recomputation and mutation.
+func (pm *PeerManager) reconcileLeaderPeerHints(external map[string]PeerHint) bool {
 	pm.mu.Lock()
-	defer pm.mu.Unlock()
-	for clusterID, addr := range addrs {
+	if !pm.isLeader {
+		pm.mu.Unlock()
+		return false
+	}
+	hints := pm.localPeerHintsLocked()
+	mergePeerHintMaps(hints, external)
+	toConnect := pm.reconcilePeerHintsLocked(hints)
+	pm.mu.Unlock()
+	pm.connectAuthorityPeers(toConnect)
+	return true
+}
+
+func (pm *PeerManager) reconcileLoadedPeerHints(membershipHints, external map[string]PeerHint) {
+	pm.mu.Lock()
+	if pm.isLeader {
+		// Leadership changed during Redis I/O. Discard the external membership snapshot rather than
+		// applying it over the leader's newer process-local tracking state.
+		membershipHints = pm.localPeerHintsLocked()
+		mergePeerHintMaps(membershipHints, external)
+	}
+	toConnect := pm.reconcilePeerHintsLocked(membershipHints)
+	pm.mu.Unlock()
+	pm.connectAuthorityPeers(toConnect)
+}
+
+func peerHintsFromMemberships(memberships map[string]StreamPeerMembership) map[string]PeerHint {
+	hints := make(map[string]PeerHint)
+	addresses := make(map[string]map[string]bool)
+	tenants := make(map[string]map[string]bool)
+	for _, membership := range memberships {
+		if !membership.Active {
+			continue
+		}
+		for _, peer := range membership.Peers {
+			hint := hints[peer.ClusterID]
+			hint.AlwaysOn = hint.AlwaysOn || peer.AlwaysOn
+			if addresses[peer.ClusterID] == nil {
+				addresses[peer.ClusterID] = make(map[string]bool)
+			}
+			addresses[peer.ClusterID][peer.Addr] = true
+			if tenants[peer.ClusterID] == nil {
+				tenants[peer.ClusterID] = make(map[string]bool)
+			}
+			tenants[peer.ClusterID][membership.TenantID] = true
+			hints[peer.ClusterID] = hint
+		}
+	}
+	for clusterID, hint := range hints {
+		if len(addresses[clusterID]) != 1 {
+			// Publisher revisions order source ownership, not Quartermaster topology. Conflicting
+			// captured endpoints contribute no address authority; a current leased Quartermaster
+			// hint may still supply the peer when maps are merged by the caller.
+			delete(hints, clusterID)
+			continue
+		}
+		hint.Tenants = make([]string, 0, len(tenants[clusterID]))
+		for tenantID := range tenants[clusterID] {
+			hint.Tenants = append(hint.Tenants, tenantID)
+		}
+		slices.Sort(hint.Tenants)
+		for addr := range addresses[clusterID] {
+			hint.Addr = addr
+		}
+		hints[clusterID] = hint
+	}
+	return hints
+}
+
+func mergePeerHintMaps(target, incoming map[string]PeerHint) {
+	for clusterID, next := range incoming {
+		current, exists := target[clusterID]
+		currentUnrestricted := exists && current.AlwaysOn && len(current.Tenants) == 0
+		nextUnrestricted := next.AlwaysOn && len(next.Tenants) == 0
+		if !exists || next.AlwaysOn || !current.AlwaysOn {
+			current.Addr = next.Addr
+		}
+		current.AlwaysOn = current.AlwaysOn || next.AlwaysOn
+		if currentUnrestricted {
+			// Empty tenant scope on an always-on authority means unrestricted.
+		} else if nextUnrestricted {
+			current.Tenants = nil
+		} else {
+			tenantSet := make(map[string]bool, len(current.Tenants)+len(next.Tenants))
+			for _, tenantID := range current.Tenants {
+				if tenantID != "" {
+					tenantSet[tenantID] = true
+				}
+			}
+			for _, tenantID := range next.Tenants {
+				if tenantID != "" {
+					tenantSet[tenantID] = true
+				}
+			}
+			current.Tenants = current.Tenants[:0]
+			for tenantID := range tenantSet {
+				current.Tenants = append(current.Tenants, tenantID)
+			}
+			slices.Sort(current.Tenants)
+		}
+		target[clusterID] = current
+	}
+}
+
+func (pm *PeerManager) reconcilePeerHintsLocked(hints map[string]PeerHint) []peerConnectRequest {
+	toConnect := make([]peerConnectRequest, 0)
+	for clusterID, hint := range hints {
 		if clusterID == pm.clusterID {
 			continue
 		}
-		if existing, ok := pm.peers[clusterID]; ok {
-			existing.addr = addr
+		lifecycle := peerStreamScoped
+		if hint.AlwaysOn {
+			lifecycle = peerAlwaysOn
+		}
+		if existing := pm.peers[clusterID]; existing != nil {
+			if existing.addr != hint.Addr {
+				existing.addr = hint.Addr
+				if existing.cancel != nil {
+					existing.cancel()
+				}
+			}
+			replacePeerTenants(existing, hint.Tenants)
+			existing.lifecycle = lifecycle
+			existing.lastRefresh = time.Now()
+			if pm.isLeader {
+				if request, reserved := pm.reservePeerRunnerLocked(clusterID, existing); reserved {
+					toConnect = append(toConnect, request)
+				}
+			}
 			continue
 		}
-		pm.peers[clusterID] = &peerState{
-			addr:        addr,
-			fromRedis:   true,
-			lastRefresh: time.Now(),
+		ps := &peerState{addr: hint.Addr, lifecycle: lifecycle, lastRefresh: time.Now()}
+		replacePeerTenants(ps, hint.Tenants)
+		pm.peers[clusterID] = ps
+		if pm.isLeader {
+			if request, reserved := pm.reservePeerRunnerLocked(clusterID, ps); reserved {
+				toConnect = append(toConnect, request)
+			}
 		}
 	}
-
 	for clusterID, ps := range pm.peers {
-		if !ps.fromRedis {
-			continue
-		}
-		if _, present := addrs[clusterID]; present {
-			continue
-		}
-		if ps.connected {
+		if _, present := hints[clusterID]; present {
 			continue
 		}
 		if ps.cancel != nil {
 			ps.cancel()
 		}
 		delete(pm.peers, clusterID)
+		pm.logger.WithField("peer_cluster", clusterID).Info("Removed peer whose authority lease expired or was revoked")
+	}
+	return toConnect
+}
+
+// importAdmissionPeerHintsLocked adds the peers carried by one admission obligation without
+// replacing unrelated authority. The caller holds pm.mu across membership mutation, authority
+// recomputation, and peer mutation, so an older import cannot apply a stale endpoint snapshot.
+func (pm *PeerManager) importAdmissionPeerHintsLocked(hints map[string]PeerHint) []peerConnectRequest {
+	// The obligation's address is discovery input, not perpetual endpoint authority. Resolve every
+	// touched cluster from the complete active membership set. Conflicting captured addresses are
+	// omitted unless current leased Quartermaster authority resolves them.
+	touched := make([]string, 0, len(hints))
+	for clusterID := range hints {
+		touched = append(touched, clusterID)
+	}
+	authoritative := pm.localPeerHintsLocked()
+	for clusterID := range hints {
+		if hint, ok := authoritative[clusterID]; ok {
+			hints[clusterID] = hint
+		} else {
+			delete(hints, clusterID)
+		}
+	}
+	for _, clusterID := range touched {
+		if _, resolved := hints[clusterID]; resolved {
+			continue
+		}
+		if existing := pm.peers[clusterID]; existing != nil {
+			if existing.cancel != nil {
+				existing.cancel()
+			}
+			delete(pm.peers, clusterID)
+		}
+	}
+	toConnect := make([]peerConnectRequest, 0, len(hints))
+	for clusterID, hint := range hints {
+		lifecycle := peerStreamScoped
+		if hint.AlwaysOn {
+			lifecycle = peerAlwaysOn
+		}
+		if existing := pm.peers[clusterID]; existing != nil {
+			if existing.lifecycle != peerAlwaysOn || lifecycle == peerAlwaysOn {
+				if existing.addr != hint.Addr {
+					existing.addr = hint.Addr
+					if existing.cancel != nil {
+						existing.cancel()
+					}
+				}
+			}
+			if existing.lifecycle != peerAlwaysOn {
+				existing.lifecycle = lifecycle
+			}
+			if existing.lifecycle != peerAlwaysOn || len(existing.tenantIDs) != 0 {
+				for _, tenantID := range hint.Tenants {
+					if !peerHasTenant(existing, tenantID) {
+						if existing.tenantSet == nil {
+							replacePeerTenants(existing, existing.tenantIDs)
+						}
+						existing.tenantIDs = append(existing.tenantIDs, tenantID)
+						existing.tenantSet[tenantID] = struct{}{}
+					}
+				}
+			}
+			existing.lastRefresh = time.Now()
+			if pm.isLeader {
+				if request, reserved := pm.reservePeerRunnerLocked(clusterID, existing); reserved {
+					toConnect = append(toConnect, request)
+				}
+			}
+			continue
+		}
+		state := &peerState{addr: hint.Addr, lifecycle: lifecycle, lastRefresh: time.Now()}
+		replacePeerTenants(state, hint.Tenants)
+		pm.peers[clusterID] = state
+		if pm.isLeader {
+			if request, reserved := pm.reservePeerRunnerLocked(clusterID, state); reserved {
+				toConnect = append(toConnect, request)
+			}
+		}
+	}
+	return toConnect
+}
+
+func (pm *PeerManager) reservePeerRunnerLocked(clusterID string, ps *peerState) (peerConnectRequest, bool) {
+	if ps.connected || ps.runnerToken != 0 {
+		return peerConnectRequest{}, false
+	}
+	pm.nextPeerRunnerToken++
+	if pm.nextPeerRunnerToken == 0 {
+		pm.nextPeerRunnerToken++
+	}
+	ps.runnerToken = pm.nextPeerRunnerToken
+	return peerConnectRequest{clusterID: clusterID, state: ps, token: ps.runnerToken}, true
+}
+
+func (pm *PeerManager) connectAuthorityPeers(peers []peerConnectRequest) {
+	for _, peer := range peers {
+		go pm.connectPeer(peer)
 	}
 }
 
 // connectPeer opens a PeerChannel to the given peer and runs the receive loop.
-func (pm *PeerManager) connectPeer(clusterID string, ps *peerState) {
+func (pm *PeerManager) connectPeer(request peerConnectRequest) {
+	clusterID, ps, token := request.clusterID, request.state, request.token
+	defer pm.releasePeerRunner(request)
 	if pm.pool == nil {
 		pm.logger.WithField("peer_cluster", clusterID).Warn("Skipping peer connect: foghorn pool is nil")
 		return
@@ -776,17 +1323,17 @@ func (pm *PeerManager) connectPeer(clusterID string, ps *peerState) {
 		ctx, cancel := context.WithCancel(context.Background())
 
 		pm.mu.Lock()
-		// Check if this peer was removed while we were reconnecting
 		current, ok := pm.peers[clusterID]
-		if !ok || current != ps {
+		if !ok || current != ps || ps.runnerToken != token {
 			pm.mu.Unlock()
 			cancel()
 			return
 		}
 		ps.cancel = cancel
+		addr := ps.addr
 		pm.mu.Unlock()
 
-		client, err := pm.pool.GetOrCreate(clusterID, ps.addr)
+		client, err := pm.pool.GetOrCreate(clusterID, addr)
 		if err != nil {
 			pm.logger.WithError(err).WithField("peer_cluster", clusterID).Warn("Failed to get Foghorn client for peer")
 			cancel()
@@ -803,6 +1350,12 @@ func (pm *PeerManager) connectPeer(clusterID string, ps *peerState) {
 		}
 
 		pm.mu.Lock()
+		current, ok = pm.peers[clusterID]
+		if !ok || current != ps || ps.runnerToken != token || ctx.Err() != nil {
+			pm.mu.Unlock()
+			cancel()
+			continue
+		}
 		ps.stream = stream
 		ps.sendCh = make(chan *foghornfederationpb.PeerMessage, peerSendQueueSize)
 		ps.connected = true
@@ -826,12 +1379,19 @@ func (pm *PeerManager) connectPeer(clusterID string, ps *peerState) {
 		pm.recvLoop(clusterID, stream)
 
 		pm.mu.Lock()
-		ps.connected = false
-		ps.stream = nil
-		ps.sendCh = nil
+		current, ok = pm.peers[clusterID]
+		owned := ok && current == ps && ps.runnerToken == token
+		if owned {
+			ps.connected = false
+			ps.stream = nil
+			ps.sendCh = nil
+		}
 		pm.mu.Unlock()
 
 		cancel() // also unblocks peerWriteLoop via ctx
+		if !owned {
+			return
+		}
 
 		pm.logger.WithField("peer_cluster", clusterID).Info("PeerChannel disconnected, will reconnect")
 		pm.emitFederationEvent(&ipcpb.FederationEventData{
@@ -840,6 +1400,23 @@ func (pm *PeerManager) connectPeer(clusterID string, ps *peerState) {
 		})
 		time.Sleep(backoff)
 	}
+}
+
+func (pm *PeerManager) releasePeerRunner(request peerConnectRequest) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	current := pm.peers[request.clusterID]
+	if current != request.state || current.runnerToken != request.token {
+		return
+	}
+	if current.cancel != nil {
+		current.cancel()
+	}
+	current.cancel = nil
+	current.connected = false
+	current.stream = nil
+	current.sendCh = nil
+	current.runnerToken = 0
 }
 
 func (pm *PeerManager) touchPool(clusterID string) {
@@ -864,14 +1441,14 @@ func (pm *PeerManager) touchPool(clusterID string) {
 //     5min TTL, never refreshed) — losing it only risks a redundant origin pull.
 //
 // No frame needs guaranteed delivery, so there is deliberately one mailbox.
-func (pm *PeerManager) enqueue(peerID string, ps *peerState, msg *foghornfederationpb.PeerMessage) {
+func (pm *PeerManager) enqueue(peerID string, ps *peerState, msg *foghornfederationpb.PeerMessage) bool {
 	if !ps.connected || ps.sendCh == nil {
-		return
+		return false
 	}
 	// Fast path: room in the mailbox.
 	select {
 	case ps.sendCh <- msg:
-		return
+		return true
 	default:
 	}
 	// Full: evict the oldest queued frame to make room for the fresher one.
@@ -886,8 +1463,10 @@ func (pm *PeerManager) enqueue(peerID string, ps *peerState, msg *foghornfederat
 	// this one rather than block.
 	select {
 	case ps.sendCh <- msg:
+		return true
 	default:
 		ps.dropped.Add(1)
+		return false
 	}
 }
 
@@ -991,18 +1570,20 @@ func (pm *PeerManager) recvLoop(peerClusterID string, stream foghornfederationpb
 
 		case *foghornfederationpb.PeerMessage_StreamLifecycle:
 			ev := payload.StreamLifecycle
-			if ev.GetIsLive() {
-				if err := pm.cache.SetRemoteLiveStream(ctx, ev.GetTenantId(), ev.GetInternalName(), &RemoteLiveStreamEntry{
-					ClusterID: ev.GetClusterId(),
-					TenantID:  ev.GetTenantId(),
-					UpdatedAt: time.Now().Unix(),
-				}); err != nil {
-					pm.logger.WithError(err).Debug("Failed to cache remote live stream from PeerChannel")
-				}
-			} else {
-				if err := pm.cache.DeleteRemoteLiveStream(ctx, ev.GetTenantId(), ev.GetInternalName()); err != nil {
-					pm.logger.WithError(err).Debug("Failed to delete remote live stream from PeerChannel")
-				}
+			if ev == nil || strings.TrimSpace(ev.GetClusterId()) != peerClusterID {
+				pm.logger.WithFields(logging.Fields{
+					"peer_cluster":    peerClusterID,
+					"claimed_cluster": ev.GetClusterId(),
+				}).Warn("Rejected stream lifecycle with mismatched PeerChannel identity")
+				continue
+			}
+			if _, err := pm.cache.ApplyRemoteStreamLifecycle(ctx, ev.GetTenantId(), ev.GetInternalName(), &RemoteLiveStreamEntry{
+				ClusterID:      peerClusterID,
+				TenantID:       ev.GetTenantId(),
+				SourceRevision: ev.GetSourceRevision(),
+				UpdatedAt:      time.Now().Unix(),
+			}, ev.GetIsLive()); err != nil {
+				pm.logger.WithError(err).Debug("Failed to apply remote stream lifecycle from PeerChannel")
 			}
 
 		case *foghornfederationpb.PeerMessage_StreamAd:
@@ -1192,16 +1773,21 @@ func (pm *PeerManager) pushTelemetry() {
 		if ss.Status != "live" || seen[ss.InternalName] {
 			continue
 		}
+		membership, tracked := pm.streamMemberships[ss.InternalName]
+		if !tracked || !membership.Active || membership.SourceRevision <= 0 {
+			continue
+		}
 		seen[ss.InternalName] = true
 		lifecycleMsg := &foghornfederationpb.PeerMessage{
 			ClusterId: pm.clusterID,
 			Payload: &foghornfederationpb.PeerMessage_StreamLifecycle{
 				StreamLifecycle: &foghornfederationpb.StreamLifecycleEvent{
-					InternalName:  ss.InternalName,
-					TenantId:      ss.TenantID,
-					ClusterId:     pm.clusterID,
-					IsLive:        true,
-					TimestampUnix: now,
+					InternalName:   ss.InternalName,
+					TenantId:       ss.TenantID,
+					ClusterId:      pm.clusterID,
+					IsLive:         true,
+					TimestampUnix:  now,
+					SourceRevision: membership.SourceRevision,
 				},
 			},
 		}
@@ -1494,7 +2080,7 @@ func (pm *PeerManager) pushArtifacts() {
 			if loc.TenantId == "" {
 				continue
 			}
-			if len(ps.tenantIDs) == 0 || slices.Contains(ps.tenantIDs, loc.TenantId) {
+			if len(ps.tenantIDs) == 0 || peerHasTenant(ps, loc.TenantId) {
 				peerLocs = append(peerLocs, loc)
 			}
 		}
@@ -1850,34 +2436,73 @@ func (pm *PeerManager) IsStreamLiveOnPeer(ctx context.Context, internalName, ten
 }
 
 // BroadcastStreamLifecycle notifies eligible peers that a stream went live or offline.
-func (pm *PeerManager) BroadcastStreamLifecycle(internalName, tenantID string, isLive bool) {
+func (pm *PeerManager) BroadcastStreamLifecycle(ctx context.Context, internalName, tenantID string, sourceRevision int64, isLive bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if sourceRevision <= 0 {
+		return errors.New("federation stream lifecycle requires a positive source revision")
+	}
 	msg := &foghornfederationpb.PeerMessage{
 		ClusterId: pm.clusterID,
 		Payload: &foghornfederationpb.PeerMessage_StreamLifecycle{
 			StreamLifecycle: &foghornfederationpb.StreamLifecycleEvent{
-				InternalName:  internalName,
-				TenantId:      tenantID,
-				ClusterId:     pm.clusterID,
-				IsLive:        isLive,
-				TimestampUnix: time.Now().Unix(),
+				InternalName:   internalName,
+				TenantId:       tenantID,
+				ClusterId:      pm.clusterID,
+				IsLive:         isLive,
+				TimestampUnix:  time.Now().Unix(),
+				SourceRevision: sourceRevision,
 			},
 		},
 	}
 
-	// Best-effort like all federation frames: a live event is re-pushed every
-	// periodic tick, and an offline event is backstopped by the receiver's
-	// RemoteLiveStream 30s TTL expiring once the live re-push stops.
+	// Live events are refreshed every periodic tick. Receivers retain the offline revision fence
+	// after removing the live marker so a delayed frame from an older channel cannot resurrect it.
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
+	required := make(map[string]*peerState)
+	for peerID, streams := range pm.streamPeers {
+		if streams[internalName] {
+			required[peerID] = pm.peers[peerID]
+		}
+	}
 	for peerID, ps := range pm.peers {
-		if !ps.connected || ps.stream == nil {
-			continue
+		if ps.lifecycle == peerAlwaysOn && pm.shouldSendStreamToPeer(peerID, ps, internalName, tenantID) {
+			required[peerID] = ps
+		}
+	}
+	// Verification and enqueue share pm.mu: a disconnect cannot slip between TrackStream's
+	// persisted requirement and this completion decision. A failed enqueue keeps the durable leg
+	// pending; successfully queued lifecycle frames remain idempotent if a later peer also fails.
+	for peerID, ps := range required {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if ps == nil {
+			if !isLive {
+				delete(required, peerID)
+				continue
+			}
+			return fmt.Errorf("required federation peer %s has no current authority lease", peerID)
 		}
 		if !pm.shouldSendStreamToPeer(peerID, ps, internalName, tenantID) {
-			continue
+			if !isLive {
+				delete(required, peerID)
+				continue
+			}
+			return fmt.Errorf("required federation peer %s is not authorized for tenant lifecycle", peerID)
 		}
-		pm.enqueue(peerID, ps, msg)
+		if !ps.connected || ps.stream == nil || ps.sendCh == nil {
+			return fmt.Errorf("required federation peer %s is not connected", peerID)
+		}
 	}
+	for peerID, ps := range required {
+		if !pm.enqueue(peerID, ps, msg) {
+			return fmt.Errorf("required federation peer %s lifecycle mailbox is unavailable", peerID)
+		}
+	}
+	return nil
 }
 
 func strPtr(s string) *string { return &s }

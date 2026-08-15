@@ -154,10 +154,13 @@ type Location struct {
 	// UpdatedAt is the wall-clock time this Location was last refreshed.
 	UpdatedAt time.Time
 
-	// SourceActive is true between an accepted PUSH_REWRITE on this
-	// cluster and the matching PUSH_INPUT_CLOSE (or owner-unhealthy
-	// short-circuit). When true, AdmitAndReserve rejects new pushes for
-	// this stream on any node — only same-session reconnects can land.
+	// SourceActive is true between ProjectSource (the confirmed DB winner's
+	// projection of an accepted PUSH_REWRITE on this cluster) and the matching
+	// PUSH_INPUT_CLOSE / STREAM_END (or owner-unhealthy short-circuit). It is a
+	// PROJECTION of the database's accept/reject decision, not an admission gate:
+	// duplicate rejection is the DB's authority (CreateIngestSession under the
+	// stream-scoped advisory lock). Consumers READ it for routing/offline typing;
+	// they never decide admission from it.
 	SourceActive bool
 	// SourceInactiveAt is the wall-clock time SourceActive flipped to
 	// false. Zero when SourceActive is true. Used by the admission rule
@@ -165,9 +168,33 @@ type Location struct {
 	SourceInactiveAt time.Time
 	// OwnerNodeID is the local cluster's node that currently owns (or
 	// last owned) the publisher session for this stream. Retained after
-	// SourceActive flips to false so a same-node PUSH_REWRITE can take
-	// the resume path. Empty until the first accepted PUSH_REWRITE.
+	// SourceActive flips to false so a same-node PUSH_REWRITE plans as a
+	// resume. Empty until the first ProjectSource.
 	OwnerNodeID string
+
+	// SourceConnectorPID is the MistServer connector PID (X-PID) of the CURRENT
+	// source session, stamped by ProjectSource. Diagnostic/identity metadata on the
+	// projected source; the same-session admission decision it once gated is now the
+	// DB's (CreateIngestSession keys on node + start_trigger_uuid). Local-cluster only.
+	SourceConnectorPID int64
+
+	// SourceGeneration is the durable ingest-session id of the current push source. Source ownership
+	// transitions use it as identity while SourceRevision supplies ordering. Pull ownership has no
+	// ingest generation.
+	SourceGeneration string
+
+	// SourceTriggerUUID is the Mist X-Trigger-UUID of the source's admitting PUSH_REWRITE trigger
+	// execution — stable across THAT execution's blocking-trigger retries, but a distinct value for a
+	// later reconnect's PUSH_REWRITE (it identifies a trigger firing, not the publisher connection's
+	// lifetime). Stamped by ProjectSource. The DB folds it into CreateIngestSession's uniqueness key
+	// (node + start_trigger_uuid) so a re-fired admission is idempotent. Here it is projected identity
+	// metadata. Empty for callers with no Mist trigger identity (pull sources, tests). Local only.
+	SourceTriggerUUID string
+
+	// SourceRevision orders push-source ownership transitions cluster-wide. It is drawn under the
+	// stream advisory lock; Redis, changelog replay, and rehydration accept only the highest revision.
+	// Pull ownership remains unversioned and merges by UpdatedAt.
+	SourceRevision int64
 
 	// RecordingNodeID is the node currently writing the active DVR
 	// recording (foghorn.artifacts row with artifact_type='dvr' AND
@@ -368,6 +395,22 @@ type StreamRegistry struct {
 type cachedEntry struct {
 	entry  StreamEntry
 	cached time.Time
+	// pendingSourceDelete marks an entry whose locations are all gone but whose durable revisioned
+	// delete has not yet been published (the tombstone publish failed transiently). The entry is
+	// RETAINED so the sweeper retries the durable delete — evicting it locally first would leave
+	// nothing to retry from, silently leaking the durable value until it resurrects on a rehydrate.
+	// pendingDeleteRevision preserves the revision captured before the locations were cleared.
+	//
+	// BOUNDED RESIDUAL: the marker is process-local. A restart (or retention-gap rehydration) that
+	// interrupts a pending delete loses the marker — the surviving durable value rehydrates as a
+	// normal entry with its persisted UpdatedAt, and the sweeper re-evicts and re-attempts the
+	// delete once that age passes the sweep cutoff. For a sweep-originated eviction the locations
+	// were already past maxAge, so the retry lands on the next sweep pass; for a federated-withdraw
+	// eviction the peer refreshed UpdatedAt just before withdrawing, so the rehydrated entry can
+	// survive up to the full sweep maxAge PLUS one sweep interval before the retry fires. Either
+	// way the exposure is bounded staleness of a routing cache entry, not a permanent leak.
+	pendingSourceDelete   bool
+	pendingDeleteRevision int64
 }
 
 // NewStreamRegistry creates a registry backed by the supplied Commodore
@@ -738,15 +781,35 @@ func (r *StreamRegistry) SweepStaleLocations(maxAge time.Duration) (locationsRem
 		return 0, 0
 	}
 	cutoff := time.Now().Add(-maxAge)
-	var deletedInternalNames []string
 	var publishUpserts []StreamEntry
-	var publishDeletes []string
+	type revisionedDelete struct {
+		internalName string
+		entry        StreamEntry
+		revision     int64
+	}
+	var publishDeletes []revisionedDelete
 
 	r.mu.Lock()
 	for internalName, ce := range r.byInt {
+		if ce.pendingSourceDelete {
+			if len(ce.entry.Locations) != 0 {
+				// A projection landed while the durable delete was pending — the entry is live again;
+				// the delete decision is obsolete (the new projection's higher revision owns the key).
+				ce.pendingSourceDelete = false
+				ce.pendingDeleteRevision = 0
+			} else {
+				// Retry the durable delete a previous pass could not publish.
+				publishDeletes = append(publishDeletes, revisionedDelete{internalName: internalName, entry: ce.entry, revision: ce.pendingDeleteRevision})
+				continue
+			}
+		}
 		if len(ce.entry.Locations) == 0 {
 			continue
 		}
+		// Capture the local cluster's source revision BEFORE the eviction loop clears Locations: the
+		// revisioned delete must carry it, and a cleared map reads 0 (which a versioned watermark
+		// rejects — the tombstone would never fire and the durable value would resurrect on rehydrate).
+		localRevision := ce.entry.Locations[r.clusterID].SourceRevision
 		anyChanged := false
 		for cid, loc := range ce.entry.Locations {
 			// Prune individual OutboundPull entries older than maxAge. The
@@ -793,17 +856,12 @@ func (r *StreamRegistry) SweepStaleLocations(maxAge time.Duration) (locationsRem
 			}
 		}
 		if len(ce.entry.Locations) == 0 && anyChanged {
-			deletedInternalNames = append(deletedInternalNames, internalName)
-			entriesEvicted++
-			evicted := ce.entry
-			delete(r.byInt, internalName)
-			if evicted.StreamID != "" {
-				delete(r.byID, evicted.StreamID)
-			}
-			if evicted.PlaybackID != "" {
-				delete(r.byPlay, evicted.PlaybackID)
-			}
-			publishDeletes = append(publishDeletes, internalName)
+			// Do NOT evict the entry yet: publish the durable revisioned delete FIRST, and only
+			// remove the local entry once the tombstone is durably published (below). Evicting first
+			// would leave a failed publish with nothing to retry from.
+			ce.pendingSourceDelete = true
+			ce.pendingDeleteRevision = localRevision
+			publishDeletes = append(publishDeletes, revisionedDelete{internalName: internalName, entry: ce.entry, revision: localRevision})
 		} else if anyChanged {
 			ce.cached = time.Now()
 			publishUpserts = append(publishUpserts, ce.entry)
@@ -814,10 +872,27 @@ func (r *StreamRegistry) SweepStaleLocations(maxAge time.Duration) (locationsRem
 	for _, e := range publishUpserts {
 		r.publishUpsertSource(e)
 	}
-	for _, name := range publishDeletes {
-		r.publishDeleteSource(name)
+	for _, del := range publishDeletes {
+		if !r.publishDeleteSource(del.entry, del.revision) {
+			// Transient failure — the entry stays marked pendingSourceDelete and the next sweep
+			// retries the durable delete.
+			continue
+		}
+		// Tombstone durably published (or obsoleted by a newer revision, which owns the key now
+		// either way) — evict the local entry, unless a projection re-populated it meanwhile.
+		r.mu.Lock()
+		if ce, ok := r.byInt[del.internalName]; ok && ce.pendingSourceDelete && len(ce.entry.Locations) == 0 {
+			delete(r.byInt, del.internalName)
+			if ce.entry.StreamID != "" {
+				delete(r.byID, ce.entry.StreamID)
+			}
+			if ce.entry.PlaybackID != "" {
+				delete(r.byPlay, ce.entry.PlaybackID)
+			}
+			entriesEvicted++
+		}
+		r.mu.Unlock()
 	}
-	_ = deletedInternalNames
 	return locationsRemoved, entriesEvicted
 }
 
@@ -939,7 +1014,7 @@ func (r *StreamRegistry) resolveSource(ctx context.Context, m map[string]*cached
 // when re-hydration fails transiently), or neither (zero entry returned).
 func (r *StreamRegistry) lookupEntry(m map[string]*cachedEntry, key string) (StreamEntry, bool, bool) {
 	// All reads of *cachedEntry must happen under the lock; writers
-	// (AdmitAndReserve, UpsertLocalSource, UpsertFederatedSource, sweeper)
+	// (ProjectSource, UpsertLocalSource, UpsertFederatedSource, sweeper)
 	// mutate ce.entry struct fields and ce.cached in place. Deep-copy
 	// the Locations map here too so the live-presence enrichment below
 	// runs against a private copy and doesn't race with future writes.
@@ -1033,7 +1108,11 @@ func (r *StreamRegistry) hydrateOnce(ctx context.Context, refKind, streamID, pla
 		r.recordMiss(ctx, refKind, firstNonEmpty(streamID, playbackID, internalName))
 		return StreamEntry{}, ErrRegistryUnavailable
 	}
-	resp, err := client.ResolveStreamContext(ctx, streamID, playbackID, internalName, r.clusterID)
+	// Hydration is an identifier-only read: declare no cluster. This Foghorn's
+	// CLUSTER_ID names the process, which serves many virtual media clusters,
+	// so declaring it would submit an infrastructure cluster to the entitlement
+	// gate and would override the stream's actual placement in the answer.
+	resp, err := client.ResolveStreamContext(ctx, streamID, playbackID, internalName, "")
 	if err != nil {
 		r.recordMiss(ctx, refKind, firstNonEmpty(streamID, playbackID, internalName))
 		return StreamEntry{}, fmt.Errorf("stream_registry: commodore lookup: %w", err)
@@ -1139,26 +1218,6 @@ func (r *StreamRegistry) store(e StreamEntry) {
 	snapshot = ce.entry
 	r.mu.Unlock()
 	r.publishUpsertSource(snapshot)
-}
-
-// Invalidate drops every cached entry for a stream. Called when Commodore
-// signals a config change (managed stream apply/retract) so subsequent
-// lookups re-hydrate.
-func (r *StreamRegistry) Invalidate(streamID, internalName, playbackID string) {
-	r.mu.Lock()
-	if streamID != "" {
-		delete(r.byID, streamID)
-	}
-	if internalName != "" {
-		delete(r.byInt, internalName)
-	}
-	if playbackID != "" {
-		delete(r.byPlay, playbackID)
-	}
-	r.mu.Unlock()
-	if internalName != "" {
-		r.publishDeleteSource(internalName)
-	}
 }
 
 // Snapshot returns a copy of every currently-cached entry, used by the

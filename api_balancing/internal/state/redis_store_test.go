@@ -134,6 +134,24 @@ func TestAcquireConnOwnerFenced_SupersedeAndLose(t *testing.T) {
 	}
 }
 
+func TestNodeReapGuardFencesReconnect(t *testing.T) {
+	store, _, _ := newRedisStateStore(t)
+	ctx := context.Background()
+	acquired, err := store.AcquireNodeReapGuard(ctx, "node-guarded", "reaper-token", time.Minute)
+	if err != nil || !acquired {
+		t.Fatalf("acquire reaper guard: acquired=%v err=%v", acquired, err)
+	}
+	if ok, err := store.AcquireConnOwnerFenced(ctx, "node-guarded", "inst-a", "10.0.0.1:9090", 1); ok || !errors.Is(err, ErrNodeReaping) {
+		t.Fatalf("connection acquired through reaper guard: ok=%v err=%v", ok, err)
+	}
+	if err := store.ReleaseNodeReapGuard(ctx, "node-guarded", "reaper-token"); err != nil {
+		t.Fatalf("release reaper guard: %v", err)
+	}
+	if ok, err := store.AcquireConnOwnerFenced(ctx, "node-guarded", "inst-a", "10.0.0.1:9090", 1); err != nil || !ok {
+		t.Fatalf("connection did not acquire after guard release: ok=%v err=%v", ok, err)
+	}
+}
+
 func TestRefreshConnOwnerFenced_RenewLostMissing(t *testing.T) {
 	store, mr, _ := newRedisStateStore(t)
 	ctx := context.Background()
@@ -300,53 +318,6 @@ func TestRedisLeaseAcquireRenewRelease(t *testing.T) {
 	}
 	if !acquired {
 		t.Fatal("expected inst-b to acquire released lease")
-	}
-}
-
-func TestPendingDVRStopConsumeIsSingleUse(t *testing.T) {
-	store, mr, _ := newRedisStateStore(t)
-	ctx := context.Background()
-
-	if err := store.RegisterPendingDVRStop(ctx, "tenant+stream", time.Now()); err != nil {
-		t.Fatalf("RegisterPendingDVRStop: %v", err)
-	}
-
-	consumed, err := store.ConsumePendingDVRStop(ctx, "tenant+stream")
-	if err != nil {
-		t.Fatalf("ConsumePendingDVRStop first: %v", err)
-	}
-	if !consumed {
-		t.Fatal("expected first consume to find pending stop")
-	}
-
-	consumed, err = store.ConsumePendingDVRStop(ctx, "tenant+stream")
-	if err != nil {
-		t.Fatalf("ConsumePendingDVRStop second: %v", err)
-	}
-	if consumed {
-		t.Fatal("expected pending stop to be single-use")
-	}
-
-	if mr.Exists(store.keyPendingDVRStop("tenant+stream")) {
-		t.Fatal("expected pending stop key to be deleted after consume")
-	}
-}
-
-func TestPendingDVRStopExpires(t *testing.T) {
-	store, mr, _ := newRedisStateStore(t)
-	ctx := context.Background()
-
-	if err := store.RegisterPendingDVRStop(ctx, "tenant+stream", time.Now()); err != nil {
-		t.Fatalf("RegisterPendingDVRStop: %v", err)
-	}
-	mr.FastForward(pendingDVRStopTTL + time.Second)
-
-	consumed, err := store.ConsumePendingDVRStop(ctx, "tenant+stream")
-	if err != nil {
-		t.Fatalf("ConsumePendingDVRStop: %v", err)
-	}
-	if consumed {
-		t.Fatal("expected expired pending stop to be absent")
 	}
 }
 

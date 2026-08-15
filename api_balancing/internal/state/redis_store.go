@@ -15,7 +15,6 @@ import (
 )
 
 const connOwnerTTL = 60 * time.Second
-const pendingDVRStopTTL = 30 * time.Minute
 
 var ErrConnOwnerMissing = errors.New("conn owner key missing")
 
@@ -30,12 +29,15 @@ else
 end
 `)
 
-var getAndDelete = goredis.NewScript(`
-local val = redis.call('get', KEYS[1])
-if val then
-  redis.call('del', KEYS[1])
-end
-return val
+var acquireNodeReapGuard = goredis.NewScript(`
+if redis.call('exists', KEYS[1]) == 1 then return 0 end
+if redis.call('set', KEYS[2], ARGV[1], 'NX', 'PX', tonumber(ARGV[2])) then return 1 end
+return 0
+`)
+
+var releaseNodeReapGuard = goredis.NewScript(`
+if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end
+return 0
 `)
 
 var renewLeaseScript = goredis.NewScript(`
@@ -382,8 +384,8 @@ func (r *RedisStateStore) keyConnOwner(nodeID string) string {
 	return fmt.Sprintf("{%s}:conn_owner:%s", r.clusterID, nodeID)
 }
 
-func (r *RedisStateStore) keyPendingDVRStop(internalName string) string {
-	return fmt.Sprintf("{%s}:pending_dvr_stop:%s", r.clusterID, internalName)
+func (r *RedisStateStore) keyNodeReapGuard(nodeID string) string {
+	return fmt.Sprintf("{%s}:conn_reap_guard:%s", r.clusterID, nodeID)
 }
 
 // ConnOwner is the compound value stored in the conn_owner Redis key.
@@ -423,6 +425,7 @@ func decodeConnOwner(val string) ConnOwner {
 // higher-or-equal fence already owns the node (the caller LOST and must close its stream). Refreshes
 // the TTL on a same-owner re-acquire. ARGV: [value, fence, ttlMillis].
 var acquireConnOwnerFenced = goredis.NewScript(`
+if redis.call('exists', KEYS[2]) == 1 then return -1 end
 local incoming = tonumber(ARGV[2])
 local cur = redis.call('get', KEYS[1])
 if cur then
@@ -466,13 +469,42 @@ return 0
 // fence already owns the node — the caller must reject/close its control stream (fail closed).
 func (r *RedisStateStore) AcquireConnOwnerFenced(ctx context.Context, nodeID, instanceID, grpcAddr string, fence int64) (acquired bool, err error) {
 	res, err := acquireConnOwnerFenced.Run(ctx, r.client,
-		[]string{r.keyConnOwner(nodeID)},
+		[]string{r.keyConnOwner(nodeID), r.keyNodeReapGuard(nodeID)},
 		encodeConnOwner(instanceID, grpcAddr, fence), fence, connOwnerTTL.Milliseconds(),
 	).Int64()
 	if err != nil {
 		return false, err
 	}
+	if res == -1 {
+		return false, ErrNodeReaping
+	}
 	return res == 1, nil
+}
+
+// ErrNodeReaping means the disconnect reaper holds the short guard that serializes confirmed
+// absence with session retirement. A registering node retries after the guard expires/releases.
+var ErrNodeReaping = errors.New("node disconnect retirement in progress")
+
+// AcquireNodeReapGuard atomically proves conn_owner is absent and blocks a new owner acquisition for
+// the duration of the guarded database retirement.
+func (r *RedisStateStore) AcquireNodeReapGuard(ctx context.Context, nodeID, token string, ttl time.Duration) (bool, error) {
+	if nodeID == "" || token == "" {
+		return false, errors.New("node reap guard requires node and token")
+	}
+	if ttl <= 0 {
+		ttl = 15 * time.Second
+	}
+	res, err := acquireNodeReapGuard.Run(ctx, r.client,
+		[]string{r.keyConnOwner(nodeID), r.keyNodeReapGuard(nodeID)}, token, ttl.Milliseconds()).Int64()
+	if err != nil {
+		return false, err
+	}
+	return res == 1, nil
+}
+
+func (r *RedisStateStore) ReleaseNodeReapGuard(ctx context.Context, nodeID, token string) error {
+	_, err := releaseNodeReapGuard.Run(ctx, r.client, []string{r.keyNodeReapGuard(nodeID)}, token).Result()
+	return err
 }
 
 // ErrConnOwnerLost means a higher-fence connection took ownership; the caller must close its stream.
@@ -523,34 +555,14 @@ func (r *RedisStateStore) DeleteConnOwnerIfMatch(ctx context.Context, nodeID, in
 	return res == 1, nil
 }
 
-func (r *RedisStateStore) RegisterPendingDVRStop(ctx context.Context, internalName string, at time.Time) error {
-	if internalName == "" {
-		return nil
-	}
-	if at.IsZero() {
-		at = time.Now()
-	}
-	return r.client.Set(ctx, r.keyPendingDVRStop(internalName), at.UTC().Format(time.RFC3339Nano), pendingDVRStopTTL).Err()
-}
-
-func (r *RedisStateStore) ConsumePendingDVRStop(ctx context.Context, internalName string) (bool, error) {
-	if internalName == "" {
-		return false, nil
-	}
-	val, err := getAndDelete.Run(ctx, r.client, []string{r.keyPendingDVRStop(internalName)}).Result()
-	if errors.Is(err, goredis.Nil) || val == nil {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
 // PublishStateChange appends the change to the cluster's ordered changelog
 // and returns the server-assigned entry ID — the change's logical version.
 func (r *RedisStateStore) PublishStateChange(change StateChange) (string, error) {
-	return r.changelog.Append(context.Background(), change)
+	return r.PublishStateChangeContext(context.Background(), change)
+}
+
+func (r *RedisStateStore) PublishStateChangeContext(ctx context.Context, change StateChange) (string, error) {
+	return r.changelog.Append(ctx, change)
 }
 
 // ChangelogTail returns the current end of the changelog; reading from it

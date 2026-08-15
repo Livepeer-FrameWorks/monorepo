@@ -101,7 +101,6 @@ func TestForwardCommand_AllCommandTypes(t *testing.T) {
 		{"dtsh_sync", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_DtshSync{DtshSync: &ipcpb.DtshSyncRequest{}}}, "dtsh_sync_request"},
 		{"stop_sessions", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_StopSessions{StopSessions: &ipcpb.StopSessionsRequest{}}}, "stop_sessions_request"},
 		{"invalidate_sessions", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_InvalidateSessions{InvalidateSessions: &ipcpb.InvalidateSessionsRequest{}}}, "invalidate_sessions_request"},
-		{"activate_push_targets", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_ActivatePushTargets{ActivatePushTargets: &ipcpb.ActivatePushTargets{}}}, "activate_push_targets"},
 		{"deactivate_push_targets", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_DeactivatePushTargets{DeactivatePushTargets: &ipcpb.DeactivatePushTargets{}}}, "deactivate_push_targets"},
 		{"processing_job", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_ProcessingJob{ProcessingJob: &ipcpb.ProcessingJobRequest{}}}, "processing_job_request"},
 		{"freeze", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_Freeze{Freeze: &ipcpb.FreezeRequest{}}}, "freeze_request"},
@@ -109,7 +108,6 @@ func TestForwardCommand_AllCommandTypes(t *testing.T) {
 		{"apply_managed_stream", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_ApplyManagedStream{ApplyManagedStream: &ipcpb.ApplyManagedStream{Name: "demo"}}}, "apply_managed_stream"},
 		{"retract_managed_stream", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_RetractManagedStream{RetractManagedStream: &ipcpb.RetractManagedStream{Name: "demo"}}}, "retract_managed_stream"},
 		{"drain_stream", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_DrainStream{DrainStream: &ipcpb.DrainStreamRequest{RuntimeName: "live+demo"}}}, "drain_stream_request"},
-		{"dvr_update_source", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_DvrUpdateSource{DvrUpdateSource: &ipcpb.DVRUpdateSourceRequest{DvrHash: "abc", SourceRuntimeName: "live+demo"}}}, "dvr_update_source_request"},
 	}
 
 	oneofFields := foghornrelaypb.File_foghorn_relay_proto.Messages().ByName("ForwardCommandRequest").Oneofs().ByName("command").Fields()

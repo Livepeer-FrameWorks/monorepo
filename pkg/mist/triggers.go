@@ -571,13 +571,17 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 // playback uses the chapter VOD artifact's playback_id (resolved
 // through Commodore) and never produces a dvr+ token.
 func ExtractInternalName(streamName string) string {
-	for _, prefix := range []string{"live+", "pull+", "vod+", "dvr+", "processing+"} {
+	for _, prefix := range wildcardPrefixes {
 		if rest, ok := strings.CutPrefix(streamName, prefix); ok {
 			return rest
 		}
 	}
 	return streamName
 }
+
+// wildcardPrefixes contains the internal namespaces accepted by Mist and the
+// artifact resolvers.
+var wildcardPrefixes = []string{"live+", "pull+", "vod+", "dvr+", "processing+"}
 
 // pairSessionShares pairs MistServer's parallel comma-separated USER_END
 // arrays (e.g. streamSummary="live+a,live+b" with streamTimes="120,45")

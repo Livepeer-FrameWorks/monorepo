@@ -219,3 +219,86 @@ func TestDVRStartingRecovery_RequestedWithDescriptorResumed(t *testing.T) {
 		t.Fatalf("unmet SQL expectations: %v", err)
 	}
 }
+
+// dvrRecoveryScanRowWithGen is dvrRecoveryScanRow plus a bound ingest generation, for the
+// start-redelivery supersession fence.
+func dvrRecoveryScanRowWithGen(status, state string, dispatchedAt int64, ingestGen string) *sqlmock.Rows {
+	d, _ := json.Marshal(DVRStartDispatch{
+		State:             state,
+		NodeID:            "node-1",
+		NodeBaseURL:       "http://node-1",
+		SourceRuntimeName: "live+stream1",
+		SourceBaseURL:     "dtsc://node-1/live+stream1",
+		IngestGeneration:  ingestGen,
+		SegmentSeconds:    6,
+		WindowSeconds:     120,
+		MaxEntries:        20,
+		StreamID:          "stream-uuid",
+		InternalName:      "stream1",
+		DispatchedAt:      dispatchedAt,
+	})
+	return sqlmock.NewRows([]string{"artifact_hash", "tenant_id", "status", "dvr_start_dispatch"}).
+		AddRow("dvr-1", "t1", status, string(d))
+}
+
+// B2 restart-safety: a stranded 'pending' start WITHIN the deadline whose ingest generation
+// has already ended (the publisher's PUSH_INPUT_CLOSE landed) must NOT be re-dispatched —
+// the durable ended-generation state, not the lost in-memory tombstone, supersedes it. It is
+// converted to a durable stop obligation and a compensating stop is sent instead.
+func TestDVRStartingRecovery_EndedIngestGenerationSupersedesRedispatch(t *testing.T) {
+	j, mock, cleanup := newDVRRecoveryJob(t)
+	defer cleanup()
+	seams := &dvrRecoverySeams{}
+	seams.wire(j)
+
+	recentDispatch := time.Now().Unix()
+	mock.ExpectQuery(`FROM foghorn\.artifacts a`).WillReturnRows(dvrRecoveryScanRowWithGen("starting", DVRDispatchStatePending, recentDispatch, "gen-x"))
+	// The generation is looked up and found ENDED.
+	mock.ExpectQuery(`SELECT ended_at IS NOT NULL FROM foghorn\.ingest_sessions`).
+		WithArgs("gen-x", "t1").
+		WillReturnRows(sqlmock.NewRows([]string{"ended"}).AddRow(true))
+	// The stop obligation is persisted durable-before-send.
+	mock.ExpectExec(`UPDATE foghorn\.artifacts`).WillReturnResult(sqlmock.NewResult(0, 1))
+
+	j.reconcile()
+
+	if seams.startCalls != 0 {
+		t.Fatalf("an ended ingest generation must NOT re-dispatch start, got %d", seams.startCalls)
+	}
+	if seams.registerCalls != 0 {
+		t.Fatalf("a superseded start must not re-register origin, got %d", seams.registerCalls)
+	}
+	if seams.stopCalls != 1 {
+		t.Fatalf("expected one compensating stop for the ended generation, got %d", seams.stopCalls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+// A stranded 'pending' start whose ingest generation is still ACTIVE re-dispatches normally:
+// the fence only suppresses a provably-superseded start.
+func TestDVRStartingRecovery_ActiveIngestGenerationStillRedispatches(t *testing.T) {
+	j, mock, cleanup := newDVRRecoveryJob(t)
+	defer cleanup()
+	seams := &dvrRecoverySeams{}
+	seams.wire(j)
+
+	recentDispatch := time.Now().Unix()
+	mock.ExpectQuery(`FROM foghorn\.artifacts a`).WillReturnRows(dvrRecoveryScanRowWithGen("starting", DVRDispatchStatePending, recentDispatch, "gen-live"))
+	mock.ExpectQuery(`SELECT ended_at IS NOT NULL FROM foghorn\.ingest_sessions`).
+		WithArgs("gen-live", "t1").
+		WillReturnRows(sqlmock.NewRows([]string{"ended"}).AddRow(false))
+
+	j.reconcile()
+
+	if seams.registerCalls != 1 || seams.startCalls != 1 {
+		t.Fatalf("an active generation must re-dispatch, got register=%d start=%d", seams.registerCalls, seams.startCalls)
+	}
+	if seams.stopCalls != 0 {
+		t.Fatalf("an active generation must not send a stop, got %d", seams.stopCalls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}

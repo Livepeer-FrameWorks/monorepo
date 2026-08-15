@@ -19,9 +19,7 @@ import (
 func TestApplyRedisChange_SkewedDelete_DoesNotWipeFresherSource(t *testing.T) {
 	r := newPopulatedRegistry(t)
 	const internal = "60546679b497415db2338cd5cae54992"
-	if res := r.AdmitAndReserve(internal, "node-A", nil); res.Decision != AdmissionAcceptNew {
-		t.Fatalf("seed admit: %v", res.Decision)
-	}
+	projectSourceForTest(t, r, internal, "node-A", 0, "", "gen-seed", 1)
 
 	// The local admission's registry write landed at changelog position 5-0.
 	r.watermarks.Record("source|"+internal, "5-0")

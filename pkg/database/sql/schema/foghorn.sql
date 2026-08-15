@@ -178,6 +178,10 @@ CREATE TABLE IF NOT EXISTS foghorn.artifacts (
     -- must be drained). jobs.DVRStartingRecoveryJob reads it to idempotently re-dispatch (or finalize) a
     -- recording whose node ack never arrived, so a 'starting' row is never permanently strandable.
     dvr_start_dispatch   JSONB,
+    -- Ingest session (foghorn.ingest_sessions.id) this recording is bound to. A same-node
+    -- reconnect is a new session id → a new recording; PUSH_INPUT_CLOSE finalizes the
+    -- recording for exactly the closing session. See migration 045.
+    ingest_generation    UUID,
 
     -- ===== ORIGIN / VISIBILITY =====
     -- origin_type identifies *how* this artifact was produced. NULL or
@@ -218,6 +222,7 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_dvr_backfill_pending
       AND dvr_chapter_mode != ''
       AND dvr_chapter_backfill_complete = false;
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_stream_internal ON foghorn.artifacts(stream_internal_name);
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_ingest_generation ON foghorn.artifacts(ingest_generation) WHERE ingest_generation IS NOT NULL;
 -- Drives the catalog-projection scan. Ordered by catalog_synced_rev (projection age) so the
 -- reconciler serves the LEAST-RECENTLY-PROJECTED rows first, not the least-recently-mutated:
 -- a continuously-mutating cohort (e.g. active DVRs minting revisions on every segment) can't
@@ -629,6 +634,217 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_dvr_chapters_reclaim
     WHERE state = 'frozen';
 CREATE INDEX IF NOT EXISTS idx_foghorn_dvr_chapters_playback_id
     ON foghorn.dvr_chapters(playback_id) WHERE playback_id IS NOT NULL;
+
+-- Durable ingest-session identity: one publisher connection = (tenant, node, Mist
+-- connector PID), fenced by the start trigger UUID/time. Minted on the accepted
+-- PUSH_REWRITE (PID from the X-PID header), ended on PUSH_INPUT_CLOSE carrying the
+-- same PID; each DVR recording binds to a session id so a same-node reconnect is a new
+-- session. See migration foghorn/v0.2.97/expand/045_dvr_ingest_sessions.sql.
+CREATE TABLE IF NOT EXISTS foghorn.ingest_sessions (
+    id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id              UUID NOT NULL,
+    node_id                VARCHAR(100) NOT NULL,
+    stream_internal_name   VARCHAR(255) NOT NULL,
+    connector_pid          BIGINT NOT NULL CHECK (connector_pid > 0),
+    start_trigger_uuid     VARCHAR(64) NOT NULL CHECK (start_trigger_uuid <> ''),
+    started_at_unix_millis BIGINT NOT NULL CHECK (started_at_unix_millis > 0),
+    started_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    ended_at               TIMESTAMPTZ,
+    ended_at_unix_millis   BIGINT,
+    ended_reason           VARCHAR(64),
+    -- Virtual media cluster this session was ADMITTED into, captured at mint. Placement claim,
+    -- renewal, and release all replay this value rather than re-resolving the node's current
+    -- cluster, so a node reassigned mid-session cannot strand the claim it was admitted under.
+    ingest_cluster_id      VARCHAR(100),
+    -- Durable DVR start intent (StartDVR inputs) for a record:true session, set at admission
+    -- before the push is approved; DVRIntentRecovery replays the start if the async StartDVR
+    -- was lost to a crash. NULL for a non-recording session.
+    dvr_intent             JSONB,
+    -- DVRIntentRecovery bookkeeping: leased-attempt counter (diagnostic; retries are UNBOUNDED while
+    -- the session is active — there is no attempt cap), per-attempt HA-safe lease/backoff, and an
+    -- explicit operator-visible terminal error (set ONLY for an undecodable payload).
+    dvr_intent_attempts    INT NOT NULL DEFAULT 0,
+    dvr_intent_lease_until TIMESTAMPTZ,
+    dvr_intent_error       TEXT,
+    -- Admission is not complete until the source projection wins the shared Redis revision CAS.
+    -- A pending row remains the stream authority while the blocking trigger retries, then the
+    -- ingest-session reaper retires it if projection never confirms.
+    projection_state       VARCHAR(16) NOT NULL DEFAULT 'pending',
+    source_revision        BIGINT,
+    projected_at           TIMESTAMPTZ,
+    UNIQUE (id, tenant_id, stream_internal_name),
+    CONSTRAINT ck_foghorn_ingest_sessions_projection_state
+        CHECK (projection_state IN ('pending', 'active')),
+    CONSTRAINT ck_foghorn_ingest_sessions_source_revision
+        CHECK (source_revision IS NULL OR source_revision > 0)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_foghorn_ingest_sessions_active_pid
+    ON foghorn.ingest_sessions(tenant_id, node_id, connector_pid)
+    WHERE ended_at IS NULL;
+-- HA authority: at most one ACTIVE session per (tenant, stream) across ALL nodes (admission is
+-- serialized cross-replica by a (tenant, stream) advisory lock; this is the durable backstop), and
+-- a Mist trigger UUID identifies one trigger EXECUTION — stable across its retries, distinct for a
+-- later reconnect — so it is unique per (tenant, node). See migration
+-- foghorn/v0.2.97/expand/046_ingest_session_stream_authority.sql.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_foghorn_ingest_sessions_active_per_stream
+    ON foghorn.ingest_sessions(tenant_id, stream_internal_name)
+    WHERE ended_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_foghorn_ingest_sessions_trigger_uuid
+    ON foghorn.ingest_sessions(tenant_id, node_id, start_trigger_uuid);
+CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_sessions_stream
+    ON foghorn.ingest_sessions(tenant_id, stream_internal_name);
+CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_sessions_pending_projection
+    ON foghorn.ingest_sessions(started_at)
+    WHERE ended_at IS NULL AND projection_state = 'pending';
+-- Enforce the DVR generation binding in schema (same-tenant, same-stream, existing session)
+-- and one active DVR per generation. Placed after ingest_sessions so the FK target exists.
+ALTER TABLE foghorn.artifacts
+    DROP CONSTRAINT IF EXISTS fk_foghorn_artifacts_ingest_generation;
+ALTER TABLE foghorn.artifacts
+    ADD CONSTRAINT fk_foghorn_artifacts_ingest_generation
+    FOREIGN KEY (ingest_generation, tenant_id, stream_internal_name)
+    REFERENCES foghorn.ingest_sessions(id, tenant_id, stream_internal_name);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_foghorn_artifacts_active_dvr_per_generation
+    ON foghorn.artifacts(ingest_generation)
+    WHERE ingest_generation IS NOT NULL
+          AND artifact_type = 'dvr'
+          AND status IN ('requested', 'starting', 'recording');
+
+-- Durable close-before-insert evidence: a PUSH_INPUT_CLOSE observed for a connector with no ingest
+-- session row yet (concurrent trigger dispatch + WAL redelivery can process a close before its own
+-- PUSH_REWRITE). CreateIngestSession consults this in the mint path (under the (tenant, stream)
+-- advisory lock the close also takes) and denies a late rewrite whose start is at or before a recorded
+-- close for the same connector, so a dead publisher is never resurrected as an active session. Swept
+-- on a TTL by the ingest session reaper. See migration
+-- foghorn/v0.2.97/expand/048_ingest_close_tombstones.sql.
+CREATE TABLE IF NOT EXISTS foghorn.ingest_close_tombstones (
+    tenant_id            UUID NOT NULL,
+    node_id              VARCHAR(100) NOT NULL,
+    connector_pid        BIGINT NOT NULL,
+    stream_internal_name VARCHAR(255) NOT NULL,
+    close_unix_millis    BIGINT NOT NULL,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_close_tombstones_lookup
+    ON foghorn.ingest_close_tombstones(tenant_id, node_id, connector_pid, stream_internal_name, close_unix_millis);
+CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_close_tombstones_created
+    ON foghorn.ingest_close_tombstones(created_at);
+
+-- Monotonic revision ordering source-ownership projections for the cluster-wide registry. Each source
+-- transition (ProjectSourceIfCurrent, the offline flip) draws nextval under the (tenant, stream)
+-- advisory lock, so a later transition carries a strictly higher revision; the registry merges
+-- source-ownership fields by it (highest wins) so a stale replica cannot clobber the real publisher via
+-- a last-writer-wins location write. See migration
+-- foghorn/v0.2.97/expand/049_source_projection_revision.sql.
+CREATE SEQUENCE IF NOT EXISTS foghorn.source_projection_revision;
+
+-- Durable, revision-fenced stream-offline work. The transition is enqueued under the same
+-- (tenant, stream) advisory lock as admission; workers apply it only while no newer active session
+-- exists. All effects are idempotent, so a lease loss or process crash safely retries the row.
+CREATE TABLE IF NOT EXISTS foghorn.ingest_offline_effects (
+    id                   BIGSERIAL PRIMARY KEY,
+    tenant_id            UUID NOT NULL,
+    stream_internal_name VARCHAR(255) NOT NULL,
+    source_node_id       VARCHAR(100) NOT NULL,
+    source_generation    UUID,
+    source_revision      BIGINT NOT NULL CHECK (source_revision > 0),
+    set_node_offline     BOOLEAN NOT NULL DEFAULT FALSE,
+    teardown_stream      BOOLEAN NOT NULL DEFAULT FALSE,
+    broadcast_offline    BOOLEAN NOT NULL DEFAULT FALSE,
+    decklog_trigger      BYTEA,
+    state                VARCHAR(16) NOT NULL DEFAULT 'pending'
+                             CHECK (state IN ('pending', 'applied', 'superseded')),
+    attempts             INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    leased_until         TIMESTAMPTZ,
+    lease_token          UUID,
+    -- Durable authority routing: the instance owning this row's outstanding authority-bound work,
+    -- recorded on deferral; the claim admits only that instance until the affinity goes stale (10s).
+    claim_affinity       VARCHAR(100),
+    last_error           TEXT,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    applied_at           TIMESTAMPTZ,
+    UNIQUE (tenant_id, stream_internal_name, source_revision)
+);
+CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_offline_effects_pending
+    ON foghorn.ingest_offline_effects(next_attempt_at, id)
+    WHERE state = 'pending';
+
+CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_offline_effects_terminal
+    ON foghorn.ingest_offline_effects(updated_at)
+    WHERE state IN ('applied', 'superseded');
+
+-- Durable, leased application of the once-only ADMISSION effects (mirror of the offline outbox
+-- above). The obligation row is inserted in the SAME transaction that confirms the source
+-- projection (pending→active), so exactly one obligation exists per admitted generation and a
+-- worker proves and settles each obligation under the stream advisory lock, with bounded push-target,
+-- drain, federation, and Decklog I/O between those locked transactions. Only the obligation worker
+-- executes these effects; trigger retries do not run them inline. The Decklog ingest
+-- event is stamped with the deterministic event_id (the generation) so worker re-deliveries
+-- deduplicate downstream.
+CREATE TABLE IF NOT EXISTS foghorn.ingest_admission_effects (
+    id                  BIGSERIAL PRIMARY KEY,
+    tenant_id           UUID NOT NULL,
+    stream_internal_name VARCHAR(255) NOT NULL,
+    node_id             VARCHAR(100) NOT NULL,
+    source_generation   UUID NOT NULL UNIQUE,
+    source_revision     BIGINT NOT NULL CHECK (source_revision > 0),
+    prior_owner_node_id VARCHAR(100) NOT NULL DEFAULT '',
+    -- Receiver fence for delayed name-scoped drain commands.
+    prior_owner_source_generation UUID,
+    -- Serialized ipcpb.ActivatePushTargets (stream name + target specs); NULL when the stream has
+    -- no configured push targets.
+    push_targets        BYTEA,
+    -- JSON array of complete federation peer hints (cluster ID, internal Foghorn address, and
+    -- lifecycle). The leader establishes stream tracking from this durable payload before the
+    -- broadcast leg can settle.
+    peer_clusters       TEXT,
+    broadcast_live      BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Serialized, enriched ipcpb.MistTrigger for the admission's Decklog ingest event, stamped with
+    -- the deterministic event_id (the generation). NULL when the event needs no ledgered delivery.
+    decklog_trigger     BYTEA,
+    -- Per-leg completion. The legs have DIFFERENT supersession rules: the Decklog event remains
+    -- OWED after the admitted generation ends (the admission still happened), while the drain,
+    -- activation and live broadcast become moot — a late drain destroys by runtime NAME and could
+    -- kill a successor session's buffer. Remote legs (drain, activation) are completed by
+    -- Helmsman's generation-correlated acknowledgements (DrainStreamResponse /
+    -- ActivatePushTargetsResult), NOT by dispatch: delivery is not completion. Legs not applicable
+    -- to an obligation are inserted TRUE.
+    drain_done          BOOLEAN NOT NULL DEFAULT FALSE,
+    activation_done     BOOLEAN NOT NULL DEFAULT FALSE,
+    broadcast_done      BOOLEAN NOT NULL DEFAULT FALSE,
+    decklog_done        BOOLEAN NOT NULL DEFAULT FALSE,
+    state               VARCHAR(16) NOT NULL DEFAULT 'pending'
+                            CHECK (state IN ('pending', 'applied', 'superseded')),
+    attempts            INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    leased_until        TIMESTAMPTZ,
+    lease_token         UUID,
+    -- Durable authority routing: the instance owning this row's outstanding authority-bound work,
+    -- recorded on deferral; the claim admits only that instance until the affinity goes stale (10s).
+    claim_affinity      VARCHAR(100),
+    last_error          TEXT,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    applied_at          TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_admission_effects_pending
+    ON foghorn.ingest_admission_effects(next_attempt_at, id)
+    WHERE state = 'pending';
+
+-- Tombstone cleanup proves that no pending admission callback at or below a membership revision can
+-- still restore it. Keep that bounded proof on the pending working set.
+CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_admission_effects_pending_fence
+    ON foghorn.ingest_admission_effects(tenant_id, stream_internal_name, source_revision)
+    WHERE state = 'pending';
+
+-- Terminal rows are retained briefly as diagnostics; this index keeps batched retention cleanup
+-- from scanning the pending working set.
+CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_admission_effects_terminal
+    ON foghorn.ingest_admission_effects(updated_at)
+    WHERE state IN ('applied', 'superseded');
 
 -- ============================================================================
 -- NODE OUTPUT CACHING & LOAD BALANCING

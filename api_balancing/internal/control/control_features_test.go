@@ -38,4 +38,7 @@ func TestMinControlProtocolVersion_AdmittedSessionsAreAuthoritative(t *testing.T
 	if f := ControlFeaturesForProtocol(MinControlProtocolVersion); !f.AuthoritativeInventory || !f.StagedFreeze || !f.StagedThumbnail {
 		t.Fatalf("a session at the minimum protocol must hold every capability, got %+v", f)
 	}
+	if MinControlProtocolVersion < IngestGenerationFencingProtocolMin {
+		t.Fatalf("minimum protocol %d admits a sidecar without ingest generation fencing (requires %d)", MinControlProtocolVersion, IngestGenerationFencingProtocolMin)
+	}
 }

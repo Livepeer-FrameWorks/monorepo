@@ -156,6 +156,11 @@ type FoghornMetrics struct {
 	// storage_not_owned_here, unsupported_artifact_type,
 	// unsupported_operation, s3_error.
 	StorageMint *prometheus.CounterVec
+
+	// RoutingEventsShed counts routing telemetry never delivered to Decklog.
+	// Labels: reason. Values: queue_full, send_failed. Sustained non-zero
+	// values mean routing_decisions is undercounting, not that routing broke.
+	RoutingEventsShed *prometheus.CounterVec
 }
 
 // StreamIDRegex matches public playback IDs and internal names (live+/vod+).
@@ -190,6 +195,9 @@ func Init(
 	geoipCache = geoCache
 	// Initialize cluster ID for dual-tenant attribution
 	clusterID = config.GetEnv("CLUSTER_ID", "")
+
+	startIngestRateLimiterJanitor()
+	StartRoutingEventQueue()
 
 	// Share database connection with control package for clip operations
 	control.SetDB(database)
@@ -1184,8 +1192,8 @@ func handleGetPullSource(c *gin.Context, streamName string, lat, lon float64, ta
 	}
 
 	// Handing this node the raw upstream URI makes it the stream's source
-	// owner — the OG pull, the exact counterpart of AdmitAndReserve's
-	// stamp for push ingest. First dialer wins; a relay or double-dial
+	// owner — the OG pull, the exact counterpart of ProjectSource's
+	// owner stamp for push ingest. First dialer wins; a relay or double-dial
 	// asking later cannot flip ownership. The federated branch above never
 	// stamps: returning a peer's DTSC means this cluster is a carrier.
 	// callerNodeID == "" (IP-mapping miss) stays unstamped by design —
@@ -1781,55 +1789,6 @@ func emitFederationEvent(data *ipcpb.FederationEventData) {
 	}()
 }
 
-// sendRoutingEvent builds a LoadBalancingData proto from a RoutingEvent and
-// sends it to Decklog. Shared by HTTP and gRPC routing emission paths.
-func sendRoutingEvent(e *RoutingEvent) {
-	if decklogClient == nil {
-		logger.Error("Decklog gRPC client not initialized")
-		return
-	}
-
-	event := BuildLoadBalancingData(e)
-
-	if e.StreamID == "" {
-		logger.WithField("stream_name", e.StreamName).Warn("LoadBalancingData missing stream_id")
-	}
-
-	if err := decklogClient.SendLoadBalancing(event); err != nil {
-		logger.WithFields(logging.Fields{
-			"error":       err,
-			"stream_name": e.StreamName,
-			"node":        e.SelectedNode,
-		}).Error("Failed to send routing event to Decklog")
-		return
-	}
-
-	logger.WithFields(logging.Fields{
-		"stream_name": e.StreamName,
-		"node":        e.SelectedNode,
-		"status":      e.Status,
-	}).Info("Routing event sent to Decklog")
-}
-
-// SendRoutingEvent is the exported version for use by the gRPC server.
-// The caller must provide a *decklog.BatchedClient since the gRPC server
-// uses an instance-level client rather than the package-level one.
-func SendRoutingEvent(client *decklog.BatchedClient, e *RoutingEvent) {
-	if client == nil {
-		return
-	}
-
-	event := BuildLoadBalancingData(e)
-
-	if err := client.SendLoadBalancing(event); err != nil {
-		logger.WithFields(logging.Fields{
-			"error":       err,
-			"stream_name": e.StreamName,
-			"node":        e.SelectedNode,
-		}).Warn("Failed to send routing event to Decklog")
-	}
-}
-
 // postBalancingEvent enriches a routing decision with gin request context
 // (client IP, country, GeoIP fallback, Commodore tenant resolution) and
 // sends it to Decklog for the /balance HTTP endpoint.
@@ -1897,7 +1856,7 @@ func postBalancingEventEx(c *gin.Context, streamName, selectedNode string, score
 		}
 	}
 
-	sendRoutingEvent(&RoutingEvent{
+	enqueueRoutingEvent(nil, &RoutingEvent{
 		Status:          status,
 		Details:         details,
 		Score:           score,
@@ -1924,7 +1883,9 @@ func resolveRoutingStreamIdentity(streamName string) (*commodorepb.ResolveStream
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		resp, err := commodoreClient.ResolveStreamContext(ctx, "", "", bareInternal, clusterID)
+		// Identifier-only read: declare no cluster, so the answer reports where
+		// the stream actually is rather than this process's own identity.
+		resp, err := commodoreClient.ResolveStreamContext(ctx, "", "", bareInternal, "")
 		cancel()
 		if err == nil && resp != nil && resp.GetStreamId() != "" {
 			return resp, nil
@@ -1933,7 +1894,7 @@ func resolveRoutingStreamIdentity(streamName string) (*commodorepb.ResolveStream
 			lastErr = err
 		}
 		ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
-		resp, err = commodoreClient.ResolveStreamContext(ctx, "", streamName, "", clusterID)
+		resp, err = commodoreClient.ResolveStreamContext(ctx, "", streamName, "", "")
 		cancel()
 		if err == nil && resp != nil && resp.GetStreamId() != "" {
 			return resp, nil
@@ -1951,8 +1912,7 @@ func resolveRoutingStreamIdentity(streamName string) (*commodorepb.ResolveStream
 	return nil, fmt.Errorf("stream identity not found")
 }
 
-// emitViewerRoutingEvent posts a routing decision for viewer playback.
-// Extracts node identity from the ViewerEndpoint proto and delegates to sendRoutingEvent.
+// emitViewerRoutingEvent submits a viewer decision to the shared bounded queue.
 func emitViewerRoutingEvent(req *sharedpb.ViewerEndpointRequest, primary *sharedpb.ViewerEndpoint, viewerLat, viewerLon, nodeLat, nodeLon float64, internalName, streamTenantID, streamID string, durationMs float32, candidatesCount int32, eventType, source string) {
 	if decklogClient == nil || primary == nil {
 		return
@@ -1963,7 +1923,7 @@ func emitViewerRoutingEvent(req *sharedpb.ViewerEndpointRequest, primary *shared
 		selectedNode = primary.Url
 	}
 
-	go sendRoutingEvent(&RoutingEvent{
+	enqueueRoutingEvent(nil, &RoutingEvent{
 		Status:          "success",
 		Details:         "play_rewrite",
 		Score:           uint64(primary.LoadScore),

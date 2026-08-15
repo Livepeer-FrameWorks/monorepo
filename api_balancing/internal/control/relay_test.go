@@ -756,25 +756,25 @@ func TestSendRelayCoverageMatchesForwardCommandOneof(t *testing.T) {
 	setCommandRelay(t, buildRelay(t, store, "self-instance", "10.0.0.1:9090", p))
 
 	sendByField := map[string]func() error{
-		"config_seed":             func() error { return SendConfigSeed("node-1", &ipcpb.ConfigSeed{NodeId: "node-1"}) },
-		"dvr_start":               func() error { return SendDVRStart("node-1", &ipcpb.DVRStartRequest{}) },
-		"dvr_stop":                func() error { return SendDVRStop("node-1", &ipcpb.DVRStopRequest{}) },
-		"clip_delete":             func() error { return SendClipDelete("node-1", &ipcpb.ClipDeleteRequest{}) },
-		"dvr_delete":              func() error { return SendDVRDelete("node-1", &ipcpb.DVRDeleteRequest{}) },
-		"vod_delete":              func() error { return SendVodDelete("node-1", &ipcpb.VodDeleteRequest{}) },
-		"dtsh_sync":               func() error { return SendDtshSyncRequest("node-1", &ipcpb.DtshSyncRequest{}) },
-		"stop_sessions":           func() error { return SendStopSessions("node-1", &ipcpb.StopSessionsRequest{}) },
-		"invalidate_sessions":     func() error { return SendInvalidateSessions("node-1", &ipcpb.InvalidateSessionsRequest{}) },
-		"activate_push_targets":   func() error { return SendActivatePushTargets("node-1", &ipcpb.ActivatePushTargets{}) },
-		"deactivate_push_targets": func() error { return SendDeactivatePushTargets("node-1", &ipcpb.DeactivatePushTargets{}) },
-		"processing_job":          func() error { return SendProcessingJob("node-1", &ipcpb.ProcessingJobRequest{}) },
-		"freeze":                  func() error { return SendFreezeRequest("node-1", &ipcpb.FreezeRequest{}) },
-		"desired_state_update":    func() error { return SendDesiredStateUpdate("node-1", &ipcpb.DesiredStateUpdate{}) },
-		"apply_managed_stream":    func() error { return SendApplyManagedStream("node-1", &ipcpb.ApplyManagedStream{Name: "demo"}) },
-		"retract_managed_stream":  func() error { return SendRetractManagedStream("node-1", &ipcpb.RetractManagedStream{Name: "demo"}) },
-		"drain_stream":            func() error { return SendDrainStream("node-1", &ipcpb.DrainStreamRequest{RuntimeName: "live+demo"}) },
-		"dvr_update_source": func() error {
-			return SendDVRUpdateSource("node-1", &ipcpb.DVRUpdateSourceRequest{DvrHash: "abc", SourceRuntimeName: "live+demo"})
+		"config_seed":         func() error { return SendConfigSeed("node-1", &ipcpb.ConfigSeed{NodeId: "node-1"}) },
+		"dvr_start":           func() error { return SendDVRStart("node-1", &ipcpb.DVRStartRequest{}) },
+		"dvr_stop":            func() error { return SendDVRStop("node-1", &ipcpb.DVRStopRequest{}) },
+		"clip_delete":         func() error { return SendClipDelete("node-1", &ipcpb.ClipDeleteRequest{}) },
+		"dvr_delete":          func() error { return SendDVRDelete("node-1", &ipcpb.DVRDeleteRequest{}) },
+		"vod_delete":          func() error { return SendVodDelete("node-1", &ipcpb.VodDeleteRequest{}) },
+		"dtsh_sync":           func() error { return SendDtshSyncRequest("node-1", &ipcpb.DtshSyncRequest{}) },
+		"stop_sessions":       func() error { return SendStopSessions("node-1", &ipcpb.StopSessionsRequest{}) },
+		"invalidate_sessions": func() error { return SendInvalidateSessions("node-1", &ipcpb.InvalidateSessionsRequest{}) },
+		"deactivate_push_targets": func() error {
+			return SendDeactivatePushTargets(context.Background(), "node-1", &ipcpb.DeactivatePushTargets{})
+		},
+		"processing_job":         func() error { return SendProcessingJob("node-1", &ipcpb.ProcessingJobRequest{}) },
+		"freeze":                 func() error { return SendFreezeRequest("node-1", &ipcpb.FreezeRequest{}) },
+		"desired_state_update":   func() error { return SendDesiredStateUpdate("node-1", &ipcpb.DesiredStateUpdate{}) },
+		"apply_managed_stream":   func() error { return SendApplyManagedStream("node-1", &ipcpb.ApplyManagedStream{Name: "demo"}) },
+		"retract_managed_stream": func() error { return SendRetractManagedStream("node-1", &ipcpb.RetractManagedStream{Name: "demo"}) },
+		"drain_stream": func() error {
+			return SendDrainStream(context.Background(), "node-1", &ipcpb.DrainStreamRequest{RuntimeName: "live+demo"})
 		},
 	}
 

@@ -47,9 +47,8 @@ type PurgeDeletedConfig struct {
 	Interval     time.Duration
 	RetentionAge time.Duration
 	Cleaner      *artifacts.Cleaner
-	// AllowCrossClusterDelete must match the federation server's AllowFederationMutations. Leave false (the
-	// default) until cluster-bound delete identity exists; the bytes+rows sweep then skips remote rows so they
-	// cannot starve local reaping. See PurgeDeletedJob.crossClusterDeleteEnabled.
+	// AllowCrossClusterDelete must match the federation server's AllowFederationMutations. Disabled deployments
+	// skip remote rows so undelegatable work cannot starve local reaping.
 	AllowCrossClusterDelete bool
 }
 

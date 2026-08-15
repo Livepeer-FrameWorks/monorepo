@@ -1,0 +1,79 @@
+//go:build schema_verify
+
+package control
+
+import (
+	"context"
+	"testing"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+)
+
+func tombstoneCount(t *testing.T, tenant, node string, pid int64, stream string) int {
+	t.Helper()
+	var n int
+	if err := db.QueryRow(`
+		SELECT count(*) FROM foghorn.ingest_close_tombstones
+		 WHERE tenant_id=$1::uuid AND node_id=$2 AND connector_pid=$3 AND stream_internal_name=$4
+	`, tenant, node, pid, stream).Scan(&n); err != nil {
+		t.Fatalf("count tombstones: %v", err)
+	}
+	return n
+}
+
+// TestIngestCloseTombstone_RealPG proves the close-before-insert fix against the real schema: a
+// PUSH_INPUT_CLOSE that beats its own PUSH_REWRITE records a tombstone; the late rewrite is then DENIED
+// (the dead publisher is never resurrected as an active session); a genuine later reconnect on the
+// reused connector is NOT blocked; and the tombstone is swept by the TTL purge.
+func TestIngestCloseTombstone_RealPG(t *testing.T) {
+	conn := startRealPG(t)
+	prev := db
+	SetDB(conn)
+	t.Cleanup(func() { SetDB(prev) })
+	ctx := context.Background()
+	lg := logging.NewLogger()
+
+	const node, stream = "node-cbt", "live+cbt"
+	const pid int64 = 100
+
+	// 1. Close arrives before any session exists → finalizes nothing, records a tombstone.
+	res, err := FinalizeIngestSessionClose(ctx, ingA, node, pid, 5000, stream, lg)
+	if err != nil {
+		t.Fatalf("close-before-insert: %v", err)
+	}
+	if res.EndedSessionID != "" {
+		t.Fatalf("close-before-insert must finalize nothing, got %+v", res)
+	}
+	if c := tombstoneCount(t, ingA, node, pid, stream); c != 1 {
+		t.Fatalf("expected one close tombstone, got %d", c)
+	}
+
+	// 2. The late rewrite (started at or before the recorded close) is DENIED — no active session.
+	_, outcome, err := CreateIngestSession(ctx, ingA, node, stream, pid, "uuid-late", 4000, nil, "cell-a", lg)
+	if err != nil {
+		t.Fatalf("late rewrite: %v", err)
+	}
+	if outcome != IngestSessionAlreadyEnded {
+		t.Fatalf("a rewrite racing behind its own close must be AlreadyEnded, got %v", outcome)
+	}
+	if c := activeSessionCount(t, ingA, node, pid); c != 0 {
+		t.Fatalf("a dead publisher must not be resurrected as an active session, got %d active", c)
+	}
+
+	// 3. A genuine reconnect that started AFTER the close is NOT blocked by the older tombstone.
+	id, outcome, err := CreateIngestSession(ctx, ingA, node, stream, pid, "uuid-reconnect", 6000, nil, "cell-a", lg)
+	if err != nil {
+		t.Fatalf("reconnect: %v", err)
+	}
+	if outcome != IngestSessionActive || id == "" {
+		t.Fatalf("a later reconnect must not be blocked by an older close tombstone, got outcome=%v id=%q", outcome, id)
+	}
+
+	// 4. The TTL purge sweeps the tombstone (olderThan=0 → anything created before now).
+	if _, err := PurgeExpiredCloseTombstones(ctx, 0); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if c := tombstoneCount(t, ingA, node, pid, stream); c != 0 {
+		t.Fatalf("tombstone not purged, %d remain", c)
+	}
+}

@@ -2,6 +2,7 @@ package federation
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"testing"
 	"time"
@@ -295,16 +296,16 @@ func TestReleaseLeaderLease_StolenLease(t *testing.T) {
 	}
 }
 
-func TestSetGetPeerAddresses(t *testing.T) {
+func TestPublishGetPeerAddresses(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	ctx := context.Background()
 
-	addrs := map[string]string{
-		"cluster-1": "foghorn.c1.example.com:18029",
-		"cluster-2": "foghorn.c2.example.com:18029",
+	hints := map[string]PeerHint{
+		"cluster-1": {Addr: "foghorn.c1.example.com:18029", AlwaysOn: true, Tenants: []string{"tenant-a"}},
+		"cluster-2": {Addr: "foghorn.c2.example.com:18029", AlwaysOn: true},
 	}
-	if err := cache.SetPeerAddresses(ctx, addrs); err != nil {
-		t.Fatalf("SetPeerAddresses: %v", err)
+	if err := cache.PublishPeerHints(ctx, "writer-a", hints); err != nil {
+		t.Fatalf("PublishPeerHints: %v", err)
 	}
 
 	got, err := cache.GetPeerAddresses(ctx)
@@ -312,10 +313,23 @@ func TestSetGetPeerAddresses(t *testing.T) {
 		t.Fatalf("GetPeerAddresses: %v", err)
 	}
 	if len(got) != 2 {
-		t.Fatalf("expected 2 addresses, got %d", len(got))
+		t.Fatalf("expected 2 hints, got %d", len(got))
 	}
-	if got["cluster-1"] != addrs["cluster-1"] || got["cluster-2"] != addrs["cluster-2"] {
-		t.Fatalf("address mismatch: got %v", got)
+	if got["cluster-1"].Addr != hints["cluster-1"].Addr || !got["cluster-1"].AlwaysOn ||
+		len(got["cluster-1"].Tenants) != 1 || got["cluster-1"].Tenants[0] != "tenant-a" {
+		t.Fatalf("hint round-trip mismatch: got %+v", got["cluster-1"])
+	}
+	if got["cluster-2"].Addr != hints["cluster-2"].Addr || !got["cluster-2"].AlwaysOn {
+		t.Fatalf("hint round-trip mismatch: got %+v", got["cluster-2"])
+	}
+
+	// The legacy raw-address hash is a different namespace and cannot poison v2 imports.
+	if seedErr := cache.client.HSet(ctx, fmt.Sprintf("{%s}:peer_addresses", cache.clusterID), "cluster-legacy", "legacy.example.com:18029").Err(); seedErr != nil {
+		t.Fatalf("seed legacy record: %v", seedErr)
+	}
+	got, err = cache.GetPeerAddresses(ctx)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("legacy namespace affected v2 import: got=%v err=%v", got, err)
 	}
 }
 
@@ -332,41 +346,82 @@ func TestGetPeerAddresses_EmptyOnMiss(t *testing.T) {
 	}
 }
 
-func TestSetPeerAddresses_OverwritesPrevious(t *testing.T) {
+func TestPeerHintContributions_AggregateAndRevokeIndependently(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	ctx := context.Background()
 
-	first := map[string]string{"cluster-1": "addr-old", "cluster-2": "addr-2"}
-	cache.SetPeerAddresses(ctx, first)
-
-	second := map[string]string{"cluster-1": "addr-new", "cluster-3": "addr-3"}
-	cache.SetPeerAddresses(ctx, second)
+	first := map[string]PeerHint{"cluster-1": {Addr: "addr-official", AlwaysOn: true, Tenants: []string{"tenant-a"}}, "cluster-2": {Addr: "addr-2", AlwaysOn: true}}
+	if err := cache.PublishPeerHints(ctx, "writer-official", first); err != nil {
+		t.Fatal(err)
+	}
+	second := map[string]PeerHint{"cluster-1": {Addr: "addr-scoped", Tenants: []string{"tenant-b"}}, "cluster-3": {Addr: "addr-3", AlwaysOn: true}}
+	if err := cache.PublishPeerHints(ctx, "writer-demand", second); err != nil {
+		t.Fatal(err)
+	}
 
 	got, _ := cache.GetPeerAddresses(ctx)
-	if len(got) != 2 {
-		t.Fatalf("expected 2 addresses after overwrite, got %d: %v", len(got), got)
+	if len(got) != 3 {
+		t.Fatalf("expected 3 hints across live contributions, got %d: %v", len(got), got)
 	}
-	if got["cluster-1"] != "addr-new" {
-		t.Fatalf("expected cluster-1 updated to addr-new, got %s", got["cluster-1"])
+	if got["cluster-1"].Addr != "addr-official" || !got["cluster-1"].AlwaysOn {
+		t.Fatalf("stream-scoped writer downgraded always-on address authority: %+v", got["cluster-1"])
 	}
-	if _, ok := got["cluster-2"]; ok {
-		t.Fatal("expected cluster-2 removed after overwrite")
+	if len(got["cluster-1"].Tenants) != 2 {
+		t.Fatalf("tenant discoveries were not unioned: %+v", got["cluster-1"])
 	}
-	if got["cluster-3"] != "addr-3" {
-		t.Fatalf("expected cluster-3 present, got %s", got["cluster-3"])
+	if got["cluster-3"].Addr != "addr-3" {
+		t.Fatalf("expected cluster-3 present, got %s", got["cluster-3"].Addr)
+	}
+	if err := cache.PublishPeerHints(ctx, "writer-official", map[string]PeerHint{}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = cache.GetPeerAddresses(ctx)
+	if got["cluster-1"].Addr != "addr-scoped" || got["cluster-1"].AlwaysOn || len(got["cluster-1"].Tenants) != 1 || got["cluster-1"].Tenants[0] != "tenant-b" {
+		t.Fatalf("replacing one contribution did not revoke its lifecycle, address, and tenant authority: %+v", got["cluster-1"])
+	}
+	if _, exists := got["cluster-2"]; exists {
+		t.Fatal("peer unique to revoked contribution remained authorized")
 	}
 }
 
-func TestSetPeerAddresses_EmptyMapClearsHash(t *testing.T) {
+func TestPeerHintContributions_RefreshingWriterDoesNotExtendAnotherLease(t *testing.T) {
+	cache, mr := setupTestCache(t)
+	ctx := context.Background()
+	if err := cache.PublishPeerHints(ctx, "writer-a", map[string]PeerHint{"cluster-a": {Addr: "addr-a", AlwaysOn: true}}); err != nil {
+		t.Fatal(err)
+	}
+	mr.FastForward(20 * time.Second)
+	if err := cache.PublishPeerHints(ctx, "writer-b", map[string]PeerHint{"cluster-b": {Addr: "addr-b", AlwaysOn: true}}); err != nil {
+		t.Fatal(err)
+	}
+	mr.FastForward(11 * time.Second)
+	got, err := cache.GetPeerAddresses(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := got["cluster-a"]; exists {
+		t.Fatal("writer-b refresh extended writer-a's expired authority")
+	}
+	if got["cluster-b"].Addr != "addr-b" {
+		t.Fatalf("live writer-b contribution missing: %v", got)
+	}
+}
+
+func TestPeerHintContributions_MalformedWriterDoesNotPoisonValidWriters(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	ctx := context.Background()
-
-	cache.SetPeerAddresses(ctx, map[string]string{"cluster-1": "addr-1"})
-	cache.SetPeerAddresses(ctx, map[string]string{})
-
-	got, _ := cache.GetPeerAddresses(ctx)
-	if len(got) != 0 {
-		t.Fatalf("expected empty map after clearing, got %v", got)
+	if err := cache.PublishPeerHints(ctx, "valid-writer", map[string]PeerHint{"cluster-valid": {Addr: "addr-valid", AlwaysOn: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.client.Set(ctx, cache.keyPeerHintContribution("broken-writer"), "not-json", peerAddrTTL).Err(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := cache.GetPeerAddresses(ctx)
+	if err != nil {
+		t.Fatalf("malformed writer poisoned aggregate import: %v", err)
+	}
+	if len(got) != 1 || got["cluster-valid"].Addr != "addr-valid" {
+		t.Fatalf("valid contribution missing after malformed sibling: %v", got)
 	}
 }
 
@@ -397,19 +452,15 @@ func TestRemoteLiveStream_TenantIsolation(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	ctx := context.Background()
 
-	if err := cache.SetRemoteLiveStream(ctx, "tenant-a", "mystream", &RemoteLiveStreamEntry{
-		ClusterID: "cluster-1",
-		TenantID:  "tenant-a",
-		UpdatedAt: 1000,
-	}); err != nil {
-		t.Fatalf("SetRemoteLiveStream tenant-a: %v", err)
+	if applied, err := cache.ApplyRemoteStreamLifecycle(ctx, "tenant-a", "mystream", &RemoteLiveStreamEntry{
+		ClusterID: "cluster-1", TenantID: "tenant-a", SourceRevision: 1, UpdatedAt: 1000,
+	}, true); err != nil || !applied {
+		t.Fatalf("ApplyRemoteStreamLifecycle tenant-a: applied=%v err=%v", applied, err)
 	}
-	if err := cache.SetRemoteLiveStream(ctx, "tenant-b", "mystream", &RemoteLiveStreamEntry{
-		ClusterID: "cluster-2",
-		TenantID:  "tenant-b",
-		UpdatedAt: 2000,
-	}); err != nil {
-		t.Fatalf("SetRemoteLiveStream tenant-b: %v", err)
+	if applied, err := cache.ApplyRemoteStreamLifecycle(ctx, "tenant-b", "mystream", &RemoteLiveStreamEntry{
+		ClusterID: "cluster-2", TenantID: "tenant-b", SourceRevision: 1, UpdatedAt: 2000,
+	}, true); err != nil || !applied {
+		t.Fatalf("ApplyRemoteStreamLifecycle tenant-b: applied=%v err=%v", applied, err)
 	}
 
 	entryA, err := cache.GetRemoteLiveStream(ctx, "tenant-a", "mystream")
@@ -428,8 +479,10 @@ func TestRemoteLiveStream_TenantIsolation(t *testing.T) {
 		t.Fatalf("expected cluster-2 for tenant-b, got %q", entryB.ClusterID)
 	}
 
-	if err := cache.DeleteRemoteLiveStream(ctx, "tenant-a", "mystream"); err != nil {
-		t.Fatalf("DeleteRemoteLiveStream tenant-a: %v", err)
+	if applied, err := cache.ApplyRemoteStreamLifecycle(ctx, "tenant-a", "mystream", &RemoteLiveStreamEntry{
+		ClusterID: "cluster-1", TenantID: "tenant-a", SourceRevision: 2, UpdatedAt: 3000,
+	}, false); err != nil || !applied {
+		t.Fatalf("apply tenant-a offline: applied=%v err=%v", applied, err)
 	}
 	deleted, _ := cache.GetRemoteLiveStream(ctx, "tenant-a", "mystream")
 	if deleted != nil {
@@ -438,6 +491,73 @@ func TestRemoteLiveStream_TenantIsolation(t *testing.T) {
 	stillThere, _ := cache.GetRemoteLiveStream(ctx, "tenant-b", "mystream")
 	if stillThere == nil {
 		t.Fatal("expected tenant-b entry to survive tenant-a deletion")
+	}
+}
+
+func TestRemoteLiveStream_RevisionFencesReorderedLifecycle(t *testing.T) {
+	cache, _ := setupTestCache(t)
+	ctx := context.Background()
+	entry := func(revision int64) *RemoteLiveStreamEntry {
+		return &RemoteLiveStreamEntry{
+			ClusterID: "remote-cluster", TenantID: "tenant-a", SourceRevision: revision, UpdatedAt: revision,
+		}
+	}
+
+	if applied, err := cache.ApplyRemoteStreamLifecycle(ctx, "tenant-a", "new-live", entry(20), true); err != nil || !applied {
+		t.Fatalf("apply newer live: applied=%v err=%v", applied, err)
+	}
+	if applied, err := cache.ApplyRemoteStreamLifecycle(ctx, "tenant-a", "new-live", entry(19), false); err != nil || applied {
+		t.Fatalf("stale offline applied=%v err=%v", applied, err)
+	}
+	if live, err := cache.GetRemoteLiveStream(ctx, "tenant-a", "new-live"); err != nil || live == nil || live.SourceRevision != 20 {
+		t.Fatalf("stale offline removed newer live marker: live=%+v err=%v", live, err)
+	}
+
+	if applied, err := cache.ApplyRemoteStreamLifecycle(ctx, "tenant-a", "new-offline", entry(30), false); err != nil || !applied {
+		t.Fatalf("apply newer offline: applied=%v err=%v", applied, err)
+	}
+	if applied, err := cache.ApplyRemoteStreamLifecycle(ctx, "tenant-a", "new-offline", entry(29), true); err != nil || applied {
+		t.Fatalf("stale live applied=%v err=%v", applied, err)
+	}
+	if live, err := cache.GetRemoteLiveStream(ctx, "tenant-a", "new-offline"); err != nil || live != nil {
+		t.Fatalf("stale live resurrected newer offline marker: live=%+v err=%v", live, err)
+	}
+
+	if applied, err := cache.ApplyRemoteStreamLifecycle(ctx, "tenant-a", "equal", entry(40), false); err != nil || !applied {
+		t.Fatalf("apply equal offline: applied=%v err=%v", applied, err)
+	}
+	if applied, err := cache.ApplyRemoteStreamLifecycle(ctx, "tenant-a", "equal", entry(40), true); err != nil || applied {
+		t.Fatalf("equal-revision live must not beat offline: applied=%v err=%v", applied, err)
+	}
+}
+
+func TestRemoteLiveStream_RevisionsAreScopedByOriginCluster(t *testing.T) {
+	cache, _ := setupTestCache(t)
+	ctx := context.Background()
+	entry := func(clusterID string, revision int64) *RemoteLiveStreamEntry {
+		return &RemoteLiveStreamEntry{
+			ClusterID: clusterID, TenantID: "tenant-a", SourceRevision: revision, UpdatedAt: revision,
+		}
+	}
+
+	if applied, err := cache.ApplyRemoteStreamLifecycle(ctx, "tenant-a", "cross-cell", entry("cell-a", 10_000), false); err != nil || !applied {
+		t.Fatalf("apply cell A offline: applied=%v err=%v", applied, err)
+	}
+	if applied, err := cache.ApplyRemoteStreamLifecycle(ctx, "tenant-a", "cross-cell", entry("cell-b", 40), true); err != nil || !applied {
+		t.Fatalf("cell B live was ordered against cell A: applied=%v err=%v", applied, err)
+	}
+	if live, err := cache.GetRemoteLiveStream(ctx, "tenant-a", "cross-cell"); err != nil || live == nil || live.ClusterID != "cell-b" {
+		t.Fatalf("cell A revision hid cell B live marker: live=%+v err=%v", live, err)
+	}
+
+	if applied, err := cache.ApplyRemoteStreamLifecycle(ctx, "tenant-a", "cross-cell", entry("cell-a", 10_001), true); err != nil || !applied {
+		t.Fatalf("apply cell A live: applied=%v err=%v", applied, err)
+	}
+	if applied, err := cache.ApplyRemoteStreamLifecycle(ctx, "tenant-a", "cross-cell", entry("cell-b", 41), false); err != nil || !applied {
+		t.Fatalf("cell B offline was ordered against cell A: applied=%v err=%v", applied, err)
+	}
+	if live, err := cache.GetRemoteLiveStream(ctx, "tenant-a", "cross-cell"); err != nil || live == nil || live.ClusterID != "cell-a" {
+		t.Fatalf("cell B revision hid cell A live marker: live=%+v err=%v", live, err)
 	}
 }
 

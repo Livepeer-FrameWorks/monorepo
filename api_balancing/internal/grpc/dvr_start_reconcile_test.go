@@ -2,10 +2,13 @@ package grpc
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"testing"
 
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/jobs"
 	"github.com/DATA-DOG/go-sqlmock"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"google.golang.org/grpc/codes"
@@ -107,5 +110,42 @@ func TestReconcileStartingDVR_TerminalSurfacesError(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+// An existing active DVR belongs to a different ingest session when its ingest
+// generation differs (precise: covers same-node reconnect) or, absent generations,
+// its source node differs. Same session/node is a live retry; missing/unparseable
+// identity is inconclusive.
+func TestDVRRecordingSupersededSession(t *testing.T) {
+	dispatch := func(sourceNodeID, ingestGen string) sql.NullString {
+		b, err := json.Marshal(jobs.DVRStartDispatch{SourceNodeID: sourceNodeID, IngestGeneration: ingestGen})
+		if err != nil {
+			t.Fatalf("marshal dispatch: %v", err)
+		}
+		return sql.NullString{String: string(b), Valid: true}
+	}
+	cases := []struct {
+		name       string
+		dispatch   sql.NullString
+		liveSource string
+		liveGen    string
+		want       bool
+	}{
+		// Precise ingest-generation comparison (both present).
+		{"same-node reconnect, different generation is superseded", dispatch("node-a", "gen-old"), "node-a", "gen-new", true},
+		{"same session (same generation) is a live retry", dispatch("node-a", "gen-1"), "node-a", "gen-1", false},
+		// Node-only fallback when a generation is missing.
+		{"another node (no generations) is superseded", dispatch("node-old", ""), "node-new", "", true},
+		{"same node (no generations) is a live retry", dispatch("node-a", ""), "node-a", "", false},
+		{"blank recorded source, no generations, inconclusive", dispatch("", ""), "node-new", "", false},
+		{"blank live source, no generations, inconclusive", dispatch("node-old", ""), "", "", false},
+		{"null descriptor is inconclusive", sql.NullString{}, "node-new", "gen-x", false},
+		{"unparseable descriptor is inconclusive", sql.NullString{String: "{not json", Valid: true}, "node-new", "gen-x", false},
+	}
+	for _, tc := range cases {
+		if got := dvrRecordingSupersededSession(tc.dispatch, tc.liveSource, tc.liveGen); got != tc.want {
+			t.Errorf("%s: dvrRecordingSupersededSession = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

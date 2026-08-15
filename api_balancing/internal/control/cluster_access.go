@@ -39,8 +39,11 @@ func cachedClusterRouting(tenantID string) (tenantStorageRouting, bool) {
 }
 
 // ClusterAccessibleForTenant reports whether a physical node's virtual cluster is entitled to run a tenant's
-// media workload, per Quartermaster cluster↔tenant entitlement. This is the GENERIC access predicate the
-// authority model is built on: the security boundary is the authenticated node→cluster binding plus this
+// media workload, per Quartermaster cluster↔tenant entitlement. It reads RAW grants: unlike the cluster-peer
+// envelope Commodore returns on a resolve, it applies neither the tenant's plan classes nor cluster health, so
+// paths that have a freshly-resolved envelope (playback, ingest endpoint selection) authorize against that
+// instead. This is for the paths that have no such envelope — storage placement, freeze, job routing. It is the
+// GENERIC access predicate the authority model is built on: the security boundary is the authenticated node→cluster binding plus this
 // entitlement, NOT any NodeState.TenantID string. A platform-shared edge cluster is entitled to any tenant.
 // Otherwise the cluster must be the tenant's official cluster or a member of its active, unexpired
 // cluster_cluster_access peer set (materialized by Quartermaster's GetClusterRouting → ClusterPeers, which
@@ -64,7 +67,7 @@ func ClusterAccessibleForTenant(clusterID, tenantID string) bool {
 	}
 	// Reuse the freeze path's entitlement envelope (the tenant's official cluster + active, unexpired peer set
 	// from GetClusterRouting) — the "storage" naming is incidental; the peer membership IS the generic
-	// cluster↔tenant entitlement with no per-operation scope. Read it through the short-TTL cache so serve-path
+	// cluster↔tenant entitlement with no per-operation scope. Read it through the short-TTL cache so repeated
 	// checks don't hit Quartermaster per request.
 	routing, ok := cachedClusterRouting(tenantID)
 	if !ok {

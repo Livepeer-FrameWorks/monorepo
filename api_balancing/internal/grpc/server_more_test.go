@@ -306,33 +306,6 @@ func TestAssertChapterTenant(t *testing.T) {
 	})
 }
 
-// Pending DVR-stop signals are one-shot: registering then consuming returns
-// true and clears the entry; a second consume returns false. With no Redis
-// store wired, this exercises the in-memory map path.
-func TestPendingDVRStopInMemoryRoundTrip(t *testing.T) {
-	s := NewFoghornGRPCServer(nil, logging.NewLogger(), nil, nil, nil, nil, nil, nil)
-
-	if s.consumePendingDVRStop("") {
-		t.Fatal("empty name must never be a registered stop")
-	}
-	if s.consumePendingDVRStop("live+x") {
-		t.Fatal("unregistered name must return false")
-	}
-
-	s.RegisterPendingDVRStop("") // no-op, must not panic or register
-	if s.consumePendingDVRStop("") {
-		t.Fatal("empty registration must remain a no-op")
-	}
-
-	s.RegisterPendingDVRStop("live+x")
-	if !s.consumePendingDVRStop("live+x") {
-		t.Fatal("registered stop must be consumed once")
-	}
-	if s.consumePendingDVRStop("live+x") {
-		t.Fatal("stop must be one-shot: second consume returns false")
-	}
-}
-
 func TestArtifactSessionName(t *testing.T) {
 	cases := []struct {
 		in, want string

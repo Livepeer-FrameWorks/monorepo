@@ -3,6 +3,7 @@ package federation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"testing"
@@ -17,7 +18,6 @@ import (
 	"frameworks/api_balancing/internal/state"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
-	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
@@ -180,15 +180,21 @@ func TestSetOwnerTenantIDUpdatesFederationEventEnrichment(t *testing.T) {
 func newTestPeerManager(t *testing.T, clusterID string, cache *RemoteEdgeCache, isLeader bool) *PeerManager {
 	t.Helper()
 	pm := &PeerManager{
-		clusterID:     clusterID,
-		instanceID:    "test-instance",
-		cache:         cache,
-		logger:        testLogger(),
-		peers:         make(map[string]*peerState),
-		streamPeers:   make(map[string]map[string]bool),
-		metricHistory: make(map[string][]metricSample),
-		done:          make(chan struct{}),
-		isLeader:      isLeader,
+		clusterID:           clusterID,
+		instanceID:          "test-instance",
+		cache:               cache,
+		logger:              testLogger(),
+		peers:               make(map[string]*peerState),
+		streamPeers:         make(map[string]map[string]bool),
+		streamTenants:       make(map[string]string),
+		streamMemberships:   make(map[string]StreamPeerMembership),
+		trackedTenantRefs:   make(map[string]map[string]int),
+		trackedAddrRefs:     make(map[string]map[string]map[int64]int),
+		trackedAlwaysOnRefs: make(map[string]int),
+		metricHistory:       make(map[string][]metricSample),
+		done:                make(chan struct{}),
+		isLeader:            isLeader,
+		leaderReady:         isLeader,
 	}
 	t.Cleanup(func() {
 		select {
@@ -200,112 +206,279 @@ func newTestPeerManager(t *testing.T, clusterID string, cache *RemoteEdgeCache, 
 	return pm
 }
 
-func TestNotifyPeers_NonLeaderRegistersAddressOnly(t *testing.T) {
-	cache, _ := setupTestCache(t)
-	pm := newTestPeerManager(t, "local-cluster", cache, false)
-
-	pm.NotifyPeers([]*clusterpeerpb.TenantClusterPeer{
-		{
-			ClusterId:       "remote-cluster",
-			ClusterSlug:     "remote",
-			BaseUrl:         "example.com",
-			FoghornGrpcAddr: "10.88.1.10:18019",
-			Role:            "official",
-		},
-	}, "tenant-a")
-
-	addr := pm.GetPeerAddr("remote-cluster")
-	if addr == "" {
-		t.Fatal("expected non-leader to have peer address registered")
+func TestTrackedDemand_IsNonExpiringAndRevokesOnUntrack(t *testing.T) {
+	cache, redisServer := setupTestCache(t)
+	pm := newTestPeerManager(t, "local-cluster", cache, true)
+	_, _ = pm.TrackStream(context.Background(), "live+alpha", "tenant-a", "generation-a", 1, []control.AdmissionPeerHint{{
+		ClusterID: "remote-cluster",
+		Addr:      "10.88.1.10:18019",
+	}})
+	redisServer.FastForward(48 * time.Hour)
+	memberships, err := cache.LoadAllStreamPeerMemberships(context.Background())
+	if err != nil {
+		t.Fatalf("LoadAllStreamPeerMemberships: %v", err)
 	}
-	if addr != "10.88.1.10:18019" {
-		t.Fatalf("unexpected address: %s", addr)
+	record, ok := memberships["live+alpha"]
+	if !ok || record.TenantID != "tenant-a" || len(record.Peers) != 1 || record.Peers[0].ClusterID != "remote-cluster" {
+		t.Fatalf("active stream membership did not survive without renewal: %+v", memberships)
 	}
-
-	// Non-leader should NOT have opened a connection
-	if pm.IsPeerConnected("remote-cluster") {
-		t.Fatal("expected non-leader peer to NOT be connected")
+	replacement := newTestPeerManager(t, "local-cluster", cache, false)
+	if err = replacement.loadStreamPeerMembershipsFromRedis(); err != nil {
+		t.Fatalf("replacement leader reconstruction: %v", err)
 	}
-}
-
-func TestNotifyPeers_SkipsSelfAndDuplicate(t *testing.T) {
-	pm := newTestPeerManager(t, "local-cluster", nil, false)
-
-	peers := []*clusterpeerpb.TenantClusterPeer{
-		{ClusterId: "local-cluster", ClusterSlug: "local", BaseUrl: "example.com"},
-		{ClusterId: "", ClusterSlug: "empty", BaseUrl: "example.com"},
-		{ClusterId: "remote-cluster", ClusterSlug: "remote", BaseUrl: "example.com", FoghornGrpcAddr: "10.88.1.11:18019", Role: "preferred"},
+	if hint := replacement.localPeerHints()["remote-cluster"]; hint.Addr != "10.88.1.10:18019" || len(hint.Tenants) != 1 || hint.Tenants[0] != "tenant-a" {
+		t.Fatalf("replacement leader lost long-lived stream authority: %+v", hint)
 	}
 
-	pm.NotifyPeers(peers, "tenant-a")
-
-	if pm.GetPeerAddr("local-cluster") != "" {
-		t.Fatal("should not register self as peer")
+	if err = pm.UntrackStream(context.Background(), "live+alpha", "tenant-a", "generation-a", 1); err != nil {
+		t.Fatalf("UntrackStream: %v", err)
 	}
-	if pm.GetPeerAddr("remote-cluster") == "" {
-		t.Fatal("expected remote-cluster to be registered")
+	memberships, err = cache.LoadAllStreamPeerMemberships(context.Background())
+	if err != nil {
+		t.Fatalf("LoadAllStreamPeerMemberships after revoke: %v", err)
 	}
-
-	// Call again — should not duplicate
-	pm.NotifyPeers(peers, "tenant-a")
-	got := pm.GetPeers()
-	if len(got) != 1 {
-		t.Fatalf("expected 1 peer, got %d: %v", len(got), got)
+	if ended, ok := memberships["live+alpha"]; !ok || ended.Active || ended.SourceRevision != 1 {
+		t.Fatalf("ended stream did not retain its revision fence: %+v", memberships)
 	}
 }
 
-func TestNotifyPeers_SkipsServedVirtualCluster(t *testing.T) {
-	pm := newTestPeerManager(t, "central-primary-test", nil, false)
-	control.AddServedCluster("demo-media-test")
-
-	pm.NotifyPeers([]*clusterpeerpb.TenantClusterPeer{
-		{ClusterId: "demo-media-test", ClusterSlug: "demo", BaseUrl: "example.com"},
-		{ClusterId: "remote-media-test", ClusterSlug: "remote", BaseUrl: "example.com", FoghornGrpcAddr: "10.88.1.12:18019"},
-	}, "tenant-a")
-
-	if pm.GetPeerAddr("demo-media-test") != "" {
-		t.Fatal("should not register a cluster served by this Foghorn as a remote peer")
-	}
-	if pm.GetPeerAddr("remote-media-test") == "" {
-		t.Fatal("expected remote media cluster to be registered")
-	}
-}
-
-func TestNotifyPeers_SkipsPeerWithoutInternalFoghornAddress(t *testing.T) {
-	pm := newTestPeerManager(t, "local-cluster", nil, false)
-
-	pm.NotifyPeers([]*clusterpeerpb.TenantClusterPeer{
-		{ClusterId: "remote-cluster", ClusterSlug: "remote", BaseUrl: "example.com"},
-	}, "tenant-a")
-
-	if pm.GetPeerAddr("remote-cluster") != "" {
-		t.Fatal("should not derive a public Foghorn address for mesh federation")
-	}
-}
-
-func TestNotifyPeers_LeaderSyncsToRedis(t *testing.T) {
+func TestStreamMembershipRevisionFenceRejectsDelayedPriorGeneration(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	pm := newTestPeerManager(t, "local-cluster", cache, true)
-
-	// Close done so any connectPeer goroutines exit immediately
-	// (we have no real FoghornPool in tests)
-	close(pm.done)
-
-	pm.NotifyPeers([]*clusterpeerpb.TenantClusterPeer{
-		{ClusterId: "remote-1", ClusterSlug: "r1", BaseUrl: "example.com", FoghornGrpcAddr: "10.88.1.13:18019", Role: "official"},
-	}, "tenant-a")
-
-	// Verify addresses were synced to Redis
 	ctx := context.Background()
-	addrs, err := cache.GetPeerAddresses(ctx)
+	hintsA := []control.AdmissionPeerHint{{ClusterID: "remote-a", Addr: "remote-a:18019"}}
+
+	current, _ := pm.TrackStream(ctx, "live+alpha", "tenant-a", "generation-a", 10, hintsA)
+	if !current {
+		t.Fatal("generation A did not establish its membership")
+	}
+	if err := pm.UntrackStream(ctx, "live+alpha", "tenant-a", "generation-a", 10); err != nil {
+		t.Fatalf("end generation A: %v", err)
+	}
+	current, err := pm.TrackStream(ctx, "live+alpha", "tenant-a", "generation-b", 11, nil)
+	if err != nil || !current {
+		t.Fatalf("generation B empty replacement = (current=%v, err=%v), want current", current, err)
+	}
+
+	// This is generation A resuming after its lock-free effect phase was paused. Its Redis CAS
+	// must lose, and its old peer set must not return to either durable or process-local state.
+	current, err = pm.TrackStream(ctx, "live+alpha", "tenant-a", "generation-a", 10, hintsA)
+	if err != nil || current {
+		t.Fatalf("delayed generation A = (current=%v, err=%v), want stale", current, err)
+	}
+	memberships, err := cache.LoadAllStreamPeerMemberships(ctx)
 	if err != nil {
-		t.Fatalf("GetPeerAddresses: %v", err)
+		t.Fatalf("LoadAllStreamPeerMemberships: %v", err)
 	}
-	if len(addrs) != 1 {
-		t.Fatalf("expected 1 address in Redis, got %d", len(addrs))
+	record := memberships["live+alpha"]
+	if !record.Active || record.SourceGeneration != "generation-b" || record.SourceRevision != 11 || len(record.Peers) != 0 {
+		t.Fatalf("generation B empty membership was not authoritative: %+v", record)
 	}
-	if addrs["remote-1"] != "10.88.1.13:18019" {
-		t.Fatalf("unexpected Redis address: %s", addrs["remote-1"])
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	if len(pm.streamPeers["remote-a"]) != 0 {
+		t.Fatalf("generation A peer authority was resurrected: %+v", pm.streamPeers)
+	}
+}
+
+func TestMembershipTombstoneCleanupRequiresAdmissionLedgerProof(t *testing.T) {
+	cache, _ := setupTestCache(t)
+	ctx := context.Background()
+	record := StreamPeerMembership{
+		StreamName: "live+ended", TenantID: "tenant-a", SourceGeneration: "generation-a",
+		SourceRevision: 30, EndedAtUnixMilli: time.Now().Add(-2 * streamPeerTombstoneRetention).UnixMilli(),
+	}
+	if _, err := cache.EndStreamPeerMembership(ctx, record); err != nil {
+		t.Fatalf("EndStreamPeerMembership: %v", err)
+	}
+	pm := newTestPeerManager(t, "local-cluster", cache, true)
+	if err := pm.loadStreamPeerMembershipsFromRedis(); err != nil {
+		t.Fatalf("loadStreamPeerMembershipsFromRedis: %v", err)
+	}
+	if len(pm.streamMemberships) != 0 {
+		t.Fatalf("leader installed ended memberships in memory: %+v", pm.streamMemberships)
+	}
+	purgeable := false
+	pm.canPurgeMemberships = func(_ context.Context, fences []control.AdmissionEffectFence) (map[string]bool, error) {
+		if len(fences) != 1 || fences[0].InternalName != record.StreamName || fences[0].SourceRevision != record.SourceRevision {
+			t.Fatalf("cleanup fences = %+v", fences)
+		}
+		return map[string]bool{record.StreamName: purgeable}, nil
+	}
+	if err := pm.cleanupStreamMembershipTombstones(ctx); err != nil {
+		t.Fatalf("cleanup with pending effect: %v", err)
+	}
+	if exists, err := cache.client.HExists(ctx, cache.keyStreamPeerMemberships(), record.StreamName).Result(); err != nil || !exists {
+		t.Fatalf("unproven tombstone was removed: exists=%v err=%v", exists, err)
+	}
+	purgeable = true
+	if err := pm.cleanupStreamMembershipTombstones(ctx); err != nil {
+		t.Fatalf("cleanup after ledger proof: %v", err)
+	}
+	for _, key := range []string{
+		cache.keyStreamPeerMemberships(), cache.keyStreamPeerMembershipRevisions(),
+		cache.keyStreamPeerMembershipGenerations(), cache.keyStreamPeerMembershipStates(),
+	} {
+		if exists, err := cache.client.HExists(ctx, key, record.StreamName).Result(); err != nil || exists {
+			t.Fatalf("cleanup left field in %s: exists=%v err=%v", key, exists, err)
+		}
+	}
+}
+
+func TestEndedStreamPeerMembershipRequiresRetentionTimestamp(t *testing.T) {
+	_, err := normalizeStreamPeerMembership(StreamPeerMembership{
+		StreamName: "live+ended", TenantID: "tenant-a", SourceGeneration: "generation-a",
+		SourceRevision: 1,
+	})
+	if err == nil {
+		t.Fatal("ended membership without an ended timestamp was accepted")
+	}
+}
+
+func TestMembershipTombstoneCleanupCannotDeleteConcurrentSuccessor(t *testing.T) {
+	cache, _ := setupTestCache(t)
+	ctx := context.Background()
+	ended := StreamPeerMembership{
+		StreamName: "live+successor", TenantID: "tenant-a", SourceGeneration: "generation-a",
+		SourceRevision: 40, EndedAtUnixMilli: time.Now().Add(-2 * streamPeerTombstoneRetention).UnixMilli(),
+	}
+	if _, err := cache.EndStreamPeerMembership(ctx, ended); err != nil {
+		t.Fatalf("EndStreamPeerMembership: %v", err)
+	}
+	pm := newTestPeerManager(t, "local-cluster", cache, true)
+	pm.canPurgeMemberships = func(_ context.Context, _ []control.AdmissionEffectFence) (map[string]bool, error) {
+		successor := StreamPeerMembership{
+			StreamName: ended.StreamName, TenantID: ended.TenantID, SourceGeneration: "generation-b",
+			SourceRevision: 41,
+		}
+		if current, err := cache.SetStreamPeerMembership(ctx, successor); err != nil || !current {
+			t.Fatalf("install concurrent successor: current=%v err=%v", current, err)
+		}
+		return map[string]bool{ended.StreamName: true}, nil
+	}
+	if err := pm.cleanupStreamMembershipTombstones(ctx); err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	memberships, err := cache.LoadAllStreamPeerMemberships(ctx)
+	if err != nil {
+		t.Fatalf("LoadAllStreamPeerMemberships: %v", err)
+	}
+	successor := memberships[ended.StreamName]
+	if !successor.Active || successor.SourceGeneration != "generation-b" || successor.SourceRevision != 41 {
+		t.Fatalf("cleanup deleted concurrent successor: %+v", successor)
+	}
+}
+
+func TestTrackedPeerAddressFailsClosedWhenValidationAndProjectionOrderDiverge(t *testing.T) {
+	pm := newTestPeerManager(t, "local-cluster", nil, true)
+	// A validated the retired endpoint first and paused. B validated the current endpoint later but
+	// projected first, so publisher source ordering is the reverse of topology observation order.
+	_, _ = pm.TrackStream(context.Background(), "live+newer-endpoint", "tenant-a", "generation-b", 20,
+		[]control.AdmissionPeerHint{{ClusterID: "remote", Addr: "a-current:18019"}})
+	_, _ = pm.TrackStream(context.Background(), "live+retired-endpoint", "tenant-a", "generation-a", 21,
+		[]control.AdmissionPeerHint{{ClusterID: "remote", Addr: "z-retired:18019"}})
+	pm.mu.RLock()
+	_, hinted := pm.trackedPeerHintsLocked()["remote"]
+	_, connected := pm.peers["remote"]
+	pm.mu.RUnlock()
+	if hinted || connected {
+		t.Fatal("conflicting publisher hints invented endpoint authority from source revision order")
+	}
+
+	// A current Quartermaster lease is topology authority and resolves the conflict.
+	pm.mu.Lock()
+	pm.quartermasterHints = make(map[string]PeerHint)
+	pm.quartermasterHints["remote"] = PeerHint{Addr: "a-current:18019", AlwaysOn: true, Tenants: []string{"tenant-a"}}
+	pm.quartermasterHintsRefreshedAt = time.Now()
+	pm.mu.Unlock()
+	_, _ = pm.TrackStream(context.Background(), "live+retired-endpoint", "tenant-a", "generation-a", 21,
+		[]control.AdmissionPeerHint{{ClusterID: "remote", Addr: "z-retired:18019"}})
+	pm.mu.RLock()
+	resolved := pm.peers["remote"]
+	pm.mu.RUnlock()
+	if resolved == nil || resolved.addr != "a-current:18019" {
+		t.Fatalf("leased Quartermaster authority did not resolve conflict: %+v", resolved)
+	}
+}
+
+func TestConcurrentAdmissionTrackingCannotReinstallConflictingEndpoint(t *testing.T) {
+	for iteration := 0; iteration < 512; iteration++ {
+		pm := newTestPeerManager(t, "local-cluster", nil, false)
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for index, addr := range []string{"retired:18019", "current:18019"} {
+			wg.Add(1)
+			go func(index int, addr string) {
+				defer wg.Done()
+				<-start
+				_, _ = pm.TrackStream(context.Background(), fmt.Sprintf("live+concurrent-%d", index),
+					"tenant-a", fmt.Sprintf("generation-%d", index), int64(index+1),
+					[]control.AdmissionPeerHint{{ClusterID: "remote", Addr: addr}})
+			}(index, addr)
+		}
+		close(start)
+		wg.Wait()
+
+		pm.mu.RLock()
+		_, authoritative := pm.trackedPeerHintsLocked()["remote"]
+		_, installed := pm.peers["remote"]
+		pm.mu.RUnlock()
+		if authoritative || installed {
+			t.Fatalf("iteration %d reinstalled endpoint authority after concurrent conflict", iteration)
+		}
+	}
+}
+
+func TestLeaderRefreshRecomputesAuthorityAfterWaitingForMembershipMutation(t *testing.T) {
+	pm := newTestPeerManager(t, "local-cluster", nil, true)
+	_, _ = pm.TrackStream(context.Background(), "live+retired", "tenant-a", "generation-a", 1,
+		[]control.AdmissionPeerHint{{ClusterID: "remote", Addr: "retired:18019"}})
+
+	// Model a refresh whose Redis read completed before a concurrent tracker entered the authority
+	// critical section. The refresh is queued on pm.mu while that tracker adds the conflicting
+	// membership, so it must recompute from the updated refs rather than apply an earlier snapshot.
+	pm.mu.Lock()
+	refreshStarted := make(chan struct{})
+	refreshDone := make(chan struct{})
+	go func() {
+		close(refreshStarted)
+		pm.reconcileLeaderPeerHints(nil)
+		close(refreshDone)
+	}()
+	<-refreshStarted
+	pm.addStreamMembershipLocked(StreamPeerMembership{
+		StreamName: "live+current", TenantID: "tenant-a", SourceGeneration: "generation-b",
+		SourceRevision: 2, Active: true,
+		Peers: []StreamPeerTarget{{ClusterID: "remote", Addr: "current:18019"}},
+	})
+	pm.mu.Unlock()
+	<-refreshDone
+
+	pm.mu.RLock()
+	_, authoritative := pm.trackedPeerHintsLocked()["remote"]
+	_, installed := pm.peers["remote"]
+	pm.mu.RUnlock()
+	if authoritative || installed {
+		t.Fatal("leader refresh applied stale endpoint authority after a conflicting membership")
+	}
+}
+
+func TestLeasedQuartermasterAddressOverridesCapturedMembership(t *testing.T) {
+	cache, _ := setupTestCache(t)
+	ctx := context.Background()
+	if err := cache.PublishPeerHints(ctx, "quartermaster", map[string]PeerHint{
+		"remote": {Addr: "current:18019", AlwaysOn: true, Tenants: []string{"tenant-a"}},
+	}); err != nil {
+		t.Fatalf("PublishPeerHints: %v", err)
+	}
+	pm := newTestPeerManager(t, "local-cluster", cache, true)
+	_, _ = pm.TrackStream(ctx, "live+captured", "tenant-a", "generation-a", 50,
+		[]control.AdmissionPeerHint{{ClusterID: "remote", Addr: "retired:18019", AlwaysOn: true}})
+	if err := pm.loadPeerAddressesFromRedis(); err != nil {
+		t.Fatalf("loadPeerAddressesFromRedis: %v", err)
+	}
+	if addr := pm.GetPeerAddr("remote"); addr != "current:18019" {
+		t.Fatalf("peer address = %q, want leased Quartermaster endpoint", addr)
 	}
 }
 
@@ -317,14 +490,16 @@ func TestLoadPeerAddressesFromRedis(t *testing.T) {
 
 	// Pre-populate Redis with addresses (as if written by leader)
 	ctx := context.Background()
-	cache.SetPeerAddresses(ctx, map[string]string{
-		"remote-1": "foghorn.r1.example.com:18029",
-		"remote-2": "foghorn.r2.example.com:18029",
+	cache.PublishPeerHints(ctx, "seed-writer", map[string]PeerHint{
+		"remote-1": {Addr: "foghorn.r1.example.com:18029", AlwaysOn: true},
+		"remote-2": {Addr: "foghorn.r2.example.com:18029", AlwaysOn: true},
 	})
 
 	pm := newTestPeerManager(t, "local-cluster", cache, false)
 
-	pm.loadPeerAddressesFromRedis()
+	if err := pm.loadPeerAddressesFromRedis(); err != nil {
+		t.Fatalf("loadPeerAddressesFromRedis: %v", err)
+	}
 
 	if addr := pm.GetPeerAddr("remote-1"); addr != "foghorn.r1.example.com:18029" {
 		t.Fatalf("expected remote-1 addr, got %q", addr)
@@ -332,6 +507,31 @@ func TestLoadPeerAddressesFromRedis(t *testing.T) {
 	if addr := pm.GetPeerAddr("remote-2"); addr != "foghorn.r2.example.com:18029" {
 		t.Fatalf("expected remote-2 addr, got %q", addr)
 	}
+}
+
+func TestLoadPeerAddressesFromRedis_LeaderConnectsImportedHint(t *testing.T) {
+	cache, _ := setupTestCache(t)
+	ctx := context.Background()
+	if err := cache.PublishPeerHints(ctx, "seed-writer", map[string]PeerHint{
+		"remote-imported": {Addr: "remote-imported:18029", AlwaysOn: true},
+	}); err != nil {
+		t.Fatalf("seed peer hint: %v", err)
+	}
+	client := &fakeFederationClient{
+		openFunc: func(context.Context) (foghornfederationpb.FoghornFederation_PeerChannelClient, error) {
+			return &capturePeerChannelStream{}, nil
+		},
+	}
+	pm := newTestPeerManager(t, "local-cluster", cache, true)
+	pm.reconnectBackoff = time.Millisecond
+	pm.pool = &fakeFederationPool{getOrCreate: func(_, _ string) (federationPeerClient, error) {
+		return client, nil
+	}}
+
+	if err := pm.loadPeerAddressesFromRedis(); err != nil {
+		t.Fatalf("loadPeerAddressesFromRedis: %v", err)
+	}
+	waitFor(t, 100*time.Millisecond, func() bool { return client.openCount() > 0 }, "leader did not connect imported peer hint")
 }
 
 func TestLoadPeerAddressesFromRedis_UpdatesExistingAddress(t *testing.T) {
@@ -349,11 +549,13 @@ func TestLoadPeerAddressesFromRedis_UpdatesExistingAddress(t *testing.T) {
 
 	// Leader wrote updated address to Redis
 	ctx := context.Background()
-	cache.SetPeerAddresses(ctx, map[string]string{
-		"remote-1": "new-addr:18029",
+	cache.PublishPeerHints(ctx, "seed-writer", map[string]PeerHint{
+		"remote-1": {Addr: "new-addr:18029", AlwaysOn: true},
 	})
 
-	pm.loadPeerAddressesFromRedis()
+	if err := pm.loadPeerAddressesFromRedis(); err != nil {
+		t.Fatalf("loadPeerAddressesFromRedis: %v", err)
+	}
 
 	if addr := pm.GetPeerAddr("remote-1"); addr != "new-addr:18029" {
 		t.Fatalf("expected updated address, got %q", addr)
@@ -367,13 +569,15 @@ func TestLoadPeerAddressesFromRedis_SkipsSelf(t *testing.T) {
 	cache := NewRemoteEdgeCache(client, "local-cluster", testLogger())
 
 	ctx := context.Background()
-	cache.SetPeerAddresses(ctx, map[string]string{
-		"local-cluster": "should-be-skipped:18029",
-		"remote-1":      "foghorn.r1.example.com:18029",
+	cache.PublishPeerHints(ctx, "seed-writer", map[string]PeerHint{
+		"local-cluster": {Addr: "should-be-skipped:18029", AlwaysOn: true},
+		"remote-1":      {Addr: "foghorn.r1.example.com:18029", AlwaysOn: true},
 	})
 
 	pm := newTestPeerManager(t, "local-cluster", cache, false)
-	pm.loadPeerAddressesFromRedis()
+	if err := pm.loadPeerAddressesFromRedis(); err != nil {
+		t.Fatalf("loadPeerAddressesFromRedis: %v", err)
+	}
 
 	if pm.GetPeerAddr("local-cluster") != "" {
 		t.Fatal("should not load self as peer")
@@ -383,27 +587,29 @@ func TestLoadPeerAddressesFromRedis_SkipsSelf(t *testing.T) {
 	}
 }
 
-func TestLoadPeerAddressesFromRedis_RemovesStaleRedisPeers(t *testing.T) {
+func TestLoadPeerAddressesFromRedis_RemovesAllRevokedPeers(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	pm := newTestPeerManager(t, "local-cluster", cache, false)
 
 	pm.mu.Lock()
-	pm.peers["redis-peer"] = &peerState{addr: "old:18029", fromRedis: true, lastRefresh: time.Now()}
-	pm.peers["hint-peer"] = &peerState{addr: "hint:18029", fromRedis: false, lastRefresh: time.Now()}
+	pm.peers["redis-peer"] = &peerState{addr: "old:18029", lastRefresh: time.Now()}
+	pm.peers["hint-peer"] = &peerState{addr: "hint:18029", lastRefresh: time.Now()}
 	pm.mu.Unlock()
 
 	ctx := context.Background()
-	if err := cache.SetPeerAddresses(ctx, map[string]string{"other-peer": "new:18029"}); err != nil {
-		t.Fatalf("SetPeerAddresses: %v", err)
+	if err := cache.PublishPeerHints(ctx, "seed-writer", map[string]PeerHint{"other-peer": {Addr: "new:18029", AlwaysOn: true}}); err != nil {
+		t.Fatalf("PublishPeerHints: %v", err)
 	}
 
-	pm.loadPeerAddressesFromRedis()
+	if err := pm.loadPeerAddressesFromRedis(); err != nil {
+		t.Fatalf("loadPeerAddressesFromRedis: %v", err)
+	}
 
 	if pm.GetPeerAddr("redis-peer") != "" {
 		t.Fatal("expected stale redis peer to be removed")
 	}
-	if pm.GetPeerAddr("hint-peer") == "" {
-		t.Fatal("expected non-redis hint peer to remain")
+	if pm.GetPeerAddr("hint-peer") != "" {
+		t.Fatal("expected locally stale peer without a live contribution to be removed")
 	}
 	if pm.GetPeerAddr("other-peer") != "new:18029" {
 		t.Fatal("expected redis peer address to be loaded")
@@ -428,16 +634,19 @@ func TestArtifactTypeToString(t *testing.T) {
 	}
 }
 
-func TestSyncPeerAddressesToRedis(t *testing.T) {
+func TestPublishQuartermasterHints(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	pm := newTestPeerManager(t, "local-cluster", cache, true)
 
 	pm.mu.Lock()
-	pm.peers["remote-1"] = &peerState{addr: "foghorn.r1.example.com:18029"}
-	pm.peers["remote-2"] = &peerState{addr: "foghorn.r2.example.com:18029"}
+	pm.quartermasterHints = map[string]PeerHint{
+		"remote-1": {Addr: "foghorn.r1.example.com:18029", AlwaysOn: true},
+		"remote-2": {Addr: "foghorn.r2.example.com:18029", AlwaysOn: true},
+	}
+	pm.quartermasterHintsRefreshedAt = time.Now()
 	pm.mu.Unlock()
 
-	pm.syncPeerAddressesToRedis()
+	pm.publishQuartermasterHints()
 
 	ctx := context.Background()
 	addrs, err := cache.GetPeerAddresses(ctx)
@@ -447,8 +656,8 @@ func TestSyncPeerAddressesToRedis(t *testing.T) {
 	if len(addrs) != 2 {
 		t.Fatalf("expected 2 addresses in Redis, got %d", len(addrs))
 	}
-	if addrs["remote-1"] != "foghorn.r1.example.com:18029" {
-		t.Fatalf("unexpected address for remote-1: %s", addrs["remote-1"])
+	if addrs["remote-1"].Addr != "foghorn.r1.example.com:18029" {
+		t.Fatalf("unexpected address for remote-1: %s", addrs["remote-1"].Addr)
 	}
 }
 
@@ -479,6 +688,44 @@ func (s *testPeerChannelStream) Trailer() metadata.MD { return metadata.MD{} }
 func (s *testPeerChannelStream) SendMsg(any) error { return nil }
 
 func (s *testPeerChannelStream) RecvMsg(any) error { return io.EOF }
+
+func TestRecvLoop_RevisionFencesLifecycleAcrossChannelGenerations(t *testing.T) {
+	cache, _ := setupTestCache(t)
+	pm := newTestPeerManager(t, "cluster-a", cache, false)
+	event := func(stream string, revision int64, live bool) *foghornfederationpb.PeerMessage {
+		return &foghornfederationpb.PeerMessage{
+			ClusterId: "remote-1",
+			Payload: &foghornfederationpb.PeerMessage_StreamLifecycle{StreamLifecycle: &foghornfederationpb.StreamLifecycleEvent{
+				InternalName: stream, TenantId: "tenant-a", ClusterId: "remote-1",
+				IsLive: live, SourceRevision: revision,
+			}},
+		}
+	}
+
+	pm.recvLoop("remote-1", &testPeerChannelStream{messages: []*foghornfederationpb.PeerMessage{
+		event("new-live", 20, true), event("new-offline", 30, false),
+	}})
+	pm.recvLoop("remote-1", &testPeerChannelStream{messages: []*foghornfederationpb.PeerMessage{
+		event("new-live", 19, false), event("new-offline", 29, true),
+		{
+			ClusterId: "remote-1",
+			Payload: &foghornfederationpb.PeerMessage_StreamLifecycle{StreamLifecycle: &foghornfederationpb.StreamLifecycleEvent{
+				InternalName: "spoofed", TenantId: "tenant-a", ClusterId: "other-cluster",
+				IsLive: true, SourceRevision: 999,
+			}},
+		},
+	}})
+
+	if live, err := cache.GetRemoteLiveStream(context.Background(), "tenant-a", "new-live"); err != nil || live == nil || live.SourceRevision != 20 {
+		t.Fatalf("older channel removed newer live marker: live=%+v err=%v", live, err)
+	}
+	if live, err := cache.GetRemoteLiveStream(context.Background(), "tenant-a", "new-offline"); err != nil || live != nil {
+		t.Fatalf("older channel resurrected newer offline marker: live=%+v err=%v", live, err)
+	}
+	if live, err := cache.GetRemoteLiveStream(context.Background(), "tenant-a", "spoofed"); err != nil || live != nil {
+		t.Fatalf("mismatched payload identity was accepted: live=%+v err=%v", live, err)
+	}
+}
 
 // TestCheckReplicationCompletion_RequiresDestinationNodeLive preserves
 // the behavioural intent of the cache-backed predecessor: when the local
@@ -577,75 +824,17 @@ func (s *capturePeerChannelStream) Trailer() metadata.MD         { return metada
 func (s *capturePeerChannelStream) SendMsg(any) error            { return nil }
 func (s *capturePeerChannelStream) RecvMsg(any) error            { return io.EOF }
 
-func TestNotifyPeers_UpdatesExistingPeerMetadata(t *testing.T) {
-	pm := newTestPeerManager(t, "local-cluster", nil, false)
-
-	pm.NotifyPeers([]*clusterpeerpb.TenantClusterPeer{{
-		ClusterId:       "remote-cluster",
-		ClusterSlug:     "remote-old",
-		BaseUrl:         "example.com",
-		FoghornGrpcAddr: "10.88.1.14:18019",
-		Role:            "subscribed",
-	}}, "tenant-a")
-
-	pm.NotifyPeers([]*clusterpeerpb.TenantClusterPeer{{
-		ClusterId:       "remote-cluster",
-		ClusterSlug:     "remote-new",
-		BaseUrl:         "example.net",
-		FoghornGrpcAddr: "10.88.1.15:18019",
-		Role:            "official",
-		S3Bucket:        "bucket-a",
-		S3Endpoint:      "https://s3.example.net",
-		S3Region:        "us-east-1",
-	}}, "tenant-a")
-
-	pm.mu.RLock()
-	defer pm.mu.RUnlock()
-	ps, ok := pm.peers["remote-cluster"]
-	if !ok {
-		t.Fatal("expected peer to exist")
-	}
-	if ps.addr != "10.88.1.15:18019" {
-		t.Fatalf("unexpected addr: %s", ps.addr)
-	}
-	if ps.lifecycle != peerAlwaysOn {
-		t.Fatalf("expected lifecycle peerAlwaysOn, got %v", ps.lifecycle)
-	}
+type blockingPeerChannelStream struct {
+	capturePeerChannelStream
+	ctx context.Context
 }
 
-func TestNotifyPeers_LeaderSyncsToRedisOnAddressChange(t *testing.T) {
-	cache, _ := setupTestCache(t)
-	pm := newTestPeerManager(t, "local-cluster", cache, true)
-
-	// Close done so connectPeer goroutines exit immediately
-	close(pm.done)
-
-	pm.NotifyPeers([]*clusterpeerpb.TenantClusterPeer{{
-		ClusterId:       "remote-1",
-		ClusterSlug:     "r1",
-		BaseUrl:         "old.example.com",
-		FoghornGrpcAddr: "10.88.1.16:18019",
-		Role:            "official",
-	}}, "tenant-a")
-
-	// Update address for the same peer
-	pm.NotifyPeers([]*clusterpeerpb.TenantClusterPeer{{
-		ClusterId:       "remote-1",
-		ClusterSlug:     "r1",
-		BaseUrl:         "new.example.com",
-		FoghornGrpcAddr: "10.88.1.17:18019",
-		Role:            "official",
-	}}, "tenant-a")
-
-	ctx := context.Background()
-	addrs, err := cache.GetPeerAddresses(ctx)
-	if err != nil {
-		t.Fatalf("GetPeerAddresses: %v", err)
-	}
-	if addrs["remote-1"] != "10.88.1.17:18019" {
-		t.Fatalf("expected updated address in Redis, got %q", addrs["remote-1"])
-	}
+func (s *blockingPeerChannelStream) Recv() (*foghornfederationpb.PeerMessage, error) {
+	<-s.ctx.Done()
+	return nil, s.ctx.Err()
 }
+
+func (s *blockingPeerChannelStream) Context() context.Context { return s.ctx }
 
 func TestShouldSendStreamToPeer_StreamScopedRequiresTrackedStreamAndTenant(t *testing.T) {
 	pm := newTestPeerManager(t, "local-cluster", nil, false)
@@ -717,7 +906,7 @@ func TestBroadcastStreamLifecycle_FiltersUnauthorizedPeers(t *testing.T) {
 	pm.mu.Unlock()
 
 	flush := pm.wireTestWriters()
-	pm.BroadcastStreamLifecycle("live+alpha", "tenant-a", true)
+	_ = pm.BroadcastStreamLifecycle(context.Background(), "live+alpha", "tenant-a", 1, true)
 	flush()
 
 	if len(allowedStream.sent) != 1 {
@@ -728,18 +917,29 @@ func TestBroadcastStreamLifecycle_FiltersUnauthorizedPeers(t *testing.T) {
 	}
 }
 
+func TestBroadcastStreamLifecycle_DisconnectedRequiredPeerKeepsObligationPending(t *testing.T) {
+	pm := newTestPeerManager(t, "local-cluster", nil, true)
+	pm.mu.Lock()
+	pm.streamPeers["required"] = map[string]bool{"live+alpha": true}
+	pm.peers["required"] = &peerState{lifecycle: peerStreamScoped, tenantIDs: []string{"tenant-a"}}
+	pm.mu.Unlock()
+
+	err := pm.BroadcastStreamLifecycle(context.Background(), "live+alpha", "tenant-a", 1, true)
+	if err == nil {
+		t.Fatal("disconnected required peer was skipped while broadcast reported success")
+	}
+}
+
 func TestIsStreamLiveOnPeer_RejectsTenantMismatch(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	pm := newTestPeerManager(t, "local-cluster", cache, false)
 
 	ctx := context.Background()
-	err := cache.SetRemoteLiveStream(ctx, "tenant-a", "stream-1", &RemoteLiveStreamEntry{
-		ClusterID: "remote-cluster",
-		TenantID:  "tenant-a",
-		UpdatedAt: time.Now().Unix(),
-	})
-	if err != nil {
-		t.Fatalf("SetRemoteLiveStream: %v", err)
+	applied, err := cache.ApplyRemoteStreamLifecycle(ctx, "tenant-a", "stream-1", &RemoteLiveStreamEntry{
+		ClusterID: "remote-cluster", TenantID: "tenant-a", SourceRevision: 1, UpdatedAt: time.Now().Unix(),
+	}, true)
+	if err != nil || !applied {
+		t.Fatalf("ApplyRemoteStreamLifecycle: applied=%v err=%v", applied, err)
 	}
 
 	if cluster, ok := pm.IsStreamLiveOnPeer(ctx, "stream-1", "tenant-b"); ok || cluster != "" {
@@ -764,12 +964,15 @@ func TestTrackAndUntrackStream_StreamScopedPeerLifecycle(t *testing.T) {
 	}
 	pm.mu.Unlock()
 
-	pm.TrackStream("live+alpha", []string{"", "local-cluster", "remote"})
+	_, _ = pm.TrackStream(context.Background(), "live+alpha", "tenant-a", "generation-a", 1, []control.AdmissionPeerHint{
+		{ClusterID: "local-cluster", Addr: "local:18019"},
+		{ClusterID: "remote", Addr: "remote:18019"},
+	})
 	if !pm.streamPeers["remote"]["live+alpha"] {
 		t.Fatal("expected stream to be tracked for remote cluster")
 	}
 
-	pm.UntrackStream("live+alpha")
+	_ = pm.UntrackStream(context.Background(), "live+alpha", "tenant-a", "generation-a", 1)
 	if !cancelled {
 		t.Fatal("expected stream-scoped peer to be canceled when last stream is removed")
 	}
@@ -784,18 +987,16 @@ func TestTrackAndUntrackStream_StreamScopedPeerLifecycle(t *testing.T) {
 func TestUntrackStream_AlwaysOnPeerRemains(t *testing.T) {
 	pm := newTestPeerManager(t, "local-cluster", nil, false)
 	cancelled := false
-
+	_, _ = pm.TrackStream(context.Background(), "live+alpha", "tenant-a", "generation-a", 1, []control.AdmissionPeerHint{{
+		ClusterID: "remote", Addr: "remote:18019", AlwaysOn: true,
+	}})
 	pm.mu.Lock()
-	pm.streamPeers["remote"] = map[string]bool{"live+alpha": true}
-	pm.peers["remote"] = &peerState{
-		lifecycle: peerAlwaysOn,
-		cancel: func() {
-			cancelled = true
-		},
+	pm.peers["remote"].cancel = func() {
+		cancelled = true
 	}
 	pm.mu.Unlock()
 
-	pm.UntrackStream("live+alpha")
+	_ = pm.UntrackStream(context.Background(), "live+alpha", "tenant-a", "generation-a", 1)
 	if cancelled {
 		t.Fatal("always-on peer should not be canceled when stream tracking is removed")
 	}
@@ -969,61 +1170,66 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool, msg string) 
 	t.Fatal(msg)
 }
 
-func TestFlushStreamPeersToRedis_PersistsAndClears(t *testing.T) {
+func reserveTestPeerRunner(t *testing.T, pm *PeerManager, clusterID string, ps *peerState) peerConnectRequest {
+	t.Helper()
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	pm.peers[clusterID] = ps
+	request, reserved := pm.reservePeerRunnerLocked(clusterID, ps)
+	if !reserved {
+		t.Fatalf("failed to reserve test runner for %s", clusterID)
+	}
+	return request
+}
+
+func TestStreamPeerMemberships_PersistIncrementallyAndClear(t *testing.T) {
 	cache, _ := setupTestCache(t)
-	pm := newTestPeerManager(t, "cluster-a", cache, false)
 	ctx := context.Background()
-
-	pm.mu.Lock()
-	pm.streamPeers["remote-1"] = map[string]bool{
-		"live+alpha": true,
-		"live+beta":  true,
+	alpha := StreamPeerMembership{StreamName: "live+alpha", TenantID: "tenant-a", SourceGeneration: "generation-a", SourceRevision: 1, Peers: []StreamPeerTarget{{ClusterID: "remote-1", Addr: "remote-1:18019"}}}
+	beta := StreamPeerMembership{StreamName: "live+beta", TenantID: "tenant-b", SourceGeneration: "generation-b", SourceRevision: 2, Peers: []StreamPeerTarget{{ClusterID: "remote-1", Addr: "remote-1:18019"}}}
+	if _, err := cache.SetStreamPeerMembership(ctx, alpha); err != nil {
+		t.Fatalf("persist alpha: %v", err)
 	}
-	pm.flushStreamPeersToRedis("remote-1")
-	pm.mu.Unlock()
-
-	got, err := cache.GetStreamPeers(ctx, "remote-1")
+	if _, err := cache.SetStreamPeerMembership(ctx, beta); err != nil {
+		t.Fatalf("persist beta: %v", err)
+	}
+	if _, err := cache.EndStreamPeerMembership(ctx, alpha); err != nil {
+		t.Fatalf("end alpha: %v", err)
+	}
+	memberships, err := cache.LoadAllStreamPeerMemberships(ctx)
 	if err != nil {
-		t.Fatalf("GetStreamPeers: %v", err)
+		t.Fatalf("load memberships: %v", err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("expected 2 streams in Redis, got %d (%v)", len(got), got)
+	if record, ok := memberships["live+alpha"]; !ok || record.Active {
+		t.Fatal("ended stream membership did not retain an inactive fence")
 	}
-	gotSet := map[string]bool{}
-	for _, s := range got {
-		gotSet[s] = true
-	}
-	if !gotSet["live+alpha"] || !gotSet["live+beta"] {
-		t.Fatalf("expected both streams persisted, got %v", got)
-	}
-
-	pm.mu.Lock()
-	delete(pm.streamPeers, "remote-1")
-	pm.flushStreamPeersToRedis("remote-1")
-	pm.mu.Unlock()
-
-	got, err = cache.GetStreamPeers(ctx, "remote-1")
-	if err != nil {
-		t.Fatalf("GetStreamPeers after clear: %v", err)
-	}
-	if got != nil {
-		t.Fatalf("expected stream peer key cleared, got %v", got)
+	if record, ok := memberships["live+beta"]; !ok || record.TenantID != "tenant-b" {
+		t.Fatalf("independent beta membership was rewritten or lost: %+v", memberships)
 	}
 }
 
-func TestLoadStreamPeersFromRedis_LoadsAndSkipsSelf(t *testing.T) {
+func TestLoadStreamPeerMembershipsFromRedis_LoadsAndSkipsSelf(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	ctx := context.Background()
 
-	if err := cache.SetStreamPeers(ctx, "cluster-a", []string{"self-stream"}); err != nil {
-		t.Fatalf("SetStreamPeers self: %v", err)
+	if _, err := cache.SetStreamPeerMembership(ctx, StreamPeerMembership{StreamName: "self-stream", TenantID: "tenant-self", SourceGeneration: "generation-self", SourceRevision: 1, Peers: []StreamPeerTarget{{ClusterID: "cluster-a", Addr: "self:18019"}}}); err != nil {
+		t.Fatalf("SetStreamPeerMembership self: %v", err)
 	}
-	if err := cache.SetStreamPeers(ctx, "remote-1", []string{"live+alpha", "live+beta"}); err != nil {
-		t.Fatalf("SetStreamPeers remote: %v", err)
+	for _, record := range []StreamPeerMembership{
+		{StreamName: "live+alpha", TenantID: "tenant-a", SourceGeneration: "generation-a", SourceRevision: 2, Peers: []StreamPeerTarget{{ClusterID: "remote-1", Addr: "remote:18019"}}},
+		{StreamName: "live+beta", TenantID: "tenant-b", SourceGeneration: "generation-b", SourceRevision: 3, Peers: []StreamPeerTarget{{ClusterID: "remote-1", Addr: "remote:18019"}}},
+	} {
+		if _, err := cache.SetStreamPeerMembership(ctx, record); err != nil {
+			t.Fatalf("SetStreamPeerMembership remote: %v", err)
+		}
 	}
 
 	pm := newTestPeerManager(t, "cluster-a", cache, false)
-	pm.loadStreamPeersFromRedis()
+	pm.streamPeers["stale-remote"] = map[string]bool{"live+stale": true}
+	pm.streamTenants["live+stale"] = "tenant-stale"
+	if err := pm.loadStreamPeerMembershipsFromRedis(); err != nil {
+		t.Fatalf("loadStreamPeerMembershipsFromRedis: %v", err)
+	}
 
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
@@ -1036,6 +1242,39 @@ func TestLoadStreamPeersFromRedis_LoadsAndSkipsSelf(t *testing.T) {
 	}
 	if !remote["live+alpha"] || !remote["live+beta"] {
 		t.Fatalf("expected both remote streams loaded, got %+v", remote)
+	}
+	if _, ok := pm.streamPeers["stale-remote"]; ok {
+		t.Fatal("exact leader reconstruction retained an absent stale mapping")
+	}
+	hint := pm.trackedPeerHintsLocked()["remote-1"]
+	if hint.Addr != "remote:18019" || len(hint.Tenants) != 2 {
+		t.Fatalf("leader reconstruction lost complete peer authority: %+v", hint)
+	}
+}
+
+func TestLoadAllStreamPeerMemberships_FailsClosedOnMalformedRecord(t *testing.T) {
+	cache, _ := setupTestCache(t)
+	ctx := context.Background()
+	if _, err := cache.SetStreamPeerMembership(ctx, StreamPeerMembership{StreamName: "live+valid", TenantID: "tenant-a", SourceGeneration: "generation-valid", SourceRevision: 1, Peers: []StreamPeerTarget{{ClusterID: "valid", Addr: "valid:18019"}}}); err != nil {
+		t.Fatalf("SetStreamPeerMembership: %v", err)
+	}
+	if err := cache.client.HSet(ctx, cache.keyStreamPeerMemberships(), "malformed", `{"stream_name":`).Err(); err != nil {
+		t.Fatalf("seed malformed stream membership: %v", err)
+	}
+	if _, err := cache.LoadAllStreamPeerMemberships(ctx); err == nil {
+		t.Fatal("partial stream-peer snapshot succeeded despite malformed record")
+	}
+}
+
+func TestRunAsLeader_MalformedMembershipNeverBecomesReady(t *testing.T) {
+	cache, _ := setupTestCache(t)
+	if err := cache.client.HSet(context.Background(), cache.keyStreamPeerMemberships(), "malformed", `{"stream_name":`).Err(); err != nil {
+		t.Fatalf("seed malformed stream membership: %v", err)
+	}
+	pm := newTestPeerManager(t, "cluster-a", cache, false)
+	pm.runAsLeader()
+	if pm.IsLeader() {
+		t.Fatal("leader advertised readiness after incomplete authority reconstruction")
 	}
 }
 
@@ -1065,16 +1304,11 @@ func TestUntrackStream_RemainingStreamsPersisted(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	pm := newTestPeerManager(t, "cluster-a", cache, false)
 	ctx := context.Background()
-
-	pm.mu.Lock()
-	pm.streamPeers["remote-1"] = map[string]bool{
-		"live+alpha": true,
-		"live+beta":  true,
+	for revision, stream := range []struct{ name, tenant string }{{"live+alpha", "tenant-a"}, {"live+beta", "tenant-b"}} {
+		_, _ = pm.TrackStream(ctx, stream.name, stream.tenant, "generation-"+stream.name, int64(revision+1), []control.AdmissionPeerHint{{ClusterID: "remote-1", Addr: "remote:18019"}})
 	}
-	pm.peers["remote-1"] = &peerState{lifecycle: peerStreamScoped}
-	pm.mu.Unlock()
 
-	pm.UntrackStream("live+alpha")
+	_ = pm.UntrackStream(context.Background(), "live+alpha", "tenant-a", "generation-live+alpha", 1)
 
 	pm.mu.RLock()
 	streams, ok := pm.streamPeers["remote-1"]
@@ -1089,12 +1323,15 @@ func TestUntrackStream_RemainingStreamsPersisted(t *testing.T) {
 		t.Fatal("expected live+beta to remain")
 	}
 
-	got, err := cache.GetStreamPeers(ctx, "remote-1")
+	memberships, err := cache.LoadAllStreamPeerMemberships(ctx)
 	if err != nil {
-		t.Fatalf("GetStreamPeers: %v", err)
+		t.Fatalf("LoadAllStreamPeerMemberships: %v", err)
 	}
-	if len(got) != 1 || got[0] != "live+beta" {
-		t.Fatalf("expected Redis stream peers to contain only live+beta, got %v", got)
+	if alpha := memberships["live+alpha"]; alpha.Active || alpha.SourceRevision != 1 {
+		t.Fatalf("expected Redis membership to retain alpha's ended fence, got %v", memberships)
+	}
+	if beta := memberships["live+beta"]; !beta.Active || beta.TenantID != "tenant-b" {
+		t.Fatalf("expected Redis membership to retain active beta, got %v", memberships)
 	}
 }
 
@@ -1109,12 +1346,10 @@ func TestRecvLoop_CachesPeerPayloads(t *testing.T) {
 	ctx := context.Background()
 	peerID := "remote-1"
 
-	if err := cache.SetRemoteLiveStream(ctx, "tenant-a", "dead+stream", &RemoteLiveStreamEntry{
-		ClusterID: peerID,
-		TenantID:  "tenant-a",
-		UpdatedAt: time.Now().Unix(),
-	}); err != nil {
-		t.Fatalf("seed remote live stream: %v", err)
+	if applied, err := cache.ApplyRemoteStreamLifecycle(ctx, "tenant-a", "dead+stream", &RemoteLiveStreamEntry{
+		ClusterID: peerID, TenantID: "tenant-a", SourceRevision: 1, UpdatedAt: time.Now().Unix(),
+	}, true); err != nil || !applied {
+		t.Fatalf("seed remote live stream: applied=%v err=%v", applied, err)
 	}
 	// Pre-seed the registry as if a prior ad already placed the entry.
 	// The withdrawal message later in this test will clear it.
@@ -1172,19 +1407,21 @@ func TestRecvLoop_CachesPeerPayloads(t *testing.T) {
 			{
 				ClusterId: peerID,
 				Payload: &foghornfederationpb.PeerMessage_StreamLifecycle{StreamLifecycle: &foghornfederationpb.StreamLifecycleEvent{
-					InternalName: "live+stream",
-					TenantId:     "tenant-a",
-					ClusterId:    peerID,
-					IsLive:       true,
+					InternalName:   "live+stream",
+					TenantId:       "tenant-a",
+					ClusterId:      peerID,
+					IsLive:         true,
+					SourceRevision: 1,
 				}},
 			},
 			{
 				ClusterId: peerID,
 				Payload: &foghornfederationpb.PeerMessage_StreamLifecycle{StreamLifecycle: &foghornfederationpb.StreamLifecycleEvent{
-					InternalName: "dead+stream",
-					TenantId:     "tenant-a",
-					ClusterId:    peerID,
-					IsLive:       false,
+					InternalName:   "dead+stream",
+					TenantId:       "tenant-a",
+					ClusterId:      peerID,
+					IsLive:         false,
+					SourceRevision: 2,
 				}},
 			},
 			{
@@ -1344,6 +1581,9 @@ func TestPushTelemetry_SendsTelemetryAndLifecycleToEligiblePeers(t *testing.T) {
 
 	pm.mu.Lock()
 	pm.streamPeers["peer-allowed"] = map[string]bool{"stream-a": true}
+	pm.streamMemberships["stream-a"] = StreamPeerMembership{
+		StreamName: "stream-a", TenantID: "tenant-a", SourceGeneration: "generation-a", SourceRevision: 7, Active: true,
+	}
 	pm.peers["peer-allowed"] = &peerState{
 		connected: true,
 		stream:    allowed,
@@ -1364,6 +1604,9 @@ func TestPushTelemetry_SendsTelemetryAndLifecycleToEligiblePeers(t *testing.T) {
 
 	if len(allowed.sent) != 2 {
 		t.Fatalf("expected allowed peer to receive telemetry+lifecycle (2 msgs), got %d", len(allowed.sent))
+	}
+	if lifecycle := allowed.sent[1].GetStreamLifecycle(); lifecycle == nil || lifecycle.GetSourceRevision() != 7 {
+		t.Fatalf("expected lifecycle heartbeat revision 7, got %+v", lifecycle)
 	}
 	if len(blocked.sent) != 0 {
 		t.Fatalf("expected blocked peer to receive 0 messages, got %d", len(blocked.sent))
@@ -1531,10 +1774,83 @@ func TestUptimeSecondsAndStrPtr(t *testing.T) {
 	}
 }
 
+func TestReconciliationReservesSinglePeerRunnerBeforeLaunch(t *testing.T) {
+	pm := newTestPeerManager(t, "cluster-a", nil, true)
+	pm.reconnectBackoff = time.Millisecond
+	client := &fakeFederationClient{
+		openFunc: func(ctx context.Context) (foghornfederationpb.FoghornFederation_PeerChannelClient, error) {
+			return &blockingPeerChannelStream{ctx: ctx}, nil
+		},
+	}
+	pm.pool = &fakeFederationPool{getOrCreate: func(_, _ string) (federationPeerClient, error) {
+		return client, nil
+	}}
+	hints := map[string]PeerHint{"remote-1": {Addr: "remote-1:18029", AlwaysOn: true}}
+
+	pm.mu.Lock()
+	first := pm.reconcilePeerHintsLocked(hints)
+	second := pm.reconcilePeerHintsLocked(hints)
+	pm.mu.Unlock()
+	if len(first) != 1 || len(second) != 0 {
+		t.Fatalf("runner reservations = first:%d second:%d, want 1 then 0", len(first), len(second))
+	}
+
+	runnerDone := make(chan struct{})
+	go func() {
+		pm.connectPeer(first[0])
+		close(runnerDone)
+	}()
+	waitFor(t, 100*time.Millisecond, func() bool { return client.openCount() == 1 }, "reserved runner did not open PeerChannel")
+
+	pm.mu.Lock()
+	third := pm.reconcilePeerHintsLocked(hints)
+	pm.mu.Unlock()
+	if len(third) != 0 {
+		t.Fatalf("connected runner allowed %d duplicate launch requests", len(third))
+	}
+
+	pm.mu.Lock()
+	pm.reconcilePeerHintsLocked(map[string]PeerHint{})
+	pm.mu.Unlock()
+	select {
+	case <-runnerDone:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("authority revocation did not stop the reserved runner")
+	}
+	if got := client.openCount(); got != 1 {
+		t.Fatalf("PeerChannel opens = %d, want exactly one", got)
+	}
+}
+
+func TestStalePeerRunnerCleanupCannotClearSuccessorConnection(t *testing.T) {
+	pm := newTestPeerManager(t, "cluster-a", nil, true)
+	successorStream := &capturePeerChannelStream{}
+	successorSendCh := make(chan *foghornfederationpb.PeerMessage, 1)
+	canceled := false
+	ps := &peerState{
+		addr: "remote-1:18029", runnerToken: 2, connected: true,
+		stream: successorStream, sendCh: successorSendCh, cancel: func() { canceled = true },
+	}
+	pm.mu.Lock()
+	pm.peers["remote-1"] = ps
+	pm.mu.Unlock()
+
+	pm.releasePeerRunner(peerConnectRequest{clusterID: "remote-1", state: ps, token: 1})
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	if canceled || ps.runnerToken != 2 || !ps.connected || ps.stream != successorStream || ps.sendCh != successorSendCh || ps.cancel == nil {
+		t.Fatalf("stale runner cleanup mutated successor state: %+v", ps)
+	}
+}
+
 func TestConnectPeer_NoPoolReturns(t *testing.T) {
 	pm := newTestPeerManager(t, "cluster-a", nil, false)
 	ps := &peerState{addr: "unused:18029"}
-	pm.connectPeer("remote-1", ps)
+	request := reserveTestPeerRunner(t, pm, "remote-1", ps)
+	pm.connectPeer(request)
+	if ps.runnerToken != 0 {
+		t.Fatal("runner reservation was not released when no pool was configured")
+	}
 }
 
 func TestRunAsLeader_ExitsWhenDoneClosedAndNoPeerDiscovery(t *testing.T) {
@@ -1637,15 +1953,15 @@ func TestRefreshPeers_ReconcilesAddUpdateAndRemove(t *testing.T) {
 		t.Fatal("expected unchanged peer to remain connected")
 	}
 	if len(pm.peers["same"].tenantIDs) != 1 || pm.peers["same"].tenantIDs[0] != "tenant-a" {
-		t.Fatalf("expected updated tenant list for unchanged peer, got %v", pm.peers["same"].tenantIDs)
+		t.Fatalf("expected authoritative tenant replacement for unchanged peer, got %v", pm.peers["same"].tenantIDs)
 	}
 
 	updated := pm.peers["changed"]
 	if updated == nil {
 		t.Fatal("expected changed peer to exist")
 	}
-	if updated == changed {
-		t.Fatal("expected changed peer state to be replaced")
+	if updated != changed {
+		t.Fatal("expected changed peer state to be updated in place")
 	}
 	if updated.addr != "new:18029" {
 		t.Fatalf("expected changed peer address to update, got %q", updated.addr)
@@ -1681,7 +1997,8 @@ func TestConnectPeer_ExitsWhenPeerEntryMissing(t *testing.T) {
 	}
 	pm.pool = pool
 
-	pm.connectPeer("remote-1", &peerState{addr: "remote-1:18029"})
+	ps := &peerState{addr: "remote-1:18029", runnerToken: 1}
+	pm.connectPeer(peerConnectRequest{clusterID: "remote-1", state: ps, token: 1})
 	if got := pool.callCount(); got != 0 {
 		t.Fatalf("expected no pool calls when peer is missing, got %d", got)
 	}
@@ -1698,13 +2015,11 @@ func TestConnectPeer_RetriesOnGetOrCreateErrorUntilDone(t *testing.T) {
 	pm.pool = pool
 
 	ps := &peerState{addr: "remote-1:18029"}
-	pm.mu.Lock()
-	pm.peers["remote-1"] = ps
-	pm.mu.Unlock()
+	request := reserveTestPeerRunner(t, pm, "remote-1", ps)
 
 	done := make(chan struct{})
 	go func() {
-		pm.connectPeer("remote-1", ps)
+		pm.connectPeer(request)
 		close(done)
 	}()
 
@@ -1739,13 +2054,11 @@ func TestConnectPeer_RetriesOnOpenPeerChannelErrorUntilDone(t *testing.T) {
 	pm.pool = pool
 
 	ps := &peerState{addr: "remote-1:18029"}
-	pm.mu.Lock()
-	pm.peers["remote-1"] = ps
-	pm.mu.Unlock()
+	request := reserveTestPeerRunner(t, pm, "remote-1", ps)
 
 	done := make(chan struct{})
 	go func() {
-		pm.connectPeer("remote-1", ps)
+		pm.connectPeer(request)
 		close(done)
 	}()
 
@@ -1774,13 +2087,11 @@ func TestConnectPeer_ConnectsThenMarksDisconnectedOnEOF(t *testing.T) {
 	pm.pool = pool
 
 	ps := &peerState{addr: "remote-1:18029"}
-	pm.mu.Lock()
-	pm.peers["remote-1"] = ps
-	pm.mu.Unlock()
+	request := reserveTestPeerRunner(t, pm, "remote-1", ps)
 
 	done := make(chan struct{})
 	go func() {
-		pm.connectPeer("remote-1", ps)
+		pm.connectPeer(request)
 		close(done)
 	}()
 

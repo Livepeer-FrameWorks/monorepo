@@ -222,18 +222,3 @@ func TestMissLogger_FiresOnMiss(t *testing.T) {
 		t.Errorf("miss logger got (%q, %q), want (internal_name, ghost)", gotKind, gotKey)
 	}
 }
-
-func TestInvalidate_ForcesRehydrate(t *testing.T) {
-	fake := &fakeCommodore{resp: nativeResp()}
-	r := NewStreamRegistry(fake, "cluster-A", time.Minute)
-	if _, err := r.ResolveSourceByInternalName(context.Background(), "60546679b497415db2338cd5cae54992"); err != nil {
-		t.Fatal(err)
-	}
-	r.Invalidate("stream-uuid-1", "60546679b497415db2338cd5cae54992", "frameworks-demo")
-	if _, err := r.ResolveSourceByInternalName(context.Background(), "60546679b497415db2338cd5cae54992"); err != nil {
-		t.Fatal(err)
-	}
-	if fake.hits != 2 {
-		t.Errorf("Commodore hits = %d, want 2 after invalidate", fake.hits)
-	}
-}

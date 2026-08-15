@@ -448,18 +448,28 @@ func (r *StreamRegistry) withdrawFederatedSource(peerClusterID, internalName str
 		delete(ce.entry.Locations, peerClusterID)
 	}
 	if len(ce.entry.Locations) == 0 {
-		// Drop the entry. Capture identity fields before deletion so the
-		// changelog delete carries the keys peer instances need to evict.
-		evicted := ce.entry
-		delete(r.byInt, internalName)
-		if evicted.StreamID != "" {
-			delete(r.byID, evicted.StreamID)
+		// Publish the durable revisioned delete BEFORE evicting locally: a failed publish must leave
+		// the (marked) entry behind so the sweeper retries it — evicting first would silently lose
+		// the delete and let the durable value resurrect the entry on a later rehydrate. The local
+		// cluster held no Location here (only the withdrawn peer's was left), so pass revision 0 —
+		// publishDeleteSource resolves the durable watermark to carry the tombstone.
+		ce.pendingSourceDelete = true
+		snapshot := ce.entry
+		r.mu.Unlock()
+		if !r.publishDeleteSource(snapshot, 0) {
+			return // retained + marked; SweepStaleLocations retries the durable delete
 		}
-		if evicted.PlaybackID != "" {
-			delete(r.byPlay, evicted.PlaybackID)
+		r.mu.Lock()
+		if cur, ok := r.byInt[internalName]; ok && cur.pendingSourceDelete && len(cur.entry.Locations) == 0 {
+			delete(r.byInt, internalName)
+			if cur.entry.StreamID != "" {
+				delete(r.byID, cur.entry.StreamID)
+			}
+			if cur.entry.PlaybackID != "" {
+				delete(r.byPlay, cur.entry.PlaybackID)
+			}
 		}
 		r.mu.Unlock()
-		r.publishDeleteSource(internalName)
 		return
 	}
 	ce.cached = time.Now()

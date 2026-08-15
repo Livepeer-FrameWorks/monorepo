@@ -977,14 +977,19 @@ func retryRedisDeleteAsync(entity, key string, del func() error) {
 // entry ID as the entity's watermark. Callers hold no expectation of
 // delivery; the write-through key remains the rehydration source of truth.
 func (sm *StreamStateManager) publishStateChange(change StateChange) {
-	id, err := sm.redisStore.PublishStateChange(change)
+	_ = sm.publishStateChangeContext(context.Background(), change) //nolint:errcheck // non-effect path logs internally
+}
+
+func (sm *StreamStateManager) publishStateChangeContext(ctx context.Context, change StateChange) error {
+	id, err := sm.redisStore.PublishStateChangeContext(ctx, change)
 	if err != nil {
 		if stateLogger != nil {
 			stateLogger.WithError(err).WithFields(map[string]any{"entity": change.Entity, "stream": change.StreamName, "node_id": change.NodeID}).Warn("Failed to append state change to changelog")
 		}
-		return
+		return err
 	}
 	sm.watermarks.Record(stateChangeKey(change), id)
+	return nil
 }
 
 func (sm *StreamStateManager) persistNodeWriteThrough(nodeID string, payload json.RawMessage) {
@@ -1029,16 +1034,20 @@ func (sm *StreamStateManager) nodePayloadLocked(nodeID string) json.RawMessage {
 }
 
 func (sm *StreamStateManager) persistStreamWriteThrough(internalName string, payload json.RawMessage) {
+	_ = sm.persistStreamWriteThroughContext(context.Background(), internalName, payload) //nolint:errcheck // non-effect path logs internally
+}
+
+func (sm *StreamStateManager) persistStreamWriteThroughContext(ctx context.Context, internalName string, payload json.RawMessage) error {
 	if sm.redisStore == nil {
-		return
+		return nil
 	}
-	if err := sm.redisStore.setJSONRaw(context.Background(), sm.redisStore.keyStream(internalName), payload); err != nil {
+	if err := sm.redisStore.setJSONRaw(ctx, sm.redisStore.keyStream(internalName), payload); err != nil {
 		if stateLogger != nil {
 			stateLogger.WithError(err).WithField("stream", internalName).Warn("Failed to write stream state to redis")
 		}
-		return
+		return err
 	}
-	sm.publishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityStream, Operation: StateOpUpsert, StreamName: internalName, Payload: payload})
+	return sm.publishStateChangeContext(ctx, StateChange{InstanceID: sm.instanceID, Entity: StateEntityStream, Operation: StateOpUpsert, StreamName: internalName, Payload: payload})
 }
 
 func (sm *StreamStateManager) persistStreamDeleteWriteThrough(internalName string) {
@@ -1070,16 +1079,20 @@ func (sm *StreamStateManager) persistStreamInstanceDeleteWriteThrough(internalNa
 }
 
 func (sm *StreamStateManager) persistStreamInstanceWriteThrough(internalName, nodeID string, payload json.RawMessage) {
+	_ = sm.persistStreamInstanceWriteThroughContext(context.Background(), internalName, nodeID, payload) //nolint:errcheck // non-effect path logs internally
+}
+
+func (sm *StreamStateManager) persistStreamInstanceWriteThroughContext(ctx context.Context, internalName, nodeID string, payload json.RawMessage) error {
 	if sm.redisStore == nil {
-		return
+		return nil
 	}
-	if err := sm.redisStore.setJSONRaw(context.Background(), sm.redisStore.keyStreamInstance(internalName, nodeID), payload); err != nil {
+	if err := sm.redisStore.setJSONRaw(ctx, sm.redisStore.keyStreamInstance(internalName, nodeID), payload); err != nil {
 		if stateLogger != nil {
 			stateLogger.WithError(err).WithFields(map[string]any{"stream": internalName, "node_id": nodeID}).Warn("Failed to write stream instance to redis")
 		}
-		return
+		return err
 	}
-	sm.publishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityStreamInstance, Operation: StateOpUpsert, StreamName: internalName, NodeID: nodeID, Payload: payload})
+	return sm.publishStateChangeContext(ctx, StateChange{InstanceID: sm.instanceID, Entity: StateEntityStreamInstance, Operation: StateOpUpsert, StreamName: internalName, NodeID: nodeID, Payload: payload})
 }
 
 func (sm *StreamStateManager) UpdateUserConnection(internalName, nodeID, tenantID string, delta int) {
@@ -1244,6 +1257,13 @@ func (sm *StreamStateManager) SetStreamStreamID(internalName, streamID string) {
 }
 
 func (sm *StreamStateManager) SetOffline(internalName, nodeID string) {
+	_ = sm.SetOfflineContext(context.Background(), internalName, nodeID) //nolint:errcheck // non-effect path logs internally
+}
+
+// SetOfflineContext applies the in-memory transition and persists both Redis snapshots and their
+// changelog entries with caller-owned cancellation. The durable offline worker uses this form so
+// no write-through operation can outlive its advisory-lock transaction.
+func (sm *StreamStateManager) SetOfflineContext(ctx context.Context, internalName, nodeID string) error {
 	staleCutoff := time.Now().Add(-sm.getStaleThreshold())
 	sm.mu.Lock()
 	union := sm.streams[internalName]
@@ -1294,8 +1314,9 @@ func (sm *StreamStateManager) SetOffline(internalName, nodeID string) {
 	instPayload, _ := json.Marshal(inst)
 	sm.mu.Unlock()
 
-	sm.persistStreamWriteThrough(internalName, streamPayload)
-	sm.persistStreamInstanceWriteThrough(internalName, nodeID, instPayload)
+	streamErr := sm.persistStreamWriteThroughContext(ctx, internalName, streamPayload)
+	instanceErr := sm.persistStreamInstanceWriteThroughContext(ctx, internalName, nodeID, instPayload)
+	return errors.Join(streamErr, instanceErr)
 }
 
 // SetStreamInstanceInputs forces the per-node Inputs counter for an
@@ -1304,8 +1325,8 @@ func (sm *StreamStateManager) SetOffline(internalName, nodeID string) {
 // admission/drain need to mark presence/absence immediately rather
 // than wait for the next STREAM_BUFFER event or poll tick. Callers:
 //
-//   - admit-side: set inputs=1 on the new owner when AdmitAndReserve
-//     accepts, so the balancer can pick that node before its first
+//   - admit-side: set inputs=1 on the new owner when ProjectSource
+//     projects the DB winner, so the balancer can pick that node before its first
 //     STREAM_BUFFER event arrives at Foghorn.
 //   - drain-side: set inputs=0 on the old owner when a takeover drain
 //     is dispatched, so the balancer stops sending viewers to the

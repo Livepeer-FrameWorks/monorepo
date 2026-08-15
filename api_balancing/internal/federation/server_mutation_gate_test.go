@@ -1,6 +1,7 @@
 package federation
 
 import (
+	"context"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -10,10 +11,8 @@ import (
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 )
 
-// The entire inbound federation surface is disabled as ONE policy by default: every RPC — including the reads
-// QueryStream and PrepareArtifact — fails closed under valid service auth, so a shared-service-token holder
-// cannot mutate, create, enumerate, drive routing, or read routing/artifact data for another cluster. There is
-// no read-only allowlist.
+// The entire inbound federation surface is disabled as one policy by default. The production entrypoint opts
+// into the whole surface only when FEDERATION_ENABLED is true; focused/default server construction stays closed.
 func TestFederationMutations_DisabledByDefault(t *testing.T) {
 	// AllowFederationMutations omitted → false.
 	srv := NewFederationServer(FederationServerConfig{Logger: logging.NewLogger(), ClusterID: "platform-eu"})
@@ -85,4 +84,22 @@ func TestFederationMutations_DisabledByDefault(t *testing.T) {
 			t.Fatalf("want FailedPrecondition, got %v", err)
 		}
 	})
+}
+
+func TestFederationMutations_EnabledForProviderFederation(t *testing.T) {
+	srv := NewFederationServer(FederationServerConfig{
+		Logger: logging.NewLogger(), ClusterID: "platform-eu", AllowFederationMutations: true,
+	})
+
+	// Crossing the gate reaches the RPC's own validation instead of the federation-disabled result.
+	_, err := srv.QueryStream(serviceAuthContext(), &foghornfederationpb.QueryStreamRequest{})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("enabled provider federation did not reach QueryStream validation: %v", err)
+	}
+
+	// Enabling federation does not weaken the service-auth boundary.
+	_, err = srv.QueryStream(context.Background(), &foghornfederationpb.QueryStreamRequest{})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("enabled provider federation accepted an unauthenticated request: %v", err)
+	}
 }

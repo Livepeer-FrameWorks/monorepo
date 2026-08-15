@@ -4,6 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
 	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/artifacts"
 	"frameworks/api_balancing/internal/balancer"
@@ -32,6 +41,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mediakeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
@@ -41,14 +51,6 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"github.com/prometheus/client_golang/prometheus"
 	goredis "github.com/redis/go-redis/v9"
-	"net"
-	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
-	"sync"
-	"sync/atomic"
-	"time"
 )
 
 type clientState struct {
@@ -57,6 +59,32 @@ type clientState struct {
 	quartermasterErr error
 	commodoreOK      bool
 	commodoreErr     error
+}
+
+type cacheMetricVectors struct {
+	hits   *prometheus.CounterVec
+	misses *prometheus.CounterVec
+	stale  *prometheus.CounterVec
+	stores *prometheus.CounterVec
+	errors *prometheus.CounterVec
+}
+
+// newServiceCache binds cache activity to a fixed namespace. Cache hooks
+// receive the full lookup key, which can be a publishing credential or client
+// address and must never become a Prometheus label.
+func newServiceCache(namespace string, ttl, swr, negTTL time.Duration, maxEntries int, metrics cacheMetricVectors) *cache.Cache {
+	return cache.New(cache.Options{
+		TTL:                  ttl,
+		StaleWhileRevalidate: swr,
+		NegativeTTL:          negTTL,
+		MaxEntries:           maxEntries,
+	}, cache.MetricsHooks{
+		OnHit:   func(map[string]string) { metrics.hits.WithLabelValues(namespace).Inc() },
+		OnMiss:  func(map[string]string) { metrics.misses.WithLabelValues(namespace).Inc() },
+		OnStale: func(map[string]string) { metrics.stale.WithLabelValues(namespace).Inc() },
+		OnStore: func(labels map[string]string) { metrics.stores.WithLabelValues(namespace, labels["ok"]).Inc() },
+		OnError: func(map[string]string) { metrics.errors.WithLabelValues(namespace).Inc() },
+	})
 }
 
 var releaseReconcilerOnce sync.Once
@@ -265,6 +293,8 @@ func main() {
 	dbConfig.URL = dbURL
 	db := database.MustConnect(dbConfig, logger)
 	defer db.Close()
+	control.SetDB(db)
+	defer control.SetDB(nil)
 
 	// Create load balancer instance
 	lb := balancer.NewLoadBalancer(logger)
@@ -409,6 +439,11 @@ func main() {
 			"MintStorageURLs federation-handler outcomes by result",
 			[]string{"result"},
 		),
+		RoutingEventsShed: metricsCollector.NewCounter(
+			"routing_events_shed_total",
+			"Routing telemetry never delivered to Decklog, by reason",
+			[]string{"reason"},
+		),
 	}
 
 	// Control-plane (HelmsmanControl) and data-plane (Decklog fan-out) observability
@@ -436,22 +471,16 @@ func main() {
 	)
 
 	// Cache metrics and factory
-	cacheHits := metricsCollector.NewCounter("cache_hits_total", "Cache hits", []string{"key"})
-	cacheMiss := metricsCollector.NewCounter("cache_misses_total", "Cache misses", []string{"key"})
-	cacheStale := metricsCollector.NewCounter("cache_stale_total", "Cache stale served", []string{"key"})
-	cacheStore := metricsCollector.NewCounter("cache_store_total", "Cache stores", []string{"key", "ok"})
-	cacheError := metricsCollector.NewCounter("cache_errors_total", "Cache load errors", []string{"key"})
+	cacheHits := metricsCollector.NewCounter("cache_hits_total", "Cache hits", []string{"cache"})
+	cacheMiss := metricsCollector.NewCounter("cache_misses_total", "Cache misses", []string{"cache"})
+	cacheStale := metricsCollector.NewCounter("cache_stale_total", "Cache stale served", []string{"cache"})
+	cacheStore := metricsCollector.NewCounter("cache_store_total", "Cache stores", []string{"cache", "ok"})
+	cacheError := metricsCollector.NewCounter("cache_errors_total", "Cache load errors", []string{"cache"})
 
-	newCache := func(ttl, swr, negTTL time.Duration, max int) *cache.Cache {
-		return cache.New(cache.Options{TTL: ttl, StaleWhileRevalidate: swr, NegativeTTL: negTTL, MaxEntries: max}, cache.MetricsHooks{
-			OnHit:   func(l map[string]string) { cacheHits.WithLabelValues(l["key"]).Inc() },
-			OnMiss:  func(l map[string]string) { cacheMiss.WithLabelValues(l["key"]).Inc() },
-			OnStale: func(l map[string]string) { cacheStale.WithLabelValues(l["key"]).Inc() },
-			OnStore: func(l map[string]string) { cacheStore.WithLabelValues(l["key"], l["ok"]).Inc() },
-			OnError: func(l map[string]string) { cacheError.WithLabelValues(l["key"]).Inc() },
-		})
+	cacheMetrics := cacheMetricVectors{
+		hits: cacheHits, misses: cacheMiss, stale: cacheStale,
+		stores: cacheStore, errors: cacheError,
 	}
-	_ = newCache // Placeholder until wired into clients (Commodore/GeoIP)
 
 	// Register DB connection-pool stats (open/in-use/idle gauges +
 	// wait_count/wait_duration counters) sourced from db.Stats() at
@@ -539,7 +568,7 @@ func main() {
 		}
 	}
 	// Use the cache factory from main
-	commodoreCache := newCache(ttl, swr, neg, maxEntries)
+	commodoreCache := newServiceCache("commodore", ttl, swr, neg, maxEntries, cacheMetrics)
 
 	commodoreClient, err := commodore.NewGRPCClient(commodore.GRPCConfig{
 		GRPCAddr:      commodoreGRPCURL,
@@ -634,7 +663,7 @@ func main() {
 				gmax = n
 			}
 		}
-		geoipCache = newCache(gttl, gswr, gneg, gmax)
+		geoipCache = newServiceCache("geoip", gttl, gswr, gneg, gmax, cacheMetrics)
 		logger.Info("GeoIP reader initialized successfully with cache")
 	} else {
 		logger.Info("GeoIP disabled (no GEOIP_MMDB_PATH or failed to load)")
@@ -846,12 +875,13 @@ func main() {
 		remoteEdgeCache = federation.NewRemoteEdgeCache(redisClient, foghornCfg.ClusterID, logger)
 
 		federationServer = federation.NewFederationServer(federation.FederationServerConfig{
-			Logger:    logger,
-			LB:        lb,
-			ClusterID: foghornCfg.ClusterID,
-			Cache:     remoteEdgeCache,
-			DB:        db,
-			S3Client:  s3ForFederation,
+			Logger:                   logger,
+			LB:                       lb,
+			ClusterID:                foghornCfg.ClusterID,
+			Cache:                    remoteEdgeCache,
+			DB:                       db,
+			S3Client:                 s3ForFederation,
+			AllowFederationMutations: federationEnabled,
 			LocalS3Backing: federation.S3Backing{
 				Bucket:   localS3Backing.Bucket,
 				Endpoint: localS3Backing.Endpoint,
@@ -872,15 +902,16 @@ func main() {
 		defer fedPool.Close()
 
 		peerManager = federation.NewPeerManager(federation.PeerManagerConfig{
-			ClusterID:     foghornCfg.ClusterID,
-			InstanceID:    instanceID,
-			Pool:          fedPool,
-			QM:            qmClient,
-			Cache:         remoteEdgeCache,
-			Logger:        logger,
-			DecklogClient: decklogClient,
-			OwnerTenantID: bootstrapOwnerTenantID,
-			SelfGeoFunc:   handlers.GetSelfGeo,
+			ClusterID:           foghornCfg.ClusterID,
+			InstanceID:          instanceID,
+			Pool:                fedPool,
+			QM:                  qmClient,
+			Cache:               remoteEdgeCache,
+			Logger:              logger,
+			DecklogClient:       decklogClient,
+			OwnerTenantID:       bootstrapOwnerTenantID,
+			SelfGeoFunc:         handlers.GetSelfGeo,
+			CanPurgeMemberships: control.PurgeableAdmissionEffectFences,
 			// Late-bound through the identity facade (wired further down,
 			// after the stream registry exists) so ad attribution shares
 			// the same front door and metrics as every other consumer.
@@ -937,7 +968,7 @@ func main() {
 		),
 		DrainDispatch: metricsCollector.NewCounter(
 			"drain_dispatch_total",
-			"AcceptTakeover drain dispatches to the prior owner node (ok/failed)",
+			"Drain dispatches to the prior owner node when the DB-ordered source projection moves to a new node (ok/failed)",
 			[]string{"result"},
 		),
 	})
@@ -948,14 +979,16 @@ func main() {
 	if peerManager != nil {
 		triggerProcessor.SetPeerNotifier(peerManager)
 	}
-	// Drain dispatcher: wire the AdmitAndReserve takeover path to the
+	// Drain dispatcher: wire the projection-change (old-owner) drain path to the
 	// long-lived Helmsman control stream. Uses the HA-aware SendDrainStream
-	// so a takeover initiated on one Foghorn instance can still drain an
+	// so a replacement admitted on one Foghorn instance can still drain an
 	// old owner connected to a peer instance.
-	triggerProcessor.SetDrainStreamDispatcher(func(nodeID, runtimeName, reason string) error {
-		return control.SendDrainStream(nodeID, &ipcpb.DrainStreamRequest{
-			RuntimeName: runtimeName,
-			Reason:      reason,
+	triggerProcessor.SetDrainStreamDispatcher(func(ctx context.Context, nodeID, runtimeName, reason, sourceGeneration, priorOwnerSourceGeneration string) error {
+		return control.SendDrainStream(ctx, nodeID, &ipcpb.DrainStreamRequest{
+			RuntimeName:                runtimeName,
+			Reason:                     reason,
+			SourceGeneration:           sourceGeneration,
+			PriorOwnerSourceGeneration: priorOwnerSourceGeneration,
 		})
 	})
 	logger.Info("Initialized trigger processor with Commodore, Decklog and Quartermaster clients")
@@ -1251,8 +1284,6 @@ func main() {
 			Metrics: serviceResolutionRejected,
 		}
 	})
-	control.SetDecklogClient(decklogClient)
-	control.SetDVRStopRegistry(foghornServer)
 	foghornServer.SetRedisStateStore(redisStore)
 
 	// Wire DVR service to trigger processor for auto-start recordings on stream start
@@ -1634,6 +1665,91 @@ func main() {
 	dvrStartingRecoveryJob.Start()
 	defer dvrStartingRecoveryJob.Stop()
 
+	// Replay the durable DVR start intent for record:true sessions whose async StartDVR was
+	// lost to a crash (the intent is persisted on the ingest_sessions row before the push
+	// is approved; this job creates the recording if no artifact exists yet).
+	dvrIntentRecoveryJob := jobs.NewDVRIntentRecoveryJob(jobs.DVRIntentRecoveryConfig{
+		Logger:  logger,
+		Starter: foghornServer,
+	})
+	dvrIntentRecoveryJob.Start()
+	defer dvrIntentRecoveryJob.Stop()
+
+	// Retire ingest sessions whose node hard-disconnected (crash / SIGKILL): it sends neither
+	// PUSH_INPUT_CLOSE nor STREAM_END, so the session would otherwise stay open forever and block a
+	// cross-node republish of the same stream (the (tenant, stream) partial unique rejects it as a
+	// duplicate). Fenced against the node's conn_owner, so a reconnect's newer session is never killed.
+	ingestSessionReaperJob := jobs.NewIngestSessionReaperJob(jobs.IngestSessionReaperConfig{
+		Logger: logger,
+	})
+	ingestSessionReaperJob.Start()
+	defer ingestSessionReaperJob.Stop()
+
+	// Apply durable source-offline transitions. The worker holds the stream advisory lock across the
+	// authority recheck and idempotent effects, so reconnect admission cannot interleave with teardown.
+	ingestOfflineEffectsJob := jobs.NewIngestOfflineEffectsJob(jobs.IngestOfflineEffectsConfig{
+		Logger:         logger,
+		Apply:          triggerProcessor.ApplyOfflineEffect,
+		LeaderInstance: triggerProcessor.FederationLeaderInstance,
+	})
+	ingestOfflineEffectsJob.Start()
+	defer ingestOfflineEffectsJob.Stop()
+
+	// Apply durable admission effects (push-target activation, prior-owner drain, federation live
+	// broadcast) — the once-only obligations persisted with each projection confirmation. Unlike
+	// the offline worker, this worker splits lock-only DB phases around an unlocked I/O phase;
+	// acknowledgements can land during dispatch. A crash on any replica is replayed by its siblings.
+	ingestAdmissionEffectsJob := jobs.NewIngestAdmissionEffectsJob(jobs.IngestAdmissionEffectsConfig{
+		Logger: logger,
+		Apply:  triggerProcessor.ApplyAdmissionEffect,
+	})
+	ingestAdmissionEffectsJob.Start()
+	defer ingestAdmissionEffectsJob.Stop()
+
+	// Keep Commodore's record of where each stream is being published current
+	// for ordinary push ingest. PUSH_REWRITE claims that placement once, under
+	// a short lease; without this the claim lapses under a still-connected
+	// publisher and endpoint resolution stops routing their reconnects here.
+	// The cadence is derived from that lease inside the job, so it is not
+	// restated (and cannot drift) here.
+	placementCfg := jobs.ActiveIngestPlacementConfig{
+		Logger: logger,
+		Sources: func(ctx context.Context) ([]jobs.LiveIngest, error) {
+			live, err := control.LocallyPublishedStreams(ctx)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]jobs.LiveIngest, 0, len(live))
+			for _, s := range live {
+				out = append(out, jobs.LiveIngest{
+					TenantID:     s.TenantID,
+					InternalName: s.InternalName,
+					ClusterID:    s.ClusterID,
+					ClaimToken:   s.ClaimToken,
+				})
+			}
+			return out, nil
+		},
+		ClaimLost: func(ctx context.Context, refused *commodorepb.ActiveIngestStream) error {
+			nodeID, retired, err := control.RetireIngestSessionByClaim(ctx, refused.GetTenantId(), refused.GetInternalName(), refused.GetClaimToken(), logger)
+			if err != nil || !retired {
+				return err
+			}
+			return control.SendDrainStream(ctx, nodeID, &ipcpb.DrainStreamRequest{
+				RuntimeName: control.RuntimeNameForStream(control.StreamRegistryInstance, refused.GetInternalName()),
+				Reason:      "placement_claim_lost",
+			})
+		},
+	}
+	// Assigned only when present: a nil *GRPCClient in the interface field
+	// would read as non-nil and the job would start and then dereference it.
+	if commodoreClient != nil {
+		placementCfg.Syncer = commodoreClient
+	}
+	activeIngestPlacementJob := jobs.NewActiveIngestPlacementJob(placementCfg)
+	activeIngestPlacementJob.Start()
+	defer activeIngestPlacementJob.Stop()
+
 	// Start orphan reconciliation job (retries failed deletions)
 	orphanCleanupJob := jobs.NewOrphanCleanupJob(jobs.OrphanCleanupConfig{
 		DB:       db,
@@ -1651,11 +1767,12 @@ func main() {
 	// resolve the recorded backend identically (nil when no S3/delegate).
 	purgeCleaner := artifactCleaner
 	purgeDeletedJob := jobs.NewPurgeDeletedJob(jobs.PurgeDeletedConfig{
-		DB:           db,
-		Logger:       logger,
-		Interval:     24 * time.Hour,
-		RetentionAge: 30 * 24 * time.Hour, // 30 days
-		Cleaner:      purgeCleaner,
+		DB:                      db,
+		Logger:                  logger,
+		Interval:                24 * time.Hour,
+		RetentionAge:            30 * 24 * time.Hour, // 30 days
+		Cleaner:                 purgeCleaner,
+		AllowCrossClusterDelete: federationServer != nil,
 	})
 	purgeDeletedJob.Start()
 	defer purgeDeletedJob.Stop()
@@ -1754,6 +1871,16 @@ func main() {
 	// Viewer playback routes - generic player redirects via foghorn.* domain
 	router.GET("/play/*path", handlers.HandleGenericViewerPlayback)
 	router.GET("/resolve/*path", handlers.HandleGenericViewerPlayback)
+
+	// Ingest front door — the publish-side counterpart to /play. GET returns
+	// the ranked candidates as JSON; POST 307s to the chosen node's WHIP URL.
+	router.GET("/ingest/:streamKey", handlers.HandleIngestFrontDoor)
+	router.POST("/ingest/:streamKey", handlers.HandleIngestFrontDoor)
+	// Gin's param route does not match an empty segment, so "/ingest/" would
+	// otherwise fall through to NoRoute and answer 404 — a missing credential
+	// is a malformed request, not an unknown stream.
+	router.GET("/ingest/", handlers.HandleIngestFrontDoor)
+	router.POST("/ingest/", handlers.HandleIngestFrontDoor)
 
 	// Livepeer gateway auth webhook — validates incoming segments against active streams
 	router.POST("/webhooks/livepeer/auth", handlers.HandleLivepeerAuth)
