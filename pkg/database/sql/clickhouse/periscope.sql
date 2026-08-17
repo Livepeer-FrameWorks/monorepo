@@ -2152,6 +2152,27 @@ PARTITION BY toYYYYMM(toDateTime(closed_at_ms / 1000))
 ORDER BY (tenant_id, closed_at_ms, node_id, session_id)
 TTL toDateTime(closed_at_ms / 1000) + INTERVAL 365 DAY;
 
+CREATE VIEW IF NOT EXISTS viewer_sessions_anomalous_v AS
+SELECT
+    tenant_id,
+    node_id,
+    session_id,
+    argMax(cluster_id, source_projection_version_ms) AS cluster_id,
+    argMax(stream_id, source_projection_version_ms) AS stream_id,
+    argMax(stream_name, source_projection_version_ms) AS stream_name,
+    argMax(estimated_duration_seconds, source_projection_version_ms) AS estimated_duration_seconds,
+    argMax(observed_first_at_ms, source_projection_version_ms) AS observed_first_at_ms,
+    argMax(observed_last_at_ms, source_projection_version_ms) AS observed_last_at_ms,
+    argMax(closed_at_ms, source_projection_version_ms) AS closed_at_ms,
+    argMax(closed_reason, source_projection_version_ms) AS closed_reason,
+    max(source_projection_version_ms) AS projection_version_ms,
+    argMax(notes, source_projection_version_ms) AS notes
+FROM (
+    SELECT *, projection_version_ms AS source_projection_version_ms
+    FROM viewer_sessions_anomalous
+)
+GROUP BY tenant_id, node_id, session_id;
+
 CREATE TABLE IF NOT EXISTS stream_sessions_anomalous (
     tenant_id UUID,
     node_id LowCardinality(String),
@@ -2172,6 +2193,26 @@ CREATE TABLE IF NOT EXISTS stream_sessions_anomalous (
 PARTITION BY toYYYYMM(toDateTime(closed_at_ms / 1000))
 ORDER BY (tenant_id, closed_at_ms, node_id, stream_id)
 TTL toDateTime(closed_at_ms / 1000) + INTERVAL 365 DAY;
+
+CREATE VIEW IF NOT EXISTS stream_sessions_anomalous_v AS
+SELECT
+    tenant_id,
+    node_id,
+    stream_id,
+    argMax(cluster_id, source_projection_version_ms) AS cluster_id,
+    argMax(stream_name, source_projection_version_ms) AS stream_name,
+    argMax(estimated_duration_seconds, source_projection_version_ms) AS estimated_duration_seconds,
+    argMax(observed_first_at_ms, source_projection_version_ms) AS observed_first_at_ms,
+    argMax(observed_last_at_ms, source_projection_version_ms) AS observed_last_at_ms,
+    argMax(closed_at_ms, source_projection_version_ms) AS closed_at_ms,
+    argMax(closed_reason, source_projection_version_ms) AS closed_reason,
+    max(source_projection_version_ms) AS projection_version_ms,
+    argMax(notes, source_projection_version_ms) AS notes
+FROM (
+    SELECT *, projection_version_ms AS source_projection_version_ms
+    FROM stream_sessions_anomalous
+)
+GROUP BY tenant_id, node_id, stream_id;
 
 -- ============================================================================
 -- 5-MIN CANONICAL LEDGERS — analytics-side projection of final facts.

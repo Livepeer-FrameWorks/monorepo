@@ -12,7 +12,8 @@ import (
 // live viewer session (returned by the scan) is materialized into one
 // viewer_sessions_anomalous row that preserves its natural key, carries the
 // observed duration/window, and is stamped "stale" with a fresh
-// projection_version_ms so repeated passes dedupe via argMax.
+// projection_version_ms. The scan also excludes keys already recorded in the
+// anomaly table so periodic passes do not append the same logical anomaly.
 func TestStaleCloseViewerSessionsEmitsAnomalyRow(t *testing.T) {
 	conn := newFakeClickhouseConn()
 	h := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
@@ -49,6 +50,9 @@ func TestStaleCloseViewerSessionsEmitsAnomalyRow(t *testing.T) {
 	}
 	if notes, _ := row[12].(string); !strings.Contains(notes, "no USER_END within") {
 		t.Errorf("notes = %q, want USER_END timeout annotation", notes)
+	}
+	if len(conn.queries) != 1 || !strings.Contains(conn.queries[0].query, "FROM periscope.viewer_sessions_anomalous") {
+		t.Fatalf("viewer scan must exclude existing anomaly keys, queries=%#v", conn.queries)
 	}
 }
 
@@ -98,6 +102,9 @@ func TestStaleCloseStreamSessionsClampsViewerSeconds(t *testing.T) {
 	}
 	if notes, _ := batch.rows[0][11].(string); !strings.Contains(notes, "no STREAM_END within") {
 		t.Errorf("notes = %q, want STREAM_END timeout annotation", notes)
+	}
+	if len(conn.queries) != 1 || !strings.Contains(conn.queries[0].query, "FROM periscope.stream_sessions_anomalous") {
+		t.Fatalf("stream scan must exclude existing anomaly keys, queries=%#v", conn.queries)
 	}
 }
 

@@ -12,14 +12,11 @@ import (
 // session map. Co-locating the worker with the ingest writer keeps a
 // single ClickHouse client authoritative for the table.
 //
-// The worker is conservative: it only marks a session/stream anomalous
+// The worker is conservative: it only marks a session/stream anomalous once
 // when (a) there is a live-state row, (b) the row has been silent past
-// the stale_close_timeout, and (c) no viewer_sessions_final row exists
-// for the same natural key. Writes to viewer_sessions_anomalous /
-// stream_sessions_anomalous are append-only — re-running the worker on
-// the same stale session adds another anomaly row with a fresher
-// projection_version_ms, which the operational dashboard can dedupe via
-// argMax.
+// the stale_close_timeout, and (c) neither a final nor anomalous row exists
+// for the same natural key. The canonical *_anomalous_v views still collapse
+// concurrent first observations from multiple ingest replicas.
 
 const (
 	// StaleCloseTimeout is how long after the last observation a live
@@ -97,6 +94,11 @@ func (h *AnalyticsHandler) staleCloseViewerSessions(ctx context.Context) error {
 		      SELECT tenant_id, node_id, session_id
 		      FROM periscope.viewer_sessions_final
 		      WHERE projection_version_ms > toUnixTimestamp(now() - INTERVAL 30 DAY) * 1000
+		      GROUP BY tenant_id, node_id, session_id
+		  )
+		  AND (tenant_id, node_id, session_id) NOT IN (
+		      SELECT tenant_id, node_id, session_id
+		      FROM periscope.viewer_sessions_anomalous
 		      GROUP BY tenant_id, node_id, session_id
 		  )
 		LIMIT %d`, StaleCloseScanLimit),
@@ -182,6 +184,11 @@ func (h *AnalyticsHandler) staleCloseStreamSessions(ctx context.Context) error {
 		       SELECT tenant_id, node_id, stream_id
 		       FROM periscope.stream_sessions_final
 		       WHERE projection_version_ms > toUnixTimestamp(now() - INTERVAL 30 DAY) * 1000
+		       GROUP BY tenant_id, node_id, stream_id
+		   )
+		   AND (tenant_id, node_id, stream_id) NOT IN (
+		       SELECT tenant_id, node_id, stream_id
+		       FROM periscope.stream_sessions_anomalous
 		       GROUP BY tenant_id, node_id, stream_id
 		   )
 		LIMIT %d`, StaleCloseScanLimit),

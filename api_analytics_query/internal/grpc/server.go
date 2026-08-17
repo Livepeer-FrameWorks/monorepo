@@ -6882,7 +6882,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscop
 	err = s.clickhouse.QueryRowContext(queryCtx, `
 			SELECT
 				countIf(is_synced = true) AS synced_artifact_count,
-				sumIf(size_bytes, is_synced = true) AS synced_artifact_bytes
+				ifNull(sumIf(size_bytes, is_synced = true), toUInt64(0)) AS synced_artifact_bytes
 			FROM artifact_state_current FINAL
 			WHERE tenant_id = ?
 		`, tenantID).Scan(

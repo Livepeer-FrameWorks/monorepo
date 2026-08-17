@@ -230,17 +230,17 @@ func TestGetLiveUsageSummaryAllQueriesFail(t *testing.T) {
 	_, server, mock := newLiveUsageSummaryServer(t)
 
 	setupLiveUsageSummaryMocks(t, mock, map[string]error{
-		liveRuntimeSummaryPattern:           sql.ErrConnDone,
-		liveViewerUsagePattern:              sql.ErrConnDone,
-		"FROM client_qoe_5m":                sql.ErrConnDone,
-		"FROM storage_gb_seconds_5m_v":      sql.ErrConnDone,
-		"FROM processing_5m_v":              sql.ErrConnDone,
-		liveGeoSummaryPattern:               sql.ErrConnDone,
-		liveGeoBreakdownPattern:             sql.ErrConnDone,
-		"FROM artifact_events":              sql.ErrConnDone,
-		"storage_scope = 'hot'":             sql.ErrConnDone,
-		"storage_scope = 'cold'":            sql.ErrConnDone,
-		"FROM artifact_state_current FINAL": sql.ErrConnDone,
+		liveRuntimeSummaryPattern:      sql.ErrConnDone,
+		liveViewerUsagePattern:         sql.ErrConnDone,
+		"FROM client_qoe_5m":           sql.ErrConnDone,
+		"FROM storage_gb_seconds_5m_v": sql.ErrConnDone,
+		"FROM processing_5m_v":         sql.ErrConnDone,
+		liveGeoSummaryPattern:          sql.ErrConnDone,
+		liveGeoBreakdownPattern:        sql.ErrConnDone,
+		"FROM artifact_events":         sql.ErrConnDone,
+		"storage_scope = 'hot'":        sql.ErrConnDone,
+		"storage_scope = 'cold'":       sql.ErrConnDone,
+		liveSyncedArtifactPattern:      sql.ErrConnDone,
 	})
 
 	_, err := server.GetLiveUsageSummary(context.Background(), &periscopepb.GetLiveUsageSummaryRequest{
@@ -259,6 +259,30 @@ func TestGetLiveUsageSummaryAllQueriesFail(t *testing.T) {
 	}
 	if st.Code() != codes.Unavailable {
 		t.Fatalf("expected unavailable, got %s", st.Code())
+	}
+	if mockErr := mock.ExpectationsWereMet(); mockErr != nil {
+		t.Fatalf("unmet mock expectations: %v", mockErr)
+	}
+}
+
+func TestGetLiveUsageSummaryZeroSyncedArtifacts(t *testing.T) {
+	db, server, mock := newLiveUsageSummaryServer(t)
+	defer db.Close()
+	setupLiveUsageSummaryMocks(t, mock, nil)
+
+	resp, err := server.GetLiveUsageSummary(context.Background(), &periscopepb.GetLiveUsageSummaryRequest{
+		TenantId: "tenant-1",
+		TimeRange: &commonpb.TimeRange{
+			Start: timestamppb.New(time.Now().Add(-time.Hour)),
+			End:   timestamppb.New(time.Now()),
+		},
+	})
+	if err != nil {
+		t.Fatalf("GetLiveUsageSummary: %v", err)
+	}
+	if resp.GetSummary().GetSyncedArtifactCount() != 0 || resp.GetSummary().GetSyncedArtifactBytes() != 0 {
+		t.Fatalf("synced artifacts = %d/%d, want 0/0",
+			resp.GetSummary().GetSyncedArtifactCount(), resp.GetSummary().GetSyncedArtifactBytes())
 	}
 	if mockErr := mock.ExpectationsWereMet(); mockErr != nil {
 		t.Fatalf("unmet mock expectations: %v", mockErr)
@@ -433,6 +457,7 @@ const (
 	liveViewerUsagePattern    = `FROM viewer_usage_5m_v[\s\S]*UNION ALL[\s\S]*FROM viewer_sessions_current FINAL`
 	liveGeoSummaryPattern     = `uniqExactIf\(country_code[\s\S]*FROM viewer_sessions_current FINAL`
 	liveGeoBreakdownPattern   = `SELECT[\s\S]*country_code[\s\S]*viewer_count[\s\S]*FROM viewer_sessions_current FINAL`
+	liveSyncedArtifactPattern = `ifNull\(sumIf\(size_bytes, is_synced = true\), toUInt64\(0\)\)[\s\S]*FROM artifact_state_current FINAL`
 )
 
 func setupLiveUsageSummaryMocks(t *testing.T, mock sqlmock.Sqlmock, overrides map[string]error) {
@@ -483,7 +508,7 @@ func setupLiveUsageSummaryMocks(t *testing.T, mock sqlmock.Sqlmock, overrides ma
 	}, []any{uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0)})
 	expectQuery("storage_scope = 'hot'", []string{"clip_bytes", "dvr_bytes", "vod_bytes"}, []any{uint64(0), uint64(0), uint64(0)})
 	expectQuery("storage_scope = 'cold'", []string{"frozen_clip_bytes", "frozen_dvr_bytes", "frozen_vod_bytes"}, []any{uint64(0), uint64(0), uint64(0)})
-	expectQuery("FROM artifact_state_current FINAL", []string{"synced_artifact_count", "synced_artifact_bytes"}, []any{uint32(0), uint64(0)})
+	expectQuery(liveSyncedArtifactPattern, []string{"synced_artifact_count", "synced_artifact_bytes"}, []any{uint32(0), uint64(0)})
 }
 
 func TestGetAPIUsageCursorPredicateStaysInWhere(t *testing.T) {
