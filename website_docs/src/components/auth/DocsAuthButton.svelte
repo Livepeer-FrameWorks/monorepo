@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import {
     checkAuth,
+    subscribeAuth,
     login,
     register,
     logout,
@@ -24,17 +25,18 @@
     }
   }
 
-  onMount(async () => {
-    user = await checkAuth();
-    loading = false;
-    dispatchAuthEvent();
+  onMount(() => {
+    const unsubscribe = subscribeAuth((snapshot) => {
+      user = snapshot.user;
+      loading = snapshot.loading;
+    });
+    void checkAuth();
     window.addEventListener("docs-auth-open", handleAuthOpen);
-    return () => window.removeEventListener("docs-auth-open", handleAuthOpen);
+    return () => {
+      unsubscribe();
+      window.removeEventListener("docs-auth-open", handleAuthOpen);
+    };
   });
-
-  function dispatchAuthEvent() {
-    window.dispatchEvent(new CustomEvent("docs-auth-change", { detail: { user } }));
-  }
 
   async function handleLogin(
     email: string,
@@ -43,9 +45,7 @@
   ): Promise<string | null> {
     const result = await login(email, password, botProtection);
     if (result.error) return result.error;
-    user = result.user ?? null;
     showPanel = false;
-    dispatchAuthEvent();
     return null;
   }
 
@@ -57,17 +57,13 @@
   ): Promise<string | null> {
     const result = await register(email, password, displayName, botProtection);
     if (result.error) return result.error;
-    user = result.user ?? null;
     showPanel = false;
-    dispatchAuthEvent();
     return null;
   }
 
   async function handleLogout() {
     await logout();
-    user = null;
     showPanel = false;
-    dispatchAuthEvent();
   }
 
   function handleClickOutside(event: MouseEvent) {
