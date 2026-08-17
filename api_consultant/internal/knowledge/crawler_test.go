@@ -56,6 +56,27 @@ func (f *fakeRenderer) Render(_ context.Context, _ string) (string, error) {
 
 func (f *fakeRenderer) Close() {}
 
+func TestCrawlerOriginRewritePreservesLogicalPathAndQuery(t *testing.T) {
+	crawler, err := NewCrawler(
+		http.DefaultClient,
+		&fakeEmbedder{},
+		&fakeStore{},
+		withSkipURLValidation(),
+		WithOriginRewrites(map[string]string{"http://localhost:18090": "http://nginx"}),
+	)
+	if err != nil {
+		t.Fatalf("new crawler: %v", err)
+	}
+
+	got, err := crawler.rewriteRequestURL(context.Background(), "http://localhost:18090/docs/page?lang=en#part")
+	if err != nil {
+		t.Fatalf("rewrite request URL: %v", err)
+	}
+	if want := "http://nginx/docs/page?lang=en#part"; got != want {
+		t.Fatalf("rewrite request URL got %q, want %q", got, want)
+	}
+}
+
 func TestCrawlerSitemapAndFetch(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

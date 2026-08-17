@@ -1,6 +1,10 @@
 package config
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -59,6 +63,7 @@ type Config struct {
 	RerankAPIURL        string
 	EnableHyDE          bool
 	SSRFAllowedHosts    []string
+	CrawlOriginRewrites map[string]string
 	SocialEnabled       bool
 	SocialInterval      time.Duration
 	SocialMaxPerDay     int
@@ -151,11 +156,50 @@ func LoadConfig() Config {
 		RerankAPIURL:        config.GetEnv("RERANKER_API_URL", ""),
 		EnableHyDE:          config.GetEnv("SKIPPER_ENABLE_HYDE", "") == "true",
 		SSRFAllowedHosts:    parseSitemapList(config.GetEnv("SKIPPER_SSRF_ALLOWED_HOSTS", "")),
+		CrawlOriginRewrites: mustParseOriginRewrites(config.GetEnv("SKIPPER_CRAWL_ORIGIN_REWRITES", "")),
 		SocialEnabled:       config.GetEnv("SKIPPER_SOCIAL_ENABLED", "") == "true",
 		SocialInterval:      parseDuration(config.GetEnv("SKIPPER_SOCIAL_INTERVAL", "2h"), 2*time.Hour),
 		SocialMaxPerDay:     config.GetEnvInt("SKIPPER_SOCIAL_MAX_PER_DAY", 2),
 		SocialNotifyEmail:   config.GetEnv("SKIPPER_SOCIAL_NOTIFY_EMAIL", ""),
 	}
+}
+
+func mustParseOriginRewrites(raw string) map[string]string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var configured map[string]string
+	if err := json.Unmarshal([]byte(raw), &configured); err != nil {
+		panic(fmt.Sprintf("invalid SKIPPER_CRAWL_ORIGIN_REWRITES: %v", err))
+	}
+	rewrites := make(map[string]string, len(configured))
+	for source, target := range configured {
+		sourceOrigin, err := normalizeOrigin(source)
+		if err != nil {
+			panic(fmt.Sprintf("invalid SKIPPER_CRAWL_ORIGIN_REWRITES source %q: %v", source, err))
+		}
+		targetOrigin, err := normalizeOrigin(target)
+		if err != nil {
+			panic(fmt.Sprintf("invalid SKIPPER_CRAWL_ORIGIN_REWRITES target %q: %v", target, err))
+		}
+		rewrites[sourceOrigin] = targetOrigin
+	}
+	return rewrites
+}
+
+func normalizeOrigin(raw string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", err
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", errors.New("origin must use http or https and include a host")
+	}
+	if u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return "", errors.New("origin must not include credentials, a path, query, or fragment")
+	}
+	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host), nil
 }
 
 func normalizeURLList(urls []string) []string {

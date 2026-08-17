@@ -146,6 +146,7 @@ type Crawler struct {
 	skipURLValidation bool // for tests that use httptest (localhost)
 	linkDiscovery     bool
 	excludePatterns   []string
+	originRewrites    map[string]string
 }
 
 type CrawlerOption func(*Crawler)
@@ -176,6 +177,18 @@ func WithLinkDiscovery(enabled bool) CrawlerOption {
 
 func WithExcludePatterns(patterns []string) CrawlerOption {
 	return func(c *Crawler) { c.excludePatterns = patterns }
+}
+
+// WithOriginRewrites changes only the network destination for configured
+// origins. Page identities, cache keys, discovered links, and citations keep
+// using the public URL supplied to the crawler.
+func WithOriginRewrites(rewrites map[string]string) CrawlerOption {
+	return func(c *Crawler) {
+		c.originRewrites = make(map[string]string, len(rewrites))
+		for source, target := range rewrites {
+			c.originRewrites[strings.ToLower(strings.TrimRight(source, "/"))] = strings.TrimRight(target, "/")
+		}
+	}
 }
 
 func (c *Crawler) Close() {
@@ -702,7 +715,7 @@ func (c *Crawler) skipRenderViaHEAD(ctx context.Context, pageURL string, cached 
 	if cached == nil || cached.ContentHash == "" || cached.RawSize <= 0 {
 		return false
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, pageURL, nil)
+	req, err := c.newRequest(ctx, http.MethodHead, pageURL)
 	if err != nil {
 		return false
 	}
@@ -726,7 +739,11 @@ func (c *Crawler) skipRenderViaHEAD(ctx context.Context, pageURL string, cached 
 func (c *Crawler) fetchRendered(ctx context.Context, pageURL string) (FetchResult, error) {
 	renderStart := time.Now()
 	meta := c.fetchHeadMetadata(ctx, pageURL)
-	htmlContent, err := c.renderer.Render(ctx, pageURL)
+	renderURL, err := c.rewriteRequestURL(ctx, pageURL)
+	if err != nil {
+		return FetchResult{}, fmt.Errorf("rewrite render URL %s: %w", pageURL, err)
+	}
+	htmlContent, err := c.renderer.Render(ctx, renderURL)
 	renderDuration.Observe(time.Since(renderStart).Seconds())
 	if err != nil {
 		renderPagesTotal.WithLabelValues("error").Inc()
@@ -756,7 +773,7 @@ type headMetadata struct {
 }
 
 func (c *Crawler) fetchHeadMetadata(ctx context.Context, pageURL string) headMetadata {
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, pageURL, nil)
+	req, err := c.newRequest(ctx, http.MethodHead, pageURL)
 	if err != nil {
 		return headMetadata{}
 	}
@@ -781,7 +798,7 @@ func (c *Crawler) fetchHeadMetadata(ctx context.Context, pageURL string) headMet
 }
 
 func (c *Crawler) fetchPageConditional(ctx context.Context, pageURL string, cached *PageCache) (FetchResult, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
+	req, err := c.newRequest(ctx, http.MethodGet, pageURL)
 	if err != nil {
 		return FetchResult{}, err
 	}
@@ -906,7 +923,7 @@ func (c *Crawler) doWithRetry(ctx context.Context, req *http.Request) (*http.Res
 }
 
 func (c *Crawler) fetchURL(ctx context.Context, target string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	req, err := c.newRequest(ctx, http.MethodGet, target)
 	if err != nil {
 		return nil, err
 	}
@@ -923,6 +940,39 @@ func (c *Crawler) fetchURL(ctx context.Context, target string) ([]byte, error) {
 	}
 
 	return io.ReadAll(io.LimitReader(resp.Body, maxPageBytes))
+}
+
+func (c *Crawler) newRequest(ctx context.Context, method, logicalURL string) (*http.Request, error) {
+	requestURL, err := c.rewriteRequestURL(ctx, logicalURL)
+	if err != nil {
+		return nil, err
+	}
+	return http.NewRequestWithContext(ctx, method, requestURL, nil)
+}
+
+func (c *Crawler) rewriteRequestURL(ctx context.Context, logicalURL string) (string, error) {
+	u, err := url.Parse(logicalURL)
+	if err != nil {
+		return "", err
+	}
+	origin := strings.ToLower(u.Scheme + "://" + u.Host)
+	target, ok := c.originRewrites[origin]
+	if !ok {
+		return logicalURL, nil
+	}
+	targetURL, err := url.Parse(target)
+	if err != nil {
+		return "", fmt.Errorf("parse rewrite target: %w", err)
+	}
+	u.Scheme = targetURL.Scheme
+	u.Host = targetURL.Host
+	rewritten := u.String()
+	if !c.skipURLValidation {
+		if _, err := validateCrawlURLWithContext(ctx, rewritten); err != nil {
+			return "", fmt.Errorf("rewrite target blocked by SSRF check: %w", err)
+		}
+	}
+	return rewritten, nil
 }
 
 func errorBodySnippet(body []byte) string {

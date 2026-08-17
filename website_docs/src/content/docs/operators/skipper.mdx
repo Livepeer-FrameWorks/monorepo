@@ -167,17 +167,19 @@ provider pricing or local inference costs before committing to a support-tier ma
 
 **Knowledge base:**
 
-| Variable                       | Purpose                                             | Default |
-| ------------------------------ | --------------------------------------------------- | ------- |
-| `SITEMAPS`                     | Comma-separated sitemap URLs                        | —       |
-| `SKIPPER_SITEMAPS_DIR`         | Directory of source files (re-read each cycle)      | —       |
-| `CRAWL_INTERVAL`               | Refresh interval                                    | `24h`   |
-| `CHUNK_TOKEN_LIMIT`            | Max BPE tokens per chunk                            | `500`   |
-| `CHUNK_TOKEN_OVERLAP`          | Overlap tokens between adjacent chunks              | `50`    |
-| `SKIPPER_ENABLE_RENDERING`     | Enable headless Chrome for JS-rendered pages        | `false` |
-| `SKIPPER_CONTEXTUAL_RETRIEVAL` | Use utility LLM to prepend context before embedding | `false` |
-| `SKIPPER_LINK_DISCOVERY`       | Discover and crawl same-domain links                | `false` |
-| `SKIPPER_SEARCH_LIMIT`         | Default result limit for `search_knowledge`         | `8`     |
+| Variable                        | Purpose                                                              | Default |
+| ------------------------------- | -------------------------------------------------------------------- | ------- |
+| `SITEMAPS`                      | Comma-separated sitemap URLs                                         | —       |
+| `SKIPPER_SITEMAPS_DIR`          | Directory of source files (re-read each cycle)                       | —       |
+| `CRAWL_INTERVAL`                | Refresh interval                                                     | `24h`   |
+| `CHUNK_TOKEN_LIMIT`             | Max BPE tokens per chunk                                             | `500`   |
+| `CHUNK_TOKEN_OVERLAP`           | Overlap tokens between adjacent chunks                               | `50`    |
+| `SKIPPER_ENABLE_RENDERING`      | Enable headless Chrome for JS-rendered pages                         | `false` |
+| `SKIPPER_CONTEXTUAL_RETRIEVAL`  | Use utility LLM to prepend context before embedding                  | `false` |
+| `SKIPPER_LINK_DISCOVERY`        | Discover and crawl same-domain links                                 | `false` |
+| `SKIPPER_SEARCH_LIMIT`          | Default result limit for `search_knowledge`                          | `8`     |
+| `SKIPPER_SSRF_ALLOWED_HOSTS`    | Comma-separated private hosts that the crawler may contact           | —       |
+| `SKIPPER_CRAWL_ORIGIN_REWRITES` | JSON map of public origins to internal network origins for crawl I/O | —       |
 
 **Service:**
 

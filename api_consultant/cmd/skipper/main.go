@@ -661,6 +661,7 @@ func main() {
 				knowledge.WithPageCache(pageCacheStore),
 				knowledge.WithLogger(logger),
 				knowledge.WithLinkDiscovery(cfg.LinkDiscovery),
+				knowledge.WithOriginRewrites(cfg.CrawlOriginRewrites),
 			}
 			if cfg.EnableRendering {
 				renderer, renderErr := knowledge.NewRodRenderer()
