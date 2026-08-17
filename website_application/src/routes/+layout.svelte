@@ -7,6 +7,7 @@
   import { page } from "$app/stores";
   import { base, resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
+  import { createTrailingRevalidator } from "$lib/auth/revalidation";
   import { loadStreamingConfig } from "$lib/stores/streaming-config.svelte";
   import { sidebarStore } from "$lib/stores/sidebar.svelte";
   import { getMarketingSiteUrl } from "$lib/config";
@@ -136,9 +137,12 @@
       await auth.checkAuth();
       loadStreamingConfig();
     })();
+    const revalidator = createTrailingRevalidator(() => {
+      void auth.checkAuth(true);
+    });
     const revalidateAuth = () => {
       if (document.visibilityState === "visible") {
-        void auth.checkAuth(true);
+        revalidator.schedule();
       }
     };
     window.addEventListener("focus", revalidateAuth);
@@ -147,6 +151,7 @@
     return () => {
       window.removeEventListener("focus", revalidateAuth);
       document.removeEventListener("visibilitychange", revalidateAuth);
+      revalidator.cancel();
     };
   });
 
