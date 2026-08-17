@@ -1,4 +1,7 @@
-.PHONY: proto clean install-tools
+.PHONY: proto proto-check clean install-tools
+
+BUF_VERSION := v1.72.0
+BUF := go run github.com/bufbuild/buf/cmd/buf@$(BUF_VERSION)
 
 # Proto generation for all services
 # - common.proto: Shared types (cursor pagination, time ranges)
@@ -20,23 +23,20 @@
 # - skipper.proto: AI consultant chat service
 # - foghorn_federation.proto: Cross-cluster federation (Foghorn ↔ Foghorn)
 # - foghorn_relay.proto: Intra-cluster HA command relay (Foghorn ↔ Foghorn)
-# The generator stamps its own version into every file's header, so generating
-# with anything other than the pinned plugin rewrites all 19 outputs and fails
-# CI's pinned-regeneration diff check. A system-installed protoc-gen-go
-# (homebrew, distro) usually shadows the pinned one on PATH, so put the Go bin
-# directory first rather than trusting whatever PATH resolves to.
-GOBIN_DIR := $(shell go env GOBIN)
-ifeq ($(GOBIN_DIR),)
-GOBIN_DIR := $(shell go env GOPATH)/bin
-endif
+# Buf owns compilation and invokes versioned Go plugins from buf.gen.yaml.
+# Local protoc and protoc-gen-* binaries are intentionally ignored so macOS
+# and Linux generate byte-identical committed output.
+proto: clean
+	$(BUF) build
+	$(BUF) generate
 
-proto: clean install-tools
-	PATH="$(GOBIN_DIR):$$PATH" protoc -I. \
-		--go_out=. \
-		--go_opt=module=github.com/Livepeer-FrameWorks/monorepo/pkg/proto \
-		--go-grpc_out=. \
-		--go-grpc_opt=module=github.com/Livepeer-FrameWorks/monorepo/pkg/proto \
-		common.proto shared.proto cluster_peer.proto tenant_limits.proto metering_contract.proto x402.proto ipc.proto dns.proto commodore.proto quartermaster.proto purser.proto periscope.proto signalman.proto foghorn_control.proto foghorn.proto foghorn_federation.proto foghorn_relay.proto deckhand.proto skipper.proto
+proto-check: proto
+	@git diff --exit-code -- .
+	@test -z "$$(git ls-files --others --exclude-standard .)" || { \
+		echo "ERROR: protobuf generation produced untracked files:"; \
+		git ls-files --others --exclude-standard .; \
+		exit 1; \
+	}
 
 # Clean generated files. Removes the old flat-package output at the root AND the
 # per-package subdirectory output, so a stale flat *.pb.go can never linger.
@@ -44,7 +44,7 @@ clean:
 	rm -f *.pb.go *_grpc.pb.go
 	rm -f common/*.pb.go shared/*.pb.go cluster_peer/*.pb.go tenant_limits/*.pb.go metering_contract/*.pb.go x402/*.pb.go ipc/*.pb.go dns/*.pb.go commodore/*.pb.go quartermaster/*.pb.go purser/*.pb.go periscope/*.pb.go signalman/*.pb.go foghorn_control/*.pb.go foghorn/*.pb.go foghorn_federation/*.pb.go foghorn_relay/*.pb.go deckhand/*.pb.go skipper/*.pb.go
 
-# Install required tools
+# Warm the pinned Buf binary in the Go build cache. Kept as part of the root
+# install-tools workflow for developers who want to prefetch all tooling.
 install-tools:
-	go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
-	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+	$(BUF) --version
