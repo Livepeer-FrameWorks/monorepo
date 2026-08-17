@@ -296,8 +296,8 @@ func TestResolveArtifact_TransientErrorsNotCached(t *testing.T) {
 		NegativeTTL: time.Minute,
 	})
 	for range 3 {
-		if _, err := r.ResolveArtifact(context.Background(), "hash-1", "clip"); !errors.Is(err, ErrUnknown) {
-			t.Fatalf("expected ErrUnknown, got %v", err)
+		if _, err := r.ResolveArtifact(context.Background(), "hash-1", "clip"); !errors.Is(err, ErrUnknown) || !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("expected ErrUnknown with ErrUnavailable, got %v", err)
 		}
 	}
 	if registryCalls != 3 || commodoreCalls != 3 {
@@ -320,8 +320,8 @@ func TestResolveArtifact_MixedAuthoritativeAndTransientNotCached(t *testing.T) {
 		NegativeTTL: time.Minute,
 	})
 	for range 3 {
-		if _, err := r.ResolveArtifact(context.Background(), "hash-1", "clip"); !errors.Is(err, ErrUnknown) {
-			t.Fatalf("expected ErrUnknown, got %v", err)
+		if _, err := r.ResolveArtifact(context.Background(), "hash-1", "clip"); !errors.Is(err, ErrUnknown) || !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("expected ErrUnknown with ErrUnavailable, got %v", err)
 		}
 	}
 	if commodoreCalls != 3 {

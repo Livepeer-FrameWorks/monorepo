@@ -141,6 +141,46 @@ func TestFreezePermission_OldProtocolDenied(t *testing.T) {
 	}
 }
 
+func TestFreezePermission_UnknownAssetHasStructuredReason(t *testing.T) {
+	routing := tenantStorageRouting{officialCluster: "official-a", peers: storagePeerSet("official-a")}
+	h := setupFreezePermTest(t, "tenant-a", "byoc-a", "tenant-a", "byoc-a", "official-a", routing)
+	identity.SetDefault(identity.NewResolver(identity.Config{
+		RegistryArtifact: func(context.Context, string) (identity.ArtifactIdentity, error) {
+			return identity.ArtifactIdentity{}, identity.ErrNotFound
+		},
+	}))
+
+	h.run()
+
+	resp := h.lastResponse(t)
+	if resp.GetApproved() || resp.GetReason() != "asset_not_found" {
+		t.Fatalf("response=%+v, want denied asset_not_found", resp)
+	}
+	if err := h.mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFreezePermission_IdentityOutageFailsClosed(t *testing.T) {
+	routing := tenantStorageRouting{officialCluster: "official-a", peers: storagePeerSet("official-a")}
+	h := setupFreezePermTest(t, "tenant-a", "byoc-a", "tenant-a", "byoc-a", "official-a", routing)
+	identity.SetDefault(identity.NewResolver(identity.Config{
+		RegistryArtifact: func(context.Context, string) (identity.ArtifactIdentity, error) {
+			return identity.ArtifactIdentity{}, errors.New("registry unavailable")
+		},
+	}))
+
+	h.run()
+
+	resp := h.lastResponse(t)
+	if resp.GetApproved() || resp.GetReason() != "identity_unavailable" {
+		t.Fatalf("response=%+v, want denied identity_unavailable", resp)
+	}
+	if err := h.mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // The AUTHORITATIVE final owning send validates the CURRENT session's protocol: a proactive/relayed freeze
 // to a locally-connected sidecar that (re)connected with a pre-staged-freeze protocol is refused with a
 // non-relayable error, so an old sidecar can never receive a staged freeze even when the reconciler's

@@ -68,9 +68,6 @@ func main() {
 	}
 	handlers.Init(logger, handlerMetrics, cfg.NodeID)
 
-	// Initialize Prometheus monitoring
-	handlers.InitPrometheusMonitor(logger)
-
 	// Initialize storage management
 	if cfg.StorageLocalPath != "" {
 		// Initialize cleanup monitor for storage management

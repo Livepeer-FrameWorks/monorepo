@@ -274,10 +274,10 @@ func TestGetArtifactSyncInfo(t *testing.T) {
 	t.Run("found with cached node", func(t *testing.T) {
 		_, mock := setupRepoTest(t)
 		repo := &artifactRepositoryDB{}
-		mock.ExpectQuery(`SELECT artifact_hash, artifact_type, COALESCE\(sync_status,'pending'\).*FROM foghorn.artifacts\s+WHERE artifact_hash = \$1`).
+		mock.ExpectQuery(`SELECT artifact_hash, artifact_type, COALESCE\(status,'requested'\), COALESCE\(sync_status,'pending'\).*FROM foghorn.artifacts\s+WHERE artifact_hash = \$1`).
 			WithArgs("art-1").
-			WillReturnRows(sqlmock.NewRows([]string{"hash", "type", "sync_status", "s3_url", "last_attempt", "sync_error"}).
-				AddRow("art-1", "clip", "synced", "s3://b/art-1", time.Unix(1700000000, 0), nil))
+			WillReturnRows(sqlmock.NewRows([]string{"hash", "type", "status", "sync_status", "s3_url", "last_attempt", "sync_error"}).
+				AddRow("art-1", "clip", "ready", "synced", "s3://b/art-1", time.Unix(1700000000, 0), nil))
 		mock.ExpectQuery(`SELECT node_id, cached_at FROM foghorn.artifact_nodes\s+WHERE artifact_hash = \$1 AND is_orphaned = false`).
 			WithArgs("art-1").
 			WillReturnRows(sqlmock.NewRows([]string{"node_id", "cached_at"}).

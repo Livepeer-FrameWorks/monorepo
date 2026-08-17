@@ -631,6 +631,13 @@ func (sm *StorageManager) evictClipVodCandidates(candidates []FreezeCandidate, b
 		}
 
 		if !safeToDelete {
+			if reason == "not_found" {
+				res.uncatalogedCount++
+				if len(res.uncatalogedSamples) < cap(res.uncatalogedSamples) {
+					res.uncatalogedSamples = append(res.uncatalogedSamples, candidate.AssetHash)
+				}
+				continue
+			}
 			// Not durable on S3 yet: upload it (freeze) so a later pass can
 			// evict it. This retains the local file and frees no disk, so it
 			// must NOT count toward bytesToFree.

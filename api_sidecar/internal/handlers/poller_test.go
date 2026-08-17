@@ -132,6 +132,37 @@ func TestAddPrometheusNode_BindsInlineRequestAndFallsBackEdgeURL(t *testing.T) {
 	}
 }
 
+func TestInitPrometheusMonitorIsIdempotent(t *testing.T) {
+	oldMonitor := prometheusMonitor
+	oldLogger := monitorLogger
+	t.Cleanup(func() {
+		prometheusMonitor = oldMonitor
+		monitorLogger = oldLogger
+	})
+
+	existing := &PrometheusMonitor{
+		artifactIndex: map[string]*ClipInfo{
+			"trusted-hash": {FilePath: "/storage/trusted-hash.mp4"},
+		},
+		artifactIndexTrusted: true,
+		artifactScanHealthy:  true,
+		lastScanGen:          42,
+	}
+	prometheusMonitor = existing
+
+	InitPrometheusMonitor(logging.NewLogger())
+
+	if prometheusMonitor != existing {
+		t.Fatal("repeated initialization replaced the live monitor")
+	}
+	if !prometheusMonitor.artifactIndexTrusted || !prometheusMonitor.artifactScanHealthy {
+		t.Fatal("repeated initialization cleared artifact trust")
+	}
+	if prometheusMonitor.lastScanGen != 42 || prometheusMonitor.artifactIndex["trusted-hash"] == nil {
+		t.Fatalf("repeated initialization changed scan state: %#v", prometheusMonitor)
+	}
+}
+
 func TestAddPrometheusNode_UsesProvidedEdgePublicURL(t *testing.T) {
 	oldMonitor := prometheusMonitor
 	oldLogger := monitorLogger

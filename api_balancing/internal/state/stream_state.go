@@ -4072,6 +4072,7 @@ type ArtifactRecord struct {
 type ArtifactSyncInfo struct {
 	ArtifactHash    string
 	ArtifactType    string
+	LifecycleStatus string   // ready, deleted, expired, aborted, etc.
 	SyncStatus      string   // pending, in_progress, synced, failed
 	S3URL           string   // S3 location when synced
 	CachedNodes     []string // Node IDs with local copies

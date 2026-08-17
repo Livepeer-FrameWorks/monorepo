@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -567,6 +568,40 @@ func TestEvictClipVodCandidates_FreezingUnsyncedDoesNotCount(t *testing.T) {
 	}
 	if _, err := os.Stat(clipPath); err != nil {
 		t.Fatalf("freezing must RETAIN the local file, stat err: %v", err)
+	}
+}
+
+func TestEvictClipVodCandidates_UncataloguedSkipsFreeze(t *testing.T) {
+	sm := newTestStorageManager(t)
+	sm.requestCanDelete = func(_ context.Context, _ string) (bool, string, int64, error) {
+		return false, "not_found", 0, nil
+	}
+	freezeCalls := 0
+	sm.requestFreezePermission = func(_ context.Context, _, _ string, _ uint64) (*ipcpb.FreezePermissionResponse, error) {
+		freezeCalls++
+		return nil, errors.New("freeze must not be called for an uncatalogued file")
+	}
+
+	clipPath := filepath.Join(sm.basePath, "unrelated.mp4")
+	payload := []byte("unrelated recording")
+	if err := os.WriteFile(clipPath, payload, 0644); err != nil {
+		t.Fatal(err)
+	}
+	cand := FreezeCandidate{AssetType: AssetTypeClip, AssetHash: "unknown-hash", FilePath: clipPath, SizeBytes: uint64(len(payload))}
+
+	res := sm.evictClipVodCandidates([]FreezeCandidate{cand}, uint64(len(payload)))
+
+	if freezeCalls != 0 {
+		t.Fatalf("freeze calls = %d, want 0", freezeCalls)
+	}
+	if res.uncatalogedCount != 1 || len(res.uncatalogedSamples) != 1 || res.uncatalogedSamples[0] != "unknown-hash" {
+		t.Fatalf("uncatalogued result = %#v", res)
+	}
+	if res.freedBytes != 0 || res.syncTriggered != 0 || res.deletedCount != 0 {
+		t.Fatalf("uncatalogued file changed reclaim accounting: %#v", res)
+	}
+	if _, err := os.Stat(clipPath); err != nil {
+		t.Fatalf("uncatalogued file must remain on disk: %v", err)
 	}
 }
 

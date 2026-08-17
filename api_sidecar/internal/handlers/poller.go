@@ -127,6 +127,7 @@ type PrometheusMonitor struct {
 
 var prometheusMonitor *PrometheusMonitor
 var monitorLogger logging.Logger
+var monitorInitMu sync.Mutex
 var fileStabilityThreshold = 10 * time.Second
 
 // Artifact-report ordering. forwardNodeMetrics runs on concurrent goroutines, so the whole-node
@@ -294,7 +295,13 @@ func firstNonEmptyString(values ...string) string {
 
 // InitPrometheusMonitor initializes the Prometheus monitoring system with logger
 func InitPrometheusMonitor(logger logging.Logger) {
+	monitorInitMu.Lock()
+	defer monitorInitMu.Unlock()
+
 	monitorLogger = logger
+	if prometheusMonitor != nil {
+		return
+	}
 
 	mistAPIPassword := os.Getenv("MIST_API_PASSWORD")
 	mistUsername := os.Getenv("MIST_API_USERNAME")

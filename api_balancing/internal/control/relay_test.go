@@ -267,6 +267,32 @@ func TestProcessCanDelete_RejectsSyncedMetadataWhenDurableObjectMissing(t *testi
 	}
 }
 
+func TestProcessCanDelete_AllowsTerminalCatalogArtifact(t *testing.T) {
+	prevRepo := artifactRepo
+	prevS3 := s3Client
+	artifactRepo = &mockArtifactRepo{
+		getArtifactSyncInfoFn: func(_ context.Context, hash string) (*state.ArtifactSyncInfo, error) {
+			return &state.ArtifactSyncInfo{
+				ArtifactHash:    hash,
+				LifecycleStatus: "deleted",
+				SyncStatus:      "pending",
+			}, nil
+		},
+	}
+	s3Client = nil
+	t.Cleanup(func() {
+		artifactRepo = prevRepo
+		s3Client = prevS3
+	})
+
+	stream := &fakeControlStream{}
+	processCanDeleteRequest(&ipcpb.CanDeleteRequest{AssetHash: "deleted-hash", NodeId: "node-1"}, "node-1", stream, logging.NewLogger())
+	resp := stream.sent[0].GetCanDeleteResponse()
+	if resp == nil || !resp.GetSafeToDelete() || resp.GetReason() != "catalog_terminal" {
+		t.Fatalf("response=%+v, want safe catalog_terminal", resp)
+	}
+}
+
 // --- forward() ---
 
 func TestForward_NoOwner(t *testing.T) {

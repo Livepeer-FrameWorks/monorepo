@@ -936,11 +936,11 @@ func (r *artifactRepositoryDB) GetArtifactSyncInfo(ctx context.Context, artifact
 
 	// Query from artifacts table for sync info
 	err := db.QueryRowContext(ctx, `
-		SELECT artifact_hash, artifact_type, COALESCE(sync_status,'pending'),
+		SELECT artifact_hash, artifact_type, COALESCE(status,'requested'), COALESCE(sync_status,'pending'),
 		       s3_url, last_sync_attempt, sync_error
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1
-	`, artifactHash).Scan(&info.ArtifactHash, &info.ArtifactType, &info.SyncStatus,
+	`, artifactHash).Scan(&info.ArtifactHash, &info.ArtifactType, &info.LifecycleStatus, &info.SyncStatus,
 		&s3URL, &lastSyncAttempt, &syncError)
 
 	if errors.Is(err, sql.ErrNoRows) {

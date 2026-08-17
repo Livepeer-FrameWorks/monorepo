@@ -5560,6 +5560,7 @@ func processFreezePermissionRequest(req *ipcpb.FreezePermissionRequest, nodeID s
 	// authorization, not collision avoidance: artifact_hash is a randomly-minted, globally-unique id).
 	// origin_cluster_id is used only for storage-cluster attribution (scAttr), not destination selection.
 	var tenantID, commodoreOrigin, commodoreStream string
+	var identityErr error
 	if resolver := identity.Default(); resolver != nil {
 		resolveCtx, resolveCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer resolveCancel()
@@ -5567,7 +5568,11 @@ func processFreezePermissionRequest(req *ipcpb.FreezePermissionRequest, nodeID s
 			tenantID = id.TenantID
 			commodoreStream = id.StreamInternalName
 			commodoreOrigin = id.OriginClusterID
+		} else {
+			identityErr = resolveErr
 		}
+	} else {
+		identityErr = errors.New("identity resolver not configured")
 	}
 
 	// TENANT-SCOPED metadata lookup (stream/origin/sync_status/format). The catalog format is the
@@ -5623,10 +5628,22 @@ func processFreezePermissionRequest(req *ipcpb.FreezePermissionRequest, nodeID s
 	// Fail closed on a DB error, no qualifying copy, or an unauthorized cluster/tenant. (Completion later
 	// re-checks request/node/state and consumes the persisted server-derived descriptor.)
 	if tenantID == "" {
-		logger.WithFields(logging.Fields{"asset_hash": assetHash, "asset_type": assetType}).
-			Error("Could not resolve tenant for asset")
+		reason := "identity_invalid"
+		if errors.Is(identityErr, identity.ErrUnavailable) {
+			reason = "identity_unavailable"
+		} else if errors.Is(identityErr, identity.ErrUnknown) || errors.Is(identityErr, identity.ErrNotFound) {
+			reason = "asset_not_found"
+		} else if identityErr != nil {
+			reason = "identity_unavailable"
+		}
+		entry := logger.WithFields(logging.Fields{"asset_hash": assetHash, "asset_type": assetType, "reason": reason})
+		if reason == "asset_not_found" {
+			entry.Debug("Freeze skipped for uncatalogued asset")
+		} else {
+			entry.WithError(identityErr).Warn("Could not resolve tenant for freeze request")
+		}
 		sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
-			RequestId: requestID, AssetHash: assetHash, Approved: false, Reason: "tenant_not_found",
+			RequestId: requestID, AssetHash: assetHash, Approved: false, Reason: reason,
 		}, logger)
 		return
 	}
@@ -7245,7 +7262,15 @@ func processCanDeleteRequest(req *ipcpb.CanDeleteRequest, nodeID string, stream 
 		return
 	}
 
-	if durable, reason := verifyDurableArtifactCopy(ctx, info, logger); durable {
+	terminal := info != nil && (info.LifecycleStatus == "deleted" || info.LifecycleStatus == "expired" || info.LifecycleStatus == "aborted")
+	if terminal {
+		response.SafeToDelete = true
+		response.Reason = "catalog_terminal"
+		logger.WithFields(logging.Fields{
+			"asset_hash": assetHash,
+			"status":     info.LifecycleStatus,
+		}).Info("Terminal catalog artifact is safe to remove locally")
+	} else if durable, reason := verifyDurableArtifactCopy(ctx, info, logger); durable {
 		response.SafeToDelete = true
 		response.Reason = reason
 

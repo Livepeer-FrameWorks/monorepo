@@ -1006,7 +1006,7 @@ ON CONFLICT (vod_hash) DO UPDATE SET
 
 INSERT INTO foghorn.artifacts (
     artifact_hash, artifact_type, stream_internal_name, internal_name, tenant_id,
-    status, size_bytes, manifest_path, format,
+    origin_cluster_id, status, size_bytes, manifest_path, format,
     storage_location, sync_status, retention_until, library_visible,
     created_at, updated_at
 ) VALUES
@@ -1017,6 +1017,7 @@ INSERT INTO foghorn.artifacts (
     'demo_live_stream_001',
     'clip_int_001',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant (denormalized for fallback)
+    'demo-media',
     'ready',
     107553,         -- Browser-safe H.264/AAC fixture
     '/var/lib/mistserver/recordings/clips/demo_live_stream_001/a1b2c3d4e5f6789012345678901234ab.mp4',
@@ -1035,6 +1036,7 @@ INSERT INTO foghorn.artifacts (
     'demo_live_stream_001',
     'clip_int_002',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
+    'demo-media',
     'deleted',
     140795,
     '/var/lib/mistserver/recordings/clips/demo_live_stream_001/20240101120100b2c3d4e5f6789012.mp4',
@@ -1053,6 +1055,7 @@ INSERT INTO foghorn.artifacts (
     'demo_live_stream_001',
     'dvr_int_001',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
+    'demo-media',
     'completed',
     513176,         -- Actual total size: ~501KB (2 segments + manifest)
     '/var/lib/mistserver/recordings/dvr/5eedfeed-11fe-ca57-feed-11feca570001/fedcba98765432109876543210fedcba',
@@ -1071,6 +1074,7 @@ INSERT INTO foghorn.artifacts (
     'demo_live_stream_001',
     'dvr_int_002',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
+    'demo-media',
     'deleted',
     1024000,
     '/var/lib/mistserver/recordings/dvr/5eedfeed-11fe-ca57-feed-11feca570001/20240101120300fedcba9876543211',
@@ -1089,6 +1093,7 @@ INSERT INTO foghorn.artifacts (
     'demo_live_stream_001',
     '34d74b7acd7ec8cf78f6cc8c9f031a8a',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    'demo-media',
     'ready',
     336471,
     NULL,
@@ -1107,6 +1112,7 @@ INSERT INTO foghorn.artifacts (
     NULL,                                     -- No stream association
     'vod_int_001',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
+    'demo-media',
     'ready',
     107553,         -- H264/AAC fixture compatible with HLS/MP4 playback
     NULL,            -- No manifest for VOD (direct file playback)
@@ -1125,6 +1131,7 @@ INSERT INTO foghorn.artifacts (
     NULL,
     'vod_int_002',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
+    'demo-media',
     'processing',
     104857600,       -- 100MB
     NULL,
@@ -1143,6 +1150,7 @@ INSERT INTO foghorn.artifacts (
     NULL,
     'vod_int_003',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
+    'demo-media',
     'failed',
     15728640,        -- 15MB
     NULL,
@@ -1155,6 +1163,7 @@ INSERT INTO foghorn.artifacts (
     NOW() - INTERVAL '2 days'
 )
 ON CONFLICT (artifact_hash) DO UPDATE SET
+    origin_cluster_id = EXCLUDED.origin_cluster_id,
     status = EXCLUDED.status,
     size_bytes = EXCLUDED.size_bytes,
     manifest_path = EXCLUDED.manifest_path,
@@ -1169,6 +1178,7 @@ SET artifact_type = 'vod',
     stream_internal_name = 'demo_live_stream_001',
     internal_name = '34d74b7acd7ec8cf78f6cc8c9f031a8a',
     tenant_id = '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    origin_cluster_id = 'demo-media',
     status = 'ready',
     size_bytes = 336471,
     manifest_path = NULL,

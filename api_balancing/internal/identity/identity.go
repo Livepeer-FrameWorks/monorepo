@@ -38,6 +38,12 @@ var ErrUnknown = errors.New("identity: unknown identifier")
 // flap can't become a 30s hard ErrUnknown for freeze/mint/thumbnails.
 var ErrNotFound = errors.New("identity: not found")
 
+// ErrUnavailable accompanies ErrUnknown when attribution failed because at
+// least one authority was unavailable. errors.Is(err, ErrUnknown) remains true
+// for existing fail-closed callers, while callers that expose a reason can
+// distinguish an outage from an authoritative miss.
+var ErrUnavailable = errors.New("identity: authority unavailable")
+
 // StreamIdentity is the platform identity of a live/pull/mist-native
 // source stream.
 type StreamIdentity struct {
@@ -275,6 +281,9 @@ func (r *Resolver) ResolveStream(ctx context.Context, internalName string) (Stre
 		if authoritative && !transient && ctx.Err() == nil {
 			r.negativeStore(negKey)
 		}
+		if transient {
+			return StreamIdentity{}, errors.Join(ErrUnknown, ErrUnavailable)
+		}
 		return StreamIdentity{}, ErrUnknown
 	}
 	return id, nil
@@ -406,6 +415,9 @@ func (r *Resolver) ResolveArtifact(ctx context.Context, artifactHash, kindHint s
 		// never a transient layer failure.
 		if authoritative && !transient && ctx.Err() == nil {
 			r.negativeStore(negKey)
+		}
+		if transient {
+			return ArtifactIdentity{}, errors.Join(ErrUnknown, ErrUnavailable)
 		}
 		return ArtifactIdentity{}, ErrUnknown
 	}
