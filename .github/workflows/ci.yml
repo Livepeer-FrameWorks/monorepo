@@ -23,7 +23,7 @@ jobs:
       frontend: ${{ steps.filter.outputs.frontend }}
       registry: ${{ steps.filter.outputs.registry }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v4
         id: filter
         with:
@@ -61,8 +61,8 @@ jobs:
     if: needs.changes.outputs.go == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: .go-version
         env:
@@ -96,8 +96,8 @@ jobs:
     if: needs.changes.outputs.go == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: .go-version
         env:
@@ -125,7 +125,7 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         continue-on-error: true
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./test-results/go-junit.xml
@@ -149,7 +149,7 @@ jobs:
       - name: Upload to Codecov
         timeout-minutes: 5
         continue-on-error: true
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage/coverage.out
@@ -163,10 +163,10 @@ jobs:
     if: needs.changes.outputs.go == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: .go-version
         env:
@@ -215,7 +215,7 @@ jobs:
     if: needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-node-pnpm
       - run: pnpm lint
       - run: pnpm format:check
@@ -226,7 +226,7 @@ jobs:
     if: needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-node-pnpm
       - name: Generate SvelteKit types
         run: pnpm --filter frameworks-frontend exec svelte-kit sync
@@ -243,7 +243,7 @@ jobs:
       - name: Upload to Codecov
         timeout-minutes: 5
         continue-on-error: true
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./**/lcov.info
@@ -254,7 +254,7 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         continue-on-error: true
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./npm_player/packages/core/test-results/junit.xml,./npm_player/packages/react/test-results/junit.xml,./npm_player/packages/svelte/test-results/junit.xml,./npm_studio/packages/core/test-results/junit.xml,./npm_studio/packages/react/test-results/junit.xml,./npm_studio/packages/svelte/test-results/junit.xml,./website_application/test-results/junit.xml
@@ -267,7 +267,7 @@ jobs:
     if: needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-node-pnpm
       - name: Build with bundle analysis
         run: pnpm build
@@ -280,8 +280,8 @@ jobs:
     if: needs.changes.outputs.registry == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: .go-version
         env:
@@ -295,7 +295,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Send Codecov notifications
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           run_command: send-notifications
           token: ${{ secrets.CODECOV_TOKEN }}
