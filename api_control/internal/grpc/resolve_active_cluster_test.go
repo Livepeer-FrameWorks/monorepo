@@ -51,7 +51,7 @@ func TestResolvePlaybackID_ActiveIngestClusterOverridesOriginCluster(t *testing.
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
 			SELECT id, internal_name, tenant_id, requires_auth, ingest_mode, active_ingest_cluster_id
-			FROM commodore.streams WHERE playback_id = $1`)).
+			FROM commodore.streams WHERE lower(playback_id::text) = lower($1::text)`)).
 		WithArgs("pb-managed").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "internal_name", "tenant_id", "requires_auth", "ingest_mode", "active_ingest_cluster_id",
@@ -79,7 +79,7 @@ func TestResolvePlaybackID_NullActiveClusterFallsBackToRoute(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
 			SELECT id, internal_name, tenant_id, requires_auth, ingest_mode, active_ingest_cluster_id
-			FROM commodore.streams WHERE playback_id = $1`)).
+			FROM commodore.streams WHERE lower(playback_id::text) = lower($1::text)`)).
 		WithArgs("pb-push").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "internal_name", "tenant_id", "requires_auth", "ingest_mode", "active_ingest_cluster_id",

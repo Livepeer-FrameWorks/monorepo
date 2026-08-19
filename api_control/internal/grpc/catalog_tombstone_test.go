@@ -37,11 +37,11 @@ func TestResolveArtifactPlaybackID_AbsentReadsNotFound(t *testing.T) {
 	s, mock, done := newMockServer(t)
 	defer done()
 
-	mock.ExpectQuery(`FROM commodore.clips[\s\S]*WHERE playback_id = \$1`).
+	mock.ExpectQuery(`FROM commodore.clips[\s\S]*WHERE lower\(playback_id::text\) = lower\(\$1::text\)`).
 		WithArgs("pb-1").WillReturnError(sql.ErrNoRows)
-	mock.ExpectQuery(`FROM commodore.dvr_recordings d[\s\S]*WHERE d.playback_id = \$1`).
+	mock.ExpectQuery(`FROM commodore.dvr_recordings d[\s\S]*WHERE lower\(d.playback_id::text\) = lower\(\$1::text\)`).
 		WithArgs("pb-1").WillReturnError(sql.ErrNoRows)
-	mock.ExpectQuery(`FROM commodore.vod_assets[\s\S]*WHERE playback_id = \$1`).
+	mock.ExpectQuery(`FROM commodore.vod_assets[\s\S]*WHERE lower\(playback_id::text\) = lower\(\$1::text\)`).
 		WithArgs("pb-1").WillReturnError(sql.ErrNoRows)
 
 	resp, err := s.ResolveArtifactPlaybackID(context.Background(), &commodorepb.ResolveArtifactPlaybackIDRequest{PlaybackId: "pb-1"})

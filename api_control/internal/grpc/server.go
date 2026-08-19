@@ -1289,7 +1289,7 @@ func (s *CommodoreServer) resolveFoghornForContent(ctx context.Context, contentI
 	// deleted_at IS NULL: a soft-deleted (two-phase deletion-pending) stream must not resolve for serving.
 	err := s.db.QueryRowContext(ctx, `
 		SELECT tenant_id, active_ingest_cluster_id
-		FROM commodore.streams WHERE playback_id = $1 AND deleted_at IS NULL
+		FROM commodore.streams WHERE lower(playback_id::text) = lower($1::text) AND deleted_at IS NULL
 	`, contentID).Scan(&tenantID, &activeClusterID)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1409,20 +1409,20 @@ func (s *CommodoreServer) resolveArtifactRouteForContent(ctx context.Context, co
 			SELECT tenant_id,
 			       COALESCE(NULLIF(storage_cluster_id, ''), NULLIF(origin_cluster_id, '')) AS cluster_id
 			  FROM commodore.clips
-			 WHERE (playback_id = $1 OR clip_hash = $1)			UNION ALL
+			 WHERE (lower(playback_id::text) = lower($1::text) OR clip_hash = $1)			UNION ALL
 			SELECT tenant_id,
 			       COALESCE(NULLIF(storage_cluster_id, ''), NULLIF(origin_cluster_id, '')) AS cluster_id
 			  FROM commodore.vod_assets
-			 WHERE (playback_id = $1 OR vod_hash = $1)			UNION ALL
+			 WHERE (lower(playback_id::text) = lower($1::text) OR vod_hash = $1)			UNION ALL
 			SELECT tenant_id,
 			       COALESCE(NULLIF(storage_cluster_id, ''), NULLIF(origin_cluster_id, '')) AS cluster_id
 			  FROM commodore.dvr_recordings
-			 WHERE (playback_id = $1 OR dvr_hash = $1)			UNION ALL
+			 WHERE (lower(playback_id::text) = lower($1::text) OR dvr_hash = $1)			UNION ALL
 			SELECT cp.tenant_id,
 			       COALESCE(NULLIF(va.storage_cluster_id, ''), NULLIF(va.origin_cluster_id, '')) AS cluster_id
 			  FROM commodore.dvr_chapter_playback cp
 			  JOIN commodore.vod_assets va ON va.tenant_id = cp.tenant_id AND va.vod_hash = cp.artifact_hash
-			 WHERE cp.playback_id = $1		  ) resolved
+			 WHERE lower(cp.playback_id::text) = lower($1::text)		  ) resolved
 		 LIMIT 1
 	`, contentID).Scan(&tenantID, &clusterID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1903,7 +1903,7 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodo
 		query = baseSelect + "s.id = $1"
 	case *commodorepb.ResolveStreamContextRequest_PlaybackId:
 		field, arg = "playback_id", id.PlaybackId
-		query = baseSelect + "s.playback_id = $1"
+		query = baseSelect + "lower(s.playback_id::text) = lower($1::text)"
 	case *commodorepb.ResolveStreamContextRequest_InternalName:
 		field, arg = "internal_name", id.InternalName
 		query = baseSelect + "s.internal_name = $1"
@@ -2630,7 +2630,7 @@ func (s *CommodoreServer) ResolvePlaybackID(ctx context.Context, req *commodorep
 	err := s.retryPostgres(ctx, func() error {
 		return s.db.QueryRowContext(ctx, `
 			SELECT id, internal_name, tenant_id, requires_auth, ingest_mode, active_ingest_cluster_id
-			FROM commodore.streams WHERE playback_id = $1 AND deleted_at IS NULL
+			FROM commodore.streams WHERE lower(playback_id::text) = lower($1::text) AND deleted_at IS NULL
 		`, playbackID).Scan(&streamID, &internalName, &tenantID, &requiresAuth, &ingestMode, &activeIngestClusterID)
 	})
 
@@ -3848,7 +3848,7 @@ func (s *CommodoreServer) ResolveChapterPlaybackID(ctx context.Context, req *com
 			  FROM commodore.dvr_chapter_playback cp
 			  JOIN commodore.vod_assets v
 			    ON v.tenant_id = cp.tenant_id AND v.vod_hash = cp.artifact_hash
-			 WHERE cp.playback_id = $1
+			 WHERE lower(cp.playback_id::text) = lower($1::text)
 		`, playbackID).Scan(&chapterID, &tenantID, &artifactHash)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -3887,7 +3887,7 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *co
 		return s.db.QueryRowContext(ctx, `
 			SELECT clip_hash, internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id, requires_auth
 			FROM commodore.clips
-			WHERE playback_id = $1		`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &requiresAuth)
+			WHERE lower(playback_id::text) = lower($1::text)		`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &requiresAuth)
 	})
 	if err == nil {
 		resp := &commodorepb.ResolveArtifactPlaybackIDResponse{
@@ -3925,7 +3925,7 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *co
 			       d.origin_cluster_id, s.requires_auth
 			FROM commodore.dvr_recordings d
 			LEFT JOIN commodore.streams s ON s.id = d.stream_id
-			WHERE d.playback_id = $1		`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &dvrSourceRequiresAuth)
+			WHERE lower(d.playback_id::text) = lower($1::text)		`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &dvrSourceRequiresAuth)
 	})
 	if err == nil {
 		// Missing source stream → treat as protected so a deleted-stream race
@@ -3961,7 +3961,7 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *co
 		return s.db.QueryRowContext(ctx, `
 			SELECT vod_hash, internal_name, tenant_id, user_id, origin_cluster_id, requires_auth
 			FROM commodore.vod_assets
-			WHERE playback_id = $1		`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &originClusterID, &requiresAuth)
+			WHERE lower(playback_id::text) = lower($1::text)		`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &originClusterID, &requiresAuth)
 	})
 	if err == nil {
 		resp := &commodorepb.ResolveArtifactPlaybackIDResponse{
@@ -4206,7 +4206,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *comm
 	var internalName string
 	err = s.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, user_id, internal_name, is_recording_enabled, requires_auth
-		FROM commodore.streams WHERE playback_id = $1 AND deleted_at IS NULL
+		FROM commodore.streams WHERE lower(playback_id::text) = lower($1::text) AND deleted_at IS NULL
 	`, identifier).Scan(&streamID, &tenantID, &userID, &internalName, &isRecordingEnabled, &requiresAuth)
 	if err == nil {
 		return &commodorepb.ResolveIdentifierResponse{
@@ -4230,7 +4230,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *comm
 		SELECT c.tenant_id, c.user_id, s.internal_name, c.stream_id, c.requires_auth
 		FROM commodore.clips c
 		LEFT JOIN commodore.streams s ON c.stream_id = s.id
-		WHERE c.playback_id = $1	`, identifier).Scan(&tenantID, &userID, &parentInternalName, &streamID, &clipRequiresAuth)
+		WHERE lower(c.playback_id::text) = lower($1::text)	`, identifier).Scan(&tenantID, &userID, &parentInternalName, &streamID, &clipRequiresAuth)
 	if err == nil {
 		return &commodorepb.ResolveIdentifierResponse{
 			Found:          true,
@@ -4251,7 +4251,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *comm
 		SELECT d.tenant_id, d.user_id, d.internal_name, d.stream_id, s.requires_auth
 		FROM commodore.dvr_recordings d
 		LEFT JOIN commodore.streams s ON s.id = d.stream_id
-		WHERE d.playback_id = $1	`, identifier).Scan(&tenantID, &userID, &internalName, &streamID, &dvrRequiresAuth)
+		WHERE lower(d.playback_id::text) = lower($1::text)	`, identifier).Scan(&tenantID, &userID, &internalName, &streamID, &dvrRequiresAuth)
 	if err == nil {
 		return &commodorepb.ResolveIdentifierResponse{
 			Found:          true,
@@ -4270,7 +4270,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *comm
 	err = s.db.QueryRowContext(ctx, `
 		SELECT tenant_id, user_id, requires_auth
 		FROM commodore.vod_assets
-		WHERE playback_id = $1	`, identifier).Scan(&tenantID, &userID, &requiresAuth)
+		WHERE lower(playback_id::text) = lower($1::text)	`, identifier).Scan(&tenantID, &userID, &requiresAuth)
 	if err == nil {
 		return &commodorepb.ResolveIdentifierResponse{
 			Found:          true,
@@ -8876,13 +8876,13 @@ func (s *CommodoreServer) identifierExists(ctx context.Context, identifier strin
 	var exists bool
 	err := s.db.QueryRowContext(ctx, `
 		SELECT EXISTS(
-			SELECT 1 FROM commodore.streams WHERE internal_name = $1 OR playback_id = $1
+			SELECT 1 FROM commodore.streams WHERE internal_name = $1 OR lower(playback_id::text) = lower($1::text)
 			UNION ALL
-			SELECT 1 FROM commodore.clips WHERE internal_name = $1 OR playback_id = $1 OR clip_hash = $1
+			SELECT 1 FROM commodore.clips WHERE internal_name = $1 OR lower(playback_id::text) = lower($1::text) OR clip_hash = $1
 			UNION ALL
-			SELECT 1 FROM commodore.dvr_recordings WHERE internal_name = $1 OR playback_id = $1 OR dvr_hash = $1
+			SELECT 1 FROM commodore.dvr_recordings WHERE internal_name = $1 OR lower(playback_id::text) = lower($1::text) OR dvr_hash = $1
 			UNION ALL
-			SELECT 1 FROM commodore.vod_assets WHERE internal_name = $1 OR playback_id = $1 OR vod_hash = $1
+			SELECT 1 FROM commodore.vod_assets WHERE internal_name = $1 OR lower(playback_id::text) = lower($1::text) OR vod_hash = $1
 		)
 	`, identifier).Scan(&exists)
 	if err != nil {

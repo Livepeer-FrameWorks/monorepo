@@ -518,7 +518,7 @@ func TestResolvePlaybackPolicyPublicReadOmitsWebhookSecret(t *testing.T) {
 	defer db.Close()
 
 	policyJSON := []byte(`{"type":"webhook","webhook":{"url":"https://customer.example/access","timeout_ms":5000}}`)
-	mock.ExpectQuery("FROM commodore.streams WHERE playback_id =").
+	mock.ExpectQuery("FROM commodore.streams WHERE lower\\(playback_id::text\\) = lower\\(\\$1::text\\)").
 		WithArgs("playback-1").
 		WillReturnRows(sqlmock.NewRows([]string{"playback_policy", "playback_webhook_secret_enc", "tenant_id"}).
 			AddRow(policyJSON, "ciphertext", "tenant-1"))

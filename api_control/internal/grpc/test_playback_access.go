@@ -108,10 +108,10 @@ func (s *CommodoreServer) TestPlaybackAccess(ctx context.Context, req *foghornco
 func (s *CommodoreServer) lookupInternalNameByPlaybackID(ctx context.Context, playbackID, tenantID string) (string, error) {
 	var internalName string
 	for _, q := range []string{
-		`SELECT internal_name FROM commodore.streams       WHERE playback_id = $1 AND tenant_id::text = $2`,
-		`SELECT internal_name FROM commodore.vod_assets    WHERE playback_id = $1 AND tenant_id::text = $2`,
-		`SELECT internal_name FROM commodore.clips         WHERE playback_id = $1 AND tenant_id::text = $2`,
-		`SELECT internal_name FROM commodore.dvr_recordings WHERE playback_id = $1 AND tenant_id::text = $2`,
+		`SELECT internal_name FROM commodore.streams       WHERE lower(playback_id::text) = lower($1::text) AND tenant_id::text = $2`,
+		`SELECT internal_name FROM commodore.vod_assets    WHERE lower(playback_id::text) = lower($1::text) AND tenant_id::text = $2`,
+		`SELECT internal_name FROM commodore.clips         WHERE lower(playback_id::text) = lower($1::text) AND tenant_id::text = $2`,
+		`SELECT internal_name FROM commodore.dvr_recordings WHERE lower(playback_id::text) = lower($1::text) AND tenant_id::text = $2`,
 	} {
 		err := s.db.QueryRowContext(ctx, q, playbackID, tenantID).Scan(&internalName)
 		if err == nil {

@@ -219,7 +219,7 @@ func TestResolveStreamContext(t *testing.T) {
 			setupMock: func(mock sqlmock.Sqlmock) {
 				rows := sqlmock.NewRows(cols).
 					AddRow("stream-id", "user-id", "tenant-id", "internal", false, true, "pk_inactive", "mist_native", false, nil, nil)
-				mock.ExpectQuery(`WHERE s\.playback_id = \$1`).WithArgs("pk_inactive").WillReturnRows(rows)
+				mock.ExpectQuery(`WHERE lower\(s\.playback_id::text\) = lower\(\$1::text\)`).WithArgs("pk_inactive").WillReturnRows(rows)
 			},
 			assert: func(t *testing.T, resp *commodorepb.ResolveStreamContextResponse) {
 				if resp.Admitted {

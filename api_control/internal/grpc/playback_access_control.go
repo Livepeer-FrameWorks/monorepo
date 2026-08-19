@@ -772,7 +772,7 @@ func (s *CommodoreServer) lookupPolicyByPlaybackID(ctx context.Context, playback
 	)
 	fetchErr = s.db.QueryRowContext(ctx, `
 		SELECT playback_policy, playback_webhook_secret_enc, tenant_id
-		FROM commodore.streams WHERE playback_id = $1 AND deleted_at IS NULL
+		FROM commodore.streams WHERE lower(playback_id::text) = lower($1::text) AND deleted_at IS NULL
 	`, playbackID).Scan(&policy, &secret, &tenantID)
 	if fetchErr == nil {
 		out := append([]byte(nil), policy...)
@@ -786,7 +786,7 @@ func (s *CommodoreServer) lookupPolicyByPlaybackID(ctx context.Context, playback
 	// VOD assets.
 	fetchErr = s.db.QueryRowContext(ctx, `
 		SELECT playback_policy, playback_webhook_secret_enc, tenant_id
-		FROM commodore.vod_assets WHERE playback_id = $1	`, playbackID).Scan(&policy, &secret, &tenantID)
+		FROM commodore.vod_assets WHERE lower(playback_id::text) = lower($1::text)	`, playbackID).Scan(&policy, &secret, &tenantID)
 	if fetchErr == nil {
 		out := append([]byte(nil), policy...)
 		return out, secret, tenantID, nil
@@ -799,7 +799,7 @@ func (s *CommodoreServer) lookupPolicyByPlaybackID(ctx context.Context, playback
 	// Clips.
 	fetchErr = s.db.QueryRowContext(ctx, `
 		SELECT playback_policy, playback_webhook_secret_enc, tenant_id
-		FROM commodore.clips WHERE playback_id = $1	`, playbackID).Scan(&policy, &secret, &tenantID)
+		FROM commodore.clips WHERE lower(playback_id::text) = lower($1::text)	`, playbackID).Scan(&policy, &secret, &tenantID)
 	if fetchErr == nil {
 		out := append([]byte(nil), policy...)
 		return out, secret, tenantID, nil
@@ -814,7 +814,7 @@ func (s *CommodoreServer) lookupPolicyByPlaybackID(ctx context.Context, playback
 		SELECT s.playback_policy, s.playback_webhook_secret_enc, s.tenant_id
 		FROM commodore.dvr_recordings d
 		JOIN commodore.streams s ON s.id = d.stream_id
-		WHERE d.playback_id = $1	`, playbackID).Scan(&policy, &secret, &tenantID)
+		WHERE lower(d.playback_id::text) = lower($1::text)	`, playbackID).Scan(&policy, &secret, &tenantID)
 	if fetchErr == nil {
 		out := append([]byte(nil), policy...)
 		return out, secret, tenantID, nil

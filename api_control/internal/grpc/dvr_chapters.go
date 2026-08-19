@@ -91,7 +91,7 @@ func (s *CommodoreServer) assertDVRTenant(ctx context.Context, dvrIdentifier, te
 		`SELECT COALESCE(origin_cluster_id, ''), dvr_hash
 		   FROM commodore.dvr_recordings
 		  WHERE tenant_id = $2::uuid
-		    AND (dvr_hash = $1 OR id::text = $1 OR playback_id = $1)`,
+		    AND (dvr_hash = $1 OR id::text = $1 OR lower(playback_id::text) = lower($1::text))`,
 		dvrIdentifier, tenantID,
 	).Scan(&originClusterID, &dvrHash); scanErr != nil {
 		if errors.Is(scanErr, sql.ErrNoRows) {

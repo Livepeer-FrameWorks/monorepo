@@ -277,7 +277,7 @@ func TestResolveFoghornForContent_RoutesActiveClusterOnPoolMiss(t *testing.T) {
 		},
 	}
 
-	mock.ExpectQuery("SELECT tenant_id, active_ingest_cluster_id\\s+FROM commodore.streams WHERE playback_id = \\$1").
+	mock.ExpectQuery("SELECT tenant_id, active_ingest_cluster_id\\s+FROM commodore.streams WHERE lower\\(playback_id::text\\) = lower\\(\\$1::text\\)").
 		WithArgs("playback-1").
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "active_ingest_cluster_id"}).AddRow("tenant-1", "peer-media"))
 
