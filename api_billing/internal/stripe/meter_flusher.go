@@ -3,6 +3,7 @@ package stripe
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -75,7 +76,7 @@ func (f *MeterFlusher) Flush(ctx context.Context) (sent, deferred int, err error
 		return 0, 0, errors.New("MeterFlusher.Flush: nil DB")
 	}
 	rows, err := f.DB.QueryContext(ctx, `
-		SELECT id, tenant_id, cluster_id, meter, stripe_meter_event_name, quantity::text,
+		SELECT id, tenant_id, cluster_id, meter, stripe_meter_event_name, quantity::text, dimensions::text,
 		       period_start, attempt_count
 		FROM purser.stripe_meter_events_outbox
 		WHERE sent_at IS NULL
@@ -95,13 +96,14 @@ func (f *MeterFlusher) Flush(ctx context.Context) (sent, deferred int, err error
 		Meter          string
 		MeterEventName string
 		Quantity       string
+		Dimensions     string
 		PeriodStart    time.Time
 		AttemptCount   int
 	}
 	var pending []outboxRow
 	for rows.Next() {
 		var r outboxRow
-		if err := rows.Scan(&r.ID, &r.TenantID, &r.ClusterID, &r.Meter, &r.MeterEventName, &r.Quantity, &r.PeriodStart, &r.AttemptCount); err != nil {
+		if err := rows.Scan(&r.ID, &r.TenantID, &r.ClusterID, &r.Meter, &r.MeterEventName, &r.Quantity, &r.Dimensions, &r.PeriodStart, &r.AttemptCount); err != nil {
 			return 0, 0, fmt.Errorf("scan outbox row: %w", err)
 		}
 		pending = append(pending, r)
@@ -111,7 +113,7 @@ func (f *MeterFlusher) Flush(ctx context.Context) (sent, deferred int, err error
 	}
 
 	for _, r := range pending {
-		if pushErr := f.pushOne(ctx, r.ID, r.TenantID, r.ClusterID, r.Meter, r.MeterEventName, r.Quantity, r.PeriodStart); pushErr != nil {
+		if pushErr := f.pushOne(ctx, r.ID, r.TenantID, r.ClusterID, r.Meter, r.MeterEventName, r.Quantity, r.Dimensions, r.PeriodStart); pushErr != nil {
 			deferred++
 			f.recordFailure(ctx, r.ID, pushErr)
 			continue
@@ -131,7 +133,7 @@ func (f *MeterFlusher) Flush(ctx context.Context) (sent, deferred int, err error
 
 // pushOne calls Stripe's MeterEvent.Create. The event identifier is the
 // outbox row id so a retry within 24h is collapsed by Stripe.
-func (f *MeterFlusher) pushOne(ctx context.Context, rowID, tenantID, clusterID, meter, meterEventName, quantity string, periodStart time.Time) error {
+func (f *MeterFlusher) pushOne(ctx context.Context, rowID, tenantID, clusterID, meter, meterEventName, quantity, dimensionsJSON string, periodStart time.Time) error {
 	customerID, err := f.TenantStripeID(ctx, tenantID)
 	if err != nil {
 		return fmt.Errorf("resolve stripe customer: %w", err)
@@ -148,6 +150,13 @@ func (f *MeterFlusher) pushOne(ctx context.Context, rowID, tenantID, clusterID, 
 	}
 	if clusterID != "" {
 		params.Payload["cluster_id"] = clusterID
+	}
+	var dimensions map[string]string
+	if err := json.Unmarshal([]byte(dimensionsJSON), &dimensions); err != nil {
+		return fmt.Errorf("decode meter dimensions: %w", err)
+	}
+	for key, value := range dimensions {
+		params.Payload["dimension_"+key] = value
 	}
 	sendMeterEvent := f.SendMeterEvent
 	if sendMeterEvent == nil {

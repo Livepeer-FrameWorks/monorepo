@@ -58,17 +58,19 @@ type EmailData struct {
 // from persisted purser.invoice_line_items. Decoupled from rating.LineItem so
 // that template-shape changes don't ripple into the rating engine.
 type EmailInvoiceLineItem struct {
-	Description   string
-	ClusterID     string
-	ClusterName   string
-	ClusterKind   string
-	Quantity      string
-	UnitPrice     string
-	Total         string
-	Currency      string
-	PricingSource string
-	PricingLabel  string
-	IsZeroPrice   bool
+	Description    string
+	Unit           string
+	DimensionLabel string
+	ClusterID      string
+	ClusterName    string
+	ClusterKind    string
+	Quantity       string
+	UnitPrice      string
+	Total          string
+	Currency       string
+	PricingSource  string
+	PricingLabel   string
+	IsZeroPrice    bool
 }
 
 // EmailLineItemGroup is one cluster (or tenant-scope bucket) in the
@@ -406,9 +408,10 @@ func (es *EmailService) renderTemplate(templateName string, data EmailData) (str
             <tr{{if .IsZeroPrice}} style="color: #666;"{{end}}>
                 <td style="padding: 8px 10px; border-bottom: 1px solid #eee;">
                     {{.Description}}
+                    {{if .DimensionLabel}}<div style="font-size: 0.8em; color: #95a5a6;">{{.DimensionLabel}}</div>{{end}}
                     {{if .PricingLabel}}<div style="font-size: 0.8em; color: #95a5a6;">{{.PricingLabel}}</div>{{end}}
                 </td>
-                <td style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #eee;">{{.Quantity}}</td>
+                <td style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #eee;">{{.Quantity}}{{if .Unit}} {{.Unit}}{{end}}</td>
                 <td style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #eee;">{{.UnitPrice}} {{.Currency}}</td>
                 <td style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #eee;">
                     {{if and .IsZeroPrice (ne .PricingSource "beta_free")}}<span style="color: #16a085; font-weight: 600;">Included</span>{{else}}{{.Total}} {{.Currency}}{{end}}

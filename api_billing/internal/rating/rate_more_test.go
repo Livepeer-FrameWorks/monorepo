@@ -6,6 +6,43 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+func TestRateCarriesRatedUnitsOnEveryInvoiceLine(t *testing.T) {
+	result, err := Rate(Input{
+		Currency:  "EUR",
+		BasePrice: dec("10"),
+		Rules: []Rule{
+			{Meter: MeterDeliveredMinutes, Model: ModelTieredGraduated, Currency: "EUR", UnitPrice: dec("0.01")},
+			{Meter: MeterStorageGBSecondsCld, Model: ModelAllUsage, Currency: "EUR", UnitPrice: dec("0.03")},
+		},
+		Usage: map[Meter]decimal.Decimal{
+			MeterDeliveredMinutes:    dec("60"),
+			MeterStorageGBSecondsCld: dec("7200"),
+		},
+		Quantities: []DimensionedQuantity{
+			{Meter: MeterDeliveredMinutes, Unit: "minute", Quantity: dec("60")},
+			{Meter: MeterStorageGBSecondsCld, Unit: "gibibyte_second", Dimensions: map[string]string{"storage_scope": "cold"}, Quantity: dec("7200")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Rate: %v", err)
+	}
+	if result.BaseLine.Unit != "subscription" {
+		t.Fatalf("base unit = %q", result.BaseLine.Unit)
+	}
+	units := map[Meter]string{}
+	quantities := map[Meter]string{}
+	for _, line := range result.UsageLines {
+		units[line.Meter] = line.Unit
+		quantities[line.Meter] = line.Quantity.String()
+	}
+	if units[MeterDeliveredMinutes] != "minute" {
+		t.Errorf("delivered unit = %q", units[MeterDeliveredMinutes])
+	}
+	if units[MeterStorageGBSecondsCld] != "gibibyte_hour" || quantities[MeterStorageGBSecondsCld] != "2" {
+		t.Errorf("storage = %s %s, want 2 gibibyte_hour", quantities[MeterStorageGBSecondsCld], units[MeterStorageGBSecondsCld])
+	}
+}
+
 // TestRate_UsageLinesSortedAscendingByLineKey pins the determinism sort to an
 // ascending order. Rules are supplied in descending-key order so the natural
 // append order is unsorted; a flipped comparator would leave them descending.
@@ -43,31 +80,21 @@ func TestRate_UsageLinesSortedAscendingByLineKey(t *testing.T) {
 	}
 }
 
-// TestRate_CodecBreakdownFallsBackToCodecSeconds verifies that when Breakdowns
-// is non-nil but has no entry for the media meter, rating falls back to the
-// CodecSeconds map. An empty per-meter breakdown must not shadow CodecSeconds.
-func TestRate_CodecBreakdownFallsBackToCodecSeconds(t *testing.T) {
+func TestRate_UnpricedDimensionedQuantityRemainsVisible(t *testing.T) {
 	res, err := Rate(Input{
 		Currency:  "EUR",
 		BasePrice: dec("0"),
-		Rules: []Rule{{
-			Meter:     MeterMediaSeconds,
-			Model:     ModelCodecMultiplier,
-			Currency:  "EUR",
-			UnitPrice: dec("0.001"),
-			Config:    map[string]any{"codec_multipliers": map[string]any{"h264": 1.0}},
+		Quantities: []DimensionedQuantity{{
+			Meter: Meter("ai_inference_units"), Unit: "unit",
+			Dimensions: map[string]string{"model": "future-model", "provider": "local"},
+			Quantity:   dec("3600"),
 		}},
-		// Non-nil Breakdowns that does NOT contain the media meter.
-		Breakdowns: map[Meter]map[string]decimal.Decimal{
-			Meter("some_other_meter"): {"h264": dec("3600")},
-		},
-		CodecSeconds: map[string]decimal.Decimal{"h264": dec("3600")}, // 60 min
 	})
 	if err != nil {
 		t.Fatalf("Rate: %v", err)
 	}
-	line := findLine(t, res.UsageLines, "meter:media_seconds:codec:h264")
-	if !line.Amount.Equal(dec("0.06")) { // 60 min × 0.001 × 1.0
-		t.Errorf("h264 amount = %s, want 0.06 (CodecSeconds fallback)", line.Amount)
+	line := findDimensionLine(t, res.UsageLines, "model", "future-model")
+	if !line.Amount.IsZero() {
+		t.Errorf("amount = %s, want 0 for an observed meter without a pricing rule", line.Amount)
 	}
 }

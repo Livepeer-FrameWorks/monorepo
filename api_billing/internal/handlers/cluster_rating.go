@@ -5,9 +5,11 @@ import (
 	"crypto/sha1"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -130,85 +132,51 @@ func (jm *JobManager) collectInvoiceUsage(ctx context.Context, tenantID string, 
 	return out, nil
 }
 
-// collectInvoiceCodecBreakdowns extracts per-cluster, per-meter processing
-// seconds from usage_details.codec_seconds. Keys may be plain codec names
-// ("h264") or joint process/codec keys ("Livepeer:h264"), which lets cluster
-// pricing distinguish future processing modes without another usage_type.
-// Returns (cluster_id -> meter -> breakdown key -> seconds).
-func (jm *JobManager) collectInvoiceCodecBreakdowns(ctx context.Context, tenantID string, periodStart, periodEnd time.Time) (map[string]map[string]map[string]float64, error) {
+func (jm *JobManager) collectInvoiceDimensionedUsage(ctx context.Context, tenantID string, periodStart, periodEnd time.Time) (map[string][]rating.DimensionedQuantity, error) {
 	rows, err := jm.db.QueryContext(ctx, `
-		WITH usage_codec_rows AS (
-			SELECT COALESCE(ur.cluster_id, '') AS cluster_id,
-			       ur.usage_type,
-			       kv.key,
-			       kv.value::float8 AS seconds
-			FROM purser.usage_records ur
-			CROSS JOIN LATERAL jsonb_each_text(COALESCE(ur.usage_details->'codec_seconds', '{}'::jsonb)) AS kv(key, value)
-			WHERE ur.tenant_id = $1
-			  AND ur.period_start < $3
-			  AND ur.period_end > $2
-			  AND ur.value_kind = 'delta'
-			  AND ur.granularity = 'minute_5'
-			  AND ur.usage_details ? 'codec_seconds'
-		),
-		adjustment_base AS (
-			SELECT COALESCE(ua.cluster_id, '') AS cluster_id,
-			       ua.usage_type,
-			       ua.delta_value::float8 AS seconds,
-			       NULLIF(COALESCE(ua.details #>> '{output_codec}', ua.details #>> '{natural_key,output_codec}'), '') AS output_codec,
-			       NULLIF(COALESCE(ua.details #>> '{process_type}', ua.details #>> '{natural_key,process_type}'), '') AS process_type
-			FROM purser.usage_adjustments ua
-			WHERE ua.tenant_id = $1
-			  AND ua.period_start < $3
-			  AND ua.period_end > $2
-			  AND ua.status = 'applied'
-			  AND ua.value_kind = 'correction_delta'
-			  AND ua.usage_type = 'media_seconds'
-		),
-		adjustment_codec_rows AS (
-			SELECT cluster_id, usage_type, output_codec AS key, seconds
-			FROM adjustment_base
-			WHERE output_codec IS NOT NULL
-
+		WITH dimensioned_rows AS (
+			SELECT cluster_id, usage_type, unit, dimensions, usage_value
+			FROM purser.usage_records
+			WHERE tenant_id = $1
+			  AND period_start < $3 AND period_end > $2
+			  AND value_kind = 'delta' AND granularity = 'minute_5'
 			UNION ALL
-
-			SELECT cluster_id, usage_type, process_type || ':' || output_codec AS key, seconds
-			FROM adjustment_base
-			WHERE output_codec IS NOT NULL AND process_type IS NOT NULL
+			SELECT cluster_id, usage_type, unit, dimensions, delta_value
+			FROM purser.usage_adjustments
+			WHERE tenant_id = $1
+			  AND period_start < $3 AND period_end > $2
+			  AND status = 'applied' AND value_kind = 'correction_delta'
 		)
-		SELECT cluster_id,
-		       usage_type,
-		       key,
-		       COALESCE(SUM(seconds), 0) AS seconds
-		FROM (
-			SELECT * FROM usage_codec_rows
-			UNION ALL
-			SELECT * FROM adjustment_codec_rows
-		) codec_rows
-		GROUP BY cluster_id, usage_type, key
+		SELECT COALESCE(r.cluster_id, ''), r.usage_type, r.unit, r.dimensions,
+		       CASE WHEN d.aggregation = 'max' THEN MAX(r.usage_value) ELSE SUM(r.usage_value) END
+		FROM dimensioned_rows r
+		JOIN purser.meter_definitions d ON d.meter = r.usage_type AND d.active = TRUE
+		GROUP BY r.cluster_id, r.usage_type, r.unit, r.dimensions, d.aggregation
 	`, tenantID, periodStart, periodEnd)
 	if err != nil {
-		return nil, fmt.Errorf("query codec_seconds: %w", err)
+		return nil, fmt.Errorf("query dimensioned usage: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-
-	out := map[string]map[string]map[string]float64{}
+	out := map[string][]rating.DimensionedQuantity{}
 	for rows.Next() {
-		var clusterID, usageType, key string
-		var seconds float64
-		if err := rows.Scan(&clusterID, &usageType, &key, &seconds); err != nil {
-			return nil, fmt.Errorf("scan codec row: %w", err)
+		var clusterID, meter, unit string
+		var rawDimensions []byte
+		var quantity decimal.Decimal
+		if err := rows.Scan(&clusterID, &meter, &unit, &rawDimensions, &quantity); err != nil {
+			return nil, fmt.Errorf("scan dimensioned usage: %w", err)
 		}
-		if out[clusterID] == nil {
-			out[clusterID] = map[string]map[string]float64{}
+		dimensions := map[string]string{}
+		if len(rawDimensions) > 0 {
+			if err := json.Unmarshal(rawDimensions, &dimensions); err != nil {
+				return nil, fmt.Errorf("decode dimensions for %s: %w", meter, err)
+			}
 		}
-		if out[clusterID][usageType] == nil {
-			out[clusterID][usageType] = map[string]float64{}
-		}
-		out[clusterID][usageType][key] += seconds
+		out[clusterID] = append(out[clusterID], rating.DimensionedQuantity{
+			Meter: rating.Meter(meter), Unit: unit, Dimensions: dimensions, Quantity: quantity,
+		})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate codec rows: %w", err)
+		return nil, fmt.Errorf("iterate dimensioned usage: %w", err)
 	}
 	return out, nil
 }
@@ -252,7 +220,7 @@ func (jm *JobManager) rateInvoiceForTenant(
 	includeBasePrice bool,
 	baseProviderManaged bool,
 	perClusterUsage map[string]map[string]float64,
-	perClusterCodecBreakdowns map[string]map[string]map[string]float64,
+	perClusterDimensioned map[string][]rating.DimensionedQuantity,
 ) (*clusterRatingResult, error) {
 	if tier == nil {
 		return nil, errors.New("rateInvoiceForTenant: nil tier")
@@ -372,14 +340,12 @@ func (jm *JobManager) rateInvoiceForTenant(
 
 		// Build a rating Input scoped to this cluster's usage and rules.
 		// BasePrice is zero — the base subscription is rated once above.
-		breakdowns := codecBreakdownsFromCluster(perClusterCodecBreakdowns[cid])
 		input := rating.Input{
 			Currency:          resolved.Currency,
 			BasePrice:         decimal.Zero,
 			Rules:             resolved.MeteredRules,
 			Usage:             usageMapFromAggregates(usageData),
-			Breakdowns:        breakdowns,
-			CodecSeconds:      breakdowns[rating.MeterMediaSeconds],
+			Quantities:        perClusterDimensioned[cid],
 			PeriodStart:       periodStart,
 			PeriodEnd:         periodEnd,
 			WaiveUsageCharges: config.WaiveUsageChargesEnabled(),
@@ -532,7 +498,7 @@ func (jm *JobManager) lookupPlatformFeeBps(ctx context.Context, ownerID uuid.UUI
 // label to the cluster ID rather than failing the email entirely.
 func (jm *JobManager) loadEmailLineItems(ctx context.Context, invoiceID, tenantID string) ([]EmailInvoiceLineItem, error) {
 	rows, err := jm.db.QueryContext(ctx, `
-		SELECT description,
+		SELECT description, unit, dimensions,
 		       COALESCE(cluster_id, ''),
 		       COALESCE(cluster_kind, ''),
 		       quantity::text,
@@ -550,12 +516,13 @@ func (jm *JobManager) loadEmailLineItems(ctx context.Context, invoiceID, tenantI
 	defer func() { _ = rows.Close() }()
 
 	type row struct {
-		Description, ClusterID, ClusterKind, Quantity, UnitPrice, Total, Currency, PricingSource string
+		Description, Unit, ClusterID, ClusterKind, Quantity, UnitPrice, Total, Currency, PricingSource string
+		DimensionsJSON                                                                                 []byte
 	}
 	var raw []row
 	for rows.Next() {
 		var r row
-		if err := rows.Scan(&r.Description, &r.ClusterID, &r.ClusterKind,
+		if err := rows.Scan(&r.Description, &r.Unit, &r.DimensionsJSON, &r.ClusterID, &r.ClusterKind,
 			&r.Quantity, &r.UnitPrice, &r.Total, &r.Currency, &r.PricingSource); err != nil {
 			return nil, fmt.Errorf("scan line item: %w", err)
 		}
@@ -576,7 +543,7 @@ func (jm *JobManager) loadEmailLineItems(ctx context.Context, invoiceID, tenantI
 			continue
 		}
 		name := r.ClusterID
-		if jm.billing.qmClient != nil {
+		if jm.billing != nil && jm.billing.qmClient != nil {
 			if resp, qmErr := jm.billing.qmClient.GetCluster(ctx, r.ClusterID); qmErr == nil {
 				if c := resp.GetCluster(); c != nil && c.GetClusterName() != "" {
 					name = c.GetClusterName()
@@ -590,20 +557,42 @@ func (jm *JobManager) loadEmailLineItems(ctx context.Context, invoiceID, tenantI
 	for _, r := range raw {
 		isZero := r.Total == "0" || r.Total == "0.00" || r.Total == "0.0"
 		out = append(out, EmailInvoiceLineItem{
-			Description:   r.Description,
-			ClusterID:     r.ClusterID,
-			ClusterName:   clusterNames[r.ClusterID],
-			ClusterKind:   r.ClusterKind,
-			Quantity:      r.Quantity,
-			UnitPrice:     r.UnitPrice,
-			Total:         r.Total,
-			Currency:      r.Currency,
-			PricingSource: r.PricingSource,
-			PricingLabel:  emailPricingLabel(r.PricingSource, r.ClusterKind),
-			IsZeroPrice:   isZero,
+			Description:    r.Description,
+			Unit:           r.Unit,
+			DimensionLabel: emailDimensionLabel(r.DimensionsJSON),
+			ClusterID:      r.ClusterID,
+			ClusterName:    clusterNames[r.ClusterID],
+			ClusterKind:    r.ClusterKind,
+			Quantity:       r.Quantity,
+			UnitPrice:      r.UnitPrice,
+			Total:          r.Total,
+			Currency:       r.Currency,
+			PricingSource:  r.PricingSource,
+			PricingLabel:   emailPricingLabel(r.PricingSource, r.ClusterKind),
+			IsZeroPrice:    isZero,
 		})
 	}
 	return out, nil
+}
+
+func emailDimensionLabel(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	dimensions := map[string]string{}
+	if err := json.Unmarshal(raw, &dimensions); err != nil || len(dimensions) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(dimensions))
+	for key := range dimensions {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, strings.ReplaceAll(key, "_", " ")+": "+dimensions[key])
+	}
+	return strings.Join(parts, " · ")
 }
 
 // emailPricingLabel mirrors gRPC's pricingLabelFor for the email path. Kept

@@ -57,21 +57,17 @@ func TestClusterScopedLineKey(t *testing.T) {
 	})
 }
 
-// buildRatingInputForUsage filters out syntactically-invalid meters, drops
-// zero-value codec totals, exposes the media_seconds codec breakdown via the
-// CodecSeconds shortcut, and wires the beta waiver flag from config.
+// buildRatingInputForUsage filters syntactically-invalid aggregate meters,
+// preserves dimensioned quantities, and wires the beta waiver flag.
 func TestBuildRatingInputForUsage(t *testing.T) {
 	usage := map[string]float64{
 		"egress_gb":     100,
 		"media_seconds": 200,
 		"Bad Meter!":    50, // syntactically invalid → dropped
 	}
-	codecBreakdowns := map[string]map[string]float64{
-		"media_seconds": {"h264": 100, "av1": 0}, // av1 zero → dropped
-		"Bad Meter!":    {"h264": 5},             // invalid meter → dropped
-	}
+	quantities := []rating.DimensionedQuantity{{Meter: rating.MeterMediaSeconds, Unit: "second", Dimensions: map[string]string{"output_codec": "h264"}, Quantity: decimal.NewFromInt(100)}}
 
-	in := buildRatingInputForUsage(usage, codecBreakdowns, "EUR", decimal.NewFromInt(10), nil)
+	in := buildRatingInputForUsage(usage, quantities, "EUR", decimal.NewFromInt(10), nil)
 
 	if in.Currency != "EUR" || !in.BasePrice.Equal(decimal.NewFromInt(10)) {
 		t.Errorf("currency/base wrong: %s / %s", in.Currency, in.BasePrice)
@@ -82,19 +78,8 @@ func TestBuildRatingInputForUsage(t *testing.T) {
 	if !in.Usage[rating.MeterEgressGB].Equal(decimal.NewFromFloat(100)) {
 		t.Errorf("egress usage = %s, want 100", in.Usage[rating.MeterEgressGB])
 	}
-	media := in.Breakdowns[rating.MeterMediaSeconds]
-	if len(media) != 1 {
-		t.Errorf("zero-value codec total should be dropped, got %v", media)
-	}
-	if _, ok := media["av1"]; ok {
-		t.Error("av1 (0 seconds) must not appear in the breakdown")
-	}
-	if _, ok := in.Breakdowns[rating.Meter("Bad Meter!")]; ok {
-		t.Error("invalid meter must not appear in breakdowns")
-	}
-	// CodecSeconds is the media_seconds shortcut.
-	if len(in.CodecSeconds) != len(media) || !in.CodecSeconds["h264"].Equal(media["h264"]) {
-		t.Errorf("CodecSeconds should mirror media_seconds breakdown, got %v", in.CodecSeconds)
+	if len(in.Quantities) != 1 || in.Quantities[0].Dimensions["output_codec"] != "h264" {
+		t.Errorf("dimensioned quantity not preserved: %#v", in.Quantities)
 	}
 	if in.WaiveUsageCharges != config.WaiveUsageChargesEnabled() {
 		t.Errorf("WaiveUsageCharges = %v, want config value", in.WaiveUsageCharges)
@@ -114,6 +99,8 @@ func TestLineItemToProto(t *testing.T) {
 		UnitPrice:        decimal.RequireFromString("0.05"),
 		Amount:           decimal.RequireFromString("2.53"),
 		Currency:         "EUR",
+		Unit:             "second",
+		Dimensions:       map[string]string{"execution_backend": "livepeer_network", "output_codec": "h264"},
 	}
 	p := lineItemToProto(li)
 	if p.GetLineKey() != "meter:egress_gb:eu:202606" || p.GetMeter() != "egress_gb" || p.GetDescription() != "Egress" {
@@ -124,6 +111,9 @@ func TestLineItemToProto(t *testing.T) {
 	}
 	if p.GetUnitPrice() != "0.05" || p.GetTotal() != "2.53" || p.GetCurrency() != "EUR" {
 		t.Errorf("price/total/currency wrong: %+v", p)
+	}
+	if p.GetUnit() != "second" || p.GetDimensions().AsMap()["output_codec"] != "h264" {
+		t.Errorf("unit/dimensions wrong: %+v", p)
 	}
 
 	// base_subscription line: empty meter must serialize as "".

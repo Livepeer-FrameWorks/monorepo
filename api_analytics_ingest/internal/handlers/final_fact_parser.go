@@ -397,11 +397,6 @@ func (h *AnalyticsHandler) projectProcessingSegmentFinal(ctx context.Context, tr
 
 	processType := strings.TrimSpace(pb_.GetProcessType())
 	outputCodec := strings.TrimSpace(pb_.GetOutputCodec())
-	if outputCodec == "" && processType == "Livepeer" {
-		// MistProcLivepeer profiles are H264-only in the local MistServer
-		// implementation; the trigger predates the output_codec field.
-		outputCodec = "h264"
-	}
 	if outputCodec == "" {
 		// Quarantine: empty output_codec would silently bucket into ''
 		// in the analytics ledger. Don't write to *_final.
@@ -492,7 +487,7 @@ func (h *AnalyticsHandler) projectProcessingSegmentFinal(ctx context.Context, tr
 			tenant_id, node_id, stream_id, process_type, output_codec, track_type, segment_number,
 			source_event_id,
 			cluster_id, stream_name, input_codec, media_seconds,
-			width, height, rendition_count, input_bytes, output_bytes_total, turnaround_ms, speed_factor, livepeer_session_id,
+			width, height, rendition_count, input_bytes, output_bytes_total, turnaround_ms, speed_factor, livepeer_session_id, renditions_json,
 			input_frames, output_frames, input_frames_delta, output_frames_delta, input_bytes_delta, output_bytes_delta,
 			rtf_in, rtf_out, is_final,
 			source_started_at_ms, source_ended_at_ms, edge_received_at_ms, projection_version_ms,
@@ -506,7 +501,7 @@ func (h *AnalyticsHandler) projectProcessingSegmentFinal(ctx context.Context, tr
 		tenantID, nodeID, streamID, processType, outputCodec, trackType, segmentNumber,
 		sourceEventID,
 		clusterID, pb_.GetStreamName(), pb_.GetInputCodec(), rawDurationSeconds,
-		pb_.GetWidth(), pb_.GetHeight(), pb_.GetRenditionCount(), pb_.GetInputBytes(), pb_.GetOutputBytesTotal(), pb_.GetTurnaroundMs(), pb_.GetSpeedFactor(), pb_.GetLivepeerSessionId(),
+		pb_.GetWidth(), pb_.GetHeight(), pb_.GetRenditionCount(), pb_.GetInputBytes(), pb_.GetOutputBytesTotal(), pb_.GetTurnaroundMs(), pb_.GetSpeedFactor(), pb_.GetLivepeerSessionId(), pb_.GetRenditionsJson(),
 		pb_.GetInputFrames(), pb_.GetOutputFrames(), pb_.GetInputFramesDelta(), pb_.GetOutputFramesDelta(), pb_.GetInputBytesDelta(), pb_.GetOutputBytesDelta(),
 		pb_.GetRtfIn(), pb_.GetRtfOut(), isFinal,
 		sourceStartedAtMS, sourceEndedAtMS, edgeReceivedAtMS, projectionVersionMS,

@@ -48,7 +48,8 @@ An open streaming stack for live video: apps, real‑time APIs, and analytics. S
   - Chandler (`api_assets`): cluster-scoped static media asset server for thumbnails, sprites, VOD metadata, and cached S3 assets
 - Event & Analytics plane
   - Periscope Ingest (`api_analytics_ingest`): consumes Kafka, writes ClickHouse
-  - Periscope Query (`api_analytics_query`): serves analytics & usage summaries
+  - Periscope Query (`api_analytics_query`): serves analytics queries
+  - Periscope Metering (`api_analytics_query/cmd/periscope-metering`): turns regional finalized facts into central usage reports
   - Decklog (`api_firehose`): gRPC ingress → Kafka
   - Signalman (`api_realtime`): real-time event fan-out and WebSocket hub
   - Kafka: event backbone
@@ -152,6 +153,7 @@ Single service: `make build-bin-<name>` (e.g. `make build-bin-purser`). See `Mak
 | Event & Analytics             | Periscope Query          | 18004    | HTTP health/metrics only                                                                                       |
 | Event & Analytics             | Periscope Query (gRPC)   | 19004    | gRPC API                                                                                                       |
 | Event & Analytics             | Periscope Ingest         | 18005    | Kafka consumer                                                                                                 |
+| Event & Analytics             | Periscope Metering       | 18021    | Regional ClickHouse metering worker health/metrics                                                             |
 | Event & Analytics             | Decklog                  | 18006    | gRPC                                                                                                           |
 | Event & Analytics             | Decklog (metrics)        | 18026    | Prometheus metrics                                                                                             |
 | Event & Analytics             | Kafka (external)         | 29092    | Host access                                                                                                    |

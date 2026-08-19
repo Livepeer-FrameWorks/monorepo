@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"frameworks/api_consultant/internal/metering"
 	"frameworks/api_consultant/internal/skipper"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/llm"
@@ -263,7 +262,6 @@ func (h *ChatHandler) HandleChat(c *gin.Context) {
 	}
 
 	h.logUsage(ctx, tenantID, userID, conversationID, startedAt, result.TokenCounts, false)
-	metering.RecordLLMUsage(ctx, result.TokenCounts.Input, result.TokenCounts.Output)
 
 	// Generate conversation summary asynchronously when message count crosses a threshold.
 	if h.LLMProvider != nil {

@@ -35,7 +35,7 @@ func TestGetTenantBillingStatusNoSubscriptionDefault(t *testing.T) {
 // must NOT trip it.
 func TestGetTenantBillingStatusPrepaidNegativeBalance(t *testing.T) {
 	cols := []string{
-		"billing_model", "status", "balance_cents", "retention", "dvr_entitlements",
+		"billing_model", "status", "balance_cents", "reserved_balance_cents", "retention", "dvr_entitlements",
 		"tier_id", "billing_period_start", "billing_period_end", "storage_limit", "resource_limits",
 	}
 
@@ -43,7 +43,7 @@ func TestGetTenantBillingStatusPrepaidNegativeBalance(t *testing.T) {
 		s, mock := newReadServer(t, true)
 		mock.ExpectQuery(`LEFT JOIN purser\.prepaid_balances pb`).
 			WillReturnRows(sqlmock.NewRows(cols).
-				AddRow("prepaid", "active", int64(-50), nil, nil, nil, nil, nil, nil, nil))
+				AddRow("prepaid", "active", int64(-50), int64(0), nil, nil, nil, nil, nil, nil, nil))
 
 		resp, err := s.GetTenantBillingStatus(context.Background(), &purserpb.GetTenantBillingStatusRequest{TenantId: "tenant-1"})
 		if err != nil {
@@ -54,11 +54,26 @@ func TestGetTenantBillingStatusPrepaidNegativeBalance(t *testing.T) {
 		}
 	})
 
+	t.Run("active reservation reduces available balance", func(t *testing.T) {
+		s, mock := newReadServer(t, true)
+		mock.ExpectQuery(`LEFT JOIN purser\.prepaid_balances pb`).
+			WillReturnRows(sqlmock.NewRows(cols).
+				AddRow("prepaid", "active", int64(100), int64(125), nil, nil, nil, nil, nil, nil, nil))
+
+		resp, err := s.GetTenantBillingStatus(context.Background(), &purserpb.GetTenantBillingStatusRequest{TenantId: "tenant-1"})
+		if err != nil {
+			t.Fatalf("GetTenantBillingStatus: %v", err)
+		}
+		if !resp.IsBalanceNegative || resp.BalanceCents != 100 || resp.ReservedBalanceCents != 125 || resp.AvailableBalanceCents != -25 {
+			t.Fatalf("expected reservation-adjusted prepaid balance: %+v", resp)
+		}
+	})
+
 	t.Run("postpaid same balance stays non-negative", func(t *testing.T) {
 		s, mock := newReadServer(t, true)
 		mock.ExpectQuery(`LEFT JOIN purser\.prepaid_balances pb`).
 			WillReturnRows(sqlmock.NewRows(cols).
-				AddRow("postpaid", "suspended", int64(-50), nil, nil, nil, nil, nil, nil, nil))
+				AddRow("postpaid", "suspended", int64(-50), int64(0), nil, nil, nil, nil, nil, nil, nil))
 
 		resp, err := s.GetTenantBillingStatus(context.Background(), &purserpb.GetTenantBillingStatusRequest{TenantId: "tenant-1"})
 		if err != nil {
@@ -85,11 +100,11 @@ func TestGetPrepaidBalanceMapsAndComputesLowBalance(t *testing.T) {
 	s, mock := newReadServer(t, true)
 	now := time.Now()
 
-	mock.ExpectQuery(`FROM purser\.prepaid_balances\s+WHERE tenant_id = \$1 AND currency = \$2`).
+	mock.ExpectQuery(`FROM purser\.prepaid_balances pb.*LEFT JOIN purser\.usage_reservations r`).
 		WithArgs("tenant-1", "EUR").
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "tenant_id", "balance_cents", "currency", "low_balance_threshold_cents", "created_at", "updated_at",
-		}).AddRow("bal-1", "tenant-1", int64(100), "EUR", int64(500), now, now))
+			"id", "tenant_id", "balance_cents", "currency", "low_balance_threshold_cents", "created_at", "updated_at", "reserved_balance_cents",
+		}).AddRow("bal-1", "tenant-1", int64(100), "EUR", int64(500), now, now, int64(25)))
 	// drain-rate aggregation over last hour
 	mock.ExpectQuery(`SELECT COALESCE\(SUM\(ABS\(amount_cents\)\), 0\)`).
 		WithArgs("tenant-1").
@@ -101,7 +116,10 @@ func TestGetPrepaidBalanceMapsAndComputesLowBalance(t *testing.T) {
 	}
 	// 100 < 500 threshold → low balance.
 	if !resp.IsLowBalance {
-		t.Fatalf("IsLowBalance = false, want true (100 < 500)")
+		t.Fatalf("IsLowBalance = false, want true (75 < 500)")
+	}
+	if resp.AvailableBalanceCents != 75 || resp.ReservedBalanceCents != 25 {
+		t.Fatalf("unexpected reservation-adjusted balance: %+v", resp)
 	}
 	if resp.DrainRateCentsPerHour != 250 {
 		t.Fatalf("DrainRateCentsPerHour = %d, want 250", resp.DrainRateCentsPerHour)

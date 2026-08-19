@@ -55,29 +55,39 @@ type CountryMetrics struct {
 
 // APIUsageBreakdown represents API usage aggregates by auth and operation type.
 type APIUsageBreakdown struct {
-	AuthType      string  `json:"auth_type"`
-	OperationType string  `json:"operation_type"`
-	OperationName string  `json:"operation_name,omitempty"`
-	Requests      float64 `json:"requests"`
-	Errors        float64 `json:"errors"`
-	DurationMs    float64 `json:"duration_ms"`
-	Complexity    float64 `json:"complexity"`
-	UniqueUsers   float64 `json:"unique_users,omitempty"`
-	UniqueTokens  float64 `json:"unique_tokens,omitempty"`
+	AuthType        string  `json:"auth_type"`
+	OperationType   string  `json:"operation_type"`
+	OperationName   string  `json:"operation_name,omitempty"`
+	Service         string  `json:"service,omitempty"`
+	LLMModel        string  `json:"llm_model,omitempty"`
+	LLMProvider     string  `json:"llm_provider,omitempty"`
+	Requests        float64 `json:"requests"`
+	Errors          float64 `json:"errors"`
+	DurationMs      float64 `json:"duration_ms"`
+	Complexity      float64 `json:"complexity"`
+	LLMInputTokens  float64 `json:"llm_input_tokens,omitempty"`
+	LLMOutputTokens float64 `json:"llm_output_tokens,omitempty"`
+	UniqueUsers     float64 `json:"unique_users,omitempty"`
+	UniqueTokens    float64 `json:"unique_tokens,omitempty"`
 }
 
-// StorageProviderUsage is the provider-keyed storage settlement input.
-// Customer invoices aggregate by serving cluster/scope; this record preserves
-// the capacity owner and backend so marketplace settlement can be computed
-// from the same metering pass.
-type StorageProviderUsage struct {
-	CustomerClusterID        string  `json:"customer_cluster_id,omitempty"`
-	StorageProviderTenantID  string  `json:"storage_provider_tenant_id,omitempty"`
-	StorageProviderClusterID string  `json:"storage_provider_cluster_id,omitempty"`
-	StorageBackend           string  `json:"storage_backend,omitempty"`
-	StorageScope             string  `json:"storage_scope"`
-	UsageType                string  `json:"usage_type"`
-	GBSeconds                float64 `json:"gb_seconds"`
+// MeterQuantity is one canonical, dimensioned quantity in a regional billing
+// report. Tenant, cluster, stream, and operation identity belong on the
+// envelope or source fact and must never be dimensions.
+type MeterQuantity struct {
+	Meter      string  `json:"meter"`
+	Unit       string  `json:"unit"`
+	Quantity   float64 `json:"quantity"`
+	Dimensions JSONB   `json:"dimensions,omitempty"`
+}
+
+// ProviderUsage attributes a customer-facing quantity to the infrastructure
+// provider that performed the work. Delivery, processing, and storage share
+// this settlement input.
+type ProviderUsage struct {
+	ProviderTenantID  string        `json:"provider_tenant_id,omitempty"`
+	ProviderClusterID string        `json:"provider_cluster_id,omitempty"`
+	Meter             MeterQuantity `json:"meter"`
 }
 
 // UsageAdjustment carries an additive metering correction. The original
@@ -87,6 +97,8 @@ type UsageAdjustment struct {
 	SourceSystem string    `json:"source_system"`
 	SourceID     string    `json:"source_id"`
 	UsageType    string    `json:"usage_type"`
+	Unit         string    `json:"unit,omitempty"`
+	Dimensions   JSONB     `json:"dimensions,omitempty"`
 	ClusterID    string    `json:"cluster_id,omitempty"`
 	DeltaValue   float64   `json:"delta_value"`
 	PeriodStart  time.Time `json:"period_start"`
@@ -95,57 +107,24 @@ type UsageAdjustment struct {
 	Details      JSONB     `json:"details,omitempty"`
 }
 
-// UsageSummary is the per-cluster billing envelope emitted by Periscope and
-// consumed by Purser. Region fields are producer attribution hints for
-// display/audit; rating resolves commercial pricing from ClusterID.
+// UsageSummary is the dimension-aware billing envelope emitted by the regional
+// Periscope metering worker and consumed by Purser. Source services emit
+// operational facts, never this financial summary.
 type UsageSummary struct {
-	TenantID              string  `json:"tenant_id"`
-	ClusterID             string  `json:"cluster_id"`
-	SourceRegion          string  `json:"source_region,omitempty"`
-	StreamOriginRegion    string  `json:"stream_origin_region,omitempty"`
-	StreamOriginClusterID string  `json:"stream_origin_cluster_id,omitempty"`
-	Period                string  `json:"period"`
-	StreamHours           float64 `json:"stream_hours"`
-	IngressGB             float64 `json:"ingress_gb,omitempty"`
-	EgressGB              float64 `json:"egress_gb"`
-	PeakBandwidthMbps     float64 `json:"peak_bandwidth_mbps"`
-	DisplayStorageGB      float64 `json:"display_storage_gb"`                // display-only average storage over the period
-	StorageGBSecondsHot   float64 `json:"storage_gb_seconds_hot,omitempty"`  // edge cache (operational, see meter-contracts.md)
-	StorageGBSecondsCold  float64 `json:"storage_gb_seconds_cold,omitempty"` // S3 (rated default)
+	ReportID     string    `json:"report_id"`
+	ReportKind   string    `json:"report_kind"` // finalized | reservation | window_complete
+	SourceID     string    `json:"source_id"`
+	SourceRegion string    `json:"source_region,omitempty"`
+	Sequence     uint64    `json:"sequence"`
+	TenantID     string    `json:"tenant_id"`
+	ClusterID    string    `json:"cluster_id"` // work-performing cluster
+	PeriodStart  time.Time `json:"period_start"`
+	PeriodEnd    time.Time `json:"period_end"`
+	Complete     bool      `json:"complete"`
 
-	// Per-codec breakdown: Livepeer (external gateway)
-	LivepeerH264Seconds float64 `json:"livepeer_h264_seconds"`
-	LivepeerVP9Seconds  float64 `json:"livepeer_vp9_seconds"`
-	LivepeerAV1Seconds  float64 `json:"livepeer_av1_seconds"`
-	LivepeerHEVCSeconds float64 `json:"livepeer_hevc_seconds"`
-
-	// Per-codec breakdown: Native AV (local processing)
-	NativeAvH264Seconds float64            `json:"native_av_h264_seconds"`
-	NativeAvVP9Seconds  float64            `json:"native_av_vp9_seconds"`
-	NativeAvAV1Seconds  float64            `json:"native_av_av1_seconds"`
-	NativeAvHEVCSeconds float64            `json:"native_av_hevc_seconds"`
-	NativeAvAACSeconds  float64            `json:"native_av_aac_seconds"`
-	NativeAvOpusSeconds float64            `json:"native_av_opus_seconds"`
-	ProcessingSeconds   map[string]float64 `json:"processing_seconds,omitempty"` // process:codec -> input media seconds
-
-	// Viewer metrics
-	TotalStreams int       `json:"total_streams"`
-	TotalViewers int       `json:"total_viewers"`
-	ViewerHours  float64   `json:"viewer_hours"`
-	MaxViewers   int       `json:"max_viewers"`
-	UniqueUsers  int       `json:"unique_users"`
-	Timestamp    time.Time `json:"timestamp"`
-
-	// API usage aggregates; unrated by default, but custom pricing can opt in.
-	APIRequests   float64             `json:"api_requests"`
-	APIErrors     float64             `json:"api_errors"`
-	APIDurationMs float64             `json:"api_duration_ms"`
-	APIComplexity float64             `json:"api_complexity"`
-	APIBreakdown  []APIUsageBreakdown `json:"api_breakdown,omitempty"`
-
-	Meters               map[string]float64     `json:"meters,omitempty"`
-	StorageProviderUsage []StorageProviderUsage `json:"storage_provider_usage,omitempty"`
-	UsageAdjustments     []UsageAdjustment      `json:"usage_adjustments,omitempty"`
+	Meters           []MeterQuantity   `json:"meters"`
+	ProviderUsage    []ProviderUsage   `json:"provider_usage,omitempty"`
+	UsageAdjustments []UsageAdjustment `json:"usage_adjustments,omitempty"`
 }
 
 // === COMMODORE SERVICE TYPES ===

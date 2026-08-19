@@ -110,18 +110,14 @@ func TestFloatDeltaValues(t *testing.T) {
 	}
 }
 
-// BillableClusterID decides which cluster is credited for a viewer-metric row.
-// The origin cluster (where the stream is produced) takes precedence over the
-// serving cluster, so cross-cluster delivery bills the origin, not the edge.
-// Flipping this precedence would mis-attribute egress between operators.
+// BillableClusterID attributes viewer work to the cluster that served the
+// connection. Origin remains audit context and never receives delivery credit.
 func TestBillableClusterID(t *testing.T) {
-	// Origin present -> origin wins, even when a serving cluster is set.
-	if got := (tenantViewerMetricRow{OriginClusterID: " origin ", ClusterID: "edge"}).BillableClusterID(); got != "origin" {
-		t.Errorf("got %q, want trimmed origin (origin takes precedence)", got)
+	if got := (tenantViewerMetricRow{OriginClusterID: " origin ", ClusterID: " edge "}).BillableClusterID(); got != "edge" {
+		t.Errorf("got %q, want trimmed serving cluster", got)
 	}
-	// No origin -> fall back to the serving cluster.
-	if got := (tenantViewerMetricRow{OriginClusterID: "  ", ClusterID: " edge "}).BillableClusterID(); got != "edge" {
-		t.Errorf("got %q, want trimmed edge fallback", got)
+	if got := (tenantViewerMetricRow{OriginClusterID: " origin "}).BillableClusterID(); got != "" {
+		t.Errorf("got %q, want unattributed when the serving cluster is missing", got)
 	}
 	// Neither set -> empty (caller treats as unattributed).
 	if got := (tenantViewerMetricRow{}).BillableClusterID(); got != "" {

@@ -1,5 +1,5 @@
-.PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge build-bin-navigator build-bin-privateer build-bin-deckhand build-bin-steward build-bin-skipper build-bin-chandler build-bin-cli \
-		build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge build-image-logbook build-image-navigator build-image-deckhand build-image-steward build-image-skipper build-image-chandler \
+.PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-periscope-metering build-bin-signalman build-bin-bridge build-bin-navigator build-bin-privateer build-bin-deckhand build-bin-steward build-bin-skipper build-bin-chandler build-bin-cli \
+		build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-periscope-metering build-image-signalman build-image-bridge build-image-logbook build-image-navigator build-image-deckhand build-image-steward build-image-skipper build-image-chandler \
 		proto proto-check graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test test-cli test-dashboards test-commodore test-quartermaster test-purser test-decklog test-foghorn test-helmsman test-periscope-ingest test-periscope-query test-signalman test-bridge test-navigator test-privateer test-deckhand test-steward test-skipper test-chandler coverage env frontend-env tidy update outdated fmt format \
 		lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
 		validate-migrations verify-release-state test-release-state verify-schema verify-schema-migrations verify-schema-postgres verify-schema-clickhouse verify-feature-registry seed-demo release-plan test-release-plan \
@@ -36,7 +36,7 @@ define component_build_args
 endef
 
 # All microservices (only services with actual binaries)
-SERVICES = commodore quartermaster purser decklog foghorn helmsman periscope-ingest periscope-query signalman bridge navigator privateer deckhand steward skipper chandler
+SERVICES = commodore quartermaster purser decklog foghorn helmsman periscope-ingest periscope-query periscope-metering signalman bridge navigator privateer deckhand steward skipper chandler
 
 # All Go modules (including pkg for testing)
 GO_SERVICES = $(shell find . -name "go.mod" -exec dirname {} \;)
@@ -51,6 +51,7 @@ SERVICE_DIR_foghorn = api_balancing
 SERVICE_DIR_helmsman = api_sidecar
 SERVICE_DIR_periscope-ingest = api_analytics_ingest
 SERVICE_DIR_periscope-query = api_analytics_query
+SERVICE_DIR_periscope-metering = api_analytics_query
 SERVICE_DIR_signalman = api_realtime
 SERVICE_DIR_bridge = api_gateway
 SERVICE_DIR_navigator = api_dns
@@ -192,6 +193,12 @@ build-image-periscope-query:
 		$(call component_build_args,periscope-query,api_analytics_query) \
 		-f api_analytics_query/Dockerfile .
 
+build-image-periscope-metering:
+	docker build -t frameworks-periscope-metering:$(VERSION) \
+		$(call component_build_args,periscope-metering,api_analytics_query) \
+		--build-arg CMD_PACKAGE=./cmd/periscope-metering \
+		-f api_analytics_query/Dockerfile .
+
 build-image-signalman:
 	docker build -t frameworks-signalman:$(VERSION) \
 		$(call component_build_args,signalman,api_realtime) \
@@ -255,6 +262,9 @@ build-bin-periscope-ingest:
 
 build-bin-periscope-query:
 	cd api_analytics_query && go build $(GO_TAG_FLAGS) $(call component_ldflags,periscope-query,api_analytics_query) -o ../bin/periscope-query ./cmd/periscope
+
+build-bin-periscope-metering:
+	cd api_analytics_query && go build $(GO_TAG_FLAGS) $(call component_ldflags,periscope-metering,api_analytics_query) -o ../bin/periscope-metering ./cmd/periscope-metering
 
 build-bin-signalman:
 	cd api_realtime && go build $(GO_TAG_FLAGS) $(call component_ldflags,signalman,api_realtime) -o ../bin/signalman ./cmd/signalman
@@ -593,7 +603,7 @@ verify-schema:
 	@# additive and would otherwise also run the package's ordinary (untagged) unit tests.
 	@cd cli && FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' go test -tags schema_verify -run '$(SCHEMA_VERIFY_TESTS)' -count=1 -timeout 1200s ./pkg/provisioner/
 	@echo "Running real-engine production-path freeze + chapter-auth + thumbnail-foundation tests (Docker: claim concurrency, ledger atomicity, NULL-safe constraints, finalize-node binding, thumbnail publish/completion, deletion-saga tombstone fences, HA recovery lease)..."
-	@cd api_balancing && go test -tags schema_verify -run 'TestClaimFreezeAttempt_RealPG|TestClaimFreezeAttempt_LedgerAtomicity_RealPG|TestFreezeConstraints_RealPG|TestChapterFinalizeNodeBinding_RealPG|TestThumbnailPublication_RealPG|TestThumbnailCompletion_RealPG|TestThumbnailProjectionFence_RealPG|TestThumbnailProjectionRecoveryPoison_RealPG|TestThumbnailProjectionReassert_RealPG|TestThumbnailReassertClaim_LeaseAndLimit_RealPG|TestThumbnailServingClusterTriggersReprojection_RealPG|TestStreamCleanupSaga_TombstoneFences_RealPG|TestThumbnailRecoveryLease_RealPG|TestThumbnailPromoteVsDeleteLeak_RealPG|TestThumbnailPublishLease_RealPG|TestThumbnailPublishTokenFence_RealPG|TestThumbnailRecoveryRedrivesTokenizedPublishing_RealPG|TestThumbnailPublishingRequiresToken_RealPG|TestEnforceImmutableLocalBackend_RealPG|TestEnforceImmutableLocalBackend_ExactMatchNotNormalized_RealPG|TestEnforceImmutableLocalBackend_ConcurrentFirstBootRace_RealPG|TestAdoptOrEnforceLocalBackend_FirstBootAdoption_RealPG|TestIngestSessionIdentity_RealPG|TestIngestSessionConcurrentCreate_RealPG|TestDVRCloseBeforeStartFence_RealPG|TestIngestSessionSchemaInvariants_RealPG|TestDVRRecheckGenerationScoped_RealPG|TestListUnstartedDVRIntents_RealPG|TestIngestSessionReuseAndStopClaim_RealPG|TestIngestSessionConcurrentDifferentSessions_RealPG|TestAdvisoryLockKeysAreValidPGText_RealPG|TestStopDVRForEndedSourceGenerationFence_RealPG|TestIngestSessionAlreadyEndedIdempotency_RealPG|TestIngestSessionConcurrentCrossNodeAdmission_RealPG|TestEndIngestSessionsForStreamEnd_ReapsLostCloseFencedByEventTime_RealPG|TestIngestSessionReaper_RealPG|TestIngestSessionReaper_BlipToleranceRealPG|TestIngestSessionReaper_RechecksAbsenceUnderRetireGuardRealPG|TestNeverProjectedSessionReaperQueuesInactiveProjectionRealPG|TestIngestCloseTombstone_RealPG|TestFenceOfflineBackstop_RealPG|TestProjectSourceIfCurrent_RealPG|TestOfflineEffectSerializesWithAdmission_RealPG|TestOfflineEffectSupersededByReconnect_RealPG|TestProjectSourceFailureAbortsPendingSession_RealPG|TestPushRewriteRetry_IdempotentResumedProjection_RealPG|TestResumedProjectionDeniedWhenRegistryHoldsNewerRevision_RealPG|TestAdmissionEffectApplyAndSupersede_RealPG|TestAdmissionEffectPoisonSettlesLegOnly_RealPG|TestAdmissionAckCompletesWhileWorkerPaused_RealPG|TestAdmissionClaimAffinityRoutesToAuthority_RealPG' -count=1 -timeout 600s ./internal/control/
+	@cd api_balancing && go test -tags schema_verify -run 'TestClaimFreezeAttempt_RealPG|TestClaimFreezeAttempt_LedgerAtomicity_RealPG|TestFreezeConstraints_RealPG|TestChapterFinalizeNodeBinding_RealPG|TestThumbnailPublication_RealPG|TestThumbnailCompletion_RealPG|TestThumbnailProjectionFence_RealPG|TestThumbnailProjectionRecoveryPoison_RealPG|TestThumbnailProjectionReassert_RealPG|TestThumbnailReassertClaim_LeaseAndLimit_RealPG|TestThumbnailServingClusterTriggersReprojection_RealPG|TestStreamCleanupSaga_TombstoneFences_RealPG|TestThumbnailRecoveryLease_RealPG|TestThumbnailPromoteVsDeleteLeak_RealPG|TestThumbnailPublishLease_RealPG|TestThumbnailPublishTokenFence_RealPG|TestThumbnailRecoveryRedrivesTokenizedPublishing_RealPG|TestThumbnailPublishingRequiresToken_RealPG|TestEnforceImmutableLocalBackend_RealPG|TestEnforceImmutableLocalBackend_ExactMatchNotNormalized_RealPG|TestEnforceImmutableLocalBackend_ConcurrentFirstBootRace_RealPG|TestEstablishOrEnforceLocalBackend_FirstBootAuthority_RealPG|TestIngestSessionIdentity_RealPG|TestIngestSessionConcurrentCreate_RealPG|TestDVRCloseBeforeStartFence_RealPG|TestIngestSessionSchemaInvariants_RealPG|TestDVRRecheckGenerationScoped_RealPG|TestListUnstartedDVRIntents_RealPG|TestIngestSessionReuseAndStopClaim_RealPG|TestIngestSessionConcurrentDifferentSessions_RealPG|TestAdvisoryLockKeysAreValidPGText_RealPG|TestStopDVRForEndedSourceGenerationFence_RealPG|TestIngestSessionAlreadyEndedIdempotency_RealPG|TestIngestSessionConcurrentCrossNodeAdmission_RealPG|TestEndIngestSessionsForStreamEnd_ReapsLostCloseFencedByEventTime_RealPG|TestIngestSessionReaper_RealPG|TestIngestSessionReaper_BlipToleranceRealPG|TestIngestSessionReaper_RechecksAbsenceUnderRetireGuardRealPG|TestNeverProjectedSessionReaperQueuesInactiveProjectionRealPG|TestIngestCloseTombstone_RealPG|TestFenceOfflineBackstop_RealPG|TestProjectSourceIfCurrent_RealPG|TestOfflineEffectSerializesWithAdmission_RealPG|TestOfflineEffectSupersededByReconnect_RealPG|TestProjectSourceFailureAbortsPendingSession_RealPG|TestPushRewriteRetry_IdempotentResumedProjection_RealPG|TestResumedProjectionDeniedWhenRegistryHoldsNewerRevision_RealPG|TestAdmissionEffectApplyAndSupersede_RealPG|TestAdmissionEffectPoisonSettlesLegOnly_RealPG|TestAdmissionAckCompletesWhileWorkerPaused_RealPG|TestAdmissionClaimAffinityRoutesToAuthority_RealPG' -count=1 -timeout 600s ./internal/control/
 	@echo "Running real-engine admission-ledger to Redis membership-cleanup proof (Docker: tenant/revision anti-join and exact tombstone purge)..."
 	@cd api_balancing && go test -tags schema_verify -run 'TestMembershipTombstoneCleanup_PostgresProofToRedisPurge_RealPG' -count=1 -timeout 600s ./internal/federation/
 	@echo "Running real-engine production-path cleanup + purge-ownership + stream-cleanup drainer + thumbnail-lifecycle integration tests (Docker: multipart-vs-stale-freeze cleanup, ownership filter NULL semantics, durable stream-cleanup convergence + local-alias routing, full publish→delete→drain lifecycle)..."

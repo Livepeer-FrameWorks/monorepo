@@ -45,10 +45,10 @@ func TestEnqueueMeterEvents_LinesWithoutMeterAreSkipped(t *testing.T) {
 	mock.ExpectQuery(`WITH lines AS`).
 		WithArgs("inv-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "cluster_id", "meter", "pricing_source", "quantity",
+			"id", "cluster_id", "meter", "pricing_source", "quantity", "dimensions",
 			"period_start", "period_end", "stripe_meter_event_name",
 		}).
-			AddRow(uuid.New().String(), "self-edge-1", "delivered_minutes", "self_hosted", "1000", time.Now(), time.Now(), nil))
+			AddRow(uuid.New().String(), "self-edge-1", "delivered_minutes", "self_hosted", "1000", `{}`, time.Now(), time.Now(), nil))
 	tx, _ := db.BeginTx(context.Background(), nil)
 	if err := EnqueueMeterEvents(context.Background(), tx, "inv-1", "tenant-1", "pending"); err != nil {
 		t.Fatalf("EnqueueMeterEvents: %v", err)
@@ -78,13 +78,13 @@ func TestEnqueueMeterEvents_ClusterMeteredEnqueues(t *testing.T) {
 	mock.ExpectQuery(`WITH lines AS`).
 		WithArgs("inv-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "cluster_id", "meter", "pricing_source", "quantity",
+			"id", "cluster_id", "meter", "pricing_source", "quantity", "dimensions",
 			"period_start", "period_end", "stripe_meter_event_name",
 		}).
-			AddRow(lineID.String(), "operator-eu-1", "delivered_minutes", "cluster_metered", "60000", periodStart, periodEnd, "meter.delivered_minutes"))
+			AddRow(lineID.String(), "operator-eu-1", "delivered_minutes", "cluster_metered", "60000", `{}`, periodStart, periodEnd, "meter.delivered_minutes"))
 	mock.ExpectExec(`INSERT INTO purser\.stripe_meter_events_outbox`).
 		WithArgs("tenant-1", "operator-eu-1", "delivered_minutes", "meter.delivered_minutes", "60000",
-			periodStart, periodEnd, "inv-1").
+			`{}`, periodStart, periodEnd, "inv-1", lineID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	tx, _ := db.BeginTx(context.Background(), nil)
@@ -114,18 +114,18 @@ func TestEnqueueMeterEvents_DistinctMetersDoNotCollapse(t *testing.T) {
 	mock.ExpectQuery(`WITH lines AS`).
 		WithArgs("inv-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "cluster_id", "meter", "pricing_source", "quantity",
+			"id", "cluster_id", "meter", "pricing_source", "quantity", "dimensions",
 			"period_start", "period_end", "stripe_meter_event_name",
 		}).
-			AddRow(lineA.String(), "operator-eu-1", "delivered_minutes", "cluster_metered", "60000", periodStart, periodEnd, "meter.delivered_minutes").
-			AddRow(lineB.String(), "operator-eu-1", "storage_gb_seconds_hot", "cluster_metered", "25", periodStart, periodEnd, "meter.storage_gb_seconds_hot"))
+			AddRow(lineA.String(), "operator-eu-1", "delivered_minutes", "cluster_metered", "60000", `{}`, periodStart, periodEnd, "meter.delivered_minutes").
+			AddRow(lineB.String(), "operator-eu-1", "storage_gb_seconds_hot", "cluster_metered", "25", `{}`, periodStart, periodEnd, "meter.storage_gb_seconds_hot"))
 	mock.ExpectExec(`INSERT INTO purser\.stripe_meter_events_outbox`).
 		WithArgs("tenant-1", "operator-eu-1", "delivered_minutes", "meter.delivered_minutes", "60000",
-			periodStart, periodEnd, "inv-1").
+			`{}`, periodStart, periodEnd, "inv-1", lineA).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO purser\.stripe_meter_events_outbox`).
 		WithArgs("tenant-1", "operator-eu-1", "storage_gb_seconds_hot", "meter.storage_gb_seconds_hot", "25",
-			periodStart, periodEnd, "inv-1").
+			`{}`, periodStart, periodEnd, "inv-1", lineB).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	tx, _ := db.BeginTx(context.Background(), nil)
@@ -136,6 +136,54 @@ func TestEnqueueMeterEvents_DistinctMetersDoNotCollapse(t *testing.T) {
 	_ = tx.Commit()
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestEnqueueMeterEvents_DimensionedLinesOfSameMeterDoNotCollapse(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	periodStart := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	periodEnd := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	lineH264 := uuid.New()
+	lineAV1 := uuid.New()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`WITH lines AS`).
+		WithArgs("inv-1", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "cluster_id", "meter", "pricing_source", "quantity", "dimensions",
+			"period_start", "period_end", "stripe_meter_event_name",
+		}).
+			AddRow(lineH264.String(), "operator-eu-1", "transcode_rendition_seconds", "cluster_metered", "3600", `{"output_codec":"h264"}`, periodStart, periodEnd, "meter.transcode").
+			AddRow(lineAV1.String(), "operator-eu-1", "transcode_rendition_seconds", "cluster_metered", "900", `{"output_codec":"av1"}`, periodStart, periodEnd, "meter.transcode"))
+	for _, row := range []struct {
+		lineID     uuid.UUID
+		quantity   string
+		dimensions string
+	}{{lineH264, "3600", `{"output_codec":"h264"}`}, {lineAV1, "900", `{"output_codec":"av1"}`}} {
+		mock.ExpectExec(`INSERT INTO purser\.stripe_meter_events_outbox`).
+			WithArgs("tenant-1", "operator-eu-1", "transcode_rendition_seconds", "meter.transcode", row.quantity,
+				row.dimensions, periodStart, periodEnd, "inv-1", row.lineID).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := EnqueueMeterEvents(context.Background(), tx, "inv-1", "tenant-1", "pending"); err != nil {
+		t.Fatalf("EnqueueMeterEvents: %v", err)
+	}
+	mock.ExpectCommit()
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
 	}
 }
 
@@ -159,10 +207,10 @@ func TestEnqueueMeterEvents_TenantScopedLineNullClusterHandled(t *testing.T) {
 	mock.ExpectQuery(`WITH lines AS`).
 		WithArgs("inv-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "cluster_id", "meter", "pricing_source", "quantity",
+			"id", "cluster_id", "meter", "pricing_source", "quantity", "dimensions",
 			"period_start", "period_end", "stripe_meter_event_name",
 		}).
-			AddRow(lineID.String(), "", "", "tier", "1", periodStart, periodEnd, nil))
+			AddRow(lineID.String(), "", "", "tier", "1", `{}`, periodStart, periodEnd, nil))
 
 	tx, _ := db.BeginTx(context.Background(), nil)
 	if err := EnqueueMeterEvents(context.Background(), tx, "inv-1", "tenant-1", "pending"); err != nil {

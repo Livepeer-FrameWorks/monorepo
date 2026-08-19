@@ -15,7 +15,7 @@ import (
 // shape the scanner expects.
 var pendingRowColumns = []string{
 	"id", "tenant_id", "cluster_id", "meter", "stripe_meter_event_name",
-	"quantity", "period_start", "attempt_count",
+	"quantity", "dimensions", "period_start", "attempt_count",
 }
 
 // TestFlush_NilDB guards the explicit nil-DB check: a misconfigured flusher
@@ -65,7 +65,7 @@ func TestFlush_SuccessMarksSent(t *testing.T) {
 	mock.ExpectQuery(`SELECT id, tenant_id, cluster_id, meter`).
 		WithArgs(6, 100).
 		WillReturnRows(sqlmock.NewRows(pendingRowColumns).
-			AddRow("row-1", "tenant-1", "cluster-1", "delivered_minutes", "meter.delivered_minutes", "60000", periodStart, 0))
+			AddRow("row-1", "tenant-1", "cluster-1", "transcode_rendition_seconds", "meter.transcode", "60000", `{"output_codec":"h264"}`, periodStart, 0))
 	mock.ExpectExec(`UPDATE purser\.stripe_meter_events_outbox\s+SET sent_at`).
 		WithArgs("row-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -75,7 +75,12 @@ func TestFlush_SuccessMarksSent(t *testing.T) {
 		MaxAttempts:    6,
 		BatchSize:      100,
 		TenantStripeID: func(context.Context, string) (string, error) { return "cus_1", nil },
-		SendMeterEvent: func(context.Context, *stripeapi.BillingMeterEventParams) error { return nil },
+		SendMeterEvent: func(_ context.Context, params *stripeapi.BillingMeterEventParams) error {
+			if params.Payload["dimension_output_codec"] != "h264" {
+				t.Errorf("dimension payload = %+v", params.Payload)
+			}
+			return nil
+		},
 	}
 	sent, deferred, err := f.Flush(context.Background())
 	if err != nil {
@@ -102,7 +107,7 @@ func TestFlush_PushFailureDefers(t *testing.T) {
 	mock.ExpectQuery(`SELECT id, tenant_id, cluster_id, meter`).
 		WithArgs(6, 100).
 		WillReturnRows(sqlmock.NewRows(pendingRowColumns).
-			AddRow("row-1", "tenant-1", "cluster-1", "delivered_minutes", "meter.delivered_minutes", "60000", periodStart, 2))
+			AddRow("row-1", "tenant-1", "cluster-1", "delivered_minutes", "meter.delivered_minutes", "60000", `{}`, periodStart, 2))
 	mock.ExpectExec(`UPDATE purser\.stripe_meter_events_outbox\s+SET attempt_count = attempt_count \+ 1`).
 		WithArgs("row-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -143,7 +148,7 @@ func TestFlush_MarkSentFailureDefers(t *testing.T) {
 	mock.ExpectQuery(`SELECT id, tenant_id, cluster_id, meter`).
 		WithArgs(6, 100).
 		WillReturnRows(sqlmock.NewRows(pendingRowColumns).
-			AddRow("row-1", "tenant-1", "cluster-1", "delivered_minutes", "meter.delivered_minutes", "60000", periodStart, 0))
+			AddRow("row-1", "tenant-1", "cluster-1", "delivered_minutes", "meter.delivered_minutes", "60000", `{}`, periodStart, 0))
 	mock.ExpectExec(`UPDATE purser\.stripe_meter_events_outbox\s+SET sent_at`).
 		WithArgs("row-1").
 		WillReturnError(errors.New("write conflict"))
@@ -183,7 +188,7 @@ func TestFlush_TenantResolveFailureDefers(t *testing.T) {
 	mock.ExpectQuery(`SELECT id, tenant_id, cluster_id, meter`).
 		WithArgs(6, 100).
 		WillReturnRows(sqlmock.NewRows(pendingRowColumns).
-			AddRow("row-1", "tenant-1", "cluster-1", "delivered_minutes", "meter.delivered_minutes", "60000", periodStart, 0))
+			AddRow("row-1", "tenant-1", "cluster-1", "delivered_minutes", "meter.delivered_minutes", "60000", `{}`, periodStart, 0))
 	mock.ExpectExec(`UPDATE purser\.stripe_meter_events_outbox\s+SET attempt_count = attempt_count \+ 1`).
 		WithArgs("row-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -284,7 +289,7 @@ func TestPushOne_ParamConstruction(t *testing.T) {
 				},
 			}
 			err := f.pushOne(context.Background(), "row-7", "tenant-1", tt.clusterID,
-				"delivered_minutes", "meter.delivered_minutes", "60000", periodStart)
+				"delivered_minutes", "meter.delivered_minutes", "60000", `{}`, periodStart)
 			if err != nil {
 				t.Fatalf("pushOne: %v", err)
 			}

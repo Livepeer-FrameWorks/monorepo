@@ -23,7 +23,7 @@ func dec(s string) decimal.Decimal {
 
 func TestBuildRatingInputFromSummary_BasePriceIsZero(t *testing.T) {
 	// Per-event prepaid path must never charge the monthly base fee.
-	in := buildRatingInputFromSummary(models.UsageSummary{ViewerHours: 100}, "EUR", nil)
+	in := buildRatingInputFromSummary(models.UsageSummary{Meters: []models.MeterQuantity{{Meter: "delivered_minutes", Unit: "minute", Quantity: 6000}}}, "EUR", nil)
 	if !in.BasePrice.IsZero() {
 		t.Errorf("BasePrice = %s, want 0 (per-event path must never charge base fee)", in.BasePrice)
 	}
@@ -37,7 +37,10 @@ func TestBuildRatingInputFromSummary_BasePriceIsZero(t *testing.T) {
 }
 
 func TestBuildRatingInputFromSummary_IncludesPriceableOperationalMeters(t *testing.T) {
-	in := buildRatingInputFromSummary(models.UsageSummary{EgressGB: 12.5, PeakBandwidthMbps: 80}, "EUR", nil)
+	in := buildRatingInputFromSummary(models.UsageSummary{Meters: []models.MeterQuantity{
+		{Meter: "egress_gb", Unit: "gigabyte", Quantity: 12.5},
+		{Meter: "peak_bandwidth_mbps", Unit: "megabit_per_second", Quantity: 80},
+	}}, "EUR", nil)
 	if got := in.Usage[rating.Meter("egress_gb")]; !got.Equal(dec("12.5")) {
 		t.Errorf("egress_gb = %s, want 12.5", got)
 	}
@@ -46,55 +49,40 @@ func TestBuildRatingInputFromSummary_IncludesPriceableOperationalMeters(t *testi
 	}
 }
 
-func TestBuildRatingInputFromSummary_MediaSecondsDoesNotDoubleCountBreakdownRollups(t *testing.T) {
+func TestBuildRatingInputFromSummary_PreservesProcessingDimensions(t *testing.T) {
 	in := buildRatingInputFromSummary(models.UsageSummary{
-		ProcessingSeconds: map[string]float64{
-			"Livepeer:h264": 100,
-			"AV:h264":       50,
-			"h264":          150,
+		Meters: []models.MeterQuantity{
+			{Meter: "transcode_rendition_seconds", Unit: "second", Quantity: 100, Dimensions: models.JSONB{"execution_backend": "livepeer", "output_codec": "h264"}},
+			{Meter: "transcode_rendition_seconds", Unit: "second", Quantity: 50, Dimensions: models.JSONB{"execution_backend": "native", "output_codec": "h264"}},
 		},
 	}, "EUR", nil)
-	if got := in.Usage[rating.MeterMediaSeconds]; !got.Equal(dec("150")) {
-		t.Errorf("media_seconds = %s, want 150", got)
+	if got := in.Usage[rating.Meter("transcode_rendition_seconds")]; !got.Equal(dec("150")) {
+		t.Errorf("transcode_rendition_seconds = %s, want 150", got)
 	}
-	if got := in.Breakdowns[rating.MeterMediaSeconds]["h264"]; !got.Equal(dec("150")) {
-		t.Errorf("h264 breakdown = %s, want 150", got)
-	}
-	if got := in.Breakdowns[rating.MeterMediaSeconds]["Livepeer:h264"]; !got.Equal(dec("100")) {
-		t.Errorf("Livepeer:h264 breakdown = %s, want 100", got)
-	}
-	if got := in.Breakdowns[rating.MeterMediaSeconds]["AV:h264"]; !got.Equal(dec("50")) {
-		t.Errorf("AV:h264 breakdown = %s, want 50", got)
+	if len(in.Quantities) != 2 || in.Quantities[0].Dimensions["execution_backend"] != "livepeer" {
+		t.Fatalf("processing dimensions not preserved: %#v", in.Quantities)
 	}
 }
 
 func TestBuildRatingInputFromSummary_IncludesUsageAdjustments(t *testing.T) {
 	in := buildRatingInputFromSummary(models.UsageSummary{
-		ViewerHours: 1,
+		Meters: []models.MeterQuantity{{Meter: "delivered_minutes", Unit: "minute", Quantity: 60}},
 		UsageAdjustments: []models.UsageAdjustment{
 			{UsageType: "delivered_minutes", DeltaValue: -15},
 			{
-				UsageType:  "media_seconds",
-				DeltaValue: -30,
-				Details: models.JSONB{
-					"process_type":    "Livepeer",
-					"output_codec":    "h264",
-					"source_event_id": "event-1",
-				},
+				UsageType: "transcode_rendition_seconds", Unit: "second", DeltaValue: -30,
+				Dimensions: models.JSONB{"execution_backend": "livepeer", "output_codec": "h264"},
 			},
 		},
 	}, "EUR", nil)
 	if got := in.Usage[rating.MeterDeliveredMinutes]; !got.Equal(dec("45")) {
 		t.Errorf("delivered_minutes = %s, want 45", got)
 	}
-	if got := in.Usage[rating.MeterMediaSeconds]; !got.Equal(dec("-30")) {
-		t.Errorf("media_seconds = %s, want -30", got)
+	if got := in.Usage[rating.Meter("transcode_rendition_seconds")]; !got.Equal(dec("-30")) {
+		t.Errorf("transcode_rendition_seconds = %s, want -30", got)
 	}
-	if got := in.Breakdowns[rating.MeterMediaSeconds]["h264"]; !got.Equal(dec("-30")) {
-		t.Errorf("h264 adjustment = %s, want -30", got)
-	}
-	if got := in.Breakdowns[rating.MeterMediaSeconds]["Livepeer:h264"]; !got.Equal(dec("-30")) {
-		t.Errorf("Livepeer:h264 adjustment = %s, want -30", got)
+	if got := in.Quantities[len(in.Quantities)-1]; got.Dimensions["output_codec"] != "h264" || !got.Quantity.Equal(dec("-30")) {
+		t.Errorf("dimensioned adjustment = %#v, want h264/-30", got)
 	}
 }
 
@@ -113,42 +101,6 @@ func TestUsageMapFromAggregates_PassesCanonicalMetersThrough(t *testing.T) {
 	}
 	if v := got[rating.MeterMediaSeconds]; !v.Equal(dec("1800")) {
 		t.Errorf("media_seconds = %s, want 1800", v)
-	}
-}
-
-func TestCodecSecondsFromCluster_FiltersZerosButKeepsCredits(t *testing.T) {
-	in := map[string]float64{"h264": 1800, "av1": 300, "hevc": 0, "vp9": -75}
-	got := codecSecondsFromCluster(in)
-	if v, ok := got["h264"]; !ok || !v.Equal(dec("1800")) {
-		t.Errorf("h264 = %v, want 1800", v)
-	}
-	if v, ok := got["av1"]; !ok || !v.Equal(dec("300")) {
-		t.Errorf("av1 = %v, want 300", v)
-	}
-	if v, ok := got["vp9"]; !ok || !v.Equal(dec("-75")) {
-		t.Errorf("vp9 = %v, want -75", v)
-	}
-	if _, ok := got["hevc"]; ok {
-		t.Errorf("hevc unexpectedly present (zero value)")
-	}
-}
-
-func TestCodecSecondsFromSummary_SumsBothSources(t *testing.T) {
-	s := models.UsageSummary{
-		LivepeerH264Seconds: 100,
-		NativeAvH264Seconds: 50,
-		LivepeerHEVCSeconds: 30,
-		NativeAvAACSeconds:  20,
-	}
-	got := codecSecondsFromSummary(s)
-	if v, ok := got["h264"]; !ok || !v.Equal(dec("150")) {
-		t.Errorf("h264 = %v, want 150", v)
-	}
-	if v, ok := got["hevc"]; !ok || !v.Equal(dec("30")) {
-		t.Errorf("hevc = %v, want 30", v)
-	}
-	if v, ok := got["aac"]; !ok || !v.Equal(dec("20")) {
-		t.Errorf("aac = %v, want 20", v)
 	}
 }
 

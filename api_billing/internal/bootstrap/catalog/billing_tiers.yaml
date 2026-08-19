@@ -24,7 +24,7 @@
 #   pricing_rules: rated meter behaviors. One per (meter, tier).
 #     model: tiered_graduated -- (qty - included_quantity) * unit_price
 #     model: all_usage        -- qty * unit_price
-#     model: codec_multiplier -- processing fee using config.codec_multipliers keyed by codec or process:codec
+#     model: dimensioned      -- most-specific config.rates selector wins for codec, model, backend, or provider
 #     unit_price stored as string for decimal precision.
 #
 #   features: opaque feature flags consumed by the application layer.

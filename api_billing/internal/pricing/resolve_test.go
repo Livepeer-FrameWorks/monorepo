@@ -76,15 +76,16 @@ func TestRulesFromMeteredRatesRejectsMissingModel(t *testing.T) {
 	}
 }
 
-func TestRulesFromMeteredRatesRejectsBadCodecConfig(t *testing.T) {
+func TestRulesFromMeteredRatesRejectsBadDimensionedConfig(t *testing.T) {
 	_, err := buildMeteredRules(map[string]any{
 		"media_seconds": map[string]any{
-			"model":      string(rating.ModelCodecMultiplier),
+			"model":      string(rating.ModelDimensioned),
 			"unit_price": "0.001",
+			"config":     map[string]any{"rates": "invalid"},
 		},
 	}, "EUR")
 	if err == nil {
-		t.Fatal("expected codec_multiplier config error")
+		t.Fatal("expected dimensioned config error")
 	}
 }
 
@@ -604,20 +605,20 @@ func TestMonthly_AccessOnly(t *testing.T) {
 	}
 }
 
-// TestZeroPricedProcessingEmitsLine is the regression test for the
-// self-hosted/free-transcoding visibility bug: zeroPricedRulesFromTier
-// must convert codec_multiplier to all_usage AND the writer must populate
-// Usage[media_seconds] so the converted rule emits a line. Without
-// either change, free transcoding silently disappears from invoices.
+// TestZeroPricedProcessingEmitsLine verifies that self-hosted processing keeps
+// its dimensions visible while both the default and selector prices are zero.
 func TestZeroPricedProcessingEmitsLine(t *testing.T) {
 	tierRules := []rating.Rule{
 		{
 			Meter:     rating.MeterMediaSeconds,
-			Model:     rating.ModelCodecMultiplier,
+			Model:     rating.ModelDimensioned,
 			Currency:  "EUR",
 			UnitPrice: dec("0.001"),
 			Config: map[string]any{
-				"codec_multipliers": map[string]any{"h264": 1.0, "hevc": 1.5},
+				"rates": []any{
+					map[string]any{"selectors": map[string]any{"output_codec": "h264"}, "unit_price": "0.001"},
+					map[string]any{"selectors": map[string]any{"output_codec": "hevc"}, "unit_price": "0.0015"},
+				},
 			},
 		},
 	}
@@ -625,8 +626,8 @@ func TestZeroPricedProcessingEmitsLine(t *testing.T) {
 	if len(zeroed) != 1 {
 		t.Fatalf("zeroed rule count = %d, want 1", len(zeroed))
 	}
-	if zeroed[0].Model != rating.ModelAllUsage {
-		t.Fatalf("zeroed model = %s, want all_usage (codec_multiplier returns nil at unit_price=0)", zeroed[0].Model)
+	if zeroed[0].Model != rating.ModelDimensioned {
+		t.Fatalf("zeroed model = %s, want dimensioned", zeroed[0].Model)
 	}
 
 	// Now drive the rating engine with the zeroed rule and a non-zero
@@ -636,8 +637,8 @@ func TestZeroPricedProcessingEmitsLine(t *testing.T) {
 		Currency:  "EUR",
 		BasePrice: decimal.Zero,
 		Rules:     zeroed,
-		Usage: map[rating.Meter]decimal.Decimal{
-			rating.MeterMediaSeconds: dec("3600"),
+		Quantities: []rating.DimensionedQuantity{
+			{Meter: rating.MeterMediaSeconds, Unit: "second", Dimensions: map[string]string{"output_codec": "h264"}, Quantity: dec("3600")},
 		},
 	})
 	if err != nil {

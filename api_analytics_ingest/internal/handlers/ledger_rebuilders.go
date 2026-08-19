@@ -1016,16 +1016,22 @@ func (h *AnalyticsHandler) rebuildApiUsage5m(ctx context.Context, windowStart, w
 			auth_type,
 			operation_type,
 			ifNull(operation_name, '')                  AS operation_name,
+			ifNull(nullIf(source_node, ''), 'bridge')     AS service,
+			llm_model,
+			llm_provider,
 			sum(request_count)                           AS requests,
 			sum(error_count)                             AS errors,
 			sum(total_duration_ms)                       AS duration_ms,
 			sum(total_complexity)                        AS complexity,
+			sum(llm_input_tokens)                        AS llm_input_tokens,
+			sum(llm_output_tokens)                       AS llm_output_tokens,
 			uniqCombinedArrayState(user_hashes)          AS unique_users_state,
 			uniqCombinedArrayState(token_hashes)         AS unique_tokens_state,
 			?                                            AS projection_version_ms
 		FROM periscope.api_requests
 		WHERE timestamp >= ? AND timestamp < ?
-		GROUP BY window_start, tenant_id, auth_type, operation_type, operation_name`,
+		GROUP BY window_start, tenant_id, auth_type, operation_type, operation_name,
+		         service, llm_model, llm_provider`,
 		projectionVersionMS, windowStart, windowEnd); err != nil {
 		return fmt.Errorf("api_usage_5m insert: %w", err)
 	}

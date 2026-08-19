@@ -94,7 +94,7 @@ func TestInvoiceCreatedRendersClusterGroupings(t *testing.T) {
 		{
 			Description: "Delivered minutes", ClusterID: "central-primary", ClusterName: "Platform EU",
 			ClusterKind: "platform_official",
-			Quantity:    "60000", UnitPrice: "0.00055", Total: "33.00", Currency: "EUR",
+			Quantity:    "60000", Unit: "minute", DimensionLabel: "output codec: h264", UnitPrice: "0.00055", Total: "33.00", Currency: "EUR",
 			PricingSource: "tier", PricingLabel: "Subscription tier",
 		},
 		{
@@ -136,6 +136,8 @@ func TestInvoiceCreatedRendersClusterGroupings(t *testing.T) {
 		"Subscription",            // tenant-scoped group label
 		"Self-hosted (no charge)", // pricing label visible
 		"Marketplace metered",     // marketplace pricing label
+		"60000 minute",            // canonical quantity unit is explicit
+		"output codec: h264",      // priced dimensions are explicit
 		"Included",                // zero-price line shows "Included" not the $0.00 column
 	}
 	for _, want := range wants {

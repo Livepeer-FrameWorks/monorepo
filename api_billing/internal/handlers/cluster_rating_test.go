@@ -9,6 +9,7 @@ import (
 
 	billingpkg "frameworks/api_billing/internal/billing"
 	"frameworks/api_billing/internal/pricing"
+	"frameworks/api_billing/internal/rating"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
@@ -41,7 +42,7 @@ func TestRateInvoiceForTenantZeroesBaseForProviderManagedSub(t *testing.T) {
 		true,                            // includeBasePrice
 		true,                            // baseProviderManaged — Stripe/Mollie owns the base
 		map[string]map[string]float64{}, // no usage → no resolver call
-		map[string]map[string]map[string]float64{}, // no codec breakdown
+		map[string][]rating.DimensionedQuantity{},
 	)
 	if err != nil {
 		t.Fatalf("rateInvoiceForTenant: %v", err)
@@ -77,7 +78,7 @@ func TestRateInvoiceForTenantKeepsBaseForSelfManagedSub(t *testing.T) {
 		true,                            // includeBasePrice
 		false,                           // baseProviderManaged — Purser owns the base
 		map[string]map[string]float64{}, // no usage
-		map[string]map[string]map[string]float64{}, // no codec breakdown
+		map[string][]rating.DimensionedQuantity{},
 	)
 	if err != nil {
 		t.Fatalf("rateInvoiceForTenant: %v", err)

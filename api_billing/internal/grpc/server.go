@@ -571,6 +571,7 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *purserpb
 	var billingModel sql.NullString
 	var subscriptionStatus sql.NullString
 	var balanceCents sql.NullInt64
+	var reservedBalanceCents sql.NullInt64
 	var retentionRaw sql.NullString
 	var dvrEntitlements sql.NullString
 	var tierID sql.NullString
@@ -591,6 +592,7 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *purserpb
 			ts.billing_model,
 			ts.status,
 			pb.balance_cents,
+			reservations.reserved_balance_cents,
 			te.value::text,
 			dvr.entitlements::text,
 			ts.tier_id,
@@ -601,6 +603,14 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *purserpb
 		FROM purser.tenant_subscriptions ts
 		LEFT JOIN purser.prepaid_balances pb
 			ON pb.tenant_id = ts.tenant_id AND pb.currency = $2
+		LEFT JOIN LATERAL (
+			SELECT CEIL(COALESCE(SUM(reserved_amount_micro), 0)::numeric / 10000)::bigint
+				AS reserved_balance_cents
+			FROM purser.usage_reservations
+			WHERE tenant_id = ts.tenant_id
+			  AND currency = $2
+			  AND updated_at >= NOW() - INTERVAL '3 minutes'
+		) reservations ON TRUE
 		LEFT JOIN LATERAL (
 			-- Precedence: subscription override (priority 1) deterministically
 			-- beats tier entitlement (priority 2) regardless of UNION ordering.
@@ -676,16 +686,17 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *purserpb
 		}, pq.StringArray{
 			"max_concurrent_streams",
 			"max_concurrent_viewers",
-		}).Scan(&billingModel, &subscriptionStatus, &balanceCents, &retentionRaw, &dvrEntitlements, &tierID, &billingPeriodStart, &billingPeriodEnd, &storageLimitRaw, &resourceLimitsRaw)
+		}).Scan(&billingModel, &subscriptionStatus, &balanceCents, &reservedBalanceCents, &retentionRaw, &dvrEntitlements, &tierID, &billingPeriodStart, &billingPeriodEnd, &storageLimitRaw, &resourceLimitsRaw)
 	})
 
 	if errors.Is(err, sql.ErrNoRows) {
 		// No subscription = assume postpaid, not suspended, not negative
 		return &purserpb.GetTenantBillingStatusResponse{
-			BillingModel:      "postpaid",
-			IsSuspended:       false,
-			IsBalanceNegative: false,
-			BalanceCents:      0,
+			BillingModel:          "postpaid",
+			IsSuspended:           false,
+			IsBalanceNegative:     false,
+			BalanceCents:          0,
+			AvailableBalanceCents: 0,
 		}, nil
 	}
 
@@ -706,14 +717,20 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *purserpb
 	// Check if suspended (subscription status = 'suspended')
 	isSuspended := subscriptionStatus.Valid && subscriptionStatus.String == "suspended"
 
-	// Check if balance is negative (prepaid only)
+	// Gate prepaid admission on available balance. The settled balance remains
+	// unchanged until finalized usage reaches the financial ledger.
 	isBalanceNegative := false
 	balance := int64(0)
+	reservedBalance := int64(0)
 	if balanceCents.Valid {
 		balance = balanceCents.Int64
-		if model == "prepaid" && balance <= 0 {
-			isBalanceNegative = true
-		}
+	}
+	if reservedBalanceCents.Valid {
+		reservedBalance = reservedBalanceCents.Int64
+	}
+	availableBalance := balance - reservedBalance
+	if model == "prepaid" && availableBalance <= 0 {
+		isBalanceNegative = true
 	}
 
 	retentionDays := parseRetentionDays(retentionRaw)
@@ -744,6 +761,8 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *purserpb
 		IsSuspended:            isSuspended,
 		IsBalanceNegative:      isBalanceNegative,
 		BalanceCents:           balance,
+		ReservedBalanceCents:   reservedBalance,
+		AvailableBalanceCents:  availableBalance,
 		RecordingRetentionDays: retentionDays,
 		DvrPolicy:              dvrPolicy,
 		Allowances:             allowances,
@@ -3493,80 +3512,54 @@ func (s *PurserServer) GetTenantUsage(ctx context.Context, req *purserpb.TenantU
 		return nil, status.Errorf(codes.Internal, "iterate usage rows: %v", rowsErr)
 	}
 
-	// Codec breakdowns live in usage_details.codec_seconds; group by cluster
-	// and meter so codec_multiplier pricing is applied under the same
-	// cluster pricing model as the parent media_seconds row.
-	perClusterCodecBreakdowns := map[string]map[string]map[string]float64{}
-	codecRows, codecErr := s.db.QueryContext(ctx, `
-		WITH usage_codec_rows AS (
-			SELECT COALESCE(ur.cluster_id, '') AS cluster_id,
-			       ur.usage_type,
-			       kv.key,
-			       kv.value::float8 AS seconds
-			FROM purser.usage_records ur
-			CROSS JOIN LATERAL jsonb_each_text(COALESCE(ur.usage_details->'codec_seconds', '{}'::jsonb)) AS kv(key, value)
-			WHERE ur.tenant_id = $1
-			  AND ur.period_start < ($3::date + INTERVAL '1 day')
-			  AND ur.period_end > $2::date
-			  AND ur.value_kind = 'delta'
-			  AND ur.granularity = 'minute_5'
-		),
-		adjustment_base AS (
-			SELECT COALESCE(ua.cluster_id, '') AS cluster_id,
-			       ua.usage_type,
-			       ua.delta_value::float8 AS seconds,
-			       NULLIF(COALESCE(ua.details #>> '{output_codec}', ua.details #>> '{natural_key,output_codec}'), '') AS output_codec,
-			       NULLIF(COALESCE(ua.details #>> '{process_type}', ua.details #>> '{natural_key,process_type}'), '') AS process_type
-			FROM purser.usage_adjustments ua
-			WHERE ua.tenant_id = $1
-			  AND ua.period_start < ($3::date + INTERVAL '1 day')
-			  AND ua.period_end > $2::date
-			  AND ua.status = 'applied'
-			  AND ua.value_kind = 'correction_delta'
-			  AND ua.usage_type = 'media_seconds'
-		),
-		adjustment_codec_rows AS (
-			SELECT cluster_id, usage_type, output_codec AS key, seconds
-			FROM adjustment_base
-			WHERE output_codec IS NOT NULL
-
+	perClusterDimensioned := map[string][]rating.DimensionedQuantity{}
+	dimensionRows, dimensionErr := s.db.QueryContext(ctx, `
+		WITH dimensioned_rows AS (
+			SELECT COALESCE(cluster_id, '') AS cluster_id, usage_type, unit, dimensions, usage_value
+			FROM purser.usage_records
+			WHERE tenant_id = $1
+			  AND period_start < ($3::date + INTERVAL '1 day')
+			  AND period_end > $2::date
+			  AND value_kind = 'delta'
+			  AND granularity = 'minute_5'
 			UNION ALL
-
-			SELECT cluster_id, usage_type, process_type || ':' || output_codec AS key, seconds
-			FROM adjustment_base
-			WHERE output_codec IS NOT NULL AND process_type IS NOT NULL
+			SELECT COALESCE(cluster_id, ''), usage_type, unit, dimensions, delta_value
+			FROM purser.usage_adjustments
+			WHERE tenant_id = $1
+			  AND period_start < ($3::date + INTERVAL '1 day')
+			  AND period_end > $2::date
+			  AND status = 'applied'
+			  AND value_kind = 'correction_delta'
 		)
-		SELECT cluster_id,
-		       usage_type,
-		       key,
-		       COALESCE(SUM(seconds), 0) AS seconds
-		FROM (
-			SELECT * FROM usage_codec_rows
-			UNION ALL
-			SELECT * FROM adjustment_codec_rows
-		) codec_rows
-		GROUP BY cluster_id, usage_type, key
+		SELECT r.cluster_id, r.usage_type, r.unit, r.dimensions,
+		       CASE WHEN d.aggregation = 'max' THEN MAX(r.usage_value) ELSE SUM(r.usage_value) END
+		FROM dimensioned_rows r
+		JOIN purser.meter_definitions d ON d.meter = r.usage_type AND d.active = TRUE
+		GROUP BY r.cluster_id, r.usage_type, r.unit, r.dimensions, d.aggregation
 	`, tenantID, startDate, endDate)
-	if codecErr != nil {
-		return nil, status.Errorf(codes.Internal, "query codec breakdown: %v", codecErr)
+	if dimensionErr != nil {
+		return nil, status.Errorf(codes.Internal, "query dimensioned usage: %v", dimensionErr)
 	}
-	defer func() { _ = codecRows.Close() }()
-	for codecRows.Next() {
-		var clusterID, usageType, key string
-		var seconds float64
-		if scanErr := codecRows.Scan(&clusterID, &usageType, &key, &seconds); scanErr != nil {
-			return nil, status.Errorf(codes.Internal, "scan codec breakdown: %v", scanErr)
+	defer func() { _ = dimensionRows.Close() }()
+	for dimensionRows.Next() {
+		var clusterID, meter, unit string
+		var rawDimensions []byte
+		var quantity decimal.Decimal
+		if scanErr := dimensionRows.Scan(&clusterID, &meter, &unit, &rawDimensions, &quantity); scanErr != nil {
+			return nil, status.Errorf(codes.Internal, "scan dimensioned usage: %v", scanErr)
 		}
-		if perClusterCodecBreakdowns[clusterID] == nil {
-			perClusterCodecBreakdowns[clusterID] = map[string]map[string]float64{}
+		dimensions := map[string]string{}
+		if len(rawDimensions) > 0 {
+			if decodeErr := json.Unmarshal(rawDimensions, &dimensions); decodeErr != nil {
+				return nil, status.Errorf(codes.Internal, "decode dimensions for %s: %v", meter, decodeErr)
+			}
 		}
-		if perClusterCodecBreakdowns[clusterID][usageType] == nil {
-			perClusterCodecBreakdowns[clusterID][usageType] = map[string]float64{}
-		}
-		perClusterCodecBreakdowns[clusterID][usageType][key] = seconds
+		perClusterDimensioned[clusterID] = append(perClusterDimensioned[clusterID], rating.DimensionedQuantity{
+			Meter: rating.Meter(meter), Unit: unit, Dimensions: dimensions, Quantity: quantity,
+		})
 	}
-	if rowsErr := codecRows.Err(); rowsErr != nil {
-		return nil, status.Errorf(codes.Internal, "iterate codec breakdown: %v", rowsErr)
+	if rowsErr := dimensionRows.Err(); rowsErr != nil {
+		return nil, status.Errorf(codes.Internal, "iterate dimensioned usage: %v", rowsErr)
 	}
 
 	// Rate via the engine. Same path as monthly invoice / draft / prepaid;
@@ -3640,7 +3633,7 @@ func (s *PurserServer) GetTenantUsage(ctx context.Context, req *purserpb.TenantU
 		if resolved.Currency != resp.Currency {
 			return nil, status.Errorf(codes.FailedPrecondition, "cluster %s prices in %s but response currency is %s", clusterID, resolved.Currency, resp.Currency)
 		}
-		in := buildRatingInputForUsage(clusterUsage, perClusterCodecBreakdowns[clusterID], resolved.Currency, decimal.Zero, resolved.MeteredRules)
+		in := buildRatingInputForUsage(clusterUsage, perClusterDimensioned[clusterID], resolved.Currency, decimal.Zero, resolved.MeteredRules)
 		res, rateErr := rating.Rate(in)
 		if rateErr != nil {
 			return nil, status.Errorf(codes.Internal, "rate usage for cluster %s: %v", clusterID, rateErr)
@@ -5023,9 +5016,17 @@ func (s *PurserServer) GetPrepaidBalance(ctx context.Context, req *purserpb.GetP
 	var createdAt, updatedAt time.Time
 
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, tenant_id, balance_cents, currency, low_balance_threshold_cents, created_at, updated_at
-		FROM purser.prepaid_balances
-		WHERE tenant_id = $1 AND currency = $2
+		SELECT pb.id, pb.tenant_id, pb.balance_cents, pb.currency,
+			pb.low_balance_threshold_cents, pb.created_at, pb.updated_at,
+			CEIL(COALESCE(SUM(r.reserved_amount_micro), 0)::numeric / 10000)::bigint
+		FROM purser.prepaid_balances pb
+		LEFT JOIN purser.usage_reservations r
+			ON r.tenant_id = pb.tenant_id
+			AND r.currency = pb.currency
+			AND r.updated_at >= NOW() - INTERVAL '3 minutes'
+		WHERE pb.tenant_id = $1 AND pb.currency = $2
+		GROUP BY pb.id, pb.tenant_id, pb.balance_cents, pb.currency,
+			pb.low_balance_threshold_cents, pb.created_at, pb.updated_at
 	`, tenantID, currency).Scan(
 		&balance.Id,
 		&balance.TenantId,
@@ -5034,6 +5035,7 @@ func (s *PurserServer) GetPrepaidBalance(ctx context.Context, req *purserpb.GetP
 		&balance.LowBalanceThresholdCents,
 		&createdAt,
 		&updatedAt,
+		&balance.ReservedBalanceCents,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.NotFound, "no prepaid balance found for tenant %s", tenantID)
@@ -5045,7 +5047,8 @@ func (s *PurserServer) GetPrepaidBalance(ctx context.Context, req *purserpb.GetP
 
 	balance.CreatedAt = timestamppb.New(createdAt)
 	balance.UpdatedAt = timestamppb.New(updatedAt)
-	balance.IsLowBalance = balance.BalanceCents < balance.LowBalanceThresholdCents
+	balance.AvailableBalanceCents = balance.BalanceCents - balance.ReservedBalanceCents
+	balance.IsLowBalance = balance.AvailableBalanceCents < balance.LowBalanceThresholdCents
 
 	// Calculate drain rate from last hour's usage deductions
 	var usageLastHour int64
@@ -7826,7 +7829,7 @@ func (s *PurserServer) GetTenantX402Address(ctx context.Context, req *purserpb.G
 // reads must filter by tenant per the cross-service tenant rule.
 func (s *PurserServer) loadInvoiceLineItems(ctx context.Context, invoiceID, tenantID string) ([]*purserpb.LineItem, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT line_key, COALESCE(meter, ''), description,
+		SELECT line_key, COALESCE(meter, ''), unit, dimensions, description,
 		       quantity::text, included_quantity::text, billable_quantity::text,
 		       unit_price::text, amount::text, currency,
 		       COALESCE(cluster_id, ''),
@@ -7843,11 +7846,15 @@ func (s *PurserServer) loadInvoiceLineItems(ctx context.Context, invoiceID, tena
 	items := []*purserpb.LineItem{}
 	for rows.Next() {
 		var li purserpb.LineItem
-		if scanErr := rows.Scan(&li.LineKey, &li.Meter, &li.Description,
+		var dimensionsJSON []byte
+		if scanErr := rows.Scan(&li.LineKey, &li.Meter, &li.Unit, &dimensionsJSON, &li.Description,
 			&li.Quantity, &li.IncludedQuantity, &li.BillableQuantity,
 			&li.UnitPrice, &li.Total, &li.Currency,
 			&li.ClusterId, &li.ClusterKind, &li.PricingSource); scanErr != nil {
 			return nil, fmt.Errorf("scan line item for invoice %s: %w", invoiceID, scanErr)
+		}
+		if len(dimensionsJSON) > 0 {
+			li.Dimensions = mapToProtoStruct(jsonToMap(dimensionsJSON))
 		}
 		li.PricingLabel = pricingLabelFor(li.PricingSource, li.ClusterKind)
 		items = append(items, &li)

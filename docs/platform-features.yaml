@@ -1294,8 +1294,8 @@ features:
     description: Two-sided placement policy — cluster-owner and content-owner constraints (data residency, minimum durable copies) compiled into signed enforcement bundles evaluated at serve/ingest/process/store/replicate/peer decision points — over a cold-to-hot storage tier ladder with a backend-keyed placement ledger.
     status: roadmap
     gap_reason: |
-      Partially built. A typed single-backend immutable storage descriptor ships today (AdoptClusterStorageDescriptor
-      RPC with fingerprinted backend ownership and fail-closed guards; see docs/architecture/durable-media-storage.md),
+      Partially built. A typed single-backend immutable storage descriptor ships today (desired-state bootstrap with
+      fingerprinted backend ownership and fail-closed guards; see docs/architecture/durable-media-storage.md),
       giving each cluster a typed, durable storage backend rather than an untyped implicit copy. Still deferred by design
       (docs/rfcs/placement-policy-engine.md): the multi-backend storage registry (cluster_storage_backends /
       artifact_locations), the cold-to-hot tier ladder, and the two-sided (cluster-owner + content-owner) policy engine.

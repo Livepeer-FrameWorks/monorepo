@@ -71,12 +71,12 @@ func TestDecimalField_StringExactVsFloatDrift(t *testing.T) {
 	}
 }
 
-// configMapField extracts the optional codec-multiplier config object. A
+// configMapField extracts the optional pricing-model config object. A
 // malformed config (string/number/list) must return a clean error so the
 // caller surfaces it, never a silent nil that would price transcoding at $0.
 func TestConfigMapField(t *testing.T) {
 	// Present object.
-	cfg, err := configMapField(map[string]any{"config": map[string]any{"codec_multipliers": map[string]any{"h265": 1.5}}}, "config")
+	cfg, err := configMapField(map[string]any{"config": map[string]any{"rates": []any{map[string]any{"selectors": map[string]any{"output_codec": "h265"}, "unit_price": "1.5"}}}}, "config")
 	if err != nil {
 		t.Fatalf("present object: %v", err)
 	}

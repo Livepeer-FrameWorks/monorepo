@@ -35,6 +35,7 @@ ARG GIT_COMMIT=docker
 ARG BUILD_DATE
 ARG COMPONENT_NAME=periscope-query
 ARG COMPONENT_VERSION=0.0.0
+ARG CMD_PACKAGE=./cmd/periscope
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
@@ -44,7 +45,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
               -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.BuildDate=${BUILD_DATE} \
               -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.ComponentName=${COMPONENT_NAME} \
               -X github.com/Livepeer-FrameWorks/monorepo/pkg/version.ComponentVersion=${COMPONENT_VERSION}" \
-    -o periscope ./cmd/periscope
+	-o service ${CMD_PACKAGE}
 
 # Runtime stage
 FROM alpine:3.19
@@ -62,17 +63,17 @@ RUN addgroup -g 1001 -S frameworks && \
 WORKDIR /app
 
 # Copy binary from builder stage
-COPY --from=builder /src/frameworks/api_analytics_query/periscope .
+COPY --from=builder /src/frameworks/api_analytics_query/service .
 
 # Change ownership
-RUN chown frameworks:frameworks /app/periscope
+RUN chown frameworks:frameworks /app/service
 
 USER frameworks
 
-# Health check (using gRPC health endpoint)
+# Both query and metering binaries expose the standard HTTP health endpoint.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD grpcurl -plaintext localhost:${GRPC_PORT:-19004} grpc.health.v1.Health/Check || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT:-18004}/health || exit 1
 
-EXPOSE 18004 19004
+EXPOSE 18004 18021 19004
 
-CMD ["./periscope"] 
+CMD ["./service"]

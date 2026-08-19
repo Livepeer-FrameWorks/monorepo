@@ -2380,7 +2380,16 @@ message ProcessingConfig {
   repeated string local_input_codecs = 4;    // ["H264", "H265", "AV1", "VP9"] - what local MistServer accepts
 }
 
-// ProcessBillingEvent tracks transcoding usage for billing purposes
+message ProcessMeterQuantity {
+  string meter = 1;
+  string unit = 2;
+  double quantity = 3;
+  map<string, string> dimensions = 4;
+}
+
+// ProcessBillingEvent is the durable processing-completion fact used by
+// analytics and regional metering. It covers transcoding today and product
+// units from future transcription and inference executors.
 // Emitted by Helmsman when MistServer triggers fire:
 // - LIVEPEER_SEGMENT_COMPLETE for Livepeer Gateway transcoding
 // - PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE for MistProcAV transcoding
@@ -2447,6 +2456,15 @@ message ProcessBillingEvent {
   // minutes can be billed against the right cluster's pricing model.
   optional string cluster_id = 70;
   optional string origin_cluster_id = 71;
+
+  optional string operation_id = 72;
+  optional string processing_product = 73; // transcode | remux | transcription | inference
+  optional string execution_backend = 74;  // native_av | ffmpeg | onnx_local | livepeer_network
+  optional string provider_tenant_id = 75;
+  optional string provider_cluster_id = 76;
+  optional string model_id = 77;
+  optional string model_version = 78;
+  repeated ProcessMeterQuantity meter_quantities = 79;
 }
 
 message StorageInfo {
@@ -2825,6 +2843,10 @@ message APIRequestAggregate {
   repeated uint64 user_hashes = 9;  // Hashed user IDs observed in the aggregate window
   repeated uint64 token_hashes = 10; // Hashed API token IDs observed in the aggregate window
   int64 timestamp = 11;             // First request timestamp (Unix seconds)
+  uint64 llm_input_tokens = 12;     // Exact provider-reported input tokens
+  uint64 llm_output_tokens = 13;    // Exact provider-reported output tokens
+  string model = 14;                // Provider model identifier
+  string provider = 15;             // LLM provider identifier
 }
 
 

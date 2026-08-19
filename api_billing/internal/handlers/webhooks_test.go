@@ -384,7 +384,7 @@ func TestUpdateInvoicePaymentStatusMarksInvoicePaidWhenConfirmedPaymentsCoverAmo
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "cluster_id", "cluster_owner_tenant_id", "operator_credit_cents", "platform_fee_cents", "currency", "period_start", "period_end",
 		}))
-	mock.ExpectQuery(`WITH storage_lines`).
+	mock.ExpectQuery(`WITH provider_lines`).
 		WithArgs("invoice-2").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "storage_provider_tenant_id", "storage_provider_cluster_id", "storage_backend",

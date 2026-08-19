@@ -7,7 +7,6 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 )
 
 // processPrepaidUsage must refuse to settle usage priced in a currency other
@@ -39,7 +38,7 @@ func TestProcessPrepaidUsage_CurrencyMismatchRejected(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
 
 	err := jm.processPrepaidUsage(context.Background(),
-		models.UsageSummary{TenantID: tenant, Period: usagePeriod}, nil)
+		prepaidSummary(tenant), nil)
 	if err == nil {
 		t.Fatal("expected currency-mismatch error, got nil")
 	}

@@ -172,13 +172,15 @@ func TestRate_DeliveredMinutesGraduated(t *testing.T) {
 	}
 }
 
-func TestRate_CodecMultiplier_PerCodecLineItems(t *testing.T) {
+func TestRate_DimensionedPerCodecLineItems(t *testing.T) {
 	rules := []Rule{{
-		Meter: MeterMediaSeconds, Model: ModelCodecMultiplier, Currency: "EUR",
+		Meter: MeterMediaSeconds, Model: ModelDimensioned, Currency: "EUR",
 		UnitPrice: dec("0.001"),
 		Config: map[string]any{
-			"codec_multipliers": map[string]any{
-				"h264": 1.0, "hevc": 1.5, "vp9": 1.5, "av1": 2.0,
+			"rated_quantity_divisor": "60",
+			"rates": []any{
+				map[string]any{"selectors": map[string]any{"output_codec": "h264"}, "unit_price": "0.001"},
+				map[string]any{"selectors": map[string]any{"output_codec": "av1"}, "unit_price": "0.002"},
 			},
 		},
 	}}
@@ -186,9 +188,9 @@ func TestRate_CodecMultiplier_PerCodecLineItems(t *testing.T) {
 		Currency:  "EUR",
 		BasePrice: dec("0"),
 		Rules:     rules,
-		CodecSeconds: map[string]decimal.Decimal{
-			"h264": dec("3600"), // 60 min
-			"av1":  dec("3600"), // 60 min
+		Quantities: []DimensionedQuantity{
+			{Meter: MeterMediaSeconds, Unit: "second", Dimensions: map[string]string{"output_codec": "h264"}, Quantity: dec("3600")},
+			{Meter: MeterMediaSeconds, Unit: "second", Dimensions: map[string]string{"output_codec": "av1"}, Quantity: dec("3600")},
 		},
 	})
 	if err != nil {
@@ -197,7 +199,7 @@ func TestRate_CodecMultiplier_PerCodecLineItems(t *testing.T) {
 	if got, want := len(res.UsageLines), 2; got != want {
 		t.Fatalf("usage lines = %d, want %d", got, want)
 	}
-	h264 := findLine(t, res.UsageLines, "meter:media_seconds:codec:h264")
+	h264 := findDimensionLine(t, res.UsageLines, "output_codec", "h264")
 	if !h264.Amount.Equal(dec("0.06")) { // 60 min × 0.001 × 1.0
 		t.Errorf("h264 amount = %s, want 0.06", h264.Amount)
 	}
@@ -207,7 +209,7 @@ func TestRate_CodecMultiplier_PerCodecLineItems(t *testing.T) {
 	if !h264.BillableQuantity.Mul(h264.UnitPrice).Equal(h264.Amount) {
 		t.Errorf("h264 audit invariant: %s × %s != %s", h264.BillableQuantity, h264.UnitPrice, h264.Amount)
 	}
-	av1 := findLine(t, res.UsageLines, "meter:media_seconds:codec:av1")
+	av1 := findDimensionLine(t, res.UsageLines, "output_codec", "av1")
 	if !av1.Amount.Equal(dec("0.12")) { // 60 min × 0.001 × 2.0
 		t.Errorf("av1 amount = %s, want 0.12", av1.Amount)
 	}
@@ -345,23 +347,23 @@ func TestRate_NegativeGraduatedUsageCreatesCreditLine(t *testing.T) {
 	}
 }
 
-func TestRate_NegativeCodecBreakdownCreatesCreditLine(t *testing.T) {
+func TestRate_NegativeDimensionedQuantityCreatesCreditLine(t *testing.T) {
 	res, err := Rate(Input{
 		Currency:  "EUR",
 		BasePrice: dec("0"),
 		Rules: []Rule{{
 			Meter:     MeterMediaSeconds,
-			Model:     ModelCodecMultiplier,
+			Model:     ModelDimensioned,
 			Currency:  "EUR",
 			UnitPrice: dec("0.001"),
-			Config:    map[string]any{"codec_multipliers": map[string]any{"h264": 1.0}},
+			Config:    map[string]any{"rated_quantity_divisor": "60"},
 		}},
-		CodecSeconds: map[string]decimal.Decimal{"h264": dec("-60")},
+		Quantities: []DimensionedQuantity{{Meter: MeterMediaSeconds, Unit: "second", Dimensions: map[string]string{"output_codec": "h264"}, Quantity: dec("-60")}},
 	})
 	if err != nil {
 		t.Fatalf("Rate: %v", err)
 	}
-	line := findLine(t, res.UsageLines, "meter:media_seconds:codec:h264")
+	line := findDimensionLine(t, res.UsageLines, "output_codec", "h264")
 	if !line.Quantity.Equal(dec("-1")) {
 		t.Errorf("quantity = %s minutes, want -1", line.Quantity)
 	}
@@ -386,20 +388,21 @@ func TestRate_UnknownModelRejected(t *testing.T) {
 	}
 }
 
-func TestRate_CodecMultiplierRequiresMultipliers(t *testing.T) {
+func TestRate_DimensionedRejectsInvalidRates(t *testing.T) {
 	_, err := Rate(Input{
 		Currency:  "EUR",
 		BasePrice: dec("0"),
 		Rules: []Rule{{
 			Meter:     MeterMediaSeconds,
-			Model:     ModelCodecMultiplier,
+			Model:     ModelDimensioned,
 			Currency:  "EUR",
 			UnitPrice: dec("0.001"),
+			Config:    map[string]any{"rates": []any{"invalid"}},
 		}},
-		CodecSeconds: map[string]decimal.Decimal{"h264": dec("60")},
+		Quantities: []DimensionedQuantity{{Meter: MeterMediaSeconds, Unit: "second", Dimensions: map[string]string{"output_codec": "h264"}, Quantity: dec("60")}},
 	})
 	if err == nil {
-		t.Fatal("expected codec_multiplier config error")
+		t.Fatal("expected dimensioned rates error")
 	}
 }
 
@@ -431,30 +434,33 @@ func TestRate_CustomMeterAndQuantityDivisor(t *testing.T) {
 	}
 }
 
-func TestRate_CodecMultiplierUsesMeterScopedBreakdown(t *testing.T) {
+func TestRate_DimensionedUsesMeterScopedQuantities(t *testing.T) {
 	res, err := Rate(Input{
 		Currency:  "EUR",
 		BasePrice: dec("0"),
 		Rules: []Rule{{
 			Meter:     Meter("video_rendition_seconds"),
-			Model:     ModelCodecMultiplier,
+			Model:     ModelDimensioned,
 			Currency:  "EUR",
 			UnitPrice: dec("0.10"),
-			Config:    map[string]any{"codec_multipliers": map[string]any{"h264": 1.0, "av1": 3.0}},
+			Config: map[string]any{"rated_quantity_divisor": "60", "rates": []any{
+				map[string]any{"selectors": map[string]any{"output_codec": "h264"}, "unit_price": "0.10"},
+				map[string]any{"selectors": map[string]any{"output_codec": "av1"}, "unit_price": "0.30"},
+			}},
 		}},
-		Usage: map[Meter]decimal.Decimal{Meter("video_rendition_seconds"): dec("240")},
-		Breakdowns: map[Meter]map[string]decimal.Decimal{
-			Meter("video_rendition_seconds"): {"h264": dec("120"), "av1": dec("60")},
+		Quantities: []DimensionedQuantity{
+			{Meter: Meter("video_rendition_seconds"), Unit: "second", Dimensions: map[string]string{"output_codec": "h264"}, Quantity: dec("120")},
+			{Meter: Meter("video_rendition_seconds"), Unit: "second", Dimensions: map[string]string{"output_codec": "av1"}, Quantity: dec("60")},
 		},
 	})
 	if err != nil {
 		t.Fatalf("Rate: %v", err)
 	}
-	h264 := findLine(t, res.UsageLines, "meter:video_rendition_seconds:codec:h264")
+	h264 := findDimensionLine(t, res.UsageLines, "output_codec", "h264")
 	if !h264.Amount.Equal(dec("0.2")) {
 		t.Errorf("h264 amount = %s, want 0.2", h264.Amount)
 	}
-	av1 := findLine(t, res.UsageLines, "meter:video_rendition_seconds:codec:av1")
+	av1 := findDimensionLine(t, res.UsageLines, "output_codec", "av1")
 	if !av1.Amount.Equal(dec("0.3")) {
 		t.Errorf("av1 amount = %s, want 0.3", av1.Amount)
 	}
@@ -532,6 +538,17 @@ func findLine(t *testing.T, lines []LineItem, key string) LineItem {
 		}
 	}
 	t.Fatalf("line %q not found in %d lines", key, len(lines))
+	return LineItem{}
+}
+
+func findDimensionLine(t *testing.T, lines []LineItem, key, value string) LineItem {
+	t.Helper()
+	for _, line := range lines {
+		if line.Dimensions[key] == value {
+			return line
+		}
+	}
+	t.Fatalf("dimension line %s=%s not found in %+v", key, value, lines)
 	return LineItem{}
 }
 

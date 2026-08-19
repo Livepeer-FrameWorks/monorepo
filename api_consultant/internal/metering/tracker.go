@@ -3,12 +3,16 @@ package metering
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
+	"frameworks/api_consultant/internal/skipper"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type contextKey struct{}
@@ -62,28 +66,35 @@ func RecordEmbedding(ctx context.Context) {
 }
 
 type UsageTrackerConfig struct {
-	DB            *sql.DB
-	Publisher     *Publisher
-	Logger        logging.Logger
-	Model         string
-	ClusterID     string
-	FlushInterval time.Duration
+	DB                *sql.DB
+	Logger            logging.Logger
+	Model             string
+	Provider          string
+	EmbeddingModel    string
+	EmbeddingProvider string
+	SearchProvider    string
+	Publisher         UsagePublisher
+	FlushInterval     time.Duration
+}
+
+type UsagePublisher interface {
+	SendServiceEvent(event *ipcpb.ServiceEvent) error
 }
 
 type UsageTracker struct {
-	db            *sql.DB
-	publisher     *Publisher
-	logger        logging.Logger
-	model         string
-	clusterID     string
-	flushInterval time.Duration
-	stopOnce      sync.Once
-	stopCh        chan struct{}
-	mu            sync.Mutex
-	lastFlush     time.Time
-	usageByTenant map[string]*tenantUsage
-	pendingMu     sync.Mutex
-	pending       []models.UsageSummary
+	db                *sql.DB
+	logger            logging.Logger
+	model             string
+	provider          string
+	embeddingModel    string
+	embeddingProvider string
+	searchProvider    string
+	publisher         UsagePublisher
+	flushInterval     time.Duration
+	stopOnce          sync.Once
+	stopCh            chan struct{}
+	mu                sync.Mutex
+	usageByTenant     map[string]*tenantUsage
 }
 
 type tenantUsage struct {
@@ -99,20 +110,18 @@ func NewUsageTracker(cfg UsageTrackerConfig) *UsageTracker {
 	if flushInterval <= 0 {
 		flushInterval = time.Minute
 	}
-	clusterID := cfg.ClusterID
-	if clusterID == "" {
-		clusterID = "skipper"
-	}
 	return &UsageTracker{
-		db:            cfg.DB,
-		publisher:     cfg.Publisher,
-		logger:        cfg.Logger,
-		model:         cfg.Model,
-		clusterID:     clusterID,
-		flushInterval: flushInterval,
-		stopCh:        make(chan struct{}),
-		lastFlush:     time.Now(),
-		usageByTenant: make(map[string]*tenantUsage),
+		db:                cfg.DB,
+		logger:            cfg.Logger,
+		model:             cfg.Model,
+		provider:          cfg.Provider,
+		embeddingModel:    cfg.EmbeddingModel,
+		embeddingProvider: cfg.EmbeddingProvider,
+		searchProvider:    cfg.SearchProvider,
+		publisher:         cfg.Publisher,
+		flushInterval:     flushInterval,
+		stopCh:            make(chan struct{}),
+		usageByTenant:     make(map[string]*tenantUsage),
 	}
 }
 
@@ -121,6 +130,9 @@ func (t *UsageTracker) Start() {
 		return
 	}
 	go t.loop()
+	if t.publisher != nil && t.db != nil {
+		go t.publishLoop()
+	}
 }
 
 func (t *UsageTracker) Stop() {
@@ -142,6 +154,13 @@ func (t *UsageTracker) RecordLLMCall(tenantID string, inputTokens, outputTokens 
 	usage.llmCalls++
 	usage.inputTokens += inputTokens
 	usage.outputTokens += outputTokens
+}
+
+// LogChatUsage makes the durable tracker the chat UsageLogger. HTTP and gRPC
+// therefore share one persisted financial fact instead of a direct, lossy
+// Decklog publication path.
+func (t *UsageTracker) LogChatUsage(_ context.Context, event skipper.ChatUsageEvent) {
+	t.RecordLLMCall(event.TenantID, event.TokensIn, event.TokensOut)
 }
 
 func (t *UsageTracker) RecordSearchQuery(tenantID string) {
@@ -186,28 +205,21 @@ func (t *UsageTracker) Flush(ctx context.Context) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	now := time.Now()
-
-	t.retryPendingSummaries(ctx)
-
 	t.mu.Lock()
 	if len(t.usageByTenant) == 0 {
-		t.lastFlush = now
 		t.mu.Unlock()
 		return
 	}
 	snapshot := t.usageByTenant
 	t.usageByTenant = make(map[string]*tenantUsage)
-	windowStart := t.lastFlush
-	t.lastFlush = now
 	t.mu.Unlock()
 
 	for tenantID, usage := range snapshot {
-		t.flushTenant(ctx, tenantID, usage, windowStart, now)
+		t.flushTenant(ctx, tenantID, usage)
 	}
 }
 
-func (t *UsageTracker) flushTenant(ctx context.Context, tenantID string, usage *tenantUsage, windowStart, windowEnd time.Time) {
+func (t *UsageTracker) flushTenant(ctx context.Context, tenantID string, usage *tenantUsage) {
 	if tenantID == "" || usage == nil {
 		return
 	}
@@ -223,15 +235,6 @@ func (t *UsageTracker) flushTenant(ctx context.Context, tenantID string, usage *
 		return
 	}
 
-	if t.publisher != nil {
-		summary := t.buildUsageSummary(tenantID, usage, windowStart, windowEnd)
-		if err := t.publisher.PublishUsageSummary(summary); err != nil {
-			t.enqueueSummary(summary)
-			if t.logger != nil {
-				t.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to publish Skipper usage summary")
-			}
-		}
-	}
 }
 
 func (t *UsageTracker) persistUsage(ctx context.Context, tenantID string, usage *tenantUsage) (*tenantUsage, error) {
@@ -243,7 +246,7 @@ func (t *UsageTracker) persistUsage(ctx context.Context, tenantID string, usage 
 	var errs []error
 
 	if usage.llmCalls > 0 {
-		if err := t.insertUsageRow(ctx, tenantID, "llm_call", usage.llmCalls, usage.inputTokens, usage.outputTokens, t.model); err != nil {
+		if err := t.insertUsageRow(ctx, tenantID, "llm_call", usage.llmCalls, usage.inputTokens, usage.outputTokens, t.model, t.provider); err != nil {
 			err = fmt.Errorf("llm_call: %w", err)
 			errs = append(errs, err)
 			failed.llmCalls = usage.llmCalls
@@ -252,14 +255,14 @@ func (t *UsageTracker) persistUsage(ctx context.Context, tenantID string, usage 
 		}
 	}
 	if usage.searches > 0 {
-		if err := t.insertUsageRow(ctx, tenantID, "search_query", usage.searches, 0, 0, ""); err != nil {
+		if err := t.insertUsageRow(ctx, tenantID, "search_query", usage.searches, 0, 0, "", t.searchProvider); err != nil {
 			err = fmt.Errorf("search_query: %w", err)
 			errs = append(errs, err)
 			failed.searches = usage.searches
 		}
 	}
 	if usage.embeddings > 0 {
-		if err := t.insertUsageRow(ctx, tenantID, "embedding", usage.embeddings, 0, 0, ""); err != nil {
+		if err := t.insertUsageRow(ctx, tenantID, "embedding", usage.embeddings, 0, 0, t.embeddingModel, t.embeddingProvider); err != nil {
 			err = fmt.Errorf("embedding: %w", err)
 			errs = append(errs, err)
 			failed.embeddings = usage.embeddings
@@ -272,13 +275,17 @@ func (t *UsageTracker) persistUsage(ctx context.Context, tenantID string, usage 
 	return nil, nil
 }
 
-func (t *UsageTracker) insertUsageRow(ctx context.Context, tenantID, eventType string, count, inputTokens, outputTokens int, model string) error {
+func (t *UsageTracker) insertUsageRow(ctx context.Context, tenantID, eventType string, count, inputTokens, outputTokens int, model, provider string) error {
 	if count <= 0 {
 		return nil
 	}
 	var modelValue sql.NullString
 	if model != "" {
 		modelValue = sql.NullString{String: model, Valid: true}
+	}
+	var providerValue sql.NullString
+	if provider != "" {
+		providerValue = sql.NullString{String: provider, Valid: true}
 	}
 	_, err := t.db.ExecContext(ctx, `
 		INSERT INTO skipper.skipper_usage (
@@ -288,9 +295,10 @@ func (t *UsageTracker) insertUsageRow(ctx context.Context, tenantID, eventType s
 			tokens_input,
 			tokens_output,
 			model,
+			provider,
 			created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, NOW())
-	`, tenantID, eventType, count, inputTokens, outputTokens, modelValue)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+	`, tenantID, eventType, count, inputTokens, outputTokens, modelValue, providerValue)
 	if err != nil && t.logger != nil {
 		t.logger.WithError(err).WithFields(logging.Fields{
 			"tenant_id":  tenantID,
@@ -300,59 +308,132 @@ func (t *UsageTracker) insertUsageRow(ctx context.Context, tenantID, eventType s
 	return err
 }
 
-func (t *UsageTracker) buildUsageSummary(tenantID string, usage *tenantUsage, windowStart, windowEnd time.Time) models.UsageSummary {
-	totalRequests := usage.llmCalls + usage.searches + usage.embeddings
-	totalTokens := usage.inputTokens + usage.outputTokens
-	breakdown := make([]models.APIUsageBreakdown, 0, 3)
+type persistedUsage struct {
+	id, tenantID, eventType, model, provider string
+	count, inputTokens, outputTokens         int
+	createdAt                                time.Time
+}
 
-	if usage.llmCalls > 0 {
-		breakdown = append(breakdown, models.APIUsageBreakdown{
-			AuthType:      "skipper",
-			OperationType: "llm_call",
-			OperationName: "skipper_chat",
-			Requests:      float64(usage.llmCalls),
-			Errors:        0,
-			DurationMs:    0,
-			Complexity:    float64(totalTokens),
-		})
-	}
-	if usage.searches > 0 {
-		breakdown = append(breakdown, models.APIUsageBreakdown{
-			AuthType:      "skipper",
-			OperationType: "search_query",
-			OperationName: "skipper_search",
-			Requests:      float64(usage.searches),
-			Errors:        0,
-			DurationMs:    0,
-			Complexity:    0,
-		})
-	}
-	if usage.embeddings > 0 {
-		breakdown = append(breakdown, models.APIUsageBreakdown{
-			AuthType:      "skipper",
-			OperationType: "embedding",
-			OperationName: "skipper_embedding",
-			Requests:      float64(usage.embeddings),
-			Errors:        0,
-			DurationMs:    0,
-			Complexity:    0,
-		})
-	}
-
-	period := fmt.Sprintf("%s/%s", windowStart.Format(time.RFC3339), windowEnd.Format(time.RFC3339))
-
-	return models.UsageSummary{
-		TenantID:      tenantID,
-		ClusterID:     t.clusterID,
-		Period:        period,
-		Timestamp:     windowEnd,
-		APIRequests:   float64(totalRequests),
-		APIErrors:     0,
-		APIDurationMs: 0,
-		APIComplexity: float64(totalTokens),
-		APIBreakdown:  breakdown,
+func (t *UsageTracker) publishLoop() {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		if err := t.publishPending(context.Background()); err != nil && t.logger != nil {
+			t.logger.WithError(err).Warn("Failed to publish persisted Skipper usage")
+		}
+		select {
+		case <-ticker.C:
+		case <-t.stopCh:
+			return
+		}
 	}
 }
+
+func (t *UsageTracker) publishPending(ctx context.Context) error {
+	rows, err := t.claimPending(ctx)
+	if err != nil {
+		return err
+	}
+	var publishErr error
+	for _, row := range rows {
+		if err := t.publisher.SendServiceEvent(row.serviceEvent()); err != nil {
+			publishErr = errors.Join(publishErr, err)
+			if _, updateErr := t.db.ExecContext(ctx, `
+				UPDATE skipper.skipper_usage
+				SET claimed_at = NULL, attempts = attempts + 1, last_error = $2
+				WHERE id = $1::uuid AND published_at IS NULL
+			`, row.id, err.Error()); updateErr != nil {
+				publishErr = errors.Join(publishErr, fmt.Errorf("record usage publication failure: %w", updateErr))
+			}
+			continue
+		}
+		if _, err := t.db.ExecContext(ctx, `
+			UPDATE skipper.skipper_usage
+			SET published_at = NOW(), claimed_at = NULL, last_error = NULL
+			WHERE id = $1::uuid
+		`, row.id); err != nil {
+			publishErr = errors.Join(publishErr, err)
+		}
+	}
+	return publishErr
+}
+
+func (t *UsageTracker) claimPending(ctx context.Context) ([]persistedUsage, error) {
+	tx, err := t.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id::text, tenant_id::text, event_type, event_count,
+		       COALESCE(tokens_input, 0), COALESCE(tokens_output, 0),
+		       COALESCE(model, ''), COALESCE(provider, ''), created_at
+		FROM skipper.skipper_usage
+		WHERE published_at IS NULL
+		  AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '2 minutes')
+		ORDER BY created_at
+		FOR UPDATE SKIP LOCKED
+		LIMIT 50
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []persistedUsage
+	var ids []string
+	for rows.Next() {
+		var row persistedUsage
+		if err := rows.Scan(&row.id, &row.tenantID, &row.eventType, &row.count,
+			&row.inputTokens, &row.outputTokens, &row.model, &row.provider, &row.createdAt); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+		ids = append(ids, row.id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(ids) > 0 {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE skipper.skipper_usage SET claimed_at = NOW()
+			WHERE id = ANY($1::uuid[])
+		`, postgresArray(ids)); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (u persistedUsage) serviceEvent() *ipcpb.ServiceEvent {
+	operationType := "skipper_" + u.eventType
+	agg := &ipcpb.APIRequestAggregate{
+		TenantId:        u.tenantID,
+		AuthType:        "service",
+		OperationType:   operationType,
+		OperationName:   operationType,
+		RequestCount:    uint32(max(u.count, 0)),
+		Timestamp:       u.createdAt.Unix(),
+		LlmInputTokens:  uint64(max(u.inputTokens, 0)),
+		LlmOutputTokens: uint64(max(u.outputTokens, 0)),
+		Model:           u.model,
+		Provider:        u.provider,
+	}
+	return &ipcpb.ServiceEvent{
+		EventId:   u.id,
+		EventType: "api_request_batch",
+		Timestamp: timestamppb.New(u.createdAt),
+		Source:    "skipper",
+		TenantId:  u.tenantID,
+		Payload: &ipcpb.ServiceEvent_ApiRequestBatch{ApiRequestBatch: &ipcpb.APIRequestBatch{
+			Timestamp: u.createdAt.Unix(), SourceNode: "skipper", Aggregates: []*ipcpb.APIRequestAggregate{agg},
+		}},
+	}
+}
+
+func postgresArray(values []string) string { return "{" + strings.Join(values, ",") + "}" }
 
 func (t *UsageTracker) ensureTenant(tenantID string) *tenantUsage {
 	usage, ok := t.usageByTenant[tenantID]
@@ -375,40 +456,4 @@ func (t *UsageTracker) requeueUsage(tenantID string, usage *tenantUsage) {
 	current.outputTokens += usage.outputTokens
 	current.searches += usage.searches
 	current.embeddings += usage.embeddings
-}
-
-func (t *UsageTracker) enqueueSummary(summary models.UsageSummary) {
-	if t == nil {
-		return
-	}
-	t.pendingMu.Lock()
-	t.pending = append(t.pending, summary)
-	t.pendingMu.Unlock()
-}
-
-func (t *UsageTracker) retryPendingSummaries(ctx context.Context) {
-	if t == nil || t.publisher == nil {
-		return
-	}
-	t.pendingMu.Lock()
-	pending := t.pending
-	t.pending = nil
-	t.pendingMu.Unlock()
-	if len(pending) == 0 {
-		return
-	}
-	var remaining []models.UsageSummary
-	for _, summary := range pending {
-		if err := t.publisher.PublishUsageSummary(summary); err != nil {
-			remaining = append(remaining, summary)
-			if t.logger != nil {
-				t.logger.WithError(err).WithField("tenant_id", summary.TenantID).Warn("Failed to retry Skipper usage summary")
-			}
-		}
-	}
-	if len(remaining) > 0 {
-		t.pendingMu.Lock()
-		t.pending = append(t.pending, remaining...)
-		t.pendingMu.Unlock()
-	}
 }

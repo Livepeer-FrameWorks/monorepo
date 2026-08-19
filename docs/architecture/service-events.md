@@ -18,7 +18,7 @@ This is **service-plane** telemetry; media-plane and Mist triggers remain on the
 ```
 Service Producer → Decklog (gRPC) → Kafka [service_events] → Periscope Ingest → ClickHouse
                                                                            ↓
-                                           Periscope Query → Kafka [billing.usage_reports] → Purser
+                                           Periscope Metering → Kafka [billing.usage_reports] → Purser
                                                                            ↓
                                                                 Usage records / billing
 ```

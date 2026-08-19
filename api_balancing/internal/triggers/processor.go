@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/federation"
@@ -2840,7 +2841,12 @@ func (p *Processor) recordPullSourceEvent(resp *commodorepb.ResolvePullSourceByI
 	if control.CommodoreClient == nil || internalName == "" || kind == "" {
 		return
 	}
-	tenantID := tenants.SystemTenantID.String()
+	systemTenantID, tenantErr := tenants.RuntimeSystemTenantID()
+	if tenantErr != nil {
+		p.logger.WithError(tenantErr).Error("Cannot record pull-source lifecycle event")
+		return
+	}
+	tenantID := systemTenantID.String()
 	streamID := ""
 	if resp != nil {
 		if resp.GetTenantId() != "" {
@@ -4993,7 +4999,8 @@ func (p *Processor) resolveClusterOwnerTenantID(clusterID string) string {
 	return ""
 }
 
-// GenerateAndSendStorageSnapshots generates and sends an hourly storage snapshot to Decklog
+// GenerateAndSendStorageSnapshots generates hourly storage observations and
+// durably enqueues them for delivery to Decklog.
 func (p *Processor) GenerateAndSendStorageSnapshots() error {
 	p.logger.Info("Starting GenerateAndSendStorageSnapshots")
 	ctx := context.Background()
@@ -5003,6 +5010,7 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 		return nil
 	}
 
+	var enqueueErr error
 	for _, nodeSnap := range snapshot.Nodes {
 		// Skip non-storage nodes or unhealthy nodes
 		if !nodeSnap.CapStorage || !nodeSnap.IsActive {
@@ -5108,22 +5116,11 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 			StorageBackend:           stringPtr("edge_disk"),
 		}
 
-		// Send to Decklog
-		trigger := &ipcpb.MistTrigger{
-			TriggerType: "STORAGE_SNAPSHOT",
-			NodeId:      nodeSnap.NodeID,
-			Timestamp:   time.Now().Unix(),
-			TenantId:    func() *string { s := snapshotTenantID; return &s }(),
-			ClusterId:   func() *string { s := p.clusterID; return &s }(),
-			TriggerPayload: &ipcpb.MistTrigger_StorageSnapshot{
-				StorageSnapshot: storageSnapshot,
-			},
-		}
-
-		if err := p.sendTriggerToDecklog(trigger); err != nil {
-			p.logger.WithError(err).WithField("node_id", nodeSnap.NodeID).Error("Failed to send StorageSnapshot to Decklog")
+		if err := artifactoutbox.EnqueueStorageSnapshot(storageSnapshot); err != nil {
+			enqueueErr = errors.Join(enqueueErr, fmt.Errorf("enqueue hot storage snapshot for node %s: %w", nodeSnap.NodeID, err))
+			p.logger.WithError(err).WithField("node_id", nodeSnap.NodeID).Error("Failed to enqueue StorageSnapshot")
 		} else {
-			p.logger.WithField("node_id", nodeSnap.NodeID).Info("Successfully sent StorageSnapshot to Decklog")
+			p.logger.WithField("node_id", nodeSnap.NodeID).Info("Enqueued StorageSnapshot")
 		}
 	}
 
@@ -5131,10 +5128,10 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 	coldUsageMap, err := control.GetColdStorageUsage(context.Background())
 	if err != nil {
 		p.logger.WithError(err).Warn("Failed to compute cold storage usage")
-		return nil
+		return errors.Join(enqueueErr, fmt.Errorf("compute cold storage usage: %w", err))
 	}
 	if len(coldUsageMap) == 0 {
-		return nil
+		return enqueueErr
 	}
 
 	var coldUsages []*ipcpb.TenantStorageUsage
@@ -5170,23 +5167,13 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 		StorageBackend:           stringPtr("s3"),
 	}
 
-	coldTrigger := &ipcpb.MistTrigger{
-		TriggerType: "STORAGE_SNAPSHOT",
-		NodeId:      "s3",
-		Timestamp:   time.Now().Unix(),
-		TenantId:    func() *string { s := coldTenantID; return &s }(),
-		ClusterId:   func() *string { s := p.clusterID; return &s }(),
-		TriggerPayload: &ipcpb.MistTrigger_StorageSnapshot{
-			StorageSnapshot: coldSnapshot,
-		},
-	}
-
-	if err := p.sendTriggerToDecklog(coldTrigger); err != nil {
-		p.logger.WithError(err).Warn("Failed to send cold storage snapshot to Decklog")
+	if err := artifactoutbox.EnqueueStorageSnapshot(coldSnapshot); err != nil {
+		enqueueErr = errors.Join(enqueueErr, fmt.Errorf("enqueue cold storage snapshot: %w", err))
+		p.logger.WithError(err).Warn("Failed to enqueue cold storage snapshot")
 	} else {
-		p.logger.Info("Successfully sent cold storage snapshot to Decklog")
+		p.logger.Info("Enqueued cold storage snapshot")
 	}
-	return nil
+	return enqueueErr
 }
 
 func stringPtr(s string) *string {

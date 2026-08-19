@@ -128,6 +128,14 @@ func applyTenantContext(trigger *ipcpb.MistTrigger) {
 // correlation and a deterministic UUID on EventId for downstream Periscope
 // dedupe. Returns the stable id so callers can include it in structured logs.
 func forwardDurable(triggerType string, body []byte, mistTrigger *ipcpb.MistTrigger) (string, error) {
+	sourceEventID, err := stampDurableIdentity(triggerType, body, mistTrigger)
+	if err != nil {
+		return sourceEventID, err
+	}
+	return sourceEventID, sendDurableMistTrigger(mistTrigger)
+}
+
+func stampDurableIdentity(triggerType string, body []byte, mistTrigger *ipcpb.MistTrigger) (string, error) {
 	nodeID := control.GetCurrentNodeID()
 	sourceEventID := storage.ComputeSourceEventID(nodeID, triggerType, body, walNaturalKey(mistTrigger))
 	if !mist.IsDurableTriggerType(triggerType) {
@@ -135,7 +143,7 @@ func forwardDurable(triggerType string, body []byte, mistTrigger *ipcpb.MistTrig
 	}
 	mistTrigger.RequestId = sourceEventID
 	mistTrigger.EventId = storage.ComputeTypedEventID(sourceEventID)
-	return sourceEventID, sendDurableMistTrigger(mistTrigger)
+	return sourceEventID, nil
 }
 
 // walNaturalKey returns MistServer's per-logical-trigger identity to distinguish two
@@ -2315,6 +2323,10 @@ func HandleLivepeerSegmentComplete(c *gin.Context) {
 	turnaroundMs := params[12]
 	speedFactor := params[13]
 	renditionsJson := params[14]
+	outputCodec := ""
+	if len(params) > 15 {
+		outputCodec = strings.TrimSpace(params[15])
+	}
 
 	logger.WithFields(logging.Fields{
 		"trigger_type":        "LIVEPEER_SEGMENT_COMPLETE",
@@ -2353,17 +2365,14 @@ func HandleLivepeerSegmentComplete(c *gin.Context) {
 	})
 
 	billingEvent := &ipcpb.ProcessBillingEvent{
-		NodeId:      nodeName,
-		StreamName:  streamName,
-		ProcessType: "Livepeer",
-		DurationMs:  durationMsInt,
-		Timestamp:   time.Now().Unix(),
-		TenantId:    stringPtr(config.GetTenantID()),
-		// Mist's LIVEPEER_SEGMENT_COMPLETE payload reports rendition names,
-		// bytes, and dimensions, but not an output codec. Current Livepeer
-		// output is H.264; this must change with the Mist trigger payload if
-		// Livepeer starts emitting multiple codecs.
-		OutputCodec:       stringPtr("h264"),
+		NodeId:            nodeName,
+		StreamName:        streamName,
+		ProcessType:       "Livepeer",
+		DurationMs:        durationMsInt,
+		Timestamp:         time.Now().Unix(),
+		TenantId:          stringPtr(config.GetTenantID()),
+		OutputCodec:       stringPtr(outputCodec),
+		TrackType:         stringPtr("video"),
 		LivepeerSessionId: stringPtr(livepeerSessionId),
 		SegmentNumber:     int32Ptr(safeInt32(segmentNumInt)),
 		SegmentStartMs:    int64Ptr(segmentStartMsInt),

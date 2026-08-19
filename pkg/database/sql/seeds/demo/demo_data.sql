@@ -482,38 +482,44 @@ INSERT INTO quartermaster.bootstrap_tokens (
 -- 7 days of 5-minute delta rows on canonical, 5-min-aligned boundaries.
 -- value_kind='delta' is required for rated meters to feed cluster_rating /
 -- the rating engine; other value shapes are excluded from invoices.
-INSERT INTO purser.usage_records (tenant_id, cluster_id, usage_type, usage_value, usage_details, period_start, period_end, granularity, value_kind)
+INSERT INTO purser.usage_records (
+    tenant_id, cluster_id, usage_type, unit, dimensions, dimension_key,
+    source_id, report_id, usage_value, usage_details,
+    period_start, period_end, granularity, value_kind
+)
 SELECT
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     'central-primary',
     usage_type,
+    unit,
+    dimensions,
+    encode(digest(dimensions::text, 'sha256'), 'hex'),
+    'demo-seed',
+    encode(digest('demo-seed:' || usage_type || ':' || n::text, 'sha256'), 'hex'),
     CASE
         WHEN usage_type = 'storage_gb_seconds_cold' THEN base_value * 300.0 * (0.7 + 0.6 * random())
         WHEN usage_type IN ('max_viewers', 'total_streams', 'total_viewers') THEN base_value * (0.7 + 0.6 * random())
         ELSE base_value / 288.0 * (0.7 + 0.6 * random())
     END,
-    CASE
-        WHEN usage_type = 'media_seconds' THEN
-            '{"codec_seconds":{"h264":8.0,"hevc":1.0,"vp9":2.0,"av1":1.0,"aac":0.5,"opus":0.25},"process_seconds":{"Livepeer":9.0,"AV":3.75}}'::jsonb
-        ELSE '{}'::jsonb
-    END,
+    '{}'::jsonb,
     date_trunc('hour', NOW()) + ((floor(extract(epoch FROM NOW() - date_trunc('hour', NOW())) / 300) - n) * INTERVAL '5 minutes'),
     date_trunc('hour', NOW()) + ((floor(extract(epoch FROM NOW() - date_trunc('hour', NOW())) / 300) - n + 1) * INTERVAL '5 minutes'),
     'minute_5',
     'delta'
 FROM generate_series(0, 2015) AS n
 CROSS JOIN (VALUES
-    ('stream_runtime_seconds', 64800.0),
-    ('ingress_gb', 18.0),
-    ('egress_gb', 65.0),
-    ('storage_gb_seconds_cold', 12.0),
-    ('delivered_minutes', 5100.0),
-    ('media_seconds', 3672.0),
-    ('max_viewers', 140.0),
-    ('total_streams', 3.0),
-    ('total_viewers', 420.0)
-) AS usage_types(usage_type, base_value)
-ON CONFLICT (tenant_id, cluster_id, usage_type, period_start, period_end) DO UPDATE SET
+    ('stream_runtime_seconds', 'second', '{}'::jsonb, 64800.0),
+    ('ingress_gb', 'gibibyte', '{}'::jsonb, 18.0),
+    ('egress_gb', 'gibibyte', '{}'::jsonb, 65.0),
+    ('storage_gb_seconds_cold', 'gibibyte_second', '{"storage_backend":"object","storage_scope":"cold"}'::jsonb, 12.0),
+    ('delivered_minutes', 'minute', '{}'::jsonb, 5100.0),
+    ('transcode_rendition_seconds', 'second', '{"execution_backend":"mist","output_codec":"h264","track_type":"video"}'::jsonb, 3672.0),
+    ('llm_input_tokens', 'token', '{"model":"demo","provider":"demo","service":"skipper"}'::jsonb, 12500.0),
+    ('max_viewers', 'viewer', '{}'::jsonb, 140.0),
+    ('total_streams', 'stream', '{}'::jsonb, 3.0),
+    ('total_viewers', 'viewer', '{}'::jsonb, 420.0)
+) AS usage_types(usage_type, unit, dimensions, base_value)
+ON CONFLICT (tenant_id, cluster_id, source_id, usage_type, dimension_key, period_start, period_end) DO UPDATE SET
     usage_value = EXCLUDED.usage_value,
     granularity = EXCLUDED.granularity,
     value_kind = EXCLUDED.value_kind;
@@ -596,7 +602,7 @@ ON CONFLICT (id) DO UPDATE SET
 -- every invoice; seed data does the same so a fresh dev DB exercises the
 -- line-item rendering path instead of falling back to invoice aggregates.
 INSERT INTO purser.invoice_line_items (
-    invoice_id, tenant_id, line_key, meter, description,
+    invoice_id, tenant_id, line_key, meter, unit, dimensions, description,
     quantity, included_quantity, billable_quantity,
     unit_price, amount, currency,
     cluster_id, cluster_kind, pricing_source
@@ -606,6 +612,8 @@ INSERT INTO purser.invoice_line_items (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     'base_subscription',
     NULL,
+    'subscription',
+    '{}',
     'Base subscription',
     1, 0, 1, 249.00, 249.00, 'EUR',
     NULL, NULL, 'tier'
@@ -615,6 +623,8 @@ INSERT INTO purser.invoice_line_items (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     'meter:delivered_minutes:demo-media:' || TO_CHAR(DATE_TRUNC('month', NOW()), 'YYYYMM'),
     'delivered_minutes',
+    'minute',
+    '{}',
     'Delivered minutes',
     250000, 500000, 0, 0.00052, 0.00, 'EUR',
     'demo-media', 'platform_official', 'tier'
@@ -624,6 +634,8 @@ INSERT INTO purser.invoice_line_items (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     'meter:storage_gb_seconds_cold:demo-media:' || TO_CHAR(DATE_TRUNC('month', NOW()), 'YYYYMM'),
     'storage_gb_seconds_cold',
+    'gibibyte_hour',
+    '{"storage_backend":"object","storage_scope":"cold"}',
     'Cold storage',
     23.5, 0, 23.5, 0.030, 0.71, 'EUR',
     'demo-media', 'platform_official', 'tier'
@@ -633,6 +645,8 @@ INSERT INTO purser.invoice_line_items (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     'base_subscription',
     NULL,
+    'subscription',
+    '{}',
     'Base subscription',
     1, 0, 1, 249.00, 249.00, 'EUR',
     NULL, NULL, 'tier'
@@ -642,6 +656,8 @@ INSERT INTO purser.invoice_line_items (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     'meter:delivered_minutes:demo-media:' || TO_CHAR(DATE_TRUNC('month', NOW() - INTERVAL '1 month'), 'YYYYMM'),
     'delivered_minutes',
+    'minute',
+    '{}',
     'Delivered minutes',
     450000, 500000, 0, 0.00052, 0.00, 'EUR',
     'demo-media', 'platform_official', 'tier'
@@ -651,6 +667,8 @@ INSERT INTO purser.invoice_line_items (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     'meter:storage_gb_seconds_cold:demo-media:' || TO_CHAR(DATE_TRUNC('month', NOW() - INTERVAL '1 month'), 'YYYYMM'),
     'storage_gb_seconds_cold',
+    'gibibyte_hour',
+    '{"storage_backend":"object","storage_scope":"cold"}',
     'Cold storage',
     45.2, 0, 45.2, 0.030, 1.36, 'EUR',
     'demo-media', 'platform_official', 'tier'
@@ -660,6 +678,8 @@ INSERT INTO purser.invoice_line_items (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     'base_subscription',
     NULL,
+    'subscription',
+    '{}',
     'Base subscription',
     1, 0, 1, 249.00, 249.00, 'EUR',
     NULL, NULL, 'tier'
@@ -669,6 +689,8 @@ INSERT INTO purser.invoice_line_items (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     'meter:delivered_minutes:demo-media:' || TO_CHAR(DATE_TRUNC('month', NOW() - INTERVAL '2 months'), 'YYYYMM'),
     'delivered_minutes',
+    'minute',
+    '{}',
     'Delivered minutes',
     350000, 500000, 0, 0.00052, 0.00, 'EUR',
     'demo-media', 'platform_official', 'tier'
@@ -678,6 +700,8 @@ INSERT INTO purser.invoice_line_items (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     'meter:storage_gb_seconds_cold:demo-media:' || TO_CHAR(DATE_TRUNC('month', NOW() - INTERVAL '2 months'), 'YYYYMM'),
     'storage_gb_seconds_cold',
+    'gibibyte_hour',
+    '{"storage_backend":"object","storage_scope":"cold"}',
     'Cold storage',
     32.1, 0, 32.1, 0.030, 0.96, 'EUR',
     'demo-media', 'platform_official', 'tier'
@@ -685,6 +709,8 @@ INSERT INTO purser.invoice_line_items (
 ON CONFLICT (invoice_id, line_key) DO UPDATE SET
     tenant_id = EXCLUDED.tenant_id,
     meter = EXCLUDED.meter,
+    unit = EXCLUDED.unit,
+    dimensions = EXCLUDED.dimensions,
     description = EXCLUDED.description,
     quantity = EXCLUDED.quantity,
     included_quantity = EXCLUDED.included_quantity,

@@ -329,7 +329,7 @@ The detector saves a baseline on first observation per content type. Subsequent 
 
 ### Persistence
 
-Drafts are stored in `skipper.skipper_posts` (`internal/social/store.go`), scoped to the platform system tenant (`pkg/tenants.SystemTenantID`): content type, tweet text, context summary, trigger data (JSONB), and status (`draft` → `sent` once the notification email goes out). The store also backs the daily-limit count and the recent-post lists used for deduplication and theme avoidance.
+Drafts are stored in `skipper.skipper_posts` (`internal/social/store.go`), scoped to the deployment's Quartermaster-owned system tenant (`SYSTEM_TENANT_ID`, resolved through `pkg/tenants.RuntimeSystemTenantID`): content type, tweet text, context summary, trigger data (JSONB), and status (`draft` → `sent` once the notification email goes out). The store also backs the daily-limit count and the recent-post lists used for deduplication and theme avoidance.
 
 ### Constraints
 

@@ -1979,13 +1979,13 @@ func applyOperatorCreditClawbackTx(ctx context.Context, tx *sql.Tx, invoiceID, r
 			),
 			inserted AS (
 				INSERT INTO purser.operator_credit_ledger (
-					source_type, invoice_line_item_id, storage_provider_usage_record_id,
+					source_type, invoice_line_item_id, provider_usage_record_id,
 					usage_adjustment_id, stripe_invoice_id,
 					entry_type, reverses_ledger_id,
 					cluster_owner_tenant_id, cluster_id, invoice_id, period_start, period_end,
 					currency, gross_cents, platform_fee_cents, payable_cents, status, notes
 				)
-			SELECT ol.source_type, ol.invoice_line_item_id, ol.storage_provider_usage_record_id,
+			SELECT ol.source_type, ol.invoice_line_item_id, ol.provider_usage_record_id,
 			       ol.usage_adjustment_id, ol.stripe_invoice_id,
 			       'clawback', ol.id,
 			       ol.cluster_owner_tenant_id, ol.cluster_id, ol.invoice_id,

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
 	"github.com/gin-gonic/gin"
 )
 
@@ -138,8 +139,14 @@ func JWTAuthMiddleware(secret []byte, opts ...JWTOption) gin.HandlerFunc {
 		// If JWT validation fails, try service token validation
 		serviceToken := GetServiceToken()
 		if serviceToken != "" && ValidateServiceToken(token, serviceToken) == nil {
+			systemTenantID, tenantErr := tenants.RuntimeSystemTenantID()
+			if tenantErr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid service identity configuration"})
+				c.Abort()
+				return
+			}
 			c.Set(string(ctxkeys.KeyUserID), "00000000-0000-0000-0000-000000000000")
-			c.Set(string(ctxkeys.KeyTenantID), "00000000-0000-0000-0000-000000000001")
+			c.Set(string(ctxkeys.KeyTenantID), systemTenantID.String())
 			c.Set(string(ctxkeys.KeyEmail), "service@internal")
 			c.Set(string(ctxkeys.KeyRole), "service")
 			c.Set(string(ctxkeys.KeyAuthType), "service")

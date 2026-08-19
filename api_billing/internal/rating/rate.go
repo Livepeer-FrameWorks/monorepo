@@ -1,6 +1,8 @@
 package rating
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
@@ -31,11 +33,6 @@ func Rate(in Input) (Result, error) {
 			return Result{}, fmt.Errorf("rating: unsupported usage meter %q", meter)
 		}
 	}
-	for meter := range in.Breakdowns {
-		if !ValidMeter(meter) {
-			return Result{}, fmt.Errorf("rating: unsupported breakdown meter %q", meter)
-		}
-	}
 
 	base := LineItem{
 		LineKey:          LineKeyBaseSubscription,
@@ -46,6 +43,7 @@ func Rate(in Input) (Result, error) {
 		UnitPrice:        in.BasePrice,
 		Amount:           in.BasePrice,
 		Currency:         currency,
+		Unit:             "subscription",
 	}
 
 	usageLines := make([]LineItem, 0, len(in.Rules))
@@ -59,19 +57,36 @@ func Rate(in Input) (Result, error) {
 		}
 		switch rule.Model {
 		case ModelTieredGraduated:
-			line, ok := rateTieredGraduated(rule, in.Usage[rule.Meter], currency)
+			line, ok := rateTieredGraduated(rule, in.Usage[rule.Meter], ratedUnit(rule, quantityUnit(in.Quantities, rule.Meter)), currency)
 			if ok {
 				usageLines = append(usageLines, line)
 			}
 		case ModelAllUsage:
-			line, ok := rateAllUsage(rule, in.Usage[rule.Meter], currency)
+			line, ok := rateAllUsage(rule, in.Usage[rule.Meter], ratedUnit(rule, quantityUnit(in.Quantities, rule.Meter)), currency)
 			if ok {
 				usageLines = append(usageLines, line)
 			}
-		case ModelCodecMultiplier:
-			lines := rateCodecMultiplier(rule, breakdownForMeter(in, rule.Meter), currency)
+		case ModelDimensioned:
+			lines, dimensionErr := rateDimensioned(rule, quantitiesForMeter(in.Quantities, rule.Meter), currency)
+			if dimensionErr != nil {
+				return Result{}, dimensionErr
+			}
 			usageLines = append(usageLines, lines...)
 		}
+	}
+
+	pricedMeters := make(map[Meter]struct{}, len(in.Rules))
+	for _, rule := range in.Rules {
+		pricedMeters[rule.Meter] = struct{}{}
+	}
+	for _, quantity := range in.Quantities {
+		if quantity.Quantity.IsZero() {
+			continue
+		}
+		if _, priced := pricedMeters[quantity.Meter]; priced {
+			continue
+		}
+		usageLines = append(usageLines, dimensionLine(quantity, decimal.Zero, decimal.Zero, currency))
 	}
 
 	// Sort usage lines by LineKey for determinism.
@@ -128,10 +143,42 @@ func toRatedUnits(rule Rule, quantity decimal.Decimal) decimal.Decimal {
 	}
 }
 
+func quantityUnit(quantities []DimensionedQuantity, meter Meter) string {
+	for _, quantity := range quantities {
+		if quantity.Meter == meter && quantity.Unit != "" {
+			return quantity.Unit
+		}
+	}
+	switch meter {
+	case MeterDeliveredMinutes:
+		return "minute"
+	case MeterIngressGB, MeterEgressGB:
+		return "gibibyte"
+	case MeterStorageGBSecondsHot, MeterStorageGBSecondsCld:
+		return "gibibyte_second"
+	case MeterMediaSeconds:
+		return "second"
+	default:
+		return "unit"
+	}
+}
+
+func ratedUnit(rule Rule, sourceUnit string) string {
+	if configured, ok := rule.Config["rated_unit"].(string); ok && configured != "" {
+		return configured
+	}
+	switch rule.Meter {
+	case MeterStorageGBSecondsHot, MeterStorageGBSecondsCld:
+		return "gibibyte_hour"
+	default:
+		return sourceUnit
+	}
+}
+
 // rateTieredGraduated charges (quantity - included) * unit_price after
 // unit conversion for the meter (storage → GiB-hours, others pass through).
 // Returns ok=false when the line would be a $0 row with no meaningful info.
-func rateTieredGraduated(rule Rule, quantity decimal.Decimal, currency string) (LineItem, bool) {
+func rateTieredGraduated(rule Rule, quantity decimal.Decimal, unit, currency string) (LineItem, bool) {
 	if quantity.IsZero() {
 		return LineItem{}, false
 	}
@@ -148,6 +195,7 @@ func rateTieredGraduated(rule Rule, quantity decimal.Decimal, currency string) (
 			UnitPrice:        rule.UnitPrice,
 			Amount:           amount,
 			Currency:         currency,
+			Unit:             unit,
 		}, true
 	}
 	billable := rated.Sub(rule.IncludedQuantity)
@@ -167,12 +215,13 @@ func rateTieredGraduated(rule Rule, quantity decimal.Decimal, currency string) (
 		UnitPrice:        rule.UnitPrice,
 		Amount:           amount,
 		Currency:         currency,
+		Unit:             unit,
 	}, true
 }
 
 // rateAllUsage charges the full quantity at unit_price, converted to the
 // meter's rated unit first.
-func rateAllUsage(rule Rule, quantity decimal.Decimal, currency string) (LineItem, bool) {
+func rateAllUsage(rule Rule, quantity decimal.Decimal, unit, currency string) (LineItem, bool) {
 	if quantity.IsZero() {
 		return LineItem{}, false
 	}
@@ -188,65 +237,147 @@ func rateAllUsage(rule Rule, quantity decimal.Decimal, currency string) (LineIte
 		UnitPrice:        rule.UnitPrice,
 		Amount:           amount,
 		Currency:         currency,
+		Unit:             unit,
 	}, true
 }
 
-// rateCodecMultiplier emits one line per codec with non-zero seconds.
-//
-// Quantity is normalized to minutes and unit_price to the effective per-minute
-// rate (rule.UnitPrice * codec_multiplier) so the line item satisfies the audit
-// invariant billable_quantity * unit_price = amount.
-func rateCodecMultiplier(rule Rule, codecSeconds map[string]decimal.Decimal, currency string) []LineItem {
-	multipliers, ok := rule.Config["codec_multipliers"].(map[string]any)
-	if !ok || len(multipliers) == 0 || rule.UnitPrice.IsZero() {
-		return nil
-	}
-
-	codecs := make([]string, 0, len(multipliers))
-	for codec := range multipliers {
-		codecs = append(codecs, codec)
-	}
-	sort.Strings(codecs)
-
-	sixty := decimal.NewFromInt(60)
-	out := make([]LineItem, 0, len(codecs))
-	for _, codec := range codecs {
-		seconds := codecSeconds[codec]
-		if seconds.IsZero() {
-			continue
+func quantitiesForMeter(all []DimensionedQuantity, meter Meter) []DimensionedQuantity {
+	out := make([]DimensionedQuantity, 0)
+	for _, quantity := range all {
+		if quantity.Meter == meter {
+			out = append(out, quantity)
 		}
-		mult, ok := decimalFromAny(multipliers[codec])
-		if !ok || mult.IsZero() {
-			continue
-		}
-		minutes := seconds.Div(sixty)
-		effectiveUnitPrice := rule.UnitPrice.Mul(mult)
-		amount := minutes.Mul(effectiveUnitPrice)
-		out = append(out, LineItem{
-			LineKey:          "meter:" + string(rule.Meter) + ":codec:" + codec,
-			Meter:            rule.Meter,
-			Description:      "Processing (" + codec + ")",
-			Quantity:         minutes,
-			IncludedQuantity: decimal.Zero,
-			BillableQuantity: minutes,
-			UnitPrice:        effectiveUnitPrice,
-			Amount:           amount,
-			Currency:         currency,
-		})
 	}
+	sort.Slice(out, func(i, j int) bool { return dimensionKey(out[i].Dimensions) < dimensionKey(out[j].Dimensions) })
 	return out
 }
 
-func breakdownForMeter(in Input, meter Meter) map[string]decimal.Decimal {
-	if in.Breakdowns != nil {
-		if breakdown := in.Breakdowns[meter]; len(breakdown) > 0 {
-			return breakdown
+func rateDimensioned(rule Rule, quantities []DimensionedQuantity, currency string) ([]LineItem, error) {
+	includedRemaining := rule.IncludedQuantity
+	out := make([]LineItem, 0, len(quantities))
+	for _, quantity := range quantities {
+		if quantity.Quantity.IsZero() {
+			continue
 		}
+		unitPrice, err := dimensionUnitPrice(rule, quantity.Dimensions)
+		if err != nil {
+			return nil, err
+		}
+		rated := toRatedUnits(rule, quantity.Quantity)
+		quantity.Quantity = rated
+		quantity.Unit = ratedUnit(rule, quantity.Unit)
+		included := decimal.Zero
+		if rated.IsPositive() && includedRemaining.IsPositive() {
+			included = decimal.Min(rated, includedRemaining)
+			includedRemaining = includedRemaining.Sub(included)
+		}
+		out = append(out, dimensionLine(quantity, included, unitPrice, currency))
 	}
-	if meter == MeterMediaSeconds {
-		return in.CodecSeconds
+	return out, nil
+}
+
+func dimensionUnitPrice(rule Rule, dimensions map[string]string) (decimal.Decimal, error) {
+	selected := rule.UnitPrice
+	selectedSpecificity := -1
+	rawRates, ok := rule.Config["rates"]
+	if !ok {
+		return selected, nil
 	}
-	return nil
+	rates, ok := rawRates.([]any)
+	if !ok {
+		return decimal.Zero, fmt.Errorf("rating: rule for meter %q has invalid rates", rule.Meter)
+	}
+	for _, rawRate := range rates {
+		rateMap, ok := rawRate.(map[string]any)
+		if !ok {
+			return decimal.Zero, fmt.Errorf("rating: rule for meter %q contains an invalid rate", rule.Meter)
+		}
+		selectors := map[string]string{}
+		if rawSelectors, exists := rateMap["selectors"]; exists {
+			switch values := rawSelectors.(type) {
+			case map[string]any:
+				for key, value := range values {
+					text, isString := value.(string)
+					if !isString {
+						return decimal.Zero, fmt.Errorf("rating: selector %q for meter %q is not a string", key, rule.Meter)
+					}
+					selectors[key] = text
+				}
+			case map[string]string:
+				selectors = values
+			default:
+				return decimal.Zero, fmt.Errorf("rating: selectors for meter %q are invalid", rule.Meter)
+			}
+		}
+		matches := true
+		for key, value := range selectors {
+			if dimensions[key] != value {
+				matches = false
+				break
+			}
+		}
+		if !matches || len(selectors) <= selectedSpecificity {
+			continue
+		}
+		price, ok := decimalFromAny(rateMap["unit_price"])
+		if !ok || price.IsNegative() {
+			return decimal.Zero, fmt.Errorf("rating: unit_price for meter %q selector is invalid", rule.Meter)
+		}
+		selected = price
+		selectedSpecificity = len(selectors)
+	}
+	return selected, nil
+}
+
+func dimensionLine(quantity DimensionedQuantity, included, unitPrice decimal.Decimal, currency string) LineItem {
+	billable := quantity.Quantity.Sub(included)
+	if quantity.Quantity.IsPositive() && billable.IsNegative() {
+		billable = decimal.Zero
+	}
+	return LineItem{
+		LineKey:          "meter:" + string(quantity.Meter) + ":dimensions:" + dimensionKey(quantity.Dimensions),
+		Meter:            quantity.Meter,
+		Description:      dimensionDescription(quantity.Meter, quantity.Dimensions),
+		Quantity:         quantity.Quantity,
+		IncludedQuantity: included,
+		BillableQuantity: billable,
+		UnitPrice:        unitPrice,
+		Amount:           billable.Mul(unitPrice),
+		Currency:         currency,
+		Unit:             quantity.Unit,
+		Dimensions:       quantity.Dimensions,
+	}
+}
+
+func dimensionKey(dimensions map[string]string) string {
+	keys := make([]string, 0, len(dimensions))
+	for key := range dimensions {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var material strings.Builder
+	for _, key := range keys {
+		fmt.Fprintf(&material, "%d:%s=%d:%s;", len(key), key, len(dimensions[key]), dimensions[key])
+	}
+	sum := sha256.Sum256([]byte(material.String()))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+func dimensionDescription(meter Meter, dimensions map[string]string) string {
+	base := humanizeMeter(meter)
+	if len(dimensions) == 0 {
+		return base
+	}
+	keys := make([]string, 0, len(dimensions))
+	for key := range dimensions {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, key+"="+dimensions[key])
+	}
+	return base + " (" + strings.Join(parts, ", ") + ")"
 }
 
 func describeMeter(rule Rule) string {

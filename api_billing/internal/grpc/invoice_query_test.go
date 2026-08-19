@@ -25,17 +25,17 @@ func newInvoiceServer(t *testing.T) (*PurserServer, sqlmock.Sqlmock, func()) {
 
 func lineItemRows() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
-		"line_key", "meter", "description",
+		"line_key", "meter", "unit", "dimensions", "description",
 		"quantity", "included_quantity", "billable_quantity",
 		"unit_price", "amount", "currency",
 		"cluster_id", "cluster_kind", "pricing_source",
 	}).AddRow(
-		"base_subscription", "", "Monthly subscription",
+		"base_subscription", "", "", []byte(`{}`), "Monthly subscription",
 		"1", "0", "1",
 		"79.00", "79.00", "EUR",
 		"", "", "tier",
 	).AddRow(
-		"meter:egress_gb", "egress_gb", "Bandwidth",
+		"meter:egress_gb", "egress_gb", "gigabyte", []byte(`{"direction":"egress"}`), "Bandwidth",
 		"120", "100", "20",
 		"0.01", "0.20", "EUR",
 		"cluster-1", "platform_official", "cluster_metered",

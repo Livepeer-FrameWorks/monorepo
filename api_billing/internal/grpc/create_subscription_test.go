@@ -90,7 +90,7 @@ func TestValidatePricingOverrideRule(t *testing.T) {
 		{Meter: "delivered_minutes", Model: "tiered_graduated", Currency: "EURO", IncludedQuantity: "0", UnitPrice: "1", ConfigJson: "{}"},
 		{Meter: "delivered_minutes", Model: "tiered_graduated", Currency: "EUR", IncludedQuantity: "not-decimal", UnitPrice: "1", ConfigJson: "{}"},
 		{Meter: "delivered_minutes", Model: "tiered_graduated", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "-1", ConfigJson: "{}"},
-		{Meter: "media_seconds", Model: "codec_multiplier", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "1", ConfigJson: "{}"},
+		{Meter: "transcode_rendition_seconds", Model: "dimensioned", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "1", ConfigJson: `{"rates":"invalid"}`},
 		{Meter: "delivered_minutes", Model: "tiered_graduated", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "1", ConfigJson: "{bad"},
 	}
 	for _, tc := range cases {

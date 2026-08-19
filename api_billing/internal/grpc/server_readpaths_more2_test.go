@@ -285,10 +285,10 @@ func TestGetTenantUsageAggregatesNoTier(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "total"}).
 			AddRow("cluster-a", "egress_bytes", float64(1000)).
 			AddRow("", "media_seconds", float64(50)))
-	// 2. codec breakdowns (empty)
-	mock.ExpectQuery(`jsonb_each_text`).
+	// 2. dimensioned usage (empty)
+	mock.ExpectQuery(`WITH dimensioned_rows`).
 		WithArgs("tenant-1", "2026-01-01", "2026-01-31").
-		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "key", "seconds"}))
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "unit", "dimensions", "quantity"}))
 	// 3. LoadEffectiveTier → no active subscription
 	mock.ExpectQuery(`metering_enabled`).
 		WithArgs("tenant-1").

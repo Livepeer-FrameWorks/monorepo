@@ -206,6 +206,12 @@ message GetTenantBillingStatusResponse {
   // per-month as per-day × 30. Nil for tenants on tiers without a
   // storage meter (e.g. self-hosted clusters fully tenant-private).
   StoragePricing storage_pricing = 10;
+  // Provisional cost of currently active work. Reservations affect admission
+  // but are never ledger transactions or invoice lines.
+  int64 reserved_balance_cents = 11;
+  // Settled cash balance less active reservations. Prepaid admission gates on
+  // this value while balance_cents remains the auditable settled balance.
+  int64 available_balance_cents = 12;
 }
 
 // Marginal storage pricing snapshot exposed via GetTenantBillingStatus.
@@ -296,7 +302,7 @@ message BillingTier {
 // Mirrors purser.tier_pricing_rules.
 message PricingRule {
   string meter = 1;             // canonical or marketplace-defined meter key
-  string model = 2;             // tiered_graduated | all_usage | codec_multiplier
+  string model = 2;             // tiered_graduated | all_usage | dimensioned
   string currency = 3;          // ISO 4217
   string included_quantity = 4; // decimal as string
   string unit_price = 5;        // decimal as string
@@ -588,6 +594,8 @@ message LineItem {
   // presentation badge in email/dashboard.
   string pricing_source = 13;      // tier | cluster_metered | cluster_monthly | cluster_custom | free_unmetered | self_hosted | included_subscription
   string pricing_label = 14;       // Human-readable label of pricing_source for direct rendering
+  string unit = 15;                // Canonical quantity unit
+  google.protobuf.Struct dimensions = 16; // Bounded priced dimension snapshot
 }
 
 message Invoice {
@@ -1036,6 +1044,8 @@ message PrepaidBalance {
   google.protobuf.Timestamp created_at = 7;
   google.protobuf.Timestamp updated_at = 8;
   int64 drain_rate_cents_per_hour = 9;  // Estimated spend rate per hour (based on last hour)
+  int64 reserved_balance_cents = 10;     // Provisional active-work reservation
+  int64 available_balance_cents = 11;    // Settled balance less active reservation
 }
 
 // Single balance transaction (top-up, usage, refund, etc.)

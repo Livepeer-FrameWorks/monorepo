@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,30 +60,29 @@ func TestOverageAmountParts(t *testing.T) {
 
 func TestParseUsageSummaryPeriod(t *testing.T) {
 	start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
-	mk := func(d time.Duration) string {
-		return start.Format(time.RFC3339) + "/" + start.Add(d).Format(time.RFC3339)
+	mk := func(d time.Duration) models.UsageSummary {
+		return models.UsageSummary{Sequence: 1, PeriodStart: start, PeriodEnd: start.Add(d)}
 	}
 	tests := []struct {
 		name            string
-		period          string
+		summary         models.UsageSummary
 		wantGranularity string
 		wantErr         bool
 	}{
-		{name: "five minutes", period: mk(5 * time.Minute), wantGranularity: "minute_5"},
-		{name: "one hour boundary", period: mk(time.Hour), wantGranularity: "hourly"},
-		{name: "one day boundary", period: mk(24 * time.Hour), wantGranularity: "daily"},
-		{name: "month boundary", period: mk(28 * 24 * time.Hour), wantGranularity: "monthly"},
-		{name: "missing separator", period: "2026-04-01T00:00:00Z", wantErr: true},
-		{name: "unparseable start", period: "notatime/2026-04-01T00:05:00Z", wantErr: true},
-		{name: "non-positive period", period: mk(0), wantErr: true},
-		{name: "inverted period", period: start.Add(time.Hour).Format(time.RFC3339) + "/" + start.Format(time.RFC3339), wantErr: true},
+		{name: "five minutes", summary: mk(5 * time.Minute), wantGranularity: "minute_5"},
+		{name: "one hour boundary", summary: mk(time.Hour), wantGranularity: "hourly"},
+		{name: "one day boundary", summary: mk(24 * time.Hour), wantGranularity: "daily"},
+		{name: "month boundary", summary: mk(28 * 24 * time.Hour), wantGranularity: "monthly"},
+		{name: "missing period", summary: models.UsageSummary{}, wantErr: true},
+		{name: "non-positive period", summary: mk(0), wantErr: true},
+		{name: "inverted period", summary: models.UsageSummary{PeriodStart: start.Add(time.Hour), PeriodEnd: start}, wantErr: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, gran, err := parseUsageSummaryPeriod(models.UsageSummary{Period: tc.period})
+			_, _, gran, err := parseUsageSummaryPeriod(tc.summary)
 			if tc.wantErr {
 				if err == nil {
-					t.Fatalf("expected error for %q, got granularity %q", tc.period, gran)
+					t.Fatalf("expected error, got granularity %q", gran)
 				}
 				return
 			}
@@ -93,6 +93,40 @@ func TestParseUsageSummaryPeriod(t *testing.T) {
 				t.Errorf("granularity = %q, want %q", gran, tc.wantGranularity)
 			}
 		})
+	}
+}
+
+func TestValidateUsageSummaryEnvelopeRequiresSequence(t *testing.T) {
+	start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	summary := models.UsageSummary{
+		ReportID:    strings.Repeat("a", 64),
+		SourceID:    "region-eu-1",
+		ReportKind:  "finalized",
+		TenantID:    "11111111-1111-4111-8111-111111111111",
+		ClusterID:   "cluster-eu-1",
+		PeriodStart: start,
+		PeriodEnd:   start.Add(5 * time.Minute),
+		Complete:    true,
+	}
+	if err := validateUsageSummaryEnvelope(summary); err == nil || err.Error() != "missing_sequence" {
+		t.Fatalf("expected missing_sequence, got %v", err)
+	}
+	summary.Sequence = uint64(summary.PeriodEnd.Unix())
+	if err := validateUsageSummaryEnvelope(summary); err != nil {
+		t.Fatalf("valid envelope rejected: %v", err)
+	}
+}
+
+func TestValidateWindowCompletionRejectsUsage(t *testing.T) {
+	start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	summary := models.UsageSummary{
+		ReportID: strings.Repeat("b", 64), SourceID: "eu-1", ReportKind: "window_complete", Sequence: 1,
+		TenantID: "11111111-1111-4111-8111-111111111111", ClusterID: "_source",
+		PeriodStart: start, PeriodEnd: start.Add(5 * time.Minute), Complete: true,
+		Meters: []models.MeterQuantity{{Meter: "api_requests", Unit: "request", Quantity: 1}},
+	}
+	if err := validateUsageSummaryEnvelope(summary); err == nil || err.Error() != "window_complete_contains_usage" {
+		t.Fatalf("expected window_complete_contains_usage, got %v", err)
 	}
 }
 

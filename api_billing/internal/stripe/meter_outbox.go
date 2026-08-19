@@ -14,10 +14,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// EnqueueMeterEvents inserts one outbox row per (cluster, meter, stripe_meter_event_name)
-// pair on the invoice. The function is idempotent on the
-// (tenant_id, cluster_id, meter, stripe_meter_event_name, period_start) UNIQUE — re-running
-// the finalization tx against the same lines is a no-op.
+// EnqueueMeterEvents inserts one outbox row per priced invoice line. The
+// function is idempotent on (invoice_line_item_id, stripe_meter_event_name),
+// so re-running finalization is a no-op without collapsing dimension buckets
+// of the same meter into one event.
 //
 // Skipped when invoice is in manual_review (Decision 8: hard hold).
 //
@@ -47,7 +47,7 @@ func EnqueueMeterEvents(ctx context.Context, tx *sql.Tx, invoiceID, tenantID, st
 		WITH lines AS (
 			SELECT li.id, COALESCE(li.cluster_id, '') AS cluster_id,
 			       COALESCE(li.meter, '') AS meter,
-			       li.pricing_source, li.quantity, li.amount, li.currency,
+			       li.pricing_source, li.quantity, li.dimensions, li.amount, li.currency,
 			       inv.period_start, inv.period_end
 			FROM purser.invoice_line_items li
 			JOIN purser.billing_invoices inv ON inv.id = li.invoice_id
@@ -56,7 +56,7 @@ func EnqueueMeterEvents(ctx context.Context, tx *sql.Tx, invoiceID, tenantID, st
 			  AND li.amount > 0
 		)
 		SELECT l.id, l.cluster_id, l.meter, l.pricing_source, l.quantity::text,
-		       l.period_start, l.period_end,
+			       l.dimensions::text, l.period_start, l.period_end,
 		       CASE l.pricing_source
 		           WHEN 'cluster_metered' THEN COALESCE(cp.metered_rates -> l.meter ->> 'stripe_meter_event_name', cp.stripe_meter_event_name)
 		           WHEN 'cluster_custom'  THEN COALESCE(cp.metered_rates -> l.meter ->> 'stripe_meter_event_name', cp.stripe_meter_event_name)
@@ -75,6 +75,7 @@ func EnqueueMeterEvents(ctx context.Context, tx *sql.Tx, invoiceID, tenantID, st
 		ClusterID      string
 		Meter          string
 		Quantity       string
+		Dimensions     string
 		PeriodStart    any
 		PeriodEnd      any
 		MeterEventName string
@@ -83,10 +84,11 @@ func EnqueueMeterEvents(ctx context.Context, tx *sql.Tx, invoiceID, tenantID, st
 	for rows.Next() {
 		var (
 			lineID, clusterID, meter, pricingSource, quantity string
+			dimensions                                        string
 			periodStart, periodEnd                            any
 			meterEventName                                    sql.NullString
 		)
-		if err := rows.Scan(&lineID, &clusterID, &meter, &pricingSource, &quantity, &periodStart, &periodEnd, &meterEventName); err != nil {
+		if err := rows.Scan(&lineID, &clusterID, &meter, &pricingSource, &quantity, &dimensions, &periodStart, &periodEnd, &meterEventName); err != nil {
 			return fmt.Errorf("scan meter event row: %w", err)
 		}
 		_ = pricingSource
@@ -102,6 +104,7 @@ func EnqueueMeterEvents(ctx context.Context, tx *sql.Tx, invoiceID, tenantID, st
 			ClusterID:      clusterID,
 			Meter:          meter,
 			Quantity:       quantity,
+			Dimensions:     dimensions,
 			PeriodStart:    periodStart,
 			PeriodEnd:      periodEnd,
 			MeterEventName: meterEventName.String,
@@ -115,11 +118,11 @@ func EnqueueMeterEvents(ctx context.Context, tx *sql.Tx, invoiceID, tenantID, st
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO purser.stripe_meter_events_outbox (
 				tenant_id, cluster_id, meter, stripe_meter_event_name, quantity,
-				period_start, period_end, invoice_id
-			) VALUES ($1, $2, $3, $4, $5::numeric, $6, $7, $8)
-			ON CONFLICT (tenant_id, cluster_id, meter, stripe_meter_event_name, period_start) DO NOTHING
-		`, tenantID, p.ClusterID, p.Meter, p.MeterEventName, p.Quantity,
-			p.PeriodStart, p.PeriodEnd, invoiceID)
+				dimensions, period_start, period_end, invoice_id, invoice_line_item_id
+			) VALUES ($1, $2, $3, $4, $5::numeric, $6::jsonb, $7, $8, $9, $10)
+			ON CONFLICT (invoice_line_item_id, stripe_meter_event_name) DO NOTHING
+		`, tenantID, p.ClusterID, p.Meter, p.MeterEventName, p.Quantity, p.Dimensions,
+			p.PeriodStart, p.PeriodEnd, invoiceID, p.LineID)
 		if err != nil {
 			return fmt.Errorf("insert meter event for line %s: %w", p.LineID, err)
 		}

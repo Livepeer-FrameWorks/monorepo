@@ -2,14 +2,18 @@ package handlers
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/shopspring/decimal"
 	"github.com/sirupsen/logrus"
 
@@ -34,8 +38,105 @@ import (
 type canonicalUsageDelta struct {
 	clusterID    string
 	usageType    string
+	unit         string
+	dimensions   models.JSONB
 	usageValue   float64
 	usageDetails models.JSONB
+}
+
+func (jm *JobManager) quarantineUsageReport(ctx context.Context, msg kafka.Message, summary *models.UsageSummary, reason string) error {
+	reportID, sourceID, tenantID := "", "", any(nil)
+	if summary != nil {
+		reportID = summary.ReportID
+		sourceID = summary.SourceID
+		if parsed, err := uuid.Parse(summary.TenantID); err == nil {
+			tenantID = parsed
+		}
+	}
+	rawPayload := models.JSONB{"base64": base64.StdEncoding.EncodeToString(msg.Value)}
+	if json.Valid(msg.Value) {
+		var decoded any
+		if err := json.Unmarshal(msg.Value, &decoded); err == nil {
+			rawPayload = models.JSONB{"payload": decoded}
+		}
+	}
+	_, err := jm.db.ExecContext(ctx, `
+		INSERT INTO purser.usage_report_quarantine
+			(report_id, source_id, tenant_id, rejected_reason,
+			 source_topic, source_partition, source_offset, raw_payload)
+		VALUES (NULLIF($1, ''), $2, $3, $4, $5, $6, $7, $8)
+	`, reportID, sourceID, tenantID, reason, msg.Topic, msg.Partition, msg.Offset, rawPayload)
+	return err
+}
+
+func validateUsageSummaryEnvelope(summary models.UsageSummary) error {
+	if len(summary.ReportID) != 64 {
+		return errors.New("invalid_report_id")
+	}
+	if summary.SourceID == "" {
+		return errors.New("missing_source_id")
+	}
+	if summary.ReportKind != "finalized" && summary.ReportKind != "reservation" && summary.ReportKind != "window_complete" {
+		return errors.New("invalid_report_kind")
+	}
+	if summary.Sequence == 0 {
+		return errors.New("missing_sequence")
+	}
+	if _, err := uuid.Parse(summary.TenantID); err != nil {
+		return errors.New("invalid_tenant_id")
+	}
+	if summary.ClusterID == "" {
+		return errors.New("missing_cluster_id")
+	}
+	if _, _, _, err := parseUsageSummaryPeriod(summary); err != nil {
+		return errors.New("invalid_period")
+	}
+	if (summary.ReportKind == "finalized" || summary.ReportKind == "window_complete") && !summary.Complete {
+		return errors.New("incomplete_finalized_report")
+	}
+	if summary.ReportKind == "window_complete" && (len(summary.Meters) != 0 || len(summary.ProviderUsage) != 0 || len(summary.UsageAdjustments) != 0) {
+		return errors.New("window_complete_contains_usage")
+	}
+	return nil
+}
+
+func (jm *JobManager) validateUsageSummaryMeters(ctx context.Context, summary models.UsageSummary) error {
+	for _, meter := range summary.Meters {
+		if !rating.ValidMeter(rating.Meter(meter.Meter)) {
+			return fmt.Errorf("invalid_meter:%s", meter.Meter)
+		}
+		if math.IsNaN(meter.Quantity) || math.IsInf(meter.Quantity, 0) || meter.Quantity < 0 {
+			return fmt.Errorf("invalid_quantity:%s", meter.Meter)
+		}
+		var unit string
+		var allowed []string
+		if err := jm.db.QueryRowContext(ctx, `
+			SELECT unit, allowed_dimensions
+			FROM purser.meter_definitions
+			WHERE meter = $1 AND active = TRUE
+		`, meter.Meter).Scan(&unit, pq.Array(&allowed)); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("unknown_meter:%s", meter.Meter)
+			}
+			return fmt.Errorf("load_meter_definition:%w", err)
+		}
+		if meter.Unit != unit {
+			return fmt.Errorf("unit_mismatch:%s", meter.Meter)
+		}
+		allowedSet := make(map[string]struct{}, len(allowed))
+		for _, key := range allowed {
+			allowedSet[key] = struct{}{}
+		}
+		for key, value := range meter.Dimensions {
+			if _, ok := allowedSet[key]; !ok {
+				return fmt.Errorf("dimension_not_allowed:%s:%s", meter.Meter, key)
+			}
+			if _, ok := value.(string); !ok {
+				return fmt.Errorf("dimension_not_string:%s:%s", meter.Meter, key)
+			}
+		}
+	}
+	return nil
 }
 
 func loadSubscriptionPeriod(ctx context.Context, db *sql.DB, tenantID string, now time.Time) (time.Time, time.Time, error) {
@@ -238,6 +339,9 @@ func (jm *JobManager) Start(ctx context.Context) {
 	// Start invoice generation job
 	go jm.runInvoiceGeneration(ctx)
 
+	// Deliver customer invoice notifications from the durable finalization outbox.
+	go jm.runInvoiceEmailOutbox(ctx)
+
 	// Start payment retry job
 	go jm.runPaymentRetry(ctx)
 
@@ -406,15 +510,44 @@ func (jm *JobManager) handleUsageReport(ctx context.Context, msg kafka.Message) 
 			"topic":     msg.Topic,
 			"partition": msg.Partition,
 			"offset":    msg.Offset,
-		}).Error("Failed to unmarshal usage summary from Kafka (skipping poison message)")
+		}).Error("Failed to unmarshal usage summary from Kafka")
+		if quarantineErr := jm.quarantineUsageReport(ctx, msg, nil, "invalid_json"); quarantineErr != nil {
+			return fmt.Errorf("quarantine malformed usage report: %w", quarantineErr)
+		}
 		return nil
+	}
+	if err := validateUsageSummaryEnvelope(summary); err != nil {
+		if quarantineErr := jm.quarantineUsageReport(ctx, msg, &summary, err.Error()); quarantineErr != nil {
+			return fmt.Errorf("quarantine invalid usage report: %w", quarantineErr)
+		}
+		return nil
+	}
+	if err := jm.validateUsageSummaryMeters(ctx, summary); err != nil {
+		if quarantineErr := jm.quarantineUsageReport(ctx, msg, &summary, err.Error()); quarantineErr != nil {
+			return fmt.Errorf("quarantine invalid usage meters: %w", quarantineErr)
+		}
+		return nil
+	}
+	var alreadyProcessed bool
+	if err := jm.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM purser.usage_reports WHERE report_id = $1)`, summary.ReportID).Scan(&alreadyProcessed); err != nil {
+		return fmt.Errorf("check usage report receipt: %w", err)
+	}
+	if alreadyProcessed {
+		return nil
+	}
+
+	if summary.ReportKind == "window_complete" {
+		return jm.processWindowCompletion(ctx, summary)
+	}
+	if summary.ReportKind == "reservation" {
+		return jm.processUsageReservation(ctx, summary)
 	}
 
 	acceptedUsage, err := jm.processUsageSummary(ctx, summary, "kafka")
 	if err != nil {
 		jm.logger.WithError(err).WithFields(logging.Fields{
 			"tenant_id": summary.TenantID,
-			"period":    summary.Period,
+			"report_id": summary.ReportID,
 		}).Error("Failed to process usage summary from Kafka")
 		return err
 	}
@@ -430,9 +563,9 @@ func (jm *JobManager) handleUsageReport(ctx context.Context, msg kafka.Message) 
 		// Prepaid: deduct usage cost from balance. Surface the error so Kafka
 		// retries the message; silently swallowing means the balance never
 		// got charged for usage that was already recorded.
-		if err := jm.processPrepaidUsage(ctx, summary, acceptedUsage); err != nil {
-			jm.logger.WithError(err).WithField("tenant_id", summary.TenantID).Error("Failed to process prepaid usage")
-			return fmt.Errorf("prepaid deduction failed: %w", err)
+		if prepaidErr := jm.processPrepaidUsage(ctx, summary, acceptedUsage); prepaidErr != nil {
+			jm.logger.WithError(prepaidErr).WithField("tenant_id", summary.TenantID).Error("Failed to process prepaid usage")
+			return fmt.Errorf("prepaid deduction failed: %w", prepaidErr)
 		}
 	} else {
 		// Postpaid: update invoice draft. Same retry contract: propagate.
@@ -444,11 +577,199 @@ func (jm *JobManager) handleUsageReport(ctx context.Context, msg kafka.Message) 
 
 	jm.logger.WithFields(logging.Fields{
 		"tenant_id":     summary.TenantID,
-		"period":        summary.Period,
+		"report_id":     summary.ReportID,
 		"billing_model": billingModel,
 	}).Debug("Processed usage summary from Kafka")
 
+	_, err = jm.db.ExecContext(ctx, `
+		INSERT INTO purser.usage_reports
+			(report_id, report_kind, source_id, source_region, sequence,
+			 tenant_id, cluster_id, period_start, period_end, complete)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		ON CONFLICT (report_id) DO NOTHING
+	`, summary.ReportID, summary.ReportKind, summary.SourceID, summary.SourceRegion,
+		summary.Sequence, summary.TenantID, summary.ClusterID,
+		summary.PeriodStart, summary.PeriodEnd, summary.Complete)
+	if err != nil {
+		return fmt.Errorf("record usage report receipt: %w", err)
+	}
 	return nil
+}
+
+func (jm *JobManager) processWindowCompletion(ctx context.Context, summary models.UsageSummary) error {
+	tx, err := jm.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin window completion: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO purser.metering_sources (source_id, region, active_from, required, updated_at)
+		VALUES ($1, $2, $3, TRUE, NOW())
+		ON CONFLICT (source_id) DO UPDATE SET
+			region = EXCLUDED.region,
+			active_from = LEAST(purser.metering_sources.active_from, EXCLUDED.active_from),
+			updated_at = NOW()
+	`, summary.SourceID, summary.SourceRegion, summary.PeriodStart); err != nil {
+		return fmt.Errorf("register metering source: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO purser.usage_reports
+			(report_id, report_kind, source_id, source_region, sequence,
+			 tenant_id, cluster_id, period_start, period_end, complete)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, TRUE)
+		ON CONFLICT (report_id) DO NOTHING
+	`, summary.ReportID, summary.ReportKind, summary.SourceID, summary.SourceRegion,
+		summary.Sequence, summary.TenantID, summary.ClusterID, summary.PeriodStart, summary.PeriodEnd); err != nil {
+		return fmt.Errorf("record window completion receipt: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO purser.metering_windows
+			(source_id, period_start, period_end, complete, report_count, observed_at)
+		VALUES ($1, $2, $3, TRUE, 1, NOW())
+		ON CONFLICT (source_id, period_start, period_end) DO UPDATE SET
+			complete = TRUE,
+			report_count = purser.metering_windows.report_count + 1,
+			observed_at = NOW()
+	`, summary.SourceID, summary.PeriodStart, summary.PeriodEnd); err != nil {
+		return fmt.Errorf("record metering window: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit window completion: %w", err)
+	}
+	return nil
+}
+
+func (jm *JobManager) processUsageReservation(ctx context.Context, summary models.UsageSummary) error {
+	usagePeriodStart, _, _, err := parseUsageSummaryPeriod(summary)
+	if err != nil {
+		return err
+	}
+	tier, err := billingpkg.LoadEffectiveTier(ctx, jm.db, summary.TenantID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("load reservation pricing: %w", err)
+	}
+	currency := tier.Currency
+	if currency == "" {
+		currency = billing.DefaultCurrency()
+	}
+	rules := tier.Rules
+	if summary.ClusterID != "" && jm.pricingResolver() != nil {
+		resolved, resolveErr := pricing.ResolveClusterPricing(ctx, pricing.ResolveInputs{
+			DB: jm.db, QM: jm.pricingResolver(), ConsumingTenantID: summary.TenantID,
+			ClusterID: summary.ClusterID, AsOf: summary.PeriodStart,
+			TierRules: tier.Rules, TierCurrency: tier.Currency,
+		})
+		if resolveErr != nil {
+			return fmt.Errorf("resolve reservation pricing: %w", resolveErr)
+		}
+		rules = resolved.MeteredRules
+		if resolved.Currency != "" {
+			currency = resolved.Currency
+		}
+	}
+	billingPeriodStart, billingPeriodEnd, err := jm.prepaidBillingPeriod(ctx, summary.TenantID, usagePeriodStart)
+	if err != nil {
+		return err
+	}
+	perCluster, err := jm.collectInvoiceDimensionedUsage(ctx, summary.TenantID, billingPeriodStart, billingPeriodEnd)
+	if err != nil {
+		return fmt.Errorf("collect finalized usage for reservation: %w", err)
+	}
+	active := make([]rating.DimensionedQuantity, 0, len(summary.Meters))
+	for _, meter := range summary.Meters {
+		dimensions := make(map[string]string, len(meter.Dimensions))
+		for key, raw := range meter.Dimensions {
+			if value, ok := raw.(string); ok {
+				dimensions[key] = value
+			}
+		}
+		active = append(active, rating.DimensionedQuantity{
+			Meter: rating.Meter(meter.Meter), Unit: meter.Unit,
+			Dimensions: dimensions, Quantity: decimal.NewFromFloat(meter.Quantity),
+		})
+	}
+	finalized := perCluster[summary.ClusterID]
+	finalizedAmount, err := ratePrepaidQuantities(currency, rules, finalized, billingPeriodStart, billingPeriodEnd)
+	if err != nil {
+		return fmt.Errorf("rate finalized usage before reservation: %w", err)
+	}
+	combined := append(append([]rating.DimensionedQuantity{}, finalized...), active...)
+	combinedAmount, err := ratePrepaidQuantities(currency, rules, combined, billingPeriodStart, billingPeriodEnd)
+	if err != nil {
+		return fmt.Errorf("rate usage reservation: %w", err)
+	}
+	reservationAmount := combinedAmount.Sub(finalizedAmount)
+	if reservationAmount.IsNegative() {
+		reservationAmount = decimal.Zero
+	}
+	reservedMicro := reservationAmount.Mul(decimal.NewFromInt(1_000_000)).Round(0).IntPart()
+	metersJSON, err := json.Marshal(summary.Meters)
+	if err != nil {
+		return fmt.Errorf("marshal reservation meters: %w", err)
+	}
+	tx, err := jm.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin reservation transaction: %w", err)
+	}
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			jm.logger.WithError(rollbackErr).Warn("Failed to roll back usage reservation transaction")
+		}
+	}()
+	if _, err = tx.ExecContext(ctx, `
+		INSERT INTO purser.usage_reports
+			(report_id, report_kind, source_id, source_region, sequence,
+			 tenant_id, cluster_id, period_start, period_end, complete)
+		VALUES ($1, 'reservation', $2, $3, $4, $5, $6, $7, $8, $9)
+		ON CONFLICT (report_id) DO NOTHING
+	`, summary.ReportID, summary.SourceID, summary.SourceRegion, summary.Sequence,
+		summary.TenantID, summary.ClusterID, summary.PeriodStart, summary.PeriodEnd, summary.Complete); err != nil {
+		return fmt.Errorf("record reservation report: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, `
+		INSERT INTO purser.usage_reservations
+			(tenant_id, source_id, cluster_id, sequence, report_id,
+			 period_start, period_end, meters, reserved_amount_micro, currency)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		ON CONFLICT (tenant_id, source_id, cluster_id) DO UPDATE SET
+			sequence = EXCLUDED.sequence,
+			report_id = EXCLUDED.report_id,
+			period_start = EXCLUDED.period_start,
+			period_end = EXCLUDED.period_end,
+			meters = EXCLUDED.meters,
+			reserved_amount_micro = EXCLUDED.reserved_amount_micro,
+			currency = EXCLUDED.currency,
+			updated_at = NOW()
+		WHERE EXCLUDED.sequence > purser.usage_reservations.sequence
+	`, summary.TenantID, summary.SourceID, summary.ClusterID, summary.Sequence,
+		summary.ReportID, summary.PeriodStart, summary.PeriodEnd, metersJSON,
+		reservedMicro, currency); err != nil {
+		return fmt.Errorf("upsert usage reservation: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit usage reservation: %w", err)
+	}
+	return nil
+}
+
+func ratePrepaidQuantities(currency string, rules []rating.Rule, quantities []rating.DimensionedQuantity, periodStart, periodEnd time.Time) (decimal.Decimal, error) {
+	usage := make(map[rating.Meter]decimal.Decimal)
+	for _, quantity := range quantities {
+		usage[quantity.Meter] = usage[quantity.Meter].Add(quantity.Quantity)
+	}
+	result, err := rating.Rate(rating.Input{
+		Currency: currency, BasePrice: decimal.Zero, Rules: rules,
+		Usage: usage, Quantities: quantities,
+		PeriodStart: periodStart, PeriodEnd: periodEnd,
+		WaiveUsageCharges: config.WaiveUsageChargesEnabled(),
+	})
+	if err != nil {
+		return decimal.Zero, err
+	}
+	return result.UsageAmount, nil
 }
 
 // getTenantBillingModel returns the billing model for a tenant (prepaid or postpaid)
@@ -467,141 +788,30 @@ func (jm *JobManager) getTenantBillingModel(ctx context.Context, tenantID string
 	return billingModel, err
 }
 
-// buildUsageDataFromSummary maps a UsageSummary onto the canonical
-// usage_types written to purser.usage_records.
-//
-// Priceable meters: delivered_minutes, ingress_gb, egress_gb,
-// storage_gb_seconds_hot/cold, and media_seconds. Operational gauges use
-// the same canonical 5-minute delta envelope so public usage APIs never
-// mix noncanonical or malformed rows with billable data.
-//
-// Per-codec processing breakdown does NOT get its own usage_type — it
-// travels in usage_details.codec_seconds and is consumed by the
-// codec_multiplier rating model. See docs/architecture/meter-contracts.md.
+// buildUsageDataFromSummary is used by aggregate rating paths that do not need
+// per-dimension rows. Financial persistence iterates summary.Meters directly.
 func buildUsageDataFromSummary(summary models.UsageSummary) map[string]float64 {
-	data := map[string]float64{
-		"delivered_minutes":       summary.ViewerHours * 60,
-		"ingress_gb":              summary.IngressGB,
-		"egress_gb":               summary.EgressGB,
-		"storage_gb_seconds_hot":  summary.StorageGBSecondsHot,
-		"storage_gb_seconds_cold": summary.StorageGBSecondsCold,
-		"media_seconds":           totalCodecSeconds(summary),
-		// Operational/display metrics.
-		"stream_runtime_seconds": summary.StreamHours * 3600,
-		"peak_bandwidth_mbps":    summary.PeakBandwidthMbps,
-		"max_viewers":            float64(summary.MaxViewers),
-		"total_streams":          float64(summary.TotalStreams),
-		"total_viewers":          float64(summary.TotalViewers),
-		"unique_users":           float64(summary.UniqueUsers),
-		"api_requests":           summary.APIRequests,
-		"api_errors":             summary.APIErrors,
-		"api_duration_ms":        summary.APIDurationMs,
-		"api_complexity":         summary.APIComplexity,
-	}
-	for meter, value := range summary.Meters {
-		if _, exists := data[meter]; exists && data[meter] != 0 {
-			continue
-		}
-		data[meter] = value
+	data := make(map[string]float64, len(summary.Meters))
+	for _, meter := range summary.Meters {
+		data[meter.Meter] += meter.Quantity
 	}
 	return data
 }
 
-// totalCodecSeconds returns total processed input seconds across all
-// codecs and processing types. The per-codec/per-process breakdown is
-// preserved in usage_details and consumed by ModelCodecMultiplier.
-func totalCodecSeconds(s models.UsageSummary) float64 {
-	if len(s.ProcessingSeconds) > 0 {
-		total := 0.0
-		useJointOnly := hasJointProcessingKeys(s.ProcessingSeconds)
-		for key, seconds := range s.ProcessingSeconds {
-			if useJointOnly && !isJointProcessingKey(key) {
-				continue
-			}
-			total += seconds
-		}
-		return total
-	}
-	return s.LivepeerH264Seconds + s.LivepeerVP9Seconds + s.LivepeerAV1Seconds + s.LivepeerHEVCSeconds +
-		s.NativeAvH264Seconds + s.NativeAvVP9Seconds + s.NativeAvAV1Seconds + s.NativeAvHEVCSeconds +
-		s.NativeAvAACSeconds + s.NativeAvOpusSeconds
-}
-
-func processingDetailsFromSummary(summary models.UsageSummary) (map[string]float64, map[string]float64) {
-	processCodec := map[string]float64{}
-	if len(summary.ProcessingSeconds) > 0 {
-		useJointOnly := hasJointProcessingKeys(summary.ProcessingSeconds)
-		for key, seconds := range summary.ProcessingSeconds {
-			if useJointOnly && !isJointProcessingKey(key) {
-				continue
-			}
-			if seconds > 0 {
-				processCodec[key] += seconds
-			}
-		}
-	} else {
-		addProcessCodecSeconds(processCodec, "Livepeer", "h264", summary.LivepeerH264Seconds)
-		addProcessCodecSeconds(processCodec, "Livepeer", "hevc", summary.LivepeerHEVCSeconds)
-		addProcessCodecSeconds(processCodec, "Livepeer", "vp9", summary.LivepeerVP9Seconds)
-		addProcessCodecSeconds(processCodec, "Livepeer", "av1", summary.LivepeerAV1Seconds)
-		addProcessCodecSeconds(processCodec, "AV", "h264", summary.NativeAvH264Seconds)
-		addProcessCodecSeconds(processCodec, "AV", "hevc", summary.NativeAvHEVCSeconds)
-		addProcessCodecSeconds(processCodec, "AV", "vp9", summary.NativeAvVP9Seconds)
-		addProcessCodecSeconds(processCodec, "AV", "av1", summary.NativeAvAV1Seconds)
-		addProcessCodecSeconds(processCodec, "AV", "aac", summary.NativeAvAACSeconds)
-		addProcessCodecSeconds(processCodec, "AV", "opus", summary.NativeAvOpusSeconds)
-	}
-
-	codecSeconds := map[string]float64{}
-	for key, seconds := range processCodec {
-		parts := strings.SplitN(key, ":", 2)
-		if len(parts) == 2 {
-			codecSeconds[parts[1]] += seconds
-		}
-		codecSeconds[key] += seconds
-	}
-	return codecSeconds, processCodec
-}
-
-func hasJointProcessingKeys(values map[string]float64) bool {
-	for key := range values {
-		if isJointProcessingKey(key) {
-			return true
-		}
-	}
-	return false
-}
-
-func isJointProcessingKey(key string) bool {
-	_, _, ok := strings.Cut(key, ":")
-	return ok
-}
-
-func addProcessCodecSeconds(out map[string]float64, processType, codec string, seconds float64) {
-	if seconds <= 0 {
-		return
-	}
-	out[processType+":"+codec] += seconds
-}
-
 func usageSummaryReferenceID(summary models.UsageSummary) uuid.UUID {
-	clusterID := summary.ClusterID
-	if clusterID == "" {
-		clusterID = "unknown"
-	}
-	raw := fmt.Sprintf("%s:%s:%s", summary.TenantID, clusterID, summary.Period)
-	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(raw))
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(summary.ReportID))
 }
 
-// processPrepaidUsage calculates usage cost and deducts from prepaid balance.
-// Uses rating.UsageAmount only, never TotalAmount, so per-event deductions
-// don't re-charge the monthly base subscription fee.
+// processPrepaidUsage rates the tenant's cumulative billing-period usage and
+// deducts only the marginal change from prepaid balance. Applying included
+// allowances to each five-minute report would renew the allowance every five
+// minutes and structurally undercharge. Base subscription fees are never part
+// of this path.
 func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.UsageSummary, acceptedUsage []canonicalUsageDelta) error {
 	periodStart, _, _, err := parseUsageSummaryPeriod(summary)
 	if err != nil {
 		return err
 	}
-
 	tier, err := billingpkg.LoadEffectiveTier(ctx, jm.db, summary.TenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		jm.logger.WithField("tenant_id", summary.TenantID).Debug("No active subscription for prepaid usage")
@@ -614,11 +824,6 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 		return nil
 	}
 
-	// Resolve cluster pricing for the summary's cluster. The Kafka usage
-	// summary already carries summary.ClusterID; the resolver picks the
-	// effective rules per cluster pricing model. Empty cluster_id usage falls
-	// through to tier rules.
-	rules := tier.Rules
 	currency := tier.Currency
 	if currency == "" {
 		currency = billing.DefaultCurrency()
@@ -626,83 +831,141 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 	if currency != billing.DefaultCurrency() {
 		return fmt.Errorf("prepaid balance currency %s cannot settle usage priced in %s", billing.DefaultCurrency(), currency)
 	}
-	if summary.ClusterID != "" {
-		resolver := jm.pricingResolver()
-		if resolver != nil {
-			resolved, resolveErr := pricing.ResolveClusterPricing(ctx, pricing.ResolveInputs{
-				DB: jm.db, QM: resolver,
-				ConsumingTenantID: summary.TenantID,
-				ClusterID:         summary.ClusterID,
-				AsOf:              periodStart,
-				TierRules:         tier.Rules,
-				TierCurrency:      tier.Currency,
-			})
-			switch {
-			case errors.Is(resolveErr, pricing.ErrCustomPricingMissingForCluster):
-				if jm.billing.metrics != nil {
-					jm.billing.metrics.BillingCalculations.WithLabelValues("prepaid", "custom_pricing_missing").Inc()
-				}
-				return fmt.Errorf("prepaid usage on cluster %s has unconfigured custom pricing", summary.ClusterID)
-			case errors.Is(resolveErr, pricing.ErrAmbiguousClusterOwnership):
-				if jm.billing.metrics != nil {
-					jm.billing.metrics.BillingCalculations.WithLabelValues("prepaid", "ambiguous_cluster_ownership").Inc()
-				}
-				return fmt.Errorf("prepaid usage on cluster %s has ambiguous ownership", summary.ClusterID)
-			case resolveErr != nil:
-				return fmt.Errorf("resolve cluster pricing for %s: %w", summary.ClusterID, resolveErr)
-			}
-			if resolved.Currency != "" && resolved.Currency != currency {
-				return fmt.Errorf("prepaid usage on cluster %s prices in %s but prepaid balance currency is %s", summary.ClusterID, resolved.Currency, currency)
-			}
-			rules = resolved.MeteredRules
-		}
-	}
-
-	in := buildRatingInputFromCanonicalUsage(acceptedUsage, currency, rules)
-	res, err := rating.Rate(in)
-	if err != nil {
-		return fmt.Errorf("rate usage: %w", err)
-	}
-	if res.UsageAmount.IsZero() {
+	if len(acceptedUsage) == 0 {
 		return nil
+	}
+	var alreadySettled bool
+	if queryErr := jm.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM purser.prepaid_usage_settlements WHERE report_id = $1
+		)
+	`, summary.ReportID).Scan(&alreadySettled); queryErr != nil {
+		return fmt.Errorf("check prepaid usage settlement: %w", queryErr)
+	}
+	if alreadySettled {
+		return nil
+	}
+	billingPeriodStart, billingPeriodEnd, err := jm.prepaidBillingPeriod(ctx, summary.TenantID, periodStart)
+	if err != nil {
+		return err
+	}
+	perCluster, err := jm.collectInvoiceDimensionedUsage(ctx, summary.TenantID, billingPeriodStart, billingPeriodEnd)
+	if err != nil {
+		return fmt.Errorf("collect cumulative prepaid usage: %w", err)
+	}
+	desiredAmount, err := jm.rateCumulativePrepaidUsage(ctx, summary.TenantID, billingPeriodStart, billingPeriodEnd, tier, perCluster)
+	if err != nil {
+		return err
 	}
 
 	microPerUnit := decimal.NewFromInt(1_000_000)
-	desiredMicro := res.UsageAmount.Mul(microPerUnit).Round(0).IntPart()
-	if desiredMicro == 0 {
-		return nil
+	desiredCumulativeMicro := desiredAmount.Mul(microPerUnit).Round(0).IntPart()
+	var previouslySettledMicro int64
+	if queryErr := jm.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(amount_micro), 0)
+		FROM purser.prepaid_usage_settlements
+		WHERE tenant_id = $1
+		  AND billing_period_start = $2
+		  AND billing_period_end = $3
+	`, summary.TenantID, billingPeriodStart, billingPeriodEnd).Scan(&previouslySettledMicro); queryErr != nil {
+		return fmt.Errorf("sum prior prepaid usage settlements: %w", queryErr)
 	}
+	marginalMicro := desiredCumulativeMicro - previouslySettledMicro
 
 	referenceID := usageSummaryReferenceID(summary)
-	previousBalance, newBalanceCents, applied, err := jm.deductPrepaidBalanceForUsageMicro(ctx, summary.TenantID, desiredMicro, fmt.Sprintf("Usage: %s", summary.Period), referenceID)
-	if err != nil {
-		return fmt.Errorf("failed to apply prepaid usage amount: %w", err)
+	periodLabel := summary.PeriodStart.UTC().Format(time.RFC3339) + "/" + summary.PeriodEnd.UTC().Format(time.RFC3339)
+	previousBalance, newBalanceCents, applied := int64(0), int64(0), false
+	if marginalMicro != 0 {
+		previousBalance, newBalanceCents, applied, err = jm.deductPrepaidBalanceForUsageMicro(ctx, summary.TenantID, marginalMicro, "Usage: "+periodLabel, referenceID)
+		if err != nil {
+			return fmt.Errorf("failed to apply prepaid usage amount: %w", err)
+		}
 	}
-	if !applied {
-		jm.logger.WithFields(logging.Fields{
-			"tenant_id":  summary.TenantID,
-			"period":     summary.Period,
-			"summary_id": referenceID.String(),
-		}).Info("Skipped prepaid usage deduction for duplicate usage summary")
-		return nil
+	if _, err := jm.db.ExecContext(ctx, `
+		INSERT INTO purser.prepaid_usage_settlements
+			(report_id, tenant_id, billing_period_start, billing_period_end,
+			 amount_micro, cumulative_amount_micro, currency)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (report_id) DO NOTHING
+	`, summary.ReportID, summary.TenantID, billingPeriodStart, billingPeriodEnd,
+		marginalMicro, desiredCumulativeMicro, currency); err != nil {
+		return fmt.Errorf("record prepaid usage settlement: %w", err)
 	}
 
-	appliedCents := previousBalance - newBalanceCents
 	jm.logger.WithFields(logging.Fields{
-		"tenant_id":         summary.TenantID,
-		"period":            summary.Period,
-		"requested_micro":   desiredMicro,
-		"applied_cents":     appliedCents,
-		"new_balance_cents": newBalanceCents,
-	}).Info("Applied prepaid usage amount")
+		"tenant_id":               summary.TenantID,
+		"period":                  periodLabel,
+		"marginal_micro":          marginalMicro,
+		"cumulative_amount_micro": desiredCumulativeMicro,
+	}).Info("Settled cumulative prepaid usage")
 
-	if jm.thresholdEnforcer != nil {
+	if applied && jm.thresholdEnforcer != nil {
 		if err := jm.thresholdEnforcer.EnforcePrepaidThresholds(ctx, summary.TenantID, previousBalance, newBalanceCents); err != nil {
 			jm.logger.WithError(err).WithField("tenant_id", summary.TenantID).Warn("Failed to enforce prepaid thresholds")
 		}
 	}
 
 	return nil
+}
+
+func (jm *JobManager) prepaidBillingPeriod(ctx context.Context, tenantID string, at time.Time) (time.Time, time.Time, error) {
+	var start, end sql.NullTime
+	err := jm.db.QueryRowContext(ctx, `
+		SELECT billing_period_start, billing_period_end
+		FROM purser.tenant_subscriptions
+		WHERE tenant_id = $1 AND status = 'active'
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, tenantID).Scan(&start, &end)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("load prepaid billing period: %w", err)
+	}
+	if start.Valid && end.Valid && end.Time.After(start.Time) {
+		return start.Time.UTC(), end.Time.UTC(), nil
+	}
+	fallbackStart := time.Date(at.Year(), at.Month(), 1, 0, 0, 0, 0, time.UTC)
+	return fallbackStart, fallbackStart.AddDate(0, 1, 0), nil
+}
+
+func (jm *JobManager) rateCumulativePrepaidUsage(
+	ctx context.Context,
+	tenantID string,
+	periodStart, periodEnd time.Time,
+	tier *billingpkg.EffectiveTier,
+	perCluster map[string][]rating.DimensionedQuantity,
+) (decimal.Decimal, error) {
+	total := decimal.Zero
+	for clusterID, quantities := range perCluster {
+		rules := tier.Rules
+		currency := tier.Currency
+		if clusterID != "" {
+			resolver := jm.pricingResolver()
+			if resolver == nil {
+				return decimal.Zero, fmt.Errorf("prepaid usage on cluster %s requires pricing resolver", clusterID)
+			}
+			resolved, err := pricing.ResolveClusterPricing(ctx, pricing.ResolveInputs{
+				DB: jm.db, QM: resolver, ConsumingTenantID: tenantID,
+				ClusterID: clusterID, AsOf: periodStart,
+				TierRules: tier.Rules, TierCurrency: tier.Currency,
+			})
+			if err != nil {
+				return decimal.Zero, fmt.Errorf("resolve prepaid pricing for cluster %s: %w", clusterID, err)
+			}
+			rules = resolved.MeteredRules
+			if resolved.Currency != "" {
+				currency = resolved.Currency
+			}
+		}
+		if currency != billing.DefaultCurrency() {
+			return decimal.Zero, fmt.Errorf("prepaid usage on cluster %s prices in %s but prepaid balance currency is %s", clusterID, currency, billing.DefaultCurrency())
+		}
+		amount, err := ratePrepaidQuantities(currency, rules, quantities, periodStart, periodEnd)
+		if err != nil {
+			return decimal.Zero, fmt.Errorf("rate cumulative prepaid usage for cluster %s: %w", clusterID, err)
+		}
+		total = total.Add(amount)
+	}
+	return total, nil
 }
 
 // deductPrepaidBalanceForCreditTx deducts up to requestCents from the prepaid
@@ -841,97 +1104,6 @@ func (jm *JobManager) applyInvoicePrepaidCreditTx(ctx context.Context, tx *sql.T
 		return 0, fmt.Errorf("deduct invoice credit delta: %w", err)
 	}
 	return applied + deltaApplied, nil
-}
-
-// deductPrepaidBalanceForCredit deducts amount from prepaid balance for non-usage adjustments.
-// If referenceID is provided, the deduction is idempotent (duplicate calls are no-ops).
-func (jm *JobManager) deductPrepaidBalanceForCredit(ctx context.Context, tenantID string, amountCents int64, description string, referenceID *string) (int64, bool, error) {
-	var newBalance int64
-	currency := billing.DefaultCurrency()
-	referenceType := "invoice_credit"
-
-	if referenceID != nil {
-		if _, found, err := jm.getBalanceTransactionByReference(ctx, tenantID, referenceType, *referenceID); err != nil {
-			return 0, false, err
-		} else if found {
-			balance, err := jm.getPrepaidBalance(ctx, tenantID)
-			if err != nil {
-				return 0, false, err
-			}
-			return balance, true, nil
-		}
-	}
-
-	tx, err := jm.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, false, err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency)
-		VALUES ($1, 0, $2)
-		ON CONFLICT (tenant_id, currency) DO NOTHING
-	`, tenantID, currency)
-	if err != nil {
-		return 0, false, err
-	}
-
-	var currentBalance int64
-	err = tx.QueryRowContext(ctx, `
-		SELECT balance_cents
-		FROM purser.prepaid_balances
-		WHERE tenant_id = $1 AND currency = $2
-		FOR UPDATE
-	`, tenantID, currency).Scan(&currentBalance)
-	if err != nil {
-		return 0, false, err
-	}
-
-	newBalance = currentBalance - amountCents
-
-	_, err = tx.ExecContext(ctx, `
-		UPDATE purser.prepaid_balances
-		SET balance_cents = $1, updated_at = NOW()
-		WHERE tenant_id = $2 AND currency = $3
-	`, newBalance, tenantID, currency)
-	if err != nil {
-		return 0, false, err
-	}
-
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO purser.balance_transactions (
-			tenant_id, amount_cents, balance_after_cents,
-			transaction_type, description, reference_id, reference_type, created_at
-		) VALUES ($1, $2, $3, 'credit', $4, $5, $6, NOW())
-	`, tenantID, -amountCents, newBalance, description, referenceID, referenceType)
-	if err != nil {
-		if referenceID != nil {
-			if database.SQLState(err) == "23505" {
-				if rollbackErr := tx.Rollback(); rollbackErr != nil {
-					jm.logger.WithError(rollbackErr).Warn("Failed to rollback duplicate credit deduction")
-				}
-				balance, balanceErr := jm.getPrepaidBalance(ctx, tenantID)
-				if balanceErr != nil {
-					return 0, false, balanceErr
-				}
-				return balance, true, nil
-			}
-		}
-		return 0, false, err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return 0, false, err
-	}
-
-	if jm.thresholdEnforcer != nil {
-		if err := jm.thresholdEnforcer.EnforcePrepaidThresholds(ctx, tenantID, currentBalance, newBalance); err != nil {
-			jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to enforce prepaid thresholds for credit deduction")
-		}
-	}
-
-	return newBalance, false, nil
 }
 
 // microPerCent is the residual unit: 10^-8 of a currency unit, i.e. 10^4
@@ -1099,7 +1271,10 @@ func (jm *JobManager) deductPrepaidBalanceForUsage(ctx context.Context, tenantID
 	return currentBalance, newBalance, true, nil
 }
 
-// getPrepaidBalance returns the current prepaid balance in cents for a tenant (0 if none exists)
+// getPrepaidBalance supports the retained idempotent invoice-credit recovery
+// path, which is not invoked by the normal dimensioned usage flow.
+//
+//nolint:unused
 func (jm *JobManager) getPrepaidBalance(ctx context.Context, tenantID string) (int64, error) {
 	var balanceCents int64
 	currency := billing.DefaultCurrency()
@@ -1288,6 +1463,10 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		if periodEnd.After(now) {
 			continue // Billing period not closed yet
 		}
+		if completenessErr := jm.assertMeteringComplete(ctx, tenantID, periodStart, periodEnd); completenessErr != nil {
+			jm.logger.WithError(completenessErr).WithField("tenant_id", tenantID).Error("Metering incomplete; invoice finalization blocked")
+			continue
+		}
 
 		// Check if a terminally-finalized invoice already exists for the
 		// previous month. manual_review is NOT terminal — it's a hold that
@@ -1343,15 +1522,15 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 			jm.logger.WithError(usageErr).WithField("tenant_id", tenantID).Error("Failed to collect usage; skipping invoice for this period")
 			continue
 		}
-		perClusterCodecBreakdowns, codecErr := jm.collectInvoiceCodecBreakdowns(ctx, tenantID, periodStart, periodEnd)
-		if codecErr != nil {
-			jm.logger.WithError(codecErr).WithField("tenant_id", tenantID).Error("Failed to collect codec breakdown; skipping invoice for this period")
+		perClusterDimensioned, dimensionErr := jm.collectInvoiceDimensionedUsage(ctx, tenantID, periodStart, periodEnd)
+		if dimensionErr != nil {
+			jm.logger.WithError(dimensionErr).WithField("tenant_id", tenantID).Error("Failed to collect dimensioned usage; skipping invoice for this period")
 			continue
 		}
 		usageData := flattenUsageAcrossClusters(perClusterUsage)
 
 		baseProviderManaged := stripeSubID.Valid || mollieSubID.Valid
-		ratingResult, ratingErr := jm.rateInvoiceForTenant(ctx, tenantID, periodStart, periodEnd, tier, true, baseProviderManaged, perClusterUsage, perClusterCodecBreakdowns)
+		ratingResult, ratingErr := jm.rateInvoiceForTenant(ctx, tenantID, periodStart, periodEnd, tier, true, baseProviderManaged, perClusterUsage, perClusterDimensioned)
 		if ratingErr != nil {
 			jm.logger.WithError(ratingErr).WithField("tenant_id", tenantID).Error("Failed to rate usage for invoice")
 			continue
@@ -1546,6 +1725,10 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 			if txErr != nil {
 				return fmt.Errorf("enqueue stripe meter events: %w", txErr)
 			}
+			txErr = enqueueInvoiceEmailTx(ctx, tx, invoiceID, tenantID, billingEmail.String, status)
+			if txErr != nil {
+				return fmt.Errorf("enqueue invoice email: %w", txErr)
+			}
 			// manual_review: do not advance the subscription period.
 			// Resolution flow is ops fixes pricing → re-finalize → side
 			// effects fire once on the corrected total.
@@ -1638,26 +1821,6 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 			}
 		}
 
-		// Send invoice created email notification. Read line items from
-		// the canonical surface (purser.invoice_line_items); usage_details
-		// is raw/debug JSON only, never rendered to customers.
-		if billingEmail.Valid && billingEmail.String != "" {
-			emailTotal, _ := totalDec.Round(2).Float64()
-			emailMetered, _ := meteredDec.Round(2).Float64()
-			emailGrossMetered, _ := unwaivedMeteredDec.Round(2).Float64()
-			emailLines, emailErr := jm.loadEmailLineItems(ctx, invoiceID, tenantID)
-			if emailErr != nil {
-				jm.logger.WithError(emailErr).WithField("invoice_id", invoiceID).Warn("Failed to load invoice line items for email; sending without breakdown")
-			}
-			err = jm.emailService.SendInvoiceCreatedEmail(billingEmail.String, "", invoiceID, emailTotal, emailMetered, emailGrossMetered, currency, dueDate, emailLines)
-			if err != nil {
-				jm.logger.WithError(err).WithFields(logging.Fields{
-					"billing_email": billingEmail.String,
-					"invoice_id":    invoiceID,
-				}).Error("Failed to send invoice created email")
-			}
-		}
-
 		// Apply any scheduled tier downgrade now that the period's invoice has
 		// committed in a non-held state. Three-step ordering favors the user
 		// on partial failure: flip tier first, reconcile cluster access second,
@@ -1674,6 +1837,67 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 	jm.logger.WithFields(logging.Fields{
 		"invoices_generated": invoicesGenerated,
 	}).Info("Monthly invoice generation completed")
+}
+
+func (jm *JobManager) assertMeteringComplete(ctx context.Context, tenantID string, periodStart, periodEnd time.Time) error {
+	var activeSources int
+	if err := jm.db.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM purser.metering_sources
+		WHERE required = TRUE
+		  AND active_from < $2
+		  AND (active_until IS NULL OR active_until > $1)
+	`, periodStart, periodEnd).Scan(&activeSources); err != nil {
+		return fmt.Errorf("count active metering sources: %w", err)
+	}
+	if activeSources == 0 {
+		return errors.New("no active metering sources registered")
+	}
+	var missingWindows int64
+	if err := jm.db.QueryRowContext(ctx, `
+		WITH source_bounds AS (
+			SELECT source_id,
+			       date_bin(INTERVAL '5 minutes', GREATEST(active_from, $1), TIMESTAMPTZ '1970-01-01')
+			           + CASE WHEN date_bin(INTERVAL '5 minutes', GREATEST(active_from, $1), TIMESTAMPTZ '1970-01-01') < GREATEST(active_from, $1)
+			                  THEN INTERVAL '5 minutes' ELSE INTERVAL '0' END AS first_window,
+			       LEAST(COALESCE(active_until, $2), $2) AS bound_end
+			FROM purser.metering_sources
+			WHERE required = TRUE
+			  AND active_from < $2
+			  AND (active_until IS NULL OR active_until > $1)
+		), expected AS (
+			SELECT source_id, window_start, window_start + INTERVAL '5 minutes' AS window_end
+			FROM source_bounds
+			CROSS JOIN LATERAL generate_series(first_window, bound_end - INTERVAL '5 minutes', INTERVAL '5 minutes') AS window_start
+		)
+		SELECT count(*)
+		FROM expected e
+		LEFT JOIN purser.metering_windows w
+		  ON w.source_id = e.source_id
+		 AND w.period_start = e.window_start
+		 AND w.period_end = e.window_end
+		 AND w.complete = TRUE
+		WHERE w.source_id IS NULL
+	`, periodStart, periodEnd).Scan(&missingWindows); err != nil {
+		return fmt.Errorf("check metering windows: %w", err)
+	}
+	if missingWindows > 0 {
+		return fmt.Errorf("%d required metering windows are missing", missingWindows)
+	}
+	var openAnomalies int64
+	if err := jm.db.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM purser.metering_anomalies
+		WHERE status = 'open'
+		  AND (tenant_id IS NULL OR tenant_id = $1)
+		  AND created_at < $3
+	`, tenantID, periodStart, periodEnd).Scan(&openAnomalies); err != nil {
+		return fmt.Errorf("check metering anomalies: %w", err)
+	}
+	if openAnomalies > 0 {
+		return fmt.Errorf("%d unresolved metering anomalies", openAnomalies)
+	}
+	return nil
 }
 
 func (jm *JobManager) applyDuePendingDowngrades(ctx context.Context, now time.Time) {
@@ -2699,20 +2923,13 @@ func (jm *JobManager) cleanupExpiredWallets(ctx context.Context) {
 // ============================================================================
 
 func parseUsageSummaryPeriod(summary models.UsageSummary) (time.Time, time.Time, string, error) {
-	parts := strings.Split(summary.Period, "/")
-	if len(parts) != 2 {
-		return time.Time{}, time.Time{}, "", fmt.Errorf("invalid usage period %q", summary.Period)
-	}
-	periodStart, err := time.Parse(time.RFC3339, parts[0])
-	if err != nil {
-		return time.Time{}, time.Time{}, "", fmt.Errorf("parse usage period start %q: %w", parts[0], err)
-	}
-	periodEnd, err := time.Parse(time.RFC3339, parts[1])
-	if err != nil {
-		return time.Time{}, time.Time{}, "", fmt.Errorf("parse usage period end %q: %w", parts[1], err)
+	periodStart := summary.PeriodStart.UTC()
+	periodEnd := summary.PeriodEnd.UTC()
+	if periodStart.IsZero() || periodEnd.IsZero() {
+		return time.Time{}, time.Time{}, "", errors.New("usage report period is required")
 	}
 	if !periodEnd.After(periodStart) {
-		return time.Time{}, time.Time{}, "", fmt.Errorf("non-positive usage period %q", summary.Period)
+		return time.Time{}, time.Time{}, "", errors.New("usage report period must be positive")
 	}
 
 	granularity := "minute_5"
@@ -2735,38 +2952,27 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 		return nil, err
 	}
 
-	// Use shared helper for usage data extraction
-	usageTypes := buildUsageDataFromSummary(summary)
-
-	codecSeconds, processCodecSeconds := processingDetailsFromSummary(summary)
-	processSeconds := map[string]float64{}
-	for key, seconds := range processCodecSeconds {
-		processType, _, ok := strings.Cut(key, ":")
-		if ok {
-			processSeconds[processType] += seconds
-		}
-	}
-	usageDetails := models.JSONB{
-		"max_viewers":           summary.MaxViewers,
-		"total_viewers":         summary.TotalViewers,
-		"total_streams":         summary.TotalStreams,
-		"unique_users":          summary.UniqueUsers,
-		"source":                source,
-		"codec_seconds":         codecSeconds,
-		"process_seconds":       processSeconds,
-		"process_codec_seconds": processCodecSeconds,
-		"api_requests":          summary.APIRequests,
-		"api_errors":            summary.APIErrors,
-		"api_duration_ms":       summary.APIDurationMs,
-		"api_complexity":        summary.APIComplexity,
-		"api_breakdown":         summary.APIBreakdown,
-	}
 	acceptedUsage := []canonicalUsageDelta{}
 
-	// Upsert each usage type
-	for usageType, usageValue := range usageTypes {
+	for _, meter := range summary.Meters {
+		usageType := meter.Meter
+		usageValue := meter.Quantity
 		if usageValue <= 0 {
 			continue
+		}
+		dimensionJSON, marshalErr := json.Marshal(meter.Dimensions)
+		if marshalErr != nil {
+			return nil, fmt.Errorf("marshal dimensions for %s: %w", usageType, marshalErr)
+		}
+		dimensionHash := sha256.Sum256(dimensionJSON)
+		dimensionKey := fmt.Sprintf("%x", dimensionHash[:])
+		usageDetails := models.JSONB{
+			"source":        source,
+			"source_id":     summary.SourceID,
+			"report_id":     summary.ReportID,
+			"unit":          meter.Unit,
+			"dimensions":    meter.Dimensions,
+			"source_region": summary.SourceRegion,
 		}
 
 		// Per-record validation: rated meters must come in as 5-minute
@@ -2800,16 +3006,22 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 			continue
 		}
 
-		_, err := jm.db.ExecContext(ctx, `
-			INSERT INTO purser.usage_records (tenant_id, cluster_id, usage_type, usage_value, usage_details, period_start, period_end, granularity, value_kind, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
-			ON CONFLICT (tenant_id, cluster_id, usage_type, period_start, period_end) DO UPDATE SET
+		_, err = jm.db.ExecContext(ctx, `
+			INSERT INTO purser.usage_records
+				(tenant_id, cluster_id, usage_type, unit, dimensions, dimension_key,
+				 source_id, report_id, usage_value, usage_details,
+				 period_start, period_end, granularity, value_kind, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
+			ON CONFLICT (tenant_id, cluster_id, source_id, usage_type, dimension_key, period_start, period_end) DO UPDATE SET
 				usage_value = EXCLUDED.usage_value,
+				report_id = EXCLUDED.report_id,
 				usage_details = EXCLUDED.usage_details,
 				granularity = EXCLUDED.granularity,
 				value_kind = EXCLUDED.value_kind,
 				updated_at = NOW()
-		`, summary.TenantID, summary.ClusterID, usageType, usageValue, usageDetails, periodStart, periodEnd, granularity, valueKind)
+		`, summary.TenantID, summary.ClusterID, usageType, meter.Unit, meter.Dimensions, dimensionKey,
+			summary.SourceID, summary.ReportID, usageValue, usageDetails,
+			periodStart, periodEnd, granularity, valueKind)
 
 		if err != nil {
 			return nil, fmt.Errorf("failed to upsert %s: %w", usageType, err)
@@ -2820,12 +3032,14 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 		acceptedUsage = append(acceptedUsage, canonicalUsageDelta{
 			clusterID:    summary.ClusterID,
 			usageType:    usageType,
+			unit:         meter.Unit,
+			dimensions:   meter.Dimensions,
 			usageValue:   usageValue,
 			usageDetails: usageDetails,
 		})
 	}
 
-	if persistErr := jm.persistStorageProviderUsage(ctx, summary, periodStart, periodEnd, granularity, source); persistErr != nil {
+	if persistErr := jm.persistProviderUsage(ctx, summary, periodStart, periodEnd, granularity, source); persistErr != nil {
 		return nil, persistErr
 	}
 	acceptedAdjustments, err := jm.persistUsageAdjustments(ctx, summary, source)
@@ -2837,67 +3051,61 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 	return acceptedUsage, nil
 }
 
-func (jm *JobManager) persistStorageProviderUsage(ctx context.Context, summary models.UsageSummary, periodStart, periodEnd time.Time, granularity, source string) error {
+func (jm *JobManager) persistProviderUsage(ctx context.Context, summary models.UsageSummary, periodStart, periodEnd time.Time, granularity, source string) error {
 	if rejection := validateCanonicalUsageWindow(periodStart, periodEnd, granularity, "delta"); rejection != "" {
 		return fmt.Errorf("reject storage provider usage for non-canonical period: %s", rejection)
 	}
-	for _, rec := range summary.StorageProviderUsage {
-		if rec.GBSeconds <= 0 {
+	for _, rec := range summary.ProviderUsage {
+		if rec.Meter.Quantity <= 0 {
 			continue
 		}
-		if rec.CustomerClusterID == "" {
-			rec.CustomerClusterID = summary.ClusterID
+		if !rating.ValidMeter(rating.Meter(rec.Meter.Meter)) {
+			return fmt.Errorf("invalid provider usage_type %q", rec.Meter.Meter)
 		}
-		if rec.CustomerClusterID == "" {
-			return fmt.Errorf("storage provider usage missing customer_cluster_id")
+		dimensionJSON, err := json.Marshal(rec.Meter.Dimensions)
+		if err != nil {
+			return fmt.Errorf("marshal provider dimensions: %w", err)
 		}
-		if rec.UsageType == "" {
-			switch rec.StorageScope {
-			case "cold":
-				rec.UsageType = string(rating.MeterStorageGBSecondsCld)
-			default:
-				rec.UsageType = string(rating.MeterStorageGBSecondsHot)
-			}
-		}
-		if !rating.ValidMeter(rating.Meter(rec.UsageType)) {
-			return fmt.Errorf("invalid storage provider usage_type %q", rec.UsageType)
-		}
+		dimensionHash := sha256.Sum256(dimensionJSON)
+		dimensionKey := fmt.Sprintf("%x", dimensionHash[:])
 		details := models.JSONB{
-			"source":                      source,
-			"customer_cluster_id":         rec.CustomerClusterID,
-			"storage_provider_tenant_id":  rec.StorageProviderTenantID,
-			"storage_provider_cluster_id": rec.StorageProviderClusterID,
-			"storage_backend":             rec.StorageBackend,
-			"storage_scope":               rec.StorageScope,
+			"source":              source,
+			"source_id":           summary.SourceID,
+			"report_id":           summary.ReportID,
+			"provider_tenant_id":  rec.ProviderTenantID,
+			"provider_cluster_id": rec.ProviderClusterID,
+			"dimensions":          rec.Meter.Dimensions,
 		}
-		_, err := jm.db.ExecContext(ctx, `
-			INSERT INTO purser.storage_provider_usage_records (
-				usage_tenant_id, customer_cluster_id,
-				storage_provider_tenant_id, storage_provider_cluster_id,
-				storage_backend, storage_scope, usage_type, gb_seconds,
-				period_start, period_end, granularity, value_kind, source, usage_details
+		_, err = jm.db.ExecContext(ctx, `
+			INSERT INTO purser.provider_usage_records (
+				usage_tenant_id, work_cluster_id,
+				provider_tenant_id, provider_cluster_id,
+				usage_type, unit, usage_value, dimensions, dimension_key,
+				source_id, report_id, period_start, period_end,
+				granularity, value_kind, source, usage_details
 			) VALUES (
-				$1, $2, $3, $4, $5, $6, $7, $8,
-				$9, $10, 'minute_5', 'delta', $11, $12
+				$1, $2, $3, $4, $5, $6, $7, $8, $9,
+				$10, $11, $12, $13, 'minute_5', 'delta', $14, $15
 			)
 			ON CONFLICT (
-				usage_tenant_id, customer_cluster_id,
-				storage_provider_tenant_id, storage_provider_cluster_id,
-				storage_backend, storage_scope, usage_type,
+				usage_tenant_id, work_cluster_id,
+				provider_tenant_id, provider_cluster_id,
+				source_id, usage_type, dimension_key,
 				period_start, period_end
 			) DO UPDATE SET
-				gb_seconds = EXCLUDED.gb_seconds,
+				usage_value = EXCLUDED.usage_value,
+				report_id = EXCLUDED.report_id,
 				granularity = EXCLUDED.granularity,
 				value_kind = EXCLUDED.value_kind,
 				source = EXCLUDED.source,
 				usage_details = EXCLUDED.usage_details,
 				updated_at = NOW()
-		`, summary.TenantID, rec.CustomerClusterID,
-			rec.StorageProviderTenantID, rec.StorageProviderClusterID,
-			rec.StorageBackend, rec.StorageScope, rec.UsageType, rec.GBSeconds,
-			periodStart, periodEnd, source, details)
+		`, summary.TenantID, summary.ClusterID,
+			rec.ProviderTenantID, rec.ProviderClusterID,
+			rec.Meter.Meter, rec.Meter.Unit, rec.Meter.Quantity, rec.Meter.Dimensions, dimensionKey,
+			summary.SourceID, summary.ReportID, periodStart, periodEnd, source, details)
 		if err != nil {
-			return fmt.Errorf("upsert storage provider usage %s/%s: %w", rec.StorageProviderTenantID, rec.UsageType, err)
+			return fmt.Errorf("upsert provider usage %s/%s: %w", rec.ProviderTenantID, rec.Meter.Meter, err)
 		}
 	}
 	return nil
@@ -2927,21 +3135,35 @@ func (jm *JobManager) persistUsageAdjustments(ctx context.Context, summary model
 		if adj.Details == nil {
 			adj.Details = models.JSONB{}
 		}
+		if adj.Unit == "" {
+			if err := jm.db.QueryRowContext(ctx, `SELECT unit FROM purser.meter_definitions WHERE meter = $1`, adj.UsageType).Scan(&adj.Unit); err != nil {
+				return nil, fmt.Errorf("resolve adjustment unit for %s: %w", adj.UsageType, err)
+			}
+		}
+		dimensionJSON, err := json.Marshal(adj.Dimensions)
+		if err != nil {
+			return nil, fmt.Errorf("marshal adjustment dimensions: %w", err)
+		}
+		dimensionHash := sha256.Sum256(dimensionJSON)
+		dimensionKey := fmt.Sprintf("%x", dimensionHash[:])
 		adj.Details["source"] = source
-		_, err := jm.db.ExecContext(ctx, `
+		_, err = jm.db.ExecContext(ctx, `
 			INSERT INTO purser.usage_adjustments (
-				tenant_id, cluster_id, usage_type, delta_value,
+				tenant_id, cluster_id, usage_type, unit, dimensions, dimension_key, delta_value,
 				period_start, period_end, value_kind, status,
 				source_system, source_id, reason, details
 			) VALUES (
-				$1, $2, $3, $4,
-				$5, $6, 'correction_delta', 'applied',
-				$7, $8, $9, $10
+				$1, $2, $3, $4, $5, $6, $7,
+				$8, $9, 'correction_delta', 'applied',
+				$10, $11, $12, $13
 			)
 			ON CONFLICT (source_system, source_id) DO UPDATE SET
 				tenant_id = EXCLUDED.tenant_id,
 				cluster_id = EXCLUDED.cluster_id,
 				usage_type = EXCLUDED.usage_type,
+				unit = EXCLUDED.unit,
+				dimensions = EXCLUDED.dimensions,
+				dimension_key = EXCLUDED.dimension_key,
 				delta_value = EXCLUDED.delta_value,
 				period_start = EXCLUDED.period_start,
 				period_end = EXCLUDED.period_end,
@@ -2949,7 +3171,7 @@ func (jm *JobManager) persistUsageAdjustments(ctx context.Context, summary model
 				reason = EXCLUDED.reason,
 				details = EXCLUDED.details,
 				updated_at = NOW()
-		`, summary.TenantID, adj.ClusterID, adj.UsageType, adj.DeltaValue,
+		`, summary.TenantID, adj.ClusterID, adj.UsageType, adj.Unit, adj.Dimensions, dimensionKey, adj.DeltaValue,
 			adj.PeriodStart, adj.PeriodEnd, adj.SourceSystem, adj.SourceID, adj.Reason, adj.Details)
 		if err != nil {
 			return nil, fmt.Errorf("upsert usage adjustment %s: %w", adj.SourceID, err)
@@ -2957,6 +3179,8 @@ func (jm *JobManager) persistUsageAdjustments(ctx context.Context, summary model
 		accepted = append(accepted, canonicalUsageDelta{
 			clusterID:    adj.ClusterID,
 			usageType:    adj.UsageType,
+			unit:         adj.Unit,
+			dimensions:   adj.Dimensions,
 			usageValue:   adj.DeltaValue,
 			usageDetails: adj.Details,
 		})
@@ -3054,9 +3278,9 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 	if err != nil {
 		return fmt.Errorf("collect invoice usage: %w", err)
 	}
-	perClusterCodecBreakdowns, err := jm.collectInvoiceCodecBreakdowns(ctx, tenantID, periodStart, periodEnd)
+	perClusterDimensioned, err := jm.collectInvoiceDimensionedUsage(ctx, tenantID, periodStart, periodEnd)
 	if err != nil {
-		return fmt.Errorf("collect invoice codec breakdown: %w", err)
+		return fmt.Errorf("collect dimensioned invoice usage: %w", err)
 	}
 	usageTotals := flattenUsageAcrossClusters(perClusterUsage)
 
@@ -3078,7 +3302,7 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 	// Rate the period via the engine; one source of truth for invoice math.
 	// Money stays as decimal.Decimal end-to-end and binds to NUMERIC columns
 	// as decimal strings; float64 never touches the cents.
-	ratingResult, err := jm.rateInvoiceForTenant(ctx, tenantID, periodStart, periodEnd, tier, true, baseProviderManaged, perClusterUsage, perClusterCodecBreakdowns)
+	ratingResult, err := jm.rateInvoiceForTenant(ctx, tenantID, periodStart, periodEnd, tier, true, baseProviderManaged, perClusterUsage, perClusterDimensioned)
 	if err != nil {
 		return fmt.Errorf("rate usage: %w", err)
 	}

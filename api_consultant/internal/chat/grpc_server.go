@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/api_consultant/internal/metering"
 	"frameworks/api_consultant/internal/skipper"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -203,7 +202,6 @@ func (s *GRPCServer) Chat(req *skipperpb.SkipperChatRequest, stream grpc.ServerS
 	}
 
 	s.logUsage(ctx, tenantID, userID, conversationID, startedAt, result.TokenCounts, false)
-	metering.RecordLLMUsage(ctx, result.TokenCounts.Input, result.TokenCounts.Output)
 
 	return nil
 }

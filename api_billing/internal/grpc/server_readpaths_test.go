@@ -203,10 +203,10 @@ func TestListInvoicesMapsRowsAndLineItems(t *testing.T) {
 		WillReturnRows(invoiceRows)
 
 	lineRows := sqlmock.NewRows([]string{
-		"line_key", "meter", "description", "quantity", "included_quantity", "billable_quantity",
+		"line_key", "meter", "unit", "dimensions", "description", "quantity", "included_quantity", "billable_quantity",
 		"unit_price", "amount", "currency", "cluster_id", "cluster_kind", "pricing_source",
 	}).AddRow(
-		"base_subscription", "", "Monthly subscription", "1", "0", "1",
+		"base_subscription", "", "", []byte(`{}`), "Monthly subscription", "1", "0", "1",
 		"30.00", "30.00", "EUR", "", "", "tier",
 	)
 	mock.ExpectQuery(`FROM purser\.invoice_line_items`).

@@ -6,26 +6,26 @@ infrastructure cost, not a tenant-facing billing item.
 ## Data Flow
 
 ```
-Ingest:     MistServer -> Foghorn (PUSH_REWRITE) -> ValidateStreamKey -> cache {OriginClusterID}
-Viewer:     MistServer -> Foghorn (USER_NEW/END) -> cache hit: origin from cache
-                                                  -> cache miss: ResolveIdentifier -> Quartermaster -> origin
+Ingest:     MistServer -> Foghorn (PUSH_REWRITE) -> ValidateStreamKey -> serving/executing cluster
+Viewer:     MistServer -> Foghorn (USER_NEW/END) -> cluster handling this viewer is serving cluster
 Analytics:  trigger -> Decklog -> Kafka -> Periscope Ingest -> ClickHouse
                                                             -> finalized facts + canonical ledgers
-                                                            -> Periscope Query -> per-cluster usage report -> Purser
+                                                            -> Periscope Metering -> Kafka -> Purser
 ```
 
-**Ingest path:** `sendTriggerToDecklog()` sets `trigger.ClusterId` from
-`p.clusterID` on every event. The `OriginClusterID` is populated from
-`ValidateStreamKeyResponse` (ingest) and `ResolveIdentifierResponse` (federated
-viewer cache-miss path).
+**Ingest path:** `sendTriggerToDecklog()` sets `trigger.ClusterId` from the
+Foghorn cluster handling the event. `OriginClusterID` is also preserved from
+stream resolution, but it is lineage/audit metadata rather than the work
+attribution key.
 
-**Query path:** `generateTenantUsageSummary` reads finalized facts and canonical
+**Metering path:** `generateTenantUsageSummary` reads finalized facts and canonical
 5-minute sources. Viewer minutes and network bytes come from
 `viewer_sessions_final`; processing comes from `processing_segments_final`; storage
 is integrated directly from canonical `storage_snapshots`; API usage comes from
 `api_usage_5m_v`.
-Cluster-scoped meters are emitted as one usage-report record per cluster. Operational
-tenant-level gauges attach to the tenant's primary cluster.
+Cluster-scoped meters are emitted as one usage report per work cluster:
+delivery → serving cluster, processing → executing cluster, storage → placement
+cluster. Tenant-level API/AI meters attach to the tenant's primary cluster.
 
 ## ClickHouse Schema
 
@@ -42,13 +42,14 @@ ledgers directly.
 
 ## Settlement Query
 
-Customer invoice usage is grouped by the cluster that served or processed the
-metered work. Customer storage billing sums provider slices into
-customer-facing storage scope rows. The same billing pass persists the
-provider-keyed storage slices into `purser.storage_provider_usage_records`.
-Paid invoices allocate storage line revenue across those provider rows and
-write `operator_credit_ledger` accruals with
-`source_type='storage_provider_usage'`.
+Customer invoice usage is grouped by the cluster that actually served,
+processed, or stored the metered work. Origin cluster remains available for
+audit and routing analysis but does not determine the delivery charge. Customer storage billing sums provider slices into
+customer-facing storage scope rows. The same billing pass persists generic
+provider-attributed work into `purser.provider_usage_records`; storage is one
+meter family on that surface, alongside processing and future provider-backed
+work. Paid invoices allocate line revenue across those provider rows and write
+`operator_credit_ledger` accruals with `source_type='provider_usage'`.
 
 ## Operator Credit Accrual
 
@@ -62,7 +63,7 @@ fail-softs to 0 bps), and the resulting `payable_cents`. New accruals start
 `accruing` only for `approved` + `payout_eligible` owners in `cluster_owners`;
 everyone else accrues as `held` — complete for audit, parked for payout.
 Writers are idempotent via partial unique indexes per source
-(`invoice_line_item_id`, `storage_provider_usage_record_id`,
+(`invoice_line_item_id`, `provider_usage_record_id`,
 `usage_adjustment_id`, `stripe_invoice_id`). Payment reversals
 (refunds/chargebacks) write negating `entry_type='clawback'` rows referencing
 the original accrual via `reverses_ledger_id`, deduplicated through
@@ -71,13 +72,33 @@ reporting are not built; the productization of this ledger into the full
 attribution → accrual → payout loop is
 `docs/rfcs/federated-settlement-attribution.md`.
 
+## Permanent Invoice Delivery
+
+Draft invoices are live Purser projections and may be refreshed in place while
+the billing period remains open. They never trigger customer email, payment,
+Stripe meter export, operator credit, or period advancement. A complete period
+is re-rated and the same invoice row plus its `invoice_line_items` snapshot is
+made permanent in one transaction; `manual_review` remains a rerunnable hold,
+not a finalized invoice.
+
+That finalization transaction also writes two delivery surfaces. Stripe meter
+events are keyed by permanent invoice line, so two codec/model/backend
+dimension buckets of the same meter cannot collapse; their bounded dimensions
+travel in the Stripe payload. Customer invoice email is queued in
+`purser.invoice_email_outbox`. Horizontally scaled Purser workers lease and
+retry those rows, then render only the permanent invoice header and itemized
+line snapshot. Missing line items or unavailable SMTP defer delivery instead
+of sending a partial summary. `payment_report_invoice_email_outbox_stuck`
+exposes repeatedly failing notifications to operators.
+
 ## Key Files
 
 | File                                             | Purpose                                                                              |
 | ------------------------------------------------ | ------------------------------------------------------------------------------------ |
 | `api_balancing/internal/triggers`                | Sets `origin_cluster_id` in streamContext and triggers                               |
 | `api_analytics_ingest/internal/handlers`         | Extracts `cluster_id` + `origin_cluster_id` from MistTrigger into ClickHouse         |
-| `api_analytics_query/internal/handlers`          | Per-cluster billing records (`generateTenantUsageSummary`)                           |
+| `api_analytics_query/cmd/periscope-metering`     | Regional scheduler and HA lease holder                                               |
+| `api_analytics_query/internal/handlers`          | Per-work-cluster reports (`generateTenantUsageSummary`)                              |
 | `api_billing/internal/operator/credit.go`        | Operator credit-ledger accrual (marketplace lines, storage providers, fee bps)       |
 | `pkg/database/sql/clickhouse`                    | Schema with cluster columns and MVs                                                  |
 | `api_control/internal/grpc`                      | `ResolveIdentifier` enriches with cluster context via `resolveClusterRouteForTenant` |

@@ -435,13 +435,6 @@ func decimalField(m map[string]any, key string) (decimal.Decimal, error) {
 // "free/self-hosted usage produces an informational line, never empty" rule:
 // the rating engine still emits a line because included_quantity stays zero
 // and quantity > 0 → billable_quantity > 0 → line is rendered with $0.00.
-//
-// codec_multiplier rules are converted to all_usage at zero price so the
-// engine reads from Usage[rule.Meter] (the writer populates this)
-// rather than CodecSeconds. Without this conversion the rating engine's
-// codec-multiplier path early-exits when unit_price is zero, dropping the
-// informational line and silently hiding self-hosted/free transcoding.
-// See rateCodecMultiplier in api_billing/internal/rating/rate.go.
 func zeroPricedRulesFromTier(tierRules []rating.Rule, currency string) []rating.Rule {
 	if len(tierRules) == 0 {
 		return nil
@@ -452,11 +445,40 @@ func zeroPricedRulesFromTier(tierRules []rating.Rule, currency string) []rating.
 		zero.UnitPrice = decimal.Zero
 		zero.IncludedQuantity = decimal.Zero
 		zero.Currency = currency
-		if zero.Model == rating.ModelCodecMultiplier {
-			zero.Model = rating.ModelAllUsage
-			zero.Config = nil
+		if zero.Model == rating.ModelDimensioned {
+			zero.Config = zeroDimensionRates(r.Config)
 		}
 		out = append(out, zero)
 	}
+	return out
+}
+
+func zeroDimensionRates(config map[string]any) map[string]any {
+	if config == nil {
+		return nil
+	}
+	out := make(map[string]any, len(config))
+	for key, value := range config {
+		out[key] = value
+	}
+	rawRates, ok := config["rates"].([]any)
+	if !ok {
+		return out
+	}
+	rates := make([]any, 0, len(rawRates))
+	for _, rawRate := range rawRates {
+		rate, ok := rawRate.(map[string]any)
+		if !ok {
+			rates = append(rates, rawRate)
+			continue
+		}
+		copyRate := make(map[string]any, len(rate))
+		for key, value := range rate {
+			copyRate[key] = value
+		}
+		copyRate["unit_price"] = "0"
+		rates = append(rates, copyRate)
+	}
+	out["rates"] = rates
 	return out
 }

@@ -142,11 +142,11 @@ func TestGetPendingInvoicesMapsRowsAndLineItems(t *testing.T) {
 	// loadInvoiceLineItems runs once per invoice. quartermasterClient is nil so
 	// enrichment is skipped.
 	lineRows := sqlmock.NewRows([]string{
-		"line_key", "meter", "description", "quantity", "included_quantity",
+		"line_key", "meter", "unit", "dimensions", "description", "quantity", "included_quantity",
 		"billable_quantity", "unit_price", "amount", "currency",
 		"cluster_id", "cluster_kind", "pricing_source",
 	}).AddRow(
-		"base_subscription", "", "Base plan", "1", "0",
+		"base_subscription", "", "", []byte(`{}`), "Base plan", "1", "0",
 		"1", "20.00", "20.00", "USD",
 		"", "", "tier",
 	)

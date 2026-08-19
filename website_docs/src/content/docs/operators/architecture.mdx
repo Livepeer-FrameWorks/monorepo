@@ -47,6 +47,7 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 | Purser                  | 18003 (HTTP), 19003 (gRPC) | Central          | Control / API                 | Billing, usage, invoices, payments, and x402 state                |
 | Periscope Query         | 18004 (HTTP), 19004 (gRPC) | Central          | Event & Analytics             | Analytics and reporting API                                       |
 | Periscope Ingest        | 18005                      | Regional         | Event & Analytics             | Kafka event processing and ClickHouse writes                      |
+| Periscope Metering      | 18021                      | Regional         | Event & Analytics             | Local ClickHouse aggregation and durable reports to Purser        |
 | Decklog                 | 18006 (gRPC)               | Regional         | Event & Analytics             | gRPC event ingress → Kafka                                        |
 | Decklog (metrics)       | 18026                      | Regional         | Observability & Operations    | Decklog Prometheus metrics                                        |
 | Signalman               | 18009 (WS), 19005 (gRPC)   | Regional         | Event & Analytics             | Real-time event fan-out and WebSocket hub                         |
@@ -103,7 +104,7 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 ## Deployment Tiers
 
 - **Central**: Commodore, Quartermaster, Purser, Navigator, Periscope Query, Deckhand, Skipper, Forms, PostgreSQL-compatible DB (YugabyteDB recommended), ClickHouse, Listmonk, Chatwoot + Redis.
-- **Regional**: Bridge, Foghorn, Decklog, Periscope Ingest, Signalman, Chandler, Kafka, Web Console, Marketing Site.
+- **Regional**: Bridge, Foghorn, Decklog, Periscope Ingest, Periscope Metering, Signalman, Chandler, Kafka, Web Console, Marketing Site. Today the unsharded ClickHouse deployment is central, so there is one metering source there; when ClickHouse becomes regional, each logical deployment gets a local worker with a unique source ID.
 - **Central/Regional**: Privateer (WireGuard mesh agent runs on all backend infrastructure nodes).
 - **Edge**: MistServer, Helmsman, Livepeer Gateway.
 

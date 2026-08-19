@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 
@@ -18,7 +19,11 @@ import (
 // covered by prepaid_credit_tx_test.go. With summary.ClusterID empty, the
 // cluster-pricing resolver is skipped and tier rules apply directly.
 
-const usagePeriod = "2026-04-01T00:00:00Z/2026-04-01T00:05:00Z"
+var usagePeriodStart = time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+
+func prepaidSummary(tenant string) models.UsageSummary {
+	return models.UsageSummary{TenantID: tenant, PeriodStart: usagePeriodStart, PeriodEnd: usagePeriodStart.Add(5 * time.Minute)}
+}
 
 func newPrepaidJM(t *testing.T) (*JobManager, sqlmock.Sqlmock, func()) {
 	t.Helper()
@@ -63,7 +68,7 @@ func TestProcessPrepaidUsage_NoActiveSubscription(t *testing.T) {
 		WillReturnError(sql.ErrNoRows)
 
 	err := jm.processPrepaidUsage(context.Background(),
-		models.UsageSummary{TenantID: tenant, Period: usagePeriod}, nil)
+		prepaidSummary(tenant), nil)
 	if err != nil {
 		t.Fatalf("expected nil (skip), got %v", err)
 	}
@@ -81,7 +86,7 @@ func TestProcessPrepaidUsage_MeteringDisabled(t *testing.T) {
 	expectEffectiveTier(mock, tenant, tier, false, false)
 
 	err := jm.processPrepaidUsage(context.Background(),
-		models.UsageSummary{TenantID: tenant, Period: usagePeriod}, nil)
+		prepaidSummary(tenant), nil)
 	if err != nil {
 		t.Fatalf("expected nil (metering off), got %v", err)
 	}
@@ -100,7 +105,7 @@ func TestProcessPrepaidUsage_ZeroRatedUsageSkipsDeduction(t *testing.T) {
 	expectEffectiveTier(mock, tenant, tier, true, true)
 
 	err := jm.processPrepaidUsage(context.Background(),
-		models.UsageSummary{TenantID: tenant, Period: usagePeriod}, nil)
+		prepaidSummary(tenant), nil)
 	if err != nil {
 		t.Fatalf("expected nil (zero usage), got %v", err)
 	}
@@ -114,7 +119,7 @@ func TestProcessPrepaidUsage_InvalidPeriod(t *testing.T) {
 	defer done()
 	// Malformed period fails before any DB access.
 	err := jm.processPrepaidUsage(context.Background(),
-		models.UsageSummary{TenantID: "tenant-1", Period: "not-a-period"}, nil)
+		models.UsageSummary{TenantID: "tenant-1"}, nil)
 	if err == nil {
 		t.Fatal("expected error for malformed usage period")
 	}

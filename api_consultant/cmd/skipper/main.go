@@ -95,37 +95,6 @@ func main() {
 		"JWT_SECRET":   jwtSecret,
 	}))
 
-	var usagePublisher *metering.Publisher
-	if len(cfg.KafkaBrokers) > 0 {
-		publisher, err := metering.NewPublisher(metering.PublisherConfig{
-			Brokers:   cfg.KafkaBrokers,
-			ClusterID: cfg.KafkaClusterID,
-			Topic:     cfg.BillingKafkaTopic,
-			Source:    "skipper",
-			Logger:    logger,
-		})
-		if err != nil {
-			logger.WithError(err).Warn("Failed to create billing Kafka publisher - usage events disabled")
-		} else {
-			usagePublisher = publisher
-			defer func() { _ = usagePublisher.Close() }()
-		}
-	} else {
-		logger.Warn("KAFKA_BROKERS not set - billing usage events disabled")
-	}
-
-	clusterID := strings.TrimSpace(config.GetEnv("CLUSTER_ID", ""))
-	usageTracker := metering.NewUsageTracker(metering.UsageTrackerConfig{
-		DB:            db,
-		Publisher:     usagePublisher,
-		Logger:        logger,
-		Model:         cfg.LLMModel,
-		ClusterID:     clusterID,
-		FlushInterval: time.Minute,
-	})
-	usageTracker.Start()
-	defer usageTracker.Stop()
-
 	rateLimiter := metering.NewRateLimiter(cfg.ChatRateLimitHour, cfg.RateLimitOverrides)
 	rateLimiter.StartCleanup(context.Background())
 
@@ -212,6 +181,20 @@ func main() {
 	} else {
 		defer func() { _ = decklogClient.Close() }()
 	}
+
+	usageTracker := metering.NewUsageTracker(metering.UsageTrackerConfig{
+		DB:                db,
+		Logger:            logger,
+		Model:             cfg.LLMModel,
+		Provider:          cfg.LLMProvider,
+		EmbeddingModel:    cfg.EmbeddingModel,
+		EmbeddingProvider: cfg.EmbeddingProvider,
+		SearchProvider:    cfg.SearchProvider,
+		Publisher:         decklogClient,
+		FlushInterval:     time.Minute,
+	})
+	usageTracker.Start()
+	defer usageTracker.Stop()
 
 	// Create Quartermaster gRPC client for tenant listings
 	qmGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
@@ -384,7 +367,11 @@ func main() {
 	knowledgeStore := knowledge.NewStore(db)
 	searchTool := chat.NewSearchWebTool(searchProvider)
 	searchTool.SetSearchLimit(cfg.SearchLimit)
-	globalTenantID := tenants.SystemTenantID.String()
+	systemTenantID, err := tenants.RuntimeSystemTenantID()
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid system tenant identity")
+	}
+	globalTenantID := systemTenantID.String()
 	orchestrator := chat.NewOrchestrator(chat.OrchestratorConfig{
 		LLMProvider:     llmProvider,
 		LLMProviderName: cfg.LLMProvider,
@@ -402,10 +389,7 @@ func main() {
 		GlobalTenantID:  globalTenantID,
 		PromptBudget:    promptTokenBudget,
 	})
-	var usageLogger skipper.UsageLogger
-	if decklogClient != nil {
-		usageLogger = &skipper.DecklogUsageLogger{Client: decklogClient, Logger: logger}
-	}
+	var usageLogger skipper.UsageLogger = usageTracker
 	chatHandler := chat.NewChatHandler(conversationStore, orchestrator, usageLogger, logger)
 	chatHandler.MaxHistoryMessages = cfg.MaxHistoryMessages
 	chatHandler.LLMProvider = llmProvider

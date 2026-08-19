@@ -4045,6 +4045,7 @@ func (h *AnalyticsHandler) processAPIRequestBatch(ctx context.Context, event kaf
 				timestamp, tenant_id, source_node,
 				auth_type, operation_name, operation_type,
 				request_count, error_count, total_duration_ms, total_complexity,
+				llm_input_tokens, llm_output_tokens, llm_model, llm_provider,
 				user_hashes, token_hashes,
 				source_region, stream_origin_region, stream_origin_cluster_id, schema_version
 			)`)
@@ -4099,6 +4100,10 @@ func (h *AnalyticsHandler) processAPIRequestBatch(ctx context.Context, event kaf
 			agg.GetErrorCount(),
 			agg.GetTotalDurationMs(),
 			agg.GetTotalComplexity(),
+			agg.GetLlmInputTokens(),
+			agg.GetLlmOutputTokens(),
+			agg.GetModel(),
+			agg.GetProvider(),
 			userHashes,
 			tokenHashes,
 			env.sourceRegion,
@@ -4312,6 +4317,7 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatch(ctx context.Context, ev
 				timestamp, tenant_id, source_node,
 				auth_type, operation_name, operation_type,
 				request_count, error_count, total_duration_ms, total_complexity,
+				llm_input_tokens, llm_output_tokens, llm_model, llm_provider,
 				user_hashes, token_hashes,
 				source_region, stream_origin_region, stream_origin_cluster_id, schema_version
 			)`)
@@ -4367,6 +4373,10 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatch(ctx context.Context, ev
 			uint32(getUint64FromMap(aggMap, "error_count")),
 			getUint64FromMap(aggMap, "total_duration_ms"),
 			uint32(getUint64FromMap(aggMap, "total_complexity")),
+			getUint64FromMap(aggMap, "llm_input_tokens"),
+			getUint64FromMap(aggMap, "llm_output_tokens"),
+			getStringFromMap(aggMap, "model"),
+			getStringFromMap(aggMap, "provider"),
 			userHashes,
 			tokenHashes,
 			env.sourceRegion,

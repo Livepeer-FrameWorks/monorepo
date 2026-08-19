@@ -140,19 +140,20 @@ func ComputeAndPersistCredits(ctx context.Context, tx *sql.Tx, invoiceID, status
 			return fmt.Errorf("insert accrual for line %s: %w", a.LineItemID, err)
 		}
 	}
-	if err := persistStorageProviderCredits(ctx, tx, invoiceID); err != nil {
+	if err := persistProviderCredits(ctx, tx, invoiceID); err != nil {
 		return err
 	}
 	return nil
 }
 
-func persistStorageProviderCredits(ctx context.Context, tx *sql.Tx, invoiceID string) error {
+func persistProviderCredits(ctx context.Context, tx *sql.Tx, invoiceID string) error {
 	rows, err := tx.QueryContext(ctx, `
-		WITH storage_lines AS (
+		WITH provider_lines AS (
 			SELECT li.id AS line_item_id,
 			       li.tenant_id,
 			       COALESCE(li.cluster_id, '') AS customer_cluster_id,
-			       li.meter,
+		       li.meter,
+		       li.dimensions,
 			       li.currency,
 			       inv.period_start,
 			       inv.period_end,
@@ -160,33 +161,34 @@ func persistStorageProviderCredits(ctx context.Context, tx *sql.Tx, invoiceID st
 			FROM purser.invoice_line_items li
 			JOIN purser.billing_invoices inv ON inv.id = li.invoice_id
 			WHERE li.invoice_id = $1
-			  AND li.meter IN ('storage_gb_seconds_hot', 'storage_gb_seconds_cold')
+			  AND li.meter IS NOT NULL
 			  AND li.amount != 0
 		),
 		base_provider_rows AS (
 			SELECT sl.line_item_id,
-			       'storage_provider_usage' AS source_type,
+		       'provider_usage' AS source_type,
 			       spu.id::text AS source_id,
 			       sl.tenant_id AS usage_tenant_id,
-			       spu.storage_provider_tenant_id,
-			       spu.storage_provider_cluster_id,
-			       spu.storage_backend,
-			       spu.usage_type,
-			       spu.gb_seconds,
+		       spu.provider_tenant_id AS storage_provider_tenant_id,
+		       spu.provider_cluster_id AS storage_provider_cluster_id,
+		       COALESCE(spu.dimensions->>'storage_backend', '') AS storage_backend,
+		       spu.usage_type,
+		       spu.usage_value AS gb_seconds,
 			       sl.currency,
 			       sl.period_start,
 			       sl.period_end,
 			       sl.gross_cents
-			FROM storage_lines sl
-			JOIN purser.storage_provider_usage_records spu
+			FROM provider_lines sl
+			JOIN purser.provider_usage_records spu
 			  ON spu.usage_tenant_id = sl.tenant_id
-			 AND spu.customer_cluster_id = sl.customer_cluster_id
+			 AND spu.work_cluster_id = sl.customer_cluster_id
 			 AND spu.usage_type = sl.meter
+			 AND spu.dimensions @> sl.dimensions
 			 AND spu.period_start < sl.period_end
 			 AND spu.period_end > sl.period_start
 			 AND spu.value_kind = 'delta'
 			 AND spu.granularity = 'minute_5'
-			WHERE spu.gb_seconds != 0
+			WHERE spu.usage_value != 0
 		),
 		adjustment_provider_rows AS (
 			SELECT sl.line_item_id,
@@ -202,7 +204,7 @@ func persistStorageProviderCredits(ctx context.Context, tx *sql.Tx, invoiceID st
 			       ua.period_start,
 			       ua.period_end,
 			       sl.gross_cents
-			FROM storage_lines sl
+			FROM provider_lines sl
 			JOIN purser.usage_adjustments ua
 			  ON ua.tenant_id = sl.tenant_id
 			 AND ua.cluster_id = sl.customer_cluster_id
@@ -285,7 +287,7 @@ func persistStorageProviderCredits(ctx context.Context, tx *sql.Tx, invoiceID st
 		}
 		a.SourceType = sourceType
 		switch sourceType {
-		case "storage_provider_usage":
+		case "provider_usage":
 			a.UsageRecordID = sourceUUID
 		case "usage_adjustment":
 			a.UsageAdjustmentID = sourceUUID
@@ -300,7 +302,7 @@ func persistStorageProviderCredits(ctx context.Context, tx *sql.Tx, invoiceID st
 	}
 
 	for _, a := range pending {
-		feeBps, err := lookupFeeBps(ctx, tx, a.OwnerTenantID, "storage_provider_usage")
+		feeBps, err := lookupFeeBps(ctx, tx, a.OwnerTenantID, "provider_usage")
 		if err != nil {
 			return err
 		}
@@ -337,18 +339,18 @@ func persistStorageProviderCredits(ctx context.Context, tx *sql.Tx, invoiceID st
 		}
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO purser.operator_credit_ledger (
-				source_type, storage_provider_usage_record_id, entry_type,
+				source_type, provider_usage_record_id, entry_type,
 				cluster_owner_tenant_id, cluster_id,
 				invoice_id, period_start, period_end, currency,
 				gross_cents, platform_fee_cents, payable_cents, status, notes
 			) VALUES (
-				'storage_provider_usage', $1, 'accrual',
+				'provider_usage', $1, 'accrual',
 				$2, $3, $4, $5, $6, $7,
 				$8, $9, $10, $11,
 				jsonb_build_object('storage_backend', $12::text, 'usage_type', $13::text)
 			)
-			ON CONFLICT (storage_provider_usage_record_id)
-			WHERE entry_type = 'accrual' AND source_type = 'storage_provider_usage'
+			ON CONFLICT (provider_usage_record_id)
+			WHERE entry_type = 'accrual' AND source_type = 'provider_usage'
 			DO NOTHING
 		`, a.UsageRecordID, a.OwnerTenantID, a.ClusterID, invoiceID,
 			a.PeriodStart, a.PeriodEnd, a.Currency,

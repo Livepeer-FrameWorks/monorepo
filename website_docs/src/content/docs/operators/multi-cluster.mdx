@@ -251,9 +251,9 @@ See [DNS and Cluster Routing](/operators/dns) for details.
 
 ## Billing Attribution
 
-Stream/viewer/artifact analytics carry `cluster_id` (serving cluster) and `origin_cluster_id` (where the stream was ingested). The billing rollups use those fields when they are present and attribute non-cluster-scoped usage, such as storage, processing, and API usage, to the tenant's primary cluster. This enables per-cluster billing:
+Stream/viewer/artifact analytics carry `cluster_id` (the cluster that performed the work) and `origin_cluster_id` (where the stream was ingested, retained for audit). Delivery is always billed to the serving cluster; processing is billed to the executing cluster; storage is billed to its placement/provider cluster. Only truly tenant-wide meters such as API usage attach to the tenant's primary cluster.
 
-- **Periscope Query** generates per-cluster `UsageSummary` records
+- **Periscope Metering** generates per-cluster, dimensioned usage reports
 - **Purser** stores these as per-cluster usage records
 - **Settlement queries** can identify cross-cluster traffic for infrastructure cost attribution
 

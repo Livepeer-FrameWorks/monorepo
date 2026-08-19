@@ -18,9 +18,9 @@ func TestStaleCloseViewerSessionsEmitsAnomalyRow(t *testing.T) {
 	conn := newFakeClickhouseConn()
 	h := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 
-	// Scan columns: tenant, stream, session, node, observedFirstMs, observedLastMs, duration.
-	conn.addQueryRow("periscope.viewer_sessions_current",
-		"tenant-1", "stream-1", "session-1", "node-1",
+	// Scan columns: tenant, stream, session, node, cluster, observedFirstMs, observedLastMs, duration.
+	conn.addQueryRow("periscope.client_qoe_samples",
+		"tenant-1", "stream-1", "session-1", "node-1", "cluster-a",
 		int64(1_700_000_000_000), int64(1_700_000_300_000), uint32(300))
 
 	if err := h.staleCloseViewerSessions(context.Background()); err != nil {
@@ -33,7 +33,7 @@ func TestStaleCloseViewerSessionsEmitsAnomalyRow(t *testing.T) {
 	}
 	row := batch.rows[0]
 	// Append order: tenant, node, session, cluster, stream, name, duration, first, last, closed, reason, version, notes
-	if row[0] != "tenant-1" || row[1] != "node-1" || row[2] != "session-1" || row[4] != "stream-1" {
+	if row[0] != "tenant-1" || row[1] != "node-1" || row[2] != "session-1" || row[3] != "cluster-a" || row[4] != "stream-1" {
 		t.Errorf("natural key mismatch: %#v", row[:5])
 	}
 	if row[6] != uint32(300) {

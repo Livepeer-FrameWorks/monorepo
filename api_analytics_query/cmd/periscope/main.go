@@ -10,7 +10,6 @@ import (
 
 	periscopegrpc "frameworks/api_analytics_query/internal/grpc"
 	"frameworks/api_analytics_query/internal/metrics"
-	"frameworks/api_analytics_query/internal/scheduler"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
@@ -35,9 +34,6 @@ func main() {
 
 	logger.Info("Starting Periscope-Query (Analytics Query API)")
 
-	// PostgreSQL is ONLY used for billing_cursors (usage summary tracking)
-	// All analytics queries use ClickHouse exclusively
-	dbURL := config.RequireEnv("DATABASE_URL")
 	clickhouseAddr := config.RequireEnv("CLICKHOUSE_ADDR")
 	clickhouseDB := config.RequireEnv("CLICKHOUSE_DB")
 	clickhouseUser := config.RequireEnv("CLICKHOUSE_USER")
@@ -45,12 +41,6 @@ func main() {
 	jwtSecret := config.RequireEnv("JWT_SECRET")
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
 	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
-
-	// PostgreSQL for billing cursors only
-	dbConfig := database.DefaultConfig()
-	dbConfig.URL = dbURL
-	yugaDB := database.MustConnect(dbConfig, logger)
-	defer func() { _ = yugaDB.Close() }()
 
 	// Connect to ClickHouse (primary analytics database)
 	chConfig := database.DefaultClickHouseConfig()
@@ -66,10 +56,8 @@ func main() {
 	metricsCollector := monitoring.NewMetricsCollector("periscope-query", version.Version, version.GitCommit)
 
 	// Add health checks
-	healthChecker.AddCheck("postgres", monitoring.DatabaseHealthCheck(yugaDB))
 	healthChecker.AddCheck("clickhouse", monitoring.DatabaseHealthCheck(clickhouse))
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"DATABASE_URL":    dbURL,
 		"CLICKHOUSE_ADDR": clickhouseAddr,
 		"CLICKHOUSE_DB":   clickhouseDB,
 		"JWT_SECRET":      jwtSecret,
@@ -86,11 +74,6 @@ func main() {
 		GRPCRequests:     metricsCollector.NewCounter("grpc_requests_total", "Total gRPC requests", []string{"method", "status"}),
 		GRPCDuration:     metricsCollector.NewHistogram("grpc_request_duration_seconds", "gRPC request duration", []string{"method"}, nil),
 	}
-
-	// Initialize and start scheduler for billing summarization (uses yugaDB for cursors)
-	taskScheduler := scheduler.NewScheduler(yugaDB, clickhouse, logger)
-	taskScheduler.Start()
-	defer taskScheduler.Stop()
 
 	// Expose health and metrics over HTTP; query APIs are served over gRPC.
 	router := server.SetupServiceRouter(logger, "periscope-query", healthChecker, metricsCollector)

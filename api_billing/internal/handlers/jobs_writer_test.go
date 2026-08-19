@@ -36,6 +36,38 @@ func TestValidateUsageRecordAllowsCustomCanonicalMeter(t *testing.T) {
 	}
 }
 
+func TestProcessWindowCompletionRecordsReceiptAndWindowAtomically(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	start := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	summary := models.UsageSummary{
+		ReportID: strings.Repeat("c", 64), ReportKind: "window_complete", SourceID: "eu-1", SourceRegion: "eu",
+		Sequence: uint64(start.Add(5 * time.Minute).Unix()), TenantID: "11111111-1111-4111-8111-111111111111",
+		ClusterID: "_source", PeriodStart: start, PeriodEnd: start.Add(5 * time.Minute), Complete: true,
+	}
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO purser\\.metering_sources").
+		WithArgs(summary.SourceID, summary.SourceRegion, summary.PeriodStart).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO purser\\.usage_reports").
+		WithArgs(summary.ReportID, summary.ReportKind, summary.SourceID, summary.SourceRegion, summary.Sequence,
+			summary.TenantID, summary.ClusterID, summary.PeriodStart, summary.PeriodEnd).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO purser\\.metering_windows").
+		WithArgs(summary.SourceID, summary.PeriodStart, summary.PeriodEnd).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	jm := &JobManager{db: db}
+	if err := jm.processWindowCompletion(context.Background(), summary); err != nil {
+		t.Fatalf("process window completion: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
 func TestValidateUsageRecordRejectsMalformedMeter(t *testing.T) {
 	start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	end := start.Add(5 * time.Minute)
@@ -65,17 +97,17 @@ func TestValidateUsageRecordRequiresCanonicalWindowForOperationalMeters(t *testi
 
 func TestBuildUsageDataFromSummaryIncludesGenericMeters(t *testing.T) {
 	got := buildUsageDataFromSummary(models.UsageSummary{
-		Meters: map[string]float64{
-			"ai_detection_seconds": 42,
-			"egress_gb":            99,
+		Meters: []models.MeterQuantity{
+			{Meter: "ai_detection_seconds", Unit: "second", Quantity: 42},
+			{Meter: "egress_gb", Unit: "gigabyte", Quantity: 99},
+			{Meter: "egress_gb", Unit: "gigabyte", Quantity: 12},
 		},
-		EgressGB: 12,
 	})
 	if got["ai_detection_seconds"] != 42 {
 		t.Fatalf("ai_detection_seconds = %v, want 42", got["ai_detection_seconds"])
 	}
-	if got["egress_gb"] != 12 {
-		t.Fatalf("egress_gb = %v, want typed field to win over generic duplicate", got["egress_gb"])
+	if got["egress_gb"] != 111 {
+		t.Fatalf("egress_gb = %v, want all dimension buckets aggregated", got["egress_gb"])
 	}
 }
 
@@ -90,23 +122,24 @@ func TestProcessUsageSummaryPersistsProviderUsageAndAdjustments(t *testing.T) {
 	start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	end := start.Add(5 * time.Minute)
 	summary := models.UsageSummary{
-		TenantID:  "00000000-0000-0000-0000-000000000001",
-		ClusterID: "cluster-a",
-		Period:    start.Format(time.RFC3339) + "/" + end.Format(time.RFC3339),
-		Timestamp: start,
-		StorageProviderUsage: []models.StorageProviderUsage{{
-			CustomerClusterID:        "cluster-a",
-			StorageProviderTenantID:  "provider-tenant",
-			StorageProviderClusterID: "provider-cluster",
-			StorageBackend:           "edge_disk",
-			StorageScope:             "hot",
-			UsageType:                "storage_gb_seconds_hot",
-			GBSeconds:                300,
+		TenantID:    "00000000-0000-0000-0000-000000000001",
+		ClusterID:   "cluster-a",
+		SourceID:    "periscope-eu",
+		ReportID:    "report-1",
+		PeriodStart: start,
+		PeriodEnd:   end,
+		ProviderUsage: []models.ProviderUsage{{
+			ProviderTenantID:  "provider-tenant",
+			ProviderClusterID: "provider-cluster",
+			Meter: models.MeterQuantity{Meter: "storage_gb_seconds_hot", Unit: "gibibyte_second", Quantity: 300,
+				Dimensions: models.JSONB{"storage_backend": "edge_disk", "storage_scope": "hot"}},
 		}},
 		UsageAdjustments: []models.UsageAdjustment{{
 			SourceSystem: "periscope.projection_divergences",
 			SourceID:     "storage-correction-1",
 			UsageType:    "storage_gb_seconds_hot",
+			Unit:         "gibibyte_second",
+			Dimensions:   models.JSONB{"storage_backend": "edge_disk", "storage_scope": "hot"},
 			ClusterID:    "cluster-a",
 			DeltaValue:   -60,
 			PeriodStart:  start,
@@ -116,11 +149,11 @@ func TestProcessUsageSummaryPersistsProviderUsageAndAdjustments(t *testing.T) {
 		}},
 	}
 
-	mock.ExpectExec(`INSERT INTO purser\.storage_provider_usage_records`).
-		WithArgs(summary.TenantID, "cluster-a", "provider-tenant", "provider-cluster", "edge_disk", "hot", "storage_gb_seconds_hot", 300.0, start, end, "kafka-test", sqlmock.AnyArg()).
+	mock.ExpectExec(`INSERT INTO purser\.provider_usage_records`).
+		WithArgs(summary.TenantID, "cluster-a", "provider-tenant", "provider-cluster", "storage_gb_seconds_hot", "gibibyte_second", 300.0, sqlmock.AnyArg(), sqlmock.AnyArg(), "periscope-eu", "report-1", start, end, "kafka-test", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO purser\.usage_adjustments`).
-		WithArgs(summary.TenantID, "cluster-a", "storage_gb_seconds_hot", -60.0, start, end, "periscope.projection_divergences", "storage-correction-1", "projection_divergence", sqlmock.AnyArg()).
+		WithArgs(summary.TenantID, "cluster-a", "storage_gb_seconds_hot", "gibibyte_second", sqlmock.AnyArg(), sqlmock.AnyArg(), -60.0, start, end, "periscope.projection_divergences", "storage-correction-1", "projection_divergence", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	if _, err := jm.processUsageSummary(context.Background(), summary, "kafka-test"); err != nil {
@@ -143,14 +176,18 @@ func TestProcessUsageSummaryPersistsCanonicalDeltaMeters(t *testing.T) {
 	start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	end := start.Add(5 * time.Minute)
 	summary := models.UsageSummary{
-		TenantID:             "00000000-0000-0000-0000-000000000001",
-		ClusterID:            "cluster-a",
-		Period:               start.Format(time.RFC3339) + "/" + end.Format(time.RFC3339),
-		ViewerHours:          1.0 / 60.0,
-		EgressGB:             2.5,
-		StorageGBSecondsCold: 300,
-		NativeAvAACSeconds:   60,
-		Timestamp:            start,
+		TenantID:    "00000000-0000-0000-0000-000000000001",
+		ClusterID:   "cluster-a",
+		SourceID:    "periscope-eu",
+		ReportID:    "report-2",
+		PeriodStart: start,
+		PeriodEnd:   end,
+		Meters: []models.MeterQuantity{
+			{Meter: "delivered_minutes", Unit: "minute", Quantity: 1},
+			{Meter: "egress_gb", Unit: "gigabyte", Quantity: 2.5},
+			{Meter: "storage_gb_seconds_cold", Unit: "gibibyte_second", Quantity: 300},
+			{Meter: "media_seconds", Unit: "second", Quantity: 60, Dimensions: models.JSONB{"output_codec": "aac"}},
+		},
 	}
 
 	for usageType, usageValue := range map[string]float64{
@@ -160,7 +197,7 @@ func TestProcessUsageSummaryPersistsCanonicalDeltaMeters(t *testing.T) {
 		"media_seconds":           60,
 	} {
 		mock.ExpectExec(`INSERT INTO purser\.usage_records`).
-			WithArgs(summary.TenantID, "cluster-a", usageType, usageValue, sqlmock.AnyArg(), start, end, "minute_5", "delta").
+			WithArgs(summary.TenantID, "cluster-a", usageType, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "periscope-eu", "report-2", usageValue, sqlmock.AnyArg(), start, end, "minute_5", "delta").
 			WillReturnResult(sqlmock.NewResult(0, 1))
 	}
 
@@ -184,9 +221,11 @@ func TestProcessUsageSummaryQuarantinesMissingClusterID(t *testing.T) {
 	end := start.Add(5 * time.Minute)
 	summary := models.UsageSummary{
 		TenantID:    "00000000-0000-0000-0000-000000000001",
-		Period:      start.Format(time.RFC3339) + "/" + end.Format(time.RFC3339),
-		ViewerHours: 1.0 / 60.0,
-		Timestamp:   start,
+		SourceID:    "periscope-eu",
+		ReportID:    "report-3",
+		PeriodStart: start,
+		PeriodEnd:   end,
+		Meters:      []models.MeterQuantity{{Meter: "delivered_minutes", Unit: "minute", Quantity: 1}},
 	}
 
 	mock.ExpectExec(`INSERT INTO purser\.usage_records_quarantine`).
@@ -212,11 +251,8 @@ func TestBuildRatingInputFromCanonicalUsageUsesAcceptedRowsOnly(t *testing.T) {
 			usageValue: 2,
 		},
 		{
-			usageType:  "media_seconds",
-			usageValue: 60,
-			usageDetails: models.JSONB{
-				"codec_seconds": map[string]float64{"AV:opus": 60, "opus": 60},
-			},
+			usageType: "transcode_rendition_seconds", unit: "second", usageValue: 60,
+			dimensions: models.JSONB{"execution_backend": "native", "output_codec": "opus"},
 		},
 	}
 
@@ -224,11 +260,11 @@ func TestBuildRatingInputFromCanonicalUsageUsesAcceptedRowsOnly(t *testing.T) {
 	if got.Usage["delivered_minutes"].String() != "2" {
 		t.Fatalf("delivered_minutes = %s, want 2", got.Usage["delivered_minutes"])
 	}
-	if got.Usage["media_seconds"].String() != "60" {
-		t.Fatalf("media_seconds = %s, want 60", got.Usage["media_seconds"])
+	if got.Usage["transcode_rendition_seconds"].String() != "60" {
+		t.Fatalf("transcode_rendition_seconds = %s, want 60", got.Usage["transcode_rendition_seconds"])
 	}
-	if got.CodecSeconds["AV:opus"].String() != "60" || got.CodecSeconds["opus"].String() != "60" {
-		t.Fatalf("codec seconds not preserved: %#v", got.CodecSeconds)
+	if len(got.Quantities) != 2 || got.Quantities[1].Dimensions["output_codec"] != "opus" {
+		t.Fatalf("dimensioned quantity not preserved: %#v", got.Quantities)
 	}
 }
 
@@ -349,9 +385,9 @@ func TestUpdateInvoiceDraftWritesRatedLineItemsTransactionally(t *testing.T) {
 		WithArgs(tenantID, periodStart, periodEnd).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "aggregated_value"}).
 			AddRow("", "storage_gb_seconds_hot", 7200.0))
-	mock.ExpectQuery(`usage_details->'codec_seconds'`).
+	mock.ExpectQuery(`WITH dimensioned_rows`).
 		WithArgs(tenantID, periodStart, periodEnd).
-		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "key", "seconds"}))
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "unit", "dimensions", "quantity"}))
 	mock.ExpectQuery(`SELECT stripe_subscription_id, mollie_subscription_id\s+FROM purser\.tenant_subscriptions`).
 		WithArgs(tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"stripe_subscription_id", "mollie_subscription_id"}).
@@ -438,9 +474,9 @@ func TestUpdateInvoiceDraftClampsPriorPrepaidCreditToZeroNet(t *testing.T) {
 		WithArgs(tenantID, periodStart, periodEnd).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "aggregated_value"}).
 			AddRow("", "storage_gb_seconds_hot", 7200.0))
-	mock.ExpectQuery(`usage_details->'codec_seconds'`).
+	mock.ExpectQuery(`WITH dimensioned_rows`).
 		WithArgs(tenantID, periodStart, periodEnd).
-		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "key", "seconds"}))
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "unit", "dimensions", "quantity"}))
 	mock.ExpectQuery(`SELECT stripe_subscription_id, mollie_subscription_id\s+FROM purser\.tenant_subscriptions`).
 		WithArgs(tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"stripe_subscription_id", "mollie_subscription_id"}).

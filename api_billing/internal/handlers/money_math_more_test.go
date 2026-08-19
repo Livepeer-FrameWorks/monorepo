@@ -73,51 +73,6 @@ func newCodecJM(t *testing.T) (*JobManager, sqlmock.Sqlmock) {
 	return &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}, mock
 }
 
-// collectInvoiceCodecBreakdowns folds the (cluster, meter, key, seconds) rows
-// into a nested map. Duplicate keys are summed (defensive against any
-// pre-aggregation gap), and distinct clusters/meters/keys stay separate.
-func TestCollectInvoiceCodecBreakdownsBuildsNestedMap(t *testing.T) {
-	jm, mock := newCodecJM(t)
-	ps := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
-	pe := ps.AddDate(0, 1, 0)
-
-	rows := sqlmock.NewRows([]string{"cluster_id", "usage_type", "key", "seconds"}).
-		AddRow("cluster-a", "media_seconds", "h264", float64(100)).
-		AddRow("cluster-a", "media_seconds", "h264", float64(50)). // dup → summed
-		AddRow("cluster-a", "media_seconds", "h265", float64(20)).
-		AddRow("cluster-b", "media_seconds", "Livepeer:h264", float64(7))
-
-	mock.ExpectQuery(`usage_codec_rows`).
-		WithArgs("tenant-1", ps, pe).
-		WillReturnRows(rows)
-
-	got, err := jm.collectInvoiceCodecBreakdowns(context.Background(), "tenant-1", ps, pe)
-	if err != nil {
-		t.Fatalf("collectInvoiceCodecBreakdowns: %v", err)
-	}
-	if got["cluster-a"]["media_seconds"]["h264"] != 150 {
-		t.Fatalf("h264 = %v, want 150 (100+50 summed)", got["cluster-a"]["media_seconds"]["h264"])
-	}
-	if got["cluster-a"]["media_seconds"]["h265"] != 20 {
-		t.Fatalf("h265 = %v, want 20", got["cluster-a"]["media_seconds"]["h265"])
-	}
-	if got["cluster-b"]["media_seconds"]["Livepeer:h264"] != 7 {
-		t.Fatalf("joint key = %v, want 7", got["cluster-b"]["media_seconds"]["Livepeer:h264"])
-	}
-}
-
-func TestCollectInvoiceCodecBreakdownsQueryError(t *testing.T) {
-	jm, mock := newCodecJM(t)
-	ps := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
-	pe := ps.AddDate(0, 1, 0)
-	mock.ExpectQuery(`usage_codec_rows`).
-		WillReturnError(errors.New("boom"))
-
-	if _, err := jm.collectInvoiceCodecBreakdowns(context.Background(), "tenant-1", ps, pe); err == nil {
-		t.Fatal("expected query error, got nil")
-	}
-}
-
 // collectInvoiceUsage unions usage_records + usage_adjustments and groups per
 // (cluster, meter). Assert the per-cluster nested map and the query-error path.
 func TestCollectInvoiceUsageMapsRowsAndError(t *testing.T) {

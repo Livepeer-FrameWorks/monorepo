@@ -173,49 +173,24 @@ func TestValidateRuleShape(t *testing.T) {
 		}
 	})
 
-	t.Run("codec_multiplier requires multipliers", func(t *testing.T) {
+	t.Run("dimensioned rejects non-array rates", func(t *testing.T) {
 		r := base()
-		r.Model = ModelCodecMultiplier
-		// No config at all.
+		r.Model = ModelDimensioned
+		r.Config = map[string]any{"rates": map[string]any{}}
 		if err := ValidateRuleShape(r); err == nil {
-			t.Fatal("expected error when codec_multipliers missing")
-		}
-		// Present but empty.
-		r.Config = map[string]any{"codec_multipliers": map[string]any{}}
-		if err := ValidateRuleShape(r); err == nil {
-			t.Fatal("expected error when codec_multipliers empty")
+			t.Fatal("expected error when rates is not an array")
 		}
 	})
 
-	t.Run("codec_multiplier rejects bad entries", func(t *testing.T) {
+	t.Run("valid dimensioned", func(t *testing.T) {
 		r := base()
-		r.Model = ModelCodecMultiplier
-
-		// Empty key.
-		r.Config = map[string]any{"codec_multipliers": map[string]any{"": 2.0}}
-		if err := ValidateRuleShape(r); err == nil {
-			t.Fatal("expected error for empty codec key")
-		}
-
-		// Non-numeric multiplier.
-		r.Config = map[string]any{"codec_multipliers": map[string]any{"h264": "fast"}}
-		if err := ValidateRuleShape(r); err == nil {
-			t.Fatal("expected error for non-numeric multiplier")
-		}
-
-		// Non-positive multiplier.
-		r.Config = map[string]any{"codec_multipliers": map[string]any{"h264": 0.0}}
-		if err := ValidateRuleShape(r); err == nil {
-			t.Fatal("expected error for non-positive multiplier")
-		}
-	})
-
-	t.Run("valid codec_multiplier", func(t *testing.T) {
-		r := base()
-		r.Model = ModelCodecMultiplier
-		r.Config = map[string]any{"codec_multipliers": map[string]any{"h264": 1.0, "av1": 2.5}}
+		r.Model = ModelDimensioned
+		r.Config = map[string]any{"rates": []any{map[string]any{
+			"selectors":  map[string]any{"output_codec": "av1"},
+			"unit_price": "0.02",
+		}}}
 		if err := ValidateRuleShape(r); err != nil {
-			t.Fatalf("expected valid codec_multiplier rule, got %v", err)
+			t.Fatalf("expected valid dimensioned rule, got %v", err)
 		}
 	})
 }

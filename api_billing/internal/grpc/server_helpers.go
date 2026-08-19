@@ -19,9 +19,7 @@ import (
 //
 // usage carries canonical usage_type → total values. The map is not limited to
 // today's billed meters; rating rules decide which meters produce lines.
-// codecBreakdowns carries per-meter codec breakdowns extracted from
-// usage_details.codec_seconds JSON.
-func buildRatingInputForUsage(usage map[string]float64, codecBreakdowns map[string]map[string]float64, currency string, basePrice decimal.Decimal, rules []rating.Rule) rating.Input {
+func buildRatingInputForUsage(usage map[string]float64, quantities []rating.DimensionedQuantity, currency string, basePrice decimal.Decimal, rules []rating.Rule) rating.Input {
 	usageMap := make(map[rating.Meter]decimal.Decimal, len(usage))
 	for meter, total := range usage {
 		m := rating.Meter(meter)
@@ -30,29 +28,12 @@ func buildRatingInputForUsage(usage map[string]float64, codecBreakdowns map[stri
 		}
 		usageMap[m] = decimal.NewFromFloat(total)
 	}
-	breakdowns := map[rating.Meter]map[string]decimal.Decimal{}
-	for meter, codecTotals := range codecBreakdowns {
-		m := rating.Meter(meter)
-		if !rating.ValidMeter(m) {
-			continue
-		}
-		codecs := map[string]decimal.Decimal{}
-		for codec, total := range codecTotals {
-			if total != 0 {
-				codecs[codec] = decimal.NewFromFloat(total)
-			}
-		}
-		if len(codecs) > 0 {
-			breakdowns[m] = codecs
-		}
-	}
 	return rating.Input{
 		Currency:          currency,
 		BasePrice:         basePrice,
 		Rules:             rules,
 		Usage:             usageMap,
-		Breakdowns:        breakdowns,
-		CodecSeconds:      breakdowns[rating.MeterMediaSeconds],
+		Quantities:        quantities,
 		WaiveUsageCharges: config.WaiveUsageChargesEnabled(),
 	}
 }
@@ -75,6 +56,10 @@ func clusterScopedLineKey(baseKey, clusterID, periodSuffix string) string {
 // lineItemToProto serializes a rating.LineItem into the proto wire shape.
 // Decimal fields are encoded as strings to preserve precision.
 func lineItemToProto(li rating.LineItem) *purserpb.LineItem {
+	dimensions := make(map[string]any, len(li.Dimensions))
+	for key, value := range li.Dimensions {
+		dimensions[key] = value
+	}
 	return &purserpb.LineItem{
 		LineKey:          li.LineKey,
 		Meter:            string(li.Meter),
@@ -85,5 +70,7 @@ func lineItemToProto(li rating.LineItem) *purserpb.LineItem {
 		UnitPrice:        li.UnitPrice.String(),
 		Total:            li.Amount.String(),
 		Currency:         li.Currency,
+		Unit:             li.Unit,
+		Dimensions:       mapToProtoStruct(dimensions),
 	}
 }

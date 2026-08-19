@@ -46,12 +46,12 @@ func TestScanRule(t *testing.T) {
 	})
 
 	t.Run("codec multiplier config decoded", func(t *testing.T) {
-		rule, err := scanRule(fakeScan("media_seconds", "codec_multiplier", "EUR", "0", "0.01", `{"codec_multipliers":{"h264":1.5}}`))
+		rule, err := scanRule(fakeScan("transcode_rendition_seconds", "dimensioned", "EUR", "0", "0.01", `{"rates":[{"selectors":{"output_codec":"h264"},"unit_price":"0.015"}]}`))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if _, ok := rule.Config["codec_multipliers"]; !ok {
-			t.Errorf("expected codec_multipliers in config, got %v", rule.Config)
+		if _, ok := rule.Config["rates"]; !ok {
+			t.Errorf("expected rates in config, got %v", rule.Config)
 		}
 	})
 

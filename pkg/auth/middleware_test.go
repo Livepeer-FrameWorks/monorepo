@@ -206,7 +206,9 @@ func TestJWTAuthMiddleware_CookieFallback(t *testing.T) {
 func TestJWTAuthMiddleware_ServiceTokenFallback(t *testing.T) {
 	secret := []byte("secret")
 	serviceToken := "test-service-token-xyz"
+	systemTenantID := "11111111-2222-3333-4444-555555555555"
 	t.Setenv("SERVICE_TOKEN", serviceToken)
+	t.Setenv("SYSTEM_TENANT_ID", systemTenantID)
 
 	r := gin.New()
 	r.Use(JWTAuthMiddleware(secret))
@@ -214,7 +216,7 @@ func TestJWTAuthMiddleware_ServiceTokenFallback(t *testing.T) {
 		if c.GetString(string(ctxkeys.KeyUserID)) != "00000000-0000-0000-0000-000000000000" {
 			t.Fatalf("expected service user ID")
 		}
-		if c.GetString(string(ctxkeys.KeyTenantID)) != "00000000-0000-0000-0000-000000000001" {
+		if c.GetString(string(ctxkeys.KeyTenantID)) != systemTenantID {
 			t.Fatalf("expected service tenant ID")
 		}
 		if c.GetString(string(ctxkeys.KeyEmail)) != "service@internal" {

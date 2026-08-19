@@ -3,9 +3,9 @@
 This document explains the FrameWorks analytics pipeline end-to-end:
 
 ```
-MistServer → Helmsman → Foghorn → Decklog → Kafka → Periscope-Ingest → ClickHouse → Periscope-Query → Bridge (GraphQL) → UI
-                                                                                          ↓
-                                                                                  Kafka (billing.usage_reports) → Purser
+MistServer → Helmsman → Foghorn → Decklog → Kafka → Periscope-Ingest → ClickHouse
+                                                                        ├→ Periscope-Query → Bridge → UI
+                                                                        └→ Periscope-Metering → Kafka (billing.usage_reports) → Purser
 ```
 
 It is written as a “how the system works” reference (vs an audit checklist).
@@ -26,12 +26,24 @@ It is written as a “how the system works” reference (vs an audit checklist).
 - `api_balancing` (“Foghorn”): Enriches triggers (tenant/user/geo), applies redaction rules where appropriate, forwards events for storage/broadcast, and handles some orchestration.
 - `api_firehose` (“Decklog”): Normalizes + publishes analytics events to Kafka (`analytics_events` topic).
 - `api_analytics_ingest` (“Periscope Ingest”): Consumes Kafka analytics events and writes to ClickHouse.
-- `api_analytics_query` (“Periscope Query”): Reads ClickHouse and serves gRPC analytics APIs; also produces billing usage reports.
+- `api_analytics_query` (“Periscope Query”): Horizontally scalable, read-only ClickHouse query API.
+- `api_analytics_query/cmd/periscope-metering` (“Periscope Metering”): Regional worker colocated with one logical ClickHouse deployment. It aggregates canonical facts, coordinates replicas with PostgreSQL leases/cursors, and publishes reports to central Purser through Kafka.
 - `api_gateway` (“Bridge”): GraphQL gateway to the control/query plane; calls Periscope Query and other services.
 - `api_realtime` (“Signalman”): Realtime subscription hub (WebSocket/streaming); redacts client IPs for broadcast.
 - `api_billing` (“Purser”): Consumes billing usage reports, stores usage records, exposes billing APIs.
 
 Bridge exposes analytics through three access scopes: public topology, tenant analytics, and cluster operations. Tenant analytics stay keyed to the caller's `tenant_id`; cluster operations require ownership of the relevant cluster or node; public topology only exposes official cluster-level status. See [analytics-access-scopes.md](analytics-access-scopes.md).
+
+### Deployment topology
+
+ClickHouse is not sharded today. The current deployment therefore has one
+logical ClickHouse metering source and one active `periscope-metering` lease
+holder (optionally with hot replicas). When ClickHouse is split by wider
+region, each logical regional ClickHouse deployment gets a local worker and a
+stable, unique `METERING_SOURCE_ID`; all workers publish to the same central
+Purser topic. Query API replicas remain stateless and may scale horizontally
+independently. The aggregation boundary is the logical ClickHouse source, not
+an individual ClickHouse replica or Query pod.
 
 ## 1) Emission: MistServer → Helmsman
 
@@ -47,9 +59,9 @@ Examples of “push” signals:
 
 Helmsman receives these over HTTP, parses them, and forwards to Foghorn as a typed `pb.MistTrigger`.
 
-For final/accounting triggers (`USER_END`, `STREAM_END`, `PUSH_END`, `PUSH_INPUT_CLOSE`, `RECORDING_END`, `RECORDING_SEGMENT`, `LIVEPEER_SEGMENT_COMPLETE`, `PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE`), Helmsman persists the parsed trigger to a local write-ahead log before responding 200 OK to Mist, and a background forwarder retries until Foghorn returns a `MistTriggerAck` (which Foghorn only sends after Decklog's Kafka publish commits). See [trigger-durability.md](trigger-durability.md). The source id used for ack correlation is `sha256(node_id || NUL || trigger_type || NUL || payload_raw)` in `MistTrigger.RequestId`; Decklog derives the typed Kafka `event_id` from that source id as a deterministic UUID so Periscope's UUID-based fact tables stay idempotent.
+For terminal accounting triggers (`USER_END`, `STREAM_END`, `PUSH_END`, `PUSH_INPUT_CLOSE`, `RECORDING_END`, `RECORDING_SEGMENT`, `LIVEPEER_SEGMENT_COMPLETE`, `PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE`), Helmsman persists the parsed trigger to a local write-ahead log before responding 200 OK to Mist, and a background forwarder retries until Foghorn returns a `MistTriggerAck` after Decklog's Kafka publish commits. `USER_NEW` is a blocking admission trigger instead: Helmsman gives it the same deterministic identity and Mist is not allowed to establish the connection until Foghorn has synchronously committed the source fact to Kafka. See [trigger-durability.md](trigger-durability.md). The source id used for ack correlation is `sha256(node_id || NUL || trigger_type || NUL || payload_raw)` in `MistTrigger.RequestId`; Decklog derives the typed Kafka `event_id` from that source id as a deterministic UUID so Periscope's UUID-based fact tables stay idempotent.
 
-Once a final/accounting trigger lands in Kafka, Periscope ingests it into `raw_mist_triggers` (durable audit) and then projects it into per-meter `*_final` tables (`viewer_sessions_final`, `stream_sessions_final`, `processing_segments_final`). Those `*_final` tables are the billing source of truth for Mist-derived meters; storage billing integrates canonical `storage_snapshots` directly. Five-minute canonical ledgers (`viewer_usage_5m`, `stream_runtime_5m`, `storage_gb_seconds_5m`, `processing_5m`, `api_usage_5m`) feed analytics and dashboard rollups. See [finalized-fact-tables.md](finalized-fact-tables.md) and [meter-contracts.md](meter-contracts.md).
+Once a final/accounting trigger lands in Kafka, Periscope ingests it into `raw_mist_triggers` (durable audit) and then projects it into per-meter `*_final` tables (`viewer_sessions_final`, `stream_sessions_final`, `processing_segments_final`). Those tables are the settlement source for Mist-derived meters. `viewer_sessions_current` plus periodic `CLIENT_LIFECYCLE_UPDATE` samples are only a liveness/reservation overlay: they keep prepaid admission responsive, but never create invoice usage. Missing `USER_END` facts become separately visible anomalies after the stale timeout. Five-minute canonical ledgers (`viewer_usage_5m`, `stream_runtime_5m`, `storage_gb_seconds_5m`, `processing_5m`, `api_usage_5m`) feed analytics and metering. See [finalized-fact-tables.md](finalized-fact-tables.md) and [meter-contracts.md](meter-contracts.md).
 
 ### B) MistServer Poller (state snapshots)
 
@@ -395,16 +407,17 @@ Key rule: do not broadcast raw client IP fields; redact before emit.
 
 ## 9) Billing / Metering
 
-Billing's canonical source is the finalized-fact tables (`viewer_sessions_final`, `stream_sessions_final`, `processing_segments_final`) plus direct hold-constant integration of canonical `storage_snapshots`. Default-priced meters are `delivered_minutes` and `storage_gb_seconds_cold`; `ingress_gb`, `egress_gb`, `storage_gb_seconds_hot`, and `media_seconds` are priceable but unrated by default. `media_seconds` carries plain codec and joint process/codec breakdowns in usage details so pricing can apply per-codec or per-workload multipliers without inventing one usage type per codec. See [meter-contracts.md](meter-contracts.md).
+Billing's canonical source is the finalized-fact tables (`viewer_sessions_final`, `stream_sessions_final`, `processing_segments_final`) plus the closed hold-constant storage ledger derived from canonical `storage_snapshots`. Purser registers every dimensioned meter even when its current price is zero. Delivery, bandwidth, storage, API, LLM/search/embedding, transcoding/rendition, transcription, and inference remain distinct invoiceable quantities rather than codec multipliers or a single generic processing bucket. See [meter-contracts.md](meter-contracts.md).
 
 ```
 USER_END / STREAM_END / segment-complete
   → raw_mist_triggers (audit journal, see trigger-durability.md)
   → *_final tables (append-only MergeTree, materialized via min/argMax on projection_version_ms)
   → 5-min canonical ledgers (viewer_usage_5m, stream_runtime_5m, processing_5m, storage_gb_seconds_5m, api_usage_5m)
-  → Periscope billing scheduler (5-min aligned cursor, 2-min settlement lag, walks billable_at_ms)
+  → regional periscope-metering worker (5-min aligned cursor, 2-min settlement lag, walks billable_at_ms)
   → Kafka billing.usage_reports
-  → Purser (Postgres usage_records, value_kind='delta')
+  → source-level window_complete marker after every tenant cursor succeeds
+  → Purser (Postgres usage records + completeness ledger)
   → rating engine → invoice line items
 ```
 
@@ -419,7 +432,7 @@ Notes:
 
 ### Cross-cluster billing attribution
 
-In multi-cluster deployments, viewer/session billing events carry `cluster_id` (serving cluster) and `origin_cluster_id` (where the stream was ingested) when that context is known. Other analytics families carry the cluster fields that match their domain; for example, stream lifecycle rows currently store the emitting `cluster_id`, while routing decisions store local and remote cluster IDs. Periscope Query generates per-cluster usage records for Purser from finalized facts and canonical ledgers, enabling settlement of inter-cluster traffic.
+In multi-cluster deployments, viewer/session billing events carry `cluster_id` (serving cluster) and `origin_cluster_id` (where the stream was ingested) when that context is known. Other analytics families carry the cluster fields that match their domain; for example, stream lifecycle rows currently store the emitting `cluster_id`, while routing decisions store local and remote cluster IDs. The regional Periscope Metering worker generates per-cluster usage records for Purser from finalized facts and canonical ledgers, enabling settlement of inter-cluster traffic.
 
 See `docs/architecture/cross-cluster-billing.md` for the full attribution model, ClickHouse schema additions (`cluster_id` + `origin_cluster_id` on viewer connection events and viewer rollups; `cluster_id` only on stream lifecycle rows), and the settlement query.
 
@@ -431,8 +444,9 @@ Foghorn tracks which nodes hold a local copy of each artifact in `foghorn.artifa
 
 - **What emits, when.** The `ArtifactNodeCopyEvent` transitions are `GAINED` (a node first holds a copy), `LOST` (it no longer does), and `UPDATED` (still present, but role/completeness changed). The poller emits `GAINED` when a `(artifact, node)` row becomes newly-present (first seen, or restored from orphaned) and `UPDATED` when a present row's role or completeness changes; finalizers (`RegisterOriginArtifact`) emit `GAINED`/`UPDATED` for the origin copy (including cache→origin promotion); the sync-complete path (`AddCachedNode`) emits for a synced cache copy; the stale-orphan sweep, disconnect eviction (`MarkNodeArtifactsOrphaned`) and explicit delete (`DeleteNodeArtifact`) emit `LOST`. `role` is `origin` (producer / peer-relay source) or `cache` (synced pull); `is_complete` marks a full local copy and is sticky once true (a poll reporting unknown completeness can't clear it).
 - **Ordering.** Each event carries a **monotonic `version`** assigned from a Postgres sequence (`foghorn.artifact_node_copy_version_seq`) inside the emitting transaction, and the current-state table is `ReplacingMergeTree(version)` — so concurrent updates converge deterministically regardless of commit order (wall-clock ms would tie). The version is also recorded on the row (`artifact_nodes.last_emitted_version`). `timestamp_ms` is event time only, not the ordering key. Within a single write, transition detection reads the row `FOR UPDATE` and derives inserted-vs-updated from `xmax = 0`, so concurrent duplicate writes of the _same_ transition don't double-emit.
-- **Reconciliation** (`ReconcileNodeCopies`, boot + slow timer). Two idempotent passes: (a) a **stale-present sweep** orphans + emits `LOST` for present rows unseen past the 15-minute threshold — a durable backstop for a disconnect whose one-shot orphaning failed (a gone node never reports again, so nothing else would emit its `LOST`); (b) a **seed** that emits `GAINED` for present copies whose last emit was not a present event (`last_emitted_version = 0`) — rows on a fresh projection, and rows created by raw writers (DVR-start / reconciler / segment inserts) that restore presence without emitting and are healed synchronously by `RefreshNodeCopy` plus this backstop. The seed handles each row under `FOR UPDATE` and skips any row already emitted, so it can't race a concurrent `LOST` (which supersedes with a higher version), never mints fake history for stable rows, and is safe on every replica with no leader lock. This is emission **correctness**, not loss recovery: **this projection is not something to protect against loss.** The durable, authoritative record of which nodes hold a copy is `foghorn.artifact_nodes` itself — a Postgres table re-asserted by every node's ~10s report and read directly by the media plane for routing/serving/relay (operational node selection never touches this ClickHouse projection). The ClickHouse `artifact_node_copy_current` table is a **derived analytics view**, read only by the library "node copies" panel; if it were wiped, the durable truth is untouched and only that panel would omit still-present _stable_ copies until they next transition. There is deliberately **no reseed mechanism** and none is needed. A migration path exists: the sequence and `last_emitted_version` column ship in both the baseline and a `foghorn/v0.2.96` expand migration.
+- **Reconciliation** (`ReconcileNodeCopies`, boot + slow timer). Two idempotent passes: (a) a **stale-present sweep** orphans + emits `LOST` for present rows unseen past the 15-minute threshold — a durable backstop for a disconnect whose one-shot orphaning failed (a gone node never reports again, so nothing else would emit its `LOST`); (b) a **seed** that emits `GAINED` for present copies whose last emit was not a present event (`last_emitted_version = 0`) — rows on a fresh projection, and rows created by raw writers (DVR-start / reconciler / segment inserts) that restore presence without emitting and are healed synchronously by `RefreshNodeCopy` plus this backstop. The seed handles each row under `FOR UPDATE` and skips any row already emitted, so it can't race a concurrent `LOST` (which supersedes with a higher version), never mints fake history for stable rows, and is safe on every replica with no leader lock. This is emission **correctness**, not loss recovery: **this projection is not something to protect against loss.** The durable, authoritative record of which nodes hold a copy is `foghorn.artifact_nodes` itself — a Postgres table re-asserted by every node's ~10s report and read directly by the media plane for routing/serving/relay (operational node selection never touches this ClickHouse projection). The ClickHouse `artifact_node_copy_current` table is a **derived analytics view**, read only by the library "node copies" panel; if it were wiped, the durable truth is untouched and only that panel would omit still-present _stable_ copies until they next transition. There is deliberately **no reseed mechanism** and none is needed. The sequence and `last_emitted_version` column are part of the v0.3 baseline.
 - **Durability.** The event is written to `foghorn.artifact_event_outbox` **inside the same transaction** as the state change (via `artifactoutbox.EnqueueArtifactNodeCopyTx`); the drain worker delivers it as a `ServiceEvent` (`service_events` topic, `event_type=artifact_node_copy`) with retry. The outbox row id becomes the stable `event_id`. Emission is gated on the outbox being wired, not on the Decklog client, so events are retained even before a client connects. Tenant-lookup failures roll the transaction back rather than committing state without telemetry.
+- Periodic hot and cold storage snapshots use the same durable Foghorn outbox before Decklog delivery. Storage projection only emits a five-minute bucket after a later source-time snapshot closes it; it never extrapolates the last observed byte count indefinitely.
 - **Storage + query.** Periscope Ingest validates the `role` (`origin`/`cache`) and `transition` and rejects anything else, then dual-writes `artifact_node_copy_events` (log; `ReplacingMergeTree` keyed on `event_id` for replay-idempotency) + `artifact_node_copy_current` (`ReplacingMergeTree(version)`). Neither table carries a cluster column — the event carries no cluster and Bridge resolves it at read time. Periscope Query exposes `GetArtifactNodeCopies(artifact_hash)` and **fails closed** (returns `Internal`) on a decode error rather than dropping rows. Bridge resolves `node_id → cluster/geo` with one `GetNode` per node, not a full-registry scan; the node's registry cluster is authoritative.
 - **Not reported: read-through relay block caches** (`<asset>.blocks/` directories on an edge). This release reports **materialized full local copies only** — a node advertises a copy only when it holds the whole file. Block caches are transient _partial_ holdings; the sidecar poller skips directories, and injecting a partial block cache into the shared artifact index would make the edge advertise a complete copy it doesn't hold (a routing-correctness hazard). What's excluded here (per-edge/per-tier placement incl. `.blocks` occupancy, and backend-keyed durable placement) is deferred to `docs/rfcs/placement-policy-engine.md`. The invariant that survives into this release: **cache/partial state never counts toward durability, and the durability ledger never reads it.**
 

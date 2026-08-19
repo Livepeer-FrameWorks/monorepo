@@ -333,9 +333,9 @@ func TestStorageProviderUsageProducesProviderAccrual(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{
 			"source_type", "source_id", "storage_provider_tenant_id", "storage_provider_cluster_id", "storage_backend",
 			"usage_type", "currency", "period_start", "period_end", "allocated_gross_cents",
-		}).AddRow("storage_provider_usage", recordID.String(), owner.String(), "operator-eu-1", "edge_disk", "storage_gb_seconds_hot", "EUR", periodStart, periodEnd, int64(1000)))
+		}).AddRow("provider_usage", recordID.String(), owner.String(), "operator-eu-1", "edge_disk", "storage_gb_seconds_hot", "EUR", periodStart, periodEnd, int64(1000)))
 	mock.ExpectQuery(`FROM purser\.platform_fee_policy`).
-		WithArgs(owner, "storage_provider_usage").
+		WithArgs(owner, "provider_usage").
 		WillReturnRows(sqlmock.NewRows([]string{"fee_basis_points"}).AddRow(2000))
 	mock.ExpectQuery(`FROM purser\.cluster_owners`).
 		WithArgs(owner).
@@ -381,9 +381,9 @@ func TestStorageProviderUsageAllocatesOnlyProviderShare(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{
 			"source_type", "source_id", "storage_provider_tenant_id", "storage_provider_cluster_id", "storage_backend",
 			"usage_type", "currency", "period_start", "period_end", "allocated_gross_cents",
-		}).AddRow("storage_provider_usage", recordID.String(), owner.String(), "operator-eu-1", "edge_disk", "storage_gb_seconds_hot", "EUR", periodStart, periodEnd, int64(500)))
+		}).AddRow("provider_usage", recordID.String(), owner.String(), "operator-eu-1", "edge_disk", "storage_gb_seconds_hot", "EUR", periodStart, periodEnd, int64(500)))
 	mock.ExpectQuery(`FROM purser\.platform_fee_policy`).
-		WithArgs(owner, "storage_provider_usage").
+		WithArgs(owner, "provider_usage").
 		WillReturnRows(sqlmock.NewRows([]string{"fee_basis_points"}).AddRow(2000))
 	mock.ExpectQuery(`FROM purser\.cluster_owners`).
 		WithArgs(owner).
@@ -431,7 +431,7 @@ func TestStorageProviderAdjustmentProducesProviderAccrual(t *testing.T) {
 			"usage_type", "currency", "period_start", "period_end", "allocated_gross_cents",
 		}).AddRow("usage_adjustment", adjustmentID.String(), owner.String(), "operator-eu-1", "s3", "storage_gb_seconds_cold", "EUR", periodStart, periodEnd, int64(-500)))
 	mock.ExpectQuery(`FROM purser\.platform_fee_policy`).
-		WithArgs(owner, "storage_provider_usage").
+		WithArgs(owner, "provider_usage").
 		WillReturnRows(sqlmock.NewRows([]string{"fee_basis_points"}).AddRow(2000))
 	mock.ExpectQuery(`FROM purser\.cluster_owners`).
 		WithArgs(owner).

@@ -784,9 +784,6 @@ services:
       - "18004:18004"
       - "19004:19004"
     environment:
-      DATABASE_URL: ${DATABASE_URL}
-      KAFKA_BROKERS: ${KAFKA_BROKERS}
-      BILLING_KAFKA_TOPIC: ${BILLING_KAFKA_TOPIC}
       PORT: ${PERISCOPE_QUERY_PORT}
       GRPC_PORT: ${PERISCOPE_QUERY_GRPC_PORT}
       LOG_LEVEL: ${LOG_LEVEL}
@@ -801,10 +798,6 @@ services:
       CLUSTER_ID: ${CLUSTER_ID}
       NODE_ID: central-node-1
     depends_on:
-      postgres:
-        condition: service_healthy
-      purser:
-        condition: service_started
       clickhouse:
         condition: service_healthy
       quartermaster:
@@ -823,6 +816,61 @@ services:
     healthcheck:
       test:
         ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18004/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Periscope-Metering (regional ClickHouse -> central Purser ledger)
+  periscope-metering:
+    <<: *default-env
+    container_name: frameworks-periscope-metering
+    build:
+      context: .
+      dockerfile: api_analytics_query/Dockerfile
+      args:
+        COMPONENT_NAME: periscope-metering
+        CMD_PACKAGE: ./cmd/periscope-metering
+    ports:
+      - "18021:18021"
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      KAFKA_BROKERS: ${KAFKA_BROKERS}
+      BILLING_KAFKA_TOPIC: ${BILLING_KAFKA_TOPIC}
+      PORT: 18021
+      LOG_LEVEL: ${LOG_LEVEL}
+      GIN_MODE: ${GIN_MODE}
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+      QUARTERMASTER_GRPC_ADDR: ${QUARTERMASTER_GRPC_ADDR}
+      CLICKHOUSE_ADDR: ${CLICKHOUSE_ADDR}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      METERING_SOURCE_ID: ${METERING_SOURCE_ID:-periscope-local}
+      METERING_SOURCE_REGION: ${METERING_SOURCE_REGION:-local}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      quartermaster:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - frameworks
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test:
+        ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18021/health"]
       interval: 10s
       timeout: 5s
       retries: 3

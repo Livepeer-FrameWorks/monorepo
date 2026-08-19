@@ -60,14 +60,15 @@ const (
 	ModelTieredGraduated Model = "tiered_graduated"
 	// ModelAllUsage bills every unit at unit_price.
 	ModelAllUsage Model = "all_usage"
-	// ModelCodecMultiplier bills processing seconds with per-codec multipliers.
-	ModelCodecMultiplier Model = "codec_multiplier"
+	// ModelDimensioned applies the most-specific selector rate to each bounded
+	// dimension bucket while sharing one included allowance across the meter.
+	ModelDimensioned Model = "dimensioned"
 )
 
 // ValidModel reports whether m is one of the pricing models Rate can execute.
 func ValidModel(m Model) bool {
 	switch m {
-	case ModelTieredGraduated, ModelAllUsage, ModelCodecMultiplier:
+	case ModelTieredGraduated, ModelAllUsage, ModelDimensioned:
 		return true
 	default:
 		return false
@@ -81,9 +82,8 @@ type Rule struct {
 	Currency         string
 	IncludedQuantity decimal.Decimal
 	UnitPrice        decimal.Decimal
-	// Config carries model-specific extras. For ModelCodecMultiplier,
-	// codec_multipliers keys can be plain codecs ("h264") or joint
-	// process/codec keys ("Livepeer:h264", "AV:h264").
+	// Config carries model-specific extras. ModelDimensioned accepts rates:
+	// [{"selectors":{"output_codec":"av1"},"unit_price":"0.01"}].
 	Config map[string]any
 }
 
@@ -103,21 +103,10 @@ func ValidateRuleShape(rule Rule) error {
 	if rule.UnitPrice.IsNegative() {
 		return fmt.Errorf("rule for meter %q has negative unit price", rule.Meter)
 	}
-	if rule.Model == ModelCodecMultiplier {
-		multipliers, ok := rule.Config["codec_multipliers"].(map[string]any)
-		if !ok || len(multipliers) == 0 {
-			return fmt.Errorf("rule for meter %q requires config.codec_multipliers", rule.Meter)
-		}
-		for key, raw := range multipliers {
-			if key == "" {
-				return fmt.Errorf("rule for meter %q has an empty codec multiplier key", rule.Meter)
-			}
-			mult, ok := decimalFromAny(raw)
-			if !ok {
-				return fmt.Errorf("rule for meter %q codec multiplier %q is not numeric", rule.Meter, key)
-			}
-			if !mult.IsPositive() {
-				return fmt.Errorf("rule for meter %q codec multiplier %q must be positive", rule.Meter, key)
+	if rule.Model == ModelDimensioned {
+		if rates, ok := rule.Config["rates"]; ok {
+			if _, ok := rates.([]any); !ok {
+				return fmt.Errorf("rule for meter %q config.rates must be an array", rule.Meter)
 			}
 		}
 	}
@@ -137,25 +126,25 @@ func ValidateRule(rule Rule) error {
 
 // Input is the rating engine's read-only input.
 type Input struct {
-	Currency  string
-	BasePrice decimal.Decimal
-	Rules     []Rule
-	Usage     map[Meter]decimal.Decimal
-	// Breakdowns carries model-specific dimensional quantities keyed by meter.
-	// For ModelCodecMultiplier, the inner map is breakdown key -> seconds;
-	// keys can be plain codecs or joint process/codec values.
-	Breakdowns map[Meter]map[string]decimal.Decimal
-	// CodecSeconds is a convenience shortcut for the per-codec breakdown of
-	// the media_seconds rule. Equivalent to Breakdowns[MeterMediaSeconds];
-	// callers may populate either, but Breakdowns wins if both are set.
-	CodecSeconds map[string]decimal.Decimal
-	PeriodStart  time.Time
-	PeriodEnd    time.Time
+	Currency    string
+	BasePrice   decimal.Decimal
+	Rules       []Rule
+	Usage       map[Meter]decimal.Decimal
+	Quantities  []DimensionedQuantity
+	PeriodStart time.Time
+	PeriodEnd   time.Time
 	// WaiveUsageCharges zeroes every usage line's Amount (keeping quantities and
 	// unit prices) so metered usage rates to 0 while the base subscription still
 	// charges. Each line's pre-waiver amount is preserved in LineItem.GrossAmount.
 	// Beta safety lever; the base line is never affected.
 	WaiveUsageCharges bool
+}
+
+type DimensionedQuantity struct {
+	Meter      Meter
+	Unit       string
+	Dimensions map[string]string
+	Quantity   decimal.Decimal
 }
 
 // LineItem is one charge row. LineKey is the stable identity used for
@@ -174,6 +163,8 @@ type LineItem struct {
 	// invoice-level gross_metered_amount total. Not persisted per-line.
 	GrossAmount decimal.Decimal
 	Currency    string
+	Unit        string
+	Dimensions  map[string]string
 }
 
 // LineKeyBaseSubscription is the well-known key for the base subscription line.

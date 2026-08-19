@@ -34,7 +34,7 @@ GRANT SELECT ON
     purser.operator_payouts,
     purser.platform_fee_policy,
     purser.simplified_invoices,
-    purser.storage_provider_usage_records,
+    purser.provider_usage_records,
     purser.subscription_pricing_overrides,
     purser.subscription_entitlement_overrides
 TO frameworks_analytics_ro;

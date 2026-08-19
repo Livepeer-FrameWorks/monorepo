@@ -79,24 +79,40 @@ func (h *AnalyticsHandler) staleCloseViewerSessions(ctx context.Context) error {
 	// materializes them inline via the engine, so we read them as
 	// regular columns with FINAL to force a merge view.
 	rows, err := h.clickhouse.Query(ctx, fmt.Sprintf(`
+		WITH latest_qoe AS (
+			SELECT tenant_id, node_id, session_id, max(timestamp) AS last_sample_at
+			FROM periscope.client_qoe_samples
+			WHERE timestamp >= now() - INTERVAL 24 HOUR
+			  AND session_id != ''
+			GROUP BY tenant_id, node_id, session_id
+		), attribution AS (
+			SELECT tenant_id, node_id, session_id,
+			       argMaxIf(cluster_id, timestamp, event_type = 'connect' AND cluster_id != '') AS cluster_id
+			FROM periscope.viewer_connection_events
+			WHERE timestamp >= now() - INTERVAL 24 HOUR
+			GROUP BY tenant_id, node_id, session_id
+		)
 		SELECT
-			tenant_id,
-			stream_id,
-			session_id,
-			node_id,
-			toInt64(toUnixTimestamp(connected_at)) * 1000 AS observed_first_at_ms,
-			toInt64(toUnixTimestamp(last_updated)) * 1000 AS observed_last_at_ms,
-			session_duration
-		FROM periscope.viewer_sessions_current FINAL
-		WHERE last_updated < ?
-		  AND (disconnected_at IS NULL OR disconnected_at = toDateTime(0))
-		  AND (tenant_id, node_id, session_id) NOT IN (
+			s.tenant_id,
+			s.stream_id,
+			s.session_id,
+			s.node_id,
+			at.cluster_id,
+			toInt64(toUnixTimestamp(s.connected_at)) * 1000 AS observed_first_at_ms,
+			toInt64(toUnixTimestamp(greatest(s.last_updated, ifNull(q.last_sample_at, s.last_updated)))) * 1000 AS observed_last_at_ms,
+			s.session_duration
+		FROM periscope.viewer_sessions_current AS s FINAL
+		LEFT JOIN latest_qoe q USING (tenant_id, node_id, session_id)
+		LEFT JOIN attribution at USING (tenant_id, node_id, session_id)
+		WHERE greatest(s.last_updated, ifNull(q.last_sample_at, s.last_updated)) < ?
+		  AND (s.disconnected_at IS NULL OR s.disconnected_at = toDateTime(0))
+		  AND (s.tenant_id, s.node_id, s.session_id) NOT IN (
 		      SELECT tenant_id, node_id, session_id
 		      FROM periscope.viewer_sessions_final
 		      WHERE projection_version_ms > toUnixTimestamp(now() - INTERVAL 30 DAY) * 1000
 		      GROUP BY tenant_id, node_id, session_id
 		  )
-		  AND (tenant_id, node_id, session_id) NOT IN (
+		  AND (s.tenant_id, s.node_id, s.session_id) NOT IN (
 		      SELECT tenant_id, node_id, session_id
 		      FROM periscope.viewer_sessions_anomalous
 		      GROUP BY tenant_id, node_id, session_id
@@ -127,10 +143,11 @@ func (h *AnalyticsHandler) staleCloseViewerSessions(ctx context.Context) error {
 	for rows.Next() {
 		var (
 			tenantID, streamID, sessionID, nodeID string
+			clusterID                             string
 			observedFirstMS, observedLastMS       int64
 			sessionDuration                       uint32
 		)
-		if err := rows.Scan(&tenantID, &streamID, &sessionID, &nodeID, &observedFirstMS, &observedLastMS, &sessionDuration); err != nil {
+		if err := rows.Scan(&tenantID, &streamID, &sessionID, &nodeID, &clusterID, &observedFirstMS, &observedLastMS, &sessionDuration); err != nil {
 			h.logger.WithError(err).Warn("viewer stale-close scan failed; skipping row")
 			continue
 		}
@@ -138,7 +155,7 @@ func (h *AnalyticsHandler) staleCloseViewerSessions(ctx context.Context) error {
 		notes := fmt.Sprintf("stale: no USER_END within %s", StaleCloseTimeout)
 		if err := batch.Append(
 			tenantID, nodeID, sessionID,
-			"", streamID, "",
+			clusterID, streamID, "",
 			sessionDuration,
 			observedFirstMS, observedLastMS,
 			closedAtMS, "stale", projectionVersionMS,
