@@ -656,16 +656,11 @@ func (r *billingTierResolver) Entitlements(ctx context.Context, obj *purserpb.Bi
 }
 
 // Metadata is the resolver for the metadata field.
-func (r *bootstrapTokenResolver) Metadata(ctx context.Context, obj *quartermasterpb.BootstrapToken) (*string, error) {
+func (r *bootstrapTokenResolver) Metadata(ctx context.Context, obj *quartermasterpb.BootstrapToken) (any, error) {
 	if obj.Metadata == nil {
 		return nil, nil
 	}
-	b, err := json.Marshal(obj.Metadata.AsMap())
-	if err != nil {
-		return nil, err
-	}
-	s := string(b)
-	return &s, nil
+	return obj.Metadata.AsMap(), nil
 }
 
 // ExpiresAt is the resolver for the expiresAt field.
@@ -730,21 +725,19 @@ func (r *bufferEventResolver) BufferState(ctx context.Context, obj *periscopepb.
 }
 
 // Payload is the resolver for the payload field.
-func (r *bufferEventResolver) Payload(ctx context.Context, obj *periscopepb.BufferEvent) (*string, error) {
+func (r *bufferEventResolver) Payload(ctx context.Context, obj *periscopepb.BufferEvent) (any, error) {
 	if obj == nil {
 		return nil, nil
 	}
 	if obj.EventPayload != nil {
-		payload, err := json.Marshal(obj.EventPayload.AsMap())
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal buffer event payload: %w", err)
-		}
-		result := string(payload)
-		return &result, nil
+		return obj.EventPayload.AsMap(), nil
 	}
 	if obj.EventData != "" {
-		v := obj.EventData
-		return &v, nil
+		var payload any
+		if err := json.Unmarshal([]byte(obj.EventData), &payload); err != nil {
+			return map[string]any{"event_data": obj.EventData}, nil
+		}
+		return payload, nil
 	}
 	return nil, nil
 }
@@ -887,6 +880,18 @@ func (r *clipResolver) UpdatedAt(ctx context.Context, obj *sharedpb.ClipInfo) (*
 	}
 	t := obj.UpdatedAt.AsTime()
 	return &t, nil
+}
+
+// RequestedParams is the resolver for the requestedParams field.
+func (r *clipResolver) RequestedParams(ctx context.Context, obj *sharedpb.ClipInfo) (any, error) {
+	if obj == nil || obj.GetRequestedParams() == "" {
+		return nil, nil
+	}
+	var params any
+	if err := json.Unmarshal([]byte(obj.GetRequestedParams()), &params); err != nil {
+		return nil, fmt.Errorf("failed to decode clip requested params: %w", err)
+	}
+	return params, nil
 }
 
 // StorageLocation is the resolver for the storageLocation field.
@@ -1052,16 +1057,11 @@ func (r *clusterResolver) NodesConnection(ctx context.Context, obj *quartermaste
 }
 
 // ResourceLimits is the resolver for the resourceLimits field.
-func (r *clusterInviteResolver) ResourceLimits(ctx context.Context, obj *quartermasterpb.ClusterInvite) (*string, error) {
+func (r *clusterInviteResolver) ResourceLimits(ctx context.Context, obj *quartermasterpb.ClusterInvite) (any, error) {
 	if obj.ResourceLimits == nil {
 		return nil, nil
 	}
-	b, err := obj.ResourceLimits.MarshalJSON()
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal cluster invite resource limits: %w", err)
-	}
-	s := string(b)
-	return &s, nil
+	return obj.ResourceLimits.AsMap(), nil
 }
 
 // CreatedAt is the resolver for the createdAt field.
@@ -1102,16 +1102,11 @@ func (r *clusterPairTrafficResolver) SuccessCount(ctx context.Context, obj *peri
 }
 
 // ResourceLimits is the resolver for the resourceLimits field.
-func (r *clusterSubscriptionResolver) ResourceLimits(ctx context.Context, obj *quartermasterpb.ClusterSubscription) (*string, error) {
+func (r *clusterSubscriptionResolver) ResourceLimits(ctx context.Context, obj *quartermasterpb.ClusterSubscription) (any, error) {
 	if obj.ResourceLimits == nil {
 		return nil, nil
 	}
-	b, err := obj.ResourceLimits.MarshalJSON()
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal cluster subscription resource limits: %w", err)
-	}
-	s := string(b)
-	return &s, nil
+	return obj.ResourceLimits.AsMap(), nil
 }
 
 // RequestedAt is the resolver for the requestedAt field.
@@ -1644,32 +1639,22 @@ func (r *infrastructureNodeResolver) LastHeartbeat(ctx context.Context, obj *qua
 }
 
 // Tags is the resolver for the tags field.
-func (r *infrastructureNodeResolver) Tags(ctx context.Context, obj *quartermasterpb.InfrastructureNode) (*string, error) {
+func (r *infrastructureNodeResolver) Tags(ctx context.Context, obj *quartermasterpb.InfrastructureNode) (any, error) {
 	if obj.Tags == nil {
 		return nil, nil
 	}
-	b, err := json.Marshal(obj.Tags.AsMap())
-	if err != nil {
-		return nil, err
-	}
-	s := string(b)
-	return &s, nil
+	return obj.Tags.AsMap(), nil
 }
 
 // Metadata is the resolver for the metadata field.
-func (r *infrastructureNodeResolver) Metadata(ctx context.Context, obj *quartermasterpb.InfrastructureNode) (*string, error) {
+func (r *infrastructureNodeResolver) Metadata(ctx context.Context, obj *quartermasterpb.InfrastructureNode) (any, error) {
 	if !r.CanViewSensitiveInfraData(ctx, obj.ClusterId) {
 		return nil, nil
 	}
 	if obj.Metadata == nil {
 		return nil, nil
 	}
-	b, err := json.Marshal(obj.Metadata.AsMap())
-	if err != nil {
-		return nil, err
-	}
-	s := string(b)
-	return &s, nil
+	return obj.Metadata.AsMap(), nil
 }
 
 // CreatedAt is the resolver for the createdAt field.
@@ -1846,16 +1831,19 @@ func (r *invoiceResolver) PeriodEnd(ctx context.Context, obj *purserpb.Invoice) 
 }
 
 // UsageDetails is the resolver for the usageDetails field.
-func (r *invoiceResolver) UsageDetails(ctx context.Context, obj *purserpb.Invoice) (*string, error) {
+func (r *invoiceResolver) UsageDetails(ctx context.Context, obj *purserpb.Invoice) (any, error) {
 	if obj.UsageDetails == nil {
 		return nil, nil
 	}
-	payload, err := json.Marshal(obj.UsageDetails.AsMap())
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode usageDetails: %w", err)
+	return obj.UsageDetails.AsMap(), nil
+}
+
+// Dimensions is the resolver for the dimensions field.
+func (r *lineItemResolver) Dimensions(ctx context.Context, obj *purserpb.LineItem) (any, error) {
+	if obj.GetDimensions() == nil {
+		return map[string]any{}, nil
 	}
-	encoded := string(payload)
-	return &encoded, nil
+	return obj.GetDimensions().AsMap(), nil
 }
 
 // CPUPercent is the resolver for the cpuPercent field.
@@ -1899,16 +1887,11 @@ func (r *liveNodeResolver) ActiveStreams(ctx context.Context, obj *periscopepb.L
 }
 
 // Metadata is the resolver for the metadata field.
-func (r *liveNodeResolver) Metadata(ctx context.Context, obj *periscopepb.LiveNode) (*string, error) {
+func (r *liveNodeResolver) Metadata(ctx context.Context, obj *periscopepb.LiveNode) (any, error) {
 	if obj.Metadata == nil {
 		return nil, nil
 	}
-	b, err := json.Marshal(obj.Metadata.AsMap())
-	if err != nil {
-		return nil, err
-	}
-	s := string(b)
-	return &s, nil
+	return obj.Metadata.AsMap(), nil
 }
 
 // UpdatedAt is the resolver for the updatedAt field.
@@ -2054,16 +2037,11 @@ func (r *mollieMandateResolver) CustomerID(ctx context.Context, obj *purserpb.Mo
 }
 
 // Details is the resolver for the details field.
-func (r *mollieMandateResolver) Details(ctx context.Context, obj *purserpb.MollieMandate) (*string, error) {
+func (r *mollieMandateResolver) Details(ctx context.Context, obj *purserpb.MollieMandate) (any, error) {
 	if obj.Details == nil {
 		return nil, nil
 	}
-	b, err := json.Marshal(obj.Details.AsMap())
-	if err != nil {
-		return nil, err
-	}
-	s := string(b)
-	return &s, nil
+	return obj.Details.AsMap(), nil
 }
 
 // CreatedAt is the resolver for the createdAt field.
@@ -2576,21 +2554,17 @@ func (r *nodeMetricResolver) Status(ctx context.Context, obj *periscopepb.NodeMe
 }
 
 // Metadata is the resolver for the metadata field.
-func (r *nodeMetricResolver) Metadata(ctx context.Context, obj *periscopepb.NodeMetric) (*string, error) {
+func (r *nodeMetricResolver) Metadata(ctx context.Context, obj *periscopepb.NodeMetric) (any, error) {
+	if obj == nil {
+		return nil, nil
+	}
 	if !r.CanViewSensitiveNodeData(ctx, obj.NodeId) {
 		return nil, nil
 	}
-	if obj == nil || obj.Metadata == nil {
+	if obj.Metadata == nil {
 		return nil, nil
 	}
-
-	payload, err := json.Marshal(obj.Metadata.AsMap())
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal node metadata: %w", err)
-	}
-
-	result := string(payload)
-	return &result, nil
+	return obj.Metadata.AsMap(), nil
 }
 
 // ID is the resolver for the id field.
@@ -4611,45 +4585,6 @@ func (r *skipperConfidenceBlockResolver) Sources(ctx context.Context, obj *skipp
 	return sources, nil
 }
 
-// Sources is the resolver for the sources field.
-func (r *skipperMessageResolver) Sources(ctx context.Context, obj *model.SkipperMessage) (*string, error) {
-	if obj.Sources == nil {
-		return nil, nil
-	}
-	b, err := json.Marshal(obj.Sources)
-	if err != nil {
-		return nil, err
-	}
-	s := string(b)
-	return &s, nil
-}
-
-// ToolsUsed is the resolver for the toolsUsed field.
-func (r *skipperMessageResolver) ToolsUsed(ctx context.Context, obj *model.SkipperMessage) (*string, error) {
-	if obj.ToolsUsed == nil {
-		return nil, nil
-	}
-	b, err := json.Marshal(obj.ToolsUsed)
-	if err != nil {
-		return nil, err
-	}
-	s := string(b)
-	return &s, nil
-}
-
-// ConfidenceBlocks is the resolver for the confidenceBlocks field.
-func (r *skipperMessageResolver) ConfidenceBlocks(ctx context.Context, obj *model.SkipperMessage) (*string, error) {
-	if obj.ConfidenceBlocks == nil {
-		return nil, nil
-	}
-	b, err := json.Marshal(obj.ConfidenceBlocks)
-	if err != nil {
-		return nil, err
-	}
-	s := string(b)
-	return &s, nil
-}
-
 // Blocks is the resolver for the blocks field.
 func (r *skipperMetaResolver) Blocks(ctx context.Context, obj *model.SkipperMeta) ([]*skipperpb.SkipperConfidenceBlock, error) {
 	if len(obj.Blocks) == 0 {
@@ -4680,18 +4615,6 @@ func (r *skipperReportResolver) CreatedAt(ctx context.Context, obj *skipperpb.Sk
 // ReadAt is the resolver for the readAt field.
 func (r *skipperReportResolver) ReadAt(ctx context.Context, obj *skipperpb.SkipperReport) (*time.Time, error) {
 	return r.Resolver.DoSkipperReportReadAt(obj)
-}
-
-// Payload is the resolver for the payload field.
-func (r *skipperToolDetailResolver) Payload(ctx context.Context, obj *model.SkipperToolDet) (string, error) {
-	if obj.Payload == nil {
-		return "{}", nil
-	}
-	b, err := json.Marshal(obj.Payload)
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
 }
 
 // ID is the resolver for the id field.
@@ -5126,14 +5049,18 @@ func (r *streamEventResolver) Stream(ctx context.Context, obj *model.StreamEvent
 }
 
 // Payload is the resolver for the payload field.
-func (r *streamEventResolver) Payload(ctx context.Context, obj *model.StreamEvent) (*string, error) {
+func (r *streamEventResolver) Payload(ctx context.Context, obj *model.StreamEvent) (any, error) {
 	if !r.CanViewSensitiveTenantData(ctx) {
 		return nil, nil
 	}
 	if obj.Payload == nil || *obj.Payload == "" {
 		return nil, nil
 	}
-	return obj.Payload, nil
+	var payload any
+	if err := json.Unmarshal([]byte(*obj.Payload), &payload); err != nil {
+		return nil, fmt.Errorf("failed to decode stream event payload: %w", err)
+	}
+	return payload, nil
 }
 
 // ID is the resolver for the id field.
@@ -5309,6 +5236,18 @@ func (r *streamHealthMetricResolver) AudioBitrate(ctx context.Context, obj *peri
 	}
 	v := int(*obj.PrimaryAudioBitrate)
 	return &v, nil
+}
+
+// TrackMetadata is the resolver for the trackMetadata field.
+func (r *streamHealthMetricResolver) TrackMetadata(ctx context.Context, obj *periscopepb.StreamHealthMetric) (any, error) {
+	if obj == nil || obj.GetTrackMetadata() == "" {
+		return nil, nil
+	}
+	var metadata any
+	if err := json.Unmarshal([]byte(obj.GetTrackMetadata()), &metadata); err != nil {
+		return nil, fmt.Errorf("failed to decode stream-health track metadata: %w", err)
+	}
+	return metadata, nil
 }
 
 // StreamID is the resolver for the streamId field.
@@ -6179,7 +6118,7 @@ func (r *viewerCountBucketResolver) Stream(ctx context.Context, obj *periscopepb
 }
 
 // Outputs is the resolver for the outputs field.
-func (r *viewerEndpointResolver) Outputs(ctx context.Context, obj *sharedpb.ViewerEndpoint) (*string, error) {
+func (r *viewerEndpointResolver) Outputs(ctx context.Context, obj *sharedpb.ViewerEndpoint) (any, error) {
 	if len(obj.Outputs) == 0 {
 		return nil, nil
 	}
@@ -6187,8 +6126,11 @@ func (r *viewerEndpointResolver) Outputs(ctx context.Context, obj *sharedpb.View
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal outputs: %w", err)
 	}
-	s := string(b)
-	return &s, nil
+	var outputs any
+	if err := json.Unmarshal(b, &outputs); err != nil {
+		return nil, fmt.Errorf("failed to decode outputs: %w", err)
+	}
+	return outputs, nil
 }
 
 // ID is the resolver for the id field.
@@ -6709,6 +6651,9 @@ func (r *Resolver) IngestMetadata() generated.IngestMetadataResolver {
 // Invoice returns generated.InvoiceResolver implementation.
 func (r *Resolver) Invoice() generated.InvoiceResolver { return &invoiceResolver{r} }
 
+// LineItem returns generated.LineItemResolver implementation.
+func (r *Resolver) LineItem() generated.LineItemResolver { return &lineItemResolver{r} }
+
 // LiveNode returns generated.LiveNodeResolver implementation.
 func (r *Resolver) LiveNode() generated.LiveNodeResolver { return &liveNodeResolver{r} }
 
@@ -6867,21 +6812,11 @@ func (r *Resolver) SkipperConfidenceBlock() generated.SkipperConfidenceBlockReso
 	return &skipperConfidenceBlockResolver{r}
 }
 
-// SkipperMessage returns generated.SkipperMessageResolver implementation.
-func (r *Resolver) SkipperMessage() generated.SkipperMessageResolver {
-	return &skipperMessageResolver{r}
-}
-
 // SkipperMeta returns generated.SkipperMetaResolver implementation.
 func (r *Resolver) SkipperMeta() generated.SkipperMetaResolver { return &skipperMetaResolver{r} }
 
 // SkipperReport returns generated.SkipperReportResolver implementation.
 func (r *Resolver) SkipperReport() generated.SkipperReportResolver { return &skipperReportResolver{r} }
-
-// SkipperToolDetail returns generated.SkipperToolDetailResolver implementation.
-func (r *Resolver) SkipperToolDetail() generated.SkipperToolDetailResolver {
-	return &skipperToolDetailResolver{r}
-}
 
 // StorageEvent returns generated.StorageEventResolver implementation.
 func (r *Resolver) StorageEvent() generated.StorageEventResolver { return &storageEventResolver{r} }
@@ -7085,6 +7020,7 @@ type geographicDistributionResolver struct{ *Resolver }
 type infrastructureNodeResolver struct{ *Resolver }
 type ingestMetadataResolver struct{ *Resolver }
 type invoiceResolver struct{ *Resolver }
+type lineItemResolver struct{ *Resolver }
 type liveNodeResolver struct{ *Resolver }
 type liveUsageSummaryResolver struct{ *Resolver }
 type mollieMandateResolver struct{ *Resolver }
@@ -7121,10 +7057,8 @@ type serviceInstanceHealthResolver struct{ *Resolver }
 type sessionQoeTimeSeriesBucketResolver struct{ *Resolver }
 type signingKeyResolver struct{ *Resolver }
 type skipperConfidenceBlockResolver struct{ *Resolver }
-type skipperMessageResolver struct{ *Resolver }
 type skipperMetaResolver struct{ *Resolver }
 type skipperReportResolver struct{ *Resolver }
-type skipperToolDetailResolver struct{ *Resolver }
 type storageEventResolver struct{ *Resolver }
 type storageUsageResolver struct{ *Resolver }
 type storageUsageRecordResolver struct{ *Resolver }

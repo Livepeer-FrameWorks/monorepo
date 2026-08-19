@@ -42,11 +42,13 @@ type AccountStatus struct {
 
 // AccountBillingInfo contains billing-related account info.
 type AccountBillingInfo struct {
-	Model             string `json:"model"`
-	BalanceCents      int64  `json:"balance_cents"`
-	DetailsComplete   bool   `json:"details_complete"`
-	LowBalanceWarning bool   `json:"low_balance_warning"`
-	DrainRatePerHour  int64  `json:"drain_rate_cents_per_hour,omitempty"`
+	Model                 string `json:"model"`
+	BalanceCents          int64  `json:"balance_cents"`
+	ReservedBalanceCents  int64  `json:"reserved_balance_cents"`
+	AvailableBalanceCents int64  `json:"available_balance_cents"`
+	DetailsComplete       bool   `json:"details_complete"`
+	LowBalanceWarning     bool   `json:"low_balance_warning"`
+	DrainRatePerHour      int64  `json:"drain_rate_cents_per_hour,omitempty"`
 }
 
 // AccountRateLimitInfo contains rate limit info.
@@ -117,7 +119,9 @@ func handleAccountStatus(ctx context.Context, clients *clients.ServiceClients, c
 			logger.WithError(err).Debug("Failed to get prepaid balance")
 		} else {
 			billingInfo.BalanceCents = balance.BalanceCents
-			billingInfo.LowBalanceWarning = balance.BalanceCents < balance.LowBalanceThresholdCents
+			billingInfo.ReservedBalanceCents = balance.ReservedBalanceCents
+			billingInfo.AvailableBalanceCents = balance.AvailableBalanceCents
+			billingInfo.LowBalanceWarning = balance.AvailableBalanceCents < balance.LowBalanceThresholdCents
 			billingInfo.DrainRatePerHour = balance.DrainRateCentsPerHour
 		}
 	}

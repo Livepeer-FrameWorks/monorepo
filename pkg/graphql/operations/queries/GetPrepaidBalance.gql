@@ -3,6 +3,8 @@ query GetPrepaidBalance($currency: String = "EUR") {
     id
     tenantId
     balanceCents
+    reservedBalanceCents
+    availableBalanceCents
     currency
     lowBalanceThresholdCents
     isLowBalance

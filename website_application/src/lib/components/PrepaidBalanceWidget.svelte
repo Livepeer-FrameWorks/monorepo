@@ -12,6 +12,8 @@
 
   let loading = $state(true);
   let balanceCents = $state(0);
+  let reservedBalanceCents = $state(0);
+  let availableBalanceCents = $state(0);
   let currency = $state("EUR");
   let isLowBalance = $state(false);
   let error = $state<string | null>(null);
@@ -27,6 +29,8 @@
       const result = await balanceQuery.fetch({ variables: { currency } });
       if (result.data?.prepaidBalance) {
         balanceCents = result.data.prepaidBalance.balanceCents;
+        reservedBalanceCents = result.data.prepaidBalance.reservedBalanceCents;
+        availableBalanceCents = result.data.prepaidBalance.availableBalanceCents;
         currency = result.data.prepaidBalance.currency;
         isLowBalance = result.data.prepaidBalance.isLowBalance;
       }
@@ -45,8 +49,8 @@
     }).format(amount);
   }
 
-  const balanceDisplay = $derived(formatCurrency(balanceCents, currency));
-  const isNegative = $derived(balanceCents < 0);
+  const balanceDisplay = $derived(formatCurrency(availableBalanceCents, currency));
+  const isNegative = $derived(availableBalanceCents < 0);
 </script>
 
 <div class="slab">
@@ -75,6 +79,10 @@
             {balanceDisplay}
           </span>
           <span class="text-sm text-muted-foreground">{currency}</span>
+        </div>
+        <div class="text-xs text-muted-foreground">
+          {formatCurrency(balanceCents, currency)} settled ·
+          {formatCurrency(reservedBalanceCents, currency)} reserved in active usage
         </div>
 
         {#if isLowBalance}

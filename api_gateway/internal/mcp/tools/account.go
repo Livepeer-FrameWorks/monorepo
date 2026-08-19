@@ -3,7 +3,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -129,7 +128,7 @@ func handleUpdateTenantSettings(ctx context.Context, args UpdateTenantSettingsIn
 	if name != "" {
 		input.Name = &name
 	}
-	settings := map[string]string{}
+	settings := map[string]any{}
 	if primaryClusterID != "" {
 		settings["primaryClusterId"] = primaryClusterID
 	}
@@ -137,12 +136,7 @@ func handleUpdateTenantSettings(ctx context.Context, args UpdateTenantSettingsIn
 		settings["deploymentModel"] = deploymentModel
 	}
 	if len(settings) > 0 {
-		raw, err := json.Marshal(settings)
-		if err != nil {
-			return toolError(fmt.Sprintf("Failed to encode tenant settings: %v", err))
-		}
-		settingsJSON := string(raw)
-		input.Settings = &settingsJSON
+		input.Settings = settings
 	}
 
 	tenant, err := resolver.DoUpdateTenant(ctx, input)

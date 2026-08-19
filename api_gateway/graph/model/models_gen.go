@@ -566,10 +566,10 @@ type ClientMetrics5mEdge struct {
 }
 
 type ClusterAccess struct {
-	ClusterID      string  `json:"clusterId"`
-	ClusterName    string  `json:"clusterName"`
-	AccessLevel    string  `json:"accessLevel"`
-	ResourceLimits *string `json:"resourceLimits,omitempty"`
+	ClusterID      string `json:"clusterId"`
+	ClusterName    string `json:"clusterName"`
+	AccessLevel    string `json:"accessLevel"`
+	ResourceLimits any    `json:"resourceLimits,omitempty"`
 }
 
 type ClusterAccessConnection struct {
@@ -812,7 +812,7 @@ type CreateClusterInviteInput struct {
 	// Access level (read, write, admin).
 	AccessLevel *string `json:"accessLevel,omitempty"`
 	// Resource limits for the invited tenant.
-	ResourceLimits *string `json:"resourceLimits,omitempty"`
+	ResourceLimits any `json:"resourceLimits,omitempty"`
 	// Days until invite expires.
 	ExpiresInDays *int `json:"expiresInDays,omitempty"`
 }
@@ -2295,7 +2295,7 @@ type UpdateTenantInput struct {
 	// New tenant name.
 	Name *string `json:"name,omitempty"`
 	// Custom settings JSON. Supports primaryClusterId, subdomain, customDomain, and deploymentModel.
-	Settings *string `json:"settings,omitempty"`
+	Settings any `json:"settings,omitempty"`
 	// BYO domain. Empty string clears it; null leaves it unchanged. Navigator
 	// picks up the change on the next reconciler tick and starts/teardowns the
 	// verification + cert lifecycle accordingly.

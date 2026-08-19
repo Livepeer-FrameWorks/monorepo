@@ -71,6 +71,8 @@ query GetBillingStatus {
       lineItems {
         lineKey
         meter
+        unit
+        dimensions
         description
         quantity
         includedQuantity

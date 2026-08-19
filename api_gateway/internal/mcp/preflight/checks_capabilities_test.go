@@ -15,7 +15,7 @@ import (
 func solventBalance() *clientstest.FakePurser {
 	return &clientstest.FakePurser{
 		GetPrepaidBalanceFn: func(context.Context, string, string) (*purserpb.PrepaidBalance, error) {
-			return &purserpb.PrepaidBalance{BalanceCents: 500}, nil
+			return &purserpb.PrepaidBalance{BalanceCents: 500, AvailableBalanceCents: 500}, nil
 		},
 	}
 }

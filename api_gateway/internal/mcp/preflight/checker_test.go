@@ -60,7 +60,7 @@ func TestCheckBalance(t *testing.T) {
 	// Positive balance → no blocker.
 	c := checkerWith(&clientstest.FakePurser{
 		GetPrepaidBalanceFn: func(context.Context, string, string) (*purserpb.PrepaidBalance, error) {
-			return &purserpb.PrepaidBalance{BalanceCents: 1000}, nil
+			return &purserpb.PrepaidBalance{BalanceCents: 1000, AvailableBalanceCents: 1000}, nil
 		},
 	})
 	if b, err := c.CheckBalance(ctxTenant("t1")); b != nil || err != nil {

@@ -4907,7 +4907,7 @@ A pricing rule: how a meter rates to money. Decimal fields are strings to preser
 type PricingRule {
   "Canonical meter name (for example delivered_minutes, storage_gb_seconds_cold, media_seconds, or a marketplace-defined meter)."
   meter: String!
-  "Pricing model (tiered_graduated, all_usage, codec_multiplier)."
+  "Pricing model (tiered_graduated, all_usage, dimensioned)."
   model: String!
   "Currency (ISO 4217)."
   currency: String!
@@ -4915,7 +4915,7 @@ type PricingRule {
   includedQuantity: String!
   "Price per unit (decimal as string)."
   unitPrice: String!
-  "Model-specific config (e.g. codec_multipliers); JSON-encoded."
+  "Model-specific config (for example dimension selector rates); JSON-encoded."
   configJson: String!
 }
 
@@ -5016,6 +5016,10 @@ type LineItem {
   pricingSource: String!
   "Human-readable label of pricingSource (e.g. 'Self-hosted (no charge)', 'Marketplace metered'). Empty when not populated by the gateway."
   pricingLabel: String!
+  "Canonical quantity unit."
+  unit: String!
+  "Bounded pricing dimensions such as codec, rendition, backend, or model."
+  dimensions: JSON!
 }
 
 # Invoices Connection (for paginated invoices list)
@@ -5331,13 +5335,17 @@ type PrepaidBalance {
   id: ID!
   "Owning tenant identifier."
   tenantId: String!
-  "Current balance in cents."
+  "Settled ledger balance in cents before active usage reservations."
   balanceCents: Int!
+  "Active in-flight usage reservations in cents."
+  reservedBalanceCents: Int!
+  "Spendable balance after active reservations (balanceCents - reservedBalanceCents)."
+  availableBalanceCents: Int!
   "Currency code (USD, EUR)."
   currency: String!
   "Alert threshold in cents."
   lowBalanceThresholdCents: Int!
-  "True if balance is below threshold."
+  "True if available balance is below threshold."
   isLowBalance: Boolean!
   "Estimated spend rate in cents per hour (based on last hour's usage)."
   drainRateCentsPerHour: Int!

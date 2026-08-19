@@ -548,6 +548,26 @@
     return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amount);
   }
 
+  function lineItemDetail(item: { quantity: string; unit: string; dimensions: unknown }): string {
+    let dimensions = item.dimensions;
+    if (typeof dimensions === "string") {
+      try {
+        dimensions = JSON.parse(dimensions);
+      } catch {
+        dimensions = {};
+      }
+    }
+    const labels =
+      dimensions && typeof dimensions === "object" && !Array.isArray(dimensions)
+        ? Object.entries(dimensions as Record<string, unknown>)
+            .filter(([, value]) => typeof value === "string" && value !== "")
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([key, value]) => `${key.replaceAll("_", " ")}: ${value}`)
+        : [];
+    const quantity = `${item.quantity}${item.unit ? ` ${item.unit}` : ""}`;
+    return labels.length > 0 ? `${quantity} · ${labels.join(" · ")}` : quantity;
+  }
+
   function formatNumber(num: number) {
     return new Intl.NumberFormat().format(Math.round(num));
   }
@@ -997,8 +1017,11 @@
               <div class="space-y-3">
                 {#if ratedCosts.lineItems.length > 0}
                   {#each ratedCosts.lineItems as item, i (`${item.lineKey}-${item.meter}-${i}`)}
-                    <div class="flex items-center justify-between text-sm">
-                      <span class="text-muted-foreground">{item.description}</span>
+                    <div class="flex items-start justify-between gap-4 text-sm">
+                      <span class="text-muted-foreground">
+                        {item.description}
+                        <span class="block text-xs">{lineItemDetail(item)}</span>
+                      </span>
                       <span class="text-foreground"
                         >{formatCurrency(moneyNumber(item.total), item.currency)}</span
                       >

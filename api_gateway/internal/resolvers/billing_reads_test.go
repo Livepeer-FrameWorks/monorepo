@@ -96,7 +96,7 @@ func TestDoGetPrepaidBalance_CurrencyOverrideAndMapping(t *testing.T) {
 	r := purserResolver(&clientstest.FakePurser{
 		GetPrepaidBalanceFn: func(_ context.Context, _ string, currency string) (*purserpb.PrepaidBalance, error) {
 			gotCurrency = currency
-			return &purserpb.PrepaidBalance{Id: "b1", BalanceCents: 100, Currency: currency, IsLowBalance: true}, nil
+			return &purserpb.PrepaidBalance{Id: "b1", BalanceCents: 100, ReservedBalanceCents: 35, AvailableBalanceCents: 65, Currency: currency, IsLowBalance: true}, nil
 		},
 	})
 	usd := "USD"
@@ -106,6 +106,9 @@ func TestDoGetPrepaidBalance_CurrencyOverrideAndMapping(t *testing.T) {
 	}
 	if got.BalanceCents != 100 || got.Currency != "USD" || !got.IsLowBalance {
 		t.Errorf("balance fields not mapped: %+v", got)
+	}
+	if got.ReservedBalanceCents != 35 || got.AvailableBalanceCents != 65 {
+		t.Errorf("reservation fields not mapped: %+v", got)
 	}
 	if gotCurrency != "USD" {
 		t.Errorf("currency override not forwarded: %q", gotCurrency)

@@ -308,6 +308,8 @@
     lineKey: string;
     description: string;
     quantity: string;
+    unit: string;
+    dimensions: unknown;
     unitPrice: string;
     total: string;
     currency: string;
@@ -317,6 +319,22 @@
     pricingSource?: string | null;
     pricingLabel?: string | null;
   };
+
+  function lineItemDimensions(value: unknown): string[] {
+    let parsed = value;
+    if (typeof parsed === "string") {
+      try {
+        parsed = JSON.parse(parsed);
+      } catch {
+        return [];
+      }
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+    return Object.entries(parsed as Record<string, unknown>)
+      .filter(([, dimensionValue]) => typeof dimensionValue === "string" && dimensionValue !== "")
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, dimensionValue]) => `${key.replaceAll("_", " ")}: ${dimensionValue}`);
+  }
 
   type LineItemGroup = {
     key: string;
@@ -880,13 +898,20 @@
                                       >
                                         <td class="py-2">
                                           <div>{item.description}</div>
+                                          {#if lineItemDimensions(item.dimensions).length}
+                                            <div class="text-[10px] text-muted-foreground">
+                                              {lineItemDimensions(item.dimensions).join(" · ")}
+                                            </div>
+                                          {/if}
                                           {#if item.pricingLabel}
                                             <div class="text-[10px] text-muted-foreground">
                                               {item.pricingLabel}
                                             </div>
                                           {/if}
                                         </td>
-                                        <td class="py-2 text-right font-mono">{item.quantity}</td>
+                                        <td class="py-2 text-right font-mono">
+                                          {item.quantity}{item.unit ? ` ${item.unit}` : ""}
+                                        </td>
                                         <td class="py-2 text-right font-mono"
                                           >{formatUnitPrice(
                                             item.unitPrice,

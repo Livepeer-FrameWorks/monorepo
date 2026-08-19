@@ -36,6 +36,8 @@
   let loading = $state(true);
   let balance = $state<{
     balanceCents: number;
+    reservedBalanceCents: number;
+    availableBalanceCents: number;
     currency: string;
     isLowBalance: boolean;
   } | null>(null);
@@ -137,6 +139,8 @@
       if (balanceResult.data?.prepaidBalance) {
         balance = {
           balanceCents: balanceResult.data.prepaidBalance.balanceCents,
+          reservedBalanceCents: balanceResult.data.prepaidBalance.reservedBalanceCents,
+          availableBalanceCents: balanceResult.data.prepaidBalance.availableBalanceCents,
           currency: balanceResult.data.prepaidBalance.currency,
           isLowBalance: balanceResult.data.prepaidBalance.isLowBalance,
         };
@@ -309,10 +313,14 @@
             {#if balance}
               <div
                 class="text-4xl font-bold tabular-nums"
-                class:text-destructive={balance.balanceCents < 0}
+                class:text-destructive={balance.availableBalanceCents < 0}
               >
-                {formatCurrency(balance.balanceCents, balance.currency)}
+                {formatCurrency(balance.availableBalanceCents, balance.currency)}
               </div>
+              <p class="text-xs text-muted-foreground mt-2">
+                {formatCurrency(balance.balanceCents, balance.currency)} settled ·
+                {formatCurrency(balance.reservedBalanceCents, balance.currency)} reserved in active usage
+              </p>
               {#if balance.isLowBalance}
                 <div class="flex items-center gap-2 mt-3 text-warning">
                   <AlertIcon class="w-4 h-4" />
@@ -320,7 +328,7 @@
                 </div>
               {/if}
               <p class="text-sm text-muted-foreground mt-4">
-                Balance is used for streaming, storage, and transcoding. API requests are free.
+                Usage is itemized by meter; your current pricing determines which items are charged.
                 <!-- eslint-disable svelte/no-navigation-without-resolve -->
                 <a
                   href={`${docsSiteUrl}/builders/billing`}

@@ -25,6 +25,8 @@ type PrepaidBalance struct {
 	ID                       string    `json:"id"`
 	TenantID                 string    `json:"tenantId"`
 	BalanceCents             int       `json:"balanceCents"`
+	ReservedBalanceCents     int       `json:"reservedBalanceCents"`
+	AvailableBalanceCents    int       `json:"availableBalanceCents"`
 	Currency                 string    `json:"currency"`
 	LowBalanceThresholdCents int       `json:"lowBalanceThresholdCents"`
 	IsLowBalance             bool      `json:"isLowBalance"`

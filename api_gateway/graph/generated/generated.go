@@ -87,6 +87,7 @@ type ResolverRoot interface {
 	InfrastructureNode() InfrastructureNodeResolver
 	IngestMetadata() IngestMetadataResolver
 	Invoice() InvoiceResolver
+	LineItem() LineItemResolver
 	LiveNode() LiveNodeResolver
 	LiveUsageSummary() LiveUsageSummaryResolver
 	MollieMandate() MollieMandateResolver
@@ -123,10 +124,8 @@ type ResolverRoot interface {
 	SessionQoeTimeSeriesBucket() SessionQoeTimeSeriesBucketResolver
 	SigningKey() SigningKeyResolver
 	SkipperConfidenceBlock() SkipperConfidenceBlockResolver
-	SkipperMessage() SkipperMessageResolver
 	SkipperMeta() SkipperMetaResolver
 	SkipperReport() SkipperReportResolver
-	SkipperToolDetail() SkipperToolDetailResolver
 	StorageEvent() StorageEventResolver
 	StorageUsage() StorageUsageResolver
 	StorageUsageRecord() StorageUsageRecordResolver
@@ -1248,6 +1247,7 @@ type ComplexityRoot struct {
 		ClusterName      func(childComplexity int) int
 		Currency         func(childComplexity int) int
 		Description      func(childComplexity int) int
+		Dimensions       func(childComplexity int) int
 		IncludedQuantity func(childComplexity int) int
 		LineKey          func(childComplexity int) int
 		Meter            func(childComplexity int) int
@@ -1255,6 +1255,7 @@ type ComplexityRoot struct {
 		PricingSource    func(childComplexity int) int
 		Quantity         func(childComplexity int) int
 		Total            func(childComplexity int) int
+		Unit             func(childComplexity int) int
 		UnitPrice        func(childComplexity int) int
 	}
 
@@ -1932,6 +1933,7 @@ type ComplexityRoot struct {
 	}
 
 	PrepaidBalance struct {
+		AvailableBalanceCents    func(childComplexity int) int
 		BalanceCents             func(childComplexity int) int
 		CreatedAt                func(childComplexity int) int
 		Currency                 func(childComplexity int) int
@@ -1939,6 +1941,7 @@ type ComplexityRoot struct {
 		ID                       func(childComplexity int) int
 		IsLowBalance             func(childComplexity int) int
 		LowBalanceThresholdCents func(childComplexity int) int
+		ReservedBalanceCents     func(childComplexity int) int
 		TenantID                 func(childComplexity int) int
 		UpdatedAt                func(childComplexity int) int
 	}
@@ -3731,7 +3734,7 @@ type BillingTierResolver interface {
 	Entitlements(ctx context.Context, obj *purserpb.BillingTier) ([]*model.EntitlementEntry, error)
 }
 type BootstrapTokenResolver interface {
-	Metadata(ctx context.Context, obj *quartermasterpb.BootstrapToken) (*string, error)
+	Metadata(ctx context.Context, obj *quartermasterpb.BootstrapToken) (any, error)
 
 	ExpiresAt(ctx context.Context, obj *quartermasterpb.BootstrapToken) (*time.Time, error)
 	UsedAt(ctx context.Context, obj *quartermasterpb.BootstrapToken) (*time.Time, error)
@@ -3745,7 +3748,7 @@ type BufferEventResolver interface {
 
 	BufferState(ctx context.Context, obj *periscopepb.BufferEvent) (model.BufferState, error)
 
-	Payload(ctx context.Context, obj *periscopepb.BufferEvent) (*string, error)
+	Payload(ctx context.Context, obj *periscopepb.BufferEvent) (any, error)
 }
 type CityMetricResolver interface {
 	Percentage(ctx context.Context, obj *periscopepb.CityMetric) (float64, error)
@@ -3775,6 +3778,7 @@ type ClipResolver interface {
 	CreatedAt(ctx context.Context, obj *sharedpb.ClipInfo) (*time.Time, error)
 	UpdatedAt(ctx context.Context, obj *sharedpb.ClipInfo) (*time.Time, error)
 
+	RequestedParams(ctx context.Context, obj *sharedpb.ClipInfo) (any, error)
 	StorageLocation(ctx context.Context, obj *sharedpb.ClipInfo) (*string, error)
 
 	ExpiresAt(ctx context.Context, obj *sharedpb.ClipInfo) (*time.Time, error)
@@ -3806,7 +3810,7 @@ type ClusterResolver interface {
 	NodesConnection(ctx context.Context, obj *quartermasterpb.InfrastructureCluster, page *model.ConnectionInput) (*model.NodesConnection, error)
 }
 type ClusterInviteResolver interface {
-	ResourceLimits(ctx context.Context, obj *quartermasterpb.ClusterInvite) (*string, error)
+	ResourceLimits(ctx context.Context, obj *quartermasterpb.ClusterInvite) (any, error)
 
 	CreatedAt(ctx context.Context, obj *quartermasterpb.ClusterInvite) (*time.Time, error)
 	ExpiresAt(ctx context.Context, obj *quartermasterpb.ClusterInvite) (*time.Time, error)
@@ -3817,7 +3821,7 @@ type ClusterPairTrafficResolver interface {
 	SuccessCount(ctx context.Context, obj *periscopepb.ClusterPairTraffic) (int, error)
 }
 type ClusterSubscriptionResolver interface {
-	ResourceLimits(ctx context.Context, obj *quartermasterpb.ClusterSubscription) (*string, error)
+	ResourceLimits(ctx context.Context, obj *quartermasterpb.ClusterSubscription) (any, error)
 	RequestedAt(ctx context.Context, obj *quartermasterpb.ClusterSubscription) (*time.Time, error)
 	ApprovedAt(ctx context.Context, obj *quartermasterpb.ClusterSubscription) (*time.Time, error)
 
@@ -3914,8 +3918,8 @@ type InfrastructureNodeResolver interface {
 	WireguardPublicKey(ctx context.Context, obj *quartermasterpb.InfrastructureNode) (*string, error)
 
 	LastHeartbeat(ctx context.Context, obj *quartermasterpb.InfrastructureNode) (*time.Time, error)
-	Tags(ctx context.Context, obj *quartermasterpb.InfrastructureNode) (*string, error)
-	Metadata(ctx context.Context, obj *quartermasterpb.InfrastructureNode) (*string, error)
+	Tags(ctx context.Context, obj *quartermasterpb.InfrastructureNode) (any, error)
+	Metadata(ctx context.Context, obj *quartermasterpb.InfrastructureNode) (any, error)
 	CreatedAt(ctx context.Context, obj *quartermasterpb.InfrastructureNode) (*time.Time, error)
 	UpdatedAt(ctx context.Context, obj *quartermasterpb.InfrastructureNode) (*time.Time, error)
 	MetricsConnection(ctx context.Context, obj *quartermasterpb.InfrastructureNode, page *model.ConnectionInput, timeRange *model.TimeRangeInput) (*model.NodeMetricsConnection, error)
@@ -3936,7 +3940,10 @@ type InvoiceResolver interface {
 	UpdatedAt(ctx context.Context, obj *purserpb.Invoice) (*time.Time, error)
 	PeriodStart(ctx context.Context, obj *purserpb.Invoice) (*time.Time, error)
 	PeriodEnd(ctx context.Context, obj *purserpb.Invoice) (*time.Time, error)
-	UsageDetails(ctx context.Context, obj *purserpb.Invoice) (*string, error)
+	UsageDetails(ctx context.Context, obj *purserpb.Invoice) (any, error)
+}
+type LineItemResolver interface {
+	Dimensions(ctx context.Context, obj *purserpb.LineItem) (any, error)
 }
 type LiveNodeResolver interface {
 	CPUPercent(ctx context.Context, obj *periscopepb.LiveNode) (float64, error)
@@ -3948,7 +3955,7 @@ type LiveNodeResolver interface {
 	DownSpeed(ctx context.Context, obj *periscopepb.LiveNode) (float64, error)
 	ActiveStreams(ctx context.Context, obj *periscopepb.LiveNode) (int, error)
 
-	Metadata(ctx context.Context, obj *periscopepb.LiveNode) (*string, error)
+	Metadata(ctx context.Context, obj *periscopepb.LiveNode) (any, error)
 	UpdatedAt(ctx context.Context, obj *periscopepb.LiveNode) (*time.Time, error)
 }
 type LiveUsageSummaryResolver interface {
@@ -3980,7 +3987,7 @@ type MollieMandateResolver interface {
 	MandateID(ctx context.Context, obj *purserpb.MollieMandate) (string, error)
 	CustomerID(ctx context.Context, obj *purserpb.MollieMandate) (string, error)
 
-	Details(ctx context.Context, obj *purserpb.MollieMandate) (*string, error)
+	Details(ctx context.Context, obj *purserpb.MollieMandate) (any, error)
 	CreatedAt(ctx context.Context, obj *purserpb.MollieMandate) (*time.Time, error)
 }
 type MutationResolver interface {
@@ -4071,7 +4078,7 @@ type NodeMetricResolver interface {
 
 	Status(ctx context.Context, obj *periscopepb.NodeMetric) (string, error)
 
-	Metadata(ctx context.Context, obj *periscopepb.NodeMetric) (*string, error)
+	Metadata(ctx context.Context, obj *periscopepb.NodeMetric) (any, error)
 }
 type NodeMetricHourlyResolver interface {
 	ID(ctx context.Context, obj *periscopepb.NodeMetricHourly) (string, error)
@@ -4370,20 +4377,12 @@ type SigningKeyResolver interface {
 type SkipperConfidenceBlockResolver interface {
 	Sources(ctx context.Context, obj *skipperpb.SkipperConfidenceBlock) ([]*model.SkipperCitation, error)
 }
-type SkipperMessageResolver interface {
-	Sources(ctx context.Context, obj *model.SkipperMessage) (*string, error)
-	ToolsUsed(ctx context.Context, obj *model.SkipperMessage) (*string, error)
-	ConfidenceBlocks(ctx context.Context, obj *model.SkipperMessage) (*string, error)
-}
 type SkipperMetaResolver interface {
 	Blocks(ctx context.Context, obj *model.SkipperMeta) ([]*skipperpb.SkipperConfidenceBlock, error)
 }
 type SkipperReportResolver interface {
 	CreatedAt(ctx context.Context, obj *skipperpb.SkipperReport) (*time.Time, error)
 	ReadAt(ctx context.Context, obj *skipperpb.SkipperReport) (*time.Time, error)
-}
-type SkipperToolDetailResolver interface {
-	Payload(ctx context.Context, obj *model.SkipperToolDet) (string, error)
 }
 type StorageEventResolver interface {
 	ID(ctx context.Context, obj *periscopepb.StorageEvent) (string, error)
@@ -4473,7 +4472,7 @@ type StreamEventResolver interface {
 	StreamID(ctx context.Context, obj *model.StreamEvent) (*string, error)
 	Stream(ctx context.Context, obj *model.StreamEvent) (*commodorepb.Stream, error)
 
-	Payload(ctx context.Context, obj *model.StreamEvent) (*string, error)
+	Payload(ctx context.Context, obj *model.StreamEvent) (any, error)
 }
 type StreamHealth5mResolver interface {
 	ID(ctx context.Context, obj *periscopepb.StreamHealth5M) (string, error)
@@ -4505,6 +4504,7 @@ type StreamHealthMetricResolver interface {
 	AudioSampleRate(ctx context.Context, obj *periscopepb.StreamHealthMetric) (*int, error)
 	AudioCodec(ctx context.Context, obj *periscopepb.StreamHealthMetric) (*string, error)
 	AudioBitrate(ctx context.Context, obj *periscopepb.StreamHealthMetric) (*int, error)
+	TrackMetadata(ctx context.Context, obj *periscopepb.StreamHealthMetric) (any, error)
 }
 type StreamKeyResolver interface {
 	StreamID(ctx context.Context, obj *commodorepb.StreamKey) (string, error)
@@ -4669,7 +4669,7 @@ type ViewerCountBucketResolver interface {
 	Stream(ctx context.Context, obj *periscopepb.ViewerCountBucket) (*commodorepb.Stream, error)
 }
 type ViewerEndpointResolver interface {
-	Outputs(ctx context.Context, obj *sharedpb.ViewerEndpoint) (*string, error)
+	Outputs(ctx context.Context, obj *sharedpb.ViewerEndpoint) (any, error)
 }
 type ViewerGeoHourlyResolver interface {
 	ID(ctx context.Context, obj *periscopepb.ViewerGeoHourly) (string, error)
@@ -10243,6 +10243,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.LineItem.Description(childComplexity), true
 
+	case "LineItem.dimensions":
+		if e.complexity.LineItem.Dimensions == nil {
+			break
+		}
+
+		return e.complexity.LineItem.Dimensions(childComplexity), true
+
 	case "LineItem.includedQuantity":
 		if e.complexity.LineItem.IncludedQuantity == nil {
 			break
@@ -10291,6 +10298,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.LineItem.Total(childComplexity), true
+
+	case "LineItem.unit":
+		if e.complexity.LineItem.Unit == nil {
+			break
+		}
+
+		return e.complexity.LineItem.Unit(childComplexity), true
 
 	case "LineItem.unitPrice":
 		if e.complexity.LineItem.UnitPrice == nil {
@@ -14126,6 +14140,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.PlayerBootTimeSeriesBucket.Timestamp(childComplexity), true
 
+	case "PrepaidBalance.availableBalanceCents":
+		if e.complexity.PrepaidBalance.AvailableBalanceCents == nil {
+			break
+		}
+
+		return e.complexity.PrepaidBalance.AvailableBalanceCents(childComplexity), true
+
 	case "PrepaidBalance.balanceCents":
 		if e.complexity.PrepaidBalance.BalanceCents == nil {
 			break
@@ -14174,6 +14195,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.PrepaidBalance.LowBalanceThresholdCents(childComplexity), true
+
+	case "PrepaidBalance.reservedBalanceCents":
+		if e.complexity.PrepaidBalance.ReservedBalanceCents == nil {
+			break
+		}
+
+		return e.complexity.PrepaidBalance.ReservedBalanceCents(childComplexity), true
 
 	case "PrepaidBalance.tenantId":
 		if e.complexity.PrepaidBalance.TenantID == nil {
@@ -27993,7 +28021,7 @@ A pricing rule: how a meter rates to money. Decimal fields are strings to preser
 type PricingRule {
   "Canonical meter name (for example delivered_minutes, storage_gb_seconds_cold, media_seconds, or a marketplace-defined meter)."
   meter: String!
-  "Pricing model (tiered_graduated, all_usage, codec_multiplier)."
+  "Pricing model (tiered_graduated, all_usage, dimensioned)."
   model: String!
   "Currency (ISO 4217)."
   currency: String!
@@ -28001,7 +28029,7 @@ type PricingRule {
   includedQuantity: String!
   "Price per unit (decimal as string)."
   unitPrice: String!
-  "Model-specific config (e.g. codec_multipliers); JSON-encoded."
+  "Model-specific config (for example dimension selector rates); JSON-encoded."
   configJson: String!
 }
 
@@ -28102,6 +28130,10 @@ type LineItem {
   pricingSource: String!
   "Human-readable label of pricingSource (e.g. 'Self-hosted (no charge)', 'Marketplace metered'). Empty when not populated by the gateway."
   pricingLabel: String!
+  "Canonical quantity unit."
+  unit: String!
+  "Bounded pricing dimensions such as codec, rendition, backend, or model."
+  dimensions: JSON!
 }
 
 # Invoices Connection (for paginated invoices list)
@@ -28417,13 +28449,17 @@ type PrepaidBalance {
   id: ID!
   "Owning tenant identifier."
   tenantId: String!
-  "Current balance in cents."
+  "Settled ledger balance in cents before active usage reservations."
   balanceCents: Int!
+  "Active in-flight usage reservations in cents."
+  reservedBalanceCents: Int!
+  "Spendable balance after active reservations (balanceCents - reservedBalanceCents)."
+  availableBalanceCents: Int!
   "Currency code (USD, EUR)."
   currency: String!
   "Alert threshold in cents."
   lowBalanceThresholdCents: Int!
-  "True if balance is below threshold."
+  "True if available balance is below threshold."
   isLowBalance: Boolean!
   "Estimated spend rate in cents per hour (based on last hour's usage)."
   drainRateCentsPerHour: Int!
@@ -45871,9 +45907,9 @@ func (ec *executionContext) _BootstrapToken_metadata(ctx context.Context, field 
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(*string)
+	res := resTmp.(any)
 	fc.Result = res
-	return ec.marshalOJSON2ᚖstring(ctx, field.Selections, res)
+	return ec.marshalOJSON2interface(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_BootstrapToken_metadata(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -46758,9 +46794,9 @@ func (ec *executionContext) _BufferEvent_payload(ctx context.Context, field grap
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(*string)
+	res := resTmp.(any)
 	fc.Result = res
-	return ec.marshalOJSON2ᚖstring(ctx, field.Selections, res)
+	return ec.marshalOJSON2interface(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_BufferEvent_payload(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -49588,7 +49624,7 @@ func (ec *executionContext) _Clip_requestedParams(ctx context.Context, field gra
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.RequestedParams, nil
+		return ec.resolvers.Clip().RequestedParams(rctx, obj)
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -49597,17 +49633,17 @@ func (ec *executionContext) _Clip_requestedParams(ctx context.Context, field gra
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(*string)
+	res := resTmp.(any)
 	fc.Result = res
-	return ec.marshalOJSON2ᚖstring(ctx, field.Selections, res)
+	return ec.marshalOJSON2interface(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Clip_requestedParams(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "Clip",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type JSON does not have child fields")
 		},
@@ -52182,9 +52218,9 @@ func (ec *executionContext) _ClusterAccess_resourceLimits(ctx context.Context, f
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(*string)
+	res := resTmp.(any)
 	fc.Result = res
-	return ec.marshalOJSON2ᚖstring(ctx, field.Selections, res)
+	return ec.marshalOJSON2interface(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_ClusterAccess_resourceLimits(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -53192,9 +53228,9 @@ func (ec *executionContext) _ClusterInvite_resourceLimits(ctx context.Context, f
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(*string)
+	res := resTmp.(any)
 	fc.Result = res
-	return ec.marshalOJSON2ᚖstring(ctx, field.Selections, res)
+	return ec.marshalOJSON2interface(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_ClusterInvite_resourceLimits(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -55480,9 +55516,9 @@ func (ec *executionContext) _ClusterSubscription_resourceLimits(ctx context.Cont
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(*string)
+	res := resTmp.(any)
 	fc.Result = res
-	return ec.marshalOJSON2ᚖstring(ctx, field.Selections, res)
+	return ec.marshalOJSON2interface(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_ClusterSubscription_resourceLimits(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -67351,9 +67387,9 @@ func (ec *executionContext) _InfrastructureNode_tags(ctx context.Context, field 
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(*string)
+	res := resTmp.(any)
 	fc.Result = res
-	return ec.marshalOJSON2ᚖstring(ctx, field.Selections, res)
+	return ec.marshalOJSON2interface(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_InfrastructureNode_tags(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -67392,9 +67428,9 @@ func (ec *executionContext) _InfrastructureNode_metadata(ctx context.Context, fi
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(*string)
+	res := resTmp.(any)
 	fc.Result = res
-	return ec.marshalOJSON2ᚖstring(ctx, field.Selections, res)
+	return ec.marshalOJSON2interface(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_InfrastructureNode_metadata(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -69328,9 +69364,9 @@ func (ec *executionContext) _Invoice_usageDetails(ctx context.Context, field gra
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(*string)
+	res := resTmp.(any)
 	fc.Result = res
-	return ec.marshalOJSON2ᚖstring(ctx, field.Selections, res)
+	return ec.marshalOJSON2interface(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Invoice_usageDetails(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -69413,6 +69449,10 @@ func (ec *executionContext) fieldContext_Invoice_lineItems(_ context.Context, fi
 				return ec.fieldContext_LineItem_pricingSource(ctx, field)
 			case "pricingLabel":
 				return ec.fieldContext_LineItem_pricingLabel(ctx, field)
+			case "unit":
+				return ec.fieldContext_LineItem_unit(ctx, field)
+			case "dimensions":
+				return ec.fieldContext_LineItem_dimensions(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type LineItem", field.Name)
 		},
@@ -70375,6 +70415,94 @@ func (ec *executionContext) fieldContext_LineItem_pricingLabel(_ context.Context
 	return fc, nil
 }
 
+func (ec *executionContext) _LineItem_unit(ctx context.Context, field graphql.CollectedField, obj *purserpb.LineItem) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_LineItem_unit(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Unit, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_LineItem_unit(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "LineItem",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _LineItem_dimensions(ctx context.Context, field graphql.CollectedField, obj *purserpb.LineItem) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_LineItem_dimensions(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.LineItem().Dimensions(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(any)
+	fc.Result = res
+	return ec.marshalNJSON2interface(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_LineItem_dimensions(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "LineItem",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type JSON does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _LinkEmailPayload_success(ctx context.Context, field graphql.CollectedField, obj *model.LinkEmailPayload) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_LinkEmailPayload_success(ctx, field)
 	if err != nil {
@@ -71146,9 +71274,9 @@ func (ec *executionContext) _LiveNode_metadata(ctx context.Context, field graphq
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(*string)
+	res := resTmp.(any)
 	fc.Result = res
-	return ec.marshalOJSON2ᚖstring(ctx, field.Selections, res)
+	return ec.marshalOJSON2interface(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_LiveNode_metadata(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -75447,9 +75575,9 @@ func (ec *executionContext) _MollieMandate_details(ctx context.Context, field gr
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(*string)
+	res := resTmp.(any)
 	fc.Result = res
-	return ec.marshalOJSON2ᚖstring(ctx, field.Selections, res)
+	return ec.marshalOJSON2interface(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_MollieMandate_details(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -82867,9 +82995,9 @@ func (ec *executionContext) _NodeMetric_metadata(ctx context.Context, field grap
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(*string)
+	res := resTmp.(any)
 	fc.Result = res
-	return ec.marshalOJSON2ᚖstring(ctx, field.Selections, res)
+	return ec.marshalOJSON2interface(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_NodeMetric_metadata(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -94022,6 +94150,94 @@ func (ec *executionContext) fieldContext_PrepaidBalance_balanceCents(_ context.C
 	return fc, nil
 }
 
+func (ec *executionContext) _PrepaidBalance_reservedBalanceCents(ctx context.Context, field graphql.CollectedField, obj *model.PrepaidBalance) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_PrepaidBalance_reservedBalanceCents(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ReservedBalanceCents, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_PrepaidBalance_reservedBalanceCents(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PrepaidBalance",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PrepaidBalance_availableBalanceCents(ctx context.Context, field graphql.CollectedField, obj *model.PrepaidBalance) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_PrepaidBalance_availableBalanceCents(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.AvailableBalanceCents, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_PrepaidBalance_availableBalanceCents(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PrepaidBalance",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _PrepaidBalance_currency(ctx context.Context, field graphql.CollectedField, obj *model.PrepaidBalance) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_PrepaidBalance_currency(ctx, field)
 	if err != nil {
@@ -101645,6 +101861,10 @@ func (ec *executionContext) fieldContext_Query_prepaidBalance(ctx context.Contex
 				return ec.fieldContext_PrepaidBalance_tenantId(ctx, field)
 			case "balanceCents":
 				return ec.fieldContext_PrepaidBalance_balanceCents(ctx, field)
+			case "reservedBalanceCents":
+				return ec.fieldContext_PrepaidBalance_reservedBalanceCents(ctx, field)
+			case "availableBalanceCents":
+				return ec.fieldContext_PrepaidBalance_availableBalanceCents(ctx, field)
 			case "currency":
 				return ec.fieldContext_PrepaidBalance_currency(ctx, field)
 			case "lowBalanceThresholdCents":
@@ -112110,7 +112330,7 @@ func (ec *executionContext) _SkipperMessage_sources(ctx context.Context, field g
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.SkipperMessage().Sources(rctx, obj)
+		return obj.Sources, nil
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -112119,17 +112339,17 @@ func (ec *executionContext) _SkipperMessage_sources(ctx context.Context, field g
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(*string)
+	res := resTmp.(any)
 	fc.Result = res
-	return ec.marshalOJSON2ᚖstring(ctx, field.Selections, res)
+	return ec.marshalOJSON2interface(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_SkipperMessage_sources(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "SkipperMessage",
 		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
+		IsMethod:   false,
+		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type JSON does not have child fields")
 		},
@@ -112151,7 +112371,7 @@ func (ec *executionContext) _SkipperMessage_toolsUsed(ctx context.Context, field
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.SkipperMessage().ToolsUsed(rctx, obj)
+		return obj.ToolsUsed, nil
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -112160,17 +112380,17 @@ func (ec *executionContext) _SkipperMessage_toolsUsed(ctx context.Context, field
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(*string)
+	res := resTmp.(any)
 	fc.Result = res
-	return ec.marshalOJSON2ᚖstring(ctx, field.Selections, res)
+	return ec.marshalOJSON2interface(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_SkipperMessage_toolsUsed(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "SkipperMessage",
 		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
+		IsMethod:   false,
+		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type JSON does not have child fields")
 		},
@@ -112192,7 +112412,7 @@ func (ec *executionContext) _SkipperMessage_confidenceBlocks(ctx context.Context
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.SkipperMessage().ConfidenceBlocks(rctx, obj)
+		return obj.ConfidenceBlocks, nil
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -112201,17 +112421,17 @@ func (ec *executionContext) _SkipperMessage_confidenceBlocks(ctx context.Context
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(*string)
+	res := resTmp.(any)
 	fc.Result = res
-	return ec.marshalOJSON2ᚖstring(ctx, field.Selections, res)
+	return ec.marshalOJSON2interface(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_SkipperMessage_confidenceBlocks(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "SkipperMessage",
 		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
+		IsMethod:   false,
+		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type JSON does not have child fields")
 		},
@@ -113289,7 +113509,7 @@ func (ec *executionContext) _SkipperToolDetail_payload(ctx context.Context, fiel
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.SkipperToolDetail().Payload(rctx, obj)
+		return obj.Payload, nil
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -113301,17 +113521,17 @@ func (ec *executionContext) _SkipperToolDetail_payload(ctx context.Context, fiel
 		}
 		return graphql.Null
 	}
-	res := resTmp.(string)
+	res := resTmp.(any)
 	fc.Result = res
-	return ec.marshalNJSON2string(ctx, field.Selections, res)
+	return ec.marshalNJSON2interface(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_SkipperToolDetail_payload(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "SkipperToolDetail",
 		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
+		IsMethod:   false,
+		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type JSON does not have child fields")
 		},
@@ -122185,9 +122405,9 @@ func (ec *executionContext) _StreamEvent_payload(ctx context.Context, field grap
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(*string)
+	res := resTmp.(any)
 	fc.Result = res
-	return ec.marshalOJSON2ᚖstring(ctx, field.Selections, res)
+	return ec.marshalOJSON2interface(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_StreamEvent_payload(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -125721,7 +125941,7 @@ func (ec *executionContext) _StreamHealthMetric_trackMetadata(ctx context.Contex
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.TrackMetadata, nil
+		return ec.resolvers.StreamHealthMetric().TrackMetadata(rctx, obj)
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -125730,17 +125950,17 @@ func (ec *executionContext) _StreamHealthMetric_trackMetadata(ctx context.Contex
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(string)
+	res := resTmp.(any)
 	fc.Result = res
-	return ec.marshalOJSON2string(ctx, field.Selections, res)
+	return ec.marshalOJSON2interface(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_StreamHealthMetric_trackMetadata(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "StreamHealthMetric",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type JSON does not have child fields")
 		},
@@ -134038,6 +134258,10 @@ func (ec *executionContext) fieldContext_TenantAdminBilling_prepaidBalance(ctx c
 				return ec.fieldContext_PrepaidBalance_tenantId(ctx, field)
 			case "balanceCents":
 				return ec.fieldContext_PrepaidBalance_balanceCents(ctx, field)
+			case "reservedBalanceCents":
+				return ec.fieldContext_PrepaidBalance_reservedBalanceCents(ctx, field)
+			case "availableBalanceCents":
+				return ec.fieldContext_PrepaidBalance_availableBalanceCents(ctx, field)
 			case "currency":
 				return ec.fieldContext_PrepaidBalance_currency(ctx, field)
 			case "lowBalanceThresholdCents":
@@ -138908,6 +139132,10 @@ func (ec *executionContext) fieldContext_TenantUsage_lineItems(_ context.Context
 				return ec.fieldContext_LineItem_pricingSource(ctx, field)
 			case "pricingLabel":
 				return ec.fieldContext_LineItem_pricingLabel(ctx, field)
+			case "unit":
+				return ec.fieldContext_LineItem_unit(ctx, field)
+			case "dimensions":
+				return ec.fieldContext_LineItem_dimensions(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type LineItem", field.Name)
 		},
@@ -143057,9 +143285,9 @@ func (ec *executionContext) _ViewerEndpoint_outputs(ctx context.Context, field g
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(*string)
+	res := resTmp.(any)
 	fc.Result = res
-	return ec.marshalOJSON2ᚖstring(ctx, field.Selections, res)
+	return ec.marshalOJSON2interface(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_ViewerEndpoint_outputs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -154947,7 +155175,7 @@ func (ec *executionContext) unmarshalInputCreateClusterInviteInput(ctx context.C
 			it.AccessLevel = data
 		case "resourceLimits":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("resourceLimits"))
-			data, err := ec.unmarshalOJSON2ᚖstring(ctx, v)
+			data, err := ec.unmarshalOJSON2interface(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -156607,7 +156835,7 @@ func (ec *executionContext) unmarshalInputUpdateTenantInput(ctx context.Context,
 			it.Name = data
 		case "settings":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("settings"))
-			data, err := ec.unmarshalOJSON2ᚖstring(ctx, v)
+			data, err := ec.unmarshalOJSON2interface(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -165219,7 +165447,38 @@ func (ec *executionContext) _Clip(ctx context.Context, sel ast.SelectionSet, obj
 		case "clipMode":
 			out.Values[i] = ec._Clip_clipMode(ctx, field, obj)
 		case "requestedParams":
-			out.Values[i] = ec._Clip_requestedParams(ctx, field, obj)
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Clip_requestedParams(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "storageLocation":
 			field := field
 
@@ -172240,47 +172499,47 @@ func (ec *executionContext) _LineItem(ctx context.Context, sel ast.SelectionSet,
 		case "lineKey":
 			out.Values[i] = ec._LineItem_lineKey(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "meter":
 			out.Values[i] = ec._LineItem_meter(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "description":
 			out.Values[i] = ec._LineItem_description(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "quantity":
 			out.Values[i] = ec._LineItem_quantity(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "includedQuantity":
 			out.Values[i] = ec._LineItem_includedQuantity(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "billableQuantity":
 			out.Values[i] = ec._LineItem_billableQuantity(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "unitPrice":
 			out.Values[i] = ec._LineItem_unitPrice(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "total":
 			out.Values[i] = ec._LineItem_total(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "currency":
 			out.Values[i] = ec._LineItem_currency(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "clusterId":
 			out.Values[i] = ec._LineItem_clusterId(ctx, field, obj)
@@ -172291,13 +172550,54 @@ func (ec *executionContext) _LineItem(ctx context.Context, sel ast.SelectionSet,
 		case "pricingSource":
 			out.Values[i] = ec._LineItem_pricingSource(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "pricingLabel":
 			out.Values[i] = ec._LineItem_pricingLabel(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
+		case "unit":
+			out.Values[i] = ec._LineItem_unit(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "dimensions":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._LineItem_dimensions(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -180600,6 +180900,16 @@ func (ec *executionContext) _PrepaidBalance(ctx context.Context, sel ast.Selecti
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "reservedBalanceCents":
+			out.Values[i] = ec._PrepaidBalance_reservedBalanceCents(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "availableBalanceCents":
+			out.Values[i] = ec._PrepaidBalance_availableBalanceCents(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "currency":
 			out.Values[i] = ec._PrepaidBalance_currency(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -186767,133 +187077,40 @@ func (ec *executionContext) _SkipperMessage(ctx context.Context, sel ast.Selecti
 		case "id":
 			out.Values[i] = ec._SkipperMessage_id(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
+				out.Invalids++
 			}
 		case "role":
 			out.Values[i] = ec._SkipperMessage_role(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
+				out.Invalids++
 			}
 		case "content":
 			out.Values[i] = ec._SkipperMessage_content(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
+				out.Invalids++
 			}
 		case "confidence":
 			out.Values[i] = ec._SkipperMessage_confidence(ctx, field, obj)
 		case "sources":
-			field := field
-
-			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._SkipperMessage_sources(ctx, field, obj)
-				return res
-			}
-
-			if field.Deferrable != nil {
-				dfs, ok := deferred[field.Deferrable.Label]
-				di := 0
-				if ok {
-					dfs.AddField(field)
-					di = len(dfs.Values) - 1
-				} else {
-					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
-					deferred[field.Deferrable.Label] = dfs
-				}
-				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
-					return innerFunc(ctx, dfs)
-				})
-
-				// don't run the out.Concurrently() call below
-				out.Values[i] = graphql.Null
-				continue
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			out.Values[i] = ec._SkipperMessage_sources(ctx, field, obj)
 		case "toolsUsed":
-			field := field
-
-			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._SkipperMessage_toolsUsed(ctx, field, obj)
-				return res
-			}
-
-			if field.Deferrable != nil {
-				dfs, ok := deferred[field.Deferrable.Label]
-				di := 0
-				if ok {
-					dfs.AddField(field)
-					di = len(dfs.Values) - 1
-				} else {
-					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
-					deferred[field.Deferrable.Label] = dfs
-				}
-				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
-					return innerFunc(ctx, dfs)
-				})
-
-				// don't run the out.Concurrently() call below
-				out.Values[i] = graphql.Null
-				continue
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			out.Values[i] = ec._SkipperMessage_toolsUsed(ctx, field, obj)
 		case "confidenceBlocks":
-			field := field
-
-			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._SkipperMessage_confidenceBlocks(ctx, field, obj)
-				return res
-			}
-
-			if field.Deferrable != nil {
-				dfs, ok := deferred[field.Deferrable.Label]
-				di := 0
-				if ok {
-					dfs.AddField(field)
-					di = len(dfs.Values) - 1
-				} else {
-					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
-					deferred[field.Deferrable.Label] = dfs
-				}
-				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
-					return innerFunc(ctx, dfs)
-				})
-
-				// don't run the out.Concurrently() call below
-				out.Values[i] = graphql.Null
-				continue
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			out.Values[i] = ec._SkipperMessage_confidenceBlocks(ctx, field, obj)
 		case "tokensInput":
 			out.Values[i] = ec._SkipperMessage_tokensInput(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
+				out.Invalids++
 			}
 		case "tokensOutput":
 			out.Values[i] = ec._SkipperMessage_tokensOutput(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
+				out.Invalids++
 			}
 		case "createdAt":
 			out.Values[i] = ec._SkipperMessage_createdAt(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
+				out.Invalids++
 			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
@@ -187284,44 +187501,13 @@ func (ec *executionContext) _SkipperToolDetail(ctx context.Context, sel ast.Sele
 		case "title":
 			out.Values[i] = ec._SkipperToolDetail_title(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
+				out.Invalids++
 			}
 		case "payload":
-			field := field
-
-			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._SkipperToolDetail_payload(ctx, field, obj)
-				if res == graphql.Null {
-					atomic.AddUint32(&fs.Invalids, 1)
-				}
-				return res
+			out.Values[i] = ec._SkipperToolDetail_payload(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
 			}
-
-			if field.Deferrable != nil {
-				dfs, ok := deferred[field.Deferrable.Label]
-				di := 0
-				if ok {
-					dfs.AddField(field)
-					di = len(dfs.Values) - 1
-				} else {
-					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
-					deferred[field.Deferrable.Label] = dfs
-				}
-				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
-					return innerFunc(ctx, dfs)
-				})
-
-				// don't run the out.Concurrently() call below
-				out.Values[i] = graphql.Null
-				continue
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -191958,7 +192144,38 @@ func (ec *executionContext) _StreamHealthMetric(ctx context.Context, sel ast.Sel
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "trackMetadata":
-			out.Values[i] = ec._StreamHealthMetric_trackMetadata(ctx, field, obj)
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._StreamHealthMetric_trackMetadata(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -205139,14 +205356,20 @@ func (ec *executionContext) marshalNInvoicesConnection2ᚖframeworksᚋapi_gatew
 	return ec._InvoicesConnection(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNJSON2string(ctx context.Context, v any) (string, error) {
-	res, err := graphql.UnmarshalString(v)
+func (ec *executionContext) unmarshalNJSON2interface(ctx context.Context, v any) (any, error) {
+	res, err := graphql.UnmarshalAny(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNJSON2string(ctx context.Context, sel ast.SelectionSet, v string) graphql.Marshaler {
+func (ec *executionContext) marshalNJSON2interface(ctx context.Context, sel ast.SelectionSet, v any) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
 	_ = sel
-	res := graphql.MarshalString(v)
+	res := graphql.MarshalAny(v)
 	if res == graphql.Null {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
@@ -213124,33 +213347,21 @@ func (ec *executionContext) marshalOInvoice2ᚖgithubᚗcomᚋLivepeerᚑFrameWo
 	return ec._Invoice(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalOJSON2string(ctx context.Context, v any) (string, error) {
-	res, err := graphql.UnmarshalString(v)
-	return res, graphql.ErrorOnPath(ctx, err)
-}
-
-func (ec *executionContext) marshalOJSON2string(ctx context.Context, sel ast.SelectionSet, v string) graphql.Marshaler {
-	_ = sel
-	_ = ctx
-	res := graphql.MarshalString(v)
-	return res
-}
-
-func (ec *executionContext) unmarshalOJSON2ᚖstring(ctx context.Context, v any) (*string, error) {
+func (ec *executionContext) unmarshalOJSON2interface(ctx context.Context, v any) (any, error) {
 	if v == nil {
 		return nil, nil
 	}
-	res, err := graphql.UnmarshalString(v)
-	return &res, graphql.ErrorOnPath(ctx, err)
+	res, err := graphql.UnmarshalAny(v)
+	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOJSON2ᚖstring(ctx context.Context, sel ast.SelectionSet, v *string) graphql.Marshaler {
+func (ec *executionContext) marshalOJSON2interface(ctx context.Context, sel ast.SelectionSet, v any) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	_ = sel
 	_ = ctx
-	res := graphql.MarshalString(*v)
+	res := graphql.MarshalAny(v)
 	return res
 }
 

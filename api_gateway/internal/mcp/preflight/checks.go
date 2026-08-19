@@ -133,17 +133,17 @@ func (c *Checker) CheckBalance(ctx context.Context) (*Blocker, error) {
 		}
 		// For prepaid accounts, treat missing balance as 0 (will be created on first top-up)
 		if statusErr == nil && billingStatus.BillingModel == "prepaid" {
-			balance = &purserpb.PrepaidBalance{BalanceCents: 0}
+			balance = &purserpb.PrepaidBalance{BalanceCents: 0, AvailableBalanceCents: 0}
 		} else {
 			return nil, fmt.Errorf("failed to get balance: %w", err)
 		}
 	}
 
 	// Check if balance is sufficient (must be > 0 for new operations)
-	if balance.BalanceCents <= 0 {
+	if balance.AvailableBalanceCents <= 0 {
 		blocker := &Blocker{
 			Code:       "INSUFFICIENT_BALANCE",
-			Message:    fmt.Sprintf("Balance is %d cents. Top up required to perform billable operations.", balance.BalanceCents),
+			Message:    fmt.Sprintf("Available balance is %d cents (%d settled, %d reserved). Top up required to perform billable operations.", balance.AvailableBalanceCents, balance.BalanceCents, balance.ReservedBalanceCents),
 			Resolution: "Call topup_balance tool to add credits, OR pay via x402 (USDC on Base/Arbitrum)",
 			Tool:       "topup_balance",
 		}

@@ -90,7 +90,7 @@ func SolventPurser() *FakePurser {
 			return &purserpb.BillingDetails{IsComplete: true}, nil
 		},
 		GetPrepaidBalanceFn: func(context.Context, string, string) (*purserpb.PrepaidBalance, error) {
-			return &purserpb.PrepaidBalance{BalanceCents: 5000}, nil
+			return &purserpb.PrepaidBalance{BalanceCents: 5000, AvailableBalanceCents: 5000}, nil
 		},
 	}
 }

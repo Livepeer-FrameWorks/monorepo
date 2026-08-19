@@ -1009,6 +1009,8 @@ enum GQL {
         lineItems {
           lineKey
           meter
+          unit
+          dimensions
           description
           quantity
           includedQuantity
@@ -1535,6 +1537,8 @@ enum GQL {
           lineItems {
             lineKey
             meter
+            unit
+            dimensions
             description
             quantity
             includedQuantity
@@ -2339,6 +2343,8 @@ enum GQL {
       id
       tenantId
       balanceCents
+      reservedBalanceCents
+      availableBalanceCents
       currency
       lowBalanceThresholdCents
       isLowBalance

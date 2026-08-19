@@ -53,6 +53,8 @@ func RegisterBillingResources(server *mcp.Server, clients *clients.ServiceClient
 // BalanceInfo represents the billing://balance response.
 type BalanceInfo struct {
 	BalanceCents          int64  `json:"balance_cents"`
+	ReservedBalanceCents  int64  `json:"reserved_balance_cents"`
+	AvailableBalanceCents int64  `json:"available_balance_cents"`
 	Currency              string `json:"currency"`
 	BillingModel          string `json:"billing_model"`
 	DetailsComplete       bool   `json:"billing_details_complete"`
@@ -106,11 +108,13 @@ func handleBillingBalance(ctx context.Context, clients *clients.ServiceClients, 
 		} else {
 			info.Currency = balance.Currency
 			info.BalanceCents = balance.BalanceCents
+			info.ReservedBalanceCents = balance.ReservedBalanceCents
+			info.AvailableBalanceCents = balance.AvailableBalanceCents
 			info.LowBalanceThreshold = balance.LowBalanceThresholdCents
-			info.LowBalanceWarning = balance.BalanceCents < balance.LowBalanceThresholdCents
+			info.LowBalanceWarning = balance.AvailableBalanceCents < balance.LowBalanceThresholdCents
 			info.DrainRateCentsPerHour = balance.DrainRateCentsPerHour
-			if balance.DrainRateCentsPerHour > 0 && balance.BalanceCents > 0 {
-				info.EstimatedHoursLeft = int(balance.BalanceCents / balance.DrainRateCentsPerHour)
+			if balance.DrainRateCentsPerHour > 0 && balance.AvailableBalanceCents > 0 {
+				info.EstimatedHoursLeft = int(balance.AvailableBalanceCents / balance.DrainRateCentsPerHour)
 			}
 		}
 	}

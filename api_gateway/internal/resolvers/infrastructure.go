@@ -2,7 +2,6 @@ package resolvers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"net/url"
@@ -538,13 +537,8 @@ func (r *Resolver) DoGetClustersAccess(ctx context.Context, first *int, after *s
 			ClusterName: c.ClusterName,
 			AccessLevel: c.AccessLevel,
 		}
-		// ResourceLimits: GraphQL JSON scalar maps to *string in generated models.
-		// Serialize from proto struct if present
 		if c.ResourceLimits != nil {
-			if b, err := json.Marshal(c.ResourceLimits.AsMap()); err == nil {
-				s := string(b)
-				item.ResourceLimits = &s
-			}
+			item.ResourceLimits = c.ResourceLimits.AsMap()
 		}
 		if item.ClusterID != "" {
 			byClusterID[item.ClusterID] = item
@@ -646,9 +640,9 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 	}
 
 	if input.Settings != nil {
-		var raw map[string]interface{}
-		if err := json.Unmarshal([]byte(*input.Settings), &raw); err != nil {
-			return nil, fmt.Errorf("invalid settings JSON: %w", err)
+		raw, ok := input.Settings.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("invalid settings JSON: expected an object")
 		}
 
 		if v := raw["primaryClusterId"]; v != nil {
