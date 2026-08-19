@@ -41,6 +41,18 @@ import (
 // USER_NEW/USER_END remain authoritative for connect/disconnect and billing.
 const clientLifecycleTickStride = 6
 
+const (
+	admittedRuntimeMissingPollThreshold = 3
+	admittedRuntimeMinimumAge           = 30 * time.Second
+	maxMissingRuntimeReportsPerPoll     = 64
+)
+
+type admittedRuntimeIdentity struct {
+	runtimeName  string
+	generation   string
+	connectorPID int64
+}
+
 func isInternalMistRuntimeStream(streamName string) bool {
 	return streamident.Parse(streamName).Kind == streamident.KindArtifactProcessing
 }
@@ -118,7 +130,11 @@ type PrometheusMonitor struct {
 	streamDiffMu            sync.Mutex
 	lastActiveInternalNames map[string]struct{}
 	pendingOfflineNames     map[string]struct{}
+	admittedRuntimeMissing  map[admittedRuntimeIdentity]int
 	activeStreamsSeeded     bool
+	loadAdmittedGenerations func() ([]control.AdmittedIngestGeneration, error)
+	sendControlTrigger      func(*ipcpb.MistTrigger, logging.Logger) (*control.MistTriggerResult, error)
+	markGenerationEnded     func(string, string, int64) error
 	// emitStreamLifecycle is spawned with `go` every tick; a slow Mist
 	// API response could overlap runs and a late finisher would swap in
 	// a stale set. Ticks that find a run in flight are dropped.
@@ -314,13 +330,17 @@ func InitPrometheusMonitor(logger logging.Logger) {
 	}
 
 	prometheusMonitor = &PrometheusMonitor{
-		mistUsername:    mistUsername,
-		mistAPIPassword: mistAPIPassword,
-		updateChannel:   make(chan models.NodeUpdate, 10),
-		stopChannel:     make(chan bool, 1),
-		isHealthy:       true,
-		lastJSONData:    make(map[string]any),
-		artifactIndex:   make(map[string]*ClipInfo),
+		mistUsername:            mistUsername,
+		mistAPIPassword:         mistAPIPassword,
+		updateChannel:           make(chan models.NodeUpdate, 10),
+		stopChannel:             make(chan bool, 1),
+		isHealthy:               true,
+		lastJSONData:            make(map[string]any),
+		artifactIndex:           make(map[string]*ClipInfo),
+		admittedRuntimeMissing:  make(map[admittedRuntimeIdentity]int),
+		loadAdmittedGenerations: control.ActiveAdmittedIngestGenerations,
+		sendControlTrigger:      control.SendMistTrigger,
+		markGenerationEnded:     control.MarkAdmittedIngestGenerationEndedExact,
 	}
 
 	monitorLogger.WithFields(logging.Fields{
@@ -523,6 +543,7 @@ func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
 		"node_id": nodeID,
 	}).Info("Fetching active streams from Mist API")
 
+	pollStartedAt := time.Now()
 	pm.mistMu.Lock()
 	apiResponse, err := pm.mistClient.GetActiveStreams()
 	pm.mistMu.Unlock()
@@ -579,7 +600,6 @@ func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
 			monitorLogger.WithField("released", released).Info("Source leases released by Mist reconciliation")
 		}
 	}
-
 	// Vanish diff: report streams that disappeared since the previous
 	// successful poll as explicit offline lifecycle updates. Without this,
 	// nothing corrects stream_state_current when STREAM_END is delayed by
@@ -606,10 +626,12 @@ func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
 	// failure retries on the next poll instead of silently dropping the
 	// offline edge until the ingest backstop catches it minutes later.
 	for _, internalName := range toReport {
-		if _, err := control.SendMistTrigger(buildOfflineLifecycleTrigger(nodeID, internalName), monitorLogger); err != nil {
+		result, err := control.SendMistTrigger(buildOfflineLifecycleTrigger(nodeID, internalName), monitorLogger)
+		if err != nil || result == nil || result.Abort {
 			monitorLogger.WithFields(logging.Fields{
 				"error":         err,
 				"internal_name": internalName,
+				"aborted":       result != nil && result.Abort,
 			}).Error("Failed to send offline stream lifecycle update to Foghorn")
 			continue
 		}
@@ -617,6 +639,7 @@ func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
 		delete(pm.pendingOfflineNames, internalName)
 		pm.streamDiffMu.Unlock()
 	}
+	pm.reconcileAdmittedRuntimePresence(nodeID, present, pollStartedAt)
 
 	markMistActiveStreamsPolled()
 }
@@ -698,6 +721,94 @@ func diffVanishedStreams(prev, current map[string]struct{}) []string {
 	return vanished
 }
 
+func (pm *PrometheusMonitor) reconcileAdmittedRuntimePresence(nodeID string, present map[string]struct{}, now time.Time) {
+	load := pm.loadAdmittedGenerations
+	if load == nil {
+		load = control.ActiveAdmittedIngestGenerations
+	}
+	records, err := load()
+	if err != nil {
+		monitorLogger.WithError(err).Warn("Failed to load admitted ingest generations for Mist reconciliation")
+		return
+	}
+
+	live := make(map[admittedRuntimeIdentity]struct{}, len(records))
+	eligible := make([]control.AdmittedIngestGeneration, 0)
+	pm.streamDiffMu.Lock()
+	if pm.admittedRuntimeMissing == nil {
+		pm.admittedRuntimeMissing = make(map[admittedRuntimeIdentity]int)
+	}
+	for _, record := range records {
+		identity := admittedRuntimeIdentity{
+			runtimeName:  record.RuntimeName,
+			generation:   record.Generation,
+			connectorPID: record.ConnectorPID,
+		}
+		live[identity] = struct{}{}
+		if _, ok := present[record.RuntimeName]; ok {
+			delete(pm.admittedRuntimeMissing, identity)
+			continue
+		}
+		pm.admittedRuntimeMissing[identity]++
+		if pm.admittedRuntimeMissing[identity] < admittedRuntimeMissingPollThreshold || now.Sub(record.UpdatedAt) < admittedRuntimeMinimumAge {
+			continue
+		}
+		if len(eligible) < maxMissingRuntimeReportsPerPoll {
+			eligible = append(eligible, record)
+		}
+	}
+	for identity := range pm.admittedRuntimeMissing {
+		if _, ok := live[identity]; !ok {
+			delete(pm.admittedRuntimeMissing, identity)
+		}
+	}
+	pm.streamDiffMu.Unlock()
+
+	send := pm.sendControlTrigger
+	if send == nil {
+		send = control.SendMistTrigger
+	}
+	markEnded := pm.markGenerationEnded
+	if markEnded == nil {
+		markEnded = control.MarkAdmittedIngestGenerationEndedExact
+	}
+	for _, record := range eligible {
+		internalName, ok := offlineReportableInternalName(record.RuntimeName)
+		if !ok {
+			continue
+		}
+		trigger := buildAcknowledgedOfflineLifecycleTriggerAt(nodeID, internalName, now)
+		result, sendErr := send(trigger, monitorLogger)
+		if sendErr != nil || result == nil || result.Abort {
+			monitorLogger.WithError(sendErr).WithFields(logging.Fields{
+				"runtime_name":      record.RuntimeName,
+				"ingest_generation": record.Generation,
+				"aborted":           result != nil && result.Abort,
+			}).Warn("Failed to reconcile admitted runtime absent from Mist; will retry")
+			continue
+		}
+		if markErr := markEnded(record.RuntimeName, record.Generation, record.ConnectorPID); markErr != nil {
+			monitorLogger.WithError(markErr).WithFields(logging.Fields{
+				"runtime_name":      record.RuntimeName,
+				"ingest_generation": record.Generation,
+			}).Warn("Foghorn retired missing runtime but local generation tombstone failed; will retry")
+			continue
+		}
+		identity := admittedRuntimeIdentity{
+			runtimeName:  record.RuntimeName,
+			generation:   record.Generation,
+			connectorPID: record.ConnectorPID,
+		}
+		pm.streamDiffMu.Lock()
+		delete(pm.admittedRuntimeMissing, identity)
+		pm.streamDiffMu.Unlock()
+		monitorLogger.WithFields(logging.Fields{
+			"runtime_name":      record.RuntimeName,
+			"ingest_generation": record.Generation,
+		}).Info("Reconciled admitted runtime absent from authoritative Mist inventory")
+	}
+}
+
 // buildOfflineLifecycleTrigger reports a vanished stream to Foghorn. Only
 // internal_name, node_id and the explicit offline status matter; stream_id
 // and tenant_id are deliberately left unset — Foghorn's applyStreamContext
@@ -706,14 +817,22 @@ func diffVanishedStreams(prev, current map[string]struct{}) []string {
 // BufferState EMPTY and the zero counters describe the vanished session
 // for the analytics row; Foghorn's offline branch does not read them.
 func buildOfflineLifecycleTrigger(nodeID, internalName string) *ipcpb.MistTrigger {
+	return buildOfflineLifecycleTriggerAt(nodeID, internalName, time.Now(), false)
+}
+
+func buildAcknowledgedOfflineLifecycleTriggerAt(nodeID, internalName string, observedAt time.Time) *ipcpb.MistTrigger {
+	return buildOfflineLifecycleTriggerAt(nodeID, internalName, observedAt, true)
+}
+
+func buildOfflineLifecycleTriggerAt(nodeID, internalName string, observedAt time.Time, acknowledged bool) *ipcpb.MistTrigger {
 	bufferState := "EMPTY"
 	zeroInputs := uint32(0)
 	zeroViewers := uint32(0)
-	return &ipcpb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "STREAM_LIFECYCLE_UPDATE",
 		NodeId:      nodeID,
-		Timestamp:   time.Now().Unix(),
-		Blocking:    false,
+		Timestamp:   observedAt.Unix(),
+		Blocking:    acknowledged,
 		TriggerPayload: &ipcpb.MistTrigger_StreamLifecycleUpdate{
 			StreamLifecycleUpdate: &ipcpb.StreamLifecycleUpdate{
 				NodeId:       nodeID,
@@ -725,6 +844,13 @@ func buildOfflineLifecycleTrigger(nodeID, internalName string) *ipcpb.MistTrigge
 			},
 		},
 	}
+	if acknowledged {
+		requestID := uuid.NewString()
+		trigger.RequestId = requestID
+		trigger.TriggerUuid = requestID
+		trigger.TriggerUnixMillis = observedAt.UnixMilli()
+	}
+	return trigger
 }
 
 // dvrRollingResolver maps a rolling-DVR playback token (the internal_name after

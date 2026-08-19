@@ -177,6 +177,21 @@ func RecordAdmittedIngestGeneration(runtimeName, generation string, connectorPID
 // PUSH_INPUT_CLOSE is durably accepted. The in-memory value remains available for reordered
 // commands, while the disk store can age/cap ended runtimes without evicting active publishers.
 func MarkAdmittedIngestGenerationEnded(runtimeName string, connectorPID int64) error {
+	return markAdmittedIngestGenerationEnded(runtimeName, "", connectorPID)
+}
+
+// MarkAdmittedIngestGenerationEndedExact tombstones only the exact admitted generation. Runtime
+// absence reconciliation uses this after Foghorn acknowledges its event-time-fenced retirement; a
+// delayed acknowledgement must not end a replacement generation even if Mist reuses a connector PID.
+func MarkAdmittedIngestGenerationEndedExact(runtimeName, generation string, connectorPID int64) error {
+	generation = strings.TrimSpace(generation)
+	if generation == "" {
+		return errors.New("ended ingest requires generation")
+	}
+	return markAdmittedIngestGenerationEnded(runtimeName, generation, connectorPID)
+}
+
+func markAdmittedIngestGenerationEnded(runtimeName, expectedGeneration string, connectorPID int64) error {
 	runtimeName = strings.TrimSpace(runtimeName)
 	if runtimeName == "" || connectorPID <= 0 {
 		return errors.New("ended ingest requires runtime and positive connector PID")
@@ -192,7 +207,7 @@ func MarkAdmittedIngestGenerationEnded(runtimeName string, connectorPID int64) e
 	ingestGenerationStoreMu.RLock()
 	store := ingestGenerationStore
 	ingestGenerationStoreMu.RUnlock()
-	if connectorPID != fence.connectorPID {
+	if connectorPID != fence.connectorPID || (expectedGeneration != "" && expectedGeneration != fence.generation) {
 		fence.Unlock()
 		return nil
 	}
@@ -213,6 +228,45 @@ func MarkAdmittedIngestGenerationEnded(runtimeName string, connectorPID int64) e
 		})
 	}
 	return nil
+}
+
+// AdmittedIngestGeneration is the persisted local identity of a runtime Helmsman approved.
+type AdmittedIngestGeneration struct {
+	RuntimeName  string
+	Generation   string
+	ConnectorPID int64
+	UpdatedAt    time.Time
+}
+
+// ActiveAdmittedIngestGenerations returns a stable snapshot for authoritative Mist-runtime
+// reconciliation. The persistent store is the source so the snapshot survives Helmsman restarts.
+func ActiveAdmittedIngestGenerations() ([]AdmittedIngestGeneration, error) {
+	ingestGenerationStoreMu.RLock()
+	store := ingestGenerationStore
+	ingestGenerationStoreMu.RUnlock()
+	if store == nil {
+		return nil, nil
+	}
+	records, err := store.Load()
+	if err != nil {
+		return nil, err
+	}
+	active := make([]AdmittedIngestGeneration, 0, len(records))
+	for _, record := range records {
+		if !record.Active {
+			continue
+		}
+		active = append(active, AdmittedIngestGeneration{
+			RuntimeName:  record.RuntimeName,
+			Generation:   record.Generation,
+			ConnectorPID: record.ConnectorPID,
+			UpdatedAt:    time.UnixMilli(record.UpdatedAt),
+		})
+	}
+	sort.Slice(active, func(i, j int) bool {
+		return active[i].RuntimeName < active[j].RuntimeName
+	})
+	return active, nil
 }
 
 func initIngestGenerationStore(logger logging.Logger) {
@@ -335,10 +389,18 @@ var (
 
 const (
 	blockingTriggerTimeout            = 4 * time.Second
+	lifecycleReconciliationTimeout    = 30 * time.Second
 	desiredStateComponentApplyTimeout = 30 * time.Minute
 	maxBlockingAttempts               = 3
 	reconnectJitterPct                = 25
 )
+
+func blockingTimeoutForTrigger(triggerType string) time.Duration {
+	if triggerType == string(mist.TriggerStreamLifecycle) {
+		return lifecycleReconciliationTimeout
+	}
+	return blockingTriggerTimeout
+}
 
 // SetOnSeed sets a callback invoked when Foghorn requests immediate JSON seed
 func SetOnSeed(cb func()) {
@@ -445,7 +507,7 @@ func SendMistTriggerContext(ctx context.Context, mistTrigger *ipcpb.MistTrigger,
 	}
 
 	attempts := max(maxBlockingAttempts, 1)
-	deadline := time.Now().Add(blockingTriggerTimeout)
+	deadline := time.Now().Add(blockingTimeoutForTrigger(triggerType))
 	if requestDeadline, ok := ctx.Deadline(); ok && requestDeadline.Before(deadline) {
 		deadline = requestDeadline
 	}
@@ -482,7 +544,10 @@ func SendMistTriggerContext(ctx context.Context, mistTrigger *ipcpb.MistTrigger,
 		// The buffered channel catches Foghorn's reply even if it arrives before the select.
 		responseCh := make(chan *ipcpb.MistTriggerResponse, 1)
 		pendingMutex <- struct{}{}
-		pendingMistTriggers[mistTrigger.RequestId] = responseCh
+		pendingMistTriggers[mistTrigger.RequestId] = pendingMistTrigger{
+			responseCh:  responseCh,
+			triggerType: triggerType,
+		}
 		<-pendingMutex
 
 		if err := sendMistTriggerOnce(triggerType, mistTrigger); err != nil {
@@ -520,9 +585,16 @@ func SendMistTriggerContext(ctx context.Context, mistTrigger *ipcpb.MistTrigger,
 	return &MistTriggerResult{Abort: true, ErrorCode: ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT}, lastErr
 }
 
-// pendingMistTriggers tracks blocking trigger requests waiting for responses
+type pendingMistTrigger struct {
+	responseCh  chan *ipcpb.MistTriggerResponse
+	triggerType string
+}
+
+// pendingMistTriggers tracks blocking trigger requests waiting for responses.
+// The trigger type is part of the pending request because only an accepted
+// PUSH_REWRITE response carries ingest-generation identity.
 var (
-	pendingMistTriggers = make(map[string]chan *ipcpb.MistTriggerResponse)
+	pendingMistTriggers = make(map[string]pendingMistTrigger)
 	pendingMutex        = make(chan struct{}, 1) // Simple mutex using buffered channel
 )
 
@@ -612,7 +684,20 @@ func awaitMistTriggerResponseContext(ctx context.Context, responseCh chan *ipcpb
 
 // handleMistTriggerResponse processes MistTriggerResponse messages from the stream
 func handleMistTriggerResponse(response *ipcpb.MistTriggerResponse) {
-	if response != nil && !response.GetAbort() {
+	if response == nil {
+		return
+	}
+	pendingMutex <- struct{}{}
+	pending, exists := pendingMistTriggers[response.GetRequestId()]
+	<-pendingMutex
+	if !exists {
+		return
+	}
+
+	acceptedPush := pending.triggerType == string(mist.TriggerPushRewrite) &&
+		!response.GetAbort() &&
+		response.GetAction() != ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY
+	if acceptedPush {
 		// Record before releasing the waiting HTTP handler. The Recv loop may immediately observe a
 		// queued control command after this response; updating synchronously makes stream ordering a
 		// generation fence even before the PUSH_REWRITE handler returns the approval to Mist.
@@ -625,13 +710,7 @@ func handleMistTriggerResponse(response *ipcpb.MistTriggerResponse) {
 			response.ErrorCode = ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL
 		}
 	}
-	pendingMutex <- struct{}{}
-	responseChan, exists := pendingMistTriggers[response.RequestId]
-	<-pendingMutex
-
-	if exists {
-		responseChan <- response
-	}
+	pending.responseCh <- response
 }
 
 func handleDesiredStateUpdate(ctx context.Context, logger logging.Logger, requestID string, update *ipcpb.DesiredStateUpdate, send func(*ipcpb.ControlMessage) error) {

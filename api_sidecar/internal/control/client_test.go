@@ -16,6 +16,7 @@ import (
 
 	"frameworks/api_sidecar/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -235,7 +236,7 @@ func TestSendMistTriggerOnceSendError(t *testing.T) {
 func TestWaitForMistTriggerResponseTimeout(t *testing.T) {
 	ch := make(chan *ipcpb.MistTriggerResponse, 1)
 	pendingMutex <- struct{}{}
-	pendingMistTriggers["timeout-test"] = ch
+	pendingMistTriggers["timeout-test"] = pendingMistTrigger{responseCh: ch, triggerType: "TEST"}
 	<-pendingMutex
 
 	result, err := awaitMistTriggerResponse(ch, "timeout-test", 20*time.Millisecond)
@@ -259,7 +260,7 @@ func TestWaitForMistTriggerResponseDisconnect(t *testing.T) {
 
 	ch := make(chan *ipcpb.MistTriggerResponse, 1)
 	pendingMutex <- struct{}{}
-	pendingMistTriggers["disconnect-test"] = ch
+	pendingMistTriggers["disconnect-test"] = pendingMistTrigger{responseCh: ch, triggerType: "TEST"}
 	<-pendingMutex
 
 	done := make(chan struct{})
@@ -341,7 +342,7 @@ type controlState struct {
 	blockingGraceMs     int
 	streamReconnected   chan struct{}
 	disconnectNotify    chan struct{}
-	pendingMistTriggers map[string]chan *ipcpb.MistTriggerResponse
+	pendingMistTriggers map[string]pendingMistTrigger
 	pendingMutex        chan struct{}
 }
 
@@ -377,7 +378,7 @@ func resetControlState(t *testing.T) {
 	disconnectNotifyMu.Lock()
 	disconnectNotify = make(chan struct{})
 	disconnectNotifyMu.Unlock()
-	pendingMistTriggers = make(map[string]chan *ipcpb.MistTriggerResponse)
+	pendingMistTriggers = make(map[string]pendingMistTrigger)
 	pendingMutex = make(chan struct{}, 1)
 }
 
@@ -485,6 +486,15 @@ func TestApplyJitterZeroPercent(t *testing.T) {
 	got := applyJitter(d, 0)
 	if got != d {
 		t.Fatalf("expected %v, got %v", d, got)
+	}
+}
+
+func TestBlockingTimeoutForTrigger(t *testing.T) {
+	if got := blockingTimeoutForTrigger(string(mist.TriggerPlayRewrite)); got != blockingTriggerTimeout {
+		t.Fatalf("PLAY_REWRITE timeout = %v, want %v", got, blockingTriggerTimeout)
+	}
+	if got := blockingTimeoutForTrigger(string(mist.TriggerStreamLifecycle)); got != lifecycleReconciliationTimeout {
+		t.Fatalf("lifecycle recovery timeout = %v, want %v", got, lifecycleReconciliationTimeout)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_sidecar/internal/control"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
@@ -156,7 +157,7 @@ func TestBuildOfflineLifecycleTrigger(t *testing.T) {
 		t.Fatalf("expected node-1, got %s", trigger.NodeId)
 	}
 	if trigger.Blocking {
-		t.Fatal("offline lifecycle update must be non-blocking")
+		t.Fatal("ordinary vanish lifecycle update must remain non-blocking")
 	}
 
 	slu := trigger.GetStreamLifecycleUpdate()
@@ -185,6 +186,141 @@ func TestBuildOfflineLifecycleTrigger(t *testing.T) {
 	// that enrichment, and a poller-supplied guess could mis-attribute.
 	if slu.StreamId != nil || slu.TenantId != nil {
 		t.Fatalf("expected stream_id/tenant_id unset, got %v/%v", slu.StreamId, slu.TenantId)
+	}
+}
+
+func TestBuildAcknowledgedOfflineLifecycleTrigger(t *testing.T) {
+	observedAt := time.UnixMilli(1_700_000_000_123)
+	trigger := buildAcknowledgedOfflineLifecycleTriggerAt("node-1", "demo", observedAt)
+	if !trigger.GetBlocking() {
+		t.Fatal("admitted-runtime recovery must wait for Foghorn acknowledgement")
+	}
+	if trigger.GetRequestId() == "" || trigger.GetTriggerUuid() != trigger.GetRequestId() {
+		t.Fatalf("expected one stable request identity, got request=%q trigger=%q", trigger.GetRequestId(), trigger.GetTriggerUuid())
+	}
+	if trigger.GetTriggerUnixMillis() != observedAt.UnixMilli() {
+		t.Fatalf("event fence = %d, want %d", trigger.GetTriggerUnixMillis(), observedAt.UnixMilli())
+	}
+}
+
+func TestReconcileAdmittedRuntimePresenceRequiresDwellAndTombstonesExactGeneration(t *testing.T) {
+	oldLogger := monitorLogger
+	monitorLogger = logging.NewLogger()
+	t.Cleanup(func() { monitorLogger = oldLogger })
+	now := time.Now()
+	record := control.AdmittedIngestGeneration{
+		RuntimeName:  "live+demo",
+		Generation:   "generation-1",
+		ConnectorPID: 42,
+		UpdatedAt:    now.Add(-time.Minute),
+	}
+	var sent int
+	var marked []control.AdmittedIngestGeneration
+	pm := &PrometheusMonitor{
+		admittedRuntimeMissing: make(map[admittedRuntimeIdentity]int),
+		loadAdmittedGenerations: func() ([]control.AdmittedIngestGeneration, error) {
+			return []control.AdmittedIngestGeneration{record}, nil
+		},
+		sendControlTrigger: func(trigger *ipcpb.MistTrigger, _ logging.Logger) (*control.MistTriggerResult, error) {
+			sent++
+			if !trigger.GetBlocking() || trigger.GetStreamLifecycleUpdate().GetStatus() != "offline" {
+				t.Fatalf("unexpected reconciliation trigger: %+v", trigger)
+			}
+			return &control.MistTriggerResult{}, nil
+		},
+		markGenerationEnded: func(runtimeName, generation string, connectorPID int64) error {
+			marked = append(marked, control.AdmittedIngestGeneration{
+				RuntimeName: runtimeName, Generation: generation, ConnectorPID: connectorPID,
+			})
+			return nil
+		},
+	}
+
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, now)
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, now)
+	if sent != 0 {
+		t.Fatalf("sent before dwell threshold: %d", sent)
+	}
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, now)
+	if sent != 1 || len(marked) != 1 || marked[0].RuntimeName != record.RuntimeName || marked[0].Generation != record.Generation || marked[0].ConnectorPID != record.ConnectorPID {
+		t.Fatalf("sent=%d marked=%+v, want exact admitted identity %+v", sent, marked, record)
+	}
+}
+
+func TestReconcileAdmittedRuntimePresencePresentAndReplacementResetDwell(t *testing.T) {
+	oldLogger := monitorLogger
+	monitorLogger = logging.NewLogger()
+	t.Cleanup(func() { monitorLogger = oldLogger })
+	now := time.Now()
+	record := control.AdmittedIngestGeneration{
+		RuntimeName: "live+demo", Generation: "generation-1", ConnectorPID: 42, UpdatedAt: now.Add(-time.Minute),
+	}
+	var sent int
+	pm := &PrometheusMonitor{
+		admittedRuntimeMissing: make(map[admittedRuntimeIdentity]int),
+		loadAdmittedGenerations: func() ([]control.AdmittedIngestGeneration, error) {
+			return []control.AdmittedIngestGeneration{record}, nil
+		},
+		sendControlTrigger: func(*ipcpb.MistTrigger, logging.Logger) (*control.MistTriggerResult, error) {
+			sent++
+			return &control.MistTriggerResult{}, nil
+		},
+		markGenerationEnded: func(string, string, int64) error { return nil },
+	}
+
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, now)
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{record.RuntimeName: {}}, now)
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, now)
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, now)
+	if sent != 0 {
+		t.Fatalf("presence did not reset absence dwell: sent=%d", sent)
+	}
+
+	record.Generation = "generation-2"
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, now)
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, now)
+	if sent != 0 {
+		t.Fatalf("replacement generation inherited stale dwell: sent=%d", sent)
+	}
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, now)
+	if sent != 1 {
+		t.Fatalf("replacement generation was not sent after its own dwell: sent=%d", sent)
+	}
+}
+
+func TestReconcileAdmittedRuntimePresenceRetriesAbortedAcknowledgement(t *testing.T) {
+	oldLogger := monitorLogger
+	monitorLogger = logging.NewLogger()
+	t.Cleanup(func() { monitorLogger = oldLogger })
+	now := time.Now()
+	record := control.AdmittedIngestGeneration{
+		RuntimeName: "live+retry", Generation: "generation-retry", ConnectorPID: 51, UpdatedAt: now.Add(-time.Minute),
+	}
+	var sent, marked int
+	pm := &PrometheusMonitor{
+		admittedRuntimeMissing: make(map[admittedRuntimeIdentity]int),
+		loadAdmittedGenerations: func() ([]control.AdmittedIngestGeneration, error) {
+			return []control.AdmittedIngestGeneration{record}, nil
+		},
+		sendControlTrigger: func(*ipcpb.MistTrigger, logging.Logger) (*control.MistTriggerResult, error) {
+			sent++
+			return &control.MistTriggerResult{Abort: sent == 1}, nil
+		},
+		markGenerationEnded: func(string, string, int64) error {
+			marked++
+			return nil
+		},
+	}
+
+	for range admittedRuntimeMissingPollThreshold {
+		pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, now)
+	}
+	if sent != 1 || marked != 0 {
+		t.Fatalf("aborted acknowledgement must stay pending: sent=%d marked=%d", sent, marked)
+	}
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, now)
+	if sent != 2 || marked != 1 {
+		t.Fatalf("next poll must retry and tombstone after success: sent=%d marked=%d", sent, marked)
 	}
 }
 
