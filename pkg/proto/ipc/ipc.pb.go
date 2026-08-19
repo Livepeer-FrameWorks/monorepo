@@ -86,6 +86,64 @@ func (ClusterRejectReason) EnumDescriptor() ([]byte, []int) {
 	return file_ipc_proto_rawDescGZIP(), []int{0}
 }
 
+type MistTriggerAction int32
+
+const (
+	MistTriggerAction_MIST_TRIGGER_ACTION_UNSPECIFIED    MistTriggerAction = 0 // Legacy response-body interpretation.
+	MistTriggerAction_MIST_TRIGGER_ACTION_VALUE          MistTriggerAction = 1
+	MistTriggerAction_MIST_TRIGGER_ACTION_DENY           MistTriggerAction = 2
+	MistTriggerAction_MIST_TRIGGER_ACTION_KEEP           MistTriggerAction = 3
+	MistTriggerAction_MIST_TRIGGER_ACTION_OFFLINE        MistTriggerAction = 4
+	MistTriggerAction_MIST_TRIGGER_ACTION_USE_CONFIGURED MistTriggerAction = 5
+)
+
+// Enum value maps for MistTriggerAction.
+var (
+	MistTriggerAction_name = map[int32]string{
+		0: "MIST_TRIGGER_ACTION_UNSPECIFIED",
+		1: "MIST_TRIGGER_ACTION_VALUE",
+		2: "MIST_TRIGGER_ACTION_DENY",
+		3: "MIST_TRIGGER_ACTION_KEEP",
+		4: "MIST_TRIGGER_ACTION_OFFLINE",
+		5: "MIST_TRIGGER_ACTION_USE_CONFIGURED",
+	}
+	MistTriggerAction_value = map[string]int32{
+		"MIST_TRIGGER_ACTION_UNSPECIFIED":    0,
+		"MIST_TRIGGER_ACTION_VALUE":          1,
+		"MIST_TRIGGER_ACTION_DENY":           2,
+		"MIST_TRIGGER_ACTION_KEEP":           3,
+		"MIST_TRIGGER_ACTION_OFFLINE":        4,
+		"MIST_TRIGGER_ACTION_USE_CONFIGURED": 5,
+	}
+)
+
+func (x MistTriggerAction) Enum() *MistTriggerAction {
+	p := new(MistTriggerAction)
+	*p = x
+	return p
+}
+
+func (x MistTriggerAction) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (MistTriggerAction) Descriptor() protoreflect.EnumDescriptor {
+	return file_ipc_proto_enumTypes[1].Descriptor()
+}
+
+func (MistTriggerAction) Type() protoreflect.EnumType {
+	return &file_ipc_proto_enumTypes[1]
+}
+
+func (x MistTriggerAction) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use MistTriggerAction.Descriptor instead.
+func (MistTriggerAction) EnumDescriptor() ([]byte, []int) {
+	return file_ipc_proto_rawDescGZIP(), []int{1}
+}
+
 type TriggerAckErrorCode int32
 
 const (
@@ -131,11 +189,11 @@ func (x TriggerAckErrorCode) String() string {
 }
 
 func (TriggerAckErrorCode) Descriptor() protoreflect.EnumDescriptor {
-	return file_ipc_proto_enumTypes[1].Descriptor()
+	return file_ipc_proto_enumTypes[2].Descriptor()
 }
 
 func (TriggerAckErrorCode) Type() protoreflect.EnumType {
-	return &file_ipc_proto_enumTypes[1]
+	return &file_ipc_proto_enumTypes[2]
 }
 
 func (x TriggerAckErrorCode) Number() protoreflect.EnumNumber {
@@ -144,7 +202,7 @@ func (x TriggerAckErrorCode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use TriggerAckErrorCode.Descriptor instead.
 func (TriggerAckErrorCode) EnumDescriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{1}
+	return file_ipc_proto_rawDescGZIP(), []int{2}
 }
 
 type IngestErrorCode int32
@@ -204,11 +262,11 @@ func (x IngestErrorCode) String() string {
 }
 
 func (IngestErrorCode) Descriptor() protoreflect.EnumDescriptor {
-	return file_ipc_proto_enumTypes[2].Descriptor()
+	return file_ipc_proto_enumTypes[3].Descriptor()
 }
 
 func (IngestErrorCode) Type() protoreflect.EnumType {
-	return &file_ipc_proto_enumTypes[2]
+	return &file_ipc_proto_enumTypes[3]
 }
 
 func (x IngestErrorCode) Number() protoreflect.EnumNumber {
@@ -217,7 +275,7 @@ func (x IngestErrorCode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use IngestErrorCode.Descriptor instead.
 func (IngestErrorCode) EnumDescriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{2}
+	return file_ipc_proto_rawDescGZIP(), []int{3}
 }
 
 // Storage location enum for cold storage tracking
@@ -257,11 +315,11 @@ func (x StorageLocation) String() string {
 }
 
 func (StorageLocation) Descriptor() protoreflect.EnumDescriptor {
-	return file_ipc_proto_enumTypes[3].Descriptor()
+	return file_ipc_proto_enumTypes[4].Descriptor()
 }
 
 func (StorageLocation) Type() protoreflect.EnumType {
-	return &file_ipc_proto_enumTypes[3]
+	return &file_ipc_proto_enumTypes[4]
 }
 
 func (x StorageLocation) Number() protoreflect.EnumNumber {
@@ -270,7 +328,7 @@ func (x StorageLocation) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use StorageLocation.Descriptor instead.
 func (StorageLocation) EnumDescriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{3}
+	return file_ipc_proto_rawDescGZIP(), []int{4}
 }
 
 // AssetState tells the relay how to dispose of a resolve. Drives the
@@ -311,11 +369,11 @@ func (x AssetState) String() string {
 }
 
 func (AssetState) Descriptor() protoreflect.EnumDescriptor {
-	return file_ipc_proto_enumTypes[4].Descriptor()
+	return file_ipc_proto_enumTypes[5].Descriptor()
 }
 
 func (AssetState) Type() protoreflect.EnumType {
-	return &file_ipc_proto_enumTypes[4]
+	return &file_ipc_proto_enumTypes[5]
 }
 
 func (x AssetState) Number() protoreflect.EnumNumber {
@@ -324,7 +382,7 @@ func (x AssetState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use AssetState.Descriptor instead.
 func (AssetState) EnumDescriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{4}
+	return file_ipc_proto_rawDescGZIP(), []int{5}
 }
 
 type NodeOperationalMode int32
@@ -363,11 +421,11 @@ func (x NodeOperationalMode) String() string {
 }
 
 func (NodeOperationalMode) Descriptor() protoreflect.EnumDescriptor {
-	return file_ipc_proto_enumTypes[5].Descriptor()
+	return file_ipc_proto_enumTypes[6].Descriptor()
 }
 
 func (NodeOperationalMode) Type() protoreflect.EnumType {
-	return &file_ipc_proto_enumTypes[5]
+	return &file_ipc_proto_enumTypes[6]
 }
 
 func (x NodeOperationalMode) Number() protoreflect.EnumNumber {
@@ -376,7 +434,7 @@ func (x NodeOperationalMode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use NodeOperationalMode.Descriptor instead.
 func (NodeOperationalMode) EnumDescriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{5}
+	return file_ipc_proto_rawDescGZIP(), []int{6}
 }
 
 // Federation operation events emitted by Foghorn for cross-cluster analytics.
@@ -436,11 +494,11 @@ func (x FederationEventType) String() string {
 }
 
 func (FederationEventType) Descriptor() protoreflect.EnumDescriptor {
-	return file_ipc_proto_enumTypes[6].Descriptor()
+	return file_ipc_proto_enumTypes[7].Descriptor()
 }
 
 func (FederationEventType) Type() protoreflect.EnumType {
-	return &file_ipc_proto_enumTypes[6]
+	return &file_ipc_proto_enumTypes[7]
 }
 
 func (x FederationEventType) Number() protoreflect.EnumNumber {
@@ -449,7 +507,7 @@ func (x FederationEventType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use FederationEventType.Descriptor instead.
 func (FederationEventType) EnumDescriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{6}
+	return file_ipc_proto_rawDescGZIP(), []int{7}
 }
 
 type ArtifactEvent_ArtifactType int32
@@ -488,11 +546,11 @@ func (x ArtifactEvent_ArtifactType) String() string {
 }
 
 func (ArtifactEvent_ArtifactType) Descriptor() protoreflect.EnumDescriptor {
-	return file_ipc_proto_enumTypes[7].Descriptor()
+	return file_ipc_proto_enumTypes[8].Descriptor()
 }
 
 func (ArtifactEvent_ArtifactType) Type() protoreflect.EnumType {
-	return &file_ipc_proto_enumTypes[7]
+	return &file_ipc_proto_enumTypes[8]
 }
 
 func (x ArtifactEvent_ArtifactType) Number() protoreflect.EnumNumber {
@@ -540,11 +598,11 @@ func (x ArtifactNodeCopyEvent_Transition) String() string {
 }
 
 func (ArtifactNodeCopyEvent_Transition) Descriptor() protoreflect.EnumDescriptor {
-	return file_ipc_proto_enumTypes[8].Descriptor()
+	return file_ipc_proto_enumTypes[9].Descriptor()
 }
 
 func (ArtifactNodeCopyEvent_Transition) Type() protoreflect.EnumType {
-	return &file_ipc_proto_enumTypes[8]
+	return &file_ipc_proto_enumTypes[9]
 }
 
 func (x ArtifactNodeCopyEvent_Transition) Number() protoreflect.EnumNumber {
@@ -601,11 +659,11 @@ func (x ClipPullRequest_SourceKind) String() string {
 }
 
 func (ClipPullRequest_SourceKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_ipc_proto_enumTypes[9].Descriptor()
+	return file_ipc_proto_enumTypes[10].Descriptor()
 }
 
 func (ClipPullRequest_SourceKind) Type() protoreflect.EnumType {
-	return &file_ipc_proto_enumTypes[9]
+	return &file_ipc_proto_enumTypes[10]
 }
 
 func (x ClipPullRequest_SourceKind) Number() protoreflect.EnumNumber {
@@ -653,11 +711,11 @@ func (x RelayResolveRequest_RelayHint) String() string {
 }
 
 func (RelayResolveRequest_RelayHint) Descriptor() protoreflect.EnumDescriptor {
-	return file_ipc_proto_enumTypes[10].Descriptor()
+	return file_ipc_proto_enumTypes[11].Descriptor()
 }
 
 func (RelayResolveRequest_RelayHint) Type() protoreflect.EnumType {
-	return &file_ipc_proto_enumTypes[10]
+	return &file_ipc_proto_enumTypes[11]
 }
 
 func (x RelayResolveRequest_RelayHint) Number() protoreflect.EnumNumber {
@@ -704,11 +762,11 @@ func (x RelayResolveResponse_CacheDecisionHint) String() string {
 }
 
 func (RelayResolveResponse_CacheDecisionHint) Descriptor() protoreflect.EnumDescriptor {
-	return file_ipc_proto_enumTypes[11].Descriptor()
+	return file_ipc_proto_enumTypes[12].Descriptor()
 }
 
 func (RelayResolveResponse_CacheDecisionHint) Type() protoreflect.EnumType {
-	return &file_ipc_proto_enumTypes[11]
+	return &file_ipc_proto_enumTypes[12]
 }
 
 func (x RelayResolveResponse_CacheDecisionHint) Number() protoreflect.EnumNumber {
@@ -777,11 +835,11 @@ func (x StorageLifecycleData_Action) String() string {
 }
 
 func (StorageLifecycleData_Action) Descriptor() protoreflect.EnumDescriptor {
-	return file_ipc_proto_enumTypes[12].Descriptor()
+	return file_ipc_proto_enumTypes[13].Descriptor()
 }
 
 func (StorageLifecycleData_Action) Type() protoreflect.EnumType {
-	return &file_ipc_proto_enumTypes[12]
+	return &file_ipc_proto_enumTypes[13]
 }
 
 func (x StorageLifecycleData_Action) Number() protoreflect.EnumNumber {
@@ -834,11 +892,11 @@ func (x StorageLifecycleData_CacheFailureReason) String() string {
 }
 
 func (StorageLifecycleData_CacheFailureReason) Descriptor() protoreflect.EnumDescriptor {
-	return file_ipc_proto_enumTypes[13].Descriptor()
+	return file_ipc_proto_enumTypes[14].Descriptor()
 }
 
 func (StorageLifecycleData_CacheFailureReason) Type() protoreflect.EnumType {
-	return &file_ipc_proto_enumTypes[13]
+	return &file_ipc_proto_enumTypes[14]
 }
 
 func (x StorageLifecycleData_CacheFailureReason) Number() protoreflect.EnumNumber {
@@ -895,11 +953,11 @@ func (x ClipLifecycleData_Stage) String() string {
 }
 
 func (ClipLifecycleData_Stage) Descriptor() protoreflect.EnumDescriptor {
-	return file_ipc_proto_enumTypes[14].Descriptor()
+	return file_ipc_proto_enumTypes[15].Descriptor()
 }
 
 func (ClipLifecycleData_Stage) Type() protoreflect.EnumType {
-	return &file_ipc_proto_enumTypes[14]
+	return &file_ipc_proto_enumTypes[15]
 }
 
 func (x ClipLifecycleData_Stage) Number() protoreflect.EnumNumber {
@@ -953,11 +1011,11 @@ func (x DVRLifecycleData_Status) String() string {
 }
 
 func (DVRLifecycleData_Status) Descriptor() protoreflect.EnumDescriptor {
-	return file_ipc_proto_enumTypes[15].Descriptor()
+	return file_ipc_proto_enumTypes[16].Descriptor()
 }
 
 func (DVRLifecycleData_Status) Type() protoreflect.EnumType {
-	return &file_ipc_proto_enumTypes[15]
+	return &file_ipc_proto_enumTypes[16]
 }
 
 func (x DVRLifecycleData_Status) Number() protoreflect.EnumNumber {
@@ -1014,11 +1072,11 @@ func (x VodLifecycleData_Status) String() string {
 }
 
 func (VodLifecycleData_Status) Descriptor() protoreflect.EnumDescriptor {
-	return file_ipc_proto_enumTypes[16].Descriptor()
+	return file_ipc_proto_enumTypes[17].Descriptor()
 }
 
 func (VodLifecycleData_Status) Type() protoreflect.EnumType {
-	return &file_ipc_proto_enumTypes[16]
+	return &file_ipc_proto_enumTypes[17]
 }
 
 func (x VodLifecycleData_Status) Number() protoreflect.EnumNumber {
@@ -1069,11 +1127,11 @@ func (x MessageLifecycleData_EventType) String() string {
 }
 
 func (MessageLifecycleData_EventType) Descriptor() protoreflect.EnumDescriptor {
-	return file_ipc_proto_enumTypes[17].Descriptor()
+	return file_ipc_proto_enumTypes[18].Descriptor()
 }
 
 func (MessageLifecycleData_EventType) Type() protoreflect.EnumType {
-	return &file_ipc_proto_enumTypes[17]
+	return &file_ipc_proto_enumTypes[18]
 }
 
 func (x MessageLifecycleData_EventType) Number() protoreflect.EnumNumber {
@@ -1128,11 +1186,11 @@ func (x StoredArtifact_Role) String() string {
 }
 
 func (StoredArtifact_Role) Descriptor() protoreflect.EnumDescriptor {
-	return file_ipc_proto_enumTypes[18].Descriptor()
+	return file_ipc_proto_enumTypes[19].Descriptor()
 }
 
 func (StoredArtifact_Role) Type() protoreflect.EnumType {
-	return &file_ipc_proto_enumTypes[18]
+	return &file_ipc_proto_enumTypes[19]
 }
 
 func (x StoredArtifact_Role) Number() protoreflect.EnumNumber {
@@ -5386,9 +5444,11 @@ type MistTrigger struct {
 	// downstream consumers (Periscope, MirrorMaker peers) use to drop
 	// duplicates after at-least-once replication. Producers stamp at emit;
 	// Decklog backfills on ingest for backward compat.
-	EventId       string `protobuf:"bytes,57,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	EventId           string `protobuf:"bytes,57,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	TriggerUuid       string `protobuf:"bytes,58,opt,name=trigger_uuid,json=triggerUuid,proto3" json:"trigger_uuid,omitempty"`                      // Stable across Mist's transport retries for one doTrigger invocation.
+	TriggerUnixMillis int64  `protobuf:"varint,59,opt,name=trigger_unix_millis,json=triggerUnixMillis,proto3" json:"trigger_unix_millis,omitempty"` // Mist event time from X-Trigger-UnixMillis.
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *MistTrigger) Reset() {
@@ -5819,6 +5879,20 @@ func (x *MistTrigger) GetEventId() string {
 	return ""
 }
 
+func (x *MistTrigger) GetTriggerUuid() string {
+	if x != nil {
+		return x.TriggerUuid
+	}
+	return ""
+}
+
+func (x *MistTrigger) GetTriggerUnixMillis() int64 {
+	if x != nil {
+		return x.TriggerUnixMillis
+	}
+	return 0
+}
+
 type isMistTrigger_TriggerPayload interface {
 	isMistTrigger_TriggerPayload()
 }
@@ -6068,15 +6142,17 @@ func (x *RawMistWebhookTrigger) GetParseError() string {
 type MistTriggerResponse struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	RequestId string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"` // Correlates to MistTrigger.request_id
-	Response  string                 `protobuf:"bytes,2,opt,name=response,proto3" json:"response,omitempty"`                    // What to return to MistServer (empty string aborts for blocking triggers)
-	Abort     bool                   `protobuf:"varint,3,opt,name=abort,proto3" json:"abort,omitempty"`                         // Explicit abort flag
+	Response  string                 `protobuf:"bytes,2,opt,name=response,proto3" json:"response,omitempty"`                    // Value returned to MistServer when action is VALUE or unspecified.
+	Abort     bool                   `protobuf:"varint,3,opt,name=abort,proto3" json:"abort,omitempty"`                         // Compatibility alias for action=DENY.
 	ErrorCode IngestErrorCode        `protobuf:"varint,4,opt,name=error_code,json=errorCode,proto3,enum=helmsmancontrol.IngestErrorCode" json:"error_code,omitempty"`
 	// Present on an accepted PUSH_REWRITE. Helmsman records this as the current runtime generation
 	// and fences delayed activation/deactivation commands against publisher replacement.
 	IngestGeneration string `protobuf:"bytes,5,opt,name=ingest_generation,json=ingestGeneration,proto3" json:"ingest_generation,omitempty"`
 	// Mist connector PID bound to ingest_generation. Persisted with the fence so a delayed
 	// PUSH_INPUT_CLOSE can tombstone only the generation whose connector actually ended.
-	IngestConnectorPid int64 `protobuf:"varint,6,opt,name=ingest_connector_pid,json=ingestConnectorPid,proto3" json:"ingest_connector_pid,omitempty"`
+	IngestConnectorPid int64             `protobuf:"varint,6,opt,name=ingest_connector_pid,json=ingestConnectorPid,proto3" json:"ingest_connector_pid,omitempty"`
+	Action             MistTriggerAction `protobuf:"varint,7,opt,name=action,proto3,enum=helmsmancontrol.MistTriggerAction" json:"action,omitempty"`
+	Reason             string            `protobuf:"bytes,8,opt,name=reason,proto3" json:"reason,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -6151,6 +6227,20 @@ func (x *MistTriggerResponse) GetIngestConnectorPid() int64 {
 		return x.IngestConnectorPid
 	}
 	return 0
+}
+
+func (x *MistTriggerResponse) GetAction() MistTriggerAction {
+	if x != nil {
+		return x.Action
+	}
+	return MistTriggerAction_MIST_TRIGGER_ACTION_UNSPECIFIED
+}
+
+func (x *MistTriggerResponse) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
 }
 
 // MistTriggerAck is Foghorn's durable acknowledgement for non-blocking
@@ -19502,7 +19592,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\amessage\x18\x02 \x01(\tR\amessage\"\x83\x01\n" +
 	"\tHeartbeat\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12]\n" +
-	"\x17applied_managed_streams\x18\x02 \x03(\v2%.helmsmancontrol.AppliedManagedStreamR\x15appliedManagedStreams\"\xde\x19\n" +
+	"\x17applied_managed_streams\x18\x02 \x03(\v2%.helmsmancontrol.AppliedManagedStreamR\x15appliedManagedStreams\"\xb1\x1a\n" +
 	"\vMistTrigger\x12!\n" +
 	"\ftrigger_type\x18\x01 \x01(\tR\vtriggerType\x12\x17\n" +
 	"\anode_id\x18\x03 \x01(\tR\x06nodeId\x12\x1c\n" +
@@ -19555,7 +19645,9 @@ const file_ipc_proto_rawDesc = "" +
 	"\x0eschema_version\x186 \x01(\x05R\rschemaVersion\x12%\n" +
 	"\x0ecorrelation_id\x187 \x01(\tR\rcorrelationId\x12!\n" +
 	"\fcausation_id\x188 \x01(\tR\vcausationId\x12\x19\n" +
-	"\bevent_id\x189 \x01(\tR\aeventIdB\x11\n" +
+	"\bevent_id\x189 \x01(\tR\aeventId\x12!\n" +
+	"\ftrigger_uuid\x18: \x01(\tR\vtriggerUuid\x12.\n" +
+	"\x13trigger_unix_millis\x18; \x01(\x03R\x11triggerUnixMillisB\x11\n" +
 	"\x0ftrigger_payloadB\f\n" +
 	"\n" +
 	"_tenant_idB\n" +
@@ -19569,7 +19661,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\vpayload_raw\x18\x01 \x01(\fR\n" +
 	"payloadRaw\x12\x1f\n" +
 	"\vparse_error\x18\x02 \x01(\tR\n" +
-	"parseError\"\x86\x02\n" +
+	"parseError\"\xda\x02\n" +
 	"\x13MistTriggerResponse\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1a\n" +
@@ -19578,7 +19670,9 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"error_code\x18\x04 \x01(\x0e2 .helmsmancontrol.IngestErrorCodeR\terrorCode\x12+\n" +
 	"\x11ingest_generation\x18\x05 \x01(\tR\x10ingestGeneration\x120\n" +
-	"\x14ingest_connector_pid\x18\x06 \x01(\x03R\x12ingestConnectorPid\"\xd1\x01\n" +
+	"\x14ingest_connector_pid\x18\x06 \x01(\x03R\x12ingestConnectorPid\x12:\n" +
+	"\x06action\x18\a \x01(\x0e2\".helmsmancontrol.MistTriggerActionR\x06action\x12\x16\n" +
+	"\x06reason\x18\b \x01(\tR\x06reason\"\xd1\x01\n" +
 	"\x0eMistTriggerAck\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x18\n" +
@@ -21596,7 +21690,14 @@ const file_ipc_proto_rawDesc = "" +
 	"!CLUSTER_REJECT_REASON_ELIGIBILITY\x10\x03\x12#\n" +
 	"\x1fCLUSTER_REJECT_REASON_DUPLICATE\x10\x04\x12#\n" +
 	"\x1fCLUSTER_REJECT_REASON_WITHDRAWN\x10\x05\x12\x1f\n" +
-	"\x1bCLUSTER_REJECT_REASON_OTHER\x10c*\x85\x02\n" +
+	"\x1bCLUSTER_REJECT_REASON_OTHER\x10c*\xdc\x01\n" +
+	"\x11MistTriggerAction\x12#\n" +
+	"\x1fMIST_TRIGGER_ACTION_UNSPECIFIED\x10\x00\x12\x1d\n" +
+	"\x19MIST_TRIGGER_ACTION_VALUE\x10\x01\x12\x1c\n" +
+	"\x18MIST_TRIGGER_ACTION_DENY\x10\x02\x12\x1c\n" +
+	"\x18MIST_TRIGGER_ACTION_KEEP\x10\x03\x12\x1f\n" +
+	"\x1bMIST_TRIGGER_ACTION_OFFLINE\x10\x04\x12&\n" +
+	"\"MIST_TRIGGER_ACTION_USE_CONFIGURED\x10\x05*\x85\x02\n" +
 	"\x13TriggerAckErrorCode\x12\x1a\n" +
 	"\x16TRIGGER_ACK_ERROR_NONE\x10\x00\x12\x1e\n" +
 	"\x1aTRIGGER_ACK_ERROR_INTERNAL\x10\x01\x12,\n" +
@@ -21662,397 +21763,399 @@ func file_ipc_proto_rawDescGZIP() []byte {
 	return file_ipc_proto_rawDescData
 }
 
-var file_ipc_proto_enumTypes = make([]protoimpl.EnumInfo, 19)
+var file_ipc_proto_enumTypes = make([]protoimpl.EnumInfo, 20)
 var file_ipc_proto_msgTypes = make([]protoimpl.MessageInfo, 150)
 var file_ipc_proto_goTypes = []any{
 	(ClusterRejectReason)(0),                        // 0: helmsmancontrol.ClusterRejectReason
-	(TriggerAckErrorCode)(0),                        // 1: helmsmancontrol.TriggerAckErrorCode
-	(IngestErrorCode)(0),                            // 2: helmsmancontrol.IngestErrorCode
-	(StorageLocation)(0),                            // 3: helmsmancontrol.StorageLocation
-	(AssetState)(0),                                 // 4: helmsmancontrol.AssetState
-	(NodeOperationalMode)(0),                        // 5: helmsmancontrol.NodeOperationalMode
-	(FederationEventType)(0),                        // 6: helmsmancontrol.FederationEventType
-	(ArtifactEvent_ArtifactType)(0),                 // 7: helmsmancontrol.ArtifactEvent.ArtifactType
-	(ArtifactNodeCopyEvent_Transition)(0),           // 8: helmsmancontrol.ArtifactNodeCopyEvent.Transition
-	(ClipPullRequest_SourceKind)(0),                 // 9: helmsmancontrol.ClipPullRequest.SourceKind
-	(RelayResolveRequest_RelayHint)(0),              // 10: helmsmancontrol.RelayResolveRequest.RelayHint
-	(RelayResolveResponse_CacheDecisionHint)(0),     // 11: helmsmancontrol.RelayResolveResponse.CacheDecisionHint
-	(StorageLifecycleData_Action)(0),                // 12: helmsmancontrol.StorageLifecycleData.Action
-	(StorageLifecycleData_CacheFailureReason)(0),    // 13: helmsmancontrol.StorageLifecycleData.CacheFailureReason
-	(ClipLifecycleData_Stage)(0),                    // 14: helmsmancontrol.ClipLifecycleData.Stage
-	(DVRLifecycleData_Status)(0),                    // 15: helmsmancontrol.DVRLifecycleData.Status
-	(VodLifecycleData_Status)(0),                    // 16: helmsmancontrol.VodLifecycleData.Status
-	(MessageLifecycleData_EventType)(0),             // 17: helmsmancontrol.MessageLifecycleData.EventType
-	(StoredArtifact_Role)(0),                        // 18: helmsmancontrol.StoredArtifact.Role
-	(*GeoBucket)(nil),                               // 19: helmsmancontrol.GeoBucket
-	(*ServiceEvent)(nil),                            // 20: helmsmancontrol.ServiceEvent
-	(*AuthEvent)(nil),                               // 21: helmsmancontrol.AuthEvent
-	(*TenantEvent)(nil),                             // 22: helmsmancontrol.TenantEvent
-	(*ClusterEvent)(nil),                            // 23: helmsmancontrol.ClusterEvent
-	(*StreamChangeEvent)(nil),                       // 24: helmsmancontrol.StreamChangeEvent
-	(*StreamKeyEvent)(nil),                          // 25: helmsmancontrol.StreamKeyEvent
-	(*BillingEvent)(nil),                            // 26: helmsmancontrol.BillingEvent
-	(*ArtifactEvent)(nil),                           // 27: helmsmancontrol.ArtifactEvent
-	(*ArtifactNodeCopyEvent)(nil),                   // 28: helmsmancontrol.ArtifactNodeCopyEvent
-	(*ControlMessage)(nil),                          // 29: helmsmancontrol.ControlMessage
-	(*ApplyManagedStream)(nil),                      // 30: helmsmancontrol.ApplyManagedStream
-	(*RetractManagedStream)(nil),                    // 31: helmsmancontrol.RetractManagedStream
-	(*DrainStreamRequest)(nil),                      // 32: helmsmancontrol.DrainStreamRequest
-	(*DrainStreamResponse)(nil),                     // 33: helmsmancontrol.DrainStreamResponse
-	(*ModeChangeRequest)(nil),                       // 34: helmsmancontrol.ModeChangeRequest
-	(*EdgeComponentVersion)(nil),                    // 35: helmsmancontrol.EdgeComponentVersion
-	(*DesiredComponent)(nil),                        // 36: helmsmancontrol.DesiredComponent
-	(*DesiredStateUpdate)(nil),                      // 37: helmsmancontrol.DesiredStateUpdate
-	(*ComponentApplyResult)(nil),                    // 38: helmsmancontrol.ComponentApplyResult
-	(*UpdateApplyResult)(nil),                       // 39: helmsmancontrol.UpdateApplyResult
-	(*StopSessionsRequest)(nil),                     // 40: helmsmancontrol.StopSessionsRequest
-	(*InvalidateSessionsRequest)(nil),               // 41: helmsmancontrol.InvalidateSessionsRequest
-	(*ActivatePushTargets)(nil),                     // 42: helmsmancontrol.ActivatePushTargets
-	(*PushTargetSpec)(nil),                          // 43: helmsmancontrol.PushTargetSpec
-	(*DeactivatePushTargets)(nil),                   // 44: helmsmancontrol.DeactivatePushTargets
-	(*ActivatePushTargetsResult)(nil),               // 45: helmsmancontrol.ActivatePushTargetsResult
-	(*PushTargetStatusReport)(nil),                  // 46: helmsmancontrol.PushTargetStatusReport
-	(*ArtifactDeleted)(nil),                         // 47: helmsmancontrol.ArtifactDeleted
-	(*Register)(nil),                                // 48: helmsmancontrol.Register
-	(*AppliedManagedStream)(nil),                    // 49: helmsmancontrol.AppliedManagedStream
-	(*NodeFingerprint)(nil),                         // 50: helmsmancontrol.NodeFingerprint
-	(*ClipPullRequest)(nil),                         // 51: helmsmancontrol.ClipPullRequest
-	(*ControlError)(nil),                            // 52: helmsmancontrol.ControlError
-	(*Heartbeat)(nil),                               // 53: helmsmancontrol.Heartbeat
-	(*MistTrigger)(nil),                             // 54: helmsmancontrol.MistTrigger
-	(*RawMistWebhookTrigger)(nil),                   // 55: helmsmancontrol.RawMistWebhookTrigger
-	(*MistTriggerResponse)(nil),                     // 56: helmsmancontrol.MistTriggerResponse
-	(*MistTriggerAck)(nil),                          // 57: helmsmancontrol.MistTriggerAck
-	(*StorageSnapshot)(nil),                         // 58: helmsmancontrol.StorageSnapshot
-	(*TenantStorageUsage)(nil),                      // 59: helmsmancontrol.TenantStorageUsage
-	(*ClipHashRequest)(nil),                         // 60: helmsmancontrol.ClipHashRequest
-	(*ClipHashResponse)(nil),                        // 61: helmsmancontrol.ClipHashResponse
-	(*DVRStartRequest)(nil),                         // 62: helmsmancontrol.DVRStartRequest
-	(*DVRConfig)(nil),                               // 63: helmsmancontrol.DVRConfig
-	(*DVRProgress)(nil),                             // 64: helmsmancontrol.DVRProgress
-	(*DVRStopped)(nil),                              // 65: helmsmancontrol.DVRStopped
-	(*DVRStopRequest)(nil),                          // 66: helmsmancontrol.DVRStopRequest
-	(*RecordDVRSegmentRequest)(nil),                 // 67: helmsmancontrol.RecordDVRSegmentRequest
-	(*RecordDVRSegmentResponse)(nil),                // 68: helmsmancontrol.RecordDVRSegmentResponse
-	(*MarkDVRSegmentUploaded)(nil),                  // 69: helmsmancontrol.MarkDVRSegmentUploaded
-	(*DVRSegmentDropped)(nil),                       // 70: helmsmancontrol.DVRSegmentDropped
-	(*EvictableSegmentsRequest)(nil),                // 71: helmsmancontrol.EvictableSegmentsRequest
-	(*EvictableSegmentsResponse)(nil),               // 72: helmsmancontrol.EvictableSegmentsResponse
-	(*RetryDVRSegmentUpload)(nil),                   // 73: helmsmancontrol.RetryDVRSegmentUpload
-	(*ReclaimDVRSegment)(nil),                       // 74: helmsmancontrol.ReclaimDVRSegment
-	(*RestoreLocalSegmentIndexRequest)(nil),         // 75: helmsmancontrol.RestoreLocalSegmentIndexRequest
-	(*RestoreLocalSegmentIndexResponse)(nil),        // 76: helmsmancontrol.RestoreLocalSegmentIndexResponse
-	(*ClipDeleteRequest)(nil),                       // 77: helmsmancontrol.ClipDeleteRequest
-	(*DVRDeleteRequest)(nil),                        // 78: helmsmancontrol.DVRDeleteRequest
-	(*VodDeleteRequest)(nil),                        // 79: helmsmancontrol.VodDeleteRequest
-	(*FreezePermissionRequest)(nil),                 // 80: helmsmancontrol.FreezePermissionRequest
-	(*FreezePermissionResponse)(nil),                // 81: helmsmancontrol.FreezePermissionResponse
-	(*FreezeRequest)(nil),                           // 82: helmsmancontrol.FreezeRequest
-	(*FreezeProgress)(nil),                          // 83: helmsmancontrol.FreezeProgress
-	(*DVRSegmentRef)(nil),                           // 84: helmsmancontrol.DVRSegmentRef
-	(*CanDeleteRequest)(nil),                        // 85: helmsmancontrol.CanDeleteRequest
-	(*CanDeleteResponse)(nil),                       // 86: helmsmancontrol.CanDeleteResponse
-	(*RelayResolveRequest)(nil),                     // 87: helmsmancontrol.RelayResolveRequest
-	(*RelayResolveResponse)(nil),                    // 88: helmsmancontrol.RelayResolveResponse
-	(*AuthorizeRelayPullRequest)(nil),               // 89: helmsmancontrol.AuthorizeRelayPullRequest
-	(*AuthorizeRelayPullResponse)(nil),              // 90: helmsmancontrol.AuthorizeRelayPullResponse
-	(*SyncComplete)(nil),                            // 91: helmsmancontrol.SyncComplete
-	(*DtshSyncRequest)(nil),                         // 92: helmsmancontrol.DtshSyncRequest
-	(*StorageLifecycleData)(nil),                    // 93: helmsmancontrol.StorageLifecycleData
-	(*PushRewriteTrigger)(nil),                      // 94: helmsmancontrol.PushRewriteTrigger
-	(*ViewerResolveTrigger)(nil),                    // 95: helmsmancontrol.ViewerResolveTrigger
-	(*StreamSourceTrigger)(nil),                     // 96: helmsmancontrol.StreamSourceTrigger
-	(*StreamProcessTrigger)(nil),                    // 97: helmsmancontrol.StreamProcessTrigger
-	(*PushOutStartTrigger)(nil),                     // 98: helmsmancontrol.PushOutStartTrigger
-	(*PushEndTrigger)(nil),                          // 99: helmsmancontrol.PushEndTrigger
-	(*PushInputCloseTrigger)(nil),                   // 100: helmsmancontrol.PushInputCloseTrigger
-	(*ViewerConnectTrigger)(nil),                    // 101: helmsmancontrol.ViewerConnectTrigger
-	(*ViewerDisconnectTrigger)(nil),                 // 102: helmsmancontrol.ViewerDisconnectTrigger
-	(*SessionTimeShare)(nil),                        // 103: helmsmancontrol.SessionTimeShare
-	(*StreamBufferTrigger)(nil),                     // 104: helmsmancontrol.StreamBufferTrigger
-	(*StreamEndTrigger)(nil),                        // 105: helmsmancontrol.StreamEndTrigger
-	(*StreamTrackListTrigger)(nil),                  // 106: helmsmancontrol.StreamTrackListTrigger
-	(*ProcessingSpeedStats)(nil),                    // 107: helmsmancontrol.ProcessingSpeedStats
-	(*RecordingCompleteTrigger)(nil),                // 108: helmsmancontrol.RecordingCompleteTrigger
-	(*RecordingSegmentTrigger)(nil),                 // 109: helmsmancontrol.RecordingSegmentTrigger
-	(*StreamLifecycleUpdate)(nil),                   // 110: helmsmancontrol.StreamLifecycleUpdate
-	(*ClientLifecycleUpdate)(nil),                   // 111: helmsmancontrol.ClientLifecycleUpdate
-	(*ClientLifecycleBatch)(nil),                    // 112: helmsmancontrol.ClientLifecycleBatch
-	(*PlaybackBootResource)(nil),                    // 113: helmsmancontrol.PlaybackBootResource
-	(*PlaybackBootTrace)(nil),                       // 114: helmsmancontrol.PlaybackBootTrace
-	(*PlaybackSessionQoe)(nil),                      // 115: helmsmancontrol.PlaybackSessionQoe
-	(*NodeLifecycleUpdate)(nil),                     // 116: helmsmancontrol.NodeLifecycleUpdate
-	(*LoadBalancingData)(nil),                       // 117: helmsmancontrol.LoadBalancingData
-	(*ClipLifecycleData)(nil),                       // 118: helmsmancontrol.ClipLifecycleData
-	(*DVRLifecycleData)(nil),                        // 119: helmsmancontrol.DVRLifecycleData
-	(*VodLifecycleData)(nil),                        // 120: helmsmancontrol.VodLifecycleData
-	(*MessageLifecycleData)(nil),                    // 121: helmsmancontrol.MessageLifecycleData
-	(*FederationEventData)(nil),                     // 122: helmsmancontrol.FederationEventData
-	(*NodeCapabilities)(nil),                        // 123: helmsmancontrol.NodeCapabilities
-	(*ProcessingConfig)(nil),                        // 124: helmsmancontrol.ProcessingConfig
-	(*ProcessBillingEvent)(nil),                     // 125: helmsmancontrol.ProcessBillingEvent
-	(*StorageInfo)(nil),                             // 126: helmsmancontrol.StorageInfo
-	(*ProcessingClassCapacity)(nil),                 // 127: helmsmancontrol.ProcessingClassCapacity
-	(*NodeLimits)(nil),                              // 128: helmsmancontrol.NodeLimits
-	(*StreamData)(nil),                              // 129: helmsmancontrol.StreamData
-	(*StreamTrack)(nil),                             // 130: helmsmancontrol.StreamTrack
-	(*StoredArtifact)(nil),                          // 131: helmsmancontrol.StoredArtifact
-	(*StreamProcess)(nil),                           // 132: helmsmancontrol.StreamProcess
-	(*StreamDef)(nil),                               // 133: helmsmancontrol.StreamDef
-	(*StreamTemplate)(nil),                          // 134: helmsmancontrol.StreamTemplate
-	(*TLSCertBundle)(nil),                           // 135: helmsmancontrol.TLSCertBundle
-	(*ConfigSeed)(nil),                              // 136: helmsmancontrol.ConfigSeed
-	(*ConfigSeedApplyResult)(nil),                   // 137: helmsmancontrol.ConfigSeedApplyResult
-	(*SiteConfig)(nil),                              // 138: helmsmancontrol.SiteConfig
-	(*TranscodeProfile)(nil),                        // 139: helmsmancontrol.TranscodeProfile
-	(*TranscodeJobRequest)(nil),                     // 140: helmsmancontrol.TranscodeJobRequest
-	(*TranscodeJobProgress)(nil),                    // 141: helmsmancontrol.TranscodeJobProgress
-	(*TranscodeJobComplete)(nil),                    // 142: helmsmancontrol.TranscodeJobComplete
-	(*ProcessingJobRequest)(nil),                    // 143: helmsmancontrol.ProcessingJobRequest
-	(*DVRChapterSegmentRef)(nil),                    // 144: helmsmancontrol.DVRChapterSegmentRef
-	(*ProcessingJobResult)(nil),                     // 145: helmsmancontrol.ProcessingJobResult
-	(*ProcessingJobProgress)(nil),                   // 146: helmsmancontrol.ProcessingJobProgress
-	(*APIRequestBatch)(nil),                         // 147: helmsmancontrol.APIRequestBatch
-	(*APIRequestAggregate)(nil),                     // 148: helmsmancontrol.APIRequestAggregate
-	(*ValidateEdgeTokenRequest)(nil),                // 149: helmsmancontrol.ValidateEdgeTokenRequest
-	(*ValidateEdgeTokenResponse)(nil),               // 150: helmsmancontrol.ValidateEdgeTokenResponse
-	(*EdgeMistAdminSessionRequest)(nil),             // 151: helmsmancontrol.EdgeMistAdminSessionRequest
-	(*EdgeMistAdminSessionResponse)(nil),            // 152: helmsmancontrol.EdgeMistAdminSessionResponse
-	(*ThumbnailUploadRequest)(nil),                  // 153: helmsmancontrol.ThumbnailUploadRequest
-	(*ThumbnailUploadResponse)(nil),                 // 154: helmsmancontrol.ThumbnailUploadResponse
-	(*ThumbnailUploaded)(nil),                       // 155: helmsmancontrol.ThumbnailUploaded
-	(*GatewayTelemetryEvent)(nil),                   // 156: helmsmancontrol.GatewayTelemetryEvent
-	(*OrchestratorVantageGeo)(nil),                  // 157: helmsmancontrol.OrchestratorVantageGeo
-	(*OrchestratorDiscoveryObserved)(nil),           // 158: helmsmancontrol.OrchestratorDiscoveryObserved
-	(*OrchestratorStateUpdate)(nil),                 // 159: helmsmancontrol.OrchestratorStateUpdate
-	(*OrchestratorCapabilityPriceEntry)(nil),        // 160: helmsmancontrol.OrchestratorCapabilityPriceEntry
-	(*OrchestratorTranscodeOutcome)(nil),            // 161: helmsmancontrol.OrchestratorTranscodeOutcome
-	(*OrchestratorAIOutcome)(nil),                   // 162: helmsmancontrol.OrchestratorAIOutcome
-	nil,                                             // 163: helmsmancontrol.FreezeRequest.SegmentUrlsEntry
-	nil,                                             // 164: helmsmancontrol.NodeLifecycleUpdate.StreamsEntry
-	nil,                                             // 165: helmsmancontrol.StreamProcess.ExtraEntry
-	nil,                                             // 166: helmsmancontrol.ProcessingJobRequest.ParamsEntry
-	nil,                                             // 167: helmsmancontrol.ProcessingJobResult.OutputsEntry
-	(*ThumbnailUploadResponse_PresignedUpload)(nil), // 168: helmsmancontrol.ThumbnailUploadResponse.PresignedUpload
-	(*timestamppb.Timestamp)(nil),                   // 169: google.protobuf.Timestamp
-	(*common.SignupAttribution)(nil),                // 170: common.SignupAttribution
-	(*common.EdgeTelemetryConfig)(nil),              // 171: common.EdgeTelemetryConfig
-	(*emptypb.Empty)(nil),                           // 172: google.protobuf.Empty
+	(MistTriggerAction)(0),                          // 1: helmsmancontrol.MistTriggerAction
+	(TriggerAckErrorCode)(0),                        // 2: helmsmancontrol.TriggerAckErrorCode
+	(IngestErrorCode)(0),                            // 3: helmsmancontrol.IngestErrorCode
+	(StorageLocation)(0),                            // 4: helmsmancontrol.StorageLocation
+	(AssetState)(0),                                 // 5: helmsmancontrol.AssetState
+	(NodeOperationalMode)(0),                        // 6: helmsmancontrol.NodeOperationalMode
+	(FederationEventType)(0),                        // 7: helmsmancontrol.FederationEventType
+	(ArtifactEvent_ArtifactType)(0),                 // 8: helmsmancontrol.ArtifactEvent.ArtifactType
+	(ArtifactNodeCopyEvent_Transition)(0),           // 9: helmsmancontrol.ArtifactNodeCopyEvent.Transition
+	(ClipPullRequest_SourceKind)(0),                 // 10: helmsmancontrol.ClipPullRequest.SourceKind
+	(RelayResolveRequest_RelayHint)(0),              // 11: helmsmancontrol.RelayResolveRequest.RelayHint
+	(RelayResolveResponse_CacheDecisionHint)(0),     // 12: helmsmancontrol.RelayResolveResponse.CacheDecisionHint
+	(StorageLifecycleData_Action)(0),                // 13: helmsmancontrol.StorageLifecycleData.Action
+	(StorageLifecycleData_CacheFailureReason)(0),    // 14: helmsmancontrol.StorageLifecycleData.CacheFailureReason
+	(ClipLifecycleData_Stage)(0),                    // 15: helmsmancontrol.ClipLifecycleData.Stage
+	(DVRLifecycleData_Status)(0),                    // 16: helmsmancontrol.DVRLifecycleData.Status
+	(VodLifecycleData_Status)(0),                    // 17: helmsmancontrol.VodLifecycleData.Status
+	(MessageLifecycleData_EventType)(0),             // 18: helmsmancontrol.MessageLifecycleData.EventType
+	(StoredArtifact_Role)(0),                        // 19: helmsmancontrol.StoredArtifact.Role
+	(*GeoBucket)(nil),                               // 20: helmsmancontrol.GeoBucket
+	(*ServiceEvent)(nil),                            // 21: helmsmancontrol.ServiceEvent
+	(*AuthEvent)(nil),                               // 22: helmsmancontrol.AuthEvent
+	(*TenantEvent)(nil),                             // 23: helmsmancontrol.TenantEvent
+	(*ClusterEvent)(nil),                            // 24: helmsmancontrol.ClusterEvent
+	(*StreamChangeEvent)(nil),                       // 25: helmsmancontrol.StreamChangeEvent
+	(*StreamKeyEvent)(nil),                          // 26: helmsmancontrol.StreamKeyEvent
+	(*BillingEvent)(nil),                            // 27: helmsmancontrol.BillingEvent
+	(*ArtifactEvent)(nil),                           // 28: helmsmancontrol.ArtifactEvent
+	(*ArtifactNodeCopyEvent)(nil),                   // 29: helmsmancontrol.ArtifactNodeCopyEvent
+	(*ControlMessage)(nil),                          // 30: helmsmancontrol.ControlMessage
+	(*ApplyManagedStream)(nil),                      // 31: helmsmancontrol.ApplyManagedStream
+	(*RetractManagedStream)(nil),                    // 32: helmsmancontrol.RetractManagedStream
+	(*DrainStreamRequest)(nil),                      // 33: helmsmancontrol.DrainStreamRequest
+	(*DrainStreamResponse)(nil),                     // 34: helmsmancontrol.DrainStreamResponse
+	(*ModeChangeRequest)(nil),                       // 35: helmsmancontrol.ModeChangeRequest
+	(*EdgeComponentVersion)(nil),                    // 36: helmsmancontrol.EdgeComponentVersion
+	(*DesiredComponent)(nil),                        // 37: helmsmancontrol.DesiredComponent
+	(*DesiredStateUpdate)(nil),                      // 38: helmsmancontrol.DesiredStateUpdate
+	(*ComponentApplyResult)(nil),                    // 39: helmsmancontrol.ComponentApplyResult
+	(*UpdateApplyResult)(nil),                       // 40: helmsmancontrol.UpdateApplyResult
+	(*StopSessionsRequest)(nil),                     // 41: helmsmancontrol.StopSessionsRequest
+	(*InvalidateSessionsRequest)(nil),               // 42: helmsmancontrol.InvalidateSessionsRequest
+	(*ActivatePushTargets)(nil),                     // 43: helmsmancontrol.ActivatePushTargets
+	(*PushTargetSpec)(nil),                          // 44: helmsmancontrol.PushTargetSpec
+	(*DeactivatePushTargets)(nil),                   // 45: helmsmancontrol.DeactivatePushTargets
+	(*ActivatePushTargetsResult)(nil),               // 46: helmsmancontrol.ActivatePushTargetsResult
+	(*PushTargetStatusReport)(nil),                  // 47: helmsmancontrol.PushTargetStatusReport
+	(*ArtifactDeleted)(nil),                         // 48: helmsmancontrol.ArtifactDeleted
+	(*Register)(nil),                                // 49: helmsmancontrol.Register
+	(*AppliedManagedStream)(nil),                    // 50: helmsmancontrol.AppliedManagedStream
+	(*NodeFingerprint)(nil),                         // 51: helmsmancontrol.NodeFingerprint
+	(*ClipPullRequest)(nil),                         // 52: helmsmancontrol.ClipPullRequest
+	(*ControlError)(nil),                            // 53: helmsmancontrol.ControlError
+	(*Heartbeat)(nil),                               // 54: helmsmancontrol.Heartbeat
+	(*MistTrigger)(nil),                             // 55: helmsmancontrol.MistTrigger
+	(*RawMistWebhookTrigger)(nil),                   // 56: helmsmancontrol.RawMistWebhookTrigger
+	(*MistTriggerResponse)(nil),                     // 57: helmsmancontrol.MistTriggerResponse
+	(*MistTriggerAck)(nil),                          // 58: helmsmancontrol.MistTriggerAck
+	(*StorageSnapshot)(nil),                         // 59: helmsmancontrol.StorageSnapshot
+	(*TenantStorageUsage)(nil),                      // 60: helmsmancontrol.TenantStorageUsage
+	(*ClipHashRequest)(nil),                         // 61: helmsmancontrol.ClipHashRequest
+	(*ClipHashResponse)(nil),                        // 62: helmsmancontrol.ClipHashResponse
+	(*DVRStartRequest)(nil),                         // 63: helmsmancontrol.DVRStartRequest
+	(*DVRConfig)(nil),                               // 64: helmsmancontrol.DVRConfig
+	(*DVRProgress)(nil),                             // 65: helmsmancontrol.DVRProgress
+	(*DVRStopped)(nil),                              // 66: helmsmancontrol.DVRStopped
+	(*DVRStopRequest)(nil),                          // 67: helmsmancontrol.DVRStopRequest
+	(*RecordDVRSegmentRequest)(nil),                 // 68: helmsmancontrol.RecordDVRSegmentRequest
+	(*RecordDVRSegmentResponse)(nil),                // 69: helmsmancontrol.RecordDVRSegmentResponse
+	(*MarkDVRSegmentUploaded)(nil),                  // 70: helmsmancontrol.MarkDVRSegmentUploaded
+	(*DVRSegmentDropped)(nil),                       // 71: helmsmancontrol.DVRSegmentDropped
+	(*EvictableSegmentsRequest)(nil),                // 72: helmsmancontrol.EvictableSegmentsRequest
+	(*EvictableSegmentsResponse)(nil),               // 73: helmsmancontrol.EvictableSegmentsResponse
+	(*RetryDVRSegmentUpload)(nil),                   // 74: helmsmancontrol.RetryDVRSegmentUpload
+	(*ReclaimDVRSegment)(nil),                       // 75: helmsmancontrol.ReclaimDVRSegment
+	(*RestoreLocalSegmentIndexRequest)(nil),         // 76: helmsmancontrol.RestoreLocalSegmentIndexRequest
+	(*RestoreLocalSegmentIndexResponse)(nil),        // 77: helmsmancontrol.RestoreLocalSegmentIndexResponse
+	(*ClipDeleteRequest)(nil),                       // 78: helmsmancontrol.ClipDeleteRequest
+	(*DVRDeleteRequest)(nil),                        // 79: helmsmancontrol.DVRDeleteRequest
+	(*VodDeleteRequest)(nil),                        // 80: helmsmancontrol.VodDeleteRequest
+	(*FreezePermissionRequest)(nil),                 // 81: helmsmancontrol.FreezePermissionRequest
+	(*FreezePermissionResponse)(nil),                // 82: helmsmancontrol.FreezePermissionResponse
+	(*FreezeRequest)(nil),                           // 83: helmsmancontrol.FreezeRequest
+	(*FreezeProgress)(nil),                          // 84: helmsmancontrol.FreezeProgress
+	(*DVRSegmentRef)(nil),                           // 85: helmsmancontrol.DVRSegmentRef
+	(*CanDeleteRequest)(nil),                        // 86: helmsmancontrol.CanDeleteRequest
+	(*CanDeleteResponse)(nil),                       // 87: helmsmancontrol.CanDeleteResponse
+	(*RelayResolveRequest)(nil),                     // 88: helmsmancontrol.RelayResolveRequest
+	(*RelayResolveResponse)(nil),                    // 89: helmsmancontrol.RelayResolveResponse
+	(*AuthorizeRelayPullRequest)(nil),               // 90: helmsmancontrol.AuthorizeRelayPullRequest
+	(*AuthorizeRelayPullResponse)(nil),              // 91: helmsmancontrol.AuthorizeRelayPullResponse
+	(*SyncComplete)(nil),                            // 92: helmsmancontrol.SyncComplete
+	(*DtshSyncRequest)(nil),                         // 93: helmsmancontrol.DtshSyncRequest
+	(*StorageLifecycleData)(nil),                    // 94: helmsmancontrol.StorageLifecycleData
+	(*PushRewriteTrigger)(nil),                      // 95: helmsmancontrol.PushRewriteTrigger
+	(*ViewerResolveTrigger)(nil),                    // 96: helmsmancontrol.ViewerResolveTrigger
+	(*StreamSourceTrigger)(nil),                     // 97: helmsmancontrol.StreamSourceTrigger
+	(*StreamProcessTrigger)(nil),                    // 98: helmsmancontrol.StreamProcessTrigger
+	(*PushOutStartTrigger)(nil),                     // 99: helmsmancontrol.PushOutStartTrigger
+	(*PushEndTrigger)(nil),                          // 100: helmsmancontrol.PushEndTrigger
+	(*PushInputCloseTrigger)(nil),                   // 101: helmsmancontrol.PushInputCloseTrigger
+	(*ViewerConnectTrigger)(nil),                    // 102: helmsmancontrol.ViewerConnectTrigger
+	(*ViewerDisconnectTrigger)(nil),                 // 103: helmsmancontrol.ViewerDisconnectTrigger
+	(*SessionTimeShare)(nil),                        // 104: helmsmancontrol.SessionTimeShare
+	(*StreamBufferTrigger)(nil),                     // 105: helmsmancontrol.StreamBufferTrigger
+	(*StreamEndTrigger)(nil),                        // 106: helmsmancontrol.StreamEndTrigger
+	(*StreamTrackListTrigger)(nil),                  // 107: helmsmancontrol.StreamTrackListTrigger
+	(*ProcessingSpeedStats)(nil),                    // 108: helmsmancontrol.ProcessingSpeedStats
+	(*RecordingCompleteTrigger)(nil),                // 109: helmsmancontrol.RecordingCompleteTrigger
+	(*RecordingSegmentTrigger)(nil),                 // 110: helmsmancontrol.RecordingSegmentTrigger
+	(*StreamLifecycleUpdate)(nil),                   // 111: helmsmancontrol.StreamLifecycleUpdate
+	(*ClientLifecycleUpdate)(nil),                   // 112: helmsmancontrol.ClientLifecycleUpdate
+	(*ClientLifecycleBatch)(nil),                    // 113: helmsmancontrol.ClientLifecycleBatch
+	(*PlaybackBootResource)(nil),                    // 114: helmsmancontrol.PlaybackBootResource
+	(*PlaybackBootTrace)(nil),                       // 115: helmsmancontrol.PlaybackBootTrace
+	(*PlaybackSessionQoe)(nil),                      // 116: helmsmancontrol.PlaybackSessionQoe
+	(*NodeLifecycleUpdate)(nil),                     // 117: helmsmancontrol.NodeLifecycleUpdate
+	(*LoadBalancingData)(nil),                       // 118: helmsmancontrol.LoadBalancingData
+	(*ClipLifecycleData)(nil),                       // 119: helmsmancontrol.ClipLifecycleData
+	(*DVRLifecycleData)(nil),                        // 120: helmsmancontrol.DVRLifecycleData
+	(*VodLifecycleData)(nil),                        // 121: helmsmancontrol.VodLifecycleData
+	(*MessageLifecycleData)(nil),                    // 122: helmsmancontrol.MessageLifecycleData
+	(*FederationEventData)(nil),                     // 123: helmsmancontrol.FederationEventData
+	(*NodeCapabilities)(nil),                        // 124: helmsmancontrol.NodeCapabilities
+	(*ProcessingConfig)(nil),                        // 125: helmsmancontrol.ProcessingConfig
+	(*ProcessBillingEvent)(nil),                     // 126: helmsmancontrol.ProcessBillingEvent
+	(*StorageInfo)(nil),                             // 127: helmsmancontrol.StorageInfo
+	(*ProcessingClassCapacity)(nil),                 // 128: helmsmancontrol.ProcessingClassCapacity
+	(*NodeLimits)(nil),                              // 129: helmsmancontrol.NodeLimits
+	(*StreamData)(nil),                              // 130: helmsmancontrol.StreamData
+	(*StreamTrack)(nil),                             // 131: helmsmancontrol.StreamTrack
+	(*StoredArtifact)(nil),                          // 132: helmsmancontrol.StoredArtifact
+	(*StreamProcess)(nil),                           // 133: helmsmancontrol.StreamProcess
+	(*StreamDef)(nil),                               // 134: helmsmancontrol.StreamDef
+	(*StreamTemplate)(nil),                          // 135: helmsmancontrol.StreamTemplate
+	(*TLSCertBundle)(nil),                           // 136: helmsmancontrol.TLSCertBundle
+	(*ConfigSeed)(nil),                              // 137: helmsmancontrol.ConfigSeed
+	(*ConfigSeedApplyResult)(nil),                   // 138: helmsmancontrol.ConfigSeedApplyResult
+	(*SiteConfig)(nil),                              // 139: helmsmancontrol.SiteConfig
+	(*TranscodeProfile)(nil),                        // 140: helmsmancontrol.TranscodeProfile
+	(*TranscodeJobRequest)(nil),                     // 141: helmsmancontrol.TranscodeJobRequest
+	(*TranscodeJobProgress)(nil),                    // 142: helmsmancontrol.TranscodeJobProgress
+	(*TranscodeJobComplete)(nil),                    // 143: helmsmancontrol.TranscodeJobComplete
+	(*ProcessingJobRequest)(nil),                    // 144: helmsmancontrol.ProcessingJobRequest
+	(*DVRChapterSegmentRef)(nil),                    // 145: helmsmancontrol.DVRChapterSegmentRef
+	(*ProcessingJobResult)(nil),                     // 146: helmsmancontrol.ProcessingJobResult
+	(*ProcessingJobProgress)(nil),                   // 147: helmsmancontrol.ProcessingJobProgress
+	(*APIRequestBatch)(nil),                         // 148: helmsmancontrol.APIRequestBatch
+	(*APIRequestAggregate)(nil),                     // 149: helmsmancontrol.APIRequestAggregate
+	(*ValidateEdgeTokenRequest)(nil),                // 150: helmsmancontrol.ValidateEdgeTokenRequest
+	(*ValidateEdgeTokenResponse)(nil),               // 151: helmsmancontrol.ValidateEdgeTokenResponse
+	(*EdgeMistAdminSessionRequest)(nil),             // 152: helmsmancontrol.EdgeMistAdminSessionRequest
+	(*EdgeMistAdminSessionResponse)(nil),            // 153: helmsmancontrol.EdgeMistAdminSessionResponse
+	(*ThumbnailUploadRequest)(nil),                  // 154: helmsmancontrol.ThumbnailUploadRequest
+	(*ThumbnailUploadResponse)(nil),                 // 155: helmsmancontrol.ThumbnailUploadResponse
+	(*ThumbnailUploaded)(nil),                       // 156: helmsmancontrol.ThumbnailUploaded
+	(*GatewayTelemetryEvent)(nil),                   // 157: helmsmancontrol.GatewayTelemetryEvent
+	(*OrchestratorVantageGeo)(nil),                  // 158: helmsmancontrol.OrchestratorVantageGeo
+	(*OrchestratorDiscoveryObserved)(nil),           // 159: helmsmancontrol.OrchestratorDiscoveryObserved
+	(*OrchestratorStateUpdate)(nil),                 // 160: helmsmancontrol.OrchestratorStateUpdate
+	(*OrchestratorCapabilityPriceEntry)(nil),        // 161: helmsmancontrol.OrchestratorCapabilityPriceEntry
+	(*OrchestratorTranscodeOutcome)(nil),            // 162: helmsmancontrol.OrchestratorTranscodeOutcome
+	(*OrchestratorAIOutcome)(nil),                   // 163: helmsmancontrol.OrchestratorAIOutcome
+	nil,                                             // 164: helmsmancontrol.FreezeRequest.SegmentUrlsEntry
+	nil,                                             // 165: helmsmancontrol.NodeLifecycleUpdate.StreamsEntry
+	nil,                                             // 166: helmsmancontrol.StreamProcess.ExtraEntry
+	nil,                                             // 167: helmsmancontrol.ProcessingJobRequest.ParamsEntry
+	nil,                                             // 168: helmsmancontrol.ProcessingJobResult.OutputsEntry
+	(*ThumbnailUploadResponse_PresignedUpload)(nil), // 169: helmsmancontrol.ThumbnailUploadResponse.PresignedUpload
+	(*timestamppb.Timestamp)(nil),                   // 170: google.protobuf.Timestamp
+	(*common.SignupAttribution)(nil),                // 171: common.SignupAttribution
+	(*common.EdgeTelemetryConfig)(nil),              // 172: common.EdgeTelemetryConfig
+	(*emptypb.Empty)(nil),                           // 173: google.protobuf.Empty
 }
 var file_ipc_proto_depIdxs = []int32{
-	169, // 0: helmsmancontrol.ServiceEvent.timestamp:type_name -> google.protobuf.Timestamp
-	147, // 1: helmsmancontrol.ServiceEvent.api_request_batch:type_name -> helmsmancontrol.APIRequestBatch
-	21,  // 2: helmsmancontrol.ServiceEvent.auth_event:type_name -> helmsmancontrol.AuthEvent
-	22,  // 3: helmsmancontrol.ServiceEvent.tenant_event:type_name -> helmsmancontrol.TenantEvent
-	23,  // 4: helmsmancontrol.ServiceEvent.cluster_event:type_name -> helmsmancontrol.ClusterEvent
-	24,  // 5: helmsmancontrol.ServiceEvent.stream_change_event:type_name -> helmsmancontrol.StreamChangeEvent
-	25,  // 6: helmsmancontrol.ServiceEvent.stream_key_event:type_name -> helmsmancontrol.StreamKeyEvent
-	26,  // 7: helmsmancontrol.ServiceEvent.billing_event:type_name -> helmsmancontrol.BillingEvent
-	121, // 8: helmsmancontrol.ServiceEvent.support_event:type_name -> helmsmancontrol.MessageLifecycleData
-	27,  // 9: helmsmancontrol.ServiceEvent.artifact_event:type_name -> helmsmancontrol.ArtifactEvent
-	28,  // 10: helmsmancontrol.ServiceEvent.artifact_node_copy_event:type_name -> helmsmancontrol.ArtifactNodeCopyEvent
-	170, // 11: helmsmancontrol.TenantEvent.attribution:type_name -> common.SignupAttribution
+	170, // 0: helmsmancontrol.ServiceEvent.timestamp:type_name -> google.protobuf.Timestamp
+	148, // 1: helmsmancontrol.ServiceEvent.api_request_batch:type_name -> helmsmancontrol.APIRequestBatch
+	22,  // 2: helmsmancontrol.ServiceEvent.auth_event:type_name -> helmsmancontrol.AuthEvent
+	23,  // 3: helmsmancontrol.ServiceEvent.tenant_event:type_name -> helmsmancontrol.TenantEvent
+	24,  // 4: helmsmancontrol.ServiceEvent.cluster_event:type_name -> helmsmancontrol.ClusterEvent
+	25,  // 5: helmsmancontrol.ServiceEvent.stream_change_event:type_name -> helmsmancontrol.StreamChangeEvent
+	26,  // 6: helmsmancontrol.ServiceEvent.stream_key_event:type_name -> helmsmancontrol.StreamKeyEvent
+	27,  // 7: helmsmancontrol.ServiceEvent.billing_event:type_name -> helmsmancontrol.BillingEvent
+	122, // 8: helmsmancontrol.ServiceEvent.support_event:type_name -> helmsmancontrol.MessageLifecycleData
+	28,  // 9: helmsmancontrol.ServiceEvent.artifact_event:type_name -> helmsmancontrol.ArtifactEvent
+	29,  // 10: helmsmancontrol.ServiceEvent.artifact_node_copy_event:type_name -> helmsmancontrol.ArtifactNodeCopyEvent
+	171, // 11: helmsmancontrol.TenantEvent.attribution:type_name -> common.SignupAttribution
 	0,   // 12: helmsmancontrol.ClusterEvent.reject_reason_code:type_name -> helmsmancontrol.ClusterRejectReason
-	7,   // 13: helmsmancontrol.ArtifactEvent.artifact_type:type_name -> helmsmancontrol.ArtifactEvent.ArtifactType
-	8,   // 14: helmsmancontrol.ArtifactNodeCopyEvent.transition:type_name -> helmsmancontrol.ArtifactNodeCopyEvent.Transition
-	169, // 15: helmsmancontrol.ControlMessage.sent_at:type_name -> google.protobuf.Timestamp
-	48,  // 16: helmsmancontrol.ControlMessage.register:type_name -> helmsmancontrol.Register
-	52,  // 17: helmsmancontrol.ControlMessage.error:type_name -> helmsmancontrol.ControlError
-	53,  // 18: helmsmancontrol.ControlMessage.heartbeat:type_name -> helmsmancontrol.Heartbeat
-	62,  // 19: helmsmancontrol.ControlMessage.dvr_start_request:type_name -> helmsmancontrol.DVRStartRequest
-	64,  // 20: helmsmancontrol.ControlMessage.dvr_progress:type_name -> helmsmancontrol.DVRProgress
-	65,  // 21: helmsmancontrol.ControlMessage.dvr_stopped:type_name -> helmsmancontrol.DVRStopped
-	66,  // 22: helmsmancontrol.ControlMessage.dvr_stop_request:type_name -> helmsmancontrol.DVRStopRequest
-	54,  // 23: helmsmancontrol.ControlMessage.mist_trigger:type_name -> helmsmancontrol.MistTrigger
-	56,  // 24: helmsmancontrol.ControlMessage.mist_trigger_response:type_name -> helmsmancontrol.MistTriggerResponse
-	57,  // 25: helmsmancontrol.ControlMessage.mist_trigger_ack:type_name -> helmsmancontrol.MistTriggerAck
-	136, // 26: helmsmancontrol.ControlMessage.config_seed:type_name -> helmsmancontrol.ConfigSeed
-	137, // 27: helmsmancontrol.ControlMessage.config_seed_apply_result:type_name -> helmsmancontrol.ConfigSeedApplyResult
-	47,  // 28: helmsmancontrol.ControlMessage.artifact_deleted:type_name -> helmsmancontrol.ArtifactDeleted
-	77,  // 29: helmsmancontrol.ControlMessage.clip_delete:type_name -> helmsmancontrol.ClipDeleteRequest
-	78,  // 30: helmsmancontrol.ControlMessage.dvr_delete:type_name -> helmsmancontrol.DVRDeleteRequest
-	79,  // 31: helmsmancontrol.ControlMessage.vod_delete:type_name -> helmsmancontrol.VodDeleteRequest
-	80,  // 32: helmsmancontrol.ControlMessage.freeze_permission_request:type_name -> helmsmancontrol.FreezePermissionRequest
-	81,  // 33: helmsmancontrol.ControlMessage.freeze_permission_response:type_name -> helmsmancontrol.FreezePermissionResponse
-	83,  // 34: helmsmancontrol.ControlMessage.freeze_progress:type_name -> helmsmancontrol.FreezeProgress
-	85,  // 35: helmsmancontrol.ControlMessage.can_delete_request:type_name -> helmsmancontrol.CanDeleteRequest
-	86,  // 36: helmsmancontrol.ControlMessage.can_delete_response:type_name -> helmsmancontrol.CanDeleteResponse
-	91,  // 37: helmsmancontrol.ControlMessage.sync_complete:type_name -> helmsmancontrol.SyncComplete
-	92,  // 38: helmsmancontrol.ControlMessage.dtsh_sync_request:type_name -> helmsmancontrol.DtshSyncRequest
-	82,  // 39: helmsmancontrol.ControlMessage.freeze_request:type_name -> helmsmancontrol.FreezeRequest
-	140, // 40: helmsmancontrol.ControlMessage.transcode_job_request:type_name -> helmsmancontrol.TranscodeJobRequest
-	141, // 41: helmsmancontrol.ControlMessage.transcode_job_progress:type_name -> helmsmancontrol.TranscodeJobProgress
-	142, // 42: helmsmancontrol.ControlMessage.transcode_job_complete:type_name -> helmsmancontrol.TranscodeJobComplete
-	143, // 43: helmsmancontrol.ControlMessage.processing_job_request:type_name -> helmsmancontrol.ProcessingJobRequest
-	145, // 44: helmsmancontrol.ControlMessage.processing_job_result:type_name -> helmsmancontrol.ProcessingJobResult
-	146, // 45: helmsmancontrol.ControlMessage.processing_job_progress:type_name -> helmsmancontrol.ProcessingJobProgress
-	40,  // 46: helmsmancontrol.ControlMessage.stop_sessions_request:type_name -> helmsmancontrol.StopSessionsRequest
-	41,  // 47: helmsmancontrol.ControlMessage.invalidate_sessions_request:type_name -> helmsmancontrol.InvalidateSessionsRequest
-	34,  // 48: helmsmancontrol.ControlMessage.mode_change_request:type_name -> helmsmancontrol.ModeChangeRequest
-	42,  // 49: helmsmancontrol.ControlMessage.activate_push_targets:type_name -> helmsmancontrol.ActivatePushTargets
-	44,  // 50: helmsmancontrol.ControlMessage.deactivate_push_targets:type_name -> helmsmancontrol.DeactivatePushTargets
-	46,  // 51: helmsmancontrol.ControlMessage.push_target_status:type_name -> helmsmancontrol.PushTargetStatusReport
-	149, // 52: helmsmancontrol.ControlMessage.validate_edge_token_request:type_name -> helmsmancontrol.ValidateEdgeTokenRequest
-	150, // 53: helmsmancontrol.ControlMessage.validate_edge_token_response:type_name -> helmsmancontrol.ValidateEdgeTokenResponse
-	151, // 54: helmsmancontrol.ControlMessage.edge_mist_admin_session_request:type_name -> helmsmancontrol.EdgeMistAdminSessionRequest
-	152, // 55: helmsmancontrol.ControlMessage.edge_mist_admin_session_response:type_name -> helmsmancontrol.EdgeMistAdminSessionResponse
-	153, // 56: helmsmancontrol.ControlMessage.thumbnail_upload_request:type_name -> helmsmancontrol.ThumbnailUploadRequest
-	154, // 57: helmsmancontrol.ControlMessage.thumbnail_upload_response:type_name -> helmsmancontrol.ThumbnailUploadResponse
-	155, // 58: helmsmancontrol.ControlMessage.thumbnail_uploaded:type_name -> helmsmancontrol.ThumbnailUploaded
-	37,  // 59: helmsmancontrol.ControlMessage.desired_state_update:type_name -> helmsmancontrol.DesiredStateUpdate
-	39,  // 60: helmsmancontrol.ControlMessage.update_apply_result:type_name -> helmsmancontrol.UpdateApplyResult
-	67,  // 61: helmsmancontrol.ControlMessage.record_dvr_segment_request:type_name -> helmsmancontrol.RecordDVRSegmentRequest
-	68,  // 62: helmsmancontrol.ControlMessage.record_dvr_segment_response:type_name -> helmsmancontrol.RecordDVRSegmentResponse
-	69,  // 63: helmsmancontrol.ControlMessage.mark_dvr_segment_uploaded:type_name -> helmsmancontrol.MarkDVRSegmentUploaded
-	70,  // 64: helmsmancontrol.ControlMessage.dvr_segment_dropped:type_name -> helmsmancontrol.DVRSegmentDropped
-	71,  // 65: helmsmancontrol.ControlMessage.evictable_segments_request:type_name -> helmsmancontrol.EvictableSegmentsRequest
-	72,  // 66: helmsmancontrol.ControlMessage.evictable_segments_response:type_name -> helmsmancontrol.EvictableSegmentsResponse
-	73,  // 67: helmsmancontrol.ControlMessage.retry_dvr_segment_upload:type_name -> helmsmancontrol.RetryDVRSegmentUpload
-	74,  // 68: helmsmancontrol.ControlMessage.reclaim_dvr_segment:type_name -> helmsmancontrol.ReclaimDVRSegment
-	75,  // 69: helmsmancontrol.ControlMessage.restore_local_segment_index_request:type_name -> helmsmancontrol.RestoreLocalSegmentIndexRequest
-	76,  // 70: helmsmancontrol.ControlMessage.restore_local_segment_index_response:type_name -> helmsmancontrol.RestoreLocalSegmentIndexResponse
-	87,  // 71: helmsmancontrol.ControlMessage.relay_resolve_request:type_name -> helmsmancontrol.RelayResolveRequest
-	88,  // 72: helmsmancontrol.ControlMessage.relay_resolve_response:type_name -> helmsmancontrol.RelayResolveResponse
-	30,  // 73: helmsmancontrol.ControlMessage.apply_managed_stream:type_name -> helmsmancontrol.ApplyManagedStream
-	31,  // 74: helmsmancontrol.ControlMessage.retract_managed_stream:type_name -> helmsmancontrol.RetractManagedStream
-	32,  // 75: helmsmancontrol.ControlMessage.drain_stream_request:type_name -> helmsmancontrol.DrainStreamRequest
-	33,  // 76: helmsmancontrol.ControlMessage.drain_stream_response:type_name -> helmsmancontrol.DrainStreamResponse
-	89,  // 77: helmsmancontrol.ControlMessage.authorize_relay_pull_request:type_name -> helmsmancontrol.AuthorizeRelayPullRequest
-	90,  // 78: helmsmancontrol.ControlMessage.authorize_relay_pull_response:type_name -> helmsmancontrol.AuthorizeRelayPullResponse
-	45,  // 79: helmsmancontrol.ControlMessage.activate_push_targets_result:type_name -> helmsmancontrol.ActivatePushTargetsResult
-	5,   // 80: helmsmancontrol.ModeChangeRequest.requested_mode:type_name -> helmsmancontrol.NodeOperationalMode
-	36,  // 81: helmsmancontrol.DesiredStateUpdate.components:type_name -> helmsmancontrol.DesiredComponent
-	169, // 82: helmsmancontrol.DesiredStateUpdate.cordon_token_expires_at:type_name -> google.protobuf.Timestamp
-	38,  // 83: helmsmancontrol.UpdateApplyResult.components:type_name -> helmsmancontrol.ComponentApplyResult
-	43,  // 84: helmsmancontrol.ActivatePushTargets.targets:type_name -> helmsmancontrol.PushTargetSpec
-	50,  // 85: helmsmancontrol.Register.fingerprint:type_name -> helmsmancontrol.NodeFingerprint
-	5,   // 86: helmsmancontrol.Register.requested_mode:type_name -> helmsmancontrol.NodeOperationalMode
-	49,  // 87: helmsmancontrol.Register.applied_managed_streams:type_name -> helmsmancontrol.AppliedManagedStream
-	9,   // 88: helmsmancontrol.ClipPullRequest.source_kind:type_name -> helmsmancontrol.ClipPullRequest.SourceKind
-	49,  // 89: helmsmancontrol.Heartbeat.applied_managed_streams:type_name -> helmsmancontrol.AppliedManagedStream
-	94,  // 90: helmsmancontrol.MistTrigger.push_rewrite:type_name -> helmsmancontrol.PushRewriteTrigger
-	95,  // 91: helmsmancontrol.MistTrigger.play_rewrite:type_name -> helmsmancontrol.ViewerResolveTrigger
-	96,  // 92: helmsmancontrol.MistTrigger.stream_source:type_name -> helmsmancontrol.StreamSourceTrigger
-	98,  // 93: helmsmancontrol.MistTrigger.push_out_start:type_name -> helmsmancontrol.PushOutStartTrigger
-	99,  // 94: helmsmancontrol.MistTrigger.push_end:type_name -> helmsmancontrol.PushEndTrigger
-	101, // 95: helmsmancontrol.MistTrigger.viewer_connect:type_name -> helmsmancontrol.ViewerConnectTrigger
-	102, // 96: helmsmancontrol.MistTrigger.viewer_disconnect:type_name -> helmsmancontrol.ViewerDisconnectTrigger
-	104, // 97: helmsmancontrol.MistTrigger.stream_buffer:type_name -> helmsmancontrol.StreamBufferTrigger
-	105, // 98: helmsmancontrol.MistTrigger.stream_end:type_name -> helmsmancontrol.StreamEndTrigger
-	106, // 99: helmsmancontrol.MistTrigger.track_list:type_name -> helmsmancontrol.StreamTrackListTrigger
-	108, // 100: helmsmancontrol.MistTrigger.recording_complete:type_name -> helmsmancontrol.RecordingCompleteTrigger
-	110, // 101: helmsmancontrol.MistTrigger.stream_lifecycle_update:type_name -> helmsmancontrol.StreamLifecycleUpdate
-	111, // 102: helmsmancontrol.MistTrigger.client_lifecycle_update:type_name -> helmsmancontrol.ClientLifecycleUpdate
-	116, // 103: helmsmancontrol.MistTrigger.node_lifecycle_update:type_name -> helmsmancontrol.NodeLifecycleUpdate
-	117, // 104: helmsmancontrol.MistTrigger.load_balancing_data:type_name -> helmsmancontrol.LoadBalancingData
-	118, // 105: helmsmancontrol.MistTrigger.clip_lifecycle_data:type_name -> helmsmancontrol.ClipLifecycleData
-	119, // 106: helmsmancontrol.MistTrigger.dvr_lifecycle_data:type_name -> helmsmancontrol.DVRLifecycleData
-	58,  // 107: helmsmancontrol.MistTrigger.storage_snapshot:type_name -> helmsmancontrol.StorageSnapshot
-	93,  // 108: helmsmancontrol.MistTrigger.storage_lifecycle_data:type_name -> helmsmancontrol.StorageLifecycleData
-	109, // 109: helmsmancontrol.MistTrigger.recording_segment:type_name -> helmsmancontrol.RecordingSegmentTrigger
-	125, // 110: helmsmancontrol.MistTrigger.process_billing:type_name -> helmsmancontrol.ProcessBillingEvent
-	120, // 111: helmsmancontrol.MistTrigger.vod_lifecycle_data:type_name -> helmsmancontrol.VodLifecycleData
-	147, // 112: helmsmancontrol.MistTrigger.api_request_batch:type_name -> helmsmancontrol.APIRequestBatch
-	121, // 113: helmsmancontrol.MistTrigger.message_lifecycle_data:type_name -> helmsmancontrol.MessageLifecycleData
-	122, // 114: helmsmancontrol.MistTrigger.federation_event_data:type_name -> helmsmancontrol.FederationEventData
-	97,  // 115: helmsmancontrol.MistTrigger.stream_process:type_name -> helmsmancontrol.StreamProcessTrigger
-	112, // 116: helmsmancontrol.MistTrigger.client_lifecycle_batch:type_name -> helmsmancontrol.ClientLifecycleBatch
-	55,  // 117: helmsmancontrol.MistTrigger.raw_mist_webhook:type_name -> helmsmancontrol.RawMistWebhookTrigger
-	100, // 118: helmsmancontrol.MistTrigger.push_input_close:type_name -> helmsmancontrol.PushInputCloseTrigger
-	114, // 119: helmsmancontrol.MistTrigger.playback_boot_trace:type_name -> helmsmancontrol.PlaybackBootTrace
-	115, // 120: helmsmancontrol.MistTrigger.playback_session_qoe:type_name -> helmsmancontrol.PlaybackSessionQoe
-	2,   // 121: helmsmancontrol.MistTriggerResponse.error_code:type_name -> helmsmancontrol.IngestErrorCode
-	1,   // 122: helmsmancontrol.MistTriggerAck.error_code:type_name -> helmsmancontrol.TriggerAckErrorCode
-	123, // 123: helmsmancontrol.StorageSnapshot.capabilities:type_name -> helmsmancontrol.NodeCapabilities
-	59,  // 124: helmsmancontrol.StorageSnapshot.usage:type_name -> helmsmancontrol.TenantStorageUsage
-	63,  // 125: helmsmancontrol.DVRStartRequest.config:type_name -> helmsmancontrol.DVRConfig
-	84,  // 126: helmsmancontrol.RetryDVRSegmentUpload.segments:type_name -> helmsmancontrol.DVRSegmentRef
-	84,  // 127: helmsmancontrol.RestoreLocalSegmentIndexResponse.segments:type_name -> helmsmancontrol.DVRSegmentRef
-	163, // 128: helmsmancontrol.FreezeRequest.segment_urls:type_name -> helmsmancontrol.FreezeRequest.SegmentUrlsEntry
-	10,  // 129: helmsmancontrol.RelayResolveRequest.hint:type_name -> helmsmancontrol.RelayResolveRequest.RelayHint
-	4,   // 130: helmsmancontrol.RelayResolveResponse.state:type_name -> helmsmancontrol.AssetState
-	11,  // 131: helmsmancontrol.RelayResolveResponse.policy_hint:type_name -> helmsmancontrol.RelayResolveResponse.CacheDecisionHint
-	12,  // 132: helmsmancontrol.StorageLifecycleData.action:type_name -> helmsmancontrol.StorageLifecycleData.Action
-	13,  // 133: helmsmancontrol.StorageLifecycleData.reason:type_name -> helmsmancontrol.StorageLifecycleData.CacheFailureReason
-	19,  // 134: helmsmancontrol.PushRewriteTrigger.publisher_bucket:type_name -> helmsmancontrol.GeoBucket
-	19,  // 135: helmsmancontrol.PushRewriteTrigger.node_bucket:type_name -> helmsmancontrol.GeoBucket
-	19,  // 136: helmsmancontrol.ViewerResolveTrigger.client_bucket:type_name -> helmsmancontrol.GeoBucket
-	19,  // 137: helmsmancontrol.ViewerResolveTrigger.node_bucket:type_name -> helmsmancontrol.GeoBucket
-	19,  // 138: helmsmancontrol.ViewerConnectTrigger.client_bucket:type_name -> helmsmancontrol.GeoBucket
-	19,  // 139: helmsmancontrol.ViewerConnectTrigger.node_bucket:type_name -> helmsmancontrol.GeoBucket
-	19,  // 140: helmsmancontrol.ViewerDisconnectTrigger.client_bucket:type_name -> helmsmancontrol.GeoBucket
-	19,  // 141: helmsmancontrol.ViewerDisconnectTrigger.node_bucket:type_name -> helmsmancontrol.GeoBucket
-	103, // 142: helmsmancontrol.ViewerDisconnectTrigger.stream_times:type_name -> helmsmancontrol.SessionTimeShare
-	103, // 143: helmsmancontrol.ViewerDisconnectTrigger.connector_times:type_name -> helmsmancontrol.SessionTimeShare
-	103, // 144: helmsmancontrol.ViewerDisconnectTrigger.host_times:type_name -> helmsmancontrol.SessionTimeShare
-	130, // 145: helmsmancontrol.StreamBufferTrigger.tracks:type_name -> helmsmancontrol.StreamTrack
-	130, // 146: helmsmancontrol.StreamTrackListTrigger.tracks:type_name -> helmsmancontrol.StreamTrack
-	130, // 147: helmsmancontrol.RecordingCompleteTrigger.tracks:type_name -> helmsmancontrol.StreamTrack
-	107, // 148: helmsmancontrol.RecordingCompleteTrigger.processing_speed:type_name -> helmsmancontrol.ProcessingSpeedStats
-	111, // 149: helmsmancontrol.ClientLifecycleBatch.samples:type_name -> helmsmancontrol.ClientLifecycleUpdate
-	113, // 150: helmsmancontrol.PlaybackBootTrace.resources:type_name -> helmsmancontrol.PlaybackBootResource
-	123, // 151: helmsmancontrol.NodeLifecycleUpdate.capabilities:type_name -> helmsmancontrol.NodeCapabilities
-	126, // 152: helmsmancontrol.NodeLifecycleUpdate.storage:type_name -> helmsmancontrol.StorageInfo
-	128, // 153: helmsmancontrol.NodeLifecycleUpdate.limits:type_name -> helmsmancontrol.NodeLimits
-	164, // 154: helmsmancontrol.NodeLifecycleUpdate.streams:type_name -> helmsmancontrol.NodeLifecycleUpdate.StreamsEntry
-	131, // 155: helmsmancontrol.NodeLifecycleUpdate.artifacts:type_name -> helmsmancontrol.StoredArtifact
-	35,  // 156: helmsmancontrol.NodeLifecycleUpdate.component_versions:type_name -> helmsmancontrol.EdgeComponentVersion
-	5,   // 157: helmsmancontrol.NodeLifecycleUpdate.operational_mode:type_name -> helmsmancontrol.NodeOperationalMode
-	19,  // 158: helmsmancontrol.LoadBalancingData.client_bucket:type_name -> helmsmancontrol.GeoBucket
-	19,  // 159: helmsmancontrol.LoadBalancingData.node_bucket:type_name -> helmsmancontrol.GeoBucket
-	14,  // 160: helmsmancontrol.ClipLifecycleData.stage:type_name -> helmsmancontrol.ClipLifecycleData.Stage
-	107, // 161: helmsmancontrol.ClipLifecycleData.processing_speed:type_name -> helmsmancontrol.ProcessingSpeedStats
-	15,  // 162: helmsmancontrol.DVRLifecycleData.status:type_name -> helmsmancontrol.DVRLifecycleData.Status
-	16,  // 163: helmsmancontrol.VodLifecycleData.status:type_name -> helmsmancontrol.VodLifecycleData.Status
-	107, // 164: helmsmancontrol.VodLifecycleData.processing_speed:type_name -> helmsmancontrol.ProcessingSpeedStats
-	17,  // 165: helmsmancontrol.MessageLifecycleData.event_type:type_name -> helmsmancontrol.MessageLifecycleData.EventType
-	6,   // 166: helmsmancontrol.FederationEventData.event_type:type_name -> helmsmancontrol.FederationEventType
-	127, // 167: helmsmancontrol.NodeLimits.processing_classes:type_name -> helmsmancontrol.ProcessingClassCapacity
-	7,   // 168: helmsmancontrol.StoredArtifact.artifact_type:type_name -> helmsmancontrol.ArtifactEvent.ArtifactType
-	18,  // 169: helmsmancontrol.StoredArtifact.role:type_name -> helmsmancontrol.StoredArtifact.Role
-	165, // 170: helmsmancontrol.StreamProcess.extra:type_name -> helmsmancontrol.StreamProcess.ExtraEntry
-	132, // 171: helmsmancontrol.StreamDef.processes:type_name -> helmsmancontrol.StreamProcess
-	133, // 172: helmsmancontrol.StreamTemplate.def:type_name -> helmsmancontrol.StreamDef
-	134, // 173: helmsmancontrol.ConfigSeed.templates:type_name -> helmsmancontrol.StreamTemplate
-	124, // 174: helmsmancontrol.ConfigSeed.processing:type_name -> helmsmancontrol.ProcessingConfig
-	5,   // 175: helmsmancontrol.ConfigSeed.operational_mode:type_name -> helmsmancontrol.NodeOperationalMode
-	135, // 176: helmsmancontrol.ConfigSeed.tls:type_name -> helmsmancontrol.TLSCertBundle
-	138, // 177: helmsmancontrol.ConfigSeed.site:type_name -> helmsmancontrol.SiteConfig
-	171, // 178: helmsmancontrol.ConfigSeed.telemetry:type_name -> common.EdgeTelemetryConfig
-	135, // 179: helmsmancontrol.ConfigSeed.tls_bundles:type_name -> helmsmancontrol.TLSCertBundle
-	169, // 180: helmsmancontrol.ConfigSeedApplyResult.applied_at:type_name -> google.protobuf.Timestamp
-	139, // 181: helmsmancontrol.TranscodeJobRequest.profiles:type_name -> helmsmancontrol.TranscodeProfile
-	166, // 182: helmsmancontrol.ProcessingJobRequest.params:type_name -> helmsmancontrol.ProcessingJobRequest.ParamsEntry
-	144, // 183: helmsmancontrol.ProcessingJobRequest.source_segments:type_name -> helmsmancontrol.DVRChapterSegmentRef
-	167, // 184: helmsmancontrol.ProcessingJobResult.outputs:type_name -> helmsmancontrol.ProcessingJobResult.OutputsEntry
-	130, // 185: helmsmancontrol.ProcessingJobResult.tracks:type_name -> helmsmancontrol.StreamTrack
-	148, // 186: helmsmancontrol.APIRequestBatch.aggregates:type_name -> helmsmancontrol.APIRequestAggregate
-	168, // 187: helmsmancontrol.ThumbnailUploadResponse.uploads:type_name -> helmsmancontrol.ThumbnailUploadResponse.PresignedUpload
-	169, // 188: helmsmancontrol.GatewayTelemetryEvent.timestamp:type_name -> google.protobuf.Timestamp
-	158, // 189: helmsmancontrol.GatewayTelemetryEvent.discovery:type_name -> helmsmancontrol.OrchestratorDiscoveryObserved
-	159, // 190: helmsmancontrol.GatewayTelemetryEvent.state:type_name -> helmsmancontrol.OrchestratorStateUpdate
-	161, // 191: helmsmancontrol.GatewayTelemetryEvent.transcode:type_name -> helmsmancontrol.OrchestratorTranscodeOutcome
-	162, // 192: helmsmancontrol.GatewayTelemetryEvent.ai:type_name -> helmsmancontrol.OrchestratorAIOutcome
-	169, // 193: helmsmancontrol.OrchestratorVantageGeo.geo_resolved_at:type_name -> google.protobuf.Timestamp
-	157, // 194: helmsmancontrol.OrchestratorDiscoveryObserved.vantage:type_name -> helmsmancontrol.OrchestratorVantageGeo
-	157, // 195: helmsmancontrol.OrchestratorStateUpdate.vantage:type_name -> helmsmancontrol.OrchestratorVantageGeo
-	160, // 196: helmsmancontrol.OrchestratorStateUpdate.capability_price_entries:type_name -> helmsmancontrol.OrchestratorCapabilityPriceEntry
-	129, // 197: helmsmancontrol.NodeLifecycleUpdate.StreamsEntry.value:type_name -> helmsmancontrol.StreamData
-	29,  // 198: helmsmancontrol.HelmsmanControl.Connect:input_type -> helmsmancontrol.ControlMessage
-	60,  // 199: helmsmancontrol.HelmsmanControl.ResolveClipHash:input_type -> helmsmancontrol.ClipHashRequest
-	54,  // 200: helmsmancontrol.DecklogService.SendEvent:input_type -> helmsmancontrol.MistTrigger
-	20,  // 201: helmsmancontrol.DecklogService.SendServiceEvent:input_type -> helmsmancontrol.ServiceEvent
-	156, // 202: helmsmancontrol.DecklogService.SendGatewayTelemetry:input_type -> helmsmancontrol.GatewayTelemetryEvent
-	29,  // 203: helmsmancontrol.HelmsmanControl.Connect:output_type -> helmsmancontrol.ControlMessage
-	61,  // 204: helmsmancontrol.HelmsmanControl.ResolveClipHash:output_type -> helmsmancontrol.ClipHashResponse
-	172, // 205: helmsmancontrol.DecklogService.SendEvent:output_type -> google.protobuf.Empty
-	172, // 206: helmsmancontrol.DecklogService.SendServiceEvent:output_type -> google.protobuf.Empty
-	172, // 207: helmsmancontrol.DecklogService.SendGatewayTelemetry:output_type -> google.protobuf.Empty
-	203, // [203:208] is the sub-list for method output_type
-	198, // [198:203] is the sub-list for method input_type
-	198, // [198:198] is the sub-list for extension type_name
-	198, // [198:198] is the sub-list for extension extendee
-	0,   // [0:198] is the sub-list for field type_name
+	8,   // 13: helmsmancontrol.ArtifactEvent.artifact_type:type_name -> helmsmancontrol.ArtifactEvent.ArtifactType
+	9,   // 14: helmsmancontrol.ArtifactNodeCopyEvent.transition:type_name -> helmsmancontrol.ArtifactNodeCopyEvent.Transition
+	170, // 15: helmsmancontrol.ControlMessage.sent_at:type_name -> google.protobuf.Timestamp
+	49,  // 16: helmsmancontrol.ControlMessage.register:type_name -> helmsmancontrol.Register
+	53,  // 17: helmsmancontrol.ControlMessage.error:type_name -> helmsmancontrol.ControlError
+	54,  // 18: helmsmancontrol.ControlMessage.heartbeat:type_name -> helmsmancontrol.Heartbeat
+	63,  // 19: helmsmancontrol.ControlMessage.dvr_start_request:type_name -> helmsmancontrol.DVRStartRequest
+	65,  // 20: helmsmancontrol.ControlMessage.dvr_progress:type_name -> helmsmancontrol.DVRProgress
+	66,  // 21: helmsmancontrol.ControlMessage.dvr_stopped:type_name -> helmsmancontrol.DVRStopped
+	67,  // 22: helmsmancontrol.ControlMessage.dvr_stop_request:type_name -> helmsmancontrol.DVRStopRequest
+	55,  // 23: helmsmancontrol.ControlMessage.mist_trigger:type_name -> helmsmancontrol.MistTrigger
+	57,  // 24: helmsmancontrol.ControlMessage.mist_trigger_response:type_name -> helmsmancontrol.MistTriggerResponse
+	58,  // 25: helmsmancontrol.ControlMessage.mist_trigger_ack:type_name -> helmsmancontrol.MistTriggerAck
+	137, // 26: helmsmancontrol.ControlMessage.config_seed:type_name -> helmsmancontrol.ConfigSeed
+	138, // 27: helmsmancontrol.ControlMessage.config_seed_apply_result:type_name -> helmsmancontrol.ConfigSeedApplyResult
+	48,  // 28: helmsmancontrol.ControlMessage.artifact_deleted:type_name -> helmsmancontrol.ArtifactDeleted
+	78,  // 29: helmsmancontrol.ControlMessage.clip_delete:type_name -> helmsmancontrol.ClipDeleteRequest
+	79,  // 30: helmsmancontrol.ControlMessage.dvr_delete:type_name -> helmsmancontrol.DVRDeleteRequest
+	80,  // 31: helmsmancontrol.ControlMessage.vod_delete:type_name -> helmsmancontrol.VodDeleteRequest
+	81,  // 32: helmsmancontrol.ControlMessage.freeze_permission_request:type_name -> helmsmancontrol.FreezePermissionRequest
+	82,  // 33: helmsmancontrol.ControlMessage.freeze_permission_response:type_name -> helmsmancontrol.FreezePermissionResponse
+	84,  // 34: helmsmancontrol.ControlMessage.freeze_progress:type_name -> helmsmancontrol.FreezeProgress
+	86,  // 35: helmsmancontrol.ControlMessage.can_delete_request:type_name -> helmsmancontrol.CanDeleteRequest
+	87,  // 36: helmsmancontrol.ControlMessage.can_delete_response:type_name -> helmsmancontrol.CanDeleteResponse
+	92,  // 37: helmsmancontrol.ControlMessage.sync_complete:type_name -> helmsmancontrol.SyncComplete
+	93,  // 38: helmsmancontrol.ControlMessage.dtsh_sync_request:type_name -> helmsmancontrol.DtshSyncRequest
+	83,  // 39: helmsmancontrol.ControlMessage.freeze_request:type_name -> helmsmancontrol.FreezeRequest
+	141, // 40: helmsmancontrol.ControlMessage.transcode_job_request:type_name -> helmsmancontrol.TranscodeJobRequest
+	142, // 41: helmsmancontrol.ControlMessage.transcode_job_progress:type_name -> helmsmancontrol.TranscodeJobProgress
+	143, // 42: helmsmancontrol.ControlMessage.transcode_job_complete:type_name -> helmsmancontrol.TranscodeJobComplete
+	144, // 43: helmsmancontrol.ControlMessage.processing_job_request:type_name -> helmsmancontrol.ProcessingJobRequest
+	146, // 44: helmsmancontrol.ControlMessage.processing_job_result:type_name -> helmsmancontrol.ProcessingJobResult
+	147, // 45: helmsmancontrol.ControlMessage.processing_job_progress:type_name -> helmsmancontrol.ProcessingJobProgress
+	41,  // 46: helmsmancontrol.ControlMessage.stop_sessions_request:type_name -> helmsmancontrol.StopSessionsRequest
+	42,  // 47: helmsmancontrol.ControlMessage.invalidate_sessions_request:type_name -> helmsmancontrol.InvalidateSessionsRequest
+	35,  // 48: helmsmancontrol.ControlMessage.mode_change_request:type_name -> helmsmancontrol.ModeChangeRequest
+	43,  // 49: helmsmancontrol.ControlMessage.activate_push_targets:type_name -> helmsmancontrol.ActivatePushTargets
+	45,  // 50: helmsmancontrol.ControlMessage.deactivate_push_targets:type_name -> helmsmancontrol.DeactivatePushTargets
+	47,  // 51: helmsmancontrol.ControlMessage.push_target_status:type_name -> helmsmancontrol.PushTargetStatusReport
+	150, // 52: helmsmancontrol.ControlMessage.validate_edge_token_request:type_name -> helmsmancontrol.ValidateEdgeTokenRequest
+	151, // 53: helmsmancontrol.ControlMessage.validate_edge_token_response:type_name -> helmsmancontrol.ValidateEdgeTokenResponse
+	152, // 54: helmsmancontrol.ControlMessage.edge_mist_admin_session_request:type_name -> helmsmancontrol.EdgeMistAdminSessionRequest
+	153, // 55: helmsmancontrol.ControlMessage.edge_mist_admin_session_response:type_name -> helmsmancontrol.EdgeMistAdminSessionResponse
+	154, // 56: helmsmancontrol.ControlMessage.thumbnail_upload_request:type_name -> helmsmancontrol.ThumbnailUploadRequest
+	155, // 57: helmsmancontrol.ControlMessage.thumbnail_upload_response:type_name -> helmsmancontrol.ThumbnailUploadResponse
+	156, // 58: helmsmancontrol.ControlMessage.thumbnail_uploaded:type_name -> helmsmancontrol.ThumbnailUploaded
+	38,  // 59: helmsmancontrol.ControlMessage.desired_state_update:type_name -> helmsmancontrol.DesiredStateUpdate
+	40,  // 60: helmsmancontrol.ControlMessage.update_apply_result:type_name -> helmsmancontrol.UpdateApplyResult
+	68,  // 61: helmsmancontrol.ControlMessage.record_dvr_segment_request:type_name -> helmsmancontrol.RecordDVRSegmentRequest
+	69,  // 62: helmsmancontrol.ControlMessage.record_dvr_segment_response:type_name -> helmsmancontrol.RecordDVRSegmentResponse
+	70,  // 63: helmsmancontrol.ControlMessage.mark_dvr_segment_uploaded:type_name -> helmsmancontrol.MarkDVRSegmentUploaded
+	71,  // 64: helmsmancontrol.ControlMessage.dvr_segment_dropped:type_name -> helmsmancontrol.DVRSegmentDropped
+	72,  // 65: helmsmancontrol.ControlMessage.evictable_segments_request:type_name -> helmsmancontrol.EvictableSegmentsRequest
+	73,  // 66: helmsmancontrol.ControlMessage.evictable_segments_response:type_name -> helmsmancontrol.EvictableSegmentsResponse
+	74,  // 67: helmsmancontrol.ControlMessage.retry_dvr_segment_upload:type_name -> helmsmancontrol.RetryDVRSegmentUpload
+	75,  // 68: helmsmancontrol.ControlMessage.reclaim_dvr_segment:type_name -> helmsmancontrol.ReclaimDVRSegment
+	76,  // 69: helmsmancontrol.ControlMessage.restore_local_segment_index_request:type_name -> helmsmancontrol.RestoreLocalSegmentIndexRequest
+	77,  // 70: helmsmancontrol.ControlMessage.restore_local_segment_index_response:type_name -> helmsmancontrol.RestoreLocalSegmentIndexResponse
+	88,  // 71: helmsmancontrol.ControlMessage.relay_resolve_request:type_name -> helmsmancontrol.RelayResolveRequest
+	89,  // 72: helmsmancontrol.ControlMessage.relay_resolve_response:type_name -> helmsmancontrol.RelayResolveResponse
+	31,  // 73: helmsmancontrol.ControlMessage.apply_managed_stream:type_name -> helmsmancontrol.ApplyManagedStream
+	32,  // 74: helmsmancontrol.ControlMessage.retract_managed_stream:type_name -> helmsmancontrol.RetractManagedStream
+	33,  // 75: helmsmancontrol.ControlMessage.drain_stream_request:type_name -> helmsmancontrol.DrainStreamRequest
+	34,  // 76: helmsmancontrol.ControlMessage.drain_stream_response:type_name -> helmsmancontrol.DrainStreamResponse
+	90,  // 77: helmsmancontrol.ControlMessage.authorize_relay_pull_request:type_name -> helmsmancontrol.AuthorizeRelayPullRequest
+	91,  // 78: helmsmancontrol.ControlMessage.authorize_relay_pull_response:type_name -> helmsmancontrol.AuthorizeRelayPullResponse
+	46,  // 79: helmsmancontrol.ControlMessage.activate_push_targets_result:type_name -> helmsmancontrol.ActivatePushTargetsResult
+	6,   // 80: helmsmancontrol.ModeChangeRequest.requested_mode:type_name -> helmsmancontrol.NodeOperationalMode
+	37,  // 81: helmsmancontrol.DesiredStateUpdate.components:type_name -> helmsmancontrol.DesiredComponent
+	170, // 82: helmsmancontrol.DesiredStateUpdate.cordon_token_expires_at:type_name -> google.protobuf.Timestamp
+	39,  // 83: helmsmancontrol.UpdateApplyResult.components:type_name -> helmsmancontrol.ComponentApplyResult
+	44,  // 84: helmsmancontrol.ActivatePushTargets.targets:type_name -> helmsmancontrol.PushTargetSpec
+	51,  // 85: helmsmancontrol.Register.fingerprint:type_name -> helmsmancontrol.NodeFingerprint
+	6,   // 86: helmsmancontrol.Register.requested_mode:type_name -> helmsmancontrol.NodeOperationalMode
+	50,  // 87: helmsmancontrol.Register.applied_managed_streams:type_name -> helmsmancontrol.AppliedManagedStream
+	10,  // 88: helmsmancontrol.ClipPullRequest.source_kind:type_name -> helmsmancontrol.ClipPullRequest.SourceKind
+	50,  // 89: helmsmancontrol.Heartbeat.applied_managed_streams:type_name -> helmsmancontrol.AppliedManagedStream
+	95,  // 90: helmsmancontrol.MistTrigger.push_rewrite:type_name -> helmsmancontrol.PushRewriteTrigger
+	96,  // 91: helmsmancontrol.MistTrigger.play_rewrite:type_name -> helmsmancontrol.ViewerResolveTrigger
+	97,  // 92: helmsmancontrol.MistTrigger.stream_source:type_name -> helmsmancontrol.StreamSourceTrigger
+	99,  // 93: helmsmancontrol.MistTrigger.push_out_start:type_name -> helmsmancontrol.PushOutStartTrigger
+	100, // 94: helmsmancontrol.MistTrigger.push_end:type_name -> helmsmancontrol.PushEndTrigger
+	102, // 95: helmsmancontrol.MistTrigger.viewer_connect:type_name -> helmsmancontrol.ViewerConnectTrigger
+	103, // 96: helmsmancontrol.MistTrigger.viewer_disconnect:type_name -> helmsmancontrol.ViewerDisconnectTrigger
+	105, // 97: helmsmancontrol.MistTrigger.stream_buffer:type_name -> helmsmancontrol.StreamBufferTrigger
+	106, // 98: helmsmancontrol.MistTrigger.stream_end:type_name -> helmsmancontrol.StreamEndTrigger
+	107, // 99: helmsmancontrol.MistTrigger.track_list:type_name -> helmsmancontrol.StreamTrackListTrigger
+	109, // 100: helmsmancontrol.MistTrigger.recording_complete:type_name -> helmsmancontrol.RecordingCompleteTrigger
+	111, // 101: helmsmancontrol.MistTrigger.stream_lifecycle_update:type_name -> helmsmancontrol.StreamLifecycleUpdate
+	112, // 102: helmsmancontrol.MistTrigger.client_lifecycle_update:type_name -> helmsmancontrol.ClientLifecycleUpdate
+	117, // 103: helmsmancontrol.MistTrigger.node_lifecycle_update:type_name -> helmsmancontrol.NodeLifecycleUpdate
+	118, // 104: helmsmancontrol.MistTrigger.load_balancing_data:type_name -> helmsmancontrol.LoadBalancingData
+	119, // 105: helmsmancontrol.MistTrigger.clip_lifecycle_data:type_name -> helmsmancontrol.ClipLifecycleData
+	120, // 106: helmsmancontrol.MistTrigger.dvr_lifecycle_data:type_name -> helmsmancontrol.DVRLifecycleData
+	59,  // 107: helmsmancontrol.MistTrigger.storage_snapshot:type_name -> helmsmancontrol.StorageSnapshot
+	94,  // 108: helmsmancontrol.MistTrigger.storage_lifecycle_data:type_name -> helmsmancontrol.StorageLifecycleData
+	110, // 109: helmsmancontrol.MistTrigger.recording_segment:type_name -> helmsmancontrol.RecordingSegmentTrigger
+	126, // 110: helmsmancontrol.MistTrigger.process_billing:type_name -> helmsmancontrol.ProcessBillingEvent
+	121, // 111: helmsmancontrol.MistTrigger.vod_lifecycle_data:type_name -> helmsmancontrol.VodLifecycleData
+	148, // 112: helmsmancontrol.MistTrigger.api_request_batch:type_name -> helmsmancontrol.APIRequestBatch
+	122, // 113: helmsmancontrol.MistTrigger.message_lifecycle_data:type_name -> helmsmancontrol.MessageLifecycleData
+	123, // 114: helmsmancontrol.MistTrigger.federation_event_data:type_name -> helmsmancontrol.FederationEventData
+	98,  // 115: helmsmancontrol.MistTrigger.stream_process:type_name -> helmsmancontrol.StreamProcessTrigger
+	113, // 116: helmsmancontrol.MistTrigger.client_lifecycle_batch:type_name -> helmsmancontrol.ClientLifecycleBatch
+	56,  // 117: helmsmancontrol.MistTrigger.raw_mist_webhook:type_name -> helmsmancontrol.RawMistWebhookTrigger
+	101, // 118: helmsmancontrol.MistTrigger.push_input_close:type_name -> helmsmancontrol.PushInputCloseTrigger
+	115, // 119: helmsmancontrol.MistTrigger.playback_boot_trace:type_name -> helmsmancontrol.PlaybackBootTrace
+	116, // 120: helmsmancontrol.MistTrigger.playback_session_qoe:type_name -> helmsmancontrol.PlaybackSessionQoe
+	3,   // 121: helmsmancontrol.MistTriggerResponse.error_code:type_name -> helmsmancontrol.IngestErrorCode
+	1,   // 122: helmsmancontrol.MistTriggerResponse.action:type_name -> helmsmancontrol.MistTriggerAction
+	2,   // 123: helmsmancontrol.MistTriggerAck.error_code:type_name -> helmsmancontrol.TriggerAckErrorCode
+	124, // 124: helmsmancontrol.StorageSnapshot.capabilities:type_name -> helmsmancontrol.NodeCapabilities
+	60,  // 125: helmsmancontrol.StorageSnapshot.usage:type_name -> helmsmancontrol.TenantStorageUsage
+	64,  // 126: helmsmancontrol.DVRStartRequest.config:type_name -> helmsmancontrol.DVRConfig
+	85,  // 127: helmsmancontrol.RetryDVRSegmentUpload.segments:type_name -> helmsmancontrol.DVRSegmentRef
+	85,  // 128: helmsmancontrol.RestoreLocalSegmentIndexResponse.segments:type_name -> helmsmancontrol.DVRSegmentRef
+	164, // 129: helmsmancontrol.FreezeRequest.segment_urls:type_name -> helmsmancontrol.FreezeRequest.SegmentUrlsEntry
+	11,  // 130: helmsmancontrol.RelayResolveRequest.hint:type_name -> helmsmancontrol.RelayResolveRequest.RelayHint
+	5,   // 131: helmsmancontrol.RelayResolveResponse.state:type_name -> helmsmancontrol.AssetState
+	12,  // 132: helmsmancontrol.RelayResolveResponse.policy_hint:type_name -> helmsmancontrol.RelayResolveResponse.CacheDecisionHint
+	13,  // 133: helmsmancontrol.StorageLifecycleData.action:type_name -> helmsmancontrol.StorageLifecycleData.Action
+	14,  // 134: helmsmancontrol.StorageLifecycleData.reason:type_name -> helmsmancontrol.StorageLifecycleData.CacheFailureReason
+	20,  // 135: helmsmancontrol.PushRewriteTrigger.publisher_bucket:type_name -> helmsmancontrol.GeoBucket
+	20,  // 136: helmsmancontrol.PushRewriteTrigger.node_bucket:type_name -> helmsmancontrol.GeoBucket
+	20,  // 137: helmsmancontrol.ViewerResolveTrigger.client_bucket:type_name -> helmsmancontrol.GeoBucket
+	20,  // 138: helmsmancontrol.ViewerResolveTrigger.node_bucket:type_name -> helmsmancontrol.GeoBucket
+	20,  // 139: helmsmancontrol.ViewerConnectTrigger.client_bucket:type_name -> helmsmancontrol.GeoBucket
+	20,  // 140: helmsmancontrol.ViewerConnectTrigger.node_bucket:type_name -> helmsmancontrol.GeoBucket
+	20,  // 141: helmsmancontrol.ViewerDisconnectTrigger.client_bucket:type_name -> helmsmancontrol.GeoBucket
+	20,  // 142: helmsmancontrol.ViewerDisconnectTrigger.node_bucket:type_name -> helmsmancontrol.GeoBucket
+	104, // 143: helmsmancontrol.ViewerDisconnectTrigger.stream_times:type_name -> helmsmancontrol.SessionTimeShare
+	104, // 144: helmsmancontrol.ViewerDisconnectTrigger.connector_times:type_name -> helmsmancontrol.SessionTimeShare
+	104, // 145: helmsmancontrol.ViewerDisconnectTrigger.host_times:type_name -> helmsmancontrol.SessionTimeShare
+	131, // 146: helmsmancontrol.StreamBufferTrigger.tracks:type_name -> helmsmancontrol.StreamTrack
+	131, // 147: helmsmancontrol.StreamTrackListTrigger.tracks:type_name -> helmsmancontrol.StreamTrack
+	131, // 148: helmsmancontrol.RecordingCompleteTrigger.tracks:type_name -> helmsmancontrol.StreamTrack
+	108, // 149: helmsmancontrol.RecordingCompleteTrigger.processing_speed:type_name -> helmsmancontrol.ProcessingSpeedStats
+	112, // 150: helmsmancontrol.ClientLifecycleBatch.samples:type_name -> helmsmancontrol.ClientLifecycleUpdate
+	114, // 151: helmsmancontrol.PlaybackBootTrace.resources:type_name -> helmsmancontrol.PlaybackBootResource
+	124, // 152: helmsmancontrol.NodeLifecycleUpdate.capabilities:type_name -> helmsmancontrol.NodeCapabilities
+	127, // 153: helmsmancontrol.NodeLifecycleUpdate.storage:type_name -> helmsmancontrol.StorageInfo
+	129, // 154: helmsmancontrol.NodeLifecycleUpdate.limits:type_name -> helmsmancontrol.NodeLimits
+	165, // 155: helmsmancontrol.NodeLifecycleUpdate.streams:type_name -> helmsmancontrol.NodeLifecycleUpdate.StreamsEntry
+	132, // 156: helmsmancontrol.NodeLifecycleUpdate.artifacts:type_name -> helmsmancontrol.StoredArtifact
+	36,  // 157: helmsmancontrol.NodeLifecycleUpdate.component_versions:type_name -> helmsmancontrol.EdgeComponentVersion
+	6,   // 158: helmsmancontrol.NodeLifecycleUpdate.operational_mode:type_name -> helmsmancontrol.NodeOperationalMode
+	20,  // 159: helmsmancontrol.LoadBalancingData.client_bucket:type_name -> helmsmancontrol.GeoBucket
+	20,  // 160: helmsmancontrol.LoadBalancingData.node_bucket:type_name -> helmsmancontrol.GeoBucket
+	15,  // 161: helmsmancontrol.ClipLifecycleData.stage:type_name -> helmsmancontrol.ClipLifecycleData.Stage
+	108, // 162: helmsmancontrol.ClipLifecycleData.processing_speed:type_name -> helmsmancontrol.ProcessingSpeedStats
+	16,  // 163: helmsmancontrol.DVRLifecycleData.status:type_name -> helmsmancontrol.DVRLifecycleData.Status
+	17,  // 164: helmsmancontrol.VodLifecycleData.status:type_name -> helmsmancontrol.VodLifecycleData.Status
+	108, // 165: helmsmancontrol.VodLifecycleData.processing_speed:type_name -> helmsmancontrol.ProcessingSpeedStats
+	18,  // 166: helmsmancontrol.MessageLifecycleData.event_type:type_name -> helmsmancontrol.MessageLifecycleData.EventType
+	7,   // 167: helmsmancontrol.FederationEventData.event_type:type_name -> helmsmancontrol.FederationEventType
+	128, // 168: helmsmancontrol.NodeLimits.processing_classes:type_name -> helmsmancontrol.ProcessingClassCapacity
+	8,   // 169: helmsmancontrol.StoredArtifact.artifact_type:type_name -> helmsmancontrol.ArtifactEvent.ArtifactType
+	19,  // 170: helmsmancontrol.StoredArtifact.role:type_name -> helmsmancontrol.StoredArtifact.Role
+	166, // 171: helmsmancontrol.StreamProcess.extra:type_name -> helmsmancontrol.StreamProcess.ExtraEntry
+	133, // 172: helmsmancontrol.StreamDef.processes:type_name -> helmsmancontrol.StreamProcess
+	134, // 173: helmsmancontrol.StreamTemplate.def:type_name -> helmsmancontrol.StreamDef
+	135, // 174: helmsmancontrol.ConfigSeed.templates:type_name -> helmsmancontrol.StreamTemplate
+	125, // 175: helmsmancontrol.ConfigSeed.processing:type_name -> helmsmancontrol.ProcessingConfig
+	6,   // 176: helmsmancontrol.ConfigSeed.operational_mode:type_name -> helmsmancontrol.NodeOperationalMode
+	136, // 177: helmsmancontrol.ConfigSeed.tls:type_name -> helmsmancontrol.TLSCertBundle
+	139, // 178: helmsmancontrol.ConfigSeed.site:type_name -> helmsmancontrol.SiteConfig
+	172, // 179: helmsmancontrol.ConfigSeed.telemetry:type_name -> common.EdgeTelemetryConfig
+	136, // 180: helmsmancontrol.ConfigSeed.tls_bundles:type_name -> helmsmancontrol.TLSCertBundle
+	170, // 181: helmsmancontrol.ConfigSeedApplyResult.applied_at:type_name -> google.protobuf.Timestamp
+	140, // 182: helmsmancontrol.TranscodeJobRequest.profiles:type_name -> helmsmancontrol.TranscodeProfile
+	167, // 183: helmsmancontrol.ProcessingJobRequest.params:type_name -> helmsmancontrol.ProcessingJobRequest.ParamsEntry
+	145, // 184: helmsmancontrol.ProcessingJobRequest.source_segments:type_name -> helmsmancontrol.DVRChapterSegmentRef
+	168, // 185: helmsmancontrol.ProcessingJobResult.outputs:type_name -> helmsmancontrol.ProcessingJobResult.OutputsEntry
+	131, // 186: helmsmancontrol.ProcessingJobResult.tracks:type_name -> helmsmancontrol.StreamTrack
+	149, // 187: helmsmancontrol.APIRequestBatch.aggregates:type_name -> helmsmancontrol.APIRequestAggregate
+	169, // 188: helmsmancontrol.ThumbnailUploadResponse.uploads:type_name -> helmsmancontrol.ThumbnailUploadResponse.PresignedUpload
+	170, // 189: helmsmancontrol.GatewayTelemetryEvent.timestamp:type_name -> google.protobuf.Timestamp
+	159, // 190: helmsmancontrol.GatewayTelemetryEvent.discovery:type_name -> helmsmancontrol.OrchestratorDiscoveryObserved
+	160, // 191: helmsmancontrol.GatewayTelemetryEvent.state:type_name -> helmsmancontrol.OrchestratorStateUpdate
+	162, // 192: helmsmancontrol.GatewayTelemetryEvent.transcode:type_name -> helmsmancontrol.OrchestratorTranscodeOutcome
+	163, // 193: helmsmancontrol.GatewayTelemetryEvent.ai:type_name -> helmsmancontrol.OrchestratorAIOutcome
+	170, // 194: helmsmancontrol.OrchestratorVantageGeo.geo_resolved_at:type_name -> google.protobuf.Timestamp
+	158, // 195: helmsmancontrol.OrchestratorDiscoveryObserved.vantage:type_name -> helmsmancontrol.OrchestratorVantageGeo
+	158, // 196: helmsmancontrol.OrchestratorStateUpdate.vantage:type_name -> helmsmancontrol.OrchestratorVantageGeo
+	161, // 197: helmsmancontrol.OrchestratorStateUpdate.capability_price_entries:type_name -> helmsmancontrol.OrchestratorCapabilityPriceEntry
+	130, // 198: helmsmancontrol.NodeLifecycleUpdate.StreamsEntry.value:type_name -> helmsmancontrol.StreamData
+	30,  // 199: helmsmancontrol.HelmsmanControl.Connect:input_type -> helmsmancontrol.ControlMessage
+	61,  // 200: helmsmancontrol.HelmsmanControl.ResolveClipHash:input_type -> helmsmancontrol.ClipHashRequest
+	55,  // 201: helmsmancontrol.DecklogService.SendEvent:input_type -> helmsmancontrol.MistTrigger
+	21,  // 202: helmsmancontrol.DecklogService.SendServiceEvent:input_type -> helmsmancontrol.ServiceEvent
+	157, // 203: helmsmancontrol.DecklogService.SendGatewayTelemetry:input_type -> helmsmancontrol.GatewayTelemetryEvent
+	30,  // 204: helmsmancontrol.HelmsmanControl.Connect:output_type -> helmsmancontrol.ControlMessage
+	62,  // 205: helmsmancontrol.HelmsmanControl.ResolveClipHash:output_type -> helmsmancontrol.ClipHashResponse
+	173, // 206: helmsmancontrol.DecklogService.SendEvent:output_type -> google.protobuf.Empty
+	173, // 207: helmsmancontrol.DecklogService.SendServiceEvent:output_type -> google.protobuf.Empty
+	173, // 208: helmsmancontrol.DecklogService.SendGatewayTelemetry:output_type -> google.protobuf.Empty
+	204, // [204:209] is the sub-list for method output_type
+	199, // [199:204] is the sub-list for method input_type
+	199, // [199:199] is the sub-list for extension type_name
+	199, // [199:199] is the sub-list for extension extendee
+	0,   // [0:199] is the sub-list for field type_name
 }
 
 func init() { file_ipc_proto_init() }
@@ -22219,7 +22322,7 @@ func file_ipc_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ipc_proto_rawDesc), len(file_ipc_proto_rawDesc)),
-			NumEnums:      19,
+			NumEnums:      20,
 			NumMessages:   150,
 			NumExtensions: 0,
 			NumServices:   2,

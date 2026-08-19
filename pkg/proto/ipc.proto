@@ -753,6 +753,8 @@ message MistTrigger {
   // duplicates after at-least-once replication. Producers stamp at emit;
   // Decklog backfills on ingest for backward compat.
   string event_id = 57;
+  string trigger_uuid = 58;       // Stable across Mist's transport retries for one doTrigger invocation.
+  int64 trigger_unix_millis = 59; // Mist event time from X-Trigger-UnixMillis.
 
   reserved 20;               // Legacy: removed stream_bandwidth field
   reserved "stream_bandwidth";
@@ -767,10 +769,19 @@ message RawMistWebhookTrigger {
   string parse_error = 2;
 }
 
+enum MistTriggerAction {
+  MIST_TRIGGER_ACTION_UNSPECIFIED = 0; // Legacy response-body interpretation.
+  MIST_TRIGGER_ACTION_VALUE = 1;
+  MIST_TRIGGER_ACTION_DENY = 2;
+  MIST_TRIGGER_ACTION_KEEP = 3;
+  MIST_TRIGGER_ACTION_OFFLINE = 4;
+  MIST_TRIGGER_ACTION_USE_CONFIGURED = 5;
+}
+
 message MistTriggerResponse {
   string request_id = 1;      // Correlates to MistTrigger.request_id
-  string response = 2;        // What to return to MistServer (empty string aborts for blocking triggers)
-  bool abort = 3;             // Explicit abort flag
+  string response = 2;        // Value returned to MistServer when action is VALUE or unspecified.
+  bool abort = 3; // Compatibility alias for action=DENY.
   IngestErrorCode error_code = 4;
   // Present on an accepted PUSH_REWRITE. Helmsman records this as the current runtime generation
   // and fences delayed activation/deactivation commands against publisher replacement.
@@ -778,6 +789,8 @@ message MistTriggerResponse {
   // Mist connector PID bound to ingest_generation. Persisted with the fence so a delayed
   // PUSH_INPUT_CLOSE can tombstone only the generation whose connector actually ended.
   int64 ingest_connector_pid = 6;
+  MistTriggerAction action = 7;
+  string reason = 8;
 }
 
 // MistTriggerAck is Foghorn's durable acknowledgement for non-blocking
