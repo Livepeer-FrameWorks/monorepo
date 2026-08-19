@@ -1406,7 +1406,7 @@ func TestRawStreamEndUsesEventLogStart(t *testing.T) {
 	tenantID := uuid.NewString()
 	streamID := uuid.NewString()
 	startedAt := time.Unix(1710000000, 0).UTC()
-	endedAt := startedAt.Add(10 * time.Minute)
+	endedAt := startedAt.Add(10*time.Minute + 789*time.Millisecond)
 	conn.addQueryRow("periscope.stream_event_log", startedAt.UnixMilli())
 	trigger := &ipcpb.MistTrigger{
 		NodeId:      "edge-1",
@@ -1450,6 +1450,27 @@ func TestRawStreamEndUsesEventLogStart(t *testing.T) {
 	}
 	if row[13] != endedAt.UnixMilli() {
 		t.Fatalf("expected source_ended_at_ms %d, got %#v", endedAt.UnixMilli(), row[13])
+	}
+	var eventLogQuery *fakeQuery
+	for i := range conn.queries {
+		if conn.queries[i].table == "periscope.stream_event_log" {
+			eventLogQuery = &conn.queries[i]
+			break
+		}
+	}
+	if eventLogQuery == nil || len(eventLogQuery.args) == 0 {
+		t.Fatal("expected event-log start lookup")
+	}
+	if !strings.Contains(eventLogQuery.query, "toUnixTimestamp64Milli") {
+		t.Fatalf("event-log lookup must return signed milliseconds for int64 scan, got query %q", eventLogQuery.query)
+	}
+	gotBoundary, ok := eventLogQuery.args[len(eventLogQuery.args)-1].(time.Time)
+	if !ok {
+		t.Fatalf("prior-end boundary type = %T, want time.Time", eventLogQuery.args[len(eventLogQuery.args)-1])
+	}
+	wantBoundary := endedAt.Truncate(time.Second)
+	if !gotBoundary.Equal(wantBoundary) {
+		t.Fatalf("prior-end boundary = %v, want current end second %v", gotBoundary, wantBoundary)
 	}
 }
 

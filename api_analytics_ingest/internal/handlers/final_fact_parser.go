@@ -949,7 +949,7 @@ func (h *AnalyticsHandler) lookupStreamStartedAtMS(ctx context.Context, lookup s
 
 	endedAt := time.UnixMilli(fallbackEndedAtMS).UTC()
 	rows, err := h.clickhouse.Query(ctx, `
-		SELECT toUnixTimestamp(ifNull(started_at, updated_at)) * 1000
+		SELECT toUnixTimestamp64Milli(toDateTime64(ifNull(started_at, updated_at), 3))
 		FROM periscope.stream_state_current FINAL
 		WHERE tenant_id = ? AND stream_id = ?
 		  AND started_at IS NOT NULL
@@ -1010,8 +1010,14 @@ func (h *AnalyticsHandler) lookupStreamStartedAtMSFromEventLog(ctx context.Conte
 
 func (h *AnalyticsHandler) lookupStreamStartedAtMSFromEventLogScope(ctx context.Context, lookup streamStartLookup, fallbackEndedAtMS int64, nodeID, clusterID, internalName string) int64 {
 	endedAt := time.UnixMilli(fallbackEndedAtMS).UTC()
+	// stream_event_log timestamps have one-second precision, while the durable
+	// raw trigger fence has millisecond precision. Without truncating the prior
+	// end boundary, this STREAM_END's own event-log row (for example 47.000)
+	// compares less than its raw receipt time (47.277) and is mistaken for the
+	// preceding session end, excluding every valid start.
+	priorEndBefore := endedAt.Truncate(time.Second)
 	rows, err := h.clickhouse.Query(ctx, `
-		SELECT toUnixTimestamp(min(timestamp)) * 1000
+		SELECT toUnixTimestamp64Milli(toDateTime64(min(timestamp), 3))
 		FROM periscope.stream_event_log
 		WHERE tenant_id = ?
 		  AND stream_id = ?
@@ -1044,7 +1050,7 @@ func (h *AnalyticsHandler) lookupStreamStartedAtMSFromEventLogScope(ctx context.
 		nodeID, nodeID,
 		clusterID, clusterID,
 		internalName, internalName,
-		endedAt)
+		priorEndBefore)
 	if err != nil {
 		h.logger.WithError(err).Debug("Stream start event-log lookup failed")
 		return 0
