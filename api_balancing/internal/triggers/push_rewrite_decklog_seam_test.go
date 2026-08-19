@@ -175,8 +175,14 @@ func TestPushRewriteTriggerCarriesNoCredentialOnTheWire(t *testing.T) {
 	if got := received[0].GetEventId(); got != "11111111-1111-1111-1111-111111111111" {
 		t.Fatalf("event_id = %q, want the deterministic generation", got)
 	}
+	if got := received[0].GetStreamId(); got != "stream-1" {
+		t.Fatalf("envelope stream_id = %q, want resolved stream-1", got)
+	}
 
 	got := received[0].GetPushRewrite()
+	if got.GetStreamId() != "stream-1" {
+		t.Fatalf("PUSH_REWRITE stream_id = %q, want resolved stream-1", got.GetStreamId())
+	}
 	if got.GetStreamName() != "live+"+internalName {
 		t.Errorf("stream_name on the wire = %q, want the resolved name", got.GetStreamName())
 	}

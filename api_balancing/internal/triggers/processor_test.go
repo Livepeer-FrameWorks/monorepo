@@ -1060,6 +1060,7 @@ func TestHandlePlayRewriteBareMistNativeResolvesThroughInternalName(t *testing.T
 type stubCommodoreInternalService struct {
 	commodorepb.UnimplementedInternalServiceServer
 	validateResponse          *commodorepb.ValidateStreamKeyResponse
+	validateResponseQueue     []*commodorepb.ValidateStreamKeyResponse
 	validateErr               error
 	mu                        sync.Mutex
 	validateClusterIDs        []string
@@ -1072,9 +1073,20 @@ type stubCommodoreInternalService struct {
 
 func (s *stubCommodoreInternalService) ValidateStreamKey(ctx context.Context, req *commodorepb.ValidateStreamKeyRequest) (*commodorepb.ValidateStreamKeyResponse, error) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.validateClusterIDs = append(s.validateClusterIDs, req.GetClusterId())
-	s.mu.Unlock()
+	if len(s.validateResponseQueue) > 0 {
+		response := s.validateResponseQueue[0]
+		s.validateResponseQueue = s.validateResponseQueue[1:]
+		return response, s.validateErr
+	}
 	return s.validateResponse, s.validateErr
+}
+
+func (s *stubCommodoreInternalService) SetValidateResponseQueue(responses ...*commodorepb.ValidateStreamKeyResponse) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.validateResponseQueue = append([]*commodorepb.ValidateStreamKeyResponse(nil), responses...)
 }
 
 func (s *stubCommodoreInternalService) LastValidateClusterID() string {

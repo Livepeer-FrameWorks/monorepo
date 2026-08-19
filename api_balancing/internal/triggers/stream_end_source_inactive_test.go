@@ -147,7 +147,7 @@ func TestApplyOfflineEffect_ThreadsCanceledContextToNodeDispatch(t *testing.T) {
 	}
 }
 
-func installOfflineFenceDB(t *testing.T, includeDVRBackstop bool) sqlmock.Sqlmock {
+func installOfflineFenceDB(t *testing.T, includeDVRBackstop bool, reapLifecycle ...bool) sqlmock.Sqlmock {
 	t.Helper()
 	dbMock, mock, err := sqlmock.New()
 	if err != nil {
@@ -156,6 +156,11 @@ func installOfflineFenceDB(t *testing.T, includeDVRBackstop bool) sqlmock.Sqlmoc
 	prevDB := control.GetDB()
 	control.SetDB(dbMock)
 	t.Cleanup(func() { control.SetDB(prevDB); _ = dbMock.Close() })
+	if len(reapLifecycle) > 0 && reapLifecycle[0] {
+		mock.ExpectBegin()
+		mock.ExpectQuery(`UPDATE foghorn.ingest_sessions`).WillReturnRows(sqlmock.NewRows([]string{"id"}))
+		mock.ExpectCommit()
+	}
 	mock.ExpectBegin()
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT EXISTS`).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
@@ -385,15 +390,17 @@ func TestOwnerVanishRunsStreamEndFinalization(t *testing.T) {
 	tenant := tenantID
 	streamID := "b3b1c1de-0000-4000-8000-000000000002"
 	p := minimalProcessorForStreamEnd(t)
-	mock := installOfflineFenceDB(t, true)
+	mock := installOfflineFenceDB(t, true, true)
 	// The stream was admitted under a resolvable owner; seed the resolver so owner-vanish finalization runs with
 	// the AUTHORITATIVE tenant. (An UNRESOLVED node-asserted tenant is deliberately NOT trusted for the
 	// tenant-scoped effects — see TestOwnerVanishUnresolvedTenantSkipsTenantScopedFinalization.)
 	p.streamCache.Set(tenantID+":"+internal, streamContext{TenantID: tenantID, StreamID: streamID}, time.Minute)
 	_, _, err := p.handleStreamLifecycleUpdate(&ipcpb.MistTrigger{
-		TriggerType: "STREAM_LIFECYCLE_UPDATE",
-		StreamId:    &streamID,
-		NodeId:      "node-ingest",
+		TriggerType:       "STREAM_LIFECYCLE_UPDATE",
+		TriggerUnixMillis: time.Now().UnixMilli(),
+		Blocking:          true,
+		StreamId:          &streamID,
+		NodeId:            "node-ingest",
 		TriggerPayload: &ipcpb.MistTrigger_StreamLifecycleUpdate{
 			StreamLifecycleUpdate: &ipcpb.StreamLifecycleUpdate{
 				TenantId:     &tenant,

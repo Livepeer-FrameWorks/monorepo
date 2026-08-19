@@ -1327,6 +1327,32 @@ func (p *Processor) handleDVRLifecycleData(trigger *ipcpb.MistTrigger) (string, 
 }
 
 // handlePushRewrite processes PUSH_REWRITE trigger (blocking)
+func ingestErrorCodeForStreamKeyRejection(reason commodorepb.StreamKeyRejectionReason) ipcpb.IngestErrorCode {
+	switch reason {
+	case commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_INVALID_KEY,
+		commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_PULL_MODE,
+		commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED,
+		commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_CLASS_MISMATCH,
+		commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_PROTOCOL_NOT_SUPPORTED:
+		// The IPC contract has no separate policy/protocol denial codes. These are
+		// terminal admission denials, so retain the terminal invalid-request code
+		// while preserving Commodore's specific message.
+		return ipcpb.IngestErrorCode_INGEST_ERROR_INVALID_STREAM_KEY
+	case commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_USER_INACTIVE,
+		commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_TENANT_SUSPENDED:
+		return ipcpb.IngestErrorCode_INGEST_ERROR_ACCOUNT_SUSPENDED
+	case commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_BALANCE_NEGATIVE:
+		return ipcpb.IngestErrorCode_INGEST_ERROR_PAYMENT_REQUIRED
+	case commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_DUPLICATE_INGEST:
+		return ipcpb.IngestErrorCode_INGEST_ERROR_DUPLICATE_INGEST
+	case commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY,
+		commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_UNSPECIFIED:
+		return ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL
+	default:
+		return ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL
+	}
+}
+
 func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ bool, retErr error) {
 	payload, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_PushRewrite)
 	if !ok {
@@ -1389,7 +1415,7 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 		if message == "" {
 			message = "invalid stream key"
 		}
-		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INVALID_STREAM_KEY, message)
+		return "", true, ingesterrors.New(ingestErrorCodeForStreamKeyRejection(identity.GetRejectionReason()), message)
 	}
 
 	// An existing session's cluster outranks the node's present registration:
@@ -1467,7 +1493,7 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 		if message == "" {
 			message = "invalid stream key"
 		}
-		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INVALID_STREAM_KEY, message)
+		return "", true, ingesterrors.New(ingestErrorCodeForStreamKeyRejection(streamValidation.GetRejectionReason()), message)
 	}
 
 	// Check if tenant is suspended (prepaid balance < -$10)
@@ -1661,6 +1687,32 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 	pushRewrite.StreamName = "live+" + streamValidation.InternalName
 	if pushURL := pushRewrite.GetPushUrl(); pushURL != "" {
 		pushRewrite.PushUrl = redactStreamKeyInURL(pushURL, publishedKey)
+	}
+
+	// The admission effect owns delivery of the PUSH_REWRITE analytics event,
+	// so its serialized trigger must already contain the resolved identity.
+	// Enrich before minting/persisting that obligation; mutations made after
+	// proto.Marshal are invisible to the durable Decklog payload.
+	if streamValidation.TenantId != "" {
+		trigger.TenantId = &streamValidation.TenantId
+	}
+	if streamValidation.UserId != "" {
+		trigger.UserId = &streamValidation.UserId
+	}
+	if streamValidation.StreamId != "" {
+		trigger.StreamId = &streamValidation.StreamId
+		streamID := streamValidation.StreamId
+		pushRewrite.StreamId = &streamID
+	}
+	if originClusterID := streamValidation.GetOriginClusterId(); originClusterID != "" {
+		trigger.OriginClusterId = &originClusterID
+	}
+	if originClusterID := streamValidation.GetOriginClusterId(); originClusterID != "" &&
+		(trigger.ClusterId == nil || strings.TrimSpace(trigger.GetClusterId()) == "" || strings.TrimSpace(trigger.GetClusterId()) == strings.TrimSpace(p.clusterID)) {
+		trigger.ClusterId = &originClusterID
+	} else if (trigger.ClusterId == nil || strings.TrimSpace(trigger.GetClusterId()) == "") && ingestClusterID != "" {
+		clusterID := ingestClusterID
+		trigger.ClusterId = &clusterID
 	}
 
 	{
@@ -1902,31 +1954,8 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 		p.streamCacheLastErr = ""
 		p.streamCacheMetaMu.Unlock()
 	}
-	if streamValidation.TenantId != "" {
-		trigger.TenantId = &streamValidation.TenantId
-	}
-	if streamValidation.UserId != "" {
-		trigger.UserId = &streamValidation.UserId
-	}
-	if streamValidation.StreamId != "" {
-		trigger.StreamId = &streamValidation.StreamId
-	}
-	if streamValidation.StreamId != "" {
-		streamID := streamValidation.StreamId
-		pushRewrite.StreamId = &streamID
-	}
 	if trigger.GetNodeId() != "" && streamValidation.GetInternalName() != "" {
 		state.DefaultManager().UpdateNodeStats(streamValidation.GetInternalName(), trigger.GetNodeId(), 0, 1, 0, 0, false)
-	}
-	if originClusterID := streamValidation.GetOriginClusterId(); originClusterID != "" {
-		trigger.OriginClusterId = &originClusterID
-	}
-	if originClusterID := streamValidation.GetOriginClusterId(); originClusterID != "" &&
-		(trigger.ClusterId == nil || strings.TrimSpace(trigger.GetClusterId()) == "" || strings.TrimSpace(trigger.GetClusterId()) == strings.TrimSpace(p.clusterID)) {
-		trigger.ClusterId = &originClusterID
-	} else if (trigger.ClusterId == nil || strings.TrimSpace(trigger.GetClusterId()) == "") && ingestClusterID != "" {
-		clusterID := ingestClusterID
-		trigger.ClusterId = &clusterID
 	}
 
 	// The admission's Decklog ingest event is NOT sent here: it is a leg of the durable
@@ -2022,12 +2051,13 @@ func (p *Processor) handlePlayRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 			return "", abort, err
 		}
 	}
-	if err != nil || target == nil {
-		p.logger.WithFields(logging.Fields{
-			"playback_id": playbackID,
-			"error":       err,
-		}).Warn("PLAY_REWRITE: resolver rejected token")
+	if err != nil {
+		p.logger.WithError(err).WithField("playback_id", playbackID).Warn("PLAY_REWRITE: resolver failed")
 		return "", false, nil //nolint:nilerr // resolver-rejection is not a Mist-level error; empty rewrite = not found
+	}
+	if target == nil {
+		p.logger.WithField("playback_id", playbackID).Debug("PLAY_REWRITE: stream not found")
+		return "", false, nil
 	}
 
 	if target.InternalName == "" {
@@ -4172,6 +4202,9 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 			"internal_name": internal,
 			"trigger_type":  trigger.GetTriggerType(),
 		}).Warn("StreamLifecycleUpdate missing stream_id")
+		if trigger.GetBlocking() && slu.GetStatus() == "offline" {
+			return "", false, fmt.Errorf("acknowledged offline lifecycle could not resolve stream identity for %q", internal)
+		}
 		return "", false, nil
 	}
 
@@ -4207,6 +4240,30 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 		if suppressUnverifiedForward {
 			finalizationTenant = ""
 		}
+		eventMillis := trigger.GetTriggerUnixMillis()
+		var reapErr error
+		if trigger.GetBlocking() && finalizationTenant == "" {
+			reapErr = fmt.Errorf("acknowledged offline lifecycle could not resolve tenant for %q", internal)
+		} else if trigger.GetBlocking() && eventMillis <= 0 {
+			reapErr = fmt.Errorf("acknowledged offline lifecycle missing event-time fence for %q", internal)
+		} else if trigger.GetBlocking() {
+			var reaped int
+			reaped, reapErr = control.EndIngestSessionsForStreamEnd(
+				context.Background(), finalizationTenant, nodeID, internal, eventMillis, p.logger,
+			)
+			if reapErr != nil {
+				p.logger.WithError(reapErr).WithFields(logging.Fields{
+					"internal_name": internal,
+					"source_node":   nodeID,
+				}).Error("Vanish ingest-session reaper failed; returning error for acknowledged retry")
+			} else if reaped > 0 {
+				p.logger.WithFields(logging.Fields{
+					"internal_name":  internal,
+					"source_node":    nodeID,
+					"sessions_ended": reaped,
+				}).Info("Vanish reaped ingest session(s) (event-time fenced)")
+			}
+		}
 
 		// ONE coherent, generation-fenced decision gates every stream-wide offline effect, exactly as on
 		// the STREAM_END path: the owner's vanish stands in for a missed/delayed STREAM_END, but it
@@ -4215,7 +4272,7 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 		// NONE of the offline effects run — per-node state, Decklog, the registry flip, capacity,
 		// push targets and federation all stay live.
 		var proceed bool
-		if isStreamWide {
+		if isStreamWide && reapErr == nil {
 			if registry := control.StreamRegistryInstance; registry != nil {
 				decklogPayload, marshalErr := proto.Marshal(trigger)
 				if marshalErr != nil {
@@ -4269,14 +4326,15 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 			}
 		}
 
+		offlineErr := errors.Join(reapErr, vanishStopErr)
 		if !isStreamWide {
 			p.logger.WithFields(offlineSuppressionLogFields(internal, nodeID)).Info("Suppressing offline lifecycle forward; not a stream-wide ending")
-			return "", false, vanishStopErr
+			return "", false, offlineErr
 		}
 		if !proceed {
-			return "", false, vanishStopErr
+			return "", false, offlineErr
 		}
-		return "", false, vanishStopErr
+		return "", false, offlineErr
 	}
 
 	// Forward the enriched StreamLifecycleUpdate to Decklog (unless the tenant is a node assertion we couldn't
