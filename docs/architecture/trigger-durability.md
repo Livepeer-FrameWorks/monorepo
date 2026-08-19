@@ -1,6 +1,6 @@
 # Trigger durability
 
-Final/accounting Mist triggers (USER_END, STREAM_END, PUSH_END, PUSH_INPUT_CLOSE, RECORDING_END, RECORDING_SEGMENT, LIVEPEER_SEGMENT_COMPLETE, PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE) carry the ground-truth facts billing reads from. The pipeline must not drop them on the way from Mist to Kafka. This page describes the contract that guarantees that.
+Final/accounting Mist triggers (USER_END, STREAM_END, PUSH_END, PUSH_INPUT_CLOSE, RECORDING_END, RECORDING_SEGMENT, LIVEPEER_SEGMENT_COMPLETE, PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE) carry the ground-truth facts billing reads from. This page describes the durable delivery contract after Helmsman has accepted one of those HTTP posts. Mist's asynchronous trigger transport does not read the HTTP response, so the guarantee does not cover a connection failure or Helmsman failure before the local WAL append.
 
 ## Why it exists
 
@@ -8,15 +8,15 @@ Before this layer, `HandleUserEnd` in `api_sidecar/internal/handlers/handlers.go
 
 The durability layer closes the gap with three changes:
 
-1. Helmsman persists the trigger to a local write-ahead log before responding to Mist.
+1. Helmsman persists the trigger to a local write-ahead log before returning from the webhook handler.
 2. Foghorn emits a `MistTriggerAck` only after Decklog's `SendEvent` returns success (Decklog returns success only after its Kafka publish commits — so a positive ack means the trigger is durably ingested).
 3. Helmsman waits for the positive ack before truncating the WAL row. On disconnect, restart, or negative-but-retryable ack, the entry stays on disk and replays.
 
-The scope is intentionally narrow: only the eight final/accounting triggers above are wrapped. Best-effort triggers (heartbeats, `USER_NEW` admission, `STREAM_BUFFER` health, etc.) stay on the fire-and-forget path; their loss is recoverable from polling.
+The scope is intentionally narrow: only the eight final/accounting triggers above are wrapped. Best-effort triggers (`STREAM_BUFFER`, `LIVE_TRACK_LIST`, `THUMBNAIL_UPDATED`, and `PROCESS_EXIT`) stay on the fire-and-forget path. Blocking policy triggers have their own synchronous outcome contract; see [Mist trigger contract](mist-trigger-contract.md).
 
 ## Source of truth
 
-- The WAL is **durable transport** — it guarantees no Mist trigger is dropped between Mist and the analytics path.
+- The WAL is **durable transport after local acceptance** — once `Append` succeeds, Helmsman retains the trigger until Foghorn acknowledges the committed Kafka publish or classifies it as permanently invalid.
 - The **billing source of truth** is the finalized-fact tables (`viewer_sessions_final`, `stream_sessions_final`, etc.) derived from the trigger payloads, not the WAL itself.
 - Canonical 5-minute ledgers are deterministic projections of those finalized-fact tables; rollups are caches.
 
@@ -27,14 +27,14 @@ The WAL is therefore an operational safety net, not an authoritative store. Once
 Each trigger gets a stable id derived from the payload at Helmsman:
 
 ```
-source_event_id = hex(sha256(node_id || 0x00 || trigger_type || 0x00 || payload_raw))
+source_event_id = hex(sha256(node_id || 0x00 || trigger_type || 0x00 || payload_raw [|| 0x00 || natural_key]))
 ```
 
 Implementation: `storage.ComputeSourceEventID` in `api_sidecar/internal/storage/trigger_wal.go`.
 
 The id is stamped onto `MistTrigger.RequestId`; Foghorn uses it to address the ack back, and Decklog derives the typed Kafka `event_id` from it as a deterministic UUID. Periscope's current fact tables dedupe on UUID `event_id`, while `raw_mist_triggers` keeps the full source hash as `source_request_id`.
 
-Identical re-deliveries from Mist hash to the same id and collapse on the WAL filename — the WAL is `append-only with idempotent natural key`, not a true journal of distinct attempts.
+The preferred natural key is Mist's retry-stable `X-Trigger-UUID` plus `X-Trigger-UnixMillis`, captured for both typed and parse-failure records. This collapses transport retries while keeping two distinct events with identical bodies separate. Legacy requests without those headers fall back to the body-derived key. The WAL is `append-only with idempotent natural key`, not a journal of delivery attempts.
 
 ## WAL layout
 
@@ -63,8 +63,8 @@ api_sidecar/internal/handlers (Helmsman)
   - forwardDurable() — stamps source_event_id on RequestId,
                        stamps deterministic UUID on EventId,
                        writes to WAL with fsync, kicks forwarder
-  - respond 200 OK to Mist only after the durable write succeeds
-    ↓ (returns to Mist)
+  - return 200 only after the durable write succeeds
+    ↓ (Mist does not read this response for sync:false)
 
 (asynchronously)
 api_sidecar/internal/control trigger_forwarder.go
@@ -105,10 +105,10 @@ Foghorn maps processor errors via `classifyTriggerError` (`api_balancing/interna
 - **api_sidecar crashes between Mist's 200 OK and the next forwarder tick.** WAL is fsynced before the response, so the trigger survives. On restart, the forwarder calls `Pending()` and replays. Same `source_event_id` → idempotent across crashes.
 - **api_balancing crashes during processing.** Helmsman's `awaitAck` times out after 30s, the next forwarder tick re-sends. Foghorn re-enriches and re-publishes; downstream dedup on `EventId`.
 - **Decklog returns Kafka publish error.** Processor returns the error, Foghorn sends a negative retryable ack. WAL entry stays; next tick retries. This includes the raw trigger journal publish. If the underlying Kafka cluster is unavailable for hours, the WAL accumulates — operators see the pending-depth metric and can intervene.
-- **WAL append fails.** Helmsman returns `503` for the trigger handler and emits `mist_webhook_requests_total{status="wal_error"}`. Final/accounting handlers must not acknowledge Mist as successfully accepted if the local durable write failed.
+- **WAL append fails.** Helmsman returns `503` for accurate diagnostics and emits `mist_webhook_requests_total{status="wal_error"}`. Mist does not read asynchronous trigger responses, so this status does not cause Mist to retry. The event was not accepted into the durable boundary.
 - **Helmsman parse/schema error after reading the body.** The raw body is wrapped in `RawMistWebhookTrigger` and durably journaled before `200 OK`, so MistServer parser drift cannot silently drop an accounting trigger. The raw envelope is operator-visible in `raw_mist_triggers`; typed final-fact projection simply skips it until the parser is fixed and the raw record is replayed.
 - **Downstream non-retryable error (schema/tenant).** The WAL entry is moved to a `.dead` file for inspection and is not retried. Re-sending the same payload would fail the same way. Operator inspects by reading the WAL directory.
-- **Trigger hash collision.** Mist would have to deliver two distinct triggers with identical `(node_id, trigger_type, payload_raw)`. SHA-256 collision in practice means this is impossible.
+- **Missing legacy trigger identity.** If Mist headers are absent, two distinct events with identical `(node_id, trigger_type, payload_raw)` collapse to the same source id. Current Mist supplies a distinct UUID for each logical trigger and reuses it only for that trigger's transport attempts, so the normal path does not have this ambiguity.
 
 ## Operational handles
 
