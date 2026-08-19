@@ -244,20 +244,26 @@ func (c *Cache) SetDefault(key string, val interface{}) {
 
 // Peek returns a cached value without triggering a load. Stale entries are allowed.
 func (c *Cache) Peek(key string) (interface{}, bool) {
+	value, ok, _ := c.PeekWithFreshness(key)
+	return value, ok
+}
+
+// PeekWithFreshness returns a cached value without loading and reports whether it is in the SWR window.
+func (c *Cache) PeekWithFreshness(key string) (interface{}, bool, bool) {
 	now := time.Now()
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	e, ok := c.items[key]
 	if !ok {
-		return nil, false
+		return nil, false, false
 	}
 	if now.After(e.staleAt) {
-		return nil, false
+		return nil, false, false
 	}
 	if e.negative {
-		return nil, false
+		return nil, false, false
 	}
-	return e.value, true
+	return e.value, true, !now.Before(e.expiresAt)
 }
 
 // Snapshot returns a copy of current cache entries for debugging/inspection.

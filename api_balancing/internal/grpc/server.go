@@ -2631,23 +2631,31 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *shar
 		billingTarget := control.ResolvePlaybackPolicyTarget(ctx, resolution.ContentId, resolution.InternalName)
 		billingInternalName := billingTarget.InternalName
 		billing := s.cacheInvalidator.GetBillingStatus(ctx, billingInternalName, resolution.TenantId)
-		if billing != nil {
-			// Hard block: tenant suspended (balance < -$10)
-			if billing.IsSuspended && !x402Paid {
-				s.logger.WithFields(logging.Fields{
-					"content_id": req.ContentId,
-					"tenant_id":  resolution.TenantId,
-				}).Warn("Rejecting viewer: content owner suspended")
-				return nil, s.paymentRequiredError(ctx, resolution.TenantId, resourcePath, "payment required - owner account suspended")
-			}
-			// Soft block: balance negative for prepaid (return 402-equivalent)
-			if billing.BillingModel == "prepaid" && billing.IsBalanceNegative && !x402Paid {
-				s.logger.WithFields(logging.Fields{
-					"content_id": req.ContentId,
-					"tenant_id":  resolution.TenantId,
-				}).Warn("Rejecting viewer: content owner balance exhausted (402)")
-				return nil, s.paymentRequiredError(ctx, resolution.TenantId, resourcePath, "payment required - content owner needs to top up balance")
-			}
+		if billing == nil || billing.State == triggers.BillingStatusUnavailable {
+			s.logger.WithFields(logging.Fields{
+				"content_id": req.ContentId,
+				"tenant_id":  resolution.TenantId,
+			}).Warn("Viewer billing authority unavailable")
+			return nil, status.Error(codes.Unavailable, "billing authority unavailable")
+		}
+		// Hard block: tenant suspended (balance < -$10)
+		if billing.IsSuspended && !x402Paid {
+			s.logger.WithFields(logging.Fields{
+				"content_id": req.ContentId,
+				"tenant_id":  resolution.TenantId,
+			}).Warn("Rejecting viewer: content owner suspended")
+			return nil, s.paymentRequiredError(ctx, resolution.TenantId, resourcePath, "payment required - owner account suspended")
+		}
+		// Soft block: balance negative for prepaid (return 402-equivalent)
+		if billing.BillingModel == "prepaid" && billing.IsBalanceNegative && !x402Paid {
+			s.logger.WithFields(logging.Fields{
+				"content_id": req.ContentId,
+				"tenant_id":  resolution.TenantId,
+			}).Warn("Rejecting viewer: content owner balance exhausted (402)")
+			return nil, s.paymentRequiredError(ctx, resolution.TenantId, resourcePath, "payment required - content owner needs to top up balance")
+		}
+		if billing.DeniedReason != "" {
+			return nil, status.Error(codes.PermissionDenied, "content owner is not active")
 		}
 	}
 

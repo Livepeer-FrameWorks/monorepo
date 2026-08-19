@@ -329,37 +329,36 @@ func (s *QuartermasterServer) ValidateTenant(ctx context.Context, req *quarterma
 
 	// Get billing info via Purser gRPC (cross-service API call, not DB join)
 	var billingModel string
-	var isSuspended, isBalanceNegative bool
+	var isSuspended, isBalanceNegative, billingStatusUnavailable bool
 
 	if s.purserClient != nil {
 		billingStatus, err := s.purserClient.GetTenantBillingStatus(ctx, tenantID)
 		if err != nil {
-			// Log but don't fail - billing info is supplementary
 			s.logger.WithFields(logging.Fields{
 				"tenant_id": tenantID,
 				"error":     err,
-			}).Warn("Failed to get billing status from Purser, using defaults")
-			billingModel = "postpaid"
+			}).Warn("Failed to get billing status from Purser")
+			billingStatusUnavailable = true
 		} else {
 			billingModel = billingStatus.BillingModel
 			isSuspended = billingStatus.IsSuspended
 			isBalanceNegative = billingStatus.IsBalanceNegative
 		}
 	} else {
-		// No Purser client configured - use defaults
-		billingModel = "postpaid"
+		billingStatusUnavailable = true
 	}
 
 	return &quartermasterpb.ValidateTenantResponse{
-		Valid:              isActive,
-		TenantId:           tenantID,
-		TenantName:         name,
-		IsActive:           isActive,
-		RateLimitPerMinute: rateLimitPerMinute,
-		RateLimitBurst:     rateLimitBurst,
-		BillingModel:       billingModel,
-		IsSuspended:        isSuspended,
-		IsBalanceNegative:  isBalanceNegative,
+		Valid:                    isActive,
+		TenantId:                 tenantID,
+		TenantName:               name,
+		IsActive:                 isActive,
+		RateLimitPerMinute:       rateLimitPerMinute,
+		RateLimitBurst:           rateLimitBurst,
+		BillingModel:             billingModel,
+		IsSuspended:              isSuspended,
+		IsBalanceNegative:        isBalanceNegative,
+		BillingStatusUnavailable: billingStatusUnavailable,
 	}, nil
 }
 

@@ -119,6 +119,7 @@ type Processor struct {
 	ownerTenantID       string
 
 	streamCache        *cache.Cache // Cache stream context (tenant + user)
+	billingCache       *cache.Cache // Cache tenant billing authority independently of stream identity.
 	streamCacheMetaMu  sync.Mutex
 	streamCacheHits    uint64
 	streamCacheMisses  uint64
@@ -220,6 +221,12 @@ func NewProcessor(logger logging.Logger, commodoreClient *commodore.GRPCClient, 
 		OnHit:  func(_ map[string]string) { atomic.AddUint64(&p.streamCacheHits, 1) },
 		OnMiss: func(_ map[string]string) { atomic.AddUint64(&p.streamCacheMisses, 1) },
 	})
+	p.billingCache = cache.New(cache.Options{
+		TTL:                  10 * time.Minute,
+		StaleWhileRevalidate: streamCacheSWR(),
+		NegativeTTL:          0,
+		MaxEntries:           10000,
+	}, cache.MetricsHooks{})
 
 	p.nodeUUIDCache = cache.New(cache.Options{
 		TTL:                  1 * time.Hour,
@@ -529,13 +536,24 @@ func (p *Processor) StreamContextCacheSnapshot() StreamContextCacheSnapshot {
 	}
 }
 
-// BillingStatus contains billing status for enforcement decisions
+type BillingStatusState string
+
+const (
+	BillingStatusHealthy     BillingStatusState = "healthy"
+	BillingStatusDenied      BillingStatusState = "denied"
+	BillingStatusStaleValid  BillingStatusState = "stale-valid"
+	BillingStatusUnavailable BillingStatusState = "unavailable"
+)
+
+// BillingStatus contains billing status and the confidence of the local decision.
 type BillingStatus struct {
 	TenantID          string
 	BillingModel      string // "postpaid" or "prepaid"
 	IsSuspended       bool   // true if balance < -$10 (hard block)
 	IsBalanceNegative bool   // true if balance <= 0 (402 warning)
 	FromCache         bool   // true if status came from cache
+	State             BillingStatusState
+	DeniedReason      string
 }
 
 // GetBillingStatus looks up billing status for a stream/artifact owner.
@@ -543,49 +561,98 @@ type BillingStatus struct {
 // Parameters:
 //   - internalName: stream's internal name (e.g., "abc123-def456") - used for cache lookup
 //   - tenantID: tenant ID - used for Quartermaster fallback if not in cache
-//
-// Returns nil if status cannot be determined (fail-open).
 func (p *Processor) GetBillingStatus(ctx context.Context, internalName, tenantID string) *BillingStatus {
-	// Try cache first (keyed by tenant + internal name)
+	if tenantID == "" {
+		return &BillingStatus{State: BillingStatusUnavailable}
+	}
+	internalName = mist.ExtractInternalName(internalName)
+
+	var admissionStatus *BillingStatus
+	// Seed tenant-keyed authority from the stream context recorded at admission.
 	if p.streamCache != nil && internalName != "" && tenantID != "" {
 		cacheKey := tenantID + ":" + internalName
 		if cached, ok := p.streamCache.Peek(cacheKey); ok {
 			//nolint:errcheck // cache stores streamContext values; enforced on write
 			info := cached.(streamContext)
-			return &BillingStatus{
+			status := &BillingStatus{
 				TenantID:          info.TenantID,
 				BillingModel:      info.BillingModel,
 				IsSuspended:       info.IsSuspended,
 				IsBalanceNegative: info.IsBalanceNegative,
 				FromCache:         true,
+				State:             billingState(info.BillingModel, info.IsSuspended, info.IsBalanceNegative),
+			}
+			admissionStatus = status
+			if p.billingCache != nil {
+				_, exists, _ := p.billingCache.PeekWithFreshness(tenantID)
+				if !exists {
+					p.billingCache.SetDefault(tenantID, status)
+				}
 			}
 		}
 	}
-
-	// Fallback to Quartermaster if we have tenant ID
-	if p.quartermasterClient != nil && tenantID != "" {
-		qmCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-		defer cancel()
-		resp, err := p.quartermasterClient.ValidateTenant(qmCtx, tenantID, "")
-		if err == nil && resp != nil && resp.Valid {
-			return &BillingStatus{
-				TenantID:          tenantID,
-				BillingModel:      resp.BillingModel,
-				IsSuspended:       resp.IsSuspended,
-				IsBalanceNegative: resp.IsBalanceNegative,
-				FromCache:         false,
-			}
+	if p.billingCache == nil {
+		if admissionStatus != nil {
+			return admissionStatus
 		}
+		status, err := p.loadBillingStatus(ctx, tenantID)
 		if err != nil {
-			p.logger.WithFields(logging.Fields{
-				"tenant_id":     tenantID,
-				"internal_name": internalName,
-				"error":         err,
-			}).Warn("Quartermaster billing lookup failed")
+			return &BillingStatus{TenantID: tenantID, State: BillingStatusUnavailable}
 		}
+		return status
 	}
 
-	return nil // Fail-open
+	_, cachedBefore, staleBefore := p.billingCache.PeekWithFreshness(tenantID)
+	value, ok, err := p.billingCache.Get(ctx, tenantID, func(loadCtx context.Context, _ string) (interface{}, bool, error) {
+		status, err := p.loadBillingStatus(loadCtx, tenantID)
+		return status, err == nil, err
+	})
+	if err != nil || !ok {
+		p.logger.WithFields(logging.Fields{
+			"tenant_id": tenantID, "internal_name": internalName, "error": err,
+		}).Warn("Tenant billing authority unavailable")
+		return &BillingStatus{TenantID: tenantID, State: BillingStatusUnavailable}
+	}
+	status, ok := value.(*BillingStatus)
+	if !ok || status == nil {
+		return &BillingStatus{TenantID: tenantID, State: BillingStatusUnavailable}
+	}
+	copy := *status
+	copy.FromCache = cachedBefore
+	if staleBefore {
+		copy.State = BillingStatusStaleValid
+	}
+	return &copy
+}
+
+func (p *Processor) loadBillingStatus(ctx context.Context, tenantID string) (*BillingStatus, error) {
+	if p.quartermasterClient == nil {
+		return nil, fmt.Errorf("quartermaster client unavailable")
+	}
+	qmCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	resp, err := p.quartermasterClient.ValidateTenant(qmCtx, tenantID, "")
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil || resp.GetBillingStatusUnavailable() {
+		return nil, fmt.Errorf("billing authority unavailable")
+	}
+	status := &BillingStatus{TenantID: tenantID, BillingModel: resp.BillingModel, IsSuspended: resp.IsSuspended, IsBalanceNegative: resp.IsBalanceNegative}
+	if !resp.Valid || !resp.IsActive {
+		status.State = BillingStatusDenied
+		status.DeniedReason = "tenant_inactive"
+	} else {
+		status.State = billingState(resp.BillingModel, resp.IsSuspended, resp.IsBalanceNegative)
+	}
+	return status, nil
+}
+
+func billingState(model string, suspended, balanceNegative bool) BillingStatusState {
+	if suspended || (model == "prepaid" && balanceNegative) {
+		return BillingStatusDenied
+	}
+	return BillingStatusHealthy
 }
 
 // GetClusterPeers returns the cached cluster peers for a stream, if available.
@@ -652,6 +719,9 @@ func (p *Processor) InvalidateTenantCache(tenantID string) int {
 		p.streamCache.Delete(key)
 	}
 	p.holdStreamCacheTenant(tenantID)
+	if p.billingCache != nil {
+		p.billingCache.Delete(tenantID)
+	}
 
 	if p.commodoreClient != nil {
 		p.commodoreClient.InvalidateTenantCacheKeys(tenantID)
@@ -1932,14 +2002,14 @@ func (p *Processor) handlePlayRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 	if !ok {
 		return "", false, fmt.Errorf("unexpected payload type for PlayRewrite: %T", trigger.GetTriggerPayload())
 	}
-	defaultStream := payload.PlayRewrite
-	playbackID := defaultStream.GetRequestedStream() // This is the stream name / playback ID
+	playRewrite := payload.PlayRewrite
+	playbackID := playRewrite.GetRequestedStream() // This is the stream name / playback ID
 
 	p.logger.WithFields(logging.Fields{
-		"requested_stream": defaultStream.GetRequestedStream(), // playback ID
-		"viewer_host":      defaultStream.GetViewerHost(),
-		"output_type":      defaultStream.GetOutputType(),
-		"request_url":      defaultStream.GetRequestUrl(),
+		"requested_stream": playRewrite.GetRequestedStream(), // playback ID
+		"viewer_host":      playRewrite.GetViewerHost(),
+		"output_type":      playRewrite.GetOutputType(),
+		"request_url":      playRewrite.GetRequestUrl(),
 		"node_id":          trigger.GetNodeId(),
 	}).Debug("Processing PLAY_REWRITE trigger")
 
@@ -1966,52 +2036,63 @@ func (p *Processor) handlePlayRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 		}).Debug("PLAY_REWRITE: stream not found")
 		return "", false, nil
 	}
+	if target.TenantID != "" {
+		trigger.TenantId = &target.TenantID
+	}
+	if target.StreamID != "" {
+		trigger.StreamId = &target.StreamID
+	}
+	streamInfo := p.applyStreamContext(trigger, target.InternalName)
+	if target.TenantID == "" {
+		target.TenantID = streamInfo.TenantID
+	}
+	if target.StreamID == "" {
+		target.StreamID = streamInfo.StreamID
+	}
 
 	// Check stream owner's billing status from cache (set during PUSH_REWRITE).
 	// Falls back to Quartermaster when cache misses.
 	billingInternalName := control.DVRChapterPolicyInternalName(context.Background(), target.InternalName)
 	billing := p.GetBillingStatus(context.Background(), billingInternalName, target.TenantID)
-	if billing != nil {
-		if billing.IsSuspended {
-			p.logger.WithFields(logging.Fields{
-				"playback_id": playbackID,
-				"tenant_id":   billing.TenantID,
-				"from_cache":  billing.FromCache,
-			}).Warn("Rejecting viewer: stream owner suspended")
-			return "", true, fmt.Errorf("stream unavailable - owner account suspended")
-		}
-		if billing.BillingModel == "prepaid" && billing.IsBalanceNegative {
-			p.logger.WithFields(logging.Fields{
-				"playback_id":   playbackID,
-				"tenant_id":     billing.TenantID,
-				"billing_model": billing.BillingModel,
-				"from_cache":    billing.FromCache,
-			}).Warn("Rejecting viewer: stream owner balance exhausted (402)")
-			return "", true, fmt.Errorf("payment required - stream owner needs to top up balance")
-		}
-	} else if target.TenantID != "" {
+	if billing.State == BillingStatusUnavailable {
+		return "", false, fmt.Errorf("billing authority unavailable for tenant %s", target.TenantID)
+	}
+	if billing.IsSuspended {
+		p.logger.WithFields(logging.Fields{
+			"playback_id": playbackID,
+			"tenant_id":   billing.TenantID,
+			"from_cache":  billing.FromCache,
+		}).Warn("Rejecting viewer: stream owner suspended")
+		return "", true, fmt.Errorf("stream unavailable - owner account suspended")
+	}
+	if billing.BillingModel == "prepaid" && billing.IsBalanceNegative {
 		p.logger.WithFields(logging.Fields{
 			"playback_id":   playbackID,
-			"tenant_id":     target.TenantID,
-			"internal_name": target.InternalName,
-		}).Debug("Billing status unknown, failing open")
+			"tenant_id":     billing.TenantID,
+			"billing_model": billing.BillingModel,
+			"from_cache":    billing.FromCache,
+		}).Warn("Rejecting viewer: stream owner balance exhausted (402)")
+		return "", true, fmt.Errorf("payment required - stream owner needs to top up balance")
+	}
+	if billing.State == BillingStatusDenied || billing.DeniedReason != "" {
+		return "", true, fmt.Errorf("stream unavailable: %s", billing.DeniedReason)
 	}
 
 	// Enrich with resolved internal name (UUID without prefix) for analytics correlation.
 	// This ensures analytics can correlate viewer events with infrastructure events.
 	resolvedName := mist.ExtractInternalName(target.InternalName)
-	defaultStream.ResolvedInternalName = &resolvedName
+	playRewrite.ResolvedInternalName = &resolvedName
 
 	// Enrich the PlayRewriteTrigger (ViewerResolveTrigger) with viewer geographic data via GeoIP lookup.
-	if p.geoipClient != nil && defaultStream.GetViewerHost() != "" {
-		if geoData := geoip.LookupCached(context.Background(), p.geoipClient, p.geoipCache, defaultStream.GetViewerHost()); geoData != nil {
-			defaultStream.CountryCode = &geoData.CountryCode
-			defaultStream.City = &geoData.City
-			defaultStream.Latitude = &geoData.Latitude
-			defaultStream.Longitude = &geoData.Longitude
+	if p.geoipClient != nil && playRewrite.GetViewerHost() != "" {
+		if geoData := geoip.LookupCached(context.Background(), p.geoipClient, p.geoipCache, playRewrite.GetViewerHost()); geoData != nil {
+			playRewrite.CountryCode = &geoData.CountryCode
+			playRewrite.City = &geoData.City
+			playRewrite.Latitude = &geoData.Latitude
+			playRewrite.Longitude = &geoData.Longitude
 
 			p.logger.WithFields(logging.Fields{
-				"viewer_ip":    defaultStream.GetViewerHost(),
+				"viewer_ip":    playRewrite.GetViewerHost(),
 				"country_code": geoData.CountryCode,
 				"city":         geoData.City,
 				"playback_id":  playbackID,
@@ -2022,7 +2103,7 @@ func (p *Processor) handlePlayRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 	// Enrich with node location name for analytics (e.g., "us-east-1", "Frankfurt")
 	if nodeConfig := p.getNodeConfig(trigger.GetNodeId()); nodeConfig != nil {
 		if nodeConfig.Location != "" {
-			defaultStream.NodeLocation = &nodeConfig.Location
+			playRewrite.NodeLocation = &nodeConfig.Location
 		}
 	}
 
@@ -2032,18 +2113,18 @@ func (p *Processor) handlePlayRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 	}
 	if target.StreamID != "" {
 		trigger.StreamId = &target.StreamID
-		defaultStream.StreamId = &target.StreamID
+		playRewrite.StreamId = &target.StreamID
 	}
 	isLivePlayback := target.ContentType == "live" || strings.HasPrefix(target.InternalName, "live+")
-	if isLivePlayback && mist.IsPlaybackViewerRequest(defaultStream.GetOutputType(), defaultStream.GetRequestUrl()) {
-		correlationID := extractCorrelationID(defaultStream.GetRequestUrl())
-		if viewerID, started := state.DefaultManager().StartVirtualViewerByID(correlationID, trigger.GetNodeId(), resolvedName, defaultStream.GetViewerHost()); started {
+	if isLivePlayback && mist.IsPlaybackViewerRequest(playRewrite.GetOutputType(), playRewrite.GetRequestUrl()) {
+		correlationID := extractCorrelationID(playRewrite.GetRequestUrl())
+		if viewerID, started := state.DefaultManager().StartVirtualViewerByID(correlationID, trigger.GetNodeId(), resolvedName, playRewrite.GetViewerHost()); started {
 			state.DefaultManager().UpdateUserConnection(resolvedName, trigger.GetNodeId(), target.TenantID, 1)
 			p.logger.WithFields(logging.Fields{
 				"viewer_id":     viewerID,
 				"internal_name": resolvedName,
-				"viewer_host":   defaultStream.GetViewerHost(),
-				"output_type":   defaultStream.GetOutputType(),
+				"viewer_host":   playRewrite.GetViewerHost(),
+				"output_type":   playRewrite.GetOutputType(),
 				"node_id":       trigger.GetNodeId(),
 			}).Info("Started playback viewer from PLAY_REWRITE")
 		}

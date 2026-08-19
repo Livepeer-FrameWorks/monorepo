@@ -39,6 +39,9 @@ func TestValidateTenantRetriesRetryablePostgresErrors(t *testing.T) {
 	if !resp.GetValid() || resp.GetTenantName() != "Tenant" {
 		t.Fatalf("unexpected response: %+v", resp)
 	}
+	if !resp.GetBillingStatusUnavailable() || resp.GetBillingModel() != "" {
+		t.Fatalf("missing Purser must be explicit billing-unavailable, got %+v", resp)
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
 	}

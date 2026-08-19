@@ -1025,6 +1025,10 @@ func TestHandlePlayRewriteBareMistNativeResolvesThroughInternalName(t *testing.T
 	processor := newTestProcessor(t)
 	processor.commodoreClient = commodoreClient
 	processor.clusterID = "media-eu-1"
+	processor.streamCache.Set("tenant-system:60546679b497415db2338cd5cae54992", streamContext{
+		TenantID:     "tenant-system",
+		BillingModel: "postpaid",
+	}, time.Minute)
 
 	resp, abort, err := processor.handlePlayRewrite(&ipcpb.MistTrigger{
 		NodeId: "edge-eu-1",
@@ -1134,6 +1138,12 @@ func newTestProcessor(t *testing.T) *Processor {
 		MaxEntries:           100,
 		SkipStore:            p.streamCacheHeld,
 	}, cache.MetricsHooks{})
+	p.billingCache = cache.New(cache.Options{
+		TTL:                  10 * time.Minute,
+		StaleWhileRevalidate: 0,
+		NegativeTTL:          0,
+		MaxEntries:           100,
+	}, cache.MetricsHooks{})
 	return p
 }
 
@@ -1227,6 +1237,7 @@ func TestHandlePlayRewriteStartsCorrelatedPlaybackViewer(t *testing.T) {
 	clientIP := "192.0.2.10"
 	processor.streamCache.Set(tenantID+":"+internalName, streamContext{
 		TenantID:          tenantID,
+		BillingModel:      "postpaid",
 		RequiresAuth:      false,
 		RequiresAuthKnown: true,
 	}, time.Minute)
@@ -1328,6 +1339,7 @@ func TestViewerCapUsesCorrelationIDInsteadOfMistSession(t *testing.T) {
 	clientIP := "192.0.2.50"
 	processor.streamCache.Set(tenantID+":"+internalName, streamContext{
 		TenantID:          tenantID,
+		BillingModel:      "postpaid",
 		MaxViewers:        1,
 		RequiresAuth:      false,
 		RequiresAuthKnown: true,
