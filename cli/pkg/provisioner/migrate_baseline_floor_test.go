@@ -43,7 +43,7 @@ func TestBelowBaselineFloor(t *testing.T) {
 		{"v0.2.65", true},
 		{"v0.2.95", true},  // folded — prod has applied it
 		{"v0.2.96", false}, // the floor itself is NOT folded — still offered to prod
-		{"v0.2.97", false}, // offered to prod on next upgrade
+		{"v0.2.97", false}, // versions above the floor remain selectable for later targets
 		{"v0.3.0", false},
 		{"v1.0.0", false},
 	}

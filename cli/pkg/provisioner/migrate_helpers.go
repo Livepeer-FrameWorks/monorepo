@@ -47,8 +47,8 @@ func BuildMigrationItemsForDatabases(databases []SchemaDatabase, phase, targetVe
 // the embedded tree (which the consolidation floor + deletion change over time).
 func buildMigrationItemsFromList(all []Migration, databases []SchemaDatabase, phase, targetVersion string) []map[string]any {
 	bySource := targetsBySource(databases)
-	// Compare against the target's BASE version: a canary (e.g. v0.2.97-rc1, which sorts BEFORE the final v0.2.97)
-	// still runs every migration the v0.2.97 line introduces — the rc binary needs that schema.
+	// Compare against the target's BASE version: a canary (e.g. v0.2.96-rc1, which sorts BEFORE the final v0.2.96)
+	// still runs every migration the v0.2.96 line introduces — the rc binary needs that schema.
 	baseTarget := releases.BaseVersion(targetVersion)
 
 	items := make([]map[string]any, 0, len(all))

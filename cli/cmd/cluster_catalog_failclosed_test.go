@@ -64,7 +64,7 @@ func TestUpgradePreDeployGate_FailsClosedOnCorruptCatalog(t *testing.T) {
 	withCorruptCatalog(t)
 
 	err := runUpgradePreDeployGate(context.Background(), &cobra.Command{}, nil, nil, nil,
-		"v0.2.97", "foghorn", "foghorn", false, false)
+		"v0.2.96", "foghorn", "foghorn", false, false)
 	if err == nil {
 		t.Fatal("a corrupt catalog must refuse the pre-deploy gate, not skip it")
 	}
@@ -77,7 +77,7 @@ func TestPhaseDataMigrationGate_FailsClosedOnCorruptCatalog(t *testing.T) {
 	withCorruptCatalog(t)
 
 	err := runPhaseDataMigrationGate(context.Background(), &cobra.Command{}, nil, nil,
-		"contract", "v0.2.97", false)
+		"contract", "v0.2.96", false)
 	if err == nil {
 		t.Fatal("a corrupt catalog must refuse the contract-phase gate, not proceed")
 	}
@@ -89,7 +89,7 @@ func TestPhaseDataMigrationGate_FailsClosedOnCorruptCatalog(t *testing.T) {
 func TestDoctorDataMigrations_ReportsDegradedOnCorruptCatalog(t *testing.T) {
 	withCorruptCatalog(t)
 
-	result := doctorDataMigrations(context.Background(), nil, nil, "v0.2.97")
+	result := doctorDataMigrations(context.Background(), nil, nil, "v0.2.96")
 	if result.OK {
 		t.Fatal("a corrupt catalog must report NOT ok (a green doctor would green-light an unverified deploy)")
 	}
@@ -106,12 +106,12 @@ func TestDoctorDataMigrations_ReportsDegradedOnCorruptCatalog(t *testing.T) {
 // the postdeploy command targets the HIGHEST PRIOR release version, never the
 // deploy target (whose own postdeploy runs after the deploy).
 func TestFormatMigrationRemediation(t *testing.T) {
-	expand := []provisioner.MigrationKey{{Database: "foghorn", Version: "v0.2.97", Phase: "expand", Seq: 1, Filename: "001_a.sql"}}
+	expand := []provisioner.MigrationKey{{Database: "foghorn", Version: "v0.2.96", Phase: "expand", Seq: 1, Filename: "001_a.sql"}}
 	postdeploy := []provisioner.MigrationKey{{Database: "foghorn", Version: "v0.2.90", Phase: "postdeploy", Seq: 1, Filename: "001_b.sql"}}
 
 	t.Run("expand only", func(t *testing.T) {
-		msg := formatMigrationRemediation("foghorn", "v0.2.97", "v0.2.90", expand, nil)
-		if !strings.Contains(msg, "--phase expand --to-version v0.2.97") {
+		msg := formatMigrationRemediation("foghorn", "v0.2.96", "v0.2.90", expand, nil)
+		if !strings.Contains(msg, "--phase expand --to-version v0.2.96") {
 			t.Fatalf("expected expand remediation, got:\n%s", msg)
 		}
 		if strings.Contains(msg, "--phase postdeploy") {
@@ -120,12 +120,12 @@ func TestFormatMigrationRemediation(t *testing.T) {
 	})
 
 	t.Run("postdeploy only targets prior version", func(t *testing.T) {
-		msg := formatMigrationRemediation("foghorn", "v0.2.97", "v0.2.90", nil, postdeploy)
+		msg := formatMigrationRemediation("foghorn", "v0.2.96", "v0.2.90", nil, postdeploy)
 		if !strings.Contains(msg, "--phase postdeploy --to-version v0.2.90") {
 			t.Fatalf("postdeploy remediation must target the prior release v0.2.90, got:\n%s", msg)
 		}
-		if strings.Contains(msg, "--phase postdeploy --to-version v0.2.97") {
-			t.Fatalf("postdeploy must NOT target the deploy version v0.2.97, got:\n%s", msg)
+		if strings.Contains(msg, "--phase postdeploy --to-version v0.2.96") {
+			t.Fatalf("postdeploy must NOT target the deploy version v0.2.96, got:\n%s", msg)
 		}
 		if strings.Contains(msg, "--phase expand") {
 			t.Fatalf("no expand missing, must not suggest expand:\n%s", msg)
@@ -133,8 +133,8 @@ func TestFormatMigrationRemediation(t *testing.T) {
 	})
 
 	t.Run("both phases each get their own command", func(t *testing.T) {
-		msg := formatMigrationRemediation("foghorn", "v0.2.97", "v0.2.90", expand, postdeploy)
-		if !strings.Contains(msg, "--phase expand --to-version v0.2.97") ||
+		msg := formatMigrationRemediation("foghorn", "v0.2.96", "v0.2.90", expand, postdeploy)
+		if !strings.Contains(msg, "--phase expand --to-version v0.2.96") ||
 			!strings.Contains(msg, "--phase postdeploy --to-version v0.2.90") {
 			t.Fatalf("both remediation commands must appear with their own versions, got:\n%s", msg)
 		}
@@ -170,7 +170,7 @@ func TestUpgradeGate_ClickHouseCheckedWhenPostgresDisabled(t *testing.T) {
 	// the catalog's min_cli_version so the shared floor check (checkCLIVersionFloor) passes.
 	origVer := fwv.Version
 	t.Cleanup(func() { fwv.Version = origVer })
-	fwv.Version = "v0.3.0"
+	fwv.Version = "v0.2.96"
 
 	origPG, origCH, origFloor := checkPostgresMigrationGateFn, checkClickHouseMigrationGateFn, runBelowFloorGuardFn
 	t.Cleanup(func() {
@@ -194,7 +194,7 @@ func TestUpgradeGate_ClickHouseCheckedWhenPostgresDisabled(t *testing.T) {
 	manifest := &inventory.Manifest{}
 	rc := &resolvedCluster{Manifest: manifest}
 	err := runUpgradePreDeployGate(context.Background(), &cobra.Command{}, rc, nil, manifest,
-		"v0.2.97", "periscope-ingest", "periscope-ingest", false, true /* skipDataMigrationCheck */)
+		"v0.2.96", "periscope-ingest", "periscope-ingest", false, true /* skipDataMigrationCheck */)
 	if err != nil {
 		t.Fatalf("gate must not error for a ClickHouse-only service with stubbed checks: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestUpgradeGate_DataMigrationCheckedForDBLessService(t *testing.T) {
 	// the data-migration routing.
 	origVer := fwv.Version
 	t.Cleanup(func() { fwv.Version = origVer })
-	fwv.Version = "v0.3.0"
+	fwv.Version = "v0.2.96"
 
 	// signalman is DB-less; the engine branches are not taken, so no SSH is touched. Stub the floor guard defensively.
 	origFloor := runBelowFloorGuardFn
@@ -232,7 +232,7 @@ func TestUpgradeGate_DataMigrationCheckedForDBLessService(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetOut(&out)
 	err := runUpgradePreDeployGate(context.Background(), cmd, rc, nil, manifest,
-		"v0.2.97", "signalman", "signalman", false, false /* run the data-migration check */)
+		"v0.2.96", "signalman", "signalman", false, false /* run the data-migration check */)
 	if err != nil {
 		t.Fatalf("gate must not error for a DB-less service: %v", err)
 	}

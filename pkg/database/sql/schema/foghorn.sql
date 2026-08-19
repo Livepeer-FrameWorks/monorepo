@@ -639,7 +639,7 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_dvr_chapters_playback_id
 -- connector PID), fenced by the start trigger UUID/time. Minted on the accepted
 -- PUSH_REWRITE (PID from the X-PID header), ended on PUSH_INPUT_CLOSE carrying the
 -- same PID; each DVR recording binds to a session id so a same-node reconnect is a new
--- session. See migration foghorn/v0.2.97/expand/045_dvr_ingest_sessions.sql.
+-- session. See migration foghorn/v0.2.96/expand/045_dvr_ingest_sessions.sql.
 CREATE TABLE IF NOT EXISTS foghorn.ingest_sessions (
     id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id              UUID NOT NULL,
@@ -685,7 +685,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_foghorn_ingest_sessions_active_pid
 -- serialized cross-replica by a (tenant, stream) advisory lock; this is the durable backstop), and
 -- a Mist trigger UUID identifies one trigger EXECUTION — stable across its retries, distinct for a
 -- later reconnect — so it is unique per (tenant, node). See migration
--- foghorn/v0.2.97/expand/046_ingest_session_stream_authority.sql.
+-- foghorn/v0.2.96/expand/046_ingest_session_stream_authority.sql.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_foghorn_ingest_sessions_active_per_stream
     ON foghorn.ingest_sessions(tenant_id, stream_internal_name)
     WHERE ended_at IS NULL;
@@ -716,7 +716,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_foghorn_artifacts_active_dvr_per_generation
 -- advisory lock the close also takes) and denies a late rewrite whose start is at or before a recorded
 -- close for the same connector, so a dead publisher is never resurrected as an active session. Swept
 -- on a TTL by the ingest session reaper. See migration
--- foghorn/v0.2.97/expand/048_ingest_close_tombstones.sql.
+-- foghorn/v0.2.96/expand/048_ingest_close_tombstones.sql.
 CREATE TABLE IF NOT EXISTS foghorn.ingest_close_tombstones (
     tenant_id            UUID NOT NULL,
     node_id              VARCHAR(100) NOT NULL,
@@ -735,7 +735,7 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_close_tombstones_created
 -- advisory lock, so a later transition carries a strictly higher revision; the registry merges
 -- source-ownership fields by it (highest wins) so a stale replica cannot clobber the real publisher via
 -- a last-writer-wins location write. See migration
--- foghorn/v0.2.97/expand/049_source_projection_revision.sql.
+-- foghorn/v0.2.96/expand/049_source_projection_revision.sql.
 CREATE SEQUENCE IF NOT EXISTS foghorn.source_projection_revision;
 
 -- Durable, revision-fenced stream-offline work. The transition is enqueued under the same

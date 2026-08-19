@@ -9,7 +9,7 @@ import (
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 )
 
-// TestArtifactPlaybackIndexUpgradeFromReleasedLower proves the v0.2.97 contract migration replaces the
+// TestArtifactPlaybackIndexUpgradeFromReleasedLower proves the v0.2.96 contract migration replaces the
 // RELEASED functional lower(playback_id::text) playback indexes with plain btrees usable by the
 // resolvers' `WHERE playback_id = $1` CITEXT equality. TestPostgresBaselineEqualsReplay cannot catch
 // this: it derives its "old" state from the current baseline (already plain), so a same-name
@@ -37,7 +37,7 @@ CREATE TABLE commodore.dvr_chapter_playback (playback_id CITEXT);
 CREATE UNIQUE INDEX idx_commodore_dvr_chapter_playback_pid_ci ON commodore.dvr_chapter_playback((lower(playback_id::text)));
 `)
 
-	mig, err := dbsql.Content.ReadFile("migrations/commodore/v0.2.97/contract/001_dvr_chapter_playback_index_realign.sql")
+	mig, err := dbsql.Content.ReadFile("migrations/commodore/v0.2.96/contract/001_dvr_chapter_playback_index_realign.sql")
 	if err != nil {
 		t.Fatalf("read contract migration: %v", err)
 	}

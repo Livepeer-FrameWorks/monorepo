@@ -24,7 +24,7 @@ import (
 var baseVersionPattern = regexp.MustCompile(`^(v?\d+\.\d+\.\d+)`)
 
 // BaseVersion strips any pre-release/build suffix from a version, returning a CANONICAL vX.Y.Z. A pre-release of X
-// (e.g. v0.2.97-rc1) is built from the X line and carries X's schema/behavior, so "is this migration/transition
+// (e.g. v0.2.96-rc1) is built from the X line and carries X's schema/behavior, so "is this migration/transition
 // introduced by the release I'm deploying?" compares the introduced version against the DEPLOY TARGET'S BASE --
 // otherwise a canary (-rc1, which sorts before the final) would skip the very migrations/transitions the final
 // introduces. The leading `v` is CANONICALIZED (always present in the result) so a version's base identity is
@@ -302,7 +302,7 @@ func RollbackDisabledFor(version string) []string {
 }
 
 // Lookup returns the release entry for a version, or nil. Matching is BASE-VERSION normalized: a prerelease/RC target
-// (v0.2.97-rc1) resolves to the declared final release (v0.2.97) — an RC carries the same catalog requirements as its
+// (v0.2.96-rc1) resolves to the declared final release (v0.2.96) — an RC carries the same catalog requirements as its
 // base, and the catalog declares one entry per base version, not per RC.
 func Lookup(version string) *Release {
 	if embedded.err != nil {
@@ -348,8 +348,8 @@ func LoadError() error {
 // (every postdeploy migration <= a given version), it checks only the HIGHEST entry here once, which subsumes all the
 // others. The selection is deliberately independent of any running service's reported version: a skewed/unreadable
 // replica cannot narrow it — completeness is proven against the actual _migrations ledger (the authority). The target's
-// own base is EXCLUDED (its postdeploy runs after the deploy); comparing by BASE version so an RC target (v0.2.97-rc1)
-// still excludes the declared final (v0.2.97). Empty catalog ⇒ empty.
+// own base is EXCLUDED (its postdeploy runs after the deploy); comparing by BASE version so an RC target (v0.2.96-rc1)
+// still excludes the declared final (v0.2.96). Empty catalog ⇒ empty.
 func ReleasesBelow(target string) []Release {
 	if embedded.err != nil {
 		return nil

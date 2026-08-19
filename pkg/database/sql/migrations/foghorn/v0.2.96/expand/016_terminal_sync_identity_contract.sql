@@ -75,7 +75,7 @@ CREATE TRIGGER artifact_clear_sync_identity_on_terminal
     )
     EXECUTE FUNCTION foghorn.clear_sync_identity_on_terminal();
 
--- ADD CONSTRAINT runs NOT VALID so the add is non-blocking; v0.2.97/postdeploy/001 VALIDATEs. Idempotent.
+-- ADD CONSTRAINT runs NOT VALID so the add is non-blocking; v0.2.96/postdeploy/001 VALIDATEs. Idempotent.
 ALTER TABLE foghorn.artifacts
     DROP CONSTRAINT IF EXISTS chk_foghorn_artifacts_sync_identity_paired;
 ALTER TABLE foghorn.artifacts

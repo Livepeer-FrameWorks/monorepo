@@ -4,7 +4,7 @@
 # live-thumbnail prefixes, fail-closed, then verify every enumerated prefix is gone in BOTH cells before any
 # service or traffic starts. This is the destructive core of the legacy ownership cutover documented in
 # docs/architecture/thumbnails.md; the operator runs it AFTER stopping old minters and provisioning infrastructure
-# (so the v0.2.97 EXPAND migrations have created thumbnail_serving_cluster_ids), and provisions applications AFTER it.
+# (so the v0.2.96 EXPAND migrations have created thumbnail_serving_cluster_ids), and provisions applications AFTER it.
 #
 # It NEVER touches the whole thumbnails/ namespace: artifact thumbnails (thumbnails/{artifact_hash}/) route via
 # origin_cluster_id and are preserved. It only removes thumbnails/{stream_id}/ for streams whose serving-cell set is
@@ -115,7 +115,7 @@ streams_file="$(mktemp)"
 trap 'rm -f "$streams_file"' EXIT
 psql "$COMMODORE_DSN" -v ON_ERROR_STOP=1 -tAc \
 	"SELECT id FROM commodore.streams WHERE thumbnail_serving_cluster_ids = '{}'" >"$streams_file" ||
-	fail "enumeration query failed (has the v0.2.97 EXPAND migration run?)"
+	fail "enumeration query failed (has the v0.2.96 EXPAND migration run?)"
 count="$(grep -c . "$streams_file" || true)"
 echo "cutover: drain ${elapsed}s OK; enumerated $count owner-less legacy live stream(s)"
 

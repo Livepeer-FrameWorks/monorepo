@@ -25,7 +25,7 @@ import (
 // declared up to vX.Y.Z" rather than passing silently.
 func CatalogRequirements(catalog []releases.Release, targetVersion string) []datamigrate.Requirement {
 	var out []datamigrate.Requirement
-	// Compare by BASE version so a canary/RC target (v0.2.97-rc1) still includes the declared final release's required
+	// Compare by BASE version so a canary/RC target (v0.2.96-rc1) still includes the declared final release's required
 	// data migrations — a raw compare would drop them because a final sorts above its prerelease.
 	targetBase := releases.BaseVersion(targetVersion)
 	for _, rel := range catalog {

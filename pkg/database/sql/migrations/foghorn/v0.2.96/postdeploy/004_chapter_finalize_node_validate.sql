@@ -1,5 +1,5 @@
 -- Null out any stale finalize_node_id on non-finalizing rows (pre-existing data), then VALIDATE the lifecycle
--- CHECK added NOT VALID in v0.2.97/expand/026. Idempotent: the UPDATE is a no-op once clean, and VALIDATE is
+-- CHECK added NOT VALID in v0.2.96/expand/026. Idempotent: the UPDATE is a no-op once clean, and VALIDATE is
 -- safe to re-run.
 UPDATE foghorn.dvr_chapters
    SET finalize_node_id = NULL

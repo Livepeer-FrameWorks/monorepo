@@ -1,6 +1,6 @@
 -- Encode the chapter finalize-node assignment lifecycle as an invariant: finalize_node_id may be non-null ONLY
 -- while state='finalizing'. Every transition out of finalizing (finalized/closed/failed) clears it in code, so
--- a retired node can never authorize a later transition. Added NOT VALID (non-blocking); v0.2.97/postdeploy/004
+-- a retired node can never authorize a later transition. Added NOT VALID (non-blocking); v0.2.96/postdeploy/004
 -- nulls stale assignments and VALIDATEs. IDEMPOTENT CONDITIONAL ADD — never drops the constraint, so a re-run
 -- or rolling deploy leaves no window where the invariant is unenforced.
 DO $$

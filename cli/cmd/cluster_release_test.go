@@ -21,7 +21,7 @@ func TestValidateFetchedReleaseCompatibility(t *testing.T) {
 	}
 
 	// A required transition the compiled registry implements → OK.
-	if err := validateFetchedReleaseCompatibility(io.Discard, &gitops.Manifest{PlatformVersion: "v0.2.97", RequiredTransitions: []string{"storage-descriptor-adoption"}}, false); err != nil {
+	if err := validateFetchedReleaseCompatibility(io.Discard, &gitops.Manifest{PlatformVersion: "v0.2.96", RequiredTransitions: []string{"storage-descriptor-adoption"}}, false); err != nil {
 		t.Fatalf("known transition must pass, got: %v", err)
 	}
 
@@ -35,24 +35,24 @@ func TestValidateFetchedReleaseCompatibility(t *testing.T) {
 
 	// min_cli_version above a concrete CLI build → fail closed.
 	fwv.Version = "v0.2.0"
-	if err := validateFetchedReleaseCompatibility(io.Discard, &gitops.Manifest{PlatformVersion: "v0.2.97", MinCLIVersion: "v0.2.50"}, false); err == nil || !strings.Contains(err.Error(), "older than the release's required minimum") {
+	if err := validateFetchedReleaseCompatibility(io.Discard, &gitops.Manifest{PlatformVersion: "v0.2.96", MinCLIVersion: "v0.2.50"}, false); err == nil || !strings.Contains(err.Error(), "older than the release's required minimum") {
 		t.Fatalf("an old CLI must fail the min-cli floor, got: %v", err)
 	}
-	// A realistic v0.2.97 manifest declares the transitions the v0.2.97 line requires (matching this CLI's catalog).
-	fwv.Version = "v0.3.0"
-	if err := validateFetchedReleaseCompatibility(io.Discard, &gitops.Manifest{PlatformVersion: "v0.2.97", MinCLIVersion: "v0.2.50", RequiredTransitions: []string{"storage-descriptor-adoption"}}, false); err != nil {
+	// A realistic v0.2.96 manifest declares the transitions the v0.2.96 line requires (matching this CLI's catalog).
+	fwv.Version = "v0.2.96"
+	if err := validateFetchedReleaseCompatibility(io.Discard, &gitops.Manifest{PlatformVersion: "v0.2.96", MinCLIVersion: "v0.2.50", RequiredTransitions: []string{"storage-descriptor-adoption"}}, false); err != nil {
 		t.Fatalf("a new-enough CLI must pass the floor, got: %v", err)
 	}
 
 	// A NON-CONCRETE local build (dev/unversioned) now FAILS CLOSED against the floor — the previous silent "dev is
 	// never blocked" exemption is gone, so a locally built CLI cannot ignore a release's required tooling floor.
 	fwv.Version = "dev"
-	if err := validateFetchedReleaseCompatibility(io.Discard, &gitops.Manifest{PlatformVersion: "v0.2.97", MinCLIVersion: "v99.0.0", RequiredTransitions: []string{"storage-descriptor-adoption"}}, false); err == nil || !strings.Contains(err.Error(), "non-concrete") {
+	if err := validateFetchedReleaseCompatibility(io.Discard, &gitops.Manifest{PlatformVersion: "v0.2.96", MinCLIVersion: "v99.0.0", RequiredTransitions: []string{"storage-descriptor-adoption"}}, false); err == nil || !strings.Contains(err.Error(), "non-concrete") {
 		t.Fatalf("a dev build must fail closed against the floor, got: %v", err)
 	}
 	// The explicit unsafe override (allowUnsafe=true) is the only escape hatch: it passes with a LOUD warning.
 	var warn bytes.Buffer
-	if err := validateFetchedReleaseCompatibility(&warn, &gitops.Manifest{PlatformVersion: "v0.2.97", MinCLIVersion: "v99.0.0", RequiredTransitions: []string{"storage-descriptor-adoption"}}, true); err != nil {
+	if err := validateFetchedReleaseCompatibility(&warn, &gitops.Manifest{PlatformVersion: "v0.2.96", MinCLIVersion: "v99.0.0", RequiredTransitions: []string{"storage-descriptor-adoption"}}, true); err != nil {
 		t.Fatalf("the unsafe override must bypass the floor, got: %v", err)
 	}
 	if !strings.Contains(warn.String(), "BYPASSED") {
@@ -62,8 +62,8 @@ func TestValidateFetchedReleaseCompatibility(t *testing.T) {
 	// AUTHORITY BINDING: the fetched required-transition set must match this CLI's catalog for the platform version. A
 	// fetched manifest that OMITS a transition the catalog requires (or names an extra one) is refused, so execution
 	// cannot silently run a different set than the release declares.
-	fwv.Version = "v0.3.0"
-	if err := validateFetchedReleaseCompatibility(io.Discard, &gitops.Manifest{PlatformVersion: "v0.2.97"}, false); err == nil || !strings.Contains(err.Error(), "disagrees") {
+	fwv.Version = "v0.2.96"
+	if err := validateFetchedReleaseCompatibility(io.Discard, &gitops.Manifest{PlatformVersion: "v0.2.96"}, false); err == nil || !strings.Contains(err.Error(), "disagrees") {
 		t.Fatalf("a manifest that omits a catalog-required transition must be refused, got: %v", err)
 	}
 }
@@ -168,12 +168,12 @@ func indexOf(haystack, needle string) int {
 	return strings.Index(haystack, needle)
 }
 
-// selectReleaseTransitions is version-gated by the catalog: the storage transition (introduced v0.2.97) is selected
+// selectReleaseTransitions is version-gated by the catalog: the storage transition (introduced v0.2.96) is selected
 // for a target at/above it and omitted below it, and the compiled handler must be present (outdated-CLI fail-closed).
 func TestSelectReleaseTransitions_VersionGated(t *testing.T) {
-	got, err := selectReleaseTransitions("v0.2.97")
+	got, err := selectReleaseTransitions("v0.2.96")
 	if err != nil {
-		t.Fatalf("v0.2.97: %v", err)
+		t.Fatalf("v0.2.96: %v", err)
 	}
 	found := false
 	for _, tr := range got {
@@ -197,12 +197,12 @@ func TestSelectReleaseTransitions_VersionGated(t *testing.T) {
 	}
 }
 
-// A CANARY of v0.2.97 (v0.2.97-rc1, which sorts BEFORE the final) must still select the storage transition the
-// v0.2.97 line introduces — otherwise the rc binary deploys against a schema/authority missing its required work.
+// A CANARY of v0.2.96 (v0.2.96-rc1, which sorts BEFORE the final) must still select the storage transition the
+// v0.2.96 line introduces — otherwise the rc binary deploys against a schema/authority missing its required work.
 func TestSelectReleaseTransitions_CanaryIncludesFinalLine(t *testing.T) {
-	got, err := selectReleaseTransitions("v0.2.97-rc1")
+	got, err := selectReleaseTransitions("v0.2.96-rc1")
 	if err != nil {
-		t.Fatalf("v0.2.97-rc1: %v", err)
+		t.Fatalf("v0.2.96-rc1: %v", err)
 	}
 	found := false
 	for _, tr := range got {
@@ -211,16 +211,16 @@ func TestSelectReleaseTransitions_CanaryIncludesFinalLine(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("a canary of v0.2.97 must include storage-descriptor-adoption (base v0.2.97 >= introduced v0.2.97)")
+		t.Fatalf("a canary of v0.2.96 must include storage-descriptor-adoption (base v0.2.96 >= introduced v0.2.96)")
 	}
 }
 
 // TestDirectUpgradeRefusesTransitionGatedService asserts a direct `cluster upgrade` refuses a service
 // that sits on the downstream side (BeforeServices) of a required release transition, because only `release apply`
-// runs and verifies transitions. For v0.2.97, storage-descriptor-adoption gates foghorn and chandler; a service that
+// runs and verifies transitions. For v0.2.96, storage-descriptor-adoption gates foghorn and chandler; a service that
 // no required transition gates (purser) is not refused.
 func TestDirectUpgradeRefusesTransitionGatedService(t *testing.T) {
-	transitions, err := selectReleaseTransitions("v0.2.97")
+	transitions, err := selectReleaseTransitions("v0.2.96")
 	if err != nil {
 		t.Fatalf("selectReleaseTransitions: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestDirectUpgradeRefusesTransitionGatedService(t *testing.T) {
 	}
 	for _, deploy := range []string{"foghorn", "chandler"} {
 		if !gated(deploy) {
-			t.Errorf("%s must be gated by a required transition (storage-descriptor-adoption) for v0.2.97; a direct upgrade must refuse it", deploy)
+			t.Errorf("%s must be gated by a required transition (storage-descriptor-adoption) for v0.2.96; a direct upgrade must refuse it", deploy)
 		}
 	}
 	if gated("purser") {
@@ -244,7 +244,7 @@ func TestDirectUpgradeRefusesTransitionGatedService(t *testing.T) {
 
 // TestPreflightReleaseTransitionBlockers pins that a direct `cluster upgrade --all` is refused BEFORE any deployment
 // when its service list includes a transition-gated service — the zero-mutation guarantee, since this preflight runs
-// before the deploy loop. For v0.2.97 storage-descriptor-adoption gates foghorn/chandler.
+// before the deploy loop. For v0.2.96 storage-descriptor-adoption gates foghorn/chandler.
 func TestPreflightReleaseTransitionBlockers(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Services: map[string]inventory.ServiceConfig{
@@ -253,11 +253,11 @@ func TestPreflightReleaseTransitionBlockers(t *testing.T) {
 		},
 	}
 	// A list that includes the gated service (foghorn) must be refused up front.
-	if err := preflightReleaseTransitionBlockers(manifest, "v0.2.97", []string{"purser", "foghorn"}); err == nil {
+	if err := preflightReleaseTransitionBlockers(manifest, "v0.2.96", []string{"purser", "foghorn"}); err == nil {
 		t.Fatal("upgrade --all including foghorn must be refused before any deploy (storage-descriptor-adoption gates it)")
 	}
 	// A list with no gated service proceeds (no refusal).
-	if err := preflightReleaseTransitionBlockers(manifest, "v0.2.97", []string{"purser"}); err != nil {
+	if err := preflightReleaseTransitionBlockers(manifest, "v0.2.96", []string{"purser"}); err != nil {
 		t.Fatalf("a service list with no transition-gated service must not be refused: %v", err)
 	}
 }
@@ -291,18 +291,18 @@ func TestReleaseTransition_IntroducedInMatchesCatalog(t *testing.T) {
 }
 
 // TestAssertProvisionSatisfiesTransitions pins that a clean provision refuses a required transition it cannot satisfy
-// by install (one that must be EXECUTED), routing it to release apply, while the real v0.2.97 transitions (established
+// by install (one that must be EXECUTED), routing it to release apply, while the real v0.2.96 transitions (established
 // by Quartermaster bootstrap) pass.
 func TestAssertProvisionSatisfiesTransitions(t *testing.T) {
 	// A full-provision planned set: the storage transition's gated services (Foghorn) and its establishing service
 	// (Quartermaster) are both scheduled, so the transition is applicable AND its bootstrap provider is present.
 	planned := map[string]bool{"quartermaster": true, "foghorn": true}
-	real, err := selectReleaseTransitions("v0.2.97")
+	real, err := selectReleaseTransitions("v0.2.96")
 	if err != nil {
 		t.Fatalf("selectReleaseTransitions: %v", err)
 	}
-	if err := assertProvisionSatisfiesTransitions("v0.2.97", planned, real); err != nil {
-		t.Fatalf("v0.2.97 transitions are established by bootstrap and must pass provision: %v", err)
+	if err := assertProvisionSatisfiesTransitions("v0.2.96", planned, real); err != nil {
+		t.Fatalf("v0.2.96 transitions are established by bootstrap and must pass provision: %v", err)
 	}
 	// PHASE-AWARE APPLICABILITY: a transition whose gated services (BeforeServices) are NOT in the plan — e.g.
 	// `--only infrastructure`, which schedules no Foghorn/Chandler — is skipped even though it would otherwise be

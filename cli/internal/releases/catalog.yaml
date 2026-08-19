@@ -8,15 +8,15 @@ service_databases:
   quartermaster: quartermaster
   skipper: skipper
 # min_cli_version is the per-release tooling floor. It is published into the fetched release metadata so a CLI below
-# the floor fails closed (validateFetchedReleaseCompatibility) before touching any database. v0.2.97's floor is the
+# the floor fails closed (validateFetchedReleaseCompatibility) before touching any database. v0.2.96's floor is the
 # earliest CLI that carries the storage-descriptor-adoption transition handler the release requires.
 releases:
-  - version: v0.2.97
+  - version: v0.2.96
     # Floor is the EARLIEST prerelease that actually contains the storage-descriptor-adoption transition handler, NOT
-    # the final v0.2.97 — a prerelease sorts BELOW its final in semver, so requiring v0.2.97 would reject a v0.2.97-rcN
+    # the final v0.2.96 — a prerelease sorts BELOW its final in semver, so requiring v0.2.96 would reject a v0.2.96-rcN
     # CLI that already has the handler. Catalog lookup is base-version normalized, so this one entry covers rc + final.
-    min_cli_version: v0.2.97-rc1
-    # Chandler serves a store-backed /ready route in v0.2.97 that the release-base Chandler lacks, so a restored old
+    min_cli_version: v0.2.96-rc1
+    # Chandler serves a store-backed /ready route in v0.2.96 that the release-base Chandler lacks, so a restored old
     # binary cannot pass the current gate. Automatic rollback is therefore disabled for it (published into the fetched
     # manifest; deploy name only — aliases chandler-eu/us resolve to it).
     rollback_disabled:
@@ -26,4 +26,4 @@ releases:
 # id is the compiled handler id (cli/cmd/release_reconcile_*.go); an outdated CLI missing it fails the release closed.
 release_transitions:
   - id: storage-descriptor-adoption
-    introduced_in: v0.2.97
+    introduced_in: v0.2.96

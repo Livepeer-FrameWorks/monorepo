@@ -23,7 +23,7 @@ type storageDescriptorAdoption struct{}
 
 func (storageDescriptorAdoption) ID() string           { return "storage-descriptor-adoption" }
 func (storageDescriptorAdoption) Title() string        { return "Storage descriptor adoption" }
-func (storageDescriptorAdoption) IntroducedIn() string { return "v0.2.97" }
+func (storageDescriptorAdoption) IntroducedIn() string { return "v0.2.96" }
 func (storageDescriptorAdoption) Irreversible() bool   { return true } // safe: the descriptor stays valid on rollback
 func (storageDescriptorAdoption) AfterServices() []string {
 	return []string{"quartermaster"}
