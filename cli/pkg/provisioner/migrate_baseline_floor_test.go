@@ -177,6 +177,12 @@ func TestIsClickHouseUnknownTable(t *testing.T) {
 		{"Database periscope does not exist", false}, // missing DB, not swallowed
 		{"Authentication failed: password is incorrect", false},
 		{"Connection refused", false},
+		// ssh.Pool.Run wraps a non-zero REMOTE exit into an error (ssh/client.go
+		// "ssh %s: %q exited %d: %s: %w"), so the fresh-node missing-ledger case
+		// reaches the caller as err.Error(), not as result.Stderr. This is the
+		// verbatim shape a fresh `cluster init clickhouse` produces.
+		{`ssh frameworks-clickhouse-eu-1: "CLICKHOUSE_PASSWORD='x' clickhouse-client --host 127.0.0.1 --port 9000 --database 'periscope' --query 'SELECT version, phase, seq, argMax(checksum, applied_at) FROM _migrations GROUP BY version, phase, seq ORDER BY version, phase, seq FORMAT TabSeparated'" exited 60: Received exception from server (version 26.3.10):
+Code: 60. DB::Exception: Received from 127.0.0.1:9000. DB::Exception: Unknown table expression identifier '_migrations' in scope SELECT version, phase, seq, argMax(checksum, applied_at) FROM _migrations. (UNKNOWN_TABLE): exit status 60`, true},
 	}
 	for _, c := range cases {
 		if got := isClickHouseUnknownTable(c.stderr); got != c.want {

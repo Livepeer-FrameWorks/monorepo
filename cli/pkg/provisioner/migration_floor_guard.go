@@ -222,6 +222,14 @@ func ReadClickHouseMigrationLedger(
 
 	result, err := sshPool.Run(runCtx, cfg, cmd)
 	if err != nil {
+		// ssh.Pool.Run reports a non-zero REMOTE exit as an error carrying the
+		// remote stderr, so the missing-table case arrives here rather than as a
+		// non-zero result.ExitCode. Both paths are checked because a fresh node
+		// has the baseline (and its _schema_baseline marker) but no ledger yet:
+		// migrate.yml creates _migrations, and it has not run.
+		if isClickHouseUnknownTable(err.Error()) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("ssh run clickhouse-client: %w", err)
 	}
 	if result.ExitCode != 0 {
@@ -376,6 +384,9 @@ func readClickHouseBaselineMarker(ctx context.Context, sshPool *ssh.Pool, host i
 	defer cancel()
 	result, err := sshPool.Run(runCtx, cfg, cmd)
 	if err != nil {
+		if isClickHouseUnknownTable(err.Error()) {
+			return "", nil // marker table absent → existing cluster
+		}
 		return "", fmt.Errorf("ssh run clickhouse-client: %w", err)
 	}
 	if result.ExitCode != 0 {
