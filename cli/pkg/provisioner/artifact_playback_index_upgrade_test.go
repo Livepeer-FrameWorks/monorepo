@@ -9,13 +9,11 @@ import (
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 )
 
-// TestArtifactPlaybackIndexUpgradeFromReleasedLower proves the v0.2.96 contract migration replaces the
-// RELEASED functional lower(playback_id::text) playback indexes with plain btrees usable by the
-// resolvers' `WHERE playback_id = $1` CITEXT equality. TestPostgresBaselineEqualsReplay cannot catch
-// this: it derives its "old" state from the current baseline (already plain), so a same-name
-// CREATE IF NOT EXISTS in expand would pass there while being inert on a real upgrade. This test seeds
-// the released lower() definitions explicitly and asserts the migration converts them.
-func TestArtifactPlaybackIndexUpgradeFromReleasedLower(t *testing.T) {
+// TestArtifactPlaybackIndexRepairFromPartialYugabyteAttempt proves the v0.2.96 contract migration
+// reconciles the live partial-failure shape: the clips index is absent while the other three released
+// functional indexes remain. The migration must restore the missing index without replacing the
+// Yugabyte-compatible definitions.
+func TestArtifactPlaybackIndexRepairFromPartialYugabyteAttempt(t *testing.T) {
 	requireDocker(t)
 
 	const name = "fw-pb-idx-upgrade"
@@ -28,7 +26,6 @@ func TestArtifactPlaybackIndexUpgradeFromReleasedLower(t *testing.T) {
 CREATE EXTENSION IF NOT EXISTS citext;
 CREATE SCHEMA commodore;
 CREATE TABLE commodore.clips (playback_id CITEXT);
-CREATE UNIQUE INDEX idx_commodore_clips_playback_ci ON commodore.clips((lower(playback_id::text)));
 CREATE TABLE commodore.dvr_recordings (playback_id CITEXT);
 CREATE UNIQUE INDEX idx_commodore_dvr_playback_ci ON commodore.dvr_recordings((lower(playback_id::text)));
 CREATE TABLE commodore.vod_assets (playback_id CITEXT);
@@ -44,13 +41,13 @@ CREATE UNIQUE INDEX idx_commodore_dvr_chapter_playback_pid_ci ON commodore.dvr_c
 	pgApply(t, name, "up", string(mig))
 
 	schema := pgIntrospect(t, name, "up")
-	wantPlain := []string{
+	wantFunctional := []string{
 		"idx_commodore_clips_playback_ci",
 		"idx_commodore_dvr_playback_ci",
 		"idx_commodore_vod_playback_ci",
 		"idx_commodore_dvr_chapter_playback_pid_ci",
 	}
-	for _, idx := range wantPlain {
+	for _, idx := range wantFunctional {
 		var def string
 		for _, line := range strings.Split(schema, "\n") {
 			if strings.Contains(line, "|"+idx+"|") {
@@ -62,11 +59,8 @@ CREATE UNIQUE INDEX idx_commodore_dvr_chapter_playback_pid_ci ON commodore.dvr_c
 			t.Errorf("index %s missing after upgrade", idx)
 			continue
 		}
-		if strings.Contains(strings.ToLower(def), "lower(") {
-			t.Errorf("index %s still functional lower() after upgrade (migration was inert): %s", idx, def)
-		}
-		if !strings.Contains(def, "(playback_id)") {
-			t.Errorf("index %s is not a plain btree on playback_id: %s", idx, def)
+		if !strings.Contains(strings.ToLower(def), "lower((playback_id)::text)") {
+			t.Errorf("index %s is not functional lower(playback_id::text): %s", idx, def)
 		}
 	}
 }

@@ -590,11 +590,10 @@ CREATE INDEX IF NOT EXISTS idx_commodore_clips_stream ON commodore.clips(stream_
 CREATE INDEX IF NOT EXISTS idx_commodore_clips_user ON commodore.clips(user_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_clips_hash ON commodore.clips(clip_hash);
 CREATE INDEX IF NOT EXISTS idx_commodore_clips_internal ON commodore.clips(internal_name);
--- playback_id is CITEXT, so a plain btree on the column enforces case-insensitive uniqueness AND is
--- usable by the resolvers' `WHERE playback_id = $1` equality (a functional lower(playback_id::text)
--- index is not).
+-- YugabyteDB cannot index CITEXT directly. Match playback lookup queries to this expression so the
+-- portable functional index provides both case-insensitive uniqueness and indexed resolution.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_commodore_clips_playback_ci
-    ON commodore.clips(playback_id);
+    ON commodore.clips((lower(playback_id::text)));
 CREATE INDEX IF NOT EXISTS idx_commodore_clips_created ON commodore.clips(created_at);
 
 -- DVR recording business registry (metadata only, lifecycle in Foghorn)
@@ -677,10 +676,9 @@ CREATE INDEX IF NOT EXISTS idx_commodore_dvr_user ON commodore.dvr_recordings(us
 CREATE INDEX IF NOT EXISTS idx_commodore_dvr_hash ON commodore.dvr_recordings(dvr_hash);
 CREATE INDEX IF NOT EXISTS idx_commodore_dvr_stream_internal ON commodore.dvr_recordings(stream_internal_name);
 CREATE INDEX IF NOT EXISTS idx_commodore_dvr_internal ON commodore.dvr_recordings(internal_name);
--- playback_id is CITEXT: a plain btree enforces case-insensitive uniqueness and is usable by the
--- resolvers' `WHERE playback_id = $1` equality.
+-- YugabyteDB cannot index CITEXT directly; playback lookup queries use this same expression.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_commodore_dvr_playback_ci
-    ON commodore.dvr_recordings(playback_id);
+    ON commodore.dvr_recordings((lower(playback_id::text)));
 CREATE INDEX IF NOT EXISTS idx_commodore_dvr_created ON commodore.dvr_recordings(created_at);
 
 -- Generate clip hash (deterministic based on stream + timing)
@@ -807,10 +805,9 @@ CREATE INDEX IF NOT EXISTS idx_commodore_vod_stream ON commodore.vod_assets(stre
     WHERE stream_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_commodore_vod_hash ON commodore.vod_assets(vod_hash);
 CREATE INDEX IF NOT EXISTS idx_commodore_vod_internal ON commodore.vod_assets(internal_name);
--- playback_id is CITEXT: a plain btree enforces case-insensitive uniqueness and is usable by the
--- resolvers' `WHERE playback_id = $1` equality.
+-- YugabyteDB cannot index CITEXT directly; playback lookup queries use this same expression.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_commodore_vod_playback_ci
-    ON commodore.vod_assets(playback_id);
+    ON commodore.vod_assets((lower(playback_id::text)));
 CREATE INDEX IF NOT EXISTS idx_commodore_vod_created ON commodore.vod_assets(created_at);
 CREATE INDEX IF NOT EXISTS idx_commodore_vod_origin
     ON commodore.vod_assets(origin_type, origin_id)
@@ -835,10 +832,9 @@ CREATE TABLE IF NOT EXISTS commodore.dvr_chapter_playback (
     updated_at    TIMESTAMP DEFAULT NOW()
 );
 
--- playback_id is CITEXT: a plain btree enforces case-insensitive uniqueness and is usable by the
--- chapter resolver's `WHERE playback_id = $1` equality.
+-- YugabyteDB cannot index CITEXT directly; the chapter resolver uses this same expression.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_commodore_dvr_chapter_playback_pid_ci
-    ON commodore.dvr_chapter_playback(playback_id);
+    ON commodore.dvr_chapter_playback((lower(playback_id::text)));
 CREATE INDEX IF NOT EXISTS idx_commodore_dvr_chapter_playback_tenant
     ON commodore.dvr_chapter_playback(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_dvr_chapter_playback_artifact

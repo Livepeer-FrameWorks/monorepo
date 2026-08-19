@@ -235,11 +235,29 @@ func TestPostgresTaggedBaselineUpgradeEqualsCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("known migration databases: %v", err)
 	}
-	migrations, err := discoverMigrationsInFS(dbsql.Content, "migrations", known)
+	allMigrations, err := discoverMigrationsInFS(dbsql.Content, "migrations", known)
 	if err != nil {
 		t.Fatalf("discover postgres migrations: %v", err)
 	}
-	migrations = migrationsAfterVersion(migrations, fromTag)
+	migrations := migrationsAfterVersion(allMigrations, fromTag)
+	if fromTag == "v0.2.96" {
+		// v0.2.96's artifact-playback contract migration was repaired after its tag because the
+		// released plain CITEXT indexes are unsupported by YugabyteDB. Apply that byte-exact,
+		// reconcilable repair when proving the old tagged baseline so the harness covers both the
+		// pre-repoint tag and the corrected tag (where CREATE IF NOT EXISTS is a no-op).
+		const repairPath = "migrations/commodore/v0.2.96/contract/001_dvr_chapter_playback_index_realign.sql"
+		foundRepair := false
+		for _, migration := range allMigrations {
+			if migration.Path == repairPath {
+				migrations = append([]Migration{migration}, migrations...)
+				foundRepair = true
+				break
+			}
+		}
+		if !foundRepair {
+			t.Fatalf("approved v0.2.96 repair %s is missing", repairPath)
+		}
+	}
 
 	const name = "fw-sv-pg-tag"
 	pgStart(t, name)
