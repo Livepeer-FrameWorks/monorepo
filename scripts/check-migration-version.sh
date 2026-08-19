@@ -18,14 +18,6 @@ diff_base=""
 worktree=false
 path_args=()
 
-# v0.2.96 contract/001 shipped with plain indexes on CITEXT, which YugabyteDB rejects. Production's
-# attempt failed before the migration entered the ledger, so the corrected release artifact embeds
-# the portable, non-destructive functional-index form and production records this replacement hash.
-# Keep this exception byte-exact: it authorizes the audited repair, not subsequent edits to shipped
-# migration history.
-approved_repair_path="pkg/database/sql/migrations/commodore/v0.2.96/contract/001_dvr_chapter_playback_index_realign.sql"
-approved_repair_sha256="f2bdab1cc45feb7062294b16aeeb327be48720a7dd0df052e4c94d525c424af7"
-
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --diff-base)
@@ -112,6 +104,12 @@ for version in "${catalog_versions[@]}"; do
   fi
 done
 
+schema_migration_floor=$(awk '$1 == "schema_migration_floor:" { print $2; exit }' "$catalog_path")
+if [[ ! "$schema_migration_floor" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "ERROR: release catalog must declare schema_migration_floor as a final vX.Y.Z release" >&2
+  exit 1
+fi
+
 violations=()
 pending_version=""
 if [ "${#pending_versions[@]}" -gt 1 ]; then
@@ -137,27 +135,10 @@ check_pending_path() {
 }
 
 # Inventory the complete checked-out tree, not only the current diff. This is
-# what prevents old v0.2.97/v0.3.0 buckets from hiding beside v0.2.96.
+# what prevents undeclared future migration buckets from hiding beside the pending release.
 while IFS= read -r file; do
   check_pending_path "$file"
 done < <(find pkg/database/sql/migrations pkg/database/sql/clickhouse/migrations -type f -name '*.sql' -print | LC_ALL=C sort)
-
-candidate_sha256() {
-  local file=$1
-  if [ -n "$diff_base" ]; then
-    git show "HEAD:$file" 2>/dev/null | shasum -a 256 | awk '{print $1}'
-  elif [ "$worktree" = true ]; then
-    shasum -a 256 "$file" 2>/dev/null | awk '{print $1}'
-  else
-    git show ":$file" 2>/dev/null | shasum -a 256 | awk '{print $1}'
-  fi
-}
-
-is_approved_shipped_repair() {
-  local file=$1
-  [ "$file" = "$approved_repair_path" ] || return 1
-  [ "$(candidate_sha256 "$file")" = "$approved_repair_sha256" ]
-}
 
 check_added_or_modified() {
   local file=$1
@@ -167,9 +148,6 @@ check_added_or_modified() {
 
   local version=${BASH_REMATCH[2]}
   if ! version_gt "$version" "$latest_tag"; then
-    if is_approved_shipped_repair "$file"; then
-      return
-    fi
     violations+=("  $file  (changes a migration at $version that is immutable because $latest_tag has shipped)")
     return
   fi
@@ -184,6 +162,12 @@ check_deleted() {
 
   local version=${BASH_REMATCH[2]}
   if ! version_gt "$version" "$latest_tag"; then
+    # A declared schema-floor release may consolidate all older SQL into the canonical baselines. This is intentionally
+    # deletion-only: modifying shipped SQL is still forbidden, and deletion is refused unless the floor itself is the
+    # one pending catalog release. That makes a squash an explicit release operation rather than a permanent escape.
+    if [ "$pending_version" = "$schema_migration_floor" ] && version_gt "$schema_migration_floor" "$version"; then
+      return
+    fi
     violations+=("  $file  (deletes a migration at $version that is immutable because $latest_tag has shipped)")
   fi
 }

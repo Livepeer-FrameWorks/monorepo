@@ -61,6 +61,10 @@ func PostgresBelowFloorGap(
 	if err != nil {
 		return nil, fmt.Errorf("discover migrations: %w", err)
 	}
+	if catalogErr := releases.LoadError(); catalogErr != nil {
+		return nil, fmt.Errorf("load release source certificates: %w", catalogErr)
+	}
+	all = append(all, schemaSentinelMigrations("postgres")...)
 	expected := belowFloorItemsFromList(all, databases)
 	if len(expected) == 0 {
 		return nil, nil
@@ -150,6 +154,10 @@ func ClickHouseBelowFloorGap(
 	if err != nil {
 		return nil, fmt.Errorf("discover clickhouse migrations: %w", err)
 	}
+	if err := releases.LoadError(); err != nil {
+		return nil, fmt.Errorf("load release source certificates: %w", err)
+	}
+	all = append(all, schemaSentinelMigrations("clickhouse")...)
 	databases := make([]SchemaDatabase, 0, len(dbNames))
 	for _, db := range dbNames {
 		databases = append(databases, SchemaDatabase{Name: db})
@@ -173,6 +181,23 @@ func ClickHouseBelowFloorGap(
 		markers[db] = floor
 	}
 	return belowFloorGap(expected, ledger, markers), nil
+}
+
+func schemaSentinelMigrations(engine string) []Migration {
+	sentinels := releases.SchemaMigrationSentinels(engine)
+	out := make([]Migration, 0, len(sentinels))
+	for _, sentinel := range sentinels {
+		out = append(out, Migration{
+			Database:      sentinel.Database,
+			Version:       sentinel.Version,
+			Phase:         sentinel.Phase,
+			Sequence:      sentinel.Sequence,
+			Filename:      "source-release-sentinel",
+			Checksum:      sentinel.Checksum,
+			Transactional: true,
+		})
+	}
+	return out
 }
 
 // ReadClickHouseMigrationLedger reads the _migrations ledger from a ClickHouse
@@ -414,6 +439,6 @@ func FormatBelowFloorRefusal(engine string, gap []MigrationKey) string {
 	}
 	return fmt.Sprintf(
 		"%s cluster is below the schema baseline floor (%s): %d migration(s) folded into the baseline were never applied here, so upgrading would skip them.\n"+
-			"Step the cluster up to the floor first — upgrade to a release older than %s (whose floor still offered these migrations), let them apply, then upgrade to this release.\nMissing: %s",
-		engine, schemaMigrationBaselineFloor, len(gap), schemaMigrationBaselineFloor, strings.Join(keys, ", "))
+			"Step the cluster through the corrected v0.2.96 release first, let every migration complete, then retry the v0.3 release.\nMissing source certificate(s): %s",
+		engine, schemaMigrationBaselineFloor, len(gap), strings.Join(keys, ", "))
 }

@@ -297,7 +297,59 @@ CREATE TABLE IF NOT EXISTS purser.tier_entitlements (
 -- One row per (tier, meter). model is one of:
 --   tiered_graduated  -- (qty - included_quantity) * unit_price
 --   all_usage         -- qty * unit_price
---   codec_multiplier  -- processing fee using config.codec_multipliers keyed by codec or process:codec
+--   dimensioned       -- per-bounded-dimension selector rates
+CREATE TABLE IF NOT EXISTS purser.meter_definitions (
+    meter VARCHAR(64) PRIMARY KEY,
+    unit VARCHAR(32) NOT NULL,
+    aggregation VARCHAR(16) NOT NULL DEFAULT 'sum',
+    display_name VARCHAR(100) NOT NULL,
+    allowed_dimensions TEXT[] NOT NULL DEFAULT '{}',
+    default_priceable BOOLEAN NOT NULL DEFAULT FALSE,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    CONSTRAINT chk_meter_definition_name CHECK (meter ~ '^[a-z][a-z0-9_]{0,63}$'),
+    CONSTRAINT chk_meter_definition_aggregation CHECK (aggregation IN ('sum', 'max', 'last'))
+);
+
+INSERT INTO purser.meter_definitions
+    (meter, unit, aggregation, display_name, allowed_dimensions, default_priceable)
+VALUES
+    ('delivered_minutes', 'minute', 'sum', 'Delivered minutes', '{}', TRUE),
+    ('ingress_gb', 'gibibyte', 'sum', 'Ingress bandwidth', '{}', FALSE),
+    ('egress_gb', 'gibibyte', 'sum', 'Egress bandwidth', '{}', TRUE),
+    ('stream_runtime_seconds', 'second', 'sum', 'Stream runtime', '{}', FALSE),
+    ('storage_gb_seconds_hot', 'gibibyte_second', 'sum', 'Hot storage', '{storage_backend,storage_scope}', FALSE),
+    ('storage_gb_seconds_cold', 'gibibyte_second', 'sum', 'Cold storage', '{storage_backend,storage_scope}', TRUE),
+    ('api_requests', 'request', 'sum', 'API requests', '{auth_type,operation_type,service}', FALSE),
+    ('api_errors', 'request', 'sum', 'API errors', '{auth_type,operation_type,service}', FALSE),
+    ('api_duration_ms', 'millisecond', 'sum', 'API duration', '{auth_type,operation_type,service}', FALSE),
+    ('api_complexity', 'point', 'sum', 'API complexity', '{auth_type,operation_type,service}', FALSE),
+    ('llm_input_tokens', 'token', 'sum', 'LLM input tokens', '{model,provider,service}', FALSE),
+    ('llm_output_tokens', 'token', 'sum', 'LLM output tokens', '{model,provider,service}', FALSE),
+    ('embedding_tokens', 'token', 'sum', 'Embedding tokens', '{model,service}', FALSE),
+    ('embedding_requests', 'request', 'sum', 'Embedding requests', '{model,provider,service}', FALSE),
+    ('search_requests', 'request', 'sum', 'Search requests', '{provider,service}', FALSE),
+    ('transcode_input_seconds', 'second', 'sum', 'Transcode input', '{execution_backend,input_codec,output_codec,track_type,rendition_profile,resolution_class}', FALSE),
+    ('transcode_rendition_seconds', 'second', 'sum', 'Transcode renditions', '{execution_backend,input_codec,output_codec,track_type,rendition_profile,resolution_class}', TRUE),
+    ('remux_seconds', 'second', 'sum', 'Remux processing', '{execution_backend,output_codec,container}', FALSE),
+    ('transcription_seconds', 'second', 'sum', 'Transcription', '{execution_backend,model,language}', FALSE),
+    ('inference_frames', 'frame', 'sum', 'Inference frames', '{execution_backend,model}', FALSE),
+    ('inference_input_tokens', 'token', 'sum', 'Inference input tokens', '{execution_backend,model}', FALSE),
+    ('inference_output_tokens', 'token', 'sum', 'Inference output tokens', '{execution_backend,model}', FALSE),
+    ('inference_invocations', 'invocation', 'sum', 'Inference invocations', '{execution_backend,model}', FALSE),
+    ('peak_bandwidth_mbps', 'megabit_per_second', 'max', 'Peak bandwidth', '{}', FALSE),
+    ('max_viewers', 'viewer', 'max', 'Peak viewers', '{}', FALSE),
+    ('total_streams', 'stream', 'sum', 'Streams', '{}', FALSE),
+    ('total_viewers', 'viewer', 'sum', 'Viewers', '{}', FALSE),
+    ('unique_users', 'user', 'max', 'Unique users', '{}', FALSE),
+    ('media_seconds', 'second', 'sum', 'Historical media processing', '{execution_backend,output_codec,track_type}', FALSE)
+ON CONFLICT (meter) DO UPDATE SET
+    unit = EXCLUDED.unit,
+    aggregation = EXCLUDED.aggregation,
+    display_name = EXCLUDED.display_name,
+    allowed_dimensions = EXCLUDED.allowed_dimensions,
+    default_priceable = EXCLUDED.default_priceable,
+    active = TRUE;
+
 CREATE TABLE IF NOT EXISTS purser.tier_pricing_rules (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tier_id UUID NOT NULL REFERENCES purser.billing_tiers(id) ON DELETE CASCADE,
@@ -308,7 +360,7 @@ CREATE TABLE IF NOT EXISTS purser.tier_pricing_rules (
     unit_price NUMERIC(20,9) NOT NULL DEFAULT 0,
     config JSONB NOT NULL DEFAULT '{}',
     CONSTRAINT chk_tier_pricing_meter CHECK (meter ~ '^[a-z][a-z0-9_]{0,63}$'),
-    CONSTRAINT chk_tier_pricing_model CHECK (model IN ('tiered_graduated', 'all_usage', 'codec_multiplier')),
+    CONSTRAINT chk_tier_pricing_model CHECK (model IN ('tiered_graduated', 'all_usage', 'dimensioned')),
     UNIQUE (tier_id, meter)
 );
 
@@ -409,7 +461,7 @@ CREATE TABLE IF NOT EXISTS purser.subscription_pricing_overrides (
     unit_price NUMERIC(20,9),
     config JSONB DEFAULT '{}',
     CONSTRAINT chk_subscription_pricing_meter CHECK (meter ~ '^[a-z][a-z0-9_]{0,63}$'),
-    CONSTRAINT chk_subscription_pricing_model CHECK (model IS NULL OR model IN ('tiered_graduated', 'all_usage', 'codec_multiplier')),
+    CONSTRAINT chk_subscription_pricing_model CHECK (model IS NULL OR model IN ('tiered_graduated', 'all_usage', 'dimensioned')),
     PRIMARY KEY (subscription_id, meter)
 );
 
@@ -435,6 +487,8 @@ CREATE TABLE IF NOT EXISTS purser.invoice_line_items (
     tenant_id UUID NOT NULL,
     line_key VARCHAR(128) NOT NULL,
     meter VARCHAR(64),
+    unit VARCHAR(32) NOT NULL DEFAULT '',
+    dimensions JSONB NOT NULL DEFAULT '{}',
     description TEXT NOT NULL,
     quantity NUMERIC(20,6) NOT NULL,
     included_quantity NUMERIC(20,6) NOT NULL DEFAULT 0,
@@ -488,7 +542,7 @@ CREATE TABLE IF NOT EXISTS purser.operator_credit_ledger (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     source_type VARCHAR(32) NOT NULL DEFAULT 'invoice_line',
     invoice_line_item_id UUID REFERENCES purser.invoice_line_items(id) ON DELETE CASCADE,
-    storage_provider_usage_record_id UUID,
+    provider_usage_record_id UUID,
     usage_adjustment_id UUID,
     stripe_invoice_id VARCHAR(255),
     entry_type VARCHAR(16) NOT NULL,
@@ -511,7 +565,7 @@ CREATE TABLE IF NOT EXISTS purser.operator_credit_ledger (
     CONSTRAINT chk_op_credit_status CHECK (status IN ('accruing', 'eligible', 'paid_out', 'clawed_back', 'held')),
     CONSTRAINT chk_op_credit_source CHECK (
         (source_type = 'invoice_line'            AND invoice_line_item_id IS NOT NULL) OR
-        (source_type = 'storage_provider_usage'  AND storage_provider_usage_record_id IS NOT NULL) OR
+        (source_type = 'provider_usage'          AND provider_usage_record_id IS NOT NULL) OR
         (source_type = 'usage_adjustment'        AND usage_adjustment_id IS NOT NULL) OR
         (source_type = 'stripe_subscription'     AND stripe_invoice_id    IS NOT NULL)
     ),
@@ -526,9 +580,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_op_credit_accrual_invoice_line
     ON purser.operator_credit_ledger(invoice_line_item_id)
     WHERE entry_type = 'accrual' AND source_type = 'invoice_line';
 -- One accrual per provider-attributed storage usage slice.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_op_credit_accrual_storage_provider_usage
-    ON purser.operator_credit_ledger(storage_provider_usage_record_id)
-    WHERE entry_type = 'accrual' AND source_type = 'storage_provider_usage';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_op_credit_accrual_provider_usage
+    ON purser.operator_credit_ledger(provider_usage_record_id)
+    WHERE entry_type = 'accrual' AND source_type = 'provider_usage';
 -- One accrual per provider-attributed storage correction.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_op_credit_accrual_usage_adjustment
     ON purser.operator_credit_ledger(usage_adjustment_id)
@@ -756,6 +810,11 @@ CREATE TABLE IF NOT EXISTS purser.usage_records (
     
     -- ===== USAGE METRICS =====
     usage_type VARCHAR(64) NOT NULL,         -- canonical meter key or operational metric key
+    unit VARCHAR(32) NOT NULL,
+    dimensions JSONB NOT NULL DEFAULT '{}',
+    dimension_key CHAR(64) NOT NULL,
+    source_id VARCHAR(128) NOT NULL,
+    report_id VARCHAR(64) NOT NULL,
     usage_value DECIMAL(20,6) NOT NULL DEFAULT 0,
     usage_details JSONB DEFAULT '{}',        -- Additional usage metadata
     -- value_kind labels the shape of usage_value. Rated billing rows are
@@ -773,19 +832,23 @@ CREATE TABLE IF NOT EXISTS purser.usage_records (
 
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
-    UNIQUE (tenant_id, cluster_id, usage_type, period_start, period_end)
+    CONSTRAINT usage_records_dimensioned_window_key UNIQUE
+        (tenant_id, cluster_id, source_id, usage_type, dimension_key, period_start, period_end)
 );
 
-CREATE TABLE IF NOT EXISTS purser.storage_provider_usage_records (
+CREATE TABLE IF NOT EXISTS purser.provider_usage_records (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     usage_tenant_id UUID NOT NULL,
-    customer_cluster_id VARCHAR(100) NOT NULL DEFAULT '',
-    storage_provider_tenant_id VARCHAR(100) NOT NULL DEFAULT '',
-    storage_provider_cluster_id VARCHAR(100) NOT NULL DEFAULT '',
-    storage_backend VARCHAR(32) NOT NULL DEFAULT 'unknown',
-    storage_scope VARCHAR(20) NOT NULL,
+    work_cluster_id VARCHAR(100) NOT NULL,
+    provider_tenant_id VARCHAR(100) NOT NULL DEFAULT '',
+    provider_cluster_id VARCHAR(100) NOT NULL DEFAULT '',
     usage_type VARCHAR(64) NOT NULL,
-    gb_seconds DECIMAL(20,6) NOT NULL DEFAULT 0,
+    unit VARCHAR(32) NOT NULL,
+    usage_value DECIMAL(20,6) NOT NULL,
+    dimensions JSONB NOT NULL DEFAULT '{}',
+    dimension_key CHAR(64) NOT NULL,
+    source_id VARCHAR(128) NOT NULL,
+    report_id VARCHAR(64) NOT NULL,
     period_start TIMESTAMPTZ NOT NULL,
     period_end TIMESTAMPTZ NOT NULL,
     granularity VARCHAR(20) NOT NULL DEFAULT 'minute_5',
@@ -795,11 +858,107 @@ CREATE TABLE IF NOT EXISTS purser.storage_provider_usage_records (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (
-        usage_tenant_id, customer_cluster_id,
-        storage_provider_tenant_id, storage_provider_cluster_id,
-        storage_backend, storage_scope, usage_type,
+        usage_tenant_id, work_cluster_id,
+        provider_tenant_id, provider_cluster_id,
+        source_id, usage_type, dimension_key,
         period_start, period_end
     )
+);
+
+CREATE TABLE IF NOT EXISTS purser.usage_reports (
+    report_id VARCHAR(64) PRIMARY KEY,
+    report_kind VARCHAR(20) NOT NULL,
+    source_id VARCHAR(128) NOT NULL,
+    source_region VARCHAR(64) NOT NULL DEFAULT '',
+    sequence BIGINT NOT NULL,
+    tenant_id UUID NOT NULL,
+    cluster_id VARCHAR(100) NOT NULL,
+    period_start TIMESTAMPTZ NOT NULL,
+    period_end TIMESTAMPTZ NOT NULL,
+    complete BOOLEAN NOT NULL,
+    received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	CONSTRAINT chk_usage_reports_kind CHECK (report_kind IN ('finalized', 'reservation', 'window_complete')),
+    UNIQUE (source_id, tenant_id, cluster_id, report_kind, sequence)
+);
+
+CREATE TABLE IF NOT EXISTS purser.usage_report_quarantine (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    report_id VARCHAR(64),
+    source_id VARCHAR(128) NOT NULL DEFAULT '',
+    tenant_id UUID,
+    rejected_reason VARCHAR(100) NOT NULL,
+    source_topic TEXT NOT NULL DEFAULT '',
+    source_partition INTEGER,
+    source_offset BIGINT,
+    raw_payload JSONB NOT NULL DEFAULT '{}',
+    rejected_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS purser.usage_reservations (
+    tenant_id UUID NOT NULL,
+    source_id VARCHAR(128) NOT NULL,
+    cluster_id VARCHAR(100) NOT NULL,
+    sequence BIGINT NOT NULL,
+    report_id VARCHAR(64) NOT NULL,
+    period_start TIMESTAMPTZ NOT NULL,
+    period_end TIMESTAMPTZ NOT NULL,
+    meters JSONB NOT NULL,
+    reserved_amount_micro BIGINT NOT NULL DEFAULT 0,
+    currency CHAR(3) NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, source_id, cluster_id)
+);
+
+-- Marginal prepaid settlements against a billing-period cumulative rating.
+-- The report key makes retries idempotent; amount_micro preserves sub-cent
+-- precision and may be negative when an explicit correction creates credit.
+CREATE TABLE IF NOT EXISTS purser.prepaid_usage_settlements (
+    report_id VARCHAR(64) PRIMARY KEY,
+    tenant_id UUID NOT NULL,
+    billing_period_start TIMESTAMPTZ NOT NULL,
+    billing_period_end TIMESTAMPTZ NOT NULL,
+    amount_micro BIGINT NOT NULL,
+    cumulative_amount_micro BIGINT NOT NULL,
+    currency CHAR(3) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_prepaid_usage_settlements_tenant_period
+    ON purser.prepaid_usage_settlements (tenant_id, billing_period_start, billing_period_end);
+
+CREATE TABLE IF NOT EXISTS purser.metering_sources (
+    source_id VARCHAR(128) PRIMARY KEY,
+    region VARCHAR(64) NOT NULL DEFAULT '',
+    active_from TIMESTAMPTZ NOT NULL,
+    active_until TIMESTAMPTZ,
+    required BOOLEAN NOT NULL DEFAULT TRUE,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS purser.metering_windows (
+    source_id VARCHAR(128) NOT NULL REFERENCES purser.metering_sources(source_id),
+    period_start TIMESTAMPTZ NOT NULL,
+    period_end TIMESTAMPTZ NOT NULL,
+    complete BOOLEAN NOT NULL,
+    report_count BIGINT NOT NULL DEFAULT 0,
+    observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (source_id, period_start, period_end)
+);
+
+CREATE TABLE IF NOT EXISTS purser.metering_anomalies (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    source_id VARCHAR(128) NOT NULL,
+    tenant_id UUID,
+    cluster_id VARCHAR(100),
+    anomaly_type VARCHAR(64) NOT NULL,
+    source_event_id VARCHAR(255) NOT NULL,
+    details JSONB NOT NULL DEFAULT '{}',
+    status VARCHAR(20) NOT NULL DEFAULT 'open',
+    resolution_reason TEXT,
+    resolved_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (source_id, anomaly_type, source_event_id),
+    CONSTRAINT chk_metering_anomalies_status CHECK (status IN ('open', 'resolved', 'ignored'))
 );
 
 CREATE TABLE IF NOT EXISTS purser.usage_adjustments (
@@ -807,6 +966,9 @@ CREATE TABLE IF NOT EXISTS purser.usage_adjustments (
     tenant_id UUID NOT NULL,
     cluster_id VARCHAR(100) NOT NULL DEFAULT '',
     usage_type VARCHAR(64) NOT NULL,
+    unit VARCHAR(32) NOT NULL DEFAULT 'unit',
+    dimensions JSONB NOT NULL DEFAULT '{}',
+    dimension_key CHAR(64) NOT NULL DEFAULT repeat('0', 64),
     delta_value DECIMAL(20,6) NOT NULL,
     period_start TIMESTAMPTZ NOT NULL,
     period_end TIMESTAMPTZ NOT NULL,
@@ -833,12 +995,19 @@ CREATE INDEX IF NOT EXISTS idx_purser_usage_records_lookup ON purser.usage_recor
 CREATE INDEX IF NOT EXISTS idx_purser_usage_records_created_at ON purser.usage_records(created_at);
 CREATE INDEX IF NOT EXISTS idx_purser_usage_records_period ON purser.usage_records(tenant_id, period_start, period_end);
 CREATE INDEX IF NOT EXISTS idx_purser_usage_records_granularity_period ON purser.usage_records(tenant_id, granularity, period_start, period_end);
-CREATE INDEX IF NOT EXISTS idx_storage_provider_usage_provider_period
-    ON purser.storage_provider_usage_records(storage_provider_tenant_id, period_start, period_end);
-CREATE INDEX IF NOT EXISTS idx_storage_provider_usage_tenant_period
-    ON purser.storage_provider_usage_records(usage_tenant_id, period_start, period_end);
-CREATE INDEX IF NOT EXISTS idx_storage_provider_usage_provider_cluster
-    ON purser.storage_provider_usage_records(storage_provider_cluster_id, storage_backend, period_start);
+CREATE INDEX IF NOT EXISTS idx_provider_usage_provider_period
+    ON purser.provider_usage_records(provider_tenant_id, period_start, period_end);
+CREATE INDEX IF NOT EXISTS idx_provider_usage_tenant_period
+    ON purser.provider_usage_records(usage_tenant_id, period_start, period_end);
+CREATE INDEX IF NOT EXISTS idx_provider_usage_provider_cluster
+    ON purser.provider_usage_records(provider_cluster_id, usage_type, period_start);
+CREATE INDEX IF NOT EXISTS idx_usage_reports_source_period
+    ON purser.usage_reports(source_id, period_start, period_end);
+CREATE INDEX IF NOT EXISTS idx_usage_report_quarantine_source
+    ON purser.usage_report_quarantine(source_id, rejected_at DESC);
+CREATE INDEX IF NOT EXISTS idx_metering_anomalies_open
+    ON purser.metering_anomalies(source_id, tenant_id, created_at)
+    WHERE status = 'open';
 CREATE INDEX IF NOT EXISTS idx_usage_adjustments_invoice_lookup
     ON purser.usage_adjustments(tenant_id, period_start, period_end, status);
 CREATE INDEX IF NOT EXISTS idx_usage_adjustments_source
@@ -954,9 +1123,13 @@ CREATE TABLE IF NOT EXISTS purser.stripe_meter_events_outbox (
     meter VARCHAR(64) NOT NULL,
     stripe_meter_event_name VARCHAR(255) NOT NULL,
     quantity NUMERIC(20,6) NOT NULL,
+    dimensions JSONB NOT NULL DEFAULT '{}',
     period_start TIMESTAMPTZ NOT NULL,
     period_end TIMESTAMPTZ NOT NULL,
     invoice_id UUID REFERENCES purser.billing_invoices(id) ON DELETE SET NULL,
+    -- Nullable only for v0.2 outbox rows carried across the v0.3 upgrade;
+    -- every v0.3 writer supplies the permanent invoice line identity.
+    invoice_line_item_id UUID REFERENCES purser.invoice_line_items(id) ON DELETE CASCADE,
     sent_at TIMESTAMPTZ,
     attempt_count INT NOT NULL DEFAULT 0,
     last_error TEXT,
@@ -964,10 +1137,33 @@ CREATE TABLE IF NOT EXISTS purser.stripe_meter_events_outbox (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_stripe_meter_events_outbox_period
-    ON purser.stripe_meter_events_outbox(tenant_id, cluster_id, meter, stripe_meter_event_name, period_start);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_stripe_meter_events_outbox_invoice_line
+    ON purser.stripe_meter_events_outbox(invoice_line_item_id, stripe_meter_event_name);
 CREATE INDEX IF NOT EXISTS idx_stripe_meter_events_outbox_pending
     ON purser.stripe_meter_events_outbox(created_at)
+    WHERE sent_at IS NULL;
+
+-- Customer invoice notifications are part of invoice finalization, not an
+-- ephemeral post-commit side effect. The outbox row is created in the same
+-- transaction as the permanent invoice and line-item snapshot. Purser workers
+-- lease and retry delivery; drafts and manual-review holds never enter it.
+CREATE TABLE IF NOT EXISTS purser.invoice_email_outbox (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    invoice_id UUID NOT NULL UNIQUE REFERENCES purser.billing_invoices(id) ON DELETE CASCADE,
+    tenant_id UUID NOT NULL,
+    recipient TEXT NOT NULL,
+    claimed_at TIMESTAMPTZ,
+    lease_token UUID,
+    attempts INT NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_error TEXT,
+    sent_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_invoice_email_outbox_pending
+    ON purser.invoice_email_outbox(next_attempt_at, created_at)
     WHERE sent_at IS NULL;
 
 -- Effective-dated audit trail of cluster pricing config. Rating reads the row
@@ -1639,6 +1835,13 @@ FROM purser.stripe_meter_events_outbox
 WHERE sent_at IS NULL
   AND attempt_count >= 5;
 
+CREATE OR REPLACE VIEW purser.payment_report_invoice_email_outbox_stuck AS
+SELECT id, invoice_id, tenant_id, recipient, attempts, next_attempt_at,
+       last_error, created_at, updated_at
+FROM purser.invoice_email_outbox
+WHERE sent_at IS NULL
+  AND attempts >= 5;
+
 -- ============================================================================
 -- BILLING EVENT OUTBOX
 -- ============================================================================
@@ -1740,4 +1943,4 @@ CREATE TABLE IF NOT EXISTS public._schema_baseline (
     applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 INSERT INTO public._schema_baseline (floor)
-    SELECT 'v0.2.96' WHERE NOT EXISTS (SELECT 1 FROM public._schema_baseline);
+    SELECT 'v0.3.0' WHERE NOT EXISTS (SELECT 1 FROM public._schema_baseline);

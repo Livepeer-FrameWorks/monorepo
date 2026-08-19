@@ -67,13 +67,11 @@ repository.
 `make verify-schema-migrations` supplies the schema proof that version checks cannot.
 For PostgreSQL it compares both current-baseline replay and the latest tagged
 baseline plus pending migrations against the current fresh-install baseline. For
-ClickHouse it verifies the current Replicated baseline plus post-floor migrations;
-the `v0.2.95` release path is a one-time cross-host migration from its tagged
-plain-engine source into a fresh Replicated destination, not an in-place engine
-conversion. Its separate `PeriscopeMigrationCatalog` coverage test and `cluster
-clickhouse migrate verify` protect that copy/cutover path. Once the latest tagged
-baseline is Replicated (`v0.2.96+`), the harness also enforces tagged-baseline plus
-pending-migration convergence for ClickHouse automatically. CI checks out full tag
+ClickHouse it verifies the current Replicated baseline plus post-floor migrations
+and the latest supported tagged Replicated baseline plus pending migrations. The
+generic `PeriscopeMigrationCatalog` and `cluster clickhouse migrate verify` remain
+available for operator-directed cross-host moves; historical plain-engine cutover
+code is not part of the v0.3 lifecycle. CI checks out full tag
 history and runs these gates whenever release metadata, migrations, or
 baseline/provisioner schema code changes.
 
@@ -85,17 +83,13 @@ the baseline_ and are never offered to any cluster (`BuildMigrationItems` /
 `BuildClickHouseMigrationItems` / the `Has*` predicates skip them). Fresh installs get
 their effect from the baseline; existing clusters already recorded them in `_migrations`.
 
-This is distinct from `migrationPhaseSafetyFloor` (which gates expand-phase _validation
-rules_, not selection).
+The floor comes from `schema_migration_floor` in the release catalog; migration
+selection, repository validation, tests, and baseline markers consume the same value.
+All migration files still present receive the current phase-safety validation rules.
 
-**SAFETY INVARIANT — the floor must be ≤ one above the highest version that EVERY live
-cluster has fully applied.** An existing cluster never re-applies the baseline, so if the
-floor is raised past what a cluster has applied, that cluster silently misses the
-migrations between its version and the floor. The floor is currently **v0.2.96** because
-production is at v0.2.95: this folds the old problematic migrations (incl. the v0.2.82
-ClickHouse rollup contract that would downgrade `Replicated*`→plain on a fresh node)
-while still _offering_ v0.2.96 to production on its next upgrade. The full v0.3.0
-consolidation raises the floor only after production has crossed to v0.2.96.
+The current floor is **v0.3.0**. Fresh databases are born from the v0.3 baseline. The
+only supported in-place source is the corrected, fully migrated **v0.2.96** release.
+Executable v0.2 migration bodies are not shipped in the v0.3 CLI.
 
 ## Minimum-upgrade-version guard
 
@@ -104,7 +98,8 @@ migrations, `cluster migrate` runs a **below-floor guard** before applying anyth
 (`{Postgres,ClickHouse}BelowFloorGap` in `cli/pkg/provisioner/migration_floor_guard.go`,
 wired via `runBelowFloorGuard`).
 
-Fresh vs stale is decided by a **durable marker**, not ledger-shape inference. Each
+Fresh vs stale is decided by a **durable marker plus compact source certificates**, not
+ledger-shape inference. Each
 baseline schema file writes a `_schema_baseline` row recording the floor it was born at
 (the value is kept in sync with `schemaMigrationBaselineFloor` by
 `TestBaselineMarkerFloorMatchesConst`). Per database the guard reads that marker and the
@@ -113,10 +108,10 @@ baseline schema file writes a `_schema_baseline` row recording the floor it was 
 - marker floor M present → everything `< M` is folded into the baseline this database was
   born from → **skip** those; migrations in `[M, floor)` are still checked against the
   ledger. A fresh cluster (marker = current floor) skips the whole below-floor set;
-- no marker → an existing in-place cluster → **every** below-floor migration must be in
-  its `_migrations` ledger, else the guard **refuses** with a stepping-stone message (step
-  the cluster up to the floor via an older release whose floor still offered those
-  migrations, then upgrade here).
+- no marker → an existing in-place cluster → the catalog's per-database source
+  certificates (version, phase, sequence, SHA-256) must match its `_migrations` ledger.
+  For v0.3 these prove the corrected v0.2.96 stepping-stone. They retain no SQL and
+  cannot execute old behavior. A missing or mismatched certificate refuses the upgrade.
 
 Fail-closed: an unreadable ledger/marker blocks rather than risk an unsafe upgrade. Because
 the marker is persisted (not inferred from ledger emptiness or newest-applied version), a
@@ -130,42 +125,44 @@ that `DROP`s and recreates a table as a **plain** `MergeTree` would downgrade th
 HA-Replicated baseline to non-replicated. Folding + the floor make the baseline the
 single source of truth and stop the replay.
 
-## The ongoing consolidation ritual (per release)
+## The bounded-history release process
 
-At each release that ships schema changes:
+For an ordinary release that ships schema changes:
 
-1. Declare `vX.Y.Z` and its safety metadata in
-   `cli/internal/releases/catalog.yaml`.
-2. Ship the migrations `vX.Y.Z` (incl. any `contract`).
-3. **Fold their net effect into the baseline schema files** (same commit as the
-   migration — never let them drift).
-4. **Raise `schemaMigrationBaselineFloor` → vX.Y.Z.**
-5. **Delete the now-folded migration dirs `< vX.Y.Z`** — but see the two-release safety
-   below.
-6. Keep `make validate-migrations` and `make verify-schema-migrations` green. Use
-   `make verify-schema-postgres` or `make verify-schema-clickhouse` while iterating on
-   one engine.
+1. Declare `vX.Y.Z` and its safety metadata in the release catalog.
+2. Add migrations only under that pending version.
+3. Fold their net effect into the baseline in the same commit.
+4. Keep the floor unchanged while any supported source still needs those executable
+   deltas.
+5. Keep `make validate-migrations` and `make verify-schema-migrations` green.
 
-This keeps `contract` migrations transient (they exist only between a release and its
-consolidation) and the migration tree small.
+At a deliberate lifecycle boundary, after every supported live cluster has crossed the
+chosen stepping-stone:
 
-## Two-release deletion safety
+1. Set `schema_migration_floor` to the boundary release.
+2. Record a minimal exact-checksum source certificate for each database in
+   `schema_migration_sentinels`.
+3. Set every baseline `_schema_baseline` marker to the same floor.
+4. Delete executable SQL strictly below the floor.
+5. Remove release-specific handlers, exceptions, and operator scripts whose invariant is
+   now baseline state.
 
-Folded migration files are **kept for one release** before deletion (Flyway CDRB /
-Django squash pattern). Because migrations are deltas-on-baseline, **no replay path can
-prove the baseline captured all folded history** — the only authoritative check is
-diffing the baseline against a **fully-migrated production database**. So before
-deleting folded dirs:
+This bounds code and migration history without creating a permanent CLI handler for
+every release. Generic transition and data-migration engines remain; individual handlers
+disappear at the next certified lifecycle boundary.
 
-1. `make verify-schema-*` is green (baseline applies cleanly + equals baseline +
-   post-floor migrations).
-2. The baseline is confirmed against the live production schema (the migration doctor
-   ledger check, and/or a direct schema diff), proving production has applied
-   everything being folded.
+## Deletion safety
 
-Only then delete the `< floor` dirs. The floor already prevents the migrations from
-running, so deletion is pure cleanup; this gate guards against a baseline that silently
-omits a folded migration's effect.
+Because migrations are deltas-on-baseline, replay alone cannot prove the baseline
+captured all folded history. Before deleting folded directories:
+
+1. `make verify-schema-*` is green.
+2. The baseline is compared with a fully migrated live schema and its ledgers.
+3. Exact source certificates are captured before deleting the corresponding SQL.
+4. The stepping-stone tag remains available for recovery and convergence tests.
+
+Only then delete `< floor`. Repository validation permits deletion only when the new
+floor is itself the one pending catalog release; modifying shipped SQL remains forbidden.
 
 ## Verification harness — `make verify-schema-{postgres,clickhouse}`
 

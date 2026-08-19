@@ -8,17 +8,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The v0.2.96 release manifest MUST carry rollback_disabled: [chandler] so a deploying CLI skips automatic rollback
-// for Chandler across the /ready contract cut. This asserts the GENERATED YAML (catalog → release-metadata → manifest
-// lines), not just the in-memory lookup — the CI pipeline appends exactly this output to dist/manifest.yaml.
-func TestReleaseMetadata_EmitsRollbackDisabledForV0_2_96(t *testing.T) {
+func TestReleaseMetadata_EmitsV0_3Boundary(t *testing.T) {
 	cmd := newReleaseMetadataCmd()
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
 	cmd.SetErr(&buf)
-	cmd.SetArgs([]string{"v0.2.96"})
+	cmd.SetArgs([]string{"v0.3.0"})
 	if err := cmd.Execute(); err != nil {
-		t.Fatalf("release-metadata v0.2.96: %v", err)
+		t.Fatalf("release-metadata v0.3.0: %v", err)
 	}
 
 	var meta struct {
@@ -28,8 +25,8 @@ func TestReleaseMetadata_EmitsRollbackDisabledForV0_2_96(t *testing.T) {
 	if err := yaml.Unmarshal(buf.Bytes(), &meta); err != nil {
 		t.Fatalf("emitted manifest is not valid YAML: %v\n%s", err, buf.String())
 	}
-	if len(meta.RollbackDisabled) != 1 || meta.RollbackDisabled[0] != "chandler" {
-		t.Fatalf("rollback_disabled = %v, want [chandler]\nfull output:\n%s", meta.RollbackDisabled, buf.String())
+	if meta.MinCLIVersion != "v0.3.0-rc1" || len(meta.RollbackDisabled) != 0 {
+		t.Fatalf("metadata = %+v, want min_cli_version v0.3.0-rc1 and no historical rollback cut\nfull output:\n%s", meta, buf.String())
 	}
 }
 
@@ -38,12 +35,12 @@ func TestReleaseMetadata_RollbackDisabledIsBaseNormalized(t *testing.T) {
 	cmd := newReleaseMetadataCmd()
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
-	cmd.SetArgs([]string{"v0.2.96-rc3"})
+	cmd.SetArgs([]string{"v0.3.0-rc3"})
 	if err := cmd.Execute(); err != nil {
-		t.Fatalf("release-metadata v0.2.96-rc3: %v", err)
+		t.Fatalf("release-metadata v0.3.0-rc3: %v", err)
 	}
-	if !strings.Contains(buf.String(), "rollback_disabled:") || !strings.Contains(buf.String(), "- chandler") {
-		t.Fatalf("prerelease must emit the base release's rollback policy; got:\n%s", buf.String())
+	if !strings.Contains(buf.String(), "min_cli_version: v0.3.0-rc1") || strings.Contains(buf.String(), "rollback_disabled:") {
+		t.Fatalf("prerelease must emit the base release's v0.3 metadata; got:\n%s", buf.String())
 	}
 }
 

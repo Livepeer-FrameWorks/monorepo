@@ -57,10 +57,10 @@ var migrationPhaseOrder = map[string]int{
 	"contract":   2,
 }
 
-const migrationPhaseSafetyFloor = "v0.2.65"
-
 func enforcesMigrationPhaseSafety(migration Migration) bool {
-	return compareSemver(migration.Version, migrationPhaseSafetyFloor) >= 0
+	// Everything still present after a schema consolidation is current migration history and must satisfy the phase
+	// rules. Older SQL is absent, rather than retained behind a second historical validation floor.
+	return !belowBaselineFloor(migration)
 }
 
 // schemaMigrationBaselineFloor is the schema-consolidation floor: migrations with
@@ -70,14 +70,14 @@ func enforcesMigrationPhaseSafety(migration Migration) bool {
 // SAFETY INVARIANT: set the floor at or below the first version not fully
 // applied by every live cluster. Existing clusters never re-apply the baseline,
 // so raising it too far would silently skip migrations between the cluster's
-// applied version and the floor. The floor is v0.2.96 so v0.2.96 still ships as
-// a normal migration while older folded migrations are excluded.
+// applied version and the floor. v0.3.0 is the deliberate hard boundary: fresh
+// clusters are born at it and the only supported in-place source is the fully
+// converged, republished v0.2.96 release.
 //
 // The minimum-upgrade-version guard ({Postgres,ClickHouse}BelowFloorGap in
 // migration_floor_guard.go) enforces this: a cluster missing any < floor migration
 // is refused with a stepping-stone message rather than silently stranded. DISTINCT
-// from migrationPhaseSafetyFloor (which gates validation rules, not selection).
-const schemaMigrationBaselineFloor = "v0.2.96"
+var schemaMigrationBaselineFloor = releases.SchemaMigrationFloor()
 
 // belowBaselineFloor reports whether a migration predates the current schema
 // consolidation and is therefore folded into the baseline. Such migrations are
@@ -360,6 +360,7 @@ var (
 	chModifyTypePattern   = regexp.MustCompile(`(?is)\bALTER\s+TABLE\b[^;]*\bMODIFY\s+COLUMN\b`)
 	chMutationPattern     = regexp.MustCompile(`(?is)\bALTER\s+TABLE\b[^;]*\b(UPDATE|DELETE)\b`)
 	chCreateObjectPattern = regexp.MustCompile(`(?is)\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:MATERIALIZED\s+)?(?:TABLE|VIEW|DICTIONARY)\b`)
+	chCreateOrReplaceView = regexp.MustCompile(`(?is)\bCREATE\s+OR\s+REPLACE\s+VIEW\b`)
 	chIfNotExistsPattern  = regexp.MustCompile(`(?is)\bIF\s+NOT\s+EXISTS\b`)
 	// Dictionary attribute DEFAULTs must be plain literals; ClickHouse
 	// rejects expressions like `DEFAULT toDateTime(0)` with a SYNTAX_ERROR
@@ -420,7 +421,9 @@ func validateClickHouseMigrationSet(migrations []Migration) error {
 		// migration re-applies cleanly on a freshly-baselined cluster.
 		if enforcesMigrationPhaseSafety(migration) {
 			for _, stmt := range splitSQLStatements(content) {
-				if chCreateObjectPattern.MatchString(stmt) && !chIfNotExistsPattern.MatchString(stmt) {
+				if chCreateObjectPattern.MatchString(stmt) &&
+					!chIfNotExistsPattern.MatchString(stmt) &&
+					!chCreateOrReplaceView.MatchString(stmt) {
 					issues = append(issues, MigrationValidationIssue{
 						Path:    migration.Path,
 						Message: "CREATE TABLE/VIEW/DICTIONARY must use IF NOT EXISTS for idempotent re-apply against an existing baseline",

@@ -1297,4 +1297,4 @@ CREATE TABLE IF NOT EXISTS public._schema_baseline (
     applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 INSERT INTO public._schema_baseline (floor)
-    SELECT 'v0.2.96' WHERE NOT EXISTS (SELECT 1 FROM public._schema_baseline);
+    SELECT 'v0.3.0' WHERE NOT EXISTS (SELECT 1 FROM public._schema_baseline);

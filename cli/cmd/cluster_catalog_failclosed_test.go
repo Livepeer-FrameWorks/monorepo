@@ -170,7 +170,7 @@ func TestUpgradeGate_ClickHouseCheckedWhenPostgresDisabled(t *testing.T) {
 	// the catalog's min_cli_version so the shared floor check (checkCLIVersionFloor) passes.
 	origVer := fwv.Version
 	t.Cleanup(func() { fwv.Version = origVer })
-	fwv.Version = "v0.2.96"
+	fwv.Version = "v0.3.0"
 
 	origPG, origCH, origFloor := checkPostgresMigrationGateFn, checkClickHouseMigrationGateFn, runBelowFloorGuardFn
 	t.Cleanup(func() {
@@ -194,7 +194,7 @@ func TestUpgradeGate_ClickHouseCheckedWhenPostgresDisabled(t *testing.T) {
 	manifest := &inventory.Manifest{}
 	rc := &resolvedCluster{Manifest: manifest}
 	err := runUpgradePreDeployGate(context.Background(), &cobra.Command{}, rc, nil, manifest,
-		"v0.2.96", "periscope-ingest", "periscope-ingest", false, true /* skipDataMigrationCheck */)
+		"v0.3.0", "periscope-ingest", "periscope-ingest", false, true /* skipDataMigrationCheck */)
 	if err != nil {
 		t.Fatalf("gate must not error for a ClickHouse-only service with stubbed checks: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestUpgradeGate_DataMigrationCheckedForDBLessService(t *testing.T) {
 	// the data-migration routing.
 	origVer := fwv.Version
 	t.Cleanup(func() { fwv.Version = origVer })
-	fwv.Version = "v0.2.96"
+	fwv.Version = "v0.3.0"
 
 	// signalman is DB-less; the engine branches are not taken, so no SSH is touched. Stub the floor guard defensively.
 	origFloor := runBelowFloorGuardFn
@@ -232,7 +232,7 @@ func TestUpgradeGate_DataMigrationCheckedForDBLessService(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetOut(&out)
 	err := runUpgradePreDeployGate(context.Background(), cmd, rc, nil, manifest,
-		"v0.2.96", "signalman", "signalman", false, false /* run the data-migration check */)
+		"v0.3.0", "signalman", "signalman", false, false /* run the data-migration check */)
 	if err != nil {
 		t.Fatalf("gate must not error for a DB-less service: %v", err)
 	}

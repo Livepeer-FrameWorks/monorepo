@@ -167,15 +167,14 @@ func TestClickHouseBaselineEqualsReplay(t *testing.T) {
 }
 
 // TestClickHouseTaggedBaselineUpgradeEqualsCurrent proves in-place upgrade
-// convergence once the shipped baseline is already Replicated. v0.2.95 is the
-// legacy plain-engine source of the one-time cross-host v0.2.96 cutover, so that
-// tag follows cluster clickhouse migrate rather than this in-place path.
+// convergence once the shipped baseline is already Replicated. Plain-engine
+// installations are below the v0.3 source floor and are refused by the ledger certificates.
 func TestClickHouseTaggedBaselineUpgradeEqualsCurrent(t *testing.T) {
 	requireDocker(t)
 	fromTag := schemaVerifyFromTag(t)
 	taggedSQL := repositoryFileAtTag(t, fromTag, "pkg/database/sql/clickhouse/periscope.sql")
 	if !strings.Contains(taggedSQL, "CREATE DATABASE IF NOT EXISTS periscope ENGINE = Replicated(") {
-		t.Skipf("%s uses the legacy plain ClickHouse source; v0.2.96 migrates it cross-host into a fresh Replicated destination", fromTag)
+		t.Skipf("%s uses the unsupported legacy plain ClickHouse source", fromTag)
 	}
 
 	currentSQL, err := dbsql.Content.ReadFile("clickhouse/periscope.sql")

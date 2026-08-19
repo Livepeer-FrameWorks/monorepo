@@ -639,7 +639,7 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_dvr_chapters_playback_id
 -- connector PID), fenced by the start trigger UUID/time. Minted on the accepted
 -- PUSH_REWRITE (PID from the X-PID header), ended on PUSH_INPUT_CLOSE carrying the
 -- same PID; each DVR recording binds to a session id so a same-node reconnect is a new
--- session. See migration foghorn/v0.2.96/expand/045_dvr_ingest_sessions.sql.
+-- session. The row is the durable ingest-session authority used across reconnects.
 CREATE TABLE IF NOT EXISTS foghorn.ingest_sessions (
     id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id              UUID NOT NULL,
@@ -685,7 +685,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_foghorn_ingest_sessions_active_pid
 -- serialized cross-replica by a (tenant, stream) advisory lock; this is the durable backstop), and
 -- a Mist trigger UUID identifies one trigger EXECUTION — stable across its retries, distinct for a
 -- later reconnect — so it is unique per (tenant, node). See migration
--- foghorn/v0.2.96/expand/046_ingest_session_stream_authority.sql.
+-- The uniqueness constraint makes the active ingest-session stream authoritative.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_foghorn_ingest_sessions_active_per_stream
     ON foghorn.ingest_sessions(tenant_id, stream_internal_name)
     WHERE ended_at IS NULL;
@@ -716,7 +716,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_foghorn_artifacts_active_dvr_per_generation
 -- advisory lock the close also takes) and denies a late rewrite whose start is at or before a recorded
 -- close for the same connector, so a dead publisher is never resurrected as an active session. Swept
 -- on a TTL by the ingest session reaper. See migration
--- foghorn/v0.2.96/expand/048_ingest_close_tombstones.sql.
+-- Close tombstones make repeated or delayed close events idempotent.
 CREATE TABLE IF NOT EXISTS foghorn.ingest_close_tombstones (
     tenant_id            UUID NOT NULL,
     node_id              VARCHAR(100) NOT NULL,
@@ -735,7 +735,7 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_close_tombstones_created
 -- advisory lock, so a later transition carries a strictly higher revision; the registry merges
 -- source-ownership fields by it (highest wins) so a stale replica cannot clobber the real publisher via
 -- a last-writer-wins location write. See migration
--- foghorn/v0.2.96/expand/049_source_projection_revision.sql.
+-- Projection revisions prevent stale source observations from replacing newer state.
 CREATE SEQUENCE IF NOT EXISTS foghorn.source_projection_revision;
 
 -- Durable, revision-fenced stream-offline work. The transition is enqueued under the same
@@ -1013,17 +1013,6 @@ CREATE TABLE IF NOT EXISTS foghorn.cell_storage_identity (
     committed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Single-row durable cutoff for the ONE-TIME attribution of legacy NULL-owner rows across every backend-owned table:
--- artifacts, thumbnail_task_assignment, stream_cleanup_obligation, staging_cleanup_queue, and freeze_publication_ledger.
--- A boot that finds no marker claims it and, in the same transaction, stamps the proven cell fingerprint onto those
--- rows' NULL backend_id; the claim makes it run exactly once, so a NULL backend appearing later is a genuine ownership
--- regression that cleanup fails closed on rather than re-attributing.
-CREATE TABLE IF NOT EXISTS foghorn.backend_adoption (
-    id         BOOLEAN PRIMARY KEY DEFAULT true,
-    adopted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT backend_adoption_singleton CHECK (id)
-);
-
 -- Crash-safe thumbnail publication. Server-minted, node-bound assignments; per-attempt staging + immutable
 -- versioned objects; an active pointer (keyed by the globally-unique asset_key) switched transactionally. Live
 -- streams have no artifact row and one attempt owns multiple files, so these are dedicated tables — not columns
@@ -1292,13 +1281,14 @@ CREATE SEQUENCE IF NOT EXISTS foghorn.artifact_node_copy_version_seq AS BIGINT;
 CREATE TABLE IF NOT EXISTS foghorn.artifact_event_outbox (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     -- event_kind discriminates the typed payload (clip_lifecycle,
-    -- dvr_lifecycle, vod_lifecycle, federation_event, artifact_node_copy).
+    -- dvr_lifecycle, vod_lifecycle, federation_event, artifact_node_copy,
+    -- storage_snapshot).
     event_kind   TEXT NOT NULL,
     tenant_id    UUID,
     stream_id    TEXT NOT NULL DEFAULT '',
     artifact_id  TEXT NOT NULL DEFAULT '',
     -- protojson-encoded typed payload (pb.{ClipLifecycleData,
-    -- DVRLifecycleData,VodLifecycleData,FederationEventData}).
+    -- DVRLifecycleData,VodLifecycleData,FederationEventData,StorageSnapshot}).
     payload JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     claimed_at   TIMESTAMPTZ,
@@ -1392,4 +1382,4 @@ CREATE TABLE IF NOT EXISTS public._schema_baseline (
     applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 INSERT INTO public._schema_baseline (floor)
-    SELECT 'v0.2.96' WHERE NOT EXISTS (SELECT 1 FROM public._schema_baseline);
+    SELECT 'v0.3.0' WHERE NOT EXISTS (SELECT 1 FROM public._schema_baseline);

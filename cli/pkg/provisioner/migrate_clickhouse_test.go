@@ -52,6 +52,23 @@ func TestValidateClickHouseMigrationSetRequiresIfNotExists(t *testing.T) {
 	}
 }
 
+func TestValidateClickHouseMigrationSetAcceptsCreateOrReplaceView(t *testing.T) {
+	migrations := []Migration{
+		{
+			Database: "periscope",
+			Version:  "v0.3.0",
+			Phase:    "expand",
+			Sequence: 1,
+			Path:     "clickhouse/migrations/periscope/v0.3.0/expand/001_replace_view.sql",
+			content:  "CREATE OR REPLACE VIEW periscope.current_rows AS SELECT 1 AS id;",
+		},
+	}
+
+	if err := validateClickHouseMigrationSet(migrations); err != nil {
+		t.Fatalf("validateClickHouseMigrationSet rejected idempotent view replacement: %v", err)
+	}
+}
+
 func TestValidateClickHouseMigrationSetRejectsDropInExpand(t *testing.T) {
 	migrations := []Migration{
 		{

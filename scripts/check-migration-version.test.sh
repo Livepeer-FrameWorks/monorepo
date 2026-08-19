@@ -15,11 +15,12 @@ mkdir -p pkg/database/sql/migrations/commodore/v0.2.95/expand
 mkdir -p pkg/database/sql/clickhouse/migrations/periscope
 
 write_empty_catalog() {
-  printf '%s\n' 'releases: []' > cli/internal/releases/catalog.yaml
+  printf '%s\n' 'schema_migration_floor: v0.2.95' 'releases: []' > cli/internal/releases/catalog.yaml
 }
 
 write_pending_catalog() {
   printf '%s\n' \
+    'schema_migration_floor: v0.2.95' \
     'releases:' \
     '  - version: v0.2.96' > cli/internal/releases/catalog.yaml
 }
@@ -65,6 +66,7 @@ expect_fail 'a migration outside the one pending release is rejected' --worktree
 rm pkg/database/sql/migrations/commodore/v0.2.97/expand/001_too_far.sql
 
 printf '%s\n' \
+  'schema_migration_floor: v0.2.95' \
   'releases:' \
   '  - version: v0.2.96' \
   '  - version: v0.2.97' > cli/internal/releases/catalog.yaml
@@ -85,5 +87,19 @@ printf '%s\n' 'SELECT 200;' > pkg/database/sql/migrations/commodore/v0.2.96/expa
 git add pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
 git commit -qm 'badly mutate shipped migration'
 expect_fail 'diff-base mode catches a committed shipped-migration edit' --diff-base v0.2.96
+
+git show v0.2.96:pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql > pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
+git add pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
+git commit -qm 'restore shipped fixture for floor test'
+printf '%s\n' \
+  'schema_migration_floor: v0.3.0' \
+  'releases:' \
+  '  - version: v0.3.0' > cli/internal/releases/catalog.yaml
+rm pkg/database/sql/migrations/commodore/v0.2.95/expand/001_released.sql
+rm pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
+expect_pass 'a pending catalog floor may consolidate older shipped migrations' --worktree
+
+printf '%s\n' 'SELECT 201;' > pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
+expect_fail 'a floor never permits rewriting shipped migration history' --worktree
 
 echo 'Release-state guard tests passed'

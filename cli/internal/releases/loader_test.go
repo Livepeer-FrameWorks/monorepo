@@ -5,13 +5,22 @@ import (
 )
 
 func TestShippedCatalogHasDatabaseOwnershipAndReleaseFloor(t *testing.T) {
-	// The shipped catalog declares the v0.2.96 release floor (min CLI version) so the fetched release metadata can carry
+	// The shipped catalog declares the v0.3.0 release floor (min CLI version) so the fetched release metadata can carry
 	// it. Lookup is base-version normalized, so an rc/prerelease target resolves to the same declared release.
-	if got := MinCLIVersionFor("v0.2.96"); got != "v0.2.96-rc1" {
-		t.Errorf("MinCLIVersionFor(v0.2.96) = %q, want v0.2.96-rc1", got)
+	if got := MinCLIVersionFor("v0.3.0"); got != "v0.3.0-rc1" {
+		t.Errorf("MinCLIVersionFor(v0.3.0) = %q, want v0.3.0-rc1", got)
 	}
-	if got := MinCLIVersionFor("v0.2.96-rc1"); got != "v0.2.96-rc1" {
-		t.Errorf("MinCLIVersionFor(v0.2.96-rc1) must resolve via base version, got %q", got)
+	if got := MinCLIVersionFor("v0.3.0-rc2"); got != "v0.3.0-rc1" {
+		t.Errorf("MinCLIVersionFor(v0.3.0-rc2) must resolve via base version, got %q", got)
+	}
+	if got := SchemaMigrationFloor(); got != "v0.3.0" {
+		t.Errorf("SchemaMigrationFloor() = %q, want v0.3.0", got)
+	}
+	if got := len(SchemaMigrationSentinels("postgres")); got != 5 {
+		t.Errorf("postgres source sentinels = %d, want 5", got)
+	}
+	if got := len(SchemaMigrationSentinels("clickhouse")); got != 1 {
+		t.Errorf("clickhouse source sentinels = %d, want 1", got)
 	}
 	if got := ServiceDatabase("purser"); got != "purser" {
 		t.Errorf("purser database ownership = %q, want purser", got)
@@ -121,12 +130,12 @@ func TestParseCatalog_ShippedCatalogPassesStrictValidation(t *testing.T) {
 }
 
 func TestReleasesBelow_ShippedCatalog(t *testing.T) {
-	// The shipped catalog declares only v0.2.96; nothing is below it, and the target's own base is excluded.
-	if got := ReleasesBelow("v0.2.96"); len(got) != 0 {
+	// The shipped catalog declares only v0.3.0; nothing is below it, and the target's own base is excluded.
+	if got := ReleasesBelow("v0.3.0"); len(got) != 0 {
 		t.Fatalf("nothing is below the only shipped release; got %+v", got)
 	}
-	// An RC target excludes the declared final by BASE version too (v0.2.96-rc1 base == v0.2.96).
-	if got := ReleasesBelow("v0.2.96-rc1"); len(got) != 0 {
+	// An RC target excludes the declared final by BASE version too.
+	if got := ReleasesBelow("v0.3.0-rc1"); len(got) != 0 {
 		t.Fatalf("an RC target must exclude its declared final by base; got %+v", got)
 	}
 }
@@ -210,32 +219,14 @@ func TestReleasesBelow_MultiReleaseCatalog(t *testing.T) {
 	}
 }
 
-// TestRequiredTransitionIDsPublished confirms the embedded catalog's transition (introduced at v0.2.96) is published
-// for v0.2.96+ and its canary, and absent for a lower target — the metadata the release pipeline writes into the
-// fetched manifest for outdated-CLI fail-closed validation.
 func TestRequiredTransitionIDsPublished(t *testing.T) {
-	for _, target := range []string{"v0.2.96", "v0.2.96-rc1", "v0.3.0"} {
+	for _, target := range []string{"v0.3.0", "v0.3.0-rc1"} {
 		ids, err := RequiredTransitionIDs(target)
 		if err != nil {
 			t.Fatalf("%s: %v", target, err)
 		}
-		found := false
-		for _, id := range ids {
-			if id == "storage-descriptor-adoption" {
-				found = true
-			}
-		}
-		if !found {
-			t.Fatalf("%s: expected storage-descriptor-adoption in %v", target, ids)
-		}
-	}
-	ids, err := RequiredTransitionIDs("v0.2.90")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, id := range ids {
-		if id == "storage-descriptor-adoption" {
-			t.Fatalf("v0.2.90 must NOT require the v0.2.96 transition, got %v", ids)
+		if len(ids) != 0 {
+			t.Fatalf("%s: v0.3 starts without historical one-off transitions, got %v", target, ids)
 		}
 	}
 }

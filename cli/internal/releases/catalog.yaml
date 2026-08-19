@@ -4,26 +4,70 @@ service_databases:
   navigator: navigator
   periscope-ingest: periscope
   periscope-query: periscope
+  periscope-metering: periscope
   purser: purser
   quartermaster: quartermaster
   skipper: skipper
-# min_cli_version is the per-release tooling floor. It is published into the fetched release metadata so a CLI below
-# the floor fails closed (validateFetchedReleaseCompatibility) before touching any database. v0.2.96's floor is the
-# earliest CLI that carries the storage-descriptor-adoption transition handler the release requires.
-releases:
-  - version: v0.2.96
-    # Floor is the EARLIEST prerelease that actually contains the storage-descriptor-adoption transition handler, NOT
-    # the final v0.2.96 — a prerelease sorts BELOW its final in semver, so requiring v0.2.96 would reject a v0.2.96-rcN
-    # CLI that already has the handler. Catalog lookup is base-version normalized, so this one entry covers rc + final.
-    min_cli_version: v0.2.96-rc1
-    # Chandler serves a store-backed /ready route in v0.2.96 that the release-base Chandler lacks, so a restored old
-    # binary cannot pass the current gate. Automatic rollback is therefore disabled for it (published into the fetched
-    # manifest; deploy name only — aliases chandler-eu/us resolve to it).
-    rollback_disabled:
-      - chandler
+# Migrations below this floor are consolidated into the canonical schema baselines. It is also consumed by the
+# shipped-migration validator, so deleting older SQL is allowed only as part of this declared boundary.
+schema_migration_floor: v0.3.0
 
-# Reconciliation transitions the release DAG must run once the target reaches introduced_in.
-# id is the compiled handler id (cli/cmd/release_reconcile_*.go); an outdated CLI missing it fails the release closed.
-release_transitions:
-  - id: storage-descriptor-adoption
-    introduced_in: v0.2.96
+# Compact ledger certificates for the sole supported in-place source. The v0.2 SQL bodies are intentionally gone;
+# these identities prove a database crossed the corrected v0.2.96 stepping-stone. A fresh v0.3 database is proven by
+# its _schema_baseline marker instead.
+schema_migration_sentinels:
+  - {
+      engine: postgres,
+      database: commodore,
+      version: v0.2.96,
+      phase: contract,
+      sequence: 2,
+      checksum: 72485f193158c1d75237b77400898e9e1d82de94a746ae484ba4629939cf5287,
+    }
+  - {
+      engine: postgres,
+      database: foghorn,
+      version: v0.2.96,
+      phase: postdeploy,
+      sequence: 5,
+      checksum: 1734d8fc1944ae8b453075872908021e5d038a46d9442d6f297ec4e3d704c15d,
+    }
+  - {
+      engine: postgres,
+      database: quartermaster,
+      version: v0.2.96,
+      phase: expand,
+      sequence: 2,
+      checksum: 32182a4c2c2e2a98934d9754ef30dad3fe5001333f0c69cb5494c586904dab0d,
+    }
+  - {
+      engine: postgres,
+      database: navigator,
+      version: v0.2.80,
+      phase: expand,
+      sequence: 1,
+      checksum: b1dd67d53c16bc15e53c82a2be2986318ccc23e468bbbb016d1328c4785abf38,
+    }
+  - {
+      engine: postgres,
+      database: purser,
+      version: v0.2.82,
+      phase: contract,
+      sequence: 1,
+      checksum: bc11f0220c2d5fd60de29681265657762d08461423b05446d7957998727181dc,
+    }
+  - {
+      engine: clickhouse,
+      database: periscope,
+      version: v0.2.96,
+      phase: contract,
+      sequence: 2,
+      checksum: d20c609f17629b002d242b258176e4737698e77cd895794fb092073c0e175c91,
+    }
+
+# v0.3.0 is an intentional lifecycle boundary. The republished v0.2.96 release is the only supported in-place source;
+# fresh clusters bootstrap directly from the v0.3.0 baselines. Old release entries and one-off transitions do not carry
+# forward into the new CLI.
+releases:
+  - version: v0.3.0
+    min_cli_version: v0.3.0-rc1

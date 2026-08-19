@@ -41,9 +41,9 @@ func TestBelowBaselineFloor(t *testing.T) {
 	}{
 		{"v0.2.1", true},
 		{"v0.2.65", true},
-		{"v0.2.95", true},  // folded — prod has applied it
-		{"v0.2.96", false}, // the floor itself is NOT folded — still offered to prod
-		{"v0.2.97", false}, // versions above the floor remain selectable for later targets
+		{"v0.2.95", true},
+		{"v0.2.96", true}, // certified by compact source sentinels, not executable SQL
+		{"v0.2.97", true},
 		{"v0.3.0", false},
 		{"v1.0.0", false},
 	}
@@ -88,15 +88,28 @@ func TestBuildClickHouseMigrationItemsExcludesBelowBaselineFloor(t *testing.T) {
 func TestBelowFloorItemsFromList(t *testing.T) {
 	all := []Migration{
 		{Database: "foghorn", Version: "v0.2.50", Phase: "expand", Sequence: 1, Filename: "001_a.sql", Checksum: "a"},
-		{Database: "foghorn", Version: "v0.2.96", Phase: "expand", Sequence: 1, Filename: "001_b.sql", Checksum: "b"}, // at floor → not folded
+		{Database: "foghorn", Version: "v0.2.96", Phase: "expand", Sequence: 1, Filename: "001_b.sql", Checksum: "b"}, // certified pre-floor state
 		{Database: "other", Version: "v0.2.10", Phase: "expand", Sequence: 1, Filename: "001_c.sql", Checksum: "c"},   // unconfigured db
 	}
 	got := belowFloorItemsFromList(all, []SchemaDatabase{{Name: "foghorn_eu", SourceName: "foghorn"}})
-	if len(got) != 1 {
-		t.Fatalf("want 1 below-floor item, got %d: %v", len(got), got)
+	if len(got) != 2 {
+		t.Fatalf("want 2 below-floor items, got %d: %v", len(got), got)
 	}
 	if got[0]["db"] != "foghorn_eu" || got[0]["version"] != "v0.2.50" {
 		t.Fatalf("remap/version wrong: %v", got[0])
+	}
+}
+
+func TestSchemaSentinelsRetainOnlyLedgerIdentity(t *testing.T) {
+	postgres := schemaSentinelMigrations("postgres")
+	clickhouse := schemaSentinelMigrations("clickhouse")
+	if len(postgres) != 5 || len(clickhouse) != 1 {
+		t.Fatalf("source certificates = %d postgres, %d clickhouse; want 5 and 1", len(postgres), len(clickhouse))
+	}
+	for _, sentinel := range append(postgres, clickhouse...) {
+		if sentinel.content != "" || sentinel.Checksum == "" || !belowBaselineFloor(sentinel) {
+			t.Fatalf("sentinel must contain identity only and sit below the v0.3 floor: %+v", sentinel)
+		}
 	}
 }
 

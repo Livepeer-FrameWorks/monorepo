@@ -21,10 +21,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var baseVersionPattern = regexp.MustCompile(`^(v?\d+\.\d+\.\d+)`)
+var (
+	baseVersionPattern       = regexp.MustCompile(`^(v?\d+\.\d+\.\d+)`)
+	sha256HexChecksumPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+)
 
 // BaseVersion strips any pre-release/build suffix from a version, returning a CANONICAL vX.Y.Z. A pre-release of X
-// (e.g. v0.2.96-rc1) is built from the X line and carries X's schema/behavior, so "is this migration/transition
+// (e.g. v1.2.3-rc1) is built from the X line and carries X's schema/behavior, so "is this migration/transition
 // introduced by the release I'm deploying?" compares the introduced version against the DEPLOY TARGET'S BASE --
 // otherwise a canary (-rc1, which sorts before the final) would skip the very migrations/transitions the final
 // introduces. The leading `v` is CANONICALIZED (always present in the result) so a version's base identity is
@@ -67,9 +70,22 @@ type DataMigrationRequirement struct {
 }
 
 type catalogFile struct {
-	ServiceDatabases   map[string]string              `yaml:"service_databases"`
-	Releases           []Release                      `yaml:"releases"`
-	ReleaseTransitions []ReleaseTransitionRequirement `yaml:"release_transitions,omitempty"`
+	ServiceDatabases         map[string]string              `yaml:"service_databases"`
+	SchemaMigrationFloor     string                         `yaml:"schema_migration_floor"`
+	SchemaMigrationSentinels []SchemaMigrationSentinel      `yaml:"schema_migration_sentinels,omitempty"`
+	Releases                 []Release                      `yaml:"releases"`
+	ReleaseTransitions       []ReleaseTransitionRequirement `yaml:"release_transitions,omitempty"`
+}
+
+// SchemaMigrationSentinel is one immutable migration-ledger identity retained after its executable SQL is folded into
+// a baseline. It proves an in-place source crossed the supported stepping-stone without shipping historical handlers.
+type SchemaMigrationSentinel struct {
+	Engine   string `yaml:"engine"`
+	Database string `yaml:"database"`
+	Version  string `yaml:"version"`
+	Phase    string `yaml:"phase"`
+	Sequence int    `yaml:"sequence"`
+	Checksum string `yaml:"checksum"`
 }
 
 // ReleaseTransitionRequirement declares a reconciliation transition the release DAG must run once the target reaches
@@ -89,10 +105,12 @@ type ReleaseTransitionRequirement struct {
 // err field) — not something a caller, or a test, can toggle at runtime.
 // Accessors read this value and fail closed when err is set.
 type catalogState struct {
-	releases         []Release
-	serviceDatabases map[string]string
-	transitions      []ReleaseTransitionRequirement
-	err              error
+	releases                 []Release
+	serviceDatabases         map[string]string
+	schemaMigrationFloor     string
+	schemaMigrationSentinels []SchemaMigrationSentinel
+	transitions              []ReleaseTransitionRequirement
+	err                      error
 }
 
 // strictSemverPattern accepts a CANONICAL vX.Y.Z with an optional -prerelease and +build. The leading `v` is REQUIRED
@@ -145,9 +163,11 @@ func parseCatalog(data []byte) *catalogState {
 		return CompareSemver(cf.Releases[i].Version, cf.Releases[j].Version) < 0
 	})
 	return &catalogState{
-		releases:         cf.Releases,
-		serviceDatabases: cf.ServiceDatabases,
-		transitions:      cf.ReleaseTransitions,
+		releases:                 cf.Releases,
+		serviceDatabases:         cf.ServiceDatabases,
+		schemaMigrationFloor:     cf.SchemaMigrationFloor,
+		schemaMigrationSentinels: append([]SchemaMigrationSentinel(nil), cf.SchemaMigrationSentinels...),
+		transitions:              cf.ReleaseTransitions,
 	}
 }
 
@@ -161,6 +181,36 @@ func validateCatalog(cf *catalogFile) error {
 			return fmt.Errorf("%s %w", field, err)
 		}
 		return nil
+	}
+	if cf.SchemaMigrationFloor != "" {
+		if err := validVersion("schema_migration_floor", cf.SchemaMigrationFloor); err != nil {
+			return err
+		}
+	}
+	seenSentinel := map[string]bool{}
+	for _, sentinel := range cf.SchemaMigrationSentinels {
+		if sentinel.Engine != "postgres" && sentinel.Engine != "clickhouse" {
+			return fmt.Errorf("schema migration sentinel has invalid engine %q (want postgres|clickhouse)", sentinel.Engine)
+		}
+		if strings.TrimSpace(sentinel.Database) == "" || sentinel.Sequence < 1 {
+			return fmt.Errorf("schema migration sentinel has invalid database or sequence: %+v", sentinel)
+		}
+		if err := validVersion("schema migration sentinel version", sentinel.Version); err != nil {
+			return err
+		}
+		switch sentinel.Phase {
+		case "expand", "postdeploy", "contract":
+		default:
+			return fmt.Errorf("schema migration sentinel has invalid phase %q", sentinel.Phase)
+		}
+		if !sha256HexChecksumPattern.MatchString(sentinel.Checksum) {
+			return fmt.Errorf("schema migration sentinel has invalid SHA-256 checksum %q", sentinel.Checksum)
+		}
+		key := fmt.Sprintf("%s/%s/%s/%s/%d", sentinel.Engine, sentinel.Database, sentinel.Version, sentinel.Phase, sentinel.Sequence)
+		if seenSentinel[key] {
+			return fmt.Errorf("duplicate schema migration sentinel %s", key)
+		}
+		seenSentinel[key] = true
 	}
 	// Uniqueness is by canonical BASE version, not raw string: Lookup base-normalizes (an RC resolves to its final), so
 	// declaring both v1.0.0-rc1 and v1.0.0 would let whichever sorts first silently supply the release line's
@@ -218,6 +268,30 @@ func validateCatalog(cf *catalogFile) error {
 		}
 	}
 	return nil
+}
+
+// SchemaMigrationFloor is the declared consolidation boundary shared by migration selection, baseline markers, and
+// the repository validator. A corrupt catalog returns an empty value; callers that mutate or select migrations must
+// also check LoadError and fail closed.
+func SchemaMigrationFloor() string {
+	if embedded.err != nil {
+		return ""
+	}
+	return embedded.schemaMigrationFloor
+}
+
+// SchemaMigrationSentinels returns a copy of the compact source certificates for one engine.
+func SchemaMigrationSentinels(engine string) []SchemaMigrationSentinel {
+	if embedded.err != nil {
+		return nil
+	}
+	var out []SchemaMigrationSentinel
+	for _, sentinel := range embedded.schemaMigrationSentinels {
+		if sentinel.Engine == engine {
+			out = append(out, sentinel)
+		}
+	}
+	return out
 }
 
 // embedded is the process-wide catalog, parsed once at init from the embedded
@@ -302,7 +376,7 @@ func RollbackDisabledFor(version string) []string {
 }
 
 // Lookup returns the release entry for a version, or nil. Matching is BASE-VERSION normalized: a prerelease/RC target
-// (v0.2.96-rc1) resolves to the declared final release (v0.2.96) — an RC carries the same catalog requirements as its
+// (v1.2.3-rc1) resolves to the declared final release (v1.2.3) — an RC carries the same catalog requirements as its
 // base, and the catalog declares one entry per base version, not per RC.
 func Lookup(version string) *Release {
 	if embedded.err != nil {
@@ -348,8 +422,8 @@ func LoadError() error {
 // (every postdeploy migration <= a given version), it checks only the HIGHEST entry here once, which subsumes all the
 // others. The selection is deliberately independent of any running service's reported version: a skewed/unreadable
 // replica cannot narrow it — completeness is proven against the actual _migrations ledger (the authority). The target's
-// own base is EXCLUDED (its postdeploy runs after the deploy); comparing by BASE version so an RC target (v0.2.96-rc1)
-// still excludes the declared final (v0.2.96). Empty catalog ⇒ empty.
+// own base is EXCLUDED (its postdeploy runs after the deploy); comparing by BASE version so an RC target (v1.2.3-rc1)
+// still excludes the declared final (v1.2.3). Empty catalog ⇒ empty.
 func ReleasesBelow(target string) []Release {
 	if embedded.err != nil {
 		return nil
@@ -381,7 +455,7 @@ func releasesBelow(releases []Release, target string) []Release {
 // gitDescribeSuffixPattern matches the `-<N>-g<sha>[-dirty]` tail `git describe` appends when HEAD sits N commits past
 // the nearest tag. Those commits make the build NEWER than the tag, but SemVer reads the tail as a PRERELEASE of it,
 // which sorts BELOW the tag — and below every rc of it, since the tail starts with a digit and digits sort under
-// letters. A CLI built one commit after v0.2.96 would therefore fail a `min_cli_version: v0.2.96-rc1` floor.
+// letters. A CLI built one commit after v1.2.3 would therefore fail a `min_cli_version: v1.2.3-rc1` floor.
 var gitDescribeSuffixPattern = regexp.MustCompile(`-\d+-g[0-9a-f]{7,}(-dirty)?$`)
 
 // StripGitDescribeSuffix reduces a `git describe` version to the tag it descends from, so a development build compares

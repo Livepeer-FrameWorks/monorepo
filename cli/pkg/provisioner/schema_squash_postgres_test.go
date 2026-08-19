@@ -139,8 +139,8 @@ func requirePGSchemasEqual(t *testing.T, label, expected, actual string) {
 }
 
 // pgBaselineFiles lists the FrameWorks Postgres baseline schema files: schema/*.sql
-// minus periscope.sql (ClickHouse) and minus any baseline that does CREATE DATABASE
-// (chatwoot/listmonk are external apps owning their own top-level DB, not the
+// minus any baseline that does CREATE DATABASE (chatwoot/listmonk are external
+// apps owning their own top-level DB, not the
 // FW schema-in-shared-DB model, and have no FW migrations to fold).
 func pgBaselineFiles(t *testing.T) []string {
 	t.Helper()
@@ -150,7 +150,7 @@ func pgBaselineFiles(t *testing.T) []string {
 	}
 	var files []string
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") || e.Name() == "periscope.sql" {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
 			continue
 		}
 		sql, rerr := dbsql.Content.ReadFile("schema/" + e.Name())
@@ -240,24 +240,6 @@ func TestPostgresTaggedBaselineUpgradeEqualsCurrent(t *testing.T) {
 		t.Fatalf("discover postgres migrations: %v", err)
 	}
 	migrations := migrationsAfterVersion(allMigrations, fromTag)
-	if fromTag == "v0.2.96" {
-		// v0.2.96's artifact-playback contract migration was repaired after its tag because the
-		// released plain CITEXT indexes are unsupported by YugabyteDB. Apply that byte-exact,
-		// reconcilable repair when proving the old tagged baseline so the harness covers both the
-		// pre-repoint tag and the corrected tag (where CREATE IF NOT EXISTS is a no-op).
-		const repairPath = "migrations/commodore/v0.2.96/contract/001_dvr_chapter_playback_index_realign.sql"
-		foundRepair := false
-		for _, migration := range allMigrations {
-			if migration.Path == repairPath {
-				migrations = append([]Migration{migration}, migrations...)
-				foundRepair = true
-				break
-			}
-		}
-		if !foundRepair {
-			t.Fatalf("approved v0.2.96 repair %s is missing", repairPath)
-		}
-	}
 
 	const name = "fw-sv-pg-tag"
 	pgStart(t, name)

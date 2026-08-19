@@ -1470,6 +1470,10 @@ CREATE TABLE IF NOT EXISTS api_requests (
     error_count UInt32 DEFAULT 0,
     total_duration_ms UInt64 DEFAULT 0,              -- Sum of all request durations in aggregate
     total_complexity UInt32 DEFAULT 0,               -- Sum of all complexity scores in aggregate
+    llm_input_tokens UInt64 DEFAULT 0,
+    llm_output_tokens UInt64 DEFAULT 0,
+    llm_model LowCardinality(String) DEFAULT '',
+    llm_provider LowCardinality(String) DEFAULT '',
     source_region LowCardinality(String) DEFAULT '',
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
@@ -2060,6 +2064,7 @@ CREATE TABLE IF NOT EXISTS processing_segments_final (
     turnaround_ms Int64 DEFAULT 0,
     speed_factor Float64 DEFAULT 0,
     livepeer_session_id String DEFAULT '',
+    renditions_json String DEFAULT '',
 
     -- MistProcAV-specific
     input_frames Int64 DEFAULT 0,
@@ -2105,6 +2110,7 @@ SELECT
     argMax(turnaround_ms,         projection_version_ms) AS turnaround_ms,
     argMax(speed_factor,          projection_version_ms) AS speed_factor,
     argMax(livepeer_session_id,   projection_version_ms) AS livepeer_session_id,
+    argMax(renditions_json,       projection_version_ms) AS renditions_json,
     argMax(input_frames,          projection_version_ms) AS input_frames,
     argMax(output_frames,         projection_version_ms) AS output_frames,
     argMax(input_frames_delta,    projection_version_ms) AS input_frames_delta,
@@ -2387,10 +2393,15 @@ CREATE TABLE IF NOT EXISTS api_usage_5m (
     auth_type LowCardinality(String),
     operation_type LowCardinality(String),
     operation_name LowCardinality(String) DEFAULT '',
+    service LowCardinality(String) DEFAULT '',
+    llm_model LowCardinality(String) DEFAULT '',
+    llm_provider LowCardinality(String) DEFAULT '',
     requests UInt64 DEFAULT 0,
     errors UInt64 DEFAULT 0,
     duration_ms UInt64 DEFAULT 0,
     complexity UInt64 DEFAULT 0,
+    llm_input_tokens UInt64 DEFAULT 0,
+    llm_output_tokens UInt64 DEFAULT 0,
     unique_users_state AggregateFunction(uniqCombined, UInt64),
     unique_tokens_state AggregateFunction(uniqCombined, UInt64),
     projection_version_ms Int64
@@ -2405,16 +2416,20 @@ TTL toDateTime(projection_version_ms / 1000) + INTERVAL 365 DAY;
 CREATE VIEW IF NOT EXISTS api_usage_5m_v AS
 SELECT
     window_start, tenant_id, auth_type, operation_type, operation_name,
+    service, llm_model, llm_provider,
     min(projection_version_ms) AS billable_at_ms,
     argMax(requests,            projection_version_ms) AS requests,
     argMax(errors,              projection_version_ms) AS errors,
     argMax(duration_ms,         projection_version_ms) AS duration_ms,
     argMax(complexity,          projection_version_ms) AS complexity,
+    argMax(llm_input_tokens,    projection_version_ms) AS llm_input_tokens,
+    argMax(llm_output_tokens,   projection_version_ms) AS llm_output_tokens,
     argMax(unique_users_state,  projection_version_ms) AS unique_users_state,
     argMax(unique_tokens_state, projection_version_ms) AS unique_tokens_state,
     max(projection_version_ms) AS latest_projection_version_ms
 FROM api_usage_5m
-GROUP BY window_start, tenant_id, auth_type, operation_type, operation_name;
+GROUP BY window_start, tenant_id, auth_type, operation_type, operation_name,
+         service, llm_model, llm_provider;
 
 -- ============================================================================
 -- OPERATIONAL GUARDRAIL — projection divergence audit
@@ -3507,4 +3522,4 @@ CREATE TABLE IF NOT EXISTS _schema_baseline (
     floor String,
     applied_at DateTime64(3) DEFAULT now64()
 ) ENGINE = ReplicatedReplacingMergeTree(applied_at) ORDER BY tuple();
-INSERT INTO _schema_baseline (floor) VALUES ('v0.2.96');
+INSERT INTO _schema_baseline (floor) VALUES ('v0.3.0');

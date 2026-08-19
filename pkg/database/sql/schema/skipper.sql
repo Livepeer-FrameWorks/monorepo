@@ -97,11 +97,20 @@ CREATE TABLE IF NOT EXISTS skipper.skipper_usage (
     tokens_input INT,
     tokens_output INT,
     model TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    provider TEXT,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    claimed_at TIMESTAMP WITH TIME ZONE,
+    attempts INT NOT NULL DEFAULT 0,
+    last_error TEXT,
+    published_at TIMESTAMP WITH TIME ZONE
 );
 
 CREATE INDEX IF NOT EXISTS skipper_usage_tenant_created_idx
     ON skipper.skipper_usage (tenant_id, created_at);
+
+CREATE INDEX IF NOT EXISTS skipper_usage_publish_pending_idx
+    ON skipper.skipper_usage (created_at)
+    WHERE published_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS skipper_conversations_tenant_user_idx
     ON skipper.skipper_conversations (tenant_id, user_id);
