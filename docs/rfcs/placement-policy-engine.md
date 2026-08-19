@@ -30,8 +30,8 @@ as `ArtifactNodeCopyEvent`. The asset UI composes "one durable S3 location + N l
 single backend is no longer implicit: it is now a **typed, immutable per-cell descriptor** — one Foghorn
 database bound to one immutable S3 backend, its physical identity frozen as a deterministic `backend_id`
 fingerprint over `(kind, bucket, endpoint, region, prefix)` and enforced fail-closed at boot and cleanup
-(`docs/architecture/durable-media-storage.md`; adopted via Quartermaster's
-`AdoptClusterStorageDescriptor`). What still does not exist is a registry of _multiple durable backends_,
+(`docs/architecture/durable-media-storage.md`; established by Quartermaster desired-state bootstrap). What still does
+not exist is a registry of _multiple durable backends_,
 _tiers_, or _where copies should live_ — the descriptor names one backend per cell, not a set, and this
 RFC's `cluster_storage_backends` / `artifact_locations` registry and tier ladder generalize it.
 Read-through relay block caches (`<asset>.blocks/`) are deliberately excluded from the node-copy index (a
@@ -192,7 +192,7 @@ domain-ownership lines and keeping resolution at the enactor:
   (`BackendFingerprint`, which already included prefix and compared it exactly). That threading has landed: `prefix` is
   now a field of `storage.S3Backing`, and its `Normalize`/`Equal` compare it BYTE-FOR-BYTE
   (`api_balancing/internal/storage/cluster_resolver.go:22,44`); the `TenantClusterPeer` proto carries `s3_prefix` plus an
-  `s3_prefix_present` flag that fails mint routing closed on an unadopted (NULL) prefix rather than collapsing it to
+  `s3_prefix_present` flag that fails mint routing closed on an incomplete (NULL) prefix rather than collapsing it to
   empty (`pkg/proto/cluster_peer.proto:20-21`); and the local-backing constructors thread it through. A Foghorn
   configured for one prefix therefore no longer classifies a cluster addressing another prefix as locally mintable. The
   shared-bucket / different-prefix topology this engine assumes is now routable at the resolver layer; what remains

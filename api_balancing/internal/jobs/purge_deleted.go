@@ -172,9 +172,8 @@ func (j *PurgeDeletedJob) purgeArtifactBytesAndRows(ctx context.Context) {
 	// BACKEND AFFINITY: only claim rows recorded on THIS cell's store — ownership is read from recorded evidence, never
 	// reconstructed (invariant I2). A row's backend_id names the physical store its bytes live on; a bare delete against
 	// the wrong store is a no-op success that would then hard-delete the row and orphan the real bytes. So we claim ONLY
-	// `backend_id = this cell's fingerprint`. A NULL backend is NOT claimed by cluster: legacy local rows are attributed
-	// once at boot (adoptLegacyLocalBackends), so a remaining NULL is unattributed and RETAINED — a safe row leak, never
-	// byte orphaning, and never a guessed-store delete. A cell without a fingerprint cannot prove ownership of anything.
+	// `backend_id = this cell's fingerprint`. A NULL backend is unattributed and RETAINED — a safe row leak, never byte
+	// orphaning, and never a guessed-store delete. A cell without a fingerprint cannot prove ownership of anything.
 	localBackendID := ""
 	if j.cleaner != nil {
 		localBackendID = j.cleaner.LocalBackendID

@@ -132,14 +132,14 @@ func localBackendFingerprint(s3 artifacts.S3Client) string {
 	return control.BackendFingerprint("s3", bucket, endpoint, region, prefix)
 }
 
-// buildFirstBootBackendAuthority assembles the first-boot ADOPTION authority from Quartermaster, which owns the FULL
+// buildFirstBootBackendAuthority assembles the first-boot authority from Quartermaster, which owns the full
 // immutable descriptor tuple (bucket/endpoint/region/prefix). It is only consequential on a first boot of an
-// established cluster; AdoptOrEnforceLocalBackend ignores it once an identity exists. Quartermaster is the SOLE source
-// of the authority — no serving component is consulted — so adoption never depends on another service being ready and
+// established cluster; EstablishOrEnforceLocalBackend ignores it once an identity exists. Quartermaster is the sole source
+// of the authority — no serving component is consulted — so establishment never depends on another service being ready and
 // has no boot-ordering coupling. QM unreachable / no client → Established+!Complete (first boot fails closed). QM
 // descriptor empty → Established+!Complete as well: Foghorn does not establish an identity from its own env, so an
-// S3-enabled cell with no QM descriptor FAILS CLOSED until the descriptor is established in QM (bootstrap or `cluster
-// storage adopt` / `cluster release apply`). QM descriptor set → established + complete (adopt it).
+// S3-enabled cell with no QM descriptor FAILS CLOSED until desired-state bootstrap establishes the descriptor in QM.
+// QM descriptor set → established + complete.
 func buildFirstBootBackendAuthority(qmClient *qmclient.GRPCClient, clusterID string, logger logging.Logger) control.LocalBackendAuthority {
 	if qmClient == nil {
 		logger.Warn("No Quartermaster client wired; a first boot cannot prove the existing backend and will fail closed")
@@ -149,7 +149,7 @@ func buildFirstBootBackendAuthority(qmClient *qmclient.GRPCClient, clusterID str
 	cr, qErr := qmClient.GetCluster(qmCtx, clusterID)
 	qmCancel()
 	if qErr != nil {
-		logger.WithError(qErr).Warn("Quartermaster unreachable for first-boot backend adoption; a first boot will fail closed until it is reachable")
+		logger.WithError(qErr).Warn("Quartermaster unreachable for first-boot backend establishment; a first boot will fail closed until it is reachable")
 		return control.LocalBackendAuthority{Established: true}
 	}
 	cl := cr.GetCluster()
@@ -157,17 +157,16 @@ func buildFirstBootBackendAuthority(qmClient *qmclient.GRPCClient, clusterID str
 		// Quartermaster has NO descriptor for this cell. Because this Foghorn reached here it HAS S3 configured (the
 		// caller only builds the authority when S3 is enabled), and Quartermaster is the sole authority — Foghorn does
 		// not establish an identity from its own env. Return Established (so the incomplete-descriptor guard fails the
-		// boot closed) rather than committing from env: the descriptor must be established in Quartermaster first
-		// (desired-state bootstrap, or `cluster storage adopt`).
-		logger.WithField("cluster_id", clusterID).Warn("Quartermaster has no S3 descriptor for this S3-enabled cell; first boot fails closed until the descriptor is established (bootstrap/adopt)")
+		// boot closed) rather than committing from env: desired-state bootstrap must establish the descriptor in
+		// Quartermaster first.
+		logger.WithField("cluster_id", clusterID).Warn("Quartermaster has no S3 descriptor for this S3-enabled cell; first boot fails closed until desired-state bootstrap establishes it")
 		return control.LocalBackendAuthority{Established: true}
 	}
 	if !cl.GetS3PrefixPresent() {
 		// The descriptor has a bucket but its s3_prefix is NULL (unset). The tuple is INCOMPLETE: a COALESCE'd empty
 		// prefix is not proof the real prefix is empty. Established-but-incomplete → first boot FAILS CLOSED until the
-		// prefix is set (desired-state bootstrap / `cluster storage adopt`), so Foghorn never commits an identity from
-		// an unset prefix.
-		logger.WithField("cluster_id", clusterID).Warn("Quartermaster descriptor has a bucket but s3_prefix is unadopted (NULL); first boot fails closed until the descriptor is adopted")
+		// prefix is set by desired-state bootstrap, so Foghorn never commits an identity from an unset prefix.
+		logger.WithField("cluster_id", clusterID).Warn("Quartermaster descriptor has a bucket but s3_prefix is unset (NULL); first boot fails closed until desired-state bootstrap establishes the complete descriptor")
 		return control.LocalBackendAuthority{Established: true}
 	}
 	return control.LocalBackendAuthority{
@@ -229,7 +228,7 @@ type clusterPeerBacking interface {
 }
 
 // backingFromPeer derives a federation S3 backing from a cluster-peer descriptor, FAILING CLOSED on an incomplete
-// one. A peer with no bucket, or a bucket but an unadopted (NULL) prefix, has no usable identity: its collapsed empty
+// one. A peer with no bucket, or a bucket but an incomplete (NULL) prefix, has no usable identity: its collapsed empty
 // prefix could false-match a local empty prefix and mint to the wrong keyspace, so it reports (zero, false) and the
 // resolver never local-mints against it. Only a fully-adopted descriptor (bucket + present prefix) yields a backing.
 func backingFromPeer(peer clusterPeerBacking) (federation.S3Backing, bool) {
@@ -716,14 +715,14 @@ func main() {
 			// (existing data — the Quartermaster row carries a descriptor), Foghorn must PROVE the existing backend
 			// before recording an identity: Quartermaster is the SOLE authority and supplies the FULL tuple
 			// (bucket/endpoint/region/prefix), and the env must match all four. No serving component is consulted, so
-			// adoption has no dependency on another service being ready. If the authority cannot be positively read (Quartermaster
+			// establishment has no dependency on another service being ready. If the authority cannot be positively read (Quartermaster
 			// unreachable or its descriptor incomplete), the first boot FAILS CLOSED — no identity is recorded — so a
 			// repointed/unproven descriptor can never strand historical bytes. An S3-enabled cell whose Quartermaster
 			// descriptor is EMPTY also fails closed (buildFirstBootBackendAuthority returns established-but-incomplete):
-			// Quartermaster is the sole authority, so the descriptor must be established there first (desired-state
-			// bootstrap, or `cluster storage adopt`). Foghorn does not establish an identity from its own env.
+			// Quartermaster is the sole authority, so desired-state bootstrap must establish the descriptor there first.
+			// Foghorn does not establish an identity from its own env.
 			auth := buildFirstBootBackendAuthority(qmClient, foghornCfg.ClusterID, logger)
-			if bErr := control.AdoptOrEnforceLocalBackend(context.Background(), db, auth); bErr != nil {
+			if bErr := control.EstablishOrEnforceLocalBackend(context.Background(), db, auth); bErr != nil {
 				logger.WithError(bErr).Fatal("Refusing to start: could not prove or match this cell's immutable S3 backend (backend repointing is not supported)")
 			}
 			logger.WithFields(logging.Fields{
@@ -2214,7 +2213,7 @@ func startStorageSnapshotScheduler(p *triggers.Processor, logger logging.Logger)
 
 	for range ticker.C {
 		if err := p.GenerateAndSendStorageSnapshots(); err != nil {
-			logger.WithError(err).Error("Failed to generate and send storage snapshots")
+			logger.WithError(err).Error("Failed to generate and enqueue storage snapshots")
 		}
 	}
 }

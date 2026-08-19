@@ -23,7 +23,7 @@ type S3Backing struct {
 }
 
 // Normalize applies the ONE canonical descriptor normalization shared with the immutable-backend identity
-// (control.BackendFingerprint), the first-boot adoption guard, and the CLI deploy gate: bucket/endpoint/prefix are
+// (control.BackendFingerprint), the first-boot establishment guard, and the CLI deploy gate: bucket/endpoint/prefix are
 // compared BYTE-FOR-BYTE (a case/whitespace difference names a different physical keyspace and must NOT collapse), and
 // the ONLY transformation is an empty region defaulting to us-east-1. Diverging from that (e.g. lowercasing the
 // endpoint) would let this resolver classify a remote descriptor as locally mintable that the backend-identity layer

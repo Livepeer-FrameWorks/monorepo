@@ -15,8 +15,8 @@ import (
 // representative rows (sqlmock can only regex-match the SQL, not its NULL semantics). Production runs each cell on its
 // OWN physical Foghorn database (foghorn_eu / foghorn_us) and immutable store, so a worker claims ONLY rows recorded on
 // its own store. Ownership is read from recorded evidence, never reconstructed (invariant I2): a NULL backend is NOT
-// claimed by cluster — legacy local rows are attributed once at boot (adoptLegacyLocalBackends), so a remaining NULL is
-// unattributed and RETAINED (a safe row leak), never deleted from a guessed store.
+// claimed by cluster. A remaining NULL is unattributed and RETAINED (a safe row leak), never deleted from a guessed
+// store.
 // The contract:
 //   - backend_id = this cell's store             -> claimed (reaped)
 //   - backend_id = another cell's store           -> retained (never a no-op wrong-store delete then hard-delete)

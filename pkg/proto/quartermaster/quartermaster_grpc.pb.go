@@ -714,46 +714,45 @@ var TenantService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	ClusterService_GetCluster_FullMethodName                    = "/quartermaster.ClusterService/GetCluster"
-	ClusterService_ListClusters_FullMethodName                  = "/quartermaster.ClusterService/ListClusters"
-	ClusterService_CreateCluster_FullMethodName                 = "/quartermaster.ClusterService/CreateCluster"
-	ClusterService_UpdateCluster_FullMethodName                 = "/quartermaster.ClusterService/UpdateCluster"
-	ClusterService_UpdateClusterMeshConfig_FullMethodName       = "/quartermaster.ClusterService/UpdateClusterMeshConfig"
-	ClusterService_AdoptClusterStorageDescriptor_FullMethodName = "/quartermaster.ClusterService/AdoptClusterStorageDescriptor"
-	ClusterService_ListClustersForTenant_FullMethodName         = "/quartermaster.ClusterService/ListClustersForTenant"
-	ClusterService_ListClustersAvailable_FullMethodName         = "/quartermaster.ClusterService/ListClustersAvailable"
-	ClusterService_GrantClusterAccess_FullMethodName            = "/quartermaster.ClusterService/GrantClusterAccess"
-	ClusterService_SubscribeToCluster_FullMethodName            = "/quartermaster.ClusterService/SubscribeToCluster"
-	ClusterService_BootstrapClusterAccess_FullMethodName        = "/quartermaster.ClusterService/BootstrapClusterAccess"
-	ClusterService_DeactivateClusterAccess_FullMethodName       = "/quartermaster.ClusterService/DeactivateClusterAccess"
-	ClusterService_ListTenantClusterAccess_FullMethodName       = "/quartermaster.ClusterService/ListTenantClusterAccess"
-	ClusterService_GetTenantEntitlement_FullMethodName          = "/quartermaster.ClusterService/GetTenantEntitlement"
-	ClusterService_UnsubscribeFromCluster_FullMethodName        = "/quartermaster.ClusterService/UnsubscribeFromCluster"
-	ClusterService_ListMySubscriptions_FullMethodName           = "/quartermaster.ClusterService/ListMySubscriptions"
-	ClusterService_ListMarketplaceClusters_FullMethodName       = "/quartermaster.ClusterService/ListMarketplaceClusters"
-	ClusterService_GetMarketplaceCluster_FullMethodName         = "/quartermaster.ClusterService/GetMarketplaceCluster"
-	ClusterService_UpdateClusterMarketplace_FullMethodName      = "/quartermaster.ClusterService/UpdateClusterMarketplace"
-	ClusterService_CreatePrivateCluster_FullMethodName          = "/quartermaster.ClusterService/CreatePrivateCluster"
-	ClusterService_CreateClusterInvite_FullMethodName           = "/quartermaster.ClusterService/CreateClusterInvite"
-	ClusterService_RevokeClusterInvite_FullMethodName           = "/quartermaster.ClusterService/RevokeClusterInvite"
-	ClusterService_ListClusterInvites_FullMethodName            = "/quartermaster.ClusterService/ListClusterInvites"
-	ClusterService_ListMyClusterInvites_FullMethodName          = "/quartermaster.ClusterService/ListMyClusterInvites"
-	ClusterService_RequestClusterSubscription_FullMethodName    = "/quartermaster.ClusterService/RequestClusterSubscription"
-	ClusterService_AcceptClusterInvite_FullMethodName           = "/quartermaster.ClusterService/AcceptClusterInvite"
-	ClusterService_ListPendingSubscriptions_FullMethodName      = "/quartermaster.ClusterService/ListPendingSubscriptions"
-	ClusterService_ApproveClusterSubscription_FullMethodName    = "/quartermaster.ClusterService/ApproveClusterSubscription"
-	ClusterService_RejectClusterSubscription_FullMethodName     = "/quartermaster.ClusterService/RejectClusterSubscription"
-	ClusterService_GetClusterMetadataBatch_FullMethodName       = "/quartermaster.ClusterService/GetClusterMetadataBatch"
-	ClusterService_ListPeers_FullMethodName                     = "/quartermaster.ClusterService/ListPeers"
-	ClusterService_AssignServiceToCluster_FullMethodName        = "/quartermaster.ClusterService/AssignServiceToCluster"
-	ClusterService_UnassignServiceFromCluster_FullMethodName    = "/quartermaster.ClusterService/UnassignServiceFromCluster"
-	ClusterService_EnableSelfHosting_FullMethodName             = "/quartermaster.ClusterService/EnableSelfHosting"
-	ClusterService_CreateEnrollmentToken_FullMethodName         = "/quartermaster.ClusterService/CreateEnrollmentToken"
-	ClusterService_ListEdgeReleases_FullMethodName              = "/quartermaster.ClusterService/ListEdgeReleases"
-	ClusterService_UpsertEdgeRelease_FullMethodName             = "/quartermaster.ClusterService/UpsertEdgeRelease"
-	ClusterService_GetClusterReleaseTarget_FullMethodName       = "/quartermaster.ClusterService/GetClusterReleaseTarget"
-	ClusterService_ListClusterReleaseTargets_FullMethodName     = "/quartermaster.ClusterService/ListClusterReleaseTargets"
-	ClusterService_SetClusterReleaseTarget_FullMethodName       = "/quartermaster.ClusterService/SetClusterReleaseTarget"
+	ClusterService_GetCluster_FullMethodName                 = "/quartermaster.ClusterService/GetCluster"
+	ClusterService_ListClusters_FullMethodName               = "/quartermaster.ClusterService/ListClusters"
+	ClusterService_CreateCluster_FullMethodName              = "/quartermaster.ClusterService/CreateCluster"
+	ClusterService_UpdateCluster_FullMethodName              = "/quartermaster.ClusterService/UpdateCluster"
+	ClusterService_UpdateClusterMeshConfig_FullMethodName    = "/quartermaster.ClusterService/UpdateClusterMeshConfig"
+	ClusterService_ListClustersForTenant_FullMethodName      = "/quartermaster.ClusterService/ListClustersForTenant"
+	ClusterService_ListClustersAvailable_FullMethodName      = "/quartermaster.ClusterService/ListClustersAvailable"
+	ClusterService_GrantClusterAccess_FullMethodName         = "/quartermaster.ClusterService/GrantClusterAccess"
+	ClusterService_SubscribeToCluster_FullMethodName         = "/quartermaster.ClusterService/SubscribeToCluster"
+	ClusterService_BootstrapClusterAccess_FullMethodName     = "/quartermaster.ClusterService/BootstrapClusterAccess"
+	ClusterService_DeactivateClusterAccess_FullMethodName    = "/quartermaster.ClusterService/DeactivateClusterAccess"
+	ClusterService_ListTenantClusterAccess_FullMethodName    = "/quartermaster.ClusterService/ListTenantClusterAccess"
+	ClusterService_GetTenantEntitlement_FullMethodName       = "/quartermaster.ClusterService/GetTenantEntitlement"
+	ClusterService_UnsubscribeFromCluster_FullMethodName     = "/quartermaster.ClusterService/UnsubscribeFromCluster"
+	ClusterService_ListMySubscriptions_FullMethodName        = "/quartermaster.ClusterService/ListMySubscriptions"
+	ClusterService_ListMarketplaceClusters_FullMethodName    = "/quartermaster.ClusterService/ListMarketplaceClusters"
+	ClusterService_GetMarketplaceCluster_FullMethodName      = "/quartermaster.ClusterService/GetMarketplaceCluster"
+	ClusterService_UpdateClusterMarketplace_FullMethodName   = "/quartermaster.ClusterService/UpdateClusterMarketplace"
+	ClusterService_CreatePrivateCluster_FullMethodName       = "/quartermaster.ClusterService/CreatePrivateCluster"
+	ClusterService_CreateClusterInvite_FullMethodName        = "/quartermaster.ClusterService/CreateClusterInvite"
+	ClusterService_RevokeClusterInvite_FullMethodName        = "/quartermaster.ClusterService/RevokeClusterInvite"
+	ClusterService_ListClusterInvites_FullMethodName         = "/quartermaster.ClusterService/ListClusterInvites"
+	ClusterService_ListMyClusterInvites_FullMethodName       = "/quartermaster.ClusterService/ListMyClusterInvites"
+	ClusterService_RequestClusterSubscription_FullMethodName = "/quartermaster.ClusterService/RequestClusterSubscription"
+	ClusterService_AcceptClusterInvite_FullMethodName        = "/quartermaster.ClusterService/AcceptClusterInvite"
+	ClusterService_ListPendingSubscriptions_FullMethodName   = "/quartermaster.ClusterService/ListPendingSubscriptions"
+	ClusterService_ApproveClusterSubscription_FullMethodName = "/quartermaster.ClusterService/ApproveClusterSubscription"
+	ClusterService_RejectClusterSubscription_FullMethodName  = "/quartermaster.ClusterService/RejectClusterSubscription"
+	ClusterService_GetClusterMetadataBatch_FullMethodName    = "/quartermaster.ClusterService/GetClusterMetadataBatch"
+	ClusterService_ListPeers_FullMethodName                  = "/quartermaster.ClusterService/ListPeers"
+	ClusterService_AssignServiceToCluster_FullMethodName     = "/quartermaster.ClusterService/AssignServiceToCluster"
+	ClusterService_UnassignServiceFromCluster_FullMethodName = "/quartermaster.ClusterService/UnassignServiceFromCluster"
+	ClusterService_EnableSelfHosting_FullMethodName          = "/quartermaster.ClusterService/EnableSelfHosting"
+	ClusterService_CreateEnrollmentToken_FullMethodName      = "/quartermaster.ClusterService/CreateEnrollmentToken"
+	ClusterService_ListEdgeReleases_FullMethodName           = "/quartermaster.ClusterService/ListEdgeReleases"
+	ClusterService_UpsertEdgeRelease_FullMethodName          = "/quartermaster.ClusterService/UpsertEdgeRelease"
+	ClusterService_GetClusterReleaseTarget_FullMethodName    = "/quartermaster.ClusterService/GetClusterReleaseTarget"
+	ClusterService_ListClusterReleaseTargets_FullMethodName  = "/quartermaster.ClusterService/ListClusterReleaseTargets"
+	ClusterService_SetClusterReleaseTarget_FullMethodName    = "/quartermaster.ClusterService/SetClusterReleaseTarget"
 )
 
 // ClusterServiceClient is the client API for ClusterService service.
@@ -767,13 +766,6 @@ type ClusterServiceClient interface {
 	CreateCluster(ctx context.Context, in *CreateClusterRequest, opts ...grpc.CallOption) (*ClusterResponse, error)
 	UpdateCluster(ctx context.Context, in *UpdateClusterRequest, opts ...grpc.CallOption) (*ClusterResponse, error)
 	UpdateClusterMeshConfig(ctx context.Context, in *UpdateClusterMeshConfigRequest, opts ...grpc.CallOption) (*UpdateClusterMeshConfigResponse, error)
-	// AdoptClusterStorageDescriptor sets the cluster's immutable S3 backend
-	// descriptor (bucket/endpoint/region + one-time prefix adoption) directly
-	// from an operator tool, applying the same freeze semantics as the bootstrap
-	// reconcile: once the bucket is established the tuple is frozen, and a
-	// pre-migration NULL prefix may be filled exactly once. Returns the
-	// re-read cluster row.
-	AdoptClusterStorageDescriptor(ctx context.Context, in *AdoptClusterStorageDescriptorRequest, opts ...grpc.CallOption) (*ClusterResponse, error)
 	// Get clusters accessible to a tenant
 	ListClustersForTenant(ctx context.Context, in *ListClustersForTenantRequest, opts ...grpc.CallOption) (*ClustersAccessResponse, error)
 	// Get clusters available for tenant onboarding
@@ -904,16 +896,6 @@ func (c *clusterServiceClient) UpdateClusterMeshConfig(ctx context.Context, in *
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UpdateClusterMeshConfigResponse)
 	err := c.cc.Invoke(ctx, ClusterService_UpdateClusterMeshConfig_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *clusterServiceClient) AdoptClusterStorageDescriptor(ctx context.Context, in *AdoptClusterStorageDescriptorRequest, opts ...grpc.CallOption) (*ClusterResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ClusterResponse)
-	err := c.cc.Invoke(ctx, ClusterService_AdoptClusterStorageDescriptor_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1271,13 +1253,6 @@ type ClusterServiceServer interface {
 	CreateCluster(context.Context, *CreateClusterRequest) (*ClusterResponse, error)
 	UpdateCluster(context.Context, *UpdateClusterRequest) (*ClusterResponse, error)
 	UpdateClusterMeshConfig(context.Context, *UpdateClusterMeshConfigRequest) (*UpdateClusterMeshConfigResponse, error)
-	// AdoptClusterStorageDescriptor sets the cluster's immutable S3 backend
-	// descriptor (bucket/endpoint/region + one-time prefix adoption) directly
-	// from an operator tool, applying the same freeze semantics as the bootstrap
-	// reconcile: once the bucket is established the tuple is frozen, and a
-	// pre-migration NULL prefix may be filled exactly once. Returns the
-	// re-read cluster row.
-	AdoptClusterStorageDescriptor(context.Context, *AdoptClusterStorageDescriptorRequest) (*ClusterResponse, error)
 	// Get clusters accessible to a tenant
 	ListClustersForTenant(context.Context, *ListClustersForTenantRequest) (*ClustersAccessResponse, error)
 	// Get clusters available for tenant onboarding
@@ -1378,9 +1353,6 @@ func (UnimplementedClusterServiceServer) UpdateCluster(context.Context, *UpdateC
 }
 func (UnimplementedClusterServiceServer) UpdateClusterMeshConfig(context.Context, *UpdateClusterMeshConfigRequest) (*UpdateClusterMeshConfigResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateClusterMeshConfig not implemented")
-}
-func (UnimplementedClusterServiceServer) AdoptClusterStorageDescriptor(context.Context, *AdoptClusterStorageDescriptorRequest) (*ClusterResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method AdoptClusterStorageDescriptor not implemented")
 }
 func (UnimplementedClusterServiceServer) ListClustersForTenant(context.Context, *ListClustersForTenantRequest) (*ClustersAccessResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListClustersForTenant not implemented")
@@ -1591,24 +1563,6 @@ func _ClusterService_UpdateClusterMeshConfig_Handler(srv interface{}, ctx contex
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ClusterServiceServer).UpdateClusterMeshConfig(ctx, req.(*UpdateClusterMeshConfigRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ClusterService_AdoptClusterStorageDescriptor_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AdoptClusterStorageDescriptorRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ClusterServiceServer).AdoptClusterStorageDescriptor(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ClusterService_AdoptClusterStorageDescriptor_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ClusterServiceServer).AdoptClusterStorageDescriptor(ctx, req.(*AdoptClusterStorageDescriptorRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2251,10 +2205,6 @@ var ClusterService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateClusterMeshConfig",
 			Handler:    _ClusterService_UpdateClusterMeshConfig_Handler,
-		},
-		{
-			MethodName: "AdoptClusterStorageDescriptor",
-			Handler:    _ClusterService_AdoptClusterStorageDescriptor_Handler,
 		},
 		{
 			MethodName: "ListClustersForTenant",

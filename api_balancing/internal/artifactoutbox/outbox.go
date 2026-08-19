@@ -1,7 +1,6 @@
-// Package artifactoutbox delivers Foghorn artifact-lifecycle (DVR / VOD / Clip),
-// federation peer-registry, and artifact node-copy events to Decklog through a
-// durable outbox. Producers call the Enqueue helpers; a drain worker
-// dispatches with exponential backoff.
+// Package artifactoutbox delivers Foghorn artifact, federation, and storage
+// facts to Decklog through a durable outbox. Producers call the Enqueue
+// helpers; a drain worker dispatches with exponential backoff.
 package artifactoutbox
 
 import (
@@ -32,6 +31,7 @@ const (
 	kindVodLifecycle     = "vod_lifecycle"
 	kindFederationEvent  = "federation_event"
 	kindArtifactNodeCopy = "artifact_node_copy"
+	kindStorageSnapshot  = "storage_snapshot"
 )
 
 func config() outbox.Config {
@@ -201,6 +201,19 @@ func EnqueueArtifactNodeCopyTx(ctx context.Context, tx execContext, tenantID str
 	return enqueue(ctx, tx, kindArtifactNodeCopy, tenantID, "", data.GetArtifactHash(), data)
 }
 
+// EnqueueStorageSnapshot durably records an authoritative periodic storage
+// observation. The snapshot's node owner supplies the trigger-envelope tenant;
+// individual usage tenants remain in StorageSnapshot.Usage.
+func EnqueueStorageSnapshot(data *ipcpb.StorageSnapshot) error {
+	if data == nil {
+		return ErrNilLifecyclePayload
+	}
+	if data.GetTenantId() == "" {
+		return errors.New("artifactoutbox: storage snapshot requires an owner tenant")
+	}
+	return enqueue(context.Background(), nil, kindStorageSnapshot, data.GetTenantId(), "", data.GetNodeId(), data)
+}
+
 // EnqueueClipLifecycleLogged enqueues to the durable outbox but LOGS an enqueue failure instead of
 // returning it — for callers that cannot propagate the error (no enclosing transaction to fail).
 // Delivery is still durable once the row is written; only the enqueue-write failure (Init never wired,
@@ -274,6 +287,8 @@ func marshalPayload(payload any) ([]byte, error) {
 	case *ipcpb.FederationEventData:
 		return protojson.Marshal(m)
 	case *ipcpb.ArtifactNodeCopyEvent:
+		return protojson.Marshal(m)
+	case *ipcpb.StorageSnapshot:
 		return protojson.Marshal(m)
 	default:
 		return nil, fmt.Errorf("unsupported artifact event payload type %T", payload)
@@ -515,11 +530,32 @@ func dispatchRow(_ context.Context, row outboxRow) ([]string, error) {
 		if err := decklogClient.SendServiceEvent(ev); err != nil {
 			return []string{"decklog"}, err
 		}
+	case kindStorageSnapshot:
+		data := &ipcpb.StorageSnapshot{}
+		if err := protojson.Unmarshal(row.payload, data); err != nil {
+			return nil, fmt.Errorf("unmarshal StorageSnapshot: %w", err)
+		}
+		trigger := &ipcpb.MistTrigger{
+			TriggerType: "STORAGE_SNAPSHOT",
+			NodeId:      data.GetNodeId(),
+			Timestamp:   data.GetTimestamp(),
+			TenantId:    stringPointer(data.GetTenantId()),
+			ClusterId:   stringPointer(data.GetStorageProviderClusterId()),
+			EventId:     row.id,
+			TriggerPayload: &ipcpb.MistTrigger_StorageSnapshot{
+				StorageSnapshot: data,
+			},
+		}
+		if err := decklogClient.SendTrigger(trigger); err != nil {
+			return []string{"decklog"}, err
+		}
 	default:
 		return nil, fmt.Errorf("unknown artifact event kind %q", row.eventKind)
 	}
 	return nil, nil
 }
+
+func stringPointer(value string) *string { return &value }
 
 func idArray(ids []string) string {
 	if len(ids) == 0 {

@@ -44,8 +44,8 @@ func main() {
 		ServiceToken: serviceToken,
 	}
 
-	adopt := func() error { return applyClusterS3FromQuartermaster(logger, qmAddr, serviceToken, clusterID, &s3Cfg) }
-	if err := resolveChandlerS3Serving(clusterID, config.GetEnvBool("CHANDLER_DEV_ALLOW_ENV_S3", false), adopt, &s3Cfg, logger); err != nil {
+	loadAuthority := func() error { return applyClusterS3FromQuartermaster(logger, qmAddr, serviceToken, clusterID, &s3Cfg) }
+	if err := resolveChandlerS3Serving(clusterID, config.GetEnvBool("CHANDLER_DEV_ALLOW_ENV_S3", false), loadAuthority, &s3Cfg, logger); err != nil {
 		// Only a genuine authority-lookup failure returns an error; Chandler cannot obtain its authority, so fail closed.
 		// A restart re-attempts once Quartermaster is reachable.
 		logger.WithError(err).WithField("cluster_id", clusterID).Fatal("Cluster S3 lookup failed — cannot resolve the authoritative storage descriptor")
@@ -177,11 +177,11 @@ func applyClusterS3FromQuartermaster(logger logging.Logger, qmAddr, serviceToken
 	if cluster.GetS3Bucket() == "" {
 		return errClusterNoS3Descriptor
 	}
-	// INCOMPLETE-DESCRIPTOR FENCE (mirrors Foghorn's first-boot guard): a row with a bucket but an unadopted
+	// INCOMPLETE-DESCRIPTOR FENCE (mirrors Foghorn's first-boot guard): a row with a bucket but an unset
 	// (NULL) s3_prefix is NOT a complete immutable descriptor — a COALESCE'd empty prefix is indistinguishable
 	// from a known-empty one, so adopting it could make Chandler address the bucket ROOT while Foghorn writes
 	// under a real, non-empty prefix. Fail closed (treat as no-descriptor → serve 503) until the prefix is
-	// adopted (`cluster storage adopt` / `cluster release apply`), so Chandler never serves the wrong keyspace
+	// established by desired-state bootstrap, so Chandler never serves the wrong keyspace
 	// during an incomplete/mixed Quartermaster rollout.
 	if !cluster.GetS3PrefixPresent() {
 		return errClusterNoS3Descriptor
@@ -210,22 +210,22 @@ var errClusterNoS3Descriptor = errors.New("cluster row declares no s3 descriptor
 
 // resolveChandlerS3Serving decides Chandler's final S3 serving descriptor and writes it into s3Cfg in place (S3
 // disabled = empty bucket). Chandler is intrinsically CELL-SCOPED, so:
-//   - With a CLUSTER_ID: adopt() fetches the authoritative Quartermaster descriptor. A "no descriptor" / unadopted
-//     prefix disables S3 (serve 503 until adopted); an authority-lookup failure returns an error (the caller fails
+//   - With a CLUSTER_ID: loadAuthority() fetches the authoritative Quartermaster descriptor. A missing or incomplete
+//     descriptor disables S3 (serve 503 until established); an authority-lookup failure returns an error (the caller fails
 //     closed / restarts). There is NO env fallback — serving an env backend the authority never validated is forbidden.
 //   - Without a CLUSTER_ID but with an env bucket: FAIL CLOSED (disable S3) — a production deploy always renders
 //     CLUSTER_ID, so this is a malformed/manual config and serving that unauthorized keyspace is refused. An explicit
 //     dev opt-in (allowEnvS3, from CHANDLER_DEV_ALLOW_ENV_S3) keeps a cluster-less local bring-up working.
 //
 // Extracted from main() so this authority/fail-closed decision is unit-testable without a live Quartermaster.
-func resolveChandlerS3Serving(clusterID string, allowEnvS3 bool, adopt func() error, s3Cfg *handlers.S3Config, logger logging.Logger) error {
+func resolveChandlerS3Serving(clusterID string, allowEnvS3 bool, loadAuthority func() error, s3Cfg *handlers.S3Config, logger logging.Logger) error {
 	if clusterID != "" {
-		switch err := adopt(); {
+		switch err := loadAuthority(); {
 		case err == nil:
-			// Adopted the authoritative descriptor from Quartermaster.
+			// Loaded the authoritative descriptor from Quartermaster.
 		case errors.Is(err, errClusterNoS3Descriptor):
 			s3Cfg.Bucket, s3Cfg.Endpoint, s3Cfg.Prefix = "", "", ""
-			logger.WithField("cluster_id", clusterID).Info("Cluster row declares no S3 descriptor — S3 disabled for this cell (returns 503 until adopted)")
+			logger.WithField("cluster_id", clusterID).Info("Cluster row declares no complete S3 descriptor — S3 disabled for this cell")
 		default:
 			return fmt.Errorf("cluster S3 lookup failed: %w", err)
 		}

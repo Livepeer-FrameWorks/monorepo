@@ -10,7 +10,7 @@ import (
 
 // backingFromPeer is the fail-closed gate that decides whether a remote cluster's advertised descriptor is a usable S3
 // backing for mint routing. It must yield a backing ONLY for a fully-adopted descriptor (bucket present AND prefix
-// present); an incomplete one (no bucket, or a NULL/unadopted prefix collapsed to "") must report (zero, false) so the
+// present); an incomplete one (no bucket, or a NULL prefix collapsed to "") must report (zero, false) so the
 // resolver never local-mints against an ambiguous identity.
 func TestBackingFromPeer_FailsClosedOnIncompleteDescriptor(t *testing.T) {
 	cases := []struct {

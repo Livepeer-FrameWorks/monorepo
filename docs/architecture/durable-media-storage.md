@@ -88,12 +88,8 @@ changes (`EnforceImmutableLocalBackend`; credentials may still rotate). So "one 
 code-enforced invariant, and cleanup routes by an object's recorded `backend_id`, never current placement.
 
 `s3_prefix` is part of the immutable tuple. The prefix is nullable — surfaced through the API as `s3_prefix_present` —
-so an _unadopted_ descriptor (NULL prefix, never reconciled into Quartermaster) is distinguishable from a known-empty
-one; Foghorn's first-boot guard fails closed on an unadopted (NULL) prefix. Bringing an env-only-S3 cell under
-descriptor authority is a one-time operator **adoption** (an operator-authorized adopt RPC reconciles the live cell's
-descriptor into its Quartermaster row); the procedure is in the operator guide,
-[running-upgrades.mdx](../../website_docs/src/content/docs/operators/running-upgrades.mdx), and its sequencing for a
-given deployment lives in that deployment's internal plan.
+so an incomplete descriptor (NULL prefix) is distinguishable from a known-empty one; Foghorn's first-boot guard fails
+closed on the incomplete shape. Desired-state bootstrap establishes the full descriptor before a cell's first boot.
 
 **Billing readiness.** Usage billing over backend attribution stays OFF until ambiguous rows are resolved: inventory
 `durable_backend_local = false`/unknown rows, backfill only from defensible evidence (persisted object URLs/backend

@@ -27,7 +27,7 @@ func resetPackageState(t *testing.T) {
 	})
 }
 
-// marshalPayload must serialize each of the four state-coupled Foghorn event
+// marshalPayload must serialize each supported Foghorn outbox event
 // kinds and reject anything else loudly — an unsupported type is a programmer
 // error, not a silently-dropped event.
 func TestMarshalPayload(t *testing.T) {
@@ -39,6 +39,7 @@ func TestMarshalPayload(t *testing.T) {
 		{"dvr", &ipcpb.DVRLifecycleData{TenantId: sp("t1"), DvrHash: "d1"}},
 		{"vod", &ipcpb.VodLifecycleData{TenantId: sp("t1"), VodHash: "v1"}},
 		{"federation", &ipcpb.FederationEventData{TenantId: sp("t1")}},
+		{"storage", &ipcpb.StorageSnapshot{TenantId: sp("t1"), NodeId: "n1"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -128,6 +129,16 @@ func TestEnqueueWritesOutboxRow(t *testing.T) {
 		err := EnqueueVodLifecycle(&ipcpb.VodLifecycleData{TenantId: sp("tenant-1"), VodHash: "vodhash"})
 		if err != nil {
 			t.Fatalf("enqueue vod: %v", err)
+		}
+	})
+
+	t.Run("storage carries owner and node", func(t *testing.T) {
+		mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
+			WithArgs(kindStorageSnapshot, "tenant-1", "", "node-1", sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		err := EnqueueStorageSnapshot(&ipcpb.StorageSnapshot{TenantId: sp("tenant-1"), NodeId: "node-1"})
+		if err != nil {
+			t.Fatalf("enqueue storage: %v", err)
 		}
 	})
 

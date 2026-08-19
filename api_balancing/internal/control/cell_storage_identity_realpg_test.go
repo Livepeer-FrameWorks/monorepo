@@ -9,116 +9,6 @@ import (
 	"testing"
 )
 
-// The one-time adoption stamps the cell fingerprint onto UNAMBIGUOUSLY-LOCAL rows that predate backend_id, by recorded
-// evidence (not durable_backend_local, which postdeploy sets only later). It must adopt: synced rows whose effective
-// cluster is empty/empty-string/localClusterID; in-flight VOD multiparts; and in-flight FREEZE attempts (local by
-// write-path invariant even under an alias cluster id). It must leave remote-origin and already-attributed rows
-// untouched, and — via the durable marker committed atomically with the backfill — never run a second time (a NULL row
-// created after the cutoff stays NULL, a regression, not silently repaired).
-func TestAdoptLegacyLocalBackends_RealPG(t *testing.T) {
-	conn := startRealPG(t)
-	ctx := context.Background()
-	const tid = "11111111-1111-1111-1111-111111111111"
-
-	nul := func(s string) any {
-		if s == "" {
-			return nil
-		}
-		return s
-	}
-	seed := func(hash, artifactType, status, syncStatus, storageCluster, originCluster, backendID string) {
-		if _, err := conn.Exec(`
-			INSERT INTO foghorn.artifacts
-			  (artifact_hash, artifact_type, tenant_id, status, sync_status, storage_location,
-			   storage_cluster_id, origin_cluster_id, backend_id)
-			VALUES ($1, $2, $3::uuid, $4, $5, 'local', $6, $7, $8)`,
-			hash, artifactType, tid, status, syncStatus, nul(storageCluster), nul(originCluster), nul(backendID)); err != nil {
-			t.Fatalf("seed %s: %v", hash, err)
-		}
-	}
-	// Recorded-evidence locality has THREE representations (all must adopt): both cluster columns NULL, empty strings,
-	// and the explicit local cluster id — matching ReconcileBillingAttribution. A remote origin is retained.
-	prevCluster := localClusterID
-	t.Cleanup(func() { localClusterID = prevCluster })
-	localClusterID = "cell-eu"
-
-	// seedStr inserts storage/origin as LITERAL strings (no NULL coercion) so the empty-string representation is tested.
-	seedStr := func(hash, storageCluster, originCluster string) {
-		if _, err := conn.Exec(`
-			INSERT INTO foghorn.artifacts
-			  (artifact_hash, artifact_type, tenant_id, status, sync_status, storage_location,
-			   storage_cluster_id, origin_cluster_id, backend_id)
-			VALUES ($1, 'clip', $2::uuid, 'ready', 'synced', 'local', $3, $4, NULL)`,
-			hash, tid, storageCluster, originCluster); err != nil {
-			t.Fatalf("seedStr %s: %v", hash, err)
-		}
-	}
-	// seedFreezing inserts an in-flight freeze attempt (storage_location='freezing', sync_status='in_progress').
-	seedFreezing := func(hash, storageCluster string) {
-		if _, err := conn.Exec(`
-			INSERT INTO foghorn.artifacts
-			  (artifact_hash, artifact_type, tenant_id, status, sync_status, storage_location, storage_cluster_id, backend_id)
-			VALUES ($1, 'clip', $2::uuid, 'ready', 'in_progress', 'freezing', $3, NULL)`,
-			hash, tid, nul(storageCluster)); err != nil {
-			t.Fatalf("seedFreezing %s: %v", hash, err)
-		}
-	}
-	seed("synced-local", "clip", "ready", "synced", "", "", "")                    // both clusters NULL -> adopted
-	seed("remote-origin", "clip", "ready", "synced", "", "media-us-1", "")         // remote origin -> retained NULL
-	seed("inflight-vod", "vod", "uploading", "in_progress", "", "", "")            // in-flight multipart -> adopted
-	seed("already-attributed", "clip", "ready", "synced", "", "", "other-backend") // has an id -> untouched
-	seedFreezing("freeze-local", "")                                               // in-flight local freeze (no cluster) -> adopted
-	seedFreezing("freeze-alias", "official-us")                                    // in-flight local freeze whose OFFICIAL/ALIAS cluster != localClusterID but same local S3 backing -> adopted (the attempt itself is local evidence)
-	seedStr("empty-string-local", "", "")                                          // empty-string clusters -> adopted
-	seedStr("local-cluster", "cell-eu", "")                                        // explicit local cluster id -> adopted
-
-	if err := adoptLegacyLocalBackends(ctx, conn, "cell-eu-backend"); err != nil {
-		t.Fatalf("adoptLegacyLocalBackends: %v", err)
-	}
-
-	backendOf := func(hash string) string {
-		var b sql.NullString
-		if err := conn.QueryRow(`SELECT backend_id FROM foghorn.artifacts WHERE artifact_hash = $1`, hash).Scan(&b); err != nil {
-			t.Fatalf("read %s: %v", hash, err)
-		}
-		return b.String
-	}
-	if got := backendOf("synced-local"); got != "cell-eu-backend" {
-		t.Errorf("synced-local backend_id = %q, want cell-eu-backend", got)
-	}
-	if got := backendOf("inflight-vod"); got != "cell-eu-backend" {
-		t.Errorf("inflight-vod backend_id = %q, want cell-eu-backend", got)
-	}
-	if got := backendOf("remote-origin"); got != "" {
-		t.Errorf("remote-origin must NOT be adopted, backend_id = %q", got)
-	}
-	if got := backendOf("already-attributed"); got != "other-backend" {
-		t.Errorf("already-attributed must be untouched, backend_id = %q", got)
-	}
-	if got := backendOf("empty-string-local"); got != "cell-eu-backend" {
-		t.Errorf("empty-string-local backend_id = %q, want cell-eu-backend", got)
-	}
-	if got := backendOf("local-cluster"); got != "cell-eu-backend" {
-		t.Errorf("local-cluster backend_id = %q, want cell-eu-backend", got)
-	}
-	if got := backendOf("freeze-local"); got != "cell-eu-backend" {
-		t.Errorf("in-flight local freeze must be adopted, backend_id = %q", got)
-	}
-	if got := backendOf("freeze-alias"); got != "cell-eu-backend" {
-		t.Errorf("in-flight local freeze with an alias cluster id must be adopted (the attempt is local evidence), backend_id = %q", got)
-	}
-
-	// The marker is now committed: a second run is a no-op even for a fresh NULL local row (a post-cutoff regression
-	// must fail closed downstream, not be re-attributed).
-	seed("post-cutoff", "clip", "ready", "synced", "", "", "")
-	if err := adoptLegacyLocalBackends(ctx, conn, "cell-eu-backend"); err != nil {
-		t.Fatalf("second adoptLegacyLocalBackends: %v", err)
-	}
-	if got := backendOf("post-cutoff"); got != "" {
-		t.Errorf("post-cutoff row must NOT be adopted after the one-time cutoff, backend_id = %q", got)
-	}
-}
-
 // Two replicas boot CONCURRENTLY against a fresh cell with DIFFERENT descriptors. The single-row PK serializes the
 // inserts; exactly one descriptor is committed, and the OTHER replica — the loser of ON CONFLICT DO NOTHING — must
 // read back the winner's committed descriptor and REFUSE to start rather than returning success against its own. Pins
@@ -237,7 +127,7 @@ func TestEnforceImmutableLocalBackend_RealPG(t *testing.T) {
 // established-but-not-complete (Quartermaster unavailable/incomplete), refuses with NO commit. The low-level
 // unestablished path still commits from env (used by EnforceImmutableLocalBackend); the production fail-closed for an
 // empty Quartermaster descriptor lives in buildFirstBootBackendAuthority. Region defaulting is applied on both sides.
-func TestAdoptOrEnforceLocalBackend_FirstBootAdoption_RealPG(t *testing.T) {
+func TestEstablishOrEnforceLocalBackend_FirstBootAuthority_RealPG(t *testing.T) {
 	prev := s3Client
 	t.Cleanup(func() { s3Client = prev })
 	// This Foghorn's env points at bucket-B / prefix artifacts, with an OMITTED region (defaults to us-east-1).
@@ -258,7 +148,7 @@ func TestAdoptOrEnforceLocalBackend_FirstBootAdoption_RealPG(t *testing.T) {
 	t.Run("established+complete but disagreeing env is refused (no commit)", func(t *testing.T) {
 		conn := startRealPG(t)
 		auth := LocalBackendAuthority{Bucket: "bucket-A", Endpoint: "https://a.s3", Region: "us-east-1", Prefix: "artifacts", Established: true, Complete: true}
-		if err := AdoptOrEnforceLocalBackend(context.Background(), conn, auth); err == nil {
+		if err := EstablishOrEnforceLocalBackend(context.Background(), conn, auth); err == nil {
 			t.Fatal("a first boot whose env disagrees with the proven backend must be refused")
 		}
 		uncommitted(t, conn)
@@ -266,7 +156,7 @@ func TestAdoptOrEnforceLocalBackend_FirstBootAdoption_RealPG(t *testing.T) {
 
 	t.Run("established but NOT complete (authority unavailable) is refused (no commit)", func(t *testing.T) {
 		conn := startRealPG(t)
-		if err := AdoptOrEnforceLocalBackend(context.Background(), conn, LocalBackendAuthority{Established: true, Complete: false}); err == nil {
+		if err := EstablishOrEnforceLocalBackend(context.Background(), conn, LocalBackendAuthority{Established: true, Complete: false}); err == nil {
 			t.Fatal("an established cluster with incomplete authority must fail first boot closed")
 		}
 		uncommitted(t, conn)
@@ -276,7 +166,7 @@ func TestAdoptOrEnforceLocalBackend_FirstBootAdoption_RealPG(t *testing.T) {
 		conn := startRealPG(t)
 		// Authority region is explicit us-east-1; env region is omitted → both normalize to us-east-1.
 		auth := LocalBackendAuthority{Bucket: "bucket-B", Endpoint: "https://b.s3", Region: "us-east-1", Prefix: "artifacts", Established: true, Complete: true}
-		if err := AdoptOrEnforceLocalBackend(context.Background(), conn, auth); err != nil {
+		if err := EstablishOrEnforceLocalBackend(context.Background(), conn, auth); err != nil {
 			t.Fatalf("a matching env must adopt/commit, got: %v", err)
 		}
 	})
@@ -284,19 +174,19 @@ func TestAdoptOrEnforceLocalBackend_FirstBootAdoption_RealPG(t *testing.T) {
 	t.Run("prefix mismatch is refused", func(t *testing.T) {
 		conn := startRealPG(t)
 		auth := LocalBackendAuthority{Bucket: "bucket-B", Endpoint: "https://b.s3", Region: "us-east-1", Prefix: "artifacts-v2", Established: true, Complete: true}
-		if err := AdoptOrEnforceLocalBackend(context.Background(), conn, auth); err == nil {
+		if err := EstablishOrEnforceLocalBackend(context.Background(), conn, auth); err == nil {
 			t.Fatal("a prefix disagreement must be refused")
 		}
 		uncommitted(t, conn)
 	})
 
-	// The low-level AdoptOrEnforceLocalBackend with an UNestablished authority still commits from env — this is the
+	// The low-level EstablishOrEnforceLocalBackend with an unestablished authority still commits from env — this is the
 	// mechanism EnforceImmutableLocalBackend uses. The PRODUCTION fail-closed (an S3-enabled Foghorn whose Quartermaster
 	// descriptor is empty must not establish from env) lives in buildFirstBootBackendAuthority, which returns an
 	// established-but-incomplete authority for an empty QM row so the guard above fires.
 	t.Run("unestablished authority commits from env (low-level path)", func(t *testing.T) {
 		conn := startRealPG(t)
-		if err := AdoptOrEnforceLocalBackend(context.Background(), conn, LocalBackendAuthority{Established: false}); err != nil {
+		if err := EstablishOrEnforceLocalBackend(context.Background(), conn, LocalBackendAuthority{Established: false}); err != nil {
 			t.Fatalf("the low-level unestablished path must commit from env, got: %v", err)
 		}
 	})

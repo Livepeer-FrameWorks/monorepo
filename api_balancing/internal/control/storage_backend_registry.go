@@ -5,10 +5,8 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"strings"
-	"time"
 )
 
 // Storage-backend identity (RFC I2). A "backend" is where bytes physically live — (kind, bucket, endpoint, region,
@@ -85,15 +83,15 @@ func localBackendFingerprint() string {
 // compares: two HA replicas racing first boot with DIFFERENT descriptors serialize on the single-row PK, so the loser
 // of the conflict reads the WINNER's descriptor and refuses to start rather than returning success against its own.
 func EnforceImmutableLocalBackend(ctx context.Context, dbh *sql.DB) error {
-	return AdoptOrEnforceLocalBackend(ctx, dbh, LocalBackendAuthority{})
+	return EstablishOrEnforceLocalBackend(ctx, dbh, LocalBackendAuthority{})
 }
 
-// LocalBackendAuthority is the proven existing-backend descriptor used to gate FIRST-boot adoption.
+// LocalBackendAuthority is the proven existing-backend descriptor used to gate first-boot establishment.
 //   - Established=true means the cluster already has a backend (existing data): the Quartermaster cluster row carries a
 //     descriptor, so a first boot MUST prove agreement before recording an identity, never establish a new one blindly.
 //   - Complete=true means a FULL four-field descriptor (bucket/endpoint/region + prefix) was positively read from the
 //     authority. Quartermaster owns the entire immutable tuple INCLUDING prefix, so it is the sole authority consulted
-//     for adoption — no serving component is queried at first boot, so adoption has no dependency on another service
+//     for validation — no serving component is queried at first boot, so establishment has no dependency on another service
 //     being ready.
 //
 // An established cluster whose authority is not Complete (Quartermaster unreachable or its descriptor incomplete) fails
@@ -117,19 +115,19 @@ func effectiveDescriptor(bucket, endpoint, region, prefix string) (string, strin
 	return bucket, endpoint, region, prefix
 }
 
-// AdoptOrEnforceLocalBackend gates first-boot ADOPTION and enforces immutability thereafter. On a first boot (no
+// EstablishOrEnforceLocalBackend gates first-boot establishment and enforces immutability thereafter. On a first boot (no
 // committed identity) with auth.Established, it REQUIRES a complete, positively-read authority descriptor and exact
 // agreement (effective values) before recording the identity — so a first boot can never establish a repointed or
 // unproven descriptor while historical bytes live on the old store. Missing/incomplete authority when Established →
 // refuse, no commit (fail closed).
 //
-// Established=false means NO adoption authority was supplied to gate this call — the env-only EnforceImmutableLocalBackend
+// Established=false means no external authority was supplied to gate this call — the env-only EnforceImmutableLocalBackend
 // entrypoint, which trusts THIS cell's env descriptor and establishes from it. This is NOT the production Foghorn
 // first-boot path: there, buildFirstBootBackendAuthority reports Established=true for any S3-enabled cell — including one
 // whose Quartermaster descriptor is absent or incomplete — so a production cell fails closed instead of establishing an
 // unproven identity from env. After the identity exists, the exact-match immutability guard governs on every boot and no
 // authority is consulted (no steady-state Quartermaster dependency).
-func AdoptOrEnforceLocalBackend(ctx context.Context, dbh *sql.DB, auth LocalBackendAuthority) error {
+func EstablishOrEnforceLocalBackend(ctx context.Context, dbh *sql.DB, auth LocalBackendAuthority) error {
 	if dbh == nil || s3Client == nil {
 		return nil
 	}
@@ -141,113 +139,18 @@ func AdoptOrEnforceLocalBackend(ctx context.Context, dbh *sql.DB, auth LocalBack
 	}
 	if !committed && auth.Established {
 		if !auth.Complete {
-			return fmt.Errorf("first-boot adoption of an established cell requires a COMPLETE descriptor from Quartermaster (the full bucket/endpoint/region/prefix tuple); the authority was unavailable or its descriptor incomplete (e.g. an unadopted NULL prefix, or an empty descriptor for an S3-enabled cell) — refusing to establish an identity (restart once Quartermaster reports a complete, adopted descriptor)")
+			return fmt.Errorf("first-boot establishment for an existing cell requires a complete descriptor from Quartermaster (the full bucket/endpoint/region/prefix tuple); the authority was unavailable or its descriptor was incomplete (for example, a NULL prefix or an empty descriptor for an S3-enabled cell) — refusing to establish an identity")
 		}
 		ab, ae, ar, ap := effectiveDescriptor(auth.Bucket, auth.Endpoint, auth.Region, auth.Prefix)
 		if bucket != ab || endpoint != ae || region != ar || prefix != ap {
-			return fmt.Errorf("first-boot adoption: this Foghorn's env descriptor (bucket=%q endpoint=%q region=%q prefix=%q) disagrees with the Quartermaster descriptor (bucket=%q endpoint=%q region=%q prefix=%q) — refusing to establish a divergent identity",
+			return fmt.Errorf("first-boot establishment: this Foghorn's env descriptor (bucket=%q endpoint=%q region=%q prefix=%q) disagrees with the Quartermaster descriptor (bucket=%q endpoint=%q region=%q prefix=%q) — refusing to establish a divergent identity",
 				bucket, endpoint, region, prefix, ab, ae, ar, ap)
 		}
 	}
 	if err := enforceImmutableLocalBackendDesc(ctx, dbh, bucket, endpoint, region, prefix); err != nil {
 		return err
 	}
-	// ONE-TIME adoption of legacy (pre-backend_id) LOCAL rows, from the just-proven cell fingerprint. Marker-gated so it
-	// is a durable cutoff (not every-boot compatibility machinery that would silently repair — and hide — a future
-	// write-time-ownership regression): after it runs, a NULL backend on a fresh row is a bug that cleanup fails closed
-	// on, never re-attributed.
-	return adoptLegacyLocalBackends(ctx, dbh, BackendFingerprint("s3", bucket, endpoint, region, prefix))
-}
-
-// adoptLegacyLocalBackends runs the one-time backend_id backfill for rows unambiguously local to THIS cell, from the
-// proven immutable cell fingerprint. The marker claim and the backfill commit in ONE transaction: if the backfill
-// fails, the marker rolls back with it, so the cutoff is only recorded once the rows are actually attributed — a crash
-// or error means the next boot retries rather than permanently skipping adoption with unattributed rows left behind.
-//
-// Locality is decided by RECORDED EVIDENCE, not durable_backend_local: that flag is set for historical rows only by
-// POSTDEPLOY migration 002, which runs AFTER this boot, so depending on it here would consume the marker before the
-// data exists. Three shapes are unambiguously local:
-//   - synced rows whose effective cluster (COALESCE over NULL/empty of storage then origin) is empty or localClusterID,
-//     matching ReconcileBillingAttribution's recorded-evidence test (broader than migration 002's both-NULL predicate,
-//     which is a subset of this — 002 only marks the both-NULL case, and the remainder re-attributes on its next write);
-//   - in-flight VOD multiparts (uploading/completing/aborting), which land on this cell before any sync;
-//   - in-flight FREEZE attempts (storage_location='freezing', sync_status='in_progress'), which the write path only ever
-//     creates for a LOCAL mint (PrepareLocalFreezeAssignment authorizes a freeze solely on same-S3-backing equality, and
-//     may persist an official/ALIAS cluster id that differs from localClusterID) — so the attempt itself is the local
-//     evidence and no cluster predicate applies.
-//
-// No-op when the fingerprint is empty (no local store).
-func adoptLegacyLocalBackends(ctx context.Context, dbh *sql.DB, backendID string) error {
-	if backendID == "" {
-		return nil
-	}
-	tx, err := dbh.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin backend adoption tx: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // best-effort on the non-commit paths
-
-	// Claim the durable cutoff. RETURNING yields a row ONLY when this INSERT won (first ever run); a conflict (marker
-	// already present) returns no rows, so the backfill is skipped forever after.
-	var adoptedAt time.Time
-	claimErr := tx.QueryRowContext(ctx, `
-		INSERT INTO foghorn.backend_adoption (id) VALUES (true)
-		ON CONFLICT (id) DO NOTHING
-		RETURNING adopted_at
-	`).Scan(&adoptedAt)
-	if errors.Is(claimErr, sql.ErrNoRows) {
-		return nil // already adopted on an earlier boot — durable cutoff passed (rollback is a no-op)
-	}
-	if claimErr != nil {
-		return fmt.Errorf("claim backend adoption marker: %w", claimErr)
-	}
-	// Locality by the SAME recorded-evidence predicate as ReconcileBillingAttribution (I2): the effective authoritative
-	// cluster — COALESCE over NULL/empty of storage then origin — is empty (schema convention: local) OR this cell's
-	// cluster id. This matches ALL local representations (both-NULL, empty-string, explicit local id); a row with a
-	// remote origin is left alone. The clusterLocal CTE-less predicate is reused for three in-flight shapes that land on
-	// THIS cell before a sync exists: synced rows, in-flight VOD multiparts, and in-flight FREEZE attempts
-	// (storage_location='freezing', sync_status='in_progress') — preserved across a redeploy, whose completion does not
-	// write backend_id, so without adoption they would be stranded unattributed.
-	localCluster := strings.TrimSpace(localClusterID)
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		   SET backend_id = $1, updated_at = NOW()
-		 WHERE backend_id IS NULL
-		   AND (
-		         (sync_status = 'synced'
-		          AND COALESCE(NULLIF(storage_cluster_id, ''), NULLIF(origin_cluster_id, ''), '') IN ('', $2))
-		      OR (storage_location = 'freezing' AND sync_status = 'in_progress')
-		      OR (artifact_type = 'vod' AND status IN ('uploading', 'completing', 'aborting'))
-		   )
-	`, backendID, localCluster); err != nil {
-		return fmt.Errorf("adopt legacy local backends: %w", err)
-	}
-	// Thumbnail assignments and stream-cleanup obligations are minted on THIS cell's store (per-cell DB), so a legacy
-	// NULL backend on either is unambiguously local — adopt it in the same transaction so the strict cleanup adapter
-	// has a recorded owner to match rather than failing closed on a pre-cut row.
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE foghorn.thumbnail_task_assignment SET backend_id = $1 WHERE backend_id IS NULL
-	`, backendID); err != nil {
-		return fmt.Errorf("adopt legacy thumbnail assignment backends: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE foghorn.stream_cleanup_obligation SET backend_id = $1 WHERE backend_id IS NULL
-	`, backendID); err != nil {
-		return fmt.Errorf("adopt legacy stream cleanup obligation backends: %w", err)
-	}
-	// Staging garbage queued for deletion (superseded thumbnail objects, freeze staging/publication) is likewise this
-	// cell's own — adopt any legacy NULL backend so the strict staging-cleanup worker resolves a recorded owner.
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE foghorn.staging_cleanup_queue SET backend_id = $1 WHERE backend_id IS NULL
-	`, backendID); err != nil {
-		return fmt.Errorf("adopt legacy staging cleanup queue backends: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE foghorn.freeze_publication_ledger SET backend_id = $1 WHERE backend_id IS NULL
-	`, backendID); err != nil {
-		return fmt.Errorf("adopt legacy freeze publication ledger backends: %w", err)
-	}
-	return tx.Commit()
+	return nil
 }
 
 // enforceImmutableLocalBackendDesc is the descriptor-taking core (also the concurrency test seam).

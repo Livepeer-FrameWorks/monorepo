@@ -388,9 +388,8 @@ region defaults to `us-east-1`). Quartermaster is the SOLE authority — there i
 no env-serving fallback, so the descriptor Chandler serves from always matches
 the one Foghorn established. Credentials stay env-only
 (`STORAGE_S3_ACCESS_KEY`/`SECRET_KEY`). A cluster row with **no** descriptor
-means S3 is not configured: Chandler starts but serves 503 until an operator
-establishes the descriptor (`frameworks cluster storage adopt`, or the
-desired-state bootstrap). A cluster **lookup failure** (Quartermaster
+means S3 is not configured: Chandler starts but serves 503 until the
+control-plane desired-state bootstrap establishes the descriptor. A cluster **lookup failure** (Quartermaster
 unreachable) is fatal — Chandler cannot serve without its authority and a
 restart re-attempts. Read-only S3 access. Chandler also registers itself with
 Quartermaster via the standard `BootstrapService` retry loop.
@@ -408,25 +407,6 @@ after the in-cell Foghorn. `/ready` returns 200 only on a successful sentinel re
 and service discovery (the rollout gate, the doctor probe, and the endpoint Quartermaster advertises all use `/ready`),
 so an instance that is up but cannot serve its bucket is never rolled out or advertised as serviceable. There is no
 Foghorn capability handshake at request time — Chandler only reads a static object.
-
-### Legacy Ownership Cutover
-
-`scripts/cutover-thumbnail-ownership-wipe.sh` is a one-time operator tool for the v0.2.96 thumbnail ownership cutover,
-not a normal provisioning or upgrade step. It exists for legacy live-stream thumbnail prefixes created before
-`commodore.streams.thumbnail_serving_cluster_ids` became the cleanup authority. Run it only during a planned cutover
-window, after the old thumbnail minters are stopped and after the expand migration has created the serving-cluster
-column, but before applications that mint new live thumbnails are started again.
-
-The script enumerates only streams whose `thumbnail_serving_cluster_ids = '{}'` and deletes only
-`thumbnails/{stream_id}/` in the configured EU and US stores. It intentionally does not touch artifact thumbnail
-prefixes (`thumbnails/{artifact_hash}/`), because artifact cleanup routes through artifact origin/serving evidence.
-It also enforces a 20-minute drain from `STOP_EPOCH`, derives bucket/prefix/endpoint from the GitOps storage descriptor
-via the CLI, verifies the operator's `mc` alias endpoint against that descriptor, deletes both cells, and verifies every
-enumerated prefix is empty. If any input, descriptor, delete, or verification step fails, the cutover aborts non-zero.
-
-If a cluster is already on the ownership-aware path and there are no owner-less legacy streams to wipe, do not run the
-script. Future releases should remove it once all live environments have crossed the cutover and the old prefixes have
-been audited away.
 
 ### Key Files
 

@@ -79,7 +79,7 @@ func TestUpsertClusterFreezesS3Descriptor(t *testing.T) {
 // A pre-migration cell (bucket/endpoint/region established, s3_prefix still NULL) must be able to ADOPT its prefix
 // exactly once — the migration transition. After adoption the prefix is frozen like the rest of the tuple.
 func TestUpsertClusterAdoptsPrefixOnce(t *testing.T) {
-	// Adopt a non-empty prefix from the NULL (unadopted) state → allowed, issues an UPDATE.
+	// Establish a non-empty prefix from an incomplete NULL state → allowed, issues an UPDATE.
 	t.Run("adopt non-empty prefix from NULL", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
 		if err != nil {

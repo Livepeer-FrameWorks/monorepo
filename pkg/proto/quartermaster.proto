@@ -90,14 +90,6 @@ service ClusterService {
   rpc UpdateCluster(UpdateClusterRequest) returns (ClusterResponse);
   rpc UpdateClusterMeshConfig(UpdateClusterMeshConfigRequest) returns (UpdateClusterMeshConfigResponse);
 
-  // AdoptClusterStorageDescriptor sets the cluster's immutable S3 backend
-  // descriptor (bucket/endpoint/region + one-time prefix adoption) directly
-  // from an operator tool, applying the same freeze semantics as the bootstrap
-  // reconcile: once the bucket is established the tuple is frozen, and a
-  // pre-migration NULL prefix may be filled exactly once. Returns the
-  // re-read cluster row.
-  rpc AdoptClusterStorageDescriptor(AdoptClusterStorageDescriptorRequest) returns (ClusterResponse);
-
   // Get clusters accessible to a tenant
   rpc ListClustersForTenant(ListClustersForTenantRequest) returns (ClustersAccessResponse);
 
@@ -746,19 +738,6 @@ message UpdateClusterMeshConfigResponse {
   string cluster_id = 1;
   string mesh_cidr = 2;
   int32 wg_listen_port = 3;
-}
-
-// Sets the cluster's immutable S3 storage descriptor. bucket/endpoint/region
-// are frozen once the bucket is established; s3_prefix carries a one-time
-// adoption from a pre-migration NULL (any value, including empty). An empty
-// s3_prefix on an unadopted row persists as an explicit '' (known-empty
-// adopted), distinct from the pre-migration NULL.
-message AdoptClusterStorageDescriptorRequest {
-  string cluster_id = 1;
-  string s3_bucket = 2;
-  string s3_endpoint = 3;
-  string s3_region = 4;
-  string s3_prefix = 5;
 }
 
 message ListClustersForTenantRequest {

@@ -201,7 +201,7 @@ func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (s
 	// cleanup and serving of historical bytes. Chandler reads THIS row for its effective descriptor and Foghorn
 	// enforces the same invariant locally (cell_storage_identity). Once the descriptor is established (bucket set),
 	// bucket/endpoint/region are frozen. Region compares on its EFFECTIVE value (empty→us-east-1) — the same
-	// normalization the AdoptClusterStorageDescriptor RPC and every reader apply — so an omitted region does not
+	// normalization every reader applies — so an omitted region does not
 	// false-drift against a us-east-1 one; bucket/endpoint compare exactly.
 	effCurS3Region := curS3Region
 	if effCurS3Region == "" {
@@ -244,8 +244,8 @@ func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (s
 		curS3Bucket == c.S3Bucket &&
 		curS3Endpoint == c.S3Endpoint &&
 		curS3Region == c.S3Region &&
-		// An unadopted (NULL) prefix is NOT a noop even when the desired value is also empty: the write must persist an
-		// explicit '' to mark the descriptor adopted, so require the prefix to already be set AND equal.
+		// A NULL prefix is not a noop even when the desired value is empty: the write must persist an explicit known-empty
+		// value, so require the prefix to already be set and equal.
 		curS3PrefixSet && curS3Prefix == c.S3Prefix {
 		return "noop", nil
 	}
@@ -268,8 +268,8 @@ func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (s
 		    s3_bucket = NULLIF($15, ''),
 		    s3_endpoint = NULLIF($16, ''),
 		    s3_region = NULLIF($17, ''),
-		    -- prefix is written verbatim (not NULLIF): adopting a known-empty prefix must persist an explicit ''
-		    -- so the row becomes s3_prefix IS NOT NULL (adopted), distinct from the pre-migration NULL (unadopted).
+		    -- prefix is written verbatim (not NULLIF): a known-empty prefix must persist as an explicit '', distinct
+		    -- from an incomplete NULL descriptor.
 		    s3_prefix = $18,
 		    updated_at = NOW()
 		WHERE cluster_id = $1`
