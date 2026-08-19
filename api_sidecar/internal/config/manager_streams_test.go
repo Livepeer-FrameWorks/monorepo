@@ -156,7 +156,7 @@ func TestReconcileConfiguresPushInputCloseTrigger(t *testing.T) {
 	}
 }
 
-func TestReconcileConfiguresPlayRewriteDefault(t *testing.T) {
+func TestReconcileConfiguresPlayRewriteFailureAction(t *testing.T) {
 	mist := &recordingMistAPI{}
 	manager := &Manager{
 		mistClient: mist,
@@ -186,8 +186,11 @@ func TestReconcileConfiguresPlayRewriteDefault(t *testing.T) {
 	if !ok {
 		t.Fatalf("PLAY_REWRITE handler = %#v", rawHandlers[0])
 	}
-	if got := handler["default"]; got != "__fw_play_rewrite_unresolved" {
-		t.Fatalf("PLAY_REWRITE default = %v", got)
+	if got := handler["onfail"]; got != "deny" {
+		t.Fatalf("PLAY_REWRITE onfail = %v", got)
+	}
+	if _, hasDefault := handler["default"]; hasDefault {
+		t.Fatalf("PLAY_REWRITE must not use a sentinel default: %#v", handler)
 	}
 }
 

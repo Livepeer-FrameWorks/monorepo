@@ -12,15 +12,15 @@ import (
 )
 
 // These tests cover the non-blocking MistServer lifecycle triggers. The
-// load-bearing contract they share is the ack discipline toward MistServer:
+// load-bearing contract they share is Helmsman's local acceptance boundary:
 //
 //   - Durable triggers (STREAM_END, PUSH_END, PUSH_INPUT_CLOSE, RECORDING_END,
 //     RECORDING_SEGMENT) must NOT acknowledge until the event is safely on the
-//     WAL. A WAL/enqueue failure returns 503 so Mist *retries* — losing one of
-//     these silently would corrupt Foghorn's admission / billing state.
+//     WAL. A WAL/enqueue failure returns 503 as accurate diagnostics, but Mist
+//     does not read responses for sync:false and therefore does not retry it.
 //   - Fire-and-forget triggers (STREAM_BUFFER, LIVE_TRACK_LIST) are pure
 //     telemetry. A forward failure is swallowed and the handler still returns
-//     200, because making Mist retry a buffer-health sample buys nothing.
+//     200; those events have no local durability contract.
 //
 // Each test asserts that distinction directly rather than just driving lines.
 

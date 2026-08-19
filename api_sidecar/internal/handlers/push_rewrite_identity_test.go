@@ -4,7 +4,8 @@ import (
 	"net/http"
 	"testing"
 
-	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 )
 
 // The PUSH_REWRITE handler must carry MistServer's OWN publisher-connection identity
@@ -16,8 +17,11 @@ func TestCapturePushRewriteIdentity_UsesRealMistHeaders(t *testing.T) {
 	h.Set("X-Trigger-UUID", "mist-tuuid-abc")
 	h.Set("X-Trigger-UnixMillis", "1699999999123")
 
-	pr := &ipcpb.PushRewriteTrigger{StreamName: "live+s1"}
-	capturePushRewriteIdentity(pr, h)
+	trigger, err := mist.ParseTriggerToProtobufWithHeaders(mist.TriggerPushRewrite, []byte("rtmp://example/live/s1\nhost\nlive+s1"), h, "node-1", logging.NewLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr := trigger.GetPushRewrite()
 
 	if pr.GetPid() != 48123 {
 		t.Fatalf("Pid = %d, want the X-PID header value 48123", pr.GetPid())
@@ -33,11 +37,12 @@ func TestCapturePushRewriteIdentity_UsesRealMistHeaders(t *testing.T) {
 // Missing/blank headers (older Helmsman path or a non-HTTP connector) leave the
 // identity zero — the caller falls back to source-node binding, never a synthetic PID.
 func TestCapturePushRewriteIdentity_MissingHeadersLeaveZero(t *testing.T) {
-	pr := &ipcpb.PushRewriteTrigger{StreamName: "live+s1"}
-	capturePushRewriteIdentity(pr, http.Header{})
+	trigger, err := mist.ParseTriggerToProtobufWithHeaders(mist.TriggerPushRewrite, []byte("rtmp://example/live/s1\nhost\nlive+s1"), http.Header{}, "node-1", logging.NewLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr := trigger.GetPushRewrite()
 	if pr.GetPid() != 0 || pr.GetTriggerUuid() != "" || pr.GetTriggerUnixMillis() != 0 {
 		t.Fatalf("missing headers must leave identity zero, got pid=%d uuid=%q millis=%d", pr.GetPid(), pr.GetTriggerUuid(), pr.GetTriggerUnixMillis())
 	}
-	// Nil trigger must not panic.
-	capturePushRewriteIdentity(nil, http.Header{})
 }

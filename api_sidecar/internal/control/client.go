@@ -334,7 +334,7 @@ var (
 )
 
 const (
-	blockingTriggerTimeout            = 5 * time.Second
+	blockingTriggerTimeout            = 4 * time.Second
 	desiredStateComponentApplyTimeout = 30 * time.Minute
 	maxBlockingAttempts               = 3
 	reconnectJitterPct                = 25
@@ -423,12 +423,19 @@ func GetCurrentNodeID() string {
 type MistTriggerResult struct {
 	Response         string
 	Abort            bool
+	Action           ipcpb.MistTriggerAction
+	Reason           string
 	ErrorCode        ipcpb.IngestErrorCode
 	IngestGeneration string
 }
 
 // SendMistTrigger forwards a typed MistServer trigger to Foghorn and returns response for blocking triggers
 func SendMistTrigger(mistTrigger *ipcpb.MistTrigger, logger logging.Logger) (*MistTriggerResult, error) {
+	return SendMistTriggerContext(context.Background(), mistTrigger, logger)
+}
+
+// SendMistTriggerContext forwards a trigger while honoring the originating HTTP request lifetime.
+func SendMistTriggerContext(ctx context.Context, mistTrigger *ipcpb.MistTrigger, logger logging.Logger) (*MistTriggerResult, error) {
 	triggerType := mistTrigger.TriggerType
 	if !mistTrigger.Blocking {
 		if err := sendMistTriggerOnce(triggerType, mistTrigger); err != nil {
@@ -439,9 +446,15 @@ func SendMistTrigger(mistTrigger *ipcpb.MistTrigger, logger logging.Logger) (*Mi
 
 	attempts := max(maxBlockingAttempts, 1)
 	deadline := time.Now().Add(blockingTriggerTimeout)
+	if requestDeadline, ok := ctx.Deadline(); ok && requestDeadline.Before(deadline) {
+		deadline = requestDeadline
+	}
 
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return &MistTriggerResult{Abort: true, ErrorCode: ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT}, err
+		}
 		if time.Now().After(deadline) {
 			break
 		}
@@ -488,7 +501,7 @@ func SendMistTrigger(mistTrigger *ipcpb.MistTrigger, logger logging.Logger) (*Mi
 			<-pendingMutex
 			break
 		}
-		result, err := awaitMistTriggerResponse(responseCh, mistTrigger.RequestId, remaining)
+		result, err := awaitMistTriggerResponseContext(ctx, responseCh, mistTrigger.RequestId, remaining)
 		if err == nil {
 			return result, nil
 		}
@@ -540,6 +553,10 @@ func sendMistTriggerOnce(triggerType string, mistTrigger *ipcpb.MistTrigger) err
 // The channel must be created and inserted into pendingMistTriggers BEFORE
 // the trigger is sent — otherwise a fast Foghorn reply races the registration.
 func awaitMistTriggerResponse(responseCh chan *ipcpb.MistTriggerResponse, requestID string, timeout time.Duration) (*MistTriggerResult, error) {
+	return awaitMistTriggerResponseContext(context.Background(), responseCh, requestID, timeout)
+}
+
+func awaitMistTriggerResponseContext(ctx context.Context, responseCh chan *ipcpb.MistTriggerResponse, requestID string, timeout time.Duration) (*MistTriggerResult, error) {
 	disconnectNotifyMu.Lock()
 	disconnectCh := disconnectNotify
 	disconnectNotifyMu.Unlock()
@@ -561,10 +578,17 @@ func awaitMistTriggerResponse(responseCh chan *ipcpb.MistTriggerResponse, reques
 
 		return &MistTriggerResult{
 			Response:         response.Response,
-			Abort:            response.Abort,
+			Abort:            response.Abort || response.GetAction() == ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY,
+			Action:           response.GetAction(),
+			Reason:           response.GetReason(),
 			ErrorCode:        response.ErrorCode,
 			IngestGeneration: response.GetIngestGeneration(),
 		}, nil
+	case <-ctx.Done():
+		pendingMutex <- struct{}{}
+		delete(pendingMistTriggers, requestID)
+		<-pendingMutex
+		return &MistTriggerResult{Abort: true, ErrorCode: ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT}, ctx.Err()
 	case <-disconnectCh:
 		pendingMutex <- struct{}{}
 		delete(pendingMistTriggers, requestID)

@@ -495,6 +495,12 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		log.Warn("Previous processing attempt still active, ignoring duplicate dispatch")
 		return
 	}
+	processesJSON := strings.TrimSpace(req.GetProcessesJson())
+	if processesJSON == "" {
+		h.sendResult(send, req.GetJobId(), "failed", "processing job is missing processes_json", nil, "", 0)
+		return
+	}
+	setProcessingProcessOverride(streamName, processesJSON)
 
 	// Stage unsafe-wrapper sources to local disk before Mist tries to open
 	// them. Mist's FLV input is fopen-only and the AV input only auto-matches
@@ -588,7 +594,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	hasLivepeer := mist.HasLivepeerProcesses(req.GetProcessesJson())
 	ignoredProcessExitBootCounts := map[string]int{}
 	activePushID := 0
-	effectiveProcessesJSON := req.GetProcessesJson()
+	effectiveProcessesJSON := processesJSON
 
 	outputs, sourceDurationMs, waitErr := h.waitForProcessingStreamReady(log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, processAVCh, livepeerSegmentCh, ignoredProcessExitBootCounts)
 	if waitErr != nil {
@@ -2254,17 +2260,21 @@ func UnregisterProcessExitListener(streamName string) {
 	delete(processExitListeners, streamName)
 }
 
-// RouteProcessExit delivers a PROCESS_EXIT event to the processing handler
-// listening on the given stream. No-op if no listener is registered.
+// RouteProcessExit delivers a PROCESS_EXIT event to the processing handler listening on the stream.
 func RouteProcessExit(evt ProcessExitEvent) {
 	processExitListenersMu.Lock()
 	ch, ok := processExitListeners[evt.StreamName]
 	processExitListenersMu.Unlock()
-	if ok {
-		select {
-		case ch <- evt:
-		default:
-		}
+	if !ok {
+		incMistWebhook("PROCESS_EXIT", "listener_missing")
+		logger.WithField("stream_name", evt.StreamName).Warn("PROCESS_EXIT has no processing listener")
+		return
+	}
+	select {
+	case ch <- evt:
+	default:
+		incMistWebhook("PROCESS_EXIT", "listener_full")
+		logger.WithField("stream_name", evt.StreamName).Error("PROCESS_EXIT listener queue full; event dropped")
 	}
 }
 

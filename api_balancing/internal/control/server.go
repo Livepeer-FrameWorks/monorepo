@@ -4120,6 +4120,63 @@ func sendMistTriggerAck(stream ipcpb.HelmsmanControl_ConnectServer, requestID st
 	}
 }
 
+const blockingTriggerReplayTTL = 10 * time.Minute
+
+type blockingTriggerReplayEntry struct {
+	ready     chan struct{}
+	response  *ipcpb.MistTriggerResponse
+	expiresAt time.Time
+}
+
+var blockingTriggerReplay = struct {
+	sync.Mutex
+	entries   map[string]*blockingTriggerReplayEntry
+	lastSweep time.Time
+}{entries: map[string]*blockingTriggerReplayEntry{}}
+
+func acquireBlockingTriggerReplay(key string) (*blockingTriggerReplayEntry, bool) {
+	now := time.Now()
+	blockingTriggerReplay.Lock()
+	defer blockingTriggerReplay.Unlock()
+	if now.Sub(blockingTriggerReplay.lastSweep) >= time.Minute {
+		for replayKey, entry := range blockingTriggerReplay.entries {
+			if !now.Before(entry.expiresAt) {
+				delete(blockingTriggerReplay.entries, replayKey)
+			}
+		}
+		blockingTriggerReplay.lastSweep = now
+	}
+	if entry := blockingTriggerReplay.entries[key]; entry != nil && now.Before(entry.expiresAt) {
+		return entry, false
+	}
+	entry := &blockingTriggerReplayEntry{ready: make(chan struct{}), expiresAt: now.Add(blockingTriggerReplayTTL)}
+	blockingTriggerReplay.entries[key] = entry
+	return entry, true
+}
+
+func completeBlockingTriggerReplay(entry *blockingTriggerReplayEntry, response *ipcpb.MistTriggerResponse) {
+	blockingTriggerReplay.Lock()
+	entry.response = cloneMistTriggerResponse(response)
+	close(entry.ready)
+	blockingTriggerReplay.Unlock()
+}
+
+func cloneMistTriggerResponse(response *ipcpb.MistTriggerResponse) *ipcpb.MistTriggerResponse {
+	if response == nil {
+		return nil
+	}
+	return &ipcpb.MistTriggerResponse{
+		RequestId:          response.RequestId,
+		Response:           response.Response,
+		Abort:              response.Abort,
+		ErrorCode:          response.ErrorCode,
+		IngestGeneration:   response.IngestGeneration,
+		IngestConnectorPid: response.IngestConnectorPid,
+		Action:             response.Action,
+		Reason:             response.Reason,
+	}
+}
+
 // processMistTrigger processes typed MistServer triggers forwarded from Helmsman
 func processMistTrigger(trigger *ipcpb.MistTrigger, session NodeSession, stream ipcpb.HelmsmanControl_ConnectServer, logger logging.Logger) {
 	nodeID := session.NodeID()
@@ -4161,6 +4218,22 @@ func processMistTrigger(trigger *ipcpb.MistTrigger, session NodeSession, stream 
 		return
 	}
 
+	var replayEntry *blockingTriggerReplayEntry
+	if blocking && trigger.GetTriggerUuid() != "" {
+		key := nodeID + "\x1f" + triggerType + "\x1f" + trigger.GetTriggerUuid()
+		entry, owner := acquireBlockingTriggerReplay(key)
+		if !owner {
+			<-entry.ready
+			response := cloneMistTriggerResponse(entry.response)
+			if response != nil {
+				response.RequestId = requestID
+				sendMistTriggerResponse(stream, response, logger)
+			}
+			return
+		}
+		replayEntry = entry
+	}
+
 	logger.WithFields(logging.Fields{
 		"trigger_type":   triggerType,
 		"request_id":     requestID,
@@ -4179,6 +4252,9 @@ func processMistTrigger(trigger *ipcpb.MistTrigger, session NodeSession, stream 
 				RequestId: requestID,
 				Response:  "",
 				Abort:     true,
+			}
+			if replayEntry != nil {
+				completeBlockingTriggerReplay(replayEntry, response)
 			}
 			sendMistTriggerResponse(stream, response, logger)
 		}
@@ -4209,6 +4285,9 @@ func processMistTrigger(trigger *ipcpb.MistTrigger, session NodeSession, stream 
 				Response:  "",
 				Abort:     true,
 				ErrorCode: errorCode,
+			}
+			if replayEntry != nil {
+				completeBlockingTriggerReplay(replayEntry, response)
 			}
 			sendMistTriggerResponse(stream, response, logger)
 		}
@@ -4243,9 +4322,26 @@ func processMistTrigger(trigger *ipcpb.MistTrigger, session NodeSession, stream 
 		Response:  responseText,
 		Abort:     shouldAbort,
 	}
+	if shouldAbort {
+		response.Action = ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY
+	} else if responseText != "" {
+		response.Action = ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_VALUE
+	} else {
+		switch triggerType {
+		case string(mist.TriggerStreamSource), string(mist.TriggerStreamProcess):
+			response.Action = ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_USE_CONFIGURED
+		case string(mist.TriggerPushOutStart):
+			response.Action = ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_KEEP
+		case string(mist.TriggerPlayRewrite), string(mist.TriggerPushRewrite), string(mist.TriggerUserNew):
+			response.Action = ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY
+		}
+	}
 	if !shouldAbort && trigger.GetPushRewrite() != nil {
 		response.IngestGeneration = trigger.GetEventId()
 		response.IngestConnectorPid = trigger.GetPushRewrite().GetPid()
+	}
+	if replayEntry != nil {
+		completeBlockingTriggerReplay(replayEntry, response)
 	}
 
 	sendMistTriggerResponse(stream, response, logger)

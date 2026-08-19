@@ -3,6 +3,7 @@ package control
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
@@ -16,6 +17,7 @@ type captureMistTriggerProcessor struct {
 	err              error
 	response         string
 	ingestGeneration string
+	calls            int
 }
 
 func (c *captureMistTriggerProcessor) ProcessTrigger(_ string, _ []byte, _ string) (string, bool, error) {
@@ -23,11 +25,62 @@ func (c *captureMistTriggerProcessor) ProcessTrigger(_ string, _ []byte, _ strin
 }
 
 func (c *captureMistTriggerProcessor) ProcessTypedTrigger(trigger *ipcpb.MistTrigger) (string, bool, error) {
+	c.calls++
 	c.last = trigger
 	if c.ingestGeneration != "" {
 		trigger.EventId = c.ingestGeneration
 	}
 	return c.response, false, c.err
+}
+
+func TestProcessMistTrigger_ReplaysBlockingResultByMistTriggerUUID(t *testing.T) {
+	prevProcessor := mistTriggerProcessor
+	t.Cleanup(func() { mistTriggerProcessor = prevProcessor })
+
+	blockingTriggerReplay.Lock()
+	previousReplayEntries := blockingTriggerReplay.entries
+	previousSweep := blockingTriggerReplay.lastSweep
+	blockingTriggerReplay.entries = map[string]*blockingTriggerReplayEntry{}
+	blockingTriggerReplay.lastSweep = time.Time{}
+	blockingTriggerReplay.Unlock()
+	t.Cleanup(func() {
+		blockingTriggerReplay.Lock()
+		blockingTriggerReplay.entries = previousReplayEntries
+		blockingTriggerReplay.lastSweep = previousSweep
+		blockingTriggerReplay.Unlock()
+	})
+
+	capture := &captureMistTriggerProcessor{response: "live+resolved"}
+	mistTriggerProcessor = capture
+	session := NodeSession{CanonicalNodeID: "node-1", ClusterID: "cluster-1"}
+	logger := logging.Logger(logrus.New())
+
+	firstStream := &captureStream{}
+	processMistTrigger(&ipcpb.MistTrigger{
+		TriggerType: "PLAY_REWRITE",
+		TriggerUuid: "mist-attempt-1",
+		Blocking:    true,
+		RequestId:   "request-1",
+	}, session, firstStream, logger)
+
+	secondStream := &captureStream{}
+	processMistTrigger(&ipcpb.MistTrigger{
+		TriggerType: "PLAY_REWRITE",
+		TriggerUuid: "mist-attempt-1",
+		Blocking:    true,
+		RequestId:   "request-2",
+	}, session, secondStream, logger)
+
+	if capture.calls != 1 {
+		t.Fatalf("processor calls = %d, want 1", capture.calls)
+	}
+	response := secondStream.lastSent().GetMistTriggerResponse()
+	if response.GetRequestId() != "request-2" {
+		t.Fatalf("replayed request id = %q, want request-2", response.GetRequestId())
+	}
+	if response.GetResponse() != "live+resolved" || response.GetAction() != ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_VALUE {
+		t.Fatalf("replayed result = (%q, %s), want value live+resolved", response.GetResponse(), response.GetAction())
+	}
 }
 
 func TestProcessMistTrigger_AcceptedPushCarriesGenerationAndConnectorIdentity(t *testing.T) {

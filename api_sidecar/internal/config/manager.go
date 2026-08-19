@@ -66,20 +66,12 @@ type ApplySeedSender func(*ipcpb.ControlMessage)
 const (
 	maxReconcileRetryDelay = 30 * time.Second
 	mistConfigRepairEvery  = 30 * time.Second
+	mistTriggerStringLimit = 127
 	inertMistSource        = "/tmp/none"
 	edgeBundleDirMode      = fs.ModeSetgid | 0o770
 )
 
 const (
-	// PlayRewriteUnresolvedSentinel is both the Mist PLAY_REWRITE `default` and
-	// the value Helmsman returns when it cannot resolve a playback ID. It is an
-	// impossible stream name, so Mist fails cleanly ("no compatible input")
-	// instead of substituting its built-in "true" default (which it applies for
-	// a missing default and would route playback to a stream named "true").
-	// Returning it from Helmsman, not only via the Mist `default`, keeps the
-	// safe value independent of the deployed trigger config.
-	PlayRewriteUnresolvedSentinel = "__fw_play_rewrite_unresolved"
-
 	// StreamSourceUnavailable is the value Helmsman returns when it cannot
 	// resolve a STREAM_SOURCE. A non-empty STREAM_SOURCE body is a *source
 	// override*, so a made-up name would make Mist try to open it as a source;
@@ -87,6 +79,15 @@ const (
 	// for a clean disconnect. Mirrors api_balancing control.OfflineUnavailable.
 	StreamSourceUnavailable = "offline:unavailable"
 )
+
+type TriggerDefinition struct {
+	Handler string   `json:"handler"`
+	Sync    bool     `json:"sync"`
+	Streams []string `json:"streams,omitempty"`
+	Params  string   `json:"params,omitempty"`
+	Default string   `json:"default,omitempty"`
+	OnFail  string   `json:"onfail,omitempty"`
+}
 
 var manager *Manager
 
@@ -224,7 +225,13 @@ func (m *Manager) reconcile() {
 	}
 
 	// Triggers (pointed at Helmsman webhooks)
-	desiredConfig["triggers"] = desiredTriggers()
+	triggers := desiredTriggers()
+	if err := validateTriggerDefinitions(triggers); err != nil {
+		m.logger.WithError(err).Error("refusing to write invalid Mist trigger configuration")
+		m.scheduleRetry()
+		return
+	}
+	desiredConfig["triggers"] = triggers
 
 	if err := m.ensureProtocols(current); err != nil {
 		m.logger.WithError(err).Warn("ensureProtocols failed")
@@ -286,36 +293,65 @@ func webhookBaseURL() string {
 	return webhookBase
 }
 
-// desiredTriggers builds the Mist trigger config pointed at Helmsman's
-// webhooks. The `default` values are the fail-safe Mist applies when a blocking
-// trigger handler is unreachable or times out: PLAY_REWRITE must never fall
-// back to Mist's implicit "true" (it would rewrite playback to a stream named
-// "true"), and USER_NEW must fail closed ("false") rather than admit viewers
-// unauthenticated. Reachable-handler safety lives in the handlers themselves;
-// these defaults cover the Helmsman-unreachable case.
+// desiredTriggers builds the complete Mist trigger config managed by Helmsman.
 func desiredTriggers() map[string]any {
 	webhookBase := webhookBaseURL()
-	return map[string]any{
-		"PUSH_REWRITE":      []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/push_rewrite"), "sync": true}},
-		"PLAY_REWRITE":      []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/play_rewrite"), "sync": true, "default": PlayRewriteUnresolvedSentinel}},
-		"STREAM_SOURCE":     []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/stream_source"), "sync": true}},
-		"PUSH_OUT_START":    []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/push_out_start"), "sync": true}},
-		"PUSH_END":          []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/push_end"), "sync": false}},
-		"PUSH_INPUT_CLOSE":  []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/push_input_close"), "sync": false}},
-		"USER_NEW":          []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/user_new"), "sync": true, "default": "false"}},
-		"USER_END":          []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/user_end"), "sync": false}},
-		"STREAM_BUFFER":     []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/stream_buffer"), "sync": false}},
-		"STREAM_END":        []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/stream_end"), "sync": false}},
-		"LIVE_TRACK_LIST":   []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/live_track_list"), "sync": false}},
-		"RECORDING_END":     []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/recording_end"), "sync": false}},
-		"RECORDING_SEGMENT": []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/recording_segment"), "sync": false}},
-		// Processing billing triggers (for tracking transcoding usage)
-		"LIVEPEER_SEGMENT_COMPLETE":           []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/livepeer_segment_complete"), "sync": false}},
-		"PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE": []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/process_av_segment_complete"), "sync": false}},
-		"THUMBNAIL_UPDATED":                   []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/thumbnail_updated"), "sync": false}},
-		"STREAM_PROCESS":                      []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/stream_process"), "sync": true}},
-		"PROCESS_EXIT":                        []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/process_exit"), "sync": false, "streams": []string{"processing+"}}},
+	definitions := map[string]TriggerDefinition{
+		"PUSH_REWRITE":                        {Handler: join(webhookBase, "/webhooks/mist/push_rewrite"), Sync: true, OnFail: "deny"},
+		"PLAY_REWRITE":                        {Handler: join(webhookBase, "/webhooks/mist/play_rewrite"), Sync: true, OnFail: "deny"},
+		"STREAM_SOURCE":                       {Handler: join(webhookBase, "/webhooks/mist/stream_source"), Sync: true, OnFail: "offline"},
+		"PUSH_OUT_START":                      {Handler: join(webhookBase, "/webhooks/mist/push_out_start"), Sync: true, OnFail: "keep"},
+		"PUSH_END":                            {Handler: join(webhookBase, "/webhooks/mist/push_end")},
+		"PUSH_INPUT_CLOSE":                    {Handler: join(webhookBase, "/webhooks/mist/push_input_close")},
+		"USER_NEW":                            {Handler: join(webhookBase, "/webhooks/mist/user_new"), Sync: true, OnFail: "deny"},
+		"USER_END":                            {Handler: join(webhookBase, "/webhooks/mist/user_end")},
+		"STREAM_BUFFER":                       {Handler: join(webhookBase, "/webhooks/mist/stream_buffer")},
+		"STREAM_END":                          {Handler: join(webhookBase, "/webhooks/mist/stream_end")},
+		"LIVE_TRACK_LIST":                     {Handler: join(webhookBase, "/webhooks/mist/live_track_list")},
+		"RECORDING_END":                       {Handler: join(webhookBase, "/webhooks/mist/recording_end")},
+		"RECORDING_SEGMENT":                   {Handler: join(webhookBase, "/webhooks/mist/recording_segment")},
+		"LIVEPEER_SEGMENT_COMPLETE":           {Handler: join(webhookBase, "/webhooks/mist/livepeer_segment_complete")},
+		"PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE": {Handler: join(webhookBase, "/webhooks/mist/process_av_segment_complete")},
+		"THUMBNAIL_UPDATED":                   {Handler: join(webhookBase, "/webhooks/mist/thumbnail_updated")},
+		"STREAM_PROCESS":                      {Handler: join(webhookBase, "/webhooks/mist/stream_process"), Sync: true, OnFail: "keep"},
+		"PROCESS_EXIT":                        {Handler: join(webhookBase, "/webhooks/mist/process_exit"), Streams: []string{"processing+"}},
 	}
+	result := make(map[string]any, len(definitions))
+	for name, definition := range definitions {
+		entry := map[string]any{"handler": definition.Handler, "sync": definition.Sync}
+		if len(definition.Streams) != 0 {
+			entry["streams"] = definition.Streams
+		}
+		if definition.Params != "" {
+			entry["params"] = definition.Params
+		}
+		if definition.Default != "" {
+			entry["default"] = definition.Default
+		}
+		if definition.OnFail != "" {
+			entry["onfail"] = definition.OnFail
+		}
+		result[name] = []any{entry}
+	}
+	return result
+}
+
+func validateTriggerDefinitions(value any) error {
+	definitions, ok := normalizeTriggerConfig(value)
+	if !ok {
+		return fmt.Errorf("unrecognized trigger configuration shape")
+	}
+	for name, entries := range definitions {
+		for _, entry := range entries {
+			if len(entry.Handler) > mistTriggerStringLimit {
+				return fmt.Errorf("%s handler is %d bytes; Mist stores at most %d", name, len(entry.Handler), mistTriggerStringLimit)
+			}
+			if len(entry.Default) > mistTriggerStringLimit {
+				return fmt.Errorf("%s default is %d bytes; Mist stores at most %d", name, len(entry.Default), mistTriggerStringLimit)
+			}
+		}
+	}
+	return nil
 }
 
 func applyBaselineMistConfig(desiredConfig map[string]any) {
@@ -360,81 +396,51 @@ func (m *Manager) repairConfigDrift() {
 	if err := m.repairMissingManagedStreams(seed); err != nil {
 		m.logger.WithError(err).Warn("Mist managed stream repair failed")
 	}
-	m.repairTriggerDefaults()
+	m.repairTriggerDefinitions()
 }
 
-// repairTriggerDefaults re-asserts the safety-critical trigger `default` values
-// in the running Mist config. The Mist `default` governs the case where
-// Helmsman is unreachable and Mist falls back without a handler response; a
-// missing or unsafe PLAY_REWRITE/USER_NEW default lets Mist admit/misroute, so
-// it must not drift. Only repairs when a default is confidently observed wrong
-// (a present trigger whose default differs from the required value, including
-// absent); an unrecognized ConfigBackup shape is left for the next full
-// reconcile rather than triggering a re-save loop.
-func (m *Manager) repairTriggerDefaults() {
+func (m *Manager) repairTriggerDefinitions() {
+	desired := desiredTriggers()
+	if err := validateTriggerDefinitions(desired); err != nil {
+		m.logger.WithError(err).Error("trigger drift repair refused invalid desired configuration")
+		return
+	}
 	current, err := m.mistClient.ConfigBackup()
 	if err != nil {
-		m.logger.WithError(err).Warn("trigger-default drift check: ConfigBackup failed")
+		m.logger.WithError(err).Warn("trigger drift check: ConfigBackup failed")
 		return
 	}
-	drifted := false
-	for name, want := range map[string]string{
-		"PLAY_REWRITE": PlayRewriteUnresolvedSentinel,
-		"USER_NEW":     "false",
-	} {
-		got, present := currentTriggerDefault(current, name)
-		// present means the trigger entry was located in a recognized shape;
-		// got is "" when the `default` key is absent. A missing default is
-		// itself unsafe (Mist substitutes "true"), so it must count as drift —
-		// repair whenever the entry is present and the default is not the
-		// required safe value. An unrecognized ConfigBackup shape (present=false)
-		// is left to the next full reconcile rather than risking a re-save loop.
-		if present && got != want {
-			m.logger.WithFields(logging.Fields{
-				"trigger": name,
-				"want":    want,
-				"got":     got,
-			}).Error("Mist trigger default missing or drifted to an unsafe value — re-applying")
-			drifted = true
-		}
-	}
-	if !drifted {
+	got, ok := normalizeTriggerConfig(current["triggers"])
+	want, _ := normalizeTriggerConfig(desired)
+	if ok && reflect.DeepEqual(got, want) {
 		return
 	}
-	if _, err := m.mistClient.UpdateConfig(map[string]any{"triggers": desiredTriggers()}); err != nil {
-		m.logger.WithError(err).Warn("trigger-default drift repair: UpdateConfig failed")
+	m.logger.Warn("Mist trigger definitions missing or drifted — re-applying complete managed set")
+	if _, err := m.mistClient.UpdateConfig(map[string]any{"triggers": desired}); err != nil {
+		m.logger.WithError(err).Warn("trigger drift repair: UpdateConfig failed")
 		return
 	}
 	if err := m.mistClient.Save(); err != nil {
-		m.logger.WithError(err).Warn("trigger-default drift repair: Save failed")
+		m.logger.WithError(err).Warn("trigger drift repair: Save failed")
 	}
 }
 
-// currentTriggerDefault extracts triggers[name][0]["default"] from a Mist
-// ConfigBackup. The bool reports whether the trigger ENTRY was located in a
-// recognized shape — not whether a default was set — so a present trigger with
-// a missing `default` returns ("", true) and is treated as drift by the caller.
-// It is false only when the ConfigBackup shape itself isn't recognized.
-func currentTriggerDefault(current map[string]any, name string) (string, bool) {
-	triggers, ok := current["triggers"].(map[string]any)
-	if !ok {
-		return "", false
+func normalizeTriggerConfig(value any) (map[string][]TriggerDefinition, bool) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, false
 	}
-	list, ok := triggers[name].([]any)
-	if !ok || len(list) == 0 {
-		return "", false
+	var decoded map[string][]TriggerDefinition
+	if err := json.Unmarshal(encoded, &decoded); err != nil || decoded == nil {
+		return nil, false
 	}
-	entry, ok := list[0].(map[string]any)
-	if !ok {
-		return "", false
+	for name, entries := range decoded {
+		for i := range entries {
+			sort.Strings(entries[i].Streams)
+		}
+		decoded[name] = entries
 	}
-	def, ok := entry["default"].(string)
-	if !ok {
-		// Trigger present but no (string) default — present, empty default,
-		// which the caller treats as drift against a required safe default.
-		return "", true
-	}
-	return def, true
+	return decoded, true
 }
 
 func (m *Manager) scheduleRetry() {

@@ -40,7 +40,7 @@ var (
 	nodeName string
 )
 
-var sendMistTrigger = control.SendMistTrigger
+var sendMistTrigger = control.SendMistTriggerContext
 
 // sendDurableMistTrigger is the indirection tests stub to intercept the
 // durable-path send. Production callers go through forwardDurable, which
@@ -64,6 +64,54 @@ func incMistWebhook(triggerType, status string) {
 		return
 	}
 	metrics.MistWebhookRequests.WithLabelValues(triggerType, status).Inc()
+}
+
+func mistActionName(action ipcpb.MistTriggerAction) string {
+	switch action {
+	case ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_VALUE:
+		return "value"
+	case ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY:
+		return "deny"
+	case ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_KEEP:
+		return "keep"
+	case ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_OFFLINE:
+		return "offline"
+	case ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_USE_CONFIGURED:
+		return "use-configured"
+	default:
+		return ""
+	}
+}
+
+func respondMistAction(c *gin.Context, status int, action ipcpb.MistTriggerAction, reason, body string) {
+	if actionName := mistActionName(action); actionName != "" {
+		c.Header("X-Mist-Trigger-Action", actionName)
+	}
+	if reason != "" {
+		c.Header("X-Mist-Trigger-Reason", reason)
+	}
+	c.String(status, body)
+}
+
+func respondMistResult(c *gin.Context, result *control.MistTriggerResult, emptyAction ipcpb.MistTriggerAction) {
+	if result.Abort && (result.ErrorCode == ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL ||
+		result.ErrorCode == ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT) {
+		c.String(http.StatusServiceUnavailable, "trigger handler unavailable")
+		return
+	}
+	action := result.Action
+	if action == ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_UNSPECIFIED {
+		if result.Abort {
+			action = ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY
+		} else if strings.TrimSpace(result.Response) == "" {
+			action = emptyAction
+		}
+	}
+	reason := result.Reason
+	if reason == "" && result.ErrorCode != ipcpb.IngestErrorCode_INGEST_ERROR_NONE {
+		reason = strings.ToLower(strings.TrimPrefix(result.ErrorCode.String(), "INGEST_ERROR_"))
+	}
+	respondMistAction(c, http.StatusOK, action, reason, result.Response)
 }
 
 func applyTenantContext(trigger *ipcpb.MistTrigger) {
@@ -96,6 +144,9 @@ func forwardDurable(triggerType string, body []byte, mistTrigger *ipcpb.MistTrig
 // UUID keeps the two real closes distinct while still colliding a single close's retries.
 // Empty for triggers without a captured UUID (falls back to the body-only key).
 func walNaturalKey(mistTrigger *ipcpb.MistTrigger) string {
+	if mistTrigger.GetTriggerUuid() != "" {
+		return mistTrigger.GetTriggerUuid() + ":" + strconv.FormatInt(mistTrigger.GetTriggerUnixMillis(), 10)
+	}
 	if pic := mistTrigger.GetPushInputClose(); pic != nil {
 		return pic.GetTriggerUuid()
 	}
@@ -109,7 +160,7 @@ func walNaturalKey(mistTrigger *ipcpb.MistTrigger) string {
 	return ""
 }
 
-func forwardDurableParseFailure(triggerType string, body []byte, parseErr error) (string, error) {
+func forwardDurableParseFailure(triggerType string, body []byte, headers http.Header, parseErr error) (string, error) {
 	rawTrigger := &ipcpb.MistTrigger{
 		TriggerType: triggerType,
 		NodeId:      control.GetCurrentNodeID(),
@@ -121,6 +172,12 @@ func forwardDurableParseFailure(triggerType string, body []byte, parseErr error)
 				ParseError: parseErr.Error(),
 			},
 		},
+	}
+	rawTrigger.TriggerUuid = strings.TrimSpace(headers.Get("X-Trigger-UUID"))
+	if rawMillis := strings.TrimSpace(headers.Get("X-Trigger-UnixMillis")); rawMillis != "" {
+		if millis, err := strconv.ParseInt(rawMillis, 10, 64); err == nil {
+			rawTrigger.TriggerUnixMillis = millis
+		}
 	}
 	applyTenantContext(rawTrigger)
 	return forwardDurable(triggerType, body, rawTrigger)
@@ -627,66 +684,7 @@ func HealthCheck(c *gin.Context) {
 	})
 }
 
-// HandlePushRewrite handles the PUSH_REWRITE trigger from MistServer
-// This is a critical blocking trigger - validates stream keys and routes to wildcard streams
-// capturePushRewriteIdentity reads MistServer's publisher-connection identity from the
-// trigger HTTP headers (X-PID / X-Trigger-UUID / X-Trigger-UnixMillis; MistServer
-// lib/triggers.cpp sets these on every trigger) onto the PushRewriteTrigger. For
-// PUSH_REWRITE the connector process IS the ingest connection, so its PID is the
-// ingest-session identity Foghorn correlates against the same connector's later
-// PUSH_INPUT_CLOSE. These are Mist's OWN values — never re-synthesized at receive time
-// — and are kept separate from FrameWorks' request_id/event_id (WAL dedup).
-func capturePushRewriteIdentity(pr *ipcpb.PushRewriteTrigger, header http.Header) {
-	if pr == nil {
-		return
-	}
-	if pidStr := strings.TrimSpace(header.Get("X-PID")); pidStr != "" {
-		if pid, err := strconv.ParseInt(pidStr, 10, 64); err == nil {
-			pr.Pid = pid
-		}
-	}
-	pr.TriggerUuid = strings.TrimSpace(header.Get("X-Trigger-UUID"))
-	pr.TriggerUnixMillis = triggerUnixMillis(header)
-}
-
-// triggerUnixMillis reads MistServer's X-Trigger-UnixMillis header (the controller's
-// own event time). Returns 0 when absent or unparseable so callers can treat it as
-// "unknown" rather than fabricating a receive-time value.
-func triggerUnixMillis(header http.Header) int64 {
-	if msStr := strings.TrimSpace(header.Get("X-Trigger-UnixMillis")); msStr != "" {
-		if ms, err := strconv.ParseInt(msStr, 10, 64); err == nil {
-			return ms
-		}
-	}
-	return 0
-}
-
-// capturePushInputCloseIdentity records Mist's event time onto the PUSH_INPUT_CLOSE
-// payload so Foghorn can fence a delayed close against ingest-session PID reuse. The
-// connector PID already rides the typed payload (field 4); the event time keys the
-// close to the exact ingest generation that started before it.
-func capturePushInputCloseIdentity(pic *ipcpb.PushInputCloseTrigger, header http.Header) {
-	if pic == nil {
-		return
-	}
-	pic.TriggerUnixMillis = triggerUnixMillis(header)
-	pic.TriggerUuid = strings.TrimSpace(header.Get("X-Trigger-UUID"))
-}
-
-// captureStreamEndIdentity records Mist's event time onto the STREAM_END payload so Foghorn can run
-// the ingest-session reaper event-time-fenced: STREAM_END ends only sessions that started at or
-// before this time, so a reconnect that came up AFTER the stream ended is not reaped. STREAM_END
-// carries no connector PID (it is aggregate stream inactivity), so the event time is the only fence
-// it can supply. 0 when absent (old Mist / missing header) → Foghorn skips the reaper and falls back
-// to its conservative offline fence.
-func captureStreamEndIdentity(se *ipcpb.StreamEndTrigger, header http.Header) {
-	if se == nil {
-		return
-	}
-	se.TriggerUnixMillis = triggerUnixMillis(header)
-	se.TriggerUuid = strings.TrimSpace(header.Get("X-Trigger-UUID"))
-}
-
+// HandlePushRewrite handles the PUSH_REWRITE trigger from MistServer.
 func HandlePushRewrite(c *gin.Context) {
 	start := time.Now()
 	incMistWebhook("PUSH_REWRITE", "received")
@@ -708,7 +706,7 @@ func HandlePushRewrite(c *gin.Context) {
 			metrics.NodeOperations.WithLabelValues("push_rewrite", "error").Inc()
 		}
 
-		c.String(http.StatusOK, "") // Empty response denies the push
+		c.String(http.StatusInternalServerError, "trigger body unavailable")
 		return
 	}
 
@@ -718,7 +716,7 @@ func HandlePushRewrite(c *gin.Context) {
 	}).Debug("Forwarding PUSH_REWRITE trigger to Foghorn via gRPC")
 
 	// Parse raw webhook data directly
-	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerPushRewrite, body, control.GetCurrentNodeID(), logger)
+	mistTrigger, err := mist.ParseTriggerToProtobufWithHeaders(mist.TriggerPushRewrite, body, c.Request.Header, control.GetCurrentNodeID(), logger)
 	if err != nil {
 		incMistWebhook("PUSH_REWRITE", "parse_error")
 		logger.WithFields(logging.Fields{
@@ -729,16 +727,13 @@ func HandlePushRewrite(c *gin.Context) {
 			metrics.NodeOperations.WithLabelValues("push_rewrite", "parse_error").Inc()
 		}
 
-		c.String(http.StatusOK, "") // Empty response denies the push
+		c.String(http.StatusBadRequest, "invalid trigger payload")
 		return
 	}
 
-	// Capture MistServer's publisher-connection identity from the trigger HTTP headers.
-	capturePushRewriteIdentity(mistTrigger.GetPushRewrite(), c.Request.Header)
-
 	// Forward trigger to Foghorn via gRPC and get response
 	applyTenantContext(mistTrigger)
-	result, err := sendMistTrigger(mistTrigger, logger)
+	result, err := sendMistTrigger(c.Request.Context(), mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("PUSH_REWRITE", "forward_error")
 		logger.WithFields(logging.Fields{
@@ -750,7 +745,7 @@ func HandlePushRewrite(c *gin.Context) {
 			metrics.NodeOperations.WithLabelValues("push_rewrite", "forwarding_error").Inc()
 		}
 
-		c.String(http.StatusOK, "") // Empty response denies the push
+		c.String(http.StatusServiceUnavailable, "trigger handler unavailable")
 		return
 	}
 
@@ -765,7 +760,7 @@ func HandlePushRewrite(c *gin.Context) {
 			metrics.NodeOperations.WithLabelValues("push_rewrite", "aborted").Inc()
 		}
 
-		c.String(http.StatusOK, "") // Empty response denies the push
+		respondMistResult(c, result, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY)
 		return
 	}
 	logger.WithFields(logging.Fields{
@@ -781,7 +776,7 @@ func HandlePushRewrite(c *gin.Context) {
 	}
 
 	// Return Foghorn's response to MistServer
-	c.String(http.StatusOK, result.Response)
+	respondMistResult(c, result, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY)
 }
 
 // HandlePlayRewrite handles the PLAY_REWRITE trigger from MistServer
@@ -808,7 +803,7 @@ func HandlePlayRewrite(c *gin.Context) {
 			metrics.NodeOperations.WithLabelValues("play_rewrite", "error").Inc()
 		}
 
-		c.String(http.StatusOK, config.PlayRewriteUnresolvedSentinel)
+		c.String(http.StatusInternalServerError, "trigger body unavailable")
 		return
 	}
 
@@ -819,7 +814,7 @@ func HandlePlayRewrite(c *gin.Context) {
 	}).Debug("Forwarding PLAY_REWRITE trigger to Foghorn via gRPC")
 
 	// Parse raw webhook data directly
-	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerPlayRewrite, body, control.GetCurrentNodeID(), logger)
+	mistTrigger, err := mist.ParseTriggerToProtobufWithHeaders(mist.TriggerPlayRewrite, body, c.Request.Header, control.GetCurrentNodeID(), logger)
 	if err != nil {
 		incMistWebhook("PLAY_REWRITE", "parse_error")
 		logger.WithFields(logging.Fields{
@@ -831,7 +826,7 @@ func HandlePlayRewrite(c *gin.Context) {
 			metrics.NodeOperations.WithLabelValues("play_rewrite", "parse_error").Inc()
 		}
 
-		c.String(http.StatusOK, config.PlayRewriteUnresolvedSentinel)
+		c.String(http.StatusBadRequest, "invalid trigger payload")
 		return
 	}
 
@@ -858,7 +853,7 @@ func HandlePlayRewrite(c *gin.Context) {
 
 	// Forward trigger to Foghorn via gRPC and get response
 	applyTenantContext(mistTrigger)
-	result, err := sendMistTrigger(mistTrigger, logger)
+	result, err := sendMistTrigger(c.Request.Context(), mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("PLAY_REWRITE", "forward_error")
 		logger.WithFields(logging.Fields{
@@ -883,11 +878,7 @@ func HandlePlayRewrite(c *gin.Context) {
 			}
 		}
 
-		// Return the unresolved sentinel ourselves rather than "" so safety
-		// does not depend on the Mist `default` being deployed correctly: an
-		// empty body lets Mist substitute its implicit "true" if the config
-		// drifted, which misroutes playback.
-		c.String(http.StatusOK, config.PlayRewriteUnresolvedSentinel)
+		c.String(http.StatusServiceUnavailable, "trigger handler unavailable")
 		return
 	}
 
@@ -902,21 +893,14 @@ func HandlePlayRewrite(c *gin.Context) {
 			metrics.NodeOperations.WithLabelValues("play_rewrite", "aborted").Inc()
 		}
 
-		// Foghorn deliberately rejected this playback (e.g. owner suspended /
-		// balance exhausted). Return the unresolved sentinel so Mist fails
-		// cleanly instead of falling back to its "true" default.
-		c.String(http.StatusOK, config.PlayRewriteUnresolvedSentinel)
+		respondMistResult(c, result, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY)
 		return
 	}
 
-	// Foghorn can resolve with a non-abort but empty response — its
-	// "not found / unresolved / admission-rejected" shape (handlePlayRewrite
-	// returns ("", false, nil), incl. the authoritative-not-found path of the
-	// registry-routed resolve). Treat that exactly like a failure: return the
-	// sentinel ourselves so Mist never falls back to its implicit "true".
+	// A reachable Foghorn returning no mapping is an authoritative denial.
 	if strings.TrimSpace(result.Response) == "" {
 		incMistWebhook("PLAY_REWRITE", "unresolved")
-		c.String(http.StatusOK, config.PlayRewriteUnresolvedSentinel)
+		respondMistAction(c, http.StatusOK, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY, "unresolved", "")
 		return
 	}
 
@@ -936,7 +920,7 @@ func HandlePlayRewrite(c *gin.Context) {
 	}
 
 	// Return Foghorn's response to MistServer
-	c.String(http.StatusOK, result.Response)
+	respondMistResult(c, result, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY)
 }
 
 // HandleStreamProcess handles the STREAM_PROCESS trigger from MistServer.
@@ -948,15 +932,15 @@ func HandleStreamProcess(c *gin.Context) {
 	if err != nil {
 		incMistWebhook("STREAM_PROCESS", "read_error")
 		logger.WithError(err).Error("Failed to read STREAM_PROCESS body")
-		c.String(http.StatusOK, "")
+		c.String(http.StatusInternalServerError, "trigger body unavailable")
 		return
 	}
 
-	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerStreamProcess, body, control.GetCurrentNodeID(), logger)
+	mistTrigger, err := mist.ParseTriggerToProtobufWithHeaders(mist.TriggerStreamProcess, body, c.Request.Header, control.GetCurrentNodeID(), logger)
 	if err != nil {
 		incMistWebhook("STREAM_PROCESS", "parse_error")
 		logger.WithError(err).Error("Failed to parse STREAM_PROCESS trigger")
-		c.String(http.StatusOK, "")
+		c.String(http.StatusBadRequest, "invalid trigger payload")
 		return
 	}
 
@@ -969,11 +953,11 @@ func HandleStreamProcess(c *gin.Context) {
 	}
 
 	applyTenantContext(mistTrigger)
-	result, err := sendMistTrigger(mistTrigger, logger)
+	result, err := sendMistTrigger(c.Request.Context(), mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("STREAM_PROCESS", "forward_error")
 		logger.WithError(err).Error("Failed to forward STREAM_PROCESS to Foghorn")
-		c.String(http.StatusOK, "")
+		c.String(http.StatusServiceUnavailable, "trigger handler unavailable")
 		return
 	}
 
@@ -983,7 +967,7 @@ func HandleStreamProcess(c *gin.Context) {
 		incMistWebhook("STREAM_PROCESS", "default")
 	}
 
-	c.String(http.StatusOK, result.Response)
+	respondMistResult(c, result, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_USE_CONFIGURED)
 }
 
 // HandleStreamSource handles the STREAM_SOURCE trigger from MistServer.
@@ -1013,7 +997,7 @@ func HandleStreamSource(c *gin.Context) {
 			metrics.NodeOperations.WithLabelValues("stream_source", "error").Inc()
 		}
 
-		c.String(http.StatusOK, config.StreamSourceUnavailable)
+		c.String(http.StatusInternalServerError, "trigger body unavailable")
 		return
 	}
 
@@ -1023,7 +1007,7 @@ func HandleStreamSource(c *gin.Context) {
 	}).Debug("Forwarding STREAM_SOURCE trigger to Foghorn via gRPC")
 
 	// Parse raw webhook data directly
-	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerStreamSource, body, control.GetCurrentNodeID(), logger)
+	mistTrigger, err := mist.ParseTriggerToProtobufWithHeaders(mist.TriggerStreamSource, body, c.Request.Header, control.GetCurrentNodeID(), logger)
 	if err != nil {
 		incMistWebhook("STREAM_SOURCE", "parse_error")
 		logger.WithFields(logging.Fields{
@@ -1034,7 +1018,7 @@ func HandleStreamSource(c *gin.Context) {
 			metrics.NodeOperations.WithLabelValues("stream_source", "parse_error").Inc()
 		}
 
-		c.String(http.StatusOK, config.StreamSourceUnavailable)
+		c.String(http.StatusBadRequest, "invalid trigger payload")
 		return
 	}
 
@@ -1089,7 +1073,7 @@ func HandleStreamSource(c *gin.Context) {
 
 	// Forward trigger to Foghorn via gRPC and get response
 	applyTenantContext(mistTrigger)
-	result, err := sendMistTrigger(mistTrigger, logger)
+	result, err := sendMistTrigger(c.Request.Context(), mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("STREAM_SOURCE", "forward_error")
 		logger.WithFields(logging.Fields{
@@ -1101,11 +1085,7 @@ func HandleStreamSource(c *gin.Context) {
 			metrics.NodeOperations.WithLabelValues("stream_source", "forwarding_error").Inc()
 		}
 
-		// Return the offline sentinel ourselves rather than "" so Mist does not
-		// fall back to the configured `balance:<foghorn>` default source, which
-		// routes through the very Foghorn we just failed to reach. The
-		// `offline:` prefix makes Mist's input_balancer disconnect cleanly.
-		c.String(http.StatusOK, config.StreamSourceUnavailable)
+		c.String(http.StatusServiceUnavailable, "trigger handler unavailable")
 		return
 	}
 
@@ -1120,7 +1100,7 @@ func HandleStreamSource(c *gin.Context) {
 			metrics.NodeOperations.WithLabelValues("stream_source", "aborted").Inc()
 		}
 
-		c.String(http.StatusOK, config.StreamSourceUnavailable)
+		respondMistAction(c, http.StatusOK, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_OFFLINE, "denied", config.StreamSourceUnavailable)
 		return
 	}
 
@@ -1139,12 +1119,12 @@ func HandleStreamSource(c *gin.Context) {
 	// Acquire a primary disk lease for the local file Mist is about to open.
 	// The source lease lives until STREAM_END (or Mist API reconciliation
 	// proves the stream is gone).
-	if ss := mistTrigger.GetStreamSource(); ss != nil {
+	if ss := mistTrigger.GetStreamSource(); ss != nil && result.Response != "" {
 		acquireSourceLeaseForStream(ss.GetStreamName(), result.Response)
 	}
 
 	// Return Foghorn's response to MistServer
-	c.String(http.StatusOK, result.Response)
+	respondMistResult(c, result, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_USE_CONFIGURED)
 }
 
 // getNodeID returns the current node ID for building triggers
@@ -1369,13 +1349,13 @@ func HandlePushEnd(c *gin.Context) {
 	}).Debug("Forwarding PUSH_END trigger to Foghorn via gRPC")
 
 	// Parse raw webhook data directly
-	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerPushEnd, body, getNodeID(), logger)
+	mistTrigger, err := mist.ParseTriggerToProtobufWithHeaders(mist.TriggerPushEnd, body, c.Request.Header, getNodeID(), logger)
 	if err != nil {
 		incMistWebhook("PUSH_END", "parse_error")
 		logger.WithFields(logging.Fields{
 			"error": err,
 		}).Error("Failed to parse PUSH_END trigger")
-		sourceEventID, walErr := forwardDurableParseFailure(string(mist.TriggerPushEnd), body, err)
+		sourceEventID, walErr := forwardDurableParseFailure(string(mist.TriggerPushEnd), body, c.Request.Header, err)
 		if walErr != nil {
 			respondDurableEnqueueError(c, logger, "PUSH_END", sourceEventID, walErr)
 			return
@@ -1430,11 +1410,11 @@ func HandlePushInputClose(c *gin.Context) {
 		return
 	}
 
-	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerPushInputClose, body, getNodeID(), logger)
+	mistTrigger, err := mist.ParseTriggerToProtobufWithHeaders(mist.TriggerPushInputClose, body, c.Request.Header, getNodeID(), logger)
 	if err != nil {
 		incMistWebhook("PUSH_INPUT_CLOSE", "parse_error")
 		logger.WithFields(logging.Fields{"error": err}).Error("Failed to parse PUSH_INPUT_CLOSE trigger")
-		sourceEventID, walErr := forwardDurableParseFailure(string(mist.TriggerPushInputClose), body, err)
+		sourceEventID, walErr := forwardDurableParseFailure(string(mist.TriggerPushInputClose), body, c.Request.Header, err)
 		if walErr != nil {
 			respondDurableEnqueueError(c, logger, "PUSH_INPUT_CLOSE", sourceEventID, walErr)
 			return
@@ -1450,7 +1430,6 @@ func HandlePushInputClose(c *gin.Context) {
 	// identical-body closes under a reused PID distinct, so a close without it is malformed
 	// and fails closed (Mist supplies it on every trigger, so this cannot wedge a real close).
 	pic := mistTrigger.GetPushInputClose()
-	capturePushInputCloseIdentity(pic, c.Request.Header)
 	if pic != nil && !strings.HasPrefix(pic.GetStreamName(), "processing+") && pic.GetTriggerUuid() == "" {
 		incMistWebhook("PUSH_INPUT_CLOSE", "missing_trigger_uuid")
 		logger.WithField("stream_name", pic.GetStreamName()).
@@ -1486,7 +1465,7 @@ func HandlePushOutStart(c *gin.Context) {
 		logger.WithFields(logging.Fields{
 			"error": err,
 		}).Error("Failed to read PUSH_OUT_START body")
-		c.String(http.StatusOK, "") // Empty response aborts push
+		c.String(http.StatusInternalServerError, "trigger body unavailable")
 		return
 	}
 
@@ -1496,26 +1475,26 @@ func HandlePushOutStart(c *gin.Context) {
 	}).Debug("Forwarding PUSH_OUT_START trigger to Foghorn via gRPC")
 
 	// Parse raw webhook data directly
-	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerPushOutStart, body, getNodeID(), logger)
+	mistTrigger, err := mist.ParseTriggerToProtobufWithHeaders(mist.TriggerPushOutStart, body, c.Request.Header, getNodeID(), logger)
 	if err != nil {
 		incMistWebhook("PUSH_OUT_START", "parse_error")
 		logger.WithFields(logging.Fields{
 			"error": err,
 		}).Error("Failed to parse PUSH_OUT_START trigger")
-		c.String(http.StatusOK, "") // Empty response aborts push
+		c.String(http.StatusBadRequest, "invalid trigger payload")
 		return
 	}
 
 	// Forward trigger to Foghorn via gRPC and get response
 	applyTenantContext(mistTrigger)
-	result, err := sendMistTrigger(mistTrigger, logger)
+	result, err := sendMistTrigger(c.Request.Context(), mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("PUSH_OUT_START", "forward_error")
 		logger.WithFields(logging.Fields{
 			"error":      err,
 			"error_code": result.ErrorCode.String(),
 		}).Error("Failed to forward PUSH_OUT_START to Foghorn")
-		c.String(http.StatusOK, "") // Empty response aborts push
+		c.String(http.StatusServiceUnavailable, "trigger handler unavailable")
 		return
 	}
 
@@ -1525,7 +1504,7 @@ func HandlePushOutStart(c *gin.Context) {
 			"response":   result.Response,
 			"error_code": result.ErrorCode.String(),
 		}).Info("PUSH_OUT_START aborted by Foghorn")
-		c.String(http.StatusOK, "") // Empty response aborts push
+		respondMistResult(c, result, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY)
 		return
 	}
 
@@ -1535,7 +1514,7 @@ func HandlePushOutStart(c *gin.Context) {
 	incMistWebhook("PUSH_OUT_START", "success")
 
 	// Return Foghorn's response to MistServer
-	c.String(http.StatusOK, result.Response)
+	respondMistResult(c, result, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_KEEP)
 }
 
 // HandleStreamBuffer handles STREAM_BUFFER webhook
@@ -1558,7 +1537,7 @@ func HandleStreamBuffer(c *gin.Context) {
 	}).Debug("Forwarding STREAM_BUFFER trigger to Foghorn via gRPC")
 
 	// Parse raw webhook data to protobuf
-	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerStreamBuffer, body, getNodeID(), logger)
+	mistTrigger, err := mist.ParseTriggerToProtobufWithHeaders(mist.TriggerStreamBuffer, body, c.Request.Header, getNodeID(), logger)
 	if err != nil {
 		incMistWebhook("STREAM_BUFFER", "parse_error")
 		logger.WithFields(logging.Fields{
@@ -1575,7 +1554,7 @@ func HandleStreamBuffer(c *gin.Context) {
 
 	// Forward enriched trigger to Foghorn via gRPC (non-blocking)
 	applyTenantContext(mistTrigger)
-	_, err = sendMistTrigger(mistTrigger, logger)
+	_, err = sendMistTrigger(c.Request.Context(), mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("STREAM_BUFFER", "forward_error")
 		logger.WithFields(logging.Fields{
@@ -1609,13 +1588,13 @@ func HandleStreamEnd(c *gin.Context) {
 	}).Debug("Forwarding STREAM_END trigger to Foghorn via gRPC")
 
 	// Parse raw webhook data directly
-	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerStreamEnd, body, getNodeID(), logger)
+	mistTrigger, err := mist.ParseTriggerToProtobufWithHeaders(mist.TriggerStreamEnd, body, c.Request.Header, getNodeID(), logger)
 	if err != nil {
 		incMistWebhook("STREAM_END", "parse_error")
 		logger.WithFields(logging.Fields{
 			"error": err,
 		}).Error("Failed to parse STREAM_END trigger")
-		sourceEventID, walErr := forwardDurableParseFailure(string(mist.TriggerStreamEnd), body, err)
+		sourceEventID, walErr := forwardDurableParseFailure(string(mist.TriggerStreamEnd), body, c.Request.Header, err)
 		if walErr != nil {
 			respondDurableEnqueueError(c, logger, "STREAM_END", sourceEventID, walErr)
 			return
@@ -1629,9 +1608,6 @@ func HandleStreamEnd(c *gin.Context) {
 	// no longer read this file; cleanup may proceed (subject to any viewer
 	// lease still pinning the path for ongoing playback).
 	if se := mistTrigger.GetStreamEnd(); se != nil {
-		// Capture Mist's event time so Foghorn's ingest-session reaper can end only sessions that
-		// started at or before this STREAM_END, preserving a later reconnect.
-		captureStreamEndIdentity(se, c.Request.Header)
 		releaseSourceLeaseForStream(se.GetStreamName())
 	}
 
@@ -1660,7 +1636,7 @@ func HandleUserNew(c *gin.Context) {
 		logger.WithFields(logging.Fields{
 			"error": err,
 		}).Error("Failed to read USER_NEW body")
-		c.String(http.StatusOK, "false") // Deny session on error
+		c.String(http.StatusInternalServerError, "trigger body unavailable")
 		return
 	}
 
@@ -1670,13 +1646,13 @@ func HandleUserNew(c *gin.Context) {
 	}).Debug("Forwarding USER_NEW trigger to Foghorn via gRPC")
 
 	// Parse raw webhook data directly
-	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerUserNew, body, getNodeID(), logger)
+	mistTrigger, err := mist.ParseTriggerToProtobufWithHeaders(mist.TriggerUserNew, body, c.Request.Header, getNodeID(), logger)
 	if err != nil {
 		incMistWebhook("USER_NEW", "parse_error")
 		logger.WithFields(logging.Fields{
 			"error": err,
 		}).Error("Failed to parse USER_NEW trigger")
-		c.String(http.StatusOK, "false") // Deny session on error
+		c.String(http.StatusBadRequest, "invalid trigger payload")
 		return
 	}
 
@@ -1700,14 +1676,14 @@ func HandleUserNew(c *gin.Context) {
 
 	// Forward trigger to Foghorn via gRPC and get response
 	applyTenantContext(mistTrigger)
-	result, err := sendMistTrigger(mistTrigger, logger)
+	result, err := sendMistTrigger(c.Request.Context(), mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("USER_NEW", "forward_error")
 		logger.WithFields(logging.Fields{
 			"error":      err,
 			"error_code": result.ErrorCode.String(),
 		}).Error("Failed to forward USER_NEW to Foghorn")
-		c.String(http.StatusOK, "false") // Deny session on error
+		c.String(http.StatusServiceUnavailable, "trigger handler unavailable")
 		return
 	}
 
@@ -1717,7 +1693,7 @@ func HandleUserNew(c *gin.Context) {
 			"response":   result.Response,
 			"error_code": result.ErrorCode.String(),
 		}).Info("USER_NEW denied by Foghorn")
-		c.String(http.StatusOK, "false") // Deny session
+		respondMistResult(c, result, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY)
 		return
 	}
 
@@ -1735,7 +1711,7 @@ func HandleUserNew(c *gin.Context) {
 	}
 
 	// Return Foghorn's response to MistServer
-	c.String(http.StatusOK, result.Response)
+	respondMistResult(c, result, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY)
 }
 
 // HandleUserEnd handles USER_END webhook
@@ -1754,13 +1730,13 @@ func HandleUserEnd(c *gin.Context) {
 	}).Debug("Forwarding USER_END trigger to Foghorn via gRPC")
 
 	// Parse raw webhook data directly
-	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerUserEnd, body, getNodeID(), logger)
+	mistTrigger, err := mist.ParseTriggerToProtobufWithHeaders(mist.TriggerUserEnd, body, c.Request.Header, getNodeID(), logger)
 	if err != nil {
 		incMistWebhook("USER_END", "parse_error")
 		logger.WithFields(logging.Fields{
 			"error": err,
 		}).Error("Failed to parse USER_END trigger")
-		sourceEventID, walErr := forwardDurableParseFailure(string(mist.TriggerUserEnd), body, err)
+		sourceEventID, walErr := forwardDurableParseFailure(string(mist.TriggerUserEnd), body, c.Request.Header, err)
 		if walErr != nil {
 			respondDurableEnqueueError(c, logger, "USER_END", sourceEventID, walErr)
 			return
@@ -1825,7 +1801,7 @@ func HandleLiveTrackList(c *gin.Context) {
 	}).Debug("Forwarding LIVE_TRACK_LIST trigger to Foghorn via gRPC")
 
 	// Parse raw webhook data directly
-	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerLiveTrackList, body, getNodeID(), logger)
+	mistTrigger, err := mist.ParseTriggerToProtobufWithHeaders(mist.TriggerLiveTrackList, body, c.Request.Header, getNodeID(), logger)
 	if err != nil {
 		incMistWebhook("LIVE_TRACK_LIST", "parse_error")
 		logger.WithFields(logging.Fields{
@@ -1871,13 +1847,13 @@ func HandleRecordingEnd(c *gin.Context) {
 	}).Debug("Forwarding RECORDING_END trigger to Foghorn via gRPC")
 
 	// Parse raw webhook data directly
-	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerRecordingEnd, body, getNodeID(), logger)
+	mistTrigger, err := mist.ParseTriggerToProtobufWithHeaders(mist.TriggerRecordingEnd, body, c.Request.Header, getNodeID(), logger)
 	if err != nil {
 		incMistWebhook("RECORDING_END", "parse_error")
 		logger.WithFields(logging.Fields{
 			"error": err,
 		}).Error("Failed to parse RECORDING_END trigger")
-		sourceEventID, walErr := forwardDurableParseFailure(string(mist.TriggerRecordingEnd), body, err)
+		sourceEventID, walErr := forwardDurableParseFailure(string(mist.TriggerRecordingEnd), body, c.Request.Header, err)
 		if walErr != nil {
 			respondDurableEnqueueError(c, logger, "RECORDING_END", sourceEventID, walErr)
 			return
@@ -1939,11 +1915,11 @@ func HandleRecordingSegment(c *gin.Context) {
 	}
 
 	// Parse trigger
-	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerRecordingSegment, body, getNodeID(), logger)
+	mistTrigger, err := mist.ParseTriggerToProtobufWithHeaders(mist.TriggerRecordingSegment, body, c.Request.Header, getNodeID(), logger)
 	if err != nil {
 		incMistWebhook("RECORDING_SEGMENT", "parse_error")
 		logger.WithError(err).Error("Failed to parse RECORDING_SEGMENT trigger")
-		sourceEventID, walErr := forwardDurableParseFailure(string(mist.TriggerRecordingSegment), body, err)
+		sourceEventID, walErr := forwardDurableParseFailure(string(mist.TriggerRecordingSegment), body, c.Request.Header, err)
 		if walErr != nil {
 			respondDurableEnqueueError(c, logger, "RECORDING_SEGMENT", sourceEventID, walErr)
 			return
@@ -2314,7 +2290,7 @@ func HandleLivepeerSegmentComplete(c *gin.Context) {
 			"payload":     payloadStr,
 			"param_count": len(params),
 		}).Warn("LIVEPEER_SEGMENT_COMPLETE incomplete payload")
-		sourceEventID, walErr := forwardDurableParseFailure(string(mist.TriggerLivepeerSegmentComplete), body, parseErr)
+		sourceEventID, walErr := forwardDurableParseFailure(string(mist.TriggerLivepeerSegmentComplete), body, c.Request.Header, parseErr)
 		if walErr != nil {
 			respondDurableEnqueueError(c, logger, "LIVEPEER_SEGMENT_COMPLETE", sourceEventID, walErr)
 			return
@@ -2457,7 +2433,7 @@ func HandleProcessAVSegmentComplete(c *gin.Context) {
 			"payload":     payloadStr,
 			"param_count": len(params),
 		}).Warn("PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE incomplete payload")
-		sourceEventID, walErr := forwardDurableParseFailure(string(mist.TriggerProcessAVSegmentComplete), body, parseErr)
+		sourceEventID, walErr := forwardDurableParseFailure(string(mist.TriggerProcessAVSegmentComplete), body, c.Request.Header, parseErr)
 		if walErr != nil {
 			respondDurableEnqueueError(c, logger, "PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE", sourceEventID, walErr)
 			return

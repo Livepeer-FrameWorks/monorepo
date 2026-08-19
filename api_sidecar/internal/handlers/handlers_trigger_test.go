@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -42,7 +43,7 @@ func stubSendMistTrigger(t *testing.T, fn func(*ipcpb.MistTrigger) (*control.Mis
 	t.Helper()
 	originalSend := sendMistTrigger
 	originalDurable := sendDurableMistTrigger
-	sendMistTrigger = func(trigger *ipcpb.MistTrigger, _ logging.Logger) (*control.MistTriggerResult, error) {
+	sendMistTrigger = func(_ context.Context, trigger *ipcpb.MistTrigger, _ logging.Logger) (*control.MistTriggerResult, error) {
 		return fn(trigger)
 	}
 	sendDurableMistTrigger = func(trigger *ipcpb.MistTrigger) error {
@@ -262,6 +263,7 @@ func TestTriggerHandlersRejectMalformedPayloads(t *testing.T) {
 		name     string
 		body     string
 		handler  func(*gin.Context)
+		status   int
 		response string
 		raw      bool
 	}{
@@ -269,24 +271,28 @@ func TestTriggerHandlersRejectMalformedPayloads(t *testing.T) {
 			name:     "push_rewrite",
 			body:     "rtmp://ingest/app\nexample.com",
 			handler:  HandlePushRewrite,
-			response: "",
+			status:   http.StatusBadRequest,
+			response: "invalid trigger payload",
 		},
 		{
 			name:     "play_rewrite",
 			body:     "stream-name\n192.0.2.10\nHLS",
 			handler:  HandlePlayRewrite,
-			response: config.PlayRewriteUnresolvedSentinel,
+			status:   http.StatusBadRequest,
+			response: "invalid trigger payload",
 		},
 		{
 			name:     "user_new",
 			body:     "vod+abc123\n192.0.2.20\nconn-1\nHLS",
 			handler:  HandleUserNew,
-			response: "false",
+			status:   http.StatusBadRequest,
+			response: "invalid trigger payload",
 		},
 		{
 			name:     "user_end",
 			body:     "sess-1\nvod+abc123\nHLS\n192.0.2.20",
 			handler:  HandleUserEnd,
+			status:   http.StatusOK,
 			response: "OK",
 			raw:      true,
 		},
@@ -312,8 +318,8 @@ func TestTriggerHandlersRejectMalformedPayloads(t *testing.T) {
 			ctx, recorder := newWebhookContext(test.body)
 			test.handler(ctx)
 
-			if recorder.Code != http.StatusOK {
-				t.Fatalf("expected status 200, got %d", recorder.Code)
+			if recorder.Code != test.status {
+				t.Fatalf("expected status %d, got %d", test.status, recorder.Code)
 			}
 			if recorder.Body.String() != test.response {
 				t.Fatalf("expected response %q, got %q", test.response, recorder.Body.String())

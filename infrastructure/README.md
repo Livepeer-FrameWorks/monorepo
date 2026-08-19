@@ -18,7 +18,7 @@ Dev-only configuration used by the root dev compose configuration. These files h
 ## How To Use It (local dev)
 
 - From the repo root, start the stack: `docker-compose up -d`
-- The compose file mounts these configs directly; edit and restart the affected container to apply changes
+- `mistserver.conf` is Mist's persisted dev-runtime snapshot. Helmsman reconciles managed streams and triggers through the Mist API after it receives its config seed, and Mist writes the result back to this mounted file. Change the Helmsman config manager and recreate the affected services; do not hand-edit managed trigger entries here.
 - Ports and endpoints are listed in the root `README.md`
 
 ## Production

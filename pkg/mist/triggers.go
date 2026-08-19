@@ -3,6 +3,7 @@ package mist
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -155,6 +156,11 @@ func hasPlaybackRequestMarker(req string) bool {
 
 // ParseTriggerToProtobuf parses raw MistServer trigger payload and returns a protobuf MistTrigger
 func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID string, logger logging.Logger) (*ipcpb.MistTrigger, error) {
+	return ParseTriggerToProtobufWithHeaders(triggerType, rawPayload, nil, nodeID, logger)
+}
+
+// ParseTriggerToProtobufWithHeaders parses a trigger and captures Mist's retry-stable identity headers.
+func ParseTriggerToProtobufWithHeaders(triggerType TriggerType, rawPayload []byte, headers http.Header, nodeID string, logger logging.Logger) (*ipcpb.MistTrigger, error) {
 	// Parse parameters from newline-separated format
 	// Handle both \n and \r\n line endings
 	payloadStr := strings.TrimSpace(string(rawPayload))
@@ -171,6 +177,14 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		Timestamp:   time.Now().UnixMilli(),
 		Blocking:    triggerType.IsBlocking(),
 		RequestId:   uuid.NewString(),
+	}
+	if headers != nil {
+		mistTrigger.TriggerUuid = strings.TrimSpace(headers.Get("X-Trigger-UUID"))
+		if rawMillis := strings.TrimSpace(headers.Get("X-Trigger-UnixMillis")); rawMillis != "" {
+			if millis, err := strconv.ParseInt(rawMillis, 10, 64); err == nil {
+				mistTrigger.TriggerUnixMillis = millis
+			}
+		}
 	}
 
 	switch triggerType {
@@ -555,6 +569,24 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 
 	default:
 		return nil, fmt.Errorf("unknown trigger type: %s", triggerType)
+	}
+
+	if push := mistTrigger.GetPushRewrite(); push != nil {
+		push.TriggerUuid = mistTrigger.GetTriggerUuid()
+		push.TriggerUnixMillis = mistTrigger.GetTriggerUnixMillis()
+		if rawPID := strings.TrimSpace(headers.Get("X-PID")); rawPID != "" {
+			if pid, err := strconv.ParseInt(rawPID, 10, 64); err == nil {
+				push.Pid = pid
+			}
+		}
+	}
+	if closeTrigger := mistTrigger.GetPushInputClose(); closeTrigger != nil {
+		closeTrigger.TriggerUuid = mistTrigger.GetTriggerUuid()
+		closeTrigger.TriggerUnixMillis = mistTrigger.GetTriggerUnixMillis()
+	}
+	if streamEnd := mistTrigger.GetStreamEnd(); streamEnd != nil {
+		streamEnd.TriggerUuid = mistTrigger.GetTriggerUuid()
+		streamEnd.TriggerUnixMillis = mistTrigger.GetTriggerUnixMillis()
 	}
 
 	return mistTrigger, nil
