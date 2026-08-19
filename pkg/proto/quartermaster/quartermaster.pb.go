@@ -483,8 +483,11 @@ type ValidateTenantResponse struct {
 	// When true, services should return HTTP 402 for new billable operations
 	// Existing operations continue until hard suspension at -$10
 	IsBalanceNegative bool `protobuf:"varint,14,opt,name=is_balance_negative,json=isBalanceNegative,proto3" json:"is_balance_negative,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// True when tenant identity was resolved but current billing authority could not be loaded.
+	// Additive inverse flag keeps older producers (which omit it) compatible.
+	BillingStatusUnavailable bool `protobuf:"varint,15,opt,name=billing_status_unavailable,json=billingStatusUnavailable,proto3" json:"billing_status_unavailable,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *ValidateTenantResponse) Reset() {
@@ -583,6 +586,13 @@ func (x *ValidateTenantResponse) GetIsSuspended() bool {
 func (x *ValidateTenantResponse) GetIsBalanceNegative() bool {
 	if x != nil {
 		return x.IsBalanceNegative
+	}
+	return false
+}
+
+func (x *ValidateTenantResponse) GetBillingStatusUnavailable() bool {
+	if x != nil {
+		return x.BillingStatusUnavailable
 	}
 	return false
 }
@@ -13205,7 +13215,7 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"M\n" +
 	"\x15ValidateTenantRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x17\n" +
-	"\auser_id\x18\x02 \x01(\tR\x06userId\"\xf4\x02\n" +
+	"\auser_id\x18\x02 \x01(\tR\x06userId\"\xb2\x03\n" +
 	"\x16ValidateTenantResponse\x12\x14\n" +
 	"\x05valid\x18\x01 \x01(\bR\x05valid\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x1f\n" +
@@ -13218,7 +13228,8 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x10rate_limit_burst\x18\v \x01(\x05R\x0erateLimitBurst\x12#\n" +
 	"\rbilling_model\x18\f \x01(\tR\fbillingModel\x12!\n" +
 	"\fis_suspended\x18\r \x01(\bR\visSuspended\x12.\n" +
-	"\x13is_balance_negative\x18\x0e \x01(\bR\x11isBalanceNegative\"\xaf\x01\n" +
+	"\x13is_balance_negative\x18\x0e \x01(\bR\x11isBalanceNegative\x12<\n" +
+	"\x1abilling_status_unavailable\x18\x0f \x01(\bR\x18billingStatusUnavailable\"\xaf\x01\n" +
 	"\n" +
 	"TenantInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +

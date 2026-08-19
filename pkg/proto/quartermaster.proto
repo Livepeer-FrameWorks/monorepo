@@ -343,6 +343,9 @@ message ValidateTenantResponse {
   // When true, services should return HTTP 402 for new billable operations
   // Existing operations continue until hard suspension at -$10
   bool is_balance_negative = 14;
+  // True when tenant identity was resolved but current billing authority could not be loaded.
+  // Additive inverse flag keeps older producers (which omit it) compatible.
+  bool billing_status_unavailable = 15;
 }
 
 // Matches pkg/api/quartermaster/types.go:TenantInfo (lines 29-35)
