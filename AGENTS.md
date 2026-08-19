@@ -28,6 +28,7 @@
 | Metrics naming/units            | `docs/standards/metrics.md`                |
 | Code comments policy            | `docs/standards/code-comments.md`          |
 | Schema migrations & baseline    | `docs/standards/schema-migrations.md`      |
+| Release catalog & upgrade gates | `cli/internal/releases/catalog.yaml`       |
 | Deployment & ops                | `website_docs/src/content/docs/operators/` |
 | Dev runtime                     | `docker-compose.yml`                       |
 | Release pipeline                | `.github/workflows/release.yml`            |
@@ -57,6 +58,31 @@ Common targets:
 - `make build-bin-<service>` - single service (e.g., `make build-bin-purser`)
 - `make test` - run all tests
 - `make verify` - full verification (tidy, fmt, vet, test, build)
+
+## Release and Migration Versions
+
+`cli/internal/releases/catalog.yaml` is the authority for the next releasable
+platform version and its safety metadata (`min_cli_version`, required release
+transitions, and rollback restrictions). Keep it aligned with the actual next
+tag before adding migrations or version-gated behavior.
+
+- Schema migrations for code and baselines already on `master` target the next
+  declared release. Never park them under a later hypothetical version.
+- When changing the next release version, update the catalog, migration paths,
+  transition `IntroducedIn` values, tests, operator tooling, and canonical docs
+  together.
+- Tags are shipped history, not a prerequisite for development: before a release,
+  the latest tag may be behind exactly one pending catalog version. All unshipped
+  migrations must target that version. Once tagged, the pending version becomes
+  shipped and code-only work may continue without inventing another version.
+- Run `make validate-migrations`; it checks the reachable Git tag, the one pending
+  catalog version, immutable shipped migrations, and the embedded migration layout.
+- Run `make verify-schema-migrations` for schema work. It proves PostgreSQL's
+  latest-tag baseline + pending migrations converges to the current baseline and
+  verifies the current Replicated ClickHouse baseline replay on real engines.
+  ClickHouse release upgrades are cross-host migrations into a fresh Replicated
+  destination for the legacy `v0.2.95` cutover; tagged convergence is enforced
+  automatically once the latest shipped baseline is already Replicated.
 
 ## Prefer Scripts Over Manual Commands
 

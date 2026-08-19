@@ -26,6 +26,57 @@ commit.** A fresh `init` applies the baseline then only post-floor migrations; a
 upgrade applies the migration. They must converge. The verification harness (below)
 enforces this for post-floor migrations.
 
+## Release catalog and migration version ceiling
+
+`cli/internal/releases/catalog.yaml` declares releasable platform versions and the
+safety metadata emitted into their release manifests: the minimum CLI version,
+required reconciliation transitions, and rollback restrictions. It is release
+authority, not an example file.
+
+Git tags and the catalog represent different moments. A `vX.Y.Z` tag says that
+version shipped. During development, its code, baseline SQL, and migrations must
+exist before the tag does, so the catalog may declare **exactly one** release newer
+than the latest reachable final tag. That entry is the pending release. Every
+migration newer than the tag must target it; multiple future migration buckets are
+invalid. When the release workflow creates the tag, the same catalog entry becomes
+shipped. Code-only work after that does not require immediately declaring another
+release.
+
+Any schema migration whose code and baseline are already on `master` **must target the
+actual next release declared in that catalog**. Do not stage migrations under a later
+hypothetical tag: the current binary would then deploy before an existing cluster is
+offered its required schema, while a fresh install would already receive the changed
+baseline.
+
+When advancing the next release, update these together:
+
+1. `cli/internal/releases/catalog.yaml` release entry and safety metadata.
+2. PostgreSQL and ClickHouse migration version directories.
+3. Compiled release-transition `IntroducedIn` values and their tests.
+4. Version-specific operator scripts, schema comments, and canonical docs.
+
+`make validate-migrations` enforces this state from two directions. The Git-aware
+guard compares the reachable final tag, catalog, full migration tree, and the current
+change set; it rejects edits to shipped migrations, more than one pending catalog
+release, or unshipped migrations outside that pending version. The embedded CLI
+validator independently rejects migrations newer than its highest catalog entry.
+`make test-release-state` exercises the guard's pre-tag, tag-cut, post-tag,
+wrong-bucket, multiple-pending, and immutable-migration cases in a temporary Git
+repository.
+
+`make verify-schema-migrations` supplies the schema proof that version checks cannot.
+For PostgreSQL it compares both current-baseline replay and the latest tagged
+baseline plus pending migrations against the current fresh-install baseline. For
+ClickHouse it verifies the current Replicated baseline plus post-floor migrations;
+the `v0.2.95` release path is a one-time cross-host migration from its tagged
+plain-engine source into a fresh Replicated destination, not an in-place engine
+conversion. Its separate `PeriscopeMigrationCatalog` coverage test and `cluster
+clickhouse migrate verify` protect that copy/cutover path. Once the latest tagged
+baseline is Replicated (`v0.2.96+`), the harness also enforces tagged-baseline plus
+pending-migration convergence for ClickHouse automatically. CI checks out full tag
+history and runs these gates whenever release metadata, migrations, or
+baseline/provisioner schema code changes.
+
 ## The baseline floor
 
 `schemaMigrationBaselineFloor` in `cli/pkg/provisioner/migrate.go` is the consolidation
@@ -43,8 +94,8 @@ floor is raised past what a cluster has applied, that cluster silently misses th
 migrations between its version and the floor. The floor is currently **v0.2.96** because
 production is at v0.2.95: this folds the old problematic migrations (incl. the v0.2.82
 ClickHouse rollup contract that would downgrade `Replicated*`→plain on a fresh node)
-while still _offering_ v0.2.96/v0.2.97 to production on its next upgrade. The full v0.3.0
-consolidation raises the floor only after production has crossed to v0.2.97.
+while still _offering_ v0.2.96 to production on its next upgrade. The full v0.3.0
+consolidation raises the floor only after production has crossed to v0.2.96.
 
 ## Minimum-upgrade-version guard
 
@@ -83,13 +134,17 @@ single source of truth and stop the replay.
 
 At each release that ships schema changes:
 
-1. Ship the migrations `vX.Y.Z` (incl. any `contract`).
-2. **Fold their net effect into the baseline schema files** (same commit as the
+1. Declare `vX.Y.Z` and its safety metadata in
+   `cli/internal/releases/catalog.yaml`.
+2. Ship the migrations `vX.Y.Z` (incl. any `contract`).
+3. **Fold their net effect into the baseline schema files** (same commit as the
    migration — never let them drift).
-3. **Raise `schemaMigrationBaselineFloor` → vX.Y.Z.**
-4. **Delete the now-folded migration dirs `< vX.Y.Z`** — but see the two-release safety
+4. **Raise `schemaMigrationBaselineFloor` → vX.Y.Z.**
+5. **Delete the now-folded migration dirs `< vX.Y.Z`** — but see the two-release safety
    below.
-5. Keep `make verify-schema-postgres` / `make verify-schema-clickhouse` green.
+6. Keep `make validate-migrations` and `make verify-schema-migrations` green. Use
+   `make verify-schema-postgres` or `make verify-schema-clickhouse` while iterating on
+   one engine.
 
 This keeps `contract` migrations transient (they exist only between a release and its
 consolidation) and the migration tree small.

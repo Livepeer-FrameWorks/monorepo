@@ -411,7 +411,7 @@ Foghorn capability handshake at request time — Chandler only reads a static ob
 
 ### Legacy Ownership Cutover
 
-`scripts/cutover-thumbnail-ownership-wipe.sh` is a one-time operator tool for the v0.2.97 thumbnail ownership cutover,
+`scripts/cutover-thumbnail-ownership-wipe.sh` is a one-time operator tool for the v0.2.96 thumbnail ownership cutover,
 not a normal provisioning or upgrade step. It exists for legacy live-stream thumbnail prefixes created before
 `commodore.streams.thumbnail_serving_cluster_ids` became the cleanup authority. Run it only during a planned cutover
 window, after the old thumbnail minters are stopped and after the expand migration has created the serving-cluster
