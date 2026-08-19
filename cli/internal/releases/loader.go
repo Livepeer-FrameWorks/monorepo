@@ -378,6 +378,18 @@ func releasesBelow(releases []Release, target string) []Release {
 // when the non-numeric prefixes match, so our combined-form prereleases order correctly (rc2 < rc10, not the lexical
 // rc10 < rc2). This gate protects both the embedded catalog and the fetched release manifest, so getting rc ordering
 // right is what keeps an older CLI from passing a higher-rc floor.
+// gitDescribeSuffixPattern matches the `-<N>-g<sha>[-dirty]` tail `git describe` appends when HEAD sits N commits past
+// the nearest tag. Those commits make the build NEWER than the tag, but SemVer reads the tail as a PRERELEASE of it,
+// which sorts BELOW the tag — and below every rc of it, since the tail starts with a digit and digits sort under
+// letters. A CLI built one commit after v0.2.96 would therefore fail a `min_cli_version: v0.2.96-rc1` floor.
+var gitDescribeSuffixPattern = regexp.MustCompile(`-\d+-g[0-9a-f]{7,}(-dirty)?$`)
+
+// StripGitDescribeSuffix reduces a `git describe` version to the tag it descends from, so a development build compares
+// against a floor as that tag rather than as a prerelease of it. A plain release or rc is returned unchanged.
+func StripGitDescribeSuffix(v string) string {
+	return gitDescribeSuffixPattern.ReplaceAllString(strings.TrimSpace(v), "")
+}
+
 func CompareSemver(a, b string) int {
 	majA, minA, patA, preA := splitSemver(a)
 	majB, minB, patB, preB := splitSemver(b)

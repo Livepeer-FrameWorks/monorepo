@@ -367,11 +367,14 @@ func checkCLIVersionFloor(out io.Writer, required string, allowUnsafe bool) erro
 	if required == "" {
 		return nil
 	}
-	current := strings.TrimSpace(fwv.Version)
-	shown := current
+	shown := strings.TrimSpace(fwv.Version)
 	if shown == "" {
 		shown = "<none>"
 	}
+	// A `git describe` build reports vX.Y.Z-<N>-g<sha>: N commits PAST the tag, i.e. newer than it, but SemVer reads
+	// that tail as a prerelease sorting below the tag and below its rc's. Compare such a build as the tag it descends
+	// from; a released or rc version is unaffected.
+	current := releases.StripGitDescribeSuffix(fwv.Version)
 	if !isConcreteCLIVersion(current) {
 		if allowUnsafe {
 			fmt.Fprintf(out, "WARNING: this frameworks CLI reports a non-concrete version %q that cannot be verified against the release's min_cli_version %s; --%s is set, so the floor is BYPASSED. This is unsupported for a real deploy.\n", shown, required, unsafeCLIFloorFlag)

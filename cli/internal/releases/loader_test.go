@@ -152,6 +152,29 @@ func TestCompareSemver(t *testing.T) {
 	}
 }
 
+func TestStripGitDescribeSuffix(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "commits past release", in: "v0.2.96-3-gabcdef1", want: "v0.2.96"},
+		{name: "dirty commits past release", in: "v0.2.96-3-gabcdef1-dirty", want: "v0.2.96"},
+		{name: "release", in: "v0.2.96", want: "v0.2.96"},
+		{name: "release candidate", in: "v0.2.96-rc1", want: "v0.2.96-rc1"},
+		{name: "non describe suffix", in: "v0.2.96-preview-gabcdef1", want: "v0.2.96-preview-gabcdef1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := StripGitDescribeSuffix(tt.in); got != tt.want {
+				t.Fatalf("StripGitDescribeSuffix(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestReleasesBelow_MultiReleaseCatalog(t *testing.T) {
 	// A synthetic multi-release catalog: today's single-entry catalog makes the gate loop run zero times, so exercise
 	// the all-prior selection through the pure releasesBelow helper (no global swap). It must return EVERY release below
