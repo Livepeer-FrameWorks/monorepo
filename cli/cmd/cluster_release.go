@@ -31,18 +31,112 @@ func newClusterReleaseCmd() *cobra.Command {
   expand migrations
   → service upgrades in dependency order
   → reconciliation transitions interleaved at their declared points
-    (e.g. storage-descriptor adoption after Quartermaster, before Foghorn/Chandler)
   → postdeploy migrations
+
+Contract migrations are intentionally excluded from automatic apply. Run the
+printed contract command only after the rollback window closes.
 
 Reconciliation transitions are constrained Check → Apply → Verify nodes registered by
 compiled handler id (never shell commands). Each converges a declared invariant against
 NATURAL authoritative state, so the plan is RESUMABLE: a rerun after a mid-release failure
 re-checks reality and skips whatever is already Complete. Use 'cluster migrate',
-'cluster upgrade', and 'cluster storage adopt' as low-level recovery tools; 'release apply'
-is the normal path.`,
+'cluster upgrade', and domain-specific repair commands as low-level recovery tools;
+'release apply' is the normal path.`,
 	}
+	release.AddCommand(newClusterReleasePlanCmd())
 	release.AddCommand(newClusterReleaseApplyCmd())
 	return release
+}
+
+type releasePlanOptions struct {
+	version string
+}
+
+func newClusterReleasePlanCmd() *cobra.Command {
+	opts := releasePlanOptions{}
+	cmd := &cobra.Command{
+		Use:   "plan",
+		Short: "Print the complete static release plan without cluster credentials",
+		Args:  cobra.NoArgs,
+		Long: `Resolve the target release and manifest topology, then print every schema,
+platform-artifact, dependency, infrastructure, and reconciliation lifecycle involved.
+This command does not decrypt cluster secrets, open SSH tunnels, dial services, or run
+live-state gates. Use 'release apply --dry-run' when you also want those live checks.`,
+		Example: `  frameworks cluster release plan --manifest ./cluster.yaml --version v0.3.0
+  frameworks cluster release plan --version stable`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rc, err := resolveClusterManifest(cmd)
+			if err != nil {
+				return err
+			}
+			defer rc.Cleanup()
+			if err := requirePlatformIfImplicitManifest(rc, cmd.OutOrStdout()); err != nil {
+				return err
+			}
+			return runReleasePlan(cmd, rc, opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.version, "version", "", "Target version (stable, rc, v1.2.3); defaults to cluster channel")
+	cmd.Flags().Bool(unsafeCLIFloorFlag, false, "UNSAFE: let a non-concrete (dev/unversioned) CLI bypass the release's min_cli_version floor")
+	return cmd
+}
+
+func runReleasePlan(cmd *cobra.Command, rc *resolvedCluster, opts releasePlanOptions) error {
+	manifest := rc.Manifest
+	selector := resolveUpgradeVersion(cmd, manifest, opts.version)
+	platformVersion, err := resolveReleasePlatformVersion(rc, selector)
+	if err != nil {
+		return fmt.Errorf("resolve target platform version: %w", err)
+	}
+	channel, _ := gitops.ResolveVersion(selector)
+	gm, err := gitops.FetchFromRepositories(gitops.FetchOptions{}, rc.ReleaseRepos, channel, platformVersion)
+	if err != nil {
+		return fmt.Errorf("fetch release metadata for compatibility check: %w", err)
+	}
+	if compatibilityErr := validateFetchedReleaseCompatibility(cmd.ErrOrStderr(), gm, unsafeCLIFloor(cmd)); compatibilityErr != nil {
+		return compatibilityErr
+	}
+
+	execution, err := orchestrator.NewPlanner(manifest).Plan(cmd.Context(), orchestrator.ProvisionOptions{Phase: orchestrator.PhaseAll})
+	if err != nil {
+		return fmt.Errorf("failed to build execution plan: %w", err)
+	}
+	classes, err := classifyReleaseServices(manifest, collectUpgradeableServices(execution))
+	if err != nil {
+		return err
+	}
+	transitions, err := selectReleaseTransitions(platformVersion)
+	if err != nil {
+		return err
+	}
+
+	out := cmd.OutOrStdout()
+	ux.Heading(out, fmt.Sprintf("Static release plan for %s (platform %s)", selector, platformVersion))
+	fmt.Fprintln(out, "  1. schema expand migrations")
+	writeReleasePlanGroup(out, "2. platform artifact upgrades", classes.Platform)
+	if len(transitions) == 0 {
+		fmt.Fprintln(out, "  3. release reconciliations: none")
+	} else {
+		fmt.Fprintln(out, "  3. release reconciliations:")
+		for _, transition := range transitions {
+			fmt.Fprintf(out, "     · %s after [%s] before [%s]\n", transition.ID(), strings.Join(transition.AfterServices(), ","), strings.Join(transition.BeforeServices(), ","))
+		}
+	}
+	fmt.Fprintln(out, "  4. schema postdeploy migrations")
+	fmt.Fprintf(out, "  5. schema contract migrations: deferred until the rollback window closes (`cluster migrate --phase contract --to-version %s`)\n", platformVersion)
+	writeReleasePlanGroup(out, "managed dependencies (independent manifest pins)", classes.Dependencies)
+	writeReleasePlanGroup(out, "host infrastructure (independent OS/data lifecycle)", classes.Infrastructure)
+	fmt.Fprintln(out, "  control-plane desired state: inspect with `cluster control-plane plan`; reconcile explicitly when needed")
+	fmt.Fprintln(out, "\nStatic plan complete. No secrets were decrypted and no cluster connections were opened.")
+	return nil
+}
+
+func writeReleasePlanGroup(out io.Writer, label string, values []string) {
+	if len(values) == 0 {
+		fmt.Fprintf(out, "  %s: none\n", label)
+		return
+	}
+	fmt.Fprintf(out, "  %s: %s\n", label, strings.Join(values, " -> "))
 }
 
 type releaseApplyOptions struct {
@@ -169,10 +263,11 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 		fmt.Fprintf(out, "     · reconcile %q after [%s] before [%s]\n", t.ID(), strings.Join(t.AfterServices(), ","), strings.Join(t.BeforeServices(), ","))
 	}
 	fmt.Fprintln(out, "  3. postdeploy migrations")
+	fmt.Fprintf(out, "  4. contract migrations: deferred until the rollback window closes (`cluster migrate --phase contract --to-version %s`)\n", platformVersion)
 
 	var env *reconcileEnv
 	if len(transitions) > 0 {
-		qc, jwt, cleanup, qErr := buildReconcileQM(cmd.Context())
+		qc, jwt, cleanup, qErr := buildReconcileQM(cmd.Context(), rc)
 		if qErr != nil {
 			return fmt.Errorf("connect to Quartermaster for reconciliation: %w", qErr)
 		}
@@ -214,6 +309,7 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	if err := runMigrate(cmd, rc, opts.dryRun, "postdeploy", true, platformVersion, false); err != nil {
 		return fmt.Errorf("postdeploy migrations: %w", err)
 	}
+	fmt.Fprintf(out, "  Contract migrations remain deferred. After the rollback window closes, run `frameworks cluster migrate --phase contract --to-version %s --dry-run`, then repeat without --dry-run.\n", platformVersion)
 
 	// Sync the edge release target to the SAME (channel, concreteVersion) the rest of the release deployed — pinned, so
 	// the edge fleet cannot drift onto a newer channel build if the channel advances mid-release.
@@ -579,11 +675,8 @@ func runReleaseTransition(cmd *cobra.Command, env *reconcileEnv, t ReleaseTransi
 		case ReconcileNotApplicable:
 			continue
 		case ReconcileComplete:
-			// Even when the invariant already holds, converge derived side-state (the manifest descriptor) from the
-			// authority so a resumed release does not leave a stale manifest the Foghorn gate would block on. It runs in
-			// dry-run too and is harmless there: ConvergeSideState only overlays the in-memory manifest and never writes
-			// to disk (in any mode), so a dry-run's downstream Checks see the same repaired state the real run would
-			// without mutating anything on disk.
+			// Even when the invariant already holds, converge any derived side-state so a resumed release presents the
+			// same in-process state to downstream checks as the original run.
 			if hasConverger {
 				if err := converger.ConvergeSideState(ctx, env, scope); err != nil {
 					return fmt.Errorf("reconciliation %q converge side-state for %s: %w", t.ID(), scope.Label, err)
@@ -593,8 +686,7 @@ func runReleaseTransition(cmd *cobra.Command, env *reconcileEnv, t ReleaseTransi
 		case ReconcileBlocked:
 			return fmt.Errorf("reconciliation %q is BLOCKED for %s: %s", t.ID(), scope.Label, chk.Detail)
 		case ReconcilePending:
-			// Validate Apply's authorization precondition NOW so --dry-run fails the same way the real run would,
-			// instead of passing and then failing at Apply. (Storage adoption requires an operator JWT.)
+			// Validate Apply's authorization precondition now so --dry-run fails the same way the real run would.
 			if strings.TrimSpace(env.operatorJWT) == "" {
 				return fmt.Errorf("reconciliation %q would apply for %s but requires a platform-operator login (no operator JWT available)", t.ID(), scope.Label)
 			}

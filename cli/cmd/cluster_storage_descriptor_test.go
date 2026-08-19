@@ -9,10 +9,9 @@ import (
 	"frameworks/cli/pkg/inventory"
 )
 
-// emitClusterDescriptor backs the `cluster storage descriptor` command the destructive thumbnail cutover consumes.
-// It must emit valid JSON, select the right cluster, fail closed on absent/backendless/incomplete clusters, round-trip
-// PRINTABLE special characters (JSON, not a positional format), and REJECT control characters (a sane prefix grammar
-// for a destructive path).
+// emitClusterDescriptor is a read-only diagnostic contract for the immutable
+// backend identity. It emits valid JSON, selects one cluster, fails closed on
+// incomplete state, round-trips printable characters, and rejects controls.
 func TestEmitClusterDescriptor(t *testing.T) {
 	p := func(s string) *string { return &s }
 	m := &inventory.Manifest{Clusters: map[string]inventory.ClusterConfig{

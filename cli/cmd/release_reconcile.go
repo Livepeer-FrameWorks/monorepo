@@ -2,10 +2,19 @@ package cmd
 
 import (
 	"context"
+	"fmt"
+	"strings"
+	"time"
 
+	fwcfg "frameworks/cli/internal/config"
+	"frameworks/cli/internal/controlplane"
+	fwcredentials "frameworks/cli/internal/credentials"
+	"frameworks/cli/pkg/bootstrap"
+	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/spf13/cobra"
@@ -41,10 +50,9 @@ type ReconcileCheck struct {
 	Detail string
 }
 
-// reconcileQM is the narrow Quartermaster surface transitions use: a read (Check/Verify) plus the operator-authorized
-// descriptor adopt (Apply). *qmclient.GRPCClient satisfies it; tests inject a fake.
+// reconcileQM is the narrow Quartermaster read surface available to release transitions.
+// *qmclient.GRPCClient satisfies it; tests inject a fake.
 type reconcileQM interface {
-	storageAdoptQM
 	GetCluster(ctx context.Context, clusterID string) (*quartermasterpb.ClusterResponse, error)
 }
 
@@ -65,14 +73,13 @@ type reconcileEnv struct {
 // registered by a COMPILED handler ID (never a shell command); an unknown id or a transition introduced after this
 // CLI's version fails the release closed rather than silently skipping a required convergence step.
 type ReleaseTransition interface {
-	// ID is the stable compiled handler identifier (e.g. "storage-descriptor-adoption").
+	// ID is the stable compiled handler identifier.
 	ID() string
 	// Title is a short human label for plan output.
 	Title() string
 	// IntroducedIn is the platform version at which this transition became required.
 	IntroducedIn() string
-	// Irreversible reports whether Apply commits state that a later service-upgrade rollback does NOT undo. Storage
-	// adoption is irreversible-but-safe: the descriptor stays valid even if the deployment rolls back.
+	// Irreversible reports whether Apply commits state that a later service-upgrade rollback does NOT undo.
 	Irreversible() bool
 	// AfterServices are deploy names that MUST be upgraded before this transition runs.
 	AfterServices() []string
@@ -106,8 +113,7 @@ const (
 	// zero value — so a new transition that forgets to classify itself is refused on provision, never silently skipped.
 	ProvisionMustExecute ProvisionDisposition = iota
 	// ProvisionEstablishedByBootstrap: a clean provision's desired-state bootstrap establishes this transition's
-	// invariant as part of normal install, via the services named in AfterServices (e.g. Quartermaster's desired-state
-	// bootstrap writes the storage descriptor before the in-cell Foghorn/Chandler deploy). The invariant is therefore
+	// invariant as part of normal install, via the services named in AfterServices. The invariant is therefore
 	// already in place at install time with nothing to converge. Provision does not take this on faith: it verifies the
 	// establishing AfterServices are actually enabled in the provision manifest, so a claim whose bootstrap mechanism
 	// is not part of this provision fails closed.
@@ -115,9 +121,7 @@ const (
 )
 
 // releaseSideStateConverger is an OPTIONAL transition capability: converge derived side-state that must stay
-// consistent with the authority even when the invariant itself is already Complete (so a rerun repairs it). Storage
-// adoption uses it to keep the manifest descriptor in step with the authoritative Quartermaster row — otherwise a
-// resumed release, seeing Complete, would leave a stale manifest that the manifest-based Foghorn gate then blocks on.
+// consistent with the authority even when the invariant itself is already Complete (so a rerun repairs it).
 // ConvergeSideState runs on Complete scopes (in dry-run too, but in-memory only via env.dryRun); PreviewSideState runs
 // on Pending scopes in dry-run; both are implied by Apply on a real Pending run.
 type releaseSideStateConverger interface {
@@ -128,18 +132,119 @@ type releaseSideStateConverger interface {
 	PreviewSideState(ctx context.Context, env *reconcileEnv, scope ReconcileScope) error
 }
 
-// releaseTransitionRegistry maps compiled handler id → transition. Populated by init() in each transition file.
+// releaseTransitionRegistry maps compiled handler id → transition. A release
+// that introduces a transition adds its implementation to this map alongside
+// the catalog entry; v0.3 starts with no retained one-off handlers.
 var releaseTransitionRegistry = map[string]ReleaseTransition{}
 
-func registerReleaseTransition(t ReleaseTransition) {
-	if _, dup := releaseTransitionRegistry[t.ID()]; dup {
-		panic("duplicate release transition id: " + t.ID())
-	}
-	releaseTransitionRegistry[t.ID()] = t
+// ResolveSystemTenantID returns the stable UUID Quartermaster owns for the
+// canonical system-tenant alias. A context-sourced invocation may reuse the
+// identity that a prior reconciliation persisted; an explicit manifest always
+// resolves its own authority through Quartermaster so an unrelated active
+// context or static env value cannot leak across clusters. The result is cached
+// for this invocation so a multi-service release never re-dials Quartermaster
+// per replica.
+func (rc *resolvedCluster) ResolveSystemTenantID(ctx context.Context) (string, error) {
+	rc.systemTenantOnce.Do(func() {
+		// An explicit manifest source may target a different cluster than the
+		// active context. Only trust the remembered identity when that context
+		// also supplied the manifest; explicit inputs resolve their own authority.
+		if rc.Source == inventory.SourceContext || rc.Source == inventory.SourceContextLastManifest {
+			if id := strings.TrimSpace(rc.ContextSystemTenantID); id != "" {
+				rc.systemTenantID = id
+				return
+			}
+		}
+		client, _, cleanup, err := buildReconcileQM(ctx, rc)
+		if err != nil {
+			rc.systemTenantErr = err
+			return
+		}
+		defer cleanup()
+		resp, err := client.ResolveTenantAliases(ctx, []string{bootstrap.SystemTenantAlias})
+		if err != nil {
+			rc.systemTenantErr = fmt.Errorf("ResolveTenantAliases: %w", err)
+			return
+		}
+		if len(resp.GetUnknown()) > 0 {
+			rc.systemTenantErr = fmt.Errorf("system tenant alias %q is not established in Quartermaster", bootstrap.SystemTenantAlias)
+			return
+		}
+		id := strings.TrimSpace(resp.GetMapping()[bootstrap.SystemTenantAlias])
+		if id == "" {
+			rc.systemTenantErr = fmt.Errorf("system tenant alias %q resolved to an empty UUID", bootstrap.SystemTenantAlias)
+			return
+		}
+		rc.systemTenantID = id
+	})
+	return rc.systemTenantID, rc.systemTenantErr
 }
 
 // buildReconcileQM constructs an authenticated Quartermaster client for the release executor and returns the operator
-// JWT so transition Applies can authorize the operator-only adopt RPC.
-func buildReconcileQM(ctx context.Context) (*qmclient.GRPCClient, string, func(), error) {
-	return clusterStorageQMClient(ctx)
+// JWT for privileged transition Applies.
+func buildReconcileQM(ctx context.Context, rc *resolvedCluster) (*qmclient.GRPCClient, string, func(), error) {
+	ctxCfg, err := reconcileContextForResolved(ctx, rc)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	resolver := controlplane.NewResolverWithManifest(ctxCfg, rc.Manifest, rc.ManifestPath, rc.AgeKey)
+	ep, err := resolver.ResolveGRPC(ctx, "quartermaster")
+	if err != nil {
+		resolver.Close()
+		return nil, "", nil, err
+	}
+	qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
+		GRPCAddr:      ep.Address,
+		Timeout:       15 * time.Second,
+		Logger:        logging.NewLogger(),
+		ServiceToken:  ctxCfg.Auth.ServiceToken,
+		AllowInsecure: ep.AllowInsecure,
+		CACertFile:    ep.CACertFile,
+		CACertPEM:     ep.CACertPEM,
+		ServerName:    ep.ServerName,
+	})
+	if err != nil {
+		resolver.Close()
+		return nil, "", nil, fmt.Errorf("failed to connect to Quartermaster gRPC: %w", err)
+	}
+	return qc, ctxCfg.Auth.JWT, resolver.Close, nil
+}
+
+func reconcileContextForResolved(ctx context.Context, rc *resolvedCluster) (fwcfg.Context, error) {
+	if rc == nil || rc.Manifest == nil {
+		return fwcfg.Context{}, fmt.Errorf("release reconciliation requires a resolved cluster manifest")
+	}
+	cfg, err := fwcfg.Load()
+	if err != nil {
+		return fwcfg.Context{}, err
+	}
+	ctxCfg, err := fwcfg.MaybeActiveContext(fwcfg.GetRuntimeOverrides(), fwcfg.OSEnv{}, cfg)
+	if err != nil {
+		return fwcfg.Context{}, err
+	}
+	if ctxCfg.Persona != fwcfg.PersonaPlatform {
+		ctxCfg = fwcfg.Context{
+			Name:       "manifest-invocation",
+			Persona:    fwcfg.PersonaPlatform,
+			AccessMode: fwcfg.AccessModeSSH,
+			Endpoints:  fwcfg.DefaultEndpoints(),
+		}
+		if isDevProfile(rc.Manifest) {
+			ctxCfg.AccessMode = fwcfg.AccessModeLocal
+		}
+	}
+	sharedEnv, err := rc.SharedEnv()
+	if err != nil {
+		return fwcfg.Context{}, fmt.Errorf("load manifest env_files for reconciliation: %w", err)
+	}
+	ctxCfg.Auth.ServiceToken = strings.TrimSpace(sharedEnv["SERVICE_TOKEN"])
+	if ctxCfg.Auth.ServiceToken == "" {
+		return fwcfg.Context{}, fmt.Errorf("SERVICE_TOKEN missing from manifest env_files (%s)", rc.ManifestPath)
+	}
+	jwt, err := fwcredentials.ResolveUserAuth(fwcfg.OSEnv{}, fwcredentials.DefaultStore())
+	if err != nil {
+		return fwcfg.Context{}, err
+	}
+	ctxCfg.Auth.JWT = jwt
+	return ctxCfg, nil
 }

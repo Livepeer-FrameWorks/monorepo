@@ -37,8 +37,9 @@ var Services = map[string]Service{
 	"purser":        {ID: "purser", DefaultPort: 18003, HealthPath: "/health", HealthProtocol: "http", Role: "control", SupportsSIGHUPReload: true},
 
 	// Analytics (Periscope)
-	"periscope-query":  {ID: "periscope-query", DefaultPort: 18004, HealthPath: "/health", HealthProtocol: "http", Role: "analytics", SupportsSIGHUPReload: true},
-	"periscope-ingest": {ID: "periscope-ingest", DefaultPort: 18005, HealthPath: "/health", HealthProtocol: "http", Role: "analytics", SupportsSIGHUPReload: true},
+	"periscope-query":    {ID: "periscope-query", DefaultPort: 18004, HealthPath: "/health", HealthProtocol: "http", Role: "analytics", SupportsSIGHUPReload: true},
+	"periscope-ingest":   {ID: "periscope-ingest", DefaultPort: 18005, HealthPath: "/health", HealthProtocol: "http", Role: "analytics", SupportsSIGHUPReload: true},
+	"periscope-metering": {ID: "periscope-metering", DefaultPort: 18021, HealthPath: "/health", HealthProtocol: "http", Role: "analytics", SupportsSIGHUPReload: true},
 
 	// Data plane
 	"decklog":   {ID: "decklog", DefaultPort: 18006, HealthPath: "/health", HealthProtocol: "grpc", Role: "data", SupportsSIGHUPReload: true},
@@ -90,22 +91,37 @@ func Lookup(id string) (Service, bool) {
 	return s, ok
 }
 
-// provisionOnly lists deploy names that are PINNED EXTERNAL images / OS-managed components — provisioned via
-// `cluster provision`, NOT FrameWorks-built artifacts that `cluster release apply` / `cluster upgrade` version and
-// upgrade. Release/upgrade classification skips these; anything NOT listed is treated as an expected FrameWorks
-// artifact and fails closed if its release image is missing. Keep in sync when adding an external component.
-var provisionOnly = map[string]bool{
-	"nginx": true, "caddy": true,
-	"postgres": true, "kafka": true, "kafka-controller": true, "kafka-mirrormaker": true, "clickhouse": true, "redis": true,
-	"victoriametrics": true, "vmagent": true, "vmauth": true, "grafana": true, "metabase": true, "prometheus": true,
-	"listmonk": true, "chatwoot": true, "mistserver": true,
-	"livepeer-gateway": true, "livepeer-signer": true,
+// DeliveryClass defines which lifecycle owns a deployable component. This replaces the ambiguous "provision-only"
+// bucket: release artifacts, independently pinned dependencies, and host infrastructure have different update paths.
+type DeliveryClass string
+
+const (
+	DeliveryPlatformArtifact   DeliveryClass = "platform-artifact"
+	DeliveryManagedDependency  DeliveryClass = "managed-dependency"
+	DeliveryHostInfrastructure DeliveryClass = "host-infrastructure"
+)
+
+var deliveryClasses = map[string]DeliveryClass{
+	"nginx": DeliveryManagedDependency, "caddy": DeliveryManagedDependency,
+	"victoriametrics": DeliveryManagedDependency, "vmagent": DeliveryManagedDependency,
+	"vmauth": DeliveryManagedDependency, "grafana": DeliveryManagedDependency,
+	"metabase": DeliveryManagedDependency, "prometheus": DeliveryManagedDependency,
+	"listmonk": DeliveryManagedDependency, "chatwoot": DeliveryManagedDependency,
+	"mistserver": DeliveryManagedDependency, "livepeer-gateway": DeliveryManagedDependency,
+	"livepeer-signer": DeliveryManagedDependency,
+
+	"postgres": DeliveryHostInfrastructure, "kafka": DeliveryHostInfrastructure,
+	"kafka-controller": DeliveryHostInfrastructure, "kafka-mirrormaker": DeliveryHostInfrastructure,
+	"clickhouse": DeliveryHostInfrastructure, "redis": DeliveryHostInfrastructure,
 }
 
-// IsProvisionOnly reports whether a deploy name is a pinned external/OS-managed component provisioned (not
-// release-upgraded). Callers exclude these from the upgrade loop; everything else must resolve to a release artifact.
-func IsProvisionOnly(deployName string) bool {
-	return provisionOnly[deployName]
+// DeliveryClassFor returns the lifecycle owner for a deploy name. FrameWorks-built artifacts are the fail-closed
+// default: a newly added service cannot be silently omitted from a release just because nobody classified it yet.
+func DeliveryClassFor(deployName string) DeliveryClass {
+	if class, ok := deliveryClasses[deployName]; ok {
+		return class
+	}
+	return DeliveryPlatformArtifact
 }
 
 // ReadinessPath is the endpoint that gates deployment and is advertised for

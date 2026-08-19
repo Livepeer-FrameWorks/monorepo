@@ -330,7 +330,7 @@ func (m *Manifest) Validate() error {
 	}
 
 	// The S3 descriptor is immutable and its prefix is part of it: a cluster that declares a bucket MUST declare an
-	// explicit prefix (an absent prefix is "unadopted", indistinguishable at deploy time from a real omission). Use
+	// explicit prefix (an absent prefix is incomplete, indistinguishable at deploy time from a real omission). Use
 	// s3_prefix: "" for a genuinely empty prefix. This catches the common gitops mistake of declaring bucket without
 	// prefix, which would leave Quartermaster and the deployed STORAGE_S3_PREFIX env disagreeing.
 	for id, cc := range m.Clusters {

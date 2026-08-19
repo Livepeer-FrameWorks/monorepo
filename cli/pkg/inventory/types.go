@@ -138,7 +138,7 @@ type ClusterConfig struct {
 	S3Bucket   string `yaml:"s3_bucket,omitempty"`
 	S3Endpoint string `yaml:"s3_endpoint,omitempty"`
 	S3Region   string `yaml:"s3_region,omitempty"`
-	// S3Prefix is a POINTER so absence (nil, unadopted) is distinguishable from a
+	// S3Prefix is a POINTER so absence (nil, incomplete) is distinguishable from a
 	// declared known-empty prefix (non-nil ""). Quartermaster preserves the same
 	// NULL-vs-empty distinction on the row; validation requires an explicit prefix
 	// whenever a bucket is declared (use s3_prefix: "" for a genuinely empty one).
@@ -581,7 +581,7 @@ type UpdateStrategyConfig struct {
 type EdgeManifest struct {
 	Version         string     `yaml:"version"`
 	Type            string     `yaml:"type,omitempty"`    // edge; accepted for consistency with cluster manifests
-	Channel         string     `yaml:"channel,omitempty"` // Release channel: "stable", "rc", or explicit version (e.g., "v0.2.0-rc3")
+	Channel         string     `yaml:"channel,omitempty"` // Release channel: "stable", "rc", or explicit version (e.g., "v1.2.3-rc1")
 	RootDomain      string     `yaml:"root_domain"`
 	PoolDomain      string     `yaml:"pool_domain"` // Shared edge pool domain (e.g., edge.media-eu.example.com)
 	Email           string     `yaml:"email"`       // ACME email

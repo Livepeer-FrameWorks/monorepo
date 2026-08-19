@@ -522,9 +522,9 @@ func (m *Manifest) GetServiceInfo(serviceName string) (*ServiceInfo, error) {
 	for _, svc := range m.Services {
 		if svc.Name == serviceName {
 			// service_version is the artefact provenance label and is
-			// trusted as written: every release built from v0.2.40
-			// onward stamps the platform tag here, and carry-forward
-			// entries preserve the baseline's value verbatim. The only
+			// trusted as written: supported release manifests stamp the
+			// platform tag here, and carry-forward entries preserve the
+			// baseline's value verbatim. The only
 			// defensive fallback is when the field is literally empty,
 			// which would mean a malformed manifest.
 			version := strings.TrimSpace(svc.ServiceVersion)

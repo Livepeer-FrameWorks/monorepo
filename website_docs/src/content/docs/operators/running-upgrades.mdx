@@ -13,18 +13,16 @@ import { Aside, Steps } from "@astrojs/starlight/components";
   reconciliation, not as the routine way to roll a running cluster forward.
 </Aside>
 
-<Aside type="note" title="Release notes can require provisioning">
-  Some releases change manifest-rendered runtime config, service environment, DNS/TLS provider
-  settings, or cluster metadata that a binary-only upgrade cannot apply. When a release note
-  explicitly includes `frameworks cluster provision` in the upgrade sequence, run it at that point;
-  otherwise keep using `cluster upgrade` for normal service rollouts.
-</Aside>
+Use `frameworks cluster release apply` for a normal platform release. It composes
+schema phases, platform artifact upgrades, live gates, and any declared one-off
+reconciliation into one resumable operation. `cluster migrate` and `cluster upgrade`
+remain explicit recovery/debugging primitives.
 
-Use `frameworks cluster upgrade` for service binaries and images, and
-`frameworks cluster migrate` for PostgreSQL/YugabyteDB schema migrations. The
-upgrade command downloads or pulls the target release artifact, lets the role
-restart the service when the artifact or config changes, validates health, and
-rolls back on health-check failure unless `--no-rollback` is set.
+Managed dependencies such as Chatwoot, Listmonk, Grafana, and VictoriaMetrics have
+independent manifest pins; host infrastructure has its own OS/data lifecycle. The static
+release plan lists both groups explicitly rather than implying that a platform release
+changed them. Inspect their desired/observed state with `cluster diff`, and use an
+intentional provision or component-specific operation when their pins change.
 
 <Aside type="caution" title="Migrations are not magic data migrations">
   `cluster migrate` applies PostgreSQL/YugabyteDB schema migrations. It does not prove that existing
@@ -36,59 +34,69 @@ rolls back on health-check failure unless `--no-rollback` is set.
 ## Recommended flow
 
 <Steps>
-1. Check the current state:
+1. Print the complete static plan. This needs the manifest and release metadata, but no
+   decrypted cluster secrets, SSH session, or control-plane login:
 
     ```bash
-    frameworks cluster status
+    frameworks cluster release plan --version stable
     ```
 
-2. Preview database migrations:
+2. Verify the active context when you intend to use one, then run the live dry-run:
 
    ```bash
-   frameworks cluster upgrade plan --version stable
-   frameworks cluster migrate --phase expand --dry-run
+   frameworks context check
+   frameworks cluster release apply --version stable --dry-run
    ```
 
-3. Preview the service or cluster upgrade:
+3. Apply the same release plan:
 
    ```bash
-   frameworks cluster upgrade quartermaster --version stable --dry-run
-   frameworks cluster upgrade --all --dry-run
+   frameworks cluster release apply --version stable --yes
    ```
 
-4. Apply PostgreSQL/YugabyteDB migrations before upgrading services that depend
-   on new schema. This normal path assumes the pending migrations are compatible
-   with both the currently running service version and the target version:
+4. Reconcile service-owned control-plane state only when the desired bootstrap model
+   changed (tenant metadata, billing catalog, managed accounts, assignments, and similar
+   platform state):
 
    ```bash
-   frameworks cluster migrate --phase expand
+   frameworks cluster control-plane plan
+   frameworks cluster control-plane reconcile
    ```
 
-5. Upgrade one service, or all enabled services in dependency order:
+   The `frameworks` system-tenant alias is a stable identity. Reconciliation updates its
+   mutable metadata but does not replace its UUID. Replacing that identity would be a
+   separate, explicitly designed data migration—not an incidental `provision` or
+   `control-plane reconcile` side effect.
 
-   ```bash
-   frameworks cluster upgrade quartermaster --version stable --yes
-   frameworks cluster upgrade --all --yes
-   ```
-
-6. Run any catalog-declared data migration after compatible binaries are
-   deployed. For example, a billing model migration may need to populate new
-   normalized tables from old JSONB columns before reads can be flipped:
-
-   ```bash
-   frameworks cluster data-migrate list --to-version v0.0.0
-   frameworks cluster data-migrate run <service>.<id> --dry-run
-   frameworks cluster data-migrate run <service>.<id>
-   ```
-
-7. Verify health and migration-specific checks after the rollout:
+5. Verify health and state:
 
    ```bash
    frameworks cluster status
    frameworks cluster doctor
    ```
 
+6. After the rollback window closes, apply any deferred contract migrations. They
+   are printed by the release plan but never run implicitly by `release apply`:
+
+   ```bash
+   frameworks cluster migrate --phase contract --to-version vX.Y.Z --dry-run
+   frameworks cluster migrate --phase contract --to-version vX.Y.Z
+   ```
+
 </Steps>
+
+## Context or explicit manifest
+
+`frameworks setup` is convenience, not a hidden provisioning step. It creates a named
+operator context (persona, access mode, GitOps source, age key path, and remembered system
+tenant). Commands with no manifest-source flags use that context. You can instead pass
+`--manifest`, or `--gitops-dir --cluster`, on every invocation; release reconciliation
+then uses that already-resolved manifest and its `SERVICE_TOKEN`, while an operator JWT is
+needed only if a future transition actually declares an operator-authorized mutation.
+
+For SSH/mesh contexts, `context check` resolves gRPC endpoints through the same transport
+resolver used by lifecycle commands. Saved localhost HTTP URLs are shown as unprobed rather
+than dialed directly. A failed attempted probe exits nonzero.
 
 ### Control plane first, then edges
 
@@ -181,6 +189,7 @@ expand migrations
 → service upgrades in dependency order, with reconciliation transitions
   interleaved at their declared points
 → postdeploy migrations
+→ contract migrations explicitly deferred until the rollback window closes
 ```
 
 ```bash
@@ -196,7 +205,7 @@ transition re-Checks reality and skips whatever is already `Complete`. A `Blocke
 with a clear reason instead of guessing, and a transition whose precondition does not apply reports
 `Not applicable` rather than mutating.
 
-`cluster migrate`, `cluster upgrade`, and the low-level reconciliation subcommands remain as
+`cluster migrate` and `cluster upgrade` remain as
 **recovery/debugging tools**; `release apply` is the normal path **for a cluster that is already
 installed** — it upgrades existing services and runs the reconciliation transitions, and it
 refuses to "upgrade" a service that is not yet installed. A **from-scratch** cluster is brought
@@ -204,8 +213,7 @@ up with `cluster provision` (see [When to use provision](#when-to-use-provision)
 install ordering and initial descriptor establishment happen. After the initial provision, use
 `release apply` for subsequent rollouts. At **serving** time Chandler has no runtime dependency on Foghorn's version (it serves a
 deterministic key with no per-request Foghorn call); the Foghorn-before-Chandler ordering is an
-**install-time** property of the planner, shared by both `provision` and `release apply`. A direct
-`cluster upgrade foghorn` still enforces the storage-descriptor prerequisite. **Upgrade the
+**install-time** property of the planner, shared by both `provision` and `release apply`. **Upgrade the
 `frameworks` CLI to at least the release's `min_cli_version` before applying** — the CLI
 validates that from the fetched release metadata, but a CLI predating that check cannot be
 stopped by it, so treat the CLI upgrade as the first step.
@@ -348,9 +356,10 @@ release declares a required data migration but the service binary cannot report
 state, upgrade and postdeploy/contract gates fail closed instead of treating
 the unknown as safe.
 
-Contract migrations are intentionally separate. `cluster migrate --phase
-contract` runs only after the matching data-migration gate succeeds, so
-destructive cleanup cannot be mixed into the routine expand/deploy step.
+Contract migrations are intentionally separate. `release plan` prints the deferred
+command, and `cluster migrate --phase contract` runs it only after the matching
+data-migration gate succeeds, so destructive cleanup cannot be mixed into the routine
+expand/deploy step or silently eliminate the rollback path.
 
 ## Local compose exception
 
@@ -375,7 +384,9 @@ Use `frameworks cluster provision` for:
 - repairing drift where you intentionally want a full converge,
 - re-rendering infrastructure after changing role inputs.
 
-For routine release rollouts, use `cluster upgrade` plus `cluster migrate`.
+For routine release rollouts, use `cluster release plan` followed by `cluster release
+apply`. Use `cluster upgrade` and `cluster migrate` independently only for recovery,
+diagnosis, or the explicitly deferred contract phase.
 
 ## Why some services keep their older version label
 
@@ -383,8 +394,8 @@ A FrameWorks release manifest pins every service by content identity (Docker
 image digest, native tarball SHA-256), not by version label. When a service's
 source code did not change since an earlier release, the new manifest carries
 that service's previous `service_version` label forward verbatim — for
-example, a `v0.2.40` release can legitimately list `helmsman` with
-`service_version: v0.2.37` because that is the release that actually produced
+example, a `v1.2.3` release can legitimately list `helmsman` with
+`service_version: v1.2.1` because that is the release that actually produced
 the bytes you are running.
 
 This is the **artefact provenance** model: `platform_version` says "what

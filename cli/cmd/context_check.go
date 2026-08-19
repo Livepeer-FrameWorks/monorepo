@@ -24,6 +24,7 @@ type checkResult struct {
 	Service  string `json:"service"`
 	Endpoint string `json:"endpoint"`
 	OK       bool   `json:"ok"`
+	Skipped  bool   `json:"skipped,omitempty"`
 	Status   string `json:"status"`
 	Error    string `json:"error,omitempty"`
 }
@@ -38,11 +39,12 @@ type personaResult struct {
 	Error  string `json:"error,omitempty"`
 }
 
-// errPersonaPreflight signals that one or more persona/auth assertions failed.
-// RunE returns this so cobra produces a nonzero exit code suitable for CI gating.
-// Reachability failures don't propagate to exit (existing UX); a CI script
-// that needs strict reachability gating should consume the JSON output.
-var errPersonaPreflight = errors.New("persona/auth preflight failed")
+// The check exits nonzero when either identity prerequisites or an attempted reachability probe fails. Endpoints that
+// cannot honestly be probed through the selected transport are explicit skipped results, not false failures.
+var (
+	errPersonaPreflight = errors.New("persona/auth preflight failed")
+	errReachability     = errors.New("context reachability check failed")
+)
 
 func newContextCheckCmd() *cobra.Command {
 	var timeout time.Duration
@@ -75,7 +77,9 @@ func newContextCheckCmd() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), "Service Reachability:")
 				for _, r := range results {
 					mark := "✗"
-					if r.OK {
+					if r.Skipped {
+						mark = "-"
+					} else if r.OK {
 						mark = "✓"
 					}
 					if r.Error != "" {
@@ -106,6 +110,11 @@ func newContextCheckCmd() *cobra.Command {
 			for _, p := range personas {
 				if !p.OK {
 					return errPersonaPreflight
+				}
+			}
+			for _, result := range results {
+				if !result.OK && !result.Skipped {
+					return errReachability
 				}
 			}
 			return nil
@@ -168,7 +177,13 @@ func runReachabilityChecks(parent context.Context, c fwcfg.Context, timeout time
 	// helper to check http health
 	checkHTTP := func(name, base string) checkResult {
 		if base == "" {
-			return checkResult{Service: name, Endpoint: "(unset)", OK: false, Status: "skip"}
+			return checkResult{Service: name, Endpoint: "(unset)", Skipped: true, Status: "not configured"}
+		}
+		if c.EffectiveAccessMode() != fwcfg.AccessModeLocal && fwcfg.IsLocalhostEndpoint(base) {
+			return checkResult{
+				Service: name, Endpoint: base, Skipped: true,
+				Status: fmt.Sprintf("not checked over access_mode=%s (gRPC probes use the resolved transport)", c.EffectiveAccessMode()),
+			}
 		}
 		u, _ := url.Parse(base)
 		// Derive HTTP URL if ws/wss
@@ -212,7 +227,8 @@ func runReachabilityChecks(parent context.Context, c fwcfg.Context, timeout time
 	checkGRPC := func(name string, target controlplane.Endpoint) checkResult {
 		r := checkResult{Service: name, Endpoint: target.Address}
 		if strings.TrimSpace(target.Address) == "" {
-			r.Status = "skip"
+			r.Skipped = true
+			r.Status = "not configured"
 			return r
 		}
 		ctx, cancel := contextWithTimeout(parent, timeout)

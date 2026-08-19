@@ -190,7 +190,7 @@ func validateStorageBackendAgreement(manifest *inventory.Manifest, serviceID, de
 	envBucket := env["STORAGE_S3_BUCKET"]
 	if envBucket == "" {
 		// The env declares NO S3. This is valid ONLY for a genuinely storage-less cell: if ANY assigned cluster declares
-		// an s3_bucket, the cell would deploy storage-disabled against a cluster whose Chandler + first-boot adoption
+		// an s3_bucket, the cell would deploy storage-disabled against a cluster whose Chandler + first-boot establishment
 		// expect a backend, and durable writes would silently fail after an apparently-successful deploy. Fail closed.
 		seen := map[string]bool{}
 		for _, cid := range clusters {
@@ -237,11 +237,11 @@ func validateStorageBackendAgreement(manifest *inventory.Manifest, serviceID, de
 			continue
 		}
 		// An S3-enabled Foghorn MUST have a cluster S3 descriptor: it is what Quartermaster persists and Chandler
-		// serves from, and it is the authority a first boot adopts against. An absent cluster descriptor (the legacy
-		// env-only shape) leaves Chandler with no backend and lets Foghorn establish an unproven identity — refuse it
-		// so operators populate the descriptor before this cell can adopt. (Credentials stay env-only.)
+		// serves from, and it is the authority a first boot establishes against. An absent descriptor leaves Chandler
+		// with no backend and lets Foghorn establish an unproven identity, so refuse it before deploy. Credentials stay
+		// env-only.
 		if cc.S3Bucket == "" {
-			return fmt.Errorf("storage backend descriptor absent: Foghorn %q has STORAGE_S3_BUCKET=%q but cluster %q declares no s3_bucket — the cluster S3 descriptor (bucket/endpoint/region) is required so Chandler and first-boot adoption have an authoritative backend; populate it on the cluster before deploying", serviceID, envBucket, cid)
+			return fmt.Errorf("storage backend descriptor absent: Foghorn %q has STORAGE_S3_BUCKET=%q but cluster %q declares no s3_bucket — the cluster S3 descriptor (bucket/endpoint/region) is required so Chandler and first-boot establishment have an authoritative backend; populate it on the cluster before deploying", serviceID, envBucket, cid)
 		}
 		if cc.S3Bucket != envBucket {
 			return fmt.Errorf("storage backend disagreement: Foghorn %q env STORAGE_S3_BUCKET=%q but cluster %q s3_bucket=%q — the cell's S3 backend is immutable and must match the cluster Chandler serves from; reconcile before deploying", serviceID, envBucket, cid, cc.S3Bucket)
@@ -340,7 +340,7 @@ func runUpgradePreDeployGate(
 			}
 		}
 		// Baseline-floor guard (Postgres AND ClickHouse). The expand/postdeploy checks use the same builder that EXCLUDES
-		// migrations folded below the v0.2.96 baseline floor, so a cluster with an incomplete folded ledger would pass
+		// migrations folded below the declared baseline floor, so a cluster with an incomplete folded ledger would pass
 		// them yet be missing schema. The floor guard fails closed on such a cluster before any binary mutates.
 		if err := runBelowFloorGuardFn(ctx, rc, sshPool); err != nil {
 			return err
@@ -522,19 +522,4 @@ func formatBlockers(blockers []datamigrate.Blocker) string {
 			blk.Requirement.Service, blk.Requirement.ID, blk.Requirement.IntroducedIn, blk.Reason)
 	}
 	return strings.TrimRight(b.String(), "\n")
-}
-
-// serviceUpgradeCluster resolves the cluster a single-service upgrade targets: explicit svc.Cluster / Clusters[0],
-// else the cluster of the service's first host.
-func serviceUpgradeCluster(manifest *inventory.Manifest, svc inventory.ServiceConfig) string {
-	if svc.Cluster != "" {
-		return svc.Cluster
-	}
-	if len(svc.Clusters) > 0 {
-		return svc.Clusters[0]
-	}
-	if h, ok := firstServiceHost(manifest, svc); ok {
-		return manifest.HostCluster(h.Name)
-	}
-	return ""
 }

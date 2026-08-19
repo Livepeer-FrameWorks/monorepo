@@ -123,6 +123,18 @@ func NewResolver(ctxCfg fwcfg.Context) *Resolver {
 	return &Resolver{ctxCfg: ctxCfg}
 }
 
+// NewResolverWithManifest binds endpoint resolution to an already-resolved invocation manifest. Lifecycle commands
+// use this when --manifest/--gitops-dir selected the cluster, so transport resolution cannot silently fall back to a
+// different saved context source. The caller retains ownership of the manifest and any source cleanup.
+func NewResolverWithManifest(ctxCfg fwcfg.Context, manifest *inventory.Manifest, manifestPath, ageKey string) *Resolver {
+	return &Resolver{
+		ctxCfg:         ctxCfg,
+		manifest:       manifest,
+		manifestPath:   manifestPath,
+		manifestAgeKey: ageKey,
+	}
+}
+
 func (r *Resolver) Close() {
 	if r == nil {
 		return

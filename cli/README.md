@@ -5,7 +5,7 @@ Unified operator tool for managing FrameWorks contexts, credentials, edge nodes,
 ## Command Groups
 
 - `frameworks setup`, `context`, `login`, `logout`, and `menu` manage local operator state and interactive setup.
-- `frameworks cluster ...` handles cluster preflight, provisioning, initialization, status, drift checks, backups, restores, migrations, seed data, upgrades, logs, restarts, diagnostics, GeoIP sync, and release-channel changes.
+- `frameworks cluster ...` handles cluster preflight, provisioning, initialization, control-plane planning and reconciliation, status, drift checks, backups, restores, migrations, seed data, upgrades, logs, restarts, diagnostics, GeoIP sync, and release-channel changes. Use `cluster control-plane plan` to validate desired service-owned platform state and `cluster control-plane reconcile` to apply it without deploying services.
 - `frameworks edge ...` handles edge deploy, preflight, tuning, initialization, enrollment, provisioning, status, updates, certificates, logs, diagnostics, and node mode changes.
 - `frameworks mesh ...` handles mesh status, WireGuard identity operations, runtime joins, reconciliation, and diagnostics.
 - `frameworks services ...` plans, starts, stops, inspects, and checks local central-service stacks.

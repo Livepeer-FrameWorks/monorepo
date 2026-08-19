@@ -66,7 +66,7 @@ func TestValidateStorageBackendAgreement(t *testing.T) {
 		t.Fatalf("an S3-declaring cluster with no Foghorn STORAGE_S3_BUCKET must be refused, got: %v", err)
 	}
 	// An S3-enabled Foghorn whose cluster declares NO descriptor is REJECTED — the cluster descriptor is required so
-	// Chandler and first-boot adoption have an authoritative backend (the legacy env-only shape is refused).
+	// Chandler and first-boot establishment have an authoritative backend (the env-only shape is refused).
 	if err := validateStorageBackendAgreement(agreementManifest("", "", "", ""), "foghorn-eu", "foghorn", "", env); err == nil || !strings.Contains(err.Error(), "descriptor absent") {
 		t.Fatalf("an absent cluster descriptor for an S3-enabled Foghorn must be rejected, got: %v", err)
 	}

@@ -682,8 +682,8 @@ func TestProvisionDoesNotRollbackOnServiceClusterReconciliationFailure(t *testin
 	if strings.Contains(block, "rollbackProvisionedTasks") {
 		t.Fatalf("service-cluster reconciliation failure must not rollback provisioned services; block:\n%s", block)
 	}
-	if !strings.Contains(block, "cluster finalize --only assignments") {
-		t.Fatalf("service-cluster reconciliation failure should point at finalize --only assignments; block:\n%s", block)
+	if !strings.Contains(block, "cluster control-plane reconcile --domain assignments") {
+		t.Fatalf("service-cluster reconciliation failure should point at control-plane assignment reconciliation; block:\n%s", block)
 	}
 }
 
@@ -4764,5 +4764,21 @@ func threeRegionKafkaManifest() *inventory.Manifest {
 				},
 			},
 		},
+	}
+}
+
+func TestBuildServiceEnvVarsInjectsResolvedSystemTenant(t *testing.T) {
+	manifest := &inventory.Manifest{Profile: "dev"}
+	task := &orchestrator.Task{Type: "skipper", ServiceID: "skipper"}
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{
+		"system_tenant_id": "11111111-2222-3333-4444-555555555555",
+	}, "", "", map[string]string{
+		"SYSTEM_TENANT_ID": "00000000-0000-0000-0000-000000000001",
+	}, nil, "native")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := env["SYSTEM_TENANT_ID"]; got != "11111111-2222-3333-4444-555555555555" {
+		t.Fatalf("SYSTEM_TENANT_ID = %q, want Quartermaster-resolved identity", got)
 	}
 }

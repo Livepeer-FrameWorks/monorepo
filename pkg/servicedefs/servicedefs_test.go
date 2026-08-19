@@ -109,17 +109,20 @@ func TestListmonkRequiresAdminCredsFromGitOps(t *testing.T) {
 	}
 }
 
-// IsProvisionOnly distinguishes pinned external/OS-managed components (provisioned, not release-upgraded) from
-// FrameWorks-built services. Release/upgrade classification skips the former and keeps the latter.
-func TestIsProvisionOnly(t *testing.T) {
-	for _, ext := range []string{"nginx", "caddy", "victoriametrics", "vmagent", "grafana", "postgres", "kafka", "clickhouse", "mistserver", "livepeer-gateway"} {
-		if !IsProvisionOnly(ext) {
-			t.Errorf("%s is a pinned external component and must be provision-only", ext)
+func TestDeliveryClassFor(t *testing.T) {
+	for _, dependency := range []string{"nginx", "caddy", "victoriametrics", "vmagent", "grafana", "mistserver", "livepeer-gateway"} {
+		if got := DeliveryClassFor(dependency); got != DeliveryManagedDependency {
+			t.Errorf("DeliveryClassFor(%s) = %s, want %s", dependency, got, DeliveryManagedDependency)
 		}
 	}
-	for _, fw := range []string{"foghorn", "chandler", "commodore", "quartermaster", "chartroom", "foredeck", "logbook"} {
-		if IsProvisionOnly(fw) {
-			t.Errorf("%s is a FrameWorks-built artifact and must NOT be provision-only (else release apply would silently skip it)", fw)
+	for _, infra := range []string{"postgres", "kafka", "clickhouse", "redis"} {
+		if got := DeliveryClassFor(infra); got != DeliveryHostInfrastructure {
+			t.Errorf("DeliveryClassFor(%s) = %s, want %s", infra, got, DeliveryHostInfrastructure)
+		}
+	}
+	for _, platform := range []string{"foghorn", "chandler", "commodore", "quartermaster", "chartroom", "foredeck", "logbook"} {
+		if got := DeliveryClassFor(platform); got != DeliveryPlatformArtifact {
+			t.Errorf("DeliveryClassFor(%s) = %s, want %s", platform, got, DeliveryPlatformArtifact)
 		}
 	}
 }

@@ -39,9 +39,10 @@ func newClusterFinalizeCmd() *cobra.Command {
 	var ignoreValidation bool
 
 	cmd := &cobra.Command{
-		Use:   "finalize",
-		Short: "Run post-provision control-plane finalization only",
-		Args:  cobra.NoArgs,
+		Use:        "finalize",
+		Short:      "Run post-provision control-plane finalization only",
+		Deprecated: "use 'frameworks cluster control-plane reconcile' instead",
+		Args:       cobra.NoArgs,
 		Long: `Run the idempotent control-plane finalization steps normally executed
 after cluster provisioning, without provisioning or restarting services.
 
@@ -78,7 +79,12 @@ epilogue after fixing the underlying data/config issue.`,
 	cmd.Flags().StringVar(&only, "only", clusterFinalizeOnlyAll, "Finalization slice to run (all|quartermaster|purser|commodore|assignments|validation)")
 	cmd.Flags().BoolVar(&skipValidation, "skip-validation", false, "Skip final control-plane validation when --only=all")
 	cmd.Flags().BoolVar(&ignoreValidation, "ignore-validation", false, "Continue even if control-plane validation has warnings")
+	addControlPlaneBootstrapFlags(cmd)
 
+	return cmd
+}
+
+func addControlPlaneBootstrapFlags(cmd *cobra.Command) {
 	cmd.Flags().String("bootstrap-admin-email", "", "Create an initial operator user with this email")
 	cmd.Flags().String("bootstrap-admin-password", "", "Plaintext password for bootstrap admin (prefer --bootstrap-admin-password-env or --bootstrap-admin-password-file)")
 	cmd.Flags().String("bootstrap-admin-password-env", "", "Read bootstrap admin password from this environment variable")
@@ -86,13 +92,24 @@ epilogue after fixing the underlying data/config issue.`,
 	cmd.Flags().String("bootstrap-admin-first-name", "FrameWorks", "First name for bootstrap admin")
 	cmd.Flags().String("bootstrap-admin-last-name", "Operator", "Last name for bootstrap admin")
 	cmd.Flags().Bool("bootstrap-reset-credentials", false, "Allow bootstrap account entries with reset_credentials=true to update existing password hashes")
-
 	cmd.Flags().Bool("strict-control-plane", false, "Fail (exit 1) if control-plane validation has warnings")
-
-	return cmd
 }
 
 func runClusterFinalize(cmd *cobra.Command, rc *resolvedCluster, only string, skipValidation, _ bool) error {
+	return runClusterFinalizeWithLabels(
+		cmd,
+		rc,
+		only,
+		skipValidation,
+		false,
+		"Finalizing cluster from manifest",
+		"Cluster finalization complete",
+		"Step",
+		only,
+	)
+}
+
+func runClusterFinalizeWithLabels(cmd *cobra.Command, rc *resolvedCluster, only string, skipValidation, _ bool, heading, success, selectionLabel, selection string) error {
 	steps, err := clusterFinalizePlan(only, skipValidation)
 	if err != nil {
 		return err
@@ -102,8 +119,8 @@ func runClusterFinalize(cmd *cobra.Command, rc *resolvedCluster, only string, sk
 	manifestDir := filepath.Dir(rc.ManifestPath)
 	out := cmd.OutOrStdout()
 
-	ux.Heading(out, fmt.Sprintf("Finalizing cluster from manifest: %s", rc.ManifestPath))
-	fmt.Fprintf(out, "Step: %s\n\n", only)
+	ux.Heading(out, fmt.Sprintf("%s: %s", heading, rc.ManifestPath))
+	fmt.Fprintf(out, "%s: %s\n\n", selectionLabel, selection)
 
 	frozenManifest, releaseSelector, releaseVersion, err := freezeProvisionReleaseManifest(manifest, rc.ReleaseRepos)
 	if err != nil {
@@ -217,7 +234,7 @@ func runClusterFinalize(cmd *cobra.Command, rc *resolvedCluster, only string, sk
 	if rc.Source == inventory.SourceManifestFlag {
 		rememberLastManifest(cmd, rc.ManifestPath)
 	}
-	ux.Success(out, "Cluster finalization complete")
+	ux.Success(out, success)
 	return nil
 }
 

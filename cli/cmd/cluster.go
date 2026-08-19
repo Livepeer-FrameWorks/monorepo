@@ -58,6 +58,7 @@ invocation. Explicit flags always win over saved context defaults.`,
 	cluster.AddCommand(newClusterDiffCmd())
 	cluster.AddCommand(newClusterApplyCmd())
 	cluster.AddCommand(newClusterProvisionCmd())
+	cluster.AddCommand(newClusterControlPlaneCmd())
 	cluster.AddCommand(newClusterFinalizeCmd())
 	cluster.AddCommand(newClusterInitCmd())
 	cluster.AddCommand(newClusterClickHouseCmd())
@@ -101,6 +102,10 @@ type resolvedCluster struct {
 	// into platform-only operations like provision/init/migrate.
 	Persona     fwcfg.Persona
 	ContextName string
+	// ContextSystemTenantID is the last Quartermaster-resolved identity saved
+	// by provisioning or control-plane reconciliation. Live lifecycle commands
+	// use it as a cache hint and resolve through Quartermaster when absent.
+	ContextSystemTenantID string
 
 	// SourcePersistsManifest is true when ManifestPath is a real on-disk file that survives this process (local
 	// manifest/gitops-dir/cwd, or a context pointing at a local checkout). It is FALSE for a GitHub-fetched source,
@@ -115,6 +120,10 @@ type resolvedCluster struct {
 	clusterEnvsOnce sync.Once
 	clusterEnvs     map[string]map[string]string
 	clusterEnvsErr  error
+
+	systemTenantOnce sync.Once
+	systemTenantID   string
+	systemTenantErr  error
 }
 
 // SharedEnv decrypts and merges the manifest's top-level env_files on
@@ -228,6 +237,7 @@ func resolveClusterManifest(cmd *cobra.Command) (*resolvedCluster, error) {
 		Cleanup:                rm.Cleanup,
 		Persona:                ctxCfg.Persona,
 		ContextName:            ctxCfg.Name,
+		ContextSystemTenantID:  ctxCfg.SystemTenantID,
 		SourcePersistsManifest: manifestSourcePersistsToDisk(source, ctxCfg),
 	}, nil
 }

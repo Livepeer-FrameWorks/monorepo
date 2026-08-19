@@ -909,7 +909,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 
 		if err := maybeReconcileBatchServiceClusterAssignments(ctx, cmd, batch, manifest, runtimeData, raSession); err != nil {
 			ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Service-cluster reconciliation failed: %v", err))
-			fmt.Fprintln(cmd.OutOrStdout(), "  Provisioned services were left running; fix finalization and run `frameworks cluster finalize --only assignments`.")
+			fmt.Fprintln(cmd.OutOrStdout(), "  Provisioned services were left running; fix the control-plane issue and run `frameworks cluster control-plane reconcile --domain assignments`.")
 			return fmt.Errorf("service-cluster reconciliation failed: %w", err)
 		}
 
@@ -5707,7 +5707,6 @@ const (
 	provisionValidateTimeout   = 75 * time.Second
 	provisionInitializeTimeout = 2 * time.Minute
 	quartermasterRPCTimeout    = 5 * time.Second
-	frameworksSystemTenantID   = "00000000-0000-0000-0000-000000000001"
 	nodeBaselineConcurrency    = 8
 )
 
@@ -6593,6 +6592,13 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		for k, v := range obs.Config {
 			env[k] = v
 		}
+	}
+	// The system tenant is a Quartermaster-owned alias mapping, not a fixed
+	// production UUID. Its resolved value overrides static env layers so a
+	// control-plane reconciliation followed by service convergence cannot leave
+	// services authenticating as an obsolete tenant.
+	if id, ok := runtimeData["system_tenant_id"].(string); ok && strings.TrimSpace(id) != "" {
+		env["SYSTEM_TENANT_ID"] = strings.TrimSpace(id)
 	}
 	if baseName == "foghorn" || baseName == "vmauth" {
 		if edgeTelemetryJWTRequired(manifest) || edgeTelemetryJWTMaterialPresent(runtimeData, env) {

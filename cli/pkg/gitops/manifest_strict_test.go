@@ -17,7 +17,7 @@ func TestParseManifest_RejectsTypoedCompatibilityFields(t *testing.T) {
 	}{
 		{"misspelled rollback_disabled", "platform_version: v1.0.0\nrollback_disabld:\n  - chandler\n"},
 		{"misspelled min_cli_version", "platform_version: v1.0.0\nmin_cli_verison: v1.0.0\n"},
-		{"misspelled required_transitions", "platform_version: v1.0.0\nrequired_transition:\n  - storage-descriptor-adoption\n"},
+		{"misspelled required_transitions", "platform_version: v1.0.0\nrequired_transition:\n  - future-transition\n"},
 		{"unknown top-level field", "platform_version: v1.0.0\nrollback_polcy: none\n"},
 		{"malformed min_cli_version value", "platform_version: v1.0.0\nmin_cli_version: 1.0\n"},
 		{"empty required transition id", "platform_version: v1.0.0\nrequired_transitions:\n  - \"\"\n"},
@@ -46,7 +46,7 @@ func TestParseManifest_RejectsTypoedCompatibilityFields(t *testing.T) {
 func TestParseManifest_AcceptsValidManifest(t *testing.T) {
 	yamlText := "platform_version: v0.2.97\n" +
 		"min_cli_version: v0.2.97-rc1\n" +
-		"required_transitions:\n  - storage-descriptor-adoption\n" +
+		"required_transitions:\n  - future-transition\n" +
 		"rollback_disabled:\n  - chandler\n" +
 		"services: []\nnative_binaries: []\ninterfaces: []\ninfrastructure: []\n"
 	m, err := parseManifest([]byte(yamlText))

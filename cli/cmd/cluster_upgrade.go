@@ -392,8 +392,8 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 
 	// Required release transitions are executed and VERIFIED only by `release apply`, which interleaves them with the
 	// dependency-ordered upgrades. A DIRECT `cluster upgrade` (including `--all`) neither runs nor proves them, so
-	// deploying a service that sits on a transition's downstream side (BeforeServices) here could start it before, e.g.,
-	// storage-descriptor-adoption and then fail its live-state boot check. Refuse and route to `release apply`, which
+	// deploying a service that sits on a transition's downstream side (BeforeServices) here could start it before its
+	// required invariant is established and then fail its live-state boot check. Refuse and route to `release apply`, which
 	// runs the transition first. Skipped when this upgrade is already being driven BY `release apply` (withinRelease),
 	// which owns the ordering itself.
 	if !withinRelease {
@@ -435,6 +435,11 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 	if gateErr := runUpgradePreDeployGate(ctx, cmd, rc, sshPool, manifest, gitopsManifest.PlatformVersion, serviceName, deployName, skipMigrationCheck, skipDataMigrationCheck); gateErr != nil {
 		return gateErr
 	}
+	systemTenantID, tenantErr := rc.ResolveSystemTenantID(ctx)
+	if tenantErr != nil {
+		return fmt.Errorf("resolve system tenant for service configuration: %w", tenantErr)
+	}
+	upgradeRuntimeData := map[string]any{"system_tenant_id": systemTenantID}
 
 	// Confirmation once, before touching any replica.
 	if !dryRun && !yes {
@@ -460,7 +465,7 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 		if len(hosts) > 1 {
 			fmt.Fprintf(cmd.OutOrStdout(), "\n--- Replica %d/%d: %s ---\n", i+1, len(hosts), host.ExternalIP)
 		}
-		upgraded, hostErr := upgradeServiceOnHost(ctx, cmd, rc, sshPool, manifest, host, serviceName, deployName, svcInfo, dryRun, skipValidation, noRollback)
+		upgraded, hostErr := upgradeServiceOnHost(ctx, cmd, rc, sshPool, manifest, host, serviceName, deployName, svcInfo, upgradeRuntimeData, dryRun, skipValidation, noRollback)
 		if hostErr != nil {
 			return hostErr
 		}
@@ -573,7 +578,7 @@ func resolveUpgradeHosts(manifest *inventory.Manifest, serviceName string) ([]in
 // (false when already at target or in dry-run) so the caller can decide whether
 // to advance the manifest version. GitOps fetch, the pre-deploy gate, and the
 // operator confirmation are performed once by the caller, not per host.
-func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, sshPool *ssh.Pool, manifest *inventory.Manifest, host inventory.Host, serviceName, deployName string, svcInfo *gitops.ServiceInfo, dryRun, skipValidation, noRollback bool) (bool, error) {
+func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, sshPool *ssh.Pool, manifest *inventory.Manifest, host inventory.Host, serviceName, deployName string, svcInfo *gitops.ServiceInfo, runtimeData map[string]any, dryRun, skipValidation, noRollback bool) (bool, error) {
 	// Detect current state on this replica.
 	fmt.Fprintf(cmd.OutOrStdout(), "  [detect] %s...\n", host.ExternalIP)
 	detector := detect.NewDetector(sshPool, host)
@@ -645,7 +650,7 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 	if clusterEnvsErr != nil {
 		return false, fmt.Errorf("load cluster env_files: %w", clusterEnvsErr)
 	}
-	config, err := buildTaskConfig(task, manifest, map[string]any{}, true, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos)
+	config, err := buildTaskConfig(task, manifest, runtimeData, true, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos)
 	if err != nil {
 		return false, fmt.Errorf("build upgrade config: %w", err)
 	}
@@ -955,29 +960,49 @@ func collectUpgradeableServices(plan *orchestrator.ExecutionPlan) []string {
 }
 
 // classifyUpgradeableServices is the SHARED, FAIL-CLOSED classification both `release apply` and `upgrade --all` run
-// before any mutation. It EXCLUDES only EXPLICITLY provision-only roles — pinned external/OS-managed components
-// (nginx, VictoriaMetrics, …) provisioned via `cluster provision`, which the interface/application phases also collect
-// but which carry no FrameWorks release artifact. Everything else is treated as an EXPECTED FrameWorks artifact and
+// before any mutation. It executes only platform artifacts; managed dependencies and host infrastructure have their
+// own lifecycle and are reported explicitly. Everything else is treated as an EXPECTED FrameWorks artifact and
 // kept; whether each kept service's image actually resolves in the fetched release manifest is verified separately by
 // ensurePlannedArtifactsResolvable (also before mutation), so a missing artifact aborts the release up front rather
 // than mid-rollout. A deploy-name that cannot be resolved is a hard error here, not an ignored skip. Alias-aware.
-func classifyUpgradeableServices(cmd *cobra.Command, manifest *inventory.Manifest, services []string) ([]string, error) {
-	var kept, skipped []string
+type releaseServiceClasses struct {
+	Platform       []string
+	Dependencies   []string
+	Infrastructure []string
+}
+
+func classifyReleaseServices(manifest *inventory.Manifest, services []string) (releaseServiceClasses, error) {
+	var classes releaseServiceClasses
 	for _, svcID := range services {
 		deployName, err := classificationDeployName(manifest, svcID)
 		if err != nil {
-			return nil, fmt.Errorf("cannot classify %q for release: %w", svcID, err)
+			return releaseServiceClasses{}, fmt.Errorf("cannot classify %q for release: %w", svcID, err)
 		}
-		if servicedefs.IsProvisionOnly(deployName) {
-			skipped = append(skipped, svcID)
+		switch servicedefs.DeliveryClassFor(deployName) {
+		case servicedefs.DeliveryManagedDependency:
+			classes.Dependencies = append(classes.Dependencies, svcID)
+			continue
+		case servicedefs.DeliveryHostInfrastructure:
+			classes.Infrastructure = append(classes.Infrastructure, svcID)
 			continue
 		}
-		kept = append(kept, svcID)
+		classes.Platform = append(classes.Platform, svcID)
 	}
-	if len(skipped) > 0 {
-		fmt.Fprintf(cmd.OutOrStdout(), "  provisioned via `cluster provision`, not upgraded here: %s\n", strings.Join(skipped, ", "))
+	return classes, nil
+}
+
+func classifyUpgradeableServices(cmd *cobra.Command, manifest *inventory.Manifest, services []string) ([]string, error) {
+	classes, err := classifyReleaseServices(manifest, services)
+	if err != nil {
+		return nil, err
 	}
-	return kept, nil
+	if len(classes.Dependencies) > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "  managed dependencies (independent pins; inspect with `cluster diff`): %s\n", strings.Join(classes.Dependencies, ", "))
+	}
+	if len(classes.Infrastructure) > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "  host infrastructure (OS/data lifecycle; not release-upgraded): %s\n", strings.Join(classes.Infrastructure, ", "))
+	}
+	return classes.Platform, nil
 }
 
 // ensurePlannedArtifactsResolvable verifies that EVERY classified service actually RESOLVES to a deployable artifact in

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	fwcfg "frameworks/cli/internal/config"
 	fwcredentials "frameworks/cli/internal/credentials"
@@ -125,5 +126,22 @@ func TestRunPersonaChecksStoreErrorPropagates(t *testing.T) {
 	got := runPersonaChecks(context.Background(), c, fwcfg.Config{}, fwcfg.MapEnv{}, store)
 	if len(got) != 1 || got[0].OK {
 		t.Fatalf("expected failed result on store error, got %+v", got)
+	}
+}
+
+func TestNonLocalHTTPReachabilityDoesNotDialSavedLocalhost(t *testing.T) {
+	t.Parallel()
+	ctx := fwcfg.Context{
+		Persona:    fwcfg.PersonaPlatform,
+		AccessMode: fwcfg.AccessModeSSH,
+		Endpoints: fwcfg.Endpoints{
+			BridgeURL:      "http://localhost:18000",
+			SignalmanWSURL: "ws://localhost:18009",
+			AllowInsecure:  true,
+		},
+	}
+	results := runReachabilityChecks(context.Background(), ctx, 10*time.Millisecond)
+	if len(results) < 2 || !results[0].Skipped || !results[1].Skipped {
+		t.Fatalf("ssh-mode localhost HTTP endpoints must be reported as unprobed, not dialed: %+v", results[:2])
 	}
 }
