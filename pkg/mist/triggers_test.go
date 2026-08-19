@@ -583,6 +583,20 @@ func TestParseTriggerToProtobufStreamBuffer(t *testing.T) {
 			t.Fatalf("malformed health must leave summary/tracks empty: %+v", got)
 		}
 	})
+
+	t.Run("valid scalar health json degrades without parse failure", func(t *testing.T) {
+		trig, err := ParseTriggerToProtobuf(TriggerStreamBuffer, joinPayload("live+x", "DRY", "12010"), "node-1", logger)
+		if err != nil {
+			t.Fatalf("scalar health JSON must not fail the parse: %v", err)
+		}
+		got := trig.GetStreamBuffer()
+		if got == nil || got.GetBufferState() != "DRY" {
+			t.Fatalf("stream buffer identity mismatch: %+v", got)
+		}
+		if got.StreamBufferMs != nil || len(got.GetTracks()) != 0 {
+			t.Fatalf("scalar health must leave summary/tracks empty: %+v", got)
+		}
+	})
 }
 
 // TestParseTriggerToProtobufLiveTrackList covers the track-list JSON branch.

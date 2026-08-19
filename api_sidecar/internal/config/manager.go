@@ -410,7 +410,12 @@ func (m *Manager) repairTriggerDefinitions() {
 		m.logger.WithError(err).Warn("trigger drift check: ConfigBackup failed")
 		return
 	}
-	got, ok := normalizeTriggerConfig(current["triggers"])
+	configSection, configOK := current["config"].(map[string]any)
+	var currentTriggers any
+	if configOK {
+		currentTriggers = configSection["triggers"]
+	}
+	got, ok := normalizeTriggerConfig(currentTriggers)
 	want, _ := normalizeTriggerConfig(desired)
 	if ok && reflect.DeepEqual(got, want) {
 		return

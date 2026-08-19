@@ -366,13 +366,13 @@ func ParseTriggerToProtobufWithHeaders(triggerType TriggerType, rawPayload []byt
 		// Parse JSON health data if present (params[2])
 		// Mist sends: {"health": {buffer, jitter, issues, maxkeepaway, tracks[], video_..., audio_...}}
 		if len(params) > 2 && params[2] != "" {
-			var healthData map[string]any
-			if err := json.Unmarshal([]byte(params[2]), &healthData); err != nil {
+			var healthValue any
+			if err := json.Unmarshal([]byte(params[2]), &healthValue); err != nil {
 				logger.WithFields(logging.Fields{
 					"error": err.Error(),
 					"json":  params[2],
 				}).Warn("Failed to parse STREAM_BUFFER health JSON")
-			} else {
+			} else if healthData, ok := healthValue.(map[string]any); ok {
 				// Check if wrapped in "health" key (Mist sends {"health": {...}})
 				if health, ok := healthData["health"].(map[string]any); ok {
 					healthData = health
@@ -397,6 +397,10 @@ func ParseTriggerToProtobufWithHeaders(triggerType TriggerType, rawPayload []byt
 
 				// Parse per-track data (entries with "codec" field)
 				trigger.Tracks = parseTracksFromJSON(healthData)
+			} else {
+				logger.WithFields(logging.Fields{
+					"json_type": fmt.Sprintf("%T", healthValue),
+				}).Debug("Ignoring non-object STREAM_BUFFER health JSON")
 			}
 		}
 

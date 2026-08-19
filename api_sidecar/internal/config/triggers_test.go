@@ -79,7 +79,7 @@ func TestRepairTriggerDefinitions(t *testing.T) {
 	t.Run("missing entry", func(t *testing.T) {
 		current := desiredTriggers()
 		delete(current, "USER_NEW")
-		mist := &recordingMistAPI{backupResult: map[string]interface{}{"triggers": current}}
+		mist := &recordingMistAPI{backupResult: map[string]interface{}{"config": map[string]interface{}{"triggers": current}}}
 		m := &Manager{mistClient: mist, logger: logging.NewLogger()}
 		m.repairTriggerDefinitions()
 		if len(mist.updatedConfigs) != 1 {
@@ -90,7 +90,7 @@ func TestRepairTriggerDefinitions(t *testing.T) {
 	t.Run("field drift", func(t *testing.T) {
 		current := desiredTriggers()
 		current["PLAY_REWRITE"] = []any{TriggerDefinition{Handler: "http://wrong", Sync: true, OnFail: "keep"}}
-		mist := &recordingMistAPI{backupResult: map[string]interface{}{"triggers": current}}
+		mist := &recordingMistAPI{backupResult: map[string]interface{}{"config": map[string]interface{}{"triggers": current}}}
 		m := &Manager{mistClient: mist, logger: logging.NewLogger()}
 		m.repairTriggerDefinitions()
 		if len(mist.updatedConfigs) != 1 {
@@ -99,7 +99,7 @@ func TestRepairTriggerDefinitions(t *testing.T) {
 	})
 
 	t.Run("stable round trip", func(t *testing.T) {
-		mist := &recordingMistAPI{backupResult: map[string]interface{}{"triggers": desiredTriggers()}}
+		mist := &recordingMistAPI{backupResult: map[string]interface{}{"config": map[string]interface{}{"triggers": desiredTriggers()}}}
 		m := &Manager{mistClient: mist, logger: logging.NewLogger()}
 		m.repairTriggerDefinitions()
 		if len(mist.updatedConfigs) != 0 {
