@@ -1,6 +1,7 @@
 package provisioner
 
 import (
+	"strings"
 	"testing"
 	"testing/fstest"
 )
@@ -149,6 +150,20 @@ func TestValidateEmbeddedPostgresMigrations(t *testing.T) {
 func TestValidateEmbeddedClickHouseMigrations(t *testing.T) {
 	if err := ValidateEmbeddedClickHouseMigrations(); err != nil {
 		t.Fatalf("ValidateEmbeddedClickHouseMigrations returned error: %v", err)
+	}
+}
+
+func TestValidateMigrationReleaseCeilingRejectsFutureVersion(t *testing.T) {
+	migrations := []Migration{
+		{Version: "v0.2.96", Path: "migrations/purser/v0.2.96/expand/001_current.sql"},
+		{Version: "v0.3.0", Path: "migrations/purser/v0.3.0/expand/001_future.sql"},
+	}
+	err := validateMigrationReleaseCeiling(migrations, "v0.2.96")
+	if err == nil {
+		t.Fatal("a migration newer than the latest declared release must fail validation")
+	}
+	if !IsMigrationValidationError(err) || !strings.Contains(err.Error(), "v0.3.0") {
+		t.Fatalf("future migration error = %v, want a version-specific MigrationValidationError", err)
 	}
 }
 

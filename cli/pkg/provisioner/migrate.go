@@ -70,8 +70,8 @@ func enforcesMigrationPhaseSafety(migration Migration) bool {
 // SAFETY INVARIANT: set the floor at or below the first version not fully
 // applied by every live cluster. Existing clusters never re-apply the baseline,
 // so raising it too far would silently skip migrations between the cluster's
-// applied version and the floor. The floor is v0.2.96 so v0.2.96/v0.2.97 still
-// ship as normal migrations while older folded migrations are excluded.
+// applied version and the floor. The floor is v0.2.96 so v0.2.96 still ships as
+// a normal migration while older folded migrations are excluded.
 //
 // The minimum-upgrade-version guard ({Postgres,ClickHouse}BelowFloorGap in
 // migration_floor_guard.go) enforces this: a cluster missing any < floor migration
@@ -124,7 +124,10 @@ func ValidateEmbeddedPostgresMigrations() error {
 	if err != nil {
 		return err
 	}
-	return validatePostgresMigrationSet(migrations)
+	return errors.Join(
+		validatePostgresMigrationSet(migrations),
+		validateEmbeddedMigrationReleaseCeiling(migrations),
+	)
 }
 
 // ValidateEmbeddedClickHouseMigrations validates the embedded
@@ -136,7 +139,45 @@ func ValidateEmbeddedClickHouseMigrations() error {
 	if err != nil {
 		return err
 	}
-	return validateClickHouseMigrationSet(migrations)
+	return errors.Join(
+		validateClickHouseMigrationSet(migrations),
+		validateEmbeddedMigrationReleaseCeiling(migrations),
+	)
+}
+
+func validateEmbeddedMigrationReleaseCeiling(migrations []Migration) error {
+	catalog, err := releases.CatalogOrError()
+	if err != nil {
+		return fmt.Errorf("read release catalog for migration version ceiling: %w", err)
+	}
+	if len(catalog) == 0 {
+		if len(migrations) == 0 {
+			return nil
+		}
+		return fmt.Errorf("migration version ceiling: cli/internal/releases/catalog.yaml declares no releases")
+	}
+	return validateMigrationReleaseCeiling(migrations, catalog[len(catalog)-1].Version)
+}
+
+func validateMigrationReleaseCeiling(migrations []Migration, latestRelease string) error {
+	var issues []MigrationValidationIssue
+	for _, migration := range migrations {
+		if compareSemver(migration.Version, latestRelease) <= 0 {
+			continue
+		}
+		issues = append(issues, MigrationValidationIssue{
+			Path: migration.Path,
+			Message: fmt.Sprintf(
+				"version %s exceeds latest declared release %s; current code migrations must target the next release in cli/internal/releases/catalog.yaml",
+				migration.Version,
+				latestRelease,
+			),
+		})
+	}
+	if len(issues) > 0 {
+		return &MigrationValidationError{Issues: issues}
+	}
+	return nil
 }
 
 // discoverAllPostgresMigrationsForValidation returns the full embedded set with

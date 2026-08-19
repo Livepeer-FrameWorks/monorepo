@@ -20,25 +20,26 @@ const pgHarnessImage = "pgvector/pgvector:pg15"
 // (schema/table/column/type/nullability/default), indexes, constraints WITH their full definition
 // (pg_get_constraintdef — so a changed CHECK expression is detected, not just a renamed constraint),
 // triggers (pg_get_triggerdef), and function bodies (md5 of pg_get_functiondef, one line so the
-// line-sorted comparison stays intact). _migrations is excluded (it exists only in the replayed DB).
+// line-sorted comparison stays intact). Migration bookkeeping and baseline
+// provenance tables are excluded because they intentionally differ by install path.
 const pgIntrospectQuery = `
 SELECT 'col|' || table_schema || '|' || table_name || '|' || column_name || '|' ||
        data_type || '|' || is_nullable || '|' || coalesce(column_default, '')
   FROM information_schema.columns
  WHERE table_schema NOT IN ('pg_catalog','information_schema')
-   AND table_name <> '_migrations'
+   AND table_name NOT IN ('_migrations', '_schema_baseline')
 UNION ALL
 SELECT 'idx|' || schemaname || '|' || indexname || '|' || indexdef
   FROM pg_indexes
  WHERE schemaname NOT IN ('pg_catalog','information_schema')
-   AND tablename <> '_migrations'
+   AND tablename NOT IN ('_migrations', '_schema_baseline')
 UNION ALL
 SELECT 'con|' || n.nspname || '|' || t.relname || '|' || c.contype::text || '|' || c.conname || '|' || pg_get_constraintdef(c.oid)
   FROM pg_constraint c
   JOIN pg_class t ON t.oid = c.conrelid
   JOIN pg_namespace n ON n.oid = t.relnamespace
  WHERE n.nspname NOT IN ('pg_catalog','information_schema')
-   AND t.relname <> '_migrations'
+   AND t.relname NOT IN ('_migrations', '_schema_baseline')
    -- Exclude Postgres's synthesized NOT NULL check constraints: their names embed
    -- table OIDs (e.g. 21489_21843_3_not_null) so they differ between the two DBs
    -- as pure noise. NOT NULL is already compared via is_nullable in the column rows.
@@ -50,7 +51,7 @@ SELECT 'trg|' || n.nspname || '|' || t.relname || '|' || tg.tgname || '|' || pg_
   JOIN pg_namespace n ON n.oid = t.relnamespace
  WHERE NOT tg.tgisinternal
    AND n.nspname NOT IN ('pg_catalog','information_schema')
-   AND t.relname <> '_migrations'
+   AND t.relname NOT IN ('_migrations', '_schema_baseline')
 UNION ALL
 SELECT 'fn|' || n.nspname || '|' || p.proname || '|' || md5(pg_get_functiondef(p.oid))
   FROM pg_proc p
@@ -107,6 +108,34 @@ func pgIntrospect(t *testing.T, name, db string) string {
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	sort.Strings(lines)
 	return strings.Join(lines, "\n")
+}
+
+func requirePGSchemasEqual(t *testing.T, label, expected, actual string) {
+	t.Helper()
+	if expected == actual {
+		return
+	}
+
+	expectedSet := map[string]bool{}
+	for _, line := range strings.Split(expected, "\n") {
+		expectedSet[line] = true
+	}
+	actualSet := map[string]bool{}
+	for _, line := range strings.Split(actual, "\n") {
+		actualSet[line] = true
+	}
+	var diffs []string
+	for _, line := range strings.Split(expected, "\n") {
+		if !actualSet[line] {
+			diffs = append(diffs, "  only in expected: "+line)
+		}
+	}
+	for _, line := range strings.Split(actual, "\n") {
+		if !expectedSet[line] {
+			diffs = append(diffs, "  only in actual:   "+line)
+		}
+	}
+	t.Fatalf("%s schemas differ:\n%s", label, strings.Join(diffs, "\n"))
 }
 
 // pgBaselineFiles lists the FrameWorks Postgres baseline schema files: schema/*.sql
@@ -191,27 +220,50 @@ func TestPostgresBaselineEqualsReplay(t *testing.T) {
 	t.Logf("postgres: %d baseline files, %d/%d migrations post-floor (floor=%s)",
 		len(baselines), replayedCount, len(migs), schemaMigrationBaselineFloor)
 
-	if baseline != replayed {
-		// Line-level diff for readability.
-		bset := map[string]bool{}
-		for _, l := range strings.Split(baseline, "\n") {
-			bset[l] = true
-		}
-		rset := map[string]bool{}
-		for _, l := range strings.Split(replayed, "\n") {
-			rset[l] = true
-		}
-		var diffs []string
-		for _, l := range strings.Split(baseline, "\n") {
-			if !rset[l] {
-				diffs = append(diffs, "  only in baseline: "+l)
-			}
-		}
-		for _, l := range strings.Split(replayed, "\n") {
-			if !bset[l] {
-				diffs = append(diffs, "  only in replay:   "+l)
-			}
-		}
-		t.Fatalf("postgres: baseline != baseline+migrations:\n%s", strings.Join(diffs, "\n"))
+	requirePGSchemasEqual(t, "postgres baseline vs baseline+migrations", baseline, replayed)
+}
+
+// TestPostgresTaggedBaselineUpgradeEqualsCurrent proves the actual release
+// lifecycle: a database initialized by the latest shipped tag, plus every
+// migration developed after that tag, converges to the baseline a fresh install
+// receives from the current commit.
+func TestPostgresTaggedBaselineUpgradeEqualsCurrent(t *testing.T) {
+	requireDocker(t)
+	fromTag := schemaVerifyFromTag(t)
+	baselines := pgBaselineFiles(t)
+	known, err := knownMigrationDatabases()
+	if err != nil {
+		t.Fatalf("known migration databases: %v", err)
 	}
+	migrations, err := discoverMigrationsInFS(dbsql.Content, "migrations", known)
+	if err != nil {
+		t.Fatalf("discover postgres migrations: %v", err)
+	}
+	migrations = migrationsAfterVersion(migrations, fromTag)
+
+	const name = "fw-sv-pg-tag"
+	pgStart(t, name)
+
+	pgCreateDB(t, name, "sv_current")
+	for _, file := range baselines {
+		sql, readErr := dbsql.Content.ReadFile(file)
+		if readErr != nil {
+			t.Fatalf("read %s: %v", file, readErr)
+		}
+		pgApply(t, name, "sv_current", string(sql))
+	}
+	current := pgIntrospect(t, name, "sv_current")
+
+	pgCreateDB(t, name, "sv_upgraded")
+	for _, file := range baselines {
+		taggedSQL := repositoryFileAtTag(t, fromTag, "pkg/database/sql/"+file)
+		pgApply(t, name, "sv_upgraded", taggedSQL)
+	}
+	for _, migration := range migrations {
+		pgApply(t, name, "sv_upgraded", migration.content)
+	}
+	upgraded := pgIntrospect(t, name, "sv_upgraded")
+
+	t.Logf("postgres: upgraded %s baseline with %d migration(s) to current", fromTag, len(migrations))
+	requirePGSchemasEqual(t, "postgres tagged baseline upgrade vs current baseline", current, upgraded)
 }

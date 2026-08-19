@@ -92,7 +92,7 @@ func chApply(t *testing.T, name, sql string) {
 func chIntrospect(t *testing.T, name string) map[string]string {
 	t.Helper()
 	out, err := docker(t, "", "exec", name, "clickhouse-client", "-q",
-		"SELECT name FROM system.tables WHERE database = 'periscope' AND name NOT LIKE '.inner%' ORDER BY name")
+		"SELECT name FROM system.tables WHERE database = 'periscope' AND name NOT LIKE '.inner%' AND name NOT IN ('_migrations', '_schema_baseline') ORDER BY name")
 	if err != nil {
 		t.Fatalf("list periscope tables in %s: %v", name, err)
 	}
@@ -164,4 +164,46 @@ func TestClickHouseBaselineEqualsReplay(t *testing.T) {
 	t.Logf("clickhouse periscope: %d baseline objects, %d replayed, %d/%d migrations post-floor (floor=%s)",
 		len(baseline), len(replayed), replayedCount, len(migs), schemaMigrationBaselineFloor)
 	diffSchemas(t, "clickhouse periscope", baseline, replayed)
+}
+
+// TestClickHouseTaggedBaselineUpgradeEqualsCurrent proves in-place upgrade
+// convergence once the shipped baseline is already Replicated. v0.2.95 is the
+// legacy plain-engine source of the one-time cross-host v0.2.96 cutover, so that
+// tag follows cluster clickhouse migrate rather than this in-place path.
+func TestClickHouseTaggedBaselineUpgradeEqualsCurrent(t *testing.T) {
+	requireDocker(t)
+	fromTag := schemaVerifyFromTag(t)
+	taggedSQL := repositoryFileAtTag(t, fromTag, "pkg/database/sql/clickhouse/periscope.sql")
+	if !strings.Contains(taggedSQL, "CREATE DATABASE IF NOT EXISTS periscope ENGINE = Replicated(") {
+		t.Skipf("%s uses the legacy plain ClickHouse source; v0.2.96 migrates it cross-host into a fresh Replicated destination", fromTag)
+	}
+
+	currentSQL, err := dbsql.Content.ReadFile("clickhouse/periscope.sql")
+	if err != nil {
+		t.Fatalf("read current periscope.sql: %v", err)
+	}
+	migrations, err := discoverMigrationsInFS(dbsql.Content, "clickhouse/migrations", map[string]bool{"periscope": true})
+	if err != nil {
+		t.Fatalf("discover clickhouse migrations: %v", err)
+	}
+	migrations = migrationsAfterVersion(migrations, fromTag)
+
+	const currentName, upgradedName = "fw-sv-ch-current", "fw-sv-ch-tag"
+	chStart(t, currentName)
+	chApply(t, currentName, string(currentSQL))
+	current := chIntrospect(t, currentName)
+
+	chStart(t, upgradedName)
+	chApply(t, upgradedName, taggedSQL)
+	for _, migration := range migrations {
+		if out, applyErr := docker(t, migration.content, "exec", "-i", upgradedName,
+			"clickhouse-client", "--database", "periscope", "--multiquery"); applyErr != nil {
+			t.Fatalf("apply migration %s/%s/%s to %s: %v\noutput: %s",
+				migration.Version, migration.Phase, migration.Filename, upgradedName, applyErr, out)
+		}
+	}
+	upgraded := chIntrospect(t, upgradedName)
+
+	t.Logf("clickhouse periscope: upgraded %s Replicated baseline with %d migration(s) to current", fromTag, len(migrations))
+	diffSchemas(t, "clickhouse tagged Replicated baseline upgrade vs current baseline", current, upgraded)
 }

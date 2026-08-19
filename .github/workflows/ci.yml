@@ -22,6 +22,7 @@ jobs:
       go: ${{ steps.filter.outputs.go }}
       frontend: ${{ steps.filter.outputs.frontend }}
       registry: ${{ steps.filter.outputs.registry }}
+      release: ${{ steps.filter.outputs.release }}
     steps:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v4
@@ -53,6 +54,16 @@ jobs:
               - 'website_application/src/routes/**'
               - 'website_application/src/lib/features/registry.json'
               - 'website_docs/src/content/docs/**'
+              - 'Makefile'
+            release:
+              - 'cli/internal/releases/catalog.yaml'
+              - 'cli/pkg/provisioner/**'
+              - 'pkg/database/sql/schema/**'
+              - 'pkg/database/sql/clickhouse/periscope.sql'
+              - 'pkg/database/sql/migrations/**'
+              - 'pkg/database/sql/clickhouse/migrations/**'
+              - 'scripts/check-migration-version.sh'
+              - 'scripts/check-migration-version.test.sh'
               - 'Makefile'
 
   go-build:
@@ -268,6 +279,30 @@ jobs:
           GOTOOLCHAIN: local
       - run: make verify-feature-registry
 
+  migration-release-state:
+    name: Migration release state
+    needs: changes
+    if: needs.changes.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: "**/go.sum"
+        env:
+          GOTOOLCHAIN: local
+      - name: Validate tag, catalog, and migration versions
+        run: make validate-migrations
+        env:
+          RELEASE_DIFF_BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+      - name: Test release-state lifecycle guard
+        run: make test-release-state
+      - name: Prove schema migration convergence
+        run: make verify-schema-migrations
+
   codecov-notify:
     name: Codecov notify
     needs: [go-test, frontend-test, frontend-build]
@@ -292,6 +327,7 @@ jobs:
         frontend-test,
         frontend-build,
         feature-registry,
+        migration-release-state,
       ]
     if: always()
     runs-on: ubuntu-latest

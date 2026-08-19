@@ -79,8 +79,9 @@ func newClusterMigrateValidateCmd() *cobra.Command {
 		Short: "Validate embedded database migrations",
 		Long: `Validate embedded PostgreSQL/YugabyteDB and ClickHouse migration files.
 
-This checks the database/version/phase directory layout and conservative
-expand-phase safety rules before migrations reach an operator cluster.`,
+This checks the database/version/phase directory layout, the release-catalog
+version ceiling, and conservative expand-phase safety rules before migrations
+reach an operator cluster.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pgErr := provisioner.ValidateEmbeddedPostgresMigrations()
 			chErr := provisioner.ValidateEmbeddedClickHouseMigrations()

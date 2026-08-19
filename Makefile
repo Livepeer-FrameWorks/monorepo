@@ -2,7 +2,7 @@
 		build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge build-image-logbook build-image-navigator build-image-deckhand build-image-steward build-image-skipper build-image-chandler \
 		proto proto-check graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test test-cli test-dashboards test-commodore test-quartermaster test-purser test-decklog test-foghorn test-helmsman test-periscope-ingest test-periscope-query test-signalman test-bridge test-navigator test-privateer test-deckhand test-steward test-skipper test-chandler coverage env frontend-env tidy update outdated fmt format \
 		lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
-		validate-migrations verify-schema verify-schema-postgres verify-schema-clickhouse verify-feature-registry seed-demo release-plan test-release-plan \
+		validate-migrations verify-release-state test-release-state verify-schema verify-schema-migrations verify-schema-postgres verify-schema-clickhouse verify-feature-registry seed-demo release-plan test-release-plan \
 		dead-code-install dead-code-go dead-code-ts dead-code-report dead-code \
 		ansible-galaxy-install ansible-lint ansible-yamllint ansible-test ansible-check ansible-molecule ansible-molecule-run ansible-molecule-all provision-hello
 
@@ -563,7 +563,17 @@ lint-report:
 lint-analyze:
 	@./scripts/lint-analyze.sh
 
-validate-migrations:
+verify-release-state:
+	@if [ -n "$(RELEASE_DIFF_BASE)" ]; then \
+		scripts/check-migration-version.sh --diff-base "$(RELEASE_DIFF_BASE)"; \
+	else \
+		scripts/check-migration-version.sh --worktree; \
+	fi
+
+test-release-state:
+	@scripts/check-migration-version.test.sh
+
+validate-migrations: verify-release-state
 	@echo "Validating embedded SQL migrations..."
 	@cd cli && go run . cluster migrate validate
 
@@ -573,14 +583,15 @@ validate-migrations:
 # creation-command CAS/lease, playback-index upgrade, artifact-events dedup, etc. These are the durable
 # gate for concurrency/constraint properties sqlmock can't prove. Needs a running Docker daemon; gated
 # behind the schema_verify build tag so a plain `make test` never needs Docker.
-SCHEMA_VERIFY_TESTS := TestPostgresBaselineEqualsReplay|TestClickHouseBaselineEqualsReplay|TestArtifactEventsDedupedPreservesLegacyRows|TestArtifactPlaybackIndexUpgradeFromReleasedLower|TestCreationCommandAckLeaseClaim|TestCreationCommandAckLeaseTokenFencesStaleSettlement|TestCreationCommandCASMutualExclusion
+SCHEMA_VERIFY_FROM_TAG ?= $(shell git tag --merged HEAD --sort=-v:refname | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$$/ { print; exit }')
+SCHEMA_VERIFY_TESTS := TestPostgresBaselineEqualsReplay|TestPostgresTaggedBaselineUpgradeEqualsCurrent|TestClickHouseBaselineEqualsReplay|TestClickHouseTaggedBaselineUpgradeEqualsCurrent|TestArtifactEventsDedupedPreservesLegacyRows|TestArtifactPlaybackIndexUpgradeFromReleasedLower|TestCreationCommandAckLeaseClaim|TestCreationCommandAckLeaseTokenFencesStaleSettlement|TestCreationCommandCASMutualExclusion
 
 verify-schema:
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-schema requires a running Docker daemon (real-engine tests must run, not skip)"; exit 1; }
 	@echo "Verifying schema convergence + real-engine behavior tests (Docker)..."
 	@# Explicit -run list so ONLY the real-engine schema tests execute — the schema_verify build tag is
 	@# additive and would otherwise also run the package's ordinary (untagged) unit tests.
-	@cd cli && go test -tags schema_verify -run '$(SCHEMA_VERIFY_TESTS)' -count=1 -timeout 1200s ./pkg/provisioner/
+	@cd cli && FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' go test -tags schema_verify -run '$(SCHEMA_VERIFY_TESTS)' -count=1 -timeout 1200s ./pkg/provisioner/
 	@echo "Running real-engine production-path freeze + chapter-auth + thumbnail-foundation tests (Docker: claim concurrency, ledger atomicity, NULL-safe constraints, finalize-node binding, thumbnail publish/completion, deletion-saga tombstone fences, HA recovery lease)..."
 	@cd api_balancing && go test -tags schema_verify -run 'TestClaimFreezeAttempt_RealPG|TestClaimFreezeAttempt_LedgerAtomicity_RealPG|TestFreezeConstraints_RealPG|TestChapterFinalizeNodeBinding_RealPG|TestThumbnailPublication_RealPG|TestThumbnailCompletion_RealPG|TestThumbnailProjectionFence_RealPG|TestThumbnailProjectionRecoveryPoison_RealPG|TestThumbnailProjectionReassert_RealPG|TestThumbnailReassertClaim_LeaseAndLimit_RealPG|TestThumbnailServingClusterTriggersReprojection_RealPG|TestStreamCleanupSaga_TombstoneFences_RealPG|TestThumbnailRecoveryLease_RealPG|TestThumbnailPromoteVsDeleteLeak_RealPG|TestThumbnailPublishLease_RealPG|TestThumbnailPublishTokenFence_RealPG|TestThumbnailRecoveryRedrivesTokenizedPublishing_RealPG|TestThumbnailPublishingRequiresToken_RealPG|TestEnforceImmutableLocalBackend_RealPG|TestEnforceImmutableLocalBackend_ExactMatchNotNormalized_RealPG|TestEnforceImmutableLocalBackend_ConcurrentFirstBootRace_RealPG|TestAdoptOrEnforceLocalBackend_FirstBootAdoption_RealPG|TestIngestSessionIdentity_RealPG|TestIngestSessionConcurrentCreate_RealPG|TestDVRCloseBeforeStartFence_RealPG|TestIngestSessionSchemaInvariants_RealPG|TestDVRRecheckGenerationScoped_RealPG|TestListUnstartedDVRIntents_RealPG|TestIngestSessionReuseAndStopClaim_RealPG|TestIngestSessionConcurrentDifferentSessions_RealPG|TestAdvisoryLockKeysAreValidPGText_RealPG|TestStopDVRForEndedSourceGenerationFence_RealPG|TestIngestSessionAlreadyEndedIdempotency_RealPG|TestIngestSessionConcurrentCrossNodeAdmission_RealPG|TestEndIngestSessionsForStreamEnd_ReapsLostCloseFencedByEventTime_RealPG|TestIngestSessionReaper_RealPG|TestIngestSessionReaper_BlipToleranceRealPG|TestIngestSessionReaper_RechecksAbsenceUnderRetireGuardRealPG|TestNeverProjectedSessionReaperQueuesInactiveProjectionRealPG|TestIngestCloseTombstone_RealPG|TestFenceOfflineBackstop_RealPG|TestProjectSourceIfCurrent_RealPG|TestOfflineEffectSerializesWithAdmission_RealPG|TestOfflineEffectSupersededByReconnect_RealPG|TestProjectSourceFailureAbortsPendingSession_RealPG|TestPushRewriteRetry_IdempotentResumedProjection_RealPG|TestResumedProjectionDeniedWhenRegistryHoldsNewerRevision_RealPG|TestAdmissionEffectApplyAndSupersede_RealPG|TestAdmissionEffectPoisonSettlesLegOnly_RealPG|TestAdmissionAckCompletesWhileWorkerPaused_RealPG|TestAdmissionClaimAffinityRoutesToAuthority_RealPG' -count=1 -timeout 600s ./internal/control/
 	@echo "Running real-engine admission-ledger to Redis membership-cleanup proof (Docker: tenant/revision anti-join and exact tombstone purge)..."
@@ -592,16 +603,21 @@ verify-schema:
 	@echo "Running real-engine ingest placement-claim ownership tests (Docker: same-cluster theft, reserve-vs-refresh, lapse, owner-fenced renew/release, cross-writer isolation)..."
 	@cd api_control && go test -tags schema_verify -run 'TestValidateStreamKey_SameClusterCannotStealLiveClaim_RealPG|TestValidateStreamKey_OwnerRefreshIsNotAReservation_RealPG|TestValidateStreamKey_LapsedClaimIsReservable_RealPG|TestSyncActiveIngestPlacement_ReleaseRequiresOwnership_RealPG|TestSyncActiveIngestPlacement_RenewalRequiresOwnership_RealPG|TestSyncActiveIngestPlacement_RenewalEstablishesUnheldClaim_RealPG|TestClearStreamActiveCluster_CannotClearPushClaim_RealPG' -count=1 -timeout 600s ./internal/grpc/
 
+verify-schema-migrations:
+	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-schema-migrations requires a running Docker daemon"; exit 1; }
+	@echo "Verifying PostgreSQL tagged upgrades and current baseline replay on PostgreSQL/ClickHouse (Docker)..."
+	@cd cli && FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' go test -tags schema_verify -run 'TestPostgresBaselineEqualsReplay|TestPostgresTaggedBaselineUpgradeEqualsCurrent|TestClickHouseBaselineEqualsReplay|TestClickHouseTaggedBaselineUpgradeEqualsCurrent' -count=1 -timeout 1200s ./pkg/provisioner/
+
 # Granular subsets of the suite above, for iterating on one engine without the full run.
 verify-schema-postgres:
-	@echo "Verifying Postgres baseline == baseline + post-floor migrations (Docker)..."
-	@cd cli && go test -tags schema_verify -run TestPostgresBaselineEqualsReplay -count=1 -timeout 600s ./pkg/provisioner/
+	@echo "Verifying Postgres current baseline and tagged-release upgrade convergence (Docker)..."
+	@cd cli && FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' go test -tags schema_verify -run 'TestPostgresBaselineEqualsReplay|TestPostgresTaggedBaselineUpgradeEqualsCurrent' -count=1 -timeout 600s ./pkg/provisioner/
 	@echo "Verifying the real PostgreSQL admission-ledger proof drives exact Redis membership cleanup..."
 	@cd api_balancing && go test -tags schema_verify -run 'TestMembershipTombstoneCleanup_PostgresProofToRedisPurge_RealPG' -count=1 -timeout 600s ./internal/federation/
 
 verify-schema-clickhouse:
-	@echo "Verifying ClickHouse baseline == baseline + post-floor migrations (Docker)..."
-	@cd cli && go test -tags schema_verify -run TestClickHouseBaselineEqualsReplay -count=1 -timeout 600s ./pkg/provisioner/
+	@echo "Verifying Replicated ClickHouse baseline == baseline + post-floor migrations (Docker)..."
+	@cd cli && FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' go test -tags schema_verify -run 'TestClickHouseBaselineEqualsReplay|TestClickHouseTaggedBaselineUpgradeEqualsCurrent' -count=1 -timeout 600s ./pkg/provisioner/
 
 verify-feature-registry:
 	@echo "Validating docs/platform-features.yaml and checking generated renderers..."
