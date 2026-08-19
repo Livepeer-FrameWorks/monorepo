@@ -59,6 +59,8 @@ func newQMGRPCClientFromContext(ctx context.Context) (*qmclient.GRPCClient, fwcf
 		Logger:        logging.NewLogger(),
 		ServiceToken:  ctxCfg.Auth.ServiceToken,
 		AllowInsecure: ep.AllowInsecure,
+		CACertFile:    ep.CACertFile,
+		CACertPEM:     ep.CACertPEM,
 		ServerName:    ep.ServerName,
 	})
 	if err != nil {

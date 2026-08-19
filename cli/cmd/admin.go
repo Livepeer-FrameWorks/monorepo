@@ -335,6 +335,8 @@ func commodoreGRPCClientFromContext(ctx context.Context) (*commodore.GRPCClient,
 		Logger:        logging.NewLogger(),
 		ServiceToken:  ctxCfg.Auth.ServiceToken,
 		AllowInsecure: ep.AllowInsecure,
+		CACertFile:    ep.CACertFile,
+		CACertPEM:     ep.CACertPEM,
 		ServerName:    ep.ServerName,
 	})
 	if err != nil {
@@ -550,6 +552,8 @@ func qmGRPCClientFromContext(ctx context.Context) (*qmclient.GRPCClient, fwcfg.C
 		Logger:        logging.NewLogger(),
 		ServiceToken:  ctxCfg.Auth.ServiceToken,
 		AllowInsecure: ep.AllowInsecure,
+		CACertFile:    ep.CACertFile,
+		CACertPEM:     ep.CACertPEM,
 		ServerName:    ep.ServerName,
 	})
 	if err != nil {
@@ -576,6 +580,8 @@ func foghornGRPCClientFromContext(ctx context.Context) (*fhclient.GRPCClient, fw
 		Logger:        logging.NewLogger(),
 		ServiceToken:  ctxCfg.Auth.ServiceToken,
 		UseTLS:        !ep.AllowInsecure,
+		CACertFile:    ep.CACertFile,
+		CACertPEM:     ep.CACertPEM,
 		ServerName:    ep.ServerName,
 		AllowInsecure: ep.AllowInsecure,
 	})
@@ -603,6 +609,8 @@ func purserGRPCClientFromContext(ctx context.Context) (*purserclient.GRPCClient,
 		Logger:        logging.NewLogger(),
 		ServiceToken:  ctxCfg.Auth.ServiceToken,
 		AllowInsecure: ep.AllowInsecure,
+		CACertFile:    ep.CACertFile,
+		CACertPEM:     ep.CACertPEM,
 		ServerName:    ep.ServerName,
 	})
 	if err != nil {

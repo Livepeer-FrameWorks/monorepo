@@ -242,6 +242,8 @@ func getQuartermasterGRPCClient(ctx context.Context) (*quartermaster.GRPCClient,
 		Logger:        logging.NewLogger(),
 		ServiceToken:  ctxConfig.Auth.ServiceToken,
 		AllowInsecure: ep.AllowInsecure,
+		CACertFile:    ep.CACertFile,
+		CACertPEM:     ep.CACertPEM,
 		ServerName:    ep.ServerName,
 	})
 	if err != nil {

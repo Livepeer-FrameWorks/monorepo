@@ -49,6 +49,7 @@ type GRPCConfig struct {
 	// UseTLS enables TLS transport. Uses system CA pool for validation.
 	UseTLS     bool
 	CACertFile string
+	CACertPEM  string
 	ServerName string
 	// AllowInsecure disables TLS for operator-local/debug gRPC paths.
 	AllowInsecure bool
@@ -164,6 +165,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 func foghornClientTLSConfig(config GRPCConfig) grpcutil.ClientTLSConfig {
 	tlsCfg := grpcutil.ClientTLSConfig{
 		CACertFile:        config.CACertFile,
+		CACertPEM:         config.CACertPEM,
 		ServerName:        config.ServerName,
 		DefaultServerName: InternalServerName,
 	}
@@ -171,7 +173,7 @@ func foghornClientTLSConfig(config GRPCConfig) grpcutil.ClientTLSConfig {
 		tlsCfg.AllowInsecure = true
 		return tlsCfg
 	}
-	if config.UseTLS || config.CACertFile != "" || config.ServerName != "" || grpcutil.AddrIsFQDN(config.GRPCAddr) || configpkg.IsProduction() {
+	if config.UseTLS || config.CACertFile != "" || config.CACertPEM != "" || config.ServerName != "" || grpcutil.AddrIsFQDN(config.GRPCAddr) || configpkg.IsProduction() {
 		return tlsCfg
 	}
 	tlsCfg.AllowInsecure = true

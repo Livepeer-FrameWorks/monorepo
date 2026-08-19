@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"path/filepath"
 	"strings"
 
 	fwcfg "frameworks/cli/internal/config"
+	"frameworks/cli/internal/internalpki"
 	fwgitops "frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/remoteaccess"
@@ -18,6 +20,8 @@ type Endpoint struct {
 	Address       string
 	ServerName    string
 	AllowInsecure bool
+	CACertFile    string
+	CACertPEM     string
 	cleanup       func()
 }
 
@@ -105,10 +109,14 @@ func ResolveGRPC(ctx context.Context, ctxCfg fwcfg.Context, service string) (End
 }
 
 type Resolver struct {
-	ctxCfg          fwcfg.Context
-	manifest        *inventory.Manifest
-	manifestCleanup func()
-	sshSession      *remoteaccess.Session
+	ctxCfg           fwcfg.Context
+	manifest         *inventory.Manifest
+	manifestPath     string
+	manifestAgeKey   string
+	manifestCleanup  func()
+	sshSession       *remoteaccess.Session
+	internalCAPEM    string
+	internalCALoaded bool
 }
 
 func NewResolver(ctxCfg fwcfg.Context) *Resolver {
@@ -128,6 +136,10 @@ func (r *Resolver) Close() {
 		r.manifestCleanup = nil
 	}
 	r.manifest = nil
+	r.manifestPath = ""
+	r.manifestAgeKey = ""
+	r.internalCAPEM = ""
+	r.internalCALoaded = false
 }
 
 func (r *Resolver) ResolveGRPC(ctx context.Context, service string) (Endpoint, error) {
@@ -159,9 +171,10 @@ func (r *Resolver) ResolveGRPC(ctx context.Context, service string) (Endpoint, e
 			return Endpoint{}, err
 		}
 		if r.sshSession == nil {
+			allowInsecure := manifestAllowsInsecureGRPC(ctxCfg, manifest)
 			sess, sessErr := remoteaccess.OpenSession(remoteaccess.Options{
 				Manifest:      manifest,
-				AllowInsecure: true,
+				AllowInsecure: allowInsecure,
 			})
 			if sessErr != nil {
 				return Endpoint{}, sessErr
@@ -175,10 +188,16 @@ func (r *Resolver) ResolveGRPC(ctx context.Context, service string) (Endpoint, e
 		if err != nil {
 			return Endpoint{}, err
 		}
+		caFile, caPEM, err := r.manifestTLSRoots()
+		if err != nil {
+			return Endpoint{}, err
+		}
 		return Endpoint{
 			Address:       ep.DialAddr,
 			ServerName:    ep.ServerName,
 			AllowInsecure: ep.Insecure,
+			CACertFile:    caFile,
+			CACertPEM:     caPEM,
 		}, nil
 	case fwcfg.AccessModeMesh:
 		if ctxCfg.Persona != fwcfg.PersonaPlatform {
@@ -195,7 +214,22 @@ func (r *Resolver) ResolveGRPC(ctx context.Context, service string) (Endpoint, e
 		if err != nil {
 			return Endpoint{}, err
 		}
-		return Endpoint{Address: addr, AllowInsecure: true}, nil
+		allowInsecure := manifestAllowsInsecureGRPC(ctxCfg, manifest)
+		caFile, caPEM, err := r.manifestTLSRoots()
+		if err != nil {
+			return Endpoint{}, err
+		}
+		serverName := ""
+		if !allowInsecure {
+			serverName = spec.manifestID + ".internal"
+		}
+		return Endpoint{
+			Address:       addr,
+			ServerName:    serverName,
+			AllowInsecure: allowInsecure,
+			CACertFile:    caFile,
+			CACertPEM:     caPEM,
+		}, nil
 	default:
 		return Endpoint{}, fmt.Errorf("unsupported access_mode %q in context %q", ctxCfg.AccessMode, ctxCfg.Name)
 	}
@@ -205,19 +239,58 @@ func (r *Resolver) loadManifest(ctx context.Context) (*inventory.Manifest, error
 	if r.manifest != nil {
 		return r.manifest, nil
 	}
-	manifest, cleanup, err := loadContextManifest(ctx, r.ctxCfg)
+	manifest, manifestPath, ageKey, cleanup, err := loadContextManifest(ctx, r.ctxCfg)
 	if err != nil {
 		return nil, err
 	}
 	r.manifest = manifest
+	r.manifestPath = manifestPath
+	r.manifestAgeKey = ageKey
 	r.manifestCleanup = cleanup
 	return manifest, nil
 }
 
-func loadContextManifest(ctx context.Context, ctxCfg fwcfg.Context) (*inventory.Manifest, func(), error) {
+func (r *Resolver) manifestTLSRoots() (string, string, error) {
+	if manifestAllowsInsecureGRPC(r.ctxCfg, r.manifest) {
+		return "", "", nil
+	}
+	if caFile := strings.TrimSpace(r.ctxCfg.Endpoints.TLSCACert); caFile != "" {
+		return caFile, "", nil
+	}
+	if r.internalCALoaded {
+		return "", r.internalCAPEM, nil
+	}
+	sharedEnv, err := inventory.LoadSharedEnv(r.manifest, filepath.Dir(r.manifestPath), r.manifestAgeKey)
+	if err != nil {
+		return "", "", fmt.Errorf("load shared env for control-plane TLS: %w", err)
+	}
+	material, err := internalpki.LoadMaterial(sharedEnv, filepath.Dir(r.manifestPath))
+	if err != nil {
+		return "", "", fmt.Errorf("load internal CA for control-plane TLS: %w", err)
+	}
+	r.internalCAPEM = material.CABundlePEM()
+	r.internalCALoaded = true
+	return "", r.internalCAPEM, nil
+}
+
+func manifestAllowsInsecureGRPC(ctxCfg fwcfg.Context, manifest *inventory.Manifest) bool {
+	if ctxCfg.Endpoints.UseTLS {
+		return false
+	}
+	if ctxCfg.Endpoints.AllowInsecure {
+		return true
+	}
+	if manifest == nil {
+		return false
+	}
+	profile := strings.ToLower(strings.TrimSpace(manifest.Profile))
+	return profile == "dev" || profile == "development"
+}
+
+func loadContextManifest(ctx context.Context, ctxCfg fwcfg.Context) (*inventory.Manifest, string, string, func(), error) {
 	cfg, err := fwcfg.Load()
 	if err != nil {
-		return nil, func() {}, err
+		return nil, "", "", func() {}, err
 	}
 	rm, err := inventory.ResolveManifestSource(inventory.ResolveInput{
 		Env:         fwcfg.MapEnv{},
@@ -228,7 +301,7 @@ func loadContextManifest(ctx context.Context, ctxCfg fwcfg.Context) (*inventory.
 		Ctx:         ctx,
 	})
 	if err != nil {
-		return nil, func() {}, fmt.Errorf("resolve manifest for control-plane endpoint: %w", err)
+		return nil, "", "", func() {}, fmt.Errorf("resolve manifest for control-plane endpoint: %w", err)
 	}
 	cleanup := rm.Cleanup
 	if cleanup == nil {
@@ -237,9 +310,9 @@ func loadContextManifest(ctx context.Context, ctxCfg fwcfg.Context) (*inventory.
 	manifest, err := inventory.LoadWithHosts(rm.Path, rm.AgeKey)
 	if err != nil {
 		cleanup()
-		return nil, func() {}, fmt.Errorf("load manifest hosts for control-plane endpoint: %w", err)
+		return nil, "", "", func() {}, fmt.Errorf("load manifest hosts for control-plane endpoint: %w", err)
 	}
-	return manifest, cleanup, nil
+	return manifest, rm.Path, rm.AgeKey, cleanup, nil
 }
 
 func manifestMeshGRPCAddr(manifest *inventory.Manifest, serviceName string, defaultPort int) (string, error) {
@@ -281,7 +354,7 @@ func nonLocalOverride(addr string) string {
 
 func savedEndpoint(ctxCfg fwcfg.Context, addr string) (Endpoint, error) {
 	if ctxCfg.Endpoints.UseTLS {
-		return Endpoint{Address: addr}, nil
+		return Endpoint{Address: addr, CACertFile: strings.TrimSpace(ctxCfg.Endpoints.TLSCACert)}, nil
 	}
 	if ctxCfg.Endpoints.AllowInsecure || fwcfg.IsLocalhostEndpoint(addr) {
 		return Endpoint{Address: addr, AllowInsecure: true}, nil

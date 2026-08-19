@@ -50,6 +50,7 @@ type GRPCConfig struct {
 	ServiceToken  string
 	AllowInsecure bool
 	CACertFile    string
+	CACertPEM     string
 	ServerName    string
 }
 
@@ -108,6 +109,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 
 	tlsCfg := grpcutil.ClientTLSConfig{
 		CACertFile:        config.CACertFile,
+		CACertPEM:         config.CACertPEM,
 		ServerName:        config.ServerName,
 		DefaultServerName: DefaultServerName,
 		AllowInsecure:     config.AllowInsecure,

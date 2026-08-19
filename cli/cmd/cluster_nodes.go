@@ -1224,6 +1224,8 @@ func clusterNodesQMClientFromContext(ctx context.Context) (*qmclient.GRPCClient,
 		Logger:        logging.NewLogger(),
 		ServiceToken:  ctxCfg.Auth.ServiceToken,
 		AllowInsecure: ep.AllowInsecure,
+		CACertFile:    ep.CACertFile,
+		CACertPEM:     ep.CACertPEM,
 		ServerName:    ep.ServerName,
 	})
 	if err != nil {
@@ -1248,6 +1250,8 @@ func clusterNodesFoghornClientFromContext(ctx context.Context) (*fhclient.GRPCCl
 		Logger:        logging.NewLogger(),
 		ServiceToken:  ctxCfg.Auth.ServiceToken,
 		UseTLS:        !ep.AllowInsecure,
+		CACertFile:    ep.CACertFile,
+		CACertPEM:     ep.CACertPEM,
 		ServerName:    ep.ServerName,
 		AllowInsecure: ep.AllowInsecure,
 	})

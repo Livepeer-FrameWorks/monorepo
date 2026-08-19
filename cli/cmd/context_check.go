@@ -218,6 +218,8 @@ func runReachabilityChecks(parent context.Context, c fwcfg.Context, timeout time
 		ctx, cancel := contextWithTimeout(parent, timeout)
 		defer cancel()
 		transport, err := grpcutil.ClientTLS(grpcutil.ClientTLSConfig{
+			CACertFile:    target.CACertFile,
+			CACertPEM:     target.CACertPEM,
 			ServerName:    target.ServerName,
 			AllowInsecure: target.AllowInsecure,
 		}, nil)

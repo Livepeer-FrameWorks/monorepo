@@ -2055,6 +2055,8 @@ func edgeQuartermasterRegistrationClient(ctx context.Context, cliCtx fwcfg.Conte
 		ServiceToken:       cliCtx.Auth.ServiceToken,
 		PreferServiceToken: true,
 		AllowInsecure:      ep.AllowInsecure,
+		CACertFile:         ep.CACertFile,
+		CACertPEM:          ep.CACertPEM,
 		ServerName:         ep.ServerName,
 	})
 	if err != nil {
@@ -2181,7 +2183,8 @@ func fetchCertFromNavigator(cmd *cobra.Command, cliCtx fwcfg.Context, domain, em
 		Timeout:       120 * time.Second, // ACME can take a while
 		ServiceToken:  cliCtx.Auth.ServiceToken,
 		AllowInsecure: ep.AllowInsecure,
-		CACertFile:    os.Getenv("GRPC_TLS_CA_PATH"),
+		CACertFile:    firstNonEmpty(ep.CACertFile, os.Getenv("GRPC_TLS_CA_PATH")),
+		CACertPEM:     ep.CACertPEM,
 		ServerName:    ep.ServerName,
 	})
 	if err != nil {

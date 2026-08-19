@@ -2,12 +2,14 @@ package controlplane
 
 import (
 	"context"
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	fwcfg "frameworks/cli/internal/config"
+	"frameworks/cli/pkg/inventory"
 )
 
 func TestResolveGRPCLocalUsesSavedEndpoint(t *testing.T) {
@@ -32,6 +34,7 @@ func TestResolveGRPCMeshUsesManifestWireGuardAddress(t *testing.T) {
 	manifestPath := writeManifest(t, `
 version: v1
 type: cluster
+profile: development
 root_domain: example.test
 hosts:
   core-1:
@@ -69,6 +72,7 @@ func TestResolveGRPCMeshRequiresWireGuardAddress(t *testing.T) {
 	manifestPath := writeManifest(t, `
 version: v1
 type: cluster
+profile: development
 root_domain: example.test
 hosts:
   core-1:
@@ -161,6 +165,78 @@ func TestResolveGRPCSSHOverrideHonorsUseTLSForServiceName(t *testing.T) {
 	}
 	if ep.AllowInsecure {
 		t.Fatal("AllowInsecure = true, want false when use_tls is explicit")
+	}
+}
+
+func TestSavedEndpointTLSPropagatesCustomCA(t *testing.T) {
+	t.Parallel()
+	ctx := fwcfg.Context{
+		Endpoints: fwcfg.Endpoints{
+			UseTLS:    true,
+			TLSCACert: "/tmp/frameworks-ca.crt",
+		},
+	}
+	ep, err := savedEndpoint(ctx, "quartermaster.internal:19002")
+	if err != nil {
+		t.Fatalf("savedEndpoint: %v", err)
+	}
+	if ep.AllowInsecure {
+		t.Fatal("AllowInsecure = true, want verified TLS")
+	}
+	if ep.CACertFile != "/tmp/frameworks-ca.crt" {
+		t.Fatalf("CACertFile = %q", ep.CACertFile)
+	}
+}
+
+func TestManifestTransportPolicy(t *testing.T) {
+	t.Parallel()
+	production := &inventory.Manifest{Profile: "production"}
+	development := &inventory.Manifest{Profile: "development"}
+	if manifestAllowsInsecureGRPC(fwcfg.Context{}, production) {
+		t.Fatal("production manifest selected plaintext gRPC")
+	}
+	if !manifestAllowsInsecureGRPC(fwcfg.Context{}, development) {
+		t.Fatal("development manifest did not select plaintext gRPC")
+	}
+	if manifestAllowsInsecureGRPC(fwcfg.Context{Endpoints: fwcfg.Endpoints{UseTLS: true}}, development) {
+		t.Fatal("explicit TLS did not override development plaintext default")
+	}
+	if !manifestAllowsInsecureGRPC(fwcfg.Context{Endpoints: fwcfg.Endpoints{AllowInsecure: true}}, production) {
+		t.Fatal("explicit plaintext did not override production TLS default")
+	}
+}
+
+func TestManifestTLSRootsLoadsInternalCAFromGitOpsEnv(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	encode := func(value string) string {
+		return base64.StdEncoding.EncodeToString([]byte(value))
+	}
+	env := strings.Join([]string{
+		"NAVIGATOR_INTERNAL_CA_ROOT_CERT_PEM_B64=" + encode("root"),
+		"NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_PEM_B64=" + encode("intermediate"),
+		"NAVIGATOR_INTERNAL_CA_INTERMEDIATE_KEY_PEM_B64=" + encode("key"),
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(dir, "shared.env"), []byte(env), 0o600); err != nil {
+		t.Fatalf("write shared env: %v", err)
+	}
+	r := &Resolver{
+		ctxCfg: fwcfg.Context{},
+		manifest: &inventory.Manifest{
+			Profile:  "production",
+			EnvFiles: []string{"shared.env"},
+		},
+		manifestPath: filepath.Join(dir, "cluster.yaml"),
+	}
+	caFile, caPEM, err := r.manifestTLSRoots()
+	if err != nil {
+		t.Fatalf("manifestTLSRoots: %v", err)
+	}
+	if caFile != "" {
+		t.Fatalf("CACertFile = %q, want inline GitOps CA", caFile)
+	}
+	if caPEM != "root\nintermediate\n" {
+		t.Fatalf("CACertPEM = %q", caPEM)
 	}
 }
 

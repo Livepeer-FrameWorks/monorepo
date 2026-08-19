@@ -66,6 +66,8 @@ func getMeshQuartermasterGRPCClient(ctx context.Context) (*quartermaster.GRPCCli
 		Logger:        logging.NewLogger(),
 		ServiceToken:  ctxConfig.Auth.ServiceToken,
 		AllowInsecure: ep.AllowInsecure,
+		CACertFile:    ep.CACertFile,
+		CACertPEM:     ep.CACertPEM,
 		ServerName:    ep.ServerName,
 	})
 	if err != nil {

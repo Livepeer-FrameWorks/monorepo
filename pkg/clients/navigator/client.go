@@ -32,6 +32,7 @@ type Config struct {
 	ServiceToken  string
 	AllowInsecure bool
 	CACertFile    string
+	CACertPEM     string
 	ServerName    string
 }
 
@@ -63,6 +64,7 @@ func NewClient(config Config) (*Client, error) {
 
 	transport, err := grpcutil.ClientTLS(grpcutil.ClientTLSConfig{
 		CACertFile:        config.CACertFile,
+		CACertPEM:         config.CACertPEM,
 		ServerName:        config.ServerName,
 		DefaultServerName: DefaultServerName,
 		AllowInsecure:     config.AllowInsecure,

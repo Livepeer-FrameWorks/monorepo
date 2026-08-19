@@ -27,6 +27,7 @@ import (
 	"time"
 
 	fwcfg "frameworks/cli/internal/config"
+	"frameworks/cli/internal/internalpki"
 	meshutil "frameworks/cli/internal/mesh"
 	"frameworks/cli/internal/readiness"
 	"frameworks/cli/internal/ux"
@@ -1888,50 +1889,11 @@ func loadInternalPKIBootstrap(sharedEnv map[string]string, manifestDir string) (
 }
 
 func loadInternalCAMaterial(env map[string]string, manifestDir string) (string, string, string, error) {
-	rootB64 := strings.TrimSpace(env["NAVIGATOR_INTERNAL_CA_ROOT_CERT_PEM_B64"])
-	intermediateB64 := strings.TrimSpace(env["NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_PEM_B64"])
-	keyB64 := strings.TrimSpace(env["NAVIGATOR_INTERNAL_CA_INTERMEDIATE_KEY_PEM_B64"])
-	if rootB64 != "" || intermediateB64 != "" || keyB64 != "" {
-		if rootB64 == "" || intermediateB64 == "" || keyB64 == "" {
-			return "", "", "", fmt.Errorf("internal CA base64 env requires root cert, intermediate cert, and intermediate key")
-		}
-		rootPEM, err := decodeB64PEM(rootB64, "root ca cert")
-		if err != nil {
-			return "", "", "", err
-		}
-		intermediatePEM, err := decodeB64PEM(intermediateB64, "intermediate ca cert")
-		if err != nil {
-			return "", "", "", err
-		}
-		keyPEM, err := decodeB64PEM(keyB64, "intermediate ca key")
-		if err != nil {
-			return "", "", "", err
-		}
-		return rootPEM, intermediatePEM, keyPEM, nil
-	}
-
-	rootFile := strings.TrimSpace(env["NAVIGATOR_INTERNAL_CA_ROOT_CERT_FILE"])
-	intermediateFile := strings.TrimSpace(env["NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_FILE"])
-	keyFile := strings.TrimSpace(env["NAVIGATOR_INTERNAL_CA_INTERMEDIATE_KEY_FILE"])
-	if rootFile == "" && intermediateFile == "" && keyFile == "" {
-		return "", "", "", fmt.Errorf("internal CA material is required for non-dev internal gRPC TLS")
-	}
-	if rootFile == "" || intermediateFile == "" || keyFile == "" {
-		return "", "", "", fmt.Errorf("internal CA file env requires root cert, intermediate cert, and intermediate key")
-	}
-	rootPEM, err := readPEMFile(resolveEnvFilePath(rootFile, manifestDir), "root ca cert")
+	material, err := internalpki.LoadMaterial(env, manifestDir)
 	if err != nil {
 		return "", "", "", err
 	}
-	intermediatePEM, err := readPEMFile(resolveEnvFilePath(intermediateFile, manifestDir), "intermediate ca cert")
-	if err != nil {
-		return "", "", "", err
-	}
-	keyPEM, err := readPEMFile(resolveEnvFilePath(keyFile, manifestDir), "intermediate ca key")
-	if err != nil {
-		return "", "", "", err
-	}
-	return rootPEM, intermediatePEM, keyPEM, nil
+	return material.RootCertPEM, material.IntermediateCertPEM, material.IntermediateKeyPEM, nil
 }
 
 func decodeB64PEM(value, label string) (string, error) {
@@ -1947,14 +1909,6 @@ func resolveEnvFilePath(path, manifestDir string) string {
 		return path
 	}
 	return filepath.Join(manifestDir, path)
-}
-
-func readPEMFile(path, label string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("read %s %q: %w", label, path, err)
-	}
-	return string(data), nil
 }
 
 func parseCertificatePEM(certPEM string) (*x509.Certificate, error) {
