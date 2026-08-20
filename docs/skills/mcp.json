@@ -23,8 +23,10 @@
       "resources/read:clusters://marketplace"
     ],
     "bearer": {
-      "description": "JWT from login or long-lived API token from account settings",
-      "header": "Authorization"
+      "description": "JWT from login or scoped API token from account settings",
+      "header": "Authorization",
+      "scope_filtered_discovery": ["tools", "resources", "resource_templates"],
+      "high_risk_scope": "mcp:high-risk"
     },
     "wallet": {
       "description": "Server-issued, single-use EIP-191 wallet challenge (auto-provisions a prepaid account on first login)",
@@ -45,7 +47,15 @@
   "capabilities": {
     "tools": true,
     "resources": true,
-    "prompts": true
+    "prompts": true,
+    "tool_annotations": true,
+    "structured_content": true
+  },
+  "limits": {
+    "request_bytes": 262144,
+    "tool_result_bytes": 65536,
+    "resource_result_bytes": 65536,
+    "session_timeout_seconds": 1800
   },
   "endpoints": {
     "mcp": "https://bridge.frameworks.network/mcp",

@@ -126,6 +126,17 @@ Configure long-lived MCP clients with `Authorization: Bearer <API token>`.
 Wallet headers are deliberately single-use bootstrap credentials and are not
 suitable for static client configuration.
 
+API-token tool and resource discovery is scope-filtered, and resource reads
+enforce the corresponding domain read scope. Grant only the domain permissions
+the agent needs (`streams:*`, `billing:*`, `analytics:read`,
+`infrastructure:*`, and the corresponding
+account/support/developer/consultant/security scopes).
+High-risk MCP tools additionally require `mcp:high-risk`; this is explicit
+pre-authorization for unattended destructive, credential-changing, costly, or
+arbitrary-query operations. Do not grant it to read-only agents.
+Public operations need no credential, but a supplied API token remains bounded
+by its scopes because authenticated responses may contain tenant-enriched data.
+
 ## x402 Payments
 
 Official x402 v2 gasless USDC payments for confirmed prepaid top-ups.

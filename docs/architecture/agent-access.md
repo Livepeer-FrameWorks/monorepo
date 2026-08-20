@@ -431,6 +431,44 @@ count.
 
 Code: `api_gateway/internal/mcp/` (tools, resources, prompts, preflight), `api_consultant/internal/` (mcpclient, mcpspoke, chat orchestrator). For full tool parameters, see the [public docs](https://logbook.frameworks.network/agents/mcp/).
 
+### MCP security contract
+
+Every Gateway tool has an authoritative server-side policy containing its
+permission scope and `read`, `write`, or `high` risk class. Registration fails
+when that policy is missing. The MCP title and read-only, destructive,
+idempotent, and open-world annotations are derived from the same policy, but
+remain advisory hints; authorization never trusts client interpretation of
+annotations.
+
+JWT and wallet sessions use the represented interactive user's existing role.
+API tokens are fail-closed and require the tool's exact domain scope:
+`account:*`, `billing:*`, `streams:*`, `analytics:read`, `support:read`,
+`infrastructure:*`, `developer:*`, `consultant:use`, or `security:*`. A
+high-risk tool called with an API token additionally requires
+`mcp:high-risk`. Granting that scope is the owner's explicit pre-authorization
+for unattended destructive, credential-changing, financially costly, or
+arbitrary-query operations; per-tool confirmation fields and downstream
+authorization checks still apply.
+
+Public operations remain available without credentials. When an API token is
+present, its scopes still apply to public operations so an authenticated,
+tenant-enriched response cannot bypass least privilege; clients that need only
+the anonymous representation can omit the token.
+
+`tools/list`, `resources/list`, and `resources/templates/list` are filtered to
+the operations and data callable by the current credential. Resource reads
+enforce the corresponding read scope and unknown resources fail closed.
+Unauthenticated discovery exposes only public tools and resources. Input objects
+reject unknown properties, constrained values are published as JSON Schema
+enums, and all successful tool results use the SDK's validated structured JSON
+plus its JSON text fallback.
+
+The HTTP transport accepts at most 256 KiB per request, expires stateful
+sessions after 30 minutes, validates browser origins against the Gateway origin
+allowlist, and rejects tool results and resource reads above 64 KiB with a
+structured `RESULT_TOO_LARGE` error. Collection tools retain their tighter
+per-tool limits.
+
 ### Preflight Checks
 
 Before billable operations, the preflight checker validates:

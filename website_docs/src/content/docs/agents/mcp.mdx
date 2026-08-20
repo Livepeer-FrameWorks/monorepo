@@ -63,6 +63,32 @@ claude mcp add frameworks %GATEWAY_URL%/mcp
 
 Any MCP-compatible client can connect using the endpoint URL and authentication headers. See [Wallet Auth](/agents/wallet-auth) for headless agent auth or use a bearer token.
 
+### Scoped access and risk controls
+
+Interactive JWT and wallet sessions use the signed-in user's platform role. API tokens are narrower:
+each tool requires its published domain permission, such as `streams:read`, `streams:write`,
+`billing:read`, `billing:write`, `analytics:read`, or `infrastructure:write`. Account, support,
+developer, consultant, and wallet-management tools use the corresponding `account:*`,
+`support:read`, `developer:*`, `consultant:use`, and `security:*` scopes.
+
+High-risk tools require API tokens to carry both their domain scope and `mcp:high-risk`. Grant this
+only to autonomous agents that are intentionally allowed to perform destructive,
+credential-changing, financially costly, or arbitrary-query operations. Tool-specific confirmation
+fields and normal downstream authorization checks still apply.
+
+Public operations need no credential. If an API token is supplied, its scopes still apply so a
+tenant-enriched version of a public response cannot bypass the token's least-privilege boundary.
+
+The server filters tool and resource discovery to data callable by the current credential. Resource
+reads require their matching domain read scope and unknown resources fail closed. Tool annotations
+describe read-only, destructive, idempotent, and open-world behavior for clients, but the Gateway's
+server-side policy is authoritative.
+
+Input objects reject unknown fields and publish constrained values as machine-readable enums.
+Requests are capped at 256 KiB, stateful sessions expire after 30 minutes, and tool results or
+resource reads above 64 KiB return `RESULT_TOO_LARGE` instead of malformed, truncated, or unbounded
+content.
+
 ## Resources
 
 Read-only data sources for account, billing, streams, analytics, infrastructure, support, and API
