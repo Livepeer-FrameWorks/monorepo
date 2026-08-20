@@ -2338,7 +2338,7 @@ func (s *QuartermasterServer) ListActiveTenants(ctx context.Context, req *quarte
 }
 
 // CreateTenant creates a new tenant
-func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *quartermasterpb.CreateTenantRequest) (*quartermasterpb.CreateTenantResponse, error) {
+func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *quartermasterpb.CreateTenantRequest) (*quartermasterpb.CreateTenantResponse, error) { //nolint:govet // Provisioning transaction branches use local error scopes.
 	name := req.GetName()
 	if name == "" {
 		return nil, status.Error(codes.InvalidArgument, "name required")
@@ -2369,6 +2369,36 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *quartermast
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
+	provisioningKey := strings.TrimSpace(req.GetProvisioningKey())
+	if len(provisioningKey) > 255 {
+		return nil, status.Error(codes.InvalidArgument, "provisioning_key is too long")
+	}
+	if provisioningKey != "" {
+		// Serialize all replicas on the caller's durable idempotency identity.
+		// A retry after a lost response returns the original tenant rather than
+		// creating an orphan in this cross-service signup saga.
+		if _, lockErr := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, provisioningKey); lockErr != nil {
+			return nil, status.Errorf(codes.Internal, "lock tenant provisioning: %v", lockErr)
+		}
+		var existingTenantID string
+		lookupErr := tx.QueryRowContext(ctx, `
+			SELECT id FROM quartermaster.tenants WHERE provisioning_key = $1
+		`, provisioningKey).Scan(&existingTenantID)
+		if lookupErr == nil {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil {
+				return nil, status.Errorf(codes.Internal, "finish tenant provisioning lookup: %v", rollbackErr)
+			}
+			existing, getErr := s.GetTenant(ctx, &quartermasterpb.GetTenantRequest{TenantId: existingTenantID})
+			if getErr != nil {
+				return nil, getErr
+			}
+			return &quartermasterpb.CreateTenantResponse{Tenant: existing.GetTenant()}, nil
+		}
+		if !errors.Is(lookupErr, sql.ErrNoRows) {
+			return nil, status.Errorf(codes.Internal, "lookup tenant provisioning key: %v", lookupErr)
+		}
+	}
+
 	// Self-signup paths omit the tier; default to 'free' so the column never
 	// holds '' (Purser stamps the billing-derived tier afterwards).
 	deploymentTier := strings.ToLower(strings.TrimSpace(req.GetDeploymentTier()))
@@ -2377,14 +2407,25 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *quartermast
 	}
 
 	// 1. Insert into quartermaster.tenants
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO quartermaster.tenants (id, name, subdomain, custom_domain, logo_url, primary_color, secondary_color,
-		                                   deployment_tier, deployment_model,
-		                                   is_active, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $10)
-	`, tenantID, name, subdomain, req.CustomDomain, req.LogoUrl,
-		req.GetPrimaryColor(), req.GetSecondaryColor(),
-		deploymentTier, req.GetDeploymentModel(), now)
+	if provisioningKey == "" {
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO quartermaster.tenants (id, name, subdomain, custom_domain, logo_url, primary_color, secondary_color,
+			                                   deployment_tier, deployment_model,
+			                                   is_active, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $10)
+		`, tenantID, name, subdomain, req.CustomDomain, req.LogoUrl,
+			req.GetPrimaryColor(), req.GetSecondaryColor(),
+			deploymentTier, req.GetDeploymentModel(), now)
+	} else {
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO quartermaster.tenants (id, name, subdomain, custom_domain, logo_url, primary_color, secondary_color,
+			                                   deployment_tier, deployment_model,
+			                                   is_active, created_at, updated_at, provisioning_key)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $10, $11)
+		`, tenantID, name, subdomain, req.CustomDomain, req.LogoUrl,
+			req.GetPrimaryColor(), req.GetSecondaryColor(),
+			deploymentTier, req.GetDeploymentModel(), now, provisioningKey)
+	}
 
 	if err != nil {
 		s.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create tenant")

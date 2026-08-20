@@ -405,6 +405,7 @@ message CreateTenantRequest {
   string deployment_model = 8;          // json:"deployment_model"
   string primary_deployment_tier = 9;   // json:"primary_deployment_tier"
   common.SignupAttribution attribution = 10;
+  optional string provisioning_key = 11; // service-owned idempotency key for cross-service signup sagas
 }
 
 // Matches pkg/api/quartermaster/types.go:CreateTenantResponse (lines 64-67)

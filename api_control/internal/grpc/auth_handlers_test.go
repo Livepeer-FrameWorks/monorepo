@@ -3,11 +3,14 @@ package grpc
 import (
 	"context"
 	"database/sql"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -109,8 +112,8 @@ func TestGetOrCreateWalletUser(t *testing.T) {
 		wantCode(t, err, codes.InvalidArgument)
 	})
 
-	// Existing wallet: purser nil → billing defaults to postpaid; the row is
-	// resolved and last_auth_at is refreshed.
+	// Existing wallet: an unavailable Purser must not become implicit postpaid
+	// credit; the identity still resolves as prepaid for fail-closed admission.
 	t.Run("existing_wallet_resolves", func(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
@@ -130,8 +133,8 @@ func TestGetOrCreateWalletUser(t *testing.T) {
 		if resp.GetIsNew() {
 			t.Errorf("IsNew = true, want false for existing wallet")
 		}
-		if resp.GetBillingModel() != "postpaid" {
-			t.Errorf("BillingModel = %q, want postpaid (purser nil default)", resp.GetBillingModel())
+		if resp.GetBillingModel() != "prepaid" {
+			t.Errorf("BillingModel = %q, want prepaid (purser unavailable default)", resp.GetBillingModel())
 		}
 		if resp.GetTenantId() != "tn-1" || resp.GetUserId() != "us-1" {
 			t.Errorf("ids = (%s,%s), want (tn-1,us-1)", resp.GetTenantId(), resp.GetUserId())
@@ -154,6 +157,158 @@ func TestGetOrCreateWalletUser(t *testing.T) {
 		})
 		wantCode(t, err, codes.Internal)
 	})
+}
+
+func TestIssueAndConsumeWalletChallenge(t *testing.T) {
+	const address = "0xd8da6bf26964af9d7eed9e03e53415d37aa96045"
+	t.Setenv("WEBAPP_PUBLIC_URL", "https://app.example.com")
+	s, mock, done := newMockServer(t)
+	defer done()
+
+	mock.ExpectExec("INSERT INTO commodore.wallet_auth_challenges").
+		WithArgs(sqlmock.AnyArg(), int64(1), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	challenge, err := s.IssueWalletChallenge(context.Background(), &commodorepb.IssueWalletChallengeRequest{
+		WalletAddress: address,
+		ChainId:       1,
+	})
+	if err != nil {
+		t.Fatalf("IssueWalletChallenge: %v", err)
+	}
+	if !strings.Contains(challenge.GetMessage(), "app.example.com wants you to sign in") ||
+		!strings.Contains(challenge.GetMessage(), "Chain ID: 1") {
+		t.Fatalf("unexpected challenge: %q", challenge.GetMessage())
+	}
+
+	mock.ExpectQuery("UPDATE commodore.wallet_auth_challenges").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("challenge-1"))
+	if err := s.consumeWalletChallenge(context.Background(), "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", challenge.GetMessage()); err != nil {
+		t.Fatalf("consumeWalletChallenge: %v", err)
+	}
+
+	mock.ExpectQuery("UPDATE commodore.wallet_auth_challenges").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnError(sql.ErrNoRows)
+	if code := status.Code(s.consumeWalletChallenge(context.Background(), "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", challenge.GetMessage())); code != codes.Unauthenticated {
+		t.Fatalf("replay code = %v, want Unauthenticated", code)
+	}
+}
+
+func walletUserContext() context.Context {
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyUserID, "user-1")
+	return context.WithValue(ctx, ctxkeys.KeyTenantID, "tenant-1")
+}
+
+func TestUnlinkWalletPreservesSigninMethod(t *testing.T) {
+	t.Run("wallet-only account cannot remove final wallet", func(t *testing.T) {
+		s, mock, done := newMockServer(t)
+		defer done()
+		mock.ExpectBegin()
+		mock.ExpectQuery("SELECT COALESCE\\(password_hash").
+			WithArgs("user-1", "tenant-1").
+			WillReturnRows(sqlmock.NewRows([]string{"has_password"}).AddRow(false))
+		mock.ExpectQuery("SELECT EXISTS").
+			WithArgs("wallet-1", "user-1", "tenant-1").
+			WillReturnRows(sqlmock.NewRows([]string{"owned"}).AddRow(true))
+		mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM commodore.wallet_identities").
+			WithArgs("user-1", "tenant-1").
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+		mock.ExpectRollback()
+
+		_, err := s.UnlinkWallet(walletUserContext(), &commodorepb.UnlinkWalletRequest{WalletId: "wallet-1"})
+		wantCode(t, err, codes.FailedPrecondition)
+		if !strings.Contains(err.Error(), "final wallet") {
+			t.Fatalf("error = %v, want final-wallet guidance", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("wallet-only account may remove one of multiple wallets", func(t *testing.T) {
+		s, mock, done := newMockServer(t)
+		defer done()
+		mock.ExpectBegin()
+		mock.ExpectQuery("SELECT COALESCE\\(password_hash").
+			WithArgs("user-1", "tenant-1").
+			WillReturnRows(sqlmock.NewRows([]string{"has_password"}).AddRow(false))
+		mock.ExpectQuery("SELECT EXISTS").
+			WithArgs("wallet-1", "user-1", "tenant-1").
+			WillReturnRows(sqlmock.NewRows([]string{"owned"}).AddRow(true))
+		mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM commodore.wallet_identities").
+			WithArgs("user-1", "tenant-1").
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
+		mock.ExpectExec("DELETE FROM commodore.wallet_identities").
+			WithArgs("wallet-1", "user-1", "tenant-1").
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit()
+		expectOutboxInsert(mock)
+
+		resp, err := s.UnlinkWallet(walletUserContext(), &commodorepb.UnlinkWalletRequest{WalletId: "wallet-1"})
+		if err != nil || !resp.GetSuccess() {
+			t.Fatalf("unlink = (%+v, %v)", resp, err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("password account may remove final wallet", func(t *testing.T) {
+		s, mock, done := newMockServer(t)
+		defer done()
+		mock.ExpectBegin()
+		mock.ExpectQuery("SELECT COALESCE\\(password_hash").
+			WithArgs("user-1", "tenant-1").
+			WillReturnRows(sqlmock.NewRows([]string{"has_password"}).AddRow(true))
+		mock.ExpectQuery("SELECT EXISTS").
+			WithArgs("wallet-1", "user-1", "tenant-1").
+			WillReturnRows(sqlmock.NewRows([]string{"owned"}).AddRow(true))
+		mock.ExpectExec("DELETE FROM commodore.wallet_identities").
+			WithArgs("wallet-1", "user-1", "tenant-1").
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit()
+		expectOutboxInsert(mock)
+
+		resp, err := s.UnlinkWallet(walletUserContext(), &commodorepb.UnlinkWalletRequest{WalletId: "wallet-1"})
+		if err != nil || !resp.GetSuccess() {
+			t.Fatalf("unlink = (%+v, %v)", resp, err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestWalletChallengeOriginAllowed(t *testing.T) {
+	t.Setenv("BUILD_ENV", "development")
+	for _, raw := range []string{
+		"https://app.example.com",
+		"http://localhost:18090/app",
+		"http://127.0.0.1:18090",
+		"http://[::1]:18090",
+	} {
+		origin, err := url.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !walletChallengeOriginAllowed(origin) {
+			t.Fatalf("expected %q to be allowed", raw)
+		}
+	}
+
+	for _, raw := range []string{"http://example.com", "ftp://localhost", "https:///missing-host"} {
+		origin, _ := url.Parse(raw)
+		if walletChallengeOriginAllowed(origin) {
+			t.Fatalf("expected %q to be rejected", raw)
+		}
+	}
+
+	t.Setenv("BUILD_ENV", "production")
+	loopback, _ := url.Parse("http://localhost:18090/app")
+	if walletChallengeOriginAllowed(loopback) {
+		t.Fatal("production must reject an insecure loopback origin")
+	}
 }
 
 func TestStartDeviceAuthorization(t *testing.T) {
@@ -272,8 +427,8 @@ func TestPollDeviceAuthorization(t *testing.T) {
 	})
 }
 
-// WalletLogin / WalletLoginWithX402 happy paths require a verified signature /
-// settled payment; these cover the deterministic guard rails before that point.
+// WalletLogin happy paths require a verified signature; these cover the
+// deterministic guard rails before that point.
 func TestWalletLoginGuards(t *testing.T) {
 	t.Run("walletlogin_missing_fields", func(t *testing.T) {
 		s, _, done := newMockServer(t)
@@ -293,14 +448,5 @@ func TestWalletLoginGuards(t *testing.T) {
 		if code := status.Code(err); code != codes.InvalidArgument && code != codes.Unauthenticated {
 			t.Errorf("bad signature: code = %v, want InvalidArgument or Unauthenticated", code)
 		}
-	})
-
-	// X402 login is gated on a configured Purser; nil → Unavailable before any
-	// payment work.
-	t.Run("x402_requires_purser", func(t *testing.T) {
-		s, _, done := newMockServer(t)
-		defer done()
-		_, err := s.WalletLoginWithX402(context.Background(), &commodorepb.WalletLoginWithX402Request{})
-		wantCode(t, err, codes.Unavailable)
 	})
 }

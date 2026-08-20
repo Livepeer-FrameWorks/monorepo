@@ -89,7 +89,8 @@ Note: network-wide usage is computed via query-time aggregation of existing dail
 
 - Capture UTM parameters, `Referer`, and landing page from HTTP requests. This exists for wallet login paths; remaining signup paths need verification.
 - Detect agent logins via user-agent.
-- Pass attribution into `Register`, `WalletLogin`, and `WalletLoginWithX402`.
+- Pass attribution into `Register` and `WalletLogin`. x402 is payment-only and
+  never creates an identity or session.
 
 ### Control plane (Commodore)
 

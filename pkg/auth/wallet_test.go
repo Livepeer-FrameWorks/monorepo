@@ -180,6 +180,20 @@ func TestValidateWalletMessageTimestamp(t *testing.T) {
 		}
 	})
 
+	t.Run("wrong purpose is rejected", func(t *testing.T) {
+		msg := fmt.Sprintf("Transfer all funds\nTimestamp: %s\nNonce: abc123", time.Now().UTC().Format(time.RFC3339))
+		if err := ValidateWalletMessageTimestamp(msg); err == nil {
+			t.Error("expected error for non-login message")
+		}
+	})
+
+	t.Run("missing nonce is rejected", func(t *testing.T) {
+		msg := fmt.Sprintf("FrameWorks Login\nTimestamp: %s\nNonce: ", time.Now().UTC().Format(time.RFC3339))
+		if err := ValidateWalletMessageTimestamp(msg); err == nil {
+			t.Error("expected error for empty nonce")
+		}
+	})
+
 	t.Run("slightly in past is valid", func(t *testing.T) {
 		past := time.Now().UTC().Add(-2 * time.Minute)
 		msg := fmt.Sprintf("FrameWorks Login\nTimestamp: %s\nNonce: abc123", past.Format(time.RFC3339))

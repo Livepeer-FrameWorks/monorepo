@@ -12,7 +12,6 @@ import "foghorn_control.proto";
 import "cluster_peer.proto";
 import "tenant_limits.proto";
 import "metering_contract.proto";
-import "x402.proto";
 
 // ============================================================================
 // COMMODORE CONTROL PLANE - INTERNAL SERVICE APIs
@@ -1341,9 +1340,9 @@ service UserService {
   rpc UpdateNewsletter(UpdateNewsletterRequest) returns (UpdateNewsletterResponse);
   rpc GetNewsletterStatus(GetNewsletterStatusRequest) returns (GetNewsletterStatusResponse);
 
-  // Wallet authentication (x402 / agent access)
+  // Wallet authentication
+  rpc IssueWalletChallenge(IssueWalletChallengeRequest) returns (IssueWalletChallengeResponse);
   rpc WalletLogin(WalletLoginRequest) returns (AuthResponse);
-  rpc WalletLoginWithX402(WalletLoginWithX402Request) returns (WalletLoginWithX402Response);
   rpc LinkWallet(LinkWalletRequest) returns (WalletIdentity);
   rpc UnlinkWallet(UnlinkWalletRequest) returns (UnlinkWalletResponse);
   rpc ListWallets(ListWalletsRequest) returns (ListWalletsResponse);
@@ -1491,37 +1490,26 @@ message GetNewsletterStatusResponse {
 }
 
 // ============================================================================
-// WALLET AUTHENTICATION (x402 / agent access)
+// WALLET AUTHENTICATION
 // ============================================================================
 
 // WalletLoginRequest authenticates via Ethereum wallet signature
 // If the wallet is not linked to any account, creates a new one
+message IssueWalletChallengeRequest {
+  string wallet_address = 1;
+  uint64 chain_id = 2;
+}
+
+message IssueWalletChallengeResponse {
+  string message = 1;
+  google.protobuf.Timestamp expires_at = 2;
+}
+
 message WalletLoginRequest {
   string wallet_address = 1;            // 0x-prefixed Ethereum address
   string message = 2;                   // Message that was signed (includes timestamp + nonce)
   string signature = 3;                 // 0x-prefixed hex signature (65 bytes: R|S|V)
   common.SignupAttribution attribution = 4;
-}
-
-// WalletLoginWithX402Request authenticates via x402 payload (EIP-3009)
-// Session token is returned on success. If value>0, the payment is settled and credited.
-message WalletLoginWithX402Request {
-  x402.X402PaymentPayload payment = 1;
-  string client_ip = 2;                 // For VAT evidence
-  optional string target_tenant_id = 3; // Optional credit target (donations)
-  common.SignupAttribution attribution = 4;
-}
-
-message WalletLoginWithX402Response {
-  AuthResponse auth = 1;
-  bool is_auth_only = 2;
-  int64 credited_cents = 3;
-  int64 new_balance_cents = 4;
-  string tx_hash = 5;
-  string currency = 6;
-  string invoice_number = 7;
-  string payer_address = 8;
-  string target_tenant_id = 9;
 }
 
 // LinkWalletRequest links a wallet to an existing authenticated user

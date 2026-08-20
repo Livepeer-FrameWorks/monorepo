@@ -200,6 +200,35 @@ func (h *AuthHandlers) Login() gin.HandlerFunc {
 	}
 }
 
+// WalletChallenge issues the single-use message that must be signed for wallet
+// login or linking. Authentication never requires or settles a payment.
+func (h *AuthHandlers) WalletChallenge() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Address string `json:"address" binding:"required"`
+			ChainID uint64 `json:"chain_id" binding:"required"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
+			return
+		}
+		resp, err := h.commodore.IssueWalletChallenge(c.Request.Context(), req.Address, req.ChainID)
+		if err != nil {
+			if isAuthServiceUnavailable(err) {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "authentication service temporarily unavailable"})
+				return
+			}
+			errMsg := gatewayerrors.SanitizeGRPCError(err, "failed to issue wallet challenge", walletLoginAllowedErrors)
+			c.JSON(http.StatusBadRequest, gin.H{"error": errMsg})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"message":    resp.GetMessage(),
+			"expires_at": resp.GetExpiresAt().AsTime(),
+		})
+	}
+}
+
 // WalletLogin handles wallet-based authentication
 func (h *AuthHandlers) WalletLogin() gin.HandlerFunc {
 	return func(c *gin.Context) {

@@ -2,8 +2,6 @@ package middleware
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"net"
 	"net/http"
 	"testing"
@@ -16,7 +14,6 @@ import (
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestAuthenticateRequestNilRequest(t *testing.T) {
@@ -36,13 +33,16 @@ func TestAuthenticateRequestWalletMissingHeaders(t *testing.T) {
 	}
 }
 
-func TestAuthenticateRequestInvalidX402Header(t *testing.T) {
+func TestAuthenticateRequestDoesNotTreatX402AsAuthentication(t *testing.T) {
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
 	req.Header.Set("X-PAYMENT", "not-base64")
 
-	_, err := AuthenticateRequest(context.Background(), req, &clients.ServiceClients{}, []byte("secret"), AuthOptions{AllowX402: true}, nil)
-	if err == nil {
-		t.Fatal("expected error for invalid X-PAYMENT header")
+	result, err := AuthenticateRequest(context.Background(), req, &clients.ServiceClients{}, []byte("secret"), AuthOptions{}, nil)
+	if err != nil {
+		t.Fatalf("payment headers must be ignored by authentication: %v", err)
+	}
+	if result != nil {
+		t.Fatalf("payment header unexpectedly authenticated caller: %#v", result)
 	}
 }
 
@@ -176,64 +176,6 @@ func TestAuthenticateRequestWalletSuccess(t *testing.T) {
 	}
 }
 
-func TestAuthenticateRequestX402Success(t *testing.T) {
-	expiresAt := time.Now().Add(10 * time.Minute)
-	server := newFakeCommodoreService(&commodorepb.WalletLoginWithX402Response{
-		Auth: &commodorepb.AuthResponse{
-			Token: "x402-token",
-			User: &commodorepb.User{
-				Id:       "user-x402",
-				TenantId: "tenant-x402",
-				Role:     "viewer",
-			},
-			ExpiresAt: timestamppb.New(expiresAt),
-		},
-		IsAuthOnly:   true,
-		PayerAddress: "",
-	}, nil)
-	addr, cleanup := startCommodoreService(t, server, server)
-	defer cleanup()
-
-	commodoreClient, err := commodore.NewGRPCClient(commodore.GRPCConfig{
-		GRPCAddr:      addr,
-		Timeout:       5 * time.Second,
-		AllowInsecure: true,
-	})
-	if err != nil {
-		t.Fatalf("failed to create commodore client: %v", err)
-	}
-	defer func() {
-		_ = commodoreClient.Close()
-	}()
-
-	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
-	req.Header.Set("X-PAYMENT", buildX402PaymentHeader(t, "0xabc"))
-	req.RemoteAddr = "203.0.113.9:1234"
-
-	result, err := AuthenticateRequest(context.Background(), req, &clients.ServiceClients{Commodore: commodoreClient}, []byte("secret"), AuthOptions{AllowX402: true}, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result == nil {
-		t.Fatal("expected auth result")
-	}
-	if result.AuthType != "x402" {
-		t.Fatalf("expected auth type x402, got %q", result.AuthType)
-	}
-	if result.JWTToken != "x402-token" || result.UserID != "user-x402" {
-		t.Fatalf("unexpected auth result: %#v", result)
-	}
-	if result.WalletAddress != "0xabc" {
-		t.Fatalf("expected fallback wallet address, got %q", result.WalletAddress)
-	}
-	if result.ExpiresAt == nil || !result.ExpiresAt.Equal(expiresAt) {
-		t.Fatalf("unexpected expiresAt: %#v", result.ExpiresAt)
-	}
-	if !result.X402AuthOnly {
-		t.Fatal("expected x402 auth-only result")
-	}
-}
-
 func TestApplyAuthToContextAPIToken(t *testing.T) {
 	ctx := ApplyAuthToContext(context.Background(), &AuthResult{
 		UserID:      "user-1",
@@ -322,21 +264,12 @@ func startInternalService(t *testing.T, server commodorepb.InternalServiceServer
 type fakeCommodoreService struct {
 	commodorepb.UnimplementedInternalServiceServer
 	commodorepb.UnimplementedUserServiceServer
-	x402Response *commodorepb.WalletLoginWithX402Response
-	x402Error    error
-	walletResp   *commodorepb.AuthResponse
-	walletErr    error
+	walletResp *commodorepb.AuthResponse
+	walletErr  error
 }
 
-func newFakeCommodoreService(x402Resp *commodorepb.WalletLoginWithX402Response, walletResp *commodorepb.AuthResponse) *fakeCommodoreService {
-	return &fakeCommodoreService{
-		x402Response: x402Resp,
-		walletResp:   walletResp,
-	}
-}
-
-func (f *fakeCommodoreService) WalletLoginWithX402(ctx context.Context, _ *commodorepb.WalletLoginWithX402Request) (*commodorepb.WalletLoginWithX402Response, error) {
-	return f.x402Response, f.x402Error
+func newFakeCommodoreService(_ any, walletResp *commodorepb.AuthResponse) *fakeCommodoreService {
+	return &fakeCommodoreService{walletResp: walletResp}
 }
 
 func (f *fakeCommodoreService) WalletLogin(ctx context.Context, _ *commodorepb.WalletLoginRequest) (*commodorepb.AuthResponse, error) {
@@ -367,30 +300,4 @@ func startCommodoreService(t *testing.T, internalServer commodorepb.InternalServ
 		grpcServer.Stop()
 		_ = listener.Close()
 	}
-}
-
-func buildX402PaymentHeader(t *testing.T, from string) string {
-	t.Helper()
-
-	payload := map[string]any{
-		"x402Version": 1,
-		"scheme":      "x402",
-		"network":     "base",
-		"payload": map[string]any{
-			"signature": "sig",
-			"authorization": map[string]any{
-				"from":        from,
-				"to":          "0xreceiver",
-				"value":       "100",
-				"validAfter":  "0",
-				"validBefore": "999999",
-				"nonce":       "1",
-			},
-		},
-	}
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		t.Fatalf("failed to marshal payload: %v", err)
-	}
-	return base64.StdEncoding.EncodeToString(raw)
 }

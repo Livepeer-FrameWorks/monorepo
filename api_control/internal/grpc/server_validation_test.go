@@ -114,7 +114,7 @@ func TestValidateStreamKey(t *testing.T) {
 				if !resp.Valid {
 					t.Fatalf("expected valid response")
 				}
-				if resp.BillingModel != "postpaid" {
+				if resp.BillingModel != "prepaid" || !resp.IsBalanceNegative {
 					t.Fatalf("unexpected billing model: %q", resp.BillingModel)
 				}
 				if resp.InternalName != "internal" {

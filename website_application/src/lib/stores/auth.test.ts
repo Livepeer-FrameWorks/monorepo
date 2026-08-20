@@ -154,4 +154,55 @@ describe("auth store", () => {
       human_check: "human",
     });
   });
+
+  it("bootstraps a zero-balance wallet session through the free auth endpoints", async () => {
+    const walletUser = {
+      id: "wallet-user-1",
+      email: "",
+      tenant_id: "wallet-tenant-1",
+      is_verified: true,
+    };
+    const authAPI = {
+      get: vi.fn(),
+      post: vi.fn().mockImplementation(async (path: string, body: Record<string, unknown>) => {
+        if (path === "/wallet-challenge") {
+          expect(body).toEqual({ address: "0xabc", chain_id: 8453 });
+          return { data: { message: "server-issued-message", expires_at: "2030-01-01T00:00:00Z" } };
+        }
+        if (path === "/wallet-login") {
+          expect(body).toEqual({
+            address: "0xabc",
+            message: "server-issued-message",
+            signature: "0xsig",
+          });
+          return { data: { user: walletUser, expires_at: "2030-01-01T00:15:00Z" } };
+        }
+        throw new Error(`unexpected auth path ${path}`);
+      }),
+    };
+    const initializeWebSocket = vi.fn();
+
+    vi.doMock("$lib/authAPI.js", () => ({ authAPI }));
+    vi.doMock("$app/environment", () => ({ browser: false }));
+    vi.doMock("./realtime.js", () => ({
+      initializeWebSocket,
+      disconnectWebSocket: vi.fn(),
+    }));
+
+    const { auth } = await import("./auth");
+    const { get } = await import("svelte/store");
+
+    const challenge = await auth.issueWalletChallenge("0xabc", 8453);
+    const login = await auth.walletLogin("0xabc", challenge, "0xsig");
+
+    expect(login).toEqual({ success: true });
+    expect(get(auth)).toMatchObject({
+      isAuthenticated: true,
+      user: walletUser,
+      error: null,
+    });
+    expect(JSON.parse(localStorage.getItem("user") ?? "null")).toEqual(walletUser);
+    expect(initializeWebSocket).toHaveBeenCalledTimes(1);
+    expect(authAPI.post).toHaveBeenCalledTimes(2);
+  });
 });

@@ -6,7 +6,6 @@ import (
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
-	x402pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/x402"
 )
 
 // Interface is the full method surface of the concrete client, extracted so
@@ -76,8 +75,8 @@ type Interface interface {
 	UpdateMe(ctx context.Context, req *commodorepb.UpdateMeRequest) (*commodorepb.User, error)
 	UpdateNewsletter(ctx context.Context, subscribed bool) (*commodorepb.UpdateNewsletterResponse, error)
 	GetNewsletterStatus(ctx context.Context) (bool, error)
+	IssueWalletChallenge(ctx context.Context, address string, chainID uint64) (*commodorepb.IssueWalletChallengeResponse, error)
 	WalletLogin(ctx context.Context, address, message, signature string, attribution *commonpb.SignupAttribution) (*commodorepb.AuthResponse, error)
-	WalletLoginWithX402(ctx context.Context, payment *x402pb.X402PaymentPayload, clientIP, targetTenantID string, attribution *commonpb.SignupAttribution) (*commodorepb.WalletLoginWithX402Response, error)
 	LinkWallet(ctx context.Context, address, message, signature string) (*commodorepb.WalletIdentity, error)
 	UnlinkWallet(ctx context.Context, walletID string) (*commodorepb.UnlinkWalletResponse, error)
 	ListWallets(ctx context.Context) (*commodorepb.ListWalletsResponse, error)

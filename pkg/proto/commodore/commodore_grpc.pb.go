@@ -2258,8 +2258,8 @@ const (
 	UserService_UpdateMe_FullMethodName                   = "/commodore.UserService/UpdateMe"
 	UserService_UpdateNewsletter_FullMethodName           = "/commodore.UserService/UpdateNewsletter"
 	UserService_GetNewsletterStatus_FullMethodName        = "/commodore.UserService/GetNewsletterStatus"
+	UserService_IssueWalletChallenge_FullMethodName       = "/commodore.UserService/IssueWalletChallenge"
 	UserService_WalletLogin_FullMethodName                = "/commodore.UserService/WalletLogin"
-	UserService_WalletLoginWithX402_FullMethodName        = "/commodore.UserService/WalletLoginWithX402"
 	UserService_LinkWallet_FullMethodName                 = "/commodore.UserService/LinkWallet"
 	UserService_UnlinkWallet_FullMethodName               = "/commodore.UserService/UnlinkWallet"
 	UserService_ListWallets_FullMethodName                = "/commodore.UserService/ListWallets"
@@ -2292,9 +2292,9 @@ type UserServiceClient interface {
 	UpdateMe(ctx context.Context, in *UpdateMeRequest, opts ...grpc.CallOption) (*User, error)
 	UpdateNewsletter(ctx context.Context, in *UpdateNewsletterRequest, opts ...grpc.CallOption) (*UpdateNewsletterResponse, error)
 	GetNewsletterStatus(ctx context.Context, in *GetNewsletterStatusRequest, opts ...grpc.CallOption) (*GetNewsletterStatusResponse, error)
-	// Wallet authentication (x402 / agent access)
+	// Wallet authentication
+	IssueWalletChallenge(ctx context.Context, in *IssueWalletChallengeRequest, opts ...grpc.CallOption) (*IssueWalletChallengeResponse, error)
 	WalletLogin(ctx context.Context, in *WalletLoginRequest, opts ...grpc.CallOption) (*AuthResponse, error)
-	WalletLoginWithX402(ctx context.Context, in *WalletLoginWithX402Request, opts ...grpc.CallOption) (*WalletLoginWithX402Response, error)
 	LinkWallet(ctx context.Context, in *LinkWalletRequest, opts ...grpc.CallOption) (*WalletIdentity, error)
 	UnlinkWallet(ctx context.Context, in *UnlinkWalletRequest, opts ...grpc.CallOption) (*UnlinkWalletResponse, error)
 	ListWallets(ctx context.Context, in *ListWalletsRequest, opts ...grpc.CallOption) (*ListWalletsResponse, error)
@@ -2443,20 +2443,20 @@ func (c *userServiceClient) GetNewsletterStatus(ctx context.Context, in *GetNews
 	return out, nil
 }
 
-func (c *userServiceClient) WalletLogin(ctx context.Context, in *WalletLoginRequest, opts ...grpc.CallOption) (*AuthResponse, error) {
+func (c *userServiceClient) IssueWalletChallenge(ctx context.Context, in *IssueWalletChallengeRequest, opts ...grpc.CallOption) (*IssueWalletChallengeResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(AuthResponse)
-	err := c.cc.Invoke(ctx, UserService_WalletLogin_FullMethodName, in, out, cOpts...)
+	out := new(IssueWalletChallengeResponse)
+	err := c.cc.Invoke(ctx, UserService_IssueWalletChallenge_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *userServiceClient) WalletLoginWithX402(ctx context.Context, in *WalletLoginWithX402Request, opts ...grpc.CallOption) (*WalletLoginWithX402Response, error) {
+func (c *userServiceClient) WalletLogin(ctx context.Context, in *WalletLoginRequest, opts ...grpc.CallOption) (*AuthResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(WalletLoginWithX402Response)
-	err := c.cc.Invoke(ctx, UserService_WalletLoginWithX402_FullMethodName, in, out, cOpts...)
+	out := new(AuthResponse)
+	err := c.cc.Invoke(ctx, UserService_WalletLogin_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -2583,9 +2583,9 @@ type UserServiceServer interface {
 	UpdateMe(context.Context, *UpdateMeRequest) (*User, error)
 	UpdateNewsletter(context.Context, *UpdateNewsletterRequest) (*UpdateNewsletterResponse, error)
 	GetNewsletterStatus(context.Context, *GetNewsletterStatusRequest) (*GetNewsletterStatusResponse, error)
-	// Wallet authentication (x402 / agent access)
+	// Wallet authentication
+	IssueWalletChallenge(context.Context, *IssueWalletChallengeRequest) (*IssueWalletChallengeResponse, error)
 	WalletLogin(context.Context, *WalletLoginRequest) (*AuthResponse, error)
-	WalletLoginWithX402(context.Context, *WalletLoginWithX402Request) (*WalletLoginWithX402Response, error)
 	LinkWallet(context.Context, *LinkWalletRequest) (*WalletIdentity, error)
 	UnlinkWallet(context.Context, *UnlinkWalletRequest) (*UnlinkWalletResponse, error)
 	ListWallets(context.Context, *ListWalletsRequest) (*ListWalletsResponse, error)
@@ -2650,11 +2650,11 @@ func (UnimplementedUserServiceServer) UpdateNewsletter(context.Context, *UpdateN
 func (UnimplementedUserServiceServer) GetNewsletterStatus(context.Context, *GetNewsletterStatusRequest) (*GetNewsletterStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetNewsletterStatus not implemented")
 }
+func (UnimplementedUserServiceServer) IssueWalletChallenge(context.Context, *IssueWalletChallengeRequest) (*IssueWalletChallengeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method IssueWalletChallenge not implemented")
+}
 func (UnimplementedUserServiceServer) WalletLogin(context.Context, *WalletLoginRequest) (*AuthResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method WalletLogin not implemented")
-}
-func (UnimplementedUserServiceServer) WalletLoginWithX402(context.Context, *WalletLoginWithX402Request) (*WalletLoginWithX402Response, error) {
-	return nil, status.Error(codes.Unimplemented, "method WalletLoginWithX402 not implemented")
 }
 func (UnimplementedUserServiceServer) LinkWallet(context.Context, *LinkWalletRequest) (*WalletIdentity, error) {
 	return nil, status.Error(codes.Unimplemented, "method LinkWallet not implemented")
@@ -2923,6 +2923,24 @@ func _UserService_GetNewsletterStatus_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _UserService_IssueWalletChallenge_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(IssueWalletChallengeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).IssueWalletChallenge(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_IssueWalletChallenge_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).IssueWalletChallenge(ctx, req.(*IssueWalletChallengeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _UserService_WalletLogin_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(WalletLoginRequest)
 	if err := dec(in); err != nil {
@@ -2937,24 +2955,6 @@ func _UserService_WalletLogin_Handler(srv interface{}, ctx context.Context, dec 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(UserServiceServer).WalletLogin(ctx, req.(*WalletLoginRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _UserService_WalletLoginWithX402_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(WalletLoginWithX402Request)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(UserServiceServer).WalletLoginWithX402(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: UserService_WalletLoginWithX402_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(UserServiceServer).WalletLoginWithX402(ctx, req.(*WalletLoginWithX402Request))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -3195,12 +3195,12 @@ var UserService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _UserService_GetNewsletterStatus_Handler,
 		},
 		{
-			MethodName: "WalletLogin",
-			Handler:    _UserService_WalletLogin_Handler,
+			MethodName: "IssueWalletChallenge",
+			Handler:    _UserService_IssueWalletChallenge_Handler,
 		},
 		{
-			MethodName: "WalletLoginWithX402",
-			Handler:    _UserService_WalletLoginWithX402_Handler,
+			MethodName: "WalletLogin",
+			Handler:    _UserService_WalletLogin_Handler,
 		},
 		{
 			MethodName: "LinkWallet",

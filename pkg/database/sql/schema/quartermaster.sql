@@ -23,6 +23,7 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE TABLE IF NOT EXISTS quartermaster.tenants (
     -- ===== IDENTITY =====
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    provisioning_key VARCHAR(255),
     name VARCHAR(255) NOT NULL,
     subdomain VARCHAR(100) UNIQUE,
     custom_domain VARCHAR(255),
@@ -61,6 +62,10 @@ CREATE TABLE IF NOT EXISTS quartermaster.tenants (
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_quartermaster_tenants_provisioning_key
+    ON quartermaster.tenants(provisioning_key)
+    WHERE provisioning_key IS NOT NULL;
 
 -- ============================================================================
 -- TENANT ATTRIBUTION

@@ -25,7 +25,6 @@ Commodore is the primary user/session issuer — `auth.GenerateSessionJWT()` is 
 - `PasswordLogin` (`api_control/internal/grpc/server.go`)
 - `RefreshToken` (`api_control/internal/grpc/server.go`)
 - `WalletLogin` (`api_control/internal/grpc/server.go`)
-- `WalletLoginWithX402` (`api_control/internal/grpc/server.go`)
 - `issueUserSessionTx` (`api_control/internal/grpc/server.go`) — the OAuth device-code and auth-code (PKCE) paths
 
 Skipper also calls `auth.GenerateJWT()` for the WebUI admin flow:

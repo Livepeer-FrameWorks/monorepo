@@ -1641,8 +1641,12 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 	}
 
 	// Get billing status via Purser gRPC (not direct DB access)
-	billingModel := "postpaid"
-	var isSuspended, isBalanceNegative bool
+	// Rated ingest fails closed when billing authority is unavailable. This
+	// still allows the Gateway's explicit onboarding/configuration operations,
+	// but it never turns a provisioning gap or Purser outage into postpaid use.
+	billingModel := "prepaid"
+	var isSuspended bool
+	isBalanceNegative := true
 	var dvrPolicy *sharedpb.DVRPolicy
 	var allowances []*meteringpb.MeterAllowance
 	var tenantResourceLimits *tenantlimitspb.TenantResourceLimits
@@ -1653,8 +1657,7 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 			s.logger.WithFields(logging.Fields{
 				"tenant_id": tenantID,
 				"error":     err,
-			}).Warn("Failed to get billing status from Purser, assuming postpaid/active")
-			// Continue with defaults - don't fail stream validation on billing lookup failure
+			}).Warn("Failed to get billing status from Purser; rated ingest remains blocked")
 		} else {
 			billingModel = billingStatus.BillingModel
 			isSuspended = billingStatus.IsSuspended
@@ -4442,7 +4445,7 @@ func (s *CommodoreServer) GetOrCreateWalletUser(ctx context.Context, req *commod
 		`, chainType, normalizedAddress)
 
 		// Get billing info via Purser gRPC (not DB JOIN)
-		billingModel := "postpaid"
+		billingModel := "prepaid"
 		if s.purserClient != nil {
 			billingStatus, billingErr := s.purserClient.GetTenantBillingStatus(ctx, tenantID)
 			if billingErr != nil {
@@ -4483,9 +4486,11 @@ func (s *CommodoreServer) GetOrCreateWalletUser(ctx context.Context, req *commod
 		return nil, status.Error(codes.Internal, "quartermaster client not available")
 	}
 	tenantName := "Wallet: " + normalizedAddress[:10] + "..."
+	provisioningKey := "wallet:" + chainType + ":" + normalizedAddress
 	tenantResp, err := s.quartermasterClient.CreateTenant(ctx, &quartermasterpb.CreateTenantRequest{
-		Name:        tenantName,
-		Attribution: req.GetAttribution(),
+		Name:            tenantName,
+		Attribution:     req.GetAttribution(),
+		ProvisioningKey: &provisioningKey,
 	})
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to create tenant via Quartermaster")
@@ -4535,6 +4540,25 @@ func (s *CommodoreServer) GetOrCreateWalletUser(ctx context.Context, req *commod
 		VALUES (gen_random_uuid(), $1, $2, $3, $4, NOW(), NOW())
 	`, normalizedAddress, chainType, tenantID, userID)
 	if err != nil {
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+			// Another replica completed the same wallet signup after both callers
+			// converged on Quartermaster's provisioning key. Roll back this local
+			// user and return the winner's canonical identity.
+			if rollbackErr := tx.Rollback(); rollbackErr != nil {
+				return nil, status.Error(codes.Internal, "failed to resolve concurrent wallet signup")
+			}
+			var existingTenantID, existingUserID string
+			if lookupErr := s.db.QueryRowContext(ctx, `
+				SELECT tenant_id, user_id FROM commodore.wallet_identities
+				WHERE chain_type = $1 AND wallet_address = $2
+			`, chainType, normalizedAddress).Scan(&existingTenantID, &existingUserID); lookupErr == nil {
+				return &commodorepb.GetOrCreateWalletUserResponse{
+					TenantId: existingTenantID, UserId: existingUserID, IsNew: false,
+					BillingModel: "prepaid", WalletAddress: normalizedAddress,
+				}, nil
+			}
+		}
 		s.logger.WithError(err).Error("Failed to create wallet identity")
 		return nil, status.Error(codes.Internal, "failed to create wallet identity")
 	}
@@ -6081,9 +6105,83 @@ func (s *CommodoreServer) GetNewsletterStatus(ctx context.Context, req *commodor
 // WALLET AUTHENTICATION (x402 / agent access)
 // ============================================================================
 
+func (s *CommodoreServer) IssueWalletChallenge(ctx context.Context, req *commodorepb.IssueWalletChallengeRequest) (*commodorepb.IssueWalletChallengeResponse, error) {
+	normalizedAddr, err := auth.NormalizeEthAddress(req.GetWalletAddress())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid address: %v", err)
+	}
+	chainID := req.GetChainId()
+	switch chainID {
+	case 1, 8453, 42161:
+	default:
+		return nil, status.Error(codes.InvalidArgument, "unsupported wallet login chain")
+	}
+
+	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("WEBAPP_PUBLIC_URL")), "/")
+	parsedURL, err := url.Parse(baseURL)
+	if err != nil || parsedURL.Host == "" || !walletChallengeOriginAllowed(parsedURL) {
+		return nil, status.Error(codes.FailedPrecondition, "WEBAPP_PUBLIC_URL must be an absolute HTTPS URL (HTTP loopback is allowed in development)")
+	}
+	nonce, err := generateRandomString(24)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to generate wallet challenge")
+	}
+	issuedAt := time.Now().UTC().Truncate(time.Second)
+	expiresAt := issuedAt.Add(5 * time.Minute)
+	message := fmt.Sprintf("%s wants you to sign in with your Ethereum account:\n%s\n\nSign in to FrameWorks.\n\nURI: %s\nVersion: 1\nChain ID: %d\nNonce: %s\nIssued At: %s\nExpiration Time: %s",
+		parsedURL.Host, normalizedAddr, baseURL, chainID, nonce, issuedAt.Format(time.RFC3339), expiresAt.Format(time.RFC3339))
+	messageHash := sha256.Sum256([]byte(message))
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO commodore.wallet_auth_challenges
+			(wallet_address, chain_id, message_hash, expires_at)
+		VALUES ($1, $2, $3, $4)
+	`, normalizedAddr, chainID, messageHash[:], expiresAt); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to store wallet challenge: %v", err)
+	}
+	return &commodorepb.IssueWalletChallengeResponse{
+		Message:   message,
+		ExpiresAt: timestamppb.New(expiresAt),
+	}, nil
+}
+
+func walletChallengeOriginAllowed(origin *url.URL) bool {
+	if origin == nil || origin.Host == "" {
+		return false
+	}
+	if origin.Scheme == "https" {
+		return true
+	}
+	if origin.Scheme != "http" || !config.IsDevelopment() {
+		return false
+	}
+	host := strings.ToLower(origin.Hostname())
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
+func (s *CommodoreServer) consumeWalletChallenge(ctx context.Context, walletAddress, message string) error {
+	messageHash := sha256.Sum256([]byte(message))
+	var challengeID string
+	err := s.db.QueryRowContext(ctx, `
+		UPDATE commodore.wallet_auth_challenges
+		SET consumed_at = NOW()
+		WHERE wallet_address = $1
+		  AND message_hash = $2
+		  AND consumed_at IS NULL
+		  AND expires_at > NOW()
+		RETURNING id
+	`, walletAddress, messageHash[:]).Scan(&challengeID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return status.Error(codes.Unauthenticated, "wallet challenge is invalid, expired, or already used")
+	}
+	if err != nil {
+		return status.Errorf(codes.Internal, "failed to consume wallet challenge: %v", err)
+	}
+	return nil
+}
+
 // WalletLogin authenticates via Ethereum wallet signature
 // If the wallet is not linked to any account, creates a new one (auto-provisioning)
-func (s *CommodoreServer) WalletLogin(ctx context.Context, req *commodorepb.WalletLoginRequest) (*commodorepb.AuthResponse, error) {
+func (s *CommodoreServer) WalletLogin(ctx context.Context, req *commodorepb.WalletLoginRequest) (*commodorepb.AuthResponse, error) { //nolint:govet // Challenge consumption is an independent failure scope.
 	walletAddr := req.GetWalletAddress()
 	message := req.GetMessage()
 	signature := req.GetSignature()
@@ -6092,24 +6190,22 @@ func (s *CommodoreServer) WalletLogin(ctx context.Context, req *commodorepb.Wall
 		return nil, status.Error(codes.InvalidArgument, "wallet_address, message, and signature required")
 	}
 
-	// Verify the signature
-	valid, err := auth.VerifyWalletAuth(auth.WalletMessage{
-		Address:   walletAddr,
-		Message:   message,
-		Signature: signature,
-	})
+	// Normalize before signature verification and challenge consumption so all
+	// callers share one address identity regardless of checksum casing.
+	normalizedAddr, err := auth.NormalizeEthAddress(walletAddr)
 	if err != nil {
-		s.logger.WithError(err).WithField("wallet", walletAddr).Warn("Wallet signature verification failed")
+		return nil, status.Errorf(codes.InvalidArgument, "invalid address: %v", err)
+	}
+	valid, err := auth.VerifyEthSignature(normalizedAddr, message, signature)
+	if err != nil {
+		s.logger.WithError(err).WithField("wallet", normalizedAddr).Warn("Wallet signature verification failed")
 		return nil, status.Errorf(codes.InvalidArgument, "signature verification failed: %v", err)
 	}
 	if !valid {
 		return nil, status.Error(codes.Unauthenticated, "invalid signature")
 	}
-
-	// Normalize address
-	normalizedAddr, err := auth.NormalizeEthAddress(walletAddr)
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid address: %v", err)
+	if challengeErr := s.consumeWalletChallenge(ctx, normalizedAddr, message); challengeErr != nil {
+		return nil, challengeErr
 	}
 
 	// Resolve or create wallet identity (single source of truth)
@@ -6171,6 +6267,23 @@ func (s *CommodoreServer) WalletLogin(ctx context.Context, req *commodorepb.Wall
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
 	}
+	if !isActive {
+		s.emitAuthEvent(ctx, eventAuthLoginFailed, userID, tenantID, "wallet", "", "", "account_inactive")
+		return nil, status.Error(codes.Unauthenticated, "account deactivated")
+	}
+
+	refreshToken, err := generateRandomString(40)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate refresh token: %v", err)
+	}
+	refreshHash := hashToken(refreshToken)
+	refreshExpiry := time.Now().Add(30 * 24 * time.Hour)
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO commodore.refresh_tokens (tenant_id, user_id, token_hash, expires_at)
+		VALUES ($1, $2, $3, $4)
+	`, tenantID, userID, refreshHash, refreshExpiry); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create wallet session: %v", err)
+	}
 	expiresAt := time.Now().Add(15 * time.Minute)
 
 	// Build user response
@@ -6196,181 +6309,16 @@ func (s *CommodoreServer) WalletLogin(ctx context.Context, req *commodorepb.Wall
 	s.emitAuthEvent(ctx, eventAuthLoginSucceeded, userID, tenantID, "wallet", "", "", "")
 
 	return &commodorepb.AuthResponse{
-		Token:     token,
-		User:      user,
-		ExpiresAt: timestamppb.New(expiresAt),
-		IsNewUser: isNewUser,
+		Token:        token,
+		RefreshToken: refreshToken,
+		User:         user,
+		ExpiresAt:    timestamppb.New(expiresAt),
+		IsNewUser:    isNewUser,
 	}, nil
-}
-
-// WalletLoginWithX402 authenticates via x402 payload and returns a session token.
-// If payment value > 0, it settles the payment and credits the target tenant (or payer if none specified).
-func (s *CommodoreServer) WalletLoginWithX402(ctx context.Context, req *commodorepb.WalletLoginWithX402Request) (*commodorepb.WalletLoginWithX402Response, error) {
-	if s.purserClient == nil {
-		return nil, status.Error(codes.Unavailable, "purser client not configured")
-	}
-
-	payment := req.GetPayment()
-	if payment == nil {
-		return nil, status.Error(codes.InvalidArgument, "payment required")
-	}
-
-	verifyResp, err := s.purserClient.VerifyX402Payment(ctx, "", payment, req.GetClientIp())
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "payment verification failed: %v", err)
-	}
-	if !verifyResp.Valid {
-		return nil, status.Errorf(codes.Unauthenticated, "payment invalid: %s", verifyResp.Error)
-	}
-
-	payerAddress := verifyResp.PayerAddress
-	if payerAddress == "" {
-		return nil, status.Error(codes.InvalidArgument, "payer address missing")
-	}
-
-	chainType := x402NetworkToChainType(payment.GetNetwork())
-	attr := req.GetAttribution()
-	if attr == nil {
-		signupMethod := "x402"
-		if payment.GetNetwork() != "" {
-			signupMethod = "x402_" + strings.ToLower(payment.GetNetwork())
-		}
-		attr = &commonpb.SignupAttribution{
-			SignupChannel: "x402",
-			SignupMethod:  signupMethod,
-		}
-	}
-	walletResp, err := s.GetOrCreateWalletUser(ctx, &commodorepb.GetOrCreateWalletUserRequest{
-		ChainType:     chainType,
-		WalletAddress: payerAddress,
-		Attribution:   attr,
-	})
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to resolve wallet user: %v", err)
-	}
-
-	userID := walletResp.GetUserId()
-	tenantID := walletResp.GetTenantId()
-	isNewUser := walletResp.GetIsNew()
-
-	var email sql.NullString
-	var firstName, lastName, role string
-	var isActive, isVerified, platformOperator bool
-	var lastLoginAt sql.NullTime
-	var createdAt, updatedAt time.Time
-
-	err = s.db.QueryRowContext(ctx, `
-		SELECT email, first_name, last_name, role, is_active, verified,
-		       last_login_at, created_at, updated_at, platform_operator
-		FROM commodore.users WHERE id = $1 AND tenant_id = $2
-	`, userID, tenantID).Scan(&email, &firstName, &lastName, &role,
-		&isActive, &isVerified, &lastLoginAt, &createdAt, &updatedAt, &platformOperator)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to fetch user: %v", err)
-	}
-
-	// Update last_auth_at on wallet identity
-	_, _ = s.db.ExecContext(ctx, `
-		UPDATE commodore.wallet_identities
-		SET last_auth_at = NOW()
-		WHERE chain_type = $1 AND wallet_address = $2
-	`, chainType, walletResp.GetWalletAddress())
-
-	// Update last_login_at on user
-	_, _ = s.db.ExecContext(ctx, `
-		UPDATE commodore.users SET last_login_at = NOW() WHERE id = $1 AND tenant_id = $2
-	`, userID, tenantID)
-
-	// Generate JWT
-	jwtSecret := []byte(config.RequireEnv("JWT_SECRET"))
-	var emailStr string
-	if email.Valid {
-		emailStr = email.String
-	}
-	token, err := auth.GenerateSessionJWT(userID, tenantID, emailStr, role, platformRoles(platformOperator), time.Now(), jwtSecret)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
-	}
-	expiresAt := time.Now().Add(15 * time.Minute)
-
-	user := &commodorepb.User{
-		Id:               userID,
-		TenantId:         tenantID,
-		FirstName:        firstName,
-		LastName:         lastName,
-		Role:             role,
-		IsActive:         isActive,
-		IsVerified:       isVerified,
-		PlatformOperator: platformOperator,
-		CreatedAt:        timestamppb.New(createdAt),
-		UpdatedAt:        timestamppb.New(updatedAt),
-	}
-	if email.Valid {
-		user.Email = &email.String
-	}
-	if lastLoginAt.Valid {
-		user.LastLoginAt = timestamppb.New(lastLoginAt.Time)
-	}
-
-	s.emitAuthEvent(ctx, eventAuthLoginSucceeded, userID, tenantID, "x402", "", "", "")
-
-	authResp := &commodorepb.AuthResponse{
-		Token:     token,
-		User:      user,
-		ExpiresAt: timestamppb.New(expiresAt),
-		IsNewUser: isNewUser,
-	}
-
-	if verifyResp.IsAuthOnly {
-		return &commodorepb.WalletLoginWithX402Response{
-			Auth:           authResp,
-			IsAuthOnly:     true,
-			PayerAddress:   payerAddress,
-			TargetTenantId: tenantID,
-		}, nil
-	}
-
-	targetTenantID := req.GetTargetTenantId()
-	if targetTenantID == "" {
-		targetTenantID = tenantID
-	}
-
-	settleResp, err := s.purserClient.SettleX402Payment(ctx, targetTenantID, payment, req.GetClientIp())
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "payment settlement failed: %v", err)
-	}
-	if !settleResp.Success {
-		return nil, status.Errorf(codes.Internal, "payment settlement failed: %s", settleResp.Error)
-	}
-
-	return &commodorepb.WalletLoginWithX402Response{
-		Auth:            authResp,
-		IsAuthOnly:      false,
-		CreditedCents:   settleResp.CreditedCents,
-		NewBalanceCents: settleResp.NewBalanceCents,
-		TxHash:          settleResp.TxHash,
-		Currency:        settleResp.Currency,
-		InvoiceNumber:   settleResp.InvoiceNumber,
-		PayerAddress:    settleResp.PayerAddress,
-		TargetTenantId:  targetTenantID,
-	}, nil
-}
-
-func x402NetworkToChainType(network string) string {
-	switch strings.ToLower(network) {
-	case "base", "base-mainnet", "base-sepolia":
-		return string(auth.ChainBase)
-	case "arbitrum", "arbitrum-one":
-		return string(auth.ChainArbitrum)
-	case "ethereum", "mainnet":
-		return string(auth.ChainEthereum)
-	default:
-		return string(auth.ChainEthereum)
-	}
 }
 
 // LinkWallet links a wallet to the authenticated user's account
-func (s *CommodoreServer) LinkWallet(ctx context.Context, req *commodorepb.LinkWalletRequest) (*commodorepb.WalletIdentity, error) {
+func (s *CommodoreServer) LinkWallet(ctx context.Context, req *commodorepb.LinkWalletRequest) (*commodorepb.WalletIdentity, error) { //nolint:govet // Challenge consumption is an independent failure scope.
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -6384,23 +6332,19 @@ func (s *CommodoreServer) LinkWallet(ctx context.Context, req *commodorepb.LinkW
 		return nil, status.Error(codes.InvalidArgument, "wallet_address, message, and signature required")
 	}
 
-	// Verify the signature
-	valid, err := auth.VerifyWalletAuth(auth.WalletMessage{
-		Address:   walletAddr,
-		Message:   message,
-		Signature: signature,
-	})
+	normalizedAddr, err := auth.NormalizeEthAddress(walletAddr)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid address: %v", err)
+	}
+	valid, err := auth.VerifyEthSignature(normalizedAddr, message, signature)
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "signature verification failed: %v", err)
 	}
 	if !valid {
 		return nil, status.Error(codes.Unauthenticated, "invalid signature")
 	}
-
-	// Normalize address
-	normalizedAddr, err := auth.NormalizeEthAddress(walletAddr)
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid address: %v", err)
+	if challengeErr := s.consumeWalletChallenge(ctx, normalizedAddr, message); challengeErr != nil {
+		return nil, challengeErr
 	}
 
 	// Check if wallet is already linked to another user
@@ -6451,18 +6395,75 @@ func (s *CommodoreServer) UnlinkWallet(ctx context.Context, req *commodorepb.Unl
 		return nil, status.Error(codes.InvalidArgument, "wallet_id required")
 	}
 
-	// Delete only if it belongs to the user
-	result, err := s.db.ExecContext(ctx, `
-		DELETE FROM commodore.wallet_identities
-		WHERE id = $1 AND user_id = $2
-	`, walletID, userID)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to unlink wallet: %v", err)
+		return nil, status.Error(codes.Internal, "failed to begin wallet unlink")
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after commit or an early return
+
+	// Locking the user serializes concurrent unlink attempts. Without this lock,
+	// two requests could each observe another wallet and remove both, locking a
+	// wallet-only user out of the account.
+	var hasPasswordSignin bool
+	lockErr := tx.QueryRowContext(ctx, `
+		SELECT COALESCE(password_hash, '') <> ''
+		   AND email IS NOT NULL
+		   AND verified = TRUE
+		FROM commodore.users
+		WHERE id = $1 AND tenant_id = $2
+		FOR UPDATE
+	`, userID, tenantID).Scan(&hasPasswordSignin)
+	if errors.Is(lockErr, sql.ErrNoRows) {
+		return nil, status.Error(codes.NotFound, "user not found")
+	} else if lockErr != nil {
+		return nil, status.Error(codes.Internal, "failed to verify account authentication methods")
 	}
 
-	rowsAffected, _ := result.RowsAffected()
+	var owned bool
+	ownedErr := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM commodore.wallet_identities
+			WHERE id = $1 AND user_id = $2 AND tenant_id = $3
+		)
+	`, walletID, userID, tenantID).Scan(&owned)
+	if ownedErr != nil {
+		return nil, status.Error(codes.Internal, "failed to verify wallet ownership")
+	}
+	if !owned {
+		return nil, status.Error(codes.NotFound, "wallet not found or not owned by you")
+	}
+
+	if !hasPasswordSignin {
+		var walletCount int
+		countErr := tx.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM commodore.wallet_identities
+			WHERE user_id = $1 AND tenant_id = $2
+		`, userID, tenantID).Scan(&walletCount)
+		if countErr != nil {
+			return nil, status.Error(codes.Internal, "failed to verify account authentication methods")
+		}
+		if walletCount <= 1 {
+			return nil, status.Error(codes.FailedPrecondition, "cannot unlink the final wallet until another sign-in method is configured")
+		}
+	}
+
+	result, err := tx.ExecContext(ctx, `
+		DELETE FROM commodore.wallet_identities
+		WHERE id = $1 AND user_id = $2 AND tenant_id = $3
+	`, walletID, userID, tenantID)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to unlink wallet")
+	}
+
+	rowsAffected, rowsErr := result.RowsAffected()
+	if rowsErr != nil {
+		return nil, status.Error(codes.Internal, "failed to verify wallet unlink")
+	}
 	if rowsAffected == 0 {
 		return nil, status.Error(codes.NotFound, "wallet not found or not owned by you")
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, status.Error(codes.Internal, "failed to commit wallet unlink")
 	}
 
 	s.emitAuthEvent(ctx, eventWalletUnlinked, userID, tenantID, "wallet", walletID, "", "")
@@ -9459,7 +9460,7 @@ func (s *CommodoreServer) ResolveViewerEndpoint(ctx context.Context, req *shared
 	outCtx := ctx
 	if md, ok := metadata.FromIncomingContext(ctx); ok && md != nil {
 		forward := metadata.MD{}
-		for _, key := range []string{"x-payment", "payment-signature", "x402-paid"} {
+		for _, key := range []string{"x-payment", "payment-signature"} {
 			if values := md.Get(key); len(values) > 0 {
 				forward.Set(key, values...)
 			}

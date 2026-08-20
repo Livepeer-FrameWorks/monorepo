@@ -995,6 +995,7 @@ type CreateTenantRequest struct {
 	DeploymentModel       string                    `protobuf:"bytes,8,opt,name=deployment_model,json=deploymentModel,proto3" json:"deployment_model,omitempty"`                     // json:"deployment_model"
 	PrimaryDeploymentTier string                    `protobuf:"bytes,9,opt,name=primary_deployment_tier,json=primaryDeploymentTier,proto3" json:"primary_deployment_tier,omitempty"` // json:"primary_deployment_tier"
 	Attribution           *common.SignupAttribution `protobuf:"bytes,10,opt,name=attribution,proto3" json:"attribution,omitempty"`
+	ProvisioningKey       *string                   `protobuf:"bytes,11,opt,name=provisioning_key,json=provisioningKey,proto3,oneof" json:"provisioning_key,omitempty"` // service-owned idempotency key for cross-service signup sagas
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -1097,6 +1098,13 @@ func (x *CreateTenantRequest) GetAttribution() *common.SignupAttribution {
 		return x.Attribution
 	}
 	return nil
+}
+
+func (x *CreateTenantRequest) GetProvisioningKey() string {
+	if x != nil && x.ProvisioningKey != nil {
+		return *x.ProvisioningKey
+	}
+	return ""
 }
 
 // Matches pkg/api/quartermaster/types.go:CreateTenantResponse (lines 64-67)
@@ -13198,7 +13206,7 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\atenants\x18\x01 \x03(\v2\x15.quartermaster.TenantR\atenants\x12@\n" +
 	"\n" +
 	"pagination\x18\x02 \x01(\v2 .common.CursorPaginationResponseR\n" +
-	"pagination\"\xda\x03\n" +
+	"pagination\"\x9f\x04\n" +
 	"\x13CreateTenantRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12!\n" +
 	"\tsubdomain\x18\x02 \x01(\tH\x00R\tsubdomain\x88\x01\x01\x12(\n" +
@@ -13210,11 +13218,13 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x10deployment_model\x18\b \x01(\tR\x0fdeploymentModel\x126\n" +
 	"\x17primary_deployment_tier\x18\t \x01(\tR\x15primaryDeploymentTier\x12;\n" +
 	"\vattribution\x18\n" +
-	" \x01(\v2\x19.common.SignupAttributionR\vattributionB\f\n" +
+	" \x01(\v2\x19.common.SignupAttributionR\vattribution\x12.\n" +
+	"\x10provisioning_key\x18\v \x01(\tH\x03R\x0fprovisioningKey\x88\x01\x01B\f\n" +
 	"\n" +
 	"_subdomainB\x10\n" +
 	"\x0e_custom_domainB\v\n" +
-	"\t_logo_url\"[\n" +
+	"\t_logo_urlB\x13\n" +
+	"\x11_provisioning_key\"[\n" +
 	"\x14CreateTenantResponse\x12-\n" +
 	"\x06tenant\x18\x01 \x01(\v2\x15.quartermaster.TenantR\x06tenant\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"\x91\x06\n" +

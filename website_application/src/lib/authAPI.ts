@@ -25,6 +25,8 @@ authAPI.interceptors.request.use(
     const isAuthEndpoint =
       config.url &&
       (config.url.includes("/login") ||
+        config.url.includes("/wallet-challenge") ||
+        config.url.includes("/wallet-login") ||
         config.url.includes("/register") ||
         config.url.includes("/verify-email") ||
         config.url.includes("/resend-verification") ||

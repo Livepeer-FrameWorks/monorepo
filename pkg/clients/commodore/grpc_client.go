@@ -15,7 +15,6 @@ import (
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
-	x402pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/x402"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
@@ -921,6 +920,13 @@ func (c *GRPCClient) GetNewsletterStatus(ctx context.Context) (bool, error) {
 // WALLET AUTHENTICATION OPERATIONS
 // ============================================================================
 
+func (c *GRPCClient) IssueWalletChallenge(ctx context.Context, address string, chainID uint64) (*commodorepb.IssueWalletChallengeResponse, error) {
+	return c.user.IssueWalletChallenge(ctx, &commodorepb.IssueWalletChallengeRequest{
+		WalletAddress: address,
+		ChainId:       chainID,
+	})
+}
+
 // WalletLogin authenticates a user via wallet signature, auto-provisioning if new
 func (c *GRPCClient) WalletLogin(ctx context.Context, address, message, signature string, attribution *commonpb.SignupAttribution) (*commodorepb.AuthResponse, error) {
 	return c.user.WalletLogin(ctx, &commodorepb.WalletLoginRequest{
@@ -929,19 +935,6 @@ func (c *GRPCClient) WalletLogin(ctx context.Context, address, message, signatur
 		Signature:     signature,
 		Attribution:   attribution,
 	})
-}
-
-// WalletLoginWithX402 authenticates via x402 payload and returns session token + payment info.
-func (c *GRPCClient) WalletLoginWithX402(ctx context.Context, payment *x402pb.X402PaymentPayload, clientIP, targetTenantID string, attribution *commonpb.SignupAttribution) (*commodorepb.WalletLoginWithX402Response, error) {
-	req := &commodorepb.WalletLoginWithX402Request{
-		Payment:     payment,
-		ClientIp:    clientIP,
-		Attribution: attribution,
-	}
-	if targetTenantID != "" {
-		req.TargetTenantId = &targetTenantID
-	}
-	return c.user.WalletLoginWithX402(ctx, req)
 }
 
 // LinkWallet links a wallet to the current user's account

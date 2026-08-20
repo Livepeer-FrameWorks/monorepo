@@ -44,15 +44,8 @@ export function cleanupWalletWatcher() {
   }
 }
 
-// Generate a message for wallet signing (matches backend format)
-export function generateAuthMessage(): string {
-  const timestamp = new Date().toISOString();
-  const nonce = crypto.randomUUID();
-  return `FrameWorks Login\nTimestamp: ${timestamp}\nNonce: ${nonce}`;
-}
-
-// Sign a message with the connected wallet
-export async function signAuthMessage(): Promise<{
+// Sign the server-issued, single-use login challenge.
+export async function signAuthMessage(message: string): Promise<{
   message: string;
   signature: string;
 } | null> {
@@ -63,7 +56,6 @@ export async function signAuthMessage(): Promise<{
 
   try {
     error = null;
-    const message = generateAuthMessage();
     const signature = await signMessage(wagmiConfig, { message });
     return { message, signature };
   } catch (err) {

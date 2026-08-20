@@ -36,7 +36,6 @@ type AuthResult struct {
 type AuthOptions struct {
 	AllowCookies bool
 	AllowWallet  bool
-	AllowX402    bool
 }
 
 // AuthenticateRequest validates wallet headers or bearer tokens and returns auth context.
@@ -44,60 +43,6 @@ type AuthOptions struct {
 func AuthenticateRequest(ctx context.Context, r *http.Request, clients *clients.ServiceClients, jwtSecret []byte, opts AuthOptions, logger logging.Logger) (*AuthResult, error) {
 	if r == nil {
 		return nil, fmt.Errorf("request is nil")
-	}
-
-	if opts.AllowX402 {
-		if xPayment := GetX402PaymentHeader(r); xPayment != "" {
-			payload, err := ParseX402PaymentHeader(xPayment)
-			if err != nil {
-				return nil, fmt.Errorf("invalid X-PAYMENT header")
-			}
-			clientIP := ClientIPFromRequest(r)
-			signupMethod := "x402"
-			if payload.GetNetwork() != "" {
-				signupMethod = "x402_" + strings.ToLower(payload.GetNetwork())
-			}
-			attr := attribution.FromRequest(r, "x402", signupMethod)
-			walletResp, err := clients.Commodore.WalletLoginWithX402(ctx, payload, clientIP, "", attr)
-			if err != nil {
-				if logger != nil {
-					logger.WithError(err).Warn("X-PAYMENT login failed")
-				}
-				return nil, fmt.Errorf("x402 login failed")
-			}
-			if walletResp == nil || walletResp.Auth == nil || walletResp.Auth.User == nil {
-				return nil, fmt.Errorf("x402 auth returned no user")
-			}
-
-			email := ""
-			if walletResp.Auth.User.Email != nil {
-				email = *walletResp.Auth.User.Email
-			}
-			expiresAt := (*time.Time)(nil)
-			if walletResp.Auth.ExpiresAt != nil {
-				value := walletResp.Auth.ExpiresAt.AsTime()
-				expiresAt = &value
-			}
-
-			walletAddress := walletResp.PayerAddress
-			if walletAddress == "" && payload.GetPayload() != nil && payload.GetPayload().GetAuthorization() != nil {
-				walletAddress = payload.GetPayload().GetAuthorization().GetFrom()
-			}
-
-			return &AuthResult{
-				UserID:           walletResp.Auth.User.Id,
-				TenantID:         walletResp.Auth.User.TenantId,
-				Email:            email,
-				Role:             walletResp.Auth.User.Role,
-				AuthType:         "x402",
-				JWTToken:         walletResp.Auth.Token,
-				WalletAddress:    walletAddress,
-				ExpiresAt:        expiresAt,
-				X402Processed:    true,
-				X402AuthOnly:     walletResp.IsAuthOnly,
-				PlatformOperator: walletResp.Auth.User.PlatformOperator,
-			}, nil
-		}
 	}
 
 	if opts.AllowWallet {
@@ -120,6 +65,11 @@ func AuthenticateRequest(ctx context.Context, r *http.Request, clients *clients.
 			if resp == nil || resp.User == nil {
 				return nil, fmt.Errorf("wallet auth returned no user")
 			}
+			var expiresAt *time.Time
+			if resp.ExpiresAt != nil {
+				value := resp.ExpiresAt.AsTime()
+				expiresAt = &value
+			}
 
 			email := ""
 			if resp.User.Email != nil {
@@ -134,6 +84,7 @@ func AuthenticateRequest(ctx context.Context, r *http.Request, clients *clients.
 				JWTToken:         resp.Token,
 				WalletAddress:    walletAddr,
 				PlatformOperator: resp.User.PlatformOperator,
+				ExpiresAt:        expiresAt,
 			}, nil
 		}
 	}

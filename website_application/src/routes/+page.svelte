@@ -124,6 +124,9 @@
         }
       : null
   );
+  let isPrepaidAccount = $derived(
+    billingStatus?.subscription?.billingModel?.toLowerCase() === "prepaid"
+  );
 
   let usageData = $derived(
     $platformOverviewStore.data?.analytics?.overview
@@ -335,6 +338,34 @@
     <!-- Scrollable Content -->
     <div class="flex-1 overflow-y-auto">
       <div class="page-transition">
+        {#if isPrepaidAccount}
+          <div class="px-4 sm:px-6 lg:px-8 py-4">
+            <div class="border border-primary/30 bg-primary/5 p-4">
+              <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p class="font-medium text-foreground">Your prepaid workspace is ready</p>
+                  <p class="mt-1 text-sm text-muted-foreground">
+                    You can finish setup and configure streams now. Add funds before starting rated
+                    usage, or complete billing details and switch to postpaid.
+                  </p>
+                </div>
+                <div class="flex shrink-0 flex-wrap gap-2">
+                  <Button href={resolve("/account/balance")} class="gap-2">
+                    <CreditCardIcon class="w-4 h-4" />
+                    Add funds
+                  </Button>
+                  <Button
+                    href={resolve(user?.email ? "/account/billing" : "/settings")}
+                    variant="outline"
+                  >
+                    {user?.email ? "Set up postpaid" : "Complete account setup"}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        {/if}
+
         <!-- Real-time Dashboard Stats (4→2×2→1 responsive) -->
         <div class="px-4 sm:px-6 lg:px-8 py-2">
           <div class="flex items-center gap-2">

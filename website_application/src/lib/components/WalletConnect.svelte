@@ -48,8 +48,8 @@
 
       const address = result.accounts[0];
 
-      // Sign authentication message
-      const signed = await signAuthMessage();
+      const message = await auth.issueWalletChallenge(address, result.chainId);
+      const signed = await signAuthMessage(message);
       if (!signed) {
         throw new Error("Failed to sign message");
       }

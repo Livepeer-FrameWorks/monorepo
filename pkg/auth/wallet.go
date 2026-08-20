@@ -105,25 +105,34 @@ func ValidateWalletMessageTimestamp(message string) error {
 
 func validateWalletMessageTimestampAt(message string, now time.Time) error {
 	lines := strings.Split(message, "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "Timestamp: ") {
-			timestampStr := strings.TrimPrefix(line, "Timestamp: ")
-			timestamp, err := time.Parse(time.RFC3339, timestampStr)
-			if err != nil {
-				return fmt.Errorf("invalid timestamp format: %w", err)
-			}
-
-			age := now.Sub(timestamp)
-			if age < -1*time.Minute {
-				return fmt.Errorf("message timestamp is in the future")
-			}
-			if age > 5*time.Minute {
-				return fmt.Errorf("message timestamp expired (older than 5 minutes)")
-			}
-			return nil
-		}
+	if len(lines) != 3 || lines[0] != "FrameWorks Login" {
+		return fmt.Errorf("invalid wallet login message")
 	}
-	return fmt.Errorf("message missing timestamp")
+	if !strings.HasPrefix(lines[1], "Timestamp: ") {
+		return fmt.Errorf("message missing timestamp")
+	}
+	if !strings.HasPrefix(lines[2], "Nonce: ") {
+		return fmt.Errorf("message missing nonce")
+	}
+	nonce := strings.TrimSpace(strings.TrimPrefix(lines[2], "Nonce: "))
+	if nonce == "" || len(nonce) > 128 {
+		return fmt.Errorf("invalid message nonce")
+	}
+
+	timestampStr := strings.TrimPrefix(lines[1], "Timestamp: ")
+	timestamp, err := time.Parse(time.RFC3339, timestampStr)
+	if err != nil {
+		return fmt.Errorf("invalid timestamp format: %w", err)
+	}
+
+	age := now.Sub(timestamp)
+	if age < -1*time.Minute {
+		return fmt.Errorf("message timestamp is in the future")
+	}
+	if age > 5*time.Minute {
+		return fmt.Errorf("message timestamp expired (older than 5 minutes)")
+	}
+	return nil
 }
 
 // VerifyEthSignature verifies an EIP-191 personal_sign signature

@@ -8,14 +8,17 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"frameworks/api_gateway/internal/clients/clientstest"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 
 	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestAuthHandlers_InvalidJSONBindingsReturnBadRequest(t *testing.T) {
@@ -61,6 +64,54 @@ func TestAuthHandlers_InvalidJSONBindingsReturnBadRequest(t *testing.T) {
 				t.Fatalf("body: expected invalid request error, got %q", rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestWalletChallengeAndLoginSessionCookies(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fake := &clientstest.FakeCommodore{
+		IssueWalletChallengeFn: func(_ context.Context, address string, chainID uint64) (*commodorepb.IssueWalletChallengeResponse, error) {
+			if address != "0xabc" || chainID != 1 {
+				t.Fatalf("challenge request = %q %d", address, chainID)
+			}
+			return &commodorepb.IssueWalletChallengeResponse{Message: "server challenge", ExpiresAt: timestamppb.New(time.Now().Add(time.Minute))}, nil
+		},
+		WalletLoginFn: func(_ context.Context, address, message, signature string, _ *commonpb.SignupAttribution) (*commodorepb.AuthResponse, error) {
+			return &commodorepb.AuthResponse{
+				Token: "access", RefreshToken: "refresh",
+				User:      &commodorepb.User{Id: "u1", TenantId: "t1"},
+				ExpiresAt: timestamppb.New(time.Now().Add(15 * time.Minute)),
+			}, nil
+		},
+	}
+	h := &AuthHandlers{commodore: fake, logger: logging.NewLogger()}
+
+	challengeRecorder := httptest.NewRecorder()
+	challengeContext, _ := gin.CreateTestContext(challengeRecorder)
+	challengeContext.Request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/auth/wallet-challenge", strings.NewReader(`{"address":"0xabc","chain_id":1}`))
+	challengeContext.Request.Header.Set("Content-Type", "application/json")
+	h.WalletChallenge()(challengeContext)
+	if challengeRecorder.Code != http.StatusOK || !strings.Contains(challengeRecorder.Body.String(), "server challenge") {
+		t.Fatalf("challenge response = %d %s", challengeRecorder.Code, challengeRecorder.Body.String())
+	}
+
+	loginRecorder := httptest.NewRecorder()
+	loginContext, _ := gin.CreateTestContext(loginRecorder)
+	loginContext.Request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/auth/wallet-login", strings.NewReader(`{"address":"0xabc","message":"server challenge","signature":"0xsig"}`))
+	loginContext.Request.Header.Set("Content-Type", "application/json")
+	h.WalletLogin()(loginContext)
+	if loginRecorder.Code != http.StatusOK {
+		t.Fatalf("login response = %d %s", loginRecorder.Code, loginRecorder.Body.String())
+	}
+	cookies := loginRecorder.Result().Cookies()
+	want := map[string]string{accessTokenCookie: "access", refreshTokenCookie: "refresh", tenantIDCookie: "t1"}
+	for _, cookie := range cookies {
+		if expected, ok := want[cookie.Name]; ok && cookie.Value == expected {
+			delete(want, cookie.Name)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing wallet session cookies: %#v", want)
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
@@ -89,26 +88,6 @@ func TestTierProcessesForLifecycle(t *testing.T) {
 	for in, want := range cases {
 		if got := tierProcessesForLifecycle(tier, in); got != want {
 			t.Errorf("tierProcessesForLifecycle(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
-func TestX402NetworkToChainType(t *testing.T) {
-	cases := map[string]string{
-		"base":         string(auth.ChainBase),
-		"base-mainnet": string(auth.ChainBase),
-		"base-sepolia": string(auth.ChainBase),
-		"BASE":         string(auth.ChainBase), // case-insensitive
-		"arbitrum":     string(auth.ChainArbitrum),
-		"arbitrum-one": string(auth.ChainArbitrum),
-		"ethereum":     string(auth.ChainEthereum),
-		"mainnet":      string(auth.ChainEthereum),
-		"":             string(auth.ChainEthereum), // unknown defaults to ethereum
-		"solana":       string(auth.ChainEthereum),
-	}
-	for in, want := range cases {
-		if got := x402NetworkToChainType(in); got != want {
-			t.Errorf("x402NetworkToChainType(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

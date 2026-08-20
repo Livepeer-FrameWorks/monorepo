@@ -238,7 +238,8 @@
       if (!result.accounts[0]) throw new Error("No account connected");
 
       const address = result.accounts[0];
-      const signed = await signAuthMessage();
+      const message = await auth.issueWalletChallenge(address, result.chainId);
+      const signed = await signAuthMessage(message);
       if (!signed) throw new Error("Failed to sign message");
 
       const linkWallet = new LinkWalletStore();
@@ -291,6 +292,14 @@
 
   function formatAddress(address: string): string {
     return `${address.slice(0, 6)}...${address.slice(-4)}`;
+  }
+
+  function finalWalletRemovalUnavailable(): boolean {
+    const user = $auth.user;
+    return (
+      linkedWallets.length === 1 &&
+      !(user?.email && (user.email_verified === true || user.is_verified === true))
+    );
   }
 
   async function saveProfile() {
@@ -503,9 +512,9 @@
                       variant="ghost"
                       size="sm"
                       onclick={() => unlinkWallet(wallet.id)}
-                      disabled={walletLoading || (linkedWallets.length === 1 && !$auth.user?.email)}
-                      title={linkedWallets.length === 1 && !$auth.user?.email
-                        ? "Cannot unlink last wallet without email"
+                      disabled={walletLoading || finalWalletRemovalUnavailable()}
+                      title={finalWalletRemovalUnavailable()
+                        ? "Verify a password sign-in before unlinking the final wallet"
                         : "Unlink wallet"}
                     >
                       <TrashIcon class="w-4 h-4 text-destructive" />
@@ -614,8 +623,10 @@
               <p class="text-sm text-muted-foreground">Loading billing details...</p>
             {:else}
               <p class="text-sm text-muted-foreground mb-4">
-                Required for VAT invoicing on payments. Complete these details before making any
-                top-ups.
+                Billing email and address are required before funding or enabling postpaid billing.
+                Add a VAT/tax identifier only if you are registered; leaving it blank records that
+                no identifier was supplied. Identifiers are not tax-authority verified
+                automatically.
               </p>
               <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
@@ -642,7 +653,7 @@
                 </div>
                 <div>
                   <label for="billingVat" class="text-sm font-medium text-muted-foreground"
-                    >VAT Number</label
+                    >VAT / Tax Identifier (optional)</label
                   >
                   <Input
                     id="billingVat"
@@ -650,6 +661,9 @@
                     bind:value={billingDetails.vatNumber}
                     placeholder="DE123456789"
                   />
+                  <p class="mt-1 text-xs text-muted-foreground">
+                    Leave blank if you are not VAT registered.
+                  </p>
                 </div>
                 <div>
                   <label for="billingCountry" class="text-sm font-medium text-muted-foreground"

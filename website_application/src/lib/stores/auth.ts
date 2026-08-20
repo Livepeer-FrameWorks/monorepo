@@ -46,6 +46,11 @@ interface LoginResponse {
   errorCode?: string;
 }
 
+interface WalletChallengeResponse {
+  message: string;
+  expires_at: string;
+}
+
 interface AuthErrorResponse {
   error?: unknown;
   error_code?: unknown;
@@ -181,6 +186,14 @@ function createAuthStore() {
 
   return {
     subscribe,
+
+    async issueWalletChallenge(address: string, chainId: number): Promise<string> {
+      const response = await authAPI.post<WalletChallengeResponse>("/wallet-challenge", {
+        address,
+        chain_id: chainId,
+      });
+      return response.data.message;
+    },
 
     async login(
       email: string,
@@ -456,6 +469,7 @@ function createAuthStore() {
         });
 
         // Initialize WebSocket
+        startRefreshLoop();
         initializeWebSocket();
 
         return { success: true };
