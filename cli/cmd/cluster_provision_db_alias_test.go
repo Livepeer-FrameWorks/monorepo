@@ -8,6 +8,22 @@ import (
 	"frameworks/cli/pkg/orchestrator"
 )
 
+func TestApplySharedPostgresDatabaseDefaultsOnlyTargetsMetering(t *testing.T) {
+	for _, serviceID := range []string{"periscope-query", "periscope-ingest"} {
+		env := map[string]string{}
+		applySharedPostgresDatabaseDefaults(serviceID, env)
+		if env["DATABASE_NAME"] != "" || env["DATABASE_USER"] != "" {
+			t.Errorf("%s received PostgreSQL defaults despite not opening PostgreSQL: %#v", serviceID, env)
+		}
+	}
+
+	env := map[string]string{}
+	applySharedPostgresDatabaseDefaults("periscope-metering", env)
+	if env["DATABASE_NAME"] != "periscope" || env["DATABASE_USER"] != "periscope" {
+		t.Fatalf("periscope-metering defaults = %#v, want periscope database and user", env)
+	}
+}
+
 // productionYugabyteManifest mirrors the production `infrastructure.postgres` shape: a native-mode
 // YugabyteDB cluster whose databases are declared at the TOP LEVEL (pg.Databases), NOT inside an
 // instances[] entry. `foghorn` is a LOGICAL database that provisioning expands to one physical

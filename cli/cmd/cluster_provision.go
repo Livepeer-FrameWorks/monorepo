@@ -7053,7 +7053,7 @@ func buildDatabaseURL(manifest *inventory.Manifest, primaryHost, port, user, pas
 
 func applySharedPostgresDatabaseDefaults(serviceID string, env map[string]string) {
 	switch serviceID {
-	case "periscope-query", "periscope-ingest":
+	case "periscope-metering":
 		if env["DATABASE_USER"] == "" {
 			env["DATABASE_USER"] = "periscope"
 		}

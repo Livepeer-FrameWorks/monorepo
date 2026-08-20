@@ -2852,7 +2852,7 @@ func TestBuildServiceEnvVarsEscapesDatabaseURLPassword(t *testing.T) {
 	}
 }
 
-func TestBuildServiceEnvVarsUsesSharedPeriscopeDatabaseRole(t *testing.T) {
+func TestBuildServiceEnvVarsUsesSharedPeriscopeMeteringDatabaseRole(t *testing.T) {
 	envFile := writeTestEnvFile(t, testSharedSecrets+"DATABASE_PASSWORD=periscope-pass\n")
 	manifest := &inventory.Manifest{
 		Profile:  "dev",
@@ -2869,9 +2869,9 @@ func TestBuildServiceEnvVarsUsesSharedPeriscopeDatabaseRole(t *testing.T) {
 		},
 	}
 	task := &orchestrator.Task{
-		Name:      "periscope-query",
-		Type:      "periscope-query",
-		ServiceID: "periscope-query",
+		Name:      "periscope-metering",
+		Type:      "periscope-metering",
+		ServiceID: "periscope-metering",
 		Host:      "central-eu-1",
 		Phase:     orchestrator.PhaseApplications,
 	}

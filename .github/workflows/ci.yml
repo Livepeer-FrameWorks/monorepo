@@ -5,6 +5,8 @@ on:
     branches: [master, main]
   push:
     branches: [master]
+  schedule:
+    - cron: "17 3 * * *"
   workflow_dispatch: # manual trigger from Actions UI
 
 concurrency:
@@ -23,6 +25,7 @@ jobs:
       frontend: ${{ steps.filter.outputs.frontend }}
       registry: ${{ steps.filter.outputs.registry }}
       release: ${{ steps.filter.outputs.release }}
+      database: ${{ steps.filter.outputs.database }}
     steps:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v4
@@ -62,6 +65,24 @@ jobs:
               - 'pkg/database/sql/clickhouse/periscope.sql'
               - 'pkg/database/sql/migrations/**'
               - 'pkg/database/sql/clickhouse/migrations/**'
+              - 'scripts/check-migration-version.sh'
+              - 'scripts/check-migration-version.test.sh'
+              - 'Makefile'
+            database:
+              - 'api_analytics_ingest/**/*.go'
+              - 'api_analytics_query/**/*.go'
+              - 'api_balancing/**/*.go'
+              - 'api_billing/**/*.go'
+              - 'api_consultant/**/*.go'
+              - 'api_control/**/*.go'
+              - 'api_dns/**/*.go'
+              - 'api_tenants/**/*.go'
+              - 'cli/internal/releases/catalog.yaml'
+              - 'cli/pkg/provisioner/**'
+              - 'config/infrastructure.yaml'
+              - 'docker-compose.yml'
+              - 'pkg/database/**'
+              - 'pkg/topology/**'
               - 'scripts/check-migration-version.sh'
               - 'scripts/check-migration-version.test.sh'
               - 'Makefile'
@@ -282,7 +303,7 @@ jobs:
   migration-release-state:
     name: Migration release state
     needs: changes
-    if: needs.changes.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
+    if: needs.changes.outputs.release == 'true' || needs.changes.outputs.database == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

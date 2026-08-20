@@ -13,9 +13,6 @@ import (
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 )
 
-// Pinned to match docker-compose.yml and the production release manifest.
-const chHarnessImage = "clickhouse/clickhouse-server:26.3.10.62"
-
 var (
 	// de-Replicate the engine name: ReplicatedXMergeTree -> XMergeTree
 	// (ReplicatedMergeTree -> MergeTree). This is the one deliberate tolerance:
@@ -49,6 +46,7 @@ func normalizeCHCreate(ddl string) string {
 // config (so Replicated* engines resolve) and waits until it answers queries.
 func chStart(t *testing.T, name string) {
 	t.Helper()
+	chHarnessImage := infrastructureHarnessImage(t, "clickhouse")
 	cfg, err := filepath.Abs("../../../infrastructure/clickhouse/config.xml")
 	if err != nil {
 		t.Fatalf("resolve config.xml: %v", err)

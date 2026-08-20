@@ -131,11 +131,16 @@ var infraDependencies = map[string][]InfraDependency{
 	"foghorn":          {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "media control state"}, {Kind: InfraRedis, Provider: InfraProviderNamed, Name: "foghorn", Optional: true, Purpose: "HA relay and federation state"}},
 	"navigator":        {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "DNS and certificate state"}},
 	"periscope-ingest": {{Kind: InfraClickHouse, Provider: InfraProviderPrimary, Purpose: "analytics writes"}, {Kind: InfraKafka, Provider: InfraProviderAggregator, Purpose: "analytics and service event ingestion"}},
-	"periscope-query":  {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "query API state"}, {Kind: InfraClickHouse, Provider: InfraProviderPrimary, Purpose: "analytics reads"}, {Kind: InfraKafka, Provider: InfraProviderAggregator, Purpose: "billing usage report publication"}},
-	"purser":           {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "billing state"}, {Kind: InfraKafka, Provider: InfraProviderAggregator, Purpose: "billing usage report ingestion"}},
-	"quartermaster":    {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "tenant, cluster, node, and service registry state"}},
-	"signalman":        {{Kind: InfraKafka, Provider: InfraProviderRegional, Purpose: "realtime analytics and service event fanout"}},
-	"skipper":          {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "knowledge and conversation state"}, {Kind: InfraKafka, Provider: InfraProviderAggregator, Optional: true, Purpose: "billing usage report publication"}},
+	"periscope-query":  {{Kind: InfraClickHouse, Provider: InfraProviderPrimary, Purpose: "analytics reads"}},
+	"periscope-metering": {
+		{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "metering leases and billing cursors"},
+		{Kind: InfraClickHouse, Provider: InfraProviderPrimary, Purpose: "analytics metering reads"},
+		{Kind: InfraKafka, Provider: InfraProviderAggregator, Purpose: "billing usage report publication"},
+	},
+	"purser":        {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "billing state"}, {Kind: InfraKafka, Provider: InfraProviderAggregator, Purpose: "billing usage report ingestion"}},
+	"quartermaster": {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "tenant, cluster, node, and service registry state"}},
+	"signalman":     {{Kind: InfraKafka, Provider: InfraProviderRegional, Purpose: "realtime analytics and service event fanout"}},
+	"skipper":       {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "knowledge and conversation state"}, {Kind: InfraKafka, Provider: InfraProviderAggregator, Optional: true, Purpose: "billing usage report publication"}},
 }
 
 // ServiceDependencies returns direct service calls made by serviceID.

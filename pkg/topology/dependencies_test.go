@@ -1,11 +1,37 @@
 package topology
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestInfraDependenciesOnlyIncludeDirectInfraClients(t *testing.T) {
 	for _, serviceID := range []string{"bridge", "chandler", "deckhand"} {
 		if deps := InfraDependencies(serviceID); len(deps) != 0 {
 			t.Fatalf("%s infra deps = %#v, want none", serviceID, deps)
+		}
+	}
+}
+
+func TestPeriscopeInfraDependenciesMatchEntrypoints(t *testing.T) {
+	tests := map[string][]InfraDependency{
+		"periscope-ingest": {
+			{Kind: InfraClickHouse, Provider: InfraProviderPrimary, Purpose: "analytics writes"},
+			{Kind: InfraKafka, Provider: InfraProviderAggregator, Purpose: "analytics and service event ingestion"},
+		},
+		"periscope-query": {
+			{Kind: InfraClickHouse, Provider: InfraProviderPrimary, Purpose: "analytics reads"},
+		},
+		"periscope-metering": {
+			{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "metering leases and billing cursors"},
+			{Kind: InfraClickHouse, Provider: InfraProviderPrimary, Purpose: "analytics metering reads"},
+			{Kind: InfraKafka, Provider: InfraProviderAggregator, Purpose: "billing usage report publication"},
+		},
+	}
+
+	for serviceID, want := range tests {
+		if got := InfraDependencies(serviceID); !reflect.DeepEqual(got, want) {
+			t.Errorf("InfraDependencies(%q) = %#v, want %#v", serviceID, got, want)
 		}
 	}
 }

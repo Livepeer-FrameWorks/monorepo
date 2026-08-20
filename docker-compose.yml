@@ -729,7 +729,6 @@ services:
     ports:
       - "18005:18005"
     environment:
-      DATABASE_URL: ${DATABASE_URL}
       KAFKA_BROKERS: ${KAFKA_BROKERS}
       KAFKA_CLUSTER_ID: ${KAFKA_CLUSTER_ID}
       ANALYTICS_KAFKA_TOPIC: ${ANALYTICS_KAFKA_TOPIC}
@@ -746,8 +745,6 @@ services:
       CLUSTER_ID: ${CLUSTER_ID}
       NODE_ID: central-node-1
     depends_on:
-      postgres:
-        condition: service_healthy
       kafka:
         condition: service_healthy
       kafka-init:
@@ -931,6 +928,7 @@ services:
       SUPPLIER_NAME: ${SUPPLIER_NAME}
       SUPPLIER_ADDRESS: ${SUPPLIER_ADDRESS}
       SUPPLIER_VAT_NUMBER: ${SUPPLIER_VAT_NUMBER}
+      SUPPLIER_REGISTRATION_NUMBER: ${SUPPLIER_REGISTRATION_NUMBER}
       SUPPLIER_COUNTRY: ${SUPPLIER_COUNTRY}
       VIES_ENDPOINT: ${VIES_ENDPOINT}
       ETH_RPC_ENDPOINT: ${ETH_RPC_ENDPOINT}

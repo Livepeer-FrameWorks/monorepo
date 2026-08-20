@@ -145,7 +145,7 @@ func TestFormatMigrationRemediation(t *testing.T) {
 // ClickHouse-dependent (so the gate verifies ClickHouse expand migrations for them), while a Postgres-only service and
 // a DB-less one are not — mirroring topology's InfraClickHouse declarations.
 func TestServiceDependsOnClickHouse(t *testing.T) {
-	for _, s := range []string{"periscope-ingest", "periscope-query"} {
+	for _, s := range []string{"periscope-ingest", "periscope-query", "periscope-metering"} {
 		if !serviceDependsOnClickHouse(s) {
 			t.Errorf("%s must be detected as ClickHouse-dependent so the gate verifies ClickHouse migrations", s)
 		}

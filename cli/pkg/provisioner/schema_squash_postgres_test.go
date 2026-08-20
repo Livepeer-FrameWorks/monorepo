@@ -12,16 +12,10 @@ import (
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 )
 
-// Postgres proxy for the YugabyteDB target (ysql is PG-compatible for schema DDL).
-// pgvector image because a baseline uses CREATE EXTENSION vector (Yugabyte ships it).
-const pgHarnessImage = "pgvector/pgvector:pg15"
-
-// pgIntrospectQuery dumps a database's logical schema as sorted text: columns
-// (schema/table/column/type/nullability/default), indexes, constraints WITH their full definition
-// (pg_get_constraintdef — so a changed CHECK expression is detected, not just a renamed constraint),
-// triggers (pg_get_triggerdef), and function bodies (md5 of pg_get_functiondef, one line so the
-// line-sorted comparison stays intact). Migration bookkeeping and baseline
-// provenance tables are excluded because they intentionally differ by install path.
+// pgIntrospectQuery dumps every deploy-relevant logical object as sorted text.
+// Definitions that can contain newlines are hashed so one object remains one
+// comparison row. Migration bookkeeping and baseline provenance are excluded
+// because they intentionally differ by install path.
 const pgIntrospectQuery = `
 SELECT 'col|' || table_schema || '|' || table_name || '|' || column_name || '|' ||
        data_type || '|' || is_nullable || '|' || coalesce(column_default, '')
@@ -53,16 +47,97 @@ SELECT 'trg|' || n.nspname || '|' || t.relname || '|' || tg.tgname || '|' || pg_
    AND n.nspname NOT IN ('pg_catalog','information_schema')
    AND t.relname NOT IN ('_migrations', '_schema_baseline')
 UNION ALL
-SELECT 'fn|' || n.nspname || '|' || p.proname || '|' || md5(pg_get_functiondef(p.oid))
+SELECT 'routine|' || n.nspname || '|' || p.prokind::text || '|' || p.proname || '|' ||
+       pg_get_function_identity_arguments(p.oid) || '|' || md5(pg_get_functiondef(p.oid)) || '|' || pg_get_userbyid(p.proowner)
   FROM pg_proc p
   JOIN pg_namespace n ON n.oid = p.pronamespace
  WHERE n.nspname NOT IN ('pg_catalog','information_schema')
-   AND p.prokind = 'f'
+   AND p.prokind IN ('f', 'p')
+UNION ALL
+SELECT 'view|' || n.nspname || '|' || c.relname || '|' || c.relkind::text || '|' || md5(pg_get_viewdef(c.oid, true)) || '|' || pg_get_userbyid(c.relowner)
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+   AND c.relkind IN ('v', 'm')
+UNION ALL
+SELECT 'seq|' || sequence_schema || '|' || sequence_name || '|' || data_type || '|' ||
+       start_value || '|' || minimum_value || '|' || maximum_value || '|' || increment || '|' || cycle_option
+  FROM information_schema.sequences
+ WHERE sequence_schema NOT IN ('pg_catalog','information_schema')
+UNION ALL
+SELECT 'ext|' || e.extname || '|' || e.extversion || '|' || n.nspname
+  FROM pg_extension e
+  JOIN pg_namespace n ON n.oid = e.extnamespace
+ WHERE e.extname <> 'plpgsql'
+UNION ALL
+SELECT 'enum|' || n.nspname || '|' || t.typname || '|' || string_agg(e.enumlabel, ',' ORDER BY e.enumsortorder) || '|' || pg_get_userbyid(t.typowner)
+  FROM pg_type t
+  JOIN pg_namespace n ON n.oid = t.typnamespace
+  JOIN pg_enum e ON e.enumtypid = t.oid
+ WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+ GROUP BY n.nspname, t.typname, t.typowner
+UNION ALL
+SELECT 'domain|' || n.nspname || '|' || t.typname || '|' || format_type(t.typbasetype, t.typtypmod) || '|' ||
+       t.typnotnull::text || '|' || coalesce(t.typdefault, '') || '|' || pg_get_userbyid(t.typowner)
+  FROM pg_type t
+  JOIN pg_namespace n ON n.oid = t.typnamespace
+ WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+   AND t.typtype = 'd'
+UNION ALL
+SELECT 'composite|' || n.nspname || '|' || c.relname || '|' || a.attnum::text || '|' || a.attname || '|' ||
+       format_type(a.atttypid, a.atttypmod) || '|' || a.attnotnull::text || '|' || pg_get_userbyid(c.relowner)
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_attribute a ON a.attrelid = c.oid
+ WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+   AND c.relkind = 'c'
+   AND a.attnum > 0
+   AND NOT a.attisdropped
+UNION ALL
+SELECT 'schema-owner|' || n.nspname || '|' || pg_get_userbyid(n.nspowner)
+  FROM pg_namespace n
+ WHERE n.nspname NOT IN ('pg_catalog','information_schema','public')
+UNION ALL
+SELECT 'relation-owner|' || n.nspname || '|' || c.relname || '|' || c.relkind::text || '|' || pg_get_userbyid(c.relowner)
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+   AND c.relkind IN ('r','p','v','m','S','f')
+   AND c.relname NOT IN ('_migrations', '_schema_baseline')
+UNION ALL
+SELECT 'table-grant|' || table_schema || '|' || table_name || '|' || grantor || '|' || grantee || '|' || privilege_type || '|' || is_grantable
+  FROM information_schema.role_table_grants
+ WHERE table_schema NOT IN ('pg_catalog','information_schema')
+   AND table_name NOT IN ('_migrations', '_schema_baseline')
+UNION ALL
+SELECT 'routine-grant|' || routine_schema || '|' || routine_name || '|' || grantor || '|' || grantee || '|' || privilege_type || '|' || is_grantable
+  FROM information_schema.role_routine_grants
+ WHERE routine_schema NOT IN ('pg_catalog','information_schema')
+UNION ALL
+SELECT 'usage-grant|' || object_type || '|' || object_schema || '|' || object_name || '|' || grantor || '|' || grantee || '|' || privilege_type || '|' || is_grantable
+  FROM information_schema.role_usage_grants
+ WHERE object_schema NOT IN ('pg_catalog','information_schema')
+UNION ALL
+SELECT 'default-acl|' || coalesce(n.nspname, '') || '|' || pg_get_userbyid(d.defaclrole) || '|' || d.defaclobjtype::text || '|' || d.defaclacl::text
+  FROM pg_default_acl d
+  LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace
+UNION ALL
+SELECT 'rls-table|' || n.nspname || '|' || c.relname || '|' || c.relrowsecurity::text || '|' || c.relforcerowsecurity::text
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+   AND c.relkind IN ('r','p')
+   AND c.relname NOT IN ('_migrations', '_schema_baseline')
+UNION ALL
+SELECT 'rls-policy|' || schemaname || '|' || tablename || '|' || policyname || '|' || permissive || '|' ||
+       array_to_string(roles, ',') || '|' || cmd || '|' || coalesce(qual, '') || '|' || coalesce(with_check, '')
+  FROM pg_policies
  ORDER BY 1`
 
 func pgStart(t *testing.T, name string) {
 	t.Helper()
 	rmContainer(t, name)
+	pgHarnessImage := infrastructureHarnessImage(t, "postgresql")
 	if _, err := docker(t, "", "run", "-d", "--name", name,
 		"-e", "POSTGRES_PASSWORD=harness", pgHarnessImage); err != nil {
 		t.Fatalf("start %s: %v", name, err)
@@ -136,6 +211,71 @@ func requirePGSchemasEqual(t *testing.T, label, expected, actual string) {
 		}
 	}
 	t.Fatalf("%s schemas differ:\n%s", label, strings.Join(diffs, "\n"))
+}
+
+func TestPostgresIntrospectionCoversDeployRelevantObjects(t *testing.T) {
+	requireDocker(t)
+	const name = "fw-sv-pg-introspect"
+	pgStart(t, name)
+
+	const common = `
+CREATE EXTENSION pgcrypto;
+CREATE SCHEMA contract;
+CREATE TYPE contract.state AS ENUM ('open', 'closed');
+CREATE DOMAIN contract.positive_int AS integer CHECK (VALUE > 0);
+CREATE TYPE contract.coordinate AS (x integer, y integer);
+CREATE TABLE contract.items (
+    id bigint PRIMARY KEY,
+    tenant_id uuid NOT NULL,
+    state contract.state NOT NULL,
+    weight contract.positive_int NOT NULL
+);
+CREATE SEQUENCE contract.external_ids START 10 INCREMENT 5;
+CREATE MATERIALIZED VIEW contract.item_counts AS SELECT state, count(*) AS total FROM contract.items GROUP BY state;
+CREATE FUNCTION contract.item_count() RETURNS bigint LANGUAGE sql AS $$ SELECT count(*) FROM contract.items $$;
+CREATE PROCEDURE contract.clear_items() LANGUAGE sql AS $$ DELETE FROM contract.items $$;
+ALTER TABLE contract.items ENABLE ROW LEVEL SECURITY;
+GRANT SELECT ON contract.items TO PUBLIC;
+ALTER DEFAULT PRIVILEGES IN SCHEMA contract GRANT SELECT ON TABLES TO PUBLIC;
+`
+
+	pgCreateDB(t, name, "objects_a")
+	pgApply(t, name, "objects_a", common+`
+CREATE VIEW contract.visible_items AS SELECT id, tenant_id FROM contract.items WHERE state = 'open';
+CREATE POLICY tenant_items ON contract.items USING (tenant_id = current_setting('app.tenant_id')::uuid);
+`)
+	a := pgIntrospect(t, name, "objects_a")
+	for _, prefix := range []string{
+		"view|contract|visible_items|v|",
+		"view|contract|item_counts|m|",
+		"seq|contract|external_ids|",
+		"ext|pgcrypto|",
+		"enum|contract|state|open,closed|",
+		"domain|contract|positive_int|integer|",
+		"composite|contract|coordinate|",
+		"routine|contract|f|item_count|",
+		"routine|contract|p|clear_items|",
+		"schema-owner|contract|",
+		"relation-owner|contract|items|",
+		"table-grant|contract|items|",
+		"default-acl|contract|",
+		"rls-table|contract|items|true|false",
+		"rls-policy|contract|items|tenant_items|",
+	} {
+		if !strings.Contains(a, prefix) {
+			t.Errorf("schema introspection omitted %q", prefix)
+		}
+	}
+
+	pgCreateDB(t, name, "objects_b")
+	pgApply(t, name, "objects_b", common+`
+CREATE VIEW contract.visible_items AS SELECT id, tenant_id FROM contract.items WHERE state = 'closed';
+CREATE POLICY tenant_items ON contract.items USING (tenant_id IS NOT NULL);
+`)
+	b := pgIntrospect(t, name, "objects_b")
+	if a == b {
+		t.Fatal("schema introspection did not detect changed view and RLS policy definitions")
+	}
 }
 
 // pgBaselineFiles lists the FrameWorks Postgres baseline schema files: schema/*.sql
