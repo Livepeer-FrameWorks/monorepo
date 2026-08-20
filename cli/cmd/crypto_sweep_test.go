@@ -112,3 +112,20 @@ func TestOfflineSweepFeePolicyRejectsPlannerFeeAboveOperatorCeiling(t *testing.T
 		t.Fatal("priority fee above the independent offline ceiling unexpectedly passed")
 	}
 }
+
+func TestCryptoSweepReleaseRequestDefaultsToDryRunAndBindsAcknowledgement(t *testing.T) {
+	dryRun, err := cryptoSweepReleaseRequest("batch", "expired plan", "", false)
+	if err != nil || !dryRun.GetDryRun() {
+		t.Fatalf("dry-run request=%+v err=%v", dryRun, err)
+	}
+	if _, err := cryptoSweepReleaseRequest("batch", "expired plan", "", true); err == nil {
+		t.Fatal("execute without acknowledgement unexpectedly succeeded")
+	}
+	execute, err := cryptoSweepReleaseRequest("batch", "expired plan", " checksum ", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if execute.GetDryRun() || execute.GetCeremonyAck() != sweepCeremonyAcknowledgementPrefix+"checksum" {
+		t.Fatalf("execute request=%+v", execute)
+	}
+}

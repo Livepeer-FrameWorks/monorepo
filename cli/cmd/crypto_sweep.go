@@ -20,13 +20,72 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/spf13/cobra"
+	"golang.org/x/sys/unix"
 )
 
 const sweepCeremonyAcknowledgementPrefix = "I_UNDERSTAND:"
 
 func newCryptoCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "crypto", Short: "Crypto custody operations"}
-	cmd.AddCommand(newCryptoReadinessCmd(), newCryptoWalletCmd(), newCryptoSweepCmd())
+	cmd.AddCommand(newCryptoReadinessCmd(), newCryptoSmokeCmd(), newCryptoWalletCmd(), newCryptoSweepCmd(), newCryptoMutationCmd())
+	return cmd
+}
+
+func newCryptoMutationCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "mutation", Short: "Inspect and resolve ambiguous paid mutation results"}
+	cmd.AddCommand(newCryptoMutationResolveCmd())
+	return cmd
+}
+
+func newCryptoMutationResolveCmd() *cobra.Command {
+	var tenantID, key, resultPath, contentType, reason string
+	var statusCode int32
+	var markReview, execute bool
+	cmd := &cobra.Command{
+		Use: "resolve", Short: "Attach a known owner result or mark an ambiguous paid mutation for review",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if reason == "" || (markReview && resultPath != "") || (!markReview && resultPath == "") {
+				return fmt.Errorf("--reason and exactly one of --result-file or --mark-review are required")
+			}
+			var payload []byte
+			var err error
+			if resultPath != "" {
+				payload, err = os.ReadFile(resultPath)
+				if err != nil {
+					return err
+				}
+				if statusCode < 100 || statusCode > 599 {
+					return fmt.Errorf("--status-code must be 100-599 when attaching a result")
+				}
+			}
+			client, ctxCfg, cleanup, err := purserGRPCClientFromContext(cmd.Context())
+			if err != nil {
+				return err
+			}
+			defer cleanup()
+			ctx, cancel := adminRPCContextTimeout(cmd.Context(), ctxCfg.Auth.JWT, 60*time.Second)
+			defer cancel()
+			response, err := client.ResolveX402MutationResult(ctx, &purserpb.ResolveX402MutationResultRequest{
+				TenantId: tenantID, IdempotencyKey: key, Result: payload, ContentType: contentType,
+				StatusCode: statusCode, Reason: reason, MarkReview: markReview, DryRun: !execute,
+			})
+			if err != nil {
+				return err
+			}
+			return printJSONOrText(cmd, response)
+		},
+	}
+	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant UUID owning the paid mutation")
+	cmd.Flags().StringVar(&key, "idempotency-key", "", "original mutation idempotency key")
+	cmd.Flags().StringVar(&resultPath, "result-file", "", "known result body to attach")
+	cmd.Flags().StringVar(&contentType, "content-type", "application/json", "known result content type")
+	cmd.Flags().Int32Var(&statusCode, "status-code", 0, "known result HTTP status code")
+	cmd.Flags().StringVar(&reason, "reason", "", "operator evidence/reason for the resolution")
+	cmd.Flags().BoolVar(&markReview, "mark-review", false, "keep the mutation blocked in operator review without attaching a result")
+	cmd.Flags().BoolVar(&execute, "execute", false, "apply the resolution; default is dry-run")
+	_ = cmd.MarkFlagRequired("tenant-id")
+	_ = cmd.MarkFlagRequired("idempotency-key")
+	_ = cmd.MarkFlagRequired("reason")
 	return cmd
 }
 
@@ -97,7 +156,7 @@ func newCryptoSweepCmd() *cobra.Command {
 		Use: "sweep", Short: "Run the manual online/offline crypto sweep ceremony",
 		Long: "Plan online, sign on an offline machine, broadcast online, then reconcile canonical receipts. Purser never receives the HD deposit private key.",
 	}
-	cmd.AddCommand(newCryptoSweepPlanCmd(), newCryptoSweepSignCmd(), newCryptoSweepBroadcastCmd(), newCryptoSweepReconcileCmd())
+	cmd.AddCommand(newCryptoSweepPlanCmd(), newCryptoSweepSignCmd(), newCryptoSweepBroadcastCmd(), newCryptoSweepReconcileCmd(), newCryptoSweepReleaseCmd())
 	return cmd
 }
 
@@ -192,10 +251,16 @@ func runCryptoSweepSign(_ context.Context, output io.Writer, manifestPath, outpu
 	if !ok || !strings.EqualFold(allowed, manifest.TreasuryAddress) {
 		return fmt.Errorf("manifest treasury is not approved for network %s", manifest.Network)
 	}
-	secretFile := os.NewFile(uintptr(secretFD), "crypto-sweep-secret")
+	duplicatedFD, err := unix.Dup(secretFD)
+	if err != nil {
+		return fmt.Errorf("duplicate secret file descriptor: %w", err)
+	}
+	secretFile := os.NewFile(uintptr(duplicatedFD), "crypto-sweep-secret")
 	if secretFile == nil {
+		_ = unix.Close(duplicatedFD)
 		return fmt.Errorf("secret file descriptor is invalid")
 	}
+	defer secretFile.Close()
 	secretBytes, err := io.ReadAll(io.LimitReader(secretFile, 16<<10))
 	if err != nil {
 		return fmt.Errorf("read secret descriptor: %w", err)
@@ -372,6 +437,54 @@ func newCryptoSweepReconcileCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&apply, "apply", false, "persist confirmed/failed item states")
 	_ = cmd.MarkFlagRequired("batch-id")
 	return cmd
+}
+
+func newCryptoSweepReleaseCmd() *cobra.Command {
+	var batchID, reason, acknowledgement string
+	var execute bool
+	cmd := &cobra.Command{
+		Use: "release", Short: "Recover expired or provably unusable sweep claims (dry-run by default)",
+		Long: "Rechecks canonical chain state before releasing claims. Signed or broadcast transactions whose outcome cannot be proven are quarantined and remain unavailable to new sweep plans.",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if strings.TrimSpace(reason) == "" {
+				return fmt.Errorf("--reason is required")
+			}
+			request, err := cryptoSweepReleaseRequest(batchID, reason, acknowledgement, execute)
+			if err != nil {
+				return err
+			}
+			client, ctxCfg, cleanup, err := purserGRPCClientFromContext(cmd.Context())
+			if err != nil {
+				return err
+			}
+			defer cleanup()
+			ctx, cancel := adminRPCContextTimeout(cmd.Context(), ctxCfg.Auth.JWT, 90*time.Second)
+			defer cancel()
+			response, err := client.ReleaseCryptoSweep(ctx, request)
+			if err != nil {
+				return err
+			}
+			return printJSONOrText(cmd, response)
+		},
+	}
+	cmd.Flags().StringVar(&batchID, "batch-id", "", "persisted sweep batch UUID")
+	cmd.Flags().StringVar(&reason, "reason", "", "operator reason recorded in the immutable sweep event log")
+	cmd.Flags().BoolVar(&execute, "execute", false, "apply eligible releases and quarantines")
+	cmd.Flags().StringVar(&acknowledgement, "ack", "", "exact manifest checksum returned by the dry run; required with --execute")
+	_ = cmd.MarkFlagRequired("batch-id")
+	_ = cmd.MarkFlagRequired("reason")
+	return cmd
+}
+
+func cryptoSweepReleaseRequest(batchID, reason, acknowledgement string, execute bool) (*purserpb.ReleaseCryptoSweepRequest, error) {
+	acknowledgement = strings.TrimSpace(acknowledgement)
+	if execute && acknowledgement == "" {
+		return nil, fmt.Errorf("--ack must equal the manifest checksum returned by the dry run")
+	}
+	return &purserpb.ReleaseCryptoSweepRequest{
+		BatchId: batchID, Reason: reason, DryRun: !execute,
+		CeremonyAck: sweepCeremonyAcknowledgementPrefix + acknowledgement,
+	}, nil
 }
 
 func writeExclusiveFile(path string, payload []byte, mode os.FileMode) error {
