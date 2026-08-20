@@ -3,7 +3,7 @@
 # Skip temporarily: git commit --no-verify
 
 pre-commit:
-  parallel: true
+  parallel: false
   commands:
     go-fmt:
       glob: "**/*.go"
@@ -22,8 +22,7 @@ pre-commit:
         - "**/*_grpc.pb.go"
         - "**/graph/generated/**"
         - "**/graph/model/models_gen.go"
-      run: golangci-lint run --new --fix {staged_files} || true
-      stage_fixed: true
+      run: make lint-go
 
     frontend-format:
       glob: "*.{js,ts,jsx,tsx,svelte,json,yaml,yml,md,mdx}"
@@ -32,8 +31,7 @@ pre-commit:
 
     frontend-lint:
       glob: "*.{js,ts,jsx,tsx,svelte}"
-      run: pnpm eslint --fix {staged_files} || true
-      stage_fixed: true
+      run: make lint-frontend
 
     demo-recordings:
       run: scripts/ensure-demo-recordings.sh
