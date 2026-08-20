@@ -112,7 +112,7 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 
 ## Multi-Cluster Topology
 
-FrameWorks supports multiple clusters. A **cluster** is a Foghorn instance (or HA pair) plus its edge nodes — strictly the media plane. All clusters share the same central Control / API Plane (Commodore, Quartermaster, Purser) and Event & Analytics Plane (Decklog, Periscope, Signalman). These services are not duplicated or federated per cluster.
+FrameWorks supports multiple clusters. A **cluster** is a Foghorn instance (or HA pair) plus its edge nodes — strictly the media plane. Clusters share the central Control / API Plane (Commodore, Quartermaster, Purser). Event collection is regional, and Periscope Metering follows the logical ClickHouse deployment: one central source in today's unsharded topology, then one local worker and ClickHouse source per wider region after sharding. Purser remains the central financial authority.
 
 Cross-cluster coordination is handled exclusively by the **FoghornFederation** gRPC protocol between Foghorn instances:
 

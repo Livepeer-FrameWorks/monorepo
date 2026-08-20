@@ -542,7 +542,7 @@ frameworks cluster init postgres --manifest production.yaml
 | `frameworks cluster skipper posts`                      | Query recent Skipper social post drafts from the skipper database over the manifest-selected SSH/database path.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `frameworks cluster metabase sync`                      | Sync repo-managed Metabase Periscope cards and attach missing cards to the dashboard without overwriting unmanaged manual edits.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `frameworks cluster sync-geoip`                         | Upload GeoLite2-City MMDB data to Foghorn/Quartermaster hosts; supports `--source maxmind` or `--source file`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `frameworks cluster set-channel <channel>`              | Set the manifest release channel. Valid channels are `stable` and `rc`; `cluster upgrade` uses this when no explicit version is given.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `frameworks cluster set-channel <channel>`              | Set the manifest release channel. Valid channels are `stable` and `rc`; `cluster release plan/apply` uses this when no explicit version is given.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `frameworks cluster clickhouse migrate backfill`        | Bulk-copy periscope data into the new Replicated node via `remote()` over the WireGuard mesh, using the same idempotent staging + `REPLACE PARTITION`/`EXCHANGE` mechanics as `sync` (re-runnable after a partial failure); stops refreshable MVs for the duration. Requires `--from <source host key>` (and `--from-port` if source/dest run on swapped ports).                                                                                                                                                                                                                                                                                                                                     |
 | `frameworks cluster clickhouse migrate sync`            | Idempotent per-partition re-copy of the growing tail (staging table + atomic `REPLACE PARTITION`; additive-safe — re-runs replace, never double). Unpartitioned tables use an atomic `EXCHANGE`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `frameworks cluster clickhouse migrate verify`          | Parity fingerprint — FINAL row count plus a `cityHash64` content hash over the shared (source-and-destination) columns, each side normalized to the destination type (`AggregateFunction` columns finalized; a type-evolved source column cast to the destination type). Destination-only/new tables absent on the source are asserted EMPTY instead of hashed. Plus a catalog-coverage assertion that fails if the live schema has a table the migration catalog doesn't classify.                                                                                                                                                                                                                  |
@@ -2752,6 +2752,111 @@ frameworks config set github.repo org/gitops
 frameworks config get github.repo
 frameworks config path --kind credentials
 ```
+
+---
+
+## Crypto Custody Commands
+
+`frameworks crypto` contains the manual custody workflow. `frameworks crypto sweep`
+is deliberately split into online and offline stages; it never sends the HD
+deposit xprv to Purser.
+
+### frameworks crypto readiness
+
+Returns the operator-only structured readiness report for direct deposits,
+x402, finalized RPC heads, scanner health/lag, treasury and relayer
+configuration, embedded facilitator readiness, tax configuration, and unresolved
+accounting anomalies. `production_eligible` is false until every live dependency
+is present.
+
+```bash
+frameworks crypto readiness
+```
+
+### frameworks crypto wallet rotate
+
+Activates a new watch-only xpub for future deposit and x402 addresses without
+changing historical address derivation. The xpub is read from a file; the xprv
+must remain offline.
+
+```bash
+frameworks crypto wallet rotate --xpub-file new-deposit.xpub --network mainnet
+```
+
+Retain the previous offline xprv until all sweep manifests for that key have
+been reconciled and its addresses are empty.
+
+### frameworks crypto sweep plan
+
+Reads confirmed, unswept direct-deposit and x402 sources at a canonical block,
+checks current chain balances, and writes a deterministic checksummed manifest.
+It is a dry run unless `--persist` is supplied; only a persisted plan can be
+signed and broadcast.
+
+```bash
+frameworks crypto sweep plan --network base --out sweep-manifest.json
+frameworks crypto sweep plan --network base --out sweep-manifest.json --persist
+```
+
+**Flags:**
+
+- `--network` - EVM network name.
+- `--out` - New manifest file; existing files are never overwritten.
+- `--persist` - Claim the source rows and persist the batch.
+
+### frameworks crypto sweep sign
+
+Runs without network access on the offline signer. The input descriptor must
+contain the external-chain xprv corresponding to the manifest xpub. Secret
+material is never accepted through arguments or environment variables. The
+separate allowlist file binds each network to its approved treasury.
+
+```bash
+exec 3< <(password-manager read frameworks-sweep-xprv)
+frameworks crypto sweep sign --manifest sweep-manifest.json \
+  --treasury-allowlist treasury-allowlist.json --secret-fd 3 \
+  --max-fee-gwei 5 --max-priority-fee-gwei 2 \
+  --out sweep-bundle.json
+exec 3<&-
+```
+
+`--secret-fd` must be descriptor 3 or higher. Required flags are `--manifest`,
+`--treasury-allowlist`, `--secret-fd`, `--max-fee-gwei`,
+`--max-priority-fee-gwei`, and `--out`. The two fee caps are chosen on the
+offline host and are never trusted from the online manifest.
+
+### frameworks crypto sweep broadcast
+
+Revalidates every signed transaction/authorization, the persisted batch,
+current treasury configuration, and signature source. It is a dry run unless
+`--execute` is supplied. Execution additionally requires `--ack` to exactly
+equal the signed bundle checksum.
+
+```bash
+frameworks crypto sweep broadcast --bundle sweep-bundle.json
+frameworks crypto sweep broadcast --bundle sweep-bundle.json --execute --ack <bundle-checksum>
+```
+
+**Flags:**
+
+- `--bundle` - Signed bundle path (required).
+- `--execute` - Persist transaction hashes and submit transactions.
+- `--ack` - Exact bundle checksum required with `--execute`.
+
+### frameworks crypto sweep reconcile
+
+Checks transaction receipts, confirmation depth, and canonical block hashes.
+It is read-only unless `--apply` is supplied.
+
+```bash
+frameworks crypto sweep reconcile --batch-id <uuid>
+frameworks crypto sweep reconcile --batch-id <uuid> --apply
+```
+
+**Flags:**
+
+- `--batch-id` - Persisted sweep batch UUID (required).
+- `--apply` - Persist confirmed/failed item and batch states.
 
 ---
 

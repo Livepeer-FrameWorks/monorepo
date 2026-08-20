@@ -60,3 +60,110 @@ groups:
         annotations:
           summary: "High database connection usage"
           description: "Database connection usage is above 80% on {{ $labels.instance }}."
+
+      # Crypto custody and scanner safety alerts
+      - alert: CryptoScannerLagging
+        expr: (purser_crypto_scanner_block{head="finalized"} - on(network) purser_crypto_scanner_block{head="cursor"}) > 500
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Crypto scanner is behind on {{ $labels.network }}"
+          description: "The durable deposit cursor is more than 500 finalized blocks behind. New production crypto methods should fail readiness."
+
+      - alert: CryptoScannerErrors
+        expr: increase(purser_crypto_scanner_errors_total[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Crypto scanner errors on {{ $labels.network }}"
+          description: "The RPC scanner recorded one or more errors in the last five minutes."
+
+      - alert: CryptoCustodyBalanceAtRisk
+        expr: purser_crypto_unswept_base_units > 0 and on(network, asset) purser_crypto_oldest_unswept_age_seconds > 21600
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Confirmed {{ $labels.asset }} remains unswept on {{ $labels.network }}"
+          description: "Customer custody funds have remained outside the approved treasury for more than six hours."
+
+      - alert: CryptoSweepItemFailed
+        expr: purser_crypto_failed_sweep_items > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Crypto sweep item failed on {{ $labels.network }}"
+          description: "At least one {{ $labels.asset }} sweep item requires operator reconciliation."
+
+      - alert: CryptoSweepRelayerGasLow
+        expr: purser_crypto_sweep_relayer_balance_eth < 0.005
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "USDC sweep relayer gas is low on {{ $labels.network }}"
+          description: "The dedicated relayer has less than 0.005 native ETH for bounded USDC relay gas."
+
+      - alert: CryptoAllocatedDepositReorg
+        expr: increase(purser_crypto_deposit_reorg_reversals_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Allocated crypto deposit was reversed on {{ $labels.network }}"
+          description: "A previously credited {{ $labels.purpose }} deposit failed a later canonicality check. Stop new money movement and investigate."
+
+      - alert: X402SettlementLatencyHigh
+        expr: purser_x402_settlement_latency_p95_seconds > 120
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "x402 settlement latency is high on {{ $labels.network }}"
+          description: "P95 finalized settlement latency over the last 24 hours exceeds two minutes."
+
+      - alert: X402QuoteConversionLow
+        expr: purser_x402_quote_conversion_ratio < 0.2
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "x402 quote conversion is low on {{ $labels.network }}"
+          description: "Fewer than 20% of x402 quotes created in the last 24 hours reached confirmed settlement."
+
+      - alert: CryptoAccountingAnomalyOpen
+        expr: purser_crypto_accounting_anomalies > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Crypto accounting anomaly requires operator action"
+          description: "Open {{ $labels.kind }} entries exist in the durable crypto accounting queue."
+
+      - alert: CryptoAccountingAnomalyAging
+        expr: purser_crypto_accounting_anomaly_oldest_age_seconds > 3600
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Crypto accounting anomaly is older than one hour"
+          description: "The oldest open {{ $labels.kind }} entry has not been resolved within one hour."
+
+      - alert: CryptoInvoiceDepositNeedsReview
+        expr: purser_crypto_invoice_review_items > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Crypto invoice deposit requires review on {{ $labels.network }}"
+          description: "A partial, late, unsupported, or conflicting invoice deposit is waiting for operator allocation."
+
+      - alert: CryptoDepositReconciliationStuck
+        expr: purser_crypto_deposit_events{status=~"observed|confirmed"} > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Crypto deposit reconciliation is not converging on {{ $labels.network }}"
+          description: "Deposit events have remained before allocation for at least fifteen minutes."

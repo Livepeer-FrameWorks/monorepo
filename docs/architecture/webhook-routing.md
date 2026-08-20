@@ -16,10 +16,12 @@ Payment Provider    API Gateway (public)         Internal Service (mesh only)
      │                    │    headers: {...}            │
      │                    │  )                           │
      │                    ├─────────────────────────────>│
-     │                    │                              │ Verify signature
-     │                    │                              │ Process webhook
-     │                    │<─────────────────────────────│
-     │<───────────────────│                              │
+     │                    │                              │ Verify/validate
+     │                    │                              │ Persist inbox row
+	 │                    │<─────────────────────────────│
+	 │<───────────────────│                              │
+     │                    │                              │ Background worker
+     │                    │                              │ leases + reconciles
 ```
 
 ## Implementation Details
@@ -104,7 +106,8 @@ Events handled:
 
 ### Mollie (`/webhooks/billing/mollie`)
 
-Mollie doesn't sign webhooks by default. Verification is done by:
+Mollie doesn't sign webhook bodies by default. The ingress validates the form
+payload and durably records it; the worker verifies the referenced object by:
 
 1. Fetching the payment/subscription from Mollie API
 
@@ -116,11 +119,24 @@ Events handled:
 
 ## Idempotency
 
-Webhook events are recorded in `purser.webhook_events` (keyed on `provider` + `event_id`). Schema: `pkg/database/sql/schema`.
+Verified/validated deliveries first enter `purser.provider_webhook_inbox`.
+Purser returns 2xx only after that insert commits. Workers lease inbox rows with
+token fencing and exponential backoff, so provider HTTP latency is independent
+of reconciliation and a worker crash leaves recoverable work. Stripe event IDs
+deduplicate ingress. Mollie deliveries use unique receipt keys because one
+payment ID may legitimately report multiple states; authoritative payment-state
+event IDs deduplicate reconciliation.
+
+Reconciled provider events are recorded in `purser.webhook_events` (keyed on
+`provider` + `event_id`). Schema: `pkg/database/sql/schema`.
 
 Current provider behavior:
 
-- Stripe checks `purser.webhook_events` before processing and skips duplicate event IDs.
-- Mollie records a derived event ID after processing with `ON CONFLICT DO NOTHING`; it does not currently do the same pre-processing duplicate skip.
+- Stripe claims `purser.webhook_events` before applying a state transition and
+  skips terminal duplicate event IDs.
+- Mollie fetches the payment from Mollie, derives an ID from the authoritative
+  payment state, and claims that ID before applying the transition.
+- Unknown Mollie payment IDs are acknowledged with 200 and retired from the
+  inbox; the response does not disclose whether a provider object exists.
 
 **Security**: Webhook routes skip JWT auth (providers can't authenticate). Signature verification happens in the target service, not Gateway. Gateway enforces per-IP rate limits and rejects payloads >1MB.

@@ -28,10 +28,10 @@ formats, marketplace cluster rates, or advanced jobs when those meters are enabl
 cluster.
 
 <Aside type="tip">
-  **API requests are free.** Stream creation, analytics queries, configuration changes—all API
-  operations cost nothing, though API traffic is still subject to request throttling. You only pay
-  when viewers watch or when recordings are stored under the public beta catalog. Advanced
-  processing (AI, V2V, compositing) is in pilot — see below.
+  **API requests currently cost €0, but they are still metered and itemized.** The same applies to
+  the current API/LLM/search/embedding meters unless a tier or cluster contract explicitly prices
+  them. API traffic remains subject to request throttling. Advanced processing (AI, V2V,
+  compositing) is in pilot — see below.
 </Aside>
 
 ## Free Tier
@@ -124,13 +124,16 @@ Load credits first, use resources as you go. Balance decreases as usage accrues.
 
 ### Postpaid
 
-Monthly subscription with included delivered-minute allocations. Cold storage is rated from GiB-second usage and displayed as GiB-hours on invoice lines. Overages are drafted during the billing period and invoiced at period end. Requires verified billing details.
+Monthly subscription with included delivered-minute allocations. Cold storage is rated from GiB-second usage and displayed as GiB-hours on invoice lines. Overages are drafted during the billing period and invoiced at period end. Before activation, complete the billing email and address, choose an eligible tier, and finish either Stripe Checkout or Mollie's first-payment mandate flow. The provider webhook is authoritative; returning to the browser alone does not activate postpaid billing.
 
 ## Topping Up
 
 ### Card
 
-Pay via Stripe or Mollie. Funds credit immediately after checkout.
+Pay via Stripe or Mollie. The minimum fiat top-up is **€5.00 / 500 cents** for
+the currently supported EUR flow. Purser validates the selected provider and
+currency before creating checkout; a provider may require a higher minimum for
+a future currency. Funds credit only after provider confirmation.
 
 ### Crypto
 
@@ -139,39 +142,94 @@ with a 24h price-locked quote (Chainlink ETH/USD; USDC is 1:1) — send exactly
 the quoted amount and the balance is credited at the locked rate when the
 deposit confirms. LPT is reserved but currently rejected.
 
-**Confirmations:**
+Crypto top-ups can be as small as **one cent**, the smallest unit the prepaid
+ledger can credit. The quoted ETH/USDC amount can have finer on-chain precision,
+but the requested balance credit is always an integer number of cents.
 
-- Ethereum: 12 confirmations
-- Base: 10 confirmations
-- Arbitrum: 10 confirmations
+Invoice deposits below the exact quote remain in operator review and never mark
+the invoice paid. A confirmed overpayment pays the invoice and atomically
+credits the locked-quote value of the surplus to the customer's prepaid
+balance; the surplus has its own ledger reference and is also reversed if the
+deposit later fails canonicality checks.
+
+**Finality:** balance credit waits for the network's consensus-labelled
+`finalized` head and then verifies the receipt block hash. A fixed number of
+`latest`-head confirmations is not treated as finality. If the RPC cannot
+return a usable finalized head, the payment remains pending and rated work is
+not released.
 
 ### x402 Protocol
 
 For programmatic clients, FrameWorks supports the [x402 protocol](https://www.x402.org/).
 
-When balance is insufficient, the API returns HTTP 402 with payment requirements. Clients sign an EIP-3009 authorization and retry with the `X-PAYMENT` (or `PAYMENT-SIGNATURE`) header to top up automatically.
+When balance is insufficient, the API returns HTTP 402 with the official v2
+`PAYMENT-REQUIRED` header. Clients sign an EIP-3009 authorization for one exact
+accepted requirement and retry with `PAYMENT-SIGNATURE`. Successful settlement
+returns `PAYMENT-RESPONSE`; `X-PAYMENT` is legacy compatibility only and is
+disabled by default in production.
+
+Paid GraphQL mutations also require `Idempotency-Key` (8–255 characters).
+Paid MCP mutation tools accept that HTTP header or `_meta.idempotencyKey`.
+Retries with the same fingerprint replay the durable terminal result; key
+collisions are rejected and an uncertain in-flight outcome is not re-executed.
 
 x402 supports USDC on Base and Arbitrum (EIP-3009 is a USDC primitive). Prepaid crypto top-ups support ETH and USDC.
+Both direct crypto and x402 prepaid funding are invoiced when confirmed credit is
+issued. Usage consumption does not create a second VAT event.
 
 ## Invoicing
 
-FrameWorks is registered in the EU and follows EU VAT invoicing rules.
+The billing page records rated statements, line items, prepaid credit, payments,
+and the remaining balance. A payment action is created only for the invoice's
+current outstanding balance; fully settled and zero-value statements do not
+offer payment.
 
-### Why the €100 Threshold
+For Stripe/Mollie postpaid overages, FrameWorks does not create an external
+collection below **€5.00 / 500 cents**. Amounts from €0.01 through €4.99 are
+shown as carried forward with zero due on that period; they are not waived.
+The first later period that brings the accumulated balance to €5.00 or more
+includes the prior balance and collects the combined amount. Usage within the
+plan allowance remains zero-priced and adds nothing to the carry balance.
+Cancelling an account before the floor is reached records the remaining amount
+as an explicit account-closure write-off rather than requesting a tiny payment.
 
-EU VAT law allows **simplified invoices** for transactions under €100. These invoices don't require customer details—just the supplier info, amount, and VAT breakdown.
+Add the billing contact, legal name, address, and optional VAT/tax identifier in
+account settings before starting a paid provider setup. The identifier is stored
+as customer-supplied billing data; format checking is not tax-authority
+validation and does not, by itself, establish reverse-charge eligibility. Leave
+the identifier blank when the customer is not VAT registered.
 
-For payments **under €100**, we issue simplified invoices automatically. No billing details needed from you.
+<Aside type="caution">
+  FrameWorks renders immutable numbered invoices, confirmed-payment receipts, simplified invoices,
+  and linked credit notes, with a database-enforced ten-year retention floor. Operators must still
+  approve supplier, VAT, tax-point, validation, and jurisdiction-specific retention treatment before
+  describing them as legally compliant tax documents.
+</Aside>
 
-For payments **€100 or above**, EU law requires a full VAT invoice with your details (name, address, and VAT number if applicable). You must add billing details in your account settings before making large payments.
+Authenticated customers can list document metadata at
+`GET /v1/billing/documents` and download a tenant-bound printable HTML attachment
+at `GET /v1/billing/documents/{kind}/{id}`. The response includes
+`X-Document-SHA256`, uses private/no-store caching, and remains reachable for a
+zero-balance prepaid tenant. The billing dashboard exposes the same downloads.
 
-### B2B in the EU
+Invoice notifications link to the exact billing-page invoice. Card payment uses
+the operator-selected Stripe or Mollie hosted checkout; USDC/ETH payment returns
+an exact address, network, quote, and expiry. Provider confirmation—not the
+browser redirect—is authoritative.
 
-If you're a business in the EU, add your VAT number in account settings. We validate the format and apply reverse charge (0% VAT) automatically.
+The dashboard shows recent invoice-payment attempts. Failed attempts can be
+retried from their invoice; pending attempts are resumed instead of creating a
+second reservation. GraphQL exposes a tenant-scoped `payment(id:)` lookup and
+cursor-paginated `paymentsConnection(page:, invoiceId:, status:, method:)`;
+`billingStatus.recentPayments` remains a compact dashboard summary. Retry or
+resume through `createPayment(input: { invoiceId, method, returnUrl })`. MCP
+clients use `billing://payments`, `billing://payments/{payment_id}`, and
+`pay_invoice`. All surfaces calculate the current server-side outstanding
+balance and reject payment when nothing remains due.
 
-### Record Keeping
-
-All invoices are available in your account. We retain transaction records for 10 years per EU requirements.
+Overdue reminders are durable and staged at 1, 7, 14, and 30 days. Each stage
+is sent at most once, SMTP failures retry from the outbox, and the outstanding
+balance is recomputed before delivery so a paid statement has no payment CTA.
 
 ## Cluster Tiers
 

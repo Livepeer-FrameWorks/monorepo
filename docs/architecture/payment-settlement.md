@@ -14,6 +14,33 @@ methods — SEPA Direct Debit, iDEAL, Bancontact — settle hours-to-days later.
 `checkout.session.completed` arrives with `payment_status != "paid"`; the confirming event
 comes later. Granting value on `completed` alone would credit money that never arrives.
 
+For invoice collection, the second invariant is **never collect more than the
+current balance**. Purser locks the invoice and derives
+`amount_due = max(invoice_total - confirmed_payments + reversals, 0)` before it
+creates or resumes a payment. A zero balance is not payable. One active
+invoice-wide reservation blocks another card/crypto method; stale and terminal
+attempts release the reservation. Billing status and reminder queries use the
+same net-settlement definition instead of presenting the original total as due.
+
+Provider transport retries reuse the original provider idempotency key. The
+bounded API-call count lives on `payment_provider_intents`; it is deliberately
+separate from the logical payment-attempt number. Declines, revoked mandates,
+and SCA/action-required results are never retried blindly. Off-session SCA marks
+the automatic reservation terminal and directs the customer to the exact
+invoice for a new on-session hosted Checkout.
+
+Provider callbacks have a separate durable ingress boundary. Stripe signatures
+and payloads are checked, and Mollie form payloads are validated, before an
+inbox row commits. The gateway receives 2xx at that point. A background worker
+then leases and reconciles the callback with exponential backoff; the existing
+provider-event claims keep reconciliation idempotent.
+
+Overdue email follows the same durability rule. A daily/startup pass marks due
+invoices overdue and stages at most one reminder for the latest eligible
+1-, 7-, 14-, or 30-day stage. The email outbox retries SMTP delivery, and its
+dispatcher recomputes amount due immediately before sending so a settled invoice
+never receives a stale payment request.
+
 ## Stripe architecture
 
 ```
@@ -71,6 +98,40 @@ list is **currency-aware**: `card` is always offered; `sepa_debit`, `ideal`, and
 are EUR-only at Stripe, so they are added only when the checkout currency is EUR (a USD
 checkout would offer card only). The same list applies to one-time and subscription Checkout —
 iDEAL/Bancontact subscribers are collected as a SEPA Direct Debit mandate.
+
+The public invoice method `card` is advertised only when one provider is fully
+reconcilable. Stripe requires its secret, webhook signing secret, and public
+webapp URL. Mollie requires its secret plus public gateway/webapp URLs. When
+both are ready, `PAYMENT_CARD_PROVIDER` must explicitly choose `stripe` or
+`mollie`; Purser does not silently prefer either provider.
+
+## Collection and top-up minimums
+
+Automatic Stripe/Mollie overage collection has a 500-cent economic floor. A
+closed period with no billable overage produces a zero-due paid statement. A
+rounded overage from 1 through 499 cents is not waived: Purser posts a visible
+negative carry-forward adjustment so the current invoice has no payment due,
+locks the amount in `billing_collection_balances`, and records the opening,
+current, collected, and closing cents in `billing_collection_entries`. The
+first later period that brings the balance to at least 500 cents adds the prior
+balance as a line item and collects the combined invoice exactly once.
+
+Cancelling the subscription explicitly writes off any remaining sub-floor
+balance to `billing_collection_writeoffs` with reason `account_closed` and then
+clears the carry in the same cancellation transaction. It is never silently
+discarded or left as an unreachable customer debt.
+
+The balance update, audit entry, invoice header, line items, credit application,
+and period advancement share one database transaction. Status is decided only
+after rounding to the invoice currency precision, so a fractional-cent rating
+cannot become a pending invoice stored as `0.00`.
+
+Fiat prepaid top-ups are separately validated by provider and currency. Stripe
+and Mollie EUR/USD top-ups currently share the 500-cent business minimum; the
+policy registry also tracks provider technical minima so adding a provider or
+currency cannot silently inherit an invalid amount. Crypto top-ups accept one
+cent, the smallest amount the prepaid ledger can credit. Provider and network
+fees are not added to the credited amount.
 
 ## Mollie subscription installments & observation drain
 
@@ -159,6 +220,8 @@ settle request ──> submitting ──broadcast ok──> pending ──receip
 
 - `api_billing/internal/handlers/checkout.go` - dispatch, gating, activation/staging helpers
 - `api_billing/internal/handlers/webhooks.go` - event switch, subscription/invoice/charge handlers (Stripe + Mollie, incl. observation park/drain)
+- `api_billing/internal/handlers/provider_webhook_inbox.go` - durable callback ingress, leasing, and retry worker
+- `api_billing/internal/handlers/invoice_email_outbox.go` - invoice and staged dunning email delivery
 - `api_billing/internal/handlers/jobs.go` - invoice generation, inline drain call, 10-minute observation-drain backstop
 - `api_billing/internal/handlers/x402.go` - settle handler: intent record, broadcast, optimistic credit
 - `api_billing/internal/handlers/x402_reconciler.go` - four-sweep reconciler (submitting/pending/failed/confirmed)

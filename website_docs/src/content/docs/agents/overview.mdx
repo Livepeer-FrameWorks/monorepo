@@ -22,15 +22,16 @@ Autonomous agents can create streams, record video, query analytics, and pay per
 
 ## Quick Start
 
-1. **Call the API operation you need** via MCP or GraphQL.
-2. **If the operation needs payment**, read the HTTP 402 / `INSUFFICIENT_BALANCE` response and its x402 payment requirements.
-3. **Sign an EIP-3009 USDC authorization** for one accepted network.
-4. **Retry the same operation** with `X-PAYMENT`.
-5. **Use the returned stream key or resource** from the original operation.
+1. **Request a wallet challenge** from `POST /auth/wallet-challenge` or MCP `request_wallet_challenge`, sign the returned message, and exchange it at `POST /auth/wallet-login` or once through the MCP wallet headers.
+2. **Call the API operation you need** via MCP or GraphQL with the resulting session or API token.
+3. **If a rated operation needs payment**, read the HTTP 402 / `INSUFFICIENT_BALANCE` response and its x402 payment requirements.
+4. **Sign an EIP-3009 USDC authorization** for one accepted network.
+5. **Retry the same operation** with `PAYMENT-SIGNATURE` and wait for confirmed credit.
 
 <Aside type="tip">
-  No signup form or auth endpoint is required for the x402 flow. The payment payload is attached to
-  the operation that needs it.
+  Wallet signup itself is free and never returns a payment challenge. A new wallet tenant may use
+  onboarding, billing, top-up, documentation, and discovery surfaces at zero balance; only rated
+  work is gated.
 </Aside>
 
 ## Discovery

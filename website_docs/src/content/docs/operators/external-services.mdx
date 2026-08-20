@@ -400,6 +400,13 @@ GEOIP_CACHE_MAX=50000      # Max cached entries
 
 Auth flows degrade with warnings logged if SMTP is missing, but a degraded auth flow is not a viable production posture. Treat SMTP as required.
 
+Purser never emails a live draft. Finalization stores the permanent invoice and
+line-item snapshot, then enqueues `purser.invoice_email_outbox` in the same
+transaction. Horizontally scaled Purser workers lease and retry delivery. Check
+`purser.payment_report_invoice_email_outbox_stuck` for rows that repeatedly
+fail; missing SMTP or missing permanent line items defer the email instead of
+sending a partial summary.
+
 **What You Need:**
 
 - SMTP credentials (host, port, username, password)
@@ -439,13 +446,17 @@ Auth flows degrade with warnings logged if SMTP is missing, but a degraded auth 
 - Stripe account and secret key (`STRIPE_SECRET_KEY`)
 - Stripe webhook signing secret (`STRIPE_WEBHOOK_SECRET`)
 - (Optional) Mollie API key (`MOLLIE_API_KEY`)
+- Public application URL (`WEBAPP_PUBLIC_URL`); Mollie also requires
+  `GATEWAY_PUBLIC_URL` so it can send authoritative payment callbacks
+- `PAYMENT_CARD_PROVIDER=stripe|mollie` when both providers are configured
 
 **What's Automated:**
 
-- Webhook event handling (sync + asynchronous settlement)
+- Durable webhook ingress followed by asynchronous, retrying reconciliation
 - Subscription management and tier activation
 - Product/price catalog sync on startup
 - Payment processing, refunds, and disputes
+- Invoice delivery and 1/7/14/30-day overdue reminders through a retrying email outbox
 
 **Manual Steps:**
 
@@ -475,6 +486,7 @@ Auth flows degrade with warnings logged if SMTP is missing, but a degraded auth 
    export STRIPE_SECRET_KEY="sk_live_..."
    export STRIPE_WEBHOOK_SECRET="whsec_..."
    export MOLLIE_API_KEY="live_xxx" # optional
+   export PAYMENT_CARD_PROVIDER="stripe" # required only when both providers are ready
    ```
 
 **Used By:** Purser (billing API)
@@ -485,6 +497,82 @@ Auth flows degrade with warnings logged if SMTP is missing, but a degraded auth 
 methods (SEPA Direct Debit, iDEAL, Bancontact) settle after checkout completes; value is
 granted only on the confirming event (`async_payment_succeeded` / `invoice.paid` /
 `customer.subscription.updated`), never on `checkout.session.completed` alone.
+
+Purser advertises the generic `CARD` invoice-payment option only when the selected provider is
+fully reconcilable. Stripe readiness requires `STRIPE_SECRET_KEY`,
+`STRIPE_WEBHOOK_SECRET`, and `WEBAPP_PUBLIC_URL`; Mollie readiness requires
+`MOLLIE_API_KEY`, `GATEWAY_PUBLIC_URL`, and `WEBAPP_PUBLIC_URL`. If both are ready and
+`PAYMENT_CARD_PROVIDER` is unset or invalid, card payments remain unavailable instead of
+silently routing to one provider.
+
+Provider HTTP requests are acknowledged only after Purser commits the verified
+or validated payload to `purser.provider_webhook_inbox`. Reconciliation runs in
+a leased background worker with exponential backoff. Monitor
+`purser.payment_report_webhook_inbox_stuck` and
+`purser.payment_report_invoice_email_outbox_stuck`; rows appear after five
+failed attempts and are not automatically discarded.
+
+### x402 facilitator and crypto settlement
+
+Production uses FrameWorks' embedded x402 v2 exact/EIP-3009 facilitator by
+default. Configure:
+
+```bash
+export X402_FACILITATOR_PROVIDER="self"
+export X402_GAS_WALLET_PRIVKEY="<dedicated-gas-only-key>"
+export X402_GAS_WALLET_ADDRESS="0x<address-derived-from-key>"
+export GATEWAY_PUBLIC_URL="https://api.example.com"
+export X402_PREPAID_BUFFER_EUR_CENTS="500"
+export SUPPLIER_COUNTRY="NL"
+export CRYPTO_SCAN_START_BLOCK_BASE="<audited-first-block>"
+export CRYPTO_TREASURY_BASE="0x<treasury-address>"
+export CRYPTO_SWEEP_RELAYER_PRIVATE_KEY_BASE="<dedicated-gas-only-key>"
+```
+
+Purser verifies and settles EIP-3009 locally, while the payer still signs a
+gasless authorization. Each response creates a five-minute tenant-bound quote with a
+locked USD/EUR rate. A facilitator timeout is an unknown settlement outcome and
+must be reconciled; it never grants provisional credit.
+
+Confirmed prepaid and x402 credit is the VAT tax point; later usage only
+consumes already-invoiced credit. When an EU VAT identifier is supplied, Purser
+validates it against the official VIES service and stores a hashed/masked
+evidence record. A current valid result enables reverse charge only when the
+customer and `SUPPLIER_COUNTRY` are different EU member states. Domestic VAT
+identifiers receive domestic VAT. Billing-country and GeoIP-country signals are
+stored separately and missing/conflicting evidence prevents document release
+and remains queued for review.
+
+Inspect live dependencies with `frameworks crypto readiness`; production
+advertisement fails closed when RPC, token, relayer, tax, scanner, or custody
+dependencies are missing. Test reports and ceremony records belong in the
+release/change record, not opaque environment-variable strings.
+
+Every enabled deposit network needs an audited
+`CRYPTO_SCAN_START_BLOCK_<NETWORK>` and a version-controlled
+`CRYPTO_TREASURY_<NETWORK>` destination. Purser accepts any non-zero EVM
+address; using a cold multisig/Safe is an operator custody choice. USDC
+sweeping also needs a dedicated gas-only
+`CRYPTO_SWEEP_RELAYER_PRIVATE_KEY_<NETWORK>`; it is not the HD deposit key and
+must not control customer funds. Fund it only for bounded relay gas.
+
+Treasury configuration is per chain. Purser validates that each configured
+value is a non-zero EVM address but does not require or inspect contract code.
+
+The operator ceremony is `frameworks crypto sweep plan`, offline `sign`,
+online `broadcast`, then `reconcile`. Commands default to dry-run and bind
+execution to checksums. See the [CLI reference](/operators/cli-reference/#crypto-custody-commands).
+The repository runbook `docs/operations/sweep-ceremony.md` defines the
+two-person evidence and interrupted/unknown-outcome recovery procedure.
+
+Activate a replacement public derivation key with
+`frameworks crypto wallet rotate --xpub-file new.xpub --network mainnet`.
+Keep the retired offline xprv until repeated sweep plans have drained every
+manifest using its fingerprint. Rotation never initiates a transaction.
+
+Direct deposit and x402 creation remain independently stoppable with
+`CRYPTO_DEPOSITS_ENABLED=false` and `X402_PAYMENTS_ENABLED=false`. These
+breakers do not stop observation or reconciliation of money already submitted.
 
 ---
 

@@ -6,7 +6,7 @@ Programmatic access for AI agents and autonomous clients: wallet auth, prepaid b
 
 1. **Wallet-based authentication** - Cryptographic identity via EVM wallet signatures
 2. **Prepaid balance system** - Pay-as-you-go credits for wallet/agent accounts (postpaid exists for verified email)
-3. **x402 protocol** - Gasless USDC payments for instant top-ups
+3. **x402-compatible payments** - Gasless USDC prepaid top-ups
 4. **MCP adapter** - Model Context Protocol for AI-native tool discovery
 
 ## Agent Quick Start
@@ -14,7 +14,7 @@ Programmatic access for AI agents and autonomous clients: wallet auth, prepaid b
 1. **Create or load an EVM wallet.**
 2. **Call the MCP tool or GraphQL operation.**
 3. **If payment is required**, the Gateway returns HTTP 402 / `INSUFFICIENT_BALANCE` with x402 requirements.
-4. **Retry the same operation** with `X-PAYMENT`.
+4. **Retry the same operation** with `PAYMENT-SIGNATURE` (legacy `X-PAYMENT` is also accepted).
 5. **Create a stream** using MCP `create_stream`, then push RTMP with the returned stream key.
 
 ```
@@ -26,8 +26,7 @@ Programmatic access for AI agents and autonomous clients: wallet auth, prepaid b
 ┌─────────────────────────────────────────────────────────────────┐
 │                   Gateway MCP (Hub)  bridge:18000/mcp           │
 │                                                                 │
-│  69 Gateway-owned tools + 1 proxied Skipper tool                 │
-│  (ask_consultant)                                               │
+│  Runtime-discovered Gateway tools + proxied ask_consultant       │
 └─────────────────────────────────────────────────────────────────┘
          │                    │                    │
          │        consumes ◄──┼──► provides        │
@@ -86,26 +85,42 @@ EVM wallet identity system. Signature auth is currently Ethereum (EIP-191); Base
 
 ### Headers
 
-| Header               | Description                                 |
-| -------------------- | ------------------------------------------- |
-| `X-Wallet-Address`   | 0x-prefixed Ethereum address                |
-| `X-Wallet-Signature` | EIP-191 `personal_sign` signature           |
-| `X-Wallet-Message`   | Signed message (includes timestamp + nonce) |
+| Header               | Description                               |
+| -------------------- | ----------------------------------------- |
+| `X-Wallet-Address`   | 0x-prefixed Ethereum address              |
+| `X-Wallet-Signature` | EIP-191 `personal_sign` signature         |
+| `X-Wallet-Message`   | Exact server-issued, single-use challenge |
 
-### EIP-191 Message Format
+### Challenge issuance and exchange
 
-Wallet login requires the following exact message format:
+Clients first call `POST /auth/wallet-challenge` or the public MCP
+`request_wallet_challenge` tool with the wallet address and chain ID. Commodore
+normalizes the address, creates an EIP-4361-style message, stores only its
+SHA-256 hash, and expires it after five minutes. A response is similar to:
 
 ```
-FrameWorks Login
-Timestamp: 2025-01-15T12:00:00Z
-Nonce: 12345
+app.frameworks.network wants you to sign in with your Ethereum account:
+0x...
+
+Sign in to FrameWorks.
+
+URI: https://app.frameworks.network
+Version: 1
+Chain ID: 1
+Nonce: <server nonce>
+Issued At: 2026-08-20T00:00:00Z
+Expiration Time: 2026-08-20T00:05:00Z
 ```
 
-Notes:
-
-- Timestamp must be ISO8601 UTC.
-- Nonce can be any random string; it only needs to be unique per request.
+- The client must sign the returned bytes verbatim; it must not construct its
+  own timestamp or nonce.
+- `WalletLogin` verifies the EIP-191 signature and atomically consumes the
+  matching unexpired challenge. Concurrent exchange or replay has one winner.
+- REST login returns a refreshable HttpOnly-cookie session. MCP header exchange
+  returns `X-Access-Token`; the client then switches to bearer/API-token auth.
+- x402 is not accepted as authentication and cannot issue a session.
+- REST and MCP wallet bootstrap calls share the public per-IP abuse bucket.
+  Authentication throttling returns 429 and never produces an x402 challenge.
 
 ### Signing Examples
 
@@ -118,13 +133,13 @@ import { privateKeyToAccount } from "viem/accounts";
 const account = privateKeyToAccount("0x...");
 const client = createWalletClient({ account, transport: http() });
 
-const message = [
-  "FrameWorks Login",
-  `Timestamp: ${new Date().toISOString()}`,
-  `Nonce: ${crypto.randomUUID()}`,
-].join("\n");
+const challenge = await fetch("https://bridge.frameworks.network/auth/wallet-challenge", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ address: account.address, chain_id: 1 }),
+}).then((response) => response.json());
 
-const signature = await client.signMessage({ message });
+const signature = await client.signMessage({ message: challenge.message });
 ```
 
 Python (eth-account):
@@ -133,17 +148,15 @@ Python (eth-account):
 from eth_account import Account
 from eth_account.messages import encode_defunct
 import os
-from datetime import datetime, timezone
-import uuid
+import requests
 
-message = "\n".join([
-    "FrameWorks Login",
-    f"Timestamp: {datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}",
-    f"Nonce: {uuid.uuid4()}"
-])
+challenge = requests.post(
+    "https://bridge.frameworks.network/auth/wallet-challenge",
+    json={"address": Account.from_key(os.environ["FRAMEWORKS_WALLET_PRIVKEY"]).address, "chain_id": 1},
+).json()
 
 signed = Account.sign_message(
-    encode_defunct(text=message),
+    encode_defunct(text=challenge["message"]),
     private_key=os.environ["FRAMEWORKS_WALLET_PRIVKEY"]
 )
 signature = signed.signature.hex()
@@ -151,9 +164,15 @@ signature = signed.signature.hex()
 
 **Notes**
 
-- Header-based wallet auth is used for MCP/HTTP flows.
+- Wallet headers are a one-time MCP/HTTP exchange, not reusable credentials.
 - REST `POST /auth/wallet-login` sets HttpOnly auth cookies and returns user metadata.
-- GraphQL uses `walletLogin(input: WalletLoginInput!)` with the same address/message/signature fields.
+- GraphQL `walletLogin` can exchange the same server-issued challenge, but
+  clients should use bearer/API tokens for subsequent requests.
+- MCP `list_linked_wallets`, `link_wallet`, and `unlink_wallet` mirror the
+  authenticated GraphQL account controls and remain available at zero prepaid
+  balance. Unlink locks the user row and refuses to remove a wallet-only
+  account's final sign-in method unless a verified password sign-in is active,
+  including under concurrent requests.
 
 ### Auto-Provisioning
 
@@ -182,7 +201,11 @@ When a new wallet authenticates:
 
 ## Prepaid Balance System
 
-Resource-based billing with prepaid credits. API requests are free; costs are for bandwidth/viewer hours, storage, and processing/transcoding.
+Resource-based billing with prepaid credits. API and AI usage is metered and
+itemized even when the current catalog prices it at zero. Delivery, bandwidth,
+storage, transcoding, transcription, inference, and future model-backed work
+remain separate canonical meters so pricing can change without changing the
+usage contract.
 
 Schema: `pkg/database/sql/schema` (`prepaid_balances`, `balance_transactions`)
 
@@ -195,8 +218,13 @@ Schema: `pkg/database/sql/schema` (`prepaid_balances`, `balance_transactions`)
 ### Top-Up Methods
 
 1. **Card payments** - Stripe/Mollie checkout → credits balance
-2. **Crypto deposits** - HD wallet address → block-explorer polling (Etherscan/Basescan/Arbiscan) → credits balance
-3. **x402 payments** - Gasless USDC via EIP-3009 → instant credit
+2. **Crypto deposits** - HD wallet address → finalized canonical receipt → credits balance
+3. **x402 payments** - Gasless USDC via EIP-3009 → finalized canonical prepaid credit
+
+New direct-deposit and x402 creation can be stopped independently with
+`CRYPTO_DEPOSITS_ENABLED=false` and `X402_PAYMENTS_ENABLED=false`. Both default
+to enabled. These breakers do not stop reconciliation of already-observed or
+already-submitted payments.
 
 ### Key Files
 
@@ -205,29 +233,82 @@ Schema: `pkg/database/sql/schema` (`prepaid_balances`, `balance_transactions`)
 - `api_billing/internal/handlers` - HD wallet derivation
 - `api_billing/internal/handlers` - Deposit monitoring
 
+### Manual custody sweep
+
+Direct-deposit and x402 receiving addresses share
+`purser.crypto_custody_addresses`. Confirmed unswept source rows move through a
+four-stage platform-operator ceremony:
+
+1. `frameworks crypto sweep plan --network <network> --out <manifest> --persist`
+2. `frameworks crypto sweep sign` on an offline machine, with the matching xprv
+   supplied only through descriptor 3 or higher and a versioned treasury
+   allowlist, plus independent `--max-fee-gwei` and
+   `--max-priority-fee-gwei` ceilings
+3. `frameworks crypto sweep broadcast --bundle <bundle>` for validation, then
+   `--execute --ack <bundle-checksum>`
+4. `frameworks crypto sweep reconcile --batch-id <uuid> --apply`
+
+ETH uses an offline-signed EIP-1559 raw transaction. USDC uses an
+offline-signed EIP-3009 authorization and a separate online gas-relayer key;
+Purser never receives the HD deposit xprv or child keys. Planning reads the
+token's live EIP-712 name/version at the canonical snapshot, and broadcasting
+rechecks chain, asset, source signer, amount, fees, and configured treasury.
+Planning and reconciliation use the network's consensus-labelled `finalized`
+head. If an RPC cannot provide it, custody operations fail closed. Allocated
+deposit events remain under continuous canonicality checks; a mismatch reverses
+the prepaid ledger or reopens the invoice atomically and moves the wallet to
+operator review. The full two-person and interrupted-batch procedure is in
+`docs/operations/sweep-ceremony.md`.
+
+Rotate the public derivation key with
+`frameworks crypto wallet rotate --xpub-file <new-xpub> --network mainnet`.
+The counter never moves backwards, and every issued address retains the xpub
+that created it. Sweep planning emits one signing-key group per manifest; repeat
+planning until all retired-key groups are empty, and retain each retired offline
+xprv until then. Rotation does not move funds automatically.
+
 ---
 
 ## x402 Protocol
 
-Implementation of [x402](https://github.com/coinbase/x402) for gasless USDC payments using EIP-3009 "Transfer With Authorization".
+FrameWorks uses the official x402 Go v2 wire types with an embedded EIP-3009
+facilitator for gasless USDC `transferWithAuthorization` payments. HTTP integrations use
+`PAYMENT-REQUIRED`, `PAYMENT-SIGNATURE`, and `PAYMENT-RESPONSE`; legacy v1
+`X-PAYMENT` input is a compatibility fallback and is disabled by default in
+production.
 
 ### How It Works
 
-1. Client makes request with insufficient balance
+1. Authenticated client makes a rated request with insufficient balance
 2. Server returns HTTP 402 with `PaymentRequirements` (payTo, asset, amount, network options)
 3. Client signs EIP-3009 authorization off-chain
-4. Client retries with `X-PAYMENT` header containing signed payload
-5. Server verifies signature, submits tx on-chain (pays gas), credits balance
+4. Client retries with `PAYMENT-SIGNATURE` containing the signed payload
+5. Purser validates the immutable tenant quote, atomically claims it, simulates
+   the exact transfer, and submits it using the dedicated gas wallet
+6. Purser waits for a finalized canonical receipt containing the exact USDC
+   `Transfer(from, payTo, amount)` event
+7. Settlement confirmation and prepaid credit commit atomically
+8. Gateway/Foghorn reload canonical billing status and run the normal
+   suspension/balance policy before executing the original operation
+
+For a side-effecting GraphQL mutation, the retry must also carry an
+`Idempotency-Key` of 8–255 characters. MCP tool calls may use the same HTTP
+header or `_meta.idempotencyKey`. Purser binds the key, request fingerprint,
+and paid quote before execution and stores the terminal result. A completed
+retry replays that result; a different fingerprint is rejected; an uncertain
+in-flight outcome is never blindly executed again.
 
 ### Supported Networks
 
-| Network  | ChainID | x402 | USDC Contract                                |
-| -------- | ------- | ---- | -------------------------------------------- |
-| Base     | 8453    | ✅   | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
-| Arbitrum | 42161   | ✅   | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` |
-| Ethereum | 1       | ❌   | Too expensive (~$2-5/tx)                     |
+The embedded facilitator advertises enabled registry chains that pass live RPC,
+USDC, relayer, custody, and finality readiness. A configured optional hosted
+facilitator is instead intersected with its live `/supported` response. Network
+identifiers are CAIP-2 (for example, `eip155:8453` for Base).
 
-**Note**: x402 uses a platform-wide `payTo` address (HD index 0). The payer identity comes from the signed authorization, not the address.
+Each tenant has a stable HD-derived `payTo` address. This binds the signed
+EIP-3009 recipient to the tenant receiving credit and prevents a captured
+authorization from being claimed for another tenant. HD index 0 remains only
+for recovery of legacy platform-address payments and is not advertised.
 
 ### 402 Response Format
 
@@ -238,46 +319,83 @@ Implementation of [x402](https://github.com/coinbase/x402) for gasless USDC paym
   "code": "INSUFFICIENT_BALANCE",
   "operation": "resolveViewerEndpoint",
   "topup_url": "/account/billing",
-  "x402Version": 1,
+  "x402Version": 2,
+  "resource": {
+    "url": "https://api.example.com/graphql",
+    "description": "FrameWorks prepaid usage credit",
+    "mimeType": "application/json"
+  },
   "accepts": [
     {
       "scheme": "exact",
-      "network": "base",
-      "maxAmountRequired": "100000000",
+      "network": "eip155:8453",
+      "amount": "5000000",
       "payTo": "0x...",
       "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
       "maxTimeoutSeconds": 60,
-      "resource": "graphql://operation",
-      "description": "Streaming, transcoding & storage credits via Base"
+      "extra": {
+        "name": "USD Coin",
+        "version": "2",
+        "assetTransferMethod": "eip3009",
+        "frameworks": {
+          "quoteId": "<server-quote-id>",
+          "resourceClass": "graphql",
+          "expiresAt": "2026-08-20T12:05:00Z"
+        }
+      }
     }
   ]
 }
 ```
 
+The quote covers the tenant's current negative balance plus
+`X402_PREPAID_BUFFER_EUR_CENTS`, with `X402_TOPUP_USD_CENTS` as the minimum.
+The USD/EUR rate is locked into the short-lived quote. Amount, asset, CAIP-2
+network, recipient, quote ID, expiry, version, and scheme must match exactly; a
+positive-payment result is never an access bypass.
+
 ### Token Limitation
 
 x402 currently settles USDC only — EIP-3009 `transferWithAuthorization` is a USDC/EURC primitive. The schema leaves room for other EIP-3009 tokens, but the current runtime network registry exposes USDC contracts only.
 
-The non-x402 deposit flow (`CreateCryptoTopup` → HD-derived address → on-chain monitor) supports **ETH and USDC** end-to-end with a price-locked quote: `expected_amount_base_units` and `quoted_price_usd` are persisted at quote time (Chainlink ETH/USD; USDC is 1:1), and the credit at confirmation is `received_amount × locked_price`. **LPT** is reserved in the schema but rejected at the gate until a non-Chainlink price source is decided (no official LPT/USD aggregator).
+The non-x402 deposit flow (`CreateCryptoTopup` → HD-derived address → on-chain monitor) supports **ETH and USDC** with a price-locked quote: `expected_amount_base_units` and `quoted_price_usd` are persisted at quote time (Chainlink ETH/USD; USDC is 1:1), and the credit at confirmation is `received_amount × locked_price`. A durable per-network JSON-RPC cursor scans USDC `Transfer` logs and native transactions into `crypto_deposit_events`; event allocation, invoice/balance changes, the wallet receipt, and ledger entry commit atomically. Production requires an explicit `CRYPTO_SCAN_START_BLOCK_<NETWORK>` anchor. Native ETH sent by an internal contract transfer is not detected or accepted. **LPT** is reserved in the schema but rejected at the gate until a non-Chainlink price source is decided (no official LPT/USD aggregator).
 
 ### Testnet Support (Local Development Only)
 
-`X402_INCLUDE_TESTNETS=true` adds Base Sepolia and Arbitrum Sepolia to accepted networks. This flag exists for local development convenience only. There is no balance isolation — testnet payments credit real tenant balances identically to mainnet payments. Never enable in production.
+`X402_INCLUDE_TESTNETS=true` adds Base Sepolia and Arbitrum Sepolia in local
+development. Purser hard-rejects and never advertises testnets when
+`BUILD_ENV=production`, even if the testnet flag is accidentally set.
 
-### Gas Wallet
+### Embedded facilitator and optional hosted settlement
 
-Single private key used on all EVM chains (same address everywhere):
+Production defaults to `X402_FACILITATOR_PROVIDER=self`. It requires a dedicated,
+gas-only `X402_GAS_WALLET_PRIVKEY` and its matching
+`X402_GAS_WALLET_ADDRESS`. Purser enforces the v2 exact EIP-3009 requirements,
+including the token signing domain, canonical signature, 32-byte nonce,
+settlement validity margin, simulation, durable nonce/quote claims, finalized
+canonical receipt, and exact transfer event. RPC timeouts remain unknown
+outcomes for reconciliation; they are never proof of failure or permission to
+credit.
 
-- `X402_GAS_WALLET_PRIVKEY` (optional `X402_GAS_WALLET_ADDRESS` override)
-- Fund with enough ETH on Base/Arbitrum for settlement gas
-- Monitor via `gas_wallet_balance_eth` Prometheus metric
+`hosted` and `cdp` remain optional providers selected explicitly with
+`X402_FACILITATOR_PROVIDER`; CDP credentials are required only when `cdp` is
+chosen. FrameWorks does not require or pay a hosted facilitator in the default
+deployment.
+
+### Authentication Boundary
+
+x402 is payment, not login. Zero-value authorizations are rejected and payment
+headers are not authentication credentials. Agents authenticate with the
+wallet challenge flow or another normal credential, then use x402 to top up the
+resolved tenant. Anonymous viewer payments may only target the stream owner's
+resolved tenant-specific address.
 
 ### Key Files
 
 - `api_billing/internal/handlers` - Verification + settlement
 - `api_billing/internal/handlers` - Network registry
 - `api_billing/internal/handlers` - Balance monitoring
-- `api_gateway/internal/middleware` - 402 response + X-PAYMENT handling
+- `api_gateway/internal/middleware` - standard x402 v2 HTTP headers and policy re-entry
 
 ---
 
@@ -285,28 +403,31 @@ Single private key used on all EVM chains (same address everywhere):
 
 Model Context Protocol integration for AI agent tool discovery, integrated into Gateway.
 
-**Summary**: 70 tools, 24 resources, 10 prompts. The Gateway acts as a **hub** — it owns 69 tools directly and proxies 1 tool (`ask_consultant`) from the Skipper spoke.
+The Gateway acts as an MCP **hub**: it owns the platform tools and resources
+directly and proxies `ask_consultant` from the Skipper spoke. Clients should use
+MCP discovery methods for the live inventory instead of relying on a hard-coded
+count.
 
-| Category                 | Tools                                                                                                                                                                                                                                                 | Resources                                                                                                                                             | Source        |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
-| Account & Settings       | `get_tenant_settings`, `update_tenant_settings`, `update_billing_details`                                                                                                                                                                             | `account://status`                                                                                                                                    | Gateway       |
-| Payment                  | `get_payment_options`, `submit_payment`                                                                                                                                                                                                               | —                                                                                                                                                     | Gateway       |
-| Billing                  | `topup_balance`, `check_topup`                                                                                                                                                                                                                        | `billing://balance`, `billing://pricing`, `billing://transactions`                                                                                    | Gateway       |
-| Streams & Keys           | `create_stream`, `update_stream`, `delete_stream`, `refresh_stream_key`, `list_stream_keys`, `create_stream_key`, `delete_stream_key`, `validate_stream_key`                                                                                          | `streams://list`, `streams://{id}`, `streams://{id}/health`                                                                                           | Gateway       |
-| Multistream              | `list_push_targets`, `create_push_target`, `update_push_target`, `delete_push_target`                                                                                                                                                                 | —                                                                                                                                                     | Gateway       |
-| Clips                    | `create_clip`, `delete_clip`                                                                                                                                                                                                                          | —                                                                                                                                                     | Gateway       |
-| DVR                      | `start_dvr`, `stop_dvr`, `delete_dvr`                                                                                                                                                                                                                 | —                                                                                                                                                     | Gateway       |
-| VOD                      | `create_vod_upload`, `complete_vod_upload`, `abort_vod_upload`, `get_vod_upload_status`, `delete_vod_asset`                                                                                                                                           | `vod://list`, `vod://{artifact_hash}`                                                                                                                 | Gateway       |
-| Retention                | `get_retention_policy`, `set_retention_policy`, `set_stream_retention_overrides`, `update_asset_retention`, `reset_asset_retention`                                                                                                                   | —                                                                                                                                                     | Gateway       |
-| Playback                 | `resolve_playback_endpoint`                                                                                                                                                                                                                           | —                                                                                                                                                     | Gateway       |
-| Playback Access Control  | `list_signing_keys`, `create_signing_key`, `revoke_signing_key`, `set_playback_policy`, `clear_playback_policy`, `test_playback_access`                                                                                                               | —                                                                                                                                                     | Gateway       |
-| Analytics                | —                                                                                                                                                                                                                                                     | `analytics://usage`, `analytics://viewers`, `analytics://geographic`, `analytics://routing`, `analytics://federation`, `analytics://network-topology` | Gateway       |
-| QoE Diagnostics          | 6 tools (`diagnose_*`, `get_stream_health_summary`, `get_anomaly_report`)                                                                                                                                                                             | —                                                                                                                                                     | Gateway       |
-| Support                  | `list_support_conversations`, `search_support_history`                                                                                                                                                                                                | `support://conversations`, `support://conversations/{conversation_id}`                                                                                | Gateway       |
-| Knowledge                | `ask_consultant`                                                                                                                                                                                                                                      | `knowledge://sources`                                                                                                                                 | Skipper spoke |
-| Schema                   | `introspect_schema`, `generate_query`, `execute_query`                                                                                                                                                                                                | `schema://catalog`                                                                                                                                    | Gateway       |
-| Infrastructure           | `browse_marketplace`, `subscribe_to_cluster`, `unsubscribe_from_cluster`, `set_preferred_cluster`, `update_cluster_marketplace`, `create_edge_cluster`, `create_enrollment_token`, `get_node_info`, `manage_node`, `set_node_mode`, `get_node_health` | `nodes://list`, `nodes://{id}`, `clusters://list`, `clusters://{id}`, `clusters://marketplace`                                                        | Gateway       |
-| Cluster Invites & Access | `create_cluster_invite`, `revoke_cluster_invite`, `accept_cluster_invite`, `request_cluster_subscription`, `approve_subscription_request`, `reject_subscription_request`                                                                              | —                                                                                                                                                     | Gateway       |
+| Category                 | Tools                                                                                                                                                                                                                                                 | Resources                                                                                                                                                                            | Source        |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------- |
+| Account & Settings       | `get_tenant_settings`, `update_tenant_settings`, `update_billing_details`                                                                                                                                                                             | `account://status`                                                                                                                                                                   | Gateway       |
+| Payment                  | `get_payment_options`, `submit_payment`                                                                                                                                                                                                               | —                                                                                                                                                                                    | Gateway       |
+| Billing                  | `topup_balance`, `check_topup`, `pay_invoice`, `start_postpaid_setup`, `complete_mollie_postpaid_setup`                                                                                                                                               | `billing://balance`, `billing://pricing`, `billing://transactions`, `billing://invoices`, `billing://invoices/{invoice_id}`, `billing://payments`, `billing://payments/{payment_id}` | Gateway       |
+| Streams & Keys           | `create_stream`, `update_stream`, `delete_stream`, `refresh_stream_key`, `list_stream_keys`, `create_stream_key`, `delete_stream_key`, `validate_stream_key`                                                                                          | `streams://list`, `streams://{id}`, `streams://{id}/health`                                                                                                                          | Gateway       |
+| Multistream              | `list_push_targets`, `create_push_target`, `update_push_target`, `delete_push_target`                                                                                                                                                                 | —                                                                                                                                                                                    | Gateway       |
+| Clips                    | `create_clip`, `delete_clip`                                                                                                                                                                                                                          | —                                                                                                                                                                                    | Gateway       |
+| DVR                      | `start_dvr`, `stop_dvr`, `delete_dvr`                                                                                                                                                                                                                 | —                                                                                                                                                                                    | Gateway       |
+| VOD                      | `create_vod_upload`, `complete_vod_upload`, `abort_vod_upload`, `get_vod_upload_status`, `delete_vod_asset`                                                                                                                                           | `vod://list`, `vod://{artifact_hash}`                                                                                                                                                | Gateway       |
+| Retention                | `get_retention_policy`, `set_retention_policy`, `set_stream_retention_overrides`, `update_asset_retention`, `reset_asset_retention`                                                                                                                   | —                                                                                                                                                                                    | Gateway       |
+| Playback                 | `resolve_playback_endpoint`                                                                                                                                                                                                                           | —                                                                                                                                                                                    | Gateway       |
+| Playback Access Control  | `list_signing_keys`, `create_signing_key`, `revoke_signing_key`, `set_playback_policy`, `clear_playback_policy`, `test_playback_access`                                                                                                               | —                                                                                                                                                                                    | Gateway       |
+| Analytics                | —                                                                                                                                                                                                                                                     | `analytics://usage`, `analytics://viewers`, `analytics://geographic`, `analytics://routing`, `analytics://federation`, `analytics://network-topology`                                | Gateway       |
+| QoE Diagnostics          | 6 tools (`diagnose_*`, `get_stream_health_summary`, `get_anomaly_report`)                                                                                                                                                                             | —                                                                                                                                                                                    | Gateway       |
+| Support                  | `list_support_conversations`, `search_support_history`                                                                                                                                                                                                | `support://conversations`, `support://conversations/{conversation_id}`                                                                                                               | Gateway       |
+| Knowledge                | `ask_consultant`                                                                                                                                                                                                                                      | `knowledge://sources`                                                                                                                                                                | Skipper spoke |
+| Schema                   | `introspect_schema`, `generate_query`, `execute_query`                                                                                                                                                                                                | `schema://catalog`                                                                                                                                                                   | Gateway       |
+| Infrastructure           | `browse_marketplace`, `subscribe_to_cluster`, `unsubscribe_from_cluster`, `set_preferred_cluster`, `update_cluster_marketplace`, `create_edge_cluster`, `create_enrollment_token`, `get_node_info`, `manage_node`, `set_node_mode`, `get_node_health` | `nodes://list`, `nodes://{id}`, `clusters://list`, `clusters://{id}`, `clusters://marketplace`                                                                                       | Gateway       |
+| Cluster Invites & Access | `create_cluster_invite`, `revoke_cluster_invite`, `accept_cluster_invite`, `request_cluster_subscription`, `approve_subscription_request`, `reject_subscription_request`                                                                              | —                                                                                                                                                                                    | Gateway       |
 
 Code: `api_gateway/internal/mcp/` (tools, resources, prompts, preflight), `api_consultant/internal/` (mcpclient, mcpspoke, chat orchestrator). For full tool parameters, see the [public docs](https://logbook.frameworks.network/agents/mcp/).
 
@@ -316,9 +437,10 @@ Before billable operations, the preflight checker validates:
 
 1. Authentication (tenant_id in context)
 2. Billing details (required before billable operations)
-3. Prepaid balance (positive balance required)
+3. Prepaid available balance (settled balance minus active reservations; positive available balance required)
 
-**Note**: x402 settlement enforces the €100 billing-details threshold for settled payments.
+**Note**: x402 settlement requires full billing details above €100; exactly
+€100 remains within the simplified-record boundary.
 
 When balance is insufficient, the blocker response includes x402 payment options:
 
@@ -383,20 +505,29 @@ Both paths update state in Foghorn's Redis-backed state store. The routing effec
 
 ---
 
-## EU VAT Compliance
+## x402 invoice records and VAT limitations
 
 ### Simplified Invoice Rule (x402)
 
-- x402 top-ups generate **simplified invoices** in `purser.simplified_invoices`.
-- Payments **≥€100** are blocked unless billing details are present.
+- Confirmed x402 top-ups generate internal simplified-invoice records in
+  `purser.simplified_invoices`.
+- Payments **over €100** are blocked unless billing details are present.
 - Full VAT invoice generation for x402 payments is **not** implemented.
+- A VAT-number format check never enables reverse charge. Purser calls the
+  official VIES `checkVat` service, caches the result for 24 hours, and persists
+  a hashed/masked validation record. Reverse charge requires both a current
+  valid VIES result and a customer country different from `SUPPLIER_COUNTRY`;
+  a domestic VAT identifier receives domestic VAT.
+- Confirmed top-up is the recorded VAT tax point. Later usage consumes the
+  already-invoiced balance and does not create another VAT event.
+- x402 readiness requires supplier name, address, VAT number, and ISO country;
+  production also requires an official facilitator and scanner anchors.
 
-### Location Evidence
-
-Two pieces required for VAT rate determination:
-
-1. IP geolocation
-2. Wallet network (chain)
+The record stores billing country and GeoIP country separately, labels the
+evidence `complete`, `single_source`, `conflict`, or `missing`, and never treats
+the settlement network as customer-location evidence. Conflicts remain visible
+for accounting review and prevent an honest production sign-off until the
+operator's evidence policy covers them.
 
 Schema: `pkg/database/sql/schema` (`simplified_invoices`)
 

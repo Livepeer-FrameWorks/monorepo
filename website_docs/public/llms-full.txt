@@ -23,6 +23,15 @@ FrameWorks exposes an MCP (Model Context Protocol) server for AI agent integrati
 
 Discovery metadata: `/.well-known/mcp.json`
 
+<Aside type="note" title="Tenant MCP, not cluster administration">
+  This Bridge endpoint is a tenant-facing API surface. It does not expose platform lifecycle
+  operations such as `cluster provision`, `cluster release`, `cluster migrate`, or `cluster
+  control-plane`. Those operations require local GitOps manifests, SOPS material, SSH access, and
+  platform-operator authority, so they remain in the local `frameworks` CLI. Use `frameworks
+  commands --output json` for machine-readable CLI discovery. Any future operator MCP should be a
+  separate, local trust boundary.
+</Aside>
+
 ## Connecting Your AI Client
 
 ### Claude Desktop
@@ -59,32 +68,38 @@ Any MCP-compatible client can connect using the endpoint URL and authentication 
 Read-only data sources for account, billing, streams, analytics, infrastructure, support, and API
 discovery.
 
-| URI                                         | Description                                       |
-| ------------------------------------------- | ------------------------------------------------- |
-| `account://status`                          | Account status, blockers, and capabilities        |
-| `billing://balance`                         | Prepaid balance, drain rate, estimated hours left |
-| `billing://pricing`                         | Current pricing rates                             |
-| `billing://transactions`                    | Recent balance transactions                       |
-| `streams://list`                            | List all streams                                  |
-| `streams://{id}`                            | Stream details (relay ID or stream_id)            |
-| `streams://{id}/health`                     | Stream health metrics                             |
-| `vod://list`                                | List all VOD assets                               |
-| `vod://{artifact_hash}`                     | VOD asset details (relay ID or artifact hash)     |
-| `analytics://usage`                         | Current billing period usage                      |
-| `analytics://viewers`                       | Viewer metrics (last 24h)                         |
-| `analytics://geographic`                    | Geographic viewer distribution                    |
-| `analytics://routing`                       | Routing efficiency and cross-cluster traffic      |
-| `analytics://federation`                    | Federation operations summary                     |
-| `analytics://network-topology`              | Cluster topology and peer connectivity            |
-| `nodes://list`                              | Infrastructure nodes                              |
-| `nodes://{id}`                              | Node details                                      |
-| `clusters://list`                           | Subscribed clusters                               |
-| `clusters://{id}`                           | Cluster details (capacity, pricing, status)       |
-| `clusters://marketplace`                    | Available clusters for subscription               |
-| `support://conversations`                   | Support conversation list                         |
-| `support://conversations/{conversation_id}` | Support conversation details                      |
-| `knowledge://sources`                       | Curated documentation sources for video streaming |
-| `schema://catalog`                          | Curated GraphQL catalog (schema + templates)      |
+| URI                                         | Description                                             |
+| ------------------------------------------- | ------------------------------------------------------- |
+| `account://status`                          | Account status, blockers, and capabilities              |
+| `billing://balance`                         | Prepaid balance, drain rate, estimated hours left       |
+| `billing://pricing`                         | Canonical meter catalog and effective tier rules        |
+| `billing://transactions`                    | Recent balance transactions                             |
+| `billing://invoices`                        | Recent draft and permanent itemized invoices            |
+| `billing://invoices/{invoice_id}`           | Itemized invoice; finalized lines are immutable         |
+| `billing://payments`                        | Recent invoice payments and outstanding balance         |
+| `billing://payments/{payment_id}`           | One tenant-owned invoice payment and confirmation state |
+| `billing://documents`                       | Retained invoices, receipts, and credit-note metadata   |
+| `billing://documents/{kind}/{document_id}`  | Printable tenant-owned document with integrity hash     |
+| `streams://list`                            | List all streams                                        |
+| `streams://{id}`                            | Stream details (relay ID or stream_id)                  |
+| `streams://{id}/health`                     | Stream health metrics                                   |
+| `vod://list`                                | List all VOD assets                                     |
+| `vod://{artifact_hash}`                     | VOD asset details (relay ID or artifact hash)           |
+| `analytics://usage`                         | Purser-rated current-period itemized usage              |
+| `analytics://viewers`                       | Viewer metrics (last 24h)                               |
+| `analytics://geographic`                    | Geographic viewer distribution                          |
+| `analytics://routing`                       | Routing efficiency and cross-cluster traffic            |
+| `analytics://federation`                    | Federation operations summary                           |
+| `analytics://network-topology`              | Cluster topology and peer connectivity                  |
+| `nodes://list`                              | Infrastructure nodes                                    |
+| `nodes://{id}`                              | Node details                                            |
+| `clusters://list`                           | Subscribed clusters                                     |
+| `clusters://{id}`                           | Cluster details (capacity, pricing, status)             |
+| `clusters://marketplace`                    | Available clusters for subscription                     |
+| `support://conversations`                   | Support conversation list                               |
+| `support://conversations/{conversation_id}` | Support conversation details                            |
+| `knowledge://sources`                       | Curated documentation sources for video streaming       |
+| `schema://catalog`                          | Curated GraphQL catalog (schema + templates)            |
 
 Public resources (no auth required): `account://status`, `billing://pricing`, `clusters://marketplace`.
 
@@ -104,6 +119,8 @@ Always read this first. Returns:
   "billing": {
     "model": "prepaid",
     "balance_cents": 5000,
+    "reserved_balance_cents": 1200,
+    "available_balance_cents": 3800,
     "details_complete": true,
     "low_balance_warning": false,
     "drain_rate_cents_per_hour": 12
@@ -114,71 +131,109 @@ Always read this first. Returns:
 }
 ```
 
-If `blockers` is non-empty, resolve them before billable operations.
+If `blockers` is non-empty, resolve them before billable operations. `balance_cents` is the settled
+balance, `reserved_balance_cents` is already committed to active usage, and `available_balance_cents`
+is what remains spendable. Billable tool preflights use the available balance.
+
+### Billing and usage resources
+
+`billing://pricing` returns every active canonical meter, including meters that
+have no rule on the current tier. `configured: false` means the tier has no
+rule; it does not claim that a marketplace or custom cluster can never price
+the meter. Configured rules retain their model, included quantity, physical
+unit, allowed dimensions, and complete dimension-selector configuration.
+
+`analytics://usage` is a Purser-rated current-period view, not a dashboard
+rollup. Its `line_items` include zero-priced meters and preserve the unit,
+bounded dimensions, pricing source, and work-cluster attribution. Use
+`billing://invoices` for recent drafts and finalized invoices and
+`billing://invoices/{invoice_id}` for one itemized invoice. Draft lines remain
+a current preview; finalized lines are the immutable snapshot used by payment,
+email, and operator settlement.
 
 ## Tools
 
 Actions the agent can perform.
 
-| Tool                         | Description                                       | Requires       |
-| ---------------------------- | ------------------------------------------------- | -------------- |
-| `get_tenant_settings`        | Read tenant identity and routing settings         | Auth           |
-| `update_tenant_settings`     | Update tenant name, primary cluster, or model     | Auth           |
-| `update_billing_details`     | Set billing address                               | Auth           |
-| `get_payment_options`        | Get x402 payment options                          | None           |
-| `submit_payment`             | Submit an x402 top-up payment                     | None           |
-| `topup_balance`              | Request ETH or USDC deposit address (locked rate) | Auth           |
-| `check_topup`                | Check crypto payment status                       | Auth           |
-| `create_stream`              | Create a push or pull stream                      | Auth + Balance |
-| `update_stream`              | Update stream settings or pull-source config      | Auth + Balance |
-| `delete_stream`              | Delete a stream                                   | Auth + Balance |
-| `list_stream_keys`           | List stream ingest keys                           | Auth           |
-| `create_stream_key`          | Create an additional ingest key                   | Auth + Confirm |
-| `delete_stream_key`          | Deactivate an ingest key                          | Auth + Confirm |
-| `refresh_stream_key`         | Rotate the primary stream key                     | Auth + Confirm |
-| `validate_stream_key`        | Validate an ingest key                            | Auth           |
-| `create_clip`                | Create clip from stream                           | Auth + Balance |
-| `delete_clip`                | Delete a clip                                     | Auth           |
-| `start_dvr`                  | Start DVR recording                               | Auth + Balance |
-| `stop_dvr`                   | Stop DVR recording                                | Auth           |
-| `delete_dvr`                 | Delete a DVR recording and stored media           | Auth + Confirm |
-| `get_retention_policy`       | Read tenant media-retention defaults and bounds   | Auth           |
-| `set_retention_policy`       | Set tenant media-retention defaults               | Auth + Balance |
-| `update_asset_retention`     | Override retention for DVR, clip, or VOD          | Auth + Balance |
-| `reset_asset_retention`      | Reset asset retention to the cascade default      | Auth + Balance |
-| `create_vod_upload`          | Start a VOD upload                                | Auth + Balance |
-| `complete_vod_upload`        | Finalize a VOD upload                             | Auth + Balance |
-| `abort_vod_upload`           | Cancel an upload                                  | Auth           |
-| `delete_vod_asset`           | Delete a VOD asset                                | Auth + Balance |
-| `resolve_playback_endpoint`  | Get viewer playback URLs                          | None           |
-| `list_signing_keys`          | List playback signing keys                        | Auth           |
-| `create_signing_key`         | Create a one-shot ES256 private key               | Auth + Confirm |
-| `revoke_signing_key`         | Revoke a playback signing key                     | Auth + Confirm |
-| `set_playback_policy`        | Set JWT or webhook playback policy                | Auth + Confirm |
-| `clear_playback_policy`      | Clear playback policy                             | Auth + Confirm |
-| `test_playback_access`       | Test JWT/webhook playback policy behavior         | Auth           |
-| `diagnose_rebuffering`       | Analyze rebuffering events                        | Auth           |
-| `diagnose_buffer_health`     | Analyze buffer health and dry events              | Auth           |
-| `diagnose_packet_loss`       | Analyze packet loss (protocol-aware)              | Auth           |
-| `diagnose_routing`           | Analyze CDN routing decisions                     | Auth           |
-| `get_stream_health_summary`  | Aggregated stream health metrics                  | Auth           |
-| `get_anomaly_report`         | Detect anomalies vs baseline                      | Auth           |
-| `search_support_history`     | Search support conversations                      | Auth           |
-| `introspect_schema`          | Explore the GraphQL schema                        | Auth           |
-| `generate_query`             | Generate a GraphQL query from templates           | Auth           |
-| `execute_query`              | Execute a GraphQL query                           | Auth           |
-| `ask_consultant`             | Full Skipper pipeline with confidence tagging     | Auth           |
-| `browse_marketplace`         | Browse available infrastructure clusters          | None           |
-| `subscribe_to_cluster`       | Subscribe to a cluster                            | Auth           |
-| `unsubscribe_from_cluster`   | Remove a cluster subscription                     | Auth + Confirm |
-| `set_preferred_cluster`      | Set preferred cluster for DNS steering            | Auth           |
-| `update_cluster_marketplace` | Update cluster visibility, approval, or pricing   | Auth + Confirm |
-| `create_enrollment_token`    | Create an enrollment token for edge bootstrap     | Auth           |
-| `get_node_info`              | Fetch node details                                | Auth           |
-| `manage_node`                | Activate/deactivate/drain/restart a node          | Auth           |
-| `set_node_mode`              | Set node mode (normal/draining/maintenance)       | Auth           |
-| `get_node_health`            | Node health and metrics summary                   | Auth           |
-| `create_edge_cluster`        | Create edge cluster (returns token and Foghorn)   | Auth           |
+| Tool                             | Description                                       | Requires       |
+| -------------------------------- | ------------------------------------------------- | -------------- |
+| `request_wallet_challenge`       | Request a single-use EIP-191 login/link challenge | None           |
+| `list_linked_wallets`            | List wallets linked to the authenticated user     | Auth           |
+| `link_wallet`                    | Link a wallet using a fresh signed challenge       | Auth           |
+| `unlink_wallet`                  | Unlink a wallet while retaining a sign-in method   | Auth           |
+| `get_tenant_settings`            | Read tenant identity and routing settings         | Auth           |
+| `update_tenant_settings`         | Update tenant name, primary cluster, or model     | Auth           |
+| `update_billing_details`         | Set billing address                               | Auth           |
+| `get_payment_options`            | Get tenant-bound x402 payment options             | Auth           |
+| `submit_payment`                 | Submit an x402 top-up payment                     | Auth           |
+| `topup_balance`                  | Request ETH or USDC deposit address (locked rate) | Auth           |
+| `check_topup`                    | Check crypto payment status                       | Auth           |
+| `pay_invoice`                    | Create or resume an invoice payment               | Auth + Billing |
+| `start_postpaid_setup`           | Start Stripe or Mollie hosted postpaid setup      | Auth + Billing |
+| `complete_mollie_postpaid_setup` | Verify mandate and activate Mollie postpaid       | Auth + Billing |
+| `create_stream`                  | Create a push or pull stream                      | Auth + Balance |
+| `update_stream`                  | Update stream settings or pull-source config      | Auth + Balance |
+| `delete_stream`                  | Delete a stream                                   | Auth + Balance |
+| `list_stream_keys`               | List stream ingest keys                           | Auth           |
+| `create_stream_key`              | Create an additional ingest key                   | Auth + Confirm |
+| `delete_stream_key`              | Deactivate an ingest key                          | Auth + Confirm |
+| `refresh_stream_key`             | Rotate the primary stream key                     | Auth + Confirm |
+| `validate_stream_key`            | Validate an ingest key                            | Auth           |
+| `list_push_targets`              | List masked multistream destinations              | Auth           |
+| `create_push_target`             | Add a cost-affecting multistream destination      | Auth + Balance |
+| `update_push_target`             | Update or enable a multistream destination        | Auth + Balance |
+| `delete_push_target`             | Delete a multistream destination                  | Auth           |
+| `create_clip`                    | Create clip from stream                           | Auth + Balance |
+| `delete_clip`                    | Delete a clip                                     | Auth           |
+| `start_dvr`                      | Start DVR recording                               | Auth + Balance |
+| `stop_dvr`                       | Stop DVR recording                                | Auth           |
+| `delete_dvr`                     | Delete a DVR recording and stored media           | Auth + Confirm |
+| `get_retention_policy`           | Read tenant media-retention defaults and bounds   | Auth           |
+| `set_retention_policy`           | Set tenant media-retention defaults               | Auth + Balance |
+| `set_stream_retention_overrides` | Set DVR/clip retention overrides for a stream     | Auth + Balance |
+| `update_asset_retention`         | Override retention for DVR, clip, or VOD          | Auth + Balance |
+| `reset_asset_retention`          | Reset asset retention to the cascade default      | Auth + Balance |
+| `create_vod_upload`              | Start a VOD upload                                | Auth + Balance |
+| `get_vod_upload_status`          | Inspect uploaded and missing VOD parts            | Auth           |
+| `complete_vod_upload`            | Finalize a VOD upload                             | Auth + Balance |
+| `abort_vod_upload`               | Cancel an upload                                  | Auth           |
+| `delete_vod_asset`               | Delete a VOD asset                                | Auth + Balance |
+| `resolve_playback_endpoint`      | Get viewer playback URLs                          | None           |
+| `list_signing_keys`              | List playback signing keys                        | Auth           |
+| `create_signing_key`             | Create a one-shot ES256 private key               | Auth + Confirm |
+| `revoke_signing_key`             | Revoke a playback signing key                     | Auth + Confirm |
+| `set_playback_policy`            | Set JWT or webhook playback policy                | Auth + Confirm |
+| `clear_playback_policy`          | Clear playback policy                             | Auth + Confirm |
+| `test_playback_access`           | Test JWT/webhook playback policy behavior         | Auth           |
+| `diagnose_rebuffering`           | Analyze rebuffering events                        | Auth           |
+| `diagnose_buffer_health`         | Analyze buffer health and dry events              | Auth           |
+| `diagnose_packet_loss`           | Analyze packet loss (protocol-aware)              | Auth           |
+| `diagnose_routing`               | Analyze CDN routing decisions                     | Auth           |
+| `get_stream_health_summary`      | Aggregated stream health metrics                  | Auth           |
+| `get_anomaly_report`             | Detect anomalies vs baseline                      | Auth           |
+| `list_support_conversations`     | List recent support conversations                 | Auth           |
+| `search_support_history`         | Search support conversations                      | Auth           |
+| `introspect_schema`              | Explore the GraphQL schema                        | Auth           |
+| `generate_query`                 | Generate a GraphQL query from templates           | Auth           |
+| `execute_query`                  | Execute a GraphQL query                           | Auth           |
+| `ask_consultant`                 | Full Skipper pipeline with confidence tagging     | Auth           |
+| `browse_marketplace`             | Browse available infrastructure clusters          | None           |
+| `subscribe_to_cluster`           | Subscribe to a cluster                            | Auth           |
+| `unsubscribe_from_cluster`       | Remove a cluster subscription                     | Auth + Confirm |
+| `create_cluster_invite`          | Invite a tenant to subscribe to an owned cluster  | Auth           |
+| `revoke_cluster_invite`          | Revoke an outstanding cluster invite              | Auth           |
+| `accept_cluster_invite`          | Redeem a cluster invite                           | Auth           |
+| `request_cluster_subscription`   | Request access to a cluster                       | Auth           |
+| `approve_subscription_request`   | Approve a pending cluster subscription            | Auth           |
+| `reject_subscription_request`    | Reject a pending cluster subscription             | Auth           |
+| `set_preferred_cluster`          | Set preferred cluster for DNS steering            | Auth           |
+| `update_cluster_marketplace`     | Update cluster visibility, approval, or pricing   | Auth + Confirm |
+| `create_enrollment_token`        | Create an enrollment token for edge bootstrap     | Auth           |
+| `get_node_info`                  | Fetch node details                                | Auth           |
+| `manage_node`                    | Activate/deactivate/drain/restart a node          | Auth           |
+| `set_node_mode`                  | Set node mode (normal/draining/maintenance)       | Auth           |
+| `get_node_health`                | Node health and metrics summary                   | Auth           |
+| `create_edge_cluster`            | Create edge cluster (returns token and Foghorn)   | Auth           |
 
 <Aside type="tip" title="CLI Alternative">
   For operators who prefer the CLI over MCP, `frameworks edge deploy` combines `create_edge_cluster`
@@ -187,7 +242,9 @@ Actions the agent can perform.
   Edge](/hybrid/connecting) for details.
 </Aside>
 
-Public tools (no auth required): `get_payment_options`, `submit_payment`, `resolve_playback_endpoint`, `browse_marketplace`.
+Public tools (no auth required): `request_wallet_challenge`, `resolve_playback_endpoint`,
+`browse_marketplace`. Payment options and submission require an authenticated tenant; x402 is a
+top-up mechanism, never an authentication bypass.
 
 QoE tool responses use a consistent status enum: `healthy | warning | critical | no_data`.
 
@@ -207,8 +264,12 @@ QoE tool responses use a consistent status enum: `healthy | warning | critical |
 - `primary_cluster_id`: Preferred primary cluster for ingest and routing decisions.
 - `deployment_model`: Deployment model, for example `shared`, `dedicated`, or `self_hosted`.
 
-Agents can create wallet-provisioned tenants with x402 auth and then use this tool to finish account
-identity and routing setup without switching to the dashboard.
+Agents can call `request_wallet_challenge` without authentication, sign the returned message
+verbatim, and reconnect once with the `X-Wallet-*` headers. That exchange auto-provisions a new
+prepaid tenant when needed and returns `X-Access-Token`; use the token for subsequent calls.
+Authenticated agents can use `list_linked_wallets`, `link_wallet`, and `unlink_wallet` at zero
+balance. An account cannot unlink its final wallet until it has another wallet or a verified
+password sign-in method. x402 only tops up the resulting tenant; it is never a login credential.
 
 **topup_balance**
 
@@ -224,6 +285,33 @@ so you get exactly the quoted amount regardless of price drift inside the TTL.
 `check_topup` returns `status` of `pending | confirming | completed | expired`,
 plus `tx_hash`, `confirmations`, and on completion `credited_cents` /
 `credited_currency` (USD or EUR per the account).
+
+**pay_invoice**
+
+- `invoice_id` (required): Invoice id from `billing://invoices`.
+- `method` (required): `card`, `crypto_usdc`, or `crypto_eth`.
+- `return_url`: Optional web application URL for card-checkout return.
+
+The tool charges only the invoice's current outstanding balance. Repeating the
+same call resumes its pending checkout or crypto quote. A different method is
+rejected until the pending payment expires or fails. Read `billing://payments`
+to inspect recent attempts and confirmation state.
+
+**start_postpaid_setup**
+
+- `provider` (required): `stripe` or `mollie`; it must appear in the account's
+  configured setup providers.
+- `tier_id` (required): An eligible paid tier.
+- Stripe: provide `success_url`, `cancel_url`, and optionally
+  `billing_period: monthly | yearly`.
+- Mollie: provide `return_url` and optionally
+  `method: creditcard | ideal | bancontact`.
+
+The tool returns a durable setup identifier and hosted `action_url`. Opening or
+returning from that URL is not proof of activation; provider confirmation is
+authoritative. Stripe completes from its webhook. After a successful Mollie
+first payment, call `complete_mollie_postpaid_setup` with the same `tier_id`; it
+fetches and validates the tenant's mandate before creating the subscription.
 
 **create_stream**
 
@@ -391,15 +479,16 @@ Autonomous agents can create streams, record video, query analytics, and pay per
 
 ## Quick Start
 
-1. **Call the API operation you need** via MCP or GraphQL.
-2. **If the operation needs payment**, read the HTTP 402 / `INSUFFICIENT_BALANCE` response and its x402 payment requirements.
-3. **Sign an EIP-3009 USDC authorization** for one accepted network.
-4. **Retry the same operation** with `X-PAYMENT`.
-5. **Use the returned stream key or resource** from the original operation.
+1. **Request a wallet challenge** from `POST /auth/wallet-challenge` or MCP `request_wallet_challenge`, sign the returned message, and exchange it at `POST /auth/wallet-login` or once through the MCP wallet headers.
+2. **Call the API operation you need** via MCP or GraphQL with the resulting session or API token.
+3. **If a rated operation needs payment**, read the HTTP 402 / `INSUFFICIENT_BALANCE` response and its x402 payment requirements.
+4. **Sign an EIP-3009 USDC authorization** for one accepted network.
+5. **Retry the same operation** with `PAYMENT-SIGNATURE` and wait for confirmed credit.
 
 <Aside type="tip">
-  No signup form or auth endpoint is required for the x402 flow. The payment payload is attached to
-  the operation that needs it.
+  Wallet signup itself is free and never returns a payment challenge. A new wallet tenant may use
+  onboarding, billing, top-up, documentation, and discovery surfaces at zero balance; only rated
+  work is gated.
 </Aside>
 
 ## Discovery
@@ -486,67 +575,76 @@ See the full [MCP Reference](/agents/mcp) for the current tools, resources, and 
 # Payments
 https://logbook.frameworks.network/agents/payments
 
-Agents need a positive prepaid balance to create streams, clips, DVR recordings, and VOD uploads. Two funding methods are available: **x402** (inline, instant) and **crypto deposits** (on-chain transfer).
+Agents need positive available prepaid balance—the settled balance minus active reservations—to create streams, clips, DVR recordings, and VOD uploads. Two funding methods are available: **x402-compatible confirmed top-ups** and **crypto deposits** (on-chain transfer).
 
 <Aside type="tip">
-  API requests are free but rate limited. Prepaid usage is deducted as reports arrive, and prepaid
-  balance still gates agent write actions and suspension handling.
+  API requests are metered and itemized even when the current pricing rule is zero. Prepaid usage is
+  deducted as reports arrive, and available prepaid balance still gates agent write actions and
+  suspension handling.
 </Aside>
 
 ## x402 Protocol
 
-[x402](https://www.x402.org/) enables gasless USDC payments using EIP-3009 `transferWithAuthorization`. The agent signs a transfer authorization off-chain; FrameWorks submits it on-chain and pays the gas.
+[x402](https://www.x402.org/) enables gasless USDC payments using EIP-3009 `transferWithAuthorization`. The agent signs a transfer authorization off-chain; the configured hosted facilitator verifies and settles it.
+Complete tenant billing details before requesting a quote so confirmed credit
+can be invoiced using the customer-country VAT rule.
 
 ### Flow
 
-1. Agent calls a billable tool (e.g., `create_stream`) with insufficient balance.
-2. Server returns an `INSUFFICIENT_BALANCE` error with `x402_accepts` payment options.
+1. An authenticated agent calls a rated tool (for example `create_clip` or `create_vod_upload`) with insufficient balance.
+2. HTTP returns 402 plus `PAYMENT-REQUIRED`; MCP returns the same base64 document as `payment_required`.
 3. Agent signs an EIP-3009 authorization for the required amount.
-4. Agent retries with the `X-PAYMENT` header containing the base64-encoded signed payload.
-5. Server verifies the signature, submits the transaction on-chain, and credits the balance.
-6. The original operation proceeds.
+4. Agent echoes the selected v2 `accepted` requirement and retries with `PAYMENT-SIGNATURE` containing the base64-encoded signed payload.
+5. Purser atomically claims the tenant-bound quote, uses the official facilitator API, and waits for a successful receipt.
+6. Settlement state and prepaid credit commit atomically.
+7. The original operation proceeds only if a fresh canonical balance and suspension check passes.
 
-For browser-based integrations, MCP and GraphQL are CORS-readable public protocol surfaces. JavaScript clients can make the actual unauthenticated API request, receive the 402 response body, sign the payment authorization, and retry with `X-PAYMENT`.
+Browser integrations authenticate first, then make the rated request, receive the 402 response, sign its tenant-bound authorization, and retry with `PAYMENT-SIGNATURE`. Wallet signup, billing, top-up, and API/MCP discovery remain reachable at zero balance.
 
 ### Payment Options
 
-Call `get_payment_options` (public, no auth required) to get the platform's payment address and supported networks:
+Call `get_payment_options` while authenticated to get the tenant-bound payment address, exact amount, and supported networks:
 
 ```json
 {
-  "x402_version": 1,
+  "x402_version": 2,
+  "payment_required": "<base64 official v2 PaymentRequired>",
   "options": [
     {
-      "network": "base",
+      "network": "eip155:8453",
       "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
       "asset_symbol": "USDC",
-      "pay_to": "0x..."
-    },
-    {
-      "network": "arbitrum",
-      "asset": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
-      "asset_symbol": "USDC",
-      "pay_to": "0x..."
+      "pay_to": "0x...",
+      "amount": "5000000",
+      "quote_id": "<server-quote-id>",
+      "extra": { "frameworks": { "quoteId": "<server-quote-id>" } }
     }
   ]
 }
 ```
 
-### X-PAYMENT Header
+### Payment signature header
 
-The `X-PAYMENT` header contains a base64-encoded JSON payload:
+The standard `PAYMENT-SIGNATURE` header contains a base64-encoded v2 JSON payload:
 
 ```json
 {
-  "x402Version": 1,
-  "scheme": "exact",
-  "network": "base",
+  "x402Version": 2,
+  "accepted": {
+    "scheme": "exact",
+    "network": "eip155:8453",
+    "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "amount": "5000000",
+    "payTo": "0x<payTo-from-payment-options>",
+    "maxTimeoutSeconds": 60,
+    "extra": { "frameworks": { "quoteId": "<server-quote-id>" } }
+  },
   "payload": {
     "signature": "0x...",
     "authorization": {
       "from": "0x<your-wallet>",
       "to": "0x<payTo-from-payment-options>",
-      "value": "1000000",
+      "value": "5000000",
       "validAfter": "0",
       "validBefore": "1735689600",
       "nonce": "0x..."
@@ -555,14 +653,24 @@ The `X-PAYMENT` header contains a base64-encoded JSON payload:
 }
 ```
 
-`PAYMENT-SIGNATURE` is also accepted as a header name.
+Use the exact server document; the amount is dynamic and covers the current
+deficit plus a prepaid buffer. Successful HTTP settlement returns
+`PAYMENT-RESPONSE`; MCP returns the same value as `payment_response`.
+`X-PAYMENT`/v1 is legacy compatibility only and is off by default in
+production. Zero-value authorizations do not authenticate a caller—use the
+wallet challenge login flow.
+
+When the retried operation is side-effecting, send an `Idempotency-Key` with
+8–255 characters. MCP clients may instead set `_meta.idempotencyKey`. The key
+is bound to the paid quote and request fingerprint; a lost response is replayed
+without creating the stream, clip, DVR, upload, or other mutation twice. Never
+reuse one key for different arguments.
 
 ### Supported Networks
 
-| Network  | Chain ID | USDC Contract                                |
-| -------- | -------- | -------------------------------------------- |
-| Base     | 8453     | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
-| Arbitrum | 42161    | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` |
+The returned options are the live intersection of FrameWorks configuration and
+the facilitator's v2 `exact` support. Networks use CAIP-2 identifiers; Base is
+`eip155:8453`.
 
 <Aside type="note">
   x402 only works with USDC (EIP-3009 required). Prepaid crypto top-ups support **ETH and USDC**.
@@ -573,7 +681,7 @@ The `X-PAYMENT` header contains a base64-encoded JSON payload:
 
 For non-x402 prepaid top-ups, use the deposit flow:
 
-1. Call `topup_balance` with `amount_cents` and `asset: "ETH"` or `"USDC"`.
+1. Call `topup_balance` with `amount_cents` (minimum `1`) and `asset: "ETH"` or `"USDC"`.
 2. The response is a **locked-rate quote**: a deposit address plus the exact
    `expected_amount_token` to send (e.g. `0.01515` ETH), the `quoted_price_usd`
    it was locked at (Chainlink for ETH; 1:1 for USDC), and a 24h `expires_at`.
@@ -583,13 +691,61 @@ For non-x402 prepaid top-ups, use the deposit flow:
    (`received_token × quoted_price_usd`), so you get exactly what was quoted
    regardless of price drift inside the 24h TTL.
 
+The address remains monitored after quote expiry. Late prepaid deposits use a
+fresh receipt-time price/FX rate. Late invoice payments and non-exact invoice
+amounts are retained in `review_required` for explicit allocation and do not
+silently mark the invoice paid.
+
+Native ETH must be sent as a top-level transaction to the deposit address;
+internal contract transfers are not an accepted deposit method. USDC is read
+from contract `Transfer` logs. Both use restart-safe JSON-RPC cursors and
+separate deposit-event records. Production operators configure an explicit
+`CRYPTO_SCAN_START_BLOCK_<NETWORK>` anchor so initial deployment cannot skip
+older issued addresses.
+
 LPT is not supported as a top-up asset. Chainlink doesn't publish an official LPT/USD aggregator, so `topup_balance` rejects `asset: "LPT"`.
+
+The one-cent crypto minimum is the prepaid ledger's credit precision, not a
+claim that every transfer is economical after wallet or network fees. Browser
+fiat top-ups use a provider-aware minimum, currently 500 cents for both Stripe
+and Mollie EUR/USD checkout.
+
+## Invoice payments and postpaid setup
+
+Invoice collection is available to agents as well as the dashboard and GraphQL
+API. Read `billing://invoices` or `billing://invoices/{invoice_id}`, then call
+`pay_invoice` with that invoice ID and `card`, `crypto_usdc`, or `crypto_eth`.
+Purser derives the amount and currency from the locked invoice balance; an agent
+cannot choose an arbitrary charge amount. Repeating the same request resumes a
+still-active hosted session or quote, and a fully paid invoice is rejected.
+
+Use `billing://payments` for paginated history and
+`billing://payments/{payment_id}` for one tenant-owned payment. A failed payment
+can be retried by calling `pay_invoice` again after its reservation is terminal;
+processing and confirmed payments are never blindly retried.
+
+Use `billing://documents` to list retained invoices, simplified invoices,
+confirmed-payment receipts, and credit notes. Read the returned
+`billing://documents/{kind}/{document_id}` URI for the printable tenant-owned
+document and its SHA-256 integrity metadata. Document reads stay available at
+zero prepaid balance.
+
+For postpaid accounts, complete billing identity first and call
+`start_postpaid_setup` with an eligible tier and configured `stripe` or `mollie`
+provider. Hosted user action is mandatory. For Mollie, finish with
+`complete_mollie_postpaid_setup`; Purser fetches the mandate for the exact
+customer and requires it to be valid. A browser return alone never activates
+postpaid service—provider confirmation is authoritative.
+
+The optional VAT number is customer-supplied identity data, not proof of
+validation or reverse-charge eligibility. Current postpaid records are billing
+statements, not rendered immutable tax invoices or credit notes.
 
 ## Preflight Errors
 
-Billable MCP tools validate positive prepaid balance before executing. Account status can also report
-billing detail blockers; x402 settlement enforces billing details for payments of €100 or
-more. When requirements aren't met, the error includes resolution guidance:
+Billable MCP tools validate positive available prepaid balance before executing. Account status can also report
+billing detail blockers; x402 settlement enforces billing details for payments over €100.
+When requirements aren't met, the error includes resolution guidance:
 
 **Missing billing details:**
 
@@ -619,8 +775,8 @@ more. When requirements aren't met, the error includes resolution guidance:
 ```
 
 <Aside type="caution">
-  x402 payments of €100 or more require billing details. Account setup/preflight responses may ask
-  for billing details before that threshold; call `update_billing_details` to clear the blocker.
+  x402 payments over €100 require billing details. Account setup/preflight responses may ask for
+  billing details before that threshold; call `update_billing_details` to clear the blocker.
 </Aside>
 
 ## Cost Awareness
@@ -628,15 +784,17 @@ more. When requirements aren't met, the error includes resolution guidance:
 Prepaid usage deductions can move an account toward zero or negative balance. Monitor via the
 `billing://balance` resource:
 
-| Field                       | Description                             |
-| --------------------------- | --------------------------------------- |
-| `balance_cents`             | Current balance                         |
-| `drain_rate_cents_per_hour` | Recent rated spend rate, when available |
-| `estimated_hours_left`      | Time until depletion                    |
-| `live_metrics`              | Current operational usage context       |
+| Field                       | Description                                  |
+| --------------------------- | -------------------------------------------- |
+| `balance_cents`             | Settled prepaid ledger balance               |
+| `reserved_balance_cents`    | Amount committed to active in-flight usage   |
+| `available_balance_cents`   | Spendable balance used by MCP preflight      |
+| `drain_rate_cents_per_hour` | Recent rated spend rate, when available      |
+| `estimated_hours_left`      | Time until the available balance is depleted |
+| `live_metrics`              | Current operational usage context            |
 
-At zero or below, prepaid accounts are blocked from new billable operations unless the request is
-settled with x402. If the balance drops below -€10, Purser suspends the tenant and asks
+At zero or below available balance, prepaid accounts are blocked from new billable operations unless the request is
+settled with x402. If the settled balance drops below -€10, Purser suspends the tenant and asks
 Commodore/Foghorn to terminate active streams and sessions. Top up proactively.
 
 
@@ -722,23 +880,32 @@ Agents authenticate with an EVM wallet signature. First-time wallets are auto-pr
 
 ## How It Works
 
-1. Agent creates or loads an EVM wallet (any chain, any client).
-2. Agent signs a login message using EIP-191 `personal_sign`.
-3. Agent sends the signature as MCP wallet headers, or calls GraphQL `walletLogin` to receive a bearer JWT for direct API calls.
-4. Server verifies the signature and creates a prepaid tenant if this is a new wallet.
+1. Agent creates or loads an EVM wallet.
+2. Agent requests a challenge from `POST %GATEWAY_URL%/auth/wallet-challenge` or the public MCP tool `request_wallet_challenge` with its address and chain ID.
+3. Agent signs the returned message verbatim using EIP-191 `personal_sign`.
+4. Agent exchanges it once through `POST /auth/wallet-login`, GraphQL `walletLogin`, or MCP wallet headers.
+5. Server atomically consumes the challenge and creates a prepaid tenant if this is a new wallet.
 
 ## Message Format
 
-The signed message must match this exact format:
+The server returns an EIP-4361-style message similar to:
 
 ```
-FrameWorks Login
-Timestamp: 2025-01-15T12:00:00Z
-Nonce: 12345
+app.frameworks.network wants you to sign in with your Ethereum account:
+0x...
+
+Sign in to FrameWorks.
+
+URI: https://app.frameworks.network
+Version: 1
+Chain ID: 1
+Nonce: <server nonce>
+Issued At: 2026-08-20T00:00:00Z
+Expiration Time: 2026-08-20T00:05:00Z
 ```
 
-- **Timestamp**: ISO 8601 UTC. Must be no more than 5 minutes old and no more than 1 minute in the future.
-- **Nonce**: Any random string, unique per request.
+- Do not build or modify this message client-side.
+- Challenges expire after five minutes and can be consumed only once. Concurrent exchanges have one winner.
 
 ## Signing Examples
 
@@ -751,13 +918,13 @@ import { privateKeyToAccount } from "viem/accounts";
 const account = privateKeyToAccount("0x...");
 const client = createWalletClient({ account, transport: http() });
 
-const message = [
-  "FrameWorks Login",
-  `Timestamp: ${new Date().toISOString()}`,
-  `Nonce: ${crypto.randomUUID()}`,
-].join("\n");
+const challenge = await fetch("%GATEWAY_URL%/auth/wallet-challenge", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ address: account.address, chain_id: 1 }),
+}).then((response) => response.json());
 
-const signature = await client.signMessage({ message });
+const signature = await client.signMessage({ message: challenge.message });
 ```
 
 ### Python (eth-account)
@@ -766,17 +933,16 @@ const signature = await client.signMessage({ message });
 from eth_account import Account
 from eth_account.messages import encode_defunct
 import os
-from datetime import datetime, timezone
-import uuid
+import requests
 
-message = "\n".join([
-    "FrameWorks Login",
-    f"Timestamp: {datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}",
-    f"Nonce: {uuid.uuid4()}"
-])
+wallet = Account.from_key(os.environ["FRAMEWORKS_WALLET_PRIVKEY"])
+challenge = requests.post(
+    "%GATEWAY_URL%/auth/wallet-challenge",
+    json={"address": wallet.address, "chain_id": 1},
+).json()
 
 signed = Account.sign_message(
-    encode_defunct(text=message),
+    encode_defunct(text=challenge["message"]),
     private_key=os.environ["FRAMEWORKS_WALLET_PRIVKEY"]
 )
 signature = signed.signature.hex()
@@ -786,41 +952,27 @@ signature = signed.signature.hex()
 
 For MCP and HTTP requests, pass wallet credentials in headers:
 
-| Header               | Value                                           |
-| -------------------- | ----------------------------------------------- |
-| `X-Wallet-Address`   | `0x`-prefixed Ethereum address                  |
-| `X-Wallet-Signature` | EIP-191 `personal_sign` signature               |
-| `X-Wallet-Message`   | The signed message (includes timestamp + nonce) |
+| Header               | Value                             |
+| -------------------- | --------------------------------- |
+| `X-Wallet-Address`   | `0x`-prefixed Ethereum address    |
+| `X-Wallet-Signature` | EIP-191 `personal_sign` signature |
+| `X-Wallet-Message`   | The exact server-issued challenge |
 
-For direct GraphQL or browser integrations, use the GraphQL `walletLogin` mutation to exchange the same address/message/signature fields for a JWT, then use `Authorization: Bearer <jwt>` on subsequent requests. The REST `POST /auth/wallet-login` endpoint is cookie-oriented for first-party sessions; it sets HttpOnly cookies and only returns user metadata.
+For direct GraphQL integrations, request the challenge over REST and exchange it
+with `walletLogin`, then use `Authorization: Bearer <jwt>`. The REST login endpoint
+creates refreshable HttpOnly cookies for first-party browser sessions. An MCP
+wallet-header exchange returns `X-Access-Token`; switch to bearer/API-token auth
+because the challenge headers cannot be replayed.
 
 ## Client Configuration
 
-### Claude Desktop
+Static MCP client configuration must use a bearer API token. Wallet headers are
+single-use bootstrap credentials, not permanent headers.
 
-```json
-{
-  "mcpServers": {
-    "frameworks": {
-      "url": "%GATEWAY_URL%/mcp",
-      "headers": {
-        "X-Wallet-Address": "0x...",
-        "X-Wallet-Signature": "0x...",
-        "X-Wallet-Message": "FrameWorks Login\nTimestamp: 2025-01-15T12:00:00Z\nNonce: 12345"
-      }
-    }
-  }
-}
-```
-
-### Claude Code CLI
-
-```bash
-claude mcp add frameworks %GATEWAY_URL%/mcp \
-  --header "X-Wallet-Address: 0x..." \
-  --header "X-Wallet-Signature: 0x..." \
-  --header "X-Wallet-Message: FrameWorks Login..."
-```
+MCP also exposes authenticated `list_linked_wallets`, `link_wallet`, and
+`unlink_wallet` tools. Linking requires a fresh challenge for the new address.
+The service serializes unlink attempts and refuses to remove the final wallet
+from an account that has no verified password sign-in method.
 
 ### Bearer Token (Alternative)
 
@@ -870,24 +1022,31 @@ The agent can immediately read `account://status`, which will show blockers like
 - Store private keys locally. Never send them to any API.
 - Only send wallet headers to `*.frameworks.network` domains.
 - Wallet signatures are verified server-side using `ecrecover` (EIP-191).
-- The GraphQL API also accepts wallet auth via the `walletLogin` mutation with the same address/message/signature fields.
+- The server stores only a challenge hash and rejects expired or replayed challenges.
+- REST and MCP challenge/login calls share the public per-IP abuse limit; throttling returns 429, never 402.
+- x402 payments are not login credentials and never mint a session.
 
 
 ---
 # An AI Agent Walks Into a Streaming Platform
 https://logbook.frameworks.network/blog/agent-native-access
 
-Here is the full onboarding flow for an AI agent that wants to broadcast on FrameWorks: create an EVM wallet, sign a login message, call `create_stream`, get told to pay, pay, call `create_stream` again. No signup form, no email verification loop, no card on file, no human in the middle. Most of the engineering behind it is in making "get told to pay, pay" trustworthy for both sides.
+Here is the onboarding flow for an AI agent: create an EVM wallet, request and sign a one-time login challenge, configure a stream at zero balance, then fund the tenant before any rated ingest, playback, storage, or processing begins. No signup form, email verification loop, or card is required for prepaid use.
 
 ## Identity is a signature
 
-Agents authenticate with an Ethereum wallet using a standard EIP-191 `personal_sign` over a login message containing a timestamp and a nonce. The first time a new wallet shows up, the platform auto-provisions around it: a tenant on the prepaid billing model, a user with no email, a balance starting at zero, and the wallet bound to both. The trust model is explicit — a bare wallet is a low-trust prepaid customer who loads balance before consuming; adding a verified email upgrades the account toward invoiced, postpaid territory. An agent can stay in the first category forever and be a perfectly good customer.
+Agents authenticate with EIP-191 `personal_sign` over a server-issued, five-minute, single-use challenge. The server stores its hash and atomically consumes it, so copied or concurrent replays cannot create another session. The first successful exchange auto-provisions a prepaid tenant, an email-less user, a zero balance, and the wallet binding. Adding a verified email and collection method makes postpaid available; it is not required for prepaid use.
 
-API requests themselves are free. Charges are for resources: bandwidth and viewer-hours, storage, processing. Usage is metered in five-minute summaries and deducted from the prepaid balance; if a balance goes more than $10 into the red, streams are terminated and new operations are blocked until it's topped up. Enforcement is mechanical, which suits a customer that can't read a collections email.
+API requests currently have a zero price, but their usage is still metered and
+itemized alongside bandwidth, viewer time, storage, processing, and AI work.
+Usage is reported in five-minute summaries and rated against the tenant and
+work-cluster contract; if an available balance is exhausted, new billable
+operations are blocked until it is topped up. Enforcement is mechanical, which
+suits a customer that can't read a collections email.
 
 ## The 402 is the API
 
-When an agent calls a billable operation without the balance to cover it, the answer is HTTP 402 with a machine-readable payment offer attached: what's owed, which networks are accepted, where to pay, and a deadline. The agent signs a USDC transfer authorization off-chain — [x402](https://github.com/coinbase/x402) rides on EIP-3009, USDC's transfer-with-authorization primitive — and retries the same call with an `X-PAYMENT` header carrying the signature. The platform verifies the signature, submits the transaction on-chain itself (the server pays the gas, so the agent's wallet needs USDC and nothing else), credits the balance, and the retried operation goes through.
+When an authenticated agent calls a rated operation without enough balance, the answer is HTTP 402 with a tenant-bound payment offer. The agent signs a USDC transfer authorization off-chain — [x402](https://github.com/coinbase/x402) rides on EIP-3009 — and retries with `PAYMENT-SIGNATURE`. FrameWorks submits it, waits for a confirmed successful receipt, atomically credits the balance, and then reruns ordinary admission policy. Payment never doubles as login or bypasses suspension.
 
 ```mermaid
 sequenceDiagram
@@ -895,14 +1054,14 @@ sequenceDiagram
     participant G as Gateway MCP
     participant P as Purser (billing)
     participant C as Base / Arbitrum
-    A->>G: create_stream (wallet auth)
+    A->>G: create_vod_upload (bearer auth)
     G-->>A: 402 · payment requirements
     A->>A: sign EIP-3009 authorization (off-chain)
-    A->>G: create_stream + X-PAYMENT header
+    A->>G: retry + PAYMENT-SIGNATURE
     G->>P: verify signature, settle
     P->>C: submit tx (server pays gas)
-    P->>P: credit prepaid balance
-    G-->>A: stream created · here's your key
+    P->>P: confirmed credit + canonical balance recheck
+    G-->>A: upload created
 ```
 
 x402 settles on Base and Arbitrum. We skipped Ethereum mainnet — a few dollars of gas per transaction makes no sense for topping up a streaming balance. For agents (or humans) who prefer plain transfers, there's also a classic deposit flow: a derived deposit address, a price-locked quote, and block-explorer polling until ETH or USDC arrives.
@@ -913,7 +1072,7 @@ Settlement is built to survive its own failure modes: verification happens befor
 
 ## One MCP surface for the whole platform
 
-The other half of agent-native is what the agent can actually do once it's a customer. The Gateway exposes the platform over [MCP](/agents/mcp): 70 tools — 69 owned by the Gateway, spanning streams, clips, DVR, VOD, playback, QoE diagnostics, billing, support, schema introspection, and infrastructure, plus [Skipper's](/agents/skipper) `ask_consultant` proxied in as the 70th — alongside read-only resources for streams, analytics, nodes, and billing state. A handful of tools work without any authentication at all (payment options, payment submission, playback resolution, marketplace browsing), because an agent needs to be able to discover how to become a customer before it is one.
+The other half of agent-native is what the agent can actually do once it's a customer. The Gateway exposes the platform over [MCP](/agents/mcp): runtime-discovered tools spanning wallet onboarding, streams, clips, DVR, VOD, playback, QoE diagnostics, billing, support, schema introspection, and infrastructure, plus [Skipper's](/agents/skipper) `ask_consultant` — alongside read-only resources for streams, analytics, nodes, and billing state. A small public surface covers wallet challenge issuance, playback resolution, and marketplace browsing, because an agent needs to be able to discover how to become a customer before it is one. Tenant-bound payment options and submission require the wallet-authenticated tenant they credit.
 
 The hub-and-spoke split keeps responsibilities clean. Skipper consults — its `ask_consultant` pipeline can search knowledge and run diagnostics but has mutation tools blocked, so a free-form consulting answer can never delete a stream as a side effect. State changes go through the dedicated Gateway tools, each with its own authorization and its own preflight. The Gateway injects the caller's tenant context into everything it forwards, so a spoke never sees a request without knowing exactly which tenant it's acting for.
 
@@ -1961,10 +2120,10 @@ formats, marketplace cluster rates, or advanced jobs when those meters are enabl
 cluster.
 
 <Aside type="tip">
-  **API requests are free.** Stream creation, analytics queries, configuration changes—all API
-  operations cost nothing, though API traffic is still subject to request throttling. You only pay
-  when viewers watch or when recordings are stored under the public beta catalog. Advanced
-  processing (AI, V2V, compositing) is in pilot — see below.
+  **API requests currently cost €0, but they are still metered and itemized.** The same applies to
+  the current API/LLM/search/embedding meters unless a tier or cluster contract explicitly prices
+  them. API traffic remains subject to request throttling. Advanced processing (AI, V2V,
+  compositing) is in pilot — see below.
 </Aside>
 
 ## Free Tier
@@ -2057,13 +2216,16 @@ Load credits first, use resources as you go. Balance decreases as usage accrues.
 
 ### Postpaid
 
-Monthly subscription with included delivered-minute allocations. Cold storage is rated from GiB-second usage and displayed as GiB-hours on invoice lines. Overages are drafted during the billing period and invoiced at period end. Requires verified billing details.
+Monthly subscription with included delivered-minute allocations. Cold storage is rated from GiB-second usage and displayed as GiB-hours on invoice lines. Overages are drafted during the billing period and invoiced at period end. Before activation, complete the billing email and address, choose an eligible tier, and finish either Stripe Checkout or Mollie's first-payment mandate flow. The provider webhook is authoritative; returning to the browser alone does not activate postpaid billing.
 
 ## Topping Up
 
 ### Card
 
-Pay via Stripe or Mollie. Funds credit immediately after checkout.
+Pay via Stripe or Mollie. The minimum fiat top-up is **€5.00 / 500 cents** for
+the currently supported EUR flow. Purser validates the selected provider and
+currency before creating checkout; a provider may require a higher minimum for
+a future currency. Funds credit only after provider confirmation.
 
 ### Crypto
 
@@ -2072,39 +2234,94 @@ with a 24h price-locked quote (Chainlink ETH/USD; USDC is 1:1) — send exactly
 the quoted amount and the balance is credited at the locked rate when the
 deposit confirms. LPT is reserved but currently rejected.
 
-**Confirmations:**
+Crypto top-ups can be as small as **one cent**, the smallest unit the prepaid
+ledger can credit. The quoted ETH/USDC amount can have finer on-chain precision,
+but the requested balance credit is always an integer number of cents.
 
-- Ethereum: 12 confirmations
-- Base: 10 confirmations
-- Arbitrum: 10 confirmations
+Invoice deposits below the exact quote remain in operator review and never mark
+the invoice paid. A confirmed overpayment pays the invoice and atomically
+credits the locked-quote value of the surplus to the customer's prepaid
+balance; the surplus has its own ledger reference and is also reversed if the
+deposit later fails canonicality checks.
+
+**Finality:** balance credit waits for the network's consensus-labelled
+`finalized` head and then verifies the receipt block hash. A fixed number of
+`latest`-head confirmations is not treated as finality. If the RPC cannot
+return a usable finalized head, the payment remains pending and rated work is
+not released.
 
 ### x402 Protocol
 
 For programmatic clients, FrameWorks supports the [x402 protocol](https://www.x402.org/).
 
-When balance is insufficient, the API returns HTTP 402 with payment requirements. Clients sign an EIP-3009 authorization and retry with the `X-PAYMENT` (or `PAYMENT-SIGNATURE`) header to top up automatically.
+When balance is insufficient, the API returns HTTP 402 with the official v2
+`PAYMENT-REQUIRED` header. Clients sign an EIP-3009 authorization for one exact
+accepted requirement and retry with `PAYMENT-SIGNATURE`. Successful settlement
+returns `PAYMENT-RESPONSE`; `X-PAYMENT` is legacy compatibility only and is
+disabled by default in production.
+
+Paid GraphQL mutations also require `Idempotency-Key` (8–255 characters).
+Paid MCP mutation tools accept that HTTP header or `_meta.idempotencyKey`.
+Retries with the same fingerprint replay the durable terminal result; key
+collisions are rejected and an uncertain in-flight outcome is not re-executed.
 
 x402 supports USDC on Base and Arbitrum (EIP-3009 is a USDC primitive). Prepaid crypto top-ups support ETH and USDC.
+Both direct crypto and x402 prepaid funding are invoiced when confirmed credit is
+issued. Usage consumption does not create a second VAT event.
 
 ## Invoicing
 
-FrameWorks is registered in the EU and follows EU VAT invoicing rules.
+The billing page records rated statements, line items, prepaid credit, payments,
+and the remaining balance. A payment action is created only for the invoice's
+current outstanding balance; fully settled and zero-value statements do not
+offer payment.
 
-### Why the €100 Threshold
+For Stripe/Mollie postpaid overages, FrameWorks does not create an external
+collection below **€5.00 / 500 cents**. Amounts from €0.01 through €4.99 are
+shown as carried forward with zero due on that period; they are not waived.
+The first later period that brings the accumulated balance to €5.00 or more
+includes the prior balance and collects the combined amount. Usage within the
+plan allowance remains zero-priced and adds nothing to the carry balance.
+Cancelling an account before the floor is reached records the remaining amount
+as an explicit account-closure write-off rather than requesting a tiny payment.
 
-EU VAT law allows **simplified invoices** for transactions under €100. These invoices don't require customer details—just the supplier info, amount, and VAT breakdown.
+Add the billing contact, legal name, address, and optional VAT/tax identifier in
+account settings before starting a paid provider setup. The identifier is stored
+as customer-supplied billing data; format checking is not tax-authority
+validation and does not, by itself, establish reverse-charge eligibility. Leave
+the identifier blank when the customer is not VAT registered.
 
-For payments **under €100**, we issue simplified invoices automatically. No billing details needed from you.
+<Aside type="caution">
+  FrameWorks renders immutable numbered invoices, confirmed-payment receipts, simplified invoices,
+  and linked credit notes, with a database-enforced ten-year retention floor. Operators must still
+  approve supplier, VAT, tax-point, validation, and jurisdiction-specific retention treatment before
+  describing them as legally compliant tax documents.
+</Aside>
 
-For payments **€100 or above**, EU law requires a full VAT invoice with your details (name, address, and VAT number if applicable). You must add billing details in your account settings before making large payments.
+Authenticated customers can list document metadata at
+`GET /v1/billing/documents` and download a tenant-bound printable HTML attachment
+at `GET /v1/billing/documents/{kind}/{id}`. The response includes
+`X-Document-SHA256`, uses private/no-store caching, and remains reachable for a
+zero-balance prepaid tenant. The billing dashboard exposes the same downloads.
 
-### B2B in the EU
+Invoice notifications link to the exact billing-page invoice. Card payment uses
+the operator-selected Stripe or Mollie hosted checkout; USDC/ETH payment returns
+an exact address, network, quote, and expiry. Provider confirmation—not the
+browser redirect—is authoritative.
 
-If you're a business in the EU, add your VAT number in account settings. We validate the format and apply reverse charge (0% VAT) automatically.
+The dashboard shows recent invoice-payment attempts. Failed attempts can be
+retried from their invoice; pending attempts are resumed instead of creating a
+second reservation. GraphQL exposes a tenant-scoped `payment(id:)` lookup and
+cursor-paginated `paymentsConnection(page:, invoiceId:, status:, method:)`;
+`billingStatus.recentPayments` remains a compact dashboard summary. Retry or
+resume through `createPayment(input: { invoiceId, method, returnUrl })`. MCP
+clients use `billing://payments`, `billing://payments/{payment_id}`, and
+`pay_invoice`. All surfaces calculate the current server-side outstanding
+balance and reject payment when nothing remains due.
 
-### Record Keeping
-
-All invoices are available in your account. We retain transaction records for 10 years per EU requirements.
+Overdue reminders are durable and staged at 1, 7, 14, and 30 days. Each stage
+is sent at most once, SMTP failures retry from the outbox, and the outstanding
+balance is recomputed before delivery so a paid statement has no payment CTA.
 
 ## Cluster Tiers
 
@@ -8587,10 +8804,11 @@ A tenant can link one or more wallets. Linking requires a signed challenge from 
 mutation LinkWallet {
   linkWallet(input: { address: "0x...", signature: "0x...", message: "<challenge>" }) {
     __typename
-    ... on Wallet {
+    ... on WalletIdentity {
       id
       address
-      linkedAt
+      createdAt
+      lastAuthAt
     }
     ... on ValidationError {
       field
@@ -8606,8 +8824,16 @@ To remove a wallet:
 mutation UnlinkWallet {
   unlinkWallet(walletId: "<wallet global id>") {
     __typename
-    ... on UnlinkWalletResult {
-      unlinked
+    ... on DeleteSuccess {
+      success
+      deletedId
+      pending
+    }
+    ... on NotFoundError {
+      message
+    }
+    ... on AuthError {
+      message
     }
   }
 }
@@ -8617,13 +8843,27 @@ mutation UnlinkWallet {
 
 `walletLogin` exchanges a signed challenge for a developer/session token. Use it to bootstrap a fresh tenant from an agent or wallet-only client.
 
+First request the single-use message from `POST /auth/wallet-challenge` with
+`{"address":"0x...","chain_id":1}`. Sign the returned `message` verbatim;
+client-generated nonces and replayed challenges are rejected.
+
 ```graphql
 mutation WalletLogin {
   walletLogin(input: { address: "0x...", signature: "0x...", message: "<challenge>" }) {
     __typename
-    ... on WalletLoginResult {
+    ... on WalletLoginPayload {
       token
-      tenantId
+      expiresAt
+      isNewAccount
+      user {
+        id
+        email
+        role
+      }
+    }
+    ... on ValidationError {
+      field
+      message
     }
   }
 }
@@ -8633,19 +8873,32 @@ If the wallet isn't yet linked to a tenant, the mutation creates one. To bind an
 
 ## x402 micropayments
 
-x402 (HTTP 402 Payment Required) is the agent-friendly payment protocol used for per-request usage on FrameWorks. The platform issues a 402 response with a payment requirement; the caller submits a signed payment proof; the server replays the original request with the receipt.
+x402 (HTTP 402 Payment Required) is an authenticated prepaid top-up protocol on FrameWorks. The platform issues a tenant-bound 402 response; the caller submits a signed payment proof; the server waits for confirmation, credits the balance, and reevaluates the original request. It is not a login method.
 
 The user-facing entry point is `submitX402Payment`:
 
 ```graphql
 mutation Pay {
-  submitX402Payment(input: { paymentToken: "<x402 payment payload>" }) {
+  submitX402Payment(payment: "<base64 PAYMENT-SIGNATURE>", resource: "graphql://createStream") {
     __typename
-    ... on X402PaymentReceipt {
-      receiptId
-      amount
-      currency
-      creditedTopupId
+    ... on X402PaymentResult {
+      success
+      tenantId
+      walletAddress
+      creditedCents
+      newBalanceCents
+      txHash
+      message
+    }
+    ... on ValidationError {
+      field
+      message
+    }
+    ... on NotFoundError {
+      message
+    }
+    ... on AuthError {
+      message
     }
   }
 }
@@ -8656,32 +8909,42 @@ Most clients won't call this directly — the SDK and MCP server handle it trans
 ## Top-ups and balances
 
 Wallet-funded crypto top-ups follow the standard prepaid-balance model. Initiate one via `createCryptoTopup`, then poll `cryptoTopupStatus` for confirmation count and the credited balance:
+Complete the tenant billing address first; it supplies the customer country used
+for the top-up VAT decision and invoice.
 
 ```graphql
 mutation Topup {
-  createCryptoTopup(input: { amount: "100.00", currency: "USDC" }) {
-    __typename
-    ... on CryptoTopupResult {
-      topupId
-      depositAddress
-      requiredConfirmations
-    }
+  createCryptoTopup(input: { amountCents: 10000, asset: USDC, currency: "EUR" }) {
+    topupId
+    depositAddress
+    asset
+    expectedAmountBaseUnits
+    expectedAmountToken
+    quotedPriceUsd
+    quoteSource
+    quotedAt
+    expiresAt
+    network
   }
 }
 
 mutation CheckStatus {
   cryptoTopupStatus(topupId: "<topup id>") {
-    __typename
-    ... on CryptoTopupStatus {
-      status
-      confirmations
-      creditedAmount
-    }
+    id
+    status
+    txHash
+    confirmations
+    receivedAmountBaseUnits
+    receivedAmountToken
+    creditedAmountCents
+    creditedAmountCurrency
   }
 }
 ```
 
 Once credited, the funds appear in your prepaid balance (`prepaidBalance` query) and are spent against usage like any other top-up.
+The confirmed credit is the VAT tax point and creates the retained top-up invoice;
+later usage only consumes that already-invoiced balance.
 
 ## Related
 
@@ -12245,6 +12508,7 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 | Purser                  | 18003 (HTTP), 19003 (gRPC) | Central          | Control / API                 | Billing, usage, invoices, payments, and x402 state                |
 | Periscope Query         | 18004 (HTTP), 19004 (gRPC) | Central          | Event & Analytics             | Analytics and reporting API                                       |
 | Periscope Ingest        | 18005                      | Regional         | Event & Analytics             | Kafka event processing and ClickHouse writes                      |
+| Periscope Metering      | 18021                      | Regional         | Event & Analytics             | Local ClickHouse aggregation and durable reports to Purser        |
 | Decklog                 | 18006 (gRPC)               | Regional         | Event & Analytics             | gRPC event ingress → Kafka                                        |
 | Decklog (metrics)       | 18026                      | Regional         | Observability & Operations    | Decklog Prometheus metrics                                        |
 | Signalman               | 18009 (WS), 19005 (gRPC)   | Regional         | Event & Analytics             | Real-time event fan-out and WebSocket hub                         |
@@ -12301,7 +12565,7 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 ## Deployment Tiers
 
 - **Central**: Commodore, Quartermaster, Purser, Navigator, Periscope Query, Deckhand, Skipper, Forms, PostgreSQL-compatible DB (YugabyteDB recommended), ClickHouse, Listmonk, Chatwoot + Redis.
-- **Regional**: Bridge, Foghorn, Decklog, Periscope Ingest, Signalman, Chandler, Kafka, Web Console, Marketing Site.
+- **Regional**: Bridge, Foghorn, Decklog, Periscope Ingest, Periscope Metering, Signalman, Chandler, Kafka, Web Console, Marketing Site. Today the unsharded ClickHouse deployment is central, so there is one metering source there; when ClickHouse becomes regional, each logical deployment gets a local worker with a unique source ID.
 - **Central/Regional**: Privateer (WireGuard mesh agent runs on all backend infrastructure nodes).
 - **Edge**: MistServer, Helmsman, Livepeer Gateway.
 
@@ -12309,7 +12573,7 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 
 ## Multi-Cluster Topology
 
-FrameWorks supports multiple clusters. A **cluster** is a Foghorn instance (or HA pair) plus its edge nodes — strictly the media plane. All clusters share the same central Control / API Plane (Commodore, Quartermaster, Purser) and Event & Analytics Plane (Decklog, Periscope, Signalman). These services are not duplicated or federated per cluster.
+FrameWorks supports multiple clusters. A **cluster** is a Foghorn instance (or HA pair) plus its edge nodes — strictly the media plane. Clusters share the central Control / API Plane (Commodore, Quartermaster, Purser). Event collection is regional, and Periscope Metering follows the logical ClickHouse deployment: one central source in today's unsharded topology, then one local worker and ClickHouse source per wider region after sharding. Purser remains the central financial authority.
 
 Cross-cluster coordination is handled exclusively by the **FoghornFederation** gRPC protocol between Foghorn instances:
 
@@ -13110,8 +13374,8 @@ frameworks cluster init postgres --manifest production.yaml
 
 | Command                                                 | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `frameworks cluster control-plane plan/reconcile`       | Validate or reconcile service-owned platform state by the `quartermaster`, `billing`, `accounts`, `assignments`, or `validation` domain without provisioning or deploying services.                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `frameworks cluster finalize`                           | Deprecated compatibility alias for control-plane reconciliation. Its existing `--only quartermaster`, `--only purser`, `--only commodore`, `--only assignments`, and `--only validation` behavior remains available.                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `frameworks cluster control-plane plan/reconcile`       | Validate or reconcile service-owned platform state by the `quartermaster`, `billing`, `accounts`, `assignments`, or `validation` domain without provisioning or deploying services.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `frameworks cluster finalize`                           | Deprecated compatibility alias for control-plane reconciliation. Its existing `--only quartermaster`, `--only purser`, `--only commodore`, `--only assignments`, and `--only validation` behavior remains available.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `frameworks cluster seed`                               | Apply idempotent static seed data; add `--demo` for sample tenant/user/stream data and `--force` to skip the prompt.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `frameworks cluster migrate`                            | Apply pending PostgreSQL/YugabyteDB schema migrations from `pkg/database/sql/migrations/`; use `--phase expand --dry-run` for Ansible check/diff mode. Filtered to `--to-version vX.Y.Z` (defaults to cluster's resolved platform version).                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `frameworks cluster migrate validate`                   | Validate migration path layout, checksums-at-source assumptions, and conservative expand-phase SQL safety rules.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -13125,7 +13389,7 @@ frameworks cluster init postgres --manifest production.yaml
 | `frameworks cluster skipper posts`                      | Query recent Skipper social post drafts from the skipper database over the manifest-selected SSH/database path.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `frameworks cluster metabase sync`                      | Sync repo-managed Metabase Periscope cards and attach missing cards to the dashboard without overwriting unmanaged manual edits.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `frameworks cluster sync-geoip`                         | Upload GeoLite2-City MMDB data to Foghorn/Quartermaster hosts; supports `--source maxmind` or `--source file`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `frameworks cluster set-channel <channel>`              | Set the manifest release channel. Valid channels are `stable` and `rc`; `cluster upgrade` uses this when no explicit version is given.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `frameworks cluster set-channel <channel>`              | Set the manifest release channel. Valid channels are `stable` and `rc`; `cluster release plan/apply` uses this when no explicit version is given.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `frameworks cluster clickhouse migrate backfill`        | Bulk-copy periscope data into the new Replicated node via `remote()` over the WireGuard mesh, using the same idempotent staging + `REPLACE PARTITION`/`EXCHANGE` mechanics as `sync` (re-runnable after a partial failure); stops refreshable MVs for the duration. Requires `--from <source host key>` (and `--from-port` if source/dest run on swapped ports).                                                                                                                                                                                                                                                                                                                                     |
 | `frameworks cluster clickhouse migrate sync`            | Idempotent per-partition re-copy of the growing tail (staging table + atomic `REPLACE PARTITION`; additive-safe — re-runs replace, never double). Unpartitioned tables use an atomic `EXCHANGE`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `frameworks cluster clickhouse migrate verify`          | Parity fingerprint — FINAL row count plus a `cityHash64` content hash over the shared (source-and-destination) columns, each side normalized to the destination type (`AggregateFunction` columns finalized; a type-evolved source column cast to the destination type). Destination-only/new tables absent on the source are asserted EMPTY instead of hashed. Plus a catalog-coverage assertion that fails if the live schema has a table the migration catalog doesn't classify.                                                                                                                                                                                                                  |
@@ -15338,6 +15602,111 @@ frameworks config path --kind credentials
 
 ---
 
+## Crypto Custody Commands
+
+`frameworks crypto` contains the manual custody workflow. `frameworks crypto sweep`
+is deliberately split into online and offline stages; it never sends the HD
+deposit xprv to Purser.
+
+### frameworks crypto readiness
+
+Returns the operator-only structured readiness report for direct deposits,
+x402, finalized RPC heads, scanner health/lag, treasury and relayer
+configuration, embedded facilitator readiness, tax configuration, and unresolved
+accounting anomalies. `production_eligible` is false until every live dependency
+is present.
+
+```bash
+frameworks crypto readiness
+```
+
+### frameworks crypto wallet rotate
+
+Activates a new watch-only xpub for future deposit and x402 addresses without
+changing historical address derivation. The xpub is read from a file; the xprv
+must remain offline.
+
+```bash
+frameworks crypto wallet rotate --xpub-file new-deposit.xpub --network mainnet
+```
+
+Retain the previous offline xprv until all sweep manifests for that key have
+been reconciled and its addresses are empty.
+
+### frameworks crypto sweep plan
+
+Reads confirmed, unswept direct-deposit and x402 sources at a canonical block,
+checks current chain balances, and writes a deterministic checksummed manifest.
+It is a dry run unless `--persist` is supplied; only a persisted plan can be
+signed and broadcast.
+
+```bash
+frameworks crypto sweep plan --network base --out sweep-manifest.json
+frameworks crypto sweep plan --network base --out sweep-manifest.json --persist
+```
+
+**Flags:**
+
+- `--network` - EVM network name.
+- `--out` - New manifest file; existing files are never overwritten.
+- `--persist` - Claim the source rows and persist the batch.
+
+### frameworks crypto sweep sign
+
+Runs without network access on the offline signer. The input descriptor must
+contain the external-chain xprv corresponding to the manifest xpub. Secret
+material is never accepted through arguments or environment variables. The
+separate allowlist file binds each network to its approved treasury.
+
+```bash
+exec 3< <(password-manager read frameworks-sweep-xprv)
+frameworks crypto sweep sign --manifest sweep-manifest.json \
+  --treasury-allowlist treasury-allowlist.json --secret-fd 3 \
+  --max-fee-gwei 5 --max-priority-fee-gwei 2 \
+  --out sweep-bundle.json
+exec 3<&-
+```
+
+`--secret-fd` must be descriptor 3 or higher. Required flags are `--manifest`,
+`--treasury-allowlist`, `--secret-fd`, `--max-fee-gwei`,
+`--max-priority-fee-gwei`, and `--out`. The two fee caps are chosen on the
+offline host and are never trusted from the online manifest.
+
+### frameworks crypto sweep broadcast
+
+Revalidates every signed transaction/authorization, the persisted batch,
+current treasury configuration, and signature source. It is a dry run unless
+`--execute` is supplied. Execution additionally requires `--ack` to exactly
+equal the signed bundle checksum.
+
+```bash
+frameworks crypto sweep broadcast --bundle sweep-bundle.json
+frameworks crypto sweep broadcast --bundle sweep-bundle.json --execute --ack <bundle-checksum>
+```
+
+**Flags:**
+
+- `--bundle` - Signed bundle path (required).
+- `--execute` - Persist transaction hashes and submit transactions.
+- `--ack` - Exact bundle checksum required with `--execute`.
+
+### frameworks crypto sweep reconcile
+
+Checks transaction receipts, confirmation depth, and canonical block hashes.
+It is read-only unless `--apply` is supplied.
+
+```bash
+frameworks crypto sweep reconcile --batch-id <uuid>
+frameworks crypto sweep reconcile --batch-id <uuid> --apply
+```
+
+**Flags:**
+
+- `--batch-id` - Persisted sweep batch UUID (required).
+- `--apply` - Persist confirmed/failed item and batch states.
+
+---
+
 ## Exit Codes
 
 - `0` - Success
@@ -15412,7 +15781,23 @@ On upgrades, `frameworks cluster migrate` runs only the migrations whose
 ledger row is missing. There is no blind ledger pre-seed: every recorded
 migration was produced by an actual SQL apply.
 
-## Upgrade procedure
+## Release and recovery procedure
+
+For a normal platform release, use the lifecycle command that owns ClickHouse,
+PostgreSQL/YugabyteDB, service, and transition ordering:
+
+```bash
+frameworks cluster release plan --version vX.Y.Z
+frameworks cluster release apply --version vX.Y.Z --dry-run
+frameworks cluster release apply --version vX.Y.Z --yes
+```
+
+It applies expand migrations before platform artifacts, interleaves declared
+release transitions, applies postdeploy migrations afterward, and always leaves
+contract migrations deferred.
+
+Use the following lower-level flow only for migration development, diagnosis,
+or a release-specific recovery runbook:
 
 1. **Check release notes** for required ClickHouse DDL.
 2. **Confirm the phase**. Routine rolling upgrades apply `expand` migrations
@@ -15449,7 +15834,8 @@ frameworks cluster migrate --phase expand --to-version v0.5.0
 `--to-version` is optional; when omitted the cluster's resolved channel
 version is used.
 
-6. **Deploy services** after expand migrations are in place:
+6. **Deploy services** only when the recovery runbook explicitly proves there
+   are no unhandled release transitions:
 
 ```bash
 frameworks cluster upgrade --all
@@ -15460,6 +15846,10 @@ frameworks cluster upgrade --all
 ```bash
 frameworks cluster migrate --phase postdeploy --to-version v0.5.0
 ```
+
+Direct `cluster upgrade --all` does not run declared release transitions and
+fails closed when one gates a downstream service. It is not the normal whole
+release path.
 
 ## Ledger details
 
@@ -16255,6 +16645,102 @@ The CLI fetches `clusters/<cluster>/cluster.yaml` from the repo, along with all 
 
 
 ---
+# Crypto payments & custody
+https://logbook.frameworks.network/operators/crypto-payments
+
+Crypto stays available when its independent readiness gates are healthy. New
+direct deposits and x402 can be stopped separately without disabling receipt
+reconciliation, customer billing reads, or sweep reconciliation.
+
+## Production gate
+
+Run the structured report before enabling or restoring either path:
+
+```bash
+frameworks crypto readiness --output json
+```
+
+Production eligibility requires the HD watch-only xpub, configured finalized
+heads and healthy scanner cursors, the embedded x402 v2 exact facilitator,
+complete supplier identity/country configuration, effective VAT rates, non-zero
+treasury addresses, and dedicated gas-only relayers.
+
+An absent gate keeps the affected method hidden/fail-closed. It is not a warning
+that operators may ignore.
+
+## Emergency controls
+
+- `CRYPTO_DEPOSITS_ENABLED=false` stops new direct-deposit addresses.
+- `X402_PAYMENTS_ENABLED=false` stops new x402 quotes and settlement.
+
+Keep the scanner and reconcilers running. A provider/RPC timeout is an unknown
+outcome, never proof that settlement failed; retries use the persisted quote,
+authorization nonce, provider transaction, and mutation-result records.
+
+## Operator review queues
+
+`purser.crypto_accounting_anomalies` holds conditions that cannot be repaired
+safely from RPC state alone, including a consumed USDC authorization without a
+recoverable transaction hash, a late settlement with no matching ledger
+reversal, and missing/conflicting customer-location evidence. Readiness reports
+the unresolved count. Never “resolve” an item by editing a balance or settlement
+row; use an audited compensating operation backed by canonical evidence.
+
+## Reorg behavior
+
+Credits are issued only after consensus-labelled finality and a canonical block
+hash check. Allocated deposits continue to be rechecked. A later canonical
+mismatch reverses prepaid credit, reopens/claws back invoice allocation, creates
+a linked credit note where a customer document exists, and lets ordinary prepaid
+admission block on the resulting balance. There is no paid-request bypass.
+
+## Customer records and retention
+
+Authenticated document downloads are available through
+`/v1/billing/documents`. Purser tenant-scopes every invoice, simplified invoice,
+confirmed-payment receipt, and credit note, renders only persisted evidence, and
+returns an integrity hash. Database deletion guards retain these source records
+for at least ten years. Confirmed top-up is the VAT tax point; each document
+records the `vat-at-confirmed-topup-v1` policy, effective rate source, customer
+location evidence, and any VIES result used for reverse charge.
+
+## Custody and sweeping
+
+Purser is watch-only. Automatic hot-wallet sweeping is deliberately out of
+scope. Operators use:
+
+```bash
+frameworks crypto sweep plan --network base --out manifest.json --persist
+frameworks crypto sweep sign --manifest manifest.json --out signed.json \
+  --treasury-allowlist treasuries.json --secret-fd 3 \
+  --max-fee-gwei 5 --max-priority-fee-gwei 2
+frameworks crypto sweep broadcast --bundle signed.json --execute --ack <checksum>
+frameworks crypto sweep reconcile --batch-id <batch-id>
+```
+
+Signing is performed offline with an xprv supplied through a file descriptor
+and independent operator-selected fee ceilings.
+Broadcast rechecks chain, token, treasury, balance, nonce/authorization state,
+and fee bounds. Repeating broadcast replays the persisted transaction intent;
+it does not allocate another relayer nonce.
+
+To rotate the generated-address key, create a new account-external xpub offline,
+then run:
+
+```bash
+frameworks crypto wallet rotate --xpub-file new-deposit.xpub --network mainnet
+```
+
+Only future addresses use the new key. Historical addresses retain their
+original xpub and are planned in separate signing-key batches. Keep every
+retired xprv offline until no remaining sweep manifest uses it.
+
+For the two-person evidence checklist, failure recovery, and incident-specific
+procedures, use the repository runbooks `docs/operations/sweep-ceremony.md` and
+`docs/operations/crypto-incidents.md` shipped with the same release.
+
+
+---
 # Data Architecture
 https://logbook.frameworks.network/operators/data-models
 
@@ -16291,6 +16777,16 @@ Real-time stream, viewer, node, artifact, storage, routing, federation, API, and
 live in ClickHouse. Current-state tables such as stream, node, artifact, and viewer-session state
 are derived from event streams and optimized for analytics/query paths.
 
+### Purser small-balance collection state
+
+`billing_collection_balances` is the lockable tenant/currency state for
+provider-collected postpaid overages below the 500-cent economic floor.
+`billing_collection_entries` records every invoice decision and its opening,
+current, collected, and closing cents. `billing_collection_writeoffs` records
+an explicit account-closure or operator-approved waiver. These are financial
+ledgers owned by Purser; integrations read the invoice API and must not mutate
+the tables directly.
+
 ## Schema Sources
 
 This page is intentionally not a full table catalog. The repository SQL is the contract used by the
@@ -16315,12 +16811,15 @@ ClickHouse stores append-only event logs plus derived rollups:
 - **Raw events**: stream lifecycle, viewer sessions, QoE samples, node metrics, routing decisions,
   federation events, storage events, processing events, API requests, and acquisition events.
 - **Current state**: stream, node, artifact, and viewer-session snapshots optimized for fast reads.
-- **Rollups**: 5-minute, hourly, and daily aggregates used for dashboards, billing, and capacity
-  reporting.
+- **Canonical ledgers**: 5-minute usage ledgers used by regional metering where
+  the meter contract calls for them. Finalized session/processing facts and
+  canonical storage snapshots remain direct billing inputs.
+- **Dashboard rollups**: hourly and daily aggregates used for dashboards and
+  capacity reporting. Billing never reads these caches.
 
-Billing-critical rollups include `cluster_id` and `origin_cluster_id` in their grouping keys so
-cross-cluster usage can be attributed correctly. See `docs/architecture/cross-cluster-billing.md`
-for the settlement model.
+Canonical facts and ledgers retain the work `cluster_id`; viewer facts also
+retain `origin_cluster_id` for lineage. See
+`docs/architecture/cross-cluster-billing.md` for the settlement model.
 
 ---
 
@@ -17629,6 +18128,13 @@ GEOIP_CACHE_MAX=50000      # Max cached entries
 
 Auth flows degrade with warnings logged if SMTP is missing, but a degraded auth flow is not a viable production posture. Treat SMTP as required.
 
+Purser never emails a live draft. Finalization stores the permanent invoice and
+line-item snapshot, then enqueues `purser.invoice_email_outbox` in the same
+transaction. Horizontally scaled Purser workers lease and retry delivery. Check
+`purser.payment_report_invoice_email_outbox_stuck` for rows that repeatedly
+fail; missing SMTP or missing permanent line items defer the email instead of
+sending a partial summary.
+
 **What You Need:**
 
 - SMTP credentials (host, port, username, password)
@@ -17668,13 +18174,17 @@ Auth flows degrade with warnings logged if SMTP is missing, but a degraded auth 
 - Stripe account and secret key (`STRIPE_SECRET_KEY`)
 - Stripe webhook signing secret (`STRIPE_WEBHOOK_SECRET`)
 - (Optional) Mollie API key (`MOLLIE_API_KEY`)
+- Public application URL (`WEBAPP_PUBLIC_URL`); Mollie also requires
+  `GATEWAY_PUBLIC_URL` so it can send authoritative payment callbacks
+- `PAYMENT_CARD_PROVIDER=stripe|mollie` when both providers are configured
 
 **What's Automated:**
 
-- Webhook event handling (sync + asynchronous settlement)
+- Durable webhook ingress followed by asynchronous, retrying reconciliation
 - Subscription management and tier activation
 - Product/price catalog sync on startup
 - Payment processing, refunds, and disputes
+- Invoice delivery and 1/7/14/30-day overdue reminders through a retrying email outbox
 
 **Manual Steps:**
 
@@ -17704,6 +18214,7 @@ Auth flows degrade with warnings logged if SMTP is missing, but a degraded auth 
    export STRIPE_SECRET_KEY="sk_live_..."
    export STRIPE_WEBHOOK_SECRET="whsec_..."
    export MOLLIE_API_KEY="live_xxx" # optional
+   export PAYMENT_CARD_PROVIDER="stripe" # required only when both providers are ready
    ```
 
 **Used By:** Purser (billing API)
@@ -17714,6 +18225,82 @@ Auth flows degrade with warnings logged if SMTP is missing, but a degraded auth 
 methods (SEPA Direct Debit, iDEAL, Bancontact) settle after checkout completes; value is
 granted only on the confirming event (`async_payment_succeeded` / `invoice.paid` /
 `customer.subscription.updated`), never on `checkout.session.completed` alone.
+
+Purser advertises the generic `CARD` invoice-payment option only when the selected provider is
+fully reconcilable. Stripe readiness requires `STRIPE_SECRET_KEY`,
+`STRIPE_WEBHOOK_SECRET`, and `WEBAPP_PUBLIC_URL`; Mollie readiness requires
+`MOLLIE_API_KEY`, `GATEWAY_PUBLIC_URL`, and `WEBAPP_PUBLIC_URL`. If both are ready and
+`PAYMENT_CARD_PROVIDER` is unset or invalid, card payments remain unavailable instead of
+silently routing to one provider.
+
+Provider HTTP requests are acknowledged only after Purser commits the verified
+or validated payload to `purser.provider_webhook_inbox`. Reconciliation runs in
+a leased background worker with exponential backoff. Monitor
+`purser.payment_report_webhook_inbox_stuck` and
+`purser.payment_report_invoice_email_outbox_stuck`; rows appear after five
+failed attempts and are not automatically discarded.
+
+### x402 facilitator and crypto settlement
+
+Production uses FrameWorks' embedded x402 v2 exact/EIP-3009 facilitator by
+default. Configure:
+
+```bash
+export X402_FACILITATOR_PROVIDER="self"
+export X402_GAS_WALLET_PRIVKEY="<dedicated-gas-only-key>"
+export X402_GAS_WALLET_ADDRESS="0x<address-derived-from-key>"
+export GATEWAY_PUBLIC_URL="https://api.example.com"
+export X402_PREPAID_BUFFER_EUR_CENTS="500"
+export SUPPLIER_COUNTRY="NL"
+export CRYPTO_SCAN_START_BLOCK_BASE="<audited-first-block>"
+export CRYPTO_TREASURY_BASE="0x<treasury-address>"
+export CRYPTO_SWEEP_RELAYER_PRIVATE_KEY_BASE="<dedicated-gas-only-key>"
+```
+
+Purser verifies and settles EIP-3009 locally, while the payer still signs a
+gasless authorization. Each response creates a five-minute tenant-bound quote with a
+locked USD/EUR rate. A facilitator timeout is an unknown settlement outcome and
+must be reconciled; it never grants provisional credit.
+
+Confirmed prepaid and x402 credit is the VAT tax point; later usage only
+consumes already-invoiced credit. When an EU VAT identifier is supplied, Purser
+validates it against the official VIES service and stores a hashed/masked
+evidence record. A current valid result enables reverse charge only when the
+customer and `SUPPLIER_COUNTRY` are different EU member states. Domestic VAT
+identifiers receive domestic VAT. Billing-country and GeoIP-country signals are
+stored separately and missing/conflicting evidence prevents document release
+and remains queued for review.
+
+Inspect live dependencies with `frameworks crypto readiness`; production
+advertisement fails closed when RPC, token, relayer, tax, scanner, or custody
+dependencies are missing. Test reports and ceremony records belong in the
+release/change record, not opaque environment-variable strings.
+
+Every enabled deposit network needs an audited
+`CRYPTO_SCAN_START_BLOCK_<NETWORK>` and a version-controlled
+`CRYPTO_TREASURY_<NETWORK>` destination. Purser accepts any non-zero EVM
+address; using a cold multisig/Safe is an operator custody choice. USDC
+sweeping also needs a dedicated gas-only
+`CRYPTO_SWEEP_RELAYER_PRIVATE_KEY_<NETWORK>`; it is not the HD deposit key and
+must not control customer funds. Fund it only for bounded relay gas.
+
+Treasury configuration is per chain. Purser validates that each configured
+value is a non-zero EVM address but does not require or inspect contract code.
+
+The operator ceremony is `frameworks crypto sweep plan`, offline `sign`,
+online `broadcast`, then `reconcile`. Commands default to dry-run and bind
+execution to checksums. See the [CLI reference](/operators/cli-reference/#crypto-custody-commands).
+The repository runbook `docs/operations/sweep-ceremony.md` defines the
+two-person evidence and interrupted/unknown-outcome recovery procedure.
+
+Activate a replacement public derivation key with
+`frameworks crypto wallet rotate --xpub-file new.xpub --network mainnet`.
+Keep the retired offline xprv until repeated sweep plans have drained every
+manifest using its fingerprint. Rotation never initiates a transaction.
+
+Direct deposit and x402 creation remain independently stoppable with
+`CRYPTO_DEPOSITS_ENABLED=false` and `X402_PAYMENTS_ENABLED=false`. These
+breakers do not stop observation or reconciliation of money already submitted.
 
 ---
 
@@ -18385,7 +18972,13 @@ https://logbook.frameworks.network/operators/multi-cluster
 
 ## What Is a Cluster?
 
-A **cluster** is a Foghorn instance (or HA pair) plus its edge nodes — strictly the media plane. All clusters share the same central control plane (Commodore, Quartermaster, Purser) and data plane (Decklog, Periscope, Signalman). These services are not duplicated or federated per cluster.
+A **cluster** is a Foghorn instance (or HA pair) plus its edge nodes — strictly
+the media plane. Commodore, Quartermaster, and Purser remain central. Today the
+unsharded ClickHouse deployment also provides one logical Periscope metering
+source. When ClickHouse is split by wider region, each logical regional
+deployment runs local Periscope Ingest, Query, and Metering services; the
+regional metering workers publish to the same central Purser through Kafka.
+These services scale by logical data source, not one copy per media cluster.
 
 While control and data plane services share infrastructure, they are registered under separate cluster IDs for operational visibility. The control plane cluster appears in the inventory and dashboard but does not participate in Foghorn federation.
 
@@ -18629,9 +19222,9 @@ See [DNS and Cluster Routing](/operators/dns) for details.
 
 ## Billing Attribution
 
-Stream/viewer/artifact analytics carry `cluster_id` (serving cluster) and `origin_cluster_id` (where the stream was ingested). The billing rollups use those fields when they are present and attribute non-cluster-scoped usage, such as storage, processing, and API usage, to the tenant's primary cluster. This enables per-cluster billing:
+Stream/viewer/artifact analytics carry `cluster_id` (the cluster that performed the work) and `origin_cluster_id` (where the stream was ingested, retained for audit). Delivery is always billed to the serving cluster; processing is billed to the executing cluster; storage is billed to its placement/provider cluster. Only truly tenant-wide meters such as API usage attach to the tenant's primary cluster.
 
-- **Periscope Query** generates per-cluster `UsageSummary` records
+- **Periscope Metering** generates per-cluster, dimensioned usage reports
 - **Purser** stores these as per-cluster usage records
 - **Settlement queries** can identify cross-cluster traffic for infrastructure cost attribution
 
@@ -18897,7 +19490,23 @@ name, for example `purser`, `quartermaster`, or `commodore`. The CLI embeds
 these files, applies only migrations whose database exists in the manifest, and
 records applied files in that database's `_migrations` table.
 
-## Upgrade procedure
+## Release and recovery procedure
+
+For a normal platform release, use the lifecycle command that owns migration and
+service ordering:
+
+```bash
+frameworks cluster release plan --version vX.Y.Z
+frameworks cluster release apply --version vX.Y.Z --dry-run
+frameworks cluster release apply --version vX.Y.Z --yes
+```
+
+It runs expand migrations, platform artifact upgrades, declared transitions,
+and postdeploy migrations in the required order. Contract migrations stay
+deferred until the rollback window closes.
+
+Use the following lower-level flow only for migration development, diagnosis,
+or a release-specific recovery runbook:
 
 1. **Check release notes** for required migrations
 2. **Confirm the phase**. Routine rolling upgrades apply `expand` migrations.
@@ -18916,7 +19525,7 @@ frameworks cluster migrate --phase expand
 psql -h <host> -d purser -c "SELECT version, phase, seq, filename, checksum FROM _migrations ORDER BY version, phase, seq;"
 ```
 
-5. **Deploy** new service versions:
+5. **Deploy** a specifically diagnosed service version:
 
 ```bash
 frameworks cluster upgrade quartermaster --version v1.1.0
@@ -18927,6 +19536,10 @@ frameworks cluster upgrade quartermaster --version v1.1.0
    `frameworks cluster data-migrate`. If a service has not adopted the
    data-migrations command surface, the CLI reports that as a blocker instead
    of treating the migration as complete.
+
+Do not substitute `cluster upgrade --all` for `cluster release apply`: direct
+upgrade does not run declared release transitions and fails closed when one
+gates a downstream service.
 
 ## Writing migrations
 

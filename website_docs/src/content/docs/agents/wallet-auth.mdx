@@ -11,23 +11,32 @@ Agents authenticate with an EVM wallet signature. First-time wallets are auto-pr
 
 ## How It Works
 
-1. Agent creates or loads an EVM wallet (any chain, any client).
-2. Agent signs a login message using EIP-191 `personal_sign`.
-3. Agent sends the signature as MCP wallet headers, or calls GraphQL `walletLogin` to receive a bearer JWT for direct API calls.
-4. Server verifies the signature and creates a prepaid tenant if this is a new wallet.
+1. Agent creates or loads an EVM wallet.
+2. Agent requests a challenge from `POST %GATEWAY_URL%/auth/wallet-challenge` or the public MCP tool `request_wallet_challenge` with its address and chain ID.
+3. Agent signs the returned message verbatim using EIP-191 `personal_sign`.
+4. Agent exchanges it once through `POST /auth/wallet-login`, GraphQL `walletLogin`, or MCP wallet headers.
+5. Server atomically consumes the challenge and creates a prepaid tenant if this is a new wallet.
 
 ## Message Format
 
-The signed message must match this exact format:
+The server returns an EIP-4361-style message similar to:
 
 ```
-FrameWorks Login
-Timestamp: 2025-01-15T12:00:00Z
-Nonce: 12345
+app.frameworks.network wants you to sign in with your Ethereum account:
+0x...
+
+Sign in to FrameWorks.
+
+URI: https://app.frameworks.network
+Version: 1
+Chain ID: 1
+Nonce: <server nonce>
+Issued At: 2026-08-20T00:00:00Z
+Expiration Time: 2026-08-20T00:05:00Z
 ```
 
-- **Timestamp**: ISO 8601 UTC. Must be no more than 5 minutes old and no more than 1 minute in the future.
-- **Nonce**: Any random string, unique per request.
+- Do not build or modify this message client-side.
+- Challenges expire after five minutes and can be consumed only once. Concurrent exchanges have one winner.
 
 ## Signing Examples
 
@@ -40,13 +49,13 @@ import { privateKeyToAccount } from "viem/accounts";
 const account = privateKeyToAccount("0x...");
 const client = createWalletClient({ account, transport: http() });
 
-const message = [
-  "FrameWorks Login",
-  `Timestamp: ${new Date().toISOString()}`,
-  `Nonce: ${crypto.randomUUID()}`,
-].join("\n");
+const challenge = await fetch("%GATEWAY_URL%/auth/wallet-challenge", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ address: account.address, chain_id: 1 }),
+}).then((response) => response.json());
 
-const signature = await client.signMessage({ message });
+const signature = await client.signMessage({ message: challenge.message });
 ```
 
 ### Python (eth-account)
@@ -55,17 +64,16 @@ const signature = await client.signMessage({ message });
 from eth_account import Account
 from eth_account.messages import encode_defunct
 import os
-from datetime import datetime, timezone
-import uuid
+import requests
 
-message = "\n".join([
-    "FrameWorks Login",
-    f"Timestamp: {datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}",
-    f"Nonce: {uuid.uuid4()}"
-])
+wallet = Account.from_key(os.environ["FRAMEWORKS_WALLET_PRIVKEY"])
+challenge = requests.post(
+    "%GATEWAY_URL%/auth/wallet-challenge",
+    json={"address": wallet.address, "chain_id": 1},
+).json()
 
 signed = Account.sign_message(
-    encode_defunct(text=message),
+    encode_defunct(text=challenge["message"]),
     private_key=os.environ["FRAMEWORKS_WALLET_PRIVKEY"]
 )
 signature = signed.signature.hex()
@@ -75,41 +83,27 @@ signature = signed.signature.hex()
 
 For MCP and HTTP requests, pass wallet credentials in headers:
 
-| Header               | Value                                           |
-| -------------------- | ----------------------------------------------- |
-| `X-Wallet-Address`   | `0x`-prefixed Ethereum address                  |
-| `X-Wallet-Signature` | EIP-191 `personal_sign` signature               |
-| `X-Wallet-Message`   | The signed message (includes timestamp + nonce) |
+| Header               | Value                             |
+| -------------------- | --------------------------------- |
+| `X-Wallet-Address`   | `0x`-prefixed Ethereum address    |
+| `X-Wallet-Signature` | EIP-191 `personal_sign` signature |
+| `X-Wallet-Message`   | The exact server-issued challenge |
 
-For direct GraphQL or browser integrations, use the GraphQL `walletLogin` mutation to exchange the same address/message/signature fields for a JWT, then use `Authorization: Bearer <jwt>` on subsequent requests. The REST `POST /auth/wallet-login` endpoint is cookie-oriented for first-party sessions; it sets HttpOnly cookies and only returns user metadata.
+For direct GraphQL integrations, request the challenge over REST and exchange it
+with `walletLogin`, then use `Authorization: Bearer <jwt>`. The REST login endpoint
+creates refreshable HttpOnly cookies for first-party browser sessions. An MCP
+wallet-header exchange returns `X-Access-Token`; switch to bearer/API-token auth
+because the challenge headers cannot be replayed.
 
 ## Client Configuration
 
-### Claude Desktop
+Static MCP client configuration must use a bearer API token. Wallet headers are
+single-use bootstrap credentials, not permanent headers.
 
-```json
-{
-  "mcpServers": {
-    "frameworks": {
-      "url": "%GATEWAY_URL%/mcp",
-      "headers": {
-        "X-Wallet-Address": "0x...",
-        "X-Wallet-Signature": "0x...",
-        "X-Wallet-Message": "FrameWorks Login\nTimestamp: 2025-01-15T12:00:00Z\nNonce: 12345"
-      }
-    }
-  }
-}
-```
-
-### Claude Code CLI
-
-```bash
-claude mcp add frameworks %GATEWAY_URL%/mcp \
-  --header "X-Wallet-Address: 0x..." \
-  --header "X-Wallet-Signature: 0x..." \
-  --header "X-Wallet-Message: FrameWorks Login..."
-```
+MCP also exposes authenticated `list_linked_wallets`, `link_wallet`, and
+`unlink_wallet` tools. Linking requires a fresh challenge for the new address.
+The service serializes unlink attempts and refuses to remove the final wallet
+from an account that has no verified password sign-in method.
 
 ### Bearer Token (Alternative)
 
@@ -159,4 +153,6 @@ The agent can immediately read `account://status`, which will show blockers like
 - Store private keys locally. Never send them to any API.
 - Only send wallet headers to `*.frameworks.network` domains.
 - Wallet signatures are verified server-side using `ecrecover` (EIP-191).
-- The GraphQL API also accepts wallet auth via the `walletLogin` mutation with the same address/message/signature fields.
+- The server stores only a challenge hash and rejects expired or replayed challenges.
+- REST and MCP challenge/login calls share the public per-IP abuse limit; throttling returns 429, never 402.
+- x402 payments are not login credentials and never mint a session.

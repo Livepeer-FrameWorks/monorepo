@@ -33,12 +33,13 @@ cluster. Tenant-level API/AI meters attach to the tenant's primary cluster.
 | ---------------------------- | ------------------------------------------------ | ------------------------------------------------- |
 | `viewer_sessions_final`      | `cluster_id`, breakdown arrays from `USER_END`   | Append-only finalized facts                       |
 | `viewer_usage_5m`            | `cluster_id`                                     | Canonical 5-minute ledger                         |
-| `storage_gb_seconds_5m`      | `cluster_id`, storage provider attribution       | Canonical 5-minute ledger                         |
+| `storage_gb_seconds_5m`      | `cluster_id`, storage provider attribution       | Dashboard ledger; billing integrates snapshots    |
 | `processing_segments_final`  | `cluster_id`, `process_type`, `output_codec`     | Append-only finalized processing facts            |
 | `*_hourly` / `*_daily` views | cluster columns matching their canonical sources | Refreshable rollup stores with public dedup views |
 
-Rollup tables are dashboard caches. Billing reads finalized facts or 5-minute
-ledgers directly.
+Hourly/daily rollup tables are dashboard caches. Billing reads finalized facts,
+the canonical API ledger, and storage snapshots directly according to each
+meter's contract; it never reads dashboard rollups.
 
 ## Settlement Query
 

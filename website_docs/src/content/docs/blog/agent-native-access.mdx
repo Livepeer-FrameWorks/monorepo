@@ -10,17 +10,22 @@ tags:
   - payments
 ---
 
-Here is the full onboarding flow for an AI agent that wants to broadcast on FrameWorks: create an EVM wallet, sign a login message, call `create_stream`, get told to pay, pay, call `create_stream` again. No signup form, no email verification loop, no card on file, no human in the middle. Most of the engineering behind it is in making "get told to pay, pay" trustworthy for both sides.
+Here is the onboarding flow for an AI agent: create an EVM wallet, request and sign a one-time login challenge, configure a stream at zero balance, then fund the tenant before any rated ingest, playback, storage, or processing begins. No signup form, email verification loop, or card is required for prepaid use.
 
 ## Identity is a signature
 
-Agents authenticate with an Ethereum wallet using a standard EIP-191 `personal_sign` over a login message containing a timestamp and a nonce. The first time a new wallet shows up, the platform auto-provisions around it: a tenant on the prepaid billing model, a user with no email, a balance starting at zero, and the wallet bound to both. The trust model is explicit — a bare wallet is a low-trust prepaid customer who loads balance before consuming; adding a verified email upgrades the account toward invoiced, postpaid territory. An agent can stay in the first category forever and be a perfectly good customer.
+Agents authenticate with EIP-191 `personal_sign` over a server-issued, five-minute, single-use challenge. The server stores its hash and atomically consumes it, so copied or concurrent replays cannot create another session. The first successful exchange auto-provisions a prepaid tenant, an email-less user, a zero balance, and the wallet binding. Adding a verified email and collection method makes postpaid available; it is not required for prepaid use.
 
-API requests themselves are free. Charges are for resources: bandwidth and viewer-hours, storage, processing. Usage is metered in five-minute summaries and deducted from the prepaid balance; if a balance goes more than $10 into the red, streams are terminated and new operations are blocked until it's topped up. Enforcement is mechanical, which suits a customer that can't read a collections email.
+API requests currently have a zero price, but their usage is still metered and
+itemized alongside bandwidth, viewer time, storage, processing, and AI work.
+Usage is reported in five-minute summaries and rated against the tenant and
+work-cluster contract; if an available balance is exhausted, new billable
+operations are blocked until it is topped up. Enforcement is mechanical, which
+suits a customer that can't read a collections email.
 
 ## The 402 is the API
 
-When an agent calls a billable operation without the balance to cover it, the answer is HTTP 402 with a machine-readable payment offer attached: what's owed, which networks are accepted, where to pay, and a deadline. The agent signs a USDC transfer authorization off-chain — [x402](https://github.com/coinbase/x402) rides on EIP-3009, USDC's transfer-with-authorization primitive — and retries the same call with an `X-PAYMENT` header carrying the signature. The platform verifies the signature, submits the transaction on-chain itself (the server pays the gas, so the agent's wallet needs USDC and nothing else), credits the balance, and the retried operation goes through.
+When an authenticated agent calls a rated operation without enough balance, the answer is HTTP 402 with a tenant-bound payment offer. The agent signs a USDC transfer authorization off-chain — [x402](https://github.com/coinbase/x402) rides on EIP-3009 — and retries with `PAYMENT-SIGNATURE`. FrameWorks submits it, waits for a confirmed successful receipt, atomically credits the balance, and then reruns ordinary admission policy. Payment never doubles as login or bypasses suspension.
 
 ```mermaid
 sequenceDiagram
@@ -28,14 +33,14 @@ sequenceDiagram
     participant G as Gateway MCP
     participant P as Purser (billing)
     participant C as Base / Arbitrum
-    A->>G: create_stream (wallet auth)
+    A->>G: create_vod_upload (bearer auth)
     G-->>A: 402 · payment requirements
     A->>A: sign EIP-3009 authorization (off-chain)
-    A->>G: create_stream + X-PAYMENT header
+    A->>G: retry + PAYMENT-SIGNATURE
     G->>P: verify signature, settle
     P->>C: submit tx (server pays gas)
-    P->>P: credit prepaid balance
-    G-->>A: stream created · here's your key
+    P->>P: confirmed credit + canonical balance recheck
+    G-->>A: upload created
 ```
 
 x402 settles on Base and Arbitrum. We skipped Ethereum mainnet — a few dollars of gas per transaction makes no sense for topping up a streaming balance. For agents (or humans) who prefer plain transfers, there's also a classic deposit flow: a derived deposit address, a price-locked quote, and block-explorer polling until ETH or USDC arrives.
@@ -46,7 +51,7 @@ Settlement is built to survive its own failure modes: verification happens befor
 
 ## One MCP surface for the whole platform
 
-The other half of agent-native is what the agent can actually do once it's a customer. The Gateway exposes the platform over [MCP](/agents/mcp): 70 tools — 69 owned by the Gateway, spanning streams, clips, DVR, VOD, playback, QoE diagnostics, billing, support, schema introspection, and infrastructure, plus [Skipper's](/agents/skipper) `ask_consultant` proxied in as the 70th — alongside read-only resources for streams, analytics, nodes, and billing state. A handful of tools work without any authentication at all (payment options, payment submission, playback resolution, marketplace browsing), because an agent needs to be able to discover how to become a customer before it is one.
+The other half of agent-native is what the agent can actually do once it's a customer. The Gateway exposes the platform over [MCP](/agents/mcp): runtime-discovered tools spanning wallet onboarding, streams, clips, DVR, VOD, playback, QoE diagnostics, billing, support, schema introspection, and infrastructure, plus [Skipper's](/agents/skipper) `ask_consultant` — alongside read-only resources for streams, analytics, nodes, and billing state. A small public surface covers wallet challenge issuance, playback resolution, and marketplace browsing, because an agent needs to be able to discover how to become a customer before it is one. Tenant-bound payment options and submission require the wallet-authenticated tenant they credit.
 
 The hub-and-spoke split keeps responsibilities clean. Skipper consults — its `ask_consultant` pipeline can search knowledge and run diagnostics but has mutation tools blocked, so a free-form consulting answer can never delete a stream as a side effect. State changes go through the dedicated Gateway tools, each with its own authorization and its own preflight. The Gateway injects the caller's tenant context into everything it forwards, so a spoke never sees a request without knowing exactly which tenant it's acting for.
 

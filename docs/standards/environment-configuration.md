@@ -125,6 +125,7 @@ These should remain the human-edited source of truth:
 
 - Topology: `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `CLICKHOUSE_HOST`, `CLICKHOUSE_HTTP_PORT`, `CLICKHOUSE_NATIVE_PORT`, `KAFKA_HOST`, `KAFKA_PORT`
 - Public URLs: `GATEWAY_PUBLIC_URL`, `WEBAPP_PUBLIC_URL`, `MARKETING_PUBLIC_URL`, `DOCS_PUBLIC_URL`, `FORMS_PUBLIC_URL`
+- Billing routing: `PAYMENT_CARD_PROVIDER` (`stripe` or `mollie`) when both providers are fully configured; omit it when only one is ready
 - Service placement: `*_HOST`, `*_PORT`, `*_GRPC_PORT`
 - Shared runtime: `BUILD_ENV`, `GIN_MODE`, `LOG_LEVEL`, `ALLOWED_ORIGINS`, `TRUSTED_PROXY_CIDRS`
 - Shared secrets: `JWT_SECRET`, `PASSWORD_RESET_SECRET`, `SERVICE_TOKEN`, `FIELD_ENCRYPTION_KEY`
@@ -174,6 +175,12 @@ These are real operator-owned inputs that should stay covered by env examples an
 - `TURNSTILE_FAIL_OPEN`
 - `QUARTERMASTER_GRPC_TLS_SERVER_NAME`
 - `NAVIGATOR_GRPC_TLS_SERVER_NAME`
+- Crypto settlement/custody inputs documented in the operator guide, including
+  `X402_FACILITATOR_*`, optional `CDP_API_KEY_*`, `CRYPTO_SCAN_START_BLOCK_*`,
+  `CRYPTO_TREASURY_*`, and `CRYPTO_SWEEP_RELAYER_PRIVATE_KEY_*`. Canonical env
+  inputs and Purser's Compose environment must be updated together when this
+  set changes. Purser always uses consensus `finalized` heads for
+  credit-releasing operations; this is not operator-configurable.
 
 ### Naming collisions already cleaned up
 

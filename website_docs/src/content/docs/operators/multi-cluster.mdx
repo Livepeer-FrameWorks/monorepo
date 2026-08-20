@@ -7,7 +7,13 @@ sidebar:
 
 ## What Is a Cluster?
 
-A **cluster** is a Foghorn instance (or HA pair) plus its edge nodes — strictly the media plane. All clusters share the same central control plane (Commodore, Quartermaster, Purser) and data plane (Decklog, Periscope, Signalman). These services are not duplicated or federated per cluster.
+A **cluster** is a Foghorn instance (or HA pair) plus its edge nodes — strictly
+the media plane. Commodore, Quartermaster, and Purser remain central. Today the
+unsharded ClickHouse deployment also provides one logical Periscope metering
+source. When ClickHouse is split by wider region, each logical regional
+deployment runs local Periscope Ingest, Query, and Metering services; the
+regional metering workers publish to the same central Purser through Kafka.
+These services scale by logical data source, not one copy per media cluster.
 
 While control and data plane services share infrastructure, they are registered under separate cluster IDs for operational visibility. The control plane cluster appears in the inventory and dashboard but does not participate in Foghorn federation.
 

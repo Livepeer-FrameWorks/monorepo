@@ -1,0 +1,97 @@
+---
+title: Crypto payments & custody
+description: Production gates, incident controls, reconciliation, and the offline sweep ceremony.
+sidebar:
+  order: 18
+---
+
+Crypto stays available when its independent readiness gates are healthy. New
+direct deposits and x402 can be stopped separately without disabling receipt
+reconciliation, customer billing reads, or sweep reconciliation.
+
+## Production gate
+
+Run the structured report before enabling or restoring either path:
+
+```bash
+frameworks crypto readiness --output json
+```
+
+Production eligibility requires the HD watch-only xpub, configured finalized
+heads and healthy scanner cursors, the embedded x402 v2 exact facilitator,
+complete supplier identity/country configuration, effective VAT rates, non-zero
+treasury addresses, and dedicated gas-only relayers.
+
+An absent gate keeps the affected method hidden/fail-closed. It is not a warning
+that operators may ignore.
+
+## Emergency controls
+
+- `CRYPTO_DEPOSITS_ENABLED=false` stops new direct-deposit addresses.
+- `X402_PAYMENTS_ENABLED=false` stops new x402 quotes and settlement.
+
+Keep the scanner and reconcilers running. A provider/RPC timeout is an unknown
+outcome, never proof that settlement failed; retries use the persisted quote,
+authorization nonce, provider transaction, and mutation-result records.
+
+## Operator review queues
+
+`purser.crypto_accounting_anomalies` holds conditions that cannot be repaired
+safely from RPC state alone, including a consumed USDC authorization without a
+recoverable transaction hash, a late settlement with no matching ledger
+reversal, and missing/conflicting customer-location evidence. Readiness reports
+the unresolved count. Never “resolve” an item by editing a balance or settlement
+row; use an audited compensating operation backed by canonical evidence.
+
+## Reorg behavior
+
+Credits are issued only after consensus-labelled finality and a canonical block
+hash check. Allocated deposits continue to be rechecked. A later canonical
+mismatch reverses prepaid credit, reopens/claws back invoice allocation, creates
+a linked credit note where a customer document exists, and lets ordinary prepaid
+admission block on the resulting balance. There is no paid-request bypass.
+
+## Customer records and retention
+
+Authenticated document downloads are available through
+`/v1/billing/documents`. Purser tenant-scopes every invoice, simplified invoice,
+confirmed-payment receipt, and credit note, renders only persisted evidence, and
+returns an integrity hash. Database deletion guards retain these source records
+for at least ten years. Confirmed top-up is the VAT tax point; each document
+records the `vat-at-confirmed-topup-v1` policy, effective rate source, customer
+location evidence, and any VIES result used for reverse charge.
+
+## Custody and sweeping
+
+Purser is watch-only. Automatic hot-wallet sweeping is deliberately out of
+scope. Operators use:
+
+```bash
+frameworks crypto sweep plan --network base --out manifest.json --persist
+frameworks crypto sweep sign --manifest manifest.json --out signed.json \
+  --treasury-allowlist treasuries.json --secret-fd 3 \
+  --max-fee-gwei 5 --max-priority-fee-gwei 2
+frameworks crypto sweep broadcast --bundle signed.json --execute --ack <checksum>
+frameworks crypto sweep reconcile --batch-id <batch-id>
+```
+
+Signing is performed offline with an xprv supplied through a file descriptor
+and independent operator-selected fee ceilings.
+Broadcast rechecks chain, token, treasury, balance, nonce/authorization state,
+and fee bounds. Repeating broadcast replays the persisted transaction intent;
+it does not allocate another relayer nonce.
+
+To rotate the generated-address key, create a new account-external xpub offline,
+then run:
+
+```bash
+frameworks crypto wallet rotate --xpub-file new-deposit.xpub --network mainnet
+```
+
+Only future addresses use the new key. Historical addresses retain their
+original xpub and are planned in separate signing-key batches. Keep every
+retired xprv offline until no remaining sweep manifest uses it.
+
+For the two-person evidence checklist, failure recovery, and incident-specific
+procedures, use the repository runbooks `docs/operations/sweep-ceremony.md` and
+`docs/operations/crypto-incidents.md` shipped with the same release.

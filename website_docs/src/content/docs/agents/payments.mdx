@@ -7,67 +7,76 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-Agents need a positive prepaid balance to create streams, clips, DVR recordings, and VOD uploads. Two funding methods are available: **x402** (inline, instant) and **crypto deposits** (on-chain transfer).
+Agents need positive available prepaid balance—the settled balance minus active reservations—to create streams, clips, DVR recordings, and VOD uploads. Two funding methods are available: **x402-compatible confirmed top-ups** and **crypto deposits** (on-chain transfer).
 
 <Aside type="tip">
-  API requests are free but rate limited. Prepaid usage is deducted as reports arrive, and prepaid
-  balance still gates agent write actions and suspension handling.
+  API requests are metered and itemized even when the current pricing rule is zero. Prepaid usage is
+  deducted as reports arrive, and available prepaid balance still gates agent write actions and
+  suspension handling.
 </Aside>
 
 ## x402 Protocol
 
-[x402](https://www.x402.org/) enables gasless USDC payments using EIP-3009 `transferWithAuthorization`. The agent signs a transfer authorization off-chain; FrameWorks submits it on-chain and pays the gas.
+[x402](https://www.x402.org/) enables gasless USDC payments using EIP-3009 `transferWithAuthorization`. The agent signs a transfer authorization off-chain; the configured hosted facilitator verifies and settles it.
+Complete tenant billing details before requesting a quote so confirmed credit
+can be invoiced using the customer-country VAT rule.
 
 ### Flow
 
-1. Agent calls a billable tool (e.g., `create_stream`) with insufficient balance.
-2. Server returns an `INSUFFICIENT_BALANCE` error with `x402_accepts` payment options.
+1. An authenticated agent calls a rated tool (for example `create_clip` or `create_vod_upload`) with insufficient balance.
+2. HTTP returns 402 plus `PAYMENT-REQUIRED`; MCP returns the same base64 document as `payment_required`.
 3. Agent signs an EIP-3009 authorization for the required amount.
-4. Agent retries with the `X-PAYMENT` header containing the base64-encoded signed payload.
-5. Server verifies the signature, submits the transaction on-chain, and credits the balance.
-6. The original operation proceeds.
+4. Agent echoes the selected v2 `accepted` requirement and retries with `PAYMENT-SIGNATURE` containing the base64-encoded signed payload.
+5. Purser atomically claims the tenant-bound quote, uses the official facilitator API, and waits for a successful receipt.
+6. Settlement state and prepaid credit commit atomically.
+7. The original operation proceeds only if a fresh canonical balance and suspension check passes.
 
-For browser-based integrations, MCP and GraphQL are CORS-readable public protocol surfaces. JavaScript clients can make the actual unauthenticated API request, receive the 402 response body, sign the payment authorization, and retry with `X-PAYMENT`.
+Browser integrations authenticate first, then make the rated request, receive the 402 response, sign its tenant-bound authorization, and retry with `PAYMENT-SIGNATURE`. Wallet signup, billing, top-up, and API/MCP discovery remain reachable at zero balance.
 
 ### Payment Options
 
-Call `get_payment_options` (public, no auth required) to get the platform's payment address and supported networks:
+Call `get_payment_options` while authenticated to get the tenant-bound payment address, exact amount, and supported networks:
 
 ```json
 {
-  "x402_version": 1,
+  "x402_version": 2,
+  "payment_required": "<base64 official v2 PaymentRequired>",
   "options": [
     {
-      "network": "base",
+      "network": "eip155:8453",
       "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
       "asset_symbol": "USDC",
-      "pay_to": "0x..."
-    },
-    {
-      "network": "arbitrum",
-      "asset": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
-      "asset_symbol": "USDC",
-      "pay_to": "0x..."
+      "pay_to": "0x...",
+      "amount": "5000000",
+      "quote_id": "<server-quote-id>",
+      "extra": { "frameworks": { "quoteId": "<server-quote-id>" } }
     }
   ]
 }
 ```
 
-### X-PAYMENT Header
+### Payment signature header
 
-The `X-PAYMENT` header contains a base64-encoded JSON payload:
+The standard `PAYMENT-SIGNATURE` header contains a base64-encoded v2 JSON payload:
 
 ```json
 {
-  "x402Version": 1,
-  "scheme": "exact",
-  "network": "base",
+  "x402Version": 2,
+  "accepted": {
+    "scheme": "exact",
+    "network": "eip155:8453",
+    "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "amount": "5000000",
+    "payTo": "0x<payTo-from-payment-options>",
+    "maxTimeoutSeconds": 60,
+    "extra": { "frameworks": { "quoteId": "<server-quote-id>" } }
+  },
   "payload": {
     "signature": "0x...",
     "authorization": {
       "from": "0x<your-wallet>",
       "to": "0x<payTo-from-payment-options>",
-      "value": "1000000",
+      "value": "5000000",
       "validAfter": "0",
       "validBefore": "1735689600",
       "nonce": "0x..."
@@ -76,14 +85,24 @@ The `X-PAYMENT` header contains a base64-encoded JSON payload:
 }
 ```
 
-`PAYMENT-SIGNATURE` is also accepted as a header name.
+Use the exact server document; the amount is dynamic and covers the current
+deficit plus a prepaid buffer. Successful HTTP settlement returns
+`PAYMENT-RESPONSE`; MCP returns the same value as `payment_response`.
+`X-PAYMENT`/v1 is legacy compatibility only and is off by default in
+production. Zero-value authorizations do not authenticate a caller—use the
+wallet challenge login flow.
+
+When the retried operation is side-effecting, send an `Idempotency-Key` with
+8–255 characters. MCP clients may instead set `_meta.idempotencyKey`. The key
+is bound to the paid quote and request fingerprint; a lost response is replayed
+without creating the stream, clip, DVR, upload, or other mutation twice. Never
+reuse one key for different arguments.
 
 ### Supported Networks
 
-| Network  | Chain ID | USDC Contract                                |
-| -------- | -------- | -------------------------------------------- |
-| Base     | 8453     | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
-| Arbitrum | 42161    | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` |
+The returned options are the live intersection of FrameWorks configuration and
+the facilitator's v2 `exact` support. Networks use CAIP-2 identifiers; Base is
+`eip155:8453`.
 
 <Aside type="note">
   x402 only works with USDC (EIP-3009 required). Prepaid crypto top-ups support **ETH and USDC**.
@@ -94,7 +113,7 @@ The `X-PAYMENT` header contains a base64-encoded JSON payload:
 
 For non-x402 prepaid top-ups, use the deposit flow:
 
-1. Call `topup_balance` with `amount_cents` and `asset: "ETH"` or `"USDC"`.
+1. Call `topup_balance` with `amount_cents` (minimum `1`) and `asset: "ETH"` or `"USDC"`.
 2. The response is a **locked-rate quote**: a deposit address plus the exact
    `expected_amount_token` to send (e.g. `0.01515` ETH), the `quoted_price_usd`
    it was locked at (Chainlink for ETH; 1:1 for USDC), and a 24h `expires_at`.
@@ -104,13 +123,61 @@ For non-x402 prepaid top-ups, use the deposit flow:
    (`received_token × quoted_price_usd`), so you get exactly what was quoted
    regardless of price drift inside the 24h TTL.
 
+The address remains monitored after quote expiry. Late prepaid deposits use a
+fresh receipt-time price/FX rate. Late invoice payments and non-exact invoice
+amounts are retained in `review_required` for explicit allocation and do not
+silently mark the invoice paid.
+
+Native ETH must be sent as a top-level transaction to the deposit address;
+internal contract transfers are not an accepted deposit method. USDC is read
+from contract `Transfer` logs. Both use restart-safe JSON-RPC cursors and
+separate deposit-event records. Production operators configure an explicit
+`CRYPTO_SCAN_START_BLOCK_<NETWORK>` anchor so initial deployment cannot skip
+older issued addresses.
+
 LPT is not supported as a top-up asset. Chainlink doesn't publish an official LPT/USD aggregator, so `topup_balance` rejects `asset: "LPT"`.
+
+The one-cent crypto minimum is the prepaid ledger's credit precision, not a
+claim that every transfer is economical after wallet or network fees. Browser
+fiat top-ups use a provider-aware minimum, currently 500 cents for both Stripe
+and Mollie EUR/USD checkout.
+
+## Invoice payments and postpaid setup
+
+Invoice collection is available to agents as well as the dashboard and GraphQL
+API. Read `billing://invoices` or `billing://invoices/{invoice_id}`, then call
+`pay_invoice` with that invoice ID and `card`, `crypto_usdc`, or `crypto_eth`.
+Purser derives the amount and currency from the locked invoice balance; an agent
+cannot choose an arbitrary charge amount. Repeating the same request resumes a
+still-active hosted session or quote, and a fully paid invoice is rejected.
+
+Use `billing://payments` for paginated history and
+`billing://payments/{payment_id}` for one tenant-owned payment. A failed payment
+can be retried by calling `pay_invoice` again after its reservation is terminal;
+processing and confirmed payments are never blindly retried.
+
+Use `billing://documents` to list retained invoices, simplified invoices,
+confirmed-payment receipts, and credit notes. Read the returned
+`billing://documents/{kind}/{document_id}` URI for the printable tenant-owned
+document and its SHA-256 integrity metadata. Document reads stay available at
+zero prepaid balance.
+
+For postpaid accounts, complete billing identity first and call
+`start_postpaid_setup` with an eligible tier and configured `stripe` or `mollie`
+provider. Hosted user action is mandatory. For Mollie, finish with
+`complete_mollie_postpaid_setup`; Purser fetches the mandate for the exact
+customer and requires it to be valid. A browser return alone never activates
+postpaid service—provider confirmation is authoritative.
+
+The optional VAT number is customer-supplied identity data, not proof of
+validation or reverse-charge eligibility. Current postpaid records are billing
+statements, not rendered immutable tax invoices or credit notes.
 
 ## Preflight Errors
 
-Billable MCP tools validate positive prepaid balance before executing. Account status can also report
-billing detail blockers; x402 settlement enforces billing details for payments of €100 or
-more. When requirements aren't met, the error includes resolution guidance:
+Billable MCP tools validate positive available prepaid balance before executing. Account status can also report
+billing detail blockers; x402 settlement enforces billing details for payments over €100.
+When requirements aren't met, the error includes resolution guidance:
 
 **Missing billing details:**
 
@@ -140,8 +207,8 @@ more. When requirements aren't met, the error includes resolution guidance:
 ```
 
 <Aside type="caution">
-  x402 payments of €100 or more require billing details. Account setup/preflight responses may ask
-  for billing details before that threshold; call `update_billing_details` to clear the blocker.
+  x402 payments over €100 require billing details. Account setup/preflight responses may ask for
+  billing details before that threshold; call `update_billing_details` to clear the blocker.
 </Aside>
 
 ## Cost Awareness
@@ -149,13 +216,15 @@ more. When requirements aren't met, the error includes resolution guidance:
 Prepaid usage deductions can move an account toward zero or negative balance. Monitor via the
 `billing://balance` resource:
 
-| Field                       | Description                             |
-| --------------------------- | --------------------------------------- |
-| `balance_cents`             | Current balance                         |
-| `drain_rate_cents_per_hour` | Recent rated spend rate, when available |
-| `estimated_hours_left`      | Time until depletion                    |
-| `live_metrics`              | Current operational usage context       |
+| Field                       | Description                                  |
+| --------------------------- | -------------------------------------------- |
+| `balance_cents`             | Settled prepaid ledger balance               |
+| `reserved_balance_cents`    | Amount committed to active in-flight usage   |
+| `available_balance_cents`   | Spendable balance used by MCP preflight      |
+| `drain_rate_cents_per_hour` | Recent rated spend rate, when available      |
+| `estimated_hours_left`      | Time until the available balance is depleted |
+| `live_metrics`              | Current operational usage context            |
 
-At zero or below, prepaid accounts are blocked from new billable operations unless the request is
-settled with x402. If the balance drops below -€10, Purser suspends the tenant and asks
+At zero or below available balance, prepaid accounts are blocked from new billable operations unless the request is
+settled with x402. If the settled balance drops below -€10, Purser suspends the tenant and asks
 Commodore/Foghorn to terminate active streams and sessions. Top up proactively.

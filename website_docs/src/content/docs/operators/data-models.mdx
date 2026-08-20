@@ -40,6 +40,16 @@ Real-time stream, viewer, node, artifact, storage, routing, federation, API, and
 live in ClickHouse. Current-state tables such as stream, node, artifact, and viewer-session state
 are derived from event streams and optimized for analytics/query paths.
 
+### Purser small-balance collection state
+
+`billing_collection_balances` is the lockable tenant/currency state for
+provider-collected postpaid overages below the 500-cent economic floor.
+`billing_collection_entries` records every invoice decision and its opening,
+current, collected, and closing cents. `billing_collection_writeoffs` records
+an explicit account-closure or operator-approved waiver. These are financial
+ledgers owned by Purser; integrations read the invoice API and must not mutate
+the tables directly.
+
 ## Schema Sources
 
 This page is intentionally not a full table catalog. The repository SQL is the contract used by the
@@ -64,12 +74,15 @@ ClickHouse stores append-only event logs plus derived rollups:
 - **Raw events**: stream lifecycle, viewer sessions, QoE samples, node metrics, routing decisions,
   federation events, storage events, processing events, API requests, and acquisition events.
 - **Current state**: stream, node, artifact, and viewer-session snapshots optimized for fast reads.
-- **Rollups**: 5-minute, hourly, and daily aggregates used for dashboards, billing, and capacity
-  reporting.
+- **Canonical ledgers**: 5-minute usage ledgers used by regional metering where
+  the meter contract calls for them. Finalized session/processing facts and
+  canonical storage snapshots remain direct billing inputs.
+- **Dashboard rollups**: hourly and daily aggregates used for dashboards and
+  capacity reporting. Billing never reads these caches.
 
-Billing-critical rollups include `cluster_id` and `origin_cluster_id` in their grouping keys so
-cross-cluster usage can be attributed correctly. See `docs/architecture/cross-cluster-billing.md`
-for the settlement model.
+Canonical facts and ledgers retain the work `cluster_id`; viewer facts also
+retain `origin_cluster_id` for lineage. See
+`docs/architecture/cross-cluster-billing.md` for the settlement model.
 
 ---
 

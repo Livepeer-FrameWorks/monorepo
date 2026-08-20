@@ -23,10 +23,11 @@ A tenant can link one or more wallets. Linking requires a signed challenge from 
 mutation LinkWallet {
   linkWallet(input: { address: "0x...", signature: "0x...", message: "<challenge>" }) {
     __typename
-    ... on Wallet {
+    ... on WalletIdentity {
       id
       address
-      linkedAt
+      createdAt
+      lastAuthAt
     }
     ... on ValidationError {
       field
@@ -42,8 +43,16 @@ To remove a wallet:
 mutation UnlinkWallet {
   unlinkWallet(walletId: "<wallet global id>") {
     __typename
-    ... on UnlinkWalletResult {
-      unlinked
+    ... on DeleteSuccess {
+      success
+      deletedId
+      pending
+    }
+    ... on NotFoundError {
+      message
+    }
+    ... on AuthError {
+      message
     }
   }
 }
@@ -53,13 +62,27 @@ mutation UnlinkWallet {
 
 `walletLogin` exchanges a signed challenge for a developer/session token. Use it to bootstrap a fresh tenant from an agent or wallet-only client.
 
+First request the single-use message from `POST /auth/wallet-challenge` with
+`{"address":"0x...","chain_id":1}`. Sign the returned `message` verbatim;
+client-generated nonces and replayed challenges are rejected.
+
 ```graphql
 mutation WalletLogin {
   walletLogin(input: { address: "0x...", signature: "0x...", message: "<challenge>" }) {
     __typename
-    ... on WalletLoginResult {
+    ... on WalletLoginPayload {
       token
-      tenantId
+      expiresAt
+      isNewAccount
+      user {
+        id
+        email
+        role
+      }
+    }
+    ... on ValidationError {
+      field
+      message
     }
   }
 }
@@ -69,19 +92,32 @@ If the wallet isn't yet linked to a tenant, the mutation creates one. To bind an
 
 ## x402 micropayments
 
-x402 (HTTP 402 Payment Required) is the agent-friendly payment protocol used for per-request usage on FrameWorks. The platform issues a 402 response with a payment requirement; the caller submits a signed payment proof; the server replays the original request with the receipt.
+x402 (HTTP 402 Payment Required) is an authenticated prepaid top-up protocol on FrameWorks. The platform issues a tenant-bound 402 response; the caller submits a signed payment proof; the server waits for confirmation, credits the balance, and reevaluates the original request. It is not a login method.
 
 The user-facing entry point is `submitX402Payment`:
 
 ```graphql
 mutation Pay {
-  submitX402Payment(input: { paymentToken: "<x402 payment payload>" }) {
+  submitX402Payment(payment: "<base64 PAYMENT-SIGNATURE>", resource: "graphql://createStream") {
     __typename
-    ... on X402PaymentReceipt {
-      receiptId
-      amount
-      currency
-      creditedTopupId
+    ... on X402PaymentResult {
+      success
+      tenantId
+      walletAddress
+      creditedCents
+      newBalanceCents
+      txHash
+      message
+    }
+    ... on ValidationError {
+      field
+      message
+    }
+    ... on NotFoundError {
+      message
+    }
+    ... on AuthError {
+      message
     }
   }
 }
@@ -92,32 +128,42 @@ Most clients won't call this directly — the SDK and MCP server handle it trans
 ## Top-ups and balances
 
 Wallet-funded crypto top-ups follow the standard prepaid-balance model. Initiate one via `createCryptoTopup`, then poll `cryptoTopupStatus` for confirmation count and the credited balance:
+Complete the tenant billing address first; it supplies the customer country used
+for the top-up VAT decision and invoice.
 
 ```graphql
 mutation Topup {
-  createCryptoTopup(input: { amount: "100.00", currency: "USDC" }) {
-    __typename
-    ... on CryptoTopupResult {
-      topupId
-      depositAddress
-      requiredConfirmations
-    }
+  createCryptoTopup(input: { amountCents: 10000, asset: USDC, currency: "EUR" }) {
+    topupId
+    depositAddress
+    asset
+    expectedAmountBaseUnits
+    expectedAmountToken
+    quotedPriceUsd
+    quoteSource
+    quotedAt
+    expiresAt
+    network
   }
 }
 
 mutation CheckStatus {
   cryptoTopupStatus(topupId: "<topup id>") {
-    __typename
-    ... on CryptoTopupStatus {
-      status
-      confirmations
-      creditedAmount
-    }
+    id
+    status
+    txHash
+    confirmations
+    receivedAmountBaseUnits
+    receivedAmountToken
+    creditedAmountCents
+    creditedAmountCurrency
   }
 }
 ```
 
 Once credited, the funds appear in your prepaid balance (`prepaidBalance` query) and are spent against usage like any other top-up.
+The confirmed credit is the VAT tax point and creates the retained top-up invoice;
+later usage only consumes that already-invoiced balance.
 
 ## Related
 
