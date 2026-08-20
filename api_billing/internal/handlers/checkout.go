@@ -207,7 +207,7 @@ func (s *CheckoutService) createMollieCheckout(ctx context.Context, req Checkout
 		"reference_id": req.ReferenceID,
 	}
 
-	amountStr := decimal.NewFromInt(req.AmountCents).Div(decimal.NewFromInt(100)).StringFixed(2)
+	amountStr := minorUnitsDecimalString(req.AmountCents, req.Currency)
 
 	webhookURL := ""
 	webhookBase := config.GetGatewayPublicURL()
@@ -259,6 +259,11 @@ func (s *CheckoutService) createMollieCheckout(ctx context.Context, req Checkout
 		SessionID:   resp.ID,
 		ExpiresAt:   expiresAt,
 	}, nil
+}
+
+func minorUnitsDecimalString(amount int64, currency string) string {
+	exponent := CurrencyMinorUnitExponent(currency)
+	return decimal.NewFromInt(amount).Shift(int32(-exponent)).StringFixed(int32(exponent))
 }
 
 // MolliePaymentResponse contains the response from creating a Mollie payment
@@ -525,6 +530,7 @@ func (s *Service) activateTenantSubscriptionFromStripe(ctx context.Context, tena
 		    stripe_subscription_id = COALESCE(NULLIF($2, ''), stripe_subscription_id),
 		    stripe_subscription_status = 'active',
 		    status = 'active',
+		    billing_model = 'postpaid',
 		    tier_id = COALESCE(
 		        NULLIF($3, '')::uuid,
 		        CASE WHEN pending_reason = 'stripe_checkout' THEN pending_tier_id END,

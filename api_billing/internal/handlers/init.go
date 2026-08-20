@@ -17,10 +17,24 @@ import (
 // was dropped because the invoice UPSERT branches on a status column rather
 // than going through distinct create/finalize/void/reissue entry points.
 type PurserMetrics struct {
-	BillingCalculations      *prometheus.CounterVec
-	UsageRecords             *prometheus.CounterVec
-	UsageQuarantine          *prometheus.CounterVec // labels: usage_type, reason
-	WebhookSignatureFailures *prometheus.CounterVec
+	BillingCalculations       *prometheus.CounterVec
+	UsageRecords              *prometheus.CounterVec
+	UsageQuarantine           *prometheus.CounterVec // labels: usage_type, reason
+	WebhookSignatureFailures  *prometheus.CounterVec
+	CryptoScannerBlocks       *prometheus.GaugeVec
+	CryptoScannerErrors       *prometheus.CounterVec
+	CryptoDepositReorgs       *prometheus.CounterVec
+	CryptoUnsweptBaseUnits    *prometheus.GaugeVec
+	CryptoOldestUnswept       *prometheus.GaugeVec
+	CryptoFailedSweepItems    *prometheus.GaugeVec
+	CryptoRelayerBalanceETH   *prometheus.GaugeVec
+	X402QuoteConversion       *prometheus.GaugeVec
+	X402SettlementLatency     *prometheus.GaugeVec
+	CryptoPendingDeposits     *prometheus.GaugeVec
+	CryptoAccountingAnomalies *prometheus.GaugeVec
+	CryptoAnomalyOldest       *prometheus.GaugeVec
+	CryptoInvoiceReview       *prometheus.GaugeVec
+	CryptoLedgerReversals     *prometheus.GaugeVec
 }
 
 // Service owns the dependencies for the Stripe/Mollie webhook and checkout

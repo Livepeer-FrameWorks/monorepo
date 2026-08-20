@@ -188,6 +188,7 @@ type DepositAddressParams struct {
 	Asset     string // "ETH" | "USDC" | "LPT"
 	Network   string // "ethereum" | "arbitrum" | "base" | "*-sepolia"
 	ExpiresAt time.Time
+	ClientIP  string // Trusted request IP retained for top-up tax evidence.
 
 	InvoiceID           *string
 	ExpectedAmountCents *int64
@@ -285,12 +286,16 @@ func (hw *HDWallet) GenerateDepositAddressTx(ctx context.Context, tx *sql.Tx, p 
 		quotedAt                any
 		quoteSource             any
 		creditedAmountCurrency  any
+		clientIPValue           any
 	)
 	if p.InvoiceID != nil {
 		invoiceIDValue = *p.InvoiceID
 	}
 	if p.ExpectedAmountCents != nil {
 		expectedAmountValue = *p.ExpectedAmountCents
+	}
+	if strings.TrimSpace(p.ClientIP) != "" {
+		clientIPValue = strings.TrimSpace(p.ClientIP)
 	}
 	if p.Quote != nil {
 		expectedAmountBaseUnits = p.Quote.ExpectedAmountBaseUnits.String()
@@ -306,18 +311,29 @@ func (hw *HDWallet) GenerateDepositAddressTx(ctx context.Context, tx *sql.Tx, p 
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO purser.crypto_wallets (
 			id, tenant_id, purpose, invoice_id, expected_amount_cents,
-			asset, network, wallet_address, derivation_index, expires_at,
+			asset, network, wallet_address, derivation_index, derivation_xpub, expires_at,
 			expected_amount_base_units, quoted_price_usd, quoted_usd_to_eur_rate,
-			quoted_at, quote_source, credited_amount_currency
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+			quoted_at, quote_source, credited_amount_currency, client_ip
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 	`,
 		walletID, p.TenantID, p.Purpose, invoiceIDValue, expectedAmountValue,
-		p.Asset, p.Network, address, derivationIndex, p.ExpiresAt,
+		p.Asset, p.Network, address, derivationIndex, xpub, p.ExpiresAt,
 		expectedAmountBaseUnits, quotedPriceUSD, quotedUSDToEURRate,
-		quotedAt, quoteSource, creditedAmountCurrency,
+		quotedAt, quoteSource, creditedAmountCurrency, clientIPValue,
 	)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to insert crypto wallet: %w", err)
+	}
+	if p.Asset == "ETH" || p.Asset == "USDC" {
+		if _, err = tx.ExecContext(ctx, `
+			INSERT INTO purser.crypto_custody_addresses (
+				tenant_id, source_kind, source_ref, network, asset, address, derivation_index, derivation_xpub
+			) VALUES ($1, 'direct_deposit', $2, $3, $4, LOWER($5), $6, $7)
+			ON CONFLICT (network, asset, address) DO UPDATE
+			SET updated_at = NOW()
+		`, p.TenantID, walletID, p.Network, p.Asset, address, derivationIndex, xpub); err != nil {
+			return "", "", fmt.Errorf("failed to register crypto custody address: %w", err)
+		}
 	}
 
 	hw.logger.WithFields(logging.Fields{
@@ -336,33 +352,9 @@ func (hw *HDWallet) GenerateDepositAddressTx(ctx context.Context, tx *sql.Tx, p 
 // InitializeHDWallet sets up the HD wallet state with an xpub.
 // The xpub should be derived offline at BIP44 path m/44'/60'/0'/0 for Ethereum.
 func (hw *HDWallet) InitializeHDWallet(ctx context.Context, xpub string, network string) error {
-	extKey, err := hdkeychain.NewKeyFromString(xpub)
+	testAddr, err := validateHDWalletXpub(xpub, network)
 	if err != nil {
-		return fmt.Errorf("invalid xpub: %w", err)
-	}
-	if extKey.IsPrivate() {
-		return fmt.Errorf("CRITICAL: received xprv instead of xpub - never store private keys")
-	}
-
-	// Validate network
-	var expectedNet *chaincfg.Params
-	switch network {
-	case "mainnet":
-		expectedNet = &chaincfg.MainNetParams
-	case "testnet":
-		expectedNet = &chaincfg.TestNet3Params
-	default:
-		return fmt.Errorf("invalid network: %s", network)
-	}
-
-	if !extKey.IsForNet(expectedNet) {
-		return fmt.Errorf("xpub network mismatch")
-	}
-
-	// Test derivation
-	testAddr, err := DeriveAddressFromXpub(xpub, 0)
-	if err != nil {
-		return fmt.Errorf("failed to derive test address: %w", err)
+		return err
 	}
 
 	_, err = hw.db.ExecContext(ctx, `
@@ -380,6 +372,76 @@ func (hw *HDWallet) InitializeHDWallet(ctx context.Context, xpub string, network
 	}).Info("HD wallet initialized")
 
 	return nil
+}
+
+func validateHDWalletXpub(xpub, network string) (string, error) {
+	extKey, err := hdkeychain.NewKeyFromString(xpub)
+	if err != nil {
+		return "", fmt.Errorf("invalid xpub: %w", err)
+	}
+	if extKey.IsPrivate() {
+		return "", fmt.Errorf("CRITICAL: received xprv instead of xpub - never store private keys")
+	}
+
+	// Validate network
+	var expectedNet *chaincfg.Params
+	switch network {
+	case "mainnet":
+		expectedNet = &chaincfg.MainNetParams
+	case "testnet":
+		expectedNet = &chaincfg.TestNet3Params
+	default:
+		return "", fmt.Errorf("invalid network: %s", network)
+	}
+
+	if !extKey.IsForNet(expectedNet) {
+		return "", fmt.Errorf("xpub network mismatch")
+	}
+
+	// Test derivation
+	testAddr, err := DeriveAddressFromXpub(xpub, 0)
+	if err != nil {
+		return "", fmt.Errorf("failed to derive test address: %w", err)
+	}
+	return testAddr, nil
+}
+
+// RotateHDWallet changes only the active public derivation key. Existing
+// addresses retain their own derivation_xpub, and next_index never moves
+// backwards, so historical funds remain sweepable with the retired xprv.
+func (hw *HDWallet) RotateHDWallet(ctx context.Context, xpub, network string) (previous string, nextIndex uint32, changed bool, err error) {
+	if _, err = validateHDWalletXpub(xpub, network); err != nil {
+		return "", 0, false, err
+	}
+	tx, err := hw.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", 0, false, fmt.Errorf("begin HD wallet rotation: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+	var next int64
+	err = tx.QueryRowContext(ctx, `SELECT xpub, next_index FROM purser.hd_wallet_state WHERE id = 1 FOR UPDATE`).Scan(&previous, &next)
+	if errors.Is(err, sql.ErrNoRows) {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO purser.hd_wallet_state (id, xpub, network, next_index) VALUES (1, $1, $2, 0)`, xpub, network); err != nil {
+			return "", 0, false, fmt.Errorf("initialize HD wallet during rotation: %w", err)
+		}
+		if err = tx.Commit(); err != nil {
+			return "", 0, false, err
+		}
+		return "", 0, true, nil
+	}
+	if err != nil {
+		return "", 0, false, fmt.Errorf("load active HD wallet key: %w", err)
+	}
+	if strings.TrimSpace(previous) == strings.TrimSpace(xpub) {
+		return previous, uint32(next), false, nil
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE purser.hd_wallet_state SET xpub = $1, network = $2, updated_at = NOW() WHERE id = 1`, xpub, network); err != nil {
+		return "", 0, false, fmt.Errorf("rotate active HD wallet key: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return "", 0, false, err
+	}
+	return previous, uint32(next), true, nil
 }
 
 // ValidateXpub checks if stored xpub can derive addresses

@@ -18,11 +18,16 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 -- BILLING & INVOICING
 -- ============================================================================
 
+CREATE SEQUENCE IF NOT EXISTS purser.billing_invoice_number_seq;
+
 -- Invoice generation and payment tracking
 CREATE TABLE IF NOT EXISTS purser.billing_invoices (
     -- ===== IDENTITY =====
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL,
+    invoice_number VARCHAR(50) NOT NULL DEFAULT (
+        'INV-' || LPAD(nextval('purser.billing_invoice_number_seq')::text, 10, '0')
+    ),
 
     -- ===== FINANCIAL DETAILS =====
     -- manual_review is a hard hold: no payment, no Stripe meter push, no
@@ -53,11 +58,67 @@ CREATE TABLE IF NOT EXISTS purser.billing_invoices (
 
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    retention_until TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '10 years'),
 
     CONSTRAINT chk_billing_invoices_status CHECK (status IN (
         'draft', 'pending', 'paid', 'overdue', 'failed', 'cancelled', 'manual_review'
     ))
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_invoices_number
+    ON purser.billing_invoices(invoice_number);
+
+-- Small provider-collected postpaid balances are retained until the economic
+-- collection floor is reached. Entries provide per-invoice reconciliation;
+-- the balance row is the lockable current state.
+CREATE TABLE IF NOT EXISTS purser.billing_collection_balances (
+    tenant_id UUID NOT NULL,
+    currency CHAR(3) NOT NULL,
+    balance_cents BIGINT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, currency),
+    CONSTRAINT chk_billing_collection_balance_nonnegative CHECK (balance_cents >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS purser.billing_collection_entries (
+    invoice_id UUID PRIMARY KEY REFERENCES purser.billing_invoices(id) ON DELETE RESTRICT,
+    tenant_id UUID NOT NULL,
+    provider VARCHAR(32) NOT NULL,
+    currency CHAR(3) NOT NULL,
+    minimum_cents BIGINT NOT NULL,
+    opening_balance_cents BIGINT NOT NULL,
+    current_charge_cents BIGINT NOT NULL,
+    collected_cents BIGINT NOT NULL,
+    closing_balance_cents BIGINT NOT NULL,
+    outcome VARCHAR(16) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_billing_collection_minimum_positive CHECK (minimum_cents > 0),
+    CONSTRAINT chk_billing_collection_entry_amounts CHECK (
+        opening_balance_cents >= 0 AND current_charge_cents >= 0 AND
+        collected_cents >= 0 AND closing_balance_cents >= 0
+    ),
+    CONSTRAINT chk_billing_collection_entry_outcome CHECK (outcome IN ('deferred', 'collected', 'none')),
+    CONSTRAINT chk_billing_collection_entry_math CHECK (
+        opening_balance_cents + current_charge_cents = collected_cents + closing_balance_cents
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_billing_collection_entries_tenant_created
+    ON purser.billing_collection_entries(tenant_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS purser.billing_collection_writeoffs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    currency CHAR(3) NOT NULL,
+    amount_cents BIGINT NOT NULL,
+    reason VARCHAR(32) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_billing_collection_writeoff_positive CHECK (amount_cents > 0),
+    CONSTRAINT chk_billing_collection_writeoff_reason CHECK (reason IN ('account_closed', 'operator_approved'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_billing_collection_writeoffs_tenant_created
+    ON purser.billing_collection_writeoffs(tenant_id, created_at DESC);
 
 -- Payment transactions against invoices
 CREATE TABLE IF NOT EXISTS purser.billing_payments (
@@ -82,7 +143,8 @@ CREATE TABLE IF NOT EXISTS purser.billing_payments (
     CONSTRAINT chk_billing_payments_method CHECK (method IN ('card', 'crypto_eth', 'crypto_usdc', 'bank_transfer')),
     
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    retention_until TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '10 years')
 );
 
 -- ============================================================================
@@ -146,15 +208,17 @@ CREATE TABLE IF NOT EXISTS purser.crypto_wallets (
 
     -- HD wallet derivation index (from xpub) - enables address regeneration
     derivation_index INTEGER NOT NULL,
+	derivation_xpub TEXT NOT NULL,
 
     -- ===== STATUS & LIFECYCLE =====
     -- pending:    address issued, no on-chain payment seen
     -- confirming: payment detected, awaiting required confirmations
+    -- review_required: confirmed funds need explicit operator allocation
     -- completed:  confirmations met, balance credited (sweepable)
     -- swept:      funds moved to cold storage
     -- expired:    no payment received before expires_at
     status VARCHAR(50) NOT NULL DEFAULT 'pending',
-    CONSTRAINT chk_wallet_status CHECK (status IN ('pending', 'confirming', 'completed', 'swept', 'expired')),
+    CONSTRAINT chk_wallet_status CHECK (status IN ('pending', 'confirming', 'review_required', 'completed', 'swept', 'expired')),
 
     expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
 
@@ -182,6 +246,7 @@ CREATE TABLE IF NOT EXISTS purser.crypto_wallets (
     -- the converted EUR cents using quoted_usd_to_eur_rate.
     credited_amount_cents      BIGINT,
     credited_amount_currency   VARCHAR(3),
+    client_ip                  VARCHAR(64),       -- Trusted request-time tax-location evidence
 
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -204,7 +269,7 @@ CREATE TABLE IF NOT EXISTS purser.crypto_wallets (
 
     -- Unique constraints:
     -- Prepaid and invoice wallets share one global derivation index pool.
-    UNIQUE(derivation_index)
+	UNIQUE(derivation_xpub, derivation_index)
 );
 
 CREATE INDEX IF NOT EXISTS idx_purser_crypto_wallets_active ON purser.crypto_wallets(status, expires_at);
@@ -216,6 +281,148 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_purser_crypto_wallets_active_invoice_asset
 CREATE UNIQUE INDEX IF NOT EXISTS idx_purser_crypto_wallets_tx
     ON purser.crypto_wallets(network, tx_hash)
     WHERE tx_hash IS NOT NULL;
+
+-- Restart-safe JSON-RPC observation. Cursor advancement and event inserts are
+-- committed together; block hashes permit deterministic rewind on reorg.
+CREATE TABLE IF NOT EXISTS purser.crypto_scan_cursors (
+    network VARCHAR(20) PRIMARY KEY,
+    next_block BIGINT NOT NULL CHECK (next_block >= 0),
+    last_scanned_block BIGINT,
+    last_scanned_block_hash VARCHAR(66),
+    safe_head_block BIGINT,
+    lag_blocks BIGINT,
+    last_error TEXT,
+    error_count INTEGER NOT NULL DEFAULT 0,
+    scanned_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS purser.crypto_deposit_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    network VARCHAR(20) NOT NULL,
+    asset VARCHAR(10) NOT NULL CHECK (asset IN ('ETH', 'USDC')),
+    tx_hash VARCHAR(66) NOT NULL,
+    log_index BIGINT NOT NULL DEFAULT -1,
+    block_number BIGINT NOT NULL,
+    block_hash VARCHAR(66) NOT NULL,
+    from_address VARCHAR(42),
+    to_address VARCHAR(42) NOT NULL,
+    amount_base_units NUMERIC(78, 0) NOT NULL CHECK (amount_base_units > 0),
+    canonical BOOLEAN NOT NULL DEFAULT TRUE,
+    status VARCHAR(24) NOT NULL DEFAULT 'observed' CHECK (
+        status IN ('observed', 'confirmed', 'allocated', 'review_required', 'reorged')
+    ),
+    wallet_id UUID REFERENCES purser.crypto_wallets(id),
+    confirmations INTEGER NOT NULL DEFAULT 0,
+    observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    confirmed_at TIMESTAMPTZ,
+    allocated_at TIMESTAMPTZ,
+    reorged_at TIMESTAMPTZ,
+    last_canonical_checked_at TIMESTAMPTZ,
+    allocation_error TEXT,
+    UNIQUE(network, tx_hash, log_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_crypto_deposit_events_destination
+    ON purser.crypto_deposit_events(network, to_address, status);
+CREATE INDEX IF NOT EXISTS idx_crypto_deposit_events_allocation
+    ON purser.crypto_deposit_events(status, block_number)
+    WHERE canonical AND status IN ('observed', 'confirmed', 'review_required');
+
+CREATE TABLE IF NOT EXISTS purser.crypto_custody_addresses (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    source_kind VARCHAR(20) NOT NULL CHECK (source_kind IN ('direct_deposit', 'x402')),
+    source_ref UUID,
+    network VARCHAR(20) NOT NULL,
+    asset VARCHAR(10) NOT NULL CHECK (asset IN ('ETH', 'USDC')),
+    address VARCHAR(42) NOT NULL,
+    derivation_index INTEGER NOT NULL,
+	derivation_xpub TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(network, asset, address),
+    UNIQUE(source_kind, source_ref, network, asset)
+);
+
+-- Manual sweep ceremony inventory. The online service never stores a seed,
+-- xprv, child key, or unencrypted signing material.
+CREATE TABLE IF NOT EXISTS purser.crypto_sweep_batches (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    manifest_version INTEGER NOT NULL,
+    network VARCHAR(20) NOT NULL,
+    treasury_address VARCHAR(42) NOT NULL,
+    snapshot_block BIGINT NOT NULL,
+    snapshot_block_hash VARCHAR(66) NOT NULL,
+    manifest_checksum VARCHAR(64) NOT NULL UNIQUE,
+    status VARCHAR(24) NOT NULL DEFAULT 'planned' CHECK (
+        status IN ('planned', 'signed', 'broadcast', 'partially_confirmed', 'confirmed', 'failed', 'expired')
+    ),
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_by UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS purser.crypto_sweep_items (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    batch_id UUID NOT NULL REFERENCES purser.crypto_sweep_batches(id),
+    custody_address_id UUID NOT NULL REFERENCES purser.crypto_custody_addresses(id),
+    wallet_id UUID REFERENCES purser.crypto_wallets(id),
+    network VARCHAR(20) NOT NULL,
+    asset VARCHAR(10) NOT NULL CHECK (asset IN ('ETH', 'USDC')),
+    source_address VARCHAR(42) NOT NULL,
+    derivation_index INTEGER NOT NULL,
+    destination_address VARCHAR(42) NOT NULL,
+    amount_base_units NUMERIC(78, 0) NOT NULL CHECK (amount_base_units > 0),
+    chain_id BIGINT NOT NULL,
+    asset_contract VARCHAR(42),
+    source_nonce BIGINT,
+    max_fee_per_gas NUMERIC(78, 0),
+    max_priority_fee_per_gas NUMERIC(78, 0),
+    gas_limit BIGINT,
+    authorization_nonce VARCHAR(66),
+    signed_payload TEXT,
+    relay_transaction TEXT,
+    tx_hash VARCHAR(66),
+    status VARCHAR(24) NOT NULL DEFAULT 'planned' CHECK (
+        status IN ('planned', 'signed', 'broadcast', 'confirmed', 'failed', 'expired')
+    ),
+    failure_reason TEXT,
+    broadcast_at TIMESTAMPTZ,
+    confirmed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(batch_id, custody_address_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_crypto_sweep_items_tx
+    ON purser.crypto_sweep_items(network, tx_hash)
+    WHERE tx_hash IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS purser.crypto_sweep_sources (
+    item_id UUID NOT NULL REFERENCES purser.crypto_sweep_items(id),
+    source_type VARCHAR(20) NOT NULL CHECK (source_type IN ('direct_wallet', 'x402_quote')),
+    source_id UUID NOT NULL,
+    amount_base_units NUMERIC(78, 0) NOT NULL CHECK (amount_base_units > 0),
+    PRIMARY KEY(source_type, source_id)
+);
+
+CREATE TABLE IF NOT EXISTS purser.crypto_sweep_events (
+    id BIGSERIAL PRIMARY KEY,
+    batch_id UUID NOT NULL REFERENCES purser.crypto_sweep_batches(id),
+    item_id UUID REFERENCES purser.crypto_sweep_items(id),
+    event_type VARCHAR(40) NOT NULL,
+    actor_id UUID,
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS purser.crypto_sweep_relayer_nonces (
+    network VARCHAR(20) PRIMARY KEY,
+    next_nonce BIGINT NOT NULL CHECK (next_nonce >= 0),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
 -- ============================================================================
 -- BILLING TIERS & SUBSCRIPTION PLANS
@@ -433,11 +640,15 @@ CREATE TABLE IF NOT EXISTS purser.tenant_subscriptions (
 
     -- ===== X402 PROTOCOL =====
     x402_address_index INTEGER,
+	x402_address_xpub TEXT,
 
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
 
-    CONSTRAINT chk_billing_model CHECK (billing_model IN ('postpaid', 'prepaid')),
+	CONSTRAINT chk_billing_model CHECK (billing_model IN ('postpaid', 'prepaid')),
+	CONSTRAINT chk_x402_address_derivation CHECK (
+		(x402_address_index IS NULL) = (x402_address_xpub IS NULL)
+	),
     UNIQUE(tenant_id)
 );
 
@@ -1149,9 +1360,11 @@ CREATE INDEX IF NOT EXISTS idx_stripe_meter_events_outbox_pending
 -- lease and retry delivery; drafts and manual-review holds never enter it.
 CREATE TABLE IF NOT EXISTS purser.invoice_email_outbox (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    invoice_id UUID NOT NULL UNIQUE REFERENCES purser.billing_invoices(id) ON DELETE CASCADE,
+    invoice_id UUID NOT NULL REFERENCES purser.billing_invoices(id) ON DELETE CASCADE,
     tenant_id UUID NOT NULL,
     recipient TEXT NOT NULL,
+    notification_type VARCHAR(32) NOT NULL DEFAULT 'invoice_created',
+    reminder_stage INT NOT NULL DEFAULT 0,
     claimed_at TIMESTAMPTZ,
     lease_token UUID,
     attempts INT NOT NULL DEFAULT 0,
@@ -1162,6 +1375,8 @@ CREATE TABLE IF NOT EXISTS purser.invoice_email_outbox (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS uq_invoice_email_outbox_notification
+    ON purser.invoice_email_outbox(invoice_id, notification_type, reminder_stage);
 CREATE INDEX IF NOT EXISTS idx_invoice_email_outbox_pending
     ON purser.invoice_email_outbox(next_attempt_at, created_at)
     WHERE sent_at IS NULL;
@@ -1313,7 +1528,7 @@ CREATE INDEX IF NOT EXISTS idx_purser_webhook_events_provider ON purser.webhook_
 -- ============================================================================
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tenant_subscriptions_x402_address_index
-    ON purser.tenant_subscriptions(x402_address_index)
+    ON purser.tenant_subscriptions(x402_address_xpub, x402_address_index)
     WHERE x402_address_index IS NOT NULL;
 
 -- Nonce tracking to prevent replay attacks
@@ -1343,14 +1558,17 @@ CREATE TABLE IF NOT EXISTS purser.x402_nonces (
 
     -- Reconciliation: track on-chain confirmation
     -- submitting: durable intent written; chain broadcast not yet acknowledged
-    -- pending: tx submitted, balance credited optimistically
-    -- confirmed: tx confirmed on-chain (receipt.status = 1)
-    -- failed: tx reverted or timed out, balance debited
+    -- pending: tx submitted; no balance credit exists yet
+    -- confirmed: receipt succeeded at required depth and balance credit committed
+    -- failed: tx reverted or timed out without creating spendable credit
     status VARCHAR(20) NOT NULL DEFAULT 'pending',
     confirmed_at TIMESTAMPTZ,
     block_number BIGINT,
     gas_used BIGINT,
     failure_reason TEXT,
+    client_ip INET,
+    rollup_applied_at TIMESTAMPTZ,
+    rollup_reversed_at TIMESTAMPTZ,
 
     UNIQUE(network, payer_address, nonce)
 );
@@ -1360,12 +1578,159 @@ CREATE INDEX IF NOT EXISTS idx_x402_nonces_payer ON purser.x402_nonces(payer_add
 CREATE INDEX IF NOT EXISTS idx_x402_nonces_pending ON purser.x402_nonces(status, settled_at) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_x402_nonces_submitting ON purser.x402_nonces(settled_at) WHERE status = 'submitting';
 
+-- Immutable x402 v2 offers. A signed EIP-3009 authorization does not carry a
+-- FrameWorks tenant ID, so the quote binds the accepted requirements to the
+-- tenant, resource, receiving address, amount, asset, chain, FX rate and
+-- expiry before a facilitator is allowed to submit it.
+CREATE TABLE IF NOT EXISTS purser.x402_payment_quotes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    resource TEXT NOT NULL,
+    resource_class VARCHAR(32) NOT NULL,
+    network VARCHAR(64) NOT NULL,
+    asset VARCHAR(42) NOT NULL,
+    pay_to VARCHAR(42) NOT NULL,
+    amount_atomic NUMERIC(78, 0) NOT NULL CHECK (amount_atomic > 0),
+    credit_amount_cents BIGINT NOT NULL CHECK (credit_amount_cents > 0),
+    credit_currency CHAR(3) NOT NULL DEFAULT 'EUR',
+    eur_per_usd_rate NUMERIC(20, 10) NOT NULL CHECK (eur_per_usd_rate > 0),
+    requirements_json JSONB NOT NULL,
+    status VARCHAR(24) NOT NULL DEFAULT 'offered' CHECK (
+        status IN ('offered', 'claiming', 'settling', 'unknown', 'confirmed', 'expired', 'failed')
+    ),
+    claim_token UUID,
+    claim_expires_at TIMESTAMPTZ,
+    payment_fingerprint VARCHAR(64),
+    provider VARCHAR(32),
+    provider_transaction_id VARCHAR(255),
+    failure_reason TEXT,
+    expires_at TIMESTAMPTZ NOT NULL,
+    confirmed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_x402_quotes_tenant_created
+    ON purser.x402_payment_quotes(tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_x402_quotes_reconcile
+    ON purser.x402_payment_quotes(status, updated_at)
+    WHERE status IN ('claiming', 'settling', 'unknown');
+CREATE UNIQUE INDEX IF NOT EXISTS idx_x402_quotes_payment_fingerprint
+    ON purser.x402_payment_quotes(payment_fingerprint)
+    WHERE payment_fingerprint IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_x402_quotes_provider_transaction
+    ON purser.x402_payment_quotes(provider, provider_transaction_id)
+    WHERE provider IS NOT NULL AND provider_transaction_id IS NOT NULL;
+
+ALTER TABLE purser.x402_nonces
+    ADD COLUMN IF NOT EXISTS quote_id UUID REFERENCES purser.x402_payment_quotes(id),
+    ADD COLUMN IF NOT EXISTS settlement_provider VARCHAR(32),
+    ADD COLUMN IF NOT EXISTS provider_transaction_id VARCHAR(255);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_x402_nonces_quote
+    ON purser.x402_nonces(quote_id)
+    WHERE quote_id IS NOT NULL;
+
+-- Conditions such as a consumed authorization without a recoverable
+-- transaction hash require durable operator action rather than log scraping.
+CREATE TABLE IF NOT EXISTS purser.crypto_accounting_anomalies (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    kind VARCHAR(64) NOT NULL,
+    network VARCHAR(64) NOT NULL,
+    reference_type VARCHAR(64) NOT NULL,
+    reference_id VARCHAR(255) NOT NULL,
+    amount_cents BIGINT NOT NULL DEFAULT 0,
+    currency CHAR(3) NOT NULL DEFAULT 'EUR',
+    detail TEXT NOT NULL,
+    evidence_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status VARCHAR(16) NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved')),
+    occurrences INTEGER NOT NULL DEFAULT 1 CHECK (occurrences > 0),
+    first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    resolved_at TIMESTAMPTZ,
+    resolved_by UUID,
+    resolution_note TEXT,
+    UNIQUE(kind, reference_type, reference_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_crypto_accounting_anomalies_open
+    ON purser.crypto_accounting_anomalies(last_seen_at, tenant_id)
+    WHERE status = 'open';
+
+CREATE TABLE IF NOT EXISTS purser.x402_rate_limit_windows (
+    scope VARCHAR(32) NOT NULL,
+    identity_hash BYTEA NOT NULL,
+    window_started_at TIMESTAMPTZ NOT NULL,
+    request_count INTEGER NOT NULL CHECK (request_count > 0),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY(scope, identity_hash, window_started_at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_x402_rate_limit_windows_expiry
+    ON purser.x402_rate_limit_windows(window_started_at);
+
+CREATE TABLE IF NOT EXISTS purser.x402_mutation_results (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    quote_id UUID NOT NULL REFERENCES purser.x402_payment_quotes(id),
+    idempotency_key VARCHAR(255) NOT NULL,
+    request_fingerprint VARCHAR(64) NOT NULL CHECK (request_fingerprint ~ '^[0-9a-f]{64}$'),
+    protocol VARCHAR(12) NOT NULL CHECK (protocol IN ('http', 'mcp')),
+    operation VARCHAR(255) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'in_progress' CHECK (status IN ('in_progress', 'completed')),
+    result BYTEA,
+    content_type VARCHAR(255),
+    status_code INTEGER,
+    claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(tenant_id, idempotency_key),
+    UNIQUE(quote_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_x402_mutation_results_unknown
+    ON purser.x402_mutation_results(claimed_at)
+    WHERE status = 'in_progress';
+
 -- ============================================================================
 -- SIMPLIFIED INVOICES (EU VAT COMPLIANCE)
 -- ============================================================================
 -- For payments under €100, EU law allows simplified invoices without
 -- customer details. We store these for 10-year retention requirement.
 -- ============================================================================
+
+CREATE SEQUENCE IF NOT EXISTS purser.simplified_invoice_number_seq;
+CREATE SEQUENCE IF NOT EXISTS purser.credit_note_number_seq;
+
+CREATE TABLE IF NOT EXISTS purser.vat_rate_periods (
+    country_code CHAR(2) NOT NULL,
+    rate_bps INTEGER NOT NULL CHECK (rate_bps >= 0 AND rate_bps <= 10000),
+    effective_from DATE NOT NULL,
+    effective_until DATE,
+    source VARCHAR(255) NOT NULL,
+    source_reference TEXT NOT NULL,
+    source_checked_on DATE NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY(country_code, effective_from),
+    CHECK (effective_until IS NULL OR effective_until > effective_from)
+);
+
+INSERT INTO purser.vat_rate_periods
+    (country_code, rate_bps, effective_from, source, source_reference, source_checked_on)
+SELECT country_code, rate_bps, DATE '2026-01-01',
+       'EU Your Europe standard VAT rates',
+       'https://europa.eu/youreurope/business/taxation/vat/vat-rules-rates/index_en.htm',
+       DATE '2026-07-13'
+FROM (VALUES
+    ('AT',2000),('BE',2100),('BG',2000),('HR',2500),('CY',1900),
+    ('CZ',2100),('DK',2500),('EE',2400),('FI',2550),('FR',2000),
+    ('DE',1900),('GR',2400),('HU',2700),('IE',2300),('IT',2200),
+    ('LV',2100),('LT',2100),('LU',1700),('MT',1800),('NL',2100),
+    ('PL',2300),('PT',2300),('RO',2100),('SK',2300),('SI',2200),
+    ('ES',2100),('SE',2500)
+) AS rates(country_code, rate_bps)
+ON CONFLICT (country_code, effective_from) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS purser.simplified_invoices (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1385,15 +1750,27 @@ CREATE TABLE IF NOT EXISTS purser.simplified_invoices (
     net_amount_cents BIGINT NOT NULL,             -- Amount before VAT
     vat_amount_cents BIGINT NOT NULL,             -- VAT portion
     vat_rate_bps INTEGER NOT NULL,                -- VAT rate in basis points (2100 = 21%)
+    vat_rate_source VARCHAR(255),
+    vat_rate_table_checked_on DATE,
+    vat_rate_effective_from DATE,
+    tax_validation_status VARCHAR(32) NOT NULL DEFAULT 'not_validated',
     currency VARCHAR(3) NOT NULL DEFAULT 'EUR',
 
     -- EUR equivalent (for threshold tracking)
     amount_eur_cents BIGINT NOT NULL,             -- Converted at ECB rate
     ecb_rate DECIMAL(10,6),                       -- EUR/USD rate used
+    fx_rate_source VARCHAR(255),
+    fx_rate_observed_at TIMESTAMPTZ,
 
     -- Location evidence (2 pieces required for EU VAT)
     evidence_ip_country VARCHAR(2),               -- ISO country from IP
     evidence_wallet_network VARCHAR(20),          -- Blockchain network
+    evidence_billing_country VARCHAR(2),
+    evidence_status VARCHAR(24) NOT NULL DEFAULT 'missing' CONSTRAINT chk_simplified_invoice_evidence_status CHECK (
+        evidence_status IN ('complete', 'single_source', 'conflict', 'missing')
+    ),
+    evidence_conflict BOOLEAN NOT NULL DEFAULT FALSE,
+    tax_policy_ref VARCHAR(255),
 
     -- Supplier details (us - static but stored for audit)
     supplier_name VARCHAR(255) NOT NULL,
@@ -1403,12 +1780,78 @@ CREATE TABLE IF NOT EXISTS purser.simplified_invoices (
     -- Invoice date
     issued_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    retention_until TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '10 years')
 );
+
+CREATE TABLE IF NOT EXISTS purser.credit_notes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    credit_note_number VARCHAR(50) NOT NULL UNIQUE,
+    tenant_id UUID NOT NULL,
+    source_document_type VARCHAR(32) NOT NULL CHECK (source_document_type IN ('invoice', 'simplified_invoice')),
+    source_document_id UUID NOT NULL,
+    reversal_reference_type VARCHAR(64) NOT NULL,
+    reversal_reference_id VARCHAR(255) NOT NULL,
+    amount_cents BIGINT NOT NULL CHECK (amount_cents > 0),
+    currency CHAR(3) NOT NULL,
+    reason TEXT NOT NULL,
+    evidence_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    issued_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    retention_until TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '10 years'),
+    UNIQUE(source_document_type, source_document_id, reversal_reference_type, reversal_reference_id)
+);
+
+CREATE OR REPLACE FUNCTION purser.prevent_billing_document_early_delete()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF OLD.retention_until > NOW() THEN
+        RAISE EXCEPTION 'billing document % is retained until %', OLD.id, OLD.retention_until;
+    END IF;
+    RETURN OLD;
+END;
+$$;
+
+CREATE TRIGGER billing_invoices_retention_guard
+    BEFORE DELETE ON purser.billing_invoices
+    FOR EACH ROW EXECUTE FUNCTION purser.prevent_billing_document_early_delete();
+CREATE TRIGGER billing_payments_retention_guard
+    BEFORE DELETE ON purser.billing_payments
+    FOR EACH ROW EXECUTE FUNCTION purser.prevent_billing_document_early_delete();
+CREATE TRIGGER simplified_invoices_retention_guard
+    BEFORE DELETE ON purser.simplified_invoices
+    FOR EACH ROW EXECUTE FUNCTION purser.prevent_billing_document_early_delete();
+CREATE TRIGGER credit_notes_retention_guard
+    BEFORE DELETE ON purser.credit_notes
+    FOR EACH ROW EXECUTE FUNCTION purser.prevent_billing_document_early_delete();
+
+CREATE INDEX IF NOT EXISTS idx_credit_notes_tenant_issued
+    ON purser.credit_notes(tenant_id, issued_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_simplified_invoices_tenant ON purser.simplified_invoices(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_simplified_invoices_issued ON purser.simplified_invoices(issued_at);
 CREATE INDEX IF NOT EXISTS idx_simplified_invoices_reference ON purser.simplified_invoices(reference_type, reference_id);
+
+CREATE TABLE IF NOT EXISTS purser.vat_validation_evidence (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    country_code VARCHAR(2) NOT NULL,
+    vat_number_hash VARCHAR(64) NOT NULL,
+    vat_number_masked VARCHAR(32) NOT NULL,
+    provider VARCHAR(16) NOT NULL DEFAULT 'VIES',
+    valid BOOLEAN NOT NULL,
+    request_date DATE NOT NULL,
+    trader_name TEXT,
+    trader_address TEXT,
+    checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    raw_response JSONB NOT NULL,
+    UNIQUE(tenant_id, vat_number_hash, request_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vat_validation_evidence_current
+    ON purser.vat_validation_evidence(tenant_id, expires_at DESC);
 
 -- ============================================================================
 -- TENANT BALANCE ROLLUPS (STATISTICS)
@@ -1684,6 +2127,32 @@ CREATE INDEX IF NOT EXISTS idx_webhook_events_provider_object
     ON purser.webhook_events(provider, provider_object_id)
     WHERE provider_object_id IS NOT NULL;
 
+-- Provider ingress is acknowledged after validation and this durable insert.
+-- Reconciliation workers lease rows independently of the HTTP/gRPC request.
+CREATE TABLE IF NOT EXISTS purser.provider_webhook_inbox (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    provider VARCHAR(50) NOT NULL,
+    event_key VARCHAR(320) NOT NULL,
+    headers JSONB NOT NULL DEFAULT '{}',
+    raw_payload BYTEA NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    attempts INT NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    claimed_at TIMESTAMPTZ,
+    lease_token UUID,
+    last_error TEXT,
+    processed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(provider, event_key),
+    CONSTRAINT chk_provider_webhook_inbox_status
+        CHECK (status IN ('pending', 'processing', 'failed', 'processed'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_provider_webhook_inbox_pending
+    ON purser.provider_webhook_inbox(next_attempt_at, created_at)
+    WHERE status IN ('pending', 'failed', 'processing');
+
 ALTER TABLE purser.billing_invoices
     ADD COLUMN IF NOT EXISTS reopened_at TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS confirmed_paid_cents BIGINT NOT NULL DEFAULT 0,
@@ -1837,9 +2306,16 @@ WHERE sent_at IS NULL
 
 CREATE OR REPLACE VIEW purser.payment_report_invoice_email_outbox_stuck AS
 SELECT id, invoice_id, tenant_id, recipient, attempts, next_attempt_at,
-       last_error, created_at, updated_at
+       last_error, created_at, updated_at, notification_type, reminder_stage
 FROM purser.invoice_email_outbox
 WHERE sent_at IS NULL
+  AND attempts >= 5;
+
+CREATE OR REPLACE VIEW purser.payment_report_webhook_inbox_stuck AS
+SELECT id, provider, event_key, status, attempts, next_attempt_at,
+       last_error, created_at, updated_at
+FROM purser.provider_webhook_inbox
+WHERE status <> 'processed'
   AND attempts >= 5;
 
 -- ============================================================================

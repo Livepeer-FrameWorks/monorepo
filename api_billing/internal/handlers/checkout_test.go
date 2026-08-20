@@ -155,6 +155,22 @@ func TestMakeMollieAPICall_MapsInlineResponse(t *testing.T) {
 	}
 }
 
+func TestMinorUnitsDecimalStringUsesCurrencyExponent(t *testing.T) {
+	for _, tc := range []struct {
+		amount   int64
+		currency string
+		want     string
+	}{
+		{amount: 1234, currency: "EUR", want: "12.34"},
+		{amount: 1234, currency: "JPY", want: "1234"},
+		{amount: 1234, currency: "BHD", want: "1.234"},
+	} {
+		if got := minorUnitsDecimalString(tc.amount, tc.currency); got != tc.want {
+			t.Errorf("minorUnitsDecimalString(%d, %q) = %q, want %q", tc.amount, tc.currency, got, tc.want)
+		}
+	}
+}
+
 func TestDispatchStripeCheckoutCompleted_MalformedJSON(t *testing.T) {
 	s := &Service{logger: logrus.New()}
 	err := s.DispatchStripeCheckoutCompleted(context.Background(), []byte(`{"id":`))

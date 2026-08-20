@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"strings"
 	"time"
 
@@ -42,6 +43,13 @@ type canonicalUsageDelta struct {
 	dimensions   models.JSONB
 	usageValue   float64
 	usageDetails models.JSONB
+}
+
+func normalizedUsageDimensions(dimensions models.JSONB) models.JSONB {
+	if dimensions == nil {
+		return models.JSONB{}
+	}
+	return dimensions
 }
 
 func (jm *JobManager) quarantineUsageReport(ctx context.Context, msg kafka.Message, summary *models.UsageSummary, reason string) error {
@@ -294,14 +302,18 @@ func NewJobManager(database *sql.DB, log logging.Logger, commodoreClient Commodo
 	includeTestnets := config.X402IncludeTestnetsEnabled()
 	emailSvc := NewEmailService(log)
 	x402Submitter := NewX402Handler(database, log, NewHDWallet(database, log), NewRPCClient(), commodoreClient)
+	var purserMetrics *PurserMetrics
+	if billing != nil {
+		purserMetrics = billing.metrics
+	}
 
 	return &JobManager{
 		db:                database,
 		logger:            log,
 		emailService:      emailSvc,
-		cryptoMonitor:     NewCryptoMonitor(database, log, decklogSvc),
+		cryptoMonitor:     NewCryptoMonitorWithMetrics(database, log, decklogSvc, purserMetrics),
 		gasWalletMonitor:  NewGasWalletMonitor(log),
-		x402Reconciler:    NewX402Reconciler(database, log, includeTestnets, x402Submitter.submitTransferWithAuthorization),
+		x402Reconciler:    NewX402Reconciler(database, log, includeTestnets, x402Submitter),
 		kafkaConsumer:     consumer,
 		stopCh:            make(chan struct{}),
 		billingTopic:      billingTopic,
@@ -341,6 +353,9 @@ func (jm *JobManager) Start(ctx context.Context) {
 
 	// Deliver customer invoice notifications from the durable finalization outbox.
 	go jm.runInvoiceEmailOutbox(ctx)
+
+	// Reconcile verified provider callbacks after their durable ingress write.
+	go jm.runProviderWebhookInbox(ctx)
 
 	// Start payment retry job
 	go jm.runPaymentRetry(ctx)
@@ -1369,10 +1384,12 @@ func (jm *JobManager) suspendTenantForBalance(ctx context.Context, tenantID stri
 
 // runInvoiceGeneration generates monthly invoices for active tenants
 func (jm *JobManager) runInvoiceGeneration(ctx context.Context) {
-	ticker := time.NewTicker(24 * time.Hour) // Run daily
-	defer ticker.Stop()
-
 	jm.logger.Info("Starting invoice generation job")
+	// The writer is idempotent by tenant + billing period, so reconcile once at
+	// startup. This prevents restarts from postponing a due invoice forever.
+	jm.generateMonthlyInvoices(ctx)
+	timer := time.NewTimer(time.Until(nextUTCStart(0)))
+	defer timer.Stop()
 
 	for {
 		select {
@@ -1380,8 +1397,9 @@ func (jm *JobManager) runInvoiceGeneration(ctx context.Context) {
 			return
 		case <-jm.stopCh:
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			jm.generateMonthlyInvoices(ctx)
+			timer.Reset(time.Until(nextUTCStart(0)))
 		}
 	}
 }
@@ -1398,7 +1416,7 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 	rows, err := jm.db.QueryContext(ctx, `
 		SELECT ts.tenant_id, ts.billing_email, ts.tier_id, ts.status,
 		       ts.billing_period_start, ts.billing_period_end, ts.mollie_next_payment_date,
-		       ts.stripe_subscription_id, ts.mollie_subscription_id,
+		       ts.stripe_subscription_id, ts.mollie_subscription_id, ts.payment_method,
 		       bt.tier_name, bt.display_name, bt.billing_period
 		FROM purser.tenant_subscriptions ts
 		JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
@@ -1426,11 +1444,11 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		var billingEmail sql.NullString
 		var tierName, displayName, billingPeriod string
 		var billingPeriodStart, billingPeriodEnd, mollieNextPaymentDate sql.NullTime
-		var stripeSubID, mollieSubID sql.NullString
+		var stripeSubID, mollieSubID, paymentMethod sql.NullString
 
 		err = rows.Scan(&tenantID, &billingEmail, &tierID, &subscriptionStatus,
 			&billingPeriodStart, &billingPeriodEnd, &mollieNextPaymentDate,
-			&stripeSubID, &mollieSubID,
+			&stripeSubID, &mollieSubID, &paymentMethod,
 			&tierName, &displayName, &billingPeriod)
 		if err != nil {
 			jm.logger.WithFields(logging.Fields{
@@ -1530,6 +1548,11 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		usageData := flattenUsageAcrossClusters(perClusterUsage)
 
 		baseProviderManaged := stripeSubID.Valid || mollieSubID.Valid
+		collectionProvider, providerErr := resolveInvoiceCollectionProvider(paymentMethod.String, stripeSubID.Valid, mollieSubID.Valid)
+		if providerErr != nil {
+			jm.logger.WithError(providerErr).WithField("tenant_id", tenantID).Error("Invoice finalization blocked by ambiguous collection provider")
+			continue
+		}
 		ratingResult, ratingErr := jm.rateInvoiceForTenant(ctx, tenantID, periodStart, periodEnd, tier, true, baseProviderManaged, perClusterUsage, perClusterDimensioned)
 		if ratingErr != nil {
 			jm.logger.WithError(ratingErr).WithField("tenant_id", tenantID).Error("Failed to rate usage for invoice")
@@ -1557,15 +1580,12 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		// subscription period advances happen until ops resolves and
 		// re-finalizes. Lines persist for ops visibility.
 		status := "pending"
-		switch {
-		case len(ratingResult.ManualReviewReasons) > 0:
+		if len(ratingResult.ManualReviewReasons) > 0 {
 			status = "manual_review"
 			jm.logger.WithFields(logging.Fields{
 				"tenant_id": tenantID,
 				"reasons":   strings.Join(ratingResult.ManualReviewReasons, "; "),
 			}).Warn("Invoice routed to manual_review; finalization halted")
-		case totalDec.IsZero():
-			status = "paid"
 		}
 
 		// Build flat usage_details - all metrics at top level for email and API
@@ -1618,6 +1638,7 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		// without their line-item audit trail. The subscription period advances
 		// in the same transaction so a finalized invoice cannot leave the
 		// subscription pointing at the already-billed period.
+		var collectionDecision *invoiceCollectionDecision
 		err = withTx(ctx, jm.db, func(tx *sql.Tx) error {
 			var txErr error
 			if len(ratingResult.ManualReviewReasons) == 0 {
@@ -1632,9 +1653,38 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 				if totalDec.IsNegative() {
 					totalDec = decimal.Zero
 				}
+				totalDec = totalDec.Round(2)
+				if collectionProvider != "" {
+					decision, decisionErr := applyInvoiceCollectionMinimumTx(
+						ctx, tx, tenantID, collectionProvider, currency,
+						totalDec.Mul(decimal.NewFromInt(100)).IntPart(),
+					)
+					if decisionErr != nil {
+						return fmt.Errorf("apply invoice collection minimum: %w", decisionErr)
+					}
+					collectionDecision = &decision
+					usageDetails["collection"] = map[string]interface{}{
+						"provider":              decision.Provider,
+						"minimum_cents":         decision.MinimumCents,
+						"opening_balance_cents": decision.OpeningBalanceCents,
+						"current_charge_cents":  decision.CurrentChargeCents,
+						"collected_cents":       decision.CollectedCents,
+						"closing_balance_cents": decision.ClosingBalanceCents,
+						"outcome":               decision.Outcome,
+					}
+					usageJSON, txErr = json.Marshal(usageDetails)
+					if txErr != nil {
+						return fmt.Errorf("marshal invoice collection details: %w", txErr)
+					}
+					totalDec = decimal.NewFromInt(decision.CollectedCents).Div(decimal.NewFromInt(100))
+				}
 				if totalDec.IsZero() {
 					status = "paid"
+				} else {
+					status = "pending"
 				}
+			} else {
+				totalDec = totalDec.Round(2)
 			}
 
 			// Bind decimals as strings into NUMERIC columns so no float64 rounding
@@ -1694,6 +1744,12 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 			txErr = persistInvoiceLineItems(ctx, tx, invoiceID, tenantID, ratingResult)
 			if txErr != nil {
 				return txErr
+			}
+			if collectionDecision != nil {
+				txErr = persistInvoiceCollectionDecisionTx(ctx, tx, invoiceID, tenantID, *collectionDecision)
+				if txErr != nil {
+					return txErr
+				}
 			}
 			if status != "manual_review" {
 				_, txErr = tx.ExecContext(ctx, `
@@ -1798,26 +1854,27 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 
 		// Overage collection. Provider subscriptions auto-charge the base;
 		// Purser collects the remaining invoice amount after prepaid credit.
-		// Branch by the tenant's stored provider id so each side only sees the
-		// tenants it can charge — the helper itself is a no-op if the tenant's
-		// not on that provider. Webhook reconciliation routes through the
-		// shared partial-payment-aware settlement path regardless of provider.
+		// Route through exactly one selected provider. Stale IDs from a prior
+		// provider switch cannot cause a second charge. Webhook reconciliation
+		// uses the shared partial-payment-aware settlement path regardless of
+		// provider.
 		providerChargeDec := totalDec
-		if meteredDec.LessThan(providerChargeDec) {
-			providerChargeDec = meteredDec
-		}
 		if status == "pending" && providerChargeDec.GreaterThan(decimal.Zero) {
-			if chargeErr := jm.chargeMollieOverage(ctx, tenantID, invoiceID, providerChargeDec, currency); chargeErr != nil {
-				jm.logger.WithError(chargeErr).WithFields(logging.Fields{
-					"tenant_id":  tenantID,
-					"invoice_id": invoiceID,
-				}).Warn("Failed to trigger Mollie overage charge")
-			}
-			if chargeErr := jm.chargeStripeOverage(ctx, tenantID, invoiceID, providerChargeDec, currency); chargeErr != nil {
-				jm.logger.WithError(chargeErr).WithFields(logging.Fields{
-					"tenant_id":  tenantID,
-					"invoice_id": invoiceID,
-				}).Warn("Failed to trigger Stripe off-session overage charge")
+			switch collectionProvider {
+			case "mollie":
+				if chargeErr := jm.chargeMollieOverage(ctx, tenantID, invoiceID, providerChargeDec, currency); chargeErr != nil {
+					jm.logger.WithError(chargeErr).WithFields(logging.Fields{
+						"tenant_id":  tenantID,
+						"invoice_id": invoiceID,
+					}).Warn("Failed to trigger Mollie overage charge")
+				}
+			case "stripe":
+				if chargeErr := jm.chargeStripeOverage(ctx, tenantID, invoiceID, providerChargeDec, currency); chargeErr != nil {
+					jm.logger.WithError(chargeErr).WithFields(logging.Fields{
+						"tenant_id":  tenantID,
+						"invoice_id": invoiceID,
+					}).Warn("Failed to trigger Stripe off-session overage charge")
+				}
 			}
 		}
 
@@ -1974,8 +2031,8 @@ const maxProviderPaymentAttempts = 3
 // the recurring base on its own invoice; Purser owns the overage invoice
 // and the off-session collection of it. Each call records a
 // billing_payment_attempts row with a deterministic Stripe idempotency
-// key (invoice_id + attempt_number) so a half-failed attempt cannot
-// double-charge. SCA-required outcomes are persisted as a customer-action
+// key. Transport-level retries reuse that same key, so an ambiguous API
+// response cannot create a second external charge. SCA-required outcomes are persisted as a customer-action
 // state on payment_provider_intents rather than being treated as a
 // failure — the customer must reauthorize before retry.
 func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoiceID string, overageAmount decimal.Decimal, currency string) error {
@@ -2007,6 +2064,17 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 	}
 	if jm.billing.stripeClient == nil {
 		return fmt.Errorf("stripe client not configured for active Stripe subscription")
+	}
+	paymentMethodID, err := jm.billing.stripeClient.ResolveDefaultPaymentMethod(ctx, stripeCustomerID.String, stripeSubscriptionID.String)
+	if err != nil {
+		return fmt.Errorf("resolve Stripe payment method: %w", err)
+	}
+	if paymentMethodID == "" {
+		jm.logger.WithFields(logging.Fields{
+			"tenant_id":  tenantID,
+			"invoice_id": invoiceID,
+		}).Warn("Skipping automatic Stripe overage collection because no default payment method is configured")
+		return nil
 	}
 
 	if amountCents <= 0 {
@@ -2048,17 +2116,18 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 	// leaves a trace operators can reconcile against the orphan Stripe
 	// PaymentIntent if one was created.
 	var providerIntentID string
+	var providerCallCount int
 	if intentErr := jm.db.QueryRowContext(ctx, `
 		INSERT INTO purser.payment_provider_intents (
 			tenant_id, provider, purpose, local_reference_type, local_reference_id,
-			provider_customer_id, status, currency, amount_cents, idempotency_key
+			provider_customer_id, status, currency, amount_cents, idempotency_key, attempt_count
 		) VALUES ($1, 'stripe', 'stripe_overage_charge', 'invoice', $2::uuid,
-		          $3, 'pending', $4, $5, $6)
+		          $3, 'pending', $4, $5, $6, 1)
 		ON CONFLICT (provider, idempotency_key) DO UPDATE SET
 			attempt_count = purser.payment_provider_intents.attempt_count + 1,
 			updated_at = NOW()
-		RETURNING id
-	`, tenantID, invoiceID, stripeCustomerID.String, currency, amountCents, intentKey).Scan(&providerIntentID); intentErr != nil {
+		RETURNING id, attempt_count
+	`, tenantID, invoiceID, stripeCustomerID.String, currency, amountCents, intentKey).Scan(&providerIntentID, &providerCallCount); intentErr != nil {
 		return fmt.Errorf("insert payment_provider_intents: %w", intentErr)
 	}
 	// Tie the billing_payments row to the canonical intent.
@@ -2088,6 +2157,7 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 
 	result, chargeErr := jm.billing.stripeClient.ChargeOffSession(ctx, billingstripe.OffSessionChargeParams{
 		CustomerID:       stripeCustomerID.String,
+		PaymentMethodID:  paymentMethodID,
 		TenantID:         tenantID,
 		InvoiceID:        invoiceID,
 		BillingPaymentID: paymentID,
@@ -2097,7 +2167,7 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 		Description:      fmt.Sprintf("Usage overage for invoice %s", invoiceID),
 	})
 	if chargeErr != nil {
-		terminal := attemptNumber >= maxProviderPaymentAttempts
+		terminal := providerCallCount >= maxProviderPaymentAttempts
 		intentStatus := "provider_call_failed"
 		var nextRetry any = time.Now().Add(1 * time.Hour)
 		if terminal {
@@ -2184,6 +2254,13 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 		`, result.FailureCode, result.FailureMessage, paymentID, attemptNumber); attemptUpdateErr != nil {
 			jm.logger.WithError(attemptUpdateErr).WithField("payment_id", paymentID).Warn("mark attempt sca_required")
 		}
+		if _, markErr := jm.db.ExecContext(ctx, `
+			UPDATE purser.billing_payments
+			SET status = 'failed', updated_at = NOW()
+			WHERE id = $1 AND status = 'pending'
+		`, paymentID); markErr != nil {
+			jm.logger.WithError(markErr).WithField("payment_id", paymentID).Warn("release Stripe overage reservation requiring SCA")
+		}
 		// Off-session SCA cannot be completed off-session, and the parked
 		// PaymentIntent is not resumable by a payment-method change. The real
 		// resume path is on-session: the overage invoice stays pending/overdue
@@ -2192,7 +2269,7 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 		// cover the invoice if they do not act.
 		actionURL := strings.TrimSpace(config.GetEnv("WEBAPP_PUBLIC_URL", ""))
 		if actionURL != "" {
-			actionURL = strings.TrimRight(actionURL, "/") + "/account/billing"
+			actionURL = strings.TrimRight(actionURL, "/") + "/account/billing?invoice=" + url.QueryEscape(invoiceID)
 		}
 		jm.logger.WithFields(logging.Fields{
 			"tenant_id":         tenantID,
@@ -2315,10 +2392,11 @@ func (jm *JobManager) nextProviderPaymentAttempt(ctx context.Context, provider, 
 	if status != "provider_call_failed" {
 		return 0, nil
 	}
-	if attemptNumber >= maxProviderPaymentAttempts {
-		return 0, nil
-	}
-	return attemptNumber + 1, nil
+	// A provider_call_failed result is ambiguous: the provider may have
+	// accepted the request even though the response never reached us. Reuse
+	// the same logical attempt and idempotency key. payment_provider_intents
+	// tracks the bounded number of actual API calls separately.
+	return attemptNumber, nil
 }
 
 // chargeMollieOverage triggers an on-demand recurring-sequence charge against
@@ -2327,7 +2405,8 @@ func (jm *JobManager) nextProviderPaymentAttempt(ctx context.Context, provider, 
 // needs explicit collection. A pending billing_payments row is inserted up
 // front so updateInvoicePaymentStatus can flip it confirmed when the webhook
 // arrives. Each provider call is recorded as a billing_payment_attempts row
-// keyed by a deterministic idempotency_key so retries do not double-charge,
+// keyed by a deterministic idempotency_key which is reused by transport
+// retries so an ambiguous response cannot double-charge,
 // and the mandate is rechecked just before the API call so a revoked mandate
 // is flagged terminal rather than failing in a loop.
 func (jm *JobManager) chargeMollieOverage(ctx context.Context, tenantID, invoiceID string, overageAmount decimal.Decimal, currency string) error {
@@ -2413,17 +2492,18 @@ func (jm *JobManager) chargeMollieOverage(ctx context.Context, tenantID, invoice
 	}
 
 	var providerIntentID string
+	var providerCallCount int
 	if intentErr := jm.db.QueryRowContext(ctx, `
 		INSERT INTO purser.payment_provider_intents (
 			tenant_id, provider, purpose, local_reference_type, local_reference_id,
-			provider_customer_id, status, currency, amount_cents, idempotency_key
+			provider_customer_id, status, currency, amount_cents, idempotency_key, attempt_count
 		) VALUES ($1, 'mollie', 'mollie_overage_charge', 'invoice', $2::uuid,
-		          $3, 'pending', $4, $5, $6)
+		          $3, 'pending', $4, $5, $6, 1)
 		ON CONFLICT (provider, idempotency_key) DO UPDATE SET
 			attempt_count = purser.payment_provider_intents.attempt_count + 1,
 			updated_at = NOW()
-		RETURNING id
-	`, tenantID, invoiceID, mollieCustomerID, currency, amountCents, idemKey).Scan(&providerIntentID); intentErr != nil {
+		RETURNING id, attempt_count
+	`, tenantID, invoiceID, mollieCustomerID, currency, amountCents, idemKey).Scan(&providerIntentID, &providerCallCount); intentErr != nil {
 		return fmt.Errorf("insert Mollie payment_provider_intents: %w", intentErr)
 	}
 	if _, linkErr := jm.db.ExecContext(ctx, `
@@ -2474,7 +2554,7 @@ func (jm *JobManager) chargeMollieOverage(ctx context.Context, tenantID, invoice
 		if mandateRevoked {
 			attemptStatus = "expired"
 			nextRetry = nil
-		} else if attemptNumber >= maxProviderPaymentAttempts {
+		} else if providerCallCount >= maxProviderPaymentAttempts {
 			nextRetry = nil
 		}
 		if _, attemptErr := jm.db.ExecContext(ctx, `
@@ -2488,7 +2568,7 @@ func (jm *JobManager) chargeMollieOverage(ctx context.Context, tenantID, invoice
 		`, attemptStatus, mollieFailureCode(err), err.Error(), nextRetry, paymentID, attemptNumber); attemptErr != nil {
 			jm.logger.WithError(attemptErr).WithField("payment_id", paymentID).Warn("update billing_payment_attempt on failure")
 		}
-		if mandateRevoked || attemptNumber >= maxProviderPaymentAttempts {
+		if mandateRevoked || providerCallCount >= maxProviderPaymentAttempts {
 			if _, markErr := jm.db.ExecContext(ctx, `
 				UPDATE purser.billing_payments
 				SET status = 'failed', updated_at = NOW()
@@ -2509,7 +2589,7 @@ func (jm *JobManager) chargeMollieOverage(ctx context.Context, tenantID, invoice
 			}
 		}
 		intentStatus := "provider_call_failed"
-		if mandateRevoked || attemptNumber >= maxProviderPaymentAttempts {
+		if mandateRevoked || providerCallCount >= maxProviderPaymentAttempts {
 			intentStatus = "terminal_failed"
 		}
 		if _, intentErr := jm.db.ExecContext(ctx, `
@@ -2684,10 +2764,16 @@ func nextUTCStart(hour int) time.Time {
 
 // runPaymentRetry retries failed payments and sends reminders
 func (jm *JobManager) runPaymentRetry(ctx context.Context) {
-	ticker := time.NewTicker(4 * time.Hour) // Run every 4 hours
-	defer ticker.Stop()
+	retryTicker := time.NewTicker(time.Hour)
+	reminderTimer := time.NewTimer(time.Until(nextUTCStart(9)))
+	defer retryTicker.Stop()
+	defer reminderTimer.Stop()
 
 	jm.logger.Info("Starting payment retry job")
+	// Reconcile due provider calls at startup. The provider idempotency key is
+	// stable across retries, so this is safe after a crash or restart.
+	jm.retryProviderPaymentAttempts(ctx)
+	jm.sendPaymentReminders(ctx)
 
 	for {
 		select {
@@ -2695,38 +2781,12 @@ func (jm *JobManager) runPaymentRetry(ctx context.Context) {
 			return
 		case <-jm.stopCh:
 			return
-		case <-ticker.C:
-			jm.retryFailedPayments(ctx)
+		case <-retryTicker.C:
 			jm.retryProviderPaymentAttempts(ctx)
+		case <-reminderTimer.C:
 			jm.sendPaymentReminders(ctx)
+			reminderTimer.Reset(time.Until(nextUTCStart(9)))
 		}
-	}
-}
-
-// retryFailedPayments retries payments that failed due to temporary issues
-func (jm *JobManager) retryFailedPayments(ctx context.Context) {
-	// Mark failed traditional payments for retry (crypto payments don't need retry)
-	_, err := jm.db.ExecContext(ctx, `
-		UPDATE purser.billing_payments bp
-		SET status = 'pending', updated_at = NOW()
-		WHERE bp.status = 'failed'
-		  AND bp.method = 'card'
-		  AND bp.created_at > NOW() - INTERVAL '24 hours'
-		  AND bp.updated_at < NOW() - INTERVAL '1 hour'
-		  AND EXISTS (
-			SELECT 1
-			FROM purser.billing_invoices bi
-			WHERE bi.id = bp.invoice_id
-			  AND bi.status IN ('pending', 'overdue')
-		  )
-	`)
-
-	if err != nil {
-		jm.logger.WithFields(logging.Fields{
-			"error": err,
-		}).Error("Failed to retry payments")
-	} else {
-		jm.logger.Info("Marked eligible failed payments for retry")
 	}
 }
 
@@ -2792,80 +2852,48 @@ func (jm *JobManager) retryProviderPaymentAttempts(ctx context.Context) {
 	}
 }
 
-// sendPaymentReminders sends reminders for overdue invoices
+// sendPaymentReminders marks invoices overdue and stages one durable reminder
+// at 1, 7, 14, and 30 days past due. The outbox worker owns SMTP retries.
 func (jm *JobManager) sendPaymentReminders(ctx context.Context) {
-	// Get overdue invoices with tenant subscription information
-	rows, err := jm.db.QueryContext(ctx, `
-		SELECT bi.id, bi.tenant_id, bi.amount, bi.currency, bi.due_date,
-		       ts.billing_email, bi.status
-		FROM purser.billing_invoices bi
-		JOIN purser.tenant_subscriptions ts ON bi.tenant_id = ts.tenant_id
-		WHERE bi.status IN ('pending', 'overdue')
-		  AND bi.due_date < NOW()
-		  AND bi.due_date > NOW() - INTERVAL '30 days'
-		  AND ts.status = 'active'
-	`)
-
-	if err != nil {
-		jm.logger.WithFields(logging.Fields{
-			"error": err,
-		}).Error("Failed to fetch overdue invoices")
+	if _, err := jm.db.ExecContext(ctx, `
+		UPDATE purser.billing_invoices
+		SET status = 'overdue', updated_at = NOW()
+		WHERE status = 'pending' AND due_date < NOW()
+	`); err != nil {
+		jm.logger.WithError(err).Error("Failed to mark invoices overdue")
 		return
 	}
-	defer func() { _ = rows.Close() }()
 
-	var overdueCount int
-	for rows.Next() {
-		var invoiceID, tenantID, currency, billingEmail, invoiceStatus string
-		var amount float64
-		var dueDate time.Time
-
-		err = rows.Scan(&invoiceID, &tenantID, &amount, &currency, &dueDate, &billingEmail, &invoiceStatus)
-		if err != nil {
-			continue
-		}
-
-		overdueCount++
-		daysPastDue := int(time.Since(dueDate).Hours() / 24)
-
-		if invoiceStatus == "pending" {
-			_, execErr := jm.db.ExecContext(ctx, `
-					UPDATE purser.billing_invoices
-					SET status = 'overdue', updated_at = NOW()
-					WHERE id = $1 AND status = 'pending'
-				`, invoiceID)
-			if execErr != nil {
-				jm.logger.WithFields(logging.Fields{
-					"error":      execErr,
-					"invoice_id": invoiceID,
-				}).Warn("Failed to mark invoice overdue")
-			}
-		}
-
-		jm.logger.WithFields(logging.Fields{
-			"invoice_id":    invoiceID,
-			"tenant_id":     tenantID,
-			"amount":        amount,
-			"currency":      currency,
-			"days_past_due": daysPastDue,
-		}).Warn("Invoice is overdue - reminder needed")
-
-		// Send overdue reminder email
-		if billingEmail != "" {
-			err = jm.emailService.SendOverdueReminderEmail(billingEmail, "", invoiceID, amount, currency, daysPastDue)
-			if err != nil {
-				jm.logger.WithError(err).WithFields(logging.Fields{
-					"billing_email": billingEmail,
-					"invoice_id":    invoiceID,
-				}).Error("Failed to send overdue reminder email")
-			}
-		}
+	result, err := jm.db.ExecContext(ctx, `
+		INSERT INTO purser.invoice_email_outbox
+			(invoice_id, tenant_id, recipient, notification_type, reminder_stage)
+		SELECT bi.id, bi.tenant_id, BTRIM(ts.billing_email), 'overdue_reminder', stage.reminder_stage
+		FROM purser.billing_invoices bi
+		JOIN purser.tenant_subscriptions ts ON ts.tenant_id = bi.tenant_id
+		CROSS JOIN LATERAL (
+			SELECT MAX(candidate) AS reminder_stage
+			FROM UNNEST(ARRAY[1, 7, 14, 30]) AS candidate
+			WHERE candidate <= FLOOR(EXTRACT(EPOCH FROM (NOW() - bi.due_date)) / 86400)
+		) stage
+		WHERE bi.status = 'overdue'
+		  AND ts.status = 'active'
+		  AND BTRIM(COALESCE(ts.billing_email, '')) <> ''
+		  AND stage.reminder_stage IS NOT NULL
+		  AND bi.amount > COALESCE((
+		      SELECT SUM(bp.amount - (COALESCE(bp.reversed_amount_cents, 0)::numeric / 100))
+		      FROM purser.billing_payments bp
+		      WHERE bp.invoice_id = bi.id
+		        AND bp.status = 'confirmed'
+		        AND bp.currency = bi.currency
+		  ), 0)
+		ON CONFLICT (invoice_id, notification_type, reminder_stage) DO NOTHING
+	`)
+	if err != nil {
+		jm.logger.WithError(err).Error("Failed to stage overdue invoice reminders")
+		return
 	}
-
-	if overdueCount > 0 {
-		jm.logger.WithFields(logging.Fields{
-			"overdue_count": overdueCount,
-		}).Info("Processed payment reminders")
+	if count, countErr := result.RowsAffected(); countErr == nil && count > 0 {
+		jm.logger.WithField("reminder_count", count).Info("Staged overdue invoice reminders")
 	}
 }
 
@@ -2960,7 +2988,8 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 		if usageValue <= 0 {
 			continue
 		}
-		dimensionJSON, marshalErr := json.Marshal(meter.Dimensions)
+		dimensions := normalizedUsageDimensions(meter.Dimensions)
+		dimensionJSON, marshalErr := json.Marshal(dimensions)
 		if marshalErr != nil {
 			return nil, fmt.Errorf("marshal dimensions for %s: %w", usageType, marshalErr)
 		}
@@ -2971,7 +3000,7 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 			"source_id":     summary.SourceID,
 			"report_id":     summary.ReportID,
 			"unit":          meter.Unit,
-			"dimensions":    meter.Dimensions,
+			"dimensions":    dimensions,
 			"source_region": summary.SourceRegion,
 		}
 
@@ -3011,7 +3040,7 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 				(tenant_id, cluster_id, usage_type, unit, dimensions, dimension_key,
 				 source_id, report_id, usage_value, usage_details,
 				 period_start, period_end, granularity, value_kind, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
+			VALUES ($1, $2, $3, $4, COALESCE($5::jsonb, '{}'::jsonb), $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
 			ON CONFLICT (tenant_id, cluster_id, source_id, usage_type, dimension_key, period_start, period_end) DO UPDATE SET
 				usage_value = EXCLUDED.usage_value,
 				report_id = EXCLUDED.report_id,
@@ -3019,7 +3048,7 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 				granularity = EXCLUDED.granularity,
 				value_kind = EXCLUDED.value_kind,
 				updated_at = NOW()
-		`, summary.TenantID, summary.ClusterID, usageType, meter.Unit, meter.Dimensions, dimensionKey,
+		`, summary.TenantID, summary.ClusterID, usageType, meter.Unit, dimensions, dimensionKey,
 			summary.SourceID, summary.ReportID, usageValue, usageDetails,
 			periodStart, periodEnd, granularity, valueKind)
 
@@ -3033,7 +3062,7 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 			clusterID:    summary.ClusterID,
 			usageType:    usageType,
 			unit:         meter.Unit,
-			dimensions:   meter.Dimensions,
+			dimensions:   dimensions,
 			usageValue:   usageValue,
 			usageDetails: usageDetails,
 		})
@@ -3062,7 +3091,8 @@ func (jm *JobManager) persistProviderUsage(ctx context.Context, summary models.U
 		if !rating.ValidMeter(rating.Meter(rec.Meter.Meter)) {
 			return fmt.Errorf("invalid provider usage_type %q", rec.Meter.Meter)
 		}
-		dimensionJSON, err := json.Marshal(rec.Meter.Dimensions)
+		dimensions := normalizedUsageDimensions(rec.Meter.Dimensions)
+		dimensionJSON, err := json.Marshal(dimensions)
 		if err != nil {
 			return fmt.Errorf("marshal provider dimensions: %w", err)
 		}
@@ -3074,7 +3104,7 @@ func (jm *JobManager) persistProviderUsage(ctx context.Context, summary models.U
 			"report_id":           summary.ReportID,
 			"provider_tenant_id":  rec.ProviderTenantID,
 			"provider_cluster_id": rec.ProviderClusterID,
-			"dimensions":          rec.Meter.Dimensions,
+			"dimensions":          dimensions,
 		}
 		_, err = jm.db.ExecContext(ctx, `
 			INSERT INTO purser.provider_usage_records (
@@ -3084,7 +3114,7 @@ func (jm *JobManager) persistProviderUsage(ctx context.Context, summary models.U
 				source_id, report_id, period_start, period_end,
 				granularity, value_kind, source, usage_details
 			) VALUES (
-				$1, $2, $3, $4, $5, $6, $7, $8, $9,
+				$1, $2, $3, $4, $5, $6, $7, COALESCE($8::jsonb, '{}'::jsonb), $9,
 				$10, $11, $12, $13, 'minute_5', 'delta', $14, $15
 			)
 			ON CONFLICT (
@@ -3102,7 +3132,7 @@ func (jm *JobManager) persistProviderUsage(ctx context.Context, summary models.U
 				updated_at = NOW()
 		`, summary.TenantID, summary.ClusterID,
 			rec.ProviderTenantID, rec.ProviderClusterID,
-			rec.Meter.Meter, rec.Meter.Unit, rec.Meter.Quantity, rec.Meter.Dimensions, dimensionKey,
+			rec.Meter.Meter, rec.Meter.Unit, rec.Meter.Quantity, dimensions, dimensionKey,
 			summary.SourceID, summary.ReportID, periodStart, periodEnd, source, details)
 		if err != nil {
 			return fmt.Errorf("upsert provider usage %s/%s: %w", rec.ProviderTenantID, rec.Meter.Meter, err)
@@ -3140,6 +3170,7 @@ func (jm *JobManager) persistUsageAdjustments(ctx context.Context, summary model
 				return nil, fmt.Errorf("resolve adjustment unit for %s: %w", adj.UsageType, err)
 			}
 		}
+		adj.Dimensions = normalizedUsageDimensions(adj.Dimensions)
 		dimensionJSON, err := json.Marshal(adj.Dimensions)
 		if err != nil {
 			return nil, fmt.Errorf("marshal adjustment dimensions: %w", err)
@@ -3153,7 +3184,7 @@ func (jm *JobManager) persistUsageAdjustments(ctx context.Context, summary model
 				period_start, period_end, value_kind, status,
 				source_system, source_id, reason, details
 			) VALUES (
-				$1, $2, $3, $4, $5, $6, $7,
+				$1, $2, $3, $4, COALESCE($5::jsonb, '{}'::jsonb), $6, $7,
 				$8, $9, 'correction_delta', 'applied',
 				$10, $11, $12, $13
 			)

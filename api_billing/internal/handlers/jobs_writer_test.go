@@ -2,10 +2,12 @@ package handlers
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -24,6 +26,17 @@ type sqlArgFunc func(driver.Value) bool
 
 func (f sqlArgFunc) Match(v driver.Value) bool {
 	return f(v)
+}
+
+func isEmptyJSONObject(v driver.Value) bool {
+	switch value := v.(type) {
+	case string:
+		return value == "{}"
+	case []byte:
+		return string(value) == "{}"
+	default:
+		return false
+	}
 }
 
 func TestValidateUsageRecordAllowsCustomCanonicalMeter(t *testing.T) {
@@ -206,6 +219,43 @@ func TestProcessUsageSummaryPersistsCanonicalDeltaMeters(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+func TestProcessUsageSummaryPersistsAbsentDimensionsAsEmptyObject(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
+	start := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	end := start.Add(5 * time.Minute)
+	summary := models.UsageSummary{
+		TenantID: "00000000-0000-0000-0000-000000000001", ClusterID: "demo-media",
+		SourceID: "periscope-local", ReportID: strings.Repeat("a", 64),
+		PeriodStart: start, PeriodEnd: end,
+		Meters: []models.MeterQuantity{{
+			Meter: "peak_bandwidth_mbps", Unit: "megabit_per_second", Quantity: 0.058208,
+		}},
+	}
+	dimensionHash := sha256.Sum256([]byte("{}"))
+	mock.ExpectExec(`INSERT INTO purser\.usage_records`).
+		WithArgs(summary.TenantID, summary.ClusterID, "peak_bandwidth_mbps", "megabit_per_second",
+			sqlArgFunc(isEmptyJSONObject), fmt.Sprintf("%x", dimensionHash[:]), summary.SourceID,
+			summary.ReportID, 0.058208, sqlmock.AnyArg(), start, end, "minute_5", "delta").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	accepted, processErr := jm.processUsageSummary(context.Background(), summary, "kafka-test")
+	if processErr != nil {
+		t.Fatalf("processUsageSummary: %v", processErr)
+	}
+	if len(accepted) != 1 || accepted[0].dimensions == nil || len(accepted[0].dimensions) != 0 {
+		t.Fatalf("accepted dimensions = %#v, want non-nil empty object", accepted)
+	}
+	if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+		t.Fatal(expectationsErr)
 	}
 }
 
@@ -603,7 +653,7 @@ func TestChargeMollieOverageCreatesLocalPaymentBeforeProviderCharge(t *testing.T
 		WillReturnRows(sqlmock.NewRows([]string{"tx_id", "status"}).AddRow("", "pending"))
 	mock.ExpectQuery(`INSERT INTO purser\.payment_provider_intents`).
 		WithArgs("tenant-1", "invoice-1", "cst_123", "EUR", int64(1234), "mollie-overage:invoice-1:1").
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("00000000-0000-0000-0000-000000000111"))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "attempt_count"}).AddRow("00000000-0000-0000-0000-000000000111", 1))
 	mock.ExpectExec(`UPDATE purser\.billing_payments SET intent_id`).
 		WithArgs("00000000-0000-0000-0000-000000000111", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))

@@ -1,12 +1,10 @@
 package grpc
 
 import (
-	"context"
 	"testing"
 
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
-	"google.golang.org/grpc/metadata"
 )
 
 // TestDVRRetentionDays pins the retention default applied when a DVR policy (or
@@ -54,39 +52,4 @@ func TestClipProcessingSourceKind(t *testing.T) {
 			t.Fatalf("clipProcessingSourceKind(%v) = %q, want %q", tc.kind, got, tc.want)
 		}
 	}
-}
-
-// TestX402PaidFromMetadata pins the security-relevant gate that decides whether
-// an incoming request is treated as already-paid. Only an explicit affirmative
-// (1/true/yes, case- and space-insensitive) flips it true; missing metadata, a
-// missing header, or any other value must be false so a request is never
-// treated as paid by accident.
-func TestX402PaidFromMetadata(t *testing.T) {
-	t.Run("affirmative values are paid", func(t *testing.T) {
-		for _, v := range []string{"1", "true", "TRUE", "yes", " Yes "} {
-			ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x402-paid", v))
-			if !x402PaidFromMetadata(ctx) {
-				t.Fatalf("value %q should be treated as paid", v)
-			}
-		}
-	})
-
-	t.Run("non-affirmative and absent are not paid", func(t *testing.T) {
-		// No metadata at all.
-		if x402PaidFromMetadata(context.Background()) {
-			t.Fatal("missing metadata must not be treated as paid")
-		}
-		// Metadata present but header absent.
-		ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("other", "1"))
-		if x402PaidFromMetadata(ctx) {
-			t.Fatal("missing x402-paid header must not be treated as paid")
-		}
-		// Header present with non-affirmative values.
-		for _, v := range []string{"0", "false", "no", "", "maybe"} {
-			ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x402-paid", v))
-			if x402PaidFromMetadata(ctx) {
-				t.Fatalf("value %q must not be treated as paid", v)
-			}
-		}
-	})
 }

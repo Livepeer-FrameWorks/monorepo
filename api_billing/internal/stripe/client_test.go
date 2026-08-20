@@ -155,12 +155,13 @@ func installBackend(t *testing.T, b stripe.Backend) {
 
 func validChargeParams() OffSessionChargeParams {
 	return OffSessionChargeParams{
-		CustomerID:     "cus_1",
-		TenantID:       "tenant-1",
-		InvoiceID:      "inv-1",
-		AmountCents:    500,
-		Currency:       "EUR",
-		IdempotencyKey: "charge:inv-1:1",
+		CustomerID:      "cus_1",
+		PaymentMethodID: "pm_1",
+		TenantID:        "tenant-1",
+		InvoiceID:       "inv-1",
+		AmountCents:     500,
+		Currency:        "EUR",
+		IdempotencyKey:  "charge:inv-1:1",
 	}
 }
 
@@ -176,6 +177,7 @@ func TestChargeOffSession_InputGuards(t *testing.T) {
 	}{
 		{"missing idempotency key", func(p *OffSessionChargeParams) { p.IdempotencyKey = "" }},
 		{"missing customer id", func(p *OffSessionChargeParams) { p.CustomerID = "" }},
+		{"missing payment method id", func(p *OffSessionChargeParams) { p.PaymentMethodID = "" }},
 		{"non-positive amount", func(p *OffSessionChargeParams) { p.AmountCents = 0 }},
 		{"missing currency", func(p *OffSessionChargeParams) { p.Currency = "" }},
 	}

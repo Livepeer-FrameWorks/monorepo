@@ -34,12 +34,12 @@ func TestGetPaymentHeaderFromRequest(t *testing.T) {
 		}
 	})
 
-	t.Run("X-PAYMENT takes precedence", func(t *testing.T) {
+	t.Run("PAYMENT-SIGNATURE takes precedence", func(t *testing.T) {
 		req, _ := http.NewRequestWithContext(context.Background(), "GET", "/", nil)
 		req.Header.Set("X-PAYMENT", "x-payment-value")
 		req.Header.Set("PAYMENT-SIGNATURE", "sig-value")
-		if got := GetPaymentHeaderFromRequest(req); got != "x-payment-value" {
-			t.Errorf("got %q, want %q", got, "x-payment-value")
+		if got := GetPaymentHeaderFromRequest(req); got != "sig-value" {
+			t.Errorf("got %q, want %q", got, "sig-value")
 		}
 	})
 
@@ -124,11 +124,11 @@ func TestGetPaymentHeaderFromContext(t *testing.T) {
 		}
 	})
 
-	t.Run("x-payment takes precedence", func(t *testing.T) {
+	t.Run("payment-signature takes precedence", func(t *testing.T) {
 		md := metadata.Pairs("x-payment", "x-val", "payment-signature", "sig-val")
 		ctx := metadata.NewIncomingContext(context.Background(), md)
-		if got := GetPaymentHeaderFromContext(ctx); got != "x-val" {
-			t.Errorf("got %q, want %q", got, "x-val")
+		if got := GetPaymentHeaderFromContext(ctx); got != "sig-val" {
+			t.Errorf("got %q, want %q", got, "sig-val")
 		}
 	})
 }
@@ -291,6 +291,30 @@ func TestParsePaymentHeader(t *testing.T) {
 			t.Error("expected error for whitespace header")
 		}
 	})
+}
+
+func TestParsePaymentHeaderV2PreservesOfficialWire(t *testing.T) {
+	payloadJSON := []byte(`{"x402Version":2,"accepted":{"scheme":"exact","network":"eip155:8453","asset":"0xAsset","amount":"5000000","payTo":"0xToAddress","maxTimeoutSeconds":60,"extra":{"frameworks":{"quoteId":"quote-123"}}},"payload":{"signature":"0xabc123","authorization":{"from":"0xFromAddress","to":"0xToAddress","value":"5000000","validAfter":"0","validBefore":"9999999999","nonce":"0x01"}},"resource":{"url":"https://api.example.com/graphql"}}`)
+
+	result, err := ParsePaymentHeader(base64.StdEncoding.EncodeToString(payloadJSON))
+	if err != nil {
+		t.Fatalf("ParsePaymentHeader() error = %v", err)
+	}
+	if result.GetX402Version() != 2 || result.GetScheme() != "exact" || result.GetNetwork() != "eip155:8453" {
+		t.Fatalf("unexpected v2 envelope: %+v", result)
+	}
+	if !bytes.Equal(result.GetCanonicalPayloadJson(), payloadJSON) {
+		t.Fatal("canonical payload JSON was not preserved")
+	}
+	if result.GetAccepted().GetAmount() != "5000000" || result.GetAccepted().GetAsset() != "0xAsset" {
+		t.Fatalf("unexpected accepted requirements: %+v", result.GetAccepted())
+	}
+	if result.GetQuoteId() != "quote-123" {
+		t.Fatalf("quote id = %q, want quote-123", result.GetQuoteId())
+	}
+	if result.GetPayload().GetAuthorization().GetNonce() != "0x01" {
+		t.Fatal("authorization was not normalized for internal verification")
+	}
 }
 
 func TestBase64DecodeFallbackOrder(t *testing.T) {

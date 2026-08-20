@@ -32,12 +32,17 @@ type CryptoMonitor struct {
 	db              *sql.DB
 	logger          logging.Logger
 	decklogClient   *decklogclient.BatchedClient
+	priceFeed       *PriceFeed
 	stopCh          chan struct{}
 	includeTestnets bool
+	rpc             *RPCClient
+	metrics         *PurserMetrics
+	taxInvoices     *X402Handler
 }
 
 // CryptoTransaction represents a blockchain transaction
 type CryptoTransaction struct {
+	EventID       string    `json:"-"`
 	Hash          string    `json:"hash"`
 	From          string    `json:"from"`
 	To            string    `json:"to"`
@@ -66,20 +71,31 @@ type PendingWallet struct {
 	QuotedUSDToEURRate      *decimal.Decimal
 	QuoteSource             string
 	CreditedAmountCurrency  string
+	ClientIP                string
 
 	// Detected-but-not-yet-confirmed state.
-	Status string // 'pending' or 'confirming'
-	TxHash string // populated once a matching tx has been seen
+	Status    string // 'pending' or 'confirming'
+	TxHash    string // populated once a matching tx has been seen
+	ExpiresAt time.Time
 }
 
 // NewCryptoMonitor creates a new crypto payment monitor
 func NewCryptoMonitor(database *sql.DB, log logging.Logger, decklogSvc *decklogclient.BatchedClient) *CryptoMonitor {
+	return NewCryptoMonitorWithMetrics(database, log, decklogSvc, nil)
+}
+
+func NewCryptoMonitorWithMetrics(database *sql.DB, log logging.Logger, decklogSvc *decklogclient.BatchedClient, metrics *PurserMetrics) *CryptoMonitor {
+	rpc := NewRPCClient()
 	return &CryptoMonitor{
 		db:              database,
 		logger:          log,
 		decklogClient:   decklogSvc,
+		priceFeed:       NewPriceFeed(rpc, log),
 		stopCh:          make(chan struct{}),
 		includeTestnets: config.X402IncludeTestnetsEnabled(),
+		rpc:             rpc,
+		metrics:         metrics,
+		taxInvoices:     NewX402Handler(database, log, NewHDWallet(database, log), rpc, nil),
 	}
 }
 
@@ -91,21 +107,9 @@ func (cm *CryptoMonitor) Start(ctx context.Context) {
 		"include_testnets": cm.includeTestnets,
 	}).Info("Starting crypto payment monitor (multi-chain)")
 
-	// Check if at least one explorer API key is configured
-	hasAnyKey := false
-	for _, n := range networks {
-		if n.GetExplorerAPIKey() != "" {
-			hasAnyKey = true
-			break
-		}
-	}
-	if !hasAnyKey {
-		cm.logger.Warn("No block explorer API keys configured - crypto payment detection disabled")
-		return
-	}
-
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
+	cm.scanRPCDeposits(ctx)
 
 	for {
 		select {
@@ -116,7 +120,7 @@ func (cm *CryptoMonitor) Start(ctx context.Context) {
 			cm.logger.Info("Crypto monitor stopping")
 			return
 		case <-ticker.C:
-			cm.checkPendingPayments(ctx)
+			cm.scanRPCDeposits(ctx)
 		}
 	}
 }
@@ -129,7 +133,9 @@ func (cm *CryptoMonitor) Stop() {
 // checkPendingPayments checks all active crypto wallets for payments.
 // Handles both invoice payments and prepaid top-ups across all supported networks.
 func (cm *CryptoMonitor) checkPendingPayments(ctx context.Context) {
-	// Query all active wallets - both invoice and prepaid
+	// Query all unsettled wallets - both invoice and prepaid. Quote expiry ends
+	// the promised conversion, not our custody responsibility: an address
+	// remains observable so late funds cannot silently disappear.
 	// For invoice: join with billing_invoices to get expected amount
 	// For prepaid: use expected_amount_cents directly
 	rows, err := cm.db.QueryContext(ctx, `
@@ -149,12 +155,13 @@ func (cm *CryptoMonitor) checkPendingPayments(ctx context.Context) {
 			cw.quoted_usd_to_eur_rate,
 			cw.quote_source,
 			cw.credited_amount_currency,
+			cw.client_ip,
+			cw.expires_at,
 			bi.amount as invoice_amount,
 			bi.currency as invoice_currency
 		FROM purser.crypto_wallets cw
 		LEFT JOIN purser.billing_invoices bi ON cw.invoice_id = bi.id AND bi.tenant_id = cw.tenant_id
 		WHERE cw.status IN ('pending', 'confirming')
-		  AND cw.expires_at > NOW()
 		  AND (
 			  (cw.purpose = 'invoice' AND bi.status IN ('pending', 'overdue'))
 			  OR cw.purpose = 'prepaid'
@@ -174,7 +181,7 @@ func (cm *CryptoMonitor) checkPendingPayments(ctx context.Context) {
 		var invoiceAmount sql.NullFloat64
 		var invoiceCurrency, invoiceID sql.NullString
 		var expectedAmountCents sql.NullInt64
-		var txHash, expectedBaseUnitsStr, quotedPriceUSDStr, quotedUSDToEURStr, quoteSource, creditedCurrency sql.NullString
+		var txHash, expectedBaseUnitsStr, quotedPriceUSDStr, quotedUSDToEURStr, quoteSource, creditedCurrency, clientIP sql.NullString
 
 		err := rows.Scan(
 			&wallet.ID,
@@ -192,6 +199,8 @@ func (cm *CryptoMonitor) checkPendingPayments(ctx context.Context) {
 			&quotedUSDToEURStr,
 			&quoteSource,
 			&creditedCurrency,
+			&clientIP,
+			&wallet.ExpiresAt,
 			&invoiceAmount,
 			&invoiceCurrency,
 		)
@@ -235,6 +244,9 @@ func (cm *CryptoMonitor) checkPendingPayments(ctx context.Context) {
 		}
 		if creditedCurrency.Valid {
 			wallet.CreditedAmountCurrency = creditedCurrency.String
+		}
+		if clientIP.Valid {
+			wallet.ClientIP = clientIP.String
 		}
 
 		cm.checkWalletForPayments(ctx, wallet)
@@ -348,12 +360,77 @@ func (cm *CryptoMonitor) checkWalletForPayments(ctx context.Context, wallet Pend
 			continue
 		}
 		if match.confirmed {
+			if wallet.Purpose == "invoice" && wallet.ExpectedAmountBaseUnits != nil && match.txBaseUnits.Cmp(wallet.ExpectedAmountBaseUnits) < 0 {
+				reason := "invoice payment is below the exact quote"
+				cm.markDepositForReview(wallet, tx, match.txBaseUnits, reason)
+				return
+			}
+			if time.Now().After(wallet.ExpiresAt) {
+				if wallet.Purpose == "invoice" {
+					cm.markDepositForReview(wallet, tx, match.txBaseUnits, "invoice payment arrived after quote expiry")
+					return
+				}
+				if err := cm.refreshLatePrepaidValuation(ctx, &wallet, network); err != nil {
+					cm.logger.WithError(err).WithField("wallet_id", wallet.ID).Error("Late crypto top-up requires valuation review")
+					cm.markDepositForReview(wallet, tx, match.txBaseUnits, "late top-up valuation unavailable")
+					return
+				}
+			}
 			cm.confirmPayment(wallet, tx, match.txBaseUnits, match.txAmount)
 		} else {
 			cm.markConfirming(wallet, tx)
 		}
 		return
 	}
+}
+
+func (cm *CryptoMonitor) refreshLatePrepaidValuation(ctx context.Context, wallet *PendingWallet, network NetworkConfig) error {
+	price, err := cm.priceFeed.GetAssetUSDPrice(ctx, network, wallet.Asset)
+	if err != nil {
+		return err
+	}
+	wallet.QuotedPriceUSD = price.PriceUSD
+	wallet.QuoteSource = price.Source + ":late_receipt"
+	if strings.EqualFold(wallet.CreditedAmountCurrency, "EUR") {
+		rate, rateErr := GetEurUsdRate(cm.logger)
+		if rateErr != nil {
+			return rateErr
+		}
+		rateDecimal := decimal.NewFromFloat(rate)
+		wallet.QuotedUSDToEURRate = &rateDecimal
+	}
+	return nil
+}
+
+func (cm *CryptoMonitor) markDepositForReview(wallet PendingWallet, tx CryptoTransaction, baseUnits *big.Int, reason string) {
+	if baseUnits == nil {
+		return
+	}
+	result, err := cm.db.ExecContext(context.Background(), `
+		UPDATE purser.crypto_wallets
+		SET status = 'review_required',
+			tx_hash = $2,
+			received_amount_base_units = $3,
+			block_number = $4,
+			confirmations = $5,
+			detected_at = COALESCE(detected_at, NOW()),
+			updated_at = NOW()
+		WHERE id = $1 AND tenant_id = $6 AND status IN ('pending', 'confirming')
+	`, wallet.ID, tx.Hash, baseUnits.String(), tx.BlockNumber, tx.Confirmations, wallet.TenantID)
+	if err != nil {
+		cm.logger.WithError(err).WithField("wallet_id", wallet.ID).Error("Failed to retain crypto deposit for review")
+		return
+	}
+	if rows, rowsErr := result.RowsAffected(); rowsErr != nil || rows != 1 {
+		cm.logger.WithFields(logging.Fields{"wallet_id": wallet.ID, "tenant_id": wallet.TenantID}).Error("Crypto review update matched no tenant-scoped row")
+		return
+	}
+	cm.logger.WithFields(logging.Fields{
+		"wallet_id": wallet.ID,
+		"tenant_id": wallet.TenantID,
+		"tx_hash":   tx.Hash,
+		"reason":    reason,
+	}).Warn("Crypto deposit requires operator review")
 }
 
 // paymentMatch carries everything the caller needs to act on a tx without
@@ -392,19 +469,15 @@ func (cm *CryptoMonitor) evaluatePayment(tx CryptoTransaction, wallet PendingWal
 
 	amountSeen := false
 	switch {
+	case wallet.ExpectedAmountBaseUnits != nil && wallet.Purpose == "invoice":
+		// Every positive invoice deposit is observed. Only an exact quote match
+		// can settle automatically; partial and excess payments are retained for
+		// explicit allocation instead of silently marking the invoice paid.
+		amountSeen = baseUnits.Sign() > 0
 	case wallet.ExpectedAmountBaseUnits != nil:
-		// Compare on-chain base units against the locked quote. The quote already
-		// accounts for invoice/prepaid currency, including EUR via the locked ECB
-		// rate. Asset-specific tolerance: USDC has only 6 decimals so 0.1% covers
-		// wallet-rounding noise; 18-decimal assets truncate more aggressively in
-		// user-wallet UIs, so 0.5%.
-		toleranceBP := int64(995) // 0.5%
-		if wallet.Asset == "USDC" {
-			toleranceBP = 999 // 0.1%
-		}
-		minBaseUnits := new(big.Int).Mul(wallet.ExpectedAmountBaseUnits, big.NewInt(toleranceBP))
-		minBaseUnits.Div(minBaseUnits, big.NewInt(1000))
-		amountSeen = baseUnits.Cmp(minBaseUnits) >= 0
+		// Prepaid quotes require at least the requested amount, then credit the
+		// actual confirmed receipt so an overpayment is never discarded.
+		amountSeen = baseUnits.Cmp(wallet.ExpectedAmountBaseUnits) >= 0
 	default:
 		amountSeen = txAmountFloat >= expectedAmount*0.999
 	}
@@ -418,15 +491,13 @@ func (cm *CryptoMonitor) evaluatePayment(tx CryptoTransaction, wallet PendingWal
 	}
 }
 
-// markConfirming records that a matching deposit was seen but doesn't yet
-// have enough confirmations. Subsequent monitor ticks update `confirmations`
-// and eventually transition the row to `completed` via confirmPayment.
+// markConfirming preserves explorer-compatibility observations that have not
+// reached their network confirmation threshold. The JSON-RPC scanner records
+// only finalized events, but the compatibility monitor still calls this path.
+//
+//nolint:unused // Used by the explorer compatibility monitor.
 func (cm *CryptoMonitor) markConfirming(wallet PendingWallet, tx CryptoTransaction) {
 	ctx := context.Background()
-
-	// Same dedup guard as confirmPayment — a tx already credited against
-	// another wallet should not re-mark this one. The unique index on
-	// (network, tx_hash) would catch it but a clean error log is friendlier.
 	if tx.Hash != "" {
 		var exists bool
 		err := cm.db.QueryRowContext(ctx, `
@@ -447,42 +518,20 @@ func (cm *CryptoMonitor) markConfirming(wallet PendingWallet, tx CryptoTransacti
 	now := time.Now()
 	result, err := cm.db.ExecContext(ctx, `
 		UPDATE purser.crypto_wallets
-		SET status = 'confirming',
-		    tx_hash = $2,
-		    confirmations = $3,
-		    detected_at = COALESCE(detected_at, $4),
-		    updated_at = NOW()
-		WHERE id = $1
-		  AND tenant_id = $5
-		  AND status IN ('pending', 'confirming')
+		SET status = 'confirming', tx_hash = $2, confirmations = $3,
+		    detected_at = COALESCE(detected_at, $4), updated_at = NOW()
+		WHERE id = $1 AND tenant_id = $5 AND status IN ('pending', 'confirming')
 	`, wallet.ID, tx.Hash, tx.Confirmations, now, wallet.TenantID)
 	if err != nil {
-		cm.logger.WithFields(logging.Fields{
-			"error":     err,
-			"wallet_id": wallet.ID,
-			"tx_hash":   tx.Hash,
-		}).Error("Failed to mark wallet confirming")
+		cm.logger.WithFields(logging.Fields{"error": err, "wallet_id": wallet.ID, "tx_hash": tx.Hash}).Error("Failed to mark wallet confirming")
 		return
 	}
 	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		cm.logger.WithFields(logging.Fields{"error": err, "wallet_id": wallet.ID}).Error("Failed to read confirming update result")
+	if err != nil || rowsAffected == 0 {
+		cm.logger.WithFields(logging.Fields{"error": err, "wallet_id": wallet.ID, "tenant_id": wallet.TenantID}).Warn("Wallet confirming update did not converge")
 		return
 	}
-	if rowsAffected == 0 {
-		cm.logger.WithFields(logging.Fields{
-			"wallet_id": wallet.ID,
-			"tenant_id": wallet.TenantID,
-			"tx_hash":   tx.Hash,
-		}).Warn("Wallet confirming update matched no tenant-scoped row")
-		return
-	}
-
-	cm.logger.WithFields(logging.Fields{
-		"wallet_id":     wallet.ID,
-		"tx_hash":       tx.Hash,
-		"confirmations": tx.Confirmations,
-	}).Debug("Wallet marked confirming")
+	cm.logger.WithFields(logging.Fields{"wallet_id": wallet.ID, "tx_hash": tx.Hash, "confirmations": tx.Confirmations}).Debug("Wallet marked confirming")
 }
 
 // confirmPayment processes a confirmed crypto payment.
@@ -530,11 +579,16 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 
 	var creditedCents int64
 	var creditedCurrency string
+	var overpaymentCents int64
+	var overpaymentCurrency string
 	var invoicePayment *confirmedInvoicePayment
 
 	switch wallet.Purpose {
 	case "invoice":
 		invoicePayment, err = cm.confirmInvoicePayment(ctx, dbTx, wallet, tx, txAmount, now)
+		if err == nil {
+			overpaymentCents, overpaymentCurrency, err = cm.creditInvoiceOverpaymentTx(ctx, dbTx, wallet, txBaseUnits, now)
+		}
 	case "prepaid":
 		creditedCents, creditedCurrency, err = cm.confirmPrepaidTopup(ctx, dbTx, wallet, tx, txBaseUnits, now)
 	default:
@@ -580,10 +634,36 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 		}).Error("Wallet completion update matched no tenant-scoped row")
 		return
 	}
+	if tx.EventID != "" {
+		eventResult, eventErr := dbTx.ExecContext(ctx, `
+			UPDATE purser.crypto_deposit_events
+			SET status = 'allocated', wallet_id = $2, allocated_at = NOW(), allocation_error = NULL
+			WHERE id = $1 AND canonical AND status = 'confirmed'
+		`, tx.EventID, wallet.ID)
+		if eventErr != nil {
+			cm.logger.WithError(eventErr).WithField("event_id", tx.EventID).Error("Failed to allocate crypto deposit event")
+			return
+		}
+		eventRows, eventErr := eventResult.RowsAffected()
+		if eventErr != nil || eventRows != 1 {
+			cm.logger.WithField("event_id", tx.EventID).Error("Crypto deposit event was already allocated")
+			return
+		}
+	}
 
 	if err = dbTx.Commit(); err != nil {
 		cm.logger.WithFields(logging.Fields{"error": err}).Error("Failed to commit payment confirmation")
 		return
+	}
+	if wallet.Purpose == "prepaid" && cm.taxInvoices != nil {
+		amountEurCents, conversionErr := cryptoTopupAmountEurCents(wallet, creditedCents, creditedCurrency)
+		if conversionErr != nil {
+			cm.logger.WithError(conversionErr).WithField("wallet_id", wallet.ID).Error("Failed to determine direct crypto top-up invoice amount")
+		} else if _, invoiceErr := cm.taxInvoices.generateCryptoTopupInvoice(
+			ctx, wallet.TenantID, amountEurCents, "crypto_payment", tx.Hash, wallet.ClientIP, wallet.Network,
+		); invoiceErr != nil {
+			cm.logger.WithError(invoiceErr).WithField("wallet_id", wallet.ID).Error("Failed to ensure direct crypto top-up invoice")
+		}
 	}
 
 	cm.logger.WithFields(logging.Fields{
@@ -616,6 +696,13 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 				TxHash:    tx.Hash,
 				Network:   wallet.Network,
 			})
+			if overpaymentCents > 0 {
+				emitBillingEvent(cm.db, cm.logger, eventTopupCredited, wallet.TenantID, "topup", wallet.ID, &ipcpb.BillingEvent{
+					TopupId: wallet.ID, Amount: float64(overpaymentCents) / 100,
+					Currency: overpaymentCurrency, Provider: "crypto_overpayment",
+					Status: "credited", Asset: wallet.Asset, TxHash: tx.Hash, Network: wallet.Network,
+				})
+			}
 		}
 	} else if wallet.Purpose == "prepaid" {
 		emitBillingEvent(cm.db, cm.logger, eventTopupCredited, wallet.TenantID, "topup", wallet.ID, &ipcpb.BillingEvent{
@@ -629,6 +716,154 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 			Network:  wallet.Network,
 		})
 	}
+}
+
+func cryptoTopupAmountEurCents(wallet PendingWallet, creditedCents int64, creditedCurrency string) (int64, error) {
+	switch strings.ToUpper(creditedCurrency) {
+	case "EUR":
+		return creditedCents, nil
+	case "USD":
+		if wallet.QuotedUSDToEURRate == nil || wallet.QuotedUSDToEURRate.Sign() <= 0 {
+			return 0, fmt.Errorf("USD top-up is missing its locked USD/EUR rate")
+		}
+		return decimal.NewFromInt(creditedCents).Mul(*wallet.QuotedUSDToEURRate).Round(0).IntPart(), nil
+	default:
+		return 0, fmt.Errorf("unsupported crypto top-up invoice currency %q", creditedCurrency)
+	}
+}
+
+func (cm *CryptoMonitor) reconcileCompletedCryptoTopupInvoices(ctx context.Context) {
+	if cm.taxInvoices == nil {
+		return
+	}
+	rows, err := cm.db.QueryContext(ctx, `
+		SELECT wallet.tenant_id::text, wallet.credited_amount_cents,
+		       wallet.credited_amount_currency, wallet.quoted_usd_to_eur_rate::text,
+		       wallet.tx_hash, COALESCE(wallet.client_ip, ''), wallet.network
+		FROM purser.crypto_wallets wallet
+		WHERE wallet.purpose = 'prepaid' AND wallet.status IN ('completed', 'swept')
+		  AND wallet.credited_amount_cents > 0 AND wallet.tx_hash IS NOT NULL
+		  AND NOT EXISTS (
+		      SELECT 1 FROM purser.simplified_invoices invoice
+		      WHERE invoice.tenant_id = wallet.tenant_id
+		        AND invoice.reference_type = 'crypto_payment'
+		        AND invoice.reference_id = wallet.tx_hash
+		  )
+		ORDER BY wallet.completed_at
+		LIMIT 100
+	`)
+	if err != nil {
+		cm.logger.WithError(err).Warn("Failed to load direct crypto top-ups missing invoices")
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var tenantID, currency, txHash, clientIP, network string
+		var creditedCents int64
+		var fx sql.NullString
+		if err := rows.Scan(&tenantID, &creditedCents, &currency, &fx, &txHash, &clientIP, &network); err != nil {
+			cm.logger.WithError(err).Warn("Failed to scan direct crypto top-up invoice candidate")
+			continue
+		}
+		wallet := PendingWallet{TenantID: tenantID, ClientIP: clientIP, Network: network}
+		if fx.Valid {
+			rate, parseErr := decimal.NewFromString(fx.String)
+			if parseErr != nil {
+				cm.logger.WithError(parseErr).WithField("tx_hash", txHash).Warn("Invalid locked FX rate for direct crypto top-up invoice")
+				continue
+			}
+			wallet.QuotedUSDToEURRate = &rate
+		}
+		amountEurCents, conversionErr := cryptoTopupAmountEurCents(wallet, creditedCents, currency)
+		if conversionErr != nil {
+			cm.logger.WithError(conversionErr).WithField("tx_hash", txHash).Warn("Failed to convert direct crypto top-up invoice amount")
+			continue
+		}
+		if _, invoiceErr := cm.taxInvoices.generateCryptoTopupInvoice(ctx, tenantID, amountEurCents, "crypto_payment", txHash, clientIP, network); invoiceErr != nil {
+			cm.logger.WithError(invoiceErr).WithField("tx_hash", txHash).Warn("Failed to reconcile direct crypto top-up invoice")
+		}
+	}
+}
+
+func quotedCryptoValueCents(wallet PendingWallet, baseUnits *big.Int, currency string) (int64, error) {
+	if baseUnits == nil || baseUnits.Sign() <= 0 {
+		return 0, nil
+	}
+	decimals, ok := TokenDecimals(wallet.Asset)
+	if !ok {
+		return 0, fmt.Errorf("unknown token decimals for %s", wallet.Asset)
+	}
+	priceUSD := wallet.QuotedPriceUSD
+	if wallet.Asset == "USDC" && priceUSD.IsZero() {
+		priceUSD = decimal.NewFromInt(1)
+	}
+	if priceUSD.IsZero() {
+		return 0, fmt.Errorf("missing quoted price for invoice overpayment")
+	}
+	value := decimal.NewFromBigInt(baseUnits, -decimals).Mul(priceUSD).Mul(decimal.NewFromInt(100))
+	if strings.EqualFold(currency, "EUR") {
+		if wallet.QuotedUSDToEURRate == nil {
+			return 0, fmt.Errorf("missing quoted USD/EUR rate for invoice overpayment")
+		}
+		value = value.Mul(*wallet.QuotedUSDToEURRate)
+	}
+	return value.Round(0).IntPart(), nil
+}
+
+func (cm *CryptoMonitor) creditInvoiceOverpaymentTx(ctx context.Context, tx *sql.Tx, wallet PendingWallet, received *big.Int, now time.Time) (int64, string, error) {
+	if wallet.ExpectedAmountBaseUnits == nil || received == nil || received.Cmp(wallet.ExpectedAmountBaseUnits) <= 0 {
+		return 0, "", nil
+	}
+	surplus := new(big.Int).Sub(new(big.Int).Set(received), wallet.ExpectedAmountBaseUnits)
+	currency := billing.DefaultCurrency()
+	if wallet.InvoiceCurrency != nil && strings.TrimSpace(*wallet.InvoiceCurrency) != "" {
+		currency = strings.ToUpper(strings.TrimSpace(*wallet.InvoiceCurrency))
+	}
+	amountCents, err := quotedCryptoValueCents(wallet, surplus, currency)
+	if err != nil {
+		return 0, "", err
+	}
+	if amountCents <= 0 {
+		return 0, "", fmt.Errorf("invoice overpayment is below the smallest creditable currency unit")
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency, updated_at)
+		VALUES ($1, 0, $2, NOW()) ON CONFLICT (tenant_id, currency) DO NOTHING
+	`, wallet.TenantID, currency); err != nil {
+		return 0, "", err
+	}
+	var balance int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT balance_cents FROM purser.prepaid_balances
+		WHERE tenant_id = $1 AND currency = $2 FOR UPDATE
+	`, wallet.TenantID, currency).Scan(&balance); err != nil {
+		return 0, "", err
+	}
+	newBalance := balance + amountCents
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE purser.prepaid_balances SET balance_cents = $1, updated_at = NOW()
+		WHERE tenant_id = $2 AND currency = $3
+	`, newBalance, wallet.TenantID, currency); err != nil {
+		return 0, "", err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO purser.balance_transactions (
+			id, tenant_id, amount_cents, balance_after_cents, transaction_type,
+			description, reference_id, reference_type, actor_kind, reason, created_at
+		) VALUES ($1,$2,$3,$4,'topup',$5,$6,'crypto_invoice_overpayment','system',$7,$8)
+	`, uuid.NewString(), wallet.TenantID, amountCents, newBalance,
+		fmt.Sprintf("Crypto invoice overpayment via %s", wallet.Asset), wallet.ID,
+		"confirmed receipt exceeded exact invoice quote", now); err != nil {
+		return 0, "", err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE purser.crypto_wallets
+		SET credited_amount_cents = $2, credited_amount_currency = $3, updated_at = NOW()
+		WHERE id = $1 AND tenant_id = $4
+	`, wallet.ID, amountCents, currency, wallet.TenantID); err != nil {
+		return 0, "", err
+	}
+	return amountCents, currency, nil
 }
 
 type confirmedInvoicePayment struct {
@@ -856,8 +1091,8 @@ func (cm *CryptoMonitor) getETHTransactions(ctx context.Context, network Network
 	}
 
 	url := fmt.Sprintf(
-		"%s?module=account&action=txlist&address=%s&startblock=0&endblock=99999999&sort=desc&apikey=%s",
-		network.ExplorerAPIURL, address, apiKey,
+		"%s?chainid=%d&module=account&action=txlist&address=%s&startblock=0&endblock=999999999&sort=desc&apikey=%s",
+		network.ExplorerAPIURL, network.ChainID, address, apiKey,
 	)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -932,8 +1167,8 @@ func (cm *CryptoMonitor) getERC20TransactionsForNetwork(ctx context.Context, net
 	}
 
 	url := fmt.Sprintf(
-		"%s?module=account&action=tokentx&contractaddress=%s&address=%s&page=1&offset=100&sort=desc&apikey=%s",
-		network.ExplorerAPIURL, contractAddress, address, apiKey,
+		"%s?chainid=%d&module=account&action=tokentx&contractaddress=%s&address=%s&page=1&offset=100&sort=desc&apikey=%s",
+		network.ExplorerAPIURL, network.ChainID, contractAddress, address, apiKey,
 	)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

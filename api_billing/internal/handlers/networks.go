@@ -13,6 +13,7 @@ type NetworkConfig struct {
 	ExplorerAPIURL string // Block explorer API base URL
 	ExplorerAPIEnv string // Environment variable name for explorer API key
 	USDCContract   string // USDC contract address on this network
+	USDCDomainName string // EIP-712 domain name; defaults to "USD Coin"
 	LPTContract    string // LPT contract address (empty if not available)
 	// PriceFeeds maps an asset symbol ("ETH", "LPT") to its Chainlink
 	// aggregator address on this network. USDC is always 1:1 USD and has
@@ -65,7 +66,7 @@ var Networks = map[string]NetworkConfig{
 		Name:           "ethereum",
 		DisplayName:    "Ethereum Mainnet",
 		RPCEndpointEnv: "ETH_RPC_ENDPOINT",
-		ExplorerAPIURL: "https://api.etherscan.io/api",
+		ExplorerAPIURL: "https://api.etherscan.io/v2/api",
 		ExplorerAPIEnv: "ETHERSCAN_API_KEY",
 		USDCContract:   "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
 		LPTContract:    "0x58b6A8A3302369DAEc383334672404Ee733aB239",
@@ -81,8 +82,8 @@ var Networks = map[string]NetworkConfig{
 		Name:           "base",
 		DisplayName:    "Base",
 		RPCEndpointEnv: "BASE_RPC_ENDPOINT",
-		ExplorerAPIURL: "https://api.basescan.org/api",
-		ExplorerAPIEnv: "BASESCAN_API_KEY",
+		ExplorerAPIURL: "https://api.etherscan.io/v2/api",
+		ExplorerAPIEnv: "ETHERSCAN_API_KEY",
 		USDCContract:   "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
 		LPTContract:    "", // No LPT on Base
 		PriceFeeds: map[string]string{
@@ -97,8 +98,8 @@ var Networks = map[string]NetworkConfig{
 		Name:           "arbitrum",
 		DisplayName:    "Arbitrum One",
 		RPCEndpointEnv: "ARBITRUM_RPC_ENDPOINT",
-		ExplorerAPIURL: "https://api.arbiscan.io/api",
-		ExplorerAPIEnv: "ARBISCAN_API_KEY",
+		ExplorerAPIURL: "https://api.etherscan.io/v2/api",
+		ExplorerAPIEnv: "ETHERSCAN_API_KEY",
 		USDCContract:   "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
 		LPTContract:    "0x289ba1701C2F088cf0faf8B3705246331cB8A839", // Livepeer migrated to Arbitrum
 		PriceFeeds: map[string]string{
@@ -115,9 +116,10 @@ var Networks = map[string]NetworkConfig{
 		Name:           "base-sepolia",
 		DisplayName:    "Base Sepolia",
 		RPCEndpointEnv: "BASE_SEPOLIA_RPC_ENDPOINT",
-		ExplorerAPIURL: "https://api-sepolia.basescan.org/api",
-		ExplorerAPIEnv: "BASESCAN_API_KEY", // Same key works for testnet
+		ExplorerAPIURL: "https://api.etherscan.io/v2/api",
+		ExplorerAPIEnv: "ETHERSCAN_API_KEY",
 		USDCContract:   "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+		USDCDomainName: "USDC",
 		LPTContract:    "",
 		Confirmations:  5,
 		X402Enabled:    true,
@@ -128,8 +130,8 @@ var Networks = map[string]NetworkConfig{
 		Name:           "arbitrum-sepolia",
 		DisplayName:    "Arbitrum Sepolia",
 		RPCEndpointEnv: "ARBITRUM_SEPOLIA_RPC_ENDPOINT",
-		ExplorerAPIURL: "https://api-sepolia.arbiscan.io/api",
-		ExplorerAPIEnv: "ARBISCAN_API_KEY", // Same key works for testnet
+		ExplorerAPIURL: "https://api.etherscan.io/v2/api",
+		ExplorerAPIEnv: "ETHERSCAN_API_KEY",
 		USDCContract:   "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
 		LPTContract:    "",
 		Confirmations:  5,

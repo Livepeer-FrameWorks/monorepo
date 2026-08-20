@@ -35,7 +35,6 @@ const (
 	KeyX402Processed Key = "x402_processed"
 	KeyX402AuthOnly  Key = "x402_auth_only"
 	KeyXPayment      Key = "x_payment"
-	KeyX402Paid      Key = "x402_paid"
 )
 
 // Request context keys

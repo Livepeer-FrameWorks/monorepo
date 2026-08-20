@@ -23,13 +23,16 @@ const (
 
 // X-PAYMENT header payload from client
 type X402PaymentPayload struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	X402Version   int32                  `protobuf:"varint,1,opt,name=x402_version,json=x402Version,proto3" json:"x402_version,omitempty"`
-	Scheme        string                 `protobuf:"bytes,2,opt,name=scheme,proto3" json:"scheme,omitempty"`   // "exact"
-	Network       string                 `protobuf:"bytes,3,opt,name=network,proto3" json:"network,omitempty"` // "base" or "base-sepolia"
-	Payload       *X402ExactPayload      `protobuf:"bytes,4,opt,name=payload,proto3" json:"payload,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                protoimpl.MessageState    `protogen:"open.v1"`
+	X402Version          int32                     `protobuf:"varint,1,opt,name=x402_version,json=x402Version,proto3" json:"x402_version,omitempty"`
+	Scheme               string                    `protobuf:"bytes,2,opt,name=scheme,proto3" json:"scheme,omitempty"`   // v1 compatibility; v2 copies accepted.scheme
+	Network              string                    `protobuf:"bytes,3,opt,name=network,proto3" json:"network,omitempty"` // v1 compatibility; v2 uses CAIP-2 accepted.network
+	Payload              *X402ExactPayload         `protobuf:"bytes,4,opt,name=payload,proto3" json:"payload,omitempty"`
+	CanonicalPayloadJson []byte                    `protobuf:"bytes,5,opt,name=canonical_payload_json,json=canonicalPayloadJson,proto3" json:"canonical_payload_json,omitempty"` // Exact decoded PAYMENT-SIGNATURE JSON
+	Accepted             *X402AcceptedRequirements `protobuf:"bytes,6,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	QuoteId              string                    `protobuf:"bytes,7,opt,name=quote_id,json=quoteId,proto3" json:"quote_id,omitempty"` // FrameWorks quote echoed from accepted.extra
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *X402PaymentPayload) Reset() {
@@ -90,6 +93,119 @@ func (x *X402PaymentPayload) GetPayload() *X402ExactPayload {
 	return nil
 }
 
+func (x *X402PaymentPayload) GetCanonicalPayloadJson() []byte {
+	if x != nil {
+		return x.CanonicalPayloadJson
+	}
+	return nil
+}
+
+func (x *X402PaymentPayload) GetAccepted() *X402AcceptedRequirements {
+	if x != nil {
+		return x.Accepted
+	}
+	return nil
+}
+
+func (x *X402PaymentPayload) GetQuoteId() string {
+	if x != nil {
+		return x.QuoteId
+	}
+	return ""
+}
+
+type X402AcceptedRequirements struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Scheme            string                 `protobuf:"bytes,1,opt,name=scheme,proto3" json:"scheme,omitempty"`
+	Network           string                 `protobuf:"bytes,2,opt,name=network,proto3" json:"network,omitempty"` // CAIP-2, for example eip155:8453
+	Asset             string                 `protobuf:"bytes,3,opt,name=asset,proto3" json:"asset,omitempty"`
+	Amount            string                 `protobuf:"bytes,4,opt,name=amount,proto3" json:"amount,omitempty"` // Atomic asset units
+	PayTo             string                 `protobuf:"bytes,5,opt,name=pay_to,json=payTo,proto3" json:"pay_to,omitempty"`
+	MaxTimeoutSeconds int32                  `protobuf:"varint,6,opt,name=max_timeout_seconds,json=maxTimeoutSeconds,proto3" json:"max_timeout_seconds,omitempty"`
+	ExtraJson         []byte                 `protobuf:"bytes,7,opt,name=extra_json,json=extraJson,proto3" json:"extra_json,omitempty"` // Exact accepted.extra object
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *X402AcceptedRequirements) Reset() {
+	*x = X402AcceptedRequirements{}
+	mi := &file_x402_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *X402AcceptedRequirements) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*X402AcceptedRequirements) ProtoMessage() {}
+
+func (x *X402AcceptedRequirements) ProtoReflect() protoreflect.Message {
+	mi := &file_x402_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use X402AcceptedRequirements.ProtoReflect.Descriptor instead.
+func (*X402AcceptedRequirements) Descriptor() ([]byte, []int) {
+	return file_x402_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *X402AcceptedRequirements) GetScheme() string {
+	if x != nil {
+		return x.Scheme
+	}
+	return ""
+}
+
+func (x *X402AcceptedRequirements) GetNetwork() string {
+	if x != nil {
+		return x.Network
+	}
+	return ""
+}
+
+func (x *X402AcceptedRequirements) GetAsset() string {
+	if x != nil {
+		return x.Asset
+	}
+	return ""
+}
+
+func (x *X402AcceptedRequirements) GetAmount() string {
+	if x != nil {
+		return x.Amount
+	}
+	return ""
+}
+
+func (x *X402AcceptedRequirements) GetPayTo() string {
+	if x != nil {
+		return x.PayTo
+	}
+	return ""
+}
+
+func (x *X402AcceptedRequirements) GetMaxTimeoutSeconds() int32 {
+	if x != nil {
+		return x.MaxTimeoutSeconds
+	}
+	return 0
+}
+
+func (x *X402AcceptedRequirements) GetExtraJson() []byte {
+	if x != nil {
+		return x.ExtraJson
+	}
+	return nil
+}
+
 type X402ExactPayload struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Signature     string                 `protobuf:"bytes,5,opt,name=signature,proto3" json:"signature,omitempty"` // EIP-712 signature (hex)
@@ -100,7 +216,7 @@ type X402ExactPayload struct {
 
 func (x *X402ExactPayload) Reset() {
 	*x = X402ExactPayload{}
-	mi := &file_x402_proto_msgTypes[1]
+	mi := &file_x402_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -112,7 +228,7 @@ func (x *X402ExactPayload) String() string {
 func (*X402ExactPayload) ProtoMessage() {}
 
 func (x *X402ExactPayload) ProtoReflect() protoreflect.Message {
-	mi := &file_x402_proto_msgTypes[1]
+	mi := &file_x402_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -125,7 +241,7 @@ func (x *X402ExactPayload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use X402ExactPayload.ProtoReflect.Descriptor instead.
 func (*X402ExactPayload) Descriptor() ([]byte, []int) {
-	return file_x402_proto_rawDescGZIP(), []int{1}
+	return file_x402_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *X402ExactPayload) GetSignature() string {
@@ -156,7 +272,7 @@ type X402Authorization struct {
 
 func (x *X402Authorization) Reset() {
 	*x = X402Authorization{}
-	mi := &file_x402_proto_msgTypes[2]
+	mi := &file_x402_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -168,7 +284,7 @@ func (x *X402Authorization) String() string {
 func (*X402Authorization) ProtoMessage() {}
 
 func (x *X402Authorization) ProtoReflect() protoreflect.Message {
-	mi := &file_x402_proto_msgTypes[2]
+	mi := &file_x402_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -181,7 +297,7 @@ func (x *X402Authorization) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use X402Authorization.ProtoReflect.Descriptor instead.
 func (*X402Authorization) Descriptor() ([]byte, []int) {
-	return file_x402_proto_rawDescGZIP(), []int{2}
+	return file_x402_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *X402Authorization) GetFrom() string {
@@ -231,12 +347,24 @@ var File_x402_proto protoreflect.FileDescriptor
 const file_x402_proto_rawDesc = "" +
 	"\n" +
 	"\n" +
-	"x402.proto\x12\x04x402\"\x9b\x01\n" +
+	"x402.proto\x12\x04x402\"\xa8\x02\n" +
 	"\x12X402PaymentPayload\x12!\n" +
 	"\fx402_version\x18\x01 \x01(\x05R\vx402Version\x12\x16\n" +
 	"\x06scheme\x18\x02 \x01(\tR\x06scheme\x12\x18\n" +
 	"\anetwork\x18\x03 \x01(\tR\anetwork\x120\n" +
-	"\apayload\x18\x04 \x01(\v2\x16.x402.X402ExactPayloadR\apayload\"o\n" +
+	"\apayload\x18\x04 \x01(\v2\x16.x402.X402ExactPayloadR\apayload\x124\n" +
+	"\x16canonical_payload_json\x18\x05 \x01(\fR\x14canonicalPayloadJson\x12:\n" +
+	"\baccepted\x18\x06 \x01(\v2\x1e.x402.X402AcceptedRequirementsR\baccepted\x12\x19\n" +
+	"\bquote_id\x18\a \x01(\tR\aquoteId\"\xe0\x01\n" +
+	"\x18X402AcceptedRequirements\x12\x16\n" +
+	"\x06scheme\x18\x01 \x01(\tR\x06scheme\x12\x18\n" +
+	"\anetwork\x18\x02 \x01(\tR\anetwork\x12\x14\n" +
+	"\x05asset\x18\x03 \x01(\tR\x05asset\x12\x16\n" +
+	"\x06amount\x18\x04 \x01(\tR\x06amount\x12\x15\n" +
+	"\x06pay_to\x18\x05 \x01(\tR\x05payTo\x12.\n" +
+	"\x13max_timeout_seconds\x18\x06 \x01(\x05R\x11maxTimeoutSeconds\x12\x1d\n" +
+	"\n" +
+	"extra_json\x18\a \x01(\fR\textraJson\"o\n" +
 	"\x10X402ExactPayload\x12\x1c\n" +
 	"\tsignature\x18\x05 \x01(\tR\tsignature\x12=\n" +
 	"\rauthorization\x18\x06 \x01(\v2\x17.x402.X402AuthorizationR\rauthorization\"\xa7\x01\n" +
@@ -261,20 +389,22 @@ func file_x402_proto_rawDescGZIP() []byte {
 	return file_x402_proto_rawDescData
 }
 
-var file_x402_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_x402_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_x402_proto_goTypes = []any{
-	(*X402PaymentPayload)(nil), // 0: x402.X402PaymentPayload
-	(*X402ExactPayload)(nil),   // 1: x402.X402ExactPayload
-	(*X402Authorization)(nil),  // 2: x402.X402Authorization
+	(*X402PaymentPayload)(nil),       // 0: x402.X402PaymentPayload
+	(*X402AcceptedRequirements)(nil), // 1: x402.X402AcceptedRequirements
+	(*X402ExactPayload)(nil),         // 2: x402.X402ExactPayload
+	(*X402Authorization)(nil),        // 3: x402.X402Authorization
 }
 var file_x402_proto_depIdxs = []int32{
-	1, // 0: x402.X402PaymentPayload.payload:type_name -> x402.X402ExactPayload
-	2, // 1: x402.X402ExactPayload.authorization:type_name -> x402.X402Authorization
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	2, // 0: x402.X402PaymentPayload.payload:type_name -> x402.X402ExactPayload
+	1, // 1: x402.X402PaymentPayload.accepted:type_name -> x402.X402AcceptedRequirements
+	3, // 2: x402.X402ExactPayload.authorization:type_name -> x402.X402Authorization
+	3, // [3:3] is the sub-list for method output_type
+	3, // [3:3] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_x402_proto_init() }
@@ -288,7 +418,7 @@ func file_x402_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_x402_proto_rawDesc), len(file_x402_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

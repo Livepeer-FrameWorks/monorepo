@@ -23,6 +23,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	BillingService_GetBillingTiers_FullMethodName            = "/purser.BillingService/GetBillingTiers"
 	BillingService_GetBillingTier_FullMethodName             = "/purser.BillingService/GetBillingTier"
+	BillingService_ListMeterDefinitions_FullMethodName       = "/purser.BillingService/ListMeterDefinitions"
 	BillingService_CreateBillingTier_FullMethodName          = "/purser.BillingService/CreateBillingTier"
 	BillingService_UpdateBillingTier_FullMethodName          = "/purser.BillingService/UpdateBillingTier"
 	BillingService_GetTenantBillingStatus_FullMethodName     = "/purser.BillingService/GetTenantBillingStatus"
@@ -38,6 +39,8 @@ type BillingServiceClient interface {
 	// Billing tiers
 	GetBillingTiers(ctx context.Context, in *GetBillingTiersRequest, opts ...grpc.CallOption) (*GetBillingTiersResponse, error)
 	GetBillingTier(ctx context.Context, in *GetBillingTierRequest, opts ...grpc.CallOption) (*BillingTier, error)
+	// Canonical meter catalog used to interpret pricing and invoice quantities.
+	ListMeterDefinitions(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListMeterDefinitionsResponse, error)
 	CreateBillingTier(ctx context.Context, in *CreateBillingTierRequest, opts ...grpc.CallOption) (*BillingTier, error)
 	UpdateBillingTier(ctx context.Context, in *UpdateBillingTierRequest, opts ...grpc.CallOption) (*BillingTier, error)
 	// ===== CROSS-SERVICE BILLING STATUS =====
@@ -73,6 +76,16 @@ func (c *billingServiceClient) GetBillingTier(ctx context.Context, in *GetBillin
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(BillingTier)
 	err := c.cc.Invoke(ctx, BillingService_GetBillingTier_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *billingServiceClient) ListMeterDefinitions(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListMeterDefinitionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListMeterDefinitionsResponse)
+	err := c.cc.Invoke(ctx, BillingService_ListMeterDefinitions_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -128,6 +141,8 @@ type BillingServiceServer interface {
 	// Billing tiers
 	GetBillingTiers(context.Context, *GetBillingTiersRequest) (*GetBillingTiersResponse, error)
 	GetBillingTier(context.Context, *GetBillingTierRequest) (*BillingTier, error)
+	// Canonical meter catalog used to interpret pricing and invoice quantities.
+	ListMeterDefinitions(context.Context, *emptypb.Empty) (*ListMeterDefinitionsResponse, error)
 	CreateBillingTier(context.Context, *CreateBillingTierRequest) (*BillingTier, error)
 	UpdateBillingTier(context.Context, *UpdateBillingTierRequest) (*BillingTier, error)
 	// ===== CROSS-SERVICE BILLING STATUS =====
@@ -154,6 +169,9 @@ func (UnimplementedBillingServiceServer) GetBillingTiers(context.Context, *GetBi
 }
 func (UnimplementedBillingServiceServer) GetBillingTier(context.Context, *GetBillingTierRequest) (*BillingTier, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetBillingTier not implemented")
+}
+func (UnimplementedBillingServiceServer) ListMeterDefinitions(context.Context, *emptypb.Empty) (*ListMeterDefinitionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListMeterDefinitions not implemented")
 }
 func (UnimplementedBillingServiceServer) CreateBillingTier(context.Context, *CreateBillingTierRequest) (*BillingTier, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateBillingTier not implemented")
@@ -220,6 +238,24 @@ func _BillingService_GetBillingTier_Handler(srv interface{}, ctx context.Context
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BillingServiceServer).GetBillingTier(ctx, req.(*GetBillingTierRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BillingService_ListMeterDefinitions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BillingServiceServer).ListMeterDefinitions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BillingService_ListMeterDefinitions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BillingServiceServer).ListMeterDefinitions(ctx, req.(*emptypb.Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -310,6 +346,10 @@ var BillingService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetBillingTier",
 			Handler:    _BillingService_GetBillingTier_Handler,
+		},
+		{
+			MethodName: "ListMeterDefinitions",
+			Handler:    _BillingService_ListMeterDefinitions_Handler,
 		},
 		{
 			MethodName: "CreateBillingTier",
@@ -635,8 +675,10 @@ var SubscriptionService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	InvoiceService_GetInvoice_FullMethodName   = "/purser.InvoiceService/GetInvoice"
-	InvoiceService_ListInvoices_FullMethodName = "/purser.InvoiceService/ListInvoices"
+	InvoiceService_GetInvoice_FullMethodName           = "/purser.InvoiceService/GetInvoice"
+	InvoiceService_ListInvoices_FullMethodName         = "/purser.InvoiceService/ListInvoices"
+	InvoiceService_ListBillingDocuments_FullMethodName = "/purser.InvoiceService/ListBillingDocuments"
+	InvoiceService_GetBillingDocument_FullMethodName   = "/purser.InvoiceService/GetBillingDocument"
 )
 
 // InvoiceServiceClient is the client API for InvoiceService service.
@@ -647,6 +689,8 @@ const (
 type InvoiceServiceClient interface {
 	GetInvoice(ctx context.Context, in *GetInvoiceRequest, opts ...grpc.CallOption) (*GetInvoiceResponse, error)
 	ListInvoices(ctx context.Context, in *ListInvoicesRequest, opts ...grpc.CallOption) (*ListInvoicesResponse, error)
+	ListBillingDocuments(ctx context.Context, in *ListBillingDocumentsRequest, opts ...grpc.CallOption) (*ListBillingDocumentsResponse, error)
+	GetBillingDocument(ctx context.Context, in *GetBillingDocumentRequest, opts ...grpc.CallOption) (*GetBillingDocumentResponse, error)
 }
 
 type invoiceServiceClient struct {
@@ -677,6 +721,26 @@ func (c *invoiceServiceClient) ListInvoices(ctx context.Context, in *ListInvoice
 	return out, nil
 }
 
+func (c *invoiceServiceClient) ListBillingDocuments(ctx context.Context, in *ListBillingDocumentsRequest, opts ...grpc.CallOption) (*ListBillingDocumentsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListBillingDocumentsResponse)
+	err := c.cc.Invoke(ctx, InvoiceService_ListBillingDocuments_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *invoiceServiceClient) GetBillingDocument(ctx context.Context, in *GetBillingDocumentRequest, opts ...grpc.CallOption) (*GetBillingDocumentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetBillingDocumentResponse)
+	err := c.cc.Invoke(ctx, InvoiceService_GetBillingDocument_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // InvoiceServiceServer is the server API for InvoiceService service.
 // All implementations must embed UnimplementedInvoiceServiceServer
 // for forward compatibility.
@@ -685,6 +749,8 @@ func (c *invoiceServiceClient) ListInvoices(ctx context.Context, in *ListInvoice
 type InvoiceServiceServer interface {
 	GetInvoice(context.Context, *GetInvoiceRequest) (*GetInvoiceResponse, error)
 	ListInvoices(context.Context, *ListInvoicesRequest) (*ListInvoicesResponse, error)
+	ListBillingDocuments(context.Context, *ListBillingDocumentsRequest) (*ListBillingDocumentsResponse, error)
+	GetBillingDocument(context.Context, *GetBillingDocumentRequest) (*GetBillingDocumentResponse, error)
 	mustEmbedUnimplementedInvoiceServiceServer()
 }
 
@@ -700,6 +766,12 @@ func (UnimplementedInvoiceServiceServer) GetInvoice(context.Context, *GetInvoice
 }
 func (UnimplementedInvoiceServiceServer) ListInvoices(context.Context, *ListInvoicesRequest) (*ListInvoicesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListInvoices not implemented")
+}
+func (UnimplementedInvoiceServiceServer) ListBillingDocuments(context.Context, *ListBillingDocumentsRequest) (*ListBillingDocumentsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListBillingDocuments not implemented")
+}
+func (UnimplementedInvoiceServiceServer) GetBillingDocument(context.Context, *GetBillingDocumentRequest) (*GetBillingDocumentResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetBillingDocument not implemented")
 }
 func (UnimplementedInvoiceServiceServer) mustEmbedUnimplementedInvoiceServiceServer() {}
 func (UnimplementedInvoiceServiceServer) testEmbeddedByValue()                        {}
@@ -758,6 +830,42 @@ func _InvoiceService_ListInvoices_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _InvoiceService_ListBillingDocuments_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListBillingDocumentsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InvoiceServiceServer).ListBillingDocuments(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InvoiceService_ListBillingDocuments_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InvoiceServiceServer).ListBillingDocuments(ctx, req.(*ListBillingDocumentsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InvoiceService_GetBillingDocument_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetBillingDocumentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InvoiceServiceServer).GetBillingDocument(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InvoiceService_GetBillingDocument_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InvoiceServiceServer).GetBillingDocument(ctx, req.(*GetBillingDocumentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // InvoiceService_ServiceDesc is the grpc.ServiceDesc for InvoiceService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -772,6 +880,14 @@ var InvoiceService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListInvoices",
 			Handler:    _InvoiceService_ListInvoices_Handler,
+		},
+		{
+			MethodName: "ListBillingDocuments",
+			Handler:    _InvoiceService_ListBillingDocuments_Handler,
+		},
+		{
+			MethodName: "GetBillingDocument",
+			Handler:    _InvoiceService_GetBillingDocument_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
@@ -967,6 +1083,8 @@ var OperatorRevenueService_ServiceDesc = grpc.ServiceDesc{
 
 const (
 	PaymentService_CreatePayment_FullMethodName     = "/purser.PaymentService/CreatePayment"
+	PaymentService_GetPayment_FullMethodName        = "/purser.PaymentService/GetPayment"
+	PaymentService_ListPayments_FullMethodName      = "/purser.PaymentService/ListPayments"
 	PaymentService_GetPaymentMethods_FullMethodName = "/purser.PaymentService/GetPaymentMethods"
 	PaymentService_GetBillingStatus_FullMethodName  = "/purser.PaymentService/GetBillingStatus"
 )
@@ -979,6 +1097,10 @@ const (
 type PaymentServiceClient interface {
 	// Initiate payment for an invoice
 	CreatePayment(ctx context.Context, in *PaymentRequest, opts ...grpc.CallOption) (*PaymentResponse, error)
+	// Fetch one tenant-owned invoice payment.
+	GetPayment(ctx context.Context, in *GetPaymentRequest, opts ...grpc.CallOption) (*Payment, error)
+	// List tenant-owned invoice payments with cursor pagination and filters.
+	ListPayments(ctx context.Context, in *ListPaymentsRequest, opts ...grpc.CallOption) (*ListPaymentsResponse, error)
 	// Get available payment methods
 	GetPaymentMethods(ctx context.Context, in *GetPaymentMethodsRequest, opts ...grpc.CallOption) (*PaymentMethodResponse, error)
 	// Get billing status for tenant
@@ -998,6 +1120,26 @@ func (c *paymentServiceClient) CreatePayment(ctx context.Context, in *PaymentReq
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PaymentResponse)
 	err := c.cc.Invoke(ctx, PaymentService_CreatePayment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *paymentServiceClient) GetPayment(ctx context.Context, in *GetPaymentRequest, opts ...grpc.CallOption) (*Payment, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Payment)
+	err := c.cc.Invoke(ctx, PaymentService_GetPayment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *paymentServiceClient) ListPayments(ctx context.Context, in *ListPaymentsRequest, opts ...grpc.CallOption) (*ListPaymentsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListPaymentsResponse)
+	err := c.cc.Invoke(ctx, PaymentService_ListPayments_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1032,6 +1174,10 @@ func (c *paymentServiceClient) GetBillingStatus(ctx context.Context, in *GetBill
 type PaymentServiceServer interface {
 	// Initiate payment for an invoice
 	CreatePayment(context.Context, *PaymentRequest) (*PaymentResponse, error)
+	// Fetch one tenant-owned invoice payment.
+	GetPayment(context.Context, *GetPaymentRequest) (*Payment, error)
+	// List tenant-owned invoice payments with cursor pagination and filters.
+	ListPayments(context.Context, *ListPaymentsRequest) (*ListPaymentsResponse, error)
 	// Get available payment methods
 	GetPaymentMethods(context.Context, *GetPaymentMethodsRequest) (*PaymentMethodResponse, error)
 	// Get billing status for tenant
@@ -1049,6 +1195,12 @@ type UnimplementedPaymentServiceServer struct{}
 
 func (UnimplementedPaymentServiceServer) CreatePayment(context.Context, *PaymentRequest) (*PaymentResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreatePayment not implemented")
+}
+func (UnimplementedPaymentServiceServer) GetPayment(context.Context, *GetPaymentRequest) (*Payment, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetPayment not implemented")
+}
+func (UnimplementedPaymentServiceServer) ListPayments(context.Context, *ListPaymentsRequest) (*ListPaymentsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListPayments not implemented")
 }
 func (UnimplementedPaymentServiceServer) GetPaymentMethods(context.Context, *GetPaymentMethodsRequest) (*PaymentMethodResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetPaymentMethods not implemented")
@@ -1091,6 +1243,42 @@ func _PaymentService_CreatePayment_Handler(srv interface{}, ctx context.Context,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PaymentServiceServer).CreatePayment(ctx, req.(*PaymentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PaymentService_GetPayment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPaymentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentServiceServer).GetPayment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentService_GetPayment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentServiceServer).GetPayment(ctx, req.(*GetPaymentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PaymentService_ListPayments_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPaymentsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentServiceServer).ListPayments(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentService_ListPayments_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentServiceServer).ListPayments(ctx, req.(*ListPaymentsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1141,6 +1329,14 @@ var PaymentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreatePayment",
 			Handler:    _PaymentService_CreatePayment_Handler,
+		},
+		{
+			MethodName: "GetPayment",
+			Handler:    _PaymentService_GetPayment_Handler,
+		},
+		{
+			MethodName: "ListPayments",
+			Handler:    _PaymentService_ListPayments_Handler,
 		},
 		{
 			MethodName: "GetPaymentMethods",
@@ -2992,10 +3188,12 @@ var MollieService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	X402Service_GetPaymentRequirements_FullMethodName = "/purser.X402Service/GetPaymentRequirements"
-	X402Service_VerifyX402Payment_FullMethodName      = "/purser.X402Service/VerifyX402Payment"
-	X402Service_SettleX402Payment_FullMethodName      = "/purser.X402Service/SettleX402Payment"
-	X402Service_GetTenantX402Address_FullMethodName   = "/purser.X402Service/GetTenantX402Address"
+	X402Service_GetPaymentRequirements_FullMethodName     = "/purser.X402Service/GetPaymentRequirements"
+	X402Service_VerifyX402Payment_FullMethodName          = "/purser.X402Service/VerifyX402Payment"
+	X402Service_SettleX402Payment_FullMethodName          = "/purser.X402Service/SettleX402Payment"
+	X402Service_GetTenantX402Address_FullMethodName       = "/purser.X402Service/GetTenantX402Address"
+	X402Service_ClaimX402MutationResult_FullMethodName    = "/purser.X402Service/ClaimX402MutationResult"
+	X402Service_CompleteX402MutationResult_FullMethodName = "/purser.X402Service/CompleteX402MutationResult"
 )
 
 // X402ServiceClient is the client API for X402Service service.
@@ -3011,6 +3209,12 @@ type X402ServiceClient interface {
 	SettleX402Payment(ctx context.Context, in *SettleX402PaymentRequest, opts ...grpc.CallOption) (*SettleX402PaymentResponse, error)
 	// Get or create the per-tenant x402 deposit address
 	GetTenantX402Address(ctx context.Context, in *GetTenantX402AddressRequest, opts ...grpc.CallOption) (*GetTenantX402AddressResponse, error)
+	// Claim a quote-bound side-effecting API/MCP operation before execution.
+	// Retries with the same key and fingerprint replay a completed result; an
+	// in-flight claim is never executed a second time.
+	ClaimX402MutationResult(ctx context.Context, in *ClaimX402MutationResultRequest, opts ...grpc.CallOption) (*ClaimX402MutationResultResponse, error)
+	// Persist the result of a previously claimed side-effecting operation.
+	CompleteX402MutationResult(ctx context.Context, in *CompleteX402MutationResultRequest, opts ...grpc.CallOption) (*CompleteX402MutationResultResponse, error)
 }
 
 type x402ServiceClient struct {
@@ -3061,6 +3265,26 @@ func (c *x402ServiceClient) GetTenantX402Address(ctx context.Context, in *GetTen
 	return out, nil
 }
 
+func (c *x402ServiceClient) ClaimX402MutationResult(ctx context.Context, in *ClaimX402MutationResultRequest, opts ...grpc.CallOption) (*ClaimX402MutationResultResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClaimX402MutationResultResponse)
+	err := c.cc.Invoke(ctx, X402Service_ClaimX402MutationResult_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *x402ServiceClient) CompleteX402MutationResult(ctx context.Context, in *CompleteX402MutationResultRequest, opts ...grpc.CallOption) (*CompleteX402MutationResultResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CompleteX402MutationResultResponse)
+	err := c.cc.Invoke(ctx, X402Service_CompleteX402MutationResult_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // X402ServiceServer is the server API for X402Service service.
 // All implementations must embed UnimplementedX402ServiceServer
 // for forward compatibility.
@@ -3074,6 +3298,12 @@ type X402ServiceServer interface {
 	SettleX402Payment(context.Context, *SettleX402PaymentRequest) (*SettleX402PaymentResponse, error)
 	// Get or create the per-tenant x402 deposit address
 	GetTenantX402Address(context.Context, *GetTenantX402AddressRequest) (*GetTenantX402AddressResponse, error)
+	// Claim a quote-bound side-effecting API/MCP operation before execution.
+	// Retries with the same key and fingerprint replay a completed result; an
+	// in-flight claim is never executed a second time.
+	ClaimX402MutationResult(context.Context, *ClaimX402MutationResultRequest) (*ClaimX402MutationResultResponse, error)
+	// Persist the result of a previously claimed side-effecting operation.
+	CompleteX402MutationResult(context.Context, *CompleteX402MutationResultRequest) (*CompleteX402MutationResultResponse, error)
 	mustEmbedUnimplementedX402ServiceServer()
 }
 
@@ -3095,6 +3325,12 @@ func (UnimplementedX402ServiceServer) SettleX402Payment(context.Context, *Settle
 }
 func (UnimplementedX402ServiceServer) GetTenantX402Address(context.Context, *GetTenantX402AddressRequest) (*GetTenantX402AddressResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetTenantX402Address not implemented")
+}
+func (UnimplementedX402ServiceServer) ClaimX402MutationResult(context.Context, *ClaimX402MutationResultRequest) (*ClaimX402MutationResultResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ClaimX402MutationResult not implemented")
+}
+func (UnimplementedX402ServiceServer) CompleteX402MutationResult(context.Context, *CompleteX402MutationResultRequest) (*CompleteX402MutationResultResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CompleteX402MutationResult not implemented")
 }
 func (UnimplementedX402ServiceServer) mustEmbedUnimplementedX402ServiceServer() {}
 func (UnimplementedX402ServiceServer) testEmbeddedByValue()                     {}
@@ -3189,6 +3425,42 @@ func _X402Service_GetTenantX402Address_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _X402Service_ClaimX402MutationResult_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClaimX402MutationResultRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(X402ServiceServer).ClaimX402MutationResult(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: X402Service_ClaimX402MutationResult_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(X402ServiceServer).ClaimX402MutationResult(ctx, req.(*ClaimX402MutationResultRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _X402Service_CompleteX402MutationResult_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CompleteX402MutationResultRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(X402ServiceServer).CompleteX402MutationResult(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: X402Service_CompleteX402MutationResult_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(X402ServiceServer).CompleteX402MutationResult(ctx, req.(*CompleteX402MutationResultRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // X402Service_ServiceDesc is the grpc.ServiceDesc for X402Service service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -3211,6 +3483,276 @@ var X402Service_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetTenantX402Address",
 			Handler:    _X402Service_GetTenantX402Address_Handler,
+		},
+		{
+			MethodName: "ClaimX402MutationResult",
+			Handler:    _X402Service_ClaimX402MutationResult_Handler,
+		},
+		{
+			MethodName: "CompleteX402MutationResult",
+			Handler:    _X402Service_CompleteX402MutationResult_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "purser.proto",
+}
+
+const (
+	CryptoSweepService_GetCryptoReadiness_FullMethodName     = "/purser.CryptoSweepService/GetCryptoReadiness"
+	CryptoSweepService_RotateCryptoDepositKey_FullMethodName = "/purser.CryptoSweepService/RotateCryptoDepositKey"
+	CryptoSweepService_PlanCryptoSweep_FullMethodName        = "/purser.CryptoSweepService/PlanCryptoSweep"
+	CryptoSweepService_BroadcastCryptoSweep_FullMethodName   = "/purser.CryptoSweepService/BroadcastCryptoSweep"
+	CryptoSweepService_ReconcileCryptoSweep_FullMethodName   = "/purser.CryptoSweepService/ReconcileCryptoSweep"
+)
+
+// CryptoSweepServiceClient is the client API for CryptoSweepService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// Operator-only online stages of the manual crypto sweep ceremony. The sign
+// stage is intentionally absent: it runs offline in the CLI and no deposit
+// private key is ever sent to Purser.
+type CryptoSweepServiceClient interface {
+	GetCryptoReadiness(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*CryptoReadinessResponse, error)
+	RotateCryptoDepositKey(ctx context.Context, in *RotateCryptoDepositKeyRequest, opts ...grpc.CallOption) (*RotateCryptoDepositKeyResponse, error)
+	PlanCryptoSweep(ctx context.Context, in *PlanCryptoSweepRequest, opts ...grpc.CallOption) (*PlanCryptoSweepResponse, error)
+	BroadcastCryptoSweep(ctx context.Context, in *BroadcastCryptoSweepRequest, opts ...grpc.CallOption) (*BroadcastCryptoSweepResponse, error)
+	ReconcileCryptoSweep(ctx context.Context, in *ReconcileCryptoSweepRequest, opts ...grpc.CallOption) (*ReconcileCryptoSweepResponse, error)
+}
+
+type cryptoSweepServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewCryptoSweepServiceClient(cc grpc.ClientConnInterface) CryptoSweepServiceClient {
+	return &cryptoSweepServiceClient{cc}
+}
+
+func (c *cryptoSweepServiceClient) GetCryptoReadiness(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*CryptoReadinessResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CryptoReadinessResponse)
+	err := c.cc.Invoke(ctx, CryptoSweepService_GetCryptoReadiness_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *cryptoSweepServiceClient) RotateCryptoDepositKey(ctx context.Context, in *RotateCryptoDepositKeyRequest, opts ...grpc.CallOption) (*RotateCryptoDepositKeyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RotateCryptoDepositKeyResponse)
+	err := c.cc.Invoke(ctx, CryptoSweepService_RotateCryptoDepositKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *cryptoSweepServiceClient) PlanCryptoSweep(ctx context.Context, in *PlanCryptoSweepRequest, opts ...grpc.CallOption) (*PlanCryptoSweepResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PlanCryptoSweepResponse)
+	err := c.cc.Invoke(ctx, CryptoSweepService_PlanCryptoSweep_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *cryptoSweepServiceClient) BroadcastCryptoSweep(ctx context.Context, in *BroadcastCryptoSweepRequest, opts ...grpc.CallOption) (*BroadcastCryptoSweepResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BroadcastCryptoSweepResponse)
+	err := c.cc.Invoke(ctx, CryptoSweepService_BroadcastCryptoSweep_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *cryptoSweepServiceClient) ReconcileCryptoSweep(ctx context.Context, in *ReconcileCryptoSweepRequest, opts ...grpc.CallOption) (*ReconcileCryptoSweepResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReconcileCryptoSweepResponse)
+	err := c.cc.Invoke(ctx, CryptoSweepService_ReconcileCryptoSweep_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// CryptoSweepServiceServer is the server API for CryptoSweepService service.
+// All implementations must embed UnimplementedCryptoSweepServiceServer
+// for forward compatibility.
+//
+// Operator-only online stages of the manual crypto sweep ceremony. The sign
+// stage is intentionally absent: it runs offline in the CLI and no deposit
+// private key is ever sent to Purser.
+type CryptoSweepServiceServer interface {
+	GetCryptoReadiness(context.Context, *emptypb.Empty) (*CryptoReadinessResponse, error)
+	RotateCryptoDepositKey(context.Context, *RotateCryptoDepositKeyRequest) (*RotateCryptoDepositKeyResponse, error)
+	PlanCryptoSweep(context.Context, *PlanCryptoSweepRequest) (*PlanCryptoSweepResponse, error)
+	BroadcastCryptoSweep(context.Context, *BroadcastCryptoSweepRequest) (*BroadcastCryptoSweepResponse, error)
+	ReconcileCryptoSweep(context.Context, *ReconcileCryptoSweepRequest) (*ReconcileCryptoSweepResponse, error)
+	mustEmbedUnimplementedCryptoSweepServiceServer()
+}
+
+// UnimplementedCryptoSweepServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedCryptoSweepServiceServer struct{}
+
+func (UnimplementedCryptoSweepServiceServer) GetCryptoReadiness(context.Context, *emptypb.Empty) (*CryptoReadinessResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetCryptoReadiness not implemented")
+}
+func (UnimplementedCryptoSweepServiceServer) RotateCryptoDepositKey(context.Context, *RotateCryptoDepositKeyRequest) (*RotateCryptoDepositKeyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RotateCryptoDepositKey not implemented")
+}
+func (UnimplementedCryptoSweepServiceServer) PlanCryptoSweep(context.Context, *PlanCryptoSweepRequest) (*PlanCryptoSweepResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PlanCryptoSweep not implemented")
+}
+func (UnimplementedCryptoSweepServiceServer) BroadcastCryptoSweep(context.Context, *BroadcastCryptoSweepRequest) (*BroadcastCryptoSweepResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method BroadcastCryptoSweep not implemented")
+}
+func (UnimplementedCryptoSweepServiceServer) ReconcileCryptoSweep(context.Context, *ReconcileCryptoSweepRequest) (*ReconcileCryptoSweepResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReconcileCryptoSweep not implemented")
+}
+func (UnimplementedCryptoSweepServiceServer) mustEmbedUnimplementedCryptoSweepServiceServer() {}
+func (UnimplementedCryptoSweepServiceServer) testEmbeddedByValue()                            {}
+
+// UnsafeCryptoSweepServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to CryptoSweepServiceServer will
+// result in compilation errors.
+type UnsafeCryptoSweepServiceServer interface {
+	mustEmbedUnimplementedCryptoSweepServiceServer()
+}
+
+func RegisterCryptoSweepServiceServer(s grpc.ServiceRegistrar, srv CryptoSweepServiceServer) {
+	// If the following call panics, it indicates UnimplementedCryptoSweepServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&CryptoSweepService_ServiceDesc, srv)
+}
+
+func _CryptoSweepService_GetCryptoReadiness_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CryptoSweepServiceServer).GetCryptoReadiness(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CryptoSweepService_GetCryptoReadiness_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CryptoSweepServiceServer).GetCryptoReadiness(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CryptoSweepService_RotateCryptoDepositKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RotateCryptoDepositKeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CryptoSweepServiceServer).RotateCryptoDepositKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CryptoSweepService_RotateCryptoDepositKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CryptoSweepServiceServer).RotateCryptoDepositKey(ctx, req.(*RotateCryptoDepositKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CryptoSweepService_PlanCryptoSweep_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PlanCryptoSweepRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CryptoSweepServiceServer).PlanCryptoSweep(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CryptoSweepService_PlanCryptoSweep_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CryptoSweepServiceServer).PlanCryptoSweep(ctx, req.(*PlanCryptoSweepRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CryptoSweepService_BroadcastCryptoSweep_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BroadcastCryptoSweepRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CryptoSweepServiceServer).BroadcastCryptoSweep(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CryptoSweepService_BroadcastCryptoSweep_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CryptoSweepServiceServer).BroadcastCryptoSweep(ctx, req.(*BroadcastCryptoSweepRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CryptoSweepService_ReconcileCryptoSweep_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReconcileCryptoSweepRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CryptoSweepServiceServer).ReconcileCryptoSweep(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CryptoSweepService_ReconcileCryptoSweep_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CryptoSweepServiceServer).ReconcileCryptoSweep(ctx, req.(*ReconcileCryptoSweepRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// CryptoSweepService_ServiceDesc is the grpc.ServiceDesc for CryptoSweepService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var CryptoSweepService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "purser.CryptoSweepService",
+	HandlerType: (*CryptoSweepServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetCryptoReadiness",
+			Handler:    _CryptoSweepService_GetCryptoReadiness_Handler,
+		},
+		{
+			MethodName: "RotateCryptoDepositKey",
+			Handler:    _CryptoSweepService_RotateCryptoDepositKey_Handler,
+		},
+		{
+			MethodName: "PlanCryptoSweep",
+			Handler:    _CryptoSweepService_PlanCryptoSweep_Handler,
+		},
+		{
+			MethodName: "BroadcastCryptoSweep",
+			Handler:    _CryptoSweepService_BroadcastCryptoSweep_Handler,
+		},
+		{
+			MethodName: "ReconcileCryptoSweep",
+			Handler:    _CryptoSweepService_ReconcileCryptoSweep_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

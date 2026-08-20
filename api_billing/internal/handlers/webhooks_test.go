@@ -47,11 +47,11 @@ func TestProcessStripeWebhookGRPCIdempotent(t *testing.T) {
 		"Stripe-Signature": signature,
 	}
 
-	// Claim/lock returns the row in its existing terminal state, so the
-	// caller short-circuits without re-processing or marking again.
-	mock.ExpectQuery(`INSERT INTO purser\.webhook_events`).
-		WithArgs("stripe", "evt_test_123", "payment_intent.succeeded", signature, sqlmock.AnyArg(), int(webhookClaimLease/time.Second)).
-		WillReturnRows(sqlmock.NewRows([]string{"status", "acquired"}).AddRow("processed", false))
+	// The provider event id is the inbox idempotency key, so a duplicate
+	// delivery is acknowledged without running reconciliation inline.
+	mock.ExpectExec(`INSERT INTO purser\.provider_webhook_inbox`).
+		WithArgs("stripe", "evt_test_123", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	ok, msg, code := s.ProcessStripeWebhookGRPC(body, headers)
 	if !ok {

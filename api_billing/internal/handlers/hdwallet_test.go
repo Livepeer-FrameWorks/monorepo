@@ -83,6 +83,50 @@ func TestDeriveAddressFromXpubRejectsXprv(t *testing.T) {
 	}
 }
 
+func TestRotateHDWalletPreservesNextIndex(t *testing.T) {
+	seed, err := hex.DecodeString("101112131415161718191a1b1c1d1e1f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	master, err := hdkeychain.NewMaster(seed, &chaincfg.MainNetParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	purpose, _ := master.Derive(hdkeychain.HardenedKeyStart + 44)
+	coin, _ := purpose.Derive(hdkeychain.HardenedKeyStart + 60)
+	account, _ := coin.Derive(hdkeychain.HardenedKeyStart)
+	external, _ := account.Derive(0)
+	newXpub, err := external.Neuter()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT xpub, next_index FROM purser.hd_wallet_state").
+		WillReturnRows(sqlmock.NewRows([]string{"xpub", "next_index"}).AddRow(testXpub, int64(42)))
+	mock.ExpectExec("UPDATE purser.hd_wallet_state SET xpub").
+		WithArgs(newXpub.String(), "mainnet").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	wallet := NewHDWallet(db, logrus.New())
+	previous, next, changed, err := wallet.RotateHDWallet(context.Background(), newXpub.String(), "mainnet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if previous != testXpub || next != 42 || !changed {
+		t.Fatalf("unexpected rotation result: previous=%q next=%d changed=%t", previous, next, changed)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestValidateXpub(t *testing.T) {
 	tests := []struct {
 		name       string

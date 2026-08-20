@@ -92,6 +92,9 @@ type SettlementResult struct {
 	Verify         *purserpb.VerifyX402PaymentResponse
 	Settle         *purserpb.SettleX402PaymentResponse
 	PayerAddress   string
+	X402Version    int32
+	Network        string
+	QuoteID        string
 }
 
 func IsAuthOnlyPayment(payload *x402pb.X402PaymentPayload) bool {
@@ -239,6 +242,9 @@ func SettleX402Payment(ctx context.Context, opts SettlementOptions) (*Settlement
 		Verify:         verifyResp,
 		Settle:         settleResp,
 		PayerAddress:   payerAddress,
+		X402Version:    payload.GetX402Version(),
+		Network:        payload.GetNetwork(),
+		QuoteID:        payload.GetQuoteId(),
 	}, nil
 }
 

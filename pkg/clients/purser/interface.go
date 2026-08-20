@@ -16,6 +16,7 @@ type Interface interface {
 	GetTenantBillingStatus(ctx context.Context, tenantID string) (*purserpb.GetTenantBillingStatusResponse, error)
 	ListTenantBillingSnapshots(ctx context.Context, tenantIDs []string, limit int32) (*purserpb.ListTenantBillingSnapshotsResponse, error)
 	GetBillingTiers(ctx context.Context, includeInactive bool, pagination *commonpb.CursorPaginationRequest) (*purserpb.GetBillingTiersResponse, error)
+	ListMeterDefinitions(ctx context.Context) (*purserpb.ListMeterDefinitionsResponse, error)
 	GetBillingTier(ctx context.Context, tierID string) (*purserpb.BillingTier, error)
 	CreateBillingTier(ctx context.Context, req *purserpb.CreateBillingTierRequest) (*purserpb.BillingTier, error)
 	UpdateBillingTier(ctx context.Context, req *purserpb.UpdateBillingTierRequest) (*purserpb.BillingTier, error)
@@ -25,7 +26,11 @@ type Interface interface {
 	CancelSubscription(ctx context.Context, tenantID string) error
 	GetInvoice(ctx context.Context, invoiceID string) (*purserpb.GetInvoiceResponse, error)
 	ListInvoices(ctx context.Context, tenantID string, status *string, pagination *commonpb.CursorPaginationRequest) (*purserpb.ListInvoicesResponse, error)
+	ListBillingDocuments(ctx context.Context, tenantID string) (*purserpb.ListBillingDocumentsResponse, error)
+	GetBillingDocument(ctx context.Context, tenantID, kind, documentID string) (*purserpb.GetBillingDocumentResponse, error)
 	CreatePayment(ctx context.Context, req *purserpb.PaymentRequest) (*purserpb.PaymentResponse, error)
+	GetPayment(ctx context.Context, paymentID string) (*purserpb.Payment, error)
+	ListPayments(ctx context.Context, req *purserpb.ListPaymentsRequest) (*purserpb.ListPaymentsResponse, error)
 	GetPaymentMethods(ctx context.Context, tenantID string) (*purserpb.PaymentMethodResponse, error)
 	GetBillingStatus(ctx context.Context, tenantID string) (*purserpb.BillingStatusResponse, error)
 	GetUsageRecords(ctx context.Context, tenantID, clusterID, usageType string, timeRange *commonpb.TimeRange, pagination *commonpb.CursorPaginationRequest) (*purserpb.UsageRecordsResponse, error)
@@ -67,6 +72,13 @@ type Interface interface {
 	VerifyX402Payment(ctx context.Context, tenantID string, payment *x402pb.X402PaymentPayload, clientIP string) (*purserpb.VerifyX402PaymentResponse, error)
 	SettleX402Payment(ctx context.Context, tenantID string, payment *x402pb.X402PaymentPayload, clientIP string) (*purserpb.SettleX402PaymentResponse, error)
 	GetTenantX402Address(ctx context.Context, tenantID string) (*purserpb.GetTenantX402AddressResponse, error)
+	ClaimX402MutationResult(ctx context.Context, req *purserpb.ClaimX402MutationResultRequest) (*purserpb.ClaimX402MutationResultResponse, error)
+	CompleteX402MutationResult(ctx context.Context, req *purserpb.CompleteX402MutationResultRequest) (*purserpb.CompleteX402MutationResultResponse, error)
+	GetCryptoReadiness(ctx context.Context) (*purserpb.CryptoReadinessResponse, error)
+	RotateCryptoDepositKey(ctx context.Context, req *purserpb.RotateCryptoDepositKeyRequest) (*purserpb.RotateCryptoDepositKeyResponse, error)
+	PlanCryptoSweep(ctx context.Context, req *purserpb.PlanCryptoSweepRequest) (*purserpb.PlanCryptoSweepResponse, error)
+	BroadcastCryptoSweep(ctx context.Context, req *purserpb.BroadcastCryptoSweepRequest) (*purserpb.BroadcastCryptoSweepResponse, error)
+	ReconcileCryptoSweep(ctx context.Context, req *purserpb.ReconcileCryptoSweepRequest) (*purserpb.ReconcileCryptoSweepResponse, error)
 }
 
 var _ Interface = (*GRPCClient)(nil)

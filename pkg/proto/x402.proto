@@ -4,16 +4,29 @@ package x402;
 
 option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/x402;x402pb";
 
-// The x402 client payment payload (X-PAYMENT header), shared by the Gateway
-// (parses the header), Commodore (wallet-login proxy), and Purser
-// (verify/settle). Matches the x402 protocol spec: https://github.com/coinbase/x402
+// The x402 client payment payload, shared by the Gateway (parses the
+// PAYMENT-SIGNATURE header) and Purser (verify/settle). The original JSON is
+// preserved because facilitators verify the exact official v2 wire document.
 
 // X-PAYMENT header payload from client
 message X402PaymentPayload {
   int32 x402_version = 1;
-  string scheme = 2;                    // "exact"
-  string network = 3;                   // "base" or "base-sepolia"
+  string scheme = 2;                    // v1 compatibility; v2 copies accepted.scheme
+  string network = 3;                   // v1 compatibility; v2 uses CAIP-2 accepted.network
   X402ExactPayload payload = 4;
+  bytes canonical_payload_json = 5;     // Exact decoded PAYMENT-SIGNATURE JSON
+  X402AcceptedRequirements accepted = 6;
+  string quote_id = 7;                  // FrameWorks quote echoed from accepted.extra
+}
+
+message X402AcceptedRequirements {
+  string scheme = 1;
+  string network = 2;                   // CAIP-2, for example eip155:8453
+  string asset = 3;
+  string amount = 4;                    // Atomic asset units
+  string pay_to = 5;
+  int32 max_timeout_seconds = 6;
+  bytes extra_json = 7;                 // Exact accepted.extra object
 }
 
 message X402ExactPayload {

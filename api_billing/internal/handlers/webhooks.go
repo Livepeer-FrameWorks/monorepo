@@ -363,7 +363,8 @@ func (s *Service) sendTenantPaymentStatusEmail(tenantID, invoiceRef, provider, s
 // the HTTP handlers. They receive raw body and headers from the Gateway.
 // ============================================================================
 
-// ProcessStripeWebhookGRPC processes a Stripe webhook received via gRPC from the Gateway.
+// ProcessStripeWebhookGRPC verifies and durably accepts a Stripe webhook.
+// Reconciliation is performed by the provider webhook inbox worker.
 // Returns (success, error_message, http_status_code).
 func (s *Service) ProcessStripeWebhookGRPC(body []byte, headers map[string]string) (bool, string, int) {
 	// Verify Stripe signature
@@ -386,13 +387,19 @@ func (s *Service) ProcessStripeWebhookGRPC(body []byte, headers map[string]strin
 		}).Warn("Invalid Stripe webhook payload")
 		return false, "Invalid payload", 400
 	}
+	if payload.ID == "" {
+		return false, "Invalid payload", 400
+	}
 
 	s.logger.WithFields(logging.Fields{
 		"event_id":   payload.ID,
 		"event_type": payload.Type,
 	}).Info("Received Stripe webhook via gRPC")
 
-	ctx := context.Background()
+	return s.enqueueProviderWebhook(context.Background(), "stripe", payload.ID, headers, body)
+}
+
+func (s *Service) processStripeWebhookPayload(ctx context.Context, payload StripeWebhookPayload, signature string, body []byte) (bool, string, int) {
 	claim, claimErr := s.claimWebhookEvent(ctx, "stripe", payload.ID, payload.Type, signature, body)
 	if claimErr != nil {
 		s.logger.WithError(claimErr).Error("Failed to claim Stripe webhook event")
@@ -1190,7 +1197,8 @@ func (s *Service) updateClusterSubscriptionFromStripe(obj StripeSubscriptionObje
 	return nil
 }
 
-// ProcessMollieWebhookGRPC processes a Mollie webhook received via gRPC from the Gateway.
+// ProcessMollieWebhookGRPC validates and durably accepts a Mollie webhook.
+// Reconciliation is performed by the provider webhook inbox worker.
 // Returns (success, error_message, http_status_code).
 //
 // Mollie webhooks are application/x-www-form-urlencoded with a single `id`
@@ -1213,8 +1221,10 @@ func (s *Service) ProcessMollieWebhookGRPC(body []byte, headers map[string]strin
 	}
 
 	s.logger.WithField("payment_id", paymentID).Info("Received Mollie webhook via gRPC")
+	return s.enqueueProviderWebhook(context.Background(), "mollie", paymentID+":"+uuid.NewString(), headers, body)
+}
 
-	ctx := context.Background()
+func (s *Service) processMollieWebhookPayload(ctx context.Context, paymentID string, body []byte) (bool, string, int) {
 	// Mollie does not sign its webhook bodies, so the only safe pattern is
 	// to fetch the payment authoritatively from the Mollie API and
 	// reconcile on (mollie_payment_id, status). The synthesized event id
@@ -1224,7 +1234,7 @@ func (s *Service) ProcessMollieWebhookGRPC(body []byte, headers map[string]strin
 	eventID, err := s.handleMolliePaymentWebhook(ctx, paymentID, body)
 	if errors.Is(err, errMollieUnknownPayment) {
 		s.logger.WithField("payment_id", paymentID).Warn("Mollie webhook references unknown payment id")
-		return false, "Payment not found", 404
+		return true, "", 200
 	}
 	if err != nil {
 		// eventID may be empty when the failure occurred before we could
@@ -2489,6 +2499,12 @@ func mollieAmountToCents(value, currency string) (int64, string, error) {
 // currencyMinorUnitExponent returns the number of decimal places used by the
 // currency's minor unit. Stripe and Mollie agree on these exponents.
 func currencyMinorUnitExponent(currency string) int {
+	return CurrencyMinorUnitExponent(currency)
+}
+
+// CurrencyMinorUnitExponent returns the ISO-4217 exponent used by the card
+// providers supported by Purser.
+func CurrencyMinorUnitExponent(currency string) int {
 	switch strings.ToUpper(currency) {
 	case "JPY", "ISK", "KRW", "VND", "CLP", "PYG", "RWF", "UGX", "XAF", "XOF":
 		return 0

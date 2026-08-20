@@ -16,6 +16,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 const DefaultServerName = "purser.internal"
@@ -34,6 +35,7 @@ type GRPCClient struct {
 	stripe         purserpb.StripeServiceClient
 	mollie         purserpb.MollieServiceClient
 	x402           purserpb.X402ServiceClient
+	cryptoSweep    purserpb.CryptoSweepServiceClient
 	logger         logging.Logger
 }
 
@@ -134,6 +136,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		stripe:         purserpb.NewStripeServiceClient(conn),
 		mollie:         purserpb.NewMollieServiceClient(conn),
 		x402:           purserpb.NewX402ServiceClient(conn),
+		cryptoSweep:    purserpb.NewCryptoSweepServiceClient(conn),
 		logger:         config.Logger,
 	}, nil
 }
@@ -179,6 +182,11 @@ func (c *GRPCClient) GetBillingTiers(ctx context.Context, includeInactive bool, 
 		IncludeInactive: includeInactive,
 		Pagination:      pagination,
 	})
+}
+
+// ListMeterDefinitions returns Purser's active canonical meter catalog.
+func (c *GRPCClient) ListMeterDefinitions(ctx context.Context) (*purserpb.ListMeterDefinitionsResponse, error) {
+	return c.billing.ListMeterDefinitions(ctx, &emptypb.Empty{})
 }
 
 // GetBillingTier returns a specific billing tier
@@ -250,6 +258,18 @@ func (c *GRPCClient) ListInvoices(ctx context.Context, tenantID string, status *
 	return c.invoice.ListInvoices(ctx, req)
 }
 
+// ListBillingDocuments returns retained customer-facing invoices, receipts, and credit notes.
+func (c *GRPCClient) ListBillingDocuments(ctx context.Context, tenantID string) (*purserpb.ListBillingDocumentsResponse, error) {
+	return c.invoice.ListBillingDocuments(ctx, &purserpb.ListBillingDocumentsRequest{TenantId: tenantID})
+}
+
+// GetBillingDocument returns one tenant-owned immutable document download.
+func (c *GRPCClient) GetBillingDocument(ctx context.Context, tenantID, kind, documentID string) (*purserpb.GetBillingDocumentResponse, error) {
+	return c.invoice.GetBillingDocument(ctx, &purserpb.GetBillingDocumentRequest{
+		TenantId: tenantID, Kind: kind, DocumentId: documentID,
+	})
+}
+
 // ============================================================================
 // PAYMENT OPERATIONS
 // ============================================================================
@@ -257,6 +277,16 @@ func (c *GRPCClient) ListInvoices(ctx context.Context, tenantID string, status *
 // CreatePayment initiates a payment for an invoice
 func (c *GRPCClient) CreatePayment(ctx context.Context, req *purserpb.PaymentRequest) (*purserpb.PaymentResponse, error) {
 	return c.payment.CreatePayment(ctx, req)
+}
+
+// GetPayment gets one tenant-owned invoice payment.
+func (c *GRPCClient) GetPayment(ctx context.Context, paymentID string) (*purserpb.Payment, error) {
+	return c.payment.GetPayment(ctx, &purserpb.GetPaymentRequest{PaymentId: paymentID})
+}
+
+// ListPayments lists tenant-owned invoice payments with server pagination.
+func (c *GRPCClient) ListPayments(ctx context.Context, req *purserpb.ListPaymentsRequest) (*purserpb.ListPaymentsResponse, error) {
+	return c.payment.ListPayments(ctx, req)
 }
 
 // GetPaymentMethods returns available payment methods
@@ -616,6 +646,7 @@ func (c *GRPCClient) GetPaymentRequirements(ctx context.Context, tenantID, resou
 	return c.x402.GetPaymentRequirements(ctx, &purserpb.GetPaymentRequirementsRequest{
 		TenantId: tenantID,
 		Resource: resource,
+		ClientIp: ctxkeys.GetClientIP(ctx),
 	})
 }
 
@@ -645,4 +676,32 @@ func (c *GRPCClient) GetTenantX402Address(ctx context.Context, tenantID string) 
 	return c.x402.GetTenantX402Address(ctx, &purserpb.GetTenantX402AddressRequest{
 		TenantId: tenantID,
 	})
+}
+
+func (c *GRPCClient) ClaimX402MutationResult(ctx context.Context, req *purserpb.ClaimX402MutationResultRequest) (*purserpb.ClaimX402MutationResultResponse, error) {
+	return c.x402.ClaimX402MutationResult(ctx, req)
+}
+
+func (c *GRPCClient) CompleteX402MutationResult(ctx context.Context, req *purserpb.CompleteX402MutationResultRequest) (*purserpb.CompleteX402MutationResultResponse, error) {
+	return c.x402.CompleteX402MutationResult(ctx, req)
+}
+
+func (c *GRPCClient) GetCryptoReadiness(ctx context.Context) (*purserpb.CryptoReadinessResponse, error) {
+	return c.cryptoSweep.GetCryptoReadiness(ctx, &emptypb.Empty{})
+}
+
+func (c *GRPCClient) RotateCryptoDepositKey(ctx context.Context, req *purserpb.RotateCryptoDepositKeyRequest) (*purserpb.RotateCryptoDepositKeyResponse, error) {
+	return c.cryptoSweep.RotateCryptoDepositKey(ctx, req)
+}
+
+func (c *GRPCClient) PlanCryptoSweep(ctx context.Context, req *purserpb.PlanCryptoSweepRequest) (*purserpb.PlanCryptoSweepResponse, error) {
+	return c.cryptoSweep.PlanCryptoSweep(ctx, req)
+}
+
+func (c *GRPCClient) BroadcastCryptoSweep(ctx context.Context, req *purserpb.BroadcastCryptoSweepRequest) (*purserpb.BroadcastCryptoSweepResponse, error) {
+	return c.cryptoSweep.BroadcastCryptoSweep(ctx, req)
+}
+
+func (c *GRPCClient) ReconcileCryptoSweep(ctx context.Context, req *purserpb.ReconcileCryptoSweepRequest) (*purserpb.ReconcileCryptoSweepResponse, error) {
+	return c.cryptoSweep.ReconcileCryptoSweep(ctx, req)
 }

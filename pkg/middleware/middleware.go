@@ -87,7 +87,7 @@ func redactSecretPathSegments(path string) string {
 
 const publicCORSAllowHeaders = "Content-Type, Authorization, X-Tenant-Id, X-Request-Id, X-PAYMENT, PAYMENT-SIGNATURE, X-Wallet-Address, X-Wallet-Signature, X-Wallet-Message, Mcp-Session-Id, Last-Event-ID"
 
-const publicCORSExposeHeaders = "X-Request-ID, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, Retry-After, X-Access-Token, X-Access-Token-Expires-At"
+const publicCORSExposeHeaders = "X-Request-ID, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, Retry-After, X-Access-Token, X-Access-Token-Expires-At, PAYMENT-REQUIRED, PAYMENT-RESPONSE"
 
 // CORSMiddleware handles CORS headers with origin validation. Credentialed
 // CORS stays restricted to configured first-party origins; public protocol

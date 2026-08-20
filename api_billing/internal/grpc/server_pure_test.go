@@ -130,17 +130,6 @@ func TestGetMolliePaymentMethod(t *testing.T) {
 	}
 }
 
-func TestHasArbitrumExplorerKey(t *testing.T) {
-	t.Setenv("ARBISCAN_API_KEY", "")
-	if hasArbitrumExplorerKey() {
-		t.Fatal("empty key should report false")
-	}
-	t.Setenv("ARBISCAN_API_KEY", "abc123")
-	if !hasArbitrumExplorerKey() {
-		t.Fatal("set key should report true")
-	}
-}
-
 func TestPricingLabelFor(t *testing.T) {
 	cases := []struct {
 		source, kind, want string

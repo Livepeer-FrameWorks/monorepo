@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
 	billingmollie "frameworks/api_billing/internal/mollie"
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/sirupsen/logrus"
 )
 
@@ -114,23 +116,47 @@ func TestProcessMollieWebhookGRPC_MissingID(t *testing.T) {
 
 func TestProcessMollieWebhookGRPC_UnknownPayment(t *testing.T) {
 	lg := logrus.New()
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	mc, err := billingmollie.NewClient(billingmollie.Config{APIKey: "test_unused", Logger: lg})
+	if err != nil {
+		t.Fatalf("failed to construct mollie client: %v", err)
+	}
+	s := &Service{db: db, logger: lg, mollieClient: mc}
+	mock.ExpectExec(`INSERT INTO purser\.provider_webhook_inbox`).
+		WithArgs("mollie", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	ok, msg, code := s.ProcessMollieWebhookGRPC([]byte("id=tr_unknown"), map[string]string{
+		"Content-Type": "application/x-www-form-urlencoded",
+	})
+	if !ok {
+		t.Fatalf("expected ok=true, got false (msg=%q)", msg)
+	}
+	if code != 200 {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestProcessMollieWebhookPayloadUnknownPaymentIsTerminalSuccess(t *testing.T) {
+	lg := logrus.New()
 	mc, err := billingmollie.NewClient(billingmollie.Config{APIKey: "test_unused", Logger: lg})
 	if err != nil {
 		t.Fatalf("failed to construct mollie client: %v", err)
 	}
 	s := &Service{logger: lg, mollieClient: mc}
-
 	withDefaultTransport(t, testRoundTripFunc(func(_ *http.Request) (*http.Response, error) {
 		return newJSONResponse(http.StatusNotFound, `{"status":404,"title":"Not Found","detail":"No payment exists with token tr_unknown"}`), nil
 	}))
 
-	ok, msg, code := s.ProcessMollieWebhookGRPC([]byte("id=tr_unknown"), map[string]string{
-		"Content-Type": "application/x-www-form-urlencoded",
-	})
-	if ok {
-		t.Fatalf("expected ok=false, got true (msg=%q)", msg)
-	}
-	if code != 404 {
-		t.Fatalf("expected 404, got %d", code)
+	ok, msg, code := s.processMollieWebhookPayload(context.Background(), "tr_unknown", []byte("id=tr_unknown"))
+	if !ok || msg != "" || code != 200 {
+		t.Fatalf("processMollieWebhookPayload = (%v, %q, %d)", ok, msg, code)
 	}
 }

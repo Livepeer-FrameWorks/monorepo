@@ -142,7 +142,7 @@ func TestPadUint8(t *testing.T) {
 // left-aligned into the word, with the 0x prefix stripped, since the nonce is
 // already a full 32-byte value.
 func TestPadBytes32(t *testing.T) {
-	const nonce = "0xdeadbeef"
+	const nonce = "0xdeadbeef00000000000000000000000000000000000000000000000000000000"
 	got, err := padBytes32(nonce)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -160,9 +160,12 @@ func TestPadBytes32(t *testing.T) {
 		}
 	}
 
-	// Bad hex and over-length (>32 bytes) must error, not panic.
+	// Bad hex and any non-32-byte value must error, not panic.
 	if _, err := padBytes32("0xzz"); err == nil {
 		t.Fatal("padBytes32 with invalid hex must error")
+	}
+	if _, err := padBytes32("0xdeadbeef"); err == nil {
+		t.Fatal("padBytes32 shorter than 32 bytes must error")
 	}
 	if _, err := padBytes32("0x" + strings.Repeat("ab", 33)); err == nil {
 		t.Fatal("padBytes32 longer than 32 bytes must error")
@@ -206,6 +209,28 @@ func TestParseUint256String(t *testing.T) {
 	}
 }
 
+func TestValidateX402TransferReceiptRequiresExactTransfer(t *testing.T) {
+	auth := testX402Authorization("25000000")
+	receipt := testX402Receipt(t, auth)
+	if err := validateX402TransferReceipt(receipt, Networks["base"], auth); err != nil {
+		t.Fatalf("matching transfer rejected: %v", err)
+	}
+
+	wrongAmount := *receipt
+	wrongAmount.Logs = append([]TransactionLog(nil), receipt.Logs...)
+	wrongAmount.Logs[0].Data = "0x" + strings.Repeat("0", 63) + "1"
+	if err := validateX402TransferReceipt(&wrongAmount, Networks["base"], auth); err == nil {
+		t.Fatal("receipt with wrong transfer amount must be rejected")
+	}
+
+	wrongToken := *receipt
+	wrongToken.Logs = append([]TransactionLog(nil), receipt.Logs...)
+	wrongToken.Logs[0].Address = "0x0000000000000000000000000000000000000001"
+	if err := validateX402TransferReceipt(&wrongToken, Networks["base"], auth); err == nil {
+		t.Fatal("receipt from wrong token contract must be rejected")
+	}
+}
+
 // TestHashTransferWithAuthorization ties the encoders together: the struct hash
 // must be deterministic for a fixed authorization and must change if any signed
 // field changes (otherwise a tampered transfer would produce the same hash).
@@ -217,7 +242,7 @@ func TestHashTransferWithAuthorization(t *testing.T) {
 		Value:       "1000000",
 		ValidAfter:  "0",
 		ValidBefore: "9999999999",
-		Nonce:       "0xabcdef",
+		Nonce:       "0xabcdef0000000000000000000000000000000000000000000000000000000000",
 	}
 	want, err := h.hashTransferWithAuthorization(base)
 	if err != nil {
@@ -233,7 +258,7 @@ func TestHashTransferWithAuthorization(t *testing.T) {
 		Value:       "0",
 		ValidAfter:  "0",
 		ValidBefore: "0",
-		Nonce:       "0x00",
+		Nonce:       "0x0000000000000000000000000000000000000000000000000000000000000000",
 	}
 	zeroHash, err := h.hashTransferWithAuthorization(zeroValued)
 	if err != nil {
@@ -247,7 +272,9 @@ func TestHashTransferWithAuthorization(t *testing.T) {
 		"value":       func(a *X402Authorization) { a.Value = "2000000" },
 		"to":          func(a *X402Authorization) { a.To = "0x0000000000000000000000000000000000000001" },
 		"validBefore": func(a *X402Authorization) { a.ValidBefore = "1" },
-		"nonce":       func(a *X402Authorization) { a.Nonce = "0x123456" },
+		"nonce": func(a *X402Authorization) {
+			a.Nonce = "0x1234560000000000000000000000000000000000000000000000000000000000"
+		},
 	}
 	for field, mutate := range mutations {
 		t.Run("changes with "+field, func(t *testing.T) {

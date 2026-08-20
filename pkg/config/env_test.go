@@ -128,3 +128,23 @@ func TestX402IncludeTestnetsEnabled(t *testing.T) {
 		t.Fatal("expected X402_INCLUDE_TESTNETS=true to enable testnets")
 	}
 }
+
+func TestCryptoPaymentBreakersDefaultEnabled(t *testing.T) {
+	t.Setenv("CRYPTO_DEPOSITS_ENABLED", "")
+	t.Setenv("X402_PAYMENTS_ENABLED", "")
+	if !CryptoDepositsEnabled() {
+		t.Fatal("expected direct crypto deposits to default enabled")
+	}
+	if !X402PaymentsEnabled() {
+		t.Fatal("expected x402 payments to default enabled")
+	}
+
+	t.Setenv("CRYPTO_DEPOSITS_ENABLED", "false")
+	t.Setenv("X402_PAYMENTS_ENABLED", "false")
+	if CryptoDepositsEnabled() {
+		t.Fatal("expected direct crypto deposit breaker to disable creation")
+	}
+	if X402PaymentsEnabled() {
+		t.Fatal("expected x402 breaker to disable new payments")
+	}
+}

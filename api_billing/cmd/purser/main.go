@@ -86,10 +86,24 @@ func main() {
 	// through distinct create/finalize/void/reissue entry points, so adding
 	// it would only ever fire with one synthetic label combination. Drop.
 	handlerMetrics := &handlers.PurserMetrics{
-		BillingCalculations:      metricsCollector.NewCounter("billing_calculations_total", "Billing calculations performed", []string{"tenant_id", "status"}),
-		UsageRecords:             metricsCollector.NewCounter("usage_records_processed_total", "Usage records processed", []string{"usage_type"}),
-		UsageQuarantine:          metricsCollector.NewCounter("usage_records_quarantine_total", "Usage records rejected and routed to purser.usage_records_quarantine", []string{"usage_type", "reason"}),
-		WebhookSignatureFailures: metricsCollector.NewCounter("webhook_signature_failures_total", "Webhook signature validation failures", []string{"provider"}),
+		BillingCalculations:       metricsCollector.NewCounter("billing_calculations_total", "Billing calculations performed", []string{"tenant_id", "status"}),
+		UsageRecords:              metricsCollector.NewCounter("usage_records_processed_total", "Usage records processed", []string{"usage_type"}),
+		UsageQuarantine:           metricsCollector.NewCounter("usage_records_quarantine_total", "Usage records rejected and routed to purser.usage_records_quarantine", []string{"usage_type", "reason"}),
+		WebhookSignatureFailures:  metricsCollector.NewCounter("webhook_signature_failures_total", "Webhook signature validation failures", []string{"provider"}),
+		CryptoScannerBlocks:       metricsCollector.NewGauge("crypto_scanner_block", "Observed crypto scanner block by head kind", []string{"network", "head"}),
+		CryptoScannerErrors:       metricsCollector.NewCounter("crypto_scanner_errors_total", "Crypto scanner errors", []string{"network"}),
+		CryptoDepositReorgs:       metricsCollector.NewCounter("crypto_deposit_reorg_reversals_total", "Allocated crypto deposit reversals after canonicality failure", []string{"network", "purpose"}),
+		CryptoUnsweptBaseUnits:    metricsCollector.NewGauge("crypto_unswept_base_units", "Confirmed custody amount not yet assigned to a confirmed sweep", []string{"network", "asset"}),
+		CryptoOldestUnswept:       metricsCollector.NewGauge("crypto_oldest_unswept_age_seconds", "Age of the oldest confirmed unswept custody source", []string{"network", "asset"}),
+		CryptoFailedSweepItems:    metricsCollector.NewGauge("crypto_failed_sweep_items", "Sweep items currently failed", []string{"network", "asset"}),
+		CryptoRelayerBalanceETH:   metricsCollector.NewGauge("crypto_sweep_relayer_balance_eth", "Dedicated USDC sweep relayer native gas balance", []string{"network"}),
+		X402QuoteConversion:       metricsCollector.NewGauge("x402_quote_conversion_ratio", "Confirmed x402 quotes divided by created quotes in the last 24 hours", []string{"network"}),
+		X402SettlementLatency:     metricsCollector.NewGauge("x402_settlement_latency_p95_seconds", "P95 confirmed x402 settlement latency over the last 24 hours", []string{"network"}),
+		CryptoPendingDeposits:     metricsCollector.NewGauge("crypto_deposit_events", "Crypto deposit events by reconciliation state", []string{"network", "status"}),
+		CryptoAccountingAnomalies: metricsCollector.NewGauge("crypto_accounting_anomalies", "Open crypto accounting anomalies", []string{"kind"}),
+		CryptoAnomalyOldest:       metricsCollector.NewGauge("crypto_accounting_anomaly_oldest_age_seconds", "Age of the oldest open crypto accounting anomaly", []string{"kind"}),
+		CryptoInvoiceReview:       metricsCollector.NewGauge("crypto_invoice_review_items", "Crypto invoice deposit events requiring operator review", []string{"network"}),
+		CryptoLedgerReversals:     metricsCollector.NewGauge("crypto_ledger_reversals_total", "Durable crypto-related ledger reversals", []string{"reference_type"}),
 	}
 
 	// Register DB connection-pool stats (open/in-use/idle gauges +

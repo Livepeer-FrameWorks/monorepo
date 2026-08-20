@@ -209,7 +209,7 @@ func TestGetEurUsdRate_FreshCacheSkipsFetch(t *testing.T) {
 	}
 }
 
-func TestGetVATRateForTenant_MalformedBillingAddressFallsBack(t *testing.T) {
+func TestGetVATRateForTenant_MalformedBillingAddressDoesNotGuessCountry(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
@@ -227,11 +227,11 @@ func TestGetVATRateForTenant_MalformedBillingAddressFallsBack(t *testing.T) {
 	}
 
 	rate, country, isB2B := handler.getVATRateForTenant(context.Background(), "tenant-1", "")
-	if country != "NL" {
-		t.Fatalf("country: got %q, want %q", country, "NL")
+	if country != "" {
+		t.Fatalf("country: got %q, want empty", country)
 	}
-	if rate != euVATRates["NL"] {
-		t.Fatalf("rate: got %d, want %d", rate, euVATRates["NL"])
+	if rate != 0 {
+		t.Fatalf("rate: got %d, want 0 pending location review", rate)
 	}
 	if isB2B {
 		t.Fatal("isB2B: got true, want false")

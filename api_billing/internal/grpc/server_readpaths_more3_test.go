@@ -12,9 +12,8 @@ import (
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 )
 
-// No subscription row → the cheapest safe default: postpaid, not suspended,
-// zero balance. Foghorn/Commodore admission must never read "suspended" or a
-// negative balance for a tenant Purser simply hasn't provisioned yet.
+// No subscription row must fail closed for rated admission without blocking the
+// Gateway's explicit non-rated onboarding/payment surfaces.
 func TestGetTenantBillingStatusNoSubscriptionDefault(t *testing.T) {
 	s, mock := newReadServer(t, true)
 	mock.ExpectQuery(`LEFT JOIN purser\.prepaid_balances pb`).
@@ -24,7 +23,7 @@ func TestGetTenantBillingStatusNoSubscriptionDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTenantBillingStatus: %v", err)
 	}
-	if resp.BillingModel != "postpaid" || resp.IsSuspended || resp.IsBalanceNegative || resp.BalanceCents != 0 {
+	if resp.BillingModel != "prepaid" || resp.IsSuspended || !resp.IsBalanceNegative || resp.BalanceCents != 0 {
 		t.Fatalf("unexpected default: %+v", resp)
 	}
 }
@@ -37,13 +36,14 @@ func TestGetTenantBillingStatusPrepaidNegativeBalance(t *testing.T) {
 	cols := []string{
 		"billing_model", "status", "balance_cents", "reserved_balance_cents", "retention", "dvr_entitlements",
 		"tier_id", "billing_period_start", "billing_period_end", "storage_limit", "resource_limits",
+		"payment_method", "stripe_subscription_id", "mollie_subscription_id",
 	}
 
 	t.Run("prepaid non-positive trips negative", func(t *testing.T) {
 		s, mock := newReadServer(t, true)
 		mock.ExpectQuery(`LEFT JOIN purser\.prepaid_balances pb`).
 			WillReturnRows(sqlmock.NewRows(cols).
-				AddRow("prepaid", "active", int64(-50), int64(0), nil, nil, nil, nil, nil, nil, nil))
+				AddRow("prepaid", "active", int64(-50), int64(0), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil))
 
 		resp, err := s.GetTenantBillingStatus(context.Background(), &purserpb.GetTenantBillingStatusRequest{TenantId: "tenant-1"})
 		if err != nil {
@@ -58,7 +58,7 @@ func TestGetTenantBillingStatusPrepaidNegativeBalance(t *testing.T) {
 		s, mock := newReadServer(t, true)
 		mock.ExpectQuery(`LEFT JOIN purser\.prepaid_balances pb`).
 			WillReturnRows(sqlmock.NewRows(cols).
-				AddRow("prepaid", "active", int64(100), int64(125), nil, nil, nil, nil, nil, nil, nil))
+				AddRow("prepaid", "active", int64(100), int64(125), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil))
 
 		resp, err := s.GetTenantBillingStatus(context.Background(), &purserpb.GetTenantBillingStatusRequest{TenantId: "tenant-1"})
 		if err != nil {
@@ -73,7 +73,7 @@ func TestGetTenantBillingStatusPrepaidNegativeBalance(t *testing.T) {
 		s, mock := newReadServer(t, true)
 		mock.ExpectQuery(`LEFT JOIN purser\.prepaid_balances pb`).
 			WillReturnRows(sqlmock.NewRows(cols).
-				AddRow("postpaid", "suspended", int64(-50), int64(0), nil, nil, nil, nil, nil, nil, nil))
+				AddRow("postpaid", "suspended", int64(-50), int64(0), nil, nil, nil, nil, nil, nil, nil, "stripe", "sub_1", nil))
 
 		resp, err := s.GetTenantBillingStatus(context.Background(), &purserpb.GetTenantBillingStatusRequest{TenantId: "tenant-1"})
 		if err != nil {
@@ -84,6 +84,9 @@ func TestGetTenantBillingStatusPrepaidNegativeBalance(t *testing.T) {
 		}
 		if !resp.IsSuspended {
 			t.Fatalf("status 'suspended' must map to IsSuspended: %+v", resp)
+		}
+		if !resp.CollectionReady || resp.CollectionProvider != "stripe" {
+			t.Fatalf("provider-backed postpaid must be collection ready: %+v", resp)
 		}
 	})
 }

@@ -135,7 +135,7 @@ func TestGetPendingInvoicesMapsRowsAndLineItems(t *testing.T) {
 		[]byte(`{"k":"v"}`), now, now, now, now,
 		10.0,
 	)
-	mock.ExpectQuery(`FROM purser\.billing_invoices\s+WHERE tenant_id = \$1 AND status IN`).
+	mock.ExpectQuery(`FROM purser\.billing_invoices bi\s+WHERE bi\.tenant_id = \$1 AND bi\.status IN`).
 		WithArgs("tenant-1").
 		WillReturnRows(invoiceRows)
 

@@ -5,8 +5,10 @@ import (
 	"context"
 	"fmt"
 	"html/template"
+	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	emailpkg "github.com/Livepeer-FrameWorks/monorepo/pkg/email"
@@ -26,16 +28,17 @@ type EmailService struct {
 
 // EmailData represents data for email templates
 type EmailData struct {
-	TenantName    string
-	InvoiceID     string
-	Amount        float64
-	Currency      string
-	DueDate       time.Time
-	PaidAt        *time.Time
-	PaymentMethod string
-	DaysPastDue   int
-	Balance       float64
-	LoginURL      string
+	TenantName      string
+	InvoiceID       string
+	Amount          float64
+	Currency        string
+	DueDate         time.Time
+	PaidAt          *time.Time
+	PaymentMethod   string
+	DaysPastDue     int
+	Balance         float64
+	LoginURL        string
+	PaymentRequired bool
 	// ActionURL is the hosted or in-app page where the customer completes a
 	// required payment action.
 	ActionURL string
@@ -125,7 +128,8 @@ func (es *EmailService) SendInvoiceCreatedEmail(tenantEmail, tenantName, invoice
 		Amount:             amount,
 		Currency:           currency,
 		DueDate:            dueDate,
-		LoginURL:           os.Getenv("WEBAPP_PUBLIC_URL") + "/login",
+		LoginURL:           invoiceBillingURL(invoiceID),
+		PaymentRequired:    amount > 0,
 		LineItems:          lineItems,
 		LineItemGroups:     groupEmailLineItems(lineItems),
 		UsageWaived:        grossMeteredAmount > 0 && meteredAmount == 0,
@@ -213,7 +217,7 @@ func (es *EmailService) SendPaymentSuccessEmail(tenantEmail, tenantName, invoice
 		Currency:      currency,
 		PaidAt:        &now,
 		PaymentMethod: paymentMethod,
-		LoginURL:      os.Getenv("WEBAPP_PUBLIC_URL") + "/login",
+		LoginURL:      invoiceBillingURL(invoiceID),
 	}
 
 	body, err := es.renderTemplate("payment_success", data)
@@ -234,12 +238,13 @@ func (es *EmailService) SendPaymentFailedEmail(tenantEmail, tenantName, invoiceI
 	subject := fmt.Sprintf("Payment Failed - Invoice %s", invoiceID)
 
 	data := EmailData{
-		TenantName:    tenantName,
-		InvoiceID:     invoiceID,
-		Amount:        amount,
-		Currency:      currency,
-		PaymentMethod: paymentMethod,
-		LoginURL:      os.Getenv("WEBAPP_PUBLIC_URL") + "/login",
+		TenantName:      tenantName,
+		InvoiceID:       invoiceID,
+		Amount:          amount,
+		Currency:        currency,
+		PaymentMethod:   paymentMethod,
+		LoginURL:        invoiceBillingURL(invoiceID),
+		PaymentRequired: amount > 0,
 	}
 
 	body, err := es.renderTemplate("payment_failed", data)
@@ -289,12 +294,13 @@ func (es *EmailService) SendOverdueReminderEmail(tenantEmail, tenantName, invoic
 	subject := fmt.Sprintf("Payment Reminder - Invoice %s (%d days overdue)", invoiceID, daysPastDue)
 
 	data := EmailData{
-		TenantName:  tenantName,
-		InvoiceID:   invoiceID,
-		Amount:      amount,
-		Currency:    currency,
-		DaysPastDue: daysPastDue,
-		LoginURL:    os.Getenv("WEBAPP_PUBLIC_URL") + "/login",
+		TenantName:      tenantName,
+		InvoiceID:       invoiceID,
+		Amount:          amount,
+		Currency:        currency,
+		DaysPastDue:     daysPastDue,
+		LoginURL:        invoiceBillingURL(invoiceID),
+		PaymentRequired: amount > 0,
 	}
 
 	body, err := es.renderTemplate("overdue_reminder", data)
@@ -303,6 +309,11 @@ func (es *EmailService) SendOverdueReminderEmail(tenantEmail, tenantName, invoic
 	}
 
 	return es.sendEmail(tenantEmail, subject, body)
+}
+
+func invoiceBillingURL(invoiceID string) string {
+	base := strings.TrimRight(strings.TrimSpace(os.Getenv("WEBAPP_PUBLIC_URL")), "/")
+	return base + "/account/billing?invoice=" + url.QueryEscape(invoiceID)
 }
 
 // SendAccountSuspendedEmail sends notification when a tenant is suspended for negative balance
@@ -422,10 +433,14 @@ func (es *EmailService) renderTemplate(templateName string, data EmailData) (str
         {{end}}
         {{end}}
 
-        <p>Please log in to your account to view the invoice details and make payment:</p>
+        {{if .PaymentRequired}}
+        <p>Open this invoice to choose an available payment method. The checkout will collect only the outstanding balance:</p>
+        {{else}}
+        <p>No payment is required for this invoice. You can still review its details:</p>
+        {{end}}
 
         <p style="text-align: center; margin: 30px 0;">
-            <a href="{{.LoginURL}}" style="background-color: #3498db; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">View Invoice</a>
+            <a href="{{.LoginURL}}" style="background-color: #3498db; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">{{if .PaymentRequired}}View and Pay Invoice{{else}}View Invoice{{end}}</a>
         </p>
 
         <p>If you have any questions, please contact our support team.</p>

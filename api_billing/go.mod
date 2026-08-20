@@ -8,6 +8,7 @@ require (
 	github.com/VictorAvelar/mollie-api-go/v4 v4.16.0
 	github.com/btcsuite/btcd v0.25.0
 	github.com/btcsuite/btcd/btcutil v1.1.6
+	github.com/coinbase/cdp-sdk/go v0.0.0-20260818020340-1e68a492df7a
 	github.com/ethereum/go-ethereum v1.17.2
 	github.com/google/uuid v1.6.0
 	github.com/lib/pq v1.12.3
@@ -15,6 +16,7 @@ require (
 	github.com/shopspring/decimal v1.4.0
 	github.com/sirupsen/logrus v1.9.4
 	github.com/stripe/stripe-go/v85 v85.2.0
+	github.com/x402-foundation/x402/go/v2 v2.23.0
 	golang.org/x/crypto v0.50.0
 	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.12

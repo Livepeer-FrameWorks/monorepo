@@ -14,18 +14,26 @@ import (
 )
 
 type invoiceEmailPayload struct {
-	InvoiceID string
-	TenantID  string
-	Recipient string
+	InvoiceID        string
+	TenantID         string
+	Recipient        string
+	NotificationType string
+	ReminderStage    int
 }
+
+const (
+	invoiceCreatedNotification  = "invoice_created"
+	overdueReminderNotification = "overdue_reminder"
+)
 
 type invoiceEmailOutboxStore struct {
 	db *sql.DB
 }
 
 type invoiceEmailDispatcher struct {
-	jobs *JobManager
-	send func(recipient, invoiceID string, amount, meteredAmount, grossMeteredAmount float64, currency string, dueDate time.Time, lineItems []EmailInvoiceLineItem) error
+	jobs         *JobManager
+	send         func(recipient, invoiceID string, amount, meteredAmount, grossMeteredAmount float64, currency string, dueDate time.Time, lineItems []EmailInvoiceLineItem) error
+	sendReminder func(recipient, invoiceID string, amount float64, currency string, daysPastDue int) error
 }
 
 func enqueueInvoiceEmailTx(ctx context.Context, tx *sql.Tx, invoiceID, tenantID, recipient, status string) error {
@@ -42,9 +50,10 @@ func enqueueInvoiceEmailTx(ctx context.Context, tx *sql.Tx, invoiceID, tenantID,
 		return nil
 	}
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO purser.invoice_email_outbox (invoice_id, tenant_id, recipient)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (invoice_id) DO NOTHING
+		INSERT INTO purser.invoice_email_outbox
+			(invoice_id, tenant_id, recipient, notification_type, reminder_stage)
+		VALUES ($1, $2, $3, 'invoice_created', 0)
+		ON CONFLICT (invoice_id, notification_type, reminder_stage) DO NOTHING
 	`, invoiceID, tenantID, strings.TrimSpace(recipient))
 	if err != nil {
 		return fmt.Errorf("insert invoice email outbox: %w", err)
@@ -79,7 +88,7 @@ func (s *invoiceEmailOutboxStore) ClaimBatch(ctx context.Context, batchSize int,
 	}()
 
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, invoice_id, tenant_id, recipient, attempts
+		SELECT id, invoice_id, tenant_id, recipient, notification_type, reminder_stage, attempts
 		FROM purser.invoice_email_outbox
 		WHERE sent_at IS NULL
 		  AND next_attempt_at <= NOW()
@@ -98,13 +107,13 @@ func (s *invoiceEmailOutboxStore) ClaimBatch(ctx context.Context, batchSize int,
 	}()
 
 	type emailCandidate struct {
-		id, invoiceID, tenantID, recipient string
-		attempts                           int
+		id, invoiceID, tenantID, recipient, notificationType string
+		reminderStage, attempts                              int
 	}
 	var candidates []emailCandidate
 	for rows.Next() {
 		var item emailCandidate
-		if err := rows.Scan(&item.id, &item.invoiceID, &item.tenantID, &item.recipient, &item.attempts); err != nil {
+		if err := rows.Scan(&item.id, &item.invoiceID, &item.tenantID, &item.recipient, &item.notificationType, &item.reminderStage, &item.attempts); err != nil {
 			return nil, fmt.Errorf("scan invoice email outbox: %w", err)
 		}
 		candidates = append(candidates, item)
@@ -131,9 +140,11 @@ func (s *invoiceEmailOutboxStore) ClaimBatch(ctx context.Context, batchSize int,
 			Attempts:   candidate.attempts,
 			LeaseToken: leaseToken,
 			Payload: invoiceEmailPayload{
-				InvoiceID: candidate.invoiceID,
-				TenantID:  candidate.tenantID,
-				Recipient: candidate.recipient,
+				InvoiceID:        candidate.invoiceID,
+				TenantID:         candidate.tenantID,
+				Recipient:        candidate.recipient,
+				NotificationType: candidate.notificationType,
+				ReminderStage:    candidate.reminderStage,
 			},
 		})
 	}
@@ -226,6 +237,12 @@ func (d *invoiceEmailDispatcher) Dispatch(ctx context.Context, payload invoiceEm
 	if d.jobs == nil || d.jobs.db == nil {
 		return []string{"smtp"}, errors.New("invoice email dispatcher is not configured")
 	}
+	if payload.NotificationType == overdueReminderNotification {
+		return d.dispatchOverdueReminder(ctx, payload)
+	}
+	if payload.NotificationType != "" && payload.NotificationType != invoiceCreatedNotification {
+		return []string{"smtp"}, fmt.Errorf("unsupported invoice notification type %q", payload.NotificationType)
+	}
 	send := d.send
 	if send == nil {
 		if d.jobs.emailService == nil || !d.jobs.emailService.IsConfigured() {
@@ -262,6 +279,53 @@ func (d *invoiceEmailDispatcher) Dispatch(ctx context.Context, payload invoiceEm
 	}
 	if err := send(payload.Recipient, payload.InvoiceID, amount, meteredAmount,
 		grossMeteredAmount, currency, dueDate, lineItems); err != nil {
+		return []string{"smtp"}, err
+	}
+	return nil, nil
+}
+
+func (d *invoiceEmailDispatcher) dispatchOverdueReminder(ctx context.Context, payload invoiceEmailPayload) ([]string, error) {
+	var amountDue float64
+	var currency, status string
+	var dueDate time.Time
+	var latestReminderStage int
+	err := d.jobs.db.QueryRowContext(ctx, `
+		SELECT GREATEST(bi.amount - COALESCE((
+		           SELECT SUM(bp.amount - (COALESCE(bp.reversed_amount_cents, 0)::numeric / 100))
+		           FROM purser.billing_payments bp
+		           WHERE bp.invoice_id = bi.id
+		             AND bp.status = 'confirmed'
+		             AND bp.currency = bi.currency
+		       ), 0), 0)::float8,
+		       bi.currency, bi.due_date, bi.status,
+		       COALESCE((
+		           SELECT MAX(candidate)
+		           FROM UNNEST(ARRAY[1, 7, 14, 30]) AS candidate
+		           WHERE candidate <= FLOOR(EXTRACT(EPOCH FROM (NOW() - bi.due_date)) / 86400)
+		       ), 0)
+		FROM purser.billing_invoices bi
+		WHERE bi.id = $1 AND bi.tenant_id = $2
+	`, payload.InvoiceID, payload.TenantID).Scan(&amountDue, &currency, &dueDate, &status, &latestReminderStage)
+	if err != nil {
+		return []string{"smtp"}, fmt.Errorf("load overdue invoice for reminder: %w", err)
+	}
+	if amountDue <= 0 || (status != "pending" && status != "overdue") || !dueDate.Before(time.Now()) {
+		return nil, nil
+	}
+	daysPastDue := int(time.Since(dueDate).Hours() / 24)
+	if daysPastDue < payload.ReminderStage || payload.ReminderStage != latestReminderStage {
+		return nil, nil
+	}
+	send := d.sendReminder
+	if send == nil {
+		if d.jobs.emailService == nil || !d.jobs.emailService.IsConfigured() {
+			return []string{"smtp"}, errors.New("invoice email SMTP is not configured")
+		}
+		send = func(recipient, invoiceID string, amount float64, currency string, daysPastDue int) error {
+			return d.jobs.emailService.SendOverdueReminderEmail(recipient, "", invoiceID, amount, currency, daysPastDue)
+		}
+	}
+	if err := send(payload.Recipient, payload.InvoiceID, amountDue, currency, daysPastDue); err != nil {
 		return []string{"smtp"}, err
 	}
 	return nil, nil

@@ -64,7 +64,7 @@ func TestGetTenantBillingStatusRetriesRetryablePostgresErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTenantBillingStatus: %v", err)
 	}
-	if resp.GetBillingModel() != "postpaid" || resp.GetIsSuspended() || resp.GetIsBalanceNegative() {
+	if resp.GetBillingModel() != "prepaid" || resp.GetIsSuspended() || !resp.GetIsBalanceNegative() || resp.GetAvailableBalanceCents() != 0 {
 		t.Fatalf("unexpected default response after retry: %+v", resp)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

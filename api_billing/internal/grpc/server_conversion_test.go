@@ -4,7 +4,32 @@ import (
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"strings"
 	"testing"
+
+	"github.com/shopspring/decimal"
 )
+
+func TestInvoiceAmountMinorUnitsUsesCurrencyExponent(t *testing.T) {
+	for _, tc := range []struct {
+		amount, currency string
+		want             int64
+		wantErr          bool
+	}{
+		{amount: "12.34", currency: "EUR", want: 1234},
+		{amount: "1234", currency: "JPY", want: 1234},
+		{amount: "1.234", currency: "BHD", wantErr: true},
+	} {
+		got, err := invoiceAmountMinorUnits(decimal.RequireFromString(tc.amount), tc.currency)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("invoiceAmountMinorUnits(%s, %s) expected error", tc.amount, tc.currency)
+			}
+			continue
+		}
+		if err != nil || got != tc.want {
+			t.Errorf("invoiceAmountMinorUnits(%s, %s) = (%d, %v), want %d", tc.amount, tc.currency, got, err, tc.want)
+		}
+	}
+}
 
 func TestScanBillingFeatures(t *testing.T) {
 	got := scanBillingFeatures(nil)

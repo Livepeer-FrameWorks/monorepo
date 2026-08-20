@@ -243,9 +243,9 @@ func TestLoadSubscriptionPeriod(t *testing.T) {
 	})
 }
 
-// nextProviderPaymentAttempt is the retry state machine: a fresh invoice gets
-// attempt 1; a previously failed provider call increments up to the cap; any
-// non-failure terminal status (or hitting the cap) stops further attempts.
+// nextProviderPaymentAttempt is the retry state machine: a fresh logical
+// payment gets attempt 1; an ambiguous provider-call failure reuses that same
+// attempt (and its provider idempotency key); all other states stop retries.
 func TestNextProviderPaymentAttempt(t *testing.T) {
 	const provider = "stripe"
 	const invoiceID = "inv-1"
@@ -265,12 +265,12 @@ func TestNextProviderPaymentAttempt(t *testing.T) {
 			want: 1,
 		},
 		{
-			name: "prior provider_call_failed increments",
+			name: "prior provider_call_failed reuses logical attempt",
 			setup: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery("billing_payment_attempts").WithArgs(provider, invoiceID).
 					WillReturnRows(sqlmock.NewRows(cols).AddRow(1, "provider_call_failed"))
 			},
-			want: 2,
+			want: 1,
 		},
 		{
 			name: "non-failure status stops retries",
@@ -281,12 +281,12 @@ func TestNextProviderPaymentAttempt(t *testing.T) {
 			want: 0,
 		},
 		{
-			name: "at attempt cap stops retries",
+			name: "legacy higher attempt is still reused",
 			setup: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery("billing_payment_attempts").WithArgs(provider, invoiceID).
 					WillReturnRows(sqlmock.NewRows(cols).AddRow(maxProviderPaymentAttempts, "provider_call_failed"))
 			},
-			want: 0,
+			want: maxProviderPaymentAttempts,
 		},
 		{
 			name: "query error propagates",

@@ -1,3 +1,4 @@
+//nolint:govet,errcheck // Protocol envelope decoding uses local scopes and optional extension type assertions.
 package x402
 
 import (
@@ -8,6 +9,7 @@ import (
 	"strings"
 
 	x402pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/x402"
+	x402types "github.com/x402-foundation/x402/go/v2/types"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -66,10 +68,13 @@ func GetPaymentHeaderFromHeaders(headers http.Header) string {
 	if headers == nil {
 		return ""
 	}
-	if value := strings.TrimSpace(headers.Get("X-PAYMENT")); value != "" {
+	// PAYMENT-SIGNATURE is the x402 v2 header. X-PAYMENT is accepted only as a
+	// v1 compatibility fallback and must not override a standards-compliant
+	// client when an intermediary forwards both.
+	if value := strings.TrimSpace(headers.Get("PAYMENT-SIGNATURE")); value != "" {
 		return value
 	}
-	if value := strings.TrimSpace(headers.Get("PAYMENT-SIGNATURE")); value != "" {
+	if value := strings.TrimSpace(headers.Get("X-PAYMENT")); value != "" {
 		return value
 	}
 	return ""
@@ -85,12 +90,12 @@ func GetPaymentHeaderFromContext(ctx context.Context) string {
 	if !ok || md == nil {
 		return ""
 	}
-	if values := md.Get("x-payment"); len(values) > 0 {
+	if values := md.Get("payment-signature"); len(values) > 0 {
 		if value := strings.TrimSpace(values[0]); value != "" {
 			return value
 		}
 	}
-	if values := md.Get("payment-signature"); len(values) > 0 {
+	if values := md.Get("x-payment"); len(values) > 0 {
 		if value := strings.TrimSpace(values[0]); value != "" {
 			return value
 		}
@@ -105,13 +110,83 @@ func ParsePaymentHeader(header string) (*x402pb.X402PaymentPayload, error) {
 		return nil, err
 	}
 
-	var payload paymentHeaderWire
+	var envelope struct {
+		X402Version int `json:"x402Version"`
+	}
+	if err := json.Unmarshal(payloadBytes, &envelope); err != nil {
+		return nil, err
+	}
+	if envelope.X402Version == 2 {
+		return parseV2PaymentPayload(payloadBytes)
+	}
 
+	var payload paymentHeaderWire
 	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 		return nil, err
 	}
+	parsed := payload.toProto()
+	parsed.CanonicalPayloadJson = append([]byte(nil), payloadBytes...)
+	return parsed, nil
 
-	return payload.toProto(), nil
+}
+
+func parseV2PaymentPayload(payloadBytes []byte) (*x402pb.X402PaymentPayload, error) {
+	payload, err := x402types.ToPaymentPayload(payloadBytes)
+	if err != nil {
+		return nil, err
+	}
+	payloadJSON, err := json.Marshal(payload.Payload)
+	if err != nil {
+		return nil, err
+	}
+	var exact paymentHeaderExactPayloadWire
+	if err := json.Unmarshal(payloadJSON, &exact); err != nil {
+		return nil, err
+	}
+	extraJSON, err := json.Marshal(payload.Accepted.Extra)
+	if err != nil {
+		return nil, err
+	}
+	quoteID := quoteIDFromExtra(payload.Accepted.Extra)
+	return &x402pb.X402PaymentPayload{
+		X402Version: int32(payload.X402Version),
+		Scheme:      payload.Accepted.Scheme,
+		Network:     payload.Accepted.Network,
+		Payload: &x402pb.X402ExactPayload{
+			Signature: exact.Signature,
+			Authorization: &x402pb.X402Authorization{
+				From:        exact.Authorization.From,
+				To:          exact.Authorization.To,
+				Value:       exact.Authorization.Value,
+				ValidAfter:  exact.Authorization.ValidAfter,
+				ValidBefore: exact.Authorization.ValidBefore,
+				Nonce:       exact.Authorization.Nonce,
+			},
+		},
+		CanonicalPayloadJson: append([]byte(nil), payloadBytes...),
+		Accepted: &x402pb.X402AcceptedRequirements{
+			Scheme:            payload.Accepted.Scheme,
+			Network:           payload.Accepted.Network,
+			Asset:             payload.Accepted.Asset,
+			Amount:            payload.Accepted.Amount,
+			PayTo:             payload.Accepted.PayTo,
+			MaxTimeoutSeconds: int32(payload.Accepted.MaxTimeoutSeconds),
+			ExtraJson:         extraJSON,
+		},
+		QuoteId: quoteID,
+	}, nil
+}
+
+func quoteIDFromExtra(extra map[string]interface{}) string {
+	if quoteID, ok := extra["quoteId"].(string); ok {
+		return strings.TrimSpace(quoteID)
+	}
+	frameworks, ok := extra["frameworks"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	quoteID, _ := frameworks["quoteId"].(string)
+	return strings.TrimSpace(quoteID)
 }
 
 func base64Decode(s string) ([]byte, error) {

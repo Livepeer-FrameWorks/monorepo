@@ -22,6 +22,12 @@ func TestCancelSubscriptionHappyPathEnqueuesOutbox(t *testing.T) {
 	mock.ExpectQuery(`SELECT id FROM purser\.tenant_subscriptions WHERE tenant_id = \$1 AND status != 'cancelled'`).
 		WithArgs("tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("sub-1"))
+	mock.ExpectExec(`INSERT INTO purser\.billing_collection_writeoffs`).
+		WithArgs("tenant-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE purser\.billing_collection_balances`).
+		WithArgs("tenant-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions`).
 		WithArgs("tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -47,6 +53,12 @@ func TestCancelSubscriptionNotFoundRollsBack(t *testing.T) {
 	mock.ExpectQuery(`SELECT id FROM purser\.tenant_subscriptions`).
 		WithArgs("tenant-x").
 		WillReturnError(sqlmockNoRows())
+	mock.ExpectExec(`INSERT INTO purser\.billing_collection_writeoffs`).
+		WithArgs("tenant-x").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`UPDATE purser\.billing_collection_balances`).
+		WithArgs("tenant-x").
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions`).
 		WithArgs("tenant-x").
 		WillReturnResult(sqlmock.NewResult(0, 0))
@@ -74,8 +86,12 @@ func TestPromoteToPaidDefaultTierCarriesCredit(t *testing.T) {
 	mock.ExpectQuery(`SELECT billing_model FROM purser\.tenant_subscriptions WHERE tenant_id = \$1`).
 		WithArgs("tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"billing_model"}).AddRow("prepaid"))
+	expectCompleteBillingDetails(mock, "tenant-1")
 	mock.ExpectQuery(`SELECT id, tier_level, tier_name FROM purser\.billing_tiers\s+WHERE is_default_postpaid = true`).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name"}).AddRow("tier-paid", int32(2), "supporter"))
+	mock.ExpectQuery(`SELECT payment_method, stripe_subscription_id, mollie_subscription_id`).
+		WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"payment_method", "stripe_subscription_id", "mollie_subscription_id"}).AddRow("stripe", "sub_ready", nil))
 	mock.ExpectQuery(`SELECT COALESCE\(balance_cents, 0\) FROM purser\.prepaid_balances WHERE tenant_id = \$1`).
 		WithArgs("tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(1500)))
@@ -100,6 +116,26 @@ func TestPromoteToPaidDefaultTierCarriesCredit(t *testing.T) {
 	}
 }
 
+func TestPromoteToPaidRequiresCompleteBillingDetails(t *testing.T) {
+	s, mock := newReadServer(t, true)
+
+	mock.ExpectQuery(`SELECT billing_model FROM purser\.tenant_subscriptions WHERE tenant_id = \$1`).
+		WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"billing_model"}).AddRow("prepaid"))
+	mock.ExpectQuery(`SELECT billing_email, billing_company, tax_id, billing_address, updated_at`).
+		WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_company", "tax_id", "billing_address", "updated_at"}).
+			AddRow("billing@example.com", nil, nil, nil, time.Now()))
+
+	_, err := s.PromoteToPaid(context.Background(), &purserpb.PromoteToPaidRequest{TenantId: "tenant-1"})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("err = %v, want FailedPrecondition", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet: %v", err)
+	}
+}
+
 // An explicit tier_id is honored only when active and postpaid-eligible
 // (tier_level >= 1 and not the default prepaid tier).
 func TestPromoteToPaidExplicitTierRejectsNonEligible(t *testing.T) {
@@ -120,6 +156,7 @@ func TestPromoteToPaidExplicitTierRejectsNonEligible(t *testing.T) {
 			mock.ExpectQuery(`SELECT billing_model FROM purser\.tenant_subscriptions`).
 				WithArgs("tenant-1").
 				WillReturnRows(sqlmock.NewRows([]string{"billing_model"}).AddRow("prepaid"))
+			expectCompleteBillingDetails(mock, "tenant-1")
 			mock.ExpectQuery(`SELECT id, tier_level, tier_name, is_default_prepaid, is_active\s+FROM purser\.billing_tiers\s+WHERE id = \$1`).
 				WithArgs("tier-req").
 				WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name", "is_default_prepaid", "is_active"}).
@@ -132,6 +169,13 @@ func TestPromoteToPaidExplicitTierRejectsNonEligible(t *testing.T) {
 			}
 		})
 	}
+}
+
+func expectCompleteBillingDetails(mock sqlmock.Sqlmock, tenantID string) {
+	mock.ExpectQuery(`SELECT billing_email, billing_company, tax_id, billing_address, updated_at`).
+		WithArgs(tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_company", "tax_id", "billing_address", "updated_at"}).
+			AddRow("billing@example.com", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now()))
 }
 
 func TestPromoteToPaidNotFoundAndAlreadyPostpaid(t *testing.T) {

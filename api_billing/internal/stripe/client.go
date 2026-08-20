@@ -200,10 +200,9 @@ func (c *Client) CreateCheckoutSession(ctx context.Context, params CheckoutSessi
 }
 
 // OffSessionChargeParams describes a Purser-owned off-session charge for
-// metered overage on a finalized invoice. The PaymentMethodID is the
-// customer's saved card; if empty, Stripe falls back to the customer's
-// default payment method. IdempotencyKey is required and must be
-// deterministic on (invoice, attempt) so retries collapse to one charge.
+// metered overage on a finalized invoice. PaymentMethodID is the explicit
+// saved card resolved from the subscription or customer before collection.
+// IdempotencyKey must be deterministic on (invoice, attempt).
 type OffSessionChargeParams struct {
 	CustomerID       string
 	PaymentMethodID  string
@@ -231,6 +230,36 @@ type OffSessionChargeResult struct {
 	AmountReceived  int64
 }
 
+// ResolveDefaultPaymentMethod returns the subscription-level default when
+// present, otherwise the customer's invoice default. Collection callers use
+// the returned id explicitly so provider behavior cannot select a card
+// implicitly.
+func (c *Client) ResolveDefaultPaymentMethod(ctx context.Context, customerID, subscriptionID string) (string, error) {
+	if customerID == "" || subscriptionID == "" {
+		return "", fmt.Errorf("stripe customer and subscription ids are required")
+	}
+	subParams := &stripe.SubscriptionParams{}
+	subParams.Context = ctx
+	sub, err := subscription.Get(subscriptionID, subParams)
+	if err != nil {
+		return "", fmt.Errorf("get Stripe subscription: %w", err)
+	}
+	if sub.DefaultPaymentMethod != nil && sub.DefaultPaymentMethod.ID != "" {
+		return sub.DefaultPaymentMethod.ID, nil
+	}
+
+	customerParams := &stripe.CustomerParams{}
+	customerParams.Context = ctx
+	cust, err := customer.Get(customerID, customerParams)
+	if err != nil {
+		return "", fmt.Errorf("get Stripe customer: %w", err)
+	}
+	if cust.InvoiceSettings != nil && cust.InvoiceSettings.DefaultPaymentMethod != nil {
+		return cust.InvoiceSettings.DefaultPaymentMethod.ID, nil
+	}
+	return "", nil
+}
+
 // ChargeOffSession creates a Stripe PaymentIntent for the customer's saved
 // payment method and confirms it off-session. Success means Stripe captured
 // the charge synchronously; the corresponding payment_intent.succeeded
@@ -244,6 +273,9 @@ func (c *Client) ChargeOffSession(ctx context.Context, params OffSessionChargePa
 	}
 	if params.CustomerID == "" {
 		return nil, fmt.Errorf("ChargeOffSession requires a Stripe customer id")
+	}
+	if params.PaymentMethodID == "" {
+		return nil, fmt.Errorf("ChargeOffSession requires an explicit Stripe payment method id")
 	}
 	if params.AmountCents <= 0 {
 		return nil, fmt.Errorf("ChargeOffSession amount must be positive, got %d", params.AmountCents)
@@ -259,9 +291,7 @@ func (c *Client) ChargeOffSession(ctx context.Context, params OffSessionChargePa
 		Confirm:    stripe.Bool(true),
 		OffSession: stripe.Bool(true),
 	}
-	if params.PaymentMethodID != "" {
-		piParams.PaymentMethod = stripe.String(params.PaymentMethodID)
-	}
+	piParams.PaymentMethod = stripe.String(params.PaymentMethodID)
 	if params.Description != "" {
 		piParams.Description = stripe.String(params.Description)
 	}

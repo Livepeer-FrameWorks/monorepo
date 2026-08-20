@@ -93,6 +93,7 @@ require (
 	github.com/twmb/franz-go v1.21.0 // indirect
 	github.com/twmb/franz-go/pkg/kmsg v1.13.1 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
+	github.com/x402-foundation/x402/go/v2 v2.23.0 // indirect
 	github.com/yugabyte/pgx/v5 v5.7.6-yb-1 // indirect
 	github.com/yuin/gopher-lua v1.1.2 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.5.1 // indirect

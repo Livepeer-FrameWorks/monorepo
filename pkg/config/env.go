@@ -94,6 +94,20 @@ func X402IncludeTestnetsEnabled() bool {
 	return GetEnvBool("X402_INCLUDE_TESTNETS", false)
 }
 
+// CryptoDepositsEnabled is the default-on emergency breaker for creating new
+// direct crypto invoice/top-up payment intents. Observation, reconciliation,
+// and access to already-received funds must continue when it is disabled.
+func CryptoDepositsEnabled() bool {
+	return GetEnvBool("CRYPTO_DEPOSITS_ENABLED", true)
+}
+
+// X402PaymentsEnabled is the default-on emergency breaker for advertising,
+// verifying, and settling new x402 payments. Background reconciliation of
+// already-submitted settlements is intentionally unaffected.
+func X402PaymentsEnabled() bool {
+	return GetEnvBool("X402_PAYMENTS_ENABLED", true)
+}
+
 // WaiveUsageChargesEnabled reports whether metered usage should rate to €0 while
 // the monthly subscription still charges. Real prices stay in the DB; flipping
 // this off resumes normal billing with no migration. Beta safety lever.

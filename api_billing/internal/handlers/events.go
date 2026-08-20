@@ -25,6 +25,7 @@ const (
 	eventX402LateRecovery      = "x402_late_recovery"
 	eventX402AccountingAnomaly = "x402_accounting_anomaly"
 	eventX402ReorgDetected     = "x402_reorg_detected"
+	eventCryptoDepositReorg    = "crypto_deposit_reorg_detected"
 )
 
 // emitBillingEvent enqueues a billing event into purser.billing_event_outbox.

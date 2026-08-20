@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -36,6 +37,10 @@ func TestCreateCheckoutSessionExpiresStripeSessionWhenLocalStageFails(t *testing
 	}
 
 	tierID := "11111111-1111-1111-1111-111111111111"
+	mock.ExpectQuery(`SELECT billing_email, billing_company, tax_id, billing_address, updated_at`).
+		WithArgs("tenant-a").
+		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_company", "tax_id", "billing_address", "updated_at"}).
+			AddRow("billing@example.com", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now()))
 	mock.ExpectQuery(`SELECT tier_name, currency, stripe_price_id_monthly FROM purser\.billing_tiers WHERE id = \$1`).
 		WithArgs(tierID).
 		WillReturnRows(sqlmock.NewRows([]string{"tier_name", "currency", "stripe_price_id_monthly"}).AddRow("Pro", "USD", "price_123"))
@@ -93,6 +98,10 @@ func TestCreateMollieSubscriptionCancelsProviderSubscriptionWhenLocalPersistFail
 	}
 
 	tierID := "11111111-1111-1111-1111-111111111111"
+	mock.ExpectQuery(`SELECT billing_email, billing_company, tax_id, billing_address, updated_at`).
+		WithArgs("tenant-a").
+		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_company", "tax_id", "billing_address", "updated_at"}).
+			AddRow("billing@example.com", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now()))
 	mock.ExpectQuery(`SELECT 1 FROM purser\.tenant_subscriptions WHERE tenant_id = \$1`).
 		WithArgs("tenant-a").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(1))
@@ -179,6 +188,10 @@ func (f *fakeMollieBillingClient) CreateFirstPayment(context.Context, billingmol
 
 func (f *fakeMollieBillingClient) ListMandates(context.Context, string) ([]*mollielib.Mandate, error) {
 	panic("unexpected ListMandates call")
+}
+
+func (f *fakeMollieBillingClient) GetMandate(_ context.Context, _ string, mandateID string) (*mollielib.Mandate, error) {
+	return &mollielib.Mandate{ID: mandateID, Status: "valid"}, nil
 }
 
 func (f *fakeMollieBillingClient) CreateSubscription(context.Context, billingmollie.SubscriptionParams) (*mollielib.Subscription, error) {

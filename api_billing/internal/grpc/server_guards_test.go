@@ -93,6 +93,12 @@ func TestMethodInputGuards(t *testing.T) {
 			})
 			return err
 		}, codes.InvalidArgument},
+		{"CreateCardTopup below provider minimum", func(s *PurserServer) error {
+			_, err := s.CreateCardTopup(ctx, &purserpb.CreateCardTopupRequest{
+				TenantId: "t1", AmountCents: 499, Currency: "EUR", SuccessUrl: "https://x/ok", CancelUrl: "https://x/no", Provider: "stripe",
+			})
+			return err
+		}, codes.InvalidArgument},
 
 		// Crypto top-up.
 		{"CreateCryptoTopup empty tenant", func(s *PurserServer) error {

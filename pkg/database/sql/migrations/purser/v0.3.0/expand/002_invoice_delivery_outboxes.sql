@@ -20,9 +20,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_stripe_meter_events_outbox_invoice_line
 
 CREATE TABLE IF NOT EXISTS purser.invoice_email_outbox (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    invoice_id UUID NOT NULL UNIQUE REFERENCES purser.billing_invoices(id) ON DELETE CASCADE,
+    invoice_id UUID NOT NULL REFERENCES purser.billing_invoices(id) ON DELETE CASCADE,
     tenant_id UUID NOT NULL,
     recipient TEXT NOT NULL,
+    notification_type VARCHAR(32) NOT NULL DEFAULT 'invoice_created',
+    reminder_stage INT NOT NULL DEFAULT 0,
     claimed_at TIMESTAMPTZ,
     lease_token UUID,
     attempts INT NOT NULL DEFAULT 0,
@@ -33,13 +35,15 @@ CREATE TABLE IF NOT EXISTS purser.invoice_email_outbox (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS uq_invoice_email_outbox_notification
+    ON purser.invoice_email_outbox(invoice_id, notification_type, reminder_stage);
 CREATE INDEX IF NOT EXISTS idx_invoice_email_outbox_pending
     ON purser.invoice_email_outbox(next_attempt_at, created_at)
     WHERE sent_at IS NULL;
 
 CREATE OR REPLACE VIEW purser.payment_report_invoice_email_outbox_stuck AS
 SELECT id, invoice_id, tenant_id, recipient, attempts, next_attempt_at,
-       last_error, created_at, updated_at
+       last_error, created_at, updated_at, notification_type, reminder_stage
 FROM purser.invoice_email_outbox
 WHERE sent_at IS NULL
   AND attempts >= 5;

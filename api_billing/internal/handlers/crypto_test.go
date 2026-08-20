@@ -221,9 +221,62 @@ func TestEvaluatePayment_InvoiceETHComparesQuotedBaseUnits(t *testing.T) {
 	}
 }
 
+func TestCreditInvoiceOverpaymentUsesLockedQuoteAndAtomicLedger(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	mock.ExpectBegin()
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rate := decimal.RequireFromString("0.90")
+	wallet := PendingWallet{
+		ID: "wallet-overpay", TenantID: "tenant-overpay", Purpose: "invoice", Asset: "USDC",
+		ExpectedAmountBaseUnits: big.NewInt(10_000_000), QuotedPriceUSD: decimal.NewFromInt(1),
+		QuotedUSDToEURRate: &rate, InvoiceCurrency: stringPtr("EUR"),
+	}
+	mock.ExpectExec(`INSERT INTO purser\.prepaid_balances`).
+		WithArgs("tenant-overpay", "EUR").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT balance_cents FROM purser\.prepaid_balances`).
+		WithArgs("tenant-overpay", "EUR").
+		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(200)))
+	mock.ExpectExec(`UPDATE purser\.prepaid_balances SET balance_cents`).
+		WithArgs(int64(335), "tenant-overpay", "EUR").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO purser\.balance_transactions`).
+		WithArgs(sqlmock.AnyArg(), "tenant-overpay", int64(135), int64(335),
+			"Crypto invoice overpayment via USDC", "wallet-overpay",
+			"confirmed receipt exceeded exact invoice quote", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE purser\.crypto_wallets`).
+		WithArgs("wallet-overpay", int64(135), "EUR", "tenant-overpay").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectRollback()
+
+	monitor := &CryptoMonitor{db: db, logger: logrus.New()}
+	cents, currency, err := monitor.creditInvoiceOverpaymentTx(
+		context.Background(), tx, wallet, big.NewInt(11_500_000), time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("creditInvoiceOverpaymentTx: %v", err)
+	}
+	if cents != 135 || currency != "EUR" {
+		t.Fatalf("unexpected overpayment allocation: %d %s", cents, currency)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestGetETHTransactions_InlineDecodeAndMapping(t *testing.T) {
 	t.Setenv("TEST_EXPLORER_API_KEY", "key")
 	network := NetworkConfig{
+		ChainID:        8453,
 		Name:           "base",
 		DisplayName:    "Base",
 		ExplorerAPIURL: "",
@@ -234,7 +287,10 @@ func TestGetETHTransactions_InlineDecodeAndMapping(t *testing.T) {
 	t.Run("malformed response", func(t *testing.T) {
 		network.ExplorerAPIURL = "https://explorer.test/api"
 		withDefaultHTTPClient(t, &http.Client{
-			Transport: testRoundTripFunc(func(_ *http.Request) (*http.Response, error) {
+			Transport: testRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if got := req.URL.Query().Get("chainid"); got != "8453" {
+					t.Fatalf("chainid query = %q, want 8453", got)
+				}
 				return newJSONResponse(http.StatusOK, `{"result":`), nil
 			}),
 		})
@@ -279,6 +335,7 @@ func TestGetETHTransactions_InlineDecodeAndMapping(t *testing.T) {
 func TestGetERC20TransactionsForNetwork_InlineDecodeAndMapping(t *testing.T) {
 	t.Setenv("TEST_EXPLORER_API_KEY", "key")
 	network := NetworkConfig{
+		ChainID:        42161,
 		Name:           "arbitrum",
 		DisplayName:    "Arbitrum One",
 		ExplorerAPIURL: "",
@@ -289,7 +346,10 @@ func TestGetERC20TransactionsForNetwork_InlineDecodeAndMapping(t *testing.T) {
 	t.Run("malformed response", func(t *testing.T) {
 		network.ExplorerAPIURL = "https://explorer.test/api"
 		withDefaultHTTPClient(t, &http.Client{
-			Transport: testRoundTripFunc(func(_ *http.Request) (*http.Response, error) {
+			Transport: testRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if got := req.URL.Query().Get("chainid"); got != "42161" {
+					t.Fatalf("chainid query = %q, want 42161", got)
+				}
 				return newJSONResponse(http.StatusOK, `{"message":`), nil
 			}),
 		})
@@ -326,6 +386,19 @@ func TestGetERC20TransactionsForNetwork_InlineDecodeAndMapping(t *testing.T) {
 			t.Fatalf("unexpected mapped tx: %+v", txs[0])
 		}
 	})
+}
+
+func TestCryptoTopupAmountEurCentsUsesLockedTaxPointValue(t *testing.T) {
+	if got, err := cryptoTopupAmountEurCents(PendingWallet{}, 1234, "EUR"); err != nil || got != 1234 {
+		t.Fatalf("EUR conversion = %d, %v", got, err)
+	}
+	rate := decimal.RequireFromString("0.92")
+	if got, err := cryptoTopupAmountEurCents(PendingWallet{QuotedUSDToEURRate: &rate}, 1000, "USD"); err != nil || got != 920 {
+		t.Fatalf("USD conversion = %d, %v", got, err)
+	}
+	if _, err := cryptoTopupAmountEurCents(PendingWallet{}, 1000, "USD"); err == nil {
+		t.Fatal("USD conversion without locked rate must fail")
+	}
 }
 
 func int64Ptr(val int64) *int64 {

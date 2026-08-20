@@ -7,7 +7,10 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 )
@@ -240,6 +243,15 @@ func TestListInvoicesMapsRowsAndLineItems(t *testing.T) {
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestListInvoicesRejectsCrossTenantRequest(t *testing.T) {
+	s := newGuardServer(t)
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-a")
+	_, err := s.ListInvoices(ctx, &purserpb.ListInvoicesRequest{TenantId: "tenant-b"})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("err = %v, want PermissionDenied", err)
 	}
 }
 

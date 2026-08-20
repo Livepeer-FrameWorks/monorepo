@@ -58,7 +58,6 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -2614,16 +2613,16 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *shar
 	}).Info("Resolved content type from ID")
 
 	resourcePath := "viewer://" + req.ContentId
-	x402Paid := x402PaidFromMetadata(ctx)
+	x402Processed := false
 	paymentHeader := x402.GetPaymentHeaderFromContext(ctx)
 	clientIP := req.GetViewerIp()
 
-	if !x402Paid && paymentHeader != "" && s.purserClient != nil && resolution.TenantId != "" {
+	if !x402Processed && paymentHeader != "" && s.purserClient != nil && resolution.TenantId != "" {
 		paid, errPay := s.handleX402ViewerPayment(ctx, resolution.TenantId, resourcePath, paymentHeader, clientIP)
 		if errPay != nil {
 			return nil, errPay
 		}
-		x402Paid = paid
+		x402Processed = paid
 	}
 
 	// Check billing status for the content owner
@@ -2631,6 +2630,33 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *shar
 		billingTarget := control.ResolvePlaybackPolicyTarget(ctx, resolution.ContentId, resolution.InternalName)
 		billingInternalName := billingTarget.InternalName
 		billing := s.cacheInvalidator.GetBillingStatus(ctx, billingInternalName, resolution.TenantId)
+		// A payment may have been settled at the Gateway before this request
+		// reaches Foghorn. When cached state would deny admission, refresh from
+		// Purser instead of trusting a cross-service "paid" flag or stale cache.
+		if !x402Processed && s.purserClient != nil && (billing == nil || billing.State == triggers.BillingStatusUnavailable || billing.IsSuspended || (billing.BillingModel == "prepaid" && billing.IsBalanceNegative)) {
+			fresh, freshErr := s.purserClient.GetTenantBillingStatus(ctx, resolution.TenantId)
+			if freshErr == nil && fresh != nil {
+				billing = &triggers.BillingStatus{
+					TenantID:          resolution.TenantId,
+					BillingModel:      fresh.GetBillingModel(),
+					IsSuspended:       fresh.GetIsSuspended(),
+					IsBalanceNegative: fresh.GetIsBalanceNegative(),
+				}
+			}
+		}
+		if x402Processed && s.purserClient != nil {
+			fresh, freshErr := s.purserClient.GetTenantBillingStatus(ctx, resolution.TenantId)
+			if freshErr != nil || fresh == nil {
+				s.logger.WithError(freshErr).WithField("tenant_id", resolution.TenantId).Warn("Failed to recheck billing status after x402 settlement")
+				return nil, status.Error(codes.Unavailable, "payment processed but updated billing status is unavailable; retry safely")
+			}
+			billing = &triggers.BillingStatus{
+				TenantID:          resolution.TenantId,
+				BillingModel:      fresh.GetBillingModel(),
+				IsSuspended:       fresh.GetIsSuspended(),
+				IsBalanceNegative: fresh.GetIsBalanceNegative(),
+			}
+		}
 		if billing == nil || billing.State == triggers.BillingStatusUnavailable {
 			s.logger.WithFields(logging.Fields{
 				"content_id": req.ContentId,
@@ -2639,7 +2665,7 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *shar
 			return nil, status.Error(codes.Unavailable, "billing authority unavailable")
 		}
 		// Hard block: tenant suspended (balance < -$10)
-		if billing.IsSuspended && !x402Paid {
+		if billing.IsSuspended {
 			s.logger.WithFields(logging.Fields{
 				"content_id": req.ContentId,
 				"tenant_id":  resolution.TenantId,
@@ -2647,7 +2673,7 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *shar
 			return nil, s.paymentRequiredError(ctx, resolution.TenantId, resourcePath, "payment required - owner account suspended")
 		}
 		// Soft block: balance negative for prepaid (return 402-equivalent)
-		if billing.BillingModel == "prepaid" && billing.IsBalanceNegative && !x402Paid {
+		if billing.BillingModel == "prepaid" && billing.IsBalanceNegative {
 			s.logger.WithFields(logging.Fields{
 				"content_id": req.ContentId,
 				"tenant_id":  resolution.TenantId,
@@ -3352,23 +3378,6 @@ func (s *FoghornGRPCServer) resolveArtifactViewerEndpoint(ctx context.Context, r
 	}
 
 	return response, nil
-}
-
-func x402PaidFromMetadata(ctx context.Context) bool {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok || md == nil {
-		return false
-	}
-	values := md.Get("x402-paid")
-	if len(values) == 0 {
-		return false
-	}
-	switch strings.ToLower(strings.TrimSpace(values[0])) {
-	case "1", "true", "yes":
-		return true
-	default:
-		return false
-	}
 }
 
 func (s *FoghornGRPCServer) handleX402ViewerPayment(ctx context.Context, tenantID, resourcePath, paymentHeader, clientIP string) (bool, error) {
