@@ -9,6 +9,7 @@
   import {
     GetPrepaidBalanceStore,
     GetBalanceTransactionsStore,
+    GetBillingStatusStore,
     CreateCardTopupStore,
     CreateCryptoTopupStore,
     GetCryptoTopupStatusStore,
@@ -27,6 +28,7 @@
   // Stores
   const balanceQuery = new GetPrepaidBalanceStore();
   const transactionsQuery = new GetBalanceTransactionsStore();
+  const billingStatusQuery = new GetBillingStatusStore();
   const cardTopupMutation = new CreateCardTopupStore();
   const cryptoTopupMutation = new CreateCryptoTopupStore();
   const cryptoStatusMutation = new GetCryptoTopupStatusStore();
@@ -56,8 +58,11 @@
   // Top-up form state. LPT is hidden until a non-Chainlink price source ships.
   let topupAmount = $state(10);
   let topupMethod = $state<"card" | "crypto">("card");
+  let cardProvider = $state<"STRIPE" | "MOLLIE">("STRIPE");
+  let availableCardProviders = $state<Array<"STRIPE" | "MOLLIE">>([]);
   let cryptoAsset = $state<"ETH" | "USDC">("USDC");
   let topupLoading = $state(false);
+  let minimumTopupAmount = $derived(topupMethod === "card" ? 5 : 0.01);
 
   // Crypto deposit state — populated post-quote.
   let cryptoDeposit = $state<{
@@ -131,9 +136,10 @@
   async function loadData() {
     loading = true;
     try {
-      const [balanceResult, txResult] = await Promise.all([
+      const [balanceResult, txResult, billingResult] = await Promise.all([
         balanceQuery.fetch({ variables: { currency: "EUR" } }),
         transactionsQuery.fetch({ variables: { page: { first: 10 } } }),
+        billingStatusQuery.fetch(),
       ]);
 
       if (balanceResult.data?.prepaidBalance) {
@@ -157,6 +163,17 @@
         }));
         totalTransactions = txResult.data.balanceTransactionsConnection.totalCount;
       }
+
+      const configuredProviders = billingResult.data?.billingStatus?.setupProviders ?? [];
+      availableCardProviders = configuredProviders
+        .map((provider) => provider.toUpperCase())
+        .filter(
+          (provider): provider is "STRIPE" | "MOLLIE" =>
+            provider === "STRIPE" || provider === "MOLLIE"
+        );
+      if (!availableCardProviders.includes(cardProvider) && availableCardProviders[0]) {
+        cardProvider = availableCardProviders[0];
+      }
     } catch {
       toast.error("Failed to load balance data");
     } finally {
@@ -165,8 +182,12 @@
   }
 
   async function handleCardTopup() {
-    if (topupAmount <= 0) {
-      toast.error("Please enter an amount");
+    if (!availableCardProviders.includes(cardProvider)) {
+      toast.error("No fiat payment provider is currently configured");
+      return;
+    }
+    if (topupAmount < 5) {
+      toast.error("Fiat top-ups have a €5.00 minimum");
       return;
     }
 
@@ -174,9 +195,9 @@
     try {
       const result = await cardTopupMutation.mutate({
         input: {
-          amountCents: topupAmount * 100,
+          amountCents: Math.round(topupAmount * 100),
           currency: "EUR",
-          provider: "STRIPE",
+          provider: cardProvider,
           successUrl: `${window.location.origin}${resolve("/account/balance")}?success=true`,
           cancelUrl: `${window.location.origin}${resolve("/account/balance")}?cancelled=true`,
         },
@@ -193,8 +214,8 @@
   }
 
   async function handleCryptoTopup() {
-    if (topupAmount <= 0) {
-      toast.error("Please enter an amount");
+    if (topupAmount < 0.01) {
+      toast.error("Crypto top-ups have a €0.01 minimum");
       return;
     }
 
@@ -202,7 +223,7 @@
     try {
       const result = await cryptoTopupMutation.mutate({
         input: {
-          amountCents: topupAmount * 100,
+          amountCents: Math.round(topupAmount * 100),
           asset: cryptoAsset,
           currency: "EUR",
         },
@@ -357,21 +378,22 @@
             <div>
               <span class="block text-sm font-medium text-muted-foreground mb-2">Amount (EUR)</span>
               <div class="flex gap-2">
-                {#each [5, 10, 25, 50, 100] as amount (amount)}
+                {#each topupMethod === "card" ? [5, 10, 25, 50, 100] : [0.01, 1, 5, 10, 25] as amount (amount)}
                   <Button
                     variant={topupAmount === amount ? "default" : "outline"}
                     size="sm"
                     onclick={() => (topupAmount = amount)}
                   >
-                    ${amount}
+                    €{amount}
                   </Button>
                 {/each}
               </div>
               <div class="mt-2">
                 <Input
                   type="number"
-                  min={1}
-                  step={1}
+                  min={minimumTopupAmount}
+                  max={100000}
+                  step={topupMethod === "card" ? 1 : 0.01}
                   bind:value={topupAmount}
                   placeholder="Custom amount"
                   class="w-32"
@@ -421,13 +443,39 @@
                   {/each}
                 </div>
               </div>
+            {:else}
+              <div>
+                <span class="block text-sm font-medium text-muted-foreground mb-2"
+                  >Fiat Provider</span
+                >
+                <div class="flex gap-2">
+                  {#each availableCardProviders as provider (provider)}
+                    <Button
+                      variant={cardProvider === provider ? "default" : "outline"}
+                      size="sm"
+                      onclick={() => (cardProvider = provider as "STRIPE" | "MOLLIE")}
+                    >
+                      {provider === "STRIPE" ? "Stripe" : "Mollie"}
+                    </Button>
+                  {/each}
+                </div>
+                {#if availableCardProviders.length === 0}
+                  <p class="mt-2 text-xs text-warning">
+                    No fiat payment provider is currently configured. Use crypto or contact support.
+                  </p>
+                {:else}
+                  <p class="mt-2 text-xs text-muted-foreground">
+                    Minimum €5.00. The provider may enforce a higher currency-specific minimum.
+                  </p>
+                {/if}
+              </div>
             {/if}
           </div>
           <div class="slab-actions">
             {#if topupMethod === "card"}
               <Button
                 onclick={handleCardTopup}
-                disabled={topupLoading || topupAmount <= 0}
+                disabled={topupLoading || topupAmount < 5 || availableCardProviders.length === 0}
                 class="gap-2"
               >
                 {topupLoading ? "Processing..." : `Pay ${formatCurrency(topupAmount * 100)}`}
@@ -435,7 +483,7 @@
             {:else}
               <Button
                 onclick={handleCryptoTopup}
-                disabled={topupLoading || topupAmount <= 0}
+                disabled={topupLoading || topupAmount < 0.01}
                 class="gap-2"
               >
                 {topupLoading ? "Creating..." : "Get Deposit Address"}

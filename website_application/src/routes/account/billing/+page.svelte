@@ -2,15 +2,20 @@
   import { onMount, onDestroy } from "svelte";
   import { SvelteMap } from "svelte/reactivity";
   import { get } from "svelte/store";
-  import { resolve } from "$app/paths";
+  import { base, resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
   import {
     fragment,
     GetBillingStatusStore,
+    GetBillingDetailsStore,
     GetBillingTiersStore,
     GetInvoicesStore,
+    GetPaymentsStore,
+    GetMollieMandatesStore,
     CreatePaymentStore,
-    PromoteToPaidStore,
+    CreateStripeCheckoutStore,
+    CreateMollieFirstPaymentStore,
+    CreateMollieSubscriptionStore,
     ChangeBillingTierStore,
     BillingTierFieldsStore,
   } from "$houdini";
@@ -25,10 +30,15 @@
 
   // Houdini stores
   const billingStatusStore = new GetBillingStatusStore();
+  const billingDetailsStore = new GetBillingDetailsStore();
   const billingTiersStore = new GetBillingTiersStore();
   const invoicesStore = new GetInvoicesStore();
+  const paymentsStore = new GetPaymentsStore();
+  const mollieMandatesStore = new GetMollieMandatesStore();
   const createPaymentMutation = new CreatePaymentStore();
-  const promoteMutation = new PromoteToPaidStore();
+  const stripeCheckoutMutation = new CreateStripeCheckoutStore();
+  const mollieFirstPaymentMutation = new CreateMollieFirstPaymentStore();
+  const mollieSubscriptionMutation = new CreateMollieSubscriptionStore();
   const changeTierMutation = new ChangeBillingTierStore();
 
   // Fragment stores for unmasking nested data
@@ -37,9 +47,20 @@
   let isAuthenticated = false;
   let error = $state<string | null>(null);
   let selectedTierId = $state("");
-  let promoteLoading = $state(false);
+  let setupLoadingProvider = $state<string | null>(null);
+  let mollieFirstPaymentMethod = $state("creditcard");
   let changeTierLoadingId = $state<string | null>(null);
   let paymentLoadingInvoiceId = $state<string | null>(null);
+  type BillingDocument = {
+    id: string;
+    kind: "invoice" | "simplified_invoice" | "payment_receipt" | "credit_note";
+    document_number: string;
+    amount_cents: number;
+    currency: string;
+    status: string;
+    download_filename: string;
+  };
+  let billingDocuments = $state<BillingDocument[]>([]);
   let invoiceCryptoPayment = $state<{
     invoiceId: string;
     walletAddress: string;
@@ -53,11 +74,24 @@
 
   // Derived state from Houdini stores
   let loading = $derived(
-    $billingStatusStore.fetching || $billingTiersStore.fetching || $invoicesStore.fetching
+    $billingStatusStore.fetching ||
+      $billingDetailsStore.fetching ||
+      $billingTiersStore.fetching ||
+      $invoicesStore.fetching ||
+      $paymentsStore.fetching
   );
   let billingStatus = $derived($billingStatusStore.data?.billingStatus ?? null);
+  let billingDetails = $derived($billingDetailsStore.data?.billingDetails ?? null);
   let availableTiers = $derived($billingTiersStore.data?.billingTiers ?? []);
   let invoices = $derived($invoicesStore.data?.invoicesConnection?.edges?.map((e) => e.node) ?? []);
+  let recentPayments = $derived(
+    $paymentsStore.data?.paymentsConnection?.edges?.map((edge) => edge.node) ??
+      billingStatus?.recentPayments ??
+      []
+  );
+  let availableSetupProviders = $derived(
+    new Set((billingStatus?.setupProviders ?? []).map((provider) => provider.toLowerCase()))
+  );
   let availablePaymentMethods = $derived.by(() => {
     const methods =
       (billingStatus as { paymentMethods?: PaymentMethod$options[] } | null)?.paymentMethods ?? [];
@@ -82,8 +116,15 @@
     if (!isAuthenticated) {
       await auth.checkAuth();
     }
+    const params = new URLSearchParams(window.location.search);
+    const requestedInvoiceId = params.get("invoice");
     showPaymentReturnToast();
     await loadBillingData();
+    await handleSetupReturn(params);
+    if (requestedInvoiceId && invoices.some((invoice) => invoice.id === requestedInvoiceId)) {
+      expandedInvoiceId = requestedInvoiceId;
+      document.getElementById(`invoice-${requestedInvoiceId}`)?.scrollIntoView({ block: "center" });
+    }
   });
 
   function showPaymentReturnToast() {
@@ -106,14 +147,41 @@
       // Load all billing data in parallel
       await Promise.all([
         billingStatusStore.fetch().catch(() => null),
+        billingDetailsStore.fetch().catch(() => null),
         billingTiersStore.fetch().catch(() => null),
         invoicesStore.fetch().catch(() => null),
+        paymentsStore.fetch({ variables: { page: { first: 50 } } }).catch(() => null),
+        loadBillingDocuments(),
       ]);
     } catch (err) {
       console.error("Failed to load billing data:", err);
       error = "Failed to load billing information. Please try again later.";
       toast.error("Failed to load billing information. Please refresh the page.");
     }
+  }
+
+  async function loadBillingDocuments() {
+    const response = await fetch(`${base}/v1/billing/documents`, {
+      credentials: "include",
+    });
+    if (!response.ok) {
+      return;
+    }
+    const payload = (await response.json()) as { documents?: BillingDocument[] };
+    billingDocuments = payload.documents ?? [];
+  }
+
+  function billingDocumentLabel(kind: BillingDocument["kind"]) {
+    return {
+      invoice: "Invoice",
+      simplified_invoice: "Simplified invoice",
+      payment_receipt: "Payment receipt",
+      credit_note: "Credit note",
+    }[kind];
+  }
+
+  function billingDocumentURL(document: BillingDocument) {
+    return `${base}/v1/billing/documents/${document.kind}/${document.id}`;
   }
 
   async function createPayment(
@@ -176,27 +244,138 @@
     toast.success("Address copied to clipboard");
   }
 
-  async function handlePromoteToPaid() {
+  function selectedPostpaidTier() {
+    return availableTiers.find(
+      (tier) =>
+        tier.id === selectedTierId &&
+        tier.tierLevel >= 1 &&
+        tier.basePrice > 0 &&
+        !tier.isEnterprise
+    );
+  }
+
+  function setupErrorMessage(result: { message?: string } | null | undefined, fallback: string) {
+    return result?.message || fallback;
+  }
+
+  function clearSetupReturnParams() {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("setup");
+    url.searchParams.delete("tier");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  }
+
+  async function handleSetupReturn(params: URLSearchParams) {
+    const provider = params.get("setup");
+    const tierId = params.get("tier");
+    if (provider === "cancelled") {
+      toast.info("Billing setup cancelled");
+      clearSetupReturnParams();
+      return;
+    }
+    if (provider === "stripe") {
+      setupLoadingProvider = "stripe";
+      for (let attempt = 0; attempt < 15; attempt++) {
+        const response = await billingStatusStore
+          .fetch({ policy: "NetworkOnly" })
+          .catch(() => null);
+        if (response?.data?.billingStatus?.collectionReady) {
+          toast.success("Stripe billing setup confirmed");
+          clearSetupReturnParams();
+          setupLoadingProvider = null;
+          return;
+        }
+        await new Promise<void>((resolveDelay) => window.setTimeout(resolveDelay, 2000));
+      }
+      toast.info("Stripe setup is still confirming. This page will reflect the webhook shortly.");
+      setupLoadingProvider = null;
+      return;
+    }
+    if (provider !== "mollie" || !tierId) return;
+
+    setupLoadingProvider = "mollie";
+    for (let attempt = 0; attempt < 15; attempt++) {
+      await mollieMandatesStore.fetch({ policy: "NetworkOnly" }).catch(() => null);
+      const mandate = $mollieMandatesStore.data?.mollieMandates.find(
+        (candidate) => candidate.status.toLowerCase() === "valid"
+      );
+      if (mandate) {
+        const response = await mollieSubscriptionMutation.mutate({
+          tierId,
+          mandateId: mandate.mandateId,
+          description: "FrameWorks postpaid subscription",
+        });
+        const result = response.data?.createMollieSubscription;
+        if (result?.__typename === "MollieSubscription") {
+          toast.success("Mollie billing setup confirmed");
+          clearSetupReturnParams();
+          await loadBillingData();
+          setupLoadingProvider = null;
+          return;
+        }
+        toast.error(setupErrorMessage(result, "Failed to create the Mollie subscription"));
+        setupLoadingProvider = null;
+        return;
+      }
+      await new Promise<void>((resolveDelay) => window.setTimeout(resolveDelay, 2000));
+    }
+    toast.info("Mollie is still confirming the mandate. Reload this return URL to continue setup.");
+    setupLoadingProvider = null;
+  }
+
+  async function startPostpaidSetup(provider: "stripe" | "mollie") {
     if (!selectedTierId) {
       toast.error("Please select a billing tier");
       return;
     }
+    const tier = selectedPostpaidTier();
+    if (!tier) {
+      toast.error("Select an eligible paid tier");
+      return;
+    }
+    if (!billingDetails?.isComplete) {
+      toast.error("Complete your billing email and address before starting postpaid setup");
+      return;
+    }
+    if (!availableSetupProviders.has(provider)) {
+      toast.error(`${provider === "stripe" ? "Stripe" : "Mollie"} is not configured`);
+      return;
+    }
 
-    promoteLoading = true;
+    setupLoadingProvider = provider;
     try {
-      const result = await promoteMutation.mutate({ tierId: selectedTierId });
-
-      const data = result.data?.promoteToPaid;
-      if (data && "success" in data && data.success) {
-        toast.success(data.message || "Successfully upgraded to postpaid billing");
-        window.location.reload();
-      } else if (data && "message" in data) {
-        throw new Error(data.message);
+      if (provider === "stripe") {
+        const billingURL = `${window.location.origin}${resolve("/account/billing")}`;
+        const response = await stripeCheckoutMutation.mutate({
+          tierId: tier.id,
+          billingPeriod: tier.billingPeriod || "monthly",
+          successUrl: `${billingURL}?setup=stripe&tier=${encodeURIComponent(tier.id)}`,
+          cancelUrl: `${billingURL}?setup=cancelled`,
+        });
+        const result = response.data?.createStripeCheckout;
+        if (result?.__typename === "StripeCheckoutSession") {
+          window.location.href = result.checkoutUrl;
+          return;
+        }
+        throw new Error(setupErrorMessage(result, "Failed to start Stripe setup"));
       }
+
+      const returnURL = `${window.location.origin}${resolve("/account/billing")}?setup=mollie&tier=${encodeURIComponent(tier.id)}`;
+      const response = await mollieFirstPaymentMutation.mutate({
+        tierId: tier.id,
+        method: mollieFirstPaymentMethod,
+        redirectUrl: returnURL,
+      });
+      const result = response.data?.createMollieFirstPayment;
+      if (result?.__typename === "MollieFirstPayment") {
+        window.location.href = result.paymentUrl;
+        return;
+      }
+      throw new Error(setupErrorMessage(result, "Failed to start Mollie setup"));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to upgrade billing");
+      toast.error(e instanceof Error ? e.message : "Failed to start postpaid setup");
     } finally {
-      promoteLoading = false;
+      setupLoadingProvider = null;
     }
   }
 
@@ -284,13 +463,47 @@
     return availablePaymentMethods.has(String(method));
   }
 
+  function paymentMethodFromRecord(method: string): PaymentMethod$options | null {
+    switch (method.toLowerCase()) {
+      case "card":
+        return PaymentMethod.CARD;
+      case "crypto_usdc":
+        return PaymentMethod.CRYPTO_USDC;
+      case "crypto_eth":
+        return PaymentMethod.CRYPTO_ETH;
+      default:
+        return null;
+    }
+  }
+
+  function retryPayment(invoiceId: string, rawMethod: string) {
+    const method = paymentMethodFromRecord(rawMethod);
+    if (!method || !paymentMethodAvailable(method)) {
+      toast.error("That payment method is not currently available");
+      return;
+    }
+    createPayment(invoiceId, method);
+  }
+
+  function invoiceIsPayable(invoiceId: string) {
+    return invoices.some(
+      (invoice) =>
+        invoice.id === invoiceId && (invoice.status === "PENDING" || invoice.status === "OVERDUE")
+    );
+  }
+
   function getStatusColor(status: string | null | undefined) {
     switch (status?.toLowerCase()) {
       case "active":
+      case "confirmed":
+      case "paid":
         return "text-success";
       case "past_due":
+      case "pending":
+      case "processing":
         return "text-warning";
       case "cancelled":
+      case "failed":
         return "text-error";
       default:
         return "text-muted-foreground";
@@ -556,46 +769,11 @@
                     billingStatus.currency
                   )}
                 </p>
-                <div class="flex flex-wrap gap-2">
-                  {#if paymentMethodAvailable(PaymentMethod.CARD)}
-                    <Button
-                      variant="default"
-                      onclick={() => billingStatus && createPayment()}
-                      class="bg-warning text-background hover:bg-warning/90"
-                      disabled={paymentLoadingInvoiceId !== null}
-                    >
-                      <CreditCardIcon class="w-4 h-4" />
-                      Card
-                    </Button>
-                  {/if}
-                  {#if paymentMethodAvailable(PaymentMethod.CRYPTO_USDC)}
-                    <Button
-                      variant="outline"
-                      onclick={() =>
-                        billingStatus && createPayment(undefined, PaymentMethod.CRYPTO_USDC)}
-                      disabled={paymentLoadingInvoiceId !== null}
-                    >
-                      <CoinsIcon class="w-4 h-4" />
-                      USDC
-                    </Button>
-                  {/if}
-                  {#if paymentMethodAvailable(PaymentMethod.CRYPTO_ETH)}
-                    <Button
-                      variant="outline"
-                      onclick={() =>
-                        billingStatus && createPayment(undefined, PaymentMethod.CRYPTO_ETH)}
-                      disabled={paymentLoadingInvoiceId !== null}
-                    >
-                      <CoinsIcon class="w-4 h-4" />
-                      ETH
-                    </Button>
-                  {/if}
-                  {#if availablePaymentMethods.size === 0}
-                    <p class="text-sm text-muted-foreground">
-                      No payment methods are currently configured.
-                    </p>
-                  {/if}
-                </div>
+                <p class="text-sm text-muted-foreground">
+                  {availablePaymentMethods.size > 0
+                    ? "Choose the invoice and payment method below."
+                    : "No payment methods are currently configured."}
+                </p>
               </div>
             </div>
           {/if}
@@ -754,9 +932,21 @@
               </div>
               <div class="slab-body--padded">
                 <p class="text-sm text-muted-foreground mb-4">
-                  You're currently on prepaid billing. Upgrade to postpaid for monthly invoicing
-                  with higher limits.
+                  You're currently on prepaid billing. Choose a provider and complete its hosted
+                  setup before monthly postpaid billing is activated.
                 </p>
+                {#if !billingDetails?.isComplete}
+                  <div class="mb-4 border border-warning/50 bg-warning/10 p-3 text-sm">
+                    <p class="font-medium text-warning">Billing details required</p>
+                    <p class="mt-1 text-muted-foreground">
+                      Add a billing email and complete address before starting provider setup. A VAT
+                      or tax identifier is optional and is not treated as verified automatically.
+                    </p>
+                    <Button href={resolve("/settings")} variant="outline" size="sm" class="mt-3">
+                      Complete billing details
+                    </Button>
+                  </div>
+                {/if}
                 {#if availableTiers.length > 0}
                   <div class="space-y-2">
                     <label for="tierSelect" class="text-sm font-medium text-muted-foreground"
@@ -768,7 +958,7 @@
                       class="w-full p-2 border border-input rounded-md bg-background text-foreground"
                     >
                       <option value="">Choose a tier...</option>
-                      {#each availableTiers.filter((t) => !t.isEnterprise) as tier (tier.id)}
+                      {#each availableTiers.filter((tier) => tier.tierLevel >= 1 && tier.basePrice > 0 && !tier.isEnterprise) as tier (tier.id)}
                         <option value={tier.id}>
                           {tier.displayName} - {formatCurrency(tier.basePrice, tier.currency)}/month
                         </option>
@@ -778,11 +968,51 @@
                 {:else}
                   <p class="text-sm text-muted-foreground">Loading billing tiers...</p>
                 {/if}
+                {#if availableSetupProviders.has("mollie")}
+                  <div class="mt-4 space-y-2">
+                    <label for="mollieMethod" class="text-sm font-medium text-muted-foreground"
+                      >Mollie first-payment method:</label
+                    >
+                    <select
+                      id="mollieMethod"
+                      bind:value={mollieFirstPaymentMethod}
+                      class="w-full p-2 border border-input rounded-md bg-background text-foreground"
+                    >
+                      <option value="creditcard">Credit card</option>
+                      <option value="ideal">iDEAL</option>
+                      <option value="bancontact">Bancontact</option>
+                    </select>
+                  </div>
+                {/if}
               </div>
-              <div class="slab-actions">
-                <Button onclick={handlePromoteToPaid} disabled={promoteLoading || !selectedTierId}>
-                  {promoteLoading ? "Upgrading..." : "Upgrade to Postpaid"}
-                </Button>
+              <div class="slab-actions flex flex-wrap gap-2">
+                {#if availableSetupProviders.has("stripe")}
+                  <Button
+                    onclick={() => startPostpaidSetup("stripe")}
+                    disabled={setupLoadingProvider !== null ||
+                      !selectedTierId ||
+                      !billingDetails?.isComplete}
+                  >
+                    {setupLoadingProvider === "stripe" ? "Opening Stripe..." : "Set up with Stripe"}
+                  </Button>
+                {/if}
+                {#if availableSetupProviders.has("mollie")}
+                  <Button
+                    variant="outline"
+                    onclick={() => startPostpaidSetup("mollie")}
+                    disabled={setupLoadingProvider !== null ||
+                      !selectedTierId ||
+                      !billingDetails?.isComplete}
+                  >
+                    {setupLoadingProvider === "mollie" ? "Opening Mollie..." : "Set up with Mollie"}
+                  </Button>
+                {/if}
+                {#if availableSetupProviders.size === 0}
+                  <p class="text-sm text-muted-foreground">
+                    No postpaid provider is fully configured. Continue using prepaid billing or
+                    contact support.
+                  </p>
+                {/if}
               </div>
             </div>
           {/if}
@@ -806,13 +1036,58 @@
             </div>
           </div>
 
+          {#if billingDocuments.length > 0}
+            <div class="slab col-span-full">
+              <div class="slab-header">
+                <div class="flex items-center gap-2">
+                  <ReceiptIcon class="w-4 h-4 text-info" />
+                  <h3>Billing documents</h3>
+                </div>
+              </div>
+              <div class="slab-body--flush overflow-x-auto">
+                <table class="w-full text-sm">
+                  <thead>
+                    <tr class="border-b border-border/50 text-muted-foreground">
+                      <th class="text-left py-3 px-4">Document</th>
+                      <th class="text-left py-3 px-4">Number</th>
+                      <th class="text-left py-3 px-4">Amount</th>
+                      <th class="text-left py-3 px-4">Status</th>
+                      <th class="text-right py-3 px-4">Download</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {#each billingDocuments as document (`${document.kind}:${document.id}`)}
+                      <tr class="border-b border-border/30">
+                        <td class="py-3 px-4">{billingDocumentLabel(document.kind)}</td>
+                        <td class="py-3 px-4 font-mono">{document.document_number}</td>
+                        <td class="py-3 px-4">
+                          {formatCurrency(document.amount_cents / 100, document.currency)}
+                        </td>
+                        <td class="py-3 px-4">
+                          <span class="px-2 py-1 text-xs {getStatusColor(document.status)}">
+                            {document.status}
+                          </span>
+                        </td>
+                        <td class="py-3 px-4 text-right">
+                          <Button size="sm" variant="outline" href={billingDocumentURL(document)}>
+                            Download
+                          </Button>
+                        </td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          {/if}
+
           <!-- Recent Invoices Slab -->
           {#if invoices.length > 0}
             <div class="slab col-span-full">
               <div class="slab-header">
                 <div class="flex items-center gap-2">
                   <ReceiptIcon class="w-4 h-4 text-info" />
-                  <h3>Recent Invoices</h3>
+                  <h3>Invoices</h3>
                 </div>
               </div>
               <div class="slab-body--flush overflow-x-auto">
@@ -825,11 +1100,13 @@
                       <th class="text-left py-3 px-4">Status</th>
                       <th class="text-left py-3 px-4">Due Date</th>
                       <th class="text-left py-3 px-4">Created</th>
+                      <th class="text-right py-3 px-4">Payment</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {#each invoices.slice(0, 5) as invoice (invoice.id)}
+                    {#each invoices as invoice (invoice.id)}
                       <tr
+                        id={`invoice-${invoice.id}`}
                         class="border-b border-border/30 cursor-pointer hover:bg-muted/20 transition-colors"
                         onclick={() => toggleInvoiceExpand(invoice.id)}
                       >
@@ -851,10 +1128,52 @@
                         </td>
                         <td class="py-3 px-4">{formatDate(invoice.dueDate)}</td>
                         <td class="py-3 px-4">{formatDate(invoice.createdAt)}</td>
+                        <td class="py-3 px-4">
+                          {#if invoice.status === "PENDING" || invoice.status === "OVERDUE"}
+                            <div class="flex justify-end gap-2">
+                              {#if paymentMethodAvailable(PaymentMethod.CARD)}
+                                <Button
+                                  size="sm"
+                                  disabled={paymentLoadingInvoiceId !== null}
+                                  onclick={(event) => {
+                                    event.stopPropagation();
+                                    createPayment(invoice.id, PaymentMethod.CARD);
+                                  }}
+                                >
+                                  {paymentLoadingInvoiceId === invoice.id
+                                    ? "Opening..."
+                                    : "Pay by card"}
+                                </Button>
+                              {/if}
+                              {#if paymentMethodAvailable(PaymentMethod.CRYPTO_USDC)}
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={paymentLoadingInvoiceId !== null}
+                                  onclick={(event) => {
+                                    event.stopPropagation();
+                                    createPayment(invoice.id, PaymentMethod.CRYPTO_USDC);
+                                  }}>USDC</Button
+                                >
+                              {/if}
+                              {#if paymentMethodAvailable(PaymentMethod.CRYPTO_ETH)}
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={paymentLoadingInvoiceId !== null}
+                                  onclick={(event) => {
+                                    event.stopPropagation();
+                                    createPayment(invoice.id, PaymentMethod.CRYPTO_ETH);
+                                  }}>ETH</Button
+                                >
+                              {/if}
+                            </div>
+                          {/if}
+                        </td>
                       </tr>
                       {#if expandedInvoiceId === invoice.id && invoice.lineItems?.length}
                         <tr class="bg-muted/10">
-                          <td colspan="6" class="py-4 px-8">
+                          <td colspan="7" class="py-4 px-8">
                             <p
                               class="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3"
                             >
@@ -981,6 +1300,77 @@
                   title="No invoices yet"
                   description="Your invoices and payment history will appear here once you have billing activity."
                 />
+              </div>
+            </div>
+          {/if}
+
+          {#if recentPayments.length > 0}
+            <div class="slab col-span-full">
+              <div class="slab-header">
+                <div class="flex items-center gap-2">
+                  <CreditCardIcon class="w-4 h-4 text-info" />
+                  <h3>Payment History</h3>
+                </div>
+              </div>
+              <div class="slab-body--flush overflow-x-auto">
+                <table class="w-full text-sm">
+                  <thead>
+                    <tr class="border-b border-border/50 text-muted-foreground">
+                      <th class="text-left py-3 px-4">Created</th>
+                      <th class="text-left py-3 px-4">Invoice</th>
+                      <th class="text-left py-3 px-4">Method</th>
+                      <th class="text-right py-3 px-4">Amount</th>
+                      <th class="text-left py-3 px-4">Status</th>
+                      <th class="text-right py-3 px-4">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {#each recentPayments as payment (payment.id)}
+                      <tr class="border-b border-border/30">
+                        <td class="py-3 px-4">{formatDate(payment.createdAt)}</td>
+                        <td class="py-3 px-4">
+                          <button
+                            type="button"
+                            class="font-mono text-left hover:text-primary"
+                            onclick={() => {
+                              expandedInvoiceId = payment.invoiceId;
+                              document
+                                .getElementById(`invoice-${payment.invoiceId}`)
+                                ?.scrollIntoView({ block: "center" });
+                            }}
+                          >
+                            {payment.invoiceId}
+                          </button>
+                        </td>
+                        <td class="py-3 px-4 uppercase">{payment.method.replaceAll("_", " ")}</td>
+                        <td class="py-3 px-4 text-right font-mono">
+                          {formatCurrency(payment.amount, payment.currency)}
+                        </td>
+                        <td class="py-3 px-4">
+                          <span class="px-2 py-1 text-xs {getStatusColor(payment.status)}">
+                            {payment.status}
+                          </span>
+                        </td>
+                        <td class="py-3 px-4 text-right">
+                          {#if payment.status.toLowerCase() === "failed" && invoiceIsPayable(payment.invoiceId)}
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={paymentLoadingInvoiceId !== null}
+                              onclick={() => retryPayment(payment.invoiceId, payment.method)}
+                            >
+                              Retry
+                            </Button>
+                          {:else if payment.status.toLowerCase() === "pending"}
+                            <span class="text-xs text-muted-foreground">Processing</span>
+                          {:else}
+                            <span class="text-xs text-muted-foreground">—</span>
+                          {/if}
+                        </td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
               </div>
             </div>
           {/if}
