@@ -4407,11 +4407,11 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *comm
 }
 
 // ============================================================================
-// WALLET IDENTITY (x402 / Agent Access)
+// WALLET IDENTITY
 // ============================================================================
 
 // GetOrCreateWalletUser looks up or creates a tenant/user for a verified wallet address.
-// This is called by x402 middleware after verifying the ERC-3009 payment signature.
+// This is called after a wallet-auth challenge signature has been verified.
 // If the wallet is not known, creates a new tenant (prepaid) + user (email=NULL) + wallet_identity.
 func (s *CommodoreServer) GetOrCreateWalletUser(ctx context.Context, req *commodorepb.GetOrCreateWalletUserRequest) (*commodorepb.GetOrCreateWalletUserResponse, error) {
 	chainType := req.GetChainType()
@@ -4588,9 +4588,13 @@ func (s *CommodoreServer) GetOrCreateWalletUser(ctx context.Context, req *commod
 // USER SERVICE (Gateway → Commodore for auth flows)
 // ============================================================================
 
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
 // Login authenticates a user and returns a JWT token
 func (s *CommodoreServer) Login(ctx context.Context, req *commodorepb.LoginRequest) (*commodorepb.AuthResponse, error) {
-	email := req.GetEmail()
+	email := normalizeEmail(req.GetEmail())
 	password := req.GetPassword()
 
 	if email == "" || password == "" {
@@ -4705,7 +4709,7 @@ func (s *CommodoreServer) Login(ctx context.Context, req *commodorepb.LoginReque
 
 // Register creates a new user account
 func (s *CommodoreServer) Register(ctx context.Context, req *commodorepb.RegisterRequest) (*commodorepb.RegisterResponse, error) {
-	email := req.GetEmail()
+	email := normalizeEmail(req.GetEmail())
 	password := req.GetPassword()
 
 	if email == "" || password == "" {
@@ -4762,9 +4766,11 @@ func (s *CommodoreServer) Register(ctx context.Context, req *commodorepb.Registe
 	// Create tenant via Quartermaster
 	var tenantID string
 	if s.quartermasterClient != nil {
+		provisioningKey := "email:" + email
 		resp, createErr := s.quartermasterClient.CreateTenant(ctx, &quartermasterpb.CreateTenantRequest{
-			Name:        email, // Use email as initial tenant name
-			Attribution: req.GetAttribution(),
+			Name:            email, // Use email as initial tenant name
+			Attribution:     req.GetAttribution(),
+			ProvisioningKey: &provisioningKey,
 		})
 		if createErr != nil {
 			s.logger.WithError(createErr).Error("Failed to create tenant via Quartermaster")
@@ -4820,6 +4826,15 @@ func (s *CommodoreServer) Register(ctx context.Context, req *commodorepb.Registe
 	`, userID, tenantID, email, hashedPassword, req.GetFirstName(), req.GetLastName(), role, pq.Array(getDefaultPermissions(role)), tokenHash, tokenExpiry)
 
 	if err != nil {
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+			// Concurrent retries converge on Quartermaster's provisioning key and
+			// the unique normalized email. The winning request owns the token/email.
+			return &commodorepb.RegisterResponse{
+				Success: true,
+				Message: "Registration received. Check your email or request a new verification link.",
+			}, nil
+		}
 		s.logger.WithError(err).Error("Failed to create user")
 		return nil, status.Errorf(codes.Internal, "failed to create user: %v", err)
 	}
@@ -4845,13 +4860,6 @@ func (s *CommodoreServer) Register(ctx context.Context, req *commodorepb.Registe
 				s.logger.WithError(err).Warn("Failed to sync new user to Listmonk")
 			}
 		}(email, req.GetFirstName(), req.GetLastName())
-	}
-
-	// Initialize postpaid billing + cluster access for the new tenant
-	if s.purserClient != nil && role == "owner" {
-		if _, billingErr := s.purserClient.InitializePostpaidAccount(ctx, tenantID); billingErr != nil {
-			s.logger.WithError(billingErr).WithField("tenant_id", tenantID).Error("Failed to initialize postpaid account")
-		}
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -5701,11 +5709,11 @@ func (s *CommodoreServer) VerifyEmail(ctx context.Context, req *commodorepb.Veri
 	tokenHash := hashToken(token)
 
 	// Find user by verification token with expiry check
-	var userID string
+	var userID, tenantID string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id FROM commodore.users
+		SELECT id, tenant_id FROM commodore.users
 		WHERE verification_token = $1 AND verified = false AND token_expires_at > NOW()
-	`, tokenHash).Scan(&userID)
+	`, tokenHash).Scan(&userID, &tenantID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return &commodorepb.VerifyEmailResponse{
@@ -5717,7 +5725,16 @@ func (s *CommodoreServer) VerifyEmail(ctx context.Context, req *commodorepb.Veri
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	// Mark as verified and clear token
+	if s.purserClient == nil {
+		return nil, status.Error(codes.Unavailable, "billing setup is temporarily unavailable; retry verification")
+	}
+	if _, err = s.purserClient.EnsureFreeAccount(ctx, tenantID); err != nil {
+		s.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Free activation failed during email verification")
+		return nil, status.Error(codes.Unavailable, "Free account setup is temporarily unavailable; retry verification")
+	}
+
+	// Mark verified only after the idempotent Free account exists. If this
+	// update fails, the still-valid token can safely retry the same tenant.
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE commodore.users
 		SET verified = true, verification_token = NULL, token_expires_at = NULL, updated_at = NOW()
@@ -5735,7 +5752,7 @@ func (s *CommodoreServer) VerifyEmail(ctx context.Context, req *commodorepb.Veri
 
 // ResendVerification resends the email verification link
 func (s *CommodoreServer) ResendVerification(ctx context.Context, req *commodorepb.ResendVerificationRequest) (*commodorepb.ResendVerificationResponse, error) {
-	email := req.GetEmail()
+	email := normalizeEmail(req.GetEmail())
 	if email == "" {
 		return nil, status.Error(codes.InvalidArgument, "email required")
 	}
@@ -5846,7 +5863,7 @@ func (s *CommodoreServer) ResendVerification(ctx context.Context, req *commodore
 
 // ForgotPassword initiates the password reset flow
 func (s *CommodoreServer) ForgotPassword(ctx context.Context, req *commodorepb.ForgotPasswordRequest) (*commodorepb.ForgotPasswordResponse, error) {
-	email := req.GetEmail()
+	email := normalizeEmail(req.GetEmail())
 	if email == "" {
 		return nil, status.Error(codes.InvalidArgument, "email required")
 	}
@@ -6521,7 +6538,7 @@ func (s *CommodoreServer) LinkEmail(ctx context.Context, req *commodorepb.LinkEm
 		return nil, err
 	}
 
-	email := strings.TrimSpace(strings.ToLower(req.GetEmail()))
+	email := normalizeEmail(req.GetEmail())
 	password := req.GetPassword()
 
 	if email == "" {
@@ -10940,7 +10957,7 @@ func (s *CommodoreServer) CreateUserInTenant(ctx context.Context, req *commodore
 	}
 
 	tenantID := req.GetTenantId()
-	email := req.GetEmail()
+	email := normalizeEmail(req.GetEmail())
 	password := req.GetPassword()
 
 	if tenantID == "" || email == "" || password == "" {

@@ -69,6 +69,8 @@ type GetPaymentOptionsResult struct {
 	Message         string          `json:"message"`
 	Instructions    string          `json:"instructions"`
 	PaymentRequired string          `json:"payment_required,omitempty"`
+	ErrorCode       string          `json:"error_code,omitempty"`
+	RequiredFields  []string        `json:"required_fields,omitempty"`
 }
 
 func handleGetPaymentOptions(ctx context.Context, args GetPaymentOptionsInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -88,7 +90,18 @@ func handleGetPaymentOptions(ctx context.Context, args GetPaymentOptionsInput, c
 	}
 
 	if resp.Error != "" {
-		return toolError(resp.Error)
+		result := GetPaymentOptionsResult{
+			X402Version:    int(resp.X402Version),
+			TopupURL:       resp.TopupUrl,
+			Message:        resp.Error,
+			ErrorCode:      resp.ErrorCode,
+			RequiredFields: append([]string(nil), resp.RequiredFields...),
+			Instructions:   "Update only the listed billing fields, then request fresh payment options.",
+		}
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: resp.Error}},
+			IsError: true,
+		}, result, nil
 	}
 
 	options := make([]PaymentOption, 0, len(resp.Accepts))
@@ -143,18 +156,21 @@ type SubmitPaymentInput struct {
 
 // SubmitPaymentResult represents the result of submitting a payment.
 type SubmitPaymentResult struct {
-	Success         bool   `json:"success"`
-	IsAuthOnly      bool   `json:"is_auth_only"`   // Always false; retained for response compatibility
-	TenantID        string `json:"tenant_id"`      // Credited tenant
-	WalletAddress   string `json:"wallet_address"` // Payer wallet
-	CreditedCents   int64  `json:"credited_cents"` // Amount credited
-	NewBalance      int64  `json:"new_balance_cents,omitempty"`
-	TxHash          string `json:"tx_hash,omitempty"` // Blockchain tx (for non-zero payments)
-	TargetTenant    string `json:"target_tenant_id,omitempty"`
-	SessionToken    string `json:"session_token,omitempty"`
-	ExpiresAt       string `json:"expires_at,omitempty"`
-	Message         string `json:"message"`
-	PaymentResponse string `json:"payment_response,omitempty"`
+	Success          bool   `json:"success"`
+	IsAuthOnly       bool   `json:"is_auth_only"`   // Always false; retained for response compatibility
+	TenantID         string `json:"tenant_id"`      // Credited tenant
+	WalletAddress    string `json:"wallet_address"` // Payer wallet
+	CreditedCents    int64  `json:"credited_cents"` // Amount credited
+	NewBalance       int64  `json:"new_balance_cents,omitempty"`
+	TxHash           string `json:"tx_hash,omitempty"` // Blockchain tx (for non-zero payments)
+	TargetTenant     string `json:"target_tenant_id,omitempty"`
+	SessionToken     string `json:"session_token,omitempty"`
+	ExpiresAt        string `json:"expires_at,omitempty"`
+	Message          string `json:"message"`
+	PaymentResponse  string `json:"payment_response,omitempty"`
+	SettlementStatus string `json:"settlement_status,omitempty"`
+	ErrorCode        string `json:"error_code,omitempty"`
+	Network          string `json:"network,omitempty"`
 }
 
 func handleSubmitPayment(ctx context.Context, args SubmitPaymentInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -198,7 +214,18 @@ func handleSubmitPayment(ctx context.Context, args SubmitPaymentInput, clients *
 		Logger:                 logger,
 	})
 	if settleErr != nil {
-		return toolError(settleErr.Message)
+		if settleErr.Code == x402.ErrSettlementPending {
+			return toolSuccess(SubmitPaymentResult{
+				Success: false, TxHash: settleErr.TxHash, Network: settleErr.Network,
+				SettlementStatus: "pending", ErrorCode: "SETTLEMENT_PENDING",
+				Message: "Settlement broadcast is pending confirmation. Retry submit_payment with the same signed payment; do not create a replacement payment.",
+			})
+		}
+		return toolSuccess(SubmitPaymentResult{
+			Success: false, TxHash: settleErr.TxHash, Network: settleErr.Network,
+			SettlementStatus: "failed", ErrorCode: settleErr.MachineCode(),
+			Message: settleErr.Message,
+		})
 	}
 	if settleResult == nil || settleResult.Settle == nil || !settleResult.Settle.Success {
 		return toolError("payment settlement failed")
@@ -210,15 +237,17 @@ func handleSubmitPayment(ctx context.Context, args SubmitPaymentInput, clients *
 	}
 
 	result := SubmitPaymentResult{
-		Success:       true,
-		IsAuthOnly:    false,
-		TenantID:      settleResult.TargetTenantID,
-		WalletAddress: walletAddress,
-		CreditedCents: settleResult.Settle.CreditedCents,
-		NewBalance:    settleResult.Settle.NewBalanceCents,
-		TxHash:        settleResult.Settle.TxHash,
-		TargetTenant:  settleResult.TargetTenantID,
-		Message:       fmt.Sprintf("Payment successful! %d cents credited to tenant %s.", settleResult.Settle.CreditedCents, settleResult.TargetTenantID),
+		Success:          true,
+		IsAuthOnly:       false,
+		TenantID:         settleResult.TargetTenantID,
+		WalletAddress:    walletAddress,
+		CreditedCents:    settleResult.Settle.CreditedCents,
+		NewBalance:       settleResult.Settle.NewBalanceCents,
+		TxHash:           settleResult.Settle.TxHash,
+		TargetTenant:     settleResult.TargetTenantID,
+		Message:          fmt.Sprintf("Payment successful! %d cents credited to tenant %s.", settleResult.Settle.CreditedCents, settleResult.TargetTenantID),
+		SettlementStatus: "confirmed",
+		Network:          settleResult.Network,
 	}
 	if settleResult.X402Version == 2 {
 		result.PaymentResponse, _ = x402.EncodePaymentResponseHeader(settleResult, settleResult.Network)

@@ -920,6 +920,7 @@ enum GQL {
   query GetBillingDetails {
     billingDetails {
       email
+      name
       company
       vatNumber
       address {
@@ -4472,11 +4473,7 @@ enum GQL {
 
   static let CreateMollieSubscription = """
   mutation CreateMollieSubscription($tierId: ID!, $mandateId: String!, $description: String) {
-    createMollieSubscription(
-      tierId: $tierId
-      mandateId: $mandateId
-      description: $description
-    ) {
+    createMollieSubscription(tierId: $tierId, mandateId: $mandateId, description: $description) {
       __typename
       ... on MollieSubscription {
         subscriptionId
@@ -5317,6 +5314,7 @@ enum GQL {
   mutation UpdateBillingDetails($input: UpdateBillingDetailsInput!) {
     updateBillingDetails(input: $input) {
       email
+      name
       company
       vatNumber
       address {

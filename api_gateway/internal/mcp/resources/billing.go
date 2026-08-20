@@ -268,11 +268,12 @@ func getLiveUsageMetrics(ctx context.Context, clients *clients.ServiceClients, t
 
 // PricingInfo represents the billing://pricing response.
 type PricingInfo struct {
-	TierName  string                     `json:"tier_name"`
-	TierLevel int                        `json:"tier_level"`
-	Resources map[string]ResourcePricing `json:"resources"`
-	Currency  string                     `json:"currency"`
-	Scope     string                     `json:"scope"`
+	TierName    string                     `json:"tier_name"`
+	DisplayName string                     `json:"display_name"`
+	TierLevel   int                        `json:"tier_level"`
+	Resources   map[string]ResourcePricing `json:"resources"`
+	Currency    string                     `json:"currency"`
+	Scope       string                     `json:"scope"`
 }
 
 // ResourcePricing represents pricing for a single resource type.
@@ -349,11 +350,12 @@ func handleBillingPricing(ctx context.Context, clients *clients.ServiceClients) 
 	}
 
 	pricing := PricingInfo{
-		TierName:  currentTier.DisplayName,
-		TierLevel: int(currentTier.TierLevel),
-		Currency:  currentTier.Currency,
-		Scope:     "tenant tier; cluster-specific pricing is reflected in usage previews and invoices",
-		Resources: map[string]ResourcePricing{},
+		TierName:    currentTier.TierName,
+		DisplayName: currentTier.DisplayName,
+		TierLevel:   int(currentTier.TierLevel),
+		Currency:    currentTier.Currency,
+		Scope:       "tenant tier; cluster-specific pricing is reflected in usage previews and invoices",
+		Resources:   map[string]ResourcePricing{},
 	}
 
 	for _, definition := range meterResp.GetMeters() {

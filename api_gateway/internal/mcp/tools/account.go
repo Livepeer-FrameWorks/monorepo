@@ -46,7 +46,7 @@ func RegisterAccountTools(server *mcp.Server, clients *clients.ServiceClients, r
 	addTool(server,
 		&mcp.Tool{
 			Name:        "update_billing_details",
-			Description: "Update billing details (company, address, VAT). Required for payments over €100 and for proper invoicing.",
+			Description: "Set the complete billing identity used for full invoices (legal name, email, address, optional company and VAT number). Small anonymous prepaid/x402 top-ups do not require it.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args UpdateBillingDetailsInput) (*mcp.CallToolResult, any, error) {
 			return handleUpdateBillingDetails(ctx, args, clients, logger)
@@ -59,6 +59,7 @@ type GetTenantSettingsInput struct{}
 // UpdateBillingDetailsInput represents input for update_billing_details tool.
 type UpdateBillingDetailsInput struct {
 	Email      string `json:"email,omitempty" jsonschema:"Billing email address"`
+	Name       string `json:"name" jsonschema:"Customer legal or person name shown on invoices"`
 	Company    string `json:"company,omitempty" jsonschema:"Company or organization name"`
 	VATNumber  string `json:"vat_number,omitempty" jsonschema:"VAT number (EU) or tax ID"`
 	Line1      string `json:"address_line1" jsonschema:"Street address line 1"`
@@ -163,8 +164,8 @@ func handleUpdateBillingDetails(ctx context.Context, args UpdateBillingDetailsIn
 	}
 
 	// Validate required fields
-	if args.Line1 == "" || args.City == "" || args.PostalCode == "" || args.Country == "" {
-		return toolError("Missing required fields: address_line1, city, postal_code, and country are required")
+	if args.Name == "" || args.Email == "" || args.Line1 == "" || args.City == "" || args.PostalCode == "" || args.Country == "" {
+		return toolError("Missing required fields: name, email, address_line1, city, postal_code, and country are required for a complete full-invoice profile")
 	}
 
 	// Validate and normalize country code
@@ -191,6 +192,7 @@ func handleUpdateBillingDetails(ctx context.Context, args UpdateBillingDetailsIn
 	// Call Purser to update billing details
 	updated, err := clients.Purser.UpdateBillingDetails(ctx, &purserpb.UpdateBillingDetailsRequest{
 		TenantId:  tenantID,
+		Name:      strPtr(args.Name),
 		Email:     strPtr(args.Email),
 		Company:   strPtr(args.Company),
 		VatNumber: strPtr(args.VATNumber),

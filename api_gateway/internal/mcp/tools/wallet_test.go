@@ -9,6 +9,8 @@ import (
 	"frameworks/api_gateway/internal/clients/clientstest"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -133,5 +135,81 @@ func TestHandleLinkAndUnlinkWallet(t *testing.T) {
 	unlinked, ok := unlinkOut.(WalletMutationResult)
 	if !ok || !unlinked.Success || !strings.Contains(unlinked.Message, "unlinked") {
 		t.Fatalf("unlink result = %T %+v", unlinkOut, unlinkOut)
+	}
+}
+
+func TestHandleLinkEmailAtZeroBalance(t *testing.T) {
+	commo := &clientstest.FakeCommodore{
+		LinkEmailFn: func(_ context.Context, email, password string) (*commodorepb.LinkEmailResponse, error) {
+			if email != "wallet@example.com" || password != "correct horse battery staple" {
+				t.Fatalf("link email args = %q/%q", email, password)
+			}
+			return &commodorepb.LinkEmailResponse{Success: true, VerificationSent: true, Message: "Verification sent"}, nil
+		},
+	}
+	result, out, err := handleLinkEmail(walletToolsCtx(), LinkEmailInput{
+		Email: " wallet@example.com ", Password: "correct horse battery staple",
+	}, clientstest.Clients(clientstest.WithCommodore(commo)), clientstest.DiscardLogger())
+	if err != nil || result == nil || result.IsError {
+		t.Fatalf("link email = (%v, %v), want success", result, err)
+	}
+	linked, ok := out.(EmailLinkResult)
+	if !ok || !linked.Success || !linked.VerificationSent {
+		t.Fatalf("link email result = %T %+v", out, out)
+	}
+}
+
+func TestHandleActivateFreeTierRequiresVerifiedEmail(t *testing.T) {
+	email := "wallet@example.com"
+	commo := &clientstest.FakeCommodore{
+		GetMeFn: func(context.Context) (*commodorepb.User, error) {
+			return &commodorepb.User{Email: &email, IsVerified: false}, nil
+		},
+	}
+	purser := &clientstest.FakePurser{}
+	result, _, err := handleActivateFreeTier(walletToolsCtx(), clientstest.Clients(
+		clientstest.WithCommodore(commo), clientstest.WithPurser(purser),
+	), clientstest.DiscardLogger())
+	if err != nil || result == nil || !result.IsError {
+		t.Fatalf("unverified activation = (%v, %v), want tool error", result, err)
+	}
+	if purser.Calls != 0 {
+		t.Fatalf("unverified activation reached Purser %d times", purser.Calls)
+	}
+}
+
+func TestHandleActivateFreeTierNeedsNoProfileOrProvider(t *testing.T) {
+	email := "wallet@example.com"
+	commo := &clientstest.FakeCommodore{
+		GetMeFn: func(context.Context) (*commodorepb.User, error) {
+			return &commodorepb.User{Email: &email, IsVerified: true}, nil
+		},
+	}
+	purser := &clientstest.FakePurser{
+		GetBillingTiersFn: func(context.Context, bool, *commonpb.CursorPaginationRequest) (*purserpb.GetBillingTiersResponse, error) {
+			return &purserpb.GetBillingTiersResponse{Tiers: []*purserpb.BillingTier{
+				{Id: "pro-tier", TierName: "pro", IsActive: true},
+				{Id: "free-tier", TierName: "free", IsActive: true},
+			}}, nil
+		},
+		PromoteToPaidFn: func(_ context.Context, tenantID, tierID string) (*purserpb.PromoteToPaidResponse, error) {
+			if tenantID != "tenant-1" || tierID != "free-tier" {
+				t.Fatalf("promotion args = %q/%q", tenantID, tierID)
+			}
+			return &purserpb.PromoteToPaidResponse{
+				Success: true, NewBillingModel: "postpaid", CreditBalanceCents: 700,
+				Message: "Free activated",
+			}, nil
+		},
+	}
+	result, out, err := handleActivateFreeTier(walletToolsCtx(), clientstest.Clients(
+		clientstest.WithCommodore(commo), clientstest.WithPurser(purser),
+	), clientstest.DiscardLogger())
+	if err != nil || result == nil || result.IsError {
+		t.Fatalf("Free activation = (%v, %v), want success", result, err)
+	}
+	activated, ok := out.(FreeTierActivationResult)
+	if !ok || !activated.Success || activated.CreditBalanceCents != 700 {
+		t.Fatalf("Free activation result = %T %+v", out, out)
 	}
 }

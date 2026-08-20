@@ -33,16 +33,20 @@ func RegisterAccountResources(server *mcp.Server, clients *clients.ServiceClient
 
 // AccountStatus represents the response for the account://status resource.
 type AccountStatus struct {
-	AccountReady bool                 `json:"account_ready"`
-	Blockers     []preflight.Blocker  `json:"blockers"`
-	Capabilities map[string]bool      `json:"capabilities"`
-	Billing      AccountBillingInfo   `json:"billing"`
-	RateLimits   AccountRateLimitInfo `json:"rate_limits"`
+	AccountReady   bool                 `json:"account_ready"`
+	RatedWorkReady bool                 `json:"rated_work_ready"`
+	Blockers       []preflight.Blocker  `json:"blockers"`
+	NextActions    []string             `json:"next_actions"`
+	Capabilities   map[string]bool      `json:"capabilities"`
+	Billing        AccountBillingInfo   `json:"billing"`
+	RateLimits     AccountRateLimitInfo `json:"rate_limits"`
 }
 
 // AccountBillingInfo contains billing-related account info.
 type AccountBillingInfo struct {
 	Model                 string `json:"model"`
+	TierName              string `json:"tier_name,omitempty"`
+	CollectionReady       bool   `json:"collection_ready"`
 	BalanceCents          int64  `json:"balance_cents"`
 	ReservedBalanceCents  int64  `json:"reserved_balance_cents"`
 	AvailableBalanceCents int64  `json:"available_balance_cents"`
@@ -61,7 +65,9 @@ func handleAccountStatus(ctx context.Context, clients *clients.ServiceClients, c
 	if tenantID == "" {
 		// Not authenticated - return unauthenticated status
 		status := AccountStatus{
-			AccountReady: false,
+			AccountReady:   false,
+			RatedWorkReady: false,
+			NextActions:    []string{"authenticate_with_wallet_or_bearer_token"},
 			Blockers: []preflight.Blocker{
 				{
 					Code:       "AUTHENTICATION_REQUIRED",
@@ -100,6 +106,8 @@ func handleAccountStatus(ctx context.Context, clients *clients.ServiceClients, c
 
 	billingInfo := AccountBillingInfo{
 		Model:             tenantBillingStatus.BillingModel,
+		TierName:          tenantBillingStatus.TierName,
+		CollectionReady:   tenantBillingStatus.CollectionReady,
 		BalanceCents:      tenantBillingStatus.BalanceCents,
 		LowBalanceWarning: tenantBillingStatus.IsBalanceNegative,
 	}
@@ -138,14 +146,33 @@ func handleAccountStatus(ctx context.Context, clients *clients.ServiceClients, c
 	}
 
 	status := AccountStatus{
-		AccountReady: len(blockers) == 0,
-		Blockers:     blockers,
-		Capabilities: capabilities,
-		Billing:      billingInfo,
-		RateLimits:   rateLimits,
+		AccountReady:   true,
+		RatedWorkReady: len(blockers) == 0,
+		Blockers:       blockers,
+		NextActions:    accountNextActions(blockers),
+		Capabilities:   capabilities,
+		Billing:        billingInfo,
+		RateLimits:     rateLimits,
 	}
 
 	return marshalResourceResult("account://status", status)
+}
+
+func accountNextActions(blockers []preflight.Blocker) []string {
+	actions := make([]string, 0, 2)
+	for _, blocker := range blockers {
+		switch blocker.Code {
+		case "INSUFFICIENT_BALANCE":
+			actions = append(actions, "top_up_prepaid_credit", "link_and_verify_email_then_activate_free_tier")
+		case "PAYMENT_SETUP_REQUIRED":
+			actions = append(actions, "complete_confirmed_postpaid_provider_setup")
+		case "BILLING_STATUS_UNAVAILABLE":
+			actions = append(actions, "retry_rated_operation_after_billing_status_recovers")
+		case "AUTHENTICATION_REQUIRED":
+			actions = append(actions, "authenticate_with_wallet_or_bearer_token")
+		}
+	}
+	return actions
 }
 
 // marshalResourceResult marshals any value to an MCP resource result.

@@ -1822,7 +1822,8 @@ func (r *Resolver) DoGetCryptoTopupStatus(ctx context.Context, topupID string) (
 // PROMOTION FLOW
 // ============================================================================
 
-// DoPromoteToPaid upgrades a wallet-only prepaid account to postpaid billing
+// DoPromoteToPaid switches a verified wallet account from prepaid to a selected
+// postpaid tier. The Free tier does not require a collection provider.
 func (r *Resolver) DoPromoteToPaid(ctx context.Context, tierID string) (model.PromoteToPaidResult, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic promotion result")
@@ -1840,6 +1841,24 @@ func (r *Resolver) DoPromoteToPaid(ctx context.Context, tierID string) (model.Pr
 			Message: "Tenant context required",
 			Code:    ptrStr("TENANT_REQUIRED"),
 			Field:   ptrStr("tenant_id"),
+		}, nil
+	}
+	user, userErr := r.Clients.Commodore.GetMe(ctx)
+	if userErr != nil || user == nil {
+		if userErr != nil {
+			r.Logger.WithError(userErr).WithField("tenant_id", tenantID).Warn("Failed to verify email before postpaid promotion")
+		}
+		return &model.ValidationError{
+			Message: "Unable to verify the account email; retry after signing in again",
+			Code:    ptrStr("EMAIL_VERIFICATION_UNAVAILABLE"),
+			Field:   ptrStr("email"),
+		}, nil
+	}
+	if user.GetEmail() == "" || !user.GetIsVerified() {
+		return &model.ValidationError{
+			Message: "Link and verify an email address before switching from prepaid to postpaid",
+			Code:    ptrStr("VERIFIED_EMAIL_REQUIRED"),
+			Field:   ptrStr("email"),
 		}, nil
 	}
 
@@ -1982,6 +2001,9 @@ func (r *Resolver) DoUpdateBillingDetails(ctx context.Context, input model.Updat
 		if input.Email != nil {
 			details.Email = *input.Email
 		}
+		if input.Name != nil {
+			details.Name = *input.Name
+		}
 		if input.Company != nil {
 			details.Company = *input.Company
 		}
@@ -2000,7 +2022,7 @@ func (r *Resolver) DoUpdateBillingDetails(ctx context.Context, input model.Updat
 			}
 		}
 		// Check completeness
-		details.IsComplete = details.Email != "" && details.Address != nil &&
+		details.IsComplete = details.Name != "" && details.Email != "" && details.Address != nil &&
 			details.Address.Street != "" && details.Address.City != "" &&
 			details.Address.PostalCode != "" && details.Address.Country != ""
 		return details, nil
@@ -2017,6 +2039,9 @@ func (r *Resolver) DoUpdateBillingDetails(ctx context.Context, input model.Updat
 	}
 	if input.Email != nil {
 		req.Email = input.Email
+	}
+	if input.Name != nil {
+		req.Name = input.Name
 	}
 	if input.Company != nil {
 		req.Company = input.Company

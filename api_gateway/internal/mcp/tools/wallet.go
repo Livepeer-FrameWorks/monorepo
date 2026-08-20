@@ -44,6 +44,20 @@ func RegisterWalletTools(server *mcp.Server, serviceClients *clients.ServiceClie
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args UnlinkWalletInput) (*mcp.CallToolResult, any, error) {
 		return handleUnlinkWallet(ctx, args, serviceClients, logger)
 	})
+
+	addTool(server, &mcp.Tool{
+		Name:        "link_email",
+		Description: "Add a password sign-in email to a wallet-only account and send its verification message. Available at zero prepaid balance.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args LinkEmailInput) (*mcp.CallToolResult, any, error) {
+		return handleLinkEmail(ctx, args, serviceClients, logger)
+	})
+
+	addTool(server, &mcp.Tool{
+		Name:        "activate_free_tier",
+		Description: "Switch a prepaid account with a verified email to the Free tier. No billing profile or payment provider is required; prepaid credit remains on the account.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ ActivateFreeTierInput) (*mcp.CallToolResult, any, error) {
+		return handleActivateFreeTier(ctx, serviceClients, logger)
+	})
 }
 
 type RequestWalletChallengeInput struct {
@@ -79,6 +93,26 @@ type LinkWalletInput struct {
 
 type UnlinkWalletInput struct {
 	WalletID string `json:"wallet_id" jsonschema:"Linked wallet UUID returned by list_linked_wallets"`
+}
+
+type LinkEmailInput struct {
+	Email    string `json:"email" jsonschema:"Email address to add to the wallet account"`
+	Password string `json:"password" jsonschema:"New password for email sign-in"`
+}
+
+type ActivateFreeTierInput struct{}
+
+type EmailLinkResult struct {
+	Success          bool   `json:"success"`
+	VerificationSent bool   `json:"verification_sent"`
+	Message          string `json:"message"`
+}
+
+type FreeTierActivationResult struct {
+	Success            bool   `json:"success"`
+	BillingModel       string `json:"billing_model"`
+	CreditBalanceCents int64  `json:"credit_balance_cents"`
+	Message            string `json:"message"`
 }
 
 type WalletMutationResult struct {
@@ -162,6 +196,63 @@ func handleUnlinkWallet(ctx context.Context, args UnlinkWalletInput, serviceClie
 		return toolError("Wallet was not unlinked")
 	}
 	return toolSuccess(WalletMutationResult{Success: true, Message: "Wallet unlinked."})
+}
+
+func handleLinkEmail(ctx context.Context, args LinkEmailInput, serviceClients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
+	if ctxkeys.GetUserID(ctx) == "" {
+		return nil, nil, mcperrors.AuthRequired()
+	}
+	email := strings.TrimSpace(args.Email)
+	if email == "" || args.Password == "" {
+		return toolError("email and password are required")
+	}
+	resp, err := serviceClients.Commodore.LinkEmail(ctx, email, args.Password)
+	if err != nil {
+		logger.WithError(err).Warn("Failed to link email from MCP")
+		return toolError("Failed to link email; verify the address is valid and not already linked")
+	}
+	return toolSuccess(EmailLinkResult{
+		Success: resp.GetSuccess(), VerificationSent: resp.GetVerificationSent(), Message: resp.GetMessage(),
+	})
+}
+
+func handleActivateFreeTier(ctx context.Context, serviceClients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" || ctxkeys.GetUserID(ctx) == "" {
+		return nil, nil, mcperrors.AuthRequired()
+	}
+	user, err := serviceClients.Commodore.GetMe(ctx)
+	if err != nil || user == nil {
+		logger.WithError(err).Warn("Failed to verify email before Free activation")
+		return toolError("Unable to verify the account email; retry after signing in again")
+	}
+	if user.GetEmail() == "" || !user.GetIsVerified() {
+		return toolError("Link and verify an email address before activating Free")
+	}
+	tiers, err := serviceClients.Purser.GetBillingTiers(ctx, false, nil)
+	if err != nil {
+		logger.WithError(err).Warn("Failed to discover Free tier")
+		return toolError("Unable to load the Free tier")
+	}
+	freeTierID := ""
+	for _, tier := range tiers.GetTiers() {
+		if tier.GetIsActive() && strings.EqualFold(tier.GetTierName(), "free") {
+			freeTierID = tier.GetId()
+			break
+		}
+	}
+	if freeTierID == "" {
+		return toolError("The Free tier is not currently available")
+	}
+	resp, err := serviceClients.Purser.PromoteToPaid(ctx, tenantID, freeTierID)
+	if err != nil {
+		logger.WithError(err).Warn("Failed to activate Free tier")
+		return toolError("Failed to activate Free")
+	}
+	return toolSuccess(FreeTierActivationResult{
+		Success: resp.GetSuccess(), BillingModel: resp.GetNewBillingModel(),
+		CreditBalanceCents: resp.GetCreditBalanceCents(), Message: resp.GetMessage(),
+	})
 }
 
 func linkedWalletResult(wallet *commodorepb.WalletIdentity) LinkedWalletResult {

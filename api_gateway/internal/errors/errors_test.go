@@ -1,13 +1,43 @@
 package errors
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+func TestErrorPresenterPreservesStructuredBillingBlocker(t *testing.T) {
+	st := status.New(codes.FailedPrecondition, "add a billing email and postal address before paying")
+	st, err := st.WithDetails(&errdetails.ErrorInfo{
+		Reason: "BILLING_PROFILE_REQUIRED",
+		Domain: "billing.frameworks.network",
+		Metadata: map[string]string{
+			"required_fields": "email, street,city,postal_code,country",
+			"public_message":  "add a billing email and postal address before paying",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	presented := ErrorPresenter(logging.NewLogger())(context.Background(), fmt.Errorf("create top-up: %w", st.Err()))
+	if presented.Message != "add a billing email and postal address before paying" {
+		t.Fatalf("message = %q", presented.Message)
+	}
+	if presented.Extensions["code"] != "BILLING_PROFILE_REQUIRED" {
+		t.Fatalf("code = %#v", presented.Extensions["code"])
+	}
+	fields, ok := presented.Extensions["required_fields"].([]string)
+	if !ok || len(fields) != 5 || fields[0] != "email" || fields[4] != "country" {
+		t.Fatalf("required_fields = %#v", presented.Extensions["required_fields"])
+	}
+}
 
 func TestSanitizeMessage(t *testing.T) {
 	cases := []struct {

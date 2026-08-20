@@ -5,15 +5,25 @@ import (
 	"errors"
 	"testing"
 
+	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/clients/clientstest"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 )
 
 func purserResolver(p *clientstest.FakePurser) *Resolver {
+	email := "verified@example.com"
 	return &Resolver{
-		Clients: clientstest.Clients(clientstest.WithPurser(p)),
-		Logger:  clientstest.DiscardLogger(),
+		Clients: clientstest.Clients(
+			clientstest.WithPurser(p),
+			clientstest.WithCommodore(&clientstest.FakeCommodore{
+				GetMeFn: func(context.Context) (*commodorepb.User, error) {
+					return &commodorepb.User{Email: &email, IsVerified: true}, nil
+				},
+			}),
+		),
+		Logger: clientstest.DiscardLogger(),
 	}
 }
 
@@ -117,5 +127,38 @@ func TestDoGetBillingStatus_Normalizes(t *testing.T) {
 	}
 	if guard.Calls != 0 {
 		t.Fatalf("backend consulted without tenant: %d calls", guard.Calls)
+	}
+}
+
+func TestDoPromoteToPaidRequiresVerifiedEmail(t *testing.T) {
+	email := "unverified@example.com"
+	purser := &clientstest.FakePurser{
+		PromoteToPaidFn: func(context.Context, string, string) (*purserpb.PromoteToPaidResponse, error) {
+			t.Fatal("Purser must not be called for an unverified wallet account")
+			return nil, nil
+		},
+	}
+	r := &Resolver{
+		Clients: clientstest.Clients(
+			clientstest.WithPurser(purser),
+			clientstest.WithCommodore(&clientstest.FakeCommodore{
+				GetMeFn: func(context.Context) (*commodorepb.User, error) {
+					return &commodorepb.User{Email: &email, IsVerified: false}, nil
+				},
+			}),
+		),
+		Logger: clientstest.DiscardLogger(),
+	}
+
+	result, err := r.DoPromoteToPaid(clientstest.AuthedCtx("t1"), "free-tier")
+	if err != nil {
+		t.Fatal(err)
+	}
+	validation, ok := result.(*model.ValidationError)
+	if !ok || validation.Code == nil || *validation.Code != "VERIFIED_EMAIL_REQUIRED" {
+		t.Fatalf("result=%#v, want VERIFIED_EMAIL_REQUIRED", result)
+	}
+	if purser.Calls != 0 {
+		t.Fatalf("Purser called %d times for an unverified account", purser.Calls)
 	}
 }

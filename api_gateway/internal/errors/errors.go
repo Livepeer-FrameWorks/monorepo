@@ -8,6 +8,7 @@ import (
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/vektah/gqlparser/v2/gqlerror"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -31,9 +32,56 @@ func ErrorPresenter(logger logging.Logger) graphql.ErrorPresenterFunc {
 			logger.WithError(err).Error("GraphQL request failed")
 		}
 		presented := graphql.DefaultErrorPresenter(ctx, err)
+		if message, extensions, ok := publicGRPCError(err); ok {
+			presented.Message = message
+			if presented.Extensions == nil {
+				presented.Extensions = map[string]any{}
+			}
+			for key, value := range extensions {
+				presented.Extensions[key] = value
+			}
+			return presented
+		}
 		presented.Message = SanitizeErrorMessage(err, presented.Message)
 		return presented
 	}
+}
+
+func publicGRPCError(err error) (string, map[string]any, bool) {
+	st, ok := status.FromError(err)
+	if !ok {
+		return "", nil, false
+	}
+	for _, detail := range st.Details() {
+		info, isErrorInfo := detail.(*errdetails.ErrorInfo)
+		if !isErrorInfo || info.GetDomain() != "billing.frameworks.network" {
+			continue
+		}
+		switch info.GetReason() {
+		case "BILLING_PROFILE_REQUIRED":
+			fields := splitMetadataList(info.GetMetadata()["required_fields"])
+			message := strings.TrimSpace(info.GetMetadata()["public_message"])
+			if message == "" {
+				message = "Complete the listed billing fields before requesting this payment."
+			}
+			return message, map[string]any{
+				"code":            info.GetReason(),
+				"required_fields": fields,
+			}, true
+		}
+	}
+	return "", nil, false
+}
+
+func splitMetadataList(value string) []string {
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if field := strings.TrimSpace(part); field != "" {
+			result = append(result, field)
+		}
+	}
+	return result
 }
 
 func SanitizeErrorMessage(err error, fallback string) string {

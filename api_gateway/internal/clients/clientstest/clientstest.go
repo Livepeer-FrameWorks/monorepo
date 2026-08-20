@@ -31,6 +31,7 @@ import (
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
+	x402pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/x402"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -905,6 +906,8 @@ type FakePurser struct {
 	CompleteX402MutationResultFn func(ctx context.Context, req *purserpb.CompleteX402MutationResultRequest) (*purserpb.CompleteX402MutationResultResponse, error)
 	ListTenantBillingSnapshotsFn func(ctx context.Context, tenantIDs []string, limit int32) (*purserpb.ListTenantBillingSnapshotsResponse, error)
 	GetPaymentRequirementsFn     func(ctx context.Context, tenantID, resource string) (*purserpb.PaymentRequirements, error)
+	VerifyX402PaymentFn          func(ctx context.Context, tenantID string, payment *x402pb.X402PaymentPayload, clientIP string) (*purserpb.VerifyX402PaymentResponse, error)
+	SettleX402PaymentFn          func(ctx context.Context, tenantID string, payment *x402pb.X402PaymentPayload, clientIP string) (*purserpb.SettleX402PaymentResponse, error)
 
 	GetBillingTiersFn             func(ctx context.Context, includeInactive bool, pagination *commonpb.CursorPaginationRequest) (*purserpb.GetBillingTiersResponse, error)
 	ListMeterDefinitionsFn        func(ctx context.Context) (*purserpb.ListMeterDefinitionsResponse, error)
@@ -985,6 +988,22 @@ func (f *FakePurser) GetPaymentRequirements(ctx context.Context, tenantID, resou
 		panic("FakePurser.GetPaymentRequirements not stubbed")
 	}
 	return f.GetPaymentRequirementsFn(ctx, tenantID, resource)
+}
+
+func (f *FakePurser) VerifyX402Payment(ctx context.Context, tenantID string, payment *x402pb.X402PaymentPayload, clientIP string) (*purserpb.VerifyX402PaymentResponse, error) {
+	f.Calls++
+	if f.VerifyX402PaymentFn == nil {
+		panic("FakePurser.VerifyX402Payment not stubbed")
+	}
+	return f.VerifyX402PaymentFn(ctx, tenantID, payment, clientIP)
+}
+
+func (f *FakePurser) SettleX402Payment(ctx context.Context, tenantID string, payment *x402pb.X402PaymentPayload, clientIP string) (*purserpb.SettleX402PaymentResponse, error) {
+	f.Calls++
+	if f.SettleX402PaymentFn == nil {
+		panic("FakePurser.SettleX402Payment not stubbed")
+	}
+	return f.SettleX402PaymentFn(ctx, tenantID, payment, clientIP)
 }
 
 func (f *FakePurser) GetBillingTiers(ctx context.Context, includeInactive bool, pagination *commonpb.CursorPaginationRequest) (*purserpb.GetBillingTiersResponse, error) {

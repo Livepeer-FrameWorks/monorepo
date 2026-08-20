@@ -754,7 +754,7 @@ type CreateBootstrapTokenInput struct {
 
 // Input for creating a card-based prepaid balance top-up.
 type CreateCardTopupInput struct {
-	// Amount to top up in cents. Minimum €5.00 (500 cents).
+	// Amount to top up in cents. Minimum €5.00 (500 cents); maximum 10,000,000 cents.
 	AmountCents int `json:"amountCents"`
 	// Currency code (default: EUR).
 	Currency *string `json:"currency,omitempty"`
@@ -829,7 +829,7 @@ type CreateConversationInput struct {
 
 // Input for creating a crypto top-up deposit address.
 type CreateCryptoTopupInput struct {
-	// Target credit amount in `currency` cents. Must be positive.
+	// Target credit amount in `currency` cents. Minimum 1 cent; maximum 10,000,000 cents.
 	AmountCents int `json:"amountCents"`
 	// Crypto asset to receive (ETH or USDC; LPT not yet supported).
 	Asset purserpb.CryptoAsset `json:"asset"`
@@ -2227,6 +2227,8 @@ type TrackListEventsConnection struct {
 type UpdateBillingDetailsInput struct {
 	// Billing contact email.
 	Email *string `json:"email,omitempty"`
+	// Customer legal or person name shown on full invoices.
+	Name *string `json:"name,omitempty"`
 	// Company name for invoices.
 	Company *string `json:"company,omitempty"`
 	// VAT number (EU format: XX123456789).

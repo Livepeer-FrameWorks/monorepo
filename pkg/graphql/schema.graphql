@@ -1836,9 +1836,10 @@ type Mutation {
   ): LinkEmailResult!
 
   """
-  Upgrade from prepaid to postpaid billing.
-  Requires: email verified + select a billing tier.
-  Existing prepaid balance is carried forward as credit.
+  Switch from prepaid to a selected postpaid tier.
+  A verified email is always required. Free needs no billing profile or payment
+  provider; paid tiers require confirmed provider collection. Existing prepaid
+  balance is carried forward as account credit.
   """
   promoteToPaid(
     """
@@ -5444,18 +5445,21 @@ type BalanceTransactionsConnection {
 # ============================================================================
 
 """
-Billing details for a tenant - required before any payment for VAT invoicing.
+Billing details for a tenant. These are optional for Free and small simplified
+top-ups, and required when paid postpaid collection or a full invoice needs them.
 """
 type BillingDetails {
   "Billing contact email."
   email: String
+  "Customer legal or person name shown on full invoices."
+  name: String
   "Company name for invoices."
   company: String
   "VAT number (EU format: XX123456789)."
   vatNumber: String
   "Structured billing address."
   address: BillingAddress
-  "True if all required fields are present (email + address)."
+  "True if all full-invoice fields are present (legal name + email + address)."
   isComplete: Boolean!
   "When billing details were last updated."
   updatedAt: Time
@@ -5483,6 +5487,8 @@ Input for updating billing details.
 input UpdateBillingDetailsInput {
   "Billing contact email."
   email: String
+  "Customer legal or person name shown on full invoices."
+  name: String
   "Company name for invoices."
   company: String
   "VAT number (EU format: XX123456789)."

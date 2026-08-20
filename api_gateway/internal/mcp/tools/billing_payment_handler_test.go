@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/base64"
 	"strings"
 	"testing"
 	"time"
@@ -11,8 +12,14 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
+	x402pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/x402"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+func v2PaymentSignature() string {
+	document := []byte(`{"x402Version":2,"accepted":{"scheme":"exact","network":"eip155:8453","asset":"0xAsset","amount":"5000000","payTo":"0xToAddress","maxTimeoutSeconds":60,"extra":{"frameworks":{"quoteId":"quote-123"}}},"payload":{"signature":"0xabc123","authorization":{"from":"0xFromAddress","to":"0xToAddress","value":"5000000","validAfter":"0","validBefore":"9999999999","nonce":"0x01"}},"resource":{"url":"https://api.example.com/graphql"}}`)
+	return base64.StdEncoding.EncodeToString(document)
+}
 
 func toolsCtx(tenant string) context.Context {
 	return context.WithValue(context.Background(), ctxkeys.KeyTenantID, tenant)
@@ -262,6 +269,58 @@ func TestHandleGetPaymentOptions(t *testing.T) {
 	}
 }
 
+func TestHandleSubmitPayment_PreservesStableTerminalCode(t *testing.T) {
+	p := &clientstest.FakePurser{
+		VerifyX402PaymentFn: func(_ context.Context, tenantID string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+			return &purserpb.VerifyX402PaymentResponse{Valid: tenantID == "t1"}, nil
+		},
+		SettleX402PaymentFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+			return &purserpb.SettleX402PaymentResponse{
+				Success: false, Error: "authorization already used", ErrorCode: "AUTHORIZATION_USED",
+			}, nil
+		},
+	}
+	sc := clientstest.Clients(clientstest.WithPurser(p))
+	res, out, err := handleSubmitPayment(toolsCtx("t1"), SubmitPaymentInput{Payment: v2PaymentSignature()}, sc, clientstest.DiscardLogger())
+	if err != nil || res == nil || res.IsError {
+		t.Fatalf("terminal settlement must be a machine-readable tool result: err=%v result=%v", err, res)
+	}
+	result, ok := out.(SubmitPaymentResult)
+	if !ok {
+		t.Fatalf("result type = %T, want SubmitPaymentResult", out)
+	}
+	if result.Success || result.SettlementStatus != "failed" || result.ErrorCode != "AUTHORIZATION_USED" {
+		t.Fatalf("unexpected terminal settlement result: %+v", result)
+	}
+	if result.Message != "authorization already used" {
+		t.Fatalf("message = %q", result.Message)
+	}
+}
+
+func TestHandleSubmitPayment_ReturnsStructuredSettlementPending(t *testing.T) {
+	p := &clientstest.FakePurser{
+		VerifyX402PaymentFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+			return &purserpb.VerifyX402PaymentResponse{Valid: true}, nil
+		},
+		SettleX402PaymentFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+			return &purserpb.SettleX402PaymentResponse{
+				Success: false, Error: "awaiting canonical receipt", ErrorCode: "SETTLEMENT_PENDING",
+				TxHash: "0xabc", Network: "eip155:8453",
+			}, nil
+		},
+	}
+	sc := clientstest.Clients(clientstest.WithPurser(p))
+	res, out, err := handleSubmitPayment(toolsCtx("t1"), SubmitPaymentInput{Payment: v2PaymentSignature()}, sc, clientstest.DiscardLogger())
+	if err != nil || res == nil || res.IsError {
+		t.Fatalf("pending settlement must be a machine-readable tool result: err=%v result=%v", err, res)
+	}
+	result, ok := out.(SubmitPaymentResult)
+	if !ok || result.Success || result.SettlementStatus != "pending" || result.ErrorCode != "SETTLEMENT_PENDING" ||
+		result.TxHash != "0xabc" || result.Network != "eip155:8453" {
+		t.Fatalf("unexpected pending settlement result: %T %+v", out, out)
+	}
+}
+
 func TestHandleGetPaymentOptions_AuthRequired(t *testing.T) {
 	p := &clientstest.FakePurser{}
 	sc := clientstest.Clients(clientstest.WithPurser(p))
@@ -347,7 +406,7 @@ func TestHandleUpdateBillingDetails(t *testing.T) {
 	}
 	scOK := clientstest.Clients(clientstest.WithPurser(pOK))
 	res, _, err = handleUpdateBillingDetails(toolsCtx("tenant-9"), UpdateBillingDetailsInput{
-		Line1: "1 Main", Line2: "Apt 4", City: "Berlin", PostalCode: "10115", Country: "de",
+		Name: "Example GmbH", Email: "billing@example.com", Line1: "1 Main", Line2: "Apt 4", City: "Berlin", PostalCode: "10115", Country: "de",
 	}, scOK, clientstest.DiscardLogger())
 	if err != nil || res.IsError {
 		t.Fatalf("expected success, got err=%v isErr=%v (%s)", err, res.IsError, extractToolText(res))

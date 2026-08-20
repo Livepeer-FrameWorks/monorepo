@@ -1,6 +1,7 @@
 query GetBillingDetails {
   billingDetails {
     email
+    name
     company
     vatNumber
     address {

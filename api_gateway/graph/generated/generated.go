@@ -439,6 +439,7 @@ type ComplexityRoot struct {
 		Company    func(childComplexity int) int
 		Email      func(childComplexity int) int
 		IsComplete func(childComplexity int) int
+		Name       func(childComplexity int) int
 		UpdatedAt  func(childComplexity int) int
 		VatNumber  func(childComplexity int) int
 	}
@@ -6263,6 +6264,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.BillingDetails.IsComplete(childComplexity), true
+
+	case "BillingDetails.name":
+		if e.complexity.BillingDetails.Name == nil {
+			break
+		}
+
+		return e.complexity.BillingDetails.Name(childComplexity), true
 
 	case "BillingDetails.updatedAt":
 		if e.complexity.BillingDetails.UpdatedAt == nil {
@@ -25147,9 +25155,10 @@ type Mutation {
   ): LinkEmailResult!
 
   """
-  Upgrade from prepaid to postpaid billing.
-  Requires: email verified + select a billing tier.
-  Existing prepaid balance is carried forward as credit.
+  Switch from prepaid to a selected postpaid tier.
+  A verified email is always required. Free needs no billing profile or payment
+  provider; paid tiers require confirmed provider collection. Existing prepaid
+  balance is carried forward as account credit.
   """
   promoteToPaid(
     """
@@ -26597,7 +26606,7 @@ enum CardPaymentProvider {
 Input for creating a card-based prepaid balance top-up.
 """
 input CreateCardTopupInput {
-  "Amount to top up in cents. Minimum €5.00 (500 cents)."
+  "Amount to top up in cents. Minimum €5.00 (500 cents); maximum 10,000,000 cents."
   amountCents: Int!
   "Currency code (default: EUR)."
   currency: String
@@ -26667,7 +26676,7 @@ enum CryptoAsset {
 Input for creating a crypto top-up deposit address.
 """
 input CreateCryptoTopupInput {
-  "Target credit amount in ` + "`" + `currency` + "`" + ` cents. Must be positive."
+  "Target credit amount in ` + "`" + `currency` + "`" + ` cents. Minimum 1 cent; maximum 10,000,000 cents."
   amountCents: Int!
   "Crypto asset to receive (ETH or USDC; LPT not yet supported)."
   asset: CryptoAsset!
@@ -28755,18 +28764,21 @@ type BalanceTransactionsConnection {
 # ============================================================================
 
 """
-Billing details for a tenant - required before any payment for VAT invoicing.
+Billing details for a tenant. These are optional for Free and small simplified
+top-ups, and required when paid postpaid collection or a full invoice needs them.
 """
 type BillingDetails {
   "Billing contact email."
   email: String
+  "Customer legal or person name shown on full invoices."
+  name: String
   "Company name for invoices."
   company: String
   "VAT number (EU format: XX123456789)."
   vatNumber: String
   "Structured billing address."
   address: BillingAddress
-  "True if all required fields are present (email + address)."
+  "True if all full-invoice fields are present (legal name + email + address)."
   isComplete: Boolean!
   "When billing details were last updated."
   updatedAt: Time
@@ -28794,6 +28806,8 @@ Input for updating billing details.
 input UpdateBillingDetailsInput {
   "Billing contact email."
   email: String
+  "Customer legal or person name shown on full invoices."
+  name: String
   "Company name for invoices."
   company: String
   "VAT number (EU format: XX123456789)."
@@ -43675,6 +43689,47 @@ func (ec *executionContext) _BillingDetails_email(ctx context.Context, field gra
 }
 
 func (ec *executionContext) fieldContext_BillingDetails_email(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BillingDetails",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _BillingDetails_name(ctx context.Context, field graphql.CollectedField, obj *purserpb.BillingDetails) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_BillingDetails_name(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Name, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalOString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_BillingDetails_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "BillingDetails",
 		Field:      field,
@@ -78265,6 +78320,8 @@ func (ec *executionContext) fieldContext_Mutation_updateBillingDetails(ctx conte
 			switch field.Name {
 			case "email":
 				return ec.fieldContext_BillingDetails_email(ctx, field)
+			case "name":
+				return ec.fieldContext_BillingDetails_name(ctx, field)
 			case "company":
 				return ec.fieldContext_BillingDetails_company(ctx, field)
 			case "vatNumber":
@@ -103263,6 +103320,8 @@ func (ec *executionContext) fieldContext_Query_billingDetails(_ context.Context,
 			switch field.Name {
 			case "email":
 				return ec.fieldContext_BillingDetails_email(ctx, field)
+			case "name":
+				return ec.fieldContext_BillingDetails_name(ctx, field)
 			case "company":
 				return ec.fieldContext_BillingDetails_company(ctx, field)
 			case "vatNumber":
@@ -157840,7 +157899,7 @@ func (ec *executionContext) unmarshalInputUpdateBillingDetailsInput(ctx context.
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"email", "company", "vatNumber", "address"}
+	fieldsInOrder := [...]string{"email", "name", "company", "vatNumber", "address"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -157854,6 +157913,13 @@ func (ec *executionContext) unmarshalInputUpdateBillingDetailsInput(ctx context.
 				return it, err
 			}
 			it.Email = data
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
 		case "company":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("company"))
 			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
@@ -164593,6 +164659,8 @@ func (ec *executionContext) _BillingDetails(ctx context.Context, sel ast.Selecti
 			out.Values[i] = graphql.MarshalString("BillingDetails")
 		case "email":
 			out.Values[i] = ec._BillingDetails_email(ctx, field, obj)
+		case "name":
+			out.Values[i] = ec._BillingDetails_name(ctx, field, obj)
 		case "company":
 			out.Values[i] = ec._BillingDetails_company(ctx, field, obj)
 		case "vatNumber":

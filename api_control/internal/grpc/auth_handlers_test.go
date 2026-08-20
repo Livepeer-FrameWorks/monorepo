@@ -50,7 +50,7 @@ func TestRegister(t *testing.T) {
 			WithArgs("a@b.com").
 			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("existing-id"))
 		resp, err := s.Register(context.Background(), &commodorepb.RegisterRequest{
-			Email: "a@b.com", Password: "pw", HumanCheck: "human", Behavior: goodBehavior(),
+			Email: " A@B.COM ", Password: "pw", HumanCheck: "human", Behavior: goodBehavior(),
 		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -89,6 +89,21 @@ func TestRegister(t *testing.T) {
 			t.Errorf("unmet: %v", err)
 		}
 	})
+}
+
+func TestVerifyEmailKeepsIdentityPendingUntilFreeSetupSucceeds(t *testing.T) {
+	s, mock, done := newMockServer(t)
+	defer done()
+
+	mock.ExpectQuery("SELECT id, tenant_id FROM commodore.users").
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id"}).AddRow("user-1", "tenant-1"))
+
+	_, err := s.VerifyEmail(context.Background(), &commodorepb.VerifyEmailRequest{Token: "valid-token"})
+	wantCode(t, err, codes.Unavailable)
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("verification must not clear the token before Free setup: %v", err)
+	}
 }
 
 func TestGetOrCreateWalletUser(t *testing.T) {

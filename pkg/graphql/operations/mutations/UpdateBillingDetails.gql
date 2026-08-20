@@ -1,6 +1,7 @@
 mutation UpdateBillingDetails($input: UpdateBillingDetailsInput!) {
   updateBillingDetails(input: $input) {
     email
+    name
     company
     vatNumber
     address {
