@@ -1678,11 +1678,7 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 					}
 					totalDec = decimal.NewFromInt(decision.CollectedCents).Div(decimal.NewFromInt(100))
 				}
-				if totalDec.IsZero() {
-					status = "paid"
-				} else {
-					status = "pending"
-				}
+				status = finalizedInvoiceStatus(totalDec)
 			} else {
 				totalDec = totalDec.Round(2)
 			}
@@ -1894,6 +1890,13 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 	jm.logger.WithFields(logging.Fields{
 		"invoices_generated": invoicesGenerated,
 	}).Info("Monthly invoice generation completed")
+}
+
+func finalizedInvoiceStatus(total decimal.Decimal) string {
+	if total.IsZero() {
+		return "paid"
+	}
+	return "pending"
 }
 
 func (jm *JobManager) assertMeteringComplete(ctx context.Context, tenantID string, periodStart, periodEnd time.Time) error {

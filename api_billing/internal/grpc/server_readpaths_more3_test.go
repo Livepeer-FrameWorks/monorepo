@@ -36,14 +36,14 @@ func TestGetTenantBillingStatusPrepaidNegativeBalance(t *testing.T) {
 	cols := []string{
 		"billing_model", "status", "balance_cents", "reserved_balance_cents", "retention", "dvr_entitlements",
 		"tier_id", "billing_period_start", "billing_period_end", "storage_limit", "resource_limits",
-		"payment_method", "stripe_subscription_id", "mollie_subscription_id",
+		"payment_method", "stripe_subscription_id", "mollie_subscription_id", "tier_name",
 	}
 
 	t.Run("prepaid non-positive trips negative", func(t *testing.T) {
 		s, mock := newReadServer(t, true)
 		mock.ExpectQuery(`LEFT JOIN purser\.prepaid_balances pb`).
 			WillReturnRows(sqlmock.NewRows(cols).
-				AddRow("prepaid", "active", int64(-50), int64(0), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil))
+				AddRow("prepaid", "active", int64(-50), int64(0), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "prepaid"))
 
 		resp, err := s.GetTenantBillingStatus(context.Background(), &purserpb.GetTenantBillingStatusRequest{TenantId: "tenant-1"})
 		if err != nil {
@@ -58,7 +58,7 @@ func TestGetTenantBillingStatusPrepaidNegativeBalance(t *testing.T) {
 		s, mock := newReadServer(t, true)
 		mock.ExpectQuery(`LEFT JOIN purser\.prepaid_balances pb`).
 			WillReturnRows(sqlmock.NewRows(cols).
-				AddRow("prepaid", "active", int64(100), int64(125), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil))
+				AddRow("prepaid", "active", int64(100), int64(125), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "prepaid"))
 
 		resp, err := s.GetTenantBillingStatus(context.Background(), &purserpb.GetTenantBillingStatusRequest{TenantId: "tenant-1"})
 		if err != nil {
@@ -73,7 +73,7 @@ func TestGetTenantBillingStatusPrepaidNegativeBalance(t *testing.T) {
 		s, mock := newReadServer(t, true)
 		mock.ExpectQuery(`LEFT JOIN purser\.prepaid_balances pb`).
 			WillReturnRows(sqlmock.NewRows(cols).
-				AddRow("postpaid", "suspended", int64(-50), int64(0), nil, nil, nil, nil, nil, nil, nil, "stripe", "sub_1", nil))
+				AddRow("postpaid", "suspended", int64(-50), int64(0), nil, nil, nil, nil, nil, nil, nil, "stripe", "sub_1", nil, "pro"))
 
 		resp, err := s.GetTenantBillingStatus(context.Background(), &purserpb.GetTenantBillingStatusRequest{TenantId: "tenant-1"})
 		if err != nil {
@@ -87,6 +87,9 @@ func TestGetTenantBillingStatusPrepaidNegativeBalance(t *testing.T) {
 		}
 		if !resp.CollectionReady || resp.CollectionProvider != "stripe" {
 			t.Fatalf("provider-backed postpaid must be collection ready: %+v", resp)
+		}
+		if resp.TierName != "pro" {
+			t.Fatalf("tier identity missing from access status: %+v", resp)
 		}
 	})
 }
@@ -215,7 +218,7 @@ func TestGetCryptoTopupExpiryFlipAndAssetEnum(t *testing.T) {
 					past, nil, nil, time.Now(),
 					nil, nil, nil))
 
-		resp, err := s.GetCryptoTopup(context.Background(), &purserpb.GetCryptoTopupRequest{TopupId: "ct-1"})
+		resp, err := s.GetCryptoTopup(serviceTestContext(), &purserpb.GetCryptoTopupRequest{TopupId: "ct-1"})
 		if err != nil {
 			t.Fatalf("GetCryptoTopup: %v", err)
 		}
@@ -229,7 +232,7 @@ func TestGetCryptoTopupExpiryFlipAndAssetEnum(t *testing.T) {
 
 	t.Run("empty id guard", func(t *testing.T) {
 		s := newGuardServer(t)
-		_, err := s.GetCryptoTopup(context.Background(), &purserpb.GetCryptoTopupRequest{})
+		_, err := s.GetCryptoTopup(serviceTestContext(), &purserpb.GetCryptoTopupRequest{})
 		if status.Code(err) != codes.InvalidArgument {
 			t.Fatalf("err = %v, want InvalidArgument", err)
 		}
@@ -239,7 +242,7 @@ func TestGetCryptoTopupExpiryFlipAndAssetEnum(t *testing.T) {
 		s, mock := newReadServer(t, true)
 		mock.ExpectQuery(`FROM purser\.crypto_wallets`).
 			WillReturnError(sqlmockNoRows())
-		_, err := s.GetCryptoTopup(context.Background(), &purserpb.GetCryptoTopupRequest{TopupId: "ct-x"})
+		_, err := s.GetCryptoTopup(serviceTestContext(), &purserpb.GetCryptoTopupRequest{TopupId: "ct-x"})
 		if status.Code(err) != codes.NotFound {
 			t.Fatalf("err = %v, want NotFound", err)
 		}
@@ -260,7 +263,7 @@ func TestGetOperatorPayoutsMapsRows(t *testing.T) {
 			AddRow("po-1", "EUR", int64(5000), "paid", "sepa", "ref-9", now, now).
 			AddRow("po-2", "EUR", int64(1200), "pending", "", "", now, nil))
 
-	resp, err := s.GetOperatorPayouts(context.Background(), &purserpb.GetOperatorPayoutsRequest{TenantId: "op-1"})
+	resp, err := s.GetOperatorPayouts(serviceTestContext(), &purserpb.GetOperatorPayoutsRequest{TenantId: "op-1"})
 	if err != nil {
 		t.Fatalf("GetOperatorPayouts: %v", err)
 	}
@@ -277,8 +280,8 @@ func TestGetOperatorPayoutsMapsRows(t *testing.T) {
 
 func TestGetOperatorPayoutsEmptyTenantGuard(t *testing.T) {
 	s := newGuardServer(t)
-	// service call (context.Background) with no tenant_id → InvalidArgument
-	_, err := s.GetOperatorPayouts(context.Background(), &purserpb.GetOperatorPayoutsRequest{})
+	// Explicit service call with no tenant_id → InvalidArgument.
+	_, err := s.GetOperatorPayouts(serviceTestContext(), &purserpb.GetOperatorPayoutsRequest{})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("err = %v, want InvalidArgument", err)
 	}

@@ -460,6 +460,13 @@ func (c *GRPCClient) InitializePostpaidAccount(ctx context.Context, tenantID str
 	})
 }
 
+// EnsureFreeAccount idempotently activates Free after email verification.
+func (c *GRPCClient) EnsureFreeAccount(ctx context.Context, tenantID string) (*purserpb.InitializePostpaidAccountResponse, error) {
+	return c.prepaid.EnsureFreeAccount(ctx, &purserpb.InitializePostpaidAccountRequest{
+		TenantId: tenantID,
+	})
+}
+
 // TopupBalance adds funds to a tenant's prepaid balance
 func (c *GRPCClient) TopupBalance(ctx context.Context, tenantID string, amountCents int64, currency, description string, referenceID, referenceType *string) (*purserpb.BalanceTransaction, error) {
 	return c.prepaid.TopupBalance(ctx, &purserpb.TopupBalanceRequest{
@@ -704,4 +711,12 @@ func (c *GRPCClient) BroadcastCryptoSweep(ctx context.Context, req *purserpb.Bro
 
 func (c *GRPCClient) ReconcileCryptoSweep(ctx context.Context, req *purserpb.ReconcileCryptoSweepRequest) (*purserpb.ReconcileCryptoSweepResponse, error) {
 	return c.cryptoSweep.ReconcileCryptoSweep(ctx, req)
+}
+
+func (c *GRPCClient) ReleaseCryptoSweep(ctx context.Context, req *purserpb.ReleaseCryptoSweepRequest) (*purserpb.ReleaseCryptoSweepResponse, error) {
+	return c.cryptoSweep.ReleaseCryptoSweep(ctx, req)
+}
+
+func (c *GRPCClient) ResolveX402MutationResult(ctx context.Context, req *purserpb.ResolveX402MutationResultRequest) (*purserpb.ResolveX402MutationResultResponse, error) {
+	return c.cryptoSweep.ResolveX402MutationResult(ctx, req)
 }

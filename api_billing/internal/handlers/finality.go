@@ -16,6 +16,14 @@ type FinalityHead struct {
 	Tag    string
 }
 
+// rpcBlockHeader is used with eth_getBlockByNumber(..., false). A compliant
+// node returns transaction hashes in that response, so decoding it into the
+// scanner's full-transaction rpcBlock shape would reject healthy RPC data.
+type rpcBlockHeader struct {
+	Number string `json:"number"`
+	Hash   string `json:"hash"`
+}
+
 func cryptoNetworkEnvKey(prefix, network string) string {
 	return prefix + "_" + strings.ToUpper(strings.ReplaceAll(network, "-", "_"))
 }
@@ -47,7 +55,7 @@ func GetFinalityHead(ctx context.Context, rpc *RPCClient, network NetworkConfig)
 		return FinalityHead{}, fmt.Errorf("RPC client unavailable")
 	}
 	const tag = "finalized"
-	var block rpcBlock
+	var block rpcBlockHeader
 	if err := rpc.Call(ctx, network, "eth_getBlockByNumber", []any{tag, false}, &block); err != nil {
 		return FinalityHead{}, fmt.Errorf("resolve %s head: %w", tag, err)
 	}

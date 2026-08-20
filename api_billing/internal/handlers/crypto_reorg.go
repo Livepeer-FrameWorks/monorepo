@@ -232,11 +232,19 @@ func reverseCryptoPrepaidDepositTx(ctx context.Context, tx *sql.Tx, eventID, old
 			reason, evidence_json
 		)
 		SELECT 'CN-' || lpad(nextval('purser.credit_note_number_seq')::text, 10, '0'),
-		       invoice.tenant_id, 'simplified_invoice', invoice.id,
+		       invoice.tenant_id, invoice.source_type, invoice.id,
 		       'crypto_reorg', $3, invoice.gross_amount_cents, invoice.currency,
 		       'confirmed direct crypto top-up reversed after canonicality failure',
 		       jsonb_build_object('transaction_hash', $2::text, 'event_id', $3::text)
-		FROM purser.simplified_invoices invoice
+		FROM (
+			SELECT id, tenant_id, reference_type, reference_id, gross_amount_cents, currency,
+			       'simplified_invoice'::text AS source_type
+			FROM purser.simplified_invoices
+			UNION ALL
+			SELECT id, tenant_id, reference_type, reference_id, gross_amount_cents, currency,
+			       'crypto_invoice'::text AS source_type
+			FROM purser.crypto_invoices
+		) invoice
 		WHERE invoice.tenant_id = $1 AND invoice.reference_type = 'crypto_payment'
 		  AND invoice.reference_id = $2
 		ON CONFLICT (source_document_type, source_document_id, reversal_reference_type, reversal_reference_id)

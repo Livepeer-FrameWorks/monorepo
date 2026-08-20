@@ -28,7 +28,7 @@ type X402Reconciler struct {
 	logger              logging.Logger
 	stopCh              chan struct{}
 	includeTestnets     bool
-	submitTransfer      func(context.Context, *X402PaymentPayload, NetworkConfig) (string, error)
+	rebroadcastTransfer func(context.Context, string, NetworkConfig) (string, error)
 	finalizeSettlement  func(context.Context, SettlementRow) string
 	recoveryWindowHours int
 	reorgDepthBlocks    int
@@ -67,11 +67,11 @@ type TransactionLog struct {
 
 // NewX402Reconciler creates a new x402 settlement reconciler
 func NewX402Reconciler(database *sql.DB, log logging.Logger, includeTestnets bool, handlers ...*X402Handler) *X402Reconciler {
-	var submitTransfer func(context.Context, *X402PaymentPayload, NetworkConfig) (string, error)
+	var rebroadcastTransfer func(context.Context, string, NetworkConfig) (string, error)
 	var finalizeSettlement func(context.Context, SettlementRow) string
 	if len(handlers) > 0 && handlers[0] != nil {
 		if handlers[0].facilitatorProvider == "self" {
-			submitTransfer = handlers[0].submitTransferWithAuthorization
+			rebroadcastTransfer = handlers[0].rebroadcastPreparedSettlementAttempt
 		}
 		finalizeSettlement = handlers[0].finalizeConfirmedSettlementEffects
 	}
@@ -80,7 +80,7 @@ func NewX402Reconciler(database *sql.DB, log logging.Logger, includeTestnets boo
 		logger:              log,
 		stopCh:              make(chan struct{}),
 		includeTestnets:     includeTestnets,
-		submitTransfer:      submitTransfer,
+		rebroadcastTransfer: rebroadcastTransfer,
 		finalizeSettlement:  finalizeSettlement,
 		recoveryWindowHours: readEnvInt("X402_RECOVERY_WINDOW_HOURS", 168),
 		reorgDepthBlocks:    readEnvInt("X402_REORG_DEPTH_BLOCKS", 50),
@@ -124,7 +124,8 @@ func (r *X402Reconciler) Stop() {
 // oracle: unused = nothing on-chain, used = an unrecorded tx settled it.
 func (r *X402Reconciler) reconcileSubmittingIntents(ctx context.Context) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, network, payer_address, nonce, tenant_id, amount_cents, settled_at, auth_payload
+		SELECT id, network, payer_address, nonce, tenant_id, amount_cents, settled_at,
+		       auth_payload, COALESCE(tx_hash, '')
 		FROM purser.x402_nonces
 		WHERE status = 'submitting'
 		AND settled_at < NOW() - INTERVAL '30 seconds'
@@ -146,11 +147,12 @@ func (r *X402Reconciler) reconcileSubmittingIntents(ctx context.Context) {
 		AmountCents  int64
 		SettledAt    time.Time
 		AuthPayload  sql.NullString
+		TxHash       string
 	}
 	var intents []intent
 	for rows.Next() {
 		var it intent
-		if err := rows.Scan(&it.ID, &it.Network, &it.PayerAddress, &it.Nonce, &it.TenantID, &it.AmountCents, &it.SettledAt, &it.AuthPayload); err != nil {
+		if err := rows.Scan(&it.ID, &it.Network, &it.PayerAddress, &it.Nonce, &it.TenantID, &it.AmountCents, &it.SettledAt, &it.AuthPayload, &it.TxHash); err != nil {
 			r.logger.WithError(err).Error("Failed to scan submitting intent")
 			continue
 		}
@@ -183,6 +185,16 @@ func (r *X402Reconciler) reconcileSubmittingIntents(ctx context.Context) {
 		r.clearRPCError(it.Network)
 
 		switch {
+		case used && it.TxHash != "":
+			if _, err := r.db.ExecContext(ctx, `
+				UPDATE purser.x402_nonces SET status = 'pending', submitted_at = COALESCE(submitted_at, NOW())
+				WHERE id = $1 AND status = 'submitting';
+				UPDATE purser.x402_settlement_attempts
+				SET state = 'broadcast', updated_at = NOW()
+				WHERE settlement_id = $1 AND transaction_hash = LOWER($2)
+			`, it.ID, it.TxHash); err != nil {
+				r.logger.WithError(err).WithField("nonce_id", it.ID).Warn("Failed to advance consumed durable x402 attempt")
+			}
 		case used:
 			// The authorization was consumed on-chain but no tx_hash made it
 			// to the row. USDC's authorizationState is a bool, so the txHash
@@ -205,7 +217,7 @@ func (r *X402Reconciler) reconcileSubmittingIntents(ctx context.Context) {
 			// safe to fail because no balance was credited.
 			r.markFailed(ctx, it.ID, "authorization expired before broadcast")
 		default:
-			if r.submitTransfer == nil {
+			if r.rebroadcastTransfer == nil {
 				r.logger.WithFields(logging.Fields{
 					"nonce_id":  it.ID,
 					"tenant_id": it.TenantID,
@@ -222,12 +234,7 @@ func (r *X402Reconciler) reconcileSubmittingIntents(ctx context.Context) {
 			if !acquired {
 				continue
 			}
-			var payload X402PaymentPayload
-			if unmarshalErr := json.Unmarshal([]byte(it.AuthPayload.String), &payload); unmarshalErr != nil {
-				r.markFailed(ctx, it.ID, "invalid stored x402 authorization payload")
-				continue
-			}
-			txHash, err := r.submitTransfer(ctx, &payload, network)
+			txHash, err := r.rebroadcastTransfer(ctx, it.ID, network)
 			if err != nil {
 				r.logger.WithError(err).WithFields(logging.Fields{
 					"nonce_id":  it.ID,
@@ -236,13 +243,7 @@ func (r *X402Reconciler) reconcileSubmittingIntents(ctx context.Context) {
 				}).Warn("Failed to resubmit x402 authorization")
 				continue
 			}
-			if err := r.markSubmitted(ctx, it.ID, txHash); err != nil {
-				r.logger.WithError(err).WithFields(logging.Fields{
-					"nonce_id": it.ID,
-					"tx_hash":  txHash,
-				}).Error("Resubmitted x402 authorization but failed to record tx hash")
-				continue
-			}
+			r.logger.WithFields(logging.Fields{"nonce_id": it.ID, "tx_hash": txHash}).Info("Rebroadcast durable x402 settlement attempt")
 			// A successful broadcast is not spendable credit. The pending
 			// reconciler will wait for the canonical receipt and confirmation
 			// depth before atomically confirming and crediting this settlement.
@@ -447,12 +448,12 @@ func (r *X402Reconciler) reconcileSettlement(ctx context.Context, s PendingSettl
 	if receipt.Status == "0x1" {
 		blockNum := parseHexInt64(receipt.BlockNumber)
 		gasUsed := parseHexInt64(receipt.GasUsed)
-		confirmed, err := r.hasRequiredConfirmations(ctx, network, blockNum)
+		confirmed, err := r.hasReachedFinalizedHead(ctx, network, blockNum)
 		if err != nil {
 			r.logger.WithError(err).WithFields(logging.Fields{
 				"tx_hash": s.TxHash,
 				"network": s.Network,
-			}).Warn("Failed to determine confirmation depth")
+			}).Warn("Failed to read consensus-labelled finalized head")
 			return
 		}
 
@@ -548,7 +549,7 @@ func (r *X402Reconciler) reconcileFailedTimeouts(ctx context.Context) {
 
 		blockNum := parseHexInt64(receipt.BlockNumber)
 		gasUsed := parseHexInt64(receipt.GasUsed)
-		confirmed, err := r.hasRequiredConfirmations(ctx, network, blockNum)
+		confirmed, err := r.hasReachedFinalizedHead(ctx, network, blockNum)
 		if err != nil || !confirmed {
 			continue
 		}
@@ -619,7 +620,20 @@ func (r *X402Reconciler) reconcileConfirmedSettlements(ctx context.Context) {
 		SELECT id, network, tx_hash, tenant_id, amount_cents, settled_at, block_number, COALESCE(client_ip::text, '')
 		FROM purser.x402_nonces
 		WHERE status = 'confirmed'
-		AND confirmed_at > NOW() - INTERVAL '1 hour'
+		AND (
+			confirmed_at > NOW() - INTERVAL '1 hour'
+			OR rollup_applied_at IS NULL
+			OR NOT EXISTS (
+				SELECT 1 FROM (
+					SELECT tenant_id, reference_type, reference_id FROM purser.simplified_invoices
+					UNION ALL
+					SELECT tenant_id, reference_type, reference_id FROM purser.crypto_invoices
+				) invoice
+				WHERE invoice.tenant_id = purser.x402_nonces.tenant_id
+				  AND invoice.reference_type = 'x402_payment'
+				  AND invoice.reference_id = purser.x402_nonces.tx_hash
+			)
+		)
 		ORDER BY confirmed_at ASC
 		LIMIT 50
 	`)
@@ -762,7 +776,7 @@ func (r *X402Reconciler) reconcileConfirmedSettlements(ctx context.Context) {
 	}
 }
 
-func (r *X402Reconciler) hasRequiredConfirmations(ctx context.Context, network NetworkConfig, blockNum int64) (bool, error) {
+func (r *X402Reconciler) hasReachedFinalizedHead(ctx context.Context, network NetworkConfig, blockNum int64) (bool, error) {
 	if blockNum == 0 {
 		return false, nil
 	}
@@ -832,25 +846,6 @@ func (r *X402Reconciler) updatePendingReceipt(ctx context.Context, id string, bl
 	if err != nil {
 		r.logger.WithError(err).WithField("id", id).Error("Failed to update pending receipt metadata")
 	}
-}
-
-func (r *X402Reconciler) markSubmitted(ctx context.Context, id, txHash string) error {
-	res, err := r.db.ExecContext(ctx, `
-		UPDATE purser.x402_nonces
-		SET tx_hash = $2, submitted_at = NOW(), status = 'pending'
-		WHERE id = $1 AND status = 'submitting'
-	`, id, txHash)
-	if err != nil {
-		return err
-	}
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
-		return fmt.Errorf("intent %s not in submitting state", id)
-	}
-	return nil
 }
 
 // recoverReversedBalance restores a credit that has an x402_failed reversal.
@@ -1093,12 +1088,20 @@ func (r *X402Reconciler) debitBalance(ctx context.Context, tenantID string, amou
 			reason, evidence_json
 		)
 		SELECT 'CN-' || lpad(nextval('purser.credit_note_number_seq')::text, 10, '0'),
-		       si.tenant_id, 'simplified_invoice', si.id, 'x402_failed', $2,
-		       si.gross_amount_cents, si.currency, 'x402 settlement reversed after confirmation',
-		       jsonb_build_object('transaction_hash', $3::text, 'original_invoice_number', si.invoice_number)
-		FROM purser.simplified_invoices si
-		WHERE si.tenant_id = $1 AND si.reference_type = 'x402_payment'
-		  AND LOWER(si.reference_id) = LOWER($3)
+		       document.tenant_id, document.source_type, document.id, 'x402_failed', $2,
+		       document.gross_amount_cents, document.currency, 'x402 settlement reversed after confirmation',
+		       jsonb_build_object('transaction_hash', $3::text, 'original_invoice_number', document.invoice_number)
+		FROM (
+			SELECT id, tenant_id, reference_type, reference_id, gross_amount_cents, currency,
+			       invoice_number, 'simplified_invoice'::text AS source_type
+			FROM purser.simplified_invoices
+			UNION ALL
+			SELECT id, tenant_id, reference_type, reference_id, gross_amount_cents, currency,
+			       invoice_number, 'crypto_invoice'::text AS source_type
+			FROM purser.crypto_invoices
+		) document
+		WHERE document.tenant_id = $1 AND document.reference_type = 'x402_payment'
+		  AND LOWER(document.reference_id) = LOWER($3)
 		ON CONFLICT (source_document_type, source_document_id, reversal_reference_type, reversal_reference_id)
 		DO NOTHING
 	`, tenantID, nonceID, txHash)

@@ -181,10 +181,10 @@ func TestGetPendingInvoicesMapsRowsAndLineItems(t *testing.T) {
 }
 
 func TestGetUsageRecordsRequiresTimeRange(t *testing.T) {
-	// A bare context is a service call, so the time_range guard (not the tenant
+	// An explicit service context means the time_range guard (not the tenant
 	// guard) is what rejects this request.
 	s := newGuardServer(t)
-	_, err := s.GetUsageRecords(context.Background(), &purserpb.GetUsageRecordsRequest{TenantId: "tenant-1"})
+	_, err := s.GetUsageRecords(serviceTestContext(), &purserpb.GetUsageRecordsRequest{TenantId: "tenant-1"})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("want InvalidArgument for missing time_range, got %v", err)
 	}
@@ -208,7 +208,7 @@ func TestGetUsageRecordsMapsRows(t *testing.T) {
 		WithArgs("tenant-1", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(rows)
 
-	resp, err := s.GetUsageRecords(context.Background(), &purserpb.GetUsageRecordsRequest{
+	resp, err := s.GetUsageRecords(serviceTestContext(), &purserpb.GetUsageRecordsRequest{
 		TenantId:  "tenant-1",
 		TimeRange: &commonpb.TimeRange{Start: start, End: end},
 	})

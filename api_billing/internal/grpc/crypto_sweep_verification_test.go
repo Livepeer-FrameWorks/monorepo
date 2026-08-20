@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"math/big"
@@ -18,7 +19,13 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
+
+func sweepServiceCtx() context.Context {
+	return serviceTestContext()
+}
 
 func TestVerifySweepBundleItemBindsETHTransactionFields(t *testing.T) {
 	key, err := ethcrypto.HexToECDSA("4f3edf983ac63ad7c43a0d8a05d3d4a6c67e594e0d56e4b1d72c05b90f3e6f7a")
@@ -192,12 +199,322 @@ func TestReconcileCryptoSweepDoesNotConfirmReorgedReceipt(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "wallet_id", "tx_hash", "status"}).
 			AddRow("22222222-2222-2222-2222-222222222222", "", "0xtx", "broadcast"))
 	server := &PurserServer{db: db, rpcClient: handlers.NewRPCClient()}
-	response, err := server.ReconcileCryptoSweep(context.Background(), &purserpb.ReconcileCryptoSweepRequest{BatchId: batchID, DryRun: true})
+	response, err := server.ReconcileCryptoSweep(sweepServiceCtx(), &purserpb.ReconcileCryptoSweepRequest{BatchId: batchID, DryRun: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if response.GetPendingItems() != 1 || response.GetConfirmedItems() != 0 {
 		t.Fatalf("reorged receipt response = %+v", response)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReconcileCryptoSweepAcceptsUnbroadcastNullHash(t *testing.T) {
+	rpcServer := sweepRPCServer(t, func(method string, _ []any) any {
+		if method == "eth_getBlockByNumber" {
+			return map[string]any{"number": "0x20", "hash": "0x" + strings.Repeat("aa", 32), "baseFeePerGas": "0x1"}
+		}
+		return nil
+	})
+	defer rpcServer.Close()
+	t.Setenv("BASE_RPC_ENDPOINT", rpcServer.URL)
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	batchID := "11111111-1111-1111-1111-111111111111"
+	mock.ExpectQuery(`SELECT network FROM purser.crypto_sweep_batches`).WithArgs(batchID).
+		WillReturnRows(sqlmock.NewRows([]string{"network"}).AddRow("base"))
+	mock.ExpectQuery(`SELECT id::text, COALESCE\(wallet_id::text, ''\), tx_hash, status`).WithArgs(batchID).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "wallet_id", "tx_hash", "status"}).
+			AddRow("22222222-2222-2222-2222-222222222222", "", nil, "planned"))
+	server := &PurserServer{db: db, rpcClient: handlers.NewRPCClient()}
+	response, err := server.ReconcileCryptoSweep(sweepServiceCtx(), &purserpb.ReconcileCryptoSweepRequest{BatchId: batchID, DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.GetPendingItems() != 1 {
+		t.Fatalf("null-hash response = %+v", response)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEvaluateSweepReleaseSignedUSDCRequiresExpiredUnusedAuthorization(t *testing.T) {
+	used := false
+	rpcServer := sweepRPCServer(t, func(method string, params []any) any {
+		switch method {
+		case "eth_getBlockByNumber":
+			return map[string]any{"number": "0x20", "hash": "0x" + strings.Repeat("aa", 32)}
+		case "eth_call":
+			if used {
+				return "0x1"
+			}
+			return "0x0"
+		default:
+			_ = params
+			return nil
+		}
+	})
+	defer rpcServer.Close()
+	t.Setenv("BASE_RPC_ENDPOINT", rpcServer.URL)
+	server := &PurserServer{rpcClient: handlers.NewRPCClient()}
+	network := handlers.Networks["base"]
+	item := sweepReleaseItem{
+		asset: "USDC", sourceAddress: "0x2222222222222222222222222222222222222222", amount: big.NewInt(1),
+		authorizationNonce:  sql.NullString{String: "0x" + strings.Repeat("11", 32), Valid: true},
+		authorizationBefore: sql.NullInt64{Int64: time.Now().Add(time.Minute).Unix(), Valid: true},
+		signedPayload:       sql.NullString{String: "0xsigned", Valid: true}, status: "signed", claimedSources: 1,
+	}
+	decision := server.evaluateSweepRelease(context.Background(), network, time.Now().Add(-time.Minute), item)
+	if decision.action != "quarantined" {
+		t.Fatalf("unexpired authorization decision=%+v", decision)
+	}
+	item.authorizationBefore.Int64 = time.Now().Add(-time.Minute).Unix()
+	decision = server.evaluateSweepRelease(context.Background(), network, time.Now().Add(-time.Minute), item)
+	if decision.action != "released" {
+		t.Fatalf("expired unused authorization decision=%+v", decision)
+	}
+	used = true
+	decision = server.evaluateSweepRelease(context.Background(), network, time.Now().Add(-time.Minute), item)
+	if decision.action != "quarantined" {
+		t.Fatalf("used authorization decision=%+v", decision)
+	}
+}
+
+func TestEvaluateSweepReleaseSignedETHRequiresAdvancedNonce(t *testing.T) {
+	nonce := "0x7"
+	rpcServer := sweepRPCServer(t, func(method string, _ []any) any {
+		if method == "eth_getBlockByNumber" {
+			return map[string]any{"number": "0x20", "hash": "0x" + strings.Repeat("aa", 32)}
+		}
+		if method == "eth_getTransactionCount" {
+			return nonce
+		}
+		return nil
+	})
+	defer rpcServer.Close()
+	t.Setenv("BASE_RPC_ENDPOINT", rpcServer.URL)
+	server := &PurserServer{rpcClient: handlers.NewRPCClient()}
+	item := sweepReleaseItem{
+		asset: "ETH", sourceAddress: "0x2222222222222222222222222222222222222222", amount: big.NewInt(1),
+		sourceNonce: sql.NullInt64{Int64: 7, Valid: true}, signedPayload: sql.NullString{String: "0xsigned", Valid: true},
+		status: "signed", claimedSources: 1,
+	}
+	decision := server.evaluateSweepRelease(context.Background(), handlers.Networks["base"], time.Now().Add(-time.Minute), item)
+	if decision.action != "quarantined" {
+		t.Fatalf("unchanged nonce decision=%+v", decision)
+	}
+	nonce = "0x8"
+	decision = server.evaluateSweepRelease(context.Background(), handlers.Networks["base"], time.Now().Add(-time.Minute), item)
+	if decision.action != "released" {
+		t.Fatalf("advanced nonce decision=%+v", decision)
+	}
+}
+
+func TestEvaluateSweepReleaseBroadcastOutcomeMustBeCanonical(t *testing.T) {
+	receiptHash := "0x" + strings.Repeat("aa", 32)
+	canonicalHash := receiptHash
+	receiptAvailable := true
+	rpcServer := sweepRPCServer(t, func(method string, params []any) any {
+		switch method {
+		case "eth_getTransactionReceipt":
+			if !receiptAvailable {
+				return nil
+			}
+			return map[string]any{
+				"transactionHash": "0xtx", "blockNumber": "0x10", "blockHash": receiptHash, "status": "0x0",
+			}
+		case "eth_getBlockByNumber":
+			if len(params) > 0 && params[0] == "finalized" {
+				return map[string]any{"number": "0x20", "hash": "0x" + strings.Repeat("bb", 32)}
+			}
+			return map[string]any{"number": "0x10", "hash": canonicalHash}
+		default:
+			return nil
+		}
+	})
+	defer rpcServer.Close()
+	t.Setenv("BASE_RPC_ENDPOINT", rpcServer.URL)
+	server := &PurserServer{rpcClient: handlers.NewRPCClient()}
+	item := sweepReleaseItem{
+		asset: "ETH", sourceAddress: "0x2222222222222222222222222222222222222222", amount: big.NewInt(1),
+		txHash: sql.NullString{String: "0xtx", Valid: true}, status: "broadcast", claimedSources: 1,
+	}
+	if decision := server.evaluateSweepRelease(context.Background(), handlers.Networks["base"], time.Now().Add(-time.Minute), item); decision.action != "released" {
+		t.Fatalf("canonical revert decision=%+v", decision)
+	}
+	canonicalHash = "0x" + strings.Repeat("cc", 32)
+	if decision := server.evaluateSweepRelease(context.Background(), handlers.Networks["base"], time.Now().Add(-time.Minute), item); decision.action != "quarantined" {
+		t.Fatalf("noncanonical receipt decision=%+v", decision)
+	}
+	receiptAvailable = false
+	if decision := server.evaluateSweepRelease(context.Background(), handlers.Networks["base"], time.Now().Add(-time.Minute), item); decision.action != "quarantined" {
+		t.Fatalf("missing receipt decision=%+v", decision)
+	}
+	item.claimedSources = 0
+	if decision := server.evaluateSweepRelease(context.Background(), handlers.Networks["base"], time.Now().Add(-time.Minute), item); decision.action != "blocked" {
+		t.Fatalf("duplicate release decision=%+v", decision)
+	}
+}
+
+func TestReleaseCryptoSweepExpiredUnsignedClaimIsAuditedAndReplannable(t *testing.T) { //nolint:funlen // SQL expectations prove the entire release state transition.
+	const (
+		batchID   = "11111111-1111-1111-1111-111111111111"
+		itemID    = "22222222-2222-2222-2222-222222222222"
+		address   = "0x3333333333333333333333333333333333333333"
+		checksum  = "manifest-checksum"
+		blockHash = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	)
+	rpcServer := sweepRPCServer(t, func(method string, _ []any) any {
+		switch method {
+		case "eth_getBlockByNumber":
+			return map[string]any{"number": "0x64", "hash": blockHash, "baseFeePerGas": "0x1"}
+		case "eth_getBalance":
+			return "0x3e8"
+		default:
+			return nil
+		}
+	})
+	defer rpcServer.Close()
+	t.Setenv("BASE_RPC_ENDPOINT", rpcServer.URL)
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery(`SELECT manifest_checksum FROM purser.crypto_sweep_batches`).WithArgs(batchID).
+		WillReturnRows(sqlmock.NewRows([]string{"manifest_checksum"}).AddRow(checksum))
+	mock.ExpectQuery(`SELECT manifest_checksum, network, expires_at`).WithArgs(batchID).
+		WillReturnRows(sqlmock.NewRows([]string{"manifest_checksum", "network", "expires_at"}).
+			AddRow(checksum, "base", time.Now().Add(-time.Hour)))
+	mock.ExpectQuery(`SELECT i.id::text, i.asset, LOWER\(i.source_address\)`).WithArgs(batchID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "asset", "source_address", "amount", "source_nonce", "authorization_nonce", "authorization_before",
+			"signed_payload", "relay_transaction", "tx_hash", "status", "broadcast_at", "claimed_sources",
+		}).AddRow(itemID, "ETH", address, "500", nil, nil, nil, nil, nil, nil, "planned", nil, int64(1)))
+	mock.ExpectQuery(`SELECT snapshot_block, snapshot_block_hash`).WithArgs(batchID).
+		WillReturnRows(sqlmock.NewRows([]string{"snapshot_block", "snapshot_block_hash"}).AddRow(int64(100), blockHash))
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT status, signed_payload, relay_transaction, tx_hash, broadcast_at`).WithArgs(itemID).
+		WillReturnRows(sqlmock.NewRows([]string{"status", "signed_payload", "relay_transaction", "tx_hash", "broadcast_at"}).
+			AddRow("planned", nil, nil, nil, nil))
+	mock.ExpectExec(`UPDATE purser.crypto_sweep_sources`).
+		WithArgs(itemID, "released", "", "operator recovery: expired unsigned manifest passed canonical balance recheck").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE purser.crypto_sweep_items`).
+		WithArgs(itemID, "expired", "expired unsigned manifest passed canonical balance recheck").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO purser.crypto_sweep_events`).
+		WithArgs(batchID, itemID, "claim_released", "", "operator recovery", "expired unsigned manifest passed canonical balance recheck").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+	mock.ExpectExec(`UPDATE purser.crypto_sweep_batches SET status=\$2`).
+		WithArgs(batchID, "expired", "", "operator recovery", int32(1), int32(0), int32(0)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	server := &PurserServer{db: db, rpcClient: handlers.NewRPCClient()}
+	response, err := server.ReleaseCryptoSweep(sweepServiceCtx(), &purserpb.ReleaseCryptoSweepRequest{
+		BatchId: batchID, Reason: "operator recovery", DryRun: false,
+		CeremonyAck: sweepCeremonyPrefix + checksum,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.GetStatus() != "expired" || response.GetReleasedItems() != 1 || response.GetQuarantinedItems() != 0 {
+		t.Fatalf("release response=%+v", response)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReleaseCryptoSweepRejectsAcknowledgementMismatch(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	batchID := "11111111-1111-1111-1111-111111111111"
+	mock.ExpectQuery(`SELECT manifest_checksum FROM purser.crypto_sweep_batches`).WithArgs(batchID).
+		WillReturnRows(sqlmock.NewRows([]string{"manifest_checksum"}).AddRow("expected"))
+	server := &PurserServer{db: db}
+	_, err = server.ReleaseCryptoSweep(sweepServiceCtx(), &purserpb.ReleaseCryptoSweepRequest{
+		BatchId: batchID, Reason: "operator recovery", CeremonyAck: sweepCeremonyPrefix + "wrong",
+	})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("error=%v, want FailedPrecondition", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCryptoSweepRPCsRejectUnmarkedContext(t *testing.T) {
+	server := &PurserServer{}
+	if _, err := server.GetCryptoReadiness(context.Background(), nil); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("readiness error=%v, want PermissionDenied", err)
+	}
+	if _, err := server.ReleaseCryptoSweep(context.Background(), &purserpb.ReleaseCryptoSweepRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("release error=%v, want PermissionDenied", err)
+	}
+	if _, err := server.ResolveX402MutationResult(context.Background(), &purserpb.ResolveX402MutationResultRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("mutation resolution error=%v, want PermissionDenied", err)
+	}
+}
+
+func TestReleaseCryptoSweepConcurrentItemChangePreservesAborted(t *testing.T) {
+	const (
+		batchID   = "11111111-1111-1111-1111-111111111111"
+		itemID    = "22222222-2222-2222-2222-222222222222"
+		address   = "0x3333333333333333333333333333333333333333"
+		checksum  = "manifest-checksum"
+		blockHash = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	)
+	rpcServer := sweepRPCServer(t, func(method string, _ []any) any {
+		switch method {
+		case "eth_getBlockByNumber":
+			return map[string]any{"number": "0x64", "hash": blockHash, "baseFeePerGas": "0x1"}
+		case "eth_getBalance":
+			return "0x3e8"
+		default:
+			return nil
+		}
+	})
+	defer rpcServer.Close()
+	t.Setenv("BASE_RPC_ENDPOINT", rpcServer.URL)
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery(`SELECT manifest_checksum FROM purser.crypto_sweep_batches`).WithArgs(batchID).
+		WillReturnRows(sqlmock.NewRows([]string{"manifest_checksum"}).AddRow(checksum))
+	mock.ExpectQuery(`SELECT manifest_checksum, network, expires_at`).WithArgs(batchID).
+		WillReturnRows(sqlmock.NewRows([]string{"manifest_checksum", "network", "expires_at"}).
+			AddRow(checksum, "base", time.Now().Add(-time.Hour)))
+	mock.ExpectQuery(`SELECT i.id::text, i.asset, LOWER\(i.source_address\)`).WithArgs(batchID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "asset", "source_address", "amount", "source_nonce", "authorization_nonce", "authorization_before",
+			"signed_payload", "relay_transaction", "tx_hash", "status", "broadcast_at", "claimed_sources",
+		}).AddRow(itemID, "ETH", address, "500", nil, nil, nil, nil, nil, nil, "planned", nil, int64(1)))
+	mock.ExpectQuery(`SELECT snapshot_block, snapshot_block_hash`).WithArgs(batchID).
+		WillReturnRows(sqlmock.NewRows([]string{"snapshot_block", "snapshot_block_hash"}).AddRow(int64(100), blockHash))
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT status, signed_payload, relay_transaction, tx_hash, broadcast_at`).WithArgs(itemID).
+		WillReturnRows(sqlmock.NewRows([]string{"status", "signed_payload", "relay_transaction", "tx_hash", "broadcast_at"}).
+			AddRow("signed", "0xsigned-after-evaluation", nil, nil, nil))
+	mock.ExpectRollback()
+	server := &PurserServer{db: db, rpcClient: handlers.NewRPCClient()}
+	_, err = server.ReleaseCryptoSweep(serviceTestContext(), &purserpb.ReleaseCryptoSweepRequest{
+		BatchId: batchID, Reason: "operator recovery", CeremonyAck: sweepCeremonyPrefix + checksum,
+	})
+	if status.Code(err) != codes.Aborted {
+		t.Fatalf("error=%v, want Aborted", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -282,11 +599,11 @@ func TestBroadcastCryptoSweepDuplicateReplaysSameETHIntent(t *testing.T) {
 	request := &purserpb.BroadcastCryptoSweepRequest{
 		SignedBundleJson: payload, CeremonyAck: sweepCeremonyPrefix + bundle.Checksum,
 	}
-	first, err := server.BroadcastCryptoSweep(context.Background(), request)
+	first, err := server.BroadcastCryptoSweep(sweepServiceCtx(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := server.BroadcastCryptoSweep(context.Background(), request)
+	second, err := server.BroadcastCryptoSweep(sweepServiceCtx(), request)
 	if err != nil {
 		t.Fatal(err)
 	}

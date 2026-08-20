@@ -1,7 +1,6 @@
 package grpc
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -32,7 +31,7 @@ func TestGetUsageAggregatesBucketsMinuteFiveDeltaRows(t *testing.T) {
 			AddRow("egress_gb", bucketStart, bucketEnd, 12.5, "hourly").
 			AddRow("max_viewers", bucketStart, bucketEnd, 42.0, "hourly"))
 
-	resp, err := server.GetUsageAggregates(context.Background(), &purserpb.GetUsageAggregatesRequest{
+	resp, err := server.GetUsageAggregates(serviceTestContext(), &purserpb.GetUsageAggregatesRequest{
 		TenantId:    tenantID,
 		TimeRange:   &commonpb.TimeRange{Start: timestamppb.New(start), End: timestamppb.New(end)},
 		Granularity: "hourly",

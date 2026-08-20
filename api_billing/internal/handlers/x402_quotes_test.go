@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,11 +28,14 @@ func TestCreatePaymentQuoteCoversDeficitAndBuffer(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT COALESCE(balance_cents, 0)")).
 		WithArgs("tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(-250)))
+	mock.ExpectQuery("SELECT billing_email, billing_name, billing_company, billing_address, tax_id").
+		WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id"}))
 	mock.ExpectExec("INSERT INTO purser.x402_payment_quotes").
 		WithArgs(
 			sqlmock.AnyArg(), "tenant-1", "graphql://createStream", "graphql",
 			"eip155:8453", "0xAsset", "0xpayto", "7500000", int64(750),
-			float64(1), sqlmock.AnyArg(), sqlmock.AnyArg(),
+			float64(1), sqlmock.AnyArg(), "simplified", sqlmock.AnyArg(), sqlmock.AnyArg(),
 		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
@@ -123,19 +127,21 @@ func TestValidateV2QuoteRejectsAlteredResourceExtension(t *testing.T) {
 		Scheme: "exact", Network: "eip155:8453",
 		Asset: Networks["base"].USDCContract, Amount: "5000000",
 		PayTo: "0x1111111111111111111111111111111111111111", MaxTimeoutSeconds: 60,
-		Extra: map[string]interface{}{"frameworks": map[string]interface{}{
-			"quoteId": "quote-1", "resourceClass": "graphql",
-		}},
+		Extra: map[string]interface{}{
+			"name": "USD Coin", "version": "2", "assetTransferMethod": "eip3009",
+			"frameworks": map[string]interface{}{"quoteId": "quote-1", "resourceClass": "graphql"},
+		},
 	}
 	requirements, _ := json.Marshal(expected)
 	mock.ExpectQuery("SELECT id::text, tenant_id::text, resource, resource_class").
 		WithArgs("quote-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "tenant_id", "resource", "resource_class", "network", "asset", "pay_to",
-			"amount_atomic", "credit_amount_cents", "eur_per_usd_rate", "requirements_json", "expires_at", "status",
+			"amount_atomic", "credit_amount_cents", "eur_per_usd_rate", "requirements_json",
+			"tax_document_kind", "tax_profile_snapshot", "expires_at", "status",
 		}).AddRow("quote-1", "tenant-1", "graphql://createStream", "graphql", "eip155:8453",
 			Networks["base"].USDCContract, expected.PayTo, "5000000", int64(500), "0.9",
-			string(requirements), time.Now().Add(time.Minute), "offered"))
+			string(requirements), "simplified", `{}`, time.Now().Add(time.Minute), "offered"))
 
 	h := &X402Handler{db: db}
 	_, _, err = h.validateV2Quote(context.Background(), "tenant-1", &X402PaymentPayload{
@@ -143,12 +149,56 @@ func TestValidateV2QuoteRejectsAlteredResourceExtension(t *testing.T) {
 		Accepted: &X402AcceptedRequirements{
 			Scheme: "exact", Network: "eip155:8453", Asset: expected.Asset,
 			Amount: "5000000", PayTo: expected.PayTo, MaxTimeoutSeconds: 60,
-			ExtraJSON: []byte(`{"frameworks":{"quoteId":"quote-1","resourceClass":"clip"}}`),
+			ExtraJSON: []byte(`{"name":"USD Coin","version":"2","assetTransferMethod":"eip3009","frameworks":{"quoteId":"quote-1","resourceClass":"clip"}}`),
 		},
 		Payload: &X402ExactPayload{Authorization: &X402Authorization{Value: "5000000", To: expected.PayTo}},
 	})
 	if err == nil {
 		t.Fatal("altered resource extension unexpectedly validated")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateV2QuoteRejectsAlteredTransferMethod(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	expected := x402sdk.PaymentRequirements{
+		Scheme: "exact", Network: "eip155:8453",
+		Asset: Networks["base"].USDCContract, Amount: "5000000",
+		PayTo: "0x1111111111111111111111111111111111111111", MaxTimeoutSeconds: 60,
+		Extra: map[string]interface{}{
+			"name": "USD Coin", "version": "2", "assetTransferMethod": "eip3009",
+			"frameworks": map[string]interface{}{"quoteId": "quote-1", "resourceClass": "graphql"},
+		},
+	}
+	requirements, _ := json.Marshal(expected)
+	mock.ExpectQuery("SELECT id::text, tenant_id::text, resource, resource_class").
+		WithArgs("quote-1", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "tenant_id", "resource", "resource_class", "network", "asset", "pay_to",
+			"amount_atomic", "credit_amount_cents", "eur_per_usd_rate", "requirements_json",
+			"tax_document_kind", "tax_profile_snapshot", "expires_at", "status",
+		}).AddRow("quote-1", "tenant-1", "graphql://createStream", "graphql", "eip155:8453",
+			Networks["base"].USDCContract, expected.PayTo, "5000000", int64(500), "0.9",
+			string(requirements), "simplified", `{}`, time.Now().Add(time.Minute), "offered"))
+
+	h := &X402Handler{db: db}
+	_, _, err = h.validateV2Quote(context.Background(), "tenant-1", &X402PaymentPayload{
+		QuoteID: "quote-1",
+		Accepted: &X402AcceptedRequirements{
+			Scheme: "exact", Network: "eip155:8453", Asset: expected.Asset,
+			Amount: "5000000", PayTo: expected.PayTo, MaxTimeoutSeconds: 60,
+			ExtraJSON: []byte(`{"name":"USD Coin","version":"2","assetTransferMethod":"permit2","frameworks":{"quoteId":"quote-1","resourceClass":"graphql"}}`),
+		},
+		Payload: &X402ExactPayload{Authorization: &X402Authorization{Value: "5000000", To: expected.PayTo}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "immutable quote") {
+		t.Fatalf("altered transfer method error = %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

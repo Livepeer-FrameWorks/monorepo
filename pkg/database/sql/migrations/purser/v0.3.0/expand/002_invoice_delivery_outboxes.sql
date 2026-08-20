@@ -6,11 +6,28 @@ ALTER TABLE purser.stripe_meter_events_outbox
         REFERENCES purser.invoice_line_items(id) ON DELETE CASCADE,
     ADD COLUMN IF NOT EXISTS dimensions JSONB NOT NULL DEFAULT '{}';
 
--- PostgreSQL freezes SELECT * view columns at creation time. Refresh the
--- operator report so upgraded databases expose the new line identity exactly
--- like a fresh v0.3 baseline.
-CREATE OR REPLACE VIEW purser.payment_report_stripe_meter_outbox_stuck AS
-SELECT *
+-- CREATE OR REPLACE cannot reorder the columns frozen by the old SELECT *.
+-- Recreate the operator-only report with a stable explicit projection so the
+-- upgrade path and a fresh baseline have identical definitions.
+DROP VIEW IF EXISTS purser.payment_report_stripe_meter_outbox_stuck;
+CREATE VIEW purser.payment_report_stripe_meter_outbox_stuck AS
+SELECT
+    id,
+    tenant_id,
+    cluster_id,
+    meter,
+    stripe_meter_event_name,
+    quantity,
+    dimensions,
+    period_start,
+    period_end,
+    invoice_id,
+    invoice_line_item_id,
+    sent_at,
+    attempt_count,
+    last_error,
+    created_at,
+    updated_at
 FROM purser.stripe_meter_events_outbox
 WHERE sent_at IS NULL
   AND attempt_count >= 5;

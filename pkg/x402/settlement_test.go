@@ -761,7 +761,7 @@ func TestSettleX402Payment(t *testing.T) {
 				return &purserpb.VerifyX402PaymentResponse{Valid: true}, nil
 			},
 			settleFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
-				return &purserpb.SettleX402PaymentResponse{Success: false, Error: "custom settle error"}, nil
+				return &purserpb.SettleX402PaymentResponse{Success: false, Error: "custom settle error", ErrorCode: "AUTHORIZATION_USED"}, nil
 			},
 		}
 		_, err := SettleX402Payment(ctx, SettlementOptions{
@@ -774,6 +774,29 @@ func TestSettleX402Payment(t *testing.T) {
 		}
 		if err.Message != "custom settle error" {
 			t.Fatalf("expected custom error message, got %q", err.Message)
+		}
+		if err.MachineCode() != "AUTHORIZATION_USED" {
+			t.Fatalf("machine code = %q", err.MachineCode())
+		}
+	})
+
+	t.Run("settlement pending preserves transaction identity", func(t *testing.T) {
+		purser := &mockPurser{
+			verifyFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+				return &purserpb.VerifyX402PaymentResponse{Valid: true}, nil
+			},
+			settleFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+				return &purserpb.SettleX402PaymentResponse{
+					Success: false, Error: "retry same payment", ErrorCode: "SETTLEMENT_PENDING",
+					SettlementStatus: "pending", TxHash: "0xabc", Network: "eip155:8453",
+				}, nil
+			},
+		}
+		_, err := SettleX402Payment(ctx, SettlementOptions{
+			Purser: purser, Payload: paymentPayload("10"), AuthTenantID: "tenant-1",
+		})
+		if err == nil || err.Code != ErrSettlementPending || err.TxHash != "0xabc" || err.Network != "eip155:8453" {
+			t.Fatalf("pending error = %+v", err)
 		}
 	})
 
@@ -996,6 +1019,23 @@ func TestSettleX402Payment(t *testing.T) {
 			t.Fatal("expected unresolved when tenant is empty")
 		}
 	})
+}
+
+func TestSettlementErrorMachineCode(t *testing.T) {
+	for _, test := range []struct {
+		code string
+		want string
+	}{
+		{ErrInvalidPayment, "INVALID_X402_PAYMENT"},
+		{ErrVerificationFailed, "X402_VERIFICATION_FAILED"},
+		{ErrBillingDetailsRequired, "BILLING_DETAILS_REQUIRED"},
+		{ErrSettlementPending, "SETTLEMENT_PENDING"},
+		{ErrSettlementFailed, "X402_SETTLEMENT_FAILED"},
+	} {
+		if got := (&SettlementError{Code: test.code}).MachineCode(); got != test.want {
+			t.Errorf("MachineCode(%q) = %q, want %q", test.code, got, test.want)
+		}
+	}
 }
 
 func paymentPayload(value string) *x402pb.X402PaymentPayload {

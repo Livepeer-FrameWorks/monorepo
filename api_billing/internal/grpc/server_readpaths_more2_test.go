@@ -49,8 +49,8 @@ func TestGetBillingDetailsMapsRowAndComplete(t *testing.T) {
 	now := time.Now()
 
 	addr := `{"street":"1 A St","city":"Berlin","state":"","postal_code":"10115","country":"DE"}`
-	rows := sqlmock.NewRows([]string{"billing_email", "billing_company", "tax_id", "billing_address", "updated_at"}).
-		AddRow("ops@example.com", "Example GmbH", "DE123456789", []byte(addr), now)
+	rows := sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at"}).
+		AddRow("ops@example.com", "Erika Mustermann", "Example GmbH", "DE123456789", []byte(addr), now)
 
 	mock.ExpectQuery(`FROM purser\.tenant_subscriptions`).
 		WithArgs("tenant-1").
@@ -60,7 +60,7 @@ func TestGetBillingDetailsMapsRowAndComplete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetBillingDetails: %v", err)
 	}
-	if resp.Email != "ops@example.com" || resp.Company != "Example GmbH" || resp.VatNumber != "DE123456789" {
+	if resp.Email != "ops@example.com" || resp.Name != "Erika Mustermann" || resp.Company != "Example GmbH" || resp.VatNumber != "DE123456789" {
 		t.Fatalf("scalar mapping wrong: %+v", resp)
 	}
 	if resp.Address == nil || resp.Address.City != "Berlin" || resp.Address.Country != "DE" {
@@ -79,8 +79,8 @@ func TestGetBillingDetailsNullsAndIncomplete(t *testing.T) {
 	now := time.Now()
 
 	addr := `{"street":"1 A St","city":"Berlin","state":"","postal_code":"","country":"DE"}`
-	rows := sqlmock.NewRows([]string{"billing_email", "billing_company", "tax_id", "billing_address", "updated_at"}).
-		AddRow("ops@example.com", nil, nil, []byte(addr), now)
+	rows := sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at"}).
+		AddRow("ops@example.com", nil, nil, nil, []byte(addr), now)
 
 	mock.ExpectQuery(`FROM purser\.tenant_subscriptions`).
 		WithArgs("tenant-1").
@@ -294,7 +294,7 @@ func TestGetTenantUsageAggregatesNoTier(t *testing.T) {
 		WithArgs("tenant-1").
 		WillReturnError(sqlmockNoRows())
 
-	resp, err := s.GetTenantUsage(context.Background(), &purserpb.TenantUsageRequest{
+	resp, err := s.GetTenantUsage(serviceTestContext(), &purserpb.TenantUsageRequest{
 		TenantId:  "tenant-1",
 		StartDate: "2026-01-01",
 		EndDate:   "2026-01-31",
@@ -315,7 +315,7 @@ func TestGetTenantUsageAggregatesNoTier(t *testing.T) {
 
 func TestGetTenantUsageInputGuards(t *testing.T) {
 	s := newGuardServer(t)
-	ctx := context.Background() // service call → skips tenant-context guard
+	ctx := serviceTestContext()
 
 	if _, err := s.GetTenantUsage(ctx, &purserpb.TenantUsageRequest{StartDate: "x", EndDate: "y"}); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("empty tenant: err = %v, want InvalidArgument", err)

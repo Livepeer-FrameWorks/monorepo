@@ -486,8 +486,13 @@ type ValidateTenantResponse struct {
 	// True when tenant identity was resolved but current billing authority could not be loaded.
 	// Additive inverse flag keeps older producers (which omit it) compatible.
 	BillingStatusUnavailable bool `protobuf:"varint,15,opt,name=billing_status_unavailable,json=billingStatusUnavailable,proto3" json:"billing_status_unavailable,omitempty"`
-	unknownFields            protoimpl.UnknownFields
-	sizeCache                protoimpl.SizeCache
+	// Postpaid access needs to distinguish zero-priced Free from a paid tier
+	// whose reusable collection setup is not yet confirmed.
+	CollectionReady    bool   `protobuf:"varint,16,opt,name=collection_ready,json=collectionReady,proto3" json:"collection_ready,omitempty"`
+	CollectionProvider string `protobuf:"bytes,17,opt,name=collection_provider,json=collectionProvider,proto3" json:"collection_provider,omitempty"`
+	TierName           string `protobuf:"bytes,18,opt,name=tier_name,json=tierName,proto3" json:"tier_name,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ValidateTenantResponse) Reset() {
@@ -595,6 +600,27 @@ func (x *ValidateTenantResponse) GetBillingStatusUnavailable() bool {
 		return x.BillingStatusUnavailable
 	}
 	return false
+}
+
+func (x *ValidateTenantResponse) GetCollectionReady() bool {
+	if x != nil {
+		return x.CollectionReady
+	}
+	return false
+}
+
+func (x *ValidateTenantResponse) GetCollectionProvider() string {
+	if x != nil {
+		return x.CollectionProvider
+	}
+	return ""
+}
+
+func (x *ValidateTenantResponse) GetTierName() string {
+	if x != nil {
+		return x.TierName
+	}
+	return ""
 }
 
 // Matches pkg/api/quartermaster/types.go:TenantInfo (lines 29-35)
@@ -13142,7 +13168,7 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"M\n" +
 	"\x15ValidateTenantRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x17\n" +
-	"\auser_id\x18\x02 \x01(\tR\x06userId\"\xb2\x03\n" +
+	"\auser_id\x18\x02 \x01(\tR\x06userId\"\xab\x04\n" +
 	"\x16ValidateTenantResponse\x12\x14\n" +
 	"\x05valid\x18\x01 \x01(\bR\x05valid\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x1f\n" +
@@ -13156,7 +13182,10 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\rbilling_model\x18\f \x01(\tR\fbillingModel\x12!\n" +
 	"\fis_suspended\x18\r \x01(\bR\visSuspended\x12.\n" +
 	"\x13is_balance_negative\x18\x0e \x01(\bR\x11isBalanceNegative\x12<\n" +
-	"\x1abilling_status_unavailable\x18\x0f \x01(\bR\x18billingStatusUnavailable\"\xaf\x01\n" +
+	"\x1abilling_status_unavailable\x18\x0f \x01(\bR\x18billingStatusUnavailable\x12)\n" +
+	"\x10collection_ready\x18\x10 \x01(\bR\x0fcollectionReady\x12/\n" +
+	"\x13collection_provider\x18\x11 \x01(\tR\x12collectionProvider\x12\x1b\n" +
+	"\ttier_name\x18\x12 \x01(\tR\btierName\"\xaf\x01\n" +
 	"\n" +
 	"TenantInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +

@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -33,9 +34,9 @@ func TestClaimX402MutationResultClaimsAndReplays(t *testing.T) {
 		result    []byte
 		wantState string
 	}{
-		{name: "new claim", inserted: 1, status: "in_progress", wantState: "claimed"},
+		{name: "new claim", inserted: 1, status: "claimed", wantState: "claimed"},
 		{name: "completed replay", inserted: 0, status: "completed", result: []byte(`{"data":{"id":"stream-1"}}`), wantState: "completed"},
-		{name: "unknown outcome remains in progress", inserted: 0, status: "in_progress", wantState: "in_progress"},
+		{name: "unknown outcome remains in progress", inserted: 0, status: "claimed", wantState: "in_progress"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
@@ -48,8 +49,8 @@ func TestClaimX402MutationResultClaimsAndReplays(t *testing.T) {
 				WillReturnResult(sqlmock.NewResult(0, tc.inserted))
 			mock.ExpectQuery(`SELECT quote_id::text, request_fingerprint, protocol, operation, status`).
 				WillReturnRows(sqlmock.NewRows([]string{
-					"quote_id", "request_fingerprint", "protocol", "operation", "status", "result", "content_type", "status_code",
-				}).AddRow(mutationQuoteID, mutationFingerprint, "http", "createStream", tc.status, tc.result, "application/json", 201))
+					"quote_id", "request_fingerprint", "protocol", "operation", "status", "result", "content_type", "status_code", "updated_at",
+				}).AddRow(mutationQuoteID, mutationFingerprint, "http", "createStream", tc.status, tc.result, "application/json", 201, time.Now()))
 
 			response, err := server.ClaimX402MutationResult(context.Background(), mutationClaimRequest())
 			if err != nil {
@@ -78,12 +79,34 @@ func TestClaimX402MutationResultRejectsFingerprintCollision(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO purser\.x402_mutation_results`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT quote_id::text, request_fingerprint, protocol, operation, status`).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"quote_id", "request_fingerprint", "protocol", "operation", "status", "result", "content_type", "status_code",
-		}).AddRow(mutationQuoteID, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "http", "createStream", "completed", []byte(`{}`), "application/json", 200))
+			"quote_id", "request_fingerprint", "protocol", "operation", "status", "result", "content_type", "status_code", "updated_at",
+		}).AddRow(mutationQuoteID, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "http", "createStream", "completed", []byte(`{}`), "application/json", 200, time.Now()))
 
 	_, err = server.ClaimX402MutationResult(context.Background(), mutationClaimRequest())
 	if status.Code(err) != codes.AlreadyExists {
 		t.Fatalf("error=%v code=%v want AlreadyExists", err, status.Code(err))
+	}
+}
+
+func TestClaimX402MutationResultMovesAbandonedClaimToOperatorReview(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := &PurserServer{db: db, logger: logging.NewLogger()}
+	mock.ExpectExec(`INSERT INTO purser\.x402_mutation_results`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT quote_id::text, request_fingerprint, protocol, operation, status`).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"quote_id", "request_fingerprint", "protocol", "operation", "status", "result", "content_type", "status_code", "updated_at",
+		}).AddRow(mutationQuoteID, mutationFingerprint, "http", "createStream", "claimed", nil, nil, nil, time.Now().Add(-16*time.Minute)))
+	mock.ExpectExec(`UPDATE purser\.x402_mutation_results`).WillReturnResult(sqlmock.NewResult(0, 1))
+	response, err := server.ClaimX402MutationResult(context.Background(), mutationClaimRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.GetState() != "operator_review" {
+		t.Fatalf("state=%q", response.GetState())
 	}
 }
 

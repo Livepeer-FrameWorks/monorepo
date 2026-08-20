@@ -179,7 +179,7 @@ func DefaultX402Network() NetworkConfig {
 
 // DefaultRPCEndpoints returns sensible defaults for public RPC endpoints
 var DefaultRPCEndpoints = map[string]string{
-	"ETH_RPC_ENDPOINT":              "https://eth.publicnode.com",
+	"ETH_RPC_ENDPOINT":              "https://ethereum-rpc.publicnode.com",
 	"BASE_RPC_ENDPOINT":             "https://base.publicnode.com",
 	"ARBITRUM_RPC_ENDPOINT":         "https://arb1.arbitrum.io/rpc",
 	"BASE_SEPOLIA_RPC_ENDPOINT":     "https://base-sepolia.publicnode.com",

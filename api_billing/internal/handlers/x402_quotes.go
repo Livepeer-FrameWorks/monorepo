@@ -37,6 +37,8 @@ type X402PaymentQuote struct {
 	ExpiresAt           time.Time
 	AcceptedRequirement []byte
 	ExtraJSON           []byte
+	TaxDocumentKind     string
+	TaxProfileSnapshot  []byte
 }
 
 func (h *X402Handler) loadPaymentQuote(ctx context.Context, tenantID, quoteID string) (*X402PaymentQuote, string, error) {
@@ -49,14 +51,15 @@ func (h *X402Handler) loadPaymentQuote(ctx context.Context, tenantID, quoteID st
 	err := h.db.QueryRowContext(ctx, `
 		SELECT id::text, tenant_id::text, resource, resource_class, network,
 		       asset, pay_to, amount_atomic::text, credit_amount_cents,
-		       eur_per_usd_rate::text, requirements_json::text, expires_at, status
+		       eur_per_usd_rate::text, requirements_json::text,
+		       tax_document_kind, tax_profile_snapshot::text, expires_at, status
 		FROM purser.x402_payment_quotes
 		WHERE id = $1 AND tenant_id = $2
 	`, quoteID, tenantID).Scan(
 		&quote.ID, &quote.TenantID, &quote.Resource, &quote.ResourceClass,
 		&quote.CAIP2Network, &quote.Asset, &quote.PayTo, &quote.AmountAtomic,
 		&quote.CreditAmountCents, &rateText, &quote.AcceptedRequirement,
-		&quote.ExpiresAt, &status,
+		&quote.TaxDocumentKind, &quote.TaxProfileSnapshot, &quote.ExpiresAt, &status,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -162,6 +165,20 @@ func (h *X402Handler) claimPaymentQuote(ctx context.Context, quoteID string) (bo
 	return rows == 1, nil
 }
 
+// ExpirePaymentQuote withdraws an internal quote that was created while
+// determining payment-specific tax requirements but was never exposed.
+func (h *X402Handler) ExpirePaymentQuote(ctx context.Context, quoteID string) error {
+	if strings.TrimSpace(quoteID) == "" {
+		return nil
+	}
+	_, err := h.db.ExecContext(ctx, `
+		UPDATE purser.x402_payment_quotes
+		SET status = 'expired', updated_at = NOW()
+		WHERE id = $1 AND status = 'offered'
+	`, quoteID)
+	return err
+}
+
 func (h *X402Handler) CreatePaymentQuote(ctx context.Context, tenantID, resource, payTo string, network NetworkConfig) (*X402PaymentQuote, error) {
 	if tenantID == "" || payTo == "" {
 		return nil, fmt.Errorf("tenant and payTo are required")
@@ -202,6 +219,14 @@ func (h *X402Handler) CreatePaymentQuote(ctx context.Context, tenantID, resource
 		creditCents = int64(math.Round(float64(usdCents) * rate))
 	}
 	atomic := new(big.Int).Mul(big.NewInt(usdCents), big.NewInt(10_000)).String()
+	documentRequirement, err := h.GetCryptoDocumentRequirement(ctx, tenantID, creditCents)
+	if err != nil {
+		return nil, fmt.Errorf("determine crypto tax-document requirement: %w", err)
+	}
+	taxProfileSnapshot, err := json.Marshal(documentRequirement.Profile)
+	if err != nil {
+		return nil, fmt.Errorf("marshal crypto tax profile: %w", err)
+	}
 	quoteID := uuid.NewString()
 	expiresAt := time.Now().UTC().Add(defaultX402QuoteTTL)
 	caip2, err := x402CAIP2Network(network)
@@ -240,11 +265,12 @@ func (h *X402Handler) CreatePaymentQuote(ctx context.Context, tenantID, resource
 		INSERT INTO purser.x402_payment_quotes (
 			id, tenant_id, resource, resource_class, network, asset, pay_to,
 			amount_atomic, credit_amount_cents, credit_currency,
-			eur_per_usd_rate, requirements_json, expires_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric, $9, 'EUR', $10, $11::jsonb, $12)
+			eur_per_usd_rate, requirements_json, tax_document_kind,
+			tax_profile_snapshot, expires_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric, $9, 'EUR', $10, $11::jsonb, $12, $13::jsonb, $14)
 	`, quoteID, tenantID, resource, classifyX402Resource(resource), caip2,
 		network.USDCContract, strings.ToLower(payTo), atomic, creditCents, rate,
-		acceptedJSON, expiresAt)
+		acceptedJSON, documentRequirement.DocumentKind, taxProfileSnapshot, expiresAt)
 	if err != nil {
 		return nil, fmt.Errorf("persist x402 quote: %w", err)
 	}
@@ -264,6 +290,8 @@ func (h *X402Handler) CreatePaymentQuote(ctx context.Context, tenantID, resource
 		ExpiresAt:           expiresAt,
 		AcceptedRequirement: acceptedJSON,
 		ExtraJSON:           extraJSON,
+		TaxDocumentKind:     documentRequirement.DocumentKind,
+		TaxProfileSnapshot:  taxProfileSnapshot,
 	}, nil
 }
 

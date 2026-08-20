@@ -56,6 +56,17 @@ func TestRecheckETHSweepRejectsChangedBalanceAndNonce(t *testing.T) {
 	})
 }
 
+func TestParseSweepHexRejectsMalformedRPCQuantities(t *testing.T) {
+	for _, value := range []string{"", "0x", "7", "-0x1", "0xnope"} {
+		if _, err := parseSweepHex(value); err == nil {
+			t.Fatalf("parseSweepHex(%q) unexpectedly succeeded", value)
+		}
+	}
+	if value, err := parseSweepHex("0x2a"); err != nil || value.Int64() != 42 {
+		t.Fatalf("valid quantity = %v, %v", value, err)
+	}
+}
+
 func TestReserveRelayerTransactionReplaysPersistedIntent(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {

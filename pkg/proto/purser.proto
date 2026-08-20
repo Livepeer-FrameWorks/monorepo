@@ -226,6 +226,7 @@ message GetTenantBillingStatusResponse {
   // Mollie subscription/mandate. Prepaid admission ignores this field.
   bool collection_ready = 13;
   string collection_provider = 14; // stripe, mollie, or empty
+  string tier_name = 15;           // free, pro, business, or custom catalog name
 }
 
 // Marginal storage pricing snapshot exposed via GetTenantBillingStatus.
@@ -414,6 +415,7 @@ message UpdateBillingDetailsRequest {
   optional string company = 3;          // Company name for invoices
   optional string vat_number = 4;       // VAT number (EU format: XX123456789)
   optional BillingAddress address = 5;  // Structured billing address
+  optional string name = 6;             // Customer legal/person name for full invoices
 }
 
 // Complete billing details for a tenant
@@ -425,6 +427,7 @@ message BillingDetails {
   BillingAddress address = 5;           // Structured billing address
   bool is_complete = 6;                 // True if all required fields present (email + address)
   google.protobuf.Timestamp updated_at = 7;
+  string name = 8;                      // Customer legal/person name for full invoices
 }
 
 message TenantSubscription {
@@ -662,7 +665,7 @@ message ListInvoicesResponse {
 
 message BillingDocument {
   string id = 1;
-  string kind = 2;                      // invoice | simplified_invoice | payment_receipt | credit_note
+  string kind = 2;                      // invoice | simplified_invoice | crypto_invoice | payment_receipt | credit_note
   string document_number = 3;
   int64 amount_cents = 4;
   string currency = 5;
@@ -1073,10 +1076,12 @@ service PrepaidService {
   // Creates: 1) subscription with billing_model='prepaid', 2) prepaid balance at 0.
   rpc InitializePrepaidAccount(InitializePrepaidAccountRequest) returns (InitializePrepaidAccountResponse);
 
-  // Initialize postpaid account for email registration.
-  // Called by Commodore during Register to provision billing + cluster access.
-  // Resolves the default postpaid tier and subscribes to eligible clusters.
+  // Compatibility name for EnsureFreeAccount.
   rpc InitializePostpaidAccount(InitializePostpaidAccountRequest) returns (InitializePostpaidAccountResponse);
+
+  // Idempotently activate the catalog's default zero-priced postpaid Free tier
+  // after an email address has been verified.
+  rpc EnsureFreeAccount(InitializePostpaidAccountRequest) returns (InitializePostpaidAccountResponse);
 
   // ===== CARD TOP-UP =====
   // Create a Stripe/Mollie checkout session for prepaid balance top-up
@@ -1585,6 +1590,8 @@ service CryptoSweepService {
   rpc PlanCryptoSweep(PlanCryptoSweepRequest) returns (PlanCryptoSweepResponse);
   rpc BroadcastCryptoSweep(BroadcastCryptoSweepRequest) returns (BroadcastCryptoSweepResponse);
   rpc ReconcileCryptoSweep(ReconcileCryptoSweepRequest) returns (ReconcileCryptoSweepResponse);
+  rpc ReleaseCryptoSweep(ReleaseCryptoSweepRequest) returns (ReleaseCryptoSweepResponse);
+  rpc ResolveX402MutationResult(ResolveX402MutationResultRequest) returns (ResolveX402MutationResultResponse);
 }
 
 message RotateCryptoDepositKeyRequest {
@@ -1656,6 +1663,45 @@ message ReconcileCryptoSweepResponse {
   bool dry_run = 6;
 }
 
+message ReleaseCryptoSweepRequest {
+  string batch_id = 1;
+  string reason = 2;
+  bool dry_run = 3;
+  string ceremony_ack = 4;
+}
+
+message ReleaseCryptoSweepResponse {
+  string batch_id = 1;
+  string manifest_checksum = 2;
+  string status = 3;
+  int32 released_items = 4;
+  int32 quarantined_items = 5;
+  int32 blocked_items = 6;
+  bool dry_run = 7;
+}
+
+message ResolveX402MutationResultRequest {
+  string tenant_id = 1;
+  string idempotency_key = 2;
+  bytes result = 3;
+  string content_type = 4;
+  int32 status_code = 5;
+  string reason = 6;
+  bool mark_review = 7;
+  bool dry_run = 8;
+}
+
+message ResolveX402MutationResultResponse {
+  string tenant_id = 1;
+  string idempotency_key = 2;
+  string quote_id = 3;
+  string operation = 4;
+  string previous_state = 5;
+  string state = 6;
+  bool changed = 7;
+  bool dry_run = 8;
+}
+
 // ============================================================================
 // X402 MESSAGES
 // ============================================================================
@@ -1677,6 +1723,8 @@ message PaymentRequirements {
   string resource_description = 6;
   string resource_mime_type = 7;
   bytes canonical_json = 8;             // Official v2 PaymentRequired JSON
+  string error_code = 9;                // Stable machine-readable blocker code
+  repeated string required_fields = 10; // Profile fields needed before a quote can be exposed
 }
 
 message PaymentRequirement {
@@ -1724,6 +1772,9 @@ message SettleX402PaymentResponse {
   string invoice_number = 7;            // Simplified invoice number (if generated)
   bool is_auth_only = 8;                // True if value=0 (authentication only, no balance change)
   string payer_address = 9;             // Payer wallet address (for tenant resolution)
+  string settlement_status = 10;        // confirmed, pending, or failed
+  string error_code = 11;               // Stable machine-readable failure/pending code
+  string network = 12;                  // CAIP-2 network for pending or confirmed settlement
 }
 
 message GetTenantX402AddressRequest {

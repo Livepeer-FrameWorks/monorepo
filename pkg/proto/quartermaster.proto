@@ -338,6 +338,11 @@ message ValidateTenantResponse {
   // True when tenant identity was resolved but current billing authority could not be loaded.
   // Additive inverse flag keeps older producers (which omit it) compatible.
   bool billing_status_unavailable = 15;
+  // Postpaid access needs to distinguish zero-priced Free from a paid tier
+  // whose reusable collection setup is not yet confirmed.
+  bool collection_ready = 16;
+  string collection_provider = 17;
+  string tier_name = 18;
 }
 
 // Matches pkg/api/quartermaster/types.go:TenantInfo (lines 29-35)

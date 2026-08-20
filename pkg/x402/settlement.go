@@ -36,17 +36,56 @@ const (
 	ErrBillingDetailsRequired = "billing_details_required"
 	ErrAuthOnly               = "auth_only"
 	ErrSettlementFailed       = "settlement_failed"
+	ErrSettlementPending      = "settlement_pending"
 )
 
 type SettlementError struct {
 	Code         string
+	PublicCode   string
 	Message      string
 	ResourceType string
 	ResourceID   string
+	TxHash       string
+	Network      string
 }
 
 func (e *SettlementError) Error() string {
 	return e.Message
+}
+
+func (e *SettlementError) MachineCode() string {
+	if e == nil {
+		return "X402_PAYMENT_FAILED"
+	}
+	if strings.TrimSpace(e.PublicCode) != "" {
+		return e.PublicCode
+	}
+	switch e.Code {
+	case ErrInvalidPayment:
+		return "INVALID_X402_PAYMENT"
+	case ErrAuthRequired:
+		return "AUTH_REQUIRED"
+	case ErrTargetMismatch:
+		return "X402_TARGET_MISMATCH"
+	case ErrResourceNotFound:
+		return "X402_RESOURCE_NOT_FOUND"
+	case ErrInvalidResource:
+		return "INVALID_X402_RESOURCE"
+	case ErrResolverUnavailable:
+		return "X402_RESOLVER_UNAVAILABLE"
+	case ErrVerificationFailed:
+		return "X402_VERIFICATION_FAILED"
+	case ErrBillingDetailsRequired:
+		return "BILLING_DETAILS_REQUIRED"
+	case ErrAuthOnly:
+		return "X402_AUTH_ONLY_UNSUPPORTED"
+	case ErrSettlementPending:
+		return "SETTLEMENT_PENDING"
+	case ErrSettlementFailed:
+		return "X402_SETTLEMENT_FAILED"
+	default:
+		return "X402_PAYMENT_FAILED"
+	}
 }
 
 type PurserClient interface {
@@ -125,7 +164,7 @@ func SettleX402Payment(ctx context.Context, opts SettlementOptions) (*Settlement
 		var err error
 		payload, err = ParsePaymentHeader(opts.PaymentHeader)
 		if err != nil {
-			return nil, &SettlementError{Code: ErrInvalidPayment, Message: "invalid X-PAYMENT header"}
+			return nil, &SettlementError{Code: ErrInvalidPayment, Message: "invalid x402 payment signature"}
 		}
 	}
 
@@ -220,7 +259,13 @@ func SettleX402Payment(ctx context.Context, opts SettlementOptions) (*Settlement
 		if settleResp != nil && settleResp.Error != "" {
 			msg = settleResp.Error
 		}
-		return nil, &SettlementError{Code: ErrSettlementFailed, Message: msg}
+		if settleResp != nil && settleResp.GetErrorCode() == "SETTLEMENT_PENDING" {
+			return nil, &SettlementError{
+				Code: ErrSettlementPending, Message: msg,
+				TxHash: settleResp.GetTxHash(), Network: settleResp.GetNetwork(),
+			}
+		}
+		return nil, &SettlementError{Code: ErrSettlementFailed, PublicCode: settleResp.GetErrorCode(), Message: msg}
 	}
 	if settleResp.IsAuthOnly {
 		return nil, &SettlementError{Code: ErrAuthOnly, Message: "auth-only payments cannot be used for settlement"}

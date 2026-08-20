@@ -31,11 +31,34 @@ func recordCryptoAccountingAnomaly(
 		SET last_seen_at = NOW(),
 		    occurrences = purser.crypto_accounting_anomalies.occurrences + 1,
 		    detail = EXCLUDED.detail,
-		    evidence_json = EXCLUDED.evidence_json
+		    evidence_json = EXCLUDED.evidence_json,
+		    status = 'open',
+		    resolved_at = NULL,
+		    resolved_by = NULL,
+		    resolution_note = NULL
 	`, tenantID, kind, network, referenceType, referenceID, amountCents, detail, database.JSONText(evidenceJSON))
 	if err != nil && logger != nil {
 		logger.WithError(err).WithFields(logging.Fields{
 			"tenant_id": tenantID, "kind": kind, "reference_id": referenceID,
 		}).Error("Failed to persist crypto accounting anomaly")
+	}
+}
+
+func resolveCryptoAccountingAnomaly(
+	ctx context.Context,
+	db *sql.DB,
+	logger logging.Logger,
+	kind, referenceType, referenceID, note string,
+) {
+	_, err := db.ExecContext(ctx, `
+		UPDATE purser.crypto_accounting_anomalies
+		SET status = 'resolved', resolved_at = NOW(), resolution_note = $4
+		WHERE kind = $1 AND reference_type = $2 AND reference_id = $3
+		  AND status = 'open'
+	`, kind, referenceType, referenceID, note)
+	if err != nil && logger != nil {
+		logger.WithError(err).WithFields(logging.Fields{
+			"kind": kind, "reference_type": referenceType, "reference_id": referenceID,
+		}).Error("Failed to resolve crypto accounting anomaly")
 	}
 }

@@ -247,6 +247,8 @@ CREATE TABLE IF NOT EXISTS purser.crypto_wallets (
     credited_amount_cents      BIGINT,
     credited_amount_currency   VARCHAR(3),
     client_ip                  VARCHAR(64),       -- Trusted request-time tax-location evidence
+	tax_document_kind          VARCHAR(16) NOT NULL DEFAULT 'simplified' CHECK (tax_document_kind IN ('simplified', 'full')),
+	tax_profile_snapshot       JSONB NOT NULL DEFAULT '{}'::jsonb,
 
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -356,7 +358,7 @@ CREATE TABLE IF NOT EXISTS purser.crypto_sweep_batches (
     snapshot_block_hash VARCHAR(66) NOT NULL,
     manifest_checksum VARCHAR(64) NOT NULL UNIQUE,
     status VARCHAR(24) NOT NULL DEFAULT 'planned' CHECK (
-        status IN ('planned', 'signed', 'broadcast', 'partially_confirmed', 'confirmed', 'failed', 'expired')
+	    status IN ('planned', 'signed', 'broadcast', 'partially_confirmed', 'confirmed', 'failed', 'expired', 'quarantined')
     ),
     expires_at TIMESTAMPTZ NOT NULL,
     created_by UUID,
@@ -380,13 +382,15 @@ CREATE TABLE IF NOT EXISTS purser.crypto_sweep_items (
     source_nonce BIGINT,
     max_fee_per_gas NUMERIC(78, 0),
     max_priority_fee_per_gas NUMERIC(78, 0),
-    gas_limit BIGINT,
-    authorization_nonce VARCHAR(66),
-    signed_payload TEXT,
+	gas_limit BIGINT,
+	authorization_nonce VARCHAR(66),
+	authorization_after BIGINT,
+	authorization_before BIGINT,
+	signed_payload TEXT,
     relay_transaction TEXT,
     tx_hash VARCHAR(66),
     status VARCHAR(24) NOT NULL DEFAULT 'planned' CHECK (
-        status IN ('planned', 'signed', 'broadcast', 'confirmed', 'failed', 'expired')
+	    status IN ('planned', 'signed', 'broadcast', 'confirmed', 'failed', 'expired', 'quarantined')
     ),
     failure_reason TEXT,
     broadcast_at TIMESTAMPTZ,
@@ -401,12 +405,27 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_crypto_sweep_items_tx
     WHERE tx_hash IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS purser.crypto_sweep_sources (
-    item_id UUID NOT NULL REFERENCES purser.crypto_sweep_items(id),
-    source_type VARCHAR(20) NOT NULL CHECK (source_type IN ('direct_wallet', 'x402_quote')),
-    source_id UUID NOT NULL,
-    amount_base_units NUMERIC(78, 0) NOT NULL CHECK (amount_base_units > 0),
-    PRIMARY KEY(source_type, source_id)
+	id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+	item_id UUID NOT NULL REFERENCES purser.crypto_sweep_items(id),
+	source_type VARCHAR(20) NOT NULL CHECK (source_type IN ('direct_wallet', 'x402_quote')),
+	source_id UUID NOT NULL,
+	amount_base_units NUMERIC(78, 0) NOT NULL CHECK (amount_base_units > 0),
+	claim_status VARCHAR(20) NOT NULL DEFAULT 'claimed' CHECK (
+	    claim_status IN ('claimed', 'released', 'consumed', 'quarantined')
+	),
+	claimed_by UUID,
+	claim_reason TEXT NOT NULL DEFAULT 'sweep plan',
+	claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	released_by UUID,
+	release_reason TEXT,
+	released_at TIMESTAMPTZ,
+	consumed_at TIMESTAMPTZ,
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_crypto_sweep_sources_active
+	ON purser.crypto_sweep_sources(source_type, source_id)
+	WHERE claim_status IN ('claimed', 'consumed', 'quarantined');
 
 CREATE TABLE IF NOT EXISTS purser.crypto_sweep_events (
     id BIGSERIAL PRIMARY KEY,
@@ -620,6 +639,7 @@ CREATE TABLE IF NOT EXISTS purser.tenant_subscriptions (
     -- ===== PAYMENT & BILLING =====
     payment_method VARCHAR(50),
     payment_reference VARCHAR(255),
+	billing_name VARCHAR(255),            -- Customer legal/person name for invoices
     billing_company VARCHAR(255),         -- Company name for invoices
     billing_address JSONB,                -- Structured: {line1, line2, city, postalCode, country}
     tax_id VARCHAR(100),                  -- VAT number (EU format: XX123456789)
@@ -1541,9 +1561,8 @@ CREATE TABLE IF NOT EXISTS purser.x402_nonces (
     payer_address VARCHAR(42) NOT NULL,           -- 0x-prefixed address that signed
     nonce VARCHAR(78) NOT NULL,                   -- uint256 as hex string
 
-    -- Settlement details. tx_hash is NULL while status='submitting'; it is
-    -- populated once eth_sendRawTransaction returns and the row advances to
-    -- status='pending'.
+    -- Embedded settlement hashes are computed and stored before broadcast;
+    -- status advances to pending only after eth_sendRawTransaction acknowledges.
     tx_hash VARCHAR(66),                          -- Transaction hash (0x + 64 hex)
     tenant_id UUID NOT NULL,                      -- Tenant that received credit
     amount_cents BIGINT NOT NULL,                 -- Amount credited in cents
@@ -1605,6 +1624,8 @@ CREATE TABLE IF NOT EXISTS purser.x402_payment_quotes (
     provider_transaction_id VARCHAR(255),
     failure_reason TEXT,
     expires_at TIMESTAMPTZ NOT NULL,
+	tax_document_kind VARCHAR(16) NOT NULL DEFAULT 'simplified' CHECK (tax_document_kind IN ('simplified', 'full')),
+	tax_profile_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
     confirmed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -1630,6 +1651,38 @@ ALTER TABLE purser.x402_nonces
 CREATE UNIQUE INDEX IF NOT EXISTS idx_x402_nonces_quote
     ON purser.x402_nonces(quote_id)
     WHERE quote_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS purser.x402_settlement_attempts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    settlement_id UUID NOT NULL REFERENCES purser.x402_nonces(id),
+    attempt_number INTEGER NOT NULL DEFAULT 1 CHECK (attempt_number > 0),
+    network VARCHAR(20) NOT NULL,
+    chain_id BIGINT NOT NULL CHECK (chain_id > 0),
+    relayer_address VARCHAR(42) NOT NULL,
+    relayer_nonce BIGINT NOT NULL CHECK (relayer_nonce >= 0),
+    signed_raw_transaction BYTEA NOT NULL,
+    transaction_hash VARCHAR(66) NOT NULL,
+    gas_limit BIGINT NOT NULL CHECK (gas_limit > 0),
+    max_fee_per_gas NUMERIC(78,0) NOT NULL CHECK (max_fee_per_gas > 0),
+    max_priority_fee_per_gas NUMERIC(78,0) NOT NULL CHECK (max_priority_fee_per_gas >= 0),
+    state VARCHAR(24) NOT NULL DEFAULT 'prepared' CHECK (
+        state IN ('prepared', 'broadcast_unknown', 'broadcast', 'confirmed', 'reverted', 'replaced')
+    ),
+    broadcast_attempts INTEGER NOT NULL DEFAULT 0 CHECK (broadcast_attempts >= 0),
+    last_error TEXT,
+    prepared_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    first_broadcast_at TIMESTAMPTZ,
+    last_broadcast_at TIMESTAMPTZ,
+    confirmed_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (settlement_id, attempt_number),
+    UNIQUE (network, relayer_address, relayer_nonce),
+    UNIQUE (transaction_hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_x402_settlement_attempts_reconcile
+    ON purser.x402_settlement_attempts(state, updated_at)
+    WHERE state IN ('prepared', 'broadcast_unknown', 'broadcast');
 
 -- Conditions such as a consumed authorization without a recoverable
 -- transaction hash require durable operator action rather than log scraping.
@@ -1678,10 +1731,15 @@ CREATE TABLE IF NOT EXISTS purser.x402_mutation_results (
     request_fingerprint VARCHAR(64) NOT NULL CHECK (request_fingerprint ~ '^[0-9a-f]{64}$'),
     protocol VARCHAR(12) NOT NULL CHECK (protocol IN ('http', 'mcp')),
     operation VARCHAR(255) NOT NULL,
-    status VARCHAR(20) NOT NULL DEFAULT 'in_progress' CHECK (status IN ('in_progress', 'completed')),
-    result BYTEA,
-    content_type VARCHAR(255),
-    status_code INTEGER,
+	status VARCHAR(24) NOT NULL DEFAULT 'claimed' CHECK (status IN ('claimed', 'completion_pending', 'completed', 'operator_review')),
+	result BYTEA,
+	content_type VARCHAR(255),
+	status_code INTEGER,
+	attempt_count INTEGER NOT NULL DEFAULT 1 CHECK (attempt_count > 0),
+	last_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	review_reason TEXT,
+	resolved_by UUID,
+	resolved_at TIMESTAMPTZ,
     claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     completed_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1691,7 +1749,7 @@ CREATE TABLE IF NOT EXISTS purser.x402_mutation_results (
 
 CREATE INDEX IF NOT EXISTS idx_x402_mutation_results_unknown
     ON purser.x402_mutation_results(claimed_at)
-    WHERE status = 'in_progress';
+	WHERE status IN ('claimed', 'completion_pending', 'operator_review');
 
 -- ============================================================================
 -- SIMPLIFIED INVOICES (EU VAT COMPLIANCE)
@@ -1776,6 +1834,10 @@ CREATE TABLE IF NOT EXISTS purser.simplified_invoices (
     supplier_name VARCHAR(255) NOT NULL,
     supplier_address TEXT NOT NULL,
     supplier_vat_number VARCHAR(50) NOT NULL,
+	supplier_registration_number VARCHAR(100),
+	service_description TEXT,
+	service_quantity INTEGER CONSTRAINT chk_simplified_invoice_service_quantity CHECK (service_quantity > 0),
+	service_date DATE,
 
     -- Invoice date
     issued_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1784,11 +1846,59 @@ CREATE TABLE IF NOT EXISTS purser.simplified_invoices (
     retention_until TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '10 years')
 );
 
+CREATE SEQUENCE IF NOT EXISTS purser.crypto_invoice_number_seq;
+
+CREATE TABLE IF NOT EXISTS purser.crypto_invoices (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    invoice_number VARCHAR(50) NOT NULL UNIQUE,
+    tenant_id UUID NOT NULL,
+    reference_type VARCHAR(20) NOT NULL,
+    reference_id VARCHAR(255) NOT NULL,
+    gross_amount_cents BIGINT NOT NULL,
+    net_amount_cents BIGINT NOT NULL,
+    vat_amount_cents BIGINT NOT NULL,
+    vat_rate_bps INTEGER NOT NULL,
+    vat_rate_source VARCHAR(255),
+    vat_rate_table_checked_on DATE,
+    vat_rate_effective_from DATE,
+    tax_validation_status VARCHAR(32) NOT NULL,
+    currency VARCHAR(3) NOT NULL DEFAULT 'EUR',
+    amount_eur_cents BIGINT NOT NULL,
+    ecb_rate DECIMAL(10,6),
+    fx_rate_source VARCHAR(255),
+    fx_rate_observed_at TIMESTAMPTZ,
+    evidence_ip_country VARCHAR(2),
+    evidence_wallet_network VARCHAR(20),
+    evidence_billing_country VARCHAR(2),
+    evidence_status VARCHAR(24) NOT NULL CONSTRAINT chk_crypto_invoice_evidence_status CHECK (
+        evidence_status IN ('complete', 'single_source', 'conflict', 'missing')
+    ),
+    evidence_conflict BOOLEAN NOT NULL DEFAULT FALSE,
+    tax_policy_ref VARCHAR(255),
+    supplier_name VARCHAR(255) NOT NULL,
+    supplier_address TEXT NOT NULL,
+    supplier_vat_number VARCHAR(50) NOT NULL,
+	supplier_registration_number VARCHAR(100) NOT NULL,
+	service_description TEXT NOT NULL,
+	service_quantity INTEGER NOT NULL CHECK (service_quantity > 0),
+	service_date DATE NOT NULL,
+    customer_email VARCHAR(255) NOT NULL,
+	customer_name VARCHAR(255) NOT NULL,
+    customer_company VARCHAR(255),
+    customer_address JSONB NOT NULL,
+    customer_vat_number VARCHAR(100),
+    customer_vat_validated BOOLEAN NOT NULL DEFAULT FALSE,
+    issued_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    retention_until TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '10 years'),
+    UNIQUE (tenant_id, reference_type, reference_id)
+);
+
 CREATE TABLE IF NOT EXISTS purser.credit_notes (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     credit_note_number VARCHAR(50) NOT NULL UNIQUE,
     tenant_id UUID NOT NULL,
-    source_document_type VARCHAR(32) NOT NULL CHECK (source_document_type IN ('invoice', 'simplified_invoice')),
+    source_document_type VARCHAR(32) NOT NULL CHECK (source_document_type IN ('invoice', 'simplified_invoice', 'crypto_invoice')),
     source_document_id UUID NOT NULL,
     reversal_reference_type VARCHAR(64) NOT NULL,
     reversal_reference_id VARCHAR(255) NOT NULL,
@@ -1822,6 +1932,10 @@ CREATE TRIGGER billing_payments_retention_guard
 CREATE TRIGGER simplified_invoices_retention_guard
     BEFORE DELETE ON purser.simplified_invoices
     FOR EACH ROW EXECUTE FUNCTION purser.prevent_billing_document_early_delete();
+
+CREATE TRIGGER crypto_invoices_retention_guard
+    BEFORE DELETE ON purser.crypto_invoices
+    FOR EACH ROW EXECUTE FUNCTION purser.prevent_billing_document_early_delete();
 CREATE TRIGGER credit_notes_retention_guard
     BEFORE DELETE ON purser.credit_notes
     FOR EACH ROW EXECUTE FUNCTION purser.prevent_billing_document_early_delete();
@@ -1832,6 +1946,8 @@ CREATE INDEX IF NOT EXISTS idx_credit_notes_tenant_issued
 CREATE INDEX IF NOT EXISTS idx_simplified_invoices_tenant ON purser.simplified_invoices(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_simplified_invoices_issued ON purser.simplified_invoices(issued_at);
 CREATE INDEX IF NOT EXISTS idx_simplified_invoices_reference ON purser.simplified_invoices(reference_type, reference_id);
+CREATE INDEX IF NOT EXISTS idx_crypto_invoices_tenant ON purser.crypto_invoices(tenant_id, issued_at DESC);
+CREATE INDEX IF NOT EXISTS idx_crypto_invoices_reference ON purser.crypto_invoices(reference_type, reference_id);
 
 CREATE TABLE IF NOT EXISTS purser.vat_validation_evidence (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -2287,7 +2403,29 @@ FROM purser.prepaid_balances
 WHERE balance_cents < 0;
 
 CREATE OR REPLACE VIEW purser.payment_report_operator_credits_without_clawback AS
-SELECT accrual.*
+SELECT
+    accrual.id,
+    accrual.source_type,
+    accrual.invoice_line_item_id,
+    accrual.provider_usage_record_id,
+    accrual.usage_adjustment_id,
+    accrual.stripe_invoice_id,
+    accrual.entry_type,
+    accrual.reverses_ledger_id,
+    accrual.cluster_owner_tenant_id,
+    accrual.cluster_id,
+    accrual.invoice_id,
+    accrual.period_start,
+    accrual.period_end,
+    accrual.currency,
+    accrual.gross_cents,
+    accrual.platform_fee_cents,
+    accrual.payable_cents,
+    accrual.status,
+    accrual.payout_batch_id,
+    accrual.notes,
+    accrual.created_at,
+    accrual.updated_at
 FROM purser.operator_credit_ledger accrual
 JOIN purser.payment_reversals pr
     ON pr.invoice_id = accrual.invoice_id
@@ -2299,7 +2437,23 @@ WHERE accrual.entry_type = 'accrual'
   AND clawback.id IS NULL;
 
 CREATE OR REPLACE VIEW purser.payment_report_stripe_meter_outbox_stuck AS
-SELECT *
+SELECT
+    id,
+    tenant_id,
+    cluster_id,
+    meter,
+    stripe_meter_event_name,
+    quantity,
+    dimensions,
+    period_start,
+    period_end,
+    invoice_id,
+    invoice_line_item_id,
+    sent_at,
+    attempt_count,
+    last_error,
+    created_at,
+    updated_at
 FROM purser.stripe_meter_events_outbox
 WHERE sent_at IS NULL
   AND attempt_count >= 5;

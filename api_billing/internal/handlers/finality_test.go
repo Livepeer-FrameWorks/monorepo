@@ -22,7 +22,10 @@ func TestGetFinalityHeadUsesFinalizedTag(t *testing.T) {
 		requestedTag, _ = request.Params[0].(string)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"jsonrpc": "2.0", "id": 1,
-			"result": map[string]any{"number": "0x2a", "hash": "0x" + strings.Repeat("a", 64)},
+			"result": map[string]any{
+				"number": "0x2a", "hash": "0x" + strings.Repeat("a", 64),
+				"transactions": []string{"0x" + strings.Repeat("b", 64)},
+			},
 		})
 	}))
 	defer server.Close()

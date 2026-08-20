@@ -1984,6 +1984,7 @@ const (
 	PrepaidService_InitializePrepaidBalance_FullMethodName  = "/purser.PrepaidService/InitializePrepaidBalance"
 	PrepaidService_InitializePrepaidAccount_FullMethodName  = "/purser.PrepaidService/InitializePrepaidAccount"
 	PrepaidService_InitializePostpaidAccount_FullMethodName = "/purser.PrepaidService/InitializePostpaidAccount"
+	PrepaidService_EnsureFreeAccount_FullMethodName         = "/purser.PrepaidService/EnsureFreeAccount"
 	PrepaidService_CreateCardTopup_FullMethodName           = "/purser.PrepaidService/CreateCardTopup"
 	PrepaidService_GetPendingTopup_FullMethodName           = "/purser.PrepaidService/GetPendingTopup"
 	PrepaidService_ListPendingTopups_FullMethodName         = "/purser.PrepaidService/ListPendingTopups"
@@ -2013,10 +2014,11 @@ type PrepaidServiceClient interface {
 	// Called by Commodore during wallet user provisioning (GetOrCreateWalletUser).
 	// Creates: 1) subscription with billing_model='prepaid', 2) prepaid balance at 0.
 	InitializePrepaidAccount(ctx context.Context, in *InitializePrepaidAccountRequest, opts ...grpc.CallOption) (*InitializePrepaidAccountResponse, error)
-	// Initialize postpaid account for email registration.
-	// Called by Commodore during Register to provision billing + cluster access.
-	// Resolves the default postpaid tier and subscribes to eligible clusters.
+	// Compatibility name for EnsureFreeAccount.
 	InitializePostpaidAccount(ctx context.Context, in *InitializePostpaidAccountRequest, opts ...grpc.CallOption) (*InitializePostpaidAccountResponse, error)
+	// Idempotently activate the catalog's default zero-priced postpaid Free tier
+	// after an email address has been verified.
+	EnsureFreeAccount(ctx context.Context, in *InitializePostpaidAccountRequest, opts ...grpc.CallOption) (*InitializePostpaidAccountResponse, error)
 	// ===== CARD TOP-UP =====
 	// Create a Stripe/Mollie checkout session for prepaid balance top-up
 	// Returns checkout URL for user to complete payment
@@ -2132,6 +2134,16 @@ func (c *prepaidServiceClient) InitializePostpaidAccount(ctx context.Context, in
 	return out, nil
 }
 
+func (c *prepaidServiceClient) EnsureFreeAccount(ctx context.Context, in *InitializePostpaidAccountRequest, opts ...grpc.CallOption) (*InitializePostpaidAccountResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InitializePostpaidAccountResponse)
+	err := c.cc.Invoke(ctx, PrepaidService_EnsureFreeAccount_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *prepaidServiceClient) CreateCardTopup(ctx context.Context, in *CreateCardTopupRequest, opts ...grpc.CallOption) (*CreateCardTopupResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateCardTopupResponse)
@@ -2222,10 +2234,11 @@ type PrepaidServiceServer interface {
 	// Called by Commodore during wallet user provisioning (GetOrCreateWalletUser).
 	// Creates: 1) subscription with billing_model='prepaid', 2) prepaid balance at 0.
 	InitializePrepaidAccount(context.Context, *InitializePrepaidAccountRequest) (*InitializePrepaidAccountResponse, error)
-	// Initialize postpaid account for email registration.
-	// Called by Commodore during Register to provision billing + cluster access.
-	// Resolves the default postpaid tier and subscribes to eligible clusters.
+	// Compatibility name for EnsureFreeAccount.
 	InitializePostpaidAccount(context.Context, *InitializePostpaidAccountRequest) (*InitializePostpaidAccountResponse, error)
+	// Idempotently activate the catalog's default zero-priced postpaid Free tier
+	// after an email address has been verified.
+	EnsureFreeAccount(context.Context, *InitializePostpaidAccountRequest) (*InitializePostpaidAccountResponse, error)
 	// ===== CARD TOP-UP =====
 	// Create a Stripe/Mollie checkout session for prepaid balance top-up
 	// Returns checkout URL for user to complete payment
@@ -2284,6 +2297,9 @@ func (UnimplementedPrepaidServiceServer) InitializePrepaidAccount(context.Contex
 }
 func (UnimplementedPrepaidServiceServer) InitializePostpaidAccount(context.Context, *InitializePostpaidAccountRequest) (*InitializePostpaidAccountResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method InitializePostpaidAccount not implemented")
+}
+func (UnimplementedPrepaidServiceServer) EnsureFreeAccount(context.Context, *InitializePostpaidAccountRequest) (*InitializePostpaidAccountResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method EnsureFreeAccount not implemented")
 }
 func (UnimplementedPrepaidServiceServer) CreateCardTopup(context.Context, *CreateCardTopupRequest) (*CreateCardTopupResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateCardTopup not implemented")
@@ -2471,6 +2487,24 @@ func _PrepaidService_InitializePostpaidAccount_Handler(srv interface{}, ctx cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PrepaidService_EnsureFreeAccount_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InitializePostpaidAccountRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).EnsureFreeAccount(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_EnsureFreeAccount_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).EnsureFreeAccount(ctx, req.(*InitializePostpaidAccountRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PrepaidService_CreateCardTopup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateCardTopupRequest)
 	if err := dec(in); err != nil {
@@ -2635,6 +2669,10 @@ var PrepaidService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "InitializePostpaidAccount",
 			Handler:    _PrepaidService_InitializePostpaidAccount_Handler,
+		},
+		{
+			MethodName: "EnsureFreeAccount",
+			Handler:    _PrepaidService_EnsureFreeAccount_Handler,
 		},
 		{
 			MethodName: "CreateCardTopup",
@@ -3498,11 +3536,13 @@ var X402Service_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	CryptoSweepService_GetCryptoReadiness_FullMethodName     = "/purser.CryptoSweepService/GetCryptoReadiness"
-	CryptoSweepService_RotateCryptoDepositKey_FullMethodName = "/purser.CryptoSweepService/RotateCryptoDepositKey"
-	CryptoSweepService_PlanCryptoSweep_FullMethodName        = "/purser.CryptoSweepService/PlanCryptoSweep"
-	CryptoSweepService_BroadcastCryptoSweep_FullMethodName   = "/purser.CryptoSweepService/BroadcastCryptoSweep"
-	CryptoSweepService_ReconcileCryptoSweep_FullMethodName   = "/purser.CryptoSweepService/ReconcileCryptoSweep"
+	CryptoSweepService_GetCryptoReadiness_FullMethodName        = "/purser.CryptoSweepService/GetCryptoReadiness"
+	CryptoSweepService_RotateCryptoDepositKey_FullMethodName    = "/purser.CryptoSweepService/RotateCryptoDepositKey"
+	CryptoSweepService_PlanCryptoSweep_FullMethodName           = "/purser.CryptoSweepService/PlanCryptoSweep"
+	CryptoSweepService_BroadcastCryptoSweep_FullMethodName      = "/purser.CryptoSweepService/BroadcastCryptoSweep"
+	CryptoSweepService_ReconcileCryptoSweep_FullMethodName      = "/purser.CryptoSweepService/ReconcileCryptoSweep"
+	CryptoSweepService_ReleaseCryptoSweep_FullMethodName        = "/purser.CryptoSweepService/ReleaseCryptoSweep"
+	CryptoSweepService_ResolveX402MutationResult_FullMethodName = "/purser.CryptoSweepService/ResolveX402MutationResult"
 )
 
 // CryptoSweepServiceClient is the client API for CryptoSweepService service.
@@ -3518,6 +3558,8 @@ type CryptoSweepServiceClient interface {
 	PlanCryptoSweep(ctx context.Context, in *PlanCryptoSweepRequest, opts ...grpc.CallOption) (*PlanCryptoSweepResponse, error)
 	BroadcastCryptoSweep(ctx context.Context, in *BroadcastCryptoSweepRequest, opts ...grpc.CallOption) (*BroadcastCryptoSweepResponse, error)
 	ReconcileCryptoSweep(ctx context.Context, in *ReconcileCryptoSweepRequest, opts ...grpc.CallOption) (*ReconcileCryptoSweepResponse, error)
+	ReleaseCryptoSweep(ctx context.Context, in *ReleaseCryptoSweepRequest, opts ...grpc.CallOption) (*ReleaseCryptoSweepResponse, error)
+	ResolveX402MutationResult(ctx context.Context, in *ResolveX402MutationResultRequest, opts ...grpc.CallOption) (*ResolveX402MutationResultResponse, error)
 }
 
 type cryptoSweepServiceClient struct {
@@ -3578,6 +3620,26 @@ func (c *cryptoSweepServiceClient) ReconcileCryptoSweep(ctx context.Context, in 
 	return out, nil
 }
 
+func (c *cryptoSweepServiceClient) ReleaseCryptoSweep(ctx context.Context, in *ReleaseCryptoSweepRequest, opts ...grpc.CallOption) (*ReleaseCryptoSweepResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReleaseCryptoSweepResponse)
+	err := c.cc.Invoke(ctx, CryptoSweepService_ReleaseCryptoSweep_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *cryptoSweepServiceClient) ResolveX402MutationResult(ctx context.Context, in *ResolveX402MutationResultRequest, opts ...grpc.CallOption) (*ResolveX402MutationResultResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolveX402MutationResultResponse)
+	err := c.cc.Invoke(ctx, CryptoSweepService_ResolveX402MutationResult_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CryptoSweepServiceServer is the server API for CryptoSweepService service.
 // All implementations must embed UnimplementedCryptoSweepServiceServer
 // for forward compatibility.
@@ -3591,6 +3653,8 @@ type CryptoSweepServiceServer interface {
 	PlanCryptoSweep(context.Context, *PlanCryptoSweepRequest) (*PlanCryptoSweepResponse, error)
 	BroadcastCryptoSweep(context.Context, *BroadcastCryptoSweepRequest) (*BroadcastCryptoSweepResponse, error)
 	ReconcileCryptoSweep(context.Context, *ReconcileCryptoSweepRequest) (*ReconcileCryptoSweepResponse, error)
+	ReleaseCryptoSweep(context.Context, *ReleaseCryptoSweepRequest) (*ReleaseCryptoSweepResponse, error)
+	ResolveX402MutationResult(context.Context, *ResolveX402MutationResultRequest) (*ResolveX402MutationResultResponse, error)
 	mustEmbedUnimplementedCryptoSweepServiceServer()
 }
 
@@ -3615,6 +3679,12 @@ func (UnimplementedCryptoSweepServiceServer) BroadcastCryptoSweep(context.Contex
 }
 func (UnimplementedCryptoSweepServiceServer) ReconcileCryptoSweep(context.Context, *ReconcileCryptoSweepRequest) (*ReconcileCryptoSweepResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReconcileCryptoSweep not implemented")
+}
+func (UnimplementedCryptoSweepServiceServer) ReleaseCryptoSweep(context.Context, *ReleaseCryptoSweepRequest) (*ReleaseCryptoSweepResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReleaseCryptoSweep not implemented")
+}
+func (UnimplementedCryptoSweepServiceServer) ResolveX402MutationResult(context.Context, *ResolveX402MutationResultRequest) (*ResolveX402MutationResultResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResolveX402MutationResult not implemented")
 }
 func (UnimplementedCryptoSweepServiceServer) mustEmbedUnimplementedCryptoSweepServiceServer() {}
 func (UnimplementedCryptoSweepServiceServer) testEmbeddedByValue()                            {}
@@ -3727,6 +3797,42 @@ func _CryptoSweepService_ReconcileCryptoSweep_Handler(srv interface{}, ctx conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CryptoSweepService_ReleaseCryptoSweep_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReleaseCryptoSweepRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CryptoSweepServiceServer).ReleaseCryptoSweep(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CryptoSweepService_ReleaseCryptoSweep_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CryptoSweepServiceServer).ReleaseCryptoSweep(ctx, req.(*ReleaseCryptoSweepRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CryptoSweepService_ResolveX402MutationResult_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolveX402MutationResultRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CryptoSweepServiceServer).ResolveX402MutationResult(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CryptoSweepService_ResolveX402MutationResult_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CryptoSweepServiceServer).ResolveX402MutationResult(ctx, req.(*ResolveX402MutationResultRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // CryptoSweepService_ServiceDesc is the grpc.ServiceDesc for CryptoSweepService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -3753,6 +3859,14 @@ var CryptoSweepService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReconcileCryptoSweep",
 			Handler:    _CryptoSweepService_ReconcileCryptoSweep_Handler,
+		},
+		{
+			MethodName: "ReleaseCryptoSweep",
+			Handler:    _CryptoSweepService_ReleaseCryptoSweep_Handler,
+		},
+		{
+			MethodName: "ResolveX402MutationResult",
+			Handler:    _CryptoSweepService_ResolveX402MutationResult_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

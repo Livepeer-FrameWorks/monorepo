@@ -49,6 +49,7 @@ type Interface interface {
 	InitializePrepaidBalance(ctx context.Context, tenantID string, currency string, initialBalanceCents, thresholdCents int64) (*purserpb.PrepaidBalance, error)
 	InitializePrepaidAccount(ctx context.Context, tenantID, currency string) (*purserpb.InitializePrepaidAccountResponse, error)
 	InitializePostpaidAccount(ctx context.Context, tenantID string) (*purserpb.InitializePostpaidAccountResponse, error)
+	EnsureFreeAccount(ctx context.Context, tenantID string) (*purserpb.InitializePostpaidAccountResponse, error)
 	TopupBalance(ctx context.Context, tenantID string, amountCents int64, currency, description string, referenceID, referenceType *string) (*purserpb.BalanceTransaction, error)
 	DeductBalance(ctx context.Context, tenantID string, amountCents int64, currency, description string, referenceID, referenceType *string) (*purserpb.BalanceTransaction, error)
 	AdjustBalance(ctx context.Context, tenantID string, amountCents int64, currency, description string, referenceID, referenceType *string) (*purserpb.BalanceTransaction, error)
@@ -79,6 +80,8 @@ type Interface interface {
 	PlanCryptoSweep(ctx context.Context, req *purserpb.PlanCryptoSweepRequest) (*purserpb.PlanCryptoSweepResponse, error)
 	BroadcastCryptoSweep(ctx context.Context, req *purserpb.BroadcastCryptoSweepRequest) (*purserpb.BroadcastCryptoSweepResponse, error)
 	ReconcileCryptoSweep(ctx context.Context, req *purserpb.ReconcileCryptoSweepRequest) (*purserpb.ReconcileCryptoSweepResponse, error)
+	ReleaseCryptoSweep(ctx context.Context, req *purserpb.ReleaseCryptoSweepRequest) (*purserpb.ReleaseCryptoSweepResponse, error)
+	ResolveX402MutationResult(ctx context.Context, req *purserpb.ResolveX402MutationResultRequest) (*purserpb.ResolveX402MutationResultResponse, error)
 }
 
 var _ Interface = (*GRPCClient)(nil)

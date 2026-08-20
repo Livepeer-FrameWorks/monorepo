@@ -328,8 +328,9 @@ func (s *QuartermasterServer) ValidateTenant(ctx context.Context, req *quarterma
 	}
 
 	// Get billing info via Purser gRPC (cross-service API call, not DB join)
-	var billingModel string
+	var billingModel, collectionProvider, tierName string
 	var isSuspended, isBalanceNegative, billingStatusUnavailable bool
+	var collectionReady bool
 
 	if s.purserClient != nil {
 		billingStatus, err := s.purserClient.GetTenantBillingStatus(ctx, tenantID)
@@ -343,6 +344,9 @@ func (s *QuartermasterServer) ValidateTenant(ctx context.Context, req *quarterma
 			billingModel = billingStatus.BillingModel
 			isSuspended = billingStatus.IsSuspended
 			isBalanceNegative = billingStatus.IsBalanceNegative
+			collectionReady = billingStatus.CollectionReady
+			collectionProvider = billingStatus.CollectionProvider
+			tierName = billingStatus.TierName
 		}
 	} else {
 		billingStatusUnavailable = true
@@ -359,6 +363,9 @@ func (s *QuartermasterServer) ValidateTenant(ctx context.Context, req *quarterma
 		IsSuspended:              isSuspended,
 		IsBalanceNegative:        isBalanceNegative,
 		BillingStatusUnavailable: billingStatusUnavailable,
+		CollectionReady:          collectionReady,
+		CollectionProvider:       collectionProvider,
+		TierName:                 tierName,
 	}, nil
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -202,10 +203,12 @@ type DepositAddressParams struct {
 type DepositQuote struct {
 	ExpectedAmountBaseUnits *big.Int         // Token base units the user must send (NOT NULL)
 	QuotedPriceUSD          decimal.Decimal  // USD per 1 whole token
-	QuotedUSDToEURRate      *decimal.Decimal // Populated when CreditedAmountCurrency == "EUR"
+	QuotedUSDToEURRate      *decimal.Decimal // Locked EUR-per-USD tax rate for every prepaid quote
 	QuotedAt                time.Time
 	QuoteSource             string // "chainlink" | "one_to_one"
 	CreditedAmountCurrency  string // "USD" | "EUR" — invoice/prepaid balance currency
+	TaxDocumentKind         string
+	TaxProfile              CryptoBillingProfile
 }
 
 // GenerateDepositAddress allocates an HD-derived deposit address and inserts
@@ -287,6 +290,8 @@ func (hw *HDWallet) GenerateDepositAddressTx(ctx context.Context, tx *sql.Tx, p 
 		quoteSource             any
 		creditedAmountCurrency  any
 		clientIPValue           any
+		taxDocumentKind         any
+		taxProfileSnapshot      any
 	)
 	if p.InvoiceID != nil {
 		invoiceIDValue = *p.InvoiceID
@@ -306,6 +311,12 @@ func (hw *HDWallet) GenerateDepositAddressTx(ctx context.Context, tx *sql.Tx, p 
 		quotedAt = p.Quote.QuotedAt
 		quoteSource = p.Quote.QuoteSource
 		creditedAmountCurrency = p.Quote.CreditedAmountCurrency
+		taxDocumentKind = p.Quote.TaxDocumentKind
+		profileJSON, marshalErr := json.Marshal(p.Quote.TaxProfile)
+		if marshalErr != nil {
+			return "", "", fmt.Errorf("marshal crypto tax profile: %w", marshalErr)
+		}
+		taxProfileSnapshot = profileJSON
 	}
 
 	_, err = tx.ExecContext(ctx, `
@@ -313,13 +324,15 @@ func (hw *HDWallet) GenerateDepositAddressTx(ctx context.Context, tx *sql.Tx, p 
 			id, tenant_id, purpose, invoice_id, expected_amount_cents,
 			asset, network, wallet_address, derivation_index, derivation_xpub, expires_at,
 			expected_amount_base_units, quoted_price_usd, quoted_usd_to_eur_rate,
-			quoted_at, quote_source, credited_amount_currency, client_ip
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+			quoted_at, quote_source, credited_amount_currency, client_ip,
+			tax_document_kind, tax_profile_snapshot
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20::jsonb)
 	`,
 		walletID, p.TenantID, p.Purpose, invoiceIDValue, expectedAmountValue,
 		p.Asset, p.Network, address, derivationIndex, xpub, p.ExpiresAt,
 		expectedAmountBaseUnits, quotedPriceUSD, quotedUSDToEURRate,
 		quotedAt, quoteSource, creditedAmountCurrency, clientIPValue,
+		taxDocumentKind, taxProfileSnapshot,
 	)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to insert crypto wallet: %w", err)

@@ -157,6 +157,9 @@ func TestReconcilePendingSettlementCreditsMissingLedgerBeforeConfirm(t *testing.
 	mock.ExpectExec("UPDATE purser.x402_nonces").
 		WithArgs("nonce-3", int64(16), int64(21000)).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("UPDATE purser.x402_settlement_attempts").
+		WithArgs("nonce-3", "0xcredit").
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("UPDATE purser.x402_payment_quotes").
 		WithArgs("nonce-3", "0xcredit").
 		WillReturnResult(sqlmock.NewResult(0, 0))

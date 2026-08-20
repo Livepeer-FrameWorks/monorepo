@@ -209,7 +209,7 @@ func TestIdempotentPendingSettlementDoesNotCreditBeforeConfirmation(t *testing.T
 	if err != nil {
 		t.Fatalf("buildIdempotentSettleResult returned error: %v", err)
 	}
-	if result == nil || result.Success || result.Error != "settlement pending confirmation; retry safely" {
+	if result == nil || result.Success || result.ErrorCode != "SETTLEMENT_PENDING" || result.TxHash != "0xabc" {
 		t.Fatalf("expected safe pending result, got %#v", result)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

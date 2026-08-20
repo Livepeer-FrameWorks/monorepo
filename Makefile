@@ -1,6 +1,6 @@
 .PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-periscope-metering build-bin-signalman build-bin-bridge build-bin-navigator build-bin-privateer build-bin-deckhand build-bin-steward build-bin-skipper build-bin-chandler build-bin-cli \
 		build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-periscope-metering build-image-signalman build-image-bridge build-image-logbook build-image-navigator build-image-deckhand build-image-steward build-image-skipper build-image-chandler \
-		proto proto-check graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test test-cli test-dashboards test-commodore test-quartermaster test-purser test-decklog test-foghorn test-helmsman test-periscope-ingest test-periscope-query test-signalman test-bridge test-navigator test-privateer test-deckhand test-steward test-skipper test-chandler coverage env frontend-env tidy update outdated fmt format \
+		proto proto-check graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test test-cli test-pkg test-topology test-crypto-evm test-dashboards test-commodore test-quartermaster test-purser test-decklog test-foghorn test-helmsman test-periscope-ingest test-periscope-query test-signalman test-bridge test-navigator test-privateer test-deckhand test-steward test-skipper test-chandler coverage env frontend-env tidy update outdated fmt format \
 		lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
 		validate-migrations verify-release-state test-release-state verify-schema verify-schema-migrations verify-schema-postgres verify-schema-clickhouse verify-feature-registry seed-demo release-plan test-release-plan \
 		dead-code-install dead-code-go dead-code-ts dead-code-report dead-code \
@@ -61,6 +61,7 @@ SERVICE_DIR_steward = api_forms
 SERVICE_DIR_skipper = api_consultant
 SERVICE_DIR_chandler = api_assets
 SERVICE_DIR_cli = cli
+SERVICE_DIR_pkg = pkg
 
 define run-go-tests
 	@echo "Running unit tests for $(1)..."
@@ -327,6 +328,17 @@ test:
 test-cli:
 	$(call run-go-tests,cli,$(SERVICE_DIR_cli))
 
+test-pkg:
+	$(call run-go-tests,pkg,$(SERVICE_DIR_pkg))
+
+test-topology:
+	@echo "Running infrastructure topology contract tests..."
+	@(cd $(SERVICE_DIR_pkg) && go test $(GO_TAG_FLAGS) ./topology -race -count=1)
+
+test-accesspolicy:
+	@echo "Running access-policy contract tests..."
+	@(cd $(SERVICE_DIR_pkg) && go test $(GO_TAG_FLAGS) ./accesspolicy -race -count=1)
+
 test-dashboards:
 	@echo "Running dashboard divergence checks..."
 	@cd cli && go test $(GO_TAG_FLAGS) ./pkg/dashcheck -count=1
@@ -339,6 +351,11 @@ test-quartermaster:
 
 test-purser:
 	$(call run-go-tests,purser,$(SERVICE_DIR_purser))
+
+test-crypto-evm:
+	@command -v anvil >/dev/null 2>&1 || { echo "ERROR: test-crypto-evm requires Foundry anvil"; exit 1; }
+	@echo "Running deterministic local-EVM x402 and sweep fault tests..."
+	@cd api_billing && go test -tags 'nomsgpack crypto_evm' -run 'TestEmbeddedFacilitatorAgainstLocalEVMFaults|TestNativeSweepAgainstLocalEVMNonceAndFinality' -count=1 -timeout 120s ./internal/handlers/ ./internal/grpc/
 
 test-decklog:
 	$(call run-go-tests,decklog,$(SERVICE_DIR_decklog))
@@ -594,7 +611,7 @@ validate-migrations: verify-release-state
 # gate for concurrency/constraint properties sqlmock can't prove. Needs a running Docker daemon; gated
 # behind the schema_verify build tag so a plain `make test` never needs Docker.
 SCHEMA_VERIFY_FROM_TAG ?= $(shell git tag --merged HEAD --sort=-v:refname | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$$/ { print; exit }')
-SCHEMA_VERIFY_TESTS := TestPostgresBaselineEqualsReplay|TestPostgresTaggedBaselineUpgradeEqualsCurrent|TestClickHouseBaselineEqualsReplay|TestClickHouseTaggedBaselineUpgradeEqualsCurrent|TestArtifactEventsDedupedPreservesLegacyRows|TestArtifactPlaybackIndexUpgradeFromReleasedLower|TestCreationCommandAckLeaseClaim|TestCreationCommandAckLeaseTokenFencesStaleSettlement|TestCreationCommandCASMutualExclusion
+SCHEMA_VERIFY_TESTS := TestComposeUsesSchemaHarnessImages|TestPostgresIntrospectionCoversDeployRelevantObjects|TestPostgresBaselineEqualsReplay|TestPostgresTaggedBaselineUpgradeEqualsCurrent|TestClickHouseBaselineEqualsReplay|TestClickHouseTaggedBaselineUpgradeEqualsCurrent|TestArtifactEventsDedupedPreservesLegacyRows|TestArtifactPlaybackIndexUpgradeFromReleasedLower|TestCreationCommandAckLeaseClaim|TestCreationCommandAckLeaseTokenFencesStaleSettlement|TestCreationCommandCASMutualExclusion
 
 verify-schema:
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-schema requires a running Docker daemon (real-engine tests must run, not skip)"; exit 1; }
@@ -616,20 +633,22 @@ verify-schema:
 verify-schema-migrations:
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-schema-migrations requires a running Docker daemon"; exit 1; }
 	@echo "Verifying PostgreSQL tagged upgrades and current baseline replay on PostgreSQL/ClickHouse (Docker)..."
-	@cd cli && FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' go test -tags schema_verify -run 'TestPostgresBaselineEqualsReplay|TestPostgresTaggedBaselineUpgradeEqualsCurrent|TestPostgresDemoSeedAppliesToCurrentBaseline|TestClickHouseBaselineEqualsReplay|TestClickHouseTaggedBaselineUpgradeEqualsCurrent|TestClickHouseDemoSeedAndMeteringQueries' -count=1 -timeout 1200s ./pkg/provisioner/
-	@cd api_billing && go test -tags schema_verify -run 'TestProcessUsageSummaryAbsentDimensions_RealPG' -count=1 -timeout 600s ./internal/handlers/
+	@cd cli && FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' go test -tags schema_verify -run 'TestComposeUsesSchemaHarnessImages|TestPostgresIntrospectionCoversDeployRelevantObjects|TestPostgresBaselineEqualsReplay|TestPostgresTaggedBaselineUpgradeEqualsCurrent|TestPostgresDemoSeedAppliesToCurrentBaseline|TestClickHouseBaselineEqualsReplay|TestClickHouseTaggedBaselineUpgradeEqualsCurrent|TestClickHouseDemoSeedAndMeteringQueries' -count=1 -timeout 1200s ./pkg/provisioner/
+	@cd api_billing && go test -tags schema_verify -run 'TestProcessUsageSummaryAbsentDimensions_RealPG|TestCryptoTaxDocuments_RealPG|TestEmbeddedFacilitatorSerializesRelayerNoncesAcrossReplicas_RealPG' -count=1 -timeout 600s ./internal/handlers/
+	@cd api_billing && go test -tags schema_verify -run 'TestBillingTransitionsSerializeAndPreserveCredit_RealPG' -count=1 -timeout 600s ./internal/grpc/
 
 # Granular subsets of the suite above, for iterating on one engine without the full run.
 verify-schema-postgres:
 	@echo "Verifying Postgres current baseline and tagged-release upgrade convergence (Docker)..."
-	@cd cli && FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' go test -tags schema_verify -run 'TestPostgresBaselineEqualsReplay|TestPostgresTaggedBaselineUpgradeEqualsCurrent|TestPostgresDemoSeedAppliesToCurrentBaseline' -count=1 -timeout 600s ./pkg/provisioner/
-	@cd api_billing && go test -tags schema_verify -run 'TestProcessUsageSummaryAbsentDimensions_RealPG' -count=1 -timeout 600s ./internal/handlers/
+	@cd cli && FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' go test -tags schema_verify -run 'TestComposeUsesSchemaHarnessImages|TestPostgresIntrospectionCoversDeployRelevantObjects|TestPostgresBaselineEqualsReplay|TestPostgresTaggedBaselineUpgradeEqualsCurrent|TestPostgresDemoSeedAppliesToCurrentBaseline' -count=1 -timeout 600s ./pkg/provisioner/
+	@cd api_billing && go test -tags schema_verify -run 'TestProcessUsageSummaryAbsentDimensions_RealPG|TestCryptoTaxDocuments_RealPG|TestEmbeddedFacilitatorSerializesRelayerNoncesAcrossReplicas_RealPG' -count=1 -timeout 600s ./internal/handlers/
+	@cd api_billing && go test -tags schema_verify -run 'TestBillingTransitionsSerializeAndPreserveCredit_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@echo "Verifying the real PostgreSQL admission-ledger proof drives exact Redis membership cleanup..."
 	@cd api_balancing && go test -tags schema_verify -run 'TestMembershipTombstoneCleanup_PostgresProofToRedisPurge_RealPG' -count=1 -timeout 600s ./internal/federation/
 
 verify-schema-clickhouse:
 	@echo "Verifying Replicated ClickHouse baseline == baseline + post-floor migrations (Docker)..."
-	@cd cli && FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' go test -tags schema_verify -run 'TestClickHouseBaselineEqualsReplay|TestClickHouseTaggedBaselineUpgradeEqualsCurrent|TestClickHouseDemoSeedAndMeteringQueries' -count=1 -timeout 600s ./pkg/provisioner/
+	@cd cli && FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' go test -tags schema_verify -run 'TestComposeUsesSchemaHarnessImages|TestClickHouseBaselineEqualsReplay|TestClickHouseTaggedBaselineUpgradeEqualsCurrent|TestClickHouseDemoSeedAndMeteringQueries' -count=1 -timeout 600s ./pkg/provisioner/
 
 verify-feature-registry:
 	@echo "Validating docs/platform-features.yaml and checking generated renderers..."

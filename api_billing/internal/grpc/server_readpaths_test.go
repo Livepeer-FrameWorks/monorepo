@@ -216,7 +216,7 @@ func TestListInvoicesMapsRowsAndLineItems(t *testing.T) {
 		WithArgs("inv-1", "tenant-1").
 		WillReturnRows(lineRows)
 
-	resp, err := s.ListInvoices(context.Background(), &purserpb.ListInvoicesRequest{TenantId: "tenant-1"})
+	resp, err := s.ListInvoices(serviceTestContext(), &purserpb.ListInvoicesRequest{TenantId: "tenant-1"})
 	if err != nil {
 		t.Fatalf("ListInvoices: %v", err)
 	}

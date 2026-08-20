@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS purser.crypto_sweep_batches (
     snapshot_block_hash VARCHAR(66) NOT NULL,
     manifest_checksum VARCHAR(64) NOT NULL UNIQUE,
     status VARCHAR(24) NOT NULL DEFAULT 'planned' CHECK (
-        status IN ('planned', 'signed', 'broadcast', 'partially_confirmed', 'confirmed', 'failed', 'expired')
+	    status IN ('planned', 'signed', 'broadcast', 'partially_confirmed', 'confirmed', 'failed', 'expired', 'quarantined')
     ),
     expires_at TIMESTAMPTZ NOT NULL,
     created_by UUID,
@@ -102,13 +102,15 @@ CREATE TABLE IF NOT EXISTS purser.crypto_sweep_items (
     source_nonce BIGINT,
     max_fee_per_gas NUMERIC(78, 0),
     max_priority_fee_per_gas NUMERIC(78, 0),
-    gas_limit BIGINT,
-    authorization_nonce VARCHAR(66),
-    signed_payload TEXT,
+	gas_limit BIGINT,
+	authorization_nonce VARCHAR(66),
+	authorization_after BIGINT,
+	authorization_before BIGINT,
+	signed_payload TEXT,
     relay_transaction TEXT,
     tx_hash VARCHAR(66),
     status VARCHAR(24) NOT NULL DEFAULT 'planned' CHECK (
-        status IN ('planned', 'signed', 'broadcast', 'confirmed', 'failed', 'expired')
+	    status IN ('planned', 'signed', 'broadcast', 'confirmed', 'failed', 'expired', 'quarantined')
     ),
     failure_reason TEXT,
     broadcast_at TIMESTAMPTZ,
@@ -123,12 +125,27 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_crypto_sweep_items_tx
     WHERE tx_hash IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS purser.crypto_sweep_sources (
-    item_id UUID NOT NULL REFERENCES purser.crypto_sweep_items(id),
-    source_type VARCHAR(20) NOT NULL CHECK (source_type IN ('direct_wallet', 'x402_quote')),
-    source_id UUID NOT NULL,
-    amount_base_units NUMERIC(78, 0) NOT NULL CHECK (amount_base_units > 0),
-    PRIMARY KEY(source_type, source_id)
+	id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+	item_id UUID NOT NULL REFERENCES purser.crypto_sweep_items(id),
+	source_type VARCHAR(20) NOT NULL CHECK (source_type IN ('direct_wallet', 'x402_quote')),
+	source_id UUID NOT NULL,
+	amount_base_units NUMERIC(78, 0) NOT NULL CHECK (amount_base_units > 0),
+	claim_status VARCHAR(20) NOT NULL DEFAULT 'claimed' CHECK (
+	    claim_status IN ('claimed', 'released', 'consumed', 'quarantined')
+	),
+	claimed_by UUID,
+	claim_reason TEXT NOT NULL DEFAULT 'sweep plan',
+	claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	released_by UUID,
+	release_reason TEXT,
+	released_at TIMESTAMPTZ,
+	consumed_at TIMESTAMPTZ,
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_crypto_sweep_sources_active
+	ON purser.crypto_sweep_sources(source_type, source_id)
+	WHERE claim_status IN ('claimed', 'consumed', 'quarantined');
 
 CREATE TABLE IF NOT EXISTS purser.crypto_sweep_events (
     id BIGSERIAL PRIMARY KEY,

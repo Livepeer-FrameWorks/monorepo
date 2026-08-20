@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 )
 
 const cryptoScanBatchBlocks = int64(100)
+const cryptoScanTopicBatchSize = 100
 
 type rpcBlock struct {
 	Number       string           `json:"number"`
@@ -233,13 +235,18 @@ func (cm *CryptoMonitor) scanUSDCLogs(ctx context.Context, network NetworkConfig
 	for address := range addresses {
 		destinationTopics = append(destinationTopics, "0x"+strings.Repeat("0", 24)+strings.TrimPrefix(address, "0x"))
 	}
+	sort.Strings(destinationTopics)
 	var logs []rpcLog
-	err := cm.rpc.Call(ctx, network, "eth_getLogs", []any{map[string]any{
-		"fromBlock": fmt.Sprintf("0x%x", from), "toBlock": fmt.Sprintf("0x%x", to),
-		"address": network.USDCContract, "topics": []any{transferTopic, nil, destinationTopics},
-	}}, &logs)
-	if err != nil {
-		return nil, err
+	for start := 0; start < len(destinationTopics); start += cryptoScanTopicBatchSize {
+		end := start + cryptoScanTopicBatchSize
+		if end > len(destinationTopics) {
+			end = len(destinationTopics)
+		}
+		shardLogs, err := cm.scanUSDCLogShard(ctx, network, from, to, transferTopic, destinationTopics[start:end])
+		if err != nil {
+			return nil, err
+		}
+		logs = append(logs, shardLogs...)
 	}
 	events := make([]observedDeposit, 0, len(logs))
 	for _, log := range logs {
@@ -261,6 +268,30 @@ func (cm *CryptoMonitor) scanUSDCLogs(ctx context.Context, network NetworkConfig
 		})
 	}
 	return events, nil
+}
+
+func (cm *CryptoMonitor) scanUSDCLogShard(ctx context.Context, network NetworkConfig, from, to int64, transferTopic string, destinationTopics []string) ([]rpcLog, error) {
+	var logs []rpcLog
+	err := cm.rpc.Call(ctx, network, "eth_getLogs", []any{map[string]any{
+		"fromBlock": fmt.Sprintf("0x%x", from), "toBlock": fmt.Sprintf("0x%x", to),
+		"address": network.USDCContract, "topics": []any{transferTopic, nil, destinationTopics},
+	}}, &logs)
+	if err == nil {
+		return logs, nil
+	}
+	if len(destinationTopics) <= 1 {
+		return nil, err
+	}
+	middle := len(destinationTopics) / 2
+	left, leftErr := cm.scanUSDCLogShard(ctx, network, from, to, transferTopic, destinationTopics[:middle])
+	if leftErr != nil {
+		return nil, leftErr
+	}
+	right, rightErr := cm.scanUSDCLogShard(ctx, network, from, to, transferTopic, destinationTopics[middle:])
+	if rightErr != nil {
+		return nil, rightErr
+	}
+	return append(left, right...), nil
 }
 
 func (cm *CryptoMonitor) commitScanBatch(ctx context.Context, network string, from, to, safeHead int64, lastHash string, events []observedDeposit) error {

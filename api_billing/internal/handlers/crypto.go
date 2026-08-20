@@ -658,11 +658,20 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 	if wallet.Purpose == "prepaid" && cm.taxInvoices != nil {
 		amountEurCents, conversionErr := cryptoTopupAmountEurCents(wallet, creditedCents, creditedCurrency)
 		if conversionErr != nil {
+			recordCryptoAccountingAnomaly(ctx, cm.db, cm.logger, wallet.TenantID,
+				"tax_document_missing", wallet.Network, "crypto_payment", tx.Hash,
+				creditedCents, conversionErr.Error(), map[string]any{"wallet_id": wallet.ID})
 			cm.logger.WithError(conversionErr).WithField("wallet_id", wallet.ID).Error("Failed to determine direct crypto top-up invoice amount")
 		} else if _, invoiceErr := cm.taxInvoices.generateCryptoTopupInvoice(
 			ctx, wallet.TenantID, amountEurCents, "crypto_payment", tx.Hash, wallet.ClientIP, wallet.Network,
 		); invoiceErr != nil {
-			cm.logger.WithError(invoiceErr).WithField("wallet_id", wallet.ID).Error("Failed to ensure direct crypto top-up invoice")
+			recordCryptoAccountingAnomaly(ctx, cm.db, cm.logger, wallet.TenantID,
+				"tax_document_missing", wallet.Network, "crypto_payment", tx.Hash,
+				amountEurCents, invoiceErr.Error(), map[string]any{"wallet_id": wallet.ID})
+			cm.logger.WithError(invoiceErr).WithField("wallet_id", wallet.ID).Error("Failed to ensure direct crypto top-up tax document")
+		} else {
+			resolveCryptoAccountingAnomaly(ctx, cm.db, cm.logger,
+				"tax_document_missing", "crypto_payment", tx.Hash, "tax document created")
 		}
 	}
 
@@ -749,11 +758,17 @@ func (cm *CryptoMonitor) reconcileCompletedCryptoTopupInvoices(ctx context.Conte
 		        AND invoice.reference_type = 'crypto_payment'
 		        AND invoice.reference_id = wallet.tx_hash
 		  )
+		  AND NOT EXISTS (
+		      SELECT 1 FROM purser.crypto_invoices invoice
+		      WHERE invoice.tenant_id = wallet.tenant_id
+		        AND invoice.reference_type = 'crypto_payment'
+		        AND invoice.reference_id = wallet.tx_hash
+		  )
 		ORDER BY wallet.completed_at
 		LIMIT 100
 	`)
 	if err != nil {
-		cm.logger.WithError(err).Warn("Failed to load direct crypto top-ups missing invoices")
+		cm.logger.WithError(err).Warn("Failed to load direct crypto top-ups missing tax documents")
 		return
 	}
 	defer rows.Close()
@@ -776,11 +791,20 @@ func (cm *CryptoMonitor) reconcileCompletedCryptoTopupInvoices(ctx context.Conte
 		}
 		amountEurCents, conversionErr := cryptoTopupAmountEurCents(wallet, creditedCents, currency)
 		if conversionErr != nil {
+			recordCryptoAccountingAnomaly(ctx, cm.db, cm.logger, tenantID,
+				"tax_document_missing", network, "crypto_payment", txHash,
+				creditedCents, conversionErr.Error(), map[string]any{})
 			cm.logger.WithError(conversionErr).WithField("tx_hash", txHash).Warn("Failed to convert direct crypto top-up invoice amount")
 			continue
 		}
 		if _, invoiceErr := cm.taxInvoices.generateCryptoTopupInvoice(ctx, tenantID, amountEurCents, "crypto_payment", txHash, clientIP, network); invoiceErr != nil {
-			cm.logger.WithError(invoiceErr).WithField("tx_hash", txHash).Warn("Failed to reconcile direct crypto top-up invoice")
+			recordCryptoAccountingAnomaly(ctx, cm.db, cm.logger, tenantID,
+				"tax_document_missing", network, "crypto_payment", txHash,
+				amountEurCents, invoiceErr.Error(), map[string]any{})
+			cm.logger.WithError(invoiceErr).WithField("tx_hash", txHash).Warn("Failed to reconcile direct crypto top-up tax document")
+		} else {
+			resolveCryptoAccountingAnomaly(ctx, cm.db, cm.logger,
+				"tax_document_missing", "crypto_payment", txHash, "tax document created")
 		}
 	}
 }

@@ -35,20 +35,22 @@ type billingDocumentRow struct {
 }
 
 type billingDocumentHTMLData struct {
-	Title           string
-	Number          string
-	SupplierName    string
-	SupplierAddress string
-	SupplierVAT     string
-	Customer        string
-	CustomerAddress string
-	CustomerVAT     string
-	IssuedAt        string
-	RetentionUntil  string
-	Status          string
-	Currency        string
-	Amount          string
-	Fields          []billingDocumentHTMLField
+	Title                string
+	Number               string
+	SupplierName         string
+	SupplierAddress      string
+	SupplierVAT          string
+	SupplierRegistration string
+	Customer             string
+	CustomerCompany      string
+	CustomerAddress      string
+	CustomerVAT          string
+	IssuedAt             string
+	RetentionUntil       string
+	Status               string
+	Currency             string
+	Amount               string
+	Fields               []billingDocumentHTMLField
 }
 
 type billingDocumentHTMLField struct {
@@ -61,7 +63,7 @@ var billingDocumentTemplate = template.Must(template.New("billing-document").Par
 <title>{{.Title}} {{.Number}}</title>
 <style>body{font:15px system-ui,sans-serif;color:#18202a;max-width:820px;margin:48px auto;padding:0 24px}header{display:flex;justify-content:space-between;gap:32px;border-bottom:2px solid #18202a;padding-bottom:20px}h1{margin:0}.money{font-size:28px;font-weight:700}.parties{display:grid;grid-template-columns:1fr 1fr;gap:32px;margin:28px 0}dl{display:grid;grid-template-columns:180px 1fr;gap:8px 16px}dt{font-weight:600}dd{margin:0;overflow-wrap:anywhere}footer{margin-top:40px;padding-top:16px;border-top:1px solid #ccd3da;color:#53606d;font-size:12px}@media print{body{margin:0}}</style>
 </head><body><header><div><h1>{{.Title}}</h1><div>{{.Number}}</div></div><div><div class="money">{{.Currency}} {{.Amount}}</div><div>{{.Status}}</div></div></header>
-<section class="parties"><div><h2>Supplier</h2><div>{{.SupplierName}}</div><div>{{.SupplierAddress}}</div><div>{{.SupplierVAT}}</div></div><div><h2>Customer</h2><div>{{.Customer}}</div><div>{{.CustomerAddress}}</div><div>{{.CustomerVAT}}</div></div></section>
+<section class="parties"><div><h2>Supplier</h2><div>{{.SupplierName}}</div><div>{{.SupplierAddress}}</div><div>VAT: {{.SupplierVAT}}</div><div>Registration: {{.SupplierRegistration}}</div></div><div><h2>Customer</h2><div>{{.Customer}}</div><div>{{.CustomerCompany}}</div><div>{{.CustomerAddress}}</div><div>{{if .CustomerVAT}}VAT: {{.CustomerVAT}}{{end}}</div></div></section>
 <dl><dt>Issued</dt><dd>{{.IssuedAt}}</dd>{{range .Fields}}<dt>{{.Label}}</dt><dd>{{.Value}}</dd>{{end}}</dl>
 <footer>Retained until at least {{.RetentionUntil}}. Document number and settlement references are immutable audit identifiers.</footer>
 </body></html>`))
@@ -110,6 +112,11 @@ func (s *PurserServer) ListBillingDocuments(ctx context.Context, req *purserpb.L
 			SELECT id, 'simplified_invoice', invoice_number, gross_amount_cents, currency,
 			       tax_validation_status, issued_at, retention_until
 			FROM purser.simplified_invoices
+			WHERE tenant_id = $1 AND tax_validation_status <> 'location_review'
+			UNION ALL
+			SELECT id, 'crypto_invoice', invoice_number, gross_amount_cents, currency,
+			       tax_validation_status, issued_at, retention_until
+			FROM purser.crypto_invoices
 			WHERE tenant_id = $1 AND tax_validation_status <> 'location_review'
 			UNION ALL
 			SELECT payment.id, 'payment_receipt', 'PAY-' || UPPER(LEFT(REPLACE(payment.id::text, '-', ''), 12)),
@@ -173,12 +180,12 @@ func renderBillingDocument(row billingDocumentRow, data billingDocumentHTMLData)
 	}, nil
 }
 
-func supplierDocumentFields() (string, string, string) {
-	return config.GetEnv("SUPPLIER_NAME", ""), config.GetEnv("SUPPLIER_ADDRESS", ""), config.GetEnv("SUPPLIER_VAT_NUMBER", "")
+func supplierDocumentFields() (string, string, string, string) {
+	return config.GetEnv("SUPPLIER_NAME", ""), config.GetEnv("SUPPLIER_ADDRESS", ""), config.GetEnv("SUPPLIER_VAT_NUMBER", ""), config.GetEnv("SUPPLIER_REGISTRATION_NUMBER", "")
 }
 
-func scanCustomer(company, address, vat *sql.NullString) (string, string, string) {
-	return company.String, address.String, vat.String
+func scanCustomer(name, company, address, vat *sql.NullString) (string, string, string, string) {
+	return name.String, company.String, address.String, vat.String
 }
 
 // GetBillingDocument renders one tenant-owned document as a self-contained,
@@ -193,11 +200,11 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 		return nil, status.Error(codes.InvalidArgument, "valid document_id required")
 	}
 	kind := strings.TrimSpace(req.GetKind())
-	supplierName, supplierAddress, supplierVAT := supplierDocumentFields()
-	base := billingDocumentHTMLData{SupplierName: supplierName, SupplierAddress: supplierAddress, SupplierVAT: supplierVAT}
+	supplierName, supplierAddress, supplierVAT, supplierRegistration := supplierDocumentFields()
+	base := billingDocumentHTMLData{SupplierName: supplierName, SupplierAddress: supplierAddress, SupplierVAT: supplierVAT, SupplierRegistration: supplierRegistration}
 	var row billingDocumentRow
 	row.id, row.kind = documentID, kind
-	var company, address, vat sql.NullString
+	var name, company, address, vat sql.NullString
 	switch kind {
 	case "invoice":
 		var periodStart, periodEnd, dueAt sql.NullTime
@@ -205,12 +212,12 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 			SELECT invoice_number, ROUND(amount * 100)::bigint, currency, status,
 			       COALESCE(invoice.created_at, NOW()), invoice.retention_until,
 			       invoice.period_start, invoice.period_end, invoice.due_date,
-			       subscription.billing_company, subscription.billing_address::text, subscription.tax_id
+			       subscription.billing_name, subscription.billing_company, subscription.billing_address::text, subscription.tax_id
 			FROM purser.billing_invoices invoice
 			LEFT JOIN purser.tenant_subscriptions subscription ON subscription.tenant_id = invoice.tenant_id
 			WHERE invoice.id = $1 AND invoice.tenant_id = $2 AND invoice.status <> 'draft'
 		`, documentID, tenantID).Scan(&row.number, &row.amountCents, &row.currency, &row.status,
-			&row.issuedAt, &row.retentionUntil, &periodStart, &periodEnd, &dueAt, &company, &address, &vat)
+			&row.issuedAt, &row.retentionUntil, &periodStart, &periodEnd, &dueAt, &name, &company, &address, &vat)
 		base.Title = "Invoice"
 		if periodStart.Valid {
 			base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "Period start", Value: periodStart.Time.UTC().Format(time.RFC3339)})
@@ -224,23 +231,65 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 	case "simplified_invoice":
 		var netCents, vatCents int64
 		var vatRate int
-		var referenceType, referenceID, taxStatus string
+		var referenceType, referenceID, taxStatus, serviceDescription string
+		var serviceQuantity int
+		var serviceDate time.Time
 		err = s.db.QueryRowContext(ctx, `
 			SELECT invoice_number, gross_amount_cents, currency, tax_validation_status, issued_at, retention_until,
 			       net_amount_cents, vat_amount_cents, vat_rate_bps, reference_type, reference_id,
-			       supplier_name, supplier_address, supplier_vat_number,
-			       subscription.billing_company, subscription.billing_address::text, subscription.tax_id
+			       supplier_name, supplier_address, supplier_vat_number, COALESCE(supplier_registration_number, ''),
+			       COALESCE(service_description, 'FrameWorks prepaid usage credit'),
+			       COALESCE(service_quantity, 1), COALESCE(service_date, issued_at::date),
+			       subscription.billing_name, subscription.billing_company, subscription.billing_address::text, subscription.tax_id
 			FROM purser.simplified_invoices invoice
 			LEFT JOIN purser.tenant_subscriptions subscription ON subscription.tenant_id = invoice.tenant_id
 			WHERE invoice.id = $1 AND invoice.tenant_id = $2 AND tax_validation_status <> 'location_review'
 		`, documentID, tenantID).Scan(&row.number, &row.amountCents, &row.currency, &taxStatus, &row.issuedAt, &row.retentionUntil,
 			&netCents, &vatCents, &vatRate, &referenceType, &referenceID,
-			&base.SupplierName, &base.SupplierAddress, &base.SupplierVAT, &company, &address, &vat)
+			&base.SupplierName, &base.SupplierAddress, &base.SupplierVAT, &base.SupplierRegistration,
+			&serviceDescription, &serviceQuantity, &serviceDate, &name, &company, &address, &vat)
 		row.status = taxStatus
 		base.Title = "Simplified invoice"
 		base.Fields = append(base.Fields,
 			billingDocumentHTMLField{Label: "Net", Value: row.currency + " " + moneyString(netCents)},
 			billingDocumentHTMLField{Label: "VAT", Value: fmt.Sprintf("%s %s (%0.2f%%)", row.currency, moneyString(vatCents), float64(vatRate)/100)},
+			billingDocumentHTMLField{Label: "Service", Value: serviceDescription},
+			billingDocumentHTMLField{Label: "Quantity", Value: fmt.Sprintf("%d", serviceQuantity)},
+			billingDocumentHTMLField{Label: "Supply date", Value: serviceDate.Format("2006-01-02")},
+			billingDocumentHTMLField{Label: "Settlement reference", Value: referenceType + ":" + referenceID},
+		)
+		if taxStatus == "reverse_charge" {
+			base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "VAT treatment", Value: "Reverse charge — btw verlegd"})
+		}
+	case "crypto_invoice":
+		var netCents, vatCents int64
+		var vatRate int
+		var referenceType, referenceID, taxStatus, serviceDescription string
+		var serviceQuantity int
+		var serviceDate time.Time
+		var customerEmail string
+		err = s.db.QueryRowContext(ctx, `
+			SELECT invoice_number, gross_amount_cents, currency, tax_validation_status, issued_at, retention_until,
+			       net_amount_cents, vat_amount_cents, vat_rate_bps, reference_type, reference_id,
+			       supplier_name, supplier_address, supplier_vat_number, supplier_registration_number,
+			       service_description, service_quantity, service_date,
+			       customer_email, customer_name, customer_company, customer_address::text, customer_vat_number
+			FROM purser.crypto_invoices
+			WHERE id = $1 AND tenant_id = $2 AND tax_validation_status <> 'location_review'
+		`, documentID, tenantID).Scan(&row.number, &row.amountCents, &row.currency, &taxStatus, &row.issuedAt, &row.retentionUntil,
+			&netCents, &vatCents, &vatRate, &referenceType, &referenceID,
+			&base.SupplierName, &base.SupplierAddress, &base.SupplierVAT, &base.SupplierRegistration,
+			&serviceDescription, &serviceQuantity, &serviceDate,
+			&customerEmail, &name, &company, &address, &vat)
+		row.status = taxStatus
+		base.Title = "Invoice"
+		base.Fields = append(base.Fields,
+			billingDocumentHTMLField{Label: "Billing email", Value: customerEmail},
+			billingDocumentHTMLField{Label: "Net", Value: row.currency + " " + moneyString(netCents)},
+			billingDocumentHTMLField{Label: "VAT", Value: fmt.Sprintf("%s %s (%0.2f%%)", row.currency, moneyString(vatCents), float64(vatRate)/100)},
+			billingDocumentHTMLField{Label: "Service", Value: serviceDescription},
+			billingDocumentHTMLField{Label: "Quantity", Value: fmt.Sprintf("%d", serviceQuantity)},
+			billingDocumentHTMLField{Label: "Supply date", Value: serviceDate.Format("2006-01-02")},
 			billingDocumentHTMLField{Label: "Settlement reference", Value: referenceType + ":" + referenceID},
 		)
 		if taxStatus == "reverse_charge" {
@@ -254,13 +303,13 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 			       ROUND(payment.amount * 100)::bigint, payment.currency, payment.status,
 			       COALESCE(payment.confirmed_at, payment.created_at, NOW()), payment.retention_until,
 			       payment.method, payment.tx_id,
-			       subscription.billing_company, subscription.billing_address::text, subscription.tax_id
+			       subscription.billing_name, subscription.billing_company, subscription.billing_address::text, subscription.tax_id
 			FROM purser.billing_payments payment
 			JOIN purser.billing_invoices invoice ON invoice.id = payment.invoice_id
 			LEFT JOIN purser.tenant_subscriptions subscription ON subscription.tenant_id = invoice.tenant_id
 			WHERE payment.id = $1 AND invoice.tenant_id = $2 AND payment.status = 'confirmed'
 		`, documentID, tenantID).Scan(&row.number, &row.amountCents, &row.currency, &row.status,
-			&row.issuedAt, &row.retentionUntil, &method, &txID, &company, &address, &vat)
+			&row.issuedAt, &row.retentionUntil, &method, &txID, &name, &company, &address, &vat)
 		base.Title = "Payment receipt"
 		base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "Method", Value: method})
 		if txID.Valid {
@@ -272,12 +321,12 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 			SELECT note.credit_note_number, note.amount_cents, note.currency, 'issued', note.issued_at, note.retention_until,
 			       note.source_document_type, note.source_document_id::text,
 			       note.reversal_reference_type, note.reversal_reference_id, note.reason,
-			       subscription.billing_company, subscription.billing_address::text, subscription.tax_id
+			       subscription.billing_name, subscription.billing_company, subscription.billing_address::text, subscription.tax_id
 			FROM purser.credit_notes note
 			LEFT JOIN purser.tenant_subscriptions subscription ON subscription.tenant_id = note.tenant_id
 			WHERE note.id = $1 AND note.tenant_id = $2
 		`, documentID, tenantID).Scan(&row.number, &row.amountCents, &row.currency, &row.status, &row.issuedAt, &row.retentionUntil,
-			&sourceType, &sourceID, &reversalType, &reversalID, &reason, &company, &address, &vat)
+			&sourceType, &sourceID, &reversalType, &reversalID, &reason, &name, &company, &address, &vat)
 		base.Title = "Credit note"
 		base.Fields = append(base.Fields,
 			billingDocumentHTMLField{Label: "Original document", Value: sourceType + ":" + sourceID},
@@ -293,9 +342,9 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "load billing document: %v", err)
 	}
-	if strings.TrimSpace(base.SupplierName) == "" || strings.TrimSpace(base.SupplierAddress) == "" || strings.TrimSpace(base.SupplierVAT) == "" {
+	if strings.TrimSpace(base.SupplierName) == "" || strings.TrimSpace(base.SupplierAddress) == "" || strings.TrimSpace(base.SupplierVAT) == "" || strings.TrimSpace(base.SupplierRegistration) == "" {
 		return nil, status.Error(codes.FailedPrecondition, "supplier information is not configured for document rendering")
 	}
-	base.Customer, base.CustomerAddress, base.CustomerVAT = scanCustomer(&company, &address, &vat)
+	base.Customer, base.CustomerCompany, base.CustomerAddress, base.CustomerVAT = scanCustomer(&name, &company, &address, &vat)
 	return renderBillingDocument(row, base)
 }

@@ -72,10 +72,12 @@ type X402Handler struct {
 	facilitatorKinds      map[string]bool
 
 	// Supplier info for invoicing (required)
-	supplierName    string
-	supplierAddress string
-	supplierVAT     string
-	supplierCountry string
+	supplierName         string
+	supplierAddress      string
+	supplierVAT          string
+	supplierRegistration string
+	supplierCountry      string
+	countryFromIP        func(string) string
 
 	// Commodore client for cache invalidation after balance changes
 	commodoreClient CommodoreClient
@@ -107,9 +109,10 @@ func NewX402Handler(database *sql.DB, log logging.Logger, hdwallet *HDWallet, rp
 	supplierName := config.GetEnv("SUPPLIER_NAME", "")
 	supplierAddress := config.GetEnv("SUPPLIER_ADDRESS", "")
 	supplierVAT := config.GetEnv("SUPPLIER_VAT_NUMBER", "")
+	supplierRegistration := config.GetEnv("SUPPLIER_REGISTRATION_NUMBER", "")
 	supplierCountry := countries.Normalize(config.GetEnv("SUPPLIER_COUNTRY", ""))
-	if supplierName == "" || supplierAddress == "" || supplierVAT == "" || len(supplierCountry) != 2 {
-		log.Warn("x402 supplier info incomplete - simplified invoicing disabled (set SUPPLIER_NAME, SUPPLIER_ADDRESS, SUPPLIER_VAT_NUMBER, SUPPLIER_COUNTRY)")
+	if supplierName == "" || supplierAddress == "" || supplierVAT == "" || supplierRegistration == "" || len(supplierCountry) != 2 {
+		log.Warn("x402 supplier info incomplete - crypto invoicing disabled (set SUPPLIER_NAME, SUPPLIER_ADDRESS, SUPPLIER_VAT_NUMBER, SUPPLIER_REGISTRATION_NUMBER, SUPPLIER_COUNTRY)")
 	}
 	facilitatorProvider, facilitator, facilitatorErr := newX402FacilitatorFromEnv()
 	if facilitatorErr != nil {
@@ -131,6 +134,7 @@ func NewX402Handler(database *sql.DB, log logging.Logger, hdwallet *HDWallet, rp
 		supplierName:         supplierName,
 		supplierAddress:      supplierAddress,
 		supplierVAT:          supplierVAT,
+		supplierRegistration: supplierRegistration,
 		supplierCountry:      supplierCountry,
 		commodoreClient:      commodoreClient,
 	}
@@ -198,7 +202,7 @@ func (h *X402Handler) Readiness(ctx context.Context) error {
 	if _, err := h.getXpub(ctx); err != nil {
 		missing = append(missing, "initialized HD wallet xpub")
 	}
-	if h.supplierName == "" || h.supplierAddress == "" || h.supplierVAT == "" || len(h.supplierCountry) != 2 {
+	if h.supplierName == "" || h.supplierAddress == "" || h.supplierVAT == "" || h.supplierRegistration == "" || len(h.supplierCountry) != 2 {
 		missing = append(missing, "supplier invoice configuration")
 	}
 	networks, facilitatorErr := h.GetAdvertisableX402Networks(ctx)
@@ -211,6 +215,11 @@ func (h *X402Handler) Readiness(ctx context.Context) error {
 	for _, network := range networks {
 		if network.GetRPCEndpointWithDefault() == "" {
 			missing = append(missing, network.RPCEndpointEnv)
+		}
+		if h.facilitatorProvider == "self" {
+			if err := ValidateGasRunway(ctx, h.rpc, network, h.gasWalletAddress, 150_000); err != nil {
+				missing = append(missing, err.Error())
+			}
 		}
 		if config.IsProduction() {
 			if err := ValidateCryptoCustodyNetwork(ctx, h.rpc, network, "USDC"); err != nil {
@@ -530,25 +539,24 @@ func (h *X402Handler) VerifyPayment(ctx context.Context, tenantID string, payloa
 		}
 	}
 
-	// Simplified invoices may include exactly EUR 100; larger payments require
-	// the full billing-details path.
-	requiresBillingDetails := false
-	if amountEurCents > 10000 {
-		// Check if tenant has complete billing details (reuse billing details logic)
-		var billingEmail sql.NullString
-		var billingAddress []byte
-		err = h.db.QueryRowContext(ctx, `
-			SELECT billing_email, billing_address
-			FROM purser.tenant_subscriptions
-			WHERE tenant_id = $1 AND status != 'cancelled'
-			ORDER BY created_at DESC
-			LIMIT 1
-		`, tenantID).Scan(&billingEmail, &billingAddress)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			h.logger.WithFields(logging.Fields{"error": err}).Warn("Failed to check billing details")
+	var documentRequirement CryptoDocumentRequirement
+	if quote != nil {
+		var profile CryptoBillingProfile
+		if err := json.Unmarshal(quote.TaxProfileSnapshot, &profile); err != nil {
+			return nil, fmt.Errorf("decode quoted crypto tax profile: %w", err)
 		}
-		isComplete := isBillingDetailsComplete(billingEmail, billingAddress)
-		requiresBillingDetails = !isComplete
+		documentRequirement = CryptoDocumentRequirement{
+			NeedsFullDocument:       quote.TaxDocumentKind == "full",
+			DocumentKind:            quote.TaxDocumentKind,
+			Profile:                 profile,
+			HasVATClaim:             strings.TrimSpace(profile.VATNumber) != "",
+			RequiresCompleteProfile: quote.TaxDocumentKind == "full" && !profile.Complete(),
+		}
+	} else {
+		documentRequirement, err = h.GetCryptoDocumentRequirement(ctx, tenantID, amountEurCents)
+		if err != nil {
+			return nil, fmt.Errorf("determine crypto tax-document requirement: %w", err)
+		}
 	}
 
 	return &VerifyResult{
@@ -556,7 +564,7 @@ func (h *X402Handler) VerifyPayment(ctx context.Context, tenantID string, payloa
 		PayerAddress:           signerAddr,
 		AmountCents:            amountEurCents,
 		IsAuthOnly:             false,
-		RequiresBillingDetails: requiresBillingDetails,
+		RequiresBillingDetails: documentRequirement.RequiresCompleteProfile,
 	}, nil
 }
 
@@ -603,8 +611,10 @@ func (h *X402Handler) SettlePayment(ctx context.Context, tenantID string, payloa
 
 	if verifyResult.RequiresBillingDetails {
 		return &SettleResult{
-			Success: false,
-			Error:   "billing details required for payments over €100",
+			Success:          false,
+			Error:            "a customer legal name, billing email, and postal address are required for this payment's tax document",
+			ErrorCode:        "BILLING_PROFILE_REQUIRED",
+			SettlementStatus: "failed",
 		}, nil
 	}
 	if err := h.enforceSettlementRateLimits(ctx, tenantID, clientIP, payload.Network, verifyResult.PayerAddress, payload.QuoteID); err != nil {
@@ -616,7 +626,14 @@ func (h *X402Handler) SettlePayment(ctx context.Context, tenantID string, payloa
 			return nil, claimErr
 		}
 		if !claimed {
-			return &SettleResult{Success: false, Error: "x402 quote is already claimed; retry the same payment safely"}, nil
+			existing, existingErr := h.existingSettlementForPayload(ctx, tenantID, payload)
+			if existingErr != nil {
+				return nil, existingErr
+			}
+			if existing != nil {
+				return h.buildIdempotentSettleResult(ctx, tenantID, existing, clientIP)
+			}
+			return pendingX402SettleResult("", payload.Network), nil
 		}
 	}
 
@@ -632,6 +649,7 @@ func (h *X402Handler) SettlePayment(ctx context.Context, tenantID string, payloa
 		//nolint:nilerr // settlement failure returned in result struct, not as error
 		return &SettleResult{Success: false, Error: err.Error()}, nil
 	}
+	settlementNetwork, _ := x402CAIP2Network(network)
 
 	auth := payload.Payload.Authorization
 
@@ -656,28 +674,40 @@ func (h *X402Handler) SettlePayment(ctx context.Context, tenantID string, payloa
 	}
 
 	var txHash string
+	embedded := payload.X402Version != 2 || h.facilitatorProvider == "self"
 	if payload.X402Version == 2 && h.facilitatorProvider != "self" {
 		txHash, err = h.settleWithFacilitator(ctx, payload, settlementQuote)
 	} else {
-		txHash, err = h.submitTransferWithAuthorization(ctx, payload, network)
+		txHash, err = h.submitDurableTransferWithAuthorization(ctx, nonceID, payload, network)
 	}
 	if err != nil {
-		// Row stays in 'submitting'; reconciler will resolve via authorizationState.
+		if txHash != "" {
+			if payload.X402Version == 2 {
+				_, _ = h.db.ExecContext(context.Background(), `
+					UPDATE purser.x402_payment_quotes SET status = 'unknown', updated_at = NOW()
+					WHERE id = $1 AND status IN ('claiming', 'settling')
+				`, payload.QuoteID)
+			}
+			return pendingX402SettleResult(txHash, settlementNetwork), nil
+		}
+		h.markSettlementFailed(ctx, nonceID, err.Error())
 		return &SettleResult{
-			Success: false,
-			Error:   fmt.Sprintf("settlement broadcast failed: %v", err),
+			Success:          false,
+			Error:            fmt.Sprintf("settlement preparation failed: %v", err),
+			ErrorCode:        "SETTLEMENT_FAILED",
+			SettlementStatus: "failed",
+			Network:          settlementNetwork,
 		}, nil
 	}
 
-	if mErr := h.markSettlementSubmitted(ctx, nonceID, txHash); mErr != nil {
-		h.logger.WithError(mErr).WithFields(logging.Fields{
-			"nonce_id": nonceID,
-			"tx_hash":  txHash,
-		}).Error("Chain broadcast succeeded but DB update failed; reconciler will recover")
-		return &SettleResult{
-			Success: false,
-			Error:   fmt.Sprintf("failed to record submission: %v", mErr),
-		}, nil
+	if !embedded {
+		if mErr := h.markSettlementSubmitted(ctx, nonceID, txHash); mErr != nil {
+			h.logger.WithError(mErr).WithFields(logging.Fields{
+				"nonce_id": nonceID,
+				"tx_hash":  txHash,
+			}).Error("Chain broadcast succeeded but DB update failed; reconciler will recover")
+			return pendingX402SettleResult(txHash, settlementNetwork), nil
+		}
 	}
 
 	receipt, err := h.waitForSettlementConfirmation(ctx, network, txHash, auth)
@@ -700,11 +730,7 @@ func (h *X402Handler) SettlePayment(ctx context.Context, tenantID string, payloa
 				WHERE id = $1 AND status = 'settling'
 			`, payload.QuoteID)
 		}
-		return &SettleResult{
-			Success: false,
-			TxHash:  txHash,
-			Error:   "settlement pending confirmation; retry safely",
-		}, nil
+		return pendingX402SettleResult(txHash, settlementNetwork), nil
 	}
 
 	blockNumber := parseHexInt64(receipt.BlockNumber)
@@ -738,13 +764,26 @@ func (h *X402Handler) SettlePayment(ctx context.Context, tenantID string, payloa
 	}).Info("x402 payment settled")
 
 	return &SettleResult{
-		Success:         true,
-		TxHash:          txHash,
-		CreditedCents:   verifyResult.AmountCents,
-		Currency:        billing.DefaultCurrency(),
-		NewBalanceCents: newBalance,
-		InvoiceNumber:   invoiceNumber,
+		Success:          true,
+		TxHash:           txHash,
+		CreditedCents:    verifyResult.AmountCents,
+		Currency:         billing.DefaultCurrency(),
+		NewBalanceCents:  newBalance,
+		InvoiceNumber:    invoiceNumber,
+		SettlementStatus: "confirmed",
+		Network:          settlementNetwork,
 	}, nil
+}
+
+func pendingX402SettleResult(txHash, network string) *SettleResult {
+	return &SettleResult{
+		Success:          false,
+		TxHash:           txHash,
+		Error:            "settlement is pending confirmation; retry the same signed payment",
+		ErrorCode:        "SETTLEMENT_PENDING",
+		SettlementStatus: "pending",
+		Network:          network,
+	}
 }
 
 // SettlementRow describes an existing x402_nonces row returned when an
@@ -945,6 +984,15 @@ func (h *X402Handler) markSettlementFailed(ctx context.Context, nonceID, reason 
 		WHERE n.id = $1 AND q.id = n.quote_id
 		  AND q.status IN ('claiming', 'settling', 'unknown')
 	`, nonceID, reason)
+	attemptState := "broadcast_unknown"
+	if strings.Contains(strings.ToLower(reason), "revert") {
+		attemptState = "reverted"
+	}
+	_, _ = h.db.ExecContext(ctx, `
+		UPDATE purser.x402_settlement_attempts
+		SET state = $2, last_error = $3, updated_at = NOW()
+		WHERE settlement_id = $1 AND state IN ('prepared', 'broadcast_unknown', 'broadcast')
+	`, nonceID, attemptState, reason)
 }
 
 // confirmAndCreditSettlement makes confirmed chain state and spendable credit
@@ -996,6 +1044,14 @@ func confirmAndCreditX402Settlement(ctx context.Context, db *sql.DB, tenantID st
 	if err != nil {
 		return 0, err
 	}
+	if _, err = tx.ExecContext(ctx, `
+		UPDATE purser.x402_settlement_attempts
+		SET state = 'confirmed', confirmed_at = COALESCE(confirmed_at, NOW()),
+		    last_error = NULL, updated_at = NOW()
+		WHERE settlement_id = $1 AND transaction_hash = LOWER($2)
+	`, nonceID, txHash); err != nil {
+		return 0, err
+	}
 	_, err = tx.ExecContext(ctx, `
 		UPDATE purser.x402_payment_quotes q
 		SET status = 'confirmed', provider_transaction_id = $2,
@@ -1019,17 +1075,18 @@ func (h *X402Handler) buildIdempotentSettleResult(ctx context.Context, tenantID 
 	}
 	if row.Status == "failed" {
 		return &SettleResult{
-			Success: false,
-			Error:   "nonce already used",
+			Success:          false,
+			Error:            "settlement failed",
+			ErrorCode:        "SETTLEMENT_FAILED",
+			SettlementStatus: "failed",
 		}, nil
 	}
+	settlementNetwork := ""
+	if network, err := h.getNetworkConfig(row.Network); err == nil {
+		settlementNetwork, _ = x402CAIP2Network(network)
+	}
 	if row.Status == "submitting" {
-		// Concurrent settle: the first call is mid-flight and the chain
-		// broadcast outcome is not yet known. Let the caller retry.
-		return &SettleResult{
-			Success: false,
-			Error:   "settlement in progress",
-		}, nil
+		return pendingX402SettleResult(row.TxHash, settlementNetwork), nil
 	}
 
 	if row.TxHash != "" {
@@ -1039,7 +1096,7 @@ func (h *X402Handler) buildIdempotentSettleResult(ctx context.Context, tenantID 
 		}
 		if !creditExists || row.Status != "confirmed" {
 			if row.Network == "" {
-				return &SettleResult{Success: false, TxHash: row.TxHash, Error: "settlement pending confirmation; retry safely"}, nil
+				return pendingX402SettleResult(row.TxHash, settlementNetwork), nil
 			}
 			network, networkErr := h.getNetworkConfig(row.Network)
 			if networkErr != nil {
@@ -1055,7 +1112,7 @@ func (h *X402Handler) buildIdempotentSettleResult(ctx context.Context, tenantID 
 					h.markSettlementFailed(ctx, row.ID, "transaction reverted on-chain")
 					return &SettleResult{Success: false, TxHash: row.TxHash, Error: "settlement reverted on-chain"}, nil
 				}
-				return &SettleResult{Success: false, TxHash: row.TxHash, Error: "settlement pending confirmation; retry safely"}, nil
+				return pendingX402SettleResult(row.TxHash, settlementNetwork), nil
 			}
 			if _, confirmErr := h.confirmAndCreditSettlement(ctx, tenantID, row.AmountCents, row.ID, row.TxHash, parseHexInt64(receipt.BlockNumber), parseHexInt64(receipt.GasUsed)); confirmErr != nil {
 				return nil, confirmErr
@@ -1075,12 +1132,14 @@ func (h *X402Handler) buildIdempotentSettleResult(ctx context.Context, tenantID 
 	invoiceNumber := h.finalizeConfirmedSettlementEffects(ctx, *row)
 
 	return &SettleResult{
-		Success:         true,
-		TxHash:          row.TxHash,
-		CreditedCents:   row.AmountCents,
-		Currency:        billing.DefaultCurrency(),
-		NewBalanceCents: currentBalance,
-		InvoiceNumber:   invoiceNumber,
+		Success:          true,
+		TxHash:           row.TxHash,
+		CreditedCents:    row.AmountCents,
+		Currency:         billing.DefaultCurrency(),
+		NewBalanceCents:  currentBalance,
+		InvoiceNumber:    invoiceNumber,
+		SettlementStatus: "confirmed",
+		Network:          settlementNetwork,
 	}, nil
 }
 
@@ -1216,69 +1275,48 @@ func (h *X402Handler) hashTransferWithAuthorization(auth *X402Authorization) ([]
 	), nil
 }
 
-// submitTransferWithAuthorization submits the settlement tx to the specified network
-func (h *X402Handler) submitTransferWithAuthorization(ctx context.Context, payload *X402PaymentPayload, network NetworkConfig) (string, error) {
-	if h.gasWalletPrivKey == "" {
-		return "", fmt.Errorf("x402 gas wallet not configured")
+func transferWithAuthorizationCallData(payload *X402PaymentPayload) ([]byte, error) {
+	if payload == nil || payload.Payload == nil || payload.Payload.Authorization == nil {
+		return nil, fmt.Errorf("invalid transfer authorization payload")
 	}
-
 	auth := payload.Payload.Authorization
 	sig, err := hex.DecodeString(strings.TrimPrefix(payload.Payload.Signature, "0x"))
 	if err != nil {
-		return "", fmt.Errorf("invalid signature: %w", err)
+		return nil, fmt.Errorf("invalid signature: %w", err)
 	}
-
-	// Parse signature into v, r, s
 	if len(sig) != 65 {
-		return "", fmt.Errorf("signature must be 65 bytes")
+		return nil, fmt.Errorf("signature must be 65 bytes")
 	}
-	r := sig[0:32]
-	s := sig[32:64]
-	v := sig[64]
+	r, s, v := sig[0:32], sig[32:64], sig[64]
 	if v < 27 {
 		v += 27
 	}
-
-	// Build transferWithAuthorization call data
-	// function transferWithAuthorization(
-	//     address from,
-	//     address to,
-	//     uint256 value,
-	//     uint256 validAfter,
-	//     uint256 validBefore,
-	//     bytes32 nonce,
-	//     uint8 v,
-	//     bytes32 r,
-	//     bytes32 s
-	// )
-	methodID := keccak256([]byte("transferWithAuthorization(address,address,uint256,uint256,uint256,bytes32,uint8,bytes32,bytes32)"))[0:4]
-
 	from, err := padAddress(auth.From)
 	if err != nil {
-		return "", fmt.Errorf("from: %w", err)
+		return nil, fmt.Errorf("from: %w", err)
 	}
 	to, err := padAddress(auth.To)
 	if err != nil {
-		return "", fmt.Errorf("to: %w", err)
+		return nil, fmt.Errorf("to: %w", err)
 	}
 	value, err := padUint256(auth.Value)
 	if err != nil {
-		return "", fmt.Errorf("value: %w", err)
+		return nil, fmt.Errorf("value: %w", err)
 	}
 	validAfter, err := padUint256(auth.ValidAfter)
 	if err != nil {
-		return "", fmt.Errorf("validAfter: %w", err)
+		return nil, fmt.Errorf("validAfter: %w", err)
 	}
 	validBefore, err := padUint256(auth.ValidBefore)
 	if err != nil {
-		return "", fmt.Errorf("validBefore: %w", err)
+		return nil, fmt.Errorf("validBefore: %w", err)
 	}
 	nonceBytes, err := padBytes32(auth.Nonce)
 	if err != nil {
-		return "", fmt.Errorf("nonce: %w", err)
+		return nil, fmt.Errorf("nonce: %w", err)
 	}
 
-	callData := methodID
+	callData := keccak256([]byte("transferWithAuthorization(address,address,uint256,uint256,uint256,bytes32,uint8,bytes32,bytes32)"))[0:4]
 	callData = append(callData, from...)
 	callData = append(callData, to...)
 	callData = append(callData, value...)
@@ -1288,78 +1326,196 @@ func (h *X402Handler) submitTransferWithAuthorization(ctx context.Context, paylo
 	callData = append(callData, padUint8(v)...)
 	callData = append(callData, padBytes32Bytes(r)...)
 	callData = append(callData, padBytes32Bytes(s)...)
-
-	// Simulate via eth_call before submitting (per x402 spec)
-	if simErr := h.simulateTransfer(ctx, network, callData); simErr != nil {
-		return "", fmt.Errorf("simulation failed: %w", simErr)
-	}
-
-	// Send raw transaction via RPC
-	txHash, err := h.sendRawTransaction(ctx, network, network.USDCContract, callData)
-	if err != nil {
-		return "", fmt.Errorf("failed to send transaction: %w", err)
-	}
-
-	return txHash, nil
+	return callData, nil
 }
 
-// sendRawTransaction signs and sends a transaction via JSON-RPC to the specified network
-func (h *X402Handler) sendRawTransaction(ctx context.Context, network NetworkConfig, to string, data []byte) (string, error) {
-	// The relayer account has one nonce sequence per chain. Serialize nonce
-	// selection and broadcast across all Purser replicas so distinct valid
-	// authorizations cannot sign competing transactions with the same nonce.
-	// The durable authorization row resolves an unknown commit/broadcast result.
-	lockTx, err := h.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", fmt.Errorf("begin relayer nonce lock: %w", err)
+func (h *X402Handler) submitDurableTransferWithAuthorization(ctx context.Context, settlementID string, payload *X402PaymentPayload, network NetworkConfig) (string, error) {
+	if h.gasWalletPrivKey == "" || h.gasWalletAddress == "" {
+		return "", fmt.Errorf("x402 gas wallet not configured")
 	}
-	defer lockTx.Rollback() //nolint:errcheck // rollback releases the advisory lock
+	callData, err := transferWithAuthorizationCallData(payload)
+	if err != nil {
+		return "", err
+	}
+	if err := h.simulateTransfer(ctx, network, callData); err != nil {
+		return "", fmt.Errorf("simulation failed: %w", err)
+	}
+	txHash, err := h.prepareEmbeddedSettlementAttempt(ctx, settlementID, network, network.USDCContract, callData)
+	if err != nil {
+		return "", err
+	}
+	_, broadcastErr := h.rebroadcastPreparedSettlementAttempt(ctx, settlementID, network)
+	return txHash, broadcastErr
+}
+
+func (h *X402Handler) prepareEmbeddedSettlementAttempt(ctx context.Context, settlementID string, network NetworkConfig, to string, data []byte) (string, error) {
+	tx, err := h.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("begin embedded settlement preparation: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback releases the advisory lock
 	lockKey := fmt.Sprintf("x402-relayer:%d:%s", network.ChainID, strings.ToLower(h.gasWalletAddress))
-	if _, lockErr := lockTx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey); lockErr != nil {
-		return "", fmt.Errorf("acquire relayer nonce lock: %w", lockErr)
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey); err != nil {
+		return "", fmt.Errorf("acquire relayer nonce lock: %w", err)
 	}
 
-	// Get nonce for gas wallet
-	nonce, err := h.getNonce(ctx, network, h.gasWalletAddress)
+	var existingHash string
+	err = tx.QueryRowContext(ctx, `
+		SELECT transaction_hash FROM purser.x402_settlement_attempts
+		WHERE settlement_id = $1 AND attempt_number = 1
+	`, settlementID).Scan(&existingHash)
+	if err == nil {
+		if err := tx.Commit(); err != nil {
+			return "", err
+		}
+		return existingHash, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+
+	chainNonce, err := h.getNonce(ctx, network, h.gasWalletAddress)
 	if err != nil {
-		return "", fmt.Errorf("failed to get nonce: %w", err)
+		return "", fmt.Errorf("read pending relayer nonce: %w", err)
+	}
+	if chainNonce > math.MaxInt64 {
+		return "", fmt.Errorf("pending relayer nonce exceeds durable database range")
+	}
+	var durableNext int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COALESCE(MAX(relayer_nonce) + 1, 0)
+		FROM purser.x402_settlement_attempts
+		WHERE network = $1 AND LOWER(relayer_address) = LOWER($2)
+	`, network.Name, h.gasWalletAddress).Scan(&durableNext); err != nil {
+		return "", fmt.Errorf("read durable relayer nonce: %w", err)
+	}
+	relayerNonce := chainNonce
+	if durableNext > int64(relayerNonce) {
+		relayerNonce = uint64(durableNext)
 	}
 
-	// Get fee market inputs for EIP-1559 fee caps.
 	gasPrice, err := h.getGasPrice(ctx, network)
 	if err != nil {
-		return "", fmt.Errorf("failed to get gas price: %w", err)
+		return "", fmt.Errorf("read gas price: %w", err)
 	}
 	priorityFee, err := h.getPriorityFee(ctx, network)
 	if err != nil {
-		return "", fmt.Errorf("failed to get priority fee: %w", err)
+		return "", fmt.Errorf("read priority fee: %w", err)
 	}
-
-	// Build an EIP-1559 dynamic-fee transaction.
-	gasLimit := uint64(150000) // Conservative estimate for transferWithAuthorization
-
-	chainId := big.NewInt(network.ChainID)
-	maxPriorityFeePerGas := priorityFee
-	maxFeePerGas := new(big.Int).Mul(gasPrice, big.NewInt(2))
-	maxFeePerGas.Add(maxFeePerGas, maxPriorityFeePerGas)
-
-	// Sign transaction
-	signedTx, err := h.signDynamicFeeTransaction(nonce, to, big.NewInt(0), gasLimit, maxFeePerGas, maxPriorityFeePerGas, data, chainId)
+	maxFee := new(big.Int).Mul(gasPrice, big.NewInt(2))
+	maxFee.Add(maxFee, priorityFee)
+	const gasLimit = uint64(150000)
+	rawTx, err := h.signDynamicFeeTransaction(relayerNonce, to, big.NewInt(0), gasLimit, maxFee, priorityFee, data, big.NewInt(network.ChainID))
 	if err != nil {
-		return "", fmt.Errorf("failed to sign transaction: %w", err)
+		return "", err
 	}
-
-	// Submit via eth_sendRawTransaction
-	var txHash string
-	err = h.rpc.Call(ctx, network, "eth_sendRawTransaction", []any{"0x" + hex.EncodeToString(signedTx)}, &txHash)
+	txHash := crypto.Keccak256Hash(rawTx).Hex()
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO purser.x402_settlement_attempts (
+			settlement_id, attempt_number, network, chain_id, relayer_address,
+			relayer_nonce, signed_raw_transaction, transaction_hash, gas_limit,
+			max_fee_per_gas, max_priority_fee_per_gas, state
+		) VALUES ($1, 1, $2, $3, LOWER($4), $5, $6, LOWER($7), $8, $9, $10, 'prepared')
+	`, settlementID, network.Name, network.ChainID, h.gasWalletAddress, relayerNonce, rawTx,
+		txHash, gasLimit, maxFee.String(), priorityFee.String()); err != nil {
+		return "", fmt.Errorf("persist embedded settlement attempt: %w", err)
+	}
+	nonceResult, err := tx.ExecContext(ctx, `
+		UPDATE purser.x402_nonces SET tx_hash = LOWER($2) WHERE id = $1 AND status = 'submitting'
+	`, settlementID, txHash)
 	if err != nil {
-		return "", fmt.Errorf("eth_sendRawTransaction failed: %w", err)
+		return "", fmt.Errorf("persist precomputed settlement hash: %w", err)
 	}
-	if err := lockTx.Commit(); err != nil {
-		return "", fmt.Errorf("release relayer nonce lock after broadcast: %w", err)
+	if rows, rowsErr := nonceResult.RowsAffected(); rowsErr != nil || rows != 1 {
+		return "", fmt.Errorf("settlement claim changed before durable attempt commit")
 	}
-
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("commit embedded settlement attempt: %w", err)
+	}
 	return txHash, nil
+}
+
+func (h *X402Handler) rebroadcastPreparedSettlementAttempt(ctx context.Context, settlementID string, network NetworkConfig) (string, error) {
+	var rawTx []byte
+	var expectedHash string
+	err := h.db.QueryRowContext(ctx, `
+		SELECT signed_raw_transaction, transaction_hash
+		FROM purser.x402_settlement_attempts
+		WHERE settlement_id = $1 AND state IN ('prepared', 'broadcast_unknown', 'broadcast')
+		ORDER BY attempt_number DESC LIMIT 1
+	`, settlementID).Scan(&rawTx, &expectedHash)
+	if err != nil {
+		return "", fmt.Errorf("load prepared settlement attempt: %w", err)
+	}
+	var rpcHash string
+	err = h.rpc.Call(ctx, network, "eth_sendRawTransaction", []any{"0x" + hex.EncodeToString(rawTx)}, &rpcHash)
+	if err != nil {
+		h.recordEmbeddedBroadcastOutcome(settlementID, "broadcast_unknown", err.Error())
+		return expectedHash, fmt.Errorf("broadcast outcome unknown for %s: %w", expectedHash, err)
+	}
+	if rpcHash == "" || !strings.EqualFold(rpcHash, expectedHash) {
+		err = fmt.Errorf("RPC returned transaction hash %q, expected %s", rpcHash, expectedHash)
+		h.recordEmbeddedBroadcastOutcome(settlementID, "broadcast_unknown", err.Error())
+		return expectedHash, err
+	}
+	if err := h.markEmbeddedSettlementBroadcast(settlementID, expectedHash); err != nil {
+		return expectedHash, err
+	}
+	return expectedHash, nil
+}
+
+func (h *X402Handler) recordEmbeddedBroadcastOutcome(settlementID, state, detail string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _ = h.db.ExecContext(ctx, `
+		UPDATE purser.x402_settlement_attempts
+		SET state = $2, broadcast_attempts = broadcast_attempts + 1,
+		    first_broadcast_at = COALESCE(first_broadcast_at, NOW()),
+		    last_broadcast_at = NOW(), last_error = $3, updated_at = NOW()
+		WHERE settlement_id = $1 AND state IN ('prepared', 'broadcast_unknown', 'broadcast')
+	`, settlementID, state, detail)
+}
+
+func (h *X402Handler) markEmbeddedSettlementBroadcast(settlementID, txHash string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tx, err := h.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE purser.x402_settlement_attempts
+		SET state = 'broadcast', broadcast_attempts = broadcast_attempts + 1,
+		    first_broadcast_at = COALESCE(first_broadcast_at, NOW()),
+		    last_broadcast_at = NOW(), last_error = NULL, updated_at = NOW()
+		WHERE settlement_id = $1 AND transaction_hash = LOWER($2)
+	`, settlementID, txHash); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `
+		UPDATE purser.x402_nonces
+		SET tx_hash = LOWER($2), submitted_at = COALESCE(submitted_at, NOW()), status = 'pending'
+		WHERE id = $1 AND status IN ('submitting', 'pending')
+	`, settlementID, txHash)
+	if err != nil {
+		return err
+	}
+	if rows, err := res.RowsAffected(); err != nil || rows == 0 {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("settlement %s is not broadcastable", settlementID)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE purser.x402_payment_quotes q
+		SET status = 'settling', updated_at = NOW()
+		FROM purser.x402_nonces n
+		WHERE n.id = $1 AND q.id = n.quote_id AND q.status IN ('claiming', 'unknown', 'settling')
+	`, settlementID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // waitForSettlementConfirmation waits until the transaction has a successful
@@ -1393,7 +1549,7 @@ func (h *X402Handler) waitForSettlementConfirmation(ctx context.Context, network
 				return nil, err
 			}
 			if blockNumber > 0 && finality.Number >= blockNumber {
-				var canonical rpcBlock
+				var canonical rpcBlockHeader
 				if err := h.rpc.Call(ctx, network, "eth_getBlockByNumber", []any{receipt.BlockNumber, false}, &canonical); err != nil {
 					return nil, fmt.Errorf("get canonical receipt block: %w", err)
 				}
@@ -1555,62 +1711,60 @@ func (h *X402Handler) getCurrentBalance(ctx context.Context, tenantID, currency 
 // later usage consumes that already-invoiced credit without another VAT event.
 func (h *X402Handler) generateCryptoTopupInvoice(ctx context.Context, tenantID string, amountEurCents int64, referenceType, referenceID, clientIP, networkName string) (string, error) {
 	// Supplier info required for invoicing
-	if h.supplierName == "" || h.supplierAddress == "" || h.supplierVAT == "" || len(h.supplierCountry) != 2 {
+	if h.supplierName == "" || h.supplierAddress == "" || h.supplierVAT == "" || h.supplierRegistration == "" || len(h.supplierCountry) != 2 {
 		return "", fmt.Errorf("supplier information not configured for x402 invoicing")
 	}
-
-	// Get actual ECB rate for record
-	ecbRate, err := h.getEurUsdRate()
+	taxSnapshot, err := h.loadCryptoTaxSnapshot(ctx, tenantID, referenceType, referenceID)
 	if err != nil {
-		return "", fmt.Errorf("failed to get ECB rate: %w", err)
+		return "", fmt.Errorf("load crypto tax snapshot: %w", err)
+	}
+	documentKind, profile := taxSnapshot.DocumentKind, taxSnapshot.Profile
+	if documentKind == "full" && !profile.Complete() {
+		return "", fmt.Errorf("full crypto invoice requires the complete profile captured before payment")
 	}
 
 	// Select an effective-dated VAT rate and retain its source on the record.
-	vatDecision, err := h.getVATDecisionForTenant(ctx, tenantID, clientIP, time.Now().UTC())
+	vatDecision, err := h.getVATDecisionForProfile(ctx, tenantID, profile, clientIP, time.Now().UTC())
 	if err != nil {
 		return "", err
 	}
 	vatRateBps, reverseCharge := vatDecision.RateBPS, vatDecision.ReverseCharge
 	netAmountCents, vatAmountCents := extractVATInclusive(amountEurCents, vatRateBps)
-	billingCountry := h.getBillingCountry(ctx, tenantID)
-	ipCountry := h.getCountryFromIP(clientIP)
-	evidenceStatus := "missing"
-	evidenceConflict := false
-	switch {
-	case billingCountry != "" && ipCountry != "" && billingCountry == ipCountry:
-		evidenceStatus = "complete"
-	case billingCountry != "" && ipCountry != "" && billingCountry != ipCountry:
-		evidenceStatus = "conflict"
-		evidenceConflict = true
-	case billingCountry != "" || ipCountry != "":
-		evidenceStatus = "single_source"
+	billingCountry := ""
+	if address, addressErr := parseBillingAddress(profile.Address); addressErr == nil {
+		billingCountry = countries.Normalize(address.Country)
 	}
-	taxValidationStatus := "not_validated"
+	ipCountry := h.getCountryFromIP(clientIP)
+	evidenceStatus, evidenceConflict := cryptoEvidenceStatus(billingCountry, ipCountry)
+	taxValidationStatus := "standard_vat"
 	if reverseCharge {
 		taxValidationStatus = "reverse_charge"
 	} else if vatDecision.VIESValidated {
 		taxValidationStatus = "vies_valid_domestic"
-	} else if evidenceStatus != "complete" {
-		taxValidationStatus = "location_review"
 	}
 
 	invoiceTx, err := h.db.BeginTx(ctx, nil)
 	if err != nil {
-		return "", fmt.Errorf("begin simplified invoice transaction: %w", err)
+		return "", fmt.Errorf("begin crypto tax-document transaction: %w", err)
 	}
 	defer invoiceTx.Rollback() //nolint:errcheck // rollback is best-effort
 	lockKey := tenantID + ":" + referenceType + ":" + strings.ToLower(referenceID)
 	if _, lockErr := invoiceTx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey); lockErr != nil {
-		return "", fmt.Errorf("lock simplified invoice reference: %w", lockErr)
+		return "", fmt.Errorf("lock crypto tax-document reference: %w", lockErr)
 	}
 
 	var existingInvoice string
 	err = invoiceTx.QueryRowContext(ctx, `
-		SELECT invoice_number
-		FROM purser.simplified_invoices
-		WHERE tenant_id = $1 AND reference_type = $2 AND reference_id = $3
-		ORDER BY issued_at ASC
-		LIMIT 1
+		SELECT invoice_number FROM (
+			SELECT invoice_number, issued_at
+			FROM purser.simplified_invoices
+			WHERE tenant_id = $1 AND reference_type = $2 AND reference_id = $3
+			UNION ALL
+			SELECT invoice_number, issued_at
+			FROM purser.crypto_invoices
+			WHERE tenant_id = $1 AND reference_type = $2 AND reference_id = $3
+		) documents
+		ORDER BY issued_at ASC LIMIT 1
 	`, tenantID, referenceType, referenceID).Scan(&existingInvoice)
 	if err == nil {
 		if commitErr := invoiceTx.Commit(); commitErr != nil {
@@ -1619,22 +1773,54 @@ func (h *X402Handler) generateCryptoTopupInvoice(ctx context.Context, tenantID s
 		return existingInvoice, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("check existing simplified invoice: %w", err)
+		return "", fmt.Errorf("check existing crypto tax document: %w", err)
 	}
 
 	var invoiceSequence int64
-	if sequenceErr := invoiceTx.QueryRowContext(ctx, `SELECT nextval('purser.simplified_invoice_number_seq')`).Scan(&invoiceSequence); sequenceErr != nil {
-		return "", fmt.Errorf("allocate simplified invoice number: %w", sequenceErr)
+	sequenceName := "purser.simplified_invoice_number_seq"
+	prefix := "SI"
+	if documentKind == "full" {
+		sequenceName = "purser.crypto_invoice_number_seq"
+		prefix = "INV"
+	}
+	if sequenceErr := invoiceTx.QueryRowContext(ctx, `SELECT nextval($1::regclass)`, sequenceName).Scan(&invoiceSequence); sequenceErr != nil {
+		return "", fmt.Errorf("allocate crypto tax-document number: %w", sequenceErr)
 	}
 
-	// Generate invoice number (SI = simplified invoice, B2B for reverse charge).
-	prefix := "SI"
 	if reverseCharge {
-		prefix = "B2B" // Reverse charge invoice
+		prefix = "B2B"
+		documentKind = "full"
 	}
 	invoiceNumber := fmt.Sprintf("%s-%010d", prefix, invoiceSequence)
 
-	_, err = invoiceTx.ExecContext(ctx, `
+	if documentKind == "full" {
+		_, err = invoiceTx.ExecContext(ctx, `
+		INSERT INTO purser.crypto_invoices (
+			invoice_number, tenant_id, reference_type, reference_id,
+			gross_amount_cents, net_amount_cents, vat_amount_cents, vat_rate_bps,
+			vat_rate_source, vat_rate_table_checked_on, vat_rate_effective_from, tax_validation_status,
+			currency, amount_eur_cents, ecb_rate, fx_rate_source, fx_rate_observed_at,
+			evidence_ip_country, evidence_wallet_network,
+			evidence_billing_country, evidence_status, evidence_conflict,
+			tax_policy_ref, supplier_name, supplier_address, supplier_vat_number,
+			supplier_registration_number, service_description, service_quantity, service_date,
+			customer_email, customer_name, customer_company, customer_address,
+			customer_vat_number, customer_vat_validated, issued_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::date, $11::date, $12,
+		          $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23,
+		          $24, $25, $26, $27, $28, $29, NOW()::date,
+		          $30, $31, $32, $33::jsonb, $34, $35, NOW())
+	`, invoiceNumber, tenantID, referenceType, referenceID,
+			amountEurCents, netAmountCents, vatAmountCents, vatRateBps,
+			vatDecision.Source, vatDecision.CheckedOn, vatDecision.EffectiveFrom, taxValidationStatus,
+			billing.DefaultCurrency(), amountEurCents, taxSnapshot.EURPerUSDRate, taxSnapshot.FXRateSource, taxSnapshot.FXRateObservedAt,
+			ipCountry, networkName, billingCountry, evidenceStatus, evidenceConflict,
+			CryptoTopupTaxPolicyRef, h.supplierName, h.supplierAddress, h.supplierVAT,
+			h.supplierRegistration, "FrameWorks prepaid usage credit", 1,
+			profile.Email, profile.Name, nullableString(profile.Company), profile.Address,
+			nullableString(profile.VATNumber), vatDecision.VIESValidated)
+	} else {
+		_, err = invoiceTx.ExecContext(ctx, `
 		INSERT INTO purser.simplified_invoices (
 			invoice_number, tenant_id, reference_type, reference_id,
 			gross_amount_cents, net_amount_cents, vat_amount_cents, vat_rate_bps,
@@ -1644,42 +1830,46 @@ func (h *X402Handler) generateCryptoTopupInvoice(ctx context.Context, tenantID s
 			evidence_billing_country, evidence_status, evidence_conflict,
 			tax_policy_ref,
 			supplier_name, supplier_address, supplier_vat_number,
+			supplier_registration_number, service_description, service_quantity, service_date,
 			issued_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::date, $11::date, $12, $13, $14, $15, $16, NOW(), $17, $18, $19, $20, $21, $22, $23, $24, $25, NOW())
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::date, $11::date, $12,
+		          $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23,
+		          $24, $25, $26, $27, $28, $29, NOW()::date, NOW())
 	`,
-		invoiceNumber, tenantID, referenceType, referenceID,
-		amountEurCents, netAmountCents, vatAmountCents, vatRateBps,
-		vatDecision.Source, vatDecision.CheckedOn, vatDecision.EffectiveFrom,
-		taxValidationStatus, billing.DefaultCurrency(), amountEurCents, ecbRate, "European Central Bank reference rate",
-		ipCountry, networkName, billingCountry, evidenceStatus, evidenceConflict,
-		CryptoTopupTaxPolicyRef,
-		h.supplierName, h.supplierAddress, h.supplierVAT,
-	)
+			invoiceNumber, tenantID, referenceType, referenceID,
+			amountEurCents, netAmountCents, vatAmountCents, vatRateBps,
+			vatDecision.Source, vatDecision.CheckedOn, vatDecision.EffectiveFrom,
+			taxValidationStatus, billing.DefaultCurrency(), amountEurCents, taxSnapshot.EURPerUSDRate, taxSnapshot.FXRateSource, taxSnapshot.FXRateObservedAt,
+			ipCountry, networkName, billingCountry, evidenceStatus, evidenceConflict,
+			CryptoTopupTaxPolicyRef,
+			h.supplierName, h.supplierAddress, h.supplierVAT,
+			h.supplierRegistration, "FrameWorks prepaid usage credit", 1,
+		)
+	}
 
 	if err != nil {
-		return "", fmt.Errorf("failed to insert simplified invoice: %w", err)
-	}
-	if taxValidationStatus == "location_review" {
-		_, err = invoiceTx.ExecContext(ctx, `
-			INSERT INTO purser.crypto_accounting_anomalies (
-				tenant_id, kind, network, reference_type, reference_id,
-				amount_cents, currency, detail, evidence_json
-			) VALUES ($1, 'tax_location_evidence_review', $2, 'simplified_invoice', $3, $4, 'EUR', $5,
-			          jsonb_build_object('billing_country', $6::text, 'ip_country', $7::text, 'evidence_status', $8::text))
-			ON CONFLICT (kind, reference_type, reference_id) DO UPDATE
-			SET last_seen_at = NOW(), occurrences = purser.crypto_accounting_anomalies.occurrences + 1,
-			    detail = EXCLUDED.detail, evidence_json = EXCLUDED.evidence_json
-		`, tenantID, networkName, invoiceNumber, amountEurCents,
-			"two non-conflicting qualifying customer-location signals are required", billingCountry, ipCountry, evidenceStatus)
-		if err != nil {
-			return "", fmt.Errorf("queue invoice location review: %w", err)
-		}
+		return "", fmt.Errorf("failed to insert crypto tax document: %w", err)
 	}
 	if err := invoiceTx.Commit(); err != nil {
-		return "", fmt.Errorf("commit simplified invoice: %w", err)
+		return "", fmt.Errorf("commit crypto tax document: %w", err)
 	}
 
 	return invoiceNumber, nil
+}
+
+func cryptoEvidenceStatus(billingCountry, ipCountry string) (string, bool) {
+	billingCountry = countries.Normalize(billingCountry)
+	ipCountry = countries.Normalize(ipCountry)
+	switch {
+	case billingCountry != "" && ipCountry != "" && billingCountry == ipCountry:
+		return "complete", false
+	case billingCountry != "" && ipCountry != "":
+		return "conflict", true
+	case billingCountry != "" || ipCountry != "":
+		return "single_source", false
+	default:
+		return "missing", false
+	}
 }
 
 // extractVATInclusive splits an integer-cent VAT-inclusive gross amount using
@@ -1704,10 +1894,16 @@ func (h *X402Handler) finalizeConfirmedSettlementEffects(ctx context.Context, ro
 
 	invoiceNumber, err := h.generateCryptoTopupInvoice(ctx, row.TenantID, row.AmountCents, "x402_payment", row.TxHash, row.ClientIP, row.Network)
 	if err != nil {
+		recordCryptoAccountingAnomaly(ctx, h.db, h.logger, row.TenantID,
+			"tax_document_missing", row.Network, "x402_payment", row.TxHash,
+			row.AmountCents, err.Error(), map[string]any{"nonce_id": row.ID})
 		h.logger.WithError(err).WithFields(logging.Fields{
 			"nonce_id": row.ID,
 			"tx_hash":  row.TxHash,
-		}).Error("Failed to ensure x402 simplified invoice")
+		}).Error("Failed to ensure x402 crypto tax document")
+	} else {
+		resolveCryptoAccountingAnomaly(ctx, h.db, h.logger,
+			"tax_document_missing", "x402_payment", row.TxHash, "tax document created")
 	}
 
 	applied, rollupErr := h.applyX402RollupOnce(ctx, row.TenantID, row.ID, row.AmountCents)
@@ -1896,8 +2092,10 @@ func (h *X402Handler) getUSDCBalance(ctx context.Context, network NetworkConfig,
 		return nil, err
 	}
 
-	balance := new(big.Int)
-	balance.SetString(strings.TrimPrefix(result, "0x"), 16)
+	balance, err := parseRPCQuantity(result)
+	if err != nil {
+		return nil, fmt.Errorf("invalid USDC balance result: %w", err)
+	}
 	return balance, nil
 }
 
@@ -1907,7 +2105,10 @@ func (h *X402Handler) getNonce(ctx context.Context, network NetworkConfig, addre
 	if err != nil {
 		return 0, err
 	}
-	nonce, _ := new(big.Int).SetString(strings.TrimPrefix(result, "0x"), 16)
+	nonce, err := parseRPCQuantity(result)
+	if err != nil || !nonce.IsUint64() {
+		return 0, fmt.Errorf("invalid pending nonce result")
+	}
 	return nonce.Uint64(), nil
 }
 
@@ -1917,7 +2118,10 @@ func (h *X402Handler) getGasPrice(ctx context.Context, network NetworkConfig) (*
 	if err != nil {
 		return nil, err
 	}
-	gasPrice, _ := new(big.Int).SetString(strings.TrimPrefix(result, "0x"), 16)
+	gasPrice, err := parseRPCQuantity(result)
+	if err != nil || gasPrice.Sign() <= 0 {
+		return nil, fmt.Errorf("invalid gas price result")
+	}
 	return gasPrice, nil
 }
 
@@ -1927,11 +2131,23 @@ func (h *X402Handler) getPriorityFee(ctx context.Context, network NetworkConfig)
 	if err != nil {
 		return nil, err
 	}
-	priorityFee, _ := new(big.Int).SetString(strings.TrimPrefix(result, "0x"), 16)
-	if priorityFee == nil || priorityFee.Sign() < 0 {
+	priorityFee, err := parseRPCQuantity(result)
+	if err != nil {
 		return nil, fmt.Errorf("invalid priority fee result")
 	}
 	return priorityFee, nil
+}
+
+func parseRPCQuantity(value string) (*big.Int, error) {
+	trimmed := strings.TrimSpace(value)
+	if !strings.HasPrefix(trimmed, "0x") || len(trimmed) <= 2 {
+		return nil, fmt.Errorf("expected 0x-prefixed hexadecimal quantity")
+	}
+	quantity, ok := new(big.Int).SetString(trimmed[2:], 16)
+	if !ok || quantity.Sign() < 0 {
+		return nil, fmt.Errorf("invalid hexadecimal quantity")
+	}
+	return quantity, nil
 }
 
 // simulateTransfer runs eth_call to verify the transfer will succeed before submitting
@@ -2132,16 +2348,25 @@ func (h *X402Handler) getVATDecisionForTenant(ctx context.Context, tenantID, cli
 		LIMIT 1
 	`, tenantID).Scan(&taxID, &billingAddress)
 
-	if err == nil && billingAddress != nil {
-		// Parse billing address to get country
-		addr, parseErr := parseBillingAddress(billingAddress)
+	if err == nil {
+		return h.getVATDecisionForProfile(ctx, tenantID, CryptoBillingProfile{
+			VATNumber: taxID.String,
+			Address:   append(json.RawMessage(nil), billingAddress...),
+		}, clientIP, at)
+	}
+	return h.getVATDecisionForProfile(ctx, tenantID, CryptoBillingProfile{}, clientIP, at)
+}
+
+func (h *X402Handler) getVATDecisionForProfile(ctx context.Context, tenantID string, profile CryptoBillingProfile, _ string, at time.Time) (vatDecision, error) {
+	if len(profile.Address) > 0 {
+		addr, parseErr := parseBillingAddress(profile.Address)
 		if parseErr == nil && addr.Country != "" {
 			country := countries.Normalize(addr.Country)
 
 			// Reverse charge requires live/cached VIES evidence and a supplier in a
 			// different EU member state. Domestic business customers pay domestic VAT.
-			if taxID.Valid && h.isValidEUVATFormat(taxID.String) {
-				validated, validationErr := h.validateVIESVAT(ctx, tenantID, country, taxID.String)
+			if strings.TrimSpace(profile.VATNumber) != "" && h.isValidEUVATFormat(profile.VATNumber) {
+				validated, validationErr := h.validateVIESVAT(ctx, tenantID, country, profile.VATNumber)
 				if validationErr == nil && validated {
 					if reverseChargeEligible(h.supplierCountry, country, true) {
 						return vatDecision{Country: country, VIESValidated: true, ReverseCharge: true, Source: "VIES validated cross-border EU reverse charge", CheckedOn: at.Format("2006-01-02"), EffectiveFrom: at.Format("2006-01-02")}, nil
@@ -2165,14 +2390,74 @@ func (h *X402Handler) getVATDecisionForTenant(ctx context.Context, tenantID, cli
 		}
 	}
 
-	// 2. Fall back to GeoIP
-	country := h.getCountryFromIP(clientIP)
-	if _, isEU := developmentVATRates[country]; isEU {
-		return h.loadEffectiveVATRate(ctx, country, at)
+	// Anonymous simplified top-ups use the supplier-country standard rate. IP
+	// location is retained as audit metadata but never silently creates a zero-
+	// VAT export or blocks the customer's document.
+	decision, err := h.loadEffectiveVATRate(ctx, h.supplierCountry, at)
+	if err != nil {
+		return vatDecision{}, err
 	}
+	decision.Source += "; supplier-country default for anonymous top-up"
+	return decision, nil
+}
 
-	// 3. Non-EU GeoIP = export exempt
-	return vatDecision{Country: country, Source: "non-EU or unavailable customer location", CheckedOn: at.Format("2006-01-02"), EffectiveFrom: at.Format("2006-01-02")}, nil
+type cryptoTaxSnapshot struct {
+	DocumentKind     string
+	Profile          CryptoBillingProfile
+	EURPerUSDRate    float64
+	FXRateSource     string
+	FXRateObservedAt time.Time
+}
+
+func (h *X402Handler) loadCryptoTaxSnapshot(ctx context.Context, tenantID, referenceType, referenceID string) (cryptoTaxSnapshot, error) {
+	var snapshot cryptoTaxSnapshot
+	var raw []byte
+	var rateText string
+	var err error
+	switch referenceType {
+	case "x402_payment":
+		err = h.db.QueryRowContext(ctx, `
+			SELECT quote.tax_document_kind, quote.tax_profile_snapshot,
+			       quote.eur_per_usd_rate::text, quote.created_at
+			FROM purser.x402_nonces nonce
+			JOIN purser.x402_payment_quotes quote ON quote.id = nonce.quote_id
+			WHERE nonce.tenant_id = $1 AND nonce.tx_hash = $2
+			ORDER BY nonce.settled_at DESC
+			LIMIT 1
+		`, tenantID, referenceID).Scan(&snapshot.DocumentKind, &raw, &rateText, &snapshot.FXRateObservedAt)
+		snapshot.FXRateSource = "European Central Bank reference rate locked by x402 quote"
+	case "crypto_payment":
+		err = h.db.QueryRowContext(ctx, `
+			SELECT tax_document_kind, tax_profile_snapshot,
+			       quoted_usd_to_eur_rate::text, quoted_at
+			FROM purser.crypto_wallets
+			WHERE tenant_id = $1 AND tx_hash = $2 AND purpose = 'prepaid'
+			ORDER BY created_at DESC
+			LIMIT 1
+		`, tenantID, referenceID).Scan(&snapshot.DocumentKind, &raw, &rateText, &snapshot.FXRateObservedAt)
+		snapshot.FXRateSource = "European Central Bank reference rate locked by deposit quote"
+	default:
+		return cryptoTaxSnapshot{}, fmt.Errorf("unsupported crypto payment reference type %q", referenceType)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return cryptoTaxSnapshot{}, fmt.Errorf("immutable crypto tax snapshot not found")
+	}
+	if err != nil {
+		return cryptoTaxSnapshot{}, err
+	}
+	if _, err := fmt.Sscan(rateText, &snapshot.EURPerUSDRate); err != nil || snapshot.EURPerUSDRate <= 0 {
+		return cryptoTaxSnapshot{}, fmt.Errorf("invalid locked EUR-per-USD rate")
+	}
+	if err := json.Unmarshal(raw, &snapshot.Profile); err != nil {
+		return cryptoTaxSnapshot{}, fmt.Errorf("decode crypto tax profile snapshot: %w", err)
+	}
+	if snapshot.DocumentKind != "simplified" && snapshot.DocumentKind != "full" {
+		return cryptoTaxSnapshot{}, fmt.Errorf("invalid crypto tax document kind %q", snapshot.DocumentKind)
+	}
+	if snapshot.FXRateObservedAt.IsZero() {
+		return cryptoTaxSnapshot{}, fmt.Errorf("locked EUR-per-USD rate is missing its observation time")
+	}
+	return snapshot, nil
 }
 
 func (h *X402Handler) getVATRateForTenant(ctx context.Context, tenantID, clientIP string) (rateBps int, country string, isB2B bool) {
@@ -2191,21 +2476,69 @@ func reverseChargeEligible(supplierCountry, customerCountry string, viesValidate
 	return viesValidated && supplierIsEU && customerIsEU && supplierCountry != customerCountry
 }
 
-func (h *X402Handler) getBillingCountry(ctx context.Context, tenantID string) string {
-	var raw []byte
+// CryptoDocumentRequirement determines whether a payment can use the
+// customer-anonymous simplified document path before any payment instruction
+// is exposed or settled.
+type CryptoDocumentRequirement struct {
+	NeedsFullDocument       bool
+	HasVATClaim             bool
+	RequiresCompleteProfile bool
+	DocumentKind            string
+	Profile                 CryptoBillingProfile
+}
+
+// CryptoBillingProfile is the immutable customer snapshot bound to a payment
+// quote or deposit address. The raw structured address is retained verbatim.
+type CryptoBillingProfile struct {
+	Email     string          `json:"email,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Company   string          `json:"company,omitempty"`
+	VATNumber string          `json:"vat_number,omitempty"`
+	Address   json.RawMessage `json:"address,omitempty"`
+}
+
+func (p CryptoBillingProfile) Complete() bool {
+	return strings.TrimSpace(p.Name) != "" && isBillingDetailsComplete(sql.NullString{String: p.Email, Valid: strings.TrimSpace(p.Email) != ""}, p.Address)
+}
+
+// GetCryptoDocumentRequirement applies the EUR 100 simplified-invoice ceiling
+// and treats a submitted VAT number as an explicit B2B/full-invoice claim.
+func (h *X402Handler) GetCryptoDocumentRequirement(ctx context.Context, tenantID string, amountEurCents int64) (CryptoDocumentRequirement, error) {
+	if amountEurCents <= 0 {
+		return CryptoDocumentRequirement{}, fmt.Errorf("positive EUR payment amount required")
+	}
+	var billingEmail, billingName, billingCompany, taxID sql.NullString
+	var billingAddress []byte
 	err := h.db.QueryRowContext(ctx, `
-		SELECT billing_address FROM purser.tenant_subscriptions
+		SELECT billing_email, billing_name, billing_company, billing_address, tax_id
+		FROM purser.tenant_subscriptions
 		WHERE tenant_id = $1 AND status != 'cancelled'
-		ORDER BY created_at DESC LIMIT 1
-	`, tenantID).Scan(&raw)
-	if err != nil || len(raw) == 0 {
-		return ""
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, tenantID).Scan(&billingEmail, &billingName, &billingCompany, &billingAddress, &taxID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return CryptoDocumentRequirement{}, err
 	}
-	address, err := parseBillingAddress(raw)
-	if err != nil {
-		return ""
+	hasVATClaim := taxID.Valid && strings.TrimSpace(taxID.String) != ""
+	needsFullDocument := amountEurCents > 10_000 || hasVATClaim
+	documentKind := "simplified"
+	if needsFullDocument {
+		documentKind = "full"
 	}
-	return countries.Normalize(address.Country)
+	profile := CryptoBillingProfile{
+		Email:     strings.TrimSpace(billingEmail.String),
+		Name:      strings.TrimSpace(billingName.String),
+		Company:   strings.TrimSpace(billingCompany.String),
+		VATNumber: strings.TrimSpace(taxID.String),
+		Address:   append(json.RawMessage(nil), billingAddress...),
+	}
+	return CryptoDocumentRequirement{
+		NeedsFullDocument:       needsFullDocument,
+		HasVATClaim:             hasVATClaim,
+		RequiresCompleteProfile: needsFullDocument && !profile.Complete(),
+		DocumentKind:            documentKind,
+		Profile:                 profile,
+	}, nil
 }
 
 func isBillingDetailsComplete(billingEmail sql.NullString, billingAddress []byte) bool {
@@ -2236,6 +2569,9 @@ func (h *X402Handler) isValidEUVATFormat(vatNumber string) bool {
 }
 
 func (h *X402Handler) getCountryFromIP(clientIP string) string {
+	if h.countryFromIP != nil {
+		return countries.Normalize(h.countryFromIP(clientIP))
+	}
 	if reader := geoip.GetSharedReader(); reader != nil {
 		if geo := reader.Lookup(clientIP); geo != nil && geo.CountryCode != "" {
 			return countries.Normalize(geo.CountryCode)
@@ -2439,13 +2775,16 @@ type VerifyResult struct {
 
 // SettleResult contains the result of payment settlement
 type SettleResult struct {
-	Success         bool
-	Error           string
-	IsAuthOnly      bool   // Retained for wire compatibility; always false
-	PayerAddress    string // Wallet address of payer (from authorization signature)
-	TxHash          string
-	CreditedCents   int64
-	Currency        string
-	NewBalanceCents int64
-	InvoiceNumber   string
+	Success          bool
+	Error            string
+	IsAuthOnly       bool   // Retained for wire compatibility; always false
+	PayerAddress     string // Wallet address of payer (from authorization signature)
+	TxHash           string
+	CreditedCents    int64
+	Currency         string
+	NewBalanceCents  int64
+	InvoiceNumber    string
+	SettlementStatus string
+	ErrorCode        string
+	Network          string
 }

@@ -49,3 +49,35 @@ ALTER TABLE purser.x402_nonces
 CREATE UNIQUE INDEX IF NOT EXISTS idx_x402_nonces_quote
     ON purser.x402_nonces(quote_id)
     WHERE quote_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS purser.x402_settlement_attempts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    settlement_id UUID NOT NULL REFERENCES purser.x402_nonces(id),
+    attempt_number INTEGER NOT NULL DEFAULT 1 CHECK (attempt_number > 0),
+    network VARCHAR(20) NOT NULL,
+    chain_id BIGINT NOT NULL CHECK (chain_id > 0),
+    relayer_address VARCHAR(42) NOT NULL,
+    relayer_nonce BIGINT NOT NULL CHECK (relayer_nonce >= 0),
+    signed_raw_transaction BYTEA NOT NULL,
+    transaction_hash VARCHAR(66) NOT NULL,
+    gas_limit BIGINT NOT NULL CHECK (gas_limit > 0),
+    max_fee_per_gas NUMERIC(78,0) NOT NULL CHECK (max_fee_per_gas > 0),
+    max_priority_fee_per_gas NUMERIC(78,0) NOT NULL CHECK (max_priority_fee_per_gas >= 0),
+    state VARCHAR(24) NOT NULL DEFAULT 'prepared' CHECK (
+        state IN ('prepared', 'broadcast_unknown', 'broadcast', 'confirmed', 'reverted', 'replaced')
+    ),
+    broadcast_attempts INTEGER NOT NULL DEFAULT 0 CHECK (broadcast_attempts >= 0),
+    last_error TEXT,
+    prepared_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    first_broadcast_at TIMESTAMPTZ,
+    last_broadcast_at TIMESTAMPTZ,
+    confirmed_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (settlement_id, attempt_number),
+    UNIQUE (network, relayer_address, relayer_nonce),
+    UNIQUE (transaction_hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_x402_settlement_attempts_reconcile
+    ON purser.x402_settlement_attempts(state, updated_at)
+    WHERE state IN ('prepared', 'broadcast_unknown', 'broadcast');

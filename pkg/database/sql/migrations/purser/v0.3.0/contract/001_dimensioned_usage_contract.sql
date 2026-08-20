@@ -74,7 +74,29 @@ ALTER TABLE purser.operator_credit_ledger
 DROP TABLE IF EXISTS purser.storage_provider_usage_records;
 
 CREATE VIEW purser.payment_report_operator_credits_without_clawback AS
-SELECT accrual.*
+SELECT
+    accrual.id,
+    accrual.source_type,
+    accrual.invoice_line_item_id,
+    accrual.provider_usage_record_id,
+    accrual.usage_adjustment_id,
+    accrual.stripe_invoice_id,
+    accrual.entry_type,
+    accrual.reverses_ledger_id,
+    accrual.cluster_owner_tenant_id,
+    accrual.cluster_id,
+    accrual.invoice_id,
+    accrual.period_start,
+    accrual.period_end,
+    accrual.currency,
+    accrual.gross_cents,
+    accrual.platform_fee_cents,
+    accrual.payable_cents,
+    accrual.status,
+    accrual.payout_batch_id,
+    accrual.notes,
+    accrual.created_at,
+    accrual.updated_at
 FROM purser.operator_credit_ledger accrual
 JOIN purser.payment_reversals pr
     ON pr.invoice_id = accrual.invoice_id

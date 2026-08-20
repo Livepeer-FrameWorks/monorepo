@@ -37,10 +37,10 @@ func TestCreateCheckoutSessionExpiresStripeSessionWhenLocalStageFails(t *testing
 	}
 
 	tierID := "11111111-1111-1111-1111-111111111111"
-	mock.ExpectQuery(`SELECT billing_email, billing_company, tax_id, billing_address, updated_at`).
+	mock.ExpectQuery(`SELECT billing_email, billing_name, billing_company, tax_id, billing_address, updated_at`).
 		WithArgs("tenant-a").
-		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_company", "tax_id", "billing_address", "updated_at"}).
-			AddRow("billing@example.com", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now()))
+		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at"}).
+			AddRow("billing@example.com", "Example Customer", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now()))
 	mock.ExpectQuery(`SELECT tier_name, currency, stripe_price_id_monthly FROM purser\.billing_tiers WHERE id = \$1`).
 		WithArgs(tierID).
 		WillReturnRows(sqlmock.NewRows([]string{"tier_name", "currency", "stripe_price_id_monthly"}).AddRow("Pro", "USD", "price_123"))
@@ -98,10 +98,10 @@ func TestCreateMollieSubscriptionCancelsProviderSubscriptionWhenLocalPersistFail
 	}
 
 	tierID := "11111111-1111-1111-1111-111111111111"
-	mock.ExpectQuery(`SELECT billing_email, billing_company, tax_id, billing_address, updated_at`).
+	mock.ExpectQuery(`SELECT billing_email, billing_name, billing_company, tax_id, billing_address, updated_at`).
 		WithArgs("tenant-a").
-		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_company", "tax_id", "billing_address", "updated_at"}).
-			AddRow("billing@example.com", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now()))
+		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at"}).
+			AddRow("billing@example.com", "Example Customer", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now()))
 	mock.ExpectQuery(`SELECT 1 FROM purser\.tenant_subscriptions WHERE tenant_id = \$1`).
 		WithArgs("tenant-a").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(1))

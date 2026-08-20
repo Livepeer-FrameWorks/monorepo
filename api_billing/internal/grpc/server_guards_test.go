@@ -1,16 +1,37 @@
 package grpc
 
 import (
-	"context"
 	"testing"
 
+	"frameworks/api_billing/internal/handlers"
 	"github.com/DATA-DOG/go-sqlmock"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 )
+
+func TestCryptoBillingProfileRequiredErrorCarriesStableDetails(t *testing.T) {
+	err := cryptoBillingProfileRequiredError(handlers.CryptoDocumentRequirement{NeedsFullDocument: true})
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.FailedPrecondition {
+		t.Fatalf("status = (%v, %v)", st, ok)
+	}
+	for _, detail := range st.Details() {
+		if info, isInfo := detail.(*errdetails.ErrorInfo); isInfo {
+			if info.GetReason() != "BILLING_PROFILE_REQUIRED" {
+				t.Fatalf("reason = %q", info.GetReason())
+			}
+			if info.GetMetadata()["required_fields"] != "name,email,street,city,postal_code,country" {
+				t.Fatalf("required_fields = %q", info.GetMetadata()["required_fields"])
+			}
+			return
+		}
+	}
+	t.Fatal("missing ErrorInfo detail")
+}
 
 // newGuardServer builds a PurserServer backed by a sqlmock with NO expectations.
 // These tests only exercise request-validation guards that must return before
@@ -27,11 +48,10 @@ func newGuardServer(t *testing.T) *PurserServer {
 }
 
 // TestMethodInputGuards asserts the InvalidArgument validation guards at the top
-// of large gRPC methods. A bare context.Background() is a service call
-// (middleware.IsServiceCall is true when both user_id and tenant_id are empty),
+// of large gRPC methods. An explicit service-auth context bypasses tenant scope,
 // so the empty-required-field guards are reached directly.
 func TestMethodInputGuards(t *testing.T) {
-	ctx := context.Background()
+	ctx := serviceTestContext()
 
 	cases := []struct {
 		name string

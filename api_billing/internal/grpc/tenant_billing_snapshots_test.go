@@ -48,7 +48,7 @@ func TestListTenantBillingSnapshotsMapsRows(t *testing.T) {
 
 	mock.ExpectQuery("FROM purser.tenant_subscriptions ts").WillReturnRows(rows)
 
-	resp, err := s.ListTenantBillingSnapshots(context.Background(), &purserpb.ListTenantBillingSnapshotsRequest{})
+	resp, err := s.ListTenantBillingSnapshots(serviceTestContext(), &purserpb.ListTenantBillingSnapshotsRequest{})
 	if err != nil {
 		t.Fatalf("ListTenantBillingSnapshots: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestListTenantBillingSnapshotsPassesFilterAndLimit(t *testing.T) {
 			"prepaid_balance_cents", "outstanding_amount", "overdue_invoices",
 		}))
 
-	_, err := s.ListTenantBillingSnapshots(context.Background(), &purserpb.ListTenantBillingSnapshotsRequest{
+	_, err := s.ListTenantBillingSnapshots(serviceTestContext(), &purserpb.ListTenantBillingSnapshotsRequest{
 		TenantIds: []string{"tenant-a"},
 		Limit:     25,
 	})
