@@ -57,13 +57,20 @@ func TestRunSetChannel_SourcePersistence(t *testing.T) {
 			SourcePersistsManifest: true,
 		}
 		cmd := &cobra.Command{}
-		cmd.SetOut(&bytes.Buffer{})
+		out := &bytes.Buffer{}
+		cmd.SetOut(out)
 		if err := runSetChannel(cmd, rc, "rc"); err != nil {
 			t.Fatalf("expected success, got: %v", err)
 		}
 		data, _ := os.ReadFile(p)
 		if !strings.Contains(string(data), "channel: rc") {
 			t.Fatalf("channel not patched, got:\n%s", data)
+		}
+		if !strings.Contains(out.String(), "cluster release plan") || !strings.Contains(out.String(), "cluster release apply --dry-run") {
+			t.Fatalf("next steps must use the canonical release lifecycle, got:\n%s", out.String())
+		}
+		if strings.Contains(out.String(), "cluster upgrade --all") {
+			t.Fatalf("next steps must not present the recovery-only upgrade flow as canonical, got:\n%s", out.String())
 		}
 	})
 }

@@ -12,7 +12,19 @@ does not use the orchestrator: it renders an Ansible inventory and runs the
 `cluster_os_update.yml` playbook directly. Edge components have a separate
 Foghorn-driven in-place update path documented in `edge-deployment.md`.
 
-## `cluster release apply`: the ordered release plan
+## `cluster release plan/apply`: the release lifecycle
+
+`cluster release plan` is the static preview. It resolves the manifest topology,
+target release metadata, migration phases, platform artifacts, declared
+transitions, managed dependencies, host infrastructure, and control-plane
+desired state without decrypting secrets, opening SSH sessions, or dialing a
+service. It is safe to use early in release preparation and CI.
+
+`cluster release apply --dry-run` is intentionally different: it opens the same
+access paths and performs the same live gates and transition `Check`s as an apply,
+but makes no changes. This catches missing credentials and inconsistent live
+state before the rollout. A static plan succeeding does not imply that the live
+preflight will succeed.
 
 `cluster release apply` runs a single ordered, resumable plan for a whole release
 rather than leaving the operator to drive migrations, reconciliations, and version
@@ -32,6 +44,42 @@ is resumable, an interrupted run picks up at the first incomplete step instead o
 restarting the whole release. Operator-facing usage (dry-run plan preview, gates,
 and the `--yes` execution flow) is documented in
 [operators/running-upgrades.mdx](../../website_docs/src/content/docs/operators/running-upgrades.mdx).
+
+The release lifecycle classifies deployable things by owner instead of treating
+every manifest entry as a platform binary:
+
+| Class                       | Release behavior                                           | Operator lifecycle                                                                |
+| --------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Platform artifacts          | Upgraded in dependency order by `cluster release apply`    | Release manifest and release catalog                                              |
+| Managed dependencies        | Reported, but never upgraded implicitly                    | Independent manifest pins and `cluster provision` or a component-specific command |
+| Host infrastructure         | Reported, but never upgraded implicitly                    | Dedicated OS, database, or data lifecycle                                         |
+| Control-plane desired state | Reported, but never reconciled implicitly during a release | `cluster control-plane plan/reconcile`                                            |
+
+The mutating release sequence is expand migrations, platform-artifact upgrades
+with declared transitions at their ordering points, then postdeploy migrations.
+Contract migrations are universally deferred. `release apply` prints the exact
+`cluster migrate --phase contract` command, which the operator runs only after
+the release's rollback or observation window closes.
+
+## Control-plane desired state
+
+Provisioning establishes both hosts and platform-owned service state on a fresh
+cluster. Subsequent changes to tenant bootstrap, the Quartermaster service
+catalog, billing tiers and prices, managed accounts, or service-cluster
+assignments do not require reprovisioning hosts. They use the explicit,
+idempotent control-plane lifecycle:
+
+```text
+frameworks cluster control-plane plan --manifest <path> --domain <domain>
+frameworks cluster control-plane reconcile --manifest <path> --domain <domain>
+```
+
+Domains are `quartermaster`, `billing`, `accounts`, `assignments`, `validation`,
+or `all`. The plan resolves and validates the rendered desired state without
+opening remote sessions or changing services. Reconcile changes service-owned
+control-plane state, but never provisions hosts, deploys binaries, or runs schema
+migrations. The deprecated `cluster finalize` command remains a compatibility
+alias, not a primary operator workflow.
 
 ## Planner and dependency graph
 
@@ -110,9 +158,12 @@ the previous version unless `--no-rollback` (or when the recorded previous
 version/mode is incomplete, in which case rollback is disabled with a warning).
 
 Rollback restores the service artifact only: it does **not** undo schema or data
-migrations. Expand-compatible migrations run first via `cluster migrate`;
-destructive contract steps must follow the release notes. `--all` upgrades enabled
-services in dependency order.
+migrations. `cluster upgrade` is a low-level recovery primitive; the normal whole
+release path is `cluster release apply`. `--all` upgrades enabled services in
+dependency order, but it neither executes nor proves declared release
+transitions. It therefore fails closed rather than crossing a transition's
+downstream service boundary unsafely. Contract migrations remain a separate,
+deferred operator action in both flows.
 
 ## OS updates (`cluster os update`)
 
@@ -140,6 +191,8 @@ updates; `--apply` runs the mutating playbook host by host.
 - `cli/pkg/orchestrator/gate.go` - `HTTPReady` / `SystemdActive` gates
 - `cli/pkg/orchestrator/executor.go` - wave execution, halt semantics
 - `cli/pkg/orchestrator/strategy_defaults.go` - per-service strategy registry
+- `cli/cmd/cluster_release.go` - static planning and ordered release apply
+- `cli/cmd/cluster_control_plane.go` - explicit desired-state plan/reconcile
 - `cli/cmd/cluster_apply.go`, `cli/cmd/cluster_upgrade.go`, `cli/cmd/cluster_os_update.go`
 - `cli/pkg/gitops/` - release manifests, checksums, digests, channel resolution
 

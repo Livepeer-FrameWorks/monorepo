@@ -67,7 +67,23 @@ On upgrades, `frameworks cluster migrate` runs only the migrations whose
 ledger row is missing. There is no blind ledger pre-seed: every recorded
 migration was produced by an actual SQL apply.
 
-## Upgrade procedure
+## Release and recovery procedure
+
+For a normal platform release, use the lifecycle command that owns ClickHouse,
+PostgreSQL/YugabyteDB, service, and transition ordering:
+
+```bash
+frameworks cluster release plan --version vX.Y.Z
+frameworks cluster release apply --version vX.Y.Z --dry-run
+frameworks cluster release apply --version vX.Y.Z --yes
+```
+
+It applies expand migrations before platform artifacts, interleaves declared
+release transitions, applies postdeploy migrations afterward, and always leaves
+contract migrations deferred.
+
+Use the following lower-level flow only for migration development, diagnosis,
+or a release-specific recovery runbook:
 
 1. **Check release notes** for required ClickHouse DDL.
 2. **Confirm the phase**. Routine rolling upgrades apply `expand` migrations
@@ -104,7 +120,8 @@ frameworks cluster migrate --phase expand --to-version v0.5.0
 `--to-version` is optional; when omitted the cluster's resolved channel
 version is used.
 
-6. **Deploy services** after expand migrations are in place:
+6. **Deploy services** only when the recovery runbook explicitly proves there
+   are no unhandled release transitions:
 
 ```bash
 frameworks cluster upgrade --all
@@ -115,6 +132,10 @@ frameworks cluster upgrade --all
 ```bash
 frameworks cluster migrate --phase postdeploy --to-version v0.5.0
 ```
+
+Direct `cluster upgrade --all` does not run declared release transitions and
+fails closed when one gates a downstream service. It is not the normal whole
+release path.
 
 ## Ledger details
 

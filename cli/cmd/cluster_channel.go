@@ -75,7 +75,8 @@ func runSetChannel(cmd *cobra.Command, rc *resolvedCluster, channel string) erro
 		ux.Warn(out, "Release candidates are pre-production — review the changelog before upgrading.")
 	}
 	ux.PrintNextSteps(out, []ux.NextStep{
-		{Cmd: "frameworks cluster upgrade --all", Why: "Roll services to the new channel."},
+		{Cmd: "frameworks cluster release plan", Why: "Review the complete release selected by the new channel."},
+		{Cmd: "frameworks cluster release apply --dry-run", Why: "Run live release gates before applying it."},
 	})
 	return nil
 }

@@ -24,23 +24,30 @@ The release file is `docs/releases/vX.Y.Z.md` (or wherever your release pipeline
 
 **`### Cluster operators (anyone running their own FrameWorks cluster)`**
 
-Open with a one-line migrations summary (count, which databases, expand vs postdeploy vs contract). Then any pre-upgrade gotchas (fail-closed columns that need pre-declaration, plan-tier reclassifications, etc.). Then the example command sequence:
+Open with a one-line migrations summary (count, which databases, expand vs postdeploy vs contract). Then any pre-upgrade gotchas (fail-closed columns that need pre-declaration, plan-tier reclassifications, etc.). The normal command sequence is:
 
-    frameworks cluster migrate validate
-    frameworks cluster migrate --manifest <path> --phase expand --to-version vX.Y.Z --dry-run
-    frameworks cluster migrate --manifest <path> --phase expand --to-version vX.Y.Z
-    frameworks cluster provision --manifest <path>
-    frameworks cluster upgrade plan --manifest <path> --version vX.Y.Z
-    frameworks cluster upgrade --manifest <path> --version vX.Y.Z --all
-    frameworks cluster migrate --manifest <path> --phase postdeploy --to-version vX.Y.Z
-    frameworks cluster migrate --manifest <path> --phase contract --to-version vX.Y.Z
+    frameworks cluster release plan --manifest <path> --version vX.Y.Z
+    frameworks cluster release apply --manifest <path> --version vX.Y.Z --dry-run
+    frameworks cluster release apply --manifest <path> --version vX.Y.Z --yes
     frameworks cluster status --manifest <path>
 
-Only include the `postdeploy` and `contract` lines when the release ships those phases. Put `contract` after binary rollout and after any postdeploy/data migration the release requires.
+`release plan` is the credential-free, static preview. `release apply --dry-run` is the live preflight: it resolves access and authentication, then runs the same migration, transition, and service checks the real rollout will use. `release apply` owns the ordered expand migrations, service upgrades, declared release transitions, and postdeploy migrations. Do not duplicate those steps in the normal-path command block.
 
-The `cluster provision` step belongs between migrate and upgrade whenever the release changes systemd env, GitOps-rendered config, manifest-derived cluster metadata, provider credentials, or anything else outside service binaries. If the release does not need config reconciliation, omit the provision line and let `cluster upgrade` handle service rollout. Old binaries keep running fine against the expanded schema, so this is a routine rolling upgrade.
+Contract migrations are always outside `release apply`. When a release has contract migrations, name the rollback or observation window and append a separate, explicitly deferred block:
 
-End with a one-line rollback expectation (expand-only stays back-compatible; postdeploy or contract migrations need an explicit forward fix).
+    frameworks cluster migrate --manifest <path> --phase contract --to-version vX.Y.Z --dry-run
+    frameworks cluster migrate --manifest <path> --phase contract --to-version vX.Y.Z
+
+Classify everything else explicitly instead of using `cluster provision` as a catch-all:
+
+- **Platform artifact:** handled by `cluster release apply`.
+- **Managed dependency or rendered host configuration:** name the exact `cluster provision` or component-specific reconciliation command and when to run it.
+- **Control-plane desired state:** use `cluster control-plane plan`, then `cluster control-plane reconcile` with the affected domain(s).
+- **Host or data infrastructure:** name the dedicated lifecycle command and its own safety procedure.
+
+The manual `cluster migrate` plus `cluster upgrade` sequence is a low-level recovery path, not the documented normal path. Include it only when a release has a diagnosed recovery need, and spell out every migration phase and transition ordering point. Direct `cluster upgrade --all` does not execute declared release transitions and may refuse an unsafe downstream upgrade.
+
+End with a one-line rollback expectation. Expand and postdeploy migrations must remain rollback-compatible for the supported window; running contract migrations closes that window and requires an explicit forward fix.
 
 **`### Tenants on a managed FrameWorks cluster`**
 

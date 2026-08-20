@@ -45,7 +45,23 @@ name, for example `purser`, `quartermaster`, or `commodore`. The CLI embeds
 these files, applies only migrations whose database exists in the manifest, and
 records applied files in that database's `_migrations` table.
 
-## Upgrade procedure
+## Release and recovery procedure
+
+For a normal platform release, use the lifecycle command that owns migration and
+service ordering:
+
+```bash
+frameworks cluster release plan --version vX.Y.Z
+frameworks cluster release apply --version vX.Y.Z --dry-run
+frameworks cluster release apply --version vX.Y.Z --yes
+```
+
+It runs expand migrations, platform artifact upgrades, declared transitions,
+and postdeploy migrations in the required order. Contract migrations stay
+deferred until the rollback window closes.
+
+Use the following lower-level flow only for migration development, diagnosis,
+or a release-specific recovery runbook:
 
 1. **Check release notes** for required migrations
 2. **Confirm the phase**. Routine rolling upgrades apply `expand` migrations.
@@ -64,7 +80,7 @@ frameworks cluster migrate --phase expand
 psql -h <host> -d purser -c "SELECT version, phase, seq, filename, checksum FROM _migrations ORDER BY version, phase, seq;"
 ```
 
-5. **Deploy** new service versions:
+5. **Deploy** a specifically diagnosed service version:
 
 ```bash
 frameworks cluster upgrade quartermaster --version v1.1.0
@@ -75,6 +91,10 @@ frameworks cluster upgrade quartermaster --version v1.1.0
    `frameworks cluster data-migrate`. If a service has not adopted the
    data-migrations command surface, the CLI reports that as a blocker instead
    of treating the migration as complete.
+
+Do not substitute `cluster upgrade --all` for `cluster release apply`: direct
+upgrade does not run declared release transitions and fails closed when one
+gates a downstream service.
 
 ## Writing migrations
 
