@@ -26,10 +26,13 @@ func TestPostgresDemoSeedAppliesToCurrentBaseline(t *testing.T) {
 		pgApply(t, name, "frameworks_demo", string(schemaSQL))
 	}
 
-	demoSQL, err := dbsql.Content.ReadFile("seeds/demo/demo_data.sql")
-	if err != nil {
-		t.Fatalf("read demo seed: %v", err)
+	for _, database := range []string{"quartermaster", "purser", "commodore", "foghorn", "periscope"} {
+		path := demoSeeds[database]
+		demoSQL, err := dbsql.Content.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s demo seed: %v", database, err)
+		}
+		pgApply(t, name, "frameworks_demo", string(demoSQL))
+		pgApply(t, name, "frameworks_demo", string(demoSQL))
 	}
-	pgApply(t, name, "frameworks_demo", string(demoSQL))
-	pgApply(t, name, "frameworks_demo", string(demoSQL))
 }

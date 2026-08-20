@@ -109,7 +109,11 @@ services:
       - ./pkg/database/sql/seeds/static/analytics_ro_purser.sql:/docker-entrypoint-initdb.d/92_analytics_ro_purser.sql:ro
       - ./infrastructure/postgres/analytics_ro_dev_password.sql:/docker-entrypoint-initdb.d/93_analytics_ro_password.sql:ro
       # Demo Seeds (Dev/Demo only - loaded by default for local development)
-      - ./pkg/database/sql/seeds/demo/demo_data.sql:/docker-entrypoint-initdb.d/99_init_demo.sql:ro
+      - ./pkg/database/sql/seeds/demo/postgres/quartermaster.sql:/docker-entrypoint-initdb.d/94_demo_quartermaster.sql:ro
+      - ./pkg/database/sql/seeds/demo/postgres/purser.sql:/docker-entrypoint-initdb.d/95_demo_purser.sql:ro
+      - ./pkg/database/sql/seeds/demo/postgres/commodore.sql:/docker-entrypoint-initdb.d/96_demo_commodore.sql:ro
+      - ./pkg/database/sql/seeds/demo/postgres/foghorn.sql:/docker-entrypoint-initdb.d/97_demo_foghorn.sql:ro
+      - ./pkg/database/sql/seeds/demo/postgres/periscope.sql:/docker-entrypoint-initdb.d/98_demo_periscope.sql:ro
     ports:
       - "5432:5432"
     networks:

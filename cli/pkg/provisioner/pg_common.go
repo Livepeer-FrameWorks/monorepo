@@ -13,5 +13,9 @@ var staticSeeds = map[string]string{
 
 // demoSeeds maps database names to their demo seed file paths.
 var demoSeeds = map[string]string{
-	"quartermaster": "seeds/demo/demo_data.sql",
+	"commodore":     "seeds/demo/postgres/commodore.sql",
+	"foghorn":       "seeds/demo/postgres/foghorn.sql",
+	"periscope":     "seeds/demo/postgres/periscope.sql",
+	"purser":        "seeds/demo/postgres/purser.sql",
+	"quartermaster": "seeds/demo/postgres/quartermaster.sql",
 }

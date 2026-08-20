@@ -56,3 +56,18 @@ func TestBuildPostgresSeedItemsFiltersToManifestDatabases(t *testing.T) {
 		t.Fatalf("items = %v, want exactly the purser seed", items)
 	}
 }
+
+func TestBuildPostgresDemoSeedItemsAreServiceOwned(t *testing.T) {
+	items, err := BuildPostgresSeedItems("demo", []string{"commodore", "foghorn", "periscope", "purser", "quartermaster"})
+	if err != nil {
+		t.Fatalf("BuildPostgresSeedItems(demo) returned error: %v", err)
+	}
+	if len(items) != 5 {
+		t.Fatalf("len(items) = %d, want one seed for each service database", len(items))
+	}
+	for _, item := range items {
+		if item["db"] == "" || item["sql"] == "" {
+			t.Errorf("incomplete demo seed item: %#v", item)
+		}
+	}
+}
