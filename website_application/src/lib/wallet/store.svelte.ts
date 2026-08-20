@@ -2,6 +2,7 @@
  * Wallet store for Svelte 5 - manages wallet connection state
  */
 import { getAccount, watchAccount, disconnect, signMessage } from "wagmi/actions";
+import type { Connector } from "wagmi";
 import { wagmiConfig, getChainType } from "./config";
 
 // Wallet connection state using Svelte 5 runes
@@ -62,6 +63,18 @@ export async function signAuthMessage(message: string): Promise<{
     error = err instanceof Error ? err.message : "Failed to sign message";
     return null;
   }
+}
+
+// Sign against the exact account/connector returned by connect(). This avoids
+// racing the reactive account watcher during first-time wallet login.
+export async function signAuthMessageForConnection(
+  message: string,
+  account: `0x${string}`,
+  connector: Connector
+): Promise<{ message: string; signature: string }> {
+  error = null;
+  const signature = await signMessage(wagmiConfig, { message, account, connector });
+  return { message, signature };
 }
 
 // Disconnect wallet

@@ -11,6 +11,7 @@
   import { loadStreamingConfig } from "$lib/stores/streaming-config.svelte";
   import { sidebarStore } from "$lib/stores/sidebar.svelte";
   import { getMarketingSiteUrl } from "$lib/config";
+  import { safeReturnTo } from "$lib/auth/returnTo";
   import { getRouteInfo } from "$lib/navigation.js";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import ComingSoonModal from "$lib/components/ComingSoonModal.svelte";
@@ -85,12 +86,6 @@
     resetPasswordIndexPath,
   ];
 
-  function safeReturnTo(value: string | null): string | null {
-    if (!value || !value.startsWith("/") || value.startsWith("//")) return null;
-    if (value === loginPath || value.startsWith(`${loginPath}?`)) return null;
-    return value;
-  }
-
   // Subscribe to auth store
   const unsubscribeAuth = auth.subscribe((authState) => {
     const wasAuthenticated = isAuthenticated;
@@ -116,7 +111,7 @@
     if (!loading && initialized) {
       const currentPath = $page.url.pathname;
       const isPublicRoute = publicRoutes.includes(currentPath);
-      const returnTo = safeReturnTo($page.url.searchParams.get("return_to"));
+      const returnTo = safeReturnTo($page.url.searchParams.get("return_to"), loginPath);
 
       if (!isAuthenticated && !isPublicRoute) {
         const target = `${currentPath}${$page.url.search}`;

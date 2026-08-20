@@ -17,6 +17,7 @@
     CreateMollieFirstPaymentStore,
     CreateMollieSubscriptionStore,
     ChangeBillingTierStore,
+    PromoteToPaidStore,
     BillingTierFieldsStore,
   } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
@@ -40,6 +41,7 @@
   const mollieFirstPaymentMutation = new CreateMollieFirstPaymentStore();
   const mollieSubscriptionMutation = new CreateMollieSubscriptionStore();
   const changeTierMutation = new ChangeBillingTierStore();
+  const promoteToPaidMutation = new PromoteToPaidStore();
 
   // Fragment stores for unmasking nested data
   const tierFragmentStore = new BillingTierFieldsStore();
@@ -53,7 +55,7 @@
   let paymentLoadingInvoiceId = $state<string | null>(null);
   type BillingDocument = {
     id: string;
-    kind: "invoice" | "simplified_invoice" | "payment_receipt" | "credit_note";
+    kind: "invoice" | "simplified_invoice" | "crypto_invoice" | "payment_receipt" | "credit_note";
     document_number: string;
     amount_cents: number;
     currency: string;
@@ -175,6 +177,7 @@
     return {
       invoice: "Invoice",
       simplified_invoice: "Simplified invoice",
+      crypto_invoice: "Crypto invoice",
       payment_receipt: "Payment receipt",
       credit_note: "Credit note",
     }[kind];
@@ -379,10 +382,36 @@
     }
   }
 
+  async function activateFreeAccount() {
+    const freeTier = availableTiers.find((tier) => (tier.tierName ?? "").toLowerCase() === "free");
+    if (!freeTier?.id) {
+      toast.error("Free tier is unavailable");
+      return;
+    }
+    changeTierLoadingId = freeTier.id;
+    try {
+      const response = await promoteToPaidMutation.mutate({ tierId: freeTier.id });
+      const result = response.data?.promoteToPaid;
+      if (result?.__typename === "PromoteToPaidPayload") {
+        toast.success(
+          "Free account activated; your prepaid balance remains available as account credit"
+        );
+        await loadBillingData();
+        return;
+      }
+      throw new Error(result && "message" in result ? result.message : "Failed to activate Free");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to activate Free");
+    } finally {
+      changeTierLoadingId = null;
+    }
+  }
+
   async function handleChangeBillingTier(tier: {
     id?: string | null;
     displayName?: string | null;
     tierLevel?: number | null;
+    basePrice?: number | null;
   }) {
     if (!tier.id) {
       toast.error("Billing tier unavailable");
@@ -393,6 +422,13 @@
       return;
     }
     const isDowngrade = tier.tierLevel < currentTier.tierLevel;
+    if (!isDowngrade && moneyNumber(tier.basePrice) > 0 && !billingStatus?.collectionReady) {
+      selectedTierId = tier.id;
+      toast.info(
+        "Choose Stripe or Mollie below to confirm collection before activating this paid tier"
+      );
+      return;
+    }
     if (isDowngrade) {
       const ok = window.confirm(
         `Downgrade to ${tier.displayName ?? "this tier"} at the end of the current billing period?`
@@ -921,19 +957,37 @@
           <!-- Prepaid Balance -->
           <PrepaidBalanceWidget />
 
-          <!-- Upgrade to Postpaid (for prepaid accounts with verified email) -->
-          {#if isPrepaid && $auth.user?.email}
+          <!-- Provider-confirmed paid-plan setup -->
+          {#if (isPrepaid || !billingStatus?.collectionReady) && $auth.user?.email}
             <div class="slab">
               <div class="slab-header">
                 <div class="flex items-center gap-2">
                   <ArrowUpIcon class="w-4 h-4 text-success" />
-                  <h3>Upgrade to Postpaid</h3>
+                  <h3>{isPrepaid ? "Upgrade to Postpaid" : "Activate a Paid Plan"}</h3>
                 </div>
               </div>
               <div class="slab-body--padded">
+                {#if isPrepaid && $auth.user?.is_verified}
+                  <div class="mb-4 border border-border bg-muted/30 p-3 text-sm">
+                    <p class="font-medium">Want the Free monthly plan instead?</p>
+                    <p class="mt-1 text-muted-foreground">
+                      Free keeps itemized monthly usage statements at €0 and does not require
+                      billing details or a payment method.
+                    </p>
+                    <Button
+                      class="mt-3"
+                      variant="outline"
+                      onclick={activateFreeAccount}
+                      disabled={changeTierLoadingId !== null}
+                    >
+                      {changeTierLoadingId ? "Activating..." : "Activate Free"}
+                    </Button>
+                  </div>
+                {/if}
                 <p class="text-sm text-muted-foreground mb-4">
-                  You're currently on prepaid billing. Choose a provider and complete its hosted
-                  setup before monthly postpaid billing is activated.
+                  {isPrepaid
+                    ? "You're currently on prepaid billing. Choose a provider and complete its hosted setup before monthly postpaid billing is activated."
+                    : "Your Free account does not need a payment method. To activate a paid tier, choose a provider and complete its hosted collection setup first."}
                 </p>
                 {#if !billingDetails?.isComplete}
                   <div class="mb-4 border border-warning/50 bg-warning/10 p-3 text-sm">

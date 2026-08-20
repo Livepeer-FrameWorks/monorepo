@@ -62,6 +62,7 @@
   let availableCardProviders = $state<Array<"STRIPE" | "MOLLIE">>([]);
   let cryptoAsset = $state<"ETH" | "USDC">("USDC");
   let topupLoading = $state(false);
+  let topupGuidance = $state<string | null>(null);
   let minimumTopupAmount = $derived(topupMethod === "card" ? 5 : 0.01);
 
   // Crypto deposit state — populated post-quote.
@@ -192,6 +193,7 @@
     }
 
     topupLoading = true;
+    topupGuidance = null;
     try {
       const result = await cardTopupMutation.mutate({
         input: {
@@ -203,11 +205,17 @@
         },
       });
 
+      if (result.errors?.length) {
+        throw new Error(paymentErrorMessage(result.errors[0], "Failed to create checkout session"));
+      }
+
       if (result.data?.createCardTopup?.checkoutUrl) {
         window.location.href = result.data.createCardTopup.checkoutUrl;
       }
-    } catch {
-      toast.error("Failed to create checkout session");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to create checkout session";
+      topupGuidance = message;
+      toast.error(message);
     } finally {
       topupLoading = false;
     }
@@ -220,6 +228,7 @@
     }
 
     topupLoading = true;
+    topupGuidance = null;
     try {
       const result = await cryptoTopupMutation.mutate({
         input: {
@@ -228,6 +237,10 @@
           currency: "EUR",
         },
       });
+
+      if (result.errors?.length) {
+        throw new Error(paymentErrorMessage(result.errors[0], "Failed to create deposit address"));
+      }
 
       if (result.data?.createCryptoTopup) {
         const r = result.data.createCryptoTopup;
@@ -245,8 +258,10 @@
         startPolling(r.topupId);
         toast.success("Deposit address created");
       }
-    } catch {
-      toast.error("Failed to create deposit address");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to create deposit address";
+      topupGuidance = message;
+      toast.error(message);
     } finally {
       topupLoading = false;
     }
@@ -290,6 +305,26 @@
 
   function isPositiveAmount(cents: number): boolean {
     return cents >= 1;
+  }
+
+  function paymentErrorMessage(error: unknown, fallback: string): string {
+    if (!error || typeof error !== "object") return fallback;
+    const candidate = error as {
+      message?: unknown;
+      extensions?: { code?: unknown; required_fields?: unknown };
+    };
+    const fields = Array.isArray(candidate.extensions?.required_fields)
+      ? candidate.extensions.required_fields.filter(
+          (field): field is string => typeof field === "string" && field.length > 0
+        )
+      : [];
+    if (candidate.extensions?.code === "BILLING_PROFILE_REQUIRED") {
+      const suffix = fields.length > 0 ? ` Required: ${fields.join(", ")}.` : "";
+      return `This payment needs a full tax invoice. Complete your billing profile before requesting a new quote.${suffix}`;
+    }
+    return typeof candidate.message === "string" && candidate.message.length > 0
+      ? candidate.message
+      : fallback;
   }
 </script>
 
@@ -443,6 +478,11 @@
                   {/each}
                 </div>
               </div>
+              <p class="text-xs text-muted-foreground">
+                Up to €100 can use the customer-anonymous simplified VAT document path. A larger
+                payment or a VAT-number claim needs a complete billing profile before an address is
+                issued.
+              </p>
             {:else}
               <div>
                 <span class="block text-sm font-medium text-muted-foreground mb-2"
@@ -467,6 +507,17 @@
                   <p class="mt-2 text-xs text-muted-foreground">
                     Minimum €5.00. The provider may enforce a higher currency-specific minimum.
                   </p>
+                {/if}
+              </div>
+            {/if}
+
+            {#if topupGuidance}
+              <div class="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">
+                <p>{topupGuidance}</p>
+                {#if topupGuidance.includes("billing profile")}
+                  <Button href={resolve("/settings")} variant="ghost" size="sm" class="mt-2 px-0">
+                    Complete billing profile
+                  </Button>
                 {/if}
               </div>
             {/if}

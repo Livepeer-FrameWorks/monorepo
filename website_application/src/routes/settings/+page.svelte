@@ -38,6 +38,7 @@
   // Billing Details state
   interface BillingDetailsState {
     email: string;
+    name: string;
     company: string;
     vatNumber: string;
     street: string;
@@ -49,6 +50,7 @@
   }
   let billingDetails = $state<BillingDetailsState>({
     email: "",
+    name: "",
     company: "",
     vatNumber: "",
     street: "",
@@ -103,6 +105,7 @@
           const d = detailsResult.data.billingDetails;
           billingDetails = {
             email: d.email || "",
+            name: d.name || "",
             company: d.company || "",
             vatNumber: d.vatNumber || "",
             street: d.address?.street || "",
@@ -190,6 +193,7 @@
       const result = await mutation.mutate({
         input: {
           email: billingDetails.email || null,
+          name: billingDetails.name || null,
           company: billingDetails.company || null,
           vatNumber: billingDetails.vatNumber || null,
           address: hasAddress
@@ -213,6 +217,7 @@
         const d = result.data.updateBillingDetails;
         billingDetails = {
           email: d.email || "",
+          name: d.name || "",
           company: d.company || "",
           vatNumber: d.vatNumber || "",
           street: d.address?.street || "",
@@ -557,7 +562,9 @@
             </div>
             <div class="slab-body--padded">
               <p class="text-sm text-muted-foreground mb-4">
-                Add an email address to enable email-based login and unlock postpaid billing.
+                Add and verify an email address to enable password sign-in and the metered €0 Free
+                tier. Paid postpaid tiers additionally require billing details and confirmed
+                provider setup; prepaid funding does not require switching billing models.
               </p>
               <div class="space-y-3">
                 <div>
@@ -629,6 +636,17 @@
                 automatically.
               </p>
               <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label for="billingName" class="text-sm font-medium text-muted-foreground"
+                    >Legal / Customer Name</label
+                  >
+                  <Input
+                    id="billingName"
+                    type="text"
+                    bind:value={billingDetails.name}
+                    placeholder="Jane Doe or Acme B.V."
+                  />
+                </div>
                 <div>
                   <label for="billingEmail" class="text-sm font-medium text-muted-foreground"
                     >Billing Email</label

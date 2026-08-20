@@ -2,15 +2,21 @@
   import { onMount, onDestroy } from "svelte";
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
-  import { connect, getConnectors } from "wagmi/actions";
+  import { connect, getConnectors, watchConnectors } from "wagmi/actions";
   import { wagmiConfig } from "$lib/wallet/config";
   import {
     setupWalletWatcher,
     cleanupWalletWatcher,
-    signAuthMessage,
+    signAuthMessageForConnection,
     disconnectWallet,
   } from "$lib/wallet/store.svelte";
   import { auth } from "$lib/stores/auth";
+  import { safeReturnTo } from "$lib/auth/returnTo";
+  import {
+    connectAndLogin,
+    subscribeToConnectors,
+    walletErrorMessage,
+  } from "$lib/wallet/loginFlow";
   import { Button } from "$lib/components/ui/button";
 
   interface Props {
@@ -27,7 +33,11 @@
 
   onMount(() => {
     setupWalletWatcher();
-    connectors = getConnectors(wagmiConfig);
+    return subscribeToConnectors(
+      () => getConnectors(wagmiConfig),
+      (onChange) => watchConnectors(wagmiConfig, { onChange }),
+      (nextConnectors) => (connectors = [...nextConnectors])
+    );
   });
 
   onDestroy(() => {
@@ -39,34 +49,34 @@
     error = "";
 
     try {
-      // Connect wallet
-      const result = await connect(wagmiConfig, { connector });
-
-      if (!result.accounts[0]) {
-        throw new Error("No account connected");
-      }
-
-      const address = result.accounts[0];
-
-      const message = await auth.issueWalletChallenge(address, result.chainId);
-      const signed = await signAuthMessage(message);
-      if (!signed) {
-        throw new Error("Failed to sign message");
-      }
-
-      // Use auth store's walletLogin (sets httpOnly cookies)
-      const loginResult = await auth.walletLogin(address, signed.message, signed.signature);
+      const loginResult = await connectAndLogin(connector, {
+        connect: (selected) => connect(wagmiConfig, { connector: selected }),
+        issueChallenge: (address, chainId) => auth.issueWalletChallenge(address, chainId),
+        signChallenge: signAuthMessageForConnection,
+        // The auth store completes the first-party cookie session.
+        login: (address, message, signature) => auth.walletLogin(address, message, signature),
+      });
 
       if (loginResult.success) {
         onSuccess?.();
         if (mode === "login") {
-          goto(resolve("/"));
+          const loginPath = resolve("/login");
+          const returnTo =
+            typeof window === "undefined"
+              ? null
+              : safeReturnTo(
+                  new URLSearchParams(window.location.search).get("return_to"),
+                  loginPath
+                );
+          // safeReturnTo accepts only a same-origin absolute path.
+          // eslint-disable-next-line svelte/no-navigation-without-resolve
+          goto(returnTo ?? resolve("/"));
         }
       } else {
         throw new Error(loginResult.error || "Wallet login failed");
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Wallet connection failed";
+      const message = walletErrorMessage(err);
       error = message;
       onError?.(message);
 

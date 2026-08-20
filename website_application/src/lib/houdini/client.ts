@@ -20,6 +20,8 @@ type X402ResponseBody = {
   message?: string;
   operation?: string;
   topup_url?: string;
+  required_fields?: unknown;
+  requirements?: unknown;
   x402Version?: number;
 };
 
@@ -53,10 +55,7 @@ async function graphQLFetch({ fetch, name, text, variables, session }: RequestHa
   }
 
   let response = await postGraphQL(fetch, name, text, variables, headers);
-  if (
-    (response.status === 401 || response.status === 402) &&
-    (await refreshAuthSession(fetch)) === "ok"
-  ) {
+  if (response.status === 401 && (await refreshAuthSession(fetch)) === "ok") {
     response = await postGraphQL(fetch, name, text, variables, headers);
   }
 
@@ -83,6 +82,16 @@ async function graphQLFetch({ fetch, name, text, variables, session }: RequestHa
       errors: [
         {
           message: body.message || "Payment required",
+          extensions: {
+            code: body.code || "PAYMENT_REQUIRED",
+            error: body.error,
+            operation: body.operation,
+            topup_url: body.topup_url,
+            accepts: body.accepts,
+            required_fields: body.required_fields,
+            requirements: body.requirements,
+            x402Version: body.x402Version,
+          },
         },
       ],
     };

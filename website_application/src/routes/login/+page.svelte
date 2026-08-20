@@ -4,6 +4,7 @@
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
   import { isEmailVerificationRequired } from "$lib/auth/errors";
+  import { safeReturnTo } from "$lib/auth/returnTo";
   import { auth } from "$lib/stores/auth";
   import { getMarketingSiteUrl } from "$lib/config";
   import { getIconComponent } from "$lib/iconUtils";
@@ -44,12 +45,6 @@
       }
     }
   };
-
-  function safeReturnTo(value: string | null): string | null {
-    if (!value || !value.startsWith("/") || value.startsWith("//")) return null;
-    if (value === resolve("/login") || value.startsWith(`${resolve("/login")}?`)) return null;
-    return value;
-  }
 
   onMount(() => {
     // Record when form was shown
@@ -113,7 +108,10 @@
         const returnTo =
           typeof window === "undefined"
             ? null
-            : safeReturnTo(new URLSearchParams(window.location.search).get("return_to"));
+            : safeReturnTo(
+                new URLSearchParams(window.location.search).get("return_to"),
+                resolve("/login")
+              );
         // returnTo is a validated same-origin path (safeReturnTo enforces
         // it starts with a single "/"); falls back to a resolve()'d default.
         // eslint-disable-next-line svelte/no-navigation-without-resolve
