@@ -2,7 +2,6 @@ package mcpspoke
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -16,6 +15,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/search"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -84,10 +84,10 @@ func NewServer(cfg Config) *mcp.Server {
 // --- search_knowledge ---
 
 type searchKnowledgeInput struct {
-	TenantID    string `json:"tenant_id" jsonschema:"required" jsonschema_description:"Tenant ID for scoping the search"`
-	Query       string `json:"query" jsonschema:"required" jsonschema_description:"Search query to run against the knowledge base"`
-	Limit       int    `json:"limit,omitempty" jsonschema_description:"Maximum number of results to return (default 8)"`
-	TenantScope string `json:"tenant_scope,omitempty" jsonschema_description:"Scope to search: tenant, global, or all (default tenant)"`
+	TenantID    string `json:"tenant_id" jsonschema:"Tenant ID for scoping the search"`
+	Query       string `json:"query" jsonschema:"Search query to run against the knowledge base"`
+	Limit       int    `json:"limit,omitempty" jsonschema:"Maximum number of results to return (default 8)"`
+	TenantScope string `json:"tenant_scope,omitempty" jsonschema:"Scope to search: tenant, global, or all (default tenant)"`
 }
 
 type searchKnowledgeResult struct {
@@ -105,7 +105,7 @@ type searchKnowledgeResponse struct {
 }
 
 func registerSearchKnowledge(srv *mcp.Server, cfg Config) {
-	mcp.AddTool(srv,
+	addSpokeTool(srv,
 		&mcp.Tool{
 			Name:        "search_knowledge",
 			Description: "Search the Skipper knowledge base for platform-specific guidance and verified docs.",
@@ -214,9 +214,9 @@ func resolveKnowledgeTenants(tenantID, scope, globalTenantID string) []string {
 // --- search_web ---
 
 type searchWebInput struct {
-	Query       string `json:"query" jsonschema:"required" jsonschema_description:"Search query to run against the web"`
-	Limit       int    `json:"limit,omitempty" jsonschema_description:"Maximum number of results to return (default 8)"`
-	SearchDepth string `json:"search_depth,omitempty" jsonschema_description:"Search depth: basic or advanced (default basic)"`
+	Query       string `json:"query" jsonschema:"Search query to run against the web"`
+	Limit       int    `json:"limit,omitempty" jsonschema:"Maximum number of results to return (default 8)"`
+	SearchDepth string `json:"search_depth,omitempty" jsonschema:"Search depth: basic or advanced (default basic)"`
 }
 
 type searchWebResult struct {
@@ -232,7 +232,7 @@ type searchWebResponse struct {
 }
 
 func registerSearchWeb(srv *mcp.Server, cfg Config) {
-	mcp.AddTool(srv,
+	addSpokeTool(srv,
 		&mcp.Tool{
 			Name:        "search_web",
 			Description: "Search the public web for documentation or references when the knowledge base is insufficient.",
@@ -303,9 +303,9 @@ func handleSearchWeb(ctx context.Context, args searchWebInput, cfg Config) (*mcp
 // --- ask_consultant ---
 
 type askConsultantInput struct {
-	TenantID string `json:"tenant_id" jsonschema:"required" jsonschema_description:"Tenant ID (injected by Gateway)"`
-	Question string `json:"question" jsonschema:"required" jsonschema_description:"Question for the AI video streaming consultant"`
-	Mode     string `json:"mode,omitempty" jsonschema_description:"Set to docs for read-only mode (default full)"`
+	TenantID string `json:"tenant_id" jsonschema:"Tenant ID (injected by Gateway)"`
+	Question string `json:"question" jsonschema:"Question for the AI video streaming consultant"`
+	Mode     string `json:"mode,omitempty" jsonschema:"Set to docs for read-only mode (default full)"`
 }
 
 type askConsultantSource struct {
@@ -335,7 +335,7 @@ type discardStreamer struct{}
 func (discardStreamer) SendToken(string) error { return nil }
 
 func registerAskConsultant(srv *mcp.Server, cfg Config) {
-	mcp.AddTool(srv,
+	addSpokeTool(srv,
 		&mcp.Tool{
 			Name:        "ask_consultant",
 			Description: "Ask the AI video streaming consultant a question. Runs the full Skipper pipeline (knowledge retrieval, web search, reasoning) and returns an answer with confidence tagging and source citations.",
@@ -438,13 +438,58 @@ func spokeError(message string) (*mcp.CallToolResult, any, error) {
 }
 
 func spokeSuccess(result any) (*mcp.CallToolResult, any, error) {
-	data, err := json.MarshalIndent(result, "", "  ")
-	if err != nil {
-		return spokeError(fmt.Sprintf("failed to format result: %v", err))
+	return &mcp.CallToolResult{}, result, nil
+}
+
+func addSpokeTool[In, Out any](server *mcp.Server, tool *mcp.Tool, handler mcp.ToolHandlerFor[In, Out]) {
+	readOnly := true
+	destructive := false
+	openWorld := tool.Name == "search_web" || tool.Name == "ask_consultant"
+	tool.Title = map[string]string{
+		"search_knowledge": "Search Knowledge",
+		"search_web":       "Search Web",
+		"ask_consultant":   "Ask Consultant",
+	}[tool.Name]
+	if tool.Title == "" {
+		panic(fmt.Sprintf("spoke tool %q has no policy", tool.Name))
 	}
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{&mcp.TextContent{Text: string(data)}},
-	}, result, nil
+	tool.Annotations = &mcp.ToolAnnotations{
+		DestructiveHint: &destructive,
+		IdempotentHint:  true,
+		OpenWorldHint:   &openWorld,
+		ReadOnlyHint:    readOnly,
+	}
+	schema, err := jsonschema.For[In](&jsonschema.ForOptions{})
+	if err != nil {
+		panic(fmt.Sprintf("spoke tool %q input schema: %v", tool.Name, err))
+	}
+	if schema.Type == "object" && schema.AdditionalProperties == nil {
+		schema.AdditionalProperties = &jsonschema.Schema{Not: &jsonschema.Schema{}}
+	}
+	for _, name := range schema.Required {
+		property := schema.Properties[name]
+		if property != nil && property.Type == "string" && property.MinLength == nil {
+			property.MinLength = new(int)
+			*property.MinLength = 1
+		}
+	}
+	for property, values := range map[string]map[string][]any{
+		"search_knowledge": {"tenant_scope": {"tenant", "global", "all"}},
+		"search_web":       {"search_depth": {"basic", "advanced"}},
+		"ask_consultant":   {"mode": {"full", "docs"}},
+	}[tool.Name] {
+		if propertySchema, ok := schema.Properties[property]; ok {
+			propertySchema.Enum = values
+		}
+	}
+	if tool.Name == "search_knowledge" || tool.Name == "search_web" {
+		if limit, ok := schema.Properties["limit"]; ok {
+			minimum := float64(1)
+			limit.Minimum = &minimum
+		}
+	}
+	tool.InputSchema = schema
+	mcp.AddTool(server, tool, handler)
 }
 
 func extractSectionHeading(text string) string {

@@ -94,6 +94,23 @@ func TestSpoke_ListTools(t *testing.T) {
 	names := make(map[string]bool)
 	for _, tool := range result.Tools {
 		names[tool.Name] = true
+		if tool.Title == "" || tool.Annotations == nil {
+			t.Errorf("tool %s is missing title or annotations", tool.Name)
+		}
+		encoded, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatalf("marshal %s schema: %v", tool.Name, err)
+		}
+		var schema map[string]any
+		if err := json.Unmarshal(encoded, &schema); err != nil {
+			t.Fatalf("decode %s schema: %v", tool.Name, err)
+		}
+		for propertyName, raw := range schema["properties"].(map[string]any) {
+			property := raw.(map[string]any)
+			if property["description"] == nil || property["description"] == "required" {
+				t.Errorf("tool %s property %s has unusable description", tool.Name, propertyName)
+			}
+		}
 	}
 	for _, expected := range []string{"search_knowledge", "search_web", "ask_consultant"} {
 		if !names[expected] {
