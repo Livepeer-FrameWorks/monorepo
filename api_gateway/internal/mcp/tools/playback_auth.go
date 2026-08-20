@@ -18,7 +18,7 @@ import (
 // RegisterPlaybackAuthTools registers playback policy and signing-key
 // management tools for agent workflows.
 func RegisterPlaybackAuthTools(server *mcp.Server, serviceClients *clients.ServiceClients, _ *resolvers.Resolver, logger logging.Logger) {
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "list_signing_keys",
 			Description: "List the tenant's playback signing keys. Filter by status='active' or status='revoked'; empty returns all.",
@@ -28,7 +28,7 @@ func RegisterPlaybackAuthTools(server *mcp.Server, serviceClients *clients.Servi
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name: "create_signing_key",
 			Description: "Generate a new ES256 playback signing keypair. The PRIVATE PEM is returned ONCE in the response and never stored or returned again — capture it before discarding the response. " +
@@ -39,7 +39,7 @@ func RegisterPlaybackAuthTools(server *mcp.Server, serviceClients *clients.Servi
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "revoke_signing_key",
 			Description: "Mark an active signing key revoked. Tokens minted with this kid are denied after session re-evaluation. Requires confirm=\"REVOKE SIGNING KEY\".",
@@ -49,7 +49,7 @@ func RegisterPlaybackAuthTools(server *mcp.Server, serviceClients *clients.Servi
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name: "set_playback_policy",
 			Description: "Set or update the playback access policy on a stream, VOD asset, or clip. " +
@@ -63,7 +63,7 @@ func RegisterPlaybackAuthTools(server *mcp.Server, serviceClients *clients.Servi
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "clear_playback_policy",
 			Description: "Make a stream / VOD asset / clip publicly playable by clearing its access policy. Foghorn caches drop and active sessions re-evaluate. Requires confirm=\"CLEAR PLAYBACK POLICY\".",
@@ -77,41 +77,41 @@ func RegisterPlaybackAuthTools(server *mcp.Server, serviceClients *clients.Servi
 // ===== Inputs =====
 
 type ListSigningKeysInput struct {
-	Status string `json:"status,omitempty" jsonschema_description:"Filter: 'active' | 'revoked'. Empty returns all."`
-	Limit  int32  `json:"limit,omitempty" jsonschema_description:"Page size. Default 50."`
+	Status string `json:"status,omitempty" jsonschema:"Filter: 'active' | 'revoked'. Empty returns all."`
+	Limit  int32  `json:"limit,omitempty" jsonschema:"Page size. Default 50."`
 }
 
 type CreateSigningKeyInput struct {
-	Name    string `json:"name" jsonschema:"required" jsonschema_description:"Human-readable label for the key (e.g. 'primary-2026', 'staging-rotation')."`
-	Confirm string `json:"confirm" jsonschema:"required" jsonschema_description:"Must be exactly 'CREATE SIGNING KEY'."`
+	Name    string `json:"name" jsonschema:"Human-readable label for the key (e.g. 'primary-2026', 'staging-rotation')."`
+	Confirm string `json:"confirm" jsonschema:"Must be exactly 'CREATE SIGNING KEY'."`
 }
 
 type RevokeSigningKeyInput struct {
-	ID      string `json:"id" jsonschema:"required" jsonschema_description:"Signing key ID (commodore.signing_keys.id, UUID) to revoke."`
-	Confirm string `json:"confirm" jsonschema:"required" jsonschema_description:"Must be exactly 'REVOKE SIGNING KEY'."`
+	ID      string `json:"id" jsonschema:"Signing key ID (commodore.signing_keys.id, UUID) to revoke."`
+	Confirm string `json:"confirm" jsonschema:"Must be exactly 'REVOKE SIGNING KEY'."`
 }
 
 type SetPlaybackPolicyInput struct {
-	StreamID   string `json:"stream_id,omitempty" jsonschema_description:"Stream ID (Stream.id). Provide exactly one of stream_id / vod_asset_id / clip_id."`
-	VodAssetID string `json:"vod_asset_id,omitempty"`
-	ClipID     string `json:"clip_id,omitempty"`
-	Type       string `json:"type" jsonschema:"required" jsonschema_description:"Policy type: 'public' | 'jwt' | 'webhook'."`
+	StreamID   string `json:"stream_id,omitempty" jsonschema:"Stream ID (Stream.id). Provide exactly one of stream_id / vod_asset_id / clip_id."`
+	VodAssetID string `json:"vod_asset_id,omitempty" jsonschema:"VOD asset ID. Provide exactly one of stream_id, vod_asset_id, or clip_id."`
+	ClipID     string `json:"clip_id,omitempty" jsonschema:"Clip ID. Provide exactly one of stream_id, vod_asset_id, or clip_id."`
+	Type       string `json:"type" jsonschema:"Policy type: 'public' | 'jwt' | 'webhook'."`
 	// JWT fields
-	AllowedKids      []string          `json:"allowed_kids,omitempty" jsonschema_description:"JWT only: signing-key kids that may mint tokens for this resource. Empty = any active key."`
-	RequiredAudience []string          `json:"required_audience,omitempty" jsonschema_description:"JWT only: required aud claim values (token must contain at least one)."`
-	RequiredClaims   map[string]string `json:"required_claims,omitempty" jsonschema_description:"JWT only: claim name → JSON-encoded expected value. The token's claim must match exactly."`
+	AllowedKids      []string          `json:"allowed_kids,omitempty" jsonschema:"JWT only: signing-key kids that may mint tokens for this resource. Empty = any active key."`
+	RequiredAudience []string          `json:"required_audience,omitempty" jsonschema:"JWT only: required aud claim values (token must contain at least one)."`
+	RequiredClaims   map[string]string `json:"required_claims,omitempty" jsonschema:"JWT only: claim name → JSON-encoded expected value. The token's claim must match exactly."`
 	// Webhook fields
-	WebhookURL       string `json:"webhook_url,omitempty" jsonschema_description:"Webhook only: HTTPS URL to POST a USER_NEW-style payload to. Public IPs only (SSRF-blocked at create time)."`
-	WebhookSecret    string `json:"webhook_secret,omitempty" jsonschema_description:"Webhook only: HMAC secret used to sign payloads. Encrypted at rest, never returned in queries."`
-	WebhookTimeoutMs int32  `json:"webhook_timeout_ms,omitempty" jsonschema_description:"Webhook only: outbound POST timeout. Server caps at 10000; default 5000."`
-	Confirm          string `json:"confirm" jsonschema:"required" jsonschema_description:"Must be exactly 'SET PLAYBACK POLICY'."`
+	WebhookURL       string `json:"webhook_url,omitempty" jsonschema:"Webhook only: HTTPS URL to POST a USER_NEW-style payload to. Public IPs only (SSRF-blocked at create time)."`
+	WebhookSecret    string `json:"webhook_secret,omitempty" jsonschema:"Webhook only: HMAC secret used to sign payloads. Encrypted at rest, never returned in queries."`
+	WebhookTimeoutMs int32  `json:"webhook_timeout_ms,omitempty" jsonschema:"Webhook only: outbound POST timeout. Server caps at 10000; default 5000."`
+	Confirm          string `json:"confirm" jsonschema:"Must be exactly 'SET PLAYBACK POLICY'."`
 }
 
 type ClearPlaybackPolicyInput struct {
-	StreamID   string `json:"stream_id,omitempty"`
-	VodAssetID string `json:"vod_asset_id,omitempty"`
-	ClipID     string `json:"clip_id,omitempty"`
-	Confirm    string `json:"confirm" jsonschema:"required" jsonschema_description:"Must be exactly 'CLEAR PLAYBACK POLICY'."`
+	StreamID   string `json:"stream_id,omitempty" jsonschema:"Stream ID. Provide exactly one of stream_id, vod_asset_id, or clip_id."`
+	VodAssetID string `json:"vod_asset_id,omitempty" jsonschema:"VOD asset ID. Provide exactly one of stream_id, vod_asset_id, or clip_id."`
+	ClipID     string `json:"clip_id,omitempty" jsonschema:"Clip ID. Provide exactly one of stream_id, vod_asset_id, or clip_id."`
+	Confirm    string `json:"confirm" jsonschema:"Must be exactly 'CLEAR PLAYBACK POLICY'."`
 }
 
 // ===== Result shapes =====

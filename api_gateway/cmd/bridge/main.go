@@ -124,6 +124,20 @@ func main() {
 			}
 		}
 	}
+	originAllowed := func(origin string) bool {
+		if wsDevMode {
+			return true
+		}
+		if wsAllowedOrigins[origin] {
+			return true
+		}
+		for _, suffix := range wsWildcardSuffixes {
+			if idx := strings.Index(origin, "://"); idx >= 0 && strings.HasSuffix(origin[idx+3:], suffix) {
+				return true
+			}
+		}
+		return false
+	}
 
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("bridge", version.Version)
@@ -278,21 +292,7 @@ func main() {
 		KeepAlivePingInterval: 10 * time.Second,
 		Upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
-				if wsDevMode {
-					return true
-				}
-				origin := r.Header.Get("Origin")
-				if wsAllowedOrigins[origin] {
-					return true
-				}
-				for _, suffix := range wsWildcardSuffixes {
-					if idx := strings.Index(origin, "://"); idx >= 0 {
-						if strings.HasSuffix(origin[idx+3:], suffix) {
-							return true
-						}
-					}
-				}
-				return false
+				return originAllowed(r.Header.Get("Origin"))
 			},
 		},
 		InitFunc: func(ctx context.Context, initPayload transport.InitPayload) (context.Context, *transport.InitPayload, error) {
@@ -676,6 +676,7 @@ func main() {
 		UsageTracker:   usageTracker,
 		TrustedProxies: trustedProxies,
 		SkipperClient:  skipperClient,
+		OriginAllowed:  originAllowed,
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to initialize MCP server")

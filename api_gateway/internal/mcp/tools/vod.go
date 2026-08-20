@@ -20,7 +20,7 @@ import (
 // RegisterVODTools registers VOD upload-related MCP tools.
 func RegisterVODTools(server *mcp.Server, clients *clients.ServiceClients, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) {
 	// create_vod_upload - Initiate multipart upload (requires balance)
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "create_vod_upload",
 			Description: "Initiate a VOD asset upload. Returns presigned URLs for multipart upload. Use this to upload video files for on-demand playback.",
@@ -31,7 +31,7 @@ func RegisterVODTools(server *mcp.Server, clients *clients.ServiceClients, resol
 	)
 
 	// complete_vod_upload - Finalize upload (auth only - upload already authorized)
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "complete_vod_upload",
 			Description: "Complete a VOD upload after all parts are uploaded. Triggers processing and returns the asset with playback ID.",
@@ -42,7 +42,7 @@ func RegisterVODTools(server *mcp.Server, clients *clients.ServiceClients, resol
 	)
 
 	// abort_vod_upload - Cancel upload (auth only)
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "abort_vod_upload",
 			Description: "Abort an in-progress VOD upload. Cleans up any uploaded parts.",
@@ -53,7 +53,7 @@ func RegisterVODTools(server *mcp.Server, clients *clients.ServiceClients, resol
 	)
 
 	// delete_vod_asset - Delete an existing VOD asset (auth only)
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "delete_vod_asset",
 			Description: "Delete a VOD asset. This action cannot be undone.",
@@ -64,7 +64,7 @@ func RegisterVODTools(server *mcp.Server, clients *clients.ServiceClients, resol
 	)
 
 	// get_vod_upload_status - Read server-authoritative state of an in-flight upload
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "get_vod_upload_status",
 			Description: "Read the server-authoritative state of an in-flight VOD upload, including which parts S3 has already received and which parts are still missing. Returns a recommendedAction (retry_missing_parts | restart_expired | wait_processing | ready | complete_upload) so callers know what to do next.",
@@ -77,11 +77,11 @@ func RegisterVODTools(server *mcp.Server, clients *clients.ServiceClients, resol
 
 // CreateVodUploadInput represents input for create_vod_upload tool.
 type CreateVodUploadInput struct {
-	Filename    string  `json:"filename" jsonschema:"required" jsonschema_description:"Original filename of the video"`
-	SizeBytes   int     `json:"size_bytes" jsonschema:"required" jsonschema_description:"File size in bytes"`
-	ContentType *string `json:"content_type,omitempty" jsonschema_description:"MIME type (e.g. video/mp4)"`
-	Title       *string `json:"title,omitempty" jsonschema_description:"Display title for the asset"`
-	Description *string `json:"description,omitempty" jsonschema_description:"Asset description"`
+	Filename    string  `json:"filename" jsonschema:"Original filename of the video"`
+	SizeBytes   int     `json:"size_bytes" jsonschema:"File size in bytes"`
+	ContentType *string `json:"content_type,omitempty" jsonschema:"MIME type (e.g. video/mp4)"`
+	Title       *string `json:"title,omitempty" jsonschema:"Display title for the asset"`
+	Description *string `json:"description,omitempty" jsonschema:"Asset description"`
 }
 
 // CreateVodUploadResult represents the result of initiating a VOD upload.
@@ -173,14 +173,14 @@ func handleCreateVodUpload(ctx context.Context, args CreateVodUploadInput, resol
 
 // CompleteVodUploadInput represents input for complete_vod_upload tool.
 type CompleteVodUploadInput struct {
-	UploadID string               `json:"upload_id" jsonschema:"required" jsonschema_description:"Upload session ID from create_vod_upload"`
-	Parts    []CompletedPartInput `json:"parts" jsonschema:"required" jsonschema_description:"Array of completed parts with ETags"`
+	UploadID string               `json:"upload_id" jsonschema:"Upload session ID from create_vod_upload"`
+	Parts    []CompletedPartInput `json:"parts" jsonschema:"Array of completed parts with ETags"`
 }
 
 // CompletedPartInput represents a completed upload part.
 type CompletedPartInput struct {
-	PartNumber int    `json:"part_number" jsonschema:"required" jsonschema_description:"Part number (1-based)"`
-	Etag       string `json:"etag" jsonschema:"required" jsonschema_description:"ETag returned from upload"`
+	PartNumber int    `json:"part_number" jsonschema:"Part number (1-based)"`
+	Etag       string `json:"etag" jsonschema:"ETag returned from upload"`
 }
 
 // CompleteVodUploadResult represents the result of completing a VOD upload.
@@ -263,7 +263,7 @@ func handleCompleteVodUpload(ctx context.Context, args CompleteVodUploadInput, r
 
 // AbortVodUploadInput represents input for abort_vod_upload tool.
 type AbortVodUploadInput struct {
-	UploadID string `json:"upload_id" jsonschema:"required" jsonschema_description:"Upload session ID to abort"`
+	UploadID string `json:"upload_id" jsonschema:"Upload session ID to abort"`
 }
 
 // AbortVodUploadResult represents the result of aborting a VOD upload.
@@ -307,7 +307,7 @@ func handleAbortVodUpload(ctx context.Context, args AbortVodUploadInput, resolve
 
 // DeleteVodAssetInput represents input for delete_vod_asset tool.
 type DeleteVodAssetInput struct {
-	ArtifactHash string `json:"artifact_hash" jsonschema:"required" jsonschema_description:"VOD artifact hash or relay ID to delete"`
+	ArtifactHash string `json:"artifact_hash" jsonschema:"VOD artifact hash or relay ID to delete"`
 }
 
 // DeleteVodAssetResult represents the result of deleting a VOD asset.
@@ -371,7 +371,7 @@ func handleDeleteVodAsset(ctx context.Context, args DeleteVodAssetInput, resolve
 
 // GetVodUploadStatusInput represents input for get_vod_upload_status tool.
 type GetVodUploadStatusInput struct {
-	UploadID string `json:"upload_id" jsonschema:"required" jsonschema_description:"Upload session ID returned by create_vod_upload"`
+	UploadID string `json:"upload_id" jsonschema:"Upload session ID returned by create_vod_upload"`
 }
 
 // VodUploadStatusUploadedPart represents one S3-confirmed uploaded part.

@@ -21,7 +21,7 @@ type SkipperCaller interface {
 // may connect lazily, so the tool is always registered; calls return an error
 // if the spoke is unreachable.
 func RegisterSkipperTools(server *mcp.Server, skipper SkipperCaller, logger logging.Logger) {
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name: "ask_consultant",
 			Description: `Ask the AI video streaming consultant a question.
@@ -50,8 +50,8 @@ For raw diagnostic data, use the QoE tools (diagnose_rebuffering, diagnose_buffe
 
 // AskConsultantInput is the schema for the proxied ask_consultant tool.
 type AskConsultantInput struct {
-	Question string `json:"question" jsonschema:"required" jsonschema_description:"Your question. Be specific: include protocol, codec, or tool names for better results. Example: 'How do I configure SRT latency in MistServer for a 500ms target?'"`
-	Mode     string `json:"mode,omitempty" jsonschema_description:"Pipeline mode: 'full' (default) uses knowledge base + web search + reasoning. 'docs' restricts to indexed knowledge base only (faster, cheaper, no web)."`
+	Question string `json:"question" jsonschema:"Your question. Be specific: include protocol, codec, or tool names for better results. Example: 'How do I configure SRT latency in MistServer for a 500ms target?'"`
+	Mode     string `json:"mode,omitempty" jsonschema:"Pipeline mode: 'full' (default) uses knowledge base + web search + reasoning. 'docs' restricts to indexed knowledge base only (faster, cheaper, no web)."`
 }
 
 func proxyToSkipper(ctx context.Context, skipper SkipperCaller, toolName string, args any, logger logging.Logger) (*mcp.CallToolResult, any, error) {

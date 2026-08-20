@@ -18,7 +18,7 @@ import (
 // RegisterDVRTools registers DVR-related MCP tools.
 func RegisterDVRTools(server *mcp.Server, clients *clients.ServiceClients, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) {
 	// start_dvr - Start DVR recording for a stream
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "start_dvr",
 			Description: "Start DVR (catch-up/time-shift) recording for a stream. Requires positive balance.",
@@ -29,7 +29,7 @@ func RegisterDVRTools(server *mcp.Server, clients *clients.ServiceClients, resol
 	)
 
 	// stop_dvr - Stop DVR recording
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "stop_dvr",
 			Description: "Stop an active DVR recording session.",
@@ -39,7 +39,7 @@ func RegisterDVRTools(server *mcp.Server, clients *clients.ServiceClients, resol
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "delete_dvr",
 			Description: "Delete a DVR recording and its stored media. Requires confirm=\"DELETE DVR\".",
@@ -53,7 +53,7 @@ func RegisterDVRTools(server *mcp.Server, clients *clients.ServiceClients, resol
 
 // StartDVRInput represents input for start_dvr tool.
 type StartDVRInput struct {
-	StreamID string `json:"stream_id" jsonschema:"required" jsonschema_description:"Relay ID or stream_id to start DVR for"`
+	StreamID string `json:"stream_id" jsonschema:"Relay ID or stream_id to start DVR for"`
 }
 
 // StartDVRResult represents the result of starting DVR.
@@ -118,8 +118,8 @@ func handleStartDVR(ctx context.Context, args StartDVRInput, clients *clients.Se
 
 // StopDVRInput represents input for stop_dvr tool.
 type StopDVRInput struct {
-	DVRHash  string `json:"dvr_hash" jsonschema:"required" jsonschema_description:"DVR hash to stop"`
-	StreamID string `json:"stream_id,omitempty" jsonschema_description:"Relay ID or stream_id (optional)"`
+	DVRHash  string `json:"dvr_hash" jsonschema:"DVR hash to stop"`
+	StreamID string `json:"stream_id,omitempty" jsonschema:"Relay ID or stream_id (optional)"`
 }
 
 // StopDVRResult represents the result of stopping DVR.
@@ -156,8 +156,8 @@ func handleStopDVR(ctx context.Context, args StopDVRInput, clients *clients.Serv
 }
 
 type DeleteDVRInput struct {
-	DVRHash string `json:"dvr_hash" jsonschema:"required" jsonschema_description:"DVR hash to delete"`
-	Confirm string `json:"confirm" jsonschema:"required" jsonschema_description:"Must be exactly 'DELETE DVR'."`
+	DVRHash string `json:"dvr_hash" jsonschema:"DVR hash to delete"`
+	Confirm string `json:"confirm" jsonschema:"Must be exactly 'DELETE DVR'."`
 }
 
 func handleDeleteDVR(ctx context.Context, args DeleteDVRInput, resolver *resolvers.Resolver, logger logging.Logger) (*mcp.CallToolResult, any, error) {

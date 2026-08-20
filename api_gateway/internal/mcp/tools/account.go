@@ -22,7 +22,7 @@ import (
 
 // RegisterAccountTools registers account-related MCP tools.
 func RegisterAccountTools(server *mcp.Server, clients *clients.ServiceClients, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) {
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "get_tenant_settings",
 			Description: "Read the current tenant's account identity and routing settings. Agents can use this to inspect wallet-provisioned accounts before changing streams, billing, or edge routing.",
@@ -32,7 +32,7 @@ func RegisterAccountTools(server *mcp.Server, clients *clients.ServiceClients, r
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "update_tenant_settings",
 			Description: "Update the current tenant's account identity and routing settings. Supports tenant name, preferred primary cluster, and deployment model.",
@@ -43,7 +43,7 @@ func RegisterAccountTools(server *mcp.Server, clients *clients.ServiceClients, r
 	)
 
 	// update_billing_details - Always allowed
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "update_billing_details",
 			Description: "Update billing details (company, address, VAT). Required for payments over €100 and for proper invoicing.",
@@ -58,20 +58,20 @@ type GetTenantSettingsInput struct{}
 
 // UpdateBillingDetailsInput represents input for update_billing_details tool.
 type UpdateBillingDetailsInput struct {
-	Email      string `json:"email,omitempty" jsonschema_description:"Billing email address"`
-	Company    string `json:"company,omitempty" jsonschema_description:"Company or organization name"`
-	VATNumber  string `json:"vat_number,omitempty" jsonschema_description:"VAT number (EU) or tax ID"`
-	Line1      string `json:"address_line1" jsonschema:"required" jsonschema_description:"Street address line 1"`
-	Line2      string `json:"address_line2,omitempty" jsonschema_description:"Street address line 2"`
-	City       string `json:"city" jsonschema:"required" jsonschema_description:"City"`
-	PostalCode string `json:"postal_code" jsonschema:"required" jsonschema_description:"Postal/ZIP code"`
-	Country    string `json:"country" jsonschema:"required" jsonschema_description:"Country code (ISO 3166-1 alpha-2)"`
+	Email      string `json:"email,omitempty" jsonschema:"Billing email address"`
+	Company    string `json:"company,omitempty" jsonschema:"Company or organization name"`
+	VATNumber  string `json:"vat_number,omitempty" jsonschema:"VAT number (EU) or tax ID"`
+	Line1      string `json:"address_line1" jsonschema:"Street address line 1"`
+	Line2      string `json:"address_line2,omitempty" jsonschema:"Street address line 2"`
+	City       string `json:"city" jsonschema:"City"`
+	PostalCode string `json:"postal_code" jsonschema:"Postal/ZIP code"`
+	Country    string `json:"country" jsonschema:"Country code (ISO 3166-1 alpha-2)"`
 }
 
 type UpdateTenantSettingsInput struct {
-	Name             string `json:"name,omitempty" jsonschema_description:"Tenant display name"`
-	PrimaryClusterID string `json:"primary_cluster_id,omitempty" jsonschema_description:"Preferred primary cluster for ingest/routing decisions"`
-	DeploymentModel  string `json:"deployment_model,omitempty" jsonschema_description:"Deployment model, for example shared, dedicated, or self_hosted"`
+	Name             string `json:"name,omitempty" jsonschema:"Tenant display name"`
+	PrimaryClusterID string `json:"primary_cluster_id,omitempty" jsonschema:"Preferred primary cluster for ingest/routing decisions"`
+	DeploymentModel  string `json:"deployment_model,omitempty" jsonschema:"Deployment model, for example shared, dedicated, or self_hosted"`
 }
 
 // BillingDetailsResult represents the result of updating billing details.
@@ -91,13 +91,6 @@ type TenantSettingsResult struct {
 	OfficialClusterID     string `json:"official_cluster_id,omitempty"`
 	IsActive              bool   `json:"is_active"`
 	Message               string `json:"message"`
-}
-
-func (r TenantSettingsResult) String() string {
-	if r.Message != "" {
-		return r.Message
-	}
-	return fmt.Sprintf("Tenant %s (%s)", r.Name, r.TenantID)
 }
 
 func handleGetTenantSettings(ctx context.Context, resolver *resolvers.Resolver, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -229,21 +222,10 @@ func toolError(message string) (*mcp.CallToolResult, any, error) {
 
 // toolSuccess returns a success result for a tool call.
 func toolSuccess(result interface{}) (*mcp.CallToolResult, any, error) {
-	text := fmt.Sprintf("%+v", result)
-	if r, ok := result.(fmt.Stringer); ok {
-		text = r.String()
-	} else if r, ok := result.(BillingDetailsResult); ok {
-		text = r.Message
-	} else if r, ok := result.(TopupResult); ok {
-		text = fmt.Sprintf("Top-up initiated. Deposit address: %s (%s). Amount: %d cents. Expires: %s",
-			r.DepositAddress, r.Asset, r.AmountCents, r.ExpiresAt)
-	}
-
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			&mcp.TextContent{Text: text},
-		},
-	}, result, nil
+	// Leave Content and StructuredContent unset. The typed MCP SDK marshals the
+	// output once, validates it, and emits the same JSON as both structured content
+	// and the protocol's text fallback.
+	return &mcp.CallToolResult{}, result, nil
 }
 
 // TopupResult is defined here for use in toolSuccess

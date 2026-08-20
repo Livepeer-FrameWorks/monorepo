@@ -22,7 +22,7 @@ import (
 // RegisterQoETools registers QoE diagnostic MCP tools.
 func RegisterQoETools(server *mcp.Server, serviceClients *clients.ServiceClients, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) {
 	// diagnose_rebuffering - Analyze rebuffer events for a stream
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "diagnose_rebuffering",
 			Description: "Analyze rebuffering events for a stream. Returns rebuffer count, duration patterns, and recommendations. Use when viewers report freezing or pausing. Pass output to ask_consultant for interpretation.",
@@ -33,7 +33,7 @@ func RegisterQoETools(server *mcp.Server, serviceClients *clients.ServiceClients
 	)
 
 	// diagnose_buffer_health - Analyze buffer state transitions
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "diagnose_buffer_health",
 			Description: "Analyze buffer health and state transitions. Identifies dry buffer events and quality fluctuations. Use when quality fluctuates or viewers see resolution drops. Pass output to ask_consultant for root-cause analysis.",
@@ -44,7 +44,7 @@ func RegisterQoETools(server *mcp.Server, serviceClients *clients.ServiceClients
 	)
 
 	// diagnose_packet_loss - Analyze packet loss for a stream
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "diagnose_packet_loss",
 			Description: "Analyze packet loss for a stream with protocol-aware guidance. Uses client QoE packet loss rollups and stream metrics when available. Use when stream stutters on unreliable networks. Thresholds differ for real-time (WebRTC/SRT) vs. buffered (HLS/RTMP) protocols.",
@@ -55,7 +55,7 @@ func RegisterQoETools(server *mcp.Server, serviceClients *clients.ServiceClients
 	)
 
 	// diagnose_routing - Analyze CDN routing decisions
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "diagnose_routing",
 			Description: "Analyze CDN routing decisions for a stream. Shows node selection patterns and geographic distribution. Use when viewers in certain regions report issues or to optimize edge placement.",
@@ -66,7 +66,7 @@ func RegisterQoETools(server *mcp.Server, serviceClients *clients.ServiceClients
 	)
 
 	// get_stream_health_summary - Get aggregated health metrics
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "get_stream_health_summary",
 			Description: "Get aggregated health metrics for a stream over a time range. Includes bitrate, FPS, quality tier, and issue counts. Good starting point for any stream investigation — run this first, then drill into specific diagnostics.",
@@ -77,7 +77,7 @@ func RegisterQoETools(server *mcp.Server, serviceClients *clients.ServiceClients
 	)
 
 	// get_anomaly_report - Detect statistical anomalies
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "get_anomaly_report",
 			Description: "Detect anomalies across stream metrics. Compares recent hour against 24h baseline and flags deviations. Use after get_stream_health_summary to detect recent degradation.",
@@ -91,33 +91,33 @@ func RegisterQoETools(server *mcp.Server, serviceClients *clients.ServiceClients
 // Input types
 
 type DiagnoseRebufferingInput struct {
-	StreamID  string `json:"stream_id" jsonschema:"required" jsonschema_description:"Relay ID or stream_id to analyze"`
-	TimeRange string `json:"time_range,omitempty" jsonschema_description:"Time range: last_1h (default), last_6h, last_24h, last_7d"`
+	StreamID  string `json:"stream_id" jsonschema:"Relay ID or stream_id to analyze"`
+	TimeRange string `json:"time_range,omitempty" jsonschema:"Time range: last_1h (default), last_6h, last_24h, last_7d"`
 }
 
 type DiagnoseBufferHealthInput struct {
-	StreamID  string `json:"stream_id" jsonschema:"required" jsonschema_description:"Relay ID or stream_id to analyze"`
-	TimeRange string `json:"time_range,omitempty" jsonschema_description:"Time range: last_1h (default), last_6h, last_24h, last_7d"`
+	StreamID  string `json:"stream_id" jsonschema:"Relay ID or stream_id to analyze"`
+	TimeRange string `json:"time_range,omitempty" jsonschema:"Time range: last_1h (default), last_6h, last_24h, last_7d"`
 }
 
 type DiagnosePacketLossInput struct {
-	StreamID  string `json:"stream_id" jsonschema:"required" jsonschema_description:"Relay ID or stream_id to analyze"`
-	TimeRange string `json:"time_range,omitempty" jsonschema_description:"Time range: last_1h (default), last_6h, last_24h, last_7d"`
+	StreamID  string `json:"stream_id" jsonschema:"Relay ID or stream_id to analyze"`
+	TimeRange string `json:"time_range,omitempty" jsonschema:"Time range: last_1h (default), last_6h, last_24h, last_7d"`
 }
 
 type DiagnoseRoutingInput struct {
-	StreamID  string `json:"stream_id" jsonschema:"required" jsonschema_description:"Relay ID or stream_id to analyze"`
-	TimeRange string `json:"time_range,omitempty" jsonschema_description:"Time range: last_1h (default), last_6h, last_24h, last_7d"`
+	StreamID  string `json:"stream_id" jsonschema:"Relay ID or stream_id to analyze"`
+	TimeRange string `json:"time_range,omitempty" jsonschema:"Time range: last_1h (default), last_6h, last_24h, last_7d"`
 }
 
 type GetStreamHealthInput struct {
-	StreamID  string `json:"stream_id" jsonschema:"required" jsonschema_description:"Relay ID or stream_id to analyze"`
-	TimeRange string `json:"time_range,omitempty" jsonschema_description:"Time range: last_1h (default), last_6h, last_24h, last_7d"`
+	StreamID  string `json:"stream_id" jsonschema:"Relay ID or stream_id to analyze"`
+	TimeRange string `json:"time_range,omitempty" jsonschema:"Time range: last_1h (default), last_6h, last_24h, last_7d"`
 }
 
 type GetAnomalyReportInput struct {
-	StreamID    string `json:"stream_id" jsonschema:"required" jsonschema_description:"Relay ID or stream_id to analyze"`
-	Sensitivity string `json:"sensitivity,omitempty" jsonschema_description:"Anomaly sensitivity: low, medium (default), high"`
+	StreamID    string `json:"stream_id" jsonschema:"Relay ID or stream_id to analyze"`
+	Sensitivity string `json:"sensitivity,omitempty" jsonschema:"Anomaly sensitivity: low, medium (default), high"`
 }
 
 // Output types
@@ -289,7 +289,7 @@ func handleDiagnoseRebuffering(ctx context.Context, args DiagnoseRebufferingInpu
 		Recommendations: recommendations,
 	}
 
-	return toolSuccessJSON(result)
+	return toolSuccess(result)
 }
 
 func handleDiagnoseBufferHealth(ctx context.Context, args DiagnoseBufferHealthInput, serviceClients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -331,7 +331,7 @@ func handleDiagnoseBufferHealth(ctx context.Context, args DiagnoseBufferHealthIn
 			},
 			Analysis: "No buffer health data available for this stream in the specified time range. The stream may be offline or not yet ingesting.",
 		}
-		return toolSuccessJSON(result)
+		return toolSuccess(result)
 	}
 
 	var totalBufferHealth float32
@@ -434,7 +434,7 @@ func handleDiagnoseBufferHealth(ctx context.Context, args DiagnoseBufferHealthIn
 		}
 	}
 
-	return toolSuccessJSON(result)
+	return toolSuccess(result)
 }
 
 func handleDiagnosePacketLoss(ctx context.Context, args DiagnosePacketLossInput, serviceClients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -486,7 +486,7 @@ func handleDiagnosePacketLoss(ctx context.Context, args DiagnosePacketLossInput,
 			},
 			Analysis: "No packet loss samples available for this stream in the specified time range.",
 		}
-		return toolSuccessJSON(result)
+		return toolSuccess(result)
 	}
 
 	avgLoss := lossSum / float64(lossSamples)
@@ -548,7 +548,7 @@ func handleDiagnosePacketLoss(ctx context.Context, args DiagnosePacketLossInput,
 		Recommendations: recommendations,
 	}
 
-	return toolSuccessJSON(result)
+	return toolSuccess(result)
 }
 
 func handleDiagnoseRouting(ctx context.Context, args DiagnoseRoutingInput, serviceClients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -580,7 +580,7 @@ func handleDiagnoseRouting(ctx context.Context, args DiagnoseRoutingInput, servi
 			},
 			Analysis: "No routing events found. The stream may not have had any viewers in this time range.",
 		}
-		return toolSuccessJSON(result)
+		return toolSuccess(result)
 	}
 
 	nodeUsage := make(map[string]int)
@@ -646,7 +646,7 @@ func handleDiagnoseRouting(ctx context.Context, args DiagnoseRoutingInput, servi
 		Recommendations: recommendations,
 	}
 
-	return toolSuccessJSON(result)
+	return toolSuccess(result)
 }
 
 func handleGetStreamHealth(ctx context.Context, args GetStreamHealthInput, serviceClients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -682,7 +682,7 @@ func handleGetStreamHealth(ctx context.Context, args GetStreamHealthInput, servi
 			},
 			Analysis: "No health data available for this stream.",
 		}
-		return toolSuccessJSON(result)
+		return toolSuccess(result)
 	}
 
 	var totalBitrate int64
@@ -745,7 +745,7 @@ func handleGetStreamHealth(ctx context.Context, args GetStreamHealthInput, servi
 		}
 	}
 
-	return toolSuccessJSON(result)
+	return toolSuccess(result)
 }
 
 func summarizeTrackInventory(metrics []*periscopepb.StreamHealthMetric) map[string]interface{} {
@@ -926,7 +926,7 @@ func handleGetAnomalyReport(ctx context.Context, args GetAnomalyReportInput, ser
 			},
 			Analysis: "Insufficient data to detect anomalies. Need more stream history.",
 		}
-		return toolSuccessJSON(result)
+		return toolSuccess(result)
 	}
 
 	// Calculate baseline metrics
@@ -1011,19 +1011,5 @@ func handleGetAnomalyReport(ctx context.Context, args GetAnomalyReportInput, ser
 		Recommendations: recommendations,
 	}
 
-	return toolSuccessJSON(result)
-}
-
-// toolSuccessJSON returns a success result with JSON-formatted content
-func toolSuccessJSON(result interface{}) (*mcp.CallToolResult, any, error) {
-	data, err := json.MarshalIndent(result, "", "  ")
-	if err != nil {
-		return toolError(fmt.Sprintf("Failed to format result: %v", err))
-	}
-
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			&mcp.TextContent{Text: string(data)},
-		},
-	}, result, nil
+	return toolSuccess(result)
 }

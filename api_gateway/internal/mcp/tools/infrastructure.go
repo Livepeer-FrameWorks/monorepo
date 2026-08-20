@@ -21,7 +21,7 @@ import (
 
 // RegisterInfrastructureTools registers cluster and marketplace MCP tools.
 func RegisterInfrastructureTools(server *mcp.Server, serviceClients *clients.ServiceClients, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) {
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name: "browse_marketplace",
 			Description: `Browse available infrastructure clusters in the marketplace.
@@ -37,7 +37,7 @@ Pricing models: FREE_UNMETERED (no cost), TIER_INHERIT (follows billing tier), M
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name: "subscribe_to_cluster",
 			Description: `Subscribe to a cluster for delivery or self-hosted edge enrollment.
@@ -51,7 +51,7 @@ After subscribing, use set_preferred_cluster to route your traffic to the new cl
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "unsubscribe_from_cluster",
 			Description: `Unsubscribe from a marketplace cluster. Requires confirm="UNSUBSCRIBE FROM CLUSTER".`,
@@ -61,7 +61,7 @@ After subscribing, use set_preferred_cluster to route your traffic to the new cl
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name: "set_preferred_cluster",
 			Description: `Set your preferred cluster for DNS steering.
@@ -75,7 +75,7 @@ Your preferred cluster maintains an always-on peering connection with your offic
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "update_cluster_marketplace",
 			Description: `Update marketplace visibility, approval, description, or pricing for a cluster you own. Pricing changes can affect subscribers. Requires confirm="UPDATE CLUSTER MARKETPLACE".`,
@@ -85,7 +85,7 @@ Your preferred cluster maintains an always-on peering connection with your offic
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name: "create_enrollment_token",
 			Description: `Generate an enrollment token for provisioning additional edge nodes into an existing edge cluster.
@@ -102,7 +102,7 @@ Requires an active subscription to the target cluster. Use create_edge_cluster f
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name: "get_node_info",
 			Description: `Get registration info for a node from the control plane.
@@ -118,7 +118,7 @@ If you provisioned the edge, you're already local — no --ssh needed. Use --ssh
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name: "manage_node",
 			Description: `Guided workflow for managing edge node lifecycle.
@@ -142,7 +142,7 @@ This tool returns node info and the relevant CLI commands. Execute them to perfo
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name: "set_node_mode",
 			Description: `Set a node's operational mode via the control plane (no SSH required).
@@ -158,7 +158,7 @@ Mode changes propagate through the load balancer to the node's control stream. T
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name: "get_node_health",
 			Description: `Get real-time health and routing state for a node from the load balancer.
@@ -172,7 +172,7 @@ Unlike get_node_info (static registration data from Quartermaster), this returns
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name: "create_edge_cluster",
 			Description: `Create a self-hosted edge cluster.
@@ -191,61 +191,61 @@ The token is shown once — save it securely. Each edge you provision joins this
 // --- Input types ---
 
 type BrowseMarketplaceInput struct {
-	PricingModel string `json:"pricing_model,omitempty" jsonschema_description:"Filter by pricing model: FREE_UNMETERED, TIER_INHERIT, METERED, MONTHLY. Leave empty for all."`
+	PricingModel string `json:"pricing_model,omitempty" jsonschema:"Filter by pricing model: FREE_UNMETERED, TIER_INHERIT, METERED, MONTHLY. Leave empty for all."`
 }
 
 type SubscribeToClusterInput struct {
-	ClusterID   string  `json:"cluster_id" jsonschema:"required" jsonschema_description:"The cluster ID to subscribe to. Get IDs from browse_marketplace."`
-	InviteToken *string `json:"invite_token,omitempty" jsonschema_description:"Optional invite token if the cluster requires one."`
+	ClusterID   string  `json:"cluster_id" jsonschema:"The cluster ID to subscribe to. Get IDs from browse_marketplace."`
+	InviteToken *string `json:"invite_token,omitempty" jsonschema:"Optional invite token if the cluster requires one."`
 }
 
 type UnsubscribeFromClusterInput struct {
-	ClusterID string `json:"cluster_id" jsonschema:"required" jsonschema_description:"The cluster ID to unsubscribe from."`
-	Confirm   string `json:"confirm" jsonschema:"required" jsonschema_description:"Must be exactly 'UNSUBSCRIBE FROM CLUSTER'."`
+	ClusterID string `json:"cluster_id" jsonschema:"The cluster ID to unsubscribe from."`
+	Confirm   string `json:"confirm" jsonschema:"Must be exactly 'UNSUBSCRIBE FROM CLUSTER'."`
 }
 
 type SetPreferredClusterInput struct {
-	ClusterID string `json:"cluster_id" jsonschema:"required" jsonschema_description:"The cluster ID to set as preferred. Must be a cluster you are subscribed to."`
+	ClusterID string `json:"cluster_id" jsonschema:"The cluster ID to set as preferred. Must be a cluster you are subscribed to."`
 }
 
 type UpdateClusterMarketplaceInput struct {
-	ClusterID         string  `json:"cluster_id" jsonschema:"required" jsonschema_description:"The cluster ID to update. Must be owned by the caller."`
-	Visibility        *string `json:"visibility,omitempty" jsonschema_description:"Marketplace visibility: PUBLIC, UNLISTED, or PRIVATE."`
-	PricingModel      *string `json:"pricing_model,omitempty" jsonschema_description:"Pricing model: FREE_UNMETERED, METERED, MONTHLY, TIER_INHERIT, or CUSTOM."`
-	MonthlyPriceCents *int    `json:"monthly_price_cents,omitempty" jsonschema_description:"Monthly price in cents when pricing_model is MONTHLY."`
-	RequiresApproval  *bool   `json:"requires_approval,omitempty" jsonschema_description:"Whether subscriptions require cluster-owner approval."`
-	ShortDescription  *string `json:"short_description,omitempty" jsonschema_description:"Short marketplace description."`
-	Confirm           string  `json:"confirm" jsonschema:"required" jsonschema_description:"Must be exactly 'UPDATE CLUSTER MARKETPLACE'."`
+	ClusterID         string  `json:"cluster_id" jsonschema:"The cluster ID to update. Must be owned by the caller."`
+	Visibility        *string `json:"visibility,omitempty" jsonschema:"Marketplace visibility: PUBLIC, UNLISTED, or PRIVATE."`
+	PricingModel      *string `json:"pricing_model,omitempty" jsonschema:"Pricing model: FREE_UNMETERED, METERED, MONTHLY, TIER_INHERIT, or CUSTOM."`
+	MonthlyPriceCents *int    `json:"monthly_price_cents,omitempty" jsonschema:"Monthly price in cents when pricing_model is MONTHLY."`
+	RequiresApproval  *bool   `json:"requires_approval,omitempty" jsonschema:"Whether subscriptions require cluster-owner approval."`
+	ShortDescription  *string `json:"short_description,omitempty" jsonschema:"Short marketplace description."`
+	Confirm           string  `json:"confirm" jsonschema:"Must be exactly 'UPDATE CLUSTER MARKETPLACE'."`
 }
 
 type CreateEdgeClusterInput struct {
-	ClusterName      string  `json:"cluster_name" jsonschema:"required" jsonschema_description:"Human-readable name for the new cluster."`
-	ShortDescription *string `json:"short_description,omitempty" jsonschema_description:"Short description for the self-hosted edge cluster."`
+	ClusterName      string  `json:"cluster_name" jsonschema:"Human-readable name for the new cluster."`
+	ShortDescription *string `json:"short_description,omitempty" jsonschema:"Short description for the self-hosted edge cluster."`
 }
 
 type CreateEnrollmentTokenInput struct {
-	ClusterID string  `json:"cluster_id" jsonschema:"required" jsonschema_description:"The cluster to create an enrollment token for. Must have an active subscription."`
-	Name      *string `json:"name,omitempty" jsonschema_description:"Display name for the token (e.g. 'us-east-edge-3')."`
-	TTL       *string `json:"ttl,omitempty" jsonschema_description:"Token validity duration (e.g. '24h', '720h'). Defaults to 30 days."`
+	ClusterID string  `json:"cluster_id" jsonschema:"The cluster to create an enrollment token for. Must have an active subscription."`
+	Name      *string `json:"name,omitempty" jsonschema:"Display name for the token (e.g. 'us-east-edge-3')."`
+	TTL       *string `json:"ttl,omitempty" jsonschema:"Token validity duration (e.g. '24h', '720h'). Defaults to 30 days."`
 }
 
 type GetNodeInfoInput struct {
-	NodeID string `json:"node_id" jsonschema:"required" jsonschema_description:"The node ID to look up. Get IDs from the nodes://list resource."`
+	NodeID string `json:"node_id" jsonschema:"The node ID to look up. Get IDs from the nodes://list resource."`
 }
 
 type ManageNodeInput struct {
-	NodeID string `json:"node_id" jsonschema:"required" jsonschema_description:"The node ID. Get IDs from the nodes://list resource or get_node_info."`
-	Action string `json:"action" jsonschema:"required" jsonschema_description:"The operation: drain, maintenance, restore, status, diagnose, logs."`
+	NodeID string `json:"node_id" jsonschema:"The node ID. Get IDs from the nodes://list resource or get_node_info."`
+	Action string `json:"action" jsonschema:"The operation: drain, maintenance, restore, status, diagnose, logs."`
 }
 
 type SetNodeModeInput struct {
-	NodeID string `json:"node_id" jsonschema:"required" jsonschema_description:"The node ID to change mode for."`
-	Mode   string `json:"mode" jsonschema:"required" jsonschema_description:"Target mode: normal, draining, or maintenance."`
-	Reason string `json:"reason,omitempty" jsonschema_description:"Reason for the mode change (for audit trail)."`
+	NodeID string `json:"node_id" jsonschema:"The node ID to change mode for."`
+	Mode   string `json:"mode" jsonschema:"Target mode: normal, draining, or maintenance."`
+	Reason string `json:"reason,omitempty" jsonschema:"Reason for the mode change (for audit trail)."`
 }
 
 type GetNodeHealthInput struct {
-	NodeID string `json:"node_id" jsonschema:"required" jsonschema_description:"The node ID to check health for."`
+	NodeID string `json:"node_id" jsonschema:"The node ID to check health for."`
 }
 
 // --- Result types ---

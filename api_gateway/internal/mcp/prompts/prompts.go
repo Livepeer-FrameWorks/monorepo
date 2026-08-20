@@ -621,6 +621,8 @@ func handleAgentInstructionsPrompt() (*mcp.GetPromptResult, error) {
 	parts = append(parts, "3. `ask_consultant` — pass diagnostic results for recommendations\n")
 	parts = append(parts, "**Historical context**: Search `search_support_history` for similar past issues, then include relevant findings when asking the consultant.\n")
 	parts = append(parts, "**API exploration**: `introspect_schema` → `generate_query` → `execute_query`\n")
+	parts = append(parts, "**Credential boundaries**: `tools/list` is filtered to the current credential. Do not assume an omitted tool exists or try to bypass its scope through `execute_query`.")
+	parts = append(parts, "**High-risk automation**: API tokens need both the domain write scope and `mcp:high-risk` for destructive, credential-changing, costly, or arbitrary-query tools. Treat that grant as pre-authorization, preserve idempotency keys on retries, and still satisfy tool-specific confirmation fields.\n")
 
 	parts = append(parts, "## 3. Confidence Tag Reference\n")
 	parts = append(parts, "Every `ask_consultant` response includes a confidence tag. Use this to decide how to act:\n")

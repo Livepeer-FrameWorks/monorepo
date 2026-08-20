@@ -20,7 +20,7 @@ import (
 // RegisterStreamTools registers stream-related MCP tools.
 func RegisterStreamTools(server *mcp.Server, clients *clients.ServiceClients, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) {
 	// create_stream - Create a new stream (requires balance)
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "create_stream",
 			Description: "Create a new push or pull live stream. Push streams return a usable stream key; pull streams return redacted source configuration and playback ID.",
@@ -31,7 +31,7 @@ func RegisterStreamTools(server *mcp.Server, clients *clients.ServiceClients, re
 	)
 
 	// update_stream - Update stream settings
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "update_stream",
 			Description: "Update stream settings, recording, or pull-source configuration.",
@@ -42,7 +42,7 @@ func RegisterStreamTools(server *mcp.Server, clients *clients.ServiceClients, re
 	)
 
 	// delete_stream - Delete a stream
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "delete_stream",
 			Description: "Delete a stream. This action cannot be undone.",
@@ -53,7 +53,7 @@ func RegisterStreamTools(server *mcp.Server, clients *clients.ServiceClients, re
 	)
 
 	// refresh_stream_key - Generate a new stream key
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "refresh_stream_key",
 			Description: "Rotate the primary stream key. The old key stops working immediately. Requires confirm=\"ROTATE STREAM KEY\".",
@@ -63,7 +63,7 @@ func RegisterStreamTools(server *mcp.Server, clients *clients.ServiceClients, re
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "list_stream_keys",
 			Description: "List stream keys for a stream, including active state and last-used timestamps.",
@@ -73,7 +73,7 @@ func RegisterStreamTools(server *mcp.Server, clients *clients.ServiceClients, re
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "create_stream_key",
 			Description: "Create an additional ingest key for a stream. The key value is returned in the response. Requires confirm=\"CREATE STREAM KEY\".",
@@ -83,7 +83,7 @@ func RegisterStreamTools(server *mcp.Server, clients *clients.ServiceClients, re
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "delete_stream_key",
 			Description: "Deactivate a stream key. Active encoders using it will fail ingest. Requires confirm=\"DELETE STREAM KEY\".",
@@ -93,7 +93,7 @@ func RegisterStreamTools(server *mcp.Server, clients *clients.ServiceClients, re
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "validate_stream_key",
 			Description: "Validate an ingest stream key and return whether it can authenticate an ingest session.",
@@ -106,17 +106,17 @@ func RegisterStreamTools(server *mcp.Server, clients *clients.ServiceClients, re
 
 // CreateStreamInput represents input for create_stream tool.
 type CreateStreamInput struct {
-	Name        string               `json:"name" jsonschema:"required" jsonschema_description:"Stream display name"`
-	Description string               `json:"description,omitempty" jsonschema_description:"Stream description"`
-	Record      bool                 `json:"record,omitempty" jsonschema_description:"Enable DVR recording"`
-	Public      bool                 `json:"public,omitempty" jsonschema_description:"Make stream publicly discoverable"`
-	IngestMode  string               `json:"ingest_mode,omitempty" jsonschema_description:"push or pull. Defaults to push."`
-	PullSource  *PullSourceToolInput `json:"pull_source,omitempty" jsonschema_description:"Required when ingest_mode is pull"`
+	Name        string               `json:"name" jsonschema:"Stream display name"`
+	Description string               `json:"description,omitempty" jsonschema:"Stream description"`
+	Record      bool                 `json:"record,omitempty" jsonschema:"Enable DVR recording"`
+	Public      bool                 `json:"public,omitempty" jsonschema:"Make stream publicly discoverable"`
+	IngestMode  string               `json:"ingest_mode,omitempty" jsonschema:"push or pull. Defaults to push."`
+	PullSource  *PullSourceToolInput `json:"pull_source,omitempty" jsonschema:"Required when ingest_mode is pull"`
 }
 
 type PullSourceToolInput struct {
-	SourceURI string `json:"source_uri" jsonschema:"required" jsonschema_description:"Upstream RTSP, SRT, RIST, HLS, DTSC, or TS source URI"`
-	Enabled   *bool  `json:"enabled,omitempty" jsonschema_description:"Whether the media plane may pull from the source. Defaults to true."`
+	SourceURI string `json:"source_uri" jsonschema:"Upstream RTSP, SRT, RIST, HLS, DTSC, or TS source URI"`
+	Enabled   *bool  `json:"enabled,omitempty" jsonschema:"Whether the media plane may pull from the source. Defaults to true."`
 }
 
 type PullSourceToolResult struct {
@@ -183,12 +183,12 @@ func handleCreateStream(ctx context.Context, args CreateStreamInput, clients *cl
 
 // UpdateStreamInput represents input for update_stream tool.
 type UpdateStreamInput struct {
-	StreamID    string               `json:"stream_id" jsonschema:"required" jsonschema_description:"Relay ID or stream_id to update"`
-	Name        *string              `json:"name,omitempty" jsonschema_description:"New stream name"`
-	Description *string              `json:"description,omitempty" jsonschema_description:"New description"`
-	Record      *bool                `json:"record,omitempty" jsonschema_description:"Enable/disable recording"`
-	IngestMode  *string              `json:"ingest_mode,omitempty" jsonschema_description:"Existing ingest mode. A different value is rejected."`
-	PullSource  *PullSourceToolInput `json:"pull_source,omitempty" jsonschema_description:"Replacement pull-source configuration for pull streams"`
+	StreamID    string               `json:"stream_id" jsonschema:"Relay ID or stream_id to update"`
+	Name        *string              `json:"name,omitempty" jsonschema:"New stream name"`
+	Description *string              `json:"description,omitempty" jsonschema:"New description"`
+	Record      *bool                `json:"record,omitempty" jsonschema:"Enable/disable recording"`
+	IngestMode  *string              `json:"ingest_mode,omitempty" jsonschema:"Existing ingest mode. A different value is rejected."`
+	PullSource  *PullSourceToolInput `json:"pull_source,omitempty" jsonschema:"Replacement pull-source configuration for pull streams"`
 }
 
 // UpdateStreamResult represents the result of updating a stream.
@@ -263,7 +263,7 @@ func fromProtoPullSource(input *commodorepb.PullSourceView) *PullSourceToolResul
 
 // DeleteStreamInput represents input for delete_stream tool.
 type DeleteStreamInput struct {
-	StreamID string `json:"stream_id" jsonschema:"required" jsonschema_description:"Relay ID or stream_id to delete"`
+	StreamID string `json:"stream_id" jsonschema:"Relay ID or stream_id to delete"`
 }
 
 // DeleteStreamResult represents the result of deleting a stream.
@@ -313,8 +313,8 @@ func handleDeleteStream(ctx context.Context, args DeleteStreamInput, clients *cl
 
 // RefreshStreamKeyInput represents input for refresh_stream_key tool.
 type RefreshStreamKeyInput struct {
-	StreamID string `json:"stream_id" jsonschema:"required" jsonschema_description:"Relay ID or stream_id to refresh key for"`
-	Confirm  string `json:"confirm" jsonschema:"required" jsonschema_description:"Must be exactly 'ROTATE STREAM KEY'."`
+	StreamID string `json:"stream_id" jsonschema:"Relay ID or stream_id to refresh key for"`
+	Confirm  string `json:"confirm" jsonschema:"Must be exactly 'ROTATE STREAM KEY'."`
 }
 
 // RefreshStreamKeyResult represents the result of refreshing a stream key.
@@ -359,23 +359,23 @@ func handleRefreshStreamKey(ctx context.Context, args RefreshStreamKeyInput, cli
 }
 
 type ListStreamKeysInput struct {
-	StreamID string `json:"stream_id" jsonschema:"required" jsonschema_description:"Relay ID or stream_id to list keys for"`
+	StreamID string `json:"stream_id" jsonschema:"Relay ID or stream_id to list keys for"`
 }
 
 type CreateStreamKeyInput struct {
-	StreamID string `json:"stream_id" jsonschema:"required" jsonschema_description:"Relay ID or stream_id to create a key for"`
-	Name     string `json:"name" jsonschema:"required" jsonschema_description:"Human-readable key name"`
-	Confirm  string `json:"confirm" jsonschema:"required" jsonschema_description:"Must be exactly 'CREATE STREAM KEY'."`
+	StreamID string `json:"stream_id" jsonschema:"Relay ID or stream_id to create a key for"`
+	Name     string `json:"name" jsonschema:"Human-readable key name"`
+	Confirm  string `json:"confirm" jsonschema:"Must be exactly 'CREATE STREAM KEY'."`
 }
 
 type DeleteStreamKeyInput struct {
-	StreamID string `json:"stream_id" jsonschema:"required" jsonschema_description:"Relay ID or stream_id that owns the key"`
-	KeyID    string `json:"key_id" jsonschema:"required" jsonschema_description:"Stream key UUID"`
-	Confirm  string `json:"confirm" jsonschema:"required" jsonschema_description:"Must be exactly 'DELETE STREAM KEY'."`
+	StreamID string `json:"stream_id" jsonschema:"Relay ID or stream_id that owns the key"`
+	KeyID    string `json:"key_id" jsonschema:"Stream key UUID"`
+	Confirm  string `json:"confirm" jsonschema:"Must be exactly 'DELETE STREAM KEY'."`
 }
 
 type ValidateStreamKeyInput struct {
-	StreamKey string `json:"stream_key" jsonschema:"required" jsonschema_description:"Raw ingest stream key to validate"`
+	StreamKey string `json:"stream_key" jsonschema:"Raw ingest stream key to validate"`
 }
 
 type StreamKeyToolResult struct {

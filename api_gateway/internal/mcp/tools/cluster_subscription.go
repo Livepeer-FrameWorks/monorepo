@@ -26,37 +26,37 @@ import (
 // Marketplace browsing, direct subscription, and preferred-cluster selection
 // are registered in infrastructure.go; this file owns invite and approval flows.
 func RegisterClusterSubscriptionTools(server *mcp.Server, _ *clients.ServiceClients, resolver *resolvers.Resolver, _ *preflight.Checker, logger logging.Logger) {
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name:        "create_cluster_invite",
 		Description: "Cluster owner: invite another tenant to subscribe. Returns an invite token the recipient passes to accept_cluster_invite.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args CreateClusterInviteInput) (*mcp.CallToolResult, any, error) {
 		return handleCreateClusterInvite(ctx, args, resolver, logger)
 	})
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name:        "revoke_cluster_invite",
 		Description: "Cluster owner: revoke an outstanding invite by ID. Already-accepted invites are unaffected (use unsubscribe to remove the resulting subscription).",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args RevokeClusterInviteInput) (*mcp.CallToolResult, any, error) {
 		return handleRevokeClusterInvite(ctx, args, resolver, logger)
 	})
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name:        "accept_cluster_invite",
 		Description: "Invitee: redeem a cluster invite token to create the subscription.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args AcceptClusterInviteInput) (*mcp.CallToolResult, any, error) {
 		return handleAcceptClusterInvite(ctx, args, resolver, logger)
 	})
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name:        "request_cluster_subscription",
 		Description: "Tenant: request subscription to a cluster. The owner approves or rejects via approve_subscription_request / reject_subscription_request. Optional invite_token short-circuits the approval workflow.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args RequestClusterSubscriptionInput) (*mcp.CallToolResult, any, error) {
 		return handleRequestClusterSubscription(ctx, args, resolver, logger)
 	})
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name:        "approve_subscription_request",
 		Description: "Cluster owner: approve a pending subscription request by subscription ID.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args ApproveSubscriptionInput) (*mcp.CallToolResult, any, error) {
 		return handleApproveSubscription(ctx, args, resolver, logger)
 	})
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name:        "reject_subscription_request",
 		Description: "Cluster owner: reject a pending subscription request. Optional reason is stored on the subscription row.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args RejectSubscriptionInput) (*mcp.CallToolResult, any, error) {
@@ -65,32 +65,32 @@ func RegisterClusterSubscriptionTools(server *mcp.Server, _ *clients.ServiceClie
 }
 
 type CreateClusterInviteInput struct {
-	ClusterID       string `json:"cluster_id" jsonschema:"required"`
-	InvitedTenantID string `json:"invited_tenant_id" jsonschema:"required"`
-	AccessLevel     string `json:"access_level,omitempty" jsonschema_description:"'viewer' | 'subscriber' | 'admin'. Defaults to 'subscriber'."`
-	ExpiresInDays   int32  `json:"expires_in_days,omitempty" jsonschema_description:"Invite TTL. Defaults to 7."`
+	ClusterID       string `json:"cluster_id" jsonschema:"Owned cluster that the other tenant may access."`
+	InvitedTenantID string `json:"invited_tenant_id" jsonschema:"Tenant ID that may accept the invitation."`
+	AccessLevel     string `json:"access_level,omitempty" jsonschema:"'viewer' | 'subscriber' | 'admin'. Defaults to 'subscriber'."`
+	ExpiresInDays   int32  `json:"expires_in_days,omitempty" jsonschema:"Invite TTL. Defaults to 7."`
 }
 
 type RevokeClusterInviteInput struct {
-	InviteID string `json:"invite_id" jsonschema:"required"`
+	InviteID string `json:"invite_id" jsonschema:"Pending cluster-invite ID to revoke."`
 }
 
 type AcceptClusterInviteInput struct {
-	InviteToken string `json:"invite_token" jsonschema:"required"`
+	InviteToken string `json:"invite_token" jsonschema:"Opaque invitation token issued by create_cluster_invite."`
 }
 
 type RequestClusterSubscriptionInput struct {
-	ClusterID   string `json:"cluster_id" jsonschema:"required"`
-	InviteToken string `json:"invite_token,omitempty" jsonschema_description:"Optional — present an invite token to skip the approval workflow."`
+	ClusterID   string `json:"cluster_id" jsonschema:"Cluster to request access to."`
+	InviteToken string `json:"invite_token,omitempty" jsonschema:"Optional — present an invite token to skip the approval workflow."`
 }
 
 type ApproveSubscriptionInput struct {
-	SubscriptionID string `json:"subscription_id" jsonschema:"required"`
+	SubscriptionID string `json:"subscription_id" jsonschema:"Pending subscription-request ID to approve."`
 }
 
 type RejectSubscriptionInput struct {
-	SubscriptionID string `json:"subscription_id" jsonschema:"required"`
-	Reason         string `json:"reason,omitempty"`
+	SubscriptionID string `json:"subscription_id" jsonschema:"Pending subscription-request ID to reject."`
+	Reason         string `json:"reason,omitempty" jsonschema:"Optional rejection reason recorded for the requester."`
 }
 
 func handleCreateClusterInvite(ctx context.Context, args CreateClusterInviteInput, resolver *resolvers.Resolver, logger logging.Logger) (*mcp.CallToolResult, any, error) {

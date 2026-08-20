@@ -16,7 +16,7 @@ import (
 // RegisterPlaybackTools registers playback-related MCP tools.
 func RegisterPlaybackTools(server *mcp.Server, clients *clients.ServiceClients, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) {
 	// resolve_playback_endpoint - Get playback URLs for content
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "resolve_playback_endpoint",
 			Description: "Resolve playback URLs for a live stream, VOD, clip, or DVR recording. Returns primary and fallback endpoints, plus thumbnail and sprite preview URLs when available.",
@@ -29,8 +29,8 @@ func RegisterPlaybackTools(server *mcp.Server, clients *clients.ServiceClients, 
 
 // ResolvePlaybackInput represents input for resolve_playback_endpoint tool.
 type ResolvePlaybackInput struct {
-	ContentID string `json:"content_id" jsonschema:"required" jsonschema_description:"Public playback_id (live, VOD, clip, or DVR), or a FrameWorks global ID (Stream/Clip/VodAsset). A raw internal stream UUID / stream_id / internal_name is not accepted — use the playback_id."`
-	ViewerIP  string `json:"viewer_ip,omitempty" jsonschema_description:"Viewer IP for geo-routing (optional)"`
+	ContentID string `json:"content_id" jsonschema:"Public playback_id (live, VOD, clip, or DVR), or a FrameWorks global ID (Stream/Clip/VodAsset). A raw internal stream UUID / stream_id / internal_name is not accepted — use the playback_id."`
+	ViewerIP  string `json:"viewer_ip,omitempty" jsonschema:"Viewer IP for geo-routing (optional)"`
 }
 
 // PlaybackEndpoint represents a resolved playback endpoint.

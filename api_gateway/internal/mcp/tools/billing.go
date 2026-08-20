@@ -21,7 +21,7 @@ import (
 // RegisterBillingTools registers billing-related MCP tools.
 func RegisterBillingTools(server *mcp.Server, clients *clients.ServiceClients, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) {
 	// topup_balance - Request crypto top-up address
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "topup_balance",
 			Description: "Request a crypto deposit address to top up your prepaid balance. Returns a locked-rate quote: send exactly the quoted token amount within 24h to be credited at the locked USD price. Supports ETH and USDC. LPT is not yet supported.",
@@ -32,7 +32,7 @@ func RegisterBillingTools(server *mcp.Server, clients *clients.ServiceClients, r
 	)
 
 	// check_topup - Check if a top-up payment was received
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "check_topup",
 			Description: "Check the status of a pending crypto top-up.",
@@ -42,7 +42,7 @@ func RegisterBillingTools(server *mcp.Server, clients *clients.ServiceClients, r
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "pay_invoice",
 			Description: "Create or resume payment for one invoice. Charges only the current outstanding balance. Repeating the same call resumes the pending checkout or crypto quote; a different method is rejected while payment is pending.",
@@ -52,7 +52,7 @@ func RegisterBillingTools(server *mcp.Server, clients *clients.ServiceClients, r
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "start_postpaid_setup",
 			Description: "Start a provider-hosted postpaid setup for an eligible tier. Billing email and address must be complete. Returns an action URL; postpaid activates only after provider confirmation.",
@@ -62,7 +62,7 @@ func RegisterBillingTools(server *mcp.Server, clients *clients.ServiceClients, r
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "complete_mollie_postpaid_setup",
 			Description: "After the Mollie first-payment return, verify the tenant's valid mandate and create the recurring subscription for the selected tier. Safe to repeat.",
@@ -74,13 +74,13 @@ func RegisterBillingTools(server *mcp.Server, clients *clients.ServiceClients, r
 }
 
 type StartPostpaidSetupInput struct {
-	Provider      string `json:"provider" jsonschema:"required" jsonschema_description:"Configured provider: stripe or mollie"`
-	TierID        string `json:"tier_id" jsonschema:"required" jsonschema_description:"Eligible paid billing tier ID"`
-	BillingPeriod string `json:"billing_period,omitempty" jsonschema_description:"Stripe billing period: monthly (default) or yearly"`
-	SuccessURL    string `json:"success_url,omitempty" jsonschema_description:"Stripe success return URL"`
-	CancelURL     string `json:"cancel_url,omitempty" jsonschema_description:"Stripe cancellation return URL"`
-	ReturnURL     string `json:"return_url,omitempty" jsonschema_description:"Mollie first-payment return URL"`
-	Method        string `json:"method,omitempty" jsonschema_description:"Mollie first-payment method: creditcard (default), ideal, or bancontact"`
+	Provider      string `json:"provider" jsonschema:"Configured provider: stripe or mollie"`
+	TierID        string `json:"tier_id" jsonschema:"Eligible paid billing tier ID"`
+	BillingPeriod string `json:"billing_period,omitempty" jsonschema:"Stripe billing period: monthly (default) or yearly"`
+	SuccessURL    string `json:"success_url,omitempty" jsonschema:"Stripe success return URL"`
+	CancelURL     string `json:"cancel_url,omitempty" jsonschema:"Stripe cancellation return URL"`
+	ReturnURL     string `json:"return_url,omitempty" jsonschema:"Mollie first-payment return URL"`
+	Method        string `json:"method,omitempty" jsonschema:"Mollie first-payment method: creditcard (default), ideal, or bancontact"`
 }
 
 type PostpaidSetupResult struct {
@@ -171,7 +171,7 @@ func handleStartPostpaidSetup(ctx context.Context, args StartPostpaidSetupInput,
 }
 
 type CompleteMolliePostpaidSetupInput struct {
-	TierID string `json:"tier_id" jsonschema:"required" jsonschema_description:"The same eligible tier used for start_postpaid_setup"`
+	TierID string `json:"tier_id" jsonschema:"The same eligible tier used for start_postpaid_setup"`
 }
 
 func handleCompleteMolliePostpaidSetup(ctx context.Context, args CompleteMolliePostpaidSetupInput, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -201,9 +201,9 @@ func handleCompleteMolliePostpaidSetup(ctx context.Context, args CompleteMollieP
 }
 
 type PayInvoiceInput struct {
-	InvoiceID string `json:"invoice_id" jsonschema:"required" jsonschema_description:"Invoice id from billing://invoices"`
-	Method    string `json:"method" jsonschema:"required" jsonschema_description:"Payment method: card, crypto_usdc, or crypto_eth"`
-	ReturnURL string `json:"return_url,omitempty" jsonschema_description:"Optional same-origin web application URL used after card checkout"`
+	InvoiceID string `json:"invoice_id" jsonschema:"Invoice id from billing://invoices"`
+	Method    string `json:"method" jsonschema:"Payment method: card, crypto_usdc, or crypto_eth"`
+	ReturnURL string `json:"return_url,omitempty" jsonschema:"Optional same-origin web application URL used after card checkout"`
 }
 
 type PayInvoiceResult struct {
@@ -281,8 +281,8 @@ func handlePayInvoice(ctx context.Context, args PayInvoiceInput, clients *client
 
 // TopupBalanceInput represents input for topup_balance tool.
 type TopupBalanceInput struct {
-	AmountCents int64  `json:"amount_cents" jsonschema:"required" jsonschema_description:"Amount to credit, in tenant currency cents (USD or EUR per the account). Minimum: 1 cent; maximum: 10000000 cents."`
-	Asset       string `json:"asset,omitempty" jsonschema_description:"Crypto asset to send: USDC or ETH. Default: USDC. (LPT is reserved and currently rejected.)"`
+	AmountCents int64  `json:"amount_cents" jsonschema:"Amount to credit, in tenant currency cents (USD or EUR per the account). Minimum: 1 cent; maximum: 10000000 cents."`
+	Asset       string `json:"asset,omitempty" jsonschema:"Crypto asset to send: USDC or ETH. Default: USDC. (LPT is reserved and currently rejected.)"`
 }
 
 func handleTopupBalance(ctx context.Context, args TopupBalanceInput, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -359,7 +359,7 @@ func handleTopupBalance(ctx context.Context, args TopupBalanceInput, clients *cl
 
 // CheckTopupInput represents input for check_topup tool.
 type CheckTopupInput struct {
-	TopupID string `json:"topup_id" jsonschema:"required" jsonschema_description:"The top-up ID returned from topup_balance"`
+	TopupID string `json:"topup_id" jsonschema:"The top-up ID returned from topup_balance"`
 }
 
 // CheckTopupResult represents the result of checking a top-up.

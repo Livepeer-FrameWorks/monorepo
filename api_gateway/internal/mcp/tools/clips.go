@@ -18,7 +18,7 @@ import (
 // RegisterClipTools registers clip-related MCP tools.
 func RegisterClipTools(server *mcp.Server, clients *clients.ServiceClients, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) {
 	// create_clip - Create a clip from a stream
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "create_clip",
 			Description: "Create a clip from a live or recorded stream. Requires positive balance.",
@@ -29,7 +29,7 @@ func RegisterClipTools(server *mcp.Server, clients *clients.ServiceClients, reso
 	)
 
 	// delete_clip - Delete a clip
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "delete_clip",
 			Description: "Delete a clip. This action cannot be undone.",
@@ -42,11 +42,11 @@ func RegisterClipTools(server *mcp.Server, clients *clients.ServiceClients, reso
 
 // CreateClipInput represents input for create_clip tool.
 type CreateClipInput struct {
-	StreamID    string `json:"stream_id" jsonschema:"required" jsonschema_description:"Relay ID or stream_id to clip from"`
-	Title       string `json:"title" jsonschema:"required" jsonschema_description:"Clip title"`
-	Description string `json:"description,omitempty" jsonschema_description:"Clip description"`
-	StartSec    *int64 `json:"start_sec,omitempty" jsonschema_description:"Start time in seconds (negative for relative to now)"`
-	DurationSec *int64 `json:"duration_sec,omitempty" jsonschema_description:"Duration in seconds (omit to use API default)"`
+	StreamID    string `json:"stream_id" jsonschema:"Relay ID or stream_id to clip from"`
+	Title       string `json:"title" jsonschema:"Clip title"`
+	Description string `json:"description,omitempty" jsonschema:"Clip description"`
+	StartSec    *int64 `json:"start_sec,omitempty" jsonschema:"Start time in seconds (negative for relative to now)"`
+	DurationSec *int64 `json:"duration_sec,omitempty" jsonschema:"Duration in seconds (omit to use API default)"`
 }
 
 // CreateClipResult represents the result of creating a clip.
@@ -113,7 +113,7 @@ func handleCreateClip(ctx context.Context, args CreateClipInput, clients *client
 
 // DeleteClipInput represents input for delete_clip tool.
 type DeleteClipInput struct {
-	ClipHash string `json:"clip_hash" jsonschema:"required" jsonschema_description:"Clip hash to delete"`
+	ClipHash string `json:"clip_hash" jsonschema:"Clip hash to delete"`
 }
 
 // DeleteClipResult represents the result of deleting a clip.

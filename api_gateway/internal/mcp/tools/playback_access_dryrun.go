@@ -23,7 +23,7 @@ import (
 // live in docs/platform-features.yaml; the tool description repeats the
 // warning at the point of use.
 func RegisterPlaybackAccessTestTools(server *mcp.Server, serviceClients *clients.ServiceClients, _ *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) {
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name: "test_playback_access",
 			Description: "Dry-run the playback policy evaluator against a JWT (or webhook test) without registering a viewer session. " +
@@ -38,14 +38,14 @@ func RegisterPlaybackAccessTestTools(server *mcp.Server, serviceClients *clients
 }
 
 type TestPlaybackAccessInput struct {
-	PlaybackID   string `json:"playback_id,omitempty" jsonschema_description:"Public playback identifier (one of playback_id or internal_name required)"`
-	InternalName string `json:"internal_name,omitempty" jsonschema_description:"MistServer internal stream name (one of playback_id or internal_name required)"`
-	ViewerToken  string `json:"viewer_token,omitempty" jsonschema_description:"JWT to test (required for type=jwt policies)"`
-	ViewerIP     string `json:"viewer_ip,omitempty"`
-	RequestURL   string `json:"request_url,omitempty"`
-	Connector    string `json:"connector,omitempty" jsonschema_description:"Mist connector name (e.g. 'hls', 'webrtc'); used in the webhook payload"`
-	SessionID    string `json:"session_id,omitempty"`
-	FireWebhook  bool   `json:"fire_webhook,omitempty" jsonschema_description:"Webhook policies: when true, fires a real outbound HTTPS request to the customer URL"`
+	PlaybackID   string `json:"playback_id,omitempty" jsonschema:"Public playback identifier (one of playback_id or internal_name required)"`
+	InternalName string `json:"internal_name,omitempty" jsonschema:"MistServer internal stream name (one of playback_id or internal_name required)"`
+	ViewerToken  string `json:"viewer_token,omitempty" jsonschema:"JWT to test (required for type=jwt policies)"`
+	ViewerIP     string `json:"viewer_ip,omitempty" jsonschema:"Viewer IP address used for policy evaluation and webhook context."`
+	RequestURL   string `json:"request_url,omitempty" jsonschema:"Playback request URL presented to a webhook policy."`
+	Connector    string `json:"connector,omitempty" jsonschema:"Mist connector name (e.g. 'hls', 'webrtc'); used in the webhook payload"`
+	SessionID    string `json:"session_id,omitempty" jsonschema:"Optional viewer session identifier presented to a webhook policy."`
+	FireWebhook  bool   `json:"fire_webhook,omitempty" jsonschema:"Webhook policies: when true, fires a real outbound HTTPS request to the customer URL"`
 }
 
 type TestPlaybackAccessResult struct {

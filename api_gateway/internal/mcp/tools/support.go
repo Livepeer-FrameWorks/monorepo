@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -19,7 +18,7 @@ import (
 // RegisterSupportTools registers support-related MCP tools.
 func RegisterSupportTools(server *mcp.Server, serviceClients *clients.ServiceClients, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) {
 	// list_support_conversations - List recent support conversations
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "list_support_conversations",
 			Description: "List recent support conversations for the authenticated account. Use this when the user asks to browse or search their past tickets without a specific keyword.",
@@ -30,7 +29,7 @@ func RegisterSupportTools(server *mcp.Server, serviceClients *clients.ServiceCli
 	)
 
 	// search_support_history - Search past support conversations
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "search_support_history",
 			Description: "Search past support conversations by keyword. Use list_support_conversations instead when the user only asks to see past tickets without naming a specific topic.",
@@ -43,13 +42,13 @@ func RegisterSupportTools(server *mcp.Server, serviceClients *clients.ServiceCli
 
 // ListSupportConversationsInput represents input for list_support_conversations.
 type ListSupportConversationsInput struct {
-	Limit int `json:"limit,omitempty" jsonschema_description:"Maximum number of recent conversations (default 10, max 50)"`
+	Limit int `json:"limit,omitempty" jsonschema:"Maximum number of recent conversations (default 10, max 50)"`
 }
 
 // SearchSupportHistoryInput represents input for search_support_history tool.
 type SearchSupportHistoryInput struct {
-	Query string `json:"query" jsonschema:"required" jsonschema_description:"Search query - keywords to find in conversation subjects and messages"`
-	Limit int    `json:"limit,omitempty" jsonschema_description:"Maximum number of results (default 10, max 50)"`
+	Query string `json:"query" jsonschema:"Search query - keywords to find in conversation subjects and messages"`
+	Limit int    `json:"limit,omitempty" jsonschema:"Maximum number of results (default 10, max 50)"`
 }
 
 // SearchResult represents a search result from support history.
@@ -123,15 +122,7 @@ func handleListSupportConversations(ctx context.Context, args ListSupportConvers
 			Info("MCP support conversation list completed")
 	}
 
-	data, err := json.MarshalIndent(result, "", "  ")
-	if err != nil {
-		return toolError(fmt.Sprintf("Failed to format result: %v", err))
-	}
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			&mcp.TextContent{Text: string(data)},
-		},
-	}, result, nil
+	return toolSuccess(result)
 }
 
 func handleSearchSupportHistory(ctx context.Context, args SearchSupportHistoryInput, serviceClients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -282,16 +273,7 @@ func handleSearchSupportHistory(ctx context.Context, args SearchSupportHistoryIn
 			Info("MCP support history search completed")
 	}
 
-	data, err := json.MarshalIndent(result, "", "  ")
-	if err != nil {
-		return toolError(fmt.Sprintf("Failed to format result: %v", err))
-	}
-
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			&mcp.TextContent{Text: string(data)},
-		},
-	}, result, nil
+	return toolSuccess(result)
 }
 
 func normalizeSupportLimit(limit int) int {

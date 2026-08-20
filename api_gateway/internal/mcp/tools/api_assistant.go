@@ -41,7 +41,7 @@ func RegisterAPIAssistantTools(server *mcp.Server, clients *clients.ServiceClien
 	introspectionClient = introspection.NewClient(graphqlURL, logger)
 
 	// introspect_schema - Progressive schema discovery
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "introspect_schema",
 			Description: "Explore the GraphQL API schema progressively. Use to discover available queries, mutations, subscriptions, or inspect specific types.",
@@ -52,7 +52,7 @@ func RegisterAPIAssistantTools(server *mcp.Server, clients *clients.ServiceClien
 	)
 
 	// generate_query - Generate ready-to-use queries
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "generate_query",
 			Description: "Generate a ready-to-use GraphQL query for a specific field path using real templates from the codebase. Returns an error if no template matches.",
@@ -63,7 +63,7 @@ func RegisterAPIAssistantTools(server *mcp.Server, clients *clients.ServiceClien
 	)
 
 	// execute_query - Execute a GraphQL query
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "execute_query",
 			Description: "Execute a GraphQL query or mutation against the API. Use generate_query or introspect_schema first to discover available fields. Authorization is enforced by the API — results are scoped to the caller's tenant.",
@@ -76,8 +76,8 @@ func RegisterAPIAssistantTools(server *mcp.Server, clients *clients.ServiceClien
 
 // IntrospectSchemaInput represents input for introspect_schema tool.
 type IntrospectSchemaInput struct {
-	Focus string `json:"focus" jsonschema:"required" jsonschema_description:"What to explore: query mutation subscription or a type name"`
-	Depth int    `json:"depth,omitempty" jsonschema_description:"Exploration depth 1-4 (default 2). 1=field names only 2=+args 3=+nested types 4=full details"`
+	Focus string `json:"focus" jsonschema:"What to explore: query mutation subscription or a type name"`
+	Depth int    `json:"depth,omitempty" jsonschema:"Exploration depth 1-4 (default 2). 1=field names only 2=+args 3=+nested types 4=full details"`
 }
 
 // IntrospectSchemaResult is the result of schema introspection.
@@ -119,14 +119,14 @@ func handleIntrospectSchema(ctx context.Context, args IntrospectSchemaInput, log
 		result.Hint = fmt.Sprintf("Type %s (%s) with %d fields.", typeSummary.Name, typeSummary.Kind, len(typeSummary.Fields))
 	}
 
-	return toolSuccessJSON(result)
+	return toolSuccess(result)
 }
 
 // GenerateQueryInput represents input for generate_query tool.
 type GenerateQueryInput struct {
-	FieldName     string `json:"field_name,omitempty" jsonschema_description:"The field to generate a query for (e.g. streamsConnection). Use field_path for nested fields."`
-	FieldPath     string `json:"field_path,omitempty" jsonschema_description:"Dot-separated path for nested fields (e.g. analytics.usage.streaming.viewerHoursHourlyConnection)"`
-	OperationType string `json:"operation_type,omitempty" jsonschema_description:"query mutation or subscription (default: query)"`
+	FieldName     string `json:"field_name,omitempty" jsonschema:"The field to generate a query for (e.g. streamsConnection). Use field_path for nested fields."`
+	FieldPath     string `json:"field_path,omitempty" jsonschema:"Dot-separated path for nested fields (e.g. analytics.usage.streaming.viewerHoursHourlyConnection)"`
+	OperationType string `json:"operation_type,omitempty" jsonschema:"query mutation or subscription (default: query)"`
 }
 
 // GenerateQueryResult is the result of query generation.
@@ -161,7 +161,7 @@ func handleGenerateQuery(ctx context.Context, args GenerateQueryInput, logger lo
 			Source:    "template",
 			Hints:     getQueryHints(template.Query),
 		}
-		return toolSuccessJSON(result)
+		return toolSuccess(result)
 	}
 
 	if _, err := introspectionClient.FindFieldPath(ctx, opType, fieldPath, 2); err != nil {
@@ -183,8 +183,8 @@ func handleGenerateQuery(ctx context.Context, args GenerateQueryInput, logger lo
 
 // ExecuteQueryInput represents input for execute_query tool.
 type ExecuteQueryInput struct {
-	Query     string         `json:"query" jsonschema:"required" jsonschema_description:"GraphQL query or mutation to execute"`
-	Variables map[string]any `json:"variables,omitempty" jsonschema_description:"Variables for the query"`
+	Query     string         `json:"query" jsonschema:"GraphQL query or mutation to execute"`
+	Variables map[string]any `json:"variables,omitempty" jsonschema:"Variables for the query"`
 }
 
 func handleExecuteQuery(ctx context.Context, args ExecuteQueryInput, logger logging.Logger) (*mcp.CallToolResult, any, error) {

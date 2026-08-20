@@ -20,25 +20,25 @@ import (
 // each enabled push target multiplies the egress bill while the source
 // stream is live.
 func RegisterMultistreamTools(server *mcp.Server, serviceClients *clients.ServiceClients, _ *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) {
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name:        "list_push_targets",
 		Description: "List multistream push targets attached to a stream. target_uri values are masked in the response (rtmp://...****xxxx).",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args ListPushTargetsInput) (*mcp.CallToolResult, any, error) {
 		return handleListPushTargets(ctx, args, serviceClients, logger)
 	})
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name:        "create_push_target",
 		Description: "Add a multistream push target. Platform must be one of twitch, youtube, facebook, kick, x, or custom. When the source stream is live, FrameWorks pushes to every enabled target. Cost-affecting: each enabled target multiplies egress.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args CreatePushTargetInput) (*mcp.CallToolResult, any, error) {
 		return handleCreatePushTarget(ctx, args, serviceClients, checker, logger)
 	})
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name:        "update_push_target",
 		Description: "Update a push target's name / target URI / enabled flag. Disable instead of delete to keep history.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args UpdatePushTargetInput) (*mcp.CallToolResult, any, error) {
 		return handleUpdatePushTarget(ctx, args, serviceClients, checker, logger)
 	})
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name:        "delete_push_target",
 		Description: "Delete a push target. Live pushes already in flight to this target are stopped.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args DeletePushTargetInput) (*mcp.CallToolResult, any, error) {
@@ -49,25 +49,25 @@ func RegisterMultistreamTools(server *mcp.Server, serviceClients *clients.Servic
 // ===== Inputs =====
 
 type ListPushTargetsInput struct {
-	StreamID string `json:"stream_id" jsonschema:"required"`
+	StreamID string `json:"stream_id" jsonschema:"Stream ID whose multistream destinations should be listed."`
 }
 
 type CreatePushTargetInput struct {
-	StreamID  string `json:"stream_id" jsonschema:"required"`
-	Platform  string `json:"platform" jsonschema:"required" jsonschema_description:"'twitch' | 'youtube' | 'facebook' | 'kick' | 'x' | 'custom'"`
-	Name      string `json:"name" jsonschema:"required"`
-	TargetURI string `json:"target_uri" jsonschema:"required" jsonschema_description:"Full RTMP/RTMPS/SRT URI including the destination stream key."`
+	StreamID  string `json:"stream_id" jsonschema:"Stream ID that should be forwarded to the destination."`
+	Platform  string `json:"platform" jsonschema:"'twitch' | 'youtube' | 'facebook' | 'kick' | 'x' | 'custom'"`
+	Name      string `json:"name" jsonschema:"Human-readable destination name."`
+	TargetURI string `json:"target_uri" jsonschema:"Full RTMP/RTMPS/SRT URI including the destination stream key."`
 }
 
 type UpdatePushTargetInput struct {
-	ID        string  `json:"id" jsonschema:"required"`
-	Name      *string `json:"name,omitempty"`
-	TargetURI *string `json:"target_uri,omitempty"`
-	IsEnabled *bool   `json:"is_enabled,omitempty"`
+	ID        string  `json:"id" jsonschema:"Push-target ID returned by list_push_targets."`
+	Name      *string `json:"name,omitempty" jsonschema:"Replacement human-readable destination name."`
+	TargetURI *string `json:"target_uri,omitempty" jsonschema:"Replacement RTMP, RTMPS, or SRT destination URI including its stream key."`
+	IsEnabled *bool   `json:"is_enabled,omitempty" jsonschema:"Whether FrameWorks should actively forward the stream to this destination."`
 }
 
 type DeletePushTargetInput struct {
-	ID string `json:"id" jsonschema:"required"`
+	ID string `json:"id" jsonschema:"Push-target ID returned by list_push_targets."`
 }
 
 // ===== Result shapes =====

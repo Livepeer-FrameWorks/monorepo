@@ -4,13 +4,17 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/clients/clientstest"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -40,6 +44,162 @@ func TestPublicMCPWalletBootstrapDoesNotOpenAccountOrPaymentTools(t *testing.T) 
 		if isPublicMCPOperation(operation) {
 			t.Errorf("%s must require authentication", operation)
 		}
+	}
+}
+
+func TestAuthorizeMCPToolUsesExistingTokenScopes(t *testing.T) {
+	apiToken := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "api_token")
+	apiToken = context.WithValue(apiToken, ctxkeys.KeyPermissions, []string{"streams:read"})
+	jwt := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "jwt")
+
+	tests := []struct {
+		name     string
+		ctx      context.Context
+		tool     string
+		wantDeny bool
+	}{
+		{name: "matching API scope", ctx: apiToken, tool: "list_stream_keys"},
+		{name: "missing API scope", ctx: apiToken, tool: "create_stream", wantDeny: true},
+		{name: "interactive user", ctx: jwt, tool: "create_stream"},
+		{name: "anonymous public tool", ctx: context.Background(), tool: "browse_marketplace"},
+		{name: "scoped token cannot inherit public tool access", ctx: apiToken, tool: "browse_marketplace", wantDeny: true},
+		{name: "anonymous private tool", ctx: context.Background(), tool: "get_tenant_settings", wantDeny: true},
+		{name: "unclassified tool fails closed", ctx: jwt, tool: "not_registered", wantDeny: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := authorizeMCPTool(tc.ctx, tc.tool)
+			if (err != nil) != tc.wantDeny {
+				t.Fatalf("authorizeMCPTool(%q) error = %v, wantDeny=%t", tc.tool, err, tc.wantDeny)
+			}
+		})
+	}
+}
+
+func TestAuthorizeMCPHighRiskToolRequiresExplicitAgentGrant(t *testing.T) {
+	base := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "api_token")
+	withoutGrant := context.WithValue(base, ctxkeys.KeyPermissions, []string{"streams:write"})
+	withGrant := context.WithValue(base, ctxkeys.KeyPermissions, []string{"streams:write", "mcp:high-risk"})
+	if err := authorizeMCPTool(withoutGrant, "delete_stream"); err == nil {
+		t.Fatal("high-risk API-token call succeeded without mcp:high-risk")
+	}
+	if err := authorizeMCPTool(withGrant, "delete_stream"); err != nil {
+		t.Fatalf("pre-authorized high-risk API-token call denied: %v", err)
+	}
+}
+
+func TestFilterToolsByPolicyOnlyPublishesCallableTools(t *testing.T) {
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "api_token")
+	ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, []string{"streams:read"})
+	result := &mcp.ListToolsResult{Tools: []*mcp.Tool{
+		{Name: "list_stream_keys"},
+		{Name: "create_stream"},
+		{Name: "browse_marketplace"},
+		{Name: "not_registered"},
+	}}
+
+	filtered := filterToolsByPolicy(ctx, result).(*mcp.ListToolsResult)
+	if len(filtered.Tools) != 1 || filtered.Tools[0].Name != "list_stream_keys" {
+		t.Fatalf("filtered tools = %#v", filtered.Tools)
+	}
+}
+
+func TestValidMCPOrigin(t *testing.T) {
+	tests := []struct {
+		name    string
+		host    string
+		origin  string
+		allowed func(string) bool
+		want    bool
+	}{
+		{name: "non-browser client", host: "api.example", want: true},
+		{name: "same origin fallback", host: "api.example", origin: "https://api.example", want: true},
+		{name: "cross origin fallback", host: "api.example", origin: "https://evil.example"},
+		{name: "configured origin", host: "api.example", origin: "https://app.example", allowed: func(value string) bool { return value == "https://app.example" }, want: true},
+		{name: "malformed origin", host: "api.example", origin: "://bad"},
+		{name: "configured callback cannot allow origin path", host: "api.example", origin: "https://evil.example/path", allowed: func(string) bool { return true }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://"+tc.host+"/mcp", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Origin", tc.origin)
+			if got := validMCPOrigin(req, tc.allowed); got != tc.want {
+				t.Fatalf("validMCPOrigin() = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAuthorizeMCPResourceUsesExistingTokenScopes(t *testing.T) {
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "api_token")
+	ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, []string{"streams:read"})
+
+	for _, uri := range []string{"streams://list", "streams://stream-1", "vod://asset-1"} {
+		if err := authorizeMCPResource(ctx, uri); err != nil {
+			t.Errorf("authorizeMCPResource(%q): %v", uri, err)
+		}
+	}
+	for _, uri := range []string{"account://status", "billing://balance", "support://conversations", "unknown://resource"} {
+		if err := authorizeMCPResource(ctx, uri); err == nil {
+			t.Errorf("authorizeMCPResource(%q) unexpectedly succeeded", uri)
+		}
+	}
+	if err := authorizeMCPResource(context.Background(), "account://status"); err != nil {
+		t.Fatalf("anonymous public resource denied: %v", err)
+	}
+}
+
+func TestFilterMCPResourcesByPolicy(t *testing.T) {
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "api_token")
+	ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, []string{"billing:read"})
+	resources := &mcp.ListResourcesResult{Resources: []*mcp.Resource{
+		{URI: "billing://balance"},
+		{URI: "streams://list"},
+		{URI: "account://status"},
+		{URI: "unknown://resource"},
+	}}
+	filtered := filterResourcesByPolicy(ctx, resources).(*mcp.ListResourcesResult)
+	if len(filtered.Resources) != 1 || filtered.Resources[0].URI != "billing://balance" {
+		t.Fatalf("filtered resources = %#v", filtered.Resources)
+	}
+
+	templates := &mcp.ListResourceTemplatesResult{ResourceTemplates: []*mcp.ResourceTemplate{
+		{URITemplate: "billing://invoices/{invoice_id}"},
+		{URITemplate: "streams://{id}"},
+	}}
+	filteredTemplates := filterResourceTemplatesByPolicy(ctx, templates).(*mcp.ListResourceTemplatesResult)
+	if len(filteredTemplates.ResourceTemplates) != 1 || filteredTemplates.ResourceTemplates[0].URITemplate != "billing://invoices/{invoice_id}" {
+		t.Fatalf("filtered resource templates = %#v", filteredTemplates.ResourceTemplates)
+	}
+}
+
+func TestMCPResourceResultLimitReturnsProtocolError(t *testing.T) {
+	err := mcpResultTooLargeError()
+	var rpcErr *jsonrpc.Error
+	if !errors.As(err, &rpcErr) || rpcErr.Code != -32016 || len(rpcErr.Data) == 0 {
+		t.Fatalf("result limit error = %#v", err)
+	}
+}
+
+func TestEnforceMCPResultLimitReturnsValidStructuredError(t *testing.T) {
+	oversized := &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: strings.Repeat("x", maxMCPResultBytes)}}}
+	result := enforceMCPResultLimit("test_tool", oversized).(*mcp.CallToolResult)
+	if !result.IsError {
+		t.Fatal("oversized result must be a tool error")
+	}
+	if result.StructuredContent == nil || len(result.Content) != 1 {
+		t.Fatalf("oversized result is not structured: %#v", result)
+	}
+	text := result.Content[0].(*mcp.TextContent).Text
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(text), &payload); err != nil {
+		t.Fatalf("oversized error text is not JSON: %v", err)
+	}
+	if payload["code"] != "RESULT_TOO_LARGE" {
+		t.Fatalf("code = %v", payload["code"])
 	}
 }
 

@@ -21,7 +21,7 @@ import (
 // RegisterPaymentTools registers x402 payment-related MCP tools.
 func RegisterPaymentTools(server *mcp.Server, clients *clients.ServiceClients, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) {
 	// get_payment_options - Get tenant-bound x402 payment options.
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "get_payment_options",
 			Description: "Get exact x402 prepaid top-up options for the authenticated tenant. Returns tenant-bound payTo addresses, supported networks, exact amounts, and payment instructions.",
@@ -32,7 +32,7 @@ func RegisterPaymentTools(server *mcp.Server, clients *clients.ServiceClients, r
 	)
 
 	// submit_payment - Submit an x402 payment
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "submit_payment",
 			Description: "Submit an official x402 v2 PAYMENT-SIGNATURE value for an authenticated tenant top-up. Zero-value payloads are not authentication; use wallet challenge login.",
@@ -45,7 +45,7 @@ func RegisterPaymentTools(server *mcp.Server, clients *clients.ServiceClients, r
 
 // GetPaymentOptionsInput represents input for get_payment_options tool.
 type GetPaymentOptionsInput struct {
-	Resource string `json:"resource,omitempty" jsonschema_description:"Optional resource being accessed (for logging)"`
+	Resource string `json:"resource,omitempty" jsonschema:"Optional resource being accessed (for logging)"`
 }
 
 // PaymentOption represents a single x402 payment option.
@@ -132,13 +132,13 @@ func handleGetPaymentOptions(ctx context.Context, args GetPaymentOptionsInput, c
 5. Retry the original operation only after confirmed settlement`,
 	}
 
-	return toolSuccessJSON(result)
+	return toolSuccess(result)
 }
 
 // SubmitPaymentInput represents input for submit_payment tool.
 type SubmitPaymentInput struct {
-	Payment  string `json:"payment" jsonschema:"required" jsonschema_description:"Base64-encoded official x402 v2 PAYMENT-SIGNATURE payload"`
-	Resource string `json:"resource,omitempty" jsonschema_description:"Resource being paid for (required for non-zero payments). Supports stream_id or artifact_hash; relay IDs accepted. Use prefixes: playback: or ingest: for view/ingest keys."`
+	Payment  string `json:"payment" jsonschema:"Base64-encoded official x402 v2 PAYMENT-SIGNATURE payload"`
+	Resource string `json:"resource,omitempty" jsonschema:"Resource being paid for (required for non-zero payments). Supports stream_id or artifact_hash; relay IDs accepted. Use prefixes: playback: or ingest: for view/ingest keys."`
 }
 
 // SubmitPaymentResult represents the result of submitting a payment.
@@ -224,7 +224,7 @@ func handleSubmitPayment(ctx context.Context, args SubmitPaymentInput, clients *
 		result.PaymentResponse, _ = x402.EncodePaymentResponseHeader(settleResult, settleResult.Network)
 	}
 
-	return toolSuccessJSON(result)
+	return toolSuccess(result)
 }
 
 // networkDisplayName returns a human-readable name for an x402 network.

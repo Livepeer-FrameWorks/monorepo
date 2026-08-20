@@ -17,28 +17,28 @@ import (
 // RegisterWalletTools registers wallet bootstrap and linked-wallet management.
 // Wallet ownership establishes identity; these tools never settle payment.
 func RegisterWalletTools(server *mcp.Server, serviceClients *clients.ServiceClients, logger logging.Logger) {
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name:        "request_wallet_challenge",
 		Description: "Request a five-minute, single-use EIP-191 wallet challenge. Sign the returned message verbatim, then reconnect once with X-Wallet-Address, X-Wallet-Message, and X-Wallet-Signature. This is authentication, not x402 payment.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args RequestWalletChallengeInput) (*mcp.CallToolResult, any, error) {
 		return handleRequestWalletChallenge(ctx, args, serviceClients, logger)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name:        "list_linked_wallets",
 		Description: "List wallets linked to the authenticated user. Available at zero prepaid balance.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ ListLinkedWalletsInput) (*mcp.CallToolResult, any, error) {
 		return handleListLinkedWallets(ctx, serviceClients, logger)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name:        "link_wallet",
 		Description: "Link another wallet to the authenticated user using a fresh request_wallet_challenge message and its EIP-191 signature. Available at zero prepaid balance.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args LinkWalletInput) (*mcp.CallToolResult, any, error) {
 		return handleLinkWallet(ctx, args, serviceClients, logger)
 	})
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name:        "unlink_wallet",
 		Description: "Unlink an owned wallet by wallet ID. The final sign-in method cannot be removed unless a verified password sign-in is active.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args UnlinkWalletInput) (*mcp.CallToolResult, any, error) {
@@ -47,8 +47,8 @@ func RegisterWalletTools(server *mcp.Server, serviceClients *clients.ServiceClie
 }
 
 type RequestWalletChallengeInput struct {
-	Address string `json:"address" jsonschema:"required" jsonschema_description:"0x-prefixed Ethereum wallet address"`
-	ChainID uint64 `json:"chain_id" jsonschema:"required" jsonschema_description:"Supported EVM chain ID: 1, 8453, or 42161"`
+	Address string `json:"address" jsonschema:"0x-prefixed Ethereum wallet address"`
+	ChainID uint64 `json:"chain_id" jsonschema:"Supported EVM chain ID: 1, 8453, or 42161"`
 }
 
 type WalletChallengeResult struct {
@@ -72,13 +72,13 @@ type LinkedWalletsResult struct {
 }
 
 type LinkWalletInput struct {
-	Address   string `json:"address" jsonschema:"required" jsonschema_description:"Wallet address used to request the challenge"`
-	Message   string `json:"message" jsonschema:"required" jsonschema_description:"Exact server-issued challenge message"`
-	Signature string `json:"signature" jsonschema:"required" jsonschema_description:"EIP-191 personal_sign signature over message"`
+	Address   string `json:"address" jsonschema:"Wallet address used to request the challenge"`
+	Message   string `json:"message" jsonschema:"Exact server-issued challenge message"`
+	Signature string `json:"signature" jsonschema:"EIP-191 personal_sign signature over message"`
 }
 
 type UnlinkWalletInput struct {
-	WalletID string `json:"wallet_id" jsonschema:"required" jsonschema_description:"Linked wallet UUID returned by list_linked_wallets"`
+	WalletID string `json:"wallet_id" jsonschema:"Linked wallet UUID returned by list_linked_wallets"`
 }
 
 type WalletMutationResult struct {
@@ -100,7 +100,7 @@ func handleRequestWalletChallenge(ctx context.Context, args RequestWalletChallen
 	if resp == nil || resp.GetMessage() == "" || resp.GetExpiresAt() == nil {
 		return toolError("Authentication service returned an incomplete wallet challenge")
 	}
-	return toolSuccessJSON(WalletChallengeResult{
+	return toolSuccess(WalletChallengeResult{
 		Message:   resp.GetMessage(),
 		ExpiresAt: resp.GetExpiresAt().AsTime().UTC().Format(time.RFC3339),
 		NextStep:  "Sign message verbatim with EIP-191 personal_sign, then reconnect once using the X-Wallet-* headers. Save the returned X-Access-Token and use it as a bearer token for subsequent MCP requests.",
@@ -123,7 +123,7 @@ func handleListLinkedWallets(ctx context.Context, serviceClients *clients.Servic
 			wallets = append(wallets, linkedWalletResult(wallet))
 		}
 	}
-	return toolSuccessJSON(LinkedWalletsResult{Wallets: wallets, Message: fmt.Sprintf("Loaded %d linked wallet(s).", len(wallets))})
+	return toolSuccess(LinkedWalletsResult{Wallets: wallets, Message: fmt.Sprintf("Loaded %d linked wallet(s).", len(wallets))})
 }
 
 func handleLinkWallet(ctx context.Context, args LinkWalletInput, serviceClients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -142,7 +142,7 @@ func handleLinkWallet(ctx context.Context, args LinkWalletInput, serviceClients 
 		return toolError("Failed to link wallet; use a fresh challenge and verify the signature or existing ownership")
 	}
 	result := linkedWalletResult(wallet)
-	return toolSuccessJSON(WalletMutationResult{Success: true, Wallet: &result, Message: "Wallet linked."})
+	return toolSuccess(WalletMutationResult{Success: true, Wallet: &result, Message: "Wallet linked."})
 }
 
 func handleUnlinkWallet(ctx context.Context, args UnlinkWalletInput, serviceClients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -161,7 +161,7 @@ func handleUnlinkWallet(ctx context.Context, args UnlinkWalletInput, serviceClie
 	if resp == nil || !resp.GetSuccess() {
 		return toolError("Wallet was not unlinked")
 	}
-	return toolSuccessJSON(WalletMutationResult{Success: true, Message: "Wallet unlinked."})
+	return toolSuccess(WalletMutationResult{Success: true, Message: "Wallet unlinked."})
 }
 
 func linkedWalletResult(wallet *commodorepb.WalletIdentity) LinkedWalletResult {

@@ -27,7 +27,7 @@ import (
 // docs/platform-features.yaml; tool descriptions repeat them at the
 // point of use.
 func RegisterRetentionTools(server *mcp.Server, clients *clients.ServiceClients, _ *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) {
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "get_retention_policy",
 			Description: "Read the tenant per-class retention defaults plus the tier cap and the values the cascade resolves to today for a new artifact of each class.",
@@ -37,7 +37,7 @@ func RegisterRetentionTools(server *mcp.Server, clients *clients.ServiceClients,
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "set_retention_policy",
 			Description: "Set the tenant per-class retention default for VOD uploads, DVR recordings, or clips. target_type is required ('vod' | 'dvr' | 'clip'). days is in [0, tier_cap] where 0 = keep forever (Free clamps to the cap). Pass clear=true to NULL the column so the tenant inherits the system default (VOD: keep forever, DVR/clip: 30d). Cost-affecting: changes storage billing for future artifacts.",
@@ -47,7 +47,7 @@ func RegisterRetentionTools(server *mcp.Server, clients *clients.ServiceClients,
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "set_stream_retention_overrides",
 			Description: "Set per-stream DVR / clip retention overrides for a single stream. Unset fields are left alone; pass 0 for keep forever (paid only — Free clamps to the cap), >0 for finite days. To clear an existing override and inherit the tenant default, set clear_dvr_retention_override / clear_clip_retention_override.",
@@ -57,7 +57,7 @@ func RegisterRetentionTools(server *mcp.Server, clients *clients.ServiceClients,
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "update_asset_retention",
 			Description: "Apply a per-asset retention override on a finalized DVR / clip / VOD asset. Set target_type to 'dvr' | 'clip' | 'vod'. retention_days = 0 means keep forever (paid only); >0 sets the days; retention_until_iso is an alternative absolute deadline. Cost-affecting and destructive-adjacent: shortening retention schedules the asset for deletion at the new horizon.",
@@ -67,7 +67,7 @@ func RegisterRetentionTools(server *mcp.Server, clients *clients.ServiceClients,
 		},
 	)
 
-	mcp.AddTool(server,
+	addTool(server,
 		&mcp.Tool{
 			Name:        "reset_asset_retention",
 			Description: "Clear a per-asset retention override and recompute the horizon from the cascade (per-stream → tenant per-class default → system default). Set target_type to 'dvr' | 'clip' | 'vod'.",
@@ -79,29 +79,29 @@ func RegisterRetentionTools(server *mcp.Server, clients *clients.ServiceClients,
 }
 
 type SetRetentionPolicyInput struct {
-	TargetType string `json:"target_type" jsonschema:"required" jsonschema_description:"Asset class: 'vod' | 'dvr' | 'clip'."`
-	Days       *int32 `json:"days,omitempty" jsonschema_description:"Days to retain new artifacts of this class. 0 = keep forever (paid only). Required unless clear=true."`
-	Clear      bool   `json:"clear,omitempty" jsonschema_description:"When true, clears the column so the tenant inherits the system default."`
+	TargetType string `json:"target_type" jsonschema:"Asset class: 'vod' | 'dvr' | 'clip'."`
+	Days       *int32 `json:"days,omitempty" jsonschema:"Days to retain new artifacts of this class. 0 = keep forever (paid only). Required unless clear=true."`
+	Clear      bool   `json:"clear,omitempty" jsonschema:"When true, clears the column so the tenant inherits the system default."`
 }
 
 type SetStreamRetentionOverridesInput struct {
-	StreamID                   string `json:"stream_id" jsonschema:"required" jsonschema_description:"Stream UUID."`
-	DvrRetentionDaysOverride   *int32 `json:"dvr_retention_days_override,omitempty" jsonschema_description:"DVR override days; 0 = keep forever, >0 = days."`
-	ClipRetentionDaysOverride  *int32 `json:"clip_retention_days_override,omitempty" jsonschema_description:"Clip override days; 0 = keep forever, >0 = days."`
-	ClearDvrRetentionOverride  bool   `json:"clear_dvr_retention_override,omitempty" jsonschema_description:"When true, clears the DVR override; inherits tenant default."`
-	ClearClipRetentionOverride bool   `json:"clear_clip_retention_override,omitempty" jsonschema_description:"When true, clears the clip override; inherits tenant default."`
+	StreamID                   string `json:"stream_id" jsonschema:"Stream UUID."`
+	DvrRetentionDaysOverride   *int32 `json:"dvr_retention_days_override,omitempty" jsonschema:"DVR override days; 0 = keep forever, >0 = days."`
+	ClipRetentionDaysOverride  *int32 `json:"clip_retention_days_override,omitempty" jsonschema:"Clip override days; 0 = keep forever, >0 = days."`
+	ClearDvrRetentionOverride  bool   `json:"clear_dvr_retention_override,omitempty" jsonschema:"When true, clears the DVR override; inherits tenant default."`
+	ClearClipRetentionOverride bool   `json:"clear_clip_retention_override,omitempty" jsonschema:"When true, clears the clip override; inherits tenant default."`
 }
 
 type UpdateAssetRetentionInput struct {
-	TargetType     string `json:"target_type" jsonschema:"required" jsonschema_description:"Asset class: 'dvr' | 'clip' | 'vod'."`
-	TargetID       string `json:"target_id" jsonschema:"required" jsonschema_description:"Asset identifier (UUID or hash for the target type)."`
-	RetentionDays  *int32 `json:"retention_days,omitempty" jsonschema_description:"Days from now (mutually exclusive with retention_until_iso). 0 = keep forever."`
-	RetentionUntil string `json:"retention_until_iso,omitempty" jsonschema_description:"Absolute ISO-8601 timestamp (mutually exclusive with retention_days)"`
+	TargetType     string `json:"target_type" jsonschema:"Asset class: 'dvr' | 'clip' | 'vod'."`
+	TargetID       string `json:"target_id" jsonschema:"Asset identifier (UUID or hash for the target type)."`
+	RetentionDays  *int32 `json:"retention_days,omitempty" jsonschema:"Days from now (mutually exclusive with retention_until_iso). 0 = keep forever."`
+	RetentionUntil string `json:"retention_until_iso,omitempty" jsonschema:"Absolute ISO-8601 timestamp (mutually exclusive with retention_days)"`
 }
 
 type ResetAssetRetentionInput struct {
-	TargetType string `json:"target_type" jsonschema:"required" jsonschema_description:"Asset class: 'dvr' | 'clip' | 'vod'."`
-	TargetID   string `json:"target_id" jsonschema:"required" jsonschema_description:"Asset identifier (UUID or hash for the target type)."`
+	TargetType string `json:"target_type" jsonschema:"Asset class: 'dvr' | 'clip' | 'vod'."`
+	TargetID   string `json:"target_id" jsonschema:"Asset identifier (UUID or hash for the target type)."`
 }
 
 type RetentionPolicyResult struct {

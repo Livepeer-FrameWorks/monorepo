@@ -2,7 +2,10 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,6 +26,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"frameworks/api_gateway/internal/clients"
+	mcpTools "frameworks/api_gateway/internal/mcp/tools"
 	"frameworks/api_gateway/internal/middleware"
 	"frameworks/api_gateway/internal/resolvers"
 )
@@ -171,5 +175,89 @@ func TestMCPSmokeSweep(t *testing.T) {
 		calledTools, len(toolList.Tools), readResources, len(resList.Resources))
 	if calledTools == 0 && readResources == 0 {
 		t.Error("MCP smoke swept nothing")
+	}
+}
+
+func TestMCPPublishedInputSchemasHaveUsefulDescriptions(t *testing.T) {
+	ctx, cs := newTestMCPSession(t)
+	toolList, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+
+	for _, tool := range toolList.Tools {
+		if strings.TrimSpace(tool.Title) == "" {
+			t.Errorf("tool %s has no title", tool.Name)
+		}
+		if tool.Annotations == nil {
+			t.Errorf("tool %s has no annotations", tool.Name)
+		}
+		if _, ok := mcpTools.ToolPolicyForName(tool.Name); !ok {
+			t.Errorf("tool %s has no authoritative policy", tool.Name)
+		}
+		encoded, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatalf("marshal %s input schema: %v", tool.Name, err)
+		}
+		var schema map[string]any
+		if err := json.Unmarshal(encoded, &schema); err != nil {
+			t.Fatalf("decode %s input schema: %v", tool.Name, err)
+		}
+		if additional, exists := schema["additionalProperties"]; !exists || additional != false {
+			t.Errorf("tool %s input schema does not reject unknown properties", tool.Name)
+		}
+		assertSchemaPropertyDescriptions(t, tool.Name, "input", schema)
+	}
+	if got, want := len(toolList.Tools), len(mcpTools.ToolPolicies()); got != want {
+		t.Errorf("published tools = %d, policies = %d", got, want)
+	}
+}
+
+func assertSchemaPropertyDescriptions(t *testing.T, toolName, path string, schema map[string]any) {
+	t.Helper()
+	if properties, ok := schema["properties"].(map[string]any); ok {
+		for name, raw := range properties {
+			property, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			description, _ := property["description"].(string)
+			if strings.TrimSpace(description) == "" || description == "required" {
+				t.Errorf("tool %s property %s.%s has unusable description %q", toolName, path, name, description)
+			}
+			assertSchemaPropertyDescriptions(t, toolName, path+"."+name, property)
+		}
+	}
+	for _, keyword := range []string{"$defs", "definitions"} {
+		if definitions, ok := schema[keyword].(map[string]any); ok {
+			for name, raw := range definitions {
+				if definition, ok := raw.(map[string]any); ok {
+					assertSchemaPropertyDescriptions(t, toolName, path+"."+name, definition)
+				}
+			}
+		}
+	}
+	for _, keyword := range []string{"items", "additionalItems", "contains", "unevaluatedItems", "propertyNames", "unevaluatedProperties", "not", "if", "then", "else", "contentSchema"} {
+		if child, ok := schema[keyword].(map[string]any); ok {
+			assertSchemaPropertyDescriptions(t, toolName, path+"."+keyword, child)
+		}
+	}
+	for _, keyword := range []string{"prefixItems", "allOf", "anyOf", "oneOf"} {
+		if children, ok := schema[keyword].([]any); ok {
+			for i, raw := range children {
+				if child, ok := raw.(map[string]any); ok {
+					assertSchemaPropertyDescriptions(t, toolName, fmt.Sprintf("%s.%s[%d]", path, keyword, i), child)
+				}
+			}
+		}
+	}
+	for _, keyword := range []string{"patternProperties", "dependentSchemas"} {
+		if children, ok := schema[keyword].(map[string]any); ok {
+			for name, raw := range children {
+				if child, ok := raw.(map[string]any); ok {
+					assertSchemaPropertyDescriptions(t, toolName, path+"."+keyword+"."+name, child)
+				}
+			}
+		}
 	}
 }

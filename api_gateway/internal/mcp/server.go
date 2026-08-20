@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -30,6 +31,12 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+const (
+	maxMCPRequestBytes = 256 << 10
+	maxMCPResultBytes  = 64 << 10
+	mcpSessionTimeout  = 30 * time.Minute
+)
+
 // Server wraps the MCP server with FrameWorks-specific functionality.
 type Server struct {
 	mcpServer      *mcp.Server
@@ -43,6 +50,7 @@ type Server struct {
 	usageTracker   *middleware.UsageTracker
 	trustedProxies *middleware.TrustedProxies
 	skipperClient  tools.SkipperCaller
+	originAllowed  func(string) bool
 }
 
 type skipperToolAvailability interface {
@@ -60,6 +68,7 @@ type Config struct {
 	UsageTracker   *middleware.UsageTracker
 	TrustedProxies *middleware.TrustedProxies
 	SkipperClient  tools.SkipperCaller
+	OriginAllowed  func(string) bool
 }
 
 // NewServer creates a new MCP server with all resources, tools, and prompts registered.
@@ -90,6 +99,7 @@ func NewServer(cfg Config) (*Server, error) {
 		usageTracker:   cfg.UsageTracker,
 		trustedProxies: cfg.TrustedProxies,
 		skipperClient:  cfg.SkipperClient,
+		originAllowed:  cfg.OriginAllowed,
 	}
 
 	// Register resources
@@ -220,11 +230,18 @@ func (s *Server) HTTPHandler() http.Handler {
 		&mcp.StreamableHTTPOptions{
 			Stateless:      false, // Maintain session state
 			JSONResponse:   false, // Use SSE format
-			SessionTimeout: 0,     // No timeout
+			SessionTimeout: mcpSessionTimeout,
 		},
 	)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !validMCPOrigin(r, s.originAllowed) {
+			http.Error(w, "MCP origin not allowed", http.StatusForbidden)
+			return
+		}
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxMCPRequestBytes)
+		}
 		ctx := s.extractAuthContext(r)
 		r = r.WithContext(ctx)
 
@@ -239,6 +256,24 @@ func (s *Server) HTTPHandler() http.Handler {
 
 		baseHandler.ServeHTTP(w, r)
 	})
+}
+
+func validMCPOrigin(r *http.Request, allowed func(string) bool) bool {
+	if r == nil {
+		return false
+	}
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return false
+	}
+	if allowed != nil {
+		return allowed(origin)
+	}
+	return strings.EqualFold(parsed.Host, r.Host)
 }
 
 // extractAuthContext extracts authentication from the HTTP request and returns a context with user info.
@@ -354,7 +389,24 @@ func (s *Server) registerAccessMiddleware() {
 			// through EvaluateAccess so the per-IP public rate limit applies to them,
 			// same as the public GraphQL surface.
 			if tenantID == "" && isPublicMCPMetadataOperation(opName) {
-				return next(ctx, method, req)
+				result, err := next(ctx, method, req)
+				if err == nil {
+					result = filterMCPDiscovery(ctx, method, result, s.skipperClient)
+				}
+				return result, err
+			}
+
+			if method == "tools/call" {
+				toolName := strings.TrimPrefix(opName, "mcp:tools/call:")
+				if err := authorizeMCPTool(ctx, toolName); err != nil {
+					mcpToolDenialsTotal.WithLabelValues(toolName, "scope").Inc()
+					return nil, err
+				}
+			}
+			if method == "resources/read" {
+				if err := authorizeMCPResource(ctx, mcpReadResourceURI(req.GetParams())); err != nil {
+					return nil, err
+				}
 			}
 
 			decision := middleware.EvaluateAccess(ctx, middleware.AccessRequest{
@@ -370,6 +422,9 @@ func (s *Server) registerAccessMiddleware() {
 			}, s.rateLimiter, s.tenantCache.GetLimitsFunc(), s.tenantCache, s.serviceClients.Purser, s.serviceClients.Purser, s.serviceClients.Commodore, s.logger)
 
 			if !decision.Allowed {
+				if method == "tools/call" {
+					mcpToolDenialsTotal.WithLabelValues(strings.TrimPrefix(opName, "mcp:tools/call:"), accessDenialReason(decision.Status)).Inc()
+				}
 				s.logger.WithField("operation", opName).
 					WithField("tenant_id", tenantID).
 					WithField("auth_type", deriveAuthType(ctx)).
@@ -386,10 +441,30 @@ func (s *Server) registerAccessMiddleware() {
 			} else {
 				result, err = next(ctx, method, req)
 			}
-			if err == nil && method == "tools/list" {
-				result = filterSkipperTools(ctx, result, s.skipperClient)
+			if err == nil {
+				result = filterMCPDiscovery(ctx, method, result, s.skipperClient)
+			}
+			if err == nil && method == "tools/call" {
+				result = enforceMCPResultLimit(strings.TrimPrefix(opName, "mcp:tools/call:"), result)
+			}
+			if err == nil && method == "resources/read" && mcpEncodedResultBytes(result) > maxMCPResultBytes {
+				resourcePolicy, _ := resourcePolicyForURI(mcpReadResourceURI(req.GetParams()))
+				mcpResourceDenialsTotal.WithLabelValues(resourcePolicy.Scope, "result_too_large").Inc()
+				result = nil
+				err = mcpResultTooLargeError()
 			}
 			if method == "tools/call" {
+				toolName := strings.TrimPrefix(opName, "mcp:tools/call:")
+				policy, _ := tools.ToolPolicyForName(toolName)
+				outcome := "success"
+				if err != nil {
+					outcome = "protocol_error"
+				} else if toolResult, ok := result.(*mcp.CallToolResult); ok && toolResult != nil && toolResult.IsError {
+					outcome = "tool_error"
+				}
+				mcpToolCallsTotal.WithLabelValues(toolName, string(policy.Risk), outcome).Inc()
+				mcpToolDurationSeconds.WithLabelValues(toolName, string(policy.Risk)).Observe(time.Since(start).Seconds())
+				mcpToolResultBytes.WithLabelValues(toolName).Observe(float64(mcpEncodedResultBytes(result)))
 				entry := s.logger.WithField("operation", opName).
 					WithField("tenant_id", ctxkeys.GetTenantID(ctx)).
 					WithField("user_id", ctxkeys.GetUserID(ctx)).
@@ -578,6 +653,65 @@ func mcpResultTextBytes(result mcp.Result) int {
 	return 0
 }
 
+func enforceMCPResultLimit(toolName string, result mcp.Result) mcp.Result {
+	if result == nil {
+		return result
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil || len(encoded) <= maxMCPResultBytes {
+		return result
+	}
+	mcpToolDenialsTotal.WithLabelValues(toolName, "result_too_large").Inc()
+	payload := map[string]any{
+		"code":      "RESULT_TOO_LARGE",
+		"message":   "The result exceeded the MCP response limit. Narrow the query or request a smaller page.",
+		"max_bytes": maxMCPResultBytes,
+	}
+	text, err := json.Marshal(payload)
+	if err != nil {
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: `{"code":"RESULT_TOO_LARGE"}`}}, IsError: true}
+	}
+	return &mcp.CallToolResult{
+		Content:           []mcp.Content{&mcp.TextContent{Text: string(text)}},
+		StructuredContent: payload,
+		IsError:           true,
+	}
+}
+
+func mcpResultTooLargeError() error {
+	payload := map[string]any{
+		"code":      "RESULT_TOO_LARGE",
+		"message":   "The result exceeded the MCP response limit. Narrow the request or use the direct API.",
+		"max_bytes": maxMCPResultBytes,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return &jsonrpc.Error{Code: -32016, Message: "result too large"}
+	}
+	return &jsonrpc.Error{Code: -32016, Message: "result too large", Data: data}
+}
+
+func mcpEncodedResultBytes(result mcp.Result) int {
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return 0
+	}
+	return len(encoded)
+}
+
+func accessDenialReason(status int) string {
+	switch status {
+	case http.StatusUnauthorized:
+		return "authentication"
+	case http.StatusPaymentRequired:
+		return "payment"
+	case http.StatusTooManyRequests:
+		return "rate_limit"
+	default:
+		return "access"
+	}
+}
+
 func mcpTextResult(result *mcp.CallToolResult) string {
 	if result == nil {
 		return ""
@@ -615,6 +749,89 @@ func filterSkipperTools(ctx context.Context, result mcp.Result, skipper tools.Sk
 	}
 	listResult.Tools = filtered
 	return listResult
+}
+
+func filterMCPDiscovery(ctx context.Context, method string, result mcp.Result, skipper tools.SkipperCaller) mcp.Result {
+	switch method {
+	case "tools/list":
+		result = filterToolsByPolicy(ctx, result)
+		return filterSkipperTools(ctx, result, skipper)
+	case "resources/list":
+		return filterResourcesByPolicy(ctx, result)
+	case "resources/templates/list":
+		return filterResourceTemplatesByPolicy(ctx, result)
+	default:
+		return result
+	}
+}
+
+func mcpReadResourceURI(params mcp.Params) string {
+	if read, ok := params.(*mcp.ReadResourceParams); ok && read != nil {
+		return read.URI
+	}
+	return ""
+}
+
+func filterToolsByPolicy(ctx context.Context, result mcp.Result) mcp.Result {
+	listResult, ok := result.(*mcp.ListToolsResult)
+	if !ok || listResult == nil {
+		return result
+	}
+	filtered := make([]*mcp.Tool, 0, len(listResult.Tools))
+	for _, tool := range listResult.Tools {
+		if tool == nil {
+			continue
+		}
+		policy, exists := tools.ToolPolicyForName(tool.Name)
+		if !exists {
+			continue
+		}
+		if canUseMCPTool(ctx, policy) {
+			filtered = append(filtered, tool)
+		}
+	}
+	listResult.Tools = filtered
+	return listResult
+}
+
+func authorizeMCPTool(ctx context.Context, toolName string) error {
+	policy, ok := tools.ToolPolicyForName(toolName)
+	if !ok {
+		return &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "tool security policy missing"}
+	}
+	if policy.Public && ctxkeys.GetAuthType(ctx) != "api_token" {
+		return nil
+	}
+	for _, scope := range requiredMCPScopes(ctx, policy) {
+		if err := middleware.RequirePermission(ctx, scope); err != nil {
+			data, marshalErr := json.Marshal(map[string]any{"code": "INSUFFICIENT_SCOPE", "required_scope": scope})
+			if marshalErr != nil {
+				return &jsonrpc.Error{Code: -32003, Message: "insufficient permissions"}
+			}
+			return &jsonrpc.Error{Code: -32003, Message: "insufficient permissions", Data: data}
+		}
+	}
+	return nil
+}
+
+func canUseMCPTool(ctx context.Context, policy tools.ToolPolicy) bool {
+	if policy.Public && ctxkeys.GetAuthType(ctx) != "api_token" {
+		return true
+	}
+	for _, scope := range requiredMCPScopes(ctx, policy) {
+		if !middleware.HasPermission(ctx, scope) {
+			return false
+		}
+	}
+	return true
+}
+
+func requiredMCPScopes(ctx context.Context, policy tools.ToolPolicy) []string {
+	scopes := []string{policy.Scope}
+	if policy.Risk == tools.ToolRiskHigh && ctxkeys.GetAuthType(ctx) == "api_token" {
+		scopes = append(scopes, "mcp:high-risk")
+	}
+	return scopes
 }
 
 func accessDecisionError(decision middleware.AccessDecision) error {
