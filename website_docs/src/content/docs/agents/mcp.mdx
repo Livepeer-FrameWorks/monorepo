@@ -136,6 +136,8 @@ Always read this first. Returns:
 ```json
 {
   "account_ready": true,
+  "rated_work_ready": true,
+  "next_actions": [],
   "blockers": [],
   "capabilities": {
     "create_stream": true,
@@ -157,7 +159,9 @@ Always read this first. Returns:
 }
 ```
 
-If `blockers` is non-empty, resolve them before billable operations. `balance_cents` is the settled
+`account_ready` means authentication and control-plane onboarding are usable.
+`rated_work_ready` and `blockers` describe rated media/compute work; zero balance
+does not make the account broken. `balance_cents` is the settled
 balance, `reserved_balance_cents` is already committed to active usage, and `available_balance_cents`
 is what remains spendable. Billable tool preflights use the available balance.
 
@@ -187,6 +191,8 @@ Actions the agent can perform.
 | `list_linked_wallets`            | List wallets linked to the authenticated user     | Auth           |
 | `link_wallet`                    | Link a wallet using a fresh signed challenge      | Auth           |
 | `unlink_wallet`                  | Unlink a wallet while retaining a sign-in method  | Auth           |
+| `link_email`                     | Add email/password and send verification          | Auth           |
+| `activate_free_tier`             | Activate Free after email verification            | Auth           |
 | `get_tenant_settings`            | Read tenant identity and routing settings         | Auth           |
 | `update_tenant_settings`         | Update tenant name, primary cluster, or model     | Auth           |
 | `update_billing_details`         | Set billing address                               | Auth           |
@@ -197,17 +203,17 @@ Actions the agent can perform.
 | `pay_invoice`                    | Create or resume an invoice payment               | Auth + Billing |
 | `start_postpaid_setup`           | Start Stripe or Mollie hosted postpaid setup      | Auth + Billing |
 | `complete_mollie_postpaid_setup` | Verify mandate and activate Mollie postpaid       | Auth + Billing |
-| `create_stream`                  | Create a push or pull stream                      | Auth + Balance |
-| `update_stream`                  | Update stream settings or pull-source config      | Auth + Balance |
-| `delete_stream`                  | Delete a stream                                   | Auth + Balance |
+| `create_stream`                  | Create a push or pull stream                      | Auth           |
+| `update_stream`                  | Update stream settings or pull-source config      | Auth           |
+| `delete_stream`                  | Delete a stream                                   | Auth + Confirm |
 | `list_stream_keys`               | List stream ingest keys                           | Auth           |
 | `create_stream_key`              | Create an additional ingest key                   | Auth + Confirm |
 | `delete_stream_key`              | Deactivate an ingest key                          | Auth + Confirm |
 | `refresh_stream_key`             | Rotate the primary stream key                     | Auth + Confirm |
 | `validate_stream_key`            | Validate an ingest key                            | Auth           |
 | `list_push_targets`              | List masked multistream destinations              | Auth           |
-| `create_push_target`             | Add a cost-affecting multistream destination      | Auth + Balance |
-| `update_push_target`             | Update or enable a multistream destination        | Auth + Balance |
+| `create_push_target`             | Add a multistream destination                     | Auth           |
+| `update_push_target`             | Update or enable a multistream destination        | Auth           |
 | `delete_push_target`             | Delete a multistream destination                  | Auth           |
 | `create_clip`                    | Create clip from stream                           | Auth + Balance |
 | `delete_clip`                    | Delete a clip                                     | Auth           |
@@ -215,15 +221,15 @@ Actions the agent can perform.
 | `stop_dvr`                       | Stop DVR recording                                | Auth           |
 | `delete_dvr`                     | Delete a DVR recording and stored media           | Auth + Confirm |
 | `get_retention_policy`           | Read tenant media-retention defaults and bounds   | Auth           |
-| `set_retention_policy`           | Set tenant media-retention defaults               | Auth + Balance |
-| `set_stream_retention_overrides` | Set DVR/clip retention overrides for a stream     | Auth + Balance |
+| `set_retention_policy`           | Set tenant media-retention defaults               | Auth           |
+| `set_stream_retention_overrides` | Set DVR/clip retention overrides for a stream     | Auth           |
 | `update_asset_retention`         | Override retention for DVR, clip, or VOD          | Auth + Balance |
-| `reset_asset_retention`          | Reset asset retention to the cascade default      | Auth + Balance |
+| `reset_asset_retention`          | Reset asset retention to the cascade default      | Auth + Confirm |
 | `create_vod_upload`              | Start a VOD upload                                | Auth + Balance |
 | `get_vod_upload_status`          | Inspect uploaded and missing VOD parts            | Auth           |
 | `complete_vod_upload`            | Finalize a VOD upload                             | Auth + Balance |
 | `abort_vod_upload`               | Cancel an upload                                  | Auth           |
-| `delete_vod_asset`               | Delete a VOD asset                                | Auth + Balance |
+| `delete_vod_asset`               | Delete a VOD asset                                | Auth + Confirm |
 | `resolve_playback_endpoint`      | Get viewer playback URLs                          | None           |
 | `list_signing_keys`              | List playback signing keys                        | Auth           |
 | `create_signing_key`             | Create a one-shot ES256 private key               | Auth + Confirm |
@@ -241,8 +247,8 @@ Actions the agent can perform.
 | `search_support_history`         | Search support conversations                      | Auth           |
 | `introspect_schema`              | Explore the GraphQL schema                        | Auth           |
 | `generate_query`                 | Generate a GraphQL query from templates           | Auth           |
-| `execute_query`                  | Execute a GraphQL query                           | Auth           |
-| `ask_consultant`                 | Full Skipper pipeline with confidence tagging     | Auth           |
+| `execute_query`                  | Execute a GraphQL query                           | Auth + Balance |
+| `ask_consultant`                 | Full Skipper pipeline with confidence tagging     | Auth + Balance |
 | `browse_marketplace`             | Browse available infrastructure clusters          | None           |
 | `subscribe_to_cluster`           | Subscribe to a cluster                            | Auth           |
 | `unsubscribe_from_cluster`       | Remove a cluster subscription                     | Auth + Confirm |
@@ -293,9 +299,19 @@ QoE tool responses use a consistent status enum: `healthy | warning | critical |
 Agents can call `request_wallet_challenge` without authentication, sign the returned message
 verbatim, and reconnect once with the `X-Wallet-*` headers. That exchange auto-provisions a new
 prepaid tenant when needed and returns `X-Access-Token`; use the token for subsequent calls.
-Authenticated agents can use `list_linked_wallets`, `link_wallet`, and `unlink_wallet` at zero
-balance. An account cannot unlink its final wallet until it has another wallet or a verified
-password sign-in method. x402 only tops up the resulting tenant; it is never a login credential.
+Authenticated agents can use `list_linked_wallets`, `link_wallet`, `unlink_wallet`, and
+`link_email` at zero balance. After the email link is verified, `activate_free_tier`
+switches prepaid to Free without billing details or provider collection; retained prepaid
+funds stay as account credit. An account cannot unlink its final wallet until it has another
+wallet or a verified password sign-in method. x402 only tops up the resulting tenant; it is
+never a login credential.
+
+**link_email / activate_free_tier**
+
+- `link_email` takes `email` and `password`, then sends the normal verification message.
+- Follow that message once; verification is required before activation.
+- `activate_free_tier` takes no fields and selects the active canonical Free tier.
+- Free produces an itemized monthly EUR 0 usage statement and needs neither a billing profile nor Stripe/Mollie.
 
 **topup_balance**
 
@@ -399,7 +415,7 @@ Returns a structured response with `answer`, `confidence` (`verified`, `sourced`
 
 ### Preflight Errors
 
-Positive-balance tools check prepaid balance before executing. Account status can also surface setup blockers, and x402 payments of €100 or more require billing details. See [Payments — Preflight Errors](/agents/payments#preflight-errors) for details.
+Rated tools check prepaid balance before executing; read, configuration, cleanup, and payment-recovery tools do not. Exactly €100 may use a simplified crypto document. Payments over €100, and any VAT-number claim, require the full billing fields returned by the payment blocker. See [Payments — Preflight Errors](/agents/payments#preflight-errors) for details.
 
 ## Prompts
 

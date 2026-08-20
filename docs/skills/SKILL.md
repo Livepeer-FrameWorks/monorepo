@@ -113,8 +113,10 @@ the refreshable HttpOnly-cookie session used by the webapp.
 
 After authentication, use `list_linked_wallets`, `link_wallet`, and
 `unlink_wallet` to manage wallet identities. Linking requires a fresh challenge
-for the new address. An account cannot unlink its final wallet until a verified
-password sign-in is active.
+for the new address. `link_email` adds a password sign-in and sends verification;
+after verification, `activate_free_tier` enables metered, zero-priced Free access
+without billing details or a payment provider. An account cannot unlink its final
+wallet until a verified password sign-in is active.
 
 ## MCP Configuration
 
@@ -144,9 +146,14 @@ Official x402 v2 gasless USDC payments for confirmed prepaid top-ups.
 - Header: `PAYMENT-SIGNATURE: <base64 payload>` (`X-PAYMENT` is legacy compatibility)
 - Challenge: `PAYMENT-REQUIRED` (HTTP) or `payment_required` (MCP)
 - Receipt: `PAYMENT-RESPONSE` (HTTP) or `payment_response` (MCP)
-- Networks: use the CAIP-2 options returned by the live facilitator intersection
-- Side-effecting retries: include `Idempotency-Key` (8–255 characters), or MCP
-  `_meta.idempotencyKey`; reuse the key only for the exact same request
+- Networks: use the live CAIP-2 options returned by the embedded facilitator; an optional hosted provider adds its `/supported` intersection
+- Tax profile: payments at or below €100 can use the simplified-document path;
+  over €100 or any VAT-number claim may require legal name, email, and address
+- Pending: retry the identical payload when `SETTLEMENT_PENDING` returns a
+  transaction hash/network; success alone returns `PAYMENT-RESPONSE`
+- Side effects: top up through `submit_payment`, then retry without the payment
+  header. Direct inline x402 mutation execution is rejected until the owning
+  service registers durable idempotency.
 
 ## GraphQL (Alternative Interface)
 
@@ -162,17 +169,15 @@ x402: authenticate first, make the rated request, read the tenant-bound 402 requ
 
 ## Rate Limits & Billing
 
-- API and AI usage is metered and itemized; the current catalog prices those
-  meters at zero, but later tiers or cluster contracts may price them.
-- Prepaid available balance (settled minus reserved) must be positive to run
-  billable operations.
+- API and media usage is metered and itemized. While the billing-beta waiver is enabled, usage lines retain quantities and would-have-cost values but net to zero.
+- Prepaid available balance (settled minus reserved) must be positive to start rated work. Reads, configuration, cleanup, developer credentials, and payment recovery remain available at zero balance.
 - Use MCP `billing://balance` or GraphQL `prepaidBalance` / `billingStatus` queries to monitor balance and drain rate. Use `billing://documents` for retained invoices, receipts, and credit notes.
 
 ## Streaming Best Practices
 
-- **Check balance before creating streams.** Active streams drain balance continuously. Use `billing://balance` (MCP) or `prepaidBalance` / `billingStatus` queries (GraphQL) to check drain rate.
+- **Check balance before starting ingest or processing.** Stream configuration itself is available at zero balance; media admission is the rated boundary. Use `billing://balance` (MCP) or `prepaidBalance` / `billingStatus` queries (GraphQL).
 - **Monitor stream health.** Read `streams://{id}/health` periodically during live streams. Use QoE diagnostic tools if viewers report issues.
-- **Top up proactively.** Streams are terminated if balance drops below -$10. Use x402 auto-payment or `topup_balance` to maintain buffer.
+- **Top up proactively.** Streams are terminated if balance drops below -€10. Use x402 auto-payment or `topup_balance` to maintain buffer.
 - **Clean up after yourself.** Delete streams, clips, and VOD assets you no longer need. Storage costs are ongoing.
 
 ## Video Consultant (Skipper)
@@ -251,7 +256,7 @@ Two management paths: use `set_node_mode` / `get_node_health` MCP tools when you
 
 - Balance is critically low (< $5 with active streams)
 - Stream health shows `critical` status
-- Billing details are missing and you can't proceed
+- A payment specifically returns `BILLING_PROFILE_REQUIRED` and you cannot provide the listed fields
 - x402 payment settlement fails
 - Wallet signature is rejected (may need re-signing)
 
@@ -273,22 +278,22 @@ For the full periodic check routine, load [heartbeat.md](https://frameworks.netw
 
 ## Preflight Errors
 
-Billable MCP tools run preflight checks before execution. These are the blocking errors:
+MCP applies the shared operation class before execution. Rated tools can return these blockers; safe read/control/payment-recovery tools do not require balance:
 
-| Code                      | Trigger                           | Resolution                                                                                                               |
-| ------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `AUTHENTICATION_REQUIRED` | No wallet headers or bearer token | Send `X-Wallet-Address` + `X-Wallet-Signature` + `X-Wallet-Message`, or `Authorization: Bearer <jwt>`                    |
-| `BILLING_DETAILS_MISSING` | Account has no billing address    | Call `update_billing_details` tool with address fields                                                                   |
-| `INSUFFICIENT_BALANCE`    | Prepaid available balance ≤ $0    | Pay via x402 (`submit_payment`) or `topup_balance`. Check `billing://balance` for settled, reserved, and available state |
+| Code                       | Trigger                                                              | Resolution                                                                                                               |
+| -------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `AUTHENTICATION_REQUIRED`  | No wallet headers or bearer token                                    | Send `X-Wallet-Address` + `X-Wallet-Signature` + `X-Wallet-Message`, or `Authorization: Bearer <jwt>`                    |
+| `BILLING_PROFILE_REQUIRED` | Payment is over €100 or carries a VAT claim and lacks a full profile | Call `update_billing_details` with the response's `required_fields`, then request fresh options                          |
+| `INSUFFICIENT_BALANCE`     | Prepaid available balance ≤ $0                                       | Pay via x402 (`submit_payment`) or `topup_balance`. Check `billing://balance` for settled, reserved, and available state |
 
 Rate limiting is handled at the Gateway layer (HTTP 429) with standard `Retry-After` headers — not as a preflight error.
-Free operations (reads, listing, health checks) skip preflight entirely.
+Read, configuration, cleanup, billing, and payment-recovery operations skip the balance check. Authentication, permissions, and abuse limits still apply.
 
 ## Example: First Stream
 
 1. **Call** — `POST /mcp` or `POST /graphql` with the desired billable operation.
-2. **Pay if challenged** — On 402, sign one accepted v2 x402 requirement and retry the same operation with `PAYMENT-SIGNATURE`.
+2. **Pay if challenged** — On 402, sign one accepted v2 x402 requirement and submit it with `submit_payment`. If settlement is pending, retry that exact payment.
 3. **Resolve blockers** — If the response asks for billing details, call `update_billing_details`; if it asks for balance, retry with x402 or use `topup_balance`.
-4. **Create & stream** — `create_stream` → capture `stream_key` + `rtmp_url`. Push RTMP/E-RTMP: `rtmp://<ingest>/live/<stream_key>`.
+4. **Retry rated work** — After confirmed credit, retry the rated operation without the payment header. Stream configuration itself may be created earlier at zero balance; ingest admission is the rated boundary.
 5. **Monitor** — Read `streams://{id}/health` periodically. If issues: `diagnose_rebuffering`, `diagnose_buffer_health`.
 6. **Wrap up** — `delete_stream` or leave. Check `billing://balance` for cost.

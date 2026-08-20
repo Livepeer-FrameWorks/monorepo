@@ -122,9 +122,10 @@ ticket.
 ## Interrupted and partial batches
 
 - Planning failed before `--persist`: discard the dry-run file and plan again.
-- Persisted but unsigned: let the manifest expire. Do not edit it. A later plan
-  may use the still-unswept sources after the expired batch is released through
-  the approved recovery procedure.
+- Persisted but unsigned: let the manifest expire, then dry-run
+  `frameworks crypto sweep release --batch-id <uuid> --reason "expired offline ceremony"`.
+  Execute only with `--execute --ack <manifest-checksum>` from that output. The
+  server rechecks canonical balance before making the sources replannable.
 - Signed but not broadcast: do not broadcast after expiry. Retain the bundle as
   sensitive audit evidence and use the approved expired-batch recovery.
 - Broadcast returned an RPC error or timed out: treat every affected item as
@@ -138,6 +139,11 @@ ticket.
 - Receipt block becomes non-canonical before finality: the item remains pending.
   If a finalized receipt later disappears, stop new crypto money movement and
   open a custody incident; do not mark the batch complete manually.
+
+Release never turns ambiguity into permission to retry. Expired, canonically
+unused USDC authorizations and ETH intents whose source nonce has advanced can
+be released; unresolved signed/broadcast items are quarantined. Every decision
+is written to the immutable sweep event log.
 
 Database rows and immutable sweep events are the operational source of truth.
 Never repair a batch by editing its manifest, signed payload, transaction hash,
@@ -164,9 +170,13 @@ the ceremony and until every item is finalized.
 
 ## Change record
 
-For every enabled chain/asset pair, retain a successful testnet ceremony with:
+The deterministic CLI and Purser test suites prove signing vectors, rejection
+paths, duplicate broadcast replay, and reorg-safe reconciliation without
+inventing a public testnet environment. Before moving customer value, capture
+the live read-only readiness report. When funds actually need sweeping, retain
+the approved production ceremony record with:
 
-- deposit and cold-treasury transaction hashes;
+- source and cold-treasury transaction hashes;
 - manifest and bundle checksums;
 - finalized snapshot and receipt block hashes;
 - interruption/unknown-outcome reconciliation evidence;

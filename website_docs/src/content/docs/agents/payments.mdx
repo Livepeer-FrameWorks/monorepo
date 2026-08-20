@@ -7,31 +7,40 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-Agents need positive available prepaid balance—the settled balance minus active reservations—to create streams, clips, DVR recordings, and VOD uploads. Two funding methods are available: **x402-compatible confirmed top-ups** and **crypto deposits** (on-chain transfer).
+Agents need positive available prepaid balance—the settled balance minus active reservations—before starting rated work such as ingest, clips, DVR recording, VOD processing, or model-backed execution. Account reads, billing, developer credentials, stream configuration, cleanup, and payment recovery remain available at zero balance. Two funding methods are available: **x402-compatible confirmed top-ups** and **crypto deposits** (on-chain transfer).
 
 <Aside type="tip">
-  API requests are metered and itemized even when the current pricing rule is zero. Prepaid usage is
-  deducted as reports arrive, and available prepaid balance still gates agent write actions and
-  suspension handling.
+  API and media usage remain metered and itemized when their net price is zero. While the
+  billing-beta usage waiver is enabled, metered usage lines retain quantities and would-have-cost
+  amounts but do not draw down prepaid credit. A positive funded balance still gates rated
+  admission. Disabling the waiver restores the tested reservation and deduction path; it is a
+  separate revenue-launch action.
 </Aside>
 
 ## x402 Protocol
 
-[x402](https://www.x402.org/) enables gasless USDC payments using EIP-3009 `transferWithAuthorization`. The agent signs a transfer authorization off-chain; the configured hosted facilitator verifies and settles it.
-Complete tenant billing details before requesting a quote so confirmed credit
-can be invoiced using the customer-country VAT rule.
+[x402](https://www.x402.org/) enables gasless USDC payments using EIP-3009 `transferWithAuthorization`. The agent signs a transfer authorization off-chain. FrameWorks uses the official v2 wire format and, by default, its embedded facilitator verifies, relays, and confirms the transfer. A hosted facilitator is optional and used only when operators explicitly select one.
+
+Payment requirements do not impose a blanket customer-profile gate. A payment of at most €100 may use the customer-anonymous simplified-document path. A payment over €100 or any submitted VAT-number claim requires a complete billing email and postal address before payment instructions are exposed.
 
 ### Flow
 
 1. An authenticated agent calls a rated tool (for example `create_clip` or `create_vod_upload`) with insufficient balance.
 2. HTTP returns 402 plus `PAYMENT-REQUIRED`; MCP returns the same base64 document as `payment_required`.
 3. Agent signs an EIP-3009 authorization for the required amount.
-4. Agent echoes the selected v2 `accepted` requirement and retries with `PAYMENT-SIGNATURE` containing the base64-encoded signed payload.
-5. Purser atomically claims the tenant-bound quote, uses the official facilitator API, and waits for a successful receipt.
+4. Agent echoes the selected v2 `accepted` requirement to GraphQL `submitX402Payment` or MCP `submit_payment` using `PAYMENT-SIGNATURE` containing the base64-encoded signed payload.
+5. Purser atomically claims the tenant-bound quote, uses the configured embedded or optional hosted facilitator, and waits for a receipt included by the chain's consensus-labelled finalized head.
 6. Settlement state and prepaid credit commit atomically.
-7. The original operation proceeds only if a fresh canonical balance and suspension check passes.
+7. The agent retries the rated operation without the payment header. A fresh
+   canonical balance and suspension check runs before work is released. Direct
+   x402 mutation execution is rejected before settlement until the owning
+   service has durable idempotency.
 
-Browser integrations authenticate first, then make the rated request, receive the 402 response, sign its tenant-bound authorization, and retry with `PAYMENT-SIGNATURE`. Wallet signup, billing, top-up, and API/MCP discovery remain reachable at zero balance.
+Browser integrations authenticate first, make the rated request, receive the
+402 response, sign its tenant-bound authorization, submit the top-up through
+the payment-recovery mutation, and retry the rated operation after confirmation.
+Wallet signup, billing, top-up, and API/MCP discovery remain reachable at zero
+balance.
 
 ### Payment Options
 
@@ -92,17 +101,26 @@ deficit plus a prepaid buffer. Successful HTTP settlement returns
 production. Zero-value authorizations do not authenticate a caller—use the
 wallet challenge login flow.
 
-When the retried operation is side-effecting, send an `Idempotency-Key` with
-8–255 characters. MCP clients may instead set `_meta.idempotencyKey`. The key
-is bound to the paid quote and request fingerprint; a lost response is replayed
-without creating the stream, clip, DVR, upload, or other mutation twice. Never
-reuse one key for different arguments.
+If submission may have reached the chain but confirmation is not yet known,
+HTTP returns 503 `SETTLEMENT_PENDING` with `transaction`, `network`, and
+`retry_same_payment: true`; MCP returns the same machine state. Retry the exact
+same signed payment. FrameWorks does not emit `PAYMENT-RESPONSE` until canonical
+confirmation and credit; `SETTLEMENT_PENDING` is a FrameWorks error, not an
+official x402 settlement response.
+
+Terminal failures keep the facilitator's stable `error_code` across HTTP and
+MCP—for example, `AUTHORIZATION_USED`—so an agent can distinguish a consumed
+authorization from a transient transport failure. Do not create a second
+payment while the result is `SETTLEMENT_PENDING`.
+
+For side effects, call `submit_payment` first and then send the normal mutation
+without `PAYMENT-SIGNATURE`. Normal operation-specific idempotency still applies.
+The platform refuses direct paid execution rather than relying only on Gateway
+response capture after an owner-service commit.
 
 ### Supported Networks
 
-The returned options are the live intersection of FrameWorks configuration and
-the facilitator's v2 `exact` support. Networks use CAIP-2 identifiers; Base is
-`eip155:8453`.
+With the default embedded facilitator, returned options are enabled chains that pass live RPC, contract, gas-wallet, and custody readiness. With an optional hosted provider, that set is additionally intersected with its live v2 `exact` support. Networks use CAIP-2 identifiers; Base is `eip155:8453`.
 
 <Aside type="note">
   x402 only works with USDC (EIP-3009 required). Prepaid crypto top-ups support **ETH and USDC**.
@@ -156,7 +174,7 @@ Use `billing://payments` for paginated history and
 can be retried by calling `pay_invoice` again after its reservation is terminal;
 processing and confirmed payments are never blindly retried.
 
-Use `billing://documents` to list retained invoices, simplified invoices,
+Use `billing://documents` to list retained monthly statements, full crypto invoices, simplified invoices,
 confirmed-payment receipts, and credit notes. Read the returned
 `billing://documents/{kind}/{document_id}` URI for the printable tenant-owned
 document and its SHA-256 integrity metadata. Document reads stay available at
@@ -175,19 +193,24 @@ statements, not rendered immutable tax invoices or credit notes.
 
 ## Preflight Errors
 
-Billable MCP tools validate positive available prepaid balance before executing. Account status can also report
-billing detail blockers; x402 settlement enforces billing details for payments over €100.
+Rated MCP tools validate positive available prepaid balance before executing. Safe read, control-plane, and payment-recovery tools remain usable at zero balance. Billing details are checked only for paid postpaid setup or for a crypto payment whose amount/tax treatment needs a full customer document.
 When requirements aren't met, the error includes resolution guidance:
 
 **Missing billing details:**
 
 ```json
 {
-  "code": "BILLING_DETAILS_MISSING",
-  "message": "Billing details required before any payments",
-  "resolution": "Call update_billing_details with address_line1, city, postal_code, country",
+  "code": "BILLING_PROFILE_REQUIRED",
+  "message": "This payment requires a full customer tax invoice; add a billing email and postal address before paying",
+  "resolution": "Call update_billing_details with only the listed fields, then request fresh payment options",
   "tool": "update_billing_details",
-  "required_fields": ["address_line1", "city", "postal_code", "country"]
+  "required_fields": [
+    "billing_email",
+    "billing_address.street",
+    "billing_address.city",
+    "billing_address.postal_code",
+    "billing_address.country"
+  ]
 }
 ```
 
@@ -207,8 +230,11 @@ When requirements aren't met, the error includes resolution guidance:
 ```
 
 <Aside type="caution">
-  x402 payments over €100 require billing details. Account setup/preflight responses may ask for
-  billing details before that threshold; call `update_billing_details` to clear the blocker.
+  Exactly €100 remains eligible for a simplified document. More than €100, or any VAT-number claim,
+  uses the full-document path and requires the fields returned in `required_fields`. A submitted VAT
+  number is not enough for zero VAT: cross-border EU reverse charge requires a current successful
+  VIES validation. Anonymous simplified top-ups conservatively use supplier-country VAT; they do not
+  need a billing address.
 </Aside>
 
 ## Cost Awareness
@@ -225,6 +251,6 @@ Prepaid usage deductions can move an account toward zero or negative balance. Mo
 | `estimated_hours_left`      | Time until the available balance is depleted |
 | `live_metrics`              | Current operational usage context            |
 
-At zero or below available balance, prepaid accounts are blocked from new billable operations unless the request is
-settled with x402. If the settled balance drops below -€10, Purser suspends the tenant and asks
+At zero or below available balance, prepaid accounts are blocked from new rated work unless the request is
+settled with x402. The rest of the authenticated platform remains usable. If the settled balance drops below -€10, Purser suspends the tenant and asks
 Commodore/Foghorn to terminate active streams and sessions. Top up proactively.

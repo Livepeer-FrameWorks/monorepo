@@ -26,12 +26,13 @@ Autonomous agents can create streams, record video, query analytics, and pay per
 2. **Call the API operation you need** via MCP or GraphQL with the resulting session or API token.
 3. **If a rated operation needs payment**, read the HTTP 402 / `INSUFFICIENT_BALANCE` response and its x402 payment requirements.
 4. **Sign an EIP-3009 USDC authorization** for one accepted network.
-5. **Retry the same operation** with `PAYMENT-SIGNATURE` and wait for confirmed credit.
+5. **Submit the payment** through GraphQL `submitX402Payment` or MCP `submit_payment`; retry the identical payment while pending, then retry the rated operation without the payment header after confirmed credit.
 
 <Aside type="tip">
   Wallet signup itself is free and never returns a payment challenge. A new wallet tenant may use
   onboarding, billing, top-up, documentation, and discovery surfaces at zero balance; only rated
-  work is gated.
+  work is gated. It may remain prepaid and top up, or use MCP `link_email`, verify the message, and
+  call `activate_free_tier` for metered, zero-priced Free service.
 </Aside>
 
 ## Discovery

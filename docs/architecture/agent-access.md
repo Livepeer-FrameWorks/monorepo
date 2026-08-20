@@ -14,8 +14,9 @@ Programmatic access for AI agents and autonomous clients: wallet auth, prepaid b
 1. **Create or load an EVM wallet.**
 2. **Call the MCP tool or GraphQL operation.**
 3. **If payment is required**, the Gateway returns HTTP 402 / `INSUFFICIENT_BALANCE` with x402 requirements.
-4. **Retry the same operation** with `PAYMENT-SIGNATURE` (legacy `X-PAYMENT` is also accepted).
-5. **Create a stream** using MCP `create_stream`, then push RTMP with the returned stream key.
+4. **Submit the signed payment** through the payment-recovery operation and
+   retry the identical payment only while settlement is pending.
+5. **Retry the rated operation without the payment header** after credit confirms.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -173,6 +174,9 @@ signature = signed.signature.hex()
   balance. Unlink locks the user row and refuses to remove a wallet-only
   account's final sign-in method unless a verified password sign-in is active,
   including under concurrent requests.
+- MCP `link_email` starts the same verification flow as GraphQL `linkEmail`.
+  Once verified, `activate_free_tier` selects the canonical Free tier without
+  a billing profile or collection provider and retains any prepaid credit.
 
 ### Auto-Provisioning
 
@@ -185,11 +189,11 @@ When a new wallet authenticates:
 
 ### Trust Model
 
-| Account Type            | Billing Model         | Trust Level                    |
-| ----------------------- | --------------------- | ------------------------------ |
-| Wallet-only             | `prepaid` (mandatory) | Low - must load balance first  |
-| Email (verified)        | `postpaid` (invoiced) | High - use now, pay later      |
-| Wallet + verified email | User choice           | High - can upgrade to postpaid |
+| Account Type            | Billing Model         | Trust Level                     |
+| ----------------------- | --------------------- | ------------------------------- |
+| Wallet-only             | `prepaid` (mandatory) | Low - must load balance first   |
+| Email (verified)        | Free postpaid         | Metered, zero-priced Free       |
+| Wallet + verified email | User choice           | Prepaid, Free, or paid postpaid |
 
 ### Key Files
 
@@ -247,6 +251,9 @@ four-stage platform-operator ceremony:
 3. `frameworks crypto sweep broadcast --bundle <bundle>` for validation, then
    `--execute --ack <bundle-checksum>`
 4. `frameworks crypto sweep reconcile --batch-id <uuid> --apply`
+5. For expired/failed ownership, dry-run `frameworks crypto sweep release
+--batch-id <uuid> --reason <reason>`, then apply only the server-proven result
+   with `--execute --ack <manifest-checksum>`.
 
 ETH uses an offline-signed EIP-1559 raw transaction. USDC uses an
 offline-signed EIP-3009 authorization and a separate online gas-relayer key;
@@ -282,21 +289,34 @@ production.
 1. Authenticated client makes a rated request with insufficient balance
 2. Server returns HTTP 402 with `PaymentRequirements` (payTo, asset, amount, network options)
 3. Client signs EIP-3009 authorization off-chain
-4. Client retries with `PAYMENT-SIGNATURE` containing the signed payload
+4. Client submits `PAYMENT-SIGNATURE` through `submitX402Payment` or MCP
+   `submit_payment`
 5. Purser validates the immutable tenant quote, atomically claims it, simulates
    the exact transfer, and submits it using the dedicated gas wallet
 6. Purser waits for a finalized canonical receipt containing the exact USDC
    `Transfer(from, payTo, amount)` event
 7. Settlement confirmation and prepaid credit commit atomically
-8. Gateway/Foghorn reload canonical billing status and run the normal
-   suspension/balance policy before executing the original operation
+8. The client retries the rated operation without the payment header;
+   Gateway/Foghorn reload canonical billing status and run the normal
+   suspension/balance policy before releasing work.
 
-For a side-effecting GraphQL mutation, the retry must also carry an
-`Idempotency-Key` of 8–255 characters. MCP tool calls may use the same HTTP
-header or `_meta.idempotencyKey`. Purser binds the key, request fingerprint,
-and paid quote before execution and stores the terminal result. A completed
-retry replays that result; a different fingerprint is rejected; an uncertain
-in-flight outcome is never blindly executed again.
+Direct x402 execution of a side-effecting GraphQL/MCP mutation is rejected
+before settlement until that mutation's owning service has registered durable
+idempotency. Use `submit_payment` (or the payment-recovery API) to top up, then
+retry the mutation without `PAYMENT-SIGNATURE`. The access-policy catalog has an
+exhaustive CI-checked strategy entry for every rated mutation.
+
+If transaction submission has an unknown outcome, HTTP returns 503 with
+`SETTLEMENT_PENDING`, the precomputed transaction hash/network, and
+`retry_same_payment: true`; MCP returns the equivalent structured error. Retry
+the identical payment payload. This is a FrameWorks nonterminal error, not an
+official x402 `PAYMENT-RESPONSE`; that standard header is emitted only after
+canonical confirmation and credit.
+
+Terminal facilitator failures preserve their machine code across HTTP and MCP
+(for example, `AUTHORIZATION_USED`) instead of collapsing into a generic
+payment error. A terminal code is not permission to create a replacement
+authorization blindly; inspect the code and the quoted transaction state.
 
 ### Supported Networks
 
@@ -471,14 +491,14 @@ per-tool limits.
 
 ### Preflight Checks
 
-Before billable operations, the preflight checker validates:
+Before an MCP operation, preflight applies the shared operation class:
 
 1. Authentication (tenant_id in context)
-2. Billing details (required before billable operations)
-3. Prepaid available balance (settled balance minus active reservations; positive available balance required)
+2. Read, control-plane, cleanup, and payment-recovery operations remain available at zero balance
+3. Rated operations require positive prepaid available balance (settled balance minus active reservations)
+4. Payment-specific profile fields are requested only when the selected amount/tax document requires them
 
-**Note**: x402 settlement requires full billing details above €100; exactly
-€100 remains within the simplified-record boundary.
+**Note**: x402 settlement requires a complete billing email and postal address above €100, or for any VAT-number claim. Exactly €100 remains within the simplified-document boundary.
 
 When balance is insufficient, the blocker response includes x402 payment options:
 
@@ -543,30 +563,43 @@ Both paths update state in Foghorn's Redis-backed state store. The routing effec
 
 ---
 
-## x402 invoice records and VAT limitations
+## Crypto tax documents and VAT
 
-### Simplified Invoice Rule (x402)
+### Document dispatch
 
-- Confirmed x402 top-ups generate internal simplified-invoice records in
-  `purser.simplified_invoices`.
-- Payments **over €100** are blocked unless billing details are present.
-- Full VAT invoice generation for x402 payments is **not** implemented.
+- Confirmed direct-crypto and x402 top-ups are the VAT tax point. Later usage consumes already-invoiced credit and is not a second VAT event.
+- Payments of at most €100 use `purser.simplified_invoices` when the applicable evidence policy permits the customer-anonymous path.
+- Payments over €100, and payments carrying a VAT-number claim, require a legal
+  billing name, email, and postal address and use `purser.crypto_invoices`.
+- The document kind and customer tax profile are frozen on the x402 quote or direct-deposit address before payment instructions are exposed. Profile changes after that point do not rewrite the document evidence.
+- The invoice stores the confirmed top-up date, service `FrameWorks prepaid
+usage credit`, quantity one, supplier registration/VAT identity, and the
+  payment quote's original FX rate/source/timestamp. Rendering never fetches a
+  later rate.
 - A VAT-number format check never enables reverse charge. Purser calls the
   official VIES `checkVat` service, caches the result for 24 hours, and persists
   a hashed/masked validation record. Reverse charge requires both a current
   valid VIES result and a customer country different from `SUPPLIER_COUNTRY`;
   a domestic VAT identifier receives domestic VAT.
-- Confirmed top-up is the recorded VAT tax point. Later usage consumes the
-  already-invoiced balance and does not create another VAT event.
-- x402 readiness requires supplier name, address, VAT number, and ISO country;
-  production also requires an official facilitator and scanner anchors.
+- x402 readiness requires supplier name, address, company-registration number,
+  VAT number, and ISO country;
+  production also requires scanner anchors. The embedded facilitator is the production default; a hosted provider is optional.
 
-The record stores billing country and GeoIP country separately, labels the
-evidence `complete`, `single_source`, `conflict`, or `missing`, and never treats
-the settlement network as customer-location evidence. Conflicts remain visible
-for accounting review and prevent an honest production sign-off until the
-operator's evidence policy covers them.
+The record stores billing country and GeoIP country separately and never treats
+the settlement network as customer location. A complete billing address is the
+customer country for full invoices. Anonymous simplified top-ups use the
+supplier-country standard VAT rate; GeoIP is retained only as audit metadata and
+does not hide the document. A conflict remains visible on the record but is not
+an account-wide payment blocker. Only successful VIES evidence enables reverse
+charge.
 
-Schema: `pkg/database/sql/schema` (`simplified_invoices`)
+Schema: `pkg/database/sql/schema` (`simplified_invoices`, `crypto_invoices`, `x402_payment_quotes`, `crypto_wallets`)
 
 Configuration: See the dev compose configuration and environment files under `config/env`.
+
+After a deployment, operators run `frameworks crypto smoke --base-url <bridge>`
+to prove that public wallet metadata and challenge issuance are reachable
+without authentication or payment. The command uses a fixed non-customer
+address and never signs or consumes the challenge. The separate authenticated
+`frameworks crypto readiness --output json` command checks live settlement,
+scanner, tax, relayer, and custody dependencies.

@@ -2761,6 +2761,19 @@ frameworks config path --kind credentials
 is deliberately split into online and offline stages; it never sends the HD
 deposit xprv to Purser.
 
+### frameworks crypto smoke
+
+Checks the deployed public wallet-onboarding and agent-payment contract. It
+validates the published wallet/x402 metadata and issues an expiring challenge
+for a fixed non-customer address. It never signs or consumes the challenge,
+creates an account, authenticates, or moves funds.
+
+```bash
+frameworks crypto smoke --base-url https://bridge.frameworks.network --output json
+```
+
+Run this after deployment alongside the authenticated operator readiness report.
+
 ### frameworks crypto readiness
 
 Returns the operator-only structured readiness report for direct deposits,
@@ -2785,6 +2798,28 @@ frameworks crypto wallet rotate --xpub-file new-deposit.xpub --network mainnet
 
 Retain the previous offline xprv until all sweep manifests for that key have
 been reconciled and its addresses are empty.
+
+### frameworks crypto mutation resolve
+
+Inspects an ambiguous paid mutation in dry-run mode, or attaches a known
+owner-service result / keeps it blocked for operator review. It never releases
+the idempotency claim for blind execution.
+
+```bash
+frameworks crypto mutation resolve --tenant-id <uuid> --idempotency-key <key> --reason "owner lookup pending" --mark-review
+frameworks crypto mutation resolve --tenant-id <uuid> --idempotency-key <key> --reason "owner result verified" --result-file result.json --status-code 201 --execute
+```
+
+**Flags:**
+
+- `--tenant-id` - Tenant UUID (required).
+- `--idempotency-key` - Original paid mutation key (required).
+- `--reason` - Operator evidence/reason (required).
+- `--result-file` - Known result body to attach.
+- `--content-type` - Result content type; defaults to `application/json`.
+- `--status-code` - Result status code; required with `--result-file`.
+- `--mark-review` - Keep the mutation blocked without attaching a result.
+- `--execute` - Apply the resolution; default is dry-run.
 
 ### frameworks crypto sweep plan
 
@@ -2845,7 +2880,8 @@ frameworks crypto sweep broadcast --bundle sweep-bundle.json --execute --ack <bu
 
 ### frameworks crypto sweep reconcile
 
-Checks transaction receipts, confirmation depth, and canonical block hashes.
+Checks transaction receipts against the consensus-labelled finalized head and
+verifies canonical block hashes.
 It is read-only unless `--apply` is supplied.
 
 ```bash
@@ -2857,6 +2893,25 @@ frameworks crypto sweep reconcile --batch-id <uuid> --apply
 
 - `--batch-id` - Persisted sweep batch UUID (required).
 - `--apply` - Persist confirmed/failed item and batch states.
+
+### frameworks crypto sweep release
+
+Rechecks chain state for an expired or failed sweep batch. Eligible claims are
+released for replanning; ambiguous signed or broadcast claims are quarantined.
+The command is read-only unless `--execute` is supplied. Run the dry-run first
+to obtain the manifest checksum, then bind execution to that checksum.
+
+```bash
+frameworks crypto sweep release --batch-id <uuid> --reason "expired offline ceremony"
+frameworks crypto sweep release --batch-id <uuid> --reason "expired offline ceremony" --execute --ack <manifest-checksum>
+```
+
+**Flags:**
+
+- `--batch-id` - Persisted sweep batch UUID (required).
+- `--reason` - Operator reason recorded in the immutable event log (required).
+- `--execute` - Apply eligible releases and quarantines.
+- `--ack` - Exact manifest checksum returned by dry-run; required with `--execute`.
 
 ---
 

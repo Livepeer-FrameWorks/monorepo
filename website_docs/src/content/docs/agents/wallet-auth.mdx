@@ -100,10 +100,13 @@ because the challenge headers cannot be replayed.
 Static MCP client configuration must use a bearer API token. Wallet headers are
 single-use bootstrap credentials, not permanent headers.
 
-MCP also exposes authenticated `list_linked_wallets`, `link_wallet`, and
-`unlink_wallet` tools. Linking requires a fresh challenge for the new address.
-The service serializes unlink attempts and refuses to remove the final wallet
-from an account that has no verified password sign-in method.
+MCP also exposes authenticated `list_linked_wallets`, `link_wallet`,
+`unlink_wallet`, `link_email`, and `activate_free_tier` tools. Wallet linking
+requires a fresh challenge for the new address. Email linking sends the normal
+verification message; after verification, Free can be activated without a
+billing profile or Stripe/Mollie. The service serializes unlink attempts and
+refuses to remove the final wallet from an account that has no verified
+password sign-in method.
 
 ### Bearer Token (Alternative)
 
@@ -133,15 +136,18 @@ When a new wallet authenticates for the first time:
 3. **Prepaid balance** is initialized at $0.
 4. A **wallet identity** record links the wallet address to the user and tenant.
 
-The agent can immediately read `account://status`, which will show blockers like `INSUFFICIENT_BALANCE` or `BILLING_DETAILS_MISSING`.
+The agent can immediately read `account://status`. `account_ready` remains true
+for the authenticated control plane, while `rated_work_ready` is false and an
+`INSUFFICIENT_BALANCE` blocker applies only to rated work. The next actions are
+either top up prepaid credit or link/verify email and activate Free.
 
 ## Trust Model
 
-| Account Type            | Billing Model         | Trust Level                    |
-| ----------------------- | --------------------- | ------------------------------ |
-| Wallet-only             | `prepaid` (mandatory) | Low — must fund balance first  |
-| Email (verified)        | `postpaid` (invoiced) | High — use now, pay later      |
-| Wallet + verified email | User choice           | High — can upgrade to postpaid |
+| Account Type            | Billing Model         | Trust Level                     |
+| ----------------------- | --------------------- | ------------------------------- |
+| Wallet-only             | `prepaid` (mandatory) | Low — must fund balance first   |
+| Email (verified)        | Free postpaid         | Metered, zero-priced Free       |
+| Wallet + verified email | User choice           | Prepaid, Free, or paid postpaid |
 
 <Aside type="note">
   Wallet-only accounts are always prepaid. This provides sybil resistance — agents must fund their

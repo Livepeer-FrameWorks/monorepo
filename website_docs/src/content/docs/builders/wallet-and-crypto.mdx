@@ -88,7 +88,11 @@ mutation WalletLogin {
 }
 ```
 
-If the wallet isn't yet linked to a tenant, the mutation creates one. To bind an email address to an existing wallet-only tenant later, use `linkEmail`.
+If the wallet isn't yet linked to a tenant, the mutation creates one. To bind an
+email address to an existing wallet-only tenant later, use GraphQL `linkEmail`
+or MCP `link_email`. After verification, GraphQL `promoteToPaid` with the Free
+tier or MCP `activate_free_tier` enables Free without billing details or a
+payment provider. Paid postpaid tiers still require confirmed provider collection.
 
 ## x402 micropayments
 
@@ -123,13 +127,16 @@ mutation Pay {
 }
 ```
 
-Most clients won't call this directly — the SDK and MCP server handle it transparently. See [agents/payments](/agents/payments) for the full request/replay flow.
+Use this payment-recovery mutation (or MCP `submit_payment`) before a
+side-effecting rated mutation. Direct inline x402 mutation execution is rejected
+until the owning service has durable idempotency. See [agents/payments](/agents/payments).
 
 ## Top-ups and balances
 
 Wallet-funded crypto top-ups follow the standard prepaid-balance model. Initiate one via `createCryptoTopup`, then poll `cryptoTopupStatus` for confirmation count and the credited balance:
-Complete the tenant billing address first; it supplies the customer country used
-for the top-up VAT decision and invoice.
+Billing details are not required for an anonymous top-up of at most €100. A
+payment over €100, or any VAT-number claim, requires legal name, billing email,
+and postal address before instructions are issued.
 
 ```graphql
 mutation Topup {

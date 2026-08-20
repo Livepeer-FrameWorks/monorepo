@@ -45,7 +45,7 @@ sequenceDiagram
 
 x402 settles on Base and Arbitrum. We skipped Ethereum mainnet — a few dollars of gas per transaction makes no sense for topping up a streaming balance. For agents (or humans) who prefer plain transfers, there's also a classic deposit flow: a derived deposit address, a price-locked quote, and block-explorer polling until ETH or USDC arrives.
 
-Two guardrails keep this from being naive. Billable operations run a preflight before doing anything — authentication, billing details, positive balance — and a failed preflight returns a structured blocker that includes the x402 offer, so an agent learns _what to fix and how to pay_ from the error itself instead of parsing prose. And payments of €100 or more require billing details on the account first, which keeps the no-questions-asked path for small amounts while larger ones produce a proper paper trail.
+Two guardrails keep this from being naive. Rated operations require authentication and positive available balance, while reads, configuration, cleanup, and payment recovery remain usable at zero balance. A failed rated check returns a structured blocker with the x402 offer, so an agent learns _what to fix and how to pay_ without parsing prose. Payments over €100, and payments carrying a VAT-number claim, require a complete billing profile and use the full-document path; exactly €100 can still use a simplified document.
 
 Settlement is built to survive its own failure modes: verification happens before any provisioning side effect, credits are idempotent under webhook and retry replay, and a crash between "payment verified" and "access granted" resolves on retry rather than stranding a paid-but-inactive account.
 

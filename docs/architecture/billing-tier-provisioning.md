@@ -59,12 +59,15 @@ Billing tiers drive cluster access. When an account is created or promoted, the 
 ### Prepaid → Postpaid Promotion
 
 ```
-1. Gateway calls Purser.PromoteToPaid(tenant_id)
-2. Purser verifies current billing_model = prepaid
-3. Purser resolves tier WHERE is_default_postpaid = true
-4. Purser updates subscription (billing_model → postpaid, new tier)
-5. Purser.ensureTierClusterAccess re-evaluates cluster access
-6. Prepaid balance is carried forward as credit
+1. Gateway calls `Purser.PromoteToPaid(tenant_id, optional tier_id)`.
+2. Purser starts a transaction and locks the tenant subscription `FOR UPDATE`.
+3. An explicit active postpaid-eligible tier is honored; otherwise Purser
+   resolves `is_default_postpaid = true`.
+4. Free needs verified email but no postal profile/provider. Paid postpaid tiers
+   require complete billing identity and confirmed Stripe/Mollie collection.
+5. Purser commits prepaid → postpaid while retaining prepaid credit.
+6. Purser rereads the canonical committed tier, then reconciles clusters and
+   invalidates caches. A same-target retry is idempotent.
 ```
 
 ## Default Tier Configuration
@@ -101,5 +104,7 @@ Purser grants each eligible cluster through Quartermaster's service-token `Boots
 ## Gotchas
 
 - Quartermaster's `CreateTenant` still auto-subscribes to the single `is_default_cluster=true` cluster as a safety net and sets `official_cluster_id`. Purser's later cluster provisioning is idempotent, so overlap is harmless.
-- Tier-specific paid subscription checkout is not active in the Gateway resolver path; wallet/prepaid accounts can still call `promoteToPaid`, which delegates to Purser and promotes to the default postpaid tier.
-- `PromoteToPaid` ignores the caller's `tier_id` and always resolves the default postpaid tier.
+- Tier-specific paid collection must be completed before selecting a non-Free
+  postpaid tier. Free activation remains provider-free.
+- `PromoteToPaid` honors an explicit active, postpaid-eligible `tier_id`; an
+  empty value selects the default postpaid tier.

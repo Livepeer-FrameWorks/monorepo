@@ -40,13 +40,15 @@ Access to the shared Free service with the included allowances below. API reques
 
 **Included:**
 
-- 10,000 delivered minutes/month (zero-priced overage — Free never produces a bill)
+- 10,000 delivered minutes/month (zero-priced overage)
 - 10 GB of stored content (durable writes rejected at cap)
 - 7-day recording retention
 - Shared cluster access
 - Livepeer-backed transcoding
 - Analytics dashboard
 - API access
+
+Free closes on the normal monthly accounting cadence and produces an itemized €0 usage statement with real meter quantities. It creates no payment or VAT event and therefore does not require a postal billing profile or collection provider.
 
 **Fair-use enforcement (three-tier cluster-load policy):**
 
@@ -168,14 +170,23 @@ accepted requirement and retry with `PAYMENT-SIGNATURE`. Successful settlement
 returns `PAYMENT-RESPONSE`; `X-PAYMENT` is legacy compatibility only and is
 disabled by default in production.
 
-Paid GraphQL mutations also require `Idempotency-Key` (8–255 characters).
-Paid MCP mutation tools accept that HTTP header or `_meta.idempotencyKey`.
-Retries with the same fingerprint replay the durable terminal result; key
-collisions are rejected and an uncertain in-flight outcome is not re-executed.
+Side-effecting GraphQL/MCP mutations do not settle x402 inline until their
+owning service has a durable idempotency contract. Top up with the payment
+recovery API or MCP `submit_payment`, then retry the mutation without the
+payment header. Unsupported inline mutations are rejected before funds move.
 
 x402 supports USDC on Base and Arbitrum (EIP-3009 is a USDC primitive). Prepaid crypto top-ups support ETH and USDC.
 Both direct crypto and x402 prepaid funding are invoiced when confirmed credit is
 issued. Usage consumption does not create a second VAT event.
+
+Crypto payments of at most €100 use the simplified-document path; anonymous
+payments conservatively use supplier-country VAT and need no billing address.
+Payments over €100 and payments carrying a VAT-number claim use an immutable
+full crypto invoice and require a legal name, billing email, and postal address
+before funds are accepted. Both document kinds store supplier registration/VAT
+identity, service description, quantity one, confirmed supply date, and the
+original locked quote FX snapshot. Cross-border EU reverse charge is applied only after a successful
+VIES validation; otherwise the normal VAT decision applies.
 
 ## Invoicing
 

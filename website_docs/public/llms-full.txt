@@ -136,6 +136,8 @@ Always read this first. Returns:
 ```json
 {
   "account_ready": true,
+  "rated_work_ready": true,
+  "next_actions": [],
   "blockers": [],
   "capabilities": {
     "create_stream": true,
@@ -157,7 +159,9 @@ Always read this first. Returns:
 }
 ```
 
-If `blockers` is non-empty, resolve them before billable operations. `balance_cents` is the settled
+`account_ready` means authentication and control-plane onboarding are usable.
+`rated_work_ready` and `blockers` describe rated media/compute work; zero balance
+does not make the account broken. `balance_cents` is the settled
 balance, `reserved_balance_cents` is already committed to active usage, and `available_balance_cents`
 is what remains spendable. Billable tool preflights use the available balance.
 
@@ -187,6 +191,8 @@ Actions the agent can perform.
 | `list_linked_wallets`            | List wallets linked to the authenticated user     | Auth           |
 | `link_wallet`                    | Link a wallet using a fresh signed challenge      | Auth           |
 | `unlink_wallet`                  | Unlink a wallet while retaining a sign-in method  | Auth           |
+| `link_email`                     | Add email/password and send verification          | Auth           |
+| `activate_free_tier`             | Activate Free after email verification            | Auth           |
 | `get_tenant_settings`            | Read tenant identity and routing settings         | Auth           |
 | `update_tenant_settings`         | Update tenant name, primary cluster, or model     | Auth           |
 | `update_billing_details`         | Set billing address                               | Auth           |
@@ -197,17 +203,17 @@ Actions the agent can perform.
 | `pay_invoice`                    | Create or resume an invoice payment               | Auth + Billing |
 | `start_postpaid_setup`           | Start Stripe or Mollie hosted postpaid setup      | Auth + Billing |
 | `complete_mollie_postpaid_setup` | Verify mandate and activate Mollie postpaid       | Auth + Billing |
-| `create_stream`                  | Create a push or pull stream                      | Auth + Balance |
-| `update_stream`                  | Update stream settings or pull-source config      | Auth + Balance |
-| `delete_stream`                  | Delete a stream                                   | Auth + Balance |
+| `create_stream`                  | Create a push or pull stream                      | Auth           |
+| `update_stream`                  | Update stream settings or pull-source config      | Auth           |
+| `delete_stream`                  | Delete a stream                                   | Auth + Confirm |
 | `list_stream_keys`               | List stream ingest keys                           | Auth           |
 | `create_stream_key`              | Create an additional ingest key                   | Auth + Confirm |
 | `delete_stream_key`              | Deactivate an ingest key                          | Auth + Confirm |
 | `refresh_stream_key`             | Rotate the primary stream key                     | Auth + Confirm |
 | `validate_stream_key`            | Validate an ingest key                            | Auth           |
 | `list_push_targets`              | List masked multistream destinations              | Auth           |
-| `create_push_target`             | Add a cost-affecting multistream destination      | Auth + Balance |
-| `update_push_target`             | Update or enable a multistream destination        | Auth + Balance |
+| `create_push_target`             | Add a multistream destination                     | Auth           |
+| `update_push_target`             | Update or enable a multistream destination        | Auth           |
 | `delete_push_target`             | Delete a multistream destination                  | Auth           |
 | `create_clip`                    | Create clip from stream                           | Auth + Balance |
 | `delete_clip`                    | Delete a clip                                     | Auth           |
@@ -215,15 +221,15 @@ Actions the agent can perform.
 | `stop_dvr`                       | Stop DVR recording                                | Auth           |
 | `delete_dvr`                     | Delete a DVR recording and stored media           | Auth + Confirm |
 | `get_retention_policy`           | Read tenant media-retention defaults and bounds   | Auth           |
-| `set_retention_policy`           | Set tenant media-retention defaults               | Auth + Balance |
-| `set_stream_retention_overrides` | Set DVR/clip retention overrides for a stream     | Auth + Balance |
+| `set_retention_policy`           | Set tenant media-retention defaults               | Auth           |
+| `set_stream_retention_overrides` | Set DVR/clip retention overrides for a stream     | Auth           |
 | `update_asset_retention`         | Override retention for DVR, clip, or VOD          | Auth + Balance |
-| `reset_asset_retention`          | Reset asset retention to the cascade default      | Auth + Balance |
+| `reset_asset_retention`          | Reset asset retention to the cascade default      | Auth + Confirm |
 | `create_vod_upload`              | Start a VOD upload                                | Auth + Balance |
 | `get_vod_upload_status`          | Inspect uploaded and missing VOD parts            | Auth           |
 | `complete_vod_upload`            | Finalize a VOD upload                             | Auth + Balance |
 | `abort_vod_upload`               | Cancel an upload                                  | Auth           |
-| `delete_vod_asset`               | Delete a VOD asset                                | Auth + Balance |
+| `delete_vod_asset`               | Delete a VOD asset                                | Auth + Confirm |
 | `resolve_playback_endpoint`      | Get viewer playback URLs                          | None           |
 | `list_signing_keys`              | List playback signing keys                        | Auth           |
 | `create_signing_key`             | Create a one-shot ES256 private key               | Auth + Confirm |
@@ -241,8 +247,8 @@ Actions the agent can perform.
 | `search_support_history`         | Search support conversations                      | Auth           |
 | `introspect_schema`              | Explore the GraphQL schema                        | Auth           |
 | `generate_query`                 | Generate a GraphQL query from templates           | Auth           |
-| `execute_query`                  | Execute a GraphQL query                           | Auth           |
-| `ask_consultant`                 | Full Skipper pipeline with confidence tagging     | Auth           |
+| `execute_query`                  | Execute a GraphQL query                           | Auth + Balance |
+| `ask_consultant`                 | Full Skipper pipeline with confidence tagging     | Auth + Balance |
 | `browse_marketplace`             | Browse available infrastructure clusters          | None           |
 | `subscribe_to_cluster`           | Subscribe to a cluster                            | Auth           |
 | `unsubscribe_from_cluster`       | Remove a cluster subscription                     | Auth + Confirm |
@@ -293,9 +299,19 @@ QoE tool responses use a consistent status enum: `healthy | warning | critical |
 Agents can call `request_wallet_challenge` without authentication, sign the returned message
 verbatim, and reconnect once with the `X-Wallet-*` headers. That exchange auto-provisions a new
 prepaid tenant when needed and returns `X-Access-Token`; use the token for subsequent calls.
-Authenticated agents can use `list_linked_wallets`, `link_wallet`, and `unlink_wallet` at zero
-balance. An account cannot unlink its final wallet until it has another wallet or a verified
-password sign-in method. x402 only tops up the resulting tenant; it is never a login credential.
+Authenticated agents can use `list_linked_wallets`, `link_wallet`, `unlink_wallet`, and
+`link_email` at zero balance. After the email link is verified, `activate_free_tier`
+switches prepaid to Free without billing details or provider collection; retained prepaid
+funds stay as account credit. An account cannot unlink its final wallet until it has another
+wallet or a verified password sign-in method. x402 only tops up the resulting tenant; it is
+never a login credential.
+
+**link_email / activate_free_tier**
+
+- `link_email` takes `email` and `password`, then sends the normal verification message.
+- Follow that message once; verification is required before activation.
+- `activate_free_tier` takes no fields and selects the active canonical Free tier.
+- Free produces an itemized monthly EUR 0 usage statement and needs neither a billing profile nor Stripe/Mollie.
 
 **topup_balance**
 
@@ -399,7 +415,7 @@ Returns a structured response with `answer`, `confidence` (`verified`, `sourced`
 
 ### Preflight Errors
 
-Positive-balance tools check prepaid balance before executing. Account status can also surface setup blockers, and x402 payments of €100 or more require billing details. See [Payments — Preflight Errors](/agents/payments#preflight-errors) for details.
+Rated tools check prepaid balance before executing; read, configuration, cleanup, and payment-recovery tools do not. Exactly €100 may use a simplified crypto document. Payments over €100, and any VAT-number claim, require the full billing fields returned by the payment blocker. See [Payments — Preflight Errors](/agents/payments#preflight-errors) for details.
 
 ## Prompts
 
@@ -509,12 +525,13 @@ Autonomous agents can create streams, record video, query analytics, and pay per
 2. **Call the API operation you need** via MCP or GraphQL with the resulting session or API token.
 3. **If a rated operation needs payment**, read the HTTP 402 / `INSUFFICIENT_BALANCE` response and its x402 payment requirements.
 4. **Sign an EIP-3009 USDC authorization** for one accepted network.
-5. **Retry the same operation** with `PAYMENT-SIGNATURE` and wait for confirmed credit.
+5. **Submit the payment** through GraphQL `submitX402Payment` or MCP `submit_payment`; retry the identical payment while pending, then retry the rated operation without the payment header after confirmed credit.
 
 <Aside type="tip">
   Wallet signup itself is free and never returns a payment challenge. A new wallet tenant may use
   onboarding, billing, top-up, documentation, and discovery surfaces at zero balance; only rated
-  work is gated.
+  work is gated. It may remain prepaid and top up, or use MCP `link_email`, verify the message, and
+  call `activate_free_tier` for metered, zero-priced Free service.
 </Aside>
 
 ## Discovery
@@ -601,31 +618,40 @@ See the full [MCP Reference](/agents/mcp) for the current tools, resources, and 
 # Payments
 https://logbook.frameworks.network/agents/payments
 
-Agents need positive available prepaid balance—the settled balance minus active reservations—to create streams, clips, DVR recordings, and VOD uploads. Two funding methods are available: **x402-compatible confirmed top-ups** and **crypto deposits** (on-chain transfer).
+Agents need positive available prepaid balance—the settled balance minus active reservations—before starting rated work such as ingest, clips, DVR recording, VOD processing, or model-backed execution. Account reads, billing, developer credentials, stream configuration, cleanup, and payment recovery remain available at zero balance. Two funding methods are available: **x402-compatible confirmed top-ups** and **crypto deposits** (on-chain transfer).
 
 <Aside type="tip">
-  API requests are metered and itemized even when the current pricing rule is zero. Prepaid usage is
-  deducted as reports arrive, and available prepaid balance still gates agent write actions and
-  suspension handling.
+  API and media usage remain metered and itemized when their net price is zero. While the
+  billing-beta usage waiver is enabled, metered usage lines retain quantities and would-have-cost
+  amounts but do not draw down prepaid credit. A positive funded balance still gates rated
+  admission. Disabling the waiver restores the tested reservation and deduction path; it is a
+  separate revenue-launch action.
 </Aside>
 
 ## x402 Protocol
 
-[x402](https://www.x402.org/) enables gasless USDC payments using EIP-3009 `transferWithAuthorization`. The agent signs a transfer authorization off-chain; the configured hosted facilitator verifies and settles it.
-Complete tenant billing details before requesting a quote so confirmed credit
-can be invoiced using the customer-country VAT rule.
+[x402](https://www.x402.org/) enables gasless USDC payments using EIP-3009 `transferWithAuthorization`. The agent signs a transfer authorization off-chain. FrameWorks uses the official v2 wire format and, by default, its embedded facilitator verifies, relays, and confirms the transfer. A hosted facilitator is optional and used only when operators explicitly select one.
+
+Payment requirements do not impose a blanket customer-profile gate. A payment of at most €100 may use the customer-anonymous simplified-document path. A payment over €100 or any submitted VAT-number claim requires a complete billing email and postal address before payment instructions are exposed.
 
 ### Flow
 
 1. An authenticated agent calls a rated tool (for example `create_clip` or `create_vod_upload`) with insufficient balance.
 2. HTTP returns 402 plus `PAYMENT-REQUIRED`; MCP returns the same base64 document as `payment_required`.
 3. Agent signs an EIP-3009 authorization for the required amount.
-4. Agent echoes the selected v2 `accepted` requirement and retries with `PAYMENT-SIGNATURE` containing the base64-encoded signed payload.
-5. Purser atomically claims the tenant-bound quote, uses the official facilitator API, and waits for a successful receipt.
+4. Agent echoes the selected v2 `accepted` requirement to GraphQL `submitX402Payment` or MCP `submit_payment` using `PAYMENT-SIGNATURE` containing the base64-encoded signed payload.
+5. Purser atomically claims the tenant-bound quote, uses the configured embedded or optional hosted facilitator, and waits for a receipt included by the chain's consensus-labelled finalized head.
 6. Settlement state and prepaid credit commit atomically.
-7. The original operation proceeds only if a fresh canonical balance and suspension check passes.
+7. The agent retries the rated operation without the payment header. A fresh
+   canonical balance and suspension check runs before work is released. Direct
+   x402 mutation execution is rejected before settlement until the owning
+   service has durable idempotency.
 
-Browser integrations authenticate first, then make the rated request, receive the 402 response, sign its tenant-bound authorization, and retry with `PAYMENT-SIGNATURE`. Wallet signup, billing, top-up, and API/MCP discovery remain reachable at zero balance.
+Browser integrations authenticate first, make the rated request, receive the
+402 response, sign its tenant-bound authorization, submit the top-up through
+the payment-recovery mutation, and retry the rated operation after confirmation.
+Wallet signup, billing, top-up, and API/MCP discovery remain reachable at zero
+balance.
 
 ### Payment Options
 
@@ -686,17 +712,26 @@ deficit plus a prepaid buffer. Successful HTTP settlement returns
 production. Zero-value authorizations do not authenticate a caller—use the
 wallet challenge login flow.
 
-When the retried operation is side-effecting, send an `Idempotency-Key` with
-8–255 characters. MCP clients may instead set `_meta.idempotencyKey`. The key
-is bound to the paid quote and request fingerprint; a lost response is replayed
-without creating the stream, clip, DVR, upload, or other mutation twice. Never
-reuse one key for different arguments.
+If submission may have reached the chain but confirmation is not yet known,
+HTTP returns 503 `SETTLEMENT_PENDING` with `transaction`, `network`, and
+`retry_same_payment: true`; MCP returns the same machine state. Retry the exact
+same signed payment. FrameWorks does not emit `PAYMENT-RESPONSE` until canonical
+confirmation and credit; `SETTLEMENT_PENDING` is a FrameWorks error, not an
+official x402 settlement response.
+
+Terminal failures keep the facilitator's stable `error_code` across HTTP and
+MCP—for example, `AUTHORIZATION_USED`—so an agent can distinguish a consumed
+authorization from a transient transport failure. Do not create a second
+payment while the result is `SETTLEMENT_PENDING`.
+
+For side effects, call `submit_payment` first and then send the normal mutation
+without `PAYMENT-SIGNATURE`. Normal operation-specific idempotency still applies.
+The platform refuses direct paid execution rather than relying only on Gateway
+response capture after an owner-service commit.
 
 ### Supported Networks
 
-The returned options are the live intersection of FrameWorks configuration and
-the facilitator's v2 `exact` support. Networks use CAIP-2 identifiers; Base is
-`eip155:8453`.
+With the default embedded facilitator, returned options are enabled chains that pass live RPC, contract, gas-wallet, and custody readiness. With an optional hosted provider, that set is additionally intersected with its live v2 `exact` support. Networks use CAIP-2 identifiers; Base is `eip155:8453`.
 
 <Aside type="note">
   x402 only works with USDC (EIP-3009 required). Prepaid crypto top-ups support **ETH and USDC**.
@@ -750,7 +785,7 @@ Use `billing://payments` for paginated history and
 can be retried by calling `pay_invoice` again after its reservation is terminal;
 processing and confirmed payments are never blindly retried.
 
-Use `billing://documents` to list retained invoices, simplified invoices,
+Use `billing://documents` to list retained monthly statements, full crypto invoices, simplified invoices,
 confirmed-payment receipts, and credit notes. Read the returned
 `billing://documents/{kind}/{document_id}` URI for the printable tenant-owned
 document and its SHA-256 integrity metadata. Document reads stay available at
@@ -769,19 +804,24 @@ statements, not rendered immutable tax invoices or credit notes.
 
 ## Preflight Errors
 
-Billable MCP tools validate positive available prepaid balance before executing. Account status can also report
-billing detail blockers; x402 settlement enforces billing details for payments over €100.
+Rated MCP tools validate positive available prepaid balance before executing. Safe read, control-plane, and payment-recovery tools remain usable at zero balance. Billing details are checked only for paid postpaid setup or for a crypto payment whose amount/tax treatment needs a full customer document.
 When requirements aren't met, the error includes resolution guidance:
 
 **Missing billing details:**
 
 ```json
 {
-  "code": "BILLING_DETAILS_MISSING",
-  "message": "Billing details required before any payments",
-  "resolution": "Call update_billing_details with address_line1, city, postal_code, country",
+  "code": "BILLING_PROFILE_REQUIRED",
+  "message": "This payment requires a full customer tax invoice; add a billing email and postal address before paying",
+  "resolution": "Call update_billing_details with only the listed fields, then request fresh payment options",
   "tool": "update_billing_details",
-  "required_fields": ["address_line1", "city", "postal_code", "country"]
+  "required_fields": [
+    "billing_email",
+    "billing_address.street",
+    "billing_address.city",
+    "billing_address.postal_code",
+    "billing_address.country"
+  ]
 }
 ```
 
@@ -801,8 +841,11 @@ When requirements aren't met, the error includes resolution guidance:
 ```
 
 <Aside type="caution">
-  x402 payments over €100 require billing details. Account setup/preflight responses may ask for
-  billing details before that threshold; call `update_billing_details` to clear the blocker.
+  Exactly €100 remains eligible for a simplified document. More than €100, or any VAT-number claim,
+  uses the full-document path and requires the fields returned in `required_fields`. A submitted VAT
+  number is not enough for zero VAT: cross-border EU reverse charge requires a current successful
+  VIES validation. Anonymous simplified top-ups conservatively use supplier-country VAT; they do not
+  need a billing address.
 </Aside>
 
 ## Cost Awareness
@@ -819,8 +862,8 @@ Prepaid usage deductions can move an account toward zero or negative balance. Mo
 | `estimated_hours_left`      | Time until the available balance is depleted |
 | `live_metrics`              | Current operational usage context            |
 
-At zero or below available balance, prepaid accounts are blocked from new billable operations unless the request is
-settled with x402. If the settled balance drops below -€10, Purser suspends the tenant and asks
+At zero or below available balance, prepaid accounts are blocked from new rated work unless the request is
+settled with x402. The rest of the authenticated platform remains usable. If the settled balance drops below -€10, Purser suspends the tenant and asks
 Commodore/Foghorn to terminate active streams and sessions. Top up proactively.
 
 
@@ -995,10 +1038,13 @@ because the challenge headers cannot be replayed.
 Static MCP client configuration must use a bearer API token. Wallet headers are
 single-use bootstrap credentials, not permanent headers.
 
-MCP also exposes authenticated `list_linked_wallets`, `link_wallet`, and
-`unlink_wallet` tools. Linking requires a fresh challenge for the new address.
-The service serializes unlink attempts and refuses to remove the final wallet
-from an account that has no verified password sign-in method.
+MCP also exposes authenticated `list_linked_wallets`, `link_wallet`,
+`unlink_wallet`, `link_email`, and `activate_free_tier` tools. Wallet linking
+requires a fresh challenge for the new address. Email linking sends the normal
+verification message; after verification, Free can be activated without a
+billing profile or Stripe/Mollie. The service serializes unlink attempts and
+refuses to remove the final wallet from an account that has no verified
+password sign-in method.
 
 ### Bearer Token (Alternative)
 
@@ -1028,15 +1074,18 @@ When a new wallet authenticates for the first time:
 3. **Prepaid balance** is initialized at $0.
 4. A **wallet identity** record links the wallet address to the user and tenant.
 
-The agent can immediately read `account://status`, which will show blockers like `INSUFFICIENT_BALANCE` or `BILLING_DETAILS_MISSING`.
+The agent can immediately read `account://status`. `account_ready` remains true
+for the authenticated control plane, while `rated_work_ready` is false and an
+`INSUFFICIENT_BALANCE` blocker applies only to rated work. The next actions are
+either top up prepaid credit or link/verify email and activate Free.
 
 ## Trust Model
 
-| Account Type            | Billing Model         | Trust Level                    |
-| ----------------------- | --------------------- | ------------------------------ |
-| Wallet-only             | `prepaid` (mandatory) | Low — must fund balance first  |
-| Email (verified)        | `postpaid` (invoiced) | High — use now, pay later      |
-| Wallet + verified email | User choice           | High — can upgrade to postpaid |
+| Account Type            | Billing Model         | Trust Level                     |
+| ----------------------- | --------------------- | ------------------------------- |
+| Wallet-only             | `prepaid` (mandatory) | Low — must fund balance first   |
+| Email (verified)        | Free postpaid         | Metered, zero-priced Free       |
+| Wallet + verified email | User choice           | Prepaid, Free, or paid postpaid |
 
 <Aside type="note">
   Wallet-only accounts are always prepaid. This provides sybil resistance — agents must fund their
@@ -1092,7 +1141,7 @@ sequenceDiagram
 
 x402 settles on Base and Arbitrum. We skipped Ethereum mainnet — a few dollars of gas per transaction makes no sense for topping up a streaming balance. For agents (or humans) who prefer plain transfers, there's also a classic deposit flow: a derived deposit address, a price-locked quote, and block-explorer polling until ETH or USDC arrives.
 
-Two guardrails keep this from being naive. Billable operations run a preflight before doing anything — authentication, billing details, positive balance — and a failed preflight returns a structured blocker that includes the x402 offer, so an agent learns _what to fix and how to pay_ from the error itself instead of parsing prose. And payments of €100 or more require billing details on the account first, which keeps the no-questions-asked path for small amounts while larger ones produce a proper paper trail.
+Two guardrails keep this from being naive. Rated operations require authentication and positive available balance, while reads, configuration, cleanup, and payment recovery remain usable at zero balance. A failed rated check returns a structured blocker with the x402 offer, so an agent learns _what to fix and how to pay_ without parsing prose. Payments over €100, and payments carrying a VAT-number claim, require a complete billing profile and use the full-document path; exactly €100 can still use a simplified document.
 
 Settlement is built to survive its own failure modes: verification happens before any provisioning side effect, credits are idempotent under webhook and retry replay, and a crash between "payment verified" and "access granted" resolves on retry rather than stranding a paid-but-inactive account.
 
@@ -2158,13 +2207,15 @@ Access to the shared Free service with the included allowances below. API reques
 
 **Included:**
 
-- 10,000 delivered minutes/month (zero-priced overage — Free never produces a bill)
+- 10,000 delivered minutes/month (zero-priced overage)
 - 10 GB of stored content (durable writes rejected at cap)
 - 7-day recording retention
 - Shared cluster access
 - Livepeer-backed transcoding
 - Analytics dashboard
 - API access
+
+Free closes on the normal monthly accounting cadence and produces an itemized €0 usage statement with real meter quantities. It creates no payment or VAT event and therefore does not require a postal billing profile or collection provider.
 
 **Fair-use enforcement (three-tier cluster-load policy):**
 
@@ -2286,14 +2337,23 @@ accepted requirement and retry with `PAYMENT-SIGNATURE`. Successful settlement
 returns `PAYMENT-RESPONSE`; `X-PAYMENT` is legacy compatibility only and is
 disabled by default in production.
 
-Paid GraphQL mutations also require `Idempotency-Key` (8–255 characters).
-Paid MCP mutation tools accept that HTTP header or `_meta.idempotencyKey`.
-Retries with the same fingerprint replay the durable terminal result; key
-collisions are rejected and an uncertain in-flight outcome is not re-executed.
+Side-effecting GraphQL/MCP mutations do not settle x402 inline until their
+owning service has a durable idempotency contract. Top up with the payment
+recovery API or MCP `submit_payment`, then retry the mutation without the
+payment header. Unsupported inline mutations are rejected before funds move.
 
 x402 supports USDC on Base and Arbitrum (EIP-3009 is a USDC primitive). Prepaid crypto top-ups support ETH and USDC.
 Both direct crypto and x402 prepaid funding are invoiced when confirmed credit is
 issued. Usage consumption does not create a second VAT event.
+
+Crypto payments of at most €100 use the simplified-document path; anonymous
+payments conservatively use supplier-country VAT and need no billing address.
+Payments over €100 and payments carrying a VAT-number claim use an immutable
+full crypto invoice and require a legal name, billing email, and postal address
+before funds are accepted. Both document kinds store supplier registration/VAT
+identity, service description, quantity one, confirmed supply date, and the
+original locked quote FX snapshot. Cross-border EU reverse charge is applied only after a successful
+VIES validation; otherwise the normal VAT decision applies.
 
 ## Invoicing
 
@@ -8895,7 +8955,11 @@ mutation WalletLogin {
 }
 ```
 
-If the wallet isn't yet linked to a tenant, the mutation creates one. To bind an email address to an existing wallet-only tenant later, use `linkEmail`.
+If the wallet isn't yet linked to a tenant, the mutation creates one. To bind an
+email address to an existing wallet-only tenant later, use GraphQL `linkEmail`
+or MCP `link_email`. After verification, GraphQL `promoteToPaid` with the Free
+tier or MCP `activate_free_tier` enables Free without billing details or a
+payment provider. Paid postpaid tiers still require confirmed provider collection.
 
 ## x402 micropayments
 
@@ -8930,13 +8994,16 @@ mutation Pay {
 }
 ```
 
-Most clients won't call this directly — the SDK and MCP server handle it transparently. See [agents/payments](/agents/payments) for the full request/replay flow.
+Use this payment-recovery mutation (or MCP `submit_payment`) before a
+side-effecting rated mutation. Direct inline x402 mutation execution is rejected
+until the owning service has durable idempotency. See [agents/payments](/agents/payments).
 
 ## Top-ups and balances
 
 Wallet-funded crypto top-ups follow the standard prepaid-balance model. Initiate one via `createCryptoTopup`, then poll `cryptoTopupStatus` for confirmation count and the credited balance:
-Complete the tenant billing address first; it supplies the customer country used
-for the top-up VAT decision and invoice.
+Billing details are not required for an anonymous top-up of at most €100. A
+payment over €100, or any VAT-number claim, requires legal name, billing email,
+and postal address before instructions are issued.
 
 ```graphql
 mutation Topup {
@@ -15634,6 +15701,19 @@ frameworks config path --kind credentials
 is deliberately split into online and offline stages; it never sends the HD
 deposit xprv to Purser.
 
+### frameworks crypto smoke
+
+Checks the deployed public wallet-onboarding and agent-payment contract. It
+validates the published wallet/x402 metadata and issues an expiring challenge
+for a fixed non-customer address. It never signs or consumes the challenge,
+creates an account, authenticates, or moves funds.
+
+```bash
+frameworks crypto smoke --base-url https://bridge.frameworks.network --output json
+```
+
+Run this after deployment alongside the authenticated operator readiness report.
+
 ### frameworks crypto readiness
 
 Returns the operator-only structured readiness report for direct deposits,
@@ -15658,6 +15738,28 @@ frameworks crypto wallet rotate --xpub-file new-deposit.xpub --network mainnet
 
 Retain the previous offline xprv until all sweep manifests for that key have
 been reconciled and its addresses are empty.
+
+### frameworks crypto mutation resolve
+
+Inspects an ambiguous paid mutation in dry-run mode, or attaches a known
+owner-service result / keeps it blocked for operator review. It never releases
+the idempotency claim for blind execution.
+
+```bash
+frameworks crypto mutation resolve --tenant-id <uuid> --idempotency-key <key> --reason "owner lookup pending" --mark-review
+frameworks crypto mutation resolve --tenant-id <uuid> --idempotency-key <key> --reason "owner result verified" --result-file result.json --status-code 201 --execute
+```
+
+**Flags:**
+
+- `--tenant-id` - Tenant UUID (required).
+- `--idempotency-key` - Original paid mutation key (required).
+- `--reason` - Operator evidence/reason (required).
+- `--result-file` - Known result body to attach.
+- `--content-type` - Result content type; defaults to `application/json`.
+- `--status-code` - Result status code; required with `--result-file`.
+- `--mark-review` - Keep the mutation blocked without attaching a result.
+- `--execute` - Apply the resolution; default is dry-run.
 
 ### frameworks crypto sweep plan
 
@@ -15718,7 +15820,8 @@ frameworks crypto sweep broadcast --bundle sweep-bundle.json --execute --ack <bu
 
 ### frameworks crypto sweep reconcile
 
-Checks transaction receipts, confirmation depth, and canonical block hashes.
+Checks transaction receipts against the consensus-labelled finalized head and
+verifies canonical block hashes.
 It is read-only unless `--apply` is supplied.
 
 ```bash
@@ -15730,6 +15833,25 @@ frameworks crypto sweep reconcile --batch-id <uuid> --apply
 
 - `--batch-id` - Persisted sweep batch UUID (required).
 - `--apply` - Persist confirmed/failed item and batch states.
+
+### frameworks crypto sweep release
+
+Rechecks chain state for an expired or failed sweep batch. Eligible claims are
+released for replanning; ambiguous signed or broadcast claims are quarantined.
+The command is read-only unless `--execute` is supplied. Run the dry-run first
+to obtain the manifest checksum, then bind execution to that checksum.
+
+```bash
+frameworks crypto sweep release --batch-id <uuid> --reason "expired offline ceremony"
+frameworks crypto sweep release --batch-id <uuid> --reason "expired offline ceremony" --execute --ack <manifest-checksum>
+```
+
+**Flags:**
+
+- `--batch-id` - Persisted sweep batch UUID (required).
+- `--reason` - Operator reason recorded in the immutable event log (required).
+- `--execute` - Apply eligible releases and quarantines.
+- `--ack` - Exact manifest checksum returned by dry-run; required with `--execute`.
 
 ---
 
@@ -16686,10 +16808,23 @@ Run the structured report before enabling or restoring either path:
 frameworks crypto readiness --output json
 ```
 
+After deploying Gateway/Commodore changes, also verify that public wallet
+onboarding is not behind an authentication or payment wall:
+
+```bash
+frameworks crypto smoke --base-url https://bridge.frameworks.network --output json
+```
+
+The smoke command checks published wallet/x402 metadata and issues an expiring
+challenge for a fixed non-customer address. It does not sign or consume the
+challenge, create an account, use a customer wallet, or move funds.
+
 Production eligibility requires the HD watch-only xpub, configured finalized
 heads and healthy scanner cursors, the embedded x402 v2 exact facilitator,
-complete supplier identity/country configuration, effective VAT rates, non-zero
-treasury addresses, and dedicated gas-only relayers.
+complete supplier identity/registration/country configuration, effective VAT
+rates, non-zero treasury addresses, and dedicated gas-only relayers. The live
+report also proves the x402 and sweep-relayer accounts can fund at least one
+transaction at the current bounded fee ceiling.
 
 An absent gate keeps the affected method hidden/fail-closed. It is not a warning
 that operators may ignore.
@@ -16707,8 +16842,8 @@ authorization nonce, provider transaction, and mutation-result records.
 
 `purser.crypto_accounting_anomalies` holds conditions that cannot be repaired
 safely from RPC state alone, including a consumed USDC authorization without a
-recoverable transaction hash, a late settlement with no matching ledger
-reversal, and missing/conflicting customer-location evidence. Readiness reports
+recoverable transaction hash and a late settlement with no matching ledger
+reversal. Readiness reports
 the unresolved count. Never “resolve” an item by editing a balance or settlement
 row; use an audited compensating operation backed by canonical evidence.
 
@@ -16728,7 +16863,9 @@ confirmed-payment receipt, and credit note, renders only persisted evidence, and
 returns an integrity hash. Database deletion guards retain these source records
 for at least ten years. Confirmed top-up is the VAT tax point; each document
 records the `vat-at-confirmed-topup-v1` policy, effective rate source, customer
-location evidence, and any VIES result used for reverse charge.
+country fields, and any VIES result used for reverse charge. Anonymous
+simplified top-ups use supplier-country VAT; GeoIP is audit metadata and does
+not hold the document.
 
 ## Custody and sweeping
 
@@ -16742,6 +16879,7 @@ frameworks crypto sweep sign --manifest manifest.json --out signed.json \
   --max-fee-gwei 5 --max-priority-fee-gwei 2
 frameworks crypto sweep broadcast --bundle signed.json --execute --ack <checksum>
 frameworks crypto sweep reconcile --batch-id <batch-id>
+frameworks crypto sweep release --batch-id <batch-id> --reason "expired ceremony"
 ```
 
 Signing is performed offline with an xprv supplied through a file descriptor
@@ -16749,6 +16887,11 @@ and independent operator-selected fee ceilings.
 Broadcast rechecks chain, token, treasury, balance, nonce/authorization state,
 and fee bounds. Repeating broadcast replays the persisted transaction intent;
 it does not allocate another relayer nonce.
+
+Release is dry-run by default. Execute only with `--execute --ack
+<manifest-checksum>` from the dry-run output. Canonically safe claims become
+replannable; unresolved signed/broadcast claims are quarantined, never blindly
+released.
 
 To rotate the generated-address key, create a new account-external xpub offline,
 then run:
@@ -18294,8 +18437,9 @@ validates it against the official VIES service and stores a hashed/masked
 evidence record. A current valid result enables reverse charge only when the
 customer and `SUPPLIER_COUNTRY` are different EU member states. Domestic VAT
 identifiers receive domestic VAT. Billing-country and GeoIP-country signals are
-stored separately and missing/conflicting evidence prevents document release
-and remains queued for review.
+stored separately. Full invoices use the complete billing address; anonymous
+simplified top-ups conservatively use supplier-country VAT. GeoIP is audit
+metadata and never silently creates a zero-VAT export or hides the document.
 
 Inspect live dependencies with `frameworks crypto readiness`; production
 advertisement fails closed when RPC, token, relayer, tax, scanner, or custody

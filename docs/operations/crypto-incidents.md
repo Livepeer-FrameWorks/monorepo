@@ -26,14 +26,17 @@ incident record.
 
 ## Facilitator outage
 
-1. Confirm the official v2 facilitator readiness/support call is failing; do
-   not switch production to self-settlement.
+1. Check the configured provider in the readiness report. For the default
+   embedded facilitator, inspect its RPC, USDC, relayer, simulation, and
+   finalized-head checks. For an explicitly configured hosted provider, inspect
+   its v2 support/readiness response. Do not change providers during an unknown
+   settlement outcome.
 2. Disable new x402 operations. Direct deposits may remain enabled if their
    independent readiness checks are green.
 3. Leave `submitting`, `settling`, and `unknown` records for reconciliation.
    A timeout is not proof of failure and must never cause a second submission.
-4. When the facilitator recovers, verify provider transaction IDs and canonical
-   finalized receipts before re-enabling.
+4. When readiness recovers, verify persisted settlement attempts, transaction
+   IDs, and canonical finalized receipts before re-enabling.
 
 ## RPC lag or missing finalized head
 
@@ -103,9 +106,10 @@ recovery procedure. ETH raw transactions have no protocol expiry.
 2. Valid, unexpired cached VIES evidence may be used under the configured cache
    policy. Otherwise the transaction/document remains non-validated or enters
    tax review.
-3. Missing or conflicting billing-country/IP signals create an open
-   `tax_location_evidence_review` anomaly. Blockchain network is never customer
-   location evidence.
+3. Anonymous simplified top-ups use supplier-country VAT. Full invoices use the
+   complete billing address. GeoIP and any conflict remain audit fields, not a
+   reason to hide an issued customer document. Blockchain network is never
+   customer location evidence.
 4. Keep production money acceptance disabled if supplier identity/country
    configuration or the effective VAT catalog is incomplete.
 

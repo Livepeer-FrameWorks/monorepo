@@ -17,10 +17,23 @@ Run the structured report before enabling or restoring either path:
 frameworks crypto readiness --output json
 ```
 
+After deploying Gateway/Commodore changes, also verify that public wallet
+onboarding is not behind an authentication or payment wall:
+
+```bash
+frameworks crypto smoke --base-url https://bridge.frameworks.network --output json
+```
+
+The smoke command checks published wallet/x402 metadata and issues an expiring
+challenge for a fixed non-customer address. It does not sign or consume the
+challenge, create an account, use a customer wallet, or move funds.
+
 Production eligibility requires the HD watch-only xpub, configured finalized
 heads and healthy scanner cursors, the embedded x402 v2 exact facilitator,
-complete supplier identity/country configuration, effective VAT rates, non-zero
-treasury addresses, and dedicated gas-only relayers.
+complete supplier identity/registration/country configuration, effective VAT
+rates, non-zero treasury addresses, and dedicated gas-only relayers. The live
+report also proves the x402 and sweep-relayer accounts can fund at least one
+transaction at the current bounded fee ceiling.
 
 An absent gate keeps the affected method hidden/fail-closed. It is not a warning
 that operators may ignore.
@@ -38,8 +51,8 @@ authorization nonce, provider transaction, and mutation-result records.
 
 `purser.crypto_accounting_anomalies` holds conditions that cannot be repaired
 safely from RPC state alone, including a consumed USDC authorization without a
-recoverable transaction hash, a late settlement with no matching ledger
-reversal, and missing/conflicting customer-location evidence. Readiness reports
+recoverable transaction hash and a late settlement with no matching ledger
+reversal. Readiness reports
 the unresolved count. Never “resolve” an item by editing a balance or settlement
 row; use an audited compensating operation backed by canonical evidence.
 
@@ -59,7 +72,9 @@ confirmed-payment receipt, and credit note, renders only persisted evidence, and
 returns an integrity hash. Database deletion guards retain these source records
 for at least ten years. Confirmed top-up is the VAT tax point; each document
 records the `vat-at-confirmed-topup-v1` policy, effective rate source, customer
-location evidence, and any VIES result used for reverse charge.
+country fields, and any VIES result used for reverse charge. Anonymous
+simplified top-ups use supplier-country VAT; GeoIP is audit metadata and does
+not hold the document.
 
 ## Custody and sweeping
 
@@ -73,6 +88,7 @@ frameworks crypto sweep sign --manifest manifest.json --out signed.json \
   --max-fee-gwei 5 --max-priority-fee-gwei 2
 frameworks crypto sweep broadcast --bundle signed.json --execute --ack <checksum>
 frameworks crypto sweep reconcile --batch-id <batch-id>
+frameworks crypto sweep release --batch-id <batch-id> --reason "expired ceremony"
 ```
 
 Signing is performed offline with an xprv supplied through a file descriptor
@@ -80,6 +96,11 @@ and independent operator-selected fee ceilings.
 Broadcast rechecks chain, token, treasury, balance, nonce/authorization state,
 and fee bounds. Repeating broadcast replays the persisted transaction intent;
 it does not allocate another relayer nonce.
+
+Release is dry-run by default. Execute only with `--execute --ack
+<manifest-checksum>` from the dry-run output. Canonically safe claims become
+replannable; unresolved signed/broadcast claims are quarantined, never blindly
+released.
 
 To rotate the generated-address key, create a new account-external xpub offline,
 then run:

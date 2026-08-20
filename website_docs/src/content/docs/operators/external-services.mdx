@@ -540,8 +540,9 @@ validates it against the official VIES service and stores a hashed/masked
 evidence record. A current valid result enables reverse charge only when the
 customer and `SUPPLIER_COUNTRY` are different EU member states. Domestic VAT
 identifiers receive domestic VAT. Billing-country and GeoIP-country signals are
-stored separately and missing/conflicting evidence prevents document release
-and remains queued for review.
+stored separately. Full invoices use the complete billing address; anonymous
+simplified top-ups conservatively use supplier-country VAT. GeoIP is audit
+metadata and never silently creates a zero-VAT export or hides the document.
 
 Inspect live dependencies with `frameworks crypto readiness`; production
 advertisement fails closed when RPC, token, relayer, tax, scanner, or custody

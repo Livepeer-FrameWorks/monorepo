@@ -175,46 +175,36 @@ explicit state machine driven by the settle handler (`x402.go`) and a 30-second
 reconciler loop (`x402_reconciler.go`):
 
 ```
-settle request ──> submitting ──broadcast ok──> pending ──receipt + depth──> confirmed
-                       │                           │                            │
-                       │ auth consumed w/o tx      │ timeout (2m) / revert      │ reorg watch (1h,
-                       │ or validBefore expired    ▼                            ▼  50-block depth)
-                       └─────────────────────────> failed <─────────────────────┘
-                                                     │
-                                                     └─ timeout/reorg failures: late recovery
-                                                        within 168h ──> confirmed (re-credit)
+settle request ──> submitting ──broadcast acknowledged──> pending
+      │                  │                                  │
+      │                  └─ unknown outcome: replay the      ├─ finalized exact transfer ──> confirmed + credit
+      │                     same durable raw transaction     └─ canonical revert/mismatch ─> failed
+      └─ validation/simulation failure ────────────────────────────────────────────────────> failed
 ```
 
-- **submitting** — durable pre-submit intent: the row (with the full
-  authorization payload as JSONB) is written _before_ any chain interaction.
-  The `(network, payer, nonce)` unique key doubles as the replay guard: a
-  conflicting tenant/amount/payload for the same nonce is rejected as a
-  settlement conflict.
-- **submitting → pending** — after `eth_call` simulation and broadcast of
-  `transferWithAuthorization`, the tx hash is recorded and the tenant's prepaid
-  balance is credited **optimistically** in its own transaction (a credit failure
-  leaves the row pending; the reconciler credits at confirmation instead). This
-  deliberately differs from the fiat core invariant — value is granted at
-  broadcast and clawed back on failure, with every credit/debit recorded in
-  `balance_transactions` by reference type.
-- **Stuck submitting** (>30s): the USDC contract's `authorizationState` is the
-  oracle. Consumed on-chain without a recorded tx hash → `failed` flagged for
-  manual reconciliation (the bool cannot recover the tx hash) + accounting
-  anomaly event. `validBefore` expired → `failed` safely (nothing was credited).
-  Otherwise the reconciler re-broadcasts from the stored payload under a
-  2-minute claim lease (`last_submit_attempt_at`), then promotes and credits.
-- **pending** (>15s): fetch the receipt. Success → wait for the network's
-  required confirmation depth (block/gas recorded while waiting), ensure the
-  credit exists, then `confirmed`. No receipt after 2 minutes → `failed`
-  (timeout) + balance debit. Reverted → `failed` + debit.
-- **failed, recoverable reasons** (timeout / reorg) within
-  `X402_RECOVERY_WINDOW_HOURS` (default 168): if a receipt now shows a confirmed
-  success, re-credit **only when the original timeout reversal exists** (missing
-  reversal → anomaly event, no credit — prevents double-credit) and promote to
-  `confirmed` with a late-recovery event.
-- **confirmed** (watched for 1 hour): reorg check. Receipt missing beyond
-  `X402_REORG_DEPTH_BLOCKS` (default 50) or now reverted → `failed` + debit,
-  guarded by "only debit if the original credit exists".
+- **submitting** — Purser atomically claims the tenant-bound quote and the
+  `(network, payer, authorization nonce)` replay key. For the embedded
+  facilitator it serializes the relayer nonce, signs once, and commits the raw
+  transaction, deterministic hash, fee inputs, and relayer identity before the
+  first RPC submission.
+- **unknown broadcast outcome** — a timeout or malformed RPC reply does not
+  become failure and never creates a replacement payment. The reconciler and
+  caller retry the exact stored bytes/hash. If the authorization is consumed
+  but no durable transaction hash exists, an accounting anomaly requires
+  operator review because USDC exposes only a boolean authorization state.
+- **pending** — broadcast is acknowledged but the customer has no spendable
+  credit yet. A missing receipt or RPC outage remains pending regardless of age.
+  A successful receipt must contain the exact authorized USDC `Transfer` and be
+  included by the network's consensus-labelled finalized head.
+- **confirmed** — settlement status, unique balance top-up, quote confirmation,
+  and prepaid credit commit atomically. Only then may the gateway rerun normal
+  admission and execute protected work. Tax-document and rollup obligations are
+  idempotently reconciled; a missing document keeps the accounting anomaly gate
+  unhealthy until repaired.
+- **failed/reorg** — only an explicit canonical revert, transfer mismatch, or
+  later loss of an already-confirmed receipt can fail a submitted payment. A
+  post-confirmation reversal debits only when the original unique credit exists;
+  any later recovery likewise requires the matching reversal before re-credit.
 
 ## Key Files
 
@@ -223,7 +213,7 @@ settle request ──> submitting ──broadcast ok──> pending ──receip
 - `api_billing/internal/handlers/provider_webhook_inbox.go` - durable callback ingress, leasing, and retry worker
 - `api_billing/internal/handlers/invoice_email_outbox.go` - invoice and staged dunning email delivery
 - `api_billing/internal/handlers/jobs.go` - invoice generation, inline drain call, 10-minute observation-drain backstop
-- `api_billing/internal/handlers/x402.go` - settle handler: intent record, broadcast, optimistic credit
+- `api_billing/internal/handlers/x402.go` - quote claim, durable embedded-facilitator attempt, finalized confirmation, and atomic credit
 - `api_billing/internal/handlers/x402_reconciler.go` - four-sweep reconciler (submitting/pending/failed/confirmed)
 - `api_billing/internal/stripe/client.go` - checkout session creation, tier sync, off-session charges
 
