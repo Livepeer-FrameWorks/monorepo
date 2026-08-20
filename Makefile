@@ -616,18 +616,20 @@ verify-schema:
 verify-schema-migrations:
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-schema-migrations requires a running Docker daemon"; exit 1; }
 	@echo "Verifying PostgreSQL tagged upgrades and current baseline replay on PostgreSQL/ClickHouse (Docker)..."
-	@cd cli && FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' go test -tags schema_verify -run 'TestPostgresBaselineEqualsReplay|TestPostgresTaggedBaselineUpgradeEqualsCurrent|TestClickHouseBaselineEqualsReplay|TestClickHouseTaggedBaselineUpgradeEqualsCurrent' -count=1 -timeout 1200s ./pkg/provisioner/
+	@cd cli && FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' go test -tags schema_verify -run 'TestPostgresBaselineEqualsReplay|TestPostgresTaggedBaselineUpgradeEqualsCurrent|TestPostgresDemoSeedAppliesToCurrentBaseline|TestClickHouseBaselineEqualsReplay|TestClickHouseTaggedBaselineUpgradeEqualsCurrent|TestClickHouseDemoSeedAndMeteringQueries' -count=1 -timeout 1200s ./pkg/provisioner/
+	@cd api_billing && go test -tags schema_verify -run 'TestProcessUsageSummaryAbsentDimensions_RealPG' -count=1 -timeout 600s ./internal/handlers/
 
 # Granular subsets of the suite above, for iterating on one engine without the full run.
 verify-schema-postgres:
 	@echo "Verifying Postgres current baseline and tagged-release upgrade convergence (Docker)..."
-	@cd cli && FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' go test -tags schema_verify -run 'TestPostgresBaselineEqualsReplay|TestPostgresTaggedBaselineUpgradeEqualsCurrent' -count=1 -timeout 600s ./pkg/provisioner/
+	@cd cli && FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' go test -tags schema_verify -run 'TestPostgresBaselineEqualsReplay|TestPostgresTaggedBaselineUpgradeEqualsCurrent|TestPostgresDemoSeedAppliesToCurrentBaseline' -count=1 -timeout 600s ./pkg/provisioner/
+	@cd api_billing && go test -tags schema_verify -run 'TestProcessUsageSummaryAbsentDimensions_RealPG' -count=1 -timeout 600s ./internal/handlers/
 	@echo "Verifying the real PostgreSQL admission-ledger proof drives exact Redis membership cleanup..."
 	@cd api_balancing && go test -tags schema_verify -run 'TestMembershipTombstoneCleanup_PostgresProofToRedisPurge_RealPG' -count=1 -timeout 600s ./internal/federation/
 
 verify-schema-clickhouse:
 	@echo "Verifying Replicated ClickHouse baseline == baseline + post-floor migrations (Docker)..."
-	@cd cli && FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' go test -tags schema_verify -run 'TestClickHouseBaselineEqualsReplay|TestClickHouseTaggedBaselineUpgradeEqualsCurrent' -count=1 -timeout 600s ./pkg/provisioner/
+	@cd cli && FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' go test -tags schema_verify -run 'TestClickHouseBaselineEqualsReplay|TestClickHouseTaggedBaselineUpgradeEqualsCurrent|TestClickHouseDemoSeedAndMeteringQueries' -count=1 -timeout 600s ./pkg/provisioner/
 
 verify-feature-registry:
 	@echo "Validating docs/platform-features.yaml and checking generated renderers..."

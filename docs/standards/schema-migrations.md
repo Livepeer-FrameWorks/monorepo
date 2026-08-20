@@ -68,7 +68,10 @@ repository.
 For PostgreSQL it compares both current-baseline replay and the latest tagged
 baseline plus pending migrations against the current fresh-install baseline. For
 ClickHouse it verifies the current Replicated baseline plus post-floor migrations
-and the latest supported tagged Replicated baseline plus pending migrations. The
+and the latest supported tagged Replicated baseline plus pending migrations. It
+also applies the complete PostgreSQL and ClickHouse demo seeds, exercises selected
+billing-critical runtime statements against the real engines, and verifies the
+Purser usage writer against its current `JSONB` constraints. The
 generic `PeriscopeMigrationCatalog` and `cluster clickhouse migrate verify` remain
 available for operator-directed cross-host moves; historical plain-engine cutover
 code is not part of the v0.3 lifecycle. CI checks out full tag
@@ -167,7 +170,8 @@ floor is itself the one pending catalog release; modifying shipped SQL remains f
 ## Verification harness — `make verify-schema-{postgres,clickhouse}`
 
 Docker-backed Go integration tests (build tag `schema_verify`,
-`cli/pkg/provisioner/schema_squash_*_test.go`) that, against real engines:
+primarily under `cli/pkg/provisioner/` plus service-owned writer contracts) that,
+against real engines:
 
 - apply the baseline to one database, the baseline + every **post-floor** migration to
   another, and assert the two are logically equal;
@@ -175,12 +179,28 @@ Docker-backed Go integration tests (build tag `schema_verify`,
   zk-path/replica args (the deliberate HA divergence), preserving everything else
   (`ORDER BY`/`PARTITION BY`/`TTL`/`SETTINGS`/version columns/TABLE-vs-VIEW kind);
 - for Postgres, compare `information_schema`/`pg_indexes` introspection (order-independent).
+- apply the complete PostgreSQL demo seed twice, catching stale column lists,
+  invalid `ON CONFLICT` targets, missing foreign keys, and non-idempotent upserts;
+- apply the complete ClickHouse demo seed and assert lifecycle/attribution
+  invariants required by regional metering;
+- execute billing-critical statements from `pkg/database/queries` using the same
+  SQL text imported by the runtime; and
+- exercise service-owned write paths where Go driver conversion, nullable values,
+  defaults, JSON encoding, or constraints are part of the contract.
 
 This is the permanent guard: a release that adds a migration but forgets to update the
-baseline (or vice versa) breaks the equality. It also smoke-tests that the baselines
-apply cleanly on a real engine (incl. ClickHouse Replicated engines + Keeper). Gated
-behind `schema_verify` so a plain `make test` needs no Docker; wire into CI once
-Docker-in-CI exists.
+baseline (or vice versa) breaks the equality. A schema change that leaves a seed or
+covered runtime statement incompatible also breaks the gate. It smoke-tests real
+PostgreSQL and ClickHouse Replicated engines with Keeper. The tests remain behind
+`schema_verify` so a plain `make test` needs no Docker; CI runs them through
+`make verify-schema-migrations`.
+
+Moving SQL into a separate file is not itself a test strategy. Keep small queries near
+their repository/service when that is clearer. Put a statement in
+`pkg/database/queries` when runtime code and a real-engine contract test must share its
+exact text, especially for metering and financial writes. Use mock tests for branching
+and failure handling, but never treat `sqlmock.AnyArg()` as proof that driver values,
+defaults, casts, unique constraints, or `NOT NULL` contracts work on the real engine.
 
 ## Operator pre-flight before a consolidation release
 

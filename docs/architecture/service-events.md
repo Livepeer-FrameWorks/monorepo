@@ -151,10 +151,13 @@ the `artifact_state_current` overlay and the `artifact_events` history.
 - `api_usage_5m` (canonical operational ledger)
 - `api_usage_hourly` / `api_usage_daily` (dashboard rollups from `api_usage_5m`)
 
-**Periscope Query**
+**Periscope Metering and Query**
 
-- Reads `api_usage_5m_v` for the billing-report path and dashboard rollups for longer API analytics views.
-- Emits `api_requests`, `api_errors`, `api_duration_ms`, and `api_complexity` as canonical usage records.
+- Periscope Metering reads `api_usage_5m_v` and emits `api_requests`,
+  `api_errors`, `api_duration_ms`, and `api_complexity` as canonical usage
+  records for Purser.
+- Periscope Query reads dashboard rollups for longer API analytics views; it
+  does not schedule or publish billing reports.
 - Persists API breakdown detail in `usage_details`: `auth_type`, `operation_type`, `operation_name`, `unique_users`, and `unique_tokens`.
 
 **Purser**

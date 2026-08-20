@@ -211,7 +211,7 @@ FROM numbers(0, 10080);
 -- =================================================================================================
 INSERT INTO periscope.viewer_connection_events (
     event_id, timestamp, tenant_id, stream_id, internal_name, session_id,
-    connection_addr, connector, node_id, request_url,
+    connection_addr, connector, node_id, cluster_id, origin_cluster_id, request_url,
     country_code, city, latitude, longitude,
     client_bucket_h3, client_bucket_res, node_bucket_h3, node_bucket_res,
     event_type, session_duration, bytes_transferred
@@ -225,7 +225,9 @@ SELECT
     concat('session-', toString(number)) as session_id,
     concat(toString(10 + rand()%240), '.', toString(rand()%255), '.', toString(rand()%255), '.', toString(number%255)) as connection_addr,
     arrayElement(['HLS', 'WebRTC', 'RTMP'], 1 + rand()%3) as connector,
-    arrayElement(['edge-node-1', 'edge-ashburn', 'edge-singapore'], 1 + rand()%3) as node_id,
+    arrayElement(['edge-node-1', 'edge-ashburn', 'edge-singapore'], 1 + number%3) as node_id,
+    'central-primary' as cluster_id,
+    'central-primary' as origin_cluster_id,
     '/live/demo_live_stream_001/index.m3u8' as request_url,
     arrayElement(['US', 'US', 'US', 'US', 'NL', 'NL', 'GB', 'GB', 'DE', 'JP', 'JP', 'SG'], 1 + number%12) as country_code,
     multiIf(
@@ -263,7 +265,7 @@ FROM numbers(0, 2016);
 
 INSERT INTO periscope.viewer_connection_events (
     event_id, timestamp, tenant_id, stream_id, internal_name, session_id,
-    connection_addr, connector, node_id, request_url,
+    connection_addr, connector, node_id, cluster_id, origin_cluster_id, request_url,
     country_code, city, latitude, longitude,
     client_bucket_h3, client_bucket_res, node_bucket_h3, node_bucket_res,
     event_type, session_duration, bytes_transferred
@@ -277,7 +279,9 @@ SELECT
     concat('session-', toString(number)) as session_id,
     concat(toString(10 + rand()%240), '.', toString(rand()%255), '.', toString(rand()%255), '.', toString(number%255)) as connection_addr,
     arrayElement(['HLS', 'WebRTC', 'RTMP'], 1 + rand()%3) as connector,
-    arrayElement(['edge-node-1', 'edge-ashburn', 'edge-singapore'], 1 + rand()%3) as node_id,
+    arrayElement(['edge-node-1', 'edge-ashburn', 'edge-singapore'], 1 + number%3) as node_id,
+    'central-primary' as cluster_id,
+    'central-primary' as origin_cluster_id,
     '/live/demo_live_stream_001/index.m3u8' as request_url,
     arrayElement(['US', 'US', 'US', 'US', 'NL', 'NL', 'GB', 'GB', 'DE', 'JP', 'JP', 'SG'], 1 + number%12) as country_code,
     multiIf(
@@ -857,7 +861,7 @@ SELECT
     '5eedfeed-11fe-ca57-feed-11feca570001' as stream_id,
     'demo_live_stream_001' as internal_name,
     concat('session-', toString(number % 200)) as session_id,
-    arrayElement(['edge-node-1', 'edge-ashburn', 'edge-singapore'], 1 + rand()%3) as node_id,
+    arrayElement(['edge-node-1', 'edge-ashburn', 'edge-singapore'], 1 + (number % 200)%3) as node_id,
     arrayElement(['HLS', 'WebRTC', 'DASH'], 1 + rand()%3) as protocol,
     concat(toString(10 + rand()%240), '.', toString(rand()%255), '.', toString(rand()%255), '.', toString(number%255)) as host,
     toFloat32(0.5 + rand()%100 / 100.0) as connection_time,
