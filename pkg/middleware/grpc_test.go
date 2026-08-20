@@ -43,6 +43,20 @@ func TestGRPCAuthInterceptor_SetsAuthTypeForServiceToken(t *testing.T) {
 	}
 }
 
+func TestIsServiceCallRequiresValidatedServiceMarker(t *testing.T) {
+	if IsServiceCall(context.Background()) {
+		t.Fatal("empty context was trusted as a service call")
+	}
+	jwtCtx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "jwt")
+	if IsServiceCall(jwtCtx) {
+		t.Fatal("JWT context was trusted as a service call")
+	}
+	serviceCtx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "service")
+	if !IsServiceCall(serviceCtx) {
+		t.Fatal("validated service context was rejected")
+	}
+}
+
 func TestGRPCAuthInterceptor_SetsAuthTypeForJWT(t *testing.T) {
 	secret := []byte("secret")
 	token, err := auth.GenerateJWT("user-a", "tenant-a", "user@example.com", "member", secret)

@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -438,5 +439,83 @@ func TestPaidMCPMutationResultIsReplayedWithoutExecutingAgain(t *testing.T) {
 	}
 	if mcpResultTextBytes(first) != mcpResultTextBytes(second) || mcpTextResult(first.(*mcp.CallToolResult)) != mcpTextResult(second.(*mcp.CallToolResult)) {
 		t.Fatalf("replayed MCP result differs: first=%v second=%v", first, second)
+	}
+}
+
+func TestPaidMCPMutationInProgressDoesNotExecute(t *testing.T) {
+	purser := &clientstest.FakePurser{
+		ClaimX402MutationResultFn: func(context.Context, *purserpb.ClaimX402MutationResultRequest) (*purserpb.ClaimX402MutationResultResponse, error) {
+			return &purserpb.ClaimX402MutationResultResponse{State: "in_progress"}, nil
+		},
+	}
+	server := &Server{serviceClients: &clients.ServiceClients{Purser: purser}, logger: clientstest.DiscardLogger()}
+	paymentJSON := `{"x402Version":2,"scheme":"exact","network":"eip155:8453","accepted":{"scheme":"exact","network":"eip155:8453","asset":"0x0000000000000000000000000000000000000001","amount":"5000000","payTo":"0x0000000000000000000000000000000000000002","maxTimeoutSeconds":60,"extra":{"frameworks":{"quoteId":"22222222-2222-2222-2222-222222222222"}}},"payload":{"signature":"0x00","authorization":{"from":"0x0000000000000000000000000000000000000003","to":"0x0000000000000000000000000000000000000002","value":"5000000","validAfter":"0","validBefore":"9999999999","nonce":"0x0000000000000000000000000000000000000000000000000000000000000001"}}}`
+	payment := base64.StdEncoding.EncodeToString([]byte(paymentJSON))
+	req := &mcp.ServerRequest[*mcp.CallToolParamsRaw]{
+		Params: &mcp.CallToolParamsRaw{
+			Meta: mcp.Meta{"idempotencyKey": "mutation-123"},
+			Name: "create_stream", Arguments: json.RawMessage(`{"name":"camera"}`),
+		},
+		Extra: &mcp.RequestExtra{Header: http.Header{"Idempotency-Key": []string{"mutation-123"}}},
+	}
+	executions := 0
+	next := func(context.Context, string, mcp.Request) (mcp.Result, error) {
+		executions++
+		return &mcp.CallToolResult{}, nil
+	}
+
+	_, err := server.executePaidMCPMutation(context.Background(), "tools/call", "mcp:tools/call:create_stream", "11111111-1111-1111-1111-111111111111", payment, req, next)
+	if err == nil || !strings.Contains(err.Error(), "paid mutation in progress") {
+		t.Fatalf("error=%v, want paid mutation in progress", err)
+	}
+	if executions != 0 {
+		t.Fatalf("MCP mutation executed %d times while the durable claim was in progress", executions)
+	}
+}
+
+func TestPaidMCPMutationOversizedResultBecomesReplayableTerminalEnvelope(t *testing.T) {
+	var stored []byte
+	claimed := false
+	executions := 0
+	purser := &clientstest.FakePurser{
+		ClaimX402MutationResultFn: func(context.Context, *purserpb.ClaimX402MutationResultRequest) (*purserpb.ClaimX402MutationResultResponse, error) {
+			if !claimed {
+				claimed = true
+				return &purserpb.ClaimX402MutationResultResponse{State: "claimed"}, nil
+			}
+			return &purserpb.ClaimX402MutationResultResponse{State: "completed", Result: append([]byte(nil), stored...)}, nil
+		},
+		CompleteX402MutationResultFn: func(_ context.Context, req *purserpb.CompleteX402MutationResultRequest) (*purserpb.CompleteX402MutationResultResponse, error) {
+			stored = append([]byte(nil), req.GetResult()...)
+			return &purserpb.CompleteX402MutationResultResponse{Completed: true}, nil
+		},
+	}
+	server := &Server{serviceClients: &clients.ServiceClients{Purser: purser}, logger: clientstest.DiscardLogger()}
+	paymentJSON := `{"x402Version":2,"scheme":"exact","network":"eip155:8453","accepted":{"scheme":"exact","network":"eip155:8453","asset":"0x0000000000000000000000000000000000000001","amount":"5000000","payTo":"0x0000000000000000000000000000000000000002","maxTimeoutSeconds":60,"extra":{"frameworks":{"quoteId":"22222222-2222-2222-2222-222222222222"}}},"payload":{"signature":"0x00","authorization":{"from":"0x0000000000000000000000000000000000000003","to":"0x0000000000000000000000000000000000000002","value":"5000000","validAfter":"0","validBefore":"9999999999","nonce":"0x0000000000000000000000000000000000000000000000000000000000000001"}}}`
+	payment := base64.StdEncoding.EncodeToString([]byte(paymentJSON))
+	req := &mcp.ServerRequest[*mcp.CallToolParamsRaw]{
+		Params: &mcp.CallToolParamsRaw{
+			Meta: mcp.Meta{"idempotencyKey": "mutation-oversized"},
+			Name: "create_stream", Arguments: json.RawMessage(`{"name":"camera"}`),
+		},
+		Extra: &mcp.RequestExtra{Header: http.Header{"Idempotency-Key": []string{"mutation-oversized"}}},
+	}
+	next := func(context.Context, string, mcp.Request) (mcp.Result, error) {
+		executions++
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: strings.Repeat("x", maxMCPResultBytes+1)}}}, nil
+	}
+	first, err := server.executePaidMCPMutation(context.Background(), "tools/call", "mcp:tools/call:create_stream", "11111111-1111-1111-1111-111111111111", payment, req, next)
+	if err != nil || first == nil {
+		t.Fatalf("first result=%v error=%v", first, err)
+	}
+	if len(stored) >= maxMCPResultBytes || !bytes.Contains(stored, []byte("exceeded the durable replay limit")) {
+		t.Fatalf("stored terminal envelope length=%d body=%q", len(stored), stored)
+	}
+	second, err := server.executePaidMCPMutation(context.Background(), "tools/call", "mcp:tools/call:create_stream", "11111111-1111-1111-1111-111111111111", payment, req, next)
+	if err != nil || executions != 1 {
+		t.Fatalf("replay result=%v error=%v executions=%d", second, err, executions)
+	}
+	if !strings.Contains(mcpTextResult(second.(*mcp.CallToolResult)), "exceeded the durable replay limit") {
+		t.Fatalf("unexpected replay result: %v", second)
 	}
 }

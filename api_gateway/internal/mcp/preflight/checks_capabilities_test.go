@@ -33,7 +33,7 @@ func TestGetCapabilities_Solvent_AllEnabled(t *testing.T) {
 	}
 }
 
-func TestGetCapabilities_Broke_BillableDisabled_ReadsEnabled(t *testing.T) {
+func TestGetCapabilities_Broke_OnlyRatedToolsDisabled(t *testing.T) {
 	c := checkerWith(&clientstest.FakePurser{
 		GetTenantBillingStatusFn: func(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {
 			return &purserpb.GetTenantBillingStatusResponse{BillingModel: "prepaid"}, nil
@@ -46,15 +46,14 @@ func TestGetCapabilities_Broke_BillableDisabled_ReadsEnabled(t *testing.T) {
 		},
 	})
 	caps := c.GetCapabilities(ctxTenant("t1"))
-	for _, k := range []string{"create_stream", "update_stream", "delete_stream", "create_clip", "start_dvr", "create_vod_upload", "complete_vod_upload", "delete_vod_asset"} {
+	for _, k := range []string{"create_clip", "start_dvr", "create_vod_upload", "complete_vod_upload", "ask_consultant", "execute_query"} {
 		if caps[k] {
-			t.Fatalf("broke tenant must not have billable cap %q: %+v", k, caps)
+			t.Fatalf("unfunded tenant must not have rated capability %q: %+v", k, caps)
 		}
 	}
-	// Free reads and the recovery tools stay available even with zero balance.
-	for _, k := range []string{"read_streams", "read_analytics", "read_billing", "read_vod", "topup_balance", "update_billing_details", "resolve_playback_endpoint", "validate_stream_key"} {
+	for _, k := range []string{"create_stream", "update_stream", "delete_stream", "delete_vod_asset", "topup_balance", "update_billing_details", "resolve_playback_endpoint", "validate_stream_key"} {
 		if !caps[k] {
-			t.Fatalf("free capability %q should stay enabled", k)
+			t.Fatalf("read/control/recovery capability %q should stay enabled", k)
 		}
 	}
 }
@@ -131,10 +130,7 @@ func TestRequireBillingDetails_ClearReturnsNil(t *testing.T) {
 	}
 }
 
-// In GetBlockers, a balance check that hard-errors (complete billing, but balance
-// + status both unavailable) is logged and swallowed — the tenant is not falsely
-// blocked, and no blocker is appended.
-func TestGetBlockers_BalanceCheckError_Swallowed(t *testing.T) {
+func TestGetBlockers_BalanceCheckErrorIsDescriptive(t *testing.T) {
 	c := checkerWith(&clientstest.FakePurser{
 		GetBillingDetailsFn: func(context.Context, string) (*purserpb.BillingDetails, error) {
 			return &purserpb.BillingDetails{IsComplete: true}, nil
@@ -150,7 +146,7 @@ func TestGetBlockers_BalanceCheckError_Swallowed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetBlockers should not surface the swallowed balance error: %v", err)
 	}
-	if len(bs) != 0 {
-		t.Fatalf("balance-check error must not produce a blocker, got %+v", bs)
+	if len(bs) != 1 || bs[0].Code != "BILLING_STATUS_UNAVAILABLE" {
+		t.Fatalf("balance-check error must produce a retryable status blocker, got %+v", bs)
 	}
 }

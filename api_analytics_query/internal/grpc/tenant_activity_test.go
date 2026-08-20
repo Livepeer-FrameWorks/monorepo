@@ -70,7 +70,7 @@ func TestListTenantActivity_MergesRollupsAndSortsByViewerHours(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "live_streams", "current_viewers"}).
 			AddRow("tenant-busy", int32(2), int32(15)))
 
-	resp, err := server.ListTenantActivity(context.Background(), &periscopepb.ListTenantActivityRequest{})
+	resp, err := server.ListTenantActivity(serviceTestContext(), &periscopepb.ListTenantActivityRequest{})
 	if err != nil {
 		t.Fatalf("ListTenantActivity: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestListTenantActivity_FiltersToRequestedTenants(t *testing.T) {
 	mock.ExpectQuery(`(?s)FROM stream_state_current FINAL.*` + filtered).
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "live_streams", "current_viewers"}))
 
-	resp, err := server.ListTenantActivity(context.Background(), &periscopepb.ListTenantActivityRequest{
+	resp, err := server.ListTenantActivity(serviceTestContext(), &periscopepb.ListTenantActivityRequest{
 		TenantIds: []string{"tenant-small"},
 		Limit:     1,
 	})
@@ -155,7 +155,7 @@ func TestListTenantActivity_AppliesLimit(t *testing.T) {
 	mock.ExpectQuery("FROM stream_state_current FINAL").
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "live_streams", "current_viewers"}))
 
-	resp, err := server.ListTenantActivity(context.Background(), &periscopepb.ListTenantActivityRequest{Limit: 1})
+	resp, err := server.ListTenantActivity(serviceTestContext(), &periscopepb.ListTenantActivityRequest{Limit: 1})
 	if err != nil {
 		t.Fatalf("ListTenantActivity: %v", err)
 	}

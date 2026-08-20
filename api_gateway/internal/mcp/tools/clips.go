@@ -21,7 +21,7 @@ func RegisterClipTools(server *mcp.Server, clients *clients.ServiceClients, reso
 	addTool(server,
 		&mcp.Tool{
 			Name:        "create_clip",
-			Description: "Create a clip from a live or recorded stream. Requires positive balance.",
+			Description: "Create a clip from a live or recorded stream. Requires funded prepaid credit or an eligible Free/collectible postpaid account.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args CreateClipInput) (*mcp.CallToolResult, any, error) {
 			return handleCreateClip(ctx, args, clients, checker, logger)
@@ -65,7 +65,7 @@ func handleCreateClip(ctx context.Context, args CreateClipInput, clients *client
 		return nil, nil, mcperrors.AuthRequired()
 	}
 
-	// Pre-flight: require positive balance
+	// Rated work requires funded prepaid credit or eligible postpaid admission.
 	if err := checker.RequireBalance(ctx); err != nil {
 		if pfe, ok := preflight.IsPreflightError(err); ok {
 			return toolErrorWithResolution(pfe.Blocker)

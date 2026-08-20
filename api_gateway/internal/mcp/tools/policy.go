@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/accesspolicy"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -22,6 +23,7 @@ const (
 type ToolPolicy struct {
 	Scope       string
 	Risk        ToolRisk
+	AccessClass accesspolicy.Class
 	Destructive bool
 	Idempotent  bool
 	OpenWorld   bool
@@ -34,7 +36,11 @@ func buildToolPolicies() map[string]ToolPolicy {
 	policies := make(map[string]ToolPolicy)
 	add := func(scope string, risk ToolRisk, names ...string) {
 		for _, name := range names {
-			policies[name] = ToolPolicy{Scope: scope, Risk: risk, Idempotent: risk == ToolRiskRead}
+			accessClass, ok := accesspolicy.MCPToolClass(name)
+			if !ok {
+				panic(fmt.Sprintf("MCP tool %q has no access policy", name))
+			}
+			policies[name] = ToolPolicy{Scope: scope, Risk: risk, AccessClass: accessClass, Idempotent: risk == ToolRiskRead}
 		}
 	}
 
@@ -67,7 +73,8 @@ func buildToolPolicies() map[string]ToolPolicy {
 	add("consultant:use", ToolRiskRead, "ask_consultant")
 	add("security:read", ToolRiskRead, "list_linked_wallets")
 	add("security:write", ToolRiskHigh, "link_wallet", "unlink_wallet")
-	add("security:write", ToolRiskWrite, "request_wallet_challenge")
+	add("security:write", ToolRiskWrite, "link_email", "request_wallet_challenge")
+	add("billing:write", ToolRiskWrite, "activate_free_tier")
 
 	for _, name := range []string{"abort_vod_upload", "clear_playback_policy", "delete_clip", "delete_dvr", "delete_push_target", "delete_stream", "delete_stream_key", "delete_vod_asset", "execute_query", "manage_node", "refresh_stream_key", "reject_subscription_request", "reset_asset_retention", "revoke_cluster_invite", "revoke_signing_key", "set_playback_policy", "unlink_wallet", "unsubscribe_from_cluster", "update_cluster_marketplace"} {
 		policy := policies[name]

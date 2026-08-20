@@ -65,69 +65,6 @@ func TestPublicOrJWTAuthInvalidBody(t *testing.T) {
 	}
 }
 
-func TestApplyX402SessionHeadersSetsCookiesWithoutOrigin(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request, _ = http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", nil)
-
-	applyX402SessionHeaders(c, &AuthResult{
-		AuthType: "x402",
-		JWTToken: "token",
-		TenantID: "tenant",
-	})
-
-	if got := w.Header().Get("X-Access-Token"); got != "token" {
-		t.Fatalf("expected X-Access-Token header, got %q", got)
-	}
-	if cookies := w.Result().Cookies(); len(cookies) != 2 {
-		t.Fatalf("expected x402 session cookies for non-browser/same-site flow, got %d", len(cookies))
-	}
-}
-
-func TestApplyX402SessionHeadersSkipsCookiesForNonCredentialedCORS(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request, _ = http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", nil)
-	c.Request.Header.Set("Origin", "https://developer.example")
-
-	applyX402SessionHeaders(c, &AuthResult{
-		AuthType: "x402",
-		JWTToken: "token",
-		TenantID: "tenant",
-	})
-
-	if got := w.Header().Get("X-Access-Token"); got != "token" {
-		t.Fatalf("expected X-Access-Token header, got %q", got)
-	}
-	if cookies := w.Result().Cookies(); len(cookies) != 0 {
-		t.Fatalf("expected no cookies for non-credentialed CORS flow, got %d", len(cookies))
-	}
-}
-
-func TestApplyX402SessionHeadersSetsCookiesForCredentialedCORS(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request, _ = http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", nil)
-	c.Request.Header.Set("Origin", "https://chartroom.frameworks.network")
-	w.Header().Set("Access-Control-Allow-Credentials", "true")
-
-	applyX402SessionHeaders(c, &AuthResult{
-		AuthType: "x402",
-		JWTToken: "token",
-		TenantID: "tenant",
-	})
-
-	if cookies := w.Result().Cookies(); len(cookies) != 2 {
-		t.Fatalf("expected x402 session cookies for credentialed CORS flow, got %d", len(cookies))
-	}
-}
-
 func TestPublicOrJWTAuthRejectsUnauthenticatedMutation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

@@ -197,32 +197,6 @@ func TestApplyAuthToContextAPIToken(t *testing.T) {
 	}
 }
 
-func TestApplyAuthToContextX402(t *testing.T) {
-	expiresAt := time.Now().Add(5 * time.Minute)
-	ctx := ApplyAuthToContext(context.Background(), &AuthResult{
-		UserID:        "user-1",
-		TenantID:      "tenant-1",
-		AuthType:      "x402",
-		JWTToken:      "token",
-		ExpiresAt:     &expiresAt,
-		X402Processed: true,
-		X402AuthOnly:  true,
-	})
-
-	if ctx.Value(ctxkeys.KeyX402Processed) != true {
-		t.Fatal("expected x402 processed flag")
-	}
-	if ctx.Value(ctxkeys.KeyX402AuthOnly) != true {
-		t.Fatal("expected x402 auth-only flag")
-	}
-	if ctx.Value(ctxkeys.KeySessionToken) != "token" {
-		t.Fatalf("expected session token in context, got %#v", ctx.Value(ctxkeys.KeySessionToken))
-	}
-	if ctx.Value(ctxkeys.KeyJWTExpiresAt) == nil {
-		t.Fatal("expected expires at in context")
-	}
-}
-
 type fakeInternalService struct {
 	commodorepb.UnimplementedInternalServiceServer
 	validateResponse *commodorepb.ValidateAPITokenResponse

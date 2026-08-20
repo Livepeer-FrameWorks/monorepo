@@ -63,7 +63,7 @@ func TestHasPermission(t *testing.T) {
 		{name: "public allowlisted", ctx: context.WithValue(context.Background(), ctxkeys.KeyPublicAllowlisted, true), permission: "read", expected: true},
 		{name: "jwt auth", ctx: context.WithValue(context.Background(), ctxkeys.KeyAuthType, "jwt"), permission: "read", expected: true},
 		{name: "wallet auth", ctx: context.WithValue(context.Background(), ctxkeys.KeyAuthType, "wallet"), permission: "read", expected: true},
-		{name: "x402 auth", ctx: context.WithValue(context.Background(), ctxkeys.KeyAuthType, "x402"), permission: "read", expected: true},
+		{name: "x402 is not authentication", ctx: context.WithValue(context.Background(), ctxkeys.KeyAuthType, "x402"), permission: "read", expected: false},
 		{
 			name:       "api token with permission",
 			ctx:        context.WithValue(context.WithValue(context.Background(), ctxkeys.KeyAuthType, "api_token"), ctxkeys.KeyPermissions, []string{"read"}),

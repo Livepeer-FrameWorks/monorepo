@@ -237,6 +237,7 @@ func main() {
 	// connectionParams are processed later. Enforce the same public-operation
 	// boundary after InitFunc has resolved identity, then charge the operation.
 	gqlHandler.AroundOperations(middleware.GraphQLOperationAuth())
+	gqlHandler.AroundOperations(middleware.GraphQLOperationAccess(tenantCache))
 	gqlHandler.AroundOperations(middleware.GraphQLOperationRateLimit(rateLimiter, tenantCache.GetLimitsFunc()))
 
 	gqlHandler.AroundResponses(func(ctx context.Context, next graphql.ResponseHandler) *graphql.Response {

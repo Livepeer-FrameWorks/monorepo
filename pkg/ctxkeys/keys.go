@@ -30,12 +30,8 @@ const (
 	KeyPlatformOperator Key = "platform_operator"
 )
 
-// X402 context keys
-const (
-	KeyX402Processed Key = "x402_processed"
-	KeyX402AuthOnly  Key = "x402_auth_only"
-	KeyXPayment      Key = "x_payment"
-)
+// Payment context keys
+const KeyXPayment Key = "x_payment"
 
 // Request context keys
 const (
@@ -177,22 +173,6 @@ func GetJWTExpiresAt(ctx context.Context) (time.Time, bool) {
 // IsDemoMode checks if demo_mode is set in context.
 func IsDemoMode(ctx context.Context) bool {
 	if v, ok := ctx.Value(KeyDemoMode).(bool); ok {
-		return v
-	}
-	return false
-}
-
-// IsX402Processed checks if x402_processed is set in context.
-func IsX402Processed(ctx context.Context) bool {
-	if v, ok := ctx.Value(KeyX402Processed).(bool); ok {
-		return v
-	}
-	return false
-}
-
-// IsX402AuthOnly checks if x402_auth_only is set in context.
-func IsX402AuthOnly(ctx context.Context) bool {
-	if v, ok := ctx.Value(KeyX402AuthOnly).(bool); ok {
 		return v
 	}
 	return false

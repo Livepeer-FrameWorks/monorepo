@@ -160,7 +160,7 @@ func RequirePermission(ctx context.Context, permission string) error {
 	}
 
 	switch ctxkeys.GetAuthType(ctx) {
-	case "jwt", "wallet", "x402":
+	case "jwt", "wallet":
 		return nil
 	case "api_token":
 		for _, perm := range ctxkeys.GetPermissions(ctx) {

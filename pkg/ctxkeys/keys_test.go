@@ -57,8 +57,6 @@ func TestBoolGetters(t *testing.T) {
 		getter func(context.Context) bool
 	}{
 		{"IsDemoMode", KeyDemoMode, IsDemoMode},
-		{"IsX402Processed", KeyX402Processed, IsX402Processed},
-		{"IsX402AuthOnly", KeyX402AuthOnly, IsX402AuthOnly},
 		{"IsPublicAllowlisted", KeyPublicAllowlisted, IsPublicAllowlisted},
 		{"IsReadOnly", KeyReadOnly, IsReadOnly},
 	}

@@ -799,7 +799,7 @@ func TestValidateRelatedTenantIDs(t *testing.T) {
 	})
 
 	t.Run("allows related list for service calls", func(t *testing.T) {
-		if err := validateRelatedTenantIDs(context.Background(), []string{"tenant-b"}); err != nil {
+		if err := validateRelatedTenantIDs(serviceTestContext(), []string{"tenant-b"}); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})

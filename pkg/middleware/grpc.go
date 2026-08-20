@@ -284,9 +284,11 @@ func GetUserID(ctx context.Context) string {
 	return ctxkeys.GetUserID(ctx)
 }
 
-// IsServiceCall returns true if this is a service-to-service call (no user_id)
+// IsServiceCall reports whether the authentication interceptor validated the
+// configured service token. Absence of user/tenant identity is not proof of a
+// service call: an empty or directly constructed context must fail closed.
 func IsServiceCall(ctx context.Context) bool {
-	return ctxkeys.GetUserID(ctx) == "" && ctxkeys.GetTenantID(ctx) == ""
+	return ctxkeys.GetAuthType(ctx) == "service"
 }
 
 // shortMethodName returns the trailing component of a gRPC FullMethod

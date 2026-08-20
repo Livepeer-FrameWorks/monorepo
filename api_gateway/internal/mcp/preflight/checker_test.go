@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"frameworks/api_gateway/internal/clients/clientstest"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/accesspolicy"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 )
@@ -102,10 +103,20 @@ func TestCheckBalance(t *testing.T) {
 		t.Fatalf("postpaid → (%v,%v), want (nil,nil)", b, err)
 	}
 
+	// Free is intentionally collectible at EUR 0 and needs no provider setup.
+	c = checkerWith(&clientstest.FakePurser{
+		GetTenantBillingStatusFn: func(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {
+			return &purserpb.GetTenantBillingStatusResponse{BillingModel: "postpaid", TierName: "free"}, nil
+		},
+	})
+	if b, err := c.CheckBalance(ctxTenant("t1")); b != nil || err != nil {
+		t.Fatalf("Free postpaid → (%v,%v), want (nil,nil)", b, err)
+	}
+
 	// A postpaid label alone is not enough to authorize billable operations.
 	c = checkerWith(&clientstest.FakePurser{
 		GetTenantBillingStatusFn: func(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {
-			return &purserpb.GetTenantBillingStatusResponse{BillingModel: "postpaid"}, nil
+			return &purserpb.GetTenantBillingStatusResponse{BillingModel: "postpaid", TierName: "pro"}, nil
 		},
 	})
 	if b, err := c.CheckBalance(ctxTenant("t1")); err != nil || b == nil || b.Code != "PAYMENT_SETUP_REQUIRED" {
@@ -137,16 +148,26 @@ func TestGetBlockers(t *testing.T) {
 		t.Fatalf("no tenant → %v (%v)", bs, err)
 	}
 
-	// Incomplete billing → balance check is skipped (only the billing blocker).
+	// Billing details are not a global blocker. Rated work is blocked only by
+	// the actual zero prepaid balance.
 	c = checkerWith(&clientstest.FakePurser{
 		GetTenantBillingStatusFn: prepaidBillingStatus,
 		GetBillingDetailsFn: func(context.Context, string) (*purserpb.BillingDetails, error) {
 			return &purserpb.BillingDetails{IsComplete: false}, nil
 		},
+		GetPrepaidBalanceFn: func(context.Context, string, string) (*purserpb.PrepaidBalance, error) {
+			return &purserpb.PrepaidBalance{}, nil
+		},
+		GetPaymentRequirementsFn: func(context.Context, string, string) (*purserpb.PaymentRequirements, error) {
+			return &purserpb.PaymentRequirements{}, nil
+		},
 	})
 	bs, err = c.GetBlockers(ctxTenant("t1"))
-	if err != nil || len(bs) != 1 || bs[0].Code != "BILLING_DETAILS_MISSING" {
+	if err != nil || len(bs) != 1 || bs[0].Code != "INSUFFICIENT_BALANCE" {
 		t.Fatalf("incomplete billing → %v (%v)", bs, err)
+	}
+	if bs, err = c.GetOperationBlockers(ctxTenant("t1"), accesspolicy.Control); err != nil || len(bs) != 0 {
+		t.Fatalf("control operation should ignore billing profile and balance → %v (%v)", bs, err)
 	}
 
 	// Complete billing + sufficient balance → no blockers.

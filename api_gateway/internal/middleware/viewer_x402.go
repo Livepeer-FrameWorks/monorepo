@@ -100,6 +100,15 @@ func ViewerX402Middleware(serviceClients *clients.ServiceClients, logger logging
 				Resolution:    resolution,
 			})
 			if settleErr != nil {
+				if settleErr.Code == x402.ErrSettlementPending {
+					c.Header("Retry-After", "3")
+					c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
+						"error": "settlement_pending", "code": "SETTLEMENT_PENDING",
+						"message": settleErr.Message, "transaction": settleErr.TxHash,
+						"network": settleErr.Network, "retry_same_payment": true,
+					})
+					return
+				}
 				c.AbortWithStatusJSON(http.StatusPaymentRequired, viewerX402ErrorResponse(c.Request.Context(), serviceClients, tenantID, resourcePath, settleErr))
 				return
 			}
@@ -194,6 +203,16 @@ func buildViewer402ResponseWithHeader(ctx context.Context, serviceClients *clien
 
 	requirements, err := serviceClients.Purser.GetPaymentRequirements(ctx, tenantID, resourcePath)
 	if err != nil || requirements == nil {
+		return response, ""
+	}
+	if requirements.Error != "" {
+		response["message"] = requirements.Error
+		if requirements.ErrorCode != "" {
+			response["code"] = requirements.ErrorCode
+		}
+		if len(requirements.RequiredFields) > 0 {
+			response["required_fields"] = requirements.RequiredFields
+		}
 		return response, ""
 	}
 

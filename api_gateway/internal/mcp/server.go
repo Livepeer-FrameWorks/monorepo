@@ -21,6 +21,7 @@ import (
 	"frameworks/api_gateway/internal/mcp/tools"
 	"frameworks/api_gateway/internal/middleware"
 	"frameworks/api_gateway/internal/resolvers"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/accesspolicy"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
@@ -245,7 +246,7 @@ func (s *Server) HTTPHandler() http.Handler {
 		ctx := s.extractAuthContext(r)
 		r = r.WithContext(ctx)
 
-		if authType := ctxkeys.GetAuthType(ctx); authType == "wallet" || authType == "x402" {
+		if authType := ctxkeys.GetAuthType(ctx); authType == "wallet" {
 			if token := ctxkeys.GetJWTToken(ctx); token != "" {
 				w.Header().Set("X-Access-Token", token)
 			}
@@ -408,6 +409,16 @@ func (s *Server) registerAccessMiddleware() {
 					return nil, err
 				}
 			}
+			if xPayment != "" && method == "tools/call" && isSideEffectingMCPCall(opName) {
+				toolName := strings.TrimPrefix(opName, "mcp:tools/call:")
+				strategy, registered := accesspolicy.MCPX402MutationStrategy(toolName)
+				if registered && strategy != accesspolicy.X402OwnerIdempotency {
+					return nil, &jsonrpc.Error{
+						Code: -32015, Message: "x402 direct mutation execution unsupported",
+						Data: json.RawMessage(`{"code":"X402_MUTATION_DIRECT_EXECUTION_UNSUPPORTED","message":"use submit_payment to top up, then retry without the payment header"}`),
+					}
+				}
+			}
 
 			decision := middleware.EvaluateAccess(ctx, middleware.AccessRequest{
 				TenantID:          tenantID,
@@ -417,8 +428,6 @@ func (s *Server) registerAccessMiddleware() {
 				OperationName:     opName,
 				XPayment:          xPayment,
 				PublicAllowlisted: publicAllowlisted,
-				X402Processed:     ctxkeys.IsX402Processed(ctx),
-				X402AuthOnly:      ctxkeys.IsX402AuthOnly(ctx),
 			}, s.rateLimiter, s.tenantCache.GetLimitsFunc(), s.tenantCache, s.serviceClients.Purser, s.serviceClients.Purser, s.serviceClients.Commodore, s.logger)
 
 			if !decision.Allowed {
@@ -624,26 +633,49 @@ func (s *Server) executePaidMCPMutation(ctx context.Context, method, operation, 
 			Code: -32013, Message: "paid mutation in progress",
 			Data: json.RawMessage(`{"code":"PAID_MUTATION_IN_PROGRESS","retry_after_seconds":2}`),
 		}
+	case "operator_review":
+		return nil, &jsonrpc.Error{
+			Code: -32016, Message: "paid mutation requires operator review",
+			Data: json.RawMessage(`{"code":"PAID_MUTATION_OPERATOR_REVIEW","message":"do not execute the mutation again"}`),
+		}
 	case "claimed":
 		result, handlerErr := next(ctx, method, req)
 		encoded, encodeErr := encodeDurableMCPResult(result, handlerErr)
 		if encodeErr != nil {
 			return result, handlerErr
 		}
-		completeCtx, completeCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-		_, completeErr := s.serviceClients.Purser.CompleteX402MutationResult(completeCtx, &purserpb.CompleteX402MutationResultRequest{
+		if len(encoded) > maxMCPResultBytes {
+			encoded = []byte(`{"texts":["The original mutation completed but its response exceeded the durable replay limit; inspect the resource state."],"is_error":true}`)
+		}
+		completeErr := completePaidMCPMutationResult(s.serviceClients.Purser, &purserpb.CompleteX402MutationResultRequest{
 			TenantId: tenantID, QuoteId: payload.GetQuoteId(), IdempotencyKey: key,
 			RequestFingerprint: fingerprint, Result: encoded,
 			ContentType: "application/json", StatusCode: http.StatusOK,
 		})
-		completeCancel()
 		if completeErr != nil && s.logger != nil {
-			s.logger.WithError(completeErr).WithField("operation", operation).Error("Failed to persist paid MCP mutation result; claim left in progress")
+			s.logger.WithError(completeErr).WithField("operation", operation).Error("Failed to persist paid MCP mutation result after retries; claim will enter operator review")
 		}
 		return result, handlerErr
 	default:
 		return nil, &jsonrpc.Error{Code: -32014, Message: "invalid paid mutation claim state"}
 	}
+}
+
+type mutationResultCompleter interface {
+	CompleteX402MutationResult(context.Context, *purserpb.CompleteX402MutationResultRequest) (*purserpb.CompleteX402MutationResultResponse, error)
+}
+
+func completePaidMCPMutationResult(store mutationResultCompleter, req *purserpb.CompleteX402MutationResultRequest) error {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		completeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		_, lastErr = store.CompleteX402MutationResult(completeCtx, req)
+		cancel()
+		if lastErr == nil {
+			return nil
+		}
+	}
+	return lastErr
 }
 
 func mcpResultTextBytes(result mcp.Result) int {

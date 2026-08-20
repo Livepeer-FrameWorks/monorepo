@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/accesspolicy"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -178,11 +179,21 @@ func (rl *RateLimiter) Allow(tenantID string, limit, burst int) (allowed bool, r
 	return false, 0, resetSeconds
 }
 
-// BillingChecker provides billing status checks for the rate limit middleware
+// BillingAccessStatus is the one coherent billing snapshot used for an access
+// decision. Fetching its fields independently can mix cache generations and,
+// on lookup failure, used to turn an unknown tenant into implicit postpaid.
+type BillingAccessStatus struct {
+	BillingModel       string
+	TierName           string
+	CollectionReady    bool
+	CollectionProvider string
+	IsBalanceNegative  bool
+	IsSuspended        bool
+}
+
+// BillingChecker provides billing status checks for the rate limit middleware.
 type BillingChecker interface {
-	IsBalanceNegative(tenantID string) bool
-	IsSuspended(tenantID string) bool
-	GetBillingModel(tenantID string) string
+	GetBillingAccessStatus(tenantID string) (BillingAccessStatus, error)
 }
 
 // X402Provider provides x402 payment requirements for 402 responses
@@ -208,8 +219,6 @@ type AccessRequest struct {
 	OperationType     string
 	XPayment          string
 	PublicAllowlisted bool
-	X402Processed     bool
-	X402AuthOnly      bool
 
 	// RateLimitTenantID, when non-nil, is the CALLER's own identity used solely for
 	// the rate-limit bucket, decoupled from TenantID (which drives billing/owner
@@ -227,120 +236,6 @@ type AccessDecision struct {
 	Body        map[string]any
 	X402Settled bool
 	X402QuoteID string
-}
-
-// Operations that are ALWAYS allowed even with negative prepaid balance.
-// These are essential for users to check their status and top up.
-// Everything else returns 402 for prepaid accounts with balance <= 0.
-var prepaidAllowlist = map[string]bool{
-	// Balance & billing (must be able to check and top up)
-	"prepaidBalance":                true,
-	"balanceTransactionsConnection": true,
-	"createCardTopup":               true,
-	"createCryptoTopup":             true,
-	"billingDetails":                true,
-	"updateBillingDetails":          true,
-	"billingStatus":                 true,
-	"invoicesConnection":            true,
-	"billingTiers":                  true,
-	"mollieMandates":                true,
-	"cryptoTopupStatus":             true,
-	"createPayment":                 true,
-	"createStripeCheckout":          true,
-	"createStripeBillingPortal":     true,
-	"createMollieFirstPayment":      true,
-	"createMollieSubscription":      true,
-	"submitX402Payment":             true,
-	"changeBillingTier":             true,
-
-	// MCP billing/account tools/resources
-	"mcp:tools/call:update_billing_details":     true,
-	"mcp:tools/call:topup_balance":              true,
-	"mcp:tools/call:check_topup":                true,
-	"mcp:tools/call:pay_invoice":                true,
-	"mcp:tools/call:get_payment_options":        true,
-	"mcp:tools/call:submit_payment":             true,
-	"mcp:tools/call:get_tenant_settings":        true,
-	"mcp:tools/call:update_tenant_settings":     true,
-	"mcp:tools/call:list_linked_wallets":        true,
-	"mcp:tools/call:link_wallet":                true,
-	"mcp:tools/call:unlink_wallet":              true,
-	"mcp:tools/call:introspect_schema":          true,
-	"mcp:resources/read:account://status":       true,
-	"mcp:resources/read:billing://balance":      true,
-	"mcp:resources/read:billing://pricing":      true,
-	"mcp:resources/read:billing://transactions": true,
-	"mcp:resources/read:billing://invoices":     true,
-	"mcp:resources/read:billing://payments":     true,
-	"mcp:resources/read:billing://documents":    true,
-
-	// Account essentials (must be able to see/manage account)
-	"me":                        true,
-	"logout":                    true,
-	"tenant":                    true,
-	"linkEmail":                 true,
-	"promoteToPaid":             true,
-	"linkWallet":                true,
-	"unlinkWallet":              true,
-	"updateTenant":              true,
-	"developerTokensConnection": true,
-	"createDeveloperToken":      true,
-	"revokeDeveloperToken":      true,
-	"CreateAPIToken":            true,
-
-	// Non-rated control-plane configuration and cleanup. Admission to actual
-	// ingest, playback, processing, and storage work is enforced at the service
-	// boundary; creating metadata must not strand a new prepaid tenant.
-	"createStream":      true,
-	"updateStream":      true,
-	"deleteStream":      true,
-	"refreshStreamKey":  true,
-	"createStreamKey":   true,
-	"deleteStreamKey":   true,
-	"deleteClip":        true,
-	"stopDVR":           true,
-	"deleteDVR":         true,
-	"abortVodUpload":    true,
-	"deleteVodAsset":    true,
-	"createSigningKey":  true,
-	"revokeSigningKey":  true,
-	"setPlaybackPolicy": true,
-	"createPushTarget":  true,
-	"updatePushTarget":  true,
-	"deletePushTarget":  true,
-
-	// MCP control-plane configuration and cleanup mirrors GraphQL. Tools that
-	// create rated work intentionally remain blocked.
-	"mcp:tools/call:create_stream":         true,
-	"mcp:tools/call:update_stream":         true,
-	"mcp:tools/call:delete_stream":         true,
-	"mcp:tools/call:refresh_stream_key":    true,
-	"mcp:tools/call:list_stream_keys":      true,
-	"mcp:tools/call:create_stream_key":     true,
-	"mcp:tools/call:delete_stream_key":     true,
-	"mcp:tools/call:validate_stream_key":   true,
-	"mcp:tools/call:delete_clip":           true,
-	"mcp:tools/call:stop_dvr":              true,
-	"mcp:tools/call:delete_dvr":            true,
-	"mcp:tools/call:abort_vod_upload":      true,
-	"mcp:tools/call:delete_vod_asset":      true,
-	"mcp:tools/call:get_vod_upload_status": true,
-	"mcp:tools/call:list_push_targets":     true,
-	"mcp:tools/call:create_push_target":    true,
-	"mcp:tools/call:update_push_target":    true,
-	"mcp:tools/call:delete_push_target":    true,
-
-	// Introspection (for tooling)
-	"__schema": true,
-	"__type":   true,
-
-	// MCP core discovery
-	"mcp:initialize":               true,
-	"mcp:tools/list":               true,
-	"mcp:resources/list":           true,
-	"mcp:resources/templates/list": true,
-	"mcp:prompts/list":             true,
-	"mcp:prompts/get":              true,
 }
 
 // Suspended tenants get only the account and payment-recovery surface. This is
@@ -393,9 +288,8 @@ var suspendedRecoveryAllowlist = map[string]bool{
 	"mcp:resources/read:billing://documents":    true,
 }
 
-// RateLimitMiddlewareWithX402 creates a Gin middleware with full x402 support
-// Includes both billing checks, x402 payment requirements in 402 responses,
-// AND X-PAYMENT header handling for settling x402 payments
+// RateLimitMiddlewareWithX402 combines billing enforcement, payment
+// requirements, and x402 payment-signature settlement.
 func RateLimitMiddlewareWithX402(rl *RateLimiter, getLimits func(tenantID string) (limit, burst int), billingChecker BillingChecker, x402Provider X402Provider, x402Settler X402Settler, x402Resolver x402.CommodoreClient, tp *TrustedProxies) gin.HandlerFunc {
 	return rateLimitMiddlewareInternal(rl, getLimits, billingChecker, x402Provider, x402Settler, x402Resolver, tp)
 }
@@ -446,21 +340,9 @@ func rateLimitMiddlewareInternal(rl *RateLimiter, getLimits func(tenantID string
 		tenantID, _ := c.Get(string(ctxkeys.KeyTenantID))
 		tenantIDStr, _ := tenantID.(string)
 		publicAllowlisted := false
-		x402Processed := false
-		x402AuthOnly := false
 		if v, ok := c.Get(string(ctxkeys.KeyPublicAllowlisted)); ok {
 			if allowed, ok := v.(bool); ok {
 				publicAllowlisted = allowed
-			}
-		}
-		if v, ok := c.Get(string(ctxkeys.KeyX402Processed)); ok {
-			if processed, ok := v.(bool); ok {
-				x402Processed = processed
-			}
-		}
-		if v, ok := c.Get(string(ctxkeys.KeyX402AuthOnly)); ok {
-			if authOnly, ok := v.(bool); ok {
-				x402AuthOnly = authOnly
 			}
 		}
 		access := extractGraphQLAccess(c)
@@ -474,6 +356,16 @@ func rateLimitMiddlewareInternal(rl *RateLimiter, getLimits func(tenantID string
 				resourcePath = resource
 			} else {
 				resourcePath = "graphql://" + opName
+			}
+		}
+		if GetX402PaymentHeader(c.Request) != "" && access.OperationType == "mutation" {
+			strategy, registered := accesspolicy.GraphQLX402MutationStrategy(opName)
+			if !registered || strategy != accesspolicy.X402OwnerIdempotency {
+				c.AbortWithStatusJSON(http.StatusConflict, gin.H{
+					"error": "x402_mutation_requires_topup", "code": "X402_MUTATION_DIRECT_EXECUTION_UNSUPPORTED",
+					"message": "this mutation does not yet have owner-level idempotency; use x402 to top up, then retry without the payment header",
+				})
+				return
 			}
 		}
 
@@ -495,8 +387,6 @@ func rateLimitMiddlewareInternal(rl *RateLimiter, getLimits func(tenantID string
 			OperationType:     access.OperationType,
 			XPayment:          GetX402PaymentHeader(c.Request),
 			PublicAllowlisted: publicAllowlisted,
-			X402Processed:     x402Processed,
-			X402AuthOnly:      x402AuthOnly,
 		}, rl, getLimits, billingChecker, x402Provider, x402Settler, x402Resolver, rl.config.Logger)
 
 		for key, value := range decision.Headers {
@@ -539,7 +429,7 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 	headers := map[string]string{}
 	tenantIDStr := tenantID
 	isPublic := isPublicTenant(tenantIDStr)
-	x402Processed := req.X402Processed && !req.X402AuthOnly
+	x402Processed := false
 	x402Settled := false
 	x402QuoteID := ""
 
@@ -556,7 +446,7 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 	}
 	rlIsPublic := isPublicTenant(rlTenant)
 
-	if req.XPayment != "" && x402Settler != nil && !req.X402Processed {
+	if req.XPayment != "" && x402Settler != nil {
 		settleResult, settleErr := x402.SettleX402Payment(ctx, x402.SettlementOptions{
 			PaymentHeader:          req.XPayment,
 			Resource:               req.Path,
@@ -568,6 +458,19 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 			Logger:                 logger,
 		})
 		if settleErr != nil {
+			if settleErr.Code == x402.ErrSettlementPending {
+				headers["Retry-After"] = "3"
+				return AccessDecision{
+					Allowed: false,
+					Status:  http.StatusServiceUnavailable,
+					Body: map[string]any{
+						"error": "settlement_pending", "code": "SETTLEMENT_PENDING",
+						"message": settleErr.Message, "transaction": settleErr.TxHash,
+						"network": settleErr.Network, "retry_same_payment": true,
+					},
+					Headers: headers,
+				}
+			}
 			if settleErr.Code == x402.ErrBillingDetailsRequired {
 				return AccessDecision{
 					Allowed: false,
@@ -577,7 +480,7 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 						"message":         settleErr.Message,
 						"code":            "BILLING_DETAILS_REQUIRED",
 						"topup_url":       "/account/billing",
-						"required_fields": []string{"email", "street", "city", "postal_code", "country"},
+						"required_fields": []string{"name", "email", "street", "city", "postal_code", "country"},
 					},
 					Headers: headers,
 				}
@@ -592,7 +495,7 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 				Body: map[string]any{
 					"error":     "payment_failed",
 					"message":   message,
-					"code":      "X402_PAYMENT_FAILED",
+					"code":      settleErr.MachineCode(),
 					"topup_url": "/account/billing",
 				},
 				Headers: headers,
@@ -627,8 +530,11 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 
 	if !isPublic {
 		billingModel := ""
+		tierName := ""
+		collectionReady := false
 		isBalanceNegative := false
 		isSuspended := false
+		unfundedAllowed, accessClassKnown := requestAllowedWithoutFunds(req)
 
 		if x402Processed {
 			if x402Settler == nil {
@@ -647,16 +553,47 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 				return billingStatusUnavailableDecision(headers)
 			}
 			billingModel = freshStatus.GetBillingModel()
+			tierName = freshStatus.GetTierName()
+			collectionReady = freshStatus.GetCollectionReady()
 			isBalanceNegative = freshStatus.GetIsBalanceNegative()
 			isSuspended = freshStatus.GetIsSuspended()
 		} else if billingChecker != nil {
-			billingModel = billingChecker.GetBillingModel(tenantIDStr)
-			isBalanceNegative = billingChecker.IsBalanceNegative(tenantIDStr)
-			isSuspended = billingChecker.IsSuspended(tenantIDStr)
+			status, err := billingChecker.GetBillingAccessStatus(tenantIDStr)
+			if err != nil {
+				if logger != nil {
+					logger.WithFields(logging.Fields{
+						"tenant_id": tenantIDStr,
+						"operation": req.OperationName,
+						"error":     err,
+					}).Warn("Failed to resolve billing status")
+				}
+				// Billing dependency failure must never create implicit postpaid
+				// access to rated work. Reads and safe control remain usable.
+				if !accessClassKnown || !unfundedAllowed {
+					return billingStatusUnavailableDecision(headers)
+				}
+			} else {
+				billingModel = status.BillingModel
+				tierName = status.TierName
+				collectionReady = status.CollectionReady
+				isBalanceNegative = status.IsBalanceNegative
+				isSuspended = status.IsSuspended
+			}
 		}
 
 		blockedBySuspension := isSuspended && !suspendedRequestAllowed(req)
-		blockedByBalance := billingModel == "prepaid" && isBalanceNegative && !prepaidRequestAllowed(req)
+		if billingModel == "prepaid" && isBalanceNegative && !accessClassKnown {
+			return accessPolicyUnavailableDecision(headers, req)
+		}
+		blockedByBalance := billingModel == "prepaid" && isBalanceNegative && !unfundedAllowed
+		if billingModel == "postpaid" && !unfundedAllowed {
+			if tierName == "" {
+				return billingStatusUnavailableDecision(headers)
+			}
+			if !strings.EqualFold(tierName, "free") && !collectionReady {
+				return postpaidCollectionRequiredDecision(headers)
+			}
+		}
 		if blockedBySuspension || blockedByBalance {
 			if logger != nil {
 				logger.WithFields(logging.Fields{
@@ -847,25 +784,35 @@ func handlePaidHTTPMutationIdempotency(c *gin.Context, store X402Settler, tenant
 			"message": "the paid mutation outcome is still being recorded; retry with the same key",
 		})
 		return true
+	case "operator_review":
+		c.AbortWithStatusJSON(http.StatusConflict, gin.H{
+			"error": "paid_mutation_operator_review", "code": "PAID_MUTATION_OPERATOR_REVIEW",
+			"message": "the mutation outcome is ambiguous and is being reviewed; do not execute it again",
+		})
+		return true
 	case "claimed":
 		capture := &paidMutationCaptureWriter{ResponseWriter: c.Writer}
 		c.Writer = capture
 		c.Next()
 		if capture.overflow {
+			envelope := []byte(`{"error":"paid_mutation_result_not_replayable","code":"PAID_MUTATION_RESULT_NOT_REPLAYABLE","message":"the original mutation completed but its response exceeded the durable replay limit; inspect the resource state"}`)
+			_ = completePaidMutationResult(store, &purserpb.CompleteX402MutationResultRequest{
+				TenantId: tenantID, QuoteId: quoteID, IdempotencyKey: key,
+				RequestFingerprint: fingerprint, Result: envelope,
+				ContentType: "application/json", StatusCode: http.StatusConflict,
+			})
 			if logger != nil {
-				logger.WithField("operation", operation).Error("Paid mutation response exceeded durable replay limit; claim left in progress")
+				logger.WithField("operation", operation).Warn("Paid mutation response exceeded durable replay limit; stored non-replayable terminal envelope")
 			}
 			return true
 		}
-		completeCtx, completeCancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 3*time.Second)
-		_, completeErr := store.CompleteX402MutationResult(completeCtx, &purserpb.CompleteX402MutationResultRequest{
+		completeErr := completePaidMutationResult(store, &purserpb.CompleteX402MutationResultRequest{
 			TenantId: tenantID, QuoteId: quoteID, IdempotencyKey: key,
 			RequestFingerprint: fingerprint, Result: capture.body.Bytes(),
 			ContentType: c.Writer.Header().Get("Content-Type"), StatusCode: int32(c.Writer.Status()),
 		})
-		completeCancel()
 		if completeErr != nil && logger != nil {
-			logger.WithError(completeErr).WithField("operation", operation).Error("Failed to persist paid mutation result; claim left in progress")
+			logger.WithError(completeErr).WithField("operation", operation).Error("Failed to persist paid mutation result after retries; claim will enter operator review")
 		}
 		return true
 	default:
@@ -874,14 +821,54 @@ func handlePaidHTTPMutationIdempotency(c *gin.Context, store X402Settler, tenant
 	}
 }
 
+func completePaidMutationResult(store X402Settler, req *purserpb.CompleteX402MutationResultRequest) error {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		completeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		_, lastErr = store.CompleteX402MutationResult(completeCtx, req)
+		cancel()
+		if lastErr == nil {
+			return nil
+		}
+	}
+	return lastErr
+}
+
 func billingStatusUnavailableDecision(headers map[string]string) AccessDecision {
 	return AccessDecision{
 		Allowed: false,
 		Status:  http.StatusServiceUnavailable,
 		Body: map[string]any{
 			"error":   "billing_status_unavailable",
-			"message": "payment was processed but the updated balance could not be verified; retry safely",
+			"message": "billing status is temporarily unavailable; rated work was not started, retry safely",
 			"code":    "BILLING_STATUS_UNAVAILABLE",
+		},
+		Headers: headers,
+	}
+}
+
+func accessPolicyUnavailableDecision(headers map[string]string, req AccessRequest) AccessDecision {
+	return AccessDecision{
+		Allowed: false,
+		Status:  http.StatusServiceUnavailable,
+		Body: map[string]any{
+			"error":     "access_policy_unclassified",
+			"message":   "operation access policy is unavailable; no rated work was started",
+			"code":      "ACCESS_POLICY_UNCLASSIFIED",
+			"operation": req.OperationName,
+		},
+		Headers: headers,
+	}
+}
+
+func postpaidCollectionRequiredDecision(headers map[string]string) AccessDecision {
+	return AccessDecision{
+		Allowed: false,
+		Status:  http.StatusPaymentRequired,
+		Body: map[string]any{
+			"error":   "payment_setup_required",
+			"message": "confirmed Stripe or Mollie collection setup is required for this paid tier",
+			"code":    "PAYMENT_SETUP_REQUIRED",
 		},
 		Headers: headers,
 	}
@@ -966,6 +953,16 @@ func build402ResponseWithHeader(ctx context.Context, tenantID, operationName, re
 			}
 			// Continue without x402 - human flow still works
 		} else if requirements != nil {
+			if requirements.Error != "" {
+				response["message"] = requirements.Error
+				if requirements.ErrorCode != "" {
+					response["code"] = requirements.ErrorCode
+				}
+				if len(requirements.RequiredFields) > 0 {
+					response["required_fields"] = requirements.RequiredFields
+				}
+				return response, ""
+			}
 			response["x402Version"] = requirements.X402Version
 
 			// Convert accepts to map slice
@@ -1013,8 +1010,6 @@ func build402ResponseWithHeader(ctx context.Context, tenantID, operationName, re
 	return response, ""
 }
 
-// handleX402Payment parses and settles an x402 payment from the X-PAYMENT header
-// The header contains a base64-encoded JSON payload per the x402 spec
 // extractGraphQLRequest reads the operationName + variables from a GraphQL request body.
 // Returns empty values if not found or on error.
 func extractGraphQLRequest(c *gin.Context) (string, map[string]interface{}) {
@@ -1050,34 +1045,30 @@ func extractGraphQLAccess(c *gin.Context) graphqlAccess {
 	}
 }
 
-func prepaidRequestAllowed(req AccessRequest) bool {
-	// Authenticated GraphQL reads are non-rated control-plane access. Request
-	// throttling and query complexity limits remain independent abuse controls.
-	if req.OperationType == "query" {
-		return true
+func requestAllowedWithoutFunds(req AccessRequest) (allowed, classified bool) {
+	if req.OperationType == "query" || req.OperationType == "subscription" {
+		return true, true
 	}
 	names := req.OperationNames
 	if len(names) == 0 && req.OperationName != "" {
 		names = []string{req.OperationName}
 	}
 	if len(names) == 0 {
-		return false
+		return false, false
 	}
 	for _, name := range names {
-		if !prepaidOperationAllowed(name) {
-			return false
+		class, ok := accesspolicy.OperationClass(req.OperationType, name)
+		if !ok {
+			return false, false
 		}
+		if !class.UnfundedAllowed() {
+			allowed = false
+		} else if !classified {
+			allowed = true
+		}
+		classified = true
 	}
-	return true
-}
-
-func prepaidOperationAllowed(name string) bool {
-	if prepaidAllowlist[name] {
-		return true
-	}
-	return strings.HasPrefix(name, "mcp:resources/read:billing://invoices/") ||
-		strings.HasPrefix(name, "mcp:resources/read:billing://payments/") ||
-		strings.HasPrefix(name, "mcp:resources/read:billing://documents/")
+	return allowed, classified
 }
 
 func suspendedRequestAllowed(req AccessRequest) bool {
@@ -1224,12 +1215,16 @@ type TenantValidator interface {
 
 // TenantRateLimits holds cached rate limit and billing info for a tenant
 type TenantRateLimits struct {
-	Limit             int
-	Burst             int
-	BillingModel      string // "postpaid" or "prepaid"
-	IsSuspended       bool   // true if tenant suspended (balance < -$10)
-	IsBalanceNegative bool   // true if balance <= 0 (should return 402)
-	FetchedAt         time.Time
+	Limit                    int
+	Burst                    int
+	BillingModel             string // "postpaid" or "prepaid"
+	TierName                 string
+	CollectionReady          bool
+	CollectionProvider       string
+	BillingStatusUnavailable bool
+	IsSuspended              bool // true if tenant suspended (balance < -$10)
+	IsBalanceNegative        bool // true if balance <= 0 (should return 402)
+	FetchedAt                time.Time
 }
 
 // TenantCache caches tenant rate limits from Quartermaster
@@ -1253,15 +1248,15 @@ func NewTenantCache(client TenantValidator, logger logging.Logger) *TenantCache 
 
 // GetLimits returns the rate limits for a tenant, fetching from Quartermaster if not cached
 func (tc *TenantCache) GetLimits(tenantID string) (limit, burst int) {
-	info := tc.getTenantInfo(tenantID)
+	info, _ := tc.getTenantInfo(tenantID)
 	if info == nil {
 		return 0, 0
 	}
 	return info.Limit, info.Burst
 }
 
-// getTenantInfo returns cached tenant info, fetching from Quartermaster if stale/missing
-func (tc *TenantCache) getTenantInfo(tenantID string) *TenantRateLimits {
+// getTenantInfo returns cached tenant info, fetching from Quartermaster if stale/missing.
+func (tc *TenantCache) getTenantInfo(tenantID string) (*TenantRateLimits, error) {
 	// Check cache first
 	if cached, ok := tc.cache.Load(tenantID); ok {
 		limits := cached.(*TenantRateLimits) //nolint:errcheck // type guaranteed by sync.Map usage
@@ -1271,7 +1266,7 @@ func (tc *TenantCache) getTenantInfo(tenantID string) *TenantRateLimits {
 			ttl = tc.cacheTTLPrepaid
 		}
 		if time.Since(limits.FetchedAt) < ttl {
-			return limits
+			return limits, nil
 		}
 	}
 
@@ -1287,57 +1282,50 @@ func (tc *TenantCache) getTenantInfo(tenantID string) *TenantRateLimits {
 				"error":     err,
 			}).Warn("Failed to fetch tenant info from Quartermaster")
 		}
-		return nil
+		return nil, fmt.Errorf("validate tenant: %w", err)
 	}
 
 	if resp == nil || !resp.Valid {
-		return nil
+		return nil, fmt.Errorf("tenant %q was not valid", tenantID)
 	}
 
 	// Cache the result with billing info
 	limits := &TenantRateLimits{
-		Limit:             int(resp.RateLimitPerMinute),
-		Burst:             int(resp.RateLimitBurst),
-		BillingModel:      resp.BillingModel,
-		IsSuspended:       resp.IsSuspended,
-		IsBalanceNegative: resp.IsBalanceNegative,
-		FetchedAt:         time.Now(),
+		Limit:                    int(resp.RateLimitPerMinute),
+		Burst:                    int(resp.RateLimitBurst),
+		BillingModel:             resp.BillingModel,
+		TierName:                 resp.TierName,
+		CollectionReady:          resp.CollectionReady,
+		CollectionProvider:       resp.CollectionProvider,
+		BillingStatusUnavailable: resp.BillingStatusUnavailable,
+		IsSuspended:              resp.IsSuspended,
+		IsBalanceNegative:        resp.IsBalanceNegative,
+		FetchedAt:                time.Now(),
 	}
 	tc.cache.Store(tenantID, limits)
 
-	return limits
+	return limits, nil
 }
 
-// IsTenantSuspended checks if a tenant is suspended (balance < -$10)
-func (tc *TenantCache) IsTenantSuspended(tenantID string) bool {
-	info := tc.getTenantInfo(tenantID)
-	if info == nil {
-		return false // Fail open - don't block on lookup failure
+// GetBillingAccessStatus returns one coherent snapshot. Lookup failure is
+// explicit so callers can keep safe control available without accidentally
+// admitting rated work as postpaid.
+func (tc *TenantCache) GetBillingAccessStatus(tenantID string) (BillingAccessStatus, error) {
+	info, err := tc.getTenantInfo(tenantID)
+	if err != nil {
+		return BillingAccessStatus{}, err
 	}
-	return info.IsSuspended
-}
-
-// IsSuspended implements BillingChecker interface
-func (tc *TenantCache) IsSuspended(tenantID string) bool {
-	return tc.IsTenantSuspended(tenantID)
-}
-
-// IsBalanceNegative checks if a tenant's balance is <= 0 (should return 402)
-func (tc *TenantCache) IsBalanceNegative(tenantID string) bool {
-	info := tc.getTenantInfo(tenantID)
-	if info == nil {
-		return false // Fail open - don't block on lookup failure
+	if info.BillingStatusUnavailable {
+		return BillingAccessStatus{}, fmt.Errorf("billing authority unavailable for tenant %q", tenantID)
 	}
-	return info.IsBalanceNegative
-}
-
-// GetBillingModel returns the billing model for a tenant ("postpaid" or "prepaid")
-func (tc *TenantCache) GetBillingModel(tenantID string) string {
-	info := tc.getTenantInfo(tenantID)
-	if info == nil {
-		return "postpaid" // Default to postpaid
-	}
-	return info.BillingModel
+	return BillingAccessStatus{
+		BillingModel:       info.BillingModel,
+		TierName:           info.TierName,
+		CollectionReady:    info.CollectionReady,
+		CollectionProvider: info.CollectionProvider,
+		IsBalanceNegative:  info.IsBalanceNegative,
+		IsSuspended:        info.IsSuspended,
+	}, nil
 }
 
 // GetLimitsFunc returns a function suitable for use with RateLimitMiddleware

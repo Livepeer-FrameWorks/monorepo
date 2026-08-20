@@ -107,7 +107,7 @@ func handleCreateVodUpload(ctx context.Context, args CreateVodUploadInput, resol
 		return nil, nil, mcperrors.AuthRequired()
 	}
 
-	// Pre-flight: require positive balance
+	// Rated work requires funded prepaid credit or eligible postpaid admission.
 	if err := checker.RequireBalance(ctx); err != nil {
 		if pfe, ok := preflight.IsPreflightError(err); ok {
 			return toolErrorWithResolution(pfe.Blocker)
@@ -199,7 +199,7 @@ func handleCompleteVodUpload(ctx context.Context, args CompleteVodUploadInput, r
 		return nil, nil, mcperrors.AuthRequired()
 	}
 
-	// Pre-flight: require positive balance
+	// Rated work requires funded prepaid credit or eligible postpaid admission.
 	if err := checker.RequireBalance(ctx); err != nil {
 		if pfe, ok := preflight.IsPreflightError(err); ok {
 			return toolErrorWithResolution(pfe.Blocker)
@@ -323,7 +323,7 @@ func handleDeleteVodAsset(ctx context.Context, args DeleteVodAssetInput, resolve
 		return nil, nil, mcperrors.AuthRequired()
 	}
 
-	// Pre-flight: require positive balance
+	// Rated work requires funded prepaid credit or eligible postpaid admission.
 	if err := checker.RequireBalance(ctx); err != nil {
 		if pfe, ok := preflight.IsPreflightError(err); ok {
 			return toolErrorWithResolution(pfe.Blocker)

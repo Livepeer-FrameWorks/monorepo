@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"frameworks/api_gateway/internal/middleware"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/accesspolicy"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -13,8 +14,9 @@ import (
 )
 
 type mcpResourcePolicy struct {
-	Scope  string
-	Public bool
+	Scope       string
+	AccessClass accesspolicy.Class
+	Public      bool
 }
 
 var mcpResourcePrefixes = []struct {
@@ -35,28 +37,28 @@ var mcpResourcePrefixes = []struct {
 func resourcePolicyForURI(uri string) (mcpResourcePolicy, bool) {
 	switch uri {
 	case "account://status":
-		return mcpResourcePolicy{Scope: "account:read", Public: true}, true
+		return mcpResourcePolicy{Scope: "account:read", AccessClass: accesspolicy.Read, Public: true}, true
 	case "billing://pricing":
-		return mcpResourcePolicy{Scope: "billing:read", Public: true}, true
+		return mcpResourcePolicy{Scope: "billing:read", AccessClass: accesspolicy.Read, Public: true}, true
 	case "clusters://marketplace":
-		return mcpResourcePolicy{Scope: "infrastructure:read", Public: true}, true
+		return mcpResourcePolicy{Scope: "infrastructure:read", AccessClass: accesspolicy.Read, Public: true}, true
 	case "billing://balance", "billing://transactions", "billing://invoices", "billing://payments", "billing://documents":
-		return mcpResourcePolicy{Scope: "billing:read"}, true
+		return mcpResourcePolicy{Scope: "billing:read", AccessClass: accesspolicy.Read}, true
 	case "clusters://list":
-		return mcpResourcePolicy{Scope: "infrastructure:read"}, true
+		return mcpResourcePolicy{Scope: "infrastructure:read", AccessClass: accesspolicy.Read}, true
 	case "knowledge://sources":
-		return mcpResourcePolicy{Scope: "consultant:use"}, true
+		return mcpResourcePolicy{Scope: "consultant:use", AccessClass: accesspolicy.Read}, true
 	case "schema://catalog":
-		return mcpResourcePolicy{Scope: "developer:read"}, true
+		return mcpResourcePolicy{Scope: "developer:read", AccessClass: accesspolicy.Read}, true
 	case "streams://list", "vod://list":
-		return mcpResourcePolicy{Scope: "streams:read"}, true
+		return mcpResourcePolicy{Scope: "streams:read", AccessClass: accesspolicy.Read}, true
 	case "support://conversations":
-		return mcpResourcePolicy{Scope: "support:read"}, true
+		return mcpResourcePolicy{Scope: "support:read", AccessClass: accesspolicy.Read}, true
 	}
 
 	for _, candidate := range mcpResourcePrefixes {
 		if strings.HasPrefix(uri, candidate.Prefix) && len(uri) > len(candidate.Prefix) {
-			return mcpResourcePolicy{Scope: candidate.Scope}, true
+			return mcpResourcePolicy{Scope: candidate.Scope, AccessClass: accesspolicy.Read}, true
 		}
 	}
 

@@ -1,13 +1,14 @@
-// Package preflight provides pre-flight checks for MCP tool execution.
-// It validates billing details, balance, and rate limits before allowing billable operations.
+// Package preflight provides operation-aware checks for MCP tool execution.
 package preflight
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"frameworks/api_gateway/internal/clients"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/accesspolicy"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -46,39 +47,39 @@ func NewChecker(clients *clients.ServiceClients, logger logging.Logger) *Checker
 	}
 }
 
-// GetBlockers returns all blockers preventing billable operations.
+// GetBlockers returns blockers for rated work. It intentionally does not make
+// billing-profile completeness a session-wide prerequisite.
 func (c *Checker) GetBlockers(ctx context.Context) ([]Blocker, error) {
-	var blockers []Blocker
+	return c.GetOperationBlockers(ctx, accesspolicy.Rated)
+}
 
+// GetOperationBlockers returns the blockers relevant to one access class.
+func (c *Checker) GetOperationBlockers(ctx context.Context, class accesspolicy.Class) ([]Blocker, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		blockers = append(blockers, Blocker{
+		return []Blocker{{
 			Code:       "AUTHENTICATION_REQUIRED",
 			Message:    "Not authenticated",
 			Resolution: "Connect with wallet signature or API token",
-		})
-		return blockers, nil
+		}}, nil
+	}
+	if class.UnfundedAllowed() {
+		return nil, nil
 	}
 
-	// Check billing details
-	billingBlocker, err := c.CheckBillingDetails(ctx)
+	balanceBlocker, err := c.CheckBalance(ctx)
 	if err != nil {
-		c.logger.WithError(err).Warn("Failed to check billing details")
-	} else if billingBlocker != nil {
-		blockers = append(blockers, *billingBlocker)
+		c.logger.WithError(err).Warn("Failed to check rated-work billing status")
+		return []Blocker{{
+			Code:       "BILLING_STATUS_UNAVAILABLE",
+			Message:    "Billing status is temporarily unavailable",
+			Resolution: "Retry the rated operation safely",
+		}}, nil
 	}
-
-	// Check balance (only if billing details are complete)
-	if billingBlocker == nil {
-		balanceBlocker, err := c.CheckBalance(ctx)
-		if err != nil {
-			c.logger.WithError(err).Warn("Failed to check balance")
-		} else if balanceBlocker != nil {
-			blockers = append(blockers, *balanceBlocker)
-		}
+	if balanceBlocker == nil {
+		return nil, nil
 	}
-
-	return blockers, nil
+	return []Blocker{*balanceBlocker}, nil
 }
 
 // CheckBillingDetails checks if billing details are complete.
@@ -95,7 +96,7 @@ func (c *Checker) CheckBillingDetails(ctx context.Context) (*Blocker, error) {
 		c.logger.WithError(err).Debug("Failed to get billing details, treating as incomplete")
 		return &Blocker{
 			Code:       "BILLING_DETAILS_MISSING",
-			Message:    "Billing details required before any payments",
+			Message:    "Billing details are required for paid postpaid setup and full customer invoices",
 			Resolution: "Call update_billing_details tool with address, city, postal code, and country",
 			Tool:       "update_billing_details",
 			Required:   []string{"address_line1", "city", "postal_code", "country"},
@@ -128,7 +129,7 @@ func (c *Checker) CheckBalance(ctx context.Context) (*Blocker, error) {
 		return nil, fmt.Errorf("failed to get billing status: %w", err)
 	}
 	if billingStatus.GetBillingModel() == "postpaid" {
-		if billingStatus.GetCollectionReady() {
+		if strings.EqualFold(billingStatus.GetTierName(), "free") || billingStatus.GetCollectionReady() {
 			return nil, nil
 		}
 		return &Blocker{
@@ -236,40 +237,21 @@ func IsPreflightError(err error) (*PreflightError, bool) {
 
 // GetCapabilities returns what operations the tenant can perform right now.
 func (c *Checker) GetCapabilities(ctx context.Context) map[string]bool {
-	caps := map[string]bool{
-		"read_streams":              true, // Free reads always work
-		"read_analytics":            true,
-		"read_billing":              true,
-		"read_vod":                  true,
-		"update_billing_details":    true, // Always allowed
-		"resolve_playback_endpoint": true, // Free
-		"validate_stream_key":       true, // Free
-		"topup_balance":             true, // Always allowed - need it to get balance
-		"create_stream":             false,
-		"update_stream":             false,
-		"delete_stream":             false,
-		"create_clip":               false,
-		"start_dvr":                 false,
-		"create_vod_upload":         false,
-		"complete_vod_upload":       false,
-		"delete_vod_asset":          false,
+	caps := make(map[string]bool)
+	for name, class := range accesspolicy.MCPToolClasses() {
+		caps[name] = class.UnfundedAllowed()
 	}
 
-	// Check balance only - billing details enforced at payment time, not here
+	// Billing/tax details are evaluated by the selected payment path, not as a
+	// prerequisite for discovery or control-plane tools.
 	balanceBlocker, err := c.CheckBalance(ctx)
 	if err != nil || balanceBlocker != nil {
-		return caps // Balance required for billable ops
+		return caps
 	}
 
-	// Balance OK - enable all operations
-	caps["create_stream"] = true
-	caps["update_stream"] = true
-	caps["delete_stream"] = true
-	caps["create_clip"] = true
-	caps["start_dvr"] = true
-	caps["create_vod_upload"] = true
-	caps["complete_vod_upload"] = true
-	caps["delete_vod_asset"] = true
+	for name := range caps {
+		caps[name] = true
+	}
 
 	return caps
 }

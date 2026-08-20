@@ -25,8 +25,6 @@ type AuthResult struct {
 	APIToken      string
 	WalletAddress string
 	ExpiresAt     *time.Time
-	X402Processed bool
-	X402AuthOnly  bool
 	Permissions   []string
 	// PlatformOperator is the platform staff grant, carried from the verified
 	// token (roles claim) or the validated credential response.
@@ -169,13 +167,6 @@ func ApplyAuthToContext(ctx context.Context, auth *AuthResult) context.Context {
 	}
 	if auth.WalletAddress != "" {
 		ctx = context.WithValue(ctx, ctxkeys.KeyWalletAddr, auth.WalletAddress)
-	}
-	if auth.AuthType == "x402" {
-		ctx = context.WithValue(ctx, ctxkeys.KeyX402Processed, auth.X402Processed)
-		ctx = context.WithValue(ctx, ctxkeys.KeyX402AuthOnly, auth.X402AuthOnly)
-		if auth.JWTToken != "" {
-			ctx = context.WithValue(ctx, ctxkeys.KeySessionToken, auth.JWTToken)
-		}
 	}
 	if auth.AuthType == "api_token" {
 		tokenID := auth.TokenID

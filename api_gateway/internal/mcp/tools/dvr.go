@@ -21,7 +21,7 @@ func RegisterDVRTools(server *mcp.Server, clients *clients.ServiceClients, resol
 	addTool(server,
 		&mcp.Tool{
 			Name:        "start_dvr",
-			Description: "Start DVR (catch-up/time-shift) recording for a stream. Requires positive balance.",
+			Description: "Start DVR (catch-up/time-shift) recording for a stream. Requires funded prepaid credit or an eligible Free/collectible postpaid account.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args StartDVRInput) (*mcp.CallToolResult, any, error) {
 			return handleStartDVR(ctx, args, clients, checker, logger)
@@ -72,7 +72,7 @@ func handleStartDVR(ctx context.Context, args StartDVRInput, clients *clients.Se
 		return nil, nil, mcperrors.AuthRequired()
 	}
 
-	// Pre-flight: require positive balance
+	// Rated work requires funded prepaid credit or eligible postpaid admission.
 	if err := checker.RequireBalance(ctx); err != nil {
 		if pfe, ok := preflight.IsPreflightError(err); ok {
 			return toolErrorWithResolution(pfe.Blocker)

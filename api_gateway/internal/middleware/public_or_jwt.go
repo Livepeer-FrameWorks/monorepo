@@ -6,11 +6,9 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"frameworks/api_gateway/internal/clients"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/x402"
 
@@ -158,16 +156,6 @@ func PublicOrJWTAuth(secret []byte, serviceClients *clients.ServiceClients) gin.
 			AllowWallet:  true,
 		}, nil)
 		if err != nil {
-			if GetX402PaymentHeader(c.Request) != "" {
-				c.JSON(http.StatusPaymentRequired, gin.H{
-					"error":     "payment_failed",
-					"message":   err.Error(),
-					"code":      "X402_PAYMENT_FAILED",
-					"topup_url": "/account/billing",
-				})
-				c.Abort()
-				return
-			}
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication failed"})
 			c.Abort()
 			return
@@ -178,20 +166,12 @@ func PublicOrJWTAuth(secret []byte, serviceClients *clients.ServiceClients) gin.
 			return
 		}
 
-		if authResult.AuthType == "x402" && authResult.JWTToken != "" {
-			applyX402SessionHeaders(c, authResult)
-		}
-
 		c.Set(string(ctxkeys.KeyUserID), authResult.UserID)
 		c.Set(string(ctxkeys.KeyTenantID), authResult.TenantID)
 		c.Set(string(ctxkeys.KeyEmail), authResult.Email)
 		c.Set(string(ctxkeys.KeyRole), authResult.Role)
 		c.Set(string(ctxkeys.KeyAuthType), authResult.AuthType)
 		c.Set(string(ctxkeys.KeyPlatformOperator), authResult.PlatformOperator)
-		if authResult.AuthType == "x402" {
-			c.Set(string(ctxkeys.KeyX402Processed), authResult.X402Processed)
-			c.Set(string(ctxkeys.KeyX402AuthOnly), authResult.X402AuthOnly)
-		}
 		if authResult.AuthType == "api_token" {
 			tokenID := authResult.TokenID
 			if tokenID == "" {
@@ -264,36 +244,4 @@ func optionalJWTAuthResult(r *http.Request, secret []byte) *AuthResult {
 		AuthType: "jwt",
 		JWTToken: token,
 	}
-}
-
-func applyX402SessionHeaders(c *gin.Context, authResult *AuthResult) {
-	if authResult == nil || authResult.JWTToken == "" {
-		return
-	}
-	c.Header("X-Access-Token", authResult.JWTToken)
-	if authResult.ExpiresAt != nil {
-		c.Header("X-Access-Token-Expires-At", authResult.ExpiresAt.Format(time.RFC3339))
-	}
-	if !x402CookiesAllowed(c) {
-		return
-	}
-
-	isDev := config.IsDevelopment()
-	secure := !isDev
-	cookieDomain := config.GetCookieDomain()
-	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie("access_token", authResult.JWTToken, 15*60, "/", cookieDomain, secure, true)
-	if authResult.TenantID != "" {
-		c.SetCookie("tenant_id", authResult.TenantID, 15*60, "/", cookieDomain, secure, true)
-	}
-}
-
-func x402CookiesAllowed(c *gin.Context) bool {
-	if c == nil || c.Request == nil {
-		return false
-	}
-	if c.Request.Header.Get("Origin") == "" {
-		return true
-	}
-	return c.Writer.Header().Get("Access-Control-Allow-Credentials") == "true"
 }
