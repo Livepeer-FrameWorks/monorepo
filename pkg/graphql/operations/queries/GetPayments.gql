@@ -1,0 +1,23 @@
+query GetPayments($page: ConnectionInput) {
+  paymentsConnection(page: $page) {
+    edges {
+      cursor
+      node {
+        id
+        invoiceId
+        method
+        amount
+        currency
+        status
+        confirmedAt
+        createdAt
+        updatedAt
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    totalCount
+  }
+}

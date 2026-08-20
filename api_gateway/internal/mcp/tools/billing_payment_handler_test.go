@@ -118,6 +118,64 @@ func TestHandleTopupBalance_ETHEnum(t *testing.T) {
 	}
 }
 
+func TestHandleStartPostpaidSetupStripe(t *testing.T) {
+	var gotTenant, gotTier string
+	p := &clientstest.FakePurser{
+		GetBillingDetailsFn: func(context.Context, string) (*purserpb.BillingDetails, error) {
+			return &purserpb.BillingDetails{IsComplete: true}, nil
+		},
+		GetBillingStatusFn: func(context.Context, string) (*purserpb.BillingStatusResponse, error) {
+			return &purserpb.BillingStatusResponse{SetupProviders: []string{"stripe"}}, nil
+		},
+		CreateStripeCheckoutSessionFn: func(_ context.Context, tenantID, tierID, period, successURL, cancelURL string) (*purserpb.CreateStripeCheckoutResponse, error) {
+			gotTenant, gotTier = tenantID, tierID
+			if period != "monthly" || successURL == "" || cancelURL == "" {
+				t.Fatalf("unexpected Stripe args: %q %q %q", period, successURL, cancelURL)
+			}
+			return &purserpb.CreateStripeCheckoutResponse{SessionId: "cs_1", CheckoutUrl: "https://checkout.stripe.test/cs_1"}, nil
+		},
+	}
+	sc := clientstest.Clients(clientstest.WithPurser(p))
+	checker := preflight.NewChecker(sc, clientstest.DiscardLogger())
+	res, out, err := handleStartPostpaidSetup(toolsCtx("tenant-1"), StartPostpaidSetupInput{
+		Provider: "stripe", TierID: "tier-1", SuccessURL: "https://app.test/ok", CancelURL: "https://app.test/no",
+	}, sc, checker, clientstest.DiscardLogger())
+	if err != nil || res.IsError {
+		t.Fatalf("expected success, got err=%v result=%s", err, extractToolText(res))
+	}
+	result, ok := out.(PostpaidSetupResult)
+	if !ok || result.SetupID != "cs_1" || result.Status != "action_required" {
+		t.Fatalf("result = %T %+v", out, out)
+	}
+	if gotTenant != "tenant-1" || gotTier != "tier-1" {
+		t.Fatalf("tenant/tier = %s/%s", gotTenant, gotTier)
+	}
+}
+
+func TestHandleCompleteMolliePostpaidSetup(t *testing.T) {
+	p := &clientstest.FakePurser{
+		GetBillingDetailsFn: func(context.Context, string) (*purserpb.BillingDetails, error) {
+			return &purserpb.BillingDetails{IsComplete: true}, nil
+		},
+		CreateMollieSubscriptionFn: func(_ context.Context, tenantID, tierID, mandateID, description string) (*purserpb.CreateMollieSubscriptionResponse, error) {
+			if tenantID != "tenant-1" || tierID != "tier-1" || mandateID != "" || description == "" {
+				t.Fatalf("unexpected Mollie args: %s %s %s %s", tenantID, tierID, mandateID, description)
+			}
+			return &purserpb.CreateMollieSubscriptionResponse{SubscriptionId: "sub_1", Status: "active"}, nil
+		},
+	}
+	sc := clientstest.Clients(clientstest.WithPurser(p))
+	checker := preflight.NewChecker(sc, clientstest.DiscardLogger())
+	res, out, err := handleCompleteMolliePostpaidSetup(toolsCtx("tenant-1"), CompleteMolliePostpaidSetupInput{TierID: "tier-1"}, sc, checker, clientstest.DiscardLogger())
+	if err != nil || res.IsError {
+		t.Fatalf("expected success, got err=%v result=%s", err, extractToolText(res))
+	}
+	result, ok := out.(PostpaidSetupResult)
+	if !ok || result.SetupID != "sub_1" || result.Status != "confirmed" {
+		t.Fatalf("result = %T %+v", out, out)
+	}
+}
+
 // ---- check_topup ----
 
 func TestHandleCheckTopup_StatusMessages(t *testing.T) {
@@ -175,13 +233,13 @@ func TestHandleCheckTopup_Guards(t *testing.T) {
 	}
 }
 
-// ---- get_payment_options (no auth required) ----
+// ---- get_payment_options (tenant-bound; auth required) ----
 
 func TestHandleGetPaymentOptions(t *testing.T) {
 	sc := clientstest.Clients(clientstest.WithPurser(&clientstest.FakePurser{
 		GetPaymentRequirementsFn: func(_ context.Context, tenantID, resource string) (*purserpb.PaymentRequirements, error) {
-			if tenantID != "" {
-				t.Errorf("payment options are tenant-agnostic, got tenant %q", tenantID)
+			if tenantID != "t1" {
+				t.Errorf("payment options tenant = %q, want t1", tenantID)
 			}
 			return &purserpb.PaymentRequirements{
 				X402Version: 1,
@@ -191,8 +249,7 @@ func TestHandleGetPaymentOptions(t *testing.T) {
 			}, nil
 		},
 	}))
-	// No tenant in context — this tool must still work.
-	res, out, err := handleGetPaymentOptions(context.Background(), GetPaymentOptionsInput{}, sc, clientstest.DiscardLogger())
+	res, out, err := handleGetPaymentOptions(toolsCtx("t1"), GetPaymentOptionsInput{}, sc, clientstest.DiscardLogger())
 	if err != nil || res.IsError {
 		t.Fatalf("expected success, got err=%v isErr=%v", err, res.IsError)
 	}
@@ -205,6 +262,21 @@ func TestHandleGetPaymentOptions(t *testing.T) {
 	}
 }
 
+func TestHandleGetPaymentOptions_AuthRequired(t *testing.T) {
+	p := &clientstest.FakePurser{}
+	sc := clientstest.Clients(clientstest.WithPurser(p))
+	res, _, err := handleGetPaymentOptions(context.Background(), GetPaymentOptionsInput{}, sc, clientstest.DiscardLogger())
+	if err != nil || res == nil || !res.IsError {
+		t.Fatalf("missing auth should be a tool error, got err=%v res=%v", err, res)
+	}
+	if !strings.Contains(extractToolText(res), "authentication required") {
+		t.Fatalf("unexpected auth error: %q", extractToolText(res))
+	}
+	if p.Calls != 0 {
+		t.Fatalf("auth gate must short-circuit before Purser, got %d calls", p.Calls)
+	}
+}
+
 // An in-band Purser error string is surfaced as a tool error.
 func TestHandleGetPaymentOptions_InBandError(t *testing.T) {
 	sc := clientstest.Clients(clientstest.WithPurser(&clientstest.FakePurser{
@@ -212,7 +284,7 @@ func TestHandleGetPaymentOptions_InBandError(t *testing.T) {
 			return &purserpb.PaymentRequirements{Error: "x402 disabled"}, nil
 		},
 	}))
-	res, _, err := handleGetPaymentOptions(context.Background(), GetPaymentOptionsInput{}, sc, clientstest.DiscardLogger())
+	res, _, err := handleGetPaymentOptions(toolsCtx("t1"), GetPaymentOptionsInput{}, sc, clientstest.DiscardLogger())
 	if err != nil || res == nil || !res.IsError {
 		t.Fatalf("in-band error should be a tool error, got err=%v res=%v", err, res)
 	}

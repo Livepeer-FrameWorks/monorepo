@@ -657,6 +657,18 @@ models:
     fields:
       paymentMethods:
         resolver: true
+      recentPayments:
+        resolver: true
+  InvoicePayment:
+    model:
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser.Payment
+    fields:
+      confirmedAt:
+        resolver: true
+      createdAt:
+        resolver: true
+      updatedAt:
+        resolver: true
   BillingTier:
     model:
       - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser.BillingTier

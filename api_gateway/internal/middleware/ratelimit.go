@@ -1,9 +1,12 @@
+//nolint:errcheck // Response replay writes to Gin's already-owned writer; transport errors terminate the request.
 package middleware
 
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -22,6 +25,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 // RateLimitConfig configures the rate limiter
@@ -189,6 +194,9 @@ type X402Provider interface {
 type X402Settler interface {
 	VerifyX402Payment(ctx context.Context, tenantID string, payment *x402pb.X402PaymentPayload, clientIP string) (*purserpb.VerifyX402PaymentResponse, error)
 	SettleX402Payment(ctx context.Context, tenantID string, payment *x402pb.X402PaymentPayload, clientIP string) (*purserpb.SettleX402PaymentResponse, error)
+	GetTenantBillingStatus(ctx context.Context, tenantID string) (*purserpb.GetTenantBillingStatusResponse, error)
+	ClaimX402MutationResult(ctx context.Context, req *purserpb.ClaimX402MutationResultRequest) (*purserpb.ClaimX402MutationResultResponse, error)
+	CompleteX402MutationResult(ctx context.Context, req *purserpb.CompleteX402MutationResultRequest) (*purserpb.CompleteX402MutationResultResponse, error)
 }
 
 type AccessRequest struct {
@@ -196,6 +204,8 @@ type AccessRequest struct {
 	ClientIP          string
 	Path              string
 	OperationName     string
+	OperationNames    []string
+	OperationType     string
 	XPayment          string
 	PublicAllowlisted bool
 	X402Processed     bool
@@ -211,10 +221,12 @@ type AccessRequest struct {
 }
 
 type AccessDecision struct {
-	Allowed bool
-	Status  int
-	Headers map[string]string
-	Body    map[string]any
+	Allowed     bool
+	Status      int
+	Headers     map[string]string
+	Body        map[string]any
+	X402Settled bool
+	X402QuoteID string
 }
 
 // Operations that are ALWAYS allowed even with negative prepaid balance.
@@ -231,15 +243,36 @@ var prepaidAllowlist = map[string]bool{
 	"billingStatus":                 true,
 	"invoicesConnection":            true,
 	"billingTiers":                  true,
+	"mollieMandates":                true,
+	"cryptoTopupStatus":             true,
+	"createPayment":                 true,
+	"createStripeCheckout":          true,
+	"createStripeBillingPortal":     true,
+	"createMollieFirstPayment":      true,
+	"createMollieSubscription":      true,
+	"submitX402Payment":             true,
+	"changeBillingTier":             true,
 
 	// MCP billing/account tools/resources
 	"mcp:tools/call:update_billing_details":     true,
 	"mcp:tools/call:topup_balance":              true,
 	"mcp:tools/call:check_topup":                true,
+	"mcp:tools/call:pay_invoice":                true,
+	"mcp:tools/call:get_payment_options":        true,
+	"mcp:tools/call:submit_payment":             true,
+	"mcp:tools/call:get_tenant_settings":        true,
+	"mcp:tools/call:update_tenant_settings":     true,
+	"mcp:tools/call:list_linked_wallets":        true,
+	"mcp:tools/call:link_wallet":                true,
+	"mcp:tools/call:unlink_wallet":              true,
+	"mcp:tools/call:introspect_schema":          true,
 	"mcp:resources/read:account://status":       true,
 	"mcp:resources/read:billing://balance":      true,
 	"mcp:resources/read:billing://pricing":      true,
 	"mcp:resources/read:billing://transactions": true,
+	"mcp:resources/read:billing://invoices":     true,
+	"mcp:resources/read:billing://payments":     true,
+	"mcp:resources/read:billing://documents":    true,
 
 	// Account essentials (must be able to see/manage account)
 	"me":                        true,
@@ -247,10 +280,55 @@ var prepaidAllowlist = map[string]bool{
 	"tenant":                    true,
 	"linkEmail":                 true,
 	"promoteToPaid":             true,
+	"linkWallet":                true,
+	"unlinkWallet":              true,
+	"updateTenant":              true,
 	"developerTokensConnection": true,
 	"createDeveloperToken":      true,
 	"revokeDeveloperToken":      true,
 	"CreateAPIToken":            true,
+
+	// Non-rated control-plane configuration and cleanup. Admission to actual
+	// ingest, playback, processing, and storage work is enforced at the service
+	// boundary; creating metadata must not strand a new prepaid tenant.
+	"createStream":      true,
+	"updateStream":      true,
+	"deleteStream":      true,
+	"refreshStreamKey":  true,
+	"createStreamKey":   true,
+	"deleteStreamKey":   true,
+	"deleteClip":        true,
+	"stopDVR":           true,
+	"deleteDVR":         true,
+	"abortVodUpload":    true,
+	"deleteVodAsset":    true,
+	"createSigningKey":  true,
+	"revokeSigningKey":  true,
+	"setPlaybackPolicy": true,
+	"createPushTarget":  true,
+	"updatePushTarget":  true,
+	"deletePushTarget":  true,
+
+	// MCP control-plane configuration and cleanup mirrors GraphQL. Tools that
+	// create rated work intentionally remain blocked.
+	"mcp:tools/call:create_stream":         true,
+	"mcp:tools/call:update_stream":         true,
+	"mcp:tools/call:delete_stream":         true,
+	"mcp:tools/call:refresh_stream_key":    true,
+	"mcp:tools/call:list_stream_keys":      true,
+	"mcp:tools/call:create_stream_key":     true,
+	"mcp:tools/call:delete_stream_key":     true,
+	"mcp:tools/call:validate_stream_key":   true,
+	"mcp:tools/call:delete_clip":           true,
+	"mcp:tools/call:stop_dvr":              true,
+	"mcp:tools/call:delete_dvr":            true,
+	"mcp:tools/call:abort_vod_upload":      true,
+	"mcp:tools/call:delete_vod_asset":      true,
+	"mcp:tools/call:get_vod_upload_status": true,
+	"mcp:tools/call:list_push_targets":     true,
+	"mcp:tools/call:create_push_target":    true,
+	"mcp:tools/call:update_push_target":    true,
+	"mcp:tools/call:delete_push_target":    true,
 
 	// Introspection (for tooling)
 	"__schema": true,
@@ -265,6 +343,56 @@ var prepaidAllowlist = map[string]bool{
 	"mcp:prompts/get":              true,
 }
 
+// Suspended tenants get only the account and payment-recovery surface. This is
+// deliberately narrower than zero-balance prepaid access: suspension is an
+// independent enforcement state and must not reopen control-plane mutation
+// access merely because those mutations do not immediately incur usage.
+var suspendedRecoveryAllowlist = map[string]bool{
+	"prepaidBalance":                true,
+	"balanceTransactionsConnection": true,
+	"createCardTopup":               true,
+	"createCryptoTopup":             true,
+	"billingDetails":                true,
+	"updateBillingDetails":          true,
+	"billingStatus":                 true,
+	"invoicesConnection":            true,
+	"billingTiers":                  true,
+	"mollieMandates":                true,
+	"cryptoTopupStatus":             true,
+	"createPayment":                 true,
+	"createStripeCheckout":          true,
+	"createStripeBillingPortal":     true,
+	"createMollieFirstPayment":      true,
+	"createMollieSubscription":      true,
+	"submitX402Payment":             true,
+	"changeBillingTier":             true,
+	"me":                            true,
+	"tenant":                        true,
+	"logout":                        true,
+	"linkEmail":                     true,
+	"promoteToPaid":                 true,
+
+	"mcp:initialize":                            true,
+	"mcp:tools/list":                            true,
+	"mcp:resources/list":                        true,
+	"mcp:resources/templates/list":              true,
+	"mcp:prompts/list":                          true,
+	"mcp:prompts/get":                           true,
+	"mcp:tools/call:update_billing_details":     true,
+	"mcp:tools/call:topup_balance":              true,
+	"mcp:tools/call:check_topup":                true,
+	"mcp:tools/call:pay_invoice":                true,
+	"mcp:tools/call:get_payment_options":        true,
+	"mcp:tools/call:submit_payment":             true,
+	"mcp:resources/read:account://status":       true,
+	"mcp:resources/read:billing://balance":      true,
+	"mcp:resources/read:billing://pricing":      true,
+	"mcp:resources/read:billing://transactions": true,
+	"mcp:resources/read:billing://invoices":     true,
+	"mcp:resources/read:billing://payments":     true,
+	"mcp:resources/read:billing://documents":    true,
+}
+
 // RateLimitMiddlewareWithX402 creates a Gin middleware with full x402 support
 // Includes both billing checks, x402 payment requirements in 402 responses,
 // AND X-PAYMENT header handling for settling x402 payments
@@ -272,10 +400,44 @@ func RateLimitMiddlewareWithX402(rl *RateLimiter, getLimits func(tenantID string
 	return rateLimitMiddlewareInternal(rl, getLimits, billingChecker, x402Provider, x402Settler, x402Resolver, tp)
 }
 
+// PublicOperationRateLimitMiddleware applies the shared per-IP public bucket to
+// non-GraphQL endpoints that must remain reachable without authentication.
+func PublicOperationRateLimitMiddleware(rl *RateLimiter, tp *TrustedProxies, operation string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		clientIP := ClientIPFromRequestWithTrust(c.Request, tp)
+		var logger logging.Logger
+		if rl != nil {
+			logger = rl.config.Logger
+		}
+		decision := EvaluateAccess(c.Request.Context(), AccessRequest{
+			ClientIP:          clientIP,
+			Path:              c.Request.URL.Path,
+			OperationName:     operation,
+			PublicAllowlisted: true,
+		}, rl, nil, nil, nil, nil, nil, logger)
+		for key, value := range decision.Headers {
+			c.Header(key, value)
+		}
+		if !decision.Allowed {
+			c.AbortWithStatusJSON(decision.Status, decision.Body)
+			return
+		}
+		c.Next()
+	}
+}
+
 // graphqlRequest represents a minimal GraphQL request for operation extraction
 type graphqlRequest struct {
+	Query         string                 `json:"query"`
 	OperationName string                 `json:"operationName"`
 	Variables     map[string]interface{} `json:"variables"`
+}
+
+type graphqlAccess struct {
+	OperationName string
+	OperationType string
+	Fields        []string
+	Variables     map[string]interface{}
 }
 
 // rateLimitMiddlewareInternal is the internal implementation with optional x402 support
@@ -301,7 +463,11 @@ func rateLimitMiddlewareInternal(rl *RateLimiter, getLimits func(tenantID string
 				x402AuthOnly = authOnly
 			}
 		}
-		opName, variables := extractGraphQLRequest(c)
+		access := extractGraphQLAccess(c)
+		opName, variables := access.OperationName, access.Variables
+		if len(access.Fields) == 1 {
+			opName = access.Fields[0]
+		}
 		resourcePath := c.Request.URL.Path
 		if opName != "" && strings.Contains(strings.ToLower(resourcePath), "graphql") {
 			if resource := graphqlResourcePath(opName, variables); resource != "" {
@@ -325,6 +491,8 @@ func rateLimitMiddlewareInternal(rl *RateLimiter, getLimits func(tenantID string
 			ClientIP:          clientIP,
 			Path:              resourcePath,
 			OperationName:     opName,
+			OperationNames:    access.Fields,
+			OperationType:     access.OperationType,
 			XPayment:          GetX402PaymentHeader(c.Request),
 			PublicAllowlisted: publicAllowlisted,
 			X402Processed:     x402Processed,
@@ -338,6 +506,17 @@ func rateLimitMiddlewareInternal(rl *RateLimiter, getLimits func(tenantID string
 		if !decision.Allowed {
 			c.AbortWithStatusJSON(decision.Status, decision.Body)
 			return
+		}
+
+		// Settlement and operation execution are separate failure domains. For a
+		// paid GraphQL mutation, claim a durable result slot before handing the
+		// request to any resolver. A retry either replays that exact result or
+		// stops at an in-progress/unknown claim; it never invokes the mutation a
+		// second time.
+		if decision.X402Settled && access.OperationType == "mutation" {
+			if handled := handlePaidHTTPMutationIdempotency(c, x402Settler, tenantIDStr, decision.X402QuoteID, opName, rl.config.Logger); handled {
+				return
+			}
 		}
 
 		c.Next()
@@ -360,7 +539,9 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 	headers := map[string]string{}
 	tenantIDStr := tenantID
 	isPublic := isPublicTenant(tenantIDStr)
-	x402Paid := req.X402Processed && !req.X402AuthOnly
+	x402Processed := req.X402Processed && !req.X402AuthOnly
+	x402Settled := false
+	x402QuoteID := ""
 
 	// Rate-limit identity is separate from the billing/owner identity (tenantIDStr):
 	// a caller can supply its own tenant (empty → per-IP public bucket) so an
@@ -418,12 +599,24 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 			}
 		}
 		if settleResult != nil && settleResult.Settle != nil && settleResult.Settle.Success {
-			x402Paid = true
+			x402Processed = true
+			x402Settled = true
+			x402QuoteID = settleResult.QuoteID
+			if settleResult.X402Version == 2 {
+				if paymentResponse, encodeErr := x402.EncodePaymentResponseHeader(settleResult, settleResult.Network); encodeErr == nil {
+					headers[x402.PaymentResponseHeader] = paymentResponse
+				} else if logger != nil {
+					logger.WithError(encodeErr).Warn("Failed to encode x402 payment response header")
+				}
+			}
 		}
 	}
 
-	if isPublic && !req.PublicAllowlisted && !x402Paid {
-		response := build402Response(ctx, "", req.OperationName, req.Path, x402Provider, logger)
+	if isPublic && !req.PublicAllowlisted {
+		response, paymentRequired := build402ResponseWithHeader(ctx, "", req.OperationName, req.Path, x402Provider, logger)
+		if paymentRequired != "" {
+			headers[x402.PaymentRequiredHeader] = paymentRequired
+		}
 		return AccessDecision{
 			Allowed: false,
 			Status:  http.StatusPaymentRequired,
@@ -432,26 +625,58 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 		}
 	}
 
-	if billingChecker != nil && !isPublic {
-		billingModel := billingChecker.GetBillingModel(tenantIDStr)
-		if billingModel == "prepaid" && billingChecker.IsBalanceNegative(tenantIDStr) {
-			if !prepaidAllowlist[req.OperationName] && !x402Paid {
+	if !isPublic {
+		billingModel := ""
+		isBalanceNegative := false
+		isSuspended := false
+
+		if x402Processed {
+			if x402Settler == nil {
+				return billingStatusUnavailableDecision(headers)
+			}
+			statusCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			freshStatus, err := x402Settler.GetTenantBillingStatus(statusCtx, tenantIDStr)
+			cancel()
+			if err != nil || freshStatus == nil {
 				if logger != nil {
 					logger.WithFields(logging.Fields{
-						"tenant_id":     tenantIDStr,
-						"billing_model": billingModel,
-						"operation":     req.OperationName,
-						"path":          req.Path,
-					}).Warn("Insufficient balance (402 Payment Required)")
+						"tenant_id": tenantIDStr,
+						"error":     err,
+					}).Warn("Failed to recheck billing status after x402 settlement")
 				}
+				return billingStatusUnavailableDecision(headers)
+			}
+			billingModel = freshStatus.GetBillingModel()
+			isBalanceNegative = freshStatus.GetIsBalanceNegative()
+			isSuspended = freshStatus.GetIsSuspended()
+		} else if billingChecker != nil {
+			billingModel = billingChecker.GetBillingModel(tenantIDStr)
+			isBalanceNegative = billingChecker.IsBalanceNegative(tenantIDStr)
+			isSuspended = billingChecker.IsSuspended(tenantIDStr)
+		}
 
-				response := build402Response(ctx, tenantIDStr, req.OperationName, req.Path, x402Provider, logger)
-				return AccessDecision{
-					Allowed: false,
-					Status:  http.StatusPaymentRequired,
-					Body:    response,
-					Headers: headers,
-				}
+		blockedBySuspension := isSuspended && !suspendedRequestAllowed(req)
+		blockedByBalance := billingModel == "prepaid" && isBalanceNegative && !prepaidRequestAllowed(req)
+		if blockedBySuspension || blockedByBalance {
+			if logger != nil {
+				logger.WithFields(logging.Fields{
+					"tenant_id":     tenantIDStr,
+					"billing_model": billingModel,
+					"is_suspended":  isSuspended,
+					"operation":     req.OperationName,
+					"path":          req.Path,
+				}).Warn("Insufficient balance (402 Payment Required)")
+			}
+
+			response, paymentRequired := build402ResponseWithHeader(ctx, tenantIDStr, req.OperationName, req.Path, x402Provider, logger)
+			if paymentRequired != "" {
+				headers[x402.PaymentRequiredHeader] = paymentRequired
+			}
+			return AccessDecision{
+				Allowed: false,
+				Status:  http.StatusPaymentRequired,
+				Body:    response,
+				Headers: headers,
 			}
 		}
 	}
@@ -461,11 +686,11 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 	// endpoints (resolveIngestEndpoint, resolveViewerEndpoint, networkStatus, the
 	// public orchestrator topology fields, and the walletLogin/bootstrapEdge
 	// mutations) that would otherwise be unmetered. Limits are fixed, not
-	// tenant-derived. x402-paid callers are metered by payment, so they skip the
-	// per-IP throttle.
+	// tenant-derived. A payment never bypasses abuse controls; settlement and
+	// request-rate accounting are separate concerns.
 	if rlIsPublic {
-		if rl == nil || x402Paid {
-			return AccessDecision{Allowed: true, Headers: headers}
+		if rl == nil {
+			return AccessDecision{Allowed: true, Headers: headers, X402Settled: x402Settled, X402QuoteID: x402QuoteID}
 		}
 		limit, burst := publicRateLimits()
 		allowed, remaining, resetSeconds := rl.Allow(rlTenant, limit, burst)
@@ -483,7 +708,7 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 			}
 			return rateLimitExceededDecision(limit, resetSeconds, headers)
 		}
-		return AccessDecision{Allowed: true, Headers: headers}
+		return AccessDecision{Allowed: true, Headers: headers, X402Settled: x402Settled, X402QuoteID: x402QuoteID}
 	}
 
 	limit, burst := 0, 0
@@ -509,7 +734,155 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 	}
 
 	return AccessDecision{
-		Allowed: true,
+		Allowed:     true,
+		Headers:     headers,
+		X402Settled: x402Settled,
+		X402QuoteID: x402QuoteID,
+	}
+}
+
+const maxPaidMutationCaptureBytes = 2 << 20
+
+type paidMutationCaptureWriter struct {
+	gin.ResponseWriter
+	body     bytes.Buffer
+	overflow bool
+}
+
+func (w *paidMutationCaptureWriter) Write(data []byte) (int, error) {
+	if !w.overflow {
+		remaining := maxPaidMutationCaptureBytes - w.body.Len()
+		if len(data) <= remaining {
+			_, _ = w.body.Write(data)
+		} else {
+			w.overflow = true
+			w.body.Reset()
+		}
+	}
+	return w.ResponseWriter.Write(data)
+}
+
+func (w *paidMutationCaptureWriter) WriteString(data string) (int, error) {
+	if !w.overflow {
+		remaining := maxPaidMutationCaptureBytes - w.body.Len()
+		if len(data) <= remaining {
+			_, _ = w.body.WriteString(data)
+		} else {
+			w.overflow = true
+			w.body.Reset()
+		}
+	}
+	return w.ResponseWriter.WriteString(data)
+}
+
+func paidMutationFingerprint(method, path string, body []byte) string {
+	digest := sha256.Sum256(bytes.Join([][]byte{[]byte(method), []byte(path), body}, []byte{0}))
+	return fmt.Sprintf("%x", digest[:])
+}
+
+// handlePaidHTTPMutationIdempotency returns true when it has already produced
+// the response. A false result means the caller owns the claim and should stop
+// this middleware after c.Next returns.
+func handlePaidHTTPMutationIdempotency(c *gin.Context, store X402Settler, tenantID, quoteID, operation string, logger logging.Logger) bool {
+	key := strings.TrimSpace(c.GetHeader("Idempotency-Key"))
+	if len(key) < 8 || len(key) > 255 {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+			"error":   "idempotency_key_required",
+			"code":    "IDEMPOTENCY_KEY_REQUIRED",
+			"message": "paid GraphQL mutations require an Idempotency-Key containing 8-255 characters",
+		})
+		return true
+	}
+	if quoteID == "" {
+		c.AbortWithStatusJSON(http.StatusConflict, gin.H{
+			"error":   "paid_mutation_quote_missing",
+			"code":    "PAID_MUTATION_QUOTE_MISSING",
+			"message": "the settled payment is not bound to an x402 v2 quote",
+		})
+		return true
+	}
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "request_body_unreadable"})
+		return true
+	}
+	c.Request.Body = io.NopCloser(bytes.NewReader(body))
+	fingerprint := paidMutationFingerprint(c.Request.Method, c.Request.URL.RequestURI(), body)
+	claimCtx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+	claim, err := store.ClaimX402MutationResult(claimCtx, &purserpb.ClaimX402MutationResultRequest{
+		TenantId: tenantID, QuoteId: quoteID, IdempotencyKey: key,
+		RequestFingerprint: fingerprint, Protocol: "http", Operation: operation,
+	})
+	cancel()
+	if err != nil {
+		statusCode := http.StatusServiceUnavailable
+		if grpcstatus.Code(err) == codes.AlreadyExists || grpcstatus.Code(err) == codes.FailedPrecondition {
+			statusCode = http.StatusConflict
+		}
+		c.AbortWithStatusJSON(statusCode, gin.H{
+			"error":   "paid_mutation_idempotency_rejected",
+			"code":    "PAID_MUTATION_IDEMPOTENCY_REJECTED",
+			"message": err.Error(),
+		})
+		return true
+	}
+	switch claim.GetState() {
+	case "completed":
+		if claim.GetContentType() != "" {
+			c.Header("Content-Type", claim.GetContentType())
+		}
+		statusCode := int(claim.GetStatusCode())
+		if statusCode < 100 {
+			statusCode = http.StatusOK
+		}
+		c.Status(statusCode)
+		_, _ = c.Writer.Write(claim.GetResult())
+		c.Abort()
+		return true
+	case "in_progress":
+		c.Header("Retry-After", "2")
+		c.AbortWithStatusJSON(http.StatusConflict, gin.H{
+			"error":   "paid_mutation_in_progress",
+			"code":    "PAID_MUTATION_IN_PROGRESS",
+			"message": "the paid mutation outcome is still being recorded; retry with the same key",
+		})
+		return true
+	case "claimed":
+		capture := &paidMutationCaptureWriter{ResponseWriter: c.Writer}
+		c.Writer = capture
+		c.Next()
+		if capture.overflow {
+			if logger != nil {
+				logger.WithField("operation", operation).Error("Paid mutation response exceeded durable replay limit; claim left in progress")
+			}
+			return true
+		}
+		completeCtx, completeCancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 3*time.Second)
+		_, completeErr := store.CompleteX402MutationResult(completeCtx, &purserpb.CompleteX402MutationResultRequest{
+			TenantId: tenantID, QuoteId: quoteID, IdempotencyKey: key,
+			RequestFingerprint: fingerprint, Result: capture.body.Bytes(),
+			ContentType: c.Writer.Header().Get("Content-Type"), StatusCode: int32(c.Writer.Status()),
+		})
+		completeCancel()
+		if completeErr != nil && logger != nil {
+			logger.WithError(completeErr).WithField("operation", operation).Error("Failed to persist paid mutation result; claim left in progress")
+		}
+		return true
+	default:
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "invalid paid mutation claim state"})
+		return true
+	}
+}
+
+func billingStatusUnavailableDecision(headers map[string]string) AccessDecision {
+	return AccessDecision{
+		Allowed: false,
+		Status:  http.StatusServiceUnavailable,
+		Body: map[string]any{
+			"error":   "billing_status_unavailable",
+			"message": "payment was processed but the updated balance could not be verified; retry safely",
+			"code":    "BILLING_STATUS_UNAVAILABLE",
+		},
 		Headers: headers,
 	}
 }
@@ -565,6 +938,11 @@ func publicRateLimits() (limit, burst int) {
 // build402Response builds the 402 Payment Required response
 // Includes both human flow (topup_url) and x402 machine flow (accepts block)
 func build402Response(ctx context.Context, tenantID, operationName, resourcePath string, x402Provider X402Provider, logger logging.Logger) map[string]any {
+	response, _ := build402ResponseWithHeader(ctx, tenantID, operationName, resourcePath, x402Provider, logger)
+	return response
+}
+
+func build402ResponseWithHeader(ctx context.Context, tenantID, operationName, resourcePath string, x402Provider X402Provider, logger logging.Logger) (map[string]any, string) {
 	response := map[string]any{
 		"error":     "insufficient_balance",
 		"message":   "Insufficient balance - please top up to continue",
@@ -593,22 +971,46 @@ func build402Response(ctx context.Context, tenantID, operationName, resourcePath
 			// Convert accepts to map slice
 			accepts := make([]map[string]any, 0, len(requirements.Accepts))
 			for _, req := range requirements.Accepts {
-				accepts = append(accepts, map[string]any{
+				accepted := map[string]any{
 					"scheme":            req.Scheme,
 					"network":           req.Network,
-					"maxAmountRequired": req.MaxAmountRequired,
 					"payTo":             req.PayTo,
 					"asset":             req.Asset,
 					"maxTimeoutSeconds": req.MaxTimeoutSeconds,
-					"resource":          req.Resource,
-					"description":       req.Description,
-				})
+				}
+				if requirements.X402Version == 2 {
+					accepted["amount"] = req.Amount
+					if len(req.ExtraJson) > 0 {
+						accepted["extra"] = json.RawMessage(req.ExtraJson)
+					}
+				} else {
+					accepted["maxAmountRequired"] = req.MaxAmountRequired
+					accepted["resource"] = req.Resource
+					accepted["description"] = req.Description
+				}
+				accepts = append(accepts, accepted)
 			}
 			response["accepts"] = accepts
+			if requirements.X402Version != 2 {
+				return response, ""
+			}
+			response["resource"] = map[string]any{
+				"url":         requirements.ResourceUrl,
+				"description": requirements.ResourceDescription,
+				"mimeType":    requirements.ResourceMimeType,
+			}
+			paymentRequired, encodeErr := x402.EncodePaymentRequiredHeader(requirements)
+			if encodeErr != nil {
+				if logger != nil {
+					logger.WithError(encodeErr).Warn("Failed to encode x402 payment-required header")
+				}
+				return response, ""
+			}
+			return response, paymentRequired
 		}
 	}
 
-	return response
+	return response, ""
 }
 
 // handleX402Payment parses and settles an x402 payment from the X-PAYMENT header
@@ -616,25 +1018,91 @@ func build402Response(ctx context.Context, tenantID, operationName, resourcePath
 // extractGraphQLRequest reads the operationName + variables from a GraphQL request body.
 // Returns empty values if not found or on error.
 func extractGraphQLRequest(c *gin.Context) (string, map[string]interface{}) {
+	access := extractGraphQLAccess(c)
+	return access.OperationName, access.Variables
+}
+
+func extractGraphQLAccess(c *gin.Context) graphqlAccess {
 	// Only process POST requests with JSON body
 	if c.Request.Method != "POST" || c.Request.Body == nil {
-		return "", nil
+		return graphqlAccess{}
 	}
 
 	// Read body (we need to restore it after reading)
 	bodyBytes, err := io.ReadAll(c.Request.Body)
 	if err != nil {
-		return "", nil
+		return graphqlAccess{}
 	}
 	// Restore the body for downstream handlers
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
 	var req graphqlRequest
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
-		return "", nil
+		return graphqlAccess{}
 	}
 
-	return req.OperationName, req.Variables
+	operationType, fields := parseGraphQLTopLevelFields(req.Query, req.OperationName)
+	return graphqlAccess{
+		OperationName: req.OperationName,
+		OperationType: operationType,
+		Fields:        fields,
+		Variables:     req.Variables,
+	}
+}
+
+func prepaidRequestAllowed(req AccessRequest) bool {
+	// Authenticated GraphQL reads are non-rated control-plane access. Request
+	// throttling and query complexity limits remain independent abuse controls.
+	if req.OperationType == "query" {
+		return true
+	}
+	names := req.OperationNames
+	if len(names) == 0 && req.OperationName != "" {
+		names = []string{req.OperationName}
+	}
+	if len(names) == 0 {
+		return false
+	}
+	for _, name := range names {
+		if !prepaidOperationAllowed(name) {
+			return false
+		}
+	}
+	return true
+}
+
+func prepaidOperationAllowed(name string) bool {
+	if prepaidAllowlist[name] {
+		return true
+	}
+	return strings.HasPrefix(name, "mcp:resources/read:billing://invoices/") ||
+		strings.HasPrefix(name, "mcp:resources/read:billing://payments/") ||
+		strings.HasPrefix(name, "mcp:resources/read:billing://documents/")
+}
+
+func suspendedRequestAllowed(req AccessRequest) bool {
+	names := req.OperationNames
+	if len(names) == 0 && req.OperationName != "" {
+		names = []string{req.OperationName}
+	}
+	if len(names) == 0 {
+		return false
+	}
+	for _, name := range names {
+		if !suspendedOperationAllowed(name) {
+			return false
+		}
+	}
+	return true
+}
+
+func suspendedOperationAllowed(name string) bool {
+	if suspendedRecoveryAllowlist[name] {
+		return true
+	}
+	return strings.HasPrefix(name, "mcp:resources/read:billing://invoices/") ||
+		strings.HasPrefix(name, "mcp:resources/read:billing://payments/") ||
+		strings.HasPrefix(name, "mcp:resources/read:billing://documents/")
 }
 
 func graphqlResourcePath(operation string, variables map[string]interface{}) string {

@@ -515,7 +515,12 @@ func main() {
 	{
 		// Public auth endpoints (no auth required)
 		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/login", authHandlers.Login())
-		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/wallet-login", authHandlers.WalletLogin())
+		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/wallet-challenge",
+			middleware.PublicOperationRateLimitMiddleware(rateLimiter, trustedProxies, "walletChallenge"),
+			authHandlers.WalletChallenge())
+		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/wallet-login",
+			middleware.PublicOperationRateLimitMiddleware(rateLimiter, trustedProxies, "walletLogin"),
+			authHandlers.WalletLogin())
 		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/register", authHandlers.Register())
 		server.HandleOptionalTrailingSlash(auth, http.MethodGet, "/verify/:token", authHandlers.VerifyEmail())
 		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/resend-verification", authHandlers.ResendVerification())
@@ -561,6 +566,16 @@ func main() {
 	{
 		infraBootstrap := handlers.NewInfrastructureBootstrapHandler(serviceClients.Quartermaster, logger)
 		server.HandleOptionalTrailingSlash(app, http.MethodPost, "/v1/bootstrap/infrastructure-node", infraBootstrap.Handle)
+	}
+
+	// Authenticated immutable billing-document downloads. This route is outside
+	// rated GraphQL admission so a zero-balance prepaid customer can always
+	// retrieve invoices, receipts, and credit notes.
+	{
+		billingDocuments := handlers.NewBillingDocumentHandlers(serviceClients.Purser)
+		billingDocumentRoutes := app.Group("/v1/billing/documents", middleware.RequireJWTAuth([]byte(jwtSecret)))
+		server.HandleOptionalTrailingSlash(billingDocumentRoutes, http.MethodGet, "", billingDocuments.List())
+		server.HandleOptionalTrailingSlash(billingDocumentRoutes, http.MethodGet, "/:kind/:id", billingDocuments.Download())
 	}
 
 	// Public player telemetry beacons. Unauthenticated and outside the GraphQL

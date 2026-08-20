@@ -78,6 +78,18 @@ func TestMergePricingRule(t *testing.T) {
 	}
 }
 
+func TestPricingRuleUnit(t *testing.T) {
+	if got := pricingRuleUnit("storage_gb_seconds_cold", "gibibyte_second", nil); got != "gibibyte_hour" {
+		t.Fatalf("storage rated unit = %q", got)
+	}
+	if got := pricingRuleUnit("inference_frames", "frame", map[string]any{"rated_unit": "kiloframe"}); got != "kiloframe" {
+		t.Fatalf("configured rated unit = %q", got)
+	}
+	if got := pricingRuleUnit("api_requests", "request", nil); got != "request" {
+		t.Fatalf("identity rated unit = %q", got)
+	}
+}
+
 // ---- entryID / splitEntryID ----
 
 func TestEntryIDRoundTrip(t *testing.T) {

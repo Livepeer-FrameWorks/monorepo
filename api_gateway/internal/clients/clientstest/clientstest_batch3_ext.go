@@ -38,6 +38,14 @@ func (f *FakeCommodore) LinkWallet(ctx context.Context, address, message, signat
 	return f.LinkWalletFn(ctx, address, message, signature)
 }
 
+func (f *FakeCommodore) ListWallets(ctx context.Context) (*commodorepb.ListWalletsResponse, error) {
+	f.Calls++
+	if f.ListWalletsFn == nil {
+		panic("FakeCommodore.ListWallets not stubbed")
+	}
+	return f.ListWalletsFn(ctx)
+}
+
 func (f *FakeCommodore) ListPullSourceEvents(ctx context.Context, req *commodorepb.ListPullSourceEventsRequest) (*commodorepb.ListPullSourceEventsResponse, error) {
 	f.Calls++
 	if f.ListPullSourceEventsFn == nil {
@@ -119,6 +127,14 @@ func (f *FakeCommodore) WalletLogin(ctx context.Context, address, message, signa
 	return f.WalletLoginFn(ctx, address, message, signature, attribution)
 }
 
+func (f *FakeCommodore) IssueWalletChallenge(ctx context.Context, address string, chainID uint64) (*commodorepb.IssueWalletChallengeResponse, error) {
+	f.Calls++
+	if f.IssueWalletChallengeFn == nil {
+		panic("FakeCommodore.IssueWalletChallenge not stubbed")
+	}
+	return f.IssueWalletChallengeFn(ctx, address, chainID)
+}
+
 func (f *FakePurser) ChangeBillingTier(ctx context.Context, tenantID, tierID string) (*purserpb.ChangeBillingTierResponse, error) {
 	f.Calls++
 	if f.ChangeBillingTierFn == nil {
@@ -173,6 +189,22 @@ func (f *FakePurser) CreatePayment(ctx context.Context, req *purserpb.PaymentReq
 		panic("FakePurser.CreatePayment not stubbed")
 	}
 	return f.CreatePaymentFn(ctx, req)
+}
+
+func (f *FakePurser) GetPayment(ctx context.Context, paymentID string) (*purserpb.Payment, error) {
+	f.Calls++
+	if f.GetPaymentFn == nil {
+		panic("FakePurser.GetPayment not stubbed")
+	}
+	return f.GetPaymentFn(ctx, paymentID)
+}
+
+func (f *FakePurser) ListPayments(ctx context.Context, req *purserpb.ListPaymentsRequest) (*purserpb.ListPaymentsResponse, error) {
+	f.Calls++
+	if f.ListPaymentsFn == nil {
+		panic("FakePurser.ListPayments not stubbed")
+	}
+	return f.ListPaymentsFn(ctx, req)
 }
 
 func (f *FakePurser) CreateStripeBillingPortal(ctx context.Context, tenantID, returnURL string) (*purserpb.CreateBillingPortalResponse, error) {

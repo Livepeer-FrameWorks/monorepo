@@ -93,11 +93,8 @@ func mcpAuthCtx() context.Context {
 	return ctx
 }
 
-// TestMCPSmokeSweep is the MCP analogue of the GraphQL smoke sweep: it stands up
-// the real MCP server with stub-backed clients, lists every tool and resource,
-// and invokes each. Coverage of the tool/resource handler bodies comes en masse;
-// the assertion is that no handler crashes the server.
-func TestMCPSmokeSweep(t *testing.T) {
+func newTestMCPSession(t *testing.T) (context.Context, *mcp.ClientSession) {
+	t.Helper()
 	addr := stubGRPCAddr(t)
 	sc := stubClients(t, addr)
 	logger := logging.NewLogger()
@@ -130,6 +127,15 @@ func TestMCPSmokeSweep(t *testing.T) {
 		t.Fatalf("client connect: %v", err)
 	}
 	t.Cleanup(func() { _ = cs.Close() })
+	return ctx, cs
+}
+
+// TestMCPSmokeSweep is the MCP analogue of the GraphQL smoke sweep: it stands up
+// the real MCP server with stub-backed clients, lists every tool and resource,
+// and invokes each. Coverage of the tool/resource handler bodies comes en masse;
+// the assertion is that no handler crashes the server.
+func TestMCPSmokeSweep(t *testing.T) {
+	ctx, cs := newTestMCPSession(t)
 
 	toolList, err := cs.ListTools(ctx, nil)
 	if err != nil {

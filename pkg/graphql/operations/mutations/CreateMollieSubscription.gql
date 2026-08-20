@@ -1,0 +1,21 @@
+mutation CreateMollieSubscription($tierId: ID!, $mandateId: String!, $description: String) {
+  createMollieSubscription(tierId: $tierId, mandateId: $mandateId, description: $description) {
+    __typename
+    ... on MollieSubscription {
+      subscriptionId
+      status
+      nextPaymentDate
+    }
+    ... on ValidationError {
+      message
+      field
+    }
+    ... on NotFoundError {
+      message
+    }
+    ... on AuthError {
+      message
+      code
+    }
+  }
+}

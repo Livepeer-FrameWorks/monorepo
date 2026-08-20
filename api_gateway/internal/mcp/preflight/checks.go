@@ -123,20 +123,28 @@ func (c *Checker) CheckBalance(ctx context.Context) (*Blocker, error) {
 		return nil, fmt.Errorf("no tenant ID in context")
 	}
 
-	// Get prepaid balance from Purser
+	billingStatus, err := c.clients.Purser.GetTenantBillingStatus(ctx, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get billing status: %w", err)
+	}
+	if billingStatus.GetBillingModel() == "postpaid" {
+		if billingStatus.GetCollectionReady() {
+			return nil, nil
+		}
+		return &Blocker{
+			Code:       "PAYMENT_SETUP_REQUIRED",
+			Message:    "Postpaid billing is not collectible because no confirmed Stripe or Mollie subscription is configured.",
+			Resolution: "Complete payment-provider setup in Billing before running billable operations.",
+		}, nil
+	}
+	if billingStatus.GetBillingModel() != "prepaid" {
+		return nil, fmt.Errorf("unknown billing model %q", billingStatus.GetBillingModel())
+	}
+
 	balance, err := c.clients.Purser.GetPrepaidBalance(ctx, tenantID, billing.DefaultCurrency())
 	if err != nil {
-		// Check billing model to determine how to handle the error
-		billingStatus, statusErr := c.clients.Purser.GetTenantBillingStatus(ctx, tenantID)
-		if statusErr == nil && billingStatus.BillingModel == "postpaid" {
-			return nil, nil // Postpaid accounts don't need balance check
-		}
-		// For prepaid accounts, treat missing balance as 0 (will be created on first top-up)
-		if statusErr == nil && billingStatus.BillingModel == "prepaid" {
-			balance = &purserpb.PrepaidBalance{BalanceCents: 0, AvailableBalanceCents: 0}
-		} else {
-			return nil, fmt.Errorf("failed to get balance: %w", err)
-		}
+		// A prepaid balance row is created on first funding, so absence is zero.
+		balance = &purserpb.PrepaidBalance{BalanceCents: 0, AvailableBalanceCents: 0}
 	}
 
 	// Check if balance is sufficient (must be > 0 for new operations)

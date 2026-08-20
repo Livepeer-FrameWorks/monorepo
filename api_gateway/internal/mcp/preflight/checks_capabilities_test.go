@@ -14,6 +14,9 @@ import (
 // prepaid balance — enough for GetCapabilities' balance gate to pass.
 func solventBalance() *clientstest.FakePurser {
 	return &clientstest.FakePurser{
+		GetTenantBillingStatusFn: func(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {
+			return &purserpb.GetTenantBillingStatusResponse{BillingModel: "prepaid"}, nil
+		},
 		GetPrepaidBalanceFn: func(context.Context, string, string) (*purserpb.PrepaidBalance, error) {
 			return &purserpb.PrepaidBalance{BalanceCents: 500, AvailableBalanceCents: 500}, nil
 		},
@@ -32,6 +35,9 @@ func TestGetCapabilities_Solvent_AllEnabled(t *testing.T) {
 
 func TestGetCapabilities_Broke_BillableDisabled_ReadsEnabled(t *testing.T) {
 	c := checkerWith(&clientstest.FakePurser{
+		GetTenantBillingStatusFn: func(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {
+			return &purserpb.GetTenantBillingStatusResponse{BillingModel: "prepaid"}, nil
+		},
 		GetPrepaidBalanceFn: func(context.Context, string, string) (*purserpb.PrepaidBalance, error) {
 			return &purserpb.PrepaidBalance{BalanceCents: 0}, nil
 		},

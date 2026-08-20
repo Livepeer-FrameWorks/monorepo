@@ -5,7 +5,7 @@
   "mcp_endpoint": "https://bridge.frameworks.network/mcp",
   "transports": ["streamable-http"],
   "auth": {
-    "schemes": ["bearer", "wallet", "x402"],
+    "schemes": ["bearer", "wallet"],
     "required": true,
     "registration_required": false,
     "public_operations": [
@@ -15,8 +15,7 @@
       "resources/templates/list",
       "prompts/list",
       "prompts/get",
-      "tools/call:get_payment_options",
-      "tools/call:submit_payment",
+      "tools/call:request_wallet_challenge",
       "tools/call:resolve_playback_endpoint",
       "tools/call:browse_marketplace",
       "resources/read:account://status",
@@ -28,17 +27,17 @@
       "header": "Authorization"
     },
     "wallet": {
-      "description": "EIP-191 wallet signature (auto-provisions account on first use)",
+      "description": "Server-issued, single-use EIP-191 wallet challenge (auto-provisions a prepaid account on first login)",
       "headers": ["X-Wallet-Address", "X-Wallet-Signature", "X-Wallet-Message"],
-      "graphql_login": {
-        "endpoint": "https://bridge.frameworks.network/graphql",
-        "mutation": "walletLogin"
-      }
-    },
+      "challenge_endpoint": "https://bridge.frameworks.network/auth/wallet-challenge",
+      "login_endpoint": "https://bridge.frameworks.network/auth/wallet-login"
+    }
+  },
+  "payments": {
     "x402": {
-      "description": "EIP-3009 gasless USDC attached to the same API request after a 402 challenge",
-      "header": "X-PAYMENT",
-      "challenge_flow": "Call the operation, read the 402 payment requirements, retry the same operation with X-PAYMENT.",
+      "description": "EIP-3009 gasless USDC top-up attached to a rated API request after a 402 challenge",
+      "header": "PAYMENT-SIGNATURE",
+      "challenge_flow": "Authenticate first, call the operation, read the tenant-bound exact 402 payment requirements, retry the same operation with PAYMENT-SIGNATURE, then wait for confirmed credit.",
       "chains": ["base", "arbitrum"],
       "token": "USDC"
     }
@@ -51,7 +50,8 @@
   "endpoints": {
     "mcp": "https://bridge.frameworks.network/mcp",
     "graphql": "https://bridge.frameworks.network/graphql",
-    "wallet_login": "https://bridge.frameworks.network/graphql",
+    "wallet_challenge": "https://bridge.frameworks.network/auth/wallet-challenge",
+    "wallet_login": "https://bridge.frameworks.network/auth/wallet-login",
     "skill_md": "https://frameworks.network/SKILL.md",
     "skill_json": "https://frameworks.network/skill.json"
   }

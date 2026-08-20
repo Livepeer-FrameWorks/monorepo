@@ -7,13 +7,15 @@
   "x_auth_methods": {
     "wallet": {
       "type": "eip191",
-      "login_endpoint": "https://bridge.frameworks.network/graphql",
-      "login_operation": "walletLogin",
+      "challenge_endpoint": "https://bridge.frameworks.network/auth/wallet-challenge",
+      "login_endpoint": "https://bridge.frameworks.network/auth/wallet-login",
       "auto_provision": true
-    },
+    }
+  },
+  "x_payment_methods": {
     "x402": {
       "type": "eip3009",
-      "challenge_flow": "Call the operation, read the 402 payment requirements, retry the same operation with X-PAYMENT.",
+      "challenge_flow": "Authenticate first, call the rated operation, read the tenant-bound exact 402 payment requirements, retry with PAYMENT-SIGNATURE, then wait for confirmed credit.",
       "chains": ["base", "arbitrum"],
       "token": "USDC"
     }

@@ -142,14 +142,6 @@ func handleCreateStream(ctx context.Context, args CreateStreamInput, clients *cl
 		return nil, nil, mcperrors.AuthRequired()
 	}
 
-	// Pre-flight: require positive balance
-	if err := checker.RequireBalance(ctx); err != nil {
-		if pfe, ok := preflight.IsPreflightError(err); ok {
-			return toolErrorWithResolution(pfe.Blocker)
-		}
-		return toolError(fmt.Sprintf("Failed to check balance: %v", err))
-	}
-
 	// Validate required fields
 	if args.Name == "" {
 		return toolError("Stream name is required")
@@ -212,14 +204,6 @@ type UpdateStreamResult struct {
 func handleUpdateStream(ctx context.Context, args UpdateStreamInput, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	if ctxkeys.GetTenantID(ctx) == "" {
 		return nil, nil, mcperrors.AuthRequired()
-	}
-
-	// Pre-flight: require positive balance
-	if err := checker.RequireBalance(ctx); err != nil {
-		if pfe, ok := preflight.IsPreflightError(err); ok {
-			return toolErrorWithResolution(pfe.Blocker)
-		}
-		return toolError(fmt.Sprintf("Failed to check balance: %v", err))
 	}
 
 	if args.StreamID == "" {
@@ -296,14 +280,6 @@ type DeleteStreamResult struct {
 func handleDeleteStream(ctx context.Context, args DeleteStreamInput, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	if ctxkeys.GetTenantID(ctx) == "" {
 		return nil, nil, mcperrors.AuthRequired()
-	}
-
-	// Pre-flight: require positive balance
-	if err := checker.RequireBalance(ctx); err != nil {
-		if pfe, ok := preflight.IsPreflightError(err); ok {
-			return toolErrorWithResolution(pfe.Blocker)
-		}
-		return toolError(fmt.Sprintf("Failed to check balance: %v", err))
 	}
 
 	if args.StreamID == "" {

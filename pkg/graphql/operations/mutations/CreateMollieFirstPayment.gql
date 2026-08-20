@@ -1,0 +1,21 @@
+mutation CreateMollieFirstPayment($tierId: ID!, $method: String!, $redirectUrl: String!) {
+  createMollieFirstPayment(tierId: $tierId, method: $method, redirectUrl: $redirectUrl) {
+    __typename
+    ... on MollieFirstPayment {
+      paymentId
+      customerId
+      paymentUrl
+    }
+    ... on ValidationError {
+      message
+      field
+    }
+    ... on NotFoundError {
+      message
+    }
+    ... on AuthError {
+      message
+      code
+    }
+  }
+}

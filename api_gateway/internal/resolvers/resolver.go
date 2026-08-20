@@ -138,25 +138,16 @@ func (r *Resolver) DoResolveViewerEndpoint(ctx context.Context, contentID string
 		return nil, fmt.Errorf("CRITICAL: Resolver.Clients.Commodore is nil - ServiceClients initialization failed silently?")
 	}
 
-	// Resource-based x402 topup (viewer pays for stream owner balance)
+	// Resource-based x402 topup (viewer pays for stream owner balance).
+	// Gateway consumes a submitted payment and Foghorn independently enforces
+	// the owner's canonical billing state; no paid boolean crosses services.
 	var httpReq *http.Request
-	x402Paid := false
 	if ginCtx, ok := ctx.Value(ctxkeys.KeyGinContext).(*gin.Context); ok && ginCtx != nil {
 		httpReq = ginCtx.Request
-		if v, ok := ginCtx.Get(string(ctxkeys.KeyX402Paid)); ok {
-			if paid, ok := v.(bool); ok {
-				x402Paid = paid
-			}
-		}
 	}
 	paymentHeader := ""
 	if httpReq != nil {
 		paymentHeader = middleware.GetX402PaymentHeader(httpReq)
-	}
-
-	if x402Paid {
-		ctx = metadata.AppendToOutgoingContext(ctx, "x402-paid", "true")
-		paymentHeader = ""
 	}
 
 	if paymentHeader != "" {

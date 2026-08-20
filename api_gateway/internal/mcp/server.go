@@ -4,7 +4,9 @@ package mcp
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -20,6 +22,7 @@ import (
 	"frameworks/api_gateway/internal/resolvers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
@@ -142,7 +145,10 @@ func (s *Server) registerTools() {
 	// Account tools (always allowed)
 	tools.RegisterAccountTools(s.mcpServer, s.serviceClients, s.resolver, s.preflightCheck, s.logger)
 
-	// Payment tools (x402 auth and balance - works without prior auth)
+	// Wallet bootstrap and linked-wallet management (authentication, never payment)
+	tools.RegisterWalletTools(s.mcpServer, s.serviceClients, s.logger)
+
+	// Payment tools (authenticated tenant top-up and balance)
 	tools.RegisterPaymentTools(s.mcpServer, s.serviceClients, s.resolver, s.preflightCheck, s.logger)
 
 	// Billing tools (require billing details)
@@ -222,7 +228,7 @@ func (s *Server) HTTPHandler() http.Handler {
 		ctx := s.extractAuthContext(r)
 		r = r.WithContext(ctx)
 
-		if ctxkeys.GetAuthType(ctx) == "x402" {
+		if authType := ctxkeys.GetAuthType(ctx); authType == "wallet" || authType == "x402" {
 			if token := ctxkeys.GetJWTToken(ctx); token != "" {
 				w.Header().Set("X-Access-Token", token)
 			}
@@ -245,7 +251,6 @@ func (s *Server) extractAuthContext(r *http.Request) context.Context {
 	authResult, err := middleware.AuthenticateRequest(ctx, r, s.serviceClients, s.jwtSecret, middleware.AuthOptions{
 		AllowCookies: false,
 		AllowWallet:  true,
-		AllowX402:    false,
 	}, s.logger)
 	if err != nil {
 		s.logger.WithError(err).Warn("MCP auth failed")
@@ -339,9 +344,6 @@ func (s *Server) registerAccessMiddleware() {
 						}
 					}
 				}
-			} else if tenantID == "" && xPayment != "" {
-				ctx = s.applyX402Auth(ctx, xPayment, clientIP)
-				tenantID = ctxkeys.GetTenantID(ctx)
 			}
 
 			publicAllowlisted := isPublicMCPOperation(opName)
@@ -377,7 +379,13 @@ func (s *Server) registerAccessMiddleware() {
 				return nil, accessDecisionError(decision)
 			}
 
-			result, err := next(ctx, method, req)
+			var result mcp.Result
+			var err error
+			if decision.X402Settled && method == "tools/call" && isSideEffectingMCPCall(opName) {
+				result, err = s.executePaidMCPMutation(ctx, method, opName, tenantID, xPayment, req, next)
+			} else {
+				result, err = next(ctx, method, req)
+			}
 			if err == nil && method == "tools/list" {
 				result = filterSkipperTools(ctx, result, s.skipperClient)
 			}
@@ -415,6 +423,152 @@ func (s *Server) registerAccessMiddleware() {
 			return result, err
 		}
 	})
+}
+
+type durableMCPMutationResult struct {
+	Texts             []string        `json:"texts,omitempty"`
+	StructuredContent json.RawMessage `json:"structured_content,omitempty"`
+	IsError           bool            `json:"is_error,omitempty"`
+	HandlerError      string          `json:"handler_error,omitempty"`
+}
+
+func isSideEffectingMCPCall(opName string) bool {
+	tool := strings.TrimPrefix(opName, "mcp:tools/call:")
+	for _, prefix := range []string{
+		"get_", "list_", "browse_", "search_", "diagnose_", "introspect_",
+		"generate_", "test_", "resolve_", "ask_", "check_",
+	} {
+		if strings.HasPrefix(tool, prefix) {
+			return false
+		}
+	}
+	return tool != "" && tool != opName && tool != "submit_payment"
+}
+
+func mcpMutationIdempotencyKey(req mcp.Request) string {
+	if extra := req.GetExtra(); extra != nil && extra.Header != nil {
+		if value := strings.TrimSpace(extra.Header.Get("Idempotency-Key")); value != "" {
+			return value
+		}
+	}
+	if params := req.GetParams(); params != nil {
+		meta := params.GetMeta()
+		for _, name := range []string{"idempotencyKey", "idempotency_key", "idempotency-key"} {
+			if value, ok := meta[name].(string); ok && strings.TrimSpace(value) != "" {
+				return strings.TrimSpace(value)
+			}
+		}
+	}
+	return ""
+}
+
+func mcpMutationFingerprint(method, operation string, params mcp.Params) (string, error) {
+	payload, err := json.Marshal(params)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(append([]byte(method+"\x00"+operation+"\x00"), payload...))
+	return fmt.Sprintf("%x", digest[:]), nil
+}
+
+func encodeDurableMCPResult(result mcp.Result, handlerErr error) ([]byte, error) {
+	envelope := durableMCPMutationResult{}
+	if handlerErr != nil {
+		envelope.HandlerError = handlerErr.Error()
+	}
+	if toolResult, ok := result.(*mcp.CallToolResult); ok && toolResult != nil {
+		envelope.IsError = toolResult.IsError
+		for _, content := range toolResult.Content {
+			if text, ok := content.(*mcp.TextContent); ok {
+				envelope.Texts = append(envelope.Texts, text.Text)
+			}
+		}
+		if toolResult.StructuredContent != nil {
+			structured, err := json.Marshal(toolResult.StructuredContent)
+			if err != nil {
+				return nil, err
+			}
+			envelope.StructuredContent = structured
+		}
+	}
+	return json.Marshal(envelope)
+}
+
+func decodeDurableMCPResult(payload []byte) (mcp.Result, error) {
+	var envelope durableMCPMutationResult
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return nil, fmt.Errorf("decode stored MCP mutation result: %w", err)
+	}
+	if envelope.HandlerError != "" {
+		return nil, errors.New(envelope.HandlerError)
+	}
+	result := &mcp.CallToolResult{IsError: envelope.IsError}
+	for _, value := range envelope.Texts {
+		result.Content = append(result.Content, &mcp.TextContent{Text: value})
+	}
+	if len(envelope.StructuredContent) > 0 {
+		var structured any
+		if err := json.Unmarshal(envelope.StructuredContent, &structured); err != nil {
+			return nil, fmt.Errorf("decode stored MCP structured result: %w", err)
+		}
+		result.StructuredContent = structured
+	}
+	return result, nil
+}
+
+func (s *Server) executePaidMCPMutation(ctx context.Context, method, operation, tenantID, payment string, req mcp.Request, next mcp.MethodHandler) (mcp.Result, error) {
+	key := mcpMutationIdempotencyKey(req)
+	if len(key) < 8 || len(key) > 255 {
+		return nil, &jsonrpc.Error{
+			Code: -32010, Message: "idempotency key required",
+			Data: json.RawMessage(`{"code":"IDEMPOTENCY_KEY_REQUIRED","message":"paid MCP mutations require Idempotency-Key or _meta.idempotencyKey containing 8-255 characters"}`),
+		}
+	}
+	payload, err := middleware.ParseX402PaymentHeader(payment)
+	if err != nil || payload.GetQuoteId() == "" {
+		return nil, &jsonrpc.Error{Code: -32011, Message: "paid mutation quote missing"}
+	}
+	fingerprint, err := mcpMutationFingerprint(method, operation, req.GetParams())
+	if err != nil {
+		return nil, err
+	}
+	claimCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	claim, err := s.serviceClients.Purser.ClaimX402MutationResult(claimCtx, &purserpb.ClaimX402MutationResultRequest{
+		TenantId: tenantID, QuoteId: payload.GetQuoteId(), IdempotencyKey: key,
+		RequestFingerprint: fingerprint, Protocol: "mcp", Operation: operation,
+	})
+	cancel()
+	if err != nil {
+		return nil, &jsonrpc.Error{Code: -32012, Message: "paid mutation idempotency rejected", Data: json.RawMessage(fmt.Sprintf("%q", err.Error()))}
+	}
+	switch claim.GetState() {
+	case "completed":
+		return decodeDurableMCPResult(claim.GetResult())
+	case "in_progress":
+		return nil, &jsonrpc.Error{
+			Code: -32013, Message: "paid mutation in progress",
+			Data: json.RawMessage(`{"code":"PAID_MUTATION_IN_PROGRESS","retry_after_seconds":2}`),
+		}
+	case "claimed":
+		result, handlerErr := next(ctx, method, req)
+		encoded, encodeErr := encodeDurableMCPResult(result, handlerErr)
+		if encodeErr != nil {
+			return result, handlerErr
+		}
+		completeCtx, completeCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		_, completeErr := s.serviceClients.Purser.CompleteX402MutationResult(completeCtx, &purserpb.CompleteX402MutationResultRequest{
+			TenantId: tenantID, QuoteId: payload.GetQuoteId(), IdempotencyKey: key,
+			RequestFingerprint: fingerprint, Result: encoded,
+			ContentType: "application/json", StatusCode: http.StatusOK,
+		})
+		completeCancel()
+		if completeErr != nil && s.logger != nil {
+			s.logger.WithError(completeErr).WithField("operation", operation).Error("Failed to persist paid MCP mutation result; claim left in progress")
+		}
+		return result, handlerErr
+	default:
+		return nil, &jsonrpc.Error{Code: -32014, Message: "invalid paid mutation claim state"}
+	}
 }
 
 func mcpResultTextBytes(result mcp.Result) int {
@@ -628,10 +782,9 @@ func isPublicMCPOperation(opName string) bool {
 		return true
 	}
 	switch opName {
-	case "mcp:tools/call:get_payment_options",
-		"mcp:tools/call:submit_payment",
-		"mcp:tools/call:resolve_playback_endpoint",
+	case "mcp:tools/call:resolve_playback_endpoint",
 		"mcp:tools/call:browse_marketplace",
+		"mcp:tools/call:request_wallet_challenge",
 		"mcp:resources/read:account://status",
 		"mcp:resources/read:billing://pricing",
 		"mcp:resources/read:clusters://marketplace":
@@ -732,59 +885,4 @@ func mcpAccessIdentity(callerTenantID, ownerTenantID string) (billingTenantID st
 	}
 	caller := callerTenantID
 	return ownerTenantID, &caller
-}
-
-func (s *Server) applyX402Auth(ctx context.Context, xPayment, clientIP string) context.Context {
-	if xPayment == "" || s.serviceClients == nil || s.serviceClients.Commodore == nil {
-		return ctx
-	}
-
-	payload, err := middleware.ParseX402PaymentHeader(xPayment)
-	if err != nil {
-		if s.logger != nil {
-			s.logger.WithError(err).Warn("Invalid X-PAYMENT header")
-		}
-		return ctx
-	}
-
-	resp, err := s.serviceClients.Commodore.WalletLoginWithX402(ctx, payload, clientIP, "", nil)
-	if err != nil {
-		if s.logger != nil {
-			s.logger.WithError(err).Warn("X-PAYMENT login failed")
-		}
-		return ctx
-	}
-	if resp == nil || resp.Auth == nil || resp.Auth.User == nil {
-		return ctx
-	}
-
-	email := ""
-	if resp.Auth.User.Email != nil {
-		email = *resp.Auth.User.Email
-	}
-	expiresAt := (*time.Time)(nil)
-	if resp.Auth.ExpiresAt != nil {
-		value := resp.Auth.ExpiresAt.AsTime()
-		expiresAt = &value
-	}
-
-	walletAddress := resp.PayerAddress
-	if walletAddress == "" && payload.Payload != nil && payload.Payload.Authorization != nil {
-		walletAddress = payload.Payload.Authorization.From
-	}
-
-	authResult := &middleware.AuthResult{
-		UserID:        resp.Auth.User.Id,
-		TenantID:      resp.Auth.User.TenantId,
-		Email:         email,
-		Role:          resp.Auth.User.Role,
-		AuthType:      "x402",
-		JWTToken:      resp.Auth.Token,
-		WalletAddress: walletAddress,
-		ExpiresAt:     expiresAt,
-		X402Processed: true,
-		X402AuthOnly:  resp.IsAuthOnly,
-	}
-
-	return middleware.ApplyAuthToContext(ctx, authResult)
 }

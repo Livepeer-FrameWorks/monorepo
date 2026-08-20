@@ -89,6 +89,9 @@ func SolventPurser() *FakePurser {
 		GetBillingDetailsFn: func(context.Context, string) (*purserpb.BillingDetails, error) {
 			return &purserpb.BillingDetails{IsComplete: true}, nil
 		},
+		GetTenantBillingStatusFn: func(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {
+			return &purserpb.GetTenantBillingStatusResponse{BillingModel: "prepaid"}, nil
+		},
 		GetPrepaidBalanceFn: func(context.Context, string, string) (*purserpb.PrepaidBalance, error) {
 			return &purserpb.PrepaidBalance{BalanceCents: 5000, AvailableBalanceCents: 5000}, nil
 		},
@@ -143,6 +146,7 @@ type FakeCommodore struct {
 	GetMeFn                       func(ctx context.Context) (*commodorepb.User, error)
 	LinkEmailFn                   func(ctx context.Context, email, password string) (*commodorepb.LinkEmailResponse, error)
 	LinkWalletFn                  func(ctx context.Context, address, message, signature string) (*commodorepb.WalletIdentity, error)
+	ListWalletsFn                 func(ctx context.Context) (*commodorepb.ListWalletsResponse, error)
 	ListPullSourceEventsFn        func(ctx context.Context, req *commodorepb.ListPullSourceEventsRequest) (*commodorepb.ListPullSourceEventsResponse, error)
 	ListStorageArtifactsFn        func(ctx context.Context, req *commodorepb.ListStorageArtifactsRequest) (*commodorepb.ListStorageArtifactsResponse, error)
 	GetTenantUserCountFn          func(ctx context.Context, tenantID string) (*commodorepb.GetTenantUserCountResponse, error)
@@ -161,6 +165,7 @@ type FakeCommodore struct {
 	ResolveChapterPlaybackIDFn    func(ctx context.Context, playbackID string) (*commodorepb.ResolveChapterPlaybackIDResponse, error)
 	UnlinkWalletFn                func(ctx context.Context, walletID string) (*commodorepb.UnlinkWalletResponse, error)
 	WalletLoginFn                 func(ctx context.Context, address, message, signature string, attribution *commonpb.SignupAttribution) (*commodorepb.AuthResponse, error)
+	IssueWalletChallengeFn        func(ctx context.Context, address string, chainID uint64) (*commodorepb.IssueWalletChallengeResponse, error)
 	GetMediaRetentionPolicyFn     func(ctx context.Context, req *commodorepb.GetMediaRetentionPolicyRequest) (*commodorepb.GetMediaRetentionPolicyResponse, error)
 	SetMediaRetentionPolicyFn     func(ctx context.Context, req *commodorepb.SetMediaRetentionPolicyRequest) (*commodorepb.SetMediaRetentionPolicyResponse, error)
 	UpdateAssetRetentionFn        func(ctx context.Context, req *commodorepb.UpdateAssetRetentionRequest) (*commodorepb.UpdateAssetRetentionResponse, error)
@@ -896,12 +901,18 @@ type FakePurser struct {
 	GetBillingDetailsFn          func(ctx context.Context, tenantID string) (*purserpb.BillingDetails, error)
 	GetPrepaidBalanceFn          func(ctx context.Context, tenantID, currency string) (*purserpb.PrepaidBalance, error)
 	GetTenantBillingStatusFn     func(ctx context.Context, tenantID string) (*purserpb.GetTenantBillingStatusResponse, error)
+	ClaimX402MutationResultFn    func(ctx context.Context, req *purserpb.ClaimX402MutationResultRequest) (*purserpb.ClaimX402MutationResultResponse, error)
+	CompleteX402MutationResultFn func(ctx context.Context, req *purserpb.CompleteX402MutationResultRequest) (*purserpb.CompleteX402MutationResultResponse, error)
 	ListTenantBillingSnapshotsFn func(ctx context.Context, tenantIDs []string, limit int32) (*purserpb.ListTenantBillingSnapshotsResponse, error)
 	GetPaymentRequirementsFn     func(ctx context.Context, tenantID, resource string) (*purserpb.PaymentRequirements, error)
 
 	GetBillingTiersFn             func(ctx context.Context, includeInactive bool, pagination *commonpb.CursorPaginationRequest) (*purserpb.GetBillingTiersResponse, error)
+	ListMeterDefinitionsFn        func(ctx context.Context) (*purserpb.ListMeterDefinitionsResponse, error)
+	GetSubscriptionFn             func(ctx context.Context, tenantID string) (*purserpb.GetSubscriptionResponse, error)
 	GetInvoiceFn                  func(ctx context.Context, invoiceID string) (*purserpb.GetInvoiceResponse, error)
 	ListInvoicesFn                func(ctx context.Context, tenantID string, status *string, pagination *commonpb.CursorPaginationRequest) (*purserpb.ListInvoicesResponse, error)
+	ListBillingDocumentsFn        func(ctx context.Context, tenantID string) (*purserpb.ListBillingDocumentsResponse, error)
+	GetBillingDocumentFn          func(ctx context.Context, tenantID, kind, documentID string) (*purserpb.GetBillingDocumentResponse, error)
 	GetBillingStatusFn            func(ctx context.Context, tenantID string) (*purserpb.BillingStatusResponse, error)
 	UpdateBillingDetailsFn        func(ctx context.Context, req *purserpb.UpdateBillingDetailsRequest) (*purserpb.BillingDetails, error)
 	CreateCryptoTopupFn           func(ctx context.Context, req *purserpb.CreateCryptoTopupRequest) (*purserpb.CreateCryptoTopupResponse, error)
@@ -913,6 +924,8 @@ type FakePurser struct {
 	CreateMollieFirstPaymentFn    func(ctx context.Context, tenantID, tierID, method, redirectURL string) (*purserpb.CreateMollieFirstPaymentResponse, error)
 	CreateMollieSubscriptionFn    func(ctx context.Context, tenantID, tierID, mandateID, description string) (*purserpb.CreateMollieSubscriptionResponse, error)
 	CreatePaymentFn               func(ctx context.Context, req *purserpb.PaymentRequest) (*purserpb.PaymentResponse, error)
+	GetPaymentFn                  func(ctx context.Context, paymentID string) (*purserpb.Payment, error)
+	ListPaymentsFn                func(ctx context.Context, req *purserpb.ListPaymentsRequest) (*purserpb.ListPaymentsResponse, error)
 	CreateStripeBillingPortalFn   func(ctx context.Context, tenantID, returnURL string) (*purserpb.CreateBillingPortalResponse, error)
 	CreateStripeCheckoutSessionFn func(ctx context.Context, tenantID, tierID, billingPeriod, successURL, cancelURL string) (*purserpb.CreateStripeCheckoutResponse, error)
 	GetBillingTierFn              func(ctx context.Context, tierID string) (*purserpb.BillingTier, error)
@@ -952,6 +965,20 @@ func (f *FakePurser) GetTenantBillingStatus(ctx context.Context, tenantID string
 	return f.GetTenantBillingStatusFn(ctx, tenantID)
 }
 
+func (f *FakePurser) ClaimX402MutationResult(ctx context.Context, req *purserpb.ClaimX402MutationResultRequest) (*purserpb.ClaimX402MutationResultResponse, error) {
+	if f.ClaimX402MutationResultFn != nil {
+		return f.ClaimX402MutationResultFn(ctx, req)
+	}
+	return &purserpb.ClaimX402MutationResultResponse{State: "claimed"}, nil
+}
+
+func (f *FakePurser) CompleteX402MutationResult(ctx context.Context, req *purserpb.CompleteX402MutationResultRequest) (*purserpb.CompleteX402MutationResultResponse, error) {
+	if f.CompleteX402MutationResultFn != nil {
+		return f.CompleteX402MutationResultFn(ctx, req)
+	}
+	return &purserpb.CompleteX402MutationResultResponse{Completed: true}, nil
+}
+
 func (f *FakePurser) GetPaymentRequirements(ctx context.Context, tenantID, resource string) (*purserpb.PaymentRequirements, error) {
 	f.Calls++
 	if f.GetPaymentRequirementsFn == nil {
@@ -968,6 +995,22 @@ func (f *FakePurser) GetBillingTiers(ctx context.Context, includeInactive bool, 
 	return f.GetBillingTiersFn(ctx, includeInactive, pagination)
 }
 
+func (f *FakePurser) ListMeterDefinitions(ctx context.Context) (*purserpb.ListMeterDefinitionsResponse, error) {
+	f.Calls++
+	if f.ListMeterDefinitionsFn == nil {
+		panic("FakePurser.ListMeterDefinitions not stubbed")
+	}
+	return f.ListMeterDefinitionsFn(ctx)
+}
+
+func (f *FakePurser) GetSubscription(ctx context.Context, tenantID string) (*purserpb.GetSubscriptionResponse, error) {
+	f.Calls++
+	if f.GetSubscriptionFn == nil {
+		panic("FakePurser.GetSubscription not stubbed")
+	}
+	return f.GetSubscriptionFn(ctx, tenantID)
+}
+
 func (f *FakePurser) GetInvoice(ctx context.Context, invoiceID string) (*purserpb.GetInvoiceResponse, error) {
 	f.Calls++
 	if f.GetInvoiceFn == nil {
@@ -982,6 +1025,22 @@ func (f *FakePurser) ListInvoices(ctx context.Context, tenantID string, status *
 		panic("FakePurser.ListInvoices not stubbed")
 	}
 	return f.ListInvoicesFn(ctx, tenantID, status, pagination)
+}
+
+func (f *FakePurser) ListBillingDocuments(ctx context.Context, tenantID string) (*purserpb.ListBillingDocumentsResponse, error) {
+	f.Calls++
+	if f.ListBillingDocumentsFn == nil {
+		panic("FakePurser.ListBillingDocuments not stubbed")
+	}
+	return f.ListBillingDocumentsFn(ctx, tenantID)
+}
+
+func (f *FakePurser) GetBillingDocument(ctx context.Context, tenantID, kind, documentID string) (*purserpb.GetBillingDocumentResponse, error) {
+	f.Calls++
+	if f.GetBillingDocumentFn == nil {
+		panic("FakePurser.GetBillingDocument not stubbed")
+	}
+	return f.GetBillingDocumentFn(ctx, tenantID, kind, documentID)
 }
 
 func (f *FakePurser) GetBillingStatus(ctx context.Context, tenantID string) (*purserpb.BillingStatusResponse, error) {

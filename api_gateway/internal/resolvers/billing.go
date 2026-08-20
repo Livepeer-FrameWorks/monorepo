@@ -42,7 +42,7 @@ func (r *Resolver) DoGetInvoicesConnection(ctx context.Context, first *int, afte
 	}
 
 	tenantID := ctxkeys.GetTenantID(ctx)
-	if tenantID == "" {
+	if tenantID == "" && !middleware.IsDemoMode(ctx) {
 		return nil, fmt.Errorf("tenant context required")
 	}
 
@@ -93,6 +93,91 @@ func (r *Resolver) DoGetInvoicesConnection(ctx context.Context, first *int, afte
 		Nodes:      edgeNodes,
 		PageInfo:   pageInfo,
 		TotalCount: int(resp.Pagination.GetTotalCount()),
+	}, nil
+}
+
+// DoGetPayment returns one payment owned by the authenticated tenant.
+func (r *Resolver) DoGetPayment(ctx context.Context, id string) (*purserpb.Payment, error) {
+	if middleware.IsDemoMode(ctx) {
+		for _, payment := range demo.GenerateBillingStatus().GetRecentPayments() {
+			if payment.GetId() == id {
+				return payment, nil
+			}
+		}
+		return nil, errDemoUnavailable("Payment")
+	}
+	if ctxkeys.GetTenantID(ctx) == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+	payment, err := r.Clients.Purser.GetPayment(ctx, id)
+	if err != nil {
+		r.Logger.WithError(err).WithField("payment_id", id).Error("Failed to load payment")
+		return nil, fmt.Errorf("failed to load payment: %w", err)
+	}
+	return payment, nil
+}
+
+// DoGetPaymentsConnection returns tenant-owned payments using Purser's keyset
+// pagination. Filters never replace the authenticated tenant constraint.
+func (r *Resolver) DoGetPaymentsConnection(ctx context.Context, first *int, after *string, last *int, before *string, invoiceID, paymentStatus, method *string) (*model.InvoicePaymentsConnection, error) {
+	if middleware.IsDemoMode(ctx) {
+		payments := demo.GenerateBillingStatus().GetRecentPayments()
+		edges := make([]*model.InvoicePaymentEdge, 0, len(payments))
+		for _, payment := range payments {
+			if payment == nil || payment.GetCreatedAt() == nil {
+				continue
+			}
+			edges = append(edges, &model.InvoicePaymentEdge{
+				Cursor: pagination.EncodeCursor(payment.GetCreatedAt().AsTime(), payment.GetId()),
+				Node:   payment,
+			})
+		}
+		nodes := make([]*purserpb.Payment, 0, len(edges))
+		for _, edge := range edges {
+			nodes = append(nodes, edge.Node)
+		}
+		return &model.InvoicePaymentsConnection{
+			Edges: edges, Nodes: nodes, PageInfo: &model.PageInfo{}, TotalCount: len(nodes),
+		}, nil
+	}
+
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" && !middleware.IsDemoMode(ctx) {
+		return nil, fmt.Errorf("tenant context required")
+	}
+	resp, err := r.Clients.Purser.ListPayments(ctx, &purserpb.ListPaymentsRequest{
+		TenantId: tenantID, InvoiceId: invoiceID, Status: paymentStatus, Method: method,
+		Pagination: buildBillingPaginationRequest(first, after, last, before),
+	})
+	if err != nil {
+		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to list payments")
+		return nil, fmt.Errorf("failed to list payments: %w", err)
+	}
+	edges := make([]*model.InvoicePaymentEdge, 0, len(resp.GetPayments()))
+	for _, payment := range resp.GetPayments() {
+		if payment == nil || payment.GetCreatedAt() == nil {
+			continue
+		}
+		edges = append(edges, &model.InvoicePaymentEdge{
+			Cursor: pagination.EncodeCursor(payment.GetCreatedAt().AsTime(), payment.GetId()),
+			Node:   payment,
+		})
+	}
+	nodes := make([]*purserpb.Payment, 0, len(edges))
+	for _, edge := range edges {
+		nodes = append(nodes, edge.Node)
+	}
+	pageInfo := &model.PageInfo{
+		HasPreviousPage: resp.GetPagination().GetHasPreviousPage(),
+		HasNextPage:     resp.GetPagination().GetHasNextPage(),
+	}
+	if len(edges) > 0 {
+		pageInfo.StartCursor = &edges[0].Cursor
+		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
+	}
+	return &model.InvoicePaymentsConnection{
+		Edges: edges, Nodes: nodes, PageInfo: pageInfo,
+		TotalCount: int(resp.GetPagination().GetTotalCount()),
 	}, nil
 }
 
@@ -856,8 +941,6 @@ func purserPaymentMethod(method model.PaymentMethod) (string, error) {
 		return "crypto_eth", nil
 	case "CRYPTO_USDC":
 		return "crypto_usdc", nil
-	case "BANK_TRANSFER":
-		return "bank_transfer", nil
 	default:
 		return "", fmt.Errorf("unsupported payment method %q", method)
 	}
@@ -1442,21 +1525,9 @@ func (r *Resolver) DoListMollieMandates(ctx context.Context) ([]*purserpb.Mollie
 
 // DoCreateCardTopup creates a card-based top-up checkout session for prepaid balance
 func (r *Resolver) DoCreateCardTopup(ctx context.Context, input model.CreateCardTopupInput) (*model.CardTopupResult, error) {
-	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Demo mode: returning synthetic card top-up")
-		return &model.CardTopupResult{
-			TopupID:     "topup_demo_" + time.Now().Format("20060102150405"),
-			CheckoutURL: "https://checkout.stripe.com/demo-topup",
-			ExpiresAt:   time.Now().Add(30 * time.Minute),
-		}, nil
-	}
-
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("authentication required")
-	}
-	if input.AmountCents <= 0 || input.AmountCents > 10_000_000 {
-		return nil, fmt.Errorf("amount_cents must be between 1 and 10000000")
 	}
 
 	// Map GraphQL provider enum to proto
@@ -1473,6 +1544,23 @@ func (r *Resolver) DoCreateCardTopup(ctx context.Context, input model.CreateCard
 	currency := billing.DefaultCurrency()
 	if input.Currency != nil && *input.Currency != "" {
 		currency = *input.Currency
+	}
+	currency = strings.ToUpper(strings.TrimSpace(currency))
+	minimumCents, minimumErr := billing.FiatTopupMinimumCents(provider, currency)
+	if minimumErr != nil {
+		return nil, minimumErr
+	}
+	if int64(input.AmountCents) < minimumCents || int64(input.AmountCents) > billing.MaximumTopupCents {
+		return nil, fmt.Errorf("amount_cents must be between %d and %d for %s/%s", minimumCents, billing.MaximumTopupCents, provider, strings.ToUpper(currency))
+	}
+
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic card top-up")
+		return &model.CardTopupResult{
+			TopupID:     "topup_demo_" + time.Now().Format("20060102150405"),
+			CheckoutURL: "https://checkout.stripe.com/demo-topup",
+			ExpiresAt:   time.Now().Add(30 * time.Minute),
+		}, nil
 	}
 
 	r.Logger.WithField("tenant_id", tenantID).
@@ -1573,17 +1661,12 @@ func demoCryptoTopup(input model.CreateCryptoTopupInput) *model.CryptoTopupResul
 
 // DoCreateCryptoTopup creates a crypto deposit address for prepaid balance top-up
 func (r *Resolver) DoCreateCryptoTopup(ctx context.Context, input model.CreateCryptoTopupInput) (*model.CryptoTopupResult, error) {
-	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Demo mode: returning synthetic crypto top-up")
-		return demoCryptoTopup(input), nil
-	}
-
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("authentication required")
 	}
-	if input.AmountCents <= 0 || input.AmountCents > 10_000_000 {
-		return nil, fmt.Errorf("amount_cents must be between 1 and 10000000")
+	if int64(input.AmountCents) < billing.CryptoTopupFloorCents || int64(input.AmountCents) > billing.MaximumTopupCents {
+		return nil, fmt.Errorf("amount_cents must be between %d and %d", billing.CryptoTopupFloorCents, billing.MaximumTopupCents)
 	}
 
 	// Validate asset (already a proto enum from gqlgen)
@@ -1596,6 +1679,12 @@ func (r *Resolver) DoCreateCryptoTopup(ctx context.Context, input model.CreateCr
 	if input.Currency != nil && *input.Currency != "" {
 		currency = *input.Currency
 	}
+	currency = strings.ToUpper(strings.TrimSpace(currency))
+
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic crypto top-up")
+		return demoCryptoTopup(input), nil
+	}
 
 	r.Logger.WithField("tenant_id", tenantID).
 		WithField("amount_cents", input.AmountCents).
@@ -1607,6 +1696,7 @@ func (r *Resolver) DoCreateCryptoTopup(ctx context.Context, input model.CreateCr
 		ExpectedAmountCents: int64(input.AmountCents),
 		Asset:               protoAsset,
 		Currency:            currency,
+		ClientIp:            ctxkeys.GetClientIP(ctx),
 	}
 
 	resp, err := r.Clients.Purser.CreateCryptoTopup(ctx, req)

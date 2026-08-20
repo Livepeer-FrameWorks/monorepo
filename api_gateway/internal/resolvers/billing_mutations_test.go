@@ -643,6 +643,11 @@ func TestDoCreateCardTopup(t *testing.T) {
 	if amtGuard.Calls != 0 {
 		t.Fatalf("backend consulted for invalid amount: %d calls", amtGuard.Calls)
 	}
+	if _, err := purserResolver(amtGuard).DoCreateCardTopup(clientstest.AuthedCtx("t1"), model.CreateCardTopupInput{
+		AmountCents: 499, Provider: model.CardPaymentProviderStripe,
+	}); err == nil {
+		t.Fatal("sub-minimum card top-up should error")
+	}
 
 	// Unsupported provider → error.
 	provGuard := &clientstest.FakePurser{}

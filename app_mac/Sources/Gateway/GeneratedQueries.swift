@@ -942,6 +942,20 @@ enum GQL {
       billingStatus
       currency
       paymentMethods
+      collectionReady
+      collectionProvider
+      setupProviders
+      recentPayments {
+        id
+        invoiceId
+        method
+        amount
+        currency
+        status
+        confirmedAt
+        createdAt
+        updatedAt
+      }
       nextBillingDate
       trialEndsAt
       outstandingAmount
@@ -1613,6 +1627,18 @@ enum GQL {
   }
   """
 
+  static let GetMollieMandates = """
+  query GetMollieMandates {
+    mollieMandates {
+      mandateId
+      customerId
+      status
+      method
+      createdAt
+    }
+  }
+  """
+
   static let GetMyClusterInvites = """
   # Fetch cluster invitations sent to the current tenant
   # Returns pending invites with access level and expiration details
@@ -2027,6 +2053,32 @@ enum GQL {
       score
       dialedRecently
       lastSeen
+    }
+  }
+  """
+
+  static let GetPayments = """
+  query GetPayments($page: ConnectionInput) {
+    paymentsConnection(page: $page) {
+      edges {
+        cursor
+        node {
+          id
+          invoiceId
+          method
+          amount
+          currency
+          status
+          confirmedAt
+          createdAt
+          updatedAt
+        }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      totalCount
     }
   }
   """
@@ -4394,6 +4446,58 @@ enum GQL {
   }
   """
 
+  static let CreateMollieFirstPayment = """
+  mutation CreateMollieFirstPayment($tierId: ID!, $method: String!, $redirectUrl: String!) {
+    createMollieFirstPayment(tierId: $tierId, method: $method, redirectUrl: $redirectUrl) {
+      __typename
+      ... on MollieFirstPayment {
+        paymentId
+        customerId
+        paymentUrl
+      }
+      ... on ValidationError {
+        message
+        field
+      }
+      ... on NotFoundError {
+        message
+      }
+      ... on AuthError {
+        message
+        code
+      }
+    }
+  }
+  """
+
+  static let CreateMollieSubscription = """
+  mutation CreateMollieSubscription($tierId: ID!, $mandateId: String!, $description: String) {
+    createMollieSubscription(
+      tierId: $tierId
+      mandateId: $mandateId
+      description: $description
+    ) {
+      __typename
+      ... on MollieSubscription {
+        subscriptionId
+        status
+        nextPaymentDate
+      }
+      ... on ValidationError {
+        message
+        field
+      }
+      ... on NotFoundError {
+        message
+      }
+      ... on AuthError {
+        message
+        code
+      }
+    }
+  }
+  """
+
   static let CreatePayment = """
   # Create a new payment transaction
   mutation CreatePayment($input: CreatePaymentInput!) {
@@ -4504,6 +4608,39 @@ enum GQL {
       }
       ... on AuthError {
         ...AuthErrorFields
+      }
+    }
+  }
+  """
+
+  static let CreateStripeCheckout = """
+  mutation CreateStripeCheckout(
+    $tierId: ID!
+    $billingPeriod: String!
+    $successUrl: String!
+    $cancelUrl: String!
+  ) {
+    createStripeCheckout(
+      tierId: $tierId
+      billingPeriod: $billingPeriod
+      successUrl: $successUrl
+      cancelUrl: $cancelUrl
+    ) {
+      __typename
+      ... on StripeCheckoutSession {
+        sessionId
+        checkoutUrl
+      }
+      ... on ValidationError {
+        message
+        field
+      }
+      ... on NotFoundError {
+        message
+      }
+      ... on AuthError {
+        message
+        code
       }
     }
   }

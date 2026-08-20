@@ -147,7 +147,7 @@ func TestPublicOrJWTAuthRejectsUnauthenticatedMutation(t *testing.T) {
 	}
 }
 
-func TestPublicOrJWTAuthInvalidXPaymentReturnsPaymentRequired(t *testing.T) {
+func TestPublicOrJWTAuthDoesNotTreatXPaymentAsAuthentication(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	r := gin.New()
@@ -162,8 +162,8 @@ func TestPublicOrJWTAuthInvalidXPaymentReturnsPaymentRequired(t *testing.T) {
 	req.Header.Set("X-PAYMENT", "not-base64")
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusPaymentRequired {
-		t.Fatalf("expected 402 for invalid x402 payment, got %d", w.Code)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 because payment is not authentication, got %d", w.Code)
 	}
 }
 

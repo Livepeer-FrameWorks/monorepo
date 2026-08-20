@@ -217,3 +217,26 @@ func TestIsAllowlistedQuery_JSONBody(t *testing.T) {
 		})
 	}
 }
+
+func TestParseGraphQLTopLevelFieldsUsesSchemaFieldsNotClientOperationName(t *testing.T) {
+	opType, fields := parseGraphQLTopLevelFields(
+		`mutation billingStatus { harmless: createClip(input: {}) { id } }`,
+		"billingStatus",
+	)
+	if opType != "mutation" {
+		t.Fatalf("operation type = %q, want mutation", opType)
+	}
+	if len(fields) != 1 || fields[0] != "createClip" {
+		t.Fatalf("fields = %#v, want createClip", fields)
+	}
+}
+
+func TestParseGraphQLTopLevelFieldsCollectsFragments(t *testing.T) {
+	opType, fields := parseGraphQLTopLevelFields(
+		`query Dashboard { ...Overview } fragment Overview on Query { billingStatus { currency } tenant { id } }`,
+		"Dashboard",
+	)
+	if opType != "query" || len(fields) != 2 || fields[0] != "billingStatus" || fields[1] != "tenant" {
+		t.Fatalf("parsed access = %q %#v", opType, fields)
+	}
+}

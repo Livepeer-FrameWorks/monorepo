@@ -1164,6 +1164,18 @@ type InvoiceEdge struct {
 	Node   *purserpb.Invoice `json:"node"`
 }
 
+type InvoicePaymentEdge struct {
+	Cursor string            `json:"cursor"`
+	Node   *purserpb.Payment `json:"node"`
+}
+
+type InvoicePaymentsConnection struct {
+	Edges      []*InvoicePaymentEdge `json:"edges"`
+	Nodes      []*purserpb.Payment   `json:"nodes"`
+	PageInfo   *PageInfo             `json:"pageInfo"`
+	TotalCount int                   `json:"totalCount"`
+}
+
 type InvoicesConnection struct {
 	Edges      []*InvoiceEdge      `json:"edges"`
 	Nodes      []*purserpb.Invoice `json:"nodes"`
@@ -3165,6 +3177,8 @@ const (
 	InvoiceStatusOverdue InvoiceStatus = "OVERDUE"
 	// Payment processing failed.
 	InvoiceStatusFailed InvoiceStatus = "FAILED"
+	// Invoice requires operator review and cannot be paid.
+	InvoiceStatusManualReview InvoiceStatus = "MANUAL_REVIEW"
 	// Invoice cancelled.
 	InvoiceStatusCancelled InvoiceStatus = "CANCELLED"
 )
@@ -3175,12 +3189,13 @@ var AllInvoiceStatus = []InvoiceStatus{
 	InvoiceStatusPaid,
 	InvoiceStatusOverdue,
 	InvoiceStatusFailed,
+	InvoiceStatusManualReview,
 	InvoiceStatusCancelled,
 }
 
 func (e InvoiceStatus) IsValid() bool {
 	switch e {
-	case InvoiceStatusDraft, InvoiceStatusPending, InvoiceStatusPaid, InvoiceStatusOverdue, InvoiceStatusFailed, InvoiceStatusCancelled:
+	case InvoiceStatusDraft, InvoiceStatusPending, InvoiceStatusPaid, InvoiceStatusOverdue, InvoiceStatusFailed, InvoiceStatusManualReview, InvoiceStatusCancelled:
 		return true
 	}
 	return false
@@ -3288,20 +3303,17 @@ const (
 	PaymentMethodCryptoEth PaymentMethod = "CRYPTO_ETH"
 	// USDC invoice payment.
 	PaymentMethodCryptoUsdc PaymentMethod = "CRYPTO_USDC"
-	// ACH/wire bank transfer.
-	PaymentMethodBankTransfer PaymentMethod = "BANK_TRANSFER"
 )
 
 var AllPaymentMethod = []PaymentMethod{
 	PaymentMethodCard,
 	PaymentMethodCryptoEth,
 	PaymentMethodCryptoUsdc,
-	PaymentMethodBankTransfer,
 }
 
 func (e PaymentMethod) IsValid() bool {
 	switch e {
-	case PaymentMethodCard, PaymentMethodCryptoEth, PaymentMethodCryptoUsdc, PaymentMethodBankTransfer:
+	case PaymentMethodCard, PaymentMethodCryptoEth, PaymentMethodCryptoUsdc:
 		return true
 	}
 	return false

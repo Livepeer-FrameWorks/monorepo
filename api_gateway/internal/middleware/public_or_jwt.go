@@ -12,6 +12,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/x402"
 
 	"github.com/gin-gonic/gin"
 )
@@ -143,7 +144,11 @@ func PublicOrJWTAuth(secret []byte, serviceClients *clients.ServiceClients) gin.
 			if serviceClients != nil && serviceClients.Purser != nil {
 				x402Provider = serviceClients.Purser
 			}
-			c.JSON(http.StatusPaymentRequired, build402Response(c.Request.Context(), "", opName, resourcePath, x402Provider, nil))
+			response, paymentRequired := build402ResponseWithHeader(c.Request.Context(), "", opName, resourcePath, x402Provider, nil)
+			if paymentRequired != "" {
+				c.Header(x402.PaymentRequiredHeader, paymentRequired)
+			}
+			c.JSON(http.StatusPaymentRequired, response)
 			c.Abort()
 			return
 		}
@@ -151,7 +156,6 @@ func PublicOrJWTAuth(secret []byte, serviceClients *clients.ServiceClients) gin.
 		authResult, err := AuthenticateRequest(c.Request.Context(), c.Request, serviceClients, secret, AuthOptions{
 			AllowCookies: true,
 			AllowWallet:  true,
-			AllowX402:    true,
 		}, nil)
 		if err != nil {
 			if GetX402PaymentHeader(c.Request) != "" {

@@ -104,6 +104,61 @@ func selectGraphQLOperation(doc *ast.QueryDocument, operationName string) *ast.O
 	return nil
 }
 
+func parseGraphQLTopLevelFields(query, operationName string) (string, []string) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return "", nil
+	}
+	doc, err := parser.ParseQuery(&ast.Source{Input: query})
+	if err != nil {
+		return "", nil
+	}
+	op := selectGraphQLOperation(doc, operationName)
+	if op == nil {
+		return "", nil
+	}
+
+	fragments := make(map[string]*ast.FragmentDefinition, len(doc.Fragments))
+	for _, fragment := range doc.Fragments {
+		fragments[fragment.Name] = fragment
+	}
+	fields := make([]string, 0, len(op.SelectionSet))
+	seenFields := map[string]bool{}
+	if !collectGraphQLTopLevelFields(op.SelectionSet, fragments, map[string]bool{}, seenFields, &fields) {
+		return "", nil
+	}
+	return string(op.Operation), fields
+}
+
+func collectGraphQLTopLevelFields(selectionSet ast.SelectionSet, fragments map[string]*ast.FragmentDefinition, visiting, seenFields map[string]bool, fields *[]string) bool {
+	for _, selection := range selectionSet {
+		switch node := selection.(type) {
+		case *ast.Field:
+			if !seenFields[node.Name] {
+				seenFields[node.Name] = true
+				*fields = append(*fields, node.Name)
+			}
+		case *ast.FragmentSpread:
+			fragment := fragments[node.Name]
+			if fragment == nil || visiting[node.Name] {
+				return false
+			}
+			visiting[node.Name] = true
+			if !collectGraphQLTopLevelFields(fragment.SelectionSet, fragments, visiting, seenFields, fields) {
+				return false
+			}
+			delete(visiting, node.Name)
+		case *ast.InlineFragment:
+			if !collectGraphQLTopLevelFields(node.SelectionSet, fragments, visiting, seenFields, fields) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return len(*fields) > 0
+}
+
 func selectionSetAllowlisted(
 	selectionSet ast.SelectionSet,
 	fragments map[string]*ast.FragmentDefinition,

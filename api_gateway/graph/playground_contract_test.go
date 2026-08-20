@@ -103,6 +103,24 @@ func TestPlaygroundCuratedTemplatesExecuteInDemoMode(t *testing.T) {
 	}
 }
 
+func TestBuilderWalletCryptoGraphQLExamplesMatchSchema(t *testing.T) {
+	repoRoot := findRepoRoot(t)
+	path := filepath.Join(repoRoot, "website_docs", "src", "content", "docs", "builders", "wallet-and-crypto.mdx")
+	source := readFile(t, path)
+	blocks := regexp.MustCompile("(?s)```graphql\\s*(.*?)```").FindAllStringSubmatch(source, -1)
+	if len(blocks) == 0 {
+		t.Fatalf("no GraphQL examples found in %s", path)
+	}
+	srv := newPlaygroundTestServer()
+	for i, block := range blocks {
+		name := fmt.Sprintf("wallet-and-crypto-example-%d", i+1)
+		doc := parseQueryDocument(t, block[1], name)
+		if errs := validator.ValidateWithRules(srv.schema, doc, nil); len(errs) > 0 {
+			t.Errorf("builder example %d does not match the Bridge schema:\n%s", i+1, errs.Error())
+		}
+	}
+}
+
 func readCatalogTemplatePaths(t *testing.T, catalogPath string) []string {
 	t.Helper()
 	source := readFile(t, catalogPath)

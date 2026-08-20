@@ -18,6 +18,10 @@ func checkerWith(p *clientstest.FakePurser) *Checker {
 	return NewChecker(clientstest.Clients(clientstest.WithPurser(p)), clientstest.DiscardLogger())
 }
 
+func prepaidBillingStatus(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {
+	return &purserpb.GetTenantBillingStatusResponse{BillingModel: "prepaid"}, nil
+}
+
 func TestCheckBillingDetails(t *testing.T) {
 	// Purser error → treated as incomplete (a blocker, not a hard error).
 	c := checkerWith(&clientstest.FakePurser{
@@ -59,6 +63,7 @@ func TestCheckBillingDetails(t *testing.T) {
 func TestCheckBalance(t *testing.T) {
 	// Positive balance → no blocker.
 	c := checkerWith(&clientstest.FakePurser{
+		GetTenantBillingStatusFn: prepaidBillingStatus,
 		GetPrepaidBalanceFn: func(context.Context, string, string) (*purserpb.PrepaidBalance, error) {
 			return &purserpb.PrepaidBalance{BalanceCents: 1000, AvailableBalanceCents: 1000}, nil
 		},
@@ -69,6 +74,7 @@ func TestCheckBalance(t *testing.T) {
 
 	// Zero balance → INSUFFICIENT_BALANCE blocker, with x402 options attached.
 	c = checkerWith(&clientstest.FakePurser{
+		GetTenantBillingStatusFn: prepaidBillingStatus,
 		GetPrepaidBalanceFn: func(context.Context, string, string) (*purserpb.PrepaidBalance, error) {
 			return &purserpb.PrepaidBalance{BalanceCents: 0}, nil
 		},
@@ -86,17 +92,24 @@ func TestCheckBalance(t *testing.T) {
 		t.Fatalf("expected x402 accepts attached, got %+v", b.X402Accepts)
 	}
 
-	// Balance fetch error + postpaid model → balance check is skipped (no blocker).
+	// Provider-backed postpaid model skips the prepaid balance check.
 	c = checkerWith(&clientstest.FakePurser{
-		GetPrepaidBalanceFn: func(context.Context, string, string) (*purserpb.PrepaidBalance, error) {
-			return nil, errors.New("no balance row")
-		},
 		GetTenantBillingStatusFn: func(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {
-			return &purserpb.GetTenantBillingStatusResponse{BillingModel: "postpaid"}, nil
+			return &purserpb.GetTenantBillingStatusResponse{BillingModel: "postpaid", CollectionReady: true}, nil
 		},
 	})
 	if b, err := c.CheckBalance(ctxTenant("t1")); b != nil || err != nil {
 		t.Fatalf("postpaid → (%v,%v), want (nil,nil)", b, err)
+	}
+
+	// A postpaid label alone is not enough to authorize billable operations.
+	c = checkerWith(&clientstest.FakePurser{
+		GetTenantBillingStatusFn: func(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {
+			return &purserpb.GetTenantBillingStatusResponse{BillingModel: "postpaid"}, nil
+		},
+	})
+	if b, err := c.CheckBalance(ctxTenant("t1")); err != nil || b == nil || b.Code != "PAYMENT_SETUP_REQUIRED" {
+		t.Fatalf("unconfigured postpaid → (%v,%v), want PAYMENT_SETUP_REQUIRED", b, err)
 	}
 
 	// Balance fetch error + prepaid model → treated as 0 → blocker (no x402 here).
@@ -126,6 +139,7 @@ func TestGetBlockers(t *testing.T) {
 
 	// Incomplete billing → balance check is skipped (only the billing blocker).
 	c = checkerWith(&clientstest.FakePurser{
+		GetTenantBillingStatusFn: prepaidBillingStatus,
 		GetBillingDetailsFn: func(context.Context, string) (*purserpb.BillingDetails, error) {
 			return &purserpb.BillingDetails{IsComplete: false}, nil
 		},
@@ -150,6 +164,7 @@ func TestRequireBalanceAndBillingWrapBlockers(t *testing.T) {
 
 	// Insufficient balance → PreflightError.
 	c = checkerWith(&clientstest.FakePurser{
+		GetTenantBillingStatusFn: prepaidBillingStatus,
 		GetBillingDetailsFn: func(context.Context, string) (*purserpb.BillingDetails, error) {
 			return &purserpb.BillingDetails{IsComplete: true}, nil
 		},

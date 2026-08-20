@@ -1,16 +1,24 @@
 package middleware
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
+	x402pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/x402"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/x402"
 	"github.com/gin-gonic/gin"
-	"reflect"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestRateLimiterAllowInvalidLimits(t *testing.T) {
@@ -312,6 +320,39 @@ type fakeX402Provider struct {
 	err          error
 }
 
+type fakeX402Settler struct {
+	status     *purserpb.GetTenantBillingStatusResponse
+	statusErr  error
+	claimFn    func(*purserpb.ClaimX402MutationResultRequest) (*purserpb.ClaimX402MutationResultResponse, error)
+	completeFn func(*purserpb.CompleteX402MutationResultRequest) (*purserpb.CompleteX402MutationResultResponse, error)
+}
+
+func (f fakeX402Settler) VerifyX402Payment(context.Context, string, *x402pb.X402PaymentPayload, string) (*purserpb.VerifyX402PaymentResponse, error) {
+	return &purserpb.VerifyX402PaymentResponse{Valid: true}, nil
+}
+
+func (f fakeX402Settler) SettleX402Payment(context.Context, string, *x402pb.X402PaymentPayload, string) (*purserpb.SettleX402PaymentResponse, error) {
+	return &purserpb.SettleX402PaymentResponse{Success: true}, nil
+}
+
+func (f fakeX402Settler) GetTenantBillingStatus(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {
+	return f.status, f.statusErr
+}
+
+func (f fakeX402Settler) ClaimX402MutationResult(_ context.Context, req *purserpb.ClaimX402MutationResultRequest) (*purserpb.ClaimX402MutationResultResponse, error) {
+	if f.claimFn != nil {
+		return f.claimFn(req)
+	}
+	return &purserpb.ClaimX402MutationResultResponse{State: "claimed"}, nil
+}
+
+func (f fakeX402Settler) CompleteX402MutationResult(_ context.Context, req *purserpb.CompleteX402MutationResultRequest) (*purserpb.CompleteX402MutationResultResponse, error) {
+	if f.completeFn != nil {
+		return f.completeFn(req)
+	}
+	return &purserpb.CompleteX402MutationResultResponse{Completed: true}, nil
+}
+
 func (f fakeX402Provider) GetPaymentRequirements(ctx context.Context, tenantID, resource string) (*purserpb.PaymentRequirements, error) {
 	return f.requirements, f.err
 }
@@ -369,6 +410,32 @@ func TestBuild402ResponseSkipsRequirementsOnError(t *testing.T) {
 	}
 }
 
+func TestBuild402ResponseEmitsOfficialV2Header(t *testing.T) {
+	provider := fakeX402Provider{requirements: &purserpb.PaymentRequirements{
+		X402Version:         2,
+		ResourceUrl:         "https://api.example.com/graphql",
+		ResourceDescription: "FrameWorks prepaid usage credit",
+		ResourceMimeType:    "application/json",
+		Accepts: []*purserpb.PaymentRequirement{{
+			Scheme: "exact", Network: "eip155:8453", Amount: "5000000",
+			PayTo: "0xabc", Asset: "0xasset", MaxTimeoutSeconds: 60,
+			ExtraJson: []byte(`{"frameworks":{"quoteId":"quote-1"}}`),
+		}},
+	}}
+
+	response, header := build402ResponseWithHeader(context.Background(), "tenant-1", "createStream", "graphql://createStream", provider, nil)
+	if response["x402Version"] != int32(2) || header == "" {
+		t.Fatalf("missing v2 response/header: response=%+v header=%q", response, header)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(decoded, []byte(`"network":"eip155:8453"`)) || !bytes.Contains(decoded, []byte(`"quoteId":"quote-1"`)) {
+		t.Fatalf("unexpected PAYMENT-REQUIRED document: %s", decoded)
+	}
+}
+
 func TestEvaluateAccessPrepaidNegativeBalanceBlocks(t *testing.T) {
 	rl := NewRateLimiter(RateLimitConfig{})
 	defer rl.Stop()
@@ -394,14 +461,64 @@ func TestEvaluateAccessPrepaidNegativeBalanceBlocks(t *testing.T) {
 	}
 }
 
+func TestEvaluateAccessRechecksCanonicalBalanceAfterX402(t *testing.T) {
+	rl := NewRateLimiter(RateLimitConfig{})
+	defer rl.Stop()
+
+	request := AccessRequest{
+		TenantID:      "tenant-1",
+		ClientIP:      "10.0.0.1",
+		Path:          "/graphql",
+		OperationName: "createClip",
+		X402Processed: true,
+	}
+
+	t.Run("insufficient topup remains blocked", func(t *testing.T) {
+		decision := EvaluateAccess(context.Background(), request, rl, func(string) (int, int) { return 10, 2 },
+			fakeBillingChecker{billingModel: "prepaid", isBalanceNegative: false}, nil,
+			fakeX402Settler{status: &purserpb.GetTenantBillingStatusResponse{
+				BillingModel:      "prepaid",
+				IsBalanceNegative: true,
+				BalanceCents:      -1,
+			}}, nil, nil)
+		if decision.Allowed || decision.Status != http.StatusPaymentRequired {
+			t.Fatalf("decision = %+v, want 402 after insufficient topup", decision)
+		}
+	})
+
+	t.Run("confirmed sufficient topup overrides stale negative cache", func(t *testing.T) {
+		decision := EvaluateAccess(context.Background(), request, rl, func(string) (int, int) { return 10, 2 },
+			fakeBillingChecker{billingModel: "prepaid", isBalanceNegative: true}, nil,
+			fakeX402Settler{status: &purserpb.GetTenantBillingStatusResponse{
+				BillingModel: "prepaid",
+				BalanceCents: 500,
+			}}, nil, nil)
+		if !decision.Allowed {
+			t.Fatalf("decision = %+v, want allowed after canonical positive balance", decision)
+		}
+	})
+
+	t.Run("status lookup failure is retryable and fail closed", func(t *testing.T) {
+		decision := EvaluateAccess(context.Background(), request, rl, func(string) (int, int) { return 10, 2 }, nil, nil,
+			fakeX402Settler{statusErr: context.DeadlineExceeded}, nil, nil)
+		if decision.Allowed || decision.Status != http.StatusServiceUnavailable {
+			t.Fatalf("decision = %+v, want 503", decision)
+		}
+	})
+}
+
 func TestEvaluateAccessPrepaidAllowlistBypassesBalance(t *testing.T) {
 	rl := NewRateLimiter(RateLimitConfig{})
 	defer rl.Stop()
 
-	getLimits := func(string) (int, int) { return 5, 1 }
+	getLimits := func(string) (int, int) { return 100, 100 }
 	billing := fakeBillingChecker{billingModel: "prepaid", isBalanceNegative: true}
 
-	for _, operation := range []string{"billingStatus", "createDeveloperToken", "developerTokensConnection", "CreateAPIToken"} {
+	for _, operation := range []string{
+		"billingStatus", "createDeveloperToken", "developerTokensConnection", "CreateAPIToken",
+		"mcp:tools/call:list_linked_wallets", "mcp:tools/call:link_wallet", "mcp:tools/call:unlink_wallet",
+		"mcp:resources/read:billing://documents", "mcp:resources/read:billing://documents/credit_note/doc-1",
+	} {
 		t.Run(operation, func(t *testing.T) {
 			decision := EvaluateAccess(context.Background(), AccessRequest{
 				TenantID:      "tenant-1",
@@ -414,6 +531,67 @@ func TestEvaluateAccessPrepaidAllowlistBypassesBalance(t *testing.T) {
 				t.Fatalf("expected allowlisted prepaid request to be allowed, got status %d", decision.Status)
 			}
 		})
+	}
+}
+
+func TestEvaluateAccessPrepaidOperationPolicy(t *testing.T) {
+	rl := NewRateLimiter(RateLimitConfig{})
+	defer rl.Stop()
+	billing := fakeBillingChecker{billingModel: "prepaid", isBalanceNegative: true}
+
+	t.Run("authenticated query is non-rated", func(t *testing.T) {
+		decision := EvaluateAccess(context.Background(), AccessRequest{
+			TenantID: "tenant-1", ClientIP: "10.0.0.1", Path: "/graphql",
+			OperationName: "Dashboard", OperationNames: []string{"streamsConnection", "billingStatus"}, OperationType: "query",
+		}, rl, func(string) (int, int) { return 10, 2 }, billing, nil, nil, nil, nil)
+		if !decision.Allowed {
+			t.Fatalf("non-rated query denied: %+v", decision)
+		}
+	})
+
+	t.Run("client operation name cannot disguise rated mutation", func(t *testing.T) {
+		decision := EvaluateAccess(context.Background(), AccessRequest{
+			TenantID: "tenant-1", ClientIP: "10.0.0.1", Path: "/graphql",
+			OperationName: "billingStatus", OperationNames: []string{"createClip"}, OperationType: "mutation",
+		}, rl, func(string) (int, int) { return 10, 2 }, billing, nil, nil, nil, nil)
+		if decision.Allowed || decision.Status != http.StatusPaymentRequired {
+			t.Fatalf("rated mutation should be denied: %+v", decision)
+		}
+	})
+
+	t.Run("mixed mutation fails closed", func(t *testing.T) {
+		decision := EvaluateAccess(context.Background(), AccessRequest{
+			TenantID: "tenant-1", ClientIP: "10.0.0.1", Path: "/graphql",
+			OperationNames: []string{"updateBillingDetails", "startDVR"}, OperationType: "mutation",
+		}, rl, func(string) (int, int) { return 10, 2 }, billing, nil, nil, nil, nil)
+		if decision.Allowed {
+			t.Fatalf("mixed rated mutation should be denied: %+v", decision)
+		}
+	})
+}
+
+func TestEvaluateAccessSuspensionPolicyIsNarrowerThanZeroBalance(t *testing.T) {
+	rl := NewRateLimiter(RateLimitConfig{})
+	defer rl.Stop()
+	billing := fakeBillingChecker{billingModel: "prepaid", isBalanceNegative: true, isSuspended: true}
+	evaluate := func(operationType string, names ...string) AccessDecision {
+		return EvaluateAccess(context.Background(), AccessRequest{
+			TenantID: "tenant-1", ClientIP: "10.0.0.1", Path: "/graphql",
+			OperationNames: names, OperationType: operationType,
+		}, rl, func(string) (int, int) { return 10, 2 }, billing, nil, nil, nil, nil)
+	}
+
+	if decision := evaluate("query", "billingStatus", "prepaidBalance"); !decision.Allowed {
+		t.Fatalf("billing recovery reads must remain available: %+v", decision)
+	}
+	if decision := evaluate("mutation", "createCryptoTopup"); !decision.Allowed {
+		t.Fatalf("top-up recovery must remain available: %+v", decision)
+	}
+	if decision := evaluate("query", "streamsConnection"); decision.Allowed || decision.Status != http.StatusPaymentRequired {
+		t.Fatalf("suspension must block unrelated reads: %+v", decision)
+	}
+	if decision := evaluate("mutation", "createStream"); decision.Allowed || decision.Status != http.StatusPaymentRequired {
+		t.Fatalf("suspension must block otherwise non-rated configuration: %+v", decision)
 	}
 }
 
@@ -433,6 +611,45 @@ func TestEvaluateAccessPublicTenantRequiresPayment(t *testing.T) {
 	}
 	if decision.Status != http.StatusPaymentRequired {
 		t.Fatalf("expected 402, got %d", decision.Status)
+	}
+}
+
+func TestPublicOperationRateLimitMiddlewareNeverReturnsPaymentChallenge(t *testing.T) {
+	t.Setenv("PUBLIC_RATE_LIMIT_PER_MINUTE", "1")
+	t.Setenv("PUBLIC_RATE_LIMIT_BURST", "1")
+	rl := NewRateLimiter(RateLimitConfig{})
+	defer rl.Stop()
+
+	router := gin.New()
+	router.POST("/auth/wallet-challenge", PublicOperationRateLimitMiddleware(rl, nil, "walletChallenge"), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+
+	first := httptest.NewRecorder()
+	firstReq := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/auth/wallet-challenge", nil)
+	firstReq.RemoteAddr = "203.0.113.20:1234"
+	router.ServeHTTP(first, firstReq)
+	if first.Code != http.StatusNoContent {
+		t.Fatalf("first request status = %d", first.Code)
+	}
+
+	burst := httptest.NewRecorder()
+	burstReq := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/auth/wallet-challenge", nil)
+	burstReq.RemoteAddr = "203.0.113.20:1235"
+	router.ServeHTTP(burst, burstReq)
+	if burst.Code != http.StatusNoContent {
+		t.Fatalf("burst request status = %d", burst.Code)
+	}
+
+	limited := httptest.NewRecorder()
+	limitedReq := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/auth/wallet-challenge", nil)
+	limitedReq.RemoteAddr = "203.0.113.20:1236"
+	router.ServeHTTP(limited, limitedReq)
+	if limited.Code != http.StatusTooManyRequests {
+		t.Fatalf("limited request status = %d, want 429", limited.Code)
+	}
+	if limited.Header().Get(x402.PaymentRequiredHeader) != "" {
+		t.Fatal("authentication throttling must never emit a payment challenge")
 	}
 }
 
@@ -491,5 +708,70 @@ func TestRateLimitBucketKeyMatchesHTTPConvention(t *testing.T) {
 	}
 	if isPublicTenant(RateLimitBucketKey("tenant-abc", "203.0.113.9")) {
 		t.Error("tenant bucket misclassified as public")
+	}
+}
+
+func TestPaidHTTPMutationResultIsReplayedWithoutExecutingAgain(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var mu sync.Mutex
+	var fingerprint string
+	var storedResult []byte
+	var storedStatus int32
+	var executions int
+	store := fakeX402Settler{
+		claimFn: func(req *purserpb.ClaimX402MutationResultRequest) (*purserpb.ClaimX402MutationResultResponse, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			if fingerprint == "" {
+				fingerprint = req.GetRequestFingerprint()
+				return &purserpb.ClaimX402MutationResultResponse{State: "claimed"}, nil
+			}
+			if fingerprint != req.GetRequestFingerprint() {
+				return nil, status.Error(codes.AlreadyExists, "key collision")
+			}
+			return &purserpb.ClaimX402MutationResultResponse{
+				State: "completed", Result: append([]byte(nil), storedResult...),
+				StatusCode: storedStatus, ContentType: "application/json",
+			}, nil
+		},
+		completeFn: func(req *purserpb.CompleteX402MutationResultRequest) (*purserpb.CompleteX402MutationResultResponse, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			storedResult = append([]byte(nil), req.GetResult()...)
+			storedStatus = req.GetStatusCode()
+			return &purserpb.CompleteX402MutationResultResponse{Completed: true}, nil
+		},
+	}
+
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		if handlePaidHTTPMutationIdempotency(c, store, "11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222", "createStream", nil) {
+			return
+		}
+	})
+	router.POST("/graphql", func(c *gin.Context) {
+		executions++
+		c.JSON(http.StatusCreated, gin.H{"id": "stream-1"})
+	})
+
+	request := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Idempotency-Key", "mutation-123")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		return response
+	}
+	first := request(`{"query":"mutation { createStream { id } }"}`)
+	second := request(`{"query":"mutation { createStream { id } }"}`)
+	if first.Code != http.StatusCreated || second.Code != http.StatusCreated || first.Body.String() != second.Body.String() {
+		t.Fatalf("responses differ: first=%d %q second=%d %q", first.Code, first.Body.String(), second.Code, second.Body.String())
+	}
+	if executions != 1 {
+		t.Fatalf("mutation executed %d times, want exactly once", executions)
+	}
+	collision := request(`{"query":"mutation { createStream(input:{name:\"different\"}) { id } }"}`)
+	if collision.Code != http.StatusConflict || executions != 1 {
+		t.Fatalf("collision status=%d executions=%d, want 409 and one execution", collision.Code, executions)
 	}
 }

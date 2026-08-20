@@ -2,9 +2,15 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"net/http"
+	"sync"
 	"testing"
 
+	"frameworks/api_gateway/internal/clients"
+	"frameworks/api_gateway/internal/clients/clientstest"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -18,6 +24,23 @@ func (f fakeSkipperAvailability) CallTool(_ context.Context, _ string, _ json.Ra
 
 func (f fakeSkipperAvailability) ToolsAvailable(_ context.Context) bool {
 	return f.available
+}
+
+func TestPublicMCPWalletBootstrapDoesNotOpenAccountOrPaymentTools(t *testing.T) {
+	if !isPublicMCPOperation("mcp:tools/call:request_wallet_challenge") {
+		t.Error("request_wallet_challenge must be public")
+	}
+	for _, operation := range []string{
+		"mcp:tools/call:list_linked_wallets",
+		"mcp:tools/call:link_wallet",
+		"mcp:tools/call:unlink_wallet",
+		"mcp:tools/call:get_payment_options",
+		"mcp:tools/call:submit_payment",
+	} {
+		if isPublicMCPOperation(operation) {
+			t.Errorf("%s must require authentication", operation)
+		}
+	}
 }
 
 func TestFilterSkipperToolsWhenUnavailable(t *testing.T) {
@@ -203,4 +226,57 @@ func ptrStr(p *string) string {
 		return "<nil>"
 	}
 	return "&" + *p
+}
+
+func TestPaidMCPMutationResultIsReplayedWithoutExecutingAgain(t *testing.T) {
+	var mu sync.Mutex
+	var fingerprint string
+	var stored []byte
+	var executions int
+	purser := &clientstest.FakePurser{
+		ClaimX402MutationResultFn: func(_ context.Context, req *purserpb.ClaimX402MutationResultRequest) (*purserpb.ClaimX402MutationResultResponse, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			if fingerprint == "" {
+				fingerprint = req.GetRequestFingerprint()
+				return &purserpb.ClaimX402MutationResultResponse{State: "claimed"}, nil
+			}
+			return &purserpb.ClaimX402MutationResultResponse{State: "completed", Result: append([]byte(nil), stored...)}, nil
+		},
+		CompleteX402MutationResultFn: func(_ context.Context, req *purserpb.CompleteX402MutationResultRequest) (*purserpb.CompleteX402MutationResultResponse, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			stored = append([]byte(nil), req.GetResult()...)
+			return &purserpb.CompleteX402MutationResultResponse{Completed: true}, nil
+		},
+	}
+	server := &Server{serviceClients: &clients.ServiceClients{Purser: purser}, logger: clientstest.DiscardLogger()}
+	paymentJSON := `{"x402Version":2,"scheme":"exact","network":"eip155:8453","accepted":{"scheme":"exact","network":"eip155:8453","asset":"0x0000000000000000000000000000000000000001","amount":"5000000","payTo":"0x0000000000000000000000000000000000000002","maxTimeoutSeconds":60,"extra":{"frameworks":{"quoteId":"22222222-2222-2222-2222-222222222222"}}},"payload":{"signature":"0x00","authorization":{"from":"0x0000000000000000000000000000000000000003","to":"0x0000000000000000000000000000000000000002","value":"5000000","validAfter":"0","validBefore":"9999999999","nonce":"0x0000000000000000000000000000000000000000000000000000000000000001"}}}`
+	payment := base64.StdEncoding.EncodeToString([]byte(paymentJSON))
+	params := &mcp.CallToolParamsRaw{
+		Meta: mcp.Meta{"idempotencyKey": "mutation-123"},
+		Name: "create_stream", Arguments: json.RawMessage(`{"name":"camera"}`),
+	}
+	req := &mcp.ServerRequest[*mcp.CallToolParamsRaw]{
+		Params: params,
+		Extra:  &mcp.RequestExtra{Header: http.Header{"Idempotency-Key": []string{"mutation-123"}}},
+	}
+	next := func(context.Context, string, mcp.Request) (mcp.Result, error) {
+		executions++
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: `{"id":"stream-1"}`}}}, nil
+	}
+	first, err := server.executePaidMCPMutation(context.Background(), "tools/call", "mcp:tools/call:create_stream", "11111111-1111-1111-1111-111111111111", payment, req, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := server.executePaidMCPMutation(context.Background(), "tools/call", "mcp:tools/call:create_stream", "11111111-1111-1111-1111-111111111111", payment, req, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executions != 1 {
+		t.Fatalf("MCP mutation executed %d times, want exactly once", executions)
+	}
+	if mcpResultTextBytes(first) != mcpResultTextBytes(second) || mcpTextResult(first.(*mcp.CallToolResult)) != mcpTextResult(second.(*mcp.CallToolResult)) {
+		t.Fatalf("replayed MCP result differs: first=%v second=%v", first, second)
+	}
 }

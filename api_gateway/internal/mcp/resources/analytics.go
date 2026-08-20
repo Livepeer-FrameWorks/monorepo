@@ -2,6 +2,7 @@ package resources
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"frameworks/api_gateway/internal/clients"
@@ -20,7 +21,7 @@ func RegisterAnalyticsResources(server *mcp.Server, clients *clients.ServiceClie
 	server.AddResource(&mcp.Resource{
 		URI:         "analytics://usage",
 		Name:        "Usage Analytics",
-		Description: "Usage aggregates for streaming, storage, and processing.",
+		Description: "Purser-rated current-period usage with every itemized meter, unit, dimension bucket, cost, and work-cluster attribution.",
 		MIMEType:    "application/json",
 	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		return handleUsageAnalytics(ctx, clients, logger)
@@ -79,34 +80,16 @@ func RegisterAnalyticsResources(server *mcp.Server, clients *clients.ServiceClie
 
 // UsageAnalytics represents the analytics://usage response.
 type UsageAnalytics struct {
-	Period     string          `json:"period"`
-	StartTime  string          `json:"start_time"`
-	EndTime    string          `json:"end_time"`
-	Streaming  StreamingUsage  `json:"streaming"`
-	Storage    StorageUsage    `json:"storage"`
-	Processing ProcessingUsage `json:"processing"`
-}
-
-// StreamingUsage contains streaming-related usage.
-type StreamingUsage struct {
-	IngestMinutes   int64 `json:"ingest_minutes"`
-	DeliveryMinutes int64 `json:"delivery_minutes"`
-	ViewerHours     int64 `json:"viewer_hours"`
-	PeakConcurrent  int   `json:"peak_concurrent_viewers"`
-}
-
-// StorageUsage contains storage-related usage.
-type StorageUsage struct {
-	TotalBytes int64 `json:"total_bytes"`
-	ClipsBytes int64 `json:"clips_bytes"`
-	DVRBytes   int64 `json:"dvr_bytes"`
-	VODBytes   int64 `json:"vod_bytes"`
-}
-
-// ProcessingUsage contains processing-related usage.
-type ProcessingUsage struct {
-	TranscodeMinutes int64 `json:"transcode_minutes"`
-	ClipMinutes      int64 `json:"clip_minutes"`
+	Period      string             `json:"period"`
+	StartTime   string             `json:"start_time"`
+	EndTime     string             `json:"end_time"`
+	Currency    string             `json:"currency"`
+	BaseAmount  string             `json:"base_amount"`
+	UsageAmount string             `json:"usage_amount"`
+	TotalCost   float64            `json:"total_cost"`
+	Usage       map[string]float64 `json:"usage"`
+	Costs       map[string]float64 `json:"costs"`
+	LineItems   []InvoiceLineInfo  `json:"line_items"`
 }
 
 func handleUsageAnalytics(ctx context.Context, clients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
@@ -115,36 +98,47 @@ func handleUsageAnalytics(ctx context.Context, clients *clients.ServiceClients, 
 		return nil, mcperrors.AuthRequired()
 	}
 
-	now := time.Now()
-	startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	now := time.Now().UTC()
+	start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	end := now
 
-	usage := UsageAnalytics{
-		Period:     "current_month",
-		StartTime:  startOfMonth.Format("2006-01-02T15:04:05Z"),
-		EndTime:    now.Format("2006-01-02T15:04:05Z"),
-		Streaming:  StreamingUsage{},
-		Storage:    StorageUsage{},
-		Processing: ProcessingUsage{},
-	}
-
-	// Get live usage summary from Periscope
-	timeRange := &periscope.TimeRangeOpts{
-		StartTime: startOfMonth,
-		EndTime:   now,
-	}
-
-	resp, err := clients.Periscope.GetLiveUsageSummary(ctx, tenantID, timeRange)
+	subscriptionResp, err := clients.Purser.GetSubscription(ctx, tenantID)
 	if err != nil {
-		logger.WithError(err).Debug("Failed to get usage summary")
-	} else if resp.Summary != nil {
-		s := resp.Summary
-		usage.Streaming.ViewerHours = int64(s.ViewerHours)
-		usage.Streaming.PeakConcurrent = int(s.MaxViewers)
-		usage.Storage.TotalBytes = int64(s.DisplayStorageGb * 1024 * 1024 * 1024)
-		// Sum all transcoding (Livepeer + Native AV) in minutes
-		totalTranscodeSeconds := s.LivepeerH264Seconds + s.LivepeerVp9Seconds + s.LivepeerAv1Seconds + s.LivepeerHevcSeconds +
-			s.NativeAvH264Seconds + s.NativeAvVp9Seconds + s.NativeAvAv1Seconds + s.NativeAvHevcSeconds
-		usage.Processing.TranscodeMinutes = int64(totalTranscodeSeconds / 60)
+		return nil, fmt.Errorf("failed to get billing period: %w", err)
+	}
+	if subscription := subscriptionResp.GetSubscription(); subscription != nil {
+		if subscription.GetBillingPeriodStart() != nil && subscription.GetBillingPeriodStart().IsValid() {
+			start = subscription.GetBillingPeriodStart().AsTime().UTC()
+		}
+		if subscription.GetBillingPeriodEnd() != nil && subscription.GetBillingPeriodEnd().IsValid() {
+			periodEnd := subscription.GetBillingPeriodEnd().AsTime().UTC()
+			if periodEnd.Before(end) {
+				end = periodEnd
+			}
+		}
+	}
+
+	resp, err := clients.Purser.GetTenantUsage(ctx, tenantID, start.Format("2006-01-02"), end.Format("2006-01-02"))
+	if err != nil {
+		logger.WithError(err).Warn("Failed to get authoritative tenant usage")
+		return nil, fmt.Errorf("failed to get tenant usage: %w", err)
+	}
+	usage := UsageAnalytics{
+		Period:      resp.GetBillingPeriod(),
+		StartTime:   start.Format("2006-01-02T15:04:05Z"),
+		EndTime:     end.Format("2006-01-02T15:04:05Z"),
+		Currency:    resp.GetCurrency(),
+		BaseAmount:  resp.GetBaseAmount(),
+		UsageAmount: resp.GetUsageAmount(),
+		TotalCost:   resp.GetTotalCost(),
+		Usage:       resp.GetUsage(),
+		Costs:       resp.GetCosts(),
+		LineItems:   make([]InvoiceLineInfo, 0, len(resp.GetLineItems())),
+	}
+	for _, line := range resp.GetLineItems() {
+		if line != nil {
+			usage.LineItems = append(usage.LineItems, invoiceLineInfo(line))
+		}
 	}
 
 	return marshalResourceResult("analytics://usage", usage)

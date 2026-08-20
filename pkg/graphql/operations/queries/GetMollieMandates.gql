@@ -1,0 +1,9 @@
+query GetMollieMandates {
+  mollieMandates {
+    mandateId
+    customerId
+    status
+    method
+    createdAt
+  }
+}

@@ -36,8 +36,6 @@ func paymentMethodFromPurser(method string) (model.PaymentMethod, error) {
 		return model.PaymentMethodCryptoEth, nil
 	case "crypto_usdc":
 		return model.PaymentMethodCryptoUsdc, nil
-	case "bank_transfer":
-		return model.PaymentMethodBankTransfer, nil
 	default:
 		return "", fmt.Errorf("unknown payment method: %s", method)
 	}

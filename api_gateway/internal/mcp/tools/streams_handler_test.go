@@ -85,16 +85,15 @@ func TestHandleCreateStream_ValidatesName(t *testing.T) {
 	}
 }
 
-func TestHandleCreateStream_BlockedByInsufficientBalance(t *testing.T) {
-	// Solvent billing details but zero balance → preflight blocker surfaces as a
-	// tool error with resolution, and the stream is never created.
-	commo := &clientstest.FakeCommodore{} // CreateStream unstubbed → panic if called
+func TestHandleCreateStream_ZeroBalanceCanConfigureStream(t *testing.T) {
+	commo := &clientstest.FakeCommodore{
+		CreateStreamFn: func(context.Context, *commodorepb.CreateStreamRequest) (*commodorepb.CreateStreamResponse, error) {
+			return &commodorepb.CreateStreamResponse{Id: "sid", Title: "x", IngestMode: "push"}, nil
+		},
+	}
 	purser := clientstest.SolventPurser()
 	purser.GetPrepaidBalanceFn = func(context.Context, string, string) (*purserpb.PrepaidBalance, error) {
 		return &purserpb.PrepaidBalance{BalanceCents: 0}, nil
-	}
-	purser.GetPaymentRequirementsFn = func(context.Context, string, string) (*purserpb.PaymentRequirements, error) {
-		return nil, errors.New("x402 unavailable")
 	}
 	sc, checker, ctx := streamToolSetup(commo, purser)
 
@@ -102,8 +101,8 @@ func TestHandleCreateStream_BlockedByInsufficientBalance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.IsError {
-		t.Fatal("insufficient balance should block stream creation")
+	if res.IsError {
+		t.Fatal("zero balance must not block non-rated stream configuration")
 	}
 }
 

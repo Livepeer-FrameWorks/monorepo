@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"frameworks/api_gateway/internal/clients"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	x402 "github.com/Livepeer-FrameWorks/monorepo/pkg/x402"
 
@@ -85,7 +84,10 @@ func ViewerX402Middleware(serviceClients *clients.ServiceClients, logger logging
 			return
 		}
 
-		x402Paid := false
+		billingModel := status.BillingModel
+		isSuspended := status.IsSuspended
+		isBalanceNegative := status.IsBalanceNegative
+		x402Processed := false
 		if paymentHeader := GetX402PaymentHeader(c.Request); paymentHeader != "" && serviceClients.Purser != nil {
 			settleResult, settleErr := x402.SettleX402Payment(c.Request.Context(), x402.SettlementOptions{
 				PaymentHeader: paymentHeader,
@@ -102,17 +104,40 @@ func ViewerX402Middleware(serviceClients *clients.ServiceClients, logger logging
 				return
 			}
 			if settleResult != nil {
-				c.Set(string(ctxkeys.KeyX402Paid), true)
-				x402Paid = true
+				x402Processed = true
+				if settleResult.X402Version == 2 {
+					if paymentResponse, encodeErr := x402.EncodePaymentResponseHeader(settleResult, settleResult.Network); encodeErr == nil {
+						c.Header(x402.PaymentResponseHeader, paymentResponse)
+					}
+				}
 			}
 		}
 
-		if !x402Paid && (status.IsSuspended || (status.BillingModel == "prepaid" && status.IsBalanceNegative)) {
+		if x402Processed {
+			freshStatus, freshErr := serviceClients.Purser.GetTenantBillingStatus(c.Request.Context(), tenantID)
+			if freshErr != nil || freshStatus == nil {
+				c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
+					"error":   "billing_status_unavailable",
+					"message": "payment was processed but the updated owner balance could not be verified; retry safely",
+					"code":    "BILLING_STATUS_UNAVAILABLE",
+				})
+				return
+			}
+			billingModel = freshStatus.GetBillingModel()
+			isSuspended = freshStatus.GetIsSuspended()
+			isBalanceNegative = freshStatus.GetIsBalanceNegative()
+		}
+
+		if isSuspended || (billingModel == "prepaid" && isBalanceNegative) {
 			message := "payment required - stream owner needs to top up balance"
-			if status.IsSuspended {
+			if isSuspended {
 				message = "payment required - owner account suspended"
 			}
-			c.AbortWithStatusJSON(http.StatusPaymentRequired, buildViewer402Response(c.Request.Context(), serviceClients, tenantID, resourcePath, message))
+			response, paymentRequired := buildViewer402ResponseWithHeader(c.Request.Context(), serviceClients, tenantID, resourcePath, message)
+			if paymentRequired != "" {
+				c.Header(x402.PaymentRequiredHeader, paymentRequired)
+			}
+			c.AbortWithStatusJSON(http.StatusPaymentRequired, response)
 			return
 		}
 
@@ -147,6 +172,11 @@ func resolveContentID(payload graphqlRequestEnvelope) string {
 }
 
 func buildViewer402Response(ctx context.Context, serviceClients *clients.ServiceClients, tenantID, resourcePath, message string) map[string]any {
+	response, _ := buildViewer402ResponseWithHeader(ctx, serviceClients, tenantID, resourcePath, message)
+	return response
+}
+
+func buildViewer402ResponseWithHeader(ctx context.Context, serviceClients *clients.ServiceClients, tenantID, resourcePath, message string) (map[string]any, string) {
 	response := map[string]any{
 		"error":     "insufficient_balance",
 		"message":   message,
@@ -156,7 +186,7 @@ func buildViewer402Response(ctx context.Context, serviceClients *clients.Service
 	}
 
 	if serviceClients == nil || serviceClients.Purser == nil {
-		return response
+		return response, ""
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -164,25 +194,45 @@ func buildViewer402Response(ctx context.Context, serviceClients *clients.Service
 
 	requirements, err := serviceClients.Purser.GetPaymentRequirements(ctx, tenantID, resourcePath)
 	if err != nil || requirements == nil {
-		return response
+		return response, ""
 	}
 
 	response["x402Version"] = requirements.X402Version
 	accepts := make([]map[string]any, 0, len(requirements.Accepts))
 	for _, req := range requirements.Accepts {
-		accepts = append(accepts, map[string]any{
+		accepted := map[string]any{
 			"scheme":            req.Scheme,
 			"network":           req.Network,
-			"maxAmountRequired": req.MaxAmountRequired,
 			"payTo":             req.PayTo,
 			"asset":             req.Asset,
 			"maxTimeoutSeconds": req.MaxTimeoutSeconds,
-			"resource":          req.Resource,
-			"description":       req.Description,
-		})
+		}
+		if requirements.X402Version == 2 {
+			accepted["amount"] = req.Amount
+			if len(req.ExtraJson) > 0 {
+				accepted["extra"] = json.RawMessage(req.ExtraJson)
+			}
+		} else {
+			accepted["maxAmountRequired"] = req.MaxAmountRequired
+			accepted["resource"] = req.Resource
+			accepted["description"] = req.Description
+		}
+		accepts = append(accepts, accepted)
 	}
 	response["accepts"] = accepts
-	return response
+	if requirements.X402Version != 2 {
+		return response, ""
+	}
+	response["resource"] = map[string]any{
+		"url":         requirements.ResourceUrl,
+		"description": requirements.ResourceDescription,
+		"mimeType":    requirements.ResourceMimeType,
+	}
+	header, err := x402.EncodePaymentRequiredHeader(requirements)
+	if err != nil {
+		return response, ""
+	}
+	return response, header
 }
 
 func viewerX402ErrorResponse(ctx context.Context, serviceClients *clients.ServiceClients, tenantID, resourcePath string, err *x402.SettlementError) map[string]any {

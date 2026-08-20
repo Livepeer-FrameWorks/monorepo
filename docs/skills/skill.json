@@ -17,8 +17,10 @@
     }
   },
   "auth": {
-    "methods": ["wallet", "x402", "bearer"],
-    "wallet_message_format": "FrameWorks Login\nTimestamp: {ISO8601}\nNonce: {random}"
+    "methods": ["wallet", "bearer"],
+    "wallet_challenge_endpoint": "POST /auth/wallet-challenge",
+    "wallet_login_endpoint": "POST /auth/wallet-login",
+    "wallet_message_format": "Server-issued EIP-4361-style message; single use and five-minute expiry"
   },
   "files": {
     "skill": "https://frameworks.network/SKILL.md",
@@ -28,7 +30,8 @@
     "mcp": "GET /.well-known/mcp.json",
     "mcp_rpc": "POST /mcp",
     "graphql": "POST /graphql",
-    "wallet_login": "GraphQL mutation walletLogin"
+    "wallet_challenge": "POST /auth/wallet-challenge",
+    "wallet_login": "POST /auth/wallet-login"
   },
   "keywords": [
     "streaming",

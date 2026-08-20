@@ -16,7 +16,7 @@ func TestPurserPaymentMethod(t *testing.T) {
 		{name: "card", in: model.PaymentMethodCard, want: "card"},
 		{name: "eth", in: model.PaymentMethod("CRYPTO_ETH"), want: "crypto_eth"},
 		{name: "usdc", in: model.PaymentMethod("CRYPTO_USDC"), want: "crypto_usdc"},
-		{name: "bank transfer", in: model.PaymentMethodBankTransfer, want: "bank_transfer"},
+		{name: "bank transfer rejected", in: model.PaymentMethod("BANK_TRANSFER"), wantErr: true},
 		{name: "generic crypto rejected", in: model.PaymentMethod("CRYPTO"), wantErr: true},
 	}
 	for _, tc := range cases {

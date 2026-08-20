@@ -4,6 +4,20 @@ query GetBillingStatus {
     billingStatus
     currency
     paymentMethods
+    collectionReady
+    collectionProvider
+    setupProviders
+    recentPayments {
+      id
+      invoiceId
+      method
+      amount
+      currency
+      status
+      confirmedAt
+      createdAt
+      updatedAt
+    }
     nextBillingDate
     trialEndsAt
     outstandingAmount

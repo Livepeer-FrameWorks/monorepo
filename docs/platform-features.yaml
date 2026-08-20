@@ -1496,8 +1496,8 @@ features:
     description: Wallet sign-in, linked-wallet account identity, and x402 micropayments.
     status: partial
     gap_reason: |
-      The on-chain stack is live end to end: wallet sign-in/link, x402 gasless settlement (EIP-3009 with the platform paying gas, multi-chain), per-tenant HD deposit addresses with price-locked quotes, and the crypto deposit monitor — exposed through get_payment_options and submit_payment.
-      First-class MCP wallet-management tools for listing, linking, and unlinking additional wallets are still missing.
+      Wallet sign-in/link now uses server-issued, single-use ownership challenges; wallet-created tenants receive retry-safe prepaid provisioning and can complete non-rated onboarding, billing, top-up, postpaid setup, and MCP discovery at zero balance. x402 remains enabled as an authenticated, tenant-bound prepaid top-up path, and direct crypto deposits use per-tenant HD addresses with price-locked quotes.
+      The official x402 v2 headers/types, embedded exact EIP-3009 facilitator, tenant-bound dynamic quote ledger, atomic quote claim, exact finalized transfer verification, HTTP/MCP settlement receipts, durable paid-mutation result replay, JSON-RPC cursor scanner, allocated-deposit reorg reversal, structured readiness gates, custody alerts, rotation-safe manual offline-signing sweep CLI, first-class MCP wallet bootstrap/management tools, and VAT-at-confirmed-top-up policy are implemented. Production still requires real deployment configuration and a green live readiness report; optional hosted facilitators remain available but are not required.
     related: [billing]
     required_surfaces:
       graphql: { required: true }
@@ -1513,7 +1513,15 @@ features:
       graphql:
         mutations: [linkWallet, unlinkWallet, walletLogin, linkEmail, submitX402Payment]
       mcp:
-        tools: [get_payment_options, submit_payment]
+        tools:
+          [
+            request_wallet_challenge,
+            list_linked_wallets,
+            link_wallet,
+            unlink_wallet,
+            get_payment_options,
+            submit_payment,
+          ]
       webapp:
         routes: ["/account/balance"]
       docs:
@@ -1782,7 +1790,7 @@ features:
     description: Tenant identity, billing setup, retention defaults, routing preferences, and wallet-provisioned account lifecycle.
     status: partial
     gap_reason: |
-      Core tenant account setup is live: wallet-provisioned accounts, tenant name, billing details, billing tier/balance, storage retention defaults,
+      Core tenant account setup is live: retry-safe wallet-provisioned prepaid accounts, refreshable wallet sessions, tenant name, billing details, billing tier/balance, storage retention defaults,
       and preferred cluster/routing settings are exposed. Broader tenant administration is still expanding: team/RBAC, notification preferences,
       custom domains/branding, security controls, and account lifecycle controls are not yet complete across API, dashboard, MCP, and docs.
     required_surfaces:

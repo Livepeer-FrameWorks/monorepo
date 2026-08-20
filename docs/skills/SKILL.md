@@ -43,27 +43,27 @@ Multi-tenant live streaming platform with three access layers and crypto-native 
 
 ### Authentication Methods
 
-| Method               | Headers                                                      | Use Case                                                           |
-| -------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------ |
-| **Wallet** (EIP-191) | `X-Wallet-Address`, `X-Wallet-Signature`, `X-Wallet-Message` | Primary agent auth. Auto-provisions tenant on first login.         |
-| **x402 Payment**     | `X-PAYMENT: <base64>`                                        | Gasless USDC payment per-request. Also acts as anti-abuse barrier. |
-| **Bearer JWT**       | `Authorization: Bearer <token>`                              | Session token from wallet-login response.                          |
+| Method               | Headers                                                      | Use Case                                                   |
+| -------------------- | ------------------------------------------------------------ | ---------------------------------------------------------- |
+| **Wallet** (EIP-191) | `X-Wallet-Address`, `X-Wallet-Signature`, `X-Wallet-Message` | Primary agent auth. Auto-provisions tenant on first login. |
+| **x402 Payment**     | `PAYMENT-SIGNATURE: <base64>`                                | Authenticated, tenant-bound gasless USDC prepaid top-up.   |
+| **Bearer JWT**       | `Authorization: Bearer <token>`                              | Session token from wallet-login response.                  |
 
 ### What You Can Do
 
-| Category        | MCP Tools                                     | MCP Resources                  | GraphQL                             |
-| --------------- | --------------------------------------------- | ------------------------------ | ----------------------------------- |
-| Streams         | create, update, delete, refresh keys          | list, details, health          | mutations + queries + subscriptions |
-| Clips           | create from live/recorded, delete             | —                              | mutations + queries                 |
-| DVR             | start/stop catch-up recording                 | —                              | mutation                            |
-| VOD             | upload, complete, abort, delete               | list, details                  | mutations + queries                 |
-| Playback        | resolve viewer endpoints (geo-routed)         | —                              | query                               |
-| Billing         | top up, submit payment, check deposits        | balance, pricing, transactions | queries                             |
-| Analytics       | —                                             | usage, viewers, geographic     | queries                             |
-| QoE Diagnostics | rebuffering, buffer, packet loss, routing     | —                              | —                                   |
-| Support         | search conversations                          | history                        | —                                   |
-| API Exploration | introspect schema, generate & execute queries | schema catalog                 | introspection                       |
-| Knowledge       | ask_consultant                                | knowledge://sources            | —                                   |
+| Category        | MCP Tools                                     | MCP Resources                                      | GraphQL                             |
+| --------------- | --------------------------------------------- | -------------------------------------------------- | ----------------------------------- |
+| Streams         | create, update, delete, refresh keys          | list, details, health                              | mutations + queries + subscriptions |
+| Clips           | create from live/recorded, delete             | —                                                  | mutations + queries                 |
+| DVR             | start/stop catch-up recording                 | —                                                  | mutation                            |
+| VOD             | upload, complete, abort, delete               | list, details                                      | mutations + queries                 |
+| Playback        | resolve viewer endpoints (geo-routed)         | —                                                  | query                               |
+| Billing         | top up, submit payment, check deposits        | balance, pricing, transactions, invoices, payments | queries                             |
+| Analytics       | —                                             | itemized usage, viewers, geographic                | queries                             |
+| QoE Diagnostics | rebuffering, buffer, packet loss, routing     | —                                                  | —                                   |
+| Support         | search conversations                          | history                                            | —                                   |
+| API Exploration | introspect schema, generate & execute queries | schema catalog                                     | introspection                       |
+| Knowledge       | ask_consultant                                | knowledge://sources                                | —                                   |
 
 MCP capabilities are registered by the Gateway at runtime. Use `tools/list`, `resources/list`, `resources/templates/list`, and `prompts/list` for the current inventory instead of relying on a hard-coded count.
 GraphQL: introspection enabled at `/graphql` — full schema discovery built-in.
@@ -90,11 +90,11 @@ Or use environment variables: `FRAMEWORKS_WALLET_PRIVKEY`, `FRAMEWORKS_JWT`.
 
 ## Quick Start (Agent Flow)
 
-1. **Call the MCP tool or GraphQL operation you need.**
-2. **If the operation needs payment**, read the HTTP 402 / `INSUFFICIENT_BALANCE` response and its x402 payment requirements.
-3. **Sign an EIP-3009 USDC authorization** for one accepted network.
-4. **Retry the same operation** with `X-PAYMENT`.
-5. **Use the returned stream key or resource.**
+1. Request a single-use challenge from `POST /auth/wallet-challenge` or MCP `request_wallet_challenge`, sign it, and exchange it through wallet login or one MCP request.
+2. Use the returned bearer session or create an API token.
+3. If a rated operation needs payment, read its tenant-bound 402 requirements.
+4. Sign an EIP-3009 USDC authorization and retry with `PAYMENT-SIGNATURE`.
+5. Wait for confirmed credit before using the returned resource.
 
 ## Wallet Authentication
 
@@ -104,15 +104,17 @@ Headers:
 - `X-Wallet-Signature: 0x...` (EIP-191 `personal_sign`)
 - `X-Wallet-Message: <exact message>`
 
-Message format (verbatim):
+`X-Wallet-Message` must be the exact message returned by `POST
+/auth/wallet-challenge` or MCP `request_wallet_challenge`; clients must not invent their own nonce. Challenges
+expire after five minutes and are consumed atomically. The first MCP exchange
+returns `X-Access-Token`; switch to that bearer token (or create an API token)
+instead of replaying the wallet headers. REST `POST /auth/wallet-login` creates
+the refreshable HttpOnly-cookie session used by the webapp.
 
-```
-FrameWorks Login
-Timestamp: 2025-01-15T12:00:00Z
-Nonce: 12345
-```
-
-For browser or direct GraphQL integrations, use the `walletLogin` mutation to exchange the same address/message/signature fields for a JWT. The REST `POST /auth/wallet-login` endpoint is cookie-oriented for first-party sessions.
+After authentication, use `list_linked_wallets`, `link_wallet`, and
+`unlink_wallet` to manage wallet identities. Linking requires a fresh challenge
+for the new address. An account cannot unlink its final wallet until a verified
+password sign-in is active.
 
 ## MCP Configuration
 
@@ -120,29 +122,20 @@ Discovery: `GET /.well-known/mcp.json`
 Endpoint: `POST /mcp`
 Transport: HTTP + SSE (streamable-http)
 
-### Example (Claude Desktop)
-
-```json
-{
-  "mcpServers": {
-    "frameworks": {
-      "url": "https://bridge.frameworks.network/mcp",
-      "headers": {
-        "X-Wallet-Address": "0x...",
-        "X-Wallet-Signature": "0x...",
-        "X-Wallet-Message": "FrameWorks Login\nTimestamp: 2025-01-15T12:00:00Z\nNonce: 12345"
-      }
-    }
-  }
-}
-```
+Configure long-lived MCP clients with `Authorization: Bearer <API token>`.
+Wallet headers are deliberately single-use bootstrap credentials and are not
+suitable for static client configuration.
 
 ## x402 Payments
 
-Gasless USDC payments for instant top-ups or per-request auth. Also acts as an economic barrier against automated abuse.
+Official x402 v2 gasless USDC payments for confirmed prepaid top-ups.
 
-- Header: `X-PAYMENT: <base64 payload>`
-- Supported networks: Base, Arbitrum (USDC)
+- Header: `PAYMENT-SIGNATURE: <base64 payload>` (`X-PAYMENT` is legacy compatibility)
+- Challenge: `PAYMENT-REQUIRED` (HTTP) or `payment_required` (MCP)
+- Receipt: `PAYMENT-RESPONSE` (HTTP) or `payment_response` (MCP)
+- Networks: use the CAIP-2 options returned by the live facilitator intersection
+- Side-effecting retries: include `Idempotency-Key` (8–255 characters), or MCP
+  `_meta.idempotencyKey`; reuse the key only for the exact same request
 
 ## GraphQL (Alternative Interface)
 
@@ -154,13 +147,15 @@ Key operations:
 - Queries: `streams`, `stream`, `me`, `billingStatus`, `prepaidBalance`
 - Subscriptions: `liveStreamEvents`, `liveViewerMetrics`, `liveFirehose`
 
-x402: make the GraphQL request, read the 402 payment requirements, then retry the same request with `X-PAYMENT`. Wallet and bearer auth are separate optional modes. Embedded playback resolution is public and uses the playback ID as the capability.
+x402: authenticate first, make the rated request, read the tenant-bound 402 requirements, then retry with `PAYMENT-SIGNATURE`. It tops up prepaid balance and never authenticates the caller. Embedded playback resolution is public and uses the playback ID as the capability.
 
 ## Rate Limits & Billing
 
-- API requests are free; usage costs apply to viewer hours, storage, and processing.
-- Prepaid balance must be positive to run billable operations.
-- Use MCP `billing://balance` or GraphQL `prepaidBalance` / `billingStatus` queries to monitor balance and drain rate.
+- API and AI usage is metered and itemized; the current catalog prices those
+  meters at zero, but later tiers or cluster contracts may price them.
+- Prepaid available balance (settled minus reserved) must be positive to run
+  billable operations.
+- Use MCP `billing://balance` or GraphQL `prepaidBalance` / `billingStatus` queries to monitor balance and drain rate. Use `billing://documents` for retained invoices, receipts, and credit notes.
 
 ## Streaming Best Practices
 
@@ -254,7 +249,9 @@ Two management paths: use `set_node_mode` / `get_node_health` MCP tools when you
 Run every 15–30 minutes during active streaming, every few hours otherwise.
 
 1. **Account health**: Read `account://status`. Resolve any blockers.
-2. **Balance**: Read `billing://balance`. Alert human if `balance_cents` is below 500 with active streams.
+2. **Balance**: Read `billing://balance`. Alert a human if
+   `available_balance_cents` is below 500 with active streams; report settled
+   and reserved balances as context.
 3. **Active streams**: Read `streams://list`. For each live stream, read `streams://{id}/health`. If `status: critical`, run `diagnose_rebuffering` and `diagnose_buffer_health`.
 4. **Skill updates**: Check `skill.json` version periodically (once/day).
 
@@ -267,11 +264,11 @@ For the full periodic check routine, load [heartbeat.md](https://frameworks.netw
 
 Billable MCP tools run preflight checks before execution. These are the blocking errors:
 
-| Code                      | Trigger                           | Resolution                                                                                            |
-| ------------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `AUTHENTICATION_REQUIRED` | No wallet headers or bearer token | Send `X-Wallet-Address` + `X-Wallet-Signature` + `X-Wallet-Message`, or `Authorization: Bearer <jwt>` |
-| `BILLING_DETAILS_MISSING` | Account has no billing address    | Call `update_billing_details` tool with address fields                                                |
-| `INSUFFICIENT_BALANCE`    | Prepaid balance ≤ $0              | Pay via x402 (`submit_payment`) or `topup_balance`. Check `billing://balance` for current state       |
+| Code                      | Trigger                           | Resolution                                                                                                               |
+| ------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `AUTHENTICATION_REQUIRED` | No wallet headers or bearer token | Send `X-Wallet-Address` + `X-Wallet-Signature` + `X-Wallet-Message`, or `Authorization: Bearer <jwt>`                    |
+| `BILLING_DETAILS_MISSING` | Account has no billing address    | Call `update_billing_details` tool with address fields                                                                   |
+| `INSUFFICIENT_BALANCE`    | Prepaid available balance ≤ $0    | Pay via x402 (`submit_payment`) or `topup_balance`. Check `billing://balance` for settled, reserved, and available state |
 
 Rate limiting is handled at the Gateway layer (HTTP 429) with standard `Retry-After` headers — not as a preflight error.
 Free operations (reads, listing, health checks) skip preflight entirely.
@@ -279,7 +276,7 @@ Free operations (reads, listing, health checks) skip preflight entirely.
 ## Example: First Stream
 
 1. **Call** — `POST /mcp` or `POST /graphql` with the desired billable operation.
-2. **Pay if challenged** — On 402, sign one accepted x402 requirement and retry the same operation with `X-PAYMENT`.
+2. **Pay if challenged** — On 402, sign one accepted v2 x402 requirement and retry the same operation with `PAYMENT-SIGNATURE`.
 3. **Resolve blockers** — If the response asks for billing details, call `update_billing_details`; if it asks for balance, retry with x402 or use `topup_balance`.
 4. **Create & stream** — `create_stream` → capture `stream_key` + `rtmp_url`. Push RTMP/E-RTMP: `rtmp://<ingest>/live/<stream_key>`.
 5. **Monitor** — Read `streams://{id}/health` periodically. If issues: `diagnose_rebuffering`, `diagnose_buffer_health`.

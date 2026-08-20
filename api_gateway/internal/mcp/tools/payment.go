@@ -1,7 +1,9 @@
+//nolint:errcheck // Optional response extensions are decoded/encoded on a best-effort interoperability path.
 package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -18,11 +20,11 @@ import (
 
 // RegisterPaymentTools registers x402 payment-related MCP tools.
 func RegisterPaymentTools(server *mcp.Server, clients *clients.ServiceClients, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) {
-	// get_payment_options - Get x402 payment options (works without auth)
+	// get_payment_options - Get tenant-bound x402 payment options.
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "get_payment_options",
-			Description: "Get x402 payment options for authentication and balance top-up. Returns the platform payTo address, supported networks, and payment instructions. Can be called without authentication.",
+			Description: "Get exact x402 prepaid top-up options for the authenticated tenant. Returns tenant-bound payTo addresses, supported networks, exact amounts, and payment instructions.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args GetPaymentOptionsInput) (*mcp.CallToolResult, any, error) {
 			return handleGetPaymentOptions(ctx, args, clients, logger)
@@ -33,7 +35,7 @@ func RegisterPaymentTools(server *mcp.Server, clients *clients.ServiceClients, r
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "submit_payment",
-			Description: "Submit an x402 payment. With value=0, this authenticates via wallet signature (proves ownership). With value>0, this settles payment for the specified resource and credits the billable tenant. The payment header should be base64-encoded JSON per the x402 spec.",
+			Description: "Submit an official x402 v2 PAYMENT-SIGNATURE value for an authenticated tenant top-up. Zero-value payloads are not authentication; use wallet challenge login.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args SubmitPaymentInput) (*mcp.CallToolResult, any, error) {
 			return handleSubmitPayment(ctx, args, clients, logger)
@@ -52,28 +54,34 @@ type PaymentOption struct {
 	DisplayName string `json:"display_name"`
 	Asset       string `json:"asset"`        // USDC contract address
 	AssetSymbol string `json:"asset_symbol"` // "USDC"
-	PayTo       string `json:"pay_to"`       // Platform payTo address
+	PayTo       string `json:"pay_to"`       // Tenant-bound payTo address
+	Amount      string `json:"amount"`       // Exact USDC amount in base units
 	Description string `json:"description"`
+	QuoteID     string `json:"quote_id,omitempty"`
+	Extra       any    `json:"extra,omitempty"`
 }
 
 // GetPaymentOptionsResult represents the result of getting payment options.
 type GetPaymentOptionsResult struct {
-	X402Version  int             `json:"x402_version"`
-	Options      []PaymentOption `json:"options"`
-	TopupURL     string          `json:"topup_url,omitempty"` // Human flow for manual top-up
-	Message      string          `json:"message"`
-	Instructions string          `json:"instructions"`
+	X402Version     int             `json:"x402_version"`
+	Options         []PaymentOption `json:"options"`
+	TopupURL        string          `json:"topup_url,omitempty"` // Human flow for manual top-up
+	Message         string          `json:"message"`
+	Instructions    string          `json:"instructions"`
+	PaymentRequired string          `json:"payment_required,omitempty"`
 }
 
 func handleGetPaymentOptions(ctx context.Context, args GetPaymentOptionsInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
-	// This works without authentication - anyone can get payment options
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
+		return toolError("authentication required to create tenant-bound payment requirements")
+	}
 	resource := args.Resource
 	if resource == "" {
 		resource = "graphql://operation"
 	}
 
-	// Get payment requirements from Purser (no tenantID needed)
-	resp, err := clients.Purser.GetPaymentRequirements(ctx, "", resource)
+	resp, err := clients.Purser.GetPaymentRequirements(ctx, tenantID, resource)
 	if err != nil {
 		logger.WithError(err).Warn("Failed to get payment requirements")
 		return toolError(fmt.Sprintf("Failed to get payment options: %v", err))
@@ -85,32 +93,43 @@ func handleGetPaymentOptions(ctx context.Context, args GetPaymentOptionsInput, c
 
 	options := make([]PaymentOption, 0, len(resp.Accepts))
 	for _, accept := range resp.Accepts {
+		amount := accept.Amount
+		if amount == "" {
+			amount = accept.MaxAmountRequired
+		}
+		var extra any
+		if len(accept.ExtraJson) > 0 {
+			_ = json.Unmarshal(accept.ExtraJson, &extra)
+		}
 		options = append(options, PaymentOption{
 			Network:     accept.Network,
 			DisplayName: networkDisplayName(accept.Network),
 			Asset:       accept.Asset,
 			AssetSymbol: "USDC", // All supported networks use USDC
 			PayTo:       accept.PayTo,
+			Amount:      amount,
 			Description: accept.Description,
+			QuoteID:     accept.QuoteId,
+			Extra:       extra,
 		})
+	}
+	paymentRequired, encodeErr := x402.EncodePaymentRequiredHeader(resp)
+	if encodeErr != nil {
+		logger.WithError(encodeErr).Warn("Failed to encode MCP payment requirements")
 	}
 
 	result := GetPaymentOptionsResult{
-		X402Version: int(resp.X402Version),
-		Options:     options,
-		TopupURL:    resp.TopupUrl,
-		Message:     "Use these options to authenticate via x402 or top up your balance.",
-		Instructions: `To authenticate (zero-value payment):
-1. Create an EIP-3009 authorization with value=0
-2. Sign it with your wallet
-3. Base64-encode the JSON payload
-4. Call submit_payment with the encoded payload
-
-To top up balance:
-1. Create an EIP-3009 authorization with your desired USDC amount (6 decimals)
-2. Sign it with your wallet
-3. Base64-encode the JSON payload
-4. Call submit_payment with the encoded payload`,
+		X402Version:     int(resp.X402Version),
+		Options:         options,
+		TopupURL:        resp.TopupUrl,
+		Message:         "Use one exact option to top up the authenticated tenant's prepaid balance.",
+		PaymentRequired: paymentRequired,
+		Instructions: `To top up balance:
+1. Decode payment_required as the official x402 v2 PaymentRequired document
+2. Choose one accepted requirement and create its exact EIP-3009 authorization
+3. Echo that requirement in accepted, preserve its frameworks.quoteId, and sign the v2 payload
+4. Base64-encode the PaymentPayload as PAYMENT-SIGNATURE and call submit_payment
+5. Retry the original operation only after confirmed settlement`,
 	}
 
 	return toolSuccessJSON(result)
@@ -118,23 +137,24 @@ To top up balance:
 
 // SubmitPaymentInput represents input for submit_payment tool.
 type SubmitPaymentInput struct {
-	Payment  string `json:"payment" jsonschema:"required" jsonschema_description:"Base64-encoded x402 payment payload (JSON with x402Version scheme network and payload with signature and authorization)"`
+	Payment  string `json:"payment" jsonschema:"required" jsonschema_description:"Base64-encoded official x402 v2 PAYMENT-SIGNATURE payload"`
 	Resource string `json:"resource,omitempty" jsonschema_description:"Resource being paid for (required for non-zero payments). Supports stream_id or artifact_hash; relay IDs accepted. Use prefixes: playback: or ingest: for view/ingest keys."`
 }
 
 // SubmitPaymentResult represents the result of submitting a payment.
 type SubmitPaymentResult struct {
-	Success       bool   `json:"success"`
-	IsAuthOnly    bool   `json:"is_auth_only"`   // True if value=0 (authentication only)
-	TenantID      string `json:"tenant_id"`      // Credited tenant (for payment) or wallet tenant (for auth)
-	WalletAddress string `json:"wallet_address"` // Payer wallet
-	CreditedCents int64  `json:"credited_cents"` // Amount credited (0 for auth-only)
-	NewBalance    int64  `json:"new_balance_cents,omitempty"`
-	TxHash        string `json:"tx_hash,omitempty"` // Blockchain tx (for non-zero payments)
-	TargetTenant  string `json:"target_tenant_id,omitempty"`
-	SessionToken  string `json:"session_token,omitempty"`
-	ExpiresAt     string `json:"expires_at,omitempty"`
-	Message       string `json:"message"`
+	Success         bool   `json:"success"`
+	IsAuthOnly      bool   `json:"is_auth_only"`   // Always false; retained for response compatibility
+	TenantID        string `json:"tenant_id"`      // Credited tenant
+	WalletAddress   string `json:"wallet_address"` // Payer wallet
+	CreditedCents   int64  `json:"credited_cents"` // Amount credited
+	NewBalance      int64  `json:"new_balance_cents,omitempty"`
+	TxHash          string `json:"tx_hash,omitempty"` // Blockchain tx (for non-zero payments)
+	TargetTenant    string `json:"target_tenant_id,omitempty"`
+	SessionToken    string `json:"session_token,omitempty"`
+	ExpiresAt       string `json:"expires_at,omitempty"`
+	Message         string `json:"message"`
+	PaymentResponse string `json:"payment_response,omitempty"`
 }
 
 func handleSubmitPayment(ctx context.Context, args SubmitPaymentInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -161,39 +181,7 @@ func handleSubmitPayment(ctx context.Context, args SubmitPaymentInput, clients *
 	clientIP := ctxkeys.GetClientIP(ctx)
 
 	if x402.IsAuthOnlyPayment(payload) {
-		resp, err := clients.Commodore.WalletLoginWithX402(ctx, payload, clientIP, "", nil)
-		if err != nil {
-			logger.WithError(err).Warn("x402 login failed")
-			return toolError(fmt.Sprintf("x402 login failed: %v", err))
-		}
-		if resp.Auth == nil || resp.Auth.User == nil {
-			return toolError("x402 login failed: missing auth response")
-		}
-
-		walletAddress := resp.PayerAddress
-		if walletAddress == "" {
-			walletAddress = payerAddress
-		}
-
-		expiresAt := ""
-		if resp.Auth.ExpiresAt != nil {
-			expiresAt = resp.Auth.ExpiresAt.AsTime().Format("2006-01-02T15:04:05Z")
-		}
-
-		result := SubmitPaymentResult{
-			Success:       true,
-			IsAuthOnly:    true,
-			TenantID:      resp.Auth.User.TenantId,
-			WalletAddress: walletAddress,
-			CreditedCents: 0,
-			SessionToken:  resp.Auth.Token,
-			ExpiresAt:     expiresAt,
-			Message:       "Authentication successful. Your wallet is now linked to your account.",
-		}
-		if resp.Auth.IsNewUser {
-			result.Message = "Account created and authenticated. Your wallet is now linked."
-		}
-		return toolSuccessJSON(result)
+		return toolError("zero-value x402 authentication is not supported; use the wallet challenge login flow")
 	}
 
 	authTenantID := ctxkeys.GetTenantID(ctx)
@@ -232,6 +220,9 @@ func handleSubmitPayment(ctx context.Context, args SubmitPaymentInput, clients *
 		TargetTenant:  settleResult.TargetTenantID,
 		Message:       fmt.Sprintf("Payment successful! %d cents credited to tenant %s.", settleResult.Settle.CreditedCents, settleResult.TargetTenantID),
 	}
+	if settleResult.X402Version == 2 {
+		result.PaymentResponse, _ = x402.EncodePaymentResponseHeader(settleResult, settleResult.Network)
+	}
 
 	return toolSuccessJSON(result)
 }
@@ -239,6 +230,14 @@ func handleSubmitPayment(ctx context.Context, args SubmitPaymentInput, clients *
 // networkDisplayName returns a human-readable name for an x402 network.
 func networkDisplayName(network string) string {
 	switch strings.ToLower(network) {
+	case "eip155:8453":
+		return "Base (Coinbase L2)"
+	case "eip155:84532":
+		return "Base Sepolia (Testnet)"
+	case "eip155:42161":
+		return "Arbitrum One"
+	case "eip155:421614":
+		return "Arbitrum Sepolia (Testnet)"
 	case "base", "base-mainnet":
 		return "Base (Coinbase L2)"
 	case "base-sepolia":

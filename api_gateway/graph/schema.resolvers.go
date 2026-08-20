@@ -610,6 +610,11 @@ func (r *billingStatusResolver) PaymentMethods(ctx context.Context, obj *purserp
 	return methods, nil
 }
 
+// RecentPayments is the resolver for the recentPayments field.
+func (r *billingStatusResolver) RecentPayments(ctx context.Context, obj *purserpb.BillingStatusResponse) ([]*purserpb.Payment, error) {
+	return obj.GetRecentPayments(), nil
+}
+
 // NextBillingDate is the resolver for the nextBillingDate field.
 func (r *billingStatusResolver) NextBillingDate(ctx context.Context, obj *purserpb.BillingStatusResponse) (*time.Time, error) {
 	if obj.NextBillingDate == nil {
@@ -1769,6 +1774,8 @@ func (r *invoiceResolver) Status(ctx context.Context, obj *purserpb.Invoice) (mo
 		return model.InvoiceStatusOverdue, nil
 	case "failed":
 		return model.InvoiceStatusFailed, nil
+	case "manual_review":
+		return model.InvoiceStatusManualReview, nil
 	case "cancelled":
 		return model.InvoiceStatusCancelled, nil
 	default:
@@ -1836,6 +1843,33 @@ func (r *invoiceResolver) UsageDetails(ctx context.Context, obj *purserpb.Invoic
 		return nil, nil
 	}
 	return obj.UsageDetails.AsMap(), nil
+}
+
+// ConfirmedAt is the resolver for the confirmedAt field.
+func (r *invoicePaymentResolver) ConfirmedAt(ctx context.Context, obj *purserpb.Payment) (*time.Time, error) {
+	if obj.GetConfirmedAt() == nil || !obj.GetConfirmedAt().IsValid() {
+		return nil, nil
+	}
+	t := obj.GetConfirmedAt().AsTime()
+	return &t, nil
+}
+
+// CreatedAt is the resolver for the createdAt field.
+func (r *invoicePaymentResolver) CreatedAt(ctx context.Context, obj *purserpb.Payment) (*time.Time, error) {
+	if obj.GetCreatedAt() == nil || !obj.GetCreatedAt().IsValid() {
+		return nil, nil
+	}
+	t := obj.GetCreatedAt().AsTime()
+	return &t, nil
+}
+
+// UpdatedAt is the resolver for the updatedAt field.
+func (r *invoicePaymentResolver) UpdatedAt(ctx context.Context, obj *purserpb.Payment) (*time.Time, error) {
+	if obj.GetUpdatedAt() == nil || !obj.GetUpdatedAt().IsValid() {
+		return nil, nil
+	}
+	t := obj.GetUpdatedAt().AsTime()
+	return &t, nil
 }
 
 // Dimensions is the resolver for the dimensions field.
@@ -3357,6 +3391,17 @@ func (r *queryResolver) InvoicesConnection(ctx context.Context, page *model.Conn
 // Invoice is the resolver for the invoice field.
 func (r *queryResolver) Invoice(ctx context.Context, id string) (*purserpb.Invoice, error) {
 	return r.DoGetInvoice(ctx, id)
+}
+
+// Payment is the resolver for the payment field.
+func (r *queryResolver) Payment(ctx context.Context, id string) (*purserpb.Payment, error) {
+	return r.DoGetPayment(ctx, id)
+}
+
+// PaymentsConnection is the resolver for the paymentsConnection field.
+func (r *queryResolver) PaymentsConnection(ctx context.Context, page *model.ConnectionInput, invoiceID *string, status *string, method *string) (*model.InvoicePaymentsConnection, error) {
+	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
+	return r.DoGetPaymentsConnection(ctx, first, after, last, before, invoiceID, status, method)
 }
 
 // BillingStatus is the resolver for the billingStatus field.
@@ -6651,6 +6696,11 @@ func (r *Resolver) IngestMetadata() generated.IngestMetadataResolver {
 // Invoice returns generated.InvoiceResolver implementation.
 func (r *Resolver) Invoice() generated.InvoiceResolver { return &invoiceResolver{r} }
 
+// InvoicePayment returns generated.InvoicePaymentResolver implementation.
+func (r *Resolver) InvoicePayment() generated.InvoicePaymentResolver {
+	return &invoicePaymentResolver{r}
+}
+
 // LineItem returns generated.LineItemResolver implementation.
 func (r *Resolver) LineItem() generated.LineItemResolver { return &lineItemResolver{r} }
 
@@ -7020,6 +7070,7 @@ type geographicDistributionResolver struct{ *Resolver }
 type infrastructureNodeResolver struct{ *Resolver }
 type ingestMetadataResolver struct{ *Resolver }
 type invoiceResolver struct{ *Resolver }
+type invoicePaymentResolver struct{ *Resolver }
 type lineItemResolver struct{ *Resolver }
 type liveNodeResolver struct{ *Resolver }
 type liveUsageSummaryResolver struct{ *Resolver }

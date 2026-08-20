@@ -1,0 +1,30 @@
+mutation CreateStripeCheckout(
+  $tierId: ID!
+  $billingPeriod: String!
+  $successUrl: String!
+  $cancelUrl: String!
+) {
+  createStripeCheckout(
+    tierId: $tierId
+    billingPeriod: $billingPeriod
+    successUrl: $successUrl
+    cancelUrl: $cancelUrl
+  ) {
+    __typename
+    ... on StripeCheckoutSession {
+      sessionId
+      checkoutUrl
+    }
+    ... on ValidationError {
+      message
+      field
+    }
+    ... on NotFoundError {
+      message
+    }
+    ... on AuthError {
+      message
+      code
+    }
+  }
+}

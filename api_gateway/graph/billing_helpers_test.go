@@ -47,7 +47,7 @@ func TestPaymentMethodFromPurser(t *testing.T) {
 		{"CARD", model.PaymentMethodCard, false}, // case-insensitive
 		{"crypto_eth", model.PaymentMethodCryptoEth, false},
 		{"crypto_usdc", model.PaymentMethodCryptoUsdc, false},
-		{"bank_transfer", model.PaymentMethodBankTransfer, false},
+		{"bank_transfer", "", true},
 		{"paypal", "", true}, // unknown must error, never silently map
 		{"", "", true},
 	}
