@@ -178,8 +178,11 @@ against real engines:
 - for ClickHouse, normalize _only_ the `Replicated*` engine prefix + injected
   zk-path/replica args (the deliberate HA divergence), preserving everything else
   (`ORDER BY`/`PARTITION BY`/`TTL`/`SETTINGS`/version columns/TABLE-vs-VIEW kind);
-- for Postgres, compare `information_schema`/`pg_indexes` introspection (order-independent).
-- apply the complete PostgreSQL demo seed twice, catching stale column lists,
+- for Postgres, compare columns, indexes, full constraints, triggers, routines,
+  view/materialized-view bodies, sequences, extensions, user-defined types,
+  ownership, grants/default ACLs, and RLS state/policies (order-independent);
+- apply every service-owned PostgreSQL demo seed twice against only its owning
+  baseline, catching cross-service assumptions, stale column lists,
   invalid `ON CONFLICT` targets, missing foreign keys, and non-idempotent upserts;
 - apply the complete ClickHouse demo seed and assert lifecycle/attribution
   invariants required by regional metering;
@@ -190,8 +193,10 @@ against real engines:
 
 This is the permanent guard: a release that adds a migration but forgets to update the
 baseline (or vice versa) breaks the equality. A schema change that leaves a seed or
-covered runtime statement incompatible also breaks the gate. It smoke-tests real
-PostgreSQL and ClickHouse Replicated engines with Keeper. The tests remain behind
+covered runtime statement incompatible also breaks the gate. It smoke-tests the
+release-pinned PostgreSQL and ClickHouse Replicated engines with Keeper. A separate
+supported-Yugabyte lane applies every service baseline and exercises runtime
+capabilities; PostgreSQL success never substitutes for Yugabyte proof. The tests remain behind
 `schema_verify` so a plain `make test` needs no Docker; CI runs them through
 `make verify-schema-migrations`.
 
@@ -201,6 +206,12 @@ their repository/service when that is clearer. Put a statement in
 exact text, especially for metering and financial writes. Use mock tests for branching
 and failure handling, but never treat `sqlmock.AnyArg()` as proof that driver values,
 defaults, casts, unique constraints, or `NOT NULL` contracts work on the real engine.
+
+Static PostgreSQL queries should migrate to the owning service's sqlc query tree.
+Generated code is committed and CI regenerates it with the pinned tool version.
+Use the generated `DBTX` boundary so transaction ownership stays with the caller;
+never split a lock/fencing transaction merely to fit generated methods. ClickHouse
+uses explicit typed batch writers and live append contracts rather than sqlc.
 
 ## Operator pre-flight before a consolidation release
 
