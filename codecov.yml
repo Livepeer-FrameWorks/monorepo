@@ -30,6 +30,9 @@ coverage:
         threshold: 5%
         flags:
           - go
+          - postgres-contract
+          - clickhouse-contract
+          - yugabyte-contract
         informational: true
       frontend:
         target: auto
@@ -42,6 +45,9 @@ coverage:
         target: 50%
         flags:
           - go
+          - postgres-contract
+          - clickhouse-contract
+          - yugabyte-contract
         informational: true
       frontend:
         target: 50%
@@ -65,4 +71,16 @@ flags:
       - "**/*.ts"
       - "**/*.tsx"
       - "**/*.svelte"
+    carryforward: true
+  postgres-contract:
+    paths:
+      - "**/*.go"
+    carryforward: true
+  clickhouse-contract:
+    paths:
+      - "**/*.go"
+    carryforward: true
+  yugabyte-contract:
+    paths:
+      - "**/*.go"
     carryforward: true

@@ -39,6 +39,7 @@ jobs:
               - '**/go.mod'
               - '**/go.sum'
               - 'Makefile'
+              - 'scripts/run-go-contract-test.sh'
               - 'pkg/proto/**'
               - '.golangci.yml'
               - '.golangci-baseline'
@@ -68,6 +69,7 @@ jobs:
               - 'scripts/check-migration-version.sh'
               - 'scripts/check-migration-version.test.sh'
               - 'scripts/reset-demo-databases.sh'
+              - 'scripts/run-go-contract-test.sh'
               - 'Makefile'
             database:
               - 'api_analytics_ingest/**/*.go'
@@ -87,6 +89,7 @@ jobs:
               - 'scripts/check-migration-version.sh'
               - 'scripts/check-migration-version.test.sh'
               - 'scripts/reset-demo-databases.sh'
+              - 'scripts/run-go-contract-test.sh'
               - 'Makefile'
 
   go-build:
@@ -329,6 +332,37 @@ jobs:
         run: make sqlc-check
       - name: Prove schema migration convergence
         run: make verify-schema-migrations-core
+        env:
+          CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
+      - name: Upload database contract coverage artifact
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: postgres-clickhouse-contract-coverage
+          path: coverage/contracts/
+          if-no-files-found: warn
+      - name: Upload PostgreSQL contract coverage to Codecov
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        continue-on-error: true
+        uses: codecov/codecov-action@v6
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage/contracts/postgres/cli.out,coverage/contracts/postgres/purser-handlers.out,coverage/contracts/postgres/purser-grpc.out,coverage/contracts/postgres/purser-query-catalog.out,coverage/contracts/postgres/navigator-query-catalog.out,coverage/contracts/postgres/navigator-store.out,coverage/contracts/postgres/skipper-query-catalog.out,coverage/contracts/postgres/skipper-conversations.out,coverage/contracts/postgres/skipper-metering.out,coverage/contracts/postgres/skipper-reports.out,coverage/contracts/postgres/skipper-social.out,coverage/contracts/postgres/skipper-baselines.out,coverage/contracts/postgres/skipper-pagecache.out,coverage/contracts/postgres/skipper-knowledge.out,coverage/contracts/postgres/purser-stripe.out,coverage/contracts/postgres/purser-billing.out,coverage/contracts/postgres/purser-tieraccess.out,coverage/contracts/postgres/purser-bootstrap.out
+          flags: postgres-contract
+          name: postgres-contract-coverage
+          fail_ci_if_error: false
+      - name: Upload ClickHouse contract coverage to Codecov
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        continue-on-error: true
+        uses: codecov/codecov-action@v6
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage/contracts/clickhouse/cli.out
+          flags: clickhouse-contract
+          name: clickhouse-contract-coverage
+          fail_ci_if_error: false
 
   database-yugabyte:
     name: Yugabyte database contract
@@ -344,15 +378,39 @@ jobs:
         env:
           GOTOOLCHAIN: local
       - run: make verify-schema-yugabyte
+        env:
+          CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
       - run: make verify-yugabyte-ha
+        env:
+          CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
+      - name: Upload Yugabyte contract coverage artifact
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: yugabyte-contract-coverage
+          path: coverage/contracts/yugabyte/
+          if-no-files-found: warn
+      - name: Upload Yugabyte contract coverage to Codecov
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        continue-on-error: true
+        uses: codecov/codecov-action@v6
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage/contracts/yugabyte/schema.out,coverage/contracts/yugabyte/ha.out
+          flags: yugabyte-contract
+          name: yugabyte-contract-coverage
+          fail_ci_if_error: false
 
   codecov-notify:
     name: Codecov notify
-    needs: [go-test, frontend-test, frontend-build]
+    needs: [go-test, frontend-test, frontend-build, migration-release-state, database-yugabyte]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Send Codecov notifications
+        timeout-minutes: 5
+        continue-on-error: true
         uses: codecov/codecov-action@v6
         with:
           run_command: send-notifications
