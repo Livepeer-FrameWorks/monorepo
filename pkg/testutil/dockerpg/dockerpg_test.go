@@ -22,3 +22,16 @@ infrastructure:
 		t.Fatal("accepted infrastructure image without digest")
 	}
 }
+
+func TestParseInspectedHostPort(t *testing.T) {
+	ports := `{"5432/tcp":[{"HostIp":"0.0.0.0","HostPort":"49153"},{"HostIp":"::","HostPort":"49153"}],"8080/tcp":null}`
+	if got := parseInspectedHostPort(ports, "5432/tcp"); got != "49153" {
+		t.Fatalf("host port = %q, want 49153", got)
+	}
+	if got := parseInspectedHostPort(ports, "8080/tcp"); got != "" {
+		t.Fatalf("unpublished port = %q, want empty", got)
+	}
+	if got := parseInspectedHostPort("not-json", "5432/tcp"); got != "" {
+		t.Fatalf("invalid JSON port = %q, want empty", got)
+	}
+}

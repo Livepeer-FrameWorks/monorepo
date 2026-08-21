@@ -149,7 +149,12 @@ func pgStart(t *testing.T, name string) {
 	t.Cleanup(func() { rmContainer(t, name) })
 	deadline := time.Now().Add(90 * time.Second)
 	for {
-		if out, err := docker(t, "", "exec", name, "psql", "-U", "postgres", "-tAc", "SELECT 1"); err == nil && strings.TrimSpace(out) == "1" {
+		// The official image first starts a temporary socket-only postmaster to run initialization, then deliberately
+		// stops it before starting the final server. A plain SELECT 1 can hit that temporary process and let the test
+		// race its shutdown. The final Docker postmaster listens on configured addresses; the temporary one forces
+		// listen_addresses='' and therefore cannot satisfy this probe.
+		if out, err := docker(t, "", "exec", name, "psql", "-U", "postgres", "-tAc",
+			"SELECT CASE WHEN current_setting('listen_addresses') <> '' THEN 1 ELSE 0 END"); err == nil && strings.TrimSpace(out) == "1" {
 			return
 		}
 		if time.Now().After(deadline) {

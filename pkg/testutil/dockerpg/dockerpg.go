@@ -6,6 +6,7 @@ package dockerpg
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -74,7 +75,7 @@ func infrastructureImage(yaml, name string) (string, string, error) {
 
 // Every docker invocation is deadline-bounded so no single call can hang a harness, but the budgets differ by command:
 // only `docker run` may pull the image (nothing pre-pulls it in the Makefile or workflows) and needs minutes; the
-// diagnostic/cleanup commands (inspect/logs/rm) and each `docker port` poll must stay short so a failure path cannot
+// diagnostic/cleanup commands (inspect/logs/rm) and each published-port probe must stay short so a failure path cannot
 // stack several multi-minute waits and collide with the package test timeout.
 const (
 	RunTimeout          = 3 * time.Minute        // docker run, incl. image pull
@@ -105,36 +106,48 @@ func runDocker(parent context.Context, timeout time.Duration, args ...string) (s
 	return string(out), err
 }
 
-// DiscoverPublishedHostPort polls `docker port <name> <containerPort>` (e.g. "5432/tcp") until a host mapping is
-// published or portDiscoveryBudget elapses. Each probe is derived from the whole-wait deadline (and further capped at
-// probeTimeout), and the inter-probe wait is context-aware, so no probe ever BEGINS after the budget — the deadline is
-// exact, not budget+interval. On failure it returns an error carrying the container's state and recent logs, so a
-// genuine startup failure is distinguishable from the publish race (publication under `docker run -P` is asynchronous,
-// so an immediate probe can briefly report no mapping).
+// DiscoverPublishedHostPort polls Docker's inspected port map until a host mapping is published or the budget elapses.
+// Inspect is authoritative and avoids `docker port` occasionally blocking under a loaded CI daemon even though a later
+// inspect shows the mapping already exists. Each probe is bounded by both probeTimeout and the whole-wait deadline.
 func DiscoverPublishedHostPort(name, containerPort string) (string, error) {
 	deadline, cancel := context.WithTimeout(context.Background(), portDiscoveryBudget)
 	defer cancel()
 	var portOut string
 	var err error
 	for {
-		portOut, err = runDocker(deadline, probeTimeout, "port", name, containerPort)
+		portOut, err = runDocker(deadline, probeTimeout, "inspect", "-f", "{{json .NetworkSettings.Ports}}", name)
 		if err == nil {
-			if p := parseHostPort(portOut); p != "" {
+			if p := parseInspectedHostPort(portOut, containerPort); p != "" {
 				return p, nil
 			}
 		}
 		select {
 		case <-deadline.Done():
 			if err == nil {
-				err = fmt.Errorf("no host mapping in port output %q", portOut)
+				err = fmt.Errorf("no host mapping in inspected ports %q", portOut)
 			}
-			return "", fmt.Errorf("docker port did not publish %s within %s: %w\nstate: %s\nlogs:\n%s",
+			return "", fmt.Errorf("docker did not publish %s within %s: %w\nstate: %s\nlogs:\n%s",
 				containerPort, portDiscoveryBudget, err,
 				cliDiagnostic("inspect", "-f", "{{.State.Status}} {{.State.Error}}", name),
 				cliDiagnostic("logs", "--tail", "20", name))
 		case <-time.After(pollInterval):
 		}
 	}
+}
+
+func parseInspectedHostPort(portJSON, containerPort string) string {
+	var ports map[string][]struct {
+		HostPort string `json:"HostPort"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(portJSON)), &ports); err != nil {
+		return ""
+	}
+	for _, binding := range ports[containerPort] {
+		if binding.HostPort != "" {
+			return binding.HostPort
+		}
+	}
+	return ""
 }
 
 // Readiness bounds: the whole wait plus each individual ping, so a stalled TCP connect or PostgreSQL startup handshake
@@ -178,14 +191,4 @@ func cliDiagnostic(args ...string) string {
 		return fmt.Sprintf("%s(diagnostic %v failed: %v)", out, args, err)
 	}
 	return out
-}
-
-// parseHostPort extracts the host port from `docker port` output like "0.0.0.0:49153" (there may be an extra IPv6 line).
-func parseHostPort(portOut string) string {
-	for line := range strings.SplitSeq(strings.TrimSpace(portOut), "\n") {
-		if i := strings.LastIndex(line, ":"); i >= 0 {
-			return strings.TrimSpace(line[i+1:])
-		}
-	}
-	return ""
 }
