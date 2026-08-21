@@ -46,7 +46,7 @@ func TestStoreSearch(t *testing.T) {
 		0.99,
 	)
 
-	mock.ExpectQuery("SELECT id").WithArgs("tenant", sqlmock.AnyArg(), 2, defaultMinSimilarity).WillReturnRows(rows)
+	mock.ExpectQuery("SELECT id").WithArgs(sqlmock.AnyArg(), "tenant", defaultMinSimilarity, 2).WillReturnRows(rows)
 
 	results, err := store.Search(context.Background(), "tenant", []float32{0.1, 0.2}, 2)
 	if err != nil {
@@ -95,7 +95,6 @@ func TestStoreUpsert(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("DELETE FROM skipper\\.skipper_knowledge").WithArgs("tenant", "https://example.com").WillReturnResult(sqlmock.NewResult(1, 2))
-	mock.ExpectPrepare("INSERT INTO skipper\\.skipper_knowledge")
 	mock.ExpectExec("INSERT INTO skipper\\.skipper_knowledge").WithArgs(
 		"tenant",
 		"https://example.com",

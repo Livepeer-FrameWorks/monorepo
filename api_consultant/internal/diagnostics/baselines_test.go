@@ -2,7 +2,6 @@ package diagnostics
 
 import (
 	"context"
-	"database/sql/driver"
 	"math"
 	"testing"
 	"time"
@@ -227,8 +226,10 @@ func TestSQLBaselineStore_Upsert(t *testing.T) {
 	}
 	defer db.Close()
 
+	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO skipper.skipper_baselines").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	store := NewSQLBaselineStore(db)
 	err = store.Upsert(context.Background(), "t1", "", map[string]BaselineMetric{
@@ -249,15 +250,13 @@ func TestSQLBaselineStore_UpsertMultiMetric(t *testing.T) {
 	}
 	defer db.Close()
 
-	// 3 metrics × 6 columns = 18 args. WithArgs validates the count,
-	// catching placeholder indexing bugs (e.g. i*5 instead of i*6).
-	anyArgs := make([]driver.Value, 18)
-	for i := range anyArgs {
-		anyArgs[i] = sqlmock.AnyArg()
+	mock.ExpectBegin()
+	for range 3 {
+		mock.ExpectExec("INSERT INTO skipper.skipper_baselines").
+			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(0, 1))
 	}
-	mock.ExpectExec("INSERT INTO skipper.skipper_baselines").
-		WithArgs(anyArgs...).
-		WillReturnResult(sqlmock.NewResult(0, 3))
+	mock.ExpectCommit()
 
 	store := NewSQLBaselineStore(db)
 	err = store.Upsert(context.Background(), "t1", "", map[string]BaselineMetric{

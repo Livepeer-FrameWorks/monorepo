@@ -5,10 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
+	"frameworks/api_consultant/internal/database/skipperdb"
 	"frameworks/api_consultant/internal/skipper"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -83,6 +83,7 @@ type UsagePublisher interface {
 
 type UsageTracker struct {
 	db                *sql.DB
+	queries           *skipperdb.Queries
 	logger            logging.Logger
 	model             string
 	provider          string
@@ -110,7 +111,7 @@ func NewUsageTracker(cfg UsageTrackerConfig) *UsageTracker {
 	if flushInterval <= 0 {
 		flushInterval = time.Minute
 	}
-	return &UsageTracker{
+	tracker := &UsageTracker{
 		db:                cfg.DB,
 		logger:            cfg.Logger,
 		model:             cfg.Model,
@@ -123,6 +124,10 @@ func NewUsageTracker(cfg UsageTrackerConfig) *UsageTracker {
 		stopCh:            make(chan struct{}),
 		usageByTenant:     make(map[string]*tenantUsage),
 	}
+	if cfg.DB != nil {
+		tracker.queries = skipperdb.New(cfg.DB)
+	}
+	return tracker
 }
 
 func (t *UsageTracker) Start() {
@@ -287,18 +292,11 @@ func (t *UsageTracker) insertUsageRow(ctx context.Context, tenantID, eventType s
 	if provider != "" {
 		providerValue = sql.NullString{String: provider, Valid: true}
 	}
-	_, err := t.db.ExecContext(ctx, `
-		INSERT INTO skipper.skipper_usage (
-			tenant_id,
-			event_type,
-			event_count,
-			tokens_input,
-			tokens_output,
-			model,
-			provider,
-			created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-	`, tenantID, eventType, count, inputTokens, outputTokens, modelValue, providerValue)
+	err := t.queries.InsertUsage(ctx, skipperdb.InsertUsageParams{
+		TenantID: tenantID, EventType: eventType, EventCount: int32(count),
+		TokensInput: int32(inputTokens), TokensOutput: int32(outputTokens),
+		Model: modelValue, Provider: providerValue,
+	})
 	if err != nil && t.logger != nil {
 		t.logger.WithError(err).WithFields(logging.Fields{
 			"tenant_id":  tenantID,
@@ -338,20 +336,14 @@ func (t *UsageTracker) publishPending(ctx context.Context) error {
 	for _, row := range rows {
 		if err := t.publisher.SendServiceEvent(row.serviceEvent()); err != nil {
 			publishErr = errors.Join(publishErr, err)
-			if _, updateErr := t.db.ExecContext(ctx, `
-				UPDATE skipper.skipper_usage
-				SET claimed_at = NULL, attempts = attempts + 1, last_error = $2
-				WHERE id = $1::uuid AND published_at IS NULL
-			`, row.id, err.Error()); updateErr != nil {
+			if updateErr := t.queries.RecordUsagePublicationFailure(ctx, skipperdb.RecordUsagePublicationFailureParams{
+				ID: row.id, LastError: err.Error(),
+			}); updateErr != nil {
 				publishErr = errors.Join(publishErr, fmt.Errorf("record usage publication failure: %w", updateErr))
 			}
 			continue
 		}
-		if _, err := t.db.ExecContext(ctx, `
-			UPDATE skipper.skipper_usage
-			SET published_at = NOW(), claimed_at = NULL, last_error = NULL
-			WHERE id = $1::uuid
-		`, row.id); err != nil {
+		if err := t.queries.CompleteUsagePublication(ctx, row.id); err != nil {
 			publishErr = errors.Join(publishErr, err)
 		}
 	}
@@ -364,40 +356,23 @@ func (t *UsageTracker) claimPending(ctx context.Context) ([]persistedUsage, erro
 		return nil, err
 	}
 	defer tx.Rollback() //nolint:errcheck
-	rows, err := tx.QueryContext(ctx, `
-		SELECT id::text, tenant_id::text, event_type, event_count,
-		       COALESCE(tokens_input, 0), COALESCE(tokens_output, 0),
-		       COALESCE(model, ''), COALESCE(provider, ''), created_at
-		FROM skipper.skipper_usage
-		WHERE published_at IS NULL
-		  AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '2 minutes')
-		ORDER BY created_at
-		FOR UPDATE SKIP LOCKED
-		LIMIT 50
-	`)
+	queries := skipperdb.New(tx)
+	rows, err := queries.ClaimPendingUsage(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var result []persistedUsage
 	var ids []string
-	for rows.Next() {
-		var row persistedUsage
-		if err := rows.Scan(&row.id, &row.tenantID, &row.eventType, &row.count,
-			&row.inputTokens, &row.outputTokens, &row.model, &row.provider, &row.createdAt); err != nil {
-			return nil, err
-		}
-		result = append(result, row)
-		ids = append(ids, row.id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+	for _, row := range rows {
+		result = append(result, persistedUsage{
+			id: row.ID, tenantID: row.TenantID, eventType: row.EventType,
+			count: int(row.EventCount), inputTokens: int(row.TokensInput), outputTokens: int(row.TokensOutput),
+			model: row.Model, provider: row.Provider, createdAt: row.CreatedAt,
+		})
+		ids = append(ids, row.ID)
 	}
 	if len(ids) > 0 {
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE skipper.skipper_usage SET claimed_at = NOW()
-			WHERE id = ANY($1::uuid[])
-		`, postgresArray(ids)); err != nil {
+		if err := queries.MarkUsageClaimed(ctx, ids); err != nil {
 			return nil, err
 		}
 	}
@@ -432,8 +407,6 @@ func (u persistedUsage) serviceEvent() *ipcpb.ServiceEvent {
 		}},
 	}
 }
-
-func postgresArray(values []string) string { return "{" + strings.Join(values, ",") + "}" }
 
 func (t *UsageTracker) ensureTenant(tenantID string) *tenantUsage {
 	usage, ok := t.usageByTenant[tenantID]

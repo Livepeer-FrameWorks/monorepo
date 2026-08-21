@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"frameworks/api_consultant/internal/database/skipperdb"
 	"github.com/google/uuid"
 )
 
@@ -34,11 +34,16 @@ type ReportStore interface {
 }
 
 type SQLReportStore struct {
-	db *sql.DB
+	db      *sql.DB
+	queries *skipperdb.Queries
 }
 
 func NewReportStore(db *sql.DB) *SQLReportStore {
-	return &SQLReportStore{db: db}
+	var queries *skipperdb.Queries
+	if db != nil {
+		queries = skipperdb.New(db)
+	}
+	return &SQLReportStore{db: db, queries: queries}
 }
 
 func (s *SQLReportStore) Save(ctx context.Context, record ReportRecord) (ReportRecord, error) {
@@ -61,29 +66,10 @@ func (s *SQLReportStore) Save(ctx context.Context, record ReportRecord) (ReportR
 		return ReportRecord{}, fmt.Errorf("encode recommendations: %w", err)
 	}
 
-	var createdAt time.Time
-	err = s.db.QueryRowContext(ctx, `
-		INSERT INTO skipper.skipper_reports (
-			id,
-			tenant_id,
-			trigger,
-			summary,
-			metrics_reviewed,
-			root_cause,
-			recommendations,
-			created_at
-		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-		RETURNING created_at
-	`,
-		record.ID,
-		record.TenantID,
-		record.Trigger,
-		record.Summary,
-		database.JSONText(metricsJSON),
-		record.RootCause,
-		database.JSONText(recommendationsJSON),
-	).Scan(&createdAt)
+	createdAt, err := s.queries.SaveReport(ctx, skipperdb.SaveReportParams{
+		ID: record.ID, TenantID: record.TenantID, Trigger: record.Trigger, Summary: record.Summary,
+		MetricsReviewed: string(metricsJSON), RootCause: record.RootCause, Recommendations: string(recommendationsJSON),
+	})
 	if err != nil {
 		return ReportRecord{}, fmt.Errorf("insert report: %w", err)
 	}
@@ -103,38 +89,20 @@ func (s *SQLReportStore) ListByTenant(ctx context.Context, tenantID string, limi
 		limit = 50
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id,
-			tenant_id,
-			trigger,
-			summary,
-			metrics_reviewed,
-			root_cause,
-			recommendations,
-			created_at,
-			read_at
-		FROM skipper.skipper_reports
-		WHERE tenant_id = $1
-		ORDER BY created_at DESC
-		LIMIT $2
-	`, tenantID, limit)
+	rows, err := s.queries.ListReportsByTenant(ctx, skipperdb.ListReportsByTenantParams{
+		TenantID: tenantID, RowLimit: int32(limit),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("list reports: %w", err)
 	}
-	defer rows.Close()
-
 	var reports []ReportRecord
-	for rows.Next() {
-		r, err := scanReport(rows)
+	for _, row := range rows {
+		r, err := decodeReport(row.ID, row.TenantID, row.Trigger, row.Summary, row.MetricsReviewed, row.RootCause, row.Recommendations, row.CreatedAt, row.ReadAt)
 		if err != nil {
 			return nil, err
 		}
 		reports = append(reports, r)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate reports: %w", err)
-	}
-
 	return reports, nil
 }
 
@@ -155,45 +123,26 @@ func (s *SQLReportStore) ListByTenantPaginated(ctx context.Context, tenantID str
 		offset = 0
 	}
 
-	var total int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM skipper.skipper_reports WHERE tenant_id = $1`, tenantID,
-	).Scan(&total); err != nil {
+	total, err := s.queries.CountReportsByTenant(ctx, tenantID)
+	if err != nil {
 		return nil, 0, fmt.Errorf("count reports: %w", err)
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id,
-			tenant_id,
-			trigger,
-			summary,
-			metrics_reviewed,
-			root_cause,
-			recommendations,
-			created_at,
-			read_at
-		FROM skipper.skipper_reports
-		WHERE tenant_id = $1
-		ORDER BY created_at DESC
-		LIMIT $2 OFFSET $3
-	`, tenantID, limit, offset)
+	rows, err := s.queries.ListReportsByTenantPaginated(ctx, skipperdb.ListReportsByTenantPaginatedParams{
+		TenantID: tenantID, RowLimit: int32(limit), RowOffset: int32(offset),
+	})
 	if err != nil {
 		return nil, 0, fmt.Errorf("list reports paginated: %w", err)
 	}
-	defer rows.Close()
-
 	var reports []ReportRecord
-	for rows.Next() {
-		r, err := scanReport(rows)
+	for _, row := range rows {
+		r, err := decodeReport(row.ID, row.TenantID, row.Trigger, row.Summary, row.MetricsReviewed, row.RootCause, row.Recommendations, row.CreatedAt, row.ReadAt)
 		if err != nil {
 			return nil, 0, err
 		}
 		reports = append(reports, r)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("iterate reports: %w", err)
-	}
-	return reports, total, nil
+	return reports, int(total), nil
 }
 
 func (s *SQLReportStore) GetByID(ctx context.Context, tenantID, reportID string) (ReportRecord, error) {
@@ -207,21 +156,11 @@ func (s *SQLReportStore) GetByID(ctx context.Context, tenantID, reportID string)
 		return ReportRecord{}, errors.New("report id is required")
 	}
 
-	row := s.db.QueryRowContext(ctx, `
-		SELECT id,
-			tenant_id,
-			trigger,
-			summary,
-			metrics_reviewed,
-			root_cause,
-			recommendations,
-			created_at,
-			read_at
-		FROM skipper.skipper_reports
-		WHERE id = $1 AND tenant_id = $2
-	`, reportID, tenantID)
-
-	return scanReportRow(row)
+	row, err := s.queries.GetReportByID(ctx, skipperdb.GetReportByIDParams{ID: reportID, TenantID: tenantID})
+	if err != nil {
+		return ReportRecord{}, fmt.Errorf("scan report: %w", err)
+	}
+	return decodeReport(row.ID, row.TenantID, row.Trigger, row.Summary, row.MetricsReviewed, row.RootCause, row.Recommendations, row.CreatedAt, row.ReadAt)
 }
 
 func (s *SQLReportStore) MarkRead(ctx context.Context, tenantID string, reportIDs []string) (int, error) {
@@ -232,34 +171,17 @@ func (s *SQLReportStore) MarkRead(ctx context.Context, tenantID string, reportID
 		return 0, errors.New("tenant id is required")
 	}
 
-	var result sql.Result
+	var affected int64
 	var err error
 	if len(reportIDs) == 0 {
-		result, err = s.db.ExecContext(ctx,
-			`UPDATE skipper.skipper_reports SET read_at = NOW() WHERE tenant_id = $1 AND read_at IS NULL`,
-			tenantID,
-		)
+		affected, err = s.queries.MarkAllReportsRead(ctx, tenantID)
 	} else {
-		args := make([]any, 0, len(reportIDs)+1)
-		args = append(args, tenantID)
-		placeholders := ""
-		for i, id := range reportIDs {
-			if i > 0 {
-				placeholders += ","
-			}
-			placeholders += fmt.Sprintf("$%d", i+2)
-			args = append(args, id)
-		}
-		result, err = s.db.ExecContext(ctx,
-			`UPDATE skipper.skipper_reports SET read_at = NOW() WHERE tenant_id = $1 AND id IN (`+placeholders+`) AND read_at IS NULL`,
-			args...,
-		)
+		affected, err = s.queries.MarkReportsRead(ctx, skipperdb.MarkReportsReadParams{TenantID: tenantID, Ids: reportIDs})
 	}
 	if err != nil {
 		return 0, fmt.Errorf("mark reports read: %w", err)
 	}
-	n, _ := result.RowsAffected()
-	return int(n), nil
+	return int(affected), nil
 }
 
 func (s *SQLReportStore) UnreadCount(ctx context.Context, tenantID string) (int, error) {
@@ -270,38 +192,20 @@ func (s *SQLReportStore) UnreadCount(ctx context.Context, tenantID string) (int,
 		return 0, errors.New("tenant id is required")
 	}
 
-	var count int
-	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM skipper.skipper_reports WHERE tenant_id = $1 AND read_at IS NULL`,
-		tenantID,
-	).Scan(&count)
+	count, err := s.queries.CountUnreadReports(ctx, tenantID)
 	if err != nil {
 		return 0, fmt.Errorf("count unread reports: %w", err)
 	}
-	return count, nil
+	return int(count), nil
 }
 
-// scanner is an interface matching both *sql.Rows and *sql.Row.
-type scanner interface {
-	Scan(dest ...any) error
-}
-
-func scanReportFields(s scanner) (ReportRecord, error) {
-	var report ReportRecord
-	var metricsJSON []byte
-	var recsJSON []byte
-	if err := s.Scan(
-		&report.ID,
-		&report.TenantID,
-		&report.Trigger,
-		&report.Summary,
-		&metricsJSON,
-		&report.RootCause,
-		&recsJSON,
-		&report.CreatedAt,
-		&report.ReadAt,
-	); err != nil {
-		return ReportRecord{}, fmt.Errorf("scan report: %w", err)
+func decodeReport(id, tenantID, trigger, summary string, metricsJSON []byte, rootCause string, recsJSON []byte, createdAt time.Time, readAt sql.NullTime) (ReportRecord, error) {
+	report := ReportRecord{
+		ID: id, TenantID: tenantID, Trigger: trigger, Summary: summary,
+		RootCause: rootCause, CreatedAt: createdAt,
+	}
+	if readAt.Valid {
+		report.ReadAt = &readAt.Time
 	}
 	if len(metricsJSON) > 0 {
 		if err := json.Unmarshal(metricsJSON, &report.MetricsReviewed); err != nil {
@@ -314,12 +218,4 @@ func scanReportFields(s scanner) (ReportRecord, error) {
 		}
 	}
 	return report, nil
-}
-
-func scanReport(rows *sql.Rows) (ReportRecord, error) {
-	return scanReportFields(rows)
-}
-
-func scanReportRow(row *sql.Row) (ReportRecord, error) {
-	return scanReportFields(row)
 }

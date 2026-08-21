@@ -508,6 +508,7 @@ func main() {
 				Store:     socialStore,
 				Collector: socialCollector,
 				DB:        db,
+				TenantID:  globalTenantID,
 				Logger:    logger,
 			})
 			socialComposer := social.NewComposer(social.ComposerConfig{

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_consultant/internal/database/skipperdb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"golang.org/x/sync/errgroup"
 )
@@ -470,9 +471,9 @@ func (s *CrawlScheduler) cleanupStaleCache(ctx context.Context) {
 	}
 
 	if s.db != nil {
-		if _, err := s.db.ExecContext(ctx,
-			`DELETE FROM skipper.skipper_crawl_jobs WHERE tenant_id = $1 AND finished_at < $2`,
-			s.tenantID, time.Now().Add(-7*24*time.Hour)); err != nil {
+		if _, err := skipperdb.New(s.db).CleanupFinishedCrawlJobs(ctx, skipperdb.CleanupFinishedCrawlJobsParams{
+			TenantID: s.tenantID, Cutoff: sql.NullTime{Time: time.Now().Add(-7 * 24 * time.Hour), Valid: true},
+		}); err != nil {
 			s.logger.WithError(err).Warn("Failed to cleanup old crawl jobs")
 		}
 	}

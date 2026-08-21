@@ -131,7 +131,7 @@ func TestReportStoreListByTenantPaginated(t *testing.T) {
 	store := NewReportStore(db)
 	mock.ExpectQuery("SELECT COUNT").WithArgs("tenant-a").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(3))
-	mock.ExpectQuery("FROM skipper\\.skipper_reports").WithArgs("tenant-a", 10, 0).
+	mock.ExpectQuery("FROM skipper\\.skipper_reports").WithArgs("tenant-a", 0, 10).
 		WillReturnRows(reportMockRows())
 
 	reports, total, err := store.ListByTenantPaginated(context.Background(), "tenant-a", 10, 0)
@@ -207,7 +207,7 @@ func TestReportStoreMarkReadSpecific(t *testing.T) {
 
 	store := NewReportStore(db)
 	mock.ExpectExec("UPDATE skipper\\.skipper_reports SET read_at").
-		WithArgs("tenant-a", "r-1", "r-2").
+		WithArgs("tenant-a", "{\"r-1\",\"r-2\"}").
 		WillReturnResult(sqlmock.NewResult(0, 2))
 
 	n, err := store.MarkRead(context.Background(), "tenant-a", []string{"r-1", "r-2"})

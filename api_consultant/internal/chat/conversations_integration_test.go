@@ -63,7 +63,7 @@ func TestConversationGetConversationScopesUser(t *testing.T) {
 			"id", "tenant_id", "user_id", "title", "summary", "created_at", "updated_at",
 		}).AddRow("conversation-id", "tenant-a", "user-a", "Title", "Summary", time.Now(), time.Now()))
 
-	mock.ExpectQuery("SELECT m\\.id, m\\.conversation_id, m\\.role, m\\.content, m\\.confidence, COALESCE\\(m\\.sources, 'null'\\), COALESCE\\(m\\.tools_used, 'null'\\), COALESCE\\(m\\.confidence_blocks, 'null'\\), m\\.token_count_input, m\\.token_count_output, m\\.created_at").
+	mock.ExpectQuery("SELECT m\\.id, m\\.conversation_id, m\\.role, m\\.content, m\\.confidence").
 		WithArgs("conversation-id", "tenant-a").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "conversation_id", "role", "content", "confidence", "sources", "tools_used", "confidence_blocks", "token_count_input", "token_count_output", "created_at",

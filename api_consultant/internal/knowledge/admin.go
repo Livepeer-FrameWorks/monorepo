@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_consultant/internal/database/skipperdb"
 	"frameworks/api_consultant/internal/skipper"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -41,6 +42,7 @@ var (
 
 type AdminAPI struct {
 	db        *sql.DB
+	queries   *skipperdb.Queries
 	store     *Store
 	embedder  *Embedder
 	crawler   *Crawler
@@ -98,6 +100,7 @@ func NewAdminAPI(db *sql.DB, store *Store, embedder *Embedder, crawler *Crawler,
 	}
 	return &AdminAPI{
 		db:        db,
+		queries:   skipperdb.New(db),
 		store:     store,
 		embedder:  embedder,
 		crawler:   crawler,
@@ -155,20 +158,14 @@ func (a *AdminAPI) handleCrawl(c *gin.Context) {
 	// for this tenant + sitemap, preventing the TOCTOU race of SELECT then INSERT.
 	jobID := uuid.NewString()
 	startedAt := a.now().UTC()
-	res, err := a.db.ExecContext(c.Request.Context(),
-		`INSERT INTO skipper.skipper_crawl_jobs (id, tenant_id, sitemap_url, status, started_at)
-		 SELECT $1, $2, $3, 'running', $4
-		 WHERE NOT EXISTS (
-		     SELECT 1 FROM skipper.skipper_crawl_jobs
-		     WHERE tenant_id = $2 AND sitemap_url = $3 AND status = 'running'
-		 )`,
-		jobID, tenantID, req.SitemapURL, startedAt)
+	rows, err := a.queries.CreateCrawlJob(c.Request.Context(), skipperdb.CreateCrawlJobParams{
+		ID: jobID, TenantID: tenantID, SitemapUrl: req.SitemapURL, StartedAt: startedAt,
+	})
 	if err != nil {
 		a.logger.WithError(err).Warn("Failed to create crawl job")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create crawl job"})
 		return
 	}
-	rows, _ := res.RowsAffected()
 	if rows == 0 {
 		c.JSON(http.StatusConflict, gin.H{"error": "a crawl for this sitemap is already running"})
 		return
@@ -371,9 +368,10 @@ func (a *AdminAPI) runCrawl(jobID, tenantID, sitemapURL string, render bool) {
 	// If cancelled while waiting for the semaphore, bail out early and
 	// mark the job so it doesn't stay stuck as "running".
 	if ctx.Err() != nil {
-		if _, dbErr := a.db.ExecContext(context.Background(),
-			`UPDATE skipper.skipper_crawl_jobs SET status = $1, error = $2, finished_at = $3 WHERE id = $4 AND status = 'running'`,
-			"cancelled", "context expired while queued", a.now().UTC(), jobID); dbErr != nil {
+		if dbErr := a.queries.FinishRunningCrawlJob(context.Background(), skipperdb.FinishRunningCrawlJobParams{
+			Status: "cancelled", Error: sql.NullString{String: "context expired while queued", Valid: true},
+			FinishedAt: sql.NullTime{Time: a.now().UTC(), Valid: true}, ID: jobID,
+		}); dbErr != nil {
 			a.logger.WithError(dbErr).Warn("Failed to update timed-out crawl job")
 		}
 		return
@@ -390,9 +388,13 @@ func (a *AdminAPI) runCrawl(jobID, tenantID, sitemapURL string, render bool) {
 		a.logger.WithError(err).Warn("Admin crawl failed")
 	}
 	// Only update if still 'running' — avoids overwriting 'cancelled' set by handleCancelCrawl.
-	if _, dbErr := a.db.ExecContext(context.Background(),
-		`UPDATE skipper.skipper_crawl_jobs SET status = $1, error = $2, finished_at = $3 WHERE id = $4 AND status = 'running'`,
-		status, errMsg, finished, jobID); dbErr != nil {
+	var errorValue sql.NullString
+	if errMsg != nil {
+		errorValue = sql.NullString{String: *errMsg, Valid: true}
+	}
+	if dbErr := a.queries.FinishRunningCrawlJob(context.Background(), skipperdb.FinishRunningCrawlJobParams{
+		Status: status, Error: errorValue, FinishedAt: sql.NullTime{Time: finished, Valid: true}, ID: jobID,
+	}); dbErr != nil {
 		a.logger.WithError(dbErr).WithField("job_id", jobID).Warn("Failed to update crawl job status")
 	}
 }
@@ -408,12 +410,7 @@ func (a *AdminAPI) handleCrawlStatus(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "tenant_id is required"})
 		return
 	}
-	var job CrawlJob
-	var errMsg sql.NullString
-	var finishedAt sql.NullTime
-	err := a.db.QueryRowContext(c.Request.Context(),
-		`SELECT id, tenant_id, sitemap_url, status, error, started_at, finished_at FROM skipper.skipper_crawl_jobs WHERE id = $1 AND tenant_id = $2`,
-		jobID, tenantID).Scan(&job.ID, &job.TenantID, &job.SitemapURL, &job.Status, &errMsg, &job.StartedAt, &finishedAt)
+	row, err := a.queries.GetCrawlJob(c.Request.Context(), skipperdb.GetCrawlJobParams{ID: jobID, TenantID: tenantID})
 	if errors.Is(err, sql.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
 		return
@@ -423,12 +420,7 @@ func (a *AdminAPI) handleCrawlStatus(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch job"})
 		return
 	}
-	if errMsg.Valid {
-		job.Error = errMsg.String
-	}
-	if finishedAt.Valid {
-		job.FinishedAt = &finishedAt.Time
-	}
+	job := crawlJobFromRow(row)
 	c.JSON(http.StatusOK, job)
 }
 
@@ -439,39 +431,15 @@ func (a *AdminAPI) handleListCrawlJobs(c *gin.Context) {
 		return
 	}
 
-	rows, err := a.db.QueryContext(c.Request.Context(),
-		`SELECT id, tenant_id, sitemap_url, status, error, started_at, finished_at
-		 FROM skipper.skipper_crawl_jobs WHERE tenant_id = $1
-		 ORDER BY started_at DESC LIMIT 50`, tenantID)
+	rows, err := a.queries.ListCrawlJobs(c.Request.Context(), tenantID)
 	if err != nil {
 		a.logger.WithError(err).Warn("Failed to list crawl jobs")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list crawl jobs"})
 		return
 	}
-	defer rows.Close()
-
 	var jobs []CrawlJob
-	for rows.Next() {
-		var job CrawlJob
-		var errMsg sql.NullString
-		var finishedAt sql.NullTime
-		if err := rows.Scan(&job.ID, &job.TenantID, &job.SitemapURL, &job.Status, &errMsg, &job.StartedAt, &finishedAt); err != nil {
-			a.logger.WithError(err).Warn("Failed to scan crawl job")
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read crawl jobs"})
-			return
-		}
-		if errMsg.Valid {
-			job.Error = errMsg.String
-		}
-		if finishedAt.Valid {
-			job.FinishedAt = &finishedAt.Time
-		}
-		jobs = append(jobs, job)
-	}
-	if err := rows.Err(); err != nil {
-		a.logger.WithError(err).Warn("Failed to iterate crawl jobs")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read crawl jobs"})
-		return
+	for _, row := range rows {
+		jobs = append(jobs, crawlJobFromRow(row))
 	}
 
 	if jobs == nil {
@@ -493,10 +461,7 @@ func (a *AdminAPI) handleCancelCrawl(c *gin.Context) {
 	}
 
 	// Verify the job belongs to this tenant
-	var status string
-	err := a.db.QueryRowContext(c.Request.Context(),
-		`SELECT status FROM skipper.skipper_crawl_jobs WHERE id = $1 AND tenant_id = $2`,
-		jobID, tenantID).Scan(&status)
+	status, err := a.queries.GetCrawlJobStatus(c.Request.Context(), skipperdb.GetCrawlJobStatusParams{ID: jobID, TenantID: tenantID})
 	if errors.Is(err, sql.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
 		return
@@ -518,13 +483,24 @@ func (a *AdminAPI) handleCancelCrawl(c *gin.Context) {
 	}
 
 	now := a.now().UTC()
-	if _, dbErr := a.db.ExecContext(c.Request.Context(),
-		`UPDATE skipper.skipper_crawl_jobs SET status = 'cancelled', finished_at = $1 WHERE id = $2 AND status = 'running'`,
-		now, jobID); dbErr != nil {
+	if dbErr := a.queries.CancelRunningCrawlJob(c.Request.Context(), skipperdb.CancelRunningCrawlJobParams{
+		FinishedAt: sql.NullTime{Time: now, Valid: true}, ID: jobID,
+	}); dbErr != nil {
 		a.logger.WithError(dbErr).Warn("Failed to update cancelled crawl job")
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "cancelled"})
+}
+
+func crawlJobFromRow(row skipperdb.SkipperSkipperCrawlJob) CrawlJob {
+	job := CrawlJob{
+		ID: row.ID, SitemapURL: row.SitemapUrl, TenantID: row.TenantID,
+		Status: row.Status, Error: row.Error.String, StartedAt: row.StartedAt,
+	}
+	if row.FinishedAt.Valid {
+		job.FinishedAt = &row.FinishedAt.Time
+	}
+	return job
 }
 
 func operatorOnlyMiddleware() gin.HandlerFunc {

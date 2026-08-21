@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"frameworks/api_consultant/internal/database/skipperdb"
 	"github.com/pgvector/pgvector-go"
 )
 
@@ -26,7 +26,8 @@ type Chunk struct {
 }
 
 type Store struct {
-	db *sql.DB
+	db      *sql.DB
+	queries *skipperdb.Queries
 }
 
 type SourceSummary struct {
@@ -36,7 +37,7 @@ type SourceSummary struct {
 }
 
 func NewStore(db *sql.DB) *Store {
-	return &Store{db: db}
+	return &Store{db: db, queries: skipperdb.New(db)}
 }
 
 const defaultMinSimilarity = 0.3
@@ -59,28 +60,22 @@ func (s *Store) SearchWithThreshold(ctx context.Context, tenantID string, embedd
 		minSimilarity = 0
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id,
-			tenant_id,
-			source_url,
-			source_title,
-			source_type,
-			chunk_text,
-			chunk_index,
-			metadata,
-			1 - (embedding <=> $2) AS similarity
-		FROM skipper.skipper_knowledge
-		WHERE tenant_id = $1
-		  AND 1 - (embedding <=> $2) > $4
-		ORDER BY embedding <=> $2
-		LIMIT $3
-	`, tenantID, pgvector.NewVector(embedding), limit, minSimilarity)
+	rows, err := s.queries.SearchKnowledge(ctx, skipperdb.SearchKnowledgeParams{
+		Embedding: pgvector.NewVector(embedding), TenantID: tenantID,
+		MinSimilarity: minSimilarity, RowLimit: int32(limit),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("search knowledge: %w", err)
 	}
-	defer rows.Close()
-
-	return scanChunks(rows)
+	chunks := make([]Chunk, 0, len(rows))
+	for _, row := range rows {
+		chunk, err := decodeChunk(row.ID, row.TenantID, row.SourceUrl, row.SourceTitle, row.SourceType, row.ChunkText, row.ChunkIndex, row.Metadata, row.Similarity)
+		if err != nil {
+			return nil, err
+		}
+		chunks = append(chunks, chunk)
+	}
+	return chunks, nil
 }
 
 const (
@@ -105,65 +100,32 @@ func (s *Store) HybridSearch(ctx context.Context, tenantID string, embedding []f
 		limit = 5
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id,
-			tenant_id,
-			source_url,
-			source_title,
-			source_type,
-			chunk_text,
-			chunk_index,
-			metadata,
-			$5 * (1 - (embedding <=> $2))
-				+ $6 * COALESCE(ts_rank(tsv, plainto_tsquery('english', $4)), 0) AS similarity
-		FROM skipper.skipper_knowledge
-		WHERE tenant_id = $1
-		  AND 1 - (embedding <=> $2) > $7
-		ORDER BY similarity DESC
-		LIMIT $3
-	`, tenantID, pgvector.NewVector(embedding), limit, query,
-		vectorSearchWeight, textSearchWeight, defaultMinSimilarity)
+	rows, err := s.queries.HybridSearchKnowledge(ctx, skipperdb.HybridSearchKnowledgeParams{
+		VectorWeight: vectorSearchWeight, Embedding: pgvector.NewVector(embedding), TextWeight: textSearchWeight,
+		SearchQuery: query, TenantID: tenantID, MinSimilarity: defaultMinSimilarity, RowLimit: int32(limit),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("hybrid search knowledge: %w", err)
 	}
-	defer rows.Close()
-
-	return scanChunks(rows)
-}
-
-func scanChunks(rows *sql.Rows) ([]Chunk, error) {
-	var chunks []Chunk
-	for rows.Next() {
-		var chunk Chunk
-		var metadataBytes []byte
-		var sourceType sql.NullString
-		if err := rows.Scan(
-			&chunk.ID,
-			&chunk.TenantID,
-			&chunk.SourceURL,
-			&chunk.SourceTitle,
-			&sourceType,
-			&chunk.Text,
-			&chunk.Index,
-			&metadataBytes,
-			&chunk.Similarity,
-		); err != nil {
-			return nil, fmt.Errorf("scan knowledge chunk: %w", err)
-		}
-		if sourceType.Valid {
-			chunk.SourceType = sourceType.String
-		}
-		if len(metadataBytes) > 0 {
-			if err := json.Unmarshal(metadataBytes, &chunk.Metadata); err != nil {
-				return nil, fmt.Errorf("decode metadata: %w", err)
-			}
+	chunks := make([]Chunk, 0, len(rows))
+	for _, row := range rows {
+		chunk, err := decodeChunk(row.ID, row.TenantID, row.SourceUrl, row.SourceTitle, row.SourceType, row.ChunkText, row.ChunkIndex, row.Metadata, row.Similarity)
+		if err != nil {
+			return nil, err
 		}
 		chunks = append(chunks, chunk)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate knowledge chunks: %w", err)
-	}
 	return chunks, nil
+}
+
+func decodeChunk(id, tenantID, sourceURL, sourceTitle string, sourceType sql.NullString, text string, index int, metadataBytes []byte, similarity float64) (Chunk, error) {
+	chunk := Chunk{ID: id, TenantID: tenantID, SourceURL: sourceURL, SourceTitle: sourceTitle, SourceType: sourceType.String, Text: text, Index: index, Similarity: similarity}
+	if len(metadataBytes) > 0 {
+		if err := json.Unmarshal(metadataBytes, &chunk.Metadata); err != nil {
+			return Chunk{}, fmt.Errorf("decode metadata: %w", err)
+		}
+	}
+	return chunk, nil
 }
 
 func (s *Store) Upsert(ctx context.Context, chunks []Chunk) error {
@@ -192,33 +154,15 @@ func (s *Store) Upsert(ctx context.Context, chunks []Chunk) error {
 	defer func() {
 		_ = tx.Rollback()
 	}()
+	queries := skipperdb.New(tx)
 
 	for sourceURL, tenantID := range bySource {
-		if _, execErr := tx.ExecContext(ctx, `
-			DELETE FROM skipper.skipper_knowledge
-			WHERE tenant_id = $1 AND source_url = $2
-		`, tenantID, sourceURL); execErr != nil {
+		if execErr := queries.DeleteKnowledgeSourceChunks(ctx, skipperdb.DeleteKnowledgeSourceChunksParams{
+			TenantID: tenantID, SourceUrl: sourceURL,
+		}); execErr != nil {
 			return fmt.Errorf("delete existing chunks: %w", execErr)
 		}
 	}
-
-	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO skipper.skipper_knowledge (
-			tenant_id,
-			source_url,
-			source_title,
-			source_root,
-			source_type,
-			chunk_text,
-			chunk_index,
-			embedding,
-			metadata
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-	`)
-	if err != nil {
-		return fmt.Errorf("prepare insert: %w", err)
-	}
-	defer stmt.Close()
 
 	for _, chunk := range chunks {
 		metadataBytes, err := json.Marshal(chunk.Metadata)
@@ -227,18 +171,11 @@ func (s *Store) Upsert(ctx context.Context, chunks []Chunk) error {
 		}
 		sourceRoot := sourceRootFromMetadata(chunk.Metadata, chunk.SourceURL)
 		sourceType := sourceTypeFromMetadata(chunk.Metadata)
-		if _, err := stmt.ExecContext(
-			ctx,
-			chunk.TenantID,
-			chunk.SourceURL,
-			chunk.SourceTitle,
-			sourceRoot,
-			sourceType,
-			chunk.Text,
-			chunk.Index,
-			pgvector.NewVector(chunk.Embedding),
-			database.JSONText(metadataBytes),
-		); err != nil {
+		if err := queries.InsertKnowledgeChunk(ctx, skipperdb.InsertKnowledgeChunkParams{
+			TenantID: chunk.TenantID, SourceUrl: chunk.SourceURL, SourceTitle: chunk.SourceTitle,
+			SourceRoot: sourceRoot, SourceType: nullableSourceType(sourceType), ChunkText: chunk.Text,
+			ChunkIndex: int32(chunk.Index), Embedding: pgvector.NewVector(chunk.Embedding), Metadata: string(metadataBytes),
+		}); err != nil {
 			return fmt.Errorf("insert chunk: %w", err)
 		}
 	}
@@ -248,6 +185,13 @@ func (s *Store) Upsert(ctx context.Context, chunks []Chunk) error {
 	}
 
 	return nil
+}
+
+func nullableSourceType(value *string) sql.NullString {
+	if value == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: *value, Valid: true}
 }
 
 func sourceRootFromMetadata(metadata map[string]any, fallback string) string {
@@ -283,57 +227,42 @@ func (s *Store) SearchFiltered(ctx context.Context, tenantID string, embedding [
 		limit = 5
 	}
 
-	q := `
-		SELECT id,
-			tenant_id,
-			source_url,
-			source_title,
-			source_type,
-			chunk_text,
-			chunk_index,
-			metadata,
-			$5 * (1 - (embedding <=> $2))
-				+ $6 * COALESCE(ts_rank(tsv, plainto_tsquery('english', $4)), 0) AS similarity
-		FROM skipper.skipper_knowledge
-		WHERE tenant_id = $1
-		  AND source_type = $8
-		  AND 1 - (embedding <=> $2) > $7
-		ORDER BY similarity DESC
-		LIMIT $3
-	`
 	if query == "" {
-		q = `
-		SELECT id,
-			tenant_id,
-			source_url,
-			source_title,
-			source_type,
-			chunk_text,
-			chunk_index,
-			metadata,
-			1 - (embedding <=> $2) AS similarity
-		FROM skipper.skipper_knowledge
-		WHERE tenant_id = $1
-		  AND source_type = $4
-		  AND 1 - (embedding <=> $2) > $5
-		ORDER BY embedding <=> $2
-		LIMIT $3
-		`
-		rows, err := s.db.QueryContext(ctx, q, tenantID, pgvector.NewVector(embedding), limit, sourceType, defaultMinSimilarity)
+		rows, err := s.queries.SearchKnowledgeFiltered(ctx, skipperdb.SearchKnowledgeFilteredParams{
+			Embedding: pgvector.NewVector(embedding), TenantID: tenantID, SourceType: sourceType,
+			MinSimilarity: defaultMinSimilarity, RowLimit: int32(limit),
+		})
 		if err != nil {
 			return nil, fmt.Errorf("search filtered knowledge: %w", err)
 		}
-		defer rows.Close()
-		return scanChunks(rows)
+		chunks := make([]Chunk, 0, len(rows))
+		for _, row := range rows {
+			chunk, err := decodeChunk(row.ID, row.TenantID, row.SourceUrl, row.SourceTitle, row.SourceType, row.ChunkText, row.ChunkIndex, row.Metadata, row.Similarity)
+			if err != nil {
+				return nil, err
+			}
+			chunks = append(chunks, chunk)
+		}
+		return chunks, nil
 	}
 
-	rows, err := s.db.QueryContext(ctx, q, tenantID, pgvector.NewVector(embedding), limit, query,
-		vectorSearchWeight, textSearchWeight, defaultMinSimilarity, sourceType)
+	rows, err := s.queries.HybridSearchKnowledgeFiltered(ctx, skipperdb.HybridSearchKnowledgeFilteredParams{
+		VectorWeight: vectorSearchWeight, Embedding: pgvector.NewVector(embedding), TextWeight: textSearchWeight,
+		SearchQuery: query, TenantID: tenantID, SourceType: sourceType,
+		MinSimilarity: defaultMinSimilarity, RowLimit: int32(limit),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("search filtered knowledge: %w", err)
 	}
-	defer rows.Close()
-	return scanChunks(rows)
+	chunks := make([]Chunk, 0, len(rows))
+	for _, row := range rows {
+		chunk, err := decodeChunk(row.ID, row.TenantID, row.SourceUrl, row.SourceTitle, row.SourceType, row.ChunkText, row.ChunkIndex, row.Metadata, row.Similarity)
+		if err != nil {
+			return nil, err
+		}
+		chunks = append(chunks, chunk)
+	}
+	return chunks, nil
 }
 
 func (s *Store) DeleteBySource(ctx context.Context, tenantID, sourceURL string) error {
@@ -343,11 +272,7 @@ func (s *Store) DeleteBySource(ctx context.Context, tenantID, sourceURL string) 
 	if sourceURL == "" {
 		return errors.New("source url is required")
 	}
-	if _, err := s.db.ExecContext(ctx, `
-		DELETE FROM skipper.skipper_knowledge
-		WHERE tenant_id = $1
-		  AND (source_url = $2 OR source_root = $2)
-	`, tenantID, sourceURL); err != nil {
+	if err := s.queries.DeleteKnowledgeBySource(ctx, skipperdb.DeleteKnowledgeBySourceParams{TenantID: tenantID, SourceUrl: sourceURL}); err != nil {
 		return fmt.Errorf("delete by source: %w", err)
 	}
 	return nil
@@ -358,37 +283,17 @@ func (s *Store) ListSources(ctx context.Context, tenantID string) ([]SourceSumma
 		return nil, errors.New("tenant id is required")
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT
-			COALESCE(source_root, source_url) AS source_url,
-			COUNT(DISTINCT source_url) AS page_count,
-			MAX(NULLIF(metadata->>'ingested_at', '')::timestamptz) AS last_crawl_at
-		FROM skipper.skipper_knowledge
-		WHERE tenant_id = $1
-		GROUP BY COALESCE(source_root, source_url)
-		ORDER BY source_url
-	`, tenantID)
+	rows, err := s.queries.ListKnowledgeSources(ctx, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("list sources: %w", err)
 	}
-	defer rows.Close()
-
 	var sources []SourceSummary
-	for rows.Next() {
-		var source SourceSummary
-		var lastCrawl sql.NullTime
-		if err := rows.Scan(&source.SourceURL, &source.PageCount, &lastCrawl); err != nil {
-			return nil, fmt.Errorf("scan source: %w", err)
-		}
-		if lastCrawl.Valid {
-			t := lastCrawl.Time
-			source.LastCrawlAt = &t
+	for _, row := range rows {
+		source := SourceSummary{SourceURL: row.SourceUrl, PageCount: int(row.PageCount)}
+		if timestamp, ok := row.LastCrawlAt.(time.Time); ok {
+			source.LastCrawlAt = &timestamp
 		}
 		sources = append(sources, source)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate sources: %w", err)
-	}
-
 	return sources, nil
 }

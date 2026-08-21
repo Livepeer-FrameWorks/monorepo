@@ -5,8 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
+
+	"frameworks/api_consultant/internal/database/skipperdb"
 )
 
 type PageCache struct {
@@ -26,64 +27,12 @@ type PageCache struct {
 }
 
 type PageCacheStore struct {
-	db *sql.DB
+	db      *sql.DB
+	queries *skipperdb.Queries
 }
 
 func NewPageCacheStore(db *sql.DB) *PageCacheStore {
-	return &PageCacheStore{db: db}
-}
-
-const pageCacheColumns = `tenant_id, source_root, page_url, content_hash, etag, last_modified, raw_size, last_fetched_at, sitemap_priority, sitemap_changefreq, consecutive_unchanged, consecutive_failures, source_type`
-
-func (s *PageCacheStore) scanRow(row interface{ Scan(...any) error }) (*PageCache, error) {
-	var pc PageCache
-	var contentHash, etag, lastModified, changeFreq, sourceType sql.NullString
-	var rawSize sql.NullInt64
-	var sitemapPriority sql.NullFloat64
-	err := row.Scan(
-		&pc.TenantID,
-		&pc.SourceRoot,
-		&pc.PageURL,
-		&contentHash,
-		&etag,
-		&lastModified,
-		&rawSize,
-		&pc.LastFetchedAt,
-		&sitemapPriority,
-		&changeFreq,
-		&pc.ConsecutiveUnchanged,
-		&pc.ConsecutiveFailures,
-		&sourceType,
-	)
-	if err != nil {
-		return nil, err
-	}
-	if contentHash.Valid {
-		pc.ContentHash = contentHash.String
-	}
-	if etag.Valid {
-		pc.ETag = etag.String
-	}
-	if lastModified.Valid {
-		pc.LastModified = lastModified.String
-	}
-	if rawSize.Valid {
-		pc.RawSize = rawSize.Int64
-	}
-	if sitemapPriority.Valid {
-		pc.SitemapPriority = sitemapPriority.Float64
-	} else {
-		pc.SitemapPriority = 0.5
-	}
-	if changeFreq.Valid {
-		pc.SitemapChangeFreq = changeFreq.String
-	}
-	if sourceType.Valid {
-		pc.SourceType = sourceType.String
-	} else {
-		pc.SourceType = "sitemap"
-	}
-	return &pc, nil
+	return &PageCacheStore{db: db, queries: skipperdb.New(db)}
 }
 
 func (s *PageCacheStore) Get(ctx context.Context, tenantID, pageURL string) (*PageCache, error) {
@@ -94,17 +43,15 @@ func (s *PageCacheStore) Get(ctx context.Context, tenantID, pageURL string) (*Pa
 		return nil, errors.New("page url is required")
 	}
 
-	row := s.db.QueryRowContext(ctx,
-		`SELECT `+pageCacheColumns+` FROM skipper.skipper_page_cache WHERE tenant_id = $1 AND page_url = $2`,
-		tenantID, pageURL)
-	pc, err := s.scanRow(row)
+	row, err := s.queries.GetPageCache(ctx, skipperdb.GetPageCacheParams{TenantID: tenantID, PageUrl: pageURL})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get page cache: %w", err)
 	}
-	return pc, nil
+	pc := pageCacheFromValues(row.TenantID, row.SourceRoot, row.PageUrl, row.ContentHash, row.Etag, row.LastModified, row.RawSize, row.LastFetchedAt, row.SitemapPriority, row.SitemapChangefreq, row.ConsecutiveUnchanged, row.ConsecutiveFailures, row.SourceType)
+	return &pc, nil
 }
 
 // Upsert inserts or updates crawl-result fields for a page.
@@ -124,20 +71,11 @@ func (s *PageCacheStore) Upsert(ctx context.Context, cache PageCache) error {
 		sourceType = "sitemap"
 	}
 
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO skipper.skipper_page_cache
-			(tenant_id, source_root, page_url, content_hash, etag, last_modified, raw_size, last_fetched_at, source_type)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		ON CONFLICT (tenant_id, page_url)
-		DO UPDATE SET content_hash = EXCLUDED.content_hash,
-		              etag = EXCLUDED.etag,
-		              last_modified = EXCLUDED.last_modified,
-		              raw_size = EXCLUDED.raw_size,
-		              last_fetched_at = EXCLUDED.last_fetched_at,
-		              source_root = EXCLUDED.source_root
-	`, cache.TenantID, cache.SourceRoot, cache.PageURL,
-		nullString(cache.ContentHash), nullString(cache.ETag), nullString(cache.LastModified),
-		nullInt64(cache.RawSize), cache.LastFetchedAt, sourceType)
+	err := s.queries.UpsertPageCache(ctx, skipperdb.UpsertPageCacheParams{
+		TenantID: cache.TenantID, SourceRoot: cache.SourceRoot, PageUrl: cache.PageURL,
+		ContentHash: nullString(cache.ContentHash), Etag: nullString(cache.ETag), LastModified: nullString(cache.LastModified),
+		RawSize: nullInt64(cache.RawSize), LastFetchedAt: cache.LastFetchedAt, SourceType: sourceType,
+	})
 	if err != nil {
 		return fmt.Errorf("upsert page cache: %w", err)
 	}
@@ -152,19 +90,15 @@ func (s *PageCacheStore) LastFetchedForSource(ctx context.Context, tenantID, sou
 		return nil, errors.New("source root is required")
 	}
 
-	var lastFetched sql.NullTime
-	err := s.db.QueryRowContext(ctx, `
-		SELECT MAX(last_fetched_at) FROM skipper.skipper_page_cache
-		WHERE tenant_id = $1 AND source_root = $2
-	`, tenantID, sourceRoot).Scan(&lastFetched)
+	lastFetched, err := s.queries.LastFetchedForSource(ctx, skipperdb.LastFetchedForSourceParams{TenantID: tenantID, SourceRoot: sourceRoot})
 	if err != nil {
 		return nil, fmt.Errorf("last fetched for source: %w", err)
 	}
-	if !lastFetched.Valid {
+	timestamp, ok := lastFetched.(time.Time)
+	if !ok {
 		return nil, nil
 	}
-	t := lastFetched.Time
-	return &t, nil
+	return &timestamp, nil
 }
 
 func (s *PageCacheStore) DeleteBySource(ctx context.Context, tenantID, sourceRoot string) error {
@@ -175,10 +109,7 @@ func (s *PageCacheStore) DeleteBySource(ctx context.Context, tenantID, sourceRoo
 		return errors.New("source root is required")
 	}
 
-	_, err := s.db.ExecContext(ctx, `
-		DELETE FROM skipper.skipper_page_cache
-		WHERE tenant_id = $1 AND source_root = $2
-	`, tenantID, sourceRoot)
+	err := s.queries.DeletePageCacheBySource(ctx, skipperdb.DeletePageCacheBySourceParams{TenantID: tenantID, SourceRoot: sourceRoot})
 	if err != nil {
 		return fmt.Errorf("delete page cache by source: %w", err)
 	}
@@ -190,46 +121,28 @@ func (s *PageCacheStore) BulkUpsert(ctx context.Context, caches []PageCache) err
 		return nil
 	}
 
-	const cols = 13
-	var b strings.Builder
-	b.WriteString(`INSERT INTO skipper.skipper_page_cache (` + pageCacheColumns + `) VALUES `)
-
-	args := make([]any, 0, len(caches)*cols)
-	for i, cache := range caches {
-		if i > 0 {
-			b.WriteString(", ")
-		}
-		offset := i * cols
-		fmt.Fprintf(&b, "($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
-			offset+1, offset+2, offset+3, offset+4, offset+5, offset+6, offset+7,
-			offset+8, offset+9, offset+10, offset+11, offset+12, offset+13)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin bulk upsert page cache: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+	queries := skipperdb.New(tx)
+	for _, cache := range caches {
 		sourceType := cache.SourceType
 		if sourceType == "" {
 			sourceType = "sitemap"
 		}
-		args = append(args,
-			cache.TenantID, cache.SourceRoot, cache.PageURL,
-			nullString(cache.ContentHash), nullString(cache.ETag), nullString(cache.LastModified),
-			nullInt64(cache.RawSize), cache.LastFetchedAt,
-			cache.SitemapPriority, nullString(cache.SitemapChangeFreq),
-			cache.ConsecutiveUnchanged, cache.ConsecutiveFailures, sourceType)
+		if err := queries.UpsertPageCacheWithScheduling(ctx, skipperdb.UpsertPageCacheWithSchedulingParams{
+			TenantID: cache.TenantID, SourceRoot: cache.SourceRoot, PageUrl: cache.PageURL,
+			ContentHash: nullString(cache.ContentHash), Etag: nullString(cache.ETag), LastModified: nullString(cache.LastModified),
+			RawSize: nullInt64(cache.RawSize), LastFetchedAt: cache.LastFetchedAt,
+			SitemapPriority: sql.NullFloat64{Float64: cache.SitemapPriority, Valid: true}, SitemapChangefreq: nullString(cache.SitemapChangeFreq),
+			ConsecutiveUnchanged: int32(cache.ConsecutiveUnchanged), ConsecutiveFailures: int32(cache.ConsecutiveFailures), SourceType: sourceType,
+		}); err != nil {
+			return fmt.Errorf("bulk upsert page cache: %w", err)
+		}
 	}
-	b.WriteString(` ON CONFLICT (tenant_id, page_url) DO UPDATE SET
-		content_hash = EXCLUDED.content_hash,
-		etag = EXCLUDED.etag,
-		last_modified = EXCLUDED.last_modified,
-		raw_size = EXCLUDED.raw_size,
-		last_fetched_at = EXCLUDED.last_fetched_at,
-		source_root = EXCLUDED.source_root,
-		sitemap_priority = EXCLUDED.sitemap_priority,
-		sitemap_changefreq = EXCLUDED.sitemap_changefreq,
-		source_type = EXCLUDED.source_type`)
-
-	_, err := s.db.ExecContext(ctx, b.String(), args...)
-	if err != nil {
-		return fmt.Errorf("bulk upsert page cache: %w", err)
-	}
-	return nil
+	return tx.Commit()
 }
 
 // ListForTenant returns all cached pages for a tenant, ordered by last_fetched_at ASC (stalest first).
@@ -238,23 +151,15 @@ func (s *PageCacheStore) ListForTenant(ctx context.Context, tenantID string) ([]
 		return nil, errors.New("tenant id is required")
 	}
 
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+pageCacheColumns+` FROM skipper.skipper_page_cache WHERE tenant_id = $1 ORDER BY last_fetched_at ASC`,
-		tenantID)
+	rows, err := s.queries.ListPageCacheForTenant(ctx, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("list page cache: %w", err)
 	}
-	defer rows.Close()
-
 	var result []PageCache
-	for rows.Next() {
-		pc, err := s.scanRow(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan page cache row: %w", err)
-		}
-		result = append(result, *pc)
+	for _, row := range rows {
+		result = append(result, pageCacheFromValues(row.TenantID, row.SourceRoot, row.PageUrl, row.ContentHash, row.Etag, row.LastModified, row.RawSize, row.LastFetchedAt, row.SitemapPriority, row.SitemapChangefreq, row.ConsecutiveUnchanged, row.ConsecutiveFailures, row.SourceType))
 	}
-	return result, rows.Err()
+	return result, nil
 }
 
 // UpdateCrawlOutcome updates the consecutive counters after a page is processed.
@@ -268,24 +173,9 @@ func (s *PageCacheStore) UpdateCrawlOutcome(ctx context.Context, tenantID, pageU
 		return errors.New("page url is required")
 	}
 
-	var unchangedExpr, failuresExpr string
-	if changed {
-		unchangedExpr = "0"
-	} else {
-		unchangedExpr = "consecutive_unchanged + 1"
-	}
-	if failed {
-		failuresExpr = "consecutive_failures + 1"
-	} else {
-		failuresExpr = "0"
-	}
-
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE skipper.skipper_page_cache
-		SET consecutive_unchanged = `+unchangedExpr+`,
-		    consecutive_failures = `+failuresExpr+`
-		WHERE tenant_id = $1 AND page_url = $2
-	`, tenantID, pageURL)
+	err := s.queries.UpdatePageCrawlOutcome(ctx, skipperdb.UpdatePageCrawlOutcomeParams{
+		Changed: changed, Failed: failed, TenantID: tenantID, PageUrl: pageURL,
+	})
 	if err != nil {
 		return fmt.Errorf("update crawl outcome: %w", err)
 	}
@@ -293,13 +183,30 @@ func (s *PageCacheStore) UpdateCrawlOutcome(ctx context.Context, tenantID, pageU
 }
 
 func (s *PageCacheStore) CleanupStale(ctx context.Context, tenantID string, olderThan time.Duration) (int64, error) {
-	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM skipper.skipper_page_cache WHERE tenant_id = $1 AND last_fetched_at < $2`,
-		tenantID, time.Now().Add(-olderThan))
+	affected, err := s.queries.CleanupStalePageCache(ctx, skipperdb.CleanupStalePageCacheParams{
+		TenantID: tenantID, Cutoff: time.Now().Add(-olderThan),
+	})
 	if err != nil {
 		return 0, fmt.Errorf("cleanup stale page cache: %w", err)
 	}
-	return res.RowsAffected()
+	return affected, nil
+}
+
+func pageCacheFromValues(tenantID, sourceRoot, pageURL string, contentHash, etag, lastModified sql.NullString, rawSize sql.NullInt64, lastFetchedAt time.Time, sitemapPriority sql.NullFloat64, changeFreq sql.NullString, unchanged, failures int32, sourceType string) PageCache {
+	priority := 0.5
+	if sitemapPriority.Valid {
+		priority = sitemapPriority.Float64
+	}
+	if sourceType == "" {
+		sourceType = "sitemap"
+	}
+	return PageCache{
+		TenantID: tenantID, SourceRoot: sourceRoot, PageURL: pageURL,
+		ContentHash: contentHash.String, ETag: etag.String, LastModified: lastModified.String,
+		RawSize: rawSize.Int64, LastFetchedAt: lastFetchedAt, SitemapPriority: priority,
+		SitemapChangeFreq: changeFreq.String, ConsecutiveUnchanged: int(unchanged),
+		ConsecutiveFailures: int(failures), SourceType: sourceType,
+	}
 }
 
 func nullString(s string) sql.NullString {

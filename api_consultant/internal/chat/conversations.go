@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/api_consultant/internal/database/skipperdb"
 	"frameworks/api_consultant/internal/skipper"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
 var ErrConversationNotFound = errors.New("conversation not found")
@@ -56,11 +56,12 @@ type TokenCounts struct {
 }
 
 type ConversationStore struct {
-	db *sql.DB
+	db      *sql.DB
+	queries *skipperdb.Queries
 }
 
 func NewConversationStore(db *sql.DB) *ConversationStore {
-	return &ConversationStore{db: db}
+	return &ConversationStore{db: db, queries: skipperdb.New(db)}
 }
 
 func (s *ConversationStore) CreateConversation(ctx context.Context, tenantID, userID string) (string, error) {
@@ -68,22 +69,10 @@ func (s *ConversationStore) CreateConversation(ctx context.Context, tenantID, us
 		return "", fmt.Errorf("tenant ID is required")
 	}
 
-	var conversationID string
-	var userIDValue any
-	if userID == "" {
-		userIDValue = nil
-	} else {
-		userIDValue = userID
-	}
-
-	err := s.db.QueryRowContext(
-		ctx,
-		`INSERT INTO skipper.skipper_conversations (tenant_id, user_id)
-		 VALUES ($1, $2)
-		 RETURNING id`,
-		tenantID,
-		userIDValue,
-	).Scan(&conversationID)
+	conversationID, err := s.queries.CreateConversation(ctx, skipperdb.CreateConversationParams{
+		TenantID: tenantID,
+		UserID:   nullableString(userID),
+	})
 	if err != nil {
 		return "", fmt.Errorf("create conversation: %w", err)
 	}
@@ -111,50 +100,29 @@ func (s *ConversationStore) AddMessage(
 	toolsValue := normalizeJSONInput(toolsUsed)
 	blocksValue := normalizeJSONInput(confidenceBlocks)
 
-	var messageID string
-	err := s.db.QueryRowContext(
-		ctx,
-		`INSERT INTO skipper.skipper_messages (
-			conversation_id,
-			role,
-			content,
-			confidence,
-			sources,
-			tools_used,
-			confidence_blocks,
-			token_count_input,
-			token_count_output
-		)
-		SELECT c.id, $2, $3, $4, $5, $6, $7, $8, $9
-		FROM skipper.skipper_conversations c
-		WHERE c.id = $1 AND c.tenant_id = $10
-		RETURNING id`,
-		conversationID,
-		role,
-		content,
-		confidence,
-		database.JSONText(sourcesValue),
-		database.JSONText(toolsValue),
-		database.JSONText(blocksValue),
-		tokens.Input,
-		tokens.Output,
-		tenantID,
-	).Scan(&messageID)
+	_, err := s.queries.AddMessage(ctx, skipperdb.AddMessageParams{
+		Role:             role,
+		Content:          content,
+		Confidence:       confidence,
+		Sources:          string(sourcesValue),
+		ToolsUsed:        string(toolsValue),
+		ConfidenceBlocks: string(blocksValue),
+		TokenCountInput:  int32(tokens.Input),
+		TokenCountOutput: int32(tokens.Output),
+		ConversationID:   conversationID,
+		TenantID:         tenantID,
+	})
 	if err != nil {
-		if errors.Is(err, database.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("conversation not found")
 		}
 		return fmt.Errorf("add message: %w", err)
 	}
 
-	_, err = s.db.ExecContext(
-		ctx,
-		`UPDATE skipper.skipper_conversations
-		 SET updated_at = NOW()
-		 WHERE id = $1 AND tenant_id = $2`,
-		conversationID,
-		tenantID,
-	)
+	err = s.queries.TouchConversation(ctx, skipperdb.TouchConversationParams{
+		ConversationID: conversationID,
+		TenantID:       tenantID,
+	})
 	if err != nil {
 		return fmt.Errorf("update conversation timestamp: %w", err)
 	}
@@ -169,36 +137,34 @@ func (s *ConversationStore) GetConversation(ctx context.Context, conversationID 
 	}
 	userID := skipper.GetUserID(ctx)
 
-	query := `SELECT id, tenant_id, user_id, title, COALESCE(summary, ''), created_at, updated_at
-		 FROM skipper.skipper_conversations
-		 WHERE id = $1 AND tenant_id = $2`
-	args := []any{conversationID, tenantID}
-	if userID != "" {
-		query += " AND user_id = $3"
-		args = append(args, userID)
-	}
-
 	var convo Conversation
-	var title sql.NullString
-	var uid sql.NullString
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(
-		&convo.ID,
-		&convo.TenantID,
-		&uid,
-		&title,
-		&convo.Summary,
-		&convo.CreatedAt,
-		&convo.UpdatedAt,
-	)
+	var err error
+	if userID == "" {
+		var row skipperdb.GetConversationRow
+		row, err = s.queries.GetConversation(ctx, skipperdb.GetConversationParams{
+			ConversationID: conversationID,
+			TenantID:       tenantID,
+		})
+		if err == nil {
+			convo = conversationFromRow(row.ID, row.TenantID, row.UserID, row.Title, row.Summary, row.CreatedAt, row.UpdatedAt)
+		}
+	} else {
+		var row skipperdb.GetConversationForUserRow
+		row, err = s.queries.GetConversationForUser(ctx, skipperdb.GetConversationForUserParams{
+			ConversationID: conversationID,
+			TenantID:       tenantID,
+			UserID:         userID,
+		})
+		if err == nil {
+			convo = conversationFromRow(row.ID, row.TenantID, row.UserID, row.Title, row.Summary, row.CreatedAt, row.UpdatedAt)
+		}
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return Conversation{}, ErrConversationNotFound
 	}
 	if err != nil {
 		return Conversation{}, fmt.Errorf("get conversation: %w", err)
 	}
-
-	convo.UserID = uid.String
-	convo.Title = title.String
 
 	messages, err := s.fetchMessages(ctx, tenantID, conversationID, 0)
 	if err != nil {
@@ -218,61 +184,29 @@ func (s *ConversationStore) ListConversations(ctx context.Context, tenantID, use
 		limit = 25
 	}
 
-	query := `SELECT
-			c.id,
-			c.tenant_id,
-			c.user_id,
-			c.title,
-			c.created_at,
-			c.updated_at,
-			MAX(m.created_at) AS last_message_at,
-			COUNT(m.id) AS message_count
-		FROM skipper.skipper_conversations c
-		LEFT JOIN skipper.skipper_messages m ON m.conversation_id = c.id
-		WHERE c.tenant_id = $1`
-	args := []any{tenantID}
-	argIdx := 2
-
-	if userID != "" {
-		query += fmt.Sprintf(" AND c.user_id = $%d", argIdx)
-		args = append(args, userID)
-		argIdx++
-	}
-
-	query += fmt.Sprintf(` GROUP BY c.id, c.tenant_id, c.user_id, c.title, c.created_at, c.updated_at
-		ORDER BY COALESCE(MAX(m.created_at), c.created_at) DESC
-		LIMIT $%d OFFSET $%d`, argIdx, argIdx+1)
-	args = append(args, limit, offset)
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("list conversations: %w", err)
-	}
-	defer rows.Close()
-
 	var summaries []ConversationSummary
-	for rows.Next() {
-		var summary ConversationSummary
-		var userID sql.NullString
-		var title sql.NullString
-		if err := rows.Scan(
-			&summary.ID,
-			&summary.TenantID,
-			&userID,
-			&title,
-			&summary.CreatedAt,
-			&summary.UpdatedAt,
-			&summary.LastMessageAt,
-			&summary.MessageCount,
-		); err != nil {
-			return nil, fmt.Errorf("scan conversation summary: %w", err)
+	if userID == "" {
+		rows, err := s.queries.ListConversations(ctx, skipperdb.ListConversationsParams{
+			TenantID: tenantID,
+			RowLimit: int32(limit), RowOffset: int32(offset),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list conversations: %w", err)
 		}
-		summary.UserID = userID.String
-		summary.Title = title.String
-		summaries = append(summaries, summary)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list conversations rows: %w", err)
+		for _, row := range rows {
+			summaries = append(summaries, conversationSummaryFromRow(row.ID, row.TenantID, row.UserID, row.Title, row.CreatedAt, row.UpdatedAt, row.LastMessageAt, row.MessageCount))
+		}
+	} else {
+		rows, err := s.queries.ListConversationsForUser(ctx, skipperdb.ListConversationsForUserParams{
+			TenantID: tenantID, UserID: userID,
+			RowLimit: int32(limit), RowOffset: int32(offset),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list conversations: %w", err)
+		}
+		for _, row := range rows {
+			summaries = append(summaries, conversationSummaryFromRow(row.ID, row.TenantID, row.UserID, row.Title, row.CreatedAt, row.UpdatedAt, row.LastMessageAt, row.MessageCount))
+		}
 	}
 
 	return summaries, nil
@@ -285,20 +219,21 @@ func (s *ConversationStore) UpdateTitle(ctx context.Context, conversationID, tit
 	}
 	userID := skipper.GetUserID(ctx)
 
-	query := `UPDATE skipper.skipper_conversations
-		 SET title = $1, updated_at = NOW()
-		 WHERE id = $2 AND tenant_id = $3`
-	args := []any{title, conversationID, tenantID}
+	var rows int64
+	var err error
 	if userID != "" {
-		query += " AND user_id = $4"
-		args = append(args, userID)
+		rows, err = s.queries.UpdateConversationTitleForUser(ctx, skipperdb.UpdateConversationTitleForUserParams{
+			Title: title, ConversationID: conversationID,
+			TenantID: tenantID, UserID: userID,
+		})
+	} else {
+		rows, err = s.queries.UpdateConversationTitle(ctx, skipperdb.UpdateConversationTitleParams{
+			Title: title, ConversationID: conversationID, TenantID: tenantID,
+		})
 	}
-
-	result, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("update title: %w", err)
 	}
-	rows, _ := result.RowsAffected()
 	if rows == 0 {
 		return ErrConversationNotFound
 	}
@@ -318,37 +253,32 @@ func (s *ConversationStore) DeleteConversation(ctx context.Context, conversation
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	delMsgQuery := `DELETE FROM skipper.skipper_messages
-		 WHERE conversation_id = $1
-		   AND conversation_id IN (
-		     SELECT id FROM skipper.skipper_conversations WHERE tenant_id = $2`
-	delMsgArgs := []any{conversationID, tenantID}
+	queries := skipperdb.New(tx)
 	if userID != "" {
-		delMsgQuery += " AND user_id = $3"
-		delMsgArgs = append(delMsgArgs, userID)
-	}
-	delMsgQuery += ")"
-
-	if _, execErr := tx.ExecContext(ctx, delMsgQuery, delMsgArgs...); execErr != nil {
+		params := skipperdb.DeleteConversationMessagesForUserParams{
+			ConversationID: conversationID, TenantID: tenantID, UserID: userID,
+		}
+		if execErr := queries.DeleteConversationMessagesForUser(ctx, params); execErr != nil {
+			return fmt.Errorf("delete messages: %w", execErr)
+		}
+	} else if execErr := queries.DeleteConversationMessages(ctx, skipperdb.DeleteConversationMessagesParams{
+		ConversationID: conversationID, TenantID: tenantID,
+	}); execErr != nil {
 		return fmt.Errorf("delete messages: %w", execErr)
 	}
 
-	delConvQuery := `DELETE FROM skipper.skipper_conversations
-		 WHERE id = $1 AND tenant_id = $2`
-	delConvArgs := []any{conversationID, tenantID}
+	var rows int64
 	if userID != "" {
-		delConvQuery += " AND user_id = $3"
-		delConvArgs = append(delConvArgs, userID)
+		rows, err = queries.DeleteConversationForUser(ctx, skipperdb.DeleteConversationForUserParams{
+			ConversationID: conversationID, TenantID: tenantID, UserID: userID,
+		})
+	} else {
+		rows, err = queries.DeleteConversation(ctx, skipperdb.DeleteConversationParams{
+			ConversationID: conversationID, TenantID: tenantID,
+		})
 	}
-
-	result, err := tx.ExecContext(ctx, delConvQuery, delConvArgs...)
 	if err != nil {
 		return fmt.Errorf("delete conversation: %w", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
 	}
 	if rows == 0 {
 		return ErrConversationNotFound
@@ -371,67 +301,27 @@ func (s *ConversationStore) GetRecentMessages(ctx context.Context, conversationI
 }
 
 func (s *ConversationStore) fetchMessages(ctx context.Context, tenantID, conversationID string, limit int) ([]Message, error) {
-	query := `SELECT
-		m.id,
-		m.conversation_id,
-		m.role,
-		m.content,
-		m.confidence,
-		COALESCE(m.sources, 'null'),
-		COALESCE(m.tools_used, 'null'),
-		COALESCE(m.confidence_blocks, 'null'),
-		m.token_count_input,
-		m.token_count_output,
-		m.created_at
-	FROM skipper.skipper_messages m
-	JOIN skipper.skipper_conversations c ON m.conversation_id = c.id
-	WHERE m.conversation_id = $1 AND c.tenant_id = $2`
-
-	var rows *sql.Rows
-	var err error
-	if limit > 0 {
-		rows, err = s.db.QueryContext(
-			ctx,
-			`SELECT * FROM (`+query+` ORDER BY m.created_at DESC LIMIT $3) recent ORDER BY created_at ASC`,
-			conversationID,
-			tenantID,
-			limit,
-		)
-	} else {
-		rows, err = s.db.QueryContext(
-			ctx,
-			query+` ORDER BY m.created_at ASC`,
-			conversationID,
-			tenantID,
-		)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get messages: %w", err)
-	}
-	defer rows.Close()
-
 	var messages []Message
-	for rows.Next() {
-		var message Message
-		if err := rows.Scan(
-			&message.ID,
-			&message.ConversationID,
-			&message.Role,
-			&message.Content,
-			&message.Confidence,
-			&message.Sources,
-			&message.ToolsUsed,
-			&message.ConfidenceBlocks,
-			&message.TokenCountInput,
-			&message.TokenCountOutput,
-			&message.CreatedAt,
-		); err != nil {
-			return nil, fmt.Errorf("scan message: %w", err)
+	if limit > 0 {
+		rows, err := s.queries.ListRecentConversationMessages(ctx, skipperdb.ListRecentConversationMessagesParams{
+			ConversationID: conversationID, TenantID: tenantID, RowLimit: int32(limit),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("get messages: %w", err)
 		}
-		messages = append(messages, message)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("get messages rows: %w", err)
+		for _, row := range rows {
+			messages = append(messages, messageFromRow(row.ID, row.ConversationID, row.Role, row.Content, row.Confidence, row.Sources, row.ToolsUsed, row.ConfidenceBlocks, row.TokenCountInput, row.TokenCountOutput, row.CreatedAt))
+		}
+	} else {
+		rows, err := s.queries.ListConversationMessages(ctx, skipperdb.ListConversationMessagesParams{
+			ConversationID: conversationID, TenantID: tenantID,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("get messages: %w", err)
+		}
+		for _, row := range rows {
+			messages = append(messages, messageFromRow(row.ID, row.ConversationID, row.Role, row.Content, row.Confidence, row.Sources, row.ToolsUsed, row.ConfidenceBlocks, row.TokenCountInput, row.TokenCountOutput, row.CreatedAt))
+		}
 	}
 
 	return messages, nil
@@ -442,11 +332,9 @@ func (s *ConversationStore) GetSummary(ctx context.Context, conversationID strin
 	if tenantID == "" {
 		return "", fmt.Errorf("tenant ID is required")
 	}
-	var summary sql.NullString
-	err := s.db.QueryRowContext(ctx,
-		`SELECT summary FROM skipper.skipper_conversations WHERE id = $1 AND tenant_id = $2`,
-		conversationID, tenantID,
-	).Scan(&summary)
+	summary, err := s.queries.GetConversationSummary(ctx, skipperdb.GetConversationSummaryParams{
+		ConversationID: conversationID, TenantID: tenantID,
+	})
 	if err != nil {
 		return "", fmt.Errorf("get summary: %w", err)
 	}
@@ -458,10 +346,9 @@ func (s *ConversationStore) UpdateSummary(ctx context.Context, conversationID, s
 	if tenantID == "" {
 		return fmt.Errorf("tenant ID is required")
 	}
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE skipper.skipper_conversations SET summary = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3`,
-		summary, conversationID, tenantID,
-	)
+	err := s.queries.UpdateConversationSummary(ctx, skipperdb.UpdateConversationSummaryParams{
+		Summary: summary, ConversationID: conversationID, TenantID: tenantID,
+	})
 	if err != nil {
 		return fmt.Errorf("update summary: %w", err)
 	}
@@ -473,17 +360,43 @@ func (s *ConversationStore) MessageCount(ctx context.Context, conversationID str
 	if tenantID == "" {
 		return 0, fmt.Errorf("tenant ID is required")
 	}
-	var count int
-	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM skipper.skipper_messages m
-		 JOIN skipper.skipper_conversations c ON m.conversation_id = c.id
-		 WHERE m.conversation_id = $1 AND c.tenant_id = $2`,
-		conversationID, tenantID,
-	).Scan(&count)
+	count, err := s.queries.CountConversationMessages(ctx, skipperdb.CountConversationMessagesParams{
+		ConversationID: conversationID, TenantID: tenantID,
+	})
 	if err != nil {
 		return 0, fmt.Errorf("message count: %w", err)
 	}
-	return count, nil
+	return int(count), nil
+}
+
+func nullableString(value string) sql.NullString {
+	return sql.NullString{String: value, Valid: value != ""}
+}
+
+func conversationFromRow(id, tenantID string, userID, title sql.NullString, summary string, createdAt, updatedAt time.Time) Conversation {
+	return Conversation{
+		ID: id, TenantID: tenantID, UserID: userID.String, Title: title.String,
+		Summary: summary, CreatedAt: createdAt, UpdatedAt: updatedAt,
+	}
+}
+
+func conversationSummaryFromRow(id, tenantID string, userID, title sql.NullString, createdAt, updatedAt time.Time, lastMessageAt any, messageCount int64) ConversationSummary {
+	var last sql.NullTime
+	if timestamp, ok := lastMessageAt.(time.Time); ok {
+		last = sql.NullTime{Time: timestamp, Valid: true}
+	}
+	return ConversationSummary{
+		ID: id, TenantID: tenantID, UserID: userID.String, Title: title.String,
+		CreatedAt: createdAt, UpdatedAt: updatedAt, LastMessageAt: last, MessageCount: int(messageCount),
+	}
+}
+
+func messageFromRow(id, conversationID, role, content, confidence string, sources, toolsUsed, confidenceBlocks json.RawMessage, tokenCountInput, tokenCountOutput int, createdAt time.Time) Message {
+	return Message{
+		ID: id, ConversationID: conversationID, Role: role, Content: content, Confidence: confidence,
+		Sources: sources, ToolsUsed: toolsUsed, ConfidenceBlocks: confidenceBlocks,
+		TokenCountInput: tokenCountInput, TokenCountOutput: tokenCountOutput, CreatedAt: createdAt,
+	}
 }
 
 func normalizeJSONInput(value json.RawMessage) json.RawMessage {

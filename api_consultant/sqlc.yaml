@@ -1,0 +1,59 @@
+version: "2"
+sql:
+  - engine: postgresql
+    schema: ../pkg/database/sql/schema/skipper.sql
+    queries: internal/database/queries
+    gen:
+      go:
+        package: skipperdb
+        out: internal/database/skipperdb
+        sql_package: database/sql
+        emit_db_tags: true
+        emit_json_tags: true
+        emit_interface: true
+        emit_empty_slices: true
+        omit_unused_structs: true
+        overrides:
+          - db_type: uuid
+            go_type: string
+          - db_type: uuid
+            nullable: true
+            go_type:
+              import: database/sql
+              type: NullString
+          - db_type: jsonb
+            go_type:
+              import: encoding/json
+              type: RawMessage
+          - db_type: public.vector
+            go_type:
+              import: github.com/pgvector/pgvector-go
+              type: Vector
+          - column: skipper.skipper_conversations.created_at
+            go_type: time.Time
+          - column: skipper.skipper_conversations.updated_at
+            go_type: time.Time
+          - column: skipper.skipper_messages.created_at
+            go_type: time.Time
+          - column: skipper.skipper_messages.conversation_id
+            go_type: string
+          - column: skipper.skipper_messages.content
+            go_type: string
+          - column: skipper.skipper_messages.confidence
+            go_type: string
+          - column: skipper.skipper_messages.token_count_input
+            go_type: int
+          - column: skipper.skipper_messages.token_count_output
+            go_type: int
+          - column: skipper.skipper_usage.event_type
+            go_type: string
+          - column: skipper.skipper_reports.trigger
+            go_type: string
+          - column: skipper.skipper_reports.summary
+            go_type: string
+          - column: skipper.skipper_reports.root_cause
+            go_type: string
+          - column: skipper.skipper_knowledge.source_title
+            go_type: string
+          - column: skipper.skipper_knowledge.chunk_index
+            go_type: int

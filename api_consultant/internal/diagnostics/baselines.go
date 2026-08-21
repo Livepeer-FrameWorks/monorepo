@@ -5,8 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
-	"strings"
 	"time"
+
+	"frameworks/api_consultant/internal/database/skipperdb"
 )
 
 // BaselineMetric holds the Welford running statistics for a single metric.
@@ -154,39 +155,32 @@ func (e *BaselineEvaluator) Cleanup(ctx context.Context, tenantID string, maxAge
 
 // SQLBaselineStore implements BaselineStore using PostgreSQL.
 type SQLBaselineStore struct {
-	db *sql.DB
+	db      *sql.DB
+	queries *skipperdb.Queries
 }
 
 // NewSQLBaselineStore creates a store backed by the given database.
 func NewSQLBaselineStore(db *sql.DB) *SQLBaselineStore {
-	return &SQLBaselineStore{db: db}
+	var queries *skipperdb.Queries
+	if db != nil {
+		queries = skipperdb.New(db)
+	}
+	return &SQLBaselineStore{db: db, queries: queries}
 }
 
 func (s *SQLBaselineStore) Get(ctx context.Context, tenantID, streamID string) (map[string]BaselineMetric, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("baseline store unavailable")
 	}
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT metric_name, avg_value, m2, sample_count
-		 FROM skipper.skipper_baselines
-		 WHERE tenant_id = $1 AND stream_id = $2`,
-		tenantID, streamID,
-	)
+	rows, err := s.queries.GetBaselines(ctx, skipperdb.GetBaselinesParams{TenantID: tenantID, StreamID: streamID})
 	if err != nil {
 		return nil, fmt.Errorf("query baselines: %w", err)
 	}
-	defer rows.Close()
-
 	metrics := make(map[string]BaselineMetric)
-	for rows.Next() {
-		var name string
-		var b BaselineMetric
-		if err := rows.Scan(&name, &b.Avg, &b.M2, &b.SampleCount); err != nil {
-			return nil, fmt.Errorf("scan baseline: %w", err)
-		}
-		metrics[name] = b
+	for _, row := range rows {
+		metrics[row.MetricName] = BaselineMetric{Avg: row.AvgValue, M2: row.M2, SampleCount: row.SampleCount}
 	}
-	return metrics, rows.Err()
+	return metrics, nil
 }
 
 func (s *SQLBaselineStore) Upsert(ctx context.Context, tenantID, streamID string, metrics map[string]BaselineMetric) error {
@@ -197,28 +191,21 @@ func (s *SQLBaselineStore) Upsert(ctx context.Context, tenantID, streamID string
 		return nil
 	}
 
-	// Build a single INSERT ... ON CONFLICT DO UPDATE for all metrics.
-	var b strings.Builder
-	b.WriteString(`INSERT INTO skipper.skipper_baselines (tenant_id, stream_id, metric_name, avg_value, m2, sample_count, updated_at) VALUES `)
-	args := make([]any, 0, len(metrics)*6)
-	i := 0
-	for name, m := range metrics {
-		if i > 0 {
-			b.WriteString(", ")
-		}
-		base := i*6 + 1
-		fmt.Fprintf(&b, "($%d, $%d, $%d, $%d, $%d, $%d, NOW())",
-			base, base+1, base+2, base+3, base+4, base+5)
-		args = append(args, tenantID, streamID, name, m.Avg, m.M2, m.SampleCount)
-		i++
-	}
-	b.WriteString(` ON CONFLICT (tenant_id, stream_id, metric_name) DO UPDATE SET avg_value = EXCLUDED.avg_value, m2 = EXCLUDED.m2, sample_count = EXCLUDED.sample_count, updated_at = NOW()`)
-
-	_, err := s.db.ExecContext(ctx, b.String(), args...)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("upsert baselines: %w", err)
+		return fmt.Errorf("begin baseline upsert: %w", err)
 	}
-	return nil
+	defer tx.Rollback() //nolint:errcheck
+	queries := skipperdb.New(tx)
+	for name, m := range metrics {
+		if err := queries.UpsertBaseline(ctx, skipperdb.UpsertBaselineParams{
+			TenantID: tenantID, StreamID: streamID, MetricName: name,
+			AvgValue: m.Avg, M2: m.M2, SampleCount: m.SampleCount,
+		}); err != nil {
+			return fmt.Errorf("upsert baselines: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *SQLBaselineStore) CleanupStale(ctx context.Context, tenantID string, maxAge time.Duration) (int64, error) {
@@ -226,12 +213,9 @@ func (s *SQLBaselineStore) CleanupStale(ctx context.Context, tenantID string, ma
 		return 0, fmt.Errorf("baseline store unavailable")
 	}
 	cutoff := time.Now().Add(-maxAge)
-	result, err := s.db.ExecContext(ctx,
-		`DELETE FROM skipper.skipper_baselines WHERE tenant_id = $1 AND updated_at < $2`,
-		tenantID, cutoff,
-	)
+	affected, err := s.queries.CleanupStaleBaselines(ctx, skipperdb.CleanupStaleBaselinesParams{TenantID: tenantID, Cutoff: cutoff})
 	if err != nil {
 		return 0, fmt.Errorf("cleanup baselines: %w", err)
 	}
-	return result.RowsAffected()
+	return affected, nil
 }

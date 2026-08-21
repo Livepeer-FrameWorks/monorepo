@@ -57,16 +57,18 @@ func TestSchedulerProcessesNewPage(t *testing.T) {
 	sitemapURL := server.URL + "/sitemap.xml"
 
 	// 1. ListForTenant — no cached pages
-	mock.ExpectQuery("SELECT .* FROM skipper\\.skipper_page_cache WHERE tenant_id").
+	mock.ExpectQuery("FROM skipper\\.skipper_page_cache").
 		WithArgs("tenant").
 		WillReturnRows(sqlmock.NewRows(pageCacheSelectColumns))
 
 	// 2. BulkUpsert — persist metadata for the new page from sitemap
+	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO skipper\\.skipper_page_cache").
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
 
 	// 3. processPage's Get — no cached entry for this page
-	mock.ExpectQuery("SELECT .* FROM skipper\\.skipper_page_cache WHERE tenant_id.*AND page_url").
+	mock.ExpectQuery("FROM skipper\\.skipper_page_cache").
 		WillReturnRows(sqlmock.NewRows(pageCacheSelectColumns))
 
 	// 4. processPage's Upsert after embedding
@@ -145,7 +147,7 @@ func TestSchedulerProcessesStalePage(t *testing.T) {
 	staleTime := time.Now().Add(-48 * time.Hour)
 
 	// 1. ListForTenant — returns the stale cached page
-	mock.ExpectQuery("SELECT .* FROM skipper\\.skipper_page_cache WHERE tenant_id").
+	mock.ExpectQuery("FROM skipper\\.skipper_page_cache").
 		WithArgs("tenant").
 		WillReturnRows(sqlmock.NewRows(pageCacheSelectColumns).AddRow(
 			"tenant", sitemapURL, pageURL, "oldhash", nil, nil, nil, staleTime,
@@ -155,7 +157,7 @@ func TestSchedulerProcessesStalePage(t *testing.T) {
 	// 2. No BulkUpsert needed — page already in cache
 
 	// 3. processPage's Get — returns the stale cache entry
-	mock.ExpectQuery("SELECT .* FROM skipper\\.skipper_page_cache WHERE tenant_id.*AND page_url").
+	mock.ExpectQuery("FROM skipper\\.skipper_page_cache").
 		WillReturnRows(sqlmock.NewRows(pageCacheSelectColumns).AddRow(
 			"tenant", sitemapURL, pageURL, "oldhash", nil, nil, nil, staleTime,
 			0.5, nil, 0, 0, "sitemap",

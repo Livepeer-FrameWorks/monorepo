@@ -105,7 +105,7 @@ func TestUsageTrackerPublishesPersistedUsageWithStableIdentity(t *testing.T) {
 	mock.ExpectQuery("FROM skipper\\.skipper_usage").WillReturnRows(sqlmock.NewRows([]string{
 		"id", "tenant_id", "event_type", "event_count", "tokens_input", "tokens_output", "model", "provider", "created_at",
 	}).AddRow(id, "22222222-2222-4222-8222-222222222222", "llm_call", 2, 30, 40, "gpt-test", "openai", createdAt))
-	mock.ExpectExec("SET claimed_at = NOW").WithArgs(postgresArray([]string{id})).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("SET claimed_at = NOW").WithArgs("{\"" + id + "\"}").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	mock.ExpectExec("SET published_at = NOW").WithArgs(id).WillReturnResult(sqlmock.NewResult(0, 1))
 

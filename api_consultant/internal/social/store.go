@@ -6,9 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"frameworks/api_consultant/internal/database/skipperdb"
 )
 
 type PostStore interface {
@@ -20,11 +19,16 @@ type PostStore interface {
 
 type SQLPostStore struct {
 	db       *sql.DB
+	queries  *skipperdb.Queries
 	tenantID string
 }
 
 func NewPostStore(db *sql.DB, tenantID string) *SQLPostStore {
-	return &SQLPostStore{db: db, tenantID: tenantID}
+	var queries *skipperdb.Queries
+	if db != nil {
+		queries = skipperdb.New(db)
+	}
+	return &SQLPostStore{db: db, queries: queries, tenantID: tenantID}
 }
 
 func (s *SQLPostStore) Save(ctx context.Context, record PostRecord) (PostRecord, error) {
@@ -42,35 +46,18 @@ func (s *SQLPostStore) Save(ctx context.Context, record PostRecord) (PostRecord,
 		status = "draft"
 	}
 
-	var createdAt time.Time
-	var id string
-	err = s.db.QueryRowContext(ctx, `
-		INSERT INTO skipper.skipper_posts (
-			tenant_id,
-			content_type,
-			tweet_text,
-			context_summary,
-			trigger_data,
-			status,
-			created_at
-		)
-		VALUES ($1, $2, $3, $4, $5, $6, NOW())
-		RETURNING id, created_at
-	`,
-		s.tenantID,
-		string(record.ContentType),
-		record.TweetText,
-		record.ContextSummary,
-		database.JSONText(triggerJSON),
-		status,
-	).Scan(&id, &createdAt)
+	row, err := s.queries.SaveSocialPost(ctx, skipperdb.SaveSocialPostParams{
+		TenantID: s.tenantID, ContentType: string(record.ContentType), TweetText: record.TweetText,
+		ContextSummary: sql.NullString{String: record.ContextSummary, Valid: record.ContextSummary != ""},
+		TriggerData:    string(triggerJSON), Status: status,
+	})
 	if err != nil {
 		return PostRecord{}, fmt.Errorf("insert post: %w", err)
 	}
 
-	record.ID = id
+	record.ID = row.ID
 	record.Status = status
-	record.CreatedAt = createdAt
+	record.CreatedAt = row.CreatedAt
 	return record, nil
 }
 
@@ -79,17 +66,11 @@ func (s *SQLPostStore) CountToday(ctx context.Context) (int, error) {
 		return 0, errors.New("post store unavailable")
 	}
 
-	var count int
-	err := s.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM skipper.skipper_posts
-		WHERE tenant_id = $1
-		AND status IN ('draft', 'sent', 'posted')
-		AND created_at >= (CURRENT_DATE AT TIME ZONE 'UTC')
-	`, s.tenantID).Scan(&count)
+	count, err := s.queries.CountSocialPostsToday(ctx, s.tenantID)
 	if err != nil {
 		return 0, fmt.Errorf("count today posts: %w", err)
 	}
-	return count, nil
+	return int(count), nil
 }
 
 func (s *SQLPostStore) ListRecent(ctx context.Context, limit int) ([]PostRecord, error) {
@@ -100,36 +81,19 @@ func (s *SQLPostStore) ListRecent(ctx context.Context, limit int) ([]PostRecord,
 		limit = 20
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id,
-			content_type,
-			tweet_text,
-			context_summary,
-			trigger_data,
-			status,
-			sent_at,
-			created_at
-		FROM skipper.skipper_posts
-		WHERE tenant_id = $1
-		AND status IN ('draft', 'sent', 'posted', 'baseline')
-		ORDER BY created_at DESC
-		LIMIT $2
-	`, s.tenantID, limit)
+	rows, err := s.queries.ListRecentSocialPosts(ctx, skipperdb.ListRecentSocialPostsParams{
+		TenantID: s.tenantID, RowLimit: int32(limit),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("list recent posts: %w", err)
 	}
-	defer rows.Close()
-
 	var posts []PostRecord
-	for rows.Next() {
-		p, err := scanPost(rows)
+	for _, row := range rows {
+		p, err := decodePost(row)
 		if err != nil {
 			return nil, err
 		}
 		posts = append(posts, p)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate posts: %w", err)
 	}
 	return posts, nil
 }
@@ -139,43 +103,23 @@ func (s *SQLPostStore) MarkSent(ctx context.Context, id string) error {
 		return errors.New("post store unavailable")
 	}
 
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE skipper.skipper_posts SET status = 'sent', sent_at = NOW() WHERE id = $1 AND tenant_id = $2`,
-		id, s.tenantID,
-	)
+	err := s.queries.MarkSocialPostSent(ctx, skipperdb.MarkSocialPostSentParams{ID: id, TenantID: s.tenantID})
 	if err != nil {
 		return fmt.Errorf("mark post sent: %w", err)
 	}
 	return nil
 }
 
-type postScanner interface {
-	Scan(dest ...any) error
-}
-
-func scanPost(s postScanner) (PostRecord, error) {
-	var post PostRecord
-	var contentType string
-	var contextSummary sql.NullString
-	var triggerJSON []byte
-	if err := s.Scan(
-		&post.ID,
-		&contentType,
-		&post.TweetText,
-		&contextSummary,
-		&triggerJSON,
-		&post.Status,
-		&post.SentAt,
-		&post.CreatedAt,
-	); err != nil {
-		return PostRecord{}, fmt.Errorf("scan post: %w", err)
+func decodePost(row skipperdb.ListRecentSocialPostsRow) (PostRecord, error) {
+	post := PostRecord{
+		ID: row.ID, ContentType: ContentType(row.ContentType), TweetText: row.TweetText,
+		ContextSummary: row.ContextSummary.String, Status: row.Status, CreatedAt: row.CreatedAt,
 	}
-	post.ContentType = ContentType(contentType)
-	if contextSummary.Valid {
-		post.ContextSummary = contextSummary.String
+	if row.SentAt.Valid {
+		post.SentAt = &row.SentAt.Time
 	}
-	if len(triggerJSON) > 0 {
-		if err := json.Unmarshal(triggerJSON, &post.TriggerData); err != nil {
+	if len(row.TriggerData) > 0 {
+		if err := json.Unmarshal(row.TriggerData, &post.TriggerData); err != nil {
 			return PostRecord{}, fmt.Errorf("decode trigger data: %w", err)
 		}
 	}

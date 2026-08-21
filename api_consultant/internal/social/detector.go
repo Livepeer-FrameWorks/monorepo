@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
+	"frameworks/api_consultant/internal/database/skipperdb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
@@ -12,6 +13,7 @@ type DetectorConfig struct {
 	Store     PostStore
 	Collector *EventCollector
 	DB        *sql.DB
+	TenantID  string
 	Logger    logging.Logger
 }
 
@@ -19,6 +21,7 @@ type Detector struct {
 	store     PostStore
 	collector *EventCollector
 	db        *sql.DB
+	tenantID  string
 	logger    logging.Logger
 }
 
@@ -27,6 +30,7 @@ func NewDetector(cfg DetectorConfig) *Detector {
 		store:     cfg.Store,
 		collector: cfg.Collector,
 		db:        cfg.DB,
+		tenantID:  cfg.TenantID,
 		logger:    cfg.Logger,
 	}
 }
@@ -263,16 +267,15 @@ func (d *Detector) processKnowledge(ctx context.Context, events []EventSignal) *
 	}
 
 	// Enrich with a sample chunk from DB if available
-	if d.db != nil {
+	if d.db != nil && d.tenantID != "" {
 		pageURL, _ := best.Data["page_url"].(string)
 		if pageURL != "" {
-			var sampleChunk string
-			_ = d.db.QueryRowContext(ctx, `
-				SELECT chunk_text FROM skipper.skipper_knowledge
-				WHERE source_url = $1
-				ORDER BY chunk_index ASC
-				LIMIT 1
-			`, pageURL).Scan(&sampleChunk)
+			sampleChunk, sampleErr := skipperdb.New(d.db).GetKnowledgeSample(ctx, skipperdb.GetKnowledgeSampleParams{
+				TenantID: d.tenantID, SourceUrl: pageURL,
+			})
+			if sampleErr != nil {
+				sampleChunk = ""
+			}
 			if sampleChunk != "" {
 				if len(sampleChunk) > 500 {
 					sampleChunk = sampleChunk[:500] + "..."
