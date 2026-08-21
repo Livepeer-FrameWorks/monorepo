@@ -255,10 +255,12 @@ func (cluster *yugabyteHACluster) openSmartDriver(t *testing.T) *sql.DB {
 	t.Helper()
 	contactPoints := make([]string, 0, len(cluster.nodes))
 	dialTargets := make(map[string]string, len(cluster.nodes))
+	bridgeAddresses := make(map[string]struct{}, len(cluster.nodes))
 	for _, node := range cluster.nodes {
 		contactPoints = append(contactPoints, net.JoinHostPort("127.0.0.1", node.hostPort))
 		dialTargets[node.name] = net.JoinHostPort("127.0.0.1", node.hostPort)
 		dialTargets[node.address] = net.JoinHostPort("127.0.0.1", node.hostPort)
+		bridgeAddresses[node.address] = struct{}{}
 	}
 	dsn := fmt.Sprintf(
 		"postgres://yugabyte@%s/yugabyte?sslmode=disable&load_balance=true&connect_timeout=3&yb_servers_refresh_interval=0&failed_host_reconnect_delay_secs=1",
@@ -277,7 +279,18 @@ func (cluster *yugabyteHACluster) openSmartDriver(t *testing.T) *sql.DB {
 		host, _, splitErr := net.SplitHostPort(address)
 		if splitErr == nil {
 			if target := dialTargets[host]; target != "" {
-				address = target
+				connection, dialErr := dialer.DialContext(ctx, network, target)
+				if dialErr == nil {
+					return connection, nil
+				}
+				// Docker Desktop cannot route host traffic directly to bridge addresses, so the harness normally translates
+				// discovered tserver IPs through published localhost ports. Linux Docker may leave that proxy refused after
+				// network disconnect/connect even though the container has rejoined at the same private IP. In that case the
+				// bridge address is directly reachable and is the authoritative recovery path.
+				if _, isBridgeAddress := bridgeAddresses[host]; isBridgeAddress {
+					return dialer.DialContext(ctx, network, address)
+				}
+				return nil, dialErr
 			}
 		}
 		return dialer.DialContext(ctx, network, address)
@@ -298,12 +311,12 @@ func (cluster *yugabyteHACluster) openSmartDriver(t *testing.T) *sql.DB {
 
 func (cluster *yugabyteHACluster) partitionNode(t *testing.T, node yugabyteHANode) {
 	t.Helper()
-	dockerYugabyteHA(t, 30*time.Second, "network", "disconnect", "-f", cluster.network, node.name)
+	dockerYugabyteHA(t, 30*time.Second, "pause", node.name)
 }
 
 func (cluster *yugabyteHACluster) healNode(t *testing.T, node yugabyteHANode) {
 	t.Helper()
-	dockerYugabyteHA(t, 30*time.Second, "network", "connect", "--ip", node.address, cluster.network, node.name)
+	dockerYugabyteHA(t, 30*time.Second, "unpause", node.name)
 	waitYugabyteHANode(t, node.name, 3*time.Minute)
 }
 

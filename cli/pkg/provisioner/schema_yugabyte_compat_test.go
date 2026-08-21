@@ -52,13 +52,8 @@ type yugabyteGeneratedQuery struct {
 	sql  string
 }
 
-func purserGeneratedQueries(t *testing.T) []yugabyteGeneratedQuery {
+func generatedQueriesInDirectory(t *testing.T, directory string) []yugabyteGeneratedQuery {
 	t.Helper()
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve Yugabyte contract test path")
-	}
-	directory := filepath.Join(filepath.Dir(currentFile), "../../../api_billing/internal/database/purserdb")
 	paths, err := filepath.Glob(filepath.Join(directory, "*.sql.go"))
 	if err != nil {
 		t.Fatal(err)
@@ -107,9 +102,18 @@ func purserGeneratedQueries(t *testing.T) []yugabyteGeneratedQuery {
 	return queries
 }
 
+func generatedServiceQueries(t *testing.T, relativeDirectory string) []yugabyteGeneratedQuery {
+	t.Helper()
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve Yugabyte contract test path")
+	}
+	return generatedQueriesInDirectory(t, filepath.Join(filepath.Dir(currentFile), relativeDirectory))
+}
+
 func ybPreparePurserCatalog(t *testing.T, name string) {
 	t.Helper()
-	queries := purserGeneratedQueries(t)
+	queries := generatedServiceQueries(t, "../../../api_billing/internal/database/purserdb")
 	if len(queries) < 100 {
 		t.Fatalf("found only %d generated Purser queries; Yugabyte catalog discovery is incomplete", len(queries))
 	}
@@ -121,6 +125,38 @@ func ybPreparePurserCatalog(t *testing.T, name string) {
 		fmt.Fprintf(&statements, "DEALLOCATE %s;\n", preparedName)
 	}
 	ybApply(t, name, "purser", statements.String())
+}
+
+func ybPrepareNavigatorCatalog(t *testing.T, name string) {
+	t.Helper()
+	queries := generatedServiceQueries(t, "../../../api_dns/internal/database/navigatordb")
+	if len(queries) != 44 {
+		t.Fatalf("found %d generated Navigator queries, want 44", len(queries))
+	}
+	var statements strings.Builder
+	for index, query := range queries {
+		preparedName := fmt.Sprintf("navigator_contract_%d", index)
+		fmt.Fprintf(&statements, "\\echo preparing %s from %s\n", query.name, query.file)
+		fmt.Fprintf(&statements, "PREPARE %s AS %s;\n", preparedName, query.sql)
+		fmt.Fprintf(&statements, "DEALLOCATE %s;\n", preparedName)
+	}
+	ybApply(t, name, "navigator", statements.String())
+}
+
+func ybPrepareSkipperCatalog(t *testing.T, name string) {
+	t.Helper()
+	queries := generatedServiceQueries(t, "../../../api_consultant/internal/database/skipperdb")
+	if len(queries) != 62 {
+		t.Fatalf("found %d generated Skipper queries, want 62", len(queries))
+	}
+	var statements strings.Builder
+	for index, query := range queries {
+		preparedName := fmt.Sprintf("skipper_contract_%d", index)
+		fmt.Fprintf(&statements, "\\echo preparing %s from %s\n", query.name, query.file)
+		fmt.Fprintf(&statements, "PREPARE %s AS %s;\n", preparedName, query.sql)
+		fmt.Fprintf(&statements, "DEALLOCATE %s;\n", preparedName)
+	}
+	ybApply(t, name, "skipper", statements.String())
 }
 
 func TestYugabyteCurrentBaselinesAndCapabilities(t *testing.T) {
@@ -147,6 +183,8 @@ func TestYugabyteCurrentBaselinesAndCapabilities(t *testing.T) {
 	ybApply(t, name, "purser", string(purserSeed))
 	ybApply(t, name, "purser", string(purserSeed))
 	ybPreparePurserCatalog(t, name)
+	ybPrepareNavigatorCatalog(t, name)
+	ybPrepareSkipperCatalog(t, name)
 
 	// These statements represent concrete runtime assumptions not proven by
 	// merely accepting DDL: JSONB null normalization, conflict inference,
