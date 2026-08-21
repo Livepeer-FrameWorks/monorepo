@@ -12,6 +12,7 @@ GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE ?= $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 GO_BUILD_TAGS ?= nomsgpack
 GO_TAG_FLAGS = $(if $(strip $(GO_BUILD_TAGS)),-tags=$(GO_BUILD_TAGS),)
+SQLC_VERSION ?= v1.31.1
 
 # component_ldflags(binary_name, source_dir) returns the -ldflags block that
 # injects platform + per-component version fields into a go build. Components
@@ -76,8 +77,35 @@ proto:
 proto-check:
 	cd pkg/proto && make proto-check
 
-seed-demo:
-	docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"' < pkg/database/sql/seeds/demo/demo_data.sql
+sqlc:
+	cd api_billing && go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
+
+sqlc-check: sqlc
+	@git diff --exit-code -- api_billing/internal/database/purserdb
+	@test -z "$$(git status --porcelain --untracked-files=all -- api_billing/internal/database/purserdb)" || { \
+		echo "ERROR: sqlc generated files are untracked or stale; run make sqlc"; \
+		git status --short --untracked-files=all -- api_billing/internal/database/purserdb; \
+		exit 1; \
+	}
+
+seed-demo: seed-demo-postgres seed-demo-clickhouse
+
+seed-demo-postgres:
+	@set -eu; \
+	for db in quartermaster purser commodore foghorn periscope; do \
+		echo "Seeding PostgreSQL database $$db..."; \
+		docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$$1" -d "$$1"' sh "$$db" < "pkg/database/sql/seeds/demo/postgres/$$db.sql"; \
+	done
+
+seed-demo-clickhouse:
+	@echo "Seeding ClickHouse database periscope..."
+	@docker compose exec -T clickhouse clickhouse-client --multiquery < pkg/database/sql/seeds/demo/clickhouse_demo_data.sql
+
+reset-demo-databases-plan:
+	@./scripts/reset-demo-databases.sh --plan
+
+reset-demo-databases:
+	@./scripts/reset-demo-databases.sh
 
 graphql:
 	cd api_gateway && make graphql
@@ -611,7 +639,7 @@ validate-migrations: verify-release-state
 # gate for concurrency/constraint properties sqlmock can't prove. Needs a running Docker daemon; gated
 # behind the schema_verify build tag so a plain `make test` never needs Docker.
 SCHEMA_VERIFY_FROM_TAG ?= $(shell git tag --merged HEAD --sort=-v:refname | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$$/ { print; exit }')
-SCHEMA_VERIFY_TESTS := TestComposeUsesSchemaHarnessImages|TestPostgresIntrospectionCoversDeployRelevantObjects|TestPostgresBaselineEqualsReplay|TestPostgresTaggedBaselineUpgradeEqualsCurrent|TestClickHouseBaselineEqualsReplay|TestClickHouseTaggedBaselineUpgradeEqualsCurrent|TestArtifactEventsDedupedPreservesLegacyRows|TestArtifactPlaybackIndexUpgradeFromReleasedLower|TestCreationCommandAckLeaseClaim|TestCreationCommandAckLeaseTokenFencesStaleSettlement|TestCreationCommandCASMutualExclusion
+SCHEMA_VERIFY_TESTS := TestComposeUsesSchemaHarnessImages|TestPostgresServiceDatabaseInitialization|TestPostgresIntrospectionCoversDeployRelevantObjects|TestPostgresBaselineEqualsReplay|TestPostgresTaggedBaselineUpgradeEqualsCurrent|TestClickHouseBaselineEqualsReplay|TestClickHouseTaggedBaselineUpgradeEqualsCurrent|TestArtifactEventsDedupedPreservesLegacyRows|TestArtifactPlaybackIndexUpgradeFromReleasedLower|TestCreationCommandAckLeaseClaim|TestCreationCommandAckLeaseTokenFencesStaleSettlement|TestCreationCommandCASMutualExclusion
 
 verify-schema:
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-schema requires a running Docker daemon (real-engine tests must run, not skip)"; exit 1; }

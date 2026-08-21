@@ -93,27 +93,15 @@ services:
       PGDATA: /var/lib/postgresql/18/docker
     volumes:
       - postgres18_data:/var/lib/postgresql
-      # Schema
-      - ./pkg/database/sql/schema/quartermaster.sql:/docker-entrypoint-initdb.d/10_init_quartermaster.sql:ro
-      - ./pkg/database/sql/schema/purser.sql:/docker-entrypoint-initdb.d/20_init_purser.sql:ro
-      - ./pkg/database/sql/schema/foghorn.sql:/docker-entrypoint-initdb.d/30_init_foghorn.sql:ro
-      - ./pkg/database/sql/schema/commodore.sql:/docker-entrypoint-initdb.d/40_init_commodore.sql:ro
-      - ./pkg/database/sql/schema/periscope.sql:/docker-entrypoint-initdb.d/50_init_periscope.sql:ro
+      # Platform services each own a database. Demo rows are loaded only by
+      # the explicit `make seed-demo` workflow below, never on first boot.
+      - ./infrastructure/postgres/init-service-databases.sh:/docker-entrypoint-initdb.d/10_init_service_databases.sh:ro
+      - ./pkg/database/sql/schema:/frameworks-schema:ro
+      - ./pkg/database/sql/seeds/static:/frameworks-static-seeds:ro
+      - ./infrastructure/postgres:/frameworks-postgres:ro
+      # External applications own and migrate their top-level databases.
       - ./pkg/database/sql/schema/listmonk.sql:/docker-entrypoint-initdb.d/60_init_listmonk.sql:ro
-      - ./pkg/database/sql/schema/navigator.sql:/docker-entrypoint-initdb.d/70_init_navigator.sql:ro
       - ./pkg/database/sql/schema/chatwoot.sql:/docker-entrypoint-initdb.d/75_init_chatwoot.sql:ro
-      - ./pkg/database/sql/schema/skipper.sql:/docker-entrypoint-initdb.d/78_init_skipper.sql:ro
-      # Operator-analytics read-only role (consumed by ClickHouse named collections)
-      - ./pkg/database/sql/seeds/static/analytics_ro_quartermaster.sql:/docker-entrypoint-initdb.d/90_analytics_ro_quartermaster.sql:ro
-      - ./pkg/database/sql/seeds/static/analytics_ro_commodore.sql:/docker-entrypoint-initdb.d/91_analytics_ro_commodore.sql:ro
-      - ./pkg/database/sql/seeds/static/analytics_ro_purser.sql:/docker-entrypoint-initdb.d/92_analytics_ro_purser.sql:ro
-      - ./infrastructure/postgres/analytics_ro_dev_password.sql:/docker-entrypoint-initdb.d/93_analytics_ro_password.sql:ro
-      # Demo Seeds (Dev/Demo only - loaded by default for local development)
-      - ./pkg/database/sql/seeds/demo/postgres/quartermaster.sql:/docker-entrypoint-initdb.d/94_demo_quartermaster.sql:ro
-      - ./pkg/database/sql/seeds/demo/postgres/purser.sql:/docker-entrypoint-initdb.d/95_demo_purser.sql:ro
-      - ./pkg/database/sql/seeds/demo/postgres/commodore.sql:/docker-entrypoint-initdb.d/96_demo_commodore.sql:ro
-      - ./pkg/database/sql/seeds/demo/postgres/foghorn.sql:/docker-entrypoint-initdb.d/97_demo_foghorn.sql:ro
-      - ./pkg/database/sql/seeds/demo/postgres/periscope.sql:/docker-entrypoint-initdb.d/98_demo_periscope.sql:ro
     ports:
       - "5432:5432"
     networks:
@@ -201,7 +189,7 @@ services:
       context: .
       dockerfile: api_balancing/Dockerfile
     environment:
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: postgresql://foghorn:${POSTGRES_PASSWORD}@postgres:5432/foghorn?sslmode=disable
       PORT: ${FOGHORN_PORT}
       FOGHORN_INTERNAL_GRPC_PORT: ${FOGHORN_INTERNAL_GRPC_PORT}
       FOGHORN_INTERNAL_GRPC_BIND_ADDR: 0.0.0.0:${FOGHORN_INTERNAL_GRPC_PORT}
@@ -291,7 +279,7 @@ services:
       context: .
       dockerfile: api_balancing/Dockerfile
     environment:
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: postgresql://foghorn:${POSTGRES_PASSWORD}@postgres:5432/foghorn?sslmode=disable
       PORT: 18018
       FOGHORN_INTERNAL_GRPC_PORT: 18019
       FOGHORN_INTERNAL_GRPC_BIND_ADDR: 0.0.0.0:18019
@@ -446,30 +434,6 @@ services:
     networks:
       - frameworks
 
-  # One-shot migration runner to apply SQL migrations
-  # db-migrate:
-  #   image: postgres:15
-  #   container_name: frameworks-db-migrate
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
-  #   entrypoint: [ '/bin/sh', '-c' ]
-  #   command: |
-  #     "
-  #     set -e
-  #     echo 'Applying SQL migrations...'
-  #     for f in /migrations/*.sql; do
-  #       echo "Running migration: $f"
-  #       psql postgresql://frameworks_user:frameworks_dev@postgres:5432/frameworks -v ON_ERROR_STOP=1 -f "$f"
-  #     done
-  #     echo 'Migrations complete.'
-  #     "
-  #   volumes:
-  #     - ./database/migrations:/migrations:ro
-  #   networks:
-  #     - frameworks
-  #   restart: 'no'
-
   # Quartermaster - Tenant Management Service
   quartermaster:
     <<: *default-env
@@ -481,7 +445,7 @@ services:
       - "18002:18002" # HTTP (health)
       - "19002:19002" # gRPC (internal)
     environment:
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: postgresql://quartermaster:${POSTGRES_PASSWORD}@postgres:5432/quartermaster?sslmode=disable
       PORT: ${QUARTERMASTER_PORT}
       GRPC_PORT: ${QUARTERMASTER_GRPC_PORT}
       LOG_LEVEL: ${LOG_LEVEL}
@@ -572,8 +536,6 @@ services:
       dockerfile: api_realtime/Dockerfile
     hostname: signalman
     depends_on:
-      postgres:
-        condition: service_healthy
       kafka:
         condition: service_healthy
       quartermaster:
@@ -581,7 +543,6 @@ services:
     environment:
       PORT: ${SIGNALMAN_PORT}
       GRPC_PORT: ${SIGNALMAN_GRPC_PORT}
-      DATABASE_URL: ${DATABASE_URL}
       KAFKA_BROKERS: ${KAFKA_BROKERS}
       ANALYTICS_KAFKA_TOPIC: ${ANALYTICS_KAFKA_TOPIC}
       KAFKA_CLUSTER_ID: ${KAFKA_CLUSTER_ID}
@@ -619,7 +580,7 @@ services:
       context: .
       dockerfile: api_control/Dockerfile
     environment:
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: postgresql://commodore:${POSTGRES_PASSWORD}@postgres:5432/commodore?sslmode=disable
       JWT_SECRET: ${JWT_SECRET}
       PASSWORD_RESET_SECRET: ${PASSWORD_RESET_SECRET}
       PORT: ${COMMODORE_PORT}
@@ -835,7 +796,7 @@ services:
     ports:
       - "18021:18021"
     environment:
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: postgresql://periscope:${POSTGRES_PASSWORD}@postgres:5432/periscope?sslmode=disable
       KAFKA_BROKERS: ${KAFKA_BROKERS}
       BILLING_KAFKA_TOPIC: ${BILLING_KAFKA_TOPIC}
       PORT: 18021
@@ -888,7 +849,7 @@ services:
       - "18003:18003" # HTTP (webhooks, health)
       - "19003:19003" # gRPC (internal)
     environment:
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: postgresql://purser:${POSTGRES_PASSWORD}@postgres:5432/purser?sslmode=disable
       KAFKA_BROKERS: ${KAFKA_BROKERS}
       BILLING_KAFKA_TOPIC: ${BILLING_KAFKA_TOPIC}
       PORT: ${PURSER_PORT}
@@ -1005,7 +966,7 @@ services:
       - "18018:18018"
       - "19007:19007"
     environment:
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: postgresql://skipper:${POSTGRES_PASSWORD}@postgres:5432/skipper?sslmode=disable
       PORT: ${SKIPPER_PORT}
       GRPC_PORT: ${SKIPPER_GRPC_PORT}
       LOG_LEVEL: ${LOG_LEVEL}
@@ -1093,7 +1054,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: postgresql://quartermaster:${POSTGRES_PASSWORD}@postgres:5432/quartermaster?sslmode=disable
       CLUSTER_ID: ${CLUSTER_ID:-central-primary}
       STORAGE_S3_ENDPOINT: ${STORAGE_S3_ENDPOINT:-}
       STORAGE_S3_BUCKET: ${STORAGE_S3_BUCKET:-}
@@ -1434,9 +1395,8 @@ services:
       - clickhouse_data:/var/lib/clickhouse
       - ./infrastructure/clickhouse/users.xml:/etc/clickhouse-server/users.xml:ro
       - ./infrastructure/clickhouse/config.xml:/etc/clickhouse-server/config.d/frameworks.xml:ro
-      # Schema first, then demo seed data (ordering by filename)
+      # Schema only. Demo rows are loaded explicitly by `make seed-demo`.
       - ./pkg/database/sql/clickhouse/periscope.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
-      - ./pkg/database/sql/seeds/demo/clickhouse_demo_data.sql:/docker-entrypoint-initdb.d/02_seed_demo.sql:ro
     environment:
       # Start with default user for initialization. Do not set CLICKHOUSE_DB here:
       # the schema creates periscope with ENGINE = Replicated, while the Docker

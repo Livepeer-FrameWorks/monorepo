@@ -73,8 +73,8 @@ generators are only reachable behind `IsDemoMode(ctx)`.
 ## Relationship to seed data
 
 Demo mode and seed data are separate systems (see the repo `CLAUDE.md` table).
-`pkg/database/sql/seeds/demo/` (`demo_data.sql`, `clickhouse_demo_data.sql`) loads
-dev-compose-only rows that reuse the same synthetic identifiers (demo tenant,
+`pkg/database/sql/seeds/demo/postgres/*.sql` and `clickhouse_demo_data.sql` load
+dev-compose-only rows when `make seed-demo` is run. They reuse the same synthetic identifiers (demo tenant,
 `demo_live_stream_001`, `central-primary`/`demo-media` clusters) so the _real_
 resolver paths have data to return during local development. Demo mode never reads
 those rows; in production they do not exist and demo mode still works, because it

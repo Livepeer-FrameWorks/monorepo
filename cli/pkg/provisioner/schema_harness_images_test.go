@@ -97,3 +97,57 @@ func TestComposeUsesSchemaHarnessImages(t *testing.T) {
 		}
 	}
 }
+
+func TestPostgresServiceDatabaseInitialization(t *testing.T) {
+	requireDocker(t)
+	const name = "fw-sv-pg-service-dbs"
+	pgStart(t, name)
+
+	manifestPath := findInfrastructureYaml(t)
+	root := filepath.Dir(filepath.Dir(manifestPath))
+	for source, destination := range map[string]string{
+		filepath.Join(root, "pkg", "database", "sql", "schema"):          name + ":/frameworks-schema",
+		filepath.Join(root, "pkg", "database", "sql", "seeds", "static"): name + ":/frameworks-static-seeds",
+		filepath.Join(root, "infrastructure", "postgres"):                name + ":/frameworks-postgres",
+	} {
+		if _, err := docker(t, "", "cp", source, destination); err != nil {
+			t.Fatalf("copy %s into database harness: %v", source, err)
+		}
+	}
+	if out, err := docker(t, "", "exec",
+		"-e", "POSTGRES_USER=postgres",
+		"-e", "POSTGRES_PASSWORD=harness",
+		"-e", "POSTGRES_DB=postgres",
+		name, "sh", "/frameworks-postgres/init-service-databases.sh"); err != nil {
+		t.Fatalf("initialize service databases: %v\n%s", err, out)
+	}
+
+	services := []string{"quartermaster", "purser", "foghorn", "commodore", "periscope", "navigator", "skipper"}
+	for _, service := range services {
+		out, err := docker(t, "", "exec", name, "psql", "-U", service, "-d", service, "-tAc",
+			"SELECT current_user || '|' || count(*) FROM information_schema.schemata WHERE schema_name = current_user")
+		if err != nil {
+			t.Errorf("connect to %s as its runtime owner: %v", service, err)
+			continue
+		}
+		if got := strings.TrimSpace(out); got != service+"|1" {
+			t.Errorf("%s ownership probe = %q, want %q", service, got, service+"|1")
+		}
+	}
+
+	out, err := docker(t, "", "exec", name, "psql", "-U", "purser", "-d", "purser", "-tAc",
+		"SELECT count(*) FROM information_schema.schemata WHERE schema_name IN ('quartermaster','commodore','foghorn','periscope','navigator','skipper')")
+	if err != nil {
+		t.Fatalf("probe Purser database isolation: %v", err)
+	}
+	if got := strings.TrimSpace(out); got != "0" {
+		t.Fatalf("Purser database contains %s foreign service schemas, want 0", got)
+	}
+
+	if out, err := docker(t, "", "exec", name, "psql", "-U", "purser", "-d", "quartermaster", "-tAc", "SELECT 1"); err == nil {
+		t.Fatalf("Purser unexpectedly connected to Quartermaster database: %s", out)
+	}
+	if out, err := docker(t, "", "exec", name, "psql", "-U", "frameworks_analytics_ro", "-d", "quartermaster", "-tAc", "SELECT 1"); err != nil {
+		t.Fatalf("approved analytics role cannot connect to Quartermaster: %v\n%s", err, out)
+	}
+}

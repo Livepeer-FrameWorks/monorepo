@@ -1,0 +1,33 @@
+version: "2"
+sql:
+  - engine: postgresql
+    schema: ../pkg/database/sql/schema/purser.sql
+    queries: internal/database/queries
+    gen:
+      go:
+        package: purserdb
+        out: internal/database/purserdb
+        sql_package: database/sql
+        emit_db_tags: true
+        emit_json_tags: true
+        emit_interface: true
+        emit_empty_slices: true
+        omit_unused_structs: true
+        overrides:
+          - db_type: uuid
+            go_type:
+              import: github.com/google/uuid
+              type: UUID
+          - db_type: jsonb
+            go_type:
+              import: encoding/json
+              type: RawMessage
+          - db_type: jsonb
+            nullable: true
+            go_type:
+              import: encoding/json
+              type: RawMessage
+          - db_type: text[]
+            go_type:
+              import: github.com/lib/pq
+              type: StringArray
