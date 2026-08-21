@@ -9,10 +9,10 @@ import (
 	"sort"
 	"strings"
 
+	"frameworks/api_billing/internal/database/purserdb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 
 	"github.com/google/uuid"
-	"github.com/lib/pq"
 )
 
 // ReconcileCustomerBilling reconciles every CustomerBilling row into Purser's
@@ -236,14 +236,14 @@ func aliasFromRef(ref string) (string, error) {
 }
 
 func resolveTier(ctx context.Context, exec DBTX, slug string) (tierID string, tierLevel int32, currency string, err error) {
-	const q = `SELECT id::text, tier_level, currency FROM purser.billing_tiers WHERE tier_name = $1`
-	row := exec.QueryRowContext(ctx, q, slug)
-	if scanErr := row.Scan(&tierID, &tierLevel, &currency); scanErr != nil {
-		if errors.Is(scanErr, sql.ErrNoRows) {
+	tier, queryErr := purserdb.New(exec).GetBootstrapBillingTier(ctx, slug)
+	if queryErr != nil {
+		if errors.Is(queryErr, sql.ErrNoRows) {
 			return "", 0, "", fmt.Errorf("tier slug %q not in purser.billing_tiers (run `purser bootstrap` so the embedded catalog is reconciled first)", slug)
 		}
-		return "", 0, "", fmt.Errorf("resolve tier: %w", scanErr)
+		return "", 0, "", fmt.Errorf("resolve tier: %w", queryErr)
 	}
+	tierID, tierLevel, currency = tier.ID.String(), tier.TierLevel, tier.Currency
 	if currency == "" {
 		currency = billing.DefaultCurrency()
 	}
@@ -251,34 +251,34 @@ func resolveTier(ctx context.Context, exec DBTX, slug string) (tierID string, ti
 }
 
 func upsertTenantSubscription(ctx context.Context, exec DBTX, tenantID, tierID string, e CustomerBilling) (string, error) {
-	const probeSQL = `
-		SELECT tier_id::text, billing_model
-		FROM purser.tenant_subscriptions
-		WHERE tenant_id = $1::uuid`
-	var curTier, curModel string
-	err := exec.QueryRowContext(ctx, probeSQL, tenantID).Scan(&curTier, &curModel)
+	queries := purserdb.New(exec)
+	tierUUID, err := uuid.Parse(tierID)
+	if err != nil {
+		return "", fmt.Errorf("parse billing tier id: %w", err)
+	}
+	current, err := queries.GetBootstrapTenantSubscription(ctx, tenantID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		const insertSQL = `
-			INSERT INTO purser.tenant_subscriptions
-				(id, tenant_id, tier_id, billing_model, status, started_at, created_at, updated_at)
-			VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 'active', NOW(), NOW(), NOW())`
-		if _, insertErr := exec.ExecContext(ctx, insertSQL, uuid.New().String(), tenantID, tierID, e.Model); insertErr != nil {
+		if insertErr := queries.InsertBootstrapTenantSubscription(ctx, purserdb.InsertBootstrapTenantSubscriptionParams{
+			ID: uuid.New(), TenantID: tenantID, TierID: tierUUID, BillingModel: e.Model,
+		}); insertErr != nil {
 			return "", fmt.Errorf("insert tenant_subscriptions: %w", insertErr)
 		}
 		return "created", nil
 	case err != nil:
 		return "", fmt.Errorf("probe tenant_subscriptions: %w", err)
 	}
-	if curTier == tierID && curModel == e.Model {
+	if current.TierID == tierUUID && current.BillingModel == e.Model {
 		return "noop", nil
 	}
-	const updateSQL = `
-		UPDATE purser.tenant_subscriptions
-		SET tier_id = $2::uuid, billing_model = $3, updated_at = NOW()
-		WHERE tenant_id = $1::uuid`
-	if _, err := exec.ExecContext(ctx, updateSQL, tenantID, tierID, e.Model); err != nil {
+	affected, err := queries.UpdateBootstrapTenantSubscription(ctx, purserdb.UpdateBootstrapTenantSubscriptionParams{
+		TierID: tierUUID, BillingModel: e.Model, TenantID: tenantID,
+	})
+	if err != nil {
 		return "", fmt.Errorf("update tenant_subscriptions: %w", err)
+	}
+	if affected != 1 {
+		return "", errors.New("update tenant_subscriptions: probed row disappeared")
 	}
 	return "updated", nil
 }
@@ -287,19 +287,19 @@ func reconcileEntitlementOverrides(ctx context.Context, exec DBTX, tenantID stri
 	if desired == nil {
 		return nil
 	}
-	const subscriptionSQL = `SELECT id::text FROM purser.tenant_subscriptions WHERE tenant_id = $1::uuid`
-	var subscriptionID string
-	if err := exec.QueryRowContext(ctx, subscriptionSQL, tenantID).Scan(&subscriptionID); err != nil {
+	queries := purserdb.New(exec)
+	subscriptionID, err := queries.GetBootstrapSubscriptionID(ctx, tenantID)
+	if err != nil {
 		return fmt.Errorf("lookup tenant subscription for entitlement overrides: %w", err)
 	}
 	if len(desired) == 0 {
-		_, err := exec.ExecContext(ctx, `DELETE FROM purser.subscription_entitlement_overrides WHERE subscription_id = $1::uuid`, subscriptionID)
+		err := queries.DeleteBootstrapEntitlementOverrides(ctx, subscriptionID)
 		if err != nil {
 			return fmt.Errorf("clear subscription entitlement overrides: %w", err)
 		}
 		return nil
 	}
-	if _, err := exec.ExecContext(ctx, `DELETE FROM purser.subscription_entitlement_overrides WHERE subscription_id = $1::uuid`, subscriptionID); err != nil {
+	if err := queries.DeleteBootstrapEntitlementOverrides(ctx, subscriptionID); err != nil {
 		return fmt.Errorf("replace subscription entitlement overrides: %w", err)
 	}
 	keys := make([]string, 0, len(desired))
@@ -313,10 +313,9 @@ func reconcileEntitlementOverrides(ctx context.Context, exec DBTX, tenantID stri
 		if err != nil {
 			return fmt.Errorf("encode entitlement override %q: %w", key, err)
 		}
-		if _, err := exec.ExecContext(ctx, `
-			INSERT INTO purser.subscription_entitlement_overrides (subscription_id, key, value)
-			VALUES ($1::uuid, $2, $3::jsonb)
-		`, subscriptionID, key, string(encoded)); err != nil {
+		if err := queries.InsertBootstrapEntitlementOverride(ctx, purserdb.InsertBootstrapEntitlementOverrideParams{
+			SubscriptionID: subscriptionID, Key: key, Value: encoded,
+		}); err != nil {
 			return fmt.Errorf("insert entitlement override %q: %w", key, err)
 		}
 	}
@@ -327,11 +326,9 @@ func reconcileEntitlementOverrides(ctx context.Context, exec DBTX, tenantID stri
 // 0-balance row at the tier currency with the same low-balance threshold the
 // runtime path uses. Idempotent via the (tenant_id, currency) UNIQUE.
 func ensurePrepaidBalance(ctx context.Context, exec DBTX, tenantID, currency string) error {
-	const insertSQL = `
-		INSERT INTO purser.prepaid_balances (id, tenant_id, balance_cents, currency, low_balance_threshold_cents, created_at, updated_at)
-		VALUES ($1::uuid, $2::uuid, 0, $3, 500, NOW(), NOW())
-		ON CONFLICT (tenant_id, currency) DO NOTHING`
-	if _, err := exec.ExecContext(ctx, insertSQL, uuid.New().String(), tenantID, currency); err != nil {
+	if err := purserdb.New(exec).EnsureBootstrapPrepaidBalance(ctx, purserdb.EnsureBootstrapPrepaidBalanceParams{
+		ID: uuid.New(), TenantID: tenantID, Currency: currency,
+	}); err != nil {
 		return fmt.Errorf("insert prepaid_balances: %w", err)
 	}
 	return nil
@@ -354,27 +351,17 @@ func eligibleClusters(ctx context.Context, exec DBTX, tierLevel int32, official 
 	for id := range official {
 		idSlice = append(idSlice, id)
 	}
-	const q = `
-		SELECT cluster_id, required_tier_level
-		FROM purser.cluster_pricing
-		WHERE cluster_id = ANY($1)
-		  AND required_tier_level <= $2
-		  AND (allow_free_tier = true OR $2 > 0)
-		ORDER BY required_tier_level DESC`
-	rows, err := exec.QueryContext(ctx, q, pq.Array(idSlice), tierLevel)
+	rows, err := purserdb.New(exec).ListBootstrapEligibleClusters(ctx, purserdb.ListBootstrapEligibleClustersParams{
+		ClusterIds: idSlice, TierLevel: tierLevel,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("query eligible clusters: %w", err)
 	}
-	defer rows.Close() //nolint:errcheck
-	var out []eligibleCluster
-	for rows.Next() {
-		var ec eligibleCluster
-		if scanErr := rows.Scan(&ec.ID, &ec.RequiredLevel); scanErr != nil {
-			return nil, fmt.Errorf("scan eligible cluster: %w", scanErr)
-		}
-		out = append(out, ec)
+	out := make([]eligibleCluster, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, eligibleCluster{ID: row.ClusterID, RequiredLevel: row.RequiredTierLevel})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // pickPrimary picks the highest-tier-level cluster as the tenant's primary,

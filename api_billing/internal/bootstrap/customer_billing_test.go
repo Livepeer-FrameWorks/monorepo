@@ -48,7 +48,7 @@ func TestReconcileCustomerBilling_PlatformOfficialIntersection(t *testing.T) {
 	tierUUID := "22222222-2222-2222-2222-222222222222"
 
 	// Tier resolution.
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id::text, tier_level, currency FROM purser.billing_tiers WHERE tier_name = $1")).
+	mock.ExpectQuery(`SELECT id, COALESCE\(tier_level, 0\)::integer AS tier_level, currency[\s\S]+FROM purser\.billing_tiers[\s\S]+WHERE tier_name = \$1`).
 		WithArgs("starter").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "currency"}).AddRow(tierUUID, int32(1), "EUR"))
 
@@ -143,7 +143,7 @@ func TestReconcileCustomerBilling_ClusterAccessNone(t *testing.T) {
 	tenantUUID := "11111111-1111-1111-1111-111111111111"
 	tierUUID := "22222222-2222-2222-2222-222222222222"
 
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id::text, tier_level, currency FROM purser.billing_tiers WHERE tier_name = $1")).
+	mock.ExpectQuery(`SELECT id, COALESCE\(tier_level, 0\)::integer AS tier_level, currency[\s\S]+FROM purser\.billing_tiers[\s\S]+WHERE tier_name = \$1`).
 		WithArgs("enterprise").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "currency"}).AddRow(tierUUID, int32(5), "EUR"))
 	mock.ExpectQuery(regexp.QuoteMeta("FROM purser.tenant_subscriptions")).
@@ -188,23 +188,23 @@ func TestReconcileCustomerBilling_EntitlementOverrides(t *testing.T) {
 	tierUUID := "22222222-2222-2222-2222-222222222222"
 	subscriptionUUID := "33333333-3333-3333-3333-333333333333"
 
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id::text, tier_level, currency FROM purser.billing_tiers WHERE tier_name = $1")).
+	mock.ExpectQuery(`SELECT id, COALESCE\(tier_level, 0\)::integer AS tier_level, currency[\s\S]+FROM purser\.billing_tiers[\s\S]+WHERE tier_name = \$1`).
 		WithArgs("free").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "currency"}).AddRow(tierUUID, int32(1), "EUR"))
 	mock.ExpectQuery(regexp.QuoteMeta("FROM purser.tenant_subscriptions")).
 		WithArgs(tenantUUID).
 		WillReturnRows(sqlmock.NewRows([]string{"tier_id", "billing_model"}).AddRow(tierUUID, "postpaid"))
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id::text FROM purser.tenant_subscriptions WHERE tenant_id = $1::uuid")).
+	mock.ExpectQuery(`SELECT id[\s\S]+FROM purser\.tenant_subscriptions[\s\S]+WHERE tenant_id = \$1::text::uuid`).
 		WithArgs(tenantUUID).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(subscriptionUUID))
 	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM purser.subscription_entitlement_overrides")).
 		WithArgs(subscriptionUUID).
 		WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO purser.subscription_entitlement_overrides")).
-		WithArgs(subscriptionUUID, "max_concurrent_streams", "0").
+		WithArgs(subscriptionUUID, "max_concurrent_streams", []byte("0")).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO purser.subscription_entitlement_overrides")).
-		WithArgs(subscriptionUUID, "max_concurrent_viewers", "0").
+		WithArgs(subscriptionUUID, "max_concurrent_viewers", []byte("0")).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	qm := &fakeQM{tenantUUIDs: map[string]string{"frameworks": tenantUUID}}

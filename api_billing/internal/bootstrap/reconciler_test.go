@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"regexp"
 	"testing"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
@@ -289,14 +288,14 @@ func TestReconcileBillingTierCatalogCreatesNewTiers(t *testing.T) {
 	for i, tier := range tiers {
 		fakeID := []string{"00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002"}[i]
 
-		mock.ExpectQuery(regexp.QuoteMeta(`SELECT id FROM purser.billing_tiers WHERE tier_name = $1`)).
+		mock.ExpectQuery(`SELECT id\s+FROM purser\.billing_tiers\s+WHERE tier_name = \$1`).
 			WithArgs(tier.TierName).
 			WillReturnError(sql.ErrNoRows)
 		mock.ExpectQuery(`INSERT INTO purser\.billing_tiers`).
 			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(fakeID))
 
 		// Entitlements: SELECT current → empty; INSERT each desired; no DELETE.
-		mock.ExpectQuery(regexp.QuoteMeta(`SELECT key, value::text FROM purser.tier_entitlements WHERE tier_id = $1`)).
+		mock.ExpectQuery(`SELECT key, value\s+FROM purser\.tier_entitlements\s+WHERE tier_id = \$1`).
 			WithArgs(fakeID).
 			WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
 		for range tier.Entitlements {
@@ -305,7 +304,7 @@ func TestReconcileBillingTierCatalogCreatesNewTiers(t *testing.T) {
 		}
 
 		// Pricing rules: SELECT current → empty; INSERT each desired.
-		mock.ExpectQuery(regexp.QuoteMeta(`SELECT meter, model, currency, included_quantity::text, unit_price::text, config::text`)).
+		mock.ExpectQuery(`SELECT meter, model, currency, included_quantity::text AS included_quantity,\s+unit_price::text AS unit_price, config`).
 			WithArgs(fakeID).
 			WillReturnRows(sqlmock.NewRows([]string{"meter", "model", "currency", "included_quantity", "unit_price", "config"}))
 		for range tier.PricingRules {
@@ -332,7 +331,7 @@ func TestReconcileBillingTierCatalogRollsBackOnError(t *testing.T) {
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id FROM purser.billing_tiers WHERE tier_name = $1`)).
+	mock.ExpectQuery(`SELECT id\s+FROM purser\.billing_tiers\s+WHERE tier_name = \$1`).
 		WithArgs("payg").
 		WillReturnError(sql.ErrConnDone)
 

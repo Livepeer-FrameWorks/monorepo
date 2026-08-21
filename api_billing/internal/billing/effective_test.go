@@ -2,35 +2,21 @@ package billing
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
 	"frameworks/api_billing/internal/rating"
 )
 
-// fakeScan returns a scan closure that writes the given string values into the
-// destination *string pointers, mimicking sql.Rows.Scan for scanRule.
-func fakeScan(vals ...string) func(...any) error {
-	return func(dst ...any) error {
-		for i := range dst {
-			if i < len(vals) {
-				*(dst[i].(*string)) = vals[i]
-			}
-		}
-		return nil
-	}
-}
-
-// scanRule is the gate that turns a stored catalog row into a validated pricing
-// rule. The invariant (per its doc) is that a malformed row must FAIL the caller
-// rather than be silently repaired — so every parse/validation failure must
-// surface as an error, not a zero-valued rule.
-func TestScanRule(t *testing.T) {
+// parseRuleFields is the generated-row boundary that turns stored catalog
+// values into a validated pricing rule. Malformed values must fail rather than
+// being silently repaired into a zero-valued rule.
+func TestParseRuleFields(t *testing.T) {
 	t.Run("valid graduated rule", func(t *testing.T) {
-		rule, err := scanRule(fakeScan("egress_gb", "tiered_graduated", "EUR", "100", "0.05", "{}"))
+		rule, err := parseRuleFields("egress_gb", "tiered_graduated", "EUR", "100", "0.05", "{}")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -46,7 +32,7 @@ func TestScanRule(t *testing.T) {
 	})
 
 	t.Run("codec multiplier config decoded", func(t *testing.T) {
-		rule, err := scanRule(fakeScan("transcode_rendition_seconds", "dimensioned", "EUR", "0", "0.01", `{"rates":[{"selectors":{"output_codec":"h264"},"unit_price":"0.015"}]}`))
+		rule, err := parseRuleFields("transcode_rendition_seconds", "dimensioned", "EUR", "0", "0.01", `{"rates":[{"selectors":{"output_codec":"h264"},"unit_price":"0.015"}]}`)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -58,20 +44,20 @@ func TestScanRule(t *testing.T) {
 	t.Run("malformed inputs must error, not repair", func(t *testing.T) {
 		cases := []struct {
 			name string
-			scan func(...any) error
+			args [6]string
 		}{
-			{"bad included_quantity", fakeScan("egress_gb", "tiered_graduated", "EUR", "abc", "0.05", "{}")},
-			{"bad unit_price", fakeScan("egress_gb", "tiered_graduated", "EUR", "100", "xyz", "{}")},
-			{"bad config json", fakeScan("egress_gb", "tiered_graduated", "EUR", "100", "0.05", "{nope")},
+			{"bad included_quantity", [6]string{"egress_gb", "tiered_graduated", "EUR", "abc", "0.05", "{}"}},
+			{"bad unit_price", [6]string{"egress_gb", "tiered_graduated", "EUR", "100", "xyz", "{}"}},
+			{"bad config json", [6]string{"egress_gb", "tiered_graduated", "EUR", "100", "0.05", "{nope"}},
 			// Models are a CLOSED enum: an unknown model is rejected.
-			{"unknown model fails validation", fakeScan("egress_gb", "bogus_model", "EUR", "100", "0.05", "{}")},
+			{"unknown model fails validation", [6]string{"egress_gb", "bogus_model", "EUR", "100", "0.05", "{}"}},
 			// Meters are syntactically validated: bad characters are rejected.
-			{"syntactically invalid meter", fakeScan("Bad Meter!", "tiered_graduated", "EUR", "100", "0.05", "{}")},
-			{"negative unit price fails validation", fakeScan("egress_gb", "tiered_graduated", "EUR", "100", "-1", "{}")},
-			{"empty currency fails validation", fakeScan("egress_gb", "tiered_graduated", "", "100", "0.05", "{}")},
+			{"syntactically invalid meter", [6]string{"Bad Meter!", "tiered_graduated", "EUR", "100", "0.05", "{}"}},
+			{"negative unit price fails validation", [6]string{"egress_gb", "tiered_graduated", "EUR", "100", "-1", "{}"}},
+			{"empty currency fails validation", [6]string{"egress_gb", "tiered_graduated", "", "100", "0.05", "{}"}},
 		}
 		for _, tc := range cases {
-			if _, err := scanRule(tc.scan); err == nil {
+			if _, err := parseRuleFields(tc.args[0], tc.args[1], tc.args[2], tc.args[3], tc.args[4], tc.args[5]); err == nil {
 				t.Errorf("%s: expected error, got nil", tc.name)
 			}
 		}
@@ -81,15 +67,8 @@ func TestScanRule(t *testing.T) {
 	// well-formed meter name is accepted — this asymmetry with the closed Model
 	// enum is intentional.
 	t.Run("novel well-formed meter is accepted", func(t *testing.T) {
-		if _, err := scanRule(fakeScan("future_meter_v2", "all_usage", "EUR", "0", "0.01", "{}")); err != nil {
+		if _, err := parseRuleFields("future_meter_v2", "all_usage", "EUR", "0", "0.01", "{}"); err != nil {
 			t.Errorf("expected a syntactically valid meter to be accepted, got %v", err)
-		}
-	})
-
-	t.Run("scan error propagates", func(t *testing.T) {
-		boom := errors.New("scan failed")
-		if _, err := scanRule(func(...any) error { return boom }); !errors.Is(err, boom) {
-			t.Errorf("expected scan error to propagate, got %v", err)
 		}
 	})
 }
@@ -137,11 +116,11 @@ func TestApplyPricingOverrides_PartialFallbackAndAddition(t *testing.T) {
 
 	rows := overrideRows().
 		// Partial override of an existing meter: only unit_price set.
-		AddRow("egress_gb", nil, nil, nil, "0.03", nil).
+		AddRow("egress_gb", nil, nil, nil, "0.03", []byte(`{}`)).
 		// New meter not on the tier: fully specified.
-		AddRow("ingress_gb", "all_usage", "EUR", "0", "0.02", nil).
+		AddRow("ingress_gb", "all_usage", "EUR", "0", "0.02", []byte(`{}`)).
 		// Empty meter must be skipped.
-		AddRow("", nil, nil, nil, "9.99", nil)
+		AddRow("", nil, nil, nil, "9.99", []byte(`{}`))
 	mock.ExpectQuery("subscription_pricing_overrides").WithArgs("sub-1").WillReturnRows(rows)
 
 	out, err := applyPricingOverrides(context.Background(), db, "sub-1", []rating.Rule{egressBase()})
@@ -206,7 +185,7 @@ func TestApplyPricingOverrides_InvalidOverrideErrors(t *testing.T) {
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
-	rows := overrideRows().AddRow("egress_gb", nil, nil, nil, "-1", nil)
+	rows := overrideRows().AddRow("egress_gb", nil, nil, nil, "-1", []byte(`{}`))
 	mock.ExpectQuery("subscription_pricing_overrides").WithArgs("sub-1").WillReturnRows(rows)
 
 	if _, err := applyPricingOverrides(context.Background(), db, "sub-1", []rating.Rule{egressBase()}); err == nil {
@@ -271,27 +250,30 @@ func TestLoadEffectiveTier_ResolvesActiveSubscription(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectQuery("tenant_subscriptions").WithArgs("tenant-1").WillReturnRows(
+	tenantID := uuid.MustParse("41000000-0000-4000-8000-000000000001")
+	tierID := uuid.MustParse("42000000-0000-4000-8000-000000000001")
+	subscriptionID := uuid.MustParse("43000000-0000-4000-8000-000000000001")
+	mock.ExpectQuery("tenant_subscriptions").WithArgs(tenantID.String()).WillReturnRows(
 		sqlmock.NewRows([]string{"id", "tier_name", "base_price", "currency", "metering_enabled", "subscription_id"}).
-			AddRow("tier-pro", "pro", "10.00", "EUR", true, "sub-1"),
+			AddRow(tierID, "pro", "10.00", "EUR", true, subscriptionID),
 	)
-	mock.ExpectQuery("tier_pricing_rules").WithArgs("tier-pro").WillReturnRows(
+	mock.ExpectQuery("tier_pricing_rules").WithArgs(tierID.String()).WillReturnRows(
 		sqlmock.NewRows([]string{"meter", "model", "currency", "included_quantity", "unit_price", "config"}).
 			AddRow("egress_gb", "tiered_graduated", "EUR", "100", "0.05", "{}"),
 	)
-	mock.ExpectQuery("subscription_pricing_overrides").WithArgs("sub-1").WillReturnRows(overrideRows())
-	mock.ExpectQuery("tier_entitlements").WithArgs("tier-pro").WillReturnRows(
+	mock.ExpectQuery("subscription_pricing_overrides").WithArgs(subscriptionID.String()).WillReturnRows(overrideRows())
+	mock.ExpectQuery("tier_entitlements").WithArgs(tierID.String()).WillReturnRows(
 		sqlmock.NewRows([]string{"key", "value"}).AddRow("dvr_max_entries", "5"),
 	)
-	mock.ExpectQuery("subscription_entitlement_overrides").WithArgs("sub-1").WillReturnRows(
+	mock.ExpectQuery("subscription_entitlement_overrides").WithArgs(subscriptionID.String()).WillReturnRows(
 		sqlmock.NewRows([]string{"key", "value"}),
 	)
 
-	eff, err := LoadEffectiveTier(context.Background(), db, "tenant-1")
+	eff, err := LoadEffectiveTier(context.Background(), db, tenantID.String())
 	if err != nil {
 		t.Fatalf("LoadEffectiveTier: %v", err)
 	}
-	if eff.TierID != "tier-pro" || eff.TierName != "pro" || eff.Currency != "EUR" || !eff.MeteringEnabled {
+	if eff.TierID != tierID.String() || eff.TierName != "pro" || eff.Currency != "EUR" || !eff.MeteringEnabled {
 		t.Errorf("tier fields wrong: %+v", eff)
 	}
 	if !eff.BasePrice.Equal(decimal.RequireFromString("10.00")) {

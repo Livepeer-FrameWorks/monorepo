@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"frameworks/api_billing/internal/database/purserdb"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -71,19 +72,13 @@ func ValidatePlatformOfficialPricingCoverage(
 }
 
 func loadPricedClusterIDs(ctx context.Context, db *sql.DB) (map[string]bool, error) {
-	rows, err := db.QueryContext(ctx, `SELECT cluster_id FROM purser.cluster_pricing`)
+	ids, err := purserdb.New(db).ListBootstrapPricedClusterIDs(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("load cluster_pricing ids: %w", err)
 	}
-	defer rows.Close() //nolint:errcheck // read-only
-
-	out := map[string]bool{}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan cluster_pricing id: %w", err)
-		}
+	out := make(map[string]bool, len(ids))
+	for _, id := range ids {
 		out[id] = true
 	}
-	return out, rows.Err()
+	return out, nil
 }

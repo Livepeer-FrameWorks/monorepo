@@ -14,8 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lib/pq"
-
+	"frameworks/api_billing/internal/database/purserdb"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
@@ -112,18 +111,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, tenantID string, tierLevel i
 		idSlice = append(idSlice, id)
 	}
 
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT cluster_id, required_tier_level
-		FROM purser.cluster_pricing
-		WHERE cluster_id = ANY($1)
-		  AND required_tier_level <= $2
-		  AND (allow_free_tier = true OR $2 > 0)
-		ORDER BY required_tier_level DESC, cluster_id ASC
-	`, pq.Array(idSlice), tierLevel)
+	rows, err := purserdb.New(r.db).ListEligibleOfficialClusters(ctx, purserdb.ListEligibleOfficialClustersParams{
+		ClusterIds: idSlice, TierLevel: tierLevel,
+	})
 	if err != nil {
 		return nil, "", fmt.Errorf("query eligible clusters: %w", err)
 	}
-	defer rows.Close()
 
 	type eligibleEntry struct {
 		clusterID string
@@ -133,11 +126,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, tenantID string, tierLevel i
 	eligibleSet := make(map[string]struct{})
 	var bestLevel int32 = -1
 	var topLevelCandidates []string
-	for rows.Next() {
-		var entry eligibleEntry
-		if err := rows.Scan(&entry.clusterID, &entry.reqLevel); err != nil {
-			return nil, "", fmt.Errorf("scan cluster row: %w", err)
-		}
+	for _, row := range rows {
+		entry := eligibleEntry{clusterID: row.ClusterID, reqLevel: row.RequiredTierLevel.Int32}
 		eligible = append(eligible, entry)
 		eligibleSet[entry.clusterID] = struct{}{}
 		eligibleClusterIDs = append(eligibleClusterIDs, entry.clusterID)
@@ -149,10 +139,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, tenantID string, tierLevel i
 			topLevelCandidates = append(topLevelCandidates, entry.clusterID)
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return nil, "", fmt.Errorf("iterate cluster rows: %w", err)
-	}
-
 	currentActive := make(map[string]struct{})
 	currentPrimary := ""
 	if resp, listErr := r.qm.ListTenantClusterAccess(ctx, tenantID); listErr != nil {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/api_billing/internal/database/purserdb"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -237,48 +238,29 @@ type historyRow struct {
 // loadHistoryRow fetches the pricing config effective at asOf. Returns
 // (nil, nil) when no row exists for the cluster.
 func loadHistoryRow(ctx context.Context, db *sql.DB, clusterID string, asOf time.Time) (*historyRow, error) {
-	const q = `
-		SELECT version_id, pricing_model, currency, base_price::text, metered_rates::text
-		FROM purser.cluster_pricing_history
-		WHERE cluster_id = $1
-		  AND effective_from <= $2
-		  AND (effective_to IS NULL OR effective_to > $2)
-		ORDER BY effective_from DESC
-		LIMIT 1
-	`
-	var (
-		versionStr   string
-		modelStr     string
-		currency     sql.NullString
-		basePriceStr string
-		ratesStr     sql.NullString
-	)
-	err := db.QueryRowContext(ctx, q, clusterID, asOf).Scan(&versionStr, &modelStr, &currency, &basePriceStr, &ratesStr)
+	row, err := purserdb.New(db).LoadClusterPricingHistory(ctx, purserdb.LoadClusterPricingHistoryParams{
+		ClusterID:     clusterID,
+		EffectiveFrom: asOf,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	versionID, err := uuid.Parse(versionStr)
+	bp, err := decimal.NewFromString(row.BasePrice)
 	if err != nil {
-		return nil, fmt.Errorf("parse version_id %q: %w", versionStr, err)
-	}
-	bp, err := decimal.NewFromString(basePriceStr)
-	if err != nil {
-		return nil, fmt.Errorf("parse base_price %q: %w", basePriceStr, err)
+		return nil, fmt.Errorf("parse base_price %q: %w", row.BasePrice, err)
 	}
 	out := &historyRow{
-		VersionID: versionID,
-		Model:     Model(modelStr),
+		VersionID: row.VersionID,
+		Model:     Model(row.PricingModel),
 		BasePrice: bp,
 	}
-	if currency.Valid {
-		out.Currency = currency.String
-	}
-	if ratesStr.Valid && ratesStr.String != "" && ratesStr.String != "{}" {
+	out.Currency = row.Currency
+	if row.MeteredRates != "" && row.MeteredRates != "{}" {
 		var rates map[string]any
-		if err := json.Unmarshal([]byte(ratesStr.String), &rates); err != nil {
+		if err := json.Unmarshal([]byte(row.MeteredRates), &rates); err != nil {
 			return nil, fmt.Errorf("parse metered_rates: %w", err)
 		}
 		out.MeteredRates = rates

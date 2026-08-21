@@ -9,10 +9,11 @@ import (
 	"reflect"
 	"sort"
 
+	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/rating"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
 // Result describes what a reconciler did per row. Returned aggregated so callers
@@ -89,12 +90,10 @@ func upsertBillingTier(ctx context.Context, exec DBTX, t CatalogTier) (string, e
 		return "", fmt.Errorf("features: %w", err)
 	}
 
-	var tierID string
+	queries := purserdb.New(exec)
+	var tierID uuid.UUID
 	var existed bool
-	probeErr := exec.QueryRowContext(ctx,
-		`SELECT id FROM purser.billing_tiers WHERE tier_name = $1`,
-		t.TierName,
-	).Scan(&tierID)
+	tierID, probeErr := queries.GetBootstrapTierID(ctx, t.TierName)
 	switch {
 	case probeErr == nil:
 		existed = true
@@ -107,115 +106,42 @@ func upsertBillingTier(ctx context.Context, exec DBTX, t CatalogTier) (string, e
 	tierAction := "noop"
 
 	if !existed {
-		const insertSQL = `
-			INSERT INTO purser.billing_tiers (
-				tier_name, display_name, description,
-				base_price, currency, billing_period,
-				features, support_level, sla_level,
-				metering_enabled,
-				tier_level, is_enterprise,
-				is_default_prepaid, is_default_postpaid,
-				processes_live, processes_dvr, processes_clip, processes_dvr_finalize, processes_vod
-			) VALUES (
-				$1, $2, $3,
-				$4, $5, $6,
-				$7, $8, $9,
-				$10,
-				$11, $12,
-				$13, $14,
-				$15, $16, $17, $18, $19
-			) RETURNING id`
-		if insertErr := exec.QueryRowContext(ctx, insertSQL,
-			t.TierName, t.DisplayName, t.Description,
-			t.BasePrice, t.Currency, defaultPeriod(t.BillingPeriod),
-			database.JSONText(features), t.SupportLevel, t.SLALevel,
-			t.MeteringEnabled,
-			t.TierLevel, t.IsEnterprise,
-			t.IsDefaultPrepaid, t.IsDefaultPostpaid,
-			processOrEmpty(t.ProcessesLive), processOrEmpty(t.ProcessesDVR), processOrEmpty(t.ProcessesClip), processOrEmpty(t.ProcessesDVRFinalize), processOrEmpty(t.ProcessesVOD),
-		).Scan(&tierID); insertErr != nil {
-			return "", insertErr
+		tierID, err = queries.InsertBootstrapBillingTier(ctx, purserdb.InsertBootstrapBillingTierParams{
+			TierName: t.TierName, DisplayName: t.DisplayName, Description: t.Description,
+			BasePrice: moneyText(t.BasePrice), Currency: t.Currency, BillingPeriod: defaultPeriod(t.BillingPeriod),
+			Features: features, SupportLevel: t.SupportLevel, SlaLevel: t.SLALevel,
+			MeteringEnabled: t.MeteringEnabled, TierLevel: int32(t.TierLevel), IsEnterprise: t.IsEnterprise,
+			IsDefaultPrepaid: t.IsDefaultPrepaid, IsDefaultPostpaid: t.IsDefaultPostpaid,
+			ProcessesLive: processOrEmpty(t.ProcessesLive), ProcessesDvr: processOrEmpty(t.ProcessesDVR),
+			ProcessesClip: processOrEmpty(t.ProcessesClip), ProcessesDvrFinalize: processOrEmpty(t.ProcessesDVRFinalize),
+			ProcessesVod: processOrEmpty(t.ProcessesVOD),
+		})
+		if err != nil {
+			return "", err
 		}
 		tierAction = "created"
 	} else {
-		// Compare current row to desired; UPDATE when drift.
-		const compareSQL = `
-			SELECT
-				display_name, description, base_price::text, currency, billing_period,
-				features::text, support_level, sla_level,
-				metering_enabled,
-				tier_level, is_enterprise,
-				is_default_prepaid, is_default_postpaid,
-				processes_live::text, processes_dvr::text, processes_clip::text, processes_dvr_finalize::text, processes_vod::text
-			FROM purser.billing_tiers
-			WHERE tier_name = $1`
-		var (
-			curDisplay, curDesc, curBase, curCurr, curPeriod                  string
-			curFeat, curSupport, curSLA                                       string
-			curMetering, curEnterprise, curDefaultPrepaid, curDefaultPostpaid bool
-			curTierLvl                                                        int
-			curLive, curDVR, curClip, curDVRFinalize, curVOD                  string
-		)
-		if scanErr := exec.QueryRowContext(ctx, compareSQL, t.TierName).Scan(
-			&curDisplay, &curDesc, &curBase, &curCurr, &curPeriod,
-			&curFeat, &curSupport, &curSLA,
-			&curMetering,
-			&curTierLvl, &curEnterprise,
-			&curDefaultPrepaid, &curDefaultPostpaid,
-			&curLive, &curDVR, &curClip, &curDVRFinalize, &curVOD,
-		); scanErr != nil {
-			return "", fmt.Errorf("compare row: %w", scanErr)
+		current, getErr := queries.GetBootstrapBillingTierState(ctx, t.TierName)
+		if getErr != nil {
+			return "", fmt.Errorf("compare row: %w", getErr)
 		}
 
-		if !(curDisplay == t.DisplayName &&
-			curDesc == t.Description &&
-			moneyEq(curBase, t.BasePrice) &&
-			curCurr == t.Currency &&
-			curPeriod == defaultPeriod(t.BillingPeriod) &&
-			jsonEq(curFeat, features) &&
-			curSupport == t.SupportLevel &&
-			curSLA == t.SLALevel &&
-			curMetering == t.MeteringEnabled &&
-			curTierLvl == t.TierLevel &&
-			curEnterprise == t.IsEnterprise &&
-			curDefaultPrepaid == t.IsDefaultPrepaid &&
-			curDefaultPostpaid == t.IsDefaultPostpaid &&
-			jsonEq(curLive, []byte(processOrEmpty(t.ProcessesLive))) &&
-			jsonEq(curDVR, []byte(processOrEmpty(t.ProcessesDVR))) &&
-			jsonEq(curClip, []byte(processOrEmpty(t.ProcessesClip))) &&
-			jsonEq(curDVRFinalize, []byte(processOrEmpty(t.ProcessesDVRFinalize))) &&
-			jsonEq(curVOD, []byte(processOrEmpty(t.ProcessesVOD)))) {
-			const updateSQL = `
-				UPDATE purser.billing_tiers SET
-					display_name = $2,
-					description = $3,
-					base_price = $4,
-					currency = $5,
-					billing_period = $6,
-					features = $7,
-					support_level = $8,
-					sla_level = $9,
-					metering_enabled = $10,
-					tier_level = $11,
-					is_enterprise = $12,
-					is_default_prepaid = $13,
-					is_default_postpaid = $14,
-					processes_live = $15,
-					processes_dvr = $16,
-					processes_clip = $17,
-					processes_dvr_finalize = $18,
-					processes_vod = $19
-				WHERE tier_name = $1`
-			if _, updateErr := exec.ExecContext(ctx, updateSQL,
-				t.TierName, t.DisplayName, t.Description,
-				t.BasePrice, t.Currency, defaultPeriod(t.BillingPeriod),
-				database.JSONText(features), t.SupportLevel, t.SLALevel,
-				t.MeteringEnabled,
-				t.TierLevel, t.IsEnterprise,
-				t.IsDefaultPrepaid, t.IsDefaultPostpaid,
-				processOrEmpty(t.ProcessesLive), processOrEmpty(t.ProcessesDVR), processOrEmpty(t.ProcessesClip), processOrEmpty(t.ProcessesDVRFinalize), processOrEmpty(t.ProcessesVOD),
-			); updateErr != nil {
+		if !billingTierMatches(current, t, features) {
+			rows, updateErr := queries.UpdateBootstrapBillingTier(ctx, purserdb.UpdateBootstrapBillingTierParams{
+				DisplayName: t.DisplayName, Description: t.Description, BasePrice: moneyText(t.BasePrice),
+				Currency: t.Currency, BillingPeriod: defaultPeriod(t.BillingPeriod), Features: features,
+				SupportLevel: t.SupportLevel, SlaLevel: t.SLALevel, MeteringEnabled: t.MeteringEnabled,
+				TierLevel: int32(t.TierLevel), IsEnterprise: t.IsEnterprise,
+				IsDefaultPrepaid: t.IsDefaultPrepaid, IsDefaultPostpaid: t.IsDefaultPostpaid,
+				ProcessesLive: processOrEmpty(t.ProcessesLive), ProcessesDvr: processOrEmpty(t.ProcessesDVR),
+				ProcessesClip: processOrEmpty(t.ProcessesClip), ProcessesDvrFinalize: processOrEmpty(t.ProcessesDVRFinalize),
+				ProcessesVod: processOrEmpty(t.ProcessesVOD), TierName: t.TierName,
+			})
+			if updateErr != nil {
 				return "", updateErr
+			}
+			if rows != 1 {
+				return "", fmt.Errorf("update tier affected %d rows", rows)
 			}
 			tierAction = "updated"
 		}
@@ -239,9 +165,30 @@ func upsertBillingTier(ctx context.Context, exec DBTX, t CatalogTier) (string, e
 	return "noop", nil
 }
 
+func billingTierMatches(current purserdb.GetBootstrapBillingTierStateRow, desired CatalogTier, features []byte) bool {
+	return current.DisplayName == desired.DisplayName &&
+		current.Description == desired.Description &&
+		moneyEq(current.BasePrice, desired.BasePrice) &&
+		current.Currency == desired.Currency &&
+		current.BillingPeriod == defaultPeriod(desired.BillingPeriod) &&
+		jsonEq(string(current.Features), features) &&
+		current.SupportLevel == desired.SupportLevel &&
+		current.SlaLevel == desired.SLALevel &&
+		current.MeteringEnabled == desired.MeteringEnabled &&
+		current.TierLevel == int32(desired.TierLevel) &&
+		current.IsEnterprise == desired.IsEnterprise &&
+		current.IsDefaultPrepaid == desired.IsDefaultPrepaid &&
+		current.IsDefaultPostpaid == desired.IsDefaultPostpaid &&
+		jsonEq(string(current.ProcessesLive), []byte(processOrEmpty(desired.ProcessesLive))) &&
+		jsonEq(string(current.ProcessesDvr), []byte(processOrEmpty(desired.ProcessesDVR))) &&
+		jsonEq(string(current.ProcessesClip), []byte(processOrEmpty(desired.ProcessesClip))) &&
+		jsonEq(string(current.ProcessesDvrFinalize), []byte(processOrEmpty(desired.ProcessesDVRFinalize))) &&
+		jsonEq(string(current.ProcessesVod), []byte(processOrEmpty(desired.ProcessesVOD)))
+}
+
 // reconcileTierEntitlements ensures (tier_id, key) rows match the desired map.
 // Returns "updated" if any row was inserted, updated, or removed, else "noop".
-func reconcileTierEntitlements(ctx context.Context, exec DBTX, tierID string, desired map[string]any) (string, error) {
+func reconcileTierEntitlements(ctx context.Context, exec DBTX, tierID uuid.UUID, desired map[string]any) (string, error) {
 	current := map[string]string{}
 	if err := scanEntitlementRows(ctx, exec, tierID, current); err != nil {
 		return "", err
@@ -265,12 +212,9 @@ func reconcileTierEntitlements(ctx context.Context, exec DBTX, tierID string, de
 		if ok && jsonEq(cur, buf) {
 			continue
 		}
-		if _, err := exec.ExecContext(ctx,
-			`INSERT INTO purser.tier_entitlements (tier_id, key, value)
-			 VALUES ($1, $2, $3::jsonb)
-			 ON CONFLICT (tier_id, key) DO UPDATE SET value = EXCLUDED.value`,
-			tierID, k, string(buf),
-		); err != nil {
+		if err := purserdb.New(exec).UpsertBootstrapTierEntitlement(ctx, purserdb.UpsertBootstrapTierEntitlementParams{
+			TierID: tierID, Key: k, Value: buf,
+		}); err != nil {
 			return "", err
 		}
 		changed = true
@@ -279,10 +223,9 @@ func reconcileTierEntitlements(ctx context.Context, exec DBTX, tierID string, de
 		if _, ok := desiredJSON[k]; ok {
 			continue
 		}
-		if _, err := exec.ExecContext(ctx,
-			`DELETE FROM purser.tier_entitlements WHERE tier_id = $1 AND key = $2`,
-			tierID, k,
-		); err != nil {
+		if err := purserdb.New(exec).DeleteBootstrapTierEntitlement(ctx, purserdb.DeleteBootstrapTierEntitlementParams{
+			TierID: tierID, Key: k,
+		}); err != nil {
 			return "", err
 		}
 		changed = true
@@ -304,7 +247,7 @@ type currentRow struct {
 
 // reconcileTierPricingRules ensures the (tier_id, meter) rows match the desired
 // rules. The currency on each rule defaults to the tier's currency.
-func reconcileTierPricingRules(ctx context.Context, exec DBTX, tierID, tierCurrency string, desired []CatalogPricingRule) (string, error) {
+func reconcileTierPricingRules(ctx context.Context, exec DBTX, tierID uuid.UUID, tierCurrency string, desired []CatalogPricingRule) (string, error) {
 	current := map[string]currentRow{}
 	if err := scanPricingRuleRows(ctx, exec, tierID, current); err != nil {
 		return "", err
@@ -346,19 +289,10 @@ func reconcileTierPricingRules(ctx context.Context, exec DBTX, tierID, tierCurre
 				continue
 			}
 		}
-		if _, err := exec.ExecContext(ctx,
-			`INSERT INTO purser.tier_pricing_rules
-			   (tier_id, meter, model, currency, included_quantity, unit_price, config)
-			 VALUES ($1, $2, $3, $4, $5::numeric, $6::numeric, $7::jsonb)
-			 ON CONFLICT (tier_id, meter) DO UPDATE SET
-			   model = EXCLUDED.model,
-			   currency = EXCLUDED.currency,
-			   included_quantity = EXCLUDED.included_quantity,
-			   unit_price = EXCLUDED.unit_price,
-			   config = EXCLUDED.config`,
-			tierID, meter, rule.Model, ruleCurrency,
-			fmtQuantity(rule.IncludedQuantity), rule.UnitPrice, string(configBytes),
-		); err != nil {
+		if err := purserdb.New(exec).UpsertBootstrapTierPricingRule(ctx, purserdb.UpsertBootstrapTierPricingRuleParams{
+			TierID: tierID, Meter: meter, Model: rule.Model, Currency: ruleCurrency,
+			IncludedQuantity: fmtQuantity(rule.IncludedQuantity), UnitPrice: rule.UnitPrice, Config: configBytes,
+		}); err != nil {
 			return "", err
 		}
 		changed = true
@@ -368,10 +302,9 @@ func reconcileTierPricingRules(ctx context.Context, exec DBTX, tierID, tierCurre
 		if _, ok := desiredByMeter[meter]; ok {
 			continue
 		}
-		if _, err := exec.ExecContext(ctx,
-			`DELETE FROM purser.tier_pricing_rules WHERE tier_id = $1 AND meter = $2`,
-			tierID, meter,
-		); err != nil {
+		if err := purserdb.New(exec).DeleteBootstrapTierPricingRule(ctx, purserdb.DeleteBootstrapTierPricingRuleParams{
+			TierID: tierID, Meter: meter,
+		}); err != nil {
 			return "", err
 		}
 		changed = true
@@ -415,40 +348,30 @@ func validateCatalogPricingRule(rule CatalogPricingRule, tierCurrency string) er
 
 // scanEntitlementRows reads entitlement values as canonical JSON text so catalog
 // reconciliation can compare serialized values without reparsing each row.
-func scanEntitlementRows(ctx context.Context, exec DBTX, tierID string, out map[string]string) error {
-	rows, err := exec.QueryContext(ctx, `SELECT key, value::text FROM purser.tier_entitlements WHERE tier_id = $1`, tierID)
+func scanEntitlementRows(ctx context.Context, exec DBTX, tierID uuid.UUID, out map[string]string) error {
+	rows, err := purserdb.New(exec).ListBootstrapTierEntitlements(ctx, tierID)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var k, v string
-		if err := rows.Scan(&k, &v); err != nil {
-			return err
-		}
-		out[k] = v
+	for _, row := range rows {
+		out[row.Key] = string(row.Value)
 	}
-	return rows.Err()
+	return nil
 }
 
 // scanPricingRuleRows reads tier_pricing_rules into out keyed by meter.
-func scanPricingRuleRows(ctx context.Context, exec DBTX, tierID string, out map[string]currentRow) error {
-	rows, err := exec.QueryContext(ctx,
-		`SELECT meter, model, currency, included_quantity::text, unit_price::text, config::text
-		   FROM purser.tier_pricing_rules WHERE tier_id = $1`, tierID)
+func scanPricingRuleRows(ctx context.Context, exec DBTX, tierID uuid.UUID, out map[string]currentRow) error {
+	rows, err := purserdb.New(exec).ListBootstrapTierPricingRules(ctx, tierID)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var meter string
-		var r currentRow
-		if err := rows.Scan(&meter, &r.model, &r.currency, &r.includedQuantity, &r.unitPrice, &r.configJSON); err != nil {
-			return err
+	for _, row := range rows {
+		out[row.Meter] = currentRow{
+			model: row.Model, currency: row.Currency, includedQuantity: row.IncludedQuantity,
+			unitPrice: row.UnitPrice, configJSON: string(row.Config),
 		}
-		out[meter] = r
 	}
-	return rows.Err()
+	return nil
 }
 
 func defaultPeriod(p string) string {

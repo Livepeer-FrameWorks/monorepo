@@ -7,7 +7,10 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/google/uuid"
 )
+
+var scannerTierID = uuid.MustParse("00000000-0000-0000-0000-000000000001")
 
 // scanEntitlementRows reads tier_entitlements into a key→json-text map. The map
 // is keyed by entitlement key so catalog diffing compares serialized values
@@ -20,13 +23,13 @@ func TestScanEntitlementRows(t *testing.T) {
 		}
 		defer db.Close()
 		mock.ExpectQuery(`FROM purser\.tier_entitlements WHERE tier_id = \$1`).
-			WithArgs("tier-1").
+			WithArgs(scannerTierID).
 			WillReturnRows(sqlmock.NewRows([]string{"key", "value"}).
-				AddRow("recording_retention_days", "30").
-				AddRow("max_concurrent_streams", "5"))
+				AddRow("recording_retention_days", []byte("30")).
+				AddRow("max_concurrent_streams", []byte("5")))
 
 		out := map[string]string{}
-		if err := scanEntitlementRows(context.Background(), db, "tier-1", out); err != nil {
+		if err := scanEntitlementRows(context.Background(), db, scannerTierID, out); err != nil {
 			t.Fatalf("scanEntitlementRows: %v", err)
 		}
 		if out["recording_retention_days"] != "30" || out["max_concurrent_streams"] != "5" {
@@ -41,7 +44,7 @@ func TestScanEntitlementRows(t *testing.T) {
 		}
 		defer db.Close()
 		mock.ExpectQuery(`FROM purser\.tier_entitlements`).WillReturnError(errors.New("boom"))
-		if err := scanEntitlementRows(context.Background(), db, "tier-1", map[string]string{}); err == nil {
+		if err := scanEntitlementRows(context.Background(), db, scannerTierID, map[string]string{}); err == nil {
 			t.Fatal("expected query error, got nil")
 		}
 	})
@@ -57,12 +60,12 @@ func TestScanPricingRuleRows(t *testing.T) {
 		}
 		defer db.Close()
 		mock.ExpectQuery(`FROM purser\.tier_pricing_rules WHERE tier_id = \$1`).
-			WithArgs("tier-1").
+			WithArgs(scannerTierID).
 			WillReturnRows(sqlmock.NewRows([]string{"meter", "model", "currency", "included_quantity", "unit_price", "config"}).
-				AddRow("delivered_minutes", "tiered_graduated", "EUR", "0.000000", "0.00055", "{}"))
+				AddRow("delivered_minutes", "tiered_graduated", "EUR", "0.000000", "0.00055", []byte("{}")))
 
 		out := map[string]currentRow{}
-		if err := scanPricingRuleRows(context.Background(), db, "tier-1", out); err != nil {
+		if err := scanPricingRuleRows(context.Background(), db, scannerTierID, out); err != nil {
 			t.Fatalf("scanPricingRuleRows: %v", err)
 		}
 		row, ok := out["delivered_minutes"]
@@ -81,7 +84,7 @@ func TestScanPricingRuleRows(t *testing.T) {
 		}
 		defer db.Close()
 		mock.ExpectQuery(`FROM purser\.tier_pricing_rules`).WillReturnError(errors.New("boom"))
-		if err := scanPricingRuleRows(context.Background(), db, "tier-1", map[string]currentRow{}); err == nil {
+		if err := scanPricingRuleRows(context.Background(), db, scannerTierID, map[string]currentRow{}); err == nil {
 			t.Fatal("expected query error, got nil")
 		}
 	})
@@ -140,15 +143,16 @@ func TestResolveTier(t *testing.T) {
 			t.Fatalf("sqlmock: %v", err)
 		}
 		defer db.Close()
-		mock.ExpectQuery(`FROM purser\.billing_tiers WHERE tier_name = \$1`).
+		tierID := "96000000-0000-4000-8000-000000000001"
+		mock.ExpectQuery(`FROM purser\.billing_tiers[\s\S]+WHERE tier_name = \$1`).
 			WithArgs("pro").
-			WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "currency"}).AddRow("tier-pro", int32(3), "USD"))
+			WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "currency"}).AddRow(tierID, int32(3), "USD"))
 
 		id, level, currency, err := resolveTier(context.Background(), db, "pro")
 		if err != nil {
 			t.Fatalf("resolveTier: %v", err)
 		}
-		if id != "tier-pro" || level != 3 || currency != "USD" {
+		if id != tierID || level != 3 || currency != "USD" {
 			t.Fatalf("resolved wrong: id=%s level=%d cur=%s", id, level, currency)
 		}
 	})
@@ -161,7 +165,7 @@ func TestResolveTier(t *testing.T) {
 		defer db.Close()
 		mock.ExpectQuery(`FROM purser\.billing_tiers`).
 			WithArgs("payg").
-			WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "currency"}).AddRow("tier-payg", int32(0), ""))
+			WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "currency"}).AddRow("96000000-0000-4000-8000-000000000002", int32(0), ""))
 
 		_, _, currency, err := resolveTier(context.Background(), db, "payg")
 		if err != nil {

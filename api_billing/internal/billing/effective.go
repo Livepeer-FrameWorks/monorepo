@@ -15,6 +15,7 @@ import (
 
 	"github.com/shopspring/decimal"
 
+	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/rating"
 )
 
@@ -50,149 +51,113 @@ func LoadEffectiveTier(ctx context.Context, db *sql.DB, tenantID string) (*Effec
 		return nil, errors.New("LoadEffectiveTier: empty tenant_id")
 	}
 
-	var (
-		tierID, tierName, currency string
-		basePrice                  string
-		meteringEnabled            bool
-		subscriptionID             sql.NullString
-	)
-	err := db.QueryRowContext(ctx, `
-		SELECT bt.id, bt.tier_name, bt.base_price::text, bt.currency, bt.metering_enabled,
-		       ts.id
-		FROM purser.tenant_subscriptions ts
-		JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
-		WHERE ts.tenant_id = $1 AND ts.status = 'active'
-		ORDER BY ts.created_at DESC
-		LIMIT 1
-	`, tenantID).Scan(&tierID, &tierName, &basePrice, &currency, &meteringEnabled, &subscriptionID)
+	row, err := purserdb.New(db).LoadActiveEffectiveTier(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
 
-	bp, err := decimal.NewFromString(basePrice)
+	bp, err := decimal.NewFromString(row.BasePrice)
 	if err != nil {
-		return nil, fmt.Errorf("parse base_price %q: %w", basePrice, err)
+		return nil, fmt.Errorf("parse base_price %q: %w", row.BasePrice, err)
 	}
 
-	rules, err := loadTierRules(ctx, db, tierID)
+	rules, err := loadTierRules(ctx, db, row.TierID.String())
 	if err != nil {
 		return nil, fmt.Errorf("load tier rules: %w", err)
 	}
-	if subscriptionID.Valid && subscriptionID.String != "" {
-		rules, err = applyPricingOverrides(ctx, db, subscriptionID.String, rules)
-		if err != nil {
-			return nil, fmt.Errorf("apply pricing overrides: %w", err)
-		}
+	rules, err = applyPricingOverrides(ctx, db, row.SubscriptionID.String(), rules)
+	if err != nil {
+		return nil, fmt.Errorf("apply pricing overrides: %w", err)
 	}
 
-	entitlements, err := loadTierEntitlements(ctx, db, tierID)
+	entitlements, err := loadTierEntitlements(ctx, db, row.TierID.String())
 	if err != nil {
 		return nil, fmt.Errorf("load entitlements: %w", err)
 	}
-	if subscriptionID.Valid && subscriptionID.String != "" {
-		entitlements, err = applyEntitlementOverrides(ctx, db, subscriptionID.String, entitlements)
-		if err != nil {
-			return nil, fmt.Errorf("apply entitlement overrides: %w", err)
-		}
+	entitlements, err = applyEntitlementOverrides(ctx, db, row.SubscriptionID.String(), entitlements)
+	if err != nil {
+		return nil, fmt.Errorf("apply entitlement overrides: %w", err)
 	}
 
 	return &EffectiveTier{
-		TierID:          tierID,
-		TierName:        tierName,
-		Currency:        currency,
+		TierID:          row.TierID.String(),
+		TierName:        row.TierName,
+		Currency:        row.Currency,
 		BasePrice:       bp,
-		MeteringEnabled: meteringEnabled,
+		MeteringEnabled: row.MeteringEnabled,
 		Rules:           rules,
 		Entitlements:    entitlements,
 	}, nil
 }
 
 func loadTierRules(ctx context.Context, db *sql.DB, tierID string) ([]rating.Rule, error) {
-	rows, err := db.QueryContext(ctx, `
-		SELECT meter, model, currency, included_quantity::text, unit_price::text, config::text
-		FROM purser.tier_pricing_rules
-		WHERE tier_id = $1
-	`, tierID)
+	rows, err := purserdb.New(db).ListTierPricingRules(ctx, tierID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var rules []rating.Rule
-	for rows.Next() {
-		r, err := scanRule(rows.Scan)
+	rules := make([]rating.Rule, 0, len(rows))
+	for _, row := range rows {
+		r, err := parseRuleFields(row.Meter, row.Model, row.Currency, row.IncludedQuantity, row.UnitPrice, row.Config)
 		if err != nil {
 			return nil, err
 		}
 		rules = append(rules, r)
 	}
-	return rules, rows.Err()
+	return rules, nil
 }
 
 func applyPricingOverrides(ctx context.Context, db *sql.DB, subscriptionID string, base []rating.Rule) ([]rating.Rule, error) {
-	rows, err := db.QueryContext(ctx, `
-		SELECT meter, model, currency, included_quantity::text, unit_price::text, config::text
-		FROM purser.subscription_pricing_overrides
-		WHERE subscription_id = $1
-	`, subscriptionID)
+	rows, err := purserdb.New(db).ListSubscriptionPricingOverrides(ctx, subscriptionID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	overrides := map[string]rating.Rule{}
-	for rows.Next() {
-		var meter, model, currency, included, unitPrice, config sql.NullString
-		if err := rows.Scan(&meter, &model, &currency, &included, &unitPrice, &config); err != nil {
-			return nil, err
-		}
-		if !meter.Valid || meter.String == "" {
+	for _, row := range rows {
+		if row.Meter == "" {
 			continue
 		}
 		// Find the base rule for this meter to fill in missing fields.
 		var baseRule rating.Rule
 		for _, r := range base {
-			if string(r.Meter) == meter.String {
+			if string(r.Meter) == row.Meter {
 				baseRule = r
 				break
 			}
 		}
 		merged := baseRule
-		merged.Meter = rating.Meter(meter.String)
-		if model.Valid && model.String != "" {
-			merged.Model = rating.Model(model.String)
+		merged.Meter = rating.Meter(row.Meter)
+		if row.Model.Valid && row.Model.String != "" {
+			merged.Model = rating.Model(row.Model.String)
 		}
-		if currency.Valid && currency.String != "" {
-			merged.Currency = currency.String
+		if row.Currency.Valid && row.Currency.String != "" {
+			merged.Currency = row.Currency.String
 		}
-		if included.Valid && included.String != "" {
-			d, err := decimal.NewFromString(included.String)
+		if row.IncludedQuantity.Valid && row.IncludedQuantity.String != "" {
+			d, err := decimal.NewFromString(row.IncludedQuantity.String)
 			if err != nil {
-				return nil, fmt.Errorf("override included_quantity for %q: %w", meter.String, err)
+				return nil, fmt.Errorf("override included_quantity for %q: %w", row.Meter, err)
 			}
 			merged.IncludedQuantity = d
 		}
-		if unitPrice.Valid && unitPrice.String != "" {
-			d, err := decimal.NewFromString(unitPrice.String)
+		if row.UnitPrice.Valid && row.UnitPrice.String != "" {
+			d, err := decimal.NewFromString(row.UnitPrice.String)
 			if err != nil {
-				return nil, fmt.Errorf("override unit_price for %q: %w", meter.String, err)
+				return nil, fmt.Errorf("override unit_price for %q: %w", row.Meter, err)
 			}
 			merged.UnitPrice = d
 		}
-		if config.Valid && config.String != "" && config.String != "{}" {
-			cfg, err := decodeJSONMap(config.String)
+		if config := string(row.Config); config != "" && config != "{}" {
+			cfg, err := decodeJSONMap(config)
 			if err != nil {
-				return nil, fmt.Errorf("override config for %q: %w", meter.String, err)
+				return nil, fmt.Errorf("override config for %q: %w", row.Meter, err)
 			}
 			merged.Config = cfg
 		}
 		if err := validateEffectiveRule(merged); err != nil {
-			return nil, fmt.Errorf("pricing override for %q: %w", meter.String, err)
+			return nil, fmt.Errorf("pricing override for %q: %w", row.Meter, err)
 		}
-		overrides[meter.String] = merged
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+		overrides[row.Meter] = merged
 	}
 
 	out := make([]rating.Rule, 0, len(base)+len(overrides))
@@ -216,48 +181,31 @@ func applyPricingOverrides(ctx context.Context, db *sql.DB, subscriptionID strin
 }
 
 func loadTierEntitlements(ctx context.Context, db *sql.DB, tierID string) (map[string]string, error) {
-	rows, err := db.QueryContext(ctx, `SELECT key, value::text FROM purser.tier_entitlements WHERE tier_id = $1`, tierID)
+	rows, err := purserdb.New(db).ListTierEntitlements(ctx, tierID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := map[string]string{}
-	for rows.Next() {
-		var k, v string
-		if err := rows.Scan(&k, &v); err != nil {
-			return nil, err
-		}
-		out[k] = v
+	out := make(map[string]string, len(rows))
+	for _, row := range rows {
+		out[row.Key] = row.Value
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func applyEntitlementOverrides(ctx context.Context, db *sql.DB, subscriptionID string, base map[string]string) (map[string]string, error) {
-	rows, err := db.QueryContext(ctx, `SELECT key, value::text FROM purser.subscription_entitlement_overrides WHERE subscription_id = $1`, subscriptionID)
+	rows, err := purserdb.New(db).ListSubscriptionEntitlementOverrides(ctx, subscriptionID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	out := make(map[string]string, len(base))
 	maps.Copy(out, base)
-	for rows.Next() {
-		var k, v string
-		if err := rows.Scan(&k, &v); err != nil {
-			return nil, err
-		}
-		out[k] = v
+	for _, row := range rows {
+		out[row.Key] = row.Value
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
-// scanRule reads one purser.tier_pricing_rules row and validates the rule exactly
-// as stored. Malformed catalog rows must fail the caller instead of being repaired
-// at read time.
-func scanRule(scan func(...any) error) (rating.Rule, error) {
-	var meter, model, currency, included, unitPrice, config string
-	if err := scan(&meter, &model, &currency, &included, &unitPrice, &config); err != nil {
-		return rating.Rule{}, err
-	}
+func parseRuleFields(meter, model, currency, included, unitPrice, config string) (rating.Rule, error) {
 	includedDec, err := decimal.NewFromString(included)
 	if err != nil {
 		return rating.Rule{}, fmt.Errorf("included_quantity %q: %w", included, err)

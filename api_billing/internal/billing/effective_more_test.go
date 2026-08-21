@@ -28,7 +28,7 @@ func TestApplyPricingOverrides_EmptyIncludedFallsBackNoError(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := overrideRows().AddRow("egress_gb", nil, nil, "", "0.03", nil)
+	rows := overrideRows().AddRow("egress_gb", nil, nil, "", "0.03", []byte(`{}`))
 	mock.ExpectQuery("subscription_pricing_overrides").WithArgs("sub-1").WillReturnRows(rows)
 
 	out, err := applyPricingOverrides(context.Background(), db, "sub-1", []rating.Rule{egressBase()})
@@ -55,7 +55,7 @@ func TestApplyPricingOverrides_SetIncludedApplies(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := overrideRows().AddRow("egress_gb", nil, nil, "250", nil, nil)
+	rows := overrideRows().AddRow("egress_gb", nil, nil, "250", nil, []byte(`{}`))
 	mock.ExpectQuery("subscription_pricing_overrides").WithArgs("sub-1").WillReturnRows(rows)
 
 	out, err := applyPricingOverrides(context.Background(), db, "sub-1", []rating.Rule{egressBase()})
@@ -67,17 +67,13 @@ func TestApplyPricingOverrides_SetIncludedApplies(t *testing.T) {
 	}
 }
 
-// TestApplyPricingOverrides_ConfigEmptyAndBracesPreserveBase pins the config
-// merge guard: neither an empty config string nor "{}" replaces the base rule's
-// config — both are treated as "no config override" and the base config is kept.
+// TestApplyPricingOverrides_EmptyConfigPreservesBase pins that an empty JSON
+// object is treated as no config override and keeps the base config.
 func TestApplyPricingOverrides_ConfigEmptyAndBracesPreserveBase(t *testing.T) {
 	cases := []struct {
 		name      string
 		configVal any
-	}{
-		{"empty string", ""},
-		{"empty object", "{}"},
-	}
+	}{{"empty object", []byte(`{}`)}}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			db, mock, err := sqlmock.New()
@@ -112,7 +108,7 @@ func TestApplyPricingOverrides_RealConfigReplacesBase(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := overrideRows().AddRow("egress_gb", nil, nil, nil, "0.03", `{"description":"override desc"}`)
+	rows := overrideRows().AddRow("egress_gb", nil, nil, nil, "0.03", []byte(`{"description":"override desc"}`))
 	mock.ExpectQuery("subscription_pricing_overrides").WithArgs("sub-1").WillReturnRows(rows)
 
 	out, err := applyPricingOverrides(context.Background(), db, "sub-1", []rating.Rule{egressBaseWithConfig()})

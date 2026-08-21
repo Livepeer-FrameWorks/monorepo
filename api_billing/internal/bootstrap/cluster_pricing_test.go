@@ -150,7 +150,7 @@ func TestReconcileClusterPricingNoopWhenIdentical(t *testing.T) {
 		}).AddRow(
 			cp.PricingModel, "0.00", cp.Currency,
 			int32(2), false,
-			string(metered), string(quotas),
+			metered, quotas,
 		))
 	// No INSERT/UPDATE — must be noop.
 
@@ -186,7 +186,7 @@ func TestReconcileClusterPricingUpdatesOnDrift(t *testing.T) {
 		}).AddRow(
 			"monthly", "9.99", cp.Currency, // drifted model + price
 			int32(2), false,
-			string(metered), string(quotas),
+			metered, quotas,
 		))
 	mock.ExpectExec(`UPDATE purser\.cluster_pricing`).WillReturnResult(sqlmock.NewResult(0, 1))
 

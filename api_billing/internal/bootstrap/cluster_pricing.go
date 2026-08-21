@@ -3,13 +3,14 @@ package bootstrap
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
 
+	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/pricing"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
 // ReconcileClusterPricing upserts every ClusterPricing row in desired into
@@ -80,30 +81,11 @@ func upsertClusterPricing(ctx context.Context, exec DBTX, cp ClusterPricing) (st
 		allowFree = *cp.AllowFreeTier
 	}
 
-	var (
-		exists                                   bool
-		curModel, curBase, curCurrency, curMeter string
-		curQuotas                                string
-		curRequiredTier                          int32
-		curAllowFree                             bool
-	)
-	const probeSQL = `
-		SELECT
-			pricing_model,
-			base_price::text,
-			currency,
-			required_tier_level,
-			allow_free_tier,
-			metered_rates::text,
-			default_quotas::text
-		FROM purser.cluster_pricing
-		WHERE cluster_id = $1`
-	err = exec.QueryRowContext(ctx, probeSQL, cp.ClusterID).Scan(
-		&curModel, &curBase, &curCurrency, &curRequiredTier, &curAllowFree, &curMeter, &curQuotas,
-	)
+	queries := purserdb.New(exec)
+	current, err := queries.GetBootstrapClusterPricing(ctx, cp.ClusterID)
+	exists := false
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		exists = false
 	case err != nil:
 		return "", fmt.Errorf("probe cluster_pricing: %w", err)
 	default:
@@ -111,46 +93,35 @@ func upsertClusterPricing(ctx context.Context, exec DBTX, cp ClusterPricing) (st
 	}
 
 	if !exists {
-		const insertSQL = `
-			INSERT INTO purser.cluster_pricing (
-				cluster_id, pricing_model, base_price, currency,
-				required_tier_level, allow_free_tier, metered_rates, default_quotas,
-				updated_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`
-		if _, err := exec.ExecContext(ctx, insertSQL,
-			cp.ClusterID, cp.PricingModel, basePrice, currency,
-			requiredTier, allowFree, database.JSONText(metered), database.JSONText(quotas),
-		); err != nil {
+		if err := queries.InsertBootstrapClusterPricing(ctx, purserdb.InsertBootstrapClusterPricingParams{
+			ClusterID: cp.ClusterID, PricingModel: cp.PricingModel, BasePrice: moneyText(basePrice),
+			Currency:          sql.NullString{String: currency, Valid: true},
+			RequiredTierLevel: sql.NullInt32{Int32: requiredTier, Valid: true},
+			AllowFreeTier:     sql.NullBool{Bool: allowFree, Valid: true},
+			MeteredRates:      json.RawMessage(metered), DefaultQuotas: json.RawMessage(quotas),
+		}); err != nil {
 			return "", err
 		}
 		return "created", nil
 	}
 
-	if curModel == cp.PricingModel &&
-		moneyEq(curBase, basePrice) &&
-		curCurrency == currency &&
-		curRequiredTier == requiredTier &&
-		curAllowFree == allowFree &&
-		jsonEq(curMeter, metered) &&
-		jsonEq(curQuotas, quotas) {
+	if current.PricingModel == cp.PricingModel &&
+		moneyEq(current.BasePrice, basePrice) &&
+		current.Currency == currency &&
+		current.RequiredTierLevel == requiredTier &&
+		current.AllowFreeTier == allowFree &&
+		jsonEq(string(current.MeteredRates), metered) &&
+		jsonEq(string(current.DefaultQuotas), quotas) {
 		return "noop", nil
 	}
 
-	const updateSQL = `
-		UPDATE purser.cluster_pricing SET
-			pricing_model = $2,
-			base_price = $3,
-			currency = $4,
-			required_tier_level = $5,
-			allow_free_tier = $6,
-			metered_rates = $7,
-			default_quotas = $8,
-			updated_at = NOW()
-		WHERE cluster_id = $1`
-	if _, err := exec.ExecContext(ctx, updateSQL,
-		cp.ClusterID, cp.PricingModel, basePrice, currency,
-		requiredTier, allowFree, database.JSONText(metered), database.JSONText(quotas),
-	); err != nil {
+	if err := queries.UpdateBootstrapClusterPricing(ctx, purserdb.UpdateBootstrapClusterPricingParams{
+		ClusterID: cp.ClusterID, PricingModel: cp.PricingModel, BasePrice: moneyText(basePrice),
+		Currency:          sql.NullString{String: currency, Valid: true},
+		RequiredTierLevel: sql.NullInt32{Int32: requiredTier, Valid: true},
+		AllowFreeTier:     sql.NullBool{Bool: allowFree, Valid: true},
+		MeteredRates:      json.RawMessage(metered), DefaultQuotas: json.RawMessage(quotas),
+	}); err != nil {
 		return "", err
 	}
 	return "updated", nil

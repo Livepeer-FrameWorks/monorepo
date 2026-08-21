@@ -11,6 +11,13 @@ import (
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
+const (
+	sweepTenantA       = "81000000-0000-4000-8000-000000000001"
+	sweepTenantB       = "81000000-0000-4000-8000-000000000002"
+	sweepTenantC       = "81000000-0000-4000-8000-000000000003"
+	sweepTenantUnknown = "81000000-0000-4000-8000-000000000004"
+)
+
 func subscriptionTierRows(rows ...[2]string) *sqlmock.Rows {
 	r := sqlmock.NewRows([]string{"tenant_id", "tier_name"})
 	for _, row := range rows {
@@ -27,16 +34,16 @@ func sweepTenant(id, tier string) *quartermasterpb.Tenant {
 // outbox churn in QM), and the repaired count reflects only actual writes.
 func TestSweepDeploymentTiers_RepairsMismatchesOnly(t *testing.T) {
 	qm := &fakeQM{tenantPages: [][]*quartermasterpb.Tenant{{
-		sweepTenant("t-stale-global", "global"), // frameworks-style stale bootstrap stamp
-		sweepTenant("t-empty", ""),              // pre-fix self-signup
-		sweepTenant("t-ok", "supporter"),
+		sweepTenant(sweepTenantA, "global"), // frameworks-style stale bootstrap stamp
+		sweepTenant(sweepTenantB, ""),       // pre-fix self-signup
+		sweepTenant(sweepTenantC, "supporter"),
 	}}}
 	r, mock := newReconcilerWithMock(t, qm)
 	mock.ExpectQuery(`FROM purser\.tenant_subscriptions`).
 		WillReturnRows(subscriptionTierRows(
-			[2]string{"t-stale-global", "free"},
-			[2]string{"t-empty", "payg"},
-			[2]string{"t-ok", "supporter"},
+			[2]string{sweepTenantA, "free"},
+			[2]string{sweepTenantB, "payg"},
+			[2]string{sweepTenantC, "supporter"},
 		))
 
 	repaired, err := r.SweepDeploymentTiers(context.Background())
@@ -46,7 +53,7 @@ func TestSweepDeploymentTiers_RepairsMismatchesOnly(t *testing.T) {
 	if repaired != 2 {
 		t.Errorf("repaired = %d, want 2", repaired)
 	}
-	want := []string{"tier:t-stale-global=free", "tier:t-empty=payg"}
+	want := []string{"tier:" + sweepTenantA + "=free", "tier:" + sweepTenantB + "=payg"}
 	if strings.Join(qm.calls, "|") != strings.Join(want, "|") {
 		t.Errorf("calls = %v, want %v", qm.calls, want)
 	}
@@ -59,7 +66,7 @@ func TestSweepDeploymentTiers_RepairsMismatchesOnly(t *testing.T) {
 // a tier for a tenant billing knows nothing about.
 func TestSweepDeploymentTiers_SkipsTenantsWithoutSubscription(t *testing.T) {
 	qm := &fakeQM{tenantPages: [][]*quartermasterpb.Tenant{{
-		sweepTenant("t-unknown", "global"),
+		sweepTenant(sweepTenantUnknown, "global"),
 	}}}
 	r, mock := newReconcilerWithMock(t, qm)
 	mock.ExpectQuery(`FROM purser\.tenant_subscriptions`).
@@ -77,14 +84,14 @@ func TestSweepDeploymentTiers_SkipsTenantsWithoutSubscription(t *testing.T) {
 // The sweep walks every ListTenants page, not just the first.
 func TestSweepDeploymentTiers_Pages(t *testing.T) {
 	qm := &fakeQM{tenantPages: [][]*quartermasterpb.Tenant{
-		{sweepTenant("t-1", "")},
-		{sweepTenant("t-2", "")},
+		{sweepTenant(sweepTenantA, "")},
+		{sweepTenant(sweepTenantB, "")},
 	}}
 	r, mock := newReconcilerWithMock(t, qm)
 	mock.ExpectQuery(`FROM purser\.tenant_subscriptions`).
 		WillReturnRows(subscriptionTierRows(
-			[2]string{"t-1", "free"},
-			[2]string{"t-2", "free"},
+			[2]string{sweepTenantA, "free"},
+			[2]string{sweepTenantB, "free"},
 		))
 
 	repaired, err := r.SweepDeploymentTiers(context.Background())
@@ -101,16 +108,16 @@ func TestSweepDeploymentTiers_Pages(t *testing.T) {
 func TestSweepDeploymentTiers_ContinuesPastStampFailure(t *testing.T) {
 	qm := &fakeQM{
 		tenantPages: [][]*quartermasterpb.Tenant{{
-			sweepTenant("t-1", ""),
-			sweepTenant("t-2", ""),
+			sweepTenant(sweepTenantA, ""),
+			sweepTenant(sweepTenantB, ""),
 		}},
 		updateErr: errors.New("qm down"),
 	}
 	r, mock := newReconcilerWithMock(t, qm)
 	mock.ExpectQuery(`FROM purser\.tenant_subscriptions`).
 		WillReturnRows(subscriptionTierRows(
-			[2]string{"t-1", "free"},
-			[2]string{"t-2", "free"},
+			[2]string{sweepTenantA, "free"},
+			[2]string{sweepTenantB, "free"},
 		))
 
 	repaired, err := r.SweepDeploymentTiers(context.Background())
