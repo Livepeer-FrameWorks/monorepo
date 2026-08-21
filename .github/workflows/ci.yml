@@ -344,6 +344,7 @@ jobs:
         env:
           GOTOOLCHAIN: local
       - run: make verify-schema-yugabyte
+      - run: make verify-yugabyte-ha
 
   codecov-notify:
     name: Codecov notify

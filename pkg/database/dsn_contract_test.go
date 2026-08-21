@@ -11,7 +11,8 @@ import (
 // connect_timeout) is accepted by the exact yugabyte/pgx version's config parser
 // and that the driver recognizes the params and resolves all contact points. This
 // is an OFFLINE contract check (pgx.ParseConfig only); it does not open a
-// connection. The live multi-host failover/balancing path is a staging drill.
+// connection. The live RF=3 distribution/failure/recovery path runs under the
+// yugabyte_ha build tag via `make verify-yugabyte-ha`.
 func TestMultiHostLoadBalanceDSNAcceptedByDriver(t *testing.T) {
 	dsn := "postgres://u:p@h1.internal:5433,h2.internal:5433,h3.internal:5433/db?sslmode=disable&load_balance=true&connect_timeout=5"
 

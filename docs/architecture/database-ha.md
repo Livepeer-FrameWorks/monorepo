@@ -29,6 +29,14 @@ a node that fails to connect (`failed_host_reconnect_delay_secs`, default 5s).
 Single-node / vanilla Postgres keeps the original single-host URL (no
 `load_balance`).
 
+`make verify-yugabyte-ha` exercises this path against the release-pinned image. It
+forms an RF=3 three-zone cluster, proves connections are distributed across all
+three tservers, injects a real retryable Yugabyte SQLSTATE, isolates the tserver
+holding an uncommitted transaction, proves surviving-node reads/writes and atomic
+rollback, then heals the node and waits for it to re-enter connection rotation.
+The Docker-only address translation lets the host reach discovered container
+addresses; the DSN and smart-driver discovery path otherwise match provisioning.
+
 ## Failover is connection-level, not query-level
 
 The smart driver does **not** replay an in-flight query whose node dies — that
