@@ -67,12 +67,13 @@ jobs:
               - 'pkg/database/sql/clickhouse/migrations/**'
               - 'scripts/check-migration-version.sh'
               - 'scripts/check-migration-version.test.sh'
+              - 'scripts/reset-demo-databases.sh'
               - 'Makefile'
             database:
               - 'api_analytics_ingest/**/*.go'
               - 'api_analytics_query/**/*.go'
               - 'api_balancing/**/*.go'
-              - 'api_billing/**/*.go'
+              - 'api_billing/**'
               - 'api_consultant/**/*.go'
               - 'api_control/**/*.go'
               - 'api_dns/**/*.go'
@@ -85,6 +86,7 @@ jobs:
               - 'pkg/topology/**'
               - 'scripts/check-migration-version.sh'
               - 'scripts/check-migration-version.test.sh'
+              - 'scripts/reset-demo-databases.sh'
               - 'Makefile'
 
   go-build:
@@ -104,6 +106,8 @@ jobs:
         run: go install github.com/99designs/gqlgen@v0.17.86
       - name: Check proto codegen is up to date
         run: make proto-check
+      - name: Check sqlc codegen is up to date
+        run: make sqlc-check
       - run: make build
         env:
           CGO_ENABLED: "1"
@@ -321,8 +325,25 @@ jobs:
           RELEASE_DIFF_BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
       - name: Test release-state lifecycle guard
         run: make test-release-state
+      - name: Check generated PostgreSQL queries
+        run: make sqlc-check
       - name: Prove schema migration convergence
-        run: make verify-schema-migrations
+        run: make verify-schema-migrations-core
+
+  database-yugabyte:
+    name: Yugabyte database contract
+    needs: changes
+    if: needs.changes.outputs.database == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: "**/go.sum"
+        env:
+          GOTOOLCHAIN: local
+      - run: make verify-schema-yugabyte
 
   codecov-notify:
     name: Codecov notify
@@ -349,6 +370,7 @@ jobs:
         frontend-build,
         feature-registry,
         migration-release-state,
+        database-yugabyte,
       ]
     if: always()
     runs-on: ubuntu-latest

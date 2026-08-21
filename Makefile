@@ -1,8 +1,8 @@
 .PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-periscope-metering build-bin-signalman build-bin-bridge build-bin-navigator build-bin-privateer build-bin-deckhand build-bin-steward build-bin-skipper build-bin-chandler build-bin-cli \
 		build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-periscope-metering build-image-signalman build-image-bridge build-image-logbook build-image-navigator build-image-deckhand build-image-steward build-image-skipper build-image-chandler \
-		proto proto-check graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test test-cli test-pkg test-topology test-crypto-evm test-dashboards test-commodore test-quartermaster test-purser test-decklog test-foghorn test-helmsman test-periscope-ingest test-periscope-query test-signalman test-bridge test-navigator test-privateer test-deckhand test-steward test-skipper test-chandler coverage env frontend-env tidy update outdated fmt format \
+		proto proto-check sqlc sqlc-check graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test test-cli test-pkg test-topology test-crypto-evm test-dashboards test-commodore test-quartermaster test-purser test-decklog test-foghorn test-helmsman test-periscope-ingest test-periscope-query test-signalman test-bridge test-navigator test-privateer test-deckhand test-steward test-skipper test-chandler coverage env frontend-env tidy update outdated fmt format \
 		lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
-		validate-migrations verify-release-state test-release-state verify-schema verify-schema-migrations verify-schema-postgres verify-schema-clickhouse verify-feature-registry seed-demo release-plan test-release-plan \
+		validate-migrations verify-release-state test-release-state verify-schema verify-schema-migrations verify-schema-migrations-core verify-schema-postgres verify-schema-yugabyte verify-schema-clickhouse verify-feature-registry seed-demo seed-demo-postgres seed-demo-clickhouse reset-demo-databases-plan reset-demo-databases release-plan test-release-plan \
 		dead-code-install dead-code-go dead-code-ts dead-code-report dead-code \
 		ansible-galaxy-install ansible-lint ansible-yamllint ansible-test ansible-check ansible-molecule ansible-molecule-run ansible-molecule-all provision-hello
 
@@ -658,21 +658,37 @@ verify-schema:
 	@echo "Running real-engine ingest placement-claim ownership tests (Docker: same-cluster theft, reserve-vs-refresh, lapse, owner-fenced renew/release, cross-writer isolation)..."
 	@cd api_control && go test -tags schema_verify -run 'TestValidateStreamKey_SameClusterCannotStealLiveClaim_RealPG|TestValidateStreamKey_OwnerRefreshIsNotAReservation_RealPG|TestValidateStreamKey_LapsedClaimIsReservable_RealPG|TestSyncActiveIngestPlacement_ReleaseRequiresOwnership_RealPG|TestSyncActiveIngestPlacement_RenewalRequiresOwnership_RealPG|TestSyncActiveIngestPlacement_RenewalEstablishesUnheldClaim_RealPG|TestClearStreamActiveCluster_CannotClearPushClaim_RealPG' -count=1 -timeout 600s ./internal/grpc/
 
-verify-schema-migrations:
+verify-schema-migrations: verify-schema-migrations-core verify-schema-yugabyte
+
+verify-schema-migrations-core:
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-schema-migrations requires a running Docker daemon"; exit 1; }
 	@echo "Verifying PostgreSQL tagged upgrades and current baseline replay on PostgreSQL/ClickHouse (Docker)..."
-	@cd cli && FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' go test -tags schema_verify -run 'TestComposeUsesSchemaHarnessImages|TestPostgresIntrospectionCoversDeployRelevantObjects|TestPostgresBaselineEqualsReplay|TestPostgresTaggedBaselineUpgradeEqualsCurrent|TestPostgresDemoSeedAppliesToCurrentBaseline|TestClickHouseBaselineEqualsReplay|TestClickHouseTaggedBaselineUpgradeEqualsCurrent|TestClickHouseDemoSeedAndMeteringQueries' -count=1 -timeout 1200s ./pkg/provisioner/
-	@cd api_billing && go test -tags schema_verify -run 'TestProcessUsageSummaryAbsentDimensions_RealPG|TestCryptoTaxDocuments_RealPG|TestEmbeddedFacilitatorSerializesRelayerNoncesAcrossReplicas_RealPG' -count=1 -timeout 600s ./internal/handlers/
-	@cd api_billing && go test -tags schema_verify -run 'TestBillingTransitionsSerializeAndPreserveCredit_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@cd cli && FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' go test -tags schema_verify -run 'TestComposeUsesSchemaHarnessImages|TestPostgresServiceDatabaseInitialization|TestPostgresIntrospectionCoversDeployRelevantObjects|TestPostgresBaselineEqualsReplay|TestPostgresTaggedBaselineUpgradeEqualsCurrent|TestPostgresDemoSeedAppliesToCurrentBaseline|TestClickHouseBaselineEqualsReplay|TestClickHouseTaggedBaselineUpgradeEqualsCurrent|TestClickHouseDemoSeedAndMeteringQueries' -count=1 -timeout 1200s ./pkg/provisioner/
+	@cd api_billing && go test -tags schema_verify -run 'TestProcessUsageSummaryAbsentDimensions_RealPG|TestProviderWebhookInboxRepository_RealPG|TestCryptoTaxDocuments_RealPG|TestEmbeddedFacilitatorSerializesRelayerNoncesAcrossReplicas_RealPG|TestInvoiceEmailOutboxLifecycleAndReads_RealPG|TestInvoiceEmailOverdueBalanceRead_RealPG|TestOperationalDatabaseGuards_RealPG|TestInvoiceCollectionMinimumSerializesAndPersists_RealPG|TestInvoiceRatingRepository_RealPG' -count=1 -timeout 600s ./internal/handlers/
+	@cd api_billing && go test -tags schema_verify -run 'TestBillingTransitionsSerializeAndPreserveCredit_RealPG|TestBillingEventOutboxLifecycle_RealPG|TestTierCatalogReads_RealPG|TestSubscriptionLifecycleRepository_RealPG|TestAccountOnboardingConvergence_RealPG|TestPrepaidBalanceRepository_RealPG|TestGRPCQueryPack_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@cd api_billing && go test -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG' -count=1 -timeout 600s ./internal/database/purserdb/
+	@cd api_billing && go test -tags schema_verify -run 'TestStripeMeterEventRepository_RealPG' -count=1 -timeout 600s ./internal/stripe/
+	@cd api_billing && go test -tags schema_verify -run 'TestLoadEffectiveTierPartialOverrides_RealPG' -count=1 -timeout 600s ./internal/billing/
+	@cd api_billing && go test -tags schema_verify -run 'TestTierAccessEligibilityQuery_RealPG' -count=1 -timeout 600s ./internal/tieraccess/
+	@cd api_billing && go test -tags schema_verify -run 'TestBootstrapPricingRepositories_RealPG|TestBootstrapCustomerBillingRepository_RealPG|TestBootstrapTierCatalogRepository_RealPG|TestTierStripeSyncRepository_RealPG' -count=1 -timeout 600s ./internal/bootstrap/
 
 # Granular subsets of the suite above, for iterating on one engine without the full run.
 verify-schema-postgres:
 	@echo "Verifying Postgres current baseline and tagged-release upgrade convergence (Docker)..."
-	@cd cli && FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' go test -tags schema_verify -run 'TestComposeUsesSchemaHarnessImages|TestPostgresIntrospectionCoversDeployRelevantObjects|TestPostgresBaselineEqualsReplay|TestPostgresTaggedBaselineUpgradeEqualsCurrent|TestPostgresDemoSeedAppliesToCurrentBaseline' -count=1 -timeout 600s ./pkg/provisioner/
-	@cd api_billing && go test -tags schema_verify -run 'TestProcessUsageSummaryAbsentDimensions_RealPG|TestCryptoTaxDocuments_RealPG|TestEmbeddedFacilitatorSerializesRelayerNoncesAcrossReplicas_RealPG' -count=1 -timeout 600s ./internal/handlers/
-	@cd api_billing && go test -tags schema_verify -run 'TestBillingTransitionsSerializeAndPreserveCredit_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@cd cli && FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' go test -tags schema_verify -run 'TestComposeUsesSchemaHarnessImages|TestPostgresServiceDatabaseInitialization|TestPostgresIntrospectionCoversDeployRelevantObjects|TestPostgresBaselineEqualsReplay|TestPostgresTaggedBaselineUpgradeEqualsCurrent|TestPostgresDemoSeedAppliesToCurrentBaseline' -count=1 -timeout 600s ./pkg/provisioner/
+	@cd api_billing && go test -tags schema_verify -run 'TestProcessUsageSummaryAbsentDimensions_RealPG|TestProviderWebhookInboxRepository_RealPG|TestCryptoTaxDocuments_RealPG|TestEmbeddedFacilitatorSerializesRelayerNoncesAcrossReplicas_RealPG|TestInvoiceEmailOutboxLifecycleAndReads_RealPG|TestInvoiceEmailOverdueBalanceRead_RealPG|TestOperationalDatabaseGuards_RealPG|TestInvoiceCollectionMinimumSerializesAndPersists_RealPG|TestInvoiceRatingRepository_RealPG' -count=1 -timeout 600s ./internal/handlers/
+	@cd api_billing && go test -tags schema_verify -run 'TestBillingTransitionsSerializeAndPreserveCredit_RealPG|TestBillingEventOutboxLifecycle_RealPG|TestTierCatalogReads_RealPG|TestSubscriptionLifecycleRepository_RealPG|TestAccountOnboardingConvergence_RealPG|TestPrepaidBalanceRepository_RealPG|TestGRPCQueryPack_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@cd api_billing && go test -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG' -count=1 -timeout 600s ./internal/database/purserdb/
+	@cd api_billing && go test -tags schema_verify -run 'TestStripeMeterEventRepository_RealPG' -count=1 -timeout 600s ./internal/stripe/
+	@cd api_billing && go test -tags schema_verify -run 'TestLoadEffectiveTierPartialOverrides_RealPG' -count=1 -timeout 600s ./internal/billing/
+	@cd api_billing && go test -tags schema_verify -run 'TestTierAccessEligibilityQuery_RealPG' -count=1 -timeout 600s ./internal/tieraccess/
+	@cd api_billing && go test -tags schema_verify -run 'TestBootstrapPricingRepositories_RealPG|TestBootstrapCustomerBillingRepository_RealPG|TestBootstrapTierCatalogRepository_RealPG|TestTierStripeSyncRepository_RealPG' -count=1 -timeout 600s ./internal/bootstrap/
 	@echo "Verifying the real PostgreSQL admission-ledger proof drives exact Redis membership cleanup..."
 	@cd api_balancing && go test -tags schema_verify -run 'TestMembershipTombstoneCleanup_PostgresProofToRedisPurge_RealPG' -count=1 -timeout 600s ./internal/federation/
+
+verify-schema-yugabyte:
+	@echo "Verifying supported Yugabyte baselines and runtime SQL capabilities (Docker)..."
+	@cd cli && go test -tags schema_verify -run 'TestYugabyteCurrentBaselinesAndCapabilities' -count=1 -timeout 1200s ./pkg/provisioner/
 
 verify-schema-clickhouse:
 	@echo "Verifying Replicated ClickHouse baseline == baseline + post-floor migrations (Docker)..."
