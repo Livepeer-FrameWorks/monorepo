@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_billing/internal/database/purserdb"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/google/uuid"
 	x402sdk "github.com/x402-foundation/x402/go/v2"
@@ -45,32 +47,25 @@ func (h *X402Handler) loadPaymentQuote(ctx context.Context, tenantID, quoteID st
 	if quoteID == "" {
 		return nil, "", fmt.Errorf("x402 v2 quote ID is required")
 	}
-	var quote X402PaymentQuote
-	var status string
-	var rateText string
-	err := h.db.QueryRowContext(ctx, `
-		SELECT id::text, tenant_id::text, resource, resource_class, network,
-		       asset, pay_to, amount_atomic::text, credit_amount_cents,
-		       eur_per_usd_rate::text, requirements_json::text,
-		       tax_document_kind, tax_profile_snapshot::text, expires_at, status
-		FROM purser.x402_payment_quotes
-		WHERE id = $1 AND tenant_id = $2
-	`, quoteID, tenantID).Scan(
-		&quote.ID, &quote.TenantID, &quote.Resource, &quote.ResourceClass,
-		&quote.CAIP2Network, &quote.Asset, &quote.PayTo, &quote.AmountAtomic,
-		&quote.CreditAmountCents, &rateText, &quote.AcceptedRequirement,
-		&quote.TaxDocumentKind, &quote.TaxProfileSnapshot, &quote.ExpiresAt, &status,
-	)
+	stored, err := purserdb.New(h.db).GetX402PaymentQuote(ctx, purserdb.GetX402PaymentQuoteParams{QuoteID: quoteID, TenantID: tenantID})
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, "", fmt.Errorf("x402 quote not found for tenant")
 		}
 		return nil, "", fmt.Errorf("load x402 quote: %w", err)
 	}
-	if _, err := fmt.Sscan(rateText, &quote.EurPerUSDRate); err != nil || quote.EurPerUSDRate <= 0 {
+	quote := X402PaymentQuote{
+		ID: stored.ID, TenantID: stored.TenantID, Resource: stored.Resource,
+		ResourceClass: stored.ResourceClass, CAIP2Network: stored.Network,
+		Asset: stored.Asset, PayTo: stored.PayTo, AmountAtomic: stored.AmountAtomic,
+		CreditAmountCents: stored.CreditAmountCents, AcceptedRequirement: stored.RequirementsJson,
+		TaxDocumentKind: stored.TaxDocumentKind, TaxProfileSnapshot: stored.TaxProfileSnapshot,
+		ExpiresAt: stored.ExpiresAt,
+	}
+	if _, err := fmt.Sscan(stored.EurPerUsdRate, &quote.EurPerUSDRate); err != nil || quote.EurPerUSDRate <= 0 {
 		return nil, "", fmt.Errorf("x402 quote has invalid FX rate")
 	}
-	return &quote, status, nil
+	return &quote, stored.Status, nil
 }
 
 func (h *X402Handler) validateV2Quote(ctx context.Context, tenantID string, payload *X402PaymentPayload) (*X402PaymentQuote, NetworkConfig, error) {
@@ -82,11 +77,7 @@ func (h *X402Handler) validateV2Quote(ctx context.Context, tenantID string, payl
 		return nil, NetworkConfig{}, err
 	}
 	if time.Now().UTC().After(quote.ExpiresAt) {
-		_, _ = h.db.ExecContext(ctx, `
-			UPDATE purser.x402_payment_quotes
-			SET status = 'expired', updated_at = NOW()
-			WHERE id = $1 AND status = 'offered'
-		`, quote.ID)
+		_ = purserdb.New(h.db).ExpireOfferedX402PaymentQuote(ctx, quote.ID)
 		return nil, NetworkConfig{}, fmt.Errorf("x402 quote expired")
 	}
 	if status != "offered" && status != "claiming" && status != "settling" && status != "unknown" && status != "confirmed" {
@@ -138,29 +129,9 @@ func (h *X402Handler) claimPaymentQuote(ctx context.Context, quoteID string) (bo
 		return true, nil
 	}
 	claimToken := uuid.NewString()
-	result, err := h.db.ExecContext(ctx, `
-		UPDATE purser.x402_payment_quotes
-		SET status = 'claiming', claim_token = $2,
-		    claim_expires_at = NOW() + INTERVAL '2 minutes', updated_at = NOW()
-		WHERE id = $1
-		  AND expires_at > NOW()
-		  AND (
-		      status = 'offered'
-		      OR (
-		          status = 'claiming'
-		          AND claim_expires_at < NOW()
-		          AND NOT EXISTS (
-		              SELECT 1 FROM purser.x402_nonces n WHERE n.quote_id = x402_payment_quotes.id
-		          )
-		      )
-		  )
-	`, quoteID, claimToken)
+	rows, err := purserdb.New(h.db).ClaimX402PaymentQuote(ctx, purserdb.ClaimX402PaymentQuoteParams{ClaimToken: claimToken, QuoteID: quoteID})
 	if err != nil {
 		return false, fmt.Errorf("claim x402 quote: %w", err)
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return false, err
 	}
 	return rows == 1, nil
 }
@@ -171,12 +142,7 @@ func (h *X402Handler) ExpirePaymentQuote(ctx context.Context, quoteID string) er
 	if strings.TrimSpace(quoteID) == "" {
 		return nil
 	}
-	_, err := h.db.ExecContext(ctx, `
-		UPDATE purser.x402_payment_quotes
-		SET status = 'expired', updated_at = NOW()
-		WHERE id = $1 AND status = 'offered'
-	`, quoteID)
-	return err
+	return purserdb.New(h.db).ExpireOfferedX402PaymentQuote(ctx, quoteID)
 }
 
 func (h *X402Handler) CreatePaymentQuote(ctx context.Context, tenantID, resource, payTo string, network NetworkConfig) (*X402PaymentQuote, error) {
@@ -188,12 +154,7 @@ func (h *X402Handler) CreatePaymentQuote(ctx context.Context, tenantID, resource
 		return nil, fmt.Errorf("load EUR/USD rate: %w", err)
 	}
 
-	var balanceCents int64
-	err = h.db.QueryRowContext(ctx, `
-		SELECT COALESCE(balance_cents, 0)
-		FROM purser.prepaid_balances
-		WHERE tenant_id = $1 AND currency = 'EUR'
-	`, tenantID).Scan(&balanceCents)
+	balanceCents, err := purserdb.New(h.db).GetX402PrepaidBalanceCents(ctx, tenantID)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, fmt.Errorf("load prepaid balance for quote: %w", err)
 	}
@@ -261,16 +222,14 @@ func (h *X402Handler) CreatePaymentQuote(ctx context.Context, tenantID, resource
 		return nil, fmt.Errorf("marshal quote extra: %w", err)
 	}
 
-	_, err = h.db.ExecContext(ctx, `
-		INSERT INTO purser.x402_payment_quotes (
-			id, tenant_id, resource, resource_class, network, asset, pay_to,
-			amount_atomic, credit_amount_cents, credit_currency,
-			eur_per_usd_rate, requirements_json, tax_document_kind,
-			tax_profile_snapshot, expires_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric, $9, 'EUR', $10, $11::jsonb, $12, $13::jsonb, $14)
-	`, quoteID, tenantID, resource, classifyX402Resource(resource), caip2,
-		network.USDCContract, strings.ToLower(payTo), atomic, creditCents, rate,
-		acceptedJSON, documentRequirement.DocumentKind, taxProfileSnapshot, expiresAt)
+	err = purserdb.New(h.db).CreateX402PaymentQuote(ctx, purserdb.CreateX402PaymentQuoteParams{
+		ID: quoteID, TenantID: tenantID, Resource: resource,
+		ResourceClass: classifyX402Resource(resource), Network: caip2,
+		Asset: network.USDCContract, PayTo: strings.ToLower(payTo), AmountAtomic: atomic,
+		CreditAmountCents: creditCents, EurPerUsdRate: fmt.Sprintf("%.10f", rate),
+		RequirementsJson: acceptedJSON, TaxDocumentKind: documentRequirement.DocumentKind,
+		TaxProfileSnapshot: taxProfileSnapshot, ExpiresAt: expiresAt,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("persist x402 quote: %w", err)
 	}

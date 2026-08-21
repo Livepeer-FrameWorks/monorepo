@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_billing/internal/database/purserdb"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/shopspring/decimal"
@@ -166,21 +168,16 @@ func (cm *CryptoMonitor) loadOrCreateScanCursor(ctx context.Context, network Net
 	if err != nil {
 		return 0, sql.NullInt64{}, sql.NullString{}, err
 	}
-	_, err = cm.db.ExecContext(ctx, `
-		INSERT INTO purser.crypto_scan_cursors (network, next_block, safe_head_block, updated_at)
-		VALUES ($1, $2, $3, NOW()) ON CONFLICT (network) DO NOTHING
-	`, network.Name, start, safeHead)
+	queries := purserdb.New(cm.db)
+	err = queries.EnsureCryptoScanCursor(ctx, purserdb.EnsureCryptoScanCursorParams{
+		Network: network.Name, NextBlock: start,
+		SafeHeadBlock: sql.NullInt64{Int64: safeHead, Valid: true},
+	})
 	if err != nil {
 		return 0, sql.NullInt64{}, sql.NullString{}, err
 	}
-	var next int64
-	var last sql.NullInt64
-	var hash sql.NullString
-	err = cm.db.QueryRowContext(ctx, `
-		SELECT next_block, last_scanned_block, last_scanned_block_hash
-		FROM purser.crypto_scan_cursors WHERE network = $1
-	`, network.Name).Scan(&next, &last, &hash)
-	return next, last, hash, err
+	cursor, err := queries.GetCryptoScanCursor(ctx, network.Name)
+	return cursor.NextBlock, cursor.LastScannedBlock, cursor.LastScannedBlockHash, err
 }
 
 func cryptoScannerStartBlock(network string, safeHead int64) (int64, error) {
@@ -209,24 +206,15 @@ func ValidateCryptoScannerStart(network string) error {
 }
 
 func (cm *CryptoMonitor) knownDepositAddresses(ctx context.Context, network string) (map[string]struct{}, error) {
-	rows, err := cm.db.QueryContext(ctx, `
-		SELECT DISTINCT LOWER(wallet_address)
-		FROM purser.crypto_wallets
-		WHERE network = $1
-	`, network)
+	rows, err := purserdb.New(cm.db).ListKnownCryptoDepositAddresses(ctx, network)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	addresses := map[string]struct{}{}
-	for rows.Next() {
-		var address string
-		if err := rows.Scan(&address); err != nil {
-			return nil, err
-		}
+	for _, address := range rows {
 		addresses[address] = struct{}{}
 	}
-	return addresses, rows.Err()
+	return addresses, nil
 }
 
 func (cm *CryptoMonitor) scanUSDCLogs(ctx context.Context, network NetworkConfig, from, to int64, addresses map[string]struct{}) ([]observedDeposit, error) {
@@ -300,38 +288,28 @@ func (cm *CryptoMonitor) commitScanBatch(ctx context.Context, network string, fr
 		return err
 	}
 	defer tx.Rollback() //nolint:errcheck
+	queries := purserdb.New(tx)
 	for _, event := range events {
-		_, err := tx.ExecContext(ctx, `
-			INSERT INTO purser.crypto_deposit_events (
-				network, asset, tx_hash, log_index, block_number, block_hash,
-				from_address, to_address, amount_base_units, status,
-				confirmations, confirmed_at
-			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::numeric,'confirmed',1,NOW())
-			ON CONFLICT (network, tx_hash, log_index) DO UPDATE
-			SET canonical = TRUE, block_hash = EXCLUDED.block_hash,
-			    block_number = EXCLUDED.block_number,
-			    confirmations = GREATEST(purser.crypto_deposit_events.confirmations, EXCLUDED.confirmations),
-			    status = CASE WHEN purser.crypto_deposit_events.status = 'reorged' THEN 'confirmed' ELSE purser.crypto_deposit_events.status END,
-			    reorged_at = NULL
-		`, network, event.Asset, event.TxHash, event.LogIndex, event.BlockNumber,
-			event.BlockHash, event.From, event.To, event.Amount)
+		err := queries.UpsertObservedCryptoDeposit(ctx, purserdb.UpsertObservedCryptoDepositParams{
+			Network: network, Asset: event.Asset, TxHash: event.TxHash, LogIndex: event.LogIndex,
+			BlockNumber: event.BlockNumber, BlockHash: event.BlockHash,
+			FromAddress: sql.NullString{String: event.From, Valid: event.From != ""},
+			ToAddress:   event.To, AmountBaseUnits: event.Amount,
+		})
 		if err != nil {
 			return err
 		}
 	}
-	result, err := tx.ExecContext(ctx, `
-		UPDATE purser.crypto_scan_cursors
-		SET next_block = $3 + 1, last_scanned_block = $3,
-		    last_scanned_block_hash = $4, safe_head_block = $5,
-		    lag_blocks = GREATEST($5 - $3, 0), last_error = NULL,
-		    error_count = 0, scanned_at = NOW(), updated_at = NOW()
-		WHERE network = $1 AND next_block = $2
-	`, network, from, to, lastHash, safeHead)
+	rows, err := queries.AdvanceCryptoScanCursor(ctx, purserdb.AdvanceCryptoScanCursorParams{
+		LastScannedBlock:     to,
+		LastScannedBlockHash: sql.NullString{String: lastHash, Valid: true},
+		SafeHeadBlock:        safeHead,
+		Network:              network, ExpectedNextBlock: from,
+	})
 	if err != nil {
 		return err
 	}
-	rows, err := result.RowsAffected()
-	if err != nil || rows != 1 {
+	if rows != 1 {
 		return fmt.Errorf("crypto scan cursor changed concurrently")
 	}
 	if err := tx.Commit(); err != nil {
@@ -349,19 +327,11 @@ func (cm *CryptoMonitor) rewindScanCursor(ctx context.Context, network string, b
 		return err
 	}
 	defer tx.Rollback() //nolint:errcheck
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE purser.crypto_deposit_events
-		SET canonical = FALSE, status = 'reorged', reorged_at = NOW()
-		WHERE network = $1 AND block_number >= $2 AND status != 'allocated'
-	`, network, block); err != nil {
+	queries := purserdb.New(tx)
+	if err := queries.MarkCryptoDepositsReorgedFromBlock(ctx, purserdb.MarkCryptoDepositsReorgedFromBlockParams{Network: network, BlockNumber: block}); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE purser.crypto_scan_cursors
-		SET next_block = $2, last_scanned_block = NULL,
-		    last_scanned_block_hash = NULL, updated_at = NOW()
-		WHERE network = $1
-	`, network, block); err != nil {
+	if err := queries.RewindCryptoScanCursor(ctx, purserdb.RewindCryptoScanCursorParams{BlockNumber: block, Network: network}); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -418,27 +388,19 @@ func (cm *CryptoMonitor) rpcBlocksByNumber(ctx context.Context, network NetworkC
 }
 
 func (cm *CryptoMonitor) updateScannerLag(ctx context.Context, network string, safeHead, lag int64) error {
-	_, err := cm.db.ExecContext(ctx, `
-		UPDATE purser.crypto_scan_cursors
-		SET safe_head_block = $2, lag_blocks = GREATEST($3, 0),
-		    last_error = NULL, error_count = 0, updated_at = NOW()
-		WHERE network = $1
-	`, network, safeHead, lag)
-	return err
+	return purserdb.New(cm.db).UpdateCryptoScannerLag(ctx, purserdb.UpdateCryptoScannerLagParams{
+		SafeHeadBlock: sql.NullInt64{Int64: safeHead, Valid: true},
+		LagBlocks:     sql.NullInt64{Int64: lag, Valid: true}, Network: network,
+	})
 }
 
 func (cm *CryptoMonitor) recordScannerError(ctx context.Context, network, message string) {
 	if cm.metrics != nil && cm.metrics.CryptoScannerErrors != nil {
 		cm.metrics.CryptoScannerErrors.WithLabelValues(network).Inc()
 	}
-	_, _ = cm.db.ExecContext(ctx, `
-		INSERT INTO purser.crypto_scan_cursors (network, next_block, last_error, error_count)
-		VALUES ($1, 0, $2, 1)
-		ON CONFLICT (network) DO UPDATE
-		SET last_error = EXCLUDED.last_error,
-		    error_count = purser.crypto_scan_cursors.error_count + 1,
-		    updated_at = NOW()
-	`, network, message)
+	_ = purserdb.New(cm.db).RecordCryptoScannerError(ctx, purserdb.RecordCryptoScannerErrorParams{
+		Network: network, Message: sql.NullString{String: message, Valid: true},
+	})
 }
 
 func hexQuantityToDecimal(value string) (string, error) {
@@ -455,75 +417,42 @@ func isZeroHex(value string) bool {
 }
 
 func (cm *CryptoMonitor) allocateConfirmedDepositEvents(ctx context.Context) {
-	rows, err := cm.db.QueryContext(ctx, `
-		SELECT e.id::text, e.tx_hash, e.block_number, e.amount_base_units::text,
-		       w.id::text, w.tenant_id::text, w.purpose, w.invoice_id,
-		       w.expected_amount_cents, w.asset, w.network, w.wallet_address,
-		       w.expected_amount_base_units::text, w.quoted_price_usd::text,
-		       w.quoted_usd_to_eur_rate::text, COALESCE(w.quote_source, ''),
-		       COALESCE(w.credited_amount_currency, ''), COALESCE(w.client_ip, ''), w.expires_at,
-		       i.amount, i.currency
-		FROM purser.crypto_deposit_events e
-		JOIN purser.crypto_wallets w
-		  ON w.network = e.network AND LOWER(w.wallet_address) = LOWER(e.to_address)
-		 AND w.asset = e.asset
-		LEFT JOIN purser.billing_invoices i
-		  ON i.id = w.invoice_id AND i.tenant_id = w.tenant_id
-		WHERE e.canonical AND e.status = 'confirmed'
-		  AND w.status IN ('pending', 'confirming')
-		ORDER BY e.block_number, e.log_index
-		LIMIT 100
-	`)
+	rows, err := purserdb.New(cm.db).ListConfirmedCryptoDepositAllocations(ctx)
 	if err != nil {
 		cm.logger.WithError(err).Warn("Failed to load confirmed crypto deposit events")
 		return
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var eventID, txHash, amount, walletID, tenantID, purpose, asset, network, address string
-		var blockNumber int64
-		var invoiceID, quoteSource, currency, clientIP sql.NullString
-		var expectedCents sql.NullInt64
-		var expectedBase, price, fx sql.NullString
-		var expires time.Time
-		var invoiceAmount sql.NullFloat64
-		var invoiceCurrency sql.NullString
-		if err := rows.Scan(&eventID, &txHash, &blockNumber, &amount,
-			&walletID, &tenantID, &purpose, &invoiceID, &expectedCents,
-			&asset, &network, &address, &expectedBase, &price, &fx,
-			&quoteSource, &currency, &clientIP, &expires, &invoiceAmount, &invoiceCurrency); err != nil {
-			cm.logger.WithError(err).Warn("Failed to scan crypto deposit allocation")
-			continue
+	for _, row := range rows {
+		wallet := PendingWallet{
+			ID: row.WalletID, TenantID: row.TenantID, Purpose: row.Purpose,
+			Asset: row.Asset, Network: row.Network, WalletAddress: row.WalletAddress, ExpiresAt: row.ExpiresAt,
 		}
-		wallet := PendingWallet{ID: walletID, TenantID: tenantID, Purpose: purpose, Asset: asset, Network: network, WalletAddress: address, ExpiresAt: expires}
-		if invoiceID.Valid {
-			wallet.InvoiceID = &invoiceID.String
+		if row.InvoiceID != "" {
+			wallet.InvoiceID = &row.InvoiceID
 		}
-		if expectedCents.Valid {
-			wallet.ExpectedAmountCents = &expectedCents.Int64
+		if row.ExpectedAmountCents.Valid {
+			wallet.ExpectedAmountCents = &row.ExpectedAmountCents.Int64
 		}
-		if expectedBase.Valid {
-			wallet.ExpectedAmountBaseUnits, _ = new(big.Int).SetString(expectedBase.String, 10)
+		if row.ExpectedAmountBaseUnits != "" {
+			wallet.ExpectedAmountBaseUnits, _ = new(big.Int).SetString(row.ExpectedAmountBaseUnits, 10)
 		}
-		if price.Valid {
-			wallet.QuotedPriceUSD, _ = decimal.NewFromString(price.String)
+		if row.QuotedPriceUsd != "" {
+			wallet.QuotedPriceUSD, _ = decimal.NewFromString(row.QuotedPriceUsd)
 		}
-		if fx.Valid {
-			value, parseErr := decimal.NewFromString(fx.String)
+		if row.QuotedUsdToEurRate != "" {
+			value, parseErr := decimal.NewFromString(row.QuotedUsdToEurRate)
 			if parseErr == nil {
 				wallet.QuotedUSDToEURRate = &value
 			}
 		}
-		wallet.QuoteSource = quoteSource.String
-		wallet.CreditedAmountCurrency = currency.String
-		wallet.ClientIP = clientIP.String
-		if invoiceAmount.Valid {
-			wallet.InvoiceAmount = &invoiceAmount.Float64
+		wallet.QuoteSource = row.QuoteSource
+		wallet.CreditedAmountCurrency = row.CreditedAmountCurrency
+		wallet.ClientIP = row.ClientIp
+		if row.InvoiceCurrency != "" {
+			wallet.InvoiceAmount = &row.InvoiceAmount
+			wallet.InvoiceCurrency = &row.InvoiceCurrency
 		}
-		if invoiceCurrency.Valid {
-			wallet.InvoiceCurrency = &invoiceCurrency.String
-		}
-		cm.allocateObservedDeposit(ctx, eventID, txHash, blockNumber, amount, wallet)
+		cm.allocateObservedDeposit(ctx, row.EventID, row.TxHash, row.BlockNumber, row.AmountBaseUnits, wallet)
 	}
 }
 
@@ -547,20 +476,16 @@ func (cm *CryptoMonitor) allocateObservedDeposit(ctx context.Context, eventID, t
 	}
 	match := cm.evaluatePayment(tx, wallet, expectedAmount, network)
 	if !match.amountSeen {
-		_, _ = cm.db.ExecContext(ctx, `
-			UPDATE purser.crypto_deposit_events
-			SET status = 'review_required', wallet_id = $2, allocation_error = $3
-			WHERE id = $1 AND status = 'confirmed'
-		`, eventID, wallet.ID, "deposit amount does not match allocatable quote")
+		_ = purserdb.New(cm.db).MarkCryptoDepositAllocationReview(ctx, purserdb.MarkCryptoDepositAllocationReviewParams{
+			WalletID: wallet.ID, AllocationError: sql.NullString{String: "deposit amount does not match allocatable quote", Valid: true}, EventID: eventID,
+		})
 		return
 	}
 	if wallet.Purpose == "invoice" && match.txBaseUnits.Cmp(wallet.ExpectedAmountBaseUnits) < 0 {
 		cm.markDepositForReview(wallet, tx, match.txBaseUnits, "invoice payment is below the exact quote")
-		_, _ = cm.db.ExecContext(ctx, `
-			UPDATE purser.crypto_deposit_events
-			SET status = 'review_required', wallet_id = $2, allocation_error = $3
-			WHERE id = $1 AND status = 'confirmed'
-		`, eventID, wallet.ID, "invoice payment is below the exact quote")
+		_ = purserdb.New(cm.db).MarkCryptoDepositAllocationReview(ctx, purserdb.MarkCryptoDepositAllocationReviewParams{
+			WalletID: wallet.ID, AllocationError: sql.NullString{String: "invoice payment is below the exact quote", Valid: true}, EventID: eventID,
+		})
 		return
 	}
 	if time.Now().After(wallet.ExpiresAt) {

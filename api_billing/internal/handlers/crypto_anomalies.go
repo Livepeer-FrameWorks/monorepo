@@ -5,7 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"frameworks/api_billing/internal/database/purserdb"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
@@ -22,21 +23,10 @@ func recordCryptoAccountingAnomaly(
 	if err != nil {
 		evidenceJSON = []byte(`{}`)
 	}
-	_, err = db.ExecContext(ctx, `
-		INSERT INTO purser.crypto_accounting_anomalies (
-			tenant_id, kind, network, reference_type, reference_id,
-			amount_cents, currency, detail, evidence_json
-		) VALUES ($1, $2, $3, $4, $5, $6, 'EUR', $7, $8)
-		ON CONFLICT (kind, reference_type, reference_id) DO UPDATE
-		SET last_seen_at = NOW(),
-		    occurrences = purser.crypto_accounting_anomalies.occurrences + 1,
-		    detail = EXCLUDED.detail,
-		    evidence_json = EXCLUDED.evidence_json,
-		    status = 'open',
-		    resolved_at = NULL,
-		    resolved_by = NULL,
-		    resolution_note = NULL
-	`, tenantID, kind, network, referenceType, referenceID, amountCents, detail, database.JSONText(evidenceJSON))
+	err = purserdb.New(db).RecordCryptoAccountingAnomaly(ctx, purserdb.RecordCryptoAccountingAnomalyParams{
+		TenantID: tenantID, Kind: kind, Network: network, ReferenceType: referenceType,
+		ReferenceID: referenceID, AmountCents: amountCents, Detail: detail, EvidenceJson: evidenceJSON,
+	})
 	if err != nil && logger != nil {
 		logger.WithError(err).WithFields(logging.Fields{
 			"tenant_id": tenantID, "kind": kind, "reference_id": referenceID,
@@ -50,12 +40,10 @@ func resolveCryptoAccountingAnomaly(
 	logger logging.Logger,
 	kind, referenceType, referenceID, note string,
 ) {
-	_, err := db.ExecContext(ctx, `
-		UPDATE purser.crypto_accounting_anomalies
-		SET status = 'resolved', resolved_at = NOW(), resolution_note = $4
-		WHERE kind = $1 AND reference_type = $2 AND reference_id = $3
-		  AND status = 'open'
-	`, kind, referenceType, referenceID, note)
+	_, err := purserdb.New(db).ResolveCryptoAccountingAnomaly(ctx, purserdb.ResolveCryptoAccountingAnomalyParams{
+		Note: sql.NullString{String: note, Valid: true}, Kind: kind,
+		ReferenceType: referenceType, ReferenceID: referenceID,
+	})
 	if err != nil && logger != nil {
 		logger.WithError(err).WithFields(logging.Fields{
 			"kind": kind, "reference_type": referenceType, "reference_id": referenceID,

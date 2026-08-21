@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_billing/internal/database/purserdb"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
@@ -119,15 +121,7 @@ func (hw *HDWallet) GetNextDerivationIndex() (uint32, string, error) {
 // GetNextDerivationIndexTx atomically gets and increments the next derivation index within a transaction.
 // Returns the index to use and the xpub.
 func (hw *HDWallet) GetNextDerivationIndexTx(ctx context.Context, tx *sql.Tx) (uint32, string, error) {
-	var index int
-	var xpub string
-
-	err := tx.QueryRowContext(ctx, `
-		UPDATE purser.hd_wallet_state
-		SET next_index = next_index + 1, updated_at = NOW()
-		WHERE id = 1
-		RETURNING next_index - 1, xpub
-	`).Scan(&index, &xpub)
+	allocated, err := purserdb.New(tx).AllocateHDWalletDerivationIndex(ctx)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, "", fmt.Errorf("hd_wallet_state not initialized - run: INSERT INTO purser.hd_wallet_state (xpub) VALUES ('your-xpub')")
@@ -136,7 +130,7 @@ func (hw *HDWallet) GetNextDerivationIndexTx(ctx context.Context, tx *sql.Tx) (u
 		return 0, "", fmt.Errorf("failed to get next derivation index: %w", err)
 	}
 
-	return uint32(index), xpub, nil
+	return uint32(allocated.DerivationIndex), allocated.Xpub, nil
 }
 
 // GetNextNonZeroDerivationIndexTx allocates a derivation index within a transaction, skipping index 0.
@@ -155,13 +149,13 @@ func (hw *HDWallet) GetNextNonZeroDerivationIndexTx(ctx context.Context, tx *sql
 // EnsureState ensures the HD wallet state row exists.
 // If no row exists, it will initialize with the provided xpub.
 func (hw *HDWallet) EnsureState(ctx context.Context, xpub string) (bool, error) {
-	var existing string
-	err := hw.db.QueryRowContext(ctx, `SELECT xpub FROM purser.hd_wallet_state WHERE id = 1`).Scan(&existing)
+	queries := purserdb.New(hw.db)
+	existing, err := queries.GetHDWalletXpub(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
 		if strings.TrimSpace(xpub) == "" {
 			return false, fmt.Errorf("hd_wallet_state not initialized and HD_WALLET_XPUB not set")
 		}
-		_, err = hw.db.ExecContext(ctx, `INSERT INTO purser.hd_wallet_state (id, xpub) VALUES (1, $1)`, xpub)
+		err = queries.InitializeHDWalletState(ctx, xpub)
 		if err != nil {
 			return false, fmt.Errorf("failed to initialize hd_wallet_state: %w", err)
 		}
@@ -280,71 +274,48 @@ func (hw *HDWallet) GenerateDepositAddressTx(ctx context.Context, tx *sql.Tx, p 
 	address = strings.ToLower(address)
 	walletID = uuid.New().String()
 
-	var (
-		invoiceIDValue          any
-		expectedAmountValue     any
-		expectedAmountBaseUnits any
-		quotedPriceUSD          any
-		quotedUSDToEURRate      any
-		quotedAt                any
-		quoteSource             any
-		creditedAmountCurrency  any
-		clientIPValue           any
-		taxDocumentKind         any
-		taxProfileSnapshot      any
-	)
+	var invoiceID sql.NullString
 	if p.InvoiceID != nil {
-		invoiceIDValue = *p.InvoiceID
+		invoiceID = sql.NullString{String: *p.InvoiceID, Valid: true}
 	}
+	var expectedAmount sql.NullInt64
 	if p.ExpectedAmountCents != nil {
-		expectedAmountValue = *p.ExpectedAmountCents
+		expectedAmount = sql.NullInt64{Int64: *p.ExpectedAmountCents, Valid: true}
 	}
+	clientIP := sql.NullString{}
 	if strings.TrimSpace(p.ClientIP) != "" {
-		clientIPValue = strings.TrimSpace(p.ClientIP)
+		clientIP = sql.NullString{String: strings.TrimSpace(p.ClientIP), Valid: true}
 	}
-	if p.Quote != nil {
-		expectedAmountBaseUnits = p.Quote.ExpectedAmountBaseUnits.String()
-		quotedPriceUSD = p.Quote.QuotedPriceUSD.String()
-		if p.Quote.QuotedUSDToEURRate != nil {
-			quotedUSDToEURRate = p.Quote.QuotedUSDToEURRate.String()
-		}
-		quotedAt = p.Quote.QuotedAt
-		quoteSource = p.Quote.QuoteSource
-		creditedAmountCurrency = p.Quote.CreditedAmountCurrency
-		taxDocumentKind = p.Quote.TaxDocumentKind
-		profileJSON, marshalErr := json.Marshal(p.Quote.TaxProfile)
-		if marshalErr != nil {
-			return "", "", fmt.Errorf("marshal crypto tax profile: %w", marshalErr)
-		}
-		taxProfileSnapshot = profileJSON
+	quotedUSDToEURRate := sql.NullString{}
+	if p.Quote.QuotedUSDToEURRate != nil {
+		quotedUSDToEURRate = sql.NullString{String: p.Quote.QuotedUSDToEURRate.String(), Valid: true}
 	}
-
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO purser.crypto_wallets (
-			id, tenant_id, purpose, invoice_id, expected_amount_cents,
-			asset, network, wallet_address, derivation_index, derivation_xpub, expires_at,
-			expected_amount_base_units, quoted_price_usd, quoted_usd_to_eur_rate,
-			quoted_at, quote_source, credited_amount_currency, client_ip,
-			tax_document_kind, tax_profile_snapshot
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20::jsonb)
-	`,
-		walletID, p.TenantID, p.Purpose, invoiceIDValue, expectedAmountValue,
-		p.Asset, p.Network, address, derivationIndex, xpub, p.ExpiresAt,
-		expectedAmountBaseUnits, quotedPriceUSD, quotedUSDToEURRate,
-		quotedAt, quoteSource, creditedAmountCurrency, clientIPValue,
-		taxDocumentKind, taxProfileSnapshot,
-	)
+	profileJSON, marshalErr := json.Marshal(p.Quote.TaxProfile)
+	if marshalErr != nil {
+		return "", "", fmt.Errorf("marshal crypto tax profile: %w", marshalErr)
+	}
+	queries := purserdb.New(tx)
+	err = queries.CreateCryptoWallet(ctx, purserdb.CreateCryptoWalletParams{
+		ID: walletID, TenantID: p.TenantID, Purpose: p.Purpose,
+		InvoiceID: invoiceID, ExpectedAmountCents: expectedAmount,
+		Asset: p.Asset, Network: p.Network, WalletAddress: address,
+		DerivationIndex: int32(derivationIndex), DerivationXpub: xpub, ExpiresAt: p.ExpiresAt,
+		ExpectedAmountBaseUnits: sql.NullString{String: p.Quote.ExpectedAmountBaseUnits.String(), Valid: true},
+		QuotedPriceUsd:          sql.NullString{String: p.Quote.QuotedPriceUSD.String(), Valid: true},
+		QuotedUsdToEurRate:      quotedUSDToEURRate,
+		QuotedAt:                sql.NullTime{Time: p.Quote.QuotedAt, Valid: true},
+		QuoteSource:             sql.NullString{String: p.Quote.QuoteSource, Valid: true},
+		CreditedAmountCurrency:  sql.NullString{String: p.Quote.CreditedAmountCurrency, Valid: true},
+		ClientIp:                clientIP, TaxDocumentKind: p.Quote.TaxDocumentKind, TaxProfileSnapshot: profileJSON,
+	})
 	if err != nil {
 		return "", "", fmt.Errorf("failed to insert crypto wallet: %w", err)
 	}
 	if p.Asset == "ETH" || p.Asset == "USDC" {
-		if _, err = tx.ExecContext(ctx, `
-			INSERT INTO purser.crypto_custody_addresses (
-				tenant_id, source_kind, source_ref, network, asset, address, derivation_index, derivation_xpub
-			) VALUES ($1, 'direct_deposit', $2, $3, $4, LOWER($5), $6, $7)
-			ON CONFLICT (network, asset, address) DO UPDATE
-			SET updated_at = NOW()
-		`, p.TenantID, walletID, p.Network, p.Asset, address, derivationIndex, xpub); err != nil {
+		if err = queries.RegisterDirectDepositCustodyAddress(ctx, purserdb.RegisterDirectDepositCustodyAddressParams{
+			TenantID: p.TenantID, WalletID: walletID, Network: p.Network, Asset: p.Asset,
+			Address: address, DerivationIndex: int32(derivationIndex), DerivationXpub: xpub,
+		}); err != nil {
 			return "", "", fmt.Errorf("failed to register crypto custody address: %w", err)
 		}
 	}
@@ -370,11 +341,7 @@ func (hw *HDWallet) InitializeHDWallet(ctx context.Context, xpub string, network
 		return err
 	}
 
-	_, err = hw.db.ExecContext(ctx, `
-		INSERT INTO purser.hd_wallet_state (id, xpub, network, next_index)
-		VALUES (1, $1, $2, 0)
-		ON CONFLICT (id) DO UPDATE SET xpub = $1, network = $2, updated_at = NOW()
-	`, xpub, network)
+	err = purserdb.New(hw.db).UpsertHDWalletState(ctx, purserdb.UpsertHDWalletStateParams{Xpub: xpub, Network: network})
 	if err != nil {
 		return fmt.Errorf("failed to initialize hd_wallet_state: %w", err)
 	}
@@ -431,10 +398,11 @@ func (hw *HDWallet) RotateHDWallet(ctx context.Context, xpub, network string) (p
 		return "", 0, false, fmt.Errorf("begin HD wallet rotation: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
-	var next int64
-	err = tx.QueryRowContext(ctx, `SELECT xpub, next_index FROM purser.hd_wallet_state WHERE id = 1 FOR UPDATE`).Scan(&previous, &next)
+	queries := purserdb.New(tx)
+	state, stateErr := queries.LockHDWalletState(ctx)
+	err = stateErr
 	if errors.Is(err, sql.ErrNoRows) {
-		if _, err = tx.ExecContext(ctx, `INSERT INTO purser.hd_wallet_state (id, xpub, network, next_index) VALUES (1, $1, $2, 0)`, xpub, network); err != nil {
+		if err = queries.InitializeRotatedHDWalletState(ctx, purserdb.InitializeRotatedHDWalletStateParams{Xpub: xpub, Network: network}); err != nil {
 			return "", 0, false, fmt.Errorf("initialize HD wallet during rotation: %w", err)
 		}
 		if err = tx.Commit(); err != nil {
@@ -445,10 +413,11 @@ func (hw *HDWallet) RotateHDWallet(ctx context.Context, xpub, network string) (p
 	if err != nil {
 		return "", 0, false, fmt.Errorf("load active HD wallet key: %w", err)
 	}
+	previous, next := state.Xpub, state.NextIndex
 	if strings.TrimSpace(previous) == strings.TrimSpace(xpub) {
 		return previous, uint32(next), false, nil
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE purser.hd_wallet_state SET xpub = $1, network = $2, updated_at = NOW() WHERE id = 1`, xpub, network); err != nil {
+	if err = queries.RotateHDWalletState(ctx, purserdb.RotateHDWalletStateParams{Xpub: xpub, Network: network}); err != nil {
 		return "", 0, false, fmt.Errorf("rotate active HD wallet key: %w", err)
 	}
 	if err = tx.Commit(); err != nil {
@@ -459,8 +428,7 @@ func (hw *HDWallet) RotateHDWallet(ctx context.Context, xpub, network string) (p
 
 // ValidateXpub checks if stored xpub can derive addresses
 func (hw *HDWallet) ValidateXpub(ctx context.Context) error {
-	var xpub string
-	err := hw.db.QueryRowContext(ctx, `SELECT xpub FROM purser.hd_wallet_state WHERE id = 1`).Scan(&xpub)
+	xpub, err := purserdb.New(hw.db).GetHDWalletXpub(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("hd_wallet_state not initialized")
 	}

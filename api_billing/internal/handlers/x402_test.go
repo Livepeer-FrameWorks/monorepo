@@ -162,7 +162,7 @@ func TestSettlePaymentReturnsExistingSettlementBeforeVerification(t *testing.T) 
 	}
 
 	handler := &X402Handler{db: mockDB, logger: logrus.New()}
-	mock.ExpectQuery("SELECT id, network, tx_hash, tenant_id, amount_cents, status").
+	mock.ExpectQuery("SELECT id::text AS id, network, tx_hash, tenant_id::text AS tenant_id").
 		WithArgs("base", "0x1111111111111111111111111111111111111111", payload.Payload.Authorization.Nonce).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "network", "tx_hash", "tenant_id", "amount_cents", "status", "auth_payload", "client_ip"}).
 			AddRow("nonce-1", "base", "0xabc", "tenant-1", int64(2300), "confirmed", string(payloadJSON), "127.0.0.1"))

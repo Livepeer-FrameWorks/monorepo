@@ -41,20 +41,18 @@ func TestConfirmPrepaidTopupCreatesBalanceAndTransaction(t *testing.T) {
 		WithArgs("tenant-1", currency).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	mock.ExpectQuery("SELECT balance_cents FROM purser.prepaid_balances").
-		WithArgs("tenant-1", currency).
-		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(0)))
-
-	mock.ExpectExec("UPDATE purser.prepaid_balances").
+	mock.ExpectQuery("UPDATE purser.prepaid_balances").
 		WithArgs(int64(2500), "tenant-1", currency).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(2500)))
 
 	mock.ExpectExec("INSERT INTO purser.balance_transactions").
-		WithArgs(sqlmock.AnyArg(), "tenant-1", int64(2500), int64(2500), sqlmock.AnyArg(), "wallet-1", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "tenant-1", int64(2500), int64(2500), "topup",
+			"Crypto top-up via USDC (0xabc)", "wallet-1", "crypto_payment",
+			nil, nil, nil, nil, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectExec("UPDATE purser.crypto_wallets").
-		WithArgs("wallet-1", int64(2500), "USD", "tenant-1").
+		WithArgs(int64(2500), "USD", "wallet-1", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	mock.ExpectRollback()
@@ -109,8 +107,8 @@ func TestConfirmInvoicePaymentUpdatesPendingIntent(t *testing.T) {
 	}
 	chainTx := CryptoTransaction{Hash: "0xtx", BlockNumber: 123}
 
-	mock.ExpectQuery("UPDATE purser.billing_payments bp").
-		WithArgs("0xtx", sqlmock.AnyArg(), 42.5, "USDC", "base", int64(123), "invoice-1", "tenant-1", "crypto_usdc", "0xwallet").
+	mock.ExpectQuery("UPDATE purser.billing_payments payment").
+		WithArgs("0xtx", sqlmock.AnyArg(), "42.5", "USDC", "base", int64(123), "invoice-1", "tenant-1", "crypto_usdc", "0xwallet").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "amount", "currency"}).AddRow("payment-1", 42.50, "EUR"))
 	mock.ExpectExec("UPDATE purser.billing_invoices").
 		WithArgs(sqlmock.AnyArg(), "invoice-1", "tenant-1").
@@ -240,18 +238,17 @@ func TestCreditInvoiceOverpaymentUsesLockedQuoteAndAtomicLedger(t *testing.T) {
 	}
 	mock.ExpectExec(`INSERT INTO purser\.prepaid_balances`).
 		WithArgs("tenant-overpay", "EUR").WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(`SELECT balance_cents FROM purser\.prepaid_balances`).
-		WithArgs("tenant-overpay", "EUR").
-		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(200)))
-	mock.ExpectExec(`UPDATE purser\.prepaid_balances SET balance_cents`).
-		WithArgs(int64(335), "tenant-overpay", "EUR").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`UPDATE purser\.prepaid_balances`).
+		WithArgs(int64(135), "tenant-overpay", "EUR").
+		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(335)))
 	mock.ExpectExec(`INSERT INTO purser\.balance_transactions`).
 		WithArgs(sqlmock.AnyArg(), "tenant-overpay", int64(135), int64(335),
-			"Crypto invoice overpayment via USDC", "wallet-overpay",
-			"confirmed receipt exceeded exact invoice quote", sqlmock.AnyArg()).
+			"topup", "Crypto invoice overpayment via USDC", "wallet-overpay",
+			"crypto_invoice_overpayment", "system", nil,
+			"confirmed receipt exceeded exact invoice quote", nil, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE purser\.crypto_wallets`).
-		WithArgs("wallet-overpay", int64(135), "EUR", "tenant-overpay").
+		WithArgs(int64(135), "EUR", "wallet-overpay", "tenant-overpay").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectRollback()
 

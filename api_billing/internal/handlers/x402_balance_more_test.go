@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 
@@ -67,9 +68,19 @@ func TestCreditPrepaidBalanceTxIdempotent(t *testing.T) {
 	mock.ExpectBegin()
 	// A settlement already recorded for this nonce returns its prior
 	// balance_after and short-circuits — no second credit applied.
-	mock.ExpectQuery(`SELECT balance_after_cents FROM purser\.balance_transactions`).
-		WithArgs("tenant-1", "nonce-1").
-		WillReturnRows(sqlmock.NewRows([]string{"balance_after_cents"}).AddRow(int64(9000)))
+	mock.ExpectQuery(`INSERT INTO purser\.balance_transactions`).
+		WithArgs(sqlmock.AnyArg(), "tenant-1", int64(500), "topup", sqlmock.AnyArg(), "nonce-1", "x402_payment", nil, nil, nil, nil, sqlmock.AnyArg()).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`SELECT id, tenant_id, amount_cents, balance_after_cents`).
+		WithArgs("tenant-1", "x402_payment", "nonce-1").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "tenant_id", "amount_cents", "balance_after_cents", "transaction_type",
+			"description", "reference_id", "reference_type", "created_at",
+		}).AddRow(
+			"11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222",
+			int64(500), int64(9000), "topup", "x402 topup", "33333333-3333-3333-3333-333333333333",
+			"x402_payment", time.Now(),
+		))
 	mock.ExpectCommit()
 
 	tx, err := db.BeginTx(context.Background(), nil)
@@ -100,23 +111,17 @@ func TestCreditPrepaidBalanceTxNewCredit(t *testing.T) {
 	h := &X402Handler{db: db, logger: logging.NewLogger()}
 
 	mock.ExpectBegin()
-	// No prior settlement for this nonce.
-	mock.ExpectQuery(`SELECT balance_after_cents FROM purser\.balance_transactions`).
-		WithArgs("tenant-1", "nonce-2").
-		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`INSERT INTO purser\.balance_transactions`).
+		WithArgs(sqlmock.AnyArg(), "tenant-1", int64(500), "topup", sqlmock.AnyArg(), "nonce-2", "x402_payment", nil, nil, nil, nil, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("11111111-1111-1111-1111-111111111111"))
 	mock.ExpectExec(`INSERT INTO purser\.prepaid_balances`).
-		WithArgs("tenant-1", sqlmock.AnyArg()).
+		WithArgs("tenant-1", "EUR").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(`SELECT balance_cents FROM purser\.prepaid_balances\s+WHERE tenant_id = \$1 AND currency = \$2\s+FOR UPDATE`).
-		WithArgs("tenant-1", sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(1000)))
-	// New balance = current (1000) + amount (500).
-	mock.ExpectExec(`UPDATE purser\.prepaid_balances\s+SET balance_cents = \$1`).
-		WithArgs(int64(1500), "tenant-1", sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	// Ledger row links to the nonce; description carries a truncated tx hash.
-	mock.ExpectExec(`INSERT INTO purser\.balance_transactions`).
-		WithArgs(sqlmock.AnyArg(), "tenant-1", int64(500), int64(1500), sqlmock.AnyArg(), "nonce-2").
+	mock.ExpectQuery(`UPDATE purser\.prepaid_balances`).
+		WithArgs(int64(500), "tenant-1", "EUR").
+		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(1500)))
+	mock.ExpectExec(`UPDATE purser\.balance_transactions`).
+		WithArgs(int64(1500), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 

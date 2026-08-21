@@ -25,17 +25,17 @@ func TestCreatePaymentQuoteCoversDeficitAndBuffer(t *testing.T) {
 	ecbRateCache.fetchedAt = time.Now()
 	ecbRateCache.Unlock()
 
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT COALESCE(balance_cents, 0)")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT balance_cents")).
 		WithArgs("tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(-250)))
-	mock.ExpectQuery("SELECT billing_email, billing_name, billing_company, billing_address, tax_id").
+	mock.ExpectQuery("SELECT billing_email, billing_name, billing_company").
 		WithArgs("tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id"}))
 	mock.ExpectExec("INSERT INTO purser.x402_payment_quotes").
 		WithArgs(
 			sqlmock.AnyArg(), "tenant-1", "graphql://createStream", "graphql",
 			"eip155:8453", "0xAsset", "0xpayto", "7500000", int64(750),
-			float64(1), sqlmock.AnyArg(), "simplified", sqlmock.AnyArg(), sqlmock.AnyArg(),
+			"1.0000000000", sqlmock.AnyArg(), "simplified", sqlmock.AnyArg(), sqlmock.AnyArg(),
 		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
@@ -77,10 +77,10 @@ func TestClaimPaymentQuoteIsCompareAndSwap(t *testing.T) {
 	h := &X402Handler{db: db}
 
 	mock.ExpectExec("UPDATE purser.x402_payment_quotes").
-		WithArgs("quote-1", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "quote-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE purser.x402_payment_quotes").
-		WithArgs("quote-1", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "quote-1").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	claimed, err := h.claimPaymentQuote(context.Background(), "quote-1")
@@ -105,7 +105,7 @@ func TestClaimPaymentQuoteOnlyReclaimsLeaseWithoutDurableIntent(t *testing.T) {
 	h := &X402Handler{db: db}
 
 	mock.ExpectExec(`(?s)status = 'claiming'.*claim_expires_at < NOW\(\).*NOT EXISTS.*x402_nonces`).
-		WithArgs("quote-1", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "quote-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	claimed, err := h.claimPaymentQuote(context.Background(), "quote-1")
@@ -133,7 +133,7 @@ func TestValidateV2QuoteRejectsAlteredResourceExtension(t *testing.T) {
 		},
 	}
 	requirements, _ := json.Marshal(expected)
-	mock.ExpectQuery("SELECT id::text, tenant_id::text, resource, resource_class").
+	mock.ExpectQuery("SELECT id::text AS id, tenant_id::text AS tenant_id, resource, resource_class").
 		WithArgs("quote-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "tenant_id", "resource", "resource_class", "network", "asset", "pay_to",
@@ -141,7 +141,7 @@ func TestValidateV2QuoteRejectsAlteredResourceExtension(t *testing.T) {
 			"tax_document_kind", "tax_profile_snapshot", "expires_at", "status",
 		}).AddRow("quote-1", "tenant-1", "graphql://createStream", "graphql", "eip155:8453",
 			Networks["base"].USDCContract, expected.PayTo, "5000000", int64(500), "0.9",
-			string(requirements), "simplified", `{}`, time.Now().Add(time.Minute), "offered"))
+			requirements, "simplified", []byte(`{}`), time.Now().Add(time.Minute), "offered"))
 
 	h := &X402Handler{db: db}
 	_, _, err = h.validateV2Quote(context.Background(), "tenant-1", &X402PaymentPayload{
@@ -177,7 +177,7 @@ func TestValidateV2QuoteRejectsAlteredTransferMethod(t *testing.T) {
 		},
 	}
 	requirements, _ := json.Marshal(expected)
-	mock.ExpectQuery("SELECT id::text, tenant_id::text, resource, resource_class").
+	mock.ExpectQuery("SELECT id::text AS id, tenant_id::text AS tenant_id, resource, resource_class").
 		WithArgs("quote-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "tenant_id", "resource", "resource_class", "network", "asset", "pay_to",
@@ -185,7 +185,7 @@ func TestValidateV2QuoteRejectsAlteredTransferMethod(t *testing.T) {
 			"tax_document_kind", "tax_profile_snapshot", "expires_at", "status",
 		}).AddRow("quote-1", "tenant-1", "graphql://createStream", "graphql", "eip155:8453",
 			Networks["base"].USDCContract, expected.PayTo, "5000000", int64(500), "0.9",
-			string(requirements), "simplified", `{}`, time.Now().Add(time.Minute), "offered"))
+			requirements, "simplified", []byte(`{}`), time.Now().Add(time.Minute), "offered"))
 
 	h := &X402Handler{db: db}
 	_, _, err = h.validateV2Quote(context.Background(), "tenant-1", &X402PaymentPayload{

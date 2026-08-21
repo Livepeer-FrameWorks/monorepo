@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_billing/internal/database/purserdb"
 	"github.com/google/uuid"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
@@ -123,21 +124,11 @@ func (r *X402Reconciler) Stop() {
 // for tx_hash did not land. authorizationState on the USDC contract is the
 // oracle: unused = nothing on-chain, used = an unrecorded tx settled it.
 func (r *X402Reconciler) reconcileSubmittingIntents(ctx context.Context) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, network, payer_address, nonce, tenant_id, amount_cents, settled_at,
-		       auth_payload, COALESCE(tx_hash, '')
-		FROM purser.x402_nonces
-		WHERE status = 'submitting'
-		AND settled_at < NOW() - INTERVAL '30 seconds'
-		ORDER BY settled_at ASC
-		LIMIT 50
-	`)
+	rows, err := purserdb.New(r.db).ListSubmittingX402Intents(ctx)
 	if err != nil {
 		r.logger.WithError(err).Error("Failed to query submitting x402 intents")
 		return
 	}
-	defer func() { _ = rows.Close() }()
-
 	type intent struct {
 		ID           string
 		Network      string
@@ -146,17 +137,16 @@ func (r *X402Reconciler) reconcileSubmittingIntents(ctx context.Context) {
 		TenantID     string
 		AmountCents  int64
 		SettledAt    time.Time
-		AuthPayload  sql.NullString
+		AuthPayload  string
 		TxHash       string
 	}
-	var intents []intent
-	for rows.Next() {
-		var it intent
-		if err := rows.Scan(&it.ID, &it.Network, &it.PayerAddress, &it.Nonce, &it.TenantID, &it.AmountCents, &it.SettledAt, &it.AuthPayload, &it.TxHash); err != nil {
-			r.logger.WithError(err).Error("Failed to scan submitting intent")
-			continue
-		}
-		intents = append(intents, it)
+	intents := make([]intent, 0, len(rows))
+	for _, row := range rows {
+		intents = append(intents, intent{
+			ID: row.ID, Network: row.Network, PayerAddress: row.PayerAddress, Nonce: row.Nonce,
+			TenantID: row.TenantID, AmountCents: row.AmountCents, SettledAt: row.SettledAt.Time,
+			AuthPayload: row.AuthPayload, TxHash: row.TxHash,
+		})
 	}
 
 	for _, it := range intents {
@@ -169,7 +159,7 @@ func (r *X402Reconciler) reconcileSubmittingIntents(ctx context.Context) {
 			continue
 		}
 
-		validBefore := r.parseAuthValidBefore(it.AuthPayload.String)
+		validBefore := r.parseAuthValidBefore(it.AuthPayload)
 		expired := validBefore > 0 && time.Now().Unix() > validBefore
 
 		used, callErr := r.callAuthorizationState(ctx, network, it.PayerAddress, it.Nonce)
@@ -186,13 +176,9 @@ func (r *X402Reconciler) reconcileSubmittingIntents(ctx context.Context) {
 
 		switch {
 		case used && it.TxHash != "":
-			if _, err := r.db.ExecContext(ctx, `
-				UPDATE purser.x402_nonces SET status = 'pending', submitted_at = COALESCE(submitted_at, NOW())
-				WHERE id = $1 AND status = 'submitting';
-				UPDATE purser.x402_settlement_attempts
-				SET state = 'broadcast', updated_at = NOW()
-				WHERE settlement_id = $1 AND transaction_hash = LOWER($2)
-			`, it.ID, it.TxHash); err != nil {
+			if err := purserdb.New(r.db).AdvanceConsumedX402Attempt(ctx, purserdb.AdvanceConsumedX402AttemptParams{
+				TxHash: it.TxHash, ID: it.ID,
+			}); err != nil {
 				r.logger.WithError(err).WithField("nonce_id", it.ID).Warn("Failed to advance consumed durable x402 attempt")
 			}
 		case used:
@@ -252,17 +238,7 @@ func (r *X402Reconciler) reconcileSubmittingIntents(ctx context.Context) {
 }
 
 func (r *X402Reconciler) claimSubmittingIntent(ctx context.Context, id string) (bool, error) {
-	res, err := r.db.ExecContext(ctx, `
-		UPDATE purser.x402_nonces
-		SET last_submit_attempt_at = NOW()
-		WHERE id = $1
-		  AND status = 'submitting'
-		  AND (last_submit_attempt_at IS NULL OR last_submit_attempt_at < NOW() - INTERVAL '2 minutes')
-	`, id)
-	if err != nil {
-		return false, err
-	}
-	rows, err := res.RowsAffected()
+	rows, err := purserdb.New(r.db).ClaimSubmittingX402Intent(ctx, id)
 	if err != nil {
 		return false, err
 	}
@@ -358,29 +334,17 @@ func (r *X402Reconciler) callAuthorizationState(ctx context.Context, network Net
 // reconcilePendingSettlements checks all pending settlements and confirms or fails them
 func (r *X402Reconciler) reconcilePendingSettlements(ctx context.Context) {
 	// Query pending settlements older than 15 seconds (give tx time to propagate)
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, network, tx_hash, tenant_id, amount_cents, settled_at,
-		       COALESCE(client_ip::text, ''), auth_payload::text
-		FROM purser.x402_nonces
-		WHERE status = 'pending'
-		AND settled_at < NOW() - INTERVAL '15 seconds'
-		ORDER BY settled_at ASC
-		LIMIT 50
-	`)
+	rows, err := purserdb.New(r.db).ListPendingX402Settlements(ctx)
 	if err != nil {
 		r.logger.WithError(err).Error("Failed to query pending x402 settlements")
 		return
 	}
-	defer func() { _ = rows.Close() }()
-
-	var settlements []PendingSettlement
-	for rows.Next() {
-		var s PendingSettlement
-		if err := rows.Scan(&s.ID, &s.Network, &s.TxHash, &s.TenantID, &s.AmountCents, &s.SettledAt, &s.ClientIP, &s.AuthPayload); err != nil {
-			r.logger.WithError(err).Error("Failed to scan pending settlement")
-			continue
-		}
-		settlements = append(settlements, s)
+	settlements := make([]PendingSettlement, 0, len(rows))
+	for _, row := range rows {
+		settlements = append(settlements, PendingSettlement{
+			ID: row.ID, Network: row.Network, TxHash: row.TxHash.String, TenantID: row.TenantID,
+			AmountCents: row.AmountCents, SettledAt: row.SettledAt.Time, ClientIP: row.ClientIp, AuthPayload: row.AuthPayload,
+		})
 	}
 
 	if len(settlements) == 0 {
@@ -509,27 +473,14 @@ func (r *X402Reconciler) reconcileSettlement(ctx context.Context, s PendingSettl
 }
 
 func (r *X402Reconciler) reconcileFailedTimeouts(ctx context.Context) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, network, tx_hash, tenant_id, amount_cents, settled_at, auth_payload::text
-		FROM purser.x402_nonces
-		WHERE status = 'failed'
-		AND (failure_reason LIKE 'timeout%' OR failure_reason = 'transaction reorged or missing')
-		AND settled_at > NOW() - ($1 * INTERVAL '1 hour')
-		ORDER BY settled_at ASC
-		LIMIT 50
-	`, r.recoveryWindowHours)
+	rows, err := purserdb.New(r.db).ListRecoverableFailedX402Settlements(ctx, r.recoveryWindowHours)
 	if err != nil {
 		r.logger.WithError(err).Error("Failed to query failed x402 settlements")
 		return
 	}
-	defer func() { _ = rows.Close() }()
-
-	for rows.Next() {
-		var s PendingSettlement
-		if err := rows.Scan(&s.ID, &s.Network, &s.TxHash, &s.TenantID, &s.AmountCents, &s.SettledAt, &s.AuthPayload); err != nil {
-			r.logger.WithError(err).Error("Failed to scan failed settlement")
-			continue
-		}
+	for _, row := range rows {
+		s := PendingSettlement{ID: row.ID, Network: row.Network, TxHash: row.TxHash.String,
+			TenantID: row.TenantID, AmountCents: row.AmountCents, AuthPayload: row.AuthPayload}
 
 		network, ok := Networks[s.Network]
 		if !ok {
@@ -561,17 +512,9 @@ func (r *X402Reconciler) reconcileFailedTimeouts(ctx context.Context) {
 
 		// Only re-credit if we previously debited the tenant due to timeout.
 		// Otherwise a transient debit failure would result in double-credit.
-		var reversalExists bool
-		err = r.db.QueryRowContext(ctx, `
-			SELECT EXISTS(
-				SELECT 1
-				FROM purser.balance_transactions
-				WHERE tenant_id = $1
-				  AND reference_id = $2
-				  AND reference_type = 'x402_failed'
-				  AND transaction_type = 'reversal'
-			)
-		`, s.TenantID, s.ID).Scan(&reversalExists)
+		reversalExists, err := purserdb.New(r.db).CryptoReversalBalanceTransactionExists(ctx, purserdb.CryptoReversalBalanceTransactionExistsParams{
+			TenantID: s.TenantID, ReferenceType: sql.NullString{String: "x402_failed", Valid: true}, ReferenceID: s.ID,
+		})
 		if err != nil {
 			r.logger.WithError(err).WithField("tenant_id", s.TenantID).Error("Failed to check timeout reversal before re-credit")
 			continue
@@ -616,39 +559,15 @@ func (r *X402Reconciler) reconcileFailedTimeouts(ctx context.Context) {
 }
 
 func (r *X402Reconciler) reconcileConfirmedSettlements(ctx context.Context) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, network, tx_hash, tenant_id, amount_cents, settled_at, block_number, COALESCE(client_ip::text, '')
-		FROM purser.x402_nonces
-		WHERE status = 'confirmed'
-		AND (
-			confirmed_at > NOW() - INTERVAL '1 hour'
-			OR rollup_applied_at IS NULL
-			OR NOT EXISTS (
-				SELECT 1 FROM (
-					SELECT tenant_id, reference_type, reference_id FROM purser.simplified_invoices
-					UNION ALL
-					SELECT tenant_id, reference_type, reference_id FROM purser.crypto_invoices
-				) invoice
-				WHERE invoice.tenant_id = purser.x402_nonces.tenant_id
-				  AND invoice.reference_type = 'x402_payment'
-				  AND invoice.reference_id = purser.x402_nonces.tx_hash
-			)
-		)
-		ORDER BY confirmed_at ASC
-		LIMIT 50
-	`)
+	rows, err := purserdb.New(r.db).ListConfirmedX402SettlementsForReconciliation(ctx)
 	if err != nil {
 		r.logger.WithError(err).Error("Failed to query confirmed x402 settlements")
 		return
 	}
-	defer func() { _ = rows.Close() }()
-
-	for rows.Next() {
-		var s PendingSettlement
-		if err := rows.Scan(&s.ID, &s.Network, &s.TxHash, &s.TenantID, &s.AmountCents, &s.SettledAt, &s.BlockNumber, &s.ClientIP); err != nil {
-			r.logger.WithError(err).Error("Failed to scan confirmed settlement")
-			continue
-		}
+	for _, row := range rows {
+		s := PendingSettlement{ID: row.ID, Network: row.Network, TxHash: row.TxHash.String,
+			TenantID: row.TenantID, AmountCents: row.AmountCents, SettledAt: row.SettledAt.Time,
+			BlockNumber: row.BlockNumber, ClientIP: row.ClientIp}
 
 		network, ok := Networks[s.Network]
 		if !ok {
@@ -692,17 +611,9 @@ func (r *X402Reconciler) reconcileConfirmedSettlements(ctx context.Context) {
 				continue
 			}
 
-			var creditExists bool
-			qErr := r.db.QueryRowContext(ctx, `
-				SELECT EXISTS(
-					SELECT 1
-					FROM purser.balance_transactions
-					WHERE tenant_id = $1
-					  AND reference_id = $2
-					  AND reference_type = 'x402_payment'
-					  AND transaction_type = 'topup'
-				)
-			`, s.TenantID, s.ID).Scan(&creditExists)
+			creditExists, qErr := purserdb.New(r.db).CryptoReversalBalanceTransactionExists(ctx, purserdb.CryptoReversalBalanceTransactionExistsParams{
+				TenantID: s.TenantID, ReferenceType: sql.NullString{String: "x402_payment", Valid: true}, ReferenceID: s.ID,
+			})
 			if qErr != nil {
 				r.logger.WithError(qErr).WithFields(logging.Fields{
 					"tenant_id": s.TenantID,
@@ -734,17 +645,9 @@ func (r *X402Reconciler) reconcileConfirmedSettlements(ctx context.Context) {
 		}
 
 		if receipt.Status != "0x1" {
-			var creditExists bool
-			qErr := r.db.QueryRowContext(ctx, `
-				SELECT EXISTS(
-					SELECT 1
-					FROM purser.balance_transactions
-					WHERE tenant_id = $1
-					  AND reference_id = $2
-					  AND reference_type = 'x402_payment'
-					  AND transaction_type = 'topup'
-				)
-			`, s.TenantID, s.ID).Scan(&creditExists)
+			creditExists, qErr := purserdb.New(r.db).CryptoReversalBalanceTransactionExists(ctx, purserdb.CryptoReversalBalanceTransactionExistsParams{
+				TenantID: s.TenantID, ReferenceType: sql.NullString{String: "x402_payment", Valid: true}, ReferenceID: s.ID,
+			})
 			if qErr != nil {
 				r.logger.WithError(qErr).WithFields(logging.Fields{
 					"tenant_id": s.TenantID,
@@ -838,11 +741,9 @@ func (r *X402Reconciler) getLatestBlockNumber(ctx context.Context, network Netwo
 }
 
 func (r *X402Reconciler) updatePendingReceipt(ctx context.Context, id string, blockNumber, gasUsed int64) {
-	_, err := r.db.ExecContext(ctx, `
-		UPDATE purser.x402_nonces
-		SET block_number = $2, gas_used = $3
-		WHERE id = $1
-	`, id, blockNumber, gasUsed)
+	err := purserdb.New(r.db).UpdatePendingX402Receipt(ctx, purserdb.UpdatePendingX402ReceiptParams{
+		BlockNumber: sql.NullInt64{Int64: blockNumber, Valid: true}, GasUsed: sql.NullInt64{Int64: gasUsed, Valid: true}, ID: id,
+	})
 	if err != nil {
 		r.logger.WithError(err).WithField("id", id).Error("Failed to update pending receipt metadata")
 	}
@@ -860,14 +761,10 @@ func (r *X402Reconciler) recoverReversedBalance(ctx context.Context, tenantID st
 
 	currency := billing.DefaultCurrency()
 
-	var recoveryExists bool
-	err = tx.QueryRowContext(ctx, `
-		SELECT EXISTS(
-			SELECT 1 FROM purser.balance_transactions
-			WHERE tenant_id = $1 AND reference_type = 'x402_recovery'
-			  AND reference_id = $2 AND transaction_type = 'topup'
-		)
-	`, tenantID, nonceID).Scan(&recoveryExists)
+	queries := purserdb.New(tx)
+	recoveryExists, err := queries.CryptoReversalBalanceTransactionExists(ctx, purserdb.CryptoReversalBalanceTransactionExistsParams{
+		TenantID: tenantID, ReferenceType: sql.NullString{String: "x402_recovery", Valid: true}, ReferenceID: nonceID,
+	})
 	if err != nil {
 		return err
 	}
@@ -875,43 +772,24 @@ func (r *X402Reconciler) recoverReversedBalance(ctx context.Context, tenantID st
 		return nil
 	}
 
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency, updated_at)
-		VALUES ($1, 0, $2, NOW())
-		ON CONFLICT (tenant_id, currency) DO NOTHING
-	`, tenantID, currency)
+	err = queries.EnsurePrepaidBalanceRow(ctx, purserdb.EnsurePrepaidBalanceRowParams{TenantID: tenantID, Currency: currency})
 	if err != nil {
 		return err
 	}
 
-	var balance int64
-	err = tx.QueryRowContext(ctx, `
-		SELECT balance_cents FROM purser.prepaid_balances
-		WHERE tenant_id = $1 AND currency = $2
-		FOR UPDATE
-	`, tenantID, currency).Scan(&balance)
+	newBalance, err := queries.AddPrepaidBalance(ctx, purserdb.AddPrepaidBalanceParams{
+		AmountCents: amountCents, TenantID: tenantID, Currency: currency,
+	})
 	if err != nil {
 		return err
 	}
 
-	newBalance := balance + amountCents
-
-	_, err = tx.ExecContext(ctx, `
-		UPDATE purser.prepaid_balances
-		SET balance_cents = $1, updated_at = NOW()
-		WHERE tenant_id = $2 AND currency = $3
-	`, newBalance, tenantID, currency)
-	if err != nil {
-		return err
-	}
-
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO purser.balance_transactions (
-			id, tenant_id, amount_cents, balance_after_cents,
-			transaction_type, description, reference_id, reference_type, created_at
-		) VALUES ($1, $2, $3, $4, 'topup', $5, $6, 'x402_recovery', NOW())
-	`, uuid.New().String(), tenantID, amountCents, newBalance,
-		fmt.Sprintf("x402 settlement recovered (%s)", truncateTxHash(txHash)), nonceID)
+	err = queries.InsertBalanceTransaction(ctx, purserdb.InsertBalanceTransactionParams{
+		ID: uuid.New(), TenantID: tenantID, AmountCents: amountCents, BalanceAfterCents: newBalance,
+		TransactionType: "topup", Description: sql.NullString{String: fmt.Sprintf("x402 settlement recovered (%s)", truncateTxHash(txHash)), Valid: true},
+		ReferenceID: sql.NullString{String: nonceID, Valid: true}, ReferenceType: sql.NullString{String: "x402_recovery", Valid: true},
+		CreatedAt: sql.NullTime{Time: time.Now(), Valid: true},
+	})
 	if err != nil {
 		return err
 	}
@@ -973,11 +851,9 @@ func (r *X402Reconciler) getTransactionReceipt(ctx context.Context, network Netw
 
 // markConfirmed updates the settlement status to confirmed
 func (r *X402Reconciler) markConfirmed(ctx context.Context, id string, blockNumber, gasUsed int64) {
-	_, err := r.db.ExecContext(ctx, `
-		UPDATE purser.x402_nonces
-		SET status = 'confirmed', confirmed_at = NOW(), block_number = $2, gas_used = $3
-		WHERE id = $1
-	`, id, blockNumber, gasUsed)
+	err := purserdb.New(r.db).MarkX402SettlementConfirmed(ctx, purserdb.MarkX402SettlementConfirmedParams{
+		BlockNumber: sql.NullInt64{Int64: blockNumber, Valid: true}, GasUsed: sql.NullInt64{Int64: gasUsed, Valid: true}, ID: id,
+	})
 	if err != nil {
 		r.logger.WithError(err).WithField("id", id).Error("Failed to mark settlement as confirmed")
 	}
@@ -985,11 +861,9 @@ func (r *X402Reconciler) markConfirmed(ctx context.Context, id string, blockNumb
 
 // markFailed updates the settlement status to failed
 func (r *X402Reconciler) markFailed(ctx context.Context, id, reason string) {
-	_, err := r.db.ExecContext(ctx, `
-		UPDATE purser.x402_nonces
-		SET status = 'failed', failure_reason = $2
-		WHERE id = $1
-	`, id, reason)
+	err := purserdb.New(r.db).MarkX402SettlementFailed(ctx, purserdb.MarkX402SettlementFailedParams{
+		Reason: sql.NullString{String: reason, Valid: reason != ""}, ID: id,
+	})
 	if err != nil {
 		r.logger.WithError(err).WithField("id", id).Error("Failed to mark settlement as failed")
 	}
@@ -1006,14 +880,10 @@ func (r *X402Reconciler) debitBalance(ctx context.Context, tenantID string, amou
 
 	currency := billing.DefaultCurrency()
 
-	var creditExists bool
-	err = tx.QueryRowContext(ctx, `
-		SELECT EXISTS(
-			SELECT 1 FROM purser.balance_transactions
-			WHERE tenant_id = $1 AND reference_id = $2
-			  AND reference_type = 'x402_payment' AND transaction_type = 'topup'
-		)
-	`, tenantID, nonceID).Scan(&creditExists)
+	queries := purserdb.New(tx)
+	creditExists, err := queries.CryptoReversalBalanceTransactionExists(ctx, purserdb.CryptoReversalBalanceTransactionExistsParams{
+		TenantID: tenantID, ReferenceType: sql.NullString{String: "x402_payment", Valid: true}, ReferenceID: nonceID,
+	})
 	if err != nil {
 		r.logger.WithError(err).Error("Failed to check original x402 credit before debit")
 		return false
@@ -1027,14 +897,9 @@ func (r *X402Reconciler) debitBalance(ctx context.Context, tenantID string, amou
 		return false
 	}
 
-	var reversalExists bool
-	err = tx.QueryRowContext(ctx, `
-		SELECT EXISTS(
-			SELECT 1 FROM purser.balance_transactions
-			WHERE tenant_id = $1 AND reference_id = $2
-			  AND reference_type = 'x402_failed' AND transaction_type = 'reversal'
-		)
-	`, tenantID, nonceID).Scan(&reversalExists)
+	reversalExists, err := queries.CryptoReversalBalanceTransactionExists(ctx, purserdb.CryptoReversalBalanceTransactionExistsParams{
+		TenantID: tenantID, ReferenceType: sql.NullString{String: "x402_failed", Valid: true}, ReferenceID: nonceID,
+	})
 	if err != nil {
 		r.logger.WithError(err).Error("Failed to check existing x402 reversal before debit")
 		return false
@@ -1043,68 +908,29 @@ func (r *X402Reconciler) debitBalance(ctx context.Context, tenantID string, amou
 		return true
 	}
 
-	var balance int64
-	err = tx.QueryRowContext(ctx, `
-		SELECT balance_cents FROM purser.prepaid_balances
-		WHERE tenant_id = $1 AND currency = $2
-		FOR UPDATE
-	`, tenantID, currency).Scan(&balance)
+	newBalance, err := queries.AddPrepaidBalance(ctx, purserdb.AddPrepaidBalanceParams{
+		AmountCents: -amountCents, TenantID: tenantID, Currency: currency,
+	})
 	if err != nil {
 		r.logger.WithError(err).Error("Failed to get current balance for debit")
 		return false
 	}
 
-	// Deduct from balance (can go negative - accumulate debt, per existing pattern)
-	newBalance := balance - amountCents
-
-	// Update balance
-	_, err = tx.ExecContext(ctx, `
-		UPDATE purser.prepaid_balances
-		SET balance_cents = $1, updated_at = NOW()
-		WHERE tenant_id = $2 AND currency = $3
-	`, newBalance, tenantID, currency)
-	if err != nil {
-		r.logger.WithError(err).Error("Failed to update balance for debit")
-		return false
-	}
-
 	// Record reversal transaction
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO purser.balance_transactions (
-			id, tenant_id, amount_cents, balance_after_cents,
-			transaction_type, description, reference_id, reference_type, created_at
-		) VALUES ($1, $2, $3, $4, 'reversal', $5, $6, 'x402_failed', NOW())
-	`, uuid.New().String(), tenantID, -amountCents, newBalance,
-		fmt.Sprintf("x402 settlement failed: %s", truncateTxHash(txHash)), nonceID)
+	err = queries.InsertBalanceTransaction(ctx, purserdb.InsertBalanceTransactionParams{
+		ID: uuid.New(), TenantID: tenantID, AmountCents: -amountCents, BalanceAfterCents: newBalance,
+		TransactionType: "reversal", Description: sql.NullString{String: fmt.Sprintf("x402 settlement failed: %s", truncateTxHash(txHash)), Valid: true},
+		ReferenceID: sql.NullString{String: nonceID, Valid: true}, ReferenceType: sql.NullString{String: "x402_failed", Valid: true},
+		CreatedAt: sql.NullTime{Time: time.Now(), Valid: true},
+	})
 	if err != nil {
 		r.logger.WithError(err).Error("Failed to record reversal transaction")
 		return false
 	}
 
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO purser.credit_notes (
-			credit_note_number, tenant_id, source_document_type, source_document_id,
-			reversal_reference_type, reversal_reference_id, amount_cents, currency,
-			reason, evidence_json
-		)
-		SELECT 'CN-' || lpad(nextval('purser.credit_note_number_seq')::text, 10, '0'),
-		       document.tenant_id, document.source_type, document.id, 'x402_failed', $2,
-		       document.gross_amount_cents, document.currency, 'x402 settlement reversed after confirmation',
-		       jsonb_build_object('transaction_hash', $3::text, 'original_invoice_number', document.invoice_number)
-		FROM (
-			SELECT id, tenant_id, reference_type, reference_id, gross_amount_cents, currency,
-			       invoice_number, 'simplified_invoice'::text AS source_type
-			FROM purser.simplified_invoices
-			UNION ALL
-			SELECT id, tenant_id, reference_type, reference_id, gross_amount_cents, currency,
-			       invoice_number, 'crypto_invoice'::text AS source_type
-			FROM purser.crypto_invoices
-		) document
-		WHERE document.tenant_id = $1 AND document.reference_type = 'x402_payment'
-		  AND LOWER(document.reference_id) = LOWER($3)
-		ON CONFLICT (source_document_type, source_document_id, reversal_reference_type, reversal_reference_id)
-		DO NOTHING
-	`, tenantID, nonceID, txHash)
+	err = queries.InsertX402ReversalCreditNote(ctx, purserdb.InsertX402ReversalCreditNoteParams{
+		NonceID: nonceID, TxHash: txHash, TenantID: tenantID,
+	})
 	if err != nil {
 		r.logger.WithError(err).Error("Failed to issue x402 reversal credit note")
 		return false

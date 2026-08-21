@@ -52,10 +52,14 @@ func TestCryptoDocumentRequirementIsPaymentSpecific(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer db.Close()
-			mock.ExpectQuery("SELECT billing_email, billing_name, billing_company, billing_address, tax_id").
+			address := test.address
+			if address == nil {
+				address = []byte(`{}`)
+			}
+			mock.ExpectQuery("SELECT billing_email, billing_name, billing_company").
 				WithArgs("tenant-1").
 				WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id"}).
-					AddRow(test.email, test.legalName, test.company, test.address, test.vatNumber))
+					AddRow(test.email, test.legalName, test.company, address, test.vatNumber))
 
 			requirement, err := (&X402Handler{db: db}).GetCryptoDocumentRequirement(context.Background(), "tenant-1", test.amountCents)
 			if err != nil {
@@ -78,7 +82,7 @@ func TestAnonymousCryptoTopupDefaultsToSupplierCountryVAT(t *testing.T) {
 	}
 	defer db.Close()
 	at := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	mock.ExpectQuery("SELECT rate_bps, source, source_checked_on::text, effective_from::text").
+	mock.ExpectQuery("SELECT rate_bps, source, source_checked_on::text AS source_checked_on").
 		WithArgs("NL", at).
 		WillReturnRows(sqlmock.NewRows([]string{"rate_bps", "source", "source_checked_on", "effective_from"}).
 			AddRow(2100, "Belastingdienst standard rate", "2026-01-01", "2026-01-01"))

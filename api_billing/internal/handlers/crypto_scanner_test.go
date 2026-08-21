@@ -174,7 +174,7 @@ func TestCommitScanBatchDeduplicatesLogsAndFencesCursor(t *testing.T) {
 				WillReturnResult(sqlmock.NewResult(0, 1))
 		}
 		mock.ExpectExec("UPDATE purser.crypto_scan_cursors").
-			WithArgs("base", int64(90), int64(100), "0xblock", int64(110)).
+			WithArgs(int64(100), "0xblock", int64(110), "base", int64(90)).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectCommit()
 		monitor := &CryptoMonitor{db: db}
@@ -194,7 +194,7 @@ func TestCommitScanBatchDeduplicatesLogsAndFencesCursor(t *testing.T) {
 		defer db.Close()
 		mock.ExpectBegin()
 		mock.ExpectExec("UPDATE purser.crypto_scan_cursors").
-			WithArgs("base", int64(90), int64(100), "0xblock", int64(110)).
+			WithArgs(int64(100), "0xblock", int64(110), "base", int64(90)).
 			WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectRollback()
 		monitor := &CryptoMonitor{db: db}

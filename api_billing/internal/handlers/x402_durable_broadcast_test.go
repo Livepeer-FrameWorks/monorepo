@@ -110,18 +110,18 @@ func TestEmbeddedFacilitatorRebroadcastsIdenticalPreparedTransactionAfterUnknown
 		WithArgs(network.Name, gasAddress).
 		WillReturnRows(sqlmock.NewRows([]string{"next_nonce"}).AddRow(int64(7)))
 	mock.ExpectExec("INSERT INTO purser.x402_settlement_attempts").
-		WithArgs("settlement-1", network.Name, network.ChainID, gasAddress, uint64(7), expectedRaw,
-			strings.ToLower(expectedHash), uint64(150000), "3000000000", "1000000000").
+		WithArgs("settlement-1", network.Name, network.ChainID, gasAddress, int64(7), expectedRaw,
+			strings.ToLower(expectedHash), int64(150000), "3000000000", "1000000000").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("UPDATE purser.x402_nonces SET tx_hash").
-		WithArgs("settlement-1", expectedHash).
+		WithArgs(expectedHash, "settlement-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	mock.ExpectQuery("SELECT signed_raw_transaction, transaction_hash").
 		WithArgs("settlement-1").
 		WillReturnRows(sqlmock.NewRows([]string{"signed_raw_transaction", "transaction_hash"}).AddRow(expectedRaw, expectedHash))
 	mock.ExpectExec("UPDATE purser.x402_settlement_attempts").
-		WithArgs("settlement-1", "broadcast_unknown", sqlmock.AnyArg()).
+		WithArgs("broadcast_unknown", sqlmock.AnyArg(), "settlement-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	txHash, err := handler.submitDurableTransferWithAuthorization(context.Background(), "settlement-1", payload, network)
@@ -137,7 +137,7 @@ func TestEmbeddedFacilitatorRebroadcastsIdenticalPreparedTransactionAfterUnknown
 		WithArgs("settlement-1", expectedHash).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE purser.x402_nonces").
-		WithArgs("settlement-1", expectedHash).
+		WithArgs(expectedHash, "settlement-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE purser.x402_payment_quotes").
 		WithArgs("settlement-1").
@@ -274,10 +274,10 @@ func TestEmbeddedFacilitatorReplaysAfterRPCAcceptanceAndDatabaseFailure(t *testi
 	mock.ExpectQuery("SELECT COALESCE\\(MAX\\(relayer_nonce\\) \\+ 1, 0\\)").WithArgs(network.Name, gasAddress).
 		WillReturnRows(sqlmock.NewRows([]string{"next_nonce"}).AddRow(int64(0)))
 	mock.ExpectExec("INSERT INTO purser.x402_settlement_attempts").
-		WithArgs("settlement-rpc-db-fail", network.Name, network.ChainID, gasAddress, uint64(5), expectedRaw,
-			strings.ToLower(expectedHash), uint64(150000), "3000000000", "1000000000").
+		WithArgs("settlement-rpc-db-fail", network.Name, network.ChainID, gasAddress, int64(5), expectedRaw,
+			strings.ToLower(expectedHash), int64(150000), "3000000000", "1000000000").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("UPDATE purser.x402_nonces SET tx_hash").WithArgs("settlement-rpc-db-fail", expectedHash).
+	mock.ExpectExec("UPDATE purser.x402_nonces SET tx_hash").WithArgs(expectedHash, "settlement-rpc-db-fail").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	mock.ExpectQuery("SELECT signed_raw_transaction, transaction_hash").WithArgs("settlement-rpc-db-fail").
@@ -295,7 +295,7 @@ func TestEmbeddedFacilitatorReplaysAfterRPCAcceptanceAndDatabaseFailure(t *testi
 	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE purser.x402_settlement_attempts").WithArgs("settlement-rpc-db-fail", expectedHash).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("UPDATE purser.x402_nonces").WithArgs("settlement-rpc-db-fail", expectedHash).
+	mock.ExpectExec("UPDATE purser.x402_nonces").WithArgs(expectedHash, "settlement-rpc-db-fail").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE purser.x402_payment_quotes").WithArgs("settlement-rpc-db-fail").
 		WillReturnResult(sqlmock.NewResult(0, 1))

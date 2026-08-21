@@ -16,10 +16,11 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_billing/internal/database/purserdb"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/countries"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -262,18 +263,14 @@ func (h *X402Handler) GetTenantDepositAddress(ctx context.Context, tenantID stri
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
 	// First check if tenant already has a deposit address index
-	var existingIndex sql.NullInt32
-	var existingXpub sql.NullString
-	err = tx.QueryRowContext(ctx, `
-		SELECT x402_address_index, x402_address_xpub FROM purser.tenant_subscriptions
-		WHERE tenant_id = $1
-		FOR UPDATE
-	`, tenantID).Scan(&existingIndex, &existingXpub)
+	queries := purserdb.New(tx)
+	existing, err := queries.LockTenantX402Address(ctx, tenantID)
 
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", 0, false, fmt.Errorf("failed to check existing deposit address: %w", err)
 	}
 
+	existingIndex, existingXpub := existing.X402AddressIndex, existing.X402AddressXpub
 	if existingIndex.Valid && existingIndex.Int32 > 0 {
 		// Derive address from existing index (must be > 0, index 0 is platform)
 		if !existingXpub.Valid || strings.TrimSpace(existingXpub.String) == "" {
@@ -306,18 +303,12 @@ func (h *X402Handler) GetTenantDepositAddress(ctx context.Context, tenantID stri
 	address = strings.ToLower(address)
 
 	// Store the index on the tenant subscription
-	result, err := tx.ExecContext(ctx, `
-		UPDATE purser.tenant_subscriptions
-		SET x402_address_index = $1, x402_address_xpub = $2, updated_at = NOW()
-		WHERE tenant_id = $3
-	`, index, xpub, tenantID)
+	rowsAffected, err := queries.AssignTenantX402Address(ctx, purserdb.AssignTenantX402AddressParams{
+		AddressIndex: sql.NullInt32{Int32: int32(index), Valid: true}, AddressXpub: sql.NullString{String: xpub, Valid: true}, TenantID: tenantID,
+	})
 
 	if err != nil {
 		return "", 0, false, fmt.Errorf("failed to store deposit address index: %w", err)
-	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return "", 0, false, fmt.Errorf("failed to verify deposit address allocation: %w", err)
 	}
 	if rowsAffected != 1 {
 		return "", 0, false, fmt.Errorf("tenant subscription not found for address allocation")
@@ -341,16 +332,10 @@ func (h *X402Handler) GetTenantDepositAddress(ctx context.Context, tenantID stri
 
 func (h *X402Handler) ensureX402CustodyInventoryTx(ctx context.Context, tx *sql.Tx, tenantID, address string, derivationIndex int32, derivationXpub string) error {
 	for _, network := range X402Networks(config.X402IncludeTestnetsEnabled()) {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO purser.crypto_custody_addresses (
-				tenant_id, source_kind, source_ref, network, asset, address, derivation_index, derivation_xpub
-			) VALUES ($1, 'x402', $1, $2, 'USDC', LOWER($3), $4, $5)
-			ON CONFLICT (network, asset, address) DO UPDATE
-			SET tenant_id = EXCLUDED.tenant_id,
-			    derivation_index = EXCLUDED.derivation_index,
-			    derivation_xpub = EXCLUDED.derivation_xpub,
-			    updated_at = NOW()
-		`, tenantID, network.Name, address, derivationIndex, derivationXpub); err != nil {
+		if err := purserdb.New(tx).UpsertX402CustodyAddress(ctx, purserdb.UpsertX402CustodyAddressParams{
+			TenantID: tenantID, Network: network.Name, Address: address,
+			DerivationIndex: derivationIndex, DerivationXpub: derivationXpub,
+		}); err != nil {
 			return fmt.Errorf("register x402 custody address for %s: %w", network.Name, err)
 		}
 	}
@@ -364,8 +349,7 @@ func (h *X402Handler) GetOrCreateTenantX402Address(ctx context.Context, tenantID
 
 // getXpub retrieves the stored extended public key
 func (h *X402Handler) getXpub(ctx context.Context) (string, error) {
-	var xpub string
-	err := h.db.QueryRowContext(ctx, `SELECT xpub FROM purser.hd_wallet_state WHERE id = 1`).Scan(&xpub)
+	xpub, err := purserdb.New(h.db).GetHDWalletXpub(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", fmt.Errorf("hd_wallet_state not initialized")
 	}
@@ -508,11 +492,9 @@ func (h *X402Handler) VerifyPayment(ctx context.Context, tenantID string, payloa
 	}
 
 	// Check also in our database (for in-flight transactions)
-	var count int
-	err = h.db.QueryRowContext(ctx, `
-			SELECT COUNT(*) FROM purser.x402_nonces
-			WHERE network = $1 AND payer_address = $2 AND nonce = $3
-		`, payload.Network, strings.ToLower(auth.From), auth.Nonce).Scan(&count)
+	count, err := purserdb.New(h.db).CountX402NonceUses(ctx, purserdb.CountX402NonceUsesParams{
+		Network: payload.Network, PayerAddress: strings.ToLower(auth.From), Nonce: auth.Nonce,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to check nonce in database: %w", err)
 	}
@@ -658,11 +640,7 @@ func (h *X402Handler) SettlePayment(ctx context.Context, tenantID string, payloa
 	nonceID, inserted, existing, err := h.recordSettlementIntent(ctx, network.Name, auth.From, auth.Nonce, tenantID, verifyResult.AmountCents, clientIP, payload)
 	if err != nil {
 		if payload.X402Version == 2 {
-			_, _ = h.db.ExecContext(ctx, `
-				UPDATE purser.x402_payment_quotes
-				SET status = 'offered', claim_token = NULL, claim_expires_at = NULL, updated_at = NOW()
-				WHERE id = $1 AND status = 'claiming'
-			`, payload.QuoteID)
+			_ = purserdb.New(h.db).ResetClaimingX402Quote(ctx, payload.QuoteID)
 		}
 		return &SettleResult{
 			Success: false,
@@ -683,10 +661,7 @@ func (h *X402Handler) SettlePayment(ctx context.Context, tenantID string, payloa
 	if err != nil {
 		if txHash != "" {
 			if payload.X402Version == 2 {
-				_, _ = h.db.ExecContext(context.Background(), `
-					UPDATE purser.x402_payment_quotes SET status = 'unknown', updated_at = NOW()
-					WHERE id = $1 AND status IN ('claiming', 'settling')
-				`, payload.QuoteID)
+				_ = purserdb.New(h.db).MarkClaimingX402QuoteUnknown(context.Background(), payload.QuoteID)
 			}
 			return pendingX402SettleResult(txHash, settlementNetwork), nil
 		}
@@ -724,11 +699,7 @@ func (h *X402Handler) SettlePayment(ctx context.Context, tenantID string, payloa
 			"tx_hash":  txHash,
 		}).Warn("x402 settlement is awaiting confirmation")
 		if payload.X402Version == 2 {
-			_, _ = h.db.ExecContext(ctx, `
-				UPDATE purser.x402_payment_quotes
-				SET status = 'unknown', updated_at = NOW()
-				WHERE id = $1 AND status = 'settling'
-			`, payload.QuoteID)
+			_ = purserdb.New(h.db).MarkSettlingX402QuoteUnknown(ctx, payload.QuoteID)
 		}
 		return pendingX402SettleResult(txHash, settlementNetwork), nil
 	}
@@ -830,33 +801,24 @@ func (h *X402Handler) existingSettlementForPayload(ctx context.Context, tenantID
 		}
 	}
 
-	var (
-		row          SettlementRow
-		storedHash   sql.NullString
-		storedPay    sql.NullString
-		storedTenant string
-	)
-	err := h.db.QueryRowContext(ctx, `
-		SELECT id, network, tx_hash, tenant_id, amount_cents, status, auth_payload::text, COALESCE(client_ip::text, '')
-		FROM purser.x402_nonces
-		WHERE network = $1 AND payer_address = $2 AND nonce = $3
-	`, storageNetwork, strings.ToLower(auth.From), auth.Nonce).
-		Scan(&row.ID, &row.Network, &storedHash, &storedTenant, &row.AmountCents, &row.Status, &storedPay, &row.ClientIP)
+	stored, err := purserdb.New(h.db).GetX402SettlementByIdentity(ctx, purserdb.GetX402SettlementByIdentityParams{
+		Network: storageNetwork, PayerAddress: strings.ToLower(auth.From), Nonce: auth.Nonce,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("check existing settlement: %w", err)
 	}
-	if storedTenant != tenantID {
+	if stored.TenantID != tenantID {
 		return nil, newX402SettlementConflict("nonce already used by another tenant")
 	}
-	row.TenantID = storedTenant
-	if storedPay.Valid && storedPay.String != "" && !sameX402Payload(storedPay.String, payload) {
+	if stored.AuthPayload != "" && !sameX402Payload(stored.AuthPayload, payload) {
 		return nil, newX402SettlementConflict("nonce already used for a different authorization")
 	}
-	row.TxHash = storedHash.String
-	row.AuthPayload = storedPay.String
+	row := SettlementRow{ID: stored.ID, Network: stored.Network, TxHash: stored.TxHash.String,
+		TenantID: stored.TenantID, AmountCents: stored.AmountCents, Status: stored.Status,
+		ClientIP: stored.ClientIp, AuthPayload: stored.AuthPayload}
 	return &row, nil
 }
 
@@ -892,107 +854,80 @@ func (h *X402Handler) recordSettlementIntent(ctx context.Context, network, payer
 		return "", false, nil, fmt.Errorf("marshal auth payload: %w", err)
 	}
 
-	var (
-		nonceID      string
-		storedTxHash sql.NullString
-		storedPay    sql.NullString
-		storedTenant string
-		storedAmount int64
-		storedStatus string
-		storedIP     string
-		inserted     bool
-	)
-	err = h.db.QueryRowContext(ctx, `
-		INSERT INTO purser.x402_nonces (
-			network, payer_address, nonce, tenant_id, amount_cents,
-			auth_payload, client_ip, status, settled_at, last_submit_attempt_at,
-			quote_id, settlement_provider
-		) VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, '')::inet, 'submitting', NOW(), NOW(), NULLIF($8, '')::uuid, $9)
-		ON CONFLICT (network, payer_address, nonce) DO UPDATE
-		SET tenant_id = purser.x402_nonces.tenant_id
-		RETURNING id, tx_hash, tenant_id, amount_cents, status, auth_payload::text, COALESCE(client_ip::text, ''), (xmax = 0) AS inserted
-	`, network, strings.ToLower(payerAddress), nonce, tenantID, amountCents, database.JSONText(payloadJSON), clientIP, payload.QuoteID, h.facilitatorProvider).
-		Scan(&nonceID, &storedTxHash, &storedTenant, &storedAmount, &storedStatus, &storedPay, &storedIP, &inserted)
-	if err != nil {
+	queries := purserdb.New(h.db)
+	inserted, err := queries.UpsertX402SettlementIntent(ctx, purserdb.UpsertX402SettlementIntentParams{
+		Network: network, PayerAddress: strings.ToLower(payerAddress), Nonce: nonce, TenantID: tenantID,
+		AmountCents: amountCents, AuthPayload: payloadJSON, ClientIp: clientIP, QuoteID: payload.QuoteID,
+		SettlementProvider: sql.NullString{String: h.facilitatorProvider, Valid: h.facilitatorProvider != ""},
+	})
+	if err == nil {
+		return inserted.ID, true, nil, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil, err
 	}
 
-	if storedTenant != tenantID {
+	stored, err := queries.GetX402SettlementByIdentity(ctx, purserdb.GetX402SettlementByIdentityParams{
+		Network: network, PayerAddress: strings.ToLower(payerAddress), Nonce: nonce,
+	})
+	if err != nil {
+		return "", false, nil, fmt.Errorf("load conflicting settlement intent: %w", err)
+	}
+	if stored.TenantID != tenantID {
 		return "", false, nil, newX402SettlementConflict("nonce already used by another tenant")
 	}
-	if storedAmount != amountCents {
+	if stored.AmountCents != amountCents {
 		return "", false, nil, newX402SettlementConflict("nonce already used for a different amount")
 	}
-	if !inserted && storedPay.Valid && storedPay.String != "" && !sameX402Payload(storedPay.String, payload) {
+	if stored.AuthPayload != "" && !sameX402Payload(stored.AuthPayload, payload) {
 		return "", false, nil, newX402SettlementConflict("nonce already used for a different authorization")
 	}
-
-	if inserted {
-		return nonceID, true, nil, nil
-	}
-	return nonceID, false, &SettlementRow{
-		ID:          nonceID,
+	return stored.ID, false, &SettlementRow{
+		ID:          stored.ID,
 		Network:     network,
-		TxHash:      storedTxHash.String,
-		TenantID:    storedTenant,
-		AmountCents: storedAmount,
-		Status:      storedStatus,
-		ClientIP:    storedIP,
-		AuthPayload: storedPay.String,
+		TxHash:      stored.TxHash.String,
+		TenantID:    stored.TenantID,
+		AmountCents: stored.AmountCents,
+		Status:      stored.Status,
+		ClientIP:    stored.ClientIp,
+		AuthPayload: stored.AuthPayload,
 	}, nil
 }
 
 // markSettlementSubmitted promotes a 'submitting' row to 'pending' once the
 // on-chain transferWithAuthorization broadcast has returned a tx hash.
 func (h *X402Handler) markSettlementSubmitted(ctx context.Context, nonceID, txHash string) error {
-	res, err := h.db.ExecContext(ctx, `
-		UPDATE purser.x402_nonces
-		SET tx_hash = $2, submitted_at = NOW(), status = 'pending'
-		WHERE id = $1 AND status = 'submitting'
-	`, nonceID, txHash)
-	if err != nil {
-		return err
-	}
-	rows, err := res.RowsAffected()
+	queries := purserdb.New(h.db)
+	rows, err := queries.MarkX402SettlementSubmitted(ctx, purserdb.MarkX402SettlementSubmittedParams{
+		TxHash: sql.NullString{String: txHash, Valid: txHash != ""}, NonceID: nonceID,
+	})
 	if err != nil {
 		return err
 	}
 	if rows == 0 {
 		return fmt.Errorf("intent %s not in submitting state", nonceID)
 	}
-	_, _ = h.db.ExecContext(ctx, `
-		UPDATE purser.x402_payment_quotes q
-		SET status = 'settling', updated_at = NOW()
-		FROM purser.x402_nonces n
-		WHERE n.id = $1 AND q.id = n.quote_id AND q.status = 'claiming'
-	`, nonceID)
+	_ = queries.MarkX402QuoteSettlingForNonce(ctx, nonceID)
 	return nil
 }
 
 func (h *X402Handler) markSettlementFailed(ctx context.Context, nonceID, reason string) {
-	if _, err := h.db.ExecContext(ctx, `
-		UPDATE purser.x402_nonces
-		SET status = 'failed', failure_reason = $2
-		WHERE id = $1 AND status IN ('submitting', 'pending')
-	`, nonceID, reason); err != nil {
+	queries := purserdb.New(h.db)
+	if err := queries.MarkActiveX402SettlementFailed(ctx, purserdb.MarkActiveX402SettlementFailedParams{
+		Reason: sql.NullString{String: reason, Valid: reason != ""}, NonceID: nonceID,
+	}); err != nil {
 		h.logger.WithError(err).WithField("nonce_id", nonceID).Error("Failed to mark x402 settlement failed")
 	}
-	_, _ = h.db.ExecContext(ctx, `
-		UPDATE purser.x402_payment_quotes q
-		SET status = 'failed', failure_reason = $2, updated_at = NOW()
-		FROM purser.x402_nonces n
-		WHERE n.id = $1 AND q.id = n.quote_id
-		  AND q.status IN ('claiming', 'settling', 'unknown')
-	`, nonceID, reason)
+	_ = queries.MarkX402QuoteFailedForNonce(ctx, purserdb.MarkX402QuoteFailedForNonceParams{
+		Reason: sql.NullString{String: reason, Valid: reason != ""}, NonceID: nonceID,
+	})
 	attemptState := "broadcast_unknown"
 	if strings.Contains(strings.ToLower(reason), "revert") {
 		attemptState = "reverted"
 	}
-	_, _ = h.db.ExecContext(ctx, `
-		UPDATE purser.x402_settlement_attempts
-		SET state = $2, last_error = $3, updated_at = NOW()
-		WHERE settlement_id = $1 AND state IN ('prepared', 'broadcast_unknown', 'broadcast')
-	`, nonceID, attemptState, reason)
+	_ = queries.MarkX402SettlementAttemptsFailed(ctx, purserdb.MarkX402SettlementAttemptsFailedParams{
+		AttemptState: attemptState, Reason: sql.NullString{String: reason, Valid: reason != ""}, NonceID: nonceID,
+	})
 }
 
 // confirmAndCreditSettlement makes confirmed chain state and spendable credit
@@ -1009,57 +944,34 @@ func confirmAndCreditX402Settlement(ctx context.Context, db *sql.DB, tenantID st
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
-	var storedStatus, storedTenant string
-	var storedAmount int64
-	var storedTxHash sql.NullString
-	err = tx.QueryRowContext(ctx, `
-		SELECT status, tenant_id, amount_cents, tx_hash
-		FROM purser.x402_nonces
-		WHERE id = $1
-		FOR UPDATE
-	`, nonceID).Scan(&storedStatus, &storedTenant, &storedAmount, &storedTxHash)
+	queries := purserdb.New(tx)
+	stored, err := queries.LockX402SettlementForConfirmation(ctx, nonceID)
 	if err != nil {
 		return 0, err
 	}
-	if storedTenant != tenantID || storedAmount != amountCents || !storedTxHash.Valid || !strings.EqualFold(storedTxHash.String, txHash) {
+	if stored.TenantID != tenantID || stored.AmountCents != amountCents || !stored.TxHash.Valid || !strings.EqualFold(stored.TxHash.String, txHash) {
 		return 0, fmt.Errorf("settlement identity changed while confirming")
 	}
-	if storedStatus == "failed" || storedStatus == "submitting" {
-		return 0, fmt.Errorf("settlement is in non-confirmable state %q", storedStatus)
+	if stored.Status == "failed" || stored.Status == "submitting" {
+		return 0, fmt.Errorf("settlement is in non-confirmable state %q", stored.Status)
 	}
 
 	newBalance, err := creditX402PrepaidBalanceTx(ctx, tx, tenantID, amountCents, nonceID, txHash, "x402 USDC payment")
 	if err != nil {
 		return 0, err
 	}
-	_, err = tx.ExecContext(ctx, `
-		UPDATE purser.x402_nonces
-		SET status = 'confirmed',
-			confirmed_at = COALESCE(confirmed_at, NOW()),
-			block_number = $2,
-			gas_used = $3,
-			failure_reason = NULL
-		WHERE id = $1
-	`, nonceID, blockNumber, gasUsed)
+	err = queries.ConfirmX402Settlement(ctx, purserdb.ConfirmX402SettlementParams{
+		BlockNumber: sql.NullInt64{Int64: blockNumber, Valid: true}, GasUsed: sql.NullInt64{Int64: gasUsed, Valid: true}, NonceID: nonceID,
+	})
 	if err != nil {
 		return 0, err
 	}
-	if _, err = tx.ExecContext(ctx, `
-		UPDATE purser.x402_settlement_attempts
-		SET state = 'confirmed', confirmed_at = COALESCE(confirmed_at, NOW()),
-		    last_error = NULL, updated_at = NOW()
-		WHERE settlement_id = $1 AND transaction_hash = LOWER($2)
-	`, nonceID, txHash); err != nil {
+	if err = queries.ConfirmX402SettlementAttempt(ctx, purserdb.ConfirmX402SettlementAttemptParams{NonceID: nonceID, TxHash: txHash}); err != nil {
 		return 0, err
 	}
-	_, err = tx.ExecContext(ctx, `
-		UPDATE purser.x402_payment_quotes q
-		SET status = 'confirmed', provider_transaction_id = $2,
-		    confirmed_at = COALESCE(confirmed_at, NOW()), updated_at = NOW(),
-		    claim_expires_at = NULL, failure_reason = NULL
-		FROM purser.x402_nonces n
-		WHERE n.id = $1 AND q.id = n.quote_id
-	`, nonceID, txHash)
+	err = queries.ConfirmX402PaymentQuoteForNonce(ctx, purserdb.ConfirmX402PaymentQuoteForNonceParams{
+		TxHash: sql.NullString{String: txHash, Valid: txHash != ""}, NonceID: nonceID,
+	})
 	if err != nil {
 		return 0, err
 	}
@@ -1355,15 +1267,12 @@ func (h *X402Handler) prepareEmbeddedSettlementAttempt(ctx context.Context, sett
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback releases the advisory lock
 	lockKey := fmt.Sprintf("x402-relayer:%d:%s", network.ChainID, strings.ToLower(h.gasWalletAddress))
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey); err != nil {
+	queries := purserdb.New(tx)
+	if err := queries.AcquireX402RelayerNonceLock(ctx, lockKey); err != nil {
 		return "", fmt.Errorf("acquire relayer nonce lock: %w", err)
 	}
 
-	var existingHash string
-	err = tx.QueryRowContext(ctx, `
-		SELECT transaction_hash FROM purser.x402_settlement_attempts
-		WHERE settlement_id = $1 AND attempt_number = 1
-	`, settlementID).Scan(&existingHash)
+	existingHash, err := queries.GetFirstX402SettlementAttemptHash(ctx, settlementID)
 	if err == nil {
 		if err := tx.Commit(); err != nil {
 			return "", err
@@ -1381,12 +1290,10 @@ func (h *X402Handler) prepareEmbeddedSettlementAttempt(ctx context.Context, sett
 	if chainNonce > math.MaxInt64 {
 		return "", fmt.Errorf("pending relayer nonce exceeds durable database range")
 	}
-	var durableNext int64
-	if err := tx.QueryRowContext(ctx, `
-		SELECT COALESCE(MAX(relayer_nonce) + 1, 0)
-		FROM purser.x402_settlement_attempts
-		WHERE network = $1 AND LOWER(relayer_address) = LOWER($2)
-	`, network.Name, h.gasWalletAddress).Scan(&durableNext); err != nil {
+	durableNext, err := queries.GetNextDurableX402RelayerNonce(ctx, purserdb.GetNextDurableX402RelayerNonceParams{
+		Network: network.Name, RelayerAddress: h.gasWalletAddress,
+	})
+	if err != nil {
 		return "", fmt.Errorf("read durable relayer nonce: %w", err)
 	}
 	relayerNonce := chainNonce
@@ -1410,23 +1317,21 @@ func (h *X402Handler) prepareEmbeddedSettlementAttempt(ctx context.Context, sett
 		return "", err
 	}
 	txHash := crypto.Keccak256Hash(rawTx).Hex()
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO purser.x402_settlement_attempts (
-			settlement_id, attempt_number, network, chain_id, relayer_address,
-			relayer_nonce, signed_raw_transaction, transaction_hash, gas_limit,
-			max_fee_per_gas, max_priority_fee_per_gas, state
-		) VALUES ($1, 1, $2, $3, LOWER($4), $5, $6, LOWER($7), $8, $9, $10, 'prepared')
-	`, settlementID, network.Name, network.ChainID, h.gasWalletAddress, relayerNonce, rawTx,
-		txHash, gasLimit, maxFee.String(), priorityFee.String()); err != nil {
+	if err := queries.InsertPreparedX402SettlementAttempt(ctx, purserdb.InsertPreparedX402SettlementAttemptParams{
+		SettlementID: settlementID, Network: network.Name, ChainID: network.ChainID,
+		RelayerAddress: h.gasWalletAddress, RelayerNonce: int64(relayerNonce), SignedRawTransaction: rawTx,
+		TransactionHash: txHash, GasLimit: int64(gasLimit), MaxFeePerGas: maxFee.String(),
+		MaxPriorityFeePerGas: priorityFee.String(),
+	}); err != nil {
 		return "", fmt.Errorf("persist embedded settlement attempt: %w", err)
 	}
-	nonceResult, err := tx.ExecContext(ctx, `
-		UPDATE purser.x402_nonces SET tx_hash = LOWER($2) WHERE id = $1 AND status = 'submitting'
-	`, settlementID, txHash)
+	rows, err := queries.SetX402SettlementPrecomputedHash(ctx, purserdb.SetX402SettlementPrecomputedHashParams{
+		TxHash: txHash, SettlementID: settlementID,
+	})
 	if err != nil {
 		return "", fmt.Errorf("persist precomputed settlement hash: %w", err)
 	}
-	if rows, rowsErr := nonceResult.RowsAffected(); rowsErr != nil || rows != 1 {
+	if rows != 1 {
 		return "", fmt.Errorf("settlement claim changed before durable attempt commit")
 	}
 	if err := tx.Commit(); err != nil {
@@ -1436,44 +1341,33 @@ func (h *X402Handler) prepareEmbeddedSettlementAttempt(ctx context.Context, sett
 }
 
 func (h *X402Handler) rebroadcastPreparedSettlementAttempt(ctx context.Context, settlementID string, network NetworkConfig) (string, error) {
-	var rawTx []byte
-	var expectedHash string
-	err := h.db.QueryRowContext(ctx, `
-		SELECT signed_raw_transaction, transaction_hash
-		FROM purser.x402_settlement_attempts
-		WHERE settlement_id = $1 AND state IN ('prepared', 'broadcast_unknown', 'broadcast')
-		ORDER BY attempt_number DESC LIMIT 1
-	`, settlementID).Scan(&rawTx, &expectedHash)
+	attempt, err := purserdb.New(h.db).GetPreparedX402SettlementAttempt(ctx, settlementID)
 	if err != nil {
 		return "", fmt.Errorf("load prepared settlement attempt: %w", err)
 	}
 	var rpcHash string
-	err = h.rpc.Call(ctx, network, "eth_sendRawTransaction", []any{"0x" + hex.EncodeToString(rawTx)}, &rpcHash)
+	err = h.rpc.Call(ctx, network, "eth_sendRawTransaction", []any{"0x" + hex.EncodeToString(attempt.SignedRawTransaction)}, &rpcHash)
 	if err != nil {
 		h.recordEmbeddedBroadcastOutcome(settlementID, "broadcast_unknown", err.Error())
-		return expectedHash, fmt.Errorf("broadcast outcome unknown for %s: %w", expectedHash, err)
+		return attempt.TransactionHash, fmt.Errorf("broadcast outcome unknown for %s: %w", attempt.TransactionHash, err)
 	}
-	if rpcHash == "" || !strings.EqualFold(rpcHash, expectedHash) {
-		err = fmt.Errorf("RPC returned transaction hash %q, expected %s", rpcHash, expectedHash)
+	if rpcHash == "" || !strings.EqualFold(rpcHash, attempt.TransactionHash) {
+		err = fmt.Errorf("RPC returned transaction hash %q, expected %s", rpcHash, attempt.TransactionHash)
 		h.recordEmbeddedBroadcastOutcome(settlementID, "broadcast_unknown", err.Error())
-		return expectedHash, err
+		return attempt.TransactionHash, err
 	}
-	if err := h.markEmbeddedSettlementBroadcast(settlementID, expectedHash); err != nil {
-		return expectedHash, err
+	if err := h.markEmbeddedSettlementBroadcast(settlementID, attempt.TransactionHash); err != nil {
+		return attempt.TransactionHash, err
 	}
-	return expectedHash, nil
+	return attempt.TransactionHash, nil
 }
 
 func (h *X402Handler) recordEmbeddedBroadcastOutcome(settlementID, state, detail string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, _ = h.db.ExecContext(ctx, `
-		UPDATE purser.x402_settlement_attempts
-		SET state = $2, broadcast_attempts = broadcast_attempts + 1,
-		    first_broadcast_at = COALESCE(first_broadcast_at, NOW()),
-		    last_broadcast_at = NOW(), last_error = $3, updated_at = NOW()
-		WHERE settlement_id = $1 AND state IN ('prepared', 'broadcast_unknown', 'broadcast')
-	`, settlementID, state, detail)
+	_ = purserdb.New(h.db).RecordX402EmbeddedBroadcastOutcome(ctx, purserdb.RecordX402EmbeddedBroadcastOutcomeParams{
+		State: state, Detail: sql.NullString{String: detail, Valid: detail != ""}, SettlementID: settlementID,
+	})
 }
 
 func (h *X402Handler) markEmbeddedSettlementBroadcast(settlementID, txHash string) error {
@@ -1484,35 +1378,22 @@ func (h *X402Handler) markEmbeddedSettlementBroadcast(settlementID, txHash strin
 		return err
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE purser.x402_settlement_attempts
-		SET state = 'broadcast', broadcast_attempts = broadcast_attempts + 1,
-		    first_broadcast_at = COALESCE(first_broadcast_at, NOW()),
-		    last_broadcast_at = NOW(), last_error = NULL, updated_at = NOW()
-		WHERE settlement_id = $1 AND transaction_hash = LOWER($2)
-	`, settlementID, txHash); err != nil {
+	queries := purserdb.New(tx)
+	if err := queries.MarkX402EmbeddedAttemptBroadcast(ctx, purserdb.MarkX402EmbeddedAttemptBroadcastParams{
+		SettlementID: settlementID, TxHash: txHash,
+	}); err != nil {
 		return err
 	}
-	res, err := tx.ExecContext(ctx, `
-		UPDATE purser.x402_nonces
-		SET tx_hash = LOWER($2), submitted_at = COALESCE(submitted_at, NOW()), status = 'pending'
-		WHERE id = $1 AND status IN ('submitting', 'pending')
-	`, settlementID, txHash)
+	rows, err := queries.MarkX402EmbeddedSettlementPending(ctx, purserdb.MarkX402EmbeddedSettlementPendingParams{
+		TxHash: txHash, SettlementID: settlementID,
+	})
 	if err != nil {
 		return err
 	}
-	if rows, err := res.RowsAffected(); err != nil || rows == 0 {
-		if err != nil {
-			return err
-		}
+	if rows == 0 {
 		return fmt.Errorf("settlement %s is not broadcastable", settlementID)
 	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE purser.x402_payment_quotes q
-		SET status = 'settling', updated_at = NOW()
-		FROM purser.x402_nonces n
-		WHERE n.id = $1 AND q.id = n.quote_id AND q.status IN ('claiming', 'unknown', 'settling')
-	`, settlementID); err != nil {
+	if err := queries.MarkX402EmbeddedQuoteSettling(ctx, settlementID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -1616,88 +1497,68 @@ func (h *X402Handler) creditPrepaidBalanceTx(ctx context.Context, tx *sql.Tx, te
 
 func creditX402PrepaidBalanceTx(ctx context.Context, tx *sql.Tx, tenantID string, amountCents int64, nonceID string, txHash string, description string) (int64, error) {
 	currency := billing.DefaultCurrency()
-
-	var existingBalanceAfter int64
-	err := tx.QueryRowContext(ctx, `
-		SELECT balance_after_cents FROM purser.balance_transactions
-		WHERE tenant_id = $1 AND reference_type = 'x402_payment' AND reference_id = $2
-	`, tenantID, nonceID).Scan(&existingBalanceAfter)
-	if err == nil {
-		return existingBalanceAfter, nil
+	queries := purserdb.New(tx)
+	transactionID := uuid.New()
+	referenceType := sql.NullString{String: "x402_payment", Valid: true}
+	_, err := queries.InsertReferencedBalanceTransaction(ctx, purserdb.InsertReferencedBalanceTransactionParams{
+		ID:              transactionID,
+		TenantID:        tenantID,
+		AmountCents:     amountCents,
+		TransactionType: "topup",
+		Description:     sql.NullString{String: fmt.Sprintf("%s (%s)", description, truncateTxHash(txHash)), Valid: true},
+		ReferenceID:     nonceID,
+		ReferenceType:   referenceType,
+		CreatedAt:       sql.NullTime{Time: time.Now(), Valid: true},
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		existing, existingErr := queries.GetBalanceTransactionByReference(ctx, purserdb.GetBalanceTransactionByReferenceParams{
+			TenantID: tenantID, ReferenceType: referenceType, ReferenceID: nonceID,
+		})
+		if existingErr != nil {
+			return 0, existingErr
+		}
+		return existing.BalanceAfterCents, nil
 	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return 0, err
-	}
-
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency, updated_at)
-		VALUES ($1, 0, $2, NOW())
-		ON CONFLICT (tenant_id, currency) DO NOTHING
-	`, tenantID, currency)
 	if err != nil {
 		return 0, err
 	}
-
-	var currentBalance int64
-	err = tx.QueryRowContext(ctx, `
-		SELECT balance_cents FROM purser.prepaid_balances
-		WHERE tenant_id = $1 AND currency = $2
-		FOR UPDATE
-	`, tenantID, currency).Scan(&currentBalance)
-	if err != nil {
+	if err := queries.EnsurePrepaidBalanceRow(ctx, purserdb.EnsurePrepaidBalanceRowParams{
+		TenantID: tenantID,
+		Currency: currency,
+	}); err != nil {
 		return 0, err
 	}
 
-	newBalance := currentBalance + amountCents
-
-	_, err = tx.ExecContext(ctx, `
-		UPDATE purser.prepaid_balances
-		SET balance_cents = $1, updated_at = NOW()
-		WHERE tenant_id = $2 AND currency = $3
-	`, newBalance, tenantID, currency)
+	newBalance, err := queries.AddPrepaidBalance(ctx, purserdb.AddPrepaidBalanceParams{
+		AmountCents: amountCents,
+		TenantID:    tenantID,
+		Currency:    currency,
+	})
 	if err != nil {
 		return 0, err
 	}
-
-	// reference_id is UUID; link to the x402_nonces row that owns this settlement.
-	// The txHash is preserved in the description for human inspection.
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO purser.balance_transactions (
-			id, tenant_id, amount_cents, balance_after_cents,
-			transaction_type, description, reference_id, reference_type, created_at
-		) VALUES ($1, $2, $3, $4, 'topup', $5, $6, 'x402_payment', NOW())
-	`,
-		uuid.New().String(),
-		tenantID,
-		amountCents,
-		newBalance,
-		fmt.Sprintf("%s (%s)", description, truncateTxHash(txHash)),
-		nonceID,
-	)
-	if err != nil {
+	if _, err := queries.SetBalanceTransactionResult(ctx, purserdb.SetBalanceTransactionResultParams{
+		BalanceAfterCents: newBalance,
+		ID:                transactionID,
+	}); err != nil {
 		return 0, err
 	}
-
 	return newBalance, nil
 }
 
 func (h *X402Handler) x402BalanceTransactionExists(ctx context.Context, tenantID, nonceID, referenceType, transactionType string) (bool, error) {
-	var exists bool
-	err := h.db.QueryRowContext(ctx, `
-		SELECT EXISTS(
-			SELECT 1 FROM purser.balance_transactions
-			WHERE tenant_id = $1 AND reference_id = $2 AND reference_type = $3 AND transaction_type = $4
-		)
-	`, tenantID, nonceID, referenceType, transactionType).Scan(&exists)
-	return exists, err
+	return purserdb.New(h.db).X402BalanceTransactionExists(ctx, purserdb.X402BalanceTransactionExistsParams{
+		TenantID: tenantID, ReferenceID: nonceID,
+		ReferenceType:   sql.NullString{String: referenceType, Valid: referenceType != ""},
+		TransactionType: transactionType,
+	})
 }
 
 func (h *X402Handler) getCurrentBalance(ctx context.Context, tenantID, currency string) (int64, error) {
-	var balance int64
-	err := h.db.QueryRowContext(ctx, `
-		SELECT balance_cents FROM purser.prepaid_balances
-		WHERE tenant_id = $1 AND currency = $2
-	`, tenantID, currency).Scan(&balance)
+	balance, err := purserdb.New(h.db).GetX402CurrentBalance(ctx, purserdb.GetX402CurrentBalanceParams{
+		TenantID: tenantID,
+		Currency: currency,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}
@@ -1749,23 +1610,14 @@ func (h *X402Handler) generateCryptoTopupInvoice(ctx context.Context, tenantID s
 	}
 	defer invoiceTx.Rollback() //nolint:errcheck // rollback is best-effort
 	lockKey := tenantID + ":" + referenceType + ":" + strings.ToLower(referenceID)
-	if _, lockErr := invoiceTx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey); lockErr != nil {
+	queries := purserdb.New(invoiceTx)
+	if lockErr := queries.AcquireCryptoTaxDocumentLock(ctx, lockKey); lockErr != nil {
 		return "", fmt.Errorf("lock crypto tax-document reference: %w", lockErr)
 	}
 
-	var existingInvoice string
-	err = invoiceTx.QueryRowContext(ctx, `
-		SELECT invoice_number FROM (
-			SELECT invoice_number, issued_at
-			FROM purser.simplified_invoices
-			WHERE tenant_id = $1 AND reference_type = $2 AND reference_id = $3
-			UNION ALL
-			SELECT invoice_number, issued_at
-			FROM purser.crypto_invoices
-			WHERE tenant_id = $1 AND reference_type = $2 AND reference_id = $3
-		) documents
-		ORDER BY issued_at ASC LIMIT 1
-	`, tenantID, referenceType, referenceID).Scan(&existingInvoice)
+	existingInvoice, err := queries.GetExistingCryptoTaxDocumentNumber(ctx, purserdb.GetExistingCryptoTaxDocumentNumberParams{
+		TenantID: tenantID, DocumentReferenceType: referenceType, DocumentReferenceID: referenceID,
+	})
 	if err == nil {
 		if commitErr := invoiceTx.Commit(); commitErr != nil {
 			return "", commitErr
@@ -1776,15 +1628,16 @@ func (h *X402Handler) generateCryptoTopupInvoice(ctx context.Context, tenantID s
 		return "", fmt.Errorf("check existing crypto tax document: %w", err)
 	}
 
-	var invoiceSequence int64
-	sequenceName := "purser.simplified_invoice_number_seq"
 	prefix := "SI"
+	var invoiceSequence int64
 	if documentKind == "full" {
-		sequenceName = "purser.crypto_invoice_number_seq"
 		prefix = "INV"
+		invoiceSequence, err = queries.NextCryptoInvoiceNumber(ctx)
+	} else {
+		invoiceSequence, err = queries.NextSimplifiedInvoiceNumber(ctx)
 	}
-	if sequenceErr := invoiceTx.QueryRowContext(ctx, `SELECT nextval($1::regclass)`, sequenceName).Scan(&invoiceSequence); sequenceErr != nil {
-		return "", fmt.Errorf("allocate crypto tax-document number: %w", sequenceErr)
+	if err != nil {
+		return "", fmt.Errorf("allocate crypto tax-document number: %w", err)
 	}
 
 	if reverseCharge {
@@ -1792,59 +1645,46 @@ func (h *X402Handler) generateCryptoTopupInvoice(ctx context.Context, tenantID s
 		documentKind = "full"
 	}
 	invoiceNumber := fmt.Sprintf("%s-%010d", prefix, invoiceSequence)
+	nullable := func(value string) sql.NullString {
+		return sql.NullString{String: value, Valid: value != ""}
+	}
+	commonRate := sql.NullString{String: fmt.Sprintf("%.6f", taxSnapshot.EURPerUSDRate), Valid: true}
 
 	if documentKind == "full" {
-		_, err = invoiceTx.ExecContext(ctx, `
-		INSERT INTO purser.crypto_invoices (
-			invoice_number, tenant_id, reference_type, reference_id,
-			gross_amount_cents, net_amount_cents, vat_amount_cents, vat_rate_bps,
-			vat_rate_source, vat_rate_table_checked_on, vat_rate_effective_from, tax_validation_status,
-			currency, amount_eur_cents, ecb_rate, fx_rate_source, fx_rate_observed_at,
-			evidence_ip_country, evidence_wallet_network,
-			evidence_billing_country, evidence_status, evidence_conflict,
-			tax_policy_ref, supplier_name, supplier_address, supplier_vat_number,
-			supplier_registration_number, service_description, service_quantity, service_date,
-			customer_email, customer_name, customer_company, customer_address,
-			customer_vat_number, customer_vat_validated, issued_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::date, $11::date, $12,
-		          $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23,
-		          $24, $25, $26, $27, $28, $29, NOW()::date,
-		          $30, $31, $32, $33::jsonb, $34, $35, NOW())
-	`, invoiceNumber, tenantID, referenceType, referenceID,
-			amountEurCents, netAmountCents, vatAmountCents, vatRateBps,
-			vatDecision.Source, vatDecision.CheckedOn, vatDecision.EffectiveFrom, taxValidationStatus,
-			billing.DefaultCurrency(), amountEurCents, taxSnapshot.EURPerUSDRate, taxSnapshot.FXRateSource, taxSnapshot.FXRateObservedAt,
-			ipCountry, networkName, billingCountry, evidenceStatus, evidenceConflict,
-			CryptoTopupTaxPolicyRef, h.supplierName, h.supplierAddress, h.supplierVAT,
-			h.supplierRegistration, "FrameWorks prepaid usage credit", 1,
-			profile.Email, profile.Name, nullableString(profile.Company), profile.Address,
-			nullableString(profile.VATNumber), vatDecision.VIESValidated)
+		err = queries.InsertCryptoTopupInvoice(ctx, purserdb.InsertCryptoTopupInvoiceParams{
+			InvoiceNumber: invoiceNumber, TenantID: tenantID, ReferenceType: referenceType, ReferenceID: referenceID,
+			GrossAmountCents: amountEurCents, NetAmountCents: netAmountCents, VatAmountCents: vatAmountCents,
+			VatRateBps: int32(vatRateBps), VatRateSource: nullable(vatDecision.Source),
+			VatRateTableCheckedOn: vatDecision.CheckedOn, VatRateEffectiveFrom: vatDecision.EffectiveFrom,
+			TaxValidationStatus: taxValidationStatus, Currency: billing.DefaultCurrency(), AmountEurCents: amountEurCents,
+			EcbRate: commonRate, FxRateSource: nullable(taxSnapshot.FXRateSource),
+			FxRateObservedAt:  sql.NullTime{Time: taxSnapshot.FXRateObservedAt, Valid: true},
+			EvidenceIpCountry: nullable(ipCountry), EvidenceWalletNetwork: nullable(networkName),
+			EvidenceBillingCountry: nullable(billingCountry), EvidenceStatus: evidenceStatus,
+			EvidenceConflict: evidenceConflict, TaxPolicyRef: nullable(CryptoTopupTaxPolicyRef),
+			SupplierName: h.supplierName, SupplierAddress: h.supplierAddress, SupplierVatNumber: h.supplierVAT,
+			SupplierRegistrationNumber: h.supplierRegistration, ServiceDescription: "FrameWorks prepaid usage credit",
+			ServiceQuantity: 1, CustomerEmail: profile.Email, CustomerName: profile.Name,
+			CustomerCompany: nullable(profile.Company), CustomerAddress: profile.Address,
+			CustomerVatNumber: nullable(profile.VATNumber), CustomerVatValidated: vatDecision.VIESValidated,
+		})
 	} else {
-		_, err = invoiceTx.ExecContext(ctx, `
-		INSERT INTO purser.simplified_invoices (
-			invoice_number, tenant_id, reference_type, reference_id,
-			gross_amount_cents, net_amount_cents, vat_amount_cents, vat_rate_bps,
-			vat_rate_source, vat_rate_table_checked_on, vat_rate_effective_from, tax_validation_status,
-			currency, amount_eur_cents, ecb_rate, fx_rate_source, fx_rate_observed_at,
-			evidence_ip_country, evidence_wallet_network,
-			evidence_billing_country, evidence_status, evidence_conflict,
-			tax_policy_ref,
-			supplier_name, supplier_address, supplier_vat_number,
-			supplier_registration_number, service_description, service_quantity, service_date,
-			issued_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::date, $11::date, $12,
-		          $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23,
-		          $24, $25, $26, $27, $28, $29, NOW()::date, NOW())
-	`,
-			invoiceNumber, tenantID, referenceType, referenceID,
-			amountEurCents, netAmountCents, vatAmountCents, vatRateBps,
-			vatDecision.Source, vatDecision.CheckedOn, vatDecision.EffectiveFrom,
-			taxValidationStatus, billing.DefaultCurrency(), amountEurCents, taxSnapshot.EURPerUSDRate, taxSnapshot.FXRateSource, taxSnapshot.FXRateObservedAt,
-			ipCountry, networkName, billingCountry, evidenceStatus, evidenceConflict,
-			CryptoTopupTaxPolicyRef,
-			h.supplierName, h.supplierAddress, h.supplierVAT,
-			h.supplierRegistration, "FrameWorks prepaid usage credit", 1,
-		)
+		err = queries.InsertSimplifiedCryptoTopupInvoice(ctx, purserdb.InsertSimplifiedCryptoTopupInvoiceParams{
+			InvoiceNumber: invoiceNumber, TenantID: tenantID, ReferenceType: referenceType, ReferenceID: referenceID,
+			GrossAmountCents: amountEurCents, NetAmountCents: netAmountCents, VatAmountCents: vatAmountCents,
+			VatRateBps: int32(vatRateBps), VatRateSource: nullable(vatDecision.Source),
+			VatRateTableCheckedOn: vatDecision.CheckedOn, VatRateEffectiveFrom: vatDecision.EffectiveFrom,
+			TaxValidationStatus: taxValidationStatus, Currency: billing.DefaultCurrency(), AmountEurCents: amountEurCents,
+			EcbRate: commonRate, FxRateSource: nullable(taxSnapshot.FXRateSource),
+			FxRateObservedAt:  sql.NullTime{Time: taxSnapshot.FXRateObservedAt, Valid: true},
+			EvidenceIpCountry: nullable(ipCountry), EvidenceWalletNetwork: nullable(networkName),
+			EvidenceBillingCountry: nullable(billingCountry), EvidenceStatus: evidenceStatus,
+			EvidenceConflict: evidenceConflict, TaxPolicyRef: nullable(CryptoTopupTaxPolicyRef),
+			SupplierName: h.supplierName, SupplierAddress: h.supplierAddress, SupplierVatNumber: h.supplierVAT,
+			SupplierRegistrationNumber: nullable(h.supplierRegistration),
+			ServiceDescription:         nullable("FrameWorks prepaid usage credit"),
+			ServiceQuantity:            sql.NullInt32{Int32: 1, Valid: true},
+		})
 	}
 
 	if err != nil {
@@ -1931,44 +1771,24 @@ func (h *X402Handler) applyX402RollupOnce(ctx context.Context, tenantID, nonceID
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
-	var storedTenant, status string
-	var storedAmount int64
-	var appliedAt, reversedAt sql.NullTime
-	err = tx.QueryRowContext(ctx, `
-		SELECT tenant_id, amount_cents, status, rollup_applied_at, rollup_reversed_at
-		FROM purser.x402_nonces
-		WHERE id = $1
-		FOR UPDATE
-	`, nonceID).Scan(&storedTenant, &storedAmount, &status, &appliedAt, &reversedAt)
+	queries := purserdb.New(tx)
+	settlement, err := queries.LockX402SettlementRollup(ctx, nonceID)
 	if err != nil {
 		return false, err
 	}
-	if storedTenant != tenantID || storedAmount != amountEurCents || status != "confirmed" {
+	if settlement.TenantID != tenantID || settlement.AmountCents != amountEurCents || settlement.Status != "confirmed" {
 		return false, fmt.Errorf("settlement identity changed while applying rollup")
 	}
-	if appliedAt.Valid && !reversedAt.Valid {
+	if settlement.RollupAppliedAt.Valid && !settlement.RollupReversedAt.Valid {
 		return false, tx.Commit()
 	}
 
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO purser.tenant_balance_rollups (
-			tenant_id, total_topup_cents, total_topup_eur_cents, topup_count, first_topup_at, last_topup_at
-		) VALUES ($1, $2, $3, 1, NOW(), NOW())
-		ON CONFLICT (tenant_id) DO UPDATE SET
-			total_topup_cents = purser.tenant_balance_rollups.total_topup_cents + EXCLUDED.total_topup_cents,
-			total_topup_eur_cents = purser.tenant_balance_rollups.total_topup_eur_cents + EXCLUDED.total_topup_eur_cents,
-			topup_count = purser.tenant_balance_rollups.topup_count + 1,
-			last_topup_at = NOW(),
-			updated_at = NOW()
-	`, tenantID, amountEurCents, amountEurCents)
-	if err != nil {
+	if err := queries.AddX402TenantBalanceRollup(ctx, purserdb.AddX402TenantBalanceRollupParams{
+		TenantID: tenantID, AmountEurCents: amountEurCents,
+	}); err != nil {
 		return false, err
 	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE purser.x402_nonces
-		SET rollup_applied_at = NOW(), rollup_reversed_at = NULL
-		WHERE id = $1
-	`, nonceID); err != nil {
+	if err := queries.MarkX402RollupApplied(ctx, nonceID); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -1984,51 +1804,28 @@ func reverseX402RollupOnce(ctx context.Context, db *sql.DB, tenantID, nonceID st
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
-	var storedTenant, status string
-	var storedAmount int64
-	var appliedAt, reversedAt sql.NullTime
-	err = tx.QueryRowContext(ctx, `
-		SELECT tenant_id, amount_cents, status, rollup_applied_at, rollup_reversed_at
-		FROM purser.x402_nonces
-		WHERE id = $1
-		FOR UPDATE
-	`, nonceID).Scan(&storedTenant, &storedAmount, &status, &appliedAt, &reversedAt)
+	queries := purserdb.New(tx)
+	settlement, err := queries.LockX402SettlementRollup(ctx, nonceID)
 	if err != nil {
 		return false, err
 	}
-	if storedTenant != tenantID || storedAmount != amountEurCents || status != "failed" {
+	if settlement.TenantID != tenantID || settlement.AmountCents != amountEurCents || settlement.Status != "failed" {
 		return false, fmt.Errorf("settlement identity changed while reversing rollup")
 	}
-	if !appliedAt.Valid || reversedAt.Valid {
+	if !settlement.RollupAppliedAt.Valid || settlement.RollupReversedAt.Valid {
 		return false, tx.Commit()
 	}
 
-	result, err := tx.ExecContext(ctx, `
-		UPDATE purser.tenant_balance_rollups
-		SET total_topup_cents = total_topup_cents - $2,
-			total_topup_eur_cents = total_topup_eur_cents - $2,
-			topup_count = topup_count - 1,
-			updated_at = NOW()
-		WHERE tenant_id = $1
-		  AND total_topup_cents >= $2
-		  AND total_topup_eur_cents >= $2
-		  AND topup_count > 0
-	`, tenantID, amountEurCents)
-	if err != nil {
-		return false, err
-	}
-	rows, err := result.RowsAffected()
+	rows, err := queries.SubtractX402TenantBalanceRollup(ctx, purserdb.SubtractX402TenantBalanceRollupParams{
+		AmountEurCents: amountEurCents, TenantID: tenantID,
+	})
 	if err != nil {
 		return false, err
 	}
 	if rows != 1 {
 		return false, fmt.Errorf("x402 rollup is missing or inconsistent")
 	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE purser.x402_nonces
-		SET rollup_reversed_at = NOW()
-		WHERE id = $1
-	`, nonceID); err != nil {
+	if err := queries.MarkX402RollupReversed(ctx, nonceID); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -2297,18 +2094,16 @@ type vatDecision struct {
 }
 
 func (h *X402Handler) loadEffectiveVATRate(ctx context.Context, country string, at time.Time) (vatDecision, error) {
-	var decision vatDecision
-	decision.Country = country
-	err := h.db.QueryRowContext(ctx, `
-		SELECT rate_bps, source, source_checked_on::text, effective_from::text
-		FROM purser.vat_rate_periods
-		WHERE country_code = $1 AND effective_from <= $2::date
-		  AND (effective_until IS NULL OR effective_until > $2::date)
-		ORDER BY effective_from DESC LIMIT 1
-	`, country, at).Scan(&decision.RateBPS, &decision.Source, &decision.CheckedOn, &decision.EffectiveFrom)
+	row, err := purserdb.New(h.db).GetEffectiveVATRate(ctx, purserdb.GetEffectiveVATRateParams{
+		CountryCode: country, EffectiveAt: at,
+	})
 	if err == nil {
-		return decision, nil
+		return vatDecision{
+			RateBPS: int(row.RateBps), Country: country, Source: row.Source,
+			CheckedOn: row.SourceCheckedOn, EffectiveFrom: row.EffectiveFrom,
+		}, nil
 	}
+	decision := vatDecision{Country: country}
 	if !config.IsProduction() {
 		if rate, ok := developmentVATRates[country]; ok {
 			decision.RateBPS = rate
@@ -2338,20 +2133,12 @@ func parseBillingAddress(raw []byte) (billingAddress, error) {
 
 func (h *X402Handler) getVATDecisionForTenant(ctx context.Context, tenantID, clientIP string, at time.Time) (vatDecision, error) {
 	// 1. Check tenant's billing details (country and VAT number)
-	var taxID sql.NullString
-	var billingAddress []byte
-	err := h.db.QueryRowContext(ctx, `
-		SELECT tax_id, billing_address
-		FROM purser.tenant_subscriptions
-		WHERE tenant_id = $1 AND status != 'cancelled'
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, tenantID).Scan(&taxID, &billingAddress)
+	profile, err := purserdb.New(h.db).GetActiveTenantTaxProfile(ctx, tenantID)
 
 	if err == nil {
 		return h.getVATDecisionForProfile(ctx, tenantID, CryptoBillingProfile{
-			VATNumber: taxID.String,
-			Address:   append(json.RawMessage(nil), billingAddress...),
+			VATNumber: profile.TaxID.String,
+			Address:   append(json.RawMessage(nil), profile.BillingAddress...),
 		}, clientIP, at)
 	}
 	return h.getVATDecisionForProfile(ctx, tenantID, CryptoBillingProfile{}, clientIP, at)
@@ -2416,25 +2203,21 @@ func (h *X402Handler) loadCryptoTaxSnapshot(ctx context.Context, tenantID, refer
 	var err error
 	switch referenceType {
 	case "x402_payment":
-		err = h.db.QueryRowContext(ctx, `
-			SELECT quote.tax_document_kind, quote.tax_profile_snapshot,
-			       quote.eur_per_usd_rate::text, quote.created_at
-			FROM purser.x402_nonces nonce
-			JOIN purser.x402_payment_quotes quote ON quote.id = nonce.quote_id
-			WHERE nonce.tenant_id = $1 AND nonce.tx_hash = $2
-			ORDER BY nonce.settled_at DESC
-			LIMIT 1
-		`, tenantID, referenceID).Scan(&snapshot.DocumentKind, &raw, &rateText, &snapshot.FXRateObservedAt)
+		row, queryErr := purserdb.New(h.db).GetX402TaxSnapshot(ctx, purserdb.GetX402TaxSnapshotParams{
+			TenantID: tenantID, TxHash: sql.NullString{String: referenceID, Valid: true},
+		})
+		err = queryErr
+		snapshot.DocumentKind, raw, rateText, snapshot.FXRateObservedAt = row.TaxDocumentKind, row.TaxProfileSnapshot, row.EurPerUsdRate, row.CreatedAt
 		snapshot.FXRateSource = "European Central Bank reference rate locked by x402 quote"
 	case "crypto_payment":
-		err = h.db.QueryRowContext(ctx, `
-			SELECT tax_document_kind, tax_profile_snapshot,
-			       quoted_usd_to_eur_rate::text, quoted_at
-			FROM purser.crypto_wallets
-			WHERE tenant_id = $1 AND tx_hash = $2 AND purpose = 'prepaid'
-			ORDER BY created_at DESC
-			LIMIT 1
-		`, tenantID, referenceID).Scan(&snapshot.DocumentKind, &raw, &rateText, &snapshot.FXRateObservedAt)
+		row, queryErr := purserdb.New(h.db).GetCryptoWalletTaxSnapshot(ctx, purserdb.GetCryptoWalletTaxSnapshotParams{
+			TenantID: tenantID, TxHash: sql.NullString{String: referenceID, Valid: true},
+		})
+		err = queryErr
+		snapshot.DocumentKind, raw, rateText = row.TaxDocumentKind, row.TaxProfileSnapshot, row.QuotedUsdToEurRate
+		if row.QuotedAt.Valid {
+			snapshot.FXRateObservedAt = row.QuotedAt.Time
+		}
 		snapshot.FXRateSource = "European Central Bank reference rate locked by deposit quote"
 	default:
 		return cryptoTaxSnapshot{}, fmt.Errorf("unsupported crypto payment reference type %q", referenceType)
@@ -2507,30 +2290,22 @@ func (h *X402Handler) GetCryptoDocumentRequirement(ctx context.Context, tenantID
 	if amountEurCents <= 0 {
 		return CryptoDocumentRequirement{}, fmt.Errorf("positive EUR payment amount required")
 	}
-	var billingEmail, billingName, billingCompany, taxID sql.NullString
-	var billingAddress []byte
-	err := h.db.QueryRowContext(ctx, `
-		SELECT billing_email, billing_name, billing_company, billing_address, tax_id
-		FROM purser.tenant_subscriptions
-		WHERE tenant_id = $1 AND status != 'cancelled'
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, tenantID).Scan(&billingEmail, &billingName, &billingCompany, &billingAddress, &taxID)
+	row, err := purserdb.New(h.db).GetCryptoDocumentBillingProfile(ctx, tenantID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return CryptoDocumentRequirement{}, err
 	}
-	hasVATClaim := taxID.Valid && strings.TrimSpace(taxID.String) != ""
+	hasVATClaim := row.TaxID.Valid && strings.TrimSpace(row.TaxID.String) != ""
 	needsFullDocument := amountEurCents > 10_000 || hasVATClaim
 	documentKind := "simplified"
 	if needsFullDocument {
 		documentKind = "full"
 	}
 	profile := CryptoBillingProfile{
-		Email:     strings.TrimSpace(billingEmail.String),
-		Name:      strings.TrimSpace(billingName.String),
-		Company:   strings.TrimSpace(billingCompany.String),
-		VATNumber: strings.TrimSpace(taxID.String),
-		Address:   append(json.RawMessage(nil), billingAddress...),
+		Email:     strings.TrimSpace(row.BillingEmail.String),
+		Name:      strings.TrimSpace(row.BillingName.String),
+		Company:   strings.TrimSpace(row.BillingCompany.String),
+		VATNumber: strings.TrimSpace(row.TaxID.String),
+		Address:   append(json.RawMessage(nil), row.BillingAddress...),
 	}
 	return CryptoDocumentRequirement{
 		NeedsFullDocument:       needsFullDocument,

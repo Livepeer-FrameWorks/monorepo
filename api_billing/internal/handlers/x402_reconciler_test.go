@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -32,12 +31,12 @@ func TestReconcileFailedTimeoutsSkipsWithoutReversal(t *testing.T) {
 	reconciler := NewX402Reconciler(mockDB, logrus.New(), false)
 
 	settledAt := time.Now().Add(-10 * time.Minute)
-	mock.ExpectQuery("SELECT id, network, tx_hash, tenant_id, amount_cents, settled_at").
+	mock.ExpectQuery("SELECT id::text AS id, network, tx_hash, tenant_id::text AS tenant_id").
 		WithArgs(reconciler.recoveryWindowHours).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "network", "tx_hash", "tenant_id", "amount_cents", "settled_at", "auth_payload"}).
 			AddRow("nonce-1", "base", "0xlate", "tenant-1", int64(2500), settledAt, testX402PayloadJSON(t, auth)))
 	mock.ExpectQuery("SELECT EXISTS").
-		WithArgs("tenant-1", "nonce-1").
+		WithArgs("tenant-1", "x402_failed", "nonce-1").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 
 	reconciler.reconcileFailedTimeouts(context.Background())
@@ -62,42 +61,40 @@ func TestReconcileConfirmedSettlementsHandlesReorg(t *testing.T) {
 	reconciler := NewX402Reconciler(mockDB, logrus.New(), false)
 
 	settledAt := time.Now().Add(-30 * time.Minute)
-	mock.ExpectQuery("SELECT id, network, tx_hash, tenant_id, amount_cents, settled_at, block_number").
+	mock.ExpectQuery("SELECT nonce.id::text AS id, nonce.network, nonce.tx_hash").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "network", "tx_hash", "tenant_id", "amount_cents", "settled_at", "block_number", "client_ip"}).
 			AddRow("nonce-2", "base", "0xreorg", "tenant-1", int64(2000), settledAt, int64(10), "127.0.0.1"))
 	mock.ExpectQuery("SELECT EXISTS").
-		WithArgs("tenant-1", "nonce-2").
+		WithArgs("tenant-1", "x402_payment", "nonce-2").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	mock.ExpectExec("UPDATE purser.x402_nonces").
-		WithArgs("nonce-2", "transaction reorged or missing").
+		WithArgs("transaction reorged or missing", "nonce-2").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT EXISTS").
-		WithArgs("tenant-1", "nonce-2").
+		WithArgs("tenant-1", "x402_payment", "nonce-2").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	mock.ExpectQuery("SELECT EXISTS").
-		WithArgs("tenant-1", "nonce-2").
+		WithArgs("tenant-1", "x402_failed", "nonce-2").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
-	mock.ExpectQuery("SELECT balance_cents FROM purser.prepaid_balances").
-		WithArgs("tenant-1", "EUR").
-		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(5000)))
-	mock.ExpectExec("UPDATE purser.prepaid_balances").
-		WithArgs(int64(3000), "tenant-1", "EUR").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery("UPDATE purser.prepaid_balances").
+		WithArgs(int64(-2000), "tenant-1", "EUR").
+		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(3000)))
 	mock.ExpectExec("INSERT INTO purser.balance_transactions").
-		WithArgs(sqlmock.AnyArg(), "tenant-1", int64(-2000), int64(3000), sqlmock.AnyArg(), "nonce-2").
+		WithArgs(sqlmock.AnyArg(), "tenant-1", int64(-2000), int64(3000), "reversal",
+			sqlmock.AnyArg(), "nonce-2", "x402_failed", nil, nil, nil, nil, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("INSERT INTO purser.credit_notes").
-		WithArgs("tenant-1", "nonce-2", "0xreorg").
+		WithArgs("nonce-2", "0xreorg", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT tenant_id, amount_cents, status, rollup_applied_at, rollup_reversed_at").
+	mock.ExpectQuery("SELECT tenant_id::text AS tenant_id, amount_cents, status, rollup_applied_at, rollup_reversed_at").
 		WithArgs("nonce-2").
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "amount_cents", "status", "rollup_applied_at", "rollup_reversed_at"}).
 			AddRow("tenant-1", int64(2000), "failed", time.Now(), nil))
 	mock.ExpectExec("UPDATE purser.tenant_balance_rollups").
-		WithArgs("tenant-1", int64(2000)).
+		WithArgs(int64(2000), "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE purser.x402_nonces").
 		WithArgs("nonce-2").
@@ -135,33 +132,30 @@ func TestReconcilePendingSettlementCreditsMissingLedgerBeforeConfirm(t *testing.
 	}
 
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT status, tenant_id, amount_cents, tx_hash").
+	mock.ExpectQuery("SELECT status, tenant_id::text AS tenant_id, amount_cents, tx_hash").
 		WithArgs("nonce-3").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "tenant_id", "amount_cents", "tx_hash"}).
 			AddRow("pending", "tenant-1", int64(2500), "0xcredit"))
-	mock.ExpectQuery("SELECT balance_after_cents FROM purser.balance_transactions").
-		WithArgs("tenant-1", "nonce-3").
-		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("INSERT INTO purser.balance_transactions").
+		WithArgs(sqlmock.AnyArg(), "tenant-1", int64(2500), "topup", sqlmock.AnyArg(), "nonce-3", "x402_payment", nil, nil, nil, nil, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("11111111-1111-1111-1111-111111111111"))
 	mock.ExpectExec("INSERT INTO purser.prepaid_balances").
 		WithArgs("tenant-1", "EUR").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectQuery("SELECT balance_cents FROM purser.prepaid_balances").
-		WithArgs("tenant-1", "EUR").
-		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(1000)))
-	mock.ExpectExec("UPDATE purser.prepaid_balances").
-		WithArgs(int64(3500), "tenant-1", "EUR").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("INSERT INTO purser.balance_transactions").
-		WithArgs(sqlmock.AnyArg(), "tenant-1", int64(2500), int64(3500), sqlmock.AnyArg(), "nonce-3").
+	mock.ExpectQuery("UPDATE purser.prepaid_balances").
+		WithArgs(int64(2500), "tenant-1", "EUR").
+		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(3500)))
+	mock.ExpectExec("UPDATE purser.balance_transactions").
+		WithArgs(int64(3500), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("UPDATE purser.x402_nonces").
-		WithArgs("nonce-3", int64(16), int64(21000)).
+		WithArgs(int64(16), int64(21000), "nonce-3").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("UPDATE purser.x402_settlement_attempts").
 		WithArgs("nonce-3", "0xcredit").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("UPDATE purser.x402_payment_quotes").
-		WithArgs("nonce-3", "0xcredit").
+		WithArgs("0xcredit", "nonce-3").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 
@@ -228,19 +222,17 @@ func TestRecoverReversedBalanceUsesDistinctIdempotencyReference(t *testing.T) {
 	reconciler := NewX402Reconciler(mockDB, logrus.New(), false)
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT EXISTS").
-		WithArgs("tenant-1", "nonce-4").
+		WithArgs("tenant-1", "x402_recovery", "nonce-4").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectExec("INSERT INTO purser.prepaid_balances").
 		WithArgs("tenant-1", "EUR").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery("SELECT balance_cents FROM purser.prepaid_balances").
-		WithArgs("tenant-1", "EUR").
-		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(1000)))
-	mock.ExpectExec("UPDATE purser.prepaid_balances").
-		WithArgs(int64(3500), "tenant-1", "EUR").
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("UPDATE purser.prepaid_balances").
+		WithArgs(int64(2500), "tenant-1", "EUR").
+		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(3500)))
 	mock.ExpectExec("INSERT INTO purser.balance_transactions").
-		WithArgs(sqlmock.AnyArg(), "tenant-1", int64(2500), int64(3500), sqlmock.AnyArg(), "nonce-4").
+		WithArgs(sqlmock.AnyArg(), "tenant-1", int64(2500), int64(3500), "topup",
+			sqlmock.AnyArg(), "nonce-4", "x402_recovery", nil, nil, nil, nil, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
@@ -262,7 +254,7 @@ func TestRecoverReversedBalanceIsIdempotent(t *testing.T) {
 	reconciler := NewX402Reconciler(mockDB, logrus.New(), false)
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT EXISTS").
-		WithArgs("tenant-1", "nonce-4").
+		WithArgs("tenant-1", "x402_recovery", "nonce-4").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	mock.ExpectRollback()
 
