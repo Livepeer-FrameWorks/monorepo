@@ -195,7 +195,7 @@ func TestReconcileCryptoSweepDoesNotConfirmReorgedReceipt(t *testing.T) {
 	batchID := "11111111-1111-1111-1111-111111111111"
 	mock.ExpectQuery(`SELECT network FROM purser.crypto_sweep_batches`).WithArgs(batchID).
 		WillReturnRows(sqlmock.NewRows([]string{"network"}).AddRow("base"))
-	mock.ExpectQuery(`SELECT id::text, COALESCE\(wallet_id::text, ''\), tx_hash, status`).WithArgs(batchID).
+	mock.ExpectQuery(`SELECT id::text AS item_id, COALESCE\(wallet_id::text, ''\)::text AS wallet_id`).WithArgs(batchID).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "wallet_id", "tx_hash", "status"}).
 			AddRow("22222222-2222-2222-2222-222222222222", "", "0xtx", "broadcast"))
 	server := &PurserServer{db: db, rpcClient: handlers.NewRPCClient()}
@@ -228,7 +228,7 @@ func TestReconcileCryptoSweepAcceptsUnbroadcastNullHash(t *testing.T) {
 	batchID := "11111111-1111-1111-1111-111111111111"
 	mock.ExpectQuery(`SELECT network FROM purser.crypto_sweep_batches`).WithArgs(batchID).
 		WillReturnRows(sqlmock.NewRows([]string{"network"}).AddRow("base"))
-	mock.ExpectQuery(`SELECT id::text, COALESCE\(wallet_id::text, ''\), tx_hash, status`).WithArgs(batchID).
+	mock.ExpectQuery(`SELECT id::text AS item_id, COALESCE\(wallet_id::text, ''\)::text AS wallet_id`).WithArgs(batchID).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "wallet_id", "tx_hash", "status"}).
 			AddRow("22222222-2222-2222-2222-222222222222", "", nil, "planned"))
 	server := &PurserServer{db: db, rpcClient: handlers.NewRPCClient()}
@@ -392,7 +392,7 @@ func TestReleaseCryptoSweepExpiredUnsignedClaimIsAuditedAndReplannable(t *testin
 	mock.ExpectQuery(`SELECT manifest_checksum, network, expires_at`).WithArgs(batchID).
 		WillReturnRows(sqlmock.NewRows([]string{"manifest_checksum", "network", "expires_at"}).
 			AddRow(checksum, "base", time.Now().Add(-time.Hour)))
-	mock.ExpectQuery(`SELECT i.id::text, i.asset, LOWER\(i.source_address\)`).WithArgs(batchID).
+	mock.ExpectQuery(`SELECT item.id::text AS item_id, item.asset, LOWER\(item.source_address\)::text`).WithArgs(batchID).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "asset", "source_address", "amount", "source_nonce", "authorization_nonce", "authorization_before",
 			"signed_payload", "relay_transaction", "tx_hash", "status", "broadcast_at", "claimed_sources",
@@ -404,17 +404,17 @@ func TestReleaseCryptoSweepExpiredUnsignedClaimIsAuditedAndReplannable(t *testin
 		WillReturnRows(sqlmock.NewRows([]string{"status", "signed_payload", "relay_transaction", "tx_hash", "broadcast_at"}).
 			AddRow("planned", nil, nil, nil, nil))
 	mock.ExpectExec(`UPDATE purser.crypto_sweep_sources`).
-		WithArgs(itemID, "released", "", "operator recovery: expired unsigned manifest passed canonical balance recheck").
+		WithArgs("released", "", "operator recovery: expired unsigned manifest passed canonical balance recheck", itemID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE purser.crypto_sweep_items`).
-		WithArgs(itemID, "expired", "expired unsigned manifest passed canonical balance recheck").
+		WithArgs("expired", "expired unsigned manifest passed canonical balance recheck", itemID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO purser.crypto_sweep_events`).
 		WithArgs(batchID, itemID, "claim_released", "", "operator recovery", "expired unsigned manifest passed canonical balance recheck").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
-	mock.ExpectExec(`UPDATE purser.crypto_sweep_batches SET status=\$2`).
-		WithArgs(batchID, "expired", "", "operator recovery", int32(1), int32(0), int32(0)).
+	mock.ExpectExec(`UPDATE purser.crypto_sweep_batches SET status = \$3`).
+		WithArgs("", "operator recovery", "expired", int32(1), int32(0), int32(0), batchID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	server := &PurserServer{db: db, rpcClient: handlers.NewRPCClient()}
@@ -497,7 +497,7 @@ func TestReleaseCryptoSweepConcurrentItemChangePreservesAborted(t *testing.T) {
 	mock.ExpectQuery(`SELECT manifest_checksum, network, expires_at`).WithArgs(batchID).
 		WillReturnRows(sqlmock.NewRows([]string{"manifest_checksum", "network", "expires_at"}).
 			AddRow(checksum, "base", time.Now().Add(-time.Hour)))
-	mock.ExpectQuery(`SELECT i.id::text, i.asset, LOWER\(i.source_address\)`).WithArgs(batchID).
+	mock.ExpectQuery(`SELECT item.id::text AS item_id, item.asset, LOWER\(item.source_address\)::text`).WithArgs(batchID).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "asset", "source_address", "amount", "source_nonce", "authorization_nonce", "authorization_before",
 			"signed_payload", "relay_transaction", "tx_hash", "status", "broadcast_at", "claimed_sources",
@@ -584,15 +584,16 @@ func TestBroadcastCryptoSweepDuplicateReplaysSameETHIntent(t *testing.T) {
 	}
 	defer db.Close()
 	for range 2 {
-		mock.ExpectQuery(`SELECT manifest_checksum, network, LOWER\(treasury_address\), snapshot_block`).WithArgs(manifest.BatchID).
+		mock.ExpectQuery(`SELECT manifest_checksum, network, LOWER\(treasury_address\)::text AS treasury_address`).WithArgs(manifest.BatchID).
 			WillReturnRows(sqlmock.NewRows([]string{
 				"manifest_checksum", "network", "treasury_address", "snapshot_block", "snapshot_block_hash", "status", "expires_at",
 			}).AddRow(manifest.Checksum, manifest.Network, strings.ToLower(treasury), manifest.SnapshotBlock, manifest.SnapshotBlockHash, "broadcast", manifest.ExpiresAt))
 		mock.ExpectQuery(`SELECT status, tx_hash, relay_transaction`).WithArgs(item.ItemID, manifest.BatchID).
 			WillReturnRows(sqlmock.NewRows([]string{"status", "tx_hash", "relay_transaction"}).AddRow("broadcast", signedTx.Hash().Hex(), nil))
-		mock.ExpectExec(`UPDATE purser.crypto_sweep_items`).WithArgs(item.ItemID, "0x"+hex.EncodeToString(raw), signedTx.Hash().Hex()).
+		mock.ExpectExec(`UPDATE purser.crypto_sweep_items`).WithArgs("0x"+hex.EncodeToString(raw), signedTx.Hash().Hex(), item.ItemID).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectExec(`UPDATE purser.crypto_sweep_batches SET status = 'broadcast'`).
+			WithArgs("", bundle.Checksum, manifest.BatchID).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 	}
 	server := &PurserServer{db: db, rpcClient: handlers.NewRPCClient()}

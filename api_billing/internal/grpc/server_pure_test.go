@@ -234,23 +234,6 @@ func TestValidatePricingOverrideRuleEdgeCases(t *testing.T) {
 	}
 }
 
-func TestAsPGUUIDArray(t *testing.T) {
-	cases := []struct {
-		in   []string
-		want string
-	}{
-		{nil, "{}"},
-		{[]string{}, "{}"},
-		{[]string{"a"}, "{a}"},
-		{[]string{"a", "b", "c"}, "{a,b,c}"},
-	}
-	for _, c := range cases {
-		if got := asPGUUIDArray(c.in); got != c.want {
-			t.Fatalf("asPGUUIDArray(%v) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
-
 func TestBillingOutboxConfig(t *testing.T) {
 	cfg := billingOutboxConfig()
 	if cfg.BatchSize != billingOutboxBatchSize {
@@ -264,21 +247,5 @@ func TestBillingOutboxConfig(t *testing.T) {
 	}
 	if cfg.AlertAfterAttempts != billingOutboxAlertAfterAttempts {
 		t.Fatalf("AlertAfterAttempts = %d, want %d", cfg.AlertAfterAttempts, billingOutboxAlertAfterAttempts)
-	}
-}
-
-func TestJoinAndClauses(t *testing.T) {
-	cases := []struct {
-		in   []string
-		want string
-	}{
-		{nil, "true"},
-		{[]string{"a = 1"}, "a = 1"},
-		{[]string{"a = 1", "b = 2", "c = 3"}, "a = 1 AND b = 2 AND c = 3"},
-	}
-	for _, c := range cases {
-		if got := joinAndClauses(c.in); got != c.want {
-			t.Fatalf("joinAndClauses(%v) = %q, want %q", c.in, got, c.want)
-		}
 	}
 }

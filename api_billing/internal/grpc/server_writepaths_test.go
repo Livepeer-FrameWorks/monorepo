@@ -64,9 +64,9 @@ func TestCancelSubscriptionHappyPathEnqueuesOutbox(t *testing.T) {
 	s, mock := newReadServer(t, true)
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id FROM purser\.tenant_subscriptions WHERE tenant_id = \$1 AND status != 'cancelled'`).
+	mock.ExpectQuery(`SELECT id\s+FROM purser\.tenant_subscriptions\s+WHERE tenant_id = \$1::text::uuid AND status != 'cancelled'`).
 		WithArgs("tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("sub-1"))
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("91000000-0000-4000-8000-000000000001"))
 	mock.ExpectExec(`INSERT INTO purser\.billing_collection_writeoffs`).
 		WithArgs("tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -77,7 +77,7 @@ func TestCancelSubscriptionHappyPathEnqueuesOutbox(t *testing.T) {
 		WithArgs("tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`INSERT INTO purser\.billing_event_outbox`).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("evt-1"))
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("93000000-0000-4000-8000-000000000001"))
 	mock.ExpectCommit()
 
 	_, err := s.CancelSubscription(context.Background(), &purserpb.CancelSubscriptionRequest{TenantId: "tenant-1"})
@@ -133,10 +133,9 @@ func TestPromoteToPaidDefaultTierCarriesCredit(t *testing.T) {
 	s.commodoreClient = cache
 	mock.ExpectBegin()
 	expectLockedPromotionSubscription(mock, "tenant-1", "prepaid", "tier-prepaid", "stripe", "sub_ready", "billing@example.com", "Example Customer", []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`))
-	mock.ExpectQuery(`SELECT id::text, tier_level, tier_name, is_default_prepaid, is_active\s+FROM purser\.billing_tiers\s+WHERE is_default_postpaid=true`).
+	mock.ExpectQuery(`SELECT id::text AS id, tier_level, tier_name, is_default_prepaid, is_active`).
+		WithArgs(false, "").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name", "is_default_prepaid", "is_active"}).AddRow("tier-paid", int32(2), "supporter", false, true))
-	mock.ExpectQuery(`SELECT COALESCE\(balance_cents,0\) FROM purser\.prepaid_balances`).WithArgs("tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(1500)))
 	mock.ExpectQuery(`UPDATE purser\.tenant_subscriptions\s+SET billing_model = 'postpaid'`).
 		WithArgs("tier-paid", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("sub-1"))
@@ -194,9 +193,9 @@ func TestReconcileCanonicalTierClusterAccessRetriesSupersededWinner(t *testing.T
 }
 
 func expectCanonicalTierReconcile(mock sqlmock.Sqlmock, tenantID, tierID string, tierLevel int32, tierName, verifiedTierID string) {
-	mock.ExpectQuery(`SELECT ts\.tier_id::text, bt\.tier_level, bt\.tier_name`).WithArgs(tenantID).
+	mock.ExpectQuery(`SELECT ts\.tier_id::text AS tier_id, COALESCE\(bt\.tier_level, 0\)::integer AS tier_level, bt\.tier_name`).WithArgs(tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"tier_id", "tier_level", "tier_name"}).AddRow(tierID, tierLevel, tierName))
-	mock.ExpectQuery(`SELECT tier_id::text FROM purser\.tenant_subscriptions`).WithArgs(tenantID).
+	mock.ExpectQuery(`SELECT tier_id::text AS tier_id\s+FROM purser\.tenant_subscriptions`).WithArgs(tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"tier_id"}).AddRow(verifiedTierID))
 }
 
@@ -204,7 +203,8 @@ func TestPromoteToPaidRequiresCompleteBillingDetails(t *testing.T) {
 	s, mock := newReadServer(t, true)
 	mock.ExpectBegin()
 	expectLockedPromotionSubscription(mock, "tenant-1", "prepaid", "tier-prepaid", nil, nil, "billing@example.com", nil, nil)
-	mock.ExpectQuery(`SELECT id::text, tier_level, tier_name, is_default_prepaid, is_active\s+FROM purser\.billing_tiers\s+WHERE is_default_postpaid=true`).
+	mock.ExpectQuery(`SELECT id::text AS id, tier_level, tier_name, is_default_prepaid, is_active`).
+		WithArgs(false, "").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name", "is_default_prepaid", "is_active"}).AddRow("tier-paid", int32(2), "supporter", false, true))
 	mock.ExpectRollback()
 
@@ -236,8 +236,8 @@ func TestPromoteToPaidExplicitTierRejectsNonEligible(t *testing.T) {
 			s, mock := newReadServer(t, true)
 			mock.ExpectBegin()
 			expectLockedPromotionSubscription(mock, "tenant-1", "prepaid", "tier-prepaid", nil, nil, nil, nil, nil)
-			mock.ExpectQuery(`SELECT id::text, tier_level, tier_name, is_default_prepaid, is_active\s+FROM purser\.billing_tiers WHERE id=\$1`).
-				WithArgs("tier-req").
+			mock.ExpectQuery(`SELECT id::text AS id, tier_level, tier_name, is_default_prepaid, is_active`).
+				WithArgs(true, "tier-req").
 				WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name", "is_default_prepaid", "is_active"}).
 					AddRow("tier-req", tc.tierLevel, "some-tier", tc.isPrepaid, tc.isActive))
 			mock.ExpectRollback()
@@ -255,13 +255,10 @@ func TestPromoteToPaidAllowsVerifiedFreePathWithoutBillingProfileOrProvider(t *t
 	s, mock := newReadServer(t, true)
 	mock.ExpectBegin()
 	expectLockedPromotionSubscription(mock, "tenant-1", "prepaid", "tier-prepaid", nil, nil, nil, nil, nil)
-	mock.ExpectQuery(`SELECT id::text, tier_level, tier_name, is_default_prepaid, is_active\s+FROM purser\.billing_tiers WHERE id=\$1`).
-		WithArgs("tier-free").
+	mock.ExpectQuery(`SELECT id::text AS id, tier_level, tier_name, is_default_prepaid, is_active`).
+		WithArgs(true, "tier-free").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name", "is_default_prepaid", "is_active"}).
 			AddRow("tier-free", int32(1), "free", false, true))
-	mock.ExpectQuery(`SELECT COALESCE\(balance_cents,0\) FROM purser\.prepaid_balances`).
-		WithArgs("tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(1500)))
 	mock.ExpectQuery(`UPDATE purser\.tenant_subscriptions\s+SET billing_model = 'postpaid'`).
 		WithArgs("tier-free", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("sub-1"))
@@ -285,7 +282,7 @@ func TestPromoteToPaidNotFoundAndAlreadyPostpaid(t *testing.T) {
 	t.Run("no subscription", func(t *testing.T) {
 		s, mock := newReadServer(t, true)
 		mock.ExpectBegin()
-		mock.ExpectQuery(`SELECT id::text, billing_model, tier_id::text`).
+		mock.ExpectQuery(`SELECT id::text AS id, billing_model, tier_id::text AS tier_id`).
 			WithArgs("tenant-x").
 			WillReturnError(sqlmockNoRows())
 		mock.ExpectRollback()
@@ -298,11 +295,9 @@ func TestPromoteToPaidNotFoundAndAlreadyPostpaid(t *testing.T) {
 		s, mock := newReadServer(t, true)
 		mock.ExpectBegin()
 		expectLockedPromotionSubscription(mock, "tenant-1", "postpaid", "tier-free", nil, nil, nil, nil, nil)
-		mock.ExpectQuery(`SELECT id::text, tier_level, tier_name, is_default_prepaid, is_active\s+FROM purser\.billing_tiers WHERE id=\$1`).
-			WithArgs("tier-free").
+		mock.ExpectQuery(`SELECT id::text AS id, tier_level, tier_name, is_default_prepaid, is_active`).
+			WithArgs(true, "tier-free").
 			WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name", "is_default_prepaid", "is_active"}).AddRow("tier-free", int32(1), "free", false, true))
-		mock.ExpectQuery(`SELECT COALESCE\(balance_cents,0\) FROM purser\.prepaid_balances`).WithArgs("tenant-1").
-			WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(1500))
 		mock.ExpectCommit()
 		expectCanonicalPromotion(mock, "tenant-1", "sub-1", "tier-free", int32(1), "free", 1500)
 		response, err := s.PromoteToPaid(context.Background(), &purserpb.PromoteToPaidRequest{TenantId: "tenant-1"})
@@ -313,7 +308,10 @@ func TestPromoteToPaidNotFoundAndAlreadyPostpaid(t *testing.T) {
 }
 
 func expectLockedPromotionSubscription(mock sqlmock.Sqlmock, tenantID, model, tierID string, paymentMethod, stripeSubscription, email, name, address any) {
-	mock.ExpectQuery(`SELECT id::text, billing_model, tier_id::text, payment_method`).WithArgs(tenantID).
+	if address == nil {
+		address = []byte(`{}`)
+	}
+	mock.ExpectQuery(`SELECT id::text AS id, billing_model, tier_id::text AS tier_id, payment_method`).WithArgs(tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "billing_model", "tier_id", "payment_method", "stripe_subscription_id", "mollie_subscription_id",
 			"billing_email", "billing_name", "billing_address",
@@ -321,7 +319,7 @@ func expectLockedPromotionSubscription(mock sqlmock.Sqlmock, tenantID, model, ti
 }
 
 func expectCanonicalPromotion(mock sqlmock.Sqlmock, tenantID, subscriptionID, tierID string, tierLevel int32, tierName string, balance int64) {
-	mock.ExpectQuery(`SELECT s.id::text, s.billing_model, s.tier_id::text, t.tier_level, t.tier_name`).WithArgs(tenantID).
+	mock.ExpectQuery(`SELECT subscription.id::text AS subscription_id, subscription.billing_model`).WithArgs("EUR", tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "billing_model", "tier_id", "tier_level", "tier_name", "balance_cents"}).
 			AddRow(subscriptionID, "postpaid", tierID, tierLevel, tierName, balance))
 }
@@ -346,7 +344,7 @@ func TestUpdateBillingDetailsAppliesAndRereads(t *testing.T) {
 	mock.ExpectQuery(`FROM purser\.tenant_subscriptions`).
 		WithArgs("tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at"}).
-			AddRow("new@example.com", nil, nil, nil, nil, now))
+			AddRow("new@example.com", nil, nil, nil, []byte(`{}`), now))
 
 	email := "new@example.com"
 	resp, err := s.UpdateBillingDetails(context.Background(), &purserpb.UpdateBillingDetailsRequest{TenantId: "tenant-1", Email: &email})
@@ -380,7 +378,7 @@ func TestUpdateBillingDetailsNoFieldsDelegatesToRead(t *testing.T) {
 	mock.ExpectQuery(`FROM purser\.tenant_subscriptions`).
 		WithArgs("tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at"}).
-			AddRow("a@b.com", nil, nil, nil, nil, now))
+			AddRow("a@b.com", nil, nil, nil, []byte(`{}`), now))
 
 	resp, err := s.UpdateBillingDetails(context.Background(), &purserpb.UpdateBillingDetailsRequest{TenantId: "tenant-1"})
 	if err != nil {
@@ -407,24 +405,27 @@ func TestUpdateBillingDetailsNotFound(t *testing.T) {
 // IDs after commit.
 func TestInitializePrepaidAccountHappyPath(t *testing.T) {
 	s, mock := newReadServer(t, true)
+	tierID := "81000000-0000-4000-8000-000000000001"
+	subID := "82000000-0000-4000-8000-000000000001"
+	balID := "83000000-0000-4000-8000-000000000001"
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`FROM purser\.billing_tiers\s+WHERE is_default_prepaid = true`).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name"}).AddRow("tier-pp", int32(1), "payg"))
+	mock.ExpectQuery(`FROM purser\.billing_tiers\s+WHERE \(`).WithArgs(true).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name"}).AddRow(tierID, int32(1), "payg"))
 	mock.ExpectExec(`INSERT INTO purser\.tenant_subscriptions`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO purser\.prepaid_balances`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
-	mock.ExpectQuery(`SELECT ts\.id::text, pb\.id::text, bt\.tier_level, bt\.tier_name`).
-		WithArgs("tenant-1", "EUR").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "balance_id", "tier_level", "tier_name"}).AddRow("sub-1", "bal-1", int32(1), "payg"))
+	mock.ExpectQuery(`SELECT ts\.id AS subscription_id, pb\.id AS balance_id`).
+		WithArgs("EUR", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "balance_id", "tier_level", "tier_name"}).AddRow(subID, balID, int32(1), "payg"))
 
 	resp, err := s.InitializePrepaidAccount(context.Background(), &purserpb.InitializePrepaidAccountRequest{TenantId: "tenant-1"})
 	if err != nil {
 		t.Fatalf("InitializePrepaidAccount: %v", err)
 	}
-	if resp.SubscriptionId != "sub-1" || resp.BalanceId != "bal-1" || resp.TierLevel != 1 {
+	if resp.SubscriptionId != subID || resp.BalanceId != balID || resp.TierLevel != 1 {
 		t.Fatalf("response mapping wrong: %+v", resp)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -434,21 +435,24 @@ func TestInitializePrepaidAccountHappyPath(t *testing.T) {
 
 func TestInitializePrepaidAccountReportsSubscriptionThatWonConcurrentProvisioning(t *testing.T) {
 	s, mock := newReadServer(t, true)
+	tierID := "81000000-0000-4000-8000-000000000002"
+	subID := "82000000-0000-4000-8000-000000000002"
+	balID := "83000000-0000-4000-8000-000000000002"
 	mock.ExpectBegin()
-	mock.ExpectQuery(`FROM purser\.billing_tiers\s+WHERE is_default_prepaid = true`).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name"}).AddRow("tier-prepaid", int32(0), "payg"))
+	mock.ExpectQuery(`FROM purser\.billing_tiers\s+WHERE \(`).WithArgs(true).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name"}).AddRow(tierID, int32(0), "payg"))
 	mock.ExpectExec(`INSERT INTO purser\.tenant_subscriptions`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`INSERT INTO purser\.prepaid_balances`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
-	mock.ExpectQuery(`SELECT ts\.id::text, pb\.id::text, bt\.tier_level, bt\.tier_name`).
-		WithArgs("tenant-1", "EUR").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "balance_id", "tier_level", "tier_name"}).AddRow("sub-free", "bal-1", int32(1), "free"))
+	mock.ExpectQuery(`SELECT ts\.id AS subscription_id, pb\.id AS balance_id`).
+		WithArgs("EUR", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "balance_id", "tier_level", "tier_name"}).AddRow(subID, balID, int32(1), "free"))
 
 	resp, err := s.InitializePrepaidAccount(context.Background(), &purserpb.InitializePrepaidAccountRequest{TenantId: "tenant-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.GetSubscriptionId() != "sub-free" || resp.GetTierLevel() != 1 {
+	if resp.GetSubscriptionId() != subID || resp.GetTierLevel() != 1 {
 		t.Fatalf("response did not report canonical winner: %+v", resp)
 	}
 }
@@ -458,7 +462,7 @@ func TestInitializePrepaidAccountReportsSubscriptionThatWonConcurrentProvisionin
 func TestInitializePrepaidAccountNoDefaultTier(t *testing.T) {
 	s, mock := newReadServer(t, true)
 	mock.ExpectBegin()
-	mock.ExpectQuery(`FROM purser\.billing_tiers\s+WHERE is_default_prepaid = true`).
+	mock.ExpectQuery(`FROM purser\.billing_tiers\s+WHERE \(`).WithArgs(true).
 		WillReturnError(sqlmockNoRows())
 	mock.ExpectRollback()
 
@@ -470,41 +474,45 @@ func TestInitializePrepaidAccountNoDefaultTier(t *testing.T) {
 
 func TestInitializePostpaidAccountHappyPath(t *testing.T) {
 	s, mock := newReadServer(t, true)
+	tierID := "81000000-0000-4000-8000-000000000003"
+	subID := "82000000-0000-4000-8000-000000000003"
 	mock.ExpectBegin()
-	mock.ExpectQuery(`FROM purser\.billing_tiers\s+WHERE is_default_postpaid = true`).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name"}).AddRow("tier-post", int32(2), "free"))
+	mock.ExpectQuery(`FROM purser\.billing_tiers\s+WHERE \(`).WithArgs(false).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name"}).AddRow(tierID, int32(2), "free"))
 	mock.ExpectExec(`INSERT INTO purser\.tenant_subscriptions`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
-	mock.ExpectQuery(`SELECT ts\.id::text, bt\.tier_level, bt\.tier_name`).
+	mock.ExpectQuery(`SELECT ts\.id AS subscription_id, COALESCE\(bt\.tier_level, 0\)::integer AS tier_level`).
 		WithArgs("tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name"}).AddRow("sub-2", int32(2), "free"))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name"}).AddRow(subID, int32(2), "free"))
 
 	resp, err := s.InitializePostpaidAccount(context.Background(), &purserpb.InitializePostpaidAccountRequest{TenantId: "tenant-1"})
 	if err != nil {
 		t.Fatalf("InitializePostpaidAccount: %v", err)
 	}
-	if resp.SubscriptionId != "sub-2" || resp.TierLevel != 2 {
+	if resp.SubscriptionId != subID || resp.TierLevel != 2 {
 		t.Fatalf("response mapping wrong: %+v", resp)
 	}
 }
 
 func TestEnsureFreeAccountReportsSubscriptionThatWonConcurrentProvisioning(t *testing.T) {
 	s, mock := newReadServer(t, true)
+	tierID := "81000000-0000-4000-8000-000000000004"
+	subID := "82000000-0000-4000-8000-000000000004"
 	mock.ExpectBegin()
-	mock.ExpectQuery(`FROM purser\.billing_tiers\s+WHERE is_default_postpaid = true`).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name"}).AddRow("tier-free", int32(1), "free"))
+	mock.ExpectQuery(`FROM purser\.billing_tiers\s+WHERE \(`).WithArgs(false).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name"}).AddRow(tierID, int32(1), "free"))
 	mock.ExpectExec(`INSERT INTO purser\.tenant_subscriptions`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
-	mock.ExpectQuery(`SELECT ts\.id::text, bt\.tier_level, bt\.tier_name`).
+	mock.ExpectQuery(`SELECT ts\.id AS subscription_id, COALESCE\(bt\.tier_level, 0\)::integer AS tier_level`).
 		WithArgs("tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name"}).AddRow("sub-prepaid", int32(0), "payg"))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name"}).AddRow(subID, int32(0), "payg"))
 
 	resp, err := s.EnsureFreeAccount(context.Background(), &purserpb.InitializePostpaidAccountRequest{TenantId: "tenant-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.GetSubscriptionId() != "sub-prepaid" || resp.GetTierLevel() != 0 {
+	if resp.GetSubscriptionId() != subID || resp.GetTierLevel() != 0 {
 		t.Fatalf("response did not report canonical winner: %+v", resp)
 	}
 }
@@ -524,10 +532,10 @@ func TestInitializeAccountEmptyTenantGuards(t *testing.T) {
 func TestUpdateSubscriptionTierGuards(t *testing.T) {
 	t.Run("mismatch rejected", func(t *testing.T) {
 		s, mock := newReadServer(t, true)
-		mock.ExpectQuery(`SELECT tier_id FROM purser\.tenant_subscriptions WHERE tenant_id = \$1`).
+		mock.ExpectQuery(`SELECT tier_id::text AS tier_id\s+FROM purser\.tenant_subscriptions\s+WHERE tenant_id = \$1::text::uuid`).
 			WithArgs("tenant-1").
-			WillReturnRows(sqlmock.NewRows([]string{"tier_id"}).AddRow("tier-current"))
-		other := "tier-other"
+			WillReturnRows(sqlmock.NewRows([]string{"tier_id"}).AddRow("92000000-0000-4000-8000-000000000001"))
+		other := "92000000-0000-4000-8000-000000000002"
 		_, err := s.UpdateSubscription(context.Background(), &purserpb.UpdateSubscriptionRequest{TenantId: "tenant-1", TierId: &other})
 		if status.Code(err) != codes.FailedPrecondition {
 			t.Fatalf("err = %v, want FailedPrecondition", err)
@@ -535,7 +543,7 @@ func TestUpdateSubscriptionTierGuards(t *testing.T) {
 	})
 	t.Run("subscription not found", func(t *testing.T) {
 		s, mock := newReadServer(t, true)
-		mock.ExpectQuery(`SELECT tier_id FROM purser\.tenant_subscriptions`).
+		mock.ExpectQuery(`SELECT tier_id::text AS tier_id\s+FROM purser\.tenant_subscriptions`).
 			WithArgs("tenant-x").
 			WillReturnError(sqlmockNoRows())
 		tid := "tier-any"

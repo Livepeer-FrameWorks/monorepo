@@ -52,18 +52,23 @@ func TestLoadStoragePricingNilWhenAbsent(t *testing.T) {
 func TestGetRecentPaymentsMapsRows(t *testing.T) {
 	s, mock := newReadServer(t, true)
 	now := time.Now()
+	tenantID := "e7b819e0-f451-4cf1-983f-ed14904c983a"
+	firstPaymentID := "7c4798e8-5920-463b-9bc4-53a8730aa5df"
+	secondPaymentID := "02fca102-08cc-4672-923c-79c333a6672c"
+	firstInvoiceID := "48906e44-4fd8-42d7-a94a-0e753b75a9fd"
+	secondInvoiceID := "024170f8-f1b5-4525-9085-a0e98f53a250"
 	rows := sqlmock.NewRows([]string{
 		"id", "invoice_id", "method", "amount", "currency",
 		"tx_id", "status", "confirmed_at", "created_at", "updated_at",
 	}).
-		AddRow("pay-1", "inv-1", "card", 12.50, "USD", "tx-abc", "confirmed", now, now, now).
-		AddRow("pay-2", "inv-2", "crypto_eth", 5.00, "USD", nil, "pending", nil, now, now)
+		AddRow(firstPaymentID, firstInvoiceID, "card", 12.50, "USD", "tx-abc", "confirmed", now, now, now).
+		AddRow(secondPaymentID, secondInvoiceID, "crypto_eth", 5.00, "USD", nil, "pending", nil, now, now)
 
 	mock.ExpectQuery(`FROM purser\.billing_payments bp\s+JOIN purser\.billing_invoices`).
-		WithArgs("tenant-1", 10).
+		WithArgs(tenantID, int32(10)).
 		WillReturnRows(rows)
 
-	got, err := s.getRecentPayments(context.Background(), "tenant-1", 10)
+	got, err := s.getRecentPayments(context.Background(), tenantID, 10)
 	if err != nil {
 		t.Fatalf("getRecentPayments: %v", err)
 	}
@@ -86,10 +91,10 @@ func TestGetSubscriptionPeriodActiveRow(t *testing.T) {
 	s, mock := newReadServer(t, true)
 	start := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	mock.ExpectQuery(`FROM purser\.tenant_subscriptions\s+WHERE tenant_id = \$1 AND status = 'active'`).
+	mock.ExpectQuery(`FROM purser\.tenant_subscriptions\s+WHERE tenant_id = \$1::text::uuid AND status = 'active'`).
 		WithArgs("tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"billing_period_start", "billing_period_end"}).
-			AddRow(start, end))
+		WillReturnRows(sqlmock.NewRows([]string{"billing_period_start", "billing_period_end", "mollie_next_payment_date"}).
+			AddRow(start, end, nil))
 
 	gotStart, gotEnd := s.getSubscriptionPeriod(context.Background(), "tenant-1", time.Now())
 	if !gotStart.Equal(start) || !gotEnd.Equal(end) {
@@ -123,6 +128,8 @@ func TestGetSubscriptionPeriodFallsBackToMonth(t *testing.T) {
 func TestGetPendingInvoicesMapsRowsAndLineItems(t *testing.T) {
 	s, mock := newReadServer(t, true)
 	now := time.Now()
+	tenantID := "f90715fb-5511-43b4-9907-e4122590bb90"
+	invoiceID := "76ecde79-3a17-4b45-b090-bb57949d1631"
 
 	invoiceRows := sqlmock.NewRows([]string{
 		"id", "tenant_id", "amount", "base_amount", "metered_amount",
@@ -130,13 +137,13 @@ func TestGetPendingInvoicesMapsRowsAndLineItems(t *testing.T) {
 		"usage_details", "created_at", "updated_at", "period_start", "period_end",
 		"gross_metered_amount",
 	}).AddRow(
-		"inv-1", "tenant-1", 30.0, 20.0, 10.0,
+		invoiceID, tenantID, 30.0, 20.0, 10.0,
 		0.0, "USD", "pending", now, nil,
 		[]byte(`{"k":"v"}`), now, now, now, now,
 		10.0,
 	)
-	mock.ExpectQuery(`FROM purser\.billing_invoices bi\s+WHERE bi\.tenant_id = \$1 AND bi\.status IN`).
-		WithArgs("tenant-1").
+	mock.ExpectQuery(`FROM purser\.billing_invoices bi\s+WHERE bi\.tenant_id = \$1::text::uuid\s+AND bi\.status IN`).
+		WithArgs(tenantID).
 		WillReturnRows(invoiceRows)
 
 	// loadInvoiceLineItems runs once per invoice. quartermasterClient is nil so
@@ -150,11 +157,11 @@ func TestGetPendingInvoicesMapsRowsAndLineItems(t *testing.T) {
 		"1", "20.00", "20.00", "USD",
 		"", "", "tier",
 	)
-	mock.ExpectQuery(`FROM purser\.invoice_line_items\s+WHERE invoice_id = \$1 AND tenant_id = \$2`).
-		WithArgs("inv-1", "tenant-1").
+	mock.ExpectQuery(`FROM purser\.invoice_line_items\s+WHERE invoice_id = \$1::text::uuid\s+AND tenant_id = \$2::text::uuid`).
+		WithArgs(invoiceID, tenantID).
 		WillReturnRows(lineRows)
 
-	got, err := s.getPendingInvoices(context.Background(), "tenant-1")
+	got, err := s.getPendingInvoices(context.Background(), tenantID)
 	if err != nil {
 		t.Fatalf("getPendingInvoices: %v", err)
 	}
@@ -162,7 +169,7 @@ func TestGetPendingInvoicesMapsRowsAndLineItems(t *testing.T) {
 		t.Fatalf("got %d invoices, want 1", len(got))
 	}
 	inv := got[0]
-	if inv.Id != "inv-1" || inv.Amount != 30.0 || inv.BaseAmount != 20.0 || inv.MeteredAmount != 10.0 {
+	if inv.Id != invoiceID || inv.Amount != 30.0 || inv.BaseAmount != 20.0 || inv.MeteredAmount != 10.0 {
 		t.Fatalf("invoice amounts mapped wrong: %+v", inv)
 	}
 	// NULL paid_at must stay unset.
@@ -201,11 +208,11 @@ func TestGetUsageRecordsMapsRows(t *testing.T) {
 		"usage_details", "created_at", "period_start", "period_end", "granularity",
 	}).
 		AddRow("u1", "tenant-1", "cl-1", "delivered_minutes", 12.5, []byte(`{"codec":"h264"}`), now, now, now, "minute_5").
-		AddRow("u2", "tenant-1", nil, "egress_gb", 3.0, nil, now, nil, nil, nil)
+		AddRow("u2", "tenant-1", "", "egress_gb", 3.0, []byte(`{}`), now, nil, nil, "")
 
-	// args: tenantID, period-range end, period-range start, limit+1.
+	// Typed query arguments include explicit optional-filter and cursor flags.
 	mock.ExpectQuery(`FROM purser\.usage_records`).
-		WithArgs("tenant-1", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs("tenant-1", false, "", false, "", sqlmock.AnyArg(), sqlmock.AnyArg(), false, false, sqlmock.AnyArg(), "", int32(51)).
 		WillReturnRows(rows)
 
 	resp, err := s.GetUsageRecords(serviceTestContext(), &purserpb.GetUsageRecordsRequest{
@@ -258,6 +265,7 @@ func TestGetBillingTierRequiresTierID(t *testing.T) {
 func TestGetBillingTierMapsRowAndSubqueries(t *testing.T) {
 	s, mock := newReadServer(t, true)
 	now := time.Now()
+	tierID := "11111111-1111-4111-8111-111111111111"
 
 	tierRow := sqlmock.NewRows([]string{
 		"id", "tier_name", "display_name", "description", "base_price", "currency", "billing_period",
@@ -267,37 +275,37 @@ func TestGetBillingTierMapsRowAndSubqueries(t *testing.T) {
 		"is_default_prepaid", "is_default_postpaid",
 		"processes_live", "processes_dvr", "processes_clip", "processes_dvr_finalize", "processes_vod",
 	}).AddRow(
-		"tier-1", "pro", "Pro", "Pro plan", 49.0, "USD", "monthly",
+		tierID, "pro", "Pro", "Pro plan", 49.0, "USD", "monthly",
 		[]byte(`{"recording":true,"analytics":true}`), "priority", "gold", true,
 		true, int32(3), false,
 		now, now,
 		true, false,
-		"live+", nil, nil, nil, nil,
+		[]byte(`["live+"]`), []byte(`[]`), []byte(`[]`), []byte(`[]`), []byte(`[]`),
 	)
 	mock.ExpectQuery(`FROM purser\.billing_tiers\s+WHERE id = \$1`).
-		WithArgs("tier-1").
+		WithArgs(tierID).
 		WillReturnRows(tierRow)
 	mock.ExpectQuery(`FROM purser\.tier_pricing_rules\s+WHERE tier_id = \$1`).
-		WithArgs("tier-1").
+		WithArgs(tierID).
 		WillReturnRows(sqlmock.NewRows([]string{"meter", "model", "currency", "included", "unit_price", "config"}).
 			AddRow("delivered_minutes", "per_unit", "USD", "100", "0.01", "{}"))
-	mock.ExpectQuery(`FROM purser\.tier_entitlements WHERE tier_id = \$1`).
-		WithArgs("tier-1").
+	mock.ExpectQuery(`FROM purser\.tier_entitlements\s+WHERE tier_id = \$1`).
+		WithArgs(tierID).
 		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}).
 			AddRow("recording_retention_days", "30"))
 
-	got, err := s.GetBillingTier(context.Background(), &purserpb.GetBillingTierRequest{TierId: "tier-1"})
+	got, err := s.GetBillingTier(context.Background(), &purserpb.GetBillingTierRequest{TierId: tierID})
 	if err != nil {
 		t.Fatalf("GetBillingTier: %v", err)
 	}
-	if got.Id != "tier-1" || got.TierName != "pro" || got.BasePrice != 49.0 || got.TierLevel != 3 {
+	if got.Id != tierID || got.TierName != "pro" || got.BasePrice != 49.0 || got.TierLevel != 3 {
 		t.Fatalf("tier identity mapped wrong: %+v", got)
 	}
 	if got.Features == nil || !got.Features.Recording || !got.Features.Analytics {
 		t.Fatalf("features JSONB not decoded: %+v", got.Features)
 	}
 	// NULL process-mode columns stay empty strings.
-	if got.ProcessesLive != "live+" || got.ProcessesDvr != "" {
+	if got.ProcessesLive != `["live+"]` || got.ProcessesDvr != `[]` {
 		t.Fatalf("process modes mapped wrong: live=%q dvr=%q", got.ProcessesLive, got.ProcessesDvr)
 	}
 	if len(got.PricingRules) != 1 || got.PricingRules[0].Meter != "delivered_minutes" {

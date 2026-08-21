@@ -19,7 +19,7 @@ func TestLoadInvoiceCryptoPaymentQuote(t *testing.T) {
 
 	quotedAt := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
 	expiresAt := quotedAt.Add(30 * time.Minute)
-	mock.ExpectQuery("SELECT wallet_address, expected_amount_base_units::text, quoted_price_usd::text").
+	mock.ExpectQuery("SELECT wallet_address, expected_amount_base_units::text AS expected_amount_base_units").
 		WithArgs("invoice-1", "tenant-1", "ETH").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"wallet_address",

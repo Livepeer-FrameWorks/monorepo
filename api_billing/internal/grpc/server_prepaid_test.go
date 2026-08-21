@@ -44,6 +44,7 @@ func TestRecordBalanceTransaction_DuplicateReferenceReturnsExisting(t *testing.T
 		WillReturnError(sql.ErrNoRows)
 
 	createdAt := time.Now().Add(-1 * time.Minute)
+	existingID := uuid.New().String()
 	rows := sqlmock.NewRows([]string{
 		"id",
 		"tenant_id",
@@ -55,7 +56,7 @@ func TestRecordBalanceTransaction_DuplicateReferenceReturnsExisting(t *testing.T
 		"reference_type",
 		"created_at",
 	}).AddRow(
-		"existing-id",
+		existingID,
 		tenantID,
 		amountCents,
 		int64(2500),
@@ -87,7 +88,7 @@ func TestRecordBalanceTransaction_DuplicateReferenceReturnsExisting(t *testing.T
 	if txn == nil {
 		t.Fatal("expected transaction, got nil")
 	}
-	if txn.Id != "existing-id" {
+	if txn.Id != existingID {
 		t.Fatalf("expected existing transaction id, got %s", txn.Id)
 	}
 	if txn.BalanceAfterCents != 2500 {

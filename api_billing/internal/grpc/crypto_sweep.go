@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/handlers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cryptosweep"
@@ -135,12 +136,8 @@ func (s *PurserServer) GetCryptoReadiness(ctx context.Context, _ *emptypb.Empty)
 	} else {
 		add("x402.facilitator", s.x402handler.Readiness(ctx), "official v2 facilitator reachable and supported")
 	}
-	var currentVATRates int64
-	vatRateErr := s.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM purser.vat_rate_periods
-		WHERE effective_from <= CURRENT_DATE
-		  AND (effective_until IS NULL OR effective_until > CURRENT_DATE)
-	`).Scan(&currentVATRates)
+	queries := purserdb.New(s.db)
+	currentVATRates, vatRateErr := queries.CountCurrentEUVATRates(ctx)
 	if vatRateErr != nil {
 		add("tax.vat_rate_catalog", fmt.Errorf("read effective VAT rates: %w", vatRateErr), "")
 	} else if currentVATRates != 27 {
@@ -148,11 +145,9 @@ func (s *PurserServer) GetCryptoReadiness(ctx context.Context, _ *emptypb.Empty)
 	} else {
 		add("tax.vat_rate_catalog", nil, "27 effective-dated EU standard rates")
 	}
-	var openAnomalies int64
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM purser.crypto_accounting_anomalies WHERE status = 'open'
-	`).Scan(&openAnomalies); err != nil {
-		add("accounting.crypto_anomaly_queue", fmt.Errorf("read anomaly queue: %w", err), "")
+	openAnomalies, anomalyErr := queries.CountOpenCryptoAccountingAnomalies(ctx)
+	if anomalyErr != nil {
+		add("accounting.crypto_anomaly_queue", fmt.Errorf("read anomaly queue: %w", anomalyErr), "")
 	} else if openAnomalies > 0 {
 		add("accounting.crypto_anomaly_queue", fmt.Errorf("%d unresolved crypto accounting anomalies", openAnomalies), "")
 	} else {
@@ -176,13 +171,8 @@ func (s *PurserServer) GetCryptoReadiness(ctx context.Context, _ *emptypb.Empty)
 		}
 		add(prefix+"usdc_relayer", relayerErr, "dedicated relayer key valid and funded for one transaction")
 
-		var scannedAt sql.NullTime
-		var lastError sql.NullString
-		var lag sql.NullInt64
-		scannerErr := s.db.QueryRowContext(ctx, `
-			SELECT scanned_at, last_error, lag_blocks
-			FROM purser.crypto_scan_cursors WHERE network = $1
-		`, network.Name).Scan(&scannedAt, &lastError, &lag)
+		health, scannerErr := queries.GetCryptoScannerHealth(ctx, network.Name)
+		scannedAt, lastError, lag := health.ScannedAt, health.LastError, health.LagBlocks
 		if scannerErr == nil && (!scannedAt.Valid || time.Since(scannedAt.Time) > time.Minute) {
 			scannerErr = fmt.Errorf("scanner has not committed a batch in the last minute")
 		}
@@ -252,65 +242,32 @@ func (s *PurserServer) sweepSnapshot(ctx context.Context, network handlers.Netwo
 }
 
 func (s *PurserServer) loadSweepCandidates(ctx context.Context, network handlers.NetworkConfig) ([]sweepCandidate, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT ca.id::text, w.id::text, ca.asset, LOWER(ca.address), ca.derivation_index, ca.derivation_xpub,
-		       'direct_wallet', w.id::text, w.received_amount_base_units::text
-		FROM purser.crypto_custody_addresses ca
-		JOIN purser.crypto_wallets w ON ca.source_kind = 'direct_deposit' AND ca.source_ref = w.id
-		WHERE ca.network = $1 AND w.status = 'completed'
-		  AND w.received_amount_base_units > 0
-			  AND NOT EXISTS (
-			      SELECT 1 FROM purser.crypto_sweep_sources ss
-			      WHERE ss.source_type = 'direct_wallet' AND ss.source_id = w.id
-			        AND ss.claim_status IN ('claimed', 'consumed', 'quarantined')
-			  )
-		UNION ALL
-		SELECT ca.id::text, NULL, ca.asset, LOWER(ca.address), ca.derivation_index, ca.derivation_xpub,
-		       'x402_quote', q.id::text, q.amount_atomic::text
-		FROM purser.crypto_custody_addresses ca
-		JOIN purser.x402_payment_quotes q
-		  ON ca.source_kind = 'x402' AND q.tenant_id = ca.tenant_id
-		 AND LOWER(q.pay_to) = LOWER(ca.address) AND q.network = $2
-		WHERE ca.network = $1 AND ca.asset = 'USDC' AND q.status = 'confirmed'
-			  AND NOT EXISTS (
-			      SELECT 1 FROM purser.crypto_sweep_sources ss
-			      WHERE ss.source_type = 'x402_quote' AND ss.source_id = q.id
-			        AND ss.claim_status IN ('claimed', 'consumed', 'quarantined')
-			  )
-		ORDER BY 1, 7
-	`, network.Name, caip2ForSweep(network))
+	rows, err := purserdb.New(s.db).ListCryptoSweepCandidates(ctx, purserdb.ListCryptoSweepCandidatesParams{
+		Network: network.Name, Caip2Network: caip2ForSweep(network),
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	byAddress := map[string]*sweepCandidate{}
-	for rows.Next() {
-		var custodyID, asset, address, derivationXpub, sourceType, sourceID, amountText string
-		var walletID sql.NullString
-		var derivation int64
-		if err := rows.Scan(&custodyID, &walletID, &asset, &address, &derivation, &derivationXpub, &sourceType, &sourceID, &amountText); err != nil {
-			return nil, err
-		}
-		amount, ok := new(big.Int).SetString(amountText, 10)
+	for _, row := range rows {
+		walletID := sql.NullString{String: row.WalletID, Valid: row.WalletID != ""}
+		amount, ok := new(big.Int).SetString(row.AmountBaseUnits, 10)
 		if !ok || amount.Sign() <= 0 {
-			return nil, fmt.Errorf("invalid eligible amount for source %s", sourceID)
+			return nil, fmt.Errorf("invalid eligible amount for source %s", row.SourceID)
 		}
-		candidate := byAddress[custodyID]
+		candidate := byAddress[row.CustodyID]
 		if candidate == nil {
 			candidate = &sweepCandidate{
-				custodyID: custodyID, walletID: walletID, asset: asset, address: address,
-				derivation: uint32(derivation), derivationXpub: derivationXpub, eligibleAmount: new(big.Int),
+				custodyID: row.CustodyID, walletID: walletID, asset: row.Asset, address: row.Address,
+				derivation: uint32(row.DerivationIndex), derivationXpub: row.DerivationXpub, eligibleAmount: new(big.Int),
 			}
-			byAddress[custodyID] = candidate
+			byAddress[row.CustodyID] = candidate
 		}
-		if candidate.derivationXpub != derivationXpub {
-			return nil, fmt.Errorf("custody address %s has conflicting derivation keys", custodyID)
+		if candidate.derivationXpub != row.DerivationXpub {
+			return nil, fmt.Errorf("custody address %s has conflicting derivation keys", row.CustodyID)
 		}
 		candidate.eligibleAmount.Add(candidate.eligibleAmount, amount)
-		candidate.sources = append(candidate.sources, sweepSource{typeName: sourceType, id: sourceID, amount: amount})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+		candidate.sources = append(candidate.sources, sweepSource{typeName: row.SourceType, id: row.SourceID, amount: amount})
 	}
 	result := make([]sweepCandidate, 0, len(byAddress))
 	for _, candidate := range byAddress {
@@ -599,51 +556,47 @@ func (s *PurserServer) PlanCryptoSweep(ctx context.Context, req *purserpb.PlanCr
 			return nil, status.Errorf(codes.Internal, "begin sweep plan: %v", err)
 		}
 		defer tx.Rollback() //nolint:errcheck
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO purser.crypto_sweep_batches (
-				id, manifest_version, network, treasury_address, snapshot_block,
-				snapshot_block_hash, manifest_checksum, expires_at, created_by
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, '')::uuid)
-		`, manifest.BatchID, manifest.Version, manifest.Network, manifest.TreasuryAddress,
-			manifest.SnapshotBlock, manifest.SnapshotBlockHash, manifest.Checksum,
-			manifest.ExpiresAt, ctxkeys.GetUserID(ctx)); err != nil {
+		queries := purserdb.New(tx)
+		if err := queries.InsertCryptoSweepBatch(ctx, purserdb.InsertCryptoSweepBatchParams{
+			ID: manifest.BatchID, ManifestVersion: int32(manifest.Version), Network: manifest.Network,
+			TreasuryAddress: manifest.TreasuryAddress, SnapshotBlock: manifest.SnapshotBlock,
+			SnapshotBlockHash: manifest.SnapshotBlockHash, ManifestChecksum: manifest.Checksum,
+			ExpiresAt: manifest.ExpiresAt, CreatedBy: ctxkeys.GetUserID(ctx),
+		}); err != nil {
 			return nil, status.Errorf(codes.Internal, "insert sweep batch: %v", err)
 		}
 		for _, item := range manifest.Items {
 			candidate := itemsByID[item.ItemID]
-			var wallet any
+			wallet := ""
 			if candidate.walletID.Valid {
 				wallet = candidate.walletID.String
 			}
-			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO purser.crypto_sweep_items (
-					id, batch_id, custody_address_id, wallet_id, network, asset,
-					source_address, derivation_index, destination_address, amount_base_units,
-					chain_id, asset_contract, source_nonce, max_fee_per_gas,
-					max_priority_fee_per_gas, gas_limit, authorization_nonce,
-					authorization_after, authorization_before
-				) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NULLIF($12,''),$13,$14,$15,$16,NULLIF($17,''),NULLIF($18,0),NULLIF($19,0))
-			`, item.ItemID, manifest.BatchID, candidate.custodyID, wallet, manifest.Network,
-				item.Asset, item.SourceAddress, item.DerivationIndex, item.DestinationAddress,
-				item.AmountBaseUnits, manifest.ChainID, item.AssetContract, item.SourceNonce,
-				item.MaxFeePerGas, item.MaxPriorityFeePerGas, item.GasLimit, item.AuthorizationNonce,
-				item.AuthorizationAfter, item.AuthorizationBefore); err != nil {
+			if err := queries.InsertCryptoSweepItem(ctx, purserdb.InsertCryptoSweepItemParams{
+				ID: item.ItemID, BatchID: manifest.BatchID, CustodyAddressID: candidate.custodyID, WalletID: wallet,
+				Network: manifest.Network, Asset: item.Asset, SourceAddress: item.SourceAddress,
+				DerivationIndex: int32(item.DerivationIndex), DestinationAddress: item.DestinationAddress,
+				AmountBaseUnits: item.AmountBaseUnits, ChainID: manifest.ChainID, AssetContract: item.AssetContract,
+				SourceNonce:          sql.NullInt64{Int64: int64(item.SourceNonce), Valid: item.Asset == "ETH"},
+				MaxFeePerGas:         sql.NullString{String: item.MaxFeePerGas, Valid: item.MaxFeePerGas != ""},
+				MaxPriorityFeePerGas: sql.NullString{String: item.MaxPriorityFeePerGas, Valid: item.MaxPriorityFeePerGas != ""},
+				GasLimit:             sql.NullInt64{Int64: int64(item.GasLimit), Valid: item.GasLimit != 0},
+				AuthorizationNonce:   item.AuthorizationNonce, AuthorizationAfter: item.AuthorizationAfter,
+				AuthorizationBefore: item.AuthorizationBefore,
+			}); err != nil {
 				return nil, status.Errorf(codes.Internal, "insert sweep item: %v", err)
 			}
 			for _, source := range candidate.sources {
-				if _, err := tx.ExecContext(ctx, `
-					INSERT INTO purser.crypto_sweep_sources (
-						item_id, source_type, source_id, amount_base_units, claimed_by, claim_reason
-					) VALUES ($1, $2, $3, $4, NULLIF($5, '')::uuid, 'sweep plan')
-				`, item.ItemID, source.typeName, source.id, source.amount.String(), ctxkeys.GetUserID(ctx)); err != nil {
+				if err := queries.InsertCryptoSweepSource(ctx, purserdb.InsertCryptoSweepSourceParams{
+					ItemID: item.ItemID, SourceType: source.typeName, SourceID: source.id,
+					AmountBaseUnits: source.amount.String(), ClaimedBy: ctxkeys.GetUserID(ctx),
+				}); err != nil {
 					return nil, status.Errorf(codes.Aborted, "claim sweep source: %v", err)
 				}
 			}
 		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO purser.crypto_sweep_events (batch_id, event_type, actor_id, payload)
-			VALUES ($1, 'planned', NULLIF($2, '')::uuid, jsonb_build_object('checksum', $3, 'items', $4))
-		`, manifest.BatchID, ctxkeys.GetUserID(ctx), manifest.Checksum, len(manifest.Items)); err != nil {
+		if err := queries.InsertCryptoSweepPlannedEvent(ctx, purserdb.InsertCryptoSweepPlannedEventParams{
+			BatchID: manifest.BatchID, ActorID: ctxkeys.GetUserID(ctx), Checksum: manifest.Checksum, ItemCount: int32(len(manifest.Items)),
+		}); err != nil {
 			return nil, status.Errorf(codes.Internal, "record sweep plan event: %v", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -718,27 +671,20 @@ func bundleItemsByID(bundle cryptosweep.SignedBundle) map[string]cryptosweep.Sig
 }
 
 func (s *PurserServer) validatePersistedSweepBundle(ctx context.Context, bundle cryptosweep.SignedBundle) error {
-	var checksum, network, treasury, snapshotHash, batchStatus string
-	var snapshot int64
-	var expires time.Time
-	err := s.db.QueryRowContext(ctx, `
-		SELECT manifest_checksum, network, LOWER(treasury_address), snapshot_block,
-		       snapshot_block_hash, status, expires_at
-		FROM purser.crypto_sweep_batches WHERE id = $1
-	`, bundle.Manifest.BatchID).Scan(&checksum, &network, &treasury, &snapshot, &snapshotHash, &batchStatus, &expires)
+	row, err := purserdb.New(s.db).GetPersistedCryptoSweepBatch(ctx, bundle.Manifest.BatchID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return status.Error(codes.NotFound, "sweep batch not found")
 	}
 	if err != nil {
 		return err
 	}
-	if checksum != bundle.Manifest.Checksum || network != bundle.Manifest.Network ||
-		!strings.EqualFold(treasury, bundle.Manifest.TreasuryAddress) || snapshot != bundle.Manifest.SnapshotBlock ||
-		snapshotHash != bundle.Manifest.SnapshotBlockHash || expires.UnixMicro() != bundle.Manifest.ExpiresAt.UnixMicro() {
+	if row.ManifestChecksum != bundle.Manifest.Checksum || row.Network != bundle.Manifest.Network ||
+		!strings.EqualFold(row.TreasuryAddress, bundle.Manifest.TreasuryAddress) || row.SnapshotBlock != bundle.Manifest.SnapshotBlock ||
+		row.SnapshotBlockHash != bundle.Manifest.SnapshotBlockHash || row.ExpiresAt.UnixMicro() != bundle.Manifest.ExpiresAt.UnixMicro() {
 		return status.Error(codes.FailedPrecondition, "signed bundle does not match persisted sweep batch")
 	}
-	if batchStatus != "planned" && batchStatus != "signed" && batchStatus != "broadcast" && batchStatus != "partially_confirmed" {
-		return status.Errorf(codes.FailedPrecondition, "sweep batch is %s", batchStatus)
+	if row.Status != "planned" && row.Status != "signed" && row.Status != "broadcast" && row.Status != "partially_confirmed" {
+		return status.Errorf(codes.FailedPrecondition, "sweep batch is %s", row.Status)
 	}
 	return nil
 }
@@ -771,24 +717,19 @@ func (s *PurserServer) reserveRelayerTransaction(ctx context.Context, network ha
 		return "", "", err
 	}
 	defer tx.Rollback() //nolint:errcheck
-	var existingRaw, existingHash sql.NullString
-	var itemStatus string
-	if err := tx.QueryRowContext(ctx, `
-		SELECT relay_transaction, tx_hash, status
-		FROM purser.crypto_sweep_items
-		WHERE id = $1
-		FOR UPDATE
-	`, item.ItemID).Scan(&existingRaw, &existingHash, &itemStatus); err != nil {
+	queries := purserdb.New(tx)
+	row, err := queries.LockCryptoSweepRelayItem(ctx, item.ItemID)
+	if err != nil {
 		return "", "", err
 	}
-	if existingRaw.Valid && existingHash.Valid {
+	if row.RelayTransaction.Valid && row.TxHash.Valid {
 		if err := tx.Commit(); err != nil {
 			return "", "", err
 		}
-		return existingRaw.String, existingHash.String, nil
+		return row.RelayTransaction.String, row.TxHash.String, nil
 	}
-	if itemStatus != "planned" && itemStatus != "signed" {
-		return "", "", fmt.Errorf("sweep item is %s without a replayable relay transaction", itemStatus)
+	if row.Status != "planned" && row.Status != "signed" {
+		return "", "", fmt.Errorf("sweep item is %s without a replayable relay transaction", row.Status)
 	}
 	var chainNonceHex string
 	if err := s.rpcClient.Call(ctx, network, "eth_getTransactionCount", []any{relayer.Hex(), "pending"}, &chainNonceHex); err != nil {
@@ -798,20 +739,15 @@ func (s *PurserServer) reserveRelayerTransaction(ctx context.Context, network ha
 	if err != nil || !chainNonce.IsUint64() {
 		return "", "", fmt.Errorf("invalid relayer nonce")
 	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO purser.crypto_sweep_relayer_nonces (network, next_nonce)
-		VALUES ($1, $2)
-		ON CONFLICT (network) DO NOTHING
-	`, network.Name, chainNonce.Uint64()); err != nil {
+	if err := queries.EnsureCryptoSweepRelayerNonce(ctx, purserdb.EnsureCryptoSweepRelayerNonceParams{
+		Network: network.Name, ChainNonce: chainNonce.Int64(),
+	}); err != nil {
 		return "", "", err
 	}
-	var storedNonce uint64
-	if err := tx.QueryRowContext(ctx, `
-		UPDATE purser.crypto_sweep_relayer_nonces
-		SET next_nonce = GREATEST(next_nonce, $2) + 1, updated_at = NOW()
-		WHERE network = $1
-		RETURNING next_nonce - 1
-	`, network.Name, chainNonce.Uint64()).Scan(&storedNonce); err != nil {
+	storedNonce, err := queries.ReserveCryptoSweepRelayerNonce(ctx, purserdb.ReserveCryptoSweepRelayerNonceParams{
+		ChainNonce: chainNonce.Int64(), Network: network.Name,
+	})
+	if err != nil {
 		return "", "", err
 	}
 	var latest sweepRPCBlock
@@ -832,7 +768,7 @@ func (s *PurserServer) reserveRelayerTransaction(ctx context.Context, network ha
 		gasLimit = 150_000
 	}
 	transaction := types.NewTx(&types.DynamicFeeTx{
-		ChainID: big.NewInt(network.ChainID), Nonce: storedNonce,
+		ChainID: big.NewInt(network.ChainID), Nonce: uint64(storedNonce),
 		GasTipCap: tip, GasFeeCap: maxFee, Gas: gasLimit,
 		To: ptrAddress(common.HexToAddress(item.AssetContract)), Data: data,
 	})
@@ -846,12 +782,10 @@ func (s *PurserServer) reserveRelayerTransaction(ctx context.Context, network ha
 	}
 	rawHex = "0x" + hex.EncodeToString(raw)
 	txHash = signed.Hash().Hex()
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE purser.crypto_sweep_items
-		SET signed_payload = $2, relay_transaction = $3, tx_hash = $4,
-		    status = 'broadcast', broadcast_at = NOW(), updated_at = NOW()
-		WHERE id = $1 AND status IN ('planned', 'signed', 'broadcast')
-	`, item.ItemID, signatureHex, rawHex, txHash); err != nil {
+	if err := queries.MarkUSDCryptoSweepItemBroadcast(ctx, purserdb.MarkUSDCryptoSweepItemBroadcastParams{
+		SignedPayload: sql.NullString{String: signatureHex, Valid: true}, RelayTransaction: sql.NullString{String: rawHex, Valid: true},
+		TxHash: sql.NullString{String: txHash, Valid: true}, ItemID: item.ItemID,
+	}); err != nil {
 		return "", "", err
 	}
 	if err := tx.Commit(); err != nil {
@@ -900,15 +834,13 @@ func (s *PurserServer) BroadcastCryptoSweep(ctx context.Context, req *purserpb.B
 			response.Items = append(response.Items, result)
 			continue
 		}
-		var persistedStatus string
-		var persistedHash, persistedRelay sql.NullString
-		if err := s.db.QueryRowContext(ctx, `
-			SELECT status, tx_hash, relay_transaction
-			FROM purser.crypto_sweep_items
-			WHERE id = $1 AND batch_id = $2
-		`, item.ItemID, bundle.Manifest.BatchID).Scan(&persistedStatus, &persistedHash, &persistedRelay); err != nil {
+		persisted, err := purserdb.New(s.db).GetPersistedCryptoSweepItem(ctx, purserdb.GetPersistedCryptoSweepItemParams{
+			ItemID: item.ItemID, BatchID: bundle.Manifest.BatchID,
+		})
+		if err != nil {
 			return nil, status.Errorf(codes.Internal, "load persisted sweep item: %v", err)
 		}
+		persistedStatus, persistedHash, persistedRelay := persisted.Status, persisted.TxHash, persisted.RelayTransaction
 		if persistedStatus == "confirmed" {
 			result.Status = "confirmed"
 			result.TxHash = persistedHash.String
@@ -929,12 +861,9 @@ func (s *PurserServer) BroadcastCryptoSweep(ctx context.Context, req *purserpb.B
 			var transaction types.Transaction
 			_ = transaction.UnmarshalBinary(raw)
 			result.TxHash = transaction.Hash().Hex()
-			if _, err := s.db.ExecContext(ctx, `
-				UPDATE purser.crypto_sweep_items
-				SET signed_payload = $2, tx_hash = $3, status = 'broadcast',
-				    broadcast_at = NOW(), updated_at = NOW()
-				WHERE id = $1 AND status IN ('planned', 'signed', 'broadcast')
-			`, item.ItemID, rawTransaction, result.TxHash); err != nil {
+			if err := purserdb.New(s.db).MarkETHCryptoSweepItemBroadcast(ctx, purserdb.MarkETHCryptoSweepItemBroadcastParams{
+				SignedPayload: sql.NullString{String: rawTransaction, Valid: true}, TxHash: sql.NullString{String: result.TxHash, Valid: true}, ItemID: item.ItemID,
+			}); err != nil {
 				return nil, status.Errorf(codes.Internal, "persist ETH sweep intent: %v", err)
 			}
 		} else if persistedRelay.Valid && persistedHash.Valid {
@@ -956,11 +885,9 @@ func (s *PurserServer) BroadcastCryptoSweep(ctx context.Context, req *purserpb.B
 		}
 		response.Items = append(response.Items, result)
 	}
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE purser.crypto_sweep_batches SET status = 'broadcast', updated_at = NOW() WHERE id = $1;
-		INSERT INTO purser.crypto_sweep_events (batch_id, event_type, actor_id, payload)
-		VALUES ($1, 'broadcast_requested', NULLIF($2, '')::uuid, jsonb_build_object('bundle_checksum', $3))
-	`, bundle.Manifest.BatchID, ctxkeys.GetUserID(ctx), bundle.Checksum); err != nil {
+	if err := purserdb.New(s.db).RecordCryptoSweepBroadcast(ctx, purserdb.RecordCryptoSweepBroadcastParams{
+		ActorID: ctxkeys.GetUserID(ctx), BundleChecksum: bundle.Checksum, BatchID: bundle.Manifest.BatchID,
+	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "record sweep broadcast: %v", err)
 	}
 	return response, nil
@@ -974,8 +901,8 @@ func (s *PurserServer) ReconcileCryptoSweep(ctx context.Context, req *purserpb.R
 	if _, err := uuid.Parse(batchID); err != nil {
 		return nil, status.Error(codes.InvalidArgument, "valid batch_id required")
 	}
-	var networkName string
-	if err := s.db.QueryRowContext(ctx, `SELECT network FROM purser.crypto_sweep_batches WHERE id = $1`, batchID).Scan(&networkName); err != nil {
+	networkName, err := purserdb.New(s.db).GetCryptoSweepBatchNetwork(ctx, batchID)
+	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "sweep batch not found: %v", err)
 	}
 	network, err := sweepNetwork(networkName)
@@ -986,21 +913,13 @@ func (s *PurserServer) ReconcileCryptoSweep(ctx context.Context, req *purserpb.R
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "read finalized head: %v", err)
 	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id::text, COALESCE(wallet_id::text, ''), tx_hash, status
-		FROM purser.crypto_sweep_items WHERE batch_id = $1 ORDER BY id
-	`, batchID)
+	rows, err := purserdb.New(s.db).ListCryptoSweepReconcileItems(ctx, batchID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "load sweep items: %v", err)
 	}
-	defer rows.Close()
 	response := &purserpb.ReconcileCryptoSweepResponse{BatchId: batchID, DryRun: req.GetDryRun()}
-	for rows.Next() {
-		var itemID, walletID, itemStatus string
-		var txHash sql.NullString
-		if err := rows.Scan(&itemID, &walletID, &txHash, &itemStatus); err != nil {
-			return nil, err
-		}
+	for _, row := range rows {
+		itemID, walletID, txHash, itemStatus := row.ItemID, row.WalletID, row.TxHash, row.Status
 		if itemStatus == "confirmed" {
 			response.ConfirmedItems++
 			continue
@@ -1021,7 +940,7 @@ func (s *PurserServer) ReconcileCryptoSweep(ctx context.Context, req *purserpb.R
 		if receipt.Status == "0x0" {
 			response.FailedItems++
 			if !req.GetDryRun() {
-				_, _ = s.db.ExecContext(ctx, `UPDATE purser.crypto_sweep_items SET status='failed', failure_reason='transaction reverted', updated_at=NOW() WHERE id=$1`, itemID)
+				_ = purserdb.New(s.db).MarkCryptoSweepItemFailed(ctx, itemID)
 			}
 			continue
 		}
@@ -1041,15 +960,12 @@ func (s *PurserServer) ReconcileCryptoSweep(ctx context.Context, req *purserpb.R
 			if err != nil {
 				return nil, err
 			}
-			if _, err = tx.ExecContext(ctx, `UPDATE purser.crypto_sweep_items SET status='confirmed', confirmed_at=NOW(), updated_at=NOW() WHERE id=$1`, itemID); err == nil {
-				_, err = tx.ExecContext(ctx, `
-					UPDATE purser.crypto_sweep_sources
-					SET claim_status='consumed', consumed_at=NOW(), updated_at=NOW()
-					WHERE item_id=$1 AND claim_status IN ('claimed', 'quarantined')
-				`, itemID)
+			queries := purserdb.New(tx)
+			if err = queries.MarkCryptoSweepItemConfirmed(ctx, itemID); err == nil {
+				err = queries.ConsumeCryptoSweepSources(ctx, itemID)
 			}
 			if err == nil && walletID != "" {
-				_, err = tx.ExecContext(ctx, `UPDATE purser.crypto_wallets SET status='swept', updated_at=NOW() WHERE id=$1 AND status='completed'`, walletID)
+				err = queries.MarkSweptCryptoWallet(ctx, walletID)
 			}
 			if err != nil {
 				_ = tx.Rollback()
@@ -1060,9 +976,6 @@ func (s *PurserServer) ReconcileCryptoSweep(ctx context.Context, req *purserpb.R
 			}
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
 	response.Status = "partially_confirmed"
 	if response.PendingItems == 0 && response.FailedItems == 0 {
 		response.Status = "confirmed"
@@ -1070,12 +983,10 @@ func (s *PurserServer) ReconcileCryptoSweep(ctx context.Context, req *purserpb.R
 		response.Status = "failed"
 	}
 	if !req.GetDryRun() {
-		if _, err := s.db.ExecContext(ctx, `
-			UPDATE purser.crypto_sweep_batches SET status=$2, updated_at=NOW() WHERE id=$1;
-			INSERT INTO purser.crypto_sweep_events (batch_id, event_type, actor_id, payload)
-			VALUES ($1, 'reconciled', NULLIF($3, '')::uuid,
-			        jsonb_build_object('status',$2,'confirmed',$4,'pending',$5,'failed',$6))
-		`, batchID, response.Status, ctxkeys.GetUserID(ctx), response.ConfirmedItems, response.PendingItems, response.FailedItems); err != nil {
+		if err := purserdb.New(s.db).RecordCryptoSweepReconciliation(ctx, purserdb.RecordCryptoSweepReconciliationParams{
+			ActorID: ctxkeys.GetUserID(ctx), Status: response.Status, ConfirmedItems: response.ConfirmedItems,
+			PendingItems: response.PendingItems, FailedItems: response.FailedItems, BatchID: batchID,
+		}); err != nil {
 			return nil, status.Errorf(codes.Internal, "record sweep reconciliation: %v", err)
 		}
 	}
@@ -1218,47 +1129,32 @@ func (s *PurserServer) evaluateSweepRelease(ctx context.Context, network handler
 }
 
 func (s *PurserServer) loadSweepReleaseBatch(ctx context.Context, batchID string) (string, handlers.NetworkConfig, time.Time, []sweepReleaseItem, error) {
-	var checksum, networkName string
-	var expiresAt time.Time
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT manifest_checksum, network, expires_at
-		FROM purser.crypto_sweep_batches WHERE id=$1
-	`, batchID).Scan(&checksum, &networkName, &expiresAt); err != nil {
-		return "", handlers.NetworkConfig{}, time.Time{}, nil, err
-	}
-	network, err := sweepNetwork(networkName)
+	batch, err := purserdb.New(s.db).GetCryptoSweepReleaseBatch(ctx, batchID)
 	if err != nil {
 		return "", handlers.NetworkConfig{}, time.Time{}, nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT i.id::text, i.asset, LOWER(i.source_address), i.amount_base_units::text,
-		       i.source_nonce, i.authorization_nonce, i.authorization_before,
-		       i.signed_payload, i.relay_transaction, i.tx_hash, i.status, i.broadcast_at,
-		       (SELECT COUNT(*) FROM purser.crypto_sweep_sources ss
-		        WHERE ss.item_id=i.id AND ss.claim_status='claimed')
-		FROM purser.crypto_sweep_items i WHERE i.batch_id=$1 ORDER BY i.id
-	`, batchID)
+	network, err := sweepNetwork(batch.Network)
 	if err != nil {
 		return "", handlers.NetworkConfig{}, time.Time{}, nil, err
 	}
-	defer rows.Close()
-	var items []sweepReleaseItem
-	for rows.Next() {
-		var item sweepReleaseItem
-		var amountText string
-		if err := rows.Scan(&item.id, &item.asset, &item.sourceAddress, &amountText,
-			&item.sourceNonce, &item.authorizationNonce, &item.authorizationBefore,
-			&item.signedPayload, &item.relayTransaction, &item.txHash, &item.status,
-			&item.broadcastAt, &item.claimedSources); err != nil {
-			return "", handlers.NetworkConfig{}, time.Time{}, nil, err
-		}
-		item.amount, _ = new(big.Int).SetString(amountText, 10)
+	rows, err := purserdb.New(s.db).ListCryptoSweepReleaseItems(ctx, batchID)
+	if err != nil {
+		return "", handlers.NetworkConfig{}, time.Time{}, nil, err
+	}
+	items := make([]sweepReleaseItem, 0, len(rows))
+	for _, row := range rows {
+		item := sweepReleaseItem{id: row.ItemID, asset: row.Asset, sourceAddress: row.SourceAddress,
+			sourceNonce: row.SourceNonce, authorizationNonce: row.AuthorizationNonce,
+			authorizationBefore: row.AuthorizationBefore, signedPayload: row.SignedPayload,
+			relayTransaction: row.RelayTransaction, txHash: row.TxHash, status: row.Status,
+			broadcastAt: row.BroadcastAt, claimedSources: row.ClaimedSources}
+		item.amount, _ = new(big.Int).SetString(row.AmountBaseUnits, 10)
 		if item.amount == nil {
 			return "", handlers.NetworkConfig{}, time.Time{}, nil, fmt.Errorf("invalid amount for sweep item %s", item.id)
 		}
 		items = append(items, item)
 	}
-	return checksum, network, expiresAt, items, rows.Err()
+	return batch.ManifestChecksum, network, batch.ExpiresAt, items, nil
 }
 
 func (s *PurserServer) releaseSweepBatch(ctx context.Context, batchID, reason string, dryRun bool) (*purserpb.ReleaseCryptoSweepResponse, error) {
@@ -1269,16 +1165,13 @@ func (s *PurserServer) releaseSweepBatch(ctx context.Context, batchID, reason st
 	if err != nil {
 		return nil, err
 	}
-	var snapshotBlock int64
-	var snapshotHash string
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT snapshot_block, snapshot_block_hash FROM purser.crypto_sweep_batches WHERE id=$1
-	`, batchID).Scan(&snapshotBlock, &snapshotHash); err != nil {
+	snapshot, err := purserdb.New(s.db).GetCryptoSweepSnapshot(ctx, batchID)
+	if err != nil {
 		return nil, err
 	}
 	var snapshotCanonical sweepRPCBlock
-	lineageErr := s.rpcClient.Call(ctx, network, "eth_getBlockByNumber", []any{fmt.Sprintf("0x%x", snapshotBlock), false}, &snapshotCanonical)
-	lineageValid := lineageErr == nil && strings.EqualFold(snapshotCanonical.Hash, snapshotHash)
+	lineageErr := s.rpcClient.Call(ctx, network, "eth_getBlockByNumber", []any{fmt.Sprintf("0x%x", snapshot.SnapshotBlock), false}, &snapshotCanonical)
+	lineageValid := lineageErr == nil && strings.EqualFold(snapshotCanonical.Hash, snapshot.SnapshotBlockHash)
 	response := &purserpb.ReleaseCryptoSweepResponse{
 		BatchId: batchID, ManifestChecksum: checksum, DryRun: dryRun, Status: "unchanged",
 	}
@@ -1302,20 +1195,15 @@ func (s *PurserServer) releaseSweepBatch(ctx context.Context, batchID, reason st
 		if txErr != nil {
 			return nil, txErr
 		}
-		var lockedStatus string
-		var lockedSigned, lockedRelay, lockedHash sql.NullString
-		var lockedBroadcast sql.NullTime
-		txErr = tx.QueryRowContext(ctx, `
-			SELECT status, signed_payload, relay_transaction, tx_hash, broadcast_at
-			FROM purser.crypto_sweep_items WHERE id=$1 FOR UPDATE
-		`, item.id).Scan(&lockedStatus, &lockedSigned, &lockedRelay, &lockedHash, &lockedBroadcast)
-		unchanged := txErr == nil && lockedStatus == item.status &&
-			lockedSigned.Valid == item.signedPayload.Valid && lockedSigned.String == item.signedPayload.String &&
-			lockedRelay.Valid == item.relayTransaction.Valid && lockedRelay.String == item.relayTransaction.String &&
-			lockedHash.Valid == item.txHash.Valid && lockedHash.String == item.txHash.String &&
-			lockedBroadcast.Valid == item.broadcastAt.Valid
-		if unchanged && lockedBroadcast.Valid {
-			unchanged = lockedBroadcast.Time.Equal(item.broadcastAt.Time)
+		queries := purserdb.New(tx)
+		locked, txErr := queries.LockCryptoSweepReleaseItem(ctx, item.id)
+		unchanged := txErr == nil && locked.Status == item.status &&
+			locked.SignedPayload.Valid == item.signedPayload.Valid && locked.SignedPayload.String == item.signedPayload.String &&
+			locked.RelayTransaction.Valid == item.relayTransaction.Valid && locked.RelayTransaction.String == item.relayTransaction.String &&
+			locked.TxHash.Valid == item.txHash.Valid && locked.TxHash.String == item.txHash.String &&
+			locked.BroadcastAt.Valid == item.broadcastAt.Valid
+		if unchanged && locked.BroadcastAt.Valid {
+			unchanged = locked.BroadcastAt.Time.Equal(item.broadcastAt.Time)
 		}
 		if txErr != nil || !unchanged {
 			_ = tx.Rollback()
@@ -1332,32 +1220,25 @@ func (s *PurserServer) releaseSweepBatch(ctx context.Context, batchID, reason st
 			sourceStatus = "quarantined"
 			eventType = "claim_quarantined"
 		}
-		result, txErr := tx.ExecContext(ctx, `
-			UPDATE purser.crypto_sweep_sources
-			SET claim_status=$2, released_by=NULLIF($3, '')::uuid,
-			    release_reason=$4, released_at=CASE WHEN $2='released' THEN NOW() ELSE released_at END,
-			    updated_at=NOW()
-			WHERE item_id=$1 AND claim_status='claimed'
-		`, item.id, sourceStatus, ctxkeys.GetUserID(ctx), reason+": "+decision.reason)
+		affected, txErr := queries.ReleaseCryptoSweepSources(ctx, purserdb.ReleaseCryptoSweepSourcesParams{
+			SourceStatus: sourceStatus, ReleasedBy: ctxkeys.GetUserID(ctx),
+			ReleaseReason: sql.NullString{String: reason + ": " + decision.reason, Valid: true}, ItemID: item.id,
+		})
 		if txErr == nil {
-			var affected int64
-			affected, txErr = result.RowsAffected()
-			if txErr == nil && affected == 0 {
+			if affected == 0 {
 				txErr = fmt.Errorf("sweep item %s no longer has active source claims", item.id)
 			}
 		}
 		if txErr == nil {
-			_, txErr = tx.ExecContext(ctx, `
-				UPDATE purser.crypto_sweep_items
-				SET status=$2, failure_reason=$3, updated_at=NOW()
-				WHERE id=$1 AND status NOT IN ('confirmed','expired')
-			`, item.id, itemStatus, decision.reason)
+			txErr = queries.UpdateReleasedCryptoSweepItem(ctx, purserdb.UpdateReleasedCryptoSweepItemParams{
+				ItemStatus: itemStatus, FailureReason: sql.NullString{String: decision.reason, Valid: true}, ItemID: item.id,
+			})
 		}
 		if txErr == nil {
-			_, txErr = tx.ExecContext(ctx, `
-				INSERT INTO purser.crypto_sweep_events (batch_id,item_id,event_type,actor_id,payload)
-				VALUES ($1,$2,$3,NULLIF($4,'')::uuid,jsonb_build_object('reason',$5,'evidence',$6))
-			`, batchID, item.id, eventType, ctxkeys.GetUserID(ctx), reason, decision.reason)
+			txErr = queries.InsertCryptoSweepReleaseEvent(ctx, purserdb.InsertCryptoSweepReleaseEventParams{
+				BatchID: batchID, ItemID: item.id, EventType: eventType, ActorID: ctxkeys.GetUserID(ctx),
+				Reason: reason, Evidence: decision.reason,
+			})
 		}
 		if txErr != nil {
 			_ = tx.Rollback()
@@ -1375,13 +1256,11 @@ func (s *PurserServer) releaseSweepBatch(ctx context.Context, batchID, reason st
 		response.Status = "partially_confirmed"
 	}
 	if !dryRun && response.Status != "unchanged" {
-		if _, err := s.db.ExecContext(ctx, `
-			UPDATE purser.crypto_sweep_batches SET status=$2, updated_at=NOW() WHERE id=$1;
-			INSERT INTO purser.crypto_sweep_events (batch_id,event_type,actor_id,payload)
-			VALUES ($1,'release_completed',NULLIF($3,'')::uuid,
-			        jsonb_build_object('reason',$4,'status',$2,'released',$5,'quarantined',$6,'blocked',$7))
-		`, batchID, response.Status, ctxkeys.GetUserID(ctx), reason,
-			response.ReleasedItems, response.QuarantinedItems, response.BlockedItems); err != nil {
+		if err := purserdb.New(s.db).RecordCryptoSweepReleaseCompleted(ctx, purserdb.RecordCryptoSweepReleaseCompletedParams{
+			ActorID: ctxkeys.GetUserID(ctx), Reason: reason, Status: response.Status,
+			ReleasedItems: response.ReleasedItems, QuarantinedItems: response.QuarantinedItems,
+			BlockedItems: response.BlockedItems, BatchID: batchID,
+		}); err != nil {
 			return nil, err
 		}
 	}
@@ -1389,31 +1268,8 @@ func (s *PurserServer) releaseSweepBatch(ctx context.Context, batchID, reason st
 }
 
 func (s *PurserServer) releaseExpiredUnsignedSweepClaims(ctx context.Context, network handlers.NetworkConfig) error {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT DISTINCT b.id::text
-		FROM purser.crypto_sweep_batches b
-		JOIN purser.crypto_sweep_items i ON i.batch_id=b.id
-		WHERE b.network=$1 AND b.expires_at <= NOW()
-		  AND b.status IN ('planned','signed') AND i.status='planned'
-		  AND i.signed_payload IS NULL AND i.relay_transaction IS NULL
-		  AND i.tx_hash IS NULL AND i.broadcast_at IS NULL
-	`, network.Name)
+	batchIDs, err := purserdb.New(s.db).ListExpiredUnsignedCryptoSweepBatches(ctx, network.Name)
 	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	var batchIDs []string
-	for rows.Next() {
-		var batchID string
-		if err := rows.Scan(&batchID); err != nil {
-			return err
-		}
-		batchIDs = append(batchIDs, batchID)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if err := rows.Close(); err != nil {
 		return err
 	}
 	for _, batchID := range batchIDs {
@@ -1436,8 +1292,8 @@ func (s *PurserServer) ReleaseCryptoSweep(ctx context.Context, req *purserpb.Rel
 	if reason == "" {
 		return nil, status.Error(codes.InvalidArgument, "release reason is required")
 	}
-	var checksum string
-	if err := s.db.QueryRowContext(ctx, `SELECT manifest_checksum FROM purser.crypto_sweep_batches WHERE id=$1`, batchID).Scan(&checksum); err != nil {
+	checksum, err := purserdb.New(s.db).GetCryptoSweepManifestChecksum(ctx, batchID)
+	if err != nil {
 		return nil, status.Error(codes.NotFound, "sweep batch not found")
 	}
 	if !req.GetDryRun() && req.GetCeremonyAck() != sweepCeremonyPrefix+checksum {
@@ -1470,17 +1326,17 @@ func (s *PurserServer) ResolveX402MutationResult(ctx context.Context, req *purse
 	if attachResult && (len(req.GetResult()) == 0 || len(req.GetResult()) > maxX402MutationResultBytes || req.GetStatusCode() < 100 || req.GetStatusCode() > 599) {
 		return nil, status.Error(codes.InvalidArgument, "known result and valid status_code are required when not marking review")
 	}
-	var quoteID, operation, currentState string
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT quote_id::text, operation, status
-		FROM purser.x402_mutation_results
-		WHERE tenant_id=$1 AND idempotency_key=$2
-	`, tenantID, key).Scan(&quoteID, &operation, &currentState); err != nil {
+	queries := purserdb.New(s.db)
+	mutation, err := queries.GetX402MutationResolutionState(ctx, purserdb.GetX402MutationResolutionStateParams{
+		TenantID: tenantID, IdempotencyKey: key,
+	})
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, status.Error(codes.NotFound, "paid mutation result not found")
 		}
 		return nil, status.Errorf(codes.Internal, "load paid mutation result: %v", err)
 	}
+	quoteID, operation, currentState := mutation.QuoteID, mutation.Operation, mutation.Status
 	targetState := "operator_review"
 	if attachResult {
 		targetState = "completed"
@@ -1496,28 +1352,22 @@ func (s *PurserServer) ResolveX402MutationResult(ctx context.Context, req *purse
 	if req.GetDryRun() {
 		return response, nil
 	}
-	var result sql.Result
-	var err error
+	var affected int64
 	if attachResult {
-		result, err = s.db.ExecContext(ctx, `
-			UPDATE purser.x402_mutation_results
-			SET status='completed', result=$3, content_type=NULLIF($4,''), status_code=$5,
-			    completed_at=NOW(), resolved_by=NULLIF($6,'')::uuid, resolved_at=NOW(),
-			    review_reason=$7, updated_at=NOW()
-			WHERE tenant_id=$1 AND idempotency_key=$2 AND status <> 'completed'
-		`, tenantID, key, req.GetResult(), req.GetContentType(), req.GetStatusCode(), ctxkeys.GetUserID(ctx), reason)
+		affected, err = queries.CompleteX402MutationResult(ctx, purserdb.CompleteX402MutationResultParams{
+			Result: req.GetResult(), ContentType: req.GetContentType(), StatusCode: sql.NullInt32{Int32: req.GetStatusCode(), Valid: true},
+			ResolvedBy: ctxkeys.GetUserID(ctx), ReviewReason: sql.NullString{String: reason, Valid: true},
+			TenantID: tenantID, IdempotencyKey: key,
+		})
 	} else {
-		result, err = s.db.ExecContext(ctx, `
-			UPDATE purser.x402_mutation_results
-			SET status='operator_review', review_reason=$3,
-			    resolved_by=NULLIF($4,'')::uuid, resolved_at=NOW(), updated_at=NOW()
-			WHERE tenant_id=$1 AND idempotency_key=$2 AND status <> 'completed'
-		`, tenantID, key, reason, ctxkeys.GetUserID(ctx))
+		affected, err = queries.ReviewX402MutationResult(ctx, purserdb.ReviewX402MutationResultParams{
+			ReviewReason: sql.NullString{String: reason, Valid: true}, ResolvedBy: ctxkeys.GetUserID(ctx),
+			TenantID: tenantID, IdempotencyKey: key,
+		})
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "resolve paid mutation result: %v", err)
 	}
-	affected, _ := result.RowsAffected()
 	response.Changed = affected > 0
 	return response, nil
 }

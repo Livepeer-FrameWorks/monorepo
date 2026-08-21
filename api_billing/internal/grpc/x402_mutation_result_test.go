@@ -47,7 +47,7 @@ func TestClaimX402MutationResultClaimsAndReplays(t *testing.T) {
 			server := &PurserServer{db: db, logger: logging.NewLogger()}
 			mock.ExpectExec(`INSERT INTO purser\.x402_mutation_results`).
 				WillReturnResult(sqlmock.NewResult(0, tc.inserted))
-			mock.ExpectQuery(`SELECT quote_id::text, request_fingerprint, protocol, operation, status`).
+			mock.ExpectQuery(`SELECT quote_id::text AS quote_id, request_fingerprint, protocol, operation, status`).
 				WillReturnRows(sqlmock.NewRows([]string{
 					"quote_id", "request_fingerprint", "protocol", "operation", "status", "result", "content_type", "status_code", "updated_at",
 				}).AddRow(mutationQuoteID, mutationFingerprint, "http", "createStream", tc.status, tc.result, "application/json", 201, time.Now()))
@@ -77,7 +77,7 @@ func TestClaimX402MutationResultRejectsFingerprintCollision(t *testing.T) {
 	defer db.Close()
 	server := &PurserServer{db: db, logger: logging.NewLogger()}
 	mock.ExpectExec(`INSERT INTO purser\.x402_mutation_results`).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectQuery(`SELECT quote_id::text, request_fingerprint, protocol, operation, status`).
+	mock.ExpectQuery(`SELECT quote_id::text AS quote_id, request_fingerprint, protocol, operation, status`).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"quote_id", "request_fingerprint", "protocol", "operation", "status", "result", "content_type", "status_code", "updated_at",
 		}).AddRow(mutationQuoteID, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "http", "createStream", "completed", []byte(`{}`), "application/json", 200, time.Now()))
@@ -96,7 +96,7 @@ func TestClaimX402MutationResultMovesAbandonedClaimToOperatorReview(t *testing.T
 	defer db.Close()
 	server := &PurserServer{db: db, logger: logging.NewLogger()}
 	mock.ExpectExec(`INSERT INTO purser\.x402_mutation_results`).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectQuery(`SELECT quote_id::text, request_fingerprint, protocol, operation, status`).
+	mock.ExpectQuery(`SELECT quote_id::text AS quote_id, request_fingerprint, protocol, operation, status`).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"quote_id", "request_fingerprint", "protocol", "operation", "status", "result", "content_type", "status_code", "updated_at",
 		}).AddRow(mutationQuoteID, mutationFingerprint, "http", "createStream", "claimed", nil, nil, nil, time.Now().Add(-16*time.Minute)))

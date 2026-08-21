@@ -36,19 +36,23 @@ func newReadServer(t *testing.T, inOrder bool) (*PurserServer, sqlmock.Sqlmock) 
 func TestListBalanceTransactionsMapsRows(t *testing.T) {
 	s, mock := newReadServer(t, true)
 	now := time.Now()
+	tenantID := "71000000-0000-4000-8000-000000000001"
+	firstID := "72000000-0000-4000-8000-000000000001"
+	secondID := "72000000-0000-4000-8000-000000000002"
+	referenceID := "73000000-0000-4000-8000-000000000001"
 
 	rows := sqlmock.NewRows([]string{
 		"id", "tenant_id", "amount_cents", "balance_after_cents",
 		"transaction_type", "description", "reference_id", "reference_type", "created_at",
 	}).
-		AddRow("tx1", "tenant-1", int64(500), int64(1500), "topup", "Card top-up", "inv-9", "invoice", now).
-		AddRow("tx2", "tenant-1", int64(-200), int64(1300), "usage", "Delivery", nil, nil, now)
+		AddRow(firstID, tenantID, int64(500), int64(1500), "topup", "Card top-up", referenceID, "invoice", now).
+		AddRow(secondID, tenantID, int64(-200), int64(1300), "usage", "Delivery", nil, nil, now)
 
 	mock.ExpectQuery(`FROM purser\.balance_transactions`).
-		WithArgs("tenant-1").
+		WithArgs(tenantID, false, "", false, nil, false, nil).
 		WillReturnRows(rows)
 
-	resp, err := s.ListBalanceTransactions(context.Background(), &purserpb.ListBalanceTransactionsRequest{TenantId: "tenant-1"})
+	resp, err := s.ListBalanceTransactions(context.Background(), &purserpb.ListBalanceTransactionsRequest{TenantId: tenantID})
 	if err != nil {
 		t.Fatalf("ListBalanceTransactions: %v", err)
 	}
@@ -60,7 +64,7 @@ func TestListBalanceTransactionsMapsRows(t *testing.T) {
 	if credit.AmountCents != 500 || credit.BalanceAfterCents != 1500 {
 		t.Fatalf("credit amounts wrong: %+v", credit)
 	}
-	if credit.GetReferenceId() != "inv-9" || credit.GetReferenceType() != "invoice" {
+	if credit.GetReferenceId() != referenceID || credit.GetReferenceType() != "invoice" {
 		t.Fatalf("credit refs not mapped: %+v", credit)
 	}
 
@@ -170,7 +174,9 @@ func TestListClusterPricingsAdminListAll(t *testing.T) {
 	)
 
 	// owner_tenant_id empty → admin "list all" path, no Quartermaster call.
-	mock.ExpectQuery(`FROM purser\.cluster_pricing`).WillReturnRows(rows)
+	mock.ExpectQuery(`FROM purser\.cluster_pricing`).
+		WithArgs(false, nil, int32(51)).
+		WillReturnRows(rows)
 
 	resp, err := s.ListClusterPricings(context.Background(), &purserpb.ListClusterPricingsRequest{})
 	if err != nil {
@@ -202,7 +208,7 @@ func TestListInvoicesMapsRowsAndLineItems(t *testing.T) {
 		now, now, now, now, 12.5,
 	)
 	mock.ExpectQuery(`FROM purser\.billing_invoices`).
-		WithArgs("tenant-1", int32(51)).
+		WithArgs("tenant-1", false, "", false, false, nil, "00000000-0000-0000-0000-000000000000", int32(51)).
 		WillReturnRows(invoiceRows)
 
 	lineRows := sqlmock.NewRows([]string{
@@ -258,6 +264,7 @@ func TestListInvoicesRejectsCrossTenantRequest(t *testing.T) {
 func TestGetBillingTiersMapsTierWithRulesAndEntitlements(t *testing.T) {
 	s, mock := newReadServer(t, false)
 	now := time.Now()
+	tierID := "22222222-2222-4222-8222-222222222222"
 
 	tierRows := sqlmock.NewRows([]string{
 		"id", "tier_name", "display_name", "description", "base_price", "currency", "billing_period",
@@ -266,21 +273,21 @@ func TestGetBillingTiersMapsTierWithRulesAndEntitlements(t *testing.T) {
 		"is_default_prepaid", "is_default_postpaid",
 		"processes_live", "processes_dvr", "processes_clip", "processes_dvr_finalize", "processes_vod",
 	}).AddRow(
-		"tier-pro", "pro", "Pro", "Pro plan", 29.0, "EUR", "monthly",
+		tierID, "pro", "Pro", "Pro plan", 29.0, "EUR", "monthly",
 		[]byte(`{"recording":true}`), "premium", "gold", true,
 		true, int32(2), false, now, now,
 		false, true,
-		"livepeer", "", "", "", "",
+		[]byte(`["livepeer"]`), []byte(`[]`), []byte(`[]`), []byte(`[]`), []byte(`[]`),
 	)
 	mock.ExpectQuery(`FROM purser\.billing_tiers`).WillReturnRows(tierRows)
 
 	mock.ExpectQuery(`FROM purser\.tier_pricing_rules`).
-		WithArgs("tier-pro").
+		WithArgs(tierID).
 		WillReturnRows(sqlmock.NewRows([]string{"meter", "model", "currency", "included_quantity", "unit_price", "config"}).
 			AddRow("delivered_minutes", "tiered_graduated", "EUR", "1000", "0.0005", "{}"))
 
 	mock.ExpectQuery(`FROM purser\.tier_entitlements`).
-		WithArgs("tier-pro").
+		WithArgs(tierID).
 		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}).
 			AddRow("retention_days", "90"))
 
@@ -296,13 +303,13 @@ func TestGetBillingTiersMapsTierWithRulesAndEntitlements(t *testing.T) {
 		t.Fatalf("got %d tiers, want 1", len(resp.Tiers))
 	}
 	tier := resp.Tiers[0]
-	if tier.Id != "tier-pro" || tier.TierName != "pro" || tier.TierLevel != 2 {
+	if tier.Id != tierID || tier.TierName != "pro" || tier.TierLevel != 2 {
 		t.Fatalf("tier identity wrong: %+v", tier)
 	}
 	if tier.Features == nil || !tier.Features.Recording {
 		t.Fatalf("features JSONB not decoded: %+v", tier.Features)
 	}
-	if tier.ProcessesLive != "livepeer" {
+	if tier.ProcessesLive != `["livepeer"]` {
 		t.Fatalf("processes_live not mapped: %q", tier.ProcessesLive)
 	}
 	if len(tier.PricingRules) != 1 || tier.PricingRules[0].Meter != "delivered_minutes" {

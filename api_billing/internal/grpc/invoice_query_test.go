@@ -47,7 +47,7 @@ func TestLoadInvoiceLineItems(t *testing.T) {
 	defer done()
 	const inv, tenant = "inv-1", "tenant-1"
 
-	mock.ExpectQuery(`FROM purser\.invoice_line_items\s+WHERE invoice_id = \$1 AND tenant_id = \$2`).
+	mock.ExpectQuery(`FROM purser\.invoice_line_items\s+WHERE invoice_id = \$1::text::uuid\s+AND tenant_id = \$2::text::uuid`).
 		WithArgs(inv, tenant).
 		WillReturnRows(lineItemRows())
 
@@ -81,15 +81,15 @@ func TestGetInvoice_TenantScoped(t *testing.T) {
 
 	// Main invoice SELECT (tenant-scoped → AND i.tenant_id = $2). tier_id "" so
 	// the GetBillingTier branch is skipped. 17 scanned columns.
-	mock.ExpectQuery(`FROM purser\.billing_invoices i\s+LEFT JOIN purser\.tenant_subscriptions`).
-		WithArgs(inv, tenant).
+	mock.ExpectQuery(`FROM purser\.billing_invoices invoice\s+LEFT JOIN purser\.tenant_subscriptions`).
+		WithArgs(inv, true, tenant).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "tenant_id", "amount", "base_amount", "metered_amount", "prepaid_credit_applied",
 			"currency", "status", "due_date", "paid_at", "usage_details", "created_at", "updated_at",
 			"tier_id", "period_start", "period_end", "gross_metered_amount",
 		}).AddRow(
 			inv, tenant, 79.20, 79.00, 0.20, 0.00,
-			"EUR", "paid", now, nil, nil, now, now,
+			"EUR", "paid", now, nil, []byte(`{}`), now, now,
 			"", nil, nil, 0.20,
 		))
 	// loadInvoiceLineItems follow-up query.

@@ -52,11 +52,11 @@ func TestGetTenantBillingStatusRetriesRetryablePostgresErrors(t *testing.T) {
 		Code:    "40001",
 		Message: "schema version mismatch for table x: expected 2, got 1",
 	}
-	mock.ExpectQuery(`FROM purser\.tenant_subscriptions ts`).
-		WithArgs(tenantID, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+	mock.ExpectQuery(`FROM purser\.tenant_subscriptions`).
+		WithArgs("EUR", sqlmock.AnyArg(), sqlmock.AnyArg(), tenantID).
 		WillReturnError(retryable)
 	mock.ExpectQuery(`FROM purser\.tenant_subscriptions ts`).
-		WithArgs(tenantID, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs("EUR", sqlmock.AnyArg(), sqlmock.AnyArg(), tenantID).
 		WillReturnError(sql.ErrNoRows)
 
 	server := &PurserServer{db: mockDB, logger: logging.NewLogger()}
@@ -82,7 +82,7 @@ func TestGetSubscriptionAndTierNoActiveSubscription(t *testing.T) {
 	server := &PurserServer{db: mockDB, logger: logging.NewLogger()}
 	tenantID := "tenant-without-subscription"
 
-	mock.ExpectQuery(`FROM purser\.tenant_subscriptions ts`).
+	mock.ExpectQuery(`FROM purser\.tenant_subscriptions`).
 		WithArgs(tenantID).
 		WillReturnError(sql.ErrNoRows)
 
@@ -110,60 +110,59 @@ func TestGetSubscriptionAndTierAllowsNullBillingEmail(t *testing.T) {
 	defer mockDB.Close()
 
 	server := &PurserServer{db: mockDB, logger: logging.NewLogger()}
-	tenantID := "tenant-with-null-email"
-	subID := "sub-1"
-	tierID := "tier-free"
+	tenantID := "6a5de239-6957-4989-aaed-03b32fc485fe"
+	subID := "9b67c82d-fef9-46d7-b5be-9ed2311138f5"
+	tierID := "b42ee494-22c1-4f61-a849-d44f874a9cfd"
 	now := testTime()
 
-	mock.ExpectQuery(`FROM purser\.tenant_subscriptions ts`).
+	mock.ExpectQuery(`FROM purser\.tenant_subscriptions`).
 		WithArgs(tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"ts_id", "tenant_id", "tier_id", "status", "billing_email",
+			"id", "tenant_id", "tier_id", "status", "billing_email",
 			"started_at", "trial_ends_at", "next_billing_date", "cancelled_at",
 			"billing_period_start", "billing_period_end",
-			"custom_features",
-			"payment_method", "payment_reference", "billing_address",
-			"tax_id", "tax_rate",
-			"billing_model",
+			"payment_method", "payment_reference", "tax_id", "tax_rate",
+			"billing_model", "custom_features", "billing_address",
 			"stripe_customer_id", "stripe_subscription_id", "stripe_subscription_status", "stripe_current_period_end", "dunning_attempts",
 			"mollie_subscription_id",
 			"pending_tier_id", "pending_effective_at", "pending_reason",
-			"sub_created_at", "sub_updated_at",
-			"bt_id", "tier_name", "display_name", "description",
-			"base_price", "currency", "billing_period",
-			"features", "support_level", "sla_level",
-			"metering_enabled", "is_active",
-			"tier_level", "is_enterprise", "tier_created_at", "tier_updated_at",
-			"processes_live", "processes_dvr", "processes_clip", "processes_dvr_finalize", "processes_vod",
+			"created_at", "updated_at",
 		}).AddRow(
 			subID, tenantID, tierID, "active", nil,
 			now, nil, nil, nil,
 			nil, nil,
-			[]byte(`{}`),
-			nil, nil, []byte(`{}`),
-			nil, nil,
-			"postpaid",
+			nil, nil, nil, nil,
+			"postpaid", []byte(`{}`), []byte(`{}`),
 			nil, nil, nil, nil, nil,
 			nil,
 			nil, nil, nil,
 			now, now,
+		))
+	mock.ExpectQuery(`FROM purser\.billing_tiers`).
+		WithArgs(tierID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "tier_name", "display_name", "description", "base_price", "currency", "billing_period",
+			"features", "support_level", "sla_level", "metering_enabled", "is_active", "tier_level", "is_enterprise",
+			"created_at", "updated_at", "is_default_prepaid", "is_default_postpaid",
+			"processes_live", "processes_dvr", "processes_clip", "processes_dvr_finalize", "processes_vod",
+		}).AddRow(
 			tierID, "free", "Free", "Free tier",
-			"0.00", "EUR", "monthly",
+			0.0, "EUR", "monthly",
 			[]byte(`{}`), "community", "none",
 			false, true,
 			int32(1), false, now, now,
-			nil, nil, nil, nil, nil,
+			false, false, []byte(`[]`), []byte(`[]`), []byte(`[]`), []byte(`[]`), []byte(`[]`),
 		))
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT meter, COALESCE(model, ''), COALESCE(currency, '')`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT meter, model, currency`)).
 		WithArgs(subID).
 		WillReturnRows(sqlmock.NewRows([]string{"meter", "model", "currency", "included_quantity", "unit_price", "config"}))
-	mock.ExpectQuery(`SELECT key, value::text FROM purser\.subscription_entitlement_overrides`).
+	mock.ExpectQuery(`SELECT key, value::text AS value FROM purser\.subscription_entitlement_overrides`).
 		WithArgs(subID).
 		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
 	mock.ExpectQuery(`FROM purser\.tier_pricing_rules`).
 		WithArgs(tierID).
 		WillReturnRows(sqlmock.NewRows([]string{"meter", "model", "currency", "included_quantity", "unit_price", "config"}))
-	mock.ExpectQuery(`SELECT key, value::text FROM purser\.tier_entitlements`).
+	mock.ExpectQuery(`SELECT key, value::text AS value FROM purser\.tier_entitlements`).
 		WithArgs(tierID).
 		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
 

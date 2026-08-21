@@ -20,7 +20,7 @@ func TestSetClusterPricingUpsertsAndRereads(t *testing.T) {
 	now := time.Now()
 
 	// existing-pricing probe → none yet
-	mock.ExpectQuery(`SELECT pricing_model, metered_rates::text\s+FROM purser\.cluster_pricing`).
+	mock.ExpectQuery(`SELECT pricing_model, metered_rates::text AS metered_rates\s+FROM purser\.cluster_pricing`).
 		WithArgs("cluster-a").
 		WillReturnError(sqlmockNoRows())
 	// upsert RETURNING id
@@ -33,8 +33,8 @@ func TestSetClusterPricingUpsertsAndRereads(t *testing.T) {
 			"id", "cluster_id", "pricing_model", "stripe_product_id", "stripe_price_id_monthly",
 			"stripe_meter_event_name", "base_price", "currency", "metered_rates",
 			"required_tier_level", "allow_free_tier", "default_quotas", "created_at", "updated_at",
-		}).AddRow("cp-1", "cluster-a", "free_unmetered", nil, nil, nil, nil, "EUR", nil,
-			int32(0), true, nil, now, now))
+		}).AddRow("cp-1", "cluster-a", "free_unmetered", nil, nil, nil, "", "EUR", []byte(`{}`),
+			int32(0), true, []byte(`{}`), now, now))
 
 	resp, err := s.SetClusterPricing(context.Background(), &purserpb.SetClusterPricingRequest{
 		ClusterId:    "cluster-a",
@@ -211,7 +211,7 @@ func TestCheckClusterAccessClassifyUnavailableDenies(t *testing.T) {
 	s, mock := newReadServer(t, true)
 	now := time.Now()
 
-	mock.ExpectQuery(`SELECT COALESCE\(bt\.tier_level, 0\)`).
+	mock.ExpectQuery(`SELECT COALESCE\(tier\.tier_level, 0\)::int AS tier_level`).
 		WithArgs("tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"tier_level"}).AddRow(int32(5)))
 	mock.ExpectQuery(`FROM purser\.cluster_pricing\s+WHERE cluster_id = \$1`).
@@ -220,8 +220,8 @@ func TestCheckClusterAccessClassifyUnavailableDenies(t *testing.T) {
 			"id", "cluster_id", "pricing_model", "stripe_product_id", "stripe_price_id_monthly",
 			"stripe_meter_event_name", "base_price", "currency", "metered_rates",
 			"required_tier_level", "allow_free_tier", "default_quotas", "created_at", "updated_at",
-		}).AddRow("cp-1", "cluster-a", "metered", nil, nil, nil, nil, "EUR", nil,
-			int32(1), true, nil, now, now))
+		}).AddRow("cp-1", "cluster-a", "metered", nil, nil, nil, "", "EUR", []byte(`{}`),
+			int32(1), true, []byte(`{}`), now, now))
 
 	resp, err := s.CheckClusterAccess(context.Background(), &purserpb.CheckClusterAccessRequest{TenantId: "tenant-1", ClusterId: "cluster-a"})
 	if err != nil {

@@ -14,6 +14,13 @@ import (
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
+const (
+	billingOutboxID1 = "91000000-0000-4000-8000-000000000001"
+	billingOutboxID2 = "91000000-0000-4000-8000-000000000002"
+	billingTenantID1 = "92000000-0000-4000-8000-000000000001"
+	billingTenantID2 = "92000000-0000-4000-8000-000000000002"
+)
+
 // jsonContains matches a []byte/string SQL arg whose text contains substr. Used
 // to pin the protojson payload written to billing_event without asserting an
 // exact byte sequence (field ordering in protojson is not contractual).
@@ -37,7 +44,7 @@ func TestEnqueueBillingEventTxInsertsAndBackfillsTenant(t *testing.T) {
 	// arg before marshaling, so the persisted JSON carries the tenant.
 	mock.ExpectQuery(`INSERT INTO purser\.billing_event_outbox`).
 		WithArgs("payment_succeeded", "tenant-1", "user-1", "payment", "pay-9", jsonContains{"tenant-1"}).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("outbox-1"))
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(billingOutboxID1))
 
 	id, err := s.EnqueueBillingEventTx(
 		context.Background(), s.db,
@@ -47,8 +54,8 @@ func TestEnqueueBillingEventTxInsertsAndBackfillsTenant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnqueueBillingEventTx: %v", err)
 	}
-	if id != "outbox-1" {
-		t.Fatalf("id = %q, want outbox-1", id)
+	if id != billingOutboxID1 {
+		t.Fatalf("id = %q, want %s", id, billingOutboxID1)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
@@ -62,7 +69,7 @@ func TestEnqueueBillingEventTxNilPayloadDefaults(t *testing.T) {
 	// tenant backfilled into it.
 	mock.ExpectQuery(`INSERT INTO purser\.billing_event_outbox`).
 		WithArgs("topup_created", "tenant-2", "", "topup", "tp-1", jsonContains{"tenant-2"}).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("outbox-2"))
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(billingOutboxID2))
 
 	id, err := s.EnqueueBillingEventTx(
 		context.Background(), s.db,
@@ -71,8 +78,8 @@ func TestEnqueueBillingEventTxNilPayloadDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnqueueBillingEventTx: %v", err)
 	}
-	if id != "outbox-2" {
-		t.Fatalf("id = %q, want outbox-2", id)
+	if id != billingOutboxID2 {
+		t.Fatalf("id = %q, want %s", id, billingOutboxID2)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
@@ -113,7 +120,7 @@ func TestEnqueueBillingEventHappyPath(t *testing.T) {
 	s, mock := newReadServer(t, true)
 	mock.ExpectQuery(`INSERT INTO purser\.billing_event_outbox`).
 		WithArgs("evt", "tenant-1", "u", "r", "rid", jsonContains{"tenant-1"}).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("ok"))
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(billingOutboxID1))
 
 	s.enqueueBillingEvent(context.Background(), "evt", "tenant-1", "u", "r", "rid", &ipcpb.BillingEvent{})
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -129,15 +136,15 @@ func TestClaimBillingOutboxBatchMapsRowsAndClaims(t *testing.T) {
 		"id", "event_type", "tenant_id", "user_id",
 		"resource_type", "resource_id", "billing_event", "attempts", "created_at",
 	}).
-		AddRow("outbox-1", "payment_succeeded", "tenant-1", "user-1", "payment", "pay-1", `{"tenant_id":"tenant-1"}`, 0, now).
-		AddRow("outbox-2", "topup_created", "tenant-2", "", "topup", "tp-2", `{"tenant_id":"tenant-2"}`, 3, now)
+		AddRow(billingOutboxID1, "payment_succeeded", billingTenantID1, "user-1", "payment", "pay-1", []byte(`{"tenant_id":"`+billingTenantID1+`"}`), 0, now).
+		AddRow(billingOutboxID2, "topup_created", billingTenantID2, "", "topup", "tp-2", []byte(`{"tenant_id":"`+billingTenantID2+`"}`), 3, now)
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`FROM purser\.billing_event_outbox\s+WHERE completed_at IS NULL`).
 		WillReturnRows(rows)
-	// Claimed ids are stamped in one UPDATE keyed by the {a,b} uuid[] literal.
+	// Claimed ids are stamped in one generated UUID-array update.
 	mock.ExpectExec(`UPDATE purser\.billing_event_outbox\s+SET claimed_at = NOW`).
-		WithArgs("{outbox-1,outbox-2}").
+		WithArgs(sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectCommit()
 
@@ -148,14 +155,14 @@ func TestClaimBillingOutboxBatchMapsRowsAndClaims(t *testing.T) {
 	if len(out) != 2 {
 		t.Fatalf("got %d rows, want 2", len(out))
 	}
-	if out[0].id != "outbox-1" || out[0].eventType != "payment_succeeded" || out[0].tenantID != "tenant-1" {
+	if out[0].id != billingOutboxID1 || out[0].eventType != "payment_succeeded" || out[0].tenantID != billingTenantID1 {
 		t.Fatalf("row0 mapping wrong: %+v", out[0])
 	}
 	if out[1].attempts != 3 {
 		t.Fatalf("row1 attempts = %d, want 3", out[1].attempts)
 	}
-	if string(out[0].billingJSON) != `{"tenant_id":"tenant-1"}` {
-		t.Fatalf("billingJSON not carried from billing_event::text: %q", out[0].billingJSON)
+	if string(out[0].billingJSON) != `{"tenant_id":"`+billingTenantID1+`"}` {
+		t.Fatalf("billingJSON not carried from billing_event: %q", out[0].billingJSON)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
@@ -214,8 +221,8 @@ func TestMarkBillingOutboxCompletedSwallowsError(t *testing.T) {
 func TestRecordBillingOutboxFailure(t *testing.T) {
 	s, mock := newReadServer(t, true)
 	// cause is stored as last_error; attempts persisted; claimed_at cleared.
-	mock.ExpectExec(`UPDATE purser\.billing_event_outbox\s+SET attempts = \$2, last_error = \$3, claimed_at = NULL`).
-		WithArgs("outbox-1", 4, "decklog timeout").
+	mock.ExpectExec(`UPDATE purser\.billing_event_outbox\s+SET attempts = attempts \+ 1, last_error = \$1, claimed_at = NULL`).
+		WithArgs("decklog timeout", "outbox-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	s.recordBillingOutboxFailure(context.Background(), "outbox-1", 4, errors.New("decklog timeout"))
@@ -229,7 +236,7 @@ func TestRecordBillingOutboxFailureNilCauseAndAlertThreshold(t *testing.T) {
 	// nil cause -> empty last_error; attempts >= billingOutboxAlertAfterAttempts
 	// (12) exercises the repeated-failure alert-log branch.
 	mock.ExpectExec(`UPDATE purser\.billing_event_outbox`).
-		WithArgs("outbox-1", billingOutboxAlertAfterAttempts, "").
+		WithArgs("", "outbox-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	s.recordBillingOutboxFailure(context.Background(), "outbox-1", billingOutboxAlertAfterAttempts, nil)

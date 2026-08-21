@@ -23,7 +23,7 @@ func TestGetOperatorRevenueExcludesHeldCredits(t *testing.T) {
 	end := start.Add(24 * time.Hour)
 
 	mock.ExpectQuery(`status IN \('accruing', 'eligible', 'paid_out', 'clawed_back'\)`).
-		WithArgs(tenantID, start, end).
+		WithArgs(tenantID, end, start, false, "").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"cluster_id", "currency", "gross_cents", "platform_fee_cents", "payable_cents", "line_count",
 		}).AddRow("cluster-a", "EUR", int64(1000), int64(200), int64(800), int32(1)))

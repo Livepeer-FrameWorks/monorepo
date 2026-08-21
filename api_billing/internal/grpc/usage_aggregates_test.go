@@ -26,7 +26,7 @@ func TestGetUsageAggregatesBucketsMinuteFiveDeltaRows(t *testing.T) {
 	bucketEnd := start.Add(time.Hour)
 
 	mock.ExpectQuery(`GREATEST\(SUM\(usage_value\), 0\)`).
-		WithArgs(tenantID, start, end, "hourly").
+		WithArgs("hourly", tenantID, end, start, false, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"usage_type", "period_start", "period_end", "usage_value", "granularity"}).
 			AddRow("egress_gb", bucketStart, bucketEnd, 12.5, "hourly").
 			AddRow("max_viewers", bucketStart, bucketEnd, 42.0, "hourly"))

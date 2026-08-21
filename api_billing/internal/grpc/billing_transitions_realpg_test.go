@@ -26,7 +26,11 @@ func startPurserTransitionRealPG(t *testing.T) *sql.DB {
 	}
 	name := fmt.Sprintf("fw-purser-transition-realpg-%d", time.Now().UnixNano())
 	t.Cleanup(func() { _, _ = dockerpg.CLI("rm", "-fv", name) })
-	if output, err := dockerpg.Run("run", "-d", "--name", name, "-P", "-e", "POSTGRES_PASSWORD=harness", "pgvector/pgvector:pg15"); err != nil {
+	image, err := dockerpg.PostgresImage()
+	if err != nil {
+		t.Fatalf("resolve PostgreSQL test image: %v", err)
+	}
+	if output, err := dockerpg.Run("run", "-d", "--name", name, "-P", "-e", "POSTGRES_PASSWORD=harness", image); err != nil {
 		t.Fatalf("docker run: %v\n%s", err, output)
 	}
 	port, err := dockerpg.DiscoverPublishedHostPort(name, "5432/tcp")

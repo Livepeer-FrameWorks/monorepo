@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_billing/internal/database/purserdb"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
@@ -101,51 +103,18 @@ func (s *PurserServer) ListBillingDocuments(ctx context.Context, req *purserpb.L
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id::text, kind, document_number, amount_cents, currency, status, issued_at, retention_until
-		FROM (
-			SELECT id, 'invoice'::text AS kind, invoice_number AS document_number,
-			       ROUND(amount * 100)::bigint AS amount_cents, currency, status,
-			       COALESCE(created_at, NOW()) AS issued_at, retention_until
-			FROM purser.billing_invoices WHERE tenant_id = $1 AND status <> 'draft'
-			UNION ALL
-			SELECT id, 'simplified_invoice', invoice_number, gross_amount_cents, currency,
-			       tax_validation_status, issued_at, retention_until
-			FROM purser.simplified_invoices
-			WHERE tenant_id = $1 AND tax_validation_status <> 'location_review'
-			UNION ALL
-			SELECT id, 'crypto_invoice', invoice_number, gross_amount_cents, currency,
-			       tax_validation_status, issued_at, retention_until
-			FROM purser.crypto_invoices
-			WHERE tenant_id = $1 AND tax_validation_status <> 'location_review'
-			UNION ALL
-			SELECT payment.id, 'payment_receipt', 'PAY-' || UPPER(LEFT(REPLACE(payment.id::text, '-', ''), 12)),
-			       ROUND(payment.amount * 100)::bigint, payment.currency, payment.status,
-			       COALESCE(payment.confirmed_at, payment.created_at, NOW()), payment.retention_until
-			FROM purser.billing_payments payment
-			JOIN purser.billing_invoices invoice ON invoice.id = payment.invoice_id
-			WHERE invoice.tenant_id = $1 AND payment.status = 'confirmed'
-			UNION ALL
-			SELECT id, 'credit_note', credit_note_number, amount_cents, currency, 'issued', issued_at, retention_until
-			FROM purser.credit_notes WHERE tenant_id = $1
-		) documents
-		ORDER BY issued_at DESC, id DESC
-		LIMIT 1000
-	`, tenantID)
+	rows, err := purserdb.New(s.db).ListBillingDocuments(ctx, tenantID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "list billing documents: %v", err)
 	}
-	defer rows.Close()
 	response := &purserpb.ListBillingDocumentsResponse{}
-	for rows.Next() {
-		var row billingDocumentRow
-		if err := rows.Scan(&row.id, &row.kind, &row.number, &row.amountCents, &row.currency, &row.status, &row.issuedAt, &row.retentionUntil); err != nil {
-			return nil, status.Errorf(codes.Internal, "scan billing document: %v", err)
+	for _, item := range rows {
+		row := billingDocumentRow{
+			id: item.ID, kind: item.Kind, number: item.DocumentNumber,
+			amountCents: item.AmountCents, currency: item.Currency, status: item.Status,
+			issuedAt: item.IssuedAt.Time, retentionUntil: item.RetentionUntil,
 		}
 		response.Documents = append(response.Documents, billingDocumentProto(row))
-	}
-	if err := rows.Err(); err != nil {
-		return nil, status.Errorf(codes.Internal, "list billing documents: %v", err)
 	}
 	return response, nil
 }
@@ -205,133 +174,91 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 	var row billingDocumentRow
 	row.id, row.kind = documentID, kind
 	var name, company, address, vat sql.NullString
+	queries := purserdb.New(s.db)
+	setCustomer := func(customerName, customerCompany, customerAddress, customerVAT string) {
+		name = sql.NullString{String: customerName, Valid: customerName != ""}
+		company = sql.NullString{String: customerCompany, Valid: customerCompany != ""}
+		address = sql.NullString{String: customerAddress, Valid: customerAddress != ""}
+		vat = sql.NullString{String: customerVAT, Valid: customerVAT != ""}
+	}
 	switch kind {
 	case "invoice":
-		var periodStart, periodEnd, dueAt sql.NullTime
-		err = s.db.QueryRowContext(ctx, `
-			SELECT invoice_number, ROUND(amount * 100)::bigint, currency, status,
-			       COALESCE(invoice.created_at, NOW()), invoice.retention_until,
-			       invoice.period_start, invoice.period_end, invoice.due_date,
-			       subscription.billing_name, subscription.billing_company, subscription.billing_address::text, subscription.tax_id
-			FROM purser.billing_invoices invoice
-			LEFT JOIN purser.tenant_subscriptions subscription ON subscription.tenant_id = invoice.tenant_id
-			WHERE invoice.id = $1 AND invoice.tenant_id = $2 AND invoice.status <> 'draft'
-		`, documentID, tenantID).Scan(&row.number, &row.amountCents, &row.currency, &row.status,
-			&row.issuedAt, &row.retentionUntil, &periodStart, &periodEnd, &dueAt, &name, &company, &address, &vat)
+		var document purserdb.GetInvoiceDocumentRow
+		document, err = queries.GetInvoiceDocument(ctx, purserdb.GetInvoiceDocumentParams{DocumentID: documentID, TenantID: tenantID})
+		row.number, row.amountCents, row.currency, row.status = document.InvoiceNumber, document.AmountCents, document.Currency, document.Status
+		row.issuedAt, row.retentionUntil = document.IssuedAt.Time, document.RetentionUntil
+		setCustomer(document.CustomerName, document.CustomerCompany, document.CustomerAddress, document.CustomerVat)
 		base.Title = "Invoice"
-		if periodStart.Valid {
-			base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "Period start", Value: periodStart.Time.UTC().Format(time.RFC3339)})
+		if document.PeriodStart.Valid {
+			base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "Period start", Value: document.PeriodStart.Time.UTC().Format(time.RFC3339)})
 		}
-		if periodEnd.Valid {
-			base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "Period end", Value: periodEnd.Time.UTC().Format(time.RFC3339)})
+		if document.PeriodEnd.Valid {
+			base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "Period end", Value: document.PeriodEnd.Time.UTC().Format(time.RFC3339)})
 		}
-		if dueAt.Valid {
-			base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "Due", Value: dueAt.Time.UTC().Format(time.RFC3339)})
-		}
+		base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "Due", Value: document.DueDate.UTC().Format(time.RFC3339)})
 	case "simplified_invoice":
-		var netCents, vatCents int64
-		var vatRate int
-		var referenceType, referenceID, taxStatus, serviceDescription string
-		var serviceQuantity int
-		var serviceDate time.Time
-		err = s.db.QueryRowContext(ctx, `
-			SELECT invoice_number, gross_amount_cents, currency, tax_validation_status, issued_at, retention_until,
-			       net_amount_cents, vat_amount_cents, vat_rate_bps, reference_type, reference_id,
-			       supplier_name, supplier_address, supplier_vat_number, COALESCE(supplier_registration_number, ''),
-			       COALESCE(service_description, 'FrameWorks prepaid usage credit'),
-			       COALESCE(service_quantity, 1), COALESCE(service_date, issued_at::date),
-			       subscription.billing_name, subscription.billing_company, subscription.billing_address::text, subscription.tax_id
-			FROM purser.simplified_invoices invoice
-			LEFT JOIN purser.tenant_subscriptions subscription ON subscription.tenant_id = invoice.tenant_id
-			WHERE invoice.id = $1 AND invoice.tenant_id = $2 AND tax_validation_status <> 'location_review'
-		`, documentID, tenantID).Scan(&row.number, &row.amountCents, &row.currency, &taxStatus, &row.issuedAt, &row.retentionUntil,
-			&netCents, &vatCents, &vatRate, &referenceType, &referenceID,
-			&base.SupplierName, &base.SupplierAddress, &base.SupplierVAT, &base.SupplierRegistration,
-			&serviceDescription, &serviceQuantity, &serviceDate, &name, &company, &address, &vat)
-		row.status = taxStatus
+		var document purserdb.GetSimplifiedInvoiceDocumentRow
+		document, err = queries.GetSimplifiedInvoiceDocument(ctx, purserdb.GetSimplifiedInvoiceDocumentParams{DocumentID: documentID, TenantID: tenantID})
+		row.number, row.amountCents, row.currency, row.status = document.InvoiceNumber, document.GrossAmountCents, document.Currency, document.TaxValidationStatus
+		row.issuedAt, row.retentionUntil = document.IssuedAt, document.RetentionUntil
+		base.SupplierName, base.SupplierAddress = document.SupplierName, document.SupplierAddress
+		base.SupplierVAT, base.SupplierRegistration = document.SupplierVatNumber, document.SupplierRegistrationNumber
+		setCustomer(document.CustomerName, document.CustomerCompany, document.CustomerAddress, document.CustomerVat)
 		base.Title = "Simplified invoice"
 		base.Fields = append(base.Fields,
-			billingDocumentHTMLField{Label: "Net", Value: row.currency + " " + moneyString(netCents)},
-			billingDocumentHTMLField{Label: "VAT", Value: fmt.Sprintf("%s %s (%0.2f%%)", row.currency, moneyString(vatCents), float64(vatRate)/100)},
-			billingDocumentHTMLField{Label: "Service", Value: serviceDescription},
-			billingDocumentHTMLField{Label: "Quantity", Value: fmt.Sprintf("%d", serviceQuantity)},
-			billingDocumentHTMLField{Label: "Supply date", Value: serviceDate.Format("2006-01-02")},
-			billingDocumentHTMLField{Label: "Settlement reference", Value: referenceType + ":" + referenceID},
+			billingDocumentHTMLField{Label: "Net", Value: row.currency + " " + moneyString(document.NetAmountCents)},
+			billingDocumentHTMLField{Label: "VAT", Value: fmt.Sprintf("%s %s (%0.2f%%)", row.currency, moneyString(document.VatAmountCents), float64(document.VatRateBps)/100)},
+			billingDocumentHTMLField{Label: "Service", Value: document.ServiceDescription},
+			billingDocumentHTMLField{Label: "Quantity", Value: fmt.Sprintf("%d", document.ServiceQuantity)},
+			billingDocumentHTMLField{Label: "Supply date", Value: document.ServiceDate.Time.Format("2006-01-02")},
+			billingDocumentHTMLField{Label: "Settlement reference", Value: document.ReferenceType + ":" + document.ReferenceID},
 		)
-		if taxStatus == "reverse_charge" {
+		if document.TaxValidationStatus == "reverse_charge" {
 			base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "VAT treatment", Value: "Reverse charge — btw verlegd"})
 		}
 	case "crypto_invoice":
-		var netCents, vatCents int64
-		var vatRate int
-		var referenceType, referenceID, taxStatus, serviceDescription string
-		var serviceQuantity int
-		var serviceDate time.Time
-		var customerEmail string
-		err = s.db.QueryRowContext(ctx, `
-			SELECT invoice_number, gross_amount_cents, currency, tax_validation_status, issued_at, retention_until,
-			       net_amount_cents, vat_amount_cents, vat_rate_bps, reference_type, reference_id,
-			       supplier_name, supplier_address, supplier_vat_number, supplier_registration_number,
-			       service_description, service_quantity, service_date,
-			       customer_email, customer_name, customer_company, customer_address::text, customer_vat_number
-			FROM purser.crypto_invoices
-			WHERE id = $1 AND tenant_id = $2 AND tax_validation_status <> 'location_review'
-		`, documentID, tenantID).Scan(&row.number, &row.amountCents, &row.currency, &taxStatus, &row.issuedAt, &row.retentionUntil,
-			&netCents, &vatCents, &vatRate, &referenceType, &referenceID,
-			&base.SupplierName, &base.SupplierAddress, &base.SupplierVAT, &base.SupplierRegistration,
-			&serviceDescription, &serviceQuantity, &serviceDate,
-			&customerEmail, &name, &company, &address, &vat)
-		row.status = taxStatus
+		var document purserdb.GetCryptoInvoiceDocumentRow
+		document, err = queries.GetCryptoInvoiceDocument(ctx, purserdb.GetCryptoInvoiceDocumentParams{DocumentID: documentID, TenantID: tenantID})
+		row.number, row.amountCents, row.currency, row.status = document.InvoiceNumber, document.GrossAmountCents, document.Currency, document.TaxValidationStatus
+		row.issuedAt, row.retentionUntil = document.IssuedAt, document.RetentionUntil
+		base.SupplierName, base.SupplierAddress = document.SupplierName, document.SupplierAddress
+		base.SupplierVAT, base.SupplierRegistration = document.SupplierVatNumber, document.SupplierRegistrationNumber
+		setCustomer(document.CustomerName, document.CustomerCompany, document.CustomerAddress, document.CustomerVat)
 		base.Title = "Invoice"
 		base.Fields = append(base.Fields,
-			billingDocumentHTMLField{Label: "Billing email", Value: customerEmail},
-			billingDocumentHTMLField{Label: "Net", Value: row.currency + " " + moneyString(netCents)},
-			billingDocumentHTMLField{Label: "VAT", Value: fmt.Sprintf("%s %s (%0.2f%%)", row.currency, moneyString(vatCents), float64(vatRate)/100)},
-			billingDocumentHTMLField{Label: "Service", Value: serviceDescription},
-			billingDocumentHTMLField{Label: "Quantity", Value: fmt.Sprintf("%d", serviceQuantity)},
-			billingDocumentHTMLField{Label: "Supply date", Value: serviceDate.Format("2006-01-02")},
-			billingDocumentHTMLField{Label: "Settlement reference", Value: referenceType + ":" + referenceID},
+			billingDocumentHTMLField{Label: "Billing email", Value: document.CustomerEmail},
+			billingDocumentHTMLField{Label: "Net", Value: row.currency + " " + moneyString(document.NetAmountCents)},
+			billingDocumentHTMLField{Label: "VAT", Value: fmt.Sprintf("%s %s (%0.2f%%)", row.currency, moneyString(document.VatAmountCents), float64(document.VatRateBps)/100)},
+			billingDocumentHTMLField{Label: "Service", Value: document.ServiceDescription},
+			billingDocumentHTMLField{Label: "Quantity", Value: fmt.Sprintf("%d", document.ServiceQuantity)},
+			billingDocumentHTMLField{Label: "Supply date", Value: document.ServiceDate.Format("2006-01-02")},
+			billingDocumentHTMLField{Label: "Settlement reference", Value: document.ReferenceType + ":" + document.ReferenceID},
 		)
-		if taxStatus == "reverse_charge" {
+		if document.TaxValidationStatus == "reverse_charge" {
 			base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "VAT treatment", Value: "Reverse charge — btw verlegd"})
 		}
 	case "payment_receipt":
-		var method string
-		var txID sql.NullString
-		err = s.db.QueryRowContext(ctx, `
-			SELECT 'PAY-' || UPPER(LEFT(REPLACE(payment.id::text, '-', ''), 12)),
-			       ROUND(payment.amount * 100)::bigint, payment.currency, payment.status,
-			       COALESCE(payment.confirmed_at, payment.created_at, NOW()), payment.retention_until,
-			       payment.method, payment.tx_id,
-			       subscription.billing_name, subscription.billing_company, subscription.billing_address::text, subscription.tax_id
-			FROM purser.billing_payments payment
-			JOIN purser.billing_invoices invoice ON invoice.id = payment.invoice_id
-			LEFT JOIN purser.tenant_subscriptions subscription ON subscription.tenant_id = invoice.tenant_id
-			WHERE payment.id = $1 AND invoice.tenant_id = $2 AND payment.status = 'confirmed'
-		`, documentID, tenantID).Scan(&row.number, &row.amountCents, &row.currency, &row.status,
-			&row.issuedAt, &row.retentionUntil, &method, &txID, &name, &company, &address, &vat)
+		var document purserdb.GetPaymentReceiptDocumentRow
+		document, err = queries.GetPaymentReceiptDocument(ctx, purserdb.GetPaymentReceiptDocumentParams{DocumentID: documentID, TenantID: tenantID})
+		row.number, row.amountCents, row.currency, row.status = document.DocumentNumber, document.AmountCents, document.Currency, document.Status
+		row.issuedAt, row.retentionUntil = document.IssuedAt.Time, document.RetentionUntil
+		setCustomer(document.CustomerName, document.CustomerCompany, document.CustomerAddress, document.CustomerVat)
 		base.Title = "Payment receipt"
-		base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "Method", Value: method})
-		if txID.Valid {
-			base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "Settlement reference", Value: txID.String})
+		base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "Method", Value: document.Method})
+		if document.TxID.Valid {
+			base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "Settlement reference", Value: document.TxID.String})
 		}
 	case "credit_note":
-		var sourceType, sourceID, reversalType, reversalID, reason string
-		err = s.db.QueryRowContext(ctx, `
-			SELECT note.credit_note_number, note.amount_cents, note.currency, 'issued', note.issued_at, note.retention_until,
-			       note.source_document_type, note.source_document_id::text,
-			       note.reversal_reference_type, note.reversal_reference_id, note.reason,
-			       subscription.billing_name, subscription.billing_company, subscription.billing_address::text, subscription.tax_id
-			FROM purser.credit_notes note
-			LEFT JOIN purser.tenant_subscriptions subscription ON subscription.tenant_id = note.tenant_id
-			WHERE note.id = $1 AND note.tenant_id = $2
-		`, documentID, tenantID).Scan(&row.number, &row.amountCents, &row.currency, &row.status, &row.issuedAt, &row.retentionUntil,
-			&sourceType, &sourceID, &reversalType, &reversalID, &reason, &name, &company, &address, &vat)
+		var document purserdb.GetCreditNoteDocumentRow
+		document, err = queries.GetCreditNoteDocument(ctx, purserdb.GetCreditNoteDocumentParams{DocumentID: documentID, TenantID: tenantID})
+		row.number, row.amountCents, row.currency, row.status = document.CreditNoteNumber, document.AmountCents, document.Currency, "issued"
+		row.issuedAt, row.retentionUntil = document.IssuedAt, document.RetentionUntil
+		setCustomer(document.CustomerName, document.CustomerCompany, document.CustomerAddress, document.CustomerVat)
 		base.Title = "Credit note"
 		base.Fields = append(base.Fields,
-			billingDocumentHTMLField{Label: "Original document", Value: sourceType + ":" + sourceID},
-			billingDocumentHTMLField{Label: "Reversal reference", Value: reversalType + ":" + reversalID},
-			billingDocumentHTMLField{Label: "Reason", Value: reason},
+			billingDocumentHTMLField{Label: "Original document", Value: document.SourceDocumentType + ":" + document.SourceDocumentID},
+			billingDocumentHTMLField{Label: "Reversal reference", Value: document.ReversalReferenceType + ":" + document.ReversalReferenceID},
+			billingDocumentHTMLField{Label: "Reason", Value: document.Reason},
 		)
 	default:
 		return nil, status.Error(codes.InvalidArgument, "unsupported billing document kind")

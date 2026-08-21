@@ -2,9 +2,8 @@ package grpc
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
-	"time"
+
+	"frameworks/api_billing/internal/database/purserdb"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -56,41 +55,21 @@ func (s *PurserServer) GetOperatorRevenue(ctx context.Context, req *purserpb.Get
 		return nil, status.Error(codes.InvalidArgument, "range_end must be after range_start")
 	}
 
-	args := []any{tenantID, rangeStart, rangeEnd}
-	clusterFilter := ""
-	if req.ClusterId != nil && *req.ClusterId != "" {
-		clusterFilter = " AND cluster_id = $4"
-		args = append(args, *req.ClusterId)
+	params := purserdb.GetOperatorRevenueParams{
+		TenantID: tenantID, RangeStart: rangeStart, RangeEnd: rangeEnd,
 	}
-	q := fmt.Sprintf(`
-		SELECT cluster_id, currency,
-		       SUM(gross_cents)::bigint,
-		       SUM(platform_fee_cents)::bigint,
-		       SUM(payable_cents)::bigint,
-		       COUNT(*) FILTER (WHERE entry_type = 'accrual')::int
-		FROM purser.operator_credit_ledger
-		WHERE cluster_owner_tenant_id = $1
-		  AND period_start < $3
-		  AND period_end > $2
-		  AND status IN ('accruing', 'eligible', 'paid_out', 'clawed_back')
-		  %s
-		GROUP BY cluster_id, currency
-		ORDER BY cluster_id
-	`, clusterFilter)
-
-	rows, err := s.db.QueryContext(ctx, q, args...)
+	if req.ClusterId != nil && *req.ClusterId != "" {
+		params.FilterCluster = true
+		params.ClusterID = *req.ClusterId
+	}
+	rows, err := purserdb.New(s.db).GetOperatorRevenue(ctx, params)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "query operator revenue: %v", err)
 	}
-	defer rows.Close()
-
 	resp := &purserpb.GetOperatorRevenueResponse{}
-	for rows.Next() {
-		entry := &purserpb.OperatorRevenueByCluster{}
-		if err := rows.Scan(&entry.ClusterId, &entry.Currency,
-			&entry.GrossCents, &entry.PlatformFeeCents, &entry.PayableCents, &entry.LineCount); err != nil {
-			return nil, status.Errorf(codes.Internal, "scan operator revenue row: %v", err)
-		}
+	for _, row := range rows {
+		entry := operatorRevenueEntry(row.ClusterID, row.Currency, row.GrossCents,
+			row.PlatformFeeCents, row.PayableCents, row.LineCount)
 		resp.Clusters = append(resp.Clusters, entry)
 		if resp.Currency == "" {
 			resp.Currency = entry.Currency
@@ -99,10 +78,6 @@ func (s *PurserServer) GetOperatorRevenue(ctx context.Context, req *purserpb.Get
 		resp.TotalPlatformFeeCents += entry.PlatformFeeCents
 		resp.TotalPayableCents += entry.PayableCents
 	}
-	if err := rows.Err(); err != nil {
-		return nil, status.Errorf(codes.Internal, "iterate operator revenue rows: %v", err)
-	}
-
 	enrichOperatorClusterNames(ctx, s, resp.Clusters)
 	return resp, nil
 }
@@ -114,37 +89,25 @@ func (s *PurserServer) ListOperatorClusters(ctx context.Context, req *purserpb.L
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT cluster_id, currency,
-		       SUM(gross_cents)::bigint,
-		       SUM(platform_fee_cents)::bigint,
-		       SUM(payable_cents)::bigint,
-		       COUNT(*) FILTER (WHERE entry_type = 'accrual')::int
-		FROM purser.operator_credit_ledger
-		WHERE cluster_owner_tenant_id = $1
-		  AND status IN ('accruing', 'eligible', 'paid_out', 'clawed_back')
-		GROUP BY cluster_id, currency
-		ORDER BY cluster_id
-	`, tenantID)
+	rows, err := purserdb.New(s.db).ListOperatorClusters(ctx, tenantID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "query operator clusters: %v", err)
 	}
-	defer rows.Close()
-
 	resp := &purserpb.ListOperatorClustersResponse{}
-	for rows.Next() {
-		entry := &purserpb.OperatorRevenueByCluster{}
-		if err := rows.Scan(&entry.ClusterId, &entry.Currency,
-			&entry.GrossCents, &entry.PlatformFeeCents, &entry.PayableCents, &entry.LineCount); err != nil {
-			return nil, status.Errorf(codes.Internal, "scan operator cluster row: %v", err)
-		}
+	for _, row := range rows {
+		entry := operatorRevenueEntry(row.ClusterID, row.Currency, row.GrossCents,
+			row.PlatformFeeCents, row.PayableCents, row.LineCount)
 		resp.Clusters = append(resp.Clusters, entry)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, status.Errorf(codes.Internal, "iterate operator cluster rows: %v", err)
 	}
 	enrichOperatorClusterNames(ctx, s, resp.Clusters)
 	return resp, nil
+}
+
+func operatorRevenueEntry(clusterID, currency string, gross, fee, payable int64, lineCount int32) *purserpb.OperatorRevenueByCluster {
+	return &purserpb.OperatorRevenueByCluster{
+		ClusterId: clusterID, Currency: currency, GrossCents: gross,
+		PlatformFeeCents: fee, PayableCents: payable, LineCount: lineCount,
+	}
 }
 
 // GetOperatorPayouts lists settlement events recorded by the payout workflow.
@@ -153,50 +116,29 @@ func (s *PurserServer) GetOperatorPayouts(ctx context.Context, req *purserpb.Get
 	if err != nil {
 		return nil, err
 	}
-	args := []any{tenantID}
-	clauses := []string{"cluster_owner_tenant_id = $1"}
+	params := purserdb.ListOperatorPayoutsParams{TenantID: tenantID}
 	if req.RangeStart != nil {
-		clauses = append(clauses, fmt.Sprintf("created_at >= $%d", len(args)+1))
-		args = append(args, req.RangeStart.AsTime())
+		params.FilterStart = true
+		params.RangeStart = req.RangeStart.AsTime()
 	}
 	if req.RangeEnd != nil {
-		clauses = append(clauses, fmt.Sprintf("created_at < $%d", len(args)+1))
-		args = append(args, req.RangeEnd.AsTime())
+		params.FilterEnd = true
+		params.RangeEnd = req.RangeEnd.AsTime()
 	}
-	q := fmt.Sprintf(`
-		SELECT id, currency, total_cents, status,
-		       COALESCE(method, ''), COALESCE(external_reference, ''),
-		       created_at, paid_at
-		FROM purser.operator_payouts
-		WHERE %s
-		ORDER BY created_at DESC
-	`, joinAndClauses(clauses))
-
-	rows, err := s.db.QueryContext(ctx, q, args...)
+	rows, err := purserdb.New(s.db).ListOperatorPayouts(ctx, params)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "query operator payouts: %v", err)
 	}
-	defer rows.Close()
-
 	resp := &purserpb.GetOperatorPayoutsResponse{}
-	for rows.Next() {
-		var (
-			payout    purserpb.OperatorPayout
-			createdAt time.Time
-			paidAt    sql.NullTime
-		)
-		if err := rows.Scan(&payout.Id, &payout.Currency, &payout.TotalCents, &payout.Status,
-			&payout.Method, &payout.ExternalReference, &createdAt, &paidAt); err != nil {
-			return nil, status.Errorf(codes.Internal, "scan operator payout row: %v", err)
+	for _, row := range rows {
+		payout := purserpb.OperatorPayout{
+			Id: row.ID.String(), Currency: row.Currency, TotalCents: row.TotalCents, Status: row.Status,
+			Method: row.Method, ExternalReference: row.ExternalReference, CreatedAt: timestamppb.New(row.CreatedAt),
 		}
-		payout.CreatedAt = timestamppb.New(createdAt)
-		if paidAt.Valid {
-			payout.PaidAt = timestamppb.New(paidAt.Time)
+		if row.PaidAt.Valid {
+			payout.PaidAt = timestamppb.New(row.PaidAt.Time)
 		}
 		resp.Payouts = append(resp.Payouts, &payout)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, status.Errorf(codes.Internal, "iterate operator payout rows: %v", err)
 	}
 	return resp, nil
 }
@@ -221,15 +163,4 @@ func enrichOperatorClusterNames(ctx context.Context, s *PurserServer, clusters [
 			c.ClusterName = name
 		}
 	}
-}
-
-func joinAndClauses(clauses []string) string {
-	if len(clauses) == 0 {
-		return "true"
-	}
-	out := clauses[0]
-	for _, c := range clauses[1:] {
-		out += " AND " + c
-	}
-	return out
 }

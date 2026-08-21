@@ -121,19 +121,23 @@ func TestGetBillingDetailsEmptyTenantGuard(t *testing.T) {
 func TestListPendingTopupsMapsRowsAndNulls(t *testing.T) {
 	s, mock := newReadServer(t, true)
 	now := time.Now()
+	tenantID := "55ee7966-8f71-445b-aa6a-7c5965668980"
+	firstID := "b741d939-2131-4446-bcc2-2ee3a065b0da"
+	secondID := "ff0eae64-a1f4-44ef-a02a-77958740acd1"
+	balanceTransactionID := "6a0f1b57-81d7-4cb5-8ec8-410deead3466"
 
 	rows := sqlmock.NewRows([]string{
 		"id", "tenant_id", "provider", "checkout_id", "amount_cents", "currency",
 		"status", "expires_at", "completed_at", "balance_transaction_id", "created_at", "updated_at",
 	}).
-		AddRow("tu1", "tenant-1", "stripe", "cs_1", int64(2000), "EUR", "pending", now, nil, nil, now, now).
-		AddRow("tu2", "tenant-1", "stripe", "cs_2", int64(500), "EUR", "completed", now, now, "btx-9", now, now)
+		AddRow(firstID, tenantID, "stripe", "cs_1", int64(2000), "EUR", "pending", now, nil, nil, now, now).
+		AddRow(secondID, tenantID, "stripe", "cs_2", int64(500), "EUR", "completed", now, now, balanceTransactionID, now, now)
 
-	mock.ExpectQuery(`FROM purser\.pending_topups WHERE tenant_id = \$1`).
-		WithArgs("tenant-1").
+	mock.ExpectQuery(`FROM purser\.pending_topups\s+WHERE tenant_id = \$1`).
+		WithArgs(tenantID, false, "").
 		WillReturnRows(rows)
 
-	resp, err := s.ListPendingTopups(context.Background(), &purserpb.ListPendingTopupsRequest{TenantId: "tenant-1"})
+	resp, err := s.ListPendingTopups(context.Background(), &purserpb.ListPendingTopupsRequest{TenantId: tenantID})
 	if err != nil {
 		t.Fatalf("ListPendingTopups: %v", err)
 	}
@@ -145,7 +149,7 @@ func TestListPendingTopupsMapsRowsAndNulls(t *testing.T) {
 		t.Fatalf("pending topup NULLs should be unset: %+v", resp.Topups[0])
 	}
 	// Completed row: both populated.
-	if resp.Topups[1].CompletedAt == nil || resp.Topups[1].GetBalanceTransactionId() != "btx-9" {
+	if resp.Topups[1].CompletedAt == nil || resp.Topups[1].GetBalanceTransactionId() != balanceTransactionID {
 		t.Fatalf("completed topup refs not mapped: %+v", resp.Topups[1])
 	}
 }
@@ -155,14 +159,15 @@ func TestListPendingTopupsMapsRowsAndNulls(t *testing.T) {
 func TestListPendingTopupsStatusFilterPassesArg(t *testing.T) {
 	s, mock := newReadServer(t, true)
 	st := "completed"
-	mock.ExpectQuery(`FROM purser\.pending_topups WHERE tenant_id = \$1 AND status = \$2`).
-		WithArgs("tenant-1", st).
+	tenantID := "4be0ee08-a93d-4aa9-8a95-06b10ee031ea"
+	mock.ExpectQuery(`FROM purser\.pending_topups\s+WHERE tenant_id = \$1`).
+		WithArgs(tenantID, true, st).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "tenant_id", "provider", "checkout_id", "amount_cents", "currency",
 			"status", "expires_at", "completed_at", "balance_transaction_id", "created_at", "updated_at",
 		}))
 
-	resp, err := s.ListPendingTopups(context.Background(), &purserpb.ListPendingTopupsRequest{TenantId: "tenant-1", Status: &st})
+	resp, err := s.ListPendingTopups(context.Background(), &purserpb.ListPendingTopupsRequest{TenantId: tenantID, Status: &st})
 	if err != nil {
 		t.Fatalf("ListPendingTopups: %v", err)
 	}
@@ -190,14 +195,16 @@ func TestListMarketplaceClusterPricingsConvertsCents(t *testing.T) {
 	now := time.Now()
 
 	// tenant tier-level lookup (tenantID non-empty path)
-	mock.ExpectQuery(`SELECT COALESCE\(bt\.tier_level, 0\)`).
+	mock.ExpectQuery(`SELECT COALESCE\(tier\.tier_level, 0\)::int AS tier_level`).
 		WithArgs("tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"tier_level"}).AddRow(int32(2)))
 
-	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM purser\.cluster_pricing`).
+	mock.ExpectQuery(`SELECT COUNT\(\*\)[\s\S]*FROM purser\.cluster_pricing`).
+		WithArgs(int32(2)).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int32(1)))
 
-	mock.ExpectQuery(`FROM purser\.cluster_pricing`).
+	mock.ExpectQuery(`SELECT cluster_id, pricing_model,[\s\S]*FROM purser\.cluster_pricing`).
+		WithArgs(int32(2), false, false, nil, "", int32(51)).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"cluster_id", "pricing_model", "base_price", "currency", "required_tier_level", "created_at",
 		}).AddRow("cluster-a", "flat", "9.99", "EUR", int32(1), now))
@@ -226,7 +233,7 @@ func TestGetBillingStatusNoActiveSubscription(t *testing.T) {
 	s, mock := newReadServer(t, false)
 
 	// getSubscriptionAndTier → ErrNoRows → (nil, nil, nil)
-	mock.ExpectQuery(`FROM purser\.tenant_subscriptions ts`).
+	mock.ExpectQuery(`FROM purser\.tenant_subscriptions`).
 		WithArgs("tenant-1").
 		WillReturnError(sqlmockNoRows())
 	// getPendingInvoices → empty
@@ -281,13 +288,13 @@ func TestGetTenantUsageAggregatesNoTier(t *testing.T) {
 
 	// 1. usage_records/usage_adjustments aggregation
 	mock.ExpectQuery(`FROM purser\.usage_records`).
-		WithArgs("tenant-1", "2026-01-01", "2026-01-31").
+		WithArgs("tenant-1", time.Date(2026, 1, 31, 0, 0, 0, 0, time.UTC), time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "total"}).
 			AddRow("cluster-a", "egress_bytes", float64(1000)).
 			AddRow("", "media_seconds", float64(50)))
 	// 2. dimensioned usage (empty)
 	mock.ExpectQuery(`WITH dimensioned_rows`).
-		WithArgs("tenant-1", "2026-01-01", "2026-01-31").
+		WithArgs("tenant-1", time.Date(2026, 1, 31, 0, 0, 0, 0, time.UTC), time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "unit", "dimensions", "quantity"}))
 	// 3. LoadEffectiveTier → no active subscription
 	mock.ExpectQuery(`metering_enabled`).

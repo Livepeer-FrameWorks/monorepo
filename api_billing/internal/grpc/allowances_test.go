@@ -71,7 +71,7 @@ func TestComputeAllowancesFreeTierWithUsage(t *testing.T) {
 			AddRow(10000.0, 0.0, "free"))
 	// Allowance usage includes canonical records plus applied corrections.
 	mock.ExpectQuery(`FROM purser\.usage_records`).
-		WithArgs(tenantID, start, end, tenantID, start, end).
+		WithArgs(tenantID, "delivered_minutes", end, start).
 		WillReturnRows(sqlmock.NewRows([]string{"sum"}).AddRow(3500.0))
 
 	got := server.computeAllowances(context.Background(), tenantID, tierID, start, end)
@@ -118,7 +118,7 @@ func TestComputeAllowancesFreeTierExhausted(t *testing.T) {
 			AddRow(10000.0, 0.0, "free"))
 	// 15000 delivered minutes — over the 10000 included.
 	mock.ExpectQuery(`FROM purser\.usage_records`).
-		WithArgs(tenantID, start, end, tenantID, start, end).
+		WithArgs(tenantID, "delivered_minutes", end, start).
 		WillReturnRows(sqlmock.NewRows([]string{"sum"}).AddRow(15000.0))
 
 	got := server.computeAllowances(context.Background(), tenantID, tierID, start, end)
@@ -155,7 +155,7 @@ func TestComputeAllowancesPaidTierNotFreeFlag(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"included_quantity", "unit_price", "tier_name"}).
 			AddRow(120000.0, 0.002, "supporter"))
 	mock.ExpectQuery(`FROM purser\.usage_records`).
-		WithArgs(tenantID, start, end, tenantID, start, end).
+		WithArgs(tenantID, "delivered_minutes", end, start).
 		WillReturnRows(sqlmock.NewRows([]string{"sum"}).AddRow(833.333))
 
 	got := server.computeAllowances(context.Background(), tenantID, tierID, start, end)
@@ -188,7 +188,7 @@ func TestComputeAllowancesPaidTierWithZeroPricedMeter(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"included_quantity", "unit_price", "tier_name"}).
 			AddRow(120000.0, 0.0, "supporter"))
 	mock.ExpectQuery(`FROM purser\.usage_records`).
-		WithArgs(tenantID, start, end, tenantID, start, end).
+		WithArgs(tenantID, "delivered_minutes", end, start).
 		WillReturnRows(sqlmock.NewRows([]string{"sum"}).AddRow(2200.0))
 
 	got := server.computeAllowances(context.Background(), tenantID, tierID, start, end)

@@ -20,12 +20,10 @@ func TestLoadInvoiceBalanceTxSubtractsConfirmedNetPayments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mock.ExpectQuery(`SELECT tenant_id::text, amount::text, currency[\s\S]*FOR UPDATE`).
+	mock.ExpectQuery(`SELECT invoice.tenant_id::text AS tenant_id,[\s\S]*FOR UPDATE`).
 		WithArgs("invoice-1", "tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "amount", "currency"}).AddRow("tenant-1", "100.00", "EUR"))
-	mock.ExpectQuery(`SELECT COALESCE\(SUM\(bp.amount`).
-		WithArgs("invoice-1", "tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"net_paid"}).AddRow("30.25"))
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "total_amount", "currency", "net_paid"}).
+			AddRow("tenant-1", "100.00", "EUR", "30.25"))
 
 	balance, err := loadInvoiceBalanceTx(context.Background(), tx, "invoice-1", "tenant-1")
 	if err != nil {

@@ -24,8 +24,8 @@ func paymentRows(now time.Time) *sqlmock.Rows {
 func TestGetPaymentBindsAuthenticatedTenant(t *testing.T) {
 	s, mock := newReadServer(t, true)
 	now := time.Now()
-	mock.ExpectQuery(`FROM purser\.billing_payments bp`).
-		WithArgs("pay-1", "tenant-1").
+	mock.ExpectQuery(`FROM purser\.billing_payments payment`).
+		WithArgs("pay-1", true, "tenant-1").
 		WillReturnRows(paymentRows(now))
 
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-1")
@@ -44,11 +44,11 @@ func TestGetPaymentBindsAuthenticatedTenant(t *testing.T) {
 func TestListPaymentsPaginatesAndBindsTenant(t *testing.T) {
 	s, mock := newReadServer(t, true)
 	now := time.Now()
-	mock.ExpectQuery(`SELECT COUNT\(\*\).*FROM purser\.billing_payments bp`).
-		WithArgs("tenant-1").
+	mock.ExpectQuery(`SELECT COUNT\(\*\).*FROM purser\.billing_payments payment`).
+		WithArgs("tenant-1", false, "", false, "", false, "").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-	mock.ExpectQuery(`SELECT bp\.id, bp\.invoice_id`).
-		WithArgs("tenant-1", 21).
+	mock.ExpectQuery(`SELECT payment\.id::text AS id,\s+payment\.invoice_id::text AS invoice_id`).
+		WithArgs("tenant-1", false, "", false, "", false, "", false, false, nil, "00000000-0000-0000-0000-000000000000", int32(21)).
 		WillReturnRows(paymentRows(now))
 
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-1")

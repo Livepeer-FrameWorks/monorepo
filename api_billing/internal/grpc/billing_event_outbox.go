@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/api_billing/internal/database/purserdb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/google/uuid"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
@@ -57,9 +59,7 @@ type billingOutboxRow struct {
 // Callers without a tx use enqueueBillingEvent below.
 func (s *PurserServer) EnqueueBillingEventTx(
 	ctx context.Context,
-	exec interface {
-		QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-	},
+	exec purserdb.DBTX,
 	eventType, tenantID, userID, resourceType, resourceID string,
 	payload *ipcpb.BillingEvent,
 ) (string, error) {
@@ -73,17 +73,14 @@ func (s *PurserServer) EnqueueBillingEventTx(
 	if err != nil {
 		return "", fmt.Errorf("marshal billing event: %w", err)
 	}
-	var id string
-	row := exec.QueryRowContext(ctx, `
-		INSERT INTO purser.billing_event_outbox
-			(event_type, tenant_id, user_id, resource_type, resource_id, billing_event)
-		VALUES ($1, $2::uuid, $3, $4, $5, $6::jsonb)
-		RETURNING id
-	`, eventType, tenantID, userID, resourceType, resourceID, database.JSONText(billingJSON))
-	if scanErr := row.Scan(&id); scanErr != nil {
-		return "", fmt.Errorf("insert billing event outbox row: %w", scanErr)
+	id, err := purserdb.New(exec).EnqueueBillingEventOutbox(ctx, purserdb.EnqueueBillingEventOutboxParams{
+		EventType: eventType, TenantID: tenantID, UserID: userID,
+		ResourceType: resourceType, ResourceID: resourceID, BillingEvent: billingJSON,
+	})
+	if err != nil {
+		return "", fmt.Errorf("insert billing event outbox row: %w", err)
 	}
-	return id, nil
+	return id.String(), nil
 }
 
 // enqueueBillingEvent writes the outbox row in its own short transaction.
@@ -163,48 +160,27 @@ func (s *PurserServer) runBillingOutboxWorker(ctx context.Context) {
 func (s *PurserServer) claimBillingOutboxBatch(ctx context.Context) ([]billingOutboxRow, error) {
 	var out []billingOutboxRow
 	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
-		rows, qerr := tx.QueryContext(ctx, `
-			SELECT id::text, event_type, tenant_id::text, user_id, resource_type, resource_id,
-			       billing_event::text, attempts, created_at
-			FROM purser.billing_event_outbox
-			WHERE completed_at IS NULL
-			  AND (claimed_at IS NULL OR claimed_at < NOW() - $1::interval)
-			ORDER BY created_at
-			FOR UPDATE SKIP LOCKED
-			LIMIT $2
-		`, fmt.Sprintf("%d seconds", int(billingOutboxLease.Seconds())), billingOutboxBatchSize)
+		queries := purserdb.New(tx)
+		rows, qerr := queries.ClaimBillingEventOutboxCandidates(ctx, purserdb.ClaimBillingEventOutboxCandidatesParams{
+			LeaseMilliseconds: billingOutboxLease.Milliseconds(), BatchSize: billingOutboxBatchSize,
+		})
 		if qerr != nil {
 			return qerr
 		}
-		defer rows.Close()
 
 		batch := make([]billingOutboxRow, 0, billingOutboxBatchSize)
-		for rows.Next() {
-			var (
-				r           billingOutboxRow
-				billingText string
-			)
-			if scanErr := rows.Scan(&r.id, &r.eventType, &r.tenantID, &r.userID,
-				&r.resourceType, &r.resourceID, &billingText, &r.attempts, &r.createdAt); scanErr != nil {
-				return scanErr
-			}
-			r.billingJSON = []byte(billingText)
-			batch = append(batch, r)
-		}
-		if rowsErr := rows.Err(); rowsErr != nil {
-			return rowsErr
+		ids := make([]uuid.UUID, 0, len(rows))
+		for _, row := range rows {
+			ids = append(ids, row.ID)
+			batch = append(batch, billingOutboxRow{
+				id: row.ID.String(), eventType: row.EventType, tenantID: row.TenantID.String(),
+				userID: row.UserID, resourceType: row.ResourceType, resourceID: row.ResourceID,
+				billingJSON: row.BillingEvent, attempts: int(row.Attempts), createdAt: row.CreatedAt,
+			})
 		}
 
-		if len(batch) > 0 {
-			ids := make([]string, 0, len(batch))
-			for _, r := range batch {
-				ids = append(ids, r.id)
-			}
-			if _, uerr := tx.ExecContext(ctx, `
-				UPDATE purser.billing_event_outbox
-				SET claimed_at = NOW()
-				WHERE id = ANY($1::uuid[])
-			`, asPGUUIDArray(ids)); uerr != nil {
+		if len(ids) > 0 {
+			if uerr := queries.MarkBillingEventOutboxClaimed(ctx, ids); uerr != nil {
 				return uerr
 			}
 		}
@@ -215,11 +191,7 @@ func (s *PurserServer) claimBillingOutboxBatch(ctx context.Context) ([]billingOu
 }
 
 func (s *PurserServer) markBillingOutboxCompleted(ctx context.Context, id string) {
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE purser.billing_event_outbox
-		SET completed_at = NOW(), last_error = NULL
-		WHERE id = $1::uuid
-	`, id); err != nil {
+	if err := purserdb.New(s.db).CompleteBillingEventOutbox(ctx, id); err != nil {
 		s.logger.WithError(err).WithField("outbox_id", id).
 			Warn("Failed to mark billing event outbox row completed")
 	}
@@ -230,18 +202,17 @@ func (s *PurserServer) recordBillingOutboxFailure(ctx context.Context, id string
 	if cause != nil {
 		msg = cause.Error()
 	}
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE purser.billing_event_outbox
-		SET attempts = $2, last_error = $3, claimed_at = NULL
-		WHERE id = $1::uuid
-	`, id, attempts, msg); err != nil {
+	if err := purserdb.New(s.db).FailBillingEventOutbox(ctx, purserdb.FailBillingEventOutboxParams{
+		ID: id, LastError: sql.NullString{String: msg, Valid: true},
+	}); err != nil {
 		s.logger.WithError(err).WithField("outbox_id", id).
 			Warn("Failed to record billing event outbox failure")
 	}
-	if attempts >= billingOutboxAlertAfterAttempts {
+	nextAttempts := attempts + 1
+	if nextAttempts >= billingOutboxAlertAfterAttempts {
 		s.logger.WithFields(logging.Fields{
 			"outbox_id": id,
-			"attempts":  attempts,
+			"attempts":  nextAttempts,
 			"cause":     msg,
 		}).Error("Billing event outbox row failing repeatedly — Decklog reachability degraded")
 	}
@@ -278,21 +249,4 @@ func (s *PurserServer) dispatchBillingOutboxRow(ctx context.Context, row billing
 		return []string{"decklog"}, err
 	}
 	return nil, nil
-}
-
-// asPGUUIDArray adapts a string slice into the {a,b,c} literal Postgres
-// expects for a uuid[] parameter.
-func asPGUUIDArray(ids []string) string {
-	if len(ids) == 0 {
-		return "{}"
-	}
-	out := "{"
-	for i, id := range ids {
-		if i > 0 {
-			out += ","
-		}
-		out += id
-	}
-	out += "}"
-	return out
 }

@@ -10,9 +10,11 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
+	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/handlers"
 	"frameworks/api_billing/internal/mollie"
 	"frameworks/api_billing/internal/pricing"
@@ -41,7 +43,6 @@ import (
 	mollielib "github.com/VictorAvelar/mollie-api-go/v4/mollie"
 
 	"github.com/google/uuid"
-	"github.com/lib/pq"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/shopspring/decimal"
 	stripelib "github.com/stripe/stripe-go/v85"
@@ -63,100 +64,93 @@ import (
 // loadTierPricingRules reads pricing rules for a tier and converts them into
 // the protobuf shape exposed on BillingTier.
 func loadTierPricingRules(ctx context.Context, db *sql.DB, tierID string) ([]*purserpb.PricingRule, error) {
-	rows, err := db.QueryContext(ctx, `
-		SELECT meter, model, currency, included_quantity::text, unit_price::text, config::text
-		FROM purser.tier_pricing_rules
-		WHERE tier_id = $1
-	`, tierID)
+	rows, err := purserdb.New(db).ListTierPricingRules(ctx, tierID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []*purserpb.PricingRule
-	for rows.Next() {
-		var meter, model, currency, included, unitPrice, config string
-		if err := rows.Scan(&meter, &model, &currency, &included, &unitPrice, &config); err != nil {
-			return nil, err
-		}
+	out := make([]*purserpb.PricingRule, 0, len(rows))
+	for _, row := range rows {
 		out = append(out, &purserpb.PricingRule{
-			Meter:            meter,
-			Model:            model,
-			Currency:         currency,
-			IncludedQuantity: included,
-			UnitPrice:        unitPrice,
-			ConfigJson:       config,
+			Meter: row.Meter, Model: row.Model, Currency: row.Currency,
+			IncludedQuantity: row.IncludedQuantity, UnitPrice: row.UnitPrice, ConfigJson: row.Config,
 		})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // loadTierEntitlements reads entitlements for a tier into a map of
 // JSON-encoded values keyed by entitlement key.
 func loadTierEntitlements(ctx context.Context, db *sql.DB, tierID string) (map[string]string, error) {
-	rows, err := db.QueryContext(ctx, `SELECT key, value::text FROM purser.tier_entitlements WHERE tier_id = $1`, tierID)
+	rows, err := purserdb.New(db).ListTierEntitlements(ctx, tierID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	out := map[string]string{}
-	for rows.Next() {
-		var k, v string
-		if err := rows.Scan(&k, &v); err != nil {
-			return nil, err
-		}
-		out[k] = v
+	for _, row := range rows {
+		out[row.Key] = row.Value
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // loadSubscriptionPricingOverrides reads per-tenant pricing overrides into
 // proto messages.
 func loadSubscriptionPricingOverrides(ctx context.Context, db *sql.DB, subscriptionID string) ([]*purserpb.PricingRule, error) {
-	rows, err := db.QueryContext(ctx, `
-		SELECT meter, COALESCE(model, ''), COALESCE(currency, ''),
-		       COALESCE(included_quantity::text, ''), COALESCE(unit_price::text, ''),
-		       COALESCE(config::text, '{}')
-		FROM purser.subscription_pricing_overrides
-		WHERE subscription_id = $1
-	`, subscriptionID)
+	rows, err := purserdb.New(db).ListSubscriptionPricingOverrides(ctx, subscriptionID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []*purserpb.PricingRule
-	for rows.Next() {
-		var meter, model, currency, included, unitPrice, config string
-		if err := rows.Scan(&meter, &model, &currency, &included, &unitPrice, &config); err != nil {
-			return nil, err
-		}
+	out := make([]*purserpb.PricingRule, 0, len(rows))
+	for _, row := range rows {
 		out = append(out, &purserpb.PricingRule{
-			Meter:            meter,
-			Model:            model,
-			Currency:         currency,
-			IncludedQuantity: included,
-			UnitPrice:        unitPrice,
-			ConfigJson:       config,
+			Meter: row.Meter, Model: row.Model.String, Currency: row.Currency.String,
+			IncludedQuantity: row.IncludedQuantity.String, UnitPrice: row.UnitPrice.String,
+			ConfigJson: string(row.Config),
 		})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // loadSubscriptionEntitlementOverrides reads per-tenant entitlement overrides.
 func loadSubscriptionEntitlementOverrides(ctx context.Context, db *sql.DB, subscriptionID string) (map[string]string, error) {
-	rows, err := db.QueryContext(ctx, `SELECT key, value::text FROM purser.subscription_entitlement_overrides WHERE subscription_id = $1`, subscriptionID)
+	rows, err := purserdb.New(db).ListSubscriptionEntitlementOverrides(ctx, subscriptionID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	out := map[string]string{}
-	for rows.Next() {
-		var k, v string
-		if err := rows.Scan(&k, &v); err != nil {
-			return nil, err
-		}
-		out[k] = v
+	for _, row := range rows {
+		out[row.Key] = row.Value
 	}
-	return out, rows.Err()
+	return out, nil
+}
+
+func billingTierFromListRow(row purserdb.ListBillingTiersRow) *purserpb.BillingTier {
+	return &purserpb.BillingTier{
+		Id: row.ID.String(), TierName: row.TierName, DisplayName: row.DisplayName,
+		Description: row.Description, BasePrice: row.BasePrice, Currency: row.Currency,
+		BillingPeriod: row.BillingPeriod, Features: scanBillingFeatures(row.Features),
+		SupportLevel: row.SupportLevel, SlaLevel: row.SlaLevel, MeteringEnabled: row.MeteringEnabled,
+		IsActive: row.IsActive, TierLevel: row.TierLevel, IsEnterprise: row.IsEnterprise,
+		CreatedAt: timestamppb.New(row.CreatedAt.Time), UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
+		IsDefaultPrepaid: row.IsDefaultPrepaid, IsDefaultPostpaid: row.IsDefaultPostpaid,
+		ProcessesLive: string(row.ProcessesLive), ProcessesDvr: string(row.ProcessesDvr),
+		ProcessesClip: string(row.ProcessesClip), ProcessesDvrFinalize: string(row.ProcessesDvrFinalize),
+		ProcessesVod: string(row.ProcessesVod),
+	}
+}
+
+func billingTierFromGetRow(row purserdb.GetBillingTierByIDRow) *purserpb.BillingTier {
+	return &purserpb.BillingTier{
+		Id: row.ID.String(), TierName: row.TierName, DisplayName: row.DisplayName,
+		Description: row.Description, BasePrice: row.BasePrice, Currency: row.Currency,
+		BillingPeriod: row.BillingPeriod, Features: scanBillingFeatures(row.Features),
+		SupportLevel: row.SupportLevel, SlaLevel: row.SlaLevel, MeteringEnabled: row.MeteringEnabled,
+		IsActive: row.IsActive, TierLevel: row.TierLevel, IsEnterprise: row.IsEnterprise,
+		CreatedAt: timestamppb.New(row.CreatedAt.Time), UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
+		IsDefaultPrepaid: row.IsDefaultPrepaid, IsDefaultPostpaid: row.IsDefaultPostpaid,
+		ProcessesLive: string(row.ProcessesLive), ProcessesDvr: string(row.ProcessesDvr),
+		ProcessesClip: string(row.ProcessesClip), ProcessesDvrFinalize: string(row.ProcessesDvrFinalize),
+		ProcessesVod: string(row.ProcessesVod),
+	}
 }
 
 // scanBillingFeatures scans a JSONB column into BillingFeatures proto
@@ -333,11 +327,11 @@ func (s *PurserServer) markProviderIntentFailed(ctx context.Context, intentID, c
 	if cause != nil {
 		errMsg = code + ": " + cause.Error()
 	}
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE purser.payment_provider_intents
-		SET status = 'provider_call_failed', last_error = $1, updated_at = NOW()
-		WHERE id = $2
-	`, errMsg, intentID); err != nil {
+	if err := purserdb.New(s.db).SetProviderPaymentIntentFailure(ctx, purserdb.SetProviderPaymentIntentFailureParams{
+		Status:    "provider_call_failed",
+		LastError: sql.NullString{String: errMsg, Valid: true},
+		IntentID:  intentID,
+	}); err != nil {
 		s.logger.WithError(err).WithField("intent_id", intentID).Warn("Failed to mark payment_provider_intents failed")
 	}
 }
@@ -350,80 +344,33 @@ func (s *PurserServer) GetBillingTiers(ctx context.Context, req *purserpb.GetBil
 		return nil, status.Errorf(codes.InvalidArgument, "invalid cursor: %v", parseErr)
 	}
 
-	// Build query based on include_inactive
-	whereClause := "WHERE is_active = true"
-	args := []any{}
-	argIdx := 1
-	if req.GetIncludeInactive() {
-		whereClause = ""
-	}
-
-	// Build keyset query - for billing tiers we use (tier_level, id) for stable ordering
+	cursorID := uuid.Nil.String()
+	var cursorTierLevel int32
 	if params.Cursor != nil {
-		// Use cursor sort key as tier_level (encoded via EncodeCursorWithSortKey)
 		tierLevelKey := params.Cursor.GetSortKey()
-		if whereClause != "" {
-			whereClause += " AND"
-		} else {
-			whereClause = "WHERE"
+		if tierLevelKey < -2147483648 || tierLevelKey > 2147483647 {
+			return nil, status.Error(codes.InvalidArgument, "invalid cursor tier level")
 		}
-		// Direction-aware keyset condition
-		if params.Direction == pagination.Backward {
-			whereClause += fmt.Sprintf(" (tier_level, id) < ($%d, $%d)", argIdx, argIdx+1)
-		} else {
-			whereClause += fmt.Sprintf(" (tier_level, id) > ($%d, $%d)", argIdx, argIdx+1)
+		parsedID, parseIDErr := uuid.Parse(params.Cursor.ID)
+		if parseIDErr != nil {
+			return nil, status.Error(codes.InvalidArgument, "invalid cursor tier ID")
 		}
-		args = append(args, tierLevelKey, params.Cursor.ID)
-		argIdx += 2
+		cursorTierLevel = int32(tierLevelKey)
+		cursorID = parsedID.String()
 	}
 
-	// Direction-aware ORDER BY
-	orderDir := "ASC"
-	if params.Direction == pagination.Backward {
-		orderDir = "DESC"
-	}
-
-	query := fmt.Sprintf(`
-		SELECT id, tier_name, display_name, description, base_price, currency, billing_period,
-		       features, support_level, sla_level, metering_enabled,
-		       is_active, tier_level, is_enterprise,
-		       created_at, updated_at,
-		       COALESCE(is_default_prepaid, false), COALESCE(is_default_postpaid, false),
-		       processes_live, processes_dvr, processes_clip, processes_dvr_finalize, processes_vod
-		FROM purser.billing_tiers
-		%s
-		ORDER BY tier_level %s, id %s
-		LIMIT $%d
-	`, whereClause, orderDir, orderDir, argIdx)
-	args = append(args, params.Limit+1) // +1 to detect hasMore
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := purserdb.New(s.db).ListBillingTiers(ctx, purserdb.ListBillingTiersParams{
+		IncludeInactive: req.GetIncludeInactive(), HasCursor: params.Cursor != nil,
+		Backward: params.Direction == pagination.Backward, CursorTierLevel: cursorTierLevel,
+		CursorID: cursorID, ResultLimit: int32(params.Limit + 1),
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer func() { _ = rows.Close() }()
 
-	var tiers []*purserpb.BillingTier
-	for rows.Next() {
-		var tier purserpb.BillingTier
-		var createdAt, updatedAt time.Time
-		var features []byte
-		var processesLive, processesDVR, processesClip, processesDVRFinalize, processesVod sql.NullString
-
-		err := rows.Scan(
-			&tier.Id, &tier.TierName, &tier.DisplayName, &tier.Description,
-			&tier.BasePrice, &tier.Currency, &tier.BillingPeriod,
-			&features, &tier.SupportLevel, &tier.SlaLevel, &tier.MeteringEnabled,
-			&tier.IsActive, &tier.TierLevel, &tier.IsEnterprise,
-			&createdAt, &updatedAt,
-			&tier.IsDefaultPrepaid, &tier.IsDefaultPostpaid,
-			&processesLive, &processesDVR, &processesClip, &processesDVRFinalize, &processesVod,
-		)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "scan billing tier: %v", err)
-		}
-
-		tier.Features = scanBillingFeatures(features)
+	tiers := make([]*purserpb.BillingTier, 0, len(rows))
+	for _, row := range rows {
+		tier := billingTierFromListRow(row)
 		rules, rulesErr := loadTierPricingRules(ctx, s.db, tier.Id)
 		if rulesErr != nil {
 			return nil, status.Errorf(codes.Internal, "load pricing rules for tier %q: %v", tier.TierName, rulesErr)
@@ -434,27 +381,7 @@ func (s *PurserServer) GetBillingTiers(ctx context.Context, req *purserpb.GetBil
 			return nil, status.Errorf(codes.Internal, "load entitlements for tier %q: %v", tier.TierName, entsErr)
 		}
 		tier.Entitlements = ents
-		tier.CreatedAt = timestamppb.New(createdAt)
-		tier.UpdatedAt = timestamppb.New(updatedAt)
-		if processesLive.Valid {
-			tier.ProcessesLive = processesLive.String
-		}
-		if processesDVR.Valid {
-			tier.ProcessesDvr = processesDVR.String
-		}
-		if processesClip.Valid {
-			tier.ProcessesClip = processesClip.String
-		}
-		if processesDVRFinalize.Valid {
-			tier.ProcessesDvrFinalize = processesDVRFinalize.String
-		}
-		if processesVod.Valid {
-			tier.ProcessesVod = processesVod.String
-		}
-		tiers = append(tiers, &tier)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, status.Errorf(codes.Internal, "iterate billing tiers: %v", err)
+		tiers = append(tiers, tier)
 	}
 
 	// Determine pagination info
@@ -494,34 +421,18 @@ func (s *PurserServer) GetBillingTiers(ctx context.Context, req *purserpb.GetBil
 // consumers use this alongside tier rules so unpriced-but-itemized meters and
 // their physical units remain discoverable.
 func (s *PurserServer) ListMeterDefinitions(ctx context.Context, _ *emptypb.Empty) (*purserpb.ListMeterDefinitionsResponse, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT meter, unit, aggregation, display_name, allowed_dimensions, default_priceable
-		FROM purser.meter_definitions
-		WHERE active = TRUE
-		ORDER BY meter
-	`)
+	rows, err := purserdb.New(s.db).ListActiveMeterDefinitions(ctx)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "list meter definitions: %v", err)
 	}
-	defer func() { _ = rows.Close() }()
 
-	resp := &purserpb.ListMeterDefinitionsResponse{Meters: []*purserpb.MeterDefinition{}}
-	for rows.Next() {
-		definition := &purserpb.MeterDefinition{}
-		if scanErr := rows.Scan(
-			&definition.Meter,
-			&definition.Unit,
-			&definition.Aggregation,
-			&definition.DisplayName,
-			pq.Array(&definition.AllowedDimensions),
-			&definition.DefaultPriceable,
-		); scanErr != nil {
-			return nil, status.Errorf(codes.Internal, "scan meter definition: %v", scanErr)
-		}
-		resp.Meters = append(resp.Meters, definition)
-	}
-	if rowsErr := rows.Err(); rowsErr != nil {
-		return nil, status.Errorf(codes.Internal, "iterate meter definitions: %v", rowsErr)
+	resp := &purserpb.ListMeterDefinitionsResponse{Meters: make([]*purserpb.MeterDefinition, 0, len(rows))}
+	for _, row := range rows {
+		resp.Meters = append(resp.Meters, &purserpb.MeterDefinition{
+			Meter: row.Meter, Unit: row.Unit, Aggregation: row.Aggregation,
+			DisplayName: row.DisplayName, AllowedDimensions: row.AllowedDimensions,
+			DefaultPriceable: row.DefaultPriceable,
+		})
 	}
 	return resp, nil
 }
@@ -533,30 +444,11 @@ func (s *PurserServer) GetBillingTier(ctx context.Context, req *purserpb.GetBill
 		return nil, status.Error(codes.InvalidArgument, "tier_id required")
 	}
 
-	var tier purserpb.BillingTier
-	var createdAt, updatedAt time.Time
-	var features []byte
-	var processesLive, processesDVR, processesClip, processesDVRFinalize, processesVod sql.NullString
-
+	var row purserdb.GetBillingTierByIDRow
 	err := fwdb.RetryPostgres(ctx, fwdb.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		return s.db.QueryRowContext(ctx, `
-		SELECT id, tier_name, display_name, description, base_price, currency, billing_period,
-		       features, support_level, sla_level, metering_enabled,
-		       is_active, tier_level, is_enterprise,
-		       created_at, updated_at,
-		       COALESCE(is_default_prepaid, false), COALESCE(is_default_postpaid, false),
-		       processes_live, processes_dvr, processes_clip, processes_dvr_finalize, processes_vod
-		FROM purser.billing_tiers
-		WHERE id = $1
-	`, tierID).Scan(
-			&tier.Id, &tier.TierName, &tier.DisplayName, &tier.Description,
-			&tier.BasePrice, &tier.Currency, &tier.BillingPeriod,
-			&features, &tier.SupportLevel, &tier.SlaLevel, &tier.MeteringEnabled,
-			&tier.IsActive, &tier.TierLevel, &tier.IsEnterprise,
-			&createdAt, &updatedAt,
-			&tier.IsDefaultPrepaid, &tier.IsDefaultPostpaid,
-			&processesLive, &processesDVR, &processesClip, &processesDVRFinalize, &processesVod,
-		)
+		var queryErr error
+		row, queryErr = purserdb.New(s.db).GetBillingTierByID(ctx, tierID)
+		return queryErr
 	})
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -567,7 +459,7 @@ func (s *PurserServer) GetBillingTier(ctx context.Context, req *purserpb.GetBill
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	tier.Features = scanBillingFeatures(features)
+	tier := billingTierFromGetRow(row)
 	rules, rulesErr := loadTierPricingRules(ctx, s.db, tier.Id)
 	if rulesErr != nil {
 		return nil, status.Errorf(codes.Internal, "load pricing rules: %v", rulesErr)
@@ -578,25 +470,8 @@ func (s *PurserServer) GetBillingTier(ctx context.Context, req *purserpb.GetBill
 		return nil, status.Errorf(codes.Internal, "load entitlements: %v", entsErr)
 	}
 	tier.Entitlements = ents
-	tier.CreatedAt = timestamppb.New(createdAt)
-	tier.UpdatedAt = timestamppb.New(updatedAt)
-	if processesLive.Valid {
-		tier.ProcessesLive = processesLive.String
-	}
-	if processesDVR.Valid {
-		tier.ProcessesDvr = processesDVR.String
-	}
-	if processesClip.Valid {
-		tier.ProcessesClip = processesClip.String
-	}
-	if processesDVRFinalize.Valid {
-		tier.ProcessesDvrFinalize = processesDVRFinalize.String
-	}
-	if processesVod.Valid {
-		tier.ProcessesVod = processesVod.String
-	}
 
-	return &tier, nil
+	return tier, nil
 }
 
 // ============================================================================
@@ -612,134 +487,22 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *purserpb
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
-	var billingModel sql.NullString
-	var subscriptionStatus sql.NullString
-	var balanceCents sql.NullInt64
-	var reservedBalanceCents sql.NullInt64
-	var retentionRaw sql.NullString
-	var dvrEntitlements sql.NullString
-	var tierID sql.NullString
-	var billingPeriodStart sql.NullTime
-	var billingPeriodEnd sql.NullTime
-	var storageLimitRaw sql.NullString
-	var resourceLimitsRaw sql.NullString
-	var paymentMethod sql.NullString
-	var stripeSubscriptionID sql.NullString
-	var mollieSubscriptionID sql.NullString
-	var tierName sql.NullString
-
 	currency := billing.DefaultCurrency()
-
-	// Query subscription, prepaid balance, recording/DVR entitlements, storage
-	// cap, and Free-plan concurrent caps in one round-trip.
-	// Commodore's StartDVR + ValidateStreamKey both need these so this
-	// avoids per-call GetSubscription + GetBillingTier roundtrips.
+	var billingStatus purserdb.GetTenantBillingStatusRow
 	err := fwdb.RetryPostgres(ctx, fwdb.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		return s.db.QueryRowContext(ctx, `
-		SELECT
-			ts.billing_model,
-			ts.status,
-			pb.balance_cents,
-			reservations.reserved_balance_cents,
-			te.value::text,
-			dvr.entitlements::text,
-			ts.tier_id,
-			ts.billing_period_start,
-				ts.billing_period_end,
-				slg.value::text,
-				caps.entitlements::text,
-				ts.payment_method,
-				ts.stripe_subscription_id,
-				ts.mollie_subscription_id,
-				bt.tier_name
-		FROM purser.tenant_subscriptions ts
-		JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
-		LEFT JOIN purser.prepaid_balances pb
-			ON pb.tenant_id = ts.tenant_id AND pb.currency = $2
-		LEFT JOIN LATERAL (
-			SELECT CEIL(COALESCE(SUM(reserved_amount_micro), 0)::numeric / 10000)::bigint
-				AS reserved_balance_cents
-			FROM purser.usage_reservations
-			WHERE tenant_id = ts.tenant_id
-			  AND currency = $2
-			  AND updated_at >= NOW() - INTERVAL '3 minutes'
-		) reservations ON TRUE
-		LEFT JOIN LATERAL (
-			-- Precedence: subscription override (priority 1) deterministically
-			-- beats tier entitlement (priority 2) regardless of UNION ordering.
-			SELECT value FROM (
-				SELECT value, 1 AS priority FROM purser.subscription_entitlement_overrides
-				WHERE subscription_id = ts.id AND key = 'recording_retention_days'
-				UNION ALL
-				SELECT value, 2 AS priority FROM purser.tier_entitlements
-				WHERE tier_id = ts.tier_id AND key = 'recording_retention_days'
-			) src
-			ORDER BY priority
-			LIMIT 1
-		) te ON TRUE
-		LEFT JOIN LATERAL (
-			-- DVR policy keys aggregated into a single JSON object. Subscription
-			-- overrides win per-key over tier entitlements.
-			SELECT jsonb_object_agg(key, value) AS entitlements
-			FROM (
-				SELECT DISTINCT ON (key) key, value
-				FROM (
-					SELECT key, value, 1 AS priority
-					FROM purser.subscription_entitlement_overrides
-					WHERE subscription_id = ts.id AND key = ANY($3)
-					UNION ALL
-					SELECT key, value, 2 AS priority
-					FROM purser.tier_entitlements
-					WHERE tier_id = ts.tier_id AND key = ANY($3)
-				) all_e
-				ORDER BY key, priority
-			) merged
-		) dvr ON TRUE
-		LEFT JOIN LATERAL (
-			-- storage_limit_gb is the hard runtime cap on durable artifact bytes.
-			-- Same precedence as retention_days: subscription override beats tier.
-			SELECT value FROM (
-				SELECT value, 1 AS priority FROM purser.subscription_entitlement_overrides
-				WHERE subscription_id = ts.id AND key = 'storage_limit_gb'
-				UNION ALL
-				SELECT value, 2 AS priority FROM purser.tier_entitlements
-				WHERE tier_id = ts.tier_id AND key = 'storage_limit_gb'
-			) src
-			ORDER BY priority
-			LIMIT 1
-			) slg ON TRUE
-			LEFT JOIN LATERAL (
-				-- Free-plan concurrent caps are tenant-plan entitlements, not
-				-- media-cluster capacity. Subscription overrides can raise/lower
-				-- them per tenant; paid tiers omit the keys for unlimited.
-				SELECT jsonb_object_agg(key, value) AS entitlements
-				FROM (
-					SELECT DISTINCT ON (key) key, value
-					FROM (
-						SELECT key, value, 1 AS priority
-						FROM purser.subscription_entitlement_overrides
-						WHERE subscription_id = ts.id AND key = ANY($4)
-						UNION ALL
-						SELECT key, value, 2 AS priority
-						FROM purser.tier_entitlements
-						WHERE tier_id = ts.tier_id AND key = ANY($4)
-					) all_e
-					ORDER BY key, priority
-				) merged
-			) caps ON TRUE
-			WHERE ts.tenant_id = $1 AND ts.status != 'cancelled'
-			ORDER BY ts.created_at DESC
-			LIMIT 1
-		`, tenantID, currency, pq.StringArray{
-			"dvr_default_window_seconds",
-			"dvr_max_window_seconds",
-			"dvr_default_segment_duration_seconds",
-			"dvr_max_entries",
-			"dvr_allow_cluster_extension",
-		}, pq.StringArray{
-			"max_concurrent_streams",
-			"max_concurrent_viewers",
-		}).Scan(&billingModel, &subscriptionStatus, &balanceCents, &reservedBalanceCents, &retentionRaw, &dvrEntitlements, &tierID, &billingPeriodStart, &billingPeriodEnd, &storageLimitRaw, &resourceLimitsRaw, &paymentMethod, &stripeSubscriptionID, &mollieSubscriptionID, &tierName)
+		var queryErr error
+		billingStatus, queryErr = purserdb.New(s.db).GetTenantBillingStatus(ctx, purserdb.GetTenantBillingStatusParams{
+			TenantID: tenantID, Currency: currency, DvrKeys: []string{
+				"dvr_default_window_seconds",
+				"dvr_max_window_seconds",
+				"dvr_default_segment_duration_seconds",
+				"dvr_max_entries",
+				"dvr_allow_cluster_extension",
+			}, ResourceKeys: []string{
+				"max_concurrent_streams",
+				"max_concurrent_viewers",
+			}})
+		return queryErr
 	})
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -765,38 +528,40 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *purserpb
 
 	// Determine billing model (default to postpaid)
 	model := "postpaid"
-	if billingModel.Valid && billingModel.String != "" {
-		model = billingModel.String
+	if billingStatus.BillingModel != "" {
+		model = billingStatus.BillingModel
 	}
 
 	// Check if suspended (subscription status = 'suspended')
-	isSuspended := subscriptionStatus.Valid && subscriptionStatus.String == "suspended"
+	isSuspended := billingStatus.SubscriptionStatus == "suspended"
 
 	// Gate prepaid admission on available balance. The settled balance remains
 	// unchanged until finalized usage reaches the financial ledger.
 	isBalanceNegative := false
 	balance := int64(0)
 	reservedBalance := int64(0)
-	if balanceCents.Valid {
-		balance = balanceCents.Int64
+	if billingStatus.BalanceCents.Valid {
+		balance = billingStatus.BalanceCents.Int64
 	}
-	if reservedBalanceCents.Valid {
-		reservedBalance = reservedBalanceCents.Int64
-	}
+	reservedBalance = billingStatus.ReservedBalanceCents
 	availableBalance := balance - reservedBalance
 	if model == "prepaid" && availableBalance <= 0 {
 		isBalanceNegative = true
 	}
 	collectionProvider := ""
 	collectionReady := false
-	if paymentMethod.String == "stripe" && stripeSubscriptionID.Valid && stripeSubscriptionID.String != "" {
+	if billingStatus.PaymentMethod.String == "stripe" && billingStatus.StripeSubscriptionID.Valid && billingStatus.StripeSubscriptionID.String != "" {
 		collectionProvider = "stripe"
 		collectionReady = true
-	} else if paymentMethod.String == "mollie" && mollieSubscriptionID.Valid && mollieSubscriptionID.String != "" {
+	} else if billingStatus.PaymentMethod.String == "mollie" && billingStatus.MollieSubscriptionID.Valid && billingStatus.MollieSubscriptionID.String != "" {
 		collectionProvider = "mollie"
 		collectionReady = true
 	}
 
+	retentionRaw := sql.NullString{String: billingStatus.RetentionValue, Valid: billingStatus.RetentionValue != ""}
+	dvrEntitlements := sql.NullString{String: billingStatus.DvrEntitlements, Valid: billingStatus.DvrEntitlements != ""}
+	storageLimitRaw := sql.NullString{String: billingStatus.StorageLimitValue, Valid: billingStatus.StorageLimitValue != ""}
+	resourceLimitsRaw := sql.NullString{String: billingStatus.ResourceLimits, Valid: billingStatus.ResourceLimits != ""}
 	retentionDays := parseRetentionDays(retentionRaw)
 	dvrPolicy := parseDVRPolicy(dvrEntitlements)
 	// Stamp the tier cap onto DVRPolicy.recording_retention_days so any
@@ -814,10 +579,10 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *purserpb
 	}
 	var allowances []*meteringpb.MeterAllowance
 	var storagePricing *purserpb.StoragePricing
-	if tierID.Valid && tierID.String != "" {
-		periodStart, periodEnd := resolveCurrentPeriod(billingPeriodStart, billingPeriodEnd, time.Now().UTC())
-		allowances = s.computeAllowances(ctx, tenantID, tierID.String, periodStart, periodEnd)
-		storagePricing = s.loadStoragePricing(ctx, tierID.String)
+	if billingStatus.TierID != "" {
+		periodStart, periodEnd := resolveCurrentPeriod(billingStatus.BillingPeriodStart, billingStatus.BillingPeriodEnd, time.Now().UTC())
+		allowances = s.computeAllowances(ctx, tenantID, billingStatus.TierID, periodStart, periodEnd)
+		storagePricing = s.loadStoragePricing(ctx, billingStatus.TierID)
 	}
 
 	return &purserpb.GetTenantBillingStatusResponse{
@@ -835,7 +600,7 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *purserpb
 		StoragePricing:         storagePricing,
 		CollectionReady:        collectionReady,
 		CollectionProvider:     collectionProvider,
-		TierName:               tierName.String,
+		TierName:               billingStatus.TierName,
 	}, nil
 }
 
@@ -847,22 +612,7 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *purserpb
 // included allowance, so the catalog and the wire are in the same unit.
 func (s *PurserServer) loadStoragePricing(ctx context.Context, tierID string) *purserpb.StoragePricing {
 	const meter = "storage_gb_seconds_cold"
-	var (
-		included  float64
-		unitPrice float64
-		model     string
-		currency  string
-	)
-	err := s.db.QueryRowContext(ctx, `
-		SELECT
-		    COALESCE(tpr.included_quantity::double precision, 0),
-		    COALESCE(tpr.unit_price::double precision, 0),
-		    COALESCE(tpr.model, ''),
-		    COALESCE(bt.currency, '')
-		FROM purser.tier_pricing_rules tpr
-		JOIN purser.billing_tiers bt ON bt.id = tpr.tier_id
-		WHERE tpr.tier_id = $1 AND tpr.meter = $2
-	`, tierID, meter).Scan(&included, &unitPrice, &model, &currency)
+	row, err := purserdb.New(s.db).GetStoragePricing(ctx, purserdb.GetStoragePricingParams{TierID: tierID, Meter: meter})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -874,10 +624,10 @@ func (s *PurserServer) loadStoragePricing(ctx context.Context, tierID string) *p
 		return nil
 	}
 	return &purserpb.StoragePricing{
-		IncludedGbHours:    included,
-		UnitPricePerGbHour: unitPrice,
-		Currency:           currency,
-		Model:              model,
+		IncludedGbHours:    row.IncludedQuantity,
+		UnitPricePerGbHour: row.UnitPrice,
+		Currency:           row.Currency,
+		Model:              row.Model,
 	}
 }
 
@@ -954,18 +704,13 @@ func resolveCurrentPeriod(start, end sql.NullTime, now time.Time) (time.Time, ti
 func (s *PurserServer) computeAllowances(ctx context.Context, tenantID, tierID string, periodStart, periodEnd time.Time) []*meteringpb.MeterAllowance {
 	const meter = "delivered_minutes"
 
-	var included, unitPrice float64
-	var tierName string
+	var pricing purserdb.GetAllowancePricingRow
 	err := fwdb.RetryPostgres(ctx, fwdb.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		return s.db.QueryRowContext(ctx, `
-			SELECT
-			    tpr.included_quantity::double precision,
-			    tpr.unit_price::double precision,
-			    bt.tier_name
-			FROM purser.tier_pricing_rules tpr
-			JOIN purser.billing_tiers bt ON bt.id = tpr.tier_id
-			WHERE tpr.tier_id = $1 AND tpr.meter = $2
-		`, tierID, meter).Scan(&included, &unitPrice, &tierName)
+		var queryErr error
+		pricing, queryErr = purserdb.New(s.db).GetAllowancePricing(ctx, purserdb.GetAllowancePricingParams{
+			TierID: tierID, Meter: meter,
+		})
+		return queryErr
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
@@ -982,30 +727,13 @@ func (s *PurserServer) computeAllowances(ctx context.Context, tenantID, tierID s
 
 	var used float64
 	if err := fwdb.RetryPostgres(ctx, fwdb.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		return s.db.QueryRowContext(ctx, `
-			SELECT COALESCE(SUM(value), 0)::double precision
-			FROM (
-				SELECT usage_value::double precision AS value
-				FROM purser.usage_records
-				WHERE tenant_id = $1
-				  AND usage_type = 'delivered_minutes'
-				  AND value_kind = 'delta'
-				  AND granularity = 'minute_5'
-				  AND period_start < $3
-				  AND period_end > $2
-
-				UNION ALL
-
-				SELECT delta_value::double precision AS value
-				FROM purser.usage_adjustments
-				WHERE tenant_id = $4
-				  AND usage_type = 'delivered_minutes'
-				  AND value_kind = 'correction_delta'
-				  AND status = 'applied'
-				  AND period_start < $6
-				  AND period_end > $5
-			) allowance_usage
-		`, tenantID, periodStart, periodEnd, tenantID, periodStart, periodEnd).Scan(&used)
+		var queryErr error
+		used, queryErr = purserdb.New(s.db).SumAllowanceUsage(ctx, purserdb.SumAllowanceUsageParams{
+			TenantID: tenantID, Meter: meter,
+			PeriodStart: sql.NullTime{Time: periodStart, Valid: true},
+			PeriodEnd:   sql.NullTime{Time: periodEnd, Valid: true},
+		})
+		return queryErr
 	}); err != nil {
 		s.logger.WithFields(logging.Fields{
 			"tenant_id": tenantID,
@@ -1015,7 +743,7 @@ func (s *PurserServer) computeAllowances(ctx context.Context, tenantID, tierID s
 		return nil
 	}
 
-	remaining := included - used
+	remaining := pricing.IncludedQuantity - used
 	if remaining < 0 {
 		remaining = 0
 	}
@@ -1023,11 +751,11 @@ func (s *PurserServer) computeAllowances(ctx context.Context, tenantID, tierID s
 	return []*meteringpb.MeterAllowance{
 		{
 			Meter:      meter,
-			Included:   included,
+			Included:   pricing.IncludedQuantity,
 			Used:       used,
 			Remaining:  remaining,
-			Exhausted:  used >= included,
-			IsFreeTier: tierName == "free",
+			Exhausted:  used >= pricing.IncludedQuantity,
+			IsFreeTier: pricing.TierName == "free",
 		},
 	}
 }
@@ -1128,116 +856,44 @@ func (s *PurserServer) GetUsageRecords(ctx context.Context, req *purserpb.GetUsa
 		return nil, status.Errorf(codes.InvalidArgument, "invalid cursor: %v", err)
 	}
 
-	// Build WHERE clause over the user-facing canonical usage surface:
-	// minute_5 delta rows plus applied correction deltas.
-	args := []any{tenantID}
-	whereClause := "WHERE tenant_id = $1"
-	argIdx := 2
-
-	if req.GetClusterId() != "" {
-		whereClause += fmt.Sprintf(" AND cluster_id = $%d", argIdx)
-		args = append(args, req.GetClusterId())
-		argIdx++
+	queryParams := purserdb.ListUsageRecordsParams{
+		TenantID: tenantID, FilterCluster: req.GetClusterId() != "", ClusterID: req.GetClusterId(),
+		FilterUsageType: req.GetUsageType() != "", UsageType: req.GetUsageType(),
+		WindowStart: req.GetTimeRange().GetStart().AsTime(), WindowEnd: req.GetTimeRange().GetEnd().AsTime(),
+		HasCursor: params.Cursor != nil, Backward: params.Direction == pagination.Backward,
+		ResultLimit: int32(params.Limit + 1),
 	}
-	if req.GetUsageType() != "" {
-		whereClause += fmt.Sprintf(" AND usage_type = $%d", argIdx)
-		args = append(args, req.GetUsageType())
-		argIdx++
-	}
-	if req.GetTimeRange() != nil && req.GetTimeRange().GetStart() != nil && req.GetTimeRange().GetEnd() != nil {
-		start := req.GetTimeRange().GetStart().AsTime()
-		end := req.GetTimeRange().GetEnd().AsTime()
-		whereClause += fmt.Sprintf(" AND period_start < $%d AND period_end > $%d", argIdx, argIdx+1)
-		args = append(args, end, start)
-		argIdx += 2
-	}
-
-	orderExpr := "COALESCE(period_start, created_at)"
-
-	// Add cursor condition for keyset pagination (direction-aware)
 	if params.Cursor != nil {
-		if params.Direction == pagination.Backward {
-			whereClause += fmt.Sprintf(" AND (%s, id) > ($%d, $%d)", orderExpr, argIdx, argIdx+1)
-		} else {
-			whereClause += fmt.Sprintf(" AND (%s, id) < ($%d, $%d)", orderExpr, argIdx, argIdx+1)
-		}
-		args = append(args, params.Cursor.Timestamp, params.Cursor.ID)
-		argIdx += 2
+		queryParams.CursorAt = params.Cursor.Timestamp
+		queryParams.CursorID = params.Cursor.ID
 	}
-
-	// Direction-aware ORDER BY
-	orderDir := "DESC"
-	if params.Direction == pagination.Backward {
-		orderDir = "ASC"
-	}
-
-	// Get records with keyset pagination (including usage_details)
-	query := fmt.Sprintf(`
-		SELECT id, tenant_id, cluster_id, usage_type, usage_value, usage_details, created_at, period_start, period_end, granularity
-		FROM (
-			SELECT id, tenant_id, cluster_id, usage_type, usage_value, usage_details, created_at, period_start, period_end, granularity
-			FROM purser.usage_records
-			WHERE value_kind = 'delta' AND granularity = 'minute_5'
-
-			UNION ALL
-
-			SELECT id, tenant_id, NULLIF(cluster_id, '') AS cluster_id, usage_type, delta_value AS usage_value,
-			       details AS usage_details, created_at, period_start, period_end, 'minute_5' AS granularity
-			FROM purser.usage_adjustments
-			WHERE status = 'applied' AND value_kind = 'correction_delta'
-		) usage_surface
-		%s
-		ORDER BY %s %s, id %s
-		LIMIT $%d
-	`, whereClause, orderExpr, orderDir, orderDir, argIdx)
-	args = append(args, params.Limit+1) // +1 to detect hasMore
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := purserdb.New(s.db).ListUsageRecords(ctx, queryParams)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer func() { _ = rows.Close() }()
 
-	var records []*purserpb.UsageRecord
-	for rows.Next() {
-		var rec purserpb.UsageRecord
-		var clusterID sql.NullString
-		var usageDetailsBytes []byte
-		var createdAt time.Time
-		var periodStart, periodEnd sql.NullTime
-		var granularity sql.NullString
-
-		err := rows.Scan(&rec.Id, &rec.TenantId, &clusterID, &rec.UsageType, &rec.UsageValue, &usageDetailsBytes, &createdAt, &periodStart, &periodEnd, &granularity)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "scan usage record: %v", err)
+	records := make([]*purserpb.UsageRecord, 0, len(rows))
+	for _, row := range rows {
+		rec := &purserpb.UsageRecord{
+			Id: row.ID, TenantId: row.TenantID, ClusterId: row.ClusterID,
+			UsageType: row.UsageType, UsageValue: row.UsageValue, Granularity: row.Granularity,
 		}
-
-		if clusterID.Valid {
-			rec.ClusterId = clusterID.String
+		if row.CreatedAt.Valid {
+			rec.CreatedAt = timestamppb.New(row.CreatedAt.Time)
 		}
-		rec.CreatedAt = timestamppb.New(createdAt)
-		if periodStart.Valid {
-			rec.PeriodStart = timestamppb.New(periodStart.Time)
+		if row.PeriodStart.Valid {
+			rec.PeriodStart = timestamppb.New(row.PeriodStart.Time)
 		}
-		if periodEnd.Valid {
-			rec.PeriodEnd = timestamppb.New(periodEnd.Time)
+		if row.PeriodEnd.Valid {
+			rec.PeriodEnd = timestamppb.New(row.PeriodEnd.Time)
 		}
-		if granularity.Valid {
-			rec.Granularity = granularity.String
-		}
-
-		// Convert usage_details JSONB to protobuf Struct
-		if len(usageDetailsBytes) > 0 {
+		if len(row.UsageDetails) > 0 {
 			var detailsMap map[string]any
-			if json.Unmarshal(usageDetailsBytes, &detailsMap) == nil {
+			if json.Unmarshal(row.UsageDetails, &detailsMap) == nil {
 				rec.UsageDetails = mapToProtoStruct(detailsMap)
 			}
 		}
-
-		records = append(records, &rec)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, status.Errorf(codes.Internal, "iterate usage records: %v", err)
+		records = append(records, rec)
 	}
 
 	// Determine pagination info
@@ -1308,17 +964,8 @@ func (s *PurserServer) GetUsageAggregates(ctx context.Context, req *purserpb.Get
 	if granularity == "" {
 		granularity = "daily"
 	}
-	var bucketExpr, bucketInterval string
 	switch granularity {
-	case "hourly":
-		bucketExpr = "date_trunc('hour', period_start)"
-		bucketInterval = "INTERVAL '1 hour'"
-	case "daily":
-		bucketExpr = "date_trunc('day', period_start)"
-		bucketInterval = "INTERVAL '1 day'"
-	case "monthly":
-		bucketExpr = "date_trunc('month', period_start)"
-		bucketInterval = "INTERVAL '1 month'"
+	case "hourly", "daily", "monthly":
 	default:
 		return nil, status.Error(codes.InvalidArgument, "invalid granularity")
 	}
@@ -1326,81 +973,19 @@ func (s *PurserServer) GetUsageAggregates(ctx context.Context, req *purserpb.Get
 	start := req.GetTimeRange().GetStart().AsTime()
 	end := req.GetTimeRange().GetEnd().AsTime()
 
-	whereClause := "WHERE tenant_id = $1 AND period_start < $3 AND period_end > $2"
-	args := []any{tenantID, start, end}
-	argIdx := 4
-
-	if len(req.GetUsageTypes()) > 0 {
-		whereClause += fmt.Sprintf(" AND usage_type = ANY($%d)", argIdx)
-		args = append(args, pq.Array(req.GetUsageTypes()))
-		argIdx++
-	}
-	granularityArgIdx := argIdx
-
-	query := fmt.Sprintf(`
-		WITH bucketed AS (
-			SELECT
-				usage_type,
-				%s AS bucket_start,
-				usage_value
-			FROM (
-				SELECT tenant_id, usage_type, usage_value, period_start, period_end
-				FROM purser.usage_records
-				WHERE value_kind = 'delta' AND granularity = 'minute_5'
-
-				UNION ALL
-
-				SELECT tenant_id, usage_type, delta_value AS usage_value, period_start, period_end
-				FROM purser.usage_adjustments
-				WHERE status = 'applied' AND value_kind = 'correction_delta'
-			) usage_surface
-			%s
-		)
-		SELECT
-			usage_type,
-			bucket_start AS period_start,
-			bucket_start + %s AS period_end,
-			CASE
-				WHEN usage_type IN ('peak_bandwidth_mbps', 'max_viewers', 'total_streams', 'total_viewers', 'unique_users')
-					THEN MAX(usage_value)
-				ELSE GREATEST(SUM(usage_value), 0)
-			END AS usage_value,
-			$%d::text AS granularity
-		FROM bucketed
-		GROUP BY usage_type, bucket_start
-		ORDER BY bucket_start ASC, usage_type ASC
-	`, bucketExpr, whereClause, bucketInterval, granularityArgIdx)
-	args = append(args, granularity)
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := purserdb.New(s.db).ListUsageAggregates(ctx, purserdb.ListUsageAggregatesParams{
+		Granularity: granularity, TenantID: tenantID, WindowStart: start, WindowEnd: end,
+		FilterUsageTypes: len(req.GetUsageTypes()) > 0, UsageTypes: req.GetUsageTypes(),
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer func() { _ = rows.Close() }()
 
-	var aggregates []*purserpb.UsageAggregate
-	for rows.Next() {
-		var usageType, rowGranularity string
-		var usageValue float64
-		var periodStart, periodEnd sql.NullTime
-		if err := rows.Scan(&usageType, &periodStart, &periodEnd, &usageValue, &rowGranularity); err != nil {
-			return nil, status.Errorf(codes.Internal, "scan usage aggregate: %v", err)
-		}
-		agg := &purserpb.UsageAggregate{
-			UsageType:   usageType,
-			UsageValue:  usageValue,
-			Granularity: rowGranularity,
-		}
-		if periodStart.Valid {
-			agg.PeriodStart = timestamppb.New(periodStart.Time)
-		}
-		if periodEnd.Valid {
-			agg.PeriodEnd = timestamppb.New(periodEnd.Time)
-		}
+	aggregates := make([]*purserpb.UsageAggregate, 0, len(rows))
+	for _, row := range rows {
+		agg := &purserpb.UsageAggregate{UsageType: row.UsageType, UsageValue: row.UsageValue,
+			Granularity: row.Granularity, PeriodStart: timestamppb.New(row.PeriodStart), PeriodEnd: timestamppb.New(row.PeriodEnd)}
 		aggregates = append(aggregates, agg)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, status.Errorf(codes.Internal, "iterate usage aggregates: %v", err)
 	}
 
 	return &purserpb.GetUsageAggregatesResponse{Aggregates: aggregates}, nil
@@ -1443,19 +1028,11 @@ func (s *PurserServer) CheckUserLimit(ctx context.Context, req *purserpb.CheckUs
 	}
 
 	// Get tier limit
-	var maxUsers sql.NullInt32
-	err := s.db.QueryRowContext(ctx, `
-		SELECT t.max_users
-		FROM purser.tenant_subscriptions s
-		JOIN purser.billing_tiers t ON s.tier_id = t.id
-		WHERE s.tenant_id = $1 AND s.status = 'active'
-		ORDER BY s.created_at DESC
-		LIMIT 1
-	`, tenantID).Scan(&maxUsers)
+	maxUsersJSON, err := purserdb.New(s.db).GetActiveTenantMaxUsers(ctx, tenantID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		// No subscription, use default limit (10 for free tier)
-		maxUsers = sql.NullInt32{Int32: 10, Valid: true}
+		maxUsersJSON = "10"
 	} else if err != nil {
 		s.logger.WithFields(logging.Fields{
 			"tenant_id": tenantID,
@@ -1463,9 +1040,14 @@ func (s *PurserServer) CheckUserLimit(ctx context.Context, req *purserpb.CheckUs
 		}).Error("Failed to get tier limit")
 		return nil, status.Error(codes.Internal, "failed to read tier limit")
 	}
+	var maxUsers int32
+	if unmarshalErr := json.Unmarshal([]byte(maxUsersJSON), &maxUsers); unmarshalErr != nil || maxUsers < 0 {
+		s.logger.WithError(unmarshalErr).WithField("tenant_id", tenantID).Error("Invalid max_users entitlement")
+		return nil, status.Error(codes.Internal, "invalid user limit configuration")
+	}
 
-	// Unlimited if max_users is null or 0
-	if !maxUsers.Valid || maxUsers.Int32 == 0 {
+	// Unlimited if max_users is 0.
+	if maxUsers == 0 {
 		return &purserpb.CheckUserLimitResponse{
 			Allowed:      true,
 			CurrentUsers: currentUsers,
@@ -1473,11 +1055,11 @@ func (s *PurserServer) CheckUserLimit(ctx context.Context, req *purserpb.CheckUs
 		}, nil
 	}
 
-	allowed := currentUsers < maxUsers.Int32
+	allowed := currentUsers < maxUsers
 	resp := &purserpb.CheckUserLimitResponse{
 		Allowed:      allowed,
 		CurrentUsers: currentUsers,
-		MaxUsers:     maxUsers.Int32,
+		MaxUsers:     maxUsers,
 	}
 	if !allowed {
 		resp.Error = "User limit reached for your plan"
@@ -1497,42 +1079,7 @@ func (s *PurserServer) GetSubscription(ctx context.Context, req *purserpb.GetSub
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
-	var sub purserpb.TenantSubscription
-	var startedAt, createdAt, updatedAt time.Time
-	var trialEndsAt, nextBillingDate, cancelledAt sql.NullTime
-	var billingPeriodStart, billingPeriodEnd sql.NullTime
-	var billingEmail, paymentMethod, paymentReference, taxID sql.NullString
-	var taxRate sql.NullFloat64
-	var billingModel string
-	var stripeCustomerID, stripeSubscriptionID, stripeSubscriptionStatus, mollieSubscriptionID sql.NullString
-	var stripePeriodEnd sql.NullTime
-	var dunningAttempts sql.NullInt32
-	var pendingTierID, pendingReason sql.NullString
-	var pendingEffectiveAt sql.NullTime
-
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, tenant_id, tier_id, status, billing_email, started_at,
-		       trial_ends_at, next_billing_date, cancelled_at,
-		       billing_period_start, billing_period_end,
-		       payment_method, payment_reference, tax_id, tax_rate,
-		       billing_model,
-		       stripe_customer_id, stripe_subscription_id, stripe_subscription_status, stripe_current_period_end, dunning_attempts,
-		       mollie_subscription_id,
-		       pending_tier_id, pending_effective_at, pending_reason,
-		       created_at, updated_at
-		FROM purser.tenant_subscriptions
-		WHERE tenant_id = $1 AND status != 'cancelled'
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, tenantID).Scan(&sub.Id, &sub.TenantId, &sub.TierId, &sub.Status, &billingEmail,
-		&startedAt, &trialEndsAt, &nextBillingDate, &cancelledAt,
-		&billingPeriodStart, &billingPeriodEnd,
-		&paymentMethod, &paymentReference, &taxID, &taxRate,
-		&billingModel,
-		&stripeCustomerID, &stripeSubscriptionID, &stripeSubscriptionStatus, &stripePeriodEnd, &dunningAttempts,
-		&mollieSubscriptionID,
-		&pendingTierID, &pendingEffectiveAt, &pendingReason,
-		&createdAt, &updatedAt)
+	row, err := purserdb.New(s.db).GetCurrentTenantSubscription(ctx, tenantID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return &purserpb.GetSubscriptionResponse{
@@ -1543,67 +1090,7 @@ func (s *PurserServer) GetSubscription(ctx context.Context, req *purserpb.GetSub
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	sub.StartedAt = timestamppb.New(startedAt)
-	sub.CreatedAt = timestamppb.New(createdAt)
-	sub.UpdatedAt = timestamppb.New(updatedAt)
-	sub.BillingModel = billingModel
-	if billingEmail.Valid {
-		sub.BillingEmail = billingEmail.String
-	}
-	if trialEndsAt.Valid {
-		sub.TrialEndsAt = timestamppb.New(trialEndsAt.Time)
-	}
-	if nextBillingDate.Valid {
-		sub.NextBillingDate = timestamppb.New(nextBillingDate.Time)
-	}
-	if cancelledAt.Valid {
-		sub.CancelledAt = timestamppb.New(cancelledAt.Time)
-	}
-	if billingPeriodStart.Valid {
-		sub.BillingPeriodStart = timestamppb.New(billingPeriodStart.Time)
-	}
-	if billingPeriodEnd.Valid {
-		sub.BillingPeriodEnd = timestamppb.New(billingPeriodEnd.Time)
-	}
-	if paymentMethod.Valid {
-		sub.PaymentMethod = &paymentMethod.String
-	}
-	if paymentReference.Valid {
-		sub.PaymentReference = &paymentReference.String
-	}
-	if taxID.Valid {
-		sub.TaxId = &taxID.String
-	}
-	if taxRate.Valid {
-		sub.TaxRate = &taxRate.Float64
-	}
-	if stripeCustomerID.Valid {
-		sub.StripeCustomerId = &stripeCustomerID.String
-	}
-	if stripeSubscriptionID.Valid {
-		sub.StripeSubscriptionId = &stripeSubscriptionID.String
-	}
-	if stripeSubscriptionStatus.Valid {
-		sub.StripeSubscriptionStatus = &stripeSubscriptionStatus.String
-	}
-	if stripePeriodEnd.Valid {
-		sub.StripeCurrentPeriodEnd = timestamppb.New(stripePeriodEnd.Time)
-	}
-	if dunningAttempts.Valid {
-		sub.DunningAttempts = dunningAttempts.Int32
-	}
-	if mollieSubscriptionID.Valid {
-		sub.MollieSubscriptionId = &mollieSubscriptionID.String
-	}
-	if pendingTierID.Valid {
-		sub.PendingTierId = &pendingTierID.String
-	}
-	if pendingEffectiveAt.Valid {
-		sub.PendingEffectiveAt = timestamppb.New(pendingEffectiveAt.Time)
-	}
-	if pendingReason.Valid {
-		sub.PendingReason = &pendingReason.String
-	}
+	sub := tenantSubscriptionFromCurrentRow(row)
 
 	// Per-tenant override rows live in their own tables; load them so the
 	// returned subscription reflects the full effective state. Mutation
@@ -1620,8 +1107,79 @@ func (s *PurserServer) GetSubscription(ctx context.Context, req *purserpb.GetSub
 	}
 
 	return &purserpb.GetSubscriptionResponse{
-		Subscription: &sub,
+		Subscription: sub,
 	}, nil
+}
+
+func tenantSubscriptionFromCurrentRow(row purserdb.GetCurrentTenantSubscriptionRow) *purserpb.TenantSubscription {
+	sub := purserpb.TenantSubscription{
+		Id: row.ID.String(), TenantId: row.TenantID.String(), TierId: row.TierID.String(), Status: row.Status,
+		StartedAt: timestamppb.New(row.StartedAt), CreatedAt: timestamppb.New(row.CreatedAt.Time),
+		UpdatedAt: timestamppb.New(row.UpdatedAt.Time), BillingModel: row.BillingModel,
+		CustomFeatures: scanBillingFeatures([]byte(row.CustomFeaturesText)),
+		BillingAddress: scanBillingAddress([]byte(row.BillingAddressText)),
+	}
+	if row.BillingEmail.Valid {
+		sub.BillingEmail = row.BillingEmail.String
+	}
+	if row.TrialEndsAt.Valid {
+		sub.TrialEndsAt = timestamppb.New(row.TrialEndsAt.Time)
+	}
+	if row.NextBillingDate.Valid {
+		sub.NextBillingDate = timestamppb.New(row.NextBillingDate.Time)
+	}
+	if row.CancelledAt.Valid {
+		sub.CancelledAt = timestamppb.New(row.CancelledAt.Time)
+	}
+	if row.BillingPeriodStart.Valid {
+		sub.BillingPeriodStart = timestamppb.New(row.BillingPeriodStart.Time)
+	}
+	if row.BillingPeriodEnd.Valid {
+		sub.BillingPeriodEnd = timestamppb.New(row.BillingPeriodEnd.Time)
+	}
+	if row.PaymentMethod.Valid {
+		sub.PaymentMethod = &row.PaymentMethod.String
+	}
+	if row.PaymentReference.Valid {
+		sub.PaymentReference = &row.PaymentReference.String
+	}
+	if row.TaxID.Valid {
+		sub.TaxId = &row.TaxID.String
+	}
+	if row.TaxRate.Valid {
+		if taxRate, err := strconv.ParseFloat(row.TaxRate.String, 64); err == nil {
+			sub.TaxRate = &taxRate
+		}
+	}
+	if row.StripeCustomerID.Valid {
+		sub.StripeCustomerId = &row.StripeCustomerID.String
+	}
+	if row.StripeSubscriptionID.Valid {
+		sub.StripeSubscriptionId = &row.StripeSubscriptionID.String
+	}
+	if row.StripeSubscriptionStatus.Valid {
+		sub.StripeSubscriptionStatus = &row.StripeSubscriptionStatus.String
+	}
+	if row.StripeCurrentPeriodEnd.Valid {
+		sub.StripeCurrentPeriodEnd = timestamppb.New(row.StripeCurrentPeriodEnd.Time)
+	}
+	if row.DunningAttempts.Valid {
+		sub.DunningAttempts = row.DunningAttempts.Int32
+	}
+	if row.MollieSubscriptionID.Valid {
+		sub.MollieSubscriptionId = &row.MollieSubscriptionID.String
+	}
+	if row.PendingTierID.Valid {
+		value := row.PendingTierID.UUID.String()
+		sub.PendingTierId = &value
+	}
+	if row.PendingEffectiveAt.Valid {
+		sub.PendingEffectiveAt = timestamppb.New(row.PendingEffectiveAt.Time)
+	}
+	if row.PendingReason.Valid {
+		sub.PendingReason = &row.PendingReason.String
+	}
+	return &sub
 }
 
 // CreateSubscription creates a new subscription for a tenant
@@ -1636,8 +1194,7 @@ func (s *PurserServer) CreateSubscription(ctx context.Context, req *purserpb.Cre
 
 	userID := middleware.GetUserID(ctx)
 	// Verify tier exists
-	var tierExists bool
-	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM purser.billing_tiers WHERE id = $1 AND is_active = true)`, tierID).Scan(&tierExists)
+	tierExists, err := purserdb.New(s.db).ActiveBillingTierExists(ctx, tierID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to verify billing tier: %v", err)
 	}
@@ -1658,7 +1215,8 @@ func (s *PurserServer) CreateSubscription(ctx context.Context, req *purserpb.Cre
 	}
 
 	// Create subscription
-	subID := uuid.New().String()
+	subUUID := uuid.New()
+	subID := subUUID.String()
 	now := time.Now()
 
 	var trialEndsAt sql.NullTime
@@ -1684,14 +1242,15 @@ func (s *PurserServer) CreateSubscription(ctx context.Context, req *purserpb.Cre
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
 
-	if _, err = tx.ExecContext(ctx, `
-		INSERT INTO purser.tenant_subscriptions (
-			id, tenant_id, tier_id, status, billing_email, billing_model, started_at,
-			trial_ends_at, next_billing_date, billing_period_start, billing_period_end,
-			payment_method, custom_features, created_at, updated_at
-		)
-		VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8, $9, $10, $11, $12, $6, $6)
-	`, subID, tenantID, tierID, billingEmail, billingModel, now, trialEndsAt, periodEnd, periodStart, periodEnd, req.GetPaymentMethod(), fwdb.JSONText(featuresJSON)); err != nil {
+	if err = purserdb.New(tx).InsertTenantSubscription(ctx, purserdb.InsertTenantSubscriptionParams{
+		ID: subUUID, TenantID: tenantID, TierID: tierID,
+		BillingEmail: sql.NullString{String: billingEmail, Valid: true}, BillingModel: billingModel,
+		Now: now, TrialEndsAt: trialEndsAt,
+		NextBillingDate:    sql.NullTime{Time: periodEnd, Valid: true},
+		BillingPeriodStart: sql.NullTime{Time: periodStart, Valid: true},
+		BillingPeriodEnd:   sql.NullTime{Time: periodEnd, Valid: true},
+		PaymentMethod:      req.GetPaymentMethod(), CustomFeatures: featuresJSON,
+	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create subscription: %v", err)
 	}
 
@@ -1752,11 +1311,8 @@ func (s *PurserServer) UpdateSubscription(ctx context.Context, req *purserpb.Upd
 	// matches the current tier_id (idempotent re-state from callers); reject
 	// any mismatch.
 	if req.TierId != nil && *req.TierId != "" {
-		var currentTierID string
-		if scanErr := s.db.QueryRowContext(ctx,
-			`SELECT tier_id FROM purser.tenant_subscriptions WHERE tenant_id = $1`,
-			tenantID,
-		).Scan(&currentTierID); scanErr != nil {
+		currentTierID, scanErr := purserdb.New(s.db).GetTenantSubscriptionTierID(ctx, tenantID)
+		if scanErr != nil {
 			if errors.Is(scanErr, sql.ErrNoRows) {
 				return nil, status.Error(codes.NotFound, "subscription not found")
 			}
@@ -1767,40 +1323,32 @@ func (s *PurserServer) UpdateSubscription(ctx context.Context, req *purserpb.Upd
 		}
 	}
 
-	// Build dynamic update
-	updates := []string{"updated_at = NOW()"}
-	args := []any{}
-	argIdx := 1
-
+	update := purserdb.UpdateTenantSubscriptionFieldsParams{
+		TierID: uuid.Nil.String(), CustomFeatures: json.RawMessage("{}"), TenantID: tenantID,
+	}
 	if req.TierId != nil {
-		updates = append(updates, fmt.Sprintf("tier_id = $%d", argIdx))
-		args = append(args, *req.TierId)
-		argIdx++
+		update.SetTierID = true
+		update.TierID = *req.TierId
 	}
 	if req.BillingEmail != nil {
-		updates = append(updates, fmt.Sprintf("billing_email = $%d", argIdx))
-		args = append(args, *req.BillingEmail)
-		argIdx++
+		update.SetBillingEmail = true
+		update.BillingEmail = *req.BillingEmail
 	}
 	if req.PaymentMethod != nil {
-		updates = append(updates, fmt.Sprintf("payment_method = $%d", argIdx))
-		args = append(args, *req.PaymentMethod)
-		argIdx++
+		update.SetPaymentMethod = true
+		update.PaymentMethod = *req.PaymentMethod
 	}
 	if req.Status != nil {
-		updates = append(updates, fmt.Sprintf("status = $%d", argIdx))
-		args = append(args, *req.Status)
-		argIdx++
+		update.SetStatus = true
+		update.Status = *req.Status
 	}
 	if req.BillingPeriodStart != nil {
-		updates = append(updates, fmt.Sprintf("billing_period_start = $%d", argIdx))
-		args = append(args, req.BillingPeriodStart.AsTime())
-		argIdx++
+		update.SetBillingPeriodStart = true
+		update.BillingPeriodStart = sql.NullTime{Time: req.BillingPeriodStart.AsTime(), Valid: true}
 	}
 	if req.BillingPeriodEnd != nil {
-		updates = append(updates, fmt.Sprintf("billing_period_end = $%d", argIdx))
-		args = append(args, req.BillingPeriodEnd.AsTime())
-		argIdx++
+		update.SetBillingPeriodEnd = true
+		update.BillingPeriodEnd = sql.NullTime{Time: req.BillingPeriodEnd.AsTime(), Valid: true}
 	}
 
 	if req.CustomFeatures != nil {
@@ -1808,14 +1356,9 @@ func (s *PurserServer) UpdateSubscription(ctx context.Context, req *purserpb.Upd
 		if err != nil {
 			return nil, status.Errorf(codes.InvalidArgument, "invalid custom_features: %v", err)
 		}
-		updates = append(updates, fmt.Sprintf("custom_features = $%d", argIdx))
-		args = append(args, fwdb.JSONText(featuresJSON))
-		argIdx++
+		update.SetCustomFeatures = true
+		update.CustomFeatures = featuresJSON
 	}
-
-	query := fmt.Sprintf("UPDATE purser.tenant_subscriptions SET %s WHERE tenant_id = $%d AND status != 'cancelled'",
-		strings.Join(updates, ", "), argIdx)
-	args = append(args, tenantID)
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1823,13 +1366,9 @@ func (s *PurserServer) UpdateSubscription(ctx context.Context, req *purserpb.Upd
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
 
-	result, err := tx.ExecContext(ctx, query, args...)
+	rows, err := purserdb.New(tx).UpdateTenantSubscriptionFields(ctx, update)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update subscription: %v", err)
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "read update result: %v", err)
 	}
 	if rows == 0 {
 		return nil, status.Error(codes.NotFound, "subscription not found")
@@ -1838,25 +1377,12 @@ func (s *PurserServer) UpdateSubscription(ctx context.Context, req *purserpb.Upd
 		return nil, overrideErr
 	}
 
-	var (
-		updatedSubID, updatedStatus string
-		updatedPaymentMethod        sql.NullString
-	)
-	if scanErr := tx.QueryRowContext(ctx, `
-		SELECT id, status, COALESCE(payment_method, '')
-		FROM purser.tenant_subscriptions
-		WHERE tenant_id = $1 AND status != 'cancelled'
-		ORDER BY started_at DESC
-		LIMIT 1
-	`, tenantID).Scan(&updatedSubID, &updatedStatus, &updatedPaymentMethod); scanErr == nil && updatedSubID != "" {
-		paymentMethod := ""
-		if updatedPaymentMethod.Valid {
-			paymentMethod = updatedPaymentMethod.String
-		}
+	if eventState, scanErr := purserdb.New(tx).GetUpdatedSubscriptionEventState(ctx, tenantID); scanErr == nil {
+		updatedSubID := eventState.ID.String()
 		if _, enqErr := s.EnqueueBillingEventTx(ctx, tx, eventSubscriptionUpdated, tenantID, userID, "subscription", updatedSubID, &ipcpb.BillingEvent{
 			SubscriptionId: updatedSubID,
-			Status:         updatedStatus,
-			Provider:       paymentMethod,
+			Status:         eventState.Status,
+			Provider:       eventState.PaymentMethod,
 		}); enqErr != nil {
 			return nil, status.Errorf(codes.Internal, "enqueue subscription_updated: %v", enqErr)
 		}
@@ -1902,19 +1428,14 @@ func (s *PurserServer) applySubscriptionOverridesTx(ctx context.Context, tx *sql
 		return nil
 	}
 
-	var subscriptionID string
-	if err := tx.QueryRowContext(ctx,
-		`SELECT id FROM purser.tenant_subscriptions WHERE tenant_id = $1 AND status != 'cancelled' ORDER BY created_at DESC LIMIT 1`,
-		tenantID,
-	).Scan(&subscriptionID); err != nil {
+	queries := purserdb.New(tx)
+	subscriptionID, err := queries.GetActiveSubscriptionID(ctx, tenantID)
+	if err != nil {
 		return status.Errorf(codes.Internal, "lookup subscription id: %v", err)
 	}
 
 	if req.GetClearPricingOverrides() || len(req.GetPricingOverrides()) > 0 {
-		if _, err := tx.ExecContext(ctx,
-			`DELETE FROM purser.subscription_pricing_overrides WHERE subscription_id = $1`,
-			subscriptionID,
-		); err != nil {
+		if err := queries.DeleteSubscriptionPricingOverrides(ctx, subscriptionID); err != nil {
 			return status.Errorf(codes.Internal, "clear pricing overrides: %v", err)
 		}
 		for _, rule := range req.GetPricingOverrides() {
@@ -1922,32 +1443,17 @@ func (s *PurserServer) applySubscriptionOverridesTx(ctx context.Context, tx *sql
 				return status.Errorf(codes.InvalidArgument, "invalid pricing override %q: %v", rule.GetMeter(), err)
 			}
 			currency := normalizeOverrideCurrency(rule.GetCurrency())
-			if _, err := tx.ExecContext(ctx, `
-					INSERT INTO purser.subscription_pricing_overrides
-					    (subscription_id, meter, model, currency, included_quantity, unit_price, config)
-				VALUES ($1, $2, NULLIF($3, ''), NULLIF($4, ''),
-				        NULLIF($5, '')::NUMERIC, NULLIF($6, '')::NUMERIC,
-				        COALESCE(NULLIF($7, ''), '{}')::JSONB)
-				ON CONFLICT (subscription_id, meter) DO UPDATE SET
-				    model = EXCLUDED.model,
-				    currency = EXCLUDED.currency,
-				    included_quantity = EXCLUDED.included_quantity,
-				    unit_price = EXCLUDED.unit_price,
-				    config = EXCLUDED.config
-			`,
-				subscriptionID, rule.GetMeter(), rule.GetModel(), currency,
-				rule.GetIncludedQuantity(), rule.GetUnitPrice(), rule.GetConfigJson(),
-			); err != nil {
+			if err := queries.UpsertSubscriptionPricingOverride(ctx, purserdb.UpsertSubscriptionPricingOverrideParams{
+				SubscriptionID: subscriptionID, Meter: rule.GetMeter(), Model: rule.GetModel(), Currency: currency,
+				IncludedQuantity: rule.GetIncludedQuantity(), UnitPrice: rule.GetUnitPrice(), Config: rule.GetConfigJson(),
+			}); err != nil {
 				return status.Errorf(codes.Internal, "upsert pricing override %q: %v", rule.GetMeter(), err)
 			}
 		}
 	}
 
 	if req.GetClearEntitlementOverrides() || len(req.GetEntitlementOverrides()) > 0 {
-		if _, err := tx.ExecContext(ctx,
-			`DELETE FROM purser.subscription_entitlement_overrides WHERE subscription_id = $1`,
-			subscriptionID,
-		); err != nil {
+		if err := queries.DeleteSubscriptionEntitlementOverrides(ctx, subscriptionID); err != nil {
 			return status.Errorf(codes.Internal, "clear entitlement overrides: %v", err)
 		}
 		for k, v := range req.GetEntitlementOverrides() {
@@ -1957,11 +1463,9 @@ func (s *PurserServer) applySubscriptionOverridesTx(ctx context.Context, tx *sql
 			if !json.Valid([]byte(v)) {
 				return status.Errorf(codes.InvalidArgument, "entitlement override %q must be valid JSON", k)
 			}
-			if _, err := tx.ExecContext(ctx, `
-					INSERT INTO purser.subscription_entitlement_overrides (subscription_id, key, value)
-					VALUES ($1, $2, $3::JSONB)
-				ON CONFLICT (subscription_id, key) DO UPDATE SET value = EXCLUDED.value
-			`, subscriptionID, k, v); err != nil {
+			if err := queries.UpsertSubscriptionEntitlementOverride(ctx, purserdb.UpsertSubscriptionEntitlementOverrideParams{
+				SubscriptionID: subscriptionID, Key: k, Value: json.RawMessage(v),
+			}); err != nil {
 				return status.Errorf(codes.Internal, "upsert entitlement override %q: %v", k, err)
 			}
 		}
@@ -2060,10 +1564,9 @@ func (s *PurserServer) CancelSubscription(ctx context.Context, req *purserpb.Can
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
 
-	var subscriptionID string
-	if scanErr := tx.QueryRowContext(ctx, `
-		SELECT id FROM purser.tenant_subscriptions WHERE tenant_id = $1 AND status != 'cancelled'
-	`, tenantID).Scan(&subscriptionID); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+	queries := purserdb.New(tx)
+	subscriptionID, scanErr := queries.GetCancelableSubscriptionID(ctx, tenantID)
+	if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.Internal, "lookup subscription: %v", scanErr)
 	}
 
@@ -2071,39 +1574,26 @@ func (s *PurserServer) CancelSubscription(ctx context.Context, req *purserpb.Can
 	// closure, record the waiver explicitly before clearing it so the amount
 	// cannot disappear from financial reconciliation or strand a cancelled
 	// tenant with an unreachable carry balance.
-	if _, err = tx.ExecContext(ctx, `
-		INSERT INTO purser.billing_collection_writeoffs (tenant_id, currency, amount_cents, reason)
-		SELECT tenant_id, currency, balance_cents, 'account_closed'
-		FROM purser.billing_collection_balances
-		WHERE tenant_id = $1 AND balance_cents > 0
-	`, tenantID); err != nil {
+	if _, err = queries.RecordAccountClosureCollectionWriteoffs(ctx, tenantID); err != nil {
 		return nil, status.Errorf(codes.Internal, "record collection balance writeoff: %v", err)
 	}
-	if _, err = tx.ExecContext(ctx, `
-		UPDATE purser.billing_collection_balances
-		SET balance_cents = 0, updated_at = NOW()
-		WHERE tenant_id = $1 AND balance_cents > 0
-	`, tenantID); err != nil {
+	if _, err = queries.ClearAccountClosureCollectionBalances(ctx, tenantID); err != nil {
 		return nil, status.Errorf(codes.Internal, "clear written-off collection balance: %v", err)
 	}
 
-	result, err := tx.ExecContext(ctx, `
-		UPDATE purser.tenant_subscriptions
-		SET status = 'cancelled', cancelled_at = NOW(), updated_at = NOW()
-		WHERE tenant_id = $1 AND status != 'cancelled'
-	`, tenantID)
+	rows, err := queries.CancelTenantSubscriptions(ctx, tenantID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to cancel subscription: %v", err)
 	}
 
-	rows, _ := result.RowsAffected()
 	if rows == 0 {
 		return nil, status.Error(codes.NotFound, "subscription not found")
 	}
 
-	if subscriptionID != "" {
-		if _, enqErr := s.EnqueueBillingEventTx(ctx, tx, eventSubscriptionCanceled, tenantID, userID, "subscription", subscriptionID, &ipcpb.BillingEvent{
-			SubscriptionId: subscriptionID,
+	if subscriptionID != uuid.Nil {
+		subscriptionIDText := subscriptionID.String()
+		if _, enqErr := s.EnqueueBillingEventTx(ctx, tx, eventSubscriptionCanceled, tenantID, userID, "subscription", subscriptionIDText, &ipcpb.BillingEvent{
+			SubscriptionId: subscriptionIDText,
 			Status:         "cancelled",
 		}); enqErr != nil {
 			return nil, status.Errorf(codes.Internal, "enqueue subscription_canceled: %v", enqErr)
@@ -2134,32 +1624,11 @@ func (s *PurserServer) GetInvoice(ctx context.Context, req *purserpb.GetInvoiceR
 		return nil, status.Error(codes.PermissionDenied, "tenant context required")
 	}
 
-	var invoice purserpb.Invoice
-	var dueDate, createdAt, updatedAt time.Time
-	var paidAt sql.NullTime
-	var tierID string
-	var usageDetailsBytes []byte
-	var periodStart, periodEnd sql.NullTime
-
-	query := `
-		SELECT i.id, i.tenant_id, i.amount, i.base_amount, i.metered_amount, i.prepaid_credit_applied, i.currency, i.status,
-		       i.due_date, i.paid_at, i.usage_details, i.created_at, i.updated_at, s.tier_id,
-		       i.period_start, i.period_end, i.gross_metered_amount
-		FROM purser.billing_invoices i
-		LEFT JOIN purser.tenant_subscriptions s ON i.tenant_id = s.tenant_id AND s.status != 'cancelled'
-		WHERE i.id = $1`
-	args := []any{invoiceID}
-
-	if !isServiceCall {
-		query += " AND i.tenant_id = $2"
-		args = append(args, ctxTenantID)
-	}
-
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(
-		&invoice.Id, &invoice.TenantId, &invoice.Amount, &invoice.BaseAmount,
-		&invoice.MeteredAmount, &invoice.PrepaidCreditApplied, &invoice.Currency, &invoice.Status,
-		&dueDate, &paidAt, &usageDetailsBytes, &createdAt, &updatedAt, &tierID,
-		&periodStart, &periodEnd, &invoice.GrossMeteredAmount)
+	row, err := purserdb.New(s.db).GetInvoiceForCaller(ctx, purserdb.GetInvoiceForCallerParams{
+		InvoiceID:     invoiceID,
+		EnforceTenant: !isServiceCall,
+		TenantID:      ctxTenantID,
+	})
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "invoice not found")
@@ -2168,23 +1637,28 @@ func (s *PurserServer) GetInvoice(ctx context.Context, req *purserpb.GetInvoiceR
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	invoice.DueDate = timestamppb.New(dueDate)
-	invoice.CreatedAt = timestamppb.New(createdAt)
-	invoice.UpdatedAt = timestamppb.New(updatedAt)
-	if paidAt.Valid {
-		invoice.PaidAt = timestamppb.New(paidAt.Time)
+	invoice := purserpb.Invoice{
+		Id: row.ID, TenantId: row.TenantID, Amount: row.Amount,
+		BaseAmount: row.BaseAmount, MeteredAmount: row.MeteredAmount,
+		PrepaidCreditApplied: row.PrepaidCreditApplied, Currency: row.Currency,
+		Status: row.Status, DueDate: timestamppb.New(row.DueDate),
+		CreatedAt: timestamppb.New(row.CreatedAt.Time), UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
+		GrossMeteredAmount: row.GrossMeteredAmount,
 	}
-	if periodStart.Valid {
-		invoice.PeriodStart = timestamppb.New(periodStart.Time)
+	if row.PaidAt.Valid {
+		invoice.PaidAt = timestamppb.New(row.PaidAt.Time)
 	}
-	if periodEnd.Valid {
-		invoice.PeriodEnd = timestamppb.New(periodEnd.Time)
+	if row.PeriodStart.Valid {
+		invoice.PeriodStart = timestamppb.New(row.PeriodStart.Time)
+	}
+	if row.PeriodEnd.Valid {
+		invoice.PeriodEnd = timestamppb.New(row.PeriodEnd.Time)
 	}
 
 	// Convert usage_details JSONB to protobuf Struct.
-	if len(usageDetailsBytes) > 0 {
+	if len(row.UsageDetails) > 0 {
 		var detailsMap map[string]any
-		if json.Unmarshal(usageDetailsBytes, &detailsMap) == nil {
+		if json.Unmarshal(row.UsageDetails, &detailsMap) == nil {
 			invoice.UsageDetails = mapToProtoStruct(detailsMap)
 		}
 	}
@@ -2198,8 +1672,8 @@ func (s *PurserServer) GetInvoice(ctx context.Context, req *purserpb.GetInvoiceR
 	// the invoice was issued); other errors fail loud — a broken normalized
 	// pricing-rules table must not return a partial invoice with nil tier.
 	var tier *purserpb.BillingTier
-	if tierID != "" {
-		tierResp, tierErr := s.GetBillingTier(ctx, &purserpb.GetBillingTierRequest{TierId: tierID})
+	if row.TierID != "" {
+		tierResp, tierErr := s.GetBillingTier(ctx, &purserpb.GetBillingTierRequest{TierId: row.TierID})
 		switch {
 		case tierErr == nil:
 			tier = tierResp
@@ -2240,83 +1714,47 @@ func (s *PurserServer) ListInvoices(ctx context.Context, req *purserpb.ListInvoi
 		return nil, status.Errorf(codes.InvalidArgument, "invalid cursor: %v", err)
 	}
 
-	// Build query
-	whereClause := "WHERE tenant_id = $1"
-	args := []any{tenantID}
-	argIdx := 2
-
-	if req.Status != nil && *req.Status != "" {
-		whereClause += fmt.Sprintf(" AND status = $%d", argIdx)
-		args = append(args, *req.Status)
-		argIdx++
+	statusFilter := ""
+	if req.Status != nil {
+		statusFilter = strings.TrimSpace(*req.Status)
 	}
-
-	orderExpr := "COALESCE(period_start, created_at)"
-
-	// Direction-aware keyset condition
+	cursorAt := sql.NullTime{}
+	cursorID := uuid.Nil.String()
 	if params.Cursor != nil {
-		if params.Direction == pagination.Backward {
-			whereClause += fmt.Sprintf(" AND (%s, id) > ($%d, $%d)", orderExpr, argIdx, argIdx+1)
-		} else {
-			whereClause += fmt.Sprintf(" AND (%s, id) < ($%d, $%d)", orderExpr, argIdx, argIdx+1)
-		}
-		args = append(args, params.Cursor.Timestamp, params.Cursor.ID)
-		argIdx += 2
+		cursorAt = sql.NullTime{Time: params.Cursor.Timestamp, Valid: true}
+		cursorID = params.Cursor.ID
 	}
-
-	// Direction-aware ORDER BY
-	orderDir := "DESC"
-	if params.Direction == pagination.Backward {
-		orderDir = "ASC"
-	}
-
-	query := fmt.Sprintf(`
-		SELECT id, tenant_id, amount, base_amount, metered_amount, prepaid_credit_applied, currency, status,
-		       due_date, paid_at, usage_details, created_at, updated_at, period_start, period_end, gross_metered_amount
-		FROM purser.billing_invoices
-		%s
-		ORDER BY %s %s, id %s
-		LIMIT $%d
-	`, whereClause, orderExpr, orderDir, orderDir, argIdx)
-	args = append(args, params.Limit+1)
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := purserdb.New(s.db).ListInvoicesForTenant(ctx, purserdb.ListInvoicesForTenantParams{
+		TenantID: tenantID, FilterStatus: statusFilter != "", Status: statusFilter,
+		HasCursor: params.Cursor != nil, Backward: params.Direction == pagination.Backward,
+		CursorAt: cursorAt, CursorID: cursorID, ResultLimit: int32(params.Limit + 1),
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer func() { _ = rows.Close() }()
-
-	var invoices []*purserpb.Invoice
-	for rows.Next() {
-		var inv purserpb.Invoice
-		var dueDate, createdAt, updatedAt time.Time
-		var paidAt sql.NullTime
-		var usageDetails []byte
-		var periodStart, periodEnd sql.NullTime
-
-		err := rows.Scan(&inv.Id, &inv.TenantId, &inv.Amount, &inv.BaseAmount,
-			&inv.MeteredAmount, &inv.PrepaidCreditApplied, &inv.Currency, &inv.Status,
-			&dueDate, &paidAt, &usageDetails, &createdAt, &updatedAt, &periodStart, &periodEnd, &inv.GrossMeteredAmount)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "scan invoice row: %v", err)
+	invoices := make([]*purserpb.Invoice, 0, len(rows))
+	for _, row := range rows {
+		inv := purserpb.Invoice{
+			Id: row.ID, TenantId: row.TenantID, Amount: row.Amount,
+			BaseAmount: row.BaseAmount, MeteredAmount: row.MeteredAmount,
+			PrepaidCreditApplied: row.PrepaidCreditApplied, Currency: row.Currency,
+			Status: row.Status, DueDate: timestamppb.New(row.DueDate),
+			CreatedAt: timestamppb.New(row.CreatedAt.Time), UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
+			GrossMeteredAmount: row.GrossMeteredAmount,
 		}
-
-		inv.DueDate = timestamppb.New(dueDate)
-		inv.CreatedAt = timestamppb.New(createdAt)
-		inv.UpdatedAt = timestamppb.New(updatedAt)
-		if paidAt.Valid {
-			inv.PaidAt = timestamppb.New(paidAt.Time)
+		if row.PaidAt.Valid {
+			inv.PaidAt = timestamppb.New(row.PaidAt.Time)
 		}
-		if periodStart.Valid {
-			inv.PeriodStart = timestamppb.New(periodStart.Time)
+		if row.PeriodStart.Valid {
+			inv.PeriodStart = timestamppb.New(row.PeriodStart.Time)
 		}
-		if periodEnd.Valid {
-			inv.PeriodEnd = timestamppb.New(periodEnd.Time)
+		if row.PeriodEnd.Valid {
+			inv.PeriodEnd = timestamppb.New(row.PeriodEnd.Time)
 		}
 		// Convert usage_details JSONB to protobuf Struct.
-		if len(usageDetails) > 0 {
+		if len(row.UsageDetails) > 0 {
 			var details map[string]any
-			if json.Unmarshal(usageDetails, &details) == nil {
+			if json.Unmarshal(row.UsageDetails, &details) == nil {
 				inv.UsageDetails = mapToProtoStruct(details)
 			}
 		}
@@ -2326,9 +1764,6 @@ func (s *PurserServer) ListInvoices(ctx context.Context, req *purserpb.ListInvoi
 		}
 		inv.LineItems = lineItems
 		invoices = append(invoices, &inv)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, status.Errorf(codes.Internal, "iterate invoice rows: %v", err)
 	}
 
 	// Determine pagination info
@@ -2391,40 +1826,6 @@ type cryptoPaymentPlan struct {
 	Asset             string
 }
 
-type paymentRowScanner interface {
-	Scan(dest ...any) error
-}
-
-func scanInvoicePayment(row paymentRowScanner) (*purserpb.Payment, error) {
-	var payment purserpb.Payment
-	var txID sql.NullString
-	var confirmedAt sql.NullTime
-	var createdAt, updatedAt time.Time
-	if err := row.Scan(
-		&payment.Id,
-		&payment.InvoiceId,
-		&payment.Method,
-		&payment.Amount,
-		&payment.Currency,
-		&txID,
-		&payment.Status,
-		&confirmedAt,
-		&createdAt,
-		&updatedAt,
-	); err != nil {
-		return nil, err
-	}
-	if txID.Valid {
-		payment.TxId = txID.String
-	}
-	payment.CreatedAt = timestamppb.New(createdAt)
-	payment.UpdatedAt = timestamppb.New(updatedAt)
-	if confirmedAt.Valid {
-		payment.ConfirmedAt = timestamppb.New(confirmedAt.Time)
-	}
-	return &payment, nil
-}
-
 // GetPayment returns a tenant-owned invoice payment. Service callers may read
 // across tenants; user callers are always constrained by authenticated context.
 func (s *PurserServer) GetPayment(ctx context.Context, req *purserpb.GetPaymentRequest) (*purserpb.Payment, error) {
@@ -2438,23 +1839,25 @@ func (s *PurserServer) GetPayment(ctx context.Context, req *purserpb.GetPaymentR
 		return nil, status.Error(codes.PermissionDenied, "tenant context required")
 	}
 
-	query := `
-		SELECT bp.id, bp.invoice_id, bp.method, bp.amount, bp.currency,
-		       bp.tx_id, bp.status, bp.confirmed_at, bp.created_at, bp.updated_at
-		FROM purser.billing_payments bp
-		JOIN purser.billing_invoices bi ON bi.id = bp.invoice_id
-		WHERE bp.id = $1`
-	args := []any{paymentID}
-	if !isServiceCall {
-		query += " AND bi.tenant_id = $2"
-		args = append(args, ctxTenantID)
-	}
-	payment, err := scanInvoicePayment(s.db.QueryRowContext(ctx, query, args...))
+	row, err := purserdb.New(s.db).GetInvoicePaymentForCaller(ctx, purserdb.GetInvoicePaymentForCallerParams{
+		PaymentID: paymentID, EnforceTenant: !isServiceCall, TenantID: ctxTenantID,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "payment not found")
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "get payment: %v", err)
+	}
+	payment := &purserpb.Payment{
+		Id: row.ID, InvoiceId: row.InvoiceID, Method: row.Method,
+		Amount: row.Amount, Currency: row.Currency, Status: row.Status,
+		CreatedAt: timestamppb.New(row.CreatedAt.Time), UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
+	}
+	if row.TxID.Valid {
+		payment.TxId = row.TxID.String
+	}
+	if row.ConfirmedAt.Valid {
+		payment.ConfirmedAt = timestamppb.New(row.ConfirmedAt.Time)
 	}
 	return payment, nil
 }
@@ -2481,66 +1884,60 @@ func (s *PurserServer) ListPayments(ctx context.Context, req *purserpb.ListPayme
 		return nil, status.Errorf(codes.InvalidArgument, "invalid cursor: %v", parseErr)
 	}
 
-	where := "WHERE bi.tenant_id = $1"
-	args := []any{tenantID}
-	argIdx := 2
-	appendFilter := func(column string, value *string) {
-		if value != nil && strings.TrimSpace(*value) != "" {
-			where += fmt.Sprintf(" AND %s = $%d", column, argIdx)
-			args = append(args, strings.TrimSpace(*value))
-			argIdx++
-		}
+	invoiceFilter, statusFilter, methodFilter := "", "", ""
+	if req.InvoiceId != nil {
+		invoiceFilter = strings.TrimSpace(*req.InvoiceId)
 	}
-	appendFilter("bp.invoice_id::text", req.InvoiceId)
-	appendFilter("bp.status", req.Status)
-	appendFilter("bp.method", req.Method)
-
-	var totalCount int32
-	if countErr := s.db.QueryRowContext(ctx, `
-		SELECT COUNT(*)
-		FROM purser.billing_payments bp
-		JOIN purser.billing_invoices bi ON bi.id = bp.invoice_id
-		`+where, args...).Scan(&totalCount); countErr != nil {
+	if req.Status != nil {
+		statusFilter = strings.TrimSpace(*req.Status)
+	}
+	if req.Method != nil {
+		methodFilter = strings.TrimSpace(*req.Method)
+	}
+	queries := purserdb.New(s.db)
+	filterParams := purserdb.CountInvoicePaymentsForTenantParams{
+		TenantID: tenantID, FilterInvoice: invoiceFilter != "", InvoiceID: invoiceFilter,
+		FilterStatus: statusFilter != "", Status: statusFilter,
+		FilterMethod: methodFilter != "", Method: methodFilter,
+	}
+	totalRows, countErr := queries.CountInvoicePaymentsForTenant(ctx, filterParams)
+	if countErr != nil {
 		return nil, status.Errorf(codes.Internal, "count payments: %v", countErr)
 	}
-
+	totalCount := int32(totalRows)
+	if totalRows > int64(^uint32(0)>>1) {
+		totalCount = int32(^uint32(0) >> 1)
+	}
+	cursorAt := sql.NullTime{}
+	cursorID := uuid.Nil.String()
 	if params.Cursor != nil {
-		op := "<"
-		if params.Direction == pagination.Backward {
-			op = ">"
-		}
-		where += fmt.Sprintf(" AND (bp.created_at, bp.id) %s ($%d, $%d)", op, argIdx, argIdx+1)
-		args = append(args, params.Cursor.Timestamp, params.Cursor.ID)
-		argIdx += 2
+		cursorAt = sql.NullTime{Time: params.Cursor.Timestamp, Valid: true}
+		cursorID = params.Cursor.ID
 	}
-	orderDir := "DESC"
-	if params.Direction == pagination.Backward {
-		orderDir = "ASC"
-	}
-	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
-		SELECT bp.id, bp.invoice_id, bp.method, bp.amount, bp.currency,
-		       bp.tx_id, bp.status, bp.confirmed_at, bp.created_at, bp.updated_at
-		FROM purser.billing_payments bp
-		JOIN purser.billing_invoices bi ON bi.id = bp.invoice_id
-		%s
-		ORDER BY bp.created_at %s, bp.id %s
-		LIMIT $%d
-	`, where, orderDir, orderDir, argIdx), append(args, params.Limit+1)...)
+	rows, err := queries.ListInvoicePaymentsForTenant(ctx, purserdb.ListInvoicePaymentsForTenantParams{
+		TenantID: tenantID, FilterInvoice: invoiceFilter != "", InvoiceID: invoiceFilter,
+		FilterStatus: statusFilter != "", Status: statusFilter,
+		FilterMethod: methodFilter != "", Method: methodFilter,
+		HasCursor: params.Cursor != nil, Backward: params.Direction == pagination.Backward,
+		CursorAt: cursorAt, CursorID: cursorID, ResultLimit: int32(params.Limit + 1),
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "list payments: %v", err)
 	}
-	defer func() { _ = rows.Close() }()
-
 	payments := make([]*purserpb.Payment, 0, params.Limit+1)
-	for rows.Next() {
-		payment, scanErr := scanInvoicePayment(rows)
-		if scanErr != nil {
-			return nil, status.Errorf(codes.Internal, "scan payment: %v", scanErr)
+	for _, row := range rows {
+		payment := &purserpb.Payment{
+			Id: row.ID, InvoiceId: row.InvoiceID, Method: row.Method,
+			Amount: row.Amount, Currency: row.Currency, Status: row.Status,
+			CreatedAt: timestamppb.New(row.CreatedAt.Time), UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
+		}
+		if row.TxID.Valid {
+			payment.TxId = row.TxID.String
+		}
+		if row.ConfirmedAt.Valid {
+			payment.ConfirmedAt = timestamppb.New(row.ConfirmedAt.Time)
 		}
 		payments = append(payments, payment)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, status.Errorf(codes.Internal, "iterate payments: %v", err)
 	}
 	resultsLen := len(payments)
 	if resultsLen > params.Limit {
@@ -2669,11 +2066,15 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *purserpb.PaymentR
 		txID = details.WalletAddress
 	}
 
-	if _, err = dbTx.ExecContext(ctx, `
-		INSERT INTO purser.billing_payments
-			(id, invoice_id, method, amount, currency, tx_id, status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4::numeric, $5, NULLIF($6, ''), 'pending', $7, $7)
-	`, paymentID, invoiceID, method, balance.AmountDue.StringFixed(2), balance.Currency, txID, createdAt); err != nil {
+	if err = purserdb.New(dbTx).CreatePendingInvoicePayment(ctx, purserdb.CreatePendingInvoicePaymentParams{
+		PaymentID: paymentID,
+		InvoiceID: invoiceID,
+		Method:    method,
+		Amount:    balance.AmountDue.StringFixed(2),
+		Currency:  balance.Currency,
+		TxID:      txID,
+		CreatedAt: sql.NullTime{Time: createdAt, Valid: true},
+	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "store pending payment: %v", err)
 	}
 	if _, err = s.EnqueueBillingEventTx(ctx, dbTx, eventPaymentCreated, ctxTenantID, userID, "payment", paymentID, &ipcpb.BillingEvent{
@@ -2732,8 +2133,7 @@ func (s *PurserServer) getAvailablePaymentMethods(ctx context.Context) []string 
 }
 
 func (s *PurserServer) hasHDWalletXpub(ctx context.Context) bool {
-	var xpub string
-	err := s.db.QueryRowContext(ctx, `SELECT xpub FROM purser.hd_wallet_state WHERE id = 1`).Scan(&xpub)
+	xpub, err := purserdb.New(s.db).GetHDWalletXpub(ctx)
 	if err != nil {
 		s.logger.WithError(err).Debug("Failed to read hd_wallet_state")
 		return false
@@ -2770,23 +2170,18 @@ func (s *PurserServer) cryptoDepositReadiness(ctx context.Context) error {
 					return err
 				}
 			}
-			var scannedAt sql.NullTime
-			var lastError sql.NullString
-			var lag sql.NullInt64
-			if err := s.db.QueryRowContext(ctx, `
-				SELECT scanned_at, last_error, lag_blocks
-				FROM purser.crypto_scan_cursors WHERE network = $1
-			`, network.Name).Scan(&scannedAt, &lastError, &lag); err != nil {
+			readiness, err := purserdb.New(s.db).GetCryptoScannerReadiness(ctx, network.Name)
+			if err != nil {
 				return fmt.Errorf("crypto scanner for %s has no readiness state: %w", network.Name, err)
 			}
-			if !scannedAt.Valid || time.Since(scannedAt.Time) > time.Minute {
+			if !readiness.ScannedAt.Valid || time.Since(readiness.ScannedAt.Time) > time.Minute {
 				return fmt.Errorf("crypto scanner for %s has not committed a batch in the last minute", network.Name)
 			}
-			if lastError.Valid && strings.TrimSpace(lastError.String) != "" {
-				return fmt.Errorf("crypto scanner for %s is unhealthy: %s", network.Name, lastError.String)
+			if readiness.LastError.Valid && strings.TrimSpace(readiness.LastError.String) != "" {
+				return fmt.Errorf("crypto scanner for %s is unhealthy: %s", network.Name, readiness.LastError.String)
 			}
-			if lag.Valid && lag.Int64 > 500 {
-				return fmt.Errorf("crypto scanner for %s is %d blocks behind", network.Name, lag.Int64)
+			if readiness.LagBlocks.Valid && readiness.LagBlocks.Int64 > 500 {
+				return fmt.Errorf("crypto scanner for %s is %d blocks behind", network.Name, readiness.LagBlocks.Int64)
 			}
 		}
 	}
@@ -2924,15 +2319,11 @@ func withPaymentQuery(rawURL, status string) (string, error) {
 }
 
 func (s *PurserServer) attachCardCheckoutToPayment(ctx context.Context, paymentID, providerID, paymentURL string) error {
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE purser.billing_payments
-		SET tx_id = $2, payment_url = $3, updated_at = NOW()
-		WHERE id = $1 AND status = 'pending'
-	`, paymentID, providerID, paymentURL)
-	if err != nil {
-		return err
-	}
-	rows, err := result.RowsAffected()
+	rows, err := purserdb.New(s.db).AttachCardCheckoutToPendingPayment(ctx, purserdb.AttachCardCheckoutToPendingPaymentParams{
+		ProviderID: sql.NullString{String: providerID, Valid: true},
+		PaymentUrl: sql.NullString{String: paymentURL, Valid: true},
+		PaymentID:  paymentID,
+	})
 	if err != nil {
 		return err
 	}
@@ -2943,17 +2334,12 @@ func (s *PurserServer) attachCardCheckoutToPayment(ctx context.Context, paymentI
 }
 
 func (s *PurserServer) markPaymentFailed(ctx context.Context, paymentID string) error {
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE purser.billing_payments
-		SET status = 'failed', updated_at = NOW()
-		WHERE id = $1 AND status = 'pending'
-	`, paymentID)
+	_, err := purserdb.New(s.db).MarkPendingInvoicePaymentFailed(ctx, paymentID)
 	return err
 }
 
 func lockInvoicePaymentTx(ctx context.Context, tx *sql.Tx, invoiceID string) error {
-	_, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, invoiceID)
-	return err
+	return purserdb.New(tx).LockInvoicePaymentCreation(ctx, invoiceID)
 }
 
 type invoiceBalance struct {
@@ -2964,33 +2350,18 @@ type invoiceBalance struct {
 }
 
 func loadInvoiceBalanceTx(ctx context.Context, tx *sql.Tx, invoiceID, tenantID string) (*invoiceBalance, error) {
-	var totalText, currency, storedTenantID string
-	if err := tx.QueryRowContext(ctx, `
-		SELECT tenant_id::text, amount::text, currency
-		FROM purser.billing_invoices
-		WHERE id = $1 AND tenant_id = $2 AND status IN ('pending', 'overdue')
-		FOR UPDATE
-	`, invoiceID, tenantID).Scan(&storedTenantID, &totalText, &currency); err != nil {
+	row, err := purserdb.New(tx).GetPayableInvoiceBalance(ctx, purserdb.GetPayableInvoiceBalanceParams{
+		InvoiceID: invoiceID,
+		TenantID:  tenantID,
+	})
+	if err != nil {
 		return nil, err
 	}
-
-	var netPaidText string
-	if err := tx.QueryRowContext(ctx, `
-		SELECT COALESCE(SUM(bp.amount - (COALESCE(bp.reversed_amount_cents, 0)::numeric / 100)), 0)::text
-		FROM purser.billing_payments bp
-		JOIN purser.billing_invoices bi ON bi.id = bp.invoice_id
-		WHERE bp.invoice_id = $1
-		  AND bi.tenant_id = $2
-		  AND bp.status = 'confirmed'
-		  AND bp.currency = bi.currency
-	`, invoiceID, tenantID).Scan(&netPaidText); err != nil {
-		return nil, err
-	}
-	total, err := decimal.NewFromString(totalText)
+	total, err := decimal.NewFromString(row.TotalAmount)
 	if err != nil {
 		return nil, fmt.Errorf("parse invoice total: %w", err)
 	}
-	netPaid, err := decimal.NewFromString(netPaidText)
+	netPaid, err := decimal.NewFromString(row.NetPaid)
 	if err != nil {
 		return nil, fmt.Errorf("parse confirmed payment total: %w", err)
 	}
@@ -3000,8 +2371,8 @@ func loadInvoiceBalanceTx(ctx context.Context, tx *sql.Tx, invoiceID, tenantID s
 	}
 	return &invoiceBalance{
 		InvoiceID: invoiceID,
-		TenantID:  storedTenantID,
-		Currency:  currency,
+		TenantID:  row.TenantID,
+		Currency:  row.Currency,
 		AmountDue: amountDue,
 	}, nil
 }
@@ -3023,25 +2394,22 @@ type activeInvoicePayment struct {
 }
 
 func loadActiveInvoicePaymentTx(ctx context.Context, tx *sql.Tx, invoiceID, tenantID string) (*activeInvoicePayment, error) {
-	var p activeInvoicePayment
-	var amountText string
-	err := tx.QueryRowContext(ctx, `
-		SELECT bp.id, bp.method, bp.amount::text, bp.currency, bp.tx_id, bp.payment_url, bp.created_at,
-		       COUNT(*) OVER ()
-		FROM purser.billing_payments bp
-		JOIN purser.billing_invoices bi ON bi.id = bp.invoice_id
-		WHERE bp.invoice_id = $1 AND bi.tenant_id = $2 AND bp.status = 'pending'
-		ORDER BY bp.created_at DESC
-		LIMIT 1
-	`, invoiceID, tenantID).Scan(&p.ID, &p.Method, &amountText, &p.Currency, &p.TxID, &p.URL, &p.CreatedAt, &p.ActiveCount)
+	row, err := purserdb.New(tx).GetActiveInvoicePayment(ctx, purserdb.GetActiveInvoicePaymentParams{
+		InvoiceID: invoiceID,
+		TenantID:  tenantID,
+	})
 	if err != nil {
 		return nil, err
 	}
-	p.Amount, err = decimal.NewFromString(amountText)
+	amount, err := decimal.NewFromString(row.Amount)
 	if err != nil {
 		return nil, fmt.Errorf("parse pending payment amount: %w", err)
 	}
-	return &p, nil
+	return &activeInvoicePayment{
+		ID: row.ID, Method: row.Method, Amount: amount, Currency: row.Currency,
+		TxID: row.TxID, URL: row.PaymentUrl, CreatedAt: row.CreatedAt.Time,
+		ActiveCount: int(row.ActiveCount),
+	}, nil
 }
 
 func (s *PurserServer) resumeInvoicePayment(ctx context.Context, req *purserpb.PaymentRequest, balance *invoiceBalance, payment *activeInvoicePayment) (*purserpb.PaymentResponse, error) {
@@ -3099,18 +2467,10 @@ func (s *PurserServer) expireStaleInvoicePayments(ctx context.Context, invoiceID
 			return err
 		}
 	}
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE purser.billing_payments bp
-		SET status = 'failed', updated_at = NOW()
-		FROM purser.billing_invoices bi
-		WHERE bp.invoice_id = bi.id
-		  AND bp.invoice_id = $1
-		  AND bi.tenant_id = $2
-		  AND bp.method = 'card'
-		  AND bp.status = 'pending'
-		  AND bp.created_at <= NOW() - INTERVAL '24 hours'
-	`, invoiceID, tenantID)
-	return err
+	return purserdb.New(s.db).ExpireStaleCardInvoicePayments(ctx, purserdb.ExpireStaleCardInvoicePaymentsParams{
+		InvoiceID: invoiceID,
+		TenantID:  tenantID,
+	})
 }
 
 func (s *PurserServer) expireStaleInvoiceCryptoPayments(ctx context.Context, invoiceID, tenantID, asset, method string) error {
@@ -3127,33 +2487,15 @@ func (s *PurserServer) expireStaleInvoiceCryptoPayments(ctx context.Context, inv
 		}
 	}()
 
-	if _, err = tx.ExecContext(ctx, `
-		UPDATE purser.billing_payments bp
-		SET status = 'failed', updated_at = NOW()
-		FROM purser.crypto_wallets cw
-		WHERE bp.invoice_id = cw.invoice_id
-		  AND bp.tx_id = cw.wallet_address
-		  AND bp.method = $4
-		  AND bp.status = 'pending'
-		  AND cw.invoice_id = $1
-		  AND cw.tenant_id = $2
-		  AND cw.asset = $3
-		  AND cw.purpose = 'invoice'
-		  AND cw.status IN ('pending', 'confirming')
-		  AND cw.expires_at <= NOW()
-	`, invoiceID, tenantID, asset, method); err != nil {
+	queries := purserdb.New(tx)
+	if err = queries.FailExpiredCryptoInvoicePayments(ctx, purserdb.FailExpiredCryptoInvoicePaymentsParams{
+		Method: method, InvoiceID: invoiceID, TenantID: tenantID, Asset: asset,
+	}); err != nil {
 		return fmt.Errorf("expire payment rows: %w", err)
 	}
-	if _, err = tx.ExecContext(ctx, `
-		UPDATE purser.crypto_wallets
-		SET status = 'expired', updated_at = NOW()
-		WHERE invoice_id = $1
-		  AND tenant_id = $2
-		  AND asset = $3
-		  AND purpose = 'invoice'
-		  AND status IN ('pending', 'confirming')
-		  AND expires_at <= NOW()
-	`, invoiceID, tenantID, asset); err != nil {
+	if err = queries.ExpireCryptoInvoiceWallets(ctx, purserdb.ExpireCryptoInvoiceWalletsParams{
+		InvoiceID: invoiceID, TenantID: tenantID, Asset: asset,
+	}); err != nil {
 		return fmt.Errorf("expire wallet rows: %w", err)
 	}
 	if err = tx.Commit(); err != nil {
@@ -3251,42 +2593,20 @@ func (s *PurserServer) createCryptoPaymentTx(ctx context.Context, dbTx *sql.Tx, 
 }
 
 func (s *PurserServer) loadInvoiceCryptoPaymentQuote(ctx context.Context, invoiceID, tenantID, asset string) (*cryptoPaymentQuoteDetails, error) {
-	return loadInvoiceCryptoPaymentQuoteFrom(ctx, s.db, invoiceID, tenantID, asset)
-}
-
-type rowQuerier interface {
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
-
-func loadInvoiceCryptoPaymentQuoteFrom(ctx context.Context, q rowQuerier, invoiceID, tenantID, asset string) (*cryptoPaymentQuoteDetails, error) {
-	var details cryptoPaymentQuoteDetails
-	err := q.QueryRowContext(ctx, `
-		SELECT wallet_address, expected_amount_base_units::text, quoted_price_usd::text,
-		       quote_source, asset, network, quoted_at, expires_at
-		FROM purser.crypto_wallets
-		WHERE invoice_id = $1
-		  AND tenant_id = $2
-		  AND asset = $3
-		  AND purpose = 'invoice'
-		  AND status IN ('pending', 'confirming')
-		  AND expires_at > NOW()
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, invoiceID, tenantID, asset).Scan(
-		&details.WalletAddress,
-		&details.ExpectedAmountBaseUnits,
-		&details.QuotedPriceUSD,
-		&details.QuoteSource,
-		&details.AssetSymbol,
-		&details.Network,
-		&details.QuotedAt,
-		&details.ExpiresAt,
-	)
+	row, err := purserdb.New(s.db).GetActiveInvoiceCryptoPaymentQuote(ctx, purserdb.GetActiveInvoiceCryptoPaymentQuoteParams{
+		InvoiceID: invoiceID, TenantID: tenantID, Asset: asset,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("pending crypto wallet not found")
 	}
 	if err != nil {
 		return nil, err
+	}
+	details := &cryptoPaymentQuoteDetails{
+		WalletAddress: row.WalletAddress, ExpectedAmountBaseUnits: row.ExpectedAmountBaseUnits,
+		QuotedPriceUSD: row.QuotedPriceUsd, QuoteSource: row.QuoteSource.String,
+		AssetSymbol: row.Asset, Network: row.Network, QuotedAt: row.QuotedAt.Time,
+		ExpiresAt: row.ExpiresAt,
 	}
 	tokenDecimals, ok := handlers.TokenDecimals(details.AssetSymbol)
 	if !ok {
@@ -3297,7 +2617,7 @@ func loadInvoiceCryptoPaymentQuoteFrom(ctx context.Context, q rowQuerier, invoic
 		return nil, fmt.Errorf("invalid expected_amount_base_units")
 	}
 	details.ExpectedAmountToken = decimal.NewFromBigInt(baseUnits, -tokenDecimals).StringFixedBank(tokenDecimals)
-	return &details, nil
+	return details, nil
 }
 
 // GetPaymentMethods returns available payment methods for a tenant
@@ -3394,69 +2714,8 @@ func (s *PurserServer) getAvailablePostpaidProviders() []string {
 func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID string) (*purserpb.TenantSubscription, *purserpb.BillingTier, error) {
 	s.logger.WithField("tenant_id", tenantID).Info("getSubscriptionAndTier: querying subscription for tenant")
 
-	var subscription purserpb.TenantSubscription
-	var tier purserpb.BillingTier
-
-	// Nullable fields
-	var billingEmail, paymentMethod, paymentReference, taxID sql.NullString
-	var taxRate sql.NullFloat64
-	var trialEndsAt, nextBillingDate, cancelledAt sql.NullTime
-	var billingPeriodStart, billingPeriodEnd sql.NullTime
-	var subStartedAt, subCreatedAt, subUpdatedAt time.Time
-	var tierCreatedAt, tierUpdatedAt time.Time
-	var billingModel string
-	var stripeCustomerID, stripeSubscriptionID, stripeSubscriptionStatus, mollieSubscriptionID sql.NullString
-	var stripePeriodEnd sql.NullTime
-	var dunningAttempts sql.NullInt32
-	var pendingTierID, pendingReason sql.NullString
-	var pendingEffectiveAt sql.NullTime
-
-	// JSONB fields
-	var customFeatures, billingAddress, features []byte
-	var processesLive, processesDVR, processesClip, processesDVRFinalize, processesVod sql.NullString
-
-	err := s.db.QueryRowContext(ctx, `
-		SELECT
-			ts.id, ts.tenant_id, ts.tier_id, ts.status, ts.billing_email,
-			ts.started_at, ts.trial_ends_at, ts.next_billing_date, ts.cancelled_at,
-			ts.billing_period_start, ts.billing_period_end,
-			ts.custom_features,
-			ts.payment_method, ts.payment_reference, ts.billing_address,
-			ts.tax_id, ts.tax_rate,
-			ts.billing_model,
-				ts.stripe_customer_id, ts.stripe_subscription_id, ts.stripe_subscription_status, ts.stripe_current_period_end, ts.dunning_attempts,
-				ts.mollie_subscription_id,
-				ts.pending_tier_id, ts.pending_effective_at, ts.pending_reason,
-				ts.created_at, ts.updated_at,
-			bt.id, bt.tier_name, bt.display_name, bt.description,
-			bt.base_price, bt.currency, bt.billing_period,
-			bt.features, bt.support_level, bt.sla_level,
-			bt.metering_enabled, bt.is_active,
-			bt.tier_level, bt.is_enterprise, bt.created_at, bt.updated_at,
-			bt.processes_live, bt.processes_dvr, bt.processes_clip, bt.processes_dvr_finalize, bt.processes_vod
-		FROM purser.tenant_subscriptions ts
-		JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
-		WHERE ts.tenant_id = $1 AND ts.status != 'cancelled'
-		ORDER BY ts.created_at DESC
-		LIMIT 1
-	`, tenantID).Scan(
-		&subscription.Id, &subscription.TenantId, &subscription.TierId, &subscription.Status, &billingEmail,
-		&subStartedAt, &trialEndsAt, &nextBillingDate, &cancelledAt,
-		&billingPeriodStart, &billingPeriodEnd,
-		&customFeatures,
-		&paymentMethod, &paymentReference, &billingAddress,
-		&taxID, &taxRate,
-		&billingModel,
-		&stripeCustomerID, &stripeSubscriptionID, &stripeSubscriptionStatus, &stripePeriodEnd, &dunningAttempts,
-		&mollieSubscriptionID,
-		&pendingTierID, &pendingEffectiveAt, &pendingReason,
-		&subCreatedAt, &subUpdatedAt,
-		&tier.Id, &tier.TierName, &tier.DisplayName, &tier.Description,
-		&tier.BasePrice, &tier.Currency, &tier.BillingPeriod,
-		&features, &tier.SupportLevel, &tier.SlaLevel,
-		&tier.MeteringEnabled, &tier.IsActive,
-		&tier.TierLevel, &tier.IsEnterprise, &tierCreatedAt, &tierUpdatedAt,
-		&processesLive, &processesDVR, &processesClip, &processesDVRFinalize, &processesVod)
+	queries := purserdb.New(s.db)
+	subscriptionRow, err := queries.GetCurrentTenantSubscription(ctx, tenantID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithField("tenant_id", tenantID).Warn("getSubscriptionAndTier: no active subscription")
@@ -3466,6 +2725,12 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 		s.logger.WithError(err).WithField("tenant_id", tenantID).Error("getSubscriptionAndTier: query error")
 		return nil, nil, err
 	}
+	subscription := tenantSubscriptionFromCurrentRow(subscriptionRow)
+	tierRow, err := queries.GetBillingTierByID(ctx, subscription.TierId)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load billing tier %s: %w", subscription.TierId, err)
+	}
+	tier := billingTierFromGetRow(tierRow)
 
 	s.logger.WithFields(map[string]any{
 		"tenant_id":    tenantID,
@@ -3474,75 +2739,6 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 		"base_price":   tier.BasePrice,
 		"status":       subscription.Status,
 	}).Info("getSubscriptionAndTier: FOUND subscription")
-
-	// Set subscription timestamps
-	subscription.StartedAt = timestamppb.New(subStartedAt)
-	subscription.CreatedAt = timestamppb.New(subCreatedAt)
-	subscription.UpdatedAt = timestamppb.New(subUpdatedAt)
-	subscription.BillingModel = billingModel
-	if billingEmail.Valid {
-		subscription.BillingEmail = billingEmail.String
-	}
-	if trialEndsAt.Valid {
-		subscription.TrialEndsAt = timestamppb.New(trialEndsAt.Time)
-	}
-	if nextBillingDate.Valid {
-		subscription.NextBillingDate = timestamppb.New(nextBillingDate.Time)
-	}
-	if cancelledAt.Valid {
-		subscription.CancelledAt = timestamppb.New(cancelledAt.Time)
-	}
-	if billingPeriodStart.Valid {
-		subscription.BillingPeriodStart = timestamppb.New(billingPeriodStart.Time)
-	}
-	if billingPeriodEnd.Valid {
-		subscription.BillingPeriodEnd = timestamppb.New(billingPeriodEnd.Time)
-	}
-
-	// Set nullable strings
-	if paymentMethod.Valid {
-		subscription.PaymentMethod = &paymentMethod.String
-	}
-	if paymentReference.Valid {
-		subscription.PaymentReference = &paymentReference.String
-	}
-	if taxID.Valid {
-		subscription.TaxId = &taxID.String
-	}
-	if taxRate.Valid {
-		subscription.TaxRate = &taxRate.Float64
-	}
-	if stripeCustomerID.Valid {
-		subscription.StripeCustomerId = &stripeCustomerID.String
-	}
-	if stripeSubscriptionID.Valid {
-		subscription.StripeSubscriptionId = &stripeSubscriptionID.String
-	}
-	if stripeSubscriptionStatus.Valid {
-		subscription.StripeSubscriptionStatus = &stripeSubscriptionStatus.String
-	}
-	if stripePeriodEnd.Valid {
-		subscription.StripeCurrentPeriodEnd = timestamppb.New(stripePeriodEnd.Time)
-	}
-	if dunningAttempts.Valid {
-		subscription.DunningAttempts = dunningAttempts.Int32
-	}
-	if mollieSubscriptionID.Valid {
-		subscription.MollieSubscriptionId = &mollieSubscriptionID.String
-	}
-	if pendingTierID.Valid {
-		subscription.PendingTierId = &pendingTierID.String
-	}
-	if pendingEffectiveAt.Valid {
-		subscription.PendingEffectiveAt = timestamppb.New(pendingEffectiveAt.Time)
-	}
-	if pendingReason.Valid {
-		subscription.PendingReason = &pendingReason.String
-	}
-
-	// Parse JSONB fields for subscription
-	subscription.CustomFeatures = scanBillingFeatures(customFeatures)
-	subscription.BillingAddress = scanBillingAddress(billingAddress)
 
 	// Load per-tenant pricing/entitlement overrides. Errors surface — a
 	// missing/broken override table must fail loudly, not silently return a
@@ -3558,12 +2754,8 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 	}
 	subscription.EntitlementOverrides = entOverrides
 
-	// Set tier timestamps and load pricing rules + entitlements from the new
-	// tables. Errors are surfaced — a missing/broken normalized table must
-	// fail loudly, not return a tier with empty pricing.
-	tier.CreatedAt = timestamppb.New(tierCreatedAt)
-	tier.UpdatedAt = timestamppb.New(tierUpdatedAt)
-	tier.Features = scanBillingFeatures(features)
+	// Load normalized tier children. Errors are surfaced — a missing or broken
+	// normalized table must not return a tier with silently empty pricing.
 	rules, rulesErr := loadTierPricingRules(ctx, s.db, tier.Id)
 	if rulesErr != nil {
 		return nil, nil, fmt.Errorf("load pricing rules for tier %s: %w", tier.Id, rulesErr)
@@ -3574,100 +2766,45 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 		return nil, nil, fmt.Errorf("load entitlements for tier %s: %w", tier.Id, entsErr)
 	}
 	tier.Entitlements = ents
-	if processesLive.Valid {
-		tier.ProcessesLive = processesLive.String
-	}
-	if processesDVR.Valid {
-		tier.ProcessesDvr = processesDVR.String
-	}
-	if processesClip.Valid {
-		tier.ProcessesClip = processesClip.String
-	}
-	if processesDVRFinalize.Valid {
-		tier.ProcessesDvrFinalize = processesDVRFinalize.String
-	}
-	if processesVod.Valid {
-		tier.ProcessesVod = processesVod.String
-	}
-
-	return &subscription, &tier, nil
+	return subscription, tier, nil
 }
 
 // getPendingInvoices fetches invoices that can still be paid by the tenant.
 func (s *PurserServer) getPendingInvoices(ctx context.Context, tenantID string) ([]*purserpb.Invoice, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT bi.id, bi.tenant_id,
-		       GREATEST(bi.amount - COALESCE((
-		           SELECT SUM(bp.amount - (COALESCE(bp.reversed_amount_cents, 0)::numeric / 100))
-		           FROM purser.billing_payments bp
-		           WHERE bp.invoice_id = bi.id
-		             AND bp.status = 'confirmed'
-		             AND bp.currency = bi.currency
-		       ), 0), 0) AS amount_due,
-		       bi.base_amount, bi.metered_amount, bi.prepaid_credit_applied, bi.currency, bi.status,
-		       due_date, paid_at, usage_details, created_at, updated_at, period_start, period_end, gross_metered_amount
-		FROM purser.billing_invoices bi
-		WHERE bi.tenant_id = $1 AND bi.status IN ('pending', 'overdue')
-		ORDER BY bi.due_date ASC
-	`, tenantID)
+	rows, err := purserdb.New(s.db).ListPayableInvoices(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var invoices []*purserpb.Invoice
-	for rows.Next() {
-		var inv purserpb.Invoice
-		var dueDate, createdAt, updatedAt time.Time
-		var paidAt sql.NullTime
-		var usageDetails []byte
-		var baseAmount, meteredAmount, grossMeteredAmount sql.NullFloat64
-		var periodStart, periodEnd sql.NullTime
-
-		err := rows.Scan(&inv.Id, &inv.TenantId, &inv.Amount, &baseAmount, &meteredAmount,
-			&inv.PrepaidCreditApplied, &inv.Currency, &inv.Status, &dueDate, &paidAt, &usageDetails,
-			&createdAt, &updatedAt, &periodStart, &periodEnd, &grossMeteredAmount)
-		if err != nil {
-			return nil, fmt.Errorf("scan pending invoice row: %w", err)
+	invoices := make([]*purserpb.Invoice, 0, len(rows))
+	for _, row := range rows {
+		inv := &purserpb.Invoice{
+			Id: row.ID.String(), TenantId: row.TenantID.String(), Amount: row.AmountDue,
+			BaseAmount: row.BaseAmount, MeteredAmount: row.MeteredAmount,
+			PrepaidCreditApplied: row.PrepaidCreditApplied, GrossMeteredAmount: row.GrossMeteredAmount,
+			Currency: row.Currency, Status: row.Status, DueDate: timestamppb.New(row.DueDate),
+			CreatedAt: timestamppb.New(row.CreatedAt.Time), UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
 		}
-
-		inv.DueDate = timestamppb.New(dueDate)
-		inv.CreatedAt = timestamppb.New(createdAt)
-		inv.UpdatedAt = timestamppb.New(updatedAt)
-		if paidAt.Valid {
-			inv.PaidAt = timestamppb.New(paidAt.Time)
+		if row.PaidAt.Valid {
+			inv.PaidAt = timestamppb.New(row.PaidAt.Time)
 		}
-		if baseAmount.Valid {
-			inv.BaseAmount = baseAmount.Float64
+		if row.PeriodStart.Valid {
+			inv.PeriodStart = timestamppb.New(row.PeriodStart.Time)
 		}
-		if meteredAmount.Valid {
-			inv.MeteredAmount = meteredAmount.Float64
+		if row.PeriodEnd.Valid {
+			inv.PeriodEnd = timestamppb.New(row.PeriodEnd.Time)
 		}
-		if grossMeteredAmount.Valid {
-			inv.GrossMeteredAmount = grossMeteredAmount.Float64
-		}
-		if periodStart.Valid {
-			inv.PeriodStart = timestamppb.New(periodStart.Time)
-		}
-		if periodEnd.Valid {
-			inv.PeriodEnd = timestamppb.New(periodEnd.Time)
-		}
-		if len(usageDetails) > 0 {
+		if len(row.UsageDetails) > 0 {
 			var details map[string]any
-			if json.Unmarshal(usageDetails, &details) == nil {
+			if json.Unmarshal(row.UsageDetails, &details) == nil {
 				inv.UsageDetails = mapToProtoStruct(details)
 			}
 		}
-		lineItems, lineErr := s.loadInvoiceLineItems(ctx, inv.Id, inv.TenantId)
+		lineItems, lineErr := s.loadInvoiceLineItems(ctx, inv.GetId(), inv.GetTenantId())
 		if lineErr != nil {
 			return nil, lineErr
 		}
 		inv.LineItems = lineItems
-
-		invoices = append(invoices, &inv)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate pending invoice rows: %w", err)
+		invoices = append(invoices, inv)
 	}
 
 	return invoices, nil
@@ -3675,62 +2812,35 @@ func (s *PurserServer) getPendingInvoices(ctx context.Context, tenantID string) 
 
 // getRecentPayments fetches recent payments for a tenant
 func (s *PurserServer) getRecentPayments(ctx context.Context, tenantID string, limit int) ([]*purserpb.Payment, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT bp.id, bp.invoice_id, bp.method, bp.amount, bp.currency,
-		       bp.tx_id, bp.status, bp.confirmed_at, bp.created_at, bp.updated_at
-		FROM purser.billing_payments bp
-		JOIN purser.billing_invoices bi ON bp.invoice_id = bi.id
-		WHERE bi.tenant_id = $1
-		ORDER BY bp.created_at DESC
-		LIMIT $2
-	`, tenantID, limit)
+	rows, err := purserdb.New(s.db).ListRecentPayments(ctx, purserdb.ListRecentPaymentsParams{
+		TenantID: tenantID, RowLimit: int32(limit),
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var payments []*purserpb.Payment
-	for rows.Next() {
-		var pay purserpb.Payment
-		var txID sql.NullString
-		var confirmedAt sql.NullTime
-		var createdAt, updatedAt time.Time
-
-		err := rows.Scan(&pay.Id, &pay.InvoiceId, &pay.Method, &pay.Amount, &pay.Currency,
-			&txID, &pay.Status, &confirmedAt, &createdAt, &updatedAt)
-		if err != nil {
-			return nil, fmt.Errorf("scan recent payment row: %w", err)
+	payments := make([]*purserpb.Payment, 0, len(rows))
+	for _, row := range rows {
+		pay := &purserpb.Payment{
+			Id: row.ID.String(), InvoiceId: row.InvoiceID.String(), Method: row.Method,
+			Amount: row.Amount, Currency: row.Currency, Status: row.Status,
+			CreatedAt: timestamppb.New(row.CreatedAt.Time), UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
 		}
-
-		if txID.Valid {
-			pay.TxId = txID.String
+		if row.TxID.Valid {
+			pay.TxId = row.TxID.String
 		}
-		pay.CreatedAt = timestamppb.New(createdAt)
-		pay.UpdatedAt = timestamppb.New(updatedAt)
-		if confirmedAt.Valid {
-			pay.ConfirmedAt = timestamppb.New(confirmedAt.Time)
+		if row.ConfirmedAt.Valid {
+			pay.ConfirmedAt = timestamppb.New(row.ConfirmedAt.Time)
 		}
-
-		payments = append(payments, &pay)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate recent payment rows: %w", err)
+		payments = append(payments, pay)
 	}
 
 	return payments, nil
 }
 
 func (s *PurserServer) getSubscriptionPeriod(ctx context.Context, tenantID string, now time.Time) (time.Time, time.Time) {
-	var start, end sql.NullTime
-	err := s.db.QueryRowContext(ctx, `
-		SELECT billing_period_start, billing_period_end
-		FROM purser.tenant_subscriptions
-		WHERE tenant_id = $1 AND status = 'active'
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, tenantID).Scan(&start, &end)
-	if err == nil && start.Valid && end.Valid && end.Time.After(start.Time) {
-		return start.Time, end.Time
+	period, err := purserdb.New(s.db).GetActiveSubscriptionPeriod(ctx, tenantID)
+	if err == nil && period.BillingPeriodStart.Valid && period.BillingPeriodEnd.Valid && period.BillingPeriodEnd.Time.After(period.BillingPeriodStart.Time) {
+		return period.BillingPeriodStart.Time, period.BillingPeriodEnd.Time
 	}
 
 	utcNow := now.UTC()
@@ -3790,116 +2900,58 @@ func (s *PurserServer) GetTenantUsage(ctx context.Context, req *purserpb.TenantU
 	if startDate == "" || endDate == "" {
 		return nil, status.Error(codes.InvalidArgument, "start_date and end_date required")
 	}
+	parsedStartDate, err := time.Parse("2006-01-02", startDate)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "start_date must use YYYY-MM-DD")
+	}
+	parsedEndDate, err := time.Parse("2006-01-02", endDate)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "end_date must use YYYY-MM-DD")
+	}
 
 	// Aggregate canonical-meter deltas by cluster and usage_type. Cost
 	// previews must use the same cluster-aware pricing resolver as invoice
 	// finalization, otherwise marketplace/custom cluster pricing would
 	// preview one amount and invoice another.
-	rows, err := s.db.QueryContext(ctx, `
-		WITH usage_rows AS (
-			SELECT COALESCE(cluster_id, '') AS cluster_id,
-			       usage_type,
-			       usage_value AS value
-			FROM purser.usage_records
-			WHERE tenant_id = $1
-			  AND period_start < ($3::date + INTERVAL '1 day')
-			  AND period_end > $2::date
-			  AND value_kind = 'delta'
-			  AND granularity = 'minute_5'
-
-			UNION ALL
-
-			SELECT COALESCE(cluster_id, '') AS cluster_id,
-			       usage_type,
-			       delta_value AS value
-			FROM purser.usage_adjustments
-			WHERE tenant_id = $1
-			  AND period_start < ($3::date + INTERVAL '1 day')
-			  AND period_end > $2::date
-			  AND status = 'applied'
-			  AND value_kind = 'correction_delta'
-		)
-		SELECT cluster_id,
-		       usage_type,
-		       CASE
-		           WHEN usage_type IN ('peak_bandwidth_mbps', 'max_viewers', 'total_streams', 'total_viewers', 'unique_users') THEN MAX(value)
-		           ELSE SUM(value)
-		       END AS total
-		FROM usage_rows
-		WHERE usage_type NOT IN ('unique_users', 'total_streams', 'total_viewers', 'unique_users_period')
-		GROUP BY cluster_id, usage_type
-	`, tenantID, startDate, endDate)
+	queries := purserdb.New(s.db)
+	rows, err := queries.ListTenantUsageTotals(ctx, purserdb.ListTenantUsageTotalsParams{
+		TenantID: tenantID, StartDate: parsedStartDate, EndDate: parsedEndDate,
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer func() { _ = rows.Close() }()
 
 	usage := make(map[string]float64)
 	perClusterUsage := map[string]map[string]float64{}
-	for rows.Next() {
-		var clusterID, usageType string
-		var total float64
-		if scanErr := rows.Scan(&clusterID, &usageType, &total); scanErr != nil {
-			return nil, status.Errorf(codes.Internal, "scan usage row: %v", scanErr)
+	for _, row := range rows {
+		usage[row.UsageType] += row.Total
+		if perClusterUsage[row.ClusterID] == nil {
+			perClusterUsage[row.ClusterID] = map[string]float64{}
 		}
-		usage[usageType] += total
-		if perClusterUsage[clusterID] == nil {
-			perClusterUsage[clusterID] = map[string]float64{}
-		}
-		perClusterUsage[clusterID][usageType] = total
-	}
-	if rowsErr := rows.Err(); rowsErr != nil {
-		return nil, status.Errorf(codes.Internal, "iterate usage rows: %v", rowsErr)
+		perClusterUsage[row.ClusterID][row.UsageType] = row.Total
 	}
 
 	perClusterDimensioned := map[string][]rating.DimensionedQuantity{}
-	dimensionRows, dimensionErr := s.db.QueryContext(ctx, `
-		WITH dimensioned_rows AS (
-			SELECT COALESCE(cluster_id, '') AS cluster_id, usage_type, unit, dimensions, usage_value
-			FROM purser.usage_records
-			WHERE tenant_id = $1
-			  AND period_start < ($3::date + INTERVAL '1 day')
-			  AND period_end > $2::date
-			  AND value_kind = 'delta'
-			  AND granularity = 'minute_5'
-			UNION ALL
-			SELECT COALESCE(cluster_id, ''), usage_type, unit, dimensions, delta_value
-			FROM purser.usage_adjustments
-			WHERE tenant_id = $1
-			  AND period_start < ($3::date + INTERVAL '1 day')
-			  AND period_end > $2::date
-			  AND status = 'applied'
-			  AND value_kind = 'correction_delta'
-		)
-		SELECT r.cluster_id, r.usage_type, r.unit, r.dimensions,
-		       CASE WHEN d.aggregation = 'max' THEN MAX(r.usage_value) ELSE SUM(r.usage_value) END
-		FROM dimensioned_rows r
-		JOIN purser.meter_definitions d ON d.meter = r.usage_type AND d.active = TRUE
-		GROUP BY r.cluster_id, r.usage_type, r.unit, r.dimensions, d.aggregation
-	`, tenantID, startDate, endDate)
+	dimensionRows, dimensionErr := queries.ListTenantDimensionedUsage(ctx, purserdb.ListTenantDimensionedUsageParams{
+		TenantID: tenantID, StartDate: parsedStartDate, EndDate: parsedEndDate,
+	})
 	if dimensionErr != nil {
 		return nil, status.Errorf(codes.Internal, "query dimensioned usage: %v", dimensionErr)
 	}
-	defer func() { _ = dimensionRows.Close() }()
-	for dimensionRows.Next() {
-		var clusterID, meter, unit string
-		var rawDimensions []byte
-		var quantity decimal.Decimal
-		if scanErr := dimensionRows.Scan(&clusterID, &meter, &unit, &rawDimensions, &quantity); scanErr != nil {
-			return nil, status.Errorf(codes.Internal, "scan dimensioned usage: %v", scanErr)
-		}
+	for _, row := range dimensionRows {
 		dimensions := map[string]string{}
-		if len(rawDimensions) > 0 {
-			if decodeErr := json.Unmarshal(rawDimensions, &dimensions); decodeErr != nil {
-				return nil, status.Errorf(codes.Internal, "decode dimensions for %s: %v", meter, decodeErr)
+		if len(row.Dimensions) > 0 {
+			if decodeErr := json.Unmarshal(row.Dimensions, &dimensions); decodeErr != nil {
+				return nil, status.Errorf(codes.Internal, "decode dimensions for %s: %v", row.UsageType, decodeErr)
 			}
 		}
-		perClusterDimensioned[clusterID] = append(perClusterDimensioned[clusterID], rating.DimensionedQuantity{
-			Meter: rating.Meter(meter), Unit: unit, Dimensions: dimensions, Quantity: quantity,
+		quantity, parseErr := decimal.NewFromString(row.Quantity)
+		if parseErr != nil {
+			return nil, status.Errorf(codes.Internal, "parse dimensioned quantity for %s: %v", row.UsageType, parseErr)
+		}
+		perClusterDimensioned[row.ClusterID] = append(perClusterDimensioned[row.ClusterID], rating.DimensionedQuantity{
+			Meter: rating.Meter(row.UsageType), Unit: row.Unit, Dimensions: dimensions, Quantity: quantity,
 		})
-	}
-	if rowsErr := dimensionRows.Err(); rowsErr != nil {
-		return nil, status.Errorf(codes.Internal, "iterate dimensioned usage: %v", rowsErr)
 	}
 
 	// Rate via the engine. Same path as monthly invoice / draft / prepaid;
@@ -4036,28 +3088,7 @@ func (s *PurserServer) GetClusterPricing(ctx context.Context, req *purserpb.GetC
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
 	}
 
-	var pricing purserpb.ClusterPricing
-	var basePrice sql.NullString
-	var currency sql.NullString
-	var stripeProductID, stripePriceIDMonthly, stripeMeterEventName sql.NullString
-	var meteredRatesJSON, defaultQuotasJSON []byte
-	var createdAt, updatedAt time.Time
-
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, cluster_id, pricing_model,
-		       stripe_product_id, stripe_price_id_monthly, stripe_meter_event_name,
-		       base_price::text, currency, metered_rates,
-		       required_tier_level, allow_free_tier,
-		       default_quotas, created_at, updated_at
-		FROM purser.cluster_pricing
-		WHERE cluster_id = $1
-	`, clusterID).Scan(
-		&pricing.Id, &pricing.ClusterId, &pricing.PricingModel,
-		&stripeProductID, &stripePriceIDMonthly, &stripeMeterEventName,
-		&basePrice, &currency, &meteredRatesJSON,
-		&pricing.RequiredTierLevel, &pricing.AllowFreeTier,
-		&defaultQuotasJSON, &createdAt, &updatedAt,
-	)
+	row, err := purserdb.New(s.db).GetClusterPricingConfig(ctx, clusterID)
 	if errors.Is(err, sql.ErrNoRows) {
 		// Return default pricing for clusters without explicit config
 		defaultPricing := &purserpb.ClusterPricing{
@@ -4076,7 +3107,37 @@ func (s *PurserServer) GetClusterPricing(ctx context.Context, req *purserpb.GetC
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	// Map optional fields
+	pricing, err := clusterPricingFromFields(
+		row.ID, row.ClusterID, row.PricingModel,
+		row.StripeProductID, row.StripePriceIDMonthly, row.StripeMeterEventName,
+		row.BasePrice, row.Currency, row.MeteredRates,
+		row.RequiredTierLevel, row.AllowFreeTier, row.DefaultQuotas,
+		row.CreatedAt, row.UpdatedAt,
+	)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "invalid cluster pricing: %v", err)
+	}
+
+	// Enrich is_platform_official from Quartermaster (cached)
+	if officialIDs, qmErr := s.getOfficialClusterIDs(ctx); qmErr == nil && officialIDs != nil {
+		pricing.IsPlatformOfficial = officialIDs[clusterID]
+	}
+
+	return pricing, nil
+}
+
+func clusterPricingFromFields(
+	id, clusterID, pricingModel string,
+	stripeProductID, stripePriceIDMonthly, stripeMeterEventName sql.NullString,
+	basePrice string, currency sql.NullString, meteredRates []byte,
+	requiredTierLevel sql.NullInt32, allowFreeTier sql.NullBool, defaultQuotas []byte,
+	createdAt, updatedAt sql.NullTime,
+) (*purserpb.ClusterPricing, error) {
+	pricing := &purserpb.ClusterPricing{
+		Id: id, ClusterId: clusterID, PricingModel: pricingModel,
+		RequiredTierLevel: requiredTierLevel.Int32, AllowFreeTier: allowFreeTier.Bool,
+		Currency: "EUR", CreatedAt: timestamppb.New(createdAt.Time), UpdatedAt: timestamppb.New(updatedAt.Time),
+	}
 	if stripeProductID.Valid {
 		pricing.StripeProductId = &stripeProductID.String
 	}
@@ -4086,36 +3147,31 @@ func (s *PurserServer) GetClusterPricing(ctx context.Context, req *purserpb.GetC
 	if stripeMeterEventName.Valid {
 		pricing.StripeMeterEventName = &stripeMeterEventName.String
 	}
-	if basePrice.Valid {
-		formattedBasePrice, formatErr := formatOptionalMoney(basePrice)
-		if formatErr != nil {
-			return nil, status.Errorf(codes.Internal, "invalid base_price: %v", formatErr)
+	if basePrice != "" {
+		formatted, err := formatOptionalMoney(sql.NullString{String: basePrice, Valid: true})
+		if err != nil {
+			return nil, err
 		}
-		pricing.BasePrice = formattedBasePrice
+		pricing.BasePrice = formatted
 	}
 	if currency.Valid {
 		pricing.Currency = currency.String
-	} else {
-		pricing.Currency = "EUR"
 	}
-
-	// Parse JSONB fields
-	if len(meteredRatesJSON) > 0 {
-		pricing.MeteredRates, _ = structpb.NewStruct(jsonToMap(meteredRatesJSON))
+	if len(meteredRates) > 0 {
+		var err error
+		pricing.MeteredRates, err = structpb.NewStruct(jsonToMap(meteredRates))
+		if err != nil {
+			return nil, fmt.Errorf("decode metered rates: %w", err)
+		}
 	}
-	if len(defaultQuotasJSON) > 0 {
-		pricing.DefaultQuotas, _ = structpb.NewStruct(jsonToMap(defaultQuotasJSON))
+	if len(defaultQuotas) > 0 {
+		var err error
+		pricing.DefaultQuotas, err = structpb.NewStruct(jsonToMap(defaultQuotas))
+		if err != nil {
+			return nil, fmt.Errorf("decode default quotas: %w", err)
+		}
 	}
-
-	pricing.CreatedAt = timestamppb.New(createdAt)
-	pricing.UpdatedAt = timestamppb.New(updatedAt)
-
-	// Enrich is_platform_official from Quartermaster (cached)
-	if officialIDs, qmErr := s.getOfficialClusterIDs(ctx); qmErr == nil && officialIDs != nil {
-		pricing.IsPlatformOfficial = officialIDs[clusterID]
-	}
-
-	return &pricing, nil
+	return pricing, nil
 }
 
 // GetClustersPricingBatch retrieves pricing configuration for multiple clusters
@@ -4132,100 +3188,33 @@ func (s *PurserServer) GetClustersPricingBatch(ctx context.Context, req *purserp
 	// Resolve tenant tier level for eligibility checks (default to 0 if not found)
 	var tenantTierLevel int32
 	if tenantID != "" {
-		err := s.db.QueryRowContext(ctx, `
-			SELECT COALESCE(bt.tier_level, 0)
-			FROM purser.tenant_subscriptions ts
-			JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
-			WHERE ts.tenant_id = $1 AND ts.status = 'active'
-		`, tenantID).Scan(&tenantTierLevel)
+		var err error
+		tenantTierLevel, err = purserdb.New(s.db).GetActiveTenantTierLevel(ctx, tenantID)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			s.logger.WithError(err).Warn("Failed to get tenant tier level for batch pricing")
 		}
 	}
 
-	// Build placeholder string for IN clause
-	placeholders := make([]string, len(clusterIDs))
-	args := make([]any, len(clusterIDs))
-	for i, id := range clusterIDs {
-		placeholders[i] = fmt.Sprintf("$%d", i+1)
-		args[i] = id
-	}
-
-	query := fmt.Sprintf(`
-		SELECT id, cluster_id, pricing_model,
-		       stripe_product_id, stripe_price_id_monthly, stripe_meter_event_name,
-		       base_price::text, currency, metered_rates,
-		       required_tier_level, allow_free_tier,
-		       default_quotas, created_at, updated_at
-		FROM purser.cluster_pricing
-		WHERE cluster_id IN (%s)
-	`, strings.Join(placeholders, ", "))
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := purserdb.New(s.db).ListClusterPricingConfigs(ctx, purserdb.ListClusterPricingConfigsParams{
+		FilterClusters: true, ClusterIds: clusterIDs, ResultLimit: int32(len(clusterIDs)),
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer func() { _ = rows.Close() }()
 
 	result := make(map[string]*purserpb.ClusterPricing)
-
-	for rows.Next() {
-		var pricing purserpb.ClusterPricing
-		var basePrice sql.NullString
-		var currency sql.NullString
-		var stripeProductID, stripePriceIDMonthly, stripeMeterEventName sql.NullString
-		var meteredRatesJSON, defaultQuotasJSON []byte
-		var createdAt, updatedAt time.Time
-
-		if err := rows.Scan(
-			&pricing.Id, &pricing.ClusterId, &pricing.PricingModel,
-			&stripeProductID, &stripePriceIDMonthly, &stripeMeterEventName,
-			&basePrice, &currency, &meteredRatesJSON,
-			&pricing.RequiredTierLevel, &pricing.AllowFreeTier,
-			&defaultQuotasJSON, &createdAt, &updatedAt,
-		); err != nil {
-			return nil, status.Errorf(codes.Internal, "scan error: %v", err)
+	for _, row := range rows {
+		pricing, mapErr := clusterPricingFromFields(
+			row.ID, row.ClusterID, row.PricingModel,
+			row.StripeProductID, row.StripePriceIDMonthly, row.StripeMeterEventName,
+			row.BasePrice, row.Currency, row.MeteredRates,
+			row.RequiredTierLevel, row.AllowFreeTier, row.DefaultQuotas,
+			row.CreatedAt, row.UpdatedAt,
+		)
+		if mapErr != nil {
+			return nil, status.Errorf(codes.Internal, "invalid cluster pricing: %v", mapErr)
 		}
-
-		// Map optional fields
-		if stripeProductID.Valid {
-			pricing.StripeProductId = &stripeProductID.String
-		}
-		if stripePriceIDMonthly.Valid {
-			pricing.StripePriceIdMonthly = &stripePriceIDMonthly.String
-		}
-		if stripeMeterEventName.Valid {
-			pricing.StripeMeterEventName = &stripeMeterEventName.String
-		}
-		if basePrice.Valid {
-			formattedBasePrice, formatErr := formatOptionalMoney(basePrice)
-			if formatErr != nil {
-				return nil, status.Errorf(codes.Internal, "invalid base_price: %v", formatErr)
-			}
-			pricing.BasePrice = formattedBasePrice
-		}
-		if currency.Valid {
-			pricing.Currency = currency.String
-		} else {
-			pricing.Currency = "EUR"
-		}
-
-		// Parse JSONB fields
-		if len(meteredRatesJSON) > 0 {
-			pricing.MeteredRates, _ = structpb.NewStruct(jsonToMap(meteredRatesJSON))
-		}
-		if len(defaultQuotasJSON) > 0 {
-			pricing.DefaultQuotas, _ = structpb.NewStruct(jsonToMap(defaultQuotasJSON))
-		}
-
-		pricing.CreatedAt = timestamppb.New(createdAt)
-		pricing.UpdatedAt = timestamppb.New(updatedAt)
-
-		result[pricing.ClusterId] = &pricing
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, status.Errorf(codes.Internal, "rows error: %v", err)
+		result[pricing.ClusterId] = pricing
 	}
 
 	// Flag clusters without explicit pricing configuration
@@ -4323,20 +3312,14 @@ func (s *PurserServer) classifyCommercialCluster(ctx context.Context, consumingT
 }
 
 func (s *PurserServer) requireMarketplaceOwnerApproved(ctx context.Context, ownerID uuid.UUID) error {
-	var ownerStatus string
-	var payoutEligible bool
-	err := s.db.QueryRowContext(ctx, `
-		SELECT status, payout_eligible
-		FROM purser.cluster_owners
-		WHERE tenant_id = $1
-	`, ownerID).Scan(&ownerStatus, &payoutEligible)
+	owner, err := purserdb.New(s.db).GetMarketplaceOwnerApproval(ctx, ownerID.String())
 	if errors.Is(err, sql.ErrNoRows) {
 		return status.Error(codes.FailedPrecondition, "cluster operator is not approved for marketplace")
 	}
 	if err != nil {
 		return status.Errorf(codes.Internal, "query cluster operator approval: %v", err)
 	}
-	if ownerStatus != "approved" || !payoutEligible {
+	if owner.Status != "approved" || !owner.PayoutEligible {
 		return status.Error(codes.FailedPrecondition, "cluster operator is not payout eligible")
 	}
 	return nil
@@ -4413,14 +3396,8 @@ func (s *PurserServer) SetClusterPricing(ctx context.Context, req *purserpb.SetC
 		return nil, status.Errorf(codes.InvalidArgument, "invalid pricing_model: %s", pricingModel)
 	}
 
-	var existingModel string
-	var existingMeteredRates sql.NullString
 	existingPricing := false
-	err := s.db.QueryRowContext(ctx, `
-		SELECT pricing_model, metered_rates::text
-		FROM purser.cluster_pricing
-		WHERE cluster_id = $1
-	`, clusterID).Scan(&existingModel, &existingMeteredRates)
+	existing, err := purserdb.New(s.db).GetExistingClusterPricing(ctx, clusterID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
@@ -4430,7 +3407,7 @@ func (s *PurserServer) SetClusterPricing(ctx context.Context, req *purserpb.SetC
 	}
 	if !pricingModelProvided {
 		if existingPricing {
-			pricingModel = existingModel
+			pricingModel = existing.PricingModel
 		} else {
 			pricingModel = "tier_inherit"
 		}
@@ -4476,11 +3453,11 @@ func (s *PurserServer) SetClusterPricing(ctx context.Context, req *purserpb.SetC
 		}
 		meteredRatesBytes = marshaled
 	} else if existingPricing && (pricingModel == "metered" || pricingModel == "custom" || !pricingModelProvided) {
-		if existingMeteredRates.Valid && existingMeteredRates.String != "" {
-			if unmarshalErr := json.Unmarshal([]byte(existingMeteredRates.String), &ratesMap); unmarshalErr != nil {
+		if existing.MeteredRates != "" {
+			if unmarshalErr := json.Unmarshal([]byte(existing.MeteredRates), &ratesMap); unmarshalErr != nil {
 				return nil, status.Errorf(codes.FailedPrecondition, "existing metered_rates invalid JSON: %v", unmarshalErr)
 			}
-			meteredRatesBytes = []byte(existingMeteredRates.String)
+			meteredRatesBytes = []byte(existing.MeteredRates)
 		}
 	}
 	if ratesMap == nil {
@@ -4498,32 +3475,16 @@ func (s *PurserServer) SetClusterPricing(ctx context.Context, req *purserpb.SetC
 		defaultQuotasBytes = []byte("{}")
 	}
 
-	// Upsert cluster pricing
-	var pricingID string
-	err = s.db.QueryRowContext(ctx, `
-		INSERT INTO purser.cluster_pricing (
-			cluster_id, pricing_model, base_price, currency,
-			required_tier_level, allow_free_tier, metered_rates, default_quotas,
-			stripe_product_id, stripe_price_id_monthly, stripe_meter_event_name,
-			updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
-		ON CONFLICT (cluster_id) DO UPDATE SET
-			pricing_model = EXCLUDED.pricing_model,
-			base_price = EXCLUDED.base_price,
-			currency = EXCLUDED.currency,
-			required_tier_level = EXCLUDED.required_tier_level,
-			allow_free_tier = EXCLUDED.allow_free_tier,
-			metered_rates = EXCLUDED.metered_rates,
-			default_quotas = EXCLUDED.default_quotas,
-			stripe_product_id = COALESCE(EXCLUDED.stripe_product_id, purser.cluster_pricing.stripe_product_id),
-			stripe_price_id_monthly = COALESCE(EXCLUDED.stripe_price_id_monthly, purser.cluster_pricing.stripe_price_id_monthly),
-			stripe_meter_event_name = COALESCE(EXCLUDED.stripe_meter_event_name, purser.cluster_pricing.stripe_meter_event_name),
-			updated_at = NOW()
-		RETURNING id
-	`, clusterID, pricingModel, basePrice, currency,
-		requiredTierLevel, allowFreeTier, fwdb.JSONText(meteredRatesBytes), fwdb.JSONText(defaultQuotasBytes),
-		req.StripeProductId, req.StripePriceIdMonthly, req.StripeMeterEventName,
-	).Scan(&pricingID)
+	_, err = purserdb.New(s.db).UpsertClusterPricingConfig(ctx, purserdb.UpsertClusterPricingConfigParams{
+		ClusterID: clusterID, PricingModel: pricingModel, BasePrice: basePrice,
+		Currency:          sql.NullString{String: currency, Valid: true},
+		RequiredTierLevel: sql.NullInt32{Int32: requiredTierLevel, Valid: true},
+		AllowFreeTier:     sql.NullBool{Bool: allowFreeTier, Valid: true},
+		MeteredRates:      meteredRatesBytes, DefaultQuotas: defaultQuotasBytes,
+		StripeProductID:      sqlNullString(req.StripeProductId),
+		StripePriceIDMonthly: sqlNullString(req.StripePriceIdMonthly),
+		StripeMeterEventName: sqlNullString(req.StripeMeterEventName),
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to set cluster pricing: %v", err)
 	}
@@ -4535,24 +3496,13 @@ func (s *PurserServer) SetClusterPricing(ctx context.Context, req *purserpb.SetC
 // ListClusterPricings returns pricing configs for clusters owned by a tenant
 func (s *PurserServer) ListClusterPricings(ctx context.Context, req *purserpb.ListClusterPricingsRequest) (*purserpb.ListClusterPricingsResponse, error) {
 	ownerTenantID := req.GetOwnerTenantId()
-
-	// Build query - if no owner specified, list all (admin use case)
-	query := `
-		SELECT id, cluster_id, pricing_model,
-		       stripe_product_id, stripe_price_id_monthly, stripe_meter_event_name,
-		       base_price::text, currency, metered_rates,
-		       required_tier_level, allow_free_tier,
-		       default_quotas, created_at, updated_at
-		FROM purser.cluster_pricing
-	`
-	var args []any
+	var clusterIDs []string
 	if ownerTenantID != "" {
 		// Get cluster IDs owned by this tenant via Quartermaster gRPC (not direct DB access)
 		if s.quartermasterClient == nil {
 			return nil, status.Error(codes.Unavailable, "quartermaster client not configured")
 		}
 
-		var clusterIDs []string
 		paginationReq := &commonpb.CursorPaginationRequest{First: 200}
 
 		for {
@@ -4586,79 +3536,33 @@ func (s *PurserServer) ListClusterPricings(ctx context.Context, req *purserpb.Li
 			// No clusters owned by this tenant - legitimate empty result
 			return &purserpb.ListClusterPricingsResponse{Pricings: []*purserpb.ClusterPricing{}}, nil
 		}
-
-		query += " WHERE cluster_id = ANY($1)"
-		args = append(args, pq.Array(clusterIDs))
 	}
-
-	query += " ORDER BY created_at DESC"
 
 	// Apply pagination
 	limit := int32(50)
 	if req.GetPagination() != nil && req.GetPagination().GetFirst() > 0 {
 		limit = req.GetPagination().GetFirst()
 	}
-	query += fmt.Sprintf(" LIMIT %d", limit+1)
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := purserdb.New(s.db).ListClusterPricingConfigs(ctx, purserdb.ListClusterPricingConfigsParams{
+		FilterClusters: ownerTenantID != "", ClusterIds: clusterIDs, ResultLimit: limit + 1,
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer func() { _ = rows.Close() }()
 
 	var pricings []*purserpb.ClusterPricing
-	for rows.Next() {
-		var pricing purserpb.ClusterPricing
-		var basePrice sql.NullString
-		var currency sql.NullString
-		var stripeProductID, stripePriceIDMonthly, stripeMeterEventName sql.NullString
-		var meteredRatesJSON, defaultQuotasJSON []byte
-		var createdAt, updatedAt time.Time
-
-		if err := rows.Scan(
-			&pricing.Id, &pricing.ClusterId, &pricing.PricingModel,
-			&stripeProductID, &stripePriceIDMonthly, &stripeMeterEventName,
-			&basePrice, &currency, &meteredRatesJSON,
-			&pricing.RequiredTierLevel, &pricing.AllowFreeTier,
-			&defaultQuotasJSON, &createdAt, &updatedAt,
-		); err != nil {
-			return nil, status.Errorf(codes.Internal, "scan cluster pricing: %v", err)
+	for _, row := range rows {
+		pricing, mapErr := clusterPricingFromFields(
+			row.ID, row.ClusterID, row.PricingModel,
+			row.StripeProductID, row.StripePriceIDMonthly, row.StripeMeterEventName,
+			row.BasePrice, row.Currency, row.MeteredRates,
+			row.RequiredTierLevel, row.AllowFreeTier, row.DefaultQuotas,
+			row.CreatedAt, row.UpdatedAt,
+		)
+		if mapErr != nil {
+			return nil, status.Errorf(codes.Internal, "invalid cluster pricing: %v", mapErr)
 		}
-
-		// Map optional fields
-		if stripeProductID.Valid {
-			pricing.StripeProductId = &stripeProductID.String
-		}
-		if stripePriceIDMonthly.Valid {
-			pricing.StripePriceIdMonthly = &stripePriceIDMonthly.String
-		}
-		if stripeMeterEventName.Valid {
-			pricing.StripeMeterEventName = &stripeMeterEventName.String
-		}
-		if basePrice.Valid {
-			formattedBasePrice, formatErr := formatOptionalMoney(basePrice)
-			if formatErr != nil {
-				return nil, status.Errorf(codes.Internal, "invalid base_price: %v", formatErr)
-			}
-			pricing.BasePrice = formattedBasePrice
-		}
-		if currency.Valid {
-			pricing.Currency = currency.String
-		} else {
-			pricing.Currency = "EUR"
-		}
-
-		if len(meteredRatesJSON) > 0 {
-			pricing.MeteredRates, _ = structpb.NewStruct(jsonToMap(meteredRatesJSON))
-		}
-		if len(defaultQuotasJSON) > 0 {
-			pricing.DefaultQuotas, _ = structpb.NewStruct(jsonToMap(defaultQuotasJSON))
-		}
-
-		pricing.CreatedAt = timestamppb.New(createdAt)
-		pricing.UpdatedAt = timestamppb.New(updatedAt)
-
-		pricings = append(pricings, &pricing)
+		pricings = append(pricings, pricing)
 	}
 
 	// Enrich is_platform_official from Quartermaster (cached)
@@ -4687,13 +3591,7 @@ func (s *PurserServer) CheckClusterAccess(ctx context.Context, req *purserpb.Che
 	}
 
 	// Get tenant's billing tier level from Purser's own tables (no cross-service DB access)
-	var tenantTierLevel int32
-	err := s.db.QueryRowContext(ctx, `
-			SELECT COALESCE(bt.tier_level, 0)
-			FROM purser.tenant_subscriptions ts
-			JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
-			WHERE ts.tenant_id = $1 AND ts.status = 'active'
-		`, tenantID).Scan(&tenantTierLevel)
+	tenantTierLevel, err := purserdb.New(s.db).GetActiveTenantTierLevel(ctx, tenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		// No active subscription = free tier (level 0)
 		tenantTierLevel = 0
@@ -4849,18 +3747,10 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *purse
 			clusterCurrency = billing.DefaultCurrency()
 		}
 		intentKey := fmt.Sprintf("stripe-cluster-checkout:%s:%s", tenantID, clusterID)
-		var clusterIntentID string
-		if intentErr := s.db.QueryRowContext(ctx, `
-			INSERT INTO purser.payment_provider_intents (
-				tenant_id, provider, purpose, local_reference_type, local_reference_id,
-				status, currency, idempotency_key
-			) VALUES ($1, 'stripe', 'cluster_subscription_checkout', 'cluster', NULL,
-			          'pending', $2, $3)
-			ON CONFLICT (provider, idempotency_key) DO UPDATE SET
-				attempt_count = purser.payment_provider_intents.attempt_count + 1,
-				updated_at = NOW()
-			RETURNING id
-		`, tenantID, clusterCurrency, intentKey).Scan(&clusterIntentID); intentErr != nil {
+		clusterIntentID, intentErr := purserdb.New(s.db).UpsertStripeClusterCheckoutIntent(ctx, purserdb.UpsertStripeClusterCheckoutIntentParams{
+			TenantID: tenantID, Currency: clusterCurrency, IdempotencyKey: intentKey,
+		})
+		if intentErr != nil {
 			s.logger.WithError(intentErr).Error("Failed to record Stripe cluster checkout intent")
 			return nil, status.Error(codes.Internal, "failed to record checkout intent")
 		}
@@ -4885,11 +3775,9 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *purse
 			return nil, status.Errorf(codes.Internal, "failed to setup payment: %v", err)
 		}
 		if cust.ID != "" {
-			if _, updateErr := s.db.ExecContext(ctx, `
-				UPDATE purser.payment_provider_intents
-				SET provider_customer_id = $1, updated_at = NOW()
-				WHERE id = $2
-			`, cust.ID, clusterIntentID); updateErr != nil {
+			if updateErr := purserdb.New(s.db).SetClusterCheckoutIntentCustomer(ctx, purserdb.SetClusterCheckoutIntentCustomerParams{
+				CustomerID: sql.NullString{String: cust.ID, Valid: true}, IntentID: clusterIntentID,
+			}); updateErr != nil {
 				s.logger.WithError(updateErr).WithField("intent_id", clusterIntentID).Warn("Failed to record provider_customer_id")
 			}
 		}
@@ -4930,28 +3818,18 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *purse
 			return nil, status.Errorf(codes.Internal, "failed to create checkout: %v", err)
 		}
 		if sess != nil && sess.ID != "" {
-			if _, updateErr := s.db.ExecContext(ctx, `
-				UPDATE purser.payment_provider_intents
-				SET provider_session_id = $1, status = 'provider_open', updated_at = NOW()
-				WHERE id = $2
-			`, sess.ID, clusterIntentID); updateErr != nil {
+			if updateErr := purserdb.New(s.db).SetClusterCheckoutIntentSessionOpen(ctx, purserdb.SetClusterCheckoutIntentSessionOpenParams{
+				SessionID: sql.NullString{String: sess.ID, Valid: true}, IntentID: clusterIntentID,
+			}); updateErr != nil {
 				s.logger.WithError(updateErr).WithField("intent_id", clusterIntentID).Warn("Failed to record provider_session_id")
 			}
 		}
 
-		var subscriptionID string
-		err = s.db.QueryRowContext(ctx, `
-			INSERT INTO purser.cluster_subscriptions (
-				tenant_id, cluster_id, status, stripe_customer_id, checkout_session_id, intent_id, created_at, updated_at
-			) VALUES ($1, $2, 'pending_payment', $3, $4, $5, NOW(), NOW())
-			ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
-				status = EXCLUDED.status,
-				stripe_customer_id = EXCLUDED.stripe_customer_id,
-				checkout_session_id = EXCLUDED.checkout_session_id,
-				intent_id = EXCLUDED.intent_id,
-				updated_at = NOW()
-			RETURNING id
-		`, tenantID, clusterID, cust.ID, sess.ID, clusterIntentID).Scan(&subscriptionID)
+		subscriptionID, err := purserdb.New(s.db).UpsertPendingClusterCheckoutSubscription(ctx, purserdb.UpsertPendingClusterCheckoutSubscriptionParams{
+			TenantID: tenantID, ClusterID: clusterID,
+			CustomerID: sql.NullString{String: cust.ID, Valid: cust.ID != ""},
+			SessionID:  sql.NullString{String: sess.ID, Valid: sess.ID != ""}, IntentID: clusterIntentID,
+		})
 		if err != nil {
 			s.logger.WithError(err).WithField("session_id", sess.ID).Error("Failed to record cluster subscription checkout")
 			if expireErr := s.stripeClient.ExpireCheckoutSession(ctx, sess.ID); expireErr != nil {
@@ -5004,16 +3882,13 @@ func (s *PurserServer) CancelClusterSubscription(ctx context.Context, req *purse
 			return nil, status.Error(codes.Unavailable, "Stripe not configured")
 		}
 
-		var stripeSubID sql.NullString
-		err = s.db.QueryRowContext(ctx, `
-			SELECT stripe_subscription_id
-			FROM purser.cluster_subscriptions
-			WHERE tenant_id = $1 AND cluster_id = $2
-		`, tenantID, clusterID).Scan(&stripeSubID)
-		if errors.Is(err, sql.ErrNoRows) || !stripeSubID.Valid {
+		stripeSubID, lookupErr := purserdb.New(s.db).GetClusterStripeSubscriptionID(ctx, purserdb.GetClusterStripeSubscriptionIDParams{
+			TenantID: tenantID, ClusterID: clusterID,
+		})
+		if errors.Is(lookupErr, sql.ErrNoRows) || !stripeSubID.Valid {
 			return nil, status.Error(codes.NotFound, "no Stripe subscription found for cluster")
 		}
-		if err != nil {
+		if lookupErr != nil {
 			return nil, status.Error(codes.Internal, "failed to load cluster subscription")
 		}
 
@@ -5030,15 +3905,14 @@ func (s *PurserServer) CancelClusterSubscription(ctx context.Context, req *purse
 		}
 		ourStatus := handlers.MapStripeSubscriptionStatus(string(sub.Status), sub.CancelAtPeriodEnd)
 
-		_, err = s.db.ExecContext(ctx, `
-			UPDATE purser.cluster_subscriptions
-			SET status = $1,
-			    stripe_subscription_status = $2,
-			    stripe_current_period_end = $3,
-			    cancelled_at = CASE WHEN $1 = 'cancelled' THEN NOW() ELSE cancelled_at END,
-			    updated_at = NOW()
-			WHERE tenant_id = $4 AND cluster_id = $5
-		`, ourStatus, sub.Status, periodEnd, tenantID, clusterID)
+		periodEndValue := sql.NullTime{}
+		if periodEnd != nil {
+			periodEndValue = sql.NullTime{Time: *periodEnd, Valid: true}
+		}
+		err = purserdb.New(s.db).UpdateCancelledClusterSubscription(ctx, purserdb.UpdateCancelledClusterSubscriptionParams{
+			Status: ourStatus, StripeStatus: sql.NullString{String: string(sub.Status), Valid: true},
+			PeriodEnd: periodEndValue, TenantID: tenantID, ClusterID: clusterID,
+		})
 		if err != nil {
 			s.logger.WithError(err).Warn("Failed to update cluster subscription after cancellation")
 		}
@@ -5063,12 +3937,8 @@ func (s *PurserServer) ListMarketplaceClusterPricings(ctx context.Context, req *
 	// Get tenant's billing tier level (0 if not found or no subscription)
 	var tenantTierLevel int32
 	if tenantID != "" {
-		err := s.db.QueryRowContext(ctx, `
-			SELECT COALESCE(bt.tier_level, 0)
-			FROM purser.tenant_subscriptions ts
-			JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
-			WHERE ts.tenant_id = $1 AND ts.status = 'active'
-		`, tenantID).Scan(&tenantTierLevel)
+		var err error
+		tenantTierLevel, err = purserdb.New(s.db).GetActiveTenantTierLevel(ctx, tenantID)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			s.logger.WithError(err).Warn("Failed to get tenant tier level")
 		}
@@ -5080,79 +3950,47 @@ func (s *PurserServer) ListMarketplaceClusterPricings(ctx context.Context, req *
 		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
 	}
 
-	// Base query with tier filter
-	baseWhere := "WHERE required_tier_level <= $1"
-	args := []any{tenantTierLevel}
-	argIdx := 2
-
-	// Get total count
-	var total int32
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM purser.cluster_pricing %s", baseWhere)
-	if countErr := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); countErr != nil {
+	totalRows, countErr := purserdb.New(s.db).CountMarketplaceClusterPricings(ctx, tenantTierLevel)
+	if countErr != nil {
 		return nil, status.Errorf(codes.Internal, "count query failed: %v", countErr)
 	}
-
-	// Add keyset pagination condition
-	where := baseWhere
+	total := int32(totalRows)
+	if totalRows > int64(^uint32(0)>>1) {
+		total = int32(^uint32(0) >> 1)
+	}
+	cursorAt := sql.NullTime{}
+	cursorID := ""
 	if params.Cursor != nil {
-		if params.Direction == pagination.Backward {
-			where += fmt.Sprintf(" AND (created_at, cluster_id) > ($%d, $%d)", argIdx, argIdx+1)
-		} else {
-			where += fmt.Sprintf(" AND (created_at, cluster_id) < ($%d, $%d)", argIdx, argIdx+1)
-		}
-		args = append(args, params.Cursor.Timestamp, params.Cursor.ID)
-		argIdx += 2
+		cursorAt = sql.NullTime{Time: params.Cursor.Timestamp, Valid: true}
+		cursorID = params.Cursor.ID
 	}
-
-	// Order by and limit
-	orderBy := "ORDER BY created_at DESC, cluster_id DESC"
-	if params.Direction == pagination.Backward {
-		orderBy = "ORDER BY created_at ASC, cluster_id ASC"
-	}
-
-	query := fmt.Sprintf(`
-		SELECT cluster_id, pricing_model, base_price::text, currency,
-		       required_tier_level, created_at
-		FROM purser.cluster_pricing
-		%s %s LIMIT $%d`,
-		where, orderBy, argIdx)
-	args = append(args, params.Limit+1)
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := purserdb.New(s.db).ListMarketplaceClusterPricingPage(ctx, purserdb.ListMarketplaceClusterPricingPageParams{
+		TierLevel: tenantTierLevel, HasCursor: params.Cursor != nil,
+		Backward: params.Direction == pagination.Backward,
+		CursorAt: cursorAt, CursorID: cursorID, ResultLimit: int32(params.Limit + 1),
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer func() { _ = rows.Close() }()
 
 	var pricings []*purserpb.MarketplaceClusterPricing
-	for rows.Next() {
-		var p purserpb.MarketplaceClusterPricing
-		var basePrice sql.NullString
-		var currency sql.NullString
-		var createdAt time.Time
-
-		if err := rows.Scan(
-			&p.ClusterId, &p.PricingModel, &basePrice, &currency,
-			&p.RequiredTierLevel, &createdAt,
-		); err != nil {
-			return nil, status.Errorf(codes.Internal, "scan marketplace cluster pricing: %v", err)
+	for _, row := range rows {
+		p := &purserpb.MarketplaceClusterPricing{
+			ClusterId: row.ClusterID, PricingModel: row.PricingModel,
+			RequiredTierLevel: row.RequiredTierLevel.Int32,
+			Currency:          "EUR", CreatedAt: timestamppb.New(row.CreatedAt.Time),
 		}
-
-		if basePrice.Valid {
-			value, err := decimal.NewFromString(basePrice.String)
+		if row.BasePrice != "" {
+			value, err := decimal.NewFromString(row.BasePrice)
 			if err != nil {
 				return nil, status.Errorf(codes.Internal, "invalid base_price: %v", err)
 			}
 			p.MonthlyPriceCents = int32(value.Mul(decimal.NewFromInt(100)).Round(0).IntPart())
 		}
-		if currency.Valid {
-			p.Currency = currency.String
-		} else {
-			p.Currency = "EUR"
+		if row.Currency.Valid {
+			p.Currency = row.Currency.String
 		}
-		p.CreatedAt = timestamppb.New(createdAt)
-
-		pricings = append(pricings, &p)
+		pricings = append(pricings, p)
 	}
 
 	// Enrich is_platform_official from Quartermaster (cached)
@@ -5339,31 +4177,9 @@ func (s *PurserServer) GetPrepaidBalance(ctx context.Context, req *purserpb.GetP
 		currency = billing.DefaultCurrency()
 	}
 
-	var balance purserpb.PrepaidBalance
-	var createdAt, updatedAt time.Time
-
-	err := s.db.QueryRowContext(ctx, `
-		SELECT pb.id, pb.tenant_id, pb.balance_cents, pb.currency,
-			pb.low_balance_threshold_cents, pb.created_at, pb.updated_at,
-			CEIL(COALESCE(SUM(r.reserved_amount_micro), 0)::numeric / 10000)::bigint
-		FROM purser.prepaid_balances pb
-		LEFT JOIN purser.usage_reservations r
-			ON r.tenant_id = pb.tenant_id
-			AND r.currency = pb.currency
-			AND r.updated_at >= NOW() - INTERVAL '3 minutes'
-		WHERE pb.tenant_id = $1 AND pb.currency = $2
-		GROUP BY pb.id, pb.tenant_id, pb.balance_cents, pb.currency,
-			pb.low_balance_threshold_cents, pb.created_at, pb.updated_at
-	`, tenantID, currency).Scan(
-		&balance.Id,
-		&balance.TenantId,
-		&balance.BalanceCents,
-		&balance.Currency,
-		&balance.LowBalanceThresholdCents,
-		&createdAt,
-		&updatedAt,
-		&balance.ReservedBalanceCents,
-	)
+	row, err := purserdb.New(s.db).GetPrepaidBalance(ctx, purserdb.GetPrepaidBalanceParams{
+		TenantID: tenantID, Currency: currency,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.NotFound, "no prepaid balance found for tenant %s", tenantID)
 	}
@@ -5372,21 +4188,17 @@ func (s *PurserServer) GetPrepaidBalance(ctx context.Context, req *purserpb.GetP
 		return nil, status.Error(codes.Internal, "failed to get prepaid balance")
 	}
 
-	balance.CreatedAt = timestamppb.New(createdAt)
-	balance.UpdatedAt = timestamppb.New(updatedAt)
+	balance := purserpb.PrepaidBalance{
+		Id: row.ID.String(), TenantId: row.TenantID.String(), BalanceCents: row.BalanceCents,
+		Currency: row.Currency, LowBalanceThresholdCents: row.LowBalanceThresholdCents,
+		ReservedBalanceCents: row.ReservedBalanceCents,
+		CreatedAt:            timestamppb.New(row.CreatedAt.Time), UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
+	}
 	balance.AvailableBalanceCents = balance.BalanceCents - balance.ReservedBalanceCents
 	balance.IsLowBalance = balance.AvailableBalanceCents < balance.LowBalanceThresholdCents
 
 	// Calculate drain rate from last hour's usage deductions
-	var usageLastHour int64
-	err = s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(SUM(ABS(amount_cents)), 0)
-		FROM purser.balance_transactions
-		WHERE tenant_id = $1
-		  AND transaction_type = 'usage'
-		  AND amount_cents < 0
-		  AND created_at >= NOW() - INTERVAL '1 hour'
-	`, tenantID).Scan(&usageLastHour)
+	usageLastHour, err := purserdb.New(s.db).GetPrepaidDrainRate(ctx, tenantID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithError(err).Warn("Failed to calculate drain rate, defaulting to 0")
 		usageLastHour = 0
@@ -5413,14 +4225,14 @@ func (s *PurserServer) InitializePrepaidBalance(ctx context.Context, req *purser
 		threshold = 500 // Default $5
 	}
 
-	id := uuid.New().String()
+	id := uuid.New()
 	now := time.Now()
 
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO purser.prepaid_balances (id, tenant_id, balance_cents, currency, low_balance_threshold_cents, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $6)
-		ON CONFLICT (tenant_id, currency) DO NOTHING
-	`, id, tenantID, req.GetInitialBalanceCents(), currency, threshold, now)
+	_, err := purserdb.New(s.db).InitializePrepaidBalanceRow(ctx, purserdb.InitializePrepaidBalanceRowParams{
+		ID: id, TenantID: tenantID, BalanceCents: req.GetInitialBalanceCents(), Currency: currency,
+		LowBalanceThresholdCents: sql.NullInt64{Int64: threshold, Valid: true},
+		Now:                      sql.NullTime{Time: now, Valid: true},
+	})
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to initialize prepaid balance")
 		return nil, status.Error(codes.Internal, "failed to initialize prepaid balance")
@@ -5463,28 +4275,21 @@ func (s *PurserServer) reconcileCanonicalTierClusterAccess(ctx context.Context, 
 	if s.tierReconciler == nil {
 		return nil, "", nil
 	}
+	queries := purserdb.New(s.db)
 	for attempt := 0; attempt < 4; attempt++ {
-		var tierID, tierName string
-		var tierLevel int32
-		if err := s.db.QueryRowContext(ctx, `
-			SELECT ts.tier_id::text, bt.tier_level, bt.tier_name
-			FROM purser.tenant_subscriptions ts
-			JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
-			WHERE ts.tenant_id = $1
-		`, tenantID).Scan(&tierID, &tierLevel, &tierName); err != nil {
+		canonical, err := queries.GetCanonicalSubscriptionTier(ctx, tenantID)
+		if err != nil {
 			return nil, "", fmt.Errorf("load canonical tier: %w", err)
 		}
-		eligible, primary, err := s.reconcileTierClusterAccess(ctx, tenantID, tierLevel, tierName)
+		eligible, primary, err := s.reconcileTierClusterAccess(ctx, tenantID, canonical.TierLevel, canonical.TierName)
 		if err != nil {
 			return nil, "", err
 		}
-		var currentTierID string
-		if err := s.db.QueryRowContext(ctx, `
-			SELECT tier_id::text FROM purser.tenant_subscriptions WHERE tenant_id = $1
-		`, tenantID).Scan(&currentTierID); err != nil {
+		currentTierID, err := queries.GetTenantSubscriptionTierID(ctx, tenantID)
+		if err != nil {
 			return nil, "", fmt.Errorf("verify canonical tier after reconcile: %w", err)
 		}
-		if currentTierID == tierID {
+		if currentTierID == canonical.TierID {
 			return eligible, primary, nil
 		}
 	}
@@ -5514,8 +4319,8 @@ func (s *PurserServer) InitializePrepaidAccount(ctx context.Context, req *purser
 		currency = billing.DefaultCurrency()
 	}
 
-	subscriptionID := uuid.New().String()
-	balanceID := uuid.New().String()
+	subscriptionID := uuid.New()
+	balanceID := uuid.New()
 	now := time.Now()
 
 	// Use a transaction to create both subscription and balance atomically
@@ -5526,14 +4331,8 @@ func (s *PurserServer) InitializePrepaidAccount(ctx context.Context, req *purser
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
 	// 1. Resolve default prepaid tier
-	var tierID, tierName string
-	var tierLevel int32
-	err = tx.QueryRowContext(ctx, `
-		SELECT id, tier_level, tier_name
-		FROM purser.billing_tiers
-		WHERE is_default_prepaid = true AND is_active = true
-		LIMIT 1
-	`).Scan(&tierID, &tierLevel, &tierName)
+	queries := purserdb.New(tx)
+	defaultTier, err := queries.GetDefaultBillingTier(ctx, true)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.FailedPrecondition, "no default prepaid billing tier configured")
 	}
@@ -5543,22 +4342,20 @@ func (s *PurserServer) InitializePrepaidAccount(ctx context.Context, req *purser
 	}
 
 	// 2. Create subscription with billing_model='prepaid', status='active'
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO purser.tenant_subscriptions (id, tenant_id, tier_id, billing_model, status, created_at, updated_at)
-		VALUES ($1, $2, $3, 'prepaid', 'active', $4, $4)
-		ON CONFLICT (tenant_id) DO NOTHING
-	`, subscriptionID, tenantID, tierID, now)
+	_, err = queries.EnsureDefaultTenantSubscription(ctx, purserdb.EnsureDefaultTenantSubscriptionParams{
+		ID: subscriptionID, TenantID: tenantID, TierID: defaultTier.ID,
+		BillingModel: "prepaid", Now: sql.NullTime{Time: now, Valid: true},
+	})
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to create prepaid subscription")
 		return nil, status.Error(codes.Internal, "failed to create subscription")
 	}
 
 	// 3. Create prepaid balance with initial balance 0
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO purser.prepaid_balances (id, tenant_id, balance_cents, currency, low_balance_threshold_cents, created_at, updated_at)
-		VALUES ($1, $2, 0, $3, 500, $4, $4)
-		ON CONFLICT (tenant_id, currency) DO NOTHING
-	`, balanceID, tenantID, currency, now)
+	_, err = queries.EnsureRuntimePrepaidBalance(ctx, purserdb.EnsureRuntimePrepaidBalanceParams{
+		ID: balanceID, TenantID: tenantID, Currency: currency,
+		Now: sql.NullTime{Time: now, Valid: true},
+	})
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to create prepaid balance")
 		return nil, status.Error(codes.Internal, "failed to create prepaid balance")
@@ -5571,15 +4368,10 @@ func (s *PurserServer) InitializePrepaidAccount(ctx context.Context, req *purser
 	// An email and wallet signup may converge on the same tenant. Read the
 	// winning subscription after ON CONFLICT instead of returning/reconciling
 	// the default tier this request attempted to insert.
-	var actualSubID, actualBalID, canonicalTierName string
-	var canonicalTierLevel int32
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT ts.id::text, pb.id::text, bt.tier_level, bt.tier_name
-		FROM purser.tenant_subscriptions ts
-		JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
-		JOIN purser.prepaid_balances pb ON pb.tenant_id = ts.tenant_id AND pb.currency = $2
-		WHERE ts.tenant_id = $1
-	`, tenantID, currency).Scan(&actualSubID, &actualBalID, &canonicalTierLevel, &canonicalTierName); err != nil {
+	actual, err := purserdb.New(s.db).GetInitializedPrepaidAccount(ctx, purserdb.GetInitializedPrepaidAccountParams{
+		Currency: currency, TenantID: tenantID,
+	})
+	if err != nil {
 		return nil, status.Errorf(codes.Internal, "load initialized prepaid account: %v", err)
 	}
 
@@ -5590,15 +4382,15 @@ func (s *PurserServer) InitializePrepaidAccount(ctx context.Context, req *purser
 
 	s.logger.WithFields(logging.Fields{
 		"tenant_id":       tenantID,
-		"subscription_id": actualSubID,
-		"balance_id":      actualBalID,
-		"tier_level":      canonicalTierLevel,
+		"subscription_id": actual.SubscriptionID.String(),
+		"balance_id":      actual.BalanceID.String(),
+		"tier_level":      actual.TierLevel,
 	}).Info("Initialized prepaid account")
 
 	return &purserpb.InitializePrepaidAccountResponse{
-		SubscriptionId:     actualSubID,
-		BalanceId:          actualBalID,
-		TierLevel:          canonicalTierLevel,
+		SubscriptionId:     actual.SubscriptionID.String(),
+		BalanceId:          actual.BalanceID.String(),
+		TierLevel:          actual.TierLevel,
 		EligibleClusterIds: eligibleClusters,
 		PrimaryClusterId:   primaryCluster,
 	}, nil
@@ -5617,7 +4409,7 @@ func (s *PurserServer) EnsureFreeAccount(ctx context.Context, req *purserpb.Init
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
 
-	subscriptionID := uuid.New().String()
+	subscriptionID := uuid.New()
 	now := time.Now()
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -5627,14 +4419,8 @@ func (s *PurserServer) EnsureFreeAccount(ctx context.Context, req *purserpb.Init
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
 	// Resolve default postpaid tier
-	var tierID, tierName string
-	var tierLevel int32
-	err = tx.QueryRowContext(ctx, `
-		SELECT id, tier_level, tier_name
-		FROM purser.billing_tiers
-		WHERE is_default_postpaid = true AND is_active = true
-		LIMIT 1
-	`).Scan(&tierID, &tierLevel, &tierName)
+	queries := purserdb.New(tx)
+	defaultTier, err := queries.GetDefaultBillingTier(ctx, false)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.FailedPrecondition, "no default postpaid billing tier configured")
 	}
@@ -5644,11 +4430,10 @@ func (s *PurserServer) EnsureFreeAccount(ctx context.Context, req *purserpb.Init
 	}
 
 	// Create subscription with billing_model='postpaid', status='active'
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO purser.tenant_subscriptions (id, tenant_id, tier_id, billing_model, status, created_at, updated_at)
-		VALUES ($1, $2, $3, 'postpaid', 'active', $4, $4)
-		ON CONFLICT (tenant_id) DO NOTHING
-	`, subscriptionID, tenantID, tierID, now)
+	_, err = queries.EnsureDefaultTenantSubscription(ctx, purserdb.EnsureDefaultTenantSubscriptionParams{
+		ID: subscriptionID, TenantID: tenantID, TierID: defaultTier.ID,
+		BillingModel: "postpaid", Now: sql.NullTime{Time: now, Valid: true},
+	})
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to create postpaid subscription")
 		return nil, status.Error(codes.Internal, "failed to create subscription")
@@ -5660,14 +4445,8 @@ func (s *PurserServer) EnsureFreeAccount(ctx context.Context, req *purserpb.Init
 
 	// Read the winning subscription after ON CONFLICT. A concurrent wallet
 	// provisioning request may already have established prepaid billing.
-	var actualSubID, canonicalTierName string
-	var canonicalTierLevel int32
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT ts.id::text, bt.tier_level, bt.tier_name
-		FROM purser.tenant_subscriptions ts
-		JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
-		WHERE ts.tenant_id = $1
-	`, tenantID).Scan(&actualSubID, &canonicalTierLevel, &canonicalTierName); err != nil {
+	actual, err := purserdb.New(s.db).GetInitializedPostpaidAccount(ctx, tenantID)
+	if err != nil {
 		return nil, status.Errorf(codes.Internal, "load initialized free account: %v", err)
 	}
 
@@ -5678,13 +4457,13 @@ func (s *PurserServer) EnsureFreeAccount(ctx context.Context, req *purserpb.Init
 
 	s.logger.WithFields(logging.Fields{
 		"tenant_id":       tenantID,
-		"subscription_id": actualSubID,
-		"tier_level":      canonicalTierLevel,
+		"subscription_id": actual.SubscriptionID.String(),
+		"tier_level":      actual.TierLevel,
 	}).Info("Initialized postpaid account")
 
 	return &purserpb.InitializePostpaidAccountResponse{
-		SubscriptionId:     actualSubID,
-		TierLevel:          canonicalTierLevel,
+		SubscriptionId:     actual.SubscriptionID.String(),
+		TierLevel:          actual.TierLevel,
 		EligibleClusterIds: eligibleClusters,
 		PrimaryClusterId:   primaryCluster,
 	}, nil
@@ -5756,6 +4535,22 @@ func (s *PurserServer) AdjustBalance(ctx context.Context, req *purserpb.AdjustBa
 	return s.recordBalanceTransaction(ctx, tenantID, currency, req.GetAmountCents(), txType, description, req.ReferenceId, req.ReferenceType)
 }
 
+func balanceTransactionFromReferenceRow(row purserdb.GetBalanceTransactionByReferenceRow) *purserpb.BalanceTransaction {
+	txn := &purserpb.BalanceTransaction{
+		Id: row.ID.String(), TenantId: row.TenantID.String(), AmountCents: row.AmountCents,
+		BalanceAfterCents: row.BalanceAfterCents, TransactionType: row.TransactionType,
+		Description: row.Description, CreatedAt: timestamppb.New(row.CreatedAt.Time),
+	}
+	if row.ReferenceID.Valid {
+		value := row.ReferenceID.UUID.String()
+		txn.ReferenceId = &value
+	}
+	if row.ReferenceType.Valid {
+		txn.ReferenceType = &row.ReferenceType.String
+	}
+	return txn
+}
+
 // recordBalanceTransaction atomically updates balance and records the transaction
 func (s *PurserServer) recordBalanceTransaction(
 	ctx context.Context,
@@ -5766,16 +4561,16 @@ func (s *PurserServer) recordBalanceTransaction(
 ) (*purserpb.BalanceTransaction, error) {
 	userID := middleware.GetUserID(ctx)
 	actorKind := "system"
-	var actorID any
+	actorID := sql.NullString{}
 	if userID != "" {
 		actorKind = "user"
 		if _, parseErr := uuid.Parse(userID); parseErr == nil {
-			actorID = userID
+			actorID = sql.NullString{String: userID, Valid: true}
 		}
 	}
-	var evidenceRef any
+	evidenceRef := sql.NullString{}
 	if referenceID != nil && *referenceID != "" {
-		evidenceRef = *referenceID
+		evidenceRef = sql.NullString{String: *referenceID, Valid: true}
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -5783,32 +4578,30 @@ func (s *PurserServer) recordBalanceTransaction(
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
-	if _, err = tx.ExecContext(ctx, `
-		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency, low_balance_threshold_cents, created_at, updated_at)
-		VALUES ($1, 0, $2, 500, NOW(), NOW())
-		ON CONFLICT (tenant_id, currency) DO NOTHING
-	`, tenantID, currency); err != nil {
+	queries := purserdb.New(tx)
+	if err = queries.EnsurePrepaidBalanceRow(ctx, purserdb.EnsurePrepaidBalanceRowParams{
+		TenantID: tenantID, Currency: currency,
+	}); err != nil {
 		s.logger.WithError(err).Error("Failed to ensure prepaid balance")
 		return nil, status.Error(codes.Internal, "failed to initialize balance")
 	}
 
-	txID := uuid.New().String()
+	txUUID := uuid.New()
+	txID := txUUID.String()
 	now := time.Now()
 	insertedWithReference := false
 
 	if referenceID != nil && referenceType != nil {
 		// Idempotency: use ON CONFLICT DO NOTHING so we can safely query in-tx
 		// without aborting the transaction.
-		var insertedID string
-		insertErr := tx.QueryRowContext(ctx, `
-			INSERT INTO purser.balance_transactions
-			(id, tenant_id, amount_cents, balance_after_cents, transaction_type, description,
-			 reference_id, reference_type, actor_kind, actor_id, reason, evidence_ref, created_at)
-			VALUES ($1, $2, $3, 0, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-			ON CONFLICT (tenant_id, reference_type, reference_id) DO NOTHING
-			RETURNING id
-		`, txID, tenantID, amountCents, txType, description, referenceID, referenceType,
-			actorKind, actorID, description, evidenceRef, now).Scan(&insertedID)
+		_, insertErr := queries.InsertReferencedBalanceTransaction(ctx, purserdb.InsertReferencedBalanceTransactionParams{
+			ID: txUUID, TenantID: tenantID, AmountCents: amountCents, TransactionType: txType,
+			Description: sql.NullString{String: description, Valid: true}, ReferenceID: *referenceID,
+			ReferenceType: sql.NullString{String: *referenceType, Valid: true},
+			ActorKind:     sql.NullString{String: actorKind, Valid: true}, ActorID: actorID,
+			Reason: sql.NullString{String: description, Valid: true}, EvidenceRef: evidenceRef,
+			CreatedAt: sql.NullTime{Time: now, Valid: true},
+		})
 		if insertErr != nil {
 			if !errors.Is(insertErr, sql.ErrNoRows) {
 				s.logger.WithError(insertErr).Error("Failed to insert balance transaction")
@@ -5816,26 +4609,9 @@ func (s *PurserServer) recordBalanceTransaction(
 			}
 
 			// Conflict: return the existing transaction (and do NOT mutate balance again).
-			var existingTxn purserpb.BalanceTransaction
-			var createdAt time.Time
-			var existingRefID, existingRefType sql.NullString
-			scanErr := tx.QueryRowContext(ctx, `
-				SELECT id, tenant_id, amount_cents, balance_after_cents, transaction_type, description, reference_id, reference_type, created_at
-				FROM purser.balance_transactions
-				WHERE tenant_id = $1 AND reference_type = $2 AND reference_id = $3
-				ORDER BY created_at DESC
-				LIMIT 1
-			`, tenantID, *referenceType, *referenceID).Scan(
-				&existingTxn.Id,
-				&existingTxn.TenantId,
-				&existingTxn.AmountCents,
-				&existingTxn.BalanceAfterCents,
-				&existingTxn.TransactionType,
-				&existingTxn.Description,
-				&existingRefID,
-				&existingRefType,
-				&createdAt,
-			)
+			existing, scanErr := queries.GetBalanceTransactionByReference(ctx, purserdb.GetBalanceTransactionByReferenceParams{
+				TenantID: tenantID, ReferenceType: sql.NullString{String: *referenceType, Valid: true}, ReferenceID: *referenceID,
+			})
 			if scanErr != nil {
 				if errors.Is(scanErr, sql.ErrNoRows) {
 					return nil, status.Error(codes.Internal, "duplicate transaction detected but existing record missing")
@@ -5844,28 +4620,16 @@ func (s *PurserServer) recordBalanceTransaction(
 				return nil, status.Error(codes.Internal, "failed to load existing transaction")
 			}
 
-			existingTxn.CreatedAt = timestamppb.New(createdAt)
-			if existingRefID.Valid {
-				existingTxn.ReferenceId = &existingRefID.String
-			}
-			if existingRefType.Valid {
-				existingTxn.ReferenceType = &existingRefType.String
-			}
-
-			return &existingTxn, nil
+			return balanceTransactionFromReferenceRow(existing), nil
 		}
 
 		insertedWithReference = true
 	}
 
 	// Update balance and get new balance in one query
-	var newBalance int64
-	err = tx.QueryRowContext(ctx, `
-		UPDATE purser.prepaid_balances
-		SET balance_cents = balance_cents + $1, updated_at = NOW()
-		WHERE tenant_id = $2 AND currency = $3
-		RETURNING balance_cents
-	`, amountCents, tenantID, currency).Scan(&newBalance)
+	newBalance, err := queries.AddPrepaidBalance(ctx, purserdb.AddPrepaidBalanceParams{
+		AmountCents: amountCents, TenantID: tenantID, Currency: currency,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.NotFound, "no prepaid balance found for tenant %s", tenantID)
 	}
@@ -5876,23 +4640,30 @@ func (s *PurserServer) recordBalanceTransaction(
 	previousBalance := newBalance - amountCents
 
 	if insertedWithReference {
-		_, err = tx.ExecContext(ctx, `
-			UPDATE purser.balance_transactions
-			SET balance_after_cents = $1
-			WHERE id = $2
-		`, newBalance, txID)
+		_, err = queries.SetBalanceTransactionResult(ctx, purserdb.SetBalanceTransactionResultParams{
+			BalanceAfterCents: newBalance, ID: txUUID,
+		})
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to update balance transaction")
 			return nil, status.Error(codes.Internal, "failed to record transaction")
 		}
 	} else {
-		_, err = tx.ExecContext(ctx, `
-			INSERT INTO purser.balance_transactions
-			(id, tenant_id, amount_cents, balance_after_cents, transaction_type, description,
-			 reference_id, reference_type, actor_kind, actor_id, reason, evidence_ref, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-		`, txID, tenantID, amountCents, newBalance, txType, description, referenceID, referenceType,
-			actorKind, actorID, description, evidenceRef, now)
+		referenceIDValue := sql.NullString{}
+		if referenceID != nil && *referenceID != "" {
+			referenceIDValue = sql.NullString{String: *referenceID, Valid: true}
+		}
+		referenceTypeValue := sql.NullString{}
+		if referenceType != nil && *referenceType != "" {
+			referenceTypeValue = sql.NullString{String: *referenceType, Valid: true}
+		}
+		err = queries.InsertBalanceTransaction(ctx, purserdb.InsertBalanceTransactionParams{
+			ID: txUUID, TenantID: tenantID, AmountCents: amountCents, BalanceAfterCents: newBalance,
+			TransactionType: txType, Description: sql.NullString{String: description, Valid: true},
+			ReferenceID: referenceIDValue, ReferenceType: referenceTypeValue,
+			ActorKind: sql.NullString{String: actorKind, Valid: true}, ActorID: actorID,
+			Reason: sql.NullString{String: description, Valid: true}, EvidenceRef: evidenceRef,
+			CreatedAt: sql.NullTime{Time: now, Valid: true},
+		})
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to insert transaction")
 			return nil, status.Error(codes.Internal, "failed to record transaction")
@@ -5927,14 +4698,10 @@ func (s *PurserServer) recordBalanceTransaction(
 
 	// Auto-reactivate suspended tenant if balance goes positive after top-up
 	if amountCents > 0 && newBalance >= 0 {
-		result, err := s.db.ExecContext(ctx, `
-			UPDATE purser.tenant_subscriptions
-			SET status = 'active', updated_at = NOW()
-			WHERE tenant_id = $1 AND status = 'suspended'
-		`, tenantID)
+		rowsAffected, err := purserdb.New(s.db).ReactivateFundedSubscription(ctx, tenantID)
 		if err != nil {
 			s.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to check/reactivate suspended subscription")
-		} else if rowsAffected, _ := result.RowsAffected(); rowsAffected > 0 {
+		} else if rowsAffected > 0 {
 			s.logger.WithFields(map[string]any{
 				"tenant_id":        tenantID,
 				"new_balance":      newBalance,
@@ -5980,78 +4747,52 @@ func (s *PurserServer) ListBalanceTransactions(ctx context.Context, req *purserp
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
 
-	// Build query with optional filters
-	query := `
-		SELECT id, tenant_id, amount_cents, balance_after_cents, transaction_type, description, reference_id, reference_type, created_at
-		FROM purser.balance_transactions
-		WHERE tenant_id = $1
-	`
-	args := []any{tenantID}
-	argIdx := 2
-
+	params := purserdb.ListBalanceTransactionsParams{TenantID: tenantID}
 	if req.TransactionType != nil && *req.TransactionType != "" {
-		query += fmt.Sprintf(" AND transaction_type = $%d", argIdx)
-		args = append(args, *req.TransactionType)
-		argIdx++
+		params.FilterType = true
+		params.TransactionType = *req.TransactionType
 	}
 
 	if req.TimeRange != nil {
 		if req.TimeRange.Start != nil {
-			query += fmt.Sprintf(" AND created_at >= $%d", argIdx)
-			args = append(args, req.TimeRange.Start.AsTime())
-			argIdx++
+			params.FilterStart = true
+			params.StartAt = sql.NullTime{Time: req.TimeRange.Start.AsTime(), Valid: true}
 		}
 		if req.TimeRange.End != nil {
-			query += fmt.Sprintf(" AND created_at <= $%d", argIdx)
-			args = append(args, req.TimeRange.End.AsTime())
+			params.FilterEnd = true
+			params.EndAt = sql.NullTime{Time: req.TimeRange.End.AsTime(), Valid: true}
 		}
 	}
 
-	query += " ORDER BY created_at DESC LIMIT 100"
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := purserdb.New(s.db).ListBalanceTransactions(ctx, params)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to list transactions")
 		return nil, status.Error(codes.Internal, "failed to list transactions")
 	}
-	defer func() { _ = rows.Close() }()
-
-	var transactions []*purserpb.BalanceTransaction
-	for rows.Next() {
-		var txn purserpb.BalanceTransaction
-		var createdAt time.Time
-		var refID, refType sql.NullString
-
-		err := rows.Scan(
-			&txn.Id,
-			&txn.TenantId,
-			&txn.AmountCents,
-			&txn.BalanceAfterCents,
-			&txn.TransactionType,
-			&txn.Description,
-			&refID,
-			&refType,
-			&createdAt,
-		)
-		if err != nil {
-			s.logger.WithError(err).Error("Failed to scan transaction")
-			continue
-		}
-
-		txn.CreatedAt = timestamppb.New(createdAt)
-		if refID.Valid {
-			txn.ReferenceId = &refID.String
-		}
-		if refType.Valid {
-			txn.ReferenceType = &refType.String
-		}
-
-		transactions = append(transactions, &txn)
+	transactions := make([]*purserpb.BalanceTransaction, 0, len(rows))
+	for _, row := range rows {
+		transactions = append(transactions, balanceTransactionFromListRow(row))
 	}
 
 	return &purserpb.ListBalanceTransactionsResponse{
 		Transactions: transactions,
 	}, nil
+}
+
+func balanceTransactionFromListRow(row purserdb.ListBalanceTransactionsRow) *purserpb.BalanceTransaction {
+	txn := &purserpb.BalanceTransaction{
+		Id: row.ID.String(), TenantId: row.TenantID.String(), AmountCents: row.AmountCents,
+		BalanceAfterCents: row.BalanceAfterCents, TransactionType: row.TransactionType,
+		Description: row.Description, CreatedAt: timestamppb.New(row.CreatedAt.Time),
+	}
+	if row.ReferenceID.Valid {
+		value := row.ReferenceID.UUID.String()
+		txn.ReferenceId = &value
+	}
+	if row.ReferenceType.Valid {
+		txn.ReferenceType = &row.ReferenceType.String
+	}
+	return txn
 }
 
 // ============================================================================
@@ -6099,31 +4840,23 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *purserpb.Create
 	topupID := uuid.New().String()
 	intentKey := fmt.Sprintf("prepaid-topup:%s", topupID)
 	provisionalExpiresAt := time.Now().Add(24 * time.Hour)
-	var providerIntentID string
-
-	if err := s.db.QueryRowContext(ctx, `
-		INSERT INTO purser.payment_provider_intents (
-			tenant_id, provider, purpose, local_reference_type, local_reference_id,
-			status, currency, amount_cents, idempotency_key, expires_at
-		) VALUES ($1, $2, 'prepaid_topup', 'pending_topups', $3::uuid,
-		          'pending', $4, $5, $6, $7)
-		ON CONFLICT (provider, idempotency_key) DO UPDATE SET
-			attempt_count = purser.payment_provider_intents.attempt_count + 1,
-			updated_at = NOW()
-		RETURNING id
-	`, tenantID, provider, topupID, currency, amountCents, intentKey, provisionalExpiresAt).Scan(&providerIntentID); err != nil {
+	providerIntentID, err := purserdb.New(s.db).UpsertPrepaidTopupProviderIntent(ctx, purserdb.UpsertPrepaidTopupProviderIntentParams{
+		TenantID: tenantID, Provider: provider, TopupID: topupID, Currency: currency,
+		AmountCents: amountCents, IdempotencyKey: intentKey,
+		ExpiresAt: sql.NullTime{Time: provisionalExpiresAt, Valid: true},
+	})
+	if err != nil {
 		s.logger.WithError(err).Error("Failed to record prepaid top-up intent")
 		return nil, status.Error(codes.Internal, "failed to record top-up intent")
 	}
 
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO purser.pending_topups (
-			id, tenant_id, provider, checkout_id, amount_cents, currency,
-			status, expires_at, billing_email, billing_name, billing_company, billing_vat_number, intent_id
-		) VALUES ($1, $2, $3, NULL, $4, $5, 'pending', $6, $7, $8, $9, $10, $11)
-	`, topupID, tenantID, provider, amountCents, currency, provisionalExpiresAt,
-		sqlNullString(req.BillingEmail), sqlNullString(req.BillingName),
-		sqlNullString(req.BillingCompany), sqlNullString(req.BillingVatNumber), providerIntentID)
+	err = purserdb.New(s.db).InsertPendingCardTopup(ctx, purserdb.InsertPendingCardTopupParams{
+		TopupID: topupID, TenantID: tenantID, Provider: provider,
+		AmountCents: amountCents, Currency: currency, ExpiresAt: provisionalExpiresAt,
+		BillingEmail: sqlNullString(req.BillingEmail), BillingName: sqlNullString(req.BillingName),
+		BillingCompany: sqlNullString(req.BillingCompany), BillingVatNumber: sqlNullString(req.BillingVatNumber),
+		IntentID: providerIntentID,
+	})
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to create pending topup")
 		return nil, status.Error(codes.Internal, "failed to create topup record")
@@ -6154,11 +4887,7 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *purserpb.Create
 			return nil, status.Errorf(codes.Internal, "failed to create checkout: %v", err)
 		}
 		defer failTx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
-		if _, markErr := failTx.ExecContext(ctx, `
-			UPDATE purser.pending_topups
-			SET status = 'failed', updated_at = NOW()
-			WHERE id = $1 AND status = 'pending'
-		`, topupID); markErr != nil {
+		if _, markErr := purserdb.New(failTx).FailPendingCardTopup(ctx, topupID); markErr != nil {
 			s.logger.WithError(markErr).WithField("topup_id", topupID).Warn("Failed to mark prepaid top-up failed")
 			return nil, status.Errorf(codes.Internal, "failed to create checkout: %v", err)
 		}
@@ -6183,19 +4912,18 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *purserpb.Create
 		return nil, status.Errorf(codes.Internal, "begin topup created tx: %v", err)
 	}
 	defer createdTx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
-	if _, err := createdTx.ExecContext(ctx, `
-		UPDATE purser.payment_provider_intents
-		SET provider_session_id = $1, expires_at = $2, status = 'provider_open', updated_at = NOW()
-		WHERE id = $3
-	`, result.SessionID, result.ExpiresAt, providerIntentID); err != nil {
+	createdQueries := purserdb.New(createdTx)
+	if err := createdQueries.OpenPrepaidTopupProviderIntent(ctx, purserdb.OpenPrepaidTopupProviderIntentParams{
+		SessionID: sql.NullString{String: result.SessionID, Valid: result.SessionID != ""},
+		ExpiresAt: sql.NullTime{Time: result.ExpiresAt, Valid: true}, IntentID: providerIntentID,
+	}); err != nil {
 		s.logger.WithError(err).WithField("intent_id", providerIntentID).Error("Failed to attach provider session to top-up intent")
 		return nil, status.Error(codes.Internal, "failed to attach checkout to payment intent")
 	}
-	if _, err := createdTx.ExecContext(ctx, `
-		UPDATE purser.pending_topups
-		SET checkout_id = $1, expires_at = $2, updated_at = NOW()
-		WHERE id = $3 AND status = 'pending'
-	`, result.SessionID, result.ExpiresAt, topupID); err != nil {
+	if _, err := createdQueries.AttachCheckoutToPendingTopup(ctx, purserdb.AttachCheckoutToPendingTopupParams{
+		SessionID: sql.NullString{String: result.SessionID, Valid: result.SessionID != ""},
+		ExpiresAt: result.ExpiresAt, TopupID: topupID,
+	}); err != nil {
 		s.logger.WithError(err).WithField("checkout_id", result.SessionID).Error("Failed to attach provider checkout to topup")
 		return nil, status.Error(codes.Internal, "failed to attach checkout to topup")
 	}
@@ -6225,33 +4953,24 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *purserpb.Create
 
 // GetPendingTopup returns the status of a pending top-up
 func (s *PurserServer) GetPendingTopup(ctx context.Context, req *purserpb.GetPendingTopupRequest) (*purserpb.PendingTopup, error) {
-	var query string
-	var args []any
-
+	queries := purserdb.New(s.db)
+	var topup *purserpb.PendingTopup
+	var err error
 	if req.GetTopupId() != "" {
-		query = `SELECT id, tenant_id, provider, checkout_id, amount_cents, currency,
-		         status, expires_at, completed_at, balance_transaction_id, created_at, updated_at
-		         FROM purser.pending_topups WHERE id = $1`
-		args = []any{req.GetTopupId()}
+		var row purserdb.GetPendingTopupByIDRow
+		row, err = queries.GetPendingTopupByID(ctx, req.GetTopupId())
+		topup = pendingTopupFromFields(row.ID, row.TenantID, row.Provider, row.CheckoutID, row.AmountCents,
+			row.Currency, row.Status, row.ExpiresAt, row.CompletedAt, row.BalanceTransactionID, row.CreatedAt, row.UpdatedAt)
 	} else if req.GetCheckoutId() != "" && req.GetProvider() != "" {
-		query = `SELECT id, tenant_id, provider, checkout_id, amount_cents, currency,
-		         status, expires_at, completed_at, balance_transaction_id, created_at, updated_at
-		         FROM purser.pending_topups WHERE provider = $1 AND checkout_id = $2`
-		args = []any{req.GetProvider(), req.GetCheckoutId()}
+		var row purserdb.GetPendingTopupByCheckoutRow
+		row, err = queries.GetPendingTopupByCheckout(ctx, purserdb.GetPendingTopupByCheckoutParams{
+			Provider: req.GetProvider(), CheckoutID: sql.NullString{String: req.GetCheckoutId(), Valid: true},
+		})
+		topup = pendingTopupFromFields(row.ID, row.TenantID, row.Provider, row.CheckoutID, row.AmountCents,
+			row.Currency, row.Status, row.ExpiresAt, row.CompletedAt, row.BalanceTransactionID, row.CreatedAt, row.UpdatedAt)
 	} else {
 		return nil, status.Error(codes.InvalidArgument, "topup_id or (provider + checkout_id) required")
 	}
-
-	var topup purserpb.PendingTopup
-	var expiresAt, createdAt, updatedAt time.Time
-	var completedAt sql.NullTime
-	var balanceTxID sql.NullString
-
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(
-		&topup.Id, &topup.TenantId, &topup.Provider, &topup.CheckoutId,
-		&topup.AmountCents, &topup.Currency, &topup.Status,
-		&expiresAt, &completedAt, &balanceTxID, &createdAt, &updatedAt,
-	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "topup not found")
 	}
@@ -6259,17 +4978,7 @@ func (s *PurserServer) GetPendingTopup(ctx context.Context, req *purserpb.GetPen
 		return nil, status.Error(codes.Internal, "failed to get topup")
 	}
 
-	topup.ExpiresAt = timestamppb.New(expiresAt)
-	topup.CreatedAt = timestamppb.New(createdAt)
-	topup.UpdatedAt = timestamppb.New(updatedAt)
-	if completedAt.Valid {
-		topup.CompletedAt = timestamppb.New(completedAt.Time)
-	}
-	if balanceTxID.Valid {
-		topup.BalanceTransactionId = &balanceTxID.String
-	}
-
-	return &topup, nil
+	return topup, nil
 }
 
 // ListPendingTopups returns a list of top-ups for a tenant
@@ -6279,56 +4988,49 @@ func (s *PurserServer) ListPendingTopups(ctx context.Context, req *purserpb.List
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
 
-	query := `SELECT id, tenant_id, provider, checkout_id, amount_cents, currency,
-	          status, expires_at, completed_at, balance_transaction_id, created_at, updated_at
-	          FROM purser.pending_topups WHERE tenant_id = $1`
-	args := []any{tenantID}
-
+	params := purserdb.ListPendingTopupsParams{TenantID: tenantID}
 	if req.Status != nil && *req.Status != "" {
-		query += " AND status = $2"
-		args = append(args, *req.Status)
+		params.FilterStatus = true
+		params.Status = *req.Status
 	}
-
-	query += " ORDER BY created_at DESC LIMIT 50"
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := purserdb.New(s.db).ListPendingTopups(ctx, params)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "failed to list topups")
 	}
-	defer func() { _ = rows.Close() }()
-
-	var topups []*purserpb.PendingTopup
-	for rows.Next() {
-		var topup purserpb.PendingTopup
-		var expiresAt, createdAt, updatedAt time.Time
-		var completedAt sql.NullTime
-		var balanceTxID sql.NullString
-
-		err := rows.Scan(
-			&topup.Id, &topup.TenantId, &topup.Provider, &topup.CheckoutId,
-			&topup.AmountCents, &topup.Currency, &topup.Status,
-			&expiresAt, &completedAt, &balanceTxID, &createdAt, &updatedAt,
-		)
-		if err != nil {
-			continue
-		}
-
-		topup.ExpiresAt = timestamppb.New(expiresAt)
-		topup.CreatedAt = timestamppb.New(createdAt)
-		topup.UpdatedAt = timestamppb.New(updatedAt)
-		if completedAt.Valid {
-			topup.CompletedAt = timestamppb.New(completedAt.Time)
-		}
-		if balanceTxID.Valid {
-			topup.BalanceTransactionId = &balanceTxID.String
-		}
-
-		topups = append(topups, &topup)
+	topups := make([]*purserpb.PendingTopup, 0, len(rows))
+	for _, row := range rows {
+		topups = append(topups, pendingTopupFromFields(row.ID, row.TenantID, row.Provider, row.CheckoutID, row.AmountCents,
+			row.Currency, row.Status, row.ExpiresAt, row.CompletedAt, row.BalanceTransactionID, row.CreatedAt, row.UpdatedAt))
 	}
 
 	return &purserpb.ListPendingTopupsResponse{
 		Topups: topups,
 	}, nil
+}
+
+func pendingTopupFromFields(
+	id, tenantID uuid.UUID,
+	provider, checkoutID string,
+	amountCents int64,
+	currency, topupStatus string,
+	expiresAt time.Time,
+	completedAt sql.NullTime,
+	balanceTransactionID uuid.NullUUID,
+	createdAt, updatedAt sql.NullTime,
+) *purserpb.PendingTopup {
+	topup := &purserpb.PendingTopup{
+		Id: id.String(), TenantId: tenantID.String(), Provider: provider, CheckoutId: checkoutID,
+		AmountCents: amountCents, Currency: currency, Status: topupStatus,
+		ExpiresAt: timestamppb.New(expiresAt), CreatedAt: timestamppb.New(createdAt.Time), UpdatedAt: timestamppb.New(updatedAt.Time),
+	}
+	if completedAt.Valid {
+		topup.CompletedAt = timestamppb.New(completedAt.Time)
+	}
+	if balanceTransactionID.Valid {
+		value := balanceTransactionID.UUID.String()
+		topup.BalanceTransactionId = &value
+	}
+	return topup
 }
 
 // ============================================================================
@@ -6553,31 +5255,9 @@ func (s *PurserServer) GetCryptoTopup(ctx context.Context, req *purserpb.GetCryp
 		return nil, status.Error(codes.PermissionDenied, "tenant context required")
 	}
 
-	var topup purserpb.CryptoTopup
-	var expiresAt, createdAt time.Time
-	var detectedAt, completedAt sql.NullTime
-	var txHash, receivedAmountBaseUnits, creditedAmountCurrency, quoteSource, network sql.NullString
-	var creditedAmountCents sql.NullInt64
-	var confirmations sql.NullInt32
-
-	const cols = `id, tenant_id, wallet_address, asset, expected_amount_cents,
-		status, tx_hash, confirmations, received_amount_base_units, credited_amount_cents,
-		expires_at, detected_at, completed_at, created_at,
-		credited_amount_currency, quote_source, network`
-
-	query := `SELECT ` + cols + ` FROM purser.crypto_wallets WHERE id = $1 AND purpose = 'prepaid'`
-	args := []any{topupID}
-	if ctxTenantID != "" {
-		query = `SELECT ` + cols + ` FROM purser.crypto_wallets WHERE id = $1 AND tenant_id = $2 AND purpose = 'prepaid'`
-		args = append(args, ctxTenantID)
-	}
-
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(
-		&topup.Id, &topup.TenantId, &topup.DepositAddress, &topup.AssetSymbol,
-		&topup.ExpectedAmountCents, &topup.Status, &txHash, &confirmations,
-		&receivedAmountBaseUnits, &creditedAmountCents, &expiresAt, &detectedAt,
-		&completedAt, &createdAt, &creditedAmountCurrency, &quoteSource, &network,
-	)
+	row, err := purserdb.New(s.db).GetPrepaidCryptoTopup(ctx, purserdb.GetPrepaidCryptoTopupParams{
+		TopupID: topupID, EnforceTenant: ctxTenantID != "", TenantID: ctxTenantID,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "crypto topup not found")
 	}
@@ -6588,7 +5268,13 @@ func (s *PurserServer) GetCryptoTopup(ctx context.Context, req *purserpb.GetCryp
 
 	// API-facing expired state for rows that the expiry sweep hasn't yet
 	// reached: pending|confirming past expires_at look 'expired' to clients.
-	if (topup.Status == "pending" || topup.Status == "confirming") && expiresAt.Before(time.Now()) {
+	topup := purserpb.CryptoTopup{
+		Id: row.ID, TenantId: row.TenantID, DepositAddress: row.WalletAddress,
+		AssetSymbol: row.Asset, ExpectedAmountCents: row.ExpectedAmountCents.Int64,
+		Status: row.Status, Confirmations: row.Confirmations,
+		ExpiresAt: timestamppb.New(row.ExpiresAt), CreatedAt: timestamppb.New(row.CreatedAt.Time),
+	}
+	if (topup.Status == "pending" || topup.Status == "confirming") && row.ExpiresAt.Before(time.Now()) {
 		topup.Status = "expired"
 	}
 
@@ -6602,41 +5288,35 @@ func (s *PurserServer) GetCryptoTopup(ctx context.Context, req *purserpb.GetCryp
 	}
 
 	topup.Currency = billing.DefaultCurrency()
-	if creditedAmountCurrency.Valid && creditedAmountCurrency.String != "" {
-		topup.Currency = creditedAmountCurrency.String
-		topup.CreditedAmountCurrency = creditedAmountCurrency.String
+	if row.CreditedAmountCurrency.Valid && row.CreditedAmountCurrency.String != "" {
+		topup.Currency = row.CreditedAmountCurrency.String
+		topup.CreditedAmountCurrency = row.CreditedAmountCurrency.String
 	}
-	topup.ExpiresAt = timestamppb.New(expiresAt)
-	topup.CreatedAt = timestamppb.New(createdAt)
-
-	if txHash.Valid {
-		topup.TxHash = txHash.String
+	if row.TxHash.Valid {
+		topup.TxHash = row.TxHash.String
 	}
-	if confirmations.Valid {
-		topup.Confirmations = confirmations.Int32
-	}
-	if receivedAmountBaseUnits.Valid && receivedAmountBaseUnits.String != "" {
-		topup.ReceivedAmountBaseUnits = receivedAmountBaseUnits.String
-		if dec, decErr := decimal.NewFromString(receivedAmountBaseUnits.String); decErr == nil {
+	if row.ReceivedAmountBaseUnits != "" {
+		topup.ReceivedAmountBaseUnits = row.ReceivedAmountBaseUnits
+		if dec, decErr := decimal.NewFromString(row.ReceivedAmountBaseUnits); decErr == nil {
 			if td, ok := handlers.TokenDecimals(topup.AssetSymbol); ok {
 				topup.ReceivedAmountToken = dec.Shift(-td).String()
 			}
 		}
 	}
-	if creditedAmountCents.Valid {
-		topup.CreditedAmountCents = creditedAmountCents.Int64
+	if row.CreditedAmountCents.Valid {
+		topup.CreditedAmountCents = row.CreditedAmountCents.Int64
 	}
-	if quoteSource.Valid {
-		topup.QuoteSource = quoteSource.String
+	if row.QuoteSource.Valid {
+		topup.QuoteSource = row.QuoteSource.String
 	}
-	if network.Valid {
-		topup.Network = network.String
+	if row.Network != "" {
+		topup.Network = row.Network
 	}
-	if detectedAt.Valid {
-		topup.DetectedAt = timestamppb.New(detectedAt.Time)
+	if row.DetectedAt.Valid {
+		topup.DetectedAt = timestamppb.New(row.DetectedAt.Time)
 	}
-	if completedAt.Valid {
-		topup.CompletedAt = timestamppb.New(completedAt.Time)
+	if row.CompletedAt.Valid {
+		topup.CompletedAt = timestamppb.New(row.CompletedAt.Time)
 	}
 
 	return &topup, nil
@@ -6657,19 +5337,8 @@ func (s *PurserServer) PromoteToPaid(ctx context.Context, req *purserpb.PromoteT
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
-	var subscriptionID, currentModel string
-	var currentTierID, paymentMethod, stripeSubscriptionID, mollieSubscriptionID sql.NullString
-	var billingEmail, billingName sql.NullString
-	var billingAddress []byte
-	err = tx.QueryRowContext(ctx, `
-		SELECT id::text, billing_model, tier_id::text, payment_method,
-		       stripe_subscription_id, mollie_subscription_id,
-		       billing_email, billing_name, billing_address
-		FROM purser.tenant_subscriptions
-		WHERE tenant_id=$1
-		FOR UPDATE
-	`, tenantID).Scan(&subscriptionID, &currentModel, &currentTierID, &paymentMethod,
-		&stripeSubscriptionID, &mollieSubscriptionID, &billingEmail, &billingName, &billingAddress)
+	queries := purserdb.New(tx)
+	subscription, err := queries.LockTenantSubscriptionForPromotion(ctx, tenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "no subscription found for tenant")
 	}
@@ -6678,29 +5347,16 @@ func (s *PurserServer) PromoteToPaid(ctx context.Context, req *purserpb.PromoteT
 	}
 
 	requestedTierID := strings.TrimSpace(req.GetTierId())
-	if currentModel == "postpaid" {
-		if requestedTierID != "" && (!currentTierID.Valid || requestedTierID != currentTierID.String) {
+	if subscription.BillingModel == "postpaid" {
+		if requestedTierID != "" && requestedTierID != subscription.TierID {
 			return nil, status.Error(codes.FailedPrecondition, "already postpaid on a different tier; use changeBillingTier")
 		}
-		requestedTierID = currentTierID.String
+		requestedTierID = subscription.TierID
 	}
 
-	var tierID, tierName string
-	var tierLevel int32
-	var isDefaultPrepaid, isActive bool
-	if requestedTierID != "" {
-		err = tx.QueryRowContext(ctx, `
-			SELECT id::text, tier_level, tier_name, is_default_prepaid, is_active
-			FROM purser.billing_tiers WHERE id=$1
-		`, requestedTierID).Scan(&tierID, &tierLevel, &tierName, &isDefaultPrepaid, &isActive)
-	} else {
-		err = tx.QueryRowContext(ctx, `
-			SELECT id::text, tier_level, tier_name, is_default_prepaid, is_active
-			FROM purser.billing_tiers
-			WHERE is_default_postpaid=true AND is_active=true
-			LIMIT 1
-		`).Scan(&tierID, &tierLevel, &tierName, &isDefaultPrepaid, &isActive)
-	}
+	tier, err := queries.GetPostpaidPromotionTier(ctx, purserdb.GetPostpaidPromotionTierParams{
+		HasRequestedTier: requestedTierID != "", RequestedTierID: requestedTierID,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		if requestedTierID != "" {
 			return nil, status.Error(codes.NotFound, "tier not found")
@@ -6710,59 +5366,43 @@ func (s *PurserServer) PromoteToPaid(ctx context.Context, req *purserpb.PromoteT
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to resolve tier: %v", err)
 	}
-	if !isActive || isDefaultPrepaid || tierLevel < 1 {
+	if !tier.IsActive.Bool || tier.IsDefaultPrepaid.Bool || tier.TierLevel.Int32 < 1 {
 		return nil, status.Error(codes.FailedPrecondition, "tier is not active and postpaid-eligible")
 	}
-	if !strings.EqualFold(tierName, "free") {
-		address := scanBillingAddress(billingAddress)
-		profileComplete := billingName.Valid && strings.TrimSpace(billingName.String) != "" &&
-			billingEmail.Valid && strings.TrimSpace(billingEmail.String) != "" && address != nil &&
+	if !strings.EqualFold(tier.TierName, "free") {
+		address := scanBillingAddress(subscription.BillingAddress)
+		profileComplete := subscription.BillingName.Valid && strings.TrimSpace(subscription.BillingName.String) != "" &&
+			subscription.BillingEmail.Valid && strings.TrimSpace(subscription.BillingEmail.String) != "" && address != nil &&
 			address.Street != "" && address.City != "" && address.PostalCode != "" && address.Country != ""
 		if !profileComplete {
 			return nil, status.Error(codes.FailedPrecondition, "customer legal name, billing email, and postal address are required for this operation")
 		}
-		providerReady := paymentMethod.String == "stripe" && stripeSubscriptionID.Valid && stripeSubscriptionID.String != "" ||
-			paymentMethod.String == "mollie" && mollieSubscriptionID.Valid && mollieSubscriptionID.String != ""
+		providerReady := subscription.PaymentMethod.String == "stripe" && subscription.StripeSubscriptionID.Valid && subscription.StripeSubscriptionID.String != "" ||
+			subscription.PaymentMethod.String == "mollie" && subscription.MollieSubscriptionID.Valid && subscription.MollieSubscriptionID.String != ""
 		if !providerReady {
 			return nil, status.Error(codes.FailedPrecondition, "complete Stripe or Mollie subscription setup before enabling paid postpaid billing")
 		}
 	}
 
-	var creditBalanceCents int64
-	if err = tx.QueryRowContext(ctx, `
-		SELECT COALESCE(balance_cents,0) FROM purser.prepaid_balances WHERE tenant_id=$1
-	`, tenantID).Scan(&creditBalanceCents); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Errorf(codes.Internal, "failed to get prepaid balance: %v", err)
-	}
-	if currentModel == "prepaid" {
-		err = tx.QueryRowContext(ctx, `
-		UPDATE purser.tenant_subscriptions
-		SET billing_model = 'postpaid', tier_id = $1, status = 'active', updated_at = NOW()
-		WHERE tenant_id = $2 AND billing_model = 'prepaid'
-		RETURNING id::text
-	`, tierID, tenantID).Scan(&subscriptionID)
+	if subscription.BillingModel == "prepaid" {
+		_, err = queries.PromotePrepaidTenantSubscription(ctx, purserdb.PromotePrepaidTenantSubscriptionParams{
+			TierID: tier.ID, TenantID: tenantID,
+		})
 		if err != nil {
 			return nil, status.Errorf(codes.Aborted, "subscription changed during promotion: %v", err)
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to commit: %v", err)
+	if commitErr := tx.Commit(); commitErr != nil {
+		return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
 	}
 
-	var canonicalModel, canonicalTierID, canonicalTierName string
-	var canonicalTierLevel int32
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT s.id::text, s.billing_model, s.tier_id::text, t.tier_level, t.tier_name,
-		       COALESCE(pb.balance_cents,0)
-		FROM purser.tenant_subscriptions s
-		JOIN purser.billing_tiers t ON t.id=s.tier_id
-		LEFT JOIN purser.prepaid_balances pb ON pb.tenant_id=s.tenant_id
-		WHERE s.tenant_id=$1
-	`, tenantID).Scan(&subscriptionID, &canonicalModel, &canonicalTierID, &canonicalTierLevel,
-		&canonicalTierName, &creditBalanceCents); err != nil {
+	canonical, err := purserdb.New(s.db).GetCanonicalPromotedSubscription(ctx, purserdb.GetCanonicalPromotedSubscriptionParams{
+		Currency: billing.DefaultCurrency(), TenantID: tenantID,
+	})
+	if err != nil {
 		return nil, status.Errorf(codes.Internal, "promotion committed but canonical subscription read failed: %v", err)
 	}
-	if canonicalModel != "postpaid" {
+	if canonical.BillingModel != "postpaid" {
 		return nil, status.Error(codes.Aborted, "promotion did not converge to postpaid billing")
 	}
 	eligibleClusters, primaryCluster, clusterErr := s.reconcileCanonicalTierClusterAccess(ctx, tenantID)
@@ -6781,18 +5421,18 @@ func (s *PurserServer) PromoteToPaid(ctx context.Context, req *purserpb.PromoteT
 
 	s.logger.WithFields(logging.Fields{
 		"tenant_id":      tenantID,
-		"tier_id":        canonicalTierID,
-		"tier_level":     canonicalTierLevel,
-		"credit_balance": creditBalanceCents,
+		"tier_id":        canonical.TierID,
+		"tier_level":     canonical.TierLevel.Int32,
+		"credit_balance": canonical.BalanceCents,
 	}).Info("Tenant promoted from prepaid to postpaid")
 
 	return &purserpb.PromoteToPaidResponse{
 		Success:            true,
 		Message:            "Switched to postpaid billing",
 		NewBillingModel:    "postpaid",
-		CreditBalanceCents: creditBalanceCents,
-		SubscriptionId:     subscriptionID,
-		TierLevel:          canonicalTierLevel,
+		CreditBalanceCents: canonical.BalanceCents,
+		SubscriptionId:     canonical.SubscriptionID,
+		TierLevel:          canonical.TierLevel.Int32,
 		EligibleClusterIds: eligibleClusters,
 		PrimaryClusterId:   primaryCluster,
 	}, nil
@@ -6819,98 +5459,61 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
-	var (
-		currentTierID      string
-		currentTierLevel   int32
-		billingModel       string
-		billingPeriodStart sql.NullTime
-		billingPeriodEnd   sql.NullTime
-		stripePeriodEnd    sql.NullTime
-	)
-	err = tx.QueryRowContext(ctx, `
-		SELECT ts.tier_id, bt.tier_level, ts.billing_model,
-		       ts.billing_period_start, ts.billing_period_end, ts.stripe_current_period_end
-		FROM purser.tenant_subscriptions ts
-		JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
-		WHERE ts.tenant_id = $1
-		FOR UPDATE OF ts
-	`, tenantID).Scan(&currentTierID, &currentTierLevel, &billingModel, &billingPeriodStart, &billingPeriodEnd, &stripePeriodEnd)
+	queries := purserdb.New(tx)
+	current, err := queries.LockTenantSubscriptionForTierChange(ctx, tenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "no subscription found for tenant")
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "load subscription: %v", err)
 	}
-	if billingModel != "postpaid" {
+	if current.BillingModel != "postpaid" {
 		return nil, status.Error(codes.FailedPrecondition, "ChangeBillingTier requires postpaid billing; use PromoteToPaid for prepaid → postpaid")
 	}
 
-	var targetTierLevel int32
-	var targetTierName string
-	var isDefaultPrepaid, isActive bool
-	err = tx.QueryRowContext(ctx, `
-		SELECT tier_level, tier_name, is_default_prepaid, is_active
-		FROM purser.billing_tiers
-		WHERE id = $1
-	`, targetTierID).Scan(&targetTierLevel, &targetTierName, &isDefaultPrepaid, &isActive)
+	target, err := queries.GetTierForBillingChange(ctx, targetTierID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "target tier not found")
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "load target tier: %v", err)
 	}
-	if !isActive {
+	if !target.IsActive.Bool {
 		return nil, status.Error(codes.FailedPrecondition, "target tier is inactive")
 	}
-	if isDefaultPrepaid || targetTierLevel < 1 {
+	if target.IsDefaultPrepaid.Bool || target.TierLevel.Int32 < 1 {
 		return nil, status.Error(codes.FailedPrecondition, "target tier is not postpaid-eligible")
 	}
-	if !strings.EqualFold(targetTierName, "free") {
-		var paymentMethod, stripeSubscriptionID, mollieSubscriptionID, billingEmail, billingName sql.NullString
-		var billingAddress []byte
-		collectionErr := tx.QueryRowContext(ctx, `
-			SELECT payment_method, stripe_subscription_id, mollie_subscription_id,
-			       billing_email, billing_name, billing_address
-			FROM purser.tenant_subscriptions
-			WHERE tenant_id = $1
-		`, tenantID).Scan(&paymentMethod, &stripeSubscriptionID, &mollieSubscriptionID,
-			&billingEmail, &billingName, &billingAddress)
+	if !strings.EqualFold(target.TierName, "free") {
+		collection, collectionErr := queries.GetPostpaidCollectionSetup(ctx, tenantID)
 		if collectionErr != nil {
 			return nil, status.Errorf(codes.Internal, "verify postpaid collection setup: %v", collectionErr)
 		}
-		address := scanBillingAddress(billingAddress)
-		profileComplete := billingName.Valid && strings.TrimSpace(billingName.String) != "" &&
-			billingEmail.Valid && strings.TrimSpace(billingEmail.String) != "" && address != nil &&
+		address := scanBillingAddress(collection.BillingAddress)
+		profileComplete := collection.BillingName.Valid && strings.TrimSpace(collection.BillingName.String) != "" &&
+			collection.BillingEmail.Valid && strings.TrimSpace(collection.BillingEmail.String) != "" && address != nil &&
 			address.Street != "" && address.City != "" && address.PostalCode != "" && address.Country != ""
 		if !profileComplete {
 			return nil, status.Error(codes.FailedPrecondition, "customer legal name, billing email, and postal address are required before selecting a paid tier")
 		}
-		collectionReady := paymentMethod.String == "stripe" && stripeSubscriptionID.Valid && stripeSubscriptionID.String != "" ||
-			paymentMethod.String == "mollie" && mollieSubscriptionID.Valid && mollieSubscriptionID.String != ""
+		collectionReady := collection.PaymentMethod.String == "stripe" && collection.StripeSubscriptionID.Valid && collection.StripeSubscriptionID.String != "" ||
+			collection.PaymentMethod.String == "mollie" && collection.MollieSubscriptionID.Valid && collection.MollieSubscriptionID.String != ""
 		if !collectionReady {
 			return nil, status.Error(codes.FailedPrecondition, "complete Stripe or Mollie subscription setup before selecting a paid tier")
 		}
 	}
 
 	now := time.Now()
-	resolvedPeriodStart, resolvedPeriodEnd, periodErr := resolveBillingPeriod(ctx, tx, tenantID, billingPeriodStart, billingPeriodEnd, now)
+	resolvedPeriodStart, resolvedPeriodEnd, periodErr := resolveBillingPeriod(ctx, tx, tenantID, current.BillingPeriodStart, current.BillingPeriodEnd, now)
 	if periodErr != nil {
 		return nil, status.Errorf(codes.Internal, "resolve billing period: %v", periodErr)
 	}
 
-	if targetTierID == currentTierID {
-		if _, periodUpdateErr := tx.ExecContext(ctx, `
-			UPDATE purser.tenant_subscriptions
-			SET billing_period_start = COALESCE(billing_period_start, $2),
-			    billing_period_end = COALESCE(billing_period_end, $3),
-			    next_billing_date = COALESCE(next_billing_date, $3),
-			    updated_at = CASE
-			        WHEN billing_period_start IS NULL OR billing_period_end IS NULL OR next_billing_date IS NULL
-			        THEN NOW()
-			        ELSE updated_at
-			    END
-			WHERE tenant_id = $1
-		`, tenantID, resolvedPeriodStart, resolvedPeriodEnd); periodUpdateErr != nil {
+	if targetTierID == current.TierID {
+		if periodUpdateErr := queries.BackfillTenantBillingPeriod(ctx, purserdb.BackfillTenantBillingPeriodParams{
+			PeriodStart: sql.NullTime{Time: resolvedPeriodStart, Valid: true},
+			PeriodEnd:   sql.NullTime{Time: resolvedPeriodEnd, Valid: true}, TenantID: tenantID,
+		}); periodUpdateErr != nil {
 			return nil, status.Errorf(codes.Internal, "backfill billing period: %v", periodUpdateErr)
 		}
 		if err := tx.Commit(); err != nil {
@@ -6928,27 +5531,20 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 		return &purserpb.ChangeBillingTierResponse{
 			Success:            true,
 			Message:            "Already on requested tier",
-			AppliedTierId:      currentTierID,
+			AppliedTierId:      current.TierID,
 			EligibleClusterIds: eligibleClusters,
 			PrimaryClusterId:   primaryCluster,
 		}, nil
 	}
 
-	if targetTierLevel >= currentTierLevel {
+	if target.TierLevel.Int32 >= current.TierLevel.Int32 {
 		// UPGRADE — apply immediately. Cluster reconcile + cache invalidation
 		// happen after the DB transaction commits.
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE purser.tenant_subscriptions
-			SET tier_id = $1,
-			    pending_tier_id = NULL,
-			    pending_effective_at = NULL,
-			    pending_reason = NULL,
-			    billing_period_start = COALESCE(billing_period_start, $3),
-			    billing_period_end = COALESCE(billing_period_end, $4),
-			    next_billing_date = COALESCE(next_billing_date, $4),
-			    updated_at = NOW()
-			WHERE tenant_id = $2
-		`, targetTierID, tenantID, resolvedPeriodStart, resolvedPeriodEnd); err != nil {
+		if err := queries.ApplyTenantTierUpgrade(ctx, purserdb.ApplyTenantTierUpgradeParams{
+			TierID:      targetTierID,
+			PeriodStart: sql.NullTime{Time: resolvedPeriodStart, Valid: true},
+			PeriodEnd:   sql.NullTime{Time: resolvedPeriodEnd, Valid: true}, TenantID: tenantID,
+		}); err != nil {
 			return nil, status.Errorf(codes.Internal, "update subscription tier: %v", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -6967,9 +5563,9 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 
 		s.logger.WithFields(logging.Fields{
 			"tenant_id":  tenantID,
-			"from_tier":  currentTierID,
+			"from_tier":  current.TierID,
 			"to_tier":    targetTierID,
-			"tier_level": targetTierLevel,
+			"tier_level": target.TierLevel.Int32,
 		}).Info("Billing tier upgraded")
 
 		return &purserpb.ChangeBillingTierResponse{
@@ -6984,10 +5580,10 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 	// DOWNGRADE — stage for end of period. The post-commit applier in
 	// jobs.go flips tier_id and reconciles after the period's invoice clears.
 	var effective time.Time
-	if stripePeriodEnd.Valid {
-		effective = stripePeriodEnd.Time
-	} else if billingPeriodEnd.Valid {
-		effective = billingPeriodEnd.Time
+	if current.StripeCurrentPeriodEnd.Valid {
+		effective = current.StripeCurrentPeriodEnd.Time
+	} else if current.BillingPeriodEnd.Valid {
+		effective = current.BillingPeriodEnd.Time
 	} else {
 		effective = resolvedPeriodEnd
 	}
@@ -6998,17 +5594,11 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 		resolvedPeriodStart = effective.AddDate(0, -1, 0)
 	}
 
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE purser.tenant_subscriptions
-		SET pending_tier_id = $1,
-		    pending_effective_at = $2,
-		    pending_reason = 'downgrade',
-		    billing_period_start = COALESCE(billing_period_start, $4),
-		    billing_period_end = COALESCE(billing_period_end, $5),
-		    next_billing_date = COALESCE(next_billing_date, $5),
-		    updated_at = NOW()
-		WHERE tenant_id = $3
-	`, targetTierID, effective, tenantID, resolvedPeriodStart, effective); err != nil {
+	if err := queries.ScheduleTenantTierDowngrade(ctx, purserdb.ScheduleTenantTierDowngradeParams{
+		TierID: targetTierID, EffectiveAt: sql.NullTime{Time: effective, Valid: true},
+		PeriodStart: sql.NullTime{Time: resolvedPeriodStart, Valid: true},
+		PeriodEnd:   sql.NullTime{Time: effective, Valid: true}, TenantID: tenantID,
+	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "schedule downgrade: %v", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -7017,7 +5607,7 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 
 	s.logger.WithFields(logging.Fields{
 		"tenant_id":    tenantID,
-		"from_tier":    currentTierID,
+		"from_tier":    current.TierID,
 		"to_tier":      targetTierID,
 		"effective_at": effective,
 	}).Info("Billing tier downgrade scheduled")
@@ -7050,29 +5640,16 @@ func currentBillingPeriod(now time.Time) (time.Time, time.Time) {
 	return start, start.AddDate(0, 1, 0)
 }
 
-type billingPeriodQuerier interface {
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-}
-
-func resolveBillingPeriod(ctx context.Context, queryer billingPeriodQuerier, tenantID string, start, end sql.NullTime, now time.Time) (time.Time, time.Time, error) {
+func resolveBillingPeriod(ctx context.Context, queryer purserdb.DBTX, tenantID string, start, end sql.NullTime, now time.Time) (time.Time, time.Time, error) {
 	if start.Valid && end.Valid && end.Time.After(start.Time) {
 		return start.Time, end.Time, nil
 	}
 
-	var invoiceStart, invoiceEnd sql.NullTime
-	err := queryer.QueryRowContext(ctx, `
-		SELECT period_start, period_end
-		FROM purser.billing_invoices
-		WHERE tenant_id = $1
-		  AND period_start IS NOT NULL
-		  AND period_end IS NOT NULL
-		  AND status IN ('draft', 'manual_review')
-		  AND period_end > $2
-		ORDER BY period_end ASC
-		LIMIT 1
-	`, tenantID, now).Scan(&invoiceStart, &invoiceEnd)
-	if err == nil && invoiceStart.Valid && invoiceEnd.Valid && invoiceEnd.Time.After(invoiceStart.Time) {
-		return invoiceStart.Time, invoiceEnd.Time, nil
+	invoice, err := purserdb.New(queryer).GetOpenInvoiceBillingPeriod(ctx, purserdb.GetOpenInvoiceBillingPeriodParams{
+		TenantID: tenantID, Now: sql.NullTime{Time: now, Valid: true},
+	})
+	if err == nil && invoice.PeriodStart.Valid && invoice.PeriodEnd.Valid && invoice.PeriodEnd.Time.After(invoice.PeriodStart.Time) {
+		return invoice.PeriodStart.Time, invoice.PeriodEnd.Time, nil
 	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return time.Time{}, time.Time{}, fmt.Errorf("load open invoice period: %w", err)
@@ -7083,8 +5660,6 @@ func resolveBillingPeriod(ctx context.Context, queryer billingPeriodQuerier, ten
 }
 
 // Ensure unused imports don't cause errors
-var _ = pq.Array
-
 // ============================================================================
 // WEBHOOK SERVICE IMPLEMENTATION
 // ============================================================================
@@ -7155,16 +5730,10 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *purserpb.
 	}
 
 	// Get billing tier to find Stripe price ID
-	var priceID sql.NullString
-	var tierName, currency string
-	priceCol := "stripe_price_id_monthly"
-	if billingPeriod == "yearly" {
-		priceCol = "stripe_price_id_yearly"
-	}
-
-	err := s.db.QueryRowContext(ctx, fmt.Sprintf(`
-		SELECT tier_name, currency, %s FROM purser.billing_tiers WHERE id = $1
-	`, priceCol), tierID).Scan(&tierName, &currency, &priceID)
+	queries := purserdb.New(s.db)
+	tier, err := queries.GetStripeTierCheckoutConfig(ctx, purserdb.GetStripeTierCheckoutConfigParams{
+		Yearly: billingPeriod == "yearly", TierID: tierID,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.NotFound, "tier not found: %s", tierID)
 	}
@@ -7172,10 +5741,10 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *purserpb.
 		s.logger.WithError(err).Error("Failed to get billing tier")
 		return nil, status.Error(codes.Internal, "failed to get billing tier")
 	}
-	if !priceID.Valid || priceID.String == "" {
-		return nil, status.Errorf(codes.FailedPrecondition, "tier %s has no Stripe %s price configured", tierName, billingPeriod)
+	if tier.PriceID == "" {
+		return nil, status.Errorf(codes.FailedPrecondition, "tier %s has no Stripe %s price configured", tier.TierName, billingPeriod)
 	}
-	currency = strings.ToUpper(currency)
+	currency := strings.ToUpper(tier.Currency)
 	if currency == "" {
 		currency = billing.DefaultCurrency()
 	}
@@ -7184,13 +5753,7 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *purserpb.
 	// an unrelated staged tier change. Read-only so a Commodore / Stripe
 	// failure later cannot leak a pending_tier_id write. The actual stage
 	// happens after the Stripe session is accepted.
-	var existingReason sql.NullString
-	var existingTier sql.NullString
-	preflightErr := s.db.QueryRowContext(ctx, `
-		SELECT pending_reason, pending_tier_id::text
-		FROM purser.tenant_subscriptions
-		WHERE tenant_id = $1
-	`, tenantID).Scan(&existingReason, &existingTier)
+	pending, preflightErr := queries.GetTenantPendingTierState(ctx, tenantID)
 	if errors.Is(preflightErr, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.FailedPrecondition,
 			"no tenant_subscriptions row for tenant %s; bootstrap must seed one before checkout", tenantID)
@@ -7199,10 +5762,10 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *purserpb.
 		s.logger.WithError(preflightErr).Error("Failed to read pending tier state")
 		return nil, status.Error(codes.Internal, "failed to read pending tier state")
 	}
-	if existingTier.Valid && existingReason.String != "" && existingReason.String != "stripe_checkout" {
+	if pending.PendingTierID != "" && pending.PendingReason.String != "" && pending.PendingReason.String != "stripe_checkout" {
 		return nil, status.Errorf(codes.FailedPrecondition,
 			"a %s is already staged for this tenant (pending_tier_id=%s); cancel it before starting a new checkout",
-			existingReason.String, existingTier.String)
+			pending.PendingReason.String, pending.PendingTierID)
 	}
 
 	// Get tenant primary user info via Commodore gRPC (not direct DB access)
@@ -7229,18 +5792,10 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *purserpb.
 	// idempotency_key is deterministic on (tenant, tier) so repeated calls
 	// for the same target tier collapse to one intent row.
 	intentKey := fmt.Sprintf("stripe-tenant-checkout:%s:%s", tenantID, tierID)
-	var intentID string
-	if intentErr := s.db.QueryRowContext(ctx, `
-		INSERT INTO purser.payment_provider_intents (
-			tenant_id, provider, purpose, local_reference_type, local_reference_id,
-			status, currency, idempotency_key
-		) VALUES ($1, 'stripe', 'tenant_subscription_checkout', 'billing_tiers', $2::uuid,
-		          'pending', $3, $4)
-		ON CONFLICT (provider, idempotency_key) DO UPDATE SET
-			attempt_count = purser.payment_provider_intents.attempt_count + 1,
-			updated_at = NOW()
-		RETURNING id
-	`, tenantID, tierID, currency, intentKey).Scan(&intentID); intentErr != nil {
+	intentID, intentErr := queries.UpsertStripeTenantCheckoutIntent(ctx, purserdb.UpsertStripeTenantCheckoutIntentParams{
+		TenantID: tenantID, TierID: tierID, Currency: currency, IdempotencyKey: intentKey,
+	})
+	if intentErr != nil {
 		s.logger.WithError(intentErr).Error("Failed to record Stripe tenant checkout intent")
 		return nil, status.Error(codes.Internal, "failed to record checkout intent")
 	}
@@ -7258,11 +5813,9 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *purserpb.
 		return nil, status.Error(codes.Internal, "failed to create Stripe customer")
 	}
 	if customer.ID != "" {
-		if _, updateErr := s.db.ExecContext(ctx, `
-			UPDATE purser.payment_provider_intents
-			SET provider_customer_id = $1, updated_at = NOW()
-			WHERE id = $2 AND (provider_customer_id IS NULL OR provider_customer_id = $1)
-		`, customer.ID, intentID); updateErr != nil {
+		if updateErr := queries.SetProviderIntentCustomer(ctx, purserdb.SetProviderIntentCustomerParams{
+			CustomerID: sql.NullString{String: customer.ID, Valid: true}, IntentID: intentID,
+		}); updateErr != nil {
 			s.logger.WithError(updateErr).WithField("intent_id", intentID).Warn("Failed to record provider_customer_id")
 		}
 	}
@@ -7274,7 +5827,7 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *purserpb.
 		TierID:         tierID,
 		Purpose:        "subscription",
 		ReferenceID:    tierID,
-		PriceID:        priceID.String,
+		PriceID:        tier.PriceID,
 		Currency:       currency,
 		SuccessURL:     successURL,
 		CancelURL:      cancelURL,
@@ -7286,11 +5839,9 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *purserpb.
 		return nil, status.Error(codes.Internal, "failed to create checkout session")
 	}
 	if sess != nil && sess.ID != "" {
-		if _, updateErr := s.db.ExecContext(ctx, `
-			UPDATE purser.payment_provider_intents
-			SET provider_session_id = $1, status = 'provider_open', updated_at = NOW()
-			WHERE id = $2
-		`, sess.ID, intentID); updateErr != nil {
+		if updateErr := queries.SetProviderIntentSessionOpen(ctx, purserdb.SetProviderIntentSessionOpenParams{
+			SessionID: sql.NullString{String: sess.ID, Valid: true}, IntentID: intentID,
+		}); updateErr != nil {
 			s.logger.WithError(updateErr).WithField("intent_id", intentID).Warn("Failed to record provider_session_id")
 		}
 	}
@@ -7299,16 +5850,9 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *purserpb.
 	// failed preflight call earlier in this RPC doesn't leak a half-staged
 	// tier. The WHERE guard still refuses to overwrite a non-Stripe pending
 	// change in case a race opened a downgrade since the preflight read.
-	stageResult, stageErr := s.db.ExecContext(ctx, `
-		UPDATE purser.tenant_subscriptions
-		SET pending_tier_id = $1::uuid,
-		    pending_reason = 'stripe_checkout',
-		    pending_effective_at = NULL,
-		    pending_intent_id = $3::uuid,
-		    updated_at = NOW()
-		WHERE tenant_id = $2
-		  AND (pending_tier_id IS NULL OR pending_reason = 'stripe_checkout')
-	`, tierID, tenantID, intentID)
+	stageRows, stageErr := queries.StageStripeCheckoutTier(ctx, purserdb.StageStripeCheckoutTierParams{
+		TierID: tierID, IntentID: intentID, TenantID: tenantID,
+	})
 	if stageErr != nil {
 		s.logger.WithError(stageErr).WithField("session_id", sess.ID).Error("Failed to stage pending tier after Stripe checkout creation")
 		if expireErr := s.stripeClient.ExpireCheckoutSession(ctx, sess.ID); expireErr != nil {
@@ -7317,14 +5861,7 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *purserpb.
 		}
 		return nil, status.Error(codes.Internal, "failed to stage pending tier")
 	}
-	if stageRows, raErr := stageResult.RowsAffected(); raErr != nil {
-		s.logger.WithError(raErr).WithField("session_id", sess.ID).Error("Failed to check pending tier stage rows")
-		if expireErr := s.stripeClient.ExpireCheckoutSession(ctx, sess.ID); expireErr != nil {
-			s.logger.WithError(expireErr).WithField("session_id", sess.ID).Error("Failed to expire Stripe checkout session after local staging verification failure")
-			return nil, status.Errorf(codes.Internal, "failed to verify pending tier stage and failed to expire Stripe checkout session %s: %v", sess.ID, expireErr)
-		}
-		return nil, status.Error(codes.Internal, "failed to stage pending tier")
-	} else if stageRows == 0 {
+	if stageRows == 0 {
 		// Race: a non-Stripe pending change appeared between preflight and
 		// stage. Expire the live Stripe session so external checkout state
 		// cannot advance while Purser refuses to stage the local target tier.
@@ -7368,11 +5905,7 @@ func (s *PurserServer) CreateBillingPortalSession(ctx context.Context, req *purs
 	}
 
 	// Get Stripe customer ID from subscription
-	var stripeCustomerID sql.NullString
-	err := s.db.QueryRowContext(ctx, `
-		SELECT stripe_customer_id FROM purser.tenant_subscriptions
-		WHERE tenant_id = $1
-	`, tenantID).Scan(&stripeCustomerID)
+	stripeCustomerID, err := purserdb.New(s.db).GetTenantStripeCustomerID(ctx, tenantID)
 	if errors.Is(err, sql.ErrNoRows) || !stripeCustomerID.Valid {
 		return nil, status.Error(codes.NotFound, "no Stripe subscription found for tenant")
 	}
@@ -7404,11 +5937,7 @@ func (s *PurserServer) SyncSubscription(ctx context.Context, req *purserpb.SyncS
 	}
 
 	// Get Stripe subscription ID
-	var stripeSubID sql.NullString
-	err := s.db.QueryRowContext(ctx, `
-		SELECT stripe_subscription_id FROM purser.tenant_subscriptions
-		WHERE tenant_id = $1
-	`, tenantID).Scan(&stripeSubID)
+	stripeSubID, err := purserdb.New(s.db).GetTenantStripeSubscriptionID(ctx, tenantID)
 	if errors.Is(err, sql.ErrNoRows) || !stripeSubID.Valid {
 		return nil, status.Error(codes.NotFound, "no Stripe subscription found for tenant")
 	}
@@ -7426,26 +5955,19 @@ func (s *PurserServer) SyncSubscription(ctx context.Context, req *purserpb.SyncS
 
 	info := s.stripeClient.ExtractSubscriptionInfo(sub)
 
-	var currentPeriodStart any
+	currentPeriodStart := sql.NullTime{}
 	if !info.CurrentPeriodStart.IsZero() {
-		currentPeriodStart = info.CurrentPeriodStart
+		currentPeriodStart = sql.NullTime{Time: info.CurrentPeriodStart, Valid: true}
 	}
-	var currentPeriodEnd any
+	currentPeriodEnd := sql.NullTime{}
 	if !info.CurrentPeriodEnd.IsZero() {
-		currentPeriodEnd = info.CurrentPeriodEnd
+		currentPeriodEnd = sql.NullTime{Time: info.CurrentPeriodEnd, Valid: true}
 	}
 
-	// Update local database
-	_, err = s.db.ExecContext(ctx, `
-		UPDATE purser.tenant_subscriptions
-		SET stripe_subscription_status = $1,
-		    stripe_current_period_end = $2,
-		    billing_period_start = COALESCE($4, billing_period_start),
-		    billing_period_end = COALESCE($2, billing_period_end),
-		    next_billing_date = COALESCE($2, next_billing_date),
-		    updated_at = NOW()
-		WHERE tenant_id = $3
-	`, info.Status, currentPeriodEnd, tenantID, currentPeriodStart)
+	err = purserdb.New(s.db).UpdateTenantStripeSubscriptionSync(ctx, purserdb.UpdateTenantStripeSubscriptionSyncParams{
+		Status:    sql.NullString{String: info.Status, Valid: info.Status != ""},
+		PeriodEnd: currentPeriodEnd, PeriodStart: currentPeriodStart, TenantID: tenantID,
+	})
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to update subscription from Stripe")
 		return nil, status.Error(codes.Internal, "failed to update subscription")
@@ -7493,11 +6015,8 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *purserpb.Cre
 	}
 
 	// Get tier price
-	var basePriceText string
-	var currency, tierName string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT tier_name, base_price::text, currency FROM purser.billing_tiers WHERE id = $1
-	`, tierID).Scan(&tierName, &basePriceText, &currency)
+	queries := purserdb.New(s.db)
+	tier, err := queries.GetMollieTierPrice(ctx, tierID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.NotFound, "tier not found: %s", tierID)
 	}
@@ -7505,34 +6024,24 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *purserpb.Cre
 		s.logger.WithError(err).Error("Failed to get billing tier")
 		return nil, status.Error(codes.Internal, "failed to get billing tier")
 	}
-	basePrice, err := decimal.NewFromString(basePriceText)
+	basePrice, err := decimal.NewFromString(tier.BasePrice)
 	if err != nil {
 		s.logger.WithError(err).WithField("tier_id", tierID).Error("Failed to parse billing tier base price")
 		return nil, status.Error(codes.Internal, "failed to parse billing tier price")
 	}
 
 	firstPaymentIntentKey := fmt.Sprintf("mollie-first-payment:%s:%s", tenantID, tierID)
-	var firstPaymentIntentID string
-	if intentErr := s.db.QueryRowContext(ctx, `
-		INSERT INTO purser.payment_provider_intents (
-			tenant_id, provider, purpose, local_reference_type, local_reference_id,
-			status, currency, amount_cents, idempotency_key
-		) VALUES ($1, 'mollie', 'mollie_first_payment', 'billing_tiers', $2::uuid,
-		          'pending', $3, $4, $5)
-		ON CONFLICT (provider, idempotency_key) DO UPDATE SET
-			attempt_count = purser.payment_provider_intents.attempt_count + 1,
-			updated_at = NOW()
-		RETURNING id
-	`, tenantID, tierID, currency, basePrice.Round(2).Shift(2).IntPart(), firstPaymentIntentKey).Scan(&firstPaymentIntentID); intentErr != nil {
+	firstPaymentIntentID, intentErr := queries.UpsertMollieFirstPaymentIntent(ctx, purserdb.UpsertMollieFirstPaymentIntentParams{
+		TenantID: tenantID, TierID: tierID, Currency: tier.Currency,
+		AmountCents: basePrice.Round(2).Shift(2).IntPart(), IdempotencyKey: firstPaymentIntentKey,
+	})
+	if intentErr != nil {
 		s.logger.WithError(intentErr).Error("Failed to record Mollie first-payment intent")
 		return nil, status.Error(codes.Internal, "failed to record first-payment intent")
 	}
 
 	// Get or create Mollie customer
-	var mollieCustomerID string
-	err = s.db.QueryRowContext(ctx, `
-		SELECT mollie_customer_id FROM purser.mollie_customers WHERE tenant_id = $1
-	`, tenantID).Scan(&mollieCustomerID)
+	mollieCustomerID, err := queries.GetMollieCustomerID(ctx, tenantID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		// Get tenant primary user info via Commodore gRPC (not direct DB access)
@@ -7568,11 +6077,9 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *purserpb.Cre
 		}
 
 		// Store customer mapping
-		_, err = s.db.ExecContext(ctx, `
-			INSERT INTO purser.mollie_customers (tenant_id, mollie_customer_id)
-			VALUES ($1, $2)
-			ON CONFLICT (tenant_id) DO UPDATE SET mollie_customer_id = $2
-			`, tenantID, customer.ID)
+		err = queries.UpsertMollieCustomer(ctx, purserdb.UpsertMollieCustomerParams{
+			TenantID: tenantID, MollieCustomerID: customer.ID,
+		})
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to store Mollie customer mapping")
 			s.markProviderIntentFailed(ctx, firstPaymentIntentID, "customer_mapping_failed", err)
@@ -7586,11 +6093,9 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *purserpb.Cre
 		return nil, status.Error(codes.Internal, "failed to get Mollie customer")
 	}
 
-	if _, linkErr := s.db.ExecContext(ctx, `
-			UPDATE purser.payment_provider_intents
-			SET provider_customer_id = $1, updated_at = NOW()
-			WHERE id = $2
-		`, mollieCustomerID, firstPaymentIntentID); linkErr != nil {
+	if linkErr := queries.LinkProviderIntentCustomer(ctx, purserdb.LinkProviderIntentCustomerParams{
+		CustomerID: sql.NullString{String: mollieCustomerID, Valid: mollieCustomerID != ""}, IntentID: firstPaymentIntentID,
+	}); linkErr != nil {
 		s.logger.WithError(linkErr).WithField("intent_id", firstPaymentIntentID).Warn("Failed to link Mollie customer to first-payment intent")
 		s.markProviderIntentFailed(ctx, firstPaymentIntentID, "customer_intent_link_failed", linkErr)
 		return nil, status.Error(codes.Internal, "failed to link first-payment intent")
@@ -7608,8 +6113,8 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *purserpb.Cre
 		CustomerID:     mollieCustomerID,
 		TenantID:       tenantID,
 		TierID:         tierID,
-		Amount:         mollie.Amount(basePrice.Round(2).StringFixed(2), currency),
-		Description:    fmt.Sprintf("Subscription setup: %s", tierName),
+		Amount:         mollie.Amount(basePrice.Round(2).StringFixed(2), tier.Currency),
+		Description:    fmt.Sprintf("Subscription setup: %s", tier.TierName),
 		Method:         getMolliePaymentMethod(method),
 		RedirectURL:    redirectURL,
 		WebhookURL:     webhookURL,
@@ -7621,11 +6126,9 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *purserpb.Cre
 		return nil, status.Error(codes.Internal, "failed to create first payment")
 	}
 	if payment != nil && payment.ID != "" {
-		if _, updateErr := s.db.ExecContext(ctx, `
-			UPDATE purser.payment_provider_intents
-			SET provider_payment_id = $1, status = 'provider_open', updated_at = NOW()
-			WHERE id = $2
-		`, payment.ID, firstPaymentIntentID); updateErr != nil {
+		if updateErr := queries.SetProviderIntentPaymentOpen(ctx, purserdb.SetProviderIntentPaymentOpenParams{
+			PaymentID: sql.NullString{String: payment.ID, Valid: true}, IntentID: firstPaymentIntentID,
+		}); updateErr != nil {
 			s.logger.WithError(updateErr).WithField("intent_id", firstPaymentIntentID).Warn("Failed to record first-payment provider_payment_id")
 		}
 	}
@@ -7666,22 +6169,19 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *purser
 	// requires this row; if it's missing, Mollie would charge a customer
 	// while Purser stayed unaware. Fail closed here so no external state
 	// gets ahead of internal state.
-	var tenantSubExists int
-	if preflightErr := s.db.QueryRowContext(ctx, `
-		SELECT 1 FROM purser.tenant_subscriptions WHERE tenant_id = $1
-	`, tenantID).Scan(&tenantSubExists); errors.Is(preflightErr, sql.ErrNoRows) {
+	queries := purserdb.New(s.db)
+	tenantSubExists, preflightErr := queries.TenantSubscriptionExists(ctx, tenantID)
+	if preflightErr == nil && !tenantSubExists {
 		return nil, status.Errorf(codes.FailedPrecondition,
 			"no tenant_subscriptions row for tenant %s; bootstrap must seed one before subscribing", tenantID)
-	} else if preflightErr != nil {
+	}
+	if preflightErr != nil {
 		s.logger.WithError(preflightErr).Error("Failed to preflight tenant_subscriptions row")
 		return nil, status.Error(codes.Internal, "failed to preflight tenant subscription")
 	}
 
 	// Get Mollie customer ID
-	var mollieCustomerID string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT mollie_customer_id FROM purser.mollie_customers WHERE tenant_id = $1
-	`, tenantID).Scan(&mollieCustomerID)
+	mollieCustomerID, err := queries.GetMollieCustomerID(ctx, tenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.FailedPrecondition, "no Mollie customer found - complete first payment first")
 	}
@@ -7719,11 +6219,7 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *purser
 	}
 
 	// Get tier price
-	var basePriceText string
-	var currency, tierName string
-	err = s.db.QueryRowContext(ctx, `
-		SELECT tier_name, base_price::text, currency FROM purser.billing_tiers WHERE id = $1
-	`, tierID).Scan(&tierName, &basePriceText, &currency)
+	tier, err := queries.GetMollieTierPrice(ctx, tierID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.NotFound, "tier not found: %s", tierID)
 	}
@@ -7731,7 +6227,7 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *purser
 		s.logger.WithError(err).Error("Failed to get billing tier")
 		return nil, status.Error(codes.Internal, "failed to get billing tier")
 	}
-	basePrice, err := decimal.NewFromString(basePriceText)
+	basePrice, err := decimal.NewFromString(tier.BasePrice)
 	if err != nil {
 		s.logger.WithError(err).WithField("tier_id", tierID).Error("Failed to parse billing tier base price")
 		return nil, status.Error(codes.Internal, "failed to parse billing tier price")
@@ -7758,18 +6254,13 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *purser
 	// still runs on local-persist failure, but the intent row provides
 	// the audit trail to identify orphan subscriptions if both halves fail.
 	subscriptionIntentKey := fmt.Sprintf("mollie-subscription:%s:%s:%s", tenantID, tierID, mandateID)
-	var subscriptionIntentID string
-	if intentErr := s.db.QueryRowContext(ctx, `
-		INSERT INTO purser.payment_provider_intents (
-			tenant_id, provider, purpose, local_reference_type, local_reference_id,
-			provider_customer_id, status, currency, amount_cents, idempotency_key
-		) VALUES ($1, 'mollie', 'mollie_subscription_create', 'billing_tiers', $2::uuid,
-		          $3, 'pending', $4, $5, $6)
-		ON CONFLICT (provider, idempotency_key) DO UPDATE SET
-			attempt_count = purser.payment_provider_intents.attempt_count + 1,
-			updated_at = NOW()
-		RETURNING id
-	`, tenantID, tierID, mollieCustomerID, currency, basePrice.Round(2).Shift(2).IntPart(), subscriptionIntentKey).Scan(&subscriptionIntentID); intentErr != nil {
+	subscriptionIntentID, intentErr := queries.UpsertMollieSubscriptionIntent(ctx, purserdb.UpsertMollieSubscriptionIntentParams{
+		TenantID: tenantID, TierID: tierID,
+		CustomerID: sql.NullString{String: mollieCustomerID, Valid: true},
+		Currency:   tier.Currency, AmountCents: basePrice.Round(2).Shift(2).IntPart(),
+		IdempotencyKey: subscriptionIntentKey,
+	})
+	if intentErr != nil {
 		s.logger.WithError(intentErr).Error("Failed to record Mollie subscription intent")
 		return nil, status.Error(codes.Internal, "failed to record subscription intent")
 	}
@@ -7780,9 +6271,9 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *purser
 		TenantID:       tenantID,
 		TierID:         tierID,
 		MandateID:      mandateID,
-		Amount:         mollie.Amount(basePrice.Round(2).StringFixed(2), currency),
+		Amount:         mollie.Amount(basePrice.Round(2).StringFixed(2), tier.Currency),
 		Interval:       "1 month",
-		Description:    fmt.Sprintf("Subscription: %s", tierName),
+		Description:    fmt.Sprintf("Subscription: %s", tier.TierName),
 		StartDate:      startDate,
 		WebhookURL:     webhookURL,
 		IdempotencyKey: subscriptionIntentKey,
@@ -7793,20 +6284,22 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *purser
 		return nil, status.Error(codes.Internal, "failed to create subscription")
 	}
 	if sub != nil && sub.ID != "" {
-		if _, updateErr := s.db.ExecContext(ctx, `
-			UPDATE purser.payment_provider_intents
-			SET provider_subscription_id = $1, status = 'provider_open', updated_at = NOW()
-			WHERE id = $2
-		`, sub.ID, subscriptionIntentID); updateErr != nil {
+		if updateErr := queries.SetProviderIntentSubscriptionOpen(ctx, purserdb.SetProviderIntentSubscriptionOpenParams{
+			SubscriptionID: sql.NullString{String: sub.ID, Valid: true}, IntentID: subscriptionIntentID,
+		}); updateErr != nil {
 			s.logger.WithError(updateErr).WithField("intent_id", subscriptionIntentID).Warn("Failed to record provider_subscription_id")
 		}
 	}
 
 	nextPayment := startDate
-	var nextPaymentArg any = startDate
+	nextPaymentDate := periodEnd
 	if sub.NextPaymentDate != nil {
 		nextPayment = sub.NextPaymentDate.String()
-		nextPaymentArg = nextPayment
+		parsedNextPayment, parseErr := time.Parse("2006-01-02", nextPayment)
+		if parseErr != nil {
+			return nil, status.Errorf(codes.Internal, "invalid Mollie next payment date: %v", parseErr)
+		}
+		nextPaymentDate = parsedNextPayment
 	}
 
 	// Persist the Mollie subscription state on the existing tenant_subscriptions
@@ -7820,23 +6313,12 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *purser
 	// customer isn't charged for a sub Purser doesn't know about. The
 	// preflight earlier in the RPC catches the no-row case; this guard
 	// covers transient DB failures and concurrent deletes.
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE purser.tenant_subscriptions
-		SET mollie_subscription_id = $1,
-		    mollie_next_payment_date = $2,
-		    next_billing_date = $2,
-		    billing_period_start = $4,
-		    billing_period_end = $5,
-		    tier_id = $6::uuid,
-		    payment_method = 'mollie',
-		    status = 'active',
-		    billing_model = 'postpaid',
-		    pending_tier_id = NULL,
-		    pending_effective_at = NULL,
-		    pending_reason = NULL,
-		    updated_at = NOW()
-		WHERE tenant_id = $3
-	`, sub.ID, nextPaymentArg, tenantID, periodStart, periodEnd, tierID)
+	rows, err := queries.ActivateMollieTenantSubscription(ctx, purserdb.ActivateMollieTenantSubscriptionParams{
+		SubscriptionID:  sql.NullString{String: sub.ID, Valid: true},
+		NextPaymentDate: nextPaymentDate,
+		PeriodStart:     sql.NullTime{Time: periodStart, Valid: true},
+		PeriodEnd:       sql.NullTime{Time: periodEnd, Valid: true}, TierID: tierID, TenantID: tenantID,
+	})
 	if err != nil {
 		s.logger.WithError(err).WithField("subscription_id", sub.ID).Error("Failed to persist Mollie subscription state; compensating cancel")
 		if cancelErr := s.mollieClient.CancelSubscription(ctx, mollieCustomerID, sub.ID); cancelErr != nil {
@@ -7844,15 +6326,6 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *purser
 			return nil, status.Errorf(codes.Internal, "created Mollie subscription %s but failed to persist it locally and failed to cancel it: %v", sub.ID, cancelErr)
 		}
 		return nil, status.Error(codes.Internal, "failed to persist Mollie subscription state")
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		s.logger.WithError(err).WithField("subscription_id", sub.ID).Error("Failed to check Mollie subscription update rows; compensating cancel")
-		if cancelErr := s.mollieClient.CancelSubscription(ctx, mollieCustomerID, sub.ID); cancelErr != nil {
-			s.logger.WithError(cancelErr).WithField("subscription_id", sub.ID).Error("Compensating Mollie subscription cancel failed; orphan needs ops cleanup")
-			return nil, status.Errorf(codes.Internal, "created Mollie subscription %s but failed to verify local persistence and failed to cancel it: %v", sub.ID, cancelErr)
-		}
-		return nil, status.Error(codes.Internal, "failed to check subscription update")
 	}
 	if rows == 0 {
 		s.logger.WithFields(logging.Fields{
@@ -7893,10 +6366,7 @@ func (s *PurserServer) ListMandates(ctx context.Context, req *purserpb.ListMolli
 	}
 
 	// Get Mollie customer ID
-	var mollieCustomerID string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT mollie_customer_id FROM purser.mollie_customers WHERE tenant_id = $1
-	`, tenantID).Scan(&mollieCustomerID)
+	mollieCustomerID, err := purserdb.New(s.db).GetMollieCustomerID(ctx, tenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return &purserpb.ListMollieMandatesResponse{Mandates: []*purserpb.MollieMandate{}}, nil
 	}
@@ -7942,10 +6412,8 @@ func (s *PurserServer) CancelMollieSubscription(ctx context.Context, req *purser
 	}
 
 	// Get Mollie customer ID
-	var mollieCustomerID string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT mollie_customer_id FROM purser.mollie_customers WHERE tenant_id = $1
-	`, tenantID).Scan(&mollieCustomerID)
+	queries := purserdb.New(s.db)
+	mollieCustomerID, err := queries.GetMollieCustomerID(ctx, tenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "no Mollie customer found")
 	}
@@ -7956,11 +6424,8 @@ func (s *PurserServer) CancelMollieSubscription(ctx context.Context, req *purser
 
 	// If no subscription ID provided, get from database
 	if subscriptionID == "" {
-		var subID sql.NullString
-		err = s.db.QueryRowContext(ctx, `
-			SELECT mollie_subscription_id FROM purser.tenant_subscriptions WHERE tenant_id = $1
-		`, tenantID).Scan(&subID)
-		if err != nil || !subID.Valid {
+		subID, subErr := queries.GetTenantMollieSubscriptionID(ctx, tenantID)
+		if subErr != nil || !subID.Valid {
 			return nil, status.Error(codes.NotFound, "no Mollie subscription found")
 		}
 		subscriptionID = subID.String
@@ -7973,11 +6438,7 @@ func (s *PurserServer) CancelMollieSubscription(ctx context.Context, req *purser
 	}
 
 	// Clear subscription ID from database
-	_, err = s.db.ExecContext(ctx, `
-		UPDATE purser.tenant_subscriptions
-		SET mollie_subscription_id = NULL, status = 'cancelled', cancelled_at = NOW(), updated_at = NOW()
-		WHERE tenant_id = $1
-	`, tenantID)
+	err = queries.CancelLocalMollieSubscription(ctx, tenantID)
 	if err != nil {
 		s.logger.WithError(err).Warn("Failed to update subscription after Mollie cancellation")
 	}
@@ -8001,17 +6462,7 @@ func (s *PurserServer) GetBillingDetails(ctx context.Context, req *purserpb.GetB
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
-	var billingEmail, billingName, billingCompany, taxID sql.NullString
-	var billingAddress []byte
-	var updatedAt time.Time
-
-	err := s.db.QueryRowContext(ctx, `
-		SELECT billing_email, billing_name, billing_company, tax_id, billing_address, updated_at
-		FROM purser.tenant_subscriptions
-		WHERE tenant_id = $1 AND status != 'cancelled'
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, tenantID).Scan(&billingEmail, &billingName, &billingCompany, &taxID, &billingAddress, &updatedAt)
+	row, err := purserdb.New(s.db).GetTenantBillingDetails(ctx, tenantID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "no subscription found for tenant")
@@ -8022,22 +6473,22 @@ func (s *PurserServer) GetBillingDetails(ctx context.Context, req *purserpb.GetB
 
 	details := &purserpb.BillingDetails{
 		TenantId:  tenantID,
-		UpdatedAt: timestamppb.New(updatedAt),
+		UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
 	}
 
-	if billingEmail.Valid {
-		details.Email = billingEmail.String
+	if row.BillingEmail.Valid {
+		details.Email = row.BillingEmail.String
 	}
-	if billingName.Valid {
-		details.Name = billingName.String
+	if row.BillingName.Valid {
+		details.Name = row.BillingName.String
 	}
-	if billingCompany.Valid {
-		details.Company = billingCompany.String
+	if row.BillingCompany.Valid {
+		details.Company = row.BillingCompany.String
 	}
-	if taxID.Valid {
-		details.VatNumber = taxID.String
+	if row.TaxID.Valid {
+		details.VatNumber = row.TaxID.String
 	}
-	details.Address = scanBillingAddress(billingAddress)
+	details.Address = scanBillingAddress(row.BillingAddress)
 
 	// IsComplete means the profile can be used for a full customer invoice.
 	details.IsComplete = details.Name != "" && details.Email != "" && details.Address != nil &&
@@ -8089,31 +6540,10 @@ func (s *PurserServer) UpdateBillingDetails(ctx context.Context, req *purserpb.U
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
-	// Build dynamic update query based on provided fields
-	updates := []string{}
-	args := []any{}
-	argIdx := 1
-
-	if req.Email != nil {
-		updates = append(updates, fmt.Sprintf("billing_email = $%d", argIdx))
-		args = append(args, *req.Email)
-		argIdx++
+	if req.Email == nil && req.Name == nil && req.Company == nil && req.VatNumber == nil && req.Address == nil {
+		return s.GetBillingDetails(ctx, &purserpb.GetBillingDetailsRequest{TenantId: tenantID})
 	}
-	if req.Name != nil {
-		updates = append(updates, fmt.Sprintf("billing_name = $%d", argIdx))
-		args = append(args, *req.Name)
-		argIdx++
-	}
-	if req.Company != nil {
-		updates = append(updates, fmt.Sprintf("billing_company = $%d", argIdx))
-		args = append(args, *req.Company)
-		argIdx++
-	}
-	if req.VatNumber != nil {
-		updates = append(updates, fmt.Sprintf("tax_id = $%d", argIdx))
-		args = append(args, *req.VatNumber)
-		argIdx++
-	}
+	addressJSON := []byte(`{}`)
 	if req.Address != nil {
 		// Validate and normalize country code
 		countryCode := countries.Normalize(req.Address.Country)
@@ -8122,7 +6552,8 @@ func (s *PurserServer) UpdateBillingDetails(ctx context.Context, req *purserpb.U
 		}
 
 		// Convert proto address to JSONB
-		addressJSON, err := json.Marshal(map[string]string{
+		var err error
+		addressJSON, err = json.Marshal(map[string]string{
 			"street":      req.Address.Street,
 			"city":        req.Address.City,
 			"state":       req.Address.State,
@@ -8132,37 +6563,18 @@ func (s *PurserServer) UpdateBillingDetails(ctx context.Context, req *purserpb.U
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to serialize address: %v", err)
 		}
-		updates = append(updates, fmt.Sprintf("billing_address = $%d", argIdx))
-		args = append(args, fwdb.JSONText(addressJSON))
-		argIdx++
 	}
-
-	if len(updates) == 0 {
-		// No updates provided, just return current details
-		return s.GetBillingDetails(ctx, &purserpb.GetBillingDetailsRequest{TenantId: tenantID})
-	}
-
-	// Always update updated_at
-	updates = append(updates, "updated_at = NOW()")
-
-	// Add tenant_id as last arg for WHERE clause
-	args = append(args, tenantID)
-
-	query := fmt.Sprintf(`
-		UPDATE purser.tenant_subscriptions
-		SET %s
-		WHERE tenant_id = $%d AND status != 'cancelled'
-	`, strings.Join(updates, ", "), argIdx)
-
-	result, err := s.db.ExecContext(ctx, query, args...)
+	rowsAffected, err := purserdb.New(s.db).UpdateTenantBillingDetails(ctx, purserdb.UpdateTenantBillingDetailsParams{
+		SetEmail: req.Email != nil, Email: derefString(req.Email),
+		SetName: req.Name != nil, Name: derefString(req.Name),
+		SetCompany: req.Company != nil, Company: derefString(req.Company),
+		SetVatNumber: req.VatNumber != nil, VatNumber: derefString(req.VatNumber),
+		SetAddress: req.Address != nil, Address: addressJSON, TenantID: tenantID,
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to get rows affected: %v", err)
-	}
 	if rowsAffected == 0 {
 		return nil, status.Error(codes.NotFound, "no active subscription found for tenant")
 	}
@@ -8461,14 +6873,10 @@ func (s *PurserServer) SettleX402Payment(ctx context.Context, req *purserpb.Sett
 
 	// Auto-reactivate suspended tenant if balance goes positive after x402 top-up
 	if result.Success && !result.IsAuthOnly && tenantID != "" && result.NewBalanceCents >= 0 {
-		res, err := s.db.ExecContext(ctx, `
-			UPDATE purser.tenant_subscriptions
-			SET status = 'active', updated_at = NOW()
-			WHERE tenant_id = $1 AND status = 'suspended'
-		`, tenantID)
+		rowsAffected, err := purserdb.New(s.db).ReactivateSuspendedTenant(ctx, tenantID)
 		if err != nil {
 			s.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to check/reactivate suspended subscription after x402 top-up")
-		} else if rowsAffected, _ := res.RowsAffected(); rowsAffected > 0 {
+		} else if rowsAffected > 0 {
 			s.logger.WithFields(map[string]any{
 				"tenant_id":   tenantID,
 				"new_balance": result.NewBalanceCents,
@@ -8570,71 +6978,46 @@ func (s *PurserServer) ClaimX402MutationResult(ctx context.Context, req *purserp
 		return nil, status.Error(codes.InvalidArgument, "operation required")
 	}
 
-	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO purser.x402_mutation_results (
-			tenant_id, quote_id, idempotency_key, request_fingerprint, protocol, operation
-		)
-		SELECT $1, q.id, $3, $4, $5, $6
-		FROM purser.x402_payment_quotes q
-		WHERE q.id = $2 AND q.tenant_id = $1 AND q.status = 'confirmed'
-		ON CONFLICT DO NOTHING
-	`, tenantID, quoteID, key, fingerprint, protocol, operation)
+	queries := purserdb.New(s.db)
+	inserted, err := queries.ClaimX402Mutation(ctx, purserdb.ClaimX402MutationParams{
+		TenantID: tenantID, QuoteID: quoteID, IdempotencyKey: key,
+		RequestFingerprint: fingerprint, Protocol: protocol, Operation: operation,
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "claim x402 mutation result: %v", err)
 	}
-	inserted, rowsErr := result.RowsAffected()
-	if rowsErr != nil {
-		return nil, status.Errorf(codes.Internal, "inspect x402 mutation claim: %v", rowsErr)
-	}
-
-	var storedQuoteID, storedFingerprint, storedProtocol, storedOperation, storedStatus string
-	var storedResult []byte
-	var contentType sql.NullString
-	var statusCode sql.NullInt64
-	var updatedAt time.Time
-	err = s.db.QueryRowContext(ctx, `
-		SELECT quote_id::text, request_fingerprint, protocol, operation, status,
-		       result, content_type, status_code, updated_at
-		FROM purser.x402_mutation_results
-		WHERE tenant_id = $1 AND idempotency_key = $2
-	`, tenantID, key).Scan(
-		&storedQuoteID, &storedFingerprint, &storedProtocol, &storedOperation, &storedStatus,
-		&storedResult, &contentType, &statusCode, &updatedAt,
-	)
+	stored, err := queries.GetX402MutationClaim(ctx, purserdb.GetX402MutationClaimParams{
+		TenantID: tenantID, IdempotencyKey: key,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.FailedPrecondition, "quote is not a confirmed tenant-bound settlement or was already bound to another mutation")
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "read x402 mutation result claim: %v", err)
 	}
-	if storedQuoteID != quoteID || storedFingerprint != fingerprint || storedProtocol != protocol || storedOperation != operation {
+	if stored.QuoteID != quoteID || stored.RequestFingerprint != fingerprint || stored.Protocol != protocol || stored.Operation != operation {
 		return nil, status.Error(codes.AlreadyExists, "idempotency key or paid quote is already bound to a different request")
 	}
 	if inserted > 0 {
 		return &purserpb.ClaimX402MutationResultResponse{State: "claimed"}, nil
 	}
-	if storedStatus == "completed" {
+	if stored.Status == "completed" {
 		return &purserpb.ClaimX402MutationResultResponse{
 			State:       "completed",
-			Result:      storedResult,
-			ContentType: contentType.String,
-			StatusCode:  int32(statusCode.Int64),
+			Result:      stored.Result,
+			ContentType: stored.ContentType.String,
+			StatusCode:  stored.StatusCode.Int32,
 		}, nil
 	}
-	if storedStatus != "operator_review" && time.Since(updatedAt) >= 15*time.Minute {
-		if _, updateErr := s.db.ExecContext(ctx, `
-			UPDATE purser.x402_mutation_results
-			SET status='operator_review',
-			    review_reason='mutation owner result was not durably recorded before the review deadline',
-			    updated_at=NOW()
-			WHERE tenant_id=$1 AND idempotency_key=$2
-			  AND status IN ('claimed','completion_pending')
-		`, tenantID, key); updateErr != nil {
+	if stored.Status != "operator_review" && time.Since(stored.UpdatedAt) >= 15*time.Minute {
+		if updateErr := queries.MarkX402MutationOperatorReview(ctx, purserdb.MarkX402MutationOperatorReviewParams{
+			TenantID: tenantID, IdempotencyKey: key,
+		}); updateErr != nil {
 			return nil, status.Errorf(codes.Internal, "mark abandoned x402 mutation for review: %v", updateErr)
 		}
-		storedStatus = "operator_review"
+		stored.Status = "operator_review"
 	}
-	if storedStatus == "operator_review" {
+	if stored.Status == "operator_review" {
 		return &purserpb.ClaimX402MutationResultResponse{
 			State: "operator_review", Error: "mutation outcome requires operator review; do not execute it again",
 		}, nil
@@ -8663,33 +7046,23 @@ func (s *PurserServer) CompleteX402MutationResult(ctx context.Context, req *purs
 		return nil, status.Error(codes.InvalidArgument, "valid status_code required")
 	}
 
-	res, err := s.db.ExecContext(ctx, `
-		UPDATE purser.x402_mutation_results
-		SET status = 'completed', result = $5, content_type = NULLIF($6, ''),
-		    status_code = $7, completed_at = NOW(), updated_at = NOW()
-		WHERE tenant_id = $1 AND quote_id = $2 AND idempotency_key = $3
-		  AND request_fingerprint = $4 AND status IN ('claimed', 'completion_pending', 'operator_review')
-	`, tenantID, quoteID, key, fingerprint, req.GetResult(), req.GetContentType(), req.GetStatusCode())
+	queries := purserdb.New(s.db)
+	updated, err := queries.CompleteX402Mutation(ctx, purserdb.CompleteX402MutationParams{
+		TenantID: tenantID, QuoteID: quoteID, IdempotencyKey: key, RequestFingerprint: fingerprint,
+		Result: req.GetResult(), ContentType: req.GetContentType(), StatusCode: req.GetStatusCode(),
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "complete x402 mutation result: %v", err)
 	}
-	updated, rowsErr := res.RowsAffected()
-	if rowsErr != nil {
-		return nil, status.Errorf(codes.Internal, "inspect x402 mutation completion: %v", rowsErr)
-	}
 	if updated == 0 {
-		var completed bool
-		err = s.db.QueryRowContext(ctx, `
-			SELECT status = 'completed'
-			FROM purser.x402_mutation_results
-			WHERE tenant_id = $1 AND quote_id = $2 AND idempotency_key = $3
-			  AND request_fingerprint = $4
-		`, tenantID, quoteID, key, fingerprint).Scan(&completed)
-		if errors.Is(err, sql.ErrNoRows) {
+		completed, readErr := queries.IsX402MutationCompleted(ctx, purserdb.IsX402MutationCompletedParams{
+			TenantID: tenantID, QuoteID: quoteID, IdempotencyKey: key, RequestFingerprint: fingerprint,
+		})
+		if errors.Is(readErr, sql.ErrNoRows) {
 			return nil, status.Error(codes.FailedPrecondition, "matching mutation claim not found")
 		}
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "read x402 mutation completion: %v", err)
+		if readErr != nil {
+			return nil, status.Errorf(codes.Internal, "read x402 mutation completion: %v", readErr)
 		}
 		return &purserpb.CompleteX402MutationResultResponse{Completed: completed}, nil
 	}
@@ -8704,39 +7077,25 @@ func (s *PurserServer) CompleteX402MutationResult(ctx context.Context, req *purs
 // tenantID is required: line items are tenant-scoped financial-audit rows and
 // reads must filter by tenant per the cross-service tenant rule.
 func (s *PurserServer) loadInvoiceLineItems(ctx context.Context, invoiceID, tenantID string) ([]*purserpb.LineItem, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT line_key, COALESCE(meter, ''), unit, dimensions, description,
-		       quantity::text, included_quantity::text, billable_quantity::text,
-		       unit_price::text, amount::text, currency,
-		       COALESCE(cluster_id, ''),
-		       COALESCE(cluster_kind, ''),
-		       pricing_source
-		FROM purser.invoice_line_items
-		WHERE invoice_id = $1 AND tenant_id = $2
-		ORDER BY (line_key = 'base_subscription') DESC, line_key ASC
-	`, invoiceID, tenantID)
+	rows, err := purserdb.New(s.db).ListInvoiceLineItemsForTenant(ctx, purserdb.ListInvoiceLineItemsForTenantParams{
+		InvoiceID: invoiceID, TenantID: tenantID,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("query line items for invoice %s: %w", invoiceID, err)
 	}
-	defer rows.Close()
-	items := []*purserpb.LineItem{}
-	for rows.Next() {
-		var li purserpb.LineItem
-		var dimensionsJSON []byte
-		if scanErr := rows.Scan(&li.LineKey, &li.Meter, &li.Unit, &dimensionsJSON, &li.Description,
-			&li.Quantity, &li.IncludedQuantity, &li.BillableQuantity,
-			&li.UnitPrice, &li.Total, &li.Currency,
-			&li.ClusterId, &li.ClusterKind, &li.PricingSource); scanErr != nil {
-			return nil, fmt.Errorf("scan line item for invoice %s: %w", invoiceID, scanErr)
+	items := make([]*purserpb.LineItem, 0, len(rows))
+	for _, row := range rows {
+		li := &purserpb.LineItem{
+			LineKey: row.LineKey, Meter: row.Meter, Unit: row.Unit, Description: row.Description,
+			Quantity: row.Quantity, IncludedQuantity: row.IncludedQuantity, BillableQuantity: row.BillableQuantity,
+			UnitPrice: row.UnitPrice, Total: row.Amount, Currency: row.Currency,
+			ClusterId: row.ClusterID, ClusterKind: row.ClusterKind, PricingSource: row.PricingSource,
 		}
-		if len(dimensionsJSON) > 0 {
-			li.Dimensions = mapToProtoStruct(jsonToMap(dimensionsJSON))
+		if len(row.Dimensions) > 0 {
+			li.Dimensions = mapToProtoStruct(jsonToMap(row.Dimensions))
 		}
 		li.PricingLabel = pricingLabelFor(li.PricingSource, li.ClusterKind)
-		items = append(items, &li)
-	}
-	if rowsErr := rows.Err(); rowsErr != nil {
-		return nil, fmt.Errorf("iterate line items for invoice %s: %w", invoiceID, rowsErr)
+		items = append(items, li)
 	}
 	// Best-effort cluster_name enrichment from Quartermaster — same shape
 	// as the email path. One RPC per distinct cluster_id; failures degrade

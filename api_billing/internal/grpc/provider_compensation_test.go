@@ -37,16 +37,16 @@ func TestCreateCheckoutSessionExpiresStripeSessionWhenLocalStageFails(t *testing
 	}
 
 	tierID := "11111111-1111-1111-1111-111111111111"
-	mock.ExpectQuery(`SELECT billing_email, billing_name, billing_company, tax_id, billing_address, updated_at`).
+	mock.ExpectQuery(`SELECT billing_email, billing_name, billing_company, tax_id,\s+COALESCE\(billing_address`).
 		WithArgs("tenant-a").
 		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at"}).
 			AddRow("billing@example.com", "Example Customer", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now()))
-	mock.ExpectQuery(`SELECT tier_name, currency, stripe_price_id_monthly FROM purser\.billing_tiers WHERE id = \$1`).
-		WithArgs(tierID).
+	mock.ExpectQuery(`SELECT tier_name, COALESCE\(currency, 'EUR'\)::text AS currency`).
+		WithArgs(false, tierID).
 		WillReturnRows(sqlmock.NewRows([]string{"tier_name", "currency", "stripe_price_id_monthly"}).AddRow("Pro", "USD", "price_123"))
-	mock.ExpectQuery(`SELECT pending_reason, pending_tier_id::text\s+FROM purser\.tenant_subscriptions`).
+	mock.ExpectQuery(`SELECT pending_reason, COALESCE\(pending_tier_id::text, ''\)::text AS pending_tier_id`).
 		WithArgs("tenant-a").
-		WillReturnRows(sqlmock.NewRows([]string{"pending_reason", "pending_tier_id"}).AddRow(nil, nil))
+		WillReturnRows(sqlmock.NewRows([]string{"pending_reason", "pending_tier_id"}).AddRow(nil, ""))
 	// Durable intent insert before any Stripe API call.
 	mock.ExpectQuery(`INSERT INTO purser\.payment_provider_intents`).
 		WithArgs("tenant-a", tierID, "USD", "stripe-tenant-checkout:tenant-a:"+tierID).
@@ -59,8 +59,8 @@ func TestCreateCheckoutSessionExpiresStripeSessionWhenLocalStageFails(t *testing
 	mock.ExpectExec(`UPDATE purser\.payment_provider_intents\s+SET provider_session_id`).
 		WithArgs("cs_test_123", "intent-tenant").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET pending_tier_id = \$1::uuid`).
-		WithArgs(tierID, "tenant-a", "intent-tenant").
+	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET pending_tier_id = \$1::text::uuid`).
+		WithArgs(tierID, "intent-tenant", "tenant-a").
 		WillReturnError(errors.New("db down"))
 
 	_, err = server.CreateCheckoutSession(context.Background(), &purserpb.CreateStripeCheckoutRequest{
@@ -98,17 +98,17 @@ func TestCreateMollieSubscriptionCancelsProviderSubscriptionWhenLocalPersistFail
 	}
 
 	tierID := "11111111-1111-1111-1111-111111111111"
-	mock.ExpectQuery(`SELECT billing_email, billing_name, billing_company, tax_id, billing_address, updated_at`).
+	mock.ExpectQuery(`SELECT billing_email, billing_name, billing_company, tax_id,\s+COALESCE\(billing_address`).
 		WithArgs("tenant-a").
 		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at"}).
 			AddRow("billing@example.com", "Example Customer", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now()))
-	mock.ExpectQuery(`SELECT 1 FROM purser\.tenant_subscriptions WHERE tenant_id = \$1`).
+	mock.ExpectQuery(`SELECT EXISTS\(`).
 		WithArgs("tenant-a").
-		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(1))
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	mock.ExpectQuery(`SELECT mollie_customer_id FROM purser\.mollie_customers WHERE tenant_id = \$1`).
 		WithArgs("tenant-a").
 		WillReturnRows(sqlmock.NewRows([]string{"mollie_customer_id"}).AddRow("cst_123"))
-	mock.ExpectQuery(`SELECT tier_name, base_price::text, currency FROM purser\.billing_tiers WHERE id = \$1`).
+	mock.ExpectQuery(`SELECT tier_name, COALESCE\(base_price::text, '0'\)::text AS base_price`).
 		WithArgs(tierID).
 		WillReturnRows(sqlmock.NewRows([]string{"tier_name", "base_price", "currency"}).AddRow("Pro", "20.00", "EUR"))
 	// Durable subscription-intent insert before the Mollie API call.

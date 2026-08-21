@@ -22,7 +22,7 @@ func TestCreateSubscription_PersistsUUIDAndBillingModel(t *testing.T) {
 	tenantID := "tenant-1"
 	tierID := "11111111-1111-1111-1111-111111111111"
 
-	mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM purser\.billing_tiers`).
+	mock.ExpectQuery(`SELECT EXISTS \(\s+SELECT 1 FROM purser\.billing_tiers`).
 		WithArgs(tierID).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	mock.ExpectBegin()
