@@ -6,11 +6,71 @@ package dockerpg
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
+
+// PostgresImage resolves the release-pinned PostgreSQL contract image from
+// config/infrastructure.yaml. Real-engine service tests use this instead of
+// silently drifting to an older hard-coded major version.
+func PostgresImage() (string, error) {
+	if override := strings.TrimSpace(os.Getenv("FRAMEWORKS_POSTGRES_TEST_IMAGE")); override != "" {
+		return override, nil
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for dir, depth := wd, 0; depth < 10; depth++ {
+		path := filepath.Join(dir, "config", "infrastructure.yaml")
+		if b, readErr := os.ReadFile(path); readErr == nil {
+			image, digest, parseErr := infrastructureImage(string(b), "postgresql")
+			if parseErr != nil {
+				return "", fmt.Errorf("parse %s: %w", path, parseErr)
+			}
+			return image + "@" + digest, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return "", errors.New("config/infrastructure.yaml not found from test working directory")
+}
+
+func infrastructureImage(yaml, name string) (string, string, error) {
+	active := false
+	image, digest := "", ""
+	for line := range strings.SplitSeq(yaml, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "- name:") {
+			if active {
+				break
+			}
+			active = strings.TrimSpace(strings.TrimPrefix(trimmed, "- name:")) == name
+			continue
+		}
+		if !active {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(trimmed, "image:"):
+			image = strings.TrimSpace(strings.TrimPrefix(trimmed, "image:"))
+		case strings.HasPrefix(trimmed, "digest:"):
+			digest = strings.TrimSpace(strings.TrimPrefix(trimmed, "digest:"))
+		}
+	}
+	if image == "" || digest == "" {
+		return "", "", fmt.Errorf("infrastructure/%s must declare image and digest", name)
+	}
+	return image, digest, nil
+}
 
 // Every docker invocation is deadline-bounded so no single call can hang a harness, but the budgets differ by command:
 // only `docker run` may pull the image (nothing pre-pulls it in the Makefile or workflows) and needs minutes; the

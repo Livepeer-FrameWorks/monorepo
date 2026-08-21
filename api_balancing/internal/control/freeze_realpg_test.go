@@ -17,8 +17,6 @@ import (
 	_ "github.com/lib/pq"
 )
 
-const realPGImage = "pgvector/pgvector:pg15"
-
 // startRealPG spins up a throwaway Postgres, applies the REAL embedded foghorn.sql baseline (trigger +
 // CHECK constraints included), and returns a live *sql.DB. Unlike the cli SQL-smoke harness, this drives
 // the ACTUAL production ClaimFreezeAttempt code against the ACTUAL deployed schema, so neither can drift
@@ -35,7 +33,11 @@ func startRealPG(t *testing.T) *sql.DB {
 	// container's anonymous data volume too: the pgvector/postgres image declares /var/lib/postgresql/data as a VOLUME,
 	// so `rm -f` (no -v) leaks a ~40MB volume per test run until the Docker VM fills and PostgreSQL fails with ENOSPC.
 	t.Cleanup(func() { _, _ = run("rm", "-fv", name) })
-	if out, err := dockerpg.Run("run", "-d", "--name", name, "-P", "-e", "POSTGRES_PASSWORD=harness", realPGImage); err != nil {
+	image, err := dockerpg.PostgresImage()
+	if err != nil {
+		t.Fatalf("resolve PostgreSQL test image: %v", err)
+	}
+	if out, err := dockerpg.Run("run", "-d", "--name", name, "-P", "-e", "POSTGRES_PASSWORD=harness", image); err != nil {
 		t.Fatalf("docker run: %v\n%s", err, out)
 	}
 

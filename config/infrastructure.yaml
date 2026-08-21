@@ -19,6 +19,9 @@ infrastructure:
 
   - name: yugabyte
     version: "2025.2.3.0"
+    # CI contract engine only; production remains native and uses artifacts.
+    contract_image: yugabytedb/yugabyte:2025.2.3.0-b149
+    contract_digest: sha256:5ffcc42ff3e6fa00a4b5aa1738744fd61bc14d9c94a608328555bffb24256a6e
     artifacts:
       - arch: linux-amd64
         url: https://downloads.yugabyte.com/releases/2025.2.3.0/yugabyte-2025.2.3.0-b149-linux-x86_64.tar.gz

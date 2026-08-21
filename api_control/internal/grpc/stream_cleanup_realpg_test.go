@@ -23,8 +23,6 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-const commodoreRealPGImage = "pgvector/pgvector:pg15"
-
 // startCommodoreRealPG spins up a throwaway Postgres, applies the REAL embedded commodore.sql baseline, and returns a
 // live *sql.DB. It drives the ACTUAL stream-cleanup outbox worker (claim → dispatch → retry → finalize) against the
 // ACTUAL deployed schema, so the two-phase deletion saga's DB coordination cannot drift from the schema undetected.
@@ -40,7 +38,11 @@ func startCommodoreRealPG(t *testing.T) *sql.DB {
 	// container's anonymous data volume (the postgres image declares /var/lib/postgresql/data as a VOLUME); `rm -f`
 	// alone leaks it until the Docker VM hits ENOSPC.
 	t.Cleanup(func() { _, _ = run("rm", "-fv", name) })
-	if out, err := dockerpg.Run("run", "-d", "--name", name, "-P", "-e", "POSTGRES_PASSWORD=harness", commodoreRealPGImage); err != nil {
+	image, err := dockerpg.PostgresImage()
+	if err != nil {
+		t.Fatalf("resolve PostgreSQL test image: %v", err)
+	}
+	if out, err := dockerpg.Run("run", "-d", "--name", name, "-P", "-e", "POSTGRES_PASSWORD=harness", image); err != nil {
 		t.Fatalf("docker run: %v\n%s", err, out)
 	}
 
