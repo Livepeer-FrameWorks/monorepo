@@ -8,6 +8,12 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
+const (
+	invoiceEmailOutboxID  = "93000000-0000-4000-8000-000000000001"
+	invoiceEmailInvoiceID = "94000000-0000-4000-8000-000000000001"
+	invoiceEmailTenantID  = "95000000-0000-4000-8000-000000000001"
+)
+
 func TestEnqueueInvoiceEmailOnlyForPermanentInvoice(t *testing.T) {
 	db, mock, setupErr := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if setupErr != nil {
@@ -58,12 +64,12 @@ func TestInvoiceEmailDispatcherReadsPermanentHeaderAndLineItems(t *testing.T) {
 	defer db.Close()
 
 	dueDate := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
-	mock.ExpectQuery(`FROM purser\.billing_invoices\s+WHERE id = \$1 AND tenant_id = \$2`).
+	mock.ExpectQuery(`FROM purser\.billing_invoices\s+WHERE id = \$1::text::uuid\s+AND tenant_id = \$2::text::uuid`).
 		WithArgs("invoice-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"amount", "metered_amount", "gross_metered_amount", "currency", "due_date", "status",
 		}).AddRow(19.75, 9.75, 9.75, "EUR", dueDate, "pending"))
-	mock.ExpectQuery(`FROM purser\.invoice_line_items\s+WHERE invoice_id = \$1 AND tenant_id = \$2`).
+	mock.ExpectQuery(`FROM purser\.invoice_line_items\s+WHERE invoice_id = \$1::text::uuid\s+AND tenant_id = \$2::text::uuid`).
 		WithArgs("invoice-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"description", "unit", "dimensions", "cluster_id", "cluster_kind",
@@ -107,9 +113,9 @@ func TestInvoiceEmailOutboxClaimLeasesRowsForHorizontalWorkers(t *testing.T) {
 		WithArgs(int64(120000), 10).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "invoice_id", "tenant_id", "recipient", "notification_type", "reminder_stage", "attempts",
-		}).AddRow("outbox-1", "invoice-1", "tenant-1", "billing@example.com", "overdue_reminder", 7, 2))
-	mock.ExpectExec(`UPDATE purser\.invoice_email_outbox[\s\S]+WHERE id = \$1 AND tenant_id = \$2`).
-		WithArgs("outbox-1", "tenant-1", sqlmock.AnyArg()).
+		}).AddRow(invoiceEmailOutboxID, invoiceEmailInvoiceID, invoiceEmailTenantID, "billing@example.com", "overdue_reminder", 7, 2))
+	mock.ExpectExec(`UPDATE purser\.invoice_email_outbox[\s\S]+WHERE id = \$2 AND tenant_id = \$3`).
+		WithArgs(sqlmock.AnyArg(), invoiceEmailOutboxID, invoiceEmailTenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
@@ -117,10 +123,10 @@ func TestInvoiceEmailOutboxClaimLeasesRowsForHorizontalWorkers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClaimBatch: %v", err)
 	}
-	if len(claims) != 1 || claims[0].ID != "tenant-1/outbox-1" || claims[0].LeaseToken == "" || claims[0].Attempts != 2 {
+	if len(claims) != 1 || claims[0].ID != invoiceEmailTenantID+"/"+invoiceEmailOutboxID || claims[0].LeaseToken == "" || claims[0].Attempts != 2 {
 		t.Fatalf("claims = %+v", claims)
 	}
-	if claims[0].Payload.InvoiceID != "invoice-1" || claims[0].Payload.Recipient != "billing@example.com" ||
+	if claims[0].Payload.InvoiceID != invoiceEmailInvoiceID || claims[0].Payload.Recipient != "billing@example.com" ||
 		claims[0].Payload.NotificationType != overdueReminderNotification || claims[0].Payload.ReminderStage != 7 {
 		t.Fatalf("claim payload = %+v", claims[0].Payload)
 	}
@@ -137,7 +143,7 @@ func TestInvoiceEmailDispatcherSendsOutstandingOverdueAmount(t *testing.T) {
 	defer db.Close()
 
 	dueDate := time.Now().Add(-8 * 24 * time.Hour)
-	mock.ExpectQuery(`SELECT GREATEST[\s\S]+FROM purser\.billing_invoices bi[\s\S]+WHERE bi\.id = \$1 AND bi\.tenant_id = \$2`).
+	mock.ExpectQuery(`SELECT GREATEST[\s\S]+FROM purser\.billing_invoices bi[\s\S]+WHERE bi\.id = \$1::text::uuid[\s\S]+AND bi\.tenant_id = \$2::text::uuid`).
 		WithArgs("invoice-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"amount_due", "currency", "due_date", "status", "latest_reminder_stage"}).
 			AddRow(4.25, "EUR", dueDate, "overdue", 7))

@@ -21,7 +21,7 @@ func TestHandlePrepaidCheckoutCompletedRejectsTenantMismatch(t *testing.T) {
 	s := &Service{db: mockDB, logger: logrus.New()}
 
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT status, tenant_id FROM purser.pending_topups WHERE id = \\$1 FOR UPDATE").
+	mock.ExpectQuery(`(?s)SELECT status, tenant_id::text AS tenant_id.*FROM purser.pending_topups.*FOR UPDATE`).
 		WithArgs("topup-123").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "tenant_id"}).AddRow("pending", "tenant-a"))
 	mock.ExpectRollback()
@@ -45,7 +45,7 @@ func TestHandlePrepaidCheckoutCompletedSkipsAlreadyProcessed(t *testing.T) {
 	s := &Service{db: mockDB, logger: logrus.New()}
 
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT status, tenant_id FROM purser.pending_topups WHERE id = \\$1 FOR UPDATE").
+	mock.ExpectQuery(`(?s)SELECT status, tenant_id::text AS tenant_id.*FROM purser.pending_topups.*FOR UPDATE`).
 		WithArgs("topup-456").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "tenant_id"}).AddRow("completed", "tenant-a"))
 	mock.ExpectRollback()
@@ -69,22 +69,23 @@ func TestHandlePrepaidCheckoutCompletedCreditsBalanceWithIdempotencyKey(t *testi
 	s := &Service{db: mockDB, logger: logrus.New()}
 
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT status, tenant_id FROM purser.pending_topups WHERE id = \\$1 FOR UPDATE").
+	mock.ExpectQuery(`(?s)SELECT status, tenant_id::text AS tenant_id.*FROM purser.pending_topups.*FOR UPDATE`).
 		WithArgs("topup-789").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "tenant_id"}).AddRow("pending", "tenant-a"))
 	mock.ExpectExec("UPDATE purser.pending_topups").
 		WithArgs("pay-3", "sess-3", "topup-789").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery("SELECT id, balance_cents FROM purser.prepaid_balances").
+	mock.ExpectExec("INSERT INTO purser.prepaid_balances").
 		WithArgs("tenant-a", "EUR").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "balance_cents"}).AddRow("balance-1", int64(500)))
-	mock.ExpectExec("UPDATE purser.prepaid_balances").
-		WithArgs(int64(2000), "balance-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(`INSERT INTO purser.balance_transactions`).
-		WithArgs("tenant-a", int64(1500), int64(2000), "Card top-up via mollie", "topup-789", "mollie checkout completed", "sess-3").
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("tx-1"))
+	mock.ExpectQuery("UPDATE purser.prepaid_balances").
+		WithArgs(int64(1500), "tenant-a", "EUR").
+		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(2000)))
+	mock.ExpectExec(`INSERT INTO purser.balance_transactions`).
+		WithArgs(sqlmock.AnyArg(), "tenant-a", int64(1500), int64(2000), "topup", "Card top-up via mollie", "topup-789", "topup", "webhook", nil, "mollie checkout completed", "sess-3", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE purser.pending_topups").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "topup-789").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE purser.payment_provider_intents").
 		WithArgs("pay-3", "sess-3", sqlmock.AnyArg(), "topup-789").
@@ -189,7 +190,7 @@ func TestHandleSubscriptionCheckoutCompletedPersistsTierAndPaymentMethod(t *test
 	s := &Service{db: mockDB, logger: logrus.New()}
 
 	mock.ExpectExec(subscriptionCheckoutUpdatePattern()).
-		WithArgs("cus_123", "sub_456", "tier-pro", "tenant-a", nil, nil).
+		WithArgs("cus_123", "sub_456", "tier-pro", nil, nil, "tenant-a").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE purser\.payment_provider_intents\s+SET provider_subscription_id`).
 		WithArgs("sub_456", "cs_test_session").
@@ -222,7 +223,7 @@ func TestHandleSubscriptionCheckoutCompletedErrorsOnMissingRow(t *testing.T) {
 	s := &Service{db: mockDB, logger: logrus.New()}
 
 	mock.ExpectExec(subscriptionCheckoutUpdatePattern()).
-		WithArgs("cus_123", "sub_456", "tier-pro", "tenant-missing", nil, nil).
+		WithArgs("cus_123", "sub_456", "tier-pro", nil, nil, "tenant-missing").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	err = s.handleSubscriptionCheckoutCompleted(
@@ -343,7 +344,7 @@ func TestHandlePrepaidCheckoutCompletedPendingWhenUnsettled(t *testing.T) {
 	s := &Service{db: mockDB, logger: logrus.New()}
 
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT status, tenant_id FROM purser.pending_topups WHERE id = \\$1 FOR UPDATE").
+	mock.ExpectQuery(`(?s)SELECT status, tenant_id::text AS tenant_id.*FROM purser.pending_topups.*FOR UPDATE`).
 		WithArgs("topup-1").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "tenant_id"}).AddRow("pending", "tenant-a"))
 	mock.ExpectExec("UPDATE purser.pending_topups").
@@ -372,12 +373,12 @@ func TestHandlePrepaidCheckoutCompletedPendingWhenUnsettled(t *testing.T) {
 
 func subscriptionCheckoutUpdatePattern() string {
 	return `(?s)UPDATE purser\.tenant_subscriptions.*` +
-		`tier_id = COALESCE\(\s*NULLIF\(\$3, ''\)::uuid,\s*CASE WHEN pending_reason = 'stripe_checkout' THEN pending_tier_id END,\s*tier_id\s*\).*` +
-		`pending_tier_id = CASE.*pending_reason = 'stripe_checkout'.*pending_tier_id = NULLIF\(\$3, ''\)::uuid.*` +
-		`pending_effective_at = CASE.*pending_reason = 'stripe_checkout'.*pending_tier_id = NULLIF\(\$3, ''\)::uuid.*` +
-		`pending_reason = CASE.*pending_reason = 'stripe_checkout'.*pending_tier_id = NULLIF\(\$3, ''\)::uuid.*` +
-		`pending_intent_id = CASE.*pending_reason = 'stripe_checkout'.*pending_tier_id = NULLIF\(\$3, ''\)::uuid.*` +
-		`WHERE tenant_id = \$4`
+		`tier_id = COALESCE\(\s*NULLIF\(\$3::text, ''\)::uuid,\s*CASE WHEN pending_reason = 'stripe_checkout' THEN pending_tier_id END,\s*tier_id\s*\).*` +
+		`pending_tier_id = CASE.*pending_reason = 'stripe_checkout'.*pending_tier_id = NULLIF\(\$3::text, ''\)::uuid.*` +
+		`pending_effective_at = CASE.*pending_reason = 'stripe_checkout'.*pending_tier_id = NULLIF\(\$3::text, ''\)::uuid.*` +
+		`pending_reason = CASE.*pending_reason = 'stripe_checkout'.*pending_tier_id = NULLIF\(\$3::text, ''\)::uuid.*` +
+		`pending_intent_id = CASE.*pending_reason = 'stripe_checkout'.*pending_tier_id = NULLIF\(\$3::text, ''\)::uuid.*` +
+		`WHERE tenant_id = \$6::text::uuid`
 }
 
 func withDefaultTransport(t *testing.T, transport http.RoundTripper) {

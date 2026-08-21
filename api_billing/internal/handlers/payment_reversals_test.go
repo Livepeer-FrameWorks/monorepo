@@ -29,7 +29,7 @@ func TestApplyProviderReversal_StripeRefundIdempotentReplay(t *testing.T) {
 	defer done()
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT p\.id, p\.invoice_id, i\.tenant_id, p\.currency`).
+	mock.ExpectQuery(`SELECT payment\.id::text AS payment_id, payment\.invoice_id::text AS invoice_id`).
 		WithArgs("pi_test").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "invoice_id", "tenant_id", "currency"}).
 			AddRow("payment-1", "invoice-1", "tenant-1", "EUR"))
@@ -69,7 +69,7 @@ func TestApplyProviderReversal_StripeRefundReopensInvoiceWhenNetDropsBelowAmount
 	defer done()
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT p\.id, p\.invoice_id, i\.tenant_id, p\.currency`).
+	mock.ExpectQuery(`SELECT payment\.id::text AS payment_id, payment\.invoice_id::text AS invoice_id`).
 		WithArgs("pi_full").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "invoice_id", "tenant_id", "currency"}).
 			AddRow("payment-2", "invoice-2", "tenant-2", "EUR"))
@@ -81,14 +81,14 @@ func TestApplyProviderReversal_StripeRefundReopensInvoiceWhenNetDropsBelowAmount
 	mock.ExpectExec(`UPDATE purser\.billing_invoices\s+SET reversed_paid_cents = reversed_paid_cents \+ \$1`).
 		WithArgs(int64(1000), "invoice-2").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`UPDATE purser\.billing_invoices i\s+SET status = 'pending'[\s\S]*reopened_at = NOW\(\)`).
+	mock.ExpectExec(`UPDATE purser\.billing_invoices invoice\s+SET status = 'pending'[\s\S]*reopened_at = NOW\(\)`).
 		WithArgs("invoice-2", "EUR").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// Operator clawback path: no marketplace lines on this invoice.
-	mock.ExpectQuery(`SELECT \(amount \* 100\)::bigint FROM purser\.billing_invoices`).
+	mock.ExpectQuery(`SELECT \(amount \* 100\)::bigint AS amount_cents`).
 		WithArgs("invoice-2").
 		WillReturnRows(sqlmock.NewRows([]string{"cents"}).AddRow(int64(1000)))
-	mock.ExpectQuery(`SELECT id, cluster_owner_tenant_id, cluster_id, currency, gross_cents, platform_fee_cents, payable_cents, period_start, period_end\s+FROM purser\.operator_credit_ledger`).
+	mock.ExpectQuery(`SELECT id::text AS id, cluster_owner_tenant_id::text AS owner_tenant_id`).
 		WithArgs("invoice-2").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "owner", "cluster", "currency", "gross", "fee", "payable", "period_start", "period_end"}))
 	mock.ExpectCommit()
@@ -119,7 +119,7 @@ func TestApplyProviderReversal_TransitionsPendingDisputeToSucceeded(t *testing.T
 	defer done()
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT p\.id, p\.invoice_id, i\.tenant_id, p\.currency`).
+	mock.ExpectQuery(`SELECT payment\.id::text AS payment_id, payment\.invoice_id::text AS invoice_id`).
 		WithArgs("pi_dispute").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "invoice_id", "tenant_id", "currency"}).
 			AddRow("payment-dispute", "invoice-dispute", "tenant-dispute", "EUR"))
@@ -131,13 +131,13 @@ func TestApplyProviderReversal_TransitionsPendingDisputeToSucceeded(t *testing.T
 	mock.ExpectExec(`UPDATE purser\.billing_invoices\s+SET reversed_paid_cents = reversed_paid_cents \+ \$1`).
 		WithArgs(int64(2500), "invoice-dispute").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`UPDATE purser\.billing_invoices i\s+SET status = 'pending'[\s\S]*reopened_at = NOW\(\)`).
+	mock.ExpectExec(`UPDATE purser\.billing_invoices invoice\s+SET status = 'pending'[\s\S]*reopened_at = NOW\(\)`).
 		WithArgs("invoice-dispute", "EUR").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(`SELECT \(amount \* 100\)::bigint FROM purser\.billing_invoices`).
+	mock.ExpectQuery(`SELECT \(amount \* 100\)::bigint AS amount_cents`).
 		WithArgs("invoice-dispute").
 		WillReturnRows(sqlmock.NewRows([]string{"cents"}).AddRow(int64(10000)))
-	mock.ExpectQuery(`SELECT id, cluster_owner_tenant_id, cluster_id, currency, gross_cents, platform_fee_cents, payable_cents, period_start, period_end\s+FROM purser\.operator_credit_ledger`).
+	mock.ExpectQuery(`SELECT id::text AS id, cluster_owner_tenant_id::text AS owner_tenant_id`).
 		WithArgs("invoice-dispute").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "owner", "cluster", "currency", "gross", "fee", "payable", "period_start", "period_end"}))
 	mock.ExpectCommit()
@@ -169,15 +169,15 @@ func TestApplyOperatorCreditClawbackLinksReversalAuditRow(t *testing.T) {
 
 	now := time.Now()
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT \(amount \* 100\)::bigint FROM purser\.billing_invoices`).
+	mock.ExpectQuery(`SELECT \(amount \* 100\)::bigint AS amount_cents`).
 		WithArgs("invoice-op").
 		WillReturnRows(sqlmock.NewRows([]string{"cents"}).AddRow(int64(10000)))
-	mock.ExpectQuery(`SELECT id, cluster_owner_tenant_id, cluster_id, currency, gross_cents, platform_fee_cents, payable_cents, period_start, period_end\s+FROM purser\.operator_credit_ledger`).
+	mock.ExpectQuery(`SELECT id::text AS id, cluster_owner_tenant_id::text AS owner_tenant_id`).
 		WithArgs("invoice-op").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "owner", "cluster", "currency", "gross", "fee", "payable", "period_start", "period_end"}).
 			AddRow("accrual-1", "owner-1", "cluster-1", "EUR", int64(1000), int64(200), int64(800), now, now))
 	mock.ExpectQuery(`WITH existing AS \(\s+SELECT operator_credit_ledger_id AS id\s+FROM purser\.operator_credit_clawback_reversals`).
-		WithArgs("accrual-1", int64(1000), int64(200), int64(800), "reversal-1").
+		WithArgs("reversal-1", "accrual-1", int64(1000), int64(200), int64(800)).
 		WillReturnRows(sqlmock.NewRows([]string{"operator_credit_ledger_id"}).AddRow("clawback-1"))
 	mock.ExpectExec(`UPDATE purser\.operator_credit_ledger\s+SET status = 'clawed_back'`).
 		WithArgs("accrual-1").
@@ -207,7 +207,7 @@ func TestApplyProviderReversal_CurrencyMismatchRejected(t *testing.T) {
 	defer done()
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT p\.id, p\.invoice_id, i\.tenant_id, p\.currency`).
+	mock.ExpectQuery(`SELECT payment\.id::text AS payment_id, payment\.invoice_id::text AS invoice_id`).
 		WithArgs("pi_eur").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "invoice_id", "tenant_id", "currency"}).
 			AddRow("payment-3", "invoice-3", "tenant-3", "EUR"))
@@ -237,10 +237,10 @@ func TestApplyProviderReversal_MissingLocalRefIsBlockedRetryable(t *testing.T) {
 	defer done()
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT p\.id, p\.invoice_id, i\.tenant_id, p\.currency`).
+	mock.ExpectQuery(`SELECT payment\.id::text AS payment_id, payment\.invoice_id::text AS invoice_id`).
 		WithArgs("pi_unknown").
 		WillReturnError(sql.ErrNoRows)
-	mock.ExpectQuery(`SELECT id, tenant_id, currency\s+FROM purser\.pending_topups`).
+	mock.ExpectQuery(`SELECT id::text AS topup_id, tenant_id::text AS tenant_id`).
 		WithArgs("pi_unknown").
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectRollback()
@@ -387,10 +387,10 @@ func TestApplyProviderReversal_PrepaidTopupRefundFlagsNegativeBalance(t *testing
 	defer done()
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT p\.id, p\.invoice_id, i\.tenant_id, p\.currency`).
+	mock.ExpectQuery(`SELECT payment\.id::text AS payment_id, payment\.invoice_id::text AS invoice_id`).
 		WithArgs("pi_topup").
 		WillReturnError(sql.ErrNoRows)
-	mock.ExpectQuery(`SELECT id, tenant_id, currency\s+FROM purser\.pending_topups`).
+	mock.ExpectQuery(`SELECT id::text AS topup_id, tenant_id::text AS tenant_id`).
 		WithArgs("pi_topup").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "currency"}).AddRow("topup-1", "tenant-prepaid", "EUR"))
 	mock.ExpectQuery(`INSERT INTO purser\.payment_reversals`).

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"frameworks/api_billing/internal/database/purserdb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
@@ -63,14 +64,7 @@ func (e *ThresholdEnforcer) EnforcePrepaidThresholds(ctx context.Context, tenant
 }
 
 func (e *ThresholdEnforcer) isPrepaidTenant(ctx context.Context, tenantID string) (bool, error) {
-	var billingModel string
-	err := e.db.QueryRowContext(ctx, `
-		SELECT COALESCE(billing_model, 'postpaid')
-		FROM purser.tenant_subscriptions
-		WHERE tenant_id = $1 AND status != 'cancelled'
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, tenantID).Scan(&billingModel)
+	billingModel, err := purserdb.New(e.db).GetActiveTenantBillingModel(ctx, tenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -97,16 +91,11 @@ func (e *ThresholdEnforcer) invalidateTenantCache(ctx context.Context, tenantID,
 }
 
 func (e *ThresholdEnforcer) suspendTenantForBalance(ctx context.Context, tenantID string, balanceCents int64) error {
-	result, err := e.db.ExecContext(ctx, `
-		UPDATE purser.tenant_subscriptions
-		SET status = 'suspended', updated_at = NOW()
-		WHERE tenant_id = $1 AND status = 'active'
-	`, tenantID)
+	rowsAffected, err := purserdb.New(e.db).SuspendActiveTenantSubscriptions(ctx, tenantID)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
 		return nil
 	}
@@ -143,11 +132,7 @@ func (e *ThresholdEnforcer) notifyTenantSuspended(tenantID string, balanceCents 
 		return
 	}
 
-	var billingEmail string
-	err := e.db.QueryRowContext(context.Background(), `
-		SELECT billing_email FROM purser.tenant_subscriptions
-		WHERE tenant_id = $1
-	`, tenantID).Scan(&billingEmail)
+	billingEmail, err := purserdb.New(e.db).GetTenantBillingEmail(context.Background(), tenantID)
 	if err != nil {
 		e.logger.WithFields(logging.Fields{
 			"tenant_id": tenantID,
@@ -155,7 +140,7 @@ func (e *ThresholdEnforcer) notifyTenantSuspended(tenantID string, balanceCents 
 		}).Warn("Failed to load billing email for suspension notification")
 		return
 	}
-	if billingEmail == "" {
+	if !billingEmail.Valid || billingEmail.String == "" {
 		e.logger.WithField("tenant_id", tenantID).Warn("No billing email for suspension notification")
 		return
 	}
@@ -166,7 +151,7 @@ func (e *ThresholdEnforcer) notifyTenantSuspended(tenantID string, balanceCents 
 	}
 
 	balance := float64(balanceCents) / 100
-	if err := e.emailService.SendAccountSuspendedEmail(billingEmail, tenantName, balance, billing.DefaultCurrency()); err != nil {
+	if err := e.emailService.SendAccountSuspendedEmail(billingEmail.String, tenantName, balance, billing.DefaultCurrency()); err != nil {
 		e.logger.WithFields(logging.Fields{
 			"tenant_id": tenantID,
 			"error":     err,

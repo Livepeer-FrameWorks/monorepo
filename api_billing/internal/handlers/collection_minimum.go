@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
+	"frameworks/api_billing/internal/database/purserdb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/shopspring/decimal"
 )
@@ -89,33 +91,31 @@ func applyInvoiceCollectionMinimumTx(
 		return invoiceCollectionDecision{}, fmt.Errorf("current collection charge cannot be negative")
 	}
 
-	if _, err = tx.ExecContext(ctx, `
-		INSERT INTO purser.billing_collection_balances (tenant_id, currency, balance_cents)
-		VALUES ($1, $2, 0)
-		ON CONFLICT (tenant_id, currency) DO NOTHING
-	`, tenantID, currency); err != nil {
+	queries := purserdb.New(tx)
+	if err = queries.EnsureBillingCollectionBalance(ctx, purserdb.EnsureBillingCollectionBalanceParams{
+		TenantID: tenantID, Currency: currency,
+	}); err != nil {
 		return invoiceCollectionDecision{}, fmt.Errorf("initialize collection balance: %w", err)
 	}
 
-	var openingCents int64
-	if err = tx.QueryRowContext(ctx, `
-		SELECT balance_cents
-		FROM purser.billing_collection_balances
-		WHERE tenant_id = $1 AND currency = $2
-		FOR UPDATE
-	`, tenantID, currency).Scan(&openingCents); err != nil {
+	openingCents, err := queries.LockBillingCollectionBalance(ctx, purserdb.LockBillingCollectionBalanceParams{
+		TenantID: tenantID, Currency: currency,
+	})
+	if err != nil {
 		return invoiceCollectionDecision{}, fmt.Errorf("lock collection balance: %w", err)
 	}
 
 	decision := decideInvoiceCollection(openingCents, currentChargeCents, minimumCents)
 	decision.Provider = provider
 	decision.Currency = currency
-	if _, err = tx.ExecContext(ctx, `
-		UPDATE purser.billing_collection_balances
-		SET balance_cents = $3, updated_at = NOW()
-		WHERE tenant_id = $1 AND currency = $2
-	`, tenantID, currency, decision.ClosingBalanceCents); err != nil {
+	affected, err := queries.UpdateBillingCollectionBalance(ctx, purserdb.UpdateBillingCollectionBalanceParams{
+		BalanceCents: decision.ClosingBalanceCents, TenantID: tenantID, Currency: currency,
+	})
+	if err != nil {
 		return invoiceCollectionDecision{}, fmt.Errorf("update collection balance: %w", err)
+	}
+	if affected != 1 {
+		return invoiceCollectionDecision{}, errors.New("update collection balance: locked row disappeared")
 	}
 	return decision, nil
 }
@@ -126,15 +126,14 @@ func persistInvoiceCollectionDecisionTx(
 	invoiceID, tenantID string,
 	decision invoiceCollectionDecision,
 ) error {
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO purser.billing_collection_entries (
-			invoice_id, tenant_id, provider, currency, minimum_cents,
-			opening_balance_cents, current_charge_cents, collected_cents,
-			closing_balance_cents, outcome
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-	`, invoiceID, tenantID, decision.Provider, decision.Currency, decision.MinimumCents,
-		decision.OpeningBalanceCents, decision.CurrentChargeCents, decision.CollectedCents,
-		decision.ClosingBalanceCents, decision.Outcome); err != nil {
+	queries := purserdb.New(tx)
+	if err := queries.InsertBillingCollectionDecision(ctx, purserdb.InsertBillingCollectionDecisionParams{
+		InvoiceID: invoiceID, TenantID: tenantID, Provider: decision.Provider,
+		Currency: decision.Currency, MinimumCents: decision.MinimumCents,
+		OpeningBalanceCents: decision.OpeningBalanceCents, CurrentChargeCents: decision.CurrentChargeCents,
+		CollectedCents: decision.CollectedCents, ClosingBalanceCents: decision.ClosingBalanceCents,
+		Outcome: decision.Outcome,
+	}); err != nil {
 		return fmt.Errorf("persist invoice collection decision: %w", err)
 	}
 
@@ -162,13 +161,10 @@ func persistInvoiceCollectionDecisionTx(
 		return fmt.Errorf("marshal collection line dimensions: %w", err)
 	}
 	amount := decimal.NewFromInt(amountCents).Div(decimal.NewFromInt(100)).StringFixed(2)
-	if _, err = tx.ExecContext(ctx, `
-		INSERT INTO purser.invoice_line_items (
-			invoice_id, tenant_id, line_key, unit, dimensions, description,
-			quantity, included_quantity, billable_quantity, unit_price, amount,
-			currency, pricing_source
-		) VALUES ($1, $2, $3, 'balance', $4, $5, 1, 0, 1, $6::numeric, $6::numeric, $7, 'tier')
-	`, invoiceID, tenantID, lineKey, dimensions, description, amount, decision.Currency); err != nil {
+	if err = queries.InsertBillingCollectionLineItem(ctx, purserdb.InsertBillingCollectionLineItemParams{
+		InvoiceID: invoiceID, TenantID: tenantID, LineKey: lineKey,
+		Dimensions: dimensions, Description: description, Amount: amount, Currency: decision.Currency,
+	}); err != nil {
 		return fmt.Errorf("persist invoice collection line: %w", err)
 	}
 	return nil

@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
 	"frameworks/api_billing/internal/billing"
+	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/pricing"
 	"frameworks/api_billing/internal/rating"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
@@ -116,7 +118,7 @@ func buildRatingInputFromCanonicalUsage(rows []canonicalUsageDelta, currency str
 // pricing_source, operator_credit_cents, platform_fee_cents,
 // price_version_id) is written from the pricedLine fields. Tenant-scoped
 // lines (base_subscription) write NULLs for the cluster columns.
-func persistInvoiceLineItems(ctx context.Context, db dbExec, invoiceID, tenantID string, result *clusterRatingResult) error {
+func persistInvoiceLineItems(ctx context.Context, db purserdb.DBTX, invoiceID, tenantID string, result *clusterRatingResult) error {
 	if invoiceID == "" {
 		return errors.New("persistInvoiceLineItems: empty invoice_id")
 	}
@@ -127,6 +129,7 @@ func persistInvoiceLineItems(ctx context.Context, db dbExec, invoiceID, tenantID
 		return errors.New("persistInvoiceLineItems: nil result")
 	}
 	all := append([]pricedLine{result.BaseLine}, result.UsageLines...)
+	queries := purserdb.New(db)
 
 	desired := make(map[string]bool, len(all))
 	for _, pl := range all {
@@ -143,102 +146,62 @@ func persistInvoiceLineItems(ctx context.Context, db dbExec, invoiceID, tenantID
 		if pl.ClusterKind != nil {
 			clusterKind = sql.NullString{String: *pl.ClusterKind, Valid: true}
 		}
-		ownerID := sql.NullString{}
+		ownerID := uuid.NullUUID{}
 		if pl.ClusterOwnerTenantID != nil {
-			ownerID = sql.NullString{String: pl.ClusterOwnerTenantID.String(), Valid: true}
+			ownerID = uuid.NullUUID{UUID: *pl.ClusterOwnerTenantID, Valid: true}
 		}
-		versionID := sql.NullString{}
+		versionID := uuid.NullUUID{}
 		if pl.PriceVersionID != nil {
-			versionID = sql.NullString{String: pl.PriceVersionID.String(), Valid: true}
+			versionID = uuid.NullUUID{UUID: *pl.PriceVersionID, Valid: true}
 		}
 		pricingSource := string(pl.PricingSource)
 		if pricingSource == "" {
 			pricingSource = string(pricing.SourceTier)
 		}
-		dimensionsJSON, err := json.Marshal(pl.Dimensions)
+		dimensions := pl.Dimensions
+		if dimensions == nil {
+			dimensions = map[string]string{}
+		}
+		dimensionsJSON, err := json.Marshal(dimensions)
 		if err != nil {
 			return fmt.Errorf("marshal line dimensions %q: %w", pl.LineKey, err)
 		}
-		if _, err := db.ExecContext(ctx, `
-			INSERT INTO purser.invoice_line_items (
-				invoice_id, tenant_id, line_key, meter, unit, dimensions, description,
-				quantity, included_quantity, billable_quantity,
-				unit_price, amount, currency,
-				cluster_id, cluster_kind, cluster_owner_tenant_id,
-				pricing_source, operator_credit_cents, platform_fee_cents,
-				price_version_id, created_at, updated_at
-			) VALUES (
-				$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-				$14, $15, $16::uuid, $17, $18, $19, $20::uuid,
-				NOW(), NOW()
-			)
-			ON CONFLICT (invoice_id, line_key) DO UPDATE SET
-				meter = EXCLUDED.meter,
-				unit = EXCLUDED.unit,
-				dimensions = EXCLUDED.dimensions,
-				description = EXCLUDED.description,
-				quantity = EXCLUDED.quantity,
-				included_quantity = EXCLUDED.included_quantity,
-				billable_quantity = EXCLUDED.billable_quantity,
-				unit_price = EXCLUDED.unit_price,
-				amount = EXCLUDED.amount,
-				currency = EXCLUDED.currency,
-				cluster_id = EXCLUDED.cluster_id,
-				cluster_kind = EXCLUDED.cluster_kind,
-				cluster_owner_tenant_id = EXCLUDED.cluster_owner_tenant_id,
-				pricing_source = EXCLUDED.pricing_source,
-				operator_credit_cents = EXCLUDED.operator_credit_cents,
-				platform_fee_cents = EXCLUDED.platform_fee_cents,
-				price_version_id = EXCLUDED.price_version_id,
-				updated_at = NOW()
-		`, invoiceID, tenantID, pl.LineKey, meter, pl.Unit, dimensionsJSON, pl.Description,
-			pl.Quantity.String(), pl.IncludedQuantity.String(), pl.BillableQuantity.String(),
-			pl.UnitPrice.String(), pl.Amount.Round(2).String(), pl.Currency,
-			clusterID, clusterKind, ownerID,
-			pricingSource, pl.OperatorCreditCents, pl.PlatformFeeCents,
-			versionID); err != nil {
+		if err := queries.UpsertInvoiceLineItem(ctx, purserdb.UpsertInvoiceLineItemParams{
+			InvoiceID: invoiceID, TenantID: tenantID, LineKey: pl.LineKey,
+			Meter: meter, Unit: pl.Unit, Dimensions: dimensionsJSON, Description: pl.Description,
+			Quantity: pl.Quantity.String(), IncludedQuantity: pl.IncludedQuantity.String(),
+			BillableQuantity: pl.BillableQuantity.String(), UnitPrice: pl.UnitPrice.String(),
+			Amount: pl.Amount.Round(2).String(), Currency: pl.Currency,
+			ClusterID: clusterID, ClusterKind: clusterKind, ClusterOwnerTenantID: ownerID,
+			PricingSource: pricingSource, OperatorCreditCents: pl.OperatorCreditCents,
+			PlatformFeeCents: pl.PlatformFeeCents, PriceVersionID: versionID,
+		}); err != nil {
 			return fmt.Errorf("upsert line %q: %w", pl.LineKey, err)
 		}
 	}
 
 	// Sweep rows that aren't in the desired set anymore. Tenant-filtered as
 	// belt-and-braces against any future cross-tenant invoice id mishap.
-	rows, err := db.QueryContext(ctx,
-		`SELECT line_key FROM purser.invoice_line_items WHERE invoice_id = $1 AND tenant_id = $2`,
-		invoiceID, tenantID,
-	)
+	lineKeys, err := queries.ListInvoiceLineKeys(ctx, purserdb.ListInvoiceLineKeysParams{
+		InvoiceID: invoiceID, TenantID: tenantID,
+	})
 	if err != nil {
 		return fmt.Errorf("list existing line keys: %w", err)
 	}
-	defer rows.Close()
 	var stale []string
-	for rows.Next() {
-		var key string
-		if err := rows.Scan(&key); err != nil {
-			return fmt.Errorf("scan line key: %w", err)
-		}
+	for _, key := range lineKeys {
 		if !desired[key] {
 			stale = append(stale, key)
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate line keys: %w", err)
-	}
 	for _, key := range stale {
-		if _, err := db.ExecContext(ctx,
-			`DELETE FROM purser.invoice_line_items WHERE invoice_id = $1 AND tenant_id = $2 AND line_key = $3`,
-			invoiceID, tenantID, key,
-		); err != nil {
+		if err := queries.DeleteInvoiceLineItem(ctx, purserdb.DeleteInvoiceLineItemParams{
+			InvoiceID: invoiceID, TenantID: tenantID, LineKey: key,
+		}); err != nil {
 			return fmt.Errorf("delete stale line %q: %w", key, err)
 		}
 	}
 	return nil
-}
-
-// dbExec is the subset of *sql.DB / *sql.Tx persistInvoiceLineItems uses.
-type dbExec interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
 // withTx runs fn inside a single SQL transaction, committing on nil error and

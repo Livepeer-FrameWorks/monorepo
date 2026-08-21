@@ -16,7 +16,8 @@ import (
 func TestProcessPrepaidUsage_CurrencyMismatchRejected(t *testing.T) {
 	jm, mock, done := newPrepaidJM(t)
 	defer done()
-	const tenant, tier = "tenant-1", "tier-pro"
+	const tenant, tier = "tenant-1", "61000000-0000-4000-8000-000000000001"
+	const subscriptionID = "62000000-0000-4000-8000-000000000001"
 
 	other := "USD"
 	if billing.DefaultCurrency() == other {
@@ -28,13 +29,19 @@ func TestProcessPrepaidUsage_CurrencyMismatchRejected(t *testing.T) {
 	mock.ExpectQuery(`FROM purser\.tenant_subscriptions ts\s+JOIN purser\.billing_tiers bt`).
 		WithArgs(tenant).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_name", "base_price", "currency", "metering_enabled", "sub_id"}).
-			AddRow(tier, "Pro", "79.00", other, true, nil))
+			AddRow(tier, "Pro", "79.00", other, true, subscriptionID))
 	mock.ExpectQuery(`FROM purser\.tier_pricing_rules WHERE tier_id`).
 		WithArgs(tier).
 		WillReturnRows(sqlmock.NewRows([]string{"meter", "model", "currency", "included_quantity", "unit_price", "config"}).
 			AddRow("egress_gb", "all_usage", other, "0", "0.010000", "{}"))
+	mock.ExpectQuery(`FROM purser\.subscription_pricing_overrides`).
+		WithArgs(subscriptionID).
+		WillReturnRows(sqlmock.NewRows([]string{"meter", "model", "currency", "included_quantity", "unit_price", "config"}))
 	mock.ExpectQuery(`FROM purser\.tier_entitlements WHERE tier_id`).
 		WithArgs(tier).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+	mock.ExpectQuery(`FROM purser\.subscription_entitlement_overrides`).
+		WithArgs(subscriptionID).
 		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
 
 	err := jm.processPrepaidUsage(context.Background(),

@@ -66,7 +66,7 @@ func TestProcessWindowCompletionRecordsReceiptAndWindowAtomically(t *testing.T) 
 		WithArgs(summary.SourceID, summary.SourceRegion, summary.PeriodStart).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO purser\\.usage_reports").
 		WithArgs(summary.ReportID, summary.ReportKind, summary.SourceID, summary.SourceRegion, summary.Sequence,
-			summary.TenantID, summary.ClusterID, summary.PeriodStart, summary.PeriodEnd).
+			summary.TenantID, summary.ClusterID, summary.PeriodStart, summary.PeriodEnd, true).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO purser\\.metering_windows").
 		WithArgs(summary.SourceID, summary.PeriodStart, summary.PeriodEnd).WillReturnResult(sqlmock.NewResult(0, 1))
@@ -394,13 +394,13 @@ func TestUpdateInvoiceDraftWritesRatedLineItemsTransactionally(t *testing.T) {
 
 	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
 	tenantID := "tenant-1"
-	tierID := "tier-1"
-	subscriptionID := "sub-1"
+	tierID := "51000000-0000-4000-8000-000000000001"
+	subscriptionID := "52000000-0000-4000-8000-000000000001"
 	periodStart := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	periodEnd := periodStart.AddDate(0, 1, 0)
 	currency := billing.DefaultCurrency()
 
-	mock.ExpectQuery(`SELECT bt\.id, bt\.tier_name, bt\.base_price::text`).
+	mock.ExpectQuery(`SELECT bt\.id AS tier_id, bt\.tier_name, bt\.base_price::text AS base_price`).
 		WithArgs(tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_name", "base_price", "currency", "metering_enabled", "subscription_id"}).
 			AddRow(tierID, "supporter", "100.00", currency, true, subscriptionID))
@@ -435,7 +435,7 @@ func TestUpdateInvoiceDraftWritesRatedLineItemsTransactionally(t *testing.T) {
 		WithArgs(tenantID, periodStart, periodEnd).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "aggregated_value"}).
 			AddRow("", "storage_gb_seconds_hot", 7200.0))
-	mock.ExpectQuery(`WITH dimensioned_rows`).
+	mock.ExpectQuery(`dimensioned_rows AS`).
 		WithArgs(tenantID, periodStart, periodEnd).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "unit", "dimensions", "quantity"}))
 	mock.ExpectQuery(`SELECT stripe_subscription_id, mollie_subscription_id\s+FROM purser\.tenant_subscriptions`).
@@ -460,13 +460,13 @@ func TestUpdateInvoiceDraftWritesRatedLineItemsTransactionally(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO purser\.invoice_line_items`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(`SELECT line_key FROM purser\.invoice_line_items WHERE invoice_id = \$1 AND tenant_id = \$2`).
+	mock.ExpectQuery(`SELECT line_key[\s\S]+FROM purser\.invoice_line_items[\s\S]+WHERE invoice_id = \$1::text::uuid[\s\S]+AND tenant_id = \$2::text::uuid`).
 		WithArgs("invoice-1", tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"line_key"}).
 			AddRow("base_subscription").
 			AddRow("meter:storage_gb_seconds_hot"))
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET billing_period_start = COALESCE`).
-		WithArgs(tenantID, periodStart, periodEnd).
+		WithArgs(periodStart, periodEnd, tenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
@@ -487,13 +487,13 @@ func TestUpdateInvoiceDraftClampsPriorPrepaidCreditToZeroNet(t *testing.T) {
 
 	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
 	tenantID := "tenant-1"
-	tierID := "tier-1"
-	subscriptionID := "sub-1"
+	tierID := "51000000-0000-4000-8000-000000000001"
+	subscriptionID := "52000000-0000-4000-8000-000000000001"
 	periodStart := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	periodEnd := periodStart.AddDate(0, 1, 0)
 	currency := billing.DefaultCurrency()
 
-	mock.ExpectQuery(`SELECT bt\.id, bt\.tier_name, bt\.base_price::text`).
+	mock.ExpectQuery(`SELECT bt\.id AS tier_id, bt\.tier_name, bt\.base_price::text AS base_price`).
 		WithArgs(tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_name", "base_price", "currency", "metering_enabled", "subscription_id"}).
 			AddRow(tierID, "supporter", "100.00", currency, true, subscriptionID))
@@ -524,7 +524,7 @@ func TestUpdateInvoiceDraftClampsPriorPrepaidCreditToZeroNet(t *testing.T) {
 		WithArgs(tenantID, periodStart, periodEnd).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "aggregated_value"}).
 			AddRow("", "storage_gb_seconds_hot", 7200.0))
-	mock.ExpectQuery(`WITH dimensioned_rows`).
+	mock.ExpectQuery(`dimensioned_rows AS`).
 		WithArgs(tenantID, periodStart, periodEnd).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "unit", "dimensions", "quantity"}))
 	mock.ExpectQuery(`SELECT stripe_subscription_id, mollie_subscription_id\s+FROM purser\.tenant_subscriptions`).
@@ -544,13 +544,13 @@ func TestUpdateInvoiceDraftClampsPriorPrepaidCreditToZeroNet(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO purser\.invoice_line_items`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(`SELECT line_key FROM purser\.invoice_line_items WHERE invoice_id = \$1 AND tenant_id = \$2`).
+	mock.ExpectQuery(`SELECT line_key[\s\S]+FROM purser\.invoice_line_items[\s\S]+WHERE invoice_id = \$1::text::uuid[\s\S]+AND tenant_id = \$2::text::uuid`).
 		WithArgs("invoice-1", tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"line_key"}).
 			AddRow("base_subscription").
 			AddRow("meter:storage_gb_seconds_hot"))
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET billing_period_start = COALESCE`).
-		WithArgs(tenantID, periodStart, periodEnd).
+		WithArgs(periodStart, periodEnd, tenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
@@ -652,13 +652,13 @@ func TestChargeMollieOverageCreatesLocalPaymentBeforeProviderCharge(t *testing.T
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"tx_id", "status"}).AddRow("", "pending"))
 	mock.ExpectQuery(`INSERT INTO purser\.payment_provider_intents`).
-		WithArgs("tenant-1", "invoice-1", "cst_123", "EUR", int64(1234), "mollie-overage:invoice-1:1").
+		WithArgs("tenant-1", "mollie", "mollie_overage_charge", "invoice-1", "cst_123", "EUR", int64(1234), "mollie-overage:invoice-1:1").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "attempt_count"}).AddRow("00000000-0000-0000-0000-000000000111", 1))
 	mock.ExpectExec(`UPDATE purser\.billing_payments SET intent_id`).
 		WithArgs("00000000-0000-0000-0000-000000000111", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO purser\.billing_payment_attempts`).
-		WithArgs(sqlmock.AnyArg(), "00000000-0000-0000-0000-000000000111", 1, "mollie-overage:invoice-1:1").
+		WithArgs(sqlmock.AnyArg(), "00000000-0000-0000-0000-000000000111", 1, "mollie-overage:invoice-1:1", "mollie").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE purser\.billing_payment_attempts`).
 		WithArgs(sqlmock.AnyArg(), 1).

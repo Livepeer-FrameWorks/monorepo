@@ -14,11 +14,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/lib/pq"
 	"github.com/shopspring/decimal"
 	"github.com/sirupsen/logrus"
 
 	billingpkg "frameworks/api_billing/internal/billing"
+	"frameworks/api_billing/internal/database/purserdb"
 	billingmollie "frameworks/api_billing/internal/mollie"
 	"frameworks/api_billing/internal/operator"
 	"frameworks/api_billing/internal/pricing"
@@ -68,13 +68,19 @@ func (jm *JobManager) quarantineUsageReport(ctx context.Context, msg kafka.Messa
 			rawPayload = models.JSONB{"payload": decoded}
 		}
 	}
-	_, err := jm.db.ExecContext(ctx, `
-		INSERT INTO purser.usage_report_quarantine
-			(report_id, source_id, tenant_id, rejected_reason,
-			 source_topic, source_partition, source_offset, raw_payload)
-		VALUES (NULLIF($1, ''), $2, $3, $4, $5, $6, $7, $8)
-	`, reportID, sourceID, tenantID, reason, msg.Topic, msg.Partition, msg.Offset, rawPayload)
-	return err
+	raw, err := json.Marshal(rawPayload)
+	if err != nil {
+		return err
+	}
+	tenant := sql.NullString{}
+	if id, ok := tenantID.(uuid.UUID); ok {
+		tenant = sql.NullString{String: id.String(), Valid: true}
+	}
+	return purserdb.New(jm.db).InsertUsageReportQuarantine(ctx, purserdb.InsertUsageReportQuarantineParams{
+		ReportID: reportID, SourceID: sourceID, TenantID: tenant, RejectedReason: reason,
+		SourceTopic: msg.Topic, SourcePartition: sql.NullInt32{Int32: msg.Partition, Valid: true},
+		SourceOffset: sql.NullInt64{Int64: msg.Offset, Valid: true}, RawPayload: raw,
+	})
 }
 
 func validateUsageSummaryEnvelope(summary models.UsageSummary) error {
@@ -116,23 +122,18 @@ func (jm *JobManager) validateUsageSummaryMeters(ctx context.Context, summary mo
 		if math.IsNaN(meter.Quantity) || math.IsInf(meter.Quantity, 0) || meter.Quantity < 0 {
 			return fmt.Errorf("invalid_quantity:%s", meter.Meter)
 		}
-		var unit string
-		var allowed []string
-		if err := jm.db.QueryRowContext(ctx, `
-			SELECT unit, allowed_dimensions
-			FROM purser.meter_definitions
-			WHERE meter = $1 AND active = TRUE
-		`, meter.Meter).Scan(&unit, pq.Array(&allowed)); err != nil {
+		definition, err := purserdb.New(jm.db).GetActiveMeterDefinition(ctx, meter.Meter)
+		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return fmt.Errorf("unknown_meter:%s", meter.Meter)
 			}
 			return fmt.Errorf("load_meter_definition:%w", err)
 		}
-		if meter.Unit != unit {
+		if meter.Unit != definition.Unit {
 			return fmt.Errorf("unit_mismatch:%s", meter.Meter)
 		}
-		allowedSet := make(map[string]struct{}, len(allowed))
-		for _, key := range allowed {
+		allowedSet := make(map[string]struct{}, len(definition.AllowedDimensions))
+		for _, key := range definition.AllowedDimensions {
 			allowedSet[key] = struct{}{}
 		}
 		for key, value := range meter.Dimensions {
@@ -148,21 +149,15 @@ func (jm *JobManager) validateUsageSummaryMeters(ctx context.Context, summary mo
 }
 
 func loadSubscriptionPeriod(ctx context.Context, db *sql.DB, tenantID string, now time.Time) (time.Time, time.Time, error) {
-	var start, end, mollieNext sql.NullTime
-	err := db.QueryRowContext(ctx, `
-		SELECT billing_period_start, billing_period_end, mollie_next_payment_date
-		FROM purser.tenant_subscriptions
-		WHERE tenant_id = $1 AND status = 'active'
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, tenantID).Scan(&start, &end, &mollieNext)
-	if err == nil && mollieNext.Valid {
-		periodEnd := time.Date(mollieNext.Time.Year(), mollieNext.Time.Month(), mollieNext.Time.Day(), 0, 0, 0, 0, time.UTC)
+	period, err := purserdb.New(db).GetActiveSubscriptionPeriod(ctx, tenantID)
+	if err == nil && period.MollieNextPaymentDate.Valid {
+		mollieNext := period.MollieNextPaymentDate.Time
+		periodEnd := time.Date(mollieNext.Year(), mollieNext.Month(), mollieNext.Day(), 0, 0, 0, 0, time.UTC)
 		periodStart := periodEnd.AddDate(0, -1, 0)
 		return periodStart, periodEnd, nil
 	}
-	if err == nil && start.Valid && end.Valid && end.Time.After(start.Time) {
-		return start.Time, end.Time, nil
+	if err == nil && period.BillingPeriodStart.Valid && period.BillingPeriodEnd.Valid && period.BillingPeriodEnd.Time.After(period.BillingPeriodStart.Time) {
+		return period.BillingPeriodStart.Time, period.BillingPeriodEnd.Time, nil
 	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return time.Time{}, time.Time{}, fmt.Errorf("load subscription period: %w", err)
@@ -475,32 +470,16 @@ func (jm *JobManager) runMollieObservationDrain(ctx context.Context) {
 }
 
 func (jm *JobManager) drainMollieObservationsBackstop(ctx context.Context) error {
-	rows, err := jm.db.QueryContext(ctx, `
-		SELECT DISTINCT bi.id
-		FROM purser.mollie_payment_observations mpo
-		JOIN purser.billing_invoices bi ON bi.tenant_id = mpo.tenant_id
-		WHERE mpo.resolved_at IS NULL
-		  AND mpo.mollie_subscription_id IS NOT NULL
-		  AND bi.status IN ('pending', 'overdue')
-		  AND COALESCE(mpo.paid_at, mpo.created_at) >= bi.period_start
-		  AND COALESCE(mpo.paid_at, mpo.created_at) <= bi.period_end
-		ORDER BY bi.id
-		LIMIT 100
-	`)
+	invoiceIDs, err := purserdb.New(jm.db).ListMollieObservationDrainInvoiceIDs(ctx)
 	if err != nil {
 		return fmt.Errorf("list invoices for Mollie observation drain: %w", err)
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var invoiceID string
-		if err := rows.Scan(&invoiceID); err != nil {
-			return fmt.Errorf("scan Mollie observation invoice: %w", err)
-		}
+	for _, invoiceID := range invoiceIDs {
 		if err := jm.billing.drainMolliePaymentObservationsForInvoice(ctx, invoiceID); err != nil {
 			jm.logger.WithError(err).WithField("invoice_id", invoiceID).Warn("Failed to drain Mollie observations for invoice")
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 // Stop stops all background jobs
@@ -543,8 +522,8 @@ func (jm *JobManager) handleUsageReport(ctx context.Context, msg kafka.Message) 
 		}
 		return nil
 	}
-	var alreadyProcessed bool
-	if err := jm.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM purser.usage_reports WHERE report_id = $1)`, summary.ReportID).Scan(&alreadyProcessed); err != nil {
+	alreadyProcessed, err := purserdb.New(jm.db).UsageReportExists(ctx, summary.ReportID)
+	if err != nil {
 		return fmt.Errorf("check usage report receipt: %w", err)
 	}
 	if alreadyProcessed {
@@ -596,15 +575,15 @@ func (jm *JobManager) handleUsageReport(ctx context.Context, msg kafka.Message) 
 		"billing_model": billingModel,
 	}).Debug("Processed usage summary from Kafka")
 
-	_, err = jm.db.ExecContext(ctx, `
-		INSERT INTO purser.usage_reports
-			(report_id, report_kind, source_id, source_region, sequence,
-			 tenant_id, cluster_id, period_start, period_end, complete)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		ON CONFLICT (report_id) DO NOTHING
-	`, summary.ReportID, summary.ReportKind, summary.SourceID, summary.SourceRegion,
-		summary.Sequence, summary.TenantID, summary.ClusterID,
-		summary.PeriodStart, summary.PeriodEnd, summary.Complete)
+	periodStart, periodEnd, _, err := parseUsageSummaryPeriod(summary)
+	if err != nil {
+		return err
+	}
+	err = purserdb.New(jm.db).InsertUsageReportReceipt(ctx, purserdb.InsertUsageReportReceiptParams{
+		ReportID: summary.ReportID, ReportKind: summary.ReportKind, SourceID: summary.SourceID,
+		SourceRegion: summary.SourceRegion, Sequence: int64(summary.Sequence), TenantID: summary.TenantID,
+		ClusterID: summary.ClusterID, PeriodStart: periodStart, PeriodEnd: periodEnd, Complete: summary.Complete,
+	})
 	if err != nil {
 		return fmt.Errorf("record usage report receipt: %w", err)
 	}
@@ -617,35 +596,26 @@ func (jm *JobManager) processWindowCompletion(ctx context.Context, summary model
 		return fmt.Errorf("begin window completion: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO purser.metering_sources (source_id, region, active_from, required, updated_at)
-		VALUES ($1, $2, $3, TRUE, NOW())
-		ON CONFLICT (source_id) DO UPDATE SET
-			region = EXCLUDED.region,
-			active_from = LEAST(purser.metering_sources.active_from, EXCLUDED.active_from),
-			updated_at = NOW()
-	`, summary.SourceID, summary.SourceRegion, summary.PeriodStart); err != nil {
+	periodStart, periodEnd, _, err := parseUsageSummaryPeriod(summary)
+	if err != nil {
+		return err
+	}
+	queries := purserdb.New(tx)
+	if err := queries.UpsertMeteringSource(ctx, purserdb.UpsertMeteringSourceParams{
+		SourceID: summary.SourceID, Region: summary.SourceRegion, ActiveFrom: periodStart,
+	}); err != nil {
 		return fmt.Errorf("register metering source: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO purser.usage_reports
-			(report_id, report_kind, source_id, source_region, sequence,
-			 tenant_id, cluster_id, period_start, period_end, complete)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, TRUE)
-		ON CONFLICT (report_id) DO NOTHING
-	`, summary.ReportID, summary.ReportKind, summary.SourceID, summary.SourceRegion,
-		summary.Sequence, summary.TenantID, summary.ClusterID, summary.PeriodStart, summary.PeriodEnd); err != nil {
+	if err := queries.InsertUsageReportReceipt(ctx, purserdb.InsertUsageReportReceiptParams{
+		ReportID: summary.ReportID, ReportKind: summary.ReportKind, SourceID: summary.SourceID,
+		SourceRegion: summary.SourceRegion, Sequence: int64(summary.Sequence), TenantID: summary.TenantID,
+		ClusterID: summary.ClusterID, PeriodStart: periodStart, PeriodEnd: periodEnd, Complete: true,
+	}); err != nil {
 		return fmt.Errorf("record window completion receipt: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO purser.metering_windows
-			(source_id, period_start, period_end, complete, report_count, observed_at)
-		VALUES ($1, $2, $3, TRUE, 1, NOW())
-		ON CONFLICT (source_id, period_start, period_end) DO UPDATE SET
-			complete = TRUE,
-			report_count = purser.metering_windows.report_count + 1,
-			observed_at = NOW()
-	`, summary.SourceID, summary.PeriodStart, summary.PeriodEnd); err != nil {
+	if err := queries.UpsertCompletedMeteringWindow(ctx, purserdb.UpsertCompletedMeteringWindowParams{
+		SourceID: summary.SourceID, PeriodStart: periodStart, PeriodEnd: periodEnd,
+	}); err != nil {
 		return fmt.Errorf("record metering window: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -734,34 +704,24 @@ func (jm *JobManager) processUsageReservation(ctx context.Context, summary model
 			jm.logger.WithError(rollbackErr).Warn("Failed to roll back usage reservation transaction")
 		}
 	}()
-	if _, err = tx.ExecContext(ctx, `
-		INSERT INTO purser.usage_reports
-			(report_id, report_kind, source_id, source_region, sequence,
-			 tenant_id, cluster_id, period_start, period_end, complete)
-		VALUES ($1, 'reservation', $2, $3, $4, $5, $6, $7, $8, $9)
-		ON CONFLICT (report_id) DO NOTHING
-	`, summary.ReportID, summary.SourceID, summary.SourceRegion, summary.Sequence,
-		summary.TenantID, summary.ClusterID, summary.PeriodStart, summary.PeriodEnd, summary.Complete); err != nil {
+	_, usagePeriodEnd, _, err := parseUsageSummaryPeriod(summary)
+	if err != nil {
+		return err
+	}
+	queries := purserdb.New(tx)
+	if err = queries.InsertUsageReportReceipt(ctx, purserdb.InsertUsageReportReceiptParams{
+		ReportID: summary.ReportID, ReportKind: "reservation", SourceID: summary.SourceID,
+		SourceRegion: summary.SourceRegion, Sequence: int64(summary.Sequence), TenantID: summary.TenantID,
+		ClusterID: summary.ClusterID, PeriodStart: usagePeriodStart, PeriodEnd: usagePeriodEnd, Complete: summary.Complete,
+	}); err != nil {
 		return fmt.Errorf("record reservation report: %w", err)
 	}
-	if _, err = tx.ExecContext(ctx, `
-		INSERT INTO purser.usage_reservations
-			(tenant_id, source_id, cluster_id, sequence, report_id,
-			 period_start, period_end, meters, reserved_amount_micro, currency)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		ON CONFLICT (tenant_id, source_id, cluster_id) DO UPDATE SET
-			sequence = EXCLUDED.sequence,
-			report_id = EXCLUDED.report_id,
-			period_start = EXCLUDED.period_start,
-			period_end = EXCLUDED.period_end,
-			meters = EXCLUDED.meters,
-			reserved_amount_micro = EXCLUDED.reserved_amount_micro,
-			currency = EXCLUDED.currency,
-			updated_at = NOW()
-		WHERE EXCLUDED.sequence > purser.usage_reservations.sequence
-	`, summary.TenantID, summary.SourceID, summary.ClusterID, summary.Sequence,
-		summary.ReportID, summary.PeriodStart, summary.PeriodEnd, metersJSON,
-		reservedMicro, currency); err != nil {
+	if err = queries.UpsertUsageReservation(ctx, purserdb.UpsertUsageReservationParams{
+		TenantID: summary.TenantID, SourceID: summary.SourceID, ClusterID: summary.ClusterID,
+		Sequence: int64(summary.Sequence), ReportID: summary.ReportID,
+		PeriodStart: usagePeriodStart, PeriodEnd: usagePeriodEnd, Meters: metersJSON,
+		ReservedAmountMicro: reservedMicro, Currency: currency,
+	}); err != nil {
 		return fmt.Errorf("upsert usage reservation: %w", err)
 	}
 	if err = tx.Commit(); err != nil {
@@ -789,14 +749,7 @@ func ratePrepaidQuantities(currency string, rules []rating.Rule, quantities []ra
 
 // getTenantBillingModel returns the billing model for a tenant (prepaid or postpaid)
 func (jm *JobManager) getTenantBillingModel(ctx context.Context, tenantID string) (string, error) {
-	var billingModel string
-	err := jm.db.QueryRowContext(ctx, `
-		SELECT COALESCE(billing_model, 'postpaid')
-		FROM purser.tenant_subscriptions
-		WHERE tenant_id = $1 AND status = 'active'
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, tenantID).Scan(&billingModel)
+	billingModel, err := purserdb.New(jm.db).GetActiveTenantBillingModelForJobs(ctx, tenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "postpaid", nil // Default for tenants without subscription
 	}
@@ -849,12 +802,8 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 	if len(acceptedUsage) == 0 {
 		return nil
 	}
-	var alreadySettled bool
-	if queryErr := jm.db.QueryRowContext(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM purser.prepaid_usage_settlements WHERE report_id = $1
-		)
-	`, summary.ReportID).Scan(&alreadySettled); queryErr != nil {
+	alreadySettled, queryErr := purserdb.New(jm.db).PrepaidUsageSettlementExists(ctx, summary.ReportID)
+	if queryErr != nil {
 		return fmt.Errorf("check prepaid usage settlement: %w", queryErr)
 	}
 	if alreadySettled {
@@ -875,14 +824,12 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 
 	microPerUnit := decimal.NewFromInt(1_000_000)
 	desiredCumulativeMicro := desiredAmount.Mul(microPerUnit).Round(0).IntPart()
-	var previouslySettledMicro int64
-	if queryErr := jm.db.QueryRowContext(ctx, `
-		SELECT COALESCE(SUM(amount_micro), 0)
-		FROM purser.prepaid_usage_settlements
-		WHERE tenant_id = $1
-		  AND billing_period_start = $2
-		  AND billing_period_end = $3
-	`, summary.TenantID, billingPeriodStart, billingPeriodEnd).Scan(&previouslySettledMicro); queryErr != nil {
+	previouslySettledMicro, queryErr := purserdb.New(jm.db).SumPrepaidUsageSettlements(ctx, purserdb.SumPrepaidUsageSettlementsParams{
+		TenantID:           summary.TenantID,
+		BillingPeriodStart: billingPeriodStart,
+		BillingPeriodEnd:   billingPeriodEnd,
+	})
+	if queryErr != nil {
 		return fmt.Errorf("sum prior prepaid usage settlements: %w", queryErr)
 	}
 	marginalMicro := desiredCumulativeMicro - previouslySettledMicro
@@ -896,14 +843,15 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 			return fmt.Errorf("failed to apply prepaid usage amount: %w", err)
 		}
 	}
-	if _, err := jm.db.ExecContext(ctx, `
-		INSERT INTO purser.prepaid_usage_settlements
-			(report_id, tenant_id, billing_period_start, billing_period_end,
-			 amount_micro, cumulative_amount_micro, currency)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		ON CONFLICT (report_id) DO NOTHING
-	`, summary.ReportID, summary.TenantID, billingPeriodStart, billingPeriodEnd,
-		marginalMicro, desiredCumulativeMicro, currency); err != nil {
+	if err := purserdb.New(jm.db).InsertPrepaidUsageSettlement(ctx, purserdb.InsertPrepaidUsageSettlementParams{
+		ReportID:              summary.ReportID,
+		TenantID:              summary.TenantID,
+		BillingPeriodStart:    billingPeriodStart,
+		BillingPeriodEnd:      billingPeriodEnd,
+		AmountMicro:           marginalMicro,
+		CumulativeAmountMicro: desiredCumulativeMicro,
+		Currency:              currency,
+	}); err != nil {
 		return fmt.Errorf("record prepaid usage settlement: %w", err)
 	}
 
@@ -924,19 +872,12 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 }
 
 func (jm *JobManager) prepaidBillingPeriod(ctx context.Context, tenantID string, at time.Time) (time.Time, time.Time, error) {
-	var start, end sql.NullTime
-	err := jm.db.QueryRowContext(ctx, `
-		SELECT billing_period_start, billing_period_end
-		FROM purser.tenant_subscriptions
-		WHERE tenant_id = $1 AND status = 'active'
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, tenantID).Scan(&start, &end)
+	period, err := purserdb.New(jm.db).GetActiveSubscriptionPeriod(ctx, tenantID)
 	if err != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("load prepaid billing period: %w", err)
 	}
-	if start.Valid && end.Valid && end.Time.After(start.Time) {
-		return start.Time.UTC(), end.Time.UTC(), nil
+	if period.BillingPeriodStart.Valid && period.BillingPeriodEnd.Valid && period.BillingPeriodEnd.Time.After(period.BillingPeriodStart.Time) {
+		return period.BillingPeriodStart.Time.UTC(), period.BillingPeriodEnd.Time.UTC(), nil
 	}
 	fallbackStart := time.Date(at.Year(), at.Month(), 1, 0, 0, 0, 0, time.UTC)
 	return fallbackStart, fallbackStart.AddDate(0, 1, 0), nil
@@ -1000,20 +941,20 @@ func (jm *JobManager) rateCumulativePrepaidUsage(
 func (jm *JobManager) deductPrepaidBalanceForCreditTx(ctx context.Context, tx *sql.Tx, tenantID string, requestCents int64, description string, referenceID *string) (newBalance, appliedCents int64, isDuplicate bool, err error) {
 	currency := billing.DefaultCurrency()
 	referenceType := "invoice_credit"
+	queries := purserdb.New(tx)
 
-	if _, insertErr := tx.ExecContext(ctx, `
-		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency)
-		VALUES ($1, 0, $2)
-		ON CONFLICT (tenant_id, currency) DO NOTHING
-	`, tenantID, currency); insertErr != nil {
+	if insertErr := queries.EnsurePrepaidBalance(ctx, purserdb.EnsurePrepaidBalanceParams{
+		TenantID: tenantID,
+		Currency: currency,
+	}); insertErr != nil {
 		return 0, 0, false, insertErr
 	}
 
-	var currentBalance int64
-	if scanErr := tx.QueryRowContext(ctx, `
-		SELECT balance_cents FROM purser.prepaid_balances
-		WHERE tenant_id = $1 AND currency = $2 FOR UPDATE
-	`, tenantID, currency).Scan(&currentBalance); scanErr != nil {
+	currentBalance, scanErr := queries.LockPrepaidBalanceCents(ctx, purserdb.LockPrepaidBalanceCentsParams{
+		TenantID: tenantID,
+		Currency: currency,
+	})
+	if scanErr != nil {
 		return 0, 0, false, scanErr
 	}
 
@@ -1032,21 +973,30 @@ func (jm *JobManager) deductPrepaidBalanceForCreditTx(ctx context.Context, tx *s
 	// are detected via the same path; convert 23505 into is_duplicate=true
 	// without touching the balance, and look up the prior amount to surface
 	// to the caller.
-	if _, txErr := tx.ExecContext(ctx, `
-		INSERT INTO purser.balance_transactions (
-			tenant_id, amount_cents, balance_after_cents,
-			transaction_type, description, reference_id, reference_type, created_at
-		) VALUES ($1, $2, $3, 'credit', $4, $5, $6, NOW())
-	`, tenantID, -applied, currentBalance-applied, description, referenceID, referenceType); txErr != nil {
+	referenceIDParam := sql.NullString{}
+	if referenceID != nil {
+		referenceIDParam = sql.NullString{String: *referenceID, Valid: true}
+	}
+	if txErr := queries.InsertInvoiceCreditBalanceTransaction(ctx, purserdb.InsertInvoiceCreditBalanceTransactionParams{
+		TenantID:          tenantID,
+		AmountCents:       -applied,
+		BalanceAfterCents: currentBalance - applied,
+		Description:       sql.NullString{String: description, Valid: true},
+		ReferenceID:       referenceIDParam,
+		ReferenceType:     sql.NullString{String: referenceType, Valid: true},
+	}); txErr != nil {
 		if database.SQLState(txErr) == "23505" {
 			// Duplicate ledger row exists. Read its amount so the caller can
 			// preserve prepaid_credit_applied. Balance is untouched.
-			var historicAmount int64
-			if probeErr := tx.QueryRowContext(ctx, `
-				SELECT amount_cents FROM purser.balance_transactions
-				WHERE tenant_id = $1 AND reference_type = $2 AND reference_id = $3
-				ORDER BY created_at DESC LIMIT 1
-			`, tenantID, referenceType, *referenceID).Scan(&historicAmount); probeErr != nil {
+			if referenceID == nil {
+				return 0, 0, false, txErr
+			}
+			historicAmount, probeErr := queries.GetBalanceTransactionAmountByReference(ctx, purserdb.GetBalanceTransactionAmountByReferenceParams{
+				TenantID:      tenantID,
+				ReferenceType: sql.NullString{String: referenceType, Valid: true},
+				ReferenceID:   *referenceID,
+			})
+			if probeErr != nil {
 				return 0, 0, false, probeErr
 			}
 			return currentBalance, -historicAmount, true, nil
@@ -1055,10 +1005,11 @@ func (jm *JobManager) deductPrepaidBalanceForCreditTx(ctx context.Context, tx *s
 	}
 
 	newBalance = currentBalance - applied
-	if _, updErr := tx.ExecContext(ctx, `
-		UPDATE purser.prepaid_balances SET balance_cents = $1, updated_at = NOW()
-		WHERE tenant_id = $2 AND currency = $3
-	`, newBalance, tenantID, currency); updErr != nil {
+	if updErr := queries.UpdatePrepaidBalance(ctx, purserdb.UpdatePrepaidBalanceParams{
+		BalanceCents: newBalance,
+		TenantID:     tenantID,
+		Currency:     currency,
+	}); updErr != nil {
 		return 0, 0, false, updErr
 	}
 	return newBalance, applied, false, nil
@@ -1080,19 +1031,10 @@ func invoiceCreditReferenceID(tenantID string, periodStart time.Time, alreadyApp
 }
 
 func (jm *JobManager) appliedInvoiceCreditCentsTx(ctx context.Context, tx *sql.Tx, tenantID string, periodStart time.Time) (int64, error) {
-	var applied int64
-	err := tx.QueryRowContext(ctx, `
-		SELECT COALESCE(SUM(-amount_cents), 0)
-		FROM purser.balance_transactions
-		WHERE tenant_id = $1
-		  AND reference_type = 'invoice_credit'
-		  AND description = $2
-		  AND amount_cents < 0
-	`, tenantID, invoiceCreditDescription(periodStart)).Scan(&applied)
-	if err != nil {
-		return 0, err
-	}
-	return applied, nil
+	return purserdb.New(tx).SumAppliedInvoiceCredit(ctx, purserdb.SumAppliedInvoiceCreditParams{
+		TenantID:    tenantID,
+		Description: sql.NullString{String: invoiceCreditDescription(periodStart), Valid: true},
+	})
 }
 
 // applyInvoicePrepaidCreditTx brings invoice credit for a tenant/period up to
@@ -1145,24 +1087,24 @@ func (jm *JobManager) deductPrepaidBalanceForUsageMicro(ctx context.Context, ten
 		return 0, 0, false, err
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+	queries := purserdb.New(tx)
 
-	if _, insertErr := tx.ExecContext(ctx, `
-		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency)
-		VALUES ($1, 0, $2)
-		ON CONFLICT (tenant_id, currency) DO NOTHING
-	`, tenantID, currency); insertErr != nil {
+	if insertErr := queries.EnsurePrepaidBalance(ctx, purserdb.EnsurePrepaidBalanceParams{
+		TenantID: tenantID,
+		Currency: currency,
+	}); insertErr != nil {
 		return 0, 0, false, insertErr
 	}
 
-	var currentBalance, currentRemainder int64
-	if scanErr := tx.QueryRowContext(ctx, `
-		SELECT balance_cents, balance_remainder_micro
-		FROM purser.prepaid_balances
-		WHERE tenant_id = $1 AND currency = $2
-		FOR UPDATE
-	`, tenantID, currency).Scan(&currentBalance, &currentRemainder); scanErr != nil {
+	lockedBalance, scanErr := queries.LockPrepaidBalance(ctx, purserdb.LockPrepaidBalanceParams{
+		TenantID: tenantID,
+		Currency: currency,
+	})
+	if scanErr != nil {
 		return 0, 0, false, scanErr
 	}
+	currentBalance := lockedBalance.BalanceCents
+	currentRemainder := lockedBalance.BalanceRemainderMicro
 
 	// Accumulate the residual; commit whole cents, carry the rest. Go integer
 	// division truncates toward zero, so normalize negative residuals to keep
@@ -1176,20 +1118,13 @@ func (jm *JobManager) deductPrepaidBalanceForUsageMicro(ctx context.Context, ten
 	}
 	newBalance := currentBalance - appliedCents
 
-	result, err := tx.ExecContext(ctx, `
-		INSERT INTO purser.balance_transactions (
-			tenant_id, amount_cents, balance_after_cents,
-			transaction_type, description, reference_id, reference_type, created_at
-		) VALUES ($1, $2, $3, 'usage', $4, $5, 'usage_summary', NOW())
-		ON CONFLICT (tenant_id, reference_type, reference_id)
-			WHERE reference_type = 'usage_summary'
-		DO NOTHING
-	`, tenantID, -appliedCents, newBalance, description, referenceID)
-	if err != nil {
-		return 0, 0, false, err
-	}
-
-	rowsAffected, err := result.RowsAffected()
+	rowsAffected, err := queries.InsertUsageBalanceTransaction(ctx, purserdb.InsertUsageBalanceTransactionParams{
+		TenantID:          tenantID,
+		AmountCents:       -appliedCents,
+		BalanceAfterCents: newBalance,
+		Description:       sql.NullString{String: description, Valid: true},
+		ReferenceID:       referenceID.String(),
+	})
 	if err != nil {
 		return 0, 0, false, err
 	}
@@ -1200,11 +1135,12 @@ func (jm *JobManager) deductPrepaidBalanceForUsageMicro(ctx context.Context, ten
 		return currentBalance, currentBalance, false, nil
 	}
 
-	if _, updErr := tx.ExecContext(ctx, `
-		UPDATE purser.prepaid_balances
-		SET balance_cents = $1, balance_remainder_micro = $2, updated_at = NOW()
-		WHERE tenant_id = $3 AND currency = $4
-	`, newBalance, newRemainder, tenantID, currency); updErr != nil {
+	if updErr := queries.UpdatePrepaidBalanceWithRemainder(ctx, purserdb.UpdatePrepaidBalanceWithRemainderParams{
+		BalanceCents:          newBalance,
+		BalanceRemainderMicro: newRemainder,
+		TenantID:              tenantID,
+		Currency:              currency,
+	}); updErr != nil {
 		return 0, 0, false, updErr
 	}
 
@@ -1224,42 +1160,32 @@ func (jm *JobManager) deductPrepaidBalanceForUsage(ctx context.Context, tenantID
 		return 0, 0, false, err
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+	queries := purserdb.New(tx)
 
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency)
-		VALUES ($1, 0, $2)
-		ON CONFLICT (tenant_id, currency) DO NOTHING
-	`, tenantID, currency)
+	err = queries.EnsurePrepaidBalance(ctx, purserdb.EnsurePrepaidBalanceParams{
+		TenantID: tenantID,
+		Currency: currency,
+	})
 	if err != nil {
 		return 0, 0, false, err
 	}
 
-	var currentBalance int64
-	err = tx.QueryRowContext(ctx, `
-		SELECT balance_cents
-		FROM purser.prepaid_balances
-		WHERE tenant_id = $1 AND currency = $2
-		FOR UPDATE
-	`, tenantID, currency).Scan(&currentBalance)
+	currentBalance, err := queries.LockPrepaidBalanceCents(ctx, purserdb.LockPrepaidBalanceCentsParams{
+		TenantID: tenantID,
+		Currency: currency,
+	})
 	if err != nil {
 		return 0, 0, false, err
 	}
 
 	newBalance = currentBalance - amountCents
-	result, err := tx.ExecContext(ctx, `
-		INSERT INTO purser.balance_transactions (
-			tenant_id, amount_cents, balance_after_cents,
-			transaction_type, description, reference_id, reference_type, created_at
-		) VALUES ($1, $2, $3, 'usage', $4, $5, 'usage_summary', NOW())
-		ON CONFLICT (tenant_id, reference_type, reference_id)
-			WHERE reference_type = 'usage_summary'
-		DO NOTHING
-	`, tenantID, -amountCents, newBalance, description, referenceID)
-	if err != nil {
-		return 0, 0, false, err
-	}
-
-	rowsAffected, err := result.RowsAffected()
+	rowsAffected, err := queries.InsertUsageBalanceTransaction(ctx, purserdb.InsertUsageBalanceTransactionParams{
+		TenantID:          tenantID,
+		AmountCents:       -amountCents,
+		BalanceAfterCents: newBalance,
+		Description:       sql.NullString{String: description, Valid: true},
+		ReferenceID:       referenceID.String(),
+	})
 	if err != nil {
 		return 0, 0, false, err
 	}
@@ -1270,11 +1196,11 @@ func (jm *JobManager) deductPrepaidBalanceForUsage(ctx context.Context, tenantID
 		return currentBalance, currentBalance, false, nil
 	}
 
-	_, err = tx.ExecContext(ctx, `
-		UPDATE purser.prepaid_balances
-		SET balance_cents = $1, updated_at = NOW()
-		WHERE tenant_id = $2 AND currency = $3
-	`, newBalance, tenantID, currency)
+	err = queries.UpdatePrepaidBalance(ctx, purserdb.UpdatePrepaidBalanceParams{
+		BalanceCents: newBalance,
+		TenantID:     tenantID,
+		Currency:     currency,
+	})
 	if err != nil {
 		return 0, 0, false, err
 	}
@@ -1291,12 +1217,11 @@ func (jm *JobManager) deductPrepaidBalanceForUsage(ctx context.Context, tenantID
 //
 //nolint:unused
 func (jm *JobManager) getPrepaidBalance(ctx context.Context, tenantID string) (int64, error) {
-	var balanceCents int64
 	currency := billing.DefaultCurrency()
-	err := jm.db.QueryRowContext(ctx, `
-		SELECT balance_cents FROM purser.prepaid_balances
-		WHERE tenant_id = $1 AND currency = $2
-	`, tenantID, currency).Scan(&balanceCents)
+	balanceCents, err := purserdb.New(jm.db).GetPrepaidBalanceForJobs(ctx, purserdb.GetPrepaidBalanceForJobsParams{
+		TenantID: tenantID,
+		Currency: currency,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}
@@ -1307,14 +1232,11 @@ func (jm *JobManager) getPrepaidBalance(ctx context.Context, tenantID string) (i
 }
 
 func (jm *JobManager) getBalanceTransactionByReference(ctx context.Context, tenantID, referenceType, referenceID string) (int64, bool, error) {
-	var amountCents int64
-	err := jm.db.QueryRowContext(ctx, `
-		SELECT amount_cents
-		FROM purser.balance_transactions
-		WHERE tenant_id = $1 AND reference_type = $2 AND reference_id = $3
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, tenantID, referenceType, referenceID).Scan(&amountCents)
+	amountCents, err := purserdb.New(jm.db).GetBalanceTransactionAmountByReference(ctx, purserdb.GetBalanceTransactionAmountByReferenceParams{
+		TenantID:      tenantID,
+		ReferenceType: sql.NullString{String: referenceType, Valid: true},
+		ReferenceID:   referenceID,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, false, nil
 	}
@@ -1331,16 +1253,11 @@ func (jm *JobManager) getBalanceTransactionByReference(ctx context.Context, tena
 func (jm *JobManager) suspendTenantForBalance(ctx context.Context, tenantID string, balanceCents int64) error {
 	// Update subscription status to 'suspended'
 	// This blocks NEW ingests/streams via Foghorn (which checks suspension status)
-	result, err := jm.db.ExecContext(ctx, `
-		UPDATE purser.tenant_subscriptions
-		SET status = 'suspended', updated_at = NOW()
-		WHERE tenant_id = $1 AND status = 'active'
-	`, tenantID)
+	rowsAffected, err := purserdb.New(jm.db).SuspendActiveTenantSubscription(ctx, tenantID)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected > 0 {
 		jm.logger.WithFields(logging.Fields{
 			"tenant_id":     tenantID,
@@ -1413,22 +1330,7 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 
 	// Identify tenants due for billing. Pricing rules / entitlements are loaded
 	// per-tenant via LoadEffectiveTier so this query stays narrow.
-	rows, err := jm.db.QueryContext(ctx, `
-		SELECT ts.tenant_id, ts.billing_email, ts.tier_id, ts.status,
-		       ts.billing_period_start, ts.billing_period_end, ts.mollie_next_payment_date,
-		       ts.stripe_subscription_id, ts.mollie_subscription_id, ts.payment_method,
-		       bt.tier_name, bt.display_name, bt.billing_period
-		FROM purser.tenant_subscriptions ts
-		JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
-		WHERE ts.status = 'active'
-		  AND bt.is_active = true
-		  AND (
-			  (ts.mollie_next_payment_date IS NOT NULL AND ts.mollie_next_payment_date <= $1::date)
-			  OR
-			  (ts.billing_period_end IS NOT NULL AND ts.billing_period_end <= $1)
-			  OR (ts.billing_period_end IS NULL AND (ts.next_billing_date IS NULL OR ts.next_billing_date <= $1))
-		  )
-	`, now)
+	dueSubscriptions, err := purserdb.New(jm.db).ListSubscriptionsDueForInvoice(ctx, now)
 
 	if err != nil {
 		jm.logger.WithFields(logging.Fields{
@@ -1436,26 +1338,19 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		}).Error("Failed to fetch tenant subscriptions for invoice generation")
 		return
 	}
-	defer func() { _ = rows.Close() }()
-
 	var invoicesGenerated int
-	for rows.Next() {
-		var tenantID, tierID, subscriptionStatus string
-		var billingEmail sql.NullString
-		var tierName, displayName, billingPeriod string
-		var billingPeriodStart, billingPeriodEnd, mollieNextPaymentDate sql.NullTime
-		var stripeSubID, mollieSubID, paymentMethod sql.NullString
-
-		err = rows.Scan(&tenantID, &billingEmail, &tierID, &subscriptionStatus,
-			&billingPeriodStart, &billingPeriodEnd, &mollieNextPaymentDate,
-			&stripeSubID, &mollieSubID, &paymentMethod,
-			&tierName, &displayName, &billingPeriod)
-		if err != nil {
-			jm.logger.WithFields(logging.Fields{
-				"error": err,
-			}).Error("Error scanning tenant subscription data")
-			continue
-		}
+	for _, subscription := range dueSubscriptions {
+		tenantID := subscription.TenantID
+		tierID := subscription.TierID.String()
+		billingEmail := subscription.BillingEmail
+		tierName := subscription.TierName
+		displayName := subscription.DisplayName
+		billingPeriodStart := subscription.BillingPeriodStart
+		billingPeriodEnd := subscription.BillingPeriodEnd
+		mollieNextPaymentDate := subscription.MollieNextPaymentDate
+		stripeSubID := subscription.StripeSubscriptionID
+		mollieSubID := subscription.MollieSubscriptionID
+		paymentMethod := subscription.PaymentMethod
 
 		tier, tierErr := billingpkg.LoadEffectiveTier(ctx, jm.db, tenantID)
 		if tierErr != nil {
@@ -1490,13 +1385,10 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		// previous month. manual_review is NOT terminal — it's a hold that
 		// must be re-runnable once ops fixes the underlying cluster
 		// pricing, so we treat it like draft for finalization purposes.
-		var existingCount int
-		err = jm.db.QueryRowContext(ctx, `
-			SELECT COUNT(*) FROM purser.billing_invoices
-			WHERE tenant_id = $1
-			  AND period_start = $2
-			  AND status NOT IN ('draft', 'manual_review')
-		`, tenantID, periodStart).Scan(&existingCount)
+		existingCount, err := purserdb.New(jm.db).CountFinalizedInvoicesForPeriod(ctx, purserdb.CountFinalizedInvoicesForPeriodParams{
+			TenantID:    tenantID,
+			PeriodStart: sql.NullTime{Time: periodStart, Valid: true},
+		})
 		if err != nil {
 			jm.logger.WithFields(logging.Fields{
 				"error":     err,
@@ -1512,19 +1404,15 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		// the previous month. Finalization applies any missing prepaid credit
 		// in the same transaction as the invoice header write, so base-only
 		// invoices and drafts that grew after first credit both consume balance.
-		var draftInvoiceID string
-		switch err := jm.db.QueryRowContext(ctx, `
-			SELECT id
-			FROM purser.billing_invoices
-			WHERE tenant_id = $1
-			  AND period_start = $2
-			  AND status IN ('draft', 'manual_review')
-			LIMIT 1
-		`, tenantID, periodStart).Scan(&draftInvoiceID); {
-		case err == nil, errors.Is(err, sql.ErrNoRows):
+		draftInvoiceID, draftErr := purserdb.New(jm.db).GetDraftInvoiceIDForPeriod(ctx, purserdb.GetDraftInvoiceIDForPeriodParams{
+			TenantID:    tenantID,
+			PeriodStart: sql.NullTime{Time: periodStart, Valid: true},
+		})
+		switch {
+		case draftErr == nil, errors.Is(draftErr, sql.ErrNoRows):
 			// nil err means draft found; ErrNoRows means no draft, leave zero values.
 		default:
-			jm.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to look up existing draft invoice; skipping invoice for this period")
+			jm.logger.WithError(draftErr).WithField("tenant_id", tenantID).Error("Failed to look up existing draft invoice; skipping invoice for this period")
 			continue
 		}
 
@@ -1640,6 +1528,7 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		// subscription pointing at the already-billed period.
 		var collectionDecision *invoiceCollectionDecision
 		err = withTx(ctx, jm.db, func(tx *sql.Tx) error {
+			queries := purserdb.New(tx)
 			var txErr error
 			if len(ratingResult.ManualReviewReasons) == 0 {
 				grossCents := grossDec.Mul(decimal.NewFromInt(100)).Round(0).IntPart()
@@ -1692,47 +1581,40 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 			creditAmt := creditDec.Round(2).String()
 
 			if draftInvoiceID != "" {
-				txErr = tx.QueryRowContext(ctx, `
-						UPDATE purser.billing_invoices
-						SET amount = $1::numeric, base_amount = $2::numeric, metered_amount = $3::numeric,
-						    prepaid_credit_applied = $4::numeric, currency = $5,
-						    status = $6, due_date = $7, usage_details = $8,
-						    period_start = $9, period_end = $10, gross_metered_amount = $13::numeric,
-						    updated_at = NOW()
-						WHERE id = $11 AND tenant_id = $12 AND status IN ('draft', 'manual_review')
-						RETURNING id
-					`, totalAmt, baseAmt, meteredAmt, creditAmt, currency, status, dueDate, database.JSONText(usageJSON), periodStart, periodEnd, draftInvoiceID, tenantID, grossMeteredAmt).Scan(&invoiceID)
+				invoiceID, txErr = queries.UpdateDraftInvoice(ctx, purserdb.UpdateDraftInvoiceParams{
+					Amount:               totalAmt,
+					BaseAmount:           baseAmt,
+					MeteredAmount:        meteredAmt,
+					PrepaidCreditApplied: creditAmt,
+					Currency:             currency,
+					Status:               status,
+					DueDate:              dueDate,
+					UsageDetails:         json.RawMessage(usageJSON),
+					PeriodStart:          sql.NullTime{Time: periodStart, Valid: true},
+					PeriodEnd:            sql.NullTime{Time: periodEnd, Valid: true},
+					GrossMeteredAmount:   grossMeteredAmt,
+					InvoiceID:            draftInvoiceID,
+					TenantID:             tenantID,
+				})
 				if txErr != nil {
 					return fmt.Errorf("update invoice: %w", txErr)
 				}
 			} else {
-				txErr = tx.QueryRowContext(ctx, `
-					INSERT INTO purser.billing_invoices (
-						id, tenant_id, amount, currency, status, due_date,
-						base_amount, metered_amount, prepaid_credit_applied,
-					usage_details, period_start, period_end, gross_metered_amount,
-					created_at, updated_at
-					) VALUES (
-						$1, $2, $3::numeric, $4, $5, $6,
-						$7::numeric, $8::numeric, $9::numeric,
-						$10, $11, $12, $13::numeric, NOW(), NOW()
-					)
-					ON CONFLICT (tenant_id, period_start) WHERE period_start IS NOT NULL
-					DO UPDATE SET
-						amount = EXCLUDED.amount,
-						currency = EXCLUDED.currency,
-						status = EXCLUDED.status,
-						due_date = EXCLUDED.due_date,
-						base_amount = EXCLUDED.base_amount,
-						metered_amount = EXCLUDED.metered_amount,
-						prepaid_credit_applied = EXCLUDED.prepaid_credit_applied,
-						usage_details = EXCLUDED.usage_details,
-						period_end = EXCLUDED.period_end,
-						gross_metered_amount = EXCLUDED.gross_metered_amount,
-						updated_at = NOW()
-					WHERE purser.billing_invoices.status IN ('draft', 'manual_review')
-					RETURNING id
-					`, invoiceID, tenantID, totalAmt, currency, status, dueDate, baseAmt, meteredAmt, creditAmt, database.JSONText(usageJSON), periodStart, periodEnd, grossMeteredAmt).Scan(&invoiceID)
+				invoiceID, txErr = queries.UpsertInvoiceForPeriod(ctx, purserdb.UpsertInvoiceForPeriodParams{
+					InvoiceID:            invoiceID,
+					TenantID:             tenantID,
+					Amount:               totalAmt,
+					Currency:             currency,
+					Status:               status,
+					DueDate:              dueDate,
+					BaseAmount:           baseAmt,
+					MeteredAmount:        meteredAmt,
+					PrepaidCreditApplied: creditAmt,
+					UsageDetails:         json.RawMessage(usageJSON),
+					PeriodStart:          sql.NullTime{Time: periodStart, Valid: true},
+					PeriodEnd:            sql.NullTime{Time: periodEnd, Valid: true},
+					GrossMeteredAmount:   grossMeteredAmt,
+				})
 				if txErr != nil {
 					return fmt.Errorf("upsert invoice: %w", txErr)
 				}
@@ -1748,17 +1630,12 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 				}
 			}
 			if status != "manual_review" {
-				_, txErr = tx.ExecContext(ctx, `
-					UPDATE purser.usage_adjustments
-					SET applied_invoice_id = $1,
-					    updated_at = NOW()
-					WHERE tenant_id = $2
-					  AND period_start < $4
-					  AND period_end > $3
-					  AND status = 'applied'
-					  AND value_kind = 'correction_delta'
-					  AND applied_invoice_id IS NULL
-				`, invoiceID, tenantID, periodStart, periodEnd)
+				txErr = queries.MarkUsageAdjustmentsAppliedToInvoice(ctx, purserdb.MarkUsageAdjustmentsAppliedToInvoiceParams{
+					InvoiceID:   invoiceID,
+					TenantID:    tenantID,
+					PeriodEnd:   periodEnd,
+					PeriodStart: periodStart,
+				})
 				if txErr != nil {
 					return fmt.Errorf("mark usage adjustments applied to invoice: %w", txErr)
 				}
@@ -1787,24 +1664,16 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 			if status == "manual_review" {
 				return nil
 			}
-			result, txErr := tx.ExecContext(ctx, `
-					UPDATE purser.tenant_subscriptions
-					SET next_billing_date = $1,
-					    billing_period_start = $2,
-					    billing_period_end = $3,
-					    mollie_next_payment_date = CASE
-					        WHEN mollie_next_payment_date IS NOT NULL THEN $3::date
-					        ELSE mollie_next_payment_date
-					    END,
-					    updated_at = NOW()
-					WHERE tenant_id = $4
-				`, nextBillingDate, nextPeriodStart, nextPeriodEnd, tenantID)
+			rowsAffected, txErr := queries.AdvanceSubscriptionBillingPeriod(ctx, purserdb.AdvanceSubscriptionBillingPeriodParams{
+				NextBillingDate:    sql.NullTime{Time: nextBillingDate, Valid: true},
+				BillingPeriodStart: sql.NullTime{Time: nextPeriodStart, Valid: true},
+				BillingPeriodEnd:   sql.NullTime{Time: nextPeriodEnd, Valid: true},
+				TenantID:           tenantID,
+			})
 			if txErr != nil {
 				return fmt.Errorf("advance subscription period: %w", txErr)
 			}
-			if rows, rowsErr := result.RowsAffected(); rowsErr != nil {
-				return fmt.Errorf("advance subscription period rows: %w", rowsErr)
-			} else if rows == 0 {
+			if rowsAffected == 0 {
 				return fmt.Errorf("advance subscription period: no subscription row for tenant %s", tenantID)
 			}
 			return nil
@@ -1883,10 +1752,6 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 			jm.applyPendingDowngrade(ctx, tenantID)
 		}
 	}
-	if err := rows.Err(); err != nil {
-		jm.logger.WithError(err).Error("Invoice subscription cursor failed")
-	}
-
 	jm.logger.WithFields(logging.Fields{
 		"invoices_generated": invoicesGenerated,
 	}).Info("Monthly invoice generation completed")
@@ -1900,58 +1765,32 @@ func finalizedInvoiceStatus(total decimal.Decimal) string {
 }
 
 func (jm *JobManager) assertMeteringComplete(ctx context.Context, tenantID string, periodStart, periodEnd time.Time) error {
-	var activeSources int
-	if err := jm.db.QueryRowContext(ctx, `
-		SELECT count(*)
-		FROM purser.metering_sources
-		WHERE required = TRUE
-		  AND active_from < $2
-		  AND (active_until IS NULL OR active_until > $1)
-	`, periodStart, periodEnd).Scan(&activeSources); err != nil {
+	queries := purserdb.New(jm.db)
+	activeSources, err := queries.CountActiveMeteringSources(ctx, purserdb.CountActiveMeteringSourcesParams{
+		PeriodStart: periodStart,
+		PeriodEnd:   periodEnd,
+	})
+	if err != nil {
 		return fmt.Errorf("count active metering sources: %w", err)
 	}
 	if activeSources == 0 {
 		return errors.New("no active metering sources registered")
 	}
-	var missingWindows int64
-	if err := jm.db.QueryRowContext(ctx, `
-		WITH source_bounds AS (
-			SELECT source_id,
-			       date_bin(INTERVAL '5 minutes', GREATEST(active_from, $1), TIMESTAMPTZ '1970-01-01')
-			           + CASE WHEN date_bin(INTERVAL '5 minutes', GREATEST(active_from, $1), TIMESTAMPTZ '1970-01-01') < GREATEST(active_from, $1)
-			                  THEN INTERVAL '5 minutes' ELSE INTERVAL '0' END AS first_window,
-			       LEAST(COALESCE(active_until, $2), $2) AS bound_end
-			FROM purser.metering_sources
-			WHERE required = TRUE
-			  AND active_from < $2
-			  AND (active_until IS NULL OR active_until > $1)
-		), expected AS (
-			SELECT source_id, window_start, window_start + INTERVAL '5 minutes' AS window_end
-			FROM source_bounds
-			CROSS JOIN LATERAL generate_series(first_window, bound_end - INTERVAL '5 minutes', INTERVAL '5 minutes') AS window_start
-		)
-		SELECT count(*)
-		FROM expected e
-		LEFT JOIN purser.metering_windows w
-		  ON w.source_id = e.source_id
-		 AND w.period_start = e.window_start
-		 AND w.period_end = e.window_end
-		 AND w.complete = TRUE
-		WHERE w.source_id IS NULL
-	`, periodStart, periodEnd).Scan(&missingWindows); err != nil {
+	missingWindows, err := queries.CountMissingMeteringWindows(ctx, purserdb.CountMissingMeteringWindowsParams{
+		PeriodStart: periodStart,
+		PeriodEnd:   periodEnd,
+	})
+	if err != nil {
 		return fmt.Errorf("check metering windows: %w", err)
 	}
 	if missingWindows > 0 {
 		return fmt.Errorf("%d required metering windows are missing", missingWindows)
 	}
-	var openAnomalies int64
-	if err := jm.db.QueryRowContext(ctx, `
-		SELECT count(*)
-		FROM purser.metering_anomalies
-		WHERE status = 'open'
-		  AND (tenant_id IS NULL OR tenant_id = $1)
-		  AND created_at < $3
-	`, tenantID, periodStart, periodEnd).Scan(&openAnomalies); err != nil {
+	openAnomalies, err := queries.CountOpenMeteringAnomalies(ctx, purserdb.CountOpenMeteringAnomaliesParams{
+		TenantID:  tenantID,
+		PeriodEnd: periodEnd,
+	})
+	if err != nil {
 		return fmt.Errorf("check metering anomalies: %w", err)
 	}
 	if openAnomalies > 0 {
@@ -1961,37 +1800,13 @@ func (jm *JobManager) assertMeteringComplete(ctx context.Context, tenantID strin
 }
 
 func (jm *JobManager) applyDuePendingDowngrades(ctx context.Context, now time.Time) {
-	rows, err := jm.db.QueryContext(ctx, `
-		SELECT ts.tenant_id
-		FROM purser.tenant_subscriptions ts
-		WHERE ts.status = 'active'
-		  AND ts.pending_tier_id IS NOT NULL
-		  AND ts.pending_effective_at <= $1
-		  AND EXISTS (
-		      SELECT 1
-		      FROM purser.billing_invoices bi
-		      WHERE bi.tenant_id = ts.tenant_id
-		        AND bi.period_end = ts.pending_effective_at
-		        AND bi.status NOT IN ('draft', 'manual_review')
-		  )
-		ORDER BY ts.pending_effective_at ASC, ts.tenant_id ASC
-	`, now)
+	tenantIDs, err := purserdb.New(jm.db).ListDuePendingDowngradeTenantIDs(ctx, sql.NullTime{Time: now, Valid: true})
 	if err != nil {
 		jm.logger.WithError(err).Warn("scan due pending tier downgrades")
 		return
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var tenantID string
-		if err := rows.Scan(&tenantID); err != nil {
-			jm.logger.WithError(err).Warn("scan pending downgrade tenant")
-			continue
-		}
+	for _, tenantID := range tenantIDs {
 		jm.applyPendingDowngrade(ctx, tenantID)
-	}
-	if err := rows.Err(); err != nil {
-		jm.logger.WithError(err).Warn("iterate due pending tier downgrades")
 	}
 }
 
@@ -2046,29 +1861,22 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 	if !rounded.GreaterThan(decimal.Zero) {
 		return nil
 	}
+	queries := purserdb.New(jm.db)
 
-	var stripeCustomerID sql.NullString
-	var stripeSubscriptionID sql.NullString
-	err := jm.db.QueryRowContext(ctx, `
-		SELECT stripe_customer_id, stripe_subscription_id
-		FROM purser.tenant_subscriptions
-		WHERE tenant_id = $1
-		  AND status = 'active'
-		  AND stripe_subscription_id IS NOT NULL
-	`, tenantID).Scan(&stripeCustomerID, &stripeSubscriptionID)
+	stripeDetails, err := queries.GetActiveStripeCollectionDetails(ctx, tenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("lookup stripe customer/subscription: %w", err)
 	}
-	if !stripeCustomerID.Valid || stripeCustomerID.String == "" {
+	if !stripeDetails.StripeCustomerID.Valid || stripeDetails.StripeCustomerID.String == "" {
 		return nil
 	}
 	if jm.billing.stripeClient == nil {
 		return fmt.Errorf("stripe client not configured for active Stripe subscription")
 	}
-	paymentMethodID, err := jm.billing.stripeClient.ResolveDefaultPaymentMethod(ctx, stripeCustomerID.String, stripeSubscriptionID.String)
+	paymentMethodID, err := jm.billing.stripeClient.ResolveDefaultPaymentMethod(ctx, stripeDetails.StripeCustomerID.String, stripeDetails.StripeSubscriptionID.String)
 	if err != nil {
 		return fmt.Errorf("resolve Stripe payment method: %w", err)
 	}
@@ -2095,22 +1903,23 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 	paymentID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(intentKey)).String()
 	intentPlaceholder := "stripe-overage-intent:" + paymentID
 
-	var existingTxID, existingStatus string
-	if insertErr := jm.db.QueryRowContext(ctx, `
-		INSERT INTO purser.billing_payments (id, invoice_id, method, amount, currency, tx_id, status, created_at, updated_at)
-		VALUES ($1, $2, 'card', $3::numeric, $4, $5, 'pending', NOW(), NOW())
-		ON CONFLICT (id) DO UPDATE SET updated_at = purser.billing_payments.updated_at
-		RETURNING COALESCE(tx_id, ''), status
-	`, paymentID, invoiceID, amountStr, currency, intentPlaceholder).Scan(&existingTxID, &existingStatus); insertErr != nil {
+	existingPayment, insertErr := queries.UpsertPendingProviderBillingPayment(ctx, purserdb.UpsertPendingProviderBillingPaymentParams{
+		PaymentID: paymentID,
+		InvoiceID: invoiceID,
+		Amount:    amountStr,
+		Currency:  currency,
+		TxID:      sql.NullString{String: intentPlaceholder, Valid: true},
+	})
+	if insertErr != nil {
 		return fmt.Errorf("insert pending billing_payment: %w", insertErr)
 	}
-	if existingTxID != "" && existingTxID != intentPlaceholder {
+	if existingPayment.TxID != "" && existingPayment.TxID != intentPlaceholder {
 		jm.logger.WithFields(logging.Fields{
 			"tenant_id":  tenantID,
 			"invoice_id": invoiceID,
 			"payment_id": paymentID,
-			"tx_id":      existingTxID,
-			"status":     existingStatus,
+			"tx_id":      existingPayment.TxID,
+			"status":     existingPayment.Status,
 		}).Debug("Stripe overage payment already has provider id; skipping duplicate collection")
 		return nil
 	}
@@ -2118,48 +1927,49 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 	// Payment-provider intent before the external call so a crash mid-API
 	// leaves a trace operators can reconcile against the orphan Stripe
 	// PaymentIntent if one was created.
-	var providerIntentID string
-	var providerCallCount int
-	if intentErr := jm.db.QueryRowContext(ctx, `
-		INSERT INTO purser.payment_provider_intents (
-			tenant_id, provider, purpose, local_reference_type, local_reference_id,
-			provider_customer_id, status, currency, amount_cents, idempotency_key, attempt_count
-		) VALUES ($1, 'stripe', 'stripe_overage_charge', 'invoice', $2::uuid,
-		          $3, 'pending', $4, $5, $6, 1)
-		ON CONFLICT (provider, idempotency_key) DO UPDATE SET
-			attempt_count = purser.payment_provider_intents.attempt_count + 1,
-			updated_at = NOW()
-		RETURNING id, attempt_count
-	`, tenantID, invoiceID, stripeCustomerID.String, currency, amountCents, intentKey).Scan(&providerIntentID, &providerCallCount); intentErr != nil {
+	providerIntent, intentErr := queries.UpsertProviderPaymentIntent(ctx, purserdb.UpsertProviderPaymentIntentParams{
+		TenantID:           tenantID,
+		Provider:           "stripe",
+		Purpose:            "stripe_overage_charge",
+		InvoiceID:          invoiceID,
+		ProviderCustomerID: sql.NullString{String: stripeDetails.StripeCustomerID.String, Valid: true},
+		Currency:           currency,
+		AmountCents:        amountCents,
+		IdempotencyKey:     intentKey,
+	})
+	if intentErr != nil {
 		return fmt.Errorf("insert payment_provider_intents: %w", intentErr)
 	}
+	providerIntentID := providerIntent.ID
+	providerCallCount := int(providerIntent.AttemptCount)
 	// Tie the billing_payments row to the canonical intent.
-	if _, linkErr := jm.db.ExecContext(ctx, `
-		UPDATE purser.billing_payments SET intent_id = $1, updated_at = NOW() WHERE id = $2
-	`, providerIntentID, paymentID); linkErr != nil {
+	if linkErr := queries.LinkBillingPaymentIntent(ctx, purserdb.LinkBillingPaymentIntentParams{
+		IntentID:  providerIntentID,
+		PaymentID: paymentID,
+	}); linkErr != nil {
 		jm.logger.WithError(linkErr).WithField("payment_id", paymentID).Warn("link billing_payment to intent")
 	}
 
 	// Per-attempt row keyed on the Stripe-side idempotency key so retries
 	// collapse to one row at the provider too.
-	if _, attemptErr := jm.db.ExecContext(ctx, `
-		INSERT INTO purser.billing_payment_attempts (
-			payment_id, intent_id, attempt_number, idempotency_key, provider, status
-		) VALUES ($1, $2, $3, $4, 'stripe', 'pending')
-		ON CONFLICT (payment_id, attempt_number) DO NOTHING
-	`, paymentID, providerIntentID, attemptNumber, intentKey); attemptErr != nil {
+	if attemptErr := queries.InsertProviderBillingPaymentAttempt(ctx, purserdb.InsertProviderBillingPaymentAttemptParams{
+		PaymentID:      paymentID,
+		IntentID:       providerIntentID,
+		AttemptNumber:  int32(attemptNumber),
+		IdempotencyKey: intentKey,
+		Provider:       "stripe",
+	}); attemptErr != nil {
 		return fmt.Errorf("insert billing_payment_attempt: %w", attemptErr)
 	}
-	if _, attemptErr := jm.db.ExecContext(ctx, `
-		UPDATE purser.billing_payment_attempts
-		SET status = 'pending', next_retry_at = NULL, updated_at = NOW()
-		WHERE payment_id = $1 AND attempt_number = $2 AND status = 'provider_call_failed'
-	`, paymentID, attemptNumber); attemptErr != nil {
+	if attemptErr := queries.PrepareProviderBillingPaymentAttemptRetry(ctx, purserdb.PrepareProviderBillingPaymentAttemptRetryParams{
+		PaymentID:     paymentID,
+		AttemptNumber: int32(attemptNumber),
+	}); attemptErr != nil {
 		return fmt.Errorf("prepare billing_payment_attempt retry: %w", attemptErr)
 	}
 
 	result, chargeErr := jm.billing.stripeClient.ChargeOffSession(ctx, billingstripe.OffSessionChargeParams{
-		CustomerID:       stripeCustomerID.String,
+		CustomerID:       stripeDetails.StripeCustomerID.String,
 		PaymentMethodID:  paymentMethodID,
 		TenantID:         tenantID,
 		InvoiceID:        invoiceID,
@@ -2172,35 +1982,30 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 	if chargeErr != nil {
 		terminal := providerCallCount >= maxProviderPaymentAttempts
 		intentStatus := "provider_call_failed"
-		var nextRetry any = time.Now().Add(1 * time.Hour)
+		nextRetry := sql.NullTime{Time: time.Now().Add(1 * time.Hour), Valid: true}
 		if terminal {
 			intentStatus = "terminal_failed"
-			nextRetry = nil
+			nextRetry = sql.NullTime{}
 		}
-		if _, updateErr := jm.db.ExecContext(ctx, `
-			UPDATE purser.payment_provider_intents
-			SET status = $1, last_error = $2, updated_at = NOW()
-			WHERE id = $3
-		`, intentStatus, chargeErr.Error(), providerIntentID); updateErr != nil {
+		if updateErr := queries.SetProviderPaymentIntentFailure(ctx, purserdb.SetProviderPaymentIntentFailureParams{
+			Status:    intentStatus,
+			LastError: sql.NullString{String: chargeErr.Error(), Valid: true},
+			IntentID:  providerIntentID,
+		}); updateErr != nil {
 			jm.logger.WithError(updateErr).WithField("intent_id", providerIntentID).Warn("mark Stripe overage intent provider_call_failed")
 		}
-		if _, attemptUpdateErr := jm.db.ExecContext(ctx, `
-			UPDATE purser.billing_payment_attempts
-			SET status = 'provider_call_failed',
-			    failure_code = 'provider_call_error',
-			    failure_message = $1,
-			    next_retry_at = $2,
-			    updated_at = NOW()
-			WHERE payment_id = $3 AND attempt_number = $4
-		`, chargeErr.Error(), nextRetry, paymentID, attemptNumber); attemptUpdateErr != nil {
+		if attemptUpdateErr := queries.SetProviderBillingPaymentAttemptFailure(ctx, purserdb.SetProviderBillingPaymentAttemptFailureParams{
+			Status:         "provider_call_failed",
+			FailureCode:    sql.NullString{String: "provider_call_error", Valid: true},
+			FailureMessage: sql.NullString{String: chargeErr.Error(), Valid: true},
+			NextRetryAt:    nextRetry,
+			PaymentID:      paymentID,
+			AttemptNumber:  int32(attemptNumber),
+		}); attemptUpdateErr != nil {
 			jm.logger.WithError(attemptUpdateErr).WithField("payment_id", paymentID).Warn("mark Stripe overage attempt provider_call_failed")
 		}
 		if terminal {
-			if _, markErr := jm.db.ExecContext(ctx, `
-				UPDATE purser.billing_payments
-				SET status = 'failed', updated_at = NOW()
-				WHERE id = $1 AND status = 'pending'
-			`, paymentID); markErr != nil {
+			if markErr := queries.MarkPendingBillingPaymentFailed(ctx, paymentID); markErr != nil {
 				jm.logger.WithError(markErr).WithField("payment_id", paymentID).Warn("mark Stripe overage payment terminal failed")
 			}
 		}
@@ -2215,25 +2020,23 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 	// Persist the provider PaymentIntent id (when known) so webhooks
 	// land on the right local payment.
 	if result.PaymentIntentID != "" {
-		if _, updateErr := jm.db.ExecContext(ctx, `
-			UPDATE purser.billing_payments
-			SET tx_id = $1, updated_at = NOW()
-			WHERE id = $2 AND status = 'pending'
-		`, result.PaymentIntentID, paymentID); updateErr != nil {
+		if updateErr := queries.AttachProviderPaymentIDToBillingPayment(ctx, purserdb.AttachProviderPaymentIDToBillingPaymentParams{
+			ProviderPaymentID: sql.NullString{String: result.PaymentIntentID, Valid: true},
+			PaymentID:         paymentID,
+		}); updateErr != nil {
 			return fmt.Errorf("attach Stripe payment_intent id: %w", updateErr)
 		}
-		if _, intentUpdateErr := jm.db.ExecContext(ctx, `
-			UPDATE purser.payment_provider_intents
-			SET provider_payment_id = $1, updated_at = NOW()
-			WHERE id = $2
-		`, result.PaymentIntentID, providerIntentID); intentUpdateErr != nil {
+		if intentUpdateErr := queries.AttachProviderPaymentIDToIntent(ctx, purserdb.AttachProviderPaymentIDToIntentParams{
+			ProviderPaymentID: sql.NullString{String: result.PaymentIntentID, Valid: true},
+			IntentID:          providerIntentID,
+		}); intentUpdateErr != nil {
 			jm.logger.WithError(intentUpdateErr).WithField("intent_id", providerIntentID).Warn("link provider_payment_id on intent")
 		}
-		if _, attemptUpdateErr := jm.db.ExecContext(ctx, `
-			UPDATE purser.billing_payment_attempts
-			SET provider_payment_id = $1, updated_at = NOW()
-			WHERE payment_id = $2 AND attempt_number = $3
-		`, result.PaymentIntentID, paymentID, attemptNumber); attemptUpdateErr != nil {
+		if attemptUpdateErr := queries.AttachProviderPaymentIDToAttempt(ctx, purserdb.AttachProviderPaymentIDToAttemptParams{
+			ProviderPaymentID: sql.NullString{String: result.PaymentIntentID, Valid: true},
+			PaymentID:         paymentID,
+			AttemptNumber:     int32(attemptNumber),
+		}); attemptUpdateErr != nil {
 			jm.logger.WithError(attemptUpdateErr).WithField("payment_id", paymentID).Warn("link provider_payment_id on attempt")
 		}
 	}
@@ -2243,25 +2046,23 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 		// SCA required: customer must reauthorize. Park the intent in
 		// sca_required; the attempt row mirrors that state so the retry
 		// job does not re-fire automatically.
-		if _, updateErr := jm.db.ExecContext(ctx, `
-			UPDATE purser.payment_provider_intents
-			SET status = 'sca_required', last_error = $1, updated_at = NOW()
-			WHERE id = $2
-		`, result.FailureMessage, providerIntentID); updateErr != nil {
+		if updateErr := queries.SetProviderPaymentIntentFailure(ctx, purserdb.SetProviderPaymentIntentFailureParams{
+			Status:    "sca_required",
+			LastError: sql.NullString{String: result.FailureMessage, Valid: true},
+			IntentID:  providerIntentID,
+		}); updateErr != nil {
 			jm.logger.WithError(updateErr).WithField("intent_id", providerIntentID).Warn("mark intent sca_required")
 		}
-		if _, attemptUpdateErr := jm.db.ExecContext(ctx, `
-			UPDATE purser.billing_payment_attempts
-			SET status = 'sca_required', failure_code = $1, failure_message = $2, updated_at = NOW()
-			WHERE payment_id = $3 AND attempt_number = $4
-		`, result.FailureCode, result.FailureMessage, paymentID, attemptNumber); attemptUpdateErr != nil {
+		if attemptUpdateErr := queries.SetProviderBillingPaymentAttemptFailure(ctx, purserdb.SetProviderBillingPaymentAttemptFailureParams{
+			Status:         "sca_required",
+			FailureCode:    sql.NullString{String: result.FailureCode, Valid: true},
+			FailureMessage: sql.NullString{String: result.FailureMessage, Valid: true},
+			PaymentID:      paymentID,
+			AttemptNumber:  int32(attemptNumber),
+		}); attemptUpdateErr != nil {
 			jm.logger.WithError(attemptUpdateErr).WithField("payment_id", paymentID).Warn("mark attempt sca_required")
 		}
-		if _, markErr := jm.db.ExecContext(ctx, `
-			UPDATE purser.billing_payments
-			SET status = 'failed', updated_at = NOW()
-			WHERE id = $1 AND status = 'pending'
-		`, paymentID); markErr != nil {
+		if markErr := queries.MarkPendingBillingPaymentFailed(ctx, paymentID); markErr != nil {
 			jm.logger.WithError(markErr).WithField("payment_id", paymentID).Warn("release Stripe overage reservation requiring SCA")
 		}
 		// Off-session SCA cannot be completed off-session, and the parked
@@ -2286,25 +2087,23 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 	case result.Status == "failed":
 		// Hard failure (card_declined, expired_card, etc.) requires a new
 		// customer action or operator decision rather than blind retry.
-		if _, updateErr := jm.db.ExecContext(ctx, `
-			UPDATE purser.payment_provider_intents
-			SET status = 'terminal_failed', last_error = $1, updated_at = NOW()
-			WHERE id = $2
-		`, result.FailureCode+": "+result.FailureMessage, providerIntentID); updateErr != nil {
+		if updateErr := queries.SetProviderPaymentIntentFailure(ctx, purserdb.SetProviderPaymentIntentFailureParams{
+			Status:    "terminal_failed",
+			LastError: sql.NullString{String: result.FailureCode + ": " + result.FailureMessage, Valid: true},
+			IntentID:  providerIntentID,
+		}); updateErr != nil {
 			jm.logger.WithError(updateErr).WithField("intent_id", providerIntentID).Warn("mark intent terminal_failed")
 		}
-		if _, attemptUpdateErr := jm.db.ExecContext(ctx, `
-			UPDATE purser.billing_payment_attempts
-			SET status = 'failed', failure_code = $1, failure_message = $2, updated_at = NOW()
-			WHERE payment_id = $3 AND attempt_number = $4
-		`, result.FailureCode, result.FailureMessage, paymentID, attemptNumber); attemptUpdateErr != nil {
+		if attemptUpdateErr := queries.SetProviderBillingPaymentAttemptFailure(ctx, purserdb.SetProviderBillingPaymentAttemptFailureParams{
+			Status:         "failed",
+			FailureCode:    sql.NullString{String: result.FailureCode, Valid: true},
+			FailureMessage: sql.NullString{String: result.FailureMessage, Valid: true},
+			PaymentID:      paymentID,
+			AttemptNumber:  int32(attemptNumber),
+		}); attemptUpdateErr != nil {
 			jm.logger.WithError(attemptUpdateErr).WithField("payment_id", paymentID).Warn("mark attempt failed")
 		}
-		if _, markErr := jm.db.ExecContext(ctx, `
-			UPDATE purser.billing_payments
-			SET status = 'failed', updated_at = NOW()
-			WHERE id = $1 AND status = 'pending'
-		`, paymentID); markErr != nil {
+		if markErr := queries.MarkPendingBillingPaymentFailed(ctx, paymentID); markErr != nil {
 			jm.logger.WithError(markErr).WithField("payment_id", paymentID).Warn("mark stripe overage payment failed")
 		}
 		return fmt.Errorf("stripe off-session overage failed: %s: %s", result.FailureCode, result.FailureMessage)
@@ -2315,11 +2114,10 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 		// account for partial payments). We do not mark confirmed here
 		// — the webhook owns that transition under the partial-payment-
 		// aware settlement.
-		if _, updateErr := jm.db.ExecContext(ctx, `
-			UPDATE purser.payment_provider_intents
-			SET status = 'provider_open', updated_at = NOW()
-			WHERE id = $1
-		`, providerIntentID); updateErr != nil {
+		if updateErr := queries.SetProviderPaymentIntentStatus(ctx, purserdb.SetProviderPaymentIntentStatusParams{
+			Status:   "provider_open",
+			IntentID: providerIntentID,
+		}); updateErr != nil {
 			jm.logger.WithError(updateErr).WithField("intent_id", providerIntentID).Warn("mark intent provider_open after success")
 		}
 		jm.logger.WithFields(logging.Fields{
@@ -2332,11 +2130,10 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 	default:
 		// requires_action without SCA, processing, etc. Leave attempt
 		// pending; webhook drives the next state transition.
-		if _, updateErr := jm.db.ExecContext(ctx, `
-			UPDATE purser.payment_provider_intents
-			SET status = 'provider_open', updated_at = NOW()
-			WHERE id = $1
-		`, providerIntentID); updateErr != nil {
+		if updateErr := queries.SetProviderPaymentIntentStatus(ctx, purserdb.SetProviderPaymentIntentStatusParams{
+			Status:   "provider_open",
+			IntentID: providerIntentID,
+		}); updateErr != nil {
 			jm.logger.WithError(updateErr).WithField("intent_id", providerIntentID).Warn("mark intent provider_open")
 		}
 		return nil
@@ -2375,31 +2172,24 @@ func overageAmountParts(amount decimal.Decimal, currency string) (decimal.Decima
 }
 
 func (jm *JobManager) nextProviderPaymentAttempt(ctx context.Context, provider, invoiceID string) (int, error) {
-	var attemptNumber int
-	var status string
-	err := jm.db.QueryRowContext(ctx, `
-		SELECT bpa.attempt_number, bpa.status
-		FROM purser.billing_payment_attempts bpa
-		JOIN purser.billing_payments bp ON bp.id = bpa.payment_id
-		WHERE bpa.provider = $1
-		  AND bp.invoice_id = $2
-		ORDER BY bpa.attempt_number DESC
-		LIMIT 1
-	`, provider, invoiceID).Scan(&attemptNumber, &status)
+	latest, err := purserdb.New(jm.db).GetLatestProviderPaymentAttempt(ctx, purserdb.GetLatestProviderPaymentAttemptParams{
+		Provider:  provider,
+		InvoiceID: invoiceID,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return 1, nil
 	}
 	if err != nil {
 		return 0, fmt.Errorf("lookup latest %s payment attempt: %w", provider, err)
 	}
-	if status != "provider_call_failed" {
+	if latest.Status != "provider_call_failed" {
 		return 0, nil
 	}
 	// A provider_call_failed result is ambiguous: the provider may have
 	// accepted the request even though the response never reached us. Reuse
 	// the same logical attempt and idempotency key. payment_provider_intents
 	// tracks the bounded number of actual API calls separately.
-	return attemptNumber, nil
+	return int(latest.AttemptNumber), nil
 }
 
 // chargeMollieOverage triggers an on-demand recurring-sequence charge against
@@ -2420,41 +2210,22 @@ func (jm *JobManager) chargeMollieOverage(ctx context.Context, tenantID, invoice
 	if !rounded.GreaterThan(decimal.Zero) {
 		return nil
 	}
+	queries := purserdb.New(jm.db)
 
-	var mollieCustomerID string
-	var mandateID sql.NullString
-	var mandateStatus sql.NullString
-	err := jm.db.QueryRowContext(ctx, `
-		SELECT mc.mollie_customer_id,
-			(SELECT mm.mollie_mandate_id
-			 FROM purser.mollie_mandates mm
-			 WHERE mm.tenant_id = $1 AND mm.status = 'valid'
-			 ORDER BY mm.created_at DESC
-			 LIMIT 1),
-			(SELECT mm.status
-			 FROM purser.mollie_mandates mm
-			 WHERE mm.tenant_id = $1
-			 ORDER BY mm.created_at DESC
-			 LIMIT 1)
-		FROM purser.mollie_customers mc
-		JOIN purser.tenant_subscriptions ts ON ts.tenant_id = mc.tenant_id
-		WHERE mc.tenant_id = $1
-		  AND ts.status = 'active'
-		  AND ts.mollie_subscription_id IS NOT NULL
-	`, tenantID).Scan(&mollieCustomerID, &mandateID, &mandateStatus)
+	mollieDetails, err := queries.GetActiveMollieCollectionDetails(ctx, tenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("lookup mollie customer/mandate: %w", err)
 	}
-	if !mandateID.Valid || mandateID.String == "" {
+	if mollieDetails.MollieMandateID == "" {
 		// Mandate exists in some non-valid state; do not retry blindly.
-		if mandateStatus.Valid && mandateStatus.String != "" && mandateStatus.String != "valid" {
+		if mollieDetails.MandateStatus != "" && mollieDetails.MandateStatus != "valid" {
 			jm.logger.WithFields(logging.Fields{
 				"tenant_id":      tenantID,
 				"invoice_id":     invoiceID,
-				"mandate_status": mandateStatus.String,
+				"mandate_status": mollieDetails.MandateStatus,
 			}).Warn("Skipping Mollie overage: mandate not valid")
 		}
 		return nil
@@ -2474,63 +2245,65 @@ func (jm *JobManager) chargeMollieOverage(ctx context.Context, tenantID, invoice
 	paymentID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(idemKey)).String()
 	intentID := "mollie-overage-intent:" + paymentID
 
-	var existingTxID, existingStatus string
-	if insertErr := jm.db.QueryRowContext(ctx, `
-		INSERT INTO purser.billing_payments (id, invoice_id, method, amount, currency, tx_id, status, created_at, updated_at)
-		VALUES ($1, $2, 'card', $3::numeric, $4, $5, 'pending', NOW(), NOW())
-		ON CONFLICT (id) DO UPDATE SET updated_at = purser.billing_payments.updated_at
-		RETURNING COALESCE(tx_id, ''), status
-	`, paymentID, invoiceID, amountStr, currency, intentID).Scan(&existingTxID, &existingStatus); insertErr != nil {
+	existingPayment, insertErr := queries.UpsertPendingProviderBillingPayment(ctx, purserdb.UpsertPendingProviderBillingPaymentParams{
+		PaymentID: paymentID,
+		InvoiceID: invoiceID,
+		Amount:    amountStr,
+		Currency:  currency,
+		TxID:      sql.NullString{String: intentID, Valid: true},
+	})
+	if insertErr != nil {
 		return fmt.Errorf("insert pending billing_payment: %w", insertErr)
 	}
-	if existingTxID != "" && existingTxID != intentID {
+	if existingPayment.TxID != "" && existingPayment.TxID != intentID {
 		jm.logger.WithFields(logging.Fields{
 			"tenant_id":  tenantID,
 			"invoice_id": invoiceID,
 			"payment_id": paymentID,
-			"tx_id":      existingTxID,
-			"status":     existingStatus,
+			"tx_id":      existingPayment.TxID,
+			"status":     existingPayment.Status,
 		}).Debug("Mollie overage payment already has provider id; skipping duplicate collection")
 		return nil
 	}
 
-	var providerIntentID string
-	var providerCallCount int
-	if intentErr := jm.db.QueryRowContext(ctx, `
-		INSERT INTO purser.payment_provider_intents (
-			tenant_id, provider, purpose, local_reference_type, local_reference_id,
-			provider_customer_id, status, currency, amount_cents, idempotency_key, attempt_count
-		) VALUES ($1, 'mollie', 'mollie_overage_charge', 'invoice', $2::uuid,
-		          $3, 'pending', $4, $5, $6, 1)
-		ON CONFLICT (provider, idempotency_key) DO UPDATE SET
-			attempt_count = purser.payment_provider_intents.attempt_count + 1,
-			updated_at = NOW()
-		RETURNING id, attempt_count
-	`, tenantID, invoiceID, mollieCustomerID, currency, amountCents, idemKey).Scan(&providerIntentID, &providerCallCount); intentErr != nil {
+	providerIntent, intentErr := queries.UpsertProviderPaymentIntent(ctx, purserdb.UpsertProviderPaymentIntentParams{
+		TenantID:           tenantID,
+		Provider:           "mollie",
+		Purpose:            "mollie_overage_charge",
+		InvoiceID:          invoiceID,
+		ProviderCustomerID: sql.NullString{String: mollieDetails.MollieCustomerID, Valid: true},
+		Currency:           currency,
+		AmountCents:        amountCents,
+		IdempotencyKey:     idemKey,
+	})
+	if intentErr != nil {
 		return fmt.Errorf("insert Mollie payment_provider_intents: %w", intentErr)
 	}
-	if _, linkErr := jm.db.ExecContext(ctx, `
-		UPDATE purser.billing_payments SET intent_id = $1, updated_at = NOW() WHERE id = $2
-	`, providerIntentID, paymentID); linkErr != nil {
+	providerIntentID := providerIntent.ID
+	providerCallCount := int(providerIntent.AttemptCount)
+	if linkErr := queries.LinkBillingPaymentIntent(ctx, purserdb.LinkBillingPaymentIntentParams{
+		IntentID:  providerIntentID,
+		PaymentID: paymentID,
+	}); linkErr != nil {
 		jm.logger.WithError(linkErr).WithField("payment_id", paymentID).Warn("link Mollie billing_payment to intent")
 	}
 
 	// Per-attempt audit row. The unique constraint on
 	// (provider, idempotency_key) collapses retries to the same logical
 	// charge attempt; status advances on provider response.
-	if _, attemptErr := jm.db.ExecContext(ctx, `
-		INSERT INTO purser.billing_payment_attempts (
-			payment_id, intent_id, attempt_number, idempotency_key, provider, status
-		) VALUES ($1, $2, $3, $4, 'mollie', 'pending')
-		ON CONFLICT (payment_id, attempt_number) DO NOTHING
-	`, paymentID, providerIntentID, attemptNumber, idemKey); attemptErr != nil {
+	if attemptErr := queries.InsertProviderBillingPaymentAttempt(ctx, purserdb.InsertProviderBillingPaymentAttemptParams{
+		PaymentID:      paymentID,
+		IntentID:       providerIntentID,
+		AttemptNumber:  int32(attemptNumber),
+		IdempotencyKey: idemKey,
+		Provider:       "mollie",
+	}); attemptErr != nil {
 		return fmt.Errorf("insert billing_payment_attempt: %w", attemptErr)
 	}
-	if _, attemptErr := jm.db.ExecContext(ctx, `
-		UPDATE purser.billing_payment_attempts
-		SET status = 'pending', next_retry_at = NULL, updated_at = NOW()
-		WHERE payment_id = $1 AND attempt_number = $2 AND status = 'provider_call_failed'
-	`, paymentID, attemptNumber); attemptErr != nil {
+	if attemptErr := queries.PrepareProviderBillingPaymentAttemptRetry(ctx, purserdb.PrepareProviderBillingPaymentAttemptRetryParams{
+		PaymentID:     paymentID,
+		AttemptNumber: int32(attemptNumber),
+	}); attemptErr != nil {
 		return fmt.Errorf("prepare billing_payment_attempt retry: %w", attemptErr)
 	}
 
@@ -2540,8 +2313,8 @@ func (jm *JobManager) chargeMollieOverage(ctx context.Context, tenantID, invoice
 	}
 
 	payment, err := jm.billing.mollieClient.ChargeOnMandate(ctx, billingmollie.OnDemandChargeParams{
-		CustomerID:     mollieCustomerID,
-		MandateID:      mandateID.String,
+		CustomerID:     mollieDetails.MollieCustomerID,
+		MandateID:      mollieDetails.MollieMandateID,
 		TenantID:       tenantID,
 		InvoiceID:      invoiceID,
 		PaymentID:      paymentID,
@@ -2553,41 +2326,32 @@ func (jm *JobManager) chargeMollieOverage(ctx context.Context, tenantID, invoice
 	if err != nil {
 		mandateRevoked := isMollieMandateRevokedError(err)
 		attemptStatus := "provider_call_failed"
-		var nextRetry any = time.Now().Add(1 * time.Hour)
+		nextRetry := sql.NullTime{Time: time.Now().Add(1 * time.Hour), Valid: true}
 		if mandateRevoked {
 			attemptStatus = "expired"
-			nextRetry = nil
+			nextRetry = sql.NullTime{}
 		} else if providerCallCount >= maxProviderPaymentAttempts {
-			nextRetry = nil
+			nextRetry = sql.NullTime{}
 		}
-		if _, attemptErr := jm.db.ExecContext(ctx, `
-			UPDATE purser.billing_payment_attempts
-			SET status = $1,
-			    failure_code = $2,
-			    failure_message = $3,
-			    next_retry_at = $4,
-			    updated_at = NOW()
-				WHERE payment_id = $5 AND attempt_number = $6
-		`, attemptStatus, mollieFailureCode(err), err.Error(), nextRetry, paymentID, attemptNumber); attemptErr != nil {
+		if attemptErr := queries.SetProviderBillingPaymentAttemptFailure(ctx, purserdb.SetProviderBillingPaymentAttemptFailureParams{
+			Status:         attemptStatus,
+			FailureCode:    sql.NullString{String: mollieFailureCode(err), Valid: true},
+			FailureMessage: sql.NullString{String: err.Error(), Valid: true},
+			NextRetryAt:    nextRetry,
+			PaymentID:      paymentID,
+			AttemptNumber:  int32(attemptNumber),
+		}); attemptErr != nil {
 			jm.logger.WithError(attemptErr).WithField("payment_id", paymentID).Warn("update billing_payment_attempt on failure")
 		}
 		if mandateRevoked || providerCallCount >= maxProviderPaymentAttempts {
-			if _, markErr := jm.db.ExecContext(ctx, `
-				UPDATE purser.billing_payments
-				SET status = 'failed', updated_at = NOW()
-				WHERE id = $1 AND status = 'pending'
-			`, paymentID); markErr != nil {
+			if markErr := queries.MarkPendingBillingPaymentFailed(ctx, paymentID); markErr != nil {
 				jm.logger.WithError(markErr).WithField("payment_id", paymentID).Warn("mark Mollie overage payment failed")
 			}
 		}
 		if mandateRevoked {
 			// Mark all valid mandates for this tenant as revoked so the
 			// next pass picks up the customer-action gate.
-			if _, mandateErr := jm.db.ExecContext(ctx, `
-				UPDATE purser.mollie_mandates
-				SET status = 'revoked', updated_at = NOW()
-				WHERE tenant_id = $1 AND status = 'valid'
-			`, tenantID); mandateErr != nil {
+			if mandateErr := queries.RevokeValidMollieMandates(ctx, tenantID); mandateErr != nil {
 				jm.logger.WithError(mandateErr).WithField("tenant_id", tenantID).Warn("mark mollie mandate revoked")
 			}
 		}
@@ -2595,35 +2359,33 @@ func (jm *JobManager) chargeMollieOverage(ctx context.Context, tenantID, invoice
 		if mandateRevoked || providerCallCount >= maxProviderPaymentAttempts {
 			intentStatus = "terminal_failed"
 		}
-		if _, intentErr := jm.db.ExecContext(ctx, `
-			UPDATE purser.payment_provider_intents
-			SET status = $1, last_error = $2, updated_at = NOW()
-			WHERE id = $3
-		`, intentStatus, err.Error(), providerIntentID); intentErr != nil {
+		if intentErr := queries.SetProviderPaymentIntentFailure(ctx, purserdb.SetProviderPaymentIntentFailureParams{
+			Status:    intentStatus,
+			LastError: sql.NullString{String: err.Error(), Valid: true},
+			IntentID:  providerIntentID,
+		}); intentErr != nil {
 			jm.logger.WithError(intentErr).WithField("intent_id", providerIntentID).Warn("mark Mollie overage intent failed")
 		}
 		return fmt.Errorf("mollie on-demand charge: %w", err)
 	}
 
-	if _, updateErr := jm.db.ExecContext(ctx, `
-		UPDATE purser.billing_payments
-		SET tx_id = $1, updated_at = NOW()
-		WHERE id = $2 AND status = 'pending'
-	`, payment.ID, paymentID); updateErr != nil {
+	if updateErr := queries.AttachProviderPaymentIDToBillingPayment(ctx, purserdb.AttachProviderPaymentIDToBillingPaymentParams{
+		ProviderPaymentID: sql.NullString{String: payment.ID, Valid: true},
+		PaymentID:         paymentID,
+	}); updateErr != nil {
 		return fmt.Errorf("attach Mollie payment id: %w", updateErr)
 	}
-	if _, intentUpdateErr := jm.db.ExecContext(ctx, `
-		UPDATE purser.payment_provider_intents
-		SET provider_payment_id = $1, status = 'provider_open', updated_at = NOW()
-		WHERE id = $2
-	`, payment.ID, providerIntentID); intentUpdateErr != nil {
+	if intentUpdateErr := queries.AttachOpenProviderPaymentIDToIntent(ctx, purserdb.AttachOpenProviderPaymentIDToIntentParams{
+		ProviderPaymentID: sql.NullString{String: payment.ID, Valid: true},
+		IntentID:          providerIntentID,
+	}); intentUpdateErr != nil {
 		jm.logger.WithError(intentUpdateErr).WithField("intent_id", providerIntentID).Warn("link Mollie provider payment id on intent")
 	}
-	if _, attemptUpdateErr := jm.db.ExecContext(ctx, `
-		UPDATE purser.billing_payment_attempts
-		SET provider_payment_id = $1, updated_at = NOW()
-		WHERE payment_id = $2 AND attempt_number = $3
-	`, payment.ID, paymentID, attemptNumber); attemptUpdateErr != nil {
+	if attemptUpdateErr := queries.AttachProviderPaymentIDToAttempt(ctx, purserdb.AttachProviderPaymentIDToAttemptParams{
+		ProviderPaymentID: sql.NullString{String: payment.ID, Valid: true},
+		PaymentID:         paymentID,
+		AttemptNumber:     int32(attemptNumber),
+	}); attemptUpdateErr != nil {
 		jm.logger.WithError(attemptUpdateErr).WithField("payment_id", paymentID).Warn("link Mollie provider payment id on attempt")
 	}
 
@@ -2648,23 +2410,8 @@ func (jm *JobManager) chargeMollieOverage(ctx context.Context, tenantID, invoice
 // fails after the tier flips, the tenant temporarily has extra cluster access
 // while already on the cheaper tier — preferable to losing paid entitlements.
 func (jm *JobManager) applyPendingDowngrade(ctx context.Context, tenantID string) {
-	var (
-		pendingTierID    sql.NullString
-		pendingDue       sql.NullTime
-		currentTierID    string
-		pendingTierLevel sql.NullInt32
-	)
-	var pendingTierName sql.NullString
-	err := jm.db.QueryRowContext(ctx, `
-		SELECT ts.tier_id,
-		       ts.pending_tier_id,
-		       ts.pending_effective_at,
-		       bt.tier_level,
-		       bt.tier_name
-		FROM purser.tenant_subscriptions ts
-		LEFT JOIN purser.billing_tiers bt ON bt.id = ts.pending_tier_id
-		WHERE ts.tenant_id = $1
-	`, tenantID).Scan(&currentTierID, &pendingTierID, &pendingDue, &pendingTierLevel, &pendingTierName)
+	queries := purserdb.New(jm.db)
+	pending, err := queries.GetPendingDowngrade(ctx, tenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return
 	}
@@ -2672,16 +2419,16 @@ func (jm *JobManager) applyPendingDowngrade(ctx context.Context, tenantID string
 		jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("load pending tier for downgrade applier")
 		return
 	}
-	if !pendingTierID.Valid || pendingTierID.String == "" {
+	if pending.PendingTierID == "" {
 		return
 	}
-	if !pendingDue.Valid || pendingDue.Time.After(time.Now()) {
+	if !pending.PendingEffectiveAt.Valid || pending.PendingEffectiveAt.Time.After(time.Now()) {
 		return
 	}
-	if !pendingTierLevel.Valid {
+	if !pending.TierLevel.Valid {
 		jm.logger.WithFields(logging.Fields{
 			"tenant_id":       tenantID,
-			"pending_tier_id": pendingTierID.String,
+			"pending_tier_id": pending.PendingTierID,
 		}).Warn("pending tier id references missing billing_tiers row")
 		return
 	}
@@ -2690,27 +2437,20 @@ func (jm *JobManager) applyPendingDowngrade(ctx context.Context, tenantID string
 		return
 	}
 
-	stagedTarget := pendingTierID.String
-	targetLevel := pendingTierLevel.Int32
-	targetName := pendingTierName.String
+	stagedTarget := pending.PendingTierID
+	targetLevel := pending.TierLevel.Int32
+	targetName := pending.TierName.String
 
 	// Step 1: flip tier_id in its own short transaction, but keep pending_*
 	// set as the "reconcile-not-yet-applied" marker. Conditional on the
 	// staged target so a racing ChangeBillingTier that re-pointed the
 	// pending is not clobbered.
-	result, err := jm.db.ExecContext(ctx, `
-		UPDATE purser.tenant_subscriptions
-		SET tier_id = $1,
-		    updated_at = NOW()
-		WHERE tenant_id = $2 AND pending_tier_id = $1
-	`, stagedTarget, tenantID)
+	rows, err := queries.ApplyPendingDowngradeTier(ctx, purserdb.ApplyPendingDowngradeTierParams{
+		PendingTierID: stagedTarget,
+		TenantID:      tenantID,
+	})
 	if err != nil {
 		jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("flip tier_id for pending downgrade")
-		return
-	}
-	rows, rowsErr := result.RowsAffected()
-	if rowsErr != nil {
-		jm.logger.WithError(rowsErr).WithField("tenant_id", tenantID).Warn("rows affected for pending downgrade flip")
 		return
 	}
 	if rows == 0 {
@@ -2736,21 +2476,17 @@ func (jm *JobManager) applyPendingDowngrade(ctx context.Context, tenantID string
 
 	// Step 3: clear the pending marker. Conditional on the tier already
 	// matching the staged target so a concurrent re-stage is not erased.
-	if _, err := jm.db.ExecContext(ctx, `
-		UPDATE purser.tenant_subscriptions
-		SET pending_tier_id = NULL,
-		    pending_effective_at = NULL,
-		    pending_reason = NULL,
-		    updated_at = NOW()
-		WHERE tenant_id = $1 AND tier_id = $2 AND pending_tier_id = $2
-	`, tenantID, stagedTarget); err != nil {
+	if err := queries.ClearAppliedPendingDowngrade(ctx, purserdb.ClearAppliedPendingDowngradeParams{
+		TenantID: tenantID,
+		TierID:   stagedTarget,
+	}); err != nil {
 		jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("clear pending downgrade marker; will retry next tick")
 		return
 	}
 
 	jm.logger.WithFields(logging.Fields{
 		"tenant_id":  tenantID,
-		"from_tier":  currentTierID,
+		"from_tier":  pending.TierID,
 		"to_tier":    stagedTarget,
 		"tier_level": targetLevel,
 	}).Info("Pending tier downgrade applied")
@@ -2794,108 +2530,52 @@ func (jm *JobManager) runPaymentRetry(ctx context.Context) {
 }
 
 func (jm *JobManager) retryProviderPaymentAttempts(ctx context.Context) {
-	rows, err := jm.db.QueryContext(ctx, `
-		SELECT bpa.provider, bi.tenant_id::text, bp.invoice_id::text, bp.amount::text, bp.currency
-		FROM purser.billing_payment_attempts bpa
-		JOIN purser.billing_payments bp ON bp.id = bpa.payment_id
-		JOIN purser.billing_invoices bi ON bi.id = bp.invoice_id
-		WHERE bpa.status = 'provider_call_failed'
-		  AND bpa.next_retry_at IS NOT NULL
-		  AND bpa.next_retry_at <= NOW()
-		  AND bpa.attempt_number < $1
-		  AND bi.status IN ('pending', 'overdue')
-		  AND NOT EXISTS (
-		      SELECT 1
-		      FROM purser.billing_payment_attempts newer
-		      JOIN purser.billing_payments newer_bp ON newer_bp.id = newer.payment_id
-		      WHERE newer.provider = bpa.provider
-		        AND newer_bp.invoice_id = bp.invoice_id
-		        AND newer.attempt_number > bpa.attempt_number
-		  )
-		ORDER BY bpa.next_retry_at ASC
-		LIMIT 50
-	`, maxProviderPaymentAttempts)
+	attempts, err := purserdb.New(jm.db).ListProviderPaymentAttemptsForRetry(ctx, maxProviderPaymentAttempts)
 	if err != nil {
 		jm.logger.WithError(err).Error("Failed to fetch provider payment attempts for retry")
 		return
 	}
-	defer func() { _ = rows.Close() }()
-
-	for rows.Next() {
-		var provider, tenantID, invoiceID, amountText, currency string
-		if err := rows.Scan(&provider, &tenantID, &invoiceID, &amountText, &currency); err != nil {
-			jm.logger.WithError(err).Warn("Failed to scan provider payment attempt")
-			continue
-		}
-		amount, parseErr := decimal.NewFromString(amountText)
+	for _, attempt := range attempts {
+		amount, parseErr := decimal.NewFromString(attempt.Amount)
 		if parseErr != nil {
-			jm.logger.WithError(parseErr).WithField("invoice_id", invoiceID).Warn("Failed to parse provider retry amount")
+			jm.logger.WithError(parseErr).WithField("invoice_id", attempt.InvoiceID).Warn("Failed to parse provider retry amount")
 			continue
 		}
 		var retryErr error
-		switch provider {
+		switch attempt.Provider {
 		case "stripe":
-			retryErr = jm.chargeStripeOverage(ctx, tenantID, invoiceID, amount, currency)
+			retryErr = jm.chargeStripeOverage(ctx, attempt.TenantID, attempt.InvoiceID, amount, attempt.Currency)
 		case "mollie":
-			retryErr = jm.chargeMollieOverage(ctx, tenantID, invoiceID, amount, currency)
+			retryErr = jm.chargeMollieOverage(ctx, attempt.TenantID, attempt.InvoiceID, amount, attempt.Currency)
 		default:
-			jm.logger.WithField("provider", provider).Warn("Unknown provider payment attempt provider")
+			jm.logger.WithField("provider", attempt.Provider).Warn("Unknown provider payment attempt provider")
 			continue
 		}
 		if retryErr != nil {
 			jm.logger.WithError(retryErr).WithFields(logging.Fields{
-				"provider":   provider,
-				"tenant_id":  tenantID,
-				"invoice_id": invoiceID,
+				"provider":   attempt.Provider,
+				"tenant_id":  attempt.TenantID,
+				"invoice_id": attempt.InvoiceID,
 			}).Warn("Provider payment attempt retry failed")
 		}
-	}
-	if err := rows.Err(); err != nil {
-		jm.logger.WithError(err).Error("Provider payment attempt retry rows failed")
 	}
 }
 
 // sendPaymentReminders marks invoices overdue and stages one durable reminder
 // at 1, 7, 14, and 30 days past due. The outbox worker owns SMTP retries.
 func (jm *JobManager) sendPaymentReminders(ctx context.Context) {
-	if _, err := jm.db.ExecContext(ctx, `
-		UPDATE purser.billing_invoices
-		SET status = 'overdue', updated_at = NOW()
-		WHERE status = 'pending' AND due_date < NOW()
-	`); err != nil {
+	queries := purserdb.New(jm.db)
+	if err := queries.MarkPendingInvoicesOverdue(ctx); err != nil {
 		jm.logger.WithError(err).Error("Failed to mark invoices overdue")
 		return
 	}
 
-	result, err := jm.db.ExecContext(ctx, `
-		INSERT INTO purser.invoice_email_outbox
-			(invoice_id, tenant_id, recipient, notification_type, reminder_stage)
-		SELECT bi.id, bi.tenant_id, BTRIM(ts.billing_email), 'overdue_reminder', stage.reminder_stage
-		FROM purser.billing_invoices bi
-		JOIN purser.tenant_subscriptions ts ON ts.tenant_id = bi.tenant_id
-		CROSS JOIN LATERAL (
-			SELECT MAX(candidate) AS reminder_stage
-			FROM UNNEST(ARRAY[1, 7, 14, 30]) AS candidate
-			WHERE candidate <= FLOOR(EXTRACT(EPOCH FROM (NOW() - bi.due_date)) / 86400)
-		) stage
-		WHERE bi.status = 'overdue'
-		  AND ts.status = 'active'
-		  AND BTRIM(COALESCE(ts.billing_email, '')) <> ''
-		  AND stage.reminder_stage IS NOT NULL
-		  AND bi.amount > COALESCE((
-		      SELECT SUM(bp.amount - (COALESCE(bp.reversed_amount_cents, 0)::numeric / 100))
-		      FROM purser.billing_payments bp
-		      WHERE bp.invoice_id = bi.id
-		        AND bp.status = 'confirmed'
-		        AND bp.currency = bi.currency
-		  ), 0)
-		ON CONFLICT (invoice_id, notification_type, reminder_stage) DO NOTHING
-	`)
+	count, err := queries.StageOverdueInvoiceReminders(ctx)
 	if err != nil {
 		jm.logger.WithError(err).Error("Failed to stage overdue invoice reminders")
 		return
 	}
-	if count, countErr := result.RowsAffected(); countErr == nil && count > 0 {
+	if count > 0 {
 		jm.logger.WithField("reminder_count", count).Info("Staged overdue invoice reminders")
 	}
 }
@@ -2925,12 +2605,7 @@ func (jm *JobManager) runWalletCleanup(ctx context.Context) {
 
 // cleanupExpiredWallets marks expired crypto wallets as inactive
 func (jm *JobManager) cleanupExpiredWallets(ctx context.Context) {
-	result, err := jm.db.ExecContext(ctx, `
-		UPDATE purser.crypto_wallets
-		SET status = 'expired', updated_at = NOW()
-		WHERE status IN ('pending', 'confirming')
-		  AND expires_at < NOW()
-	`)
+	rowsAffected, err := purserdb.New(jm.db).ExpireStaleCryptoWallets(ctx)
 
 	if err != nil {
 		jm.logger.WithFields(logging.Fields{
@@ -2939,7 +2614,6 @@ func (jm *JobManager) cleanupExpiredWallets(ctx context.Context) {
 		return
 	}
 
-	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected > 0 {
 		jm.logger.WithFields(logging.Fields{
 			"expired_wallets": rowsAffected,
@@ -3006,6 +2680,10 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 			"dimensions":    dimensions,
 			"source_region": summary.SourceRegion,
 		}
+		usageDetailsJSON, marshalErr := json.Marshal(usageDetails)
+		if marshalErr != nil {
+			return nil, fmt.Errorf("marshal usage details for %s: %w", usageType, marshalErr)
+		}
 
 		// Per-record validation: rated meters must come in as 5-minute
 		// delta rows on aligned period boundaries. Mismatches go to
@@ -3019,14 +2697,20 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 			rejection = "missing_cluster_id"
 		}
 		if rejection != "" {
-			if _, qErr := jm.db.ExecContext(ctx, `
-				INSERT INTO purser.usage_records_quarantine
-					(tenant_id, cluster_id, usage_type, usage_value, usage_details,
-					 period_start, period_end, granularity, value_kind,
-					 rejected_reason, source, raw_payload)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-			`, summary.TenantID, summary.ClusterID, usageType, usageValue, usageDetails,
-				periodStart, periodEnd, granularity, valueKind, rejection, source, usageDetails); qErr != nil {
+			if qErr := purserdb.New(jm.db).InsertUsageRecordQuarantine(ctx, purserdb.InsertUsageRecordQuarantineParams{
+				TenantID:       summary.TenantID,
+				ClusterID:      summary.ClusterID,
+				UsageType:      usageType,
+				UsageValue:     usageValue,
+				UsageDetails:   json.RawMessage(usageDetailsJSON),
+				PeriodStart:    sql.NullTime{Time: periodStart, Valid: true},
+				PeriodEnd:      sql.NullTime{Time: periodEnd, Valid: true},
+				Granularity:    granularity,
+				ValueKind:      sql.NullString{String: valueKind, Valid: true},
+				RejectedReason: rejection,
+				Source:         source,
+				RawPayload:     json.RawMessage(usageDetailsJSON),
+			}); qErr != nil {
 				jm.logger.WithError(qErr).WithFields(logging.Fields{
 					"tenant_id":  summary.TenantID,
 					"usage_type": usageType,
@@ -3038,22 +2722,22 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 			continue
 		}
 
-		_, err = jm.db.ExecContext(ctx, `
-			INSERT INTO purser.usage_records
-				(tenant_id, cluster_id, usage_type, unit, dimensions, dimension_key,
-				 source_id, report_id, usage_value, usage_details,
-				 period_start, period_end, granularity, value_kind, created_at)
-			VALUES ($1, $2, $3, $4, COALESCE($5::jsonb, '{}'::jsonb), $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
-			ON CONFLICT (tenant_id, cluster_id, source_id, usage_type, dimension_key, period_start, period_end) DO UPDATE SET
-				usage_value = EXCLUDED.usage_value,
-				report_id = EXCLUDED.report_id,
-				usage_details = EXCLUDED.usage_details,
-				granularity = EXCLUDED.granularity,
-				value_kind = EXCLUDED.value_kind,
-				updated_at = NOW()
-		`, summary.TenantID, summary.ClusterID, usageType, meter.Unit, dimensions, dimensionKey,
-			summary.SourceID, summary.ReportID, usageValue, usageDetails,
-			periodStart, periodEnd, granularity, valueKind)
+		err = purserdb.New(jm.db).UpsertCanonicalUsageRecord(ctx, purserdb.UpsertCanonicalUsageRecordParams{
+			TenantID:     summary.TenantID,
+			ClusterID:    summary.ClusterID,
+			UsageType:    usageType,
+			Unit:         meter.Unit,
+			Dimensions:   json.RawMessage(dimensionJSON),
+			DimensionKey: dimensionKey,
+			SourceID:     summary.SourceID,
+			ReportID:     summary.ReportID,
+			UsageValue:   usageValue,
+			UsageDetails: json.RawMessage(usageDetailsJSON),
+			PeriodStart:  sql.NullTime{Time: periodStart, Valid: true},
+			PeriodEnd:    sql.NullTime{Time: periodEnd, Valid: true},
+			Granularity:  granularity,
+			ValueKind:    valueKind,
+		})
 
 		if err != nil {
 			return nil, fmt.Errorf("failed to upsert %s: %w", usageType, err)
@@ -3109,34 +2793,27 @@ func (jm *JobManager) persistProviderUsage(ctx context.Context, summary models.U
 			"provider_cluster_id": rec.ProviderClusterID,
 			"dimensions":          dimensions,
 		}
-		_, err = jm.db.ExecContext(ctx, `
-			INSERT INTO purser.provider_usage_records (
-				usage_tenant_id, work_cluster_id,
-				provider_tenant_id, provider_cluster_id,
-				usage_type, unit, usage_value, dimensions, dimension_key,
-				source_id, report_id, period_start, period_end,
-				granularity, value_kind, source, usage_details
-			) VALUES (
-				$1, $2, $3, $4, $5, $6, $7, COALESCE($8::jsonb, '{}'::jsonb), $9,
-				$10, $11, $12, $13, 'minute_5', 'delta', $14, $15
-			)
-			ON CONFLICT (
-				usage_tenant_id, work_cluster_id,
-				provider_tenant_id, provider_cluster_id,
-				source_id, usage_type, dimension_key,
-				period_start, period_end
-			) DO UPDATE SET
-				usage_value = EXCLUDED.usage_value,
-				report_id = EXCLUDED.report_id,
-				granularity = EXCLUDED.granularity,
-				value_kind = EXCLUDED.value_kind,
-				source = EXCLUDED.source,
-				usage_details = EXCLUDED.usage_details,
-				updated_at = NOW()
-		`, summary.TenantID, summary.ClusterID,
-			rec.ProviderTenantID, rec.ProviderClusterID,
-			rec.Meter.Meter, rec.Meter.Unit, rec.Meter.Quantity, dimensions, dimensionKey,
-			summary.SourceID, summary.ReportID, periodStart, periodEnd, source, details)
+		detailsJSON, marshalErr := json.Marshal(details)
+		if marshalErr != nil {
+			return fmt.Errorf("marshal provider usage details: %w", marshalErr)
+		}
+		err = purserdb.New(jm.db).UpsertProviderUsageRecord(ctx, purserdb.UpsertProviderUsageRecordParams{
+			UsageTenantID:     summary.TenantID,
+			WorkClusterID:     summary.ClusterID,
+			ProviderTenantID:  rec.ProviderTenantID,
+			ProviderClusterID: rec.ProviderClusterID,
+			UsageType:         rec.Meter.Meter,
+			Unit:              rec.Meter.Unit,
+			UsageValue:        rec.Meter.Quantity,
+			Dimensions:        json.RawMessage(dimensionJSON),
+			DimensionKey:      dimensionKey,
+			SourceID:          summary.SourceID,
+			ReportID:          summary.ReportID,
+			PeriodStart:       periodStart,
+			PeriodEnd:         periodEnd,
+			Source:            source,
+			UsageDetails:      json.RawMessage(detailsJSON),
+		})
 		if err != nil {
 			return fmt.Errorf("upsert provider usage %s/%s: %w", rec.ProviderTenantID, rec.Meter.Meter, err)
 		}
@@ -3169,9 +2846,11 @@ func (jm *JobManager) persistUsageAdjustments(ctx context.Context, summary model
 			adj.Details = models.JSONB{}
 		}
 		if adj.Unit == "" {
-			if err := jm.db.QueryRowContext(ctx, `SELECT unit FROM purser.meter_definitions WHERE meter = $1`, adj.UsageType).Scan(&adj.Unit); err != nil {
-				return nil, fmt.Errorf("resolve adjustment unit for %s: %w", adj.UsageType, err)
+			unit, unitErr := purserdb.New(jm.db).GetMeterUnitForAdjustment(ctx, adj.UsageType)
+			if unitErr != nil {
+				return nil, fmt.Errorf("resolve adjustment unit for %s: %w", adj.UsageType, unitErr)
 			}
+			adj.Unit = unit
 		}
 		adj.Dimensions = normalizedUsageDimensions(adj.Dimensions)
 		dimensionJSON, err := json.Marshal(adj.Dimensions)
@@ -3181,32 +2860,25 @@ func (jm *JobManager) persistUsageAdjustments(ctx context.Context, summary model
 		dimensionHash := sha256.Sum256(dimensionJSON)
 		dimensionKey := fmt.Sprintf("%x", dimensionHash[:])
 		adj.Details["source"] = source
-		_, err = jm.db.ExecContext(ctx, `
-			INSERT INTO purser.usage_adjustments (
-				tenant_id, cluster_id, usage_type, unit, dimensions, dimension_key, delta_value,
-				period_start, period_end, value_kind, status,
-				source_system, source_id, reason, details
-			) VALUES (
-				$1, $2, $3, $4, COALESCE($5::jsonb, '{}'::jsonb), $6, $7,
-				$8, $9, 'correction_delta', 'applied',
-				$10, $11, $12, $13
-			)
-			ON CONFLICT (source_system, source_id) DO UPDATE SET
-				tenant_id = EXCLUDED.tenant_id,
-				cluster_id = EXCLUDED.cluster_id,
-				usage_type = EXCLUDED.usage_type,
-				unit = EXCLUDED.unit,
-				dimensions = EXCLUDED.dimensions,
-				dimension_key = EXCLUDED.dimension_key,
-				delta_value = EXCLUDED.delta_value,
-				period_start = EXCLUDED.period_start,
-				period_end = EXCLUDED.period_end,
-				status = EXCLUDED.status,
-				reason = EXCLUDED.reason,
-				details = EXCLUDED.details,
-				updated_at = NOW()
-		`, summary.TenantID, adj.ClusterID, adj.UsageType, adj.Unit, adj.Dimensions, dimensionKey, adj.DeltaValue,
-			adj.PeriodStart, adj.PeriodEnd, adj.SourceSystem, adj.SourceID, adj.Reason, adj.Details)
+		detailsJSON, marshalErr := json.Marshal(adj.Details)
+		if marshalErr != nil {
+			return nil, fmt.Errorf("marshal adjustment details: %w", marshalErr)
+		}
+		err = purserdb.New(jm.db).UpsertUsageAdjustment(ctx, purserdb.UpsertUsageAdjustmentParams{
+			TenantID:     summary.TenantID,
+			ClusterID:    adj.ClusterID,
+			UsageType:    adj.UsageType,
+			Unit:         adj.Unit,
+			Dimensions:   json.RawMessage(dimensionJSON),
+			DimensionKey: dimensionKey,
+			DeltaValue:   adj.DeltaValue,
+			PeriodStart:  adj.PeriodStart,
+			PeriodEnd:    adj.PeriodEnd,
+			SourceSystem: adj.SourceSystem,
+			SourceID:     adj.SourceID,
+			Reason:       sql.NullString{String: adj.Reason, Valid: adj.Reason != ""},
+			Details:      json.RawMessage(detailsJSON),
+		})
 		if err != nil {
 			return nil, fmt.Errorf("upsert usage adjustment %s: %w", adj.SourceID, err)
 		}
@@ -3288,13 +2960,11 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 	// manual_review is a hold, not a terminal state — let the draft refresh
 	// re-rate it once ops fixes the cluster pricing. Only truly finalized
 	// invoices block draft updates.
-	var finalizedCount int
-	if countErr := jm.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM purser.billing_invoices
-		WHERE tenant_id = $1
-		  AND period_start = $2
-		  AND status NOT IN ('draft', 'manual_review')
-	`, tenantID, periodStart).Scan(&finalizedCount); countErr != nil {
+	finalizedCount, countErr := purserdb.New(jm.db).CountFinalizedInvoicesForPeriod(ctx, purserdb.CountFinalizedInvoicesForPeriodParams{
+		TenantID:    tenantID,
+		PeriodStart: sql.NullTime{Time: periodStart, Valid: true},
+	})
+	if countErr != nil {
 		return fmt.Errorf("failed to check finalized invoices: %w", countErr)
 	}
 	if finalizedCount > 0 {
@@ -3323,15 +2993,11 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 	// included_subscription base line instead of duplicating the tier's base
 	// price. A query failure aborts the draft so we never emit a wrong base
 	// silently — the next Kafka redelivery retries.
-	var stripeSubID, mollieSubID sql.NullString
-	if scanErr := jm.db.QueryRowContext(ctx, `
-		SELECT stripe_subscription_id, mollie_subscription_id
-		FROM purser.tenant_subscriptions
-		WHERE tenant_id = $1
-	`, tenantID).Scan(&stripeSubID, &mollieSubID); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+	providerIDs, scanErr := purserdb.New(jm.db).GetSubscriptionProviderIDs(ctx, tenantID)
+	if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
 		return fmt.Errorf("read provider sub ids for draft: %w", scanErr)
 	}
-	baseProviderManaged := stripeSubID.Valid || mollieSubID.Valid
+	baseProviderManaged := providerIDs.StripeSubscriptionID.Valid || providerIDs.MollieSubscriptionID.Valid
 
 	// Rate the period via the engine; one source of truth for invoice math.
 	// Money stays as decimal.Decimal end-to-end and binds to NUMERIC columns
@@ -3392,6 +3058,7 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 	var netDec decimal.Decimal
 	hundred := decimal.NewFromInt(100)
 	err = withTx(ctx, jm.db, func(tx *sql.Tx) error {
+		queries := purserdb.New(tx)
 		grossCents := grossDec.Mul(hundred).Round(0).IntPart()
 		appliedCreditCents, txErr := jm.applyInvoicePrepaidCreditTx(ctx, tx, tenantID, periodStart, grossCents)
 		if txErr != nil {
@@ -3413,51 +3080,30 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 		grossMeteredAmt := unwaivedMeteredDec.Round(2).String()
 		creditAmt := prepaidCreditDec.Round(2).String()
 
-		txErr = tx.QueryRowContext(ctx, `
-				INSERT INTO purser.billing_invoices (
-					id, tenant_id, amount, currency, status, due_date,
-					base_amount, metered_amount, prepaid_credit_applied, usage_details,
-					period_start, period_end, gross_metered_amount,
-					created_at, updated_at
-				) VALUES (
-					gen_random_uuid(), $1, $2::numeric, $3, 'draft', $4,
-					$5::numeric, $6::numeric, $7::numeric, $8, $9, $10, $11::numeric, NOW(), NOW()
-				)
-				ON CONFLICT (tenant_id, period_start) WHERE period_start IS NOT NULL
-				DO UPDATE SET
-					amount = EXCLUDED.amount,
-					currency = EXCLUDED.currency,
-					status = 'draft',
-					due_date = EXCLUDED.due_date,
-					base_amount = EXCLUDED.base_amount,
-					metered_amount = EXCLUDED.metered_amount,
-					prepaid_credit_applied = EXCLUDED.prepaid_credit_applied,
-					usage_details = EXCLUDED.usage_details,
-					period_end = EXCLUDED.period_end,
-					gross_metered_amount = EXCLUDED.gross_metered_amount,
-					updated_at = NOW()
-				WHERE purser.billing_invoices.status IN ('draft', 'manual_review')
-				RETURNING id
-			`, tenantID, totalAmt, currency, dueDate, baseAmt, meteredAmt, creditAmt, database.JSONText(usageJSON), periodStart, periodEnd, grossMeteredAmt).Scan(&invoiceID)
+		invoiceID, txErr = queries.UpsertInvoiceDraft(ctx, purserdb.UpsertInvoiceDraftParams{
+			TenantID:             tenantID,
+			Amount:               totalAmt,
+			Currency:             currency,
+			DueDate:              dueDate,
+			BaseAmount:           baseAmt,
+			MeteredAmount:        meteredAmt,
+			PrepaidCreditApplied: creditAmt,
+			UsageDetails:         json.RawMessage(usageJSON),
+			PeriodStart:          sql.NullTime{Time: periodStart, Valid: true},
+			PeriodEnd:            sql.NullTime{Time: periodEnd, Valid: true},
+			GrossMeteredAmount:   grossMeteredAmt,
+		})
 		if txErr != nil {
 			return fmt.Errorf("upsert invoice draft: %w", txErr)
 		}
 		if txErr = persistInvoiceLineItems(ctx, tx, invoiceID, tenantID, ratingResult); txErr != nil {
 			return txErr
 		}
-		_, txErr = tx.ExecContext(ctx, `
-				UPDATE purser.tenant_subscriptions
-				SET billing_period_start = COALESCE(billing_period_start, $2),
-				    billing_period_end = COALESCE(billing_period_end, $3),
-				    next_billing_date = COALESCE(next_billing_date, $3),
-				    updated_at = CASE
-				        WHEN billing_period_start IS NULL OR billing_period_end IS NULL OR next_billing_date IS NULL
-				        THEN NOW()
-				        ELSE updated_at
-				    END
-				WHERE tenant_id = $1
-				  AND status = 'active'
-			`, tenantID, periodStart, periodEnd)
+		txErr = queries.BackfillSubscriptionPeriodFromDraft(ctx, purserdb.BackfillSubscriptionPeriodFromDraftParams{
+			PeriodStart: sql.NullTime{Time: periodStart, Valid: true},
+			PeriodEnd:   sql.NullTime{Time: periodEnd, Valid: true},
+			TenantID:    tenantID,
+		})
 		if txErr != nil {
 			return fmt.Errorf("backfill subscription period from draft: %w", txErr)
 		}

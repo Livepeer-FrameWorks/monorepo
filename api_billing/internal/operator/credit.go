@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/api_billing/internal/database/purserdb"
+
 	"github.com/google/uuid"
 )
 
@@ -45,99 +47,34 @@ func ComputeAndPersistCredits(ctx context.Context, tx *sql.Tx, invoiceID, status
 		return nil
 	}
 
-	// Pull every marketplace-attributed priced line on the invoice.
-	rows, err := tx.QueryContext(ctx, `
-		SELECT li.id, li.cluster_id, li.cluster_owner_tenant_id,
-		       li.operator_credit_cents, li.platform_fee_cents,
-		       li.currency,
-		       inv.period_start, inv.period_end
-		FROM purser.invoice_line_items li
-		JOIN purser.billing_invoices inv ON inv.id = li.invoice_id
-		WHERE li.invoice_id = $1
-		  AND li.cluster_kind = 'third_party_marketplace'
-		  AND li.cluster_owner_tenant_id IS NOT NULL
-		  AND li.amount != 0
-		  AND COALESCE(li.meter, '') NOT IN ('storage_gb_seconds_hot', 'storage_gb_seconds_cold')
-	`, invoiceID)
+	queries := purserdb.New(tx)
+	lines, err := queries.ListMarketplaceCreditLines(ctx, invoiceID)
 	if err != nil {
 		return fmt.Errorf("query marketplace lines: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-
-	type accrual struct {
-		LineItemID    uuid.UUID
-		ClusterID     string
-		OwnerTenantID uuid.UUID
-		AmountCents   int64
-		PlatformFee   int64
-		Currency      string
-		PeriodStart   time.Time
-		PeriodEnd     time.Time
-	}
-	var pending []accrual
-	for rows.Next() {
-		var (
-			lineItemID, ownerID string
-			clusterID, currency string
-			operatorCreditCents int64
-			platformFeeCents    int64
-			periodStart         time.Time
-			periodEnd           sql.NullTime
-		)
-		if err := rows.Scan(&lineItemID, &clusterID, &ownerID, &operatorCreditCents, &platformFeeCents, &currency, &periodStart, &periodEnd); err != nil {
-			return fmt.Errorf("scan marketplace line: %w", err)
-		}
-		liUUID, err := uuid.Parse(lineItemID)
+	for _, line := range lines {
+		ownerUUID, err := uuid.Parse(line.ClusterOwnerTenantID)
 		if err != nil {
-			return fmt.Errorf("parse line_item_id %q: %w", lineItemID, err)
+			return fmt.Errorf("parse cluster_owner_tenant_id %q: %w", line.ClusterOwnerTenantID, err)
 		}
-		ownerUUID, err := uuid.Parse(ownerID)
-		if err != nil {
-			return fmt.Errorf("parse cluster_owner_tenant_id %q: %w", ownerID, err)
-		}
-		pe := periodEnd.Time
-		if !periodEnd.Valid {
-			pe = periodStart
-		}
-		pending = append(pending, accrual{
-			LineItemID:    liUUID,
-			ClusterID:     clusterID,
-			OwnerTenantID: ownerUUID,
-			AmountCents:   operatorCreditCents + platformFeeCents,
-			PlatformFee:   platformFeeCents,
-			Currency:      currency,
-			PeriodStart:   periodStart,
-			PeriodEnd:     pe,
-		})
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate marketplace lines: %w", err)
-	}
-
-	for _, a := range pending {
-		payable := a.AmountCents - a.PlatformFee
-		ledgerStatus, err := initialLedgerStatus(ctx, tx, a.OwnerTenantID)
+		grossCents := line.OperatorCreditCents + line.PlatformFeeCents
+		payable := grossCents - line.PlatformFeeCents
+		ledgerStatus, err := initialLedgerStatus(ctx, tx, ownerUUID)
 		if err != nil {
 			return err
 		}
 		// ON CONFLICT skip silently: the partial unique index makes the
 		// accrual idempotent on (invoice_line_item_id). Re-running the
 		// finalization tx against the same line is a no-op.
-		_, err = tx.ExecContext(ctx, `
-			INSERT INTO purser.operator_credit_ledger (
-				source_type, invoice_line_item_id, entry_type,
-				cluster_owner_tenant_id, cluster_id,
-				invoice_id, period_start, period_end, currency,
-				gross_cents, platform_fee_cents, payable_cents, status
-			) VALUES (
-				'invoice_line', $1, 'accrual', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
-			)
-			ON CONFLICT (invoice_line_item_id) WHERE entry_type = 'accrual' AND source_type = 'invoice_line' DO NOTHING
-		`, a.LineItemID, a.OwnerTenantID, a.ClusterID, invoiceID,
-			a.PeriodStart, a.PeriodEnd, a.Currency,
-			a.AmountCents, a.PlatformFee, payable, ledgerStatus)
+		err = queries.InsertMarketplaceOperatorCredit(ctx, purserdb.InsertMarketplaceOperatorCreditParams{
+			InvoiceLineItemID: line.ID, ClusterOwnerTenantID: line.ClusterOwnerTenantID,
+			ClusterID: line.ClusterID, InvoiceID: invoiceID,
+			PeriodStart: line.PeriodStart.Time, PeriodEnd: line.PeriodEnd.Time, Currency: line.Currency,
+			GrossCents: grossCents, PlatformFeeCents: line.PlatformFeeCents,
+			PayableCents: payable, Status: ledgerStatus,
+		})
 		if err != nil {
-			return fmt.Errorf("insert accrual for line %s: %w", a.LineItemID, err)
+			return fmt.Errorf("insert accrual for line %s: %w", line.ID, err)
 		}
 	}
 	if err := persistProviderCredits(ctx, tx, invoiceID); err != nil {
@@ -147,217 +84,57 @@ func ComputeAndPersistCredits(ctx context.Context, tx *sql.Tx, invoiceID, status
 }
 
 func persistProviderCredits(ctx context.Context, tx *sql.Tx, invoiceID string) error {
-	rows, err := tx.QueryContext(ctx, `
-		WITH provider_lines AS (
-			SELECT li.id AS line_item_id,
-			       li.tenant_id,
-			       COALESCE(li.cluster_id, '') AS customer_cluster_id,
-		       li.meter,
-		       li.dimensions,
-			       li.currency,
-			       inv.period_start,
-			       inv.period_end,
-			       ROUND(li.amount * 100)::bigint AS gross_cents
-			FROM purser.invoice_line_items li
-			JOIN purser.billing_invoices inv ON inv.id = li.invoice_id
-			WHERE li.invoice_id = $1
-			  AND li.meter IS NOT NULL
-			  AND li.amount != 0
-		),
-		base_provider_rows AS (
-			SELECT sl.line_item_id,
-		       'provider_usage' AS source_type,
-			       spu.id::text AS source_id,
-			       sl.tenant_id AS usage_tenant_id,
-		       spu.provider_tenant_id AS storage_provider_tenant_id,
-		       spu.provider_cluster_id AS storage_provider_cluster_id,
-		       COALESCE(spu.dimensions->>'storage_backend', '') AS storage_backend,
-		       spu.usage_type,
-		       spu.usage_value AS gb_seconds,
-			       sl.currency,
-			       sl.period_start,
-			       sl.period_end,
-			       sl.gross_cents
-			FROM provider_lines sl
-			JOIN purser.provider_usage_records spu
-			  ON spu.usage_tenant_id = sl.tenant_id
-			 AND spu.work_cluster_id = sl.customer_cluster_id
-			 AND spu.usage_type = sl.meter
-			 AND spu.dimensions @> sl.dimensions
-			 AND spu.period_start < sl.period_end
-			 AND spu.period_end > sl.period_start
-			 AND spu.value_kind = 'delta'
-			 AND spu.granularity = 'minute_5'
-			WHERE spu.usage_value != 0
-		),
-		adjustment_provider_rows AS (
-			SELECT sl.line_item_id,
-			       'usage_adjustment' AS source_type,
-			       ua.id::text AS source_id,
-			       sl.tenant_id AS usage_tenant_id,
-			       COALESCE(ua.details #>> '{natural_key,storage_provider_tenant_id}', '') AS storage_provider_tenant_id,
-			       COALESCE(ua.details #>> '{natural_key,storage_provider_cluster_id}', '') AS storage_provider_cluster_id,
-			       COALESCE(ua.details #>> '{natural_key,storage_backend}', '') AS storage_backend,
-			       ua.usage_type,
-			       ua.delta_value AS gb_seconds,
-			       sl.currency,
-			       ua.period_start,
-			       ua.period_end,
-			       sl.gross_cents
-			FROM provider_lines sl
-			JOIN purser.usage_adjustments ua
-			  ON ua.tenant_id = sl.tenant_id
-			 AND ua.cluster_id = sl.customer_cluster_id
-			 AND ua.usage_type = sl.meter
-			 AND ua.period_start < sl.period_end
-			 AND ua.period_end > sl.period_start
-			 AND ua.value_kind = 'correction_delta'
-			 AND ua.status = 'applied'
-			WHERE ua.delta_value != 0
-			  AND COALESCE(ua.details #>> '{natural_key,storage_provider_tenant_id}', '') <> ''
-		),
-		all_provider_rows AS (
-			SELECT *,
-			       SUM(gb_seconds) OVER (PARTITION BY line_item_id) AS line_gb_seconds
-			FROM (
-				SELECT * FROM base_provider_rows
-				UNION ALL
-				SELECT * FROM adjustment_provider_rows
-			) rows
-		),
-		provider_rows AS (
-			SELECT *
-			FROM all_provider_rows
-			WHERE storage_provider_tenant_id <> ''
-			  AND storage_provider_tenant_id <> usage_tenant_id::text
-		)
-		SELECT source_type,
-		       source_id,
-		       storage_provider_tenant_id,
-		       storage_provider_cluster_id,
-		       storage_backend,
-		       usage_type,
-		       currency,
-		       period_start,
-		       period_end,
-		       CASE
-		         WHEN line_gb_seconds != 0 THEN ROUND(gross_cents::numeric * gb_seconds / line_gb_seconds)::bigint
-		         ELSE 0
-		       END AS allocated_gross_cents
-		FROM provider_rows
-	`, invoiceID)
+	queries := purserdb.New(tx)
+	allocations, err := queries.ListStorageProviderCreditAllocations(ctx, invoiceID)
 	if err != nil {
 		return fmt.Errorf("query storage provider usage credits: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-
-	type providerAccrual struct {
-		SourceType        string
-		UsageRecordID     uuid.UUID
-		UsageAdjustmentID uuid.UUID
-		OwnerTenantID     uuid.UUID
-		ClusterID         string
-		Backend           string
-		UsageType         string
-		Currency          string
-		PeriodStart       time.Time
-		PeriodEnd         time.Time
-		GrossCents        int64
-	}
-	var pending []providerAccrual
-	for rows.Next() {
-		var (
-			sourceID, ownerID string
-			sourceType        string
-			a                 providerAccrual
-		)
-		if err := rows.Scan(&sourceType, &sourceID, &ownerID, &a.ClusterID, &a.Backend, &a.UsageType, &a.Currency, &a.PeriodStart, &a.PeriodEnd, &a.GrossCents); err != nil {
-			return fmt.Errorf("scan storage provider usage credit: %w", err)
-		}
-		if a.GrossCents == 0 {
+	for _, allocation := range allocations {
+		if allocation.AllocatedGrossCents == 0 {
 			continue
 		}
-		sourceUUID, err := uuid.Parse(sourceID)
-		if err != nil {
-			return fmt.Errorf("parse storage provider credit source_id %q: %w", sourceID, err)
+		if _, err := uuid.Parse(allocation.SourceID); err != nil {
+			return fmt.Errorf("parse storage provider credit source_id %q: %w", allocation.SourceID, err)
 		}
-		ownerUUID, err := uuid.Parse(ownerID)
+		ownerUUID, err := uuid.Parse(allocation.StorageProviderTenantID)
 		if err != nil {
-			return fmt.Errorf("parse storage_provider_tenant_id %q: %w", ownerID, err)
+			return fmt.Errorf("parse storage_provider_tenant_id %q: %w", allocation.StorageProviderTenantID, err)
 		}
-		a.SourceType = sourceType
-		switch sourceType {
-		case "provider_usage":
-			a.UsageRecordID = sourceUUID
+		feeBps, err := lookupFeeBps(ctx, tx, ownerUUID, "provider_usage")
+		if err != nil {
+			return err
+		}
+		platformFee := platformFeeCents(allocation.AllocatedGrossCents, feeBps)
+		payable := allocation.AllocatedGrossCents - platformFee
+		ledgerStatus, err := initialLedgerStatus(ctx, tx, ownerUUID)
+		if err != nil {
+			return err
+		}
+		switch allocation.SourceType {
 		case "usage_adjustment":
-			a.UsageAdjustmentID = sourceUUID
-		default:
-			return fmt.Errorf("unsupported storage provider credit source_type %q", sourceType)
-		}
-		a.OwnerTenantID = ownerUUID
-		pending = append(pending, a)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate storage provider usage credits: %w", err)
-	}
-
-	for _, a := range pending {
-		feeBps, err := lookupFeeBps(ctx, tx, a.OwnerTenantID, "provider_usage")
-		if err != nil {
-			return err
-		}
-		platformFee := platformFeeCents(a.GrossCents, feeBps)
-		payable := a.GrossCents - platformFee
-		ledgerStatus, err := initialLedgerStatus(ctx, tx, a.OwnerTenantID)
-		if err != nil {
-			return err
-		}
-		if a.SourceType == "usage_adjustment" {
-			_, err = tx.ExecContext(ctx, `
-				INSERT INTO purser.operator_credit_ledger (
-					source_type, usage_adjustment_id, entry_type,
-					cluster_owner_tenant_id, cluster_id,
-					invoice_id, period_start, period_end, currency,
-					gross_cents, platform_fee_cents, payable_cents, status, notes
-				) VALUES (
-					'usage_adjustment', $1, 'accrual',
-					$2, $3, $4, $5, $6, $7,
-					$8, $9, $10, $11,
-					jsonb_build_object('storage_backend', $12::text, 'usage_type', $13::text)
-				)
-				ON CONFLICT (usage_adjustment_id)
-				WHERE entry_type = 'accrual' AND source_type = 'usage_adjustment'
-				DO NOTHING
-			`, a.UsageAdjustmentID, a.OwnerTenantID, a.ClusterID, invoiceID,
-				a.PeriodStart, a.PeriodEnd, a.Currency,
-				a.GrossCents, platformFee, payable, ledgerStatus,
-				a.Backend, a.UsageType)
+			err = queries.InsertUsageAdjustmentOperatorCredit(ctx, purserdb.InsertUsageAdjustmentOperatorCreditParams{
+				UsageAdjustmentID: allocation.SourceID, ClusterOwnerTenantID: allocation.StorageProviderTenantID,
+				ClusterID: allocation.StorageProviderClusterID, InvoiceID: invoiceID,
+				PeriodStart: allocation.PeriodStart.Time, PeriodEnd: allocation.PeriodEnd.Time, Currency: allocation.Currency,
+				GrossCents: allocation.AllocatedGrossCents, PlatformFeeCents: platformFee, PayableCents: payable,
+				Status: ledgerStatus, StorageBackend: allocation.StorageBackend, UsageType: allocation.UsageType,
+			})
 			if err != nil {
-				return fmt.Errorf("insert storage provider adjustment accrual %s: %w", a.UsageAdjustmentID, err)
+				return fmt.Errorf("insert storage provider adjustment accrual %s: %w", allocation.SourceID, err)
 			}
-			continue
-		}
-		_, err = tx.ExecContext(ctx, `
-			INSERT INTO purser.operator_credit_ledger (
-				source_type, provider_usage_record_id, entry_type,
-				cluster_owner_tenant_id, cluster_id,
-				invoice_id, period_start, period_end, currency,
-				gross_cents, platform_fee_cents, payable_cents, status, notes
-			) VALUES (
-				'provider_usage', $1, 'accrual',
-				$2, $3, $4, $5, $6, $7,
-				$8, $9, $10, $11,
-				jsonb_build_object('storage_backend', $12::text, 'usage_type', $13::text)
-			)
-			ON CONFLICT (provider_usage_record_id)
-			WHERE entry_type = 'accrual' AND source_type = 'provider_usage'
-			DO NOTHING
-		`, a.UsageRecordID, a.OwnerTenantID, a.ClusterID, invoiceID,
-			a.PeriodStart, a.PeriodEnd, a.Currency,
-			a.GrossCents, platformFee, payable, ledgerStatus,
-			a.Backend, a.UsageType)
-		if err != nil {
-			return fmt.Errorf("insert storage provider accrual %s: %w", a.UsageRecordID, err)
+		case "provider_usage":
+			err = queries.InsertProviderUsageOperatorCredit(ctx, purserdb.InsertProviderUsageOperatorCreditParams{
+				ProviderUsageRecordID: allocation.SourceID, ClusterOwnerTenantID: allocation.StorageProviderTenantID,
+				ClusterID: allocation.StorageProviderClusterID, InvoiceID: invoiceID,
+				PeriodStart: allocation.PeriodStart.Time, PeriodEnd: allocation.PeriodEnd.Time, Currency: allocation.Currency,
+				GrossCents: allocation.AllocatedGrossCents, PlatformFeeCents: platformFee, PayableCents: payable,
+				Status: ledgerStatus, StorageBackend: allocation.StorageBackend, UsageType: allocation.UsageType,
+			})
+			if err != nil {
+				return fmt.Errorf("insert storage provider accrual %s: %w", allocation.SourceID, err)
+			}
+		default:
+			return fmt.Errorf("unsupported storage provider credit source_type %q", allocation.SourceType)
 		}
 	}
 	return nil
@@ -406,19 +183,12 @@ func PersistStripeSubscriptionCredit(
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO purser.operator_credit_ledger (
-			source_type, stripe_invoice_id, entry_type,
-			cluster_owner_tenant_id, cluster_id,
-			period_start, period_end, currency,
-			gross_cents, platform_fee_cents, payable_cents, status
-		) VALUES (
-			'stripe_subscription', $1, 'accrual', $2, $3, $4, $5, $6, $7, $8, $9, $10
-		)
-		ON CONFLICT (stripe_invoice_id) WHERE entry_type = 'accrual' AND source_type = 'stripe_subscription' DO NOTHING
-	`, stripeInvoiceID, ownerTenantID, clusterID,
-		periodStart, periodEnd, currency,
-		grossCents, platformFee, payable, ledgerStatus)
+	err = purserdb.New(tx).InsertStripeSubscriptionOperatorCredit(ctx, purserdb.InsertStripeSubscriptionOperatorCreditParams{
+		StripeInvoiceID:      sql.NullString{String: stripeInvoiceID, Valid: true},
+		ClusterOwnerTenantID: ownerTenantID.String(), ClusterID: clusterID,
+		PeriodStart: periodStart, PeriodEnd: periodEnd, Currency: currency,
+		GrossCents: grossCents, PlatformFeeCents: platformFee, PayableCents: payable, Status: ledgerStatus,
+	})
 	if err != nil {
 		return fmt.Errorf("insert stripe-subscription accrual %s: %w", stripeInvoiceID, err)
 	}
@@ -432,20 +202,14 @@ func PersistStripeSubscriptionCredit(
 // preventing pre-launch / un-vetted operators from accumulating payable
 // balances.
 func initialLedgerStatus(ctx context.Context, tx *sql.Tx, ownerID uuid.UUID) (string, error) {
-	var status string
-	var payoutEligible bool
-	err := tx.QueryRowContext(ctx, `
-		SELECT status, payout_eligible
-		FROM purser.cluster_owners
-		WHERE tenant_id = $1
-	`, ownerID).Scan(&status, &payoutEligible)
+	state, err := purserdb.New(tx).GetClusterOwnerLedgerState(ctx, ownerID.String())
 	if errors.Is(err, sql.ErrNoRows) {
 		return "held", nil
 	}
 	if err != nil {
 		return "", fmt.Errorf("query cluster_owners: %w", err)
 	}
-	if status == "approved" && payoutEligible {
+	if state.Status == "approved" && state.PayoutEligible {
 		return "accruing", nil
 	}
 	return "held", nil
@@ -456,27 +220,16 @@ func initialLedgerStatus(ctx context.Context, tx *sql.Tx, ownerID uuid.UUID) (st
 // Returns 0 when no policy is configured (no fee is taken — fail-soft so
 // invoice finalization doesn't block on missing policy).
 func lookupFeeBps(ctx context.Context, tx *sql.Tx, ownerID uuid.UUID, pricingSource string) (int, error) {
-	const q = `
-		SELECT fee_basis_points
-		FROM purser.platform_fee_policy
-		WHERE cluster_kind = 'third_party_marketplace'
-		  AND effective_to IS NULL
-		  AND (cluster_owner_tenant_id = $1 OR cluster_owner_tenant_id IS NULL)
-		  AND (pricing_source IS NULL OR pricing_source = $2)
-		ORDER BY (cluster_owner_tenant_id = $1) DESC,
-		         (pricing_source = $2) DESC,
-		         effective_from DESC
-		LIMIT 1
-	`
-	var bps int
-	err := tx.QueryRowContext(ctx, q, ownerID, pricingSource).Scan(&bps)
+	bps, err := purserdb.New(tx).GetOperatorPlatformFeeBps(ctx, purserdb.GetOperatorPlatformFeeBpsParams{
+		OwnerID: ownerID.String(), PricingSource: pricingSource,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}
 	if err != nil {
 		return 0, fmt.Errorf("query platform_fee_policy: %w", err)
 	}
-	return bps, nil
+	return int(bps), nil
 }
 
 // dollarStringToCents converts a NUMERIC(20,2) text value to cents. The

@@ -8,7 +8,14 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/google/uuid"
 	stripeapi "github.com/stripe/stripe-go/v85"
+)
+
+var (
+	testMeterRowID    = uuid.MustParse("10000000-0000-4000-8000-000000000001")
+	testMeterTenantID = uuid.MustParse("20000000-0000-4000-8000-000000000001")
+	testOtherTenantID = uuid.MustParse("20000000-0000-4000-8000-000000000002")
 )
 
 // pendingRowColumns mirrors the SELECT in Flush so each test seeds the same
@@ -65,9 +72,9 @@ func TestFlush_SuccessMarksSent(t *testing.T) {
 	mock.ExpectQuery(`SELECT id, tenant_id, cluster_id, meter`).
 		WithArgs(6, 100).
 		WillReturnRows(sqlmock.NewRows(pendingRowColumns).
-			AddRow("row-1", "tenant-1", "cluster-1", "transcode_rendition_seconds", "meter.transcode", "60000", `{"output_codec":"h264"}`, periodStart, 0))
+			AddRow(testMeterRowID, testMeterTenantID, "cluster-1", "transcode_rendition_seconds", "meter.transcode", "60000", []byte(`{"output_codec":"h264"}`), periodStart, 0))
 	mock.ExpectExec(`UPDATE purser\.stripe_meter_events_outbox\s+SET sent_at`).
-		WithArgs("row-1").
+		WithArgs(testMeterRowID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	f := &MeterFlusher{
@@ -107,9 +114,9 @@ func TestFlush_PushFailureDefers(t *testing.T) {
 	mock.ExpectQuery(`SELECT id, tenant_id, cluster_id, meter`).
 		WithArgs(6, 100).
 		WillReturnRows(sqlmock.NewRows(pendingRowColumns).
-			AddRow("row-1", "tenant-1", "cluster-1", "delivered_minutes", "meter.delivered_minutes", "60000", `{}`, periodStart, 2))
+			AddRow(testMeterRowID, testMeterTenantID, "cluster-1", "delivered_minutes", "meter.delivered_minutes", "60000", []byte(`{}`), periodStart, 2))
 	mock.ExpectExec(`UPDATE purser\.stripe_meter_events_outbox\s+SET attempt_count = attempt_count \+ 1`).
-		WithArgs("row-1", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), testMeterRowID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	f := &MeterFlusher{
@@ -148,12 +155,12 @@ func TestFlush_MarkSentFailureDefers(t *testing.T) {
 	mock.ExpectQuery(`SELECT id, tenant_id, cluster_id, meter`).
 		WithArgs(6, 100).
 		WillReturnRows(sqlmock.NewRows(pendingRowColumns).
-			AddRow("row-1", "tenant-1", "cluster-1", "delivered_minutes", "meter.delivered_minutes", "60000", `{}`, periodStart, 0))
+			AddRow(testMeterRowID, testMeterTenantID, "cluster-1", "delivered_minutes", "meter.delivered_minutes", "60000", []byte(`{}`), periodStart, 0))
 	mock.ExpectExec(`UPDATE purser\.stripe_meter_events_outbox\s+SET sent_at`).
-		WithArgs("row-1").
+		WithArgs(testMeterRowID).
 		WillReturnError(errors.New("write conflict"))
 	mock.ExpectExec(`UPDATE purser\.stripe_meter_events_outbox\s+SET attempt_count = attempt_count \+ 1`).
-		WithArgs("row-1", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), testMeterRowID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	f := &MeterFlusher{
@@ -188,9 +195,9 @@ func TestFlush_TenantResolveFailureDefers(t *testing.T) {
 	mock.ExpectQuery(`SELECT id, tenant_id, cluster_id, meter`).
 		WithArgs(6, 100).
 		WillReturnRows(sqlmock.NewRows(pendingRowColumns).
-			AddRow("row-1", "tenant-1", "cluster-1", "delivered_minutes", "meter.delivered_minutes", "60000", `{}`, periodStart, 0))
+			AddRow(testMeterRowID, testMeterTenantID, "cluster-1", "delivered_minutes", "meter.delivered_minutes", "60000", []byte(`{}`), periodStart, 0))
 	mock.ExpectExec(`UPDATE purser\.stripe_meter_events_outbox\s+SET attempt_count = attempt_count \+ 1`).
-		WithArgs("row-1", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), testMeterRowID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	sendCalled := false
@@ -239,9 +246,9 @@ func TestNewMeterFlusher_DefaultTenantResolver(t *testing.T) {
 
 	t.Run("active subscription resolves", func(t *testing.T) {
 		mock.ExpectQuery(`SELECT stripe_customer_id\s+FROM purser\.tenant_subscriptions`).
-			WithArgs("tenant-1").
+			WithArgs(testMeterTenantID).
 			WillReturnRows(sqlmock.NewRows([]string{"stripe_customer_id"}).AddRow("cus_live"))
-		got, err := f.TenantStripeID(context.Background(), "tenant-1")
+		got, err := f.TenantStripeID(context.Background(), testMeterTenantID.String())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -252,9 +259,9 @@ func TestNewMeterFlusher_DefaultTenantResolver(t *testing.T) {
 
 	t.Run("no active subscription is an error", func(t *testing.T) {
 		mock.ExpectQuery(`SELECT stripe_customer_id\s+FROM purser\.tenant_subscriptions`).
-			WithArgs("tenant-2").
+			WithArgs(testOtherTenantID).
 			WillReturnError(sql.ErrNoRows)
-		if _, err := f.TenantStripeID(context.Background(), "tenant-2"); err == nil {
+		if _, err := f.TenantStripeID(context.Background(), testOtherTenantID.String()); err == nil {
 			t.Fatal("no active subscription must return an error")
 		}
 	})

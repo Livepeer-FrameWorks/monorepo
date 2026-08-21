@@ -27,7 +27,11 @@ func startPurserUsageRealPG(t *testing.T) *sql.DB {
 	name := fmt.Sprintf("fw-purser-usage-realpg-%d", time.Now().UnixNano())
 	run := dockerpg.CLI
 	t.Cleanup(func() { _, _ = run("rm", "-fv", name) })
-	if output, err := dockerpg.Run("run", "-d", "--name", name, "-P", "-e", "POSTGRES_PASSWORD=harness", "pgvector/pgvector:pg15"); err != nil {
+	image, err := dockerpg.PostgresImage()
+	if err != nil {
+		t.Fatalf("resolve PostgreSQL test image: %v", err)
+	}
+	if output, err := dockerpg.Run("run", "-d", "--name", name, "-P", "-e", "POSTGRES_PASSWORD=harness", image); err != nil {
 		t.Fatalf("docker run: %v\n%s", err, output)
 	}
 	port, err := dockerpg.DiscoverPublishedHostPort(name, "5432/tcp")
@@ -65,7 +69,7 @@ func TestProcessUsageSummaryAbsentDimensions_RealPG(t *testing.T) {
 			Meter: "peak_bandwidth_mbps", Unit: "megabit_per_second", Quantity: 0.058208,
 		}},
 		ProviderUsage: []models.ProviderUsage{{
-			ProviderTenantID: "provider-tenant", ProviderClusterID: "provider-cluster",
+			ProviderTenantID: "22222222-2222-4222-8222-222222222222", ProviderClusterID: "provider-cluster",
 			Meter: models.MeterQuantity{Meter: "peak_bandwidth_mbps", Unit: "megabit_per_second", Quantity: 0.058208},
 		}},
 		UsageAdjustments: []models.UsageAdjustment{{

@@ -50,7 +50,7 @@ func TestHandleStripeInvoicePaid_ResetsDunningForKnownCustomer(t *testing.T) {
 	defer done()
 
 	const tenant = "tenant-1"
-	mock.ExpectQuery(`SELECT tenant_id FROM purser\.tenant_subscriptions WHERE stripe_customer_id`).
+	mock.ExpectQuery(`SELECT tenant_id::text AS tenant_id`).
 		WithArgs("cus_known").
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow(tenant))
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET dunning_attempts = 0`).
@@ -76,7 +76,7 @@ func TestHandleStripeInvoicePaid_FallsBackToMetadataTenant(t *testing.T) {
 	defer done()
 
 	const tenant = "tenant-meta"
-	mock.ExpectQuery(`SELECT tenant_id FROM purser\.tenant_subscriptions WHERE stripe_customer_id`).
+	mock.ExpectQuery(`SELECT tenant_id::text AS tenant_id`).
 		WithArgs("cus_unknown").
 		WillReturnError(sqlmock.ErrCancelled) // any error → fall back to metadata
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET dunning_attempts = 0`).
@@ -101,7 +101,7 @@ func TestHandleStripeInvoicePaid_SkipsUnknownCustomerWithoutMetadata(t *testing.
 	s, mock, done := newWebhookService(t)
 	defer done()
 
-	mock.ExpectQuery(`SELECT tenant_id FROM purser\.tenant_subscriptions WHERE stripe_customer_id`).
+	mock.ExpectQuery(`SELECT tenant_id::text AS tenant_id`).
 		WithArgs("cus_ghost").
 		WillReturnError(sqlmock.ErrCancelled)
 	// No further expectations: any extra query fails the test.

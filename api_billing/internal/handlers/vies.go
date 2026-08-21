@@ -15,6 +15,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"frameworks/api_billing/internal/database/purserdb"
 )
 
 const defaultVIESEndpoint = "https://ec.europa.eu/taxation_customs/vies/services/checkVatService"
@@ -58,12 +60,9 @@ func (h *X402Handler) validateVIESVAT(ctx context.Context, tenantID, countryCode
 	}
 	hashBytes := sha256.Sum256([]byte(countryCode + vatNumber))
 	vatHash := hex.EncodeToString(hashBytes[:])
-	var cached bool
-	err := h.db.QueryRowContext(ctx, `
-		SELECT valid FROM purser.vat_validation_evidence
-		WHERE tenant_id = $1 AND vat_number_hash = $2 AND expires_at > NOW()
-		ORDER BY checked_at DESC LIMIT 1
-	`, tenantID, vatHash).Scan(&cached)
+	cached, err := purserdb.New(h.db).GetCachedVATValidation(ctx, purserdb.GetCachedVATValidationParams{
+		TenantID: tenantID, VatNumberHash: vatHash,
+	})
 	if err == nil {
 		return cached, nil
 	}
@@ -120,17 +119,12 @@ func (h *X402Handler) validateVIESVAT(ctx context.Context, tenantID, countryCode
 	} else {
 		masked += vatNumber
 	}
-	_, err = h.db.ExecContext(ctx, `
-		INSERT INTO purser.vat_validation_evidence (
-			tenant_id, country_code, vat_number_hash, vat_number_masked,
-			valid, request_date, trader_name, trader_address,
-			checked_at, expires_at, raw_response
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),NOW() + INTERVAL '24 hours',$9::jsonb)
-		ON CONFLICT (tenant_id, vat_number_hash, request_date) DO UPDATE
-		SET valid = EXCLUDED.valid, trader_name = EXCLUDED.trader_name,
-		    trader_address = EXCLUDED.trader_address, checked_at = NOW(),
-		    expires_at = NOW() + INTERVAL '24 hours', raw_response = EXCLUDED.raw_response
-	`, tenantID, countryCode, vatHash, masked, result.Valid, requestDate, result.Name, result.Address, raw)
+	err = purserdb.New(h.db).UpsertVATValidationEvidence(ctx, purserdb.UpsertVATValidationEvidenceParams{
+		TenantID: tenantID, CountryCode: countryCode, VatNumberHash: vatHash,
+		VatNumberMasked: masked, Valid: result.Valid, RequestDate: requestDate,
+		TraderName:    sql.NullString{String: result.Name, Valid: true},
+		TraderAddress: sql.NullString{String: result.Address, Valid: true}, RawResponse: raw,
+	})
 	if err != nil {
 		return false, err
 	}

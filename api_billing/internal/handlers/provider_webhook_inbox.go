@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"frameworks/api_billing/internal/database/purserdb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
 )
 
@@ -31,12 +32,9 @@ func (s *Service) enqueueProviderWebhook(ctx context.Context, provider, eventKey
 	if err != nil {
 		return false, "Invalid webhook headers", 400
 	}
-	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO purser.provider_webhook_inbox
-			(provider, event_key, headers, raw_payload)
-		VALUES ($1, $2, $3::jsonb, $4)
-		ON CONFLICT (provider, event_key) DO NOTHING
-	`, provider, eventKey, headerJSON, body); err != nil {
+	if err := purserdb.New(s.db).EnqueueProviderWebhook(ctx, purserdb.EnqueueProviderWebhookParams{
+		Provider: provider, EventKey: eventKey, Headers: headerJSON, RawPayload: body,
+	}); err != nil {
 		s.logger.WithError(err).WithField("provider", provider).Error("Failed to persist provider webhook")
 		return false, "Failed to persist webhook", 503
 	}
@@ -70,59 +68,31 @@ func (s *providerWebhookInboxStore) ClaimBatch(ctx context.Context, batchSize in
 		}
 	}()
 
-	rows, err := tx.QueryContext(ctx, `
-		SELECT id, provider, headers, raw_payload, attempts
-		FROM purser.provider_webhook_inbox
-		WHERE next_attempt_at <= NOW()
-		  AND (status IN ('pending', 'failed')
-		       OR (status = 'processing' AND claimed_at < NOW() - ($1 * interval '1 millisecond')))
-		ORDER BY next_attempt_at, created_at
-		LIMIT $2
-		FOR UPDATE SKIP LOCKED
-	`, lease.Milliseconds(), batchSize)
+	queries := purserdb.New(tx)
+	candidates, err := queries.ClaimProviderWebhooks(ctx, purserdb.ClaimProviderWebhooksParams{
+		LeaseMilliseconds: lease.Milliseconds(),
+		BatchSize:         int32(batchSize),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("select provider webhook inbox: %w", err)
-	}
-	defer rows.Close()
-
-	type candidate struct {
-		id, provider string
-		headers      []byte
-		body         []byte
-		attempts     int
-	}
-	var candidates []candidate
-	for rows.Next() {
-		var item candidate
-		if err := rows.Scan(&item.id, &item.provider, &item.headers, &item.body, &item.attempts); err != nil {
-			return nil, fmt.Errorf("scan provider webhook inbox: %w", err)
-		}
-		candidates = append(candidates, item)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
 	}
 
 	claims = make([]outbox.Claim[providerWebhookPayload], 0, len(candidates))
 	for _, item := range candidates {
 		leaseToken := uuid.NewString()
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE purser.provider_webhook_inbox
-			SET status = 'processing', claimed_at = NOW(), lease_token = $2, updated_at = NOW()
-			WHERE id = $1
-		`, item.id, leaseToken); err != nil {
+		if err := queries.MarkProviderWebhookProcessing(ctx, purserdb.MarkProviderWebhookProcessingParams{
+			LeaseToken: leaseToken,
+			ID:         item.ID,
+		}); err != nil {
 			return nil, err
 		}
 		var headers map[string]string
-		if err := json.Unmarshal(item.headers, &headers); err != nil {
+		if err := json.Unmarshal(item.Headers, &headers); err != nil {
 			return nil, fmt.Errorf("decode provider webhook headers: %w", err)
 		}
 		claims = append(claims, outbox.Claim[providerWebhookPayload]{
-			ID: webhookInboxClaimID(item.id), Attempts: item.attempts, LeaseToken: leaseToken,
-			Payload: providerWebhookPayload{Provider: item.provider, Headers: headers, Body: item.body},
+			ID: webhookInboxClaimID(item.ID.String()), Attempts: int(item.Attempts), LeaseToken: leaseToken,
+			Payload: providerWebhookPayload{Provider: item.Provider, Headers: headers, Body: item.RawPayload},
 		})
 	}
 	if err := tx.Commit(); err != nil {
@@ -140,12 +110,13 @@ func (s *providerWebhookInboxStore) MarkCompletedToken(ctx context.Context, id, 
 }
 
 func (s *providerWebhookInboxStore) complete(ctx context.Context, id, leaseToken string) error {
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE purser.provider_webhook_inbox
-		SET status = 'processed', processed_at = NOW(), claimed_at = NULL,
-		    lease_token = NULL, last_error = NULL, updated_at = NOW()
-		WHERE id = $1 AND ($2 = '' OR lease_token::text = $2)
-	`, id, leaseToken)
+	inboxID, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("complete provider webhook: invalid id %q: %w", id, err)
+	}
+	result, err := purserdb.New(s.db).CompleteProviderWebhook(ctx, purserdb.CompleteProviderWebhookParams{
+		ID: inboxID, LeaseToken: leaseToken,
+	})
 	return requireWebhookInboxUpdate(result, err)
 }
 
@@ -162,13 +133,16 @@ func (s *providerWebhookInboxStore) fail(ctx context.Context, id string, cause e
 	if cause != nil {
 		message = cause.Error()
 	}
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE purser.provider_webhook_inbox
-		SET status = 'failed', attempts = attempts + 1,
-		    next_attempt_at = NOW() + ($2 * interval '1 millisecond'),
-		    claimed_at = NULL, lease_token = NULL, last_error = $3, updated_at = NOW()
-		WHERE id = $1 AND ($4 = '' OR lease_token::text = $4)
-	`, id, backoff.Milliseconds(), message, leaseToken)
+	inboxID, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("fail provider webhook: invalid id %q: %w", id, err)
+	}
+	result, err := purserdb.New(s.db).FailProviderWebhook(ctx, purserdb.FailProviderWebhookParams{
+		BackoffMilliseconds: backoff.Milliseconds(),
+		LastError:           sql.NullString{String: message, Valid: true},
+		ID:                  inboxID,
+		LeaseToken:          leaseToken,
+	})
 	return requireWebhookInboxUpdate(result, err)
 }
 

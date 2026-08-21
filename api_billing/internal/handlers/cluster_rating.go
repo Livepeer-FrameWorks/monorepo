@@ -16,6 +16,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	billingpkg "frameworks/api_billing/internal/billing"
+	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/pricing"
 	"frameworks/api_billing/internal/rating"
 
@@ -74,109 +75,46 @@ type clusterRatingResult struct {
 // Returns (cluster_id → meter → aggregated_value). Errors abort the caller —
 // rating an invoice on partial usage underbills.
 func (jm *JobManager) collectInvoiceUsage(ctx context.Context, tenantID string, periodStart, periodEnd time.Time) (map[string]map[string]float64, error) {
-	rows, err := jm.db.QueryContext(ctx, `
-		WITH usage_rows AS (
-			SELECT COALESCE(cluster_id, '') AS cluster_id,
-			       usage_type,
-			       usage_value
-			FROM purser.usage_records
-			WHERE tenant_id = $1
-			  AND period_start < $3
-			  AND period_end > $2
-			  AND usage_type NOT IN ('unique_users', 'total_streams', 'total_viewers', 'unique_users_period')
-			  AND value_kind = 'delta'
-			  AND granularity = 'minute_5'
-
-			UNION ALL
-
-			SELECT COALESCE(cluster_id, '') AS cluster_id,
-			       usage_type,
-			       delta_value AS usage_value
-			FROM purser.usage_adjustments
-			WHERE tenant_id = $1
-			  AND period_start < $3
-			  AND period_end > $2
-			  AND status = 'applied'
-			  AND value_kind = 'correction_delta'
-			  AND usage_type NOT IN ('unique_users', 'total_streams', 'total_viewers', 'unique_users_period')
-		)
-		SELECT cluster_id,
-		       usage_type,
-		       CASE
-		           WHEN usage_type IN ('peak_bandwidth_mbps', 'max_viewers') THEN MAX(usage_value)
-		           ELSE SUM(usage_value)
-		       END AS aggregated_value
-		FROM usage_rows
-		GROUP BY cluster_id, usage_type
-	`, tenantID, periodStart, periodEnd)
+	rows, err := purserdb.New(jm.db).CollectInvoiceUsage(ctx, purserdb.CollectInvoiceUsageParams{
+		TenantID:    tenantID,
+		WindowStart: periodStart,
+		WindowEnd:   periodEnd,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("query usage_records: %w", err)
+		return nil, fmt.Errorf("query or iterate usage rows: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
 
 	out := map[string]map[string]float64{}
-	for rows.Next() {
-		var clusterID, usageType string
-		var val float64
-		if err := rows.Scan(&clusterID, &usageType, &val); err != nil {
-			return nil, fmt.Errorf("scan usage row: %w", err)
+	for _, row := range rows {
+		if out[row.ClusterID] == nil {
+			out[row.ClusterID] = map[string]float64{}
 		}
-		if out[clusterID] == nil {
-			out[clusterID] = map[string]float64{}
-		}
-		out[clusterID][usageType] = val
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate usage rows: %w", err)
+		out[row.ClusterID][row.UsageType] = row.AggregatedValue
 	}
 	return out, nil
 }
 
 func (jm *JobManager) collectInvoiceDimensionedUsage(ctx context.Context, tenantID string, periodStart, periodEnd time.Time) (map[string][]rating.DimensionedQuantity, error) {
-	rows, err := jm.db.QueryContext(ctx, `
-		WITH dimensioned_rows AS (
-			SELECT cluster_id, usage_type, unit, dimensions, usage_value
-			FROM purser.usage_records
-			WHERE tenant_id = $1
-			  AND period_start < $3 AND period_end > $2
-			  AND value_kind = 'delta' AND granularity = 'minute_5'
-			UNION ALL
-			SELECT cluster_id, usage_type, unit, dimensions, delta_value
-			FROM purser.usage_adjustments
-			WHERE tenant_id = $1
-			  AND period_start < $3 AND period_end > $2
-			  AND status = 'applied' AND value_kind = 'correction_delta'
-		)
-		SELECT COALESCE(r.cluster_id, ''), r.usage_type, r.unit, r.dimensions,
-		       CASE WHEN d.aggregation = 'max' THEN MAX(r.usage_value) ELSE SUM(r.usage_value) END
-		FROM dimensioned_rows r
-		JOIN purser.meter_definitions d ON d.meter = r.usage_type AND d.active = TRUE
-		GROUP BY r.cluster_id, r.usage_type, r.unit, r.dimensions, d.aggregation
-	`, tenantID, periodStart, periodEnd)
+	rows, err := purserdb.New(jm.db).CollectInvoiceDimensionedUsage(ctx, purserdb.CollectInvoiceDimensionedUsageParams{
+		TenantID:    tenantID,
+		WindowStart: periodStart,
+		WindowEnd:   periodEnd,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("query dimensioned usage: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
 	out := map[string][]rating.DimensionedQuantity{}
-	for rows.Next() {
-		var clusterID, meter, unit string
-		var rawDimensions []byte
-		var quantity decimal.Decimal
-		if err := rows.Scan(&clusterID, &meter, &unit, &rawDimensions, &quantity); err != nil {
-			return nil, fmt.Errorf("scan dimensioned usage: %w", err)
-		}
+	for _, row := range rows {
 		dimensions := map[string]string{}
-		if len(rawDimensions) > 0 {
-			if err := json.Unmarshal(rawDimensions, &dimensions); err != nil {
-				return nil, fmt.Errorf("decode dimensions for %s: %w", meter, err)
+		if len(row.Dimensions) > 0 {
+			if err := json.Unmarshal(row.Dimensions, &dimensions); err != nil {
+				return nil, fmt.Errorf("decode dimensions for %s: %w", row.UsageType, err)
 			}
 		}
-		out[clusterID] = append(out[clusterID], rating.DimensionedQuantity{
-			Meter: rating.Meter(meter), Unit: unit, Dimensions: dimensions, Quantity: quantity,
+		out[row.ClusterID] = append(out[row.ClusterID], rating.DimensionedQuantity{
+			Meter: rating.Meter(row.UsageType), Unit: row.Unit, Dimensions: dimensions,
+			Quantity: decimal.NewFromFloat(row.Quantity),
 		})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate dimensioned usage: %w", err)
 	}
 	return out, nil
 }
@@ -469,27 +407,17 @@ func signedBasisPointsCents(grossCents int64, feeBps int) int64 {
 }
 
 func (jm *JobManager) lookupPlatformFeeBps(ctx context.Context, ownerID uuid.UUID, pricingSource pricing.PricingSource) (int, error) {
-	const q = `
-		SELECT fee_basis_points
-		FROM purser.platform_fee_policy
-		WHERE cluster_kind = 'third_party_marketplace'
-		  AND effective_to IS NULL
-		  AND (cluster_owner_tenant_id = $1 OR cluster_owner_tenant_id IS NULL)
-		  AND (pricing_source IS NULL OR pricing_source = $2)
-		ORDER BY (cluster_owner_tenant_id = $1) DESC,
-		         (pricing_source = $2) DESC,
-		         effective_from DESC
-		LIMIT 1
-	`
-	var bps int
-	err := jm.db.QueryRowContext(ctx, q, ownerID, string(pricingSource)).Scan(&bps)
+	bps, err := purserdb.New(jm.db).GetMarketplacePlatformFeeBps(ctx, purserdb.GetMarketplacePlatformFeeBpsParams{
+		OwnerID:       uuid.NullUUID{UUID: ownerID, Valid: true},
+		PricingSource: sql.NullString{String: string(pricingSource), Valid: true},
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}
 	if err != nil {
 		return 0, fmt.Errorf("query platform_fee_policy: %w", err)
 	}
-	return bps, nil
+	return int(bps), nil
 }
 
 // loadEmailLineItems queries persisted invoice_line_items and shapes them as
@@ -497,39 +425,26 @@ func (jm *JobManager) lookupPlatformFeeBps(ctx context.Context, ownerID uuid.UUI
 // Quartermaster when a clusterID is present; lookup failures degrade the
 // label to the cluster ID rather than failing the email entirely.
 func (jm *JobManager) loadEmailLineItems(ctx context.Context, invoiceID, tenantID string) ([]EmailInvoiceLineItem, error) {
-	rows, err := jm.db.QueryContext(ctx, `
-		SELECT description, unit, dimensions,
-		       COALESCE(cluster_id, ''),
-		       COALESCE(cluster_kind, ''),
-		       quantity::text,
-		       unit_price::text,
-		       amount::text,
-		       currency,
-		       pricing_source
-		FROM purser.invoice_line_items
-		WHERE invoice_id = $1 AND tenant_id = $2
-		ORDER BY (line_key = 'base_subscription') DESC, line_key ASC
-	`, invoiceID, tenantID)
+	rows, err := purserdb.New(jm.db).ListInvoiceEmailLineItems(ctx, purserdb.ListInvoiceEmailLineItemsParams{
+		InvoiceID: invoiceID,
+		TenantID:  tenantID,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("query line items: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
 
 	type row struct {
 		Description, Unit, ClusterID, ClusterKind, Quantity, UnitPrice, Total, Currency, PricingSource string
 		DimensionsJSON                                                                                 []byte
 	}
 	var raw []row
-	for rows.Next() {
-		var r row
-		if err := rows.Scan(&r.Description, &r.Unit, &r.DimensionsJSON, &r.ClusterID, &r.ClusterKind,
-			&r.Quantity, &r.UnitPrice, &r.Total, &r.Currency, &r.PricingSource); err != nil {
-			return nil, fmt.Errorf("scan line item: %w", err)
-		}
-		raw = append(raw, r)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate line items: %w", err)
+	for _, item := range rows {
+		raw = append(raw, row{
+			Description: item.Description, Unit: item.Unit, DimensionsJSON: item.Dimensions,
+			ClusterID: item.ClusterID, ClusterKind: item.ClusterKind, Quantity: item.Quantity,
+			UnitPrice: item.UnitPrice, Total: item.Amount, Currency: item.Currency,
+			PricingSource: item.PricingSource,
+		})
 	}
 
 	// Resolve cluster names once per cluster_id. A best-effort lookup; we
@@ -654,34 +569,16 @@ func (jm *JobManager) persistManualReviewDraft(
 	creditAmt := decimal.Zero.String()
 
 	return withTx(ctx, jm.db, func(tx *sql.Tx) error {
-		var invoiceID string
-		txErr := tx.QueryRowContext(ctx, `
-			INSERT INTO purser.billing_invoices (
-				id, tenant_id, amount, currency, status, due_date,
-				base_amount, metered_amount, prepaid_credit_applied, usage_details,
-				period_start, period_end, gross_metered_amount,
-				created_at, updated_at
-			) VALUES (
-				gen_random_uuid(), $1, $2::numeric, $3, 'manual_review', $4,
-				$5::numeric, $6::numeric, $7::numeric, '{}'::jsonb, $8, $9,
-				$10::numeric, NOW(), NOW()
-			)
-			ON CONFLICT (tenant_id, period_start) WHERE period_start IS NOT NULL
-			DO UPDATE SET
-				amount = EXCLUDED.amount,
-				status = 'manual_review',
-				due_date = EXCLUDED.due_date,
-				base_amount = EXCLUDED.base_amount,
-				metered_amount = EXCLUDED.metered_amount,
-				period_end = EXCLUDED.period_end,
-				gross_metered_amount = EXCLUDED.gross_metered_amount,
-				updated_at = NOW()
-			WHERE purser.billing_invoices.status IN ('draft', 'manual_review')
-			RETURNING id
-		`, tenantID, totalAmt, currency, dueDate, baseAmt, meteredAmt, creditAmt, periodStart, periodEnd, grossMeteredAmt).Scan(&invoiceID)
+		invoiceID, txErr := purserdb.New(tx).UpsertManualReviewInvoice(ctx, purserdb.UpsertManualReviewInvoiceParams{
+			TenantID: tenantID, Amount: totalAmt, Currency: currency, DueDate: dueDate,
+			BaseAmount: baseAmt, MeteredAmount: meteredAmt, PrepaidCreditApplied: creditAmt,
+			PeriodStart:        sql.NullTime{Time: periodStart, Valid: true},
+			PeriodEnd:          sql.NullTime{Time: periodEnd, Valid: true},
+			GrossMeteredAmount: grossMeteredAmt,
+		})
 		if txErr != nil {
 			return fmt.Errorf("upsert manual_review draft: %w", txErr)
 		}
-		return persistInvoiceLineItems(ctx, tx, invoiceID, tenantID, ratingResult)
+		return persistInvoiceLineItems(ctx, tx, invoiceID.String(), tenantID, ratingResult)
 	})
 }

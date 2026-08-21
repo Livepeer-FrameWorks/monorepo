@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"frameworks/api_billing/internal/database/purserdb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -54,11 +54,10 @@ func emitBillingEvent(db *sql.DB, logger logging.Logger, eventType, tenantID, re
 		}
 		return
 	}
-	if _, err := db.ExecContext(context.Background(), `
-		INSERT INTO purser.billing_event_outbox
-			(event_type, tenant_id, user_id, resource_type, resource_id, billing_event)
-		VALUES ($1, $2::uuid, $3, $4, $5, $6::jsonb)
-	`, eventType, tenantID, "", resourceType, resourceID, database.JSONText(billingJSON)); err != nil && logger != nil {
+	if err := purserdb.New(db).EnqueueBillingEventOutboxNoReturn(context.Background(), purserdb.EnqueueBillingEventOutboxNoReturnParams{
+		EventType: eventType, TenantID: tenantID, UserID: "", ResourceType: resourceType,
+		ResourceID: resourceID, BillingEvent: billingJSON,
+	}); err != nil && logger != nil {
 		logger.WithError(err).WithField("event_type", eventType).
 			Warn("Failed to enqueue billing event outbox row")
 	}

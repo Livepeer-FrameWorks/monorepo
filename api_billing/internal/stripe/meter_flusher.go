@@ -9,8 +9,11 @@ import (
 	"os"
 	"time"
 
+	"github.com/google/uuid"
 	stripeapi "github.com/stripe/stripe-go/v85"
 	stripemeter "github.com/stripe/stripe-go/v85/billing/meterevent"
+
+	"frameworks/api_billing/internal/database/purserdb"
 )
 
 // MeterFlusher reads pending stripe_meter_events_outbox rows and pushes
@@ -49,13 +52,11 @@ func NewMeterFlusher(db *sql.DB) *MeterFlusher {
 			return err
 		},
 		TenantStripeID: func(ctx context.Context, tenantID string) (string, error) {
-			var customerID sql.NullString
-			err := db.QueryRowContext(ctx, `
-				SELECT stripe_customer_id
-				FROM purser.tenant_subscriptions
-				WHERE tenant_id = $1 AND status = 'active'
-				ORDER BY created_at DESC LIMIT 1
-			`, tenantID).Scan(&customerID)
+			tenantUUID, err := uuid.Parse(tenantID)
+			if err != nil {
+				return "", fmt.Errorf("invalid tenant id %q: %w", tenantID, err)
+			}
+			customerID, err := purserdb.New(db).ResolveActiveStripeCustomer(ctx, tenantUUID)
 			if errors.Is(err, sql.ErrNoRows) || !customerID.Valid {
 				return "", fmt.Errorf("no active subscription for tenant %s", tenantID)
 			}
@@ -75,45 +76,15 @@ func (f *MeterFlusher) Flush(ctx context.Context) (sent, deferred int, err error
 	if f.DB == nil {
 		return 0, 0, errors.New("MeterFlusher.Flush: nil DB")
 	}
-	rows, err := f.DB.QueryContext(ctx, `
-		SELECT id, tenant_id, cluster_id, meter, stripe_meter_event_name, quantity::text, dimensions::text,
-		       period_start, attempt_count
-		FROM purser.stripe_meter_events_outbox
-		WHERE sent_at IS NULL
-		  AND attempt_count < $1
-		ORDER BY created_at
-		LIMIT $2
-	`, f.MaxAttempts, f.BatchSize)
+	pending, err := purserdb.New(f.DB).ListPendingStripeMeterEvents(ctx, purserdb.ListPendingStripeMeterEventsParams{
+		MaxAttempts: int32(f.MaxAttempts), BatchSize: int32(f.BatchSize),
+	})
 	if err != nil {
 		return 0, 0, fmt.Errorf("query outbox: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-
-	type outboxRow struct {
-		ID             string
-		TenantID       string
-		ClusterID      string
-		Meter          string
-		MeterEventName string
-		Quantity       string
-		Dimensions     string
-		PeriodStart    time.Time
-		AttemptCount   int
-	}
-	var pending []outboxRow
-	for rows.Next() {
-		var r outboxRow
-		if err := rows.Scan(&r.ID, &r.TenantID, &r.ClusterID, &r.Meter, &r.MeterEventName, &r.Quantity, &r.Dimensions, &r.PeriodStart, &r.AttemptCount); err != nil {
-			return 0, 0, fmt.Errorf("scan outbox row: %w", err)
-		}
-		pending = append(pending, r)
-	}
-	if err := rows.Err(); err != nil {
-		return 0, 0, fmt.Errorf("iterate outbox rows: %w", err)
-	}
 
 	for _, r := range pending {
-		if pushErr := f.pushOne(ctx, r.ID, r.TenantID, r.ClusterID, r.Meter, r.MeterEventName, r.Quantity, r.Dimensions, r.PeriodStart); pushErr != nil {
+		if pushErr := f.pushOne(ctx, r.ID.String(), r.TenantID.String(), r.ClusterID, r.Meter, r.StripeMeterEventName, r.Quantity, string(r.Dimensions), r.PeriodStart); pushErr != nil {
 			deferred++
 			f.recordFailure(ctx, r.ID, pushErr)
 			continue
@@ -171,23 +142,14 @@ func (f *MeterFlusher) pushOne(ctx context.Context, rowID, tenantID, clusterID, 
 	return nil
 }
 
-func (f *MeterFlusher) markSent(ctx context.Context, rowID string) error {
-	_, err := f.DB.ExecContext(ctx, `
-		UPDATE purser.stripe_meter_events_outbox
-		SET sent_at = NOW(), updated_at = NOW(), last_error = NULL
-		WHERE id = $1
-	`, rowID)
-	return err
+func (f *MeterFlusher) markSent(ctx context.Context, rowID uuid.UUID) error {
+	return purserdb.New(f.DB).MarkStripeMeterEventSent(ctx, rowID)
 }
 
-func (f *MeterFlusher) recordFailure(ctx context.Context, rowID string, failErr error) {
-	if _, err := f.DB.ExecContext(ctx, `
-		UPDATE purser.stripe_meter_events_outbox
-		SET attempt_count = attempt_count + 1,
-		    last_error = $2,
-		    updated_at = NOW()
-		WHERE id = $1
-	`, rowID, failErr.Error()); err != nil {
+func (f *MeterFlusher) recordFailure(ctx context.Context, rowID uuid.UUID, failErr error) {
+	if err := purserdb.New(f.DB).RecordStripeMeterEventFailure(ctx, purserdb.RecordStripeMeterEventFailureParams{
+		ID: rowID, LastError: sql.NullString{String: failErr.Error(), Valid: true},
+	}); err != nil {
 		// Failure to record the failure is non-fatal: the next tick
 		// will see (sent_at IS NULL) and retry. Surface so ops can
 		// notice if this consistently fails.

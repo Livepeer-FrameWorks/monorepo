@@ -17,8 +17,10 @@ import (
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
+	"frameworks/api_billing/internal/database/purserdb"
 	billingstripe "frameworks/api_billing/internal/stripe"
 
+	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 	"github.com/stripe/stripe-go/v85"
 	"github.com/stripe/stripe-go/v85/checkout/session"
@@ -492,15 +494,9 @@ func (s *Service) handleSubscriptionCheckoutCompleted(ctx context.Context, sessi
 	if rows == 0 {
 		return fmt.Errorf("no tenant_subscriptions row for tenant %s; cannot activate Stripe subscription %s", tenantID, subscriptionID)
 	}
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE purser.payment_provider_intents
-		SET provider_subscription_id = COALESCE(provider_subscription_id, NULLIF($1, '')),
-		    status = 'succeeded',
-		    succeeded_at = COALESCE(succeeded_at, NOW()),
-		    updated_at = NOW()
-		WHERE provider = 'stripe'
-		  AND provider_session_id = $2
-	`, subscriptionID, sessionID); err != nil {
+	if err := purserdb.New(s.db).MarkStripeIntentSucceededBySession(ctx, purserdb.MarkStripeIntentSucceededBySessionParams{
+		SubscriptionID: subscriptionID, SessionID: sessionID,
+	}); err != nil {
 		return fmt.Errorf("failed to mark subscription checkout intent succeeded: %w", err)
 	}
 
@@ -524,56 +520,18 @@ func (s *Service) handleSubscriptionCheckoutCompleted(ctx context.Context, sessi
 // returns the number of tenant rows updated. Shared by the
 // checkout.session.completed and customer.subscription.updated paths.
 func (s *Service) activateTenantSubscriptionFromStripe(ctx context.Context, tenantID, customerID, subscriptionID, tierID string, periodStart, periodEnd *time.Time) (int64, error) {
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE purser.tenant_subscriptions
-		SET stripe_customer_id = COALESCE(NULLIF($1, ''), stripe_customer_id),
-		    stripe_subscription_id = COALESCE(NULLIF($2, ''), stripe_subscription_id),
-		    stripe_subscription_status = 'active',
-		    status = 'active',
-		    billing_model = 'postpaid',
-		    tier_id = COALESCE(
-		        NULLIF($3, '')::uuid,
-		        CASE WHEN pending_reason = 'stripe_checkout' THEN pending_tier_id END,
-		        tier_id
-		    ),
-		    payment_method = 'stripe',
-		    pending_tier_id = CASE
-		        WHEN pending_reason = 'stripe_checkout'
-		         AND (NULLIF($3, '') IS NULL OR pending_tier_id = NULLIF($3, '')::uuid)
-		        THEN NULL
-		        ELSE pending_tier_id
-		    END,
-		    pending_effective_at = CASE
-		        WHEN pending_reason = 'stripe_checkout'
-		         AND (NULLIF($3, '') IS NULL OR pending_tier_id = NULLIF($3, '')::uuid)
-		        THEN NULL
-		        ELSE pending_effective_at
-		    END,
-		    pending_reason = CASE
-		        WHEN pending_reason = 'stripe_checkout'
-		         AND (NULLIF($3, '') IS NULL OR pending_tier_id = NULLIF($3, '')::uuid)
-		        THEN NULL
-		        ELSE pending_reason
-		    END,
-		    pending_intent_id = CASE
-		        WHEN pending_reason = 'stripe_checkout'
-		         AND (NULLIF($3, '') IS NULL OR pending_tier_id = NULLIF($3, '')::uuid)
-		        THEN NULL
-		        ELSE pending_intent_id
-		    END,
-		    stripe_current_period_end = COALESCE($5, stripe_current_period_end),
-		    billing_period_start = COALESCE($6, billing_period_start),
-		    billing_period_end = COALESCE($5, billing_period_end),
-		    next_billing_date = COALESCE($5, next_billing_date),
-		    updated_at = NOW()
-		WHERE tenant_id = $4
-	`, customerID, subscriptionID, tierID, tenantID, periodEnd, periodStart)
+	toNullTime := func(value *time.Time) sql.NullTime {
+		if value == nil {
+			return sql.NullTime{}
+		}
+		return sql.NullTime{Time: *value, Valid: true}
+	}
+	rows, err := purserdb.New(s.db).ActivateTenantSubscriptionFromStripe(ctx, purserdb.ActivateTenantSubscriptionFromStripeParams{
+		CustomerID: customerID, SubscriptionID: subscriptionID, TierID: tierID,
+		PeriodEnd: toNullTime(periodEnd), PeriodStart: toNullTime(periodStart), TenantID: tenantID,
+	})
 	if err != nil {
 		return 0, fmt.Errorf("failed to activate tenant subscription: %w", err)
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("tenant subscription activation rows: %w", err)
 	}
 	return rows, nil
 }
@@ -587,14 +545,9 @@ func (s *Service) activateTenantSubscriptionFromStripe(ctx context.Context, tena
 // stripe_subscription_status guard preserves an already-active row against a
 // late unpaid re-delivery.
 func (s *Service) stageTenantSubscriptionPending(ctx context.Context, sessionID, tenantID, customerID, subscriptionID string) error {
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE purser.tenant_subscriptions
-		SET stripe_customer_id = COALESCE(NULLIF($1, ''), stripe_customer_id),
-		    stripe_subscription_id = COALESCE(NULLIF($2, ''), stripe_subscription_id),
-		    stripe_subscription_status = CASE WHEN status = 'active' THEN stripe_subscription_status ELSE 'incomplete' END,
-		    updated_at = NOW()
-		WHERE tenant_id = $3
-	`, customerID, subscriptionID, tenantID); err != nil {
+	if err := purserdb.New(s.db).StageTenantSubscriptionPendingStripe(ctx, purserdb.StageTenantSubscriptionPendingStripeParams{
+		CustomerID: customerID, SubscriptionID: subscriptionID, TenantID: tenantID,
+	}); err != nil {
 		return fmt.Errorf("failed to stage pending tenant subscription: %w", err)
 	}
 	if err := s.linkStripeIntentSubscription(ctx, sessionID, subscriptionID); err != nil {
@@ -639,34 +592,27 @@ func (s *Service) activateClusterSubscriptionFromStripe(ctx context.Context, ten
 		if subscriptionID == "" {
 			return nil
 		}
-		var existingCustomer sql.NullString
-		err := s.db.QueryRowContext(ctx, `
-			SELECT tenant_id, cluster_id, stripe_customer_id
-			FROM purser.cluster_subscriptions
-			WHERE stripe_subscription_id = $1
-		`, subscriptionID).Scan(&tenantID, &clusterID, &existingCustomer)
+		resolved, err := purserdb.New(s.db).ResolveClusterSubscriptionByStripeID(ctx, subscriptionID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil // not a cluster subscription
 		}
 		if err != nil {
 			return fmt.Errorf("resolve cluster subscription %s: %w", subscriptionID, err)
 		}
-		if customerID == "" && existingCustomer.Valid {
-			customerID = existingCustomer.String
+		tenantID, clusterID = resolved.TenantID, resolved.ClusterID
+		if customerID == "" {
+			customerID = resolved.StripeCustomerID
 		}
 	}
 
 	// Skip the grant when the row is already active so duplicate events do not
 	// re-enqueue access work. Best-effort read; the upsert below is the
 	// authority for the row state.
-	var currentStatus sql.NullString
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT status FROM purser.cluster_subscriptions
-		WHERE tenant_id = $1 AND cluster_id = $2
-	`, tenantID, clusterID).Scan(&currentStatus); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("lookup cluster subscription status: %w", err)
+	currentStatus, statusErr := purserdb.New(s.db).GetClusterSubscriptionStatus(ctx, purserdb.GetClusterSubscriptionStatusParams{TenantID: tenantID, ClusterID: clusterID})
+	if statusErr != nil && !errors.Is(statusErr, sql.ErrNoRows) {
+		return fmt.Errorf("lookup cluster subscription status: %w", statusErr)
 	}
-	alreadyActive := currentStatus.Valid && currentStatus.String == "active"
+	alreadyActive := currentStatus == "active"
 
 	// Grant access BEFORE marking the row active. A failed grant returns an
 	// error and leaves the row non-active, so the webhook retry re-attempts the
@@ -685,38 +631,17 @@ func (s *Service) activateClusterSubscriptionFromStripe(ctx context.Context, ten
 		}
 	}
 
-	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO purser.cluster_subscriptions (
-			tenant_id, cluster_id, status, stripe_customer_id, stripe_subscription_id,
-			stripe_subscription_status, checkout_session_id, intent_id, created_at, updated_at
-		) VALUES (
-			$1, $2, 'active', NULLIF($3, ''), NULLIF($4, ''), 'active', NULLIF($5, ''),
-			(SELECT id FROM purser.payment_provider_intents
-			 WHERE provider = 'stripe' AND provider_session_id = $5
-			 LIMIT 1),
-			NOW(), NOW()
-		)
-		ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
-			status = 'active',
-			stripe_customer_id = COALESCE(EXCLUDED.stripe_customer_id, purser.cluster_subscriptions.stripe_customer_id),
-			stripe_subscription_id = COALESCE(EXCLUDED.stripe_subscription_id, purser.cluster_subscriptions.stripe_subscription_id),
-			stripe_subscription_status = 'active',
-			checkout_session_id = COALESCE(EXCLUDED.checkout_session_id, purser.cluster_subscriptions.checkout_session_id),
-			intent_id = COALESCE(purser.cluster_subscriptions.intent_id, EXCLUDED.intent_id),
-			updated_at = NOW()
-	`, tenantID, clusterID, customerID, subscriptionID, sessionID); err != nil {
+	queries := purserdb.New(s.db)
+	if err := queries.UpsertActiveStripeClusterSubscription(ctx, purserdb.UpsertActiveStripeClusterSubscriptionParams{
+		TenantID: tenantID, ClusterID: clusterID, CustomerID: customerID,
+		SubscriptionID: subscriptionID, SessionID: sessionID,
+	}); err != nil {
 		return fmt.Errorf("failed to activate cluster subscription: %w", err)
 	}
 
-	if _, intentErr := s.db.ExecContext(ctx, `
-		UPDATE purser.payment_provider_intents
-		SET provider_subscription_id = COALESCE(provider_subscription_id, NULLIF($1, '')),
-		    status = 'succeeded',
-		    succeeded_at = COALESCE(succeeded_at, NOW()),
-		    updated_at = NOW()
-		WHERE provider = 'stripe'
-		  AND (provider_session_id = NULLIF($2, '') OR provider_subscription_id = NULLIF($1, ''))
-	`, subscriptionID, sessionID); intentErr != nil {
+	if intentErr := queries.MarkStripeClusterIntentSucceeded(ctx, purserdb.MarkStripeClusterIntentSucceededParams{
+		SubscriptionID: subscriptionID, SessionID: sessionID,
+	}); intentErr != nil {
 		return fmt.Errorf("failed to mark cluster checkout intent succeeded: %w", intentErr)
 	}
 
@@ -738,29 +663,10 @@ func (s *Service) activateClusterSubscriptionFromStripe(ctx context.Context, ten
 // customer.subscription.updated / invoice.paid. The stripe_subscription_status
 // guard preserves an already-active row against a late unpaid re-delivery.
 func (s *Service) stageClusterSubscriptionPending(ctx context.Context, sessionID, tenantID, clusterID, customerID, subscriptionID string) error {
-	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO purser.cluster_subscriptions (
-			tenant_id, cluster_id, status, stripe_customer_id, stripe_subscription_id,
-			stripe_subscription_status, checkout_session_id, intent_id, created_at, updated_at
-		) VALUES (
-			$1, $2, 'pending_payment', NULLIF($3, ''), NULLIF($4, ''), 'incomplete', NULLIF($5, ''),
-			(SELECT id FROM purser.payment_provider_intents
-			 WHERE provider = 'stripe' AND provider_session_id = $5
-			 LIMIT 1),
-			NOW(), NOW()
-		)
-		ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
-			stripe_customer_id = COALESCE(EXCLUDED.stripe_customer_id, purser.cluster_subscriptions.stripe_customer_id),
-			stripe_subscription_id = COALESCE(EXCLUDED.stripe_subscription_id, purser.cluster_subscriptions.stripe_subscription_id),
-			stripe_subscription_status = CASE
-				WHEN purser.cluster_subscriptions.status = 'active'
-				THEN purser.cluster_subscriptions.stripe_subscription_status
-				ELSE 'incomplete'
-			END,
-			checkout_session_id = COALESCE(EXCLUDED.checkout_session_id, purser.cluster_subscriptions.checkout_session_id),
-			intent_id = COALESCE(purser.cluster_subscriptions.intent_id, EXCLUDED.intent_id),
-			updated_at = NOW()
-	`, tenantID, clusterID, customerID, subscriptionID, sessionID); err != nil {
+	if err := purserdb.New(s.db).UpsertPendingStripeClusterSubscription(ctx, purserdb.UpsertPendingStripeClusterSubscriptionParams{
+		TenantID: tenantID, ClusterID: clusterID, CustomerID: customerID,
+		SubscriptionID: subscriptionID, SessionID: sessionID,
+	}); err != nil {
 		return fmt.Errorf("failed to stage pending cluster subscription: %w", err)
 	}
 	if err := s.linkStripeIntentSubscription(ctx, sessionID, subscriptionID); err != nil {
@@ -781,25 +687,11 @@ func (s *Service) stageClusterSubscriptionPending(ctx context.Context, sessionID
 // touched. Idempotent.
 func (s *Service) clearStagedStripeCheckout(ctx context.Context, tenantID, subscriptionID string) error {
 	if subscriptionID != "" {
-		if _, err := s.db.ExecContext(ctx, `
-			UPDATE purser.payment_provider_intents
-			SET status = 'expired', updated_at = NOW()
-			WHERE provider = 'stripe'
-			  AND provider_subscription_id = $1
-			  AND status NOT IN ('succeeded', 'cancelled', 'expired', 'terminal_failed')
-		`, subscriptionID); err != nil {
+		if err := purserdb.New(s.db).ExpireStripeIntentBySubscription(ctx, subscriptionID); err != nil {
 			return fmt.Errorf("expire staged stripe intent for %s: %w", subscriptionID, err)
 		}
 	}
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE purser.tenant_subscriptions
-		SET pending_tier_id = NULL,
-		    pending_effective_at = NULL,
-		    pending_reason = NULL,
-		    pending_intent_id = NULL,
-		    updated_at = NOW()
-		WHERE tenant_id = $1 AND pending_reason = 'stripe_checkout'
-	`, tenantID); err != nil {
+	if err := purserdb.New(s.db).ClearTenantStripeCheckoutPending(ctx, tenantID); err != nil {
 		return fmt.Errorf("clear staged stripe checkout for tenant %s: %w", tenantID, err)
 	}
 	return nil
@@ -812,11 +704,7 @@ func (s *Service) markPendingTopupTerminal(ctx context.Context, topupID, status 
 	if topupID == "" {
 		return nil
 	}
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE purser.pending_topups
-		SET status = $1, updated_at = NOW()
-		WHERE id = $2 AND status = 'pending'
-	`, status, topupID); err != nil {
+	if err := purserdb.New(s.db).MarkPendingTopupTerminal(ctx, purserdb.MarkPendingTopupTerminalParams{Status: status, TopupID: topupID}); err != nil {
 		return fmt.Errorf("mark pending top-up %s as %s: %w", topupID, status, err)
 	}
 	return nil
@@ -830,12 +718,9 @@ func (s *Service) linkStripeIntentSubscription(ctx context.Context, sessionID, s
 	if sessionID == "" || subscriptionID == "" {
 		return nil
 	}
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE purser.payment_provider_intents
-		SET provider_subscription_id = COALESCE(provider_subscription_id, $1),
-		    updated_at = NOW()
-		WHERE provider = 'stripe' AND provider_session_id = $2
-	`, subscriptionID, sessionID); err != nil {
+	if err := purserdb.New(s.db).LinkStripeIntentSubscription(ctx, purserdb.LinkStripeIntentSubscriptionParams{
+		SubscriptionID: subscriptionID, SessionID: sessionID,
+	}); err != nil {
 		return fmt.Errorf("link stripe intent %s to subscription %s: %w", sessionID, subscriptionID, err)
 	}
 	return nil
@@ -847,13 +732,7 @@ func (s *Service) expireStripeCheckoutIntent(ctx context.Context, sessionID stri
 	if sessionID == "" {
 		return nil
 	}
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE purser.payment_provider_intents
-		SET status = 'expired', updated_at = NOW()
-		WHERE provider = 'stripe'
-		  AND provider_session_id = $1
-		  AND status NOT IN ('succeeded', 'cancelled', 'expired', 'terminal_failed')
-	`, sessionID); err != nil {
+	if err := purserdb.New(s.db).ExpireStripeIntentBySession(ctx, sessionID); err != nil {
 		return fmt.Errorf("expire stripe checkout intent %s: %w", sessionID, err)
 	}
 	return nil
@@ -868,12 +747,9 @@ func (s *Service) clearStagedClusterSubscription(ctx context.Context, sessionID,
 	if sessionID == "" && subscriptionID == "" {
 		return nil
 	}
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE purser.cluster_subscriptions
-		SET status = 'cancelled', stripe_subscription_status = 'incomplete_expired', updated_at = NOW()
-		WHERE status = 'pending_payment'
-		  AND (checkout_session_id = NULLIF($1, '') OR stripe_subscription_id = NULLIF($2, ''))
-	`, sessionID, subscriptionID); err != nil {
+	if err := purserdb.New(s.db).ClearStagedStripeClusterSubscription(ctx, purserdb.ClearStagedStripeClusterSubscriptionParams{
+		SessionID: sessionID, SubscriptionID: subscriptionID,
+	}); err != nil {
 		return fmt.Errorf("clear staged cluster subscription: %w", err)
 	}
 	return nil
@@ -892,14 +768,9 @@ func (s *Service) handleInvoiceCheckoutCompleted(ctx context.Context, sessionID,
 	txID := sessionID
 	if paymentIntentID != "" {
 		txID = paymentIntentID
-		if _, err := s.db.ExecContext(ctx, `
-			UPDATE purser.billing_payments
-			SET tx_id = $1, updated_at = NOW()
-			WHERE invoice_id = $2
-			  AND method = 'card'
-			  AND status = 'pending'
-			  AND tx_id = $3
-		`, paymentIntentID, invoiceID, sessionID); err != nil {
+		if err := purserdb.New(s.db).AttachStripeIntentToInvoicePayment(ctx, purserdb.AttachStripeIntentToInvoicePaymentParams{
+			PaymentIntentID: paymentIntentID, InvoiceID: invoiceID, SessionID: sessionID,
+		}); err != nil {
 			return fmt.Errorf("attach stripe payment_intent to invoice payment: %w", err)
 		}
 	}
@@ -957,38 +828,31 @@ func (s *Service) handlePrepaidCheckoutCompleted(ctx context.Context, sessionID,
 
 	// 1. Lock the pending_topup row so concurrent webhook deliveries serialize
 	//    on the idempotency check below.
-	var currentStatus string
-	var storedTenantID string
-	err = tx.QueryRowContext(ctx, `
-		SELECT status, tenant_id FROM purser.pending_topups WHERE id = $1 FOR UPDATE
-	`, topupID).Scan(&currentStatus, &storedTenantID)
+	queries := purserdb.New(tx)
+	topup, err := queries.LockPendingTopupForCheckout(ctx, topupID)
 	if err != nil {
 		return fmt.Errorf("failed to find pending topup: %w", err)
 	}
-	if storedTenantID != tenantID {
+	if topup.TenantID != tenantID {
 		s.logger.WithFields(logging.Fields{
 			"topup_id":         topupID,
 			"tenant_id":        tenantID,
-			"stored_tenant_id": storedTenantID,
+			"stored_tenant_id": topup.TenantID,
 		}).Warn("Pending top-up tenant mismatch")
 		return fmt.Errorf("pending top-up tenant mismatch")
 	}
 
-	if currentStatus != "pending" {
+	if topup.Status != "pending" {
 		s.logger.WithFields(logging.Fields{
 			"topup_id": topupID,
-			"status":   currentStatus,
+			"status":   topup.Status,
 		}).Info("Top-up already processed, skipping")
 		return nil
 	}
 
-	if _, attachErr := tx.ExecContext(ctx, `
-		UPDATE purser.pending_topups
-		SET provider_payment_id = COALESCE(provider_payment_id, NULLIF($1, '')),
-		    checkout_id = COALESCE(checkout_id, NULLIF($2, '')),
-		    updated_at = NOW()
-		WHERE id = $3
-	`, providerPaymentID, sessionID, topupID); attachErr != nil {
+	if attachErr := queries.AttachProviderPaymentToPendingTopup(ctx, purserdb.AttachProviderPaymentToPendingTopupParams{
+		ProviderPaymentID: providerPaymentID, SessionID: sessionID, TopupID: topupID,
+	}); attachErr != nil {
 		return fmt.Errorf("failed to attach provider payment to topup: %w", attachErr)
 	}
 
@@ -1005,90 +869,52 @@ func (s *Service) handlePrepaidCheckoutCompleted(ctx context.Context, sessionID,
 		return nil
 	}
 
-	// 2. Credit prepaid balance
-	var balanceID string
-	var currentBalance int64
-	err = tx.QueryRowContext(ctx, `
-		SELECT id, balance_cents FROM purser.prepaid_balances
-		WHERE tenant_id = $1 AND currency = $2
-		FOR UPDATE
-	`, tenantID, currency).Scan(&balanceID, &currentBalance)
-
-	if errors.Is(err, sql.ErrNoRows) {
-		// Create balance if doesn't exist
-		err = tx.QueryRowContext(ctx, `
-			INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency)
-			VALUES ($1, $2, $3)
-			RETURNING id, balance_cents
-		`, tenantID, amountCents, currency).Scan(&balanceID, &currentBalance)
-		if err != nil {
-			return fmt.Errorf("failed to create prepaid balance: %w", err)
-		}
-		currentBalance = amountCents
-	} else if err != nil {
-		return fmt.Errorf("failed to get prepaid balance: %w", err)
-	} else {
-		// Update existing balance
-		newBalance := currentBalance + amountCents
-		_, err = tx.ExecContext(ctx, `
-			UPDATE purser.prepaid_balances
-			SET balance_cents = $1, updated_at = NOW()
-			WHERE id = $2
-		`, newBalance, balanceID)
-		if err != nil {
-			return fmt.Errorf("failed to update prepaid balance: %w", err)
-		}
-		currentBalance = newBalance
+	// 2. Credit prepaid balance.
+	if err = queries.EnsurePrepaidBalanceRow(ctx, purserdb.EnsurePrepaidBalanceRowParams{TenantID: tenantID, Currency: currency}); err != nil {
+		return fmt.Errorf("failed to ensure prepaid balance: %w", err)
+	}
+	currentBalance, err := queries.AddPrepaidBalance(ctx, purserdb.AddPrepaidBalanceParams{
+		AmountCents: amountCents, TenantID: tenantID, Currency: currency,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to update prepaid balance: %w", err)
 	}
 
 	// 3. Create balance transaction. reference_type='topup' activates the
 	//    partial unique index at purser.sql:idx_balance_transactions_idempotency
 	//    so replayed webhooks cannot double-credit.
-	var txID string
-	err = tx.QueryRowContext(ctx, `
-		INSERT INTO purser.balance_transactions (
-			tenant_id, amount_cents, balance_after_cents,
-			transaction_type, description, reference_id, reference_type,
-			actor_kind, reason, evidence_ref
-		) VALUES ($1, $2, $3, 'topup', $4, $5, 'topup', 'webhook', $6, $7)
-		RETURNING id
-	`, tenantID, amountCents, currentBalance,
-		fmt.Sprintf("Card top-up via %s", provider), topupID,
-		fmt.Sprintf("%s checkout completed", provider), sessionID).Scan(&txID)
+	txID := uuid.New()
+	err = queries.InsertBalanceTransaction(ctx, purserdb.InsertBalanceTransactionParams{
+		ID: txID, TenantID: tenantID, AmountCents: amountCents, BalanceAfterCents: currentBalance,
+		TransactionType: "topup",
+		Description:     sql.NullString{String: fmt.Sprintf("Card top-up via %s", provider), Valid: true},
+		ReferenceID:     sql.NullString{String: topupID, Valid: true},
+		ReferenceType:   sql.NullString{String: "topup", Valid: true},
+		ActorKind:       sql.NullString{String: "webhook", Valid: true},
+		Reason:          sql.NullString{String: fmt.Sprintf("%s checkout completed", provider), Valid: true},
+		EvidenceRef:     sql.NullString{String: sessionID, Valid: true},
+		CreatedAt:       sql.NullTime{Time: now, Valid: true},
+	})
 	if err != nil {
 		return fmt.Errorf("failed to create balance transaction: %w", err)
 	}
 
 	// 4. Update pending_topup to completed
-	_, err = tx.ExecContext(ctx, `
-		UPDATE purser.pending_topups
-		SET status = 'completed', completed_at = $1,
-		    balance_transaction_id = $2, updated_at = NOW()
-		WHERE id = $3
-	`, now, txID, topupID)
+	err = queries.CompletePendingTopup(ctx, purserdb.CompletePendingTopupParams{
+		CompletedAt: sql.NullTime{Time: now, Valid: true}, BalanceTransactionID: txID.String(), TopupID: topupID,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to update pending topup: %w", err)
 	}
-	if _, err = tx.ExecContext(ctx, `
-		UPDATE purser.payment_provider_intents ppi
-		SET provider_payment_id = COALESCE(ppi.provider_payment_id, NULLIF($1, '')),
-		    provider_session_id = COALESCE(ppi.provider_session_id, NULLIF($2, '')),
-		    status = 'succeeded',
-		    succeeded_at = COALESCE(ppi.succeeded_at, $3),
-		    updated_at = NOW()
-		FROM purser.pending_topups pt
-		WHERE pt.intent_id = ppi.id
-		  AND pt.id = $4
-	`, providerPaymentID, sessionID, now, topupID); err != nil {
+	if err = queries.CompletePendingTopupProviderIntent(ctx, purserdb.CompletePendingTopupProviderIntentParams{
+		ProviderPaymentID: providerPaymentID, SessionID: sessionID,
+		CompletedAt: sql.NullTime{Time: now, Valid: true}, TopupID: topupID,
+	}); err != nil {
 		return fmt.Errorf("failed to update topup provider intent: %w", err)
 	}
 
 	// 5. If tenant was suspended due to balance, unsuspend
-	_, err = tx.ExecContext(ctx, `
-		UPDATE purser.tenant_subscriptions
-		SET status = 'active', updated_at = NOW()
-		WHERE tenant_id = $1 AND status = 'suspended'
-	`, tenantID)
+	_, err = queries.ReactivateFundedSubscription(ctx, tenantID)
 	if err != nil {
 		s.logger.WithError(err).Warn("Failed to unsuspend tenant (may not have been suspended)")
 	}

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_billing/internal/database/purserdb"
 	"github.com/google/uuid"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
@@ -49,12 +50,11 @@ func enqueueInvoiceEmailTx(ctx context.Context, tx *sql.Tx, invoiceID, tenantID,
 	if strings.TrimSpace(recipient) == "" {
 		return nil
 	}
-	_, err := tx.ExecContext(ctx, `
-		INSERT INTO purser.invoice_email_outbox
-			(invoice_id, tenant_id, recipient, notification_type, reminder_stage)
-		VALUES ($1, $2, $3, 'invoice_created', 0)
-		ON CONFLICT (invoice_id, notification_type, reminder_stage) DO NOTHING
-	`, invoiceID, tenantID, strings.TrimSpace(recipient))
+	err := purserdb.New(tx).EnqueueInvoiceEmail(ctx, purserdb.EnqueueInvoiceEmailParams{
+		InvoiceID: invoiceID,
+		TenantID:  tenantID,
+		Recipient: strings.TrimSpace(recipient),
+	})
 	if err != nil {
 		return fmt.Errorf("insert invoice email outbox: %w", err)
 	}
@@ -87,64 +87,39 @@ func (s *invoiceEmailOutboxStore) ClaimBatch(ctx context.Context, batchSize int,
 		}
 	}()
 
-	rows, err := tx.QueryContext(ctx, `
-		SELECT id, invoice_id, tenant_id, recipient, notification_type, reminder_stage, attempts
-		FROM purser.invoice_email_outbox
-		WHERE sent_at IS NULL
-		  AND next_attempt_at <= NOW()
-		  AND (claimed_at IS NULL OR claimed_at < NOW() - ($1 * interval '1 millisecond'))
-		ORDER BY next_attempt_at, created_at
-		LIMIT $2
-		FOR UPDATE SKIP LOCKED
-	`, lease.Milliseconds(), batchSize)
+	queries := purserdb.New(tx)
+	candidates, err := queries.ClaimInvoiceEmailCandidates(ctx, purserdb.ClaimInvoiceEmailCandidatesParams{
+		LeaseMilliseconds: lease.Milliseconds(),
+		BatchSize:         int32(batchSize),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("select invoice email outbox: %w", err)
-	}
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			err = errors.Join(err, closeErr)
-		}
-	}()
-
-	type emailCandidate struct {
-		id, invoiceID, tenantID, recipient, notificationType string
-		reminderStage, attempts                              int
-	}
-	var candidates []emailCandidate
-	for rows.Next() {
-		var item emailCandidate
-		if err := rows.Scan(&item.id, &item.invoiceID, &item.tenantID, &item.recipient, &item.notificationType, &item.reminderStage, &item.attempts); err != nil {
-			return nil, fmt.Errorf("scan invoice email outbox: %w", err)
-		}
-		candidates = append(candidates, item)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate invoice email outbox: %w", err)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
 	}
 
 	claims = make([]outbox.Claim[invoiceEmailPayload], 0, len(candidates))
 	for _, candidate := range candidates {
-		leaseToken := uuid.NewString()
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE purser.invoice_email_outbox
-			SET claimed_at = NOW(), lease_token = $3, updated_at = NOW()
-			WHERE id = $1 AND tenant_id = $2
-		`, candidate.id, candidate.tenantID, leaseToken); err != nil {
-			return nil, fmt.Errorf("lease invoice email outbox: %w", err)
+		leaseToken := uuid.New()
+		affected, leaseErr := queries.LeaseInvoiceEmail(ctx, purserdb.LeaseInvoiceEmailParams{
+			LeaseToken: uuid.NullUUID{UUID: leaseToken, Valid: true},
+			ID:         candidate.ID,
+			TenantID:   candidate.TenantID,
+		})
+		if leaseErr != nil {
+			return nil, fmt.Errorf("lease invoice email outbox: %w", leaseErr)
+		}
+		if affected != 1 {
+			return nil, errors.New("lease invoice email outbox: selected row disappeared")
 		}
 		claims = append(claims, outbox.Claim[invoiceEmailPayload]{
-			ID:         invoiceEmailClaimID(candidate.tenantID, candidate.id),
-			Attempts:   candidate.attempts,
-			LeaseToken: leaseToken,
+			ID:         invoiceEmailClaimID(candidate.TenantID.String(), candidate.ID.String()),
+			Attempts:   int(candidate.Attempts),
+			LeaseToken: leaseToken.String(),
 			Payload: invoiceEmailPayload{
-				InvoiceID:        candidate.invoiceID,
-				TenantID:         candidate.tenantID,
-				Recipient:        candidate.recipient,
-				NotificationType: candidate.notificationType,
-				ReminderStage:    candidate.reminderStage,
+				InvoiceID:        candidate.InvoiceID.String(),
+				TenantID:         candidate.TenantID.String(),
+				Recipient:        candidate.Recipient,
+				NotificationType: candidate.NotificationType,
+				ReminderStage:    int(candidate.ReminderStage),
 			},
 		})
 	}
@@ -159,13 +134,8 @@ func (s *invoiceEmailOutboxStore) MarkCompleted(ctx context.Context, claimID str
 	if err != nil {
 		return err
 	}
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE purser.invoice_email_outbox
-		SET sent_at = NOW(), claimed_at = NULL, lease_token = NULL,
-		    last_error = NULL, updated_at = NOW()
-		WHERE id = $1 AND tenant_id = $2
-	`, id, tenantID)
-	return requireInvoiceEmailOutboxUpdate(result, err)
+	affected, err := purserdb.New(s.db).CompleteInvoiceEmail(ctx, purserdb.CompleteInvoiceEmailParams{ID: id, TenantID: tenantID})
+	return requireInvoiceEmailOutboxUpdate(affected, err)
 }
 
 func (s *invoiceEmailOutboxStore) MarkCompletedToken(ctx context.Context, claimID, leaseToken string) error {
@@ -173,20 +143,13 @@ func (s *invoiceEmailOutboxStore) MarkCompletedToken(ctx context.Context, claimI
 	if err != nil {
 		return err
 	}
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE purser.invoice_email_outbox
-		SET sent_at = NOW(), claimed_at = NULL, lease_token = NULL,
-		    last_error = NULL, updated_at = NOW()
-		WHERE id = $1 AND tenant_id = $2 AND lease_token = $3
-	`, id, tenantID, leaseToken)
-	return requireInvoiceEmailOutboxUpdate(result, err)
+	affected, err := purserdb.New(s.db).CompleteInvoiceEmailWithLease(ctx, purserdb.CompleteInvoiceEmailWithLeaseParams{
+		ID: id, TenantID: tenantID, LeaseToken: leaseToken,
+	})
+	return requireInvoiceEmailOutboxUpdate(affected, err)
 }
 
-func requireInvoiceEmailOutboxUpdate(result sql.Result, err error) error {
-	if err != nil {
-		return err
-	}
-	affected, err := result.RowsAffected()
+func requireInvoiceEmailOutboxUpdate(affected int64, err error) error {
 	if err != nil {
 		return err
 	}
@@ -213,24 +176,25 @@ func (s *invoiceEmailOutboxStore) recordFailure(ctx context.Context, claimID str
 	if cause != nil {
 		message = cause.Error()
 	}
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE purser.invoice_email_outbox
-		SET attempts = attempts + 1,
-		    next_attempt_at = NOW() + ($3 * interval '1 millisecond'),
-		    last_error = $4, claimed_at = NULL, lease_token = NULL,
-		    updated_at = NOW()
-		WHERE id = $1 AND tenant_id = $2
-		  AND ($5 = '' OR lease_token::text = $5)
-	`, id, tenantID, backoff.Milliseconds(), message, leaseToken)
-	if err != nil {
-		return err
+	queries := purserdb.New(s.db)
+	var affected int64
+	if leaseToken == "" {
+		affected, err = queries.FailInvoiceEmail(ctx, purserdb.FailInvoiceEmailParams{
+			BackoffMilliseconds: backoff.Milliseconds(),
+			LastError:           sql.NullString{String: message, Valid: true},
+			ID:                  id,
+			TenantID:            tenantID,
+		})
+	} else {
+		affected, err = queries.FailInvoiceEmailWithLease(ctx, purserdb.FailInvoiceEmailWithLeaseParams{
+			BackoffMilliseconds: backoff.Milliseconds(),
+			LastError:           sql.NullString{String: message, Valid: true},
+			ID:                  id,
+			TenantID:            tenantID,
+			LeaseToken:          leaseToken,
+		})
 	}
-	if affected, err := result.RowsAffected(); err != nil {
-		return err
-	} else if affected == 0 {
-		return errors.New("invoice email lease no longer owned")
-	}
-	return nil
+	return requireInvoiceEmailOutboxUpdate(affected, err)
 }
 
 func (d *invoiceEmailDispatcher) Dispatch(ctx context.Context, payload invoiceEmailPayload) ([]string, error) {
@@ -253,22 +217,15 @@ func (d *invoiceEmailDispatcher) Dispatch(ctx context.Context, payload invoiceEm
 		}
 	}
 
-	var amount, meteredAmount, grossMeteredAmount float64
-	var currency, status string
-	var dueDate time.Time
-	err := d.jobs.db.QueryRowContext(ctx, `
-		SELECT amount::float8, metered_amount::float8,
-		       gross_metered_amount::float8, currency, due_date, status
-		FROM purser.billing_invoices
-		WHERE id = $1 AND tenant_id = $2
-	`, payload.InvoiceID, payload.TenantID).Scan(
-		&amount, &meteredAmount, &grossMeteredAmount, &currency, &dueDate, &status,
-	)
+	header, err := purserdb.New(d.jobs.db).GetInvoiceEmailHeader(ctx, purserdb.GetInvoiceEmailHeaderParams{
+		InvoiceID: payload.InvoiceID,
+		TenantID:  payload.TenantID,
+	})
 	if err != nil {
 		return []string{"smtp"}, fmt.Errorf("load permanent invoice for email: %w", err)
 	}
-	if status == "draft" || status == "manual_review" {
-		return []string{"smtp"}, fmt.Errorf("invoice %s is not permanent: status %s", payload.InvoiceID, status)
+	if header.Status == "draft" || header.Status == "manual_review" {
+		return []string{"smtp"}, fmt.Errorf("invoice %s is not permanent: status %s", payload.InvoiceID, header.Status)
 	}
 	lineItems, err := d.jobs.loadEmailLineItems(ctx, payload.InvoiceID, payload.TenantID)
 	if err != nil {
@@ -277,43 +234,26 @@ func (d *invoiceEmailDispatcher) Dispatch(ctx context.Context, payload invoiceEm
 	if len(lineItems) == 0 {
 		return []string{"smtp"}, fmt.Errorf("invoice %s has no permanent line-item snapshot", payload.InvoiceID)
 	}
-	if err := send(payload.Recipient, payload.InvoiceID, amount, meteredAmount,
-		grossMeteredAmount, currency, dueDate, lineItems); err != nil {
+	if err := send(payload.Recipient, payload.InvoiceID, header.Amount, header.MeteredAmount,
+		header.GrossMeteredAmount, header.Currency, header.DueDate, lineItems); err != nil {
 		return []string{"smtp"}, err
 	}
 	return nil, nil
 }
 
 func (d *invoiceEmailDispatcher) dispatchOverdueReminder(ctx context.Context, payload invoiceEmailPayload) ([]string, error) {
-	var amountDue float64
-	var currency, status string
-	var dueDate time.Time
-	var latestReminderStage int
-	err := d.jobs.db.QueryRowContext(ctx, `
-		SELECT GREATEST(bi.amount - COALESCE((
-		           SELECT SUM(bp.amount - (COALESCE(bp.reversed_amount_cents, 0)::numeric / 100))
-		           FROM purser.billing_payments bp
-		           WHERE bp.invoice_id = bi.id
-		             AND bp.status = 'confirmed'
-		             AND bp.currency = bi.currency
-		       ), 0), 0)::float8,
-		       bi.currency, bi.due_date, bi.status,
-		       COALESCE((
-		           SELECT MAX(candidate)
-		           FROM UNNEST(ARRAY[1, 7, 14, 30]) AS candidate
-		           WHERE candidate <= FLOOR(EXTRACT(EPOCH FROM (NOW() - bi.due_date)) / 86400)
-		       ), 0)
-		FROM purser.billing_invoices bi
-		WHERE bi.id = $1 AND bi.tenant_id = $2
-	`, payload.InvoiceID, payload.TenantID).Scan(&amountDue, &currency, &dueDate, &status, &latestReminderStage)
+	reminder, err := purserdb.New(d.jobs.db).GetOverdueInvoiceReminder(ctx, purserdb.GetOverdueInvoiceReminderParams{
+		InvoiceID: payload.InvoiceID,
+		TenantID:  payload.TenantID,
+	})
 	if err != nil {
 		return []string{"smtp"}, fmt.Errorf("load overdue invoice for reminder: %w", err)
 	}
-	if amountDue <= 0 || (status != "pending" && status != "overdue") || !dueDate.Before(time.Now()) {
+	if reminder.AmountDue <= 0 || (reminder.Status != "pending" && reminder.Status != "overdue") || !reminder.DueDate.Before(time.Now()) {
 		return nil, nil
 	}
-	daysPastDue := int(time.Since(dueDate).Hours() / 24)
-	if daysPastDue < payload.ReminderStage || payload.ReminderStage != latestReminderStage {
+	daysPastDue := int(time.Since(reminder.DueDate).Hours() / 24)
+	if daysPastDue < payload.ReminderStage || payload.ReminderStage != int(reminder.LatestReminderStage) {
 		return nil, nil
 	}
 	send := d.sendReminder
@@ -325,7 +265,7 @@ func (d *invoiceEmailDispatcher) dispatchOverdueReminder(ctx context.Context, pa
 			return d.jobs.emailService.SendOverdueReminderEmail(recipient, "", invoiceID, amount, currency, daysPastDue)
 		}
 	}
-	if err := send(payload.Recipient, payload.InvoiceID, amountDue, currency, daysPastDue); err != nil {
+	if err := send(payload.Recipient, payload.InvoiceID, reminder.AmountDue, reminder.Currency, daysPastDue); err != nil {
 		return []string{"smtp"}, err
 	}
 	return nil, nil

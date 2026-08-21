@@ -98,18 +98,18 @@ func TestHandleStripeSubscriptionEventBackfillsBillingPeriod(t *testing.T) {
 		},
 	}
 
-	mock.ExpectQuery(`SELECT tenant_id FROM purser\.tenant_subscriptions WHERE stripe_subscription_id = \$1`).
+	mock.ExpectQuery(`SELECT tenant_id::text AS tenant_id`).
 		WithArgs(subscriptionID).
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow(tenantID))
 	// active routes through the activation helper: applies the tier, sets
 	// payment_method=stripe, clears staged state, and backfills the period.
-	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions[\s\S]*payment_method = 'stripe'[\s\S]*billing_period_start = COALESCE\(\$6, billing_period_start\)[\s\S]*WHERE tenant_id = \$4`).
-		WithArgs("cus_test", subscriptionID, "", tenantID, sqlmock.AnyArg(), sqlmock.AnyArg()).
+	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions[\s\S]*payment_method = 'stripe'[\s\S]*billing_period_start = COALESCE\(\$5, billing_period_start\)[\s\S]*WHERE tenant_id = \$6::text::uuid`).
+		WithArgs("cus_test", subscriptionID, "", sqlmock.AnyArg(), sqlmock.AnyArg(), tenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE purser\.payment_provider_intents[\s\S]*provider_subscription_id = \$1`).
 		WithArgs(subscriptionID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(`SELECT id FROM purser\.tenant_subscriptions WHERE tenant_id = \$1`).
+	mock.ExpectQuery(`SELECT id::text AS id`).
 		WithArgs(tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("sub-local-1"))
 	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
@@ -146,7 +146,7 @@ func TestHandleStripeCheckoutAsyncPaymentFailedPrepaid(t *testing.T) {
 		},
 	}
 
-	mock.ExpectExec(`UPDATE purser\.pending_topups\s+SET status = \$1.*WHERE id = \$2 AND status = 'pending'`).
+	mock.ExpectExec(`UPDATE purser\.pending_topups\s+SET status = \$1.*WHERE id = \$2::text::uuid AND status = 'pending'`).
 		WithArgs("failed", "topup-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -188,7 +188,7 @@ func TestHandleStripeCheckoutExpiredSubscription(t *testing.T) {
 	mock.ExpectExec(`UPDATE purser\.payment_provider_intents\s+SET status = 'expired'.*provider_subscription_id = \$1`).
 		WithArgs("sub_1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET pending_tier_id = NULL.*WHERE tenant_id = \$1 AND pending_reason = 'stripe_checkout'`).
+	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET pending_tier_id = NULL.*WHERE tenant_id = \$1::text::uuid AND pending_reason = 'stripe_checkout'`).
 		WithArgs("t1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -328,20 +328,20 @@ func TestUpdateInvoicePaymentStatusDoesNotMarkPartiallyPaidInvoicePaid(t *testin
 	s := &Service{db: mockDB, logger: logrus.New()}
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id, invoice_id FROM purser\.billing_payments`).
+	mock.ExpectQuery(`SELECT id::text AS payment_id, invoice_id::text AS invoice_id`).
 		WithArgs("tr_partial", "card").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "invoice_id"}).AddRow("payment-1", "invoice-1"))
 	mock.ExpectExec(`UPDATE purser\.billing_payments`).
-		WithArgs("confirmed", sqlmock.AnyArg(), "payment-1", "tr_partial").
+		WithArgs("confirmed", sqlmock.AnyArg(), "tr_partial", "payment-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE purser\.billing_payment_attempts`).
 		WithArgs("succeeded", "tr_partial", "payment-1", "mollie").
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`UPDATE purser\.billing_invoices[\s\S]*COALESCE\(SUM[\s\S]*currency = i\.currency[\s\S]*>= i\.amount`).
+	mock.ExpectExec(`UPDATE purser\.billing_invoices invoice[\s\S]*COALESCE\(SUM[\s\S]*currency = invoice\.currency[\s\S]*>= invoice\.amount`).
 		WithArgs(sqlmock.AnyArg(), "invoice-1").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
-	mock.ExpectQuery(`SELECT bi\.tenant_id, bi\.amount, bi\.currency, ts\.billing_email`).
+	mock.ExpectQuery(`SELECT invoice\.tenant_id::text AS tenant_id, invoice\.amount::float8 AS amount`).
 		WithArgs("invoice-1").
 		WillReturnError(sql.ErrNoRows)
 
@@ -367,16 +367,16 @@ func TestUpdateInvoicePaymentStatusMarksInvoicePaidWhenConfirmedPaymentsCoverAmo
 	s := &Service{db: mockDB, logger: logrus.New()}
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id, invoice_id FROM purser\.billing_payments`).
+	mock.ExpectQuery(`SELECT id::text AS payment_id, invoice_id::text AS invoice_id`).
 		WithArgs("tr_full", "card").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "invoice_id"}).AddRow("payment-2", "invoice-2"))
 	mock.ExpectExec(`UPDATE purser\.billing_payments`).
-		WithArgs("confirmed", sqlmock.AnyArg(), "payment-2", "tr_full").
+		WithArgs("confirmed", sqlmock.AnyArg(), "tr_full", "payment-2").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE purser\.billing_payment_attempts`).
 		WithArgs("succeeded", "tr_full", "payment-2", "mollie").
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`UPDATE purser\.billing_invoices[\s\S]*COALESCE\(SUM[\s\S]*currency = i\.currency[\s\S]*>= i\.amount`).
+	mock.ExpectExec(`UPDATE purser\.billing_invoices invoice[\s\S]*COALESCE\(SUM[\s\S]*currency = invoice\.currency[\s\S]*>= invoice\.amount`).
 		WithArgs(sqlmock.AnyArg(), "invoice-2").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`FROM purser\.invoice_line_items li`).
@@ -391,7 +391,7 @@ func TestUpdateInvoicePaymentStatusMarksInvoicePaidWhenConfirmedPaymentsCoverAmo
 			"usage_type", "currency", "period_start", "period_end", "allocated_gross_cents",
 		}))
 	mock.ExpectCommit()
-	mock.ExpectQuery(`SELECT bi\.tenant_id, bi\.amount, bi\.currency, ts\.billing_email`).
+	mock.ExpectQuery(`SELECT invoice\.tenant_id::text AS tenant_id, invoice\.amount::float8 AS amount`).
 		WithArgs("invoice-2").
 		WillReturnError(sql.ErrNoRows)
 
@@ -417,7 +417,7 @@ func TestUpdateInvoicePaymentStatusRejectsInvoiceMismatch(t *testing.T) {
 	s := &Service{db: mockDB, logger: logrus.New()}
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id, invoice_id FROM purser\.billing_payments`).
+	mock.ExpectQuery(`SELECT id::text AS payment_id, invoice_id::text AS invoice_id`).
 		WithArgs("tr_wrong", "card").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "invoice_id"}).AddRow("payment-3", "invoice-real"))
 	mock.ExpectRollback()

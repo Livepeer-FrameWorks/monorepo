@@ -48,7 +48,7 @@ func TestApplyPendingDowngrade_NotDue_NoOp(t *testing.T) {
 	future := time.Now().Add(48 * time.Hour)
 	rows := sqlmock.NewRows([]string{"tier_id", "pending_tier_id", "pending_effective_at", "tier_level", "tier_name"}).
 		AddRow(currentTier, pending, future, int32(1), "supporter")
-	mock.ExpectQuery(`SELECT ts\.tier_id,\s+ts\.pending_tier_id`).
+	mock.ExpectQuery(`SELECT subscription\.tier_id::text AS tier_id,\s+COALESCE\(subscription\.pending_tier_id::text`).
 		WithArgs(tenantID).
 		WillReturnRows(rows)
 
@@ -74,8 +74,8 @@ func TestApplyPendingDowngrade_NoPending_NoOp(t *testing.T) {
 
 	tenantID := "tenant-1"
 	rows := sqlmock.NewRows([]string{"tier_id", "pending_tier_id", "pending_effective_at", "tier_level", "tier_name"}).
-		AddRow("tier-A", nil, nil, nil, nil)
-	mock.ExpectQuery(`SELECT ts\.tier_id,\s+ts\.pending_tier_id`).
+		AddRow("tier-A", "", nil, nil, nil)
+	mock.ExpectQuery(`SELECT subscription\.tier_id::text AS tier_id,\s+COALESCE\(subscription\.pending_tier_id::text`).
 		WithArgs(tenantID).
 		WillReturnRows(rows)
 
@@ -105,7 +105,7 @@ func TestApplyPendingDowngrade_Happy_FlipsThenReconcilesThenClears(t *testing.T)
 
 	rows := sqlmock.NewRows([]string{"tier_id", "pending_tier_id", "pending_effective_at", "tier_level", "tier_name"}).
 		AddRow("tier-A", pending, past, int32(1), "free")
-	mock.ExpectQuery(`SELECT ts\.tier_id,\s+ts\.pending_tier_id`).
+	mock.ExpectQuery(`SELECT subscription\.tier_id::text AS tier_id,\s+COALESCE\(subscription\.pending_tier_id::text`).
 		WithArgs(tenantID).
 		WillReturnRows(rows)
 	// Step 1: flip tier_id.
@@ -149,7 +149,7 @@ func TestApplyPendingDowngrade_ReconcileFailLeavesPending(t *testing.T) {
 
 	rows := sqlmock.NewRows([]string{"tier_id", "pending_tier_id", "pending_effective_at", "tier_level", "tier_name"}).
 		AddRow("tier-A", pending, past, int32(1), "free")
-	mock.ExpectQuery(`SELECT ts\.tier_id,\s+ts\.pending_tier_id`).
+	mock.ExpectQuery(`SELECT subscription\.tier_id::text AS tier_id,\s+COALESCE\(subscription\.pending_tier_id::text`).
 		WithArgs(tenantID).
 		WillReturnRows(rows)
 	// Step 1 flip still happens — favors-user ordering.

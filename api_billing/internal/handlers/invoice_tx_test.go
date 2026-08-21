@@ -53,7 +53,7 @@ func TestPersistInvoiceLineItems_UpsertsAllLines(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	// Orphan sweep returns no extra rows.
-	mock.ExpectQuery(`SELECT line_key FROM purser\.invoice_line_items WHERE invoice_id = \$1 AND tenant_id = \$2`).
+	mock.ExpectQuery(`SELECT line_key[\s\S]+FROM purser\.invoice_line_items[\s\S]+WHERE invoice_id = \$1::text::uuid[\s\S]+AND tenant_id = \$2::text::uuid`).
 		WithArgs("inv-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"line_key"}))
 
@@ -89,12 +89,12 @@ func TestPersistInvoiceLineItems_SweepsStaleLines(t *testing.T) {
 
 	mock.ExpectExec(`INSERT INTO purser\.invoice_line_items`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(`SELECT line_key FROM purser\.invoice_line_items WHERE invoice_id = \$1 AND tenant_id = \$2`).
+	mock.ExpectQuery(`SELECT line_key[\s\S]+FROM purser\.invoice_line_items[\s\S]+WHERE invoice_id = \$1::text::uuid[\s\S]+AND tenant_id = \$2::text::uuid`).
 		WithArgs("inv-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"line_key"}).
 			AddRow(rating.LineKeyBaseSubscription).
 			AddRow("meter:legacy_removed_meter")) // stale row from a prior run
-	mock.ExpectExec(`DELETE FROM purser\.invoice_line_items WHERE invoice_id = \$1 AND tenant_id = \$2 AND line_key = \$3`).
+	mock.ExpectExec(`DELETE FROM purser\.invoice_line_items[\s\S]+WHERE invoice_id = \$1::text::uuid[\s\S]+AND tenant_id = \$2::text::uuid[\s\S]+AND line_key = \$3`).
 		WithArgs("inv-1", "tenant-1", "meter:legacy_removed_meter").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
