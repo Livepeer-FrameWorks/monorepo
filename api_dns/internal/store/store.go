@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_dns/internal/database/navigatordb"
 	fieldcrypt "github.com/Livepeer-FrameWorks/monorepo/pkg/crypto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
@@ -137,12 +138,33 @@ type TenantEdgeApplyState struct {
 }
 
 type Store struct {
-	db  *sql.DB
+	q   *navigatordb.Queries
 	enc *fieldcrypt.FieldEncryptor // nil = no encryption (backward-compatible)
 }
 
 func NewStore(db *sql.DB, enc *fieldcrypt.FieldEncryptor) *Store {
-	return &Store{db: db, enc: enc}
+	return &Store{q: navigatordb.New(db), enc: enc}
+}
+
+func certificateFromDB(row navigatordb.NavigatorCertificate) Certificate {
+	return Certificate{
+		ID: row.ID, TenantID: row.TenantID, Domain: row.Domain, CertPEM: row.CertPem, KeyPEM: row.KeyPem,
+		ExpiresAt: row.ExpiresAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, IssuerCA: row.IssuerCa,
+	}
+}
+
+func acmeAccountFromDB(row navigatordb.NavigatorAcmeAccount) ACMEAccount {
+	return ACMEAccount{
+		ID: row.ID, TenantID: row.TenantID, Email: row.Email, Registration: row.RegistrationJson,
+		PrivateKeyPEM: row.PrivateKeyPem, CreatedAt: row.CreatedAt, CA: row.Ca,
+	}
+}
+
+func tlsBundleFromDB(row navigatordb.NavigatorTlsBundle) TLSBundle {
+	return TLSBundle{
+		ID: row.ID, BundleID: row.BundleID, CertPEM: row.CertPem, KeyPEM: row.KeyPem,
+		ExpiresAt: row.ExpiresAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, IssuerCA: row.IssuerCa,
+	}
 }
 
 func marshalDomains(domains []string) ([]byte, error) {
@@ -182,36 +204,22 @@ func (s *Store) decryptField(stored string) (string, error) {
 // GetCertificate retrieves a valid certificate for a domain within a tenant context.
 // If tenantID is empty, retrieves platform-wide certificate (tenant_id IS NULL).
 func (s *Store) GetCertificate(ctx context.Context, tenantID, domain string) (*Certificate, error) {
-	var query string
-	var args []interface{}
-
+	var row navigatordb.NavigatorCertificate
+	var err error
 	if tenantID == "" {
-		query = `
-			SELECT id, tenant_id, domain, cert_pem, key_pem, expires_at, created_at, updated_at, issuer_ca
-			FROM navigator.certificates
-			WHERE tenant_id IS NULL AND domain = $1
-		`
-		args = []interface{}{domain}
+		row, err = s.q.GetPlatformCertificate(ctx, domain)
 	} else {
-		query = `
-			SELECT id, tenant_id, domain, cert_pem, key_pem, expires_at, created_at, updated_at, issuer_ca
-			FROM navigator.certificates
-			WHERE tenant_id = $1 AND domain = $2
-		`
-		args = []interface{}{tenantID, domain}
+		row, err = s.q.GetTenantCertificate(ctx, navigatordb.GetTenantCertificateParams{
+			TenantID: sql.NullString{String: tenantID, Valid: true}, Domain: domain,
+		})
 	}
-
-	var cert Certificate
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(
-		&cert.ID, &cert.TenantID, &cert.Domain, &cert.CertPEM, &cert.KeyPEM,
-		&cert.ExpiresAt, &cert.CreatedAt, &cert.UpdatedAt, &cert.IssuerCA,
-	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
+	cert := certificateFromDB(row)
 	if cert.KeyPEM, err = s.decryptField(cert.KeyPEM); err != nil {
 		return nil, fmt.Errorf("decrypt certificate key: %w", err)
 	}
@@ -230,36 +238,22 @@ func (s *Store) SaveCertificate(ctx context.Context, tenantID string, cert *Cert
 		issuer = "letsencrypt"
 	}
 	if tenantID == "" {
-		query := `
-			INSERT INTO navigator.certificates (tenant_id, domain, cert_pem, key_pem, expires_at, updated_at, issuer_ca)
-			VALUES (NULL, $1, $2, $3, $4, NOW(), $5)
-			ON CONFLICT (domain) WHERE tenant_id IS NULL DO UPDATE SET
-				cert_pem = EXCLUDED.cert_pem,
-				key_pem = EXCLUDED.key_pem,
-				expires_at = EXCLUDED.expires_at,
-				updated_at = NOW(),
-				issuer_ca = EXCLUDED.issuer_ca
-			RETURNING id, tenant_id, created_at
-		`
-		return s.db.QueryRowContext(ctx, query,
-			cert.Domain, cert.CertPEM, encryptedKey, cert.ExpiresAt, issuer,
-		).Scan(&cert.ID, &cert.TenantID, &cert.CreatedAt)
+		row, queryErr := s.q.SavePlatformCertificate(ctx, navigatordb.SavePlatformCertificateParams{
+			Domain: cert.Domain, CertPem: cert.CertPEM, KeyPem: encryptedKey, ExpiresAt: cert.ExpiresAt, IssuerCa: issuer,
+		})
+		if queryErr == nil {
+			cert.ID, cert.TenantID, cert.CreatedAt = row.ID, row.TenantID, row.CreatedAt
+		}
+		return queryErr
 	}
-
-	query := `
-		INSERT INTO navigator.certificates (tenant_id, domain, cert_pem, key_pem, expires_at, updated_at, issuer_ca)
-		VALUES ($1::uuid, $2, $3, $4, $5, NOW(), $6)
-		ON CONFLICT (tenant_id, domain) DO UPDATE SET
-			cert_pem = EXCLUDED.cert_pem,
-			key_pem = EXCLUDED.key_pem,
-			expires_at = EXCLUDED.expires_at,
-			updated_at = NOW(),
-			issuer_ca = EXCLUDED.issuer_ca
-		RETURNING id, tenant_id, created_at
-	`
-	return s.db.QueryRowContext(ctx, query,
-		tenantID, cert.Domain, cert.CertPEM, encryptedKey, cert.ExpiresAt, issuer,
-	).Scan(&cert.ID, &cert.TenantID, &cert.CreatedAt)
+	row, queryErr := s.q.SaveTenantCertificate(ctx, navigatordb.SaveTenantCertificateParams{
+		TenantID: sql.NullString{String: tenantID, Valid: true}, Domain: cert.Domain, CertPem: cert.CertPEM, KeyPem: encryptedKey,
+		ExpiresAt: cert.ExpiresAt, IssuerCa: issuer,
+	})
+	if queryErr == nil {
+		cert.ID, cert.TenantID, cert.CreatedAt = row.ID, row.TenantID, row.CreatedAt
+	}
+	return queryErr
 }
 
 // DeleteCertificate removes a stored cert (and its encrypted key) for the
@@ -267,17 +261,11 @@ func (s *Store) SaveCertificate(ctx context.Context, tenantID string, cert *Cert
 // material doesn't outlive the lifecycle row. Idempotent on missing rows.
 func (s *Store) DeleteCertificate(ctx context.Context, tenantID, domain string) error {
 	if tenantID == "" {
-		_, err := s.db.ExecContext(ctx, `
-			DELETE FROM navigator.certificates
-			WHERE tenant_id IS NULL AND domain = $1
-		`, domain)
-		return err
+		return s.q.DeletePlatformCertificate(ctx, domain)
 	}
-	_, err := s.db.ExecContext(ctx, `
-		DELETE FROM navigator.certificates
-		WHERE tenant_id = $1::uuid AND domain = $2
-	`, tenantID, domain)
-	return err
+	return s.q.DeleteTenantCertificate(ctx, navigatordb.DeleteTenantCertificateParams{
+		TenantID: sql.NullString{String: tenantID, Valid: true}, Domain: domain,
+	})
 }
 
 // GetACMEAccount retrieves an ACME account scoped to (tenant, email, ca).
@@ -289,35 +277,22 @@ func (s *Store) GetACMEAccount(ctx context.Context, tenantID, email, ca string) 
 	if ca == "" {
 		ca = "letsencrypt"
 	}
-	var query string
-	var args []interface{}
-
+	var row navigatordb.NavigatorAcmeAccount
+	var err error
 	if tenantID == "" {
-		query = `
-			SELECT id, tenant_id, email, registration_json, private_key_pem, created_at, ca
-			FROM navigator.acme_accounts
-			WHERE tenant_id IS NULL AND email = $1 AND ca = $2
-		`
-		args = []interface{}{email, ca}
+		row, err = s.q.GetPlatformACMEAccount(ctx, navigatordb.GetPlatformACMEAccountParams{Email: email, Ca: ca})
 	} else {
-		query = `
-			SELECT id, tenant_id, email, registration_json, private_key_pem, created_at, ca
-			FROM navigator.acme_accounts
-			WHERE tenant_id = $1 AND email = $2 AND ca = $3
-		`
-		args = []interface{}{tenantID, email, ca}
+		row, err = s.q.GetTenantACMEAccount(ctx, navigatordb.GetTenantACMEAccountParams{
+			TenantID: sql.NullString{String: tenantID, Valid: true}, Email: email, Ca: ca,
+		})
 	}
-
-	var acc ACMEAccount
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(
-		&acc.ID, &acc.TenantID, &acc.Email, &acc.Registration, &acc.PrivateKeyPEM, &acc.CreatedAt, &acc.CA,
-	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
+	acc := acmeAccountFromDB(row)
 	if acc.PrivateKeyPEM, err = s.decryptField(acc.PrivateKeyPEM); err != nil {
 		return nil, fmt.Errorf("decrypt ACME private key: %w", err)
 	}
@@ -336,54 +311,35 @@ func (s *Store) SaveACMEAccount(ctx context.Context, tenantID string, acc *ACMEA
 		return fmt.Errorf("encrypt ACME private key: %w", err)
 	}
 	if tenantID == "" {
-		query := `
-			INSERT INTO navigator.acme_accounts (tenant_id, email, registration_json, private_key_pem, ca)
-			VALUES (NULL, $1, $2, $3, $4)
-			ON CONFLICT (email, ca) WHERE tenant_id IS NULL DO UPDATE SET
-				registration_json = EXCLUDED.registration_json,
-				private_key_pem = EXCLUDED.private_key_pem
-			RETURNING id, tenant_id, created_at
-		`
-		return s.db.QueryRowContext(ctx, query,
-			acc.Email, acc.Registration, encryptedKey, acc.CA,
-		).Scan(&acc.ID, &acc.TenantID, &acc.CreatedAt)
+		row, queryErr := s.q.SavePlatformACMEAccount(ctx, navigatordb.SavePlatformACMEAccountParams{
+			Email: acc.Email, RegistrationJson: acc.Registration, PrivateKeyPem: encryptedKey, Ca: acc.CA,
+		})
+		if queryErr == nil {
+			acc.ID, acc.TenantID, acc.CreatedAt = row.ID, row.TenantID, row.CreatedAt
+		}
+		return queryErr
 	}
-
-	query := `
-		INSERT INTO navigator.acme_accounts (tenant_id, email, registration_json, private_key_pem, ca)
-		VALUES ($1::uuid, $2, $3, $4, $5)
-		ON CONFLICT (tenant_id, email, ca) DO UPDATE SET
-			registration_json = EXCLUDED.registration_json,
-			private_key_pem = EXCLUDED.private_key_pem
-		RETURNING id, tenant_id, created_at
-	`
-	return s.db.QueryRowContext(ctx, query,
-		tenantID, acc.Email, acc.Registration, encryptedKey, acc.CA,
-	).Scan(&acc.ID, &acc.TenantID, &acc.CreatedAt)
+	row, queryErr := s.q.SaveTenantACMEAccount(ctx, navigatordb.SaveTenantACMEAccountParams{
+		TenantID: sql.NullString{String: tenantID, Valid: true}, Email: acc.Email,
+		RegistrationJson: acc.Registration, PrivateKeyPem: encryptedKey, Ca: acc.CA,
+	})
+	if queryErr == nil {
+		acc.ID, acc.TenantID, acc.CreatedAt = row.ID, row.TenantID, row.CreatedAt
+	}
+	return queryErr
 }
 
 // ListExpiringCertificates finds certs expiring within the given duration.
 // Returns all certificates (platform-wide and tenant-specific) that are expiring.
 func (s *Store) ListExpiringCertificates(ctx context.Context, threshold time.Duration) ([]Certificate, error) {
 	expiryLimit := time.Now().Add(threshold)
-	query := `
-		SELECT id, tenant_id, domain, cert_pem, key_pem, expires_at, created_at, updated_at, issuer_ca
-		FROM navigator.certificates
-		WHERE expires_at < $1
-		ORDER BY expires_at ASC
-	`
-	rows, err := s.db.QueryContext(ctx, query, expiryLimit)
+	rows, err := s.q.ListExpiringCertificates(ctx, expiryLimit)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
 	var certs []Certificate
-	for rows.Next() {
-		var c Certificate
-		if scanErr := rows.Scan(&c.ID, &c.TenantID, &c.Domain, &c.CertPEM, &c.KeyPEM, &c.ExpiresAt, &c.CreatedAt, &c.UpdatedAt, &c.IssuerCA); scanErr != nil {
-			return nil, scanErr
-		}
+	for _, row := range rows {
+		c := certificateFromDB(row)
 		if c.KeyPEM, err = s.decryptField(c.KeyPEM); err != nil {
 			return nil, fmt.Errorf("decrypt certificate key for %s: %w", c.Domain, err)
 		}
@@ -394,38 +350,19 @@ func (s *Store) ListExpiringCertificates(ctx context.Context, threshold time.Dur
 
 // ListCertificatesForTenant returns all certificates belonging to a specific tenant.
 func (s *Store) ListCertificatesForTenant(ctx context.Context, tenantID string) ([]Certificate, error) {
-	var query string
-	var args []interface{}
-
+	var rows []navigatordb.NavigatorCertificate
+	var err error
 	if tenantID == "" {
-		query = `
-			SELECT id, tenant_id, domain, cert_pem, key_pem, expires_at, created_at, updated_at, issuer_ca
-			FROM navigator.certificates
-			WHERE tenant_id IS NULL
-			ORDER BY domain
-		`
+		rows, err = s.q.ListPlatformCertificates(ctx)
 	} else {
-		query = `
-			SELECT id, tenant_id, domain, cert_pem, key_pem, expires_at, created_at, updated_at, issuer_ca
-			FROM navigator.certificates
-			WHERE tenant_id = $1
-			ORDER BY domain
-		`
-		args = []interface{}{tenantID}
+		rows, err = s.q.ListTenantCertificates(ctx, sql.NullString{String: tenantID, Valid: true})
 	}
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
 	var certs []Certificate
-	for rows.Next() {
-		var c Certificate
-		if scanErr := rows.Scan(&c.ID, &c.TenantID, &c.Domain, &c.CertPEM, &c.KeyPEM, &c.ExpiresAt, &c.CreatedAt, &c.UpdatedAt, &c.IssuerCA); scanErr != nil {
-			return nil, scanErr
-		}
+	for _, row := range rows {
+		c := certificateFromDB(row)
 		if c.KeyPEM, err = s.decryptField(c.KeyPEM); err != nil {
 			return nil, fmt.Errorf("decrypt certificate key for %s: %w", c.Domain, err)
 		}
@@ -435,19 +372,11 @@ func (s *Store) ListCertificatesForTenant(ctx context.Context, tenantID string) 
 }
 
 func (s *Store) GetTLSBundle(ctx context.Context, bundleID string) (*TLSBundle, error) {
-	query := `
-		SELECT id, bundle_id, domains, cert_pem, key_pem, expires_at, created_at, updated_at, issuer_ca
-		FROM navigator.tls_bundles
-		WHERE bundle_id = $1
-	`
-
-	var bundle TLSBundle
-	var domainsJSON []byte
-	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		return s.db.QueryRowContext(ctx, query, bundleID).Scan(
-			&bundle.ID, &bundle.BundleID, &domainsJSON, &bundle.CertPEM, &bundle.KeyPEM,
-			&bundle.ExpiresAt, &bundle.CreatedAt, &bundle.UpdatedAt, &bundle.IssuerCA,
-		)
+	var row navigatordb.NavigatorTlsBundle
+	var err error
+	err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		row, err = s.q.GetTLSBundle(ctx, bundleID)
+		return err
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -455,10 +384,11 @@ func (s *Store) GetTLSBundle(ctx context.Context, bundleID string) (*TLSBundle, 
 	if err != nil {
 		return nil, err
 	}
+	bundle := tlsBundleFromDB(row)
 	if bundle.KeyPEM, err = s.decryptField(bundle.KeyPEM); err != nil {
 		return nil, fmt.Errorf("decrypt tls bundle key: %w", err)
 	}
-	bundle.Domains, err = unmarshalDomains(domainsJSON)
+	bundle.Domains, err = unmarshalDomains(row.Domains)
 	if err != nil {
 		return nil, fmt.Errorf("decode tls bundle domains: %w", err)
 	}
@@ -479,53 +409,31 @@ func (s *Store) SaveTLSBundle(ctx context.Context, bundle *TLSBundle) error {
 	if issuer == "" {
 		issuer = "letsencrypt"
 	}
-	query := `
-		INSERT INTO navigator.tls_bundles (bundle_id, domains, cert_pem, key_pem, expires_at, issuer_ca, updated_at)
-		VALUES ($1, $2::jsonb, $3, $4, $5, $6, NOW())
-		ON CONFLICT (bundle_id) DO UPDATE SET
-			domains = EXCLUDED.domains,
-			cert_pem = EXCLUDED.cert_pem,
-			key_pem = EXCLUDED.key_pem,
-			expires_at = EXCLUDED.expires_at,
-			issuer_ca = EXCLUDED.issuer_ca,
-			updated_at = NOW()
-		RETURNING id, created_at
-	`
 	return database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		return s.db.QueryRowContext(ctx, query,
-			bundle.BundleID, string(domainsJSON), bundle.CertPEM, encryptedKey, bundle.ExpiresAt, issuer,
-		).Scan(&bundle.ID, &bundle.CreatedAt)
+		row, queryErr := s.q.SaveTLSBundle(ctx, navigatordb.SaveTLSBundleParams{
+			BundleID: bundle.BundleID, Domains: domainsJSON, CertPem: bundle.CertPEM, KeyPem: encryptedKey,
+			ExpiresAt: bundle.ExpiresAt, IssuerCa: issuer,
+		})
+		if queryErr == nil {
+			bundle.ID, bundle.CreatedAt = row.ID, row.CreatedAt
+		}
+		return queryErr
 	})
 }
 
 func (s *Store) ListExpiringTLSBundles(ctx context.Context, threshold time.Duration) ([]TLSBundle, error) {
 	expiryLimit := time.Now().Add(threshold)
-	query := `
-		SELECT id, bundle_id, domains, cert_pem, key_pem, expires_at, created_at, updated_at, issuer_ca
-		FROM navigator.tls_bundles
-		WHERE expires_at < $1
-		ORDER BY expires_at ASC
-	`
-	rows, err := s.db.QueryContext(ctx, query, expiryLimit)
+	rows, err := s.q.ListExpiringTLSBundles(ctx, expiryLimit)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
 	var bundles []TLSBundle
-	for rows.Next() {
-		var bundle TLSBundle
-		var domainsJSON []byte
-		if scanErr := rows.Scan(
-			&bundle.ID, &bundle.BundleID, &domainsJSON, &bundle.CertPEM, &bundle.KeyPEM,
-			&bundle.ExpiresAt, &bundle.CreatedAt, &bundle.UpdatedAt, &bundle.IssuerCA,
-		); scanErr != nil {
-			return nil, scanErr
-		}
+	for _, row := range rows {
+		bundle := tlsBundleFromDB(row)
 		if bundle.KeyPEM, err = s.decryptField(bundle.KeyPEM); err != nil {
 			return nil, fmt.Errorf("decrypt tls bundle key for %s: %w", bundle.BundleID, err)
 		}
-		bundle.Domains, err = unmarshalDomains(domainsJSON)
+		bundle.Domains, err = unmarshalDomains(row.Domains)
 		if err != nil {
 			return nil, fmt.Errorf("decode tls bundle domains for %s: %w", bundle.BundleID, err)
 		}
@@ -536,18 +444,11 @@ func (s *Store) ListExpiringTLSBundles(ctx context.Context, threshold time.Durat
 }
 
 func (s *Store) GetInternalCA(ctx context.Context, role string) (*InternalCA, error) {
-	query := `
-		SELECT role, cert_pem, key_pem, expires_at, created_at, updated_at
-		FROM navigator.internal_ca
-		WHERE role = $1
-	`
-
-	var ca InternalCA
-	var keyPEM sql.NullString
-	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		return s.db.QueryRowContext(ctx, query, role).Scan(
-			&ca.Role, &ca.CertPEM, &keyPEM, &ca.ExpiresAt, &ca.CreatedAt, &ca.UpdatedAt,
-		)
+	var row navigatordb.NavigatorInternalCa
+	var err error
+	err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		row, err = s.q.GetInternalCA(ctx, role)
+		return err
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -555,8 +456,12 @@ func (s *Store) GetInternalCA(ctx context.Context, role string) (*InternalCA, er
 	if err != nil {
 		return nil, err
 	}
-	if keyPEM.Valid {
-		ca.KeyPEM = keyPEM.String
+	ca := InternalCA{
+		Role: row.Role, CertPEM: row.CertPem, ExpiresAt: row.ExpiresAt,
+		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+	}
+	if row.KeyPem.Valid {
+		ca.KeyPEM = row.KeyPem.String
 	}
 	if ca.KeyPEM != "" {
 		if ca.KeyPEM, err = s.decryptField(ca.KeyPEM); err != nil {
@@ -567,49 +472,43 @@ func (s *Store) GetInternalCA(ctx context.Context, role string) (*InternalCA, er
 }
 
 func (s *Store) SaveInternalCA(ctx context.Context, ca *InternalCA) error {
-	var encryptedKey *string
+	var encryptedKey sql.NullString
 	if ca.KeyPEM != "" {
 		encoded, err := s.encryptField(ca.KeyPEM)
 		if err != nil {
 			return fmt.Errorf("encrypt internal ca key: %w", err)
 		}
-		encryptedKey = &encoded
+		encryptedKey = sql.NullString{String: encoded, Valid: true}
 	}
 
-	query := `
-		INSERT INTO navigator.internal_ca (role, cert_pem, key_pem, expires_at, updated_at)
-		VALUES ($1, $2, $3, $4, NOW())
-		ON CONFLICT (role) DO UPDATE SET
-			cert_pem = EXCLUDED.cert_pem,
-			key_pem = EXCLUDED.key_pem,
-			expires_at = EXCLUDED.expires_at,
-			updated_at = NOW()
-		RETURNING created_at
-	`
 	return database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		return s.db.QueryRowContext(ctx, query, ca.Role, ca.CertPEM, encryptedKey, ca.ExpiresAt).Scan(&ca.CreatedAt)
+		createdAt, queryErr := s.q.SaveInternalCA(ctx, navigatordb.SaveInternalCAParams{
+			Role: ca.Role, CertPem: ca.CertPEM, KeyPem: encryptedKey, ExpiresAt: ca.ExpiresAt,
+		})
+		if queryErr == nil {
+			ca.CreatedAt = createdAt
+		}
+		return queryErr
 	})
 }
 
 func (s *Store) GetInternalCertificate(ctx context.Context, nodeID, serviceType string) (*InternalCertificate, error) {
-	query := `
-		SELECT id, node_id, cluster_id, service_type, cert_pem, key_pem, expires_at, created_at, updated_at
-		FROM navigator.internal_certificates
-		WHERE node_id = $1 AND service_type = $2
-	`
-
-	var cert InternalCertificate
-	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		return s.db.QueryRowContext(ctx, query, nodeID, serviceType).Scan(
-			&cert.ID, &cert.NodeID, &cert.ClusterID, &cert.ServiceType, &cert.CertPEM, &cert.KeyPEM,
-			&cert.ExpiresAt, &cert.CreatedAt, &cert.UpdatedAt,
-		)
+	var row navigatordb.NavigatorInternalCertificate
+	var err error
+	err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		row, err = s.q.GetInternalCertificate(ctx, navigatordb.GetInternalCertificateParams{NodeID: nodeID, ServiceType: serviceType})
+		return err
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
+	}
+	cert := InternalCertificate{
+		ID: row.ID, NodeID: row.NodeID, ClusterID: row.ClusterID, ServiceType: row.ServiceType,
+		CertPEM: row.CertPem, KeyPEM: row.KeyPem, ExpiresAt: row.ExpiresAt,
+		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}
 	if cert.KeyPEM, err = s.decryptField(cert.KeyPEM); err != nil {
 		return nil, fmt.Errorf("decrypt internal certificate key: %w", err)
@@ -623,20 +522,14 @@ func (s *Store) SaveInternalCertificate(ctx context.Context, cert *InternalCerti
 		return fmt.Errorf("encrypt internal certificate key: %w", err)
 	}
 
-	query := `
-		INSERT INTO navigator.internal_certificates (node_id, cluster_id, service_type, cert_pem, key_pem, expires_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, NOW())
-		ON CONFLICT (node_id, service_type) DO UPDATE SET
-			cluster_id = EXCLUDED.cluster_id,
-			cert_pem = EXCLUDED.cert_pem,
-			key_pem = EXCLUDED.key_pem,
-			expires_at = EXCLUDED.expires_at,
-			updated_at = NOW()
-		RETURNING id, created_at
-	`
 	return database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		return s.db.QueryRowContext(ctx, query,
-			cert.NodeID, cert.ClusterID, cert.ServiceType, cert.CertPEM, encryptedKey, cert.ExpiresAt,
-		).Scan(&cert.ID, &cert.CreatedAt)
+		row, queryErr := s.q.SaveInternalCertificate(ctx, navigatordb.SaveInternalCertificateParams{
+			NodeID: cert.NodeID, ClusterID: cert.ClusterID, ServiceType: cert.ServiceType,
+			CertPem: cert.CertPEM, KeyPem: encryptedKey, ExpiresAt: cert.ExpiresAt,
+		})
+		if queryErr == nil {
+			cert.ID, cert.CreatedAt = row.ID, row.CreatedAt
+		}
+		return queryErr
 	})
 }

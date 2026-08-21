@@ -5,8 +5,16 @@ import (
 	"database/sql"
 	"errors"
 
-	"github.com/lib/pq"
+	"frameworks/api_dns/internal/database/navigatordb"
 )
+
+func tenantCustomDomainFromDB(row navigatordb.NavigatorTenantCustomDomain) TenantCustomDomain {
+	return TenantCustomDomain{
+		TenantID: row.TenantID, Domain: row.Domain, Status: row.Status, AcmeDNSSubdomain: row.AcmeDnsSubdomain,
+		IssuerID: row.IssuerID, LastVerifiedAt: row.LastVerifiedAt, CertIssuedAt: row.CertIssuedAt,
+		CertExpiresAt: row.CertExpiresAt, LastError: row.LastError, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+	}
+}
 
 // EnsureTenantCustomDomain inserts or updates the custom-domain row. On
 // conflict the existing row's status is preserved (the worker drives
@@ -14,50 +22,27 @@ import (
 // rows and re-used on idempotent calls. Status defaults to
 // pending_verification for new rows.
 func (s *Store) EnsureTenantCustomDomain(ctx context.Context, tenantID, domain, acmeDNSSubdomain string) (*TenantCustomDomain, error) {
-	const q = `
-		INSERT INTO navigator.tenant_custom_domains
-			(tenant_id, domain, status, acme_dns_subdomain, created_at, updated_at)
-		VALUES ($1::uuid, $2, 'pending_verification', $3, NOW(), NOW())
-		ON CONFLICT (tenant_id, domain) DO UPDATE SET
-			updated_at = NOW()
-		RETURNING tenant_id, domain, status, acme_dns_subdomain, issuer_id,
-		          last_verified_at, cert_issued_at, cert_expires_at, last_error,
-		          created_at, updated_at
-	`
-	var d TenantCustomDomain
-	err := s.db.QueryRowContext(ctx, q, tenantID, domain, acmeDNSSubdomain).Scan(
-		&d.TenantID, &d.Domain, &d.Status, &d.AcmeDNSSubdomain, &d.IssuerID,
-		&d.LastVerifiedAt, &d.CertIssuedAt, &d.CertExpiresAt, &d.LastError,
-		&d.CreatedAt, &d.UpdatedAt,
-	)
+	row, err := s.q.EnsureTenantCustomDomain(ctx, navigatordb.EnsureTenantCustomDomainParams{
+		TenantID: tenantID, Domain: domain, AcmeDnsSubdomain: acmeDNSSubdomain,
+	})
 	if err != nil {
 		return nil, err
 	}
+	d := tenantCustomDomainFromDB(row)
 	return &d, nil
 }
 
 // GetTenantCustomDomain returns the custom-domain row by (tenant_id,
 // domain), or ErrNotFound when absent.
 func (s *Store) GetTenantCustomDomain(ctx context.Context, tenantID, domain string) (*TenantCustomDomain, error) {
-	const q = `
-		SELECT tenant_id, domain, status, acme_dns_subdomain, issuer_id,
-		       last_verified_at, cert_issued_at, cert_expires_at, last_error,
-		       created_at, updated_at
-		FROM navigator.tenant_custom_domains
-		WHERE tenant_id = $1::uuid AND domain = $2
-	`
-	var d TenantCustomDomain
-	err := s.db.QueryRowContext(ctx, q, tenantID, domain).Scan(
-		&d.TenantID, &d.Domain, &d.Status, &d.AcmeDNSSubdomain, &d.IssuerID,
-		&d.LastVerifiedAt, &d.CertIssuedAt, &d.CertExpiresAt, &d.LastError,
-		&d.CreatedAt, &d.UpdatedAt,
-	)
+	row, err := s.q.GetTenantCustomDomain(ctx, navigatordb.GetTenantCustomDomainParams{TenantID: tenantID, Domain: domain})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
+	d := tenantCustomDomainFromDB(row)
 	return &d, nil
 }
 
@@ -67,82 +52,37 @@ func (s *Store) ListTenantCustomDomainsByStatus(ctx context.Context, statuses []
 	if len(statuses) == 0 {
 		return nil, nil
 	}
-	const q = `
-		SELECT tenant_id, domain, status, acme_dns_subdomain, issuer_id,
-		       last_verified_at, cert_issued_at, cert_expires_at, last_error,
-		       created_at, updated_at
-		FROM navigator.tenant_custom_domains
-		WHERE status = ANY($1)
-		ORDER BY updated_at ASC
-	`
-	rows, err := s.db.QueryContext(ctx, q, pq.Array(statuses))
+	rows, err := s.q.ListTenantCustomDomainsByStatus(ctx, statuses)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var out []TenantCustomDomain
-	for rows.Next() {
-		var d TenantCustomDomain
-		if err := rows.Scan(
-			&d.TenantID, &d.Domain, &d.Status, &d.AcmeDNSSubdomain, &d.IssuerID,
-			&d.LastVerifiedAt, &d.CertIssuedAt, &d.CertExpiresAt, &d.LastError,
-			&d.CreatedAt, &d.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		out = append(out, d)
+	for _, row := range rows {
+		out = append(out, tenantCustomDomainFromDB(row))
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // ListTenantCustomDomains returns every row for a tenant.
 func (s *Store) ListTenantCustomDomains(ctx context.Context, tenantID string) ([]TenantCustomDomain, error) {
-	const q = `
-		SELECT tenant_id, domain, status, acme_dns_subdomain, issuer_id,
-		       last_verified_at, cert_issued_at, cert_expires_at, last_error,
-		       created_at, updated_at
-		FROM navigator.tenant_custom_domains
-		WHERE tenant_id = $1::uuid
-		ORDER BY domain ASC
-	`
-	rows, err := s.db.QueryContext(ctx, q, tenantID)
+	rows, err := s.q.ListTenantCustomDomains(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var out []TenantCustomDomain
-	for rows.Next() {
-		var d TenantCustomDomain
-		if err := rows.Scan(
-			&d.TenantID, &d.Domain, &d.Status, &d.AcmeDNSSubdomain, &d.IssuerID,
-			&d.LastVerifiedAt, &d.CertIssuedAt, &d.CertExpiresAt, &d.LastError,
-			&d.CreatedAt, &d.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		out = append(out, d)
+	for _, row := range rows {
+		out = append(out, tenantCustomDomainFromDB(row))
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // SetTenantCustomDomainStatus transitions the lifecycle. cert_issued and
 // last_verified_at timestamps are stamped automatically on the matching
 // transition; last_error is cleared unless errMsg is non-empty.
 func (s *Store) SetTenantCustomDomainStatus(ctx context.Context, tenantID, domain, status, errMsg string) error {
-	const q = `
-		UPDATE navigator.tenant_custom_domains
-		SET status = $3,
-		    last_verified_at = CASE WHEN $3 = 'verified' THEN NOW() ELSE last_verified_at END,
-		    cert_issued_at   = CASE WHEN $3 = 'cert_issued' THEN NOW() ELSE cert_issued_at END,
-		    last_error       = NULLIF($4, ''),
-		    updated_at       = NOW()
-		WHERE tenant_id = $1::uuid AND domain = $2
-	`
-	res, err := s.db.ExecContext(ctx, q, tenantID, domain, status, errMsg)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
+	n, err := s.q.SetTenantCustomDomainStatus(ctx, navigatordb.SetTenantCustomDomainStatusParams{
+		TenantID: tenantID, Domain: domain, Status: status, ErrMsg: errMsg,
+	})
 	if err != nil {
 		return err
 	}
@@ -155,18 +95,9 @@ func (s *Store) SetTenantCustomDomainStatus(ctx context.Context, tenantID, domai
 // SetTenantCustomDomainCertMetadata records the issuer and cert expiry
 // after a successful ACME issuance. Called from the cert-issuance worker.
 func (s *Store) SetTenantCustomDomainCertMetadata(ctx context.Context, tenantID, domain, issuerID string, expiresAt sql.NullTime) error {
-	const q = `
-		UPDATE navigator.tenant_custom_domains
-		SET issuer_id = NULLIF($3, ''),
-		    cert_expires_at = $4,
-		    updated_at = NOW()
-		WHERE tenant_id = $1::uuid AND domain = $2
-	`
-	res, err := s.db.ExecContext(ctx, q, tenantID, domain, issuerID, expiresAt)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
+	n, err := s.q.SetTenantCustomDomainCertMetadata(ctx, navigatordb.SetTenantCustomDomainCertMetadataParams{
+		TenantID: tenantID, Domain: domain, IssuerID: issuerID, CertExpiresAt: expiresAt,
+	})
 	if err != nil {
 		return err
 	}
@@ -180,10 +111,5 @@ func (s *Store) SetTenantCustomDomainCertMetadata(ctx context.Context, tenantID,
 // already cleared the corresponding ACME-DNS subzone records + cert
 // material before deleting.
 func (s *Store) DeleteTenantCustomDomain(ctx context.Context, tenantID, domain string) error {
-	const q = `
-		DELETE FROM navigator.tenant_custom_domains
-		WHERE tenant_id = $1::uuid AND domain = $2
-	`
-	_, err := s.db.ExecContext(ctx, q, tenantID, domain)
-	return err
+	return s.q.DeleteTenantCustomDomain(ctx, navigatordb.DeleteTenantCustomDomainParams{TenantID: tenantID, Domain: domain})
 }

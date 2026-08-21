@@ -1,0 +1,45 @@
+version: "2"
+sql:
+  - engine: postgresql
+    schema: ../pkg/database/sql/schema/navigator.sql
+    queries: internal/database/queries
+    gen:
+      go:
+        package: navigatordb
+        out: internal/database/navigatordb
+        sql_package: database/sql
+        emit_db_tags: true
+        emit_json_tags: true
+        emit_interface: true
+        emit_empty_slices: true
+        omit_unused_structs: true
+        overrides:
+          - db_type: uuid
+            go_type: string
+          - db_type: uuid
+            nullable: true
+            go_type:
+              import: database/sql
+              type: NullString
+          - db_type: jsonb
+            go_type:
+              import: encoding/json
+              type: RawMessage
+          - column: navigator.certificates.created_at
+            go_type: time.Time
+          - column: navigator.certificates.updated_at
+            go_type: time.Time
+          - column: navigator.acme_accounts.created_at
+            go_type: time.Time
+          - column: navigator.tls_bundles.created_at
+            go_type: time.Time
+          - column: navigator.tls_bundles.updated_at
+            go_type: time.Time
+          - column: navigator.internal_ca.created_at
+            go_type: time.Time
+          - column: navigator.internal_ca.updated_at
+            go_type: time.Time
+          - column: navigator.internal_certificates.created_at
+            go_type: time.Time
+          - column: navigator.internal_certificates.updated_at
+            go_type: time.Time
